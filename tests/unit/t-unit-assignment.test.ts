@@ -247,6 +247,33 @@ describe("the lead's word builds a Unit here: assign --here", () => {
     expect(next(home.dir)).toMatchObject({ kind: "run-stage", unit: "refunds" });
   });
 
+  // A live run (Claude Code): after Not now on the share, the lead's 'build
+  // the API here' pushed the Unit's claim branch to their remote unasked.
+  test("before the plan is shared, the lead's word builds it here and pushes nothing; the share then sends its claim with the plan", () => {
+    const home = makeHome();
+    git(home.dir, ["config", "user.name", "lee"]);
+    chooseTeams(home.dir);
+    const id8 = fixtureIntentId8(home.dir);
+    const refs = (): string => git(home.remote, ["for-each-ref", "--format=%(refname) %(objectname)"]);
+    const before = refs();
+    const here = run(UNIT, ["assign", "--here", "refunds", "--person-words", "build refunds here"], home.dir);
+    expect(here.status, here.out).toBe(0);
+    expect(here.json?.notice).toBe("refunds is built here now, no longer open for the teams.");
+    expect(refs()).toBe(before);
+    share(home.dir);
+    expect(git(home.remote, ["rev-parse", "main"])).toBe(git(home.dir, ["rev-parse", "HEAD"]));
+    expect(claimPayload(home.remote, id8, "refunds")).toMatchObject({ status: "claimed", owner: "default", taken_by: "lee" });
+    expect(claimPayload(home.remote, id8, "checkout-ui")).toBeNull();
+    // A teammate's clone: it is not offered, and a take by name says who builds it.
+    const ana = cloneOf(home.remote, "ana");
+    const offer = next(ana);
+    expect(((offer.choices ?? []) as Array<{ label: string }>).map((choice) => choice.label), JSON.stringify(offer).slice(0, 600))
+      .not.toContain("Start refunds");
+    const took = run(UNIT, ["take", "refunds", "--home", HOME_RECORD], ana);
+    expect(took.status, took.out).not.toBe(0);
+    expect(took.out).toContain("lee");
+  });
+
   test("the lead's words reach the record whole through the file the board's note names: apostrophes, $ and backticks", () => {
     const home = makeHome();
     chooseTeams(home.dir);

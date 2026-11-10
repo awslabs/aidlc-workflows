@@ -238,7 +238,7 @@ import {
   resolveTestingPosture,
 } from "./aidlc-testing-posture.ts";
 import { beforePerUnitBlock, memoryDirFor } from "./aidlc-graph.ts";
-import { planMadeElsewhere, registryList, spacesRoot } from "./aidlc-record-core.ts";
+import { planMadeElsewhere, registryList, spacesRoot, stateFilePath } from "./aidlc-record-core.ts";
 import { approvalDecidesOpenFindings, approvalOpenFindings } from "./aidlc-review-brief.ts";
 import {
   aidlcEngineCommand,
@@ -5313,12 +5313,14 @@ function shareMain(args: string[], projectDir?: string): void {
     );
   }
   noteTeamShared(pd);
+  const notSeen = claimsAskedHereWithShare(pd);
   console.log(JSON.stringify({
     shared: true,
     remote,
     branch,
     commit: gitOutput(pd, ["rev-parse", "HEAD"], "Cannot resolve HEAD"),
     committed_paths: committed,
+    ...(notSeen.length > 0 ? { notice: notSeen.join(" ") } : {}),
     step: "Tell the person in plain words what it reports, then end your turn.",
   }));
 }
@@ -5464,6 +5466,82 @@ function assignUnits(args: string[], projectDir?: string): void {
 // with the take's compare-and-swap, so no teammate takes it meanwhile, then
 // the walk takes it up. A Unit someone took first stays theirs. The lead's own
 // claim already there is this word again: its row is written, the same line said.
+// The lead's claim on a Unit built here, written with the take's compare-and-
+// swap so no teammate takes it meanwhile: assign --here once the plan is
+// shared, and the share for a Unit asked here before then. One someone else
+// built and merged is taken back to build here, as a new attempt (the lead's
+// Build and Test asked to fix it here); one still being built stays theirs.
+function writeHereClaim(
+  pd: string,
+  identity: ReturnType<typeof activeIdentity>,
+  integration: ReturnType<typeof fetchIntegration>,
+  unit: string,
+  state: string,
+): { kind: "here" } | { kind: "theirs"; line: string } | { kind: "unseen"; why: string } {
+  validateClaimRefUnit(identity.intentId8, unit);
+  const ref = claimRef(identity.intentId8, unit);
+  const current = currentClaim(pd, integration.remote, ref);
+  const takenBack = current?.status === "claimed" && current.payload.done === true &&
+    !(current.owner === identity.space && claimIsMine(pd, current));
+  if (current?.status === "claimed" && !takenBack) {
+    return current.owner === identity.space && claimIsMine(pd, current) ? { kind: "here" } : { kind: "theirs", line: takenLine(unit, current) };
+  }
+  const payload = takenClaimPayload(current, {
+    team: identity.space, home: { space: identity.space, uuid: identity.intentUuid, id8: identity.intentId8 }, unit, ref,
+    generation: takenBack ? (current?.generation ?? 0) + 1 : takeGeneration(current), me: gitUserName(pd) ?? "a teammate",
+    baseOid: integration.oid, integrationRef: integration.ref, gateRhythm: readUnitGateRhythm(state),
+  });
+  const pushed = updateClaimRef(pd, integration.remote, ref, createClaimCommit(pd, current?.oid ?? integration.oid, payload), current?.oid ?? null);
+  if (!pushed.ok) {
+    const winner = currentClaim(pd, integration.remote, ref);
+    if (winner?.status === "claimed") return { kind: "theirs", line: takenLine(unit, winner) };
+    return { kind: "unseen", why: pushed.refused?.replace(/\.+$/, "") ?? "it changed meanwhile" };
+  }
+  invalidateLiveClaimPayloadCache(pd, unit);
+  return { kind: "here" };
+}
+
+function hereNotSeenLine(unit: string, why: string): string {
+  return `${unit} is built here now. The teams cannot see that yet (${why}), so a teammate could still take it meanwhile.`;
+}
+
+// The teams' clones see the work as a team home only once the remote's main
+// (as this clone last fetched it) carries its state with the home recorded.
+export function planUnshared(projectDir: string, target: { remote: string; branch: string }): boolean {
+  const state = relative(projectDir, stateFilePath(projectDir)).split("\\").join("/");
+  const shown = git(projectDir, ["show", `refs/remotes/${target.remote}/${target.branch}:${state}`]);
+  return !shown.ok || homeLocation(shown.stdout) === null;
+}
+
+// At the share, a Unit the lead asked to build here before it, with no claim
+// yet, gets its claim, so a team's clone sees it taken from its first look;
+// the lines for one that could not be written.
+function claimsAskedHereWithShare(pd: string): string[] {
+  const asked = [...unitsAskedHere(readAuditShardEvents(pd))];
+  if (asked.length === 0) return [];
+  let integration: ReturnType<typeof fetchIntegration> | null = null;
+  let why = "it could not be read just now";
+  try {
+    integration = fetchIntegration(pd);
+  } catch (e) {
+    why = errorMessage(e).replace(/\.+$/, "");
+  }
+  const identity = activeIdentity(pd);
+  const state = readStateFile(pd);
+  const lines: string[] = [];
+  for (const unit of asked) {
+    if (integration === null) {
+      lines.push(hereNotSeenLine(unit, why));
+      continue;
+    }
+    if (currentClaim(pd, integration.remote, claimRef(identity.intentId8, unit)) !== null) continue;
+    const claimed = writeHereClaim(pd, identity, integration, unit, state);
+    if (claimed.kind === "unseen") lines.push(hereNotSeenLine(unit, claimed.why));
+    else if (claimed.kind === "theirs") lines.push(claimed.line);
+  }
+  return lines;
+}
+
 function buildLeftOpenHere(pd: string, state: string, units: string[], words: string): void {
   if (units.length === 0) fail(`usage: ${unitUsage("assign")}`);
   const local = localOpeningStatus(pd);
@@ -5472,52 +5550,45 @@ function buildLeftOpenHere(pd: string, state: string, units: string[], words: st
   }
   const identity = activeIdentity(pd);
   affirmedIntegrationBranch(pd);
+  // Before the plan is shared no team's clone can see its Units: nothing is
+  // pushed, and the claim goes with the share (claimsAskedHereWithShare).
+  let target: ReturnType<typeof shareTarget> = null;
+  try {
+    target = shareTarget(pd);
+  } catch {
+    // No remote to read: the claim's own write below says why.
+  }
+  const unshared = target !== null && planUnshared(pd, target);
   let integration: ReturnType<typeof fetchIntegration> | null = null;
   let unseen: string | null = null;
-  try {
-    integration = fetchIntegration(pd);
-  } catch (e) {
-    unseen = errorMessage(e).replace(/\.+$/, "");
+  if (!unshared) {
+    try {
+      integration = fetchIntegration(pd);
+    } catch (e) {
+      unseen = errorMessage(e).replace(/\.+$/, "");
+    }
   }
-  const me = gitUserName(pd) ?? "a teammate";
   const lines: string[] = [];
   const here: string[] = [];
   const notSeen: string[] = [];
   for (const unit of units) {
+    if (unshared) {
+      here.push(unit);
+      continue;
+    }
     if (integration === null) {
       here.push(unit);
       notSeen.push(unit);
       continue;
     }
-    validateClaimRefUnit(identity.intentId8, unit);
-    const ref = claimRef(identity.intentId8, unit);
-    const current = currentClaim(pd, integration.remote, ref);
-    // One someone else built and merged is taken back to build here, as a new
-    // attempt (the lead's Build and Test asked to fix it here); one still being
-    // built stays theirs.
-    const takenBack = current?.status === "claimed" && current.payload.done === true &&
-      !(current.owner === identity.space && claimIsMine(pd, current));
-    if (current?.status === "claimed" && !takenBack) {
-      if (current.owner === identity.space && claimIsMine(pd, current)) here.push(unit);
-      else lines.push(takenLine(unit, current));
+    const claimed = writeHereClaim(pd, identity, integration, unit, state);
+    if (claimed.kind === "theirs") {
+      lines.push(claimed.line);
       continue;
     }
-    const payload = takenClaimPayload(current, {
-      team: identity.space, home: { space: identity.space, uuid: identity.intentUuid, id8: identity.intentId8 }, unit, ref,
-      generation: takenBack ? (current?.generation ?? 0) + 1 : takeGeneration(current), me, baseOid: integration.oid,
-      integrationRef: integration.ref, gateRhythm: readUnitGateRhythm(state),
-    });
-    const pushed = updateClaimRef(pd, integration.remote, ref, createClaimCommit(pd, current?.oid ?? integration.oid, payload), current?.oid ?? null);
-    if (!pushed.ok) {
-      const winner = currentClaim(pd, integration.remote, ref);
-      if (winner?.status === "claimed") {
-        lines.push(takenLine(unit, winner));
-        continue;
-      }
-      unseen ??= pushed.refused?.replace(/\.+$/, "") ?? "it changed meanwhile";
+    if (claimed.kind === "unseen") {
+      unseen ??= claimed.why;
       notSeen.push(unit);
-    } else {
-      invalidateLiveClaimPayloadCache(pd, unit);
     }
     here.push(unit);
   }
@@ -5534,7 +5605,7 @@ function buildLeftOpenHere(pd: string, state: string, units: string[], words: st
     here,
     notice: [
       ...here.map((unit) => notSeen.includes(unit)
-        ? `${unit} is built here now. The teams cannot see that yet (${unseen}), so a teammate could still take it meanwhile.`
+        ? hereNotSeenLine(unit, unseen ?? "it changed meanwhile")
         : mergedBy.get(unit)
           ? `${unit} is built here now, on top of what ${mergedBy.get(unit)} merged.`
           : `${unit} is built here now, no longer open for the teams.`),

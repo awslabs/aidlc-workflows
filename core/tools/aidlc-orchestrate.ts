@@ -644,6 +644,7 @@ import {
   changedInputs,
   claimIsMine,
   buildClaimHere,
+  planUnshared,
   leadsOwnClaims,
   takenFromSoloWork,
   type ToldMerge,
@@ -5949,17 +5950,6 @@ function unitsNotShared(projectDir: string, target: { remote: string; branch: st
   if (!there.ok) return [];
   const listed = new Set(there.batches.flat());
   return dag.units.filter((unit) => !listed.has(unit)).sort(compareBoardKeys);
-}
-
-// The teams' clones see the work as a team home only once the remote's main
-// (as this clone last fetched it) carries its state with the home recorded.
-function planUnshared(projectDir: string, target: { remote: string; branch: string }): boolean {
-  const state = relative(projectDir, stateFilePath(projectDir)).split("\\").join("/");
-  const shown = Bun.spawnSync({
-    cmd: ["git", "show", `refs/remotes/${target.remote}/${target.branch}:${state}`],
-    cwd: projectDir, stdout: "pipe", stderr: "ignore",
-  });
-  return shown.exitCode !== 0 || homeLocation(new TextDecoder().decode(shown.stdout)) === null;
 }
 
 // In a claimed checkout whose Unit is complete and approved: commit it and
