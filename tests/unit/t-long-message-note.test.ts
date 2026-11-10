@@ -97,8 +97,6 @@ function japaneseSpec(size: number): string {
 }
 
 const sha = (text: string): string => createHash("sha256").update(text, "utf-8").digest("hex");
-// Taken from the person's line, its line breaks read as the spaces between its words, as main has it for any line.
-const spaced = (text: string): string => text.replace(/\s+/g, " ").trim();
 const notes = (out: string): number => out.split(NOTE).length - 1;
 const projects: string[] = [];
 afterEach(() => {
@@ -150,7 +148,7 @@ async function kiroIdeCard(proj: string, prompt: string): Promise<Exec> {
 async function bareNextTakesIt(proj: string, words: string, opts: { session?: string } = {}): Promise<Directive | null> {
   const first = await next(proj, [], opts);
   expect(String(first.directive?.message ?? ""), first.out.slice(0, 400)).toContain("propose");
-  expect(sha(spaced(newest(proj)?.text ?? "")), "every word of the paste").toBe(sha(spaced(words)));
+  expect(sha(newest(proj)?.text ?? ""), "the paste byte for byte, its line breaks included").toBe(sha(words));
   return first.directive;
 }
 
@@ -273,8 +271,8 @@ describe("a long /aidlc paste: the agent is told AI-DLC has it whole and runs ne
       if (named !== undefined) await next(proj, named);
       taken.push(newest(proj)?.text);
     }
-    expect(sha(spaced(taken[0] ?? "")), "every word after the plan word, by the note").toBe(sha(spaced(words)));
-    expect(sha(spaced(taken[1] ?? "")), "the same as the agent's own call").toBe(sha(spaced(words)));
+    expect(sha(taken[0] ?? ""), "everything after the plan word, byte for byte, by the note").toBe(sha(words));
+    expect(sha(taken[1] ?? ""), "the same as the agent's own call").toBe(sha(words));
   });
 
   test("which chat: the note's next takes the line in the chat that typed it, and a second chat's does not", async () => {
@@ -300,7 +298,7 @@ describe("a long /aidlc paste: the agent is told AI-DLC has it whole and runs ne
     expect(newest(proj)).toBeUndefined();
     const own = await next(proj, [], asClaude(SESSION));
     expect(String(own.directive?.message ?? ""), own.out.slice(0, 400)).toContain("propose");
-    expect(sha(spaced(newest(proj)?.text ?? ""))).toBe(sha(spaced(words)));
+    expect(sha(newest(proj)?.text ?? "")).toBe(sha(words));
   });
 
   test("no loop: the note's next gives the plan proposal, whose own command asks the plan question", async () => {
