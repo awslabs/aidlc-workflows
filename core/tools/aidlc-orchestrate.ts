@@ -8023,9 +8023,10 @@ function newProjectDropsReverseEngineering(
   return runs && detectedProjectType(projectDir) === "greenfield";
 }
 
-// How a routing question names the work already in progress.
+// How a step names the work already in progress: by the start of the request
+// it was made from, as a question quotes a request, so a long one still fits.
 function activeWorkLabel(stateContent: string): string {
-  return (getField(stateContent, "Project") ?? "").trim() ||
+  return requestPreview((getField(stateContent, "Project") ?? "").trim()) ||
     (getField(stateContent, "Current Stage") ?? "").trim() ||
     "the active workflow";
 }
