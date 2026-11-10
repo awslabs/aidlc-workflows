@@ -107,6 +107,30 @@ team taking a rule out of the list. Policy that arrives by MDM, the Windows
 registry or the server cannot be read by a hook. The rule is
 `claudeAllowsOwnCommand` in `core/tools/aidlc-claude-own-command.ts`.
 
+**The code plan question's box shows the plan (Claude Code).** Claude Code's
+question box shows only what the agent put in it, and agents asked "Approve the
+code plan?" with the choices alone. So the same row also runs for
+`AskUserQuestion`, which none of its members matches: when the box asks the
+open, unanswered code plan question alone, offering its choices, the group
+answers with `updatedInput` (no permission decision, no reason text) that puts
+the plan's summary lines and its `Full plan:` path under the agent's own
+question, the lines the engine hands over in `plan_approval.targets` and writes
+in the questions file, and the line naming source that already changed when the
+engine adds one. A question about several Units gets each Unit's name and its
+`Full plan:` path, with the changed-source line once, and no summaries: the box
+does not scroll, and a short window (an editor's terminal panel) would show the
+last plan alone as if it were the only one, so each Unit's summary, an Adds line
+among them, is read in the plan file the box names. A line (or the plan's path)
+the agent's question already shows is not added again. Claude Code shows 2,000
+characters of a box's question, so past that a plan shows only its path (with
+the changed-source line), and past that nothing is added. The choices, their descriptions and the
+engine's `question` stay as they were. The human-turn hook takes the lines off
+again when the answer comes back, so the pick, the person's own words and
+`QUESTION_REPLIED` read the box as the agent asked it. Any other box, another
+harness, and any failure leave the call as the agent wrote it, with nothing
+printed. The rule is `planQuestionBoxInput` and `planQuestionBoxAsAsked` in
+`core/tools/aidlc-plan-approval-ask.ts`.
+
 Before probing `next` in a shared engine session, the Stop hook preserves a
 current guard-recovery question while the person selects a remedy or supplies
 required follow-up feedback. This wait also applies in autonomous Construction

@@ -106,14 +106,14 @@ import {
   writeProjectHookStatusFile,
 } from "../tools/aidlc-lib.ts";
 import { appendAuditEntryUnlocked, maskSecretShapes, saySecretMaskedOnce } from "../tools/aidlc-audit.ts";
-import { aidlcToolInvocation } from "../tools/aidlc-runtime-paths.ts";
+import { aidlcToolInvocation, runtimeHarnessName } from "../tools/aidlc-runtime-paths.ts";
 import { normalizeRetiredGuardPolicyField } from "../tools/aidlc-guard-switch.ts";
 import {
   type PlanApprovalPickerQuestion,
   recordPlanApprovalHumanResponse,
   recordProtectedHumanResponse,
 } from "../tools/aidlc-testing-posture.ts";
-import { notePlanApprovalAskReply, openEngineQuestion } from "../tools/aidlc-plan-approval-ask.ts";
+import { notePlanApprovalAskReply, openEngineQuestion, planQuestionBoxAsAsked } from "../tools/aidlc-plan-approval-ask.ts";
 import { claudeTurnKey, noteClaudeTurnPending } from "../tools/aidlc-claude-turn-origin.ts";
 import { settleClaudeTurnsFirst } from "../tools/aidlc-claude-turn-pending.ts";
 import { openPlanQuestion } from "../tools/aidlc-question-store.ts";
@@ -603,13 +603,17 @@ async function run(input: string): Promise<number> {
 }
 
 async function respond(
-  input: string,
+  received: string,
   notes: string[],
   forThePerson: Array<() => void>,
   handover: { help: string | null; event: "UserPromptSubmit" | "PostToolUse" },
 ): Promise<number> {
 try {
   const projectDir = resolveProjectDirFromHook(import.meta.url);
+  // Claude Code's box for the code plan question showed the plan's lines under
+  // the agent's question (planQuestionBoxInput); everything below reads the box
+  // as the agent asked it.
+  const input = runtimeHarnessName() === "claude" ? planQuestionBoxAsAsked(projectDir, received) : received;
   // A turn Claude Code started itself before this one is settled first, so
   // nothing below reads it as the person's (aidlc-claude-turn-origin.ts).
   settleClaudeTurnsFirst(projectDir);
