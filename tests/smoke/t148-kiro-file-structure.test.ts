@@ -975,9 +975,8 @@ describe("t148 dist/kiro file structure", () => {
     }
   });
 
-  // The lead ran `git status --short` while writing a Unit's source-manifest.json,
-  // and Kiro asks about a git command the person has not allowed; AI-DLC's own
-  // lookup asks nothing.
+  // Kiro asks about a git command the person has not allowed; AI-DLC's own
+  // lookup, which the SKILL names for a Unit's source-manifest.json, asks nothing.
   test("the Kiro IDE conductor checks a Unit's changed files with AI-DLC, a command it runs without asking", () => {
     for (const { tree, invoke } of KIRO_IDE_CHANNELS) {
       const dir = join(REPO_ROOT, tree, "kiro-ide", ".kiro");

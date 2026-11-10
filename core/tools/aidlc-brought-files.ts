@@ -323,9 +323,9 @@ function takenListing(
 
 // Where this build attempt started: the stage's own listing, or, on a machine
 // that took its own (broughtListing) and does not hold the stage's, that one.
-function attemptStart(projectDir: string, rows: readonly AuditShardEvent[], brought: Brought): WorkspaceSourceListing | null {
+function attemptStart(projectDir: string, rows: readonly AuditShardEvent[], brought: Brought | null): WorkspaceSourceListing | null {
   const stage = currentStageSourceBaseline(projectDir, STAGE, false, undefined, undefined, rows);
-  return stage.state === "ready" ? stage.listing : stage.state === "missing" && brought.taken ? brought.listing : null;
+  return stage.state === "ready" ? stage.listing : stage.state === "missing" && brought?.taken ? brought.listing : null;
 }
 
 // The files as a Unit's Code Generation found them in this attempt, taken here
@@ -353,16 +353,9 @@ export function buildStartListing(
 ): { listing: WorkspaceSourceListing; since: "unit" | "stage" } | null {
   const rows = readAuditShardEvents(projectDir);
   const brought = broughtListing(projectDir, rows, false, false);
-  // With no listing of the work's start, no Unit's own was taken either
-  // (broughtFileNames), and the stage's start is the one there is.
-  let start: WorkspaceSourceListing | null;
-  if (brought === null) {
-    const stage = currentStageSourceBaseline(projectDir, STAGE, false, undefined, undefined, rows);
-    start = stage.state === "ready" ? stage.listing : null;
-  } else {
-    start = attemptStart(projectDir, rows, brought);
-  }
+  const start = attemptStart(projectDir, rows, brought);
   if (start === null) return null;
+  // With no listing of the work's start, no Unit's own was taken either (broughtFileNames).
   const own = unit === null || brought === null ? null : unitStartListing(projectDir, start, unit);
   return own === null ? { listing: start, since: "stage" } : { listing: own, since: "unit" };
 }

@@ -263,8 +263,7 @@ import {
   worktreeStateFilePath,
   sameWorkspaceSource,
   recordedSourceListingUnderCurrentBoundary,
-  linkOfTargetListingKey,
-  sourceCheckoutListingRel,
+  isLinkTargetListingKey,
   sourceListingChangedKeys,
   splitSourcePathKey,
   workspaceSourceState,
@@ -5408,10 +5407,14 @@ function sourceChangesSinceBuildStart(pd: string, unit: string | null): Record<s
       current.listing,
     );
     const listings = [recorded, current.listing];
+    const keysOf = (mode: string): string[] => listings.flatMap((listing) =>
+      [...listing].filter(([, entry]) => entry.startsWith(`${mode} `)).map(([key]) => key));
+    // isLinkTargetListingKey decides whether a key is a link's target; the
+    // link it goes through is the one its name starts with.
+    const links = keysOf("120000");
     const linkOf = (key: string): string | null =>
-      listings.map((listing) => linkOfTargetListingKey(listing, key)).find((link) => link !== null) ?? null;
-    const nestedCheckouts = listings.flatMap((listing) =>
-      [...listing].filter(([, entry]) => entry.startsWith("160000 ")).map(([key]) => key));
+      !listings.some((listing) => isLinkTargetListingKey(listing, key)) ? null
+        : links.find((link) => key === `${link}@target` || key.startsWith(`${link}@target/`)) ?? null;
     // Listing keys of the links and the git-ignored checkouts the list leaves out.
     const leftOut = new Set<string>();
     const keys = paths.filter((key) => {
@@ -5420,12 +5423,13 @@ function sourceChangesSinceBuildStart(pd: string, unit: string | null): Record<s
       leftOut.add(link);
       return false;
     });
+    const nestedCheckouts = ignored.size === 0 ? [] : keysOf("160000");
     for (const key of ignored) {
       const place = linkOf(key) ?? nestedCheckouts.find((checkout) => key === checkout || key.startsWith(`${checkout}/`));
       if (place !== undefined) leftOut.add(place);
     }
     const notListed = [...new Set([
-      ...readRecordedSourceCheckouts(pd).map((entry) => sourceCheckoutListingRel(entry.label)),
+      ...readRecordedSourceCheckouts(pd).map((entry) => entry.path.replace(/[\\/]+$/, "")),
       ...renderSourcePathKeys(leftOut),
     ])].sort();
     const others = unitSourceManifests(pd).filter((entry) => entry.unit !== unit);

@@ -1,13 +1,11 @@
 // covers: subcommand:aidlc-state:lookup, function:buildStartListing
 //
 // A Unit's `source-manifest.json` lists every source path its build created,
-// modified or deleted. The developer writes the code, so the lead had no list
-// of its own and ran `git status --short` for one, and Kiro asks the person
-// about every git command (six of the seven git approvals on the lead in four
-// Kiro runs came from that step). `lookup source-changes <unit>` gives the same
-// list from AI-DLC's own records: what changed since that Unit's Code
-// Generation began, AI-DLC's own files left out, with the other Units'
-// manifests that list a path named beside it. It reads; it writes nothing.
+// modified or deleted. `lookup source-changes <unit>` gives the agent a list to
+// check its account of the build against without git, which Kiro asks the
+// person about: what changed since that Unit's Code Generation began, AI-DLC's
+// own files left out, with the other Units' manifests that list a path named
+// beside it. It only reads.
 // Places it cannot list as a manifest claims them (a recorded checkout, a folder
 // a link leads to outside the project, a checkout the project's git ignores)
 // are named apart, a name that is no Unit is refused, and an unreadable
@@ -246,7 +244,7 @@ describe("the stage's start, and code kept in a recorded checkout", () => {
     expect(ran.json).toEqual({
       since: "stage",
       changed: [{ path: "src/auth/login.ts", change: "created" }],
-      not_listed: ["feature@checkout"],
+      not_listed: [".claude/worktrees/feature"],
     });
   });
 });
@@ -258,12 +256,13 @@ describe("places the lookup cannot list as a manifest claims them", () => {
     symlinkSync(outside, join(proj, "wt-link"), "junction");
     startCodeGeneration(proj, false);
     writeFileSync(join(outside, "src", "legacy.ts"), "export const legacy = 2;\n");
-    write(proj, { "src/a@target.ts": "export const a = 1;\n" });
+    // Beside the link, a file whose name starts with the link's and `@target`.
+    write(proj, { "src/a@target.ts": "export const a = 1;\n", "wt-link@target.ts": "export const b = 1;\n" });
     const ran = lookupWithTool(proj, []);
     expect(ran.status, ran.out).toBe(0);
     expect(ran.json).toEqual({
       since: "stage",
-      changed: [{ path: "src/a@target.ts", change: "created" }],
+      changed: [{ path: "src/a@target.ts", change: "created" }, { path: "wt-link@target.ts", change: "created" }],
       not_listed: ["wt-link"],
     });
   });
