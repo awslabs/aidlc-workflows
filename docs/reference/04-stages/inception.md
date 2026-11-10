@@ -1355,8 +1355,8 @@ Changes**. The user can override stage inclusion/exclusion at this gate.
   dependencies defined in the component catalogue (`components.md`) and the
   unit-of-work-dependency artifact.
 - Team allocation draws from the Team Formation artifacts (Stage 1.5) if
-  they exist; when 1.5 is SKIP (mvp, classic, workshop), all Bolts are executed by
-  aidlc-developer-agent (AI).
+  they exist; when 1.5 is SKIP (mvp, classic, workshop), every Bolt is planned
+  for aidlc-developer-agent (AI). The allocation is a plan, not the decision.
 
 ---
 

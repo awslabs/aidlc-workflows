@@ -29,7 +29,7 @@ Each Bolt is one pass through the Construction stages executing one or more Unit
 
 - Bundle Units of Work into Bolts with coherent Definitions of Done
 - Choose a Bolt sequence using an explicit heuristic: WSJF, risk-first, walking-skeleton-first, or value-first
-- Assign Bolts to mobs (referencing teams from team-formation when available; AI-only otherwise)
+- Plan which mob builds each Bolt (referencing teams from team-formation when available; AI-only otherwise)
 - Capture per-Bolt confidence hypotheses — what will shipping this Bolt prove?
 - Validate the chosen sequence respects the DAG's dependency constraints (architect-agent input)
 
