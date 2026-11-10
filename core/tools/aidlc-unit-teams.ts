@@ -569,8 +569,12 @@ export function checkInLine(projectDir: string, stateContent?: string): string |
 // reads the same for every name. Read from this clone's own reflog (a pull that
 // brought nothing writes no entry), so nothing is written. Null with no such
 // pull here, nothing from anyone else (the person's own changes from another
-// computer are theirs), or no git.
-export function arrivedAtLastPull(projectDir: string): string | null {
+// computer are theirs), or no git. A build's name is followed by where it
+// stands when the caller's reader says (status passes the take question's).
+export function arrivedAtLastPull(
+  projectDir: string,
+  standing?: (built: { space: string; dirName: string }) => string | null,
+): string | null {
   const reflog = spawnSync("git", ["-C", projectDir, "reflog", "-n", "200", "--format=%H%x00%gs"], { encoding: "utf-8", timeout: 10_000 });
   if (reflog.status !== 0) return null;
   const rows = reflog.stdout.split("\n").filter((row) => row.includes("\u0000")).map((row) => row.split("\u0000") as [string, string]);
@@ -602,7 +606,9 @@ export function arrivedAtLastPull(projectDir: string): string | null {
       try {
         const state = readStateFile(projectDir, dirName, space);
         const entry = listIntents(projectDir, space).find((intent) => intent.dirName === dirName);
-        label = unitBuildOf(state)?.unit ?? (entry !== undefined ? intentDisplayLabel(entry) : dirName);
+        const unit = unitBuildOf(state)?.unit;
+        const where = unit === undefined ? null : standing?.({ space, dirName }) ?? null;
+        label = unit === undefined ? (entry !== undefined ? intentDisplayLabel(entry) : dirName) : where === null ? unit : `${unit} (${where})`;
       } catch {
         // A record no longer here keeps its folder name.
       }

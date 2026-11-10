@@ -2509,8 +2509,9 @@ To get started:
     : `Also open:      ${others.join(", ")} (ask to switch to ${others.length === 1 ? "it" : "one"})\n`;
   // Teams across repos sharing one workspace by git: what the last pull here brought from the others.
   const acrossRepos = unitBuildOf(content) !== null || (isTeamUnitOwnership(content) && homeLocation(content) !== null);
-  const arrived = acrossRepos ? arrivedAtLastPull(projectDir) : null;
-  const arrivedLine = arrived === null ? "" : `From others:    ${arrived} (at your last pull that brought changes)\n`;
+  const { pulledBuildStanding } = await import("./aidlc-orchestrate.ts");
+  const arrived = acrossRepos ? arrivedAtLastPull(projectDir, (built) => pulledBuildStanding(projectDir, built)) : null;
+  const arrivedLine = arrived === null ? "" : `From others, at your last pull that brought changes:    ${arrived}\n`;
   // Work an older AI-DLC recorded, brought up to this one in place: said here
   // on purpose, never in chat.
   const upgrade = stateUpgradeRecord(projectDir, selection.intent ?? undefined, selection.space);

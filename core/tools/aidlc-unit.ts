@@ -7575,15 +7575,27 @@ function resultVerdicts(pd: string, payload: UnitClaimPayload, unreached?: strin
 // repo of the result has it and each was reached now; a repo not here, offline
 // or refusing reads as not merged yet, and nothing is said.
 export function mergedAtTeamLook(projectDir: string, payload: UnitClaimPayload): boolean {
+  return teamMergeSeen(projectDir, payload) === true;
+}
+
+// The same read, for a line that says where a pushed build stands: true when
+// every repo has it, false when every repo is here and was reached and one
+// does not have it yet, null when a repo is not here or was not reached now.
+export function teamMergeSeen(projectDir: string, payload: UnitClaimPayload): boolean | null {
   const pd = resolveProjectDir(projectDir);
   try {
     return quietly(() => {
+      const repos = payload.result?.repos ?? [];
+      const notHere = repos.some((repo) => !payload.said_merged?.some((entry) => entry.repo === repo.repo) &&
+        !isGitRepoDir(repo.repo === "." ? pd : repoDir(pd, repo.repo)));
+      if (repos.length === 0 || notHere) return null;
       const unreached: string[] = [];
       const verdicts = resultVerdicts(pd, payload, unreached);
-      return unreached.length === 0 && verdicts.length > 0 && verdicts.every((verdict) => verdict.merged);
+      if (unreached.length > 0) return null;
+      return verdicts.every((verdict) => verdict.merged);
     });
   } catch {
-    return false;
+    return null;
   }
 }
 

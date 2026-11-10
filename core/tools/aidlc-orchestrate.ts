@@ -652,7 +652,7 @@ import {
   sendLeadsApprovedChanges,
   GitWriteRefused,
   earlyBaseMerged,
-  mergedAtTeamLook,
+  teamMergeSeen,
   moveRefusedMark,
   shareBlocker,
   skeletonHeldBackOnShare,
@@ -9132,6 +9132,41 @@ export function buildIsMine(
   return by === null ? null : by === gitUserName(projectDir);
 }
 
+// Where a teammate's build stands, the take question's one owner of it: from
+// the build's own record and its claim as this clone last fetched it, merged
+// once the lead recorded it or every repo has it now (teamMergeSeen); 'pushed'
+// alone when its repos cannot be read here.
+type BuildStanding =
+  | { kind: "building" | "waiting" | "merged" | "pushed" }
+  | { kind: "turned-down"; down: { repo: string; from?: string } };
+
+function buildStanding(
+  projectDir: string,
+  built: { space: string; dirName: string },
+  claim: UnitClaimView | null | undefined,
+  worked = buildLastWorked(projectDir, built, claim?.status === "claimed" ? claim.payload.taken_by : undefined),
+): BuildStanding {
+  const live = claim?.status === "claimed" ? claim : undefined;
+  if (live?.payload.turned_down) return { kind: "turned-down", down: live.payload.turned_down };
+  if (live?.payload.done === true) return { kind: "merged" };
+  if (!worked.awaitingMerge) return { kind: "building" };
+  const seen = live === undefined ? null : teamMergeSeen(projectDir, live.payload);
+  return { kind: seen === true ? "merged" : seen === false ? "waiting" : "pushed" };
+}
+
+// A build a pull brought, in those words for status's 'From others' line; null
+// for a record that is not a build, or one that cannot be read.
+export function pulledBuildStanding(projectDir: string, built: { space: string; dirName: string }): string | null {
+  try {
+    if (unitBuildOf(readStateFile(projectDir, built.dirName, built.space)) === null) return null;
+    const standing = buildStanding(projectDir, built, buildClaimHere(projectDir, built));
+    return standing.kind === "turned-down" ? turnedDownWords(standing.down, "the lead's")
+      : standing.kind === "waiting" ? "pushed, waiting for its merge" : standing.kind;
+  } catch {
+    return null;
+  }
+}
+
 // Other work here that is not this person's to switch to: another person's
 // build a pull brought (buildIsMine), or, in a teammate's clone, the lead's
 // plan (planMadeElsewhere on its own rows). Solo work is never read this way.
@@ -9324,13 +9359,12 @@ function unitTakeLook(
           const worked = buildLastWorked(projectDir, built, live?.payload.taken_by);
           const who = live !== undefined ? builderOf(live) : worked.by ?? "a teammate";
           const where = spaceWords(built.space, true);
-          const down = live?.payload.turned_down;
-          const sentBack = down !== undefined ? turnedDownStatus(down, `${who}${where}`, "the lead's") : null;
+          const standing = buildStanding(projectDir, built, live, worked);
+          const sentBack = standing.kind === "turned-down" ? turnedDownStatus(standing.down, `${who}${where}`, "the lead's") : null;
           const mine = buildIsMine(projectDir, built, live, worked.by) === true;
-          if (worked.awaitingMerge && sentBack === null) {
-            // Merged in every repo by the lead's own rule, read here and never written (mergedAtTeamLook).
-            const merged = live !== undefined && mergedAtTeamLook(projectDir, live.payload);
-            building.push(`${unit} (pushed by ${who}${where}, ${merged ? "merged; the lead's project records it at its next look" : "waiting for its merge"})`);
+          if (standing.kind !== "building" && standing.kind !== "turned-down") {
+            // Merged in every repo by the lead's own rule, read here and never written (teamMergeSeen).
+            building.push(`${unit} (pushed by ${who}${where}, ${standing.kind === "merged" ? "merged; the lead's project records it at its next look" : "waiting for its merge"})`);
             continue;
           }
           if (!mine) {
@@ -18050,9 +18084,11 @@ function leftForTakesAtHome(
 // A Unit back with its team: turned down in one of its repos, or sent back
 // from the lead's own Build and Test (which names no repo).
 function turnedDownStatus(down: { repo: string; from?: string }, team: string, whose = "your"): string {
-  return down.from === "build-and-test"
-    ? `sent back from ${whose} Build and Test, back with ${team}`
-    : `turned down in ${down.repo}, back with ${team}`;
+  return `${turnedDownWords(down, whose)}, back with ${team}`;
+}
+
+function turnedDownWords(down: { repo: string; from?: string }, whose = "your"): string {
+  return down.from === "build-and-test" ? `sent back from ${whose} Build and Test` : `turned down in ${down.repo}`;
 }
 
 // The Units merged at a team home, read from the audit too when no progress

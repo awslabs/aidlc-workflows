@@ -19,8 +19,11 @@ import { mergedAtTeamLook, type UnitClaimPayload } from "../../dist/claude/.clau
 import { fixtureIntentId8 } from "../harness/fixtures.ts";
 import {
   cleanupTeamBuild,
+  cloneCode,
   cloneOf,
   codeGenerated,
+  codeHost,
+  DEPENDENCIES,
   claimPayload,
   ENV,
   finishBuild,
@@ -392,13 +395,15 @@ describe("where things stand", () => {
     git(ana, ["pull", "-q", "--no-rebase", "--no-edit"]);
     expect(arrivedAtLastPull(ana)).toBe("bea: checkout-ui");
     const status = run(UTILITY, ["status"], ana, ENV);
-    expect(status.out).toContain("From others:    bea: checkout-ui (at your last pull that brought changes)");
+    expect(status.out).toContain("From others, at your last pull that brought changes:    bea: checkout-ui (building)\n");
     // Another pull, straight after, that brings the lead's change: only that one is said.
     writeFileSync(join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD, "notes.md"), "Lead's note.\n");
     git(home.dir, ["pull", "-q", "--no-rebase", "--no-edit"]);
     checkIn(home.dir, "the lead's note");
     git(ana, ["pull", "-q", "--no-rebase", "--no-edit"]);
     expect(arrivedAtLastPull(ana)).toBe("lead: fixture");
+    // A record that is not a build keeps its name alone.
+    expect(run(UTILITY, ["status"], ana, ENV).out).toContain("From others, at your last pull that brought changes:    lead: fixture\n");
   });
 
   // A live run (Windows Server, every take in the default space): status right
@@ -414,7 +419,7 @@ describe("where things stand", () => {
     checkIn(bea, "checkout-ui started");
     git(ana, ["pull", "-q", "--no-rebase", "--no-edit"]);
     expect(arrivedAtLastPull(ana)).toBe("bea: checkout-ui");
-    expect(run(UTILITY, ["status"], ana, ENV).out).toContain("From others:    bea: checkout-ui (at your last pull that brought changes)");
+    expect(run(UTILITY, ["status"], ana, ENV).out).toContain("From others, at your last pull that brought changes:    bea: checkout-ui (building)\n");
     // Ana's own change from her other computer: nothing from others.
     const laptop = cloneOf(home.remote, "ana");
     const intents = join(laptop, "aidlc", "spaces", "default", "intents");
@@ -424,7 +429,60 @@ describe("where things stand", () => {
     checkIn(laptop, "ana's note");
     git(ana, ["pull", "-q", "--no-rebase", "--no-edit"]);
     expect(arrivedAtLastPull(ana)).toBeNull();
-    expect(run(UTILITY, ["status"], ana, ENV).out).not.toContain("From others:");
+    expect(run(UTILITY, ["status"], ana, ENV).out).not.toContain("From others");
+  });
+
+  // Live runs (Windows Server, Kiro CLI): status said only whose records a pull
+  // brought, and the agent said a merged Unit was still in progress.
+  test("each pulled build says where it stands in the take question's words: pushed, waiting for its merge, merged, or pushed alone when its repos cannot be read here", () => {
+    const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
+    const home = makeHome({ repos: hosts });
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "teams"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const bea = cloneOf(home.remote, "bea");
+    expect(run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD], bea).status).toBe(0);
+    checkIn(bea, "checkout-ui started");
+    const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "ana-chat" };
+    const ana = cloneOf(home.remote, "ana");
+    for (const [name, host] of Object.entries(hosts)) cloneCode(host, ana, name, "ana");
+    expect(run(UNIT, ["take", "refunds", "--home", HOME_RECORD], ana, chat).status).toBe(0);
+    const intents = join(ana, "aidlc", "spaces", "default", "intents");
+    const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-refunds"))!);
+    codeGenerated(ana, record);
+    finishBuild(record);
+    const pushed = run(UNIT, ["push"], ana, chat);
+    expect(pushed.status, pushed.out).toBe(0);
+    checkIn(ana, "refunds pushed");
+    git(bea, ["pull", "-q", "--no-rebase", "--no-edit"]);
+    const fromOthers = (): string | undefined =>
+      /^From others, at your last pull that brought changes: +(.*)$/m.exec(run(UTILITY, ["status"], bea, ENV).out)?.[1];
+    // Her workspace has no copy of refunds' repos: where its merge stands cannot be read here.
+    expect(fromOthers()).toBe("ana: refunds (pushed)");
+    for (const [name, host] of Object.entries(hosts)) cloneCode(host, bea, name, "bea");
+    expect(fromOthers()).toBe("ana: refunds (pushed, waiting for its merge)");
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    mergeOnHost(hosts.billing, "refunds", "merge");
+    expect(fromOthers()).toBe("ana: refunds (merged)");
+  });
+
+  test("two builds one teammate is building are each said building, in one line", () => {
+    const home = makeHome({ dependencies: DEPENDENCIES.replace("depends_on: [refunds]", "depends_on: []") });
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "teams"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const ana = cloneOf(home.remote, "ana");
+    expect(run(UNIT, ["take", "refunds", "--home", HOME_RECORD], ana).status).toBe(0);
+    checkIn(ana, "refunds started");
+    const bea = cloneOf(home.remote, "bea");
+    expect(run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD], bea).status).toBe(0);
+    expect(run(UNIT, ["take", "reporting", "--home", HOME_RECORD], bea).status).toBe(0);
+    checkIn(bea, "checkout-ui and reporting started");
+    git(ana, ["pull", "-q", "--no-rebase", "--no-edit"]);
+    expect(run(UTILITY, ["status"], ana, ENV).out)
+      .toContain("From others, at your last pull that brought changes:    bea: checkout-ui (building), reporting (building)\n");
   });
 });
 

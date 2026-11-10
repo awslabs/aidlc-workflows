@@ -815,9 +815,13 @@ work stands once aidlc/ is committed and pushed." It
 never goes by what git shows changed, since AI-DLC's own record changes at every
 step. Asked where things stand (`/aidlc --status`), a clone also says what its
 last `git pull` that brought changes brought from other people, by who made each
-change (their git name), for example "From others: Abe Payments: u1-redeem;
-bea: checkout-ui (at your last pull that brought changes)"; your own changes
-from another computer are not said.
+change (their git name), and where each Unit's build stands in the words the
+Units offer uses (building, pushed, waiting for its merge, merged, turned down
+or sent back), for example "From others, at your last pull that brought
+changes: Abe Payments: u1-redeem (merged); bea: checkout-ui (building)". A build
+whose repos this workspace has no copy of, or cannot reach just now, says only
+"(pushed)"; other work is named alone; your own changes from another computer
+are not said.
 
 ### Start early, and change a shared input
 
