@@ -1271,7 +1271,14 @@ change. See
    workspace, when another open piece of work in this checkout claims files in
    its Units' source manifests, its `agent_note` gives the line the brief
    carries word for word: those files are that work's, not this work's to
-   review (the same set `other_work_note` names to the build). The directive's `review_artifact` field
+   review (the same set `other_work_note` names to the build). On Code
+   Generation, when the plan the person approved changed after that approval
+   and the plan re-approval check let it build without asking them again
+   (Guard Policy relaxed or off, unless that check is switched back on), the
+   `agent_note` gives one more line the brief carries word for word: what
+   changed, in the change line's words, and that their earlier approval stays
+   the record, naming the plan-approval record file while it is still that
+   approval's (`approvedPlanChangeReviewLine` in `aidlc-testing-posture.ts`). The directive's `review_artifact` field
    names the required Markdown output the review is about: the record is
    keyed to it, the gate names it, and finding selectors address it; output
    ordering and plugin additions cannot change it, and nothing writes to it

@@ -306,6 +306,7 @@ import {
   renderReadableReviewCopy,
 } from "./aidlc-review-brief.js";
 import {
+  approvedPlanChangeReviewLine,
   codeGenerationPlanApprovalQuestionEvidence,
   type CodeGenerationTarget,
   notePlanApprovalOverrideOffered,
@@ -5031,6 +5032,11 @@ function handleReview(args: string[]): void {
     // The reviewer is told which files another open piece of work in this
     // folder claims, as the build was, so it raises no finding about them.
     const otherWork = workspaceStage ? otherOpenWorkClaims(pd, flags.stage) : [];
+    // A Code Generation plan the person approved that changed and was built
+    // without asking them again: the reviewer is told, so the plan-approval
+    // record beside the plan does not read as a missing approval.
+    const planChange = flags.stage === "code-generation"
+      ? approvedPlanChangeReviewLine(pd, { unit: flags.unit ?? null }) : null;
     console.log(JSON.stringify({
       emitted: "REVIEW_REQUESTED",
       stage: flags.stage,
@@ -5045,7 +5051,7 @@ function handleReview(args: string[]): void {
         reviewFile ?? "the review file this request opened",
         recordVerdict,
         dispatchAgent,
-        otherWork.length > 0 ? otherWorkNote(otherWork, "review") : undefined,
+        [...(otherWork.length > 0 ? [otherWorkNote(otherWork, "review")] : []), ...(planChange === null ? [] : [planChange])],
       ),
       ...(retried ? { retry: "pending-request" } : {}),
       ...(upgraded ? { upgrade: "legacy-request" } : {}),

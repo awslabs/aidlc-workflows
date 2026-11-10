@@ -20,6 +20,7 @@ import {
   activeIntentUuid,
   delegatedWorktreeIntent,
   decideFence,
+  fenceCheckName,
   aidlcOwnedSourceKey,
   isLinkTargetListingKey,
   attemptEventDefinitelyBefore,
@@ -1913,6 +1914,27 @@ function changedSteps(before: string[], after: string[]): string {
   return others > 0 ? `${what}, and ${others} more ${others === 1 ? "step" : "steps"} changed` : what;
 }
 
+const lf = (text: string) => text.replace(/\r\n/g, "\n");
+
+/**
+ * What changed since the approval, in the change line's words, or null when
+ * nothing did: the plan's steps (with the test instructions when they changed
+ * too), or the test instructions alone. The person's line and the reviewer's
+ * both say it from here.
+ */
+function approvedPlanChange(
+  copy: ApprovedPlanCopy,
+  plan: string,
+  instructions: string,
+): { plan: boolean; what: string } | null {
+  const planChanged = projectPlanApprovalContent(plan) !== projectPlanApprovalContent(copy.plan);
+  const instructionsChanged = lf(instructions) !== lf(copy.instructions);
+  if (!planChanged && !instructionsChanged) return null;
+  if (!planChanged) return { plan: false, what: "the test instructions changed" };
+  const steps = changedSteps(planSteps(copy.plan).map((step) => step.text), planSteps(plan).map((step) => step.text));
+  return { plan: true, what: `${steps}${instructionsChanged ? ", and the test instructions changed too" : ""}` };
+}
+
 export function approvedPlanChangeText(
   copy: ApprovedPlanCopy,
   plan: string,
@@ -1920,18 +1942,14 @@ export function approvedPlanChangeText(
   planAsked = false,
   built = false,
 ): string | null {
-  const planChanged = projectPlanApprovalContent(plan) !== projectPlanApprovalContent(copy.plan);
-  const lf = (text: string) => text.replace(/\r\n/g, "\n");
-  const instructionsChanged = lf(instructions) !== lf(copy.instructions);
-  if (!planChanged && !instructionsChanged) return null;
+  const change = approvedPlanChange(copy, plan, instructions);
+  if (change === null) return null;
   const wayBack = built
     ? planAsked ? APPROVED_PLAN_REBUILD_OFFER : APPROVED_PLAN_REBUILD_QUESTION
     : planAsked ? APPROVED_PLAN_UNDO_OFFER : APPROVED_PLAN_UNDO_QUESTION;
   const when = built ? "after the build started" : "before the build";
-  if (!planChanged) return `Your approved test instructions changed ${when}. ${wayBack}`;
-  const what = changedSteps(planSteps(copy.plan).map((step) => step.text), planSteps(plan).map((step) => step.text));
-  return `Your approved plan changed ${when}: ${what}${instructionsChanged ? ", and the test instructions changed too" : ""}. ` +
-    wayBack;
+  if (!change.plan) return `Your approved test instructions changed ${when}. ${wayBack}`;
+  return `Your approved plan changed ${when}: ${change.what}. ${wayBack}`;
 }
 
 /**
@@ -2003,6 +2021,42 @@ export function approvedPlanChangeLine(
       planAsked,
       approved.built,
     );
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The line a Code Generation review's brief carries when the plan the person
+ * approved changed after that approval and was built without asking them again,
+ * or null. A reviewer handed the plan-approval record beside a plan that says
+ * more read the difference as a missing approval and asked the person for one
+ * their setting does not ask for (a live run under Guard Policy off). Whether
+ * the changed plan was asked about again is the plan re-approval check's own
+ * decision (codeGenerationPlanApprovalFence), not the policy word: a check the
+ * person switched on asks again under off, and one switched off does not under
+ * strict. The record file is named only while it is still that approval's
+ * (the copy is replaced at every approval, so it is never "the first").
+ */
+export function approvedPlanChangeReviewLine(projectDir: string, target: CodeGenerationTarget): string | null {
+  try {
+    const authority = resolveCodeGenerationAuthority(projectDir, target);
+    const approved = approvedCopyForAttempt(projectDir, authority);
+    if (approved === null) return null;
+    const change = approvedPlanChange(
+      approved.copy,
+      readFileSync(join(authority.stageDir, "code-generation-plan.md"), "utf-8"),
+      readFileSync(join(authority.stageDir, "unit-test-instructions.md"), "utf-8"),
+    );
+    if (change === null || codeGenerationPlanApprovalFence(projectDir, target).decision !== "stand-aside") return null;
+    const questionsPath = join(authority.stageDir, "code-generation-questions.md");
+    const record = existsSync(questionsPath) && lf(readFileSync(questionsPath, "utf-8")) === lf(approved.copy.questions)
+      ? `: \`${toPosix(relative(projectDir, questionsPath))}\` is the record of that approval, with the summary of the ` +
+        "plan as they approved it."
+      : ".";
+    return `The person approved this code plan, and what they approved changed after that: ${change.what}. ` +
+      `The ${fenceCheckName("plan-approval")} check is off for this piece of work, so they were not asked again, ` +
+      `and their earlier approval stays the record${record}`;
   } catch {
     return null;
   }
