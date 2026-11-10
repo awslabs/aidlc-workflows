@@ -21,8 +21,8 @@ in this module applies unchanged, with three additions:
 
 1. **One request per stage.** Before dispatching the reviewer, record the
    request for this stage as step 1 says, and then one more request per
-   `review_covers` entry — the same command with `--stage "<entry.slug>"
-   --covered-by "<directive.stage>"` (the engine admits a deferred stage's
+   `review_covers` entry — the same command with `--stage '<entry.slug>'
+   --covered-by '<directive.stage>'` (the engine admits a deferred stage's
    request only through that flag, a retry of its own pending request, or a
    review the person asked for). Each returns its own `reviewFile`. If a
    covered stage's request is refused because its review budget is already

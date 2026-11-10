@@ -2693,8 +2693,8 @@ export function renderReviewBrief(
       .filter(({ context }) => context.findings.some(findingIsOpen))
       .map(({ stage: of }) => [of.slug, of] as const),
   ).values()].map((of) =>
-    `**Way back:** a change to ${findStageBySlug(of.slug)?.name ?? of.slug}'s documents is a jump back — ` +
-      `\`${entrySkillInvocation()} --stage ${of.slug}\` — and the work replays forward from there.`
+    `**Way back:** a change to ${findStageBySlug(of.slug)?.name ?? of.slug}'s documents is a jump back ` +
+      `(\`${entrySkillInvocation()} --stage ${of.slug}\`), and the work replays forward from there.`
   );
   lines.push(
     "",

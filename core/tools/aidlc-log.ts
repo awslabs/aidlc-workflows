@@ -4008,7 +4008,7 @@ function handleReview(args: string[]): void {
           const anchorName = loadStageGraphAll().find((entry) => entry.slug === role.anchor)?.name ?? role.anchor;
           refuseReview(
             `Reviews are grouped per phase for this piece of work: "${flags.stage}"'s review runs at ` +
-              `${anchorName}'s step, which records this stage's own receipt, so nothing is owed here — ` +
+              `${anchorName}'s step, which records this stage's own receipt, so nothing is owed here: ` +
               `go on to this stage's approval gate. The grouped pass requests it with ` +
               `--covered-by "${role.anchor}"; a review the person asked for runs now with ` +
               `--person-asked --message <their message id>.`,
