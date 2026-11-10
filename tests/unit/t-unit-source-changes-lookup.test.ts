@@ -213,14 +213,35 @@ describe("the files a Unit's build changed, for its source-manifest.json", () =>
     expect(ran.out).toContain("No Unit named u1-tag in this work. Its Units: alpha, beta.");
   });
 
-  test("a start listing that cannot be read answers available: false, not an error", () => {
-    const p = atAlphasBuild();
+  // The Unit's own listing in brought-files, read before it is replaced: the
+  // lookup answers from it (`since: "unit"`), so the replacement is what fails.
+  function ownListing(p: string): string {
     const dir = join(seededRecordDir(p), ".aidlc-engine", "brought-files");
     const own = readdirSync(dir).find((name) => name.startsWith("unit-"));
     expect(own, readdirSync(dir).join(", ")).toBeDefined();
-    unlinkSync(join(dir, own!));
-    writeFileSync(join(p, "elsewhere.tsv"), "");
-    symlinkSync(join(p, "elsewhere.tsv"), join(dir, own!));
+    expect(lookupWithTool(p, ["alpha"]).json).toMatchObject({ unit: "alpha", since: "unit" });
+    return join(dir, own!);
+  }
+
+  test("a start listing that cannot be read answers available: false, not an error", () => {
+    const p = atAlphasBuild();
+    const listing = ownListing(p);
+    // A folder where the file was: no regular file to read, on every OS.
+    unlinkSync(listing);
+    mkdirSync(listing);
+    const ran = lookupWithTool(p, ["alpha"]);
+    expect(ran.status, ran.out).toBe(0);
+    expect(ran.json).toMatchObject({ unit: "alpha", available: false });
+  });
+
+  // A file link needs rights Windows does not give by default.
+  test.skipIf(process.platform === "win32")("a start listing that is a link is not followed", () => {
+    const p = atAlphasBuild();
+    const listing = ownListing(p);
+    const kept = readFileSync(listing, "utf-8");
+    unlinkSync(listing);
+    writeFileSync(join(p, "elsewhere.tsv"), kept);
+    symlinkSync(join(p, "elsewhere.tsv"), listing);
     const ran = lookupWithTool(p, ["alpha"]);
     expect(ran.status, ran.out).toBe(0);
     expect(ran.json).toMatchObject({ unit: "alpha", available: false });
