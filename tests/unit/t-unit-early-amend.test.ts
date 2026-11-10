@@ -30,6 +30,7 @@ import {
   git,
   GIT_ENV,
   HOME_RECORD,
+  inSpace,
   makeHome,
   mergeOnHost,
   next,
@@ -47,8 +48,8 @@ afterEach(cleanupTeamBuild);
 
 const REQUIREMENTS = "inception/requirements-analysis/requirements.md";
 
-// refunds pushed by payments; a data member's clone with billing, ready to take
-// reporting, which waits on refunds and which the lead left open for a team.
+// refunds pushed from the payments space; dana's clone with billing and
+// checkout-api, ready to take reporting, which waits on refunds and is open.
 function refundsPushed(dependencies?: string) {
   const taken = refundsTaken(undefined, dependencies);
   codeGenerated(taken.alice, taken.record);
@@ -79,13 +80,16 @@ describe("starting early", () => {
     expect(run(UNIT, ["push"], taken.alice).status).toBe(0);
     const dana = cloneOf(taken.home.remote, "dana");
     cloneCode(taken.hosts.billing, dana, "billing", "dana");
+    // From a space of their own: a build in the lead's own space follows the lead's rules, with no choice to put.
+    inSpace(dana, "data");
     const ask = next(dana);
     const choices = ask.choices as Array<{ label: string; command: string }>;
     const own = choices.find((choice) => choice.label === "Start one under your team's own rules only");
     expect(own, choices.map((choice) => choice.label).join(" | ")).toBeDefined();
     expect(own!.command).toContain(" --early");
+    expect(own!.command).not.toContain("--team");
     const took = run(UNIT, own!.command.replace(/^.*aidlc-unit\.ts /, "").replace("'<the Unit>'", "reporting")
-      .replace("'<their team>'", "data").split(" ").filter(Boolean), dana);
+      .split(" ").filter(Boolean), dana);
     expect(took.status, took.out).toBe(0);
     expect(String(took.json?.notice)).toContain("It starts early on the pushed branch of refunds in billing.");
   });
@@ -94,9 +98,8 @@ describe("starting early", () => {
     const { dana, hosts, home } = refundsPushed();
     const ask = next(dana);
     const labels = (ask.choices as Array<{ label: string; command: string }>).map((choice) => choice.label);
-    // reporting is open: started early for a team the lead named, or another.
-    expect(labels, JSON.stringify(ask)).toContain("Start reporting early for payments");
-    expect(labels).toContain("Start reporting early for another team");
+    // reporting is open: one start, early, for whoever takes it.
+    expect(labels.filter((label) => label.startsWith("Start reporting")), JSON.stringify(ask)).toEqual(["Start reporting early"]);
     const took = takeIn("data", ["reporting", "--home", HOME_RECORD, "--early"], dana);
     expect(took.status, took.out).toBe(0);
     expect(String(took.json?.notice)).toContain(
@@ -305,7 +308,7 @@ describe("a change to a shared input", () => {
     expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-amend");
     const proposedAt = `aidlc/spaces/default/intents/${HOME_RECORD}/.aidlc-engine/proposed/refunds/${REQUIREMENTS}`;
     expect(ask.question).toBe(
-      `payments proposes a change to the requirements for refunds ("refunds need partial amounts"). Their version is at ${proposedAt}. ` +
+      `alice proposes a change to the requirements for refunds ("refunds need partial amounts"). Their version is at ${proposedAt}. ` +
         "Approve it for every Unit that uses it, or turn it down?",
     );
     expect(readFileSync(join(home.dir, ...proposedAt.split("/")), "utf-8")).toBe("# Requirements\n\nFR1 refunds, partial amounts too.\n");
@@ -362,7 +365,7 @@ describe("a change to a shared input", () => {
     const pushed = run(UNIT, ["push"], alice);
     expect(pushed.status, pushed.out).toBe(0);
     git(home.dir, ["fetch", "-q", "origin"]);
-    const heard = "The payments team's copy of the requirements has their own edit, made on the version before your change, and they kept it: " +
+    const heard = "alice's copy of the requirements has their own edit, made on the version before your change, and they kept it: " +
       "what they built uses theirs.";
     const lead = personsChat("lead-chat");
     expect(notices(next(home.dir, lead))).toContain(heard);
@@ -379,6 +382,8 @@ describe("a change to a shared input", () => {
     const chat = personsChat("bob-chat");
     // bob's chat has looked at its claim once already.
     personsNext(bob, chat, "bob-chat");
+    // The lead's step puts the change to them, seeing bob's take, and they approve it.
+    expect(next(home.dir).ask_type).toBe("unit-amend");
     expect(run(UNIT, ["amend", "refunds", "--input", REQUIREMENTS, "--answer", "approve", "--person-words", "yes"], home.dir).status).toBe(0);
     // Its build moves on to its next stage in the same chat: the change is heard there, with no fetch by hand.
     const intents = join(bob, "aidlc", "spaces", "web", "intents");
@@ -404,7 +409,7 @@ describe("a change to a shared input", () => {
     const lead = personsChat("lead-chat");
     const step = personsNext(home.dir, lead, "lead-chat");
     expect(notices(step).join(" "), JSON.stringify(step).slice(0, 400)).toContain(
-      "The requirements you changed reach the teams building with it (payments): they hear it once and carry on.",
+      "The requirements you changed reach the teams building with it (alice): they hear it once and carry on.",
     );
     expect((claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds") as { amendments?: unknown[] }).amendments?.length).toBe(1);
     git(alice, ["fetch", "-q", "origin"]);
@@ -417,8 +422,8 @@ describe("a change to a shared input", () => {
   // redid Requirements Analysis with a wording change "so the web team gets
   // it too", and the team's next chat heard nothing.
   test("the lead's own approved change reaches a Unit already done and merged, with the offer of follow-up work", () => {
-    // The team's Unit is the only one a team holds: once it is done, no Unit
-    // waits on a team, and the change still reaches it.
+    // The team's Unit is the only one taken: once it is done, nobody builds a
+    // Unit, and the change still reaches it.
     const { home, hosts, alice, record } = refundsTaken();
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
@@ -476,7 +481,34 @@ describe("a change to a shared input", () => {
     const { home } = proposed();
     const bob = cloneOf(home.remote, "bob");
     expect(takeIn("web", ["checkout-ui", "--home", HOME_RECORD], bob).status).toBe(0);
+    // The lead's step puts the change to them, seeing bob's take, and they approve it.
+    expect(next(home.dir).ask_type).toBe("unit-amend");
     expect(run(UNIT, ["amend", "refunds", "--input", REQUIREMENTS, "--answer", "approve", "--person-words", "yes"], home.dir).status).toBe(0);
+    git(bob, ["fetch", "-q", "origin"]);
+    expect(notices(next(bob))).toContain("The lead changed the requirements; checkout-ui uses the new one from here.");
+  });
+
+  // A take the lead's chat had not seen when it approved, or one made after the
+  // approval from the plan as last pushed: the lead's next step sends the
+  // approved change onto that claim too, as it did onto a Unit held for a team.
+  test("a Unit taken while the lead's answer is open hears the approved change at the lead's next step", () => {
+    const { home } = proposed();
+    expect(next(home.dir).ask_type).toBe("unit-amend");
+    const bob = cloneOf(home.remote, "bob");
+    expect(takeIn("web", ["checkout-ui", "--home", HOME_RECORD], bob).status).toBe(0);
+    expect(run(UNIT, ["amend", "refunds", "--input", REQUIREMENTS, "--answer", "approve", "--person-words", "yes"], home.dir).status).toBe(0);
+    next(home.dir);
+    git(bob, ["fetch", "-q", "origin"]);
+    expect(notices(next(bob))).toContain("The lead changed the requirements; checkout-ui uses the new one from here.");
+  });
+
+  test("a Unit taken after the approval, from the plan as last pushed, hears the approved change at the lead's next step", () => {
+    const { home } = proposed();
+    expect(next(home.dir).ask_type).toBe("unit-amend");
+    expect(run(UNIT, ["amend", "refunds", "--input", REQUIREMENTS, "--answer", "approve", "--person-words", "yes"], home.dir).status).toBe(0);
+    const bob = cloneOf(home.remote, "bob");
+    expect(takeIn("web", ["checkout-ui", "--home", HOME_RECORD], bob).status).toBe(0);
+    next(home.dir);
     git(bob, ["fetch", "-q", "origin"]);
     expect(notices(next(bob))).toContain("The lead changed the requirements; checkout-ui uses the new one from here.");
   });
@@ -556,7 +588,7 @@ describe("a change to a shared input", () => {
     expect(JSON.stringify(step)).not.toContain("Do you want me to redo");
   });
 
-  test("an approved change that does not reach a team just now names that team", () => {
+  test("an approved change that does not reach a build just now names who took it", () => {
     const { home } = proposed();
     const bob = cloneOf(home.remote, "bob");
     expect(takeIn("web", ["checkout-ui", "--home", HOME_RECORD], bob).status).toBe(0);
@@ -566,7 +598,7 @@ describe("a change to a shared input", () => {
     chmodSync(hook, 0o755);
     const amended = run(UNIT, ["amend", "refunds", "--input", REQUIREMENTS, "--answer", "approve", "--person-words", "yes"], home.dir);
     expect(amended.status, amended.out).toBe(0);
-    expect(String(amended.json?.notice)).toContain("It did not reach web just now (its claim moved meanwhile), so that team does not have it yet.");
+    expect(String(amended.json?.notice)).toContain("It did not reach bob just now (its claim moved meanwhile), so that team does not have it yet.");
   });
 
   test("turned down: the team hears the owner's words and carries on with the approved one", () => {
@@ -599,7 +631,7 @@ describe("a change to a shared input", () => {
     const step = next(home.dir);
     expect(step.ask_type).not.toBe("unit-amend");
     expect(notices(step)).toContain(
-      "The change payments proposed to the requirements waits for your answer: approve it or turn it down when you are ready.",
+      "The change alice proposed to the requirements waits for your answer: approve it or turn it down when you are ready.",
     );
   });
 
@@ -686,7 +718,7 @@ describe("who hears a change to the contract summary", () => {
     approveContracts(home);
     const step = next(home.dir);
     expect(notices(step).join(" "), JSON.stringify(step).slice(0, 400)).toContain(
-      "The contract summary you changed reaches the teams building with it (web and payments): they hear it once and carry on.",
+      "The contract summary you changed reaches the teams building with it (bob and alice): they hear it once and carry on.",
     );
     expect([amendments(home, "refunds"), amendments(home, "checkout-ui"), amendments(home, "reporting")]).toEqual([1, 1, 0]);
   });

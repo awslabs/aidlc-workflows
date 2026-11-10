@@ -13361,7 +13361,8 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   // opens later in the same chat is offered then.
   // A build the lead turned down is not done: its step says so.
   if (stateContent && plainNext && engineSessionId && !isReadOnlyEngineProbe() && unitBuildOf(stateContent) !== null) {
-    const buildDone = (getField(stateContent, "Status")?.trim() === "Completed" ||
+    // Finished with its push still to offer is not done: its push comes first (workflowContinues reads it the same way).
+    const buildDone = ((getField(stateContent, "Status")?.trim() === "Completed" && !unitPushToOffer(pd, stateContent)) ||
       getField(stateContent, UNIT_PUSH_FIELD)?.trim() === "pushed") && !buildTurnedDownNow(pd, stateContent, engineSessionId);
     const take = buildDone ? unitTakeAsk(pd) : null;
     // Only when there is a Unit to start: a build that is the team's only one says its own end.
@@ -14393,9 +14394,11 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     // too (a team's space before its first take, or after a give back);
     // picking the work itself is the lead's, and in the lead's own checkout
     // "Carry on ... here, as the lead" stays among the choices.
+    const look = takeOfferedOnWords(pd) || here !== null ? null : unitTakeAsk(pd);
     const take = takeOfferedOnWords(pd) ? null
       : here !== null && here.selectable.length > 0 ? unitTakeAsk(pd) ?? soloElsewhereAsk(pd)
-      : here === null ? unitTakeAsk(pd)
+      // Nothing here to pick up: the Units only when one can be taken; else their words go on.
+      : look?.kind === "ask" ? look
       : null;
     if (take !== null) {
       noteTakeOfferedOnWords(pd);

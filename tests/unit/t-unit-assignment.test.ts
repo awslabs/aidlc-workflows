@@ -17,7 +17,7 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
-import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { auditBlockField, readAuditShardEvents, REQUEST_TEXT_DIR } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { fixtureIntentId8, seededRecordDir } from "../harness/fixtures.ts";
 import {
   claimPayload,
@@ -211,7 +211,7 @@ describe("after the share nothing is built at the lead's project until the lead 
     const note = String(board.board_note);
     expect(note).toContain(
       "when they ask to build a Unit left open here, run `bun .claude/tools/aidlc-unit.ts assign --here <unit> " +
-        "--request-file aidlc/.aidlc-request-text/unit-assign.txt`",
+        `--request-file ${REQUEST_TEXT_DIR}/unit-assign.txt\``,
     );
     expect(note).not.toContain("assign <unit>=<team>");
     expect(note).not.toContain("assign --open");
@@ -251,7 +251,7 @@ describe("the lead's word builds a Unit here: assign --here", () => {
     share(home.dir);
     const board = next(home.dir);
     const file = /assign --here <unit> --request-file (\S+?)`/.exec(String(board.board_note))?.[1];
-    expect(file).toBe("aidlc/.aidlc-request-text/unit-assign.txt");
+    expect(file).toBe(`${REQUEST_TEXT_DIR}/unit-assign.txt`);
     const words = "we build refunds here, it's $HOME's `job`";
     mkdirSync(join(home.dir, file!, ".."), { recursive: true });
     writeFileSync(join(home.dir, file!), `${words}\n`);

@@ -7917,7 +7917,8 @@ export function otherBuildsTurnedDown(
         const mine = cachedClaimsForIdentity(projectDir, { space: homeSpace, intentUuid: build.homeWork, intentId8: idSuffix(build.homeWork) }, false)
           .get(build.unit);
         const down = mine?.payload.turned_down;
-        if (!down || mine?.payload.done || takeStanding(projectDir, build).state !== "recorded") continue;
+        // Offered back only to the one who took it; another's build is said in the take list.
+        if (!down || mine?.payload.done || !claimIsMine(projectDir, mine!) || takeStanding(projectDir, build).state !== "recorded") continue;
         const said = turnedDownLine(build.unit, down);
         found.push({
           line: `${said} ${BUILD_WAITING_CLAUSE}`,
@@ -8349,8 +8350,12 @@ export function sendLeadsApprovedChanges(projectDir: string): string[] {
     const graph = loadGraph();
     const rows = readAuditShardEvents(pd);
     const receipts = latestCompletionBasesFromAudit(readAllAuditShards(pd));
-    const approval = (stage: string): AuditShardEvent | undefined => rows
-      .filter((row) => row.event === "GATE_APPROVED" && auditBlockField(row.block, "Stage") === stage && !auditBlockField(row.block, "Unit"))
+    // The lead's latest word on an input: its stage's gate, or a team's change
+    // to it the lead approved (SHARED_INPUT_AMENDED), which reaches a Unit
+    // taken after it too.
+    const approval = (stage: string, input: string): AuditShardEvent | undefined => rows
+      .filter((row) => (row.event === "GATE_APPROVED" && auditBlockField(row.block, "Stage") === stage && !auditBlockField(row.block, "Unit")) ||
+        (row.event === "SHARED_INPUT_AMENDED" && auditBlockField(row.block, "Input") === input))
       .sort((a, b) => (a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0)).at(-1);
     // Per commit a team took its copies from: the inputs that differ here now
     // (one diff), and the approval rows its audit already held.
@@ -8360,14 +8365,15 @@ export function sendLeadsApprovedChanges(projectDir: string): string[] {
         const diff = git(pd, ["diff", "--name-only", "--relative", base, "--", recordRel]);
         taken.set(base, {
           changed: new Set(diff.ok ? diff.stdout.split("\n").filter(Boolean).map((path) => path.slice(recordRel.length + 1)) : []),
-          approvals: new Set(auditRowsAt(pd, recordRel, base).filter((row) => row.event === "GATE_APPROVED").map((row) => row.block)),
+          approvals: new Set(auditRowsAt(pd, recordRel, base).filter((row) => row.event === "GATE_APPROVED" || row.event === "SHARED_INPUT_AMENDED")
+            .map((row) => row.block)),
         });
       }
       return taken.get(base)!;
     };
     for (const input of approvedInputPathsHere(pd)) {
       const at = artifactAt(input);
-      const approved = at === null ? undefined : approval(at.producer);
+      const approved = at === null ? undefined : approval(at.producer, input);
       if (at === null || approved === undefined) continue;
       // Edited since its completion recorded it: not what the gate approved.
       const node = graph.find((entry) => entry.slug === at.producer);

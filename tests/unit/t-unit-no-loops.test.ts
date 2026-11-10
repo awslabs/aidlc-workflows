@@ -5,7 +5,7 @@
 // with the person's words filled in) and then asks for the next step, and the
 // next step is never the same step for the same thing. A command that is
 // refused names a way on, and following it leads somewhere else. Walks: the
-// lead assigns and shares the plan; a team takes, pushes, goes back to main, is
+// lead shares the plan; a teammate takes, pushes, goes back to main, is
 // turned down, goes back to Code Generation and pushes again from main; the
 // home answers two proposals; no step met tells the person what to type
 // (tellsWhatToType), and every step is a kind each harness's skill acts on
@@ -61,6 +61,7 @@ import {
   UNIT,
   UTILITY,
   GIT_ENV,
+  inSpace,
   takeIn,
 } from "../harness/team-build.ts";
 import { hostFor } from "../harness/scope-hosts.ts";
@@ -91,8 +92,7 @@ function runPrinted(dir: string, env: NodeJS.ProcessEnv, command: string): { sta
     mkdirSync(join(dir, match[1], ".."), { recursive: true });
     writeFileSync(join(dir, match[1]), "yes, go ahead\n");
   }
-  const line = bashLine(command).replace(/'<their team>'/g, "'payments'");
-  const r = spawnSync("bash", ["-c", line], { cwd: dir, encoding: "utf-8", env });
+  const r = spawnSync("bash", ["-c", bashLine(command)], { cwd: dir, encoding: "utf-8", env });
   return { status: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 }
 
@@ -136,26 +136,22 @@ function movesOn(dir: string, env: NodeJS.ProcessEnv, step: Step, command: strin
 }
 
 describe("no step of the build-out comes back after its own command ran", () => {
-  test("the lead assigns and shares the plan, a team takes, pushes, is turned down and goes back to Code Generation", () => {
+  test("the lead shares the plan, a teammate takes, pushes, is turned down and goes back to Code Generation", () => {
     const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
     const home = makeHome({ repos: hosts });
     withTools(home.dir);
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
-    // Who builds which Unit: the lead's words, run once; the question is not put again.
-    const assignment = next(home.dir);
-    expect(assignment.ask_type, JSON.stringify(assignment)).toBe("unit-assignment");
-    const assign = String(assignment.assign_command).replace("<unit>=<team> [<unit>=<team> ...] [--open <unit>[,<unit>...]]", "refunds=payments checkout-ui=web");
     // Sharing the plan with the teams is asked once; its yes pushes it, and the board follows.
-    const share = movesOn(home.dir, ENV, assignment, assign);
+    const share = next(home.dir);
     expect(share.ask_type, JSON.stringify(share)).toBe("team-handover");
-    const shareChoice = (share.choices as Array<{ label: string; command?: string }>).find((choice) => choice.label === "Share them with the teams");
-    movesOn(home.dir, ENV, share, shareChoice!.command!);
-    // A team member takes refunds from the offer; the offer is not put again.
+    movesOn(home.dir, ENV, share, choice(share, "Share them with the teams"));
+    // A teammate takes refunds from the offer, from the space they work in; the offer is not put again.
     const alice = withTools(cloneOf(home.remote, "alice"));
     for (const [name, host] of Object.entries(hosts)) cloneCode(host, alice, name, "alice");
+    inSpace(alice, "payments");
     const take = next(alice, ENV);
     expect(take.ask_type, JSON.stringify(take)).toBe("unit-take");
-    movesOn(alice, ENV, take, choice(take, "Start refunds for payments"));
+    movesOn(alice, ENV, take, choice(take, "Start refunds"));
     const intents = join(alice, "aidlc", "spaces", "payments", "intents");
     const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-refunds"))!);
     // The team's push at the end of its build.
@@ -238,37 +234,19 @@ function teamsHome(): ReturnType<typeof makeHome> {
 }
 
 describe("a step that waits on the person, and every way on the round added, never comes back for the same thing", () => {
-  test("who builds which Unit: after not yet, the offer; with the home unreachable, try again", () => {
-    const home = teamsHome();
-    expect(next(home.dir).ask_type).toBe("unit-assignment");
-    appendAuditEntry("HUMAN_TURN", { "Person Reply": "not yet" }, home.dir);
-    const waits = next(home.dir);
-    expect(waits.kind, JSON.stringify(waits)).toBe("print");
-    movesOn(home.dir, ENV, waits, offered(waits, "Leave them all open"));
-    // The home unreachable: the answer is kept, and trying again holds the Units.
-    const other = teamsHome();
-    git(other.dir, ["remote", "set-url", "origin", join(other.remote, "gone")]);
-    const kept = next(other.dir);
-    expect(kept.kind, JSON.stringify(kept)).toBe("print");
-    git(other.dir, ["remote", "set-url", "origin", other.remote]);
-    movesOn(other.dir, ENV, kept, offered(kept, "Try again"));
-  });
-
-  test("a Unit the lead left open: the board's Build it here moves on to building it", () => {
+  test("a Unit the lead asks to build here: the board's command for it moves on to building it", () => {
     const home = teamsHome();
     const chat = { ...ENV, AIDLC_SESSION_OVERRIDE: "t-unit-no-loops-lead" };
-    const assignment = next(home.dir, chat);
-    expect(assignment.ask_type, JSON.stringify(assignment)).toBe("unit-assignment");
-    const assign = String(assignment.assign_command)
-      .replace("<unit>=<team> [<unit>=<team> ...] [--open <unit>[,<unit>...]]", "refunds=payments --open checkout-ui");
-    let board = movesOn(home.dir, chat, assignment, assign);
-    if (board.ask_type === "team-handover") {
-      // Not now: the step after it is the board, with its offers (put once in the chat).
-      appendAuditEntry("HUMAN_TURN", { "Person Reply": "not now" }, home.dir);
-      board = next(home.dir, chat);
-    }
+    // Not now to the share: the step after it is the board, every Unit open, with its offers (put once in the chat).
+    const share = next(home.dir, chat);
+    expect(share.ask_type, JSON.stringify(share)).toBe("team-handover");
+    const board = movesOn(home.dir, chat, share, choice(share, "Not now"));
     expect(board.kind, JSON.stringify(board)).toBe("print");
-    const built = movesOn(home.dir, chat, board, offered(board, "Build checkout-ui here"));
+    expect(String(board.narration)).toContain("- checkout-ui, open: waiting for a team to take it");
+    // The lead's words to build checkout-ui here run the board's own command for them.
+    const here = /`([^`]*assign --here <unit>[^`]*)`/.exec(String(board.board_note ?? ""))?.[1];
+    expect(here, JSON.stringify(board)).toBeDefined();
+    const built = movesOn(home.dir, chat, board, here!.replace("<unit>", "checkout-ui"));
     expect(built, JSON.stringify(built)).toMatchObject({ kind: "run-stage", unit: "checkout-ui" });
   });
 
@@ -447,25 +425,28 @@ describe("a step that waits on the person, and every way on the round added, nev
     movesOn(alice, ENV, push, choice(push, "Finish the merge and push"));
   });
 
-  test("a take: a Unit the home started is refused with a way on that does not offer it; an open Unit starts for a team the lead named", () => {
-    const home = teamsHome();
+  test("a take: a Unit the home started is refused with a way on that does not offer it; an open Unit starts from the person's own space", () => {
+    // checkout-ui started at the home before teams were chosen: the home's walk keeps it.
+    const home = makeHome();
+    withTools(home.dir);
+    appendAuditEntry("UNIT_STARTED", { Stage: "functional-design", Unit: "checkout-ui", "Run floor": "0" }, home.dir);
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
     expect(run(UNIT, ["share", "--plan"], home.dir).status).toBe(0);
     const homeStep = next(home.dir);
     expect(homeStep.unit, JSON.stringify(homeStep)).toBe("checkout-ui");
-    expect(run(STATE, ["unit", "start", "--stage", "functional-design", "--unit", "checkout-ui"], home.dir).status).toBe(0);
     git(home.dir, ["add", "-A"]);
     git(home.dir, ["commit", "-q", "-m", "teams"]);
     git(home.dir, ["push", "-q", "origin", "main"]);
     const carol = withTools(cloneOf(home.remote, "carol"));
     // The agent's own command for the home's Unit: refused, with a way on that does not offer it again.
-    const refused = runPrinted(carol, ENV, `bun .claude/tools/aidlc-unit.ts take checkout-ui --home ${HOME_RECORD} --team web`);
+    const refused = runPrinted(carol, ENV, `bun .claude/tools/aidlc-unit.ts take checkout-ui --home ${HOME_RECORD}`);
     expect(refused.status).not.toBe(0);
     const way = /`(bun [^`]+)`/.exec(refused.out)?.[1];
     expect(way, refused.out).toBeDefined();
     const after = runPrinted(carol, ENV, way!);
     expect(after.status, after.out).toBe(0);
     expect(after.out).not.toContain("Start checkout-ui");
-    // An open Unit nobody started, from the default space: started for a team the lead named.
+    // An open Unit nobody started, from the default space: started there.
     const other = teamsHome();
     git(other.dir, ["add", "-A"]);
     git(other.dir, ["commit", "-q", "-m", "teams"]);
@@ -473,7 +454,7 @@ describe("a step that waits on the person, and every way on the round added, nev
     const dana = withTools(cloneOf(other.remote, "dana"));
     const offer = next(dana);
     expect(offer.ask_type, JSON.stringify(offer)).toBe("unit-take");
-    movesOn(dana, ENV, offer, choice(offer, "Start checkout-ui for payments"));
+    movesOn(dana, ENV, offer, choice(offer, "Start checkout-ui"));
   });
 
   test("a fresh clone while the home builds the walking skeleton: the waiting step is one every harness's skill acts on, and ends the turn", () => {
@@ -498,7 +479,9 @@ describe("a step that waits on the person, and every way on the round added, nev
   test("mid-stage at the home, the lead says a team's Unit was turned down: the step carries the command, the board reads fresh, and the team hears it", () => {
     const { home, alice, record } = refundsTaken();
     withTools(home.dir);
-    // The lead builds checkout-ui here.
+    // The lead asks to build checkout-ui here.
+    const here = run(UNIT, ["assign", "--here", "checkout-ui", "--person-words", "build checkout-ui here"], home.dir);
+    expect(here.status, here.out).toBe(0);
     const own = next(home.dir, ENV);
     expect(own.unit, JSON.stringify(own)).toBe("checkout-ui");
     codeGenerated(alice, record);
@@ -596,6 +579,9 @@ describe("a step that waits on the person, and every way on the round added, nev
 
   test("a clone where nothing is ready: words for new work start it, and the take opens once the home moves", () => {
     const { hosts, home, alice, record } = refundsTaken();
+    // checkout-ui taken too: only reporting is left, and it waits on refunds.
+    const carol = takeIn("web", ["checkout-ui", "--home", HOME_RECORD], cloneOf(home.remote, "carol"));
+    expect(carol.status, carol.out).toBe(0);
     const dana = withTools(cloneOf(home.remote, "dana"));
     expect(run(UTILITY, ["space-create", "data"], dana).status).toBe(0);
     expect(run(UTILITY, ["space", "data"], dana).status).toBe(0);
@@ -803,12 +789,13 @@ describe("the take's own line reaches the person with the build's next step, onc
     git(home.dir, ["push", "-q", "origin", "main"]);
     const bob = withTools(cloneOf(home.remote, "bob"));
     for (const [name, host] of Object.entries(hosts)) cloneCode(host, bob, name, "bob");
+    inSpace(bob, "payments");
     const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "bob-chat" };
     const offer = next(bob, chat);
     expect(offer.ask_type, JSON.stringify(offer)).toBe("unit-take");
-    const took = runPrinted(bob, chat, choice(offer, "Start refunds for payments"));
+    const took = runPrinted(bob, chat, choice(offer, "Start refunds"));
     expect(took.status, took.out).toBe(0);
-    const line = "Refunds is yours, for the payments team. Its build is its own piece of work here, under your team's rules, " +
+    const line = "Refunds is yours. Its build is its own piece of work here, in the payments space, under your team's rules, " +
       "from what the lead approved. If it is not your team's to build, say so and I give it back.";
     expect(JSON.parse(took.out.trim().split("\n").at(-1)!).notice, took.out).toBeUndefined();
     const step = next(bob, chat);

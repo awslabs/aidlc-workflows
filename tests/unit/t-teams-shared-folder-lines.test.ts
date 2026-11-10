@@ -1,13 +1,13 @@
 // covers: function:checkInLine, function:arrivedAtLastPull, subcommand:aidlc-unit:take, subcommand:aidlc-unit:push
 //
 // The lines a person meets in a workspace teams share by git (#2410). Carry on
-// is offered only for the person's own team's build: another team's is said,
-// with who builds it and where, and one pushed waits for its merge (a fresh
-// clone, whose team is not known yet, names each team's). The check-in line is
-// said once at a stop, at the push and at a Unit's end, never from what git
-// status shows (AI-DLC's own audit rows always change aidlc/), and never names
-// the person's tool folder. Status says what the last pull brought from the
-// other teams.
+// is offered only for the person's own take, by their git name, whatever space
+// their clone is in: another's build is said, with who builds it and where, and
+// carried on only when they ask; one pushed waits for its merge. The check-in
+// line is said once at a stop, at the push and at a Unit's end, never from
+// what git status shows (AI-DLC's own audit rows always change aidlc/), and
+// never names the person's tool folder. Status says what the last pull brought
+// from the other teams.
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -39,7 +39,7 @@ afterEach(cleanupTeamBuild);
 const LINE = "Your teammates get where this work stands when you check it in: `git add aidlc`, then commit and push.";
 type Choice = { label: string; detail?: string };
 
-// The lead's work with its Units held for two teams, shared.
+// The lead's work, teams chosen and every Unit open, shared.
 function homeWithTeams() {
   const home = makeHome();
   expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
@@ -61,7 +61,7 @@ const carryOns = (step: Record<string, unknown>): Choice[] =>
   ((step.choices ?? []) as Choice[]).filter((choice) => choice.label.startsWith("Carry on") && !choice.label.endsWith("as the lead"));
 
 describe("Carry on in a shared workspace", () => {
-  test("a fresh clone names each team's build; once the team is known, only its own is offered and the other is said", () => {
+  test("a fresh clone is offered only the builds its own git name took; another's is said with who and where, and carried on when asked", () => {
     const home = homeWithTeams();
     const ana = cloneOf(home.remote, "ana");
     expect(takeIn("payments", ["refunds", "--home", HOME_RECORD], ana).status).toBe(0);
@@ -70,43 +70,63 @@ describe("Carry on in a shared workspace", () => {
     expect(takeIn("web", ["checkout-ui", "--home", HOME_RECORD], bea).status).toBe(0);
     checkIn(bea, "web: checkout-ui started");
 
+    // Someone who took neither, in the default space: each build is said, nothing is offered to carry on.
     const abe = cloneOf(home.remote, "abe");
     const fresh = next(abe);
-    expect(carryOns(fresh), JSON.stringify(fresh)).toEqual([
-      expect.objectContaining({ label: "Carry on refunds for the payments team", detail: "ana's build of it, from another computer." }),
-      expect.objectContaining({ label: "Carry on checkout-ui for the web team", detail: "bea's build of it, from another computer." }),
-    ]);
+    expect(carryOns(fresh), JSON.stringify(fresh)).toEqual([]);
+    expect(String(fresh.narration ?? fresh.question), JSON.stringify(fresh)).toContain(
+      "Being built: refunds (being built by ana in payments, on another computer), checkout-ui (being built by bea in web, on another computer).",
+    );
 
+    // Ana's own second clone, also in the default space: her build is offered, bea's is said.
+    const laptop = cloneOf(home.remote, "ana");
+    const own = next(laptop);
+    expect(carryOns(own), JSON.stringify(own)).toEqual([
+      expect.objectContaining({ label: "Carry on refunds", detail: "Your build of it in the payments space, from another computer." }),
+    ]);
+    expect(String(own.question), JSON.stringify(own)).toContain("checkout-ui (being built by bea in web, on another computer)");
+    const mine = run(UNIT, ["take", "refunds", "--home", HOME_RECORD], laptop);
+    expect(mine.status, mine.out).toBe(0);
+    expect(mine.json?.notice).toBe("Carrying on refunds, your build in the payments space.");
+    expect(readFileSync(join(laptop, "aidlc", "active-space"), "utf-8").trim()).toBe("payments");
+
+    // Abe asks to carry on ana's build all the same: it is carried on, said as hers.
     const carried = run(UNIT, ["take", "refunds", "--home", HOME_RECORD], abe);
     expect(carried.status, carried.out).toBe(0);
+    expect(carried.json?.notice).toBe("Carrying on refunds, ana's build in the payments space.");
     expect(readFileSync(join(abe, "aidlc", "active-space"), "utf-8").trim()).toBe("payments");
-    // Abe's team is known now: the look with nothing of theirs selected.
+    // With nothing of theirs selected, abe's look still offers neither build.
     writeFileSync(join(abe, "aidlc", "spaces", "payments", "intents", "active-intent"), "");
-    const known = next(abe);
-    expect(carryOns(known).map((choice) => choice.label), JSON.stringify(known)).toEqual(["Carry on refunds"]);
-    expect(carryOns(known)[0].detail).toBe("ana's build of it, from another computer.");
-    expect(String(known.question), JSON.stringify(known)).toContain("checkout-ui (being built by bea on another computer)");
+    const later = next(abe);
+    expect(carryOns(later), JSON.stringify(later)).toEqual([]);
   });
 
-  test("a pushed build waits for its merge and is not offered; one the lead turned down is said so and stays its team's to carry on", () => {
+  test("a pushed build waits for its merge and is not offered; one the lead turned down is said so and stays its taker's to carry on", () => {
     const { home, alice, record } = refundsTaken();
     codeGenerated(alice, record);
     finishBuild(record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     checkIn(alice, "payments: refunds pushed");
-    const look = next(cloneOf(home.remote, "abe"));
-    expect(carryOns(look).map((choice) => choice.label), JSON.stringify(look)).not.toContain("Carry on refunds for the payments team");
-    expect(String(look.question), JSON.stringify(look)).toContain("refunds (pushed, waiting for its merge)");
+    const look = next(cloneOf(home.remote, "alice"));
+    expect(carryOns(look), JSON.stringify(look)).toEqual([]);
+    expect(String(look.question), JSON.stringify(look)).toContain("refunds (pushed by alice in payments, waiting for its merge)");
 
-    // The lead turns it down in billing: it is back with payments.
+    // The lead turns it down in billing: it is back with alice.
     git(home.dir, ["fetch", "-q", "origin"]);
     const down = run(UNIT, ["turned-down", "refunds", "--repo", "billing", "--person-words", "needs the ledger entry"], home.dir);
     expect(down.status, down.out).toBe(0);
-    const again = next(cloneOf(home.remote, "abe-again"));
-    expect(String(again.question), JSON.stringify(again)).not.toContain("refunds (pushed, waiting for its merge)");
+    const again = next(cloneOf(home.remote, "alice"));
+    expect(String(again.question), JSON.stringify(again)).not.toContain("waiting for its merge");
     expect(carryOns(again), JSON.stringify(again)).toEqual([
-      expect.objectContaining({ label: "Carry on refunds for the payments team", detail: "alice's build of it, from another computer; turned down in billing, back with payments." }),
+      expect.objectContaining({
+        label: "Carry on refunds",
+        detail: "Your build of it in the payments space, from another computer; turned down in billing, back with alice in payments.",
+      }),
     ]);
+    // Someone else hears where it is, and is not offered it.
+    const other = next(cloneOf(home.remote, "abe"));
+    expect(carryOns(other), JSON.stringify(other)).toEqual([]);
+    expect(String(other.question), JSON.stringify(other)).toContain("refunds (turned down in billing, back with alice in payments)");
   });
 
   test("a build the lead sent back from Build and Test says it was the lead's Build and Test", () => {
@@ -118,11 +138,15 @@ describe("Carry on in a shared workspace", () => {
     git(home.dir, ["fetch", "-q", "origin"]);
     const sent = run(UNIT, ["send-back", "refunds", "--person-words", "the refund total is off by one"], home.dir);
     expect(sent.status, sent.out).toBe(0);
-    const look = next(cloneOf(home.remote, "abe"));
+    const look = next(cloneOf(home.remote, "alice"));
     expect(carryOns(look), JSON.stringify(look)).toEqual([
-      expect.objectContaining({ detail: "alice's build of it, from another computer; sent back from the lead's Build and Test, back with payments." }),
+      expect.objectContaining({
+        detail: "Your build of it in the payments space, from another computer; sent back from the lead's Build and Test, back with alice in payments.",
+      }),
     ]);
     expect(JSON.stringify(look)).not.toContain("your Build and Test");
+    const other = next(cloneOf(home.remote, "abe"));
+    expect(String(other.question), JSON.stringify(other)).toContain("refunds (sent back from the lead's Build and Test, back with alice in payments)");
   });
 });
 
@@ -203,9 +227,9 @@ describe("where things stand", () => {
     expect(takeIn("web", ["checkout-ui", "--home", HOME_RECORD], bea).status).toBe(0);
     checkIn(bea, "web: checkout-ui started");
     git(ana, ["pull", "-q", "--no-rebase", "--no-edit"]);
-    expect(arrivedAtLastPull(ana, "payments")).toBe("the web team's checkout-ui");
+    expect(arrivedAtLastPull(ana, "payments")).toBe("checkout-ui in web");
     const status = run(UTILITY, ["status"], ana, ENV);
-    expect(status.out).toContain("From others:    the web team's checkout-ui (at your last pull that brought changes)");
+    expect(status.out).toContain("From others:    checkout-ui in web (at your last pull that brought changes)");
     // Another pull, straight after, that brings the lead's change: only that one is said.
     writeFileSync(join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD, "notes.md"), "Lead's note.\n");
     git(home.dir, ["pull", "-q", "--no-rebase", "--no-edit"]);
