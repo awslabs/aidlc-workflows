@@ -339,6 +339,23 @@ describe("a team member's clone of the home's workspace", () => {
 });
 
 describe("taking a Unit starts its build in the team's space", () => {
+  // A live run (Pat): the build's Workflow Start said "/aidlc Build ... from what
+  // the lead approved", words nobody typed.
+  test("the build's start records the person's own words of the take, or that the take started it, never a /aidlc line nobody typed", () => {
+    const home = homeWithTeams(["refunds=payments", "checkout-ui=web"]);
+    const alice = cloneOf(home.remote, "alice");
+    const request = (unit: string, space: string): string | null => {
+      const rows = readAuditShardEvents(alice, basename(buildDir(alice, space, unit)), space);
+      const started = rows.find((row) => row.event === "WORKFLOW_STARTED");
+      return started === undefined ? null : (/^\*\*Request\*\*: (.*)$/m.exec(started.block)?.[1] ?? null);
+    };
+    expect(take(alice, "refunds", ["--team", "payments"]).status).toBe(0);
+    expect(request("refunds", "payments")).toBe("Taken from the lead's plan: refunds");
+    const said = take(alice, "checkout-ui", ["--team", "web", "--person-words", "we're the web team, we'll do the checkout page"]);
+    expect(said.status, said.out).toBe(0);
+    expect(request("checkout-ui", "web")).toBe("we're the web team, we'll do the checkout page");
+  });
+
   test("one Unit, the home's inputs at their own paths, the home's Inception done, the claim taken", () => {
     const home = homeWithTeams(["refunds=payments"]);
     const alice = cloneOf(home.remote, "alice");

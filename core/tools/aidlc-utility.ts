@@ -719,6 +719,7 @@ const INTENT_CREATE_VALUE_FLAGS = [
   "scope",
   "arguments",
   "request",
+  "take-request",
   "label",
   "depth",
   "test-strategy",
@@ -8712,7 +8713,10 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     // audit alone. Lands in the created intent's audit (relocated from --init).
     appendAuditEvent(projectDir, "WORKFLOW_STARTED", {
       Scope: scope,
-      Request: `/aidlc ${flags.arguments || scope}`,
+      // A Unit's build a take starts records the take's own request (the
+      // person's words of it, or that the take started it), never a /aidlc
+      // line nobody typed.
+      Request: flags["take-request"] ?? `/aidlc ${flags.arguments || scope}`,
       // The record is listed last, so its repo set comes from this creation,
       // not from the registry.
       ...sourceBaselineAuditFields(

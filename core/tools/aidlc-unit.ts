@@ -6154,6 +6154,8 @@ function createUnitBuild(
   inSpace?: string,
   // The lead's files the person chose to follow too (leadRules, read where they are).
   leadPaths: readonly string[] = [],
+  // The person's own words of the take, when the agent handed them.
+  takeRequest = "",
 ): { space: string; dirName: string } {
   const space = inSpace ?? teamSpaceOf(team);
   if (!listSpacesHere(projectDir).includes(space)) {
@@ -6175,6 +6177,7 @@ function createUnitBuild(
     "--scope", scope,
     "--label", unit,
     "--arguments", `Build ${unit} for ${home.label}, from what the lead approved`,
+    "--take-request", takeRequest || `Taken from the lead's plan: ${unit}`,
     "--space", space,
     ...(skip.length > 0 ? ["--skip", skip.join(",")] : []),
     ...(add.length > 0 ? ["--add", add.join(",")] : []),
@@ -6670,7 +6673,7 @@ function takeUnit(args: string[], projectDir?: string): void {
       return shown.ok ? shown.stdout : null;
     },
     approvals: (produced) => homeApprovals(homeRows, produced),
-  }, home.solo ? home.space : home.leadCopy ? activeSpace(pd) : undefined, leads?.paths ?? []);
+  }, home.solo ? home.space : home.leadCopy ? activeSpace(pd) : undefined, leads?.paths ?? [], personWordsOf(pd, flags));
   setActiveSpaceCursor(pd, build.space);
   // Early: the Unit's branch starts at each dependency's pushed head, checked
   // out where nothing of the person's is uncommitted.

@@ -784,7 +784,9 @@ for its team as it was (or open again), and sets the build aside with the
 engine's archive, nothing deleted. A Unit that
 waits on another is refused until that Unit is done at the lead's project. The build
 records the lead's repos. The build copies what the lead approved at its pushed commit,
-records `UNIT_TAKEN_IN`, and is selected for this chat. Taking a Unit whose
+records `UNIT_TAKEN_IN`, and is selected for this chat. Its `WORKFLOW_STARTED` row records the person's own
+words of the take when the agent hands them (`--request-file` or `--person-words`), and otherwise
+`Taken from the lead's plan: <unit>`. Taking a Unit whose
 build is already in this workspace carries that build on. A lead's project that takes no
 push from here gives no Unit, held for your team or open: the take says git's
 reason and the way on, which is push access from the lead.
