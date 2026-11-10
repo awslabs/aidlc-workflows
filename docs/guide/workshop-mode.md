@@ -653,9 +653,10 @@ work does: after every stage, or once at its end.
   worked on this computer or another. Someone else's build is listed as being
   built, by whom and where, and never offered; when you ask for it in your own
   words it is carried on, and the take says once whose build it is. A pushed
-  build is listed as waiting for its merge, until the lead turns it down or sends
-  it back from the lead's Build and Test; then it is offered again, with those
-  words, to the one who took it.
+  build is listed as waiting for its merge, and as merged once every one of its
+  repos has it (the lead's project records the merge at its next look). One the
+  lead turns down or sends back from the lead's Build and Test is offered again,
+  with those words, to the one who took it.
 - A lead's project you can read but not push to: the take goes on and the build
   starts, and one line, said once, gives git's reason and says the lead and the
   other teams cannot see your take until a push goes through; AI-DLC records it

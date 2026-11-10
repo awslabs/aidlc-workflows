@@ -644,6 +644,7 @@ import {
   sendLeadsApprovedChanges,
   GitWriteRefused,
   earlyBaseMerged,
+  mergedAtTeamLook,
   moveRefusedMark,
   shareBlocker,
   skeletonHeldBackOnShare,
@@ -9241,7 +9242,9 @@ function unitTakeLook(
           const sentBack = down !== undefined ? turnedDownStatus(down, `${who}${where}`, "the lead's") : null;
           const mine = live !== undefined ? claimIsMine(projectDir, live) : worked.by !== null && worked.by === gitUserName(projectDir);
           if (worked.awaitingMerge && sentBack === null) {
-            building.push(`${unit} (pushed by ${who}${where}, waiting for its merge)`);
+            // Merged in every repo by the lead's own rule, read here and never written (mergedAtTeamLook).
+            const merged = live !== undefined && mergedAtTeamLook(projectDir, live.payload);
+            building.push(`${unit} (pushed by ${who}${where}, ${merged ? "merged; the lead's project records it at its next look" : "waiting for its merge"})`);
             continue;
           }
           if (!mine) {

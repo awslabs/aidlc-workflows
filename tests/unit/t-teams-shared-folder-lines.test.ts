@@ -137,7 +137,26 @@ describe("Carry on in a shared workspace", () => {
   // A live run (Windows Server): a team's look said the Unit was waiting for its
   // merge after it had merged, until the lead's next look. The team's look runs
   // the lead's own merge rule, read only (mergedAtTeamLook), for its own pushed
-  // build; the row that says it comes with its own change.
+  // build.
+  test("a pushed build of this checkout reads as merged at its own look once every repo has it, with nothing written to the claim", () => {
+    const { hosts, home, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    finishBuild(record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    checkIn(alice, "payments: refunds pushed");
+    const look = (): string => {
+      writeFileSync(join(alice, "aidlc", "spaces", "payments", "intents", "active-intent"), "");
+      return String(next(alice).question);
+    };
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    expect(look()).toContain("refunds (pushed by alice in payments, waiting for its merge)");
+    mergeOnHost(hosts.billing, "refunds", "squash");
+    const merged = look();
+    expect(merged).toContain("refunds (pushed by alice in payments, merged; the lead's project records it at its next look)");
+    expect(merged).not.toContain("waiting for its merge");
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.verdicts).toBeUndefined();
+  });
+
   test("the lead's merge rule, read at a team's checkout: merged once every repo has it, with nothing written to the claim", () => {
     const { hosts, home, alice, record } = refundsTaken();
     codeGenerated(alice, record);
