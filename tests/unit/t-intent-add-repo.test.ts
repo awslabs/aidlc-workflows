@@ -135,6 +135,20 @@ function insteadOf(prefix: string, owner: string): void {
   writeFileSync(gitConfig, `${readFileSync(gitConfig, "utf-8")}[url "${base}/"]\n\tinsteadOf = ${prefix}\n`);
 }
 
+// Every git process the add starts writes a line here; a file never made means none ran.
+function gitTrace(): { env: NodeJS.ProcessEnv; ranRemote: () => boolean } {
+  const file = join(mkdtempSync(join(gitHome, "trace-")), "trace.log");
+  return {
+    env: { GIT_TRACE: file },
+    ranRemote: () => existsSync(file) && /\bgit (clone|fetch|ls-remote)\b/.test(readFileSync(file, "utf-8")),
+  };
+}
+
+function notListedLine(name: string): string {
+  return `${name} is not in this workspace yet, and no repos.json lists it, so there is no address to clone it from. ` +
+    "Give its clone address with --url, or clone it beside the other repos, then add it again.";
+}
+
 function stagingLeft(): string[] {
   return readdirSync(proj).filter((name) => name.startsWith(".aidlc-workspace-sync-txn-"));
 }
@@ -413,24 +427,20 @@ describe("intent add-repo clones a repo that is not here yet", () => {
     cleanupTestProject(gitHome);
   });
 
-  test("from the repos.json org, through the person's own git config: installed, listed, recorded, said", () => {
+  test("a repo repos.json lists by name alone is cloned from its org, through the person's own git config: installed, recorded, said", () => {
     bareRepo("acme", "payments");
     insteadOf("git@github.com:acme/", "acme");
-    writeFileSync(
-      join(proj, "repos.json"),
-      '{\n  // the team\'s repos\n  "org": "acme",\n  "repos": [\n    { "name": "app-a" }\n  ]\n}\n',
-    );
+    const raw = '{\n  // the team\'s repos\n  "org": "acme",\n  "repos": [\n    { "name": "app-a" },\n    { "name": "payments" }\n  ]\n}\n';
+    writeFileSync(join(proj, "repos.json"), raw);
     const r = utility(["intent", "add-repo", "payments", "--reason", "the consent API lives in payments"]);
     expect(r.rc, r.out).toBe(0);
     expect(r.out.trim()).toBe(
       "Cloned payments from git@github.com:acme/payments.git and added it to this piece of work's repos. " +
-        "repos.json now lists it. Reverse Engineering will cover payments when it runs. You can remove it again any time.",
+        "Reverse Engineering will cover payments when it runs. You can remove it again any time.",
     );
     expect(existsSync(join(proj, "payments", "src", "api.ts"))).toBe(true);
     expect(repos()).toEqual(["app-a", "payments"]);
-    const manifest = readFileSync(join(proj, "repos.json"), "utf-8");
-    expect(manifest).toContain("// the team's repos");
-    expect(manifest).toContain('"name": "payments"');
+    expect(readFileSync(join(proj, "repos.json"), "utf-8")).toBe(raw);
     expect(readFileSync(join(proj, ".gitignore"), "utf-8")).toContain("/payments/\n");
     expect(readFileSync(join(proj, ".gitignore"), "utf-8")).toContain("/.aidlc-workspace-sync-txn-*/\n");
     expect(JSON.parse(readFileSync(join(proj, "aidlc.code-workspace"), "utf-8")).folders).toContainEqual({ path: "payments" });
@@ -447,7 +457,8 @@ describe("intent add-repo clones a repo that is not here yet", () => {
     insteadOf("git@github.com:acme/", "acme");
     const shared = '{\n  "org": "acme",\n  "repos": [\n    { "name": "app-a" }\n  ]\n}\n';
     writeFileSync(join(proj, "aidlc", "repos.json"), shared);
-    const r = utility(["intent", "add-repo", "payments"]);
+    // A repo the list does not name clones only from the address the person gives.
+    const r = utility(["intent", "add-repo", "payments", "--url", "git@github.com:acme/payments.git"]);
     expect(r.rc, r.out).toBe(0);
     expect(existsSync(join(proj, "repos.json"))).toBe(false);
     const manifest = JSON.parse(readFileSync(join(proj, "aidlc", "repos.json"), "utf-8")) as { repos: Array<{ name: string }> };
@@ -487,6 +498,69 @@ describe("intent add-repo clones a repo that is not here yet", () => {
     expect(readFileSync(join(proj, "aidlc", "repos.json"), "utf-8")).not.toContain("s3cret-tok");
   });
 
+  // The list a first add by address writes names that address's owner as its
+  // org, on any host; a later add by name of a repo the list does not name
+  // must not turn that owner into a github.com address. The trap sends that
+  // made-up address to a real local repo, so a clone of it would go through.
+  test.each([
+    ["a GitLab-style https address", "https://gitlab.example.invalid/code/"],
+    ["an ssh address on another host", "git@git.example.invalid:code/"],
+    ["a git:// address", "git://git.example.invalid/code/"],
+    ["a github.com address", "https://github.com/code/"],
+  ])("after a first add by %s, a repo the list does not name is asked for and nothing is cloned", (_shape, prefix) => {
+    bareRepo("code", "storefront");
+    insteadOf(prefix, "code");
+    bareRepo("trap", "billing");
+    insteadOf("git@github.com:code/", "trap");
+    const first = gitTrace();
+    const added = utility(["intent", "add-repo", "storefront", "--url", `${prefix}storefront.git`], first.env);
+    expect(added.rc, added.out).toBe(0);
+    expect(first.ranRemote()).toBe(true);
+    expect(added.out).toContain("repos.json is new: it lists storefront under the org code; commit it to share the list with your team.");
+    const raw = readFileSync(join(proj, "aidlc", "repos.json"), "utf-8");
+    expect(JSON.parse(raw)).toEqual({ org: "code", repos: [{ name: "storefront", url: `${prefix}storefront.git` }] });
+
+    const second = gitTrace();
+    const r = utility(["intent", "add-repo", "billing", "--person-words", "add the billing repo too"], second.env);
+    expect(r.rc, r.out).not.toBe(0);
+    expect(r.out).toContain(notListedLine("billing"));
+    expect(r.out).not.toContain("github.com:code/billing");
+    expect(second.ranRemote()).toBe(false);
+    expect(existsSync(join(proj, "billing"))).toBe(false);
+    expect(repos()).toEqual(["app-a", "storefront"]);
+    expect(readFileSync(join(proj, "aidlc", "repos.json"), "utf-8")).toBe(raw);
+    expect(audit()).not.toContain("**Added**: billing");
+    expect(stagingLeft()).toEqual([]);
+  });
+
+  test("a team's own list: a repo it does not name is asked for, then cloned from the address the person gives", () => {
+    bareRepo("acme", "payments");
+    insteadOf("git@github.com:acme/", "acme");
+    const raw = '{\n  // the team\'s repos\n  "org": "acme",\n  "repos": [\n    { "name": "app-a" }\n  ]\n}\n';
+    writeFileSync(join(proj, "repos.json"), raw);
+    const asked = gitTrace();
+    const r = utility(["intent", "add-repo", "payments"], asked.env);
+    expect(r.rc, r.out).not.toBe(0);
+    expect(r.out).toContain(notListedLine("payments"));
+    expect(asked.ranRemote()).toBe(false);
+    expect(existsSync(join(proj, "payments"))).toBe(false);
+    expect(readFileSync(join(proj, "repos.json"), "utf-8")).toBe(raw);
+    expect(audit()).not.toContain("**Added**: payments");
+
+    const given = gitTrace();
+    const added = utility(["intent", "add-repo", "payments", "--url", "git@github.com:acme/payments.git"], given.env);
+    expect(added.rc, added.out).toBe(0);
+    expect(given.ranRemote()).toBe(true);
+    expect(added.out.trim()).toBe(
+      "Cloned payments from git@github.com:acme/payments.git and added it to this piece of work's repos. " +
+        "repos.json now lists it. Reverse Engineering will cover payments when it runs. You can remove it again any time.",
+    );
+    const manifest = readFileSync(join(proj, "repos.json"), "utf-8");
+    expect(manifest).toContain("// the team's repos");
+    expect(manifest).toContain('"url": "git@github.com:acme/payments.git"');
+    expect(repos()).toEqual(["app-a", "payments"]);
+  });
+
   test("a failed clone records nothing, says git's reason and the command to run by hand, and leaves no staging folder", () => {
     writeFileSync(join(proj, "repos.json"), '{ "org": "acme", "repos": [{ "name": "app-a" }] }\n');
     const missing = join(gitHome, "nowhere", "payments.git");
@@ -524,10 +598,7 @@ describe("intent add-repo clones a repo that is not here yet", () => {
   test("no repos.json and no --url: one line says what to give, and nothing changes", () => {
     const r = utility(["intent", "add-repo", "payments"]);
     expect(r.rc).not.toBe(0);
-    expect(r.out).toContain(
-      "payments is not in this workspace yet, and there is no repos.json to say where it is. If it is already cloned " +
-        "elsewhere, run this again with --path and the folder the person named; to clone it, give its address with --url. Nothing was changed.",
-    );
+    expect(r.out).toContain(notListedLine("payments"));
     expect(repos()).toEqual(["app-a"]);
     expect(stagingLeft()).toEqual([]);
   });
@@ -537,10 +608,7 @@ describe("intent add-repo clones a repo that is not here yet", () => {
     writeFileSync(join(proj, "repos.json"), raw);
     const r = utility(["intent", "add-repo", "payments"]);
     expect(r.rc).not.toBe(0);
-    expect(r.out).toContain(
-      "payments is not in this workspace yet, and repos.json gives no address to clone it from (it does not list payments, and has no org). " +
-        "Ask the person for its clone address once, then run this again with --url and that address; if it is already cloned elsewhere, give its folder with --path. Nothing was changed.",
-    );
+    expect(r.out).toContain(notListedLine("payments"));
     expect(r.out).not.toContain("undefined");
     expect(readFileSync(join(proj, "repos.json"), "utf-8")).toBe(raw);
     expect(repos()).toEqual(["app-a"]);
