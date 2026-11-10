@@ -289,6 +289,26 @@ describe("the lead's project builds nothing it was not asked to", () => {
     expect(run(UTILITY, ["status"], home.dir).out).toContain("Current Stage:  Functional Design");
   });
 
+  // A live run (the lead in a workspace of their own): status, the only step
+  // of the look, named Functional Design with the Architect on it and a next
+  // stage, because no board had run on the state since it last changed.
+  test("before any board on this state, a look at where things stand still says the lead's project waits on the Units", () => {
+    const { home } = refundsTaken();
+    git(home.dir, ["fetch", "-q", "origin"]);
+    const waits = (): void => {
+      const status = run(UTILITY, ["status"], home.dir).out;
+      expect(status).toContain("Current Stage:  none here: the Units left are taken or open to take (below)\n");
+      expect(status).toContain("Status:         Waiting on the Units below\n");
+      expect(status).not.toContain("Active Agent:");
+      expect(status).not.toContain("Next Stage:");
+    };
+    waits();
+    // A board, then the state changes under it: the look still says it waits.
+    expect(next(home.dir).kind).toBe("print");
+    expect(run(STATE, ["set-unit-gate-rhythm", "unit-end"], home.dir).status).toBe(0);
+    waits();
+  });
+
   // A live run: the board's bare space names read as teams the lead never named.
   test("a take's row names its space as a space, and a take in a default space has no column", () => {
     const { home } = refundsTaken();

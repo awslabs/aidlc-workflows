@@ -190,7 +190,6 @@ import {
 import {
   arrivedAtLastPull,
   homeLocation,
-  leadWaitsOnTeams,
   PROJECT_TYPE_SOURCE_FIELD,
   PROJECT_TYPE_SOURCE_HOME,
   unitBuildOf,
@@ -2135,11 +2134,10 @@ To get started:
   const currentStage = getField(content, "Current Stage") || "Unknown";
   const status = getField(content, "Status") || "Unknown";
   const walk = await soloUnitWalk(projectDir, flags, scope, content);
-  // The lead's project of work teams build, while its last board on this state
-  // says it waits on the Units (leadWaitsOnTeams), builds nothing: no stage,
-  // agent, step or next stage is said as now.
-  const waitsHere = isTeamUnitOwnership(content) && homeLocation(content) !== null && unitBuildOf(content) === null &&
-    (leadWaitsOnTeams(projectDir, content)?.length ?? 0) > 0;
+  // The lead's project of work teams build, while it waits on the Units
+  // (leadWaitsHere), builds nothing: no stage, agent, step or next stage is
+  // said as now.
+  const waitsHere = (await import("./aidlc-orchestrate.ts")).leadWaitsHere(projectDir, content);
   // Who is on it and what was done or comes next, in the names the person
   // sees elsewhere; a setup step or an empty value says nothing.
   const agentSlug = (getField(content, "Active Agent") ?? "").trim();
@@ -2507,7 +2505,7 @@ To get started:
     : `Also open:      ${others.join(", ")} (ask to switch to ${others.length === 1 ? "it" : "one"})\n`;
   // Teams across repos sharing one workspace by git: what the last pull here brought from the others.
   const acrossRepos = unitBuildOf(content) !== null || (isTeamUnitOwnership(content) && homeLocation(content) !== null);
-  const arrived = acrossRepos ? arrivedAtLastPull(projectDir, selection.space) : null;
+  const arrived = acrossRepos ? arrivedAtLastPull(projectDir) : null;
   const arrivedLine = arrived === null ? "" : `From others:    ${arrived} (at your last pull that brought changes)\n`;
   // Work an older AI-DLC recorded, brought up to this one in place: said here
   // on purpose, never in chat.

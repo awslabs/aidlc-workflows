@@ -225,6 +225,45 @@ describe("a team member's clone of the home's workspace", () => {
     expect(String(words.message)).toContain("If they say they lead this work and ask to carry it on here, run");
   });
 
+  // A live run on Codex (the second teammate): "I'm carrying it on" after the
+  // Units offer found nothing to run; the step said to run nothing for a Unit
+  // being built.
+  test("a teammate's words asking to carry on a build listed as being built get its command; done or waiting ones none", () => {
+    const home = makeHome();
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    asLeadsOwnCheckout(home.dir);
+    commitAll(home.dir, "teams");
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const alice = cloneOf(home.remote, "alice");
+    expect(takeFrom("payments", alice, "refunds").status).toBe(0);
+    commitAll(alice, "payments: refunds taken");
+    git(alice, ["pull", "-q", "--no-rebase", "--no-edit"]);
+    git(alice, ["push", "-q", "origin", "HEAD:main"]);
+    const bea = cloneOf(home.remote, "bea");
+    const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "bea-chat" };
+    const offer = next(bea, chat, ["hi, what is there to build?"]);
+    expect(offer.ask_type, JSON.stringify(offer).slice(0, 600)).toBe("unit-take");
+    expect(String(offer.question)).toContain("refunds (being built by alice in payments, on another computer)");
+    const command = `bun .claude/tools/aidlc-unit.ts take refunds --home ${HOME}`;
+    expect(String(offer.question_note)).toContain(
+      `When their words ask to carry on a build the question lists as being built, run its command: refunds: \`${command}\`.`,
+    );
+    const words = next(bea, chat, ["alice started refunds, I'm carrying it on"]);
+    expect(words.kind, JSON.stringify(words).slice(0, 600)).toBe("print");
+    const message = String(words.message);
+    expect(message).toContain(`run its command: refunds: \`${command}\``);
+    expect(message).not.toContain("being built, waiting, or done");
+    // Only the build listed as being built gets one: reporting waits on refunds.
+    expect(message).not.toContain("reporting: `");
+    // The command carries it on, said once whose it is, and the next step is its build, asked nothing again.
+    const took = run(UNIT, ["take", "refunds", "--home", HOME], bea, chat);
+    expect(took.status, took.out).toBe(0);
+    expect(took.json?.resumed, took.out).toBe(true);
+    const after = next(bea, chat);
+    expect(after.ask_type, JSON.stringify(after).slice(0, 600)).toBeUndefined();
+    expect(JSON.stringify(after)).toContain("Carrying on refunds, alice's build in the payments space.");
+  });
+
   test("a teammate's first words are answered with the Units to take, never the pick of the work itself", () => {
     const home = homeWithTeams();
     const alice = cloneOf(home.remote, "alice");
@@ -1696,6 +1735,11 @@ describe("a team's own workspace that holds no copy of the lead's", () => {
     const offer = next(pay2, chat);
     expect(String(offer.question ?? offer.narration), JSON.stringify(offer).slice(0, 400)).toContain("refunds (being built by pay, on another computer)");
     expect((offer.choices as Array<{ label: string }> | undefined ?? []).map((choice) => choice.label)).not.toContain("Carry on refunds");
+    // A live run on Codex (the second teammate): the person asked to carry it
+    // on and no step named a way to; the step now names the command, never as a choice.
+    const carryOn = /When their words ask to carry on a build the question lists as being built, run its command: refunds: `([^`]+)`/
+      .exec(String(offer.question_note ?? offer.board_note ?? ""))?.[1];
+    expect(carryOn, JSON.stringify(offer).slice(0, 1600)).toBe(`bun .claude/tools/aidlc-unit.ts take refunds --from ${home.remote} --home ${HOME}`);
     // Asked for in their words, it is carried on, said once whose it is.
     const took = run(UNIT, ["take", "refunds", "--from", home.remote, "--home", HOME], pay2, chat);
     expect(took.status, took.out).toBe(0);
@@ -1704,6 +1748,8 @@ describe("a team's own workspace that holds no copy of the lead's", () => {
     const first = nextSaying(pay2, chat);
     expect(first.step.kind, JSON.stringify(first.step).slice(0, 600)).toBe("run-stage");
     expect(first.step.stage).toBe("functional-design");
+    // Nothing is asked twice: the take question is not put again.
+    expect(first.step.ask_type).toBeUndefined();
     expect(first.step.rules_in_context as string[]).toContain("the lead's aidlc/spaces/default/memory/team.md");
     expect(first.said).toContain("Test first for the refund amount.");
     expect(first.said).not.toContain(UNREAD);

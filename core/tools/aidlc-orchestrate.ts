@@ -166,6 +166,8 @@ import {
   REPO_PLACEHOLDER,
   showsGateAgain,
   TAKE_SPACE_NOTE,
+  carryOnNote,
+  type CarryOnCommand,
   validateDirective,
   withAgentNotes,
 } from "./aidlc-directive.ts";
@@ -762,6 +764,7 @@ import {
   unitsInPlanOrder,
   unknownLikelyReposLine,
   noteLeadWaitsOnTeams,
+  leadWaitsOnTeams,
   SIGN_OFF_CLAUSE,
   UNIT_WORDS_NOTE,
   unitWordsArg,
@@ -5001,7 +5004,8 @@ function unitsWordsReplyDirective(requestId: string, offer: AskDirective | Print
       `The Units offer says: ${said} Read the person's words. ` +
       (choices === "" ? "" : `If they ask for one of these Units (to take it, start it, or start it early), run that choice's ` +
         `command and follow what it returns: ${choices}. ${TAKE_SPACE_NOTE} `) +
-      "If they ask for a Unit the offer does not list as one to start (being built, waiting, or done), tell them in one line " +
+      `${carryOnNote((offer as { carry_on?: CarryOnCommand[] }).carry_on).trimStart()} `.trimStart() +
+      "If they ask for a Unit the offer does not list as one to start (waiting or done), tell them in one line " +
       "where it stands, from what the offer says, and run nothing. " +
       `If they only ask what is here, run \`${orchestrate} next\` with nothing after it. If they say they lead this work and ask ` +
       `to carry it on here, run \`${aidlcDispatcherInvocation("intent")} switch <name>\` with its name, then \`${aidlcToolInvocation("unit")} ` +
@@ -8966,7 +8970,7 @@ function unitTakeAsk(projectDir: string): AskDirective | PrintDirective | null {
   // so each look fetches them again.
   let looked = unitTakeLook(projectDir, false);
   if (looked.choices.length === 0 && looked.sentences.length > 0 && looked.stale) looked = unitTakeLook(projectDir, true);
-  const { sentences, choices, homeHere } = looked;
+  const { sentences, choices, carryOn, homeHere } = looked;
   const active = engineSelection(projectDir).space;
   if (choices.length === 0 && sentences.length === 0) return null;
   // Other work of the person's own here is theirs to pick up first.
@@ -8978,7 +8982,7 @@ function unitTakeAsk(projectDir: string): AskDirective | PrintDirective | null {
   const ledHere = homeHere.filter((home) => planMadeHere(projectDir, home.dirName!, active));
   if (choices.length === 0) {
     // Offered once in a chat.
-    return lineEndingTurn(`${sentences.join(" ")} Nothing is ready to take yet.`, offersOnce(projectDir, ledHere
+    return withCarryOn(lineEndingTurn(`${sentences.join(" ")} Nothing is ready to take yet.`, offersOnce(projectDir, ledHere
       .map((home) => {
         const label = intentDisplayLabel(home);
         return {
@@ -8988,7 +8992,7 @@ function unitTakeAsk(projectDir: string): AskDirective | PrintDirective | null {
             { label: "Not now" },
           ],
         };
-      })));
+      }))), carryOn);
   }
   for (const home of ledHere) {
     choices.push({
@@ -9003,7 +9007,17 @@ function unitTakeAsk(projectDir: string): AskDirective | PrintDirective | null {
     response_route: "command",
     question: `${sentences.join(" ")} Taking a Unit starts it as your team's own piece of work here, from what the lead approved.`.trim(),
     choices,
+    ...(carryOn.length > 0 ? { carry_on: carryOn } : {}),
   };
+}
+
+// A step listing someone else's build as being built carries the command that
+// carries it on (carryOnNote names it for the agent), never as a choice.
+function withCarryOn(step: PrintDirective, carryOn: readonly CarryOnCommand[]): PrintDirective {
+  if (carryOn.length === 0) return step;
+  step.carry_on = [...carryOn];
+  step.board_note = [step.board_note, carryOnNote(carryOn).trim()].filter(Boolean).join(" ");
+  return step;
 }
 
 // The lead's project by the address the person said (--lead-address): the
@@ -9024,13 +9038,14 @@ function leadAddressStep(projectDir: string, address: string): Directive | null 
       ? lineEndingTurn(`The lead's project at ${maskUserinfo(address)} has no work built by teams on its branch yet: the lead shares the plan first.`)
       : null;
   }
-  if (looked.choices.length === 0) return lineEndingTurn(`${looked.sentences.join(" ")} Nothing is ready to take yet.`);
+  if (looked.choices.length === 0) return withCarryOn(lineEndingTurn(`${looked.sentences.join(" ")} Nothing is ready to take yet.`), looked.carryOn);
   return {
     kind: "ask",
     ask_type: "unit-take",
     response_route: "command",
     question: `${looked.sentences.join(" ")} Taking a Unit starts it as your team's own piece of work here, from what the lead approved.`.trim(),
     choices: looked.choices,
+    ...(looked.carryOn.length > 0 ? { carry_on: looked.carryOn } : {}),
   };
 }
 
@@ -9165,11 +9180,14 @@ function unitTakeLook(
   now: boolean,
   // The lead's project by the address the person said now (--lead-address).
   address?: string,
-): { sentences: string[]; choices: AskChoice[]; homeHere: IntentInfo[]; stale: boolean; readAtAddress: number | null } {
+): { sentences: string[]; choices: AskChoice[]; carryOn: CarryOnCommand[]; homeHere: IntentInfo[]; stale: boolean; readAtAddress: number | null } {
   const active = engineSelection(projectDir).space;
   const unitTool = aidlcToolInvocation("unit");
   const sentences: string[] = [];
   const choices: AskChoice[] = [];
+  // Someone else's build the look lists as being built: never a choice, and
+  // carried on by its take command when the person's words ask for it.
+  const carryOn: CarryOnCommand[] = [];
   const homeHere: IntentInfo[] = [];
   // A home whose claims this look did not fetch (fetched earlier in the chat).
   let stale = false;
@@ -9263,6 +9281,7 @@ function unitTakeLook(
           }
           if (!mine) {
             building.push(`${unit} (${sentBack ?? `being built by ${who}${where}, ${worked.here ? "on this computer" : "on another computer"}`})`);
+            carryOn.push({ unit, command: take.replace("%s", shellArg(unit)) });
             continue;
           }
           choices.push({
@@ -9329,7 +9348,7 @@ function unitTakeLook(
       }
     }
   }
-  return { sentences, choices, homeHere, stale, readAtAddress: byAddressLook.readAtAddress };
+  return { sentences, choices, carryOn, homeHere, stale, readAtAddress: byAddressLook.readAtAddress };
 }
 
 // A Unit's build its lead turned down or sent back, not redone since its
@@ -18635,7 +18654,7 @@ function teamUnitMajorWalkBeat(
   scope: string,
   stateContent: string,
   currentSlug: string | null,
-): { step: TeamUnitWalkStep; block: GraphStage[]; context: UnitWorkContext } | null {
+): { step: TeamUnitWalkStep; block: GraphStage[]; context: UnitWorkContext; elsewhere: string[] } | null {
   if (readConstructionIteration(stateContent) !== "unit-major" || !isTeamUnitOwnership(stateContent)) return null;
   const resolution = resolveBoltBatches(projectDir);
   if (resolution.state !== "ok" || resolution.batches.flat().length === 0) return null;
@@ -18679,7 +18698,26 @@ function teamUnitMajorWalkBeat(
     projectDir, stateContent, block, units, resolution.unitKinds, model.ledgers, model.mergedUnits,
     effectiveUnitGateRhythm(projectDir, stateContent), auditRows, recordPrefix, codekbCtx,
   );
-  return { step, block, context: { units, kinds: resolution.unitKinds, recordPrefix, codekbCtx } };
+  // The Units built or open to take elsewhere, not merged here yet.
+  const elsewhere = [...heldElsewhere].filter((unit) => !model.mergedUnits.has(unit));
+  return { step, block, context: { units, kinds: resolution.unitKinds, recordPrefix, codekbCtx }, elsewhere };
+}
+
+// Whether the lead's project of work teams build waits on the Units, building
+// nothing here: its last board on this state said so (leadWaitsOnTeams), or,
+// before a board has run on this state, its walk, read as the board's step
+// reads it, has nothing here while a Unit is built or open elsewhere. Status
+// reads this one rule.
+export function leadWaitsHere(projectDir: string, stateContent: string): boolean {
+  if (!isTeamUnitOwnership(stateContent) || homeLocation(stateContent) === null || unitBuildOf(stateContent) !== null) return false;
+  if ((leadWaitsOnTeams(projectDir, stateContent)?.length ?? 0) > 0) return true;
+  try {
+    const walk = teamUnitMajorWalkBeat(projectDir, getField(stateContent, "Scope") ?? "", stateContent,
+      getField(stateContent, "Current Stage")?.trim() ?? null);
+    return walk?.step.kind === "covered" && walk.elsewhere.length > 0;
+  } catch {
+    return false;
+  }
 }
 
 // The first stop of the solo unit-major walk, without emitting it. Units walk

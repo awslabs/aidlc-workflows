@@ -1329,11 +1329,47 @@ describe("at the home", () => {
     expect(String(next(home.dir).narration)).toContain("checkout-api merged, billing not merged yet (1 of 2 merged)");
     const said = run(UNIT, ["merged", "refunds", "--repo", "billing", "--person-words", "billing merged it by hand last night"], home.dir);
     expect(said.status, said.out).toBe(0);
-    expect(said.json?.notice).toBe("billing counts as merged for refunds, in your words.");
-    next(home.dir);
+    // Recorded when the lead says it, by the take-in the next step runs, with the check-in line.
+    expect(said.json?.notice).toBe(`refunds is recorded as merged here. ${CHECK_IN_LINE}`);
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
-    const merged = readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_MERGED");
-    expect(merged[0]?.block).toContain('billing (by your word: "billing merged it by hand last night")');
+    const merged = () => readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_MERGED");
+    expect(merged()).toHaveLength(1);
+    expect(merged()[0]?.block).toContain('billing (by your word: "billing merged it by hand last night")');
+    // The next step records nothing again and says nothing of it again.
+    const after = next(home.dir);
+    expect(merged()).toHaveLength(1);
+    expect(JSON.stringify(after.change_notices ?? [])).not.toContain(CHECK_IN_LINE);
+    expect(JSON.stringify(after)).not.toContain("is recorded as merged here");
+  });
+
+  // A live run (the lead in a workspace of their own): the lead asked to record
+  // a merge the board had seen, and only that; the agent ran merged, which put
+  // their words on the claim and recorded nothing, and no check-in line came.
+  test("the lead's word for a merge the check sees: recorded at once, saying so, with no next step", () => {
+    const { hosts, home, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    mergeOnHost(hosts.billing, "refunds", "squash");
+    git(home.dir, ["fetch", "-q", "origin"]);
+    const said = run(UNIT, ["merged", "refunds", "--repo", "billing", "--person-words", "record the refunds merge, just the merge"], home.dir);
+    expect(said.status, said.out).toBe(0);
+    expect(said.json?.notice).toBe(`refunds is recorded as merged here. ${CHECK_IN_LINE}`);
+    const rows = readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_MERGED");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].block).toContain("by your word");
+  });
+
+  test("the lead's word for one repo while another has not merged: nothing recorded, and the line says which", () => {
+    const { home, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    const said = run(UNIT, ["merged", "refunds", "--repo", "billing", "--person-words", "billing merged it"], home.dir);
+    expect(said.status, said.out).toBe(0);
+    expect(said.json?.notice).toBe("billing counts as merged for refunds, in your words. checkout-api has not merged it yet, so nothing is recorded here.");
+    expect(readAuditShardEvents(home.dir).some((row) => row.event === "UNIT_MERGED")).toBe(false);
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.done).toBeUndefined();
   });
 
   // A live run: the member said the merge request merged and the agent ran the

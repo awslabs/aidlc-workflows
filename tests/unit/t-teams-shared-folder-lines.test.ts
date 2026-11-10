@@ -10,7 +10,7 @@
 // from the other teams.
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
@@ -390,16 +390,41 @@ describe("where things stand", () => {
     expect(takeIn("web", ["checkout-ui", "--home", HOME_RECORD], bea).status).toBe(0);
     checkIn(bea, "web: checkout-ui started");
     git(ana, ["pull", "-q", "--no-rebase", "--no-edit"]);
-    expect(arrivedAtLastPull(ana, "payments")).toBe("checkout-ui in web");
+    expect(arrivedAtLastPull(ana)).toBe("bea's checkout-ui");
     const status = run(UTILITY, ["status"], ana, ENV);
-    expect(status.out).toContain("From others:    checkout-ui in web (at your last pull that brought changes)");
+    expect(status.out).toContain("From others:    bea's checkout-ui (at your last pull that brought changes)");
     // Another pull, straight after, that brings the lead's change: only that one is said.
     writeFileSync(join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD, "notes.md"), "Lead's note.\n");
     git(home.dir, ["pull", "-q", "--no-rebase", "--no-edit"]);
     checkIn(home.dir, "the lead's note");
     git(ana, ["pull", "-q", "--no-rebase", "--no-edit"]);
-    expect(arrivedAtLastPull(ana, "payments")).toStartWith("the lead's ");
-    expect(arrivedAtLastPull(ana, "payments")).not.toContain("checkout-ui");
+    expect(arrivedAtLastPull(ana)).toBe("lead's fixture");
+  });
+
+  // A live run (Windows Server, every take in the default space): status right
+  // after a pull that brought a teammate's merged Unit said nothing of it, since
+  // the line read other spaces; it reads who made the change.
+  test("with every build in one space, a pull's news is said by who made it, and nothing when it was only the person's own", () => {
+    const home = homeWithTeams();
+    const ana = cloneOf(home.remote, "ana");
+    expect(run(UNIT, ["take", "refunds", "--home", HOME_RECORD], ana).status).toBe(0);
+    checkIn(ana, "refunds started");
+    const bea = cloneOf(home.remote, "bea");
+    expect(run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD], bea).status).toBe(0);
+    checkIn(bea, "checkout-ui started");
+    git(ana, ["pull", "-q", "--no-rebase", "--no-edit"]);
+    expect(arrivedAtLastPull(ana)).toBe("bea's checkout-ui");
+    expect(run(UTILITY, ["status"], ana, ENV).out).toContain("From others:    bea's checkout-ui (at your last pull that brought changes)");
+    // Ana's own change from her other computer: nothing from others.
+    const laptop = cloneOf(home.remote, "ana");
+    const intents = join(laptop, "aidlc", "spaces", "default", "intents");
+    const build = readdirSync(intents).find((name) => name.endsWith("-refunds"));
+    expect(build).toBeDefined();
+    writeFileSync(join(intents, build!, "notes.md"), "Ana's note.\n");
+    checkIn(laptop, "ana's note");
+    git(ana, ["pull", "-q", "--no-rebase", "--no-edit"]);
+    expect(arrivedAtLastPull(ana)).toBeNull();
+    expect(run(UTILITY, ["status"], ana, ENV).out).not.toContain("From others:");
   });
 });
 

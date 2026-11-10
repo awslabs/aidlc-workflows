@@ -8703,7 +8703,19 @@ function saidMerged(args: string[], projectDir?: string): void {
   const sent = updateClaimRef(pd, remote, live.ref, createClaimCommit(pd, live.oid, payload), live.oid);
   if (!sent.ok) fail(`${unit}'s claim moved meanwhile: ${sent.refused ?? "try again"}.`);
   invalidateLiveClaimPayloadCache(pd, unit);
-  console.log(JSON.stringify({ unit, notice: `${flags.repo} counts as merged for ${unit}, in your words.` }));
+  // Recorded now, by the take-in the next step runs, once every repo it
+  // changed is merged by the check or by the lead's word.
+  const tookIn: string[] = [];
+  const checked = checkTeamResults(pd, [], [], [], false, tookIn).get(unit);
+  const said = `${flags.repo} counts as merged for ${unit}, in your words.`;
+  const notMerged = (checked?.verdicts ?? []).filter((verdict) => !verdict.merged).map((verdict) => verdict.repo);
+  const checkIn = tookIn.includes(unit) ? checkInLine(pd) : null;
+  const notice = checked?.done
+    ? [`${unit} is recorded as merged here.`, checkIn].filter((line) => line !== null).join(" ")
+    : notMerged.length > 0
+      ? `${said} ${joinNames(notMerged)} ${notMerged.length === 1 ? "has" : "have"} not merged it yet, so nothing is recorded here.`
+      : said;
+  console.log(JSON.stringify({ unit, notice }));
 }
 
 // The lead's repo list at a commit of the lead's workspace, as addresses by

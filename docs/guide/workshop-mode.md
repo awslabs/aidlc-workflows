@@ -814,8 +814,10 @@ lead's project when Build and Test is approved: "Your teammates see where this
 work stands once aidlc/ is committed and pushed." It
 never goes by what git shows changed, since AI-DLC's own record changes at every
 step. Asked where things stand (`/aidlc --status`), a clone also says what its
-last `git pull` that brought changes brought from the other teams, for example
-"From others: checkout-ui in web (at your last pull that brought changes)".
+last `git pull` that brought changes brought from other people, by who made each
+change (their git name), for example "From others: bea's checkout-ui (at your
+last pull that brought changes)"; your own changes from another computer are
+not said.
 
 ### Start early, and change a shared input
 

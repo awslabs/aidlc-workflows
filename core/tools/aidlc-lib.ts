@@ -69,7 +69,7 @@ export {
   workspaceEngineFile,
   workspaceEnginePath,
 } from "./aidlc-runtime-paths.ts";
-import { humanTurnMintAllowed, personGitNameField } from "./aidlc-git-name.ts";
+import { gitUserName, humanTurnMintAllowed, personGitNameField } from "./aidlc-git-name.ts";
 export { humanTurnMintAllowed } from "./aidlc-git-name.ts";
 import { hasRealGitEntry, submoduleLeavesProjectRepo } from "./aidlc-git.ts";
 export { hasRealGitEntry } from "./aidlc-git.ts";
@@ -40652,6 +40652,10 @@ export interface RecordedAnswerMode {
   mode: AnswerModeChoice;
   stage: string;
   timestamp: string;
+  /** The audit shard (the clone) the answer is in. */
+  shard?: string;
+  /** Who works in that clone, by the newest Git Name its rows recorded, when one did. */
+  by?: string;
 }
 
 /**
@@ -40691,11 +40695,15 @@ export function latestRecordedAnswerMode(
       before !== null && after === null && row.event === "QUESTION_ANSWERED" && isAnswerModeDecision(before)
     ) {
       const mode = answerModeFromReply(auditBlockField(row.block, "Details"));
-      if (mode !== null) latest = { mode, stage, timestamp: row.timestamp };
+      if (mode !== null) latest = { mode, stage, timestamp: row.timestamp, shard: row.shard };
     }
     open.set(key, after);
   }
-  return latest;
+  // An answer row carries no name: the clone's newest named row says who works there.
+  const named = latest === null ? undefined
+    : rows.findLast((row) => row.shard === latest?.shard && auditBlockField(row.block, "Git Name"));
+  const by = named === undefined ? null : auditBlockField(named.block, "Git Name");
+  return latest === null || by === null ? latest : { ...latest, by };
 }
 
 export interface StageAnswerMode {
@@ -40719,11 +40727,27 @@ export function resolveStageAnswerMode(
 ): StageAnswerMode {
   const recorded = projectDir === null ? null : latestRecordedAnswerMode(projectDir, options.intent, options.space);
   if (recorded !== null) {
+    // A Unit's build (its Unit Build field) carried on from someone else: the
+    // answer is another clone's (as buildLastWorked reads a build's last hand)
+    // and the one who works there is not this person, so the choice is theirs.
+    const carriedOn = (): boolean => {
+      try {
+        if (projectDir === null || getField(readStateFile(projectDir), "Unit Build") === null) return false;
+      } catch {
+        return false;
+      }
+      if (recorded.shard === undefined || basename(recorded.shard) === auditShardName(projectDir)) return false;
+      const me = gitUserName(projectDir);
+      return me !== null && me !== recorded.by;
+    };
+    const chose = recorded.by !== undefined && carriedOn()
+      ? `Answering the way ${recorded.by} chose for this build`
+      : "Answering the way you chose earlier";
     return {
       mode: recorded.mode,
       ask: false,
       reused_from: recorded.stage,
-      notice: `Answering the way you chose earlier: ${ANSWER_MODE_LABELS[recorded.mode]}. ` +
+      notice: `${chose}: ${ANSWER_MODE_LABELS[recorded.mode]}. ` +
         `Say if you'd rather ${ANSWER_MODE_OTHERS[recorded.mode]}.`,
     };
   }

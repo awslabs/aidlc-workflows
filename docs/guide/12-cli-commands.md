@@ -933,8 +933,11 @@ change made again by hand, or merged through another branch). The agent runs it
 with your words in the request file its command names
 (`--request-file aidlc/.aidlc-engine/request-text/unit-merged.txt`). Your words, as you
 typed them in the message you said them in (the agent names another with
-`--message <id>`), go onto the Unit's claim, the repo counts as merged at the lead's project's next step, and the Unit's
-done record keeps them ("by your word").
+`--message <id>`), go onto the Unit's claim, and the Unit's
+done record keeps them ("by your word"). Once every repo the Unit changed is merged, by the board's
+check or by your word, it is recorded at once, by the same take-in the next step runs:
+"<unit> is recorded as merged here." then the check-in line. A repo still not merged records
+nothing, and the line says which.
 In a team's own build it names the way on instead: the lead's project checks the merge itself.
 
 ### `/aidlc unit adopt <unit>` — Adopt a teammate's live claim

@@ -44,6 +44,7 @@ import {
   writeEngineFileNoFollow,
 } from "./aidlc-lib.ts";
 import { visibleMarkdownLines } from "./aidlc-markdown.ts";
+import { gitUserName } from "./aidlc-git-name.ts";
 import { applicableTeamUnitScopeStamp, idSuffix, listIntents } from "./aidlc-record-core.ts";
 import { gitAddressKey } from "./aidlc-workspace-repos.ts";
 import { withoutCredentials } from "./aidlc-workspace-manifest.ts";
@@ -561,12 +562,14 @@ export function checkInLine(projectDir: string, stateContent?: string): string |
   return remotes.status === 0 && remotes.stdout.trim() !== "" ? CHECK_IN_LINE : null;
 }
 
-// What the person's last `git pull` here that brought changes brought from the
-// other spaces of a workspace teams share: each record by its Unit and where it
-// is, or the lead's work by its own name. Read from this clone's own reflog (a pull
-// that brought nothing writes no entry), so nothing is written. Null with no
-// such pull here, nothing from others, or no git.
-export function arrivedAtLastPull(projectDir: string, ownSpace: string): string | null {
+// What the person's last `git pull` here that brought changes brought from
+// other people, by who made each change (the git name git records on the
+// pulled commits, the name the board shows), never by space: each record as
+// "<who>'s <Unit or work>". Read from this clone's own reflog (a pull that
+// brought nothing writes no entry), so nothing is written. Null with no such
+// pull here, nothing from anyone else (the person's own changes from another
+// computer are theirs), or no git.
+export function arrivedAtLastPull(projectDir: string): string | null {
   const reflog = spawnSync("git", ["-C", projectDir, "reflog", "-n", "200", "--format=%H%x00%gs"], { encoding: "utf-8", timeout: 10_000 });
   if (reflog.status !== 0) return null;
   const rows = reflog.stdout.split("\n").filter((row) => row.includes("\u0000")).map((row) => row.split("\u0000") as [string, string]);
@@ -580,30 +583,34 @@ export function arrivedAtLastPull(projectDir: string, ownSpace: string): string 
     if (start !== -1) last = start;
   }
   if (last + 1 >= rows.length) return null;
-  const diff = spawnSync("git", ["-C", projectDir, "diff", "--name-only", rows[last + 1][0], rows[first][0], "--", "aidlc/spaces"], { encoding: "utf-8", timeout: 10_000 });
-  if (diff.status !== 0) return null;
-  // Each record once, by where it is: a Unit's build by its Unit and space (a
-  // default space is never named), the lead's own work as the lead's.
+  const log = spawnSync("git", ["-C", projectDir, "log", "--no-merges", "--name-only", "--format=%x01%an",
+    `${rows[last + 1][0]}..${rows[first][0]}`, "--", "aidlc/spaces"], { encoding: "utf-8", timeout: 10_000 });
+  if (log.status !== 0) return null;
+  const me = gitUserName(projectDir);
+  // Each record once per person who changed it, newest first as git lists them.
   const records = new Map<string, string>();
-  for (const path of diff.stdout.split("\n")) {
-    const match = /^aidlc\/spaces\/([^/]+)\/intents\/([^/]+)\//.exec(path.trim());
-    if (match === null || match[1] === ownSpace) continue;
-    const [, space, dirName] = match;
-    if (records.has(`${space}/${dirName}`)) continue;
-    let said = `${dirName}${spaceWords(space, true)}`;
-    try {
-      const state = readStateFile(projectDir, dirName, space);
-      const build = unitBuildOf(state);
-      const entry = listIntents(projectDir, space).find((intent) => intent.dirName === dirName);
-      const label = build?.unit ?? (entry !== undefined ? intentDisplayLabel(entry) : dirName);
-      said = build === null && homeLocation(state) !== null ? `the lead's ${label}` : `${label}${spaceWords(space, true)}`;
-    } catch {
-      // A record no longer here keeps its folder name.
+  for (const commit of log.stdout.split("\u0001").slice(1)) {
+    const [author, ...paths] = commit.split("\n");
+    const who = author.trim();
+    if (who === "" || who === me) continue;
+    for (const path of paths) {
+      const match = /^aidlc\/spaces\/([^/]+)\/intents\/([^/]+)\//.exec(path.trim());
+      if (match === null) continue;
+      const [, space, dirName] = match;
+      const key = `${who}\u0000${space}/${dirName}`;
+      if (records.has(key)) continue;
+      let label = dirName;
+      try {
+        const state = readStateFile(projectDir, dirName, space);
+        const entry = listIntents(projectDir, space).find((intent) => intent.dirName === dirName);
+        label = unitBuildOf(state)?.unit ?? (entry !== undefined ? intentDisplayLabel(entry) : dirName);
+      } catch {
+        // A record no longer here keeps its folder name.
+      }
+      records.set(key, `${who}'s ${label}`);
     }
-    records.set(`${space}/${dirName}`, said);
   }
-  if (records.size === 0) return null;
-  return [...records.values()].join("; ");
+  return records.size === 0 ? null : [...records.values()].join("; ");
 }
 
 // A build walks only its own Unit: its copy of the home's plan names every

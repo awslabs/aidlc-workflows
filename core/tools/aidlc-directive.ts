@@ -801,6 +801,22 @@ export interface UnitTakeAskDirective extends AskDirectiveBase {
   ask_type: "unit-take";
   response_route: "command";
   choices: AskChoice[];
+  /** Someone else's builds the question lists as being built, each with the take command that carries it on (carryOnNote). */
+  carry_on?: CarryOnCommand[];
+}
+
+/** A build the take look lists as being built by someone else, and the take command that carries it on. */
+export interface CarryOnCommand {
+  unit: string;
+  command: string;
+}
+
+// Someone else's build is never a choice; the person's own words ask to carry
+// it on, and this names the command for each one listed as being built.
+export function carryOnNote(carryOn: readonly CarryOnCommand[] | undefined): string {
+  if (carryOn === undefined || carryOn.length === 0) return "";
+  return " When their words ask to carry on a build the question lists as being built, run its command: " +
+    `${carryOn.map((entry) => `${entry.unit}: \`${entry.command}\``).join("; ")}.`;
 }
 
 // A team's proposed change to a shared input, at the home: the person's own
@@ -1013,6 +1029,8 @@ export interface PrintDirective {
   // and what each runs.
   board_note?: string;
   offers?: Array<{ question: string; choices: Array<{ label: string; command?: string; recommended?: true }> }>;
+  /** As on the take question: someone else's builds listed as being built, with the command that carries each on. */
+  carry_on?: CarryOnCommand[];
 }
 
 // error — stop with an error (unknown scope, mutually-exclusive flags, init
@@ -1299,9 +1317,13 @@ const ASK_FIELDS = [
   "repo_facts",
   "estimate_note",
   "handovers",
+  // The take question: someone else's builds listed as being built, each with
+  // the command that carries it on (carryOnNote).
+  "carry_on",
 ] as const;
 const PRINT_FIELDS = [
   "kind", "message", "ends_turn", "next_stage", "document_note", "revision_cycle", "accept_as_is", "question_id", "offers",
+  "carry_on",
 ] as const;
 const ERROR_FIELDS = ["kind", "message"] as const;
 const DONE_FIELDS = ["kind", "reason", "workflow_continues", "done_note"] as const;
@@ -1974,7 +1996,7 @@ export function withAgentNotes<T extends object>(
       : d.ask_type === "unit-amend"
       ? unitAmendQuestionNote(invocation)
       : d.ask_type === "unit-take"
-      ? `${questionNote(invocation, choices?.length === 1)} ${TAKE_SPACE_NOTE}`
+      ? `${questionNote(invocation, choices?.length === 1)} ${TAKE_SPACE_NOTE}${carryOnNote(d.carry_on as CarryOnCommand[] | undefined)}`
       : d.ask_type === "unit-signoff"
       ? questionNote(invocation, choices?.length === 1) + " Their words sign it off: when they do, write them, as they typed them, to the file signoff_command names with your file tool, never a shell, and run it; anything else leaves it waiting."
       : questionNote(invocation, choices?.length === 1);
