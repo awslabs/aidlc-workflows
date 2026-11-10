@@ -532,6 +532,18 @@ describe("t325 atomic team Unit claims", () => {
     expect(readAllAuditShards(fanout.seed)).toBe(auditBefore);
   });
 
+  // A look at the teams' claims the remote did not answer is said before the
+  // walk goes on without any claim seen, never silently.
+  test("a team walk whose remote does not answer says so before it walks with no claim seen", () => {
+    const { seed } = makeSeed();
+    git(seed, ["remote", "set-url", "origin", join(seed, "dead-remote")]);
+    const directive = nextDirective(seed);
+    expect(directive).toMatchObject({ stage: "functional-design", unit: "skeleton" });
+    expect(directive.change_notices).toContain(
+      "The shared repository did not answer just now, so this shows the teams' work as this clone last saw it.",
+    );
+  });
+
   test("scoped receipt writes and claim-sensitive forks are offline-first", () => {
     const { remote } = makeSeed();
     const checkout = clone(remote, "offline");

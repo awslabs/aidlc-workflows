@@ -5323,33 +5323,6 @@ function shareMain(args: string[], projectDir?: string): void {
   }));
 }
 
-const CLAIM_REFRESH_TIMEOUT_MS = 3000;
-
-// Each team's claim refs as the remote has them now, for the board and the
-// offers on a checkout that has fetched nothing since: one fetch of the claim
-// refs only, no prompt, a few seconds at most. Best effort: false when the
-// remote did not answer, and the caller shows what this clone last saw.
-export function refreshClaimRefs(projectDir: string): boolean {
-  const pd = resolveProjectDir(projectDir);
-  let remote: string | null;
-  try {
-    remote = repositoryRemote(pd);
-  } catch {
-    return false;
-  }
-  if (!remote) return true;
-  const result = spawnSync("git", [
-    "fetch", "--quiet", "--no-tags", "--no-filter", remote,
-    `+refs/heads/claim/*:refs/remotes/${remote}/claim/*`,
-  ], {
-    cwd: pd,
-    env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
-    stdio: ["ignore", "pipe", "pipe"],
-    timeout: CLAIM_REFRESH_TIMEOUT_MS,
-  });
-  return result.status === 0 && !result.error && !result.signal;
-}
-
 // Units landed here that the remote's integration branch, as last fetched,
 // does not have yet: the push after a land is due for them.
 export function landedNotOnRemote(projectDir: string): Array<{ unit: string; commit: string }> {

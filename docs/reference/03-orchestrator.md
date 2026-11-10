@@ -715,7 +715,9 @@ start, the set of open Units, the HEAD, the published claim commit, the landed
 commit) and is written as the question is put, so its **Not now** choice, which
 runs `next`, never meets it again; a push the remote refuses clears the share and
 push marks. Before deciding walk or board, the team block fetches the claim refs
-from the remote (`refreshClaimRefs`, best effort, three seconds at most).
+from the remote (`refreshHomeClaims`, this work's claim refs only, the quiet fetch
+the teams' looks use; a remote that does not answer is said in one line before
+the walk or board goes on with what this clone last saw).
 `claimlessTeamCheckout` is false once this checkout shared the plan
 (`teamSharedHere`) or is a fresh clone of work whose claims are open
 (`planMadeElsewhere` and `claimsOpenHere`), and the board shows there while Unit

@@ -635,7 +635,6 @@ import {
   claimIsMine,
   leadsOwnClaims,
   takenFromSoloWork,
-  refreshClaimRefs,
   type ToldMerge,
   writeProposedText,
   newsNotTakenIn,
@@ -14944,12 +14943,24 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     } else if (!beforeTeamUnitWork(pd, stateContent)) {
       try {
         const readOnlyBoard = isReadOnlyEngineProbe();
-        // The teams' claims as the remote has them now, before walk or board is
+        // This work's claims as the remote has them now, before walk or board is
         // decided, so a checkout that fetched nothing since the teams claimed
-        // and published still sees them (one fetch of the claim refs only).
-        const reached = readOnlyBoard || refreshClaimRefs(pd);
+        // and published still sees them: the one quiet fetch the teams' looks
+        // use. A .git this session cannot write stops the step once, with its way on.
+        let refused = false;
+        const reached = readOnlyBoard || ((): boolean => {
+          try {
+            const looked = refreshHomeClaims(pd, { sessionId: engineSessionId, now: true });
+            refused = looked.refused !== undefined;
+            return looked.unreached === null && !refused;
+          } catch (e) {
+            if (e instanceof GitWriteRefused) throw e;
+            return false;
+          }
+        })();
         const lastSeen = (): void => {
-          if (!reached) {
+          if (refused) sayWithStepOnce(pd, newsNotTakenIn("the teams"));
+          else if (!reached) {
             sayWithStepOnce(pd, "The shared repository did not answer just now, so this shows the teams' work as this clone last saw it.");
           }
         };
@@ -14957,6 +14968,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
         if (claimlessTeamCheckout(pd)) {
           // Exact claim-less team mode remains the increment-1 single-checkout
           // walk: no fan-out directive.
+          lastSeen();
           throw new Error("claimless-team-mode");
         }
         // A checkout the teams take Units from reads the team's own
@@ -15015,7 +15027,10 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
         // The Unit this checkout walks without a claim is still its own once a
         // team claims another (#3610): after the offers above, the walk goes on
         // with it instead of the board.
-        if (unitsHeldHere(pd) !== null) throw new Error("claimless-team-mode");
+        if (unitsHeldHere(pd) !== null) {
+          lastSeen();
+          throw new Error("claimless-team-mode");
+        }
         // While the guard's fan-out check holds (a landed Unit's claim
         // included) it refuses Unit work in this checkout, so the board stays
         // up until the walk has no Unit left to take: every Unit merged. A
@@ -15033,6 +15048,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
           return;
         }
       } catch (e) {
+        if (e instanceof GitWriteRefused) throw e;
         if (errorMessage(e) === "claimless-team-mode" || !existsSync(join(pd, ".git"))) {
           // Non-git deterministic fixtures and exact claim-less increment-1
           // projects retain the existing single-checkout team walk.
