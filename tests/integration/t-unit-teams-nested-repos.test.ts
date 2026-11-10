@@ -149,7 +149,7 @@ describe("the packages inside the workspace's own repo, as gitlinks", () => {
     expect(git(home.remote, ["branch", "--list", "refunds"])).toBe("");
 
     git(home.dir, ["fetch", "-q", "origin"]);
-    expect(String(next(home.dir).narration)).toContain("- refunds, payments: pkg-a not merged yet, pkg-b not merged yet (0 of 2 merged)");
+    expect(String(next(home.dir).narration)).toContain("- refunds, payments space: built by alice, pkg-a not merged yet, pkg-b not merged yet (0 of 2 merged)");
     mergeOnHost(hosts["pkg-a"], "refunds", "squash");
     mergeOnHost(hosts["pkg-b"], "refunds", "merge");
     git(home.dir, ["fetch", "-q", "origin"]);

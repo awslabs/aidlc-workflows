@@ -155,7 +155,7 @@ describe("a look at the board records nothing, and says so", () => {
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
     mergeOnHost(hosts.billing, "refunds", "merge");
     expect(teamBoard(home.dir)).toContain(
-      "- refunds, payments: checkout-api merged, billing merged (2 of 2 merged), not recorded yet: " +
+      "- refunds, payments space: built by alice, checkout-api merged, billing merged (2 of 2 merged), not recorded yet: " +
         "the next step here records it and opens reporting",
     );
     expect(readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_MERGED")).toEqual([]);
@@ -163,7 +163,7 @@ describe("a look at the board records nothing, and says so", () => {
     next(home.dir);
     expect(readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_MERGED")).toHaveLength(1);
     const after = teamBoard(home.dir);
-    expect(after).toContain("- refunds, payments: done");
+    expect(after).toContain("- refunds, payments space: built by alice, done");
     expect(after).not.toContain("not recorded yet");
   });
 
@@ -260,7 +260,7 @@ describe("the lead's project builds nothing it was not asked to", () => {
     const { home } = refundsMerged();
     const step = next(home.dir);
     expect(step.kind, JSON.stringify(step).slice(0, 400)).toBe("print");
-    expect(String(step.narration)).toContain("- refunds, payments: done");
+    expect(String(step.narration)).toContain("- refunds, payments space: built by alice, done");
     expect(merged(home.dir)).toBe(1);
     expect(readAuditShardEvents(home.dir).some((row) => row.event === "UNIT_STARTED")).toBe(false);
   });
@@ -278,7 +278,7 @@ describe("the lead's project builds nothing it was not asked to", () => {
     expect(status).not.toContain("Current Step:");
     expect(status).not.toContain("Next Stage:");
     expect(status).not.toMatch(/CONSTRUCTION .*Unit \d+ of \d+/);
-    expect(status).toContain("- refunds, payments: building, taken by alice");
+    expect(status).toContain("- refunds, payments space: building, taken by alice");
     // The Units' own stages run in each taker's build, never in this record: out of the count here.
     expect(status).toMatch(/^Completion: {5}\d+\/\d+ stages here \(\d+%\); each Unit's own stages are on the board below$/m);
     // A taker's own build counts its stages as always.
@@ -287,6 +287,17 @@ describe("the lead's project builds nothing it was not asked to", () => {
     expect(run(UNIT, ["assign", "--here", "checkout-ui"], home.dir).status).toBe(0);
     expect(next(home.dir).unit).toBe("checkout-ui");
     expect(run(UTILITY, ["status"], home.dir).out).toContain("Current Stage:  Functional Design");
+  });
+
+  // A live run: the board's bare space names read as teams the lead never named.
+  test("a take's row names its space as a space, and a take in a default space has no column", () => {
+    const { home } = refundsTaken();
+    const bea = cloneOf(home.remote, "bea");
+    expect(run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD], bea).status).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    const board = String(next(home.dir).narration);
+    expect(board).toContain("- refunds, payments space: building, taken by alice");
+    expect(board).toContain("- checkout-ui: building, taken by bea");
   });
 
   test("the lead's plain words to record a team's merge reach the step that records it, and nothing is started", () => {

@@ -489,7 +489,7 @@ describe("a step that waits on the person, and every way on the round added, nev
     // Where every Unit stands, as the lead asks: read as the home has it now.
     const board = runPrinted(home.dir, ENV, "bun .claude/tools/aidlc-orchestrate.ts team-board");
     expect(board.status, board.out).toBe(0);
-    expect(board.out).toContain("- refunds, payments: checkout-api not merged yet, billing not merged yet (0 of 2 merged)");
+    expect(board.out).toContain("- refunds, payments space: built by alice, checkout-api not merged yet, billing not merged yet (0 of 2 merged)");
     const step = next(home.dir, ENV);
     expect(step.kind, JSON.stringify(step)).toBe("run-stage");
     const command = /`([^`]*turned-down <unit> --repo <repo>[^`]*)`/.exec(String(step.board_note ?? ""))?.[1];
@@ -520,7 +520,7 @@ describe("a step that waits on the person, and every way on the round added, nev
     const claimBefore = git(home.remote, ["rev-parse", claimRef]);
     const rowsBefore = readAuditShardEvents(home.dir).length;
     const merged = runPrinted(home.dir, ENV, "bun .claude/tools/aidlc-orchestrate.ts team-board");
-    expect(merged.out).toContain("- refunds, payments: checkout-api merged, billing not merged yet (1 of 2 merged)");
+    expect(merged.out).toContain("- refunds, payments space: built by alice, checkout-api merged, billing not merged yet (1 of 2 merged)");
     expect(git(home.remote, ["rev-parse", claimRef])).toBe(claimBefore);
     expect(readAuditShardEvents(home.dir)).toHaveLength(rowsBefore);
     const after = next(home.dir, ENV);

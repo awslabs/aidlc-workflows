@@ -939,13 +939,13 @@ describe("at the home", () => {
     expect(first.kind, JSON.stringify(first)).toBe("print");
     expect(String(first.narration)).toBe([
       "Units of fixture:",
-      "- refunds, payments: checkout-api not merged yet, billing not merged yet (0 of 2 merged)",
+      "- refunds, payments space: built by alice, checkout-api not merged yet, billing not merged yet (0 of 2 merged)",
       "- checkout-ui, open: waiting for a team to take it",
       "- reporting, open: waiting for a team to take it",
     ].join("\n"));
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
     expect(String(next(home.dir).narration)).toContain(
-      "- refunds, payments: checkout-api merged, billing not merged yet (1 of 2 merged)",
+      "- refunds, payments space: built by alice, checkout-api merged, billing not merged yet (1 of 2 merged)",
     );
     mergeOnHost(hosts.billing, "refunds", "merge");
     const after = next(home.dir);
@@ -955,7 +955,7 @@ describe("at the home", () => {
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
     expect(readFileSync(join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD, "construction", "refunds", "code-generation", "code-summary.md"), "utf-8"))
       .toBe("# Code summary\n\nRefunds.\n");
-    expect(String(after.narration), JSON.stringify(after).slice(0, 600)).toContain("- refunds, payments: done");
+    expect(String(after.narration), JSON.stringify(after).slice(0, 600)).toContain("- refunds, payments space: built by alice, done");
     // reporting waited on refunds: on the lead's word to build it here, it starts now, as the home's own work.
     expect(run(UNIT, ["assign", "--here", "reporting", "--person-words", "we build reporting here"], home.dir).status).toBe(0);
     const building = next(home.dir);
@@ -979,7 +979,7 @@ describe("at the home", () => {
     const picked = run(join(AIDLC_SRC, "tools", "aidlc.ts"), ["engine", "intent", "switch", HOME_RECORD], laptop);
     expect(picked.status, picked.out).toBe(0);
     const step = next(laptop);
-    expect(String(step.narration), JSON.stringify(step).slice(0, 600)).toContain("- refunds, payments: done");
+    expect(String(step.narration), JSON.stringify(step).slice(0, 600)).toContain("- refunds, payments space: built by alice, done");
     expect(readAuditShardEvents(laptop).filter((row) => row.event === "UNIT_MERGED")).toHaveLength(1);
     expect(readFileSync(join(laptop, "aidlc", "spaces", "default", "intents", HOME_RECORD, "construction", "refunds", "code-generation", "code-summary.md"), "utf-8"))
       .toBe("# Code summary\n\nRefunds.\n");
@@ -995,7 +995,7 @@ describe("at the home", () => {
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     expect(String(next(home.dir).narration)).toContain(
-      "- refunds, payments: checkout-api not merged yet, billing not merged yet (0 of 2 merged)",
+      "- refunds, payments space: built by alice, checkout-api not merged yet, billing not merged yet (0 of 2 merged)",
     );
   });
 
@@ -1007,7 +1007,7 @@ describe("at the home", () => {
     git(home.dir, ["remote", "set-url", "origin", join(home.remote, "gone")]);
     const step = next(home.dir);
     expect(step.kind, JSON.stringify(step)).toBe("print");
-    expect(String(step.narration)).toContain("- refunds, payments: checkout-api not merged yet, billing not merged yet (0 of 2 merged)");
+    expect(String(step.narration)).toContain("- refunds, payments space: built by alice, checkout-api not merged yet, billing not merged yet (0 of 2 merged)");
     expect((step.change_notices ?? []) as string[]).toEqual([
       "origin could not be reached just now, so the board may be behind: it shows what your last fetch brought.",
     ]);
@@ -1263,8 +1263,8 @@ describe("at the home", () => {
     mergeOnHost(hosts.billing, "refunds", "squash");
     // The board and status say where it is, read only, before any step records it.
     const row = "not recorded yet: it is recorded once the work is back on Functional Design";
-    expect(run(ORCH, ["team-board"], home.dir).out).toMatch(new RegExp(`^- refunds, payments: .*${row}$`, "m"));
-    expect(run(UTILITY, ["status"], home.dir).out).toMatch(new RegExp(`^- refunds, payments: .*${row}$`, "m"));
+    expect(run(ORCH, ["team-board"], home.dir).out).toMatch(new RegExp(`^- refunds, payments space: built by alice, .*${row}$`, "m"));
+    expect(run(UTILITY, ["status"], home.dir).out).toMatch(new RegExp(`^- refunds, payments space: built by alice, .*${row}$`, "m"));
     const chat = { ...ENV, AIDLC_SESSION_OVERRIDE: "t-unit-push-past-unit-stages" };
     const step = next(home.dir, chat);
     const said = ((step.change_notices ?? []) as string[]).filter((line) => line.startsWith("refunds (from alice) is back but not recorded yet"));
@@ -1615,7 +1615,7 @@ describe("a team's done Unit that the lead's Build and Test sends back", () => {
     // Nothing of it is built here: the board says it was sent back, never a turn-down in no repo.
     const board = String(next(home.dir).narration ?? "");
     expect(board).not.toContain("refunds, payments: done");
-    expect(board, board).toContain("- refunds, payments: sent back from your Build and Test, back with alice");
+    expect(board, board).toContain("- refunds, payments space: sent back from your Build and Test, back with alice");
     expect(board).not.toContain("turned down in ,");
     // payments hears it once, in the failure's words.
     git(alice, ["fetch", "-q", "origin"]);

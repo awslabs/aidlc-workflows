@@ -148,12 +148,12 @@ describe("scenario 1: one shared workspace repo, the repos side by side", () => 
 
     expect(boardAt(home)).toBe([
       "Units of fixture:",
-      "- refunds, payments: checkout-api not merged yet, billing not merged yet (0 of 2 merged)",
+      "- refunds, payments space: built by alice, checkout-api not merged yet, billing not merged yet (0 of 2 merged)",
       "- checkout-ui, open: waiting for a team to take it",
       "- reporting, open: waiting for a team to take it",
     ].join("\n"));
     mergeOnHost(hosts["checkout-api"], "refunds", "merge");
-    expect(boardAt(home)).toContain("- refunds, payments: checkout-api merged, billing not merged yet (1 of 2 merged)");
+    expect(boardAt(home)).toContain("- refunds, payments space: built by alice, checkout-api merged, billing not merged yet (1 of 2 merged)");
     mergeOnHost(hosts.billing, "refunds", "squash");
     git(home.dir, ["fetch", "-q", "origin"]);
     next(home.dir);
@@ -223,7 +223,7 @@ describe("scenario 2: one big code repo", () => {
     );
     expect(git(platform, ["ls-tree", "-r", "--name-only", "refunds"]).split("\n").sort())
       .toEqual(["README.md", "services/billing/lib/refund.ts", "services/checkout-api/src/refunds.ts"]);
-    expect(boardAt(home)).toContain("- refunds, payments: platform not merged yet");
+    expect(boardAt(home)).toContain("- refunds, payments space: built by alice, platform not merged yet");
     mergeOnHost(platform, "refunds", "squash");
     git(home.dir, ["fetch", "-q", "origin"]);
     next(home.dir);
@@ -293,7 +293,7 @@ describe("scenario 3: each team keeps its own workspace repo", () => {
     // Its repo is not checked out in this clone: the build's step offers to clone it, once.
     expect(kiroIde.next(will).ask_type).toBe("unit-clone");
     expect(kiroIde.next(will).unit).toBe("checkout-ui");
-    expect(boardAt(home)).toContain("- checkout-ui, web: checkout-web not merged yet");
+    expect(boardAt(home)).toContain("- checkout-ui, web space: built by wendy, checkout-web not merged yet");
     mergeOnHost(hosts["checkout-web"], "checkout-ui", "rebase");
     git(home.dir, ["fetch", "-q", "origin"]);
     next(home.dir);
@@ -386,7 +386,7 @@ describe("scenario 6: when things go wrong", () => {
     git(home.dir, ["fetch", "-q", "origin"]);
     const down = run(UNIT, ["turned-down", "refunds", "--repo", "billing", "--person-words", "they want the retry logic in the client"], home.dir);
     expect(down.status, down.out).toBe(0);
-    expect(boardAt(home)).toContain("- refunds, payments: turned down in billing, back with alice");
+    expect(boardAt(home)).toContain("- refunds, payments space: turned down in billing, back with alice");
     git(alice, ["fetch", "-q", "origin"]);
     expect(notices(kiro.next(alice))).toContain(
       'refunds was turned down in billing by the lead: "they want the retry logic in the client".',

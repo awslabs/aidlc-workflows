@@ -126,7 +126,7 @@ function leadWaits(policy?: "relaxed" | "off") {
   expect(reopened.status, reopened.out).toBe(0);
   expect(readFileSync(statePath, "utf-8")).toMatch(/^- \*\*Current Stage\*\*: code-generation$/m);
   const board = next(home.dir, LEAD);
-  expect(String(board.narration)).toContain("- reporting, data: sent back from your Build and Test, back with dana");
+  expect(String(board.narration)).toContain("- reporting, data space: sent back from your Build and Test, back with dana");
   expect(String(board.message)).toContain("end the turn");
   return { home };
 }

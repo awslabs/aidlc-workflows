@@ -322,7 +322,7 @@ describe("one piece of work, a team on every tool", () => {
     lead.person.say("/aidlc");
     const board = lead.agent.next();
     expect(board.kind, JSON.stringify(board)).toBe("print");
-    expect(String(board.narration)).toContain("- refunds, payments: checkout-api not merged yet, billing not merged yet (0 of 2 merged)");
+    expect(String(board.narration)).toContain("- refunds, payments space: built by alice, checkout-api not merged yet, billing not merged yet (0 of 2 merged)");
     expect(String(board.narration)).toContain("- reporting, open: waiting for a team to take it");
 
     // Each repo merges its own way.
@@ -330,7 +330,7 @@ describe("one piece of work, a team on every tool", () => {
     const seen = lead.agent.next();
     expect(unitsMerged(home.dir), JSON.stringify(seen)).toEqual(FIRST.map((p) => p.unit).sort());
     for (const p of FIRST) expect(claimPayload(home.remote, id8, p.unit), p.unit).toMatchObject({ done: true });
-    expect(String(seen.narration)).toContain("- refunds, payments: done");
+    expect(String(seen.narration)).toContain("- refunds, payments space: built by alice, done");
 
     // refunds is done, so reporting opens, and dana builds it on Cursor. The
     // lead's state as last pushed still has refunds under way, and the take
@@ -352,7 +352,7 @@ describe("one piece of work, a team on every tool", () => {
     expect(named, JSON.stringify(status)).toBeString();
     const look = lead.agent.host.bash(named!);
     expect(look.status, look.stdout + look.stderr).toBe(0);
-    expect(look.stdout).toMatch(/^- reporting, data: billing merged\b.*, not recorded yet: the next step here records it$/m);
+    expect(look.stdout).toMatch(/^- reporting, data space: built by dana, billing merged\b.*, not recorded yet: the next step here records it$/m);
     expect(unitsMerged(home.dir)).not.toContain("reporting");
 
     // Every Unit is in: the home records the last one, runs Build and Test, and the work ends done.
@@ -472,7 +472,7 @@ describe("a teammate on Copilot CLI and the open Units", () => {
     lead.person.say("/aidlc");
     const board = lead.agent.next();
     expect(board.kind, JSON.stringify(board).slice(0, 400)).toBe("print");
-    expect(String(board.narration)).toContain("- refunds, payments: building, taken by alice");
+    expect(String(board.narration)).toContain("- refunds, payments space: building, taken by alice");
     expect(String(board.narration)).toContain("- checkout-ui, open: waiting for a team to take it");
     expect(String(board.board_note)).toMatch(/`[^`]*\bassign --here <unit>[^`]*`/);
     // x2783-s9 4: how often the teams approve is put on the board until the
