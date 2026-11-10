@@ -32,6 +32,7 @@ import {
   claimAttemptFields,
   collectStalePlanApprovalReceipts,
   enterHookWorkflow,
+  hookStandsOutside,
   errorMessage,
   fenceSwitchSentence,
   getField,
@@ -854,12 +855,13 @@ function boxText(question: string, additions: readonly string[]): string | null 
 }
 
 // `read` run on the work the hook payload's chat is on, picked by the payload's
-// session as the guards pick it (enterHookWorkflow); null for a chat that has
-// not joined that work, so a box never shows, or reads back, another work's plan.
+// session as the guards pick it (enterHookWorkflow); null where the hooks stand
+// outside that work (hookStandsOutside), so a box never shows, or reads back,
+// another work's plan.
 function forPayloadChat<T>(projectDir: string, session: unknown, read: () => T | null): T | null {
   const workflow = enterHookWorkflow(projectDir, session);
   try {
-    return workflow.participation === "participant" ? read() : null;
+    return hookStandsOutside(workflow) ? null : read();
   } finally {
     workflow.restore();
   }

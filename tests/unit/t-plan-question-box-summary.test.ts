@@ -28,7 +28,7 @@
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import {
   AIDLC_SRC,
@@ -39,6 +39,7 @@ import {
   DEFAULT_SPACE,
   FIXTURES_DIR,
   intentsDirOf,
+  removeWorkspaceRecord,
   runOrchestrateNext,
   seedAidlcMemory,
   seedBoltDagBatches,
@@ -641,6 +642,48 @@ describe("two pieces of work open in two chats", () => {
       .map((name) => readFileSync(join(intentsDirOf(proj, DEFAULT_SPACE), WORKS[1].record, "audit", name), "utf-8")).join("\n");
     const replied = audit.split(/\n(?=## )/).filter((block) => block.includes("**Event**: QUESTION_REPLIED\n"));
     expect(field(replied[0] ?? "", "Question")).toBe("Approve the code plan?");
+    expect(audit).toContain("**Event**: PLAN_APPROVAL_RECORDED");
+  });
+});
+
+// An isolated Code Generation run in a project with no work (as
+// t-plan-approval-ask's "project with no work" sets it up): its plan question is
+// the open step of the space's own record, and its box gets the lines too.
+describe("an isolated Code Generation run in a project with no work", () => {
+  const SINGLE = ["--stage", "code-generation", "--single", "--scope", "enterprise"];
+  const SPACE_RECORD = ["aidlc", "spaces", "default", "intents"];
+  const ownPlanDir = (proj: string) => join(proj, ...SPACE_RECORD, "construction", "code-generation");
+
+  test("the box gets the plan's lines and path, and the answer records against its question", () => {
+    const proj = createOrchestrationTestProject();
+    created.push(proj);
+    removeWorkspaceRecord(proj);
+    cpSync(AIDLC_SRC, join(proj, ".claude"), { recursive: true });
+    mkdirSync(join(proj, "src"), { recursive: true });
+    writeFileSync(join(proj, "src", "base.ts"), "export const base = true;\n", "utf-8");
+    typed(proj, "/aidlc --stage code-generation --single");
+    const planning = runOrchestrateNext(ORCHESTRATE, proj, SINGLE, { env: env(proj) });
+    expect(planning.status, planning.out).toBe(0);
+    mkdirSync(ownPlanDir(proj), { recursive: true });
+    writeFileSync(join(ownPlanDir(proj), "code-generation-plan.md"),
+      "# Code Generation Plan\n\n## Summary\n\n- Builds: slugify for titles\n- Touches: src/slugify.ts\n" +
+        "- Tests: 3 unit tests\n\n## Steps\n\n- [ ] Step 1: write slugify\n\n" +
+        renderTestingContract(resolveTestingPosture(proj)), "utf-8");
+    writeFileSync(join(ownPlanDir(proj), "unit-test-instructions.md"),
+      "# Unit Test Instructions\n\nRun `bun test src/slugify.test.ts`.\n", "utf-8");
+    const ask = runOrchestrateNext(ORCHESTRATE, proj, SINGLE, { env: env(proj) });
+    expect(ask.status, ask.out).toBe(0);
+    const question = (ask.directive as unknown as Directive).question ?? "";
+    expect((ask.directive as unknown as Directive).ask_type).toBe("plan-approval");
+    const path = relative(proj, join(ownPlanDir(proj), "code-generation-plan.md")).replaceAll("\\", "/");
+    const shown = filled(proj, [planBox(question)]);
+    expect(shown?.[0].question).toBe([question, "", ...LINES, "", `Full plan: ${path}`].join("\n"));
+    answered(proj, shown![0], "Approve Plan");
+    const auditDir = join(proj, ...SPACE_RECORD, "audit");
+    const audit = existsSync(auditDir)
+      ? readdirSync(auditDir).map((name) => readFileSync(join(auditDir, name), "utf-8")).join("\n") : "";
+    const replied = audit.split(/\n(?=## )/).filter((block) => block.includes("**Event**: QUESTION_REPLIED\n"));
+    expect(field(replied.at(-1) ?? "", "Question")).toBe(question);
     expect(audit).toContain("**Event**: PLAN_APPROVAL_RECORDED");
   });
 });
