@@ -1124,12 +1124,32 @@ function realFolderChain(root: string, dir: string): boolean {
   return true;
 }
 
+function copyOver(source: string, target: string): void {
+  try {
+    if (readFileSync(source).equals(readFileSync(target))) return;
+  } catch {
+    return;
+  }
+  const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    copyFileSync(source, temporary);
+    renameSync(temporary, target);
+  } catch {
+    try {
+      unlinkSync(temporary);
+    } catch {
+      // Never made.
+    }
+  }
+}
+
 // One file into its new place. Both present: the clone id keeps the new place
-// (its token names this clone's audit shard from now on); any other file keeps
-// the newer, the new place on equal times (only an older engine writes the old
-// name after the move). A refused rename (Windows, a reader holding the file
-// open) copies under a temporary name and renames that in, so no reader of the
-// new name sees half a file; the old copy goes when it can.
+// (its token names this clone's audit shard from now on) and the old name gets
+// its bytes; any other file keeps the newer, the new place on equal times (only
+// an older engine writes the old name after the move). A refused rename
+// (Windows, a reader holding the file open) copies under a temporary name and
+// renames that in, so no reader of the new name sees half a file; the old copy
+// goes when it can.
 function moveEngineFile(from: string, to: string, root: string, newPlaceWins: boolean): void {
   if (!realFolderChain(root, dirname(to))) return;
   let fromTime: number;
@@ -1139,8 +1159,15 @@ function moveEngineFile(from: string, to: string, root: string, newPlaceWins: bo
     return;
   }
   const existing = lstatSync(to, { throwIfNoEntry: false });
+  // An earlier release that wrote its own clone id after the move (it runs
+  // doctor and config itself in a project pinned to this one) reads this one
+  // from then on, so it adds no new audit shard each time it runs.
+  if (existing?.isFile() && newPlaceWins) {
+    copyOver(to, from);
+    return;
+  }
   if (existing !== undefined) {
-    if (!existing.isFile() || newPlaceWins || fromTime <= existing.mtimeMs) {
+    if (!existing.isFile() || fromTime <= existing.mtimeMs) {
       try {
         if (existing.isFile()) unlinkSync(from);
       } catch {

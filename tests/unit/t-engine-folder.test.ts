@@ -12,8 +12,10 @@
 //      byte, writes the folder's .gitignore, and leaves aidlc/.aidlc-sessions/
 //      holding only pin-target; git status shows nothing of the folder.
 //   2. A second process changes nothing.
-//   3. Both places present: the clone id keeps the new place; any other file
-//      keeps the newer, the new place on equal times.
+//   3. Both places present: the clone id keeps the new place, and the old
+//      name gets its bytes, so an earlier release that runs here again reads
+//      the same identity; any other file keeps the newer, the new place on
+//      equal times.
 //   4. A move refused (an unwritable folder) leaves the clone id read and
 //      written at its old name: no new token, no second audit shard.
 //   5. A link at aidlc/.aidlc-engine carries nothing out of the project.
@@ -180,7 +182,7 @@ describe("an earlier release's engine files move into aidlc/.aidlc-engine/", () 
     expect(tree(join(proj, "aidlc"))).toEqual(before);
   });
 
-  test("both places present: the clone id keeps the new place; another file keeps the newer, the new place on equal times", () => {
+  test("both places present: the clone id keeps the new place and the old name gets it; another file keeps the newer, the new place on equal times", () => {
     const proj = earlierWorkspace();
     const folder = join(proj, "aidlc", ".aidlc-engine");
     mkdirSync(join(folder, "sessions"), { recursive: true });
@@ -196,7 +198,7 @@ describe("an earlier release's engine files move into aidlc/.aidlc-engine/", () 
     utimesSync(join(folder, "sessions", "s-other.binding.json"), old, old);
     engine(proj, "lib.sessionsDir(proj);");
     expect(readFileSync(join(folder, "clone-id"), "utf-8")).toBe("ffffffffffff\nhost-two\n");
-    expect(existsSync(join(proj, "aidlc", ".aidlc-clone-id"))).toBe(false);
+    expect(readFileSync(join(proj, "aidlc", ".aidlc-clone-id"), "utf-8")).toBe("ffffffffffff\nhost-two\n");
     expect(readFileSync(join(folder, "sessions", "no-git-said"), "utf-8")).toBe("new place\n");
     expect(readFileSync(join(folder, "sessions", "s-other.binding.json"), "utf-8")).toBe(EARLIER[".aidlc-sessions/s-other.binding.json"]);
   });
@@ -272,7 +274,8 @@ describe("an earlier release's engine files move into aidlc/.aidlc-engine/", () 
 
   test("a project pinned to another release keeps its earlier files where that release reads them", () => {
     const proj = earlierWorkspace();
-    writeFileSync(join(proj, ".aidlc-version"), "2.11.3\n");
+    // A release before the folder, never this one (whose own pin moves them).
+    writeFileSync(join(proj, ".aidlc-version"), "2.10.0\n");
     engine(proj, "lib.sessionsDir(proj); lib.cloneIdPath(proj);");
     for (const old of Object.keys(EARLIER)) {
       expect(readFileSync(join(proj, "aidlc", old), "utf-8"), old).toBe(EARLIER[old]);
