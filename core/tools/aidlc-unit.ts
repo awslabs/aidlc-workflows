@@ -5620,17 +5620,18 @@ function buildLeftOpenHere(pd: string, state: string, units: string[], words: st
       ...(words.trim() ? { "Person Words": words.trim() } : {}),
     }, pd);
   }
-  console.log(JSON.stringify({
-    here,
-    notice: [
-      ...here.map((unit) => notSeen.includes(unit)
-        ? hereNotSeenLine(unit, unseen ?? "it changed meanwhile")
-        : mergedBy.get(unit)
-          ? `${unit} is built here now, on top of what ${mergedBy.get(unit)} merged.`
-          : `${unit} is built here now, no longer open for the teams.`),
-      ...lines,
-    ].join(" "),
-  }));
+  const notice = [
+    ...here.map((unit) => notSeen.includes(unit)
+      ? hereNotSeenLine(unit, unseen ?? "it changed meanwhile")
+      : mergedBy.get(unit)
+        ? `${unit} is built here now, on top of what ${mergedBy.get(unit)} merged.`
+        : `${unit} is built here now, no longer open for the teams.`),
+    ...lines,
+  ].join(" ");
+  // The line rides the step that follows, as the take's carry-on line does, so
+  // a next run at once says it with its own; with no chat known it is printed.
+  const forNextStep = notice !== "" && saidWithNextStep(pd, notice);
+  console.log(JSON.stringify({ here, ...(forNextStep ? {} : { notice }) }));
 }
 
 // A take refused because the Unit is taken: who builds it, and where.

@@ -288,6 +288,22 @@ describe("the lead's word builds a Unit here: assign --here", () => {
     expect(next(home.dir)).toMatchObject({ kind: "run-stage", unit: "refunds" });
   });
 
+  // A live run (Claude Code): the line stayed folded in the tool's frame and
+  // the agent said in its own words that it had 'claimed' the Unit.
+  test("from a chat, the line that a Unit is built here rides the step that follows, said once", () => {
+    const home = makeHome();
+    chooseTeams(home.dir);
+    share(home.dir);
+    const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "lead-chat" };
+    const here = run(UNIT, ["assign", "--here", "refunds", "--person-words", "build refunds here"], home.dir, chat);
+    expect(here.status, here.out).toBe(0);
+    expect(here.json?.notice, here.out).toBeUndefined();
+    const step = next(home.dir, chat);
+    expect((step.change_notices ?? []) as string[], JSON.stringify(step).slice(0, 600))
+      .toContain("refunds is built here now, no longer open for the teams.");
+    expect(JSON.stringify(next(home.dir, chat))).not.toContain("refunds is built here now");
+  });
+
   // A live run (Claude Code): after Not now on the share, the lead's 'build
   // the API here' pushed the Unit's claim branch to their remote unasked.
   test("before the plan is shared, the lead's word builds it here and pushes nothing; the share then sends its claim with the plan", () => {

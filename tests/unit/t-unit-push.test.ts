@@ -1740,9 +1740,9 @@ describe("a team's done Unit that the lead's Build and Test sends back", () => {
     const words = "Fix it here, in refunds and checkout-ui, then run Build and Test again.";
     expect(hook(home.dir, chat, { hook_event_name: "UserPromptSubmit", session_id: session, prompt: words }).status).toBe(0);
     const here = run(UNIT, ["assign", "--here", "refunds,checkout-ui", "--person-words", words], home.dir, chat);
-    expect(here.json?.notice).toBe(
-      "refunds is built here now, on top of what alice merged. checkout-ui is built here now, on top of what alice merged.",
-    );
+    // From a chat the line rides the next step the agent speaks from.
+    expect(here.json?.notice, here.out).toBeUndefined();
+    const builtHere = "refunds is built here now, on top of what alice merged. checkout-ui is built here now, on top of what alice merged.";
     const print = next(home.dir, chat, ["--stage", "code-generation", "--unit", "refunds"]);
     const jump = /`(bun \S+aidlc-jump\.ts reopen [^`]+)`/.exec(String(print.message))?.[1];
     expect(jump, String(print.message)).toContain("--units refunds,checkout-ui ");
@@ -1759,6 +1759,8 @@ describe("a team's done Unit that the lead's Build and Test sends back", () => {
       expect(step.kind, JSON.stringify(step).slice(0, 600)).toBe("run-stage");
       expect(step.stage).toBe("code-generation");
       expect(String(step.narration)).toContain("Writing the code plan for Code Generation for ");
+      // Said once, with the first of them.
+      expect(((step.change_notices ?? []) as string[]).includes(builtHere), JSON.stringify(step.change_notices)).toBe(look === 0);
     }
     expect(completions()).toBe(before);
     // The stages before it keep the work that merged.
