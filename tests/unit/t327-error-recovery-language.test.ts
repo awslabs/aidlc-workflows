@@ -5,14 +5,12 @@
 // workshop-facing gate/question/review paths from regressing to internal names.
 
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import { REPO_ROOT } from "../harness/fixtures.ts";
+import { readConductorSurface } from "../harness/conductor-skill.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 import { ENGINE_ERROR_RELAY_HARNESSES } from "../../core/tools/aidlc-lib.ts";
 
 function read(rel: string): string {
-  return readFileSync(join(REPO_ROOT, rel), "utf-8");
+  return readConductorSurface(rel);
 }
 
 function functionBody(source: string, start: string, end: string): string {

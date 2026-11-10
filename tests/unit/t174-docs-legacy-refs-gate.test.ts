@@ -26,6 +26,7 @@
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { conductorSkillFileNames } from "../harness/conductor-skill.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 
 const DOCS_DIR = join(REPO_ROOT, "docs");
@@ -34,8 +35,8 @@ const FIXTURE = join(REPO_ROOT, "tests", "fixtures", "docs-legacy-refs.json");
 // SKILL.md or a new onboarding template is auto-covered without a test edit. Two
 // roots beyond docs/: every `core/templates/*.md` (including both onboarding
 // skeletons — the FIRST surfaces a user reads), and each harness's
-// orchestrator `SKILL.md` (the conductor prose the harness loads at runtime — the
-// blind spot that let stale rules-dir prose ship).
+// orchestrator `SKILL.md` and the files it goes on in (the conductor prose the
+// harness loads at runtime — the blind spot that let stale rules-dir prose ship).
 //   EXCLUDED by design: dist/** (generated — `package.ts --check` proves byte
 //   parity, so gating the authored source suffices for all dist trees) and
 //   core/aidlc-common/** (the engine-parsed stage/protocol method tree — its
@@ -48,13 +49,17 @@ function listExtraAuthoredDocs(): string[] {
     if (name.endsWith(".md")) out.push(`core/templates/${name}`);
   }
   for (const h of readdirSync(join(REPO_ROOT, "harness"))) {
-    const rel = `harness/${h}/skills/aidlc/SKILL.md`;
+    const [skill, ...continuations] = conductorSkillFileNames(h);
+    const rel = `harness/${h}/skills/aidlc/${skill}`;
     try {
       statSync(join(REPO_ROOT, rel));
-      out.push(rel);
     } catch {
       // harness without an orchestrator SKILL.md — skip
+      continue;
     }
+    out.push(rel);
+    // The files the skill goes on in ship with it; a missing one fails the read.
+    for (const file of continuations) out.push(`harness/${h}/skills/aidlc/${file}`);
   }
   return out;
 }

@@ -1255,7 +1255,7 @@ describe("t221 (c) harness registration and protocol prose", () => {
     for (const harness of HARNESS_MATRIX.filter(
       (entry) => entry.capabilities.reviewerScopeRegistration !== "unsupported",
     )) {
-      const body = readFileSync(join(harness.authoredRoot, "skills", "aidlc", "SKILL.md"), "utf-8");
+      const body = readConductorSurface(join(harness.authoredRoot, "skills", "aidlc", "SKILL.md"));
       const labelled = `harness ${harness.name}: ${body}`;
       expect(labelled).toContain("stage-protocol-reviewer.md");
     }

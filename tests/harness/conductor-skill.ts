@@ -6,7 +6,7 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 // The files each harness's /aidlc conductor skill is made of, SKILL.md first,
 // all in one folder. Kiro loads at most 50,000 characters from one agent
-// resource file, so the Kiro row's skill goes on in workflow.md.
+// resource file, so the Kiro row's skill (`kiro-ide`) goes on in workflow.md.
 // tests/harness/harness-matrix.ts checks every harness has an entry and that
 // its manifest ships each file.
 export const CONDUCTOR_SKILL_FILES = {
@@ -20,6 +20,11 @@ export const CONDUCTOR_SKILL_FILES = {
 } as const satisfies Record<string, readonly string[]>;
 
 export type ConductorSkillHarness = keyof typeof CONDUCTOR_SKILL_FILES;
+
+/** The file names of a harness's conductor skill, SKILL.md first; a name with no entry has SKILL.md alone. */
+export function conductorSkillFileNames(name: string): readonly string[] {
+  return Object.hasOwn(CONDUCTOR_SKILL_FILES, name) ? CONDUCTOR_SKILL_FILES[name as ConductorSkillHarness] : ["SKILL.md"];
+}
 
 /** The conductor skill's files in `skillDir`, in the order the agent reads them. */
 export function conductorSkillPaths(name: ConductorSkillHarness, skillDir: string): string[] {
