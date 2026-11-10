@@ -564,8 +564,9 @@ export function checkInLine(projectDir: string, stateContent?: string): string |
 
 // What the person's last `git pull` here that brought changes brought from
 // other people, by who made each change (the git name git records on the
-// pulled commits, the name the board shows), never by space: each record as
-// "<who>'s <Unit or work>". Read from this clone's own reflog (a pull that
+// pulled commits, the name the board shows), never by space: "<who>: <Unit or
+// work>, ..." per person, people joined by semicolons, with no possessive so it
+// reads the same for every name. Read from this clone's own reflog (a pull that
 // brought nothing writes no entry), so nothing is written. Null with no such
 // pull here, nothing from anyone else (the person's own changes from another
 // computer are theirs), or no git.
@@ -588,7 +589,7 @@ export function arrivedAtLastPull(projectDir: string): string | null {
   if (log.status !== 0) return null;
   const me = gitUserName(projectDir);
   // Each record once per person who changed it, newest first as git lists them.
-  const records = new Map<string, string>();
+  const byPerson = new Map<string, string[]>();
   for (const commit of log.stdout.split("\u0001").slice(1)) {
     const [author, ...paths] = commit.split("\n");
     const who = author.trim();
@@ -597,8 +598,6 @@ export function arrivedAtLastPull(projectDir: string): string | null {
       const match = /^aidlc\/spaces\/([^/]+)\/intents\/([^/]+)\//.exec(path.trim());
       if (match === null) continue;
       const [, space, dirName] = match;
-      const key = `${who}\u0000${space}/${dirName}`;
-      if (records.has(key)) continue;
       let label = dirName;
       try {
         const state = readStateFile(projectDir, dirName, space);
@@ -607,10 +606,11 @@ export function arrivedAtLastPull(projectDir: string): string | null {
       } catch {
         // A record no longer here keeps its folder name.
       }
-      records.set(key, `${who}'s ${label}`);
+      const theirs = byPerson.get(who) ?? [];
+      if (!theirs.includes(label)) byPerson.set(who, [...theirs, label]);
     }
   }
-  return records.size === 0 ? null : [...records.values()].join("; ");
+  return byPerson.size === 0 ? null : [...byPerson].map(([who, labels]) => `${who}: ${labels.join(", ")}`).join("; ");
 }
 
 // A build walks only its own Unit: its copy of the home's plan names every

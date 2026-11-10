@@ -390,15 +390,15 @@ describe("where things stand", () => {
     expect(takeIn("web", ["checkout-ui", "--home", HOME_RECORD], bea).status).toBe(0);
     checkIn(bea, "web: checkout-ui started");
     git(ana, ["pull", "-q", "--no-rebase", "--no-edit"]);
-    expect(arrivedAtLastPull(ana)).toBe("bea's checkout-ui");
+    expect(arrivedAtLastPull(ana)).toBe("bea: checkout-ui");
     const status = run(UTILITY, ["status"], ana, ENV);
-    expect(status.out).toContain("From others:    bea's checkout-ui (at your last pull that brought changes)");
+    expect(status.out).toContain("From others:    bea: checkout-ui (at your last pull that brought changes)");
     // Another pull, straight after, that brings the lead's change: only that one is said.
     writeFileSync(join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD, "notes.md"), "Lead's note.\n");
     git(home.dir, ["pull", "-q", "--no-rebase", "--no-edit"]);
     checkIn(home.dir, "the lead's note");
     git(ana, ["pull", "-q", "--no-rebase", "--no-edit"]);
-    expect(arrivedAtLastPull(ana)).toBe("lead's fixture");
+    expect(arrivedAtLastPull(ana)).toBe("lead: fixture");
   });
 
   // A live run (Windows Server, every take in the default space): status right
@@ -413,8 +413,8 @@ describe("where things stand", () => {
     expect(run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD], bea).status).toBe(0);
     checkIn(bea, "checkout-ui started");
     git(ana, ["pull", "-q", "--no-rebase", "--no-edit"]);
-    expect(arrivedAtLastPull(ana)).toBe("bea's checkout-ui");
-    expect(run(UTILITY, ["status"], ana, ENV).out).toContain("From others:    bea's checkout-ui (at your last pull that brought changes)");
+    expect(arrivedAtLastPull(ana)).toBe("bea: checkout-ui");
+    expect(run(UTILITY, ["status"], ana, ENV).out).toContain("From others:    bea: checkout-ui (at your last pull that brought changes)");
     // Ana's own change from her other computer: nothing from others.
     const laptop = cloneOf(home.remote, "ana");
     const intents = join(laptop, "aidlc", "spaces", "default", "intents");
