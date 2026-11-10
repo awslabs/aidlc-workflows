@@ -108,7 +108,7 @@ function activeIntentSeenBy(dir: string, thread: string): string | null {
 }
 
 function helperRecords(dir: string): string[] {
-  const sessions = join(dir, "aidlc", ".aidlc-sessions");
+  const sessions = join(dir, "aidlc", ".aidlc-engine", "sessions");
   return existsSync(sessions) ? readdirSync(sessions).filter((name) => name.endsWith(".helper-of")).sort() : [];
 }
 
@@ -141,7 +141,7 @@ describe("a Codex helper's engine command stays on the chat that spawned it", ()
     });
     expect(brief.code, brief.err).toBe(0);
     expect(helperRecords(dir)).toEqual([`${HELPER}.helper-of`]);
-    expect(readFileSync(join(dir, "aidlc", ".aidlc-sessions", `${HELPER}.helper-of`), "utf-8").trim()).toBe(ROOT);
+    expect(readFileSync(join(dir, "aidlc", ".aidlc-engine", "sessions", `${HELPER}.helper-of`), "utf-8").trim()).toBe(ROOT);
     expect(activeIntentSeenBy(dir, HELPER)).toBe(BOUND_RECORD);
     expect(activeIntentSeenBy(dir, ROOT)).toBe(BOUND_RECORD);
   });
@@ -178,7 +178,7 @@ describe("a Codex helper's engine command stays on the chat that spawned it", ()
     });
     expect(review.code, review.err).toBe(0);
     expect(helperRecords(dir)).toEqual([`${REVIEW}.helper-of`]);
-    expect(readFileSync(join(dir, "aidlc", ".aidlc-sessions", `${REVIEW}.helper-of`), "utf-8").trim()).toBe(ROOT);
+    expect(readFileSync(join(dir, "aidlc", ".aidlc-engine", "sessions", `${REVIEW}.helper-of`), "utf-8").trim()).toBe(ROOT);
     expect(activeIntentSeenBy(dir, REVIEW)).toBe(BOUND_RECORD);
     // The root chat's own rollout, plain or with a rollout-id suffix, is the main chat: nothing is recorded for it.
     for (const name of [`rollout-2026-10-10T13-58-13-${ROOT}.jsonl`, `rollout-2026-10-10T13-58-13-${ROOT}_019f0000-0000-7000-8000-0000000000aa.jsonl`]) {

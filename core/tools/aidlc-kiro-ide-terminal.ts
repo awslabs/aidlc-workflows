@@ -13,7 +13,7 @@ import { installRoot } from "./aidlc-install-paths.ts";
 import { setByDotenvFile } from "./aidlc-kiro-session.ts";
 import { insideKiroIde, kiroIdeUserSettingsPath } from "./aidlc-kiro-ide-workflows.ts";
 import { atATerminal, writeFileAtomic } from "./aidlc-lib.ts";
-import { isCompiledExecutable } from "./aidlc-runtime-paths.ts";
+import { isCompiledExecutable, workspaceEnginePath } from "./aidlc-runtime-paths.ts";
 
 export const KIRO_TERMINAL_SETTING = "terminal.integrated.defaultProfile.windows";
 const KIRO_TERMINAL_PROFILES = "terminal.integrated.profiles.windows";
@@ -371,7 +371,7 @@ export function rejoinCommandPromptQuotes(
 }
 
 export const KIRO_REPLY_TEE_ENV = "AIDLC_CMD_REPLY_TEE";
-export const KIRO_REPLY_DIR = join("aidlc", ".aidlc-sessions", "replies");
+export const KIRO_REPLY_DIR = join("aidlc", ".aidlc-engine", "sessions", "replies");
 const KIRO_REPLIES_KEPT = 20;
 
 /**
@@ -438,7 +438,7 @@ export async function relayCommandPromptChild(
  * `aidlc/` folder, a tool prints one pointer line first, runs itself as a child
  * process (the engine writes its reply straight to fd 1, so nothing in-process
  * can copy it), relays the child's output and writes it to the file the pointer
- * names under `aidlc/.aidlc-sessions/` (gitignored, per-user scratch, the newest
+ * names under `aidlc/.aidlc-engine/sessions/` (gitignored, per-user scratch, the newest
  * twenty kept) when the child exits. When the result ends at the pointer or the
  * reply after it is cut off, the agent goes on from the file instead of running
  * the command again. Resolves false, having done nothing, everywhere else and
@@ -457,7 +457,7 @@ export async function commandPromptReplyTee(
   if (gap === null && !inCommandPromptTerminal(env, platform)) return false;
   const project = process.cwd();
   if (!existsSync(join(project, "aidlc"))) return false;
-  const replies = resolve(project, KIRO_REPLY_DIR);
+  const replies = resolve(workspaceEnginePath(project, "sessions", "replies"));
   const file = join(KIRO_REPLY_DIR, `${Date.now().toString(36)}-${process.pid}.txt`).replace(/\\/g, "/");
   const command = commandPromptChildCommand();
   let child: ReturnType<typeof Bun.spawn>;

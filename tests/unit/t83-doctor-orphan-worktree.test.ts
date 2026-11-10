@@ -141,7 +141,7 @@ function wtRecordRoot(proj: string, slug: string): string {
 }
 
 /** Replicate aidlc-record-core's auditShardName for a worktree: <host>-<clone-id>.md,
- *  where the clone-id is read from <wt>/aidlc/.aidlc-clone-id. We write a fixed
+ *  where the clone-id is read from <wt>/aidlc/.aidlc-engine/clone-id. We write a fixed
  *  token there first so the doctor (a separate process) resolves the SAME shard
  *  name — its worktreeAuditFilePath(...) → auditShardName(wtPath) reads the same
  *  on-disk token. (The lib's auditShardName is memoized per-process, so calling
@@ -150,7 +150,7 @@ function seedWtAuditShard(proj: string, slug: string, contents: string): void {
   const wtRoot = worktreePath(proj, fixtureIntentId8(proj), slug);
   mkdirSync(join(wtRoot, "aidlc"), { recursive: true });
   const token = "ffffffffffff";
-  writeFileSync(join(wtRoot, "aidlc", ".aidlc-clone-id"), `${token}\n`, "utf-8");
+  writeFileSync(join(wtRoot, "aidlc", ".aidlc-engine", "clone-id"), `${token}\n`, "utf-8");
   const host =
     hostname()
       .toLowerCase()

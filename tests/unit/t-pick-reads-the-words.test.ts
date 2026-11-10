@@ -83,7 +83,7 @@ function carried(proj: string, step: string): { file: string; words: string } {
 }
 
 function questionTexts(proj: string): string[] {
-  const dir = join(proj, "aidlc", ".aidlc-sessions", "questions");
+  const dir = join(proj, "aidlc", ".aidlc-engine", "sessions", "questions");
   return existsSync(dir)
     ? readdirSync(dir).filter((name) => name.endsWith(".json"))
       .map((name) => (JSON.parse(readFileSync(join(dir, name), "utf-8")) as { text: string }).text)

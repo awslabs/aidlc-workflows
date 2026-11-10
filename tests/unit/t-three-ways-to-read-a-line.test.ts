@@ -101,7 +101,7 @@ function openWork(): string {
 }
 
 function questions(proj: string): Array<{ id: string; text: string; origin: string }> {
-  const dir = join(proj, "aidlc", ".aidlc-sessions", "questions");
+  const dir = join(proj, "aidlc", ".aidlc-engine", "sessions", "questions");
   if (!existsSync(dir)) return [];
   return readdirSync(dir).filter((name) => name.endsWith(".json"))
     .map((name) => JSON.parse(readFileSync(join(dir, name), "utf-8")) as { id: string; text: string; origin: string });
@@ -201,7 +201,7 @@ describe("a plan word at the start of their sentence", () => {
     const { d, out } = next(proj, ["feature", "flags"]);
     expect(d.kind, out).toBe("print");
     expect(d.narration, out).toBeUndefined();
-    expect(String(d.message), out).toContain("--scope feature --request-file aidlc/.aidlc-request-text/line-after-plan");
+    expect(String(d.message), out).toContain("--scope feature --request-file aidlc/.aidlc-engine/request-text/line-after-plan");
     expect(String(d.message), out).toContain('(the task: "flags")');
     expect(String(d.message), out).toContain('which keeps every word of theirs ("feature flags")');
     // The step names the guide's own form, so a plan's name and then the task

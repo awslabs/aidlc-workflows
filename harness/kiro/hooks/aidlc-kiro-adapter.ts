@@ -68,10 +68,13 @@ import {
   stateFilePath,
   stripOrchestratorLauncherOptions,
   unrecordedKiroCliSteers,
+  REQUEST_TEXT_DIR,
+  workspaceEngineFile,
+  workspaceEnginePath,
 } from "../tools/aidlc-lib.ts";
 import { terminalDispatcherArgv } from "../tools/aidlc.ts";
 import { SAY_ONCE_BEFORE_THEY_REPLY } from "../tools/aidlc-directive.ts";
-import { ACTIVE_MEMORY_DIR, refreshActiveMemory } from "../tools/aidlc-includes.ts";
+import { ACTIVE_MEMORY_DIR, EARLIER_ACTIVE_MEMORY_DIR, refreshActiveMemory } from "../tools/aidlc-includes.ts";
 import { HOOK_PRE_DISPATCH_ENV } from "../tools/aidlc-locks.ts";
 import { aidlcInvocation, typedHarnessName } from "../tools/aidlc-runtime-paths.ts";
 
@@ -219,7 +222,9 @@ function nativePreloadError(projectDir: string, agents: string[]): PreloadFailur
   const space = activeSpace(projectDir);
   const pattern = `${ACTIVE_MEMORY_DIR}/**/*.md`;
   const expected = `file://${pattern}`;
-  const accepted = [expected, `file://aidlc/spaces/${space}/memory/**/*.md`];
+  // An earlier release's agent files read the copy where it kept it, which
+  // the refresh keeps writing while they name it (aidlc-includes.ts).
+  const accepted = [expected, `file://${EARLIER_ACTIVE_MEMORY_DIR}/**/*.md`, `file://aidlc/spaces/${space}/memory/**/*.md`];
   // Each failure names the one step that repairs it. Plugin authoring reserves
   // aidlc- for core; other roster namespaces have hand-authored native JSON
   // that no AI-DLC command can repair.
@@ -407,7 +412,7 @@ function windowsArgv(arg: string): string {
 // token as words: nothing runs, and at worst the engine shows a flag back as
 // words. A file that cannot be written still leaves the words off the line;
 // the engine then asks for the request again.
-const REQUEST_FILE = "aidlc/.aidlc-request-text/request.txt";
+const REQUEST_FILE = `${REQUEST_TEXT_DIR}/request.txt`;
 async function requestFileForwarding(
   args: readonly string[],
   cwd: string,
@@ -466,7 +471,7 @@ async function requestFileForwarding(
     }
   }
   try {
-    mkdirSync(join(cwd, "aidlc", ".aidlc-request-text"), { recursive: true });
+    mkdirSync(workspaceEnginePath(cwd, "request-text"), { recursive: true });
     writeFileSync(join(cwd, REQUEST_FILE), `${words.join(" ")}\n`, "utf-8");
   } catch { /* the engine reports the unread file; the words still stay off the line */ }
   const argv = [...flags, "--request-file", REQUEST_FILE];
@@ -622,7 +627,7 @@ if (target === "verb-intercept") {
   try {
     const cwd = projectDir;
     mkdirSync(join(cwd, "aidlc"), { recursive: true });
-    const cp = join(cwd, "aidlc", ".aidlc-turn-counter");
+    const cp = workspaceEngineFile(cwd, "sessions/kiro-turn-counter");
     turn = existsSync(cp)
       ? (Number.parseInt(readFileSync(cp, "utf-8").trim(), 10) || 0) + 1
       : 1;
@@ -717,13 +722,13 @@ if (target === "verb-intercept") {
             typeof parsed.kind === "string" && parsed.kind !== "load-steering" &&
             Buffer.byteLength(preface + packet, "utf-8") <= PROMPT_HOOK_MAX_BYTES
           ) {
-            rmSync(join(cwd, "aidlc", ".aidlc-forwarding-latch"), {
+            rmSync(workspaceEngineFile(cwd, "sessions/kiro-forwarding-latch"), {
               force: true,
             });
             if (args[0] === "--config") {
               try {
                 writeFileSync(
-                  join(cwd, "aidlc", ".aidlc-readonly-latch"),
+                  workspaceEngineFile(cwd, "sessions/kiro-readonly-latch"),
                   JSON.stringify({
                     turn,
                     flag: args.join(" ").replace(/^--/, ""),
@@ -752,7 +757,7 @@ if (target === "verb-intercept") {
       const forwarded = viaFile?.forwarded ?? invocation.forwarded;
       try {
         writeFileSync(
-          join(cwd, "aidlc", ".aidlc-forwarding-latch"),
+          workspaceEngineFile(cwd, "sessions/kiro-forwarding-latch"),
           JSON.stringify({
             turn,
             raw: forwarded,
@@ -814,7 +819,7 @@ if (target === "verb-intercept") {
       ? cmd.subcommand
       : (cmd.display ?? [cmd.subcommand, ...forwarded].join(" "));
     writeFileSync(
-      join(cwd, "aidlc", ".aidlc-readonly-latch"),
+      workspaceEngineFile(cwd, "sessions/kiro-readonly-latch"),
       JSON.stringify({ turn, flag, source: cmd.source, ts: Date.now() }) + "\n",
       "utf-8",
     );
@@ -831,7 +836,7 @@ if (target === "verb-intercept") {
 // --- guard-tool-call: the preToolUse roll-forward backstop (matcher: execute_bash) ---
 //
 // Defense-in-depth behind the engine done-guard. The verb-intercept seam above
-// handles a read-only/nav command off-band and stamps aidlc/.aidlc-readonly-latch
+// handles a read-only/nav command off-band and stamps sessions/kiro-readonly-latch
 // with the current turn counter; the engine's `next` then emits `done` for a bare
 // advancing next this same turn. But Kiro's userPromptSubmit can only INJECT, not
 // block — so if the live conductor retries a bare `next` past the engine's `done`,
@@ -880,12 +885,12 @@ if (target === "guard-tool-call") {
   let counter = -1;
   let latchTurn = -2;
   try {
-    const cp = join(cwd, "aidlc", ".aidlc-turn-counter");
+    const cp = workspaceEngineFile(cwd, "sessions/kiro-turn-counter");
     if (existsSync(cp)) {
       const n = Number.parseInt(readFileSync(cp, "utf-8").trim(), 10);
       if (Number.isFinite(n)) counter = n;
     }
-    const lp = join(cwd, "aidlc", ".aidlc-readonly-latch");
+    const lp = workspaceEngineFile(cwd, "sessions/kiro-readonly-latch");
     if (existsSync(lp)) {
       const r = JSON.parse(readFileSync(lp, "utf-8")) as { turn?: number };
       if (typeof r.turn === "number") latchTurn = r.turn;
@@ -898,7 +903,7 @@ if (target === "guard-tool-call") {
   // Quoting and path-safe escapes normalize through splitKiroCommandArgs
   // before compare.
   try {
-    const forwardingPath = join(cwd, "aidlc", ".aidlc-forwarding-latch");
+    const forwardingPath = workspaceEngineFile(cwd, "sessions/kiro-forwarding-latch");
     if (m !== null && existsSync(forwardingPath)) {
       const forwarding = JSON.parse(
         readFileSync(forwardingPath, "utf-8"),

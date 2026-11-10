@@ -131,7 +131,7 @@ describe("a team member's clone of the home's workspace", () => {
     expect(labels(cloneOf(home.remote, "lead"))).toEqual(["Start refunds for payments", "Start checkout-ui for web"]);
     // A copy of the lead's checkout keeps its clone id, so the plan's rows are its own.
     const copy = cloneOf(home.remote, "lead-copy");
-    cpSync(join(home.dir, "aidlc", ".aidlc-clone-id"), join(copy, "aidlc", ".aidlc-clone-id"));
+    cpSync(join(home.dir, "aidlc", ".aidlc-engine", "clone-id"), join(copy, "aidlc", ".aidlc-engine", "clone-id"));
     expect(labels(copy)).toContain("Carry on fixture here, as the lead");
   });
 
@@ -1433,7 +1433,7 @@ function freshTeamWorkspace(label: string): { dir: string; host: string } {
   const dir = join(tempDir(`${label}-ws`), "workspace");
   mkdirSync(dir, { recursive: true });
   seedAidlcMemory(dir);
-  writeFileSync(join(dir, ".gitignore"), "aidlc/.aidlc-clone-id\naidlc/.aidlc-sessions/\naidlc/active-space\naidlc/spaces/*/intents/active-intent\n" +
+  writeFileSync(join(dir, ".gitignore"), "aidlc/.aidlc-engine/clone-id\naidlc/.aidlc-engine/sessions/\naidlc/active-space\naidlc/spaces/*/intents/active-intent\n" +
     "**/aidlc/spaces/*/intents/**/.aidlc-engine/\n/checkout-api/\n/billing/\n");
   git(dir, ["init", "-q", "-b", "main"]);
   git(dir, ["config", "user.name", label]);

@@ -157,7 +157,7 @@ export function runMergeTool(
 // pin - this is. Pin's own refusals are what this exercises.
 export function pushUnprojectedCandidate(checkout: string, unit: string): void {
   const stamp = JSON.parse(
-    readFileSync(join(checkout, "aidlc", ".aidlc-unit-scope.json"), "utf-8"),
+    readFileSync(join(checkout, "aidlc", ".aidlc-engine", "units", "claimed.json"), "utf-8"),
   ) as { claim_ref: string };
   const claimOid = git(checkout, ["ls-remote", "origin", stamp.claim_ref])
     .split(/\s+/)[0] ?? "";

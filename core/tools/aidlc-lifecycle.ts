@@ -3001,10 +3001,11 @@ export async function configureProjectPin(
       }
       commitProjectPin(projectDir, version);
       const reposLine = reposListGoingBackLine(projectDir, version);
+      const engineLine = await engineFolderGoingBack(projectDir, version, "aidlc config --unpin");
       return success(
         `Pinned this project to aidlc ${version}. Commit .aidlc-version to share the pin.${finish}${
           reposLine ? ` ${reposLine}` : ""
-        }`,
+        }${engineLine ? ` ${engineLine}` : ""}`,
         { projectDir: responseProjectDir, version, pinned: true },
       );
     } finally {
@@ -3051,12 +3052,32 @@ async function useCommand(argv: string[]): Promise<CommandResult> {
       caBundle: valueAfter(argv, "--ca-bundle"),
     });
   }
+  const before = activeVersion();
   const pluginCatalogue = activate(version, { replaceLauncher });
   const reposLine = reposListGoingBackLine(projectDirFrom(argv), version);
-  return success(`active AI-DLC version set to ${version}${reposLine ? `. ${reposLine}` : ""}`, {
-    version,
-    ...(pluginCatalogue ? { pluginCatalogue } : {}),
-  });
+  const engineLine = before && before !== version
+    ? await engineFolderGoingBack(projectDirFrom(argv), version, `aidlc use ${before}`)
+    : null;
+  return success(
+    `active AI-DLC version set to ${version}${reposLine ? `. ${reposLine}` : ""}${engineLine ? ` ${engineLine}` : ""}`,
+    {
+      version,
+      ...(pluginCatalogue ? { pluginCatalogue } : {}),
+      ...(engineLine ? { engineLine } : {}),
+    },
+  );
+}
+
+// What a release from before the engine folder will not see in this project
+// (engineFolderGoingBackLine, aidlc-lib.ts), loaded only where the folder is.
+async function engineFolderGoingBack(projectDir: string, release: string, back: string): Promise<string | null> {
+  if (!existsSync(join(projectDir, "aidlc", ".aidlc-engine"))) return null;
+  try {
+    const { engineFolderGoingBackLine } = await import("./aidlc-lib.ts");
+    return engineFolderGoingBackLine(projectDir, release, back);
+  } catch {
+    return null;
+  }
 }
 
 function installProfileCommand(argv: string[]): CommandResult {
@@ -3246,10 +3267,11 @@ export function humanLifecycleNarration(
     ].join("\n");
   }
   if (command === "use") {
-    const data = result.data as { version?: string; pluginCatalogue?: PluginCatalogueRefresh } | undefined;
+    const data = result.data as { version?: string; pluginCatalogue?: PluginCatalogueRefresh; engineLine?: string } | undefined;
     const target = data?.version ?? argv[1];
     if (!target) return null;
     const reposLine = before === target ? null : reposListGoingBackLine(projectDirFrom([...argv]), target);
+    const engineLine = before === target ? null : data?.engineLine;
     return `${successText(
       before === target
         ? `Already using aidlc ${target}.`
@@ -3257,7 +3279,7 @@ export function humanLifecycleNarration(
             before ?? "not installed"
           }; retained locally, no project changes).`,
       process.stdout,
-    )}${reposLine ? `\n${reposLine}` : ""}${data?.pluginCatalogue?.warning ? `\n${data.pluginCatalogue.warning}` : ""}`;
+    )}${reposLine ? `\n${reposLine}` : ""}${engineLine ? `\n${engineLine}` : ""}${data?.pluginCatalogue?.warning ? `\n${data.pluginCatalogue.warning}` : ""}`;
   }
   if (command === "uninstall") {
     const data = result.data as {

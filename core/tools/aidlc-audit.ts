@@ -33,6 +33,7 @@ import {
   claimAttemptFields,
   cloneIdFileContent,
   cloneIdPath,
+  ensureWorkspaceEngineFolder,
   ENGINE_DIR,
   entrySkillInvocation,
   errorMessage,
@@ -2026,6 +2027,8 @@ function handleAuditFork(args: string[], projectDir: string): void {
       verifyWorktreeIdentity();
       assertNoSymlinkInChainOrThrow(wtReal, relative(wtPath, wtClone));
       if (!existsSync(wtClone)) {
+        // The worktree's engine folder, its .gitignore first (a code repo has none of AI-DLC's ignore lines).
+        ensureWorkspaceEngineFolder(wtPath);
         mkdirSync(dirname(wtClone), { recursive: true });
         verifyWorktreeIdentity();
         assertNoSymlinkInChainOrThrow(wtReal, relative(wtPath, wtClone));
@@ -2159,6 +2162,7 @@ function handleAuditFork(args: string[], projectDir: string): void {
         : readRegularFileNoFollowOrThrow(cloneIdPath(projectDir), "clone id");
       verifyWorktreeIdentity();
       assertNoSymlinkInChainOrThrow(wtReal, relative(wtPath, wtCloneIdPath));
+      ensureWorkspaceEngineFolder(wtPath);
       mkdirSync(dirname(wtCloneIdPath), { recursive: true });
       verifyWorktreeIdentity();
       assertNoSymlinkInChainOrThrow(wtReal, relative(wtPath, wtCloneIdPath));

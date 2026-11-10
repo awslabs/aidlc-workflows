@@ -64,7 +64,7 @@ export const DEFAULT_INTENT_UUID = "00000000-0000-7000-8000-000000000001";
 const DEFAULT_RECORD_ID8 = DEFAULT_INTENT_UUID.replace(/-/g, "").slice(-16);
 export const DEFAULT_RECORD_DIR = `fixture-${DEFAULT_RECORD_ID8}`;
 // A FIXED per-clone audit-shard token seeded into every fixture project's
-// gitignored aidlc/.aidlc-clone-id. Pinning it makes the audit shard a spawned
+// gitignored aidlc/.aidlc-engine/clone-id. Pinning it makes the audit shard a spawned
 // tool resolves (auditShardName = `<host>-<clone>.md`) DETERMINISTIC, so a test
 // that pre-seeds a shard header or reads back a specific shard agrees with the
 // subprocess. On a real project the token is minted + gitignored per clone; a
@@ -412,11 +412,11 @@ export function seedWorkspaceShell(proj: string, space = DEFAULT_SPACE): void {
   mkdirSync(seededRecordDir(proj, space), { recursive: true });
   // Pin the per-clone audit-shard token so a spawned tool's shard is
   // deterministic (see FIXTURE_CLONE_ID / seededAuditShard).
-  writeFileSync(join(proj, "aidlc", ".aidlc-clone-id"), `${FIXTURE_CLONE_ID}\n`, "utf-8");
+  writeFileSync(join(proj, "aidlc", ".aidlc-engine", "clone-id"), `${FIXTURE_CLONE_ID}\n`, "utf-8");
   // A fixture has no git, so its first gate would say the no-git line: this
   // project has already heard it (t-no-git-said-once removes the record).
-  mkdirSync(join(proj, "aidlc", ".aidlc-sessions"), { recursive: true });
-  writeFileSync(join(proj, "aidlc", ".aidlc-sessions", "no-git-said"), "2026-01-01T00:00:00Z\n", "utf-8");
+  mkdirSync(join(proj, "aidlc", ".aidlc-engine", "sessions"), { recursive: true });
+  writeFileSync(join(proj, "aidlc", ".aidlc-engine", "sessions", "no-git-said"), "2026-01-01T00:00:00Z\n", "utf-8");
   // The cursors (per-user, gitignored on a real project) + the canonical registry.
   writeFileSync(join(proj, "aidlc", "active-space"), `${space}\n`, "utf-8");
   writeFileSync(join(intentsDir, "active-intent"), `${DEFAULT_RECORD_DIR}\n`, "utf-8");
@@ -909,7 +909,7 @@ export function setupWorkspaceJourney(harness: JourneyHarness = "claude"): Works
   // Pin the per-clone audit-shard token (gitignored on a real project) so any
   // shard a spawned tool writes is deterministic — same posture as the per-intent
   // fixtures (FIXTURE_CLONE_ID / seededAuditShard).
-  writeFileSync(join(root, "aidlc", ".aidlc-clone-id"), `${FIXTURE_CLONE_ID}\n`, "utf-8");
+  writeFileSync(join(root, "aidlc", ".aidlc-engine", "clone-id"), `${FIXTURE_CLONE_ID}\n`, "utf-8");
 
   // 2. Two git-init'd sibling repos as immediate children of the root, each with a
   //    tiny source file so a reverse-engineering scan has real content and the

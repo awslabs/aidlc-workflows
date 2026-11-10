@@ -666,13 +666,13 @@ describe("t-checkpoint-answer-any-chat: a bare /aidlc in a new chat", () => {
   });
 
   // A question that takes the person's own reply is held for it under
-  // aidlc/.aidlc-sessions/, which is not committed: a teammate's fresh clone
+  // aidlc/.aidlc-engine/sessions/, which is not committed: a teammate's fresh clone
   // holds none, so the question shown again is registered there first.
   for (const which of Object.keys(PROTECTED) as (keyof typeof PROTECTED)[]) {
     test(`in a fresh clone the ${which} question shown again is registered first, so one pick records it`, () => {
       const p = askedInOldChat(which);
       writeFileSync(join(seededRecordDir(p), "verification-command.txt"), "npm test", "utf-8");
-      renameSync(join(p, "aidlc", ".aidlc-sessions"), join(p, "aidlc", ".aidlc-sessions-of-the-first-clone"));
+      renameSync(join(p, "aidlc", ".aidlc-engine", "sessions"), join(p, "aidlc", ".aidlc-sessions-of-the-first-clone"));
       const shown = bare(p, NEW);
       expect(shown.kind, JSON.stringify(shown)).toBe("print");
       const flags = which === "verification command"
@@ -902,7 +902,7 @@ describe("t-checkpoint-answer-any-chat: a bare /aidlc in a new chat", () => {
       if (where === "a teammate's fresh clone") {
         const mine = seededAuditShard(p);
         renameSync(mine, join(dirname(mine), `zz-teammate-${basename(mine)}`));
-        renameSync(join(p, "aidlc", ".aidlc-sessions"), join(p, "aidlc", ".aidlc-sessions-of-the-first-clone"));
+        renameSync(join(p, "aidlc", ".aidlc-engine", "sessions"), join(p, "aidlc", ".aidlc-sessions-of-the-first-clone"));
         // The record's times are whole seconds: two shards order by them alone.
         Bun.sleepSync(1100);
       }

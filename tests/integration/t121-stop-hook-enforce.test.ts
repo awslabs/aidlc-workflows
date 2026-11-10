@@ -181,7 +181,7 @@ function seedShell(proj: string): void {
     )}\n`,
     "utf-8",
   );
-  writeFileSync(join(proj, "aidlc", ".aidlc-clone-id"), `${PINNED_CLONE_ID}\n`, "utf-8");
+  writeFileSync(join(proj, "aidlc", ".aidlc-engine", "clone-id"), `${PINNED_CLONE_ID}\n`, "utf-8");
 }
 
 // The stop-hook guard counter, re-rooted under the record (stopHookDir).

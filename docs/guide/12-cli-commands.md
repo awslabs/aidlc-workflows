@@ -226,9 +226,9 @@ engine through a file instead of the command line (on Kiro IDE the agent also
 sends a request holding a double quote, a typographic one such as `“` or `’`,
 one of `&`, `|`, `<`, `>`, `^`, or a trailing backslash this way, since Windows
 PowerShell or cmd.exe can change them): the agent writes it to
-`aidlc/.aidlc-request-text/request.txt` and runs `aidlc engine orchestrate next
---request-file aidlc/.aidlc-request-text/request.txt` with any other flags. The
-engine reads only a plain file directly inside `aidlc/.aidlc-request-text/`,
+`aidlc/.aidlc-engine/request-text/request.txt` and runs `aidlc engine orchestrate next
+--request-file aidlc/.aidlc-engine/request-text/request.txt` with any other flags. The
+engine reads only a plain file directly inside `aidlc/.aidlc-engine/request-text/`,
 through no link, up to 64 KiB, uses its words exactly as written, and removes
 the file once the command goes ahead.
 
@@ -530,7 +530,7 @@ takes it out again.
 
 Bare `/aidlc space` lists spaces; add `--json` for structured output.
 `/aidlc space <name>` switches the per-user active-space cursor and writes that
-space's method files into `aidlc/active-memory/`, the git-ignored copy
+space's method files into `aidlc/.aidlc-engine/active-memory/`, the git-ignored copy
 the harness-native method include reads. No tracked file changes. It never
 creates a space or advances an intent. As for intents, a word that is neither a
 verb nor a space's exact name goes to the agent with the verbs and the space
@@ -744,7 +744,7 @@ asked for it to go to a team or be left open all the same, the agent adds
 here stays in the work's record. One Unit named for two teams is refused with both names. The
 walking skeleton, when on, is built at the lead's project first and is never held for a
 team. The agent writes the words the answer came from to the request file the
-command names (`--request-file aidlc/.aidlc-request-text/unit-assign.txt`), and
+command names (`--request-file aidlc/.aidlc-engine/request-text/unit-assign.txt`), and
 they go into the `UNITS_ASSIGNED` audit row when a turn of yours stands behind
 them. When the lead's project cannot be reached, the answer is kept
 (`Held: not yet`) and the next step offers to try again. When it answers but has no
@@ -912,7 +912,7 @@ typed it, from the message it came in (the agent names another with
 
 At the lead's project, when a team's pull request in one repo is turned down. The agent
 runs it with your words in the request file its command names
-(`--request-file aidlc/.aidlc-request-text/unit-turned-down.txt`). Your words go onto
+(`--request-file aidlc/.aidlc-engine/request-text/unit-turned-down.txt`). Your words go onto
 the Unit's claim, beside your words as you typed them in the message you said
 them in (the agent names another with `--message <id>`), and the team hears them
 once at its next step; its build asks
@@ -924,7 +924,7 @@ pushed again. A repo that already merged stays merged.
 At the lead's project, when a repo merged a team's Unit in a way the board does not see (the
 change made again by hand, or merged through another branch). The agent runs it
 with your words in the request file its command names
-(`--request-file aidlc/.aidlc-request-text/unit-merged.txt`). Your words, as you
+(`--request-file aidlc/.aidlc-engine/request-text/unit-merged.txt`). Your words, as you
 typed them in the message you said them in (the agent names another with
 `--message <id>`), go onto the Unit's claim, the repo counts as merged at the lead's project's next step, and the Unit's
 done record keeps them ("by your word").
@@ -1075,7 +1075,7 @@ main.
 Accepted decisions are `approve` and `reject`. The command records the
 person's answer when a typed human turn follows the pin (pin's output names this
 command for each answer). The person's words may come in a file instead of
-`--user-input`: `--request-file aidlc/.aidlc-request-text/<name>.txt`, which
+`--user-input`: `--request-file aidlc/.aidlc-engine/request-text/<name>.txt`, which
 AI-DLC writes when it prints the command for you (after pin, the agent writes
 your reply to the file pin's commands name), so no shell reads them on the way;
 the file goes once the decision is recorded. A pinned Unit lands with a
@@ -1189,7 +1189,7 @@ stage-graph integrity are in place. Clean and warnings-only reports exit 0; a
 failed check exits 1. The full report writes to stdout in all cases so the
 orchestrator surfaces it either way. Core doctor checks change no file of yours.
 They do bring AI-DLC's own copy of the active space's memory up to date
-(`aidlc/active-memory/`, and on Kiro IDE its steering copies), as every session
+(`aidlc/.aidlc-engine/active-memory/`, and on Kiro IDE its steering copies), as every session
 start does, so the command is safe to run before the first intent is created;
 once an intent exists it also records a `HEALTH_CHECKED` audit row. Plugin checks execute installed plugin code: plugin authors are required by convention to keep those scripts read-only, but the runtime cannot enforce that property.
 
@@ -1214,7 +1214,7 @@ When a workflow has issues, `--doctor` also lists the structured findings in its
 | Kiro hooks switched off | On the Kiro harness: every AI-DLC hook file in `.kiro/hooks/` (`aidlc-*.json`) that carries `"enabled": false`, which Kiro IDE writes when you switch a hook off under Agent Hooks (a committed file can carry it too). The guard hook (`aidlc-guard-tool-call`), the reply recorder (`aidlc-record-human-turn`) and the older guard files a project may still hold fail, each naming what is no longer protected; any other AI-DLC hook switched off is one warning. The fix is to turn the hook back on under Agent Hooks in Kiro IDE, or in Kiro CLI to change `"enabled": false` to `true` in the hook's file, then quit Kiro and start `kiro-cli --v3` again in the folder |
 | Kiro ignore sources | On the Kiro harness with the Markdown conductor (`.kiro/agents/aidlc-aidlc.md`, used by Kiro IDE and Kiro CLI v3): evaluates git's global excludes file (in a git repo), `~/.kiro/settings/kiroignore`, the project `.gitignore`, and `.kiroignore` independently against the reads the engine sends the agent to make through `fs_read`: for every stage `harness.json` selects in the compiled graph, the stage file and the persona and knowledge the conductor holds inline (the engine's own roster at Standard and Minimal depth, within the directive's 8 KiB `inline_context_paths` cap), plus `stage-protocol.md` and its `stage-protocol-<name>.md` modules and the files beside each skill's `SKILL.md`. Contributor-only protocol files such as `stage-definition.md` are not loaded, so they are not counted. Plugins count however they were composed. `SKILL.md` files, the conductor agent (`agents/aidlc-aidlc.md`), `aidlc-common/conductor.md`, and `tools/`, `sensors/`, `hooks/`, `scopes/`, and `steering/` are loaded by Kiro itself or the engine, not through `fs_read`, and are not counted. A rule that hides only some of them is reported with a count and the framework folders it touches. Global-source rules that hide `.kiro/` fail, naming the source and line, because Kiro's `fs_read` guard (Kiro IDE and Kiro CLI v3) then denies every stage, agent, and protocol read. Workspace-source matches warn, because doctor cannot tell which Kiro runs: in Kiro IDE they apply only when `kiroAgent.agentIgnoreFiles` names the file (the default includes `.gitignore`; `[]` disables workspace sources), and doctor cannot read that IDE setting; Kiro CLI v3 applies `.kiroignore` (so a match there denies those reads) and not `.gitignore`, and the warning says which. A source doctor cannot evaluate (for example, `git` is not on PATH, which in a git repository also hides a custom `core.excludesFile`, or git refuses a repository that exists on disk) warns as `not evaluated` rather than passing. Rows name sources by fixed names such as `~/.config/git/ignore` and `.gitignore`, never by path, rule text, or git error text. A `!.kiro/` in another file does not undo a deny |
 | Workspace shell | `.claude/` + `aidlc/spaces/default/memory/` are present (the shipped shell) |
-| Active space method copy | `aidlc/active-memory/` (the git-ignored copy every harness include reads) holds the active space's `memory/` files; the check writes it first, as every session start does, so a difference left is a file that cannot be written there (warn) |
+| Active space method copy | `aidlc/.aidlc-engine/active-memory/` (the git-ignored copy every harness include reads) holds the active space's `memory/` files; the check writes it first, as every session start does, so a difference left is a file that cannot be written there (warn) |
 | VS Code agent request cap | Copilot only: `.vscode/settings.json` sets `chat.agent.maxRequests` to 100 or more. Unset (VS Code's default of 50), lower, not a number (a number in quotes included), or unreadable warns, because VS Code then stops a long stage to ask "Continue to iterate?" and the chat waits until someone answers. The fix names the line to write in the file |
 | Submodules | If a `.gitmodules` is present, reports how many submodule paths are declared and how many are uninitialized, naming `git submodule update --init --recursive` when any are (advisory - never fails) |
 | Env scope | `AWS_AIDLC_DEFAULT_SCOPE` (if set) names a valid scope |
@@ -1227,7 +1227,7 @@ When a workflow has issues, `--doctor` also lists the structured findings in its
 | Current step out of date | Only while it lasts: the step the assistant was working from went out of date (the chat was compacted, or the workflow state changed after the step was issued). Says when and why, and, when known, which state lines changed and which AI-DLC command wrote them; the fix is `next` as its own command, which hands the current step out again and keeps an approval that still matches (warning - never fails) |
 | State drift | the active intent's `aidlc-state.md` matches the last `WORKFLOW_COMPLETED` in the audit |
 | Pending approval | When the current stage has waited at an organic approval gate for more than 24 hours, identifies it as waiting for a human rather than stuck and points to `/aidlc --status` (advisory - never fails) |
-| Background subagents | Reports fresh and stale session-scoped entries in `aidlc/.aidlc-subagent-inflight`. Fresh entries are advisory; stale or malformed entries fail with exact removal guidance. Silent when absent |
+| Background subagents | Reports fresh and stale session-scoped entries in `aidlc/.aidlc-engine/sessions/subagent-inflight`. Fresh entries are advisory; stale or malformed entries fail with exact removal guidance. Silent when absent |
 | Set-aside Bolt attempts | Informational list of saved attempts: slug, stamp, age in days, mode (`snapshot`, `branch-tip`, or `legacy` for saved heads; `evidence-only` when only reviewed source refs remain), restored checkout ownership, and typed restore/purge operations with optional safe display commands or rendering errors (purge only for evidence-only entries). These entries are neither warnings nor failures |
 | Cycle detection | `stage-graph.json` has no cycles |
 | Orphan stage files | Every slug in the graph has a matching `<phase>/<slug>.md` on disk |
@@ -1244,8 +1244,8 @@ When a workflow has issues, `--doctor` also lists the structured findings in its
 | Keyword overlap | A hint more than one plan has is a warning, naming the plans (the plan proposal lists it under each) |
 | Rule drift | Surfaces live team/project headings that overlap populated org policy for contradiction review, and reports lifecycle-stale overlaps in a separate stale-suppressed row (advisory — never fails) |
 | Paired sensor coverage | Confirms every rule that names a paired Sensor resolves to a Sensor some stage actually fires (advisory — never fails) |
-| Workspace records | Reports uncommitted changes under `aidlc/` so shared records are not left only in one checkout, leaving out `aidlc/.aidlc-request-text/` and an audit log whose only change is the entries doctor writes about its own runs (when those are all there is, the row passes and says so); while git tracks or shows a request file, or holds a removed one the folder does not ignore, it gives no commit command, since `git add aidlc/` would take your request in (advisory - never fails) |
-| Request folder | Only when git can see files in `aidlc/.aidlc-request-text/`: they hold your own requests, so it names the steps, never running them: add the line `aidlc/.aidlc-request-text/` to the project folder's `.gitignore` when the folder is not ignored yet (and check no later rule of yours un-ignores it), and, in the project folder, `git rm --cached -r -f -- aidlc/.aidlc-request-text/` (the files stay) when git tracks them, then commit and push the removal and the `.gitignore` change (a refresh may have left it uncommitted) so teammates' clones drop it too; a removal not committed yet keeps the row (advisory - never fails) |
+| Workspace records | Reports uncommitted changes under `aidlc/` so shared records are not left only in one checkout, leaving out `aidlc/.aidlc-engine/request-text/` and an audit log whose only change is the entries doctor writes about its own runs (when those are all there is, the row passes and says so); while git tracks or shows a request file, or holds a removed one the folder does not ignore, it gives no commit command, since `git add aidlc/` would take your request in (advisory - never fails) |
+| Request folder | Only when git can see files in `aidlc/.aidlc-engine/request-text/`: they hold your own requests, so it names the steps, never running them: add the line `aidlc/.aidlc-engine/request-text/` to the project folder's `.gitignore` when the folder is not ignored yet (and check no later rule of yours un-ignores it), and, in the project folder, `git rm --cached -r -f -- aidlc/.aidlc-engine/request-text/` (the files stay) when git tracks them, then commit and push the removal and the `.gitignore` change (a refresh may have left it uncommitted) so teammates' clones drop it too; a removal not committed yet keeps the row (advisory - never fails) |
 | Declared workspace repos | When `repos.json` exists, compares its declared set with the sibling repos runtime discovery sees on disk (advisory - never fails) |
 | Workspace gitignore | When `repos.json` exists, checks that the managed `.gitignore` block matches the declared repo set (advisory - never fails) |
 
@@ -1790,7 +1790,7 @@ assignment.
 The session-start hook keeps its `presence-bypass-<session>` stamp in the Plan
 Approval runtime directory for an attended harness launched with
 `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1`.
-Model tools cannot invoke hooks or write `aidlc/.aidlc-sessions/` or any
+Model tools cannot invoke hooks or write `aidlc/.aidlc-engine/sessions/` or any
 `.aidlc-plan-approval/` or `<record>/.aidlc-engine/gate-words/` directory, as enforced by the
 [state-transition guard](../reference/06-hooks-and-tools.md#pretooluse-aidlc-state-transition-guardts).
 Memory-held strict refuses first and overrides both the policy word and any
@@ -2124,7 +2124,7 @@ is set where you run `config flags --bypass`, the command says so for each check
 but sensors, learnings and usage tracking, instead of saying the check is off.
 Recording or clearing a switch changes only that settings file (and AI-DLC's
 gitignored note of how it was set,
-`aidlc/.aidlc-sessions/recorded-switches.json`) and refreshes no harness files,
+`aidlc/.aidlc-engine/sessions/recorded-switches.json`) and refreshes no harness files,
 so it also works while a workflow is running: the next check reads it, with no
 restart. AI-DLC's managed `.gitignore` block already lists
 `aidlc.settings.local.json`; on an install from before that, the first `--local`
@@ -2396,7 +2396,7 @@ up to 64 KiB, and removes the file once read. `log decision` takes the question 
 same way with `--decision-file`, and its choices, one a line, with `--options-file`
 (a choice holding a comma can also go as its own `--option '<choice>'`), and `learnings surface` a correction with
 `--correction-file`. A file the agent wrote for `next --request-file` works for an
-answer too: `log answer --request-file aidlc/.aidlc-request-text/request.txt` reads
+answer too: `log answer --request-file aidlc/.aidlc-engine/request-text/request.txt` reads
 it as `next` does and removes it once the answer is taken, so a refused answer
 keeps it; it is not passed beside `--details` or `--details-file`.
 

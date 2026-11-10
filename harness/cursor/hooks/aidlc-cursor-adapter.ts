@@ -63,6 +63,7 @@ import {
   enterHookWorkflow,
   promptMovesSelection,
   recordHookDrop,
+  sessionsDir,
   takeSessionSelectionNotice,
 } from "../tools/aidlc-lib.ts";
 import { aidlcInvocation, knownActiveSpace } from "../tools/aidlc-runtime-paths.ts";
@@ -237,8 +238,8 @@ export async function run(
   const REVIEWER_DISPATCH_TTL_MS = 6 * 60 * 60 * 1000;
   const AMBIGUOUS_REVIEWER = "__aidlc_ambiguous_reviewer__";
   const REVIEW_AGENT_RE = /^aidlc-(architecture-reviewer|product-lead)-agent$/;
-  const AIDLC_RUNTIME_DIR = join(projectDir, "aidlc");
-  const LEDGER_DIR = join(projectDir, "aidlc", ".aidlc-cursor-subagents");
+  // The dispatch ledger and the witness copies, both under the sessions folder.
+  const LEDGER_DIR = join(sessionsDir(projectDir), "cursor-subagents");
   const ledgerPrefix = "spawn-";
   const witnessPrefix = ".aidlc-cursor-subagent-";
 
@@ -265,10 +266,7 @@ export async function run(
   }
 
   function witnessFile(parent: string, task: string): string {
-    return join(
-      AIDLC_RUNTIME_DIR,
-      `${witnessPrefix}${digest(parent)}-${digest(task)}.json`,
-    );
+    return join(LEDGER_DIR, `${witnessPrefix}${digest(parent)}-${digest(task)}.json`);
   }
 
   function ledgerFiles(): string[] {
@@ -283,9 +281,9 @@ export async function run(
 
   function witnessFiles(): string[] {
     try {
-      return readdirSync(AIDLC_RUNTIME_DIR)
+      return readdirSync(LEDGER_DIR)
         .filter((name) => name.startsWith(witnessPrefix) && name.endsWith(".json"))
-        .map((name) => join(AIDLC_RUNTIME_DIR, name));
+        .map((name) => join(LEDGER_DIR, name));
     } catch {
       return [];
     }
@@ -2638,7 +2636,7 @@ export async function run(
     const reviewerDispatch = new RegExp(`${engineDirFor("").replaceAll("\\", "/").replaceAll(".", "\\.")}/+reviewer-dispatch\\.json`);
     if (
       reviewerDispatch.test(serialized) ||
-      [".aidlc-cursor-subagents", "aidlc-cursor-subagent-"].some((token) => serialized.includes(token))
+      ["cursor-subagents", ".aidlc-cursor-subagents", "aidlc-cursor-subagent-"].some((token) => serialized.includes(token))
     ) {
       return true;
     }

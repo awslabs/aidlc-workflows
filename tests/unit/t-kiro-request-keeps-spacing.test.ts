@@ -93,7 +93,7 @@ function kiroSays(proj: string, prompt: string): void {
 
 // The call the hook told the agent to run, as the shell hands it to the engine.
 function latchedArgs(proj: string): string[] {
-  const latch = JSON.parse(readFileSync(join(proj, "aidlc", ".aidlc-forwarding-latch"), "utf-8")) as { args: string[] };
+  const latch = JSON.parse(readFileSync(join(proj, "aidlc", ".aidlc-engine", "sessions", "kiro-forwarding-latch"), "utf-8")) as { args: string[] };
   return latch.args;
 }
 
@@ -105,7 +105,7 @@ function next(proj: string, args: string[]): { d: Record<string, unknown>; out: 
 }
 
 function questionCopies(proj: string): string[] {
-  const dir = join(proj, "aidlc", ".aidlc-sessions", "questions");
+  const dir = join(proj, "aidlc", ".aidlc-engine", "sessions", "questions");
   if (!existsSync(dir)) return [];
   return readdirSync(dir)
     .filter((name) => name.endsWith(".json"))

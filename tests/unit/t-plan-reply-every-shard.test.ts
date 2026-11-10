@@ -91,7 +91,7 @@ function checkout(): Checkout {
   const state = readFileSync(join(REPO_ROOT, "tests", "fixtures", "state-mid-ideation.md"), "utf-8")
     .replace("## Runtime State\n", "## Runtime State\n- **Unit Ownership**: team\n");
   writeFileSync(seededStateFile(dir), state);
-  writeFileSync(join(dir, "aidlc", ".aidlc-clone-id"), `${TOKEN}\n${HOST}\n`);
+  writeFileSync(join(dir, "aidlc", ".aidlc-engine", "clone-id"), `${TOKEN}\n${HOST}\n`);
   const audit = join(seededRecordDir(dir), "audit");
   mkdirSync(audit, { recursive: true });
   const tracked = join(audit, `${HOST}-${TOKEN}.md`);
@@ -103,7 +103,7 @@ function checkout(): Checkout {
 // The claim's stamp: from now on the checkout writes the work's rows to the
 // Unit's own record, starting with the rows the claim moved there.
 function claim(c: Checkout, moved = ""): void {
-  writeFileSync(join(c.dir, "aidlc", ".aidlc-unit-scope.json"), `${JSON.stringify({
+  writeFileSync(join(c.dir, "aidlc", ".aidlc-engine", "units", "claimed.json"), `${JSON.stringify({
     version: 1, space: DEFAULT_SPACE, intent_uuid: DEFAULT_INTENT_UUID, intent_id8: "00000001", unit: "alpha",
     owner: "lead team", generation: 1, nonce: "5f02e323-0680-4e0e-b544-f5543bc69171",
     claim_ref: "refs/heads/claim/00000001/alpha", claim_oid: "0".repeat(40), claimed_from_oid: "1".repeat(40),
@@ -179,7 +179,7 @@ describe("a reply in the Unit's record after a claim", () => {
       `# AI-DLC Audit Log\n${rows(turn(after(2), "c3000001"))}`);
     expect(personRepliedAfter(c.dir, mark)).toBe(false);
     // The person moves to another piece of work and replies there.
-    rmSync(join(c.dir, "aidlc", ".aidlc-unit-scope.json"));
+    rmSync(join(c.dir, "aidlc", ".aidlc-engine", "units", "claimed.json"));
     const other = join(intentsDirOf(c.dir, DEFAULT_SPACE), OTHER_RECORD);
     mkdirSync(join(other, "audit"), { recursive: true });
     writeFileSync(join(other, "aidlc-state.md"), readFileSync(seededStateFile(c.dir), "utf-8"));
@@ -194,7 +194,7 @@ describe("a reply in the Unit's record after a claim", () => {
     claim(c);
     const mark = auditMark(c.dir);
     expect(mark.shard).toEndWith(`/.aidlc-engine/audit/${CLAIM_SHARD}`);
-    rmSync(join(c.dir, "aidlc", ".aidlc-unit-scope.json"));
+    rmSync(join(c.dir, "aidlc", ".aidlc-engine", "units", "claimed.json"));
     appendFileSync(c.tracked, rows(turn(before(30), "d4000001")));
     expect(personRepliedAfter(c.dir, mark)).toBe(false);
     appendFileSync(c.tracked, rows(turn(after(2), "d4000002")));

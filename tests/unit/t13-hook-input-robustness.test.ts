@@ -114,7 +114,7 @@ function seedShell(proj: string, space = DEFAULT_SPACE): void {
 /** Pin the clone-id + create the resolved empty audit shard for hooks that require
  *  it and for deterministic log-subagent reads. Returns the audit DIR. */
 function seedAuditShard(proj: string): string {
-  writeFileSync(join(proj, "aidlc", ".aidlc-clone-id"), `${PINNED_CLONE_ID}\n`, "utf-8");
+  writeFileSync(join(proj, "aidlc", ".aidlc-engine", "clone-id"), `${PINNED_CLONE_ID}\n`, "utf-8");
   const auditDir = seededAuditDir(proj);
   mkdirSync(auditDir, { recursive: true });
   writeFileSync(join(auditDir, pinnedShardName()), "", "utf-8");

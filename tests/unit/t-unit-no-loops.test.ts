@@ -564,7 +564,7 @@ describe("a step that waits on the person, and every way on the round added, nev
     // A copy of the lead's checkout keeps its clone id, so the plan's rows are its own.
     const leadsCopy = (): string => {
       const dir = withTools(cloneOf(home.remote, "lead"));
-      cpSync(join(home.dir, "aidlc", ".aidlc-clone-id"), join(dir, "aidlc", ".aidlc-clone-id"));
+      cpSync(join(home.dir, "aidlc", ".aidlc-engine", "clone-id"), join(dir, "aidlc", ".aidlc-engine", "clone-id"));
       return dir;
     };
     const laptop = leadsCopy();

@@ -94,7 +94,7 @@ function shardName(): string {
  *  shard name is deterministic and shared with the main checkout. */
 function seedCloneId(cloneRoot: string): void {
   mkdirSync(join(cloneRoot, "aidlc"), { recursive: true });
-  writeFileSync(join(cloneRoot, "aidlc", ".aidlc-clone-id"), `${FIXED_CLONE_ID}\n`, "utf-8");
+  writeFileSync(join(cloneRoot, "aidlc", ".aidlc-engine", "clone-id"), `${FIXED_CLONE_ID}\n`, "utf-8");
 }
 
 const BUN = process.execPath;
@@ -203,7 +203,7 @@ function makeFixture(): string {
     join(p, ".gitignore"),
     [
       "aidlc/active-space",
-      "aidlc/.aidlc-clone-id",
+      "aidlc/.aidlc-engine/clone-id",
       "aidlc/spaces/*/intents/active-intent",
       "aidlc/spaces/*/intents/*/runtime-graph.json",
       "aidlc/spaces/*/intents/*/.aidlc-*",

@@ -633,7 +633,7 @@ describe("the engine asks for Plan Approval", () => {
       .toBe(0);
     // So does a person's request for `next --request-file`, directly inside the
     // project's request-text folder, the only place the engine reads it.
-    const requestText = join(proj, "aidlc", ".aidlc-request-text");
+    const requestText = join(proj, "aidlc", ".aidlc-engine", "request-text");
     expect(guardWrite(proj, join(requestText, "request.txt")).code).toBe(0);
     expect(guardWrite(proj, join(requestText, "nested", "request.txt")).code).toBe(2);
     expect(guardWrite(proj, join(requestText, "..", "aidlc-state.md")).code).toBe(2);

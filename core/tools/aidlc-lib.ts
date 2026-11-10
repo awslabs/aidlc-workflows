@@ -52,8 +52,21 @@ import {
   repoNameRefusal,
   normalizeDriveLetter,
   typedHarnessName,
+  WORKSPACE_ENGINE_DIR,
+  workspaceEngineFile,
+  workspaceEnginePath,
 } from "./aidlc-runtime-paths.ts";
-export { entrySkillInvocation, normalizeDriveLetter, repoNameProblem, repoNameRefusal, SPACE_NAME_REGEX } from "./aidlc-runtime-paths.ts";
+export {
+  ensureWorkspaceEngineFolder,
+  entrySkillInvocation,
+  normalizeDriveLetter,
+  repoNameProblem,
+  repoNameRefusal,
+  SPACE_NAME_REGEX,
+  WORKSPACE_ENGINE_DIR,
+  workspaceEngineFile,
+  workspaceEnginePath,
+} from "./aidlc-runtime-paths.ts";
 import { humanTurnMintAllowed, personGitNameField } from "./aidlc-git-name.ts";
 export { humanTurnMintAllowed } from "./aidlc-git-name.ts";
 import { NEXT_VALUELESS_FLAGS, nextFlagTakesFollowing, unitCommandArgv } from "./aidlc-command.ts";
@@ -7941,8 +7954,8 @@ export function clearSessionIntentSwitch(projectDir: string): void {
 // has no session_id, so it cannot re-stamp the live session's record on its own.
 // This marker is the bridge: the hook writes it on EVERY fire (so it always names
 // the live conversation), and the switch tool reads it to learn which session to
-// re-stamp. Lives beside the per-session records under `aidlc/.aidlc-sessions/`
-// (gitignored — dot-gitignore `aidlc/.aidlc-sessions/`): per-user runtime state.
+// re-stamp. Lives beside the per-session records under `aidlc/.aidlc-engine/sessions/`
+// (kept out of git by the engine folder's .gitignore): per-user runtime state.
 export const CURRENT_SESSION_FILE = ".current-session";
 
 function currentSessionPath(projectDir: string): string {
@@ -9116,7 +9129,7 @@ export function steeringTokenKeyPathFor(projectDir: string, statePath: string): 
       ? join(record, LEGACY_SESSION_STEERING_TOKEN_KEY_FILE)
       : join(storage, STEERING_TOKEN_KEY_FILE);
   }
-  return join(projectDir, "aidlc", ".aidlc-sessions", LEGACY_SESSION_STEERING_TOKEN_KEY_FILE);
+  return join(sessionsDir(projectDir), LEGACY_SESSION_STEERING_TOKEN_KEY_FILE);
 }
 
 /** The key encoded in a key file's text, or null when it is not a well-formed key. */
@@ -13048,7 +13061,11 @@ export const ENGINE_TEXT_DIRS: readonly string[] = [ANSWER_TEXT_DIR, LEARNINGS_S
 /** The project folder where a person's request for `next --request-file` is
  *  written, so the words reach the engine without passing through any shell.
  *  The engine reads only a plain file directly inside it. */
-export const REQUEST_TEXT_DIR = "aidlc/.aidlc-request-text";
+export const REQUEST_TEXT_DIR = "aidlc/.aidlc-engine/request-text";
+/** Every folder a request file is read from: this release's, and the one an
+ *  earlier release named, which a chat that loaded that release's text still
+ *  writes to. Request files are never moved (aidlc-runtime-paths.ts). */
+export const REQUEST_TEXT_DIRS: readonly string[] = [REQUEST_TEXT_DIR, "aidlc/.aidlc-request-text"];
 
 /**
  * Read one answer text file the agent wrote, then remove it. The path is
@@ -21619,6 +21636,8 @@ function worktreeSourceExclusionContext(
     ".aidlc/worktree-meta.json",
     ".aidlc/base-source-listing.tsv",
     "aidlc/.aidlc-clone-id",
+    // The engine folder (the clone id, its .gitignore) is the workspace's, never the repo's source.
+    `aidlc/${WORKSPACE_ENGINE_DIR}/`,
   ];
   if ("intentRecord" in parsed) {
     if (
@@ -29857,11 +29876,12 @@ export const REVIEWER_DISPATCH_TTL_MS = 6 * 60 * 60 * 1000;
 export function composeMarkerPath(projectDir: string): string {
   return join(projectDir, "aidlc", ".aidlc-compose-pending");
 }
-export const UNIT_PARKED_FILE = ".aidlc-unit-parked";
-export const CLAIM_GENERATIONS_FILE = ".aidlc-claim-generations.json";
-export const UNIT_PARTICIPANT_FILE = ".aidlc-unit-participant";
-export const UNIT_RELEASE_PENDING_FILE = ".aidlc-unit-releases";
-export const UNIT_MERGE_DIR = ".aidlc-unit-merges";
+// This checkout's Unit files, under aidlc/.aidlc-engine/ (workspaceEngineFile).
+export const UNIT_PARKED_FILE = "units/parked";
+export const CLAIM_GENERATIONS_FILE = "units/claim-generations.json";
+export const UNIT_PARTICIPANT_FILE = "units/participant";
+export const UNIT_RELEASE_PENDING_FILE = "units/releases";
+export const UNIT_MERGE_DIR = "units/merges";
 
 export interface UnitMergeEvidence {
   stages_expected: string[];
@@ -29938,15 +29958,15 @@ export interface UnitMergeTransaction {
 }
 
 export function unitParkedPath(projectDir: string): string {
-  return join(workspaceRoot(projectDir), UNIT_PARKED_FILE);
+  return workspaceEngineFile(projectDir, UNIT_PARKED_FILE);
 }
 
 export function claimGenerationsPath(projectDir: string): string {
-  return join(workspaceRoot(projectDir), CLAIM_GENERATIONS_FILE);
+  return workspaceEngineFile(projectDir, CLAIM_GENERATIONS_FILE);
 }
 
 export function unitParticipantPath(projectDir: string): string {
-  return join(workspaceRoot(projectDir), UNIT_PARTICIPANT_FILE);
+  return workspaceEngineFile(projectDir, UNIT_PARTICIPANT_FILE);
 }
 
 function identityScopedUnitPath(
@@ -29970,7 +29990,7 @@ function identityScopedUnitPath(
       throw new Error(`Invalid ${label} path segment "${value}".`);
     }
   }
-  return join(workspaceRoot(projectDir), root, resolvedSpace, resolvedIntent, `${unit}.json`);
+  return workspaceEnginePath(projectDir, ...root.split("/"), resolvedSpace, resolvedIntent, `${unit}.json`);
 }
 
 export function unitReleasePendingPath(
@@ -30127,17 +30147,89 @@ export function writeUnitMergeTransaction(
   writeFileAtomic(path, `${JSON.stringify(transaction, null, 2)}\n`);
 }
 
+// The release that keeps this checkout's engine files in aidlc/.aidlc-engine/.
+const ENGINE_FOLDER_SINCE = { major: 2, minor: 12 };
+
+function engineFolderJson(projectDir: string, ...parts: string[]): Record<string, unknown> | null {
+  try {
+    const value: unknown = JSON.parse(readFileSync(join(projectDir, "aidlc", WORKSPACE_ENGINE_DIR, ...parts), "utf-8"));
+    return isPlainObject(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function engineFolderNames(projectDir: string, ...parts: string[]): string[] {
+  try {
+    return readdirSync(join(projectDir, "aidlc", WORKSPACE_ENGINE_DIR, ...parts)).sort();
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Said once when the person switches this project to a release from before the
+ * engine folder (`aidlc use`, `aidlc config --pin`): what that release will not
+ * see here, since it reads these files where it kept them and nothing is moved
+ * back. Null when nothing is open, or the folder was never made (then nothing
+ * moved). Read by path only, so the switch itself moves nothing. `back` is the
+ * command that brings it back.
+ */
+export function engineFolderGoingBackLine(projectDir: string, release: string, back: string): string | null {
+  const parts = /^(\d+)\.(\d+)\./.exec(release);
+  if (parts === null) return null;
+  const [major, minor] = [Number(parts[1]), Number(parts[2])];
+  if (major > ENGINE_FOLDER_SINCE.major || (major === ENGINE_FOLDER_SINCE.major && minor >= ENGINE_FOLDER_SINCE.minor)) {
+    return null;
+  }
+  if (!existsSync(join(projectDir, "aidlc", WORKSPACE_ENGINE_DIR))) return null;
+  const unseen: string[] = [];
+  const claimed = engineFolderJson(projectDir, ...UNIT_SCOPE_FILE.split("/"))?.unit;
+  if (typeof claimed === "string" && claimed !== "") unseen.push(`the Unit ${claimed} you claimed`);
+  // Approved at its gate and not landed yet: the older release asks again.
+  const merges = UNIT_MERGE_DIR.split("/");
+  for (const space of engineFolderNames(projectDir, ...merges)) {
+    for (const intent of engineFolderNames(projectDir, ...merges, space)) {
+      for (const file of engineFolderNames(projectDir, ...merges, space, intent)) {
+        const journal = engineFolderJson(projectDir, ...merges, space, intent, file);
+        if (["approved", "git-landed", "state-folded"].includes(String(journal?.status)) && typeof journal?.unit === "string") {
+          unseen.push(`the merge of ${journal.unit} you approved`);
+        }
+      }
+    }
+  }
+  try {
+    const statePath = stateFilePath(projectDir);
+    const state = readFileSync(statePath, "utf-8");
+    // A Code Generation plan approved and not built yet: the older release
+    // reads it as unapproved and asks for the approval again.
+    const intent = activeIntentUuid(projectDir);
+    if (getField(state, "Current Stage") === "code-generation" && intent) {
+      const targets = new Set<string>();
+      for (const name of engineFolderNames(projectDir, "sessions", "plan-approval")) {
+        if (!/^receipt-[0-9a-f]{64}\.json$/.test(name)) continue;
+        const receipt = engineFolderJson(projectDir, "sessions", "plan-approval", name);
+        if (receipt?.intentId === intent && typeof receipt.targetId === "string") targets.add(receipt.targetId);
+      }
+      for (const target of [...targets].sort()) {
+        unseen.push(target.startsWith("unit:") ? `the plan you approved for ${target.slice(5)}` : "the plan you approved");
+      }
+    }
+    if (readActiveDirectiveMarker(projectDir, state)?.kind === "ask") unseen.push("the question waiting for your answer");
+  } catch {
+    // No work selected: no plan and no question.
+  }
+  if (unseen.length === 0) return null;
+  const list = unseen.length === 1 ? unseen[0] : `${unseen.slice(0, -1).join(", ")} and ${unseen[unseen.length - 1]}`;
+  return `AI-DLC ${release} will not see ${list} in this project. \`${back}\` brings it back.`;
+}
+
 export function unitMergeTransactionsForIdentity(
   projectDir: string,
   space: string,
   intentUuid: string,
 ): UnitMergeTransaction[] {
-  const dir = join(
-    workspaceRoot(projectDir),
-    UNIT_MERGE_DIR,
-    space,
-    intentUuid,
-  );
+  const dir = workspaceEnginePath(projectDir, ...UNIT_MERGE_DIR.split("/"), space, intentUuid);
   let files: string[];
   try {
     files = readdirSync(dir)
@@ -30762,13 +30854,13 @@ export function composeGateOpen(projectDir: string): boolean {
   return existsSync(marker) && Date.now() - statSync(marker).mtimeMs <= COMPOSE_MARKER_TTL_MS;
 }
 
-// `<projectDir>/aidlc/.aidlc-subagent-inflight`: the workspace-level background
+// `<projectDir>/aidlc/.aidlc-engine/sessions/subagent-inflight`: the workspace-level background
 // dispatch ledger. Entries are session-scoped and reference-counted so
 // overlapping workers cannot clear or authorize each other. The file remains
 // workspace-level because dispatch and completion hooks can run outside an
 // intent record, while each entry carries the session identity needed by Stop.
 export function subagentInflightMarkerPath(projectDir: string): string {
-  return join(projectDir, "aidlc", ".aidlc-subagent-inflight");
+  return workspaceEngineFile(projectDir, "sessions/subagent-inflight");
 }
 
 // Freshness window for each background-subagent entry. The Stop hook honours
@@ -30910,7 +31002,7 @@ export function markSubagentInflight(
     const current = readSubagentInflightLedger(projectDir);
     if (current.malformed) {
       throw new Error(
-        "background-subagent in-flight ledger is malformed; remove aidlc/.aidlc-subagent-inflight",
+        "background-subagent in-flight ledger is malformed; remove aidlc/.aidlc-engine/sessions/subagent-inflight",
       );
     }
     const nowMs = Date.now();
@@ -30939,7 +31031,7 @@ export function completeSubagentInflight(
     if (!current.exists) return false;
     if (current.malformed) {
       throw new Error(
-        "background-subagent in-flight ledger is malformed; remove aidlc/.aidlc-subagent-inflight",
+        "background-subagent in-flight ledger is malformed; remove aidlc/.aidlc-engine/sessions/subagent-inflight",
       );
     }
     const entries = freshSubagentEntries(current.entries, Date.now());

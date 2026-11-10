@@ -154,7 +154,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
     expect(standing).toMatch(/^alwaysApply: true$/m);
     // The rules read the engine's git-ignored copy of the active space's memory.
     for (const f of ["org.md", "team.md", "project.md"]) {
-      expect(standing).toContain(`aidlc/active-memory/${f}`);
+      expect(standing).toContain(`aidlc/.aidlc-engine/active-memory/${f}`);
     }
     expect(standing).not.toContain("memory/phases/");
 
@@ -166,7 +166,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       expect(rule, phase).toMatch(/^description: .+ phase practices$/mi);
       expect(rule, phase).toMatch(/^alwaysApply: false$/m);
       expect(rule, phase).toContain(
-        `aidlc/active-memory/phases/${phase}.md`,
+        `aidlc/.aidlc-engine/active-memory/phases/${phase}.md`,
       );
       expect(rule, phase).not.toContain("memory/org.md");
     }
@@ -774,8 +774,8 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       // space's files (the switch wrote it), so the installer rewrites nothing.
       expect(
         readFileSync(join(project, ".cursor", "rules", "aidlc.mdc"), "utf-8"),
-      ).toContain("aidlc/active-memory/org.md");
-      expect(readFileSync(join(project, "aidlc", "active-memory", "org.md"), "utf-8"))
+      ).toContain("aidlc/.aidlc-engine/active-memory/org.md");
+      expect(readFileSync(join(project, "aidlc", ".aidlc-engine", "active-memory", "org.md"), "utf-8"))
         .toStartWith("<!-- AI-DLC keeps this copy in step with aidlc/spaces/team-b/memory/org.md.");
       expect(
         readFileSync(join(project, ".cursor", "rules", "aidlc-onboarding.mdc"), "utf-8"),
@@ -786,7 +786,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
           "utf-8",
         );
         expect(installedRule, phase).toContain(
-          `aidlc/active-memory/phases/${phase}.md`,
+          `aidlc/.aidlc-engine/active-memory/phases/${phase}.md`,
         );
         expect(installedRule, phase).not.toContain("aidlc/spaces/");
       }
@@ -995,7 +995,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       expect(reinstall.status, reinstall.stderr).toBe(0);
       for (const file of [phaseRule, agent]) {
         const restored = readFileSync(file, "utf-8");
-        expect(restored, file).toContain("aidlc/active-memory/");
+        expect(restored, file).toContain("aidlc/.aidlc-engine/active-memory/");
         expect(restored, file).not.toContain("aidlc/spaces/default/memory/");
         expect(restored, file).not.toContain("aidlc/spaces/team-b/memory/");
       }

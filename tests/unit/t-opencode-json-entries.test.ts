@@ -150,7 +150,7 @@ describe("a team's opencode.json keeps what the team set", () => {
     expect(value.instructions).toEqual([
       "docs/team-rules.md",
       ".aidlc/onboarding.md",
-      "aidlc/active-memory/**/*.md",
+      "aidlc/.aidlc-engine/active-memory/**/*.md",
     ]);
     expect(value.skills).toEqual({ paths: [".aidlc/skills"] });
     expect(value.permission.edit).toEqual({ ".aidlc/tools/**": "ask", ".aidlc/hooks/**": "ask" });
@@ -243,7 +243,7 @@ describe("a refresh follows only AI-DLC's unchanged entries", () => {
     expect(value.instructions).toEqual([
       "docs/team-rules.md",
       ".aidlc/onboarding.md",
-      "aidlc/active-memory/**/*.md",
+      "aidlc/.aidlc-engine/active-memory/**/*.md",
       ".aidlc/extra.md",
     ]);
     expect(value.permission.edit[".aidlc/tools/**"]).toBe("deny");
@@ -422,11 +422,11 @@ describe("the entry merge", () => {
     const current = '{\n  "instructions": [".aidlc/onboarding.md", "aidlc/spaces/team/memory/**/*.md"]\n}\n';
     const merged = mergeJsonEntries(current, shipped, { kind: "recorded", entries: recorded });
     if ("conflict" in merged) throw new Error(merged.conflict);
-    expect(parse(merged.text).instructions).toEqual([".aidlc/onboarding.md", "aidlc/active-memory/**/*.md"]);
+    expect(parse(merged.text).instructions).toEqual([".aidlc/onboarding.md", "aidlc/.aidlc-engine/active-memory/**/*.md"]);
     // A space glob no record names is the project's own and stays beside the copy glob.
     const own = mergeJsonEntries('{\n  "instructions": ["aidlc/spaces/team/memory/**/*.md"]\n}\n', shipped, { kind: "none" });
     if ("conflict" in own) throw new Error(own.conflict);
-    expect(parse(own.text).instructions).toEqual(["aidlc/spaces/team/memory/**/*.md", ".aidlc/onboarding.md", "aidlc/active-memory/**/*.md"]);
+    expect(parse(own.text).instructions).toEqual(["aidlc/spaces/team/memory/**/*.md", ".aidlc/onboarding.md", "aidlc/.aidlc-engine/active-memory/**/*.md"]);
   });
 
   test("a one-line file stays one line where it can", async () => {

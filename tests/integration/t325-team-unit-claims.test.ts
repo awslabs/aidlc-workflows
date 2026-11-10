@@ -154,9 +154,9 @@ function makeSeed(options: {
   writeFileSync(join(depDir, "unit-of-work-dependency.md"), dependencyBody());
   writeFileSync(
     join(seed, ".gitignore"),
-    "aidlc/.aidlc-clone-id\naidlc/.aidlc-unit-scope.json\naidlc/.aidlc-unit-parked\n" +
-      "aidlc/.aidlc-claim-generations.json\naidlc/.aidlc-unit-participant\n" +
-      "aidlc/.aidlc-claim-registry.json\naidlc/.aidlc-unit-releases/\n",
+    "aidlc/.aidlc-engine/clone-id\naidlc/.aidlc-engine/units/claimed.json\naidlc/.aidlc-engine/units/parked\n" +
+      "aidlc/.aidlc-engine/units/claim-generations.json\naidlc/.aidlc-engine/units/participant\n" +
+      "aidlc/.aidlc-engine/units/claim-registry.json\naidlc/.aidlc-engine/units/releases/\n",
   );
   git(seed, ["init", "-b", "main"]);
   git(seed, ["config", "user.name", "seed"]);
@@ -279,11 +279,11 @@ function fetchClaimRefs(projectDir: string): void {
 function localRuntimeSnapshot(projectDir: string): Record<string, string | null> {
   const paths = [
     seededStateFile(projectDir),
-    join(projectDir, "aidlc", ".aidlc-unit-scope.json"),
-    join(projectDir, "aidlc", ".aidlc-unit-parked"),
-    join(projectDir, "aidlc", ".aidlc-claim-generations.json"),
-    join(projectDir, "aidlc", ".aidlc-claim-registry.json"),
-    join(projectDir, "aidlc", ".aidlc-unit-participant"),
+    join(projectDir, "aidlc", ".aidlc-engine", "units", "claimed.json"),
+    join(projectDir, "aidlc", ".aidlc-engine", "units", "parked"),
+    join(projectDir, "aidlc", ".aidlc-engine", "units", "claim-generations.json"),
+    join(projectDir, "aidlc", ".aidlc-engine", "units", "claim-registry.json"),
+    join(projectDir, "aidlc", ".aidlc-engine", "units", "participant"),
     unitReleasePendingPath(projectDir, "alpha"),
     unitReleasePendingPath(projectDir, "beta"),
     join(seededRecordDir(projectDir), ".aidlc-engine/active-directive.json"),
@@ -478,7 +478,7 @@ describe("t325 atomic team Unit claims", () => {
     );
     const beforeStamp = nextDirective(knobOff, { AIDLC_STOP_HOOK_PROBE: "1" });
     writeFileSync(
-      join(knobOff, "aidlc", ".aidlc-unit-scope.json"),
+      join(knobOff, "aidlc", ".aidlc-engine", "units", "claimed.json"),
       `${JSON.stringify({
         version: 1,
         space: "wrong",
@@ -896,7 +896,7 @@ describe("t325 atomic team Unit claims", () => {
     expect(loser.stderr).toContain(winnerName);
     const winner = winnerName === "alice" ? alice : bob;
     const loserDir = winnerName === "alice" ? bob : alice;
-    expect(exists(join(winner, "aidlc", ".aidlc-unit-scope.json"))).toBe(true);
+    expect(exists(join(winner, "aidlc", ".aidlc-engine", "units", "claimed.json"))).toBe(true);
     const recoveredClaim = run(
       UNIT,
       ["claim", "alpha", "--team", winnerName],
@@ -1067,8 +1067,8 @@ describe("t325 atomic team Unit claims", () => {
     const stalePark = run(ORCH, ["park"], winner);
     expect(stalePark.status, stalePark.out).toBe(0);
     expect(JSON.parse(stalePark.stdout).kind).toBe("parked");
-    expect(exists(join(winner, "aidlc", ".aidlc-unit-parked"))).toBe(true);
-    rmSync(join(winner, "aidlc", ".aidlc-unit-parked"), { force: true });
+    expect(exists(join(winner, "aidlc", ".aidlc-engine", "units", "parked"))).toBe(true);
+    rmSync(join(winner, "aidlc", ".aidlc-engine", "units", "parked"), { force: true });
     expect(nextDirective(winner).kind).not.toBe("error");
 
     const reclaimed = run(
@@ -1092,7 +1092,7 @@ describe("t325 atomic team Unit claims", () => {
       checkout,
     );
     expect(claimed.status, claimed.out).toBe(0);
-    const stampPath = join(checkout, "aidlc", ".aidlc-unit-scope.json");
+    const stampPath = join(checkout, "aidlc", ".aidlc-engine", "units", "claimed.json");
     const stampBefore = readFileSync(stampPath, "utf-8");
 
     git(checkout, [
@@ -1329,8 +1329,8 @@ describe("t325 atomic team Unit claims", () => {
     expect(JSON.parse(parked.stdout).reason).toContain('Unit "alpha" is parked in this checkout');
     expect(parked.stdout).not.toContain('parked at \\"\\"');
     expect(readFileSync(seededStateFile(checkout), "utf-8")).toBe(stateBefore);
-    expect(exists(join(checkout, "aidlc", ".aidlc-unit-parked"))).toBe(true);
-    rmSync(join(checkout, "aidlc", ".aidlc-unit-parked"), { force: true });
+    expect(exists(join(checkout, "aidlc", ".aidlc-engine", "units", "parked"))).toBe(true);
+    rmSync(join(checkout, "aidlc", ".aidlc-engine", "units", "parked"), { force: true });
     writeFileSync(
       seededStateFile(checkout),
       stateBefore.replace(
@@ -1343,13 +1343,13 @@ describe("t325 atomic team Unit claims", () => {
     expect(refused.status, refused.out).toBe(0);
     expect(JSON.parse(refused.stdout).kind).toBe("print");
     expect(refused.stdout).toContain("autonomous");
-    expect(exists(join(checkout, "aidlc", ".aidlc-unit-parked"))).toBe(false);
+    expect(exists(join(checkout, "aidlc", ".aidlc-engine", "units", "parked"))).toBe(false);
     // The person's stop with no reply of theirs on record is still refused.
     const asked = run(ORCH, ["park", "--person-asked"], checkout);
     expect(asked.status, asked.out).toBe(0);
     expect(JSON.parse(asked.stdout).kind).toBe("error");
     expect(asked.stdout).toContain("autonomous");
-    expect(exists(join(checkout, "aidlc", ".aidlc-unit-parked"))).toBe(false);
+    expect(exists(join(checkout, "aidlc", ".aidlc-engine", "units", "parked"))).toBe(false);
   });
 
   test("no-remote sibling worktree claim uses the shared local ref namespace", () => {
@@ -1446,11 +1446,11 @@ describe("t325 atomic team Unit claims", () => {
     ).toBe(0);
     const wt = worktreePath(checkout, fixtureIntentId8(checkout), "alpha");
     const mainCloneId = readFileSync(
-      join(checkout, "aidlc", ".aidlc-clone-id"),
+      join(checkout, "aidlc", ".aidlc-engine", "clone-id"),
       "utf-8",
     );
     const worktreeCloneId = readFileSync(
-      join(wt, "aidlc", ".aidlc-clone-id"),
+      join(wt, "aidlc", ".aidlc-engine", "clone-id"),
       "utf-8",
     );
     expect(worktreeCloneId).not.toBe(mainCloneId);
@@ -1459,7 +1459,7 @@ describe("t325 atomic team Unit claims", () => {
     const retriedFork = run(AUDIT, ["audit-fork", "--slug", "alpha"], checkout);
     expect(retriedFork.status, retriedFork.out).toBe(0);
     expect(
-      readFileSync(join(wt, "aidlc", ".aidlc-clone-id"), "utf-8"),
+      readFileSync(join(wt, "aidlc", ".aidlc-engine", "clone-id"), "utf-8"),
     ).toBe(worktreeCloneId);
     const workerEvent = run(AUDIT, [
       "append",
@@ -1752,7 +1752,7 @@ describe("t325 atomic team Unit claims", () => {
     expect(refused.out).toContain('Unit \\"gamma\\" claim was rejected by origin: ');
     expect(refused.out).toContain("You cannot push commits for 'outsider@example.org'");
     expect(refused.out).not.toContain("compare-and-swap");
-    expect(exists(join(outsider, "aidlc", ".aidlc-unit-scope.json"))).toBe(false);
+    expect(exists(join(outsider, "aidlc", ".aidlc-engine", "units", "claimed.json"))).toBe(false);
     const second = clone(remote, "second");
     const accepted = run(UNIT, ["claim", "gamma", "--team", "second"], second);
     expect(accepted.status, accepted.out).toBe(0);

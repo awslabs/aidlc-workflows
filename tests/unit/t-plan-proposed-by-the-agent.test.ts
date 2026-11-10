@@ -118,7 +118,7 @@ function createFromConfirm(proj: string, ask: Directive, env: NodeJS.ProcessEnv 
 }
 
 function questionTexts(proj: string): Array<{ id: string; text: string; proposedScope: string; origin: string; settings?: unknown; answeredBy?: string }> {
-  const dir = join(proj, "aidlc", ".aidlc-sessions", "questions");
+  const dir = join(proj, "aidlc", ".aidlc-engine", "sessions", "questions");
   if (!existsSync(dir)) return [];
   return readdirSync(dir).filter((name) => name.endsWith(".json"))
     .map((name) => JSON.parse(readFileSync(join(dir, name), "utf-8")));
@@ -496,7 +496,7 @@ describe("t-plan-proposed-by-the-agent: a request no plan was shown for is no pl
     proj = finishedProject();
     const id = unproposed(proj, [STATUS_WORDS]);
     // The copy as a release before the mark wrote it.
-    const file = join(proj, "aidlc", ".aidlc-sessions", "questions", `${id}.json`);
+    const file = join(proj, "aidlc", ".aidlc-engine", "sessions", "questions", `${id}.json`);
     const { proposal: _mark, ...before } = JSON.parse(readFileSync(file, "utf-8"));
     writeFileSync(file, `${JSON.stringify(before)}\n`);
     const chain = follow(CLAUDE_TOOLS, proj, ["push it when you are done"], "feature");
@@ -724,7 +724,7 @@ describe("t-plan-proposed-by-the-agent: a line that opens with a plan's name kee
       expect(d.kind, JSON.stringify(d).slice(0, 300)).toBe("print");
       expect(String(d.message)).toContain(`\`classic\` ${BOTH}`);
       expect(String(d.message)).toContain('which keeps every word of theirs ("classic car rental website")');
-      expect(String(d.message)).toContain("--scope classic --request-file aidlc/.aidlc-request-text/line-after-plan");
+      expect(String(d.message)).toContain("--scope classic --request-file aidlc/.aidlc-engine/request-text/line-after-plan");
       expect(String(d.message)).toContain('(the task: "car rental website")');
       expect(questionTexts(proj)).toEqual([]);
       const theirs = next(CLAUDE_TOOLS, proj, commandAfter(d.message, /--request-file aidlc\/\.aidlc-request-text\/line(?!-after)/));
@@ -773,7 +773,7 @@ describe("t-plan-proposed-by-the-agent: a line that opens with a plan's name kee
     expect(d.kind, JSON.stringify(d).slice(0, 300)).toBe("print");
     expect(d.ask_type).toBeUndefined();
     expect(String(d.message)).toContain(`\`bugfix\` ${BOTH}`);
-    expect(String(d.message)).toContain("--scope bugfix --request-file aidlc/.aidlc-request-text/line-after-plan");
+    expect(String(d.message)).toContain("--scope bugfix --request-file aidlc/.aidlc-engine/request-text/line-after-plan");
     expect(String(d.message)).toContain(`(the task: ${JSON.stringify(LINE.join(" "))})`);
     expect(questionTexts(proj)).toEqual([]);
   });

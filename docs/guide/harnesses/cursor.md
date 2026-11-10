@@ -152,7 +152,7 @@ utility shortcuts are `/aidlc-status`, `/aidlc-jump --stage <slug>` (or
   workflow, as a second session could on any harness. Cursor flags a
   background agent only on `sessionStart`, `beforeSubmitPrompt`, and
   `sessionEnd`, so the adapter records the flag in
-  `aidlc/.aidlc-cursor-subagents/` for the conversation's later stops and
+  `aidlc/.aidlc-engine/sessions/cursor-subagents/` for the conversation's later stops and
   removes it at `sessionEnd`; if the record cannot be written, the agent runs
   normally and its stops get the foreground nudge.
 - **A real session-end moment exists** (unlike Codex): `sessionEnd` fires, so
@@ -166,8 +166,8 @@ utility shortcuts are `/aidlc-status`, `/aidlc-jump --stage <slug>` (or
 - **Subagent identity is reconstructed.** Cursor emits no per-subagent identity
   on hook payloads (its `subagentStart`/`subagentStop` events are documented but
   never fire on the CLI), so the adapter maintains a protected project-local
-  runtime ledger under `aidlc/.aidlc-cursor-subagents/` plus independent
-  `aidlc/.aidlc-cursor-subagent-*.json` active-delegation witnesses. Top-level
+  runtime ledger under `aidlc/.aidlc-engine/sessions/cursor-subagents/` plus independent
+  `aidlc/.aidlc-engine/sessions/cursor-subagents/.aidlc-cursor-subagent-*.json` active-delegation witnesses. Top-level
   conversations register themselves at `sessionStart`/`beforeSubmitPrompt`
   (subagent conversations get neither event), each Task spawn records its
   agent, and reviewer read-scope enforcement attributes calls from conversations
@@ -206,7 +206,7 @@ utility shortcuts are `/aidlc-status`, `/aidlc-jump --stage <slug>` (or
   phase-framed prompt loads exactly the matching phase rule, an unrelated
   prompt loads none). The `sessionStart` hook separately
   injects live workflow context. All five rule files read
-  `aidlc/active-memory/`, the engine's git-ignored copy of the active
+  `aidlc/.aidlc-engine/active-memory/`, the engine's git-ignored copy of the active
   space's method; `/aidlc space <name>` rewrites the copy, never the rules.
 - **Construction swarm runs as task-tool fan-out only** (`AIDLC_USE_SWARM=1` is
   a loud no-op - no Workflow tool exists).

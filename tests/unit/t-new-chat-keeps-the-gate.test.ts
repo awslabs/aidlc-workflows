@@ -208,7 +208,7 @@ for (const tree of TREES) {
       says(tree, proj, SECOND, REPLY);
       // A second message of the same second whose id sorts after theirs, with no turn of its own after their reply:
       // the store alone cannot say which came last.
-      const dir = join(proj, "aidlc", ".aidlc-sessions", "messages");
+      const dir = join(proj, "aidlc", ".aidlc-engine", "sessions", "messages");
       const id = auditBlockField(rows(proj, "HUMAN_TURN").at(-1)!.block, "Message Id")!;
       const kept = JSON.parse(readFileSync(join(dir, `${id}.json`), "utf-8")) as Record<string, unknown>;
       writeFileSync(join(dir, "ffffffff.json"), `${JSON.stringify({ ...kept, id: "ffffffff", text: "older words", words: "older words" })}\n`);
@@ -221,7 +221,7 @@ for (const tree of TREES) {
       says(tree, proj, SECOND, REPLY);
       const id = auditBlockField(rows(proj, "HUMAN_TURN").at(-1)!.block, "Message Id")!;
       appendAuditEntry("SESSION_RESUMED", { Source: "resume", Session: SECOND }, proj);
-      const dir = join(proj, "aidlc", ".aidlc-sessions", "messages");
+      const dir = join(proj, "aidlc", ".aidlc-engine", "sessions", "messages");
       const kept = JSON.parse(readFileSync(join(dir, `${id}.json`), "utf-8")) as Record<string, unknown>;
       writeFileSync(join(dir, "ffffffff.json"), `${JSON.stringify({ ...kept, id: "ffffffff", text: "older words", words: "older words" })}\n`);
       readsTheirReply(next(tree, proj, SECOND));

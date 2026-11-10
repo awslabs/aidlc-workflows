@@ -136,13 +136,13 @@ describe("t157 seeded workspace shell + re-rooted .gitignore (SEED)", () => {
     for (const harness of HARNESS_MATRIX) {
       if (harness.capabilities.memoryInclude === "claude-import") {
         const stub = readFileSync(join(harness.engineRoot, "rules", "aidlc.md"), "utf-8");
-        expect(stub).toContain("@../../aidlc/active-memory/org.md");
+        expect(stub).toContain("@../../aidlc/.aidlc-engine/active-memory/org.md");
       } else if (harness.capabilities.memoryInclude === "kiro-resources") {
         const agent = JSON.parse(
           readFileSync(join(harness.engineRoot, "agents", "aidlc.json"), "utf-8"),
         ) as { resources: string[] };
         expect(agent.resources, harness.name).toContain(
-          "file://aidlc/active-memory/**/*.md",
+          "file://aidlc/.aidlc-engine/active-memory/**/*.md",
         );
       } else if (harness.capabilities.memoryInclude === "kiro-steering") {
         const steering = readFileSync(
@@ -163,14 +163,14 @@ describe("t157 seeded workspace shell + re-rooted .gitignore (SEED)", () => {
         // Copilot: the project-root AGENTS.md's @-import lines are the
         // native include (both Copilot surfaces expand @-imports).
         const agentsMd = readFileSync(harness.onboardingDist, "utf-8");
-        expect(agentsMd, harness.name).toContain("@aidlc/active-memory/org.md");
+        expect(agentsMd, harness.name).toContain("@aidlc/.aidlc-engine/active-memory/org.md");
       } else if (harness.capabilities.memoryInclude === "cursor-rule") {
         // Cursor: the alwaysApply rule lists the method files as plain paths
         // (no @-import expansion on Cursor); the sessionStart hook injects the
         // live workflow context. AGENTS.md is the auto-read rules file.
         const rule = readFileSync(join(harness.engineRoot, "rules", "aidlc.mdc"), "utf-8");
         expect(rule).toContain("alwaysApply: true");
-        expect(rule).toContain("aidlc/active-memory/org.md");
+        expect(rule).toContain("aidlc/.aidlc-engine/active-memory/org.md");
         expect(existsSync(harness.onboardingDist)).toBe(true);
       } else {
         // opencode: the instructions glob in the project-root opencode.json is
@@ -179,7 +179,7 @@ describe("t157 seeded workspace shell + re-rooted .gitignore (SEED)", () => {
           readFileSync(join(harness.distRoot, "opencode.json"), "utf-8"),
         ) as { instructions: string[] };
         expect(config.instructions, harness.name).toContain(
-          "aidlc/active-memory/**/*.md",
+          "aidlc/.aidlc-engine/active-memory/**/*.md",
         );
         expect(existsSync(harness.onboardingDist)).toBe(true);
       }

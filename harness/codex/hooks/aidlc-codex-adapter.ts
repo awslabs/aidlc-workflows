@@ -323,7 +323,7 @@ const projectEnv = { ...process.env, ...projectPins };
 // is that the agent has spoken in between, so on that seam the key also
 // carries the number of assistant messages in the Codex rollout.
 // The cache lives in the project's own gitignored scratch folder
-// (aidlc/.aidlc-sessions/codex-dedupe), never in the OS temp folder, and every
+// (aidlc/.aidlc-engine/sessions/codex-dedupe), never in the OS temp folder, and every
 // delivery that uses it prunes it: a slot is kept for 5 minutes at most (the
 // duplicate waits 2 seconds; the bound outlasts any hook's run) and at most 64
 // slots stay, so a long session never piles up folders. Failure anywhere fails

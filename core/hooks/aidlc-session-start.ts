@@ -37,8 +37,8 @@ import { runAnchor } from "../tools/aidlc-attest.ts";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import { stageGraphDrift } from "../tools/aidlc-graph.ts";
 import {
-  ACTIVE_MEMORY_DIR,
   activeMemoryCopyDrift,
+  chatActiveMemoryCopyDir,
   addRootBlocks,
   ignoreOwnWorkingFiles,
   inlineMemoryFiles,
@@ -457,12 +457,15 @@ const planNotHere = leadsPlanNotHere(projectDir);
 if (planNotHere) ignoreOwnWorkingFiles(projectDir);
 let includeRepointed = !planNotHere && addRootBlocks(projectDir).length > 0;
 let copyBehind: string[] = [];
+// The copy this chat's own include reads (an earlier release's place until the
+// refresh re-points it).
+const chatCopyDir = chatActiveMemoryCopyDir(projectDir, runtimeHarnessName(projectDir));
 try {
-  copyBehind = activeMemoryCopyDrift(projectDir, selection.space);
+  copyBehind = activeMemoryCopyDrift(projectDir, selection.space, chatCopyDir);
   const written = refreshActiveMemory(projectDir, selection.space);
-  if (!written.includes(ACTIVE_MEMORY_DIR)) copyBehind = [];
+  if (!written.includes(chatCopyDir)) copyBehind = [];
   const noOlderCopyInChat = ["kiro", "opencode", "kiro-ide"].includes(runtimeHarnessName(projectDir));
-  if (written.some((path) => path !== ACTIVE_MEMORY_DIR || !noOlderCopyInChat)) includeRepointed = true;
+  if (written.some((path) => path !== chatCopyDir || !noOlderCopyInChat)) includeRepointed = true;
 } catch {
   // non-fatal: the copy is written again at the next /aidlc, switch or --doctor
 }
@@ -480,7 +483,7 @@ let memoryHandoff = "";
 if (copyBehind.length > 0) {
   try {
     if (["claude", "copilot"].includes(runtimeHarnessName(projectDir))) {
-      const written = `The method files this chat's instructions import (${ACTIVE_MEMORY_DIR}/) were written for space ` +
+      const written = `The method files this chat's instructions import (${chatCopyDir}/) were written for space ` +
         `\`${selection.space}\` just now, after the instructions were read`;
       const inline = inlineMemoryFiles(projectDir, selection.space, copyBehind);
       memoryHandoff = inline !== null && inline.bytes <= HANDOFF_MAX_BYTES
@@ -680,7 +683,7 @@ if (eventType && process.env.AIDLC_SESSION_ANCHOR === "1") {
 // A conversation works ONE intent; the active-intent cursor is durable + shared
 // across sessions. So resuming an A-chat after the cursor moved to B would
 // inject B's context silently (vision §3, the central multi-space hazard). We
-// fix it with a per-session binding and intent stamp (aidlc/.aidlc-sessions/):
+// fix it with a per-session binding and intent stamp (aidlc/.aidlc-engine/sessions/):
 //   - On a STARTED-class event, stamp the working intent's UUID for this
 //     session so a later resume can detect a cursor drift.
 //   - On RESUMED, if the owned UUID (the binding's, else the stamp's) differs

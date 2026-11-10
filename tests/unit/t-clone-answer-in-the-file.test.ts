@@ -102,8 +102,8 @@ async function work(harness: "codex" | "claude", clone: boolean): Promise<string
   await buildState(proj, "stage-question-asked");
   if (clone) {
     rmSync(join(intentsDirOf(proj, "default"), "active-intent"), { force: true });
-    rmSync(join(proj, "aidlc", ".aidlc-sessions"), { recursive: true, force: true });
-    rmSync(join(proj, "aidlc", ".aidlc-clone-id"), { force: true });
+    rmSync(join(proj, "aidlc", ".aidlc-engine", "sessions"), { recursive: true, force: true });
+    rmSync(join(proj, "aidlc", ".aidlc-engine", "clone-id"), { force: true });
     rmSync(join(seededRecordDir(proj), ".aidlc-engine"), { recursive: true, force: true });
   }
   await laterSecond();
@@ -112,7 +112,7 @@ async function work(harness: "codex" | "claude", clone: boolean): Promise<string
 
 /** The id of the message the hook kept for `text`. */
 function messageId(proj: string, text: string): string {
-  const dir = join(proj, "aidlc", ".aidlc-sessions", "messages");
+  const dir = join(proj, "aidlc", ".aidlc-engine", "sessions", "messages");
   const ids = readdirSync(dir).filter((name) => name.endsWith(".json"))
     .map((name) => JSON.parse(readFileSync(join(dir, name), "utf-8")) as { id: string; text: string })
     .filter((message) => message.text === text).map((message) => message.id);

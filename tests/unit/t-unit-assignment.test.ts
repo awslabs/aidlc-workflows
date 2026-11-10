@@ -108,7 +108,7 @@ describe("who builds which Unit is asked once, at the home", () => {
     expect(claimPayload(home.remote, id8, "refunds")).toMatchObject({ status: "claimed", owner: "payments" });
     expect(claimPayload(home.remote, id8, "checkout-ui")).toMatchObject({ status: "claimed", owner: "web" });
     expect(claimPayload(home.remote, id8, "reporting")).toBeNull();
-    expect(existsSync(join(home.dir, "aidlc", ".aidlc-unit-scope.json"))).toBe(false);
+    expect(existsSync(join(home.dir, "aidlc", ".aidlc-engine", "units", "claimed.json"))).toBe(false);
     const rows = readAuditShardEvents(home.dir).filter((row) => row.event === "UNITS_ASSIGNED");
     expect(rows).toHaveLength(1);
     expect(rows[0].block).toContain("**Assigned**: refunds=payments, checkout-ui=web");
@@ -125,7 +125,7 @@ describe("who builds which Unit is asked once, at the home", () => {
     chooseTeams(home.dir);
     const ask = next(home.dir);
     const file = /--request-file (\S+)/.exec(String(ask.assign_command))?.[1];
-    expect(file).toBe("aidlc/.aidlc-request-text/unit-assign.txt");
+    expect(file).toBe("aidlc/.aidlc-engine/request-text/unit-assign.txt");
     const words = "payments' team takes refunds, it's $HOME's `job`";
     mkdirSync(join(home.dir, file!, ".."), { recursive: true });
     writeFileSync(join(home.dir, file!), `${words}\n`);
@@ -218,7 +218,7 @@ describe("the lead's answer is never asked for twice", () => {
       "Who builds which Unit is kept, but nothing is held for the teams yet: the lead's project could not be reached. Do you want me to try again?",
     );
     const retry = String(offer.choices[0].command);
-    expect(retry).toEndWith("aidlc-unit.ts assign refunds=payments checkout-ui=web --request-file aidlc/.aidlc-request-text/unit-assign.txt");
+    expect(retry).toEndWith("aidlc-unit.ts assign refunds=payments checkout-ui=web --request-file aidlc/.aidlc-engine/request-text/unit-assign.txt");
     git(home.dir, ["remote", "set-url", "origin", home.remote]);
     expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web", "--person-words", "yes, try again"], home.dir).status).toBe(0);
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.owner).toBe("payments");
@@ -644,11 +644,11 @@ describe("the lead's re-hold stays a hold", () => {
     const note = String(board.board_note);
     expect(note).toContain(
       "When they ask to hold a Unit for a team, run `bun .claude/tools/aidlc-unit.ts assign <unit>=<team> " +
-        "--request-file aidlc/.aidlc-request-text/unit-assign.txt`",
+        "--request-file aidlc/.aidlc-engine/request-text/unit-assign.txt`",
     );
     expect(note).toContain(
       "when they ask to leave a Unit open for any team, run `bun .claude/tools/aidlc-unit.ts assign --open <unit> " +
-        "--request-file aidlc/.aidlc-request-text/unit-assign.txt`",
+        "--request-file aidlc/.aidlc-engine/request-text/unit-assign.txt`",
     );
     expect(note).toContain("--started-here <unit>");
     expect(note).not.toContain("hand-off");

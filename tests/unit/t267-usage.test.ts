@@ -20,7 +20,7 @@
 // network. Most tests import the shipped modules in-process; the hook-routing and
 // cross-process lock regressions spawn local bun processes. Fixtures are
 // hand-authored minimal JSONL (no real transcript content) written into a temp
-// project tree whose ledger lands at <tmp>/aidlc/.aidlc-sessions/usage-ledger.json.
+// project tree whose ledger lands at <tmp>/aidlc/.aidlc-engine/sessions/usage-ledger.json.
 //
 // MECHANISM. In-process imports from the shipped dist tree (the `none` floor for
 // pure lib fns). The lib re-exports this file exercises transitively -
@@ -785,7 +785,7 @@ describe("Task 3 - updateLedger per-file cursors", () => {
 
   test("corrupt ledger on disk => loadLedger empty, updateLedger still succeeds", () => {
     const dir = mkProject();
-    mkdirSync(join(dir, "aidlc", ".aidlc-sessions"), { recursive: true });
+    mkdirSync(join(dir, "aidlc", ".aidlc-engine", "sessions"), { recursive: true });
     writeFileSync(ledgerPath(dir), "{ not json ]");
     const led = loadLedger(dir);
     expect(led.totals.tokens.output).toBe(0);
@@ -993,7 +993,7 @@ describe("Task 5 - stageUsageAuditFields", () => {
     // ledger (schemaVersion:3 + a byteOffset cursor) so the migration reset does
     // NOT discard it - the coercion path is what's under test here.
     const dir = mkProject();
-    mkdirSync(join(dir, "aidlc", ".aidlc-sessions"), { recursive: true });
+    mkdirSync(join(dir, "aidlc", ".aidlc-engine", "sessions"), { recursive: true });
     writeFileSync(
       ledgerPath(dir),
       JSON.stringify({
@@ -1304,7 +1304,7 @@ describe("Task 6 - transcript path round-trip + foldTranscriptIntoLedger", () =>
     const transcript = join(dir, "session.jsonl");
     writeFileSync(transcript, `${assistantLine({ uuid: "outside", timestamp: "t", model: "opus", input: 100 })}\n`);
     // A ledger from before the current schema: the next fold that owns the bytes rebuilds it.
-    mkdirSync(join(dir, "aidlc", ".aidlc-sessions"), { recursive: true });
+    mkdirSync(join(dir, "aidlc", ".aidlc-engine", "sessions"), { recursive: true });
     const stale = JSON.stringify({ schemaVersion: 2, cursors: {}, workflows: {} });
     writeFileSync(ledgerPath(dir), stale);
     writeSessionBinding(dir, session, "default", null, "archive");
@@ -1888,7 +1888,7 @@ describe("offset-aware fold, holdback, byteOffset", () => {
 
   test("migration: an OLD-shape ledger is discarded; fold rebuilds == a single clean fold", () => {
     const dir = mkProject();
-    mkdirSync(join(dir, "aidlc", ".aidlc-sessions"), { recursive: true });
+    mkdirSync(join(dir, "aidlc", ".aidlc-engine", "sessions"), { recursive: true });
     const transcript = join(dir, "session.jsonl");
     writeFileSync(
       transcript,
@@ -1928,7 +1928,7 @@ describe("offset-aware fold, holdback, byteOffset", () => {
 
   test("migration: a v3 ledger with byteOffset cursors is PRESERVED (not reset)", () => {
     const dir = mkProject();
-    mkdirSync(join(dir, "aidlc", ".aidlc-sessions"), { recursive: true });
+    mkdirSync(join(dir, "aidlc", ".aidlc-engine", "sessions"), { recursive: true });
     writeFileSync(
       ledgerPath(dir),
       JSON.stringify({

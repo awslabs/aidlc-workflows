@@ -135,7 +135,7 @@ function installedProject(): string {
 /** The adapter's project-local subagent ledger. Spawn records are `.json`;
  *  main-conversation markers are `.marker`. */
 function ledgerDirFor(projectDir: string): string {
-  return join(projectDir, "aidlc", ".aidlc-cursor-subagents");
+  return join(projectDir, "aidlc", ".aidlc-engine", "sessions", "cursor-subagents");
 }
 
 function ledgerFilesFor(projectDir: string, suffix = ".json"): string[] {
@@ -279,7 +279,7 @@ function registerTaskParent(projectDir: string): void {
 
 /** A chat stamped by an earlier version: its stamp stays, its binding goes. */
 function unbind(projectDir: string): void {
-  const sessions = join(projectDir, "aidlc", ".aidlc-sessions");
+  const sessions = join(projectDir, "aidlc", ".aidlc-engine", "sessions");
   for (const name of readdirSync(sessions)) {
     if (name.endsWith(".binding.json")) rmSync(join(sessions, name));
   }
@@ -907,7 +907,7 @@ describe("t276 cursor adapter payload conversion", () => {
     const b = createIntent(proj, "intent-b", "default", "feature");
     setActiveIntentCursor(proj, a.dirName, "default");
     expect(runAdapter(proj, "session-start", payload("sessionStart", proj, { session_id: undefined })).code).toBe(0);
-    const sessions = join(proj, "aidlc", ".aidlc-sessions");
+    const sessions = join(proj, "aidlc", ".aidlc-engine", "sessions");
     for (const name of readdirSync(sessions)) {
       if (name.endsWith(".binding.json")) rmSync(join(sessions, name));
     }
@@ -1227,7 +1227,7 @@ describe("t276 cursor adapter payload conversion", () => {
       .toEqual({ owner: 1, other: 0 });
     // A drop is recorded beside the completion, not under the cursor's intent.
     expect(drive((proj) => {
-      writeFileSync(join(proj, "aidlc", ".aidlc-subagent-inflight"), "{malformed");
+      writeFileSync(join(proj, "aidlc", ".aidlc-engine", "sessions", "subagent-inflight"), "{malformed");
       runAdapter(proj, "session-end", payload("sessionEnd", proj, same));
     })).toEqual({ owner: 1, other: 0, ownerDrop: true, otherDrop: false });
     // sessionEnd retires the delegation witness when the Task ledger is gone.
@@ -4682,10 +4682,10 @@ if (import.meta.main) {
       for (const command of [
         "bun -e 'x'",
         `${mint}\nbun -e 'x'`,
-        `${mint} \\\n> aidlc/.aidlc-cursor-subagents/x.json`,
+        `${mint} \\\n> aidlc/.aidlc-engine/sessions/cursor-subagents/x.json`,
         "bun --preload ./x.ts .cursor/tools/aidlc.ts engine workspace codekb-scope-diff --mint --paths ./",
-        `${mint} > aidlc/.aidlc-cursor-subagents/x.json`,
-        `rm -rf aidlc/.aidlc-cursor-subagents && ${mint}`,
+        `${mint} > aidlc/.aidlc-engine/sessions/cursor-subagents/x.json`,
+        `rm -rf aidlc/.aidlc-engine/sessions/cursor-subagents && ${mint}`,
         `FORCE=1 ${mint}`,
         "bun scratch/aidlc.ts engine workspace codekb-scope-diff --mint --paths ./",
         "bun .cursor/tools/aidlc.ts engine knowledge sync",

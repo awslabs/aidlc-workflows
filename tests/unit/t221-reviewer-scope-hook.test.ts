@@ -606,7 +606,7 @@ function seedUnitScope(
     "utf-8",
   );
   writeFileSync(
-    join(proj, "aidlc", ".aidlc-unit-scope.json"),
+    join(proj, "aidlc", ".aidlc-engine", "units", "claimed.json"),
     `${JSON.stringify({
       version: 1,
       space: "default",
@@ -629,7 +629,7 @@ function seedUnitScope(
 function seedAuditShard(proj: string): string {
   const auditDir = join(proj, "aidlc", "spaces", "default", "intents", "audit");
   mkdirSync(auditDir, { recursive: true });
-  writeFileSync(join(proj, "aidlc", ".aidlc-clone-id"), "t221clone\n", "utf-8");
+  writeFileSync(join(proj, "aidlc", ".aidlc-engine", "clone-id"), "t221clone\n", "utf-8");
   const host =
     hostname()
       .toLowerCase()
@@ -984,7 +984,7 @@ describe("t221 (b) dispatch-record lifecycle (shipped hook, subprocess)", () => 
     expect(refused.code).toBe(2);
     expect(refused.stderr).toContain("make that change from the project's main checkout");
     // The named step works: the main checkout carries no Unit stamp, and the write goes through there.
-    rmSync(join(proj, "aidlc", ".aidlc-unit-scope.json"));
+    rmSync(join(proj, "aidlc", ".aidlc-engine", "units", "claimed.json"));
     expect(runHook(proj, write).code).toBe(0);
   });
 

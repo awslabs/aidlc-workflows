@@ -25,6 +25,7 @@ import {
   isGitRepoDir,
   repoDir,
   REQUEST_TEXT_DIR,
+  REQUEST_TEXT_DIRS,
 } from "./aidlc-lib.ts";
 import { committedRecordIgnoreConflicts } from "./aidlc-gitignore.ts";
 import { workspaceSyncInvocation } from "./aidlc-runtime-paths.ts";
@@ -79,19 +80,23 @@ export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
   let requestRow: DoctorCheck | null = null;
   let requestBlocksCommit = false;
   try {
-    const trackedProc = git(["ls-files", "-z", "--", REQUEST_TEXT_DIR]);
-    const untrackedProc = git(["ls-files", "-z", "--others", "--exclude-standard", "--", REQUEST_TEXT_DIR]);
+    // This release's folder and the one an earlier release named.
+    const trackedProc = git(["ls-files", "-z", "--", ...REQUEST_TEXT_DIRS]);
+    const untrackedProc = git(["ls-files", "-z", "--others", "--exclude-standard", "--", ...REQUEST_TEXT_DIRS]);
     // Taken out of git but not committed yet: teammates still get the file.
-    const removedProc = git(["diff", "--cached", "--relative", "--no-renames", "--name-only", "-z", "--diff-filter=D", "--", REQUEST_TEXT_DIR]);
+    const removedProc = git(["diff", "--cached", "--relative", "--no-renames", "--name-only", "-z", "--diff-filter=D", "--", ...REQUEST_TEXT_DIRS]);
     // A conflicted file is listed once per stage.
     const tracked = trackedProc.exitCode === 0 ? entries(trackedProc.stdout) : [];
     const removedList = removedProc.exitCode === 0 ? entries(removedProc.stdout) : [];
     // A removed file still on disk and not ignored is counted once, as removed.
-    const untracked = untrackedProc.exitCode === 0
-      ? entries(untrackedProc.stdout).filter((path) => !removedList.includes(path)).length
-      : 0;
+    const untrackedList = untrackedProc.exitCode === 0
+      ? entries(untrackedProc.stdout).filter((path) => !removedList.includes(path))
+      : [];
+    const untracked = untrackedList.length;
     const removed = removedList.length;
     if (tracked.length + untracked + removed > 0) {
+      const first = [...tracked, ...untrackedList, ...removedList][0] ?? "";
+      const folder = REQUEST_TEXT_DIRS.find((dir) => first.startsWith(`${dir}/`)) ?? REQUEST_TEXT_DIR;
       // A file git shows as untracked is not ignored; every tracked or removed
       // one is tried against the ignore rules as if untracked.
       const tried = [...tracked, ...removedList];
@@ -110,13 +115,13 @@ export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
         ...(ignored
           ? []
           : [
-            `add the line \`${REQUEST_TEXT_DIR}/\` to the project folder's .gitignore, ` +
+            `add the line \`${folder}/\` to the project folder's .gitignore, ` +
             "and check no later rule of yours un-ignores it",
           ]),
         ...(tracked.length > 0
           ? [
             `in the project folder, take the tracked ones out of git, keeping the files: ` +
-            `\`git rm --cached -r -f -- ${REQUEST_TEXT_DIR}/\``,
+            `\`git rm --cached -r -f -- ${folder}/\``,
           ]
           : []),
         // The removal, and the ignore rule, reach teammates' clones only once
@@ -134,7 +139,7 @@ export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
       requestRow = {
         pass: false,
         severity: "warn",
-        label: `Request folder: files in ${REQUEST_TEXT_DIR}/ hold your own requests (${held.join(", ")})`,
+        label: `Request folder: files in ${folder}/ hold your own requests (${held.join(", ")})`,
         fix: steps.join(", then "),
       };
     }
@@ -166,7 +171,7 @@ export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
         "aidlc",
         // A request left for the engine is the person's words, never a shared
         // record; the request-folder row names it instead.
-        `:(exclude)${REQUEST_TEXT_DIR}`,
+        ...REQUEST_TEXT_DIRS.map((dir) => `:(exclude)${dir}`),
       ],
       // The exclude is pathspec magic, which a literal-pathspec setting turns off.
       env: { ...process.env, GIT_LITERAL_PATHSPECS: "0" },

@@ -468,6 +468,24 @@ describe("Kiro CLI and opencode: the host sends the memory files with every requ
     expect(sentInFull(await next(proj, "opencode", { AIDLC_SESSION_OVERRIDE: fresh, OPENCODE: "1" }))).toBe(true);
   });
 
+  // Right after an update, opencode.json still names the copy where the
+  // earlier release kept it. The engine writes that copy until the refresh
+  // re-points the include and then removes it, so a chat on that include is
+  // never sent a pointer to it: it gets the text.
+  test("opencode: an earlier release's instructions glob gets the text, never the pointer", async () => {
+    const proj = await projectFor("opencode");
+    const config = join(proj, "opencode.json");
+    const parsed = JSON.parse(readFileSync(config, "utf-8")) as { instructions: string[] };
+    writeFileSync(config, JSON.stringify({
+      ...parsed,
+      instructions: parsed.instructions.map((entry) => entry.replace("aidlc/.aidlc-engine/active-memory/", "aidlc/.aidlc-engine/active-memory/")),
+    }));
+    const sid = randomUUID();
+    await sessionStart(proj, "opencode", sid, "startup");
+    expect(sentInFull(await next(proj, "opencode", { AIDLC_SESSION_OVERRIDE: sid, OPENCODE: "1" }))).toBe(true);
+    expect(sentInFull(await next(proj, "opencode", { AIDLC_SESSION_OVERRIDE: sid, OPENCODE: "1" }))).toBe(true);
+  });
+
   // A team that keeps opencode.jsonc writes comments and trailing commas in
   // it; the include proof reads that file as jsonc, so the pointer still
   // replaces the text once the chat holds it.
@@ -636,7 +654,7 @@ describe("Kiro IDE: the chat holds the steering file it captured when it started
     await kiroIdePrompt(proj, sid);
     expect(sentInFull(await next(proj, "kiro-ide", inKiroIde(sid)))).toBe(true);
     expect(pointerOnly(await next(proj, "kiro-ide", inKiroIde(sid)))).toBe(true);
-    const record = join(proj, "aidlc", ".aidlc-sessions", `${sid}.rules-delivered.json`);
+    const record = join(proj, "aidlc", ".aidlc-engine", "sessions", `${sid}.rules-delivered.json`);
     const card = (tool: string, command: string) =>
       kiroIdeHook(proj, "guard-tool-call", {
         hook_event_name: "PreToolUse",
@@ -718,10 +736,10 @@ describe("Kiro IDE: the chat holds the steering file it captured when it started
   // that chat holds.
   test("a memory copy written at a chat's start is not a reload of its steering file", async () => {
     const proj = await kiroIdeProject();
-    rmSync(join(proj, "aidlc", "active-memory", "org.md"));
+    rmSync(join(proj, "aidlc", ".aidlc-engine", "active-memory", "org.md"));
     const sid = kiroChat();
     await kiroIdePrompt(proj, sid);
-    expect(existsSync(join(proj, "aidlc", "active-memory", "org.md"))).toBe(true);
+    expect(existsSync(join(proj, "aidlc", ".aidlc-engine", "active-memory", "org.md"))).toBe(true);
     expect(sentInFull(await next(proj, "kiro-ide", inKiroIde(sid)))).toBe(true);
     expect(pointerOnly(await next(proj, "kiro-ide", inKiroIde(sid)))).toBe(true);
     await kiroIdeStop(proj, sid);
@@ -869,7 +887,7 @@ describe("the conductor persona reaches every chat that works on the workflow", 
     // A project whose session records were never written (hooks off for a
     // launch, a fresh clone): the record is created, so the persona is handed
     // over once and not on every step.
-    rmSync(join(proj, "aidlc", ".aidlc-sessions"), { recursive: true, force: true });
+    rmSync(join(proj, "aidlc", ".aidlc-engine", "sessions"), { recursive: true, force: true });
     expect(personaSent(await next(proj, "claude", env))).toBe(true);
     expect(personaSent(await next(proj, "claude", env))).toBe(false);
 

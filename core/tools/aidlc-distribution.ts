@@ -1591,6 +1591,7 @@ function entryAddress(id: string): { path: string[]; item?: string } | null {
 function aidlcOwnEntry(entry: Pick<JsonEntry, "path" | "item">): boolean {
   return [...entry.path, ...(entry.item === undefined ? [] : [entry.item])].some((part) =>
     part.includes(".aidlc/") || part.startsWith("aidlc/spaces/") || part.startsWith("aidlc/active-memory/") ||
+    part.startsWith("aidlc/.aidlc-engine/") ||
     part.startsWith("aidlc ")
   );
 }

@@ -101,7 +101,7 @@ const BUN = process.execPath;
 // state file to exist.
 const PINNED_CLONE_ID = "testcloneid125";
 function pinClone(proj: string): void {
-  writeFileSync(join(proj, "aidlc", ".aidlc-clone-id"), `${PINNED_CLONE_ID}\n`, "utf-8");
+  writeFileSync(join(proj, "aidlc", ".aidlc-engine", "clone-id"), `${PINNED_CLONE_ID}\n`, "utf-8");
 }
 
 // Seed a fresh temp project: aidlc-state.md from a fixture into the default

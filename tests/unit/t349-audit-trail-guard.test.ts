@@ -191,8 +191,8 @@ describe("t349 audit trail guard: file-write tools", () => {
       }
       return out;
     };
-    expect(captured({ tool_name: "Write", tool_input: { file_path: "aidlc/.aidlc-sessions/foo.json" } }))
-      .toContain("Matched: aidlc/.aidlc-sessions/foo.json.");
+    expect(captured({ tool_name: "Write", tool_input: { file_path: "aidlc/.aidlc-engine/sessions/foo.json" } }))
+      .toContain("Matched: aidlc/.aidlc-engine/sessions/foo.json.");
     expect(captured({
       tool_name: "Write",
       tool_input: {
@@ -213,8 +213,8 @@ describe("t349 audit trail guard: file-write tools", () => {
   });
 
   test("runtime records still classify as runtime, ahead of the audit class", () => {
-    expect(kind("Write", { file_path: "aidlc/.aidlc-sessions/foo.json" })).toBe("runtime");
-    expect(bash("echo x > aidlc/.aidlc-sessions/foo.json")).toBe("runtime");
+    expect(kind("Write", { file_path: "aidlc/.aidlc-engine/sessions/foo.json" })).toBe("runtime");
+    expect(bash("echo x > aidlc/.aidlc-engine/sessions/foo.json")).toBe("runtime");
     expect(violatesRuntimeIntegrity({
       hook_event_name: "PreToolUse",
       tool_name: "Write",
@@ -247,8 +247,8 @@ describe("t349 audit trail guard: shell commands", () => {
       `bash -c 'echo x >> ${SHARD}'`,
       `sh -c "printf x >> ${SHARD}"`,
       // The live incident: a shard named by a command substitution.
-      `echo x >> ${AUDIT}/$(cat aidlc/.aidlc-clone-id).md`,
-      `echo x >> "${AUDIT}/$(hostname)-$(cat aidlc/.aidlc-clone-id).md"`,
+      `echo x >> ${AUDIT}/$(cat aidlc/.aidlc-engine/clone-id).md`,
+      `echo x >> "${AUDIT}/$(hostname)-$(cat aidlc/.aidlc-engine/clone-id).md"`,
       // Quoted Windows spellings and the PowerShell cmdlets the parser knows.
       `Set-Content -Path 'C:\\proj\\aidlc\\spaces\\default\\intents\\260925-login\\audit\\host.md' -Value y`,
       `Add-Content -Path "C:\\proj\\aidlc\\spaces\\default\\intents\\260925-login\\audit\\host.md" -Value y`,

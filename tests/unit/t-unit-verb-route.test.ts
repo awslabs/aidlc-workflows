@@ -106,9 +106,9 @@ describe("a Unit command typed after /aidlc reaches that command", () => {
     // The gate's words travel in a request file the gate reads (t-words-travel-in-a-file).
     expectUnitCommandStep(
       nextFrom(kiroIde, ['unit gate alpha --decision approve --user-input "ship it"']),
-      `${kiroIde.invoke} unit gate alpha --decision approve --request-file aidlc/.aidlc-request-text/gate-alpha.txt`,
+      `${kiroIde.invoke} unit gate alpha --decision approve --request-file aidlc/.aidlc-engine/request-text/gate-alpha.txt`,
     );
-    expect(readFileSync(join(projectWithWork(), "aidlc", ".aidlc-request-text", "gate-alpha.txt"), "utf-8")).toBe("ship it");
+    expect(readFileSync(join(projectWithWork(), "aidlc", ".aidlc-engine", "request-text", "gate-alpha.txt"), "utf-8")).toBe("ship it");
   });
 
   test("the entry word handed on as an argument is how they reached AI-DLC, not part of the command", () => {

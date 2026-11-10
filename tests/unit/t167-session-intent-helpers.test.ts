@@ -6,7 +6,7 @@
 // per-user session record + the intent registry, so they're directly callable.
 //
 //   - writeSessionIntentUuid / readSessionIntentUuid — the per-conversation
-//     stamp at aidlc/.aidlc-sessions/<session_id>. A round-trip returns the
+//     stamp at aidlc/.aidlc-engine/sessions/<session_id>. A round-trip returns the
 //     stamped uuid; an unstamped session id returns null; a blank session id /
 //     blank uuid is a no-op (never writes a stray file).
 //   - activeIntentUuid — the uuid of the active intent (cursor / lone), or null
@@ -52,7 +52,7 @@ describe("t167 session→intent helpers (mechanism none — pure in-process)", (
   test("a blank session id never writes a stray record (no-op)", () => {
     writeSessionIntentUuid(proj, "", "uuid-x");
     // Only the fixture's own no-git record (tests/harness/fixtures.ts) is there.
-    expect(readdirSync(join(proj, "aidlc", ".aidlc-sessions"))).toEqual(["no-git-said"]);
+    expect(readdirSync(join(proj, "aidlc", ".aidlc-engine", "sessions"))).toEqual(["no-git-said"]);
   });
 
   test("a blank uuid is a no-op (does not clear/create)", () => {

@@ -163,7 +163,7 @@ function pickMany(proj: string, questions: string[], answers: Record<string, str
 }
 
 function messagesDir(proj: string): string {
-  return join(proj, "aidlc", ".aidlc-sessions", "messages");
+  return join(proj, "aidlc", ".aidlc-engine", "sessions", "messages");
 }
 
 // Read without the store module, so a red run fails on what is asserted, not on an import.
@@ -348,7 +348,7 @@ describe("the human-turn hook keeps one record of each message", () => {
     const proj = withWork();
     const outside = join(tmpdir(), `aidlc-message-link-${process.pid}-${Date.now()}`);
     mkdirSync(outside, { recursive: true });
-    mkdirSync(join(proj, "aidlc", ".aidlc-sessions"), { recursive: true });
+    mkdirSync(join(proj, "aidlc", ".aidlc-engine", "sessions"), { recursive: true });
     symlinkSync(outside, messagesDir(proj));
     say(proj, "approve");
     expect(readdirSync(outside)).toEqual([]);

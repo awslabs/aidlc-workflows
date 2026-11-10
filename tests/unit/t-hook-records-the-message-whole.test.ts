@@ -87,7 +87,7 @@ function openWork(
   writeFileSync(seededStateFile(proj), state, "utf-8");
   mkdirSync(join(proj, "src"), { recursive: true });
   writeFileSync(join(proj, "src", "base.ts"), "export const base = true;\n", "utf-8");
-  const sessions = join(proj, "aidlc", ".aidlc-sessions");
+  const sessions = join(proj, "aidlc", ".aidlc-engine", "sessions");
   mkdirSync(sessions, { recursive: true });
   writeFileSync(join(sessions, ".current-session"), `${SESSION}\n`, "utf-8");
   return proj;

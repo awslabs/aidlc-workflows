@@ -179,7 +179,7 @@ function scratchProject(tree: Tree): { dir: string; home: string } {
   seedShell(dir);
   seedAidlcMemory(dir);
   writeFileSync(seededStateFile(dir), readFileSync(join(REPO_ROOT, "tests", "fixtures", "state-mid-ideation.md"), "utf-8"));
-  writeFileSync(join(dir, "aidlc", ".aidlc-clone-id"), `${PINNED_CLONE_ID}\n`, "utf-8");
+  writeFileSync(join(dir, "aidlc", ".aidlc-engine", "clone-id"), `${PINNED_CLONE_ID}\n`, "utf-8");
   mkdirSync(seededAuditDir(dir), { recursive: true });
   writeFileSync(join(seededAuditDir(dir), pinnedShardName()), "# AI-DLC Audit Log\n");
   const home = join(dir, "home");
@@ -219,7 +219,7 @@ const hostTurns = (dir: string): string[] => rows(dir, "HOST_TURN");
 const approvals = (dir: string): number => rows(dir, "GATE_APPROVED").length;
 // The message records the hook keeps for the person's messages (aidlc-message-store.ts).
 function messageRecords(dir: string): number {
-  const store = join(dir, "aidlc", ".aidlc-sessions", "messages");
+  const store = join(dir, "aidlc", ".aidlc-engine", "sessions", "messages");
   return existsSync(store) ? readdirSync(store).filter((name) => name.endsWith(".json")).length : 0;
 }
 
@@ -429,7 +429,7 @@ describe("a prompt the host injected is not the person's turn", () => {
     try {
       const chat = "sess_cb1ae1f6-2806-42b4-883e-de7b71038a41";
       const step = "sess_9fca3eb1-f75c-48f3-909d-2b41e414ab15";
-      const sessions = join(project.dir, "aidlc", ".aidlc-sessions");
+      const sessions = join(project.dir, "aidlc", ".aidlc-engine", "sessions");
       const currentSession = join(sessions, ".kiro-ide-current-session");
       const submit = (session: string, prompt: string) =>
         run(project, [join(project.dir, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), "record-human-turn"],
@@ -919,7 +919,7 @@ describe("a message typed while Kiro CLI works is the person's turn", () => {
       JSON.stringify({ hook_event_name: "preToolUse", cwd: project.dir, session_id: chat, tool_name: "shell", tool_input: { command } }),
       { KIRO_SESSION_ID: chat });
   const keptWords = (dir: string): string[] => {
-    const store = join(dir, "aidlc", ".aidlc-sessions", "messages");
+    const store = join(dir, "aidlc", ".aidlc-engine", "sessions", "messages");
     return existsSync(store)
       ? readdirSync(store).filter((name) => name.endsWith(".json"))
         .map((name) => String((JSON.parse(readFileSync(join(store, name), "utf-8")) as { text?: unknown }).text ?? ""))
@@ -1022,7 +1022,7 @@ describe("a message typed while Kiro CLI v3 works is the person's turn", () => {
   // Their words, in the order of the HUMAN_TURN rows that name them (a kept
   // message's time is to the second, too coarse to order two).
   const keptWords = (dir: string): string[] => {
-    const store = join(dir, "aidlc", ".aidlc-sessions", "messages");
+    const store = join(dir, "aidlc", ".aidlc-engine", "sessions", "messages");
     if (!existsSync(store)) return [];
     const kept = readdirSync(store).filter((name) => name.endsWith(".json"))
       .map((name) => JSON.parse(readFileSync(join(store, name), "utf-8")) as { id?: unknown; text?: unknown });

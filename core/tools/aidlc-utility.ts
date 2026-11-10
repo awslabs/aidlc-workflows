@@ -6028,8 +6028,8 @@ export async function collectDoctorReport(
         : `${subagents.freshCount} fresh, ${subagents.staleCount} stale, oldest ${ageLabel}`;
       results.push({
         pass: !subagents.malformed && subagents.staleCount === 0,
-        label: `Background-subagent ledger present (aidlc/.aidlc-subagent-inflight, ${countLabel})`,
-        fix: "if no background subagent is actually running, delete it ('rm aidlc/.aidlc-subagent-inflight'). Stale or malformed entries never authorize the Stop hook, but the ledger should not linger.",
+        label: `Background-subagent ledger present (aidlc/.aidlc-engine/sessions/subagent-inflight, ${countLabel})`,
+        fix: "if no background subagent is actually running, delete it in your own terminal ('rm aidlc/.aidlc-engine/sessions/subagent-inflight'). Stale or malformed entries never authorize the Stop hook, but the ledger should not linger.",
       });
     }
   } catch {
@@ -6127,7 +6127,7 @@ export async function collectDoctorReport(
           label:
             `Unit claim stamp stale: ${stamp.unit} generation ${stamp.generation} is tombstoned or superseded`,
           fix:
-            `the checkout stamp may linger after release; preserve any useful work, then delete ${join("aidlc", ".aidlc-unit-scope.json")} and re-claim explicitly`,
+            `the checkout stamp may linger after release; preserve any useful work, then delete ${join("aidlc", ".aidlc-engine", "units", "claimed.json")} and re-claim explicitly`,
         });
       }
     }

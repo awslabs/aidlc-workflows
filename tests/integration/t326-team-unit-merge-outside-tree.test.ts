@@ -26,7 +26,7 @@ afterEach(cleanupTempDirs);
 
 function claimTip(checkout: string): string {
   const { claim_ref } = JSON.parse(
-    readFileSync(join(checkout, "aidlc", ".aidlc-unit-scope.json"), "utf-8"),
+    readFileSync(join(checkout, "aidlc", ".aidlc-engine", "units", "claimed.json"), "utf-8"),
   ) as { claim_ref: string };
   return git(checkout, ["ls-remote", "origin", claim_ref]).split(/\s+/)[0] ?? "";
 }

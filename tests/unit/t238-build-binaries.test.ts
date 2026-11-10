@@ -755,13 +755,13 @@ describe("t238 build-binaries release builder", () => {
       cpSync(join(copyRoot, "runtime", "kiro"), kiroThenClaude, { recursive: true });
       sessionStart(".kiro");
       const kiroIgnore = readFileSync(join(kiroThenClaude, ".gitignore"), "utf-8");
-      expect(kiroIgnore).toContain("aidlc/.aidlc-turn-counter");
+      expect(kiroIgnore).toContain("aidlc/.aidlc-engine/sessions/kiro-turn-counter");
       cpSync(join(copyRoot, "runtime", "claude"), kiroThenClaude, { recursive: true });
       expect(readFileSync(join(kiroThenClaude, ".gitignore"), "utf-8")).toBe(kiroIgnore);
       sessionStart(".claude");
       expect(readFileSync(join(kiroThenClaude, ".gitignore"), "utf-8")).toStartWith("node_modules\n");
       expect(spawnSync("git", ["init", "-q"], { cwd: kiroThenClaude }).status).toBe(0);
-      for (const path of ["aidlc/.aidlc-turn-counter", "aidlc/.aidlc-readonly-latch", ".claude/settings.local.json"]) {
+      for (const path of ["aidlc/.aidlc-engine/sessions/kiro-turn-counter", "aidlc/.aidlc-engine/sessions/kiro-readonly-latch", ".claude/settings.local.json"]) {
         expect(spawnSync("git", ["check-ignore", "-q", path], { cwd: kiroThenClaude }).status, path).toBe(0);
       }
 

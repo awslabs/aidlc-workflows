@@ -30,13 +30,13 @@ describe("a Unit merge decision in the person's words, from a request file", () 
     const pin = runMergeTool(UNIT, ["pin", "alpha"], seed);
     expect(pin.status, pin.out).toBe(0);
     replyAfterPin(seed, "alpha");
-    const folder = join(seed, "aidlc", ".aidlc-request-text");
+    const folder = join(seed, "aidlc", ".aidlc-engine", "request-text");
     mkdirSync(folder, { recursive: true });
     const file = join(folder, "gate-alpha.txt");
     writeFileSync(file, WORDS, "utf-8");
     const quote = (value: string) => `'${value}'`;
     const both = runMergeTool(UNIT, [
-      "gate", "alpha", "--decision", "reject", "--user-input", "Reject", "--request-file", "aidlc/.aidlc-request-text/gate-alpha.txt",
+      "gate", "alpha", "--decision", "reject", "--user-input", "Reject", "--request-file", "aidlc/.aidlc-engine/request-text/gate-alpha.txt",
     ], seed);
     expect(both.status).not.toBe(0);
     expect(both.out).toContain("Pass either --user-input or --request-file, not both.");
@@ -44,7 +44,7 @@ describe("a Unit merge decision in the person's words, from a request file", () 
     const run = spawnSync(process.platform === "win32" ? gitBashPath() : "bash", [
       "-c",
       `${[process.execPath, UNIT].map(quote).join(" ")} gate alpha --decision reject ` +
-        "--request-file aidlc/.aidlc-request-text/gate-alpha.txt",
+        "--request-file aidlc/.aidlc-engine/request-text/gate-alpha.txt",
     ], {
       cwd: seed,
       encoding: "utf-8",
@@ -60,7 +60,7 @@ describe("a Unit merge decision in the person's words, from a request file", () 
     const { seed, remote } = makeSeed();
     prepareCandidate(remote, "alpha", "gate-words-pin");
     // A reply left from an earlier gate of this Unit answers nothing this pin asks.
-    const folder = join(seed, "aidlc", ".aidlc-request-text");
+    const folder = join(seed, "aidlc", ".aidlc-engine", "request-text");
     mkdirSync(folder, { recursive: true });
     writeFileSync(join(folder, "gate-alpha.txt"), "Approve", "utf-8");
     const pin = runMergeTool(UNIT, ["pin", "alpha"], seed);

@@ -265,7 +265,7 @@ function scratchProject(withState: boolean): string {
       seededStateFile(dir),
       readFileSync(join(REPO_ROOT, "tests", "fixtures", "state-brownfield-feature.md"), "utf-8"),
     );
-    writeFileSync(join(dir, "aidlc", ".aidlc-clone-id"), `${PINNED_CLONE_ID}\n`, "utf-8");
+    writeFileSync(join(dir, "aidlc", ".aidlc-engine", "clone-id"), `${PINNED_CLONE_ID}\n`, "utf-8");
     const auditDir = seededAuditDir(dir);
     mkdirSync(auditDir, { recursive: true });
     writeFileSync(join(auditDir, pinnedShardName()), "# AI-DLC Audit Log\n");
@@ -706,7 +706,7 @@ function keptWords(dir: string): string {
 
 // The text of every message record the human-turn hook kept.
 function messageRecordTexts(dir: string): string[] {
-  const messages = join(dir, "aidlc", ".aidlc-sessions", "messages");
+  const messages = join(dir, "aidlc", ".aidlc-engine", "sessions", "messages");
   return existsSync(messages)
     ? readdirSync(messages).map((name) => String((JSON.parse(readFileSync(join(messages, name), "utf-8")) as { text?: unknown }).text))
     : [];
@@ -714,7 +714,7 @@ function messageRecordTexts(dir: string): string[] {
 
 // The record of the last Stop note the adapter sent to a chat.
 function stopNotePath(dir: string, session: string): string {
-  return join(dir, "aidlc", ".aidlc-sessions", `${session}.copilot-stop-note`);
+  return join(dir, "aidlc", ".aidlc-engine", "sessions", `${session}.copilot-stop-note`);
 }
 
 // A Stop that blocks in this chat; its reason is what Copilot sends back. The
@@ -4802,7 +4802,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const chat = String(FIXTURES.preToolUse_task.session_id);
     const agent = "aidlc-architecture-reviewer-agent";
     const messageTexts = (): string[] => {
-      const messages = join(dir, "aidlc", ".aidlc-sessions", "messages");
+      const messages = join(dir, "aidlc", ".aidlc-engine", "sessions", "messages");
       return existsSync(messages)
         ? readdirSync(messages).map((name) => String((JSON.parse(readFileSync(join(messages, name), "utf-8")) as { text?: unknown }).text))
         : [];
@@ -5473,7 +5473,7 @@ describe("the subagent's id belongs to the chat, and a per-call id is no chat", 
   const SUBAGENT_CALL = "toolu_sub_0001";
   function helperOf(dir: string, id: string): string | null {
     try {
-      return readFileSync(join(dir, "aidlc", ".aidlc-sessions", `${id}.helper-of`), "utf-8").trim();
+      return readFileSync(join(dir, "aidlc", ".aidlc-engine", "sessions", `${id}.helper-of`), "utf-8").trim();
     } catch {
       return null;
     }
@@ -5481,7 +5481,7 @@ describe("the subagent's id belongs to the chat, and a per-call id is no chat", 
   function heartbeat(dir: string): string | null {
     try {
       return (JSON.parse(
-        readFileSync(join(dir, "aidlc", ".aidlc-sessions", "copilot-heartbeat.json"), "utf-8"),
+        readFileSync(join(dir, "aidlc", ".aidlc-engine", "sessions", "copilot-heartbeat.json"), "utf-8"),
       ) as { session_id?: string }).session_id ?? null;
     } catch {
       return null;

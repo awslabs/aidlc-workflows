@@ -420,7 +420,7 @@ from there:
 ```bash
 aidlc unit gate payments \
   --decision approve \
-  --request-file aidlc/.aidlc-request-text/gate-payments.txt
+  --request-file aidlc/.aidlc-engine/request-text/gate-payments.txt
 ```
 
 An approval's output names the land command, run in the same turn with no

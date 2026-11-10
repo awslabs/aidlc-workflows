@@ -719,7 +719,7 @@ describe("the reply file and its pointer under Command Prompt", () => {
   test("a recorded Command Prompt without a settings file still tees, and the newest twenty replies are kept", () => {
     const m = machine();
     const dir = project();
-    const replies = join(dir, "aidlc", ".aidlc-sessions", "replies");
+    const replies = join(dir, "aidlc", ".aidlc-engine", "sessions", "replies");
     mkdirSync(replies, { recursive: true });
     for (let i = 10; i < 35; i++) writeFileSync(join(replies, `0000000${i}-1.txt`), "old\n");
     const r = run(["version"], dir, inTerminal(m, "cmd"));

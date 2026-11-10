@@ -6074,9 +6074,9 @@ describe("t243 project initialization", () => {
     const source = temp("aidlc-t240-polluted-runtime-");
     cpSync(KIRO_IDE_RELEASE, source, { recursive: true });
     const state = [
-      "aidlc/.aidlc-clone-id",
-      "aidlc/.aidlc-sessions/.kiro-ide-current-session",
-      "aidlc/.aidlc-sessions/kiro-terminal/0123abcd/turn",
+      "aidlc/.aidlc-engine/clone-id",
+      "aidlc/.aidlc-engine/sessions/.kiro-ide-current-session",
+      "aidlc/.aidlc-engine/sessions/kiro-terminal/0123abcd/turn",
       "aidlc/spaces/default/intents/.aidlc-engine/hooks-health/plan-approval-guard.last",
       "aidlc/spaces/default/intents/.aidlc-engine/hooks-health/kiro-adapter.drops",
     ];
@@ -6098,16 +6098,16 @@ describe("t243 project initialization", () => {
     const baseline = JSON.parse(readFileSync(manifest, "utf-8")) as { files: Record<string, string> };
     expect(Object.keys(baseline.files).filter((rel) => state.includes(rel))).toEqual([]);
 
-    const cloneId = join(project, "aidlc", ".aidlc-clone-id");
+    const cloneId = join(project, "aidlc", ".aidlc-engine", "clone-id");
     writeFileSync(cloneId, "project clone id\n");
-    baseline.files["aidlc/.aidlc-clone-id"] = sha256Bytes(readFileSync(cloneId));
+    baseline.files["aidlc/.aidlc-engine/clone-id"] = sha256Bytes(readFileSync(cloneId));
     writeFileSync(manifest, `${JSON.stringify(baseline, null, 2)}\n`);
     const refreshed = config(KIRO_IDE_RELEASE);
     expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
     expect(readFileSync(cloneId, "utf-8")).toBe("project clone id\n");
     expect(
       (JSON.parse(readFileSync(manifest, "utf-8")) as { files: Record<string, string> })
-        .files["aidlc/.aidlc-clone-id"],
+        .files["aidlc/.aidlc-engine/clone-id"],
     ).toBeUndefined();
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

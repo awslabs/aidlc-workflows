@@ -158,7 +158,7 @@ function pinnedShardName(): string {
 /** Pin the clone-id + create the resolved audit shard so the SESSION_COMPACTED
  *  gate (existsSync(auditFilePath)) passes; returns the audit DIR. */
 function seedAuditShard(p: string): string {
-  writeFileSync(join(p, "aidlc", ".aidlc-clone-id"), `${PINNED_CLONE_ID}\n`, "utf-8");
+  writeFileSync(join(p, "aidlc", ".aidlc-engine", "clone-id"), `${PINNED_CLONE_ID}\n`, "utf-8");
   const auditDir = seededAuditDir(p);
   mkdirSync(auditDir, { recursive: true });
   writeFileSync(join(auditDir, pinnedShardName()), "", "utf-8");

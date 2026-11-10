@@ -211,7 +211,7 @@ describe("t-second-chat-batch-in-flight: a batch another chat is building is tha
   test("a batch a teammate's clone started is not called your other chat", () => {
     const pd = firstChatBuilds();
     // This checkout now writes a shard of its own: every row so far is another clone's.
-    writeFileSync(join(pd, "aidlc", ".aidlc-clone-id"), "teammate0002\nhost\n");
+    writeFileSync(join(pd, "aidlc", ".aidlc-engine", "clone-id"), "teammate0002\nhost\n");
     expect(next(pd, SECOND)).toMatchObject({ kind: "invoke-swarm", units: UNITS });
   });
 

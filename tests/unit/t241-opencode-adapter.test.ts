@@ -58,8 +58,8 @@ const TEST_ENTRYPOINTS = new Set([
 const scratch: string[] = [];
 // A request the launcher cannot carry goes through the file `next` reads.
 const REQUEST_FILE_STEP =
-  "with your file tool to aidlc/.aidlc-request-text/request.txt in this project, and run the same command with " +
-  "--request-file aidlc/.aidlc-request-text/request.txt in place of the request's words";
+  "with your file tool to aidlc/.aidlc-engine/request-text/request.txt in this project, and run the same command with " +
+  "--request-file aidlc/.aidlc-engine/request-text/request.txt in place of the request's words";
 
 afterEach(() => {
   for (const dir of scratch.splice(0)) {

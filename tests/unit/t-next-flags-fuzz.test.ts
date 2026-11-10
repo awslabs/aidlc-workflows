@@ -551,7 +551,7 @@ describe("the engine routes a seeded slice of those lines", () => {
     return proj;
   }
 
-  const questionDir = (proj: string) => join(proj, "aidlc", ".aidlc-sessions", "questions");
+  const questionDir = (proj: string) => join(proj, "aidlc", ".aidlc-engine", "sessions", "questions");
 
   function questionIds(proj: string): string[] {
     const dir = questionDir(proj);
@@ -866,7 +866,7 @@ describe("a line of settings and words at the open code plan question", () => {
     writeFileSync(seededStateFile(proj), state, "utf-8");
     mkdirSync(join(proj, "src"), { recursive: true });
     writeFileSync(join(proj, "src", "base.ts"), "export const base = true;\n", "utf-8");
-    const sessions = join(proj, "aidlc", ".aidlc-sessions");
+    const sessions = join(proj, "aidlc", ".aidlc-engine", "sessions");
     mkdirSync(sessions, { recursive: true });
     writeFileSync(join(sessions, ".current-session"), `${SESSION}\n`, "utf-8");
     const stage = join(proj, "aidlc", "spaces", "default", "intents");

@@ -36,7 +36,7 @@ setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const NO_GIT = "This project has no git, so AI-DLC can't undo the changes it makes to your files; " +
   "to get an undo, run `git init` and commit them.";
-const SAID = join("aidlc", ".aidlc-sessions", "no-git-said");
+const SAID = join("aidlc", ".aidlc-engine", "sessions", "no-git-said");
 const BUN = process.execPath;
 const AIDLC = join(AIDLC_SRC, "tools", "aidlc.ts");
 const SESSION = "01995000-7a11-7000-8000-00000000a0b1";

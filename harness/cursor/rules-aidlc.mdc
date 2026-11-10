@@ -14,7 +14,7 @@ alwaysApply: true
   Instead it instructs the agent to read the standing org/team/project layers.
   The four phase pointers beside this file are agent-decided rules, so phase
   guidance is loaded when relevant instead of on every Cursor turn. The paths
-  name aidlc/active-memory/, AI-DLC's git-ignored copy of the ACTIVE
+  name aidlc/.aidlc-engine/active-memory/, AI-DLC's git-ignored copy of the ACTIVE
   space's memory files, which the engine writes at session start, on a space
   switch, and with each step whose rules it sends; so these rule files are the
   same for every teammate and never change after install.
@@ -28,9 +28,9 @@ files listed below (org -> team -> project; strict-additive). Read them before
 acting on AIDLC work, and honour them in casual chat that touches process,
 practices, or workflow questions:
 
-- aidlc/active-memory/org.md
-- aidlc/active-memory/team.md
-- aidlc/active-memory/project.md
+- aidlc/.aidlc-engine/active-memory/org.md
+- aidlc/.aidlc-engine/active-memory/team.md
+- aidlc/.aidlc-engine/active-memory/project.md
 
 If every tool call here is refused before it runs, AI-DLC cannot start in
 this Cursor window, and nothing you retry will get through. Stop and tell the

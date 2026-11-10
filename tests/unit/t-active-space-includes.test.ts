@@ -1,7 +1,7 @@
 // covers: function:refreshActiveMemory, function:refreshActiveMemoryCopy, function:activeMemoryCopyDrift, function:addRootBlocks, function:kiroIdeSteering
 //
 // t-active-space-includes: every harness's native rule include reads ONE fixed,
-// git-ignored location, aidlc/active-memory/ (ACTIVE_MEMORY_DIR), and
+// git-ignored location, aidlc/.aidlc-engine/active-memory/ (ACTIVE_MEMORY_DIR), and
 // the engine writes the active space's memory files into it. So a space switch
 // changes no tracked file: the includes are the same for every teammate, and
 // each person's copy follows their own gitignored active-space cursor.
@@ -51,7 +51,9 @@ const distSurface = (h: string, ...parts: string[]): string =>
   join(REPO_ROOT, "dist", h, ...parts);
 const portablePaths = (paths: string[]): string[] =>
   paths.map((path) => path.replaceAll("\\", "/"));
-const COPY = "aidlc/active-memory";
+const COPY = "aidlc/.aidlc-engine/active-memory";
+// Where an earlier release's includes read the copy.
+const EARLIER_COPY = "aidlc/active-memory";
 const MEMORY_FILES = [
   "org.md",
   "team.md",
@@ -218,6 +220,29 @@ describe("t-active-space-includes: refreshActiveMemory writes the space's memory
     expect(activeMemoryCopyDrift(root, "teamB").sort()).toEqual(["notes.md", "org.md", "phases/ideation.md", "team.md"]);
   });
 
+  // Right after `aidlc update` a chat already open runs this release on the
+  // earlier release's harness files: the copy goes where their include reads
+  // it until the refresh re-points it, and then the earlier copy goes (only
+  // what AI-DLC wrote there).
+  test("an earlier release's include gets the copy where it reads it; once none names it, that copy goes", () => {
+    const root = setup();
+    const stub = join(root, ".claude", "rules", "aidlc.md");
+    mkdirSync(join(root, ".claude", "rules"), { recursive: true });
+    writeFileSync(stub, `@../../${EARLIER_COPY}/org.md\n`);
+    mkdirSync(join(root, ...EARLIER_COPY.split("/")), { recursive: true });
+    writeFileSync(join(root, ...EARLIER_COPY.split("/"), "mine.md"), "a file of mine\n");
+    expect(portablePaths(refreshActiveMemory(root, "teamB"))).toEqual([EARLIER_COPY]);
+    expect(readFileSync(join(root, ...EARLIER_COPY.split("/"), "org.md"), "utf-8")).toBe(copied("teamB", "org.md", "# org teamB\n"));
+    expect(existsSync(join(root, ...COPY.split("/")))).toBe(false);
+
+    writeFileSync(stub, `@../../${COPY}/org.md\n`);
+    expect(portablePaths(refreshActiveMemory(root, "teamB"))).toEqual([COPY]);
+    expect(copyFile(root, "org.md")).toBe(copied("teamB", "org.md", "# org teamB\n"));
+    expect(existsSync(join(root, ...EARLIER_COPY.split("/"), "org.md"))).toBe(false);
+    expect(readFileSync(join(root, ...EARLIER_COPY.split("/"), "mine.md"), "utf-8")).toBe("a file of mine\n");
+    expect(readFileSync(join(root, "aidlc", ".aidlc-engine", ".gitignore"), "utf-8")).toBe("*\n");
+  });
+
   test("an edit of a memory file reaches the copy at the next refresh, and the source is never touched", () => {
     const root = setup();
     refreshActiveMemory(root, "teamB");
@@ -320,7 +345,7 @@ describe("t-active-space-includes: a space switch changes no tracked file", () =
     git(root, "init", "-q");
     git(root, "add", "-A");
     git(root, "commit", "-q", "-m", "install");
-    expect(git(root, "ls-files", "--", "aidlc/active-memory")).toBe("");
+    expect(git(root, "ls-files", "--", COPY)).toBe("");
     const created = engine(root, ["space", "create", "teamb"], env);
     expect(created.status, created.out).toBe(0);
     writeFileSync(join(root, "aidlc", "spaces", "teamb", "memory", "team.md"), "# Team\n\nEvery queue has a dead-letter alarm.\n");

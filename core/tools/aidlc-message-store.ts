@@ -52,7 +52,7 @@ export { MESSAGE_SPENDING_EVENTS, type PersonsWords };
 // person's stands behind it.
 //
 // Each record is its own file in the gitignored session directory
-// (`aidlc/.aidlc-sessions/messages/<id>.json`, beside the question store),
+// (`aidlc/.aidlc-engine/sessions/messages/<id>.json`, beside the question store),
 // written once and never rewritten, through no symlink, and read back only
 // through the same no-follow path. The store keeps a day's worth and at most
 // MESSAGE_MAX_RECORDS; older records go on the next write. The HUMAN_TURN row

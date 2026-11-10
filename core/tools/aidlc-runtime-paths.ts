@@ -1,15 +1,22 @@
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import {
   type Dirent,
   closeSync,
+  copyFileSync,
   existsSync,
   lstatSync,
+  mkdirSync,
   openSync,
   readFileSync,
   readSync,
   readdirSync,
   realpathSync,
+  renameSync,
+  rmdirSync,
   statSync,
+  unlinkSync,
+  writeFileSync,
 } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
@@ -1044,6 +1051,206 @@ export class LinkedFolderError extends Error {
 export function refuseLinkOnTheWay(projectDir: string, target: string): void {
   const link = linkOnTheWay(projectDir, target);
   if (link !== null) throw new LinkedFolderError(link);
+}
+
+// --- The workspace's engine folder: aidlc/.aidlc-engine/ ---------------------
+//
+// AI-DLC's own machine-local files in a workspace (per-chat records, the clone
+// id, the Unit claim cache, the active space's method copy, request files) live
+// in one hidden folder that keeps itself out of git with its own .gitignore
+// holding "*", so no branch, older or newer, shows it and no ignore line has to
+// travel with the team's .gitignore. Earlier releases kept these files as
+// separate entries at the top of aidlc/. The first engine process that builds
+// one of these paths moves them in, file by file: on Windows a reader holding
+// one file open must not strand the rest, as a refused folder rename would. The
+// pin marker stays where every release reads it (projectPinTargetPath), and so
+// does a request file a loaded chat names by its old path (REQUEST_TEXT_DIRS).
+// The move runs in the read-only engine observers too (the Stop hook's probe,
+// the route check): it keeps every byte, and an observer that skipped it would
+// read no approval and no open question.
+export const WORKSPACE_ENGINE_DIR = ".aidlc-engine";
+
+// Each entry an earlier release kept at the top of aidlc/, and where it lives
+// now under aidlc/.aidlc-engine/. A folder moves file by file.
+const LEGACY_ENGINE_ENTRIES: ReadonlyMap<string, string> = new Map([
+  [".aidlc-clone-id", "clone-id"],
+  [".aidlc-sessions", "sessions"],
+  [".aidlc-turn-counter", "sessions/kiro-turn-counter"],
+  [".aidlc-readonly-latch", "sessions/kiro-readonly-latch"],
+  [".aidlc-forwarding-latch", "sessions/kiro-forwarding-latch"],
+  [".aidlc-subagent-inflight", "sessions/subagent-inflight"],
+  [".aidlc-cursor-subagents", "sessions/cursor-subagents"],
+  [".aidlc-claim-registry.json", "units/claim-registry.json"],
+  [".aidlc-claim-generations.json", "units/claim-generations.json"],
+  [".aidlc-unit-scope.json", "units/claimed.json"],
+  [".aidlc-unit-participant", "units/participant"],
+  [".aidlc-unit-parked", "units/parked"],
+  [".aidlc-unit-releases", "units/releases"],
+  [".aidlc-unit-merges", "units/merges"],
+]);
+// Cursor's dispatch witnesses sat beside the ledger folder; they go into it.
+const LEGACY_CURSOR_WITNESS = /^\.aidlc-cursor-subagent-[^/\\]+\.json$/;
+const LEGACY_NAMES: ReadonlyMap<string, string> = new Map(
+  [...LEGACY_ENGINE_ENTRIES].map(([legacy, now]) => [now, legacy]),
+);
+
+const SETTLED_ENGINE_FOLDERS = new Set<string>();
+
+function isRealFolder(path: string): boolean {
+  try {
+    const stat = lstatSync(path);
+    return stat.isDirectory() && !stat.isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+// The folders from `root` down to `dir`, made where missing; false when one
+// of them is a link or not a folder, so nothing is written through it.
+function realFolderChain(root: string, dir: string): boolean {
+  let path = root;
+  for (const part of relative(root, dir).split(/[\\/]/).filter(Boolean)) {
+    path = join(path, part);
+    if (!existsSync(path)) {
+      try {
+        mkdirSync(path);
+      } catch {
+        // A concurrent process made it; checked next.
+      }
+    }
+    if (!isRealFolder(path)) return false;
+  }
+  return true;
+}
+
+// One file into its new place. Both present: the clone id keeps the new place
+// (its token names this clone's audit shard from now on); any other file keeps
+// the newer, the new place on equal times (only an older engine writes the old
+// name after the move). A refused rename (Windows, a reader holding the file
+// open) copies under a temporary name and renames that in, so no reader of the
+// new name sees half a file; the old copy goes when it can.
+function moveEngineFile(from: string, to: string, root: string, newPlaceWins: boolean): void {
+  if (!realFolderChain(root, dirname(to))) return;
+  let fromTime: number;
+  try {
+    fromTime = lstatSync(from).mtimeMs;
+  } catch {
+    return;
+  }
+  const existing = lstatSync(to, { throwIfNoEntry: false });
+  if (existing !== undefined) {
+    if (!existing.isFile() || newPlaceWins || fromTime <= existing.mtimeMs) {
+      try {
+        if (existing.isFile()) unlinkSync(from);
+      } catch {
+        // Dropped by a later process.
+      }
+      return;
+    }
+  }
+  try {
+    renameSync(from, to);
+    return;
+  } catch {
+    // Copied below.
+  }
+  const temporary = `${to}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    copyFileSync(from, temporary);
+    renameSync(temporary, to);
+  } catch {
+    try {
+      unlinkSync(temporary);
+    } catch {
+      // Never made.
+    }
+    return;
+  }
+  try {
+    unlinkSync(from);
+  } catch {
+    // Dropped by a later process.
+  }
+}
+
+function moveEngineEntry(from: string, to: string, root: string, top: string): void {
+  const stat = lstatSync(from, { throwIfNoEntry: false });
+  if (stat === undefined || stat.isSymbolicLink()) return;
+  if (stat.isDirectory()) {
+    let children: string[];
+    try {
+      children = readdirSync(from);
+    } catch {
+      return;
+    }
+    for (const child of children) {
+      // Every release reads the pin marker here (projectPinTargetPath).
+      if (from === top && child === "pin-target") continue;
+      moveEngineEntry(join(from, child), join(to, child), root, top);
+    }
+    try {
+      rmdirSync(from);
+    } catch {
+      // Not empty: a file that could not move yet, or the pin marker.
+    }
+    return;
+  }
+  if (stat.isFile()) moveEngineFile(from, to, root, basename(top) === ".aidlc-clone-id");
+}
+
+/**
+ * Make `aidlc/.aidlc-engine/` and its `.gitignore` (written first, never
+ * rewritten), then move in what an earlier release kept at the top of aidlc/.
+ * Once per process per workspace; a folder that is a link is neither written
+ * into nor moved into. Never throws. Returns the folder.
+ */
+export function ensureWorkspaceEngineFolder(projectDir: string): string {
+  const aidlc = join(projectDir, "aidlc");
+  const folder = join(aidlc, WORKSPACE_ENGINE_DIR);
+  const key = resolve(folder);
+  if (SETTLED_ENGINE_FOLDERS.has(key)) return folder;
+  try {
+    const stat = lstatSync(folder, { throwIfNoEntry: false });
+    if (stat !== undefined && !isRealFolder(folder)) return folder;
+    mkdirSync(folder, { recursive: true });
+    if (!isRealFolder(folder)) return folder;
+    try {
+      writeFileSync(join(folder, ".gitignore"), "*\n", { flag: "wx" });
+    } catch {
+      // Already there, as the person or an earlier process left it.
+    }
+    for (const name of readdirSync(aidlc)) {
+      const now = LEGACY_ENGINE_ENTRIES.get(name) ??
+        (LEGACY_CURSOR_WITNESS.test(name) ? `sessions/cursor-subagents/${name}` : undefined);
+      if (now === undefined) continue;
+      const from = join(aidlc, name);
+      moveEngineEntry(from, join(folder, ...now.split("/")), folder, from);
+    }
+    SETTLED_ENGINE_FOLDERS.add(key);
+  } catch {
+    // The next process tries again; the paths below still name the new place.
+  }
+  return folder;
+}
+
+/** A path under `aidlc/.aidlc-engine/`, the folder made first where aidlc/ exists. */
+export function workspaceEnginePath(projectDir: string, ...parts: string[]): string {
+  if (existsSync(join(projectDir, "aidlc"))) ensureWorkspaceEngineFolder(projectDir);
+  return join(projectDir, "aidlc", WORKSPACE_ENGINE_DIR, ...parts);
+}
+
+/**
+ * One file under `aidlc/.aidlc-engine/` (`rel` in / form). While a file an
+ * earlier release kept is still at its old name (the move was refused), that
+ * name is read and written instead, so nothing starts over beside it: the
+ * clone id above all, whose token names this clone's audit shard.
+ */
+export function workspaceEngineFile(projectDir: string, rel: string): string {
+  const path = workspaceEnginePath(projectDir, ...rel.split("/"));
+  const legacy = LEGACY_NAMES.get(rel);
+  if (legacy === undefined || existsSync(path)) return path;
+  const old = join(projectDir, "aidlc", legacy);
+  return lstatSync(old, { throwIfNoEntry: false })?.isFile() ? old : path;
 }
 
 export function resolveHarnessRoot(location: HarnessLocation = {}): string {

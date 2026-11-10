@@ -51,13 +51,13 @@ active space's method layers into ambient context (the native include: they read
 AI-DLC's git-ignored copy of the active space's \`aidlc/spaces/<space>/memory/\`,
 which the engine refreshes at session start and on \`/aidlc space <name>\`):
 
-@aidlc/active-memory/org.md
-@aidlc/active-memory/team.md
-@aidlc/active-memory/project.md
-@aidlc/active-memory/phases/ideation.md
-@aidlc/active-memory/phases/inception.md
-@aidlc/active-memory/phases/construction.md
-@aidlc/active-memory/phases/operation.md
+@aidlc/.aidlc-engine/active-memory/org.md
+@aidlc/.aidlc-engine/active-memory/team.md
+@aidlc/.aidlc-engine/active-memory/project.md
+@aidlc/.aidlc-engine/active-memory/phases/ideation.md
+@aidlc/.aidlc-engine/active-memory/phases/inception.md
+@aidlc/.aidlc-engine/active-memory/phases/construction.md
+@aidlc/.aidlc-engine/active-memory/phases/operation.md
 `,
   },
 };

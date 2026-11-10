@@ -646,7 +646,7 @@ describe("intent add-repo clones a repo that is not here yet", () => {
       expect(r.rc, r.out).toBe(0);
       const said = `AI-DLC could not remove the temporary folder ${left} it made to clone notify; nothing in it is needed, so you can delete it.`;
       expect(r.out).not.toContain(said);
-      const kept = readFileSync(join(proj, "aidlc", ".aidlc-sessions", `${SESSION}.person-lines`), "utf-8");
+      const kept = readFileSync(join(proj, "aidlc", ".aidlc-engine", "sessions", `${SESSION}.person-lines`), "utf-8");
       expect(kept).toContain(JSON.stringify(said).slice(1, -1));
       // Kept for the reply: the turn's decision log carries it too, and it is never dropped by age.
       expect((JSON.parse(kept) as { lines: Array<{ line: string; reply?: boolean }> }).lines.find((entry) => entry.line === said)?.reply).toBe(true);
