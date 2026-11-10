@@ -400,6 +400,14 @@ describe("the answer to the filled box records as on main", () => {
     expect(filledRecord).toEqual(plainRecord);
   });
 
+  test("a question that ends in a line break records as on main", () => {
+    const { filledRecord, plainRecord } = twins((proj, box) => {
+      answered(proj, box(`${asked(proj)}\n`), "Approve Plan");
+      expect(rows(proj, "PLAN_APPROVAL_RECORDED").length).toBe(1);
+    });
+    expect(filledRecord).toEqual(plainRecord);
+  });
+
   test("I'll edit the files opens edit mode, as on main", () => {
     const { filledRecord, plainRecord } = twins((proj, box) => {
       const question = asked(proj);
@@ -413,6 +421,18 @@ describe("the answer to the filled box records as on main", () => {
       expect(next(proj).kind).toBe("run-stage");
     });
     expect(filledRecord).toEqual(plainRecord);
+  });
+
+  // The ceiling the reverse names: the shortest question that rebuilds the box wins.
+  test("an agent question that holds the lines after a blank line is recorded as the text before them", () => {
+    const proj = project();
+    const question = asked(proj);
+    const own = [question, "", ...LINES].join("\n");
+    const shown = filled(proj, [planBox(own)])![0];
+    expect(shown.question).toBe(`${own}\n\nFull plan: ${planPath(proj)}`);
+    answered(proj, shown, "Approve Plan");
+    expect(rows(proj, "PLAN_APPROVAL_RECORDED").length).toBe(1);
+    expect(field(rows(proj, "QUESTION_REPLIED")[0], "Question")).toBe(question);
   });
 
   test("the plan's Summary saved while the box is open: the pick still records; the record keeps the box's text", () => {

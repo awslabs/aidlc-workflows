@@ -881,7 +881,9 @@ export function planQuestionBoxInput(projectDir: string, toolInput: unknown): Re
 export function planQuestionBoxAsAsked(projectDir: string, payload: string): string {
   // ponytail: the lines are read again from disk, so when the plan's Summary or
   // the source changes while the box is open the box's text stays on the record
-  // (the pick still records); keep what was shown if that ever matters.
+  // (the pick still records); and an agent question that already holds the lines
+  // after a blank line is recorded as the text before them, the shortest
+  // question that rebuilds the box. Keep what was shown if that ever matters.
   try {
     const parsed = JSON.parse(payload) as Record<string, unknown> | null;
     if (parsed === null || parsed.hook_event_name !== "PostToolUse" || parsed.tool_name !== "AskUserQuestion") return payload;
@@ -891,8 +893,9 @@ export function planQuestionBoxAsAsked(projectDir: string, payload: string): str
     if (open === null || !pickerAsksThisQuestion(box.picker, open.record)) return payload;
     const shown = box.question;
     const additions = boxAdditions(projectDir, open.record);
-    // The agent's question ends where a blank line starts what the box added.
-    const asked = [...shown.matchAll(/\n\n/g)]
+    // The agent's question ends where a blank line starts what the box added;
+    // every place one starts, as its own question may end in a line break.
+    const asked = [...shown.matchAll(/(?=\n\n)/g)]
       .map((match) => shown.slice(0, match.index))
       .find((question) => boxText(question, additions) === shown);
     if (asked === undefined) return payload;
