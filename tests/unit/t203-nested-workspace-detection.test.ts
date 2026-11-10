@@ -321,6 +321,28 @@ describe("t203 nested-project detection (bounded recursive fallback)", () => {
     expect(scan.projectType).toBe("Brownfield");
     expect(scan.nestedRoot).toBe("web/site");
   });
+
+  // A live Claude Code run in a folder holding two Terraform roots heard "The
+  // scan found no code in this folder yet".
+  test("infrastructure code is code: two Terraform roots -> Brownfield, both named", () => {
+    const d = tmp();
+    for (const root of ["queue", "worker"]) {
+      put(d, ["infra", root, "main.tf"], 'resource "aws_sqs_queue" "q" {\n  name = "orders"\n}\n');
+      put(d, ["infra", root, "variables.tf"], 'variable "env" {}\n');
+      // The provider lock file Terraform writes beside a root is not a language of its own.
+      put(d, ["infra", root, ".terraform.lock.hcl"], 'provider "registry.terraform.io/hashicorp/aws" {}\n');
+    }
+    const scan = detectWorkspace(d);
+    expect(scan.projectType).toBe("Brownfield");
+    expect(scan.languages).toBe("Terraform");
+    expect(scan.nestedRoot).toBe("infra/queue, infra/worker");
+    const bicep = tmp();
+    put(bicep, ["main.bicep"], "param location string\n");
+    expect(detectWorkspace(bicep).languages).toBe("Bicep");
+    const terragrunt = tmp();
+    put(terragrunt, ["live", "prod", "terragrunt.hcl"], "include \"root\" {}\n");
+    expect(detectWorkspace(terragrunt).projectType).toBe("Brownfield");
+  });
 });
 
 // intent-create writes state into the created intent's per-intent record dir.

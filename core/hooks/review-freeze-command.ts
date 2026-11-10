@@ -5,6 +5,21 @@ import { basename, isAbsolute, join, resolve } from "node:path";
 // never invalidate a receipt.
 const WRITE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
 
+// Whether the backslash at `at` escapes the next character in POSIX shell:
+// anywhere outside single quotes, but inside "..." only before $ ` " \ and a
+// newline, so a quoted Windows path keeps its separators.
+export function posixBackslashEscapes(
+  text: string,
+  at: number,
+  quote: "'" | '"' | null,
+): boolean {
+  return (
+    text[at] === "\\" &&
+    quote !== "'" &&
+    (quote !== '"' || '$`"\\\n'.includes(text[at + 1] ?? ""))
+  );
+}
+
 function shellWords(command: string): string[] {
   const words: string[] = [];
   let word = "";
@@ -24,15 +39,7 @@ function shellWords(command: string): string[] {
       escaped = false;
       continue;
     }
-    if (
-      ch === "\\" &&
-      quote === '"' &&
-      !'$`"\\\n'.includes(command[i + 1] ?? "")
-    ) {
-      word += ch;
-      continue;
-    }
-    if (ch === "\\" && quote !== "'") {
+    if (posixBackslashEscapes(command, i, quote)) {
       escaped = true;
       wordStarted = true;
       continue;
@@ -80,14 +87,7 @@ function shellCommandSegments(command: string): string[] {
       escaped = false;
       continue;
     }
-    if (
-      ch === "\\" &&
-      quote === '"' &&
-      !'$`"\\\n'.includes(command[i + 1] ?? "")
-    ) {
-      continue;
-    }
-    if (ch === "\\" && quote !== "'") {
+    if (posixBackslashEscapes(command, i, quote)) {
       escaped = true;
       continue;
     }
@@ -589,17 +589,7 @@ function shellWordAt(command: string, start: number): { word: string; end: numbe
       escaped = false;
       continue;
     }
-    // Same double-quote rule as shellWords: inside "..." a backslash escapes
-    // only $ ` " \ and newline, so a quoted Windows path keeps its separators.
-    if (
-      ch === "\\" &&
-      quote === '"' &&
-      !'$`"\\\n'.includes(command[i + 1] ?? "")
-    ) {
-      word += ch;
-      continue;
-    }
-    if (ch === "\\" && quote !== "'") {
+    if (posixBackslashEscapes(command, i, quote)) {
       escaped = true;
       continue;
     }

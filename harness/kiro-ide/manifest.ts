@@ -160,11 +160,12 @@ const KIRO_CLI_RESTART =
 const KIRO_ACP_CLIENT = "If you drive Kiro from an ACP client, the Kiro IDE guide names what that client must send.";
 const KIRO_CLI_ACP_STEP = `${KIRO_CLI_RESTART}. ${KIRO_ACP_CLIENT}`;
 
-// The agent's own step when the hooks never ran: the new chat never saw the
-// request, so the person is told to type the entry there, and the engine fills
-// it with the id it kept the stopped command under (`<entry> --request <id>`),
-// before a workflow or inside one. The missed-reply line is shown unfilled, so
-// <entry> stays out of the constant it shares.
+// A restarted Kiro CLI is a new chat, where the entry carries the work on, so
+// the person is told to type it there. In the agent's own step when the hooks
+// never ran, the engine fills it with the id it kept the stopped command under
+// (`<entry> --request <id>`), before a workflow or inside one; doctor and the
+// Plan Approval refusal fill the bare entry. The missed-reply line is shown
+// unfilled, so <entry> stays out of the constant it shares.
 const KIRO_CLI_ACP_RESTART_STEP = `${KIRO_CLI_RESTART}, then type <entry> to carry on. ${KIRO_ACP_CLIENT}`;
 
 // The words the agent relays when the person's answer was not recorded. Nothing
@@ -265,11 +266,9 @@ const manifest: HarnessManifest = {
   // 1.1.14 from the Restricted Mode banner, and on 1.2.4 from both the banner
   // and Trust Folder & Continue), so every copy of the step names both.
   // Another agent in the picker did not stop the hooks. What an ACP client
-  // must send to run hooks is in the Kiro IDE guide. The approval refusal
-  // (hooks/aidlc-kiro-adapter.ts) gives a Kiro IDE person the text before
-  // " In Kiro CLI," alone, so that sentence keeps its place and spelling.
+  // must send to run hooks is in the Kiro IDE guide.
   hookActivation: {
-    recovery: `${KIRO_IDE_TRUST_STEP} ${KIRO_CLI_ACP_STEP}`,
+    recovery: `${KIRO_IDE_TRUST_STEP} ${KIRO_CLI_ACP_RESTART_STEP}`,
     // Says what happened, that the question may come again, and gives the
     // person the step for the tool they are in, in fixed words the agent relays
     // without explaining why. Inside Kiro IDE that is the Kiro IDE step alone;
@@ -410,6 +409,7 @@ const manifest: HarnessManifest = {
     { src: "skills/aidlc-session-cost", dst: "skills/aidlc-session-cost" },
     { src: "skills/aidlc-replay", dst: "skills/aidlc-replay" },
     { src: "skills/aidlc-outcomes-pack", dst: "skills/aidlc-outcomes-pack" },
+    { src: "skills/aidlc-issue-report", dst: "skills/aidlc-issue-report" },
     { src: "skills/aidlc-knowledge", dst: "skills/aidlc-knowledge" },
   ],
 

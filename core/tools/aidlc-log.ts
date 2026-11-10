@@ -346,9 +346,13 @@ const ANSWER_CHECKPOINTS: readonly string[] = [...DECISION_CHECKPOINTS, "guard-r
 function unitManifestRefusal(
   unit: string,
   manifestPath: string,
-  manifest: { reason: string; unrecordedRepo?: string },
+  manifest: { reason: string; unrecordedRepo?: string; projectSubmodule?: string },
   rewrite: string,
 ): string {
+  // The reason names the person's question and the way on for each answer.
+  if (manifest.projectSubmodule !== undefined) {
+    return `unit "${unit}"'s source manifest at ${manifestPath}: ${manifest.reason}. Then request the review again.`;
+  }
   if (manifest.unrecordedRepo !== undefined) {
     const repo = manifest.unrecordedRepo;
     return `unit "${unit}"'s source manifest at ${manifestPath} names repo ${JSON.stringify(repo)}, which this piece of work does not record. ` +

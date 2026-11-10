@@ -273,7 +273,8 @@ in your own words or by picking **Approve**, is what sets it, in the chat that
 asked or in a new one while it is the newest question asked; **Request
 Changes** or an answer to some other question does not. You may
 defer if no runnable check exists yet; the first checkpoint then asks before
-verification. A missing authorization or later command change always requires
+verification (on Kiro IDE and Kiro CLI v3, a side-by-side build asks once its plans
+are approved, before its workers start). A missing authorization or later command change always requires
 the [recorded-command flow](12-cli-commands.md#construction-verification-command-record-human-authorization),
 never a command chosen at verify time. The approval question shows **Verified
 with `<verification_command>` (exit 0)**.

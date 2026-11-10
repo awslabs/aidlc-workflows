@@ -35,7 +35,7 @@
 //
 // Reviewer read-scope enforcement fails open when its dispatch evidence is
 // unavailable: no record, a stale record (mtime beyond
-// REVIEWER_DISPATCH_TTL_MS - janitored like the compose marker), malformed
+// REVIEWER_DISPATCH_TTL_MS, and janitored), malformed
 // stdin or record JSON, an unknown tool, a non-reviewer agent, or any throw
 // allows the call. AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1 disables that read-scope
 // check. Claimed-checkout Unit ownership is evaluated first and remains
@@ -1068,7 +1068,7 @@ async function checkScope(input: string, projectDir: string, outside: boolean, b
     if (ageMs > REVIEWER_DISPATCH_TTL_MS) {
       // Orphaned record (a session crashed between dispatch and verdict):
       // ignore it and best-effort janitor it so a stale window cannot keep
-      // refusing sibling access indefinitely. Mirrors the compose marker.
+      // refusing sibling access indefinitely.
       try {
         unlinkSync(recordPath);
       } catch {

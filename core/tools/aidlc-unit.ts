@@ -149,7 +149,6 @@ import {
   readActiveIntentCursor,
   readIntentRegistry,
   DEFAULT_SPACE,
-  hasRealGitEntry,
   isGitRepoDir,
   repoDir,
   resolveWorkflowSelection,
@@ -221,7 +220,8 @@ import {
   leadRecordHere,
   textAt,
 } from "./aidlc-unit-teams.js";
-import { displayRepoPath, isProjectSubmodule, localUnreadableLine, readWorkspaceRepos, repoCloneable, repoCloneOfferLine, repoNotThereLine, withoutCredentials, workspaceManifestAt } from "./aidlc-workspace-manifest.js";
+import { isProjectSubmodule, submoduleLeavesProjectRepo } from "./aidlc-git.ts";
+import { displayRepoPath, localUnreadableLine, readWorkspaceRepos, repoCloneable, repoCloneOfferLine, repoNotThereLine, withoutCredentials, workspaceManifestAt } from "./aidlc-workspace-manifest.js";
 import { maskUserinfo, workspaceCloneUrl } from "./aidlc-workspace-sync.ts";
 import { loadGraph } from "./aidlc-graph.ts";
 import {
@@ -232,6 +232,7 @@ import {
   stageLabel,
 } from "./aidlc-validity.ts";
 import {
+  planApprovalPromptSha256,
   parseTestingContract,
   recordedApprovalFingerprint,
   resolveTestingPosture,
@@ -2260,14 +2261,7 @@ function candidateEvidence(
     const questionsSha256 = createHash("sha256")
       .update(questions, "utf-8")
       .digest("hex");
-    const promptSha256 = createHash("sha256")
-      .update(
-        `${questions
-          .replace(/^\[Answer\]:[ \t]*.*$/gm, "[Answer]:")
-          .trimEnd()}\n`,
-        "utf-8",
-      )
-      .digest("hex");
+    const promptSha256 = planApprovalPromptSha256(questions);
     if (
       fingerprint &&
       instructions.trim().length > 0 &&
@@ -7079,16 +7073,17 @@ function comesAlongLine(dir: string, name: string, branch: string, remote: strin
 
 // Work that records a submodule of the project as its only repo, from before
 // a project's own submodule stopped being recorded, while the Unit's code is
-// the project's own (its Code Generation record reads whole with no repo
-// recorded) and cannot be the submodule's (the record does not read under it,
-// or a fresh clone has not checked it out): the submodule's name, else null.
-// The push question and the push read this one rule; the way on is
-// remove-repo's, which takes such a submodule off at any stage.
+// the project's own: the submodule's name, else null. The source manifest's
+// reader says so (its projectSubmodule); in a fresh clone that has not checked
+// the submodule out, its Code Generation record reading whole with no repo
+// recorded does. The push question and the push read this one rule; the way
+// on is remove-repo's, which takes such a submodule off at any stage.
 export function submoduleOverOwnCode(projectDir: string, unit: string): string | null {
+  const read = readUnitSourceManifest(projectDir, "code-generation", unit);
+  if (!read.ok && read.projectSubmodule !== undefined) return read.projectSubmodule;
   const only = intentRepos(projectDir);
-  if (only.length !== 1 || !hasRealGitEntry(projectDir) || !isProjectSubmodule(projectDir, only[0])) return null;
-  if (!readUnitSourceManifest(projectDir, "code-generation", unit, { recordedRepos: [] }).ok) return null;
-  return !readUnitSourceManifest(projectDir, "code-generation", unit).ok || !isGitRepoDir(repoDir(projectDir, only[0])) ? only[0] : null;
+  if (only.length !== 1 || !submoduleLeavesProjectRepo(projectDir, only[0]) || isGitRepoDir(repoDir(projectDir, only[0]))) return null;
+  return readUnitSourceManifest(projectDir, "code-generation", unit, { recordedRepos: [] }).ok ? only[0] : null;
 }
 
 function pushUnit(args: string[], projectDir?: string): void {

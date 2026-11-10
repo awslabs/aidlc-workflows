@@ -486,6 +486,17 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
     expect(errs(d)).toBe("VALID");
   });
 
+  test("invoke-swarm verification_command_authorized is an optional boolean", () => {
+    for (const value of [true, false]) {
+      const d = invokeSwarm();
+      d.verification_command_authorized = value;
+      expect(errs(d)).toBe("VALID");
+    }
+    const d = invokeSwarm();
+    d.verification_command_authorized = "false";
+    expect(errs(d)).toContain("invoke-swarm: verification_command_authorized must be boolean, got string");
+  });
+
   test("invoke-swarm rejects a non-positive reviewer iteration cap", () => {
     const d = invokeSwarm();
     d.reviewer_max_iterations = 0;

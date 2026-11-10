@@ -82,7 +82,6 @@ CODEX_SESSION_RECORD_MAX_BYTES
 COMMAND_TURN_REPLY
 COMMAND_TURN_SENTENCE
 COMPLETE_INTENT_STATUS
-COMPOSE_MARKER_TTL_MS
 CONDUCTOR_SUMMARY_FIELD
 CONFIGURATION_STEP
 CONFIG_KEYS
@@ -731,7 +730,6 @@ completeSubagentInflight
 completedPipelineLinks
 completionCarriesVerifiedReview
 composeGateOpen
-composeMarkerPath
 composedPlanLabel
 composedPluginBase
 composerProposalPath
@@ -939,7 +937,6 @@ hasCurrentSharedResumeWait
 hasDurableSourceBindingEvidence
 hasModernSourceBindingEvidence
 hasPendingDecision
-hasRealGitEntry
 hasRunnerGenMarker
 hasSubagentInflight
 hasUnsafeSingleLineCharacter

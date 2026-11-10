@@ -598,11 +598,12 @@ describe("t150 dist/codex packaging determinism + trust", () => {
     const dirs = readdirSync(skillsDir).filter((d) =>
       statSync(join(skillsDir, d)).isDirectory(),
     );
-    // 42 skills: orchestrator + 30 stage runners + init + compose + 5 scope runners
-    // + 3 session + aidlc-knowledge. The last one only ships here because
-    // harness/codex/emit.ts names it explicitly: codex does not enumerate
-    // core/skills/, so this count is what catches a skill missing from that array.
-    expect(dirs.length).toBe(42);
+    // 43 skills: orchestrator + 30 stage runners + init + compose + 5 scope runners
+    // + 3 session + aidlc-knowledge + aidlc-issue-report. The last two only ship
+    // here because harness/codex/emit.ts names them explicitly: codex does not
+    // enumerate core/skills/, so this count is what catches a skill missing from
+    // that array.
+    expect(dirs.length).toBe(43);
     for (const d of dirs) {
       const guard = join(skillsDir, d, "agents", "openai.yaml");
       if (d === "aidlc") {

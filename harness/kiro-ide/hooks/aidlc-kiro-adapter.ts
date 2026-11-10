@@ -205,7 +205,7 @@ import {
   kiroNamedDelegate,
   mutationCapableTool,
 } from "./aidlc-kiro-tool-names.ts";
-import { isPowerShellDoubleQuote, isPowerShellSingleQuote } from "./review-freeze-command.ts";
+import { isPowerShellDoubleQuote, isPowerShellSingleQuote, posixBackslashEscapes } from "./review-freeze-command.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 // The NORMALIZED hook context, whichever channel delivered it: 1.x snake_case
@@ -1232,20 +1232,28 @@ function cmdMetacharacterHazard(command: string): CmdHazard | null {
 // them back (#2167). Measured live on Kiro IDE 1.2.37, the command result holds
 // the whole reply in Command Prompt and in PowerShell, so the file only leaves
 // copies behind and pays for each step twice. Read with both quote kinds as
-// quotes on every shell, so a > inside a value never counts; a stderr redirect,
+// quotes on every shell (and, in a command posixReading reads as POSIX, the
+// backslash escape and comments: topLevelParts, stdoutRedirectTargets,
+// posixCommandText), so a > inside a value does not count; a stderr redirect,
 // a discarded stream and a reader pipe pass.
 const FILE_WRITER = /^(?:out-file|set-content|add-content|tee-object|tee)(?:\.exe)?$/i;
 const DISCARD = /^(?:\$null|nul|\/dev\/null)$/i;
 
 // With `redirectAmpersand`, an & right after > (`2>&1`, `>&2`) is the redirect's
 // and not a statement break. Only the bookkeeping read below asks for it; the
-// file-redirect refusal keeps its answers exactly as they were.
-function topLevelParts(text: string, separators: RegExp, redirectAmpersand = false): string[] {
+// file-redirect refusal splits there. With `posix` (posixReading), a backslash
+// escapes the next character the way the shell reads it, so `'\''` or `\"`
+// does not end a quoted value (the text comes from posixReading).
+function topLevelParts(text: string, separators: RegExp, posix: boolean, redirectAmpersand = false): string[] {
   const parts: string[] = [];
-  let quote: string | null = null;
+  let quote: "'" | '"' | null = null;
   let start = 0;
   for (let at = 0; at < text.length; at++) {
     const c = text[at];
+    if (posix && posixBackslashEscapes(text, at, quote)) {
+      at++;
+      continue;
+    }
     if (quote !== null) {
       if (c === quote) quote = null;
       continue;
@@ -1266,6 +1274,93 @@ function topLevelParts(text: string, separators: RegExp, redirectAmpersand = fal
   return parts;
 }
 
+// The command as a POSIX shell reads its lines: each backslash before a line
+// break outside single quotes joins the two lines, and each comment is cut,
+// from a # outside quotes at the start of the command, or after an unescaped
+// line break, a blank, ; & | < or >, to the end of its line, whose quotes,
+// backslashes, > and | the shell never reads. Kiro runs these commands in
+// bash -c, zsh -c, or its terminal's zsh with INTERACTIVE_COMMENTS set by its
+// shell integration, and each reads such a # as a comment. posixReading
+// decides whether the checks read this text.
+function posixCommandText(command: string): string {
+  let kept = "";
+  let start = 0;
+  let quote: "'" | '"' | null = null;
+  let wordStart = true;
+  for (let at = 0; at < command.length; at++) {
+    const c = command[at];
+    if (posixBackslashEscapes(command, at, quote)) {
+      if (command[at + 1] === "\n") {
+        kept += command.slice(start, at);
+        start = at + 2;
+      } else {
+        wordStart = false;
+      }
+      at++;
+      continue;
+    }
+    if (quote !== null) {
+      if (c === quote) quote = null;
+      wordStart = false;
+      continue;
+    }
+    if (c === "'" || c === '"') {
+      quote = c;
+      wordStart = false;
+      continue;
+    }
+    if (c === "#" && wordStart) {
+      kept += command.slice(start, at);
+      const end = command.indexOf("\n", at);
+      if (end < 0) return kept;
+      start = end;
+      at = end - 1;
+      continue;
+    }
+    wordStart = " \t\n;&|<>".includes(c);
+  }
+  return kept + command.slice(start);
+}
+
+// The text the two checks read on a POSIX shell tool, or null when they read
+// the command as it is. Kiro names its shell tool execute_pwsh on Windows,
+// where a command runs in PowerShell or Command Prompt and a backslash is a
+// plain character; any other shell tool name seen on Windows is read the same
+// way, as its shell is not known. Otherwise the text is posixCommandText's,
+// unless what is left still opens a substitution, an expansion, a group, a
+// here-document or a $'...' value (an unescaped backtick, $(, ${ or $[ outside
+// single quotes; ( ) { } [ ], << or $' outside quotes): there a quote can open
+// a context of its own and a # can be text, which this reading does not
+// follow. A # that sits in such a context leaves its opener in the text.
+function posixReading(tool: string, command: string): string | null {
+  if (isKiroPowerShellTool(tool) || process.platform === "win32") return null;
+  const text = posixCommandText(command);
+  let quote: "'" | '"' | null = null;
+  for (let at = 0; at < text.length; at++) {
+    const c = text[at];
+    const next = text[at + 1] ?? "";
+    if (posixBackslashEscapes(text, at, quote)) {
+      at++;
+      continue;
+    }
+    if (quote === "'") {
+      if (c === "'") quote = null;
+      continue;
+    }
+    if (c === "`" || (c === "$" && next !== "" && "({[".includes(next))) return null;
+    if (quote === '"') {
+      if (c === '"') quote = null;
+      continue;
+    }
+    if (c === "'" || c === '"') {
+      quote = c;
+      continue;
+    }
+    if ("(){}[]".includes(c) || (c === "<" && next === "<") || (c === "$" && next === "'")) return null;
+  }
+  return text;
+}
+
 // The engine's own commands, whose replies are the steps: `aidlc engine ...`
 // (bare, .cmd or .exe, by path or not), the dispatcher file run by bun with
 // engine as its first argument, and an engine tool file run by bun directly. A
@@ -1283,11 +1378,15 @@ function isEngineCommand(segment: string): boolean {
 
 // Every target the segment's stdout is redirected to (`>`, `>>`, `1>`, `*>`),
 // unquoted; a > inside a quoted value is not one.
-function stdoutRedirectTargets(segment: string): string[] {
+function stdoutRedirectTargets(segment: string, posix: boolean): string[] {
   const targets: string[] = [];
-  let quote: string | null = null;
+  let quote: "'" | '"' | null = null;
   for (let at = 0; at < segment.length; at++) {
     const c = segment[at];
+    if (posix && posixBackslashEscapes(segment, at, quote)) {
+      at++;
+      continue;
+    }
     if (quote !== null) {
       if (c === quote) quote = null;
       continue;
@@ -1309,15 +1408,15 @@ function stdoutRedirectTargets(segment: string): string[] {
   return targets;
 }
 
-function stdoutToFile(segment: string): boolean {
-  return stdoutRedirectTargets(segment).some((target) => !DISCARD.test(target));
+function stdoutToFile(segment: string, posix: boolean): boolean {
+  return stdoutRedirectTargets(segment, posix).some((target) => !DISCARD.test(target));
 }
 
-function engineReplyToFile(command: string): boolean {
-  for (const statement of topLevelParts(command, /^(?:&&|\|\||;|\r?\n|&(?!>))/)) {
-    const pipeline = topLevelParts(statement, /^\|/);
+function engineReplyToFile(command: string, posix: boolean): boolean {
+  for (const statement of topLevelParts(command, /^(?:&&|\|\||;|\r?\n|&(?!>))/, posix)) {
+    const pipeline = topLevelParts(statement, /^\|/, posix);
     if (!isEngineCommand(pipeline[0] ?? "")) continue;
-    if (stdoutToFile(pipeline[0])) return true;
+    if (stdoutToFile(pipeline[0], posix)) return true;
     if (pipeline.slice(1).some((part) => FILE_WRITER.test(part.trim().split(/\s+/)[0] ?? ""))) return true;
   }
   return false;
@@ -1343,17 +1442,17 @@ function isStepCommand(segment: string): boolean {
 // | inside a quoted value never counts, a step inside quotes is not read, and a
 // redirect to a file never gets here (engineReplyToFile stops that command
 // before it runs). The reported commands put `2>&1` before the pipe, so this
-// read keeps the & of a redirect inside its statement; the refusal's read is
-// left as it is.
-function stepReplyLeftResult(command: string): boolean {
-  for (const statement of topLevelParts(command, /^(?:&&|\|\||;|\r?\n|&(?!>))/, true)) {
-    const pipeline = topLevelParts(statement, /^\|/);
+// read keeps the & of a redirect inside its statement; the refusal's read
+// splits there.
+function stepReplyLeftResult(command: string, posix: boolean): boolean {
+  for (const statement of topLevelParts(command, /^(?:&&|\|\||;|\r?\n|&(?!>))/, posix, true)) {
+    const pipeline = topLevelParts(statement, /^\|/, posix);
     const capture = /^\s*(\$?[A-Za-z_][A-Za-z0-9_]*\s*=\s*)?(\$\(|\(|`)?/.exec(pipeline[0] ?? "");
     const segment = (pipeline[0] ?? "").slice(capture?.[0].length ?? 0);
     if (!isStepCommand(segment)) continue;
     const assigned = capture?.[1] !== undefined;
     const substituted = capture?.[2] !== undefined && capture[2] !== "(";
-    const targets = stdoutRedirectTargets(segment);
+    const targets = stdoutRedirectTargets(segment, posix);
     const discarded = targets.length > 0 && targets.every((target) => DISCARD.test(target));
     if (assigned || substituted || pipeline.length > 1 || discarded) return true;
   }
@@ -2511,7 +2610,8 @@ async function catchUpPendingCalls(card: "call" | "message" | "turn-end"): Promi
       // A step reply the agent piped or captured away (stepReplyLeftResult) did
       // not put its rules in front of it: forget what this chat's last step
       // named, so its next step carries the text again (#2167).
-      if (stepReplyLeftResult(call.command)) forgetRulesDelivered(projectDir, call.session);
+      const callText = posixReading(call.tool, call.command);
+      if (stepReplyLeftResult(callText ?? call.command, callText !== null)) forgetRulesDelivered(projectDir, call.session);
       const now = recordDirs(projectDir);
       const made = Object.entries(now).flatMap(([space, dirs]) =>
         dirs.filter((dir) => !(call.records[space] ?? []).includes(dir)).map((dir) => ({ space, dir })));
@@ -2696,7 +2796,8 @@ if (target === "terminal-command-guard") {
   }
   // The agent's own transport, on any shell: the reply comes back whole in the
   // command's result (see engineReplyToFile), so it runs the command on its own.
-  if (engineReplyToFile(rawCommand)) {
+  const replyText = posixReading(tool, rawCommand);
+  if (engineReplyToFile(replyText ?? rawCommand, replyText !== null)) {
     process.stderr.write(
       "AIDLC stopped this command before it ran: it sends AI-DLC's reply to a file. Run the same AI-DLC command " +
         "again on its own, with nothing after it that writes to a file, and read the reply from the command's " +

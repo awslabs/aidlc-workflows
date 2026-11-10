@@ -143,9 +143,7 @@ import { workspaceManifestChecks } from "./aidlc-workspace-doctor.ts";
 import {
   displayRepoPath,
   hostedAddressOwner,
-  isProjectSubmodule,
   mappedRepoDir,
-  parseGitmodules,
   repoCloneable,
   parseWorkspaceManifest,
   readWorkspaceRepos,
@@ -156,9 +154,9 @@ import {
   type WorkspaceManifest,
   workspaceManifestWith,
   type WorkspaceRepoEntry,
-  submodulePath,
   withoutCredentials,
 } from "./aidlc-workspace-manifest.ts";
+import { isProjectSubmodule, parseGitmodules, submoduleLeavesProjectRepo, submodulePath } from "./aidlc-git.ts";
 export { parseGitmodules };
 import {
   CloneFailure,
@@ -264,8 +262,6 @@ import {
   parseGuardPolicyStateLine,
   resolveGuardPolicy,
   composeGateOpen,
-  composeMarkerPath,
-  COMPOSE_MARKER_TTL_MS,
   defaultScope,
   defaultScopeResolution,
   DEFAULT_SPACE,
@@ -5978,35 +5974,26 @@ export async function collectDoctorReport(
     }
   }
 
-  // Orphaned compose-marker probe: a read-only tripwire. The conductor writes
-  // the compose marker before an in-flight compose gate and deletes it on
-  // resolve; the Stop hook treats a FRESH marker as a carve-out (the turn may
-  // end at the gate). A crash between write and resolve can leave the marker on
-  // disk, so doctor reports a present marker with its age and the remediation
-  // (delete it if no compose gate is actually pending). Pass/fail follows the
-  // shared freshness window: a FRESH marker is the normal state while a compose
-  // gate is legitimately open (written before the gate, deleted on resolve), so
-  // it renders as an advisory pass (running doctor in a second terminal during
-  // a live gate must not exit 1 on a healthy workspace). Only a STALE marker
-  // (older than the TTL, i.e. an orphan the Stop hook has begun ignoring) is a
-  // fault. Silent when absent (no marker means nothing to report). Read-only:
-  // doctor never deletes it (the Stop hook is the janitor for a stale one).
+  // The in-flight compose question (composeGateOpen) is healthy waiting: an
+  // advisory pass. The file an earlier version had the agent write for it is
+  // read by nothing now; doctor names it while it is there and never deletes it.
   try {
-    const composeMarker = composeMarkerPath(projectDir);
-    if (existsSync(composeMarker)) {
-      const ageMs = Date.now() - statSync(composeMarker).mtimeMs;
-      const ageHours = Math.floor(ageMs / (60 * 60 * 1000));
-      const ageLabel = ageHours >= 1 ? `${ageHours}h old` : "under 1h old";
-      const stale = ageMs > COMPOSE_MARKER_TTL_MS;
-      const staleLabel = stale ? ", stale" : ", fresh";
+    if (composeGateOpen(projectDir)) {
       results.push({
-        pass: !stale,
-        label: `Compose marker present (aidlc/.aidlc-compose-pending, ${ageLabel}${staleLabel})`,
-        fix: "if no in-flight compose gate is actually pending, delete it ('rm aidlc/.aidlc-compose-pending') or resolve the pending gate. A stale marker no longer disables the Stop hook, but it should not linger.",
+        pass: true,
+        label: "A proposed plan change is waiting for the person's answer (approve, edit or reject)",
+        fix: "answer the proposed plan change in the chat that shows it",
       });
     }
   } catch {
-    // Compose-marker probe failure is non-fatal for the doctor report.
+    // Compose-question probe failure is non-fatal for the doctor report.
+  }
+  if (existsSync(join(projectDir, "aidlc", ".aidlc-compose-pending"))) {
+    results.push({
+      pass: true,
+      label: "Left over from an earlier AI-DLC version and no longer read: aidlc/.aidlc-compose-pending (safe to delete)",
+      fix: "delete aidlc/.aidlc-compose-pending",
+    });
   }
 
   // A long-open approval gate is healthy waiting, not a hung workflow. Surface
@@ -7582,6 +7569,10 @@ const LANG_BY_EXT: Record<string, string> = {
   ".hpp": "C++",
   ".swift": "Swift",
   ".php": "PHP",
+  // Infrastructure code is code (Terraform, Terragrunt and Packer, Bicep).
+  ".tf": "Terraform",
+  ".hcl": "HCL",
+  ".bicep": "Bicep",
 };
 
 const SCAN_SOURCE_DIRS = ["src", "app", "lib", "pages", "components", "tests"];
@@ -7603,6 +7594,8 @@ const SCAN_EXCLUDE = new Set([
   ".next",
   "target",
   "vendor",
+  // Terraform's provider lock file, written beside a root's .tf files.
+  ".terraform.lock.hcl",
 ]);
 
 // Package/build manifests that mark a directory as an application (not just
@@ -9943,9 +9936,9 @@ function handleIntentRepos(
         if (!current.includes(name)) return { kind: "absent" as const, current };
         // The last one goes only where the workspace folder can be the work's
         // repo again (a checkout of its own): a submodule the project lists at
-        // any stage, as in any one-repo project, any other repo while nothing
-        // is built.
-        if (current.length === 1 && !(hasRealGitEntry(projectDir) && (isProjectSubmodule(projectDir, name) || !started))) {
+        // any stage (submoduleLeavesProjectRepo), as in any one-repo project,
+        // any other repo while nothing is built.
+        if (current.length === 1 && !(submoduleLeavesProjectRepo(projectDir, name) || (hasRealGitEntry(projectDir) && !started))) {
           die(`intent remove-repo refused: "${name}" is the only repo this piece of work records; removing it would leave none.`);
         }
       }
@@ -9961,7 +9954,8 @@ function handleIntentRepos(
           ...(mapping !== null && mapping.next !== null ? { "Listed At": mapping.shown } : {}),
           ...(reason ? { Reason: reason } : {}),
           ...(personWords ? { "Person Words": personWords } : {}),
-          ...(verb === "add-repo" ? repoBaselineAdditionField(projectDir, [name], dirName, space) : {}),
+          ...(verb === "add-repo" ? repoBaselineAdditionField(projectDir, [name], dirName, space)
+            : next.length === 0 ? repoBaselineAdditionField(projectDir, [], dirName, space) : {}),
         },
         projectDir,
         dirName,
@@ -12365,18 +12359,24 @@ function handleReclassify(projectDir: string, flags: Record<string, string>, raw
   // command, else the chat most recently active here. At the person's own
   // terminal no chat answer can arrive: the step that works there is named
   // instead.
-  if (!humanPresenceGuardDisabled() && !personSaidProjectType(projectDir, {
+  const said = {
     chat: selection.sessionId ?? readCurrentSessionId(projectDir),
-    type: declared === "Brownfield" ? "brownfield" : "greenfield",
-    ...(named.message !== undefined ? { message: named.message } : {}),
+    type: declared === "Brownfield" ? ("brownfield" as const) : ("greenfield" as const),
     intent,
     space,
+  };
+  if (!humanPresenceGuardDisabled() && !personSaidProjectType(projectDir, {
+    ...said,
+    ...(named.message !== undefined ? { message: named.message } : {}),
   })) {
     die(personAtOwnTerminal(projectDir)
       ? OWN_TERMINAL_PRESENCE_STEP
       : requestMessageStep(projectDir, "The person has not said yet whether this folder is existing code. Ask them " +
         "the question you were given, end the turn, and run this command after they answer."));
   }
+  // "as you said" only where the record shows them saying it; a message the
+  // agent named and nothing else is the agent's reading of their words.
+  const asTheySaid = named.message === undefined || personSaidProjectType(projectDir, said) ? ", as you said" : "";
 
   // The registry row is workspace state and the plan is the work's own: hold
   // the workspace lock, then the work's lock, across the whole read, audit and
@@ -12479,10 +12479,10 @@ function handleReclassify(projectDir: string, flags: Record<string, string>, raw
     // it, in their words. It rides on the directive as its narration.
     const lines: string[] = [
       previous.toLowerCase() !== declared.toLowerCase()
-        ? `Project type is now ${words}, as you said${found}.`
+        ? `Project type is now ${words}${asTheySaid}${found}.`
         : yours
           ? `Project type is already ${words}, as you said${found}.`
-          : `Project type is ${words}, as you said${found}; I won't ask about it again for this piece of work.`,
+          : `Project type is ${words}${asTheySaid}${found}; I won't ask about it again for this piece of work.`,
     ];
     if (declared === "Brownfield" && scan.projectType !== "Brownfield") lines.push(NO_CODE_FOUND_YET);
     // Finished stages these lines name as behind the code.
@@ -13523,15 +13523,15 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
       : { content, audit: [], lines: [] };
     content = setField(settingsUpdate.content, "Last Updated", isoTimestamp());
 
-    // The person's approval at the in-flight compose question: its step runs
-    // this before deleting the question's marker and names nothing after it,
-    // so the work goes on from here, as after their approval at a stage's gate.
-    // The engine's other plan-change steps say what comes after themselves.
+    // The person's approval at the in-flight compose question, read before
+    // this write closes it: its step names nothing after this, so the work
+    // goes on from here, as after their approval at a stage's gate. The
+    // engine's other plan-change steps say what comes after themselves.
     let approvedAtCompose = false;
     try {
-      approvedAtCompose = composeGateOpen(projectDir);
+      approvedAtCompose = composeGateOpen(projectDir, flags.intent, flags.space);
     } catch {
-      // An unreadable marker names no step and nobody; the plan change still lands.
+      // An unreadable step names no step and nobody; the plan change still lands.
     }
 
     // Audit first, as config-change does, in one batch: a failed append leaves
@@ -13568,7 +13568,7 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
         (droppedUnitWork === null ? "" : `${droppedUnitWork}\n`) +
         settingsUpdate.lines.map((line) => `${line}\n`).join("") +
         (approvedAtCompose
-          ? "Then delete `aidlc/.aidlc-compose-pending`, apply any setting the same approval also named, and run " +
+          ? "Then apply any setting the same approval also named, and run " +
             `\`${aidlcToolInvocation("orchestrate")} next\`; follow what it returns, so the work carries on.\n`
           : ""),
     );

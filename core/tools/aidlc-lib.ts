@@ -71,6 +71,8 @@ export {
 } from "./aidlc-runtime-paths.ts";
 import { humanTurnMintAllowed, personGitNameField } from "./aidlc-git-name.ts";
 export { humanTurnMintAllowed } from "./aidlc-git-name.ts";
+import { hasRealGitEntry, submoduleLeavesProjectRepo } from "./aidlc-git.ts";
+export { hasRealGitEntry } from "./aidlc-git.ts";
 import { NEXT_VALUELESS_FLAGS, nextFlagTakesFollowing, unitCommandArgv } from "./aidlc-command.ts";
 import { pluginCommandOnLine, projectPluginCommands } from "./aidlc-plugin-commands.ts";
 import {
@@ -265,6 +267,7 @@ import {
   worktreesDir,
   writeSessionBinding,
   writeStateFile,
+  COMPOSE_ASK_TYPE,
 } from "./aidlc-record-core.ts";
 export {
   ACTIVE_INTENT_POINTER,
@@ -368,6 +371,7 @@ export {
   worktreesDir,
   writeSessionBinding,
   writeStateFile,
+  COMPOSE_ASK_TYPE,
 } from "./aidlc-record-core.ts";
 import {
   isReviewRecordRelativePath,
@@ -21380,19 +21384,6 @@ function rootCarriesWorkspaceShell(projectDir: string, root: string): boolean {
   return resolvePath(root) === resolvePath(projectDir);
 }
 
-// A folder a person made a Git checkout of: a real .git entry (a folder, or a
-// worktree's or submodule's file), by lstat, so no link is followed. A commit
-// can never carry a .git entry, so a committed folder merely shaped like a repo
-// never passes and git never runs on its config.
-export function hasRealGitEntry(dir: string): boolean {
-  try {
-    const entry = lstatSync(join(dir, ".git"));
-    return entry.isDirectory() || entry.isFile();
-  } catch {
-    return false;
-  }
-}
-
 // The checkouts a piece of work keeps its code in where the source walk does
 // not reach: a worktree in a harness folder (Claude Code's .claude/worktrees/)
 // or one outside the project. The agent or the person names one (`intent
@@ -25447,8 +25438,10 @@ export type ReadUnitSourceManifestResult =
     }
   // `unrecordedRepo` names the one repo a write claimed that the piece of work
   // does not record: the way on is to record that repo, not to rewrite the
-  // manifest.
-  | { ok: false; reason: string; unrecordedRepo?: string };
+  // manifest. `projectSubmodule` names the project's own submodule the work
+  // records as its only repo while every write is the project's own: the way
+  // on is the person's (remove-repo, or the code goes in it), not a rewrite.
+  | { ok: false; reason: string; unrecordedRepo?: string; projectSubmodule?: string };
 
 function sourceListingFieldEncode(value: string): string {
   return value
@@ -26756,6 +26749,7 @@ function validateUnitSourceManifestBytes(
   const seen = new Set<string>();
   const writes: UnitSourceManifestWrite[] = [];
   const notInRepo: string[] = [];
+  let projectOwnWrites = 0;
   const pathModeIndexes: GitPathModeIndexCache = new Map();
   // Cache only this manifest read: later review, verdict, and finalize checks
   // must observe fresh HEAD and ignore rules, even for the same manifest.
@@ -26919,6 +26913,20 @@ function validateUnitSourceManifestBytes(
             `writes[${index}].path ${JSON.stringify(write.path)} is not in repo ${JSON.stringify(canonicalRepo)} or its git history` +
               (rootPath === "" ? "" : ` (from that repo's root: ${JSON.stringify(rootPath)})`),
           );
+          // The project's own repo has the path (a deletion when only its git
+          // history does); one into the repo's folder from the workspace is not.
+          if (declaredRepo === undefined && rootPath === "" && literal !== from) {
+            let own = true;
+            try {
+              lstatSync(join(projectDir, literal));
+            } catch {
+              const project = gitSourceClaimHeadAndTree(projectDir, sourceClaimValidation);
+              own = project.treeModes?.has(literal) === true || (project.head !== null && (spawnSync(
+                "git", ["-C", projectDir, "--literal-pathspecs", "rev-list", "-1", project.head, "--", literal], { encoding: "utf-8" },
+              ).stdout ?? "").trim() !== "");
+            }
+            if (own) projectOwnWrites++;
+          }
         }
       }
     }
@@ -26930,6 +26938,22 @@ function validateUnitSourceManifestBytes(
     writes.push({ ...(declaredRepo === undefined ? {} : { repo: declaredRepo }), path: normalized.path });
   }
   if (notInRepo.length > 0) {
+    // Work that records the project's own submodule as its only repo (as work
+    // did before such a submodule stopped being recorded), every write a file
+    // of the project's own: no path from the submodule's root names them.
+    const only = recordedRepos.length === 1 ? recordedRepos[0] : undefined;
+    if (only !== undefined && projectOwnWrites === value.writes.length && submoduleLeavesProjectRepo(projectDir, only)) {
+      return {
+        ok: false,
+        projectSubmodule: only,
+        reason: `${notInRepo.join("; ")}. This work records ${only}, a submodule of the project, as its only repo, and ` +
+          `${notInRepo.length === 1 ? "that path is" : "those paths are"} in the project's own repo. Ask the person once ` +
+          `whether to take ${only} off this work's repos, so the project's own repo is the work's repo (${only}'s folder ` +
+          `stays as it is): on their yes, run \`${aidlcDispatcherInvocation(`intent remove-repo ${quoteCommandArgument(only)}`)}\`, ` +
+          `and the manifest reads as written; on their no, the Unit's code goes in ${only}, each write giving its path ` +
+          `from ${only}'s root`,
+      };
+    }
     return {
       ok: false,
       reason: `${notInRepo.join("; ")}. Give each write's path from its repo's root, or leave out a path this Unit did not change`,
@@ -27628,7 +27652,24 @@ function withRepoBaselineAdditions(
 ): SourceBaselineResult {
   if (baseline.state !== "ready" || from === null) return baseline;
   const repos = new Set(intentRepos(projectDir, intent, space));
-  const inWork = (repo: string): boolean => repo === "" || repos.size === 0 || repos.has(repo);
+  // Work whose last repo came off (a submodule of the project, intent
+  // remove-repo) walks the project folder, which reads that repo's files at the
+  // folder's own paths: they stay in the baseline there, as they were. `read`
+  // keeps the top-level folders the baseline's walk read (those repos, each
+  // checkout).
+  let read: Set<string> | null = null;
+  if (repos.size === 0) {
+    read = new Set();
+    const listing: WorkspaceSourceListing = new Map();
+    for (const [key, entry] of baseline.listing) {
+      const parsed = splitSourcePathKey(key);
+      const path = parsed === null ? null : parsed.repo === "" ? parsed.path : `${parsed.repo}/${parsed.path}`;
+      listing.set(path === null ? key : `\0${path}`, entry);
+      if (path?.includes("/")) read.add(path.slice(0, path.indexOf("/")));
+    }
+    baseline = { state: "ready", listing };
+  }
+  const inWork = (repo: string): boolean => repo === "" || repos.has(repo);
   const kept: WorkspaceSourceListing = new Map(
     [...baseline.listing].filter(([key]) => inWork(splitSourcePathKey(key)?.repo ?? "")),
   );
@@ -27640,6 +27681,34 @@ function withRepoBaselineAdditions(
   const joined = new Map<string, WorkspaceSourceListing>();
   const written = new Map<string, string>();
   for (const row of additions) {
+    // The remove that left the work on the project folder: what the walk
+    // before it never read joins as it was then (a folder that was neither a
+    // repo it took off nor a checkout, and a removed submodule's own entry),
+    // less a path a Unit claims, whose write there is the Unit's own.
+    const left = read !== null && auditBlockField(row.block, "Repos") === ""
+      ? new Set((auditBlockField(row.block, "Removed") ?? "").split(",").map((name) => name.trim()))
+      : null;
+    const claimed: SourceClaimModel[] = [];
+    if (left !== null) {
+      const record = recordDir(projectDir);
+      let units: string[] = [];
+      try {
+        units = record === null ? [] : readdirSync(join(record, "construction"));
+      } catch {
+        // Nothing built yet.
+      }
+      for (const unit of units) {
+        const manifest = readUnitSourceManifest(projectDir, "code-generation", unit);
+        if (manifest.ok) claimed.push(manifest);
+      }
+    }
+    const unread = (key: string, path: string): boolean => {
+      if (left === null || read === null || claimed.some((claim) => sourceClaimCovers(key, claim))) return false;
+      const slash = path.indexOf("/");
+      if (slash === -1) return left.has(path);
+      const top = path.slice(0, slash);
+      return !left.has(top) && !read.has(top);
+    };
     const added = readStageBaseline(projectDir, stageSlug, auditBlockField(row.block, REPO_BASELINE_ADDITION_FIELD) ?? "", intent, space);
     if (added.state !== "ready") return added;
     // A clone's install, or add-repo --path's, wrote repos.json and the two files.
@@ -27649,6 +27718,7 @@ function withRepoBaselineAdditions(
       const parsed = splitSourcePathKey(key);
       const repo = parsed?.repo ?? "";
       if (repo === "") {
+        if (parsed !== null && !kept.has(key) && unread(key, parsed.path)) kept.set(key, entry);
         if (cloned && parsed !== null && CLONE_WRITES_AT_ROOT.has(parsed.path)) written.set(key, entry);
         continue;
       }
@@ -29856,20 +29926,11 @@ export function reviewerDispatchPath(projectDir: string, intent?: string, space?
 // Freshness window for the reviewer dispatch record. The scope hook honours a
 // record only while its mtime is younger than this; an older record is an
 // orphan (a session that crashed between dispatch and verdict) and is ignored
-// plus best-effort cleaned up — the same staleness discipline as the compose
-// marker. 6h: the worst observed pre-fix review ran ~3h, so the window covers
-// the pathological case with margin while still bounding a crashed review.
+// plus best-effort cleaned up. 6h: the worst observed pre-fix review ran ~3h,
+// so the window covers the pathological case with margin while still bounding
+// a crashed review.
 export const REVIEWER_DISPATCH_TTL_MS = 6 * 60 * 60 * 1000;
 
-// `<projectDir>/aidlc/.aidlc-compose-pending`: the in-flight compose gate
-// marker the conductor writes before presenting the approve/edit/reject gate
-// and deletes on resolve. It lives at the WORKSPACE level (not a per-intent
-// record) so a single spelling is shared by the Stop-hook carve-out (which
-// honours it as a turn-stop signal) and the doctor probe (which flags an
-// orphaned one). Hoisted here so the path is spelled once.
-export function composeMarkerPath(projectDir: string): string {
-  return join(projectDir, "aidlc", ".aidlc-compose-pending");
-}
 // This checkout's Unit files, under aidlc/.aidlc-engine/ (workspaceEngineFile).
 export const UNIT_PARKED_FILE = "units/parked";
 export const CLAIM_GENERATIONS_FILE = "units/claim-generations.json";
@@ -30755,20 +30816,17 @@ export function effectiveUnitGateRhythm(
     readUnitGateRhythm(stateContent);
 }
 
-// Freshness window for the compose marker. The Stop hook honours the carve-out
-// only while the marker's mtime is younger than this; an older marker is an
-// orphan (a session that crashed between write and gate-resolve) and is ignored
-// plus best-effort cleaned up, so it cannot silently disable forwarding-loop
-// enforcement forever. 24h is generous enough to cover a long human pause at an
-// open gate while still catching a stranded marker.
-export const COMPOSE_MARKER_TTL_MS = 24 * 60 * 60 * 1000;
-
-// Whether an in-flight compose proposal waits on the person's approve, edit or
-// reject: its marker is on disk and fresh. A stale orphan is no open question,
-// as the Stop hook reads it. A failed read throws; each caller decides.
-export function composeGateOpen(projectDir: string): boolean {
-  const marker = composeMarkerPath(projectDir);
-  return existsSync(marker) && Date.now() - statSync(marker).mtimeMs <= COMPOSE_MARKER_TTL_MS;
+// Whether the in-flight compose question waits on the person's approve, edit
+// or reject: it is the step on record for the selected work (or the work
+// named), on the state it was asked on. A `next` that names another step, or
+// the plan change their approval runs, closes it; a setting written meanwhile
+// keeps it, as it keeps every step. A failed state read throws (each caller
+// decides); a step that cannot be read is no open question.
+export function composeGateOpen(projectDir: string, intent?: string, space?: string): boolean {
+  const statePath = stateFilePath(projectDir, intent, space);
+  if (!existsSync(statePath)) return false;
+  const marker = readActiveDirectiveMarker(projectDir, readFileSync(statePath, "utf-8"), intent, space);
+  return marker?.kind === "ask" && marker.ask_type === COMPOSE_ASK_TYPE;
 }
 
 // `<projectDir>/aidlc/.aidlc-engine/sessions/subagent-inflight`: the workspace-level background

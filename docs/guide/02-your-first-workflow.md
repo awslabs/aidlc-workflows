@@ -288,7 +288,8 @@ Your approval is recorded before the intent's `Construction Verification Command
 is set. That same command is reused at every Unit/batch checkpoint; changing it
 requires another recorded human approval. If a greenfield project has no runnable
 check yet, you may defer selection; the first checkpoint asks before running any
-verification. The conductor never invents or auto-approves a command.
+verification (on Kiro IDE and Kiro CLI v3, a side-by-side build asks once its plans
+are approved, before its workers start). The conductor never invents or auto-approves a command.
 
 With skeleton-on, the first DAG Unit is the smallest working integrated slice.
 It completes its design and code, including your Plan Approval and required

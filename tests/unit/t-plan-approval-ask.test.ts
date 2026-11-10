@@ -2370,7 +2370,10 @@ describe("after approval, whatever the engine said last", () => {
     }
   });
 
-  // Only this work's own Code Generation step stands in when it is out of date.
+  // An out-of-date step of another stage (a second checkout whose last step
+  // there came before the plan), or a marker naming another piece of work,
+  // gives the step no authority of its own: it is read on this work's own
+  // record, and this work's recorded approval holds.
   test("an out-of-date step of another stage or another piece of work is not read for the approval", () => {
     const { pd } = groupedProject();
     replyAndRecord(pd, "approve all", "Approve all");
@@ -2384,8 +2387,8 @@ describe("after approval, whatever the engine said last", () => {
       } as Parameters<typeof routeCodeGenerationPlanApproval>[1]) as unknown as Emitted;
     };
     expect(route({}).plan_approval).toEqual({ status: "approved" });
-    expect(route({ stage: "functional-design" }).kind).toBe("ask");
-    expect(route({ intent_uuid: "01995000-7a11-7000-8000-00000000ffff" }).kind).toBe("ask");
+    expect(route({ stage: "functional-design" }).plan_approval).toEqual({ status: "approved" });
+    expect(route({ intent_uuid: "01995000-7a11-7000-8000-00000000ffff" }).plan_approval).toEqual({ status: "approved" });
   });
 
   // "Review the plan first" is the person's own request, whatever the engine

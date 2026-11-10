@@ -5,14 +5,19 @@
 // {repo: "billing", path: "billing/package.json"}) binds no file to the
 // review, so the read fails with one reason naming every such write; a real
 // deletion still reads as one, and a workspace that is its own repo or a Bolt's
-// worktree reads as before.
+// worktree reads as before. Work that records the project's own git submodule
+// as its only repo (as work started before a project's own submodule stopped
+// being recorded did) while the Unit's code is the project's own names the way
+// on: the person is asked once whether to take the submodule off the work's
+// repos (remove-repo), or the code goes in the submodule.
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readUnitSourceManifest, sourceClaimCovers } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { aidlcDispatcherInvocation } from "../../dist/claude/.claude/tools/aidlc-runtime-paths.ts";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -194,5 +199,112 @@ describe("a recorded repo's write names its path from the repo's root", () => {
     const { project, record } = workspace([]);
     writeManifest(record, [{ path: "billing/package.json" }]);
     expect(read(project, { worktreeRelative: true }).ok).toBe(true);
+  });
+});
+
+// The work's recorded repos, as its registry row keeps them.
+function recordRepos(project: string, repos: string[]): void {
+  const path = join(project, "aidlc", "spaces", "default", "intents", "intents.json");
+  const rows = JSON.parse(readFileSync(path, "utf-8")) as Array<Record<string, unknown>>;
+  writeFileSync(path, `${JSON.stringify(rows.map((row) => ({ ...row, repos })))}\n`);
+}
+
+// A project with code of its own (package.json, src/app.ts) holding a library
+// at vendor/ (lib/index.ts) added with `git submodule add`, whose work records
+// vendor as its only repo, and the Unit's code at src/refunds.ts.
+function submoduleWork(): { project: string; record: string } {
+  const { project, record } = workspace([]);
+  const library = mkdtempSync(join(tmpdir(), "aidlc-manifest-lib-"));
+  dirs.push(library);
+  mkdirSync(join(library, "lib"));
+  writeFileSync(join(library, "lib", "index.ts"), "export const slug = 1;\n");
+  git(library, ["init", "-q"]);
+  git(library, ["config", "user.email", "t@test"]);
+  git(library, ["config", "user.name", "t"]);
+  commitAll(library, "seed");
+  // Forward slashes: git reads them on Windows too.
+  git(project, ["-c", "protocol.file.allow=always", "submodule", "add", "-q", library.replaceAll("\\", "/"), "vendor"]);
+  commitAll(project, "vendor");
+  recordRepos(project, ["vendor"]);
+  writeFileSync(join(project, "src", "refunds.ts"), "export const refunds = 1;\n");
+  return { project, record };
+}
+
+const TODAY = "Give each write's path from its repo's root, or leave out a path this Unit did not change";
+
+describe("work that records the project's submodule as its only repo", () => {
+  test("code in the project's own repo: the read asks once to take the submodule off, or the code goes in it", () => {
+    const { project, record } = submoduleWork();
+    writeManifest(record, [{ path: "src/refunds.ts" }]);
+    const result = read(project);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe(
+      'writes[0].path "src/refunds.ts" is not in repo "vendor" or its git history. This work records vendor, a submodule ' +
+        "of the project, as its only repo, and that path is in the project's own repo. Ask the person once whether to " +
+        "take vendor off this work's repos, so the project's own repo is the work's repo (vendor's folder stays as it is): " +
+        `on their yes, run \`${aidlcDispatcherInvocation("intent remove-repo vendor")}\`, and the manifest reads as written; ` +
+        "on their no, the Unit's code goes in vendor, each write giving its path from vendor's root",
+    );
+    expect(result.projectSubmodule).toBe("vendor");
+    writeManifest(record, [{ path: "src/refunds.ts" }, { path: "src/" }]);
+    const both = read(project);
+    expect(both.ok).toBe(false);
+    if (!both.ok) {
+      expect(both.reason).toContain("and those paths are in the project's own repo");
+      expect(both.projectSubmodule).toBe("vendor");
+    }
+    // A file of the project's the Unit deleted is the project's own too.
+    unlinkSync(join(project, "src", "app.ts"));
+    writeManifest(record, [{ path: "src/refunds.ts" }, { path: "src/app.ts" }]);
+    const deleted = read(project);
+    expect(deleted.ok).toBe(false);
+    if (!deleted.ok) expect(deleted.projectSubmodule).toBe("vendor");
+  });
+
+  test("once the work no longer records the submodule, the same manifest reads and binds the project's file", () => {
+    const { project, record } = submoduleWork();
+    writeManifest(record, [{ path: "src/refunds.ts" }]);
+    recordRepos(project, []);
+    const result = read(project);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(sourceClaimCovers("\0src/refunds.ts", result)).toBe(true);
+  });
+
+  test("a write that is not all the project's own keeps the root-path reason", () => {
+    const { project, record } = submoduleWork();
+    for (const writes of [
+      [{ path: "vendor/lib/index.ts" }],
+      [{ path: "src/missing.ts" }],
+      [{ path: "src/refunds.ts" }, { path: "lib/index.ts" }],
+      [{ repo: "vendor", path: "src/refunds.ts" }],
+      [{ path: "vendor/" }],
+    ]) {
+      writeManifest(record, writes);
+      const result = read(project);
+      expect(result.ok, JSON.stringify(writes)).toBe(false);
+      if (result.ok) continue;
+      expect(result.reason, JSON.stringify(writes)).toEndWith(TODAY);
+      expect(result.projectSubmodule, JSON.stringify(writes)).toBeUndefined();
+    }
+  });
+
+  test("a repo inside the project that is no submodule of it keeps the root-path reason", () => {
+    const { project, record } = workspace([]);
+    const api = join(project, "api");
+    mkdirSync(join(api, "lib"), { recursive: true });
+    writeFileSync(join(api, "lib", "index.ts"), "export const api = 1;\n");
+    git(api, ["init", "-q"]);
+    git(api, ["config", "user.email", "t@test"]);
+    git(api, ["config", "user.name", "t"]);
+    commitAll(api, "seed");
+    recordRepos(project, ["api"]);
+    writeFileSync(join(project, "src", "refunds.ts"), "export const refunds = 1;\n");
+    writeManifest(record, [{ path: "src/refunds.ts" }]);
+    const result = read(project);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toEndWith(TODAY);
+    expect(result.projectSubmodule).toBeUndefined();
   });
 });

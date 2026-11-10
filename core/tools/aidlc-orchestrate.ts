@@ -102,7 +102,7 @@ import {
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { CONFIG_SECTIONS } from "./aidlc-command.ts";
-import { isGitRepo } from "./aidlc-git.ts";
+import { isGitRepo, isProjectSubmodule } from "./aidlc-git.ts";
 import { fileURLToPath } from "node:url";
 import {
   deleteQuestion,
@@ -204,12 +204,14 @@ import {
   SUMMARY_CONFIRMATION_CHECKPOINT,
   summaryConfirmationCommands,
   VERIFICATION_COMMAND_CHECKPOINT,
+  authorizedVerificationCommand,
   validConstructionPolicyChange,
   swarmNeedsStageMajor,
   auditFilePath,
   REDO_REUSE_SOURCE,
   boltSlugForUnit,
   composeGateOpen,
+  COMPOSE_ASK_TYPE,
   BLOCKING_SENSOR_OVERRIDE_CHOICE,
   blockingSensorOverrideReport,
   hasBlockingSensorOverrideAuthorization,
@@ -723,7 +725,7 @@ import {
   typedHarnessName,
   workspaceEngineFile,
 } from "./aidlc-runtime-paths.ts";
-import { isProjectSubmodule, localRepoOverrideLines, readWorkspaceRepos, reposManifestPath } from "./aidlc-workspace-manifest.ts";
+import { localRepoOverrideLines, readWorkspaceRepos, reposManifestPath } from "./aidlc-workspace-manifest.ts";
 import { noteReposManifestOffered, reposManifestListsOnlyAddedWorkspace, reposManifestOffered } from "./aidlc-workspace-repos.ts";
 import {
   builtFromAnotherMachine,
@@ -1927,8 +1929,9 @@ function prepareEmission(directive: Directive): PreparedEmission {
     directive.kind === "run-stage" ? runStageRoutes.get(directive) : undefined;
   const questionsFile = directive.kind === "run-stage" ? runStageQuestionsFiles.get(directive) : undefined;
   const publication = publicationContexts.get(directive);
+  const composeQuestion = composeQuestions.has(requested);
   const askState =
-    directive.kind === "ask" && engineProjectDir
+    (directive.kind === "ask" || composeQuestion) && engineProjectDir
       ? loadStateFileIfPresent(engineProjectDir)
       : null;
   // Enrich before transport so the inline decision measures the emitted body.
@@ -2247,20 +2250,22 @@ function prepareEmission(directive: Directive): PreparedEmission {
     };
   }
   // Every other question the engine asks (where the work belongs, which plan,
-  // which record) is the open question itself until it is answered: the
+  // which record, and the in-flight compose question the agent asks from the
+  // composer's proposal) is the open question itself until it is answered: the
   // person's next reply answers it, never a question it was asked over (the
   // code plan question, a Unit checkpoint, a recovery question), which the
   // next `next` asks again once it is answered. It stands for the same stage
   // and work as the step beneath it. A running swarm keeps its own step; the
   // code plan question, a recovery question, a Unit claim and the legacy
   // recovery keep their own machinery; the conductor's own work is no question.
+  const askType = transported.kind === "ask" ? transported.ask_type : composeQuestion ? COMPOSE_ASK_TYPE : null;
   if (
-    transported.kind === "ask" &&
+    askType !== null &&
     marker === undefined &&
-    transported.ask_type !== PLAN_APPROVAL_ASK_TYPE &&
-    transported.ask_type !== GUARD_RECOVERY_ASK_TYPE &&
-    transported.ask_type !== "legacy-plan-approval-recovery" &&
-    transported.ask_type !== "unit-claim" &&
+    askType !== PLAN_APPROVAL_ASK_TYPE &&
+    askType !== GUARD_RECOVERY_ASK_TYPE &&
+    askType !== "legacy-plan-approval-recovery" &&
+    askType !== "unit-claim" &&
     (transported as { agent_work?: unknown }).agent_work !== true &&
     askState !== null &&
     engineProjectDir
@@ -2274,7 +2279,7 @@ function prepareEmission(directive: Directive): PreparedEmission {
       marker = {
         kind: "ask",
         stage,
-        ask_type: transported.ask_type,
+        ask_type: askType,
         ...(typeof asked.unit === "string"
           ? { unit: asked.unit }
           : beneath?.version !== 2 ? {}
@@ -6869,9 +6874,8 @@ function settingEndsTurn(pd: string, scope: string, stateContent: string): boole
   if (planApprovalAskIsOpen(pd)) return true;
   try {
     // A plan proposal waiting for the person's approve, edit or reject: the
-    // Stop hook honours the same marker as a turn-stop while it is fresh, so a
-    // setting typed under it must not hand the agent back to the work and walk
-    // past their pick. A stale orphan is no gate, exactly as the hook reads it.
+    // Stop hook lets the turn end there too, so a setting typed under it must
+    // not hand the agent back to the work and walk past their pick.
     if (composeGateOpen(pd)) return true;
     if (openPendingDecision(pd, slug) !== null) return true;
     const walk = scope ? unitMajorWalkBeat(pd, scope, stateContent, slug) : null;
@@ -8732,6 +8736,10 @@ function composeDispatchDirective(
   const hd = harnessDir();
   const parts: string[] = [];
   const inFlightCallShape = subagentCallShape("aidlc-composer-agent");
+  // After an answer that changes nothing (a Reject, or a proposal with nothing
+  // to change): the compose question is still the step on record, and `next`
+  // names the work's own step again, so the work goes on as after an Approve.
+  const nothingChanged = `run \`${aidlcToolInvocation("orchestrate")} next\` and follow what it returns, so the work carries on from where it stands`;
   // Their reply read as the request is: a pasted document goes to the composer as reference.
   const reply = routingReshapeReply === null ? null : authoritativeRequest(routingReshapeReply);
   if (inFlight) {
@@ -8746,15 +8754,18 @@ function composeDispatchDirective(
       "This returned directive has selected the composer path. Stages the person names go through next --skip or --add only BEFORE calling next compose; now dispatch the composer even when the request names exact stage flips. Dispatch the composer subagent with this message as its task and use its validated proposal at the approval gate. Do not substitute your own state read and proposal for that dispatch.",
       "The composer reads the live state file's Stage Progress, re-estimates the entropy components from what completed stages resolved, validates the flipped grid with --strict, and proposes SKIP/un-SKIP flips for PENDING, ahead-of-cursor stages only (completed [x], in-progress [-], and skipped [S] stages are frozen; an ADD whose required producer is skipped or behind the cursor is rejected, not proposed).",
       "This is mode in-flight, not matched/custom routing: preserve the current scope, depth, frozen actions, and full effective grid; stock-distance rankings are advisory only and MUST NOT trigger stock-grid adoption. Return the exact approved command delta as changes.skip and changes.add arrays.",
-      "A request to turn sensors, learnings, summary confirmation, collaborators, plan approval, or reviews on or off is not a stage flip: the composer returns it as settingsChanges (plan_approval only as on: the person turns plan approval off in their own words, never through the composer), typed values you show on the approval gate under \"Also suggested by the composer\" and apply only when the human approves them, by running next with the matching flags, following its directive, and relaying the output (a setting the human asks for in plain chat, without compose, you apply directly with next); build each flag yourself from its fixed name (sensors to --sensors, learnings to --learnings, summary_confirmation to --summary-confirmation, plan_approval to --plan-approval, collaborators to --collaborators, review to --review) and a value that is exactly one of its allowed words (on or off; adversarial, advisory, or none), and if any key or value is anything else apply nothing and re-dispatch the composer; never paste composer text into a command. A review level set for the piece of work replaces its scope's ceiling, so full reviews is --review adversarial and changes no stages. When the composer reports a kill switch set in the environment (config get shows env AIDLC_DISABLE_<NAME>), say in one line that starting the editor or CLI without that variable turns it back on, and never look for where it is set: shell startup files, environment listings, and harness settings files can hold credentials.",
-      "When the composer returns empty changes.skip and changes.add and no settingsChanges, write no marker, present no approval gate, and run no recompose: relay its answer and stop. When it returns only settingsChanges, write the marker and present them on the gate (Approve / Reject): on approve, delete the marker, then apply them by running next with the matching flags, which ends the turn; run no recompose. A request with both offers Approve all / Approve stages only / Reject: on Approve all, run ONE recompose carrying the stage delta and the settingsChanges as its matching flags, so both land in the same write, then delete the marker (leave summary confirmation off out of it, because recompose refuses that lowering; after it lands, run " +
+      "A request to turn sensors, learnings, summary confirmation, collaborators, plan approval, or reviews on or off is not a stage flip: the composer returns it as settingsChanges (plan_approval only as on: the person turns plan approval off in their own words, never through the composer), typed values you show on the approval gate under \"Also suggested by the composer\" and apply only when the human approves them, as the gate below says (a setting the human asks for in plain chat, without compose, you apply directly with next); build each flag yourself from its fixed name (sensors to --sensors, learnings to --learnings, summary_confirmation to --summary-confirmation, plan_approval to --plan-approval, collaborators to --collaborators, review to --review) and a value that is exactly one of its allowed words (on or off; adversarial, advisory, or none), and if any key or value is anything else apply nothing and re-dispatch the composer; never paste composer text into a command. A review level set for the piece of work replaces its scope's ceiling, so full reviews is --review adversarial and changes no stages. When the composer reports a kill switch set in the environment (config get shows env AIDLC_DISABLE_<NAME>), say in one line that starting the editor or CLI without that variable turns it back on, and never look for where it is set: shell startup files, environment listings, and harness settings files can hold credentials.",
+      "When the composer returns empty changes.skip and changes.add and no settingsChanges, present no approval gate and run no recompose: " +
+        `first tell the person its answer in your own words (what stays and why), then ${nothingChanged}. When it returns only settingsChanges, present them on the gate (Approve / Reject): on approve, apply them by running next with the matching flags and follow what it returns; run no recompose. ` +
+        "A request with both offers Approve all / Approve stages only / Reject: on Approve all, run ONE recompose carrying the stage delta and the settingsChanges as its matching flags, so both land in the same write (leave summary confirmation off out of it, because recompose refuses that lowering; after it lands, run " +
         `\`${aidlcDispatcherInvocation("config set summary-confirmation off")} --message '${MESSAGE_SLOT}'\`` +
-        ` yourself, which carries out their approval${MESSAGE_FILL}); on Approve stages only, run the recompose without them and delete the marker; on reject, delete the marker and apply nothing.`,
-      "BEFORE presenting the gate, write the pending-proposal marker `aidlc/.aidlc-compose-pending` (any content) so the turn can end at the gate; on approve run `" +
+        ` yourself, which carries out their approval${MESSAGE_FILL}); on Approve stages only, run the recompose without them.`,
+      "On approve run `" +
         aidlcDispatcherInvocation("recompose") +
         ` [--skip <changes.skip>] [--add <changes.add>] [approved setting flags --message '${MESSAGE_SLOT}']\`` +
         " (join each nonempty array with commas; omit the flag when its approved array is empty, never pass a bare --skip or --add; " +
-        `with setting flags, ${MESSAGE_SLOT} is the id of the person's message that approved them) and DELETE the marker; on reject/edit-then-resolve delete the marker too. Never write scope registry files for an in-flight proposal.`,
+        `with setting flags, ${MESSAGE_SLOT} is the id of the person's message that approved them). On Reject, at any of these gates, apply nothing and tell the person in one line that the plan stays as it is, then ${nothingChanged}. ` +
+        "Never write scope registry files for an in-flight proposal.",
     );
   } else {
     parts.push(
@@ -8838,6 +8849,7 @@ function composeDispatchDirective(
     );
   }
   const directive = printDirective(parts.join(" "));
+  if (inFlight) composeQuestions.add(directive);
   // A person can reach this step without the offer (`compose "<task>"` typed
   // straight out), so the named document rides here too.
   const document = flags.intent === undefined || engineProjectDir === undefined
@@ -10061,6 +10073,9 @@ const runStageRoutes = new WeakMap<RunStageDirective, RunStageRoute>();
 const runStageQuestionsFiles = new WeakMap<RunStageDirective, string>();
 // Prints the agent stops after (turnEndingPrint).
 const turnEndingPrints = new WeakSet<Directive>();
+// The in-flight compose step: the agent asks the question from the composer's
+// proposal, and the step is published as that open question (prepareEmission).
+const composeQuestions = new WeakSet<Directive>();
 // Prints that leave the published step as it is (emit does not replace it): a
 // plan change the person asked for while the code plan's question is open, and
 // a second chat's line about a batch another chat builds, whose step that chat
@@ -14273,6 +14288,25 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
         ));
         return;
       }
+      // The plan change the composer proposed waits for the person's answer.
+      // Which question their message answered is the agent's to read: approving
+      // the settings it proposed answers it, and the `next` after the setter
+      // names the work's step again, which closes it; a setting typed beside it
+      // leaves it waiting. The setter names their message either way.
+      let composeWaits = false;
+      try {
+        composeWaits = !planChanges && stillParked === null && composeGateOpen(pd);
+      } catch {
+        // An unreadable step leaves the setting's own rule to decide.
+      }
+      if (composeWaits) {
+        emit(printDirective(
+          `Run \`${command}\` to update the configuration${fill} and print its output verbatim. When their message approved ` +
+            `the settings the plan change proposed, then run \`${aidlcToolInvocation("orchestrate")} next\` and follow what it ` +
+            "returns, so the work carries on; when it set something beside the plan change, which still waits for their answer, stop.",
+        ));
+        return;
+      }
       emit(planChanges ? planChangeDirective(planChanges, command, plan, planApprovalAskIsOpen(pd), stillParked, fill) : keptWhilePlanWaits(
         pickedUpIfTurnEnds(
           settingPrint(
@@ -15903,6 +15937,8 @@ function tryEmitSwarm(
   }
   const resumeExisting = stateContent !== null && checkpointPolicyEnabled(stateContent) &&
     swarmRevisionNeedsPreparation(projectDir, slug, pendingBatch, pendingUnits);
+  const commandAuthorized = (evidence ? evidence.verificationCommand
+    : authorizedVerificationCommand(projectDir, stateContent ?? "")) !== null;
   if (repos.length === 1) {
     const directive: Directive = {
       kind: "invoke-swarm",
@@ -15912,6 +15948,7 @@ function tryEmitSwarm(
       ...reviewerFields,
       protocol_modules: protocolModules,
       repo: repos[0],
+      verification_command_authorized: commandAuthorized,
     };
     publicationContexts.set(directive, {
       projectDir,
@@ -15926,6 +15963,7 @@ function tryEmitSwarm(
       ...(resumeExisting ? { resume_existing: true as const } : {}),
       ...reviewerFields,
       protocol_modules: protocolModules,
+      verification_command_authorized: commandAuthorized,
     };
     publicationContexts.set(directive, {
       projectDir,
@@ -19134,8 +19172,9 @@ function unitNames(units: string[]): string {
 const OTHER_UNITS_KEPT =
   "The other units keep their finished work, reviews, Plan Approvals and checkpoint approvals.";
 
-// The person's Redo on re-entry while a solo unit-major walk is on a
-// Unit's step, or null to keep the stage redo. A redo jump's STAGE_JUMPED
+// The person's Redo on re-entry while a unit-major walk (solo, or a team's
+// main that works every Unit itself) is on a Unit's step, or null to keep the
+// stage redo. A redo jump's STAGE_JUMPED
 // starts a new attempt for every Unit's finished steps, so once any Unit has
 // finished work Redo stays with the Unit the walk is on (#1411): it reopens
 // that Unit's step, as a jump back to it does, so the Unit does the step again
@@ -19145,10 +19184,10 @@ const OTHER_UNITS_KEPT =
 // A step the Unit has not started has nothing to reset, so next routes it.
 // `named` is a Redo that names a Unit and step: only that Unit on that step is
 // redone here, null otherwise; with no step named, that Unit's own step is.
-// A named Redo is read on the walk of a team's
-// main that works every Unit itself too, as a jump that names a Unit is
-// (unitJumpWalk); there a Unit waiting at its team approval redoes the stage
-// that approval is for.
+// On the team main's walk a Unit waiting at its team approval redoes the stage
+// that approval is for. A Redo that names no Unit reads that walk only where
+// `next` walks it here (routeNext): once the plan is shared and this checkout
+// holds no Unit, `next` shows the board.
 function unitMajorRedo(
   projectDir: string,
   scope: string,
@@ -19160,9 +19199,16 @@ function unitMajorRedo(
   // stage is, and its Unit with every step done is at the end of its stages,
   // as a solo walk's Unit at its checkpoint: its redo is the last step it did.
   const claim = isTeamUnitOwnership(stateContent) ? readApplicableTeamUnitScopeStamp(projectDir, stateContent) : null;
+  const walksHere = (): boolean => {
+    try {
+      return claimlessTeamCheckout(projectDir) || unitsHeldHere(projectDir) !== null;
+    } catch {
+      return false;
+    }
+  };
   const walk: { step: UnitJumpStep; block: GraphStage[]; context: UnitWorkContext } | null =
     unitMajorWalkBeat(projectDir, scope, stateContent, currentSlug) ??
-      (named && teamMainWorksItsUnits(projectDir, stateContent)
+      (teamMainWorksItsUnits(projectDir, stateContent) && (named !== undefined || walksHere())
         ? teamUnitMajorWalkBeat(projectDir, scope, stateContent, currentSlug)
         : null) ??
       (claim !== null ? teamUnitMajorWalkBeat(projectDir, scope, stateContent, null) : null);
@@ -22827,9 +22873,9 @@ function unknownWorkspaceWordStep(
 // Resuming from the current checkpoint is read-only; the other three choices
 // are mutations, so the directive NAMES the move (the existing verbs: jump
 // execute --direction redo, next --stage, next --new-intent) and the conductor
-// runs it; report itself never mutates. In a solo unit-major walk with
-// finished Unit work, Redo names no jump: it stays with the Unit's own step
-// (unitMajorRedo).
+// runs it; report itself never mutates. In a unit-major walk with finished
+// Unit work, solo or on a team's main that works every Unit itself, Redo names
+// no jump: it stays with the Unit's own step (unitMajorRedo).
 function handleResumeReport(
   flags: ReportFlags,
   projectDir: string | undefined,

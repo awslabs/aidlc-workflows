@@ -238,7 +238,7 @@ describe("the lead's word builds a Unit here: assign --here", () => {
     expect(claimPayload(home.remote, id8, "checkout-ui")).toBeNull();
     expect(claimPayload(home.remote, id8, "reporting")).toBeNull();
     // The lead's checkout stays the home's: it is never scoped to the Unit.
-    expect(existsSync(join(home.dir, "aidlc", ".aidlc-unit-scope.json"))).toBe(false);
+    expect(existsSync(join(home.dir, "aidlc", ".aidlc-engine", "units", "claimed.json"))).toBe(false);
     const rows = readAuditShardEvents(home.dir).filter((row) => row.event === "UNITS_ASSIGNED");
     expect(rows).toHaveLength(1);
     expect(auditBlockField(rows[0].block, "Here")).toBe("refunds");

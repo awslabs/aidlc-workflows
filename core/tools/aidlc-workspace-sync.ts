@@ -46,9 +46,9 @@ import {
   withAuditLock,
 } from "./aidlc-lib.ts";
 import { reposManifestListsOnlyAddedWorkspace } from "./aidlc-workspace-repos.ts";
+import { isProjectSubmodule } from "./aidlc-git.ts";
 import {
   displayRepoPath,
-  isProjectSubmodule,
   parseWorkspaceManifest,
   readWorkspaceRepos,
   REPOS_LOCAL_PLACE,

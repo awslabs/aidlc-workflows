@@ -1490,6 +1490,37 @@ describe("t305 real receipt and guard flows", () => {
     expect(error).toContain(`intent add-repo ${quoteCommandArgument("app b")} --reason`);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
+  // Work started before a project's own submodule stopped being recorded:
+  // vendor, a submodule of the project, is its only repo, and the Unit's code
+  // is the project's own.
+  test("REVIEW_REQUESTED in work that records the project's submodule as its only repo, with the code in the project, asks to take it off; after remove-repo the review is requested", () => {
+    const { project, record } = runtimeFixture();
+    const library = mkdtempSync(join(tmpdir(), "aidlc-t305-lib-"));
+    dirs.push(library);
+    writeFileSync(join(library, "index.ts"), "export const slug = 1;\n");
+    git(library, ["init", "-q"]); git(library, ["config", "user.email", "t@test"]); git(library, ["config", "user.name", "t"]);
+    git(library, ["add", "-A"]); git(library, ["commit", "-qm", "seed"]);
+    git(project, ["-c", "protocol.file.allow=always", "submodule", "add", "-q", library.replaceAll("\\", "/"), "vendor"]);
+    git(project, ["commit", "-qm", "vendor"]);
+    const registry = join(project, "aidlc", "spaces", "default", "intents", "intents.json");
+    writeFileSync(registry, readFileSync(registry, "utf-8").replace('"repos":[]', '"repos":["vendor"]'));
+    mkdirSync(join(project, "src"));
+    writeFileSync(join(project, "src", "refunds.ts"), "export const refunds = 1;\n");
+    writeManifest(record, "alpha", [{ path: "src/refunds.ts" }]);
+    const args = ["review", "--stage", "code-generation", "--reviewer", REVIEWER, "--unit", "alpha", "--iteration", "1"];
+    const refused = cli(LOG, args, project);
+    expect(refused.rc, refused.out).toBe(1);
+    const error = (JSON.parse(refused.out) as { error: string }).error;
+    expect(error).toContain("Ask the person once whether to take vendor off this work's repos");
+    expect(error).toContain("intent remove-repo vendor");
+    expect(error).not.toContain("Write the manifest listing every application-source path");
+    expect(error).toEndWith("Then request the review again.");
+    const removed = cli(UTILITY, ["intent", "remove-repo", "vendor"], project);
+    expect(removed.rc, removed.out).toBe(0);
+    const requested = cli(LOG, args, project);
+    expect(requested.rc, requested.out).toBe(0);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
   test("REVIEW_COMPLETED and retry-pending refuse source edited after dispatch", () => {
     const { project, record } = runtimeFixture();
     writeManifest(record, "alpha", [{ path: "app.ts" }]);

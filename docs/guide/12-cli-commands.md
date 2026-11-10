@@ -9,8 +9,8 @@ diagnostic and lifecycle routes.
 > Cursor, opencode, and GitHub Copilot you type `/aidlc`; on Codex CLI it is `$aidlc` (or
 > `/skills` → aidlc). The flags and behaviour below are identical either way —
 > only the prefix changes. The examples use `/aidlc`; substitute `$aidlc` on
-> Codex. See the [Kiro CLI](harnesses/kiro-cli.md),
-> [Kiro IDE](harnesses/kiro-ide.md), [Codex CLI](harnesses/codex-cli.md),
+> Codex. See the [Kiro](harnesses/kiro.md),
+> [Kiro CLI (V2)](harnesses/kiro.md#kiro-cli-v2), [Codex CLI](harnesses/codex-cli.md),
 > [Cursor](harnesses/cursor.md), [opencode](harnesses/opencode.md), and
 > [GitHub Copilot](harnesses/copilot.md) harness guides.
 
@@ -227,7 +227,10 @@ sends a request holding a double quote, a typographic one such as `“` or `’`
 one of `&`, `|`, `<`, `>`, `^`, or a trailing backslash this way, since Windows
 PowerShell or cmd.exe can change them): the agent writes it to
 `aidlc/.aidlc-engine/request-text/request.txt` and runs `aidlc engine orchestrate next
---request-file aidlc/.aidlc-engine/request-text/request.txt` with any other flags. The
+--request-file aidlc/.aidlc-engine/request-text/request.txt` with any other flags. On
+Kiro (Kiro IDE and Kiro CLI on its v3 engine) the agent sends a request this way
+on every shell when it holds `$`, a backtick, `>`, `<`, `&`, `@(`, `@{` or a line
+break, since Kiro asks you to approve an AI-DLC command holding one of them. The
 engine reads only a plain file directly inside `aidlc/.aidlc-engine/request-text/`,
 through no link, up to 64 KiB, uses its words exactly as written, and removes
 the file once the command goes ahead.
@@ -3545,7 +3548,7 @@ Stages in scope: 22
 Completed: 4/22
 ```
 
-Runs under the audit lock, rejects flips that would starve a remaining stage of a required input, other than a skip you named with `/aidlc --skip`, after which the stages that read it run from what there is (and flips of completed/in-progress stages, behind-cursor stages (Reverse Engineering before Construction starts is the exception: while `next` would still go back to run it you can skip it, and on existing code you can put it back; so is a stage the plan skips that the work has just passed over while nothing after it has started, such as User Stories right after Requirements Analysis is approved: you can put it back, and `next` goes back to run it), any flip that would move the first EXECUTE stage of Construction - the protected stage-routing anchor - in either direction, any recompose against a workflow whose Status is not Running, and, under autonomous Construction, a recompose with no request of yours on record, or one run with `AIDLC_UNATTENDED=1`: that refusal names `aidlc-bolt.ts set-autonomy --mode gated`, which switches to stopping for approval at each Bolt), rebuilds the derived state fields, and emits `RECOMPOSED`. Each refusal of a stage names what you can do instead: jump to or past the stage, run it on its own with `/aidlc --stage <slug> --single`, add or skip the stages a missing input involves, or change to a scope that runs or skips it. Reached through `/aidlc --skip <slug>`, `/aidlc --add <slug>`, a jump to a skipped stage, and `/aidlc compose` mid-workflow, not typed directly. For a change you approved at a `/aidlc compose` question (its marker `aidlc/.aidlc-compose-pending` still on disk and fresh), the output ends with one more line for the agent: delete the marker and run `next`, so your work carries on in the same turn.
+Runs under the audit lock, rejects flips that would starve a remaining stage of a required input, other than a skip you named with `/aidlc --skip`, after which the stages that read it run from what there is (and flips of completed/in-progress stages, behind-cursor stages (Reverse Engineering before Construction starts is the exception: while `next` would still go back to run it you can skip it, and on existing code you can put it back; so is a stage the plan skips that the work has just passed over while nothing after it has started, such as User Stories right after Requirements Analysis is approved: you can put it back, and `next` goes back to run it), any flip that would move the first EXECUTE stage of Construction - the protected stage-routing anchor - in either direction, any recompose against a workflow whose Status is not Running, and, under autonomous Construction, a recompose with no request of yours on record, or one run with `AIDLC_UNATTENDED=1`: that refusal names `aidlc-bolt.ts set-autonomy --mode gated`, which switches to stopping for approval at each Bolt), rebuilds the derived state fields, and emits `RECOMPOSED`. Each refusal of a stage names what you can do instead: jump to or past the stage, run it on its own with `/aidlc --stage <slug> --single`, add or skip the stages a missing input involves, or change to a scope that runs or skips it. Reached through `/aidlc --skip <slug>`, `/aidlc --add <slug>`, a jump to a skipped stage, and `/aidlc compose` mid-workflow, not typed directly. For a change you approved at a `/aidlc compose` question while it is still open, the output ends with one more line for the agent: run `next`, so your work carries on in the same turn.
 
 Putting back a stage this work skipped, by the undo AI-DLC names or later in your own words, is not refused either: the stage is judged as the plan had it before the skip.
 
@@ -3687,6 +3690,10 @@ Three read-only skills surface what `aidlc engine runtime summary` reports, wrap
 | `/aidlc-outcomes-pack` | Handover document for the team. Writes `OUTCOMES.md` |
 
 All three are read-only — no stage advance, no audit emit — and source every number from `aidlc engine runtime summary --json`. If your harness doesn't surface skills as slash commands (so `/aidlc-session-cost` is reported invalid), run that command directly — it produces the same cost view. See [Session Management § Session Skills](11-session-management.md#session-skills) for the full walkthrough.
+
+### Issue report — when something went wrong
+
+`/aidlc-issue-report` (Codex: `$aidlc-issue-report`) gathers what a run that went wrong left behind, with sensitive details removed, for you to send to the AI-DLC team. It reads AI-DLC's records and your AI tool's own log for this project, writes the data (`safe.json`) and a cover that says what it holds into `aidlc/diagnostics/issue-reports/<time>/`, and checks them before it says they are ready; it does not diagnose anything and never sends anything itself. See [Skills](17-skills.md).
 
 ---
 
