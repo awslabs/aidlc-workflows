@@ -111,7 +111,8 @@ import {
 import { compareVersions } from "../tools/aidlc-channel.ts";
 import { AIDLC_VERSION } from "../tools/aidlc-version.ts";
 import {
-  REPOS_MOVED_LINE,
+  catchUpChangedLine,
+  REPOS_FILE,
   reposManifestMovedIntoAidlc,
   trackedReposManifestAtRoot,
 } from "../tools/aidlc-workspace-manifest.ts";
@@ -160,10 +161,11 @@ function completeHelpersOfEarlierProcess(projectDir: string, sessionId: string):
 // Kiro questions to the person. A refresh that fails says nothing (doctor's
 // version row shows the project behind) and is tried again at the next chat's
 // start. A newer stamp is never touched. Two passes, as config refreshes a
-// folder only after a sibling it shares files with. True when this moved a
-// repos.json git tracks into aidlc/.
-function catchUpProjectFiles(projectDir: string): boolean {
-  if (!isCompiledExecutable() || existsSync(join(projectDir, ".aidlc-version"))) return false;
+// folder only after a sibling it shares files with. The person's line when it
+// changed files git tracks, or moved a repos.json git tracks into aidlc/; null
+// otherwise.
+function catchUpProjectFiles(projectDir: string): string | null {
+  if (!isCompiledExecutable() || existsSync(join(projectDir, ".aidlc-version"))) return null;
   const major = AIDLC_VERSION.split(".")[0];
   const behind = () => {
     try {
@@ -181,8 +183,9 @@ function catchUpProjectFiles(projectDir: string): boolean {
     }
   };
   let pending = behind();
-  if (pending.length === 0) return false;
+  if (pending.length === 0) return null;
   const trackedList = trackedReposManifestAtRoot(projectDir);
+  const before = projectChanges(projectDir);
   // The child resolves its own harness, as a typed config does: this hook's
   // pins name the chat's harness folder, not the one being refreshed.
   const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_CONFIG_DEFER_KIRO_SESSION: "1" };
@@ -208,7 +211,64 @@ function catchUpProjectFiles(projectDir: string): boolean {
     // refused stays refused, so it runs once per chat start.
     if (pending.length === tried) break;
   }
-  return trackedList && reposManifestMovedIntoAidlc(projectDir);
+  const moved = trackedList && reposManifestMovedIntoAidlc(projectDir);
+  const after = before === null ? null : projectChanges(projectDir);
+  const changed = after === null ? [] : refreshChanged(projectDir, before ?? new Map(), after, moved);
+  return catchUpChangedLine(AIDLC_VERSION, changed, moved);
+}
+
+function projectGit(projectDir: string, args: string[], input?: string) {
+  return spawnSync("git", ["-C", projectDir, ...args], { encoding: "utf-8", input, timeout: 30_000, stdio: ["pipe", "pipe", "pipe"] });
+}
+
+// What git shows changed in the project outside aidlc/ (whose records change at
+// every step), by path relative to the project folder, each with its status and
+// its content's id: a file the person had changed already and the refresh
+// rewrote reads as changed after, one it left does not. Null outside git.
+function projectChanges(projectDir: string): Map<string, string> | null {
+  const prefix = projectGit(projectDir, ["rev-parse", "--show-prefix"]);
+  if (prefix.status !== 0) return null;
+  const status = projectGit(projectDir, ["status", "--porcelain=v1", "-z", "-uall", "--", ".", ":(exclude)aidlc"]);
+  if (status.status !== 0) return null;
+  const inProject = prefix.stdout.trim();
+  const rows: Array<{ code: string; path: string }> = [];
+  const entries = status.stdout.split("\0");
+  for (let at = 0; at < entries.length; at++) {
+    const entry = entries[at];
+    if (entry.length < 4) continue;
+    const code = entry.slice(0, 2);
+    const path = entry.slice(3);
+    rows.push({ code, path: inProject !== "" && path.startsWith(inProject) ? path.slice(inProject.length) : path });
+    // A rename's source path follows it.
+    if (code[0] === "R" || code[0] === "C") at++;
+  }
+  const present = rows.filter((row) => existsSync(join(projectDir, ...row.path.split("/"))));
+  const ids = present.length === 0 ? [] : projectGit(projectDir, ["hash-object", "--stdin-paths"], `${present.map((row) => row.path).join("\n")}\n`)
+    .stdout.split("\n").map((line) => line.trim());
+  const changes = new Map<string, string>();
+  for (const row of rows) {
+    const at = present.indexOf(row);
+    changes.set(row.path, `${row.code}:${at < 0 ? "-" : ids[at] ?? "?"}`);
+  }
+  return changes;
+}
+
+// The paths the refresh changed: new in git's view or with new content, a file
+// git does not track counted only in a folder git already tracks, and the
+// list's own two paths left to the move.
+function refreshChanged(projectDir: string, before: Map<string, string>, after: Map<string, string>, moved: boolean): string[] {
+  const tracked = new Map<string, boolean>();
+  const folderTracked = (folder: string): boolean => {
+    if (!tracked.has(folder)) tracked.set(folder, projectGit(projectDir, ["ls-files", "--", folder]).stdout.trim() !== "");
+    return tracked.get(folder) ?? false;
+  };
+  return [...after].filter(([path, now]) => {
+    if (before.get(path) === now) return false;
+    if (moved && path === REPOS_FILE) return false;
+    if (!now.startsWith("??")) return true;
+    const slash = path.indexOf("/");
+    return slash > 0 && folderTracked(path.slice(0, slash));
+  }).map(([path]) => path);
 }
 
 export async function run(input: string): Promise<number> {
@@ -475,10 +535,11 @@ if (sessionId && !rebindCheckOnly) {
   // After the status line, whose once-only line config's own call would take.
   // A compaction's start is mid-turn, so the refresh waits for the next chat.
   try {
-    if (source !== "compact" && catchUpProjectFiles(projectDir)) {
+    const caughtUp = source === "compact" ? null : catchUpProjectFiles(projectDir);
+    if (caughtUp !== null) {
       // opencode's adapter carries no session-start context: the next step does.
-      if (runtimeHarnessName(projectDir) === "opencode") addPendingPersonLines(projectDir, sessionId, [REPOS_MOVED_LINE]);
-      else asks.push(`TELL ONCE: in your first reply, tell the person this, in their language: "${REPOS_MOVED_LINE}"`);
+      if (runtimeHarnessName(projectDir) === "opencode") addPendingPersonLines(projectDir, sessionId, [caughtUp]);
+      else asks.push(`TELL ONCE: in your first reply, tell the person this, in their language: "${caughtUp}"`);
     }
   } catch {
     // Tried again at the next chat's start.

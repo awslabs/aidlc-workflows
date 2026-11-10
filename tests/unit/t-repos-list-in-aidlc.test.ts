@@ -1,4 +1,4 @@
-// covers: function:workspaceManifestAt, function:reposManifestPath, function:moveReposManifestIntoAidlc, function:trackedReposManifestAtRoot, function:reposManifestMovedIntoAidlc, function:reposListGoingBackLine, function:readWorkspaceRepos, function:repoNotThereLine, function:aidlcOwnedSourceKey, function:sourceChangedOutsideAidlc, function:workspaceManifestChecks, subcommand:aidlc-unit:share, file:core/tools/aidlc-workspace-manifest.ts
+// covers: function:catchUpChangedLine, function:workspaceManifestAt, function:reposManifestPath, function:moveReposManifestIntoAidlc, function:trackedReposManifestAtRoot, function:reposManifestMovedIntoAidlc, function:reposListGoingBackLine, function:readWorkspaceRepos, function:repoNotThereLine, function:aidlcOwnedSourceKey, function:sourceChangedOutsideAidlc, function:workspaceManifestChecks, subcommand:aidlc-unit:share, file:core/tools/aidlc-workspace-manifest.ts
 //
 // The workspace's repo list lives in aidlc/repos.json from 2.12, checked in with
 // the team's record; a root repos.json an older AI-DLC wrote is still read. One
@@ -16,6 +16,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  catchUpChangedLine,
   moveReposManifestIntoAidlc,
   readWorkspaceRepos,
   REPOS_LOCAL_PLACE,
@@ -92,6 +93,27 @@ describe("where the repo list is read", () => {
     const bare = tempDir("no-aidlc");
     expect(reposManifestPath(bare)).toBe(join(bare, "repos.json"));
     expect(existsSync(join(bare, "aidlc"))).toBe(false);
+  });
+
+  // The catch-up after an update: one line for what it changed that git
+  // tracks, by folder and count, the list's move in the same line.
+  test("the catch-up's line names each folder with its count, AI-DLC's part of a shared file, and the move in one line", () => {
+    expect(catchUpChangedLine("9.9.9", [], false)).toBeNull();
+    expect(catchUpChangedLine("9.9.9", [], true)).toBe(REPOS_MOVED_LINE);
+    expect(catchUpChangedLine("9.9.9", [".claude/tools/data/aidlc-stamp.json"], false)).toBe(
+      "AI-DLC updated its own files in this project to 9.9.9: 1 file under .claude changed. Commit it so your team gets it.",
+    );
+    expect(catchUpChangedLine("9.9.9", [".kiro/a.md", ".claude/a.md", "AGENTS.md", ".claude/b.md"], false)).toBe(
+      "AI-DLC updated its own files in this project to 9.9.9: 2 files under .claude, 1 under .kiro and its part of AGENTS.md changed. " +
+        "Commit them so your team gets them.",
+    );
+    expect(catchUpChangedLine("9.9.9", ["AGENTS.md"], false)).toBe(
+      "AI-DLC updated its own files in this project to 9.9.9: its part of AGENTS.md changed. Commit it so your team gets it.",
+    );
+    expect(catchUpChangedLine("9.9.9", [".claude/a.md", ".claude/b.md"], true)).toBe(
+      "AI-DLC updated its own files in this project to 9.9.9: 2 files under .claude changed, and repos.json moved into aidlc/. " +
+        "Commit them so your team gets them; teammates need AI-DLC 2.12 or newer to find repos.json there.",
+    );
   });
 
   test("one person's repos.local.json sits beside the list in aidlc/ and is read only there", () => {

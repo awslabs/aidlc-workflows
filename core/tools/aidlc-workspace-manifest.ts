@@ -61,6 +61,40 @@ export const REPOS_MOVED_LINE =
   `AI-DLC moved repos.json into aidlc/. Commit it so your team gets it; teammates need AI-DLC ` +
   `${REPOS_IN_AIDLC_SINCE.major}.${REPOS_IN_AIDLC_SINCE.minor} or newer.`;
 
+// A file AI-DLC shares with the person, where it writes only its own marked part.
+const SHARED_ROOT_FILES = new Set(["AGENTS.md", ".gitignore"]);
+
+function joinWithAnd(parts: readonly string[]): string {
+  return parts.length <= 1 ? (parts[0] ?? "") : `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}`;
+}
+
+// The catch-up's one line after an update: the files of the project git tracks
+// that the refresh changed (paths relative to the project, "/"-separated), by
+// folder with each folder's count, a root file by its name, and the list's move
+// in the same line when it moved; the move alone keeps its own line. Null when
+// nothing git tracks changed.
+export function catchUpChangedLine(version: string, paths: readonly string[], moved: boolean): string | null {
+  if (paths.length === 0) return moved ? REPOS_MOVED_LINE : null;
+  const folders = new Map<string, number>();
+  const roots: string[] = [];
+  for (const path of paths) {
+    const slash = path.indexOf("/");
+    if (slash < 0) roots.push(path);
+    else folders.set(path.slice(0, slash), (folders.get(path.slice(0, slash)) ?? 0) + 1);
+  }
+  const ordered = [...folders].sort(([a, n], [b, m]) => m - n || (a < b ? -1 : a > b ? 1 : 0));
+  const parts = [
+    ...ordered.map(([folder, n], at) => (at === 0 ? `${n} file${n === 1 ? "" : "s"} under ${folder}` : `${n} under ${folder}`)),
+    ...[...roots].sort().map((file) => (SHARED_ROOT_FILES.has(file) ? `its part of ${file}` : file)),
+  ];
+  const head = `AI-DLC updated its own files in this project to ${version}: ${joinWithAnd(parts)} changed`;
+  if (moved) {
+    return `${head}, and repos.json moved into aidlc/. Commit them so your team gets them; teammates need AI-DLC ` +
+      `${REPOS_IN_AIDLC_SINCE.major}.${REPOS_IN_AIDLC_SINCE.minor} or newer to find repos.json there.`;
+  }
+  return `${head}. ${paths.length === 1 ? "Commit it so your team gets it." : "Commit them so your team gets them."}`;
+}
+
 // Said when the person sets a project to an earlier release (a pin, `aidlc
 // use`): that release would not see the list where this one moved it.
 export function reposListGoingBackLine(root: string, release: string): string | null {

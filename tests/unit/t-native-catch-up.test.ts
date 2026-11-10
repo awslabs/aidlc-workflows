@@ -4,8 +4,10 @@
 // native install's hooks run the machine's release, so the first chat's start in
 // a project whose harness files an earlier release wrote runs config's refresh
 // for it, unattended, every recorded answer kept. 2.12's refresh moves a tracked
-// root repos.json into aidlc/ and the first reply says so; an untracked one moves
-// silently. A second start and a later `aidlc config` change nothing. A pinned
+// root repos.json into aidlc/; the first reply says, in one line, how many files
+// under each folder git tracks the refresh changed and that the list moved, for
+// the person to commit; an untracked list moves silently, and a folder git does not
+// track or a project not in git says nothing. A second start and a later `aidlc config` change nothing. A pinned
 // project, a newer stamp, the status line and a tool call's hook are left alone.
 // The release comes through a served mirror, as an organisation's would; the
 // project's hooks run through the shell Claude Code uses (Git Bash on Windows).
@@ -75,12 +77,22 @@ function stampedTree(version: string): string {
   const stamp = join(dir, ".claude", "tools", "data", "aidlc-stamp.json");
   const value = JSON.parse(readFileSync(stamp, "utf-8")) as Record<string, unknown>;
   writeFileSync(stamp, `${JSON.stringify({ ...value, frameworkVersion: version }, null, 2)}\n`);
+  // A second file that release wrote otherwise, so the refresh changes more than the stamp.
+  const skill = join(dir, ".claude", "skills", "aidlc", "SKILL.md");
+  writeFileSync(skill, `${readFileSync(skill, "utf-8")}\n<!-- ${version} -->\n`);
   return dir;
 }
 
-// A Claude Code project set up from `tree`, with a repo list, all committed.
-function project(tree: string, options: { tracked?: boolean; pin?: boolean } = {}): string {
+// A Claude Code project set up from `tree`, with a repo list, all committed
+// (with `harnessCommitted: false`, all but .claude; with `git: false`, no git).
+function project(tree: string, options: { tracked?: boolean; pin?: boolean; harnessCommitted?: boolean; git?: boolean } = {}): string {
   const dir = realpathSync(mkdtempSync(join(root, "project-")));
+  if (options.git === false) {
+    const configured = sh(dir, `aidlc config --project-dir "${dir.replaceAll("\\", "/")}" --harness claude --mcp none --quiet --from "${tree.replaceAll("\\", "/")}"`);
+    expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+    writeFileSync(join(dir, "repos.json"), `${JSON.stringify({ repos: [{ name: "billing" }] }, null, 2)}\n`);
+    return dir;
+  }
   git(dir, ["init", "-q", "-b", "main"]);
   git(dir, ["config", "user.name", "lee"]);
   git(dir, ["config", "user.email", "lee@example.test"]);
@@ -90,7 +102,7 @@ function project(tree: string, options: { tracked?: boolean; pin?: boolean } = {
     const pinned = sh(dir, `aidlc config --pin ${AIDLC_VERSION} --project-dir "${dir.replaceAll("\\", "/")}"`);
     expect(pinned.status, pinned.stdout + pinned.stderr).toBe(0);
   }
-  git(dir, ["add", "-A"]);
+  git(dir, options.harnessCommitted === false ? ["add", "-A", "--", ".", ":!.claude"] : ["add", "-A"]);
   git(dir, ["commit", "-q", "-m", "setup"]);
   writeFileSync(join(dir, "repos.json"), `${JSON.stringify({ repos: [{ name: "billing" }] }, null, 2)}\n`);
   if (options.tracked !== false) {
@@ -98,6 +110,15 @@ function project(tree: string, options: { tracked?: boolean; pin?: boolean } = {
     git(dir, ["commit", "-q", "-m", "repo list"]);
   }
   return dir;
+}
+
+// The catch-up's line for what changed under .claude, as git now shows it.
+function catchUpSaid(dir: string, moved: boolean): string {
+  const n = git(dir, ["status", "--porcelain", "-uall", "--", ".claude"]).split("\n").filter(Boolean).length;
+  const head = `AI-DLC updated its own files in this project to ${AIDLC_VERSION}: ${n} file${n === 1 ? "" : "s"} under .claude changed`;
+  return moved
+    ? `${head}, and repos.json moved into aidlc/. Commit them so your team gets them; teammates need AI-DLC 2.12 or newer to find repos.json there.`
+    : `${head}. ${n === 1 ? "Commit it so your team gets it." : "Commit them so your team gets them."}`;
 }
 
 function hookCommand(dir: string, event: string): string {
@@ -180,7 +201,10 @@ describe.skipIf(SKIP_REASON !== null)("each project catches up the next time it 
     const first = sessionStart(dir, "catch-up");
     expect(first.status, first.stdout + first.stderr).toBe(0);
     expect(stampVersion(dir)).toBe(AIDLC_VERSION);
-    expect(first.stdout).toContain(MOVED);
+    // One line for both: the files the refresh changed and the list's move.
+    expect(first.stdout).toContain(catchUpSaid(dir, true));
+    expect(catchUpSaid(dir, true)).not.toContain(": 1 file under");
+    expect(first.stdout).not.toContain(MOVED);
     expect(git(dir, ["status", "--porcelain"])).toContain("R  repos.json -> aidlc/repos.json");
     // Recorded answers kept: --mcp none still writes no .mcp.json.
     expect(existsSync(join(dir, ".mcp.json"))).toBe(false);
@@ -188,6 +212,7 @@ describe.skipIf(SKIP_REASON !== null)("each project catches up the next time it 
     const second = sessionStart(dir, "next start");
     expect(second.status, second.stdout + second.stderr).toBe(0);
     expect(second.stdout).not.toContain("repos.json");
+    expect(second.stdout).not.toContain("AI-DLC updated its own files");
     expect(git(dir, ["status", "--porcelain", "--", ":!aidlc"])).toBe(status);
     const configured = sh(dir, `aidlc config --project-dir "${dir.replaceAll("\\", "/")}" --harness claude`);
     expect(configured.status, configured.stdout + configured.stderr).toBe(0);
@@ -195,13 +220,27 @@ describe.skipIf(SKIP_REASON !== null)("each project catches up the next time it 
     expect(git(dir, ["status", "--porcelain", "--", ":!aidlc"])).toBe(status);
   });
 
-  test("an untracked list moves with nothing said", () => {
+  test("an untracked list moves with nothing said of it; the files the refresh changed are", () => {
     const dir = project(earlierTree, { tracked: false });
     const first = sessionStart(dir, "catch-up, untracked list");
     expect(first.status, first.stdout + first.stderr).toBe(0);
     expect(stampVersion(dir)).toBe(AIDLC_VERSION);
     expect(existsSync(join(dir, "aidlc", "repos.json"))).toBe(true);
     expect(first.stdout).not.toContain("repos.json");
+    expect(first.stdout).toContain(catchUpSaid(dir, false));
+  });
+
+  test("a harness folder git does not track, and a project not in git, say nothing of the files", () => {
+    const untracked = project(earlierTree, { tracked: false, harnessCommitted: false });
+    const started = sessionStart(untracked, "catch-up, untracked .claude");
+    expect(started.status, started.stdout + started.stderr).toBe(0);
+    expect(stampVersion(untracked)).toBe(AIDLC_VERSION);
+    expect(started.stdout).not.toContain("AI-DLC updated its own files");
+    const away = project(earlierTree, { git: false });
+    const outside = sessionStart(away, "catch-up, no git");
+    expect(outside.status, outside.stdout + outside.stderr).toBe(0);
+    expect(stampVersion(away)).toBe(AIDLC_VERSION);
+    expect(outside.stdout).not.toContain("AI-DLC updated its own files");
   });
 
   test("a pinned project and a newer stamp are left alone", () => {

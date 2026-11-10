@@ -1497,7 +1497,12 @@ Nobody runs config after an update: each project catches up the next time it is
 opened. A native install's hooks run the machine's release, so the first chat's
 start in a project whose harness files an earlier release wrote runs the refresh
 `aidlc config` does, with no terminal and every recorded answer kept (it asks
-nothing, switches no harness and answers no Kiro question for you). A pinned
+nothing, switches no harness and answers no Kiro question for you). When the refresh changed files git tracks, the first
+reply says so once, with each folder's count, for example "AI-DLC updated its
+own files in this project to 2.12.1: 120 files under .claude changed. Commit
+them so your team gets them." (with `repos.json` moved into `aidlc/` too, the
+same line says that); nothing is said when nothing git tracks changed or the
+project is not in git. A pinned
 project runs its pinned release and is left as it is. A refresh that cannot
 finish says nothing in the chat and is tried again when the next chat starts;
 `aidlc doctor` shows the project still on the earlier release, and
