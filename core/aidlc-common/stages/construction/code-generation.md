@@ -145,7 +145,8 @@ the engine asks for approval, so that line is where they learn of such an
 element before anything is written; on a platform where a schema change is
 shared and hard to undo, it is their one chance to say no. When nothing
 upstream covers an element the work cannot do without, say so there rather
-than inventing a requirement for it.
+than inventing a requirement for it. A plan that adds no such element has no
+`## Assumptions` section and no `Adds:` line.
 
 When the deliverable is infrastructure-as-code (always in the `infra` scope),
 this stage writes the IaC, under the same Plan Approval as application code:

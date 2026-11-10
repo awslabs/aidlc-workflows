@@ -73,8 +73,10 @@ describe("a Code Generation plan names the data-model elements it adds (#3455)",
     expect(PLANNING).toContain("When the plan adds an element nothing upstream asks for, add a fourth line, the count first:");
     expect(fenceLabels(STAGE, "```\n- Adds:")).toEqual(["Adds"]);
     expect(STAGE).toContain("- Adds: <how many data-model elements no requirement asks for, then their names>; see Assumptions");
-    // A plan that adds nothing says nothing: no line on every plan.
+    // A plan that adds nothing says nothing: no line and no section on every
+    // plan (a live run wrote "## Assumptions" with "None." when this was unsaid).
     for (const text of [STAGE, DOCS]) expect(text).not.toContain("nothing beyond the requirements");
+    expect(PLANNING).toContain("A plan that adds no such element has no `## Assumptions` section and no `Adds:` line.");
   });
 
   test("the developer agent takes an element nothing upstream asks for through the plan first, as a step of its own", () => {
