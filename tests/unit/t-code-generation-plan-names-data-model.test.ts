@@ -70,7 +70,7 @@ describe("a Code Generation plan names the data-model elements it adds (#3455)",
   test("the Summary keeps its three lines, and the Adds line is added only when there is an element", () => {
     expect(PLANNING).toContain("`## Summary` section of three lines, one line each");
     expect(fenceLabels(STAGE, "```\n## Summary")).toEqual(["Builds", "Touches", "Tests"]);
-    expect(PLANNING).toContain("When the plan adds an element nothing upstream asks for, add a fourth line, the count first:");
+    expect(PLANNING).toContain("When the plan adds an element nothing upstream asks for, the Summary gets one more line, the count first:");
     expect(fenceLabels(STAGE, "```\n- Adds:")).toEqual(["Adds"]);
     expect(STAGE).toContain("- Adds: <how many data-model elements no requirement asks for, then their names>; see Assumptions");
     // A plan that adds nothing says nothing: no line and no section on every

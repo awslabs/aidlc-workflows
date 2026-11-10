@@ -257,8 +257,8 @@ The engine shows them to the person when it asks for approval:
 - Tests: <how many tests, and of what kind>
 ```
 
-When the plan adds an element nothing upstream asks for, add a fourth line, the
-count first:
+When the plan adds an element nothing upstream asks for, the Summary gets one
+more line, the count first:
 
 ```
 - Adds: <how many data-model elements no requirement asks for, then their names>; see Assumptions
