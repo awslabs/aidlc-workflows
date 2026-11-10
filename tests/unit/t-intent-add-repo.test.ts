@@ -146,7 +146,8 @@ function gitTrace(): { env: NodeJS.ProcessEnv; ranRemote: () => boolean } {
 
 function notListedLine(name: string): string {
   return `${name} is not in this workspace yet, and no repos.json lists it, so there is no address to clone it from. ` +
-    "Give its clone address with --url, or clone it beside the other repos, then add it again.";
+    "Ask the person for its clone address once, then run this again with --url and that address; " +
+    "if it is already cloned elsewhere, give its folder with --path. Nothing was changed.";
 }
 
 function stagingLeft(): string[] {
@@ -869,7 +870,7 @@ describe("work that records no repos", () => {
     const billing = besideRepo("billing");
     const refused = utility(["intent", "add-repo", "checkout-api"]);
     expect(refused.rc).not.toBe(0);
-    expect(refused.out).toContain("run this again with --path and the folder the person named");
+    expect(refused.out).toContain(notListedLine("checkout-api"));
     expect(repos()).toEqual([]);
     expect(existsSync(join(proj, "repos.json"))).toBe(false);
     const added = utility(["intent", "add-repo", "checkout-api", "--path", api]);

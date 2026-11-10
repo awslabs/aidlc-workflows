@@ -10217,7 +10217,8 @@ function plannedRepoClone(
   if (url === undefined) {
     die(
       `${name} is not in this workspace yet, and no repos.json lists it, so there is no address to clone it from. ` +
-        "Give its clone address with --url, or clone it beside the other repos, then add it again.",
+        "Ask the person for its clone address once, then run this again with --url and that address; " +
+        "if it is already cloned elsewhere, give its folder with --path. Nothing was changed.",
     );
   }
   const kept = withoutCredentials(url);
