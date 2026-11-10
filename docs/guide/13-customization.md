@@ -332,7 +332,8 @@ apply to that work and you hear so once. Work created from any other request kee
 and typing `/aidlc --plan-approval on` first takes the words back. The agent never turns it off on its own and never
 suggests it: run with no reply from you since the last decision, its setter is refused. Turning it
 on (`/aidlc --plan-approval on`) works from anywhere, the agent included, and
-applies from the next plan. `guard.plan-approval` is another name for the same
+applies to every plan whose build has not started, so a plan just written with
+plan approval off is shown for approval before its build begins. `guard.plan-approval` is another name for the same
 switch: `/aidlc config set guard.plan-approval off` turns plan approval off and
 writes no `Guards Off` line.
 

@@ -3180,7 +3180,43 @@ function planApprovalReceiptFor(
   authority: CodeGenerationAuthority,
   key: PlanApprovalReceiptKey,
 ): PlanApprovalRuntimeReceipt | null {
-  return readPlanApprovalReceipt(projectDir, key) ?? committedPlanApproval(projectDir, authority, key);
+  const receipt = readPlanApprovalReceipt(projectDir, key);
+  if (skipNoLongerStands(projectDir, authority, receipt)) return null;
+  return receipt ?? committedPlanApproval(projectDir, authority, key);
+}
+
+// The plan-approval setting, from its one owner (resolvePlanApprovalSetting in
+// aidlc-guard-switch.ts). This file may not import it: a tool the agent runs that
+// names that module is refused by the runtime-integrity guard (HOOK_MODULE). The
+// router module (aidlc-plan-approval-ask.ts) hands it in as it loads, so `next`,
+// the hooks and every tool that loads the router judge by it. Unset (this CLI
+// on its own, usually), a plan built without asking stands on its record alone.
+let planApprovalOffFor: ((projectDir: string) => boolean) | null = null;
+
+export function readPlanApprovalSettingWith(planApprovalOff: (projectDir: string) => boolean): void {
+  planApprovalOffFor = planApprovalOff;
+}
+
+// The engine's record that plan approval off built a plan without asking stands,
+// until that plan's build starts, only while plan approval is still off and the
+// questions file is still the record it wrote. Turned on, nobody approved the
+// plan, so `next` asks; once the plan question is shown (plan approval turned on,
+// or the person asked to review it), their answer decides, and plan approval
+// turned off again records the skip afresh. A setting or file that cannot be
+// read keeps the plan stop, as the router does.
+function skipNoLongerStands(
+  projectDir: string,
+  authority: CodeGenerationAuthority,
+  receipt: PlanApprovalRuntimeReceipt | null,
+): boolean {
+  if (receipt?.skipped === undefined || receipt.status === "generation") return false;
+  try {
+    if (planApprovalOffFor !== null && !planApprovalOffFor(projectDir)) return true;
+    const path = join(authority.stageDir, "code-generation-questions.md");
+    return !existsSync(path) || planApprovalPromptSha256(readFileSync(path, "utf-8")) !== receipt.promptSha256;
+  } catch {
+    return true;
+  }
 }
 
 /**
@@ -3330,9 +3366,11 @@ function codeGenerationApprovalArtifacts(
   // approval whose receipt went missing or whose attempt moved on still reads
   // as approved and is checked as one. The label on the file's `[Answer]:`
   // line, the person's own words included, decides nothing.
-  const approvedAnswer = recordedFingerprint !== null && (readPlanApprovalReceipt(projectDir, {
+  const receipt = recordedFingerprint === null ? null : readPlanApprovalReceipt(projectDir, {
     targetId: authority.targetId, runFloor: authority.runFloor, fingerprint: recordedFingerprint,
-  })?.choice === "Approve Plan" || planApprovedOnRecord(projectDir, authority.targetId, recordedFingerprint));
+  });
+  const approvedAnswer = recordedFingerprint !== null && !skipNoLongerStands(projectDir, authority, receipt) &&
+    (receipt?.choice === "Approve Plan" || planApprovedOnRecord(projectDir, authority.targetId, recordedFingerprint));
   const embedded = planExists ? parseTestingContract(plan) : null;
   const current = planExists ? resolveTestingPosture(contractProjectDir) : null;
   const contractHash = embedded?.contract_sha256 ?? null;
