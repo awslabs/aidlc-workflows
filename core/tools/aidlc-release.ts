@@ -316,12 +316,19 @@ export function verifyReleaseProvenance(
     const stderr = Buffer.from(result.stderr ?? new Uint8Array()).toString("utf-8").trim();
     // Name what the release was checked against: a release published from
     // another repository fails here with only gh's issuer line otherwise.
+    // The hint leads with the safe step, because a release that was changed
+    // fails here too and must not be told only the setting that moves the
+    // check. Someone who set AIDLC_RELEASE_REPOSITORY needs no reminder of it.
+    const hint = process.env.AIDLC_RELEASE_REPOSITORY === undefined
+      ? `. Get the release from ${trust.repository}. If you meant to use a ` +
+        "release from another repository, set " +
+        "AIDLC_RELEASE_REPOSITORY=<owner>/<name> where aidlc runs."
+      : "";
     throw new Error(
       `release provenance verification failed against ${trust.repository} ` +
         `(signer workflow ${trust.workflow})${
           stderr ? `: ${stderr.split(/\r?\n/)[0]}` : ""
-        }. A release from another repository needs ` +
-        "AIDLC_RELEASE_REPOSITORY=<owner>/<name> set where aidlc runs.",
+        }${hint}`,
     );
   }
   return "verified";

@@ -1,8 +1,9 @@
 // covers: function:verifyReleaseProvenance
 //
 // A release whose provenance does not verify says which repository and signer
-// workflow it was checked against, and how to point the check at another
-// repository. A fork's release checked against the default repository fails
+// workflow it was checked against. When AIDLC_RELEASE_REPOSITORY is not set it
+// also says where to get the release, then how to point the check at another
+// repository; when it is set, it adds nothing. A fork's release checked against the default repository fails
 // with only gh's own line ("verifying with issuer \"sigstore.dev\""), which
 // names neither, so the person cannot tell an installation setting from a
 // tampered release.
@@ -82,6 +83,7 @@ describe.skipIf(process.platform === "win32")("a provenance failure names what i
     expect(message).toContain(GH_FAILURE);
     expect(message).toContain("awslabs/aidlc-workflows");
     expect(message).toContain("awslabs/aidlc-workflows/.github/workflows/preview-release.yml");
+    expect(message).toContain("Get the release from awslabs/aidlc-workflows");
     expect(message).toContain("AIDLC_RELEASE_REPOSITORY=<owner>/<name>");
   });
 
@@ -91,5 +93,6 @@ describe.skipIf(process.platform === "win32")("a provenance failure names what i
     const message = failure(directory, manifest);
     expect(message).toContain("alice/aidlc-workflows/.github/workflows/preview-release.yml");
     expect(message).not.toContain("awslabs/");
+    expect(message).not.toContain("AIDLC_RELEASE_REPOSITORY");
   });
 });
