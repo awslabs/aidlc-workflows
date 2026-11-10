@@ -1016,7 +1016,7 @@ export const ALLOWED: Record<string, Allowed> = {
   "core/tools/aidlc-unit.ts#amendInput": { use: "keeps", why: "the audit writer: SHARED_INPUT_AMENDED's Person Words; what the teams hear stays the agent's relay" },
   "core/tools/aidlc-unit.ts#turnedDown": { use: "keeps", why: "the claim writer: the turn-down keeps the lead's typed words as person_reply, read by no line" },
   "core/tools/aidlc-unit.ts#saidMerged": { use: "keeps", why: "the claim writer: the lead's word that a repo merged, kept on the claim for the lead's own merge check" },
-  "core/tools/aidlc-unit.ts#checkTeamResultsQuietly": { use: "keeps", why: "the lead's merge check: a repo counted merged by the lead's word carries their words into UNIT_MERGED's how" },
+  "core/tools/aidlc-unit.ts#resultVerdicts": { use: "keeps", why: "the lead's merge check (checkTeamResults' rule, shared with a team's read-only look): a repo counted merged by the lead's word carries their words into UNIT_MERGED's how" },
   "core/tools/aidlc-unit.ts#pushUnit": { use: "keeps", why: "a team's push copies the lead's merged-by-word entries for repos its new push did not change, untouched" },
   [`${STATE}#parkedWords`]: { use: "keeps", why: "the audit writer: the park row's Person Reply" },
   // The recorded answer's Details is the choice the agent recorded, never the file's [Answer]: line (S2a's R31).
