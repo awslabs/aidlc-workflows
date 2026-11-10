@@ -3183,8 +3183,9 @@ describe("plan approval turned on after a plan was built without asking", () => 
   }
 
   // Left open on purpose: `testing-posture begin` is a tool the agent runs, which
-  // cannot read the setting, and no step names it. Run in the window, it starts
-  // the build under the skip, and the switch applies from the next plan.
+  // usually loads no router and so reads no setting, and no step tells an agent
+  // to run it. Run in the window, it starts the build under the skip, and the
+  // switch applies from the next plan.
   test("switched on, no next yet, testing-posture begin run anyway: the build starts, and nothing is asked", () => {
     const proj = project("relaxed", "off");
     builtWithoutAsking(proj);

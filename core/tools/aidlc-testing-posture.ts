@@ -3132,10 +3132,11 @@ function planApprovalReceiptFor(
 }
 
 // The plan-approval setting, from its one owner (resolvePlanApprovalSetting in
-// aidlc-guard-switch.ts), for the processes that may load it: a tool the agent
-// runs may not (the runtime-integrity guard's HOOK_MODULE), so the router module
-// and the plan-approval guard hand it in. Unset, a plan built without asking
-// stands on its record alone.
+// aidlc-guard-switch.ts). This file may not import it: a tool the agent runs that
+// names that module is refused by the runtime-integrity guard (HOOK_MODULE). The
+// router module (aidlc-plan-approval-ask.ts) hands it in as it loads, so `next`,
+// the hooks and every tool that loads the router judge by it. Unset (this CLI
+// on its own, usually), a plan built without asking stands on its record alone.
 let planApprovalOffFor: ((projectDir: string) => boolean) | null = null;
 
 export function readPlanApprovalSettingWith(planApprovalOff: (projectDir: string) => boolean): void {
