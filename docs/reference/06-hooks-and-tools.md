@@ -1826,7 +1826,7 @@ stands with no decision after it (their own request, or their go-ahead after the
 refusal), never on an unattended run, and leaves `ASKED_CHANGE_ALLOWED` with the
 call, that message and their words. The agent's own change waits for their word,
 under every Guard Policy, refused with one sentence of theirs that names no
-step: at the lead's project, which Units wait on which teams, that nothing is
+step: at the lead's project, which Units wait on a build elsewhere or for a take, that nothing is
 built there meanwhile, and that the files there change only when they ask. At
 the lead's project a developer handoff keeps that refusal, and AI-DLC's own
 command in a spelling the reading refused or could not see keeps the refusal

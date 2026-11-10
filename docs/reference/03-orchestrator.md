@@ -760,25 +760,22 @@ refuses the step with that function's own repair step. Under `relaxed` or `off`
 the repo command itself writes the row at the change.
 When choosing teams recorded `Home Location` (work that records code repos of
 its own, `buildOutHomeLocation`, in a workspace that is a Git repository: its
-`origin` address, or `local`), the next step is `ask_type:
-unit-assignment` instead, asked once before any Unit starts: who builds which
-Unit, each named with its likely repos and the Units it waits on. The person
-answers in their own words; the agent runs `assign_command` (`unit assign
-<unit>=<team> ... --request-file <file>`, their words written to that file
-first) with the Units they named and `--open <unit>,...` for the ones they
-left open for any team, or the **Leave them all open** choice's command
-(`--open` alone). A `UNITS_ASSIGNED` row after the latest team
-`UNIT_OWNERSHIP_SET` settles it; its `Left Open` field names the Units left
-open (`unitsLeftOpen`). The home then walks only the Units no team holds and
-none left open, skipping a Unit that waits, directly or through another, on
-one a team holds and has not merged or one left open; a Unit the answer left
-unnamed is the home's to build. When none is left to it while a held or open
-Unit is unmerged, the step is the team board, which offers once in a chat to
-build a Unit left open here (**Build <unit> here**, `unit assign --here
-<unit>`) when it could start now. Each step of teams building Units that
-says where things stand and waits for the person (the board, who builds which
-Unit after the person spoke without naming teams or while the home could not be
-reached, a turn-down asked again, a clone where nothing is ready to take) is a
+`origin` address, or `local`), no question names a team: every Unit is open,
+and the next step is the share offer (`buildOutShareOffer`). The home walks the
+walking skeleton, a Unit started there with no claim of its own
+(`leadBuildsWithoutClaim`, the same reading the take refuses on), and a Unit
+the lead asked to build here (`unit assign --here <unit>`, a `UNITS_ASSIGNED`
+`Here` row) whose claim is the lead's own take (`leadsOwnClaims`: counted as
+walked, never claimed, in `buildOverview`) or was never written; every other
+Unit is left for takes (`unitsLeftForTakes`), held elsewhere for the walk, and
+the walk skips a Unit that waits, directly or through another, on one of them
+not merged yet. Where a Unit started there before teams were chosen, or teams
+came from a teammate's take of solo work (`takenFromSoloWork`), the walk keeps
+every Unit nobody took and puts no share offer. When none is left to the walk
+while a Unit is unmerged, the step is the team board, which puts the approval
+rhythm until the lead answers it. Each step of teams building Units that
+says where things stand and waits for the person (the board, a turn-down asked
+again, a clone where nothing is ready to take) is a
 `print` that ends the turn (`lineEndingTurn`): what the person reads rides as
 `narration`, the engine's own instruction is the `message`, and any `offers`
 ride with it, so every harness's skill acts on it from a fresh chat. Team work
@@ -960,15 +957,7 @@ carrying the same choice in `offers`; once Code Generation is approved again
 after the last push (`redoneSincePush`), the end offers the push instead, never
 the redo. The board carries `offers` (each a question and its choices, with the
 command each runs), each put once in a chat: a sign-off or a proposal asked once
-and not answered. Who builds which Unit (`ask_type:
-unit-assignment`) is asked once; after the person spoke without naming teams the
-step is a print with the same choice in `offers`, and an answer kept while the
-home could not be reached (`UNITS_ASSIGNED` with `Held: not yet`), or that
-answered with no such branch (`Not Held Because`, said in the offer and its
-waiting line), makes the step a print offering to try again, once; after the person answers it the home builds
-the Units it holds no team for, and the ones named for a team wait for it
-(`unitsKeptForTeams`), said once. Leaving every Unit open holds nothing, so it
-needs no home. A team's result carries the
+and not answered, and the approval rhythm until the lead answers it. A team's result carries the
 outputs the home's later stages consume and the files the cross-Unit coverage
 check at Build and Test reads of the Unit (`crossUnitCoverageReads`).
 

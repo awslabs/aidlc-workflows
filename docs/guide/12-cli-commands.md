@@ -47,7 +47,7 @@ diagnostic and lifecycle routes.
 | `/aidlc --config [section]` | Configure project policy conversationally, then land exact deterministic config flags |
 | `/aidlc --claim <unit> [--team <label>] [--rhythm <per-stage\|unit-end>]` | Atomically claim an open team-owned Unit and bind this checkout to that attempt |
 | `/aidlc --release <unit>` | Release a live Unit claim from unscoped main by publishing a tombstone |
-| `/aidlc unit assign <unit>=<team> ... \| --open` | At the lead's project, hold each named Unit for a team, or leave every Unit open |
+| `/aidlc unit assign --here <unit>` | At the lead's project, build a Unit here: its claim is taken for the lead's project, like any take |
 | `/aidlc unit take <unit> --home <record>` | Take a Unit of the lead's work as your team's own piece of work, or carry its build on |
 | `/aidlc unit push [--later] [--remote <repo>=<name>] [--branch <name>] [--finish-merge]` | In a Unit's build, commit and push exactly its files on its branch in each repo, and send the result back to the lead's project |
 | `/aidlc unit send-back <unit>` | At the lead's project, send a team's Unit back from Build and Test in the failure's words |
@@ -719,50 +719,40 @@ stamped Unit. While main is back at Units Generation changing the Unit plan, a
 claim still goes ahead, and its result says once that if the approved plan
 changes that Unit's own entry, pin asks for a rebase onto main.
 
-### `/aidlc unit assign` - Say who builds which Unit
+### `/aidlc unit assign --here` - Build a Unit at the lead's project
 
-At the lead's project, once teams are chosen and `Home Location` is recorded, hold each
-named Unit for a team. The agent runs it from your own words when the lead's project asks
-who builds which Unit; you can also run it yourself:
+At the lead's project, once teams are chosen and `Home Location` is recorded,
+every Unit is open for anyone to take, and the lead's project builds the walking
+skeleton (when on) and a Unit only when you say so. The agent runs this from
+your own words ("build reporting here"); you can also run it yourself:
 
 ```
-/aidlc unit assign refunds=payments checkout-ui=web --open reporting
-/aidlc unit assign --open
 /aidlc unit assign --here reporting
 ```
 
-Each `<unit>=<team>` writes a claim held for that team at the lead's project's remote
-(in the lead's project's own repository when it has none), with no scope stamp, so the lead's checkout stays unscoped. A Unit you leave
-open (`--open <unit>,...`, or `--open` alone for every Unit you did not name)
-waits for any team to take it, and the lead's project builds it only when you say so:
-`--here <unit>` builds it here after all, as the board's **Build <unit> here**
-does. A Unit you leave out is built here. A Unit a team already holds stays
-with it, and the command says so. A
-Unit the lead's project already started stays here, and the command says so: when you
-asked for it to go to a team or be left open all the same, the agent adds
-`--started-here <unit>`, your words go on the record, and what was built on it
-here stays in the work's record. One Unit named for two teams is refused with both names. The
-walking skeleton, when on, is built at the lead's project first and is never held for a
-team. The agent writes the words the answer came from to the request file the
-command names (`--request-file aidlc/.aidlc-request-text/unit-assign.txt`), and
-they go into the `UNITS_ASSIGNED` audit row when a turn of yours stands behind
-them. When the lead's project cannot be reached, the answer is kept
-(`Held: not yet`) and the next step offers to try again. When it answers but has no
-branch of that name (say the one `memory/team.md` names under Way of Working), the
-answer is kept the same way and every line says that, with the file that named it.
+It is a take like any other: the Unit's claim is written at the lead's project's
+remote (in the lead's project's own repository when it has none) with a
+compare-and-swap, held for the lead's own work by your git `user.name`, so no
+teammate takes it meanwhile, and the lead's walk builds it. A Unit someone took
+first stays theirs, and the command says who builds it. When the claim cannot be
+written, the Unit is built here all the same and the line says the teams cannot
+see that yet, with git's words. `unit release <unit>` there opens it again. The
+agent writes the words it came from to the request file the command names
+(`--request-file aidlc/.aidlc-request-text/unit-assign.txt`), and they go into
+the `UNITS_ASSIGNED` audit row when a turn of yours stands behind them.
 
 ### `/aidlc unit take <unit> --home <record>` - Take a Unit as your team's own work
 
 In a team member's workspace, take one Unit of the lead's work (the record
 named by `--home`, in space `--home-space`, default `default`) and start its
-build as a piece of work of its own in the team's space. AI-DLC offers it when
+build as a piece of work of its own in the space you are working in (your
+team's space, or the default space). AI-DLC offers it when
 you run `/aidlc` with no work of your own selected; you can also run it
 yourself:
 
 ```
 /aidlc unit take refunds --home 261018-checkout-revamp
-/aidlc unit take reporting --home 261018-checkout-revamp --team payments
-/aidlc unit take refunds --from git@example.com:shop/shop-ws.git --home 261018-checkout-revamp --team payments
+/aidlc unit take refunds --from git@example.com:shop/shop-ws.git --home 261018-checkout-revamp
 ```
 
 `--from <address>` takes it from the lead's project at that address when this
@@ -772,22 +762,24 @@ the active space, and each later step reads the lead's project from the build.
 Where the lead's record is in this workspace, `--from` changes nothing. An
 address that starts with `-` is refused before any git call.
 
-The Unit is held at the lead's project's remote first, by its address when the workspace
-is the team's own, with a compare-and-swap like any claim: a Unit held for your
-team becomes yours (your team is `--team`, or your active space; from the
-default space it is named on the take, and the take offer's choice names it),
-an open Unit is held for `--team` (or your active space; from the default space
-the team is asked for), and a Unit another team holds, a teammate took, or the
-lead's project started is refused with who holds it. The take says its way back once:
-`/aidlc unit release <unit>` in the Unit's build gives it back, the lead's hold
-for its team as it was (or open again), and sets the build aside with the
-engine's archive, nothing deleted. A Unit that
+The take is the Unit's claim at the lead's project's remote, by its address when
+the workspace is the team's own, with a compare-and-swap like any claim: its
+owner is the space the build goes in and `taken_by` your git `user.name`. The
+first take wins; a Unit someone took, or the lead's project builds, is refused
+with who builds it and where. The take says its way back once: `/aidlc unit
+release <unit>` in the Unit's build gives it back, open again, and sets the
+build aside with the engine's archive, nothing deleted; you stay in your space.
+A Unit that
 waits on another is refused until that Unit is done at the lead's project. The build
 records the lead's repos. The build copies what the lead approved at its pushed commit,
 records `UNIT_TAKEN_IN`, and is selected for this chat. Taking a Unit whose
-build is already in this workspace carries that build on. A lead's project that takes no
-push from here gives no Unit, held for your team or open: the take says git's
-reason and the way on, which is push access from the lead.
+build is already in this workspace carries that build on, and says whose build it
+is when someone else took it. A lead's project that takes no push from here: the
+take goes on, says git's reason, and is recorded there when a push next goes
+through; an early start waits for it, with git's reason and the way on, which is
+push access from the lead. Before any Unit is taken, a lead's project out of
+reach at its recorded address while this clone's own remote holds the lead's
+plan records the take at that remote, said once.
 `--early` starts a Unit that waits on others once each of them has pushed: its
 branch starts at their pushed heads in each repo, and the line says it may
 still change before it merges.
@@ -965,9 +957,10 @@ After a Unit has been released and re-claimed, a later release must include
 successor attempt and prevents a lost-output retry from tombstoning it.
 
 In a Unit's build (a team's take of the lead's Unit), `unit release <unit>` is
-the way back from the take: the lead's project's claim goes back to what it was before
-(the lead's hold for that team, or open), and the build is archived with its
-record and audit kept.
+the way back from the take: the lead's project's claim is released, open again,
+and the build is archived with its record and audit kept. At the lead's project,
+`unit release <unit>` opens a Unit a team took, or one the lead built here,
+again.
 
 ### `/aidlc unit participate` — Enable the guided picker
 
