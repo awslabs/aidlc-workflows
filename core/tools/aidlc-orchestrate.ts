@@ -17220,8 +17220,8 @@ function unitMajorReopen(
 // every Unit itself. The person asked to go there, so it goes through (#1411).
 // When the target is the step the walk is already on, plain routing lands
 // there and skips nothing ("route"). A target among the later per-unit steps
-// moves only the unit in flight on, before any unit has finished work too
-// (#3575): `execute --units` skips that unit's steps up to the target and
+// moves only the unit in flight on, before any unit has finished work too:
+// `execute --units` skips that unit's steps up to the target and
 // every other unit keeps its finished, approved work; this returns the execute
 // flags and the sentence naming what is skipped, so the agent can say what was
 // skipped and how to reopen it. Otherwise null: the jump runs as it does

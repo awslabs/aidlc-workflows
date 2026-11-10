@@ -1633,7 +1633,7 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(next(p)).toMatchObject({ stage: "code-generation", unit: "beta" });
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  // The first unit jumps on before any unit has finished a step (#3575). It
+  // The first unit jumps on before any unit has finished a step. It
   // still moves only that unit on: no step is marked skipped for every unit,
   // so the next unit starts at its own first step.
   test("a forward jump before any unit has finished a step moves only the first unit on", () => {
@@ -2286,7 +2286,7 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     // Unit by unit, the jump's own line says what it skips for each Unit
     // (#3530), so there is nothing to say or run around it: the `next` makes
     // the jump itself and returns the step it lands on, with that line. A jump
-    // inside the per-unit steps moves only the unit in flight on (#3575), so
+    // inside the per-unit steps moves only the unit in flight on, so
     // this one leaves Construction.
     const fresh = fixture();
     const clear = JSON.parse(tool(fresh, "orchestrate", ["next", "--stage", "build-and-test"]).stdout);

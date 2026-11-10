@@ -520,7 +520,7 @@ describe("a jump that names one Unit on a team main that works every Unit itself
 });
 
 // A forward jump on a team main that works every Unit itself moves only the
-// Unit in flight on, as on the solo walk (#3575): no step is marked skipped for
+// Unit in flight on, as on the solo walk: no step is marked skipped for
 // every Unit, so a later Unit still starts at its own first step.
 describe("a forward jump on a team main that works every Unit itself", () => {
   const stageWideSkips = (proj: string): string[] =>
