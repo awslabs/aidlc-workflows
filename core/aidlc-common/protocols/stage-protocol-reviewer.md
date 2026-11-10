@@ -122,9 +122,7 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    Never continue a reviewer from an earlier dispatch (of this stage, another
    stage, or another Unit) by sending it a message: it still holds its earlier
    reviews, which undoes the independent judgment below and grows its context
-   with every stage, and the dispatch is where the stage's rules are attached.
-   The list below is everything the reviewer needs; a re-dispatch carries the
-   earlier review through `Prior findings`.
+   with every stage.
 
    Pass:
    - The stage definition file path (`directive.stage_file`)
