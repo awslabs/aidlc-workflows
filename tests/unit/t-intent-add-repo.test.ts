@@ -81,11 +81,16 @@ function gitEnv(): NodeJS.ProcessEnv {
 
 // A refusal prints {"error": "..."}: its text is read the way it is said, so a
 // Windows path in it has single backslashes.
+// A run from a host's own shell names no chat unless a case gives one.
+const CHAT_VARIABLES = ["CLAUDE_CODE_SESSION_ID", "CLAUDE_PID", "CODEX_THREAD_ID", "KIRO_SESSION_ID", "AIDLC_SESSION_OVERRIDE"];
+
 function utility(args: string[], env: NodeJS.ProcessEnv = {}): { rc: number; out: string } {
+  const base = gitEnv();
+  for (const name of CHAT_VARIABLES) delete base[name];
   const r = spawnSync(process.execPath, [UTIL, ...args, "--project-dir", proj], {
     cwd: proj,
     encoding: "utf-8",
-    env: { ...gitEnv(), ...env },
+    env: { ...base, ...env },
   });
   const out = `${r.stdout ?? ""}${r.stderr ?? ""}`.split("\n").map((line) => {
     try {

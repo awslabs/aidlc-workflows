@@ -1479,9 +1479,12 @@ export function installWorkspaceRepo(
   const target = cloneDestination(root, staged.clones, staged.repo.name);
   const text = manifest.next ?? manifest.raw;
   let committing = false;
+  // Removed once, so a refusal and its line name what is still there.
+  let cleaned = false;
   try {
     if (pathEntryExists(target) && !isEmptyDirectory(target)) {
       removeTransaction(staged.clones);
+      cleaned = true;
       throw new SyncFailure(
         `${staged.repo.name} appeared while it was being cloned; ${stagingLeftByThisRun() ? "nothing in the workspace was changed" : "nothing was changed"}`,
       );
@@ -1506,7 +1509,7 @@ export function installWorkspaceRepo(
     );
   } finally {
     // commitPlan removes its own transaction folder.
-    if (!committing) removeTransaction(staged.clones);
+    if (!committing && !cleaned) removeTransaction(staged.clones);
   }
 }
 
