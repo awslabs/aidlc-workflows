@@ -22,8 +22,8 @@ dot-dir). The distribution is:
   `skills/` (the orchestrator as the project skill `aidlc`, the five session
   and knowledge skills, and the generated stage runners). The other dirs -
   `agents/` (the 14 personas, adopted inline by the conductor), `tools/`,
-  `aidlc-common/`, `knowledge/`, `sensors/`, `scopes/`, `hooks/` - are inert
-  data to Hermes; the conductor reads them and the engine runs the tools.
+  `aidlc-common/`, `knowledge/`, `sensors/`, `scopes/`, `hooks/` - are not
+  automatically registered with Hermes; the optional adapter below uses `hooks/`.
 - **`aidlc/`** - the workspace shell (the pre-built
   `aidlc/spaces/default/memory/` method tree the engine reads), a sibling of
   `.hermes/`.
@@ -38,7 +38,7 @@ dot-dir). The distribution is:
 - **A git repository, trusted once** - Hermes finds the project root at the git
   root and loads project skills only from a repository you trust. Run
   `hermes skills trust` once in the project; `hermes skills untrust` revokes it.
-  Without it the tree is on disk but `/skill aidlc` finds nothing.
+  Without it the tree is on disk but `/aidlc` cannot load the project skill.
 - **bun 1.4.4 or newer** (copy channel) or the native `aidlc` command (release
   channel). The copy projection runs the engine through
   `bun .hermes/tools/aidlc.ts`; a native install runs it through `aidlc`. `bun`
@@ -66,7 +66,7 @@ aidlc doctor
 hermes skills trust
 ```
 
-Start `hermes` in the project and type `/skill aidlc`, followed by what you
+Start `hermes` in the project and type `/aidlc`, followed by what you
 want to build.
 
 ### Versioned manual-copy alternative
@@ -88,25 +88,79 @@ fresh copy of the newer release (or `aidlc config --harness hermes` with the
 native command). `aidlc config` merges its block into an existing `.hermes.md`
 and `.gitignore`; it never replaces your own lines.
 
+## Optional shell adapter
+
+Installation does **not** register a hook. To opt in, use a Hermes version that
+supports [shell hooks and `fail_closed`](https://hermes-agent.nousresearch.com/docs/user-guide/features/hooks#configuration-schema).
+Install Bun on the machine running Hermes even with the native AI-DLC channel,
+and ensure Bun and the installed `.hermes/hooks/aidlc-hermes-adapter.ts` and
+its sibling guard scripts are accessible to that process. Review the scripts
+before trusting them. The hook runs as the Hermes user, not in a sandbox.
+
+Edit the active profile's `config.yaml` (`hermes config path` identifies it).
+Merge this entry into any existing `hooks` / `pre_tool_call` lists; do not
+replace other hooks. This is an example for a POSIX install: substitute the
+absolute paths to **your** Bun executable and project adapter, including quotes
+inside the command for paths containing spaces. Hermes parses `command` with
+`shlex.split` and does not invoke a shell, so do not use `~`, `$PATH`, shell
+expansion, or a relative project path.
+
+```yaml
+hooks:
+  pre_tool_call:
+    - matcher: '^(terminal|write_file|patch)$'
+      command: '"/absolute/path/to/bun" "/absolute/path/to/project/.hermes/hooks/aidlc-hermes-adapter.ts"'
+      timeout: 60
+      fail_closed: true
+```
+
+On Windows use absolute forward-slash paths such as
+`"C:/Users/name/.bun/bin/bun.exe" "C:/work/project/.hermes/hooks/aidlc-hermes-adapter.ts"`
+inside the YAML string. Start foreground `hermes chat` in the project root and
+approve the hook's first-use consent prompt; an unapproved hook is not registered.
+Gateway and other noninteractive surfaces do not prompt: approve the exact command
+first, or follow the [Hermes consent model](https://hermes-agent.nousresearch.com/docs/user-guide/features/hooks#consent-model)
+for service deployments. Use `hermes hooks list` to inspect consent and
+`hermes hooks test pre_tool_call --for-tool terminal` with a suitable synthetic
+payload to test dispatch. Consent tracks the command string, not script contents;
+review changes to the scripts after updates.
+Remove the profile entry to opt out. If the project moves, update the absolute
+path and approve the changed command. Each profile requires its own opt-in.
+
+The adapter acts only on `pre_tool_call` for `terminal`, `write_file`, and
+`patch`, and only when both the event `cwd` and the hook process cwd resolve to
+the installed project root. A mismatched or missing cwd, malformed input, an
+unsupported tool or input shape, or a patch with no recognized paths is a
+silent no-op. `terminal` is translated to Bash for the state-transition,
+review-freeze, and plan-approval guards; supported writes/patches go through
+review-freeze and plan-approval guards. It does not enforce reviewer read scope,
+produce an audit log, enforce the forwarding loop, or intercept other tools,
+indirect operations, or calls outside this hook's scope. The guards themselves
+have limits. This is **not a complete safety boundary**; use the workflow's
+approval steps and independent access controls.
+
+With `fail_closed: true`, Hermes blocks a matching call on hook spawn errors
+and timeouts; guard refusals return exit code 2. A hook exit other than 2 with
+empty stdout may still allow the call, so do not assume all hook failures block.
+This setting does not convert the adapter's intentional exit-0 no-ops into blocks. Hook behavior
+depends on the active profile, surface, consent and cwd; `aidlc doctor` checks
+the installed tree, not hook registration or enforcement. Verify in a safe test
+project before relying on any particular guard, and check Hermes hook logs if
+the call is unexpectedly allowed or blocked.
+
 ## What's different on this harness
 
-- **The entry is a project skill, not a slash command.** Hermes has no
-  user-defined slash commands, so `/skill aidlc` loads the conductor from
+- **The entry is a discovered project skill.** `/aidlc` loads the conductor from
   `.hermes/skills/aidlc/SKILL.md`; every engine call then runs through the
   `terminal` tool. The session skills load the same way
-  (`/skill aidlc-session-cost`, `/skill aidlc-status`-style stage runners as
-  `/skill aidlc-<stage>`).
+  (`/aidlc-session-cost` and stage runners as `/aidlc-<stage>`).
 - **Questions render as numbered prose.** No structured-question widget is
   wired for the conductor; the questions file with `[Answer]:` tags remains the
   source of truth, and an approval gate always ends the turn.
-- **Hooks are not wired.** Hermes keeps its shell hooks in the person's own
-  `~/.hermes/config.yaml`, outside the project, so a project install cannot
-  register them. The forwarding loop (ask the engine for the next step until a
-  gate or a completion) is the skill's prose discipline, and the guards other
-  harnesses enforce before a tool call - review freeze, reviewer read scope,
-  plan approval - are advisory here: the stage steps and the conductor enforce
-  them, nothing refuses a tool call. `aidlc doctor` reports the tree's surfaces
-  (skill, personas, `.hermes.md`, git) and does not claim hook health.
+- **Hooks are optional and limited.** The profile adapter above is not registered
+  by installation; without it no AI-DLC pre-tool guard is active. Even with it,
+  reviewer read scope, auditing, and the forwarding loop are not enforced by
+  the adapter. `aidlc doctor` does not check hook health.
 - **Subagents run through `delegate_task`.** The conductor reads the persona in
   `.hermes/agents/` itself and passes the persona text plus the stage brief in
   the child's context. Children are leaf agents: they cannot delegate further.
@@ -145,7 +199,7 @@ A healthy tree reports `0 problems` and names the project as
 `(.hermes, Hermes Agent)`. `hermes skills trust` prints the number of project
 skills it will load; a full tree is 43 (the orchestrator, the five session and
 knowledge skills, and the generated stage runners). Then start `hermes` in the
-project and type `/skill aidlc` - the conductor's first reply asks for the work
+project and type `/aidlc` - the conductor's first reply asks for the work
 or shows the plan offer.
 
 ## Next steps

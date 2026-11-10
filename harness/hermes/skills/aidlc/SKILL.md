@@ -32,7 +32,7 @@ The person is in charge of their work, and AIDLC enforces their will. Read what 
 
 ## The Forwarding Loop
 
-This is the orchestrator's whole control structure. Run it from the moment `/skill aidlc` is invoked.
+This is the orchestrator's whole control structure. Run it from the moment `/aidlc` is invoked.
 
 ```
 Loop:
@@ -119,7 +119,7 @@ For directives not already handled by Construction routing, `run-stage` folds th
 - **State sync is conductor-owned here.** There is no plan/todo hook wired on this harness: state-file sync rides on the state tools (`aidlc-state.ts advance/approve` etc., dispatched by the engine's `report`). A todo list per stage is bookkeeping for visibility, never state.
 - **Stage visibility**: there is no statusline. Surface position with the Part 4 progress line after every gate, and `{{INVOKE}} --status` on demand.
 - **Subagent delegation**: the conductor reads the persona files in `.hermes/agents/` itself and hands a delegated stage, a reviewer pass or a composer request to the `delegate_task` tool, passing the persona's text and the stage brief in the child's context. Children are leaf agents: they cannot delegate further.
-- **Forwarding-loop enforcement is advisory**: AI-DLC's hooks are not wired on Hermes (Hermes keeps shell hooks in the person's own `~/.hermes/config.yaml`, outside the project), so no hook can refuse a stop or a tool call. The loop above is the only forwarding discipline — never end a turn mid-workflow without either a gate question or a completed `report`.
+- **Forwarding-loop enforcement is advisory**: project installation does not register hooks. A user can opt into a limited profile shell adapter; it does not enforce the forwarding loop, reviewer read scope, or audit. Follow the loop above and end a turn only at a gate question or a completed `report`.
 - **Working directory**: Hermes's `terminal` tool starts in the session's working directory, which is not always the project root. Every engine command in this skill is written relative to the project root, so prefix it with a `cd` to the project root (or the folder the person opened Hermes in) in the same command line.
 
 ---

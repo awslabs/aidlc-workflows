@@ -9,14 +9,12 @@
 //   - token -> .hermes. Hermes discovers project skills under `.hermes/skills/`
 //     and `.agents/skills/`; the engine tree lives in `.hermes/` so the whole
 //     install is one directory.
-//   - the entry is `/skill aidlc` (Hermes has no user-defined slash commands),
+//   - the entry is the discovered skill command `/aidlc`,
 //     and every engine call runs through the `terminal` tool.
 //   - `.hermes.md` at the project root is Hermes's always-on project context
 //     (walked up to the git root), so the onboarding doc lands there.
-//   - AI-DLC's hooks are not wired on this harness: Hermes's shell hooks live
-//     in the person's own `~/.hermes/config.yaml`, not in the project, so a
-//     project install cannot register them. The engine's directives and the
-//     skill's prose bounds govern; the guide documents the gap.
+//   - shell hook registration is a manual profile opt-in; the bundled adapter
+//     covers only a subset of tools and guards. See the Hermes guide.
 //   - no statusline and no MCP servers ship.
 //
 // Verified against Hermes Agent v0.21.7.
@@ -27,14 +25,14 @@ import onboardingFills from "./onboarding.fills.ts";
 const manifest: HarnessManifest = {
   name: "hermes",
   productName: "Hermes Agent",
-  // Hermes has no user-defined slash command: `/skill aidlc` loads the
+  // The discovered skill command `/aidlc` loads the
   // conductor, and the conductor runs the engine through its terminal tool.
   configNextStep:
-    "start `hermes` in this project (run `hermes skills trust` once so it loads the project's skills), then type `/skill aidlc`",
+    "start `hermes` in this project (run `hermes skills trust` once so it loads the project's skills), then type `/aidlc`",
   // Every command Hermes's agent runs carries AI_AGENT=hermes-agent.
   hostShell: { env: ["AI_AGENT=hermes-agent"] },
-  // /new starts a clean session; the conductor is loaded again with /skill aidlc.
-  newChatStep: { text: "type `/new`, then `/skill aidlc`" },
+  // /new starts a clean session; load the conductor again with /aidlc.
+  newChatStep: { text: "type `/new`, then `/aidlc`" },
   harnessDir: ".hermes",
   orchestratorSkillPath: ".hermes/skills/aidlc/SKILL.md",
   // Persona files are inline prose the conductor adopts; no native subagent
@@ -75,6 +73,7 @@ const manifest: HarnessManifest = {
   ],
 
   harnessFiles: [
+    { src: "hooks/aidlc-hermes-adapter.ts", dst: "hooks/aidlc-hermes-adapter.ts" },
     // The orchestrator skill: Hermes discovers it as the project skill `aidlc`.
     { src: "skills/aidlc/SKILL.md", dst: "skills/aidlc/SKILL.md" },
     { src: "skills/aidlc/question-rendering.md", dst: "skills/aidlc/question-rendering.md" },

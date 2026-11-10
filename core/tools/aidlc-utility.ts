@@ -4967,12 +4967,12 @@ export async function collectDoctorReport(
     if (shortForm) results.push({ pass: true, severity: "warn", label: shortForm });
   } else if (harness === ".hermes") {
     // Hermes Agent: the orchestrator is a project skill under .hermes/skills/
-    // (loaded with `/skill aidlc`), the personas are inline .md files the
+    // (loaded with `/aidlc`), the personas are inline .md files the
     // conductor adopts, and .hermes.md at the project root is Hermes's
-    // always-on project context. AI-DLC wires no hooks on this harness, so no
-    // wiring file is checked here; the guide documents that gap.
+    // always-on project context. Optional profile hook wiring is not checked;
+    // the guide documents its scope and limitations.
     for (const [file, what] of [
-      ["skills/aidlc/SKILL.md", "orchestrator project skill (loaded with `/skill aidlc`)"],
+      ["skills/aidlc/SKILL.md", "orchestrator project skill (loaded with `/aidlc`)"],
       ["agents/aidlc-product-agent.md", "persona set (adopted inline by the conductor)"],
       ["aidlc-common/protocols/stage-protocol.md", "stage protocol"],
     ] as const) {
