@@ -86,7 +86,7 @@ describe("a Code Generation plan names the data-model elements it adds (#3455)",
     // plan already names is built as approved, so a plan approved before this
     // rule is never edited for it.
     expect(AGENT).toContain("an element nothing upstream asks for and the approved plan does not name goes into the plan before the code");
-    expect(GUIDE).toContain("For each entity the requirements ask for or the approved plan names (any other goes into the plan first");
+    expect(GUIDE).toContain("For each entity something upstream asks for or the approved plan names (any other goes into the plan first");
   });
 
   test("the stage adds no question of its own: the person decides at Plan Approval", () => {
