@@ -67,7 +67,10 @@ export interface StoredMessage {
   session: string | null;
   at: string;
   source: "prompt" | "picker" | "terminal";
-  /** As the host delivered it, cut at MESSAGE_TEXT_MAX_CHARS (`cut` says so). An empty text is a prompt whose words the host did not pass on. */
+  /**
+   * As the host delivered it, cut at MESSAGE_TEXT_MAX_CHARS (`cut` says so; a typed prompt's whole text is then kept
+   * beside the record, wholeMessageText). An empty text is a prompt whose words the host did not pass on.
+   */
   text: PersonsWords;
   /**
    * What a question box carried back: one entry per question it asked, in the order shown, `reply` null where the
@@ -93,6 +96,11 @@ export type NewMessage = Omit<StoredMessage, "id" | "text" | "picker" | "words">
 };
 
 export const MESSAGE_TEXT_MAX_CHARS = 8000;
+/**
+ * How much a request can carry: the whole text of a typed prompt the record cut, kept beside it, and a request file
+ * (readRequestFile reads this number), so the two never differ.
+ */
+export const REQUEST_MAX_BYTES = 128 * 1024;
 /** A question box's question or reply is kept to this many characters. */
 export const MESSAGE_PICKER_MAX_CHARS = 2000;
 export const MESSAGE_MAX_RECORDS = 200;
@@ -109,6 +117,18 @@ export function isMessageId(id: string): boolean {
 function messageRel(projectDir: string, id?: string): string {
   const dir = join(sessionsDir(projectDir), "messages");
   return relative(projectDir, id === undefined ? dir : join(dir, `${id}.json`));
+}
+
+// The whole text of a typed prompt its record cut, beside the record under the same id.
+function wholeRel(projectDir: string, id: string): string {
+  return relative(projectDir, join(sessionsDir(projectDir), "messages", `${id}.txt`));
+}
+
+// A record and its whole text, the text first, so a copy never stands without its record. A file this process may
+// not remove is left for the operating system's permissions to decide.
+function removeMessageRecord(projectDir: string, id: string): void {
+  removeRecordFileNoFollow(projectDir, wholeRel(projectDir, id));
+  removeRecordFileNoFollow(projectDir, messageRel(projectDir, id));
 }
 
 function isStringList(value: unknown): value is string[] {
@@ -182,7 +202,7 @@ export function readMessage(projectDir: string, id: string): StoredMessage | nul
  * turn Claude Code started itself (settleClaudeTurns), so no proof finds it.
  */
 export function forgetMessage(projectDir: string, id: string): void {
-  if (MESSAGE_ID.test(id)) removeRecordFileNoFollow(projectDir, messageRel(projectDir, id));
+  if (MESSAGE_ID.test(id)) removeMessageRecord(projectDir, id);
 }
 
 function recordIds(projectDir: string): string[] {
@@ -221,8 +241,10 @@ export function listMessages(projectDir: string): StoredMessage[] {
 /**
  * Store one message and return it with a fresh id. Older records are pruned
  * after the write, so a store failure never costs the message just received.
+ * `whole` is a typed prompt's text as the host delivered it, kept beside a
+ * record that cut it, up to REQUEST_MAX_BYTES; the record is written first.
  */
-export function saveMessage(projectDir: string, message: NewMessage): StoredMessage {
+export function saveMessage(projectDir: string, message: NewMessage, whole?: string): StoredMessage {
   // Kept as it came; read back, the words are PersonsWords.
   const stored = { ...message, id: mintMessageId(projectDir) } as unknown as StoredMessage;
   const serialized = `${JSON.stringify(stored)}\n`;
@@ -230,8 +252,31 @@ export function saveMessage(projectDir: string, message: NewMessage): StoredMess
     throw new Error("message record over the size the reader accepts");
   }
   writeRecordFileNoFollow(projectDir, messageRel(projectDir, stored.id), serialized);
+  if (message.cut === true && message.source === "prompt" && whole !== undefined &&
+    Buffer.byteLength(whole, "utf-8") <= REQUEST_MAX_BYTES) {
+    try {
+      writeRecordFileNoFollow(projectDir, wholeRel(projectDir, stored.id), whole);
+    } catch {
+      // The record stands; a reader of it goes without the whole text.
+    }
+  }
   pruneExpiredMessages(projectDir);
   return stored;
+}
+
+/**
+ * The whole text of a typed prompt its record keeps cut, as the host delivered
+ * it; null when the record is whole or no copy was kept (over REQUEST_MAX_BYTES,
+ * a failed write, a record from before copies were kept).
+ */
+export function wholeMessageText(projectDir: string, message: StoredMessage): PersonsWords | null {
+  if (message.cut !== true || message.source !== "prompt" || !MESSAGE_ID.test(message.id)) return null;
+  try {
+    const target = recordFileTargetOrThrow(projectDir, wholeRel(projectDir, message.id));
+    return readRegularFileNoFollowOrThrow(target, "message", REQUEST_MAX_BYTES).toString("utf-8") as unknown as PersonsWords;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -322,7 +367,7 @@ export function pruneExpiredMessages(projectDir: string): void {
       if (!lstatSync(path).isFile()) continue;
       const at = Date.parse(readStoredMessage(projectDir, id)?.at ?? "");
       const when = Number.isNaN(at) ? lstatSync(path).mtimeMs : at;
-      if (when < cutoff && !stillUnspent(id)) removeRecordFileNoFollow(projectDir, messageRel(projectDir, id));
+      if (when < cutoff && !stillUnspent(id)) removeMessageRecord(projectDir, id);
       else kept.push({ id, at: when });
     } catch {
       // Not ours to remove, or already gone: keep going.
@@ -331,7 +376,7 @@ export function pruneExpiredMessages(projectDir: string): void {
   kept.sort((a, b) => a.at - b.at || a.id.localeCompare(b.id));
   for (const { id } of kept.slice(0, Math.max(0, kept.length - MESSAGE_MAX_RECORDS))) {
     try {
-      removeRecordFileNoFollow(projectDir, messageRel(projectDir, id));
+      removeMessageRecord(projectDir, id);
     } catch {
       // As above.
     }
