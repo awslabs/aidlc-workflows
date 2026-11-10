@@ -30,7 +30,6 @@ import {
   heading,
   tipLabel,
 } from "./aidlc-color.ts";
-import { pinnedVersionNote, projectPinnedVersion } from "./aidlc-channel.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 import {
   aidlcInvocation,
@@ -3374,6 +3373,8 @@ async function execute(action: Action): Promise<number> {
     return 0;
   }
   if (action.type === "version") {
+    // Loaded here, not at the top: every hook starts through this file.
+    const { pinnedVersionNote, projectPinnedVersion } = await import("./aidlc-channel.ts");
     const pinned = action.projectDir ? projectPinnedVersion(action.projectDir) : null;
     text(
       1,
@@ -3387,8 +3388,11 @@ async function execute(action: Action): Promise<number> {
         : `aidlc ${AIDLC_VERSION} (runtime ${AIDLC_VERSION})\n`,
     );
     // The stdout line stays exactly as it is: an update checks a release it
-    // activates by comparing that line, in whatever folder the update runs.
-    if (pinned && !action.json) text(2, `aidlc: ${pinnedVersionNote(pinned, AIDLC_VERSION)}\n`);
+    // activates by comparing that line, in whatever folder the update runs. The
+    // pin goes to stderr only at a terminal, where a person reads it: Windows
+    // PowerShell 5.1 stops a script that stops on errors at a stderr line it
+    // redirects, so a script, a pipe or a capture gets nothing new.
+    if (pinned && !action.json && process.stderr.isTTY) text(2, `aidlc: ${pinnedVersionNote(pinned, AIDLC_VERSION)}\n`);
     return 0;
   }
   if (action.type === "hook") {

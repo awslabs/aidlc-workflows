@@ -1,17 +1,21 @@
 // covers: none (aidlc-channel.ts and the dispatcher's version route have no registry unit)
 //
 // In a pinned project the pin decides which release runs the work, so both
-// version answers name it (#1464). `aidlc version` runs on this machine's
-// release and keeps its stdout line exactly as it is, because an update checks
-// a release it activates by comparing that line in whatever folder it runs:
-// the pin is named on stderr, and as `pinnedVersion` under --json. When the pin
-// launched the engine, `/aidlc --version` is answered by that engine, which
-// knows both releases; otherwise it runs `aidlc version` as before.
+// version answers name it. `aidlc version` runs on this machine's release and
+// keeps its stdout line exactly as it is, because an update checks a release it
+// activates by comparing that line in whatever folder it runs. The pin is named
+// on stderr only at a terminal, where a person reads it: a script, a pipe or a
+// capture gets nothing new, since Windows PowerShell 5.1 stops a script that
+// stops on errors at a stderr line it redirects. `--json` names it as
+// `pinnedVersion`. When the pin launched the engine, `/aidlc --version` is
+// answered by that engine, which knows both releases; otherwise it runs
+// `aidlc version` as before.
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
 import {
   pinnedVersionNote,
@@ -45,6 +49,26 @@ function run(
   return { status: result.status, stdout: result.stdout, stderr: result.stderr };
 }
 
+// The same command with a terminal on every stream, as a person runs it; the
+// terminal shows both streams as one text, and a Windows console writes
+// sequences of its own between lines (its window title among them).
+async function runAtTerminal(dir: string, args: string[]): Promise<{ status: number; shown: string }> {
+  const env: Record<string, string | undefined> = { ...process.env, CLAUDE_PROJECT_DIR: dir };
+  for (const name of ["AIDLC_PROJECT_DIR", "KIRO_PROJECT_DIR", "AIDLC_PIN_DISPATCHED", "AIDLC_ACTIVE_VERSION"]) {
+    delete env[name];
+  }
+  let shown = "";
+  const decoder = new TextDecoder();
+  const child = Bun.spawn([process.execPath, ...args], {
+    cwd: dir,
+    env,
+    terminal: { cols: 200, rows: 24, data: (_terminal, data) => { shown += decoder.decode(data); } },
+  });
+  const status = await child.exited;
+  child.terminal?.close();
+  return { status, shown: stripVTControlCharacters(shown).replaceAll("\r", "") };
+}
+
 const VERSION_LINE = `aidlc ${AIDLC_VERSION} (runtime ${AIDLC_VERSION})\n`;
 
 describe("the project's pin is read once, the same way everywhere", () => {
@@ -70,21 +94,32 @@ describe("the project's pin is read once, the same way everywhere", () => {
 });
 
 describe("aidlc version in a pinned project", () => {
-  test("stdout is the same line as anywhere else, and stderr names the pin", () => {
-    const dir = project(`${OTHER}\n`);
-    const shown = run(dir, [".claude/tools/aidlc.ts", "version"]);
-    expect(shown.status, shown.stderr).toBe(0);
-    expect(shown.stdout).toBe(VERSION_LINE);
-    expect(shown.stderr).toBe(
-      `aidlc: this project is pinned to aidlc ${OTHER}, which runs its workflow (machine active: ${AIDLC_VERSION})\n`,
-    );
+  test("redirected, piped or captured, it writes nothing to stderr", () => {
+    for (const pin of [OTHER, AIDLC_VERSION]) {
+      const dir = project(`${pin}\n`);
+      const shown = run(dir, [".claude/tools/aidlc.ts", "version"]);
+      expect(shown.status, shown.stderr).toBe(0);
+      expect(shown.stdout).toBe(VERSION_LINE);
+      expect(shown.stderr).toBe("");
+    }
   });
 
-  test("a pin to this machine's own release is named without a second version", () => {
-    const dir = project(`${AIDLC_VERSION}\n`);
-    const shown = run(dir, [".claude/tools/aidlc.ts", "version"]);
-    expect(shown.stdout).toBe(VERSION_LINE);
-    expect(shown.stderr).toBe(`aidlc: this project is pinned to aidlc ${AIDLC_VERSION}, which runs its workflow\n`);
+  test("at a terminal it names the pin after the same line", async () => {
+    const versionLine = VERSION_LINE.trim();
+    const other = await runAtTerminal(project(`${OTHER}\n`), [".claude/tools/aidlc.ts", "version"]);
+    expect(other.status, other.shown).toBe(0);
+    const pinLine =
+      `aidlc: this project is pinned to aidlc ${OTHER}, which runs its workflow (machine active: ${AIDLC_VERSION})`;
+    expect(other.shown).toContain(versionLine);
+    expect(other.shown.indexOf(pinLine)).toBeGreaterThan(other.shown.indexOf(versionLine));
+    const own = await runAtTerminal(project(`${AIDLC_VERSION}\n`), [".claude/tools/aidlc.ts", "version"]);
+    const ownLine = `aidlc: this project is pinned to aidlc ${AIDLC_VERSION}, which runs its workflow`;
+    expect(own.shown).toContain(versionLine);
+    expect(own.shown.indexOf(ownLine)).toBeGreaterThan(own.shown.indexOf(versionLine));
+    expect(own.shown).not.toContain("machine active");
+    const unpinned = await runAtTerminal(project(), [".claude/tools/aidlc.ts", "version"]);
+    expect(unpinned.shown).toContain(versionLine);
+    expect(unpinned.shown).not.toContain("pinned to");
   });
 
   test("--json carries the pin as pinnedVersion, with nothing on stderr", () => {
