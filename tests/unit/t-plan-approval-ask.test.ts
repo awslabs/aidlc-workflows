@@ -90,6 +90,7 @@ import {
   planApprovalReviewRequested,
   planSummaryLines,
   publishPlanApprovalAsk,
+  publishPlanApprovalSkip,
   routeCodeGenerationPlanApproval,
 } from "../../dist/claude/.claude/tools/aidlc-plan-approval-ask.ts";
 import {
@@ -3065,6 +3066,396 @@ describe("an isolated Code Generation run in a project with no work", () => {
     const refused = answer(proj, "Approve Plan");
     expect(refused.code).not.toBe(0);
     expect(events(proj)).not.toContain("PLAN_APPROVAL_RECORDED");
+  });
+});
+
+// Plan approval off built the plan without asking (the skip is on record) and
+// then plan approval was turned on, by the person or by the agent reading
+// "show me the code plan before you build it". Until that plan's build starts,
+// nobody approved it: `next` asks the engine's own plan question, the answer
+// records as any answer does, and the build waits for it. Once the build has
+// started, or with plan approval off again, the skip stands.
+describe("plan approval turned on after a plan was built without asking", () => {
+  const PLAN_PATH = /construction\/code-generation\/code-generation-plan\.md$/;
+  const CHANGE = "print one decimal place, and add a test for that.";
+  const count = (proj: string, event: string): number => auditText(proj).split(`**Event**: ${event}\n`).length - 1;
+  const setLines = (proj: string, edit: (state: string) => string): void => {
+    const path = seededStateFile(proj);
+    writeFileSync(path, edit(readFileSync(path, "utf-8")), "utf-8");
+  };
+  const express = (proj: string): void => setLines(proj, (state) => state
+    .replace("- **Scope**: poc", "- **Scope**: express")
+    .replace(/^- \*\*Guard Policy\*\*:.*$/m, "- **Guard Policy**: off (from scope express)")
+    .replace(/^- \*\*Plan Approval\*\*:.*$/m, "- **Plan Approval**: off (from scope express)"));
+  // A plan written, and `next` hands its build over without asking.
+  const builtWithoutAsking = (proj: string, unit: string | null = null): void => {
+    writePlan(proj, "", unit);
+    const build = next(proj);
+    expect(build.kind, JSON.stringify(build)).toBe("run-stage");
+    expect(build.plan_approval.skipped, JSON.stringify(build)).toBe(true);
+  };
+  // The agent's setter, as the run had it: no message of the person's named.
+  const turnOn = (proj: string): string => {
+    const on = lower(proj, "plan-approval", "on");
+    expect(on.code, on.out).toBe(0);
+    expect(on.out).toContain("Each code plan is now shown for approval before it is built.");
+    return on.out;
+  };
+  // The person's own words turning it off, the setter naming their message.
+  const theyTurnOff = (proj: string, words: string): { code: number; out: string } => {
+    reply(proj, words);
+    const result = spawnSync(BUN, [
+      DISPATCHER, "engine", "config", "set", "plan-approval", "off", "--message", turnId(proj), "--project-dir", proj,
+    ], {
+      cwd: proj,
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    return { code: result.status ?? -1, out: `${result.stdout ?? ""}${result.stderr ?? ""}` };
+  };
+  // What the guard says at a code write, on stdout and stderr together.
+  const guardSays = (proj: string, path: string): { code: number; out: string } => {
+    const result = spawnSync(BUN, [GUARD], {
+      cwd: proj,
+      input: JSON.stringify({
+        hook_event_name: "PreToolUse", session_id: SESSION, cwd: proj,
+        tool_name: "Write", tool_input: { file_path: path, content: "x\n" },
+      }),
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    return { code: result.status ?? -1, out: `${result.stdout ?? ""}${result.stderr ?? ""}` };
+  };
+  const reviseThePlan = (proj: string, unit: string | null = null): void => {
+    const plan = join(stageDir(proj, unit), "code-generation-plan.md");
+    writeFileSync(plan, readFileSync(plan, "utf-8").replace("- [ ] Step 1: write slugify\n",
+      "- [ ] Step 1: write slugify\n- [ ] Step 2: print one decimal place\n"), "utf-8");
+  };
+
+  const SETUPS: Array<[string, (proj: string) => void]> = [
+    ["poc, Guard Policy relaxed", () => {}],
+    ["express, Guard Policy off", express],
+    ["Guard Policy strict and plan approval off, both set by the person", (proj) => setLines(proj, (state) => state
+      .replace(/^- \*\*Guard Policy\*\*:.*$/m, "- **Guard Policy**: strict (set by you)")
+      .replace(/^- \*\*Plan Approval\*\*:.*$/m, "- **Plan Approval**: off (set by you)"))],
+  ];
+  for (const [name, setup] of SETUPS) {
+    test(`${name}: next asks the plan question once, and nothing is built while it waits`, () => {
+      const proj = project("relaxed", "off");
+      setup(proj);
+      builtWithoutAsking(proj);
+      turnOn(proj);
+      const asked = next(proj);
+      expect(asked, JSON.stringify(asked)).toMatchObject({ kind: "ask", ask_type: "plan-approval", question: "Approve the code plan?" });
+      expect(asked.plan_approval.choices).toEqual(["Approve Plan", "Request Changes", "I'll edit the files"]);
+      expect(asked.plan_approval.targets?.[0].summary).toContain("Builds: slugify for titles");
+      expect(asked.plan_approval.targets?.[0].plan_path).toMatch(PLAN_PATH);
+      expect(guardWrite(proj, join(proj, "src", "slugify.ts")).code).toBe(2);
+      // A file the plan does not name goes in while it waits, as with plan approval on from the start.
+      expect(guardWrite(proj, join(proj, "src", "other.ts")).code).toBe(0);
+      expect(posture(proj, "brief", null).status).not.toBe(0);
+      expect(next(proj).ask_type).toBe("plan-approval");
+      expect(count(proj, "QUESTION_ASKED")).toBe(1);
+    });
+  }
+
+  // The window between the switch and the next `next`: the agent still holds
+  // the build step `next` gave before the switch. The guard judges by the
+  // setting too, so the build does not start under the skip; `next` asks.
+  for (const [name, setup] of [["poc, Guard Policy relaxed", () => {}], ["express, Guard Policy off", express]] as const) {
+    test(`${name}: switched on, no next yet: the developer and a code write wait, and next asks once`, () => {
+      const proj = project("relaxed", "off");
+      setup(proj);
+      builtWithoutAsking(proj);
+      turnOn(proj);
+      const brief = posture(proj, "brief", null);
+      expect(brief.status, brief.stderr).toBe(0);
+      const dispatched = guardDispatch(proj, brief.stdout);
+      expect(dispatched.code, dispatched.stderr).toBe(2);
+      expect(dispatched.stderr).toContain("run next");
+      expect(guardWrite(proj, join(proj, "src", "slugify.ts")).code).toBe(2);
+      expect(generationStarted(proj)).toBe(false);
+      expect(next(proj).ask_type).toBe("plan-approval");
+      expect(count(proj, "QUESTION_ASKED")).toBe(1);
+    });
+  }
+
+  // Left open on purpose: `testing-posture begin` is a tool the agent runs, which
+  // cannot read the setting, and no step names it. Run in the window, it starts
+  // the build under the skip, and the switch applies from the next plan.
+  test("switched on, no next yet, testing-posture begin run anyway: the build starts, and nothing is asked", () => {
+    const proj = project("relaxed", "off");
+    builtWithoutAsking(proj);
+    turnOn(proj);
+    // A process that loads the reader alone (the setting never handed in) reads
+    // the plan as main does: approved, built without asking.
+    const verified = spawnSync(BUN, [
+      join(AIDLC_SRC, "tools", "aidlc-testing-posture.ts"), "verify", "--stage-level", "--project-dir", proj,
+    ], {
+      cwd: proj,
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(verified.status, verified.stderr).toBe(0);
+    expect(JSON.parse(verified.stdout)).toMatchObject({ ok: true, skipped: true, execution_allowed: true });
+    const begun = posture(proj, "begin", null);
+    expect(begun.status, begun.stderr).toBe(0);
+    expect(generationStarted(proj)).toBe(true);
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+  });
+
+  // Each answer leads on to its own step, and `next` again never brings the
+  // same question back for the same plan.
+  test("Approve Plan: their words are on the record, and the build follows", () => {
+    const proj = project("relaxed", "off");
+    builtWithoutAsking(proj);
+    turnOn(proj);
+    expect(next(proj).ask_type).toBe("plan-approval");
+    replyAndRecord(proj, "looks good, go ahead", "Approve Plan");
+    const build = next(proj);
+    expect(build.kind, JSON.stringify(build)).toBe("run-stage");
+    expect(build.plan_approval).toEqual({ status: "approved" });
+    expect(auditText(proj)).toContain("**Person Reply**: looks good, go ahead");
+    expect(count(proj, "PLAN_APPROVAL_RECORDED")).toBe(1);
+    expect(questions(proj)).toMatch(/^\[Answer\]: A\. Approve Plan$/m);
+    expect(guardWrite(proj, join(proj, "src", "slugify.ts")).code).toBe(0);
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+    expect(count(proj, "QUESTION_ASKED")).toBe(1);
+  });
+
+  test("Request Changes in their words: the revise step carries them, and the revised plan is asked about once", () => {
+    const proj = project("relaxed", "off");
+    builtWithoutAsking(proj);
+    turnOn(proj);
+    expect(next(proj).ask_type).toBe("plan-approval");
+    reply(proj, `Request changes: ${CHANGE}`);
+    expect(answer(proj, `Request Changes: ${CHANGE}`).message).toContain('Recorded "Request Changes"');
+    const recorded = auditText(proj).split("\n---\n").find((block) => block.includes("**Details**: Request Changes"));
+    expect(recorded).toContain(`**User Input**: ${CHANGE}`);
+    expect(next(proj).plan_approval).toEqual({ status: "revise", feedback: CHANGE });
+    // Nothing is approved while it is revised: the build waits, and a document goes in, as with plan approval on.
+    expect(guardWrite(proj, join(proj, "src", "slugify.ts")).code).toBe(2);
+    expect(guardWrite(proj, join(proj, "NOTES.md")).code).toBe(0);
+    reviseThePlan(proj);
+    const again = next(proj);
+    expect(again.ask_type, JSON.stringify(again)).toBe("plan-approval");
+    expect(next(proj).ask_type).toBe("plan-approval");
+    expect(count(proj, "QUESTION_ASKED")).toBe(2);
+    replyAndRecord(proj, "yes", "Approve Plan");
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+  });
+
+  test("I'll edit the files: the editing question, then their done builds the plan as they left it", () => {
+    const proj = project("relaxed", "off");
+    builtWithoutAsking(proj);
+    turnOn(proj);
+    expect(next(proj).ask_type).toBe("plan-approval");
+    replyAndRecord(proj, "I'll edit the files", "I'll edit the files");
+    expect(next(proj).plan_approval.editing).toBe(true);
+    reviseThePlan(proj);
+    replyAndRecord(proj, "done", "Approve Plan");
+    const build = next(proj);
+    expect(build.plan_approval, JSON.stringify(build)).toEqual({ status: "approved" });
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+  });
+
+  test("turned on before the plan is written: the plan is asked about, and nothing records it as built", () => {
+    const proj = project("relaxed", "off");
+    turnOn(proj);
+    writePlan(proj);
+    expect(next(proj).ask_type).toBe("plan-approval");
+    expect(count(proj, "PLAN_APPROVAL_SKIPPED")).toBe(0);
+  });
+
+  test("off throughout: one record that it was built without asking, and next stays the build", () => {
+    const proj = project("relaxed", "off");
+    builtWithoutAsking(proj);
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+    expect(guardWrite(proj, join(proj, "src", "slugify.ts")).code).toBe(0);
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+    expect(count(proj, "PLAN_APPROVAL_SKIPPED")).toBe(1);
+  });
+
+  test("turned off again before the question is shown: it is shown once with the one line, and their word then builds it", () => {
+    const proj = project("relaxed", "off");
+    builtWithoutAsking(proj);
+    turnOn(proj);
+    const early = theyTurnOff(proj, "never mind, skip plan approval for this work");
+    expect(early.code, early.out).not.toBe(0);
+    expect(early.out).toContain("Turning plan approval off needs your word after the plan is shown");
+    expect(next(proj).ask_type).toBe("plan-approval");
+    const off = theyTurnOff(proj, "skip plan approval for this work");
+    expect(off.code, off.out).toBe(0);
+    const build = next(proj);
+    expect(build.plan_approval.skipped, JSON.stringify(build)).toBe(true);
+  });
+
+  test("turned off again once the question is shown: the plan builds as plan approval off builds it, said and recorded as such", () => {
+    const proj = project("relaxed", "off");
+    builtWithoutAsking(proj);
+    turnOn(proj);
+    expect(next(proj).ask_type).toBe("plan-approval");
+    const off = theyTurnOff(proj, "actually, skip plan approval for this work");
+    expect(off.code, off.out).toBe(0);
+    expect(off.out).toContain("Each code plan is now built without asking you first.");
+    const build = next(proj);
+    expect(build.kind, JSON.stringify(build)).toBe("run-stage");
+    expect(build.plan_approval.skipped).toBe(true);
+    expect(build.plan_approval.notice).toContain("is off for this piece of work (set by you). Starting code generation now.");
+    expect(count(proj, "PLAN_APPROVAL_SKIPPED")).toBe(2);
+    expect(questions(proj)).toMatch(/^\[Answer\]: Plan approval off$/m);
+    const write = guardSays(proj, join(proj, "src", "slugify.ts"));
+    expect(write.code, write.out).toBe(0);
+    expect(write.out).not.toContain("Continuing past");
+  });
+
+  test("Request Changes, then turned off: their change is made first, and the revised plan builds without asking", () => {
+    const proj = project("relaxed", "off");
+    builtWithoutAsking(proj);
+    turnOn(proj);
+    expect(next(proj).ask_type).toBe("plan-approval");
+    replyAndRecord(proj, `Request changes: ${CHANGE}`, `Request Changes: ${CHANGE}`);
+    const off = theyTurnOff(proj, "and skip plan approval from now on");
+    expect(off.code, off.out).toBe(0);
+    expect(next(proj).plan_approval).toEqual({ status: "revise", feedback: CHANGE });
+    reviseThePlan(proj);
+    const build = next(proj);
+    expect(build.plan_approval.skipped, JSON.stringify(build)).toBe(true);
+    expect(count(proj, "PLAN_APPROVAL_SKIPPED")).toBe(2);
+  });
+
+  // The rule reads only the engine's own record of a plan built without
+  // asking: an approval the person gave is theirs whatever happens after it.
+  test("an approval they gave is never asked again: off and on, a second chat, a compacted chat", () => {
+    const proj = project("relaxed", "off");
+    builtWithoutAsking(proj);
+    turnOn(proj);
+    expect(next(proj).ask_type).toBe("plan-approval");
+    replyAndRecord(proj, "approve", "Approve Plan");
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+    expect(theyTurnOff(proj, "skip plan approval for this work").code).toBe(0);
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+    turnOn(proj);
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+    const second = runOrchestrateNext(ORCHESTRATE, proj, [], {
+      env: { ...process.env, AIDLC_UNATTENDED: "0", AIDLC_SESSION_OVERRIDE: OTHER_SESSION },
+    });
+    expect(second.status, second.out).toBe(0);
+    expect((second.directive as unknown as Emitted).plan_approval).toEqual({ status: "approved" });
+    interrupt(proj, "the chat compacts");
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+    expect(count(proj, "QUESTION_ASKED")).toBe(1);
+    expect(count(proj, "PLAN_APPROVAL_RECORDED")).toBe(1);
+  });
+
+  test("turned on once the build has started: the build goes on, nothing is asked, and its pick-up stays the build", () => {
+    const proj = project("relaxed", "off");
+    builtWithoutAsking(proj);
+    expect(guardWrite(proj, join(proj, "src", "slugify.ts")).code).toBe(0);
+    expect(generationStarted(proj)).toBe(true);
+    expect(turnOn(proj).trim().split("\n")).toEqual([
+      "Plan Approval changed: off (from scope poc) to on (set by a command)",
+      "Each code plan is now shown for approval before it is built.",
+    ]);
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+    expect(guardWrite(proj, join(proj, "src", "slugify-more.ts")).code).toBe(0);
+    const plan = join(stageDir(proj), "code-generation-plan.md");
+    writeFileSync(plan, readFileSync(plan, "utf-8").replace("- [ ] Step 1", "- [x] Step 1"), "utf-8");
+    interrupt(proj, "the chat compacts");
+    const resumed = next(proj);
+    expect(resumed.kind, JSON.stringify(resumed)).toBe("run-stage");
+    expect(resumed.plan_approval.status).toBe("approved");
+    expect(count(proj, "QUESTION_ASKED")).toBe(0);
+  });
+
+  test("a team's strict Guard Policy arriving in memory after the skip: the plan is asked about", () => {
+    const proj = project("relaxed", "off");
+    builtWithoutAsking(proj);
+    const memory = join(proj, "aidlc", "spaces", "default", "memory", "project.md");
+    const content = readFileSync(memory, "utf-8");
+    writeFileSync(memory, content.includes("## Guard Policy\n")
+      ? content.replace("## Guard Policy\n", "## Guard Policy\n\nMode: strict\n")
+      : `${content.trimEnd()}\n\n## Guard Policy\n\nMode: strict\n`);
+    const asked = next(proj);
+    expect(asked, JSON.stringify(asked)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+    expect(guardWrite(proj, join(proj, "src", "slugify.ts")).code).toBe(2);
+  });
+
+  // "Review the plan" with plan approval still off: the question is the open
+  // step, so nothing starts that build until the person answers it.
+  test("'review the plan' for a plan built without asking: its build waits for the answer", () => {
+    const proj = project("relaxed", "off");
+    builtWithoutAsking(proj);
+    reply(proj, "review the plan first");
+    expect(answer(proj, "Review the plan").message).toContain("wants to review the plan");
+    expect(next(proj).ask_type).toBe("plan-approval");
+    expect(posture(proj, "begin", null).status).not.toBe(0);
+    replyAndRecord(proj, "ok, build it", "Approve Plan");
+    const begun = posture(proj, "begin", null);
+    expect(begun.status, begun.stderr).toBe(0);
+  });
+
+  test("several Units: the one whose build started goes on, and the next one is asked about", () => {
+    const proj = unitProject("unit-b", "unit-a");
+    setLines(proj, (state) => state.replace("- **Guard Policy**: relaxed (set by you)",
+      "- **Guard Policy**: relaxed (set by you)\n- **Plan Approval**: off (set by you)"));
+    writePlan(proj, "", "unit-a");
+    builtWithoutAsking(proj, "unit-b");
+    expect(guardWrite(proj, join(proj, "src", "slugify.ts")).code).toBe(0);
+    // unit-a's turn: its build is handed over without asking too.
+    writeActiveDirectiveMarker(proj, {
+      kind: "run-stage", stage: "code-generation", unit: "unit-a",
+      state_sha256: stateDigest(readFileSync(seededStateFile(proj), "utf-8")),
+    });
+    const route = (unit: string): Emitted => routeCodeGenerationPlanApproval(proj, {
+      kind: "run-stage", stage: "code-generation", unit,
+    } as Parameters<typeof routeCodeGenerationPlanApproval>[1]) as unknown as Emitted;
+    const handed = route("unit-a");
+    expect(handed.plan_approval.skipped, JSON.stringify(handed)).toBe(true);
+    expect(publishPlanApprovalSkip(proj, handed as unknown as Parameters<typeof publishPlanApprovalSkip>[1])).toBe(true);
+    turnOn(proj);
+    expect(route("unit-a")).toMatchObject({ kind: "ask", ask_type: "plan-approval", unit: "unit-a" });
+    expect(route("unit-b").plan_approval).toEqual({ status: "approved" });
+  });
+
+  test("a parallel batch not started yet: one question for both Units, and approving all lets each build", () => {
+    const pd = swarmFixture(true, GROUP, "off");
+    const directive = { kind: "invoke-swarm", stage: "code-generation", units: GROUP } as const;
+    const handed = swarmState(pd);
+    expect(handed.plan_approval.skipped, JSON.stringify(handed)).toBe(true);
+    expect(publishPlanApprovalSkip(pd, directive as unknown as Parameters<typeof publishPlanApprovalSkip>[1])).toBe(true);
+    setLines(pd, (state) => state.replace("- **Plan Approval**: off (set by you)", "- **Plan Approval**: on (set by you)"));
+    const routed = swarmState(pd);
+    expect(routed, JSON.stringify(routed)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+    expect(routed.plan_approval.choices).toEqual(["Approve all", "Request Changes", "I'll edit the files"]);
+    for (const unit of GROUP) expect(evaluateCodeGenerationApproval(pd, { unit }).ok).toBe(false);
+    writeActiveDirectiveMarker(pd, {
+      kind: "ask", stage: "code-generation", ask_type: "plan-approval", units: GROUP,
+      state_sha256: stateDigest(readFileSync(seededStateFile(pd), "utf-8")),
+    });
+    publishPlanApprovalAsk(pd, routed as unknown as Parameters<typeof publishPlanApprovalAsk>[1]);
+    replyAndRecord(pd, "approve all", "Approve all");
+    for (const unit of GROUP) expect(evaluateCodeGenerationApproval(pd, { unit }).ok).toBe(true);
+    expect(swarmState(pd).plan_approval).toEqual({ status: "approved" });
+  });
+
+  test("an isolated Code Generation run: its own next asks, and names itself", () => {
+    const OWN = "bun .claude/tools/aidlc-orchestrate.ts next --stage code-generation --single --scope poc";
+    const proj = project("relaxed", "off");
+    cpSync(AIDLC_SRC, join(proj, ".claude"), { recursive: true });
+    setLines(proj, (state) => state.replace(/^- \*\*Current Stage\*\*:.*$/m, "- **Current Stage**: requirements-analysis"));
+    reply(proj, "/aidlc --stage code-generation --single");
+    next(proj, ["--stage", "code-generation", "--single"]);
+    writePlan(proj);
+    const own = (): Emitted => next(proj, OWN.split(" ").slice(3));
+    const build = own();
+    expect(build.plan_approval.skipped, JSON.stringify(build)).toBe(true);
+    turnOn(proj);
+    const asked = own();
+    expect(asked, JSON.stringify(asked)).toMatchObject({ kind: "ask", ask_type: "plan-approval", plan_approval: { next: OWN } });
   });
 });
 

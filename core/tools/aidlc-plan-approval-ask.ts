@@ -96,6 +96,7 @@ import {
   keepApprovedPlanCopy,
   PlanApprovalUnbindableError,
   planAsSentBack,
+  readPlanApprovalSettingWith,
   readTestingContract,
   replaceTestingContractSection,
   resolveCodeGenerationAuthority,
@@ -1322,6 +1323,9 @@ function planApprovalSettingFor(projectDir: string): PlanApprovalSetting | null 
     return null;
   }
 }
+
+// The receipt reader judges a plan built without asking by this setting too.
+readPlanApprovalSettingWith((projectDir) => planApprovalSettingFor(projectDir)?.value === "off");
 
 /**
  * A Kiro IDE window that passes hooks no message text keeps its picker, so no

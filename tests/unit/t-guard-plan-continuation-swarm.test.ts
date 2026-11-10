@@ -1243,6 +1243,30 @@ describe("prepare with plan approval off", () => {
     expect(readFileSync(join(codeGenerationRecordDir(pd, UNIT), "code-generation-questions.md"), "utf-8")).toBe(questions);
   });
 
+  // Turned on once the Units are being built, the build goes on: the worker
+  // builds from its delegated record and `next` hands back the batch.
+  test("plan approval turned on after prepare started the Units: the worker still builds, and nothing is asked", () => {
+    const pd = fixture(false, false);
+    const statePath = seededStateFile(pd);
+    writeFileSync(statePath, readFileSync(statePath, "utf-8").replace(
+      "- **Guard Policy**: strict (set by you)\n",
+      "- **Guard Policy**: strict (set by you)\n- **Plan Approval**: off (set by you)\n",
+    ));
+    publish(pd);
+    const directive = { kind: "invoke-swarm", stage: STAGE, units: [UNIT] } as unknown as Parameters<typeof publishPlanApprovalSkip>[1];
+    expect(publishPlanApprovalSkip(pd, directive)).toBe(true);
+    const prepared = prepare(pd);
+    expect(prepared.code, `${prepared.out}\n${prepared.err}`).toBe(0);
+    const worker = child(pd);
+    writeFileSync(statePath, readFileSync(statePath, "utf-8").replace(
+      "- **Plan Approval**: off (set by you)", "- **Plan Approval**: on (set by you)",
+    ));
+    expect(codeGenerationExecutionAllowed(worker, TARGET)).toBe(true);
+    const after = tool(pd, "aidlc-orchestrate.ts", ["next", "--project-dir", pd]);
+    succeeded(after);
+    expect(JSON.parse(after.out)).toMatchObject({ kind: "invoke-swarm", units: [UNIT] });
+  });
+
   // Nobody approved this plan, so a change after the engine's record is no
   // reason to ask for an approval: strict built one Unit at a time carries on,
   // and so does the parallel build. Asking would loop, since `next` never asks.

@@ -9,7 +9,6 @@
 
 import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
 import { gitSubmoduleNames } from "./aidlc-git.ts";
-import { resolvePlanApprovalSetting } from "./aidlc-guard-switch.ts";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
@@ -3132,11 +3131,23 @@ function planApprovalReceiptFor(
   return receipt ?? committedPlanApproval(projectDir, authority, key);
 }
 
-// A plan that plan approval off built without asking, its build not started
-// yet, stands only while plan approval is still off and its questions file is
-// still the record the skip wrote. Turned on, nobody approved it, so `next`
-// asks; once that question is out, the plan is the question's, and plan
-// approval turned off again records the skip afresh. A setting that cannot be
+// The plan-approval setting, from its one owner (resolvePlanApprovalSetting in
+// aidlc-guard-switch.ts), for the processes that may load it: a tool the agent
+// runs may not (the runtime-integrity guard's HOOK_MODULE), so the router module
+// and the plan-approval guard hand it in. Unset, a plan built without asking
+// stands on its record alone.
+let planApprovalOffFor: ((projectDir: string) => boolean) | null = null;
+
+export function readPlanApprovalSettingWith(planApprovalOff: (projectDir: string) => boolean): void {
+  planApprovalOffFor = planApprovalOff;
+}
+
+// The engine's record that plan approval off built a plan without asking stands,
+// until that plan's build starts, only while plan approval is still off and the
+// questions file is still the record it wrote. Turned on, nobody approved the
+// plan, so `next` asks; once the plan question is shown (plan approval turned on,
+// or the person asked to review it), their answer decides, and plan approval
+// turned off again records the skip afresh. A setting or file that cannot be
 // read keeps the plan stop, as the router does.
 function skipNoLongerStands(
   projectDir: string,
@@ -3145,7 +3156,7 @@ function skipNoLongerStands(
 ): boolean {
   if (receipt?.skipped === undefined || receipt.status === "generation") return false;
   try {
-    if (resolvePlanApprovalSetting(projectDir, runStateContent(projectDir)).value !== "off") return true;
+    if (planApprovalOffFor !== null && !planApprovalOffFor(projectDir)) return true;
     const path = join(authority.stageDir, "code-generation-questions.md");
     return !existsSync(path) || planApprovalPromptSha256(readFileSync(path, "utf-8")) !== receipt.promptSha256;
   } catch {

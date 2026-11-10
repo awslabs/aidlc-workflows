@@ -184,6 +184,7 @@ import {
   parkedWhereItStands,
   planReviewAppendix,
   promptTestingContractMarkers,
+  readPlanApprovalSettingWith,
   setAsideBuildUnderOff,
   stepNextCommand,
   WORKER_BRIEF_SECTIONS,
@@ -2456,6 +2457,16 @@ async function evaluate(
     (!DISPATCH_TOOLS.has(toolName) && toolName.length > 0);
   if (!guardedDispatch && !mutationCapable) return 0;
   const cwd = typeof parsed.cwd === "string" ? parsed.cwd : projectDir;
+  // The receipt reader judges a plan built without asking by the plan-approval
+  // setting too. This hook may load the setting's resolver; a tool the agent
+  // runs may not (readPlanApprovalSettingWith).
+  try {
+    const { resolvePlanApprovalSetting } = await import("../tools/aidlc-guard-switch.ts");
+    const sessionId = validSessionId(typeof parsed.session_id === "string" ? parsed.session_id : undefined) ?? undefined;
+    readPlanApprovalSettingWith((pd) => resolvePlanApprovalSetting(pd, runStateContent(pd), { sessionId }).value === "off");
+  } catch (error) {
+    recordHookDrop(projectDir, HOOK_NAME, `plan-approval setting not read: ${errorMessage(error)}`);
+  }
 
   let state: string | null = null;
   let verdict: PlanApprovalVerdict;
