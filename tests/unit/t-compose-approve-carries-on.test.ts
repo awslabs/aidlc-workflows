@@ -158,7 +158,7 @@ describe("t-compose-approve-carries-on: every answer to the in-flight compose qu
       // Both answers name the same step, said once in the print.
       const named = print.match(new RegExp(NEXT_STEP, "g")) ?? [];
       expect(named.length, print).toBe(2);
-      expect(print).toMatch(/relay its answer, then run `[^`]*aidlc-orchestrate\.ts next`/);
+      expect(print).toMatch(/first tell the person its answer in your own words \(what stays and why\), then run `[^`]*aidlc-orchestrate\.ts next`/);
       expect(print).toMatch(/On Reject, at any of these gates, apply nothing, then run `[^`]*aidlc-orchestrate\.ts next`/);
       carriesOn(proj);
       expect(readState(proj), answer).toMatch(/- \[ \] market-research \u2014 EXECUTE/);
