@@ -6458,8 +6458,8 @@ function takeUnit(args: string[], projectDir?: string): void {
   const leads = !withLeadRules ? null
     : home.leadCopy ? leadRulesOf(pd, home.space, (rel) => textAt(pd, integration.oid, rel)) : leadRulesOf(pd, home.space);
   const leadsToo = leads === null || leads.paths.length === 0 ? ""
-    : ` and the lead's ${leads.practices.length > 0 && leads.project.length > 0 ? "agreed practices and project rules"
-      : leads.practices.length > 0 ? "agreed practices" : "project rules"}`;
+    : ` and the lead's ${leads.practices.length > 0 && leads.project.length > 0 ? "practices and project rules"
+      : leads.practices.length > 0 ? "practices" : "project rules"}`;
   const build = createUnitBuild(pd, home, plan, integration.oid, unit, team, generation, {
     read: (rel) => {
       const shown = git(pd, ["show", `${integration.oid}:${home.recordPrefix}/${rel}`, "--"]);

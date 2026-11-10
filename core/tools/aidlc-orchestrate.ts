@@ -5406,7 +5406,7 @@ function teamCommandsNote(): string {
     `answer a team's proposed change, run \`${unitTool} amend <unit> --input <file> --answer <approve|reject> ` +
     `${unitWordsArg("amend")}\`. ` +
     `When they ask for their sign-off on every team's result, run \`${unitTool} lead-sign-off on\` (\`off\` to stop); ` +
-    `when they ask to free a Unit a team holds, run \`${unitTool} release <unit>\`; when they ask to build a Unit ` +
+    `when they ask to free a Unit, run \`${unitTool} release <unit>\`; when they ask to build a Unit ` +
     `left open here, run \`${unitTool} assign --here <unit> ${unitWordsArg("assign")}\`. ` +
     `${UNIT_WORDS_NOTE} Say the notice line each prints.`;
 }
@@ -9192,11 +9192,11 @@ function unitTakeLook(
       // once and follows them too, the recommended way, its detail naming
       // them; one more row takes a Unit under the team's own rules only, naming
       // the Unit when one start is offered, else asking which.
-      // Their agreed practices (memory/team.md) come with them, named as such.
+      // Their practices (memory/team.md) come with them, named as such.
       const lead = byAddress === null ? leadRules(projectDir, space) : leadRules(projectDir, space, (rel) => textAt(projectDir, byAddress.oid, rel));
       // A build in the lead's own space follows the lead's rules as its own: no choice to put.
       const names = byAddress === null && active === space ? [] : [...lead.practices, ...lead.project];
-      const brings = lead.practices.length === 0 ? "project rules" : lead.project.length === 0 ? "agreed practices" : "agreed practices and project rules";
+      const brings = lead.practices.length === 0 ? "project rules" : lead.project.length === 0 ? "practices" : "practices and project rules";
       const ownRules: AskChoice[] = [];
       // A start that can only begin early carries --early, which a Unit ready
       // to start reads as nothing, so the one own-rules row starts either.

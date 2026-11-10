@@ -211,7 +211,7 @@ export function leadBuildsWithoutClaim(
 }
 
 // A team's build that follows the lead's rules too (Arden's call): the lead's
-// agreed practices (memory/team.md) and project rules (memory/project.md),
+// practices (memory/team.md) and project rules (memory/project.md),
 // each read where it is and never written from the build, and loaded before
 // the team's own file of the same name, so the team's own are on top. The
 // field lists the lead's files that hold any.
@@ -298,7 +298,7 @@ export function leadRulesUnreadLine(projectDir: string, stateContent: string): s
   const unread = leadRuleFiles(projectDir, stateContent).filter((file) => file.text === null).map((file) => file.path);
   if (unread.length === 0) return null;
   const kinds = [
-    ...(unread.some((path) => path.endsWith("/team.md")) ? ["agreed practices"] : []),
+    ...(unread.some((path) => path.endsWith("/team.md")) ? ["practices"] : []),
     ...(unread.some((path) => path.endsWith("/project.md")) ? ["project rules"] : []),
   ];
   return `The lead's ${kinds.length > 0 ? kinds.join(" and ") : "rules"} could not be read just now, so this step follows your team's own rules.`;

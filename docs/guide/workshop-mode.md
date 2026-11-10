@@ -596,7 +596,7 @@ AI-DLC offers the Units their team can take, from what the workspace already
 has (the lead's plan and the claims git last brought in). Where the lead has
 practices they agreed (their `team.md`) or project rules of their own (their
 `project.md`) beyond the template's notes, the same question says so once: each
-**Start <unit>** follows the lead's agreed practices too (or project rules, or
+**Start <unit>** follows the lead's practices too (or project rules, or
 both, named by their headings in its detail), the recommended way, which loads
 each of those files where it is, read only, just before the team's own file of
 the same name, so the team's are on top. One more choice takes a Unit under the
@@ -697,7 +697,7 @@ no folder of the lead's and no remote are added.
   the lead's repo list, with its address: "billing is not here yet; the lead's
   list has it at <address>. Do you want me to clone it here?" On your yes it is
   cloned and added to your workspace's own list.
-- Following the lead's rules too reads the lead's agreed practices and project
+- Following the lead's rules too reads the lead's practices and project
   rules where they are, in the lead's project, before your team's own; nothing
   is copied, and a change the lead pushes applies once AI-DLC next looks at the
   lead's project (in a new chat, or at your build's next stage). When they
@@ -760,7 +760,11 @@ done once it is through its gate, the stage it is at, waiting for your
 approval while its gate is open, or not started yet. A look at the board on its
 own (`/aidlc team-board`) records nothing: a Unit whose repos it sees merged reads
 "not recorded yet", and the next step at the lead's project records it and opens
-the Units waiting on it.
+the Units waiting on it; with no Unit of its own to build, that step starts
+nothing. While the lead's project builds nothing, `/aidlc --status` says so: its
+Current Stage reads "none here: the Units left are taken or open to take
+(below)", its Status "Waiting on the Units below", and it names no agent or next
+stage.
 
 A Unit is done when every repo it changed has merged, however it merged (when a
 repo merged it in a way the board cannot see, tell the lead's chat and
