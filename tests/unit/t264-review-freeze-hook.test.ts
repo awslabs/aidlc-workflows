@@ -79,6 +79,7 @@ import {
   seededRecordDir,
   seedStateFile,
 } from "../harness/fixtures.ts";
+import { readConductorSurface } from "../harness/conductor-skill.ts";
 
 const BUN = process.execPath;
 const DIST_CLAUDE = join(REPO_ROOT, "dist", "claude", ".claude");
@@ -1787,7 +1788,7 @@ describe("t264 (d) the refusal names next; next asks the recovery question", () 
     const missing: string[] = [];
     for (const harness of ["claude", "kiro", "kiro-ide", "codex", "cursor", "opencode", "copilot"]) {
       const rel = join("harness", harness, "skills", "aidlc", "SKILL.md");
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const body = readConductorSurface(rel);
       if (!body.includes(HOOK_REFUSAL_NEXT_RULE)) missing.push(rel);
     }
     expect(missing).toEqual([]);

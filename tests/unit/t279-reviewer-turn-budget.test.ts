@@ -56,6 +56,7 @@ import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { AIDLC_SRC, REPO_ROOT } from "../harness/fixtures.ts";
+import { readConductorSurface } from "../harness/conductor-skill.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 
 const REVIEWERS = [
@@ -366,7 +367,7 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
         join(harness.authoredRoot, SKILL),
         join(harness.skillsRoot, "aidlc", "SKILL.md"),
       ]) {
-        const body = readFileSync(path, "utf-8");
+        const body = readConductorSurface(path);
         const labelled = `harness ${harness.name}: ${path}\n${body}`;
         expect(labelled).toContain("stage-protocol-reviewer.md");
         expect(labelled).toMatch(/when the engine lists `reviewer` in `directive\.protocol_modules`/);
@@ -446,7 +447,7 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
   });
 
   test("kiro-ide SKILL stays free of any dispatch-record mention (t221's pin, re-asserted beside the module pointer)", () => {
-    const body = readFileSync(join(REPO_ROOT, "harness", "kiro-ide", SKILL), "utf-8");
+    const body = readConductorSurface(join(REPO_ROOT, "harness", "kiro-ide", SKILL));
     expect(body).toContain("stage-protocol-reviewer.md");
     expect(body).not.toContain(".aidlc-engine/reviewer-dispatch.json");
     // The shared module keeps the guard prose and grants kiro-ide its

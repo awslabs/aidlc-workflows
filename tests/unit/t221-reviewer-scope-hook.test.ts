@@ -18,6 +18,7 @@
 //       surfaces and the 12a dispatch-record prose, so a wiring or prose sweep
 //       cannot silently drop the enforcement while the hook file survives.
 
+import { readConductorSurface } from "../harness/conductor-skill.ts";
 import {
   NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
   NATIVE_STARTUP_TIMEOUT_MS,
@@ -1261,10 +1262,7 @@ describe("t221 (c) harness registration and protocol prose", () => {
   });
 
   test("Kiro IDE documents its prose-only reviewer bound and omits the unused record", () => {
-    const body = readFileSync(
-      join(REPO_ROOT, "harness", "kiro-ide", "skills", "aidlc", "SKILL.md"),
-      "utf-8",
-    );
+    const body = readConductorSurface(join(REPO_ROOT, "harness", "kiro-ide", "skills", "aidlc", "SKILL.md"));
     expect(body).toContain("stage-protocol-reviewer.md");
     expect(body).not.toContain(".aidlc-engine/reviewer-dispatch.json");
     expect(body).not.toContain("reviewer-scope PreToolUse hook enforces");

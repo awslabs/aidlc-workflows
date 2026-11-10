@@ -197,10 +197,10 @@ workflow.
 
 The install ships:
 
-- `.kiro/skills/aidlc/SKILL.md`: AI-DLC's instructions to the aidlc agent. The
-  agent has them, with `question-rendering.md` and `composer.md` beside them,
-  from the first line of every chat, so it reads no file before acting on your
-  request.
+- `.kiro/skills/aidlc/SKILL.md` and `workflow.md`: AI-DLC's instructions to the
+  aidlc agent. The agent has them, with `question-rendering.md` and `composer.md`
+  beside them, from the first line of every chat, so it reads no file before
+  acting on your request.
 - `.kiro/agents/aidlc-aidlc.md` — the same conductor exposed in the workspace agent
   selector (named so it sorts before the `aidlc-*-agent.md` specialists: Kiro
   lists agents in file-name order, so `aidlc` comes first in the picker and in
