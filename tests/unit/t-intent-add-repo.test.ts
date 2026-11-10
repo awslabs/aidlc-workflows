@@ -146,8 +146,8 @@ function gitTrace(): { env: NodeJS.ProcessEnv; ranRemote: () => boolean } {
 
 function notListedLine(name: string): string {
   return `${name} is not in this workspace yet, and no repos.json lists it, so there is no address to clone it from. ` +
-    "Ask the person for its clone address once, then run this again with --url and that address; " +
-    "if it is already cloned elsewhere, give its folder with --path. Nothing was changed.";
+    "Give its clone address with --url, or clone it beside the other repos, then add it again; " +
+    "if it is already cloned somewhere else, give its folder with --path.";
 }
 
 function stagingLeft(): string[] {
