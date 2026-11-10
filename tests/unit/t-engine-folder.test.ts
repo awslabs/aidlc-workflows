@@ -255,4 +255,34 @@ describe("an earlier release's engine files move into aidlc/.aidlc-engine/", () 
     expect(line("2.12.0")).toBe("none");
     expect(line("3.0.0")).toBe("none");
   });
+
+  test("a fresh workspace gets the folder with its sessions and units folders, so a first claim has somewhere to write", () => {
+    const proj = scratch("aidlc-engine-folder-fresh-");
+    mkdirSync(join(proj, "aidlc"), { recursive: true });
+    engine(proj, "lib.sessionsDir(proj);");
+    for (const sub of ["sessions", "units"]) {
+      expect(lstatSync(join(proj, "aidlc", ".aidlc-engine", sub)).isDirectory(), sub).toBe(true);
+    }
+    // A first Unit write lands without making its folder itself.
+    engine(proj, "require('node:fs').writeFileSync(lib.claimGenerationsPath(proj), '{}');");
+    expect(existsSync(join(proj, "aidlc", ".aidlc-engine", "units", "claim-generations.json"))).toBe(true);
+  });
+
+  test("a project pinned to another release keeps its earlier files where that release reads them", () => {
+    const proj = earlierWorkspace();
+    writeFileSync(join(proj, ".aidlc-version"), "2.11.3\n");
+    engine(proj, "lib.sessionsDir(proj); lib.cloneIdPath(proj);");
+    for (const old of Object.keys(EARLIER)) {
+      expect(readFileSync(join(proj, "aidlc", old), "utf-8"), old).toBe(EARLIER[old]);
+    }
+  });
+
+  test("the going-back line reads what is there and moves nothing", () => {
+    const proj = earlierWorkspace();
+    mkdirSync(join(proj, "aidlc", ".aidlc-engine"), { recursive: true });
+    expect(engine(proj, 'console.log(lib.engineFolderGoingBackLine(proj, "2.11.3", "aidlc use 2.12.0") ?? "none");')).toBe("none");
+    for (const old of Object.keys(EARLIER)) {
+      expect(readFileSync(join(proj, "aidlc", old), "utf-8"), old).toBe(EARLIER[old]);
+    }
+  });
 });

@@ -1599,7 +1599,7 @@ describe("t230 version-aware startup", () => {
   // own files where it keeps them: the dispatcher hands every route over
   // before anything of this release could move them into aidlc/.aidlc-engine/.
   test.skipIf(process.platform === "win32")(
-    "a pinned project's hook, command and statusline move none of its engine files",
+    "a pinned project's hook, command, statusline and doctor move none of its engine files",
     () => {
       const project = makeProject();
       const machine = mkdtempSync(join(tmpdir(), "aidlc-t230-pinned-layout-"));
@@ -1642,9 +1642,11 @@ describe("t230 version-aware startup", () => {
         [["engine", "hook", "validate-state"], JSON.stringify({ session_id: "s-one" })],
         [["engine", "status"], undefined],
         [["engine", "statusline"], JSON.stringify({ session_id: "s-one", workspace: { current_dir: project } })],
+        // Doctor runs this release's checks in the pinned project.
+        [["doctor"], undefined],
       ] as const) {
         const result = viaDispatcher([...argv], project, env, input);
-        expect(result.exitCode, `${argv.join(" ")}: ${result.stderr.toString()}`).toBe(0);
+        if (argv[0] !== "doctor") expect(result.exitCode, `${argv.join(" ")}: ${result.stderr.toString()}`).toBe(0);
         expect(listed(), argv.join(" ")).toEqual(before);
         for (const [rel, bytes] of Object.entries(earlier)) {
           expect(readFileSync(join(project, "aidlc", rel), "utf-8"), `${argv.join(" ")}: ${rel}`).toBe(bytes);
