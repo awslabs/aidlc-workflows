@@ -2625,9 +2625,9 @@ describe("t242 state-transition ownership guard", () => {
   });
 
   // The runtime-integrity walk must visit each script once per tool call.
-  // Before, it re-walked a script once per path that reached it, so a shared
-  // helper reached by many parents (a diamond, no cycle) or scripts that run
-  // each other hung the hook on an ordinary Bash command. See issue #3569.
+  // A re-walk once per path that reaches a script would hang the hook on an
+  // ordinary Bash command when many parents reach a shared helper (a diamond,
+  // no cycle) or scripts run each other.
   test("runtime integrity walks shared and mutually-running scripts once (no blowup)", () => {
     const project = createTestProject();
     projects.push(project);
