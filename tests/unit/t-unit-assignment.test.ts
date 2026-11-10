@@ -140,6 +140,13 @@ describe("after choosing teams the plan goes to them the way main's share questi
     expect(String(withTwo.question)).toContain(", with the note that refunds and checkout-ui are built here, so each team");
     expect((withTwo.choices as Offer["choices"])[0].detail)
       .toBe("Pushes main, and the note that refunds and checkout-ui are built here, to origin; it never overwrites what a team pushed.");
+    const sharedTwo = run(UNIT, ["share", "--plan"], two.dir);
+    expect(sharedTwo.status, sharedTwo.out).toBe(0);
+    expect(sharedTwo.json?.notice).toBe("Pushed main, and the note that refunds and checkout-ui are built here, to origin.");
+    // A share with no Unit built here says nothing of a note.
+    const sharedPlain = run(UNIT, ["share", "--plan"], plain.dir);
+    expect(sharedPlain.status, sharedPlain.out).toBe(0);
+    expect(sharedPlain.json?.notice).toBeUndefined();
   });
 
   test("Share puts the plan on the home's remote, where a teammate's clone takes its Unit", () => {
@@ -294,7 +301,9 @@ describe("the lead's word builds a Unit here: assign --here", () => {
     expect(here.status, here.out).toBe(0);
     expect(here.json?.notice).toBe("refunds is built here now, no longer open for the teams.");
     expect(refs()).toBe(before);
-    share(home.dir);
+    const shared = run(UNIT, ["share", "--plan"], home.dir);
+    expect(shared.status, shared.out).toBe(0);
+    expect(shared.json?.notice).toBe("Pushed main, and the note that refunds is built here, to origin.");
     expect(git(home.remote, ["rev-parse", "main"])).toBe(git(home.dir, ["rev-parse", "HEAD"]));
     expect(claimPayload(home.remote, id8, "refunds")).toMatchObject({ status: "claimed", owner: "default", taken_by: "lee" });
     expect(claimPayload(home.remote, id8, "checkout-ui")).toBeNull();

@@ -5313,14 +5313,18 @@ function shareMain(args: string[], projectDir?: string): void {
     );
   }
   noteTeamShared(pd);
-  const notSeen = claimsAskedHereWithShare(pd);
+  const claims = claimsAskedHereWithShare(pd);
+  const notice = [
+    ...(claims.sent.length > 0 ? [`Pushed ${branch}, and ${builtHereNote(claims.sent)}, to ${remote}.`] : []),
+    ...claims.lines,
+  ];
   console.log(JSON.stringify({
     shared: true,
     remote,
     branch,
     commit: gitOutput(pd, ["rev-parse", "HEAD"], "Cannot resolve HEAD"),
     committed_paths: committed,
-    ...(notSeen.length > 0 ? { notice: notSeen.join(" ") } : {}),
+    ...(notice.length > 0 ? { notice: notice.join(" ") } : {}),
     step: "Tell the person in plain words what it reports, then end your turn.",
   }));
 }
@@ -5520,12 +5524,18 @@ export function unitsAskedHereForShare(pd: string): string[] {
   return [...unitsAskedHere(readAuditShardEvents(pd))];
 }
 
+// The words for the claim of a Unit built here that a share sends: the share
+// question, its choice and the share's own line say it the same way.
+export function builtHereNote(units: string[]): string {
+  return `the note that ${namesInProse(units)} ${units.length === 1 ? "is" : "are"} built here`;
+}
+
 // At the share, a Unit the lead asked to build here before it, with no claim
-// yet, gets its claim, so a team's clone sees it taken from its first look;
-// the lines for one that could not be written.
-function claimsAskedHereWithShare(pd: string): string[] {
+// yet, gets its claim, so a team's clone sees it taken from its first look:
+// the Units whose claim went, and the lines for one that could not be written.
+function claimsAskedHereWithShare(pd: string): { sent: string[]; lines: string[] } {
   const asked = unitsAskedHereForShare(pd);
-  if (asked.length === 0) return [];
+  if (asked.length === 0) return { sent: [], lines: [] };
   let integration: ReturnType<typeof fetchIntegration> | null = null;
   let why = "it could not be read just now";
   try {
@@ -5535,6 +5545,7 @@ function claimsAskedHereWithShare(pd: string): string[] {
   }
   const identity = activeIdentity(pd);
   const state = readStateFile(pd);
+  const sent: string[] = [];
   const lines: string[] = [];
   for (const unit of asked) {
     if (integration === null) {
@@ -5543,10 +5554,11 @@ function claimsAskedHereWithShare(pd: string): string[] {
     }
     if (currentClaim(pd, integration.remote, claimRef(identity.intentId8, unit)) !== null) continue;
     const claimed = writeHereClaim(pd, identity, integration, unit, state);
-    if (claimed.kind === "unseen") lines.push(hereNotSeenLine(unit, claimed.why));
-    else if (claimed.kind === "theirs") lines.push(claimed.line);
+    if (claimed.kind === "here") sent.push(unit);
+    else if (claimed.kind === "unseen") lines.push(hereNotSeenLine(unit, claimed.why));
+    else lines.push(claimed.line);
   }
-  return lines;
+  return { sent, lines };
 }
 
 function buildLeftOpenHere(pd: string, state: string, units: string[], words: string): void {

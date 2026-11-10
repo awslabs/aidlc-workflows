@@ -645,6 +645,7 @@ import {
   buildClaimHere,
   planUnshared,
   unitsAskedHereForShare,
+  builtHereNote,
   leadsOwnClaims,
   takenFromSoloWork,
   type ToldMerge,
@@ -5921,8 +5922,7 @@ function buildOutShareOffer(projectDir: string): AskDirective | null {
     : "The Units are open for any team to take.";
   // A Unit built here before the share has no claim yet: the share sends it.
   const builtHere = added === null ? unitsAskedHereForShare(projectDir) : [];
-  const note = builtHere.length === 0 ? null
-    : `the note that ${namesInProse(builtHere)} ${builtHere.length === 1 ? "is" : "are"} built here`;
+  const note = builtHere.length === 0 ? null : builtHereNote(builtHere);
   return teamHandoverAsk(projectDir, {
     handovers: ["share"],
     marks: [mark],
