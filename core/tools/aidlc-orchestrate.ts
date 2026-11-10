@@ -645,6 +645,7 @@ import {
   claimIsMine,
   buildClaimHere,
   planUnshared,
+  unitsAskedHereForShare,
   leadsOwnClaims,
   takenFromSoloWork,
   type ToldMerge,
@@ -5918,16 +5919,22 @@ function buildOutShareOffer(projectDir: string): AskDirective | null {
     ? `${namesInProse(added)} ${added.length === 1 ? "was" : "were"} added to the plan since you shared it, so the ` +
       `teams cannot take ${added.length === 1 ? "it" : "them"} yet.`
     : "The Units are open for any team to take.";
+  // A Unit built here before the share has no claim yet: the share sends it.
+  const builtHere = added === null ? unitsAskedHereForShare(projectDir) : [];
+  const note = builtHere.length === 0 ? null
+    : `the note that ${namesInProse(builtHere)} ${builtHere.length === 1 ? "is" : "are"} built here`;
   return teamHandoverAsk(projectDir, {
     handovers: ["share"],
     marks: [mark],
     question: `${said} Share the plan with them now? I'd commit the plan here (AI-DLC's record, ` +
-      `nothing else of yours) and push ${target.branch} to ${target.remote}, so each team can take its Unit by opening ` +
-      `its own clone and running ${entrySkillInvocation()}.`,
+      `nothing else of yours) and push ${target.branch} to ${target.remote}${note === null ? "" : `, with ${note}`}, ` +
+      `so each team can take its Unit by opening its own clone and running ${entrySkillInvocation()}.`,
     choices: [
       {
         label: "Share them with the teams",
-        detail: `Pushes ${target.branch} to ${target.remote} as a plain push; it never overwrites what a team pushed.`,
+        detail: note === null
+          ? `Pushes ${target.branch} to ${target.remote} as a plain push; it never overwrites what a team pushed.`
+          : `Pushes ${target.branch}, and ${note}, to ${target.remote}; it never overwrites what a team pushed.`,
         command: `${aidlcInvocation()} unit share --plan`,
       },
     ],

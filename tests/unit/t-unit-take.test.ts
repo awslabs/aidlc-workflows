@@ -1374,9 +1374,16 @@ describe("a teammate's clone before the lead's project shared its plan", () => {
     hostFor("codex", home.dir, GIT_ENV).sessionStart("startup");
     const teams = run(STATE, ["set-unit-ownership", "team"], home.dir);
     expect(teams.status, teams.out).toBe(0);
-    // A claim at the lead's remote before the plan is shared: the lead's own build here.
-    const here = run(UNIT, ["assign", "--here", "checkout-ui"], home.dir);
+    // A claim at the lead's remote before the plan is shared, as an earlier
+    // release pushed when the lead built a Unit here (building one here before
+    // the share pushes nothing now): made on a shared copy of the same work.
+    const donor = makeHome({ repos });
+    expect(run(STATE, ["set-unit-ownership", "team"], donor.dir).status).toBe(0);
+    expect(run(UNIT, ["share", "--plan"], donor.dir).status).toBe(0);
+    const here = run(UNIT, ["assign", "--here", "checkout-ui"], donor.dir);
     expect(here.status, here.out).toBe(0);
+    git(home.remote, ["fetch", "-q", donor.remote, "+refs/heads/claim/*:refs/heads/claim/*"]);
+    expect(git(home.remote, ["for-each-ref", "--format=%(refname)", "refs/heads/claim/"])).not.toBe("");
     const bob = cloneOf(home.remote, "bob");
     const host = hostFor("codex", bob, GIT_ENV);
     host.sessionStart("startup");

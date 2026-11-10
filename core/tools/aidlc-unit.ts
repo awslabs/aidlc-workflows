@@ -5513,11 +5513,18 @@ export function planUnshared(projectDir: string, target: { remote: string; branc
   return !shown.ok || homeLocation(shown.stdout) === null;
 }
 
+// The Units the lead asked to build here: the share writes the claim of each
+// that has none, and its question names them while the plan is not shared yet
+// (assign --here writes no claim then).
+export function unitsAskedHereForShare(pd: string): string[] {
+  return [...unitsAskedHere(readAuditShardEvents(pd))];
+}
+
 // At the share, a Unit the lead asked to build here before it, with no claim
 // yet, gets its claim, so a team's clone sees it taken from its first look;
 // the lines for one that could not be written.
 function claimsAskedHereWithShare(pd: string): string[] {
-  const asked = [...unitsAskedHere(readAuditShardEvents(pd))];
+  const asked = unitsAskedHereForShare(pd);
   if (asked.length === 0) return [];
   let integration: ReturnType<typeof fetchIntegration> | null = null;
   let why = "it could not be read just now";

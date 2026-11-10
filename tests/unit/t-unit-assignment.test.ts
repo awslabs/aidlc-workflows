@@ -46,7 +46,7 @@ const UNITS = ["refunds", "checkout-ui", "reporting"];
 const RHYTHM_OFFER = "Each team will approve its Unit after every stage. Do you want them to approve once at the end of " +
   "each Unit instead? I'd keep after every stage, so a wrong turn is caught at the stage where it happens.";
 
-type Offer = { question: string; choices: Array<{ label: string; command?: string; recommended?: boolean }> };
+type Offer = { question: string; choices: Array<{ label: string; detail?: string; command?: string; recommended?: boolean }> };
 
 const field = (content: string, name: string) => new RegExp(`^- \\*\\*${name}\\*\\*: ?(.*)$`, "m").exec(content)?.[1]?.trim();
 
@@ -106,6 +106,40 @@ describe("after choosing teams the plan goes to them the way main's share questi
       expect(isShare(step), JSON.stringify(step)).toBe(false);
       expect(step.ask_type).not.toBe("unit-assignment");
     }
+  });
+
+  // The share also sends the claim of a Unit built here before it: its
+  // question says so then, and only then.
+  test("the share question names a Unit built here before it, which its push also sends; otherwise its words are as they were", () => {
+    const plain = makeHome();
+    chooseTeams(plain.dir);
+    const asked = next(plain.dir);
+    expect(asked.question).toBe(
+      "The Units are open for any team to take. Share the plan with them now? I'd commit the plan here (AI-DLC's record, " +
+        "nothing else of yours) and push main to origin, so each team can take its Unit by opening its own clone and running /aidlc.",
+    );
+    expect((asked.choices as Offer["choices"])[0]).toMatchObject({
+      label: "Share them with the teams",
+      detail: "Pushes main to origin as a plain push; it never overwrites what a team pushed.",
+    });
+    const one = makeHome();
+    chooseTeams(one.dir);
+    expect(run(UNIT, ["assign", "--here", "refunds", "--person-words", "build refunds here"], one.dir).status).toBe(0);
+    const withOne = next(one.dir);
+    expect(withOne.question).toBe(
+      "The Units are open for any team to take. Share the plan with them now? I'd commit the plan here (AI-DLC's record, " +
+        "nothing else of yours) and push main to origin, with the note that refunds is built here, so each team can take " +
+        "its Unit by opening its own clone and running /aidlc.",
+    );
+    expect((withOne.choices as Offer["choices"])[0].detail)
+      .toBe("Pushes main, and the note that refunds is built here, to origin; it never overwrites what a team pushed.");
+    const two = makeHome();
+    chooseTeams(two.dir);
+    expect(run(UNIT, ["assign", "--here", "refunds,checkout-ui", "--person-words", "build both here"], two.dir).status).toBe(0);
+    const withTwo = next(two.dir);
+    expect(String(withTwo.question)).toContain(", with the note that refunds and checkout-ui are built here, so each team");
+    expect((withTwo.choices as Offer["choices"])[0].detail)
+      .toBe("Pushes main, and the note that refunds and checkout-ui are built here, to origin; it never overwrites what a team pushed.");
   });
 
   test("Share puts the plan on the home's remote, where a teammate's clone takes its Unit", () => {
