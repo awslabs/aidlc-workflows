@@ -288,7 +288,8 @@ Your approval is recorded before the intent's `Construction Verification Command
 is set. That same command is reused at every Unit/batch checkpoint; changing it
 requires another recorded human approval. If a greenfield project has no runnable
 check yet, you may defer selection; the first checkpoint asks before running any
-verification. The conductor never invents or auto-approves a command.
+verification (on Kiro IDE and Kiro CLI v3, a side-by-side build asks once its plans
+are approved, before its workers start). The conductor never invents or auto-approves a command.
 
 With skeleton-on, the first DAG Unit is the smallest working integrated slice.
 It completes its design and code, including your Plan Approval and required
@@ -314,8 +315,9 @@ approval says so once, with the
 command that puts each one back when git holds your copy, for example "The
 build changed README.md, a file you had before this work started. To put it
 back, run `git checkout HEAD -- README.md`.", or that there is no committed
-copy to put back. AI-DLC's own files, as its setup or a later `aidlc config`
-wrote them, are not among them, and neither is AI-DLC's marked part of a file
+copy to put back. Built Unit by Unit, each Unit's approval names what that
+Unit changed and puts it back as that Unit found it. AI-DLC's own files, as its
+setup or a later `aidlc config` wrote them, are not among them, and neither is AI-DLC's marked part of a file
 it shares with you, such as AGENTS.md or `.gitignore`, when git holds your copy
 of it: your part of that file still is.
 

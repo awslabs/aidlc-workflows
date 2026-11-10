@@ -77,7 +77,9 @@ question asked. Only **Approve** authorizes the receipt; an unrelated reply,
 Never write `--details "Approve"` unless the human chose it; only then run
 `state set-construction-verification-command --command-file verification-command.txt` to write the matching Runtime
 State field. A human may defer when no runnable
-check exists yet; the first checkpoint then asks. The current approval receipt,
+check exists yet; the first checkpoint then asks (on Kiro IDE and Kiro CLI v3, a
+side-by-side batch asks once its plans are approved, before its initial `prepare`).
+The current approval receipt,
 not the field alone, authorizes execution. Changing it requires a new receipt
 and typed setter, never generic `state set` or an automatic choice.
 
@@ -1190,7 +1192,15 @@ This stage has a **two-part structure**: planning followed by generation.
    files. Paths are POSIX-relative and use no globs or `..`; a trailing `/`
    claims a generated directory tree. In a main-workspace multi-repo run every
    entry names its recorded `repo`; inside the worktree hosting the Bolt, paths are relative
-   to that selected repo and omit `repo`.
+   to that selected repo and omit `repo`. An entry read in a recorded repo gives its path
+   from that repo's root: one the repo does not have counts as deleted only when the repo
+   had it (at HEAD, in a commit before it, or, for a file, in a folder still on disk), and
+   any other (`{"repo": "billing", "path": "billing/package.json"}`) is refused before the
+   review, every such entry named in one reason. When the work records a git submodule of
+   the project as its only repo (work started before such a submodule stopped being
+   recorded) and every entry is a file of the project's own, the reason asks the person
+   once whether to take the submodule off the work's repos (`intent remove-repo`), after
+   which the manifest reads as written, or to put the code in the submodule.
 
    The stage file gives this shape:
 

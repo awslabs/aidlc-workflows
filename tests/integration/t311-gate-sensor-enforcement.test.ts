@@ -855,6 +855,30 @@ describe("t311 gate-bound sensor enforcement", () => {
     );
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // The gate and the dispatcher read `matches` the same way: a `**/` before
+  // the file name also takes no folder, so the check the gate fires on
+  // probe/one.md runs there and reports, instead of being refused as
+  // outside its own filter and recorded as could not run.
+  test("a check whose glob takes no folder for **/ runs on that file and reports, blocking and advisory", () => {
+    for (const severity of ["blocking", "advisory"] as const) {
+      const fixture = setupFixture(severity, "**/probe/**/one.md");
+      const result = gate(fixture);
+      const trail = audit(fixture.project);
+      expect(eventCount(trail, "SENSOR_FIRED"), trail).toBe(1);
+      expect(eventCount(trail, "SENSOR_FAILED"), trail).toBe(1);
+      expect(eventCount(trail, "SENSOR_COULD_NOT_RUN"), trail).toBe(0);
+      if (severity === "blocking") {
+        expect(result.status, result.out).toBe(1);
+        expect(result.out).toContain(".aidlc-engine/sensors/probe/gate-probe-");
+        expect(result.out).not.toContain("does not match sensor");
+        expect(readFileSync(seededStateFile(fixture.project), "utf-8")).toContain("- [-] probe");
+      } else {
+        expect(result.status, result.out).toBe(0);
+        expect(readFileSync(seededStateFile(fixture.project), "utf-8")).toContain("- [?] probe");
+      }
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("gate dispatch skips deliverables outside the sensor matches capability", () => {
     const fixture = setupFixture("blocking", "**/one.md", true);
     const result = gate(fixture);

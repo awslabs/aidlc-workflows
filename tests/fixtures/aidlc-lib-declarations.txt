@@ -53,7 +53,6 @@ BLOCKING_SENSOR_OVERRIDE_CHOICE
 BLOCKING_SENSOR_OVERRIDE_DECISION
 BLOCKING_SENSOR_OVERRIDE_OPTIONS
 BOLT_NAME_REGEX
-BoltDagParse
 BoltDagResolution
 BoltIdentity
 BoltIdentityError
@@ -72,7 +71,6 @@ CHANGE_CONTROL_VALUES
 CHECKBOX_REVERSE
 CLAIM_BOUNDARY_WARNINGS
 CLAIM_GENERATIONS_FILE
-CLAIM_REGISTRY_CACHE_FILE
 CLAUDE_HOST_TEMPLATES
 CLAUDE_HOST_TURN_ORIGINS
 CLAUDE_QUEUED_HOST_ORIGINS
@@ -84,7 +82,6 @@ CODEX_SESSION_RECORD_MAX_BYTES
 COMMAND_TURN_REPLY
 COMMAND_TURN_SENTENCE
 COMPLETE_INTENT_STATUS
-COMPOSE_MARKER_TTL_MS
 CONDUCTOR_SUMMARY_FIELD
 CONFIGURATION_STEP
 CONFIG_KEYS
@@ -95,7 +92,6 @@ CREATION_RECEIPT_FILE
 CURRENT_FINGERPRINTS
 CURRENT_SESSION_FILE
 CURRENT_STATE_VERSION
-CachedUnitClaim
 CeremonyKey
 CeremonyPolicy
 CeremonyResolution
@@ -509,7 +505,6 @@ TurnOrigin
 UNBINDABLE_FINGERPRINT
 UNITS_REPOS_ASK
 UNIT_GATE_RHYTHM_FIELD
-UNIT_KINDS
 UNIT_LIFECYCLE_EVENTS
 UNIT_MERGE_DIR
 UNIT_NAME_PLACEHOLDER
@@ -522,12 +517,9 @@ UNSAVED_REASONS
 UNTRUSTED_AUDIT_NOTICE
 UTILITY_COMMANDS
 UnitCheckpoint
-UnitClaimRegistryCache
-UnitDependencyEdge
 UnitGateRhythm
 UnitGateScope
 UnitGateStatus
-UnitKind
 UnitLifecycleMode
 UnitLifecycleRow
 UnitLifecycleSnapshot
@@ -652,7 +644,6 @@ boltEventUnits
 boltWorktreeBaseCommit
 boundDirectiveMessage
 boxPicksAddANote
-cachedClaimFanoutActive
 candidateAttemptEventMatches
 candidateReviewCoverageProjection
 canonicalEngineCommand
@@ -677,8 +668,6 @@ claimGenerationKey
 claimGenerationsPath
 claimOverOwnJump
 claimPayloadAtTip
-claimRegistryCachePath
-claimRegistryGit
 claimRegistryRemote
 claimRegistryTips
 classifyRuntimeCompileCommand
@@ -742,11 +731,9 @@ completeSubagentInflight
 completedPipelineLinks
 completionCarriesVerifiedReview
 composeGateOpen
-composeMarkerPath
 composedPlanLabel
 composedPluginBase
 composerProposalPath
-computeBatches
 constructionCheckpointGaps
 constructionCheckpointsApply
 constructionHasStarted
@@ -843,7 +830,6 @@ exactCopilotMarker
 existingReviewAppendixOffset
 explicitWorkspaceList
 extractScopeBlock
-extractYamlUnitsBlock
 fenceCheckName
 fenceCommandOutput
 fenceKeyBypassed
@@ -952,7 +938,6 @@ hasCurrentSharedResumeWait
 hasDurableSourceBindingEvidence
 hasModernSourceBindingEvidence
 hasPendingDecision
-hasRealGitEntry
 hasRunnerGenMarker
 hasSubagentInflight
 hasUnsafeSingleLineCharacter
@@ -991,7 +976,6 @@ humanTurnState
 identityScopedUnitPath
 ignoredPathClaimable
 ignoredSourceClaimReason
-inHostShell
 inertPath
 inspectArtifactPath
 inspectContinuationCursor
@@ -1248,7 +1232,6 @@ parseActiveDirectiveOutOfDate
 parseAgentFrontmatter
 parseArgs
 parseAuditShardNotes
-parseBoltDag
 parseBoltName
 parseCeremonySetting
 parseCeremonyStateLine
@@ -1260,7 +1243,6 @@ parseGuardPolicy
 parseGuardPolicyStateLine
 parseGuardsOffLine
 parseGuardsOnLine
-parseInlineDepsList
 parseKnowledgeCommand
 parseLiteralShellInvocation
 parseMemoryEntries
@@ -1277,7 +1259,6 @@ parseStageFrontmatter
 parseStateStageSuffixes
 parseTeamBoardArgs
 parseUnitSourceListing
-parseUnitsBlock
 parseWorkspaceCommand
 parsedNextArgv
 pathContainedBy
@@ -1421,7 +1402,6 @@ readSubagentInflightLedger
 readSummaryAuthorization
 readSyncBufferedBytes
 readSyncBufferedLine
-readUnitClaimRegistryCache
 readUnitGateRhythm
 readUnitMergeTransaction
 readUnitSourceManifest
@@ -1863,7 +1843,6 @@ unknownRuntimeSessionWarning
 unlistedRecordForQuestion
 unmergedRootSettingsNotices
 unmetProducerInPlan
-unquoteScalar
 unrecordedKiroCliSteers
 unresolvedTeamGateRemedy
 unsavedOutputsMessage

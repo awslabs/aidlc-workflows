@@ -1,4 +1,4 @@
-// covers: file:core/tools/aidlc-windows-uninstall.ts
+// covers: file:core/tools/aidlc-windows-uninstall.ts file:core/tools/aidlc-doctor.ts function:windowsUninstallRetryFix
 
 import { describe, expect, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -38,6 +38,7 @@ import {
   type WindowsUninstallJournal,
   type WindowsUninstallPlan,
 } from "../../core/tools/aidlc-windows-uninstall.ts";
+import { windowsUninstallRetryFix } from "../../core/tools/aidlc-doctor.ts";
 
 const DISPATCHER = join(dirname(dirname(import.meta.dir)), "core", "tools", "aidlc.ts");
 const SID = "S-1-5-21-111-222-333-1001";
@@ -1547,4 +1548,48 @@ describe.skipIf(process.platform !== "win32")("native Windows uninstall PATH cle
       expect(result.errors[0]).toContain("invalid Windows PATH registration binding");
     });
   }, 35_000);
+});
+
+describe("doctor's Windows uninstall retry line", () => {
+  const sha = (bytes: string) => `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
+  const journal = (bin: string, files: WindowsUninstallPlan["files"], purge = false) => ({
+    commandPath: join(bin, "aidlc.cmd"),
+    purge,
+    files,
+  });
+
+  // aidlc.cmd starts aidlc-shim.ps1, which a Group Policy AllSigned refuses;
+  // AI-DLC's own aidlc.exe beside it runs the same retry.
+  test("a failed uninstall is retried through AI-DLC's own aidlc.exe in bin", () => {
+    const bin = mkdtempSync(join(tmpdir(), "aidlc-retry-it's-"));
+    try {
+      const launcher = "@echo off\r\nrem the launcher\r\n";
+      writeFileSync(join(bin, "aidlc.cmd"), launcher);
+      writeFileSync(join(bin, "aidlc.exe"), "exe\n");
+      const files = [
+        { path: join(bin, "aidlc.cmd"), expected: sha(launcher) },
+        { path: join(bin, "aidlc.exe"), expected: sha("exe\n") },
+      ];
+      const exe = join(bin, "aidlc.exe").replaceAll("'", "''");
+      expect(windowsUninstallRetryFix(journal(bin, files, true)))
+        .toContain(`run \`& '${exe}' uninstall --purge\` to retry (or reinstall if that command no longer runs)`);
+
+      const cmd = join(bin, "aidlc.cmd").replaceAll("'", "''");
+      const recorded = `run \`& '${cmd}' uninstall\` to retry`;
+      // Not in the plan (an aidlc.exe AI-DLC did not write).
+      expect(windowsUninstallRetryFix(journal(bin, files.slice(0, 1)))).toContain(recorded);
+      // aidlc.cmd edited or not in the plan: the copy would not start this install.
+      writeFileSync(join(bin, "aidlc.cmd"), "@echo off\r\nrem edited\r\n");
+      expect(windowsUninstallRetryFix(journal(bin, files))).toContain(recorded);
+      writeFileSync(join(bin, "aidlc.cmd"), launcher);
+      expect(windowsUninstallRetryFix(journal(bin, files.slice(1)))).toContain(recorded);
+      // Changed since the plan, or gone.
+      writeFileSync(join(bin, "aidlc.exe"), "changed\n");
+      expect(windowsUninstallRetryFix(journal(bin, files))).toContain(recorded);
+      rmSync(join(bin, "aidlc.exe"));
+      expect(windowsUninstallRetryFix(journal(bin, files))).toContain(recorded);
+    } finally {
+      rmSync(bin, { recursive: true, force: true });
+    }
+  });
 });

@@ -46,8 +46,12 @@ import {
   resolveTestingPostureFromSections,
 } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 import {
+  cleanupTestProject,
+  createTestProject,
   seededAuditShard,
   seededRecordDir,
+  SYNC_FOLDER_WORDS,
+  syncedFolderEnv,
 } from "../harness/fixtures.ts";
 import {
   acceptedRows,
@@ -438,7 +442,7 @@ describe("t334 (5) changed content or prompt before the answer cannot be recorde
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
-  test("a plan or instructions edited after approval names the differing files and the sync cause", () => {
+  test("a plan or instructions edited after approval names the differing files, and a synced folder when it is one", () => {
     const project = createProject("strict");
     const questions = presentPlan(project);
     const session = "synced-after-approval";
@@ -460,10 +464,17 @@ describe("t334 (5) changed content or prompt before the answer cannot be recorde
       `Files that differ from the approved copy: ${relative(project, plan).replaceAll("\\", "/")}, ` +
         relative(project, instructions).replaceAll("\\", "/") + ".",
     );
-    expect(refused.stderr).toContain(
-      "A background sync client (Google Drive, iCloud Drive, OneDrive, Dropbox) rewriting files on its own",
-    );
+    expect(refused.stderr).not.toContain("sync can change files");
     expect(refused.stderr).toContain("Re-run the fingerprint command, re-present the plan, and approve again.");
+
+    const home = createTestProject();
+    try {
+      const synced = answer(project, questions, session, syncedFolderEnv(project, home));
+      expect(synced.code).not.toBe(0);
+      expect(synced.stderr).toContain(`${SYNC_FOLDER_WORDS} Re-run the fingerprint command`);
+    } finally {
+      cleanupTestProject(home);
+    }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 

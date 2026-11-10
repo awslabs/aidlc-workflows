@@ -71,7 +71,7 @@ Phases execute sequentially. At each phase boundary (except Initialization → I
 
 **Construction repeats its stages for each Unit**, in one of two walks:
 
-- **Unit-major** (the default for new solo work that has Units and produces source): one Unit goes through its design stages and Code Generation, then the next Unit starts again at the first design stage. You approve each Unit at a verified Unit checkpoint; the stage gates that follow the last Unit are recorded as bookkeeping. Workflows without Unit checkpoints, such as older ones, get one question for those stage approvals instead: one Approve approves them all, and a change request approves none of them. A change for one Unit's stage ("in beta's NFR design, retry failed calls through a queue") redoes that stage and the ones after it for that Unit only, from your words; the other Units are asked nothing, and the one question comes back once. See [Why Construction works the way it does](#why-construction-works-the-way-it-does).
+- **Unit-major** (the default for new solo work that has Units and produces source): one Unit goes through its design stages and Code Generation, then the next Unit starts again at the first design stage. You approve each Unit at a verified Unit checkpoint; your team's blocking checks run on that Unit's own files at its checkpoint, so a check that fails is put to you there (fix it, or override it for that Unit), before the next Unit is built on it, and is not checked again at the end while that file and the check's settings stay as they were. The stage gates that follow the last Unit are recorded as bookkeeping. Workflows without Unit checkpoints, such as older ones, get one question for those stage approvals instead: one Approve approves them all, and a change request approves none of them. A change for one Unit's stage ("in beta's NFR design, retry failed calls through a queue") redoes that stage and the ones after it for that Unit only, from your words; the other Units are asked nothing, and the one question comes back once. See [Why Construction works the way it does](#why-construction-works-the-way-it-does).
 - **Stage-major**: every Unit goes through one stage before the next stage starts, and that stage's gate comes once, after the last Unit. With a walking skeleton on, the first Unit still goes through every stage, including Code Generation, before the other Units start.
 
 **What can run in parallel**, within a stage or across Units in Construction:
@@ -273,7 +273,8 @@ in your own words or by picking **Approve**, is what sets it, in the chat that
 asked or in a new one while it is the newest question asked; **Request
 Changes** or an answer to some other question does not. You may
 defer if no runnable check exists yet; the first checkpoint then asks before
-verification. A missing authorization or later command change always requires
+verification (on Kiro IDE and Kiro CLI v3, a side-by-side build asks once its plans
+are approved, before its workers start). A missing authorization or later command change always requires
 the [recorded-command flow](12-cli-commands.md#construction-verification-command-record-human-authorization),
 never a command chosen at verify time. The approval question shows **Verified
 with `<verification_command>` (exit 0)**.

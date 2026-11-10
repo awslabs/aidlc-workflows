@@ -19,7 +19,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { saveMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import {
@@ -48,6 +48,7 @@ function runUtility(
   project: string,
   args: string[],
   envOverrides: Record<string, string> = {},
+  tool = "aidlc-utility.ts",
 ) {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
@@ -66,7 +67,7 @@ function runUtility(
   return spawnSync(
     process.execPath,
     [
-      join(project, ".claude", "tools", "aidlc-utility.ts"),
+      join(project, ".claude", "tools", tool),
       ...args,
       "--project-dir",
       project,
@@ -86,6 +87,10 @@ function output(run: ReturnType<typeof runUtility>): string {
 
 // The fixture runs the Claude tools tree; giving its shipped harness data a
 // Kiro tree's hookActivation block makes the doctor read it as that install.
+// The kiro copy tree's own command for the switch to Kiro, which its shipped
+// recovery line names.
+const KIRO_SWITCH = "bun .kiro/tools/aidlc.ts config --harness kiro";
+
 function asShippedKiro(project: string, harness: "kiro" | "kiro-ide"): Record<string, string> {
   const kiro = JSON.parse(readFileSync(
     join(REPO_ROOT, "dist", harness, ".kiro", "tools", "data", "harness.json"),
@@ -115,6 +120,40 @@ function asKiroIde(project: string): Record<string, string> {
 }
 
 const KIRO_IDE_ADVICE = ["Trust Folder & Continue", "Kiro IDE", "Reload Window", "agent picker"];
+
+// The Kiro IDE and Kiro CLI v3 tree's step for hooks that stopped running, in
+// the words doctor and the Plan Approval refusal give it. A restarted Kiro CLI
+// is a new chat, so its step ends with the entry.
+const KIRO_RECOVERY =
+  "In Kiro IDE, trust this folder: choose Trust Folder & Continue when Kiro asks whether you trust it, or select Manage on the Restricted Mode banner, then Trust. Then run Developer: Reload Window from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), and say carry on. " +
+  "In Kiro CLI, quit Kiro and start `kiro-cli --v3` again in this folder (if Kiro asks whether you trust this workspace and you know what is in this folder, choose 'Trust, continue'), then type /aidlc to carry on. " +
+  "If you drive Kiro from an ACP client, the Kiro IDE guide names what that client must send.";
+
+// A PATH with a supported kiro-cli (a stand-in doctor runs for its version: a
+// .cmd on Windows, a shell script elsewhere) or with none, and the shell marks
+// that say where doctor runs: Kiro IDE's (TERM_PROGRAM=kiro) or none.
+function withKiroCli(project: string, ide: boolean, cli = true): Record<string, string> {
+  const bin = join(project, ".managed-policy", "bin");
+  mkdirSync(bin, { recursive: true });
+  const windows = process.platform === "win32";
+  if (cli) {
+    writeFileSync(
+      join(bin, windows ? "kiro-cli.cmd" : "kiro-cli"),
+      windows ? "@echo off\r\necho kiro-cli 3.1.0\r\n" : "#!/bin/sh\nprintf '%s\\n' 'kiro-cli 3.1.0'\n",
+      { mode: 0o755 },
+    );
+  }
+  const path = cli ? `${bin}${delimiter}${process.env.PATH ?? ""}` : bin;
+  return {
+    PATH: path,
+    // Windows names the inherited variable Path; both spellings get the same value.
+    ...(windows ? { Path: path } : {}),
+    TERM_PROGRAM: ide ? "kiro" : "",
+    VSCODE_GIT_ASKPASS_NODE: "",
+    VSCODE_IPC_HOOK: "",
+    VSCODE_PID: "",
+  };
+}
 
 function writeManagedSettings(
   project: string,
@@ -211,7 +250,8 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
   // the first workflow, so none yet gets the trust step, in Kiro's words.
   test("Kiro IDE with no heartbeat warns that the hooks have not run, with the trust step", () => {
     const project = freshProject();
-    const run = runUtility(project, ["doctor", "--verbose"], asKiroIde(project));
+    const kiroIde = { ...asKiroIde(project), ...withKiroCli(project, true) };
+    const run = runUtility(project, ["doctor", "--verbose"], kiroIde);
     const text = output(run);
     expect(text).toContain("warn  AIDLC hooks have not run in this project yet");
     expect(text).toContain(
@@ -224,6 +264,33 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
     );
     expect(text).not.toContain("agent picker");
     expect(text).not.toContain("Hook heartbeats: not yet fired");
+  });
+
+  // Outside Kiro IDE, with a supported kiro-cli on the PATH, the same warning
+  // leads with Kiro CLI's restart (#3596), Windows included.
+  test(
+    "Kiro with no heartbeat, run outside Kiro IDE where kiro-cli is found, leads with Kiro CLI's step",
+    () => {
+      const project = freshProject();
+      const run = runUtility(project, ["doctor", "--verbose"], { ...asKiroIde(project), ...withKiroCli(project, false) });
+      const text = output(run);
+      expect(text).toContain("warn  AIDLC hooks have not run in this project yet");
+      expect(text).toContain(
+        "fix: This is expected before your first chat message here. If you already sent one in Kiro CLI, quit Kiro and start `kiro-cli --v3` again in this folder (if Kiro asks whether you trust this workspace and you know what is in this folder, choose 'Trust, continue'), then send a message and run doctor again. If you sent it in Kiro IDE, trust this folder there: choose Trust Folder & Continue when Kiro asks whether you trust it,",
+      );
+      expect(text).toContain("Reload Window does not change that.");
+    },
+  );
+
+  test("Kiro with no heartbeat, run outside Kiro IDE with no kiro-cli, keeps the Kiro IDE step first", () => {
+    const project = freshProject();
+    const run = runUtility(project, ["doctor", "--verbose"], { ...asKiroIde(project), ...withKiroCli(project, false, false) });
+    const text = output(run);
+    expect(text).toContain("warn  AIDLC hooks have not run in this project yet");
+    expect(text).toContain(
+      "fix: This is expected before your first chat message here. If you already sent one, trust this folder in Kiro IDE:",
+    );
+    expect(text).not.toContain("If you already sent one in Kiro CLI");
   });
 
   // Claude Code's human-turn hook leaves a heartbeat on every message, so with
@@ -296,7 +363,7 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
     );
     // Trust takes effect after the reload; the agent picker does not stop the hooks.
     expect(output(run)).not.toContain("agent picker");
-    expect(output(run)).toContain("In Kiro CLI, quit Kiro and start `kiro-cli --v3` again in this folder (if Kiro asks whether you trust this workspace and you know what is in this folder, choose 'Trust, continue').");
+    expect(output(run)).toContain(KIRO_RECOVERY);
     // What an ACP client must send is in the Kiro IDE guide, not in this line,
     // and the line says what to do, not how AI-DLC works.
     expect(output(run)).toContain(
@@ -305,6 +372,36 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
     expect(output(run)).not.toContain("for AI-DLC's hooks to run");
     expect(output(run)).not.toContain("clientCapabilities");
     expect(output(run)).not.toContain("AIDLC hooks have not run in this project yet");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // Hooks that fired, then stopped: doctor's row and the Plan Approval refusal
+  // give the same step, whose Kiro CLI half ends with the entry.
+  test("Kiro with stale heartbeats gives the step that ends Kiro CLI's restart with the entry, in doctor and the Plan Approval refusal", () => {
+    const project = projectWithWorkflowProgress();
+    writeHeartbeat(project, "2000-01-01T00:00:00Z");
+    const env = asKiroIde(project);
+    const doctor = output(runUtility(project, ["doctor", "--verbose"], env));
+    expect(doctor).toContain("fail  Hooks last fired 2000-01-01T00:00:00Z, but the workflow last advanced ");
+    expect(doctor).toContain(KIRO_RECOVERY);
+    const refused = runUtility(
+      project,
+      [
+        "decision",
+        "--stage",
+        "code-generation",
+        "--checkpoint",
+        "plan-approval",
+        "--decision",
+        "Approve this exact Code Generation plan?",
+        "--options",
+        "Approve Plan,Request Changes",
+      ],
+      env,
+      "aidlc-log.ts",
+    );
+    expect(refused.status).not.toBe(0);
+    expect(output(refused)).toContain("hooks are not firing in this session");
+    expect(output(refused)).toContain(KIRO_RECOVERY);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // Only shipped hookActivation advice with a notRunYet turns "no heartbeat
@@ -324,10 +421,11 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
     });
   }
 
-  // #1487: Kiro CLI's engines read disjoint registrations. The kiro tree's
-  // hooks live in the agent JSON, which only the v2 engine runs, so the
-  // generic "fully restart the harness" advice could never work on v3. The
-  // shipped kiro hookActivation names v2 and its ACP flag instead.
+  // #1487: the kiro tree's hooks live in the agent JSON, which Kiro CLI's v2
+  // engine runs and the v3 engine runs only once Kiro has
+  // upgraded it, so the generic "fully restart the harness" advice could never
+  // work there. The shipped kiro hookActivation names Kiro's upgrade, the
+  // switch to Kiro in the install's own command, v2, and the ACP flag instead.
   test("Kiro CLI after workflow progress names the engine its hooks need", () => {
     const project = projectWithWorkflowProgress();
 
@@ -337,9 +435,24 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
     expect(text).toMatch(/fail {2}Hooks have never executed although this workflow has progressed/);
     expect(text).toContain("In Kiro CLI, type /agent and pick aidlc, then carry on.");
     expect(text).toContain(
-      "quit Kiro and start it again in this folder with: kiro-cli --v2 --agent aidlc (Kiro CLI 2.21.4 or later; for an older one, see the AI-DLC Kiro CLI guide). " +
-        "From an ACP client, start `kiro-cli acp --agent-engine v2`.",
+      "If aidlc is not in that list, Kiro is on its v3 engine with this project's agent files not upgraded: " +
+        "type /upgrade-agent and choose the " +
+        "workspace agents, then quit Kiro and start `kiro-cli --v3` again in this folder; or, to switch this " +
+        `project to Kiro, quit Kiro, run \`${KIRO_SWITCH}\` in a terminal in this folder and, once it has ` +
+        "finished, start `kiro-cli --v3`; or quit Kiro and start it again in this folder with: kiro-cli --v2 " +
+        "--agent aidlc (Kiro CLI 2.21.4 or later; for an older one, see the AI-DLC Kiro CLI guide). " +
+        "From an ACP client, start `kiro-cli acp --agent-engine v2`; or switch this project to Kiro with " +
+        `\`${KIRO_SWITCH}\` in a terminal in this folder and start \`kiro-cli acp --agent-engine v3\` with Kiro's ` +
+        "client hooks turned on " +
+        "(the AI-DLC guide for Kiro names them).",
     );
+    expect(text).not.toContain("{{INVOKE}}");
+    // A native install names its own command there.
+    const native = JSON.parse(readFileSync(
+      join(REPO_ROOT, "dist-release", "kiro", ".kiro", "tools", "data", "harness.json"),
+      "utf-8",
+    )) as { hookActivation: { recovery: string } };
+    expect(native.hookActivation.recovery).toContain("run `aidlc config --harness kiro` in a terminal in this folder");
     expect(text).not.toContain("fully restart the harness");
     for (const advice of KIRO_IDE_ADVICE) expect(text).not.toContain(advice);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);

@@ -42,6 +42,7 @@ import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts
 import { personTurnStands } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import { validateDirective } from "../../dist/claude/.claude/tools/aidlc-directive.ts";
 import { kiroCliPrompt, kiroCliRecord, kiroCliToolResults, kiroCliToolUse } from "../harness/kiro-cli-record.ts";
+import { kiroV3Prompt, kiroV3Record, kiroV3Steer, kiroV3ToolResult } from "../harness/kiro-v3-chat-record.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
@@ -365,6 +366,64 @@ describe("Kiro CLI: a stop typed while the agent works is on the park row", () =
     expect(r.rc, r.out).toBe(0);
     expect(r.out).not.toContain("this host can miss one");
     expect(parkedWords(proj), rowOrder(proj)).toContain(STOP);
+  });
+});
+
+// On Kiro CLI v3 a stop typed while the agent works runs no prompt hook either
+// (measured live, kiro-cli 3.0.0): the park row named the gate reply that opened
+// the turn as the stop's words. Kiro's own record keeps the stop, and the guard
+// card before the agent's park command records it as the person's turn first.
+describe("Kiro CLI v3: a stop typed while the agent works is on the park row", () => {
+  let proj: string;
+  let home: string;
+  const KIRO = join(AIDLC_SRC, "..", "..", "kiro-ide", ".kiro");
+  const CHAT = "sess_f071f4f8-d5b5-4687-a500-c440240fc2ec";
+  const OPENING = "1";
+  const STOP = "stop for today, I'll pick this up tomorrow";
+  const PARK = "bun .kiro/tools/aidlc.ts engine orchestrate park --person-asked";
+  beforeEach(() => {
+    resetAidlcEnv();
+    proj = createOrchestrationTestProject();
+    seedStage(proj);
+    cpSync(KIRO, join(proj, ".kiro"), { recursive: true });
+    home = mkdtempSync(join(tmpdir(), "t-park-kiro-v3-home-"));
+  });
+  afterEach(() => {
+    cleanupTestProject(proj);
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  const kiroEnv = () => ({ ...env(CHAT), HOME: home, USERPROFILE: home, CLAUDE_PROJECT_DIR: proj, KIRO_SESSION_ID: CHAT });
+  function adapter(target: string, payload: Record<string, unknown>): void {
+    const r = spawnSync(BUN, [join(proj, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), target], {
+      cwd: proj,
+      input: JSON.stringify({ cwd: proj, session_id: CHAT, ...payload }),
+      env: kiroEnv(),
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+  }
+
+  test("the park row carries the stop and names its message, not the reply that opened the turn", () => {
+    adapter("person-message", { hook_event_name: "UserPromptSubmit", prompt: OPENING });
+    kiroV3Record(home, CHAT, [
+      ...kiroV3Prompt(OPENING),
+      ...kiroV3Steer(STOP, "steer-d2b1460f-65c9-411c-a241-dd21db13acea"),
+      kiroV3ToolResult("{}"),
+    ]);
+    adapter("guard-tool-call", { hook_event_name: "PreToolUse", tool_name: "execute_bash", tool_input: { command: PARK } });
+    const r = spawnSync(BUN, [join(proj, ".kiro", "tools", "aidlc-state.ts"), "park", "--person-asked", "--project-dir", proj], {
+      cwd: proj,
+      env: { ...kiroEnv(), AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1" },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(r.status, `${r.stdout ?? ""}${r.stderr ?? ""}`).toBe(0);
+    expect(parkedWords(proj), rowOrder(proj)).toContain(STOP);
+    const turn = events(proj, "HUMAN_TURN").at(-1)!;
+    expect(auditBlockField(events(proj, "WORKFLOW_PARKED")[0].block, "Message Id"))
+      .toBe(auditBlockField(turn.block, "Message Id"));
   });
 });
 

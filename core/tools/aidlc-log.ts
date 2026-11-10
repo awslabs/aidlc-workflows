@@ -7,7 +7,7 @@
 // because they fire per-question / per-review, not per state transition.
 
 import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
-import { otherWorkNote, reviewRequestNote, reviewVerdictNote } from "./aidlc-directive.ts";
+import { CHANGE_NOTICES_NOTE, otherWorkNote, reviewRequestNote, reviewVerdictNote } from "./aidlc-directive.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
@@ -17,9 +17,12 @@ import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import { prepareReviewCopy, removeReviewCopy, sweepReviewCopies } from "./aidlc-kiro-review-copy.ts";
 import {
   askedQuestionFields,
+  commandChat,
+  latestAskedQuestion,
   QUESTION_ID_FIELD,
   questionEntryDigests,
   questionShows,
+  shownOnlyInOtherChats,
 } from "./aidlc-questions.ts";
 import {
   chatsSince,
@@ -85,6 +88,7 @@ import {
   requireProtectedResponse,
   consumeProtectedQuestion,
   withdrawProtectedQuestions,
+  pendingPersonLines,
   resolveInvokingSessionId,
   resolveSessionIdFromAncestry,
   runtimeSessionHint,
@@ -247,6 +251,8 @@ import {
   summaryQuestionFileRelative,
   SUMMARY_CONFIRMATION_CHECKPOINT,
   SUMMARY_CONFIRMATION_HASH_SCOPE,
+  summaryAuthorizationThisAttempt,
+  readSummaryAuthorization,
   summaryConfirmationAnswer,
   summaryConfirmationContentHash,
   singleStageAttemptIsOpen,
@@ -339,9 +345,13 @@ const ANSWER_CHECKPOINTS: readonly string[] = [...DECISION_CHECKPOINTS, "guard-r
 function unitManifestRefusal(
   unit: string,
   manifestPath: string,
-  manifest: { reason: string; unrecordedRepo?: string },
+  manifest: { reason: string; unrecordedRepo?: string; projectSubmodule?: string },
   rewrite: string,
 ): string {
+  // The reason names the person's question and the way on for each answer.
+  if (manifest.projectSubmodule !== undefined) {
+    return `unit "${unit}"'s source manifest at ${manifestPath}: ${manifest.reason}. Then request the review again.`;
+  }
   if (manifest.unrecordedRepo !== undefined) {
     const repo = manifest.unrecordedRepo;
     return `unit "${unit}"'s source manifest at ${manifestPath} names repo ${JSON.stringify(repo)}, which this piece of work does not record. ` +
@@ -994,6 +1004,98 @@ function revisedSummaryNote(
 // question the gate never counts, so the stage would refuse for good with
 // SUMMARY_RECEIPT_MISSING. When the call is plainly the summary (its two
 // choices) on a stage that owes one, refuse it and name the command that counts.
+// The questions file with its summary answer line put back to `[Answer]:
+// Looks correct`, every other byte as it was (line endings included): a chat
+// still showing the summary wrote over (or blanked) a confirmation another chat
+// already recorded, before the engine could say the stage was done. The one
+// summary reader (summaryConfirmationAnswer) says which `[Answer]:` line is the
+// summary's. Null when the section holds no single answer, or it reads Looks
+// correct.
+function summaryAnswerPutBack(content: string): string | null {
+  const answer = summaryConfirmationAnswer(content);
+  if (answer === null || answer === "Looks correct") return null;
+  const parts = content.split(/(\r\n|\r|\n)/);
+  for (let at = parts.length - 1; at >= 0; at -= 1) {
+    if (!/^(?:\uFEFF)?\[Answer\]:/.test(parts[at])) continue;
+    const candidate = [...parts];
+    candidate[at] = `${parts[at].startsWith("\uFEFF") ? "\uFEFF" : ""}[Answer]: Looks correct`;
+    const putBack = candidate.join("");
+    if (summaryConfirmationAnswer(putBack) === "Looks correct") return putBack;
+  }
+  return null;
+}
+
+// The positive summary confirmation this questions file stands on: the
+// stage's own for this attempt, or the Unit's.
+function summaryConfirmedOnRecord(pd: string, stage: string, unit: string | null, questions: string): boolean {
+  const authorization = unit === null ? summaryAuthorizationThisAttempt(pd, stage) : readSummaryAuthorization(pd, stage, unit);
+  return authorization !== null && authorization.choice === "Looks correct" &&
+    authorization.questions_file.replaceAll("\\", "/") === questions;
+}
+
+// A stage's own question asked or answered while its gate waits (a chat that
+// was still showing it when another chat finished the stage): the stage is
+// done, so the step is that gate, shown with `next`, the documents as they are,
+// and nothing is recorded. The summary is closed once the gate opens, whichever
+// chat asks; the stage's other questions only in a chat that never saw the
+// gate, opened in another chat of this clone (shownOnlyInOtherChats), since a
+// chat at its own gate may still ask the person something about it. The
+// summary's answer line the chat wrote over or blanked first (the stage
+// protocol has it written before it is recorded) is put back as confirmed, so
+// the gate's own check finds the file as the other chat left it. True when it
+// printed the step.
+function stageWaitsAtItsGate(flags: Record<string, string>, verb: "decision" | "answer"): boolean {
+  if (flags.single !== undefined) return false;
+  // A Unit's own question at the stage's gate (Construction stage by stage):
+  // the Unit's summary and documents are done too.
+  const unit = flags.unit ?? null;
+  if (flags.checkpoint !== undefined && flags.checkpoint !== "summary-confirmation") return false;
+  const stage = flags.stage;
+  const pd = resolveActiveProjectDir(projectDir, stage);
+  let content: string;
+  try {
+    content = readFileSync(stateFilePath(pd), "utf-8");
+  } catch {
+    return false;
+  }
+  if (getField(content, "Current Stage")?.trim() !== stage) return false;
+  if (getField(content, "Construction Autonomy Mode")?.trim() === "autonomous") return false;
+  if (stageBox(content, stage) !== "awaiting-approval") return false;
+  // Unit by Unit, a Unit the person asked to change is redone while the
+  // stage's box stays at its gate, and its summary is asked again: only built
+  // stage by stage is a Unit's question at that gate a late one.
+  if (unit !== null && getField(content, "Construction Iteration")?.trim() === "unit-major") return false;
+  const gate = latestAskedQuestion(pd, { event: "STAGE_AWAITING_APPROVAL", type: "gate", stage });
+  const elsewhere = gate !== null && shownOnlyInOtherChats(pd, gate.id, commandChat(pd));
+  if (flags.checkpoint === undefined && !elsewhere) return false;
+  const node = loadStageGraphAll().find((entry) => entry.slug === stage);
+  const questions = node ? summaryQuestionFileRelative(pd, node, content, unit) : null;
+  // Only a confirmation on record for this attempt is put back: a summary the
+  // person asked to change, with summary confirmation off since, stays as it is.
+  if (questions !== null && summaryConfirmedOnRecord(pd, stage, unit, questions)) {
+    try {
+      const path = resolve(pd, questions);
+      const putBack = summaryAnswerPutBack(readFileSync(path, "utf-8"));
+      if (putBack !== null) writeFileAtomic(path, putBack);
+    } catch {
+      // The gate's own check says what is wrong with the file.
+    }
+  }
+  const next = aidlcDispatcherInvocation("orchestrate next");
+  const waits = `Stage "${stage}" is finished and waiting for the person's approval` +
+    `${elsewhere ? ", opened in another chat," : ""} with its documents as they are, so nothing was recorded`;
+  const change = `When it asked for a change, run \`${requestChangesReportCommand(pd, stage, flags.unit)}\` and ` +
+    "follow what it returns: their messages go on the record as what should change.";
+  const message = verb === "decision"
+    ? `${waits}: there is no question of it to ask now. When the person's last reply asked for nothing to change, ` +
+      `run \`${next}\` and show the gate it returns. ${change}`
+    : `${waits}: ${flags.checkpoint === undefined ? "its questions were answered" : "its summary was confirmed"} ` +
+      "before its documents were written. When the person's reply confirmed or answered it, it decides nothing at " +
+      `the gate: run \`${next}\` and show the gate it returns. ${change}`;
+  console.log(JSON.stringify({ recorded: null, message }));
+  return true;
+}
+
 function refusePlainSummaryConfirmation(flags: Record<string, string>, verb: "decision" | "answer"): void {
   if (flags.checkpoint !== undefined) return;
   // An answer names a summary choice by its label, with what to change after it.
@@ -1177,6 +1279,7 @@ function handleDecision(args: string[]): void {
   if (flags.checkpoint !== undefined && !DECISION_CHECKPOINTS.includes(flags.checkpoint)) {
     error(unknownCheckpointMessage(flags.checkpoint, DECISION_CHECKPOINTS));
   }
+  if (stageWaitsAtItsGate(flags, "decision")) return;
   refusePlainSummaryConfirmation(flags, "decision");
   const pd = resolveActiveProjectDir(projectDir, flags.stage);
   if (flags.checkpoint === "plan-approval" && planApprovalAskIsOpen(pd)) {
@@ -1367,6 +1470,18 @@ function handleDecision(args: string[]): void {
     }
   }
 
+  // The question the agent asks now is the reply the person reads, so the lines
+  // kept for that reply (a landing settled by hand under Continue
+  // automatically) ride with it, once, with their order; a run that keeps none
+  // prints as before.
+  let forReply: { lines: string[]; said(): void } = { lines: [], said: () => {} };
+  try {
+    const chat = fields.Session || resolveInvokingSessionId(pd);
+    if (chat) forReply = pendingPersonLines(pd, chat, { replyOnly: true });
+  } catch {
+    // The next reply says them.
+  }
+  for (const line of forReply.lines) if (!changeNotices.includes(line)) changeNotices.push(line);
   console.log(
     JSON.stringify({
       emitted: "DECISION_RECORDED",
@@ -1389,8 +1504,10 @@ function handleDecision(args: string[]): void {
           }
         : {}),
       ...(changeNotices.length > 0 ? { change_notices: changeNotices } : {}),
+      ...(forReply.lines.length > 0 ? { change_notices_note: CHANGE_NOTICES_NOTE } : {}),
     })
   );
+  forReply.said();
 }
 
 // What a logged question shows the person (aidlc-questions.ts): the command or
@@ -2227,6 +2344,7 @@ function handleAnswer(args: string[]): void {
     console.log(JSON.stringify({ recorded: picked.op, message }));
     return;
   }
+  if (stageWaitsAtItsGate(flags, "answer")) return;
   refusePlainSummaryConfirmation(flags, "answer");
   const summaryCheckpoint = flags.checkpoint === "summary-confirmation";
   const planCheckpoint = flags.checkpoint === "plan-approval";
@@ -3027,6 +3145,26 @@ function codekbReceiptNotes(pd: string, node: StageEntry): Record<string, unknow
 // and attempt freshness are checked under the audit lock so two concurrent
 // conductors cannot advance the same chain; a link the attempt already holds
 // is answered without a second receipt.
+// The person asked for a system package install (in the message that approved
+// a stage, say), which that approval's decision spends: the agent names the
+// message and the packages, the tool proves the message as any request's and
+// records them, and the install check reads the record (system-install.ts). It
+// reads no words.
+function handleInstall(args: string[]): void {
+  const { positional, flags } = parseFlags(args);
+  if (positional.length === 0 || flags.message === undefined) error(`Usage: ${logUsage("install").split("\n")[0]}`);
+  const pd = resolveProjectDir(projectDir);
+  const proof = proveMessage(pd, flags.message, "request", { request: true });
+  if ("refusal" in proof) error(proof.refusal);
+  const words = personsWordsText(proof.message.words ?? proof.message.text);
+  emitAudit(pd, "SYSTEM_INSTALL_REQUESTED", {
+    Packages: JSON.stringify(positional),
+    "Message Id": proof.message.id,
+    ...(words ? { "Person Reply": words } : {}),
+  });
+  console.log(JSON.stringify({ requested: positional }));
+}
+
 function handleLink(args: string[]): void {
   const { flags } = parseFlags(args);
   if (!flags.stage) error("Missing --stage <slug>");
@@ -5449,6 +5587,11 @@ function logUsage(subcommand: string | undefined): string {
       `  Options: ${flags(ANSWER_OPTIONS)}`,
     ],
     answers: [`${invoke("answers")} --stage <slug> [--unit <unit>]`, "  Lists the answers recorded for a stage."],
+    install: [
+      `${invoke("install")} <package>... --message <id>`,
+      "  Records that the person's message asked to install these system packages, so the install check runs that " +
+        "install. Required: a package and --message.",
+    ],
     link: [
       `${invoke("link")} --stage <slug> --link <agent> [--repo <repo>] [--artifact <path>] [--single]`,
       "  Records that a declared pipeline link returned. Runs in the active workspace (no --intent or --space).",
@@ -5489,7 +5632,7 @@ export function main(argv: string[]): void {
   if (subcommand === undefined || asksForHelp([subcommand])) printUsageAndExit(logUsage(undefined));
   if (asksForHelp(filteredArgs.slice(1))) printUsageAndExit(logUsage(subcommand));
   readOnlyCommand = subcommand === "answers";
-  // What the chat records here (a decision, an answer, a link, a review) is its
+  // What the chat records here (a decision, an answer, a link, a review, an install asked for) is its
   // step on the work (chatTookStepHere); reading the answers is not.
   if (!readOnlyCommand) chatTookStepHere(resolveProjectDir(projectDir));
   if (subcommand === "decision" || subcommand === "answer") {
@@ -5510,6 +5653,9 @@ export function main(argv: string[]): void {
       case "link":
         handleLink(filteredArgs.slice(1));
         break;
+      case "install":
+        handleInstall(filteredArgs.slice(1));
+        break;
       case "review":
         // One review command runs the review accounting per unit, each pass
         // recomputing the whole-tree source identity. Share one computation
@@ -5519,7 +5665,7 @@ export function main(argv: string[]): void {
         );
         break;
       default:
-        error(`Unknown subcommand: ${subcommand}. Valid: decision, answer, answers, link, review`);
+        error(`Unknown subcommand: ${subcommand}. Valid: decision, answer, answers, link, review, install`);
     }
     spendRequestFile();
     // The stage's work went on through the record, not through `next`: on the
