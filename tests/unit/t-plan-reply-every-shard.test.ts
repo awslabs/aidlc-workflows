@@ -104,6 +104,7 @@ function checkout(): Checkout {
 // The claim's stamp: from now on the checkout writes the work's rows to the
 // Unit's own record, starting with the rows the claim moved there.
 function claim(c: Checkout, moved = ""): void {
+  mkdirSync(join(c.dir, "aidlc", ".aidlc-engine", "units"), { recursive: true });
   writeFileSync(join(c.dir, "aidlc", ".aidlc-engine", "units", "claimed.json"), `${JSON.stringify({
     version: 1, space: DEFAULT_SPACE, intent_uuid: DEFAULT_INTENT_UUID, intent_id8: "00000001", unit: "alpha",
     owner: "lead team", generation: 1, nonce: "5f02e323-0680-4e0e-b544-f5543bc69171",

@@ -36,7 +36,7 @@ import {
 } from "../harness/test-budget.ts";
 import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -639,6 +639,7 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
 describe("t180 pretool-block roll-forward backstop (exit-code contract)", () => {
   // Seed the counter + latch under aidlc/ directly; pretool-block reads them.
   function seedClock(dir: string, counter: number, latchTurn: number | null): void {
+    mkdirSync(dirname(counterPath(dir)), { recursive: true });
     writeFileSync(counterPath(dir), `${counter}\n`, "utf-8");
     if (latchTurn !== null) {
       writeFileSync(
@@ -656,6 +657,7 @@ describe("t180 pretool-block roll-forward backstop (exit-code contract)", () => 
     raw: string,
     args: string[],
   ): void {
+    mkdirSync(dirname(counterPath(dir)), { recursive: true });
     writeFileSync(counterPath(dir), `${counter}\n`, "utf-8");
     writeFileSync(
       forwardingPath(dir),

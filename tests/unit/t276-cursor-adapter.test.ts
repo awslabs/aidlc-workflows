@@ -142,12 +142,12 @@ function ledgerFilesFor(projectDir: string, suffix = ".json"): string[] {
   const dir = ledgerDirFor(projectDir);
   if (!existsSync(dir)) return [];
   return readdirSync(dir)
-    .filter((name) => name.endsWith(suffix) && !name.startsWith(".aidlc-cursor-subagent-"))
+    .filter((name) => name.endsWith(suffix))
     .map((name) => join(dir, name));
 }
 
 function witnessFilesFor(projectDir: string): string[] {
-  const dir = ledgerDirFor(projectDir);
+  const dir = join(projectDir, "aidlc", ".aidlc-engine", "sessions");
   if (!existsSync(dir)) return [];
   return readdirSync(dir)
     .filter(
@@ -1932,7 +1932,7 @@ if (import.meta.main) {
       `rm -f ${JSON.stringify(dispatch.slice(0, -1))}*`,
       `rm -f ${JSON.stringify(dispatch.slice(0, -1))}[n]`,
       `rm -rf ${JSON.stringify(`${dirname(record)}${sep}`)}*`,
-      `rm -rf ${JSON.stringify(`${join(proj, "aidlc")}${sep}.aidlc-cursor-sub`)}*`,
+      `rm -rf ${JSON.stringify(`${join(proj, "aidlc", ".aidlc-engine", "sessions")}${sep}.aidlc-cursor-sub`)}*`,
       `rm -rf ${JSON.stringify(`${join(proj, "aidlc")}${sep}.aidlc-`)}*`,
     ]) {
       const removal = runAdapter(
@@ -3760,9 +3760,9 @@ if (import.meta.main) {
     if (process.platform !== "win32") {
       for (const currentTargetCommand of [
         `shred -u ~+/${relative.slice(0, -1)}*`,
-        "find ~+/aidlc/.aidlc-cursor-subagent* -depth -delete",
+        "find ~+/aidlc/.aidlc-engine/sessions/.aidlc-cursor-subagent* -depth -delete",
         `shred -u ~-/${relative.slice(0, -1)}*`,
-        "find ~-/aidlc/.aidlc-cursor-subagent* -depth -delete",
+        "find ~-/aidlc/.aidlc-engine/sessions/.aidlc-cursor-subagent* -depth -delete",
       ]) {
         const currentTarget = runAdapter(
           proj,
@@ -3907,7 +3907,7 @@ if (import.meta.main) {
       process.platform === "win32"
         ? [
             `cd /d aidlc && del /q ${relativeDispatch.slice(0, -1)}*`,
-            "pushd aidlc && del /q .aidlc-cursor-subagent*",
+            "pushd aidlc\\.aidlc-engine\\sessions && del /q .aidlc-cursor-subagent*",
             `Set-Location aidlc; Remove-Item ${relativeDispatch.slice(0, -1)}*`,
             `cd /d no-such-dir || del /q ${projectRelativeDispatch.slice(0, -1)}*`,
             `cd /d aidlc || echo unchanged\ndel /q ${relativeDispatch.slice(0, -1)}*`,
@@ -3918,7 +3918,7 @@ if (import.meta.main) {
           ]
         : [
             `cd aidlc; shred -u ${relativeDispatch.slice(0, -1)}*`,
-            "pushd aidlc; find .aidlc-cursor-subagent* -depth -delete",
+            "pushd aidlc/.aidlc-engine/sessions; find .aidlc-cursor-subagent* -depth -delete",
             `cd no-such-dir || shred -u ${projectRelativeDispatch.slice(0, -1)}*`,
             `cd aidlc || true; shred -u ${relativeDispatch.slice(0, -1)}*`,
             `cd aidlc || cd scratch; shred -u ${relativeDispatch.slice(0, -1)}*`,
@@ -3929,7 +3929,7 @@ if (import.meta.main) {
             `case x in x) cd aidlc;; esac; shred -u ${relativeDispatch.slice(0, -1)}*`,
             `f(){ cd aidlc; }; f; shred -u ${relativeDispatch.slice(0, -1)}*`,
             `builtin cd aidlc; shred -u ${relativeDispatch.slice(0, -1)}*`,
-            "builtin -- pushd aidlc; find .aidlc-cursor-subagent* -depth -delete",
+            "builtin -- pushd aidlc/.aidlc-engine/sessions; find .aidlc-cursor-subagent* -depth -delete",
           ];
     for (const command of commands) {
       const removal = runAdapter(

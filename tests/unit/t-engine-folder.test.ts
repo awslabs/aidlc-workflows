@@ -105,7 +105,7 @@ const NOW: Record<string, string> = {
   ".aidlc-forwarding-latch": "sessions/kiro-forwarding-latch",
   ".aidlc-subagent-inflight": "sessions/subagent-inflight",
   ".aidlc-cursor-subagents/spawn-aaaa-bbbb.json": "sessions/cursor-subagents/spawn-aaaa-bbbb.json",
-  ".aidlc-cursor-subagent-aaaa-bbbb.json": "sessions/cursor-subagents/.aidlc-cursor-subagent-aaaa-bbbb.json",
+  ".aidlc-cursor-subagent-aaaa-bbbb.json": "sessions/.aidlc-cursor-subagent-aaaa-bbbb.json",
   ".aidlc-claim-registry.json": "units/claim-registry.json",
   ".aidlc-claim-generations.json": "units/claim-generations.json",
   ".aidlc-unit-scope.json": "units/claimed.json",

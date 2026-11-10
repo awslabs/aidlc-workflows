@@ -238,8 +238,10 @@ export async function run(
   const REVIEWER_DISPATCH_TTL_MS = 6 * 60 * 60 * 1000;
   const AMBIGUOUS_REVIEWER = "__aidlc_ambiguous_reviewer__";
   const REVIEW_AGENT_RE = /^aidlc-(architecture-reviewer|product-lead)-agent$/;
-  // The dispatch ledger and the witness copies, both under the sessions folder.
-  const LEDGER_DIR = join(sessionsDir(projectDir), "cursor-subagents");
+  // The dispatch ledger, and beside it (never inside, so the attribution
+  // outlives a lost ledger) the witness copies, both in the sessions folder.
+  const WITNESS_DIR = sessionsDir(projectDir);
+  const LEDGER_DIR = join(WITNESS_DIR, "cursor-subagents");
   const ledgerPrefix = "spawn-";
   const witnessPrefix = ".aidlc-cursor-subagent-";
 
@@ -266,7 +268,7 @@ export async function run(
   }
 
   function witnessFile(parent: string, task: string): string {
-    return join(LEDGER_DIR, `${witnessPrefix}${digest(parent)}-${digest(task)}.json`);
+    return join(WITNESS_DIR, `${witnessPrefix}${digest(parent)}-${digest(task)}.json`);
   }
 
   function ledgerFiles(): string[] {
@@ -281,9 +283,9 @@ export async function run(
 
   function witnessFiles(): string[] {
     try {
-      return readdirSync(LEDGER_DIR)
+      return readdirSync(WITNESS_DIR)
         .filter((name) => name.startsWith(witnessPrefix) && name.endsWith(".json"))
-        .map((name) => join(LEDGER_DIR, name));
+        .map((name) => join(WITNESS_DIR, name));
     } catch {
       return [];
     }

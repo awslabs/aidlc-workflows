@@ -167,7 +167,7 @@ utility shortcuts are `/aidlc-status`, `/aidlc-jump --stage <slug>` (or
   on hook payloads (its `subagentStart`/`subagentStop` events are documented but
   never fire on the CLI), so the adapter maintains a protected project-local
   runtime ledger under `aidlc/.aidlc-engine/sessions/cursor-subagents/` plus independent
-  `aidlc/.aidlc-engine/sessions/cursor-subagents/.aidlc-cursor-subagent-*.json` active-delegation witnesses. Top-level
+  `aidlc/.aidlc-engine/sessions/.aidlc-cursor-subagent-*.json` active-delegation witnesses. Top-level
   conversations register themselves at `sessionStart`/`beforeSubmitPrompt`
   (subagent conversations get neither event), each Task spawn records its
   agent, and reviewer read-scope enforcement attributes calls from conversations

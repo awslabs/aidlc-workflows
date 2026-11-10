@@ -3100,7 +3100,7 @@ describe("the forwarded call is accepted as written", () => {
     const dir = scratchProject(true);
     try {
       const raw = String.raw`'can''t open C:\temp\x'`;
-      mkdirSync(join(dir, "aidlc"), { recursive: true });
+      mkdirSync(join(dir, "aidlc", ".aidlc-engine", "sessions"), { recursive: true });
       writeFileSync(join(dir, "aidlc", ".aidlc-engine", "sessions", "kiro-turn-counter"), "1\n");
       writeFileSync(
         join(dir, "aidlc", ".aidlc-engine", "sessions", "kiro-forwarding-latch"),

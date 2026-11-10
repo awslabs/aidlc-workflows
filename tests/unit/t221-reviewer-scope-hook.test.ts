@@ -605,6 +605,7 @@ function seedUnitScope(
     `# AI-DLC State Tracking\n\n## Runtime State\n- **Unit Ownership**: team\n${settings}`,
     "utf-8",
   );
+  mkdirSync(join(proj, "aidlc", ".aidlc-engine", "units"), { recursive: true });
   writeFileSync(
     join(proj, "aidlc", ".aidlc-engine", "units", "claimed.json"),
     `${JSON.stringify({

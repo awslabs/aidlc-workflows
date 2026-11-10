@@ -1268,7 +1268,7 @@ export function ensureWorkspaceEngineFolder(projectDir: string): string {
     }
     for (const name of readdirSync(aidlc)) {
       const now = LEGACY_ENGINE_ENTRIES.get(name) ??
-        (LEGACY_CURSOR_WITNESS.test(name) ? `sessions/cursor-subagents/${name}` : undefined);
+        (LEGACY_CURSOR_WITNESS.test(name) ? `sessions/${name}` : undefined);
       if (now === undefined) continue;
       const from = join(aidlc, name);
       moveEngineEntry(from, join(folder, ...now.split("/")), folder, from);

@@ -3,7 +3,7 @@
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, readFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import {
   auditShardHost,
@@ -155,6 +155,7 @@ describe("t326 pinned team Unit merge: a claim in a checkout whose shard main ha
     const { seed: lead, remote } = makeSeed();
     const leadShard = leadShardOnMain(lead);
     const copy = clone(remote, "copy");
+    mkdirSync(join(copy, "aidlc", ".aidlc-engine"), { recursive: true });
     copyFileSync(join(lead, "aidlc", ".aidlc-engine", "clone-id"), join(copy, "aidlc", ".aidlc-engine", "clone-id"));
 
     const candidate = prepareCandidate(remote, "alpha", "copy", { checkout: copy });
@@ -165,6 +166,7 @@ describe("t326 pinned team Unit merge: a claim in a checkout whose shard main ha
     // A teammate whose own shard main also has takes the attempt over and
     // keeps writing the claim's shard.
     const mate = clone(remote, "mate");
+    mkdirSync(join(mate, "aidlc", ".aidlc-engine"), { recursive: true });
     copyFileSync(join(lead, "aidlc", ".aidlc-engine", "clone-id"), join(mate, "aidlc", ".aidlc-engine", "clone-id"));
     const ref = readUnitScopeStamp(copy)!.claim_ref;
     git(mate, ["fetch", "origin", `${ref}:${ref}`]);
