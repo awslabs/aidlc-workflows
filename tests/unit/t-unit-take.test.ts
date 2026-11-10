@@ -339,7 +339,7 @@ describe("a team member's clone of the home's workspace", () => {
 });
 
 describe("taking a Unit starts its build in the team's space", () => {
-  // A live run (Pat): the build's Workflow Start said "/aidlc Build ... from what
+  // A live run: the build's Workflow Start said "/aidlc Build ... from what
   // the lead approved", words nobody typed.
   test("the build's start records the person's own words of the take, or that the take started it, never a /aidlc line nobody typed", () => {
     const home = homeWithTeams(["refunds=payments", "checkout-ui=web"]);
@@ -354,6 +354,18 @@ describe("taking a Unit starts its build in the team's space", () => {
     const said = take(alice, "checkout-ui", ["--team", "web", "--person-words", "we're the web team, we'll do the checkout page"]);
     expect(said.status, said.out).toBe(0);
     expect(request("checkout-ui", "web")).toBe("we're the web team, we'll do the checkout page");
+  });
+
+  // The words are read before the claim is written: a request file that cannot
+  // be read stops the take with nothing taken at the lead's project.
+  test("a take whose request file cannot be read takes nothing at the lead's project", () => {
+    const home = homeWithTeams(["refunds=payments"]);
+    const alice = cloneOf(home.remote, "alice");
+    const before = claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds");
+    const took = take(alice, "refunds", ["--team", "payments", "--request-file", "aidlc/.aidlc-request-text/missing.txt"]);
+    expect(took.status).not.toBe(0);
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toEqual(before);
+    expect(existsSync(join(alice, "aidlc", "spaces", "payments"))).toBe(false);
   });
 
   test("one Unit, the home's inputs at their own paths, the home's Inception done, the claim taken", () => {
@@ -469,7 +481,7 @@ describe("taking a Unit starts its build in the team's space", () => {
     expect(readFileSync(join(alice, "aidlc", "spaces", "default", "memory", "project.md"), "utf-8")).toContain("Every handler ships with a contract test.");
   });
 
-  // A live run (Pat): the lead's team.md and project.md both had their own Code
+  // A live run: the lead's team.md and project.md both had their own Code
   // Style, and the take named it twice.
   test("a rule name the lead's agreed practices and project rules share is named once at the take", () => {
     const home = makeHome();
@@ -1036,7 +1048,7 @@ describe("a team's own workspace, made from the home's", () => {
     expect(existsSync("/tmp/aidlc-no")).toBe(false);
   });
 
-  // A live run (Pat): the line sat at the end of the take's own line, and the
+  // A live run: the line sat at the end of the take's own line, and the
   // agent's reply said the take in its own words without it. In a chat it is a
   // line of its own, kept for the reply the turn ends on.
   test("a home that takes no push from here, from a chat: its line is its own, kept for the reply, and the next step carries it", () => {

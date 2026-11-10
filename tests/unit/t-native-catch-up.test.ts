@@ -85,17 +85,23 @@ function stampedTree(version: string): string {
 
 // A Claude Code project set up from `tree`, with a repo list, all committed
 // (with `harnessCommitted: false`, all but .claude; with `git: false`, no git).
-function project(tree: string, options: { tracked?: boolean; pin?: boolean; harnessCommitted?: boolean; git?: boolean } = {}): string {
-  const dir = realpathSync(mkdtempSync(join(root, "project-")));
+function project(
+  tree: string,
+  options: { tracked?: boolean; pin?: boolean; harnessCommitted?: boolean; git?: boolean; subfolder?: boolean } = {},
+): string {
+  // With `subfolder`, the project is a folder inside its repo, as in a monorepo.
+  const repo = realpathSync(mkdtempSync(join(root, "project-")));
+  const dir = options.subfolder ? join(repo, "app") : repo;
+  if (options.subfolder) mkdirSync(dir);
   if (options.git === false) {
     const configured = sh(dir, `aidlc config --project-dir "${dir.replaceAll("\\", "/")}" --harness claude --mcp none --quiet --from "${tree.replaceAll("\\", "/")}"`);
     expect(configured.status, configured.stdout + configured.stderr).toBe(0);
     writeFileSync(join(dir, "repos.json"), `${JSON.stringify({ repos: [{ name: "billing" }] }, null, 2)}\n`);
     return dir;
   }
-  git(dir, ["init", "-q", "-b", "main"]);
-  git(dir, ["config", "user.name", "lee"]);
-  git(dir, ["config", "user.email", "lee@example.test"]);
+  git(repo, ["init", "-q", "-b", "main"]);
+  git(repo, ["config", "user.name", "lee"]);
+  git(repo, ["config", "user.email", "lee@example.test"]);
   const configured = sh(dir, `aidlc config --project-dir "$P" --harness claude --mcp none --quiet --from "$T"`.replace("$P", dir.replaceAll("\\", "/")).replace("$T", tree.replaceAll("\\", "/")));
   expect(configured.status, configured.stdout + configured.stderr).toBe(0);
   if (options.pin) {
@@ -228,6 +234,14 @@ describe.skipIf(SKIP_REASON !== null)("each project catches up the next time it 
     expect(existsSync(join(dir, "aidlc", "repos.json"))).toBe(true);
     expect(first.stdout).not.toContain("repos.json");
     expect(first.stdout).toContain(catchUpSaid(dir, false));
+  });
+
+  test("a project in a folder of its repo: the line counts its own folders", () => {
+    const dir = project(earlierTree, { subfolder: true });
+    const first = sessionStart(dir, "catch-up, subfolder");
+    expect(first.status, first.stdout + first.stderr).toBe(0);
+    expect(stampVersion(dir)).toBe(AIDLC_VERSION);
+    expect(first.stdout).toContain(catchUpSaid(dir, true));
   });
 
   test("a harness folder git does not track, and a project not in git, say nothing of the files", () => {

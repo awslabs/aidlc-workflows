@@ -671,7 +671,8 @@ work does: after every stage, or once at its end.
   starts, and one line, said once, gives git's reason and says the lead and the
   other teams cannot see your take until a push goes through; AI-DLC records it
   there then, with nothing more said. A take someone else's claim beat there is
-  said once, and your build stays for you to agree who carries it on.
+  said once, and your build stays for you to agree who carries it on. An early
+  start (`--early`) still waits for push access.
 - A repo the lead's work records that your workspace has no checkout of is
   said once, with where to clone it or how to give its path in
   `aidlc/repos.local.json`. When `repos.json` has its address, the build's first step

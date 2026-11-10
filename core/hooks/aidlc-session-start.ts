@@ -31,7 +31,7 @@
 // bootstraps cursors/includes and records host session identity and transcript
 // metadata so the first intent created later in the turn can bind to it.
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { runAnchor } from "../tools/aidlc-attest.ts";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
@@ -218,7 +218,14 @@ function catchUpProjectFiles(projectDir: string): string | null {
 }
 
 function projectGit(projectDir: string, args: string[], input?: string) {
-  return spawnSync("git", ["-C", projectDir, ...args], { encoding: "utf-8", input, timeout: 30_000, stdio: ["pipe", "pipe", "pipe"] });
+  // No optional locks: a commit the person starts meanwhile never meets this one's index lock.
+  return spawnSync("git", ["--no-optional-locks", "-C", projectDir, ...args], {
+    encoding: "utf-8",
+    input,
+    timeout: 30_000,
+    maxBuffer: 64 * 1024 * 1024,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
 }
 
 // What git shows changed in the project outside aidlc/ (whose records change at
@@ -227,23 +234,34 @@ function projectGit(projectDir: string, args: string[], input?: string) {
 // rewrote reads as changed after, one it left does not. Null outside git.
 function projectChanges(projectDir: string): Map<string, string> | null {
   const prefix = projectGit(projectDir, ["rev-parse", "--show-prefix"]);
-  if (prefix.status !== 0) return null;
+  const top = projectGit(projectDir, ["rev-parse", "--show-toplevel"]);
+  if (prefix.status !== 0 || top.status !== 0) return null;
   const status = projectGit(projectDir, ["status", "--porcelain=v1", "-z", "-uall", "--", ".", ":(exclude)aidlc"]);
   if (status.status !== 0) return null;
   const inProject = prefix.stdout.trim();
-  const rows: Array<{ code: string; path: string }> = [];
+  // git's own paths are from the top of the repo; each row keeps that path for
+  // its content id and the project-relative one it is counted by.
+  const rows: Array<{ code: string; path: string; fromTop: string }> = [];
   const entries = status.stdout.split("\0");
   for (let at = 0; at < entries.length; at++) {
     const entry = entries[at];
     if (entry.length < 4) continue;
     const code = entry.slice(0, 2);
-    const path = entry.slice(3);
-    rows.push({ code, path: inProject !== "" && path.startsWith(inProject) ? path.slice(inProject.length) : path });
-    // A rename's source path follows it.
-    if (code[0] === "R" || code[0] === "C") at++;
+    const fromTop = entry.slice(3);
+    rows.push({ code, fromTop, path: inProject !== "" && fromTop.startsWith(inProject) ? fromTop.slice(inProject.length) : fromTop });
+    // A rename's source path follows it, in either column.
+    if ("RC".includes(code[0]) || "RC".includes(code[1])) at++;
   }
-  const present = rows.filter((row) => existsSync(join(projectDir, ...row.path.split("/"))));
-  const ids = present.length === 0 ? [] : projectGit(projectDir, ["hash-object", "--stdin-paths"], `${present.map((row) => row.path).join("\n")}\n`)
+  const repoTop = top.stdout.trim();
+  // Only regular files have a content id (a nested repo or a submodule is a folder).
+  const present = rows.filter((row) => {
+    try {
+      return lstatSync(join(repoTop, ...row.fromTop.split("/"))).isFile();
+    } catch {
+      return false;
+    }
+  });
+  const ids = present.length === 0 ? [] : projectGit(repoTop, ["hash-object", "--stdin-paths"], `${present.map((row) => row.fromTop).join("\n")}\n`)
     .stdout.split("\n").map((line) => line.trim());
   const changes = new Map<string, string>();
   for (const row of rows) {

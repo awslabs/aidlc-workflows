@@ -8790,7 +8790,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
 
     const phaseDirDetail = `${runningPhases.size} in-scope phase dirs + verification/ + space-level knowledge/ ensured`;
     appendAuditEvent(projectDir, "WORKSPACE_SCAFFOLDED", {
-      Request: `/aidlc ${flags.arguments || scope}`,
+      Request: flags["take-request"] ?? `/aidlc ${flags.arguments || scope}`,
       Details: `${phaseDirDetail} (shell shipped by SEED)`,
     }, created.dirName, created.space);
     appendAuditEvent(projectDir, "STAGE_COMPLETED", {
@@ -9175,7 +9175,7 @@ ${stageProgress}
   // only its creation stub, which `next` refuses to route, so an interrupted
   // creation never leaves a routable workflow without its initialization audit.
   appendAuditEvent(projectDir, "WORKSPACE_INITIALISED", {
-    Request: `/aidlc ${flags.arguments || scope}`,
+    Request: flags["take-request"] ?? `/aidlc ${flags.arguments || scope}`,
     "Project Type": projectType,
     [PROJECT_TYPE_SOURCE_FIELD]: projectTypeSource,
     Scope: scope,

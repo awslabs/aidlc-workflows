@@ -6177,7 +6177,8 @@ function createUnitBuild(
     "--scope", scope,
     "--label", unit,
     "--arguments", `Build ${unit} for ${home.label}, from what the lead approved`,
-    "--take-request", takeRequest || `Taken from the lead's plan: ${unit}`,
+    // One token, so words that start with "--" are never read as a flag.
+    `--take-request=${takeRequest || `Taken from the lead's plan: ${unit}`}`,
     "--space", space,
     ...(skip.length > 0 ? ["--skip", skip.join(",")] : []),
     ...(add.length > 0 ? ["--add", add.join(",")] : []),
@@ -6530,6 +6531,9 @@ function takeUnit(args: string[], projectDir?: string): void {
   if (unitError) fail(unitError);
   if (!flags.home) fail("take needs --home <record>: the lead's work this Unit belongs to.");
   const pd = resolveProjectDir(projectDir);
+  // The person's words of the take, read before anything is written: a request
+  // that cannot be read stops the take here, never after its claim is pushed.
+  const takeWords = personWordsOf(pd, flags);
   const homeSpace = flags["home-space"] ?? DEFAULT_SPACE;
   // --from: the lead's project by the address the person said, read there when
   // the lead's record is not in this workspace (in a clone of the lead's
@@ -6673,7 +6677,7 @@ function takeUnit(args: string[], projectDir?: string): void {
       return shown.ok ? shown.stdout : null;
     },
     approvals: (produced) => homeApprovals(homeRows, produced),
-  }, home.solo ? home.space : home.leadCopy ? activeSpace(pd) : undefined, leads?.paths ?? [], personWordsOf(pd, flags));
+  }, home.solo ? home.space : home.leadCopy ? activeSpace(pd) : undefined, leads?.paths ?? [], takeWords);
   setActiveSpaceCursor(pd, build.space);
   // Early: the Unit's branch starts at each dependency's pushed head, checked
   // out where nothing of the person's is uncommitted.
