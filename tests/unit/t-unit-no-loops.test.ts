@@ -795,7 +795,7 @@ describe("the take's own line reaches the person with the build's next step, onc
     expect(offer.ask_type, JSON.stringify(offer)).toBe("unit-take");
     const took = runPrinted(bob, chat, choice(offer, "Start refunds"));
     expect(took.status, took.out).toBe(0);
-    const line = "Refunds is yours. Its build is its own piece of work here, in the payments space, under your team's rules, " +
+    const line = "refunds is yours. Its build is its own piece of work here, in the payments space, under your team's rules, " +
       "from what the lead approved. If it is not your team's to build, say so and I give it back.";
     expect(JSON.parse(took.out.trim().split("\n").at(-1)!).notice, took.out).toBeUndefined();
     const step = next(bob, chat);

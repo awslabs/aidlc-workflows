@@ -582,7 +582,7 @@ describe("the push", () => {
     expect(readFileSync(join(record, "aidlc-state.md"), "utf-8")).toContain("- **Unit Push**: unsent");
     const again = next(alice);
     expect(again.ask_type, JSON.stringify(again)).toBe("unit-push");
-    expect(again.question).toBe("Refunds is pushed, but the lead's project did not take its result just now. Do you want me to send it again?");
+    expect(again.question).toBe("refunds is pushed, but the lead's project did not take its result just now. Do you want me to send it again?");
     writeFileSync(hook, "#!/bin/sh\nexit 0\n");
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     expect(readFileSync(join(record, "aidlc-state.md"), "utf-8")).toContain("- **Unit Push**: pushed");
@@ -603,7 +603,7 @@ describe("the push", () => {
     expect(readFileSync(join(record, "aidlc-state.md"), "utf-8")).toContain("- **Unit Push**: unsent");
     const again = next(alice);
     expect(again.ask_type, JSON.stringify(again)).toBe("unit-push");
-    expect(again.question).toBe("Refunds is pushed, but the lead's project did not take its result just now. Do you want me to send it again?");
+    expect(again.question).toBe("refunds is pushed, but the lead's project did not take its result just now. Do you want me to send it again?");
     const later = run(UNIT, ["push", "--later"], alice);
     expect(later.status, later.out).toBe(0);
     expect(next(alice).ask_type ?? null).not.toBe("unit-push");
@@ -835,7 +835,7 @@ describe("the push", () => {
     const ask = next(alice);
     expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-push");
     expect(ask.question).toBe(
-      "Refunds is built and you approved it. It changed checkout-api and billing. Commit its changes on branch " +
+      "refunds is built and you approved it. It changed checkout-api and billing. Commit its changes on branch " +
         "refunds in each and push them?",
     );
     const choices = ask.choices as Array<{ label: string; command: string }>;
@@ -917,7 +917,7 @@ describe("at the home", () => {
     mergeOnHost(hosts.billing, "refunds", "squash");
     const seen = next(home.dir);
     const notices = (seen.change_notices ?? []) as string[];
-    expect(notices, JSON.stringify(seen)).toContain("I've told the payments team refunds is merged.");
+    expect(notices, JSON.stringify(seen)).toContain("I've told alice refunds is merged.");
     expect(notices.filter((line) => line === CHECK_IN_LINE), JSON.stringify(notices)).toHaveLength(1);
     const after = next(home.dir);
     expect((after.change_notices ?? []) as string[]).not.toContain(CHECK_IN_LINE);

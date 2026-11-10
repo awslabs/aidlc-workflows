@@ -9355,7 +9355,7 @@ function turnedDownStep(projectDir: string, unit: string, down: { repo: string; 
         : `That is what I'd do: ${down.repo} needs the change before ${unit} can merge.`),
     choices: [
       back,
-      { label: "Not now", detail: `${unit.charAt(0).toUpperCase()}${unit.slice(1)} stays ${sentBack ? "sent back" : "turned down"} until you come back to it.` },
+      { label: "Not now", detail: `${unit} stays ${sentBack ? "sent back" : "turned down"} until you come back to it.` },
     ],
   };
 }
@@ -9433,7 +9433,7 @@ function unitMoveOntoAsk(projectDir: string, stateContent: string): AskDirective
           detail: "Only its own commits move, with your own git; nothing is pushed.",
           command: `${aidlcToolInvocation("unit")} rebase`,
         },
-        { label: "Not now", detail: `${unit.charAt(0).toUpperCase()}${unit.slice(1)} stays on ${dep.unit}'s branch.` },
+        { label: "Not now", detail: `${unit} stays on ${dep.unit}'s branch.` },
       ],
     };
   }
@@ -9462,7 +9462,7 @@ function unitPushAsk(projectDir: string, stateContent: string | null): AskDirect
       kind: "ask",
       ask_type: "unit-push",
       response_route: "command",
-      question: `${unit.charAt(0).toUpperCase()}${unit.slice(1)} is pushed, but the lead's project did not take its result just now. ` +
+      question: `${unit} is pushed, but the lead's project did not take its result just now. ` +
         "Do you want me to send it again?",
       choices: [
         { label: "Send it again", detail: "Nothing new is committed; the result goes to the lead's project.", command: `${unitTool} push` },
@@ -9532,7 +9532,7 @@ function unitPushAsk(projectDir: string, stateContent: string | null): AskDirect
     kind: "ask",
     ask_type: "unit-push",
     response_route: "command",
-    question: `${unit.charAt(0).toUpperCase()}${unit.slice(1)} is built and you approved it.${changed}${several}${merging} ` +
+    question: `${unit} is built and you approved it.${changed}${several}${merging} ` +
       `${finishing ? "Finish the merge, then commit" : "Commit"} its changes on ` +
       `branch ${branch} in ${names.length > 1 ? "each" : "it"} and push ${names.length > 1 ? "them" : "it"}?`,
     choices: [

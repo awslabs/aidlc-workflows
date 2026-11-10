@@ -461,7 +461,7 @@ describe("a teammate on Copilot CLI and the open Units", () => {
     sam.person.say("give it back, it is not ours to build after all");
     const back = sam.agent.host.bash(`bun ${sam.agent.host.dir}/tools/aidlc-unit.ts release checkout-ui`);
     expect(back.status, back.stdout + back.stderr).toBe(0);
-    expect(back.stdout).toContain("Checkout-ui is given back: it is open again at the lead's project.");
+    expect(back.stdout).toContain("checkout-ui is given back: it is open again at the lead's project.");
     const released = claimPayload(home.remote, id8, "checkout-ui");
     expect(released).toMatchObject({ status: "released" });
     expect(released?.taken_by, JSON.stringify(released)).toBeUndefined();

@@ -4925,7 +4925,6 @@ function releaseUnit(args: string[], projectDir?: string): void {
 // left as it is. The person stays in the space they took it from.
 function giveBack(pd: string, build: UnitBuild): void {
   const unit = build.unit;
-  const Unit = `${unit.charAt(0).toUpperCase()}${unit.slice(1)}`;
   const home = buildsHome(pd, build);
   const ref = claimRef(home.id8, unit);
   let current: UnitClaimView | null;
@@ -4951,7 +4950,7 @@ function giveBack(pd: string, build: UnitBuild): void {
       fail(`${unit} could not be given back: ${pushed.refused ?? "its claim at the lead's project moved meanwhile"}. Try again.`);
     }
     invalidateLiveClaimPayloadCache(pd, unit);
-    said = `${Unit} is given back: it is open again at the lead's project.`;
+    said = `${unit} is given back: it is open again at the lead's project.`;
   } else {
     said = `Nothing changed for ${unit} at the lead's project, which still has it as it was.`;
   }
@@ -5556,13 +5555,12 @@ function buildLeftOpenHere(pd: string, state: string, units: string[], words: st
       ...(words.trim() ? { "Person Words": words.trim() } : {}),
     }, pd);
   }
-  const sentence = (unit: string): string => unit.charAt(0).toUpperCase() + unit.slice(1);
   console.log(JSON.stringify({
     here,
     notice: [
       ...here.map((unit) => notSeen.includes(unit)
-        ? `${sentence(unit)} is built here now. The teams cannot see that yet (${unseen}), so a teammate could still take it meanwhile.`
-        : `${sentence(unit)} is built here now, no longer open for the teams.`),
+        ? `${unit} is built here now. The teams cannot see that yet (${unseen}), so a teammate could still take it meanwhile.`
+        : `${unit} is built here now, no longer open for the teams.`),
       ...lines,
     ].join(" "),
   }));
@@ -6508,7 +6506,7 @@ function takeUnit(args: string[], projectDir?: string): void {
   }
   // The likely repos this workspace has no checkout of, said with the way to one.
   const notThere = likelyReposNotHere(pd, likely, home.repos, leadRepoAddresses(pd, integration.oid));
-  const taken = `${unit.charAt(0).toUpperCase()}${unit.slice(1)} is yours. Its build is its own ` +
+  const taken = `${unit} is yours. Its build is its own ` +
     `piece of work here,${spaceWords(build.space) === "" ? "" : `${spaceWords(build.space)},`} under your team's rules${leadsToo}, from what the lead approved.` +
     // The way back (release, run in this build), said once with the take.
     " If it is not your team's to build, say so and I give it back." +

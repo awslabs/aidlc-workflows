@@ -381,7 +381,7 @@ describe("taking a Unit starts its build in the team's space", () => {
     expect(took.status, took.out).toBe(0);
     expect(took.json).toMatchObject({ taken: true, unit: "refunds", team: "payments", space: "payments" });
     expect(String(took.json?.notice)).toStartWith(
-      "Refunds is yours. Its build is its own piece of work here, in the payments space, under your team's rules, " +
+      "refunds is yours. Its build is its own piece of work here, in the payments space, under your team's rules, " +
         "from what the lead approved.",
     );
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({
@@ -652,7 +652,7 @@ describe("taking a Unit starts its build in the team's space", () => {
     const took = take(dee, "refunds", ["--lead-rules"]);
     expect(took.status, took.out).toBe(0);
     expect(took.json?.space).toBe("default");
-    expect(String(took.json?.notice)).toStartWith("Refunds is yours. Its build is its own piece of work here, under your team's rules, from what the lead approved.");
+    expect(String(took.json?.notice)).toStartWith("refunds is yours. Its build is its own piece of work here, under your team's rules, from what the lead approved.");
     expect(field(readFileSync(join(buildDir(dee, "default", "refunds"), "aidlc-state.md"), "utf-8"), "Lead Project Rules")).toBeUndefined();
   });
 
@@ -848,7 +848,7 @@ describe("who takes what", () => {
     git(home.dir, ["config", "user.name", "lee"]);
     const here = run(UNIT, ["assign", "--here", "refunds"], home.dir);
     expect(here.status, here.out).toBe(0);
-    expect(here.json?.notice).toBe("Refunds is built here now, no longer open for the teams.");
+    expect(here.json?.notice).toBe("refunds is built here now, no longer open for the teams.");
     commitAll(home.dir, "refunds here");
     git(home.dir, ["push", "-q", "origin", "main"]);
     const ask = next(cloneOf(home.remote, "riley"));
@@ -859,7 +859,7 @@ describe("who takes what", () => {
     // Asked again, it is the same word: one more Here row, the same line, the claim untouched.
     const claim = claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds");
     const again = run(UNIT, ["assign", "--here", "refunds"], home.dir);
-    expect(again.json?.notice).toBe("Refunds is built here now, no longer open for the teams.");
+    expect(again.json?.notice).toBe("refunds is built here now, no longer open for the teams.");
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toEqual(claim);
   });
 
@@ -884,7 +884,7 @@ describe("who takes what", () => {
     refusePushes(home.remote);
     const here = run(UNIT, ["assign", "--here", "checkout-ui"], home.dir);
     expect(here.status, here.out).toBe(0);
-    expect(String(here.json?.notice)).toStartWith("Checkout-ui is built here now. The teams cannot see that yet (");
+    expect(String(here.json?.notice)).toStartWith("checkout-ui is built here now. The teams cannot see that yet (");
     expect(String(here.json?.notice)).toEndWith("), so a teammate could still take it meanwhile.");
     takePushes(home.remote);
     const step = next(home.dir);
@@ -1237,7 +1237,7 @@ describe("a likely repo this workspace has no copy of", () => {
     for (const [name, host] of Object.entries(hosts)) cloneCode(host, alice, name, "alice");
     const took = takeIn("payments", ["refunds", "--home", HOME], alice);
     expect(took.status, took.out).toBe(0);
-    expect(String(took.json?.notice)).toStartWith("Refunds is yours.");
+    expect(String(took.json?.notice)).toStartWith("refunds is yours.");
     expect(String(took.json?.notice)).toContain(`The lead's project could not be reached at ${https} (`);
     expect(String(took.json?.notice)).toContain(`), so refunds is recorded at ${home.remote}, where this clone's copy of the lead's plan comes from.`);
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ taken_by: "alice" });
@@ -1374,7 +1374,7 @@ describe("the way back from a take, and the lead's release", () => {
     const back = run(UNIT, ["release", "refunds"], sam);
     expect(back.status, back.out).toBe(0);
     expect(back.json?.notice).toBe(
-      "Refunds is given back: it is open again at the lead's project. Its build here is set aside, with everything in it kept.",
+      "refunds is given back: it is open again at the lead's project. Its build here is set aside, with everything in it kept.",
     );
     expect(claimPayload(home.remote, id8(home), "refunds")).toMatchObject({ status: "released" });
     // Nothing of the build is deleted: its record is set aside.

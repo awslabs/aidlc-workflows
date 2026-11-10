@@ -231,7 +231,7 @@ describe("the lead's word builds a Unit here: assign --here", () => {
     const words = "let's build refunds here ourselves";
     const here = run(UNIT, ["assign", "--here", "refunds", "--person-words", words], home.dir);
     expect(here.status, here.out).toBe(0);
-    expect(here.json?.notice).toBe("Refunds is built here now, no longer open for the teams.");
+    expect(here.json?.notice).toBe("refunds is built here now, no longer open for the teams.");
     expect(tellsWhatToType(here.json?.notice)).toBe(false);
     const id8 = fixtureIntentId8(home.dir);
     expect(claimPayload(home.remote, id8, "refunds")).toMatchObject({ status: "claimed", owner: "default", taken_by: "lee" });

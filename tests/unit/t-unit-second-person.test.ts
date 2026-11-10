@@ -197,7 +197,7 @@ describe("a teammate opens solo work built from another machine", () => {
     expect(took.json).toMatchObject({ space: "default" });
     // The Unit is theirs, never "for the bob team": solo work's build goes in
     // the lead's own space, so the claim names that space and who took it.
-    expect(String(took.json?.notice)).toStartWith("Checkout-ui is yours. Its build is its own piece of work here");
+    expect(String(took.json?.notice)).toStartWith("checkout-ui is yours. Its build is its own piece of work here");
     expect(readFileSync(seededStateFile(bob), "utf-8")).toBe(homeStateBefore);
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "checkout-ui")).toMatchObject({ owner: "default", taken_by: "bob" });
     const other = run(UNIT, ["take", "refunds", "--home", HOME_RECORD], cloneOf(home.remote, "carol"));
