@@ -53,6 +53,7 @@ import {
   normalizeDriveLetter,
   typedHarnessName,
   WORKSPACE_ENGINE_DIR,
+  leaveEarlierEngineFiles,
   workspaceEngineFile,
   workspaceEnginePath,
 } from "./aidlc-runtime-paths.ts";
@@ -30184,6 +30185,8 @@ export function engineFolderGoingBackLine(projectDir: string, release: string, b
     return null;
   }
   if (!existsSync(join(projectDir, "aidlc", WORKSPACE_ENGINE_DIR))) return null;
+  // The switch hands the project to that release as it is now.
+  leaveEarlierEngineFiles(projectDir);
   const unseen: string[] = [];
   const claimed = engineFolderJson(projectDir, ...UNIT_SCOPE_FILE.split("/"))?.unit;
   if (typeof claimed === "string" && claimed !== "") unseen.push(`the Unit ${claimed} you claimed`);
@@ -30210,7 +30213,10 @@ export function engineFolderGoingBackLine(projectDir: string, release: string, b
       for (const name of engineFolderNames(projectDir, "sessions", "plan-approval")) {
         if (!/^receipt-[0-9a-f]{64}\.json$/.test(name)) continue;
         const receipt = engineFolderJson(projectDir, "sessions", "plan-approval", name);
-        if (receipt?.intentId === intent && typeof receipt.targetId === "string") targets.add(receipt.targetId);
+        // "approved": not started yet (a started build's receipt says "generation").
+        if (receipt?.intentId === intent && receipt.status === "approved" && typeof receipt.targetId === "string") {
+          targets.add(receipt.targetId);
+        }
       }
       for (const target of [...targets].sort()) {
         unseen.push(target.startsWith("unit:") ? `the plan you approved for ${target.slice(5)}` : "the plan you approved");
@@ -31003,7 +31009,7 @@ export function markSubagentInflight(
     const current = readSubagentInflightLedger(projectDir);
     if (current.malformed) {
       throw new Error(
-        "background-subagent in-flight ledger is malformed; remove aidlc/.aidlc-engine/sessions/subagent-inflight",
+        "background-subagent in-flight ledger is malformed; delete it in your own terminal (rm aidlc/.aidlc-engine/sessions/subagent-inflight)",
       );
     }
     const nowMs = Date.now();
@@ -31032,7 +31038,7 @@ export function completeSubagentInflight(
     if (!current.exists) return false;
     if (current.malformed) {
       throw new Error(
-        "background-subagent in-flight ledger is malformed; remove aidlc/.aidlc-engine/sessions/subagent-inflight",
+        "background-subagent in-flight ledger is malformed; delete it in your own terminal (rm aidlc/.aidlc-engine/sessions/subagent-inflight)",
       );
     }
     const entries = freshSubagentEntries(current.entries, Date.now());

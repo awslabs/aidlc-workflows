@@ -122,7 +122,7 @@ import {
   validateScope,
   withStageProgressRow,
 } from "./aidlc-graph.ts";
-import { ACTIVE_MEMORY_DIR, activeMemoryCopyDrift, addRootBlocks, refreshActiveMemory } from "./aidlc-includes.ts";
+import { activeMemoryCopyDirs, activeMemoryCopyDrift, addRootBlocks, refreshActiveMemory } from "./aidlc-includes.ts";
 import {
   codexHookTrustHash,
   hookGroupMemberNames,
@@ -5369,7 +5369,8 @@ export async function collectDoctorReport(
     })(),
   });
 
-  // 5b. The copy every harness include reads (aidlc/active-memory/)
+  // 5b. The copy the installed includes read (aidlc/.aidlc-engine/active-memory/,
+  // or an earlier release's aidlc/active-memory/ until a refresh re-points them)
   // holds the active space's memory files. It is brought up to date here, as
   // every session start does, so a difference left after that is a file the
   // engine cannot write there.
@@ -5380,17 +5381,20 @@ export async function collectDoctorReport(
     } catch {
       // The row below says what is behind.
     }
-    const drift = activeMemoryCopyDrift(projectDir, space);
+    const copies = activeMemoryCopyDirs(projectDir);
+    const behind = copies.find((dir) => activeMemoryCopyDrift(projectDir, space, dir).length > 0);
+    const copy = behind ?? copies[0];
+    const drift = activeMemoryCopyDrift(projectDir, space, copy);
     results.push(drift.length === 0
       ? {
         pass: true,
-        label: `active space method copy current (${ACTIVE_MEMORY_DIR}/ holds aidlc/spaces/${space}/memory/)`,
+        label: `active space method copy current (${copy}/ holds aidlc/spaces/${space}/memory/)`,
       }
       : {
         pass: false,
         severity: "warn",
         label: `active space method copy is behind aidlc/spaces/${space}/memory/ (${drift.join(", ")}); your chats read that copy`,
-        fix: `make ${ACTIVE_MEMORY_DIR}/ writable in the project root (it is AI-DLC's git-ignored copy; remove what is there if it is not a plain folder of files), then run /aidlc or \`${aidlcInvocation()} engine space switch ${space}\``,
+        fix: `make ${copy}/ writable in the project root (it is AI-DLC's git-ignored copy; remove what is there if it is not a plain folder of files), then run /aidlc or \`${aidlcInvocation()} engine space switch ${space}\``,
       });
   }
 

@@ -22,6 +22,7 @@ import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { AIDLC_VERSION } from "./aidlc-version.ts";
 
 // The environment the engine runs in, settled before anything else in this
 // module or any module that imports it (the dispatcher, aidlc-lib and every
@@ -1198,11 +1199,25 @@ function moveEngineEntry(from: string, to: string, root: string, top: string): v
   if (stat.isFile()) moveEngineFile(from, to, root, basename(top) === ".aidlc-clone-id");
 }
 
+// A project pinned to another release (`.aidlc-version`) runs that release,
+// which reads these files where it keeps them: this one never moves them, even
+// from the few paths that run before the pinned dispatch (doctor, the Kiro IDE
+// reply tee, the pin command itself).
+function pinnedElsewhere(projectDir: string): boolean {
+  try {
+    const pinned = readFileSync(join(projectDir, ".aidlc-version"), "utf-8").trim();
+    return pinned !== "" && pinned !== AIDLC_VERSION;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Make `aidlc/.aidlc-engine/` and its `.gitignore` (written first, never
- * rewritten), then move in what an earlier release kept at the top of aidlc/.
- * Once per process per workspace; a folder that is a link is neither written
- * into nor moved into. Never throws. Returns the folder.
+ * rewritten) with its `sessions/` and `units/` folders, then move in what an
+ * earlier release kept at the top of aidlc/. Once per process per workspace;
+ * a folder that is a link is neither written into nor moved into. Never
+ * throws. Returns the folder.
  */
 export function ensureWorkspaceEngineFolder(projectDir: string): string {
   const aidlc = join(projectDir, "aidlc");
@@ -1219,6 +1234,11 @@ export function ensureWorkspaceEngineFolder(projectDir: string): string {
     } catch {
       // Already there, as the person or an earlier process left it.
     }
+    for (const sub of ["sessions", "units"]) realFolderChain(folder, join(folder, sub));
+    if (pinnedElsewhere(projectDir)) {
+      SETTLED_ENGINE_FOLDERS.add(key);
+      return folder;
+    }
     for (const name of readdirSync(aidlc)) {
       const now = LEGACY_ENGINE_ENTRIES.get(name) ??
         (LEGACY_CURSOR_WITNESS.test(name) ? `sessions/cursor-subagents/${name}` : undefined);
@@ -1231,6 +1251,13 @@ export function ensureWorkspaceEngineFolder(projectDir: string): string {
     // The next process tries again; the paths below still name the new place.
   }
   return folder;
+}
+
+/** Leave an earlier release's files where they are for the rest of this
+ *  process: a command that hands the project to that release reads them by
+ *  path and must not move them first (engineFolderGoingBackLine). */
+export function leaveEarlierEngineFiles(projectDir: string): void {
+  SETTLED_ENGINE_FOLDERS.add(resolve(join(projectDir, "aidlc", WORKSPACE_ENGINE_DIR)));
 }
 
 /** A path under `aidlc/.aidlc-engine/`, the folder made first where aidlc/ exists. */
@@ -1250,7 +1277,11 @@ export function workspaceEngineFile(projectDir: string, rel: string): string {
   const legacy = LEGACY_NAMES.get(rel);
   if (legacy === undefined || existsSync(path)) return path;
   const old = join(projectDir, "aidlc", legacy);
-  return lstatSync(old, { throwIfNoEntry: false })?.isFile() ? old : path;
+  try {
+    return lstatSync(old, { throwIfNoEntry: false })?.isFile() ? old : path;
+  } catch {
+    return path;
+  }
 }
 
 export function resolveHarnessRoot(location: HarnessLocation = {}): string {

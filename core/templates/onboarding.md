@@ -51,7 +51,7 @@ On startup, resolve the active intent (the `aidlc/spaces/<active-space>/intents/
 
 Commit the `aidlc/` workspace tree — the record (state, the per-clone audit shards under `<record>/audit/`, `intents.json`), memory, codekb, and knowledge are all version-controlled. The shipped `.gitignore` excludes the per-user cursors and machine-local runtime (these may be per-clone or contain sensitive data):
 - `aidlc/active-space` and `aidlc/spaces/*/intents/active-intent` (per-user cursors)
-- `aidlc/.aidlc-engine/clone-id` (per-clone audit-shard token) and `aidlc/.aidlc-engine/sessions/`
+- `aidlc/.aidlc-engine/` (the per-clone audit-shard token, the per-chat sessions and the rest of AI-DLC's machine-local files), kept out of git by its own `.gitignore`
 - `aidlc/spaces/*/intents/.aidlc-*` (pre-intent hooks-health scratch)
 - `**/aidlc/spaces/*/intents/**/.aidlc-engine/` (framework state at any depth, including package-local record trees)
 - `aidlc/spaces/*/intents/*/runtime-graph.json` (also covers per-Bolt worktree fragments by relative-path glob)
