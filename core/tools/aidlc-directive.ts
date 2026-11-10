@@ -1394,6 +1394,12 @@ export function questionNote(invocation: string, oneChoice = false, next = `${in
 const TEAM_NAME_NOTE = "When they take a Unit and give their team another name than the one the question offers, " +
   "add `--team '<that name>'` to that Take choice's command.";
 
+// A take builds in the space the person works in; the space is theirs to name
+// where to build, and a team they mention never picks one (team names change).
+export const TAKE_SPACE_NOTE = "When they say which space to build it in, in their own words (such as \"take it in the " +
+  "web space\" or \"build this in payments\"), add `--space '<that space>'` to the Start choice's command; naming " +
+  "themselves or their team is not that.";
+
 // Which repos Reverse Engineering reads: the names are the person's, the
 // command takes them exactly; the engine checks each one. "Only some" has no
 // command of its own, so `next` waits until the names are set. A request that
@@ -1960,6 +1966,8 @@ export function withAgentNotes<T extends object>(
       ? `${questionNote(invocation, choices?.length === 1)} ${TEAM_NAME_NOTE}`
       : d.ask_type === "unit-amend"
       ? unitAmendQuestionNote(invocation)
+      : d.ask_type === "unit-take"
+      ? `${questionNote(invocation, choices?.length === 1)} ${TAKE_SPACE_NOTE}`
       : d.ask_type === "unit-signoff"
       ? questionNote(invocation, choices?.length === 1) + " Their words sign it off: when they do, write them, as they typed them, to the file signoff_command names with your file tool, never a shell, and run it; anything else leaves it waiting."
       : questionNote(invocation, choices?.length === 1);

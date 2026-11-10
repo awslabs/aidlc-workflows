@@ -746,12 +746,15 @@ the `UNITS_ASSIGNED` audit row when a turn of yours stands behind them.
 In a team member's workspace, take one Unit of the lead's work (the record
 named by `--home`, in space `--home-space`, default `default`) and start its
 build as a piece of work of its own in the space you are working in (your
-team's space, or the default space). AI-DLC offers it when
+team's space, or the default space), or in the space `--space <name>` names
+when you ask for one: a space not here yet is made as `/aidlc space-create`
+makes it, with its name rule, and you are switched to it. AI-DLC offers it when
 you run `/aidlc` with no work of your own selected; you can also run it
 yourself:
 
 ```
 /aidlc unit take refunds --home 261018-checkout-revamp
+/aidlc unit take refunds --home 261018-checkout-revamp --space payments
 /aidlc unit take refunds --from git@example.com:shop/shop-ws.git --home 261018-checkout-revamp
 ```
 
@@ -881,8 +884,8 @@ they are out of the way.
 
 ### `/aidlc unit lead-here` - Lead the work from another checkout
 
-In a checkout that did not make the work's plan (a fresh clone on another machine), the lead's own questions (who builds which
-Unit, a sign-off, an answer to a team's change) are not put: the step shows the board and the Units to take, as a
+In a checkout that did not make the work's plan (a fresh clone on another machine), the lead's own questions (a sign-off,
+an answer to a team's change) are not put: the step shows the board and the Units to take, as a
 teammate's clone does. When you say you lead this work and want to carry it on there, the agent runs `unit lead-here` with
 your words; it records `LEAD_HERE_SET` in that checkout's own audit, and from then on the lead's questions are put there.
 

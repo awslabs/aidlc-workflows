@@ -165,6 +165,7 @@ import {
   PLAN_CHANGE_DETAILS,
   REPO_PLACEHOLDER,
   showsGateAgain,
+  TAKE_SPACE_NOTE,
   validateDirective,
   withAgentNotes,
 } from "./aidlc-directive.ts";
@@ -857,6 +858,7 @@ import {
   leftOutNotice,
   parkWorkflow,
   practicesRulesToAdd,
+  unitGateRhythmCanBe,
   unitsWithoutInputsNotice,
 } from "./aidlc-state.ts";
 import {
@@ -4987,10 +4989,10 @@ function unitsWordsReplyDirective(requestId: string, offer: AskDirective | Print
   const choices = offer.kind !== "ask" ? "" : (offer.choices ?? [])
     .filter((choice) => choice.command !== undefined).map((choice) => `${choice.label}: \`${choice.command}\``).join("; ");
   return printDirective(
-    `This clone has the lead's work (${work.join(", ")}), built by teams; the work itself is not picked here. ` +
+    `This clone has the lead's work${work.length > 0 ? ` (${work.join(", ")})` : ""}, built by teams; the work itself is not picked here. ` +
       `The Units offer says: ${said} Read the person's words. ` +
       (choices === "" ? "" : `If they ask for one of these Units (to take it, start it, or start it early), run that choice's ` +
-        `command and follow what it returns: ${choices}. `) +
+        `command and follow what it returns: ${choices}. ${TAKE_SPACE_NOTE} `) +
       "If they ask for a Unit the offer does not list as one to start (being built, waiting, or done), tell them in one line " +
       "where it stands, from what the offer says, and run nothing. " +
       `If they only ask what is here, run \`${orchestrate} next\` with nothing after it. If they say they lead this work and ask ` +
@@ -5654,7 +5656,8 @@ function constructionStaffingAsk(
   if (ownership !== "" && !teams) return null;
   if (teams && teamsClone(projectDir, stateContent)) return null;
   // Teams building each Unit as work of their own: every Unit is open, and the
-  // step goes on to the plan's share and the board, which puts the rhythm.
+  // step goes on to the plan's share and the board, or a Unit the lead's walk
+  // builds, which offer the rhythm.
   if (teams && homeLocation(stateContent) !== null) return null;
   const evidence = routingEvidenceFor(projectDir, stateContent);
   const dag = resolveBoltBatches(projectDir, evidence);
@@ -9224,12 +9227,15 @@ function unitTakeLook(
           // Carry on is offered for the person's own take, on any computer;
           // another's build is said, with who builds it and where, and carried
           // on when the person asks for it. A pushed one waits for its merge.
-          const worked = buildLastWorked(projectDir, built, claim?.payload.taken_by);
-          const who = claim !== undefined ? builderOf(claim) : worked.by ?? "a teammate";
+          // Who and whose from its claim while it is taken; a claim given back
+          // or freed names nobody, so the build's own last hand does.
+          const live = claim?.status === "claimed" ? claim : undefined;
+          const worked = buildLastWorked(projectDir, built, live?.payload.taken_by);
+          const who = live !== undefined ? builderOf(live) : worked.by ?? "a teammate";
           const where = spaceWords(built.space, true);
-          const down = claim?.payload.turned_down;
-          const sentBack = down !== undefined && claim !== undefined ? turnedDownStatus(down, `${who}${where}`, "the lead's") : null;
-          const mine = claim !== undefined ? claimIsMine(projectDir, claim) : worked.by !== null && worked.by === gitUserName(projectDir);
+          const down = live?.payload.turned_down;
+          const sentBack = down !== undefined ? turnedDownStatus(down, `${who}${where}`, "the lead's") : null;
+          const mine = live !== undefined ? claimIsMine(projectDir, live) : worked.by !== null && worked.by === gitUserName(projectDir);
           if (worked.awaitingMerge && sentBack === null) {
             building.push(`${unit} (pushed by ${who}${where}, waiting for its merge)`);
             continue;
@@ -9439,9 +9445,9 @@ function unitPushAsk(projectDir: string, stateContent: string | null): AskDirect
   }
   if (!unitPushToOffer(projectDir, stateContent)) return null;
   const unitTool = aidlcToolInvocation("unit");
-  // Someone else's take, a hold for another team or the Unit done is on the
-  // claim before this take was recorded: said once (buildClaimNotes), never
-  // offered again as a result to send.
+  // Someone else's take or the Unit done is on the claim before this take was
+  // recorded: said once (buildClaimNotes), never offered again as a result to
+  // send.
   if (push === "unsent" && takeAside(projectDir, stateContent)) return null;
   if (push === "unsent") {
     return {
@@ -13361,9 +13367,12 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   // opens later in the same chat is offered then.
   // A build the lead turned down is not done: its step says so.
   if (stateContent && plainNext && engineSessionId && !isReadOnlyEngineProbe() && unitBuildOf(stateContent) !== null) {
-    // Finished with its push still to offer is not done: its push comes first (workflowContinues reads it the same way).
-    const buildDone = ((getField(stateContent, "Status")?.trim() === "Completed" && !unitPushToOffer(pd, stateContent)) ||
-      getField(stateContent, UNIT_PUSH_FIELD)?.trim() === "pushed") && !buildTurnedDownNow(pd, stateContent, engineSessionId);
+    // Finished with its push still to offer: a bare /aidlc or a resume gets
+    // its push first (workflowContinues reads it the same way); their own
+    // words get the Units, as over a done build.
+    const pushFirst = (flags.intent === undefined || resuming) && unitPushToOffer(pd, stateContent);
+    const buildDone = (getField(stateContent, "Status")?.trim() === "Completed" || getField(stateContent, UNIT_PUSH_FIELD)?.trim() === "pushed") &&
+      !pushFirst && !buildTurnedDownNow(pd, stateContent, engineSessionId);
     const take = buildDone ? unitTakeAsk(pd) : null;
     // Only when there is a Unit to start: a build that is the team's only one says its own end.
     if (take !== null && take.kind === "ask" && (take.choices ?? []).some((choice) => choice.label.startsWith("Start ")) &&
@@ -14390,20 +14399,26 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     const here = unselectedRecords(pd);
     // A teammate's first words in a clone of work teams build ("what's ours?",
     // "take u1"): the Units to take are what is theirs, put as a bare `next`
-    // puts them, once in a chat, in a space with nothing of its own to pick up
-    // too (a team's space before its first take, or after a give back);
-    // picking the work itself is the lead's, and in the lead's own checkout
-    // "Carry on ... here, as the lead" stays among the choices.
-    const look = takeOfferedOnWords(pd) || here !== null ? null : unitTakeAsk(pd);
-    const take = takeOfferedOnWords(pd) ? null
-      : here !== null && here.selectable.length > 0 ? unitTakeAsk(pd) ?? soloElsewhereAsk(pd)
-      // Nothing here to pick up: the Units only when one can be taken; else their words go on.
-      : look?.kind === "ask" ? look
-      : null;
+    // puts them, once in a chat; picking the work itself is the lead's, and in
+    // the lead's own checkout "Carry on ... here, as the lead" stays among the
+    // choices.
+    const take = here !== null && here.selectable.length > 0 && !takeOfferedOnWords(pd) ? unitTakeAsk(pd) ?? soloElsewhereAsk(pd) : null;
     if (take !== null) {
       noteTakeOfferedOnWords(pd);
       emit(take);
       return;
+    }
+    // In a space with nothing of its own to pick up (a team's space before its
+    // first take, or after a give back), their words are read against the
+    // Units offer while one can be taken, and kept: they may be new work of
+    // their own. Else their words go on.
+    if (here === null) {
+      const look = unitTakeAsk(pd);
+      if (look?.kind === "ask") {
+        const words = saveReadingQuestion(pd, flags.intent, "", "routing", { space: engineSelection(pd).space, targets: [] });
+        emit(unitsWordsReplyDirective(words.id, look, []));
+        return;
+      }
     }
     // Before the lead's plan reaches the clone there is nothing to take yet.
     if (here === null && leadsPlanNotHere(pd)) sayWithStepOnce(pd, WORK_BEFORE_THE_PLAN);
@@ -17750,6 +17765,10 @@ function teamHomeClaims(
     ? cachedUnitClaimOverview(projectDir, { writeCache: !query && !isReadOnlyEngineProbe() })
     : null;
   let overview = readOverview();
+  // Every Unit the lead's walk leaves for takes waits for someone to take it,
+  // never this project's to build.
+  const leftNow = () => teamHome ? leftForTakesAtHome(projectDir, overview) : { units: new Set<string>(), keepsWalk: true, own: new Set<string>() };
+  let left = leftNow();
   const unreached: string[] = [];
   if (teamHome && !isReadOnlyEngineProbe()) {
     // No Unit left to take is the board, except while the home builds the
@@ -17760,15 +17779,21 @@ function teamHomeClaims(
       claim.status === "claimed" && !claim.payload.done &&
       (claim.payload.result !== undefined || (claim.payload.proposals ?? []).some((entry) => entry.answer === undefined))
     )));
-    // While a team holds a Unit not done, the person's message since the last
-    // look is a look again, so a team's push or merge is heard on the lead's
-    // own Unit's steps too.
-    const teamBuilding = overview !== null && [...overview.claims.values()].some((claim) =>
-      claim.status === "claimed" && claim.payload.done !== true && !(overview?.walked ?? []).includes(claim.unit));
-    const refreshed = refreshHomeClaims(projectDir, { sessionId: engineSessionId, now, sincePerson: teamBuilding });
+    // While a team builds a Unit not done, or a Unit waits for someone to
+    // take it, the person's message since the last look is a look again, so a
+    // take, push or merge is heard on the lead's own Unit's steps too. A walk
+    // that keeps every Unit nobody took still leaves each one open to a take.
+    const teamBuilding = [...(overview?.claims.values() ?? [])].some((claim) =>
+      claim.status === "claimed" && claim.payload.done !== true && !left.own.has(claim.unit) &&
+      !(overview?.walked ?? []).includes(claim.unit));
+    const open = left.keepsWalk || [...left.units].some((unit) => overview?.claims.get(unit)?.status !== "claimed");
+    const refreshed = refreshHomeClaims(projectDir, { sessionId: engineSessionId, now, sincePerson: teamBuilding || open });
     if (refreshed.unreached !== null) unreached.push(refreshed.unreached);
     if (refreshed.refused) sayWithStepOnce(projectDir, newsNotTakenIn("the teams"));
-    if (refreshed.fetched) overview = readOverview();
+    if (refreshed.fetched) {
+      overview = readOverview();
+      left = leftNow();
+    }
   }
   const heldElsewhere = new Set(overview?.claimed.map((row) => row.unit) ?? []);
   // A Unit a team holds that is not done on its claim (one Build and Test
@@ -17776,9 +17801,6 @@ function teamHomeClaims(
   for (const [unit, claim] of overview?.claims ?? []) {
     if (claim.status === "claimed" && claim.payload.done !== true && claim.payload.turned_down) heldElsewhere.add(unit);
   }
-  // Every Unit the lead's walk leaves for takes waits for someone to take it,
-  // never this project's to build.
-  const left = teamHome ? leftForTakesAtHome(projectDir, overview) : { units: new Set<string>(), keepsWalk: true };
   for (const unit of left.units) heldElsewhere.add(unit);
   // The lead's own approved change to an input the teams build with goes onto
   // their claims, said once (a look writes nothing): a team whose Unit is done
@@ -17825,22 +17847,26 @@ function teamHomeClaims(
 }
 
 // The Units the lead's walk at a team home leaves for takes (unitsLeftForTakes),
-// from its plan, its audit and the claims as this checkout has them, and
-// whether the walk keeps every Unit nobody took.
-function leftForTakesAtHome(projectDir: string, overview: UnitClaimOverview | null): { units: Set<string>; keepsWalk: boolean } {
+// from its plan, its audit and the claims as this checkout has them, whether
+// the walk keeps every Unit nobody took, and the lead's own build-here claims.
+function leftForTakesAtHome(
+  projectDir: string,
+  overview: UnitClaimOverview | null,
+): { units: Set<string>; keepsWalk: boolean; own: Set<string> } {
   const rows = readAuditShardEvents(projectDir);
   const claims = overview?.claims ?? new Map<string, UnitClaimView>();
-  const keepsWalk = unitStartedBeforeTeams(rows) || takenFromSoloWork(projectDir, claims);
   let state: string;
   try {
     state = readStateFile(projectDir);
   } catch {
-    return { units: new Set(), keepsWalk };
+    return { units: new Set(), keepsWalk: unitStartedBeforeTeams(rows) || takenFromSoloWork(projectDir, claims, new Set()), own: new Set() };
   }
+  const own = leadsOwnClaims(projectDir, state, claims);
+  const keepsWalk = unitStartedBeforeTeams(rows) || takenFromSoloWork(projectDir, claims, own);
   const dag = resolveBoltDag(projectDir);
-  if (dag.state !== "ok") return { units: new Set(), keepsWalk };
+  if (dag.state !== "ok") return { units: new Set(), keepsWalk, own };
   const skeleton = teamSkeletonOn(state) ? dag.batches[0]?.[0] ?? null : null;
-  return { units: unitsLeftForTakes(rows, dag.units, skeleton, claims, leadsOwnClaims(projectDir, state, claims), keepsWalk), keepsWalk };
+  return { units: unitsLeftForTakes(rows, dag.units, skeleton, claims, own, keepsWalk), keepsWalk, own };
 }
 
 // A Unit back with its team: turned down in one of its repos, or sent back
@@ -17920,9 +17946,10 @@ function unitBoardRows(
 ): { rows: UnitBoardRow[] } {
   const dependencies = unitDependencies(projectDir);
   const standing = unitProgressStanding(progress);
-  const left = homeLocation(stateContent) === null ? new Set<string>() : leftForTakesAtHome(projectDir, overview).units;
-  // The lead's own build-here claims count as walked here (leadsOwnClaims).
-  const own = new Set(overview?.walked ?? []);
+  const home = homeLocation(stateContent) === null ? null : leftForTakesAtHome(projectDir, overview);
+  const left = home?.units ?? new Set<string>();
+  // The lead's own build-here claims are built here, done ones too (leadsOwnClaims).
+  const own = new Set([...(overview?.walked ?? []), ...(home?.own ?? [])]);
   const done = (unit: string): boolean => {
     const claim = overview?.claims.get(unit);
     if (claim?.status === "claimed" && claim.payload.done === true) return true;
@@ -18136,8 +18163,8 @@ function emitTeamUnitMajorRunStage(
     );
     return;
   }
-  // The share question is main's claim flow's: a build-out home asked who
-  // builds which Unit once, and builds the Units no team holds.
+  // The share question is main's claim flow's; a build-out home puts its own
+  // (buildOutShareOffer).
   if (!scopeStamp && step.kind === "work" && homeLocation(refreshedState) === null) {
     const merged = model?.mergedUnits ?? new Set<string>();
     let claimless = false;
@@ -18158,6 +18185,13 @@ function emitTeamUnitMajorRunStage(
     const { stage, unit } = step;
     const unitKind = kinds?.get(unit) ?? null;
     if (!syncScopedStage(stage.slug, unit)) return;
+    // A Unit the lead's walk builds before the board: the approval rhythm is
+    // offered with its step, before its first approval question, after which
+    // the rhythm no longer changes.
+    if (teamHome && !keepsWalk && step.kind === "work" && !unitGateRhythmChosen(refreshedState) &&
+      unitGateRhythmCanBe(projectDir, refreshedState, "unit-end")) {
+      sayWithStepOnce(projectDir, TEAM_RHYTHM_OFFER);
+    }
     const directive = buildRunStageDirective(
       stage,
       projectType,
@@ -18312,7 +18346,8 @@ function emitTeamUnitMajorRunStage(
     // The rhythm is the lead's to choose, asked until they answer: each choice
     // runs the setter, so their answer is on the record and not asked again.
     const setRhythm = `${aidlcToolInvocation("state")} set-unit-gate-rhythm`;
-    const rhythm = teamHome && !keepsWalk && !unitGateRhythmChosen(stateContent)
+    const rhythm = teamHome && !keepsWalk && !unitGateRhythmChosen(stateContent) &&
+        unitGateRhythmCanBe(projectDir, stateContent, "unit-end")
       ? [{
         question: TEAM_RHYTHM_OFFER,
         choices: [

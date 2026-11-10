@@ -67,7 +67,8 @@ export function homeLocation(stateContent: string | null): string | null {
 }
 
 // The offer to approve each team's Unit once at its end instead of after every
-// stage, said once as teams are chosen and in the lead's assign reply.
+// stage, said with the step of a Unit the lead's walk builds and put on the
+// lead's board, while it can still change (unitGateRhythmCanBe).
 export const TEAM_RHYTHM_OFFER = "Each team will approve its Unit after every stage. Do you want them to approve once " +
   "at the end of each Unit instead? I'd keep after every stage, so a wrong turn is caught at the stage where it happens.";
 

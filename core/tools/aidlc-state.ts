@@ -1860,17 +1860,7 @@ function handleSetUnitGateRhythm(args: string[]): void {
       );
     }
     const current = readUnitGateRhythm(content);
-    // Each team gate is recorded under the rhythm it was asked in (its Gate
-    // Scope), and a rhythm reads only its own; a Unit started or built so far
-    // routes the same under either. So the change holds until a Unit's first
-    // approval question opens under another rhythm than the one asked for: a
-    // Unit built before teams, asked once at its end, is the end-of-Unit
-    // rhythm's already.
-    const other = (row: AuditShardEvent): boolean => {
-      const scope = auditBlockField(row.block, "Gate Scope") ?? "";
-      return values.includes(scope) && scope !== value;
-    };
-    if (value !== current && hasCurrentTeamUnitActivity(pd, content, other)) {
+    if (!unitGateRhythmCanBe(pd, content, value as UnitGateScope)) {
       error(unitGateRhythmStaysLine(pd, content, current));
     }
     content = setOrInsertField(
@@ -1883,6 +1873,21 @@ function handleSetUnitGateRhythm(args: string[]): void {
     writeStateFile(pd, content);
     console.log(JSON.stringify({ updated: true, unit_gate_rhythm: value }));
   });
+}
+
+// Whether the Units' approvals can take `value` as their rhythm: the setter's
+// rule, and the lead's offer is put only while it holds. Each team gate is
+// recorded under the rhythm it was asked in (its Gate Scope), and a rhythm
+// reads only its own; a Unit started or built so far routes the same under
+// either. So the change holds until a Unit's first approval question opens
+// under another rhythm than the one asked for: a Unit built before teams,
+// asked once at its end, is the end-of-Unit rhythm's already.
+export function unitGateRhythmCanBe(pd: string, content: string, value: UnitGateScope): boolean {
+  const other = (row: AuditShardEvent): boolean => {
+    const scope = auditBlockField(row.block, "Gate Scope") ?? "";
+    return (scope === "per-stage" || scope === "unit-end") && scope !== value;
+  };
+  return value === readUnitGateRhythm(content) || !hasCurrentTeamUnitActivity(pd, content, other);
 }
 
 // The rhythm the Units' approvals began under stays for the work. A Unit

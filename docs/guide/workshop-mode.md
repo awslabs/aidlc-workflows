@@ -625,7 +625,8 @@ reads **Yes, for this project, and offered to any team that takes a Unit**.
 - **A personal copy** works as one of the two, by where its `origin` points.
 
 A take builds the Unit in the space you are working in: your team's space
-(`/aidlc space switch <team>`), or the default space. Every Unit nobody has
+(made once with `/aidlc space-create <team>`, then `/aidlc space <team>`), or the
+default space; a space you ask for by name at the take is made then. Every Unit nobody has
 taken is offered, once each. A Unit that waits on another is listed as waiting
 until that Unit is done at the lead's project, and a Unit already being built is
 listed with who took it and where (a build in a default space by who took it
@@ -740,7 +741,8 @@ Generation's summary and test instructions). A review fix pushed later goes
 back the same way.
 
 At the lead's project, while teams build, AI-DLC fetches the work's claims from the
-lead's project's remote once per chat, after your messages while a team is building,
+lead's project's remote once per chat, after your messages while a team is building
+or a Unit waits for someone to take it,
 and at each step that shows or acts on them, and
 checks every pushed Unit's repos against their integration branch, with the
 lead's own login and never a password prompt, then shows the board (when a
@@ -923,7 +925,8 @@ claim-bound CAS publication; main serializes the reviewed pinned OIDs.
    chooses teams, and shares the plan.
 2. If enabled, the facilitator builds the walking skeleton at the lead's project first.
 3. Each team member clones the workspace (or the team's own), runs
-   `aidlc config` there for their own tool, switches to their team's space,
+   `aidlc config` there for their own tool, makes their team's space and
+   switches to it (`/aidlc space-create <team>`, then `/aidlc space <team>`),
    then `/aidlc`, and takes a Unit that is ready. Each team approves its own
    stages, and checks in `aidlc/` when AI-DLC says so.
 

@@ -159,6 +159,7 @@ import {
   writeFileAtomic,
   intentRepos,
   setField,
+  slugify,
   sourceClaimCovers,
   sourcePathKey,
   type SourceClaimModel,
@@ -236,7 +237,7 @@ import {
   resolveTestingPosture,
 } from "./aidlc-testing-posture.ts";
 import { beforePerUnitBlock, memoryDirFor } from "./aidlc-graph.ts";
-import { planMadeElsewhere, registryList } from "./aidlc-record-core.ts";
+import { planMadeElsewhere, registryList, spacesRoot } from "./aidlc-record-core.ts";
 import { approvalDecidesOpenFindings, approvalOpenFindings } from "./aidlc-review-brief.ts";
 import {
   aidlcEngineCommand,
@@ -345,7 +346,6 @@ export interface UnitClaimPayload {
   audit_shard?: string;
   candidate_tree_oid?: string;
   candidate_head_oid?: string;
-  // Held for this team by the lead at the home, before anyone took it.
   // Who took it: their git user.name.
   taken_by?: string;
   // What the team pushed, what the home found merged, and done: a Unit whose
@@ -5941,6 +5941,25 @@ function runEngineUtility(projectDir: string, args: string[]): GitResult {
   return { ok: result.status === 0, stdout: result.stdout ?? "", stderr: result.stderr ?? "", code: result.status ?? 1 };
 }
 
+// The space a take was asked to build in, by its name as space create keeps
+// it; made by space create itself when it is not here yet, so its name rule
+// and refusals are the same, said in its own words.
+function spaceAskedFor(projectDir: string, asked: string): string {
+  const name = slugify(asked);
+  if (name !== "" && existsSync(join(spacesRoot(projectDir), name))) return name;
+  const made = runEngineUtility(projectDir, isCompiledExecutable() ? ["space", "create", asked] : ["space-create", asked]);
+  if (!made.ok) {
+    let words = (made.stderr || made.stdout).trim();
+    try {
+      words = String((JSON.parse(words) as { error?: unknown }).error ?? words);
+    } catch {
+      // Not the error line: said as it is.
+    }
+    fail(words);
+  }
+  return name;
+}
+
 // The Unit's build: a piece of work of its own in the team's space, running the
 // home's planned per-Unit stages from a copy of what the Unit was approved with.
 // What a build needs to know of its home.
@@ -6336,9 +6355,10 @@ function takeUnit(args: string[], projectDir?: string): void {
   if (existing !== null) {
     setActiveSpaceCursor(pd, existing.space);
     selectIntentForSession(pd, existing.dirName, existing.space, resolveWorkflowSelection(pd).sessionId ?? undefined);
-    // Whose build it is, said once, from its claim as this workspace last fetched it.
+    // Whose build it is, said once, from its claim as this workspace last
+    // fetched it, while it is taken: a claim given back or freed names nobody.
     const claim = buildClaimHere(pd, existing);
-    const whose = claim === null ? "its" : claimIsMine(pd, claim) ? "your" : `${builderOf(claim)}'s`;
+    const whose = claim?.status !== "claimed" ? "its" : claimIsMine(pd, claim) ? "your" : `${builderOf(claim)}'s`;
     const carrying = `Carrying on ${unit}, ${whose} build${existing.space === DEFAULT_SPACE ? " here" : spaceWords(existing.space)}.`;
     console.log(JSON.stringify({
       taken: true,
@@ -6403,9 +6423,10 @@ function takeUnit(args: string[], projectDir?: string): void {
         })),
     }))
     : undefined;
-  // The build goes in the space the person is working in; solo work's in the
-  // lead's own space. The claim's owner names that space.
-  const team = home.solo ? home.space : activeSpace(pd);
+  // The build goes in the space the person asked for (--space), else the one
+  // they are working in; solo work's in the lead's own space. The claim's
+  // owner names that space.
+  const team = flags.space?.trim() ? spaceAskedFor(pd, flags.space) : home.solo ? home.space : activeSpace(pd);
   const generation = takeGeneration(current);
   const payload = takenClaimPayload(current, {
     team, home, unit, ref, generation, me, baseOid: integration.oid, integrationRef: integration.ref,
@@ -6588,13 +6609,15 @@ export function leadsOwnClaims(projectDir: string, stateContent: string, claims:
 }
 
 // Whether the lead's work went to teams by a teammate's take of solo work: a
-// claim on it was taken from the lead's commit while the work was still solo.
-// The lead's walk then carries on with the rest, as its switch says.
+// claim on it, other than the lead's own build-here claims (`own`), was taken
+// from the lead's commit while the work was still solo. The lead's walk then
+// carries on with the rest, as its switch says.
 const SOLO_AT_OID = new Map<string, boolean>();
-export function takenFromSoloWork(projectDir: string, claims: ReadonlyMap<string, UnitClaimView>): boolean {
+export function takenFromSoloWork(projectDir: string, claims: ReadonlyMap<string, UnitClaimView>, own: ReadonlySet<string>): boolean {
   const relative = relativeRecordDir(projectDir);
   if (!relative) return false;
   return [...claims.values()].some((claim) => {
+    if (own.has(claim.unit)) return false;
     const key = `${claim.payload.base_oid}:${relative}`;
     if (!SOLO_AT_OID.has(key)) {
       const shown = localGit(projectDir, ["show", `${claim.payload.base_oid}:${relative}/aidlc-state.md`, "--"]);
@@ -6716,9 +6739,9 @@ function recordTakeHere(projectDir: string, build: UnitBuild, home: HomeWork, st
 }
 
 // What a build's claim says is not this build's to act on now: someone else's
-// take, a hold for another team or the Unit done, before this checkout's take
-// was recorded. The step says it once (buildClaimNotes), and no look, push or
-// give back acts on that claim as this build's.
+// take or the Unit done, before this checkout's take was recorded. The step
+// says it once (buildClaimNotes), and no look, push or give back acts on that
+// claim as this build's.
 export function takeAside(projectDir: string, stateContent: string): boolean {
   const build = unitBuildOf(stateContent);
   if (build === null) return false;

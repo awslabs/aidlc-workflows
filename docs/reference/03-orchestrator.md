@@ -773,7 +773,9 @@ not merged yet. Where a Unit started there before teams were chosen, or teams
 came from a teammate's take of solo work (`takenFromSoloWork`), the walk keeps
 every Unit nobody took and puts no share offer. When none is left to the walk
 while a Unit is unmerged, the step is the team board, which puts the approval
-rhythm until the lead answers it. Each step of teams building Units that
+rhythm until the lead answers it, while it can still change
+(`unitGateRhythmCanBe`, the setter's own rule); a Unit the walk builds first
+says it once with its step, before its first approval. Each step of teams building Units that
 says where things stand and waits for the person (the board, a turn-down asked
 again, a clone where nothing is ready to take) is a
 `print` that ends the turn (`lineEndingTurn`): what the person reads rides as
@@ -855,7 +857,8 @@ fetch of `refs/heads/claim/<id8>/*` into the refs the person's own fetch uses
 (noted in `aidlc/.aidlc-sessions/claims-fetched.json`) and, at the home, again
 at each step that shows or acts on the claims (nothing left for the home to
 build now, a result to check, a proposal to answer) and, while a team holds a
-Unit not done, after each of the person's messages; the take offer in a clone
+Unit not done or a Unit left for takes has no claim yet, after each of the
+person's messages; the take offer in a clone
 runs it for each home it lists, and again at each look while nothing is ready;
 solo work built one Unit at a time (`switchSoloToTeams`) runs it once its Unit
 walk has begun (a Unit started, or the step is a per-Unit Construction stage),
@@ -957,7 +960,7 @@ carrying the same choice in `offers`; once Code Generation is approved again
 after the last push (`redoneSincePush`), the end offers the push instead, never
 the redo. The board carries `offers` (each a question and its choices, with the
 command each runs), each put once in a chat: a sign-off or a proposal asked once
-and not answered, and the approval rhythm until the lead answers it. A team's result carries the
+and not answered, and the approval rhythm until the lead answers it, while it can still change. A team's result carries the
 outputs the home's later stages consume and the files the cross-Unit coverage
 check at Build and Test reads of the Unit (`crossUnitCoverageReads`).
 
