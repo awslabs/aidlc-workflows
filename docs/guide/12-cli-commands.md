@@ -788,8 +788,8 @@ records `UNIT_TAKEN_IN`, and is selected for this chat. Its `WORKFLOW_STARTED` r
 words of the take when the agent hands them (`--request-file` or `--person-words`), and otherwise
 `Taken from the lead's plan: <unit>`. Taking a Unit whose
 build is already in this workspace carries that build on. A lead's project that takes no
-push from here gives no Unit, held for your team or open: the take says git's
-reason and the way on, which is push access from the lead.
+push from here does not stop the take: it says git's reason once, and the claim
+is recorded there when a push next goes through.
 `--early` starts a Unit that waits on others once each of them has pushed: its
 branch starts at their pushed heads in each repo, and the line says it may
 still change before it merges.

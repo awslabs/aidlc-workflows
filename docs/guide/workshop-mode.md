@@ -667,9 +667,11 @@ work does: after every stage, or once at its end.
   offered to its team again with those words. In a fresh clone, before your team is known,
   each team's build is offered with its team named (**Carry on <unit> for the
   payments team**), and picking one makes that team your active space.
-- A lead's project you can read but not push to: nothing is taken, held for your
-  team or open. The take says git's reason and the way on: ask the lead for push
-  access to it, then take the Unit again.
+- A lead's project you can read but not push to: the take goes on and the build
+  starts, and one line, said once, gives git's reason and says the lead and the
+  other teams cannot see your take until a push goes through; AI-DLC records it
+  there then, with nothing more said. A take someone else's claim beat there is
+  said once, and your build stays for you to agree who carries it on.
 - A repo the lead's work records that your workspace has no checkout of is
   said once, with where to clone it or how to give its path in
   `aidlc/repos.local.json`. When `repos.json` has its address, the build's first step
