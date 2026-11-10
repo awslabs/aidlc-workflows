@@ -515,7 +515,8 @@ const TASK_LINE_RE = /^[ \t]*(?:[-*+]|\d+[.)])[ \t]+\[[ xX-]\]/;
 
 /**
  * The few lines the question shows for one plan. Step 2 asks for a
- * `## Summary` section with Builds / Touches / Tests lines; without one, the
+ * `## Summary` section with Builds / Touches / Tests lines, and an Adds line
+ * when the plan adds an element no requirement asks for; without one, the
  * engine counts plan steps instead of refusing.
  */
 export function planSummaryLines(plan: string, instructions: string): string[] {
