@@ -1079,6 +1079,13 @@ const OUTSIDE_STAGE_SUFFIX_LENGTH = 6;
 // folder it just made; one it could not remove, or an earlier run left, is the
 // person's to delete.
 const stagingLeft = new Set<string>();
+// Whether a folder this run made is among them (not only an earlier run's): a
+// refusal then never says nothing was changed.
+let stagingLeftThisRun = false;
+
+export function stagingLeftByThisRun(): boolean {
+  return stagingLeftThisRun;
+}
 
 export function stagingLeftLine(dir: string, repo: string): string {
   return `AI-DLC could not remove the temporary folder ${dir} it made to clone ${repo}; nothing in it is needed, so you can delete it.`;
@@ -1087,6 +1094,7 @@ export function stagingLeftLine(dir: string, repo: string): string {
 export function takeStagingLeftLines(): string[] {
   const lines = [...stagingLeft];
   stagingLeft.clear();
+  stagingLeftThisRun = false;
   return lines;
 }
 
@@ -1099,6 +1107,7 @@ export function removeOutsideStages(
       remove(stage.dir);
     } catch {
       stagingLeft.add(stagingLeftLine(stage.dir, stage.repo));
+      stagingLeftThisRun = true;
     }
   }
 }
@@ -1472,7 +1481,10 @@ export function installWorkspaceRepo(
   let committing = false;
   try {
     if (pathEntryExists(target) && !isEmptyDirectory(target)) {
-      throw new SyncFailure(`${staged.repo.name} appeared while it was being cloned; nothing was changed`);
+      removeTransaction(staged.clones);
+      throw new SyncFailure(
+        `${staged.repo.name} appeared while it was being cloned; ${stagingLeftByThisRun() ? "nothing in the workspace was changed" : "nothing was changed"}`,
+      );
     }
     if (text === null) {
       if (isEmptyDirectory(target)) rmdirSync(target);

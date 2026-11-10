@@ -170,6 +170,7 @@ import {
   originUrl,
   type StagedWorkspaceRepo,
   stageWorkspaceRepo,
+  stagingLeftByThisRun,
   takeStagingLeftLines,
 } from "./aidlc-workspace-sync.ts";
 import { noteReposManifestWritten } from "./aidlc-workspace-repos.ts";
@@ -751,8 +752,25 @@ let errorArgs: string[] = [];
 let errorProjectDirArg: string | undefined;
 let errorSelection: { intent?: string; space?: string } = {};
 
-function stagingLeftAfter(msg: string): string | { message: string; auditMessage: string } {
+// The add's own chat, when it runs in one: a staging folder its clone left
+// outside the workspace is kept for that chat's next AI-DLC step, which says it
+// once (as the add's repos.json note is), since the agent may not pass the
+// command's own output on; with no chat it is printed after the add's line.
+let stagingLeftChat: string | null = null;
+
+function stagingLeftToSay(projectDir: string): string[] {
   const left = takeStagingLeftLines();
+  if (left.length === 0 || stagingLeftChat === null) return left;
+  return addPendingPersonLines(projectDir, stagingLeftChat, left) ? [] : left;
+}
+
+// "Nothing was changed" is never said while a folder this run made is left.
+function nothingChanged(): string {
+  return stagingLeftByThisRun() ? "Nothing in the workspace was changed" : "Nothing was changed";
+}
+
+function stagingLeftAfter(projectDir: string, msg: string): string | { message: string; auditMessage: string } {
+  const left = stagingLeftToSay(projectDir);
   return left.length === 0 ? msg : { message: [msg, ...left].join("\n"), auditMessage: msg };
 }
 
@@ -770,7 +788,7 @@ function die(msg: string): never {
     // A staging folder an add's clone left outside the workspace is said after
     // the refusal, on its own line (none unless a clone was staged), and kept
     // off the audit row, which holds the refusal alone.
-    stagingLeftAfter(msg),
+    stagingLeftAfter(pd, msg),
     errorSelection.intent,
     errorSelection.space,
   );
@@ -9762,6 +9780,7 @@ function handleIntentRepos(
   const reason = auditReason(flags.reason === undefined ? undefined : maskUserinfo(flags.reason));
   const personWords = maskUserinfo(flags["person-words"]?.replace(/\s+/g, " ").trim() ?? "") || null;
   const selection = resolveWorkflowSelection(projectDir);
+  stagingLeftChat = selection.sessionId;
   const space = selection.space;
   const dirName = selection.intent;
   if (!dirName) {
@@ -9795,7 +9814,7 @@ function handleIntentRepos(
       // The clone stageWorkspaceRepo makes, with the credential left for the person to put back.
       const byHand = `git clone ${clone.repo.branch ? `--branch ${clone.repo.branch} ` : ""}-- ` +
         `${address === url ? `"${url}"` : "<the address with its credential>"} "${target}"`;
-      die(`Could not clone ${name} from ${address}: ${why}. Nothing was changed. To clone it yourself, run ${byHand}, then add it again.`);
+      die(`Could not clone ${name} from ${address}: ${why}. ${nothingChanged()}. To clone it yourself, run ${byHand}, then add it again.`);
     }
   }
   // A repos.json the add makes is noted by what it wrote, so the offer to list
@@ -9826,7 +9845,7 @@ function handleIntentRepos(
         const code = (err as NodeJS.ErrnoException).code ?? "";
         die(
           ["EACCES", "EBUSY", "EPERM"].includes(code)
-            ? `Could not move the new clone of ${name} into place: another program has a file in it open. Nothing was changed; add it again.`
+            ? `Could not move the new clone of ${name} into place: another program has a file in it open. ${nothingChanged()}; add it again.`
             : `Could not put the new clone of ${name} in place: ${maskUserinfo(errorMessage(err))}`,
         );
       }
@@ -9993,7 +10012,7 @@ function handleIntentRepos(
       }
       break;
   }
-  process.stdout.write([lines.join(" "), ...takeStagingLeftLines()].map((line) => `${line}\n`).join(""));
+  process.stdout.write([lines.join(" "), ...stagingLeftToSay(projectDir)].map((line) => `${line}\n`).join(""));
 }
 
 // The way on for work that keeps its code in the workspace folder itself once

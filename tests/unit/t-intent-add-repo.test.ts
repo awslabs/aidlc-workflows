@@ -13,7 +13,7 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import {
@@ -81,11 +81,11 @@ function gitEnv(): NodeJS.ProcessEnv {
 
 // A refusal prints {"error": "..."}: its text is read the way it is said, so a
 // Windows path in it has single backslashes.
-function utility(args: string[]): { rc: number; out: string } {
+function utility(args: string[], env: NodeJS.ProcessEnv = {}): { rc: number; out: string } {
   const r = spawnSync(process.execPath, [UTIL, ...args, "--project-dir", proj], {
     cwd: proj,
     encoding: "utf-8",
-    env: gitEnv(),
+    env: { ...gitEnv(), ...env },
   });
   const out = `${r.stdout ?? ""}${r.stderr ?? ""}`.split("\n").map((line) => {
     try {
@@ -621,6 +621,68 @@ describe("intent add-repo clones a repo that is not here yet", () => {
       rmSync(away, { recursive: true, force: true });
     }
   });
+
+  // In a chat the agent may not pass a command's own output on, so the line
+  // rides the chat's next step, which the agent says, and is said once there.
+  test("from a chat: a staging folder an earlier add left is kept for the chat's next step, not only printed", () => {
+    const bare = bareRepo("local", "notify");
+    const away = realpathSync(mkdtempSync(join(tmpdir(), "aidlc-t-add-away-")));
+    try {
+      const left = join(away, ".aidlc-workspace-sync-clone-notify-Ab12Cd");
+      mkdirSync(left);
+      writeFileSync(join(proj, "repos.json"), `${JSON.stringify({ repos: [{ name: "app-a" }] }, null, 2)}\n`);
+      personSays("clone notify into the folder beside the workspace");
+      const r = utility(["intent", "add-repo", "notify", "--path", join(away, "notify").replace(/\\/g, "/"), "--url", bare], {
+        // Claude Code names the chat a command runs in by its id and its own live process.
+        CLAUDE_CODE_SESSION_ID: SESSION,
+        CLAUDE_PID: String(process.pid),
+        CLAUDE_PROJECT_DIR: proj,
+      });
+      expect(r.rc, r.out).toBe(0);
+      const said = `AI-DLC could not remove the temporary folder ${left} it made to clone notify; nothing in it is needed, so you can delete it.`;
+      expect(r.out).not.toContain(said);
+      const kept = readFileSync(join(proj, "aidlc", ".aidlc-sessions", `${SESSION}.person-lines`), "utf-8");
+      expect(kept).toContain(JSON.stringify(said).slice(1, -1));
+      expect(existsSync(left)).toBe(true);
+    } finally {
+      rmSync(away, { recursive: true, force: true });
+    }
+  });
+
+  // The clone's own hook leaves a folder git cannot let go of and fails the
+  // clone: the refusal never says nothing was changed while its folder is left.
+  // chmod does not lock a file on Windows, and root opens any folder.
+  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "a clone that fails and leaves its staging folder: the refusal says nothing in the workspace was changed, then the line",
+    () => {
+      const bare = bareRepo("local", "notify");
+      const away = realpathSync(mkdtempSync(join(tmpdir(), "aidlc-t-add-away-")));
+      const template = join(away, "template");
+      mkdirSync(join(template, "hooks"), { recursive: true });
+      writeFileSync(join(template, "hooks", "post-checkout"), "#!/bin/sh\nmkdir -p held && echo x > held/f && chmod 555 held\nexit 1\n", {
+        mode: 0o755,
+      });
+      let stage: string | undefined;
+      try {
+        writeFileSync(join(proj, "repos.json"), `${JSON.stringify({ repos: [{ name: "app-a" }] }, null, 2)}\n`);
+        const r = utility(["intent", "add-repo", "notify", "--path", join(away, "notify").replace(/\\/g, "/"), "--url", bare], {
+          GIT_TEMPLATE_DIR: template,
+        });
+        stage = readdirSync(away).find((name) => name.startsWith(".aidlc-workspace-sync-clone-notify-"));
+        expect(r.rc, r.out).not.toBe(0);
+        expect(stage, readdirSync(away).join(", ")).toBeDefined();
+        expect(r.out).toContain(". Nothing in the workspace was changed. To clone it yourself, run ");
+        expect(r.out).not.toContain("Nothing was changed");
+        expect(r.out.trim().split("\n").at(-1)).toBe(
+          `AI-DLC could not remove the temporary folder ${join(away, stage ?? "")} it made to clone notify; nothing in it is needed, so you can delete it.`,
+        );
+      } finally {
+        const held = join(away, stage ?? "", "notify", "held");
+        if (stage !== undefined && existsSync(held)) chmodSync(held, 0o755);
+        rmSync(away, { recursive: true, force: true });
+      }
+    },
+  );
 
   test("--path to a checkout already there with --url: repos.json keeps the address, the credential left out", () => {
     bareRepo("acme", "notify");
