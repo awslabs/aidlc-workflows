@@ -428,10 +428,10 @@ describe("intent add-repo clones a repo that is not here yet", () => {
     cleanupTestProject(gitHome);
   });
 
-  test("a repo repos.json lists by name alone is cloned from its org, through the person's own git config: installed, recorded, said", () => {
+  test("a repo repos.json lists with its address is cloned from it, through the person's own git config: installed, recorded, said", () => {
     bareRepo("acme", "payments");
     insteadOf("git@github.com:acme/", "acme");
-    const raw = '{\n  // the team\'s repos\n  "org": "acme",\n  "repos": [\n    { "name": "app-a" },\n    { "name": "payments" }\n  ]\n}\n';
+    const raw = '{\n  // the team\'s repos\n  "org": "acme",\n  "repos": [\n    { "name": "app-a" },\n    { "name": "payments", "url": "git@github.com:acme/payments.git" }\n  ]\n}\n';
     writeFileSync(join(proj, "repos.json"), raw);
     const r = utility(["intent", "add-repo", "payments", "--reason", "the consent API lives in payments"]);
     expect(r.rc, r.out).toBe(0);
@@ -450,6 +450,28 @@ describe("intent add-repo clones a repo that is not here yet", () => {
     expect(rows).toContain("**Cloned From**: git@github.com:acme/payments.git");
     expect(rows).toContain("**Reason**: the consent API lives in payments");
     expect(rows).toMatch(/\*\*Source Baseline Addition\*\*: sha256:[0-9a-f]{64}/);
+    expect(stagingLeft()).toEqual([]);
+  });
+
+  // The list's org makes no address: an entry with a name alone is asked for
+  // its address, and git is never asked for github.com under the org. The trap
+  // sends that address to a real repo, so a clone of it would go through.
+  test("a repo repos.json lists by name alone, under an org, is asked for its address and nothing is cloned", () => {
+    bareRepo("acme", "payments");
+    insteadOf("git@github.com:acme/", "acme");
+    const raw = '{\n  "org": "acme",\n  "repos": [\n    { "name": "app-a" },\n    { "name": "payments" }\n  ]\n}\n';
+    writeFileSync(join(proj, "repos.json"), raw);
+    const asked = gitTrace();
+    const r = utility(["intent", "add-repo", "payments"], asked.env);
+    expect(r.rc, r.out).not.toBe(0);
+    expect(r.out).toContain('repos.json gives it no "url" to clone it from: add its "url" in repos.json, or in ');
+    expect(r.out).toContain(" for your own copy, or give it with --url. Nothing was changed.");
+    expect(r.out).not.toContain('"org"');
+    expect(r.out).not.toContain("github.com");
+    expect(asked.ranRemote()).toBe(false);
+    expect(existsSync(join(proj, "payments"))).toBe(false);
+    expect(readFileSync(join(proj, "repos.json"), "utf-8")).toBe(raw);
+    expect(audit()).not.toContain("**Added**: payments");
     expect(stagingLeft()).toEqual([]);
   });
 
@@ -478,7 +500,7 @@ describe("intent add-repo clones a repo that is not here yet", () => {
     expect(repos()).toEqual(["app-a", "payments"]);
   });
 
-  test("a hosted --url creates repos.json under its owner, without the credential, and no secret is printed or recorded", () => {
+  test("a hosted --url creates repos.json listing it, with no org, without the credential, and no secret is printed or recorded", () => {
     bareRepo("acme", "payments");
     insteadOf("https://user:s3cret-tok@example.invalid/acme/", "acme");
     const r = utility([
@@ -488,21 +510,21 @@ describe("intent add-repo clones a repo that is not here yet", () => {
     expect(r.rc, r.out).toBe(0);
     expect(r.out).toContain("Cloned payments from https://***@example.invalid/acme/payments.git");
     expect(r.out).toContain(
-      "repos.json is new: it lists payments under the org acme; commit it to share the list with your team. " +
+      "repos.json is new: it lists payments; commit it to share the list with your team. " +
         "Its address there leaves out the credential.",
     );
     const manifest = JSON.parse(readFileSync(join(proj, "aidlc", "repos.json"), "utf-8"));
-    expect(manifest).toEqual({ org: "acme", repos: [{ name: "payments", url: "https://example.invalid/acme/payments.git" }] });
+    expect(manifest).toEqual({ repos: [{ name: "payments", url: "https://example.invalid/acme/payments.git" }] });
     expect(r.out).not.toContain("s3cret-tok");
     expect(audit()).not.toContain("s3cret-tok");
     expect(audit()).toContain("**Person Words**: add payments from https://***@example.invalid/acme/payments.git");
     expect(readFileSync(join(proj, "aidlc", "repos.json"), "utf-8")).not.toContain("s3cret-tok");
   });
 
-  // The list a first add by address writes names that address's owner as its
-  // org, on any host; a later add by name of a repo the list does not name
-  // must not turn that owner into a github.com address. The trap sends that
-  // made-up address to a real local repo, so a clone of it would go through.
+  // The list a first add by address writes names no org, on any host; a later
+  // add by name of a repo the list does not name must not make a github.com
+  // address from that address's owner. The trap sends that made-up address to
+  // a real local repo, so a clone of it would go through.
   test.each([
     ["a GitLab-style https address", "https://gitlab.example.invalid/code/"],
     ["an ssh address on another host", "git@git.example.invalid:code/"],
@@ -517,9 +539,9 @@ describe("intent add-repo clones a repo that is not here yet", () => {
     const added = utility(["intent", "add-repo", "storefront", "--url", `${prefix}storefront.git`], first.env);
     expect(added.rc, added.out).toBe(0);
     expect(first.ranRemote()).toBe(true);
-    expect(added.out).toContain("repos.json is new: it lists storefront under the org code; commit it to share the list with your team.");
+    expect(added.out).toContain("repos.json is new: it lists storefront; commit it to share the list with your team.");
     const raw = readFileSync(join(proj, "aidlc", "repos.json"), "utf-8");
-    expect(JSON.parse(raw)).toEqual({ org: "code", repos: [{ name: "storefront", url: `${prefix}storefront.git` }] });
+    expect(JSON.parse(raw)).toEqual({ repos: [{ name: "storefront", url: `${prefix}storefront.git` }] });
 
     const second = gitTrace();
     const r = utility(["intent", "add-repo", "billing", "--person-words", "add the billing repo too"], second.env);

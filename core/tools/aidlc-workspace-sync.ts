@@ -166,16 +166,16 @@ function detectDefaultBranch(dir: string): string | null {
   return result.stdout.trim().replace(/^origin\//, "") || null;
 }
 
-// The address a missing checkout is cloned from: its own `url`, else the org
-// default; null when repos.json gives neither.
-function cloneUrl(manifest: WorkspaceManifest, repo: WorkspaceRepoEntry): string | null {
-  if (repo.url !== undefined) return repo.url;
-  return manifest.org === undefined ? null : `git@github.com:${manifest.org}/${repo.name}.git`;
+// The address a missing checkout is cloned from: its own `url`, null without
+// one. A repos.json `org` is read and ignored: an address made from it may name
+// a host the team never uses.
+function cloneUrl(repo: WorkspaceRepoEntry): string | null {
+  return repo.url ?? null;
 }
 
-/** The address a repo is cloned from: its url, else the org's; null with neither. */
-export function workspaceCloneUrl(org: string | undefined, repo: WorkspaceRepoEntry): string | null {
-  return cloneUrl({ ...(org === undefined || org === "" ? {} : { org }), repos: [] }, repo);
+/** The address a repo is cloned from: its url; null without one. */
+export function workspaceCloneUrl(repo: WorkspaceRepoEntry): string | null {
+  return cloneUrl(repo);
 }
 
 // What workspace-sync prints hides the userinfo of any address in it, so a
@@ -852,9 +852,9 @@ function preflight(
     const repo = resolved.get(declared.name) ?? declared;
     const dir = repoDir(root, repo.name);
     if (!repoIsWorkspace(root, repo.name) && (!pathEntryExists(dir) || isEmptyDirectory(dir))) {
-      if (cloneUrl(manifest, repo) === null) {
+      if (cloneUrl(repo) === null) {
         notCloned.push(
-          `${repoNotThereLine(root, repo.name)} repos.json gives it no "url" and no "org" to clone it from: ` +
+          `${repoNotThereLine(root, repo.name)} repos.json gives it no "url" to clone it from: ` +
             `add its "url" in repos.json, or in ${REPOS_LOCAL_PLACE} for your own copy.`,
         );
         continue;
@@ -1006,13 +1006,12 @@ export class CloneFailure extends SyncFailure {
 function cloneIntoStage(
   root: string,
   stagePaths: ReadonlyMap<string, string>,
-  manifest: WorkspaceManifest,
   repos: WorkspaceRepoEntry[],
   log: (line: string) => void,
 ): void {
   for (const repo of repos) {
     const destination = stagePaths.get(repo.name) ?? "";
-    const url = cloneUrl(manifest, repo) ?? "";
+    const url = cloneUrl(repo) ?? "";
     log(
       `  staging clone ${repo.name} from ${maskUserinfo(url)}` +
         (repo.branch ? ` (branch ${repo.branch})` : "") +
@@ -1141,7 +1140,6 @@ function cloneDestination(root: string, staged: StagedClones, name: string): str
 // puts elsewhere. It takes no lock of its own.
 function stagePlan(
   root: string,
-  manifest: WorkspaceManifest,
   repos: WorkspaceRepoEntry[],
   log: (line: string) => void,
   targets: ReadonlyMap<string, string> = new Map(),
@@ -1165,7 +1163,7 @@ function stagePlan(
         staged.stagePaths.set(repo.name, join(stage, repo.name));
       }
     }
-    cloneIntoStage(root, staged.stagePaths, manifest, repos, log);
+    cloneIntoStage(root, staged.stagePaths, repos, log);
     return staged;
   } catch (err) {
     removeTransaction(staged);
@@ -1190,7 +1188,7 @@ function applyPlan(
   plan: ReconcilePlan,
 ): void {
   const before = snapshotOutputs(root);
-  const staged = stagePlan(root, manifest, plan.toClone, console.log);
+  const staged = stagePlan(root, plan.toClone, console.log);
   const { recoveryDir, retainedRecovery } = commitPlan(
     root,
     manifest,
@@ -1451,18 +1449,13 @@ export interface StagedWorkspaceRepo {
 }
 
 /**
- * Clone `repo` (its `url`, else `org`'s address) into a staging folder on the
- * volume its checkout goes to: `target` when the caller names the folder, else
- * where repoDir puts it. Throws CloneFailure.
+ * Clone `repo` from its `url` into a staging folder on the volume its checkout
+ * goes to: `target` when the caller names the folder, else where repoDir puts
+ * it. Throws CloneFailure.
  */
-export function stageWorkspaceRepo(
-  root: string,
-  org: string | undefined,
-  repo: WorkspaceRepoEntry,
-  target?: string,
-): StagedWorkspaceRepo {
+export function stageWorkspaceRepo(root: string, repo: WorkspaceRepoEntry, target?: string): StagedWorkspaceRepo {
   const targets = new Map(target === undefined ? [] : [[repo.name, target]]);
-  return { clones: stagePlan(root, { ...(org === undefined ? {} : { org }), repos: [repo] }, [repo], () => {}, targets), repo };
+  return { clones: stagePlan(root, [repo], () => {}, targets), repo };
 }
 
 /**
@@ -1527,7 +1520,7 @@ export function installWorkspaceManifest(root: string, manifest: { raw: string |
     parsed,
     { path: reposManifestPath(root), ...manifest },
     { toClone: [], toKeep: [], toRemove: [], branchWarnings: [], notCloned: [] },
-    stagePlan(root, parsed, [], () => {}),
+    stagePlan(root, [], () => {}),
     before,
     () => {},
   );
@@ -1590,7 +1583,7 @@ function writeManifest(root: string): number {
     const found = manifest === null ? [] : discoverSiblingRepos(root)
       .filter((name) => !isProjectSubmodule(root, name) && !manifest.repos.some((repo) => repo.name === name));
     const next = found.reduce<string | null>(
-      (text, name) => text === null ? null : workspaceManifestWith(text, manifest?.org, { name, url: origin(join(root, name)), path: name }),
+      (text, name) => text === null ? null : workspaceManifestWith(text, { name, url: origin(join(root, name)), path: name }),
       raw,
     );
     if (raw === null || next === null || found.length === 0) {

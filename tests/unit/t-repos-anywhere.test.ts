@@ -345,14 +345,14 @@ describe("workspace-sync clones to the path, by path", () => {
     expect(existsSync(join(root, "work", "billing"))).toBe(false);
   });
 
-  test("a blank url with no org is not cloned, and one line names how to add a url", () => {
+  test("a blank url is not cloned, and one line names how to add a url", () => {
     const { ws } = layout();
     writeFileSync(join(ws, "repos.json"), JSON.stringify({ repos: [{ name: "billing", url: "", path: "../billing" }] }));
     const result = sync(ws);
     expect(result.status, result.out).toBe(2);
     expect(result.out).toContain(
       "billing is not at ../billing, where repos.json puts it. Clone it there, or give its path in aidlc/repos.local.json. " +
-        'repos.json gives it no "url" and no "org" to clone it from: add its "url" in repos.json, or in aidlc/repos.local.json for your own copy.',
+        'repos.json gives it no "url" to clone it from: add its "url" in repos.json, or in aidlc/repos.local.json for your own copy.',
     );
   });
 

@@ -9837,7 +9837,7 @@ function handleIntentRepos(
   let staged: StagedWorkspaceRepo | null = null;
   if (clone !== null) {
     try {
-      staged = stageWorkspaceRepo(projectDir, clone.org, clone.repo, target);
+      staged = stageWorkspaceRepo(projectDir, clone.repo, target);
     } catch (err) {
       const url = clone.address;
       const address = maskUserinfo(url);
@@ -10084,7 +10084,7 @@ function plannedRepoPath(
   next: string | null;
   note: string;
   shown: string;
-  clone: { repo: WorkspaceRepoEntry; org: string | undefined; address: string; manifest: { raw: string | null; next: string | null }; note: null } | null;
+  clone: { repo: WorkspaceRepoEntry; address: string; manifest: { raw: string | null; next: string | null }; note: null } | null;
 } {
   const shown = displayRepoPath(typed);
   const dir = mappedRepoDir(projectDir, typed);
@@ -10113,7 +10113,7 @@ function plannedRepoPath(
   const kept = address === undefined ? undefined : withoutCredentials(address);
   const file = reposManifestPath(projectDir);
   const raw = existsSync(file) ? readFileSync(file, "utf-8") : null;
-  const next = workspaceManifestWith(raw, repos.manifest?.org, { name, path: shown, ...(kept === undefined ? {} : { url: kept }) });
+  const next = workspaceManifestWith(raw, { name, path: shown, ...(kept === undefined ? {} : { url: kept }) });
   if (next === null) die(`${name} could not be added to repos.json, which has no repos list. Nothing was changed.`);
   const share = isAbsolute(shown) || /^[A-Za-z]:\//.test(shown)
     ? `It is a path on this machine, so a teammate whose copy is elsewhere gives theirs in ${REPOS_LOCAL_PLACE}.`
@@ -10127,7 +10127,6 @@ function plannedRepoPath(
     note: `${raw === null ? "repos.json is new: it lists" : "repos.json now lists"} ${name} ${where}. ${share}${stripped}`,
     clone: there ? null : {
       repo: { name, path: shown, url: url! },
-      org: repos.manifest?.org,
       address: url!,
       manifest: { raw, next },
       note: null,
@@ -10181,18 +10180,16 @@ function workspaceManifestNames(projectDir: string): string[] {
 }
 
 // Where a repo not on disk is cloned from and what repos.json becomes: the
-// person's `--url`, else its own entry (a name-only entry from the repos.json
-// `org`). A name no repos.json lists gets no address made up from the org: the
-// org may be another host's owner, read off the address of the repo that
-// started the list. The address goes to git as given; repos.json, which the
-// team commits, gets it without credentials. With no repos.json, a hosted
-// `--url` creates one naming its owner as the org; a local path or another
-// shape creates none, and the line says so.
+// person's `--url`, else its own entry's `url`. No address is made up from the
+// repos.json `org`, which is read and ignored: it may be another host's owner.
+// The address goes to git as given; repos.json, which the team commits, gets
+// it without credentials. With no repos.json, a hosted `--url` creates one
+// listing it; a local path or another shape creates none, and the line says so.
 function plannedRepoClone(
   projectDir: string,
   name: string,
   url: string | undefined,
-): { repo: WorkspaceRepoEntry; org: string | undefined; address: string; manifest: { raw: string | null; next: string | null }; note: string | null } {
+): { repo: WorkspaceRepoEntry; address: string; manifest: { raw: string | null; next: string | null }; note: string | null } {
   const path = reposManifestPath(projectDir);
   const raw = existsSync(path) ? readFileSync(path, "utf-8") : null;
   let manifest: WorkspaceManifest | null = null;
@@ -10205,14 +10202,15 @@ function plannedRepoClone(
   }
   const entry = manifest?.repos.find((repo) => repo.name === name);
   if (manifest !== null && entry !== undefined) {
-    if (url === undefined && entry.url === undefined && manifest.org === undefined) {
+    const repo = url === undefined ? entry : { ...entry, url };
+    const address = workspaceCloneUrl(repo);
+    if (address === null) {
       die(
-        `${repoNotThereLine(projectDir, name)} repos.json gives it no "url" and no "org" to clone it from: ` +
+        `${repoNotThereLine(projectDir, name)} repos.json gives it no "url" to clone it from: ` +
           `add its "url" in repos.json, or in ${REPOS_LOCAL_PLACE} for your own copy, or give it with --url. Nothing was changed.`,
       );
     }
-    const repo = url === undefined ? entry : { ...entry, url };
-    return { repo, org: manifest.org, address: workspaceCloneUrl(manifest.org, repo)!, manifest: { raw, next: null }, note: null };
+    return { repo, address, manifest: { raw, next: null }, note: null };
   }
   if (url === undefined) {
     die(
@@ -10226,26 +10224,23 @@ function plannedRepoClone(
   const stripped = kept !== url ? " Its address there leaves out the credential." : "";
   const repo: WorkspaceRepoEntry = { name, url };
   if (manifest !== null) {
-    const next = workspaceManifestWith(raw, manifest.org, written);
+    const next = workspaceManifestWith(raw, written);
     if (next === null) die(`${name} could not be added to repos.json, which has no repos list. Nothing was changed.`);
-    return { repo, org: manifest.org, address: workspaceCloneUrl(manifest.org, repo)!, manifest: { raw, next }, note: `repos.json now lists it.${stripped}` };
+    return { repo, address: url, manifest: { raw, next }, note: `repos.json now lists it.${stripped}` };
   }
-  const owner = hostedAddressOwner(url);
-  if (owner === null) {
+  if (hostedAddressOwner(url) === null) {
     return {
       repo,
-      org: "",
-      address: url!,
+      address: url,
       manifest: { raw: null, next: null },
       note: "This workspace has no repos.json, so a teammate's workspace does not get it by itself.",
     };
   }
   return {
     repo,
-    org: owner,
-    address: url!,
-    manifest: { raw: null, next: workspaceManifestWith(null, owner, written) },
-    note: `repos.json is new: it lists ${name} under the org ${owner}; commit it to share the list with your team.${stripped}`,
+    address: url,
+    manifest: { raw: null, next: workspaceManifestWith(null, written) },
+    note: `repos.json is new: it lists ${name}; commit it to share the list with your team.${stripped}`,
   };
 }
 

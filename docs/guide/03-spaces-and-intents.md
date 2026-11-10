@@ -587,10 +587,9 @@ it, is still read, and the next refresh moves it into `aidlc/`
 
 ```json
 {
-  "org": "your-github-org",
   "repos": [
-    { "name": "checkout-api", "branch": "main" },
-    { "name": "checkout-web" },
+    { "name": "checkout-api", "url": "git@github.com:your-github-org/checkout-api.git", "branch": "main" },
+    { "name": "checkout-web", "url": "https://github.com/your-github-org/checkout-web.git" },
     { "name": "billing", "url": "https://gitlab.example.com/platform/billing.git", "path": "../billing" }
   ]
 }
@@ -607,10 +606,10 @@ it, is still read, and the next refresh moves it into `aidlc/`
   (a `docs/` folder, say), list the workspace too, as `"."`: with only the repos
   inside it listed, the reviews and change checks leave its folders out.
 - `url` is any address git clones (GitHub https or SSH, GitLab, anything else).
-  A blank `url` counts as not set.
-- `org` is optional. With it, a repo with no `url` clones from
-  `git@github.com:<org>/<name>.git`; without it, such a repo is not cloned, and
-  the sync tool says how to add its `url`.
+  A blank `url` counts as not set. A repo with no `url` is not cloned, and the
+  sync tool says how to add its `url`.
+- An `org` key, which releases before 2.12 used to clone a repo with no `url`
+  from `git@github.com:<org>/<name>.git`, is read and ignored.
 - `branch` selects the checkout for a new clone and is an advisory expectation
   for a repo already on disk; omit it to use the repo's own default.
 - A repo name is the name of one folder, with the characters a discovered folder
@@ -658,11 +657,10 @@ multi-root workspace.
 writes this file too. A repo that work needs but nobody cloned here is cloned
 from its entry; a repo with no entry is cloned from the address you give and
 gets one, with the file's comments and layout kept, and without an address you
-are asked for one. A repo that `repos.json` lists by name alone is cloned from
-github.com under the list's org, so a team on GitHub can add a line with the
-repo's name and then add it by name. With no `repos.json` yet, a hosted
-`--url` (a host, an owner and a name) creates one whose `org` is that owner, so
-commit it to share the list with your team. An address written here never keeps
+are asked for one. A repo that `repos.json` lists by name alone is not cloned:
+the line asks for its `url`, which you add to its entry or give with `--url`.
+With no `repos.json` yet, a hosted `--url` (a host, an owner and a name)
+creates one that lists the repo, so commit it to share the list with your team. An address written here never keeps
 its credentials.
 
 The manifest is a convenience, not a second source of truth. **Disk wins at

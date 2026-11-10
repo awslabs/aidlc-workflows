@@ -1434,6 +1434,26 @@ describe("t255 workspace-sync - reconcile checkout against repos.json", () => {
     expect(git(join(ws, "checkout-api"), "config", "--get", "remote.origin.url")).toBe(tokenUrl);
   });
 
+  // The org makes no address: a repo listed by name alone is not cloned, and
+  // git never hears of github.com under the org. The rewrite sends that address
+  // to a real repo, so a clone of it would go through.
+  test("a repo listed by name alone under an org is not cloned, and one line asks for its url", () => {
+    const sourceWs = freshRealWorkspace('{ "repos": [] }');
+    const remote = git(makeRepo(sourceWs, "source"), "remote", "get-url", "origin");
+    const ws = freshRealWorkspace(JSON.stringify({ org: "acme", repos: [{ name: "checkout-api" }] }));
+    const result = runSync(ws, [], {
+      ...GIT_ENV,
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: `url.${remote}.insteadOf`,
+      GIT_CONFIG_VALUE_0: "git@github.com:acme/checkout-api.git",
+    });
+    expect(result.status, result.out).toBe(2);
+    expect(result.out).toContain('repos.json gives it no "url" to clone it from: add its "url" in repos.json, or in ');
+    expect(result.out).not.toContain('"org"');
+    expect(result.out).not.toContain("github.com");
+    expect(existsSync(join(ws, "checkout-api"))).toBe(false);
+  });
+
   test("clone-failure text from git hides userinfo; addresses without it print unchanged", () => {
     expect(
       maskUserinfo(

@@ -506,11 +506,9 @@ export function repoNotThereLine(projectDir: string, repoName: string): string {
     : `${repoName} is not at ${where} in this workspace. Clone it there, or list it in repos.json with its path.`;
 }
 
-// Whether repos.json gives a repo an address to clone it from: its own url,
-// or the org's.
+// Whether repos.json gives a repo an address to clone it from: its own url.
 export function repoCloneable(projectDir: string, repoName: string): boolean {
-  const repos = readWorkspaceRepos(projectDir);
-  return repos.entries.get(repoName)?.url !== undefined || (repos.entries.has(repoName) && repos.manifest?.org !== undefined);
+  return readWorkspaceRepos(projectDir).entries.get(repoName)?.url !== undefined;
 }
 
 // With this person's repos.local.json unreadable: what is wrong, and where the
@@ -556,16 +554,18 @@ export function workspaceGitignoreEntries(manifest: WorkspaceManifest): string[]
 }
 
 // repos.json after `entry` joins it: one entry added in place, the file's
-// comments and layout kept, or a new file when there is none. Null when the
-// text has no `repos` array to add to.
-export function workspaceManifestWith(raw: string | null, org: string | undefined, entry: WorkspaceRepoEntry): string | null {
-  if (raw === null) return `${JSON.stringify({ ...(org === undefined ? {} : { org }), repos: [entry] }, null, 2)}\n`;
+// comments and layout kept (an `org` in it stays), or a new file listing it,
+// with no `org`, when there is none. Null when the text has no `repos` array to
+// add to.
+export function workspaceManifestWith(raw: string | null, entry: WorkspaceRepoEntry): string | null {
+  if (raw === null) return `${JSON.stringify({ repos: [entry] }, null, 2)}\n`;
   return appendJsoncArrayItem(raw, "repos", entry);
 }
 
 // The owner in a hosted address that has a host, an owner and a name
-// (`https://host/<owner>/<name>.git`, `git@host:<owner>/<name>.git`): what a new
-// repos.json names as its `org`. Null for a local path or any other shape.
+// (`https://host/<owner>/<name>.git`, `git@host:<owner>/<name>.git`): an
+// address a teammate can clone too, so a first add from it starts repos.json.
+// Null for a local path or any other shape.
 export function hostedAddressOwner(url: string): string | null {
   const hosted =
     /^(?!file:)[A-Za-z][A-Za-z0-9+.-]*:\/\/(?:[^\s/?#@]*@)?[^\s/?#@]+\/([^\s/?#]+)\/[^\s/?#]+$/i.exec(url) ??

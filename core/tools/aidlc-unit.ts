@@ -8793,7 +8793,7 @@ function leadRepoAddresses(projectDir: string, oid: string | null): Map<string, 
   try {
     const found = workspaceManifestAt((rel) => textAt(projectDir, oid, rel));
     for (const repo of found?.manifest.repos ?? []) {
-      const address = workspaceCloneUrl(found?.manifest.org, repo);
+      const address = workspaceCloneUrl(repo);
       if (address !== null) addresses.set(repo.name, address);
     }
   } catch {

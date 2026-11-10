@@ -423,10 +423,10 @@ under `## Mandated` in its space memory.
 When the repo is not in the workspace yet, it is cloned first, beside the other
 repos, with the same code `aidlc system workspace-sync` uses and your own git
 setup (your credential helpers and `insteadOf` rules apply as at your own shell). The
-address is the one you give with `--url`, else the repo's `repos.json` entry.
-A repo that `repos.json` lists by name alone is cloned from github.com under the
-list's org, so a team on GitHub can add a line with the repo's name and then add
-it by name. The agent never passes `--url` on its own, so a name it found in a
+address is the one you give with `--url`, else the `url` of the repo's
+`repos.json` entry. A repo that `repos.json` lists by name alone, with no `url`,
+is not cloned: the line says to add its `url` there or give it with `--url`.
+The agent never passes `--url` on its own, so a name it found in a
 code search is cloned only when `repos.json` lists it. The clone runs in a
 staging folder and is moved into place under
 the workspace lock; then the `repos.json` entry is written (your comments and
@@ -435,8 +435,8 @@ refreshed, and only then is the change recorded. The line names the address,
 with the user part of an address such as `https://user:token@host/...` shown
 as `***`; `repos.json`, which your team commits, gets the address without its
 credentials. With no `repos.json`, a
-hosted `--url` (a host, an owner and a name) creates one that names the owner as
-its `org`, and the line says so: commit it to share the list. A local path, or
+hosted `--url` (a host, an owner and a name) creates one that lists the repo,
+and the line says so: commit it to share the list. A local path, or
 an address of another shape, adds the repo without creating the file. When the
 clone fails, nothing is recorded or changed, and the line gives git's reason
 and the `git clone` command to run by hand. A repo no `repos.json` lists, added
@@ -3405,8 +3405,8 @@ rewrites the managed block in the workspace `.gitignore` to one `/{path}/` line
 per repo whose checkout sits inside the workspace (never the workspace itself,
 plus its two own folder patterns), and writes an `aidlc.code-workspace` VSCode
 multi-root file listing the root plus each repo's folder. A repo with no `url`
-and no `org` to clone it from is left as it is, with one line on how to add its
-`url` (exit `2`), and a line of `repos.local.json` that is not read is said
+to clone it from is left as it is, with one line on how to add its `url` (exit
+`2`; an `org` in `repos.json` is read and ignored), and a line of `repos.local.json` that is not read is said
 once. In a Copilot project that file also carries VS Code's agent request cap,
 `"settings": { "chat.agent.maxRequests": 200 }`, added once to a file with no
 settings yet; the keys and values already in its settings are kept (the file
