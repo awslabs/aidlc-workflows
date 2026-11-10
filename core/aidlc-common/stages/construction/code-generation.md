@@ -131,6 +131,23 @@ Plan should cover (as applicable to the unit):
 - [ ] Documentation (inline and API docs)
 - [ ] Deployment artifacts (Dockerfiles, IaC)
 
+**Data-model elements are named, never implied.** A step that creates or
+changes an object, entity, table, field or column names each one, with the
+requirement, acceptance criterion, business rule or design element that asks
+for it; a technical column that element needs (a key, an index, its created
+or updated time) shares its reason. "Schema changes" or "data model" as a step
+with no names is not a plan step. An element that nothing upstream asks for is
+the developer's own call, and the person decides it: put it under a
+`## Assumptions` section of the plan, one line each, not a checkbox (the
+checkbox is on the step that adds it), naming that step and why the work needs
+it, never only in a step. The person reads the Summary's `Adds:` line when
+the engine asks for approval, so that line is where they learn of such an
+element before anything is written; on a platform where a schema change is
+shared and hard to undo, it is their one chance to say no. When nothing
+upstream covers an element the work cannot do without, say so there rather
+than inventing a requirement for it. A plan that adds no such element has no
+`## Assumptions` section and no `Adds:` line.
+
 When the deliverable is infrastructure-as-code (always in the `infra` scope),
 this stage writes the IaC, under the same Plan Approval as application code:
 Infrastructure Design only describes it, and Environment Provisioning
@@ -229,8 +246,8 @@ with no step after it that the threshold exit would stop: Build and Test does
 not exempt a command whose exit stopped a later step. A coverage target set
 for this Unit or one of its paths still gets its own Unit-scoped check.
 
-Start the plan with a short `## Summary` section of three lines. The engine
-shows them to the person when it asks for approval:
+Start the plan with a short `## Summary` section of three lines, one line each.
+The engine shows them to the person when it asks for approval:
 
 ```
 ## Summary
@@ -238,6 +255,13 @@ shows them to the person when it asks for approval:
 - Builds: <what this plan builds, in a few words>
 - Touches: <the main files or folders it creates or changes>
 - Tests: <how many tests, and of what kind>
+```
+
+When the plan adds an element nothing upstream asks for, the Summary gets one
+more line, the count first:
+
+```
+- Adds: <how many data-model elements no requirement asks for, then their names>; see Assumptions
 ```
 
 ### Step 3: Plan Approval
@@ -485,6 +509,14 @@ Include in the delegation prompt:
   The subagent must NEVER relax, lower, or disable a defined target, including
   threshold settings in test or build configuration, to make a step pass; it
   must surface the gap instead.
+- The instruction that a data-model element (an object, entity, table, field
+  or column) that nothing upstream or in the approved plan asks for is built
+  only once the plan names it; a key, index or created or updated time that a
+  requested element needs is part of that element. One the build turns out to
+  need goes into the plan first, as a step of its own, with its line under
+  `## Assumptions` and the Summary's `Adds:` line, and only then into the code:
+  that edit is a change to the approved plan, and Step 3's after-approval rules
+  decide what the person sees.
 
 The subagent generates all code, test files, and configuration artifacts in the workspace.
 

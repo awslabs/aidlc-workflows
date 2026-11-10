@@ -2318,6 +2318,12 @@ On the other harnesses it says that the tool has no status line and that
 
 Print the framework version (`aidlc <X.Y.Z>`) and exit. Read-only — works without a workflow and never prompts to resume one.
 
+In a project pinned with `aidlc config --pin` to this release or a later one,
+the answer names the pinned release, which runs the workflow, and this
+machine's active release when it is a different one: `this project is pinned
+to aidlc 2.10.0, which runs its workflow (machine active: 2.9.0)`. A pin to an
+earlier release answers with this machine's version line.
+
 **Syntax:**
 
 ```

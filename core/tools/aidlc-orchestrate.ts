@@ -101,8 +101,10 @@ import {
   writeSync,
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { pinnedVersionNote, VERSION_ID } from "./aidlc-channel.ts";
 import { CONFIG_SECTIONS } from "./aidlc-command.ts";
 import { isGitRepo, isProjectSubmodule } from "./aidlc-git.ts";
+import { AIDLC_VERSION } from "./aidlc-version.ts";
 import { fileURLToPath } from "node:url";
 import {
   deleteQuestion,
@@ -4877,6 +4879,15 @@ function approvedPlanUndoReading(projectDir: string, stateContent: string): stri
 // answer a question from it name the same command.
 function readOnlyCommand(sub: string): string {
   return `${aidlcInvocation()} ${terminalDispatcherArgv({ subcommand: sub, source: "read-only-flag" }).join(" ")}`;
+}
+
+// The release this engine runs as because the project's pin started it, and the
+// machine's active release that started it: dispatchPinnedVersion in aidlc.ts
+// hands both to the pinned release it launches.
+function pinDispatchedVersion(): { version: string; active?: string } | null {
+  if (process.env.AIDLC_PIN_DISPATCHED !== AIDLC_VERSION) return null;
+  const active = process.env.AIDLC_ACTIVE_VERSION;
+  return { version: AIDLC_VERSION, ...(active && VERSION_ID.test(active) ? { active } : {}) };
 }
 
 // Words that ask about the work (where it stands, what is left) are a question
@@ -13172,10 +13183,18 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     const extra = flags.readOnlyArgs && flags.readOnlyArgs.length > 0
       ? ` ${flags.readOnlyArgs.join(" ")}`
       : "";
+    const readOnly = "This is a read-only utility, NOT workflow work: do NOT run `next` and do NOT advance, resume, or run any workflow stage.";
+    // Here the project's pin launched this engine, and `aidlc version` would
+    // answer from this machine's release instead, so the engine answers itself.
+    const pinned = sub === "version" ? pinDispatchedVersion() : null;
+    if (pinned) {
+      emit(turnEndingPrint(
+        `Tell the person, in one line, that ${pinnedVersionNote(pinned.version, pinned.active)}, then stop. ${readOnly}`,
+      ));
+      return;
+    }
     const command = readOnlyCommand(sub);
-    emit(turnEndingPrint(
-      `Run \`${command}${extra}\`, print its output verbatim, then stop. This is a read-only utility, NOT workflow work: do NOT run \`next\` and do NOT advance, resume, or run any workflow stage.`,
-    ));
+    emit(turnEndingPrint(`Run \`${command}${extra}\`, print its output verbatim, then stop. ${readOnly}`));
     return;
   }
 

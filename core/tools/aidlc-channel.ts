@@ -8,6 +8,8 @@
 // current AIDLC_VERSION, the UTC build date, and a positive build counter for
 // that date. Nothing else is a version anywhere in the install tree, so a
 // version is always a safe directory name by construction.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 
 export const STABLE_CHANNEL = "stable";
@@ -81,6 +83,26 @@ export function requireVersion(value: string): string {
     throw new Error("invalid version: numeric components must be safe integers");
   }
   return value;
+}
+
+// The release a project's `.aidlc-version` pins it to, or null when it has no
+// well-formed pin. It never throws: doctor reports a malformed pin, and the
+// pinned routes refuse one with its fix.
+export function projectPinnedVersion(projectDir: string): string | null {
+  try {
+    const value = readFileSync(join(projectDir, ".aidlc-version"), "utf-8").trim();
+    return VERSION_ID.test(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+// What a version answer says about a pinned project: the pin runs the workflow,
+// and this machine's own release is named only when it is a different one, as
+// doctor's "machine active" does.
+export function pinnedVersionNote(pinned: string, active?: string): string {
+  const machine = active && active !== pinned ? ` (machine active: ${active})` : "";
+  return `this project is pinned to aidlc ${pinned}, which runs its workflow${machine}`;
 }
 
 export function parseVersion(value: string): ParsedVersion {
