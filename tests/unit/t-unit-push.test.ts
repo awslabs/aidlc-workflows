@@ -1669,8 +1669,9 @@ describe("a team's done Unit that the lead's Build and Test sends back", () => {
     const { home } = twoMergedAtBuildAndTest();
     const message = String(next(home.dir, undefined, ["--stage", "code-generation", "--unit", "refunds"]).message);
     expect(message).toContain("send-back refunds --request-file");
-    expect(message).toContain("aidlc-unit.ts release refunds");
     expect(message).toContain("aidlc-unit.ts assign --here refunds --request-file aidlc/.aidlc-engine/request-text/unit-assign.txt");
+    // A merged Unit's release is refused once the lead's record is pushed: the take-back is assign's alone.
+    expect(message).not.toContain("release refunds");
     expect(message).toContain("next --stage code-generation --unit refunds");
     expect(message).not.toContain("never reopened here");
     const prose = readFileSync(join(AIDLC_SRC, "aidlc-common", "protocols", "stage-protocol-loopback.md"), "utf-8");
@@ -1685,7 +1686,6 @@ describe("a team's done Unit that the lead's Build and Test sends back", () => {
     const chat = personsChat(session);
     const words = "Fix it here, in refunds and checkout-ui, then run Build and Test again.";
     expect(hook(home.dir, chat, { hook_event_name: "UserPromptSubmit", session_id: session, prompt: words }).status).toBe(0);
-    for (const unit of ["refunds", "checkout-ui"]) expect(run(UNIT, ["release", unit], home.dir, chat).status).toBe(0);
     const here = run(UNIT, ["assign", "--here", "refunds,checkout-ui", "--person-words", words], home.dir, chat);
     expect(here.json?.notice).toBe(
       "refunds is built here now, on top of what alice merged. checkout-ui is built here now, on top of what alice merged.",
@@ -1709,10 +1709,21 @@ describe("a team's done Unit that the lead's Build and Test sends back", () => {
     }
     expect(completions()).toBe(before);
     // The stages before it keep the work that merged.
-    const state = readFileSync(join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD, "aidlc-state.md"), "utf-8");
+    const statePath = join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD, "aidlc-state.md");
     for (const unit of ["refunds", "checkout-ui"]) {
-      expect(state).toMatch(new RegExp(`^\\| ${unit} \\| [^|]* \\| \\[x\\] \\| \\[x\\] \\| \\[x\\] \\| \\[x\\] \\| \\[R\\] \\|`, "m"));
+      expect(readFileSync(statePath, "utf-8"))
+        .toMatch(new RegExp(`^\\| ${unit} \\| [^|]* \\| \\[x\\] \\| \\[x\\] \\| \\[x\\] \\| \\[x\\] \\| \\[R\\] \\|`, "m"));
     }
+    // Reopened further back after that, it goes back to the earliest stage reopened.
+    const back = spawnSync("bash", ["-c", bashLine("bun .claude/tools/aidlc-jump.ts reopen --target nfr-requirements --stages " +
+      "nfr-requirements,nfr-design,infrastructure-design,code-generation --units refunds --scope feature")], {
+      cwd: home.dir, encoding: "utf-8", env: chat,
+    });
+    expect(back.status, `${back.stdout}${back.stderr}`).toBe(0);
+    // checkout-ui's Code Generation, in progress, goes first; refunds' row is open again from NFR Requirements.
+    const earlier = next(home.dir, chat);
+    expect(earlier.kind, JSON.stringify(earlier).slice(0, 600)).toBe("run-stage");
+    expect(readFileSync(statePath, "utf-8")).toMatch(/^\| refunds \| [^|]* \| \[x\] \| (?!\[x\])/m);
   });
 
   // A live run on Codex: payments said "yes, go back to it and fix it" in the
@@ -1828,6 +1839,10 @@ function twoMergedAtBuildAndTest() {
   git(home.dir, ["fetch", "-q", "origin"]);
   const step = next(home.dir);
   expect(step.stage, JSON.stringify(step).slice(0, 400)).toBe("build-and-test");
+  // The lead checks the record in, as the check-in line asks at this step.
+  git(home.dir, ["add", "aidlc"]);
+  git(home.dir, ["commit", "-q", "-m", "the teams' merges taken in"]);
+  git(home.dir, ["push", "-q", "origin", "HEAD:main"]);
   return { home, hosts, alice };
 }
 

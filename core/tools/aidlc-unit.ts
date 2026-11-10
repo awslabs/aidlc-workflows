@@ -220,7 +220,7 @@ import {
   leadRecordHere,
   textAt,
 } from "./aidlc-unit-teams.js";
-import { isProjectSubmodule, submoduleLeavesProjectRepo } from "./aidlc-git.ts";
+import { submoduleLeavesProjectRepo } from "./aidlc-git.ts";
 import { displayRepoPath, localUnreadableLine, readWorkspaceRepos, repoCloneable, repoCloneOfferLine, repoNotThereLine, withoutCredentials, workspaceManifestAt } from "./aidlc-workspace-manifest.js";
 import { maskUserinfo, workspaceCloneUrl } from "./aidlc-workspace-sync.ts";
 import { loadGraph } from "./aidlc-graph.ts";
@@ -5519,15 +5519,20 @@ function buildLeftOpenHere(pd: string, state: string, units: string[], words: st
     validateClaimRefUnit(identity.intentId8, unit);
     const ref = claimRef(identity.intentId8, unit);
     const current = currentClaim(pd, integration.remote, ref);
-    if (current?.status === "claimed") {
+    // One someone else built and merged is taken back to build here, as a new
+    // attempt (the lead's Build and Test asked to fix it here); one still being
+    // built stays theirs.
+    const takenBack = current?.status === "claimed" && current.payload.done === true &&
+      !(current.owner === identity.space && claimIsMine(pd, current));
+    if (current?.status === "claimed" && !takenBack) {
       if (current.owner === identity.space && claimIsMine(pd, current)) here.push(unit);
       else lines.push(takenLine(unit, current));
       continue;
     }
     const payload = takenClaimPayload(current, {
       team: identity.space, home: { space: identity.space, uuid: identity.intentUuid, id8: identity.intentId8 }, unit, ref,
-      generation: takeGeneration(current), me, baseOid: integration.oid, integrationRef: integration.ref,
-      gateRhythm: readUnitGateRhythm(state),
+      generation: takenBack ? (current?.generation ?? 0) + 1 : takeGeneration(current), me, baseOid: integration.oid,
+      integrationRef: integration.ref, gateRhythm: readUnitGateRhythm(state),
     });
     const pushed = updateClaimRef(pd, integration.remote, ref, createClaimCommit(pd, current?.oid ?? integration.oid, payload), current?.oid ?? null);
     if (!pushed.ok) {

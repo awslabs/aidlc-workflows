@@ -744,13 +744,13 @@ agent writes the words it came from to the request file the command names
 (`--request-file aidlc/.aidlc-engine/request-text/unit-assign.txt`), and they go into
 the `UNITS_ASSIGNED` audit row when a turn of yours stands behind them.
 
-A Unit someone else built and merged, released first and then named here (the
-lead's Build and Test asked to fix it at the lead's project), is built here on
-top of what they merged, and the line says so ("<unit> is built here now, on top
-of what <who> merged."). Its merge no longer counts: the stages before the one
-reopened for it keep the work that merged, and the reopened stage (Code
-Generation, with its plan, review and approval) and the ones after are built
-here.
+A Unit someone else built and merged, named here (the lead's Build and Test
+asked to fix it at the lead's project), is taken back as a new attempt and built
+here on top of what they merged, and the line says so ("<unit> is built here
+now, on top of what <who> merged."). Its merge no longer counts: the stages
+before the earliest one reopened for it keep the work that merged, and the
+reopened stages (Code Generation, with its plan, review and approval) and the
+ones after are built here. A Unit someone is still building stays theirs.
 
 ### `/aidlc unit take <unit> --home <record>` - Take a Unit as your team's own work
 
@@ -879,8 +879,7 @@ with the words, and the lead's project records it again once it merges again
 (`UNIT_SENT_BACK`, which keeps the lead's own words to send it back and the
 message they came in, beside the failure). Nothing of it is rebuilt at the
 lead's project. To fix it at the lead's project instead, the agent takes it
-back (`unit release <unit>`, then `unit assign --here <unit>`) and reopens its
-Code Generation there.
+back (`unit assign --here <unit>`) and reopens its Code Generation there.
 
 ### `/aidlc unit rebase` - Move an early build onto what merged
 

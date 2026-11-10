@@ -341,23 +341,23 @@ export function unitMergesStanding(rows: readonly AuditShardEvent[], unit: strin
 }
 
 // The Units a team built and merged that the lead then took back to build at
-// the lead's project (assign --here after the merge), each with the first stage
-// reopened for it since (its GATE_REJECTED), or null while none is. The stages
-// before that one keep the team's approved work.
-export function unitsTakenBackHere(rows: readonly AuditShardEvent[]): Map<string, string | null> {
-  const taken = new Map<string, string | null>();
-  const ordered = inAuditOrder(rows);
+// the lead's project (assign --here after the merge), each with the stages
+// reopened for it since (its GATE_REJECTED rows), none while it waits for its
+// reopen. The stages before the earliest of them keep the team's approved work.
+export function unitsTakenBackHere(rows: readonly AuditShardEvent[]): Map<string, string[]> {
+  const taken = new Map<string, string[]>();
   const merged = new Set<string>();
-  for (const row of ordered) {
+  for (const row of inAuditOrder(rows)) {
     const unit = auditBlockField(row.block, "Unit");
     if (row.event === "UNIT_MERGED" && unit && auditBlockField(row.block, "Built By") !== null) merged.add(unit);
     else if (row.event === "UNIT_SENT_BACK" && unit) merged.delete(unit);
     else if (row.event === "UNITS_ASSIGNED") {
       for (const name of (auditBlockField(row.block, "Here") ?? "").split(",").map((entry) => entry.trim())) {
-        if (merged.delete(name)) taken.set(name, null);
+        if (merged.delete(name)) taken.set(name, []);
       }
-    } else if (row.event === "GATE_REJECTED" && unit && taken.get(unit) === null) {
-      taken.set(unit, auditBlockField(row.block, "Stage"));
+    } else if (row.event === "GATE_REJECTED" && unit) {
+      const stage = auditBlockField(row.block, "Stage");
+      if (stage) taken.get(unit)?.push(stage);
     }
   }
   return taken;

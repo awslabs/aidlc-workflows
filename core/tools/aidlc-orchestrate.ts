@@ -17403,8 +17403,8 @@ function stagesKeptOnTakeBack(auditRows: readonly AuditShardEvent[], block: read
   return (unit) => {
     const reopened = takenBack.get(unit);
     if (reopened === undefined) return null;
-    const at = reopened === null ? -1 : block.findIndex((stage) => stage.slug === reopened);
-    return at === -1 ? block.length : at;
+    const at = reopened.map((slug) => block.findIndex((stage) => stage.slug === slug)).filter((index) => index !== -1);
+    return at.length === 0 ? block.length : Math.min(...at);
   };
 }
 
@@ -19499,8 +19499,8 @@ function unitMajorReopen(
   // A Unit a team built as work of its own goes back to whoever built it with
   // the failure (send-back), and past the Unit stages the lead's project goes
   // back to them to wait for it; or, when the person asks to fix it here, it
-  // is taken back and built here (release, then assign --here), and the next
-  // `next --stage` reopens it.
+  // is taken back and built here (assign --here), and the next `next --stage`
+  // reopens it.
   const sentBack = flags.jumpUnit;
   if (sentBack !== undefined && homeLocation(stateContent) !== null && !readApplicableTeamUnitScopeStamp(projectDir, stateContent)) {
     let claim: UnitClaimView | undefined;
@@ -19521,10 +19521,9 @@ function unitMajorReopen(
           "write the failure, in the words you showed the person, to the request file its command names with your file tool, never " +
           `a shell, then run \`${aidlcToolInvocation("unit")} send-back ${shellArg(sentBack)} ${unitWordsArg("send-back", sentBack)}\`${back}; ` +
           "tell the person its notice line and re-run `next`. To fix it here, write their words to the request file " +
-          `\`assign\` names the same way, then run \`${aidlcToolInvocation("unit")} release ${shellArg(sentBack)}\` and ` +
-          `\`${aidlcToolInvocation("unit")} assign --here ${shellArg(sentBack)} ${unitWordsArg("assign")}\` (release each other ` +
-          "Unit they asked to fix here too, and name it beside this one), tell the person its notice line, and re-run " +
-          `\`next --stage ${targetSlug} --unit ${shellArg(sentBack)}\`.`,
+          `\`assign\` names the same way, then run \`${aidlcToolInvocation("unit")} assign --here ${shellArg(sentBack)} ` +
+          `${unitWordsArg("assign")}\` (name each other Unit they asked to fix here beside this one, comma-separated), tell the ` +
+          `person its notice line, and re-run \`next --stage ${targetSlug} --unit ${shellArg(sentBack)}\`.`,
       };
     }
   }
@@ -19621,8 +19620,9 @@ function unitMajorReopen(
     // Every Unit taken back here beside it, not reopened yet, goes in the same
     // reopen: the person's one ask stands behind one jump.
     const takenBack = unitsTakenBackHere(readAuditShardEvents(projectDir));
-    reopened = takenBack.get(named) === null
-      ? [named, ...units.filter((unit) => unit !== named && takenBack.get(unit) === null && reached(unit))]
+    const waitsForReopen = (unit: string): boolean => takenBack.get(unit)?.length === 0;
+    reopened = waitsForReopen(named)
+      ? [named, ...units.filter((unit) => unit !== named && waitsForReopen(unit) && reached(unit))]
       : [named];
   } else if (flags.everyUnit) {
     // Every unit includes one that is on the target step now: it starts it again.

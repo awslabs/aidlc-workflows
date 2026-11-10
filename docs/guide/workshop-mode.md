@@ -794,9 +794,9 @@ to that build. When the lead's Build and Test finds a Unit someone else built
 wanting, the lead picks: send it back to whoever built it in the failure's own
 words (`aidlc unit send-back <unit>`), and the board shows it back with them and
 records its next merge again; or fix it here, and AI-DLC takes it back (`aidlc
-unit release <unit>`, then `aidlc unit assign --here <unit>`) and reopens Code
-Generation for it at the lead's project, with its plan, review and approval,
-keeping the stages before it as they merged.
+unit assign --here <unit>`) and reopens Code Generation for it at the lead's
+project, with its plan, review and approval, keeping the stages before it as
+they merged.
 
 ### Check in your team's record
 
