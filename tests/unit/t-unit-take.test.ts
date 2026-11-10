@@ -362,7 +362,7 @@ describe("taking a Unit starts its build in the team's space", () => {
     const home = homeWithTeams(["refunds=payments"]);
     const alice = cloneOf(home.remote, "alice");
     const before = claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds");
-    const took = take(alice, "refunds", ["--team", "payments", "--request-file", "aidlc/.aidlc-request-text/missing.txt"]);
+    const took = take(alice, "refunds", ["--team", "payments", "--request-file", "aidlc/.aidlc-engine/request-text/missing.txt"]);
     expect(took.status).not.toBe(0);
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toEqual(before);
     expect(existsSync(join(alice, "aidlc", "spaces", "payments"))).toBe(false);
@@ -1062,7 +1062,7 @@ describe("a team's own workspace, made from the home's", () => {
     expect(took.json?.notice).toBeUndefined();
     const line = "The lead's project takes no push from here (this host takes no push from here (pre-receive hook declined)), so the lead " +
       "and the other teams cannot see that you took refunds until it does; AI-DLC records it there when a push next goes through.";
-    const kept = JSON.parse(readFileSync(join(pay, "aidlc", ".aidlc-sessions", `${session}.person-lines`), "utf-8")) as {
+    const kept = JSON.parse(readFileSync(join(pay, "aidlc", ".aidlc-engine", "sessions", `${session}.person-lines`), "utf-8")) as {
       lines: Array<{ line: string; reply?: boolean }>;
     };
     expect(kept.lines.find((entry) => entry.line === line)?.reply, JSON.stringify(kept)).toBe(true);
