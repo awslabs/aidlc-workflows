@@ -15,7 +15,11 @@
 //   1. a review request for a Unit never started is refused and names the
 //      start; after the start it is recorded;
 //   2. while the engine's recovery ask about that Unit is open, the request
-//      goes through (the ask's own remedies must stay runnable).
+//      goes through (the ask's own remedies must stay runnable), and so does
+//      another Unit's, whose start the engine refuses while it asks;
+//   3. with the Unit's files written before its first record, the engine
+//      refuses the start, so the request is never told to run it and is
+//      recorded as before.
 //
 // SOURCE UNDER TEST (dist/claude/.claude/tools/): aidlc-log.ts review,
 // aidlc-state.ts unit start, aidlc-orchestrate.ts next, aidlc-lib.ts
@@ -148,6 +152,14 @@ function requestReview(proj: string, unit: string) {
   return first.status === 0 && first.stdout.includes("this stage's checks ran") ? request() : first;
 }
 
+function startUnit(proj: string, unit: string) {
+  return spawnSync(
+    BUN,
+    [STATE, "unit", "start", "--stage", SLUG, "--unit", unit, "--project-dir", proj],
+    { ...runOpts(), env: engineEnv() },
+  );
+}
+
 describe("a per-Unit stage's receipts hang off the Unit's start", () => {
   test("1: a review request for a Unit never started is refused and names the start; after the start it is recorded", () => {
     const proj = seedTeamProject({ artifacts: false });
@@ -163,11 +175,7 @@ describe("a per-Unit stage's receipts hang off the Unit's start", () => {
     const routed = runOrchestrateNext(ORCH, proj, [], { env: engineEnv() });
     expect(routed.status, routed.stderr).toBe(0);
     expect(routed.directive).toMatchObject({ kind: "run-stage", stage: SLUG, unit: "alpha" });
-    const started = spawnSync(
-      BUN,
-      [STATE, "unit", "start", "--stage", SLUG, "--unit", "alpha", "--project-dir", proj],
-      { ...runOpts(), env: engineEnv() },
-    );
+    const started = startUnit(proj, "alpha");
     expect(started.status, `${started.stdout}${started.stderr}`).toBe(0);
     expect(unitLifecycleRecorded(proj, SLUG, "alpha")).toBe(true);
     expect(unitLifecycleRecorded(proj, SLUG, "beta")).toBe(false);
@@ -198,9 +206,28 @@ describe("a per-Unit stage's receipts hang off the Unit's start", () => {
     const recorded = requestReview(proj, "alpha");
     expect(recorded.status, `${recorded.stdout}${recorded.stderr}`).toBe(0);
     expect(recorded.stdout).toContain("REVIEW_REQUESTED");
-    // The other Unit has no open ask: its request still names the start.
-    const refused = requestReview(proj, "beta");
-    expect(refused.status).not.toBe(0);
-    expect(`${refused.stdout}${refused.stderr}`).toContain("has not been started for this stage");
+    // The other Unit has no open ask, but its start is refused while the
+    // engine asks about alpha, so its request is not told to run it.
+    const otherStart = startUnit(proj, "beta");
+    expect(`${otherStart.stdout}${otherStart.stderr}`).toContain("the engine currently routes");
+    const other = requestReview(proj, "beta");
+    expect(other.status, `${other.stdout}${other.stderr}`).toBe(0);
+    expect(other.stdout).toContain("REVIEW_REQUESTED");
+  });
+
+  test("3: with the Unit's files written before its first record, the request is recorded and never names the start", () => {
+    const proj = seedTeamProject({ artifacts: false });
+    const dir = join(seededRecordDir(proj), "construction", "alpha", SLUG);
+    mkdirSync(dir, { recursive: true });
+    for (const name of PRODUCES) writeFileSync(join(dir, artifactFilename(name)), `# ${name} for alpha\n`);
+    // The engine takes the step as done from its files, so it refuses the start.
+    const started = startUnit(proj, "alpha");
+    expect(started.status).not.toBe(0);
+    expect(`${started.stdout}${started.stderr}`).toContain("the engine currently routes");
+
+    const recorded = requestReview(proj, "alpha");
+    expect(recorded.status, `${recorded.stdout}${recorded.stderr}`).toBe(0);
+    expect(recorded.stdout).toContain("REVIEW_REQUESTED");
+    expect(recorded.stdout).not.toContain("has not been started");
   });
 });
