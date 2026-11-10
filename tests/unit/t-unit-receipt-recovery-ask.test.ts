@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-state:unit, function:evaluateGuardRefusal, function:guardRecoveryAskForRefusal, function:validateDirective, audit:UNIT_COMPLETED
+// covers: subcommand:aidlc-orchestrate:next, function:evaluateGuardRefusal, function:guardRecoveryAskForRefusal, function:validateDirective
 //
 // CLI-contract test: a Unit whose work is on disk but whose completion was
 // never recorded is offered "record its completion" in a question the engine
@@ -7,13 +7,13 @@
 // What the person sees: Units owned by the team, a Unit's design written
 // without its start and completion receipts. Before, every `next` stopped with
 // "refusing to emit a malformed directive" and nothing else; recording the
-// completion by hand was refused too, so the work could not go on. After, the
-// agent asks which way on, recording the Unit's completion from the work on
-// disk first, and once the person picks it the completion is recorded.
+// completion by hand was refused too, so the work could not go on. Now the
+// step comes to its own gate for approval once its review is recorded, with no
+// question about its receipts (t-team-unit-never-started-gate).
 //
 // Pinned here:
-//   1. team-owned Units: `next` sends the question, recording the completion
-//      first, and the person's pick records it;
+//   1. team-owned Units: `next` brings the step's own gate, with no question
+//      about its receipts;
 //   2. every remedy that runs a command waits for the person's pick, so each
 //      Unit-receipt question the engine builds passes the directive check
 //      (the team gate's, and finishing a Unit's step with the review it has,
@@ -40,11 +40,8 @@ import {
 } from "../harness/fixtures.ts";
 import {
   artifactFilename,
-  consumeSharedDirectiveAsk,
-  recordGuardRecoveryChoice,
   evaluateGuardRefusal,
   guardRecoveryAskForRefusal,
-  unitCompletedReceipts,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { validateDirective } from "../../dist/claude/.claude/tools/aidlc-directive.ts";
 import {
@@ -64,7 +61,6 @@ resetAidlcEnv();
 const BUN = process.execPath;
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
-const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const SLUG = "functional-design";
 const UNITS = ["alpha", "beta"];
 const PRODUCES = ["entities", "rules", "functional-spec", "frontend-components", "traceability"];
@@ -171,10 +167,10 @@ function engineEnv(): NodeJS.ProcessEnv {
 }
 
 describe("a Unit done without its receipts is offered recording them", () => {
-  test("1: team-owned Units: next asks, and the person's pick records the completion", () => {
+  test("1: team-owned Units: a step done without its receipts comes to its own gate, with no question about them", () => {
     const proj = seedTeamProject();
-    // The first `next` asks about the missing receipt; with the ask open, the
-    // Unit's review is recorded, and the next `next` offers the completion.
+    // The first `next` takes the missing review as the agent's own step; once it
+    // is recorded, the next `next` brings the step's own gate.
     const first = runOrchestrateNext(ORCH, proj, [], { env: engineEnv() });
     expect(first.stderr).not.toContain("malformed directive");
     expect(first.status, first.stderr).toBe(0);
@@ -183,39 +179,14 @@ describe("a Unit done without its receipts is offered recording them", () => {
       ask_type: "guard-recovery",
       stage: SLUG,
       unit: "alpha",
-      reason_codes: ["UNIT_COMPLETION_MISSING"],
+      reason_codes: ["REVIEW_EVIDENCE_MISSING"],
+      agent_work: true,
     });
     reviewUnitReady(proj, "alpha");
     const r = runOrchestrateNext(ORCH, proj, [], { env: engineEnv() });
     expect(r.stderr).not.toContain("malformed directive");
     expect(r.status, r.stderr).toBe(0);
-    expect(r.directive).toMatchObject({
-      kind: "ask",
-      ask_type: "guard-recovery",
-      stage: SLUG,
-      unit: "alpha",
-      reason_codes: ["UNIT_COMPLETION_MISSING"],
-    });
-    const remedies = (r.directive?.remedies ?? []) as Record<string, unknown>[];
-    expect(remedies[0]).toMatchObject({
-      op: "record-unit-completion",
-      interaction: "command",
-      requiresHuman: true,
-      operation: { kind: "record-unit-completion", stage: SLUG, unit: "alpha" },
-    });
-
-    // The person picks it; the hook keeps their reply, and the agent records the remedy it read.
-    expect(consumeSharedDirectiveAsk(proj, "1")).toBe(true);
-    expect(recordGuardRecoveryChoice(proj, "record-unit-completion", false).op).toBe("record-unit-completion");
-    const env = engineEnv();
-    delete env.AIDLC_SKIP_ARTIFACT_GUARD;
-    const done = spawnSync(
-      BUN,
-      [STATE, "unit", "complete", "--stage", SLUG, "--unit", "alpha", "--project-dir", proj],
-      { ...runOpts(), env },
-    );
-    expect(done.status, `${done.stdout}${done.stderr}`).toBe(0);
-    expect(unitCompletedReceipts(proj, SLUG).has("alpha")).toBe(true);
+    expect(r.directive).toMatchObject({ kind: "run-stage", stage: SLUG, unit: "alpha", gate_only: true });
   });
 
   test("2: each Unit-receipt question the engine builds passes the directive check", () => {

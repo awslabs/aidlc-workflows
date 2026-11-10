@@ -247,6 +247,7 @@ import {
   renderSourcePathKeys,
   unitCompletedReceipts,
   unitGateStatus,
+  unitLifecycleReceiptsInUse,
   unitMajorConstructionStageSlugs,
   unitParkedPath,
   unitPlainName,
@@ -334,6 +335,7 @@ import {
   loadConstructionEvidence,
   resolveConstructionCheckpoint,
   unfinishedReviewsNotice,
+  unitReceiptsRequired,
 } from "./aidlc-construction-checkpoints.ts";
 
 // All valid checkbox states (lib.ts adds [?] awaiting-approval and [R] revising)
@@ -6763,6 +6765,15 @@ function verifyReviewerPreconditionForUnit(
   }
 }
 
+// A step no Unit records receipts for at its stage is done from its documents,
+// as the walk reads it (unitReceiptsRequired), once it is approved: its
+// approval on record, or the one this gate asks for when the step is the
+// gate's own. A step with nothing approved still needs its receipt.
+function stepDoneByApproval(pd: string, content: string, slug: string, context: TeamGateContext): boolean {
+  if (unitReceiptsRequired(content, unitLifecycleReceiptsInUse(pd, slug))) return false;
+  return slug === context.stages.at(-1)?.slug || unitGateStatus(pd, slug, context.unit, "per-stage") === "approved";
+}
+
 function verifyTeamUnitGateEvidence(
   pd: string,
   content: string,
@@ -6791,7 +6802,7 @@ function verifyTeamUnitGateEvidence(
         unit: context.unit,
       });
     }
-    if (!unitCompletedReceipts(pd, stage.slug).has(context.unit)) {
+    if (!unitCompletedReceipts(pd, stage.slug).has(context.unit) && !stepDoneByApproval(pd, content, stage.slug, context)) {
       const message =
         `Refusing gate for unit "${context.unit}" of "${stage.slug}": no current ` +
         "UNIT_COMPLETED receipt is recorded.";

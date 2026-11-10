@@ -388,6 +388,14 @@ export function checkpointPolicyEnabled(stateContent: string): boolean {
   return constructionCheckpointsApply(stateContent);
 }
 
+// Whether a per-Unit stage's steps need a lifecycle receipt to count as done:
+// with Construction Checkpoints on, or once any Unit recorded one at the stage
+// (`inUse`). Otherwise a step's documents settle it. The walk (unitLedgerFor)
+// and a team Unit's gate (verifyTeamUnitGateEvidence) both read it here.
+export function unitReceiptsRequired(stateContent: string | null, inUse: boolean): boolean {
+  return inUse || (stateContent !== null && checkpointPolicyEnabled(stateContent));
+}
+
 function digest(value: unknown): string {
   return `sha256:${createHash("sha256").update(JSON.stringify(value)).digest("hex")}`;
 }

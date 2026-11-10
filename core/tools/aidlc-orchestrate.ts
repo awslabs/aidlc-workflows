@@ -601,6 +601,7 @@ import {
   constructionCheckpointKind,
   type ConstructionCheckpointKind,
   type ConstructionEvidence,
+  unitReceiptsRequired,
 } from "./aidlc-construction-checkpoints.ts";
 import { broughtFileNames, broughtFilesNote, unheardBroughtFilesLine } from "./aidlc-brought-files.ts";
 import { newChatStep } from "./aidlc-new-chat.ts";
@@ -16150,7 +16151,7 @@ function unitLedgerFor(
     (policyState !== null && guardPolicyAcceptsChanges(projectDir, policyState));
   if (auditRows && stateContent) {
     const snapshot = unitLifecycleSnapshot(projectDir, slug, auditRows, stateContent, { keepChangedWaveCompletions });
-    return { ...snapshot, inUse: snapshot.inUse || receiptsRequired };
+    return { ...snapshot, inUse: unitReceiptsRequired(policyState, snapshot.inUse) };
   }
   const receipts = unitCompletedReceipts(projectDir, slug, { keepChangedWaveCompletions });
   const open = unitOpenCheckpoints(projectDir, slug);
@@ -16159,7 +16160,7 @@ function unitLedgerFor(
     skipped: unitSkippedUnits(projectDir, slug, undefined, policyState ?? undefined),
     checkpoint: open[0] ?? null,
     open,
-    inUse: receiptsRequired || unitLifecycleReceiptsInUse(projectDir, slug),
+    inUse: unitReceiptsRequired(policyState, unitLifecycleReceiptsInUse(projectDir, slug)),
     mode: currentUnitLifecycleMode(projectDir, slug),
   };
 }
