@@ -40725,7 +40725,32 @@ export function resolveStageAnswerMode(
   projectDir: string | null,
   options: { intent?: string; space?: string } = {},
 ): StageAnswerMode {
-  const recorded = projectDir === null ? null : latestRecordedAnswerMode(projectDir, options.intent, options.space);
+  let recorded = projectDir === null ? null : latestRecordedAnswerMode(projectDir, options.intent, options.space);
+  // A Unit's build with no answer yet takes this person's newest answer on
+  // their other builds of the same lead's work (answered in this clone, its own
+  // audit shard), since they were told later stages keep it; a teammate's
+  // choice is never theirs.
+  if (recorded === null && projectDir !== null) {
+    try {
+      const own = readStateFile(projectDir, options.intent, options.space);
+      const home = getField(own, "Home Work")?.trim();
+      if (getField(own, "Unit Build") !== null && home) {
+        const shard = auditShardName(projectDir);
+        for (const { name: space } of listSpaces(projectDir)) {
+          for (const entry of listIntents(projectDir, space)) {
+            if (!entry.dirName) continue;
+            const other = readStateFile(projectDir, entry.dirName, space);
+            if (getField(other, "Unit Build") === null || getField(other, "Home Work")?.trim() !== home) continue;
+            const theirs = latestRecordedAnswerMode(projectDir, entry.dirName, space);
+            if (theirs?.shard === undefined || basename(theirs.shard) !== shard) continue;
+            if (recorded === null || theirs.timestamp > recorded.timestamp) recorded = theirs;
+          }
+        }
+      }
+    } catch {
+      // Unreadable: the stage asks, as before.
+    }
+  }
   if (recorded !== null) {
     // A Unit's build (its Unit Build field) carried on from someone else: the
     // answer is another clone's (as buildLastWorked reads a build's last hand)

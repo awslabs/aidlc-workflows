@@ -234,6 +234,37 @@ describe("answer mode across a piece of work", () => {
     );
   });
 
+  // Live runs (Claude Code on Windows Server, Kiro CLI): a teammate told
+  // 'Later stages will use this way too' was asked again at her second Unit,
+  // a build of its own.
+  test("a person's second Unit's build takes the answer from their first build of the same work; a teammate's choice is never theirs", () => {
+    const { proj, state: firstState } = project();
+    const asBuild = (path: string, unit: string): void => {
+      writeFileSync(path, readFileSync(path, "utf-8").replace(/^(- \*\*Project\*\*: .*)$/m,
+        `$1\n- **Unit Build**: ${unit}\n- **Home Work**: 8f2c1a34-5b6d-4e7f-9a0b-1c2d3e4f5a6b`));
+    };
+    Bun.spawnSync({ cmd: ["git", "init", "-q"], cwd: proj });
+    Bun.spawnSync({ cmd: ["git", "config", "user.name", "Bea Web"], cwd: proj });
+    asBuild(firstState, "checkout-ui");
+    askModeQuestion(proj, currentStage(firstState), "Guide me");
+    const created = run(UTILITY, [
+      "intent-create", "--scope", "classic", "--arguments", "second unit fixture", "--label", "second-unit",
+    ], proj);
+    expect(created.status, created.stderr).toBe(0);
+    const intents = join(proj, "aidlc", "spaces", "default", "intents");
+    const second = join(intents, readFileSync(join(intents, "active-intent"), "utf-8").trim(), "aidlc-state.md");
+    expect(second).not.toBe(firstState);
+    asBuild(second, "check-page");
+    expect(runStageAnswerMode(proj).notice).toBe(
+      "Answering the way you chose earlier: Guide me. Say if you'd rather edit the file or chat.",
+    );
+    // The first build's answer made in another clone, a teammate's: asked again.
+    const audit = join(dirname(firstState), "audit");
+    const [shard] = readdirSync(audit).filter((name) => name.endsWith(".md"));
+    renameSync(join(audit, shard), join(audit, "aidlc-weshost-0123456789ab.md"));
+    expect(runStageAnswerMode(proj).ask).toBe(true);
+  });
+
   test("a new choice the person makes later is the one the following stages use", () => {
     const { proj, state } = project();
     const first = currentStage(state);
