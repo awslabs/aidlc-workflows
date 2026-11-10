@@ -9839,11 +9839,14 @@ function workspaceManifestNames(projectDir: string): string[] {
   }
 }
 
-// Where a repo not on disk is cloned from and what repos.json becomes: its own
-// entry, else the person's `--url`, else the repos.json `org`. The address goes
-// to git as given; repos.json, which the team commits, gets it without
-// credentials. With no repos.json, a hosted `--url` creates one naming its owner
-// as the org; a local path or another shape creates none, and the line says so.
+// Where a repo not on disk is cloned from and what repos.json becomes: the
+// person's `--url`, else its own entry (a name-only entry from the repos.json
+// `org`). A name no repos.json lists gets no address made up from the org: the
+// org may be another host's owner, read off the address of the repo that
+// started the list. The address goes to git as given; repos.json, which the
+// team commits, gets it without credentials. With no repos.json, a hosted
+// `--url` creates one naming its owner as the org; a local path or another
+// shape creates none, and the line says so.
 function plannedRepoClone(
   projectDir: string,
   name: string,
@@ -9868,22 +9871,22 @@ function plannedRepoClone(
       note: null,
     };
   }
-  if (url === undefined && manifest === null) {
+  if (url === undefined) {
     die(
-      `${name} is not in this workspace yet, and there is no repos.json with an org to clone it from. ` +
+      `${name} is not in this workspace yet, and no repos.json lists it, so there is no address to clone it from. ` +
         "Give its clone address with --url, or clone it beside the other repos, then add it again.",
     );
   }
-  const kept = url === undefined ? undefined : withoutCredentials(url);
-  const written: WorkspaceRepoEntry = { name, ...(kept === undefined ? {} : { url: kept }) };
+  const kept = withoutCredentials(url);
+  const written: WorkspaceRepoEntry = { name, url: kept };
   const stripped = kept !== url ? " Its address there leaves out the credential." : "";
-  const repo: WorkspaceRepoEntry = { name, ...(url === undefined ? {} : { url }) };
+  const repo: WorkspaceRepoEntry = { name, url };
   if (manifest !== null) {
     const next = workspaceManifestWith(raw, manifest.org, written);
     if (next === null) die(`${name} could not be added to repos.json, which has no repos list. Nothing was changed.`);
     return { repo, org: manifest.org, manifest: { raw, next }, note: `repos.json now lists it.${stripped}` };
   }
-  const owner = hostedAddressOwner(url!);
+  const owner = hostedAddressOwner(url);
   if (owner === null) {
     return {
       repo,

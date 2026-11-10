@@ -411,10 +411,12 @@ under `## Mandated` in its space memory.
 When the repo is not in the workspace yet, it is cloned first, beside the other
 repos, with the same code `aidlc system workspace-sync` uses and your own git
 setup (your credential helpers and `insteadOf` rules apply as at your own shell). The
-address is the one you give with `--url`, else the repo's `repos.json` entry,
-else the `repos.json` `org`. The agent never passes `--url`
-on its own, so a name it found in a code search can only be cloned from your
-team's org. The clone runs in a staging folder and is moved into place under
+address is the one you give with `--url`, else the repo's `repos.json` entry.
+A repo that `repos.json` lists by name alone is cloned from github.com under the
+list's org, so a team on GitHub can add a line with the repo's name and then add
+it by name. The agent never passes `--url` on its own, so a name it found in a
+code search is cloned only when `repos.json` lists it. The clone runs in a
+staging folder and is moved into place under
 the workspace lock; then the `repos.json` entry is written (your comments and
 layout kept), the managed `.gitignore` block and `aidlc.code-workspace` are
 refreshed, and only then is the change recorded. The line names the address,
@@ -425,8 +427,8 @@ hosted `--url` (a host, an owner and a name) creates one that names the owner as
 its `org`, and the line says so: commit it to share the list. A local path, or
 an address of another shape, adds the repo without creating the file. When the
 clone fails, nothing is recorded or changed, and the line gives git's reason
-and the `git clone` command to run by hand. With no `repos.json` org and no
-`--url`, the line asks for the address.
+and the `git clone` command to run by hand. A repo no `repos.json` lists, added
+without `--url`, is not cloned: the line asks for its address.
 
 The name must be a single folder name, and a folder already there must be a Git
 checkout (a real `.git` entry): a folder merely shaped like a repository is
