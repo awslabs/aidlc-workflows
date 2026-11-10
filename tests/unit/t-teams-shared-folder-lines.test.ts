@@ -331,6 +331,25 @@ describe("the check-in line", () => {
     expect(String(approved.json?.narration), approved.out).toEndWith(LINE);
   });
 
+  // A live run (Kiro CLI, the lead's Build and Test): the step said '15 of 23'
+  // where status said '9/18 stages here': the step counted the Units' own
+  // stages, which run in each taker's build.
+  test("at the lead's project the approval's progress and status count the same stages, the Units' own left out", () => {
+    const home = homeWithTeams();
+    const statePath = join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD, "aidlc-state.md");
+    writeFileSync(statePath, readFileSync(statePath, "utf-8")
+      .replace(/^- \[[-? ]\] (functional-design|nfr-requirements|nfr-design|infrastructure-design|code-generation) /gm, "- [x] $1 ")
+      .replace(/^- \[ \] build-and-test /m, "- [?] build-and-test ")
+      .replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: build-and-test"));
+    const approved = run(ORCH, ["report", "--stage", "build-and-test", "--result", "approved", "--user-input", "Approve"], home.dir);
+    expect(approved.status, approved.out).toBe(0);
+    const step = /Progress: (\d+) of (\d+) stages done\. Next: /.exec(String(approved.json?.narration));
+    expect(step, approved.out).not.toBeNull();
+    const status = /^Completion: +(\d+)\/(\d+) stages here /m.exec(run(UTILITY, ["status"], home.dir, ENV).out);
+    expect(status).not.toBeNull();
+    expect([step![1], step![2]]).toEqual([status![1], status![2]]);
+  });
+
   // A live run (the lead's pull and Build and Test): the approval went straight
   // on to CI Pipeline and the line, in the approval's own narration, never
   // reached the person. In a chat it is kept for the reply the turn ends on.

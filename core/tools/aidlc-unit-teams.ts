@@ -25,6 +25,9 @@ import {
   isTeamUnitOwnership,
   LEARNINGS_CORRECTION_CHOICES,
   listIntentDirs,
+  plannedStages,
+  type StageEntry,
+  unitMajorConstructionStageSlugs,
   markPersonLinesHeard,
   personLineHeard,
   loadScopeMapping,
@@ -545,6 +548,21 @@ function findBuild(projectDir: string, matches: (build: UnitBuild) => boolean): 
 // A fact, not a task: the agent carried the earlier words (with their command
 // list) into every later look as a to-do.
 export const CHECK_IN_LINE = "Your teammates see where this work stands once aidlc/ is committed and pushed.";
+
+// The stages a record's counts name: every stage the plan runs after
+// Initialization, but at a lead's project that teams build for not the Units'
+// own stages, which run in each taker's build. Read by status's Completion
+// and by the step's progress and 'stage N of M' lines.
+export function stagesCounted(
+  stateContent: string,
+  scope: string,
+  work: { projectDir: string; intent?: string; space?: string } | null,
+): StageEntry[] {
+  const planned = plannedStages(stateContent, scope, work);
+  if (!isTeamUnitOwnership(stateContent) || homeLocation(stateContent) === null || unitBuildOf(stateContent) !== null) return planned;
+  const unitStages = new Set(unitMajorConstructionStageSlugs(scope, stateContent, true));
+  return planned.filter((stage) => !unitStages.has(stage.slug));
+}
 
 // What the chat that heard CHECK_IN_LINE hears once at its first look after the
 // person's own commit and push, and status's line then (checkInState).

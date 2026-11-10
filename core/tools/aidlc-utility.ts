@@ -190,6 +190,7 @@ import {
 import {
   arrivedAtLastPull,
   builtFromAnotherMachine,
+  stagesCounted,
   checkInApplies,
   checkInState,
   CHECKED_IN_STATUS,
@@ -544,7 +545,6 @@ import {
   declaredProjectType,
   installWithoutReplacing,
   pathContainedBy,
-  unitMajorConstructionStageSlugs,
 } from "./aidlc-lib.ts";
 import { auditShardName, chatTookStep, relativeRecordDirForSelection } from "./aidlc-record-core.ts";
 import { GUARD_POLICY_GLOSS, SCOPE_GLOSS } from "./aidlc-guard-fences.ts";
@@ -2338,8 +2338,7 @@ To get started:
   // teams build), each Unit's own stages run in its taker's build, never in
   // this record: they are out of both numbers here.
   const takesBuildUnits = isTeamUnitOwnership(content) && homeLocation(content) !== null && unitBuildOf(content) === null;
-  const unitStages = new Set(takesBuildUnits ? unitMajorConstructionStageSlugs(scope, content, true) : []);
-  const planned = new Set(plannedStages(content, scope, work).map((s) => s.slug).filter((slug) => !unitStages.has(slug)));
+  const planned = new Set(stagesCounted(content, scope, work).map((s) => s.slug));
   const setup = new Set(graph.filter((s) => s.phase === "initialization").map((s) => s.slug));
   const scopedCheckboxes = checkboxes.filter((c) =>
     planned.has(c.slug) ||
