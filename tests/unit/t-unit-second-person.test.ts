@@ -195,10 +195,11 @@ describe("a teammate opens solo work built from another machine", () => {
     const took = run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD], bob);
     expect(took.status, took.out).toBe(0);
     expect(took.json).toMatchObject({ space: "default" });
-    // Their team is their own name: the Unit is theirs, never "for the bob team".
+    // The Unit is theirs, never "for the bob team": solo work's build goes in
+    // the lead's own space, so the claim names that space and who took it.
     expect(String(took.json?.notice)).toStartWith("Checkout-ui is yours. Its build is its own piece of work here");
     expect(readFileSync(seededStateFile(bob), "utf-8")).toBe(homeStateBefore);
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "checkout-ui")).toMatchObject({ owner: "bob", taken_by: "bob" });
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "checkout-ui")).toMatchObject({ owner: "default", taken_by: "bob" });
     const other = run(UNIT, ["take", "refunds", "--home", HOME_RECORD], cloneOf(home.remote, "carol"));
     expect(other.status).not.toBe(0);
     expect(other.out).toContain("refunds is being built on the other machine; take another Unit, or follow along.");
@@ -434,7 +435,7 @@ describe("the lead's sign-off", () => {
     const ask = next(home.dir);
     expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-signoff");
     expect(ask.question).toBe(
-      "refunds came back from payments: checkout-api not merged yet, billing not merged yet (0 of 2 merged). Sign it off?",
+      "refunds came back from alice: checkout-api not merged yet, billing not merged yet (0 of 2 merged). Sign it off?",
     );
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
     mergeOnHost(hosts.billing, "refunds", "squash");
@@ -443,10 +444,10 @@ describe("the lead's sign-off", () => {
     expect(String(unasked.json?.error)).toStartWith("The sign-off is the person's own word: ask them first, then run this with their words.");
     appendAuditEntry("HUMAN_TURN", { "Person Reply": "let me look at the PRs first" }, home.dir);
     const board = next(home.dir);
-    expect(String(board.narration)).toContain("- refunds, payments: checkout-api merged, billing merged (2 of 2 merged), waiting for your sign-off");
+    expect(String(board.narration)).toContain("- refunds, payments space: built by alice, checkout-api merged, billing merged (2 of 2 merged), waiting for your sign-off");
     // Not asked again; the board keeps the sign-off theirs to give, and names the lead's other moves.
     const signOff = (board.offers as Array<{ question: string; choices: Array<{ label: string; command?: string }> }>)
-      .find((offer) => offer.question === "refunds came back from payments. Sign it off?");
+      .find((offer) => offer.question === "refunds came back from alice. Sign it off?");
     expect(signOff?.choices.map((choice) => choice.label)).toEqual(["Sign it off", "Not now"]);
     expect(String(signOff?.choices[0].command)).toEndWith("aidlc-unit.ts sign-off refunds --request-file aidlc/.aidlc-request-text/unit-sign-off-refunds.txt");
     for (const command of ["sign-off <unit>", "amend <unit> --input <file>", "lead-sign-off on", "release <unit>"]) {

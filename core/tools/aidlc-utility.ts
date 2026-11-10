@@ -189,7 +189,14 @@ import {
   localUnitClaimOverviewForIntent,
   main as unitMain,
 } from "./aidlc-unit.ts";
-import { arrivedAtLastPull, homeLocation, PROJECT_TYPE_SOURCE_FIELD, PROJECT_TYPE_SOURCE_HOME, unitBuildOf } from "./aidlc-unit-teams.ts";
+import {
+  arrivedAtLastPull,
+  homeLocation,
+  leadWaitsOnTeams,
+  PROJECT_TYPE_SOURCE_FIELD,
+  PROJECT_TYPE_SOURCE_HOME,
+  unitBuildOf,
+} from "./aidlc-unit-teams.ts";
 import {
   codeGenerationBuildsWithoutSource,
   PLAN_APPROVAL_REPAIR_SOURCE_BOUNDARY_REMEDY,
@@ -538,6 +545,7 @@ import {
   declaredProjectType,
   installWithoutReplacing,
   pathContainedBy,
+  unitMajorConstructionStageSlugs,
 } from "./aidlc-lib.ts";
 import { chatTookStep, relativeRecordDirForSelection } from "./aidlc-record-core.ts";
 import { GUARD_POLICY_GLOSS, SCOPE_GLOSS } from "./aidlc-guard-fences.ts";
@@ -2131,6 +2139,11 @@ To get started:
   const currentStage = getField(content, "Current Stage") || "Unknown";
   const status = getField(content, "Status") || "Unknown";
   const walk = await soloUnitWalk(projectDir, flags, scope, content);
+  // The lead's project of work teams build, while its last board on this state
+  // says it waits on the Units (leadWaitsOnTeams), builds nothing: no stage,
+  // agent, step or next stage is said as now.
+  const waitsHere = isTeamUnitOwnership(content) && homeLocation(content) !== null && unitBuildOf(content) === null &&
+    (leadWaitsOnTeams(projectDir, content)?.length ?? 0) > 0;
   // Who is on it and what was done or comes next, in the names the person
   // sees elsewhere; a setup step or an empty value says nothing.
   const agentSlug = (getField(content, "Active Agent") ?? "").trim();
@@ -2141,7 +2154,7 @@ To get started:
   const nextNode = findStageBySlug((getField(content, "Next Stage") ?? "").trim());
   const lastName = lastStage === undefined || lastStage.phase === "initialization" ? null : stageLabel(lastStage, lastStage.slug);
   const nextName = nextNode === undefined ? null : stageLabel(nextNode, nextNode.slug);
-  const agentLine = agentName === null ? "" : `Active Agent:   ${agentName}\n`;
+  const agentLine = agentName === null || waitsHere ? "" : `Active Agent:   ${agentName}\n`;
   // Who approved it, as their git named them at the keyboard (the approval's
   // Git Name); nothing more when the approval recorded no name.
   let approvedBy = "";
@@ -2160,7 +2173,7 @@ To get started:
   // On a Unit walk the Next Stage field stays on the stage after the block's
   // first one, so the walk's own next step is said instead.
   const shownNext = walk === null ? nextName : walk.next;
-  const nextLine = shownNext === null ? "" : `Next Stage:     ${shownNext}\n`;
+  const nextLine = shownNext === null || waitsHere ? "" : `Next Stage:     ${shownNext}\n`;
   const plan = getField(content, PLAN_FIELD);
   // A plan composed for this work runs on a stock scope the person never
   // chose, so a setting that came from that scope reads as the approved
@@ -2221,7 +2234,9 @@ To get started:
   const currentName = currentEntry === undefined
     ? currentStage
     : stageLabel(currentEntry, currentEntry.slug) ?? "this stage";
-  const stageDisplay = currentEntry
+  const stageDisplay = waitsHere
+    ? "none here: the Units left are taken or open to take (below)"
+    : currentEntry
     ? `${currentName} (${currentEntry.number})`
     : currentStage;
 
@@ -2266,6 +2281,8 @@ To get started:
     statusLine = planApprovalAskState(projectDir, planAsk.intent_uuid ?? "bare-space") === "editing"
       ? `Waiting for you to finish editing the ${plans}`
       : `Awaiting your approval on the ${plans}`;
+  } else if (waitsHere) {
+    statusLine = "Waiting on the Units below";
   } else if (currentCheckbox?.state === "awaiting-approval") {
     const displayName = currentName;
     statusLine = `Awaiting your approval on ${displayName}`;
@@ -2319,7 +2336,12 @@ To get started:
   // below and stays out of the count.
   const checkboxes = parseCheckboxes(content);
   const work = selection.intent === null ? null : { projectDir, intent: selection.intent, space: selection.space };
-  const planned = new Set(plannedStages(content, scope, work).map((s) => s.slug));
+  // Where the record's Units are built as takes (the lead's project of work
+  // teams build), each Unit's own stages run in its taker's build, never in
+  // this record: they are out of both numbers here.
+  const takesBuildUnits = isTeamUnitOwnership(content) && homeLocation(content) !== null && unitBuildOf(content) === null;
+  const unitStages = new Set(takesBuildUnits ? unitMajorConstructionStageSlugs(scope, content, true) : []);
+  const planned = new Set(plannedStages(content, scope, work).map((s) => s.slug).filter((slug) => !unitStages.has(slug)));
   const setup = new Set(graph.filter((s) => s.phase === "initialization").map((s) => s.slug));
   const scopedCheckboxes = checkboxes.filter((c) =>
     planned.has(c.slug) ||
@@ -2378,14 +2400,16 @@ To get started:
       ? unitProgress(dirname(sp), getField(content, "Construction Iteration") ?? "")
       : null;
     const phaseSkipped = phaseCheckboxes.filter((c) => c.state === "skipped").length;
-    const count = p === "construction" && walk !== null
+    const count = p === "construction" && waitsHere
+      ? ""
+      : p === "construction" && walk !== null
       ? walk.current === null ? walk.clause : `Unit ${walk.current} of ${walk.total}: ${walk.clause}`
       : units
       ? `Unit ${units.current} of ${units.total}`
       : phaseSkipped === phaseCheckboxes.length
       ? "skipped"
       : `${done}/${phaseCheckboxes.length - phaseSkipped}`;
-    phaseProgress += `  ${(phaseLabels[p] || p).padEnd(16)} ${bar} ${count}\n`;
+    phaseProgress += `  ${(phaseLabels[p] || p).padEnd(16)} ${bar}${count === "" ? "" : ` ${count}`}\n`;
   }
 
   // Only a change the person can act on: a stage whose inputs moved since it
@@ -2464,7 +2488,7 @@ To get started:
   const markerUnit = marker?.delivery !== "superseded" && typeof marker?.unit === "string" ? marker.unit : "";
   const stepStage = fieldStage ?? (markerUnit ? findStageBySlug(marker?.stage ?? "") : undefined);
   const stepUnit = fieldStage ? fieldUnit : markerUnit;
-  const currentStep =
+  const currentStep = !waitsHere &&
     UNIT_NAME_REGEX.test(stepUnit) && stepStage && isPerUnitStage(stepStage) && stepStage.slug !== currentStage &&
     currentNode !== undefined && isPerUnitStage(currentNode)
       ? `Current Step:   ${stepStage.slug} for unit ${stepUnit}\n`
@@ -2504,7 +2528,9 @@ Current Stage:  ${stageDisplay}
 ${currentStep}Status:         ${statusLine}
 ${agentLine}Guard Policy:   ${guardPolicyDisplay}
 ${fencesOffLine}${ceremonyDisplay}
-Completion:     ${completed}/${total} stages (${pct}%)${skippedNote}
+Completion:     ${completed}/${total} stages${takesBuildUnits ? " here" : ""} (${pct}%)${skippedNote}${
+    takesBuildUnits ? "; each Unit's own stages are on the board below" : ""
+  }
 
 Phase Progress:
 ${phaseProgress}

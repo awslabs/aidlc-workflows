@@ -14,7 +14,21 @@ import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { hostFor } from "../harness/scope-hosts.ts";
 import { AgentStandIn, type Directive, PersonScript } from "../harness/scope-run.ts";
-import { cleanupTeamBuild, codeHost, GIT_ENV, git, homeState, makeHome, run, STATE, UNIT } from "../harness/team-build.ts";
+import {
+  cleanupTeamBuild,
+  cloneCode,
+  cloneOf,
+  codeHost,
+  GIT_ENV,
+  git,
+  HOME_RECORD,
+  homeState,
+  makeHome,
+  run,
+  STATE,
+  takeIn,
+  UNIT,
+} from "../harness/team-build.ts";
 
 setDefaultTimeout(20 * 60_000);
 afterAll(cleanupTeamBuild);
@@ -39,7 +53,17 @@ function builtToCheckpoint() {
   person.say("/aidlc");
   const gate = agent.drive(agent.next());
   expect((gate.construction_checkpoint as { unit?: string } | undefined)?.unit, JSON.stringify(gate)).toBe("orders-api");
-  return { home, host, person, agent };
+  return { hosts, home, host, person, agent };
+}
+
+// Teams chosen at the lead's project, with the plan as the teams have it:
+// committed and pushed.
+function teamsChosen(dir: string): void {
+  const team = run(STATE, ["set-unit-ownership", "team"], dir);
+  expect(team.status, team.out).toBe(0);
+  git(dir, ["add", "-A"]);
+  git(dir, ["commit", "-q", "-m", "teams chosen"]);
+  git(dir, ["push", "-q", "origin", "main"]);
 }
 
 function stateOf(dir: string): string {
@@ -57,12 +81,14 @@ function auditOf(dir: string): string {
 
 describe("a Unit built at the lead's project stays the lead's to approve there", () => {
   test("after the report Unit goes to a team, the orders API's open gate is still put to the lead and their approval records", () => {
-    const { home, host, person, agent } = builtToCheckpoint();
-    person.say("Let's give the report Unit to the data team and leave anything else open");
-    const team = run(STATE, ["set-unit-ownership", "team"], home.dir);
-    expect(team.status, team.out).toBe(0);
-    const assigned = run(UNIT, ["assign", "report=data"], home.dir);
-    expect(assigned.status, assigned.out).toBe(0);
+    const { hosts, home, host, person, agent } = builtToCheckpoint();
+    person.say("Let's have teams build the rest; the data team takes the report Unit");
+    teamsChosen(home.dir);
+    // A data teammate takes the report Unit from the data space.
+    const dana = cloneOf(home.remote, "dana");
+    cloneCode(hosts.data, dana, "data", "dana");
+    const took = takeIn("data", ["report", "--home", HOME_RECORD], dana);
+    expect(took.status, took.out).toBe(0);
     let step = agent.next();
     if (step.ask_type === "team-handover") {
       const later = (step.choices as Array<{ label: string; command: string }>).find((c) => c.label === "Not now")!;
@@ -84,13 +110,8 @@ describe("a Unit built at the lead's project stays the lead's to approve there",
 
   test("main's claim never scopes the lead's project to one of its Units", () => {
     const { home, person } = builtToCheckpoint();
-    person.say("Let's give the report Unit to the data team and leave anything else open");
-    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
-    expect(run(UNIT, ["assign", "report=data"], home.dir).status).toBe(0);
-    // The plan as the teams have it: committed and pushed.
-    git(home.dir, ["add", "-A"]);
-    git(home.dir, ["commit", "-q", "-m", "teams chosen"]);
-    git(home.dir, ["push", "-q", "origin", "main"]);
+    person.say("Let's have teams build the rest; the data team takes the report Unit");
+    teamsChosen(home.dir);
     const claim = run(UNIT, ["claim", "orders-api", "--team", "shop"], home.dir);
     expect(claim.status, claim.out).not.toBe(0);
     expect(existsSync(join(home.dir, "aidlc", ".aidlc-unit-scope.json"))).toBe(false);

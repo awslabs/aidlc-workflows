@@ -292,24 +292,40 @@ export function stateOf(dir: string): string {
 
 export const HOME_RECORD = "fixture-8000000000000001";
 
-// The home of work across checkout-api and billing, refunds held for payments,
-// pushed; a payments member's clone with both repos and refunds taken. Another
-// Unit plan (`dependencies`) replaces DEPENDENCIES.
-export function refundsTaken(assign: string[] = ["refunds=payments", "checkout-ui=web"], beforeTake?: (alice: string) => void, dependencies?: string) {
+// The space a teammate works in: made in their clone and switched to, so a
+// take there builds there.
+export function inSpace(dir: string, space: string): void {
+  if (!existsSync(join(dir, "aidlc", "spaces", space, "memory"))) {
+    const made = run(UTILITY, ["space-create", space], dir);
+    expect(made.status, made.out).toBe(0);
+  }
+  const switched = run(UTILITY, ["space", space], dir);
+  expect(switched.status, switched.out).toBe(0);
+}
+
+// `unit take` from the space the person works in, made and switched to first.
+export function takeIn(space: string, args: string[], dir: string, env: NodeJS.ProcessEnv = ENV): RunResult {
+  inSpace(dir, space);
+  return run(UNIT, ["take", ...args], dir, env);
+}
+
+// The home of work across checkout-api and billing, teams chosen and every Unit
+// open, pushed; a teammate's clone with both repos, working in the payments
+// space, refunds taken there. Another Unit plan (`dependencies`) replaces
+// DEPENDENCIES.
+export function refundsTaken(beforeTake?: (alice: string) => void, dependencies?: string) {
   const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
   const home = makeHome({ repos: hosts, ...(dependencies === undefined ? {} : { dependencies }) });
   const teams = run(STATE, ["set-unit-ownership", "team"], home.dir);
   expect(teams.status, teams.out).toBe(0);
-  expect(run(UNIT, ["assign", ...assign], home.dir).status).toBe(0);
   git(home.dir, ["add", "-A"]);
   git(home.dir, ["commit", "-q", "-m", "teams"]);
   git(home.dir, ["push", "-q", "origin", "main"]);
   const alice = cloneOf(home.remote, "alice");
   for (const [name, host] of Object.entries(hosts)) cloneCode(host, alice, name, "alice");
   beforeTake?.(alice);
-  // Alice is on the team the lead holds refunds for.
-  const team = assign.find((pair) => pair.startsWith("refunds="))?.slice("refunds=".length) ?? "payments";
-  const took = run(UNIT, ["take", "refunds", "--home", HOME_RECORD, "--team", team], alice);
+  inSpace(alice, "payments");
+  const took = run(UNIT, ["take", "refunds", "--home", HOME_RECORD], alice);
   expect(took.status, took.out).toBe(0);
   const intents = join(alice, "aidlc", "spaces", "payments", "intents");
   const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-refunds"))!);

@@ -1,14 +1,15 @@
 // covers: subcommand:aidlc-unit:take, subcommand:aidlc-unit:push, subcommand:aidlc-unit:release, subcommand:aidlc-unit:assign, function:checkTeamResults, function:unitMergeVerdict, function:localRepoOverrideLines
 //
 // The build-out's journey (#2410, section 3), on every tool's tree, in one piece
-// of work. The home is the lead's clone on Claude Code; each team works in its
-// own clone with its own tool's tree, through that tool's own hooks: it is
-// offered its Unit, takes it, builds it with the agent stand-in (every stage,
-// its gate and the code plan approved by the person), pushes it, and its repos
-// merge their own way (squash, merge commit, rebase). One team keeps its repos
-// outside the workspace, in its own repos.local.json. The home sees every
-// merge, records each Unit done, opens the Unit that waited, and runs Build and
-// Test once every Unit is in. The home's plan skips the NFR and infrastructure
+// of work. The home is the lead's clone on Claude Code, every Unit open for any
+// team; each team works in its own clone, in its own space, with its own tool's
+// tree, through that tool's own hooks: it is offered the open Units, takes its
+// own, builds it with the agent stand-in (every stage, its gate and the code
+// plan approved by the person), pushes it, and its repos merge their own way
+// (squash, merge commit, rebase). One team keeps its repos outside the
+// workspace, in its own repos.local.json. The home sees every merge, records
+// each Unit done, opens the Unit that waited, and runs Build and Test once
+// every Unit is in. The home's plan skips the NFR and infrastructure
 // stages, as t-scope-host-* journeys skip design stages, so each build walks
 // Functional Design and Code Generation.
 //
@@ -21,8 +22,8 @@
 // the order they were fixed, so on an older engine the journey stops at the
 // first route it still breaks. The cases after the journey are routes of their
 // own: the lead's project building a Unit while a team's Unit merges, a team's
-// next Unit asked for in the chat of its pushed build, a take of another team's
-// Unit and its way back, and the lead's re-hold of a Unit.
+// next Unit asked for in the chat of its pushed build, and a take of a Unit
+// someone else took, a take given back and the lead's board.
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -41,9 +42,9 @@ import {
   git,
   type Home,
   homeState,
+  inSpace,
   makeHome,
   mergeOnHost,
-  ORCH,
   run,
   STATE,
   tempDir,
@@ -84,12 +85,13 @@ const PLAN: readonly Plan[] = [
 const FIRST = PLAN.filter((p) => p.dependsOn === undefined);
 const plan = (unit: string): Plan => PLAN.find((p) => p.unit === unit)!;
 
-const UNIT_ASKS = new Set(["unit-take", "unit-push", "unit-assignment", "unit-amend", "unit-signoff"]);
+const UNIT_ASKS = new Set(["unit-take", "unit-push", "unit-amend", "unit-signoff"]);
 
 // The lead's project at the first Construction step, its plan skipping the
-// NFR and infrastructure stages, with the lead's tree and the Units held as
-// `assign` says: committed and pushed, as the lead shares it.
-function leadsProject(hosts: Record<string, string>, units: readonly Plan[], assign: string[]): { home: Home; id8: string; assigned: Record<string, unknown> } {
+// NFR and infrastructure stages, with the lead's tree, teams chosen and every
+// Unit open but those the lead asks to build `here`: committed and pushed, as
+// the lead shares it.
+function leadsProject(hosts: Record<string, string>, units: readonly Plan[], here: string[] = []): { home: Home; id8: string } {
   const dependencies = "# Unit dependencies\n\n```yaml\nunits:\n" +
     units.map((p) => `  - name: ${p.unit}\n    kind: service\n    repos: [${p.repos.map((r) => r.repo).join(", ")}]\n    depends_on: [${p.dependsOn ?? ""}]\n`).join("") +
     "```\n";
@@ -97,12 +99,18 @@ function leadsProject(hosts: Record<string, string>, units: readonly Plan[], ass
   const home = makeHome({ repos: hosts, dependencies, state });
   cpSync(join(REPO_ROOT, "dist", "claude"), home.dir, { recursive: true, force: false, errorOnExist: false });
   expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
-  const assigned = run(UNIT, ["assign", ...assign], home.dir);
-  expect(assigned.status, assigned.out).toBe(0);
   git(home.dir, ["add", "-A"]);
   git(home.dir, ["commit", "-q", "-m", "teams chosen"]);
   git(home.dir, ["push", "-q", "origin", "main"]);
-  return { home, id8: fixtureIntentId8(home.dir), assigned: assigned.json ?? {} };
+  // Once the plan is shared, the lead asks to build a Unit here.
+  if (here.length > 0) {
+    const built = run(UNIT, ["assign", "--here", here.join(","), "--person-words", `we build ${here.join(" and ")} here`], home.dir);
+    expect(built.status, built.out).toBe(0);
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "built here"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+  }
+  return { home, id8: fixtureIntentId8(home.dir) };
 }
 
 interface Team {
@@ -113,9 +121,10 @@ interface Team {
 }
 
 // A teammate's clone of the workspace with their own tool's tree laid in beside
-// its files, and their clones of the Unit's repos: under the workspace, or, with
-// `elsewhere`, in a folder of their own that their repos.local.json names. A
-// repo in `without` is not checked out yet.
+// its files, switched to their team's space so a take there builds there, and
+// their clones of the Unit's repos: under the workspace, or, with `elsewhere`,
+// in a folder of their own that their repos.local.json names. A repo in
+// `without` is not checked out yet.
 function teamClone(home: Home, hosts: Record<string, string>, plan: Plan, opts: { elsewhere?: boolean; without?: string[] } = {}): Team {
   const dir = cloneOf(home.remote, plan.person);
   cpSync(join(REPO_ROOT, "dist", plan.tool), dir, { recursive: true, force: false, errorOnExist: false });
@@ -137,6 +146,7 @@ function teamClone(home: Home, hosts: Record<string, string>, plan: Plan, opts: 
       repos: plan.repos.map(({ repo }) => ({ name: repo, path: join(own, repo).replace(/\\/g, "/") })),
     }, null, 2)}\n`);
   }
+  inSpace(dir, plan.team);
   const host = hostFor(plan.tool, dir, GIT_ENV);
   if (host instanceof OpencodeScopeHost) opened.push(host);
   const person = new PersonScript(host);
@@ -160,10 +170,10 @@ function pick(team: { agent: AgentStandIn; person: PersonScript }, d: Directive,
   return JSON.parse(ran.stdout.trim().split("\n").at(-1) ?? "{}") as Record<string, unknown>;
 }
 
-// The take offer's choice for a Unit, whatever team its label names.
+// The take offer's choice that starts a Unit.
 function startChoice(offer: Directive, unit: string): { label: string; command: string } {
   const choice = ((offer.choices as Array<{ label: string; command?: string }> | undefined) ?? [])
-    .find((c) => c.label === `Start ${unit}` || c.label.startsWith(`Start ${unit} for `));
+    .find((c) => c.label === `Start ${unit}`);
   expect(choice?.command, `Start ${unit} in ${JSON.stringify(offer)}`).toBeString();
   return choice as { label: string; command: string };
 }
@@ -239,16 +249,10 @@ function expectResult(remote: string, id8: string, p: Plan, pushed: Record<strin
 const unitsMerged = (dir: string): string[] =>
   readAuditShardEvents(dir).filter((row) => row.event === "UNIT_MERGED").map((row) => /\*\*Unit\*\*: (\S+)/.exec(row.block)?.[1] ?? "").sort();
 
-// A Unit the lead holds for a team that nobody has taken.
-function heldNotTaken(claim: Record<string, unknown> | null, team: string): void {
-  expect(claim).toMatchObject({ status: "claimed", owner: team });
-  expect(claim?.taken_by, JSON.stringify(claim)).toBeUndefined();
-}
-
 describe("one piece of work, a team on every tool", () => {
   test("each team takes, builds and pushes its Unit by the routes the live runs took; the repos merge their own way; the home records every Unit done and runs Build and Test", () => {
     const hosts: Record<string, string> = { "checkout-api": codeHost("checkout-api"), "checkout-web": codeHost("checkout-web"), billing: codeHost("billing") };
-    const { home, id8 } = leadsProject(hosts, PLAN, PLAN.map((p) => `${p.unit}=${p.team}`));
+    const { home, id8 } = leadsProject(hosts, PLAN);
     const teams = new Map<string, Team>();
     const pushedBy = new Map<string, Record<string, unknown>>();
 
@@ -260,11 +264,12 @@ describe("one piece of work, a team on every tool", () => {
     const doraBuilt = takeAndBuild(dora, opencodeBareEntry(dora));
     expect(doraBuilt.took).toMatchObject({ taken: true, unit: "search", team: "discovery", space: "discovery" });
 
-    // Finance, on Copilot CLI: the teammate's first line is words, which get the
-    // Units to take (a live run once got the pick of the lead's work itself).
+    // Finance, on Copilot CLI: the teammate's first line is words, read against
+    // the Units to take and kept (a live run once got the pick of the lead's
+    // work itself); asking what is here puts the offer.
     const frank = teamClone(home, hosts, plan("receipts"));
     teams.set("receipts", frank);
-    const frankBuilt = takeAndBuild(frank, frank.agent.personTypes("/aidlc Hi, I am on the finance team. What is ours to build?"));
+    const frankBuilt = takeAndBuild(frank, goOn(frank, frank.agent.personTypes("/aidlc Hi, I am on the finance team. What is ours to build?")));
     expect(frankBuilt.took).toMatchObject({ taken: true, unit: "receipts", team: "finance", space: "finance" });
     pushedBy.set("receipts", pick(frank, frankBuilt.end, "Push"));
 
@@ -317,17 +322,17 @@ describe("one piece of work, a team on every tool", () => {
     lead.person.say("/aidlc");
     const board = lead.agent.next();
     expect(board.kind, JSON.stringify(board)).toBe("print");
-    expect(String(board.narration)).toContain("- refunds, payments: checkout-api not merged yet, billing not merged yet (0 of 2 merged)");
-    expect(String(board.narration)).toContain("- reporting, data: held for data, not taken yet");
+    expect(String(board.narration)).toContain("- refunds, payments space: built by alice, checkout-api not merged yet, billing not merged yet (0 of 2 merged)");
+    expect(String(board.narration)).toContain("- reporting, open: waiting for a team to take it");
 
     // Each repo merges its own way.
     for (const p of FIRST) for (const { repo, merge } of p.repos) mergeOnHost(hosts[repo], p.unit, merge);
     const seen = lead.agent.next();
     expect(unitsMerged(home.dir), JSON.stringify(seen)).toEqual(FIRST.map((p) => p.unit).sort());
     for (const p of FIRST) expect(claimPayload(home.remote, id8, p.unit), p.unit).toMatchObject({ done: true });
-    expect(String(seen.narration)).toContain("- refunds, payments: done");
+    expect(String(seen.narration)).toContain("- refunds, payments space: built by alice, done");
 
-    // refunds is done, so reporting opens for data, who builds it on Cursor. The
+    // refunds is done, so reporting opens, and dana builds it on Cursor. The
     // lead's state as last pushed still has refunds under way, and the take
     // offer never says a Unit done on its claim is being built.
     const data = teamClone(home, hosts, plan("reporting"));
@@ -347,7 +352,7 @@ describe("one piece of work, a team on every tool", () => {
     expect(named, JSON.stringify(status)).toBeString();
     const look = lead.agent.host.bash(named!);
     expect(look.status, look.stdout + look.stderr).toBe(0);
-    expect(look.stdout).toMatch(/^- reporting, data: billing merged\b.*, not recorded yet: the next step here records it$/m);
+    expect(look.stdout).toMatch(/^- reporting, data space: built by dana, billing merged\b.*, not recorded yet: the next step here records it$/m);
     expect(unitsMerged(home.dir)).not.toContain("reporting");
 
     // Every Unit is in: the home records the last one, runs Build and Test, and the work ends done.
@@ -371,8 +376,8 @@ describe("the lead's project builds a Unit of its own while a team's Unit merges
     const hosts: Record<string, string> = { "checkout-web": codeHost("checkout-web"), billing: codeHost("billing") };
     const team: Plan = { unit: "refund-button", team: "storefront", tool: "copilot", person: "sam", repos: [{ repo: "checkout-web", merge: "merge" }] };
     const here: Plan = { unit: "weekly-report", team: "here", tool: "claude", person: "lead", repos: [{ repo: "billing", merge: "squash" }] };
-    // The lead names a team for refund-button only, so weekly-report is built here.
-    const { home, id8 } = leadsProject(hosts, [team, here], ["refund-button=storefront"]);
+    // The lead asks to build weekly-report here; refund-button is open for any team.
+    const { home, id8 } = leadsProject(hosts, [team, here], ["weekly-report"]);
     // The lead's chat starts on the Unit built here, reading the claims once.
     const lead = homeStandIn(home);
     lead.person.say("/aidlc");
@@ -397,7 +402,7 @@ describe("a team's pushed build, asked for the team's next Unit", () => {
     const hosts: Record<string, string> = { "checkout-api": codeHost("checkout-api") };
     const receipts = plan("receipts");
     const statements: Plan = { ...receipts, unit: "statements", dependsOn: "receipts" };
-    const { home, id8 } = leadsProject(hosts, [receipts, statements], ["receipts=finance", "statements=finance"]);
+    const { home, id8 } = leadsProject(hosts, [receipts, statements]);
     const frank = teamClone(home, hosts, receipts);
     frank.person.say("/aidlc");
     const built = takeAndBuild(frank, frank.agent.next());
@@ -414,65 +419,74 @@ describe("a team's pushed build, asked for the team's next Unit", () => {
   });
 });
 
-// refunds held for payments and checkout-ui for web.
+// refunds and checkout-ui, each taken on Copilot CLI: alice works in the
+// payments space, sam in the web space.
 const TWO_TEAMS: Plan[] = [
   { unit: "refunds", team: "payments", tool: "copilot", person: "alice", repos: [{ repo: "checkout-api", merge: "squash" }] },
   { unit: "checkout-ui", team: "web", tool: "copilot", person: "sam", repos: [{ repo: "checkout-web", merge: "squash" }] },
 ];
 
-describe("a teammate on Copilot CLI and the Units the lead held for teams", () => {
-  test("asking to take another team's Unit leaves it with that team, and a take is given back to the team it was held for", () => {
+describe("a teammate on Copilot CLI and the open Units", () => {
+  test("asking to take a Unit someone took is told who has it, a take given back is open again, and the lead's board names assign --here", () => {
     const hosts: Record<string, string> = { "checkout-api": codeHost("checkout-api"), "checkout-web": codeHost("checkout-web") };
-    const { home, id8 } = leadsProject(hosts, TWO_TEAMS, TWO_TEAMS.map((p) => `${p.unit}=${p.team}`));
+    const { home, id8 } = leadsProject(hosts, TWO_TEAMS);
+    const alice = teamClone(home, hosts, TWO_TEAMS[0]);
+    alice.person.say("/aidlc");
+    const aliceOffer = alice.agent.next();
+    expect(aliceOffer.ask_type, JSON.stringify(aliceOffer)).toBe("unit-take");
+    expect(pick(alice, aliceOffer, startChoice(aliceOffer, "refunds").label)).toMatchObject({ taken: true, unit: "refunds", space: "payments" });
+    const hers = { status: "claimed", owner: "payments", taken_by: "alice" };
+    expect(claimPayload(home.remote, id8, "refunds")).toMatchObject(hers);
     const sam = teamClone(home, hosts, TWO_TEAMS[1]);
-    // x2783-s9 5: his words name the payments team's Unit, and the agent takes it for his own team.
-    const offer = sam.agent.personTypes("/aidlc We are the web team. Can we take refunds instead?");
+    // x2783-s9 5: his words name the Unit alice took. The offer says who builds
+    // it, and the agent's take of it all the same is told who has it.
+    const said = sam.agent.personTypes("/aidlc We are the web team. Can we take refunds instead?");
+    expect(String(said.message), JSON.stringify(said).slice(0, 400)).toContain("Being built: refunds (by alice in payments)");
+    expect(String(said.message)).not.toContain("Start refunds:");
+    const offer = goOn(sam, said);
     expect(offer.ask_type, JSON.stringify(offer)).toBe("unit-take");
-    const asked = sam.agent.host.bash(`${startChoice(offer, "refunds").command.replace(/ --team (?:'[^']*'|\S+)/, "")} --team web`);
-    heldNotTaken(claimPayload(home.remote, id8, "refunds"), "payments");
-    expect(asked.stdout + asked.stderr).toContain("payments");
-    // x2783-s9 6: he takes his team's own Unit, then asks to give it back; the lead's hold for web comes back.
+    expect(String(offer.question)).toContain("Being built: refunds (by alice in payments)");
+    expect((offer.choices as Array<{ label: string }>).map((c) => c.label)).not.toContain("Start refunds");
     const mine = startChoice(offer, "checkout-ui");
+    const asked = sam.agent.host.bash(mine.command.replace(/ take \S+/, " take refunds"));
+    expect(asked.status, asked.stdout + asked.stderr).not.toBe(0);
+    expect(asked.stdout + asked.stderr).toContain("refunds is already taken: alice builds it in the payments space.");
+    expect(claimPayload(home.remote, id8, "refunds")).toMatchObject(hers);
+    // x2783-s9 6: he takes checkout-ui, then asks to give it back: it is open
+    // again for anyone, and he stays in his space.
     sam.person.pick(String(offer.question), [mine.label], mine.label);
     const took = sam.agent.host.bash(mine.command);
     expect(took.status, took.stdout + took.stderr).toBe(0);
-    expect(claimPayload(home.remote, id8, "checkout-ui")).toMatchObject({ owner: "web", taken_by: "sam" });
+    expect(claimPayload(home.remote, id8, "checkout-ui")).toMatchObject({ status: "claimed", owner: "web", taken_by: "sam" });
     sam.person.say("give it back, it is not ours to build after all");
     const back = sam.agent.host.bash(`bun ${sam.agent.host.dir}/tools/aidlc-unit.ts release checkout-ui`);
     expect(back.status, back.stdout + back.stderr).toBe(0);
-    heldNotTaken(claimPayload(home.remote, id8, "checkout-ui"), "web");
-  });
-});
-
-describe("the lead holds a Unit for a team again", () => {
-  test("a re-hold after a release is a hold, and the approvals question is answered once", () => {
-    const hosts: Record<string, string> = { "checkout-api": codeHost("checkout-api"), "checkout-web": codeHost("checkout-web") };
-    const { home, id8, assigned } = leadsProject(hosts, TWO_TEAMS, TWO_TEAMS.map((p) => `${p.unit}=${p.team}`));
+    expect(back.stdout).toContain("Checkout-ui is given back: it is open again at the lead's project.");
+    const released = claimPayload(home.remote, id8, "checkout-ui");
+    expect(released).toMatchObject({ status: "released" });
+    expect(released?.taken_by, JSON.stringify(released)).toBeUndefined();
+    expect(readFileSync(join(sam.dir, "aidlc", "active-space"), "utf-8").trim()).toBe("web");
+    // The lead's board: refunds with alice, checkout-ui open, and the note
+    // naming the command that builds an open Unit at the lead's project.
     const lead = homeStandIn(home);
-    const unitTool = `bun ${lead.agent.host.dir}/tools/aidlc-unit.ts`;
-    // The first assign asked how often the teams approve; the lead keeps the recommended answer.
-    const rhythm = (assigned.offer as { choices?: Array<{ label: string; command?: string }> } | undefined)?.choices ?? [];
-    const keep = rhythm.find((c) => c.label === "Keep approvals after every stage");
-    expect(keep, JSON.stringify(assigned)).toBeDefined();
-    lead.person.pick(String(assigned.notice), rhythm.map((c) => c.label), keep!.label);
-    if (keep!.command !== undefined) expect(lead.agent.host.bash(keep!.command).status).toBe(0);
     lead.person.say("/aidlc");
     const board = lead.agent.next();
     expect(board.kind, JSON.stringify(board).slice(0, 400)).toBe("print");
-    // x2783-s9 3: the lead freed refunds, then said to hold it for payments again;
-    // the board's note names the assign that holds it.
-    lead.person.say("free refunds for now");
-    const freed = lead.agent.host.bash(`${unitTool} release refunds`);
-    expect(freed.status, freed.stdout + freed.stderr).toBe(0);
-    expect(String(board.board_note)).toMatch(/`[^`]*\bassign <unit>=<team>[^`]*`/);
-    const again = "No, the payments team builds it. Hold it for them again.";
-    lead.person.say(again);
-    const held = lead.agent.host.bash(`${unitTool} assign refunds=payments --person-words '${again}'`);
-    expect(held.status, held.stdout + held.stderr).toBe(0);
-    heldNotTaken(claimPayload(home.remote, id8, "refunds"), "payments");
-    // x2783-s9 4: the approvals question was answered at the first assign and is not asked again.
-    expect((JSON.parse(held.stdout.trim().split("\n").at(-1) ?? "{}") as { offer?: unknown }).offer).toBeUndefined();
-    heldNotTaken(claimPayload(home.remote, id8, "checkout-ui"), "web");
-    expect(run(ORCH, ["team-board"], home.dir).out).toContain("- checkout-ui, web: held for web, not taken yet");
+    expect(String(board.narration)).toContain("- refunds, payments space: building, taken by alice");
+    expect(String(board.narration)).toContain("- checkout-ui, open: waiting for a team to take it");
+    expect(String(board.board_note)).toMatch(/`[^`]*\bassign --here <unit>[^`]*`/);
+    // x2783-s9 4: how often the teams approve is put on the board until the
+    // lead answers, and once answered it is not asked again.
+    const offers = (board.offers ?? []) as Array<{ question: string; choices: Array<{ label: string; command?: string }> }>;
+    const rhythm = offers.find((o) => o.question.startsWith("Each team will approve its Unit after every stage."));
+    expect(rhythm?.choices.map((c) => c.label), JSON.stringify(offers)).toEqual(["Keep approvals after every stage", "Approve once at the end of each Unit"]);
+    lead.person.pick(rhythm!.question, rhythm!.choices.map((c) => c.label), "Keep approvals after every stage");
+    const kept = lead.agent.host.bash(rhythm!.choices[0].command!);
+    expect(kept.status, kept.stdout + kept.stderr).toBe(0);
+    lead.agent.host.newSession();
+    lead.person.say("/aidlc");
+    const again = lead.agent.next();
+    expect(again.kind, JSON.stringify(again).slice(0, 400)).toBe("print");
+    expect(JSON.stringify(again.offers ?? [])).not.toContain("Each team will approve its Unit");
   });
 });

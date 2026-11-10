@@ -7,12 +7,12 @@
 // a compound read, was refused by the plan-approval guard with "Run next", and
 // next printed the board: a loop with no way out. At that wait the agent's own
 // change is still refused, in one sentence that says the wait (which Units wait
-// on which teams, and that nothing is built here meanwhile) and names no step;
-// the person's own ask, before or after that refusal, lets it through, with a
-// row naming their message and their words. The same refusal never comes back
-// for what they asked, and a Unit the lead builds here keeps its plan. The
-// team's twin, a Unit's build whose Code Generation is approved, leaves the
-// same row when the person's ask runs there.
+// on their builds in which spaces, and that nothing is built here meanwhile) and
+// names no step; the person's own ask, before or after that refusal, lets it
+// through, with a row naming their message and their words. The same refusal
+// never comes back for what they asked, and a Unit the lead builds here keeps
+// its plan. The team's twin, a Unit's build whose Code Generation is approved,
+// leaves the same row when the person's ask runs there.
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -38,6 +38,7 @@ import {
   run,
   STATE,
   UNIT,
+  takeIn,
 } from "../harness/team-build.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -48,8 +49,8 @@ const OPEN = "# Unit dependencies\n\n```yaml\nunits:\n  - name: refunds\n    dep
   "  - name: reporting\n    repos: [ledger]\n    depends_on: []\n```\n";
 const CHAT = "t-unit-lead-waits-chat";
 const FAILURE = "the refund route never calls the notices handler";
-const WAIT = "refunds waits on the payments team and reporting on the data team, so nothing is built here " +
-  "meanwhile: the files here change only when you ask for a change.";
+const WAIT = "refunds waits on its build in the payments space and reporting on its build in the data space, so " +
+  "nothing is built here meanwhile: the files here change only when you ask for a change.";
 
 // The lead's own chat: its commands carry the chat, as the host's hooks name it.
 const LEAD: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: CHAT };
@@ -79,10 +80,10 @@ const reason = (out: string): string => {
   }
 };
 
-// refunds held for payments, reporting for data; a data member's clone takes
-// reporting, builds it and pushes it; then the lead's Build and Test fails on
-// reporting, the lead sends it back, and the lead's project goes back to Code
-// Generation to wait for it, as the step says. The board is the step there.
+// A teammate takes refunds from the payments space and another takes reporting
+// from the data space, builds it and pushes it; then the lead's Build and Test
+// fails on reporting, the lead sends it back, and the lead's project goes back
+// to Code Generation to wait for it, as the step says. The board is the step there.
 function leadWaits(policy?: "relaxed" | "off") {
   const home = makeHome({
     dependencies: OPEN,
@@ -90,11 +91,14 @@ function leadWaits(policy?: "relaxed" | "off") {
     ...(policy ? { state: homeState([`- **Guard Policy**: ${policy} (set by you)`]) } : {}),
   });
   expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
-  expect(run(UNIT, ["assign", "refunds=payments", "reporting=data"], home.dir).status).toBe(0);
   expect(run(UNIT, ["share", "--plan"], home.dir).status).toBe(0);
+  const payer = cloneOf(home.remote, "pat");
+  cloneCode(codeHost("ledger"), payer, "ledger", "pat");
+  const paying = takeIn("payments", ["refunds", "--home", HOME_RECORD], payer);
+  expect(paying.status, paying.out).toBe(0);
   const partner = cloneOf(home.remote, "dana");
   cloneCode(codeHost("ledger"), partner, "ledger", "dana");
-  const took = run(UNIT, ["take", "reporting", "--home", HOME_RECORD, "--team", "data"], partner);
+  const took = takeIn("data", ["reporting", "--home", HOME_RECORD], partner);
   expect(took.status, took.out).toBe(0);
   const intents = join(partner, "aidlc", "spaces", "data", "intents");
   const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-reporting"))!);
@@ -122,7 +126,7 @@ function leadWaits(policy?: "relaxed" | "off") {
   expect(reopened.status, reopened.out).toBe(0);
   expect(readFileSync(statePath, "utf-8")).toMatch(/^- \*\*Current Stage\*\*: code-generation$/m);
   const board = next(home.dir, LEAD);
-  expect(String(board.narration)).toContain("- reporting, data: sent back from your Build and Test, back with data");
+  expect(String(board.narration)).toContain("- reporting, data space: sent back from your Build and Test, back with dana");
   expect(String(board.message)).toContain("end the turn");
   return { home };
 }
@@ -196,13 +200,17 @@ describe("while the lead's project waits on the teams at Code Generation", () =>
   test("a Unit the lead builds here keeps its plan: the person's word to build it here ends the wait's pass", () => {
     const home = makeHome({ dependencies: OPEN, repos: { ledger: "" } });
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
-    expect(run(UNIT, ["assign", "--open", "refunds", "reporting=data"], home.dir).status).toBe(0);
     expect(run(UNIT, ["share", "--plan"], home.dir).status).toBe(0);
+    const partner = cloneOf(home.remote, "dana");
+    cloneCode(codeHost("ledger"), partner, "ledger", "dana");
+    const took = takeIn("data", ["reporting", "--home", HOME_RECORD], partner);
+    expect(took.status, took.out).toBe(0);
     const statePath = seededStateFile(home.dir);
     writeFileSync(statePath, readFileSync(statePath, "utf-8").replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: code-generation"));
     next(home.dir, LEAD);
     // The wait is recorded: the agent's own write hears it, an open Unit in its own words.
-    expect(reason(write(home.dir, "notes/for-data.md").out).trim()).toStartWith("refunds waits for a team to take it and reporting on the data team");
+    expect(reason(write(home.dir, "notes/for-data.md").out).trim())
+      .toStartWith("refunds waits for a team to take it and reporting on its build in the data space");
     leadSays(home.dir, "build refunds here");
     const here = run(UNIT, ["assign", "--here", "refunds", "--person-words", "build refunds here"], home.dir, LEAD);
     expect(here.status, here.out).toBe(0);

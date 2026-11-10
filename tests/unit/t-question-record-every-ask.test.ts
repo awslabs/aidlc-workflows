@@ -30,7 +30,9 @@ import {
   A, B, BUN, C, D, built, codeGeneration, engine, field, inception, lastTurn, openIn, reviewedStage, rows, say, shellQuote,
   STAGE, staffing, step, tool,
 } from "../harness/question-record.ts";
-import { cleanupTeamBuild, ENV, makeHome, next as teamNext, run as teamRun, STATE, UNIT } from "../harness/team-build.ts";
+import {
+  cleanupTeamBuild, codeGenerated, ENV, git, next as teamNext, refundsTaken, run as teamRun, UNIT,
+} from "../harness/team-build.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 resetAidlcEnv();
@@ -203,27 +205,31 @@ describe("an engine question", () => {
   });
 });
 
-// Teams building their Units as work of their own: the home's question who
-// builds which Unit is an engine ask like the others.
+// Teams building their Units as work of their own: the lead's sign-off on a
+// team's result is an engine ask like the others. (The take offer in a fresh
+// clone is not recorded: no work is selected there to keep the record in.)
 describe("an engine question of teams building their Units", () => {
   test("is recorded once, asked again under its id, and open in a turn only while it is the open step", () => {
-    const home = makeHome();
-    expect(teamRun(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    const { home, alice, record } = refundsTaken();
+    expect(teamRun(UNIT, ["lead-sign-off", "on"], home.dir).status).toBe(0);
+    codeGenerated(alice, record);
+    expect(teamRun(UNIT, ["push"], alice).status).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
     const chat = { ...ENV, AIDLC_SESSION_OVERRIDE: A, AIDLC_SESSION_OVERRIDE_SOURCE: "payload" };
     const ask = teamNext(home.dir, chat);
-    expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-assignment");
+    expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-signoff");
     expect(ask.question_id).toMatch(ID);
     expect(teamNext(home.dir, chat).question_id).toBe(ask.question_id);
-    const asked = rows(home.dir, "QUESTION_ASKED").filter((row) => field(row, "Question Type") === "unit-assignment");
+    const asked = rows(home.dir, "QUESTION_ASKED").filter((row) => field(row, "Question Type") === "unit-signoff");
     expect(asked.map((row) => field(row, "Question Id"))).toEqual([ask.question_id as string]);
-    say(home.dir, A, "leave them open for now");
+    say(home.dir, A, "looks right, sign it off");
     expect(openIn(home.dir)).toEqual([ask.question_id as string]);
-    expect(teamRun(UNIT, ["assign", "--open"], home.dir).status).toBe(0);
-    // The plan's share question follows it: the open step is that one now.
-    const share = teamNext(home.dir, chat);
-    expect(share.ask_type, JSON.stringify(share)).toBe("team-handover");
-    say(home.dir, A, "ok");
-    expect(openIn(home.dir)).toEqual([share.question_id as string]);
+    expect(teamRun(UNIT, ["sign-off", "refunds", "--person-words", "looks right, sign it off"], home.dir, chat).status).toBe(0);
+    // Signed off, the board is the step: no question is open at the next turn.
+    const board = teamNext(home.dir, chat);
+    expect(board.kind, JSON.stringify(board)).toBe("print");
+    say(home.dir, A, "thanks");
+    expect(openIn(home.dir)).toEqual([]);
   });
 
   test("every ask the engine hands out is on its list of engine asks, the code plan question aside", () => {

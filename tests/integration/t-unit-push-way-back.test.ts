@@ -25,6 +25,7 @@ import {
   GIT_ENV,
   git,
   homeState,
+  inSpace,
   makeHome,
   run,
   STATE,
@@ -37,21 +38,21 @@ afterAll(cleanupTeamBuild);
 const UNIT_ASKS = new Set(["unit-take", "unit-push"]);
 const DEPENDENCIES = "# Unit dependencies\n\n```yaml\nunits:\n  - name: refunds\n    kind: service\n    repos: [billing]\n    depends_on: []\n```\n";
 
-// The home with refunds held for payments, and a payments member's clone on
-// `tool`, built to the push question.
+// The home with every Unit open, and a teammate's clone on `tool`, working in
+// the payments space: refunds taken there and built to the push question.
 function builtToPush(tool: "claude" | HostName, manifestFromWorkspace: boolean, policy?: "strict" | "relaxed" | "off") {
   const hosts = { billing: codeHost("billing") };
   const state = homeState(policy === undefined ? [] : [`- **Guard Policy**: ${policy} (set by you)`]).replace(/^- \[ \] (nfr-requirements|nfr-design|infrastructure-design) (\S+) EXECUTE$/gm, "- [ ] $1 $2 SKIP");
   const home = makeHome({ repos: hosts, dependencies: DEPENDENCIES, state });
   cpSync(join(REPO_ROOT, "dist", "claude"), home.dir, { recursive: true, force: false, errorOnExist: false });
   expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
-  expect(run(UNIT, ["assign", "refunds=payments"], home.dir).status).toBe(0);
   git(home.dir, ["add", "-A"]);
   git(home.dir, ["commit", "-q", "-m", "teams chosen"]);
   git(home.dir, ["push", "-q", "origin", "main"]);
   const dir = cloneOf(home.remote, "alice");
   cpSync(join(REPO_ROOT, "dist", tool), dir, { recursive: true, force: false, errorOnExist: false });
   cloneCode(hosts.billing, dir, "billing", "alice");
+  inSpace(dir, "payments");
   const host = hostFor(tool, dir, GIT_ENV);
   const person = new PersonScript(host);
   const agent = new AgentStandIn(host, person, {
@@ -64,7 +65,7 @@ function builtToPush(tool: "claude" | HostName, manifestFromWorkspace: boolean, 
   person.say("/aidlc");
   const offer = agent.next();
   expect(offer.ask_type, JSON.stringify(offer)).toBe("unit-take");
-  choose(agent, person, offer, "Start refunds for payments");
+  choose(agent, person, offer, "Start refunds");
   const push = agent.drive(agent.next());
   expect(push.ask_type, JSON.stringify(push)).toBe("unit-push");
   const intents = join(dir, "aidlc", "spaces", "payments", "intents");

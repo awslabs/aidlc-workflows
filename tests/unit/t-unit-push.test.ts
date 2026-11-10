@@ -47,6 +47,7 @@ import {
   tempDir,
   UNIT,
   UTILITY,
+  takeIn,
 } from "../harness/team-build.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -56,12 +57,15 @@ const JUMP = join(AIDLC_SRC, "tools", "aidlc-jump.ts");
 afterEach(cleanupTeamBuild);
 
 describe("teams build Units across repos when the workspace is in git", () => {
-  test("choosing teams on work across repos goes through, and the home asks who builds which Unit", () => {
+  test("choosing teams on work across repos goes through, and no question of who builds which Unit is put", () => {
     const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
     const home = makeHome({ repos: hosts });
     const teams = run(STATE, ["set-unit-ownership", "team"], home.dir);
     expect(teams.status, teams.out).toBe(0);
-    expect(next(home.dir).ask_type).toBe("unit-assignment");
+    // Every Unit is open for any team: the step after is the offer to share the plan.
+    const step = next(home.dir);
+    expect(step.ask_type, JSON.stringify(step).slice(0, 400)).not.toBe("unit-assignment");
+    expect(String(step.question)).toStartWith("The Units are open for any team to take. Share the plan with them now?");
   });
 });
 
@@ -96,7 +100,7 @@ describe("the push", () => {
   });
 
   test("a file that held their own uncommitted change when the Unit was taken: only the Unit's change goes, theirs stays theirs", () => {
-    const { hosts, alice, record } = refundsTaken(undefined, (dir) => {
+    const { hosts, alice, record } = refundsTaken((dir) => {
       writeFileSync(join(dir, "checkout-api", "README.md"), "# checkout-api\n\nmy secret note\n");
       writeFileSync(join(dir, "billing", "README.md"), "# billing (my note)\n");
     });
@@ -412,7 +416,7 @@ describe("the push", () => {
   // A file the repo tracks in such a folder (a committed bundle) is theirs to
   // ship: the build's change to it goes.
   test("the build names whole folders and its tests leave caches in them: the push carries what it wrote, deletions and tracked bundles too, and never the caches", () => {
-    const { hosts, alice, record } = refundsTaken(undefined, (alice) => {
+    const { hosts, alice, record } = refundsTaken((alice) => {
       const billing = join(alice, "billing");
       mkdirSync(join(billing, "lib", "dist"), { recursive: true });
       writeFileSync(join(billing, "lib", "old.ts"), "export const old = 1;\n");
@@ -452,7 +456,6 @@ describe("the push", () => {
     const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
     const home = makeHome({ repos: hosts });
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
-    expect(run(UNIT, ["assign", "refunds=payments"], home.dir).status).toBe(0);
     git(home.dir, ["add", "-A"]);
     git(home.dir, ["commit", "-q", "-m", "teams"]);
     git(home.dir, ["push", "-q", "origin", "main"]);
@@ -462,7 +465,7 @@ describe("the push", () => {
       { name: "checkout-api", path: "../checkout-api-mine" },
       { name: "billing", path: "../billing-mine" },
     ] })}\n`);
-    expect(run(UNIT, ["take", "refunds", "--home", HOME_RECORD, "--team", "payments"], alice).status).toBe(0);
+    expect(takeIn("payments", ["refunds", "--home", HOME_RECORD], alice).status).toBe(0);
     const intents = join(alice, "aidlc", "spaces", "payments", "intents");
     const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-refunds"))!);
     mkdirSync(join(alice, "..", "checkout-api-mine", "src"), { recursive: true });
@@ -860,7 +863,6 @@ describe("at the home", () => {
       "  - name: refunds\n    depends_on: [orders]\n  - name: checkout-ui\n    depends_on: [orders]\n```\n";
     const home = makeHome({ dependencies, state: homeState().replace("- **Skeleton Stance**: off", "- **Skeleton Stance**: on") });
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
-    expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web"], home.dir).status).toBe(0);
     git(home.dir, ["add", "-A"]);
     git(home.dir, ["commit", "-q", "-m", "teams"]);
     git(home.dir, ["push", "-q", "origin", "main"]);
@@ -896,7 +898,7 @@ describe("at the home", () => {
       { repo: "billing", merged: false },
     ]);
     // The one write the home makes for the teams, said once in plain words.
-    expect((seen.change_notices ?? []) as string[]).toContain("I've told the payments team checkout-api merged refunds.");
+    expect((seen.change_notices ?? []) as string[]).toContain("I've told alice checkout-api merged refunds.");
     const written = git(home.remote, ["rev-parse", ref]);
     const after = next(home.dir);
     expect(git(home.remote, ["rev-parse", ref])).toBe(written);
@@ -956,13 +958,13 @@ describe("at the home", () => {
     expect(first.kind, JSON.stringify(first)).toBe("print");
     expect(String(first.narration)).toBe([
       "Units of fixture:",
-      "- refunds, payments: checkout-api not merged yet, billing not merged yet (0 of 2 merged)",
-      "- checkout-ui, web: held for web, not taken yet",
-      "- reporting, here: waits on refunds",
+      "- refunds, payments space: built by alice, checkout-api not merged yet, billing not merged yet (0 of 2 merged)",
+      "- checkout-ui, open: waiting for a team to take it",
+      "- reporting, open: waiting for a team to take it",
     ].join("\n"));
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
     expect(String(next(home.dir).narration)).toContain(
-      "- refunds, payments: checkout-api merged, billing not merged yet (1 of 2 merged)",
+      "- refunds, payments space: built by alice, checkout-api merged, billing not merged yet (1 of 2 merged)",
     );
     mergeOnHost(hosts.billing, "refunds", "merge");
     const after = next(home.dir);
@@ -972,9 +974,12 @@ describe("at the home", () => {
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
     expect(readFileSync(join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD, "construction", "refunds", "code-generation", "code-summary.md"), "utf-8"))
       .toBe("# Code summary\n\nRefunds.\n");
-    // reporting waited on refunds and is the home's to build now, as the home's own work.
-    expect(after.kind, JSON.stringify(after)).toBe("run-stage");
-    expect(after.unit).toBe("reporting");
+    expect(String(after.narration), JSON.stringify(after).slice(0, 600)).toContain("- refunds, payments space: built by alice, done");
+    // reporting waited on refunds: on the lead's word to build it here, it starts now, as the home's own work.
+    expect(run(UNIT, ["assign", "--here", "reporting", "--person-words", "we build reporting here"], home.dir).status).toBe(0);
+    const building = next(home.dir);
+    expect(building.kind, JSON.stringify(building).slice(0, 600)).toBe("run-stage");
+    expect(building.unit).toBe("reporting");
     const started = run(STATE, ["unit", "start", "--stage", "functional-design", "--unit", "reporting"], home.dir);
     expect(started.status, started.out).toBe(0);
   });
@@ -993,11 +998,15 @@ describe("at the home", () => {
     const picked = run(join(AIDLC_SRC, "tools", "aidlc.ts"), ["engine", "intent", "switch", HOME_RECORD], laptop);
     expect(picked.status, picked.out).toBe(0);
     const step = next(laptop);
-    expect(step.kind, JSON.stringify(step)).toBe("run-stage");
-    expect(step.unit).toBe("reporting");
+    expect(String(step.narration), JSON.stringify(step).slice(0, 600)).toContain("- refunds, payments space: built by alice, done");
     expect(readAuditShardEvents(laptop).filter((row) => row.event === "UNIT_MERGED")).toHaveLength(1);
     expect(readFileSync(join(laptop, "aidlc", "spaces", "default", "intents", HOME_RECORD, "construction", "refunds", "code-generation", "code-summary.md"), "utf-8"))
       .toBe("# Code summary\n\nRefunds.\n");
+    // reporting, built here on the lead's word, starts on the laptop too.
+    expect(run(UNIT, ["assign", "--here", "reporting", "--person-words", "we build reporting here"], laptop).status).toBe(0);
+    const building = next(laptop);
+    expect(building.kind, JSON.stringify(building).slice(0, 600)).toBe("run-stage");
+    expect(building.unit).toBe("reporting");
   });
 
   test("what a team sent shows at the home's next step, with no fetch by the lead", () => {
@@ -1005,7 +1014,7 @@ describe("at the home", () => {
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     expect(String(next(home.dir).narration)).toContain(
-      "- refunds, payments: checkout-api not merged yet, billing not merged yet (0 of 2 merged)",
+      "- refunds, payments space: built by alice, checkout-api not merged yet, billing not merged yet (0 of 2 merged)",
     );
   });
 
@@ -1017,7 +1026,7 @@ describe("at the home", () => {
     git(home.dir, ["remote", "set-url", "origin", join(home.remote, "gone")]);
     const step = next(home.dir);
     expect(step.kind, JSON.stringify(step)).toBe("print");
-    expect(String(step.narration)).toContain("- refunds, payments: checkout-api not merged yet, billing not merged yet (0 of 2 merged)");
+    expect(String(step.narration)).toContain("- refunds, payments space: built by alice, checkout-api not merged yet, billing not merged yet (0 of 2 merged)");
     expect((step.change_notices ?? []) as string[]).toEqual([
       "origin could not be reached just now, so the board may be behind: it shows what your last fetch brought.",
     ]);
@@ -1027,7 +1036,6 @@ describe("at the home", () => {
     const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
     const home = makeHome({ repos: hosts });
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
-    expect(run(UNIT, ["assign", "refunds=payments"], home.dir).status).toBe(0);
     git(home.dir, ["add", "-A"]);
     git(home.dir, ["commit", "-q", "-m", "teams"]);
     git(home.dir, ["push", "-q", "origin", "main"]);
@@ -1040,7 +1048,7 @@ describe("at the home", () => {
     git(seed, ["push", "-q", "origin", "main"]);
     const alice = cloneOf(own, "alice");
     for (const [name, host] of Object.entries(hosts)) cloneCode(host, alice, name, "alice");
-    expect(run(UNIT, ["take", "refunds", "--home", HOME_RECORD, "--team", "payments"], alice).status).toBe(0);
+    expect(takeIn("payments", ["refunds", "--home", HOME_RECORD], alice).status).toBe(0);
     const intents = join(alice, "aidlc", "spaces", "payments", "intents");
     codeGenerated(alice, join(intents, readdirSync(intents).find((name) => name.endsWith("-refunds"))!));
     expect(run(UNIT, ["push"], alice).status).toBe(0);
@@ -1096,7 +1104,6 @@ describe("at the home", () => {
   test("code a team merged into the workspace itself is the work's own: the home never asks whether it is existing code", () => {
     const home = makeHome();
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
-    expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web"], home.dir).status).toBe(0);
     mkdirSync(join(home.dir, "services", "checkout-api", "src"), { recursive: true });
     writeFileSync(join(home.dir, "services", "checkout-api", "src", "refunds.ts"), "export const refunds = 1;\n");
     writeFileSync(join(home.dir, "package.json"), '{ "name": "platform" }\n');
@@ -1172,13 +1179,12 @@ describe("at the home", () => {
     writeFileSync(join(home.dir, ".gitignore"), readFileSync(join(home.dir, ".gitignore"), "utf-8").replace("/vendor/\n", ""));
     git(home.dir, ["-c", "protocol.file.allow=always", "submodule", "add", "-q", vendorHost, "vendor"]);
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
-    expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web"], home.dir).status).toBe(0);
     git(home.dir, ["add", "-A"]);
     git(home.dir, ["commit", "-q", "-m", "teams"]);
     git(home.dir, ["push", "-q", "origin", "main"]);
     const alice = cloneOf(home.remote, "alice");
     git(alice, ["-c", "protocol.file.allow=always", "submodule", "update", "--init", "-q"]);
-    const took = run(UNIT, ["take", "refunds", "--home", HOME_RECORD, "--team", "payments"], alice);
+    const took = takeIn("payments", ["refunds", "--home", HOME_RECORD], alice);
     expect(took.status, took.out).toBe(0);
     const intents = join(alice, "aidlc", "spaces", "payments", "intents");
     const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-refunds"))!);
@@ -1230,12 +1236,11 @@ describe("at the home", () => {
     writeFileSync(join(home.dir, ".gitignore"), readFileSync(join(home.dir, ".gitignore"), "utf-8").replace("/vendor/\n", ""));
     git(home.dir, ["-c", "protocol.file.allow=always", "submodule", "add", "-q", vendorHost, "vendor"]);
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
-    expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web"], home.dir).status).toBe(0);
     git(home.dir, ["add", "-A"]);
     git(home.dir, ["commit", "-q", "-m", "teams"]);
     git(home.dir, ["push", "-q", "origin", "main"]);
     const alice = cloneOf(home.remote, "alice");
-    const took = run(UNIT, ["take", "refunds", "--home", HOME_RECORD, "--team", "payments"], alice);
+    const took = takeIn("payments", ["refunds", "--home", HOME_RECORD], alice);
     expect(took.status, took.out).toBe(0);
     const intents = join(alice, "aidlc", "spaces", "payments", "intents");
     const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-refunds"))!);
@@ -1277,13 +1282,13 @@ describe("at the home", () => {
     mergeOnHost(hosts.billing, "refunds", "squash");
     // The board and status say where it is, read only, before any step records it.
     const row = "not recorded yet: it is recorded once the work is back on Functional Design";
-    expect(run(ORCH, ["team-board"], home.dir).out).toMatch(new RegExp(`^- refunds, payments: .*${row}$`, "m"));
-    expect(run(UTILITY, ["status"], home.dir).out).toMatch(new RegExp(`^- refunds, payments: .*${row}$`, "m"));
+    expect(run(ORCH, ["team-board"], home.dir).out).toMatch(new RegExp(`^- refunds, payments space: built by alice, .*${row}$`, "m"));
+    expect(run(UTILITY, ["status"], home.dir).out).toMatch(new RegExp(`^- refunds, payments space: built by alice, .*${row}$`, "m"));
     const chat = { ...ENV, AIDLC_SESSION_OVERRIDE: "t-unit-push-past-unit-stages" };
     const step = next(home.dir, chat);
-    const said = ((step.change_notices ?? []) as string[]).filter((line) => line.startsWith("refunds (from payments) is back but not recorded yet"));
+    const said = ((step.change_notices ?? []) as string[]).filter((line) => line.startsWith("refunds (from alice) is back but not recorded yet"));
     expect(said, JSON.stringify(step)).toEqual([
-      "refunds (from payments) is back but not recorded yet: this work moved on to Build and Test past the Unit stages, " +
+      "refunds (from alice) is back but not recorded yet: this work moved on to Build and Test past the Unit stages, " +
         "so it is recorded once the work is back on Functional Design, and Build and Test does not have its outputs " +
         "until then.",
     ]);
@@ -1425,8 +1430,8 @@ describe("at the home", () => {
   });
 
   test("a team whose pushed build waits on the home hears a turn-down at its next step in the same chat, and the build never reads as finished", () => {
-    // reporting left open, so the team is offered it next.
-    const { home, alice, record } = refundsTaken(["refunds=payments", "checkout-ui=web", "--open", "reporting"]);
+    // Every other Unit is open, so the team is offered one next.
+    const { home, alice, record } = refundsTaken();
     codeGenerated(alice, record);
     // The person's chat ran the build: its prompt hook has run in this record.
     const chat = personsChat("t-unit-push-waits");
@@ -1462,8 +1467,8 @@ describe("at the home", () => {
   });
 
   test("after a turn-down the build asks whether to go back to Code Generation, and the person's yes takes it there", () => {
-    // reporting left open, so the team is offered it next.
-    const { home, alice, record } = refundsTaken(["refunds=payments", "checkout-ui=web", "--open", "reporting"]);
+    // Every other Unit is open, so the team is offered one next.
+    const { home, alice, record } = refundsTaken();
     codeGenerated(alice, record);
     // The first build's code plan, as its Code Generation wrote it (a live run
     // on Kiro CLI: after the turn-down this plan was put up for approval again).
@@ -1615,21 +1620,21 @@ describe("a team's done Unit that the lead's Build and Test sends back", () => {
     expect(claimPayload(home.remote, id8, "refunds")).toMatchObject({ done: true });
     const merges = () => readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_MERGED" && row.block.includes("**Unit**: refunds")).length;
     expect(merges()).toBe(1);
-    // The retry for refunds sends it back to payments; nothing of it is reopened here.
+    // The retry for refunds sends it back to alice's build; nothing of it is reopened here.
     const retry = next(home.dir, undefined, ["--stage", "code-generation", "--unit", "refunds"]);
     expect(String(retry.message), JSON.stringify(retry)).toContain("send-back refunds --request-file");
     expect(String(retry.message)).not.toContain("reopen --target");
     const words = "checkout-api sends no CORS headers for the web page";
     const sent = run(UNIT, ["send-back", "refunds", "--person-words", words], home.dir);
     expect(sent.status, sent.out).toBe(0);
-    expect(sent.json?.notice).toBe("Sent refunds back to the payments team with your words. It waits for them here; nothing of it is rebuilt here.");
+    expect(sent.json?.notice).toBe("Sent refunds back to alice with your words. It waits for them here; nothing of it is rebuilt here.");
     const claim = claimPayload(home.remote, id8, "refunds") as Record<string, unknown>;
     expect(claim.done).toBeUndefined();
     expect(claim.result).toBeUndefined();
     // Nothing of it is built here: the board says it was sent back, never a turn-down in no repo.
     const board = String(next(home.dir).narration ?? "");
     expect(board).not.toContain("refunds, payments: done");
-    expect(board, board).toContain("- refunds, payments: sent back from your Build and Test, back with payments");
+    expect(board, board).toContain("- refunds, payments space: sent back from your Build and Test, back with alice");
     expect(board).not.toContain("turned down in ,");
     // payments hears it once, in the failure's words.
     git(alice, ["fetch", "-q", "origin"]);
@@ -1732,7 +1737,7 @@ const SENT_BACK_WORDS = "it's their refund-flow test that pulls billing into che
 // lead's Build and Test sends refunds back. The chat looked once before, at
 // the person's /aidlc (`typedLook`) or on the agent's own.
 function sentBackWhileOnFinishedBuild(session: string, typedLook = true) {
-  const { home, hosts, alice, record } = refundsTaken(["refunds=payments", "checkout-ui=payments"], undefined, TWO_BUILDS_PLAN);
+  const { home, hosts, alice, record } = refundsTaken(undefined, TWO_BUILDS_PLAN);
   const chat = personsChat(session);
   expect(hook(alice, chat, { hook_event_name: "UserPromptSubmit", session_id: session, prompt: "build refunds" }).status).toBe(0);
   codeGenerated(alice, record);
@@ -1743,7 +1748,7 @@ function sentBackWhileOnFinishedBuild(session: string, typedLook = true) {
   mergeOnHost(hosts.billing, "refunds", "squash");
   git(home.dir, ["fetch", "-q", "origin"]);
   next(home.dir);
-  expect(run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD, "--team", "payments"], alice, chat).status).toBe(0);
+  expect(takeIn("payments", ["checkout-ui", "--home", HOME_RECORD], alice, chat).status).toBe(0);
   const intents = join(alice, "aidlc", "spaces", "payments", "intents");
   const ui = join(intents, readdirSync(intents).find((name) => name.endsWith("-checkout-ui"))!);
   expect(hook(alice, chat, { hook_event_name: "UserPromptSubmit", session_id: session, prompt: "build checkout-ui" }).status).toBe(0);
@@ -1806,12 +1811,12 @@ function jumpGuard(alice: string, chat: NodeJS.ProcessEnv, session: string, jump
 // heard nothing; the lead's words reached only the build they were about.
 describe("a team hears the lead's turn-down from any chat on its work", () => {
   test("on another of its builds, the turn-down of its Unit is said once, with how to go back to that build", () => {
-    const { home, alice, record } = refundsTaken(["refunds=payments", "checkout-ui=payments"]);
+    const { home, alice, record } = refundsTaken();
     codeGenerated(alice, record);
     finishBuild(record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     // Its chat moves to its other Unit.
-    expect(run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD, "--team", "payments"], alice).status).toBe(0);
+    expect(takeIn("payments", ["checkout-ui", "--home", HOME_RECORD], alice).status).toBe(0);
     git(home.dir, ["fetch", "-q", "origin"]);
     expect(run(UNIT, ["turned-down", "refunds", "--repo", "billing", "--person-words", "needs the ledger entry"], home.dir).status).toBe(0);
     git(alice, ["fetch", "-q", "origin"]);
