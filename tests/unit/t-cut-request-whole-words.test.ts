@@ -15,7 +15,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { cleanupTestProject, createTestProject } from "../harness/fixtures.ts";
-import { type Directive, type Harness, next, projectAt, say, SESSION } from "../harness/aidlc-input-corpus.ts";
+import { DISPATCHER, type Directive, env, exec, type Harness, next, projectAt, say, SESSION } from "../harness/aidlc-input-corpus.ts";
 import {
   forgetMessage,
   MESSAGE_TEXT_MAX_CHARS,
@@ -371,5 +371,99 @@ describe("with no whole copy, the agent's one step, and the person's line only w
     const step = (await next(proj, [])).directive;
     expect(wholeWordsStep(step)).toEqual(["--request-file", REQUEST_FILE]);
     expect(String(step?.message)).toContain("whole reply");
+  });
+});
+
+// A line taken from the person's message keeps their line breaks (the one reading, requestAsTyped, and its fallback
+// withTypedSpacing): the stored request and project-description.json hold the spec as pasted, the plan question's
+// preview reads its line breaks as spaces, and the state's Project line and the audit row stay one line.
+describe("a taken line keeps the person's line breaks", () => {
+  const END = "END-OF-SPEC: these late decisions override anything above.";
+  // A markdown spec with a code block (indented lines, double quotes) and `paragraphs` long paragraphs:
+  // markdownSpec(3) is 1,510 characters, markdownSpec(30) is 10,387.
+  function markdownSpec(paragraphs: number): string {
+    const para = (n: number) =>
+      `Paragraph ${n}. The ledger keeps every task a team adds, with its owner, its due day and its notes, and anyone ` +
+      "on the team can read the whole list at any time from any machine; a task that is done stays in the list, marked " +
+      "done, so the team can look back at what it finished and when, and the list never loses a task it was given.";
+    return [
+      "# Tally: a command-line task ledger for small teams", "", "## Why", para(1), para(2), para(3), "",
+      "## What it keeps", "- a title for every task, never blank", "- an owner, who can be changed later",
+      "- a due day, which can be left empty", "- notes, as long as the team likes", "", "## How it adds a task",
+      "```ts", "export function add(tasks: string[], title: string): string[] {", "    if (title.trim() === \"\") {",
+      "        throw new Error(\"a task needs a title\");", "    }", "    return [...tasks, title];", "}", "```", "",
+      "## More", ...Array.from({ length: Math.max(0, paragraphs - 3) }, (_, i) => para(i + 4)), "", "## Late decisions", END,
+    ].join("\n");
+  }
+  const CODE_LINE = "        throw new Error(\"a task needs a title\");";
+
+  // Through the plan question to the work, as a person picks the plan offered; returns the work's record folder.
+  async function created(proj: string, proposal: Directive | null): Promise<{ record: string; question: Directive | null }> {
+    const question = await proposed(proj, proposal);
+    await say(proj, "go ahead with that plan", "kiro-ide");
+    const confirm = String((question as Record<string, unknown>)?.confirm_command ?? "").replace(/^.*aidlc-orchestrate\.ts next /, "").split(" ");
+    const made = await next(proj, confirm);
+    const create = /`bun [^`]*aidlc\.ts engine intent create ([^`]*)`/.exec(String(made.directive?.message ?? ""));
+    expect(create, String(made.directive?.message)).not.toBeNull();
+    const args = (create as RegExpExecArray)[1].replace("'<2-3 word kebab essence>'", "tally-ledger").split(" ");
+    const ran = await exec([process.execPath, DISPATCHER, "engine", "intent", "create", ...args, "--project-dir", proj], { cwd: proj, env: env(proj) });
+    expect(ran.status, ran.stdout + ran.stderr).toBe(0);
+    const intents = join(proj, "aidlc", "spaces", "default", "intents");
+    const record = join(intents, readdirSync(intents).find((name) => !name.startsWith(".") && name.includes("tally")) as string);
+    return { record, question };
+  }
+
+  for (const [label, words] of [["1,510", markdownSpec(3)], ["10,387", markdownSpec(30)]] as Array<[string, string]>) {
+    test(`a ${label}-character markdown spec is stored, and the work made, as pasted`, async () => {
+      expect(words.length.toLocaleString("en-US")).toBe(label);
+      const proj = await project("fresh");
+      await say(proj, `/aidlc ${words}`, "kiro-ide");
+      const first = await next(proj, []);
+      expect((newest(proj) as Question).text, "the stored request").toBe(words);
+      expect((newest(proj) as Question).text).toContain(CODE_LINE);
+      const { record, question } = await created(proj, first.directive);
+      // The plan question's preview: the start of the request, its line breaks read as spaces.
+      const asked = String((question as Record<string, unknown>)?.question ?? "");
+      expect(asked).toContain("# Tally: a command-line task ledger for small teams ## Why Paragraph 1.");
+      const description = JSON.parse(readFileSync(join(record, "project-description.json"), "utf-8")) as unknown;
+      expect(JSON.stringify(description)).toContain(JSON.stringify(words).slice(1, -1));
+      const projectLine = /^- \*\*Project\*\*: (.*)$/m.exec(readFileSync(join(record, "aidlc-state.md"), "utf-8"));
+      expect(projectLine?.[1] ?? "", "the state's Project line stays one line").toContain(END);
+      const audit = readdirSync(join(record, "audit")).map((name) => readFileSync(join(record, "audit", name), "utf-8")).join("\n");
+      const request = /^\*\*Request\*\*: (.*)$/m.exec(audit.slice(audit.indexOf("WORKFLOW_STARTED")));
+      expect(request?.[1] ?? "", "the audit row's Request is one line").toStartWith("/aidlc # Tally");
+    });
+  }
+
+  test("the record's words keep the line breaks", async () => {
+    const proj = await project("fresh");
+    // The record reads an `/aidlc` line's words as arguments, so a quote typed in it is a quote to that reading;
+    // the lines with none (the indented ones of the code block among them) are the spec's lines as typed.
+    const words = markdownSpec(3).split("\n").filter((line) => !line.includes("\"")).join("\n");
+    await say(proj, `/aidlc ${words}`, "kiro-ide");
+    const record = readdirSync(messagesDir(proj)).filter((name) => name.endsWith(".json"))
+      .map((name) => JSON.parse(readFileSync(join(messagesDir(proj), name), "utf-8")) as { words: string | null })[0];
+    expect(record.words).toBe(words);
+  });
+
+  test("a flag typed on a later line is still read as the flag", async () => {
+    const proj = await project("fresh");
+    await say(proj, "/aidlc build a task ledger\nfor small teams\n--depth minimal", "kiro-ide");
+    const record = readdirSync(messagesDir(proj)).filter((name) => name.endsWith(".json"))
+      .map((name) => JSON.parse(readFileSync(join(messagesDir(proj), name), "utf-8")) as { settings: Array<{ key: string; value: string }>; words: string })[0];
+    expect(record.settings).toEqual([{ key: "depth", value: "minimal" }]);
+    await next(proj, []);
+    expect((newest(proj) as Question).text).toBe("build a task ledger\nfor small teams");
+  });
+
+  test("a plan word before a multi-line spec: the reading step's files hold its lines", async () => {
+    const proj = await project("fresh");
+    const words = markdownSpec(3);
+    await say(proj, `/aidlc bugfix ${words}`, "kiro-ide");
+    const step = await next(proj, []);
+    const afterPlan = namedNexts(step.directive).find((args) => args.includes("--request-file") && args.includes("--scope"));
+    expect(afterPlan, String(step.directive?.message)).toBeDefined();
+    const file = (afterPlan as string[])[(afterPlan as string[]).indexOf("--request-file") + 1];
+    expect(readFileSync(join(proj, ...file.split("/")), "utf-8")).toBe(words);
   });
 });

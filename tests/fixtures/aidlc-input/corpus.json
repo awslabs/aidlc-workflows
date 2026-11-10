@@ -1700,7 +1700,7 @@
           "ask",
           "print"
         ],
-        "words": "fix the login",
+        "words": "fix the\nlogin",
         "settings": []
       },
       "end": {

@@ -535,6 +535,7 @@ import {
   type WorkflowSelection,
   withdrawProtectedReplyWords,
   commandArgSpans,
+  typedWordGap,
   withTypedSpacing,
   writeActiveDirectiveMarker,
   writeEngineFileNoFollow,
@@ -3522,8 +3523,10 @@ function authoritativeRequest(raw: string): string {
   return authoritativeProjectDescription(raw).description;
 }
 
+// The start of the request as a question quotes it on one line: each line
+// break, with the spaces around it, reads as one space.
 function requestPreview(raw: string): string {
-  const text = authoritativeRequest(raw);
+  const text = authoritativeRequest(raw).replace(/[ \t]*[\r\n][ \t\r\n]*/g, " ");
   return text.length > 240 ? `${text.slice(0, 240)}...` : text;
 }
 
@@ -11362,8 +11365,8 @@ function cutMessageStep(shape: ParsedFlags, message: StoredMessage, reply: boole
 // came back as `slugit  prints`, the bug itself gone). `said` is the parse's
 // own join of the request's arguments, one space apart, untrimmed so an empty
 // `""` at either end still lines up; the one stretch of the line's arguments that
-// spells it comes back as typed, with the spaces and tabs typed between them and
-// any other gap one space, as withTypedSpacing keeps them. A request of one
+// spells it comes back as typed, each gap between them as typedWordGap keeps
+// it and any other one space, as withTypedSpacing keeps them. A request of one
 // argument is that argument: the quotes around it only made it one. Null when
 // no stretch, or more than one, spells it.
 export function requestAsTyped(said: string, typed: string): string | null {
@@ -11390,7 +11393,7 @@ export function requestAsTyped(said: string, typed: string): string | null {
   let request = typed.slice(spans[first].start, spans[first].end);
   for (let k = first + 1; k <= last; k++) {
     const gap = typed.slice(spans[k - 1].end, spans[k].start);
-    request += (/^[ \t]+$/.test(gap) ? gap : " ") + typed.slice(spans[k].start, spans[k].end);
+    request += (typedWordGap(gap) ?? " ") + typed.slice(spans[k].start, spans[k].end);
   }
   return request;
 }

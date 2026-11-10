@@ -192,11 +192,15 @@ describe("withTypedSpacing: only the separators take what was typed", () => {
     expect(withTypedSpacing("say Hello,  World! now", `say   "Hello,  World!"  now`)).toBe("say   Hello,  World!  now");
   });
 
-  test("a gap that is not spaces and tabs stays one plain space, as the split hands it on", () => {
+  test("a gap that is not spaces, tabs or line breaks stays one plain space, as the split hands it on", () => {
     // A no-break space pasted from a document reads as a plain space (the input corpus, cu03-w).
     expect(withTypedSpacing("fix the login", "fix\u00a0the  login")).toBe("fix the  login");
-    expect(withTypedSpacing("fix this and that", "fix  this\nand  that")).toBe("fix  this and  that");
-    expect(withTypedSpacing("fix this and that", "fix this \r\n and that")).toBe("fix this and that");
+  });
+
+  test("the line breaks typed between the words are kept, a Windows or older Mac line ending as one line break", () => {
+    expect(withTypedSpacing("fix this and that", "fix  this\nand  that")).toBe("fix  this\nand  that");
+    expect(withTypedSpacing("fix this and that", "fix this \r\n and that")).toBe("fix this \n and that");
+    expect(withTypedSpacing("fix this and that", "fix this\r\rand that")).toBe("fix this\n\nand that");
   });
 
   test("the spacing comes only from the one stretch of the line that spells the words side by side", () => {
