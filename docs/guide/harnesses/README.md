@@ -19,11 +19,14 @@ Onboarding is installed in each harness's native instruction surface:
 | Cursor | `.cursor/rules/aidlc-onboarding.mdc` |
 | opencode | `.aidlc/onboarding.md` |
 | GitHub Copilot | Root `AGENTS.md` (full onboarding, including method imports) |
+| Hermes Agent | Root `.hermes.md` (full onboarding; Hermes reads it as always-on project context) |
 
 Kiro, Kiro IDE, Codex, Cursor, and opencode share a harness-neutral root
 `AGENTS.md` block with other installed harnesses. Their native setup stays in
 the files above. Copilot's full root block remains exclusive; distinct harnesses
-also need distinct engine directories to coexist.
+also need distinct engine directories to coexist. Hermes Agent ships its own
+`${'`'}.hermes.md${'`'}` (Hermes reads it before a root `AGENTS.md`) and needs no
+shared block.
 
 ## Install first
 
@@ -60,6 +63,7 @@ Pick your harness:
 | **Cursor** | `/aidlc` | [AI-DLC on Cursor](cursor.md) — one tree for the Cursor IDE and CLI, native subagents and skills, the hooks.json adapter, what's different on Cursor. |
 | **opencode** (1.18.29 or newer, or OpenCode 2) | `/aidlc` | [AI-DLC on opencode](opencode.md) — the split `.aidlc/` + `.opencode/` layout, the adapter plugin, what's different on opencode. |
 | **GitHub Copilot** (CLI ≥ 1.0.74 / VS Code ≥ 1.130) | `/aidlc` | [AI-DLC on GitHub Copilot](copilot.md) — one install for both surfaces, the `.github/` merge, folder trust, what's different on Copilot. |
+| **Hermes Agent** (≥ 0.21) | `/skill aidlc` | [AI-DLC on Hermes Agent](hermes.md) — the `.hermes/` project skill tree, `hermes skills trust`, prose-bounded guards, what's different on Hermes. |
 
 AI-DLC on Kiro (IDE or CLI) works best with **Claude Opus 4.8**, which requires a **paid Kiro plan**.
 

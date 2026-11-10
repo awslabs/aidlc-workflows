@@ -9,7 +9,7 @@ import { kiroHome } from "./lib-transcripts.ts";
 import { TOOL_KEYS, type ToolKey } from "./lib-tools.ts";
 
 // The engine dirs AI-DLC's harness rows install into (AI-DLC's harness table in aidlc-lib.ts).
-export const ENGINE_DIRS = [".claude", ".kiro", ".codex", ".cursor", ".aidlc"] as const;
+export const ENGINE_DIRS = [".claude", ".kiro", ".codex", ".cursor", ".aidlc", ".hermes"] as const;
 
 // A tool the person named (set-version.ts), with the version they read or null, written into safe.json's environment.
 // A version already found or given is not dropped by a later "I don't know". When no chat log showed which tool the

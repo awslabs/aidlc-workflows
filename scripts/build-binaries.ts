@@ -2529,6 +2529,7 @@ function buildTarget(target: TargetConfig): TargetResult {
     result.gates.push(harnessRuntimeGate(actual.artifact, "kiro-ide", ".kiro"));
     result.gates.push(harnessRuntimeGate(actual.artifact, "copilot", ".aidlc"));
     result.gates.push(harnessRuntimeGate(actual.artifact, "opencode", ".aidlc"));
+    result.gates.push(harnessRuntimeGate(actual.artifact, "hermes", ".hermes"));
     result.gates.push(harnessProbeGate(
       actual.artifact,
       "kiro",
@@ -2543,6 +2544,11 @@ function buildTarget(target: TargetConfig): TargetResult {
       actual.artifact,
       "opencode",
       "opencode.json or opencode.jsonc present",
+    ));
+    result.gates.push(harnessProbeGate(
+      actual.artifact,
+      "hermes",
+      ".hermes/skills/aidlc/SKILL.md present (project skill",
     ));
     result.gates.push(compiledKiroNewWorkRoutingGate(actual.artifact));
     result.gates.push(pluginSelectGate(actual.artifact));

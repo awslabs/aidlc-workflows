@@ -892,7 +892,7 @@ function buildTree(
 ): string[] {
   const harnessDir = m.harnessDir;
   const treeRoot = join(outRoot, harnessDir);
-  // Every harness projects onto ONE of the six flavors the tier module
+  // Every harness projects onto ONE of the seven flavors the tier module
   // knows (Kiro CLI and Kiro IDE share the "kiro" flavor - identical model
   // dial). Declared per manifest, never inferred from the harness name.
   const harnessKind = m.tierFlavor;

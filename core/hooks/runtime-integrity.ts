@@ -1364,7 +1364,7 @@ function isAuthoredDevelopmentPath(path: string, cwd: string): boolean {
 
 function harnessInstallRoots(cwd: string): string[] {
   return [...new Set(integrityProjectRoots(cwd).flatMap((projectDir) => {
-    const conventional = [".claude", ".codex", ".kiro", ".cursor", ".aidlc"]
+    const conventional = [".claude", ".codex", ".kiro", ".cursor", ".aidlc", ".hermes"]
       .map((dir) => resolve(projectDir, dir));
     try {
       const harnessDir = runtimeHarnessDir(projectDir);

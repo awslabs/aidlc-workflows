@@ -47,7 +47,8 @@ export type ModelHarness =
   | "cursor"
   | "kiro"
   | "kiro-ide"
-  | "opencode";
+  | "opencode"
+  | "hermes";
 export type ModelPolicyLayer =
   | "agent-exception"
   | "group-dial"
@@ -168,6 +169,13 @@ export const HARNESS_HONESTY = Object.freeze({
     message:
       "GitHub Copilot runs every agent on the model you choose in its model picker (/model in the Copilot CLI), so a model or effort set here is kept for other tools and changes nothing in GitHub Copilot.",
   }),
+  hermes: Object.freeze({
+    model: false,
+    effort: false,
+    groupEffort: false,
+    message:
+      "Hermes Agent runs every agent on the model and reasoning effort you choose in your session, so a model or effort set here is kept for other tools and changes nothing in Hermes.",
+  }),
 });
 
 type HarnessHonesty = {
@@ -216,6 +224,7 @@ export const HARNESS_PRODUCT_NAMES: Readonly<Record<ModelHarness, string>> = Obj
   kiro: "Kiro CLI",
   "kiro-ide": "Kiro",
   opencode: "opencode",
+  hermes: "Hermes Agent",
 });
 
 // The one sentence setup and doctor show on those harnesses. A recorded policy

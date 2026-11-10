@@ -26,6 +26,7 @@ const RELEASE_DISTRIBUTIONS = [
   "kiro",
   "kiro-ide",
   "opencode",
+  "hermes",
 ] as const;
 
 function releaseAssets(version: string): Map<string, {

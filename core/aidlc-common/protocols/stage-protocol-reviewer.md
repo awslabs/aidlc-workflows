@@ -449,3 +449,7 @@ If `directive.reviewer` is present, invoke the reviewer as a sub-agent (via the 
 ### GitHub Copilot
 
 If `directive.reviewer` is present, invoke the reviewer as a sub-agent (delegate to the reviewer custom agent - the `.github/agents/` roster is exposed as callable agents).
+
+### Hermes Agent
+
+If `directive.reviewer` is present, invoke the reviewer as a sub-agent: call `delegate_task` with the reviewer's persona from `{{HARNESS_DIR}}/agents/` and the stage file in the child's context (children are leaf agents and cannot delegate).

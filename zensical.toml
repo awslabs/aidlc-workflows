@@ -58,6 +58,7 @@ nav = [
       "guide/harnesses/codex-cli.md",
       "guide/harnesses/cursor.md",
       "guide/harnesses/opencode.md",
+      "guide/harnesses/hermes.md",
     ] },
     { "Help and Examples" = [
       "guide/15-troubleshooting.md",

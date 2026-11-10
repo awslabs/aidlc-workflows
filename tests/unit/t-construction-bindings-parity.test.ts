@@ -31,6 +31,7 @@ const TOOL_HEADING: Record<string, string> = {
   cursor: "Cursor",
   opencode: "opencode",
   copilot: "GitHub Copilot",
+  hermes: "Hermes Agent",
 };
 const TOOL_HEADINGS = new Set(Object.values(TOOL_HEADING));
 
