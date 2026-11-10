@@ -6800,13 +6800,16 @@ function takeStanding(projectDir: string, build: UnitBuild): TakeStanding {
   }
   // The claim's own history, back from what git fetched: this take there once
   // is recorded, whatever the lead did with the Unit since. It is this person's
-  // by their git name then, or the email the claim commit was made with.
+  // by their git name then, or by the email of the commit that made the take
+  // (only that one: a later commit of theirs on someone else's take is not it).
   let oid = current?.oid ?? null;
   for (let steps = 0; oid !== null && steps < 200; steps++) {
     const payload = readPayload(projectDir, oid, { localOnly: true });
     if (payload === null) break;
-    if (payload.taken_by !== undefined && payload.generation === attempt && (payload.taken_by === me ||
-      (myEmail !== "" && localGit(projectDir, ["log", "-1", "--format=%ce", oid]).stdout.trim() === myEmail))) return { state: "recorded" };
+    const before = payload.predecessor_oid === null ? null : readPayload(projectDir, payload.predecessor_oid, { localOnly: true });
+    const madeTheTake = payload.taken_by !== undefined && before?.taken_by !== payload.taken_by;
+    if (payload.taken_by !== undefined && payload.generation === attempt && (payload.taken_by === me || (madeTheTake && myEmail !== "" &&
+      localGit(projectDir, ["log", "-1", "--format=%ce", oid]).stdout.trim() === myEmail))) return { state: "recorded" };
     oid = payload.predecessor_oid;
   }
   const team = auditBlockField(row.block, "Team") ?? "";
@@ -8316,6 +8319,18 @@ function proposeChange(args: string[], projectDir?: string): void {
   const home = buildsHome(pd, build);
   const ref = claimRef(home.id8, build.unit);
   if (home.target !== null) ensureFetchedClaim(pd, home, ref);
+  // Never onto a claim this build's take is not on; one the lead's project did
+  // not record then is recorded first.
+  let standing = takeStanding(pd, build);
+  if (standing.state === "pending") {
+    refreshHomeClaims(pd, { home, now: true });
+    standing = takeStanding(pd, build);
+    if (standing.state === "pending" && recordTakeHere(pd, build, home, standing, true).ok) standing = takeStanding(pd, build);
+  }
+  if (standing.state === "aside") {
+    console.log(JSON.stringify({ proposed: false, notice: standing.line }));
+    return;
+  }
   const live = currentClaim(pd, home.target, ref);
   if (live?.status !== "claimed") fail(`${build.unit} is not held at the lead's project, so there is no claim to send the change on.`);
   const proposal: Proposal = {

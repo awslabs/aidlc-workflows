@@ -9498,7 +9498,8 @@ function unitCloneAsk(projectDir: string, stateContent: string): AskDirective | 
 
 function unitProposeAsk(projectDir: string, stateContent: string): AskDirective | null {
   const build = unitBuildOf(stateContent);
-  if (build === null) return null;
+  // A claim this build's take is not on takes no change from it (said once by buildClaimNotes).
+  if (build === null || takeAside(projectDir, stateContent)) return null;
   for (const changed of changedInputs(projectDir, stateContent)) {
     const askName = `unit-propose-${changed.path.replace(/[^A-Za-z0-9.-]+/g, "_")}-${changed.fingerprint.slice("sha256:".length, 19)}.json`;
     if (engineAskMark(projectDir, askName) !== null) continue;

@@ -1814,8 +1814,15 @@ describe("a take the lead's project could not record then", () => {
         "so the lead and the other teams see theirs, not yours. Your build is still here: agree with pal who carries it on, or give yours back.",
     );
     expect(nextSaying(pay, chat).said).not.toContain("before your take could be recorded");
-    // The push sends the code to the team's own repos and no result onto pal's claim, and offers no send again.
     const record = buildDir(pay, "payments", "refunds");
+    // A change to an approved input is never sent on pal's claim.
+    const requirements = join(record, "inception", "requirements-analysis", "requirements.md");
+    writeFileSync(requirements, `${readFileSync(requirements, "utf-8")}\nFR2 partial refunds.\n`);
+    const proposed = run(UNIT, ["propose", "--input", "requirements.md", "--person-words", "partial refunds too"], pay, chat);
+    expect(proposed.status, proposed.out).toBe(0);
+    expect(String(proposed.json?.notice)).toContain("before your take could be recorded there");
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toEqual(theirs);
+    // The push sends the code to the team's own repos and no result onto pal's claim, and offers no send again.
     codeGenerated(pay, record);
     const pushed = run(UNIT, ["push"], pay, chat);
     expect(pushed.status, pushed.out).toBe(0);
@@ -1829,6 +1836,16 @@ describe("a take the lead's project could not record then", () => {
         "set aside, with everything in it kept.",
     );
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toEqual(theirs);
+  });
+
+  test("a person who changes their git name after their take was recorded is still the one who took it", () => {
+    const home = homeWithTeams(["refunds=payments"]);
+    const pay = cloneOf(home.remote, "pay");
+    expect(take(pay, "refunds", ["--team", "payments"]).status).toBe(0);
+    git(pay, ["config", "user.name", "Pay Person"]);
+    const look = nextSaying(pay, chatOf("pay-2"));
+    expect(look.said).not.toContain("before your take could be recorded");
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ taken_by: "pay" });
   });
 
   test("held for another team before it was recorded: said once, the way on the lead's", () => {
