@@ -528,9 +528,12 @@ describe("t259 the engine's last word ended the turn", () => {
 
   // A plan proposal waiting for the person's approve, edit or reject is a stop
   // the engine itself put up: the Stop hook honours its open compose question.
-  // A setting typed under it must not hand the agent back to the work and walk
-  // past their pick; once `next` has named another step, it is no gate.
-  test("a setting typed while a plan proposal waits ends the turn, and once next names another step it does not", async () => {
+  // A setting under it is either their approval of the settings it proposed
+  // (the agent goes on through `next`, which closes it) or one typed beside it
+  // (the agent stops, and it still waits): which one is the agent's to read.
+  // Once `next` has named another step, a setting goes on as it does with no
+  // proposal at all.
+  test("a setting while a plan proposal waits names both endings for the agent, and once next names another step it carries on", async () => {
     const proj = setupIntegrationProject({ withState: "state-mid-ideation.md", stripEnvScope: true });
     tempDirs.push(proj);
     const env: Record<string, string | undefined> = { ...process.env, CLAUDE_PROJECT_DIR: proj };
@@ -548,9 +551,9 @@ describe("t259 the engine's last word ended the turn", () => {
     await Bun.sleep(20);
     const waiting = setting();
     expect(waiting.kind).toBe("print");
-    expect(waiting.message).toContain("print its output verbatim and stop");
-    expect(waiting.message).not.toContain("re-run next");
-    expect(existsSync(turnEndMarkerPath(proj))).toBe(true);
+    expect(waiting.message).toContain("When their message approved the settings the plan change proposed, then run");
+    expect(waiting.message).toContain("when it set something beside the plan change, which still waits for their answer, stop.");
+    expect(composeGateOpen(proj)).toBe(true);
     // A setting's write keeps the question; a `next` naming the stage closes
     // it, so the work carries on as it does with no proposal at all.
     expect(engine().kind).toBe("run-stage");

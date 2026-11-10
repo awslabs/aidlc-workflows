@@ -176,14 +176,18 @@ describe("t-compose-approve-carries-on: every answer to the in-flight compose qu
     carriesOn(proj);
   });
 
-  test("a settings-only Approve goes through the setter, which keeps the question, then next closes it and carries on", () => {
+  test("a settings-only Approve goes through next, whose setter step names what follows: next after an approval, which closes the question", () => {
     const proj = work();
     const print = askCompose(proj);
-    expect(print).toMatch(/on approve, apply them yourself with `[^`]*config set <setting> <value> \[--<setting> <value> \.\.\.\] --message '<id>' --verbatim`/);
-    expect(print).toMatch(/print its output verbatim, then run `[^`]*aidlc-orchestrate\.ts next` and follow what it returns; run no recompose/);
+    expect(print).toContain("on approve, apply them by running next with the matching flags and follow what it returns; run no recompose");
+    // A setting while the question is open: the setter, then the agent reads
+    // which question their message answered.
+    const setting = next(proj, ["--review", "none"]);
+    const step = String(setting.message);
+    expect(step).toMatch(/^Run `[^`]*config set review none[^`]*` to update the configuration and print its output verbatim\./);
+    expect(step).toMatch(/When their message approved the settings the plan change proposed, then run `[^`]*aidlc-orchestrate\.ts next` and follow what it returns, so the work carries on; when it set something beside the plan change, which still waits for their answer, stop\./);
     const set = run(proj, "aidlc.ts", ["config", "set", "review", "none"]);
     expect(set.status, set.out).toBe(0);
-    expect(readState(proj)).toMatch(/Review.*none/i);
     expect(composeGateOpen(proj)).toBe(true);
     carriesOn(proj);
   });

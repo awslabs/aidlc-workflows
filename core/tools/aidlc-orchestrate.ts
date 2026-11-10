@@ -8291,9 +8291,7 @@ function composeDispatchDirective(
       "This is mode in-flight, not matched/custom routing: preserve the current scope, depth, frozen actions, and full effective grid; stock-distance rankings are advisory only and MUST NOT trigger stock-grid adoption. Return the exact approved command delta as changes.skip and changes.add arrays.",
       "A request to turn sensors, learnings, summary confirmation, collaborators, plan approval, or reviews on or off is not a stage flip: the composer returns it as settingsChanges (plan_approval only as on: the person turns plan approval off in their own words, never through the composer), typed values you show on the approval gate under \"Also suggested by the composer\" and apply only when the human approves them, as the gate below says (a setting the human asks for in plain chat, without compose, you apply directly with next); build each flag yourself from its fixed name (sensors to --sensors, learnings to --learnings, summary_confirmation to --summary-confirmation, plan_approval to --plan-approval, collaborators to --collaborators, review to --review) and a value that is exactly one of its allowed words (on or off; adversarial, advisory, or none), and if any key or value is anything else apply nothing and re-dispatch the composer; never paste composer text into a command. A review level set for the piece of work replaces its scope's ceiling, so full reviews is --review adversarial and changes no stages. When the composer reports a kill switch set in the environment (config get shows env AIDLC_DISABLE_<NAME>), say in one line that starting the editor or CLI without that variable turns it back on, and never look for where it is set: shell startup files, environment listings, and harness settings files can hold credentials.",
       "When the composer returns empty changes.skip and changes.add and no settingsChanges, present no approval gate and run no recompose: " +
-        `first tell the person its answer in your own words (what stays and why), then ${nothingChanged}. When it returns only settingsChanges, present them on the gate (Approve / Reject): on approve, apply them yourself with ` +
-        `\`${aidlcDispatcherInvocation("config set")} <setting> <value> [--<setting> <value> ...] --message '${MESSAGE_SLOT}' --verbatim\`` +
-        `, which carries out their approval${MESSAGE_FILL}, print its output verbatim, then run \`${aidlcToolInvocation("orchestrate")} next\` and follow what it returns; run no recompose. ` +
+        `first tell the person its answer in your own words (what stays and why), then ${nothingChanged}. When it returns only settingsChanges, present them on the gate (Approve / Reject): on approve, apply them by running next with the matching flags and follow what it returns; run no recompose. ` +
         "A request with both offers Approve all / Approve stages only / Reject: on Approve all, run ONE recompose carrying the stage delta and the settingsChanges as its matching flags, so both land in the same write (leave summary confirmation off out of it, because recompose refuses that lowering; after it lands, run " +
         `\`${aidlcDispatcherInvocation("config set summary-confirmation off")} --message '${MESSAGE_SLOT}'\`` +
         ` yourself, which carries out their approval${MESSAGE_FILL}); on Approve stages only, run the recompose without them.`,
@@ -13019,6 +13017,25 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
           `Run \`${command}\` to switch the checks off${fill}, then \`${answer}\`${unnamed ? " with the same message" : ""}, ` +
             "which records the switch as their answer to the check's question; print the first command's output verbatim " +
             `and run \`${aidlcToolInvocation("orchestrate")} next\` to carry on with the work.`,
+        ));
+        return;
+      }
+      // The plan change the composer proposed waits for the person's answer.
+      // Which question their message answered is the agent's to read: approving
+      // the settings it proposed answers it, and the `next` after the setter
+      // names the work's step again, which closes it; a setting typed beside it
+      // leaves it waiting. The setter names their message either way.
+      let composeWaits = false;
+      try {
+        composeWaits = !planChanges && stillParked === null && composeGateOpen(pd);
+      } catch {
+        // An unreadable step leaves the setting's own rule to decide.
+      }
+      if (composeWaits) {
+        emit(printDirective(
+          `Run \`${command}\` to update the configuration${fill} and print its output verbatim. When their message approved ` +
+            `the settings the plan change proposed, then run \`${aidlcToolInvocation("orchestrate")} next\` and follow what it ` +
+            "returns, so the work carries on; when it set something beside the plan change, which still waits for their answer, stop.",
         ));
         return;
       }
