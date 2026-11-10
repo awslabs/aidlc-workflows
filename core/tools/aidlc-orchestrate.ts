@@ -9304,7 +9304,8 @@ function unitTakeLook(
       // the Unit when one start is offered, else asking which.
       // Their agreed practices (memory/team.md) come with them, named as such.
       const lead = byAddress === null ? leadRules(projectDir, space) : leadRules(projectDir, space, (rel) => textAt(projectDir, byAddress.oid, rel));
-      const names = [...lead.practices, ...lead.project];
+      // A heading both files have (Code Style, say) is named once.
+      const names = [...new Set([...lead.practices, ...lead.project])];
       const brings = lead.practices.length === 0 ? "project rules" : lead.project.length === 0 ? "agreed practices" : "agreed practices and project rules";
       const ownRules: AskChoice[] = [];
       // A start that can only begin early carries --early, which a Unit ready

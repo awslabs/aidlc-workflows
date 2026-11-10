@@ -6710,19 +6710,23 @@ function takeUnit(args: string[], projectDir?: string): void {
     notThere.lines +
     (planChanging !== null
       ? ` The lead is changing the Unit plan (${planChanging} is open again there), so ${unit} is taken on the plan as it stands there.`
-      : "") +
-    (notRecorded === null ? "" : ` The lead's project takes no push from here (${notRecorded}), so the lead and the other teams ` +
-      `cannot see that you took ${unit} until it does; AI-DLC records it there when a push next goes through.`);
+      : "");
+  const noPush = notRecorded === null ? null : `The lead's project takes no push from here (${notRecorded}), so the lead and the other teams ` +
+    `cannot see that you took ${unit} until it does; AI-DLC records it there when a push next goes through.`;
   // The take's own line waits for the build's next step, which also puts the
-  // offer to clone its repos not checked out here (buildCloneOffer).
+  // offer to clone its repos not checked out here (buildCloneOffer). The
+  // no-push risk is a line of its own kept for the reply the turn ends on, so
+  // the agent's own words for the take never leave it out.
   const said = saidWithNextStep(pd, taken);
+  const riskKept = noPush !== null && said && saidWithNextStep(pd, noPush, { forReply: true });
+  const notice = said ? (noPush !== null && !riskKept ? noPush : null) : [taken, noPush].filter((line) => line !== null).join(" ");
   console.log(JSON.stringify({
     taken: true,
     unit,
     team,
     space: build.space,
     record: build.dirName,
-    ...(said ? {} : { notice: taken }),
+    ...(notice === null ? {} : { notice }),
   }));
 }
 
@@ -6892,10 +6896,10 @@ export function takeAside(projectDir: string, stateContent: string): boolean {
 // speaks from in this chat (on the build it selected), as a jump's does, so it
 // reaches them with that step's own lines. False when no chat can hold it, and
 // the output carries it.
-function saidWithNextStep(pd: string, line: string): boolean {
+function saidWithNextStep(pd: string, line: string, options: { forReply?: boolean } = {}): boolean {
   try {
     const session = resolveWorkflowSelection(pd).sessionId;
-    return session !== null && session !== undefined && addPendingPersonLines(pd, session, [line]);
+    return session !== null && session !== undefined && addPendingPersonLines(pd, session, [line], options);
   } catch {
     return false;
   }

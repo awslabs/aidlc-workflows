@@ -452,6 +452,24 @@ describe("taking a Unit starts its build in the team's space", () => {
     expect(readFileSync(join(alice, "aidlc", "spaces", "default", "memory", "project.md"), "utf-8")).toContain("Every handler ships with a contract test.");
   });
 
+  // A live run (Pat): the lead's team.md and project.md both had their own Code
+  // Style, and the take named it twice.
+  test("a rule name the lead's agreed practices and project rules share is named once at the take", () => {
+    const home = makeHome();
+    const memory = join(home.dir, "aidlc", "spaces", "default", "memory");
+    for (const file of ["team.md", "project.md"]) {
+      writeFileSync(join(memory, file), `# ${file}\n\n## Code Style\nNo default exports.\n`);
+    }
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    expect(run(UNIT, ["assign", "refunds=payments"], home.dir).status).toBe(0);
+    commitAll(home.dir, "teams");
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const ask = next(cloneOf(home.remote, "alice"));
+    expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-take");
+    const detail = String((ask.choices as Array<{ detail?: string }>)[0]?.detail);
+    expect(detail).toContain("The lead's agreed practices and project rules (Code Style) apply to its build too");
+  });
+
   // A live run (S1): payments built the refund amount test-after against the
   // lead's agreed "test first", which the take never carried.
   test("the lead's agreed practices are offered at the take too, named, and taken they reach the build before the team's own", () => {
@@ -999,6 +1017,29 @@ describe("a team's own workspace, made from the home's", () => {
     expect(took.status).not.toBe(0);
     expect(String(took.json?.error)).toContain('starts with "-"');
     expect(existsSync("/tmp/aidlc-no")).toBe(false);
+  });
+
+  // A live run (Pat): the line sat at the end of the take's own line, and the
+  // agent's reply said the take in its own words without it. In a chat it is a
+  // line of its own, kept for the reply the turn ends on.
+  test("a home that takes no push from here, from a chat: its line is its own, kept for the reply, and the next step carries it", () => {
+    const home = homeWithTeams(["refunds=payments"]);
+    refusePushes(home.remote);
+    const pay = teamWorkspace(home.remote, "pay");
+    const session = "6c7a1d2f-2e3b-4d4c-8f5a-1b2c3d4e5f60";
+    const chat: NodeJS.ProcessEnv = { ...ENV, CLAUDE_CODE_SESSION_ID: session, CLAUDE_PID: String(process.pid) };
+    const took = run(UNIT, ["take", "refunds", "--home", HOME, "--team", "payments"], pay, chat);
+    expect(took.status, took.out).toBe(0);
+    expect(took.json?.notice).toBeUndefined();
+    const line = "The lead's project takes no push from here (this host takes no push from here (pre-receive hook declined)), so the lead " +
+      "and the other teams cannot see that you took refunds until it does; AI-DLC records it there when a push next goes through.";
+    const kept = JSON.parse(readFileSync(join(pay, "aidlc", ".aidlc-sessions", `${session}.person-lines`), "utf-8")) as {
+      lines: Array<{ line: string; reply?: boolean }>;
+    };
+    expect(kept.lines.find((entry) => entry.line === line)?.reply, JSON.stringify(kept)).toBe(true);
+    expect(kept.lines.some((entry) => entry.line !== line && entry.line.includes("takes no push from here"))).toBe(false);
+    const step = next(pay, chat);
+    expect((step.change_notices ?? []) as string[], JSON.stringify(step)).toContain(line);
   });
 
   test("a home that takes no push from here: the take goes on, held or open, with one line naming git's reason", () => {
