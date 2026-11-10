@@ -195,7 +195,7 @@ describe("a long /aidlc paste: the agent is told AI-DLC has it whole and runs ne
   test("the note is Kiro's own first-step sentence, word for word", async () => {
     const kiro = readFileSync(join(REPO_ROOT, "harness", "kiro-ide", "hooks", "aidlc-kiro-adapter.ts"), "utf-8");
     expect(kiro).toContain(`return \`${NOTE} \${run}\`;`);
-    expect(kiro).toContain("engine orchestrate ${step}\\` now and do only what it prints.`;");
+    expect(kiro).toContain(`engine orchestrate \${step}\\\` now and do only what it prints.\`;`);
     const proj = await project("fresh");
     const line = contextLine((await say(proj, `/aidlc ${spec(30_000)}`, "claude")).stdout).context;
     expect(line.slice(line.indexOf(NOTE))).toMatch(/^AI-DLC: this message is an AI-DLC request and AI-DLC has it on record\. Run `[^`]+ engine orchestrate next` now and do only what it prints\.$/);
