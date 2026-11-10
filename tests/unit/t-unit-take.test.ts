@@ -1947,3 +1947,83 @@ describe("a take the lead's project could not record then", () => {
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ owner: "payments", taken_by: "pay" });
   });
 });
+
+describe("every Unit is open: whoever takes it builds it where they are, and no team is named", () => {
+  // The lead's project once teams are chosen, shared, with no team named.
+  function homeOpen() {
+    const home = makeHome();
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    commitAll(home.dir, "teams");
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    return home;
+  }
+  function workIn(dir: string, space: string): void {
+    expect(run(UTILITY, ["space-create", space], dir).status).toBe(0);
+    expect(run(UTILITY, ["space", space], dir).status).toBe(0);
+  }
+
+  test("the lead says Payments and the team works in its pay space: their take goes, and its build is in pay", () => {
+    const home = makeHome();
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    // The lead's own words name a team; nothing holds a Unit for a name now.
+    run(UNIT, ["assign", "refunds=Payments"], home.dir);
+    commitAll(home.dir, "teams");
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const pat = cloneOf(home.remote, "pat");
+    workIn(pat, "pay");
+    const took = take(pat, "refunds");
+    expect(took.status, took.out).toBe(0);
+    expect(took.json?.space).toBe("pay");
+    expect(String(took.json?.notice ?? "")).toContain("Its build is its own piece of work here, in the pay space,");
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ owner: "pay", taken_by: "pat" });
+  });
+
+  test("two fresh clones take one Unit: the first builds it where it is, the other is told who has it", () => {
+    const home = homeOpen();
+    const ann = cloneOf(home.remote, "ann");
+    const ben = cloneOf(home.remote, "ben");
+    const first = take(ann, "refunds");
+    expect(first.status, first.out).toBe(0);
+    expect(first.json?.space).toBe("default");
+    const second = take(ben, "refunds");
+    expect(second.status).not.toBe(0);
+    expect(second.out).toContain("refunds is already taken: ann builds it.");
+    expect(second.out).not.toContain("team");
+  });
+
+  test("a taker in a named space builds there, one in default builds in default", () => {
+    const home = homeOpen();
+    const web = cloneOf(home.remote, "wen");
+    workIn(web, "web");
+    const ui = take(web, "checkout-ui");
+    expect(ui.status, ui.out).toBe(0);
+    expect(ui.json?.space).toBe("web");
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "checkout-ui")).toMatchObject({ owner: "web", taken_by: "wen" });
+    const dee = cloneOf(home.remote, "dee");
+    const refunds = take(dee, "refunds");
+    expect(refunds.status, refunds.out).toBe(0);
+    expect(refunds.json?.space).toBe("default");
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ owner: "default", taken_by: "dee" });
+  });
+
+  test("a fresh clone is offered each open Unit once, with no team to name", () => {
+    const home = homeOpen();
+    const ask = next(cloneOf(home.remote, "fay"));
+    expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-take");
+    const choices = ask.choices as Array<{ label: string; command: string }>;
+    expect(choices.filter((choice) => choice.label.startsWith("Start refunds")).length, JSON.stringify(choices)).toBe(1);
+    for (const choice of choices) expect(choice.command).not.toContain("--team");
+    expect(JSON.stringify(ask)).not.toMatch(/Which team|for another team|the lead's project builds/i);
+  });
+
+  test("the lead's own build here holds the Unit: a teammate's take after it is told who has it", () => {
+    const home = homeOpen();
+    git(home.dir, ["config", "user.name", "lee"]);
+    const here = run(UNIT, ["assign", "--here", "refunds"], home.dir);
+    expect(here.status, here.out).toBe(0);
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ taken_by: "lee" });
+    const tom = take(cloneOf(home.remote, "tom"), "refunds");
+    expect(tom.status).not.toBe(0);
+    expect(tom.out).toContain("refunds is already taken: lee builds it.");
+  });
+});
