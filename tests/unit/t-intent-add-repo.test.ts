@@ -13,7 +13,7 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import {
@@ -598,6 +598,28 @@ describe("intent add-repo clones a repo that is not here yet", () => {
     expect(rows).toContain("**Listed At**: src/notify");
     expect(readFileSync(join(proj, ".gitignore"), "utf-8")).toContain("/src/notify/\n");
     expect(stagingLeft()).toEqual([]);
+  });
+
+  // A staging folder an earlier add left beside a folder outside the workspace
+  // (a run stopped mid-clone): the next add of that repo says it after its own
+  // line, with where it is, and leaves it for the person to delete.
+  test("--path outside the workspace with --url: a staging folder an earlier add left there is said after the add's line, and kept", () => {
+    const bare = bareRepo("local", "notify");
+    const away = realpathSync(mkdtempSync(join(tmpdir(), "aidlc-t-add-away-")));
+    try {
+      const left = join(away, ".aidlc-workspace-sync-clone-notify-Ab12Cd");
+      mkdirSync(left);
+      writeFileSync(join(proj, "repos.json"), `${JSON.stringify({ repos: [{ name: "app-a" }] }, null, 2)}\n`);
+      const r = utility(["intent", "add-repo", "notify", "--path", join(away, "notify").replace(/\\/g, "/"), "--url", bare]);
+      expect(r.rc, r.out).toBe(0);
+      expect(existsSync(join(away, "notify", ".git"))).toBe(true);
+      expect(r.out.trim().split("\n").at(-1)).toBe(
+        `AI-DLC could not remove the temporary folder ${left} it made to clone notify; nothing in it is needed, so you can delete it.`,
+      );
+      expect(existsSync(left)).toBe(true);
+    } finally {
+      rmSync(away, { recursive: true, force: true });
+    }
   });
 
   test("--path to a checkout already there with --url: repos.json keeps the address, the credential left out", () => {

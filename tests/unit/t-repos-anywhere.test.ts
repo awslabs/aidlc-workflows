@@ -1,4 +1,4 @@
-// covers: function:repoDir, function:resolveIntentRepoSet, function:sourceKeyRegistryFiles, function:insideProject, function:workspaceTargetPath, function:repoNotThereLine, file:core/tools/aidlc-workspace-manifest.ts, file:core/tools/aidlc-workspace-repos.ts
+// covers: function:repoDir, function:resolveIntentRepoSet, function:sourceKeyRegistryFiles, function:insideProject, function:workspaceTargetPath, function:repoNotThereLine, function:removeOutsideStages, function:takeStagingLeftLines, function:stagingLeftLine, file:core/tools/aidlc-workspace-manifest.ts, file:core/tools/aidlc-workspace-repos.ts
 //
 // Repos anywhere on disk (#2410, item 1). repos.json can give a repo a `path`
 // (relative to the workspace and outside it, absolute, or "." for the workspace
@@ -12,7 +12,7 @@
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { loadStageGraph, repoDir, resolveIntentRepoSet, sourceKeyRegistryFiles, sourcePathKey } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -24,6 +24,7 @@ import {
   workspaceGitignoreEntries,
 } from "../../dist/claude/.claude/tools/aidlc-workspace-manifest.ts";
 import { insideProject, workspaceTargetPath } from "../../dist/claude/.claude/tools/aidlc-workspace-repos.ts";
+import { removeOutsideStages, takeStagingLeftLines } from "../../dist/claude/.claude/tools/aidlc-workspace-sync.ts";
 import { detectWorkspace } from "../../dist/claude/.claude/tools/aidlc-utility.ts";
 import {
   AIDLC_SRC,
@@ -380,6 +381,74 @@ describe("workspace-sync clones to the path, by path", () => {
     expect(git(join(ws, "checkout-api"), ["config", "--get-regexp", "^remote\\."])).toBe(before);
     expect(result.out).toContain('billing has no origin, so its "url" is blank for now.');
   });
+});
+
+// A staging folder beside a checkout outside the workspace that is still there
+// after a run: said once, after the run's own line, with where it is; never
+// removed by AI-DLC when it did not just make it.
+describe("a staging folder left beside a checkout outside the workspace", () => {
+  const leftLine = (dir: string, repo: string): string =>
+    `AI-DLC could not remove the temporary folder ${dir} it made to clone ${repo}; nothing in it is needed, so you can delete it.`;
+
+  test("a removal that fails is said once, and the folder is kept", () => {
+    const { root } = layout();
+    const dir = join(root, ".aidlc-workspace-sync-clone-billing-Ab12Cd");
+    mkdirSync(dir);
+    removeOutsideStages([{ dir, repo: "billing" }], () => {
+      throw new Error("EBUSY: resource busy or locked");
+    });
+    expect(takeStagingLeftLines()).toEqual([leftLine(dir, "billing")]);
+    expect(takeStagingLeftLines()).toEqual([]);
+    expect(existsSync(dir)).toBe(true);
+  });
+
+  test("one an earlier run left is said by the next workspace-sync of that repo, after its result, and kept", () => {
+    const { root, ws } = layout();
+    const bare = bareWithCommit(root, "billing");
+    const left = join(root, "work", ".aidlc-workspace-sync-clone-billing-Ab12Cd");
+    mkdirSync(join(left, "billing"), { recursive: true });
+    writeFileSync(join(ws, "repos.json"), JSON.stringify({ repos: [{ name: "billing", url: bare, path: "../billing" }] }));
+    const result = sync(ws);
+    expect(result.status, result.out).toBe(0);
+    expect(existsSync(join(root, "work", "billing", ".git"))).toBe(true);
+    const said = leftLine(left, "billing");
+    expect(result.out.split(said).length - 1, result.out).toBe(1);
+    expect(result.out.indexOf(said)).toBeGreaterThan(result.out.indexOf("workspace in sync"));
+    expect(existsSync(left)).toBe(true);
+  });
+
+  // A file git cannot let go of: the clone's own hook leaves a folder only its
+  // owner can open up, then fails the clone. chmod does not lock a file on
+  // Windows, and root opens any folder.
+  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "a clone that fails and leaves a folder that cannot be removed: the line comes after the failure, and the folder stays",
+    () => {
+      const { root, ws } = layout();
+      const bare = bareWithCommit(root, "billing");
+      const template = join(root, "template");
+      mkdirSync(join(template, "hooks"), { recursive: true });
+      writeFileSync(join(template, "hooks", "post-checkout"), "#!/bin/sh\nmkdir -p held && echo x > held/f && chmod 555 held\nexit 1\n", {
+        mode: 0o755,
+      });
+      writeFileSync(join(ws, "repos.json"), JSON.stringify({ repos: [{ name: "billing", url: bare, path: "../billing" }] }));
+      const result = spawnSync(BUN, [SYNC, "--project-dir", ws], {
+        cwd: ws,
+        encoding: "utf-8",
+        env: { ...GIT_ENV, GIT_TEMPLATE_DIR: template },
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      const stage = readdirSync(join(root, "work")).find((name) => name.startsWith(".aidlc-workspace-sync-clone-billing-"));
+      try {
+        expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
+        expect(stage, readdirSync(join(root, "work")).join(", ")).toBeDefined();
+        const said = leftLine(join(root, "work", stage ?? ""), "billing");
+        expect(result.stderr.split(said).length - 1, result.stderr).toBe(1);
+        expect(result.stderr.indexOf(said)).toBeGreaterThan(result.stderr.indexOf("✗"));
+      } finally {
+        if (stage !== undefined) chmodSync(join(root, "work", stage, "billing", "held"), 0o755);
+      }
+    },
+  );
 });
 
 // A feature plan between two stages: Requirements Analysis done and approved,

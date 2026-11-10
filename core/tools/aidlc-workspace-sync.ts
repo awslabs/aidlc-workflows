@@ -1059,8 +1059,59 @@ function snapshotOutputs(root: string): OutputSnapshots {
 interface StagedClones {
   transactionDir: string;
   stagePaths: Map<string, string>;
-  outsideStages: string[];
+  outsideStages: OutsideStage[];
   targets: Map<string, string>;
+}
+
+// A staging folder beside a checkout outside the workspace, and the repo it
+// was made to clone.
+export interface OutsideStage {
+  dir: string;
+  repo: string;
+}
+
+const OUTSIDE_STAGE_PREFIX = ".aidlc-workspace-sync-clone-";
+// mkdtemp's own six characters after the prefix.
+const OUTSIDE_STAGE_SUFFIX_LENGTH = 6;
+
+// A staging folder outside the workspace that is still there after a run,
+// said once, after the run's own result or failure line. AI-DLC removes only a
+// folder it just made; one it could not remove, or an earlier run left, is the
+// person's to delete.
+const stagingLeft = new Set<string>();
+
+export function stagingLeftLine(dir: string, repo: string): string {
+  return `AI-DLC could not remove the temporary folder ${dir} it made to clone ${repo}; nothing in it is needed, so you can delete it.`;
+}
+
+export function takeStagingLeftLines(): string[] {
+  const lines = [...stagingLeft];
+  stagingLeft.clear();
+  return lines;
+}
+
+export function removeOutsideStages(
+  stages: readonly OutsideStage[],
+  remove: (dir: string) => void = (dir) => rmSync(dir, { recursive: true, force: true }),
+): void {
+  for (const stage of stages) {
+    try {
+      remove(stage.dir);
+    } catch {
+      stagingLeft.add(stagingLeftLine(stage.dir, stage.repo));
+    }
+  }
+}
+
+// The one read for a folder an earlier run left beside this checkout (a run
+// stopped mid-clone runs no code to say it): the parent folder's own names.
+function noteEarlierStages(parent: string, repo: string): void {
+  const prefix = `${OUTSIDE_STAGE_PREFIX}${repo}-`;
+  for (const name of readdirSync(parent)) {
+    if (name.startsWith(prefix) && name.length === prefix.length + OUTSIDE_STAGE_SUFFIX_LENGTH) {
+      stagingLeft.add(stagingLeftLine(join(parent, name), repo));
+    }
+  }
 }
 
 function cloneDestination(root: string, staged: StagedClones, name: string): string {
@@ -1092,8 +1143,9 @@ function stagePlan(
         staged.stagePaths.set(repo.name, join(transactionDir, "clones", repo.name));
       } else {
         mkdirSync(dirname(destination), { recursive: true });
-        const stage = mkdtempSync(join(dirname(destination), `.aidlc-workspace-sync-clone-${repo.name}-`));
-        staged.outsideStages.push(stage);
+        noteEarlierStages(dirname(destination), repo.name);
+        const stage = mkdtempSync(join(dirname(destination), `${OUTSIDE_STAGE_PREFIX}${repo.name}-`));
+        staged.outsideStages.push({ dir: stage, repo: repo.name });
         staged.stagePaths.set(repo.name, join(stage, repo.name));
       }
     }
@@ -1106,13 +1158,11 @@ function stagePlan(
 }
 
 function removeTransaction(staged: StagedClones): void {
-  for (const dir of [...staged.outsideStages, staged.transactionDir]) {
-    try {
-      rmSync(dir, { recursive: true, force: true });
-    } catch {
-      // Left under a name the managed .gitignore block ignores, or beside the
-      // checkout it was staged for.
-    }
+  removeOutsideStages(staged.outsideStages);
+  try {
+    rmSync(staged.transactionDir, { recursive: true, force: true });
+  } catch {
+    // Left under a name the managed .gitignore block ignores.
   }
 }
 
@@ -1323,13 +1373,7 @@ function commitPlan(
     throw err;
   } finally {
     if (cleanupTransaction) {
-      for (const stage of outsideStages) {
-        try {
-          rmSync(stage, { recursive: true, force: true });
-        } catch {
-          // A staging folder that cannot be removed stays beside the checkout.
-        }
-      }
+      removeOutsideStages(outsideStages);
       try {
         rmSync(transactionDir, { recursive: true, force: true });
       } catch (err) {
@@ -1576,6 +1620,7 @@ export function main(argv: string[]): void {
   } catch (err) {
     console.error(red(`✗ ${(err as Error).message}`));
   }
+  for (const line of takeStagingLeftLines()) console.error(yellow(`  ⚠ ${line}`));
   process.exit(exitCode);
 }
 

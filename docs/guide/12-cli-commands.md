@@ -3376,7 +3376,10 @@ are replaced successfully remain under the ignored
 too and can be deleted. The tool clones
 repos declared in `repos.json` but missing on disk into the folder each one's
 `path` gives (yours from `aidlc/repos.local.json` when you set one; a clone into a
-path outside the workspace is staged beside that folder, so another drive works),
+path outside the workspace is staged beside that folder, so another drive works,
+and a `.aidlc-workspace-sync-clone-<repo>-*` staging folder there that could not be
+removed, or that a cut-off run left, is named once in one line and left for you to
+delete),
 rewrites the managed block in the workspace `.gitignore` to one `/{path}/` line
 per repo whose checkout sits inside the workspace (never the workspace itself,
 plus its two own folder patterns), and writes an `aidlc.code-workspace` VSCode

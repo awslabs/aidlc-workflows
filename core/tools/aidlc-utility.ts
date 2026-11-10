@@ -170,6 +170,7 @@ import {
   originUrl,
   type StagedWorkspaceRepo,
   stageWorkspaceRepo,
+  takeStagingLeftLines,
 } from "./aidlc-workspace-sync.ts";
 import { noteReposManifestWritten } from "./aidlc-workspace-repos.ts";
 import {
@@ -761,7 +762,9 @@ function die(msg: string): never {
     pd,
     "aidlc-utility",
     command,
-    msg,
+    // A staging folder an add's clone left outside the workspace is said after
+    // the refusal, on its own line (none unless a clone was staged).
+    [msg, ...takeStagingLeftLines()].join("\n"),
     errorSelection.intent,
     errorSelection.space,
   );
@@ -9973,7 +9976,7 @@ function handleIntentRepos(
       }
       break;
   }
-  process.stdout.write(`${lines.join(" ")}\n`);
+  process.stdout.write([lines.join(" "), ...takeStagingLeftLines()].map((line) => `${line}\n`).join(""));
 }
 
 // The way on for work that keeps its code in the workspace folder itself once
