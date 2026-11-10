@@ -1089,8 +1089,12 @@ const LEGACY_ENGINE_ENTRIES: ReadonlyMap<string, string> = new Map([
   [".aidlc-unit-releases", "units/releases"],
   [".aidlc-unit-merges", "units/merges"],
 ]);
-// Cursor's dispatch witnesses sat beside the ledger folder; they go into it.
+// Cursor's dispatch witnesses, each at the top of aidlc/ under its own name.
 const LEGACY_CURSOR_WITNESS = /^\.aidlc-cursor-subagent-[^/\\]+\.json$/;
+/** Where Cursor's delegation witnesses live inside aidlc/.aidlc-engine/, under
+ *  their own names: beside its Task ledger folder (sessions/cursor-subagents/),
+ *  never inside it, so the attribution outlives a lost ledger. */
+export const CURSOR_WITNESS_DIR = "sessions";
 const LEGACY_NAMES: ReadonlyMap<string, string> = new Map(
   [...LEGACY_ENGINE_ENTRIES].map(([legacy, now]) => [now, legacy]),
 );
@@ -1268,7 +1272,7 @@ export function ensureWorkspaceEngineFolder(projectDir: string): string {
     }
     for (const name of readdirSync(aidlc)) {
       const now = LEGACY_ENGINE_ENTRIES.get(name) ??
-        (LEGACY_CURSOR_WITNESS.test(name) ? `sessions/${name}` : undefined);
+        (LEGACY_CURSOR_WITNESS.test(name) ? `${CURSOR_WITNESS_DIR}/${name}` : undefined);
       if (now === undefined) continue;
       const from = join(aidlc, name);
       moveEngineEntry(from, join(folder, ...now.split("/")), folder, from);

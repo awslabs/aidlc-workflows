@@ -66,7 +66,7 @@ import {
   sessionsDir,
   takeSessionSelectionNotice,
 } from "../tools/aidlc-lib.ts";
-import { aidlcInvocation, knownActiveSpace } from "../tools/aidlc-runtime-paths.ts";
+import { aidlcInvocation, CURSOR_WITNESS_DIR, knownActiveSpace, workspaceEnginePath } from "../tools/aidlc-runtime-paths.ts";
 import { TRUSTED_ROUTE_NAMESPACE } from "../tools/aidlc-command.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
@@ -238,10 +238,8 @@ export async function run(
   const REVIEWER_DISPATCH_TTL_MS = 6 * 60 * 60 * 1000;
   const AMBIGUOUS_REVIEWER = "__aidlc_ambiguous_reviewer__";
   const REVIEW_AGENT_RE = /^aidlc-(architecture-reviewer|product-lead)-agent$/;
-  // The dispatch ledger, and beside it (never inside, so the attribution
-  // outlives a lost ledger) the witness copies, both in the sessions folder.
-  const WITNESS_DIR = sessionsDir(projectDir);
-  const LEDGER_DIR = join(WITNESS_DIR, "cursor-subagents");
+  const WITNESS_DIR = workspaceEnginePath(projectDir, CURSOR_WITNESS_DIR);
+  const LEDGER_DIR = join(sessionsDir(projectDir), "cursor-subagents");
   const ledgerPrefix = "spawn-";
   const witnessPrefix = ".aidlc-cursor-subagent-";
 
