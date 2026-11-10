@@ -860,12 +860,13 @@ export function writesByRepo(projectDir: string, writes: ReadonlyArray<{ path: s
 
 export interface UnitBoardRow {
   unit: string;
+  /** Where it is built: a take's space ("payments space"), "here", "" for a take in a default space (no column), null when open. */
   team: string | null;
   status: string;
 }
 
 export function renderUnitBoard(label: string, rows: readonly UnitBoardRow[]): string {
-  return [`Units of ${label}:`, ...rows.map((row) => `- ${row.unit}, ${row.team ?? "open"}: ${row.status}`)].join("\n");
+  return [`Units of ${label}:`, ...rows.map((row) => `- ${row.unit}${row.team === "" ? "" : `, ${row.team ?? "open"}`}: ${row.status}`)].join("\n");
 }
 
 // --- The lead's project waits on the teams ------------------------------------

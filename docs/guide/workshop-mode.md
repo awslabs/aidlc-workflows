@@ -750,10 +750,13 @@ remote cannot be reached, one line says the board may be behind):
 
 ```text
 Units of checkout-revamp:
-- refunds, payments: checkout-api merged, billing not merged yet (1 of 2 merged)
-- checkout-ui, web: building, taken by sam
+- refunds, payments space: built by bea, checkout-api merged, billing not merged yet (1 of 2 merged)
+- checkout-ui, web space: building, taken by sam
 - reporting, here: waits on refunds
 ```
+
+Each take's row names the space its build is in (a take in a default space has
+no space named), and a pushed or done one says who built it.
 
 A Unit the lead's project builds itself reads where its Unit Progress has it:
 done once it is through its gate, the stage it is at, waiting for your
@@ -882,7 +885,7 @@ teammate by their own git name.
 
 The lead's sign-off is off by default. With `aidlc unit lead-sign-off on` at
 the lead's project, a team's result waits for the lead's own word: the lead's project asks once
-as the result arrives ("refunds came back from payments: ... Sign it off?"),
+as the result arrives ("refunds came back from bea: ... Sign it off?"),
 and the Unit counts as done only once it is signed off and every repo it
 changed has merged; the board says "waiting for your sign-off" meanwhile, and
 keeps **Sign it off** there after a **Not now**. When solo work switches to

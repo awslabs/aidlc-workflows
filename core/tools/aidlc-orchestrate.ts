@@ -17958,9 +17958,11 @@ function unitBoardRows(
   };
   const rows = unitsInPlanOrder(projectDir, planUnits).map((unit): UnitBoardRow => {
     const claim = overview?.claims.get(unit);
-    // The space it is built in, or who took it where that is a default space.
-    const team = claim?.status === "claimed" && !own.has(unit) ? (claim.owner === DEFAULT_SPACE ? builderOf(claim) : claim.owner) : null;
-    if (done(unit)) return { unit, team: team ?? "here", status: "done" };
+    // The space a take is built in, said as a space; a default space is not
+    // named, so its row has no column. A pushed or done one says who built it.
+    const team = claim?.status === "claimed" && !own.has(unit) ? (claim.owner === DEFAULT_SPACE ? "" : `${claim.owner} space`) : null;
+    const builtBy = team === null ? "" : `built by ${builderOf(claim!)}, `;
+    if (done(unit)) return { unit, team: team ?? "here", status: `${builtBy}done` };
     if (team === null && left.has(unit)) return { unit, team: null, status: "waiting for a team to take it" };
     if (team === null) {
       const waits = (dependencies.get(unit) ?? []).filter((dep) => !done(dep));
@@ -17984,7 +17986,7 @@ function unitBoardRows(
       const unrecorded = opens === null ? "" : past !== null
         ? `, not recorded yet: it is recorded once the work is back on ${past.back}`
         : `, not recorded yet: the next step here records it${named ? ` and opens ${named}` : ""}`;
-      return { unit, team, status: `${mergedStatus(verdicts)}${waiting}${unrecorded}` };
+      return { unit, team, status: `${builtBy}${mergedStatus(verdicts)}${waiting}${unrecorded}` };
     }
     const early = (payload.early_on ?? []).map((dep) => dep.unit);
     return { unit, team, status: `building${early.length > 0 ? ` early on ${early.join(", ")}` : ""}, taken by ${builderOf(claim!)}` };
