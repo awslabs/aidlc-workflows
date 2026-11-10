@@ -32,6 +32,7 @@ import {
   messageBeforeJoining,
   proveMessage,
   readMessage,
+  REQUEST_MAX_BYTES,
   type StoredMessage,
   SUMMARY_CHANGES_QUESTION,
 } from "./aidlc-message-store.ts";
@@ -307,6 +308,7 @@ import {
   renderReadableReviewCopy,
 } from "./aidlc-review-brief.js";
 import {
+  approvedPlanChangeReviewLine,
   codeGenerationPlanApprovalQuestionEvidence,
   type CodeGenerationTarget,
   notePlanApprovalOverrideOffered,
@@ -2208,8 +2210,8 @@ function namedProtectedReply(
 // `next --request-file` (and carries them to `log answer --request-file`), so
 // they reach AI-DLC with no shell on the way: on Windows, cmd.exe ends a
 // command at a line break and replaces a %NAME% pair even inside quotes, and
-// the aidlc launcher is read by cmd.exe again.
-const REQUEST_TEXT_MAX_BYTES = 64 * 1024;
+// the aidlc launcher is read by cmd.exe again. A file is read up to
+// REQUEST_MAX_BYTES, the message store's number for how much a request can carry.
 
 export const REQUEST_FILE_USAGE =
   `--request-file needs a file directly inside ${REQUEST_TEXT_DIR}/ in this project, for example ` +
@@ -2223,6 +2225,17 @@ export function readRequestFile(
   projectDir: string,
   file: string,
 ): { text: string; spend(): void; restore(): void } | string {
+  const read = readRequestFileResult(projectDir, file);
+  return "refusal" in read ? read.refusal : read;
+}
+
+// The same read, saying when the one reason it was refused is the file's size
+// (`overCap`, with the removal the command makes once it goes ahead): `next`
+// tells a request too long for the file from one it cannot read at all.
+export function readRequestFileResult(
+  projectDir: string,
+  file: string,
+): { text: string; spend(): void; restore(): void } | { refusal: string; overCap?: { spend(): void } } {
   const relativePath = file.replaceAll("\\", "/");
   const parts = relativePath.split("/");
   const name = parts[parts.length - 1];
@@ -2231,38 +2244,38 @@ export function readRequestFile(
     return parts.length === folder.length + 1 && folder.every((part, i) => parts[i] === part);
   });
   if (isAbsolute(file) || dir === undefined || name === "" || name === "." || name === "..") {
-    return REQUEST_FILE_USAGE;
+    return { refusal: REQUEST_FILE_USAGE };
   }
   const unread = `AI-DLC could not read the request in ${relativePath}. Send your request again.`;
+  const spend = (): void => {
+    if (isReadOnlyEngineProbe()) return;
+    try {
+      removeRecordFileNoFollow(projectDir, relativePath);
+    } catch {
+      // Left in its gitignored folder; the next request replaces it.
+    }
+    // An earlier release's folder goes once its last request is read.
+    if (dir !== REQUEST_TEXT_DIR) {
+      try {
+        rmdirSync(join(projectDir, ...dir.split("/")));
+      } catch {
+        // Not empty, or already gone.
+      }
+    }
+  };
   let text: string;
+  let target: string | null = null;
   try {
-    text = agentFileText(readRegularFileNoFollowOrThrow(
-      recordFileTargetOrThrow(projectDir, relativePath),
-      "The request file",
-      REQUEST_TEXT_MAX_BYTES,
-    )).replace(/\r?\n$/, "");
+    target = recordFileTargetOrThrow(projectDir, relativePath);
+    text = agentFileText(readRegularFileNoFollowOrThrow(target, "The request file", REQUEST_MAX_BYTES))
+      .replace(/\r?\n$/, "");
   } catch {
-    return unread;
+    return { refusal: unread, ...(target !== null && overRequestCap(target) ? { overCap: { spend } } : {}) };
   }
-  if (text.trim() === "") return `The request in ${relativePath} is empty. Send your request again.`;
+  if (text.trim() === "") return { refusal: `The request in ${relativePath} is empty. Send your request again.` };
   return {
     text,
-    spend: () => {
-      if (isReadOnlyEngineProbe()) return;
-      try {
-        removeRecordFileNoFollow(projectDir, relativePath);
-      } catch {
-        // Left in its gitignored folder; the next request replaces it.
-      }
-      // An earlier release's folder goes once its last request is read.
-      if (dir !== REQUEST_TEXT_DIR) {
-        try {
-          rmdirSync(join(projectDir, ...dir.split("/")));
-        } catch {
-          // Not empty, or already gone.
-        }
-      }
-    },
+    spend,
     // The words as they were read, for a step that runs the same command again.
     restore: () => {
       if (isReadOnlyEngineProbe()) return;
@@ -2273,6 +2286,16 @@ export function readRequestFile(
       }
     },
   };
+}
+
+// A plain file, not a link, larger than the request reader takes.
+function overRequestCap(path: string): boolean {
+  try {
+    const stat = lstatSync(path);
+    return stat.isFile() && stat.size > REQUEST_MAX_BYTES;
+  } catch {
+    return false;
+  }
 }
 
 function handleAnswer(args: string[]): void {
@@ -5040,6 +5063,11 @@ function handleReview(args: string[]): void {
     // The reviewer is told which files another open piece of work in this
     // folder claims, as the build was, so it raises no finding about them.
     const otherWork = workspaceStage ? otherOpenWorkClaims(pd, flags.stage) : [];
+    // A Code Generation plan the person approved that changed and was built
+    // without asking them again: the reviewer is told, so the plan-approval
+    // record beside the plan does not read as a missing approval.
+    const planChange = flags.stage === "code-generation"
+      ? approvedPlanChangeReviewLine(pd, { unit: flags.unit ?? null }) : null;
     console.log(JSON.stringify({
       emitted: "REVIEW_REQUESTED",
       stage: flags.stage,
@@ -5054,7 +5082,7 @@ function handleReview(args: string[]): void {
         reviewFile ?? "the review file this request opened",
         recordVerdict,
         dispatchAgent,
-        otherWork.length > 0 ? otherWorkNote(otherWork, "review") : undefined,
+        [...(otherWork.length > 0 ? [otherWorkNote(otherWork, "review")] : []), ...(planChange === null ? [] : [planChange])],
       ),
       ...(retried ? { retry: "pending-request" } : {}),
       ...(upgraded ? { upgrade: "legacy-request" } : {}),

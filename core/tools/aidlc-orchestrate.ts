@@ -136,10 +136,16 @@ import {
   waitingFrontRequests,
 } from "./aidlc-question-store.ts";
 import {
-  latestMessage, listMessages, messageBeforeJoining, noReplySince, personTurnStands, readMessage, standingPersonTurn,
-  requestMessageStep,
+  latestMessage, listMessages, MESSAGE_TEXT_MAX_CHARS, messageBeforeJoining, noReplySince, personTurnStands, readMessage,
+  REQUEST_MAX_BYTES, requestMessageStep, standingPersonTurn, type StoredMessage, wholeMessageText,
 } from "./aidlc-message-store.ts";
-import { aidlcEntryWords, APPROVAL_GATE_CHOICES, protectedChoices, SUMMARY_CONFIRMATION_CHOICES } from "./aidlc-reply-reader.ts";
+import {
+  aidlcEntryWords,
+  APPROVAL_GATE_CHOICES,
+  protectedChoices,
+  SUMMARY_CONFIRMATION_CHOICES,
+  typedWordGap,
+} from "./aidlc-reply-reader.ts";
 import {
   type AskChoice,
   type AskDirective,
@@ -593,7 +599,7 @@ import {
 } from "./aidlc-lib.ts";
 import { chatTookStep, hostNamesThisChat, idSuffix, planMadeElsewhere } from "./aidlc-record-core.ts";
 import { maskUserinfo } from "./aidlc-workspace-sync.ts";
-import { readRequestFile, REQUEST_FILE_USAGE, reviewRecoverySpentMessage, reviewVerdictStep } from "./aidlc-log.ts";
+import { readRequestFileResult, REQUEST_FILE_USAGE, reviewRecoverySpentMessage, reviewVerdictStep } from "./aidlc-log.ts";
 import { LOCK_FOLDER_HELD_STEP_KEY, lockFolderHeldAgentStep } from "./aidlc-lock-line.ts";
 import {
   autonomyGrantedOnRecord,
@@ -1381,7 +1387,13 @@ function hooksOffStop(
 // settings, never a command of another kind.
 const KEPT_REQUEST_FILE = "kept-request.json";
 const KEPT_REQUEST_MAX_AGE_MS = 24 * 60 * 60 * 1000;
-const KEPT_REQUEST_MAX_BYTES = 64 * 1024;
+// A request up to REQUEST_MAX_BYTES, the message store's one number for how
+// much a request can carry, read back whole: its arguments are kept as JSON,
+// which writes a byte of theirs as at most six (a control character such as
+// an ESC as \u001b; a gap between arguments as three), and the record's own
+// fields (the time, a space name, which as a folder name is at most 255
+// bytes, and the restart id) fit in the 4 KiB beside it.
+const KEPT_REQUEST_MAX_BYTES = 6 * REQUEST_MAX_BYTES + 4 * 1024;
 const KEPT_REQUEST_LINE = "Carrying on with your earlier request.";
 const KEPT_REQUEST_FLAGS = new Set([
   "intent", "scope", "positionalScope", "depth", "testStrategy", "projectType", "review",
@@ -2098,6 +2110,10 @@ function prepareEmission(directive: Directive): PreparedEmission {
       ? `${activeKeptRequestLine} ${directive.narration}`
       : activeKeptRequestLine;
     activeKeptRequestLine = null;
+  }
+  if (activeCutMessageLine !== null) {
+    directive.narration = directive.narration ? `${activeCutMessageLine} ${directive.narration}` : activeCutMessageLine;
+    activeCutMessageLine = null;
   }
   if (activeRestartWords !== null) {
     if (directive.kind === "print") {
@@ -3689,8 +3705,13 @@ function authoritativeRequest(raw: string): string {
   return authoritativeProjectDescription(raw).description;
 }
 
-function requestPreview(raw: string): string {
-  const text = authoritativeRequest(raw);
+// The start of the request as a question or a step quotes it: across a CR or
+// LF line break, its lines trimmed and joined with one space.
+export function requestPreview(raw: string): string {
+  const request = authoritativeRequest(raw);
+  const text = /[\r\n]/.test(request)
+    ? request.split(/\r\n?|\n/).map((line) => line.trim()).filter((line) => line.length > 0).join(" ")
+    : request;
   return text.length > 240 ? `${text.slice(0, 240)}...` : text;
 }
 
@@ -5309,13 +5330,25 @@ function routingQuestionReplyDirective(question: StoredQuestion, words: string, 
       `"${option.label}" on another plan they name: the command for that plan, one of ${otherPlans.map(({ command: c }) => `\`${c}\``).join(", ")}`,
     ];
   });
-  return printDirective(
+  const otherFile = wordsForNextStep(projectDir, "other", words);
+  return printDirective(fittingQuote((quote) =>
     "The person has not answered the question about where their words belong, so `next` cannot tell their reply " +
     "from a new request and took nothing from the line. If their words answer that question, run the command for " +
     `their choice: ${answers.join("; ")}. If they are asking for something else, run ` +
-    `\`${tool}${wordsForNextStep(projectDir, "other", words)}\` (their words: ${JSON.stringify(words)}). ` +
-    "If you cannot tell, ask them once in plain words.",
-  );
+    `\`${tool}${otherFile}\` (their words: ${quote(words)}). ` +
+    "If you cannot tell, ask them once in plain words."));
+}
+
+// A step that hands the person's words on in a file and also quotes them: the
+// quote is whole while the step fits its limit (the room prepareEmission keeps
+// for a restart's words), and the request's preview otherwise, as the plan
+// question shows it; the file carries them whole either way.
+function fittingQuote(message: (quote: (words: string) => string) => string): string {
+  const whole = message((words) => JSON.stringify(words));
+  if (Buffer.byteLength(JSON.stringify(printDirective(whole)), "utf-8") <= directiveMaxBytes() - RESTART_WORDS_MARGIN_BYTES) {
+    return whole;
+  }
+  return message((words) => JSON.stringify(requestPreview(words)));
 }
 
 function newWorkRoutingAskDirective(
@@ -8504,9 +8537,10 @@ function newProjectDropsReverseEngineering(
   return runs && detectedProjectType(projectDir) === "greenfield";
 }
 
-// How a routing question names the work already in progress.
+// How a step names the work already in progress: by the start of the request
+// it was made from, as a question quotes a request, so a long one still fits.
 function activeWorkLabel(stateContent: string): string {
-  return (getField(stateContent, "Project") ?? "").trim() ||
+  return requestPreview((getField(stateContent, "Project") ?? "").trim()) ||
     (getField(stateContent, "Current Stage") ?? "").trim() ||
     "the active workflow";
 }
@@ -12449,7 +12483,10 @@ function takePersonsOwnLine(flags: ParsedFlags, pd: string): string[] | null {
     if (lineHandedOut(pd, engineSessionId, message.id)) return null;
     if (stateContent !== null ? !turnIsLatestRow(pd, message.id) : settingsKeptSince(pd, engineSessionId, message.at)) return null;
   }
-  const typed = aidlcEntryWords(personsWordsText(message.text));
+  // A typed prompt its record cut is read whole from the copy kept beside the
+  // record; a plain reply is that text trimmed, as the record's words are.
+  const whole = wholeMessageText(pd, message);
+  const typed = aidlcEntryWords(personsWordsText(whole ?? message.text));
   let argv: string[];
   if (typed === null) {
     if (
@@ -12457,16 +12494,20 @@ function takePersonsOwnLine(flags: ParsedFlags, pd: string): string[] | null {
       flags.positionalScope !== undefined || isTeamUnitOwnership(stateContent) ||
       openStageQuestion(pd, stateContent) === null
     ) return null;
-    argv = ["--", personsWordsText(message.words)];
+    argv = ["--", whole === null ? personsWordsText(message.words) : personsWordsText(whole).trim()];
   } else {
     if (typed.length === 0) return null;
     argv = splitKiroCommandArgs(typed);
   }
   const own = parseNextFlags(argv);
-  // A line `next` already read for this chat (a reading step kept its words as
-  // a question and marked the message) is not read again: the bare `next` the
-  // agent runs after that step goes on from it.
-  if (own.intent !== undefined && lineHandedOut(pd, engineSessionId, message.id)) return null;
+  if (own.intent !== undefined && message.cut === true && whole === null) {
+    if (!cutLineGoesOn(pd, engineSessionId, message, parseNextFlags(argv), typed === null)) return null;
+  } else if (own.intent !== undefined && lineHandedOut(pd, engineSessionId, message.id)) {
+    // A line `next` already read for this chat (a reading step kept its words
+    // as a question and marked the message) is not read again: the bare `next`
+    // the agent runs after that step goes on from it.
+    return null;
+  }
   // A plain-chat line went whole behind `--`; an `/aidlc` line's request is
   // taken as it was typed.
   if (own.intent !== undefined && typed !== null) {
@@ -12478,13 +12519,147 @@ function takePersonsOwnLine(flags: ParsedFlags, pd: string): string[] | null {
   return argv;
 }
 
+// The line the person reads when only the first part of their message
+// reached AI-DLC: no whole copy, and the agent no longer has it (cutLineGoesOn).
+export const CUT_MESSAGE_PERSON_LINE =
+  `AI-DLC kept only the first ${MESSAGE_TEXT_MAX_CHARS.toLocaleString("en-US")} characters of your message, so the ` +
+  "work goes ahead from those. To use all of it, save it as a file in this project and tell me the file's name.";
+// The file the step for a cut message has the agent write their words to.
+const CUT_MESSAGE_FILE = `${REQUEST_TEXT_DIR}/request.txt`;
+// The step for a cut message, which routeNext emits in place of the route.
+let pendingCutMessageStep: PrintDirective | null = null;
+// Said on the next step when the line cannot be kept for the step the agent speaks from.
+let activeCutMessageLine: string | null = null;
+// A request file too long for the reader (nextArgsWithRequestFile): `next`
+// runs bare, and routeNext shows the refusal unless it went on from a cut
+// message's kept part (cutLineGoesOn).
+interface OverCapRequest {
+  refusal: string;
+  spend(): void;
+  wentAhead?: true;
+}
+let overCapRequest: OverCapRequest | null = null;
+
+// A message the record kept cut (`cut`, past MESSAGE_TEXT_MAX_CHARS) with no
+// whole copy beside it (wholeMessageText: over REQUEST_MAX_BYTES, a failed
+// write, a record from before copies were kept) is not the person's whole
+// words, so `next` does not take it as their request on its own. `shape` is
+// the parse of the kept line, structure only. The first time it takes nothing: the message is marked handed out, the
+// mark read back (one that cannot be kept never brings the step back), and
+// routeNext hands the agent one step (cutMessageStep), their whole words
+// through the request file. When the agent comes back with no words (marked,
+// and no reading step has kept a question from the message), or with a request
+// file too long for the reader (overCapRequest), the line is taken as it was
+// kept and the person is told once. An over-cap file the agent sent with no
+// step waiting keeps its refusal. False: take nothing.
+function cutLineGoesOn(
+  pd: string, session: string, message: StoredMessage, shape: ParsedFlags, reply: boolean,
+): boolean {
+  const overCap = overCapRequest;
+  if (!lineHandedOut(pd, session, message.id)) {
+    if (overCap !== null) return false;
+    markLineHandedOut(pd, session, message.id);
+    if (lineHandedOut(pd, session, message.id)) {
+      pendingCutMessageStep = cutMessageStep(shape, message, reply);
+      return false;
+    }
+  } else if (questionsFromMessage(pd, message.id).length > 0) {
+    return false;
+  }
+  if (overCap !== null) {
+    overCap.spend();
+    overCap.wentAhead = true;
+  }
+  if (!pendingPersonLines(pd, session).lines.includes(CUT_MESSAGE_PERSON_LINE)) {
+    if (!addPendingPersonLines(pd, session, [CUT_MESSAGE_PERSON_LINE])) activeCutMessageLine = CUT_MESSAGE_PERSON_LINE;
+  }
+  return true;
+}
+
+// The keys of the person's parsed line the step's command carries; with any
+// other on it, the step has the agent keep every flag they typed.
+const CUT_STEP_CARRIES = new Set([
+  "intent", "personWords", "markedWords", "readingStep", "compose", "scope", "positionalScope", "newIntent",
+  "projectType", "planChanges", "planName", "saveAs", "depth", "testStrategy", "review", "changeControl", "ceremony",
+  "fences",
+]);
+
+// What the person typed beside their words, as `next` arguments: the verb and
+// plan from the parse of the kept line, and the settings and routing the
+// record's own parse of the whole line holds (a flag typed after the cut is
+// there), or the parse's when the record kept none.
+function cutMessageArgs(shape: ParsedFlags, message: StoredMessage): string[] {
+  const args: string[] = [];
+  if (shape.compose) args.push("compose");
+  if (shape.positionalScope) args.push(shape.positionalScope);
+  if (shape.scope) args.push("--scope", shape.scope);
+  else if (!shape.positionalScope && message.route.scope) args.push("--scope", message.route.scope);
+  if (shape.newIntent || message.route.newIntent) args.push("--new-intent");
+  const projectType = message.route.projectType ?? shape.projectType;
+  if (projectType) args.push("--project-type", projectType);
+  const skip = message.route.skip.length > 0 ? message.route.skip : shape.planChanges?.skip ?? [];
+  const add = message.route.add.length > 0 ? message.route.add : shape.planChanges?.add ?? [];
+  if (skip.length > 0) args.push("--skip", skip.join(","));
+  if (add.length > 0) args.push("--add", add.join(","));
+  if (shape.planName) args.push("--plan-name", shape.planName);
+  if (shape.saveAs) args.push("--save-as", shape.saveAs);
+  const settings = new Map(message.settings.map(({ key, value }) => [key, value]));
+  for (const modifier of typedSettingModifiers(shape)) {
+    const space = modifier.indexOf(" ");
+    if (!settings.has(modifier.slice(0, space))) settings.set(modifier.slice(0, space), modifier.slice(space + 1));
+  }
+  for (const [key, value] of settings) args.push(`--${key}`, value);
+  return args.map(shellArg);
+}
+
+// The one step for the agent when the line `next` would take was kept cut:
+// every way on, each with its command. The words go in a file, never on a
+// command line (Windows caps one at 32,767 characters, cmd.exe at 8,191).
+function cutMessageStep(shape: ParsedFlags, message: StoredMessage, reply: boolean): PrintDirective {
+  const next = `${aidlcToolInvocation("orchestrate")} next`;
+  const run = (args: readonly string[]): string => `\`${[next, ...args, "--request-file", CUT_MESSAGE_FILE].join(" ")}\``;
+  const write = (what: string): string => `Write ${what} with your file tool to \`${CUT_MESSAGE_FILE}\`, then`;
+  const theirWords = write("the words of their request, exactly as they typed them,");
+  const step = shape.readingStep;
+  let ways: string;
+  if (reply) {
+    ways = `${write("their whole reply, exactly as they typed it,")} run ${run([])} and follow what it returns.`;
+  } else if (step?.kind === "plan-word") {
+    ways = `${theirWords} run ${run(["--scope", step.scope])} with only the words after \`${step.scope}\` in the file ` +
+      `when the rest of their line is the task for that plan, or ${run([])} with all of it when the whole line is ` +
+      "their own sentence, and follow what it returns.";
+  } else if (step?.kind === "value") {
+    ways = `${theirWords} run ${run([step.flag, "<that word>"])} with the rest of their words in the file when they ` +
+      `meant \`${step.flag}\` with one of ${step.valid.join("|")}, or ${run([])} with all of it when that value is ` +
+      "part of what they asked for, and follow what it returns.";
+  } else if (step !== undefined) {
+    const word = step.kind === "noun" ? step.noun : step.kind === "command" ? step.name : "";
+    ways = `${theirWords} run ${run([])} with all of it and follow what it returns. If its first word \`${word}\` ` +
+      "was meant as AI-DLC's own command rather than their words, run that command as they typed it instead.";
+  } else {
+    ways = `${theirWords} run ${run(cutMessageArgs(shape, message))} and follow what it returns.`;
+  }
+  const unread = Object.keys(shape).some((key) => !CUT_STEP_CARRIES.has(key));
+  const flags = reply || step !== undefined
+    ? ""
+    : unread
+    ? " Only their words go in the file: keep every flag they typed on the command, before `--request-file`."
+    : " Only their words go in the file: the plan, command word and flags they typed stay on the command as shown.";
+  return printDirective(
+    `The person's message is longer than the ${MESSAGE_TEXT_MAX_CHARS.toLocaleString("en-US")} characters AI-DLC ` +
+      `keeps from the chat, so the copy here stops partway and nothing was started from it. ${ways}${flags} If you ` +
+      `no longer have their whole message, run \`${next}\` again: the work goes ahead from the part AI-DLC kept, ` +
+      "and AI-DLC tells the person.",
+  );
+}
+
 // The request as the person's line typed it. The split reads quote marks and
 // escapes as syntax, so the parse's words had lost them (`slugit "" prints`
 // came back as `slugit  prints`, the bug itself gone). `said` is the parse's
 // own join of the request's arguments, one space apart, untrimmed so an empty
 // `""` at either end still lines up; the one stretch of the line's arguments that
-// spells it comes back as typed, with the spaces and tabs typed between them and
-// any other gap one space, as withTypedSpacing keeps them. A request of one
+// spells it comes back as typed, each gap between them as typedWordGap keeps
+// it and any other one space, as withTypedSpacing keeps them. A request of one
 // argument is that argument: the quotes around it only made it one. Null when
 // no stretch, or more than one, spells it.
 export function requestAsTyped(said: string, typed: string): string | null {
@@ -12511,7 +12686,7 @@ export function requestAsTyped(said: string, typed: string): string | null {
   let request = typed.slice(spans[first].start, spans[first].end);
   for (let k = first + 1; k <= last; k++) {
     const gap = typed.slice(spans[k - 1].end, spans[k].start);
-    request += (/^[ \t]+$/.test(gap) ? gap : " ") + typed.slice(spans[k].start, spans[k].end);
+    request += (typedWordGap(gap) ?? " ") + typed.slice(spans[k].start, spans[k].end);
   }
   return request;
 }
@@ -12658,6 +12833,14 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   activeRetiredGuardPolicyNotice = null;
   const flags = parseNextFlags(agentArgs);
   const taken = takePersonsOwnLine(flags, resolveProjectDir(projectDir)) ?? agentArgs;
+  const cutStep = pendingCutMessageStep;
+  pendingCutMessageStep = null;
+  const overCap = overCapRequest;
+  overCapRequest = null;
+  if (overCap !== null && overCap.wentAhead !== true) {
+    emit(errorDirective(overCap.refusal));
+    return;
+  }
   const withoutResume = resumeWithWords(flags, taken);
   const args = withoutResume ?? taken;
   // Only the park branches still see a resume that carried words.
@@ -12689,6 +12872,10 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   if (engagesWorkflow) {
     touchEngineMarker(projectDir);
   }
+  if (cutStep !== null) {
+    emit(cutStep);
+    return;
+  }
 
   if (flags.parseError) {
     emit(errorDirective(flags.parseError));
@@ -12717,20 +12904,20 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     // every shell the agent may run it in (PowerShell and Git Bash read an
     // apostrophe beside a ! or a $ differently). It is shown once as a quoted
     // string for the agent to read.
-    const theirs = `run \`${next}${wordsForNextStep(resolveProjectDir(projectDir), "line", said)}\`, ` +
-      `which keeps every word of theirs (${JSON.stringify(said)})`;
+    const lineFile = wordsForNextStep(resolveProjectDir(projectDir), "line", said);
+    const theirs = (quote: (words: string) => string): string =>
+      `run \`${next}${lineFile}\`, which keeps every word of theirs (${quote(said)})`;
     const ask = "If you cannot tell, ask them once in plain words.";
     if (step.kind === "value") {
       // Their value is shown as a quoted string, never inside backticks: in
       // every directive of this engine a backticked span is a command to run,
       // and a value of theirs is not one. The only command here that carries
       // their text is the delimiter one above, where it is one quoted argument.
-      emit(printDirective(
+      emit(printDirective(fittingQuote((quote) =>
         `\`next\` takes \`${step.flag}\` with ${step.valid.join("|")}, and does not take ` +
         `${JSON.stringify(step.value)}. If the person meant one of those, run \`${next}\` again with ` +
         `\`${step.flag}\` and that word, and their own words after it. ` +
-        `If that value is part of what they asked for, ${theirs}. ${ask}`,
-      ));
+        `If that value is part of what they asked for, ${theirs(quote)}. ${ask}`)));
       return;
     }
     if (step.kind === "plan-word") {
@@ -12738,35 +12925,33 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       // that reading carries on with the plan; asking is left for a line that
       // reads both ways. The examples are quoted, not backticked: a backticked
       // span in a directive is a command to run.
-      emit(printDirective(
+      const task = said.slice(step.scope.length).trim();
+      const taskFile = wordsForNextStep(resolveProjectDir(projectDir), "line-after-plan", task);
+      emit(printDirective(fittingQuote((quote) =>
         `\`${step.scope}\` is the name of a plan and also the first word of what the person typed, ` +
         `and \`next\` cannot tell which they meant, so it took nothing from the line. ` +
         `A plan's name and then the task ("${entrySkillInvocation()} ${step.scope} <the task>") is how ` +
         `AI-DLC's guide tells people to pick a plan: when the rest of the line reads as the task for that ` +
-        `plan, they named it, so run \`${next} --scope ${step.scope}` +
-        `${wordsForNextStep(resolveProjectDir(projectDir), "line-after-plan", said.slice(step.scope.length).trim())}\` ` +
-        `(the task: ${JSON.stringify(said.slice(step.scope.length).trim())}). ` +
+        `plan, they named it, so run \`${next} --scope ${step.scope}${taskFile}\` ` +
+        `(the task: ${quote(task)}). ` +
         `When the whole line reads as one phrase with that word in it ("classic car rental website"), ` +
-        `it is their own words: ${theirs}. Ask them once in plain words only when it reads both ways.`,
-      ));
+        `it is their own words: ${theirs(quote)}. Ask them once in plain words only when it reads both ways.`)));
       return;
     }
     if (step.kind === "command") {
-      emit(printDirective(
+      emit(printDirective(fittingQuote((quote) =>
         `\`${step.name}\` is the name of the ${step.plugin} plugin's command and also the first word of what the ` +
         `person typed, and \`next\` cannot tell which they meant, so it took nothing from the line. ` +
         `If they meant to run that command, run \`${aidlcInvocation()} ${step.name}\` with the arguments they gave it. ` +
-        `If \`${step.name}\` is their own word, ${theirs}. ${ask}`,
-      ));
+        `If \`${step.name}\` is their own word, ${theirs(quote)}. ${ask}`)));
       return;
     }
-    emit(printDirective(
+    emit(printDirective(fittingQuote((quote) =>
       `\`${step.noun}\` is one of this engine's own nouns and also the first word of what the person ` +
       `typed, and \`next\` cannot tell which they meant, so it took nothing from the line. ` +
       `If they meant the \`${step.noun}\` command, run \`${next} ${step.noun} <its verb>\` ` +
       `(\`${next} ${step.noun} help\` lists them). ` +
-      `If \`${step.noun}\` is their own word, ${theirs}. ${ask}`,
-    ));
+      `If \`${step.noun}\` is their own word, ${theirs(quote)}. ${ask}`)));
     return;
   }
 
@@ -25376,11 +25561,13 @@ function engineWorkflowSelection(projectDir: string): WorkflowSelection {
 }
 
 // The file's words take the flag's place as one argument after `--`, so none
-// of them is read as a flag (readRequestFile reads it). A string is the refusal.
+// of them is read as a flag (readRequestFileResult reads it). A string is the
+// refusal; `overCap` is the one for a file larger than the reader takes, which
+// `next` decides on once it knows the chat (OverCapRequest).
 function nextArgsWithRequestFile(
   args: readonly string[],
   projectDir: string,
-): { args: string[]; spend(): void; restore(): void } | string {
+): { args: string[]; spend(): void; restore(): void } | string | { overCap: OverCapRequest } {
   // The flag counts only in front of the `--` mark: behind it the token is one
   // of the person's words ("add a --request-file option"), as every flag is.
   const options = beforeDelimiter(args);
@@ -25391,8 +25578,10 @@ function nextArgsWithRequestFile(
   if (file === undefined || file.startsWith("--")) return REQUEST_FILE_USAGE;
   if (beforeDelimiter(rest).includes("--request-file")) return "Pass --request-file once.";
   if (rest.includes("--")) return "Pass the request either after -- or with --request-file, not both.";
-  const read = readRequestFile(projectDir, file);
-  if (typeof read === "string") return read;
+  const read = readRequestFileResult(projectDir, file);
+  if ("refusal" in read) {
+    return read.overCap === undefined ? read.refusal : { overCap: { refusal: read.refusal, spend: read.overCap.spend } };
+  }
   return { args: [...rest, "--", read.text], spend: read.spend, restore: read.restore };
 }
 
@@ -25445,9 +25634,17 @@ export function main(argv: string[]): void {
       emit(errorDirective(withRequest));
       return;
     }
-    subArgs = withRequest.args;
-    spendRequestFile = withRequest.spend;
-    restoreRequestFile = withRequest.restore;
+    if ("overCap" in withRequest) {
+      // Too long for the file: when it answers the step for a message the
+      // record kept cut, `next` goes on from the part kept, so it runs bare
+      // (takePersonsOwnLine decides; routeNext shows the refusal otherwise).
+      overCapRequest = withRequest.overCap;
+      subArgs = [];
+    } else {
+      subArgs = withRequest.args;
+      spendRequestFile = withRequest.spend;
+      restoreRequestFile = withRequest.restore;
+    }
   }
   // The chat's own step on the work it followed the cursor to puts it in that
   // work's fences from now on (chatTookStep); a read-only `next` or a hook's
@@ -25604,6 +25801,9 @@ export function main(argv: string[]): void {
     activeSwitchOffNotices = null;
     activeRedefinedStages = null;
     activeKeptRequestLine = null;
+    activeCutMessageLine = null;
+    pendingCutMessageStep = null;
+    overCapRequest = null;
     activeRestartWords = null;
     activeRestartAsked = null;
     restartUnmarkedNotice = false;

@@ -153,6 +153,13 @@ function pushMain(lead: string, message: string): void {
   git(lead, ["push", "origin", "main"]);
 }
 
+// The lead's checkout fetches what the teammates pushed, as a pull does, before
+// the `next` that needs their claim: the claim fetch `next` makes itself stops at
+// three seconds (refreshClaimRefs), which a busy Windows runner can exceed.
+function leadFetches(lead: string): void {
+  git(lead, ["fetch", "origin"]);
+}
+
 function teammateClaimsBeta(remote: string): string {
   const team = clone(remote, "team");
   const claim = runMergeTool(UNIT, ["claim", "beta", "--team", "team-b"], team);
@@ -290,8 +297,9 @@ describe("the lead's own Unit, begun before a team claimed another, stays the le
     const { lead, remote } = leadsCheckout();
     leadStartsAlpha(lead);
     teammateClaimsBeta(remote);
+    leadFetches(lead);
 
-    // The lead's next step (the claims refreshed from the remote) is alpha's.
+    // The lead's next step (the claims fetched) is alpha's.
     const step = nextDirective(lead);
     expect(step, JSON.stringify(step).slice(0, 400)).toMatchObject({ kind: "run-stage", stage: FD, unit: "alpha" });
     walkFunctionalDesign(lead, "alpha");
@@ -325,6 +333,7 @@ describe("the lead's own Unit, begun before a team claimed another, stays the le
     const { lead, remote } = leadsCheckout("team", true);
     leadStartsAlpha(lead);
     teammateClaimsBeta(remote);
+    leadFetches(lead);
     expect(nextDirective(lead)).toMatchObject({ kind: "run-stage", stage: FD, unit: "alpha" });
     writeAndReview(lead, "alpha");
     expect(unitVerb(lead, "complete", "alpha").status).toBe(0);
@@ -348,6 +357,7 @@ describe("the lead's own Unit, begun before a team claimed another, stays the le
     const { lead, remote } = leadsCheckout();
     leadStartsAlpha(lead);
     prepareCandidate(remote, "beta", "team-b");
+    leadFetches(lead);
     const offer = nextDirective(lead);
     expect(offer, JSON.stringify(offer).slice(0, 400)).toMatchObject({ kind: "ask", ask_type: "team-handover", handovers: ["review"] });
     expect(String(offer.question)).toContain("beta is ready from team-b");
@@ -421,7 +431,8 @@ describe("one active Unit at a time where this checkout holds every Unit", () =>
     const second = runMergeTool(UNIT, ["claim", "alpha", "--team", "team-b"], team);
     expect(second.status).not.toBe(0);
     expect(said(second)).toContain('This checkout is already scoped to Unit "beta".');
-    // The lead's checkout, the claims refreshed, works alpha and not the teammate's beta.
+    // The lead's checkout, the claims fetched, works alpha and not the teammate's beta.
+    leadFetches(lead);
     nextDirective(lead);
     const theirs = unitVerb(lead, "start", "beta");
     expect(theirs.status).not.toBe(0);

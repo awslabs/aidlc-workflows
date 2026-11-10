@@ -3149,7 +3149,29 @@ async function runGroupMembers(
     const allow = await claudeOwnCommandAllow(input);
     if (allow) process.stdout.write(allow);
   }
+  if (code === 0 && !printed && toolName === "AskUserQuestion") {
+    const box = await claudePlanQuestionBox(input);
+    if (box) process.stdout.write(box);
+  }
   return code;
+}
+
+// Claude Code's box for the code plan question shows each plan's lines under
+// the agent's question (planQuestionBoxInput in aidlc-plan-approval-ask.ts).
+// Any other box, and any failure, prints nothing, so the box opens as the agent
+// wrote it and is never refused.
+async function claudePlanQuestionBox(input: string): Promise<string> {
+  try {
+    const payload = JSON.parse(input) as { hook_event_name?: unknown; session_id?: unknown; tool_input?: unknown };
+    if (payload.hook_event_name !== "PreToolUse" || runtimeHarnessName() !== "claude") return "";
+    const { resolveProjectDirFromHook } = await import("./aidlc-lib.ts");
+    const { planQuestionBoxInput } = await import("./aidlc-plan-approval-ask.ts");
+    const updatedInput = planQuestionBoxInput(resolveProjectDirFromHook(import.meta.url), payload.tool_input, payload.session_id);
+    if (updatedInput === null) return "";
+    return `${JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", updatedInput } })}\n`;
+  } catch {
+    return "";
+  }
 }
 
 // Claude Code runs AI-DLC's own command without a prompt however a helper spells this project's

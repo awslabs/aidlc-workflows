@@ -232,7 +232,7 @@ Kiro (Kiro IDE and Kiro CLI on its v3 engine) the agent sends a request this way
 on every shell when it holds `$`, a backtick, `>`, `<`, `&`, `@(`, `@{` or a line
 break, since Kiro asks you to approve an AI-DLC command holding one of them. The
 engine reads only a plain file directly inside `aidlc/.aidlc-engine/request-text/`,
-through no link, up to 64 KiB, uses its words exactly as written, and removes
+through no link, up to 128 KiB, uses its words exactly as written, and removes
 the file once the command goes ahead.
 
 ---
@@ -2245,7 +2245,7 @@ it, for the active intent:
 
 | Flag / config key | State and status row | What `off` skips |
 |-------------------|----------------------|------------------|
-| `--plan-approval` / `plan-approval` (also `guard.plan-approval`) | Plan Approval | The Plan Approval question. Once a plan is written the person hears one line naming it and the build starts; a `PLAN_APPROVAL_SKIPPED` row records the fingerprint that was built |
+| `--plan-approval` / `plan-approval` (also `guard.plan-approval`) | Plan Approval | The Plan Approval question. Once a plan is written the person hears one line naming it and the build starts; a `PLAN_APPROVAL_SKIPPED` row records the fingerprint handed over to be built |
 
 Express and poc ship with it off, and every other shipped scope with it on.
 Precedence matches the other ceremonies, with one addition: a memory

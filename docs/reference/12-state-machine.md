@@ -1605,7 +1605,10 @@ is the skipped record when plan approval is off for the piece of work: a receipt
 marked skipped, `[Answer]: Plan approval off`, and a `PLAN_APPROVAL_SKIPPED`
 row, written when the build is handed over (by `next`, or by the `continue`
 that delivers its last rules part). Its authority is the setting (which only the person, the scope, or the
-machine switch sets), never an answer, and no reader takes it for one. The two engine
+machine switch sets), never an answer, and no reader takes it for one. It stands only
+while plan approval is off and the questions file is still its record, or once that
+plan's build has started (the receipt at `generation`); turned on before then, `next`
+asks about that plan. The two engine
 observers (the Stop probe and the route check) write nothing at all, and a typed barrier at the durable write
 primitives makes an observer that reaches one fail loudly rather than corrupt
 authority. A guard's only move is to refuse: it does not clear a receipt, a

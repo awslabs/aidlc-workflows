@@ -437,6 +437,19 @@ describe("a claimed checkout reopens its own Unit's stages", () => {
     });
   }
 
+  test("over work made from a long request, the claimed checkout's re-entry step names it by its start (#3750)", () => {
+    const { checkout } = claimedPastFunctionalDesign("shared");
+    const first = `Tally, a command-line task ledger. ${"Every task keeps its owner and its due day. ".repeat(700)}END-OF-THE-FIRST-REQUEST`;
+    const file = seededStateFile(checkout);
+    writeFileSync(file, readFileSync(file, "utf-8").replace("- **Project**: claimed reopen", `- **Project**: ${first}`));
+    const words = "add a CSV export to the ledger";
+    says(checkout, words);
+    const reading = nextWords(checkout, words);
+    expect(reading.kind, JSON.stringify(reading).slice(0, 300)).toBe("print");
+    expect(reading.message).toContain(`Work is in progress on "${first.slice(0, 240)}..."`);
+    expect(JSON.stringify(reading)).not.toContain("END-OF-THE-FIRST-REQUEST");
+  });
+
   test("a redo they type with no Unit named is the claimed Unit's, never a redo of the whole stage", () => {
     const { checkout } = claimedPastFunctionalDesign("clone");
     // A stage alpha finished, named with no Unit while beta still owes it.

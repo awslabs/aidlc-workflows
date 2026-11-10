@@ -1377,6 +1377,47 @@ describe("the memory lock and the machine switch", () => {
     expect(build.plan_approval.skipped).toBe(true);
   });
 
+  // A plan built without asking stands in every process that reads the
+  // switch, so the guard lets its build through and `next` stays the build.
+  for (const how of ["launched with the switch", "the switch recorded with config flags --bypass"] as const) {
+    test(`${how}: a plan built without asking stays built, at the guard and at every next`, () => {
+      const proj = project("on");
+      writePlan(proj);
+      const env: Record<string, string> = { ...process.env as Record<string, string>, ...CLEAR };
+      if (how === "launched with the switch") {
+        startSession(proj, MACHINE_OFF);
+        Object.assign(env, MACHINE_OFF);
+      } else {
+        startSession(proj);
+        writeFileSync(
+          join(proj, "aidlc.settings.json"),
+          `${JSON.stringify({ schemaVersion: 1, flags: { schemaVersion: 1, bypasses: ["AIDLC_DISABLE_PLAN_APPROVAL_GUARD"] } }, null, 2)}\n`,
+          "utf-8",
+        );
+        delete env.AIDLC_DISABLE_PLAN_APPROVAL_GUARD;
+      }
+      const drive = (): Emitted => {
+        const result = runOrchestrateNext(ORCHESTRATE, proj, [], { env });
+        expect(result.status, result.out).toBe(0);
+        return result.directive as unknown as Emitted;
+      };
+      expect(drive().plan_approval.skipped).toBe(true);
+      const write = spawnSync(BUN, [GUARD], {
+        cwd: proj,
+        input: JSON.stringify({
+          hook_event_name: "PreToolUse", session_id: SESSION, cwd: proj,
+          tool_name: "Write", tool_input: { file_path: join(proj, "src", "slugify.ts"), content: "x\n" },
+        }),
+        env: { ...env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj },
+        encoding: "utf-8",
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      expect(write.status, write.stderr).toBe(0);
+      expect(drive().plan_approval).toEqual({ status: "approved" });
+      expect(drive().plan_approval).toEqual({ status: "approved" });
+    });
+  }
+
   test("with no harness session in the project (CI, a plain CLI run), the variable counts", () => {
     const proj = project("on");
     writePlan(proj);

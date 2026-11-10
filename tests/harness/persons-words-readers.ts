@@ -974,6 +974,7 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${LIB}#forgetGateWords`]: { use: "keeps", why: "the gate-words record's own write: forgets a message by its offset" },
   [`${LIB}#gateWordsSinceUnitReview`]: { use: "keeps", why: "the gate-words record: hands a checkpoint the replies typed while its review ran, blank ones left out" },
   [`${STORE}#parseMessage`]: { use: "keeps", why: "the message store's own read: checks a record's shape" },
+  [`${STORE}#saveMessage`]: { use: "keeps", why: "the message store's own write: a typed prompt the record cut, kept whole beside it up to REQUEST_MAX_BYTES", from: ["core/hooks/aidlc-record-human-turn.ts#respond"] },
   [`${STORE}#isPickerList`]: { use: "keeps", why: "the message store's own read: checks the box entries' shape", from: [`${STORE}#parseMessage`] },
   [`${STORE}#latestMessage`]: { use: "keeps", why: "the presence shape: a message with words or none (words === null)" },
   [`${STORE}#messageIsReply`]: { use: "keeps", why: "the presence shape: a message with words or none (words === null)" },
@@ -1017,6 +1018,7 @@ export const ALLOWED: Record<string, Allowed> = {
   "core/tools/aidlc-unit.ts#turnedDown": { use: "keeps", why: "the claim writer: the turn-down keeps the lead's typed words as person_reply, read by no line" },
   "core/tools/aidlc-unit.ts#saidMerged": { use: "keeps", why: "the claim writer: the lead's word that a repo merged, kept on the claim for the lead's own merge check" },
   "core/tools/aidlc-unit.ts#resultVerdicts": { use: "keeps", why: "the lead's merge check (checkTeamResults' rule, shared with a team's read-only look): a repo counted merged by the lead's word carries their words into UNIT_MERGED's how" },
+  "core/tools/aidlc-unit.ts#teamMergeSeen": { use: "keeps", why: "the same merge read, three ways, for where a pushed build stands (status and the Units offer): a repo the lead said merged needs no copy here, and resultVerdicts carries their words" },
   "core/tools/aidlc-unit.ts#pushUnit": { use: "keeps", why: "a team's push copies the lead's merged-by-word entries for repos its new push did not change, untouched" },
   [`${STATE}#parkedWords`]: { use: "keeps", why: "the audit writer: the park row's Person Reply" },
   // The recorded answer's Details is the choice the agent recorded, never the file's [Answer]: line (S2a's R31).
@@ -1049,12 +1051,15 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${ORCH}#planProposalDirective`]: { use: "decides", why: "keeps the request as a question and previews it; reuses the question the words came through without comparing them", from: [`${ORCH}#freshWorkRoute`, `${ORCH}#routeNext`] },
   [`${ORCH}#saveReadingQuestion`]: { use: "keeps", why: "keeps the words as a routing question with the message they came in", from: [`${ORCH}#newWorkRoutingAskDirective`, `${ORCH}#routeNext`] },
   [`${ORCH}#takePersonsOwnLine`]: { use: "keeps", why: "the /aidlc parse of the person's own line; already read is the message id" },
+  [`${ORCH}#cutLineGoesOn`]: { use: "keeps", why: "hands the parse of a cut line with no whole copy to the agent's one step", from: [`${ORCH}#takePersonsOwnLine`] },
+  [`${ORCH}#cutMessageStep`]: { use: "keeps", why: "the agent's one step for a cut line: the parse's plan, verb and reading in its command", from: [`${ORCH}#cutLineGoesOn`] },
+  [`${ORCH}#cutMessageArgs`]: { use: "keeps", why: "the plan, verb and settings of a cut line's parse as next's arguments", from: [`${ORCH}#cutMessageStep`] },
   [`${ORCH}#keptWordsStep`]: { use: "decides", why: "the pick step's command: the words a reading step kept from this message, handed on as kept (wordsForNextStep)" },
   [`${ORCH}#resumeWithWords`]: { use: "keeps", why: "a resume with words beside it: whether words are there, then the line read again without --resume" },
   [`${ORCH}#resumeAgain`]: { use: "decides", why: "the unpark step's re-run: the words typed with the resume, handed on as typed (wordsForNextStep)" },
   [`${ORCH}#wordsForNextStep`]: { use: "decides", why: "a step's command: the words go to a request file of their own as given, or quoted onto the line when that file cannot be written", from: [`${ORCH}#keptWordsStep`, `${ORCH}#reshapeReplyArgument`, `${ORCH}#resumeAgain`, `${ORCH}#routeNext`, `${ORCH}#routingQuestionReplyDirective`, `${ORCH}#unitPlanChangeAsk`] },
   [`${ORCH}#requestFileFor`]: { use: "keeps", why: "writes the request file a step's command names, with the words as given", from: [`${ORCH}#wordsForNextStep`] },
-  [`${LIB}#writeRecordFileNoFollow`]: { use: "keeps", why: "writes a step's request file with the words as given, and the isolated run's request", from: [`${ORCH}#requestFileFor`, `${LIB}#keepSingleRunRequest`] },
+  [`${LIB}#writeRecordFileNoFollow`]: { use: "keeps", why: "writes a step's request file with the words as given, the isolated run's request, and a cut message's whole copy", from: [`${ORCH}#requestFileFor`, `${LIB}#keepSingleRunRequest`, `${STORE}#saveMessage`] },
   [`${LOCKS}#writeBufferAtomic`]: { use: "keeps", why: "the atomic write under writeRecordFileNoFollow", from: [`${LIB}#writeRecordFileNoFollow`] },
   [`${ORCH}#emit`]: { use: "decides", why: "the words the person said belong to the work in progress are kept once as the code plan question's reply (keepRoutedPlanApprovalReply), and leave it by their message id" },
   [`${ORCH}#withParkedReply`]: { use: "keeps", why: "the resume re-show: the words they parked the work with" },
@@ -1141,7 +1146,7 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${ORCH}#reshapeReplyArgument`]: { use: "decides", why: "a print between a reshape answer and the composer hands their reply on in a request file its command names, when the answer carried one" },
   [`${ORCH}#unitPlanChangeAsk`]: { use: "decides", why: "the Unit-change question's separate-work answer hands the request on in a request file its command names, when the request carried words" },
   [`${ORCH}#newWorkRoutingAskDirective`]: { use: "decides", why: "as above (the routing question)", from: [`${ORCH}#intentPickPromptIfRecordsExist`, `${ORCH}#routeNext`] },
-  [`${ORCH}#printDirective`]: { use: "keeps", why: "prints a step, which may carry their request", from: [`${ORCH}#jumpStepPrint`, `${ORCH}#routeNext`, `${ORCH}#routingQuestionReplyDirective`, `${ORCH}#unitsWordsReplyDirective`] },
+  [`${ORCH}#printDirective`]: { use: "keeps", why: "prints a step, which may carry their request", from: [`${ORCH}#jumpStepPrint`, `${ORCH}#routeNext`, `${ORCH}#unitsWordsReplyDirective`] },
   [`${ORCH}#unitsWordsReplyDirective`]: { use: "keeps", why: "a teammate's clone: the Units offer's own lines and commands, put to the agent beside the request id their words are kept under" },
   [`${ORCH}#jumpStepPrint`]: { use: "keeps", why: "as above, for a step that names one jump", from: [`${ORCH}#emitTypedResumeChoice`] },
   [`${ORCH}#projectTypeIsWholeRequest`]: { use: "keeps", why: "the presence shape: the line is only the project type" },
@@ -1203,9 +1208,9 @@ export const ALLOWED_UNREACHED: Record<string, Allowed> = {
   "core/tools/aidlc-sensor-claim-sources.ts#answerIsFilled": { use: "decides", why: "the presence shape: an [Answer]: line holds more than blanks or underscores", from: ["core/tools/aidlc-sensor-claim-sources.ts#parseSourceUniverse"] },
 };
 
-/** The places that make a record's words PersonsWords: the two records' writers and their own reads of the file. */
+/** The places that make a record's words PersonsWords: the two records' writers and their own reads of the files. */
 export const BRAND_WRITERS: readonly string[] = [
-  `${STORE}#saveMessage`, `${STORE}#parseMessage`, `${LIB}#recordGateWords`, `${LIB}#readGateWords`,
+  `${STORE}#saveMessage`, `${STORE}#parseMessage`, `${STORE}#wholeMessageText`, `${LIB}#recordGateWords`, `${LIB}#readGateWords`,
 ];
 
 /** The agent-argument checks (O4): they read the agent's argv or the file it wrote, never the person's words. */

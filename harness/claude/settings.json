@@ -37,7 +37,7 @@
         ]
       },
       {
-        "matcher": "Read|NotebookRead|Edit|MultiEdit|Write|NotebookEdit|LS|Glob|Grep|Bash|Task|Agent",
+        "matcher": "Read|NotebookRead|Edit|MultiEdit|Write|NotebookEdit|LS|Glob|Grep|Bash|Task|Agent|AskUserQuestion",
         "hooks": [
           {
             "type": "command",

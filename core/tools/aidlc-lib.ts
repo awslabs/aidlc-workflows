@@ -131,6 +131,7 @@ import {
   type ProtectedChoice,
   protectedChoiceDigests,
   stripRecommendedDecorator,
+  typedWordGap,
 } from "./aidlc-reply-reader.ts";
 export {
   formatReceivedReply,
@@ -2103,9 +2104,8 @@ export function commandArgSpans(raw: string): CommandArgSpan[] {
 // its hooks a quoted phrase with the quotes removed and the spaces kept, so
 // "Hello,  World!" arrives as two tokens. `words` is some of the line's tokens
 // in order, separated by whitespace. When one stretch of the line's tokens,
-// side by side, spells them, each separator takes the spaces and tabs typed
-// there; any other gap (a line break, a no-break or other Unicode space) stays
-// one plain space, as the split hands it on. Read by text alone a flag's value
+// side by side, spells them, each separator takes the gap typed there as
+// typedWordGap keeps it; any other gap stays the join's. Read by text alone a flag's value
 // can spell a word too (`--scope bugfix  bugfix bugfix is broken`), so words no
 // stretch spells, or two stretches spell with different spacing, keep the
 // join's spaces. A token lines up only whole, at a whitespace boundary, and
@@ -2145,7 +2145,7 @@ function spacedFrom(words: string, raw: string, tokens: CommandArgSpan[], first:
     while (at < words.length && /\s/.test(words[at])) at++;
     if (at === words.length) return spaced + words.slice(to);
     const typed = k + 1 < tokens.length ? raw.slice(tokens[k].end, tokens[k + 1].start) : "";
-    spaced += /^[ \t]+$/.test(typed) ? typed : words.slice(to, at);
+    spaced += typedWordGap(typed) ?? words.slice(to, at);
   }
   return null;
 }

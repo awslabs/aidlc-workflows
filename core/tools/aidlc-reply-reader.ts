@@ -170,4 +170,15 @@ export function aidlcEntryWords(prompt: string): string | null {
   const entry = /^[/$]aidlc(?:\s+|$)/i.exec(text);
   return entry === null ? null : text.slice(entry[0].length).trim();
 }
+
+// A gap typed between two of the person's words as their request keeps it: the
+// spaces, tabs and line breaks typed, a Windows or older Mac line ending as one
+// line break, and beside a line break any other space (a no-break space
+// indenting a pasted list) as a plain one. Null for a gap with no line break
+// that holds any other space, which stays one plain space, as the split hands
+// it on.
+export function typedWordGap(gap: string): string | null {
+  if (!/^[ \t]+$/.test(gap) && !(/^\s+$/.test(gap) && /[\r\n]/.test(gap))) return null;
+  return gap.replace(/\r\n?/g, "\n").replace(/[^\S\n\t ]/g, " ");
+}
 export const SUMMARY_CONFIRMATION_CHOICES = ["Looks correct", "Request changes"] as const;

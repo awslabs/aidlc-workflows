@@ -1575,7 +1575,7 @@ export function reviewRequestNote(
   reviewFile: string,
   recordVerdict: string,
   dispatchAgent: string | null = null,
-  otherWork?: string,
+  carried: readonly string[] = [],
 ): string {
   // A reviewer copy (Kiro) is dispatched by its own name; the brief and
   // the verdict keep the reviewer's.
@@ -1586,7 +1586,9 @@ export function reviewRequestNote(
       `read-scope check) as a subagent, name ${reviewer} as the reviewer in the brief,`;
   return `${dispatch} and have it write ${reviewFile}: that file is the reviewer's, so never ` +
     `write it yourself and never stand in for it. When its verdict is back, record it with \`${recordVerdict}\`.` +
-    (otherWork === undefined ? "" : ` Its brief carries this line word for word: ${otherWork}`);
+    (carried.length === 0 ? "" : carried.length === 1
+      ? ` Its brief carries this line word for word: ${carried[0]}`
+      : ` Its brief carries these lines word for word: ${carried.join(" ")}`);
 }
 
 // The step after a stage's verdict is recorded (#2400), as the logger decides

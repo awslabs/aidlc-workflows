@@ -91,7 +91,10 @@ export function cursorTrustedShell(): string {
 // expression over the tool name, so a tool reaches exactly the checks it
 // reached before: reads and searches go to the three that read, while only a
 // write, a shell command or a dispatch reaches the plan-approval guard. The
-// group is a registration, not a check: it decides nothing itself.
+// group is a registration, not a check: it decides nothing itself. On Claude
+// Code the row also carries the question box (AskUserQuestion), which no member
+// matches, so the code plan question's box can show the plan's lines
+// (runGroupMembers in aidlc.ts).
 //
 // The doctor reads this table too (aidlc-utility.ts), to check that every
 // member's hook file ships and to treat drift on the row as flow-altering, so
