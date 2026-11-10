@@ -188,8 +188,26 @@ describe("t-compose-approve-carries-on: every answer to the in-flight compose qu
     expect(step).toMatch(/When their message approved the settings the plan change proposed, then run `[^`]*aidlc-orchestrate\.ts next` and follow what it returns, so the work carries on; when it set something beside the plan change, which still waits for their answer, stop\./);
     const set = run(proj, "aidlc.ts", ["config", "set", "review", "none"]);
     expect(set.status, set.out).toBe(0);
+    expect(readState(proj)).toMatch(/Review.*none/i);
+    // The setter's write keeps the question; the `next` after it closes it.
     expect(composeGateOpen(proj)).toBe(true);
     carriesOn(proj);
+  });
+
+  test("a setting that needs their words names their message while the question is open, so their approval is recorded as theirs", () => {
+    const proj = work();
+    askCompose(proj);
+    const said = spawnSync(process.execPath, [tool(proj, "aidlc.ts"), "engine", "hook", "record-human-turn"], {
+      input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: env.AIDLC_SESSION_OVERRIDE, prompt: "1, approve" }),
+      encoding: "utf-8", cwd: proj, env: { ...env, CLAUDE_PROJECT_DIR: proj } as Record<string, string>,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(said.status, `${said.stdout}${said.stderr}`).toBe(0);
+    const step = String(next(proj, ["--sensors", "off"]).message);
+    expect(step).toMatch(/config set sensors off --message '<id>'/);
+    expect(step).toMatch(/with <id> the id of the person's message that asked for it \([0-9a-z-]+, sent [^)]+\)/);
+    expect(step).toContain("When their message approved the settings the plan change proposed, then run");
+    expect(composeGateOpen(proj)).toBe(true);
   });
 
   test("with no compose question open, recompose prints only its counts", () => {

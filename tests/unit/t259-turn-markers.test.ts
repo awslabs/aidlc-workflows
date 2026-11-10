@@ -554,8 +554,8 @@ describe("t259 the engine's last word ended the turn", () => {
     expect(waiting.message).toContain("When their message approved the settings the plan change proposed, then run");
     expect(waiting.message).toContain("when it set something beside the plan change, which still waits for their answer, stop.");
     expect(composeGateOpen(proj)).toBe(true);
-    // A setting's write keeps the question; a `next` naming the stage closes
-    // it, so the work carries on as it does with no proposal at all.
+    // A `next` naming the stage closes it, so a setting then goes on as it
+    // does with no proposal at all.
     expect(engine().kind).toBe("run-stage");
     expect(composeGateOpen(proj)).toBe(false);
     await Bun.sleep(20);
