@@ -7636,15 +7636,17 @@ export interface ToldMerge {
 }
 
 // `readOnly` (a query such as `team-board`): the same verdicts, nothing written.
+// `tookIn` gets each Unit whose records this look wrote into the lead's checkout.
 export function checkTeamResults(
   projectDir: string,
   unreached?: string[],
   unsent?: Array<{ to: string; refused?: string }>,
   told?: ToldMerge[],
   readOnly = false,
+  tookIn?: string[],
 ): Map<string, { team: string; verdicts: NonNullable<UnitClaimPayload["verdicts"]>; done: boolean }> {
   const pd = resolveProjectDir(projectDir);
-  return quietly(() => checkTeamResultsQuietly(pd, unreached, unsent, told, readOnly));
+  return quietly(() => checkTeamResultsQuietly(pd, unreached, unsent, told, readOnly, tookIn));
 }
 
 function checkTeamResultsQuietly(
@@ -7653,6 +7655,7 @@ function checkTeamResultsQuietly(
   unsent?: Array<{ to: string; refused?: string }>,
   told?: ToldMerge[],
   readOnly = false,
+  tookIn?: string[],
 ): Map<string, { team: string; verdicts: NonNullable<UnitClaimPayload["verdicts"]>; done: boolean }> {
   const found = new Map<string, { team: string; verdicts: NonNullable<UnitClaimPayload["verdicts"]>; done: boolean }>();
   const identity = activeIdentity(pd);
@@ -7662,7 +7665,7 @@ function checkTeamResultsQuietly(
     // Done on its claim is the home's own word, wherever it was recorded: a
     // fresh clone or another machine of the home records it here too.
     if (claim.payload.done) {
-      if (!readOnly) recordUnitDone(pd, claim, claim.payload.verdicts ?? []);
+      if (!readOnly && recordUnitDone(pd, claim, claim.payload.verdicts ?? [])) tookIn?.push(unit);
       found.set(unit, { team: claim.owner, verdicts: claim.payload.verdicts ?? [], done: true });
       continue;
     }
@@ -7695,7 +7698,7 @@ function checkTeamResultsQuietly(
     // board that sees no new merge leaves the claim as the team sent it.
     const newlyMerged = verdicts.filter((verdict) => verdict.merged &&
       !(live.payload.verdicts ?? []).some((before) => before.repo === verdict.repo && before.merged)).map((verdict) => verdict.repo);
-    if (done && !readOnly) recordUnitDone(pd, live, verdicts);
+    if (done && !readOnly && recordUnitDone(pd, live, verdicts)) tookIn?.push(unit);
     if (!readOnly && (newlyMerged.length > 0 || done)) {
       const payload: UnitClaimPayload = { ...live.payload, predecessor_oid: live.oid, verdicts, ...(done ? { done: true as const } : {}) };
       const commit = createClaimCommit(pd, live.oid, payload);
@@ -7765,11 +7768,12 @@ export function homeResultsPastUnitStages(projectDir: string, stateContent: stri
 }
 
 // Once per Unit and attempt: its outputs written into the home's record, then UNIT_MERGED.
-function recordUnitDone(projectDir: string, claim: UnitClaimView, verdicts: NonNullable<UnitClaimPayload["verdicts"]>): void {
+// True when this wrote the Unit's records here (they are the person's to check in).
+function recordUnitDone(projectDir: string, claim: UnitClaimView, verdicts: NonNullable<UnitClaimPayload["verdicts"]>): boolean {
   const recorded = (): boolean => unitMergesStanding(readAuditShardEvents(projectDir), claim.unit).some((row) =>
     auditBlockField(row.block, "Attempt Generation") === String(claim.generation)
   );
-  if (recorded()) return;
+  if (recorded()) return false;
   const record = activeRecordDir(projectDir);
   const reads = new Set(unitOutputsHomeReads(claim.unit, getField(readStateFile(projectDir), "Scope") ?? ""));
   for (const rel of (claim.payload.result?.outputs ?? []).filter((output) => reads.has(output))) {
@@ -7778,8 +7782,10 @@ function recordUnitDone(projectDir: string, claim: UnitClaimView, verdicts: NonN
     mkdirSync(dirname(join(record, ...rel.split("/"))), { recursive: true });
     writeFileSync(join(record, ...rel.split("/")), shown.stdout, "utf-8");
   }
+  let wrote = false;
   withAuditLock(projectDir, () => {
     if (recorded()) return;
+    wrote = true;
     appendAuditEntryUnlocked("UNIT_MERGED", {
       Unit: claim.unit,
       Owner: claim.owner,
@@ -7788,6 +7794,7 @@ function recordUnitDone(projectDir: string, claim: UnitClaimView, verdicts: NonN
       "Attempt Generation": String(claim.generation),
     }, projectDir);
   });
+  return wrote;
 }
 
 // The home's turn-down of this build's Unit, as the claims git last brought in

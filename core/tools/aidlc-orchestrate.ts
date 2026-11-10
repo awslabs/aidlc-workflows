@@ -17934,9 +17934,10 @@ function teamHomeClaims(
   let results: ReturnType<typeof checkTeamResults> = new Map();
   const unsent: Array<{ to: string; refused?: string }> = [];
   const told: ToldMerge[] = [];
+  const tookIn: string[] = [];
   if (heldElsewhere.size > 0 && !isReadOnlyEngineProbe() && unreached.length === 0) {
     try {
-      results = checkTeamResults(projectDir, unreached, unsent, told, query);
+      results = checkTeamResults(projectDir, unreached, unsent, told, query, tookIn);
     } catch (e) {
       sayWithStepOnce(projectDir, `The teams' results could not be checked just now: ${errorMessage(e)}`);
     }
@@ -17947,6 +17948,9 @@ function teamHomeClaims(
       ? `I've told ${merge.to} ${merge.unit} is merged.`
       : `I've told ${merge.to} ${joinRepoNames(merge.repos)} merged ${merge.unit}.`);
   }
+  // Taking a Unit in wrote its records here: one of the check-in line's stopping points.
+  const checkIn = tookIn.length > 0 ? checkInLine(projectDir) : null;
+  if (checkIn !== null) sayWithStepOnce(projectDir, checkIn);
   // In git's words when git refused it (a hook of theirs, the host), as the push and take lines are.
   if (unsent.length > 0) {
     const [first] = unsent;

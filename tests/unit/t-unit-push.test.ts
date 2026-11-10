@@ -17,6 +17,7 @@ import { basename, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { hooksHealthReadDir, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { pastUnitStages } from "../../dist/claude/.claude/tools/aidlc-unit.ts";
+import { CHECK_IN_LINE } from "../../dist/claude/.claude/tools/aidlc-unit-teams.ts";
 import { AIDLC_SRC, fixtureIntentId8 } from "../harness/fixtures.ts";
 import {
   bashLine,
@@ -900,6 +901,24 @@ describe("at the home", () => {
     const after = next(home.dir);
     expect(git(home.remote, ["rev-parse", ref])).toBe(written);
     expect(JSON.stringify(after.change_notices ?? [])).not.toContain("I've told");
+  });
+
+  // A live run (Lee, model 2): taking the team's Unit in wrote its records into
+  // the lead's checkout, uncommitted, and no check-in line came.
+  test("the lead's step that takes a team's merged Unit in says the check-in line, once", () => {
+    const { hosts, home, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    next(home.dir);
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    mergeOnHost(hosts.billing, "refunds", "squash");
+    const seen = next(home.dir);
+    const notices = (seen.change_notices ?? []) as string[];
+    expect(notices, JSON.stringify(seen)).toContain("I've told the payments team refunds is merged.");
+    expect(notices.filter((line) => line === CHECK_IN_LINE), JSON.stringify(notices)).toHaveLength(1);
+    const after = next(home.dir);
+    expect((after.change_notices ?? []) as string[]).not.toContain(CHECK_IN_LINE);
   });
 
   test("a team's result brings home what Build and Test reads of the Unit, so its coverage check passes for team-built Units", () => {
