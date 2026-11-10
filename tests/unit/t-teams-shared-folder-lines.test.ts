@@ -308,6 +308,23 @@ describe("the check-in line", () => {
     expect((step.change_notices ?? []) as string[], JSON.stringify(step)).toContain(LINE);
   });
 
+  test("from a chat, the lead's Build and Test end with a stop in the same turn says the line once", () => {
+    const home = homeWithTeams();
+    const statePath = join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD, "aidlc-state.md");
+    writeFileSync(statePath, readFileSync(statePath, "utf-8")
+      .replace(/^- \[[-? ]\] (functional-design|nfr-requirements|nfr-design|infrastructure-design|code-generation) /gm, "- [x] $1 ")
+      .replace(/^- \[ \] build-and-test /m, "- [?] build-and-test ")
+      .replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: build-and-test"));
+    const chat: NodeJS.ProcessEnv = { ...ENV, CLAUDE_CODE_SESSION_ID: "8e9f3a4b-4c5d-4f6e-8b7c-3d4e5f6a7b81", CLAUDE_PID: String(process.pid) };
+    const approved = run(ORCH, ["report", "--stage", "build-and-test", "--result", "approved", "--user-input", "Approve"], home.dir, chat);
+    expect(approved.status, approved.out).toBe(0);
+    const parked = run(ORCH, ["park", "--person-asked"], home.dir, chat);
+    expect(parked.status, parked.out).toBe(0);
+    expect(parked.json?.kind, parked.out).toBe("parked");
+    const said = [String(parked.json?.narration ?? ""), ...((parked.json?.change_notices ?? []) as string[])].join("\n");
+    expect(said.split(LINE).length - 1, parked.out).toBe(1);
+  });
+
   test("only for teams across repos with a remote: main's team Units on the workspace's own repo never hear it", () => {
     const { alice } = refundsTaken();
     expect(checkInLine(alice)).toBe(LINE);

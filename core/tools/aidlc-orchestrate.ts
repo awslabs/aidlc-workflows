@@ -7071,6 +7071,9 @@ function parkedAfterPark(pd: string, parkStdout: string, lead?: string): ParkedD
 function withCheckIn(projectDir: string, narration: string, stateContent?: string): string {
   const line = checkInLine(projectDir, stateContent);
   if (line === null) return narration;
+  // An approval earlier in this turn kept it for the reply (keptForReply), so
+  // this step's change_notices already carry it.
+  if (engineSessionId !== undefined && pendingPersonLines(projectDir, engineSessionId, { replyOnly: true }).lines.includes(line)) return narration;
   return narration ? `${narration} ${line}` : line;
 }
 
