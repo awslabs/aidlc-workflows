@@ -99,6 +99,10 @@ const manifest: HarnessManifest = {
       "Claude Code runs this project's hooks only when it is started in the project folder. Exit Claude Code, " +
       "start it again in <folder>, then type <entry>.",
   },
+  // Claude Code marks every command its agent runs (measured in its Bash tool,
+  // 2.1.318); a native engine with several tools set up reads this to know it
+  // runs for Claude Code.
+  hostShell: { env: ["CLAUDECODE", "CLAUDE_CODE_SESSION_ID"] },
   // A clean chat for new work started beside other work: /clear starts a new
   // conversation and keeps the old one for /resume.
   newChatStep: { text: "type /clear, then <entry>" },
@@ -178,6 +182,7 @@ const manifest: HarnessManifest = {
     { src: "skills/aidlc-session-cost", dst: "skills/aidlc-session-cost" },
     { src: "skills/aidlc-replay", dst: "skills/aidlc-replay" },
     { src: "skills/aidlc-outcomes-pack", dst: "skills/aidlc-outcomes-pack" },
+    { src: "skills/aidlc-issue-report", dst: "skills/aidlc-issue-report" },
     { src: "skills/aidlc-knowledge", dst: "skills/aidlc-knowledge" },
   ],
 

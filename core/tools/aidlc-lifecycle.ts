@@ -1214,6 +1214,17 @@ function removeStoppedExeCommandAsides(bin: string): void {
   }
 }
 
+// What an activation runs `version` through to check the release it made
+// active. With AI-DLC's bin\aidlc.exe in place it runs that file alone: the
+// default PATHEXT finds it before aidlc.cmd, and aidlc.cmd starts
+// aidlc-shim.ps1 with -File, which a Group Policy execution policy (AllSigned,
+// Restricted) refuses whatever -ExecutionPolicy it passes, so probing aidlc.cmd
+// would roll back a release the person's `aidlc` runs. The text of aidlc.cmd
+// and its helper is still checked (windowsLauncherOwnedByInstaller).
+export function activationProbeCommands(command: string, exe: string | null): string[] {
+  return exe === null ? [command] : [exe];
+}
+
 function activateReserved(version: string, options: { failAfter?: number } = {}): void {
   if (!completeVersion(version)) {
     commandError(`retained version ${version} is incomplete`, EXIT.unavailable);
@@ -1359,7 +1370,7 @@ function activateReserved(version: string, options: { failAfter?: number } = {})
         ) {
           throw new Error(`command pointer validation failed for ${version}`);
         }
-        for (const command of [commandPath(), ...(exeInPlace ? [exe as string] : [])]) {
+        for (const command of activationProbeCommands(commandPath(), exeInPlace ? exe : null)) {
           const probe = Bun.spawnSync([command, "version"], {
             stdin: "ignore",
             stdout: "pipe",
@@ -2634,8 +2645,8 @@ async function updateCommand(argv: string[]): Promise<CommandResult> {
     : undefined;
   // Only `config --channel` changes the channel the machine follows; `--channel`
   // here lasts this run, and `--version` and `--from` pick a release of either
-  // channel. So a move onto the other channel is the machine's switch only
-  // when the machine already follows it.
+  // channel. So a move onto the other channel reads which channel the machine
+  // follows, to say so when this run moved off it.
   let follows: ReleaseChannel | undefined;
   let followsUnknown = false;
   try {
@@ -2677,7 +2688,7 @@ async function updateCommand(argv: string[]): Promise<CommandResult> {
 
 // `aidlc config --channel [stable|preview]`: with a value, persist the machine
 // release channel; without one, report the channel in force.
-export function configureChannel(argv: readonly string[]): CommandResult {
+export async function configureChannel(argv: readonly string[]): Promise<CommandResult> {
   const requested = valueAfter(argv, "--channel");
   try {
     if (!requested || requested.startsWith("--")) {
@@ -2692,19 +2703,35 @@ export function configureChannel(argv: readonly string[]): CommandResult {
     }
     const channel = writeMachineChannel(requested);
     // A plain update never installs an older release, so from a release of
-    // the other channel it waits for a newer one; asked by name it goes now.
-    // The channel is saved by now, so a damaged version pointer (doctor
-    // reports it) only leaves out that hint.
+    // the other channel it moves now only when that channel has a newer one,
+    // else it waits; asked by name it goes now. The channel is saved by now,
+    // so a damaged version pointer (doctor reports it) or a check that cannot
+    // answer only leaves out what the releases say.
     let running: string | null = null;
     try {
       running = activeVersion();
     } catch {
       running = null;
     }
-    const next = running && versionChannel(running) !== channel
-      ? `aidlc update moves to a ${channel} release once one is newer than ${running}; ` +
-        `to go to the newest ${channel} release now, run aidlc update --channel ${channel}`
-      : "run aidlc update to install its newest release";
+    if (!running || versionChannel(running) === channel) {
+      return success(`release channel set to ${channel}; run aidlc update to install its newest release`, {
+        channel,
+        source: "machine",
+      });
+    }
+    let newest: string | undefined;
+    try {
+      const state = await refreshUpdateState(5_000, { offline: offline(argv), channel });
+      // Only a check made now names the newest; the state's own verdict is
+      // against this binary, so the line compares with the release running.
+      if (state.state === "behind" || state.state === "current") newest = state.latestVersion;
+    } catch {
+      // No answer: the line says the plain update waits, and how to go now.
+    }
+    const next = newest && compareVersions(newest, running) > 0
+      ? `aidlc update moves to ${newest} now`
+      : `aidlc update moves to a ${channel} release once one is newer than ${running}; ` +
+        `to go to the newest ${channel} release now, run aidlc update --channel ${channel}`;
     return success(`release channel set to ${channel}; ${next}`, { channel, source: "machine" });
   } catch (error) {
     return lifecycleFailureResult(error, argv);
@@ -3163,7 +3190,6 @@ export function humanLifecycleNarration(
       channel?: ReleaseChannel;
       channelSwitch?: { from: ReleaseChannel; to: ReleaseChannel };
       follows?: ReleaseChannel;
-      followsUnknown?: boolean;
       newerThan?: { channel: ReleaseChannel; version: string };
       pruned?: string[];
       pruneWarning?: string;
@@ -3185,23 +3211,18 @@ export function humanLifecycleNarration(
       : data?.pruneWarning
       ? `\nWarning: update succeeded, but old-release cleanup was skipped: ${data.pruneWarning}`
       : "";
-    const switchLine = !data?.channelSwitch || data.followsUnknown
-      ? null
-      : data.follows !== undefined
+    // Only `config --channel` switches the channel the machine follows, so an
+    // update says which one it follows only when this run moved off it.
+    const switchLine = data?.channelSwitch && data.follows !== undefined
       ? `This machine follows ${data.follows} releases. ${channelWays(data.follows, data.channelSwitch.to)}`
-      : `Switched release channel from ${data.channelSwitch.from} to ${data.channelSwitch.to}.`;
+      : null;
     if (argv.includes("--dry-run")) {
       return before === target
         ? successText(
           `You're on the latest version of aidlc (${target}); nothing to update.`,
           process.stdout,
         )
-        : warnVerdict(
-          `Would update aidlc from ${before ?? "not installed"} to ${target}${
-            switchLine && data?.follows === undefined ? ` (switching to the ${data?.channelSwitch?.to} channel)` : ""
-          }.`,
-          process.stdout,
-        );
+        : warnVerdict(`Would update aidlc from ${before ?? "not installed"} to ${target}.`, process.stdout);
     }
     const catalogueWarning = data?.pluginCatalogue?.warning;
     if (before === target) {

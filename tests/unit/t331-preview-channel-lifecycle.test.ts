@@ -336,7 +336,10 @@ describe("t331 preview release channel", () => {
 
     // Back to stable is a lower id. A plain update never installs a release
     // older than the one running: it changes nothing and names both ways on.
-    const followStable = await run(DISPATCHER, ["config", "--channel", STABLE_CHANNEL], project, env);
+    const followStable = await run(DISPATCHER, ["config", "--channel", STABLE_CHANNEL], project, {
+      ...env,
+      AIDLC_RELEASE_BASE_URL: stable.baseUrl,
+    });
     expect(followStable.status).toBe(0);
     expect(followStable.stdout).toContain(
       `release channel set to ${STABLE_CHANNEL}; aidlc update moves to a ${STABLE_CHANNEL} release once one is newer ` +
@@ -350,15 +353,14 @@ describe("t331 preview release channel", () => {
         `To keep getting previews: aidlc config --channel ${PREVIEW_CHANNEL}.`,
     );
     expect(readFileSync(join(machine, "active-version"), "utf-8").trim()).toBe(PREVIEW_2);
-    // Asked by name, it goes back, reported as a channel switch.
+    // Asked by name, it goes back. Config switched the channel, so the update
+    // claims no switch of its own.
     const switched = await run(LIFECYCLE, [
       "update", "--channel", STABLE_CHANNEL, "--release-base-url", stable.baseUrl,
     ], project, env);
     expect(switched.status, switched.stdout + switched.stderr).toBe(0);
     expect(switched.stdout).toContain(`Checking for releases ... ${PREVIEW_2} -> ${AIDLC_VERSION}`);
-    expect(switched.stdout).toContain(
-      `Switched release channel from ${PREVIEW_CHANNEL} to ${STABLE_CHANNEL}.`,
-    );
+    expect(switched.stdout).not.toContain("Switched release channel");
     expect(switched.stdout).toContain(`Updated aidlc from ${PREVIEW_2} to ${AIDLC_VERSION}.`);
     expect(switched.stdout).not.toContain("downgrade");
     expect(readFileSync(join(machine, "active-version"), "utf-8").trim()).toBe(AIDLC_VERSION);
@@ -395,7 +397,93 @@ describe("t331 preview release channel", () => {
     expect(oneRun.stdout).not.toContain("Switched release channel");
     const followed = await run(DISPATCHER, ["config", "--channel"], project, env);
     expect(followed.stdout).toContain(`release channel: ${STABLE_CHANNEL}`);
+
+    // From stable with a newer preview out: config says the plain update goes
+    // there now, and the update that does it claims no switch of its own.
+    expect((await run(LIFECYCLE, ["use", AIDLC_VERSION], project, env)).status).toBe(0);
+    const followPreview = await run(DISPATCHER, ["config", "--channel", PREVIEW_CHANNEL], project, {
+      ...env,
+      AIDLC_RELEASE_BASE_URL: preview.baseUrl,
+      AIDLC_RELEASE_API_URL: preview.apiUrl,
+    });
+    expect(followPreview.status, followPreview.stdout + followPreview.stderr).toBe(0);
+    expect(followPreview.stdout).toContain(
+      `release channel set to ${PREVIEW_CHANNEL}; aidlc update moves to ${PREVIEW_2} now`,
+    );
+    const plainPreview = await run(LIFECYCLE, [
+      "update", "--release-base-url", preview.baseUrl, "--release-api-url", preview.apiUrl,
+    ], project, env);
+    expect(plainPreview.status, plainPreview.stdout + plainPreview.stderr).toBe(0);
+    expect(plainPreview.stdout).toContain(`Checking for ${PREVIEW_CHANNEL} releases ... ${AIDLC_VERSION} -> ${PREVIEW_2}`);
+    expect(plainPreview.stdout).toContain(`Updated aidlc from ${AIDLC_VERSION} to ${PREVIEW_2}.`);
+    expect(plainPreview.stdout).not.toContain("Switched release channel");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // Setting the channel says what the next plain update does with the releases
+  // out now; with no way to check, it says what main always said.
+  test("config --channel says the next update moves to a newer release of that channel now, or waits", async () => {
+    const { machine, project, env } = machineEnv();
+    writeFileSync(join(machine, "active-version"), `${AIDLC_VERSION}\n`);
+    const newer = serve(fixture(PREVIEW_2), [{ tag_name: `v${PREVIEW_2}`, prerelease: true }]);
+    const at = (server: { baseUrl: string; apiUrl: string }) => ({
+      ...env,
+      AIDLC_RELEASE_BASE_URL: server.baseUrl,
+      AIDLC_RELEASE_API_URL: server.apiUrl,
+    });
+    const waiting = `release channel set to ${PREVIEW_CHANNEL}; aidlc update moves to a ${PREVIEW_CHANNEL} release ` +
+      `once one is newer than ${AIDLC_VERSION}; to go to the newest ${PREVIEW_CHANNEL} release now, run aidlc ` +
+      `update --channel ${PREVIEW_CHANNEL}`;
+
+    const moves = await run(DISPATCHER, ["config", "--channel", PREVIEW_CHANNEL], project, at(newer));
+    expect(moves.status, moves.stdout + moves.stderr).toBe(0);
+    expect(moves.stdout).toContain(`release channel set to ${PREVIEW_CHANNEL}; aidlc update moves to ${PREVIEW_2} now`);
+    expect(moves.stdout).not.toContain("once one is newer");
+
+    // The same channel the running release is on: unchanged, and no lookup.
+    const asked = newer.requests.length;
+    const same = await run(DISPATCHER, ["config", "--channel", STABLE_CHANNEL], project, at(newer));
+    expect(same.stdout).toContain(`release channel set to ${STABLE_CHANNEL}; run aidlc update to install its newest release`);
+
+    const offline = await run(DISPATCHER, ["config", "--channel", PREVIEW_CHANNEL], project, {
+      ...at(newer),
+      AIDLC_OFFLINE: "1",
+    });
+    expect(offline.status, offline.stdout + offline.stderr).toBe(0);
+    expect(offline.stdout).toContain(waiting);
+    expect(newer.requests.length).toBe(asked);
+
+    // Only a preview older than the stable running: the plain update waits.
+    const olderPreview = `${AIDLC_VERSION}-${PREVIEW_CHANNEL}.20260901.1`;
+    const older = serve(fixture(olderPreview), [{ tag_name: `v${olderPreview}`, prerelease: true }]);
+    const waits = await run(DISPATCHER, ["config", "--channel", PREVIEW_CHANNEL], project, at(older));
+    expect(waits.status, waits.stdout + waits.stderr).toBe(0);
+    expect(waits.stdout).toContain(waiting);
+    expect(older.requests).toContain("/api/releases");
+    expect(readFileSync(join(machine, "channel"), "utf-8")).toBe(`${PREVIEW_CHANNEL}\n`);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // Only `config --channel` changes the channel the machine follows, so an
+  // update onto that channel from a release of the other one claims no switch.
+  test("an update onto the channel the machine follows claims no channel switch", () => {
+    const result = {
+      ok: true,
+      code: 0,
+      status: "ok",
+      message: "",
+      data: {
+        version: PREVIEW_2,
+        channel: PREVIEW_CHANNEL,
+        channelSwitch: { from: STABLE_CHANNEL, to: PREVIEW_CHANNEL },
+      },
+    } as never;
+    const narrated = humanLifecycleNarration("update", ["update"], AIDLC_VERSION, result) ?? "";
+    expect(narrated).toContain(`Updated aidlc from ${AIDLC_VERSION} to ${PREVIEW_2}.`);
+    expect(narrated).not.toContain("Switched release channel");
+    expect(narrated).not.toContain("This machine follows");
+    const planned = humanLifecycleNarration("update", ["update", "--dry-run"], AIDLC_VERSION, result) ?? "";
+    expect(planned).toContain(`Would update aidlc from ${AIDLC_VERSION} to ${PREVIEW_2}.`);
+    expect(planned).not.toContain("switching");
+  });
 
   // With the machine's channel marker unreadable, the update cannot say which
   // channel the machine follows, so it says nothing about a switch.

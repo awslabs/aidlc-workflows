@@ -155,6 +155,14 @@ function makeProject(): string {
     join(proj, ".claude", "tools", "aidlc-review-records.ts"),
   );
   copyFileSync(
+    join(SRC_TOOLS, "aidlc-unit-dag.ts"),
+    join(proj, ".claude", "tools", "aidlc-unit-dag.ts"),
+  );
+  copyFileSync(
+    join(SRC_TOOLS, "aidlc-git.ts"),
+    join(proj, ".claude", "tools", "aidlc-git.ts"),
+  );
+  copyFileSync(
     join(SRC_TOOLS, "aidlc-record-core.ts"),
     join(proj, ".claude", "tools", "aidlc-record-core.ts"),
   );

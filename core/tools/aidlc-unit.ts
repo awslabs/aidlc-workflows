@@ -16,7 +16,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry, startClaimLocalRecord, takeHandedOverAuditRows } from "./aidlc-audit.ts";
@@ -51,7 +51,6 @@ import {
   ENGINE_DIR,
   ensureCloneId,
   errorMessage,
-  extractMarkdownSection,
   filterProducesByKind,
   getField,
   loadStageGraph,
@@ -93,6 +92,11 @@ import {
   resolveProjectDir,
   resolveReviewClass,
   teamSkeletonOn,
+  loadScopeMetadata,
+  memorySectionBody,
+  structuredField,
+  sessionsDir,
+  writeFileAtomic,
   type UnitMergeEvidence,
   type UnitMergeTransaction,
   UNIT_MERGE_DIR,
@@ -119,11 +123,13 @@ import {
   type SourceClaimModel,
 } from "./aidlc-lib.js";
 import {
+  planApprovalPromptSha256,
   parseTestingContract,
   recordedApprovalFingerprint,
   resolveTestingPosture,
 } from "./aidlc-testing-posture.ts";
-import { beforePerUnitBlock } from "./aidlc-graph.ts";
+import { beforePerUnitBlock, memoryDirFor } from "./aidlc-graph.ts";
+import { planMadeElsewhere } from "./aidlc-record-core.ts";
 import { approvalDecidesOpenFindings, approvalOpenFindings } from "./aidlc-review-brief.ts";
 import {
   aidlcEngineCommand,
@@ -133,6 +139,7 @@ import {
   quoteCommandArgument,
 } from "./aidlc-runtime-paths.ts";
 import { readRequestFile } from "./aidlc-log.ts";
+import { withoutLearnedDate } from "./aidlc-learned-date.ts";
 
 const CLAIM_FILE = ".aidlc-unit-claim.json";
 const ZERO_OID = "0000000000000000000000000000000000000000";
@@ -258,51 +265,160 @@ function currentBranch(projectDir: string): string {
   return result.ok && result.stdout.trim() ? result.stdout.trim() : "main";
 }
 
-// A Way of Working line names the team's branch only when it says so: "the
-// integration branch", "the base branch", "the merge-target branch" or "the
-// merge target", with the name in backticks in the same sentence. A line such
-// as "Integration tests live in `tests/integration`" names no branch.
-const INTEGRATION_BRANCH_WORDS =
-  "(?:(?:base|integration|merge[ -]target) branch|merge target)";
-const INTEGRATION_BRANCH_AFTER_WORDS = new RegExp(
-  `\\b${INTEGRATION_BRANCH_WORDS}\\b[^\`\\n.;]*\`([^\`]+)\``,
-  "i",
-);
-const INTEGRATION_BRANCH_BEFORE_WORDS = new RegExp(
-  `\`([^\`]+)\`[^.;\\n]*\\b${INTEGRATION_BRANCH_WORDS}\\b`,
-  "i",
-);
+const WAY_OF_WORKING = "## Way of Working";
+const INTEGRATION_BRANCH_FIELD = "Integration branch";
+const MEMORY_LAYERS = ["project.md", "team.md", "org.md"] as const;
 
-// The branch the team wrote down under "## Way of Working", narrowest layer
-// first. Whatever it is called, that branch is used; a name git cannot use as a
-// branch is refused with its file, never skipped for a broader layer's choice.
-function affirmedIntegrationBranch(
-  projectDir: string,
-): { branch: string; source: string } | null {
-  const space = activeSpace(projectDir);
-  for (const name of ["project.md", "team.md", "org.md"]) {
-    const source = `aidlc/spaces/${space}/memory/${name}`;
+// The one path both the reader (integrationBranchLayer) and the writer
+// (recordIntegrationBranch) use for a memory layer.
+function memoryLayerSource(projectDir: string, name: string): string {
+  return `aidlc/spaces/${activeSpace(projectDir)}/memory/${name}`;
+}
+
+// The layers whose Way of Working words the agent read as naming no branch,
+// each keyed to those words, so the read is not asked again for the same text.
+// AI-DLC's own per-machine record, beside the sessions (git-ignored), never
+// the person's file: a teammate's clone reads its words once for itself.
+const BRANCH_FREE_WORDS_FILE = "integration-branch-free-words.json";
+
+function wordsKey(section: string): string {
+  return createHash("sha256").update(section.trim()).digest("hex");
+}
+
+function branchFreeWords(projectDir: string): Record<string, string> {
+  try {
+    const read = JSON.parse(readFileSync(join(sessionsDir(projectDir), BRANCH_FREE_WORDS_FILE), "utf-8"));
+    return read !== null && typeof read === "object" ? read : {};
+  } catch {
+    return {};
+  }
+}
+
+// The branch the team wrote down on its own `Integration branch: <name>` line
+// under "## Way of Working", narrowest layer first. Only that line is read: a
+// sentence naming the repos beside the branch once gave a repo's name. A layer
+// whose section has words but no line stops the walk there until the agent has
+// read them: they may name the team's branch, so it records the line, or that
+// they name none, first; never a broader layer's line or `main` in its place
+// (an update must not move a team whose team.md says `develop` in a sentence).
+// A layer with no words (the shipped comment-only files), or words read as
+// naming none, is passed. Nothing is checked here, so the share offers can ask
+// without a refusal.
+function integrationBranchLayer(projectDir: string): { value: string; source: string } | { toRead: string } | null {
+  let branchFree: Record<string, string> | undefined;
+  for (const name of MEMORY_LAYERS) {
+    const source = memoryLayerSource(projectDir, name);
     let body: string;
     try {
       body = readFileSync(join(projectDir, ...source.split("/")), "utf-8");
     } catch {
       continue;
     }
-    const section = extractMarkdownSection(body, "## Way of Working");
-    const explicit =
-      INTEGRATION_BRANCH_AFTER_WORDS.exec(section) ??
-      INTEGRATION_BRANCH_BEFORE_WORDS.exec(section);
-    if (!explicit) continue;
-    const branch = explicit[1].trim();
-    if (!git(projectDir, ["check-ref-format", "--branch", branch]).ok) {
-      fail(
-        `The integration branch "${branch}", named in ${source} under "Way of Working", ` +
-          "is not a valid git branch name. Correct it there and run the command again.",
-      );
-    }
-    return { branch, source };
+    const section = memorySectionBody(body, WAY_OF_WORKING);
+    const value = structuredField(section, INTEGRATION_BRANCH_FIELD);
+    if (value !== null) return { value, source };
+    if (section.trim() === "") continue;
+    branchFree ??= branchFreeWords(projectDir);
+    if (branchFree[source] !== wordsKey(section)) return { toRead: source };
   }
   return null;
+}
+
+// The layer whose Way of Working words are still to be read, or null.
+export function integrationBranchToRead(projectDir: string): string | null {
+  const layer = integrationBranchLayer(projectDir);
+  return layer !== null && "toRead" in layer ? layer.toRead : null;
+}
+
+// What the agent does before a step that needs the branch, while a layer's
+// words are still to be read: every such step says these words.
+function integrationBranchReadStep(source: string, then: string): string {
+  const file = source.slice(source.lastIndexOf("/") + 1);
+  const record = `${aidlcToolInvocation("state")} practices-branch --file ${file}`;
+  return `Run these now, in this turn: read the "${WAY_OF_WORKING.slice(3)}" section of ${source} for the one ` +
+    `branch the work merges into. Record it with \`${record} --branch <name>\`, or, when the words name no ` +
+    `branch, with \`${record} --none\` (the broader layers then answer, and nothing is asked). Ask the person only ` +
+    "when one sentence names two branches and you cannot tell which the work merges into. Say the line it prints, " +
+    `if any, to the person, ${then}.`;
+}
+
+// A hand-written line may end in a full stop, which no git name ends in, and
+// wrap the name in a code span, which is Markdown, not the name (`dev`.).
+function integrationBranchName(value: string): string {
+  return withoutLearnedDate(value).replace(/\.$/, "").replace(/^`([^`]+)`$/, "$1").trim();
+}
+
+function requireBranchName(projectDir: string, branch: string, source: string): void {
+  if (!git(projectDir, ["check-ref-format", "--branch", branch]).ok) {
+    fail(
+      `The integration branch "${branch}", named in ${source} under "Way of Working", ` +
+        "is not a valid git branch name. Correct it there and run the command again.",
+    );
+  }
+}
+
+// The branch team work uses, from the narrowest layer's line. Whatever it is
+// called, it is used; a name git cannot use is refused with its file, never
+// skipped for a broader layer's choice.
+function affirmedIntegrationBranch(
+  projectDir: string,
+): { branch: string; source: string } | null {
+  const layer = integrationBranchLayer(projectDir);
+  if (layer === null) return null;
+  if ("toRead" in layer) fail(integrationBranchReadStep(layer.toRead, "then run the command again"));
+  const branch = integrationBranchName(layer.value);
+  requireBranchName(projectDir, branch, layer.source);
+  return { branch, source: layer.source };
+}
+
+// `practices-branch` (aidlc-state.ts): what the agent read in a layer's Way of
+// Working words. A branch becomes the line the reader reads, at the end of the
+// section, a fixed place, so a lead and a teammate's clone that record the same
+// words write the same bytes and a land merges clean. Null (`--none`) records
+// that these words name no branch, in AI-DLC's own record, keyed to them.
+export function recordIntegrationBranch(
+  projectDir: string,
+  file: string,
+  given: string | null,
+): { recorded: string | null; file: string; line: string | null } {
+  if (!(MEMORY_LAYERS as readonly string[]).includes(file)) fail(`--file is one of ${MEMORY_LAYERS.join(", ")}.`);
+  const source = memoryLayerSource(projectDir, file);
+  const path = join(projectDir, ...source.split("/"));
+  let body: string;
+  try {
+    body = readFileSync(path, "utf-8");
+  } catch {
+    fail(`${source} is not here.`);
+  }
+  if (given === null) {
+    const dir = sessionsDir(projectDir);
+    assertNoSymlinkInChainOrThrow(projectDir, relative(projectDir, dir));
+    mkdirSync(dir, { recursive: true });
+    const words = { ...branchFreeWords(projectDir), [source]: wordsKey(memorySectionBody(body, WAY_OF_WORKING)) };
+    writeFileAtomic(join(dir, BRANCH_FREE_WORDS_FILE), `${JSON.stringify(words, null, 2)}\n`);
+    return { recorded: null, file: source, line: null };
+  }
+  const branch = integrationBranchName(given);
+  requireBranchName(projectDir, branch, source);
+  if (structuredField(memorySectionBody(body, WAY_OF_WORKING), INTEGRATION_BRANCH_FIELD) !== null) {
+    fail(`${source} already has an "${INTEGRATION_BRANCH_FIELD}:" line under "Way of Working"; change it there.`);
+  }
+  const crlf = body.includes("\r\n");
+  const lf = body.replace(/\r\n/g, "\n");
+  const recorded = `- **${INTEGRATION_BRANCH_FIELD}**: ${branch}`;
+  const at = lf.search(new RegExp(`^${WAY_OF_WORKING}[ \\t]*$`, "m"));
+  const next = at < 0 ? -1 : lf.slice(at + WAY_OF_WORKING.length).search(/^## /m);
+  const end = at < 0 || next < 0 ? lf.length : at + WAY_OF_WORKING.length + next;
+  const after = lf.slice(end);
+  const written = `${lf.slice(0, end).trimEnd()}\n\n${at < 0 ? `${WAY_OF_WORKING}\n\n` : ""}${recorded}\n` +
+    (after === "" ? "" : `\n${after}`);
+  writeFileSync(path, crlf ? written.replace(/\n/g, "\r\n") : written);
+  return {
+    recorded,
+    file: source,
+    line: `Team work merges into ${branch}, read from ${source}, where it is now the "${INTEGRATION_BRANCH_FIELD}" ` +
+      'line under "Way of Working"; change it there to use another branch.',
+  };
 }
 
 function integrationBranch(projectDir: string, remote: string | null): string {
@@ -1963,14 +2079,7 @@ function candidateEvidence(
     const questionsSha256 = createHash("sha256")
       .update(questions, "utf-8")
       .digest("hex");
-    const promptSha256 = createHash("sha256")
-      .update(
-        `${questions
-          .replace(/^\[Answer\]:[ \t]*.*$/gm, "[Answer]:")
-          .trimEnd()}\n`,
-        "utf-8",
-      )
-      .digest("hex");
+    const promptSha256 = planApprovalPromptSha256(questions);
     if (
       fingerprint &&
       instructions.trim().length > 0 &&
@@ -4777,6 +4886,74 @@ export function shareTarget(projectDir: string): { remote: string; branch: strin
   return { remote, branch: affirmedIntegrationBranch(projectDir)?.branch ?? integrationBranch(projectDir, remote) };
 }
 
+// What a share or push offer names: the share target, or "the team's branch"
+// while a layer's Way of Working words are still to be read (the share's own
+// step reads them first, shareMain).
+export function shareOfferTarget(projectDir: string): { remote: string; branch: string } | null {
+  if (integrationBranchToRead(projectDir) === null) return shareTarget(projectDir);
+  const remote = repositoryRemote(projectDir);
+  return remote ? { remote, branch: "the team's branch" } : null;
+}
+
+// A clone that took part or holds a claim is a team's, not the lead's.
+export function teamsClone(projectDir: string, stateContent: string): boolean {
+  return existsSync(unitParticipantPath(projectDir)) ||
+    readApplicableTeamUnitScopeStamp(projectDir, stateContent) !== null;
+}
+
+// The team's own answer on building a walking skeleton first, not read yet:
+// team work whose scope runs one, no stance recorded, and the team's or the
+// project's memory says something under `## Walking Skeleton` (Practices
+// Discovery writes the team's). org.md's section is the framework's default,
+// which reads as the scope's own answer, so it is not one. Which way the answer
+// goes is the agent's to read (the classify round-trip); this reads only
+// whether there is one.
+export function teamSkeletonAnswerUnread(projectDir: string, stateContent: string): boolean {
+  if (!isTeamUnitOwnership(stateContent) || getField(stateContent, "Skeleton Stance")) return false;
+  if (loadScopeMetadata()[getField(stateContent, "Scope") ?? ""]?.skeleton !== true) return false;
+  let memory: string;
+  try {
+    memory = memoryDirFor(projectDir);
+  } catch {
+    return false;
+  }
+  return ["team.md", "project.md"].some((file) => {
+    try {
+      return memorySectionBody(readFileSync(join(memory, file), "utf-8"), "## Walking Skeleton").trim() !== "";
+    } catch {
+      return false;
+    }
+  });
+}
+
+// The team's own walking-skeleton answer is read on the lead's checkout before
+// any team step decides from it (the handout line, the share, a teammate's
+// claim): a team's clone reads the lead's record and never writes the stance.
+export function teamStanceToRead(projectDir: string, stateContent: string | null): boolean {
+  return stateContent !== null && teamSkeletonAnswerUnread(projectDir, stateContent) &&
+    !teamsClone(projectDir, stateContent) && !planMadeElsewhere(projectDir);
+}
+
+// The first Unit, when the plan as this checkout last shared or fetched it
+// holds every Unit behind it as a walking skeleton while this checkout's own
+// record opens them (its recorded answer is no thin slice first). Null when the
+// two agree or the shared plan cannot be read.
+export function skeletonHeldBackOnShare(projectDir: string): string | null {
+  try {
+    const pd = resolveProjectDir(projectDir);
+    const state = readStateFile(pd);
+    if (!isTeamUnitOwnership(state) || getField(state, "Skeleton Stance") === null || teamSkeletonOn(state)) return null;
+    const target = shareTarget(pd);
+    if (target === null) return null;
+    const ref = git(pd, ["rev-parse", "--verify", "--quiet", `refs/remotes/${target.remote}/${target.branch}`]);
+    if (!ref.ok) return null;
+    const shared = openingStatus(pd, ref.stdout.trim());
+    return [...shared.blockers.values()].some((blockers) => blockers.includes("walking-skeleton")) ? shared.skeleton : null;
+  } catch {
+    return null;
+  }
+}
+
 // Whether a share can run here: team work, a checkout holding no Unit claim, a
 // remote, and HEAD on the integration branch. Null when it can; the reason
 // otherwise. The share offer is put only where this is null.
@@ -4785,8 +4962,10 @@ export function shareBlocker(projectDir: string): string | null {
   try {
     if (readApplicableTeamUnitScopeStamp(pd)) return "This checkout holds a Unit claim; share main from a checkout that holds none.";
     if (!isTeamUnitOwnership(readStateFile(pd))) return "Sharing main is for work that several teams build.";
-    const target = shareTarget(pd);
-    if (!target) return "This repository has no remote to share main with. Add one (git remote add origin <url>), then share again.";
+    if (!repositoryRemote(pd)) return "This repository has no remote to share main with. Add one (git remote add origin <url>), then share again.";
+    // The branch is read from the Way of Working words first, by the share's own step.
+    if (integrationBranchToRead(pd) !== null) return null;
+    const target = shareTarget(pd)!;
     const current = currentBranch(pd);
     if (current !== target.branch) {
       return `This checkout is on ${current}, not ${target.branch}. Switch to ${target.branch}, then share again.`;
@@ -4807,6 +4986,37 @@ function shareMain(projectDir?: string): void {
   const pd = resolveProjectDir(projectDir);
   const blocker = shareBlocker(pd);
   if (blocker !== null) fail(blocker);
+  // The branch the share pushes, read from the team's own words before
+  // anything is committed or pushed; the offers stay due in case the share
+  // does not run again.
+  const toRead = integrationBranchToRead(pd);
+  if (toRead !== null) {
+    clearTeamHandoverMarks(pd, ["share", "push"]);
+    console.log(JSON.stringify({
+      shared: false,
+      step: integrationBranchReadStep(toRead, `then run \`${aidlcInvocation()} unit share\` again and tell the person ` +
+        "in plain words what it reports"),
+    }));
+    return;
+  }
+  // The team's own answer on building a thin slice first is read before the
+  // plan goes to the teams, by the rule the reading step in `next` and the
+  // report go by (teamStanceToRead), so the shared plan carries it. Nothing is
+  // committed or pushed until it is; the offers stay due in case the share
+  // does not run again.
+  if (teamStanceToRead(pd, readStateFile(pd))) {
+    clearTeamHandoverMarks(pd, ["share", "push"]);
+    const memory = relative(pd, memoryDirFor(pd)).replaceAll("\\", "/");
+    console.log(JSON.stringify({
+      shared: false,
+      step: "Run these now, in this turn: read the \"## Walking Skeleton\" section of " +
+        `${memory}/project.md over ${memory}/team.md and settle what the team says it does: on if the team always ` +
+        "runs a walking skeleton, off if it says it does not run one, scope-dependent if it says neither. Run " +
+        `\`${aidlcToolInvocation("orchestrate")} report --skeleton-stance <on|off|scope-dependent>\` with that stance, ` +
+        `then run \`${aidlcInvocation()} unit share\` again and tell the person in plain words what it reports.`,
+    }));
+    return;
+  }
   const { remote, branch } = shareTarget(pd)!;
   const landed = landedNotOnRemote(pd).map((row) => row.unit);
   let committed: number;

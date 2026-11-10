@@ -53,7 +53,6 @@ BLOCKING_SENSOR_OVERRIDE_CHOICE
 BLOCKING_SENSOR_OVERRIDE_DECISION
 BLOCKING_SENSOR_OVERRIDE_OPTIONS
 BOLT_NAME_REGEX
-BoltDagParse
 BoltDagResolution
 BoltIdentity
 BoltIdentityError
@@ -83,7 +82,6 @@ CODEX_SESSION_RECORD_MAX_BYTES
 COMMAND_TURN_REPLY
 COMMAND_TURN_SENTENCE
 COMPLETE_INTENT_STATUS
-COMPOSE_MARKER_TTL_MS
 CONDUCTOR_SUMMARY_FIELD
 CONFIGURATION_STEP
 CONFIG_KEYS
@@ -507,7 +505,6 @@ TurnOrigin
 UNBINDABLE_FINGERPRINT
 UNITS_REPOS_ASK
 UNIT_GATE_RHYTHM_FIELD
-UNIT_KINDS
 UNIT_LIFECYCLE_EVENTS
 UNIT_MERGE_DIR
 UNIT_NAME_PLACEHOLDER
@@ -520,11 +517,9 @@ UNSAVED_REASONS
 UNTRUSTED_AUDIT_NOTICE
 UTILITY_COMMANDS
 UnitCheckpoint
-UnitDependencyEdge
 UnitGateRhythm
 UnitGateScope
 UnitGateStatus
-UnitKind
 UnitLifecycleMode
 UnitLifecycleRow
 UnitLifecycleSnapshot
@@ -736,11 +731,9 @@ completeSubagentInflight
 completedPipelineLinks
 completionCarriesVerifiedReview
 composeGateOpen
-composeMarkerPath
 composedPlanLabel
 composedPluginBase
 composerProposalPath
-computeBatches
 constructionCheckpointGaps
 constructionCheckpointsApply
 constructionHasStarted
@@ -837,7 +830,6 @@ exactCopilotMarker
 existingReviewAppendixOffset
 explicitWorkspaceList
 extractScopeBlock
-extractYamlUnitsBlock
 fenceCheckName
 fenceCommandOutput
 fenceKeyBypassed
@@ -946,7 +938,6 @@ hasCurrentSharedResumeWait
 hasDurableSourceBindingEvidence
 hasModernSourceBindingEvidence
 hasPendingDecision
-hasRealGitEntry
 hasRunnerGenMarker
 hasSubagentInflight
 hasUnsafeSingleLineCharacter
@@ -985,7 +976,6 @@ humanTurnState
 identityScopedUnitPath
 ignoredPathClaimable
 ignoredSourceClaimReason
-inHostShell
 inertPath
 inspectArtifactPath
 inspectContinuationCursor
@@ -1242,7 +1232,6 @@ parseActiveDirectiveOutOfDate
 parseAgentFrontmatter
 parseArgs
 parseAuditShardNotes
-parseBoltDag
 parseBoltName
 parseCeremonySetting
 parseCeremonyStateLine
@@ -1254,7 +1243,6 @@ parseGuardPolicy
 parseGuardPolicyStateLine
 parseGuardsOffLine
 parseGuardsOnLine
-parseInlineDepsList
 parseKnowledgeCommand
 parseLiteralShellInvocation
 parseMemoryEntries
@@ -1271,7 +1259,6 @@ parseStageFrontmatter
 parseStateStageSuffixes
 parseTeamBoardArgs
 parseUnitSourceListing
-parseUnitsBlock
 parseWorkspaceCommand
 parsedNextArgv
 pathContainedBy
@@ -1856,7 +1843,6 @@ unknownRuntimeSessionWarning
 unlistedRecordForQuestion
 unmergedRootSettingsNotices
 unmetProducerInPlan
-unquoteScalar
 unrecordedKiroCliSteers
 unresolvedTeamGateRemedy
 unsavedOutputsMessage

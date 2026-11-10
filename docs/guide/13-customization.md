@@ -13,8 +13,8 @@ AI-DLC is designed to adapt to your team's needs. This chapter covers settings o
 > (permissions only), opencode in the project-root `opencode.json`, and Copilot
 > in `.github/hooks/aidlc.json` (hook wiring) + `~/.copilot/config.json`
 > (folder trust) — see
-> [Running on Kiro CLI](harnesses/kiro-cli.md),
-> [Running on Kiro IDE](harnesses/kiro-ide.md),
+> [Running on Kiro](harnesses/kiro.md),
+> [Running on Kiro CLI (V2)](harnesses/kiro.md#kiro-cli-v2),
 > [Running on Codex CLI](harnesses/codex-cli.md),
 > [AI-DLC on Cursor](harnesses/cursor.md),
 > [AI-DLC on opencode](harnesses/opencode.md), and
@@ -62,12 +62,12 @@ kept and reported as unexpressed rather than written as inert keys. Kiro CLI run
 on one model, so there a preset sets ONE effort for the whole interactive session
 (`minimal` low, `balanced` medium, `thorough` extra-high), saved with the
 session model in your personal Kiro settings; see
-[Session model and effort](harnesses/kiro-cli.md#session-model-and-effort).
+[Kiro CLI (V2) session model and effort](harnesses/kiro.md#kiro-cli-v2-session-model-and-effort).
 Explicit group dials still have no Kiro CLI surface. See
 [Model Policy](18-install-and-lifecycle.md#model-policy) for profiles, overrides,
 and the upgrade path.
 
-To change ONE agent's effort, run `aidlc config models --agent <name> --effort <low|medium|high|xhigh|max> --project --yes`. To pin its model, use `--model <id>` (a model ID enabled on your install) in place of `--effort`, or pass both. `--effort default` (or `--model default`) removes that one setting of the agent's, so the preset or group applies to it again; the command prints it as the undo of a change. `--local` instead of `--project` keeps the change to yourself. Config records the change in the settings file and rewrites that agent's file from it. Do not edit the `aidlc-*-agent` files by hand where config writes them: `aidlc config models --check` reports a hand edit as drift, and the next `aidlc config` puts the recorded value back. Claude Code, Codex, and opencode take both a model and an effort for one agent (Codex runs `max` as `xhigh`, and opencode runs `xhigh` as `high`). Kiro CLI (V2) takes a model, and an effort only together with a model. Kiro IDE (and Kiro CLI on its v3 engine) takes both a model and an effort for one agent, written into that agent's `.kiro/agents/aidlc-<name>-agent.md` ([One agent on its own model and effort](harnesses/kiro-ide.md#one-agent-on-its-own-model-and-effort)); a preset or group effort changes nothing there. On Cursor and Copilot every agent keeps the session's model and effort, and the command says what it could not apply there. To cap EVERY agent when building your own distribution from source, set a `tier_cap:` in `core/memory/org.md`/`project.md` frontmatter or run the packager with `AIDLC_TIER_CAP=<tier>`. Both are pack-time knobs on `bun scripts/package.ts`, not runtime settings.
+To change ONE agent's effort, run `aidlc config models --agent <name> --effort <low|medium|high|xhigh|max> --project --yes`. To pin its model, use `--model <id>` (a model ID enabled on your install) in place of `--effort`, or pass both. `--effort default` (or `--model default`) removes that one setting of the agent's, so the preset or group applies to it again; the command prints it as the undo of a change. `--local` instead of `--project` keeps the change to yourself. Config records the change in the settings file and rewrites that agent's file from it. Do not edit the `aidlc-*-agent` files by hand where config writes them: `aidlc config models --check` reports a hand edit as drift, and the next `aidlc config` puts the recorded value back. Claude Code, Codex, and opencode take both a model and an effort for one agent (Codex runs `max` as `xhigh`, and opencode runs `xhigh` as `high`). Kiro CLI (V2) takes a model, and an effort only together with a model. Kiro IDE (and Kiro CLI on its v3 engine) takes both a model and an effort for one agent, written into that agent's `.kiro/agents/aidlc-<name>-agent.md` ([One agent on its own model and effort](harnesses/kiro.md#one-agent-on-its-own-model-and-effort)); a preset or group effort changes nothing there. On Cursor and Copilot every agent keeps the session's model and effort, and the command says what it could not apply there. To cap EVERY agent when building your own distribution from source, set a `tier_cap:` in `core/memory/org.md`/`project.md` frontmatter or run the packager with `AIDLC_TIER_CAP=<tier>`. Both are pack-time knobs on `bun scripts/package.ts`, not runtime settings.
 
 ---
 
@@ -264,7 +264,7 @@ a command the agent or a script runs and reads `set by a command`. A change to w
 either way; a flag on the command that starts new work is stored in the new
 state file without one. Turning summary
 confirmation or plan approval off for work already under way needs your own
-turn: run by the agent, it is refused with a message asking you to type it. On a Kiro IDE build that gives hooks no message text, typing it cannot work, so the refusal asks you to update Kiro IDE ([Kiro IDE guide](harnesses/kiro-ide.md#whats-different-on-kiro)). `/aidlc --status` shows the effective value and source.
+turn: run by the agent, it is refused with a message asking you to type it. On a Kiro IDE build that gives hooks no message text, typing it cannot work, so the refusal asks you to update Kiro IDE ([Kiro guide](harnesses/kiro.md#whats-different-on-kiro)). `/aidlc --status` shows the effective value and source.
 Changing scope updates scope-sourced settings while keeping your overrides;
 an absent or malformed field falls back to the scope instead of blocking the run.
 Turning summary confirmation on, by a setting or a scope change, applies to work
@@ -395,7 +395,7 @@ The exception is a build of Units in parallel under `strict`. A change in the pr
 
 Initial Plan Approval (while [plan approval](#plan-approval) is on) and other gates remain required. A lowered fence does not mean the edited content was approved: your original answer and approval evidence remain a record of what you actually approved. No reviewer's verdict is changed, no evidence is deleted, and an agent can never answer for you.
 
-AI-DLC asks for Plan Approval itself: it shows the plan's summary and path with **Approve Plan**, **Request Changes**, and **I'll edit the files**. When files in the workspace already changed since Code Generation started, or since the previous plan was approved (an agent that ran ahead of the plan, or your own edits), the summary ends with one line naming them: "Already changed before you approved: src/app/page.tsx." The files a plan approved since then names are its own build and are not listed, and neither are AI-DLC's own files that an AI-DLC update changed. The agent records the choice you make, from any chat on this piece of work, with your exact words beside it. "Approve, but add a test for the empty cart" is an approval plus an instruction: the agent adds it to the plan and the approval covers the plan as it stands then. You can also edit the plan or write your answer in `code-generation-questions.md`, then tell the agent you are done. It does not add a reapproval stop for content changes that a lowered plan-approval fence permits.
+AI-DLC asks for Plan Approval itself: it shows the plan's summary and path with **Approve Plan**, **Request Changes**, and **I'll edit the files**. When files in the workspace already changed since Code Generation started, or since the previous plan was approved (an agent that ran ahead of the plan, or your own edits), the summary ends with one line naming them: "Already changed before you approved: src/app/page.tsx." The files a plan approved since then names are its own build and are not listed, and neither are AI-DLC's own files that an AI-DLC update changed. The agent records the choice you make, from any chat on this piece of work, with your exact words beside it. Once your approval is committed and pushed, a teammate's clone or your second laptop carrying on the same work builds that plan without asking again, and your answer stays in the questions file; a plan changed there, or a redo of Code Generation, is asked about. "Approve, but add a test for the empty cart" is an approval plus an instruction: the agent adds it to the plan and the approval covers the plan as it stands then. You can also edit the plan or write your answer in `code-generation-questions.md`, then tell the agent you are done. It does not add a reapproval stop for content changes that a lowered plan-approval fence permits.
 
 Existing delegated workers follow their verified parent intent's live
 plan-approval setting. Lowering or raising it applies on their next check;

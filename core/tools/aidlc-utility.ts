@@ -44,7 +44,7 @@ import {
   maskSecretShapes,
   saySecretMaskedOnce,
 } from "./aidlc-audit.ts";
-import { hasStateUpgrade, stateUpgradeRecord } from "./aidlc-state-upgrade.ts";
+import { hasStateUpgrade, stateUpgradeRecord, waitsToBeBroughtUp } from "./aidlc-state-upgrade.ts";
 import {
   applyIntentSettings,
   applyReviewOverride,
@@ -148,6 +148,8 @@ import {
   type WorkspaceRepoEntry,
   withoutCredentials,
 } from "./aidlc-workspace-manifest.ts";
+import { isProjectSubmodule, parseGitmodules, submoduleLeavesProjectRepo, submodulePath } from "./aidlc-git.ts";
+export { parseGitmodules };
 import {
   CloneFailure,
   discardStagedWorkspaceRepo,
@@ -159,6 +161,7 @@ import {
 import {
   composedPluginNames,
   copilotCliTrust,
+  harnessCliLeads,
   insideGitRepository,
   instructionFileDoctorCheck,
   openCodeGlobalShortFormNote,
@@ -237,8 +240,6 @@ import {
   parseGuardPolicyStateLine,
   resolveGuardPolicy,
   composeGateOpen,
-  composeMarkerPath,
-  COMPOSE_MARKER_TTL_MS,
   defaultScope,
   defaultScopeResolution,
   DEFAULT_SPACE,
@@ -2021,7 +2022,33 @@ function workHereStatus(projectDir: string, space: string): string | null {
     `To start new work: ${entry} "build the auth service"\n`;
 }
 
-function handleStatus(projectDir: string, flags: Record<string, string>): void {
+// Work built one Unit at a time, as the walk the engine routes by has it:
+// where each Unit stands and what comes next (unitWalkStanding). The
+// orchestrator is loaded only here, with an awaited import as aidlc-jump.ts
+// loads it (the compiled build takes no require() of it), and only for the
+// work's own record in Construction, which is the record the walk reads, and
+// not while an older AI-DLC's record waits for the next step to bring it up:
+// reading the walk would bring it up in place, and status writes nothing. Null
+// otherwise, or when it cannot be read: status then gives the light count
+// (unitProgress) and the Next Stage field.
+async function soloUnitWalk(
+  projectDir: string,
+  flags: Record<string, string>,
+  scope: string,
+  content: string,
+): Promise<{ clause: string; current: number | null; total: number; next: string | null } | null> {
+  if (flags.intent || flags.space || isTeamUnitOwnership(content) || waitsToBeBroughtUp(content)) return null;
+  if ((getField(content, "Construction Iteration") ?? "").trim() !== "unit-major") return null;
+  if (findStageBySlug((getField(content, "Current Stage") ?? "").trim())?.phase !== "construction") return null;
+  try {
+    const { unitWalkStanding } = await import("./aidlc-orchestrate.ts");
+    return unitWalkStanding(projectDir, scope, content);
+  } catch {
+    return null;
+  }
+}
+
+async function handleStatus(projectDir: string, flags: Record<string, string>): Promise<void> {
   // --intent <record> / --space <name> target a specific intent's status
   // (vision §5); omitted -> the active record.
   const selection = resolveWorkflowSelection(projectDir, {
@@ -2055,6 +2082,7 @@ To get started:
   const phase = getField(content, "Lifecycle Phase") || "Unknown";
   const currentStage = getField(content, "Current Stage") || "Unknown";
   const status = getField(content, "Status") || "Unknown";
+  const walk = await soloUnitWalk(projectDir, flags, scope, content);
   // Who is on it and what was done or comes next, in the names the person
   // sees elsewhere; a setup step or an empty value says nothing.
   const agentSlug = (getField(content, "Active Agent") ?? "").trim();
@@ -2081,7 +2109,10 @@ To get started:
     }
   }
   const lastLine = lastName === null ? "" : `Last Completed: ${lastName}${approvedBy}\n`;
-  const nextLine = nextName === null ? "" : `Next Stage:     ${nextName}\n`;
+  // On a Unit walk the Next Stage field stays on the stage after the block's
+  // first one, so the walk's own next step is said instead.
+  const shownNext = walk === null ? nextName : walk.next;
+  const nextLine = shownNext === null ? "" : `Next Stage:     ${shownNext}\n`;
   const plan = getField(content, PLAN_FIELD);
   // A plan composed for this work runs on a stock scope the person never
   // chose, so a setting that came from that scope reads as the approved
@@ -2292,12 +2323,16 @@ To get started:
     ).length;
     // Working one Unit at a time, the stage boxes tick only when the last Unit
     // finishes a stage, so while a Unit is open the count is of Units: the one
-    // the person is on, of those planned (the status line counts the same way).
-    const units = p === "construction"
+    // the person is on, of those planned, and where each Unit stands. Without
+    // the walk (another record named, or it cannot be read), the light count,
+    // while Current Stage is on the Units' stages.
+    const units = p === "construction" && walk === null && currentEntry !== undefined && isPerUnitStage(currentEntry)
       ? unitProgress(dirname(sp), getField(content, "Construction Iteration") ?? "")
       : null;
     const phaseSkipped = phaseCheckboxes.filter((c) => c.state === "skipped").length;
-    const count = units
+    const count = p === "construction" && walk !== null
+      ? walk.current === null ? walk.clause : `Unit ${walk.current} of ${walk.total}: ${walk.clause}`
+      : units
       ? `Unit ${units.current} of ${units.total}`
       : phaseSkipped === phaseCheckboxes.length
       ? "skipped"
@@ -5409,11 +5444,21 @@ export async function collectDoctorReport(
   const workflowHasProgress = progressedStageCount > 0;
   const workflowStageStarted = auditAllShards.includes("**Event**: STAGE_STARTED");
   const hookExecutionRecovery = gitBashLauncherRecovery() ?? hookExecutionRecoveryText(projectDir);
-  const declaredNotRunYet = hookActivation()?.notRunYet;
-  const hooksNotRunYet = declaredNotRunYet === undefined
-    ? undefined
-    : startedInsideProjectStep(projectDir) ??
-      fillHookActivationText(registrationFault(projectDir) ?? declaredNotRunYet, projectDir);
+  const activation = hookActivation();
+  // A chat started inside the project or a broken registration has its own
+  // line; otherwise the CLI's words are for the CLI of the harness whose
+  // shipped data gave the advice.
+  const hooksNotRunYet = (notRunYet: string): string => {
+    const own = startedInsideProjectStep(projectDir);
+    if (own !== null) return own;
+    const fault = registrationFault(projectDir);
+    if (fault !== null) return fillHookActivationText(fault, projectDir);
+    const cliFirst = activation?.notRunYetCliFirst;
+    const text = cliFirst && harnessCliLeads(runtimeHarnessName(projectDir, harnessDir()), cliFirst.env)
+      ? cliFirst.text
+      : notRunYet;
+    return fillHookActivationText(text, projectDir);
+  };
 
   // 6. Hook heartbeats
   // Three states, discriminated by health-dir presence, readable heartbeats,
@@ -5498,7 +5543,7 @@ export async function collectDoctorReport(
     });
   } else if (
     (!heartbeatDirExists || (!hasHookFiredContent && !workflowStageStarted)) &&
-    hooksNotRunYet !== undefined
+    activation?.notRunYet !== undefined
   ) {
     // (a) on a host whose hooks leave a heartbeat on the first chat message and
     // run only after the person acts: none yet means nobody has chatted here or
@@ -5507,7 +5552,7 @@ export async function collectDoctorReport(
       pass: false,
       severity: "warn",
       label: "AIDLC hooks have not run in this project yet",
-      fix: hooksNotRunYet,
+      fix: hooksNotRunYet(activation.notRunYet),
     });
   } else if (
     !heartbeatDirExists ||
@@ -5727,9 +5772,9 @@ export async function collectDoctorReport(
     try {
       const auditContent = auditAllShards;
       const stateContent = readFileSync(stateMdPath, "utf-8");
-      // The latest run recorded a completion that no later stage start
-      // reopened (a scope change on finished work starts the stage it adds,
-      // #2261). One owner for the rule, the doctor bundle's timeline, which
+      // The latest run recorded a completion that nothing reopened since (a
+      // scope change on finished work starts the stage it adds, #2261; a
+      // Unit's reopen there writes its reopen rows, #3608). One owner for the rule, the doctor bundle's timeline, which
       // reads every shard in time order: shards joined by file name put a
       // teammate's earlier completion after this clone's reopen.
       if (reconstructTimeline(auditContent, stateContent).workflowCompleted) {
@@ -5835,35 +5880,26 @@ export async function collectDoctorReport(
     }
   }
 
-  // Orphaned compose-marker probe: a read-only tripwire. The conductor writes
-  // the compose marker before an in-flight compose gate and deletes it on
-  // resolve; the Stop hook treats a FRESH marker as a carve-out (the turn may
-  // end at the gate). A crash between write and resolve can leave the marker on
-  // disk, so doctor reports a present marker with its age and the remediation
-  // (delete it if no compose gate is actually pending). Pass/fail follows the
-  // shared freshness window: a FRESH marker is the normal state while a compose
-  // gate is legitimately open (written before the gate, deleted on resolve), so
-  // it renders as an advisory pass (running doctor in a second terminal during
-  // a live gate must not exit 1 on a healthy workspace). Only a STALE marker
-  // (older than the TTL, i.e. an orphan the Stop hook has begun ignoring) is a
-  // fault. Silent when absent (no marker means nothing to report). Read-only:
-  // doctor never deletes it (the Stop hook is the janitor for a stale one).
+  // The in-flight compose question (composeGateOpen) is healthy waiting: an
+  // advisory pass. The file an earlier version had the agent write for it is
+  // read by nothing now; doctor names it while it is there and never deletes it.
   try {
-    const composeMarker = composeMarkerPath(projectDir);
-    if (existsSync(composeMarker)) {
-      const ageMs = Date.now() - statSync(composeMarker).mtimeMs;
-      const ageHours = Math.floor(ageMs / (60 * 60 * 1000));
-      const ageLabel = ageHours >= 1 ? `${ageHours}h old` : "under 1h old";
-      const stale = ageMs > COMPOSE_MARKER_TTL_MS;
-      const staleLabel = stale ? ", stale" : ", fresh";
+    if (composeGateOpen(projectDir)) {
       results.push({
-        pass: !stale,
-        label: `Compose marker present (aidlc/.aidlc-compose-pending, ${ageLabel}${staleLabel})`,
-        fix: "if no in-flight compose gate is actually pending, delete it ('rm aidlc/.aidlc-compose-pending') or resolve the pending gate. A stale marker no longer disables the Stop hook, but it should not linger.",
+        pass: true,
+        label: "A proposed plan change is waiting for the person's answer (approve, edit or reject)",
+        fix: "answer the proposed plan change in the chat that shows it",
       });
     }
   } catch {
-    // Compose-marker probe failure is non-fatal for the doctor report.
+    // Compose-question probe failure is non-fatal for the doctor report.
+  }
+  if (existsSync(join(projectDir, "aidlc", ".aidlc-compose-pending"))) {
+    results.push({
+      pass: true,
+      label: "Left over from an earlier AI-DLC version and no longer read: aidlc/.aidlc-compose-pending (safe to delete)",
+      fix: "delete aidlc/.aidlc-compose-pending",
+    });
   }
 
   // A long-open approval gate is healthy waiting, not a hung workflow. Surface
@@ -7439,6 +7475,10 @@ const LANG_BY_EXT: Record<string, string> = {
   ".hpp": "C++",
   ".swift": "Swift",
   ".php": "PHP",
+  // Infrastructure code is code (Terraform, Terragrunt and Packer, Bicep).
+  ".tf": "Terraform",
+  ".hcl": "HCL",
+  ".bicep": "Bicep",
 };
 
 const SCAN_SOURCE_DIRS = ["src", "app", "lib", "pages", "components", "tests"];
@@ -7460,6 +7500,8 @@ const SCAN_EXCLUDE = new Set([
   ".next",
   "target",
   "vendor",
+  // Terraform's provider lock file, written beside a root's .tf files.
+  ".terraform.lock.hcl",
 ]);
 
 // Package/build manifests that mark a directory as an application (not just
@@ -7747,48 +7789,6 @@ function scanSignals(dir: string, fileScanDepth: number, leftOut: ReadonlySet<st
   };
 }
 
-// Parse .gitmodules (ini-like) into submodule entries. Pure and exported for
-// direct unit testing. Line-oriented, tolerant: malformed content degrades to
-// whatever parses (total garbage yields []); it never throws. An entry with no
-// path is dropped, as is any path that is absolute or escapes the project via a
-// `..` segment (a caller joins path under projectDir and must not follow it out).
-export function parseGitmodules(
-  content: string
-): Array<{ name: string; path: string; url: string }> {
-  const entries: Array<{ name: string; path: string; url: string }> = [];
-  let current: { name: string; path: string; url: string } | null = null;
-  const finish = () => {
-    if (!current) return;
-    const p = current.path;
-    const isUnsafe =
-      p === "" ||
-      p.startsWith("/") ||
-      /^[A-Za-z]:[\\/]/.test(p) || // Windows drive-absolute
-      p.split(/[/\\]/).includes("..");
-    if (!isUnsafe) entries.push(current);
-    current = null;
-  };
-  for (const rawLine of content.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (line === "" || line.startsWith("#") || line.startsWith(";")) continue;
-    if (line.startsWith("[")) {
-      finish();
-      const m = line.match(/^\[submodule\s+"(.+)"\]$/);
-      current = m ? { name: m[1], path: "", url: "" } : null;
-      continue;
-    }
-    if (!current) continue;
-    const eq = line.indexOf("=");
-    if (eq < 0) continue;
-    const key = line.slice(0, eq).trim();
-    const value = line.slice(eq + 1).trim();
-    if (key === "path") current.path = value;
-    else if (key === "url") current.url = value;
-  }
-  finish();
-  return entries;
-}
-
 // Read + parse the workspace-root .gitmodules and probe each declared path for
 // initialization. A missing/unreadable file yields [] (the swallow idiom of the
 // scanner neighbors). `initialized` mirrors isGitRepoDir (aidlc-lib.ts): the dir
@@ -7805,13 +7805,6 @@ function scanSubmodules(projectDir: string): SubmoduleEntry[] {
     ...e,
     initialized: existsSync(join(projectDir, e.path, ".git")),
   }));
-}
-
-// A path .gitmodules lists, as the '/'-joined path from the project the scan
-// walks (a Windows path's backslashes, a leading ./ and a trailing slash read
-// the same).
-function submodulePath(path: string): string {
-  return path.replaceAll("\\", "/").replace(/^(?:\.\/)+/, "").replace(/\/+$/, "");
 }
 
 // `ownCodeBeside` leaves these folders and the ones the project's .gitmodules
@@ -7933,11 +7926,6 @@ export function detectWorkspace(projectDir: string, { ownCodeBeside }: { ownCode
   };
   if (nestedHits.length > 0) result.nestedRoot = nestedRoots.join(", ");
   return result;
-}
-
-// Whether `name` is a folder the project's .gitmodules lists.
-function isProjectSubmodule(projectDir: string, name: string): boolean {
-  return scanSubmodules(projectDir).some((entry) => submodulePath(entry.path) === name);
 }
 
 // The repos a piece of work records when it starts, one rule for its creation
@@ -9750,7 +9738,7 @@ function handleIntentRepos(
         if (!current.includes(name)) return { kind: "absent" as const, current };
         // A submodule of a project that is a checkout itself leaves the
         // project folder as the work's repo, as in any one-repo project.
-        if (current.length === 1 && !(hasRealGitEntry(projectDir) && isProjectSubmodule(projectDir, name))) {
+        if (current.length === 1 && !submoduleLeavesProjectRepo(projectDir, name)) {
           die(`intent remove-repo refused: "${name}" is the only repo this piece of work records; removing it would leave none.`);
         }
       }
@@ -9765,7 +9753,8 @@ function handleIntentRepos(
           ...(staged !== null && clone !== null ? { "Cloned From": maskUserinfo(clone.repo.url ?? `git@github.com:${clone.org}/${name}.git`) } : {}),
           ...(reason ? { Reason: reason } : {}),
           ...(personWords ? { "Person Words": personWords } : {}),
-          ...(verb === "add-repo" ? repoBaselineAdditionField(projectDir, [name], dirName, space) : {}),
+          ...(verb === "add-repo" ? repoBaselineAdditionField(projectDir, [name], dirName, space)
+            : next.length === 0 ? repoBaselineAdditionField(projectDir, [], dirName, space) : {}),
         },
         projectDir,
         dirName,
@@ -12023,18 +12012,24 @@ function handleReclassify(projectDir: string, flags: Record<string, string>, raw
   // command, else the chat most recently active here. At the person's own
   // terminal no chat answer can arrive: the step that works there is named
   // instead.
-  if (!humanPresenceGuardDisabled() && !personSaidProjectType(projectDir, {
+  const said = {
     chat: selection.sessionId ?? readCurrentSessionId(projectDir),
-    type: declared === "Brownfield" ? "brownfield" : "greenfield",
-    ...(named.message !== undefined ? { message: named.message } : {}),
+    type: declared === "Brownfield" ? ("brownfield" as const) : ("greenfield" as const),
     intent,
     space,
+  };
+  if (!humanPresenceGuardDisabled() && !personSaidProjectType(projectDir, {
+    ...said,
+    ...(named.message !== undefined ? { message: named.message } : {}),
   })) {
     die(personAtOwnTerminal(projectDir)
       ? OWN_TERMINAL_PRESENCE_STEP
       : requestMessageStep(projectDir, "The person has not said yet whether this folder is existing code. Ask them " +
         "the question you were given, end the turn, and run this command after they answer."));
   }
+  // "as you said" only where the record shows them saying it; a message the
+  // agent named and nothing else is the agent's reading of their words.
+  const asTheySaid = named.message === undefined || personSaidProjectType(projectDir, said) ? ", as you said" : "";
 
   // The registry row is workspace state and the plan is the work's own: hold
   // the workspace lock, then the work's lock, across the whole read, audit and
@@ -12137,10 +12132,10 @@ function handleReclassify(projectDir: string, flags: Record<string, string>, raw
     // it, in their words. It rides on the directive as its narration.
     const lines: string[] = [
       previous.toLowerCase() !== declared.toLowerCase()
-        ? `Project type is now ${words}, as you said${found}.`
+        ? `Project type is now ${words}${asTheySaid}${found}.`
         : yours
           ? `Project type is already ${words}, as you said${found}.`
-          : `Project type is ${words}, as you said${found}; I won't ask about it again for this piece of work.`,
+          : `Project type is ${words}${asTheySaid}${found}; I won't ask about it again for this piece of work.`,
     ];
     if (declared === "Brownfield" && scan.projectType !== "Brownfield") lines.push(NO_CODE_FOUND_YET);
     // Finished stages these lines name as behind the code.
@@ -13181,15 +13176,15 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
       : { content, audit: [], lines: [] };
     content = setField(settingsUpdate.content, "Last Updated", isoTimestamp());
 
-    // The person's approval at the in-flight compose question: its step runs
-    // this before deleting the question's marker and names nothing after it,
-    // so the work goes on from here, as after their approval at a stage's gate.
-    // The engine's other plan-change steps say what comes after themselves.
+    // The person's approval at the in-flight compose question, read before
+    // this write closes it: its step names nothing after this, so the work
+    // goes on from here, as after their approval at a stage's gate. The
+    // engine's other plan-change steps say what comes after themselves.
     let approvedAtCompose = false;
     try {
-      approvedAtCompose = composeGateOpen(projectDir);
+      approvedAtCompose = composeGateOpen(projectDir, flags.intent, flags.space);
     } catch {
-      // An unreadable marker names no step and nobody; the plan change still lands.
+      // An unreadable step names no step and nobody; the plan change still lands.
     }
 
     // Audit first, as config-change does, in one batch: a failed append leaves
@@ -13226,7 +13221,7 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
         (droppedUnitWork === null ? "" : `${droppedUnitWork}\n`) +
         settingsUpdate.lines.map((line) => `${line}\n`).join("") +
         (approvedAtCompose
-          ? "Then delete `aidlc/.aidlc-compose-pending`, apply any setting the same approval also named, and run " +
+          ? "Then apply any setting the same approval also named, and run " +
             `\`${aidlcToolInvocation("orchestrate")} next\`; follow what it returns, so the work carries on.\n`
           : ""),
     );
@@ -14088,7 +14083,7 @@ export async function main(argv: string[]): Promise<void> {
       process.stdout.write(`${isoTimestamp()}\n`);
       break;
     case "status":
-      handleStatus(projectDir, flags);
+      await handleStatus(projectDir, flags);
       break;
     case "claim":
       unitMain([

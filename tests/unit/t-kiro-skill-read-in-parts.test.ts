@@ -134,9 +134,35 @@ describe("t-kiro-skill-read-in-parts: every file the skill sends the agent to fi
 // The generated knowledge preflight in every delegated agent file tells a
 // helper to load its knowledge files; on Kiro those reads are cut at 30,000
 // characters too, so the Kiro trees' preflight carries the same read-in-parts
-// clause (the reporter's helpers in #2196 read theirs once).
+// clause (the reporter's helpers in #2196 read theirs once). It names folders,
+// and Kiro helpers listed them with one shell `ls` (each an approval card on
+// Kiro CLI 3.1.0 and Kiro IDE), so it also says how to list them. Checked in
+// the paragraph after the marker: some personas' own file-tools rule further
+// down names listing too.
 const PREFLIGHT_MARKER = "<!-- aidlc-delegated-knowledge-preflight -->";
 const PREFLIGHT_KIRO_CLAUSE = "Kiro shows only part of a long file: read each one with your file tool in parts of at most 200 lines (offset and limit), from the first line to the last; a read that comes back cut short is not all of it.";
+const PREFLIGHT_KIRO_LIST = "To find them, list each of these folders with your file tool, one folder per call, and any folder inside one the same way; a folder that is not there has nothing to load, and a shell line that lists, searches or reads them can stop and ask the person to approve it.";
+
+function preflightParagraph(text: string): string {
+  const match = text.replace(/\r\n/g, "\n").match(/^<!-- aidlc-delegated-knowledge-preflight -->\n([^\n]*)\n/m);
+  return match ? match[1] : "";
+}
+
+// Every agent file (Markdown, or Codex's TOML) under a dist tree that carries
+// the preflight (a plugin's contribution fragments carry none), found by
+// walking rather than by folder name.
+function preflightFiles(root: string): string[] {
+  const files: string[] = [];
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) walk(path);
+      else if (/-agent\.(md|toml)$/.test(entry.name) && readFileSync(path, "utf-8").includes(PREFLIGHT_MARKER)) files.push(path);
+    }
+  };
+  walk(root);
+  return files;
+}
 
 describe("t-kiro-skill-read-in-parts: the generated preflight tells a Kiro helper to read its knowledge in parts", () => {
   for (const [tool, root] of TREES) {
@@ -148,7 +174,24 @@ describe("t-kiro-skill-read-in-parts: the generated preflight tells a Kiro helpe
         const file = join(agents, name);
         const text = readFileSync(file, "utf-8");
         expect(text, relative(REPO, file)).toContain(PREFLIGHT_MARKER);
-        expect(text, relative(REPO, file)).toContain(PREFLIGHT_KIRO_CLAUSE);
+        expect(preflightParagraph(text), relative(REPO, file)).toContain(PREFLIGHT_KIRO_CLAUSE);
+        expect(preflightParagraph(text), relative(REPO, file)).toContain(PREFLIGHT_KIRO_LIST);
+      }
+    });
+  }
+
+  for (const harness of ["kiro-ide", "kiro"]) {
+    test(`a plugin's ${harness} agent files carry the same Kiro clauses in their preflight`, () => {
+      const plugins = join(REPO, "dist", "plugins");
+      const files = readdirSync(plugins)
+        .map((plugin) => join(plugins, plugin, harness))
+        .filter((root) => existsSync(root))
+        .flatMap(preflightFiles);
+      expect(files.length).toBeGreaterThan(0);
+      for (const file of files) {
+        const paragraph = preflightParagraph(readFileSync(file, "utf-8"));
+        expect(paragraph, relative(REPO, file)).toContain(PREFLIGHT_KIRO_LIST);
+        expect(paragraph, relative(REPO, file)).toContain(PREFLIGHT_KIRO_CLAUSE);
       }
     });
   }
@@ -158,4 +201,20 @@ describe("t-kiro-skill-read-in-parts: the generated preflight tells a Kiro helpe
     expect(text).toContain(PREFLIGHT_MARKER);
     expect(text).not.toContain("parts of at most 200 lines");
   });
+
+  for (const harness of ["claude", "codex", "cursor", "opencode", "copilot"]) {
+    test(`${harness}: no agent file, core or plugin, carries the Kiro clauses in its preflight`, () => {
+      const roots = [join(REPO, "dist", harness)];
+      const plugins = join(REPO, "dist", "plugins");
+      for (const plugin of readdirSync(plugins)) roots.push(join(plugins, plugin, harness));
+      const files = roots.filter((root) => existsSync(root)).flatMap(preflightFiles);
+      expect(files.length).toBeGreaterThan(0);
+      for (const file of files) {
+        const paragraph = preflightParagraph(readFileSync(file, "utf-8"));
+        expect(paragraph, relative(REPO, file)).toStartWith("**Delegated knowledge preflight (mandatory):**");
+        expect(paragraph, relative(REPO, file)).not.toContain(PREFLIGHT_KIRO_LIST);
+        expect(paragraph, relative(REPO, file)).not.toContain(PREFLIGHT_KIRO_CLAUSE);
+      }
+    });
+  }
 });

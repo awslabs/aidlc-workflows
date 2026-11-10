@@ -164,7 +164,10 @@ gate; claims open once its Unit Progress row on the pushed main is complete.
 With `skeleton: off`, or `Skeleton Stance: off` recorded in the work's state,
 dependency-ready Units open immediately. When the team's practices answer
 whether to build a thin end-to-end slice first, that answer is read at the
-first step after several teams are chosen, before a Unit is handed out.
+first step after several teams are chosen, before a Unit is handed out and
+before the plan is shared. While your answer is recorded but the plan the teams
+have still holds every Unit behind the first, the board says so once, with the
+share that fixes it.
 
 Teams take Units from the plan on the shared remote. Once claims are open (at
 once with the skeleton off, once the walking skeleton is approved with it on)

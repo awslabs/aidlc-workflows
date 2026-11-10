@@ -62,6 +62,7 @@ import {
   MESSAGE_FILL,
   MESSAGE_SLOT,
   nextInScopeStage,
+  pendingPersonLines,
   readAuditShardEvents,
   releaseAuditLock,
   reverseEngineeringOwedBehindCursor,
@@ -118,6 +119,11 @@ function reply(r: RunResult): string {
   expect(directive.kind).toBe("done");
   expect(directive.workflow_continues).toBe(true);
   return String(directive.narration);
+}
+
+// What reclassify keeps for the chat's next step to say.
+function keptForChat(proj: string, chat: string): string {
+  return pendingPersonLines(proj, chat).lines.join(" ");
 }
 
 function run(tool: string, proj: string, args: string[], env?: NodeJS.ProcessEnv): RunResult {
@@ -467,6 +473,8 @@ describe("t352 next: the flag rides to creation and the preview is honest", () =
     expect(auditBlockField(row!.block, "Message Id")).toBe(id);
     expect(auditBlockField(row!.block, "Person Reply")).toBe(words);
     expect(auditBlockField(row!.block, "Person Words")).toBeNull();
+    // Said in a turn of theirs since the work started: it was their word.
+    expect(keptForChat(proj, chat)).toStartWith("Project type is now existing code, as you said.");
     // Words inline and in a file at once get the setters' one answer, and the file stays.
     const file = ".aidlc-engine/answer-text/project-type-words.txt";
     mkdirSync(join(recordDir(proj), ".aidlc-engine", "answer-text"), { recursive: true });
@@ -716,6 +724,23 @@ describe("t352 said in the message that started the work", () => {
     expect(auditBlockField(row!.block, "Message Id")).toBe(id);
     expect(auditBlockField(row!.block, "Person Reply")).toBe(REQUEST);
     expect(auditBlockField(row!.block, "Person Words")).toBeNull();
+  });
+
+  // A live Claude Code run in a folder with two Terraform roots: the agent read
+  // them and named the request, and heard "as you said" and "The scan found no
+  // code in this folder yet". With only the agent's reading of the request
+  // behind it, the line says the type and what the scan found, not whose word.
+  test("named from the request alone, the line says what the scan found, never 'as you said'", () => {
+    const proj = noWorkYet();
+    const id = typed(proj, `/aidlc ${REQUEST}`);
+    startWork(proj);
+    for (const root of ["queue", "worker"]) {
+      mkdirSync(join(proj, "infra", root), { recursive: true });
+      writeFileSync(join(proj, "infra", root, "main.tf"), 'resource "aws_sqs_queue" "q" {\n  name = "orders"\n}\n');
+    }
+    recordedAsTheirs(proj, reclassify(proj, ["--message", id]));
+    expect(keptForChat(proj, CHAT)).toStartWith("Project type is now existing code (Terraform in infra/queue, infra/worker). ");
+    expect(keptForChat(proj, CHAT)).not.toContain("found no code");
   });
 
   test("a request composed, then Approve: the request's message goes through", () => {

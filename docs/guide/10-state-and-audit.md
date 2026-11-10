@@ -158,7 +158,7 @@ means. The write guard is a guardrail, not a security boundary. See
 [Audit Trail Rules](../reference/04-stage-protocol.md#audit-trail-rules) for
 the owning commands and the read-only query contract.
 
-### 132-event taxonomy
+### 134-event taxonomy
 
 Events are organized into 27 categories:
 
@@ -179,7 +179,7 @@ Events are organized into 27 categories:
 | **Reviewer Enforcement** | 2 | `REVIEWER_SCOPE_BLOCKED` (reviewer-scope hook), `REVIEW_FREEZE_BLOCKED` (review-freeze hook) |
 | **Plan Approval** | 2 | `PLAN_APPROVAL_BLOCKED`, `GUARD_DISABLED` (plan-approval-guard hook, or a fence you switched off for this piece of work) |
 | **Guard Refusals** | 2 | `STATE_TRANSITION_BLOCKED` (state-transition guard refused a delegated agent's lifecycle or routing command), `STAGE_RULES_BLOCKED` (stage rules refused for size, or a required rule file could not be read); each carries `Guard`, `Reason`, and the `Target`/`Session` it refused, one row per refusal |
-| **System Install** | 2 | `SYSTEM_INSTALL_BLOCKED` (a system package install, such as `sudo apt-get install`, that you had not asked for and your approved plan does not name, held until you say so), `SYSTEM_INSTALL_ALLOWED` (one let through on your message, with your words) |
+| **System Install** | 3 | `SYSTEM_INSTALL_BLOCKED` (a system package install, such as `sudo apt-get install`, that you had not asked for and your approved plan does not name, held until you say so), `SYSTEM_INSTALL_ALLOWED` (one let through on your message, with your words), `SYSTEM_INSTALL_REQUESTED` (the message of yours that asked for it, named by the agent when your approval in the same message had used it) |
 | **Documents** | 3 | `DOCUMENT_INDEXED`, `DOCUMENT_UPDATED`, `DOCUMENT_REMOVED` — space-level shard even when intent-scoped |
 | **Utility** | 1 | `HEALTH_CHECKED` |
 | **Error/Recovery** | 3 | `ERROR_LOGGED`, `RECOVERY_COMPLETED`, `COORDINATION_STOOD_ASIDE` |
@@ -189,7 +189,7 @@ Events are organized into 27 categories:
 | **Merge Dispatch** | 3 | `MERGE_DISPATCH_INVOKED`, `MERGE_DISPATCH_RETURNED`, `MERGE_DISPATCH_FALLBACK` |
 | **Sensors** | 6 | `SENSOR_FIRED`, `SENSOR_PASSED`, `SENSOR_FAILED`, `SENSOR_COULD_NOT_RUN`, `SENSOR_BUDGET_OVERRIDE`, `GUARDRAIL_LOADED` |
 | **Learning Loop** | 3 | `MEMORY_EMPTY`, `RULE_LEARNED`, `SENSOR_PROPOSED` |
-| **Swarm** | 8 | `SWARM_STARTED`, `SWARM_UNIT_CONVERGED`, `SWARM_SOURCE_MERGED`, `SWARM_UNIT_FAILED`, `SWARM_BATON_RETURNED`, `SWARM_COMPLETED`, `SWARM_DEGRADED`, `MAIN_CHECKOUT_CHANGE_ALLOWED` |
+| **Swarm** | 9 | `SWARM_STARTED`, `SWARM_UNIT_CONVERGED`, `SWARM_SOURCE_MERGED`, `SWARM_UNIT_FAILED`, `SWARM_BATON_RETURNED`, `SWARM_COMPLETED`, `SWARM_DEGRADED`, `MAIN_CHECKOUT_CHANGE_ALLOWED`, `SWARM_TAKEN_OVER` |
 | **Commit Provenance** | 1 | `SOURCE_COMMITTED` (`aidlc attest anchor`, or the opt-in session-start sweep — enrichment only; `resolve` never reads it) |
 
 ### What gets logged and when

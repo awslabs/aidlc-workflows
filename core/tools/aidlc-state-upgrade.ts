@@ -64,6 +64,13 @@ function upgradedText(content: string, step: StateUpgrade): string {
   return text;
 }
 
+// Whether an earlier State Version wrote this record, one a step brings up to
+// the current one (bringStateUpToDate) the next time the engine reads it.
+export function waitsToBeBroughtUp(content: string): boolean {
+  const verdict = classifyStateVersion(content);
+  return verdict.kind === "past" && hasStateUpgrade(verdict.version);
+}
+
 // The content as the current State Version reads it. When the version is one
 // a step brings up, the state as it was is kept beside it first
 // (aidlc-state.v<N>.md), each renamed stage's record folders move to the new
@@ -78,8 +85,9 @@ export function bringStateUpToDate(
   intent?: string,
   space?: string,
 ): string {
+  if (!waitsToBeBroughtUp(content)) return content;
   const verdict = classifyStateVersion(content);
-  if (verdict.kind !== "past" || !hasStateUpgrade(verdict.version)) return content;
+  if (verdict.kind !== "past") return content;
   let text = content;
   let version = verdict.version;
   const renamed: StageRename[] = [];

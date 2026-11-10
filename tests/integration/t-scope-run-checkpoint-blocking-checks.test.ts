@@ -217,7 +217,7 @@ describe("a team's blocking check in solo work built Unit by Unit", () => {
     expect(r.stops.map((s) => s.where)).toEqual(["checkpoint core", "checkpoint extra"]);
     expect(r.checkAsked).toBe(2);
     expect(r.stops[0].said).not.toContain("You overrode");
-    expect(r.stops[1].said).toMatch(/Say to the person, just before the question: \\?"You overrode this check at core\.\\?"/);
+    expect(r.stops[1].said).toMatch(/Say to the person, just before the question: \\?"You overrode the <check> for the core Unit\.\\?"/);
     const overridden = (unit: string) => r.rows.filter((row) =>
       row.event === "CHECKPOINT_VERIFICATION_RECORDED" && field(row.block, "Unit") === unit && field(row.block, "Verified") === "true")
       .at(-1);

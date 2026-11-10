@@ -55,7 +55,7 @@ import {
   targetTriple,
 } from "../../core/tools/aidlc-install-paths.ts";
 import {
-  discoverableRuntimeHarnessDir,
+  discoverableRuntimeHarness,
   discoverProjectHarnesses,
   isCompiledModuleUrl,
   kiroLayoutOf,
@@ -1390,6 +1390,9 @@ describe("t230 dispatcher route parity", () => {
     } catch {
       cpSync(BUN, launcher);
     }
+    // The command under the name aidlc reads its data (the plans `next` lists
+    // for the words) from the runtime beside it, as an install lays it out.
+    cpSync(join(REPO_ROOT, "dist-release", "claude"), join(launcherDir, "runtime", "claude"), { recursive: true });
     const env = { AIDLC_DISPATCH_TOOLS_DIR: DIST_TOOLS_DIR };
     const payload = JSON.stringify({
       session_id: "t230-outside",
@@ -2288,6 +2291,10 @@ describe("t230 dispatcher dev and compiled in-process modes", () => {
           AIDLC_HARNESS_NAME: "",
           AIDLC_INSTALL_ROOT: machine,
           CODEX_SESSION_ID: "",
+          CODEX_THREAD_ID: "",
+          // The shell these tests run in may be a Claude Code chat's.
+          CLAUDECODE: "",
+          CLAUDE_CODE_SESSION_ID: "",
           ...env,
         },
       );
@@ -2307,41 +2314,36 @@ describe("t230 dispatcher dev and compiled in-process modes", () => {
   });
 
   test("a Codex session picks the project's Codex install only when there is one and no harness is named", () => {
-    const saved = { dir: process.env.AIDLC_HARNESS_DIR, session: process.env.CODEX_SESSION_ID };
-    const restore = (key: "AIDLC_HARNESS_DIR" | "CODEX_SESSION_ID", value: string | undefined) => {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    };
-    const writeHarness = (projectDir: string, distribution: string): void => {
+    // Codex's mark, as its manifest declares it (hostShell).
+    const writeHarness = (projectDir: string, distribution: string, hostShell?: string[]): void => {
       const dataDir = join(projectDir, `.${distribution}`, "tools", "data");
       mkdirSync(dataDir, { recursive: true });
       writeFileSync(
         join(dataDir, "harness.json"),
-        `${JSON.stringify({ schemaVersion: 1, distribution, harnessDir: `.${distribution}` })}\n`,
+        `${JSON.stringify({
+          schemaVersion: 1,
+          name: distribution,
+          distribution,
+          harnessDir: `.${distribution}`,
+          ...(hostShell ? { hostShell: { env: hostShell } } : {}),
+        })}\n`,
       );
     };
-    try {
-      delete process.env.AIDLC_HARNESS_DIR;
-      const both = mkdtempSync(join(tmpdir(), "aidlc-t230-codex-session-both-"));
-      const claudeOnly = mkdtempSync(join(tmpdir(), "aidlc-t230-codex-session-claude-"));
-      tempProjects.add(both);
-      tempProjects.add(claudeOnly);
-      writeHarness(both, "claude");
-      writeHarness(both, "codex");
-      writeHarness(claudeOnly, "claude");
-      delete process.env.CODEX_SESSION_ID;
-      expect(discoverableRuntimeHarnessDir(both)).toBe(".claude");
-      process.env.CODEX_SESSION_ID = "  ";
-      expect(discoverableRuntimeHarnessDir(both)).toBe(".claude");
-      process.env.CODEX_SESSION_ID = "019a0000-0000-7000-8000-000000000231";
-      expect(discoverableRuntimeHarnessDir(both)).toBe(".codex");
-      expect(discoverableRuntimeHarnessDir(claudeOnly)).toBe(".claude");
-      process.env.AIDLC_HARNESS_DIR = ".claude";
-      expect(discoverableRuntimeHarnessDir(both)).toBe(".claude");
-    } finally {
-      restore("AIDLC_HARNESS_DIR", saved.dir);
-      restore("CODEX_SESSION_ID", saved.session);
-    }
+    const both = mkdtempSync(join(tmpdir(), "aidlc-t230-codex-session-both-"));
+    const claudeOnly = mkdtempSync(join(tmpdir(), "aidlc-t230-codex-session-claude-"));
+    tempProjects.add(both);
+    tempProjects.add(claudeOnly);
+    writeHarness(both, "claude");
+    writeHarness(both, "codex", ["CODEX_SESSION_ID", "CODEX_THREAD_ID"]);
+    writeHarness(claudeOnly, "claude");
+    const pick = (projectDir: string, env: NodeJS.ProcessEnv) => discoverableRuntimeHarness(projectDir, env)?.harnessDir;
+    expect(pick(both, {})).toBe(".claude");
+    expect(pick(both, { CODEX_SESSION_ID: "  " })).toBe(".claude");
+    expect(pick(both, { CODEX_SESSION_ID: "019a0000-0000-7000-8000-000000000231" })).toBe(".codex");
+    expect(pick(both, { CODEX_THREAD_ID: "019a0000-0000-7000-8000-000000000232" })).toBe(".codex");
+    expect(pick(claudeOnly, { CODEX_SESSION_ID: "019a0000-0000-7000-8000-000000000231" })).toBe(".claude");
+    expect(pick(both, { AIDLC_HARNESS_DIR: ".claude", CODEX_SESSION_ID: "019a0000-0000-7000-8000-000000000231" }))
+      .toBe(".claude");
   });
 
   test("a Kiro tree's layout comes from its declaration, then its row name, then its conductor", () => {
@@ -2496,7 +2498,7 @@ describe("t230 dispatcher dev and compiled in-process modes", () => {
       // Discovery itself stays strict for callers that need the project.
       expect(() => discoverProjectHarnesses(cwd)).toThrow("EACCES");
       expect(() => runtimeHarnessDir(cwd)).toThrow("EACCES");
-      expect(discoverableRuntimeHarnessDir(cwd)).toBeNull();
+      expect(discoverableRuntimeHarness(cwd)).toBeNull();
     } finally {
       chmodSync(cwd, 0o755);
     }
@@ -2509,7 +2511,7 @@ describe("t230 dispatcher dev and compiled in-process modes", () => {
       join(dataDir, "harness.json"),
       `${JSON.stringify({ schemaVersion: 1, distribution: "kiro", harnessDir: ".kiro" })}\n`,
     );
-    expect(discoverableRuntimeHarnessDir(project)).toBe(".kiro");
+    expect(discoverableRuntimeHarness(project)?.harnessDir).toBe(".kiro");
   });
 
   test("compiled main pins the Kiro harness name before unselected routing", () => {

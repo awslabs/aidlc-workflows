@@ -7,7 +7,7 @@
 // because they fire per-question / per-review, not per state transition.
 
 import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
-import { otherWorkNote, reviewRequestNote, reviewVerdictNote } from "./aidlc-directive.ts";
+import { CHANGE_NOTICES_NOTE, otherWorkNote, reviewRequestNote, reviewVerdictNote } from "./aidlc-directive.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
@@ -88,6 +88,7 @@ import {
   requireProtectedResponse,
   consumeProtectedQuestion,
   withdrawProtectedQuestions,
+  pendingPersonLines,
   resolveInvokingSessionId,
   resolveSessionIdFromAncestry,
   runtimeSessionHint,
@@ -344,9 +345,13 @@ const ANSWER_CHECKPOINTS: readonly string[] = [...DECISION_CHECKPOINTS, "guard-r
 function unitManifestRefusal(
   unit: string,
   manifestPath: string,
-  manifest: { reason: string; unrecordedRepo?: string },
+  manifest: { reason: string; unrecordedRepo?: string; projectSubmodule?: string },
   rewrite: string,
 ): string {
+  // The reason names the person's question and the way on for each answer.
+  if (manifest.projectSubmodule !== undefined) {
+    return `unit "${unit}"'s source manifest at ${manifestPath}: ${manifest.reason}. Then request the review again.`;
+  }
   if (manifest.unrecordedRepo !== undefined) {
     const repo = manifest.unrecordedRepo;
     return `unit "${unit}"'s source manifest at ${manifestPath} names repo ${JSON.stringify(repo)}, which this piece of work does not record. ` +
@@ -1465,6 +1470,18 @@ function handleDecision(args: string[]): void {
     }
   }
 
+  // The question the agent asks now is the reply the person reads, so the lines
+  // kept for that reply (a landing settled by hand under Continue
+  // automatically) ride with it, once, with their order; a run that keeps none
+  // prints as before.
+  let forReply: { lines: string[]; said(): void } = { lines: [], said: () => {} };
+  try {
+    const chat = fields.Session || resolveInvokingSessionId(pd);
+    if (chat) forReply = pendingPersonLines(pd, chat, { replyOnly: true });
+  } catch {
+    // The next reply says them.
+  }
+  for (const line of forReply.lines) if (!changeNotices.includes(line)) changeNotices.push(line);
   console.log(
     JSON.stringify({
       emitted: "DECISION_RECORDED",
@@ -1487,8 +1504,10 @@ function handleDecision(args: string[]): void {
           }
         : {}),
       ...(changeNotices.length > 0 ? { change_notices: changeNotices } : {}),
+      ...(forReply.lines.length > 0 ? { change_notices_note: CHANGE_NOTICES_NOTE } : {}),
     })
   );
+  forReply.said();
 }
 
 // What a logged question shows the person (aidlc-questions.ts): the command or
@@ -3126,6 +3145,26 @@ function codekbReceiptNotes(pd: string, node: StageEntry): Record<string, unknow
 // and attempt freshness are checked under the audit lock so two concurrent
 // conductors cannot advance the same chain; a link the attempt already holds
 // is answered without a second receipt.
+// The person asked for a system package install (in the message that approved
+// a stage, say), which that approval's decision spends: the agent names the
+// message and the packages, the tool proves the message as any request's and
+// records them, and the install check reads the record (system-install.ts). It
+// reads no words.
+function handleInstall(args: string[]): void {
+  const { positional, flags } = parseFlags(args);
+  if (positional.length === 0 || flags.message === undefined) error(`Usage: ${logUsage("install").split("\n")[0]}`);
+  const pd = resolveProjectDir(projectDir);
+  const proof = proveMessage(pd, flags.message, "request", { request: true });
+  if ("refusal" in proof) error(proof.refusal);
+  const words = personsWordsText(proof.message.words ?? proof.message.text);
+  emitAudit(pd, "SYSTEM_INSTALL_REQUESTED", {
+    Packages: JSON.stringify(positional),
+    "Message Id": proof.message.id,
+    ...(words ? { "Person Reply": words } : {}),
+  });
+  console.log(JSON.stringify({ requested: positional }));
+}
+
 function handleLink(args: string[]): void {
   const { flags } = parseFlags(args);
   if (!flags.stage) error("Missing --stage <slug>");
@@ -5548,6 +5587,11 @@ function logUsage(subcommand: string | undefined): string {
       `  Options: ${flags(ANSWER_OPTIONS)}`,
     ],
     answers: [`${invoke("answers")} --stage <slug> [--unit <unit>]`, "  Lists the answers recorded for a stage."],
+    install: [
+      `${invoke("install")} <package>... --message <id>`,
+      "  Records that the person's message asked to install these system packages, so the install check runs that " +
+        "install. Required: a package and --message.",
+    ],
     link: [
       `${invoke("link")} --stage <slug> --link <agent> [--repo <repo>] [--artifact <path>] [--single]`,
       "  Records that a declared pipeline link returned. Runs in the active workspace (no --intent or --space).",
@@ -5588,7 +5632,7 @@ export function main(argv: string[]): void {
   if (subcommand === undefined || asksForHelp([subcommand])) printUsageAndExit(logUsage(undefined));
   if (asksForHelp(filteredArgs.slice(1))) printUsageAndExit(logUsage(subcommand));
   readOnlyCommand = subcommand === "answers";
-  // What the chat records here (a decision, an answer, a link, a review) is its
+  // What the chat records here (a decision, an answer, a link, a review, an install asked for) is its
   // step on the work (chatTookStepHere); reading the answers is not.
   if (!readOnlyCommand) chatTookStepHere(resolveProjectDir(projectDir));
   if (subcommand === "decision" || subcommand === "answer") {
@@ -5609,6 +5653,9 @@ export function main(argv: string[]): void {
       case "link":
         handleLink(filteredArgs.slice(1));
         break;
+      case "install":
+        handleInstall(filteredArgs.slice(1));
+        break;
       case "review":
         // One review command runs the review accounting per unit, each pass
         // recomputing the whole-tree source identity. Share one computation
@@ -5618,7 +5665,7 @@ export function main(argv: string[]): void {
         );
         break;
       default:
-        error(`Unknown subcommand: ${subcommand}. Valid: decision, answer, answers, link, review`);
+        error(`Unknown subcommand: ${subcommand}. Valid: decision, answer, answers, link, review, install`);
     }
     spendRequestFile();
     // The stage's work went on through the record, not through `next`: on the

@@ -9,8 +9,8 @@ diagnostic and lifecycle routes.
 > Cursor, opencode, and GitHub Copilot you type `/aidlc`; on Codex CLI it is `$aidlc` (or
 > `/skills` → aidlc). The flags and behaviour below are identical either way —
 > only the prefix changes. The examples use `/aidlc`; substitute `$aidlc` on
-> Codex. See the [Kiro CLI](harnesses/kiro-cli.md),
-> [Kiro IDE](harnesses/kiro-ide.md), [Codex CLI](harnesses/codex-cli.md),
+> Codex. See the [Kiro](harnesses/kiro.md),
+> [Kiro CLI (V2)](harnesses/kiro.md#kiro-cli-v2), [Codex CLI](harnesses/codex-cli.md),
 > [Cursor](harnesses/cursor.md), [opencode](harnesses/opencode.md), and
 > [GitHub Copilot](harnesses/copilot.md) harness guides.
 
@@ -215,7 +215,10 @@ sends a request holding a double quote, a typographic one such as `“` or `’`
 one of `&`, `|`, `<`, `>`, `^`, or a trailing backslash this way, since Windows
 PowerShell or cmd.exe can change them): the agent writes it to
 `aidlc/.aidlc-request-text/request.txt` and runs `aidlc engine orchestrate next
---request-file aidlc/.aidlc-request-text/request.txt` with any other flags. The
+--request-file aidlc/.aidlc-request-text/request.txt` with any other flags. On
+Kiro (Kiro IDE and Kiro CLI on its v3 engine) the agent sends a request this way
+on every shell when it holds `$`, a backtick, `>`, `<`, `&`, `@(`, `@{` or a line
+break, since Kiro asks you to approve an AI-DLC command holding one of them. The
 engine reads only a plain file directly inside `aidlc/.aidlc-request-text/`,
 through no link, up to 64 KiB, uses its words exactly as written, and removes
 the file once the command goes ahead.
@@ -888,12 +891,21 @@ Read the current integration state and claim registry, then print the claimable,
 claimed, and waiting Unit sets as JSON. This is a claim-time/status surface and
 may contact the configured git remote.
 
-Team mode reads the integration branch from the `## Way of Working` section of
-`project.md`, then `team.md`, then `org.md`: the first line that names the
-integration, base or merge-target branch in backticks wins, whatever the branch
-is called. When no layer names one, the remote's default branch is used. A named
-branch that git cannot use, or that is not on the remote, is reported with the
-file it came from instead of being replaced by another layer's choice.
+Team mode reads the integration branch from one line under `## Way of Working`,
+`- **Integration branch**: <name>` (or plain `Integration branch: <name>`), in
+`project.md`, then `team.md`, then `org.md`: the first file with the line wins,
+whatever the branch is called, and the prose around it is not read. Practices
+Discovery writes the line into `team.md` for the branch you affirm; a line you
+add by hand takes effect at once. AI-DLC's `org.md` ships `main`. A file whose
+Way of Working has words but no line (written before the line existed) is read
+by the agent before the first team step that needs the branch: it records the
+branch the words name as the line
+(`aidlc engine state practices-branch --file <file> --branch <name>`), or, when
+they name none, that they name none (`--none`, kept in AI-DLC's own git-ignored
+record, so the same words are not read again) and the broader files answer. You
+are asked only when one sentence names two branches. A named branch that git
+cannot use, or that is not on the remote, is reported with the file it came
+from instead of being replaced by another layer's choice.
 
 ```
 /aidlc unit status
@@ -1728,12 +1740,13 @@ sent: on a harness that runs hooks only after the person acts, the steps that
 turn them on; elsewhere, one line for the person: "Your answer didn't reach
 AI-DLC. Please give it once more. If
 it happens again, type /aidlc --doctor." In Kiro CLI, where a reply typed to
-another agent picked in `/agent` is never recorded, that line is "Your answer
-didn't reach AI-DLC. Type /agent and pick aidlc, then give it once more." When
-Kiro says agent "aidlc" needs upgrading for its 3.0 engine, the line is "Your
-answer didn't reach AI-DLC. Quit Kiro and start it again in this folder with:
-kiro-cli --v2 --agent aidlc (Kiro CLI 2.21.4 or later; for an older one, see the AI-DLC Kiro CLI guide), then give it
-once more." The
+another agent picked in `/agent` is never recorded, that line starts "Your
+answer didn't reach AI-DLC. Type /agent and pick aidlc, then give it once
+more." and goes on, for when aidlc is not in that list (Kiro CLI on its v3
+engine with the agent files not upgraded), with Kiro's own upgrade
+(`/upgrade-agent`, choosing the workspace agents, then `kiro-cli --v3` again),
+the switch to Kiro and a start with `kiro-cli --v2 --agent aidlc`, then ", and
+give it there." The
 agent is told never to offer to turn a check off for them.
 
 A `log answer` for a question the agent logged after the person's reply is
@@ -2157,6 +2170,23 @@ work in another, and is not spent by a later approval or decision, and reads
 none of its words. The id is
 engine-to-agent text and is never shown to the person.
 See [Hooks and Tools](../reference/06-hooks-and-tools.md#read-only-audit-commands) for pairing rules, ordering, and filters.
+
+### `aidlc engine log install` - a system install the person asked for
+
+```bash
+aidlc engine log install <package>... --message <id>
+```
+
+A system package install (`sudo apt-get install`, `brew install`, `winget
+install` and the like) waits for the person unless they asked for it. When they
+asked in a message an approval or another decision has already used ("Approve.
+Then install shellcheck and run it."), the install check's refusal names this
+command with their messages. The agent names the one that asked; the engine
+proves it as it proves any request (it exists, came through the person's own
+prompt on this work, carries their words, and no later decision has spent it),
+reads none of its words, and records the packages as `SYSTEM_INSTALL_REQUESTED`.
+The install of those packages then runs, its `SYSTEM_INSTALL_ALLOWED` row naming
+that message and their words, until the next decision of theirs.
 
 ### `aidlc engine bolt set-autonomy` - change Construction approvals
 
@@ -2588,6 +2618,25 @@ batch's prepare and stage completion keep the change, each recorded as
 Unit being built names in its plan (that change goes through the Unit's own
 checkpoint). Under a strict Guard Policy the team holds in memory it changes
 nothing and says in one line where that is set.
+
+### `aidlc engine swarm take-over` - build in this chat the Units another chat started
+
+```bash
+aidlc engine swarm take-over --batch <n> --message <id>
+```
+
+While Units are built side by side from one chat, `next` in another chat on the
+same machine says "Your other chat started building these Units." and hands out
+nothing to run for them. When the person asks that second chat to build them
+instead, `next` names their message for this command, which proves it, records
+it with this chat as `SWARM_TAKEN_OVER`, and `next` then hands this chat the
+batch; the first chat is then told "Your other chat took over building these
+Units." A batch the person sent back at its checkpoint is held for no chat until
+it is prepared again. Only a message sent since the other chat started or last
+took over the build can take it over, so words from before it changed hands do
+not move it back. It refuses
+where the tool cannot tell its chats apart (there nothing holds the batch for
+another chat) and when the batch is not being built from another chat.
 
 ### `aidlc engine bolt swarm-checkpoint` - approve a completed batch
 
@@ -3120,8 +3169,9 @@ bun .claude/tools/aidlc-utility.ts select-plugins aidlc,test-pro
 
 In a project with more than one harness installed, `--harness-dir <dir>` names the
 install to change (`aidlc engine plugin select aidlc --harness-dir .kiro`), as it
-does for `plugin sync` below; without it the native `aidlc` changes the first one
-(`.claude` when it is there).
+does for `plugin sync` below; without it the native `aidlc` changes the install of
+the tool whose chat runs it, and from your own terminal the first one (`.claude`
+when it is there).
 
 The command validates names, writes `.claude/tools/data/harness.json`, strips a newly disabled plugin's merged contributions from core stage source (structural adds via the compose-written sidecar, spliced prose via its sentinel markers; re-enabling restores them on the next session start, or on Kiro CLI and opencode when you run `aidlc engine plugin sync --plugin-root <folder>` with the plugin's folder), recompiles the full graph with disabled nodes marked `enabled:false`, prunes/regenerates stage and scope runners, and refreshes the generated scope and stage tables (`tables.md`, beside the orchestrator skill) in one transaction. `aidlc` is core; omitting it disables core surfaces except the always-on Initialization stages. A change that would strand an active workflow (its scope, or a pending EXECUTE stage in its plan, owned by a plugin the new selection disables) is refused with each dependency named - complete or archive the workflow first (a parked workflow still needs its plugin when it resumes), or keep the plugin enabled. Leaving a base plugin out while keeping a plugin built on it pauses that plugin: the list is written as typed, one line says so once with the command that turns the plugin off as well, nothing the plugin adds runs while its base is off, `plugin list` shows it as `paused`, and turning the base back on brings it back at the next session start (on Kiro CLI and opencode, when you run `aidlc engine plugin sync --plugin-root <folder>` with the plugin's folder); the select that turns the base on says which, once.
 
@@ -3218,7 +3268,7 @@ Stages in scope: 22
 Completed: 4/22
 ```
 
-Runs under the audit lock, rejects flips that would starve a remaining stage of a required input, other than a skip you named with `/aidlc --skip`, after which the stages that read it run from what there is (and flips of completed/in-progress stages, behind-cursor stages (Reverse Engineering before Construction starts is the exception: while `next` would still go back to run it you can skip it, and on existing code you can put it back; so is a stage the plan skips that the work has just passed over while nothing after it has started, such as User Stories right after Requirements Analysis is approved: you can put it back, and `next` goes back to run it), any flip that would move the first EXECUTE stage of Construction - the protected stage-routing anchor - in either direction, any recompose against a workflow whose Status is not Running, and, under autonomous Construction, a recompose with no request of yours on record, or one run with `AIDLC_UNATTENDED=1`: that refusal names `aidlc-bolt.ts set-autonomy --mode gated`, which switches to stopping for approval at each Bolt), rebuilds the derived state fields, and emits `RECOMPOSED`. Each refusal of a stage names what you can do instead: jump to or past the stage, run it on its own with `/aidlc --stage <slug> --single`, add or skip the stages a missing input involves, or change to a scope that runs or skips it. Reached through `/aidlc --skip <slug>`, `/aidlc --add <slug>`, a jump to a skipped stage, and `/aidlc compose` mid-workflow, not typed directly. For a change you approved at a `/aidlc compose` question (its marker `aidlc/.aidlc-compose-pending` still on disk and fresh), the output ends with one more line for the agent: delete the marker and run `next`, so your work carries on in the same turn.
+Runs under the audit lock, rejects flips that would starve a remaining stage of a required input, other than a skip you named with `/aidlc --skip`, after which the stages that read it run from what there is (and flips of completed/in-progress stages, behind-cursor stages (Reverse Engineering before Construction starts is the exception: while `next` would still go back to run it you can skip it, and on existing code you can put it back; so is a stage the plan skips that the work has just passed over while nothing after it has started, such as User Stories right after Requirements Analysis is approved: you can put it back, and `next` goes back to run it), any flip that would move the first EXECUTE stage of Construction - the protected stage-routing anchor - in either direction, any recompose against a workflow whose Status is not Running, and, under autonomous Construction, a recompose with no request of yours on record, or one run with `AIDLC_UNATTENDED=1`: that refusal names `aidlc-bolt.ts set-autonomy --mode gated`, which switches to stopping for approval at each Bolt), rebuilds the derived state fields, and emits `RECOMPOSED`. Each refusal of a stage names what you can do instead: jump to or past the stage, run it on its own with `/aidlc --stage <slug> --single`, add or skip the stages a missing input involves, or change to a scope that runs or skips it. Reached through `/aidlc --skip <slug>`, `/aidlc --add <slug>`, a jump to a skipped stage, and `/aidlc compose` mid-workflow, not typed directly. For a change you approved at a `/aidlc compose` question while it is still open, the output ends with one more line for the agent: run `next`, so your work carries on in the same turn.
 
 Putting back a stage this work skipped, by the undo AI-DLC names or later in your own words, is not refused either: the stage is judged as the plan had it before the skip.
 
@@ -3360,6 +3410,10 @@ Three read-only skills surface what `aidlc engine runtime summary` reports, wrap
 | `/aidlc-outcomes-pack` | Handover document for the team. Writes `OUTCOMES.md` |
 
 All three are read-only — no stage advance, no audit emit — and source every number from `aidlc engine runtime summary --json`. If your harness doesn't surface skills as slash commands (so `/aidlc-session-cost` is reported invalid), run that command directly — it produces the same cost view. See [Session Management § Session Skills](11-session-management.md#session-skills) for the full walkthrough.
+
+### Issue report — when something went wrong
+
+`/aidlc-issue-report` (Codex: `$aidlc-issue-report`) gathers what a run that went wrong left behind, with sensitive details removed, for you to send to the AI-DLC team. It reads AI-DLC's records and your AI tool's own log for this project, writes the data (`safe.json`) and a cover that says what it holds into `aidlc/diagnostics/issue-reports/<time>/`, and checks them before it says they are ready; it does not diagnose anything and never sends anything itself. See [Skills](17-skills.md).
 
 ---
 

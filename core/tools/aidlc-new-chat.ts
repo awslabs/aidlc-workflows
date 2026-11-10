@@ -4,8 +4,8 @@
 // shell's environment (inHostShell); `<entry>` is filled in as there.
 
 import { readFileSync } from "node:fs";
-import { fillHookActivationText, harnessDataPath, hostLine, inHostShell } from "./aidlc-lib.ts";
-import { compiledExecutable, discoverProjectHarnesses } from "./aidlc-runtime-paths.ts";
+import { fillHookActivationText, harnessDataPath, hostLine } from "./aidlc-lib.ts";
+import { harnessIsAGuess, inHostShell } from "./aidlc-runtime-paths.ts";
 
 type NewChatStep = { text: string; inHost?: { env: string[]; text: string } };
 
@@ -23,27 +23,14 @@ function shippedNewChatStep(): NewChatStep | null {
   }
 }
 
-// Whether this engine's tree is the tool the person is in. The copy channel
-// runs from the tree of the tool that called it. A native engine in a project
-// with more than one harness runs on the first one installed for every host but
-// Codex (runtimeHarnessDir), so its step can be another tool's: a wrong line,
-// where the offer is only an offer.
-function treeIsTheHost(projectDir: string): boolean {
-  if (compiledExecutable() === null) return true;
-  try {
-    return discoverProjectHarnesses(projectDir).length <= 1;
-  } catch {
-    return false;
-  }
-}
-
 /**
  * The person's step to a clean chat in the host the agent's shell is in,
- * filled in, or null when this tree names none or cannot tell it is theirs.
- * Never throws.
+ * filled in, or null when this tree names none or the engine only guessed it
+ * is theirs (a native engine with several tools set up and no tool's mark on
+ * the command). Never throws.
  */
-export function newChatStep(projectDir: string): string | null {
-  if (!treeIsTheHost(projectDir)) return null;
+export function newChatStep(): string | null {
+  if (harnessIsAGuess()) return null;
   const step = shippedNewChatStep();
   if (step === null) return null;
   try {

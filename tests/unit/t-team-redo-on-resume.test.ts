@@ -2,12 +2,12 @@
 //
 // A team's main checkout that works every Unit itself (no team has taken one)
 // walks the Units one at a time, as a solo walk does. On re-entry the person's
-// Redo for the Unit the walk is on, at its step, was read only on the solo
-// walk: on that main it went out as a jump that names the Unit, which reopens
-// the step but records no Redo, so the stage asked Keep, Modify or Redo again
-// for the step the person had just asked to redo. It now goes as on the solo
-// walk: the reopen carries the Redo (`--via redo`), and the step comes back
-// to be redone from the start with the question answered. The solo walk's
+// Redo for the Unit the walk is on, at its step, goes as on the solo walk,
+// whether they name that Unit, the step, or neither: a jump that names the
+// Unit reopens the step but records no Redo, so the stage would ask Keep,
+// Modify or Redo again, and the stage's own redo starts every Unit's finished
+// steps over. The reopen carries the Redo (`--via redo`), and the step comes
+// back to be redone from the start with the question answered. The solo walk's
 // lines are pinned by t342-construction-checkpoint-routing.
 //
 // Mechanism: cli - spawns the shipped tools against temp projects created via
@@ -216,10 +216,15 @@ describe("a Redo on re-entry for the Unit a team main is walking", () => {
     return proj;
   };
 
-  for (const named of [["--unit", "alpha"], ["--target", "nfr-design", "--unit", "alpha"]]) {
-    test(`at the step alpha is on (${named.join(" ")}): redone from the start, the Redo recorded once, not asked again`, () => {
+  for (const [words, named] of [
+    ["redo", []],
+    ["redo NFR Design", ["--target", "nfr-design"]],
+    ["redo alpha's NFR Design from scratch", ["--unit", "alpha"]],
+    ["redo alpha's NFR Design from scratch", ["--target", "nfr-design", "--unit", "alpha"]],
+  ] as Array<[string, string[]]>) {
+    test(`at the step alpha is on (${named.join(" ") || "nothing named"}): redone from the start, the Redo recorded once, not asked again`, () => {
       const proj = midStep();
-      const message = redo(proj, "redo alpha's NFR Design from scratch", named);
+      const message = redo(proj, words, named);
       follow(proj, message);
       // The step comes back with the person's Redo as its answer: the stage
       // redoes it from the start without asking Keep, Modify or Redo.
@@ -240,21 +245,24 @@ describe("a Redo on re-entry for the Unit a team main is walking", () => {
     });
   }
 
-  test("with approvals after every stage, alpha waiting at its Functional Design approval: that step is redone", () => {
-    const proj = walk(1, "per-stage");
-    const gate = next(proj);
-    expect(`${gate.stage}/${gate.unit} ${gate.gate}`, JSON.stringify(gate)).toBe("functional-design/alpha true");
-    const message = redo(proj, "redo functional design for alpha", ["--unit", "alpha"]);
-    follow(proj, message);
-    const back = next(proj);
-    expect(`${back.kind} ${back.stage}/${back.unit} ${back.gate ?? false}`, JSON.stringify(back)).toBe("run-stage functional-design/alpha false");
-    expect(back.artifact_reuse, `${message}\n${JSON.stringify(back)}`).toEqual({ decision: "redo", unit: "alpha" });
-    expect(redoAnswers(proj)).toEqual(["functional-design/alpha Redo on re-entry"]);
-    expect(commands(message), message).toEqual([
-      "aidlc-jump.ts reopen --target functional-design " +
-        "--stages functional-design,nfr-requirements,nfr-design,infrastructure-design,code-generation --units alpha --via redo --scope feature",
-    ]);
-  });
+  for (const [words, named] of [["redo", []], ["redo functional design for alpha", ["--unit", "alpha"]]] as Array<[string, string[]]>) {
+    test(`with approvals after every stage, alpha waiting at its Functional Design approval (${named.join(" ") || "nothing named"}): that step is redone`, () => {
+      const proj = walk(1, "per-stage");
+      const gate = next(proj);
+      expect(`${gate.stage}/${gate.unit} ${gate.gate}`, JSON.stringify(gate)).toBe("functional-design/alpha true");
+      const message = redo(proj, words, named);
+      follow(proj, message);
+      const back = next(proj);
+      expect(`${back.kind} ${back.stage}/${back.unit} ${back.gate ?? false}`, JSON.stringify(back)).toBe("run-stage functional-design/alpha false");
+      expect(back.artifact_reuse, `${message}\n${JSON.stringify(back)}`).toEqual({ decision: "redo", unit: "alpha" });
+      expect(redoAnswers(proj)).toEqual(["functional-design/alpha Redo on re-entry"]);
+      expect(commands(message), message).toEqual([
+        "aidlc-jump.ts reopen --target functional-design " +
+          "--stages functional-design,nfr-requirements,nfr-design,infrastructure-design,code-generation --units alpha --via redo --scope feature",
+      ]);
+      expect(readAuditShardEvents(proj).filter((row) => row.event === "STAGE_JUMPED")).toEqual([]);
+    });
+  }
 
   test("with approvals after every stage, alpha waiting at its NFR Requirements approval: the step named is redone", () => {
     const proj = walk(1, "per-stage");

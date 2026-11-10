@@ -407,6 +407,29 @@ function proofRelativePath(unit: string, kind: ConstructionCheckpointKind): stri
   return `${PROOF_DIR}/${unit}/${kind}.json`;
 }
 
+// The person's "Continue automatically": the state says autonomous and their
+// latest grant on record (WORKFLOW_STARTED or AUTONOMY_MODE_SET, one frontier
+// row) set it. A checkpoint the agent approves under it needs no person.
+export function autonomyGranted(stateContent: string | null, grant: AuditShardEvent | null | undefined): boolean {
+  return isAutonomousMode(stateContent) && grant?.event === "AUTONOMY_MODE_SET" &&
+    auditBlockField(grant.block, "Mode") === "autonomous";
+}
+
+// The same grant read from the record (the main workflow's rows; an isolated
+// run's own rows are not the person's grant).
+export function autonomyGrantedOnRecord(
+  projectDir: string,
+  stateContent: string | null,
+  intent?: string,
+  space?: string,
+): boolean {
+  if (!isAutonomousMode(stateContent)) return false;
+  const frontier = maximalAttemptEvents(readAuditShardEvents(projectDir, intent, space).filter((row) =>
+    (row.event === "AUTONOMY_MODE_SET" || row.event === "WORKFLOW_STARTED") &&
+    !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:")));
+  return autonomyGranted(stateContent, frontier.length === 1 ? frontier[0] : null);
+}
+
 function onlyLatest(rows: readonly AuditShardEvent[]): AuditShardEvent | null {
   const frontier = maximalAttemptEvents(rows);
   return frontier.length === 1 ? frontier[0] : null;
@@ -858,9 +881,7 @@ function snapshot(
   if (!enabled) errors.push("Construction Checkpoints: enabled requires solo Units with an in-scope source-producing stage.");
   if (stages.length === 0) errors.push("No applicable per-unit Construction stages.");
   if (!workflow) errors.push("A current, unambiguous WORKFLOW_STARTED record is required.");
-  const autonomous = isAutonomousMode(state) &&
-    grant?.event === "AUTONOMY_MODE_SET" &&
-    auditBlockField(grant.block, "Mode") === "autonomous";
+  const autonomous = autonomyGranted(state, grant);
   const humanRequired = kind === "skeleton" || !autonomous;
   const floors: Record<string, string> = {};
   const evidence: unknown[] = [];
@@ -1828,7 +1849,7 @@ export function askConstructionCheckpoint(
     const offer = current.result.stages.map((slug) => findStageBySlug(slug))
       .map((stage) => stage ? reviewCheckOffer(projectDir, stage, unit) : null).find((found) => found !== null) ?? null;
     const changedFiles = current.result.stages.includes("code-generation")
-      ? unheardBroughtFilesLine(projectDir, readStateFile(projectDir), session, true)
+      ? unheardBroughtFilesLine(projectDir, readStateFile(projectDir), session, true, unit)
       : null;
     // With their reply already in, the question is not shown: the line about
     // their files rides the next step the agent speaks from instead.
