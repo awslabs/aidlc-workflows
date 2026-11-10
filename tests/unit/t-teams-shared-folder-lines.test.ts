@@ -30,6 +30,7 @@ import {
   STATE,
   UNIT,
   UTILITY,
+  takeIn,
 } from "../harness/team-build.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -42,7 +43,6 @@ type Choice = { label: string; detail?: string };
 function homeWithTeams() {
   const home = makeHome();
   expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
-  expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web"], home.dir).status).toBe(0);
   git(home.dir, ["add", "-A"]);
   git(home.dir, ["commit", "-q", "-m", "teams"]);
   git(home.dir, ["push", "-q", "origin", "main"]);
@@ -64,10 +64,10 @@ describe("Carry on in a shared workspace", () => {
   test("a fresh clone names each team's build; once the team is known, only its own is offered and the other is said", () => {
     const home = homeWithTeams();
     const ana = cloneOf(home.remote, "ana");
-    expect(run(UNIT, ["take", "refunds", "--home", HOME_RECORD, "--team", "payments"], ana).status).toBe(0);
+    expect(takeIn("payments", ["refunds", "--home", HOME_RECORD], ana).status).toBe(0);
     checkIn(ana, "payments: refunds started");
     const bea = cloneOf(home.remote, "bea");
-    expect(run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD, "--team", "web"], bea).status).toBe(0);
+    expect(takeIn("web", ["checkout-ui", "--home", HOME_RECORD], bea).status).toBe(0);
     checkIn(bea, "web: checkout-ui started");
 
     const abe = cloneOf(home.remote, "abe");
@@ -196,11 +196,11 @@ describe("where things stand", () => {
   test("status says what the last pull brought from the other teams", () => {
     const home = homeWithTeams();
     const ana = cloneOf(home.remote, "ana");
-    expect(run(UNIT, ["take", "refunds", "--home", HOME_RECORD, "--team", "payments"], ana).status).toBe(0);
+    expect(takeIn("payments", ["refunds", "--home", HOME_RECORD], ana).status).toBe(0);
     checkIn(ana, "payments: refunds started");
     expect(arrivedAtLastPull(ana, "payments")).toBeNull();
     const bea = cloneOf(home.remote, "bea");
-    expect(run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD, "--team", "web"], bea).status).toBe(0);
+    expect(takeIn("web", ["checkout-ui", "--home", HOME_RECORD], bea).status).toBe(0);
     checkIn(bea, "web: checkout-ui started");
     git(ana, ["pull", "-q", "--no-rebase", "--no-edit"]);
     expect(arrivedAtLastPull(ana, "payments")).toBe("the web team's checkout-ui");

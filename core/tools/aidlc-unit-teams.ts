@@ -1,6 +1,6 @@
 // Teams building each Unit as a piece of work of their own (#2410): where the
 // home is, what the Unit plan says about each Unit (likely repos, what it waits
-// on), whether who builds which Unit was answered, and a Unit's build. Built on
+// on), which Units the lead's own walk leaves for takes, and a Unit's build. Built on
 // aidlc-lib.ts, which requires it lazily where its own functions need it.
 
 import { spawnSync } from "node:child_process";
@@ -37,7 +37,6 @@ import {
   removeRecordFileNoFollow,
   repoDir,
   REQUEST_TEXT_DIR,
-  slugify,
   sourceCheckoutListingRel,
   stateDigest,
   UNIT_GATE_RHYTHM_FIELD,
@@ -141,50 +140,16 @@ export function unitsInPlanOrder(projectDir: string, units: readonly string[]): 
     units.includes(unit) && all.indexOf(unit) === at);
 }
 
-// Who builds which Unit was answered since the person last chose teams.
-export function unitsAssignedSinceTeams(rows: readonly AuditShardEvent[]): boolean {
+// The rows since the person last chose teams, in time order, and whether a
+// Unit started at the lead's project before that (UNIT_STARTED): work that was
+// built one Unit at a time first, or switched to teams by a teammate's take.
+function sinceTeams(rows: readonly AuditShardEvent[]): { after: AuditShardEvent[]; startedBefore: boolean } {
   const ordered = [...rows].sort((a, b) => (a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0));
   let teamsAt = -1;
   ordered.forEach((row, at) => {
     if (row.event === "UNIT_OWNERSHIP_SET" && auditBlockField(row.block, "Mode") === "team") teamsAt = at;
   });
-  return ordered.slice(teamsAt + 1).some((row) => row.event === "UNITS_ASSIGNED");
-}
-
-// Why a kept answer is not held, on its row when the remote answered without
-// the branch (IntegrationBranchMissing's words); a row without it is a home
-// that could not be reached.
-export const NOT_HELD_BECAUSE_FIELD = "Not Held Because";
-
-// The words for why a kept answer is not held yet, said by assign's notice,
-// the step's offer to try again and its line for a Unit kept for its team.
-export function notHeldWords(because: string | null): { why: string; until: string } {
-  return because === null
-    ? { why: "the lead's project could not be reached", until: "the lead's project can be reached" }
-    : { why: because, until: "that is put right" };
-}
-
-// The lead's answer to who builds which Unit, kept while the home could not
-// be reached (the newest UNITS_ASSIGNED since teams says `Held: not yet`).
-export function assignmentNotHeld(
-  rows: readonly AuditShardEvent[],
-): { pairs: string[]; open: boolean; leftOpen: string[]; because: string | null } | null {
-  const ordered = [...rows].sort((a, b) => (a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0));
-  let teamsAt = -1;
-  ordered.forEach((row, at) => {
-    if (row.event === "UNIT_OWNERSHIP_SET" && auditBlockField(row.block, "Mode") === "team") teamsAt = at;
-  });
-  // The lead's word to build a Unit here (`assign --here`) answers no one's assignment.
-  const last = ordered.slice(teamsAt + 1)
-    .filter((row) => row.event === "UNITS_ASSIGNED" && auditBlockField(row.block, "Here") === null).at(-1);
-  if (last === undefined || auditBlockField(last.block, "Held") !== "not yet") return null;
-  const pairs = (auditBlockField(last.block, "Assigned") ?? "").split(",").map((pair) => pair.trim()).filter((pair) => pair.includes("="));
-  return {
-    pairs,
-    open: auditBlockField(last.block, "Open") === "all",
-    leftOpen: listField(last.block, "Left Open"),
-    because: auditBlockField(last.block, NOT_HELD_BECAUSE_FIELD),
-  };
+  return { after: ordered.slice(teamsAt + 1), startedBefore: ordered.slice(0, Math.max(teamsAt, 0)).some((row) => row.event === "UNIT_STARTED") };
 }
 
 function listField(block: string, name: string): string[] {
@@ -192,26 +157,56 @@ function listField(block: string, name: string): string[] {
   return value === null || value === "none" ? [] : value.split(",").map((entry) => entry.trim()).filter(Boolean);
 }
 
-// The Units the lead's own answer left open for any team (`assign --open`):
-// each waits for a team, and the lead's project builds one only on the lead's
-// word (`assign --here`, offered once on the board). A Unit the answer left
-// unnamed is not among them: it stays the lead's project's to build. A Unit
-// named for a team later, or started here, leaves the list.
-export function unitsLeftOpen(rows: readonly AuditShardEvent[]): Set<string> {
-  const ordered = [...rows].sort((a, b) => (a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0));
-  let teamsAt = -1;
-  ordered.forEach((row, at) => {
-    if (row.event === "UNIT_OWNERSHIP_SET" && auditBlockField(row.block, "Mode") === "team") teamsAt = at;
-  });
-  const open = new Set<string>();
-  for (const row of ordered.slice(teamsAt + 1)) {
-    if (row.event === "UNIT_STARTED") open.delete(auditBlockField(row.block, "Unit") ?? "");
-    if (row.event !== "UNITS_ASSIGNED") continue;
-    for (const unit of listField(row.block, "Left Open")) open.add(unit);
-    for (const pair of listField(row.block, "Assigned")) open.delete(pair.slice(0, Math.max(pair.indexOf("="), 0)));
-    for (const unit of listField(row.block, "Here")) open.delete(unit);
+// Whether a Unit started at the lead's project before teams were chosen: the
+// lead was building the work one Unit at a time first.
+export function unitStartedBeforeTeams(rows: readonly AuditShardEvent[]): boolean {
+  return sinceTeams(rows).startedBefore;
+}
+
+// The Units the lead asked to build at the lead's project (`assign --here`)
+// since teams were chosen.
+export function unitsAskedHere(rows: readonly AuditShardEvent[]): Set<string> {
+  const here = new Set<string>();
+  for (const row of sinceTeams(rows).after) {
+    if (row.event === "UNITS_ASSIGNED") for (const unit of listField(row.block, "Here")) here.add(unit);
   }
-  return open;
+  return here;
+}
+
+// The Units the lead's own walk leaves for anyone to take: every Unit but the
+// walking skeleton, the lead's own build-here claims (`own`), a Unit asked
+// here whose claim was never written, and one the lead's project builds with
+// no claim of its own (leadBuildsWithoutClaim, as the take reads it). A released claim on a Unit asked here
+// is open again. Where the lead's walk keeps every Unit nobody took
+// (`keepsWalk`: a Unit started at the lead's project before teams, or teams
+// that came from a teammate's take of solo work, where the lead was never
+// asked), only such a released Unit is left.
+export function unitsLeftForTakes(
+  rows: readonly AuditShardEvent[],
+  units: readonly string[],
+  skeleton: string | null,
+  claims: ReadonlyMap<string, { status: string }>,
+  own: ReadonlySet<string>,
+  keepsWalk: boolean,
+): Set<string> {
+  const here = unitsAskedHere(rows);
+  if (keepsWalk) {
+    return new Set(units.filter((unit) => here.has(unit) && claims.get(unit)?.status === "released"));
+  }
+  return new Set(units.filter((unit) => unit !== skeleton && !own.has(unit) && !(here.has(unit) && !claims.has(unit)) &&
+    !leadBuildsWithoutClaim(rows, unit, claims.get(unit))));
+}
+
+// A Unit the lead's project started and builds with no claim of its own: none
+// at all, or a released one on a Unit the lead never asked to build here (the
+// claim `assign --here` wrote is the one its release gives up).
+export function leadBuildsWithoutClaim(
+  rows: readonly AuditShardEvent[],
+  unit: string,
+  claim: { status: string } | null | undefined,
+): boolean {
+  if (claim?.status === "claimed" || !unitsStartedAtLeadsProject(rows).has(unit)) return false;
+  return claim === null || claim === undefined || !unitsAskedHere(rows).has(unit);
 }
 
 // A team's build that follows the lead's rules too (Arden's call): the lead's
@@ -350,47 +345,6 @@ export function offersLearningsCorrectionChoices(has: (choice: string) => boolea
     (has(LEARNINGS_CORRECTION_CHOICES[0]) || has(LEARNINGS_PROJECT_CHOICE_AT_HOME));
 }
 
-// What the plan's share reaches, from the lead's answers since teams: Units held
-// for a team that takes them from the home, and Units open for any team that
-// the home has not started itself.
-export function unitsTakenFromHome(rows: readonly AuditShardEvent[]): { held: number; open: number; units: string[] } {
-  const ordered = [...rows].sort((a, b) => (a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0));
-  let teamsAt = -1;
-  ordered.forEach((row, at) => {
-    if (row.event === "UNIT_OWNERSHIP_SET" && auditBlockField(row.block, "Mode") === "team") teamsAt = at;
-  });
-  const held = new Set<string>();
-  const open = new Set<string>();
-  for (const row of ordered.slice(teamsAt + 1)) {
-    if (row.event !== "UNITS_ASSIGNED") continue;
-    const opened = auditBlockField(row.block, "Open");
-    if (opened !== null && opened !== "none") {
-      for (const unit of opened.split(",").map((entry) => entry.trim()).filter(Boolean)) {
-        held.delete(unit);
-        open.add(unit);
-      }
-    }
-    for (const unit of listField(row.block, "Here")) open.delete(unit);
-    for (const pair of (auditBlockField(row.block, "Assigned") ?? "").split(",").map((entry) => entry.trim())) {
-      const at = pair.indexOf("=");
-      if (at < 1) continue;
-      open.delete(pair.slice(0, at));
-      held.add(pair.slice(0, at));
-    }
-  }
-  for (const row of ordered) if (row.event === "UNIT_STARTED") open.delete(auditBlockField(row.block, "Unit") ?? "");
-  return { held: held.size, open: open.size, units: [...held, ...open] };
-}
-
-// The Units the lead named for teams while the home could not be reached, with
-// their teams: never the home's own to build while they wait to be held.
-export function unitsKeptForTeams(rows: readonly AuditShardEvent[]): Map<string, string> {
-  return new Map((assignmentNotHeld(rows)?.pairs ?? []).map((pair) => {
-    const at = pair.indexOf("=");
-    return [pair.slice(0, at), pair.slice(at + 1)] as [string, string];
-  }));
-}
-
 // The line for likely repos the work does not record: said once, kept as
 // written. Null when every one names a recorded repo, or the work records none
 // (its likely folders are inside the one repo).
@@ -458,21 +412,18 @@ function builtBeforeTeams(rows: readonly AuditShardEvent[], finalStage: string):
   return { approved: new Set(built.filter(approved)), open: new Set(built.filter((unit) => !approved(unit))) };
 }
 
-// The space a team's label names: "Payments" and "payments" are one team.
-export function teamSpaceOf(label: string): string {
-  return slugify(label);
+// Who builds a Unit, as its claim has it: the person who took it (a pushed
+// result's own `by` first), else the claim's owner. A line names a person,
+// never a team.
+export function builderOf(claim: { owner: string; payload: { taken_by?: string; result?: { by?: string } } }): string {
+  return claim.payload.result?.by ?? claim.payload.taken_by ?? claim.owner;
 }
 
-// A team named in a line, by the label the lead gave it: "the payments team",
-// and "the data team" for a label that already says team.
-export function theTeam(label: string): string {
-  return /\bteam$/i.test(label.trim()) ? `the ${label.trim()}` : `the ${label.trim()} team`;
-}
-
-// Who holds a Unit, in words: the team, or the person when their team label is
-// their own name (a teammate who took solo work), never "the <name> team".
-export function teamOrPerson(owner: string, by?: string): string {
-  return by !== undefined && by.trim() === owner.trim() ? owner.trim() : theTeam(owner);
+// A build's space as a line says it (" in the pay space", or `short` " in
+// pay"). A default space is never named: anywhere but a workspace teams share,
+// it reads as the reader's own.
+export function spaceWords(space: string, short = false): string {
+  return space === "default" ? "" : short ? ` in ${space}` : ` in the ${space} space`;
 }
 
 // --- A Unit's build -----------------------------------------------------------
@@ -576,8 +527,8 @@ export function checkInLine(projectDir: string, stateContent?: string): string |
 }
 
 // What the person's last `git pull` here that brought changes brought from the
-// other spaces of a workspace teams share: each record by its Unit, or the
-// work's own name, with whose it is. Read from this clone's own reflog (a pull
+// other spaces of a workspace teams share: each record by its Unit and where it
+// is, or the lead's work by its own name. Read from this clone's own reflog (a pull
 // that brought nothing writes no entry), so nothing is written. Null with no
 // such pull here, nothing from others, or no git.
 export function arrivedAtLastPull(projectDir: string, ownSpace: string): string | null {
@@ -596,24 +547,28 @@ export function arrivedAtLastPull(projectDir: string, ownSpace: string): string 
   if (last + 1 >= rows.length) return null;
   const diff = spawnSync("git", ["-C", projectDir, "diff", "--name-only", rows[last + 1][0], rows[first][0], "--", "aidlc/spaces"], { encoding: "utf-8", timeout: 10_000 });
   if (diff.status !== 0) return null;
-  const records = new Map<string, Set<string>>();
+  // Each record once, by where it is: a Unit's build by its Unit and space (a
+  // default space is never named), the lead's own work as the lead's.
+  const records = new Map<string, string>();
   for (const path of diff.stdout.split("\n")) {
     const match = /^aidlc\/spaces\/([^/]+)\/intents\/([^/]+)\//.exec(path.trim());
     if (match === null || match[1] === ownSpace) continue;
     const [, space, dirName] = match;
-    let label = dirName;
+    if (records.has(`${space}/${dirName}`)) continue;
+    let said = `${dirName}${spaceWords(space, true)}`;
     try {
-      const build = unitBuildOf(readStateFile(projectDir, dirName, space));
+      const state = readStateFile(projectDir, dirName, space);
+      const build = unitBuildOf(state);
       const entry = listIntents(projectDir, space).find((intent) => intent.dirName === dirName);
-      label = build?.unit ?? (entry !== undefined ? intentDisplayLabel(entry) : dirName);
+      const label = build?.unit ?? (entry !== undefined ? intentDisplayLabel(entry) : dirName);
+      said = build === null && homeLocation(state) !== null ? `the lead's ${label}` : `${label}${spaceWords(space, true)}`;
     } catch {
       // A record no longer here keeps its folder name.
     }
-    records.set(space, (records.get(space) ?? new Set()).add(label));
+    records.set(`${space}/${dirName}`, said);
   }
   if (records.size === 0) return null;
-  const whose = (space: string): string => space === "default" ? "the lead's" : `${theTeam(space)}'s`;
-  return [...records].map(([space, labels]) => `${whose(space)} ${[...labels].join(", ")}`).join("; ");
+  return [...records.values()].join("; ");
 }
 
 // A build walks only its own Unit: its copy of the home's plan names every
@@ -921,7 +876,7 @@ export function renderUnitBoard(label: string, rows: readonly UnitBoardRow[]): s
 // command that can give the lead's project a Unit to build, or count one
 // merged, clears it (aidlc-unit.ts main); the next `next` decides again.
 
-/** A Unit the lead's project waits on, with the team that holds it (null: open for any team). */
+/** A Unit the lead's project waits on, with the space its build is in (null: open for any team). */
 export interface WaitingUnit {
   unit: string;
   team: string | null;
@@ -970,7 +925,7 @@ export function leadWaitsOnTeams(projectDir: string, stateContent: string): Wait
 // written, so it is their sentence and names no step (the step is theirs).
 export function leadWaitSentence(waiting: readonly WaitingUnit[]): string {
   const parts = waiting.map(({ unit, team }, at) =>
-    `${unit}${at === 0 ? " waits" : ""} ${team === null ? "for a team to take it" : `on ${theTeam(team)}`}`);
+    `${unit}${at === 0 ? " waits" : ""} ${team === null ? "for a team to take it" : `on its build${spaceWords(team)}`}`);
   const list = parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}`;
   return `${list}, so nothing is built here meanwhile: the files here change only when you ask for a change.`;
 }
@@ -1201,15 +1156,12 @@ export function lastCommittedByThisPerson(projectDir: string, path: string): boo
   return name !== "" && name === run(["config", "user.name"]);
 }
 
-// The Units the lead's project started that stay its own: each it started,
-// unless the lead's own word gave it to a team or left it open since (an
-// assign's Started Here, recorded with their words).
+// The Units the lead's project started. One with no claim at all stays the
+// lead's project's; a claim on it (the lead's own, released, or a take) says
+// whose it is instead.
 export function unitsStartedAtLeadsProject(rows: readonly AuditShardEvent[]): Set<string> {
   const started = new Set<string>();
-  for (const row of [...rows].sort((a, b) => (a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0))) {
-    if (row.event === "UNIT_STARTED") started.add(auditBlockField(row.block, "Unit") ?? "");
-    if (row.event === "UNITS_ASSIGNED") for (const unit of listField(row.block, "Started Here")) started.delete(unit);
-  }
+  for (const row of rows) if (row.event === "UNIT_STARTED") started.add(auditBlockField(row.block, "Unit") ?? "");
   started.delete("");
   return started;
 }

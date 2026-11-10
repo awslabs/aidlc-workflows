@@ -789,15 +789,6 @@ export interface TeamHandoverAskDirective extends AskDirectiveBase {
   unit?: string;
 }
 
-// Who builds which Unit, answered in the person's own words: the agent fills
-// assign_command with one <unit>=<team> per Unit they named.
-export interface UnitAssignmentAskDirective extends AskDirectiveBase {
-  ask_type: "unit-assignment";
-  response_route: "command";
-  choices: AskChoice[];
-  assign_command: string;
-}
-
 // A Unit a team can take, or carry on, as a piece of work of its own here. Each
 // choice is one complete command.
 export interface UnitTakeAskDirective extends AskDirectiveBase {
@@ -972,7 +963,6 @@ export type AskDirective =
   | UnitPlanChangeAskDirective
   | TeamHandoverAskDirective
   | ReposManifestAskDirective
-  | UnitAssignmentAskDirective
   | UnitTakeAskDirective
   | UnitPushAskDirective
   | UnitTurnedDownAskDirective
@@ -1271,7 +1261,6 @@ const ASK_FIELDS = [
   "ask_type",
   "response_route",
   "confirm_command",
-  "assign_command",
   "amend_command",
   "signoff_command",
   "compose_command",
@@ -1439,14 +1428,6 @@ export function unitAmendQuestionNote(invocation: string): string {
   return questionNote(invocation) + " Their words answer it: when they approve or turn it down, run amend_command " +
     "with --answer approve or --answer reject, after writing their words, as they typed them, to the file it names with " +
     "your file tool, never a shell; anything else leaves it waiting.";
-}
-
-// Who builds which Unit: the person's own words name a team per Unit.
-export function unitAssignmentQuestionNote(invocation: string): string {
-  return questionNote(invocation) + " Their words name who builds which Unit: run assign_command with one " +
-    "<unit>=<team> for each Unit they gave a team (the team as they named it) and --open with the Units they left " +
-    "open for any team (comma-separated; --open alone when they leave them all open), after writing their words, as " +
-    "they typed them, to the file it names with your file tool, never a shell. A Unit they left out is built here.";
 }
 
 // The routing question asked while no piece of work is selected: continue and
@@ -1809,7 +1790,7 @@ export function ceremonyNote(state: "on" | "off", questionsOnly = false): string
 // the numbers: a reply of "2" is read against this order, and the agent
 // renders nothing of its own. One builder, so every question has one shape.
 // Engine questions answered by running the picked choice's command.
-const COMMAND_CHOICE_ASKS = new Set(["construction-staffing", "repo-scope", "units-repos", "unit-plan-change", "repos-manifest", "unit-assignment", "unit-take", "unit-push", "unit-amend", "unit-signoff", "unit-turned-down", "unit-propose", "unit-move-onto", "unit-clone"]);
+const COMMAND_CHOICE_ASKS = new Set(["construction-staffing", "repo-scope", "units-repos", "unit-plan-change", "repos-manifest", "unit-take", "unit-push", "unit-amend", "unit-signoff", "unit-turned-down", "unit-propose", "unit-move-onto", "unit-clone"]);
 
 export interface AskChoice {
   label: string;
@@ -1977,8 +1958,6 @@ export function withAgentNotes<T extends object>(
       ? repoScopeQuestionNote(invocation)
       : d.ask_type === "team-handover" && Array.isArray(d.handovers) && d.handovers.includes("join")
       ? `${questionNote(invocation, choices?.length === 1)} ${TEAM_NAME_NOTE}`
-      : d.ask_type === "unit-assignment"
-      ? unitAssignmentQuestionNote(invocation)
       : d.ask_type === "unit-amend"
       ? unitAmendQuestionNote(invocation)
       : d.ask_type === "unit-signoff"
@@ -2280,7 +2259,6 @@ export function validateDirective(obj: unknown): ValidationResult {
         "existing_code_command",
         "new_project_command",
         "handovers",
-        "assign_command",
         "amend_command",
         "signoff_command",
       ] as const;
@@ -2373,8 +2351,7 @@ export function validateDirective(obj: unknown): ValidationResult {
         if (o.response_route !== "command") {
           errors.push(`${kind}: ${o.ask_type} response_route must be "command"`);
         }
-        const commandField = o.ask_type === "unit-assignment" ? "assign_command"
-          : o.ask_type === "unit-amend" ? "amend_command"
+        const commandField = o.ask_type === "unit-amend" ? "amend_command"
           : o.ask_type === "unit-signoff" ? "signoff_command"
           : null;
         if (commandField !== null) checkString(o, commandField, kind, errors);

@@ -39,6 +39,7 @@ import {
   run,
   STATE,
   UNIT,
+  takeIn,
 } from "../harness/team-build.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -145,7 +146,7 @@ describe("a Unit the lead's project builds reads where its Unit Progress has it"
 describe("a teammate's take offer", () => {
   test("a fresh clone never names a Unit done on its claim as being built, and what waited on it is ready", () => {
     // reporting left open, so it is a team's to take once refunds is done.
-    const { hosts, home, alice, record } = refundsTaken(["refunds=payments", "checkout-ui=web", "--open", "reporting"]);
+    const { hosts, home, alice, record } = refundsTaken();
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     git(home.dir, ["fetch", "-q", "origin"]);
@@ -188,7 +189,6 @@ describe("a look at the board records nothing, and says so", () => {
     const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
     const home = makeHome({ repos: hosts });
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
-    expect(run(UNIT, ["assign", "refunds=payments"], home.dir).status).toBe(0);
     git(home.dir, ["add", "-A"]);
     git(home.dir, ["commit", "-q", "-m", "teams chosen"]);
     git(home.dir, ["push", "-q", "origin", "main"]);
@@ -197,7 +197,7 @@ describe("a look at the board records nothing, and says so", () => {
     expect(building.unit, JSON.stringify(building).slice(0, 400)).toBe("checkout-ui");
     const alice = cloneOf(home.remote, "alice");
     for (const [name, host] of Object.entries(hosts)) cloneCode(host, alice, name, "alice");
-    expect(run(UNIT, ["take", "refunds", "--home", HOME_RECORD, "--team", "payments"], alice).status).toBe(0);
+    expect(takeIn("payments", ["refunds", "--home", HOME_RECORD], alice).status).toBe(0);
     const intents = join(alice, "aidlc", "spaces", "payments", "intents");
     const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-refunds"))!);
     codeGenerated(alice, record);
@@ -229,7 +229,6 @@ describe("going back to change the Unit plan while teams hold Units", () => {
     const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
     const home = makeHome({ repos: hosts });
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
-    expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web"], home.dir).status).toBe(0);
     git(home.dir, ["add", "-A"]);
     git(home.dir, ["commit", "-q", "-m", "teams chosen"]);
     git(home.dir, ["push", "-q", "origin", "main"]);
@@ -237,7 +236,7 @@ describe("going back to change the Unit plan while teams hold Units", () => {
     const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "lead-chat" };
     next(home.dir, chat);
     const alice = cloneOf(home.remote, "alice");
-    const took = run(UNIT, ["take", "refunds", "--home", HOME_RECORD, "--team", "payments"], alice);
+    const took = takeIn("payments", ["refunds", "--home", HOME_RECORD], alice);
     expect(took.status, took.out).toBe(0);
     const step = next(home.dir, chat, ["--stage", "units-generation"]);
     const line = ((step.change_notices ?? []) as string[]).find((notice) => notice.startsWith("Still with teams:"));

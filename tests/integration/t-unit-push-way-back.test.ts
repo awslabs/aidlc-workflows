@@ -45,7 +45,6 @@ function builtToPush(tool: "claude" | HostName, manifestFromWorkspace: boolean, 
   const home = makeHome({ repos: hosts, dependencies: DEPENDENCIES, state });
   cpSync(join(REPO_ROOT, "dist", "claude"), home.dir, { recursive: true, force: false, errorOnExist: false });
   expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
-  expect(run(UNIT, ["assign", "refunds=payments"], home.dir).status).toBe(0);
   git(home.dir, ["add", "-A"]);
   git(home.dir, ["commit", "-q", "-m", "teams chosen"]);
   git(home.dir, ["push", "-q", "origin", "main"]);

@@ -33,6 +33,7 @@ import {
   stateOf,
   tellsWhatToType,
   UNIT,
+  takeIn,
 } from "../harness/team-build.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -140,7 +141,6 @@ describe("who builds which Unit is asked once, at the home", () => {
   test("a Unit held for one team is never given to another", () => {
     const home = makeHome();
     chooseTeams(home.dir);
-    expect(run(UNIT, ["assign", "refunds=payments"], home.dir).status).toBe(0);
     const again = run(UNIT, ["assign", "refunds=web"], home.dir);
     expect(again.status, again.out).toBe(0);
     expect(String(again.json?.notice)).toContain("refunds is held by payments, so it stays with them.");
@@ -220,7 +220,6 @@ describe("the lead's answer is never asked for twice", () => {
     const retry = String(offer.choices[0].command);
     expect(retry).toEndWith("aidlc-unit.ts assign refunds=payments checkout-ui=web --request-file aidlc/.aidlc-request-text/unit-assign.txt");
     git(home.dir, ["remote", "set-url", "origin", home.remote]);
-    expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web", "--person-words", "yes, try again"], home.dir).status).toBe(0);
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.owner).toBe("payments");
     // Held now: what is asked next is sharing the plan, never the assignment again.
     const after = next(home.dir);
@@ -273,7 +272,6 @@ describe("the lead's answer is never asked for twice", () => {
     );
     expect(JSON.stringify([kept.json, step, after])).not.toContain("could not be reached");
     git(home.dir, ["push", "-q", "origin", "main:develop"]);
-    expect(run(UNIT, ["assign", "refunds=payments", "--person-words", "try again"], home.dir).status).toBe(0);
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.owner).toBe("payments");
   });
 
@@ -361,7 +359,6 @@ describe("the lead's plan goes to the teams the way main's share question asks i
     const home = makeHome();
     chooseTeams(home.dir);
     expect(next(home.dir).ask_type).toBe("unit-assignment");
-    expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web"], home.dir).status).toBe(0);
     const ask = next(home.dir);
     expect(isShare(ask), JSON.stringify(ask)).toBe(true);
     expect(String(ask.question)).toStartWith("The teams have their Units. Share the plan with them now?");
@@ -378,7 +375,6 @@ describe("the lead's plan goes to the teams the way main's share question asks i
     const home = makeHome();
     chooseTeams(home.dir);
     next(home.dir);
-    expect(run(UNIT, ["assign", "refunds=payments"], home.dir).status).toBe(0);
     const ask = next(home.dir);
     expect(isShare(ask), JSON.stringify(ask)).toBe(true);
     const shared = run(UNIT, ["share", "--plan"], home.dir);
@@ -394,13 +390,11 @@ describe("the lead's plan goes to the teams the way main's share question asks i
     const home = makeHome();
     chooseTeams(home.dir);
     next(home.dir);
-    expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web", "reporting=data"], home.dir).status).toBe(0);
     expect(isShare(next(home.dir))).toBe(true);
     share(home.dir);
     expect(isShare(next(home.dir))).toBe(false);
     const plan = join(seededRecordDir(home.dir), "inception", "units-generation", "unit-of-work-dependency.md");
     writeFileSync(plan, DEPENDENCIES.replace("```\n", "  - name: reporting2-email\n    kind: service\n    repos: [billing]\n    depends_on: []\n```\n"));
-    expect(run(UNIT, ["assign", "reporting2-email=data"], home.dir).status).toBe(0);
     const ask = next(home.dir);
     expect(isShare(ask), JSON.stringify(ask)).toBe(true);
     expect(String(ask.question)).toContain("reporting2-email");
@@ -415,7 +409,6 @@ describe("the lead's plan goes to the teams the way main's share question asks i
     const home = makeHome();
     chooseTeams(home.dir);
     next(home.dir);
-    expect(run(UNIT, ["assign", "refunds=payments"], home.dir).status).toBe(0);
     git(home.dir, ["add", "-A"]);
     git(home.dir, ["commit", "-q", "-m", "teams named"]);
     git(home.dir, ["push", "-q", "origin", "main"]);
@@ -426,7 +419,6 @@ describe("the lead's plan goes to the teams the way main's share question asks i
     const home = makeHome();
     chooseTeams(home.dir);
     next(home.dir);
-    expect(run(UNIT, ["assign", "--open"], home.dir).status).toBe(0);
     const ask = next(home.dir);
     expect(isShare(ask), JSON.stringify(ask)).toBe(true);
     expect(String(ask.question)).toStartWith("The Units are open for any team to take. Share the plan with them now?");
@@ -436,7 +428,6 @@ describe("the lead's plan goes to the teams the way main's share question asks i
     const home = makeHome();
     chooseTeams(home.dir);
     next(home.dir);
-    expect(run(UNIT, ["assign", "--open"], home.dir).status).toBe(0);
     for (const unit of ["refunds", "checkout-ui", "reporting"]) {
       appendAuditEntry("UNIT_STARTED", { Stage: "functional-design", Unit: unit, "Run floor": "0" }, home.dir);
     }
@@ -447,7 +438,6 @@ describe("the lead's plan goes to the teams the way main's share question asks i
     const home = makeHome();
     chooseTeams(home.dir);
     next(home.dir);
-    expect(run(UNIT, ["assign", "refunds=payments"], home.dir).status).toBe(0);
     expect(isShare(next(home.dir))).toBe(true);
     git(home.dir, ["remote", "set-url", "origin", join(home.remote, "gone")]);
     const shared = run(UNIT, ["share", "--plan"], home.dir);
@@ -475,7 +465,6 @@ describe("the home walks only the Units no team holds", () => {
   test("with refunds and checkout-ui held, reporting waits on refunds, so the home shows the board", () => {
     const home = makeHome();
     chooseTeams(home.dir);
-    expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web"], home.dir).status).toBe(0);
     share(home.dir);
     const step = next(home.dir);
     expect(step.kind, JSON.stringify(step)).toBe("print");
@@ -485,7 +474,6 @@ describe("the home walks only the Units no team holds", () => {
   test("an open Unit with nothing to wait on is the home's to build", () => {
     const home = makeHome();
     chooseTeams(home.dir);
-    expect(run(UNIT, ["assign", "refunds=payments", "reporting=data"], home.dir).status).toBe(0);
     share(home.dir);
     const step = next(home.dir);
     expect(step.kind, JSON.stringify(step)).toBe("run-stage");
@@ -495,7 +483,6 @@ describe("the home walks only the Units no team holds", () => {
   test("at a home with nothing of its own to build now, a skip is never put as a skip of a team's Unit", () => {
     const home = makeHome();
     chooseTeams(home.dir);
-    expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web"], home.dir).status).toBe(0);
     share(home.dir);
     expect(next(home.dir).kind).toBe("print");
     // The person's skip of a step: not offered for the web team's checkout-ui.
@@ -513,7 +500,6 @@ describe("the home walks only the Units no team holds", () => {
   test("a skip of the step the home hands out is that Unit's: the walk the skip reads holds the same Units", () => {
     const home = makeHome();
     chooseTeams(home.dir);
-    expect(run(UNIT, ["assign", "refunds=payments", "reporting=data"], home.dir).status).toBe(0);
     share(home.dir);
     const step = next(home.dir);
     expect(step.unit, JSON.stringify(step)).toBe("checkout-ui");
@@ -638,7 +624,6 @@ describe("the lead's re-hold stays a hold", () => {
   test("the board's note names how to hold a Unit for a team and leave one open", () => {
     const home = makeHome();
     chooseTeams(home.dir);
-    expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web"], home.dir).status).toBe(0);
     const board = next(home.dir);
     expect(board.board_note, JSON.stringify(board)).toBeDefined();
     const note = String(board.board_note);
@@ -659,7 +644,6 @@ describe("the lead's re-hold stays a hold", () => {
   test("a Unit an earlier answer left open stays open in a later assign's line and record, never built here", () => {
     const home = makeHome();
     chooseTeams(home.dir);
-    expect(run(UNIT, ["assign", "refunds=payments", "--open", "reporting"], home.dir).status).toBe(0);
     const later = run(UNIT, ["assign", "checkout-ui=web"], home.dir);
     expect(later.status, later.out).toBe(0);
     expect(String(later.json?.notice)).toContain("Open for any team: reporting.");
@@ -690,7 +674,6 @@ describe("the lead's re-hold stays a hold", () => {
   test("a Unit started at the lead's project is left open when the person asked for it all the same, with their words, and a team takes it", () => {
     const home = makeHome();
     chooseTeams(home.dir);
-    expect(run(UNIT, ["assign", "refunds=payments"], home.dir).status).toBe(0);
     appendAuditEntry("UNIT_STARTED", { Stage: "functional-design", Unit: "checkout-ui", "Run floor": "0" }, home.dir);
     const stays = run(UNIT, ["assign", "--open", "checkout-ui"], home.dir);
     expect(stays.status, stays.out).toBe(0);
@@ -715,7 +698,7 @@ describe("the lead's re-hold stays a hold", () => {
     const sam = cloneOf(home.remote, "sam");
     const ask = next(sam);
     expect(String(ask.question)).not.toContain("checkout-ui (at the home)");
-    const took = run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD, "--team", "storefront"], sam);
+    const took = takeIn("storefront", ["checkout-ui", "--home", HOME_RECORD], sam);
     expect(took.status, took.out).toBe(0);
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "checkout-ui")).toMatchObject({ owner: "storefront", taken_by: "sam" });
   });

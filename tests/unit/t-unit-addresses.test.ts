@@ -87,7 +87,6 @@ describe("addresses", () => {
   test("a teammate whose clone spells the home's address another way is at the home, not in a copy of it", () => {
     const home = makeHome();
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
-    expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web"], home.dir).status).toBe(0);
     git(home.dir, ["add", "-A"]);
     git(home.dir, ["commit", "-q", "-m", "teams"]);
     git(home.dir, ["push", "-q", "origin", "main"]);
@@ -116,7 +115,6 @@ describe("the person's own git, on steps nobody typed", () => {
   test("a home whose remote wants a sign-in: the step opens no sign-in window, comes back, and says once that it could not reach it", async () => {
     const home = makeHome();
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
-    expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web"], home.dir).status).toBe(0);
     git(home.dir, ["add", "-A"]);
     git(home.dir, ["commit", "-q", "-m", "teams"]);
     git(home.dir, ["push", "-q", "origin", "main"]);

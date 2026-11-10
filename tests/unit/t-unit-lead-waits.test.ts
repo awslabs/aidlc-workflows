@@ -38,6 +38,7 @@ import {
   run,
   STATE,
   UNIT,
+  takeIn,
 } from "../harness/team-build.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -90,11 +91,10 @@ function leadWaits(policy?: "relaxed" | "off") {
     ...(policy ? { state: homeState([`- **Guard Policy**: ${policy} (set by you)`]) } : {}),
   });
   expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
-  expect(run(UNIT, ["assign", "refunds=payments", "reporting=data"], home.dir).status).toBe(0);
   expect(run(UNIT, ["share", "--plan"], home.dir).status).toBe(0);
   const partner = cloneOf(home.remote, "dana");
   cloneCode(codeHost("ledger"), partner, "ledger", "dana");
-  const took = run(UNIT, ["take", "reporting", "--home", HOME_RECORD, "--team", "data"], partner);
+  const took = takeIn("data", ["reporting", "--home", HOME_RECORD], partner);
   expect(took.status, took.out).toBe(0);
   const intents = join(partner, "aidlc", "spaces", "data", "intents");
   const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-reporting"))!);
@@ -196,7 +196,6 @@ describe("while the lead's project waits on the teams at Code Generation", () =>
   test("a Unit the lead builds here keeps its plan: the person's word to build it here ends the wait's pass", () => {
     const home = makeHome({ dependencies: OPEN, repos: { ledger: "" } });
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
-    expect(run(UNIT, ["assign", "--open", "refunds", "reporting=data"], home.dir).status).toBe(0);
     expect(run(UNIT, ["share", "--plan"], home.dir).status).toBe(0);
     const statePath = seededStateFile(home.dir);
     writeFileSync(statePath, readFileSync(statePath, "utf-8").replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: code-generation"));

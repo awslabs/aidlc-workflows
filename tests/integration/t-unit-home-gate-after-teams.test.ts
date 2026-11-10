@@ -86,7 +86,6 @@ describe("a Unit built at the lead's project stays the lead's to approve there",
     const { home, person } = builtToCheckpoint();
     person.say("Let's give the report Unit to the data team and leave anything else open");
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
-    expect(run(UNIT, ["assign", "report=data"], home.dir).status).toBe(0);
     // The plan as the teams have it: committed and pushed.
     git(home.dir, ["add", "-A"]);
     git(home.dir, ["commit", "-q", "-m", "teams chosen"]);

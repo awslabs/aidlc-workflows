@@ -189,7 +189,6 @@ import {
   PROJECT_TYPE_SOURCE_FIELD,
   PROJECT_TYPE_SOURCE_HOME,
   soloUnitsProgress,
-  teamSpaceOf,
   teamUnitStageApplies,
   textFingerprint,
   UNIT_BUILD_FIELD,
@@ -206,18 +205,15 @@ import {
   type UnitResult,
   unitsInPlanOrder,
   workspaceHomeLocation,
-  unitsLeftOpen,
-  unitsStartedAtLeadsProject,
-  NOT_HELD_BECAUSE_FIELD,
-  notHeldWords,
+  leadBuildsWithoutClaim,
+  unitsAskedHere,
   unitGateRhythmChosen,
   unitWriteTargets,
   outputForLead,
   checkInLine,
   unitWordsArg,
-  TEAM_RHYTHM_OFFER,
-  teamOrPerson,
-  theTeam,
+  builderOf,
+  spaceWords,
   clearLeadWaitsOnTeams,
   findUnitBuildOfRecord,
   isGitAddress,
@@ -600,18 +596,6 @@ function integrationBranch(projectDir: string, remote: string | null): string {
   return current || "main";
 }
 
-// The remote answered and has no such branch (git ls-remote --exit-code exits
-// 2), never a remote out of reach. `because` is that, in the lead's words, with
-// the file that named the branch.
-export class IntegrationBranchMissing extends Error {
-  readonly because: string;
-  constructor(message: string, remote: string, branch: string, source: string | null) {
-    super(message);
-    this.because = `${remote} has no branch ${branch}` +
-      (source === null ? "" : `, the branch named in ${source} under Way of Working`);
-  }
-}
-
 function fetchIntegration(projectDir: string): {
   remote: string | null;
   branch: string;
@@ -627,13 +611,11 @@ function fetchIntegration(projectDir: string): {
   if (remote) {
     const fetched = git(projectDir, ["fetch", remote, branch]);
     if (!fetched.ok) {
-      const message = named
-        ? `${named} could not be fetched from ${remote}: ${fetched.stderr.trim().replace(/^fatal:\s*/i, "")}`
-        : `git fetch ${remote} ${branch} failed: ${fetched.stderr.trim()}`;
-      if (git(projectDir, ["ls-remote", "--exit-code", "--heads", remote, `refs/heads/${branch}`]).code === 2) {
-        throw new IntegrationBranchMissing(message, remote, branch, affirmed?.source ?? null);
-      }
-      fail(message);
+      fail(
+        named
+          ? `${named} could not be fetched from ${remote}: ${fetched.stderr.trim().replace(/^fatal:\s*/i, "")}`
+          : `git fetch ${remote} ${branch} failed: ${fetched.stderr.trim()}`,
+      );
     }
   }
   const ref = remote ? `refs/remotes/${remote}/${branch}` : `refs/heads/${branch}`;
@@ -1071,6 +1053,9 @@ function buildOverview(
   claims: Map<string, UnitClaimView>,
   walked: ReadonlySet<string>,
   warning?: string,
+  // The lead's own build-here claims (leadsOwnClaims): walked at the lead's
+  // project, never a team's.
+  own: ReadonlySet<string> = new Set(),
 ): UnitClaimOverview {
   const claimable: string[] = [];
   const claimed: UnitClaimOverview["claimed"] = [];
@@ -1082,7 +1067,7 @@ function buildOverview(
       if (claim?.status === "claimed" && opening.landed.has(unit)) claim.landed = true;
       continue;
     }
-    if (claim?.status === "claimed") {
+    if (claim?.status === "claimed" && !own.has(unit)) {
       // A claimed Unit lands after the Units it depends on; a revised plan can
       // add one that has not landed (the walking skeleton is not one).
       const blockedBy = (opening.blockers.get(unit) ?? []).filter((dep) => dep !== "walking-skeleton");
@@ -1094,7 +1079,7 @@ function buildOverview(
       });
       continue;
     }
-    if (walked.has(unit)) {
+    if (walked.has(unit) || own.has(unit)) {
       walkedUnits.push(unit);
       continue;
     }
@@ -1295,7 +1280,7 @@ export function cachedUnitClaimOverview(
   if (options.writeCache !== false && !isReadOnlyEngineProbe()) {
     claims = cacheClaims(pd, claims, cache?.warning);
   }
-  return buildOverview(opening, claims, new Set(unitsWalkedWithoutClaim(pd).keys()), cache?.warning);
+  return buildOverview(opening, claims, new Set(unitsWalkedWithoutClaim(pd).keys()), cache?.warning, leadsOwnClaims(pd, state, claims));
 }
 
 export function localUnitClaimOverviewForIntent(
@@ -1340,7 +1325,7 @@ export function unitClaimOverview(projectDir: string): UnitClaimOverview {
   const opening = openingStatus(pd, integration.oid);
   const claims = allClaims(pd, integration.remote, identity.intentId8, opening.units);
   const observedClaims = cacheClaims(pd, claims);
-  return buildOverview(opening, observedClaims, new Set(unitsWalkedWithoutClaim(pd).keys()));
+  return buildOverview(opening, observedClaims, new Set(unitsWalkedWithoutClaim(pd).keys()), undefined, leadsOwnClaims(pd, state, observedClaims));
 }
 
 function updateCachedClaim(
@@ -4564,15 +4549,6 @@ function unitPlanChangingStage(state: string): string | null {
   return beforePerUnitBlock(graph, stage) ? graph.find((node) => node.slug === stage)?.name ?? stage : null;
 }
 
-// The same risk said at the home itself, as the lead hands Units to teams
-// while it is changing the Unit plan.
-function homePlanChangingLine(state: string, units: readonly string[]): string | null {
-  const changing = unitPlanChangingStage(state);
-  if (changing === null || units.length === 0) return null;
-  return `The Unit plan is open again here (${changing}), so ${joinNames([...units])} ` +
-    `${units.length === 1 ? "goes to its team" : "go to their teams"} on the plan as it stands, which may still change.`;
-}
-
 function claimUnit(args: string[], projectDir?: string): void {
   const { positional, flags } = parseArgs(args);
   const unit = positional[0];
@@ -4601,12 +4577,10 @@ function claimUnit(args: string[], projectDir?: string): void {
   const state = readStateFile(pd);
   if (!isTeamUnitOwnership(state)) fail("Unit claims require Unit Ownership: team.");
   // Where the work records its home, each team takes its Unit in its own clone
-  // (take), and the lead's project is never scoped to one Unit: one no team
-  // holds is built and approved here, on the home's own walk.
+  // (take), and the lead's project is never scoped to one Unit.
   if (homeLocation(state) !== null) {
     fail(
-      `Nothing is claimed here: this work's teams each take their Unit in their own clone, with ${entrySkillInvocation()} there. ` +
-        `${unit} is built and approved here unless a team holds it; ${entrySkillInvocation()} puts its next step to the person.`,
+      `Nothing is claimed here: this work's teams each take their Unit in their own clone, with ${entrySkillInvocation()} there.`,
     );
   }
   const identity = activeIdentity(pd);
@@ -4944,12 +4918,10 @@ function releaseUnit(args: string[], projectDir?: string): void {
 }
 
 // The way back from a take, run in the Unit's build: the claim at the lead's
-// project goes back to what it was before this build took it (the lead's hold
-// for its team, or open), and the build is set aside by the engine's own
-// archive, so its record and audit stay and nothing is deleted. A claim that
-// moved on since (a pushed result, a release at the lead's project, a build by
-// file) is left as it is. The clone goes back to the default space, where its
-// next step offers the Units again.
+// project is released, open again, and the build is set aside by the engine's
+// own archive, so its record and audit stay and nothing is deleted. A claim
+// that moved on since (a pushed result, a release at the lead's project) is
+// left as it is. The person stays in the space they took it from.
 function giveBack(pd: string, build: UnitBuild): void {
   const unit = build.unit;
   const Unit = `${unit.charAt(0).toUpperCase()}${unit.slice(1)}`;
@@ -4965,15 +4937,11 @@ function giveBack(pd: string, build: UnitBuild): void {
   let said: string;
   if (current?.status === "claimed" && current.payload.taken_by !== undefined && current.generation === build.attempt &&
     current.payload.result === undefined && takeStanding(pd, build).state === "recorded") {
-    const before = current.payload.predecessor_oid ? readPayload(pd, current.payload.predecessor_oid, { localOnly: true }) : null;
-    const held = before !== null && before.status === "claimed" && before.taken_by === undefined &&
-      teamSpaceOf(before.owner) === teamSpaceOf(current.owner) ? before : null;
     const { taken_by: _taker, early_on: _early, ...untaken } = current.payload;
-    // The lead's hold comes back as the lead made it, its nonce too; a Unit
-    // that was open is released, as the lead's release does. Either way the
-    // generation moves on, so this build's attempt is over.
+    // Released, as the lead's release does: the generation moves on, so this
+    // build's attempt is over.
     const payload: UnitClaimPayload = {
-      ...(held ?? { ...untaken, status: "released", owner: "released", nonce: randomUUID() }),
+      ...untaken, status: "released", owner: "released", nonce: randomUUID(),
       generation: current.generation + 1,
       predecessor_oid: current.oid,
     } as UnitClaimPayload;
@@ -4982,17 +4950,13 @@ function giveBack(pd: string, build: UnitBuild): void {
       fail(`${unit} could not be given back: ${pushed.refused ?? "its claim at the lead's project moved meanwhile"}. Try again.`);
     }
     invalidateLiveClaimPayloadCache(pd, unit);
-    said = held !== null
-      ? `${Unit} is given back: the lead's project holds it for ${theTeam(held.owner)} again, as before.`
-      : `${Unit} is given back: it is open again at the lead's project.`;
+    said = `${Unit} is given back: it is open again at the lead's project.`;
   } else {
-    said = `Nothing changed for ${unit} at the lead's project, which still has it as it was` +
-      (current?.status === "claimed" ? `, for ${theTeam(current.owner)}.` : ".");
+    said = `Nothing changed for ${unit} at the lead's project, which still has it as it was.`;
   }
   const dirName = resolveWorkflowSelection(pd).intent;
   const archived = dirName ? runEngineUtility(pd, ["intent", "archive", dirName, "--reason", "given back to the lead's project"]) : null;
   if (archived !== null && !archived.ok) fail(`${said} Its build here could not be set aside: ${(archived.stderr || archived.stdout).trim()}`);
-  setActiveSpaceCursor(pd, DEFAULT_SPACE);
   console.log(JSON.stringify({
     released: true,
     given_back: true,
@@ -5514,15 +5478,10 @@ function leadsWord(
   };
 }
 
-// Who builds which Unit, in the lead's own words at the home: one claim per
-// Unit they named, held for that team by the claim's compare-and-swap, with no
-// scope stamp, so the lead's checkout stays the home's. A Unit they left open
-// (`--open <unit>`, or `--open` alone for every Unit not named) waits for a
-// team (`Left Open`); a Unit they left unnamed is built here. The walking
-// skeleton, when on, is built here first. `--here <unit>` is the lead's word to
-// build a Unit left open here after all.
+// The lead's word to build a Unit at the lead's project (`--here <unit>`), in
+// their own words: every other Unit is open for anyone to take.
 function assignUnits(args: string[], projectDir?: string): void {
-  const { positional, flags, bareFlags } = parseArgs(args);
+  const { flags } = parseArgs(args);
   const pd = resolveProjectDir(projectDir);
   const state = readStateFile(pd);
   if (!isTeamUnitOwnership(state) || homeLocation(state) === null) {
@@ -5530,224 +5489,15 @@ function assignUnits(args: string[], projectDir?: string): void {
   }
   if (readApplicableTeamUnitScopeStamp(pd)) fail("Units are given to teams at the lead's project, not from a checkout scoped to one Unit.");
   const words = leadSpoke(pd) ? personWordsOf(pd, flags) : "";
-  if (flags.here !== undefined) {
-    buildLeftOpenHere(pd, flags.here.split(",").map((entry) => entry.trim()).filter((entry) => entry && entry !== "true"), words);
-    return;
-  }
-  const openAll = bareFlags.has("open") || flags.open === "true";
-  const tokens = [...positional];
-  const openNamed: string[] = [];
-  for (const entry of openAll ? [] : (flags.open ?? "").split(",").map((part) => part.trim()).filter(Boolean)) {
-    if (entry.includes("=")) tokens.push(entry);
-    else openNamed.push(entry);
-  }
-  const open = openAll || openNamed.length > 0;
-  const pairs: Array<{ unit: string; team: string }> = [];
-  for (const token of tokens) {
-    const at = token.indexOf("=");
-    const unit = at > 0 ? token.slice(0, at).trim() : "";
-    const team = at > 0 ? token.slice(at + 1).trim() : "";
-    if (!unit || !team) fail(`"${token}" is not <unit>=<team>.`);
-    const unitError = validateUnitName(unit);
-    if (unitError) fail(unitError);
-    if (/[\r\n|]/.test(team)) fail("Team labels cannot contain pipes or newlines.");
-    pairs.push({ unit, team });
-  }
-  if (pairs.length === 0 && !open) fail(`usage: ${unitUsage("assign")}`);
-  const local = localOpeningStatus(pd);
-  let skeleton = teamSkeletonOn(state) ? local.skeleton : null;
-  const lines: string[] = [];
-  const named = new Map<string, string>();
-  for (const { unit, team } of pairs) {
-    if (!local.units.includes(unit)) fail(`${unit} is not one of this work's Units (${local.units.join(", ")}).`);
-    const already = named.get(unit);
-    if (already !== undefined && already !== team) fail(`${unit} can go to one team; you named ${already} and ${team}.`);
-    named.set(unit, team);
-  }
-  for (const unit of openNamed) {
-    if (!local.units.includes(unit)) fail(`${unit} is not one of this work's Units (${local.units.join(", ")}).`);
-    if (named.has(unit)) fail(`${unit} can go to a team or stay open; you named ${named.get(unit)} and open.`);
-  }
-  // A Unit the lead's project started stays there, its approvals the lead's,
-  // unless the person asked for it to go to a team or be left open all the
-  // same: the agent, having read their words, names it with --started-here,
-  // and the record keeps that with their words.
-  const startedHere = unitsStartedAtLeadsProject(readAuditShardEvents(pd));
-  const lift = new Set((flags["started-here"] ?? "").split(",").map((entry) => entry.trim()).filter((entry) => entry && entry !== "true"));
-  const lifted = (openAll ? [...lift] : []).filter((unit) => startedHere.has(unit));
-  for (const unit of [...named.keys(), ...openNamed].filter((name) => startedHere.has(name))) {
-    if (lift.has(unit)) {
-      if (!lifted.includes(unit)) lifted.push(unit);
-      continue;
-    }
-    lines.push(
-      `${unit} was started here, at the lead's project, so it stays here with you. If the person asked for it ` +
-        `${named.has(unit) ? `to go to ${named.get(unit)}` : "to be left open"} all the same, run this again with ` +
-        `--started-here ${unit} and their words.`,
-    );
-    named.delete(unit);
-  }
-  const staysHere = (unit: string): boolean => startedHere.has(unit) && !lifted.includes(unit);
-  openNamed.splice(0, openNamed.length, ...openNamed.filter((unit) => !staysHere(unit)));
-  if (lifted.length > 0) lines.push(`What was built on ${joinNames(lifted)} here stays in this work's record.`);
-  // The lead's own words win over the slice built together first: the part
-  // they name a team for goes to that team, and nothing is built together
-  // first for this work, said once.
-  if (skeleton !== null && named.has(skeleton)) {
-    const [command, ...stanceArgs] = aidlcEngineCommand(
-      "state",
-      ["set-skeleton-stance", "off", "--project-dir", pd],
-      join(dirname(fileURLToPath(import.meta.url)), "aidlc-state.ts"),
-      isCompiledExecutable() ? process.execPath : null,
-    );
-    const set = spawnSync(command, stanceArgs, { cwd: pd, encoding: "utf-8", env: process.env });
-    if (set.status !== 0) fail(`${(set.stderr || set.stdout).trim()}`);
-    lines.push(`${skeleton} goes to ${named.get(skeleton)}, as you said, so nothing is built together first for this work.`);
-    skeleton = null;
-  }
-  const identity = activeIdentity(pd);
-  // The team's words about its branch are read first: their step reaches the
-  // agent, never "could not be reached" from the catch below.
-  affirmedIntegrationBranch(pd);
-  let integration: ReturnType<typeof fetchIntegration> | null;
-  let missing: IntegrationBranchMissing | null = null;
-  try {
-    integration = fetchIntegration(pd);
-  } catch (e) {
-    // Every Unit left open holds nothing at the home, so it needs no home.
-    integration = null;
-    if (e instanceof IntegrationBranchMissing) missing = e;
-  }
-  if (integration === null && named.size > 0) {
-    // The home cannot be reached, or has no such branch: the answer is kept,
-    // with why, and the next step offers to hold it again.
-    const kept = [...named].map(([unit, team]) => `${unit}=${team}`);
-    const leftOpen = openAll ? local.units.filter((unit) => unit !== skeleton && !named.has(unit) && !staysHere(unit)) : openNamed;
-    appendAuditEntry("UNITS_ASSIGNED", {
-      Assigned: kept.join(", ") || "none",
-      ...(openAll ? { Open: "all" } : {}),
-      ...(leftOpen.length > 0 ? { "Left Open": leftOpen.join(", ") } : {}),
-      ...(lifted.length > 0 ? { "Started Here": lifted.join(", ") } : {}),
-      Held: "not yet",
-      ...(missing !== null ? { [NOT_HELD_BECAUSE_FIELD]: missing.because } : {}),
-      ...(words ? { "Person Words": words } : {}),
-    }, pd);
-    console.log(JSON.stringify({
-      assigned: [],
-      notice: `Nothing is held for the teams yet: ${notHeldWords(missing?.because ?? null).why}. I've kept who builds which Unit. ` +
-        "Do you want me to try again?",
-      offer: { choices: [{ label: "Try again", command: assignRetryCommand(kept, openAll, openNamed) }, { label: "Not now" }] },
-    }));
-    return;
-  }
-  const assigned: Array<{ unit: string; team: string }> = [];
-  const held = new Set<string>();
-  for (const [unit, team] of named) {
-    if (integration === null) break;
-    validateClaimRefUnit(identity.intentId8, unit);
-    const ref = claimRef(identity.intentId8, unit);
-    const current = currentClaim(pd, integration.remote, ref);
-    if (current?.status === "claimed") {
-      held.add(unit);
-      if (teamSpaceOf(current.owner) !== teamSpaceOf(team)) {
-        lines.push(`${unit} is held by ${current.owner}, so it stays with them.`);
-        continue;
-      }
-      assigned.push({ unit, team: current.owner });
-      continue;
-    }
-    const payload: UnitClaimPayload = {
-      version: 1,
-      status: "claimed",
-      owner: team,
-      space: identity.space,
-      intent_uuid: identity.intentUuid,
-      intent_id8: identity.intentId8,
-      unit,
-      generation: current?.status === "released" ? current.generation : (current?.generation ?? 0) + 1,
-      nonce: randomUUID(),
-      base_oid: integration.oid,
-      integration_ref: integration.ref,
-      claim_ref: ref,
-      predecessor_oid: current?.oid ?? null,
-      gate_rhythm: readUnitGateRhythm(state),
-    };
-    const commit = createClaimCommit(pd, current?.oid ?? integration.oid, payload);
-    const pushed = updateClaimRef(pd, integration.remote, ref, commit, current?.oid ?? null);
-    if (!pushed.ok) {
-      const winner = currentClaim(pd, integration.remote, ref);
-      if (winner?.status === "claimed") held.add(unit);
-      lines.push(
-        winner?.status === "claimed"
-          ? `${unit} is held by ${winner.owner}, so it stays with them.`
-          : `${unit} could not be held for ${team}: ${pushed.refused ?? "the claim did not take"}. It stays open.`,
-      );
-      continue;
-    }
-    invalidateLiveClaimPayloadCache(pd, unit);
-    held.add(unit);
-    assigned.push({ unit, team });
-  }
-  // Open: no team holds it, whether named now, earlier, or never.
-  const openUnits = unitsInPlanOrder(pd, local.units).filter((unit) =>
-    unit !== skeleton && !held.has(unit) &&
-    (named.has(unit) || integration === null ||
-      currentClaim(pd, integration.remote, claimRef(identity.intentId8, unit))?.status !== "claimed"));
-  // Left open, waiting for a team: every Unit open when they left them all
-  // open, else the ones they named open now or in an earlier answer, and any
-  // named for a team that could not be held for it. The rest of the open
-  // Units are built here.
-  const leftBefore = unitsLeftOpen(readAuditShardEvents(pd));
-  const leftOpen = openUnits.filter((unit) =>
-    !staysHere(unit) && (openAll || openNamed.includes(unit) || named.has(unit) || leftBefore.has(unit)));
-  const builtHere = openUnits.filter((unit) => !leftOpen.includes(unit));
-  appendAuditEntry("UNITS_ASSIGNED", {
-    Assigned: assigned.map((row) => `${row.unit}=${row.team}`).join(", ") || "none",
-    Open: openUnits.join(", ") || "none",
-    ...(leftOpen.length > 0 ? { "Left Open": leftOpen.join(", ") } : {}),
-    ...(lifted.length > 0 ? { "Started Here": lifted.join(", ") } : {}),
-    ...(words.trim() ? { "Person Words": words.trim() } : {}),
-  }, pd);
-  const planChanging = homePlanChangingLine(state, assigned.map((row) => row.unit));
-  if (planChanging !== null) lines.push(planChanging);
-  const sentence = (unit: string): string => unit.charAt(0).toUpperCase() + unit.slice(1);
-  const summary = [
-    ...assigned.map((row) => `${sentence(row.unit)}: ${row.team}.`),
-    ...(leftOpen.length > 0 ? [`Open for any team: ${leftOpen.join(", ")}.`] : []),
-    ...(builtHere.length > 0 ? [`Built here: ${builtHere.join(", ")}.`] : []),
-  ];
-  // The rhythm is the lead's to choose, asked until they answer: each choice
-  // runs the setter, so their answer is on the record and not asked again.
-  const askRhythm = !unitGateRhythmChosen(state);
-  const setRhythm = `${aidlcToolInvocation("state")} set-unit-gate-rhythm`;
-  console.log(JSON.stringify({
-    assigned,
-    open: openUnits,
-    notice: [...summary, ...lines, ...(askRhythm ? [TEAM_RHYTHM_OFFER] : [])].join(" "),
-    ...(askRhythm
-      ? {
-        offer: {
-          choices: [
-            { label: "Keep approvals after every stage", recommended: true, command: `${setRhythm} per-stage` },
-            { label: "Approve once at the end of each Unit", command: `${setRhythm} unit-end` },
-          ],
-        },
-      }
-      : {}),
-  }));
+  buildLeftOpenHere(pd, state, (flags.here ?? "").split(",").map((entry) => entry.trim()).filter((entry) => entry && entry !== "true"), words);
 }
 
-// The assignment the lead gave, run again.
-export function assignRetryCommand(pairs: string[], open: boolean, leftOpen: readonly string[] = []): string {
-  const opened = open ? " --open" : leftOpen.length > 0 ? ` --open ${shellArg(leftOpen.join(","))}` : "";
-  return `${aidlcToolInvocation("unit")} assign ${pairs.length > 0 ? pairs.map(shellArg).join(" ") : ""}${opened} ` +
-    unitWordsArg("assign");
-}
-
-// The lead's word to build a Unit they left open at the lead's project after
-// all (offered once on the board): it leaves the open list and the walk takes
-// it up. A Unit a team holds meanwhile stays with that team.
-function buildLeftOpenHere(pd: string, units: string[], words: string): void {
+// The lead's word to build a Unit at the lead's project after all (`assign
+// --here`), a take like any other: its claim is written for the lead's project
+// with the take's compare-and-swap, so no teammate takes it meanwhile, then
+// the walk takes it up. A Unit someone took first stays theirs. The lead's own
+// claim already there is this word again: its row is written, the same line said.
+function buildLeftOpenHere(pd: string, state: string, units: string[], words: string): void {
   if (units.length === 0) fail(`usage: ${unitUsage("assign")}`);
   const local = localOpeningStatus(pd);
   for (const unit of units) {
@@ -5755,22 +5505,52 @@ function buildLeftOpenHere(pd: string, units: string[], words: string): void {
   }
   const identity = activeIdentity(pd);
   affirmedIntegrationBranch(pd);
-  let integration: ReturnType<typeof fetchIntegration> | null;
+  let integration: ReturnType<typeof fetchIntegration> | null = null;
+  let unseen: string | null = null;
   try {
     integration = fetchIntegration(pd);
-  } catch {
-    integration = null;
+  } catch (e) {
+    unseen = errorMessage(e).replace(/\.+$/, "");
   }
+  const me = gitUserName(pd) ?? "a teammate";
   const lines: string[] = [];
   const here: string[] = [];
+  const notSeen: string[] = [];
   for (const unit of units) {
-    const current = integration === null ? null : currentClaim(pd, integration.remote, claimRef(identity.intentId8, unit));
-    if (current?.status === "claimed") lines.push(`${unit} is held by ${current.owner}, so it stays with them.`);
-    else here.push(unit);
+    if (integration === null) {
+      here.push(unit);
+      notSeen.push(unit);
+      continue;
+    }
+    validateClaimRefUnit(identity.intentId8, unit);
+    const ref = claimRef(identity.intentId8, unit);
+    const current = currentClaim(pd, integration.remote, ref);
+    if (current?.status === "claimed") {
+      if (current.owner === identity.space && claimIsMine(pd, current)) here.push(unit);
+      else lines.push(takenLine(unit, current));
+      continue;
+    }
+    const payload = takenClaimPayload(current, {
+      team: identity.space, home: { space: identity.space, uuid: identity.intentUuid, id8: identity.intentId8 }, unit, ref,
+      generation: takeGeneration(current), me, baseOid: integration.oid, integrationRef: integration.ref,
+      gateRhythm: readUnitGateRhythm(state),
+    });
+    const pushed = updateClaimRef(pd, integration.remote, ref, createClaimCommit(pd, current?.oid ?? integration.oid, payload), current?.oid ?? null);
+    if (!pushed.ok) {
+      const winner = currentClaim(pd, integration.remote, ref);
+      if (winner?.status === "claimed") {
+        lines.push(takenLine(unit, winner));
+        continue;
+      }
+      unseen ??= pushed.refused?.replace(/\.+$/, "") ?? "it changed meanwhile";
+      notSeen.push(unit);
+    } else {
+      invalidateLiveClaimPayloadCache(pd, unit);
+    }
+    here.push(unit);
   }
   if (here.length > 0) {
     appendAuditEntry("UNITS_ASSIGNED", {
-      Assigned: "none",
       Here: here.join(", "),
       ...(words.trim() ? { "Person Words": words.trim() } : {}),
     }, pd);
@@ -5778,8 +5558,18 @@ function buildLeftOpenHere(pd: string, units: string[], words: string): void {
   const sentence = (unit: string): string => unit.charAt(0).toUpperCase() + unit.slice(1);
   console.log(JSON.stringify({
     here,
-    notice: [...here.map((unit) => `${sentence(unit)} is built here now, no longer open for the teams.`), ...lines].join(" "),
+    notice: [
+      ...here.map((unit) => notSeen.includes(unit)
+        ? `${sentence(unit)} is built here now. The teams cannot see that yet (${unseen}), so a teammate could still take it meanwhile.`
+        : `${sentence(unit)} is built here now, no longer open for the teams.`),
+      ...lines,
+    ].join(" "),
   }));
+}
+
+// A take refused because the Unit is taken: who builds it, and where.
+function takenLine(unit: string, claim: UnitClaimView): string {
+  return `${unit} is already taken: ${builderOf(claim)} builds it${spaceWords(claim.owner)}.`;
 }
 
 // --- Taking a Unit: a team builds it as a piece of work of its own -----------
@@ -5807,6 +5597,9 @@ interface HomeWork {
   // copy AI-DLC fetched by the lead's address (leadCopyRef), which comes with
   // the claims (refreshHomeClaims).
   leadCopy?: boolean;
+  // The claims go to this clone's own remote because the recorded address could
+  // not be reached (homeTarget): git's words, and that remote's address.
+  atOrigin?: { why: string; origin: string };
 }
 
 // This clone's own remote carries the work's claims (git tracks them under
@@ -5845,7 +5638,8 @@ function findHomeWork(projectDir: string, dirName: string, space: string): HomeW
   const row = readIntentRegistry(projectDir, space).find((entry) => entry.dirName === dirName);
   if (!row?.uuid) fail(`${dirName} has no entry in its space's list of work.`);
   const id8 = idSuffix(row.uuid);
-  const target = homeTarget(projectDir, location, id8);
+  const recordPrefix = `aidlc/spaces/${space}/intents/${dirName}`;
+  const { target, atOrigin } = homeTarget(projectDir, location, id8, { space, recordPrefix });
   return {
     space,
     dirName,
@@ -5854,9 +5648,10 @@ function findHomeWork(projectDir: string, dirName: string, space: string): HomeW
     label: row.slug,
     location,
     target,
-    recordPrefix: `aidlc/spaces/${space}/intents/${dirName}`,
+    recordPrefix,
     repos: row.repos ?? [],
     solo,
+    ...(atOrigin !== undefined ? { atOrigin } : {}),
   };
 }
 
@@ -5872,12 +5667,30 @@ function recordedAddressRefusal(dirName: string): string {
 }
 
 // Where the lead's claims are read and written: this workspace's own remote
-// when the recorded lead's project is it, else the recorded address.
-function homeTarget(projectDir: string, location: string, id8: string): string | null {
+// when the recorded lead's project is it, else the recorded address. Before any
+// claim is there, the recorded address out of reach and this clone's own remote
+// holding the lead's plan (`plan`, the lead's record here) is the lead's repo by
+// another spelling (ssh beside the lead's https): the claims go there, and the
+// take says so once (`atOrigin`). Once a claim is there, remoteHoldsClaims
+// reads it. A team's own workspace made from the lead's reaches the lead's
+// address, so it never gets here unless the lead's project is out of reach too.
+function homeTarget(
+  projectDir: string,
+  location: string,
+  id8: string,
+  plan?: { space: string; recordPrefix: string },
+): { target: string | null; atOrigin?: { why: string; origin: string } } {
   const own = workspaceHomeLocation(projectDir);
-  return location === "local" || (own !== null && sameGitAddress(location, own)) || remoteHoldsClaims(projectDir, id8)
-    ? repositoryRemote(projectDir)
-    : location;
+  if (location === "local" || (own !== null && sameGitAddress(location, own)) || remoteHoldsClaims(projectDir, id8)) {
+    return { target: repositoryRemote(projectDir) };
+  }
+  const remote = repositoryRemote(projectDir);
+  if (plan === undefined || remote === null || own === null || own === "local") return { target: location };
+  const reached = quietly(() => git(projectDir, ["ls-remote", "--heads", location]));
+  if (reached.ok) return { target: location };
+  const branch = affirmedIntegrationBranch(projectDir, plan.space)?.branch ?? integrationBranch(projectDir, remote);
+  if (!git(projectDir, ["cat-file", "-e", `refs/remotes/${remote}/${branch}:${plan.recordPrefix}/aidlc-state.md`]).ok) return { target: location };
+  return { target: remote, atOrigin: { why: gitSaid(reached.stderr) || "it did not answer", origin: own } };
 }
 
 // --- The lead's project by its address (a team's own workspace) -------------
@@ -5967,7 +5780,7 @@ export function leadOfBuild(projectDir: string, build: UnitBuild): HomeWork | nu
   const id8 = idSuffix(build.homeWork);
   return {
     space, dirName, uuid: build.homeWork, id8, label, location: build.homeLocation,
-    target: homeTarget(projectDir, build.homeLocation, id8),
+    target: homeTarget(projectDir, build.homeLocation, id8).target,
     recordPrefix: `aidlc/spaces/${space}/intents/${dirName}`, repos, solo: false, leadCopy: true,
   };
 }
@@ -6147,19 +5960,13 @@ function createUnitBuild(
   plan: { state: string },
   baseOid: string,
   unit: string,
-  team: string,
+  // The space the build goes in, which the claim's owner names.
+  space: string,
   attempt: number,
   source: BuildSource,
-  // A build taken from solo work lives in the home's own space.
-  inSpace?: string,
   // The lead's files the person chose to follow too (leadRules, read where they are).
   leadPaths: readonly string[] = [],
 ): { space: string; dirName: string } {
-  const space = inSpace ?? teamSpaceOf(team);
-  if (!listSpacesHere(projectDir).includes(space)) {
-    const created = runEngineUtility(projectDir, isCompiledExecutable() ? ["space", "create", space] : ["space-create", space]);
-    if (!created.ok) fail(`${theTeam(team).replace(/^the/, "The")}'s space could not be made: ${(created.stderr || created.stdout).trim()}`);
-  }
   const scope = getField(plan.state, "Scope") ?? "";
   const grid = loadScopeMapping()[scope];
   if (!grid) fail(`The lead's plan names a scope this install does not have: ${scope}.`);
@@ -6251,7 +6058,7 @@ function createUnitBuild(
       "Home Work": home.uuid,
       "Home Record": `${home.space}/${home.dirName}`,
       Unit: unit,
-      Team: team,
+      Team: space,
       "Home Attempt": String(attempt),
       "Home Commit": baseOid,
       "Copy Fingerprint": fingerprint,
@@ -6488,16 +6295,6 @@ function approvedInputsText(
   ].join("\n");
 }
 
-function listSpacesHere(projectDir: string): string[] {
-  try {
-    return readdirSync(join(projectDir, "aidlc", "spaces")).filter((name) =>
-      existsSync(join(projectDir, "aidlc", "spaces", name, "memory"))
-    );
-  } catch {
-    return [];
-  }
-}
-
 // The Units of solo work built from another machine: the Unit plan at the
 // home's commit, with what its walk started and finished read from the record
 // here (git brought it with the pull).
@@ -6515,10 +6312,9 @@ function soloOpening(projectDir: string, home: HomeWork, plan: { state: string; 
   };
 }
 
-// Take a Unit of the home's work: hold it at the home (adopting the lead's
-// claim for this team, or claiming an open Unit), then start its build in the
-// team's space. A Unit held by another team stays theirs; a Unit that waits on
-// another is not taken yet.
+// Take a Unit of the home's work: claim it at the home, then start its build
+// in the space the person is working in (solo work's in its own space). The
+// first take wins; a Unit that waits on another is not taken yet.
 function takeUnit(args: string[], projectDir?: string): void {
   const { positional, flags, bareFlags } = parseArgs(args);
   const unit = positional[0];
@@ -6542,8 +6338,10 @@ function takeUnit(args: string[], projectDir?: string): void {
   if (existing !== null) {
     setActiveSpaceCursor(pd, existing.space);
     selectIntentForSession(pd, existing.dirName, existing.space, resolveWorkflowSelection(pd).sessionId ?? undefined);
-    // A team's own workspace keeps its build in its default space: it is their team's, not a team named default.
-    const carrying = `Carrying on ${unit}, ${existing.space === DEFAULT_SPACE ? "your team" : theTeam(existing.space)}'s build here.`;
+    // Whose build it is, said once, from its claim as this workspace last fetched it.
+    const claim = buildClaimHere(pd, existing);
+    const whose = claim === null ? "its" : claimIsMine(pd, claim) ? "your" : `${builderOf(claim)}'s`;
+    const carrying = `Carrying on ${unit}, ${whose} build${existing.space === DEFAULT_SPACE ? " here" : spaceWords(existing.space)}.`;
     console.log(JSON.stringify({
       taken: true,
       resumed: true,
@@ -6566,27 +6364,10 @@ function takeUnit(args: string[], projectDir?: string): void {
   if (!opening.units.includes(unit)) fail(`${unit} is not one of ${home.label}'s Units (${opening.units.join(", ")}).`);
   if (solo?.started.has(unit)) fail(`${unit} is being built on the other machine; take another Unit, or follow along.`);
   const me = git(pd, ["config", "user.name"]).stdout.trim() || "a teammate";
-  const activeTeam = activeSpace(pd) === DEFAULT_SPACE ? null : activeSpace(pd);
-  if (current?.status === "claimed") {
-    if (current.payload.taken_by !== undefined) {
-      fail(`${unit} is held by ${theTeam(current.owner)} (${current.payload.taken_by} took it).`);
-    }
-    // A Unit the lead holds for a team is that team's to take, in any space:
-    // the person's team is the one they name or the team space they are in,
-    // and with neither, theirs is for the agent to read from their words.
-    const taker = flags.team ?? activeTeam;
-    if (!home.solo && taker === null) {
-      fail(
-        `${unit} is held for ${theTeam(current.owner)}. Run this again with --team and the person's team: ` +
-          `--team ${shellArg(current.owner)} if they are on it. If their words do not say which team they are on, ask them.`,
-      );
-    }
-    if (taker !== null && teamSpaceOf(taker) !== teamSpaceOf(current.owner)) fail(`${unit} is held by ${theTeam(current.owner)}.`);
-  }
+  if (current?.status === "claimed") fail(takenLine(unit, current));
   if (opening.completed.has(unit)) fail(`${unit} is already done at the lead's project.`);
   const homeRows = homeAuditAt(pd, home, integration.oid);
-  // A Unit no team holds that the home started is the home's.
-  if (!home.solo && current?.status !== "claimed" && unitsStartedAtLeadsProject(homeRows).has(unit)) {
+  if (!home.solo && leadBuildsWithoutClaim(homeRows, unit, current)) {
     fail(`${unit} is being built at the lead's project, so it is not open to take. Run \`${aidlcToolInvocation("orchestrate")} next\` for what is.`);
   }
   // A Unit the home marked done on its claim counts as done, pushed state or not.
@@ -6624,12 +6405,9 @@ function takeUnit(args: string[], projectDir?: string): void {
         })),
     }))
     : undefined;
-  // An open Unit is taken for a team: the one the person names, or the space they are in.
-  if (!home.solo && current?.status !== "claimed" && flags.team === undefined && activeTeam === null) {
-    fail(`Which team builds ${unit}? Ask the person, then run this again with --team '<their team>'.`);
-  }
-  const team = current?.status === "claimed" ? current.owner : flags.team ?? activeTeam ?? me;
-  if (/[\r\n|]/.test(team)) fail("Team labels cannot contain pipes or newlines.");
+  // The build goes in the space the person is working in; solo work's in the
+  // lead's own space. The claim's owner names that space.
+  const team = home.solo ? home.space : activeSpace(pd);
   const generation = takeGeneration(current);
   const payload = takenClaimPayload(current, {
     team, home, unit, ref, generation, me, baseOid: integration.oid, integrationRef: integration.ref,
@@ -6644,19 +6422,18 @@ function takeUnit(args: string[], projectDir?: string): void {
   let notRecorded: string | null = null;
   if (!pushed.ok) {
     const winner = currentClaim(pd, home.target, ref);
-    if (winner?.status === "claimed" && winner.nonce !== current?.nonce) fail(`${unit} was just taken by ${theTeam(winner.owner)}.`);
-    if (winner?.status === "claimed" && winner.payload.taken_by !== undefined) fail(`${unit} was just taken by ${winner.payload.taken_by}.`);
+    if (winner?.status === "claimed") fail(takenLine(unit, winner));
     // Git gave no reason when the claim moved under the take.
     if (pushed.refused === undefined) fail(`${unit} was not taken: its claim at the lead's project moved meanwhile. Try again.`);
     const why = pushed.refused.replace(/\.+$/, "");
     if (earlyOn) {
-      fail(`${unit} is ${current?.status === "claimed" ? "held for your team" : "open"} at the lead's project, which takes no push from here: ` +
-        `${why}. Ask the lead for push access to it, then take ${unit} again.`);
+      fail(`${unit} is open at the lead's project, which takes no push from here: ${why}. Ask the lead for push access to it, then take ${unit} again.`);
     }
     notRecorded = why;
   }
   if (notRecorded === null) invalidateLiveClaimPayloadCache(pd, unit);
-  const withLeadRules = bareFlags.has("lead-rules") || flags["lead-rules"] !== undefined;
+  // A build in the lead's own space reads the lead's rules as its own already.
+  const withLeadRules = (bareFlags.has("lead-rules") || flags["lead-rules"] !== undefined) && (home.leadCopy || team !== home.space);
   // The lead's rules the build reads too, in the take's own words, as its choice named them.
   // In a team's own workspace the lead's files are read from the lead's commit, never this workspace's own.
   const leads = !withLeadRules ? null
@@ -6670,7 +6447,7 @@ function takeUnit(args: string[], projectDir?: string): void {
       return shown.ok ? shown.stdout : null;
     },
     approvals: (produced) => homeApprovals(homeRows, produced),
-  }, home.solo ? home.space : home.leadCopy ? activeSpace(pd) : undefined, leads?.paths ?? []);
+  }, leads?.paths ?? []);
   setActiveSpaceCursor(pd, build.space);
   // Early: the Unit's branch starts at each dependency's pushed head, checked
   // out where nothing of the person's is uncommitted.
@@ -6702,8 +6479,8 @@ function takeUnit(args: string[], projectDir?: string): void {
   }
   // The likely repos this workspace has no checkout of, said with the way to one.
   const notThere = likelyReposNotHere(pd, likely, home.repos, leadRepoAddresses(pd, integration.oid));
-  const taken = `${unit.charAt(0).toUpperCase()}${unit.slice(1)} is yours${team === me ? "" : `, for ${theTeam(team)}`}. Its build is its own ` +
-    `piece of work here, under your team's rules${leadsToo}, from what the lead approved.` +
+  const taken = `${unit.charAt(0).toUpperCase()}${unit.slice(1)} is yours. Its build is its own ` +
+    `piece of work here,${spaceWords(build.space) === "" ? "" : `${spaceWords(build.space)},`} under your team's rules${leadsToo}, from what the lead approved.` +
     // The way back (release, run in this build), said once with the take.
     " If it is not your team's to build, say so and I give it back." +
     earlyLines.map((line) => ` ${line}`).join("") +
@@ -6712,7 +6489,9 @@ function takeUnit(args: string[], projectDir?: string): void {
       ? ` The lead is changing the Unit plan (${planChanging} is open again there), so ${unit} is taken on the plan as it stands there.`
       : "") +
     (notRecorded === null ? "" : ` The lead's project takes no push from here (${notRecorded}), so the lead and the other teams ` +
-      `cannot see that you took ${unit} until it does; AI-DLC records it there when a push next goes through.`);
+      `cannot see that you took ${unit} until it does; AI-DLC records it there when a push next goes through.`) +
+    (home.atOrigin === undefined ? "" : ` The lead's project could not be reached at ${home.location} (${home.atOrigin.why}), so ` +
+      `${unit} is recorded at ${home.atOrigin.origin}, where this clone's copy of the lead's plan comes from.`);
   // The take's own line waits for the build's next step, which also puts the
   // offer to clone its repos not checked out here (buildCloneOffer).
   const said = saidWithNextStep(pd, taken);
@@ -6726,33 +6505,31 @@ function takeUnit(args: string[], projectDir?: string): void {
   }));
 }
 
-// The generation a take writes: a held or released claim's own, else the next.
+// The generation a take writes: a released claim's own, else the next.
 function takeGeneration(current: UnitClaimView | null): number {
   return current?.status === "claimed" || current?.status === "released" ? current.generation : (current?.generation ?? 0) + 1;
 }
 
-// The claim a take writes: the lead's hold kept as the lead made it, or a new
-// claim for the team, taken by this person, at this generation.
+// The claim a take writes: the space the build goes in as its owner, taken by
+// this person, at this generation.
 function takenClaimPayload(
   current: UnitClaimView | null,
   take: {
-    team: string; home: HomeWork; unit: string; ref: string; generation: number; me: string; baseOid: string;
-    integrationRef: string; gateRhythm: ReturnType<typeof readUnitGateRhythm>; earlyOn?: UnitClaimPayload["early_on"];
+    team: string; home: Pick<HomeWork, "space" | "uuid" | "id8">; unit: string; ref: string; generation: number; me: string;
+    baseOid: string; integrationRef: string; gateRhythm: ReturnType<typeof readUnitGateRhythm>; earlyOn?: UnitClaimPayload["early_on"];
   },
 ): UnitClaimPayload {
   return {
-    ...(current?.status === "claimed" ? current.payload : {
-      version: 1,
-      status: "claimed",
-      owner: take.team,
-      space: take.home.space,
-      intent_uuid: take.home.uuid,
-      intent_id8: take.home.id8,
-      unit: take.unit,
-      nonce: randomUUID(),
-      claim_ref: take.ref,
-      gate_rhythm: take.gateRhythm,
-    }),
+    version: 1,
+    status: "claimed",
+    owner: take.team,
+    space: take.home.space,
+    intent_uuid: take.home.uuid,
+    intent_id8: take.home.id8,
+    unit: take.unit,
+    nonce: randomUUID(),
+    claim_ref: take.ref,
+    gate_rhythm: take.gateRhythm,
     generation: take.generation,
     base_oid: take.baseOid,
     integration_ref: take.integrationRef,
@@ -6766,9 +6543,82 @@ function takenClaimPayload(
 // fetched the claim. Only the checkout that made the take can tell (its
 // UNIT_TAKEN_IN row is in this checkout's own audit shard); a build taken in
 // another reads as recorded, as every take did before. "pending": never
-// recorded and still the person's to record; "aside": someone else's take, a
-// hold for another team, or the Unit done, is there now, and this build's take
-// is never written over it.
+// recorded and still the person's to record; "aside": someone else's take, or
+// the Unit done, is there now, and this build's take is never written over it.
+// Whether a claim's take is this person's: its taken_by is their git
+// user.name, or the commit that made the take is theirs by user.email (one
+// person on two computers with two names). An unset name never matches.
+export function claimIsMine(projectDir: string, claim: UnitClaimView): boolean {
+  return claim.status === "claimed" &&
+    takeIsBy(projectDir, claim.oid, claim.payload, gitUserName(projectDir), git(projectDir, ["config", "user.email"]).stdout.trim());
+}
+
+// The take on a claim commit is by this name, or by the email of the commit
+// that made it (the oldest of the claim's own history with this taker; a later
+// commit of theirs on someone else's take is not it).
+function takeIsBy(projectDir: string, oid: string, payload: UnitClaimPayload, me: string | null, myEmail: string): boolean {
+  if (payload.taken_by === undefined) return false;
+  if (me !== null && payload.taken_by === me) return true;
+  if (myEmail === "") return false;
+  let at = oid;
+  let taking = payload;
+  for (let steps = 0; taking.predecessor_oid !== null && steps < 200; steps++) {
+    const before = readPayload(projectDir, taking.predecessor_oid, { localOnly: true });
+    if (before === null || before.taken_by !== taking.taken_by) break;
+    at = taking.predecessor_oid;
+    taking = before;
+  }
+  return localGit(projectDir, ["log", "-1", "--format=%ce", at]).stdout.trim() === myEmail;
+}
+
+// The lead's own build-here claims at the lead's work (Home Location, not a
+// Unit's build): a Unit the lead asked to build at the lead's project (`assign
+// --here`) whose claim is this person's take for the work's own space. The
+// lead's walk builds it; it is no team's.
+export function leadsOwnClaims(projectDir: string, stateContent: string, claims: ReadonlyMap<string, UnitClaimView>): Set<string> {
+  if (homeLocation(stateContent) === null || unitBuildOf(stateContent) !== null) return new Set();
+  let asked: Set<string>;
+  try {
+    asked = unitsAskedHere(readAuditShardEvents(projectDir));
+  } catch {
+    return new Set();
+  }
+  if (asked.size === 0) return new Set();
+  const space = activeSpace(projectDir);
+  return new Set([...claims].filter(([unit, claim]) =>
+    asked.has(unit) && claim.status === "claimed" && claim.owner === space && claimIsMine(projectDir, claim)).map(([unit]) => unit));
+}
+
+// Whether the lead's work went to teams by a teammate's take of solo work: a
+// claim on it was taken from the lead's commit while the work was still solo.
+// The lead's walk then carries on with the rest, as its switch says.
+const SOLO_AT_OID = new Map<string, boolean>();
+export function takenFromSoloWork(projectDir: string, claims: ReadonlyMap<string, UnitClaimView>): boolean {
+  const relative = relativeRecordDir(projectDir);
+  if (!relative) return false;
+  return [...claims.values()].some((claim) => {
+    const key = `${claim.payload.base_oid}:${relative}`;
+    if (!SOLO_AT_OID.has(key)) {
+      const shown = localGit(projectDir, ["show", `${claim.payload.base_oid}:${relative}/aidlc-state.md`, "--"]);
+      SOLO_AT_OID.set(key, shown.ok && !isTeamUnitOwnership(shown.stdout));
+    }
+    return SOLO_AT_OID.get(key) === true;
+  });
+}
+
+// A build's claim at the lead's project as this workspace last fetched it.
+function buildClaimHere(projectDir: string, built: { space: string; dirName: string }): UnitClaimView | null {
+  try {
+    const build = unitBuildOf(readStateFile(projectDir, built.dirName, built.space));
+    if (build === null) return null;
+    const homeSpace = build.homeRecord.includes("/") ? build.homeRecord.slice(0, build.homeRecord.indexOf("/")) : DEFAULT_SPACE;
+    return cachedClaimsForIdentity(projectDir, { space: homeSpace, intentUuid: build.homeWork, intentId8: idSuffix(build.homeWork) }, false)
+      .get(build.unit) ?? null;
+  } catch {
+    return null;
+  }
+}
+
 type TakeStanding =
   | { state: "recorded" }
   | { state: "pending"; current: UnitClaimView | null; team: string; baseOid: string; dirName: string; space: string }
@@ -6788,7 +6638,7 @@ function takeStanding(projectDir: string, build: UnitBuild): TakeStanding {
   } catch {
     return { state: "recorded" };
   }
-  const me = git(projectDir, ["config", "user.name"]).stdout.trim() || "a teammate";
+  const me = gitUserName(projectDir);
   const myEmail = git(projectDir, ["config", "user.email"]).stdout.trim();
   // The build's attempt as its record has it now (a take recorded later at a
   // new attempt writes it there), never as the caller read it before.
@@ -6799,17 +6649,12 @@ function takeStanding(projectDir: string, build: UnitBuild): TakeStanding {
     // The caller's stands.
   }
   // The claim's own history, back from what git fetched: this take there once
-  // is recorded, whatever the lead did with the Unit since. It is this person's
-  // by their git name then, or by the email of the commit that made the take
-  // (only that one: a later commit of theirs on someone else's take is not it).
+  // is recorded, whatever the lead did with the Unit since (takeIsBy).
   let oid = current?.oid ?? null;
   for (let steps = 0; oid !== null && steps < 200; steps++) {
     const payload = readPayload(projectDir, oid, { localOnly: true });
     if (payload === null) break;
-    const before = payload.predecessor_oid === null ? null : readPayload(projectDir, payload.predecessor_oid, { localOnly: true });
-    const madeTheTake = payload.taken_by !== undefined && before?.taken_by !== payload.taken_by;
-    if (payload.taken_by !== undefined && payload.generation === attempt && (payload.taken_by === me || (madeTheTake && myEmail !== "" &&
-      localGit(projectDir, ["log", "-1", "--format=%ce", oid]).stdout.trim() === myEmail))) return { state: "recorded" };
+    if (payload.generation === attempt && takeIsBy(projectDir, oid, payload, me, myEmail)) return { state: "recorded" };
     oid = payload.predecessor_oid;
   }
   const team = auditBlockField(row.block, "Team") ?? "";
@@ -6819,17 +6664,15 @@ function takeStanding(projectDir: string, build: UnitBuild): TakeStanding {
     const at = git(projectDir, ["log", "-1", "--format=%cs", current.oid]).stdout.trim();
     return {
       state: "aside",
-      line: `${unit} was taken at the lead's project by ${by} for ${theTeam(current.owner)}${at ? ` on ${at}` : ""}, before your take ` +
+      line: `${unit} was taken at the lead's project by ${by}${at ? ` on ${at}` : ""}, before your take ` +
         `could be recorded there, so the lead and the other teams see theirs, not yours. Your build is still here: agree with ${by} ` +
         "who carries it on, or give yours back.",
     };
   }
-  const now = current?.payload.done === true ? "done there"
-    : current?.status === "claimed" && teamSpaceOf(current.owner) !== teamSpaceOf(team) ? `held for ${theTeam(current.owner)}` : null;
-  if (now !== null) {
+  if (current?.payload.done === true) {
     return {
       state: "aside",
-      line: `${unit}'s claim at the lead's project changed before your take could be recorded there: it is ${now} now, so the lead ` +
+      line: `${unit}'s claim at the lead's project changed before your take could be recorded there: it is done there now, so the lead ` +
         "and the other teams do not see your take. Your build is still here: agree with the lead who carries it on, or give yours back.",
     };
   }
@@ -7696,7 +7539,7 @@ function checkTeamResultsQuietly(
       const sent = updateClaimRef(pd, remote, live.ref, commit, live.oid);
       if (sent.ok) {
         invalidateLiveClaimPayloadCache(pd, unit);
-        told?.push({ unit, repos: newlyMerged, done, to: teamOrPerson(live.owner, live.payload.result?.by ?? live.payload.taken_by) });
+        told?.push({ unit, repos: newlyMerged, done, to: builderOf(live) });
       } else unsent?.push({ to: remote ?? "the lead's project", ...(sent.refused ? { refused: sent.refused } : {}) });
     }
     found.set(unit, { team: live.owner, verdicts, done });
@@ -7729,7 +7572,7 @@ function notRecordedPastUnitStages(past: { at: string; back: string }, one: bool
 
 function resultsBackLine(back: UnitClaimView[], past: { at: string; back: string }): string {
   const one = back.length === 1;
-  return `${joinNames(back.map((claim) => `${claim.unit} (from ${claim.owner})`))} ${one ? "is" : "are"} back but not ` +
+  return `${joinNames(back.map((claim) => `${claim.unit} (from ${builderOf(claim)})`))} ${one ? "is" : "are"} back but not ` +
     `recorded yet: ${notRecordedPastUnitStages(past, one)}`;
 }
 
@@ -7746,7 +7589,9 @@ export function homeResultsPastUnitStages(projectDir: string, stateContent: stri
   if (past === null) return null;
   let back: UnitClaimView[];
   try {
-    const open = [...cachedClaims(projectDir).values()].some((claim) => claim.status === "claimed" && !claim.payload.done);
+    const cached = cachedClaims(projectDir);
+    const own = leadsOwnClaims(projectDir, stateContent, cached);
+    const open = [...cached.values()].some((claim) => claim.status === "claimed" && !claim.payload.done && !own.has(claim.unit));
     if (!open) return null;
     if (!isReadOnlyEngineProbe()) refreshHomeClaims(projectDir, { sessionId, sincePerson: true });
     back = resultsBack(projectDir);
@@ -8492,8 +8337,11 @@ export function sendLeadsApprovedChanges(projectDir: string): string[] {
     const lines: string[] = [];
     // A Unit already done hears it too, as an approved proposal reaches it:
     // once, with the offer of follow-up work, never reopened (takeNewerInput).
-    const claims = [...cachedClaims(pd).values()].filter((claim) =>
-      claim.status === "claimed" && claim.payload.taken_by !== undefined
+    // The lead's own build here reads the lead's inputs where they are.
+    const cached = cachedClaims(pd);
+    const own = leadsOwnClaims(pd, readStateFile(pd), cached);
+    const claims = [...cached.values()].filter((claim) =>
+      claim.status === "claimed" && claim.payload.taken_by !== undefined && !own.has(claim.unit)
     );
     const recordRel = relativeRecordDir(pd)?.split(sep).join("/") ?? null;
     if (claims.length === 0 || recordRel === null) return lines;
@@ -8558,7 +8406,7 @@ export function sendLeadsApprovedChanges(projectDir: string): string[] {
         };
         const sent = amendClaim(pd, remote, claim, { input, at: isoTimestamp(), words: "" }, text, undefined, differs);
         if (sent === null || sent === "missed") continue;
-        reached.push(claim.owner);
+        reached.push(builderOf(claim));
       }
       if (reached.length > 0) {
         const name = inputName(input);
@@ -8633,7 +8481,7 @@ function amendInput(args: string[], projectDir?: string): void {
     if (text === null) {
       const theirs = writeProposedText(pd, live, proposal.input);
       fail(
-        `${live.owner}'s change was made on an older copy of the ${name}, and it does not fit onto the ${name} as it ` +
+        `${builderOf(live)}'s change was made on an older copy of the ${name}, and it does not fit onto the ${name} as it ` +
           `stands here now, so nothing was changed. Show the lead both: their version${theirs === null ? "" : ` (${theirs})`} ` +
           `and the current one (${relative(pd, path).split(sep).join("/")}); the team can send the change again on the current one. ` +
           `When the lead puts the two together (or asks you to), write that text to a file and approve it as written with ` +
@@ -8649,13 +8497,15 @@ function amendInput(args: string[], projectDir?: string): void {
     const amendment: Amendment = { input: proposal.input, at: isoTimestamp(), words };
     const readers = unitsHearing(pd, proposal.input, before, text);
     const missed: string[] = [];
-    for (const [other, claim] of cachedClaims(pd)) {
+    const cached = cachedClaims(pd);
+    const leads = leadsOwnClaims(pd, readStateFile(pd), cached);
+    for (const [other, claim] of cached) {
       // Only the Units whose stages read it hear it; the proposing team always hears its answer.
-      if (claim.status !== "claimed" || (other !== unit && !readers.has(other))) continue;
+      if (claim.status !== "claimed" || leads.has(other) || (other !== unit && !readers.has(other))) continue;
       const sent = amendClaim(pd, remote, claim, amendment, text, other === unit
         ? (payload) => ({ proposals: (payload.proposals ?? []).map((entry) => (entry.input === proposal.input && entry.answer === undefined ? answered : entry)) })
         : undefined);
-      if (sent === "missed") missed.push(claim.owner);
+      if (sent === "missed") missed.push(builderOf(claim));
     }
     lines.unshift(`The ${name} is changed here. The teams building with it hear it once and carry on; nobody approves anything again.`);
     if (missed.length > 0) {
@@ -8671,10 +8521,10 @@ function amendInput(args: string[], projectDir?: string): void {
     const sent = updateClaimRef(pd, remote, live.ref, createClaimCommit(pd, live.oid, payload), live.oid);
     if (!sent.ok) fail(`${unit}'s claim moved meanwhile: ${sent.refused ?? "try again"}.`);
     invalidateLiveClaimPayloadCache(pd, unit);
-    lines.push(`Turned down ${live.owner}'s change to the ${name}; they hear it once, with your words.`);
+    lines.push(`Turned down ${builderOf(live)}'s change to the ${name}; they hear it once, with your words.`);
   }
   appendAuditEntry("QUESTION_ANSWERED", {
-    Question: `${live.owner} proposes a change to the ${name} for ${unit}`,
+    Question: `${builderOf(live)} proposes a change to the ${name} for ${unit}`,
     Answer: answer === "approve" ? "Approve it" : "Turn it down",
     // The engine's own question this answers, which the row closes (the ledger's answered).
     [QUESTION_TYPE_FIELD]: "unit-amend",
@@ -8717,7 +8567,7 @@ function sendBack(args: string[], projectDir?: string): void {
   }, pd);
   console.log(JSON.stringify({
     unit,
-    notice: `Sent ${unit} back to ${theTeam(live.owner)} with your words. It waits for them here; nothing of it is rebuilt here.`,
+    notice: `Sent ${unit} back to ${builderOf(live)} with your words. It waits for them here; nothing of it is rebuilt here.`,
   }));
 }
 
@@ -8742,7 +8592,7 @@ function turnedDown(args: string[], projectDir?: string): void {
   const sent = updateClaimRef(pd, remote, live.ref, createClaimCommit(pd, live.oid, payload), live.oid);
   if (!sent.ok) fail(`The note could not be put on ${unit}'s claim: ${sent.refused ?? "it moved meanwhile"}. Try again.`);
   invalidateLiveClaimPayloadCache(pd, unit);
-  console.log(JSON.stringify({ unit, notice: `${theTeam(live.owner).replace(/^the/, "The")} hears that ${flags.repo} was turned down, with your words, at its next step.` }));
+  console.log(JSON.stringify({ unit, notice: `${builderOf(live)} hears that ${flags.repo} was turned down, with your words, at their next step.` }));
 }
 
 // The lead says a repo merged the Unit where the merge check cannot see it (a
@@ -9067,7 +8917,7 @@ function signOff(args: string[], projectDir?: string): void {
   if (!sent.ok) fail(`${unit}'s claim moved meanwhile: ${sent.refused ?? "try again"}.`);
   invalidateLiveClaimPayloadCache(pd, unit);
   appendAuditEntry("QUESTION_ANSWERED", {
-    Question: `Sign off ${unit} from ${live.owner}`, Answer: "Sign it off", [QUESTION_TYPE_FIELD]: "unit-signoff", ...lead.fields,
+    Question: `Sign off ${unit} from ${builderOf(live)}`, Answer: "Sign it off", [QUESTION_TYPE_FIELD]: "unit-signoff", ...lead.fields,
   }, pd);
   const merged = (live.payload.verdicts ?? []).length > 0 && live.payload.verdicts!.every((verdict) => verdict.merged);
   console.log(JSON.stringify({
@@ -9109,10 +8959,8 @@ function checkUnitWords(verb: string, args: readonly string[]): void {
   const option = Object.keys(flags).find((key) =>
     key !== "project-dir" && !grammar.options.includes(key) && !switches.has(key)
   );
-  // Past the one word it takes (the Unit's name, or its own word), a word is
-  // the verb's only as a `<unit>=<team>` pair of a verb that takes them.
-  const extra = positional.slice(grammar.name || grammar.word !== undefined ? 1 : 0)
-    .find((word) => grammar.pairs !== true || !/^[^=\s]+=\S/.test(word));
+  // Past the one word it takes (the Unit's name, or its own word), no word is the verb's.
+  const extra = positional[grammar.name || grammar.word !== undefined ? 1 : 0];
   if (option === undefined && extra === undefined) return;
   const word = option !== undefined ? `--${option}` : JSON.stringify(extra);
   console.error(JSON.stringify({ error: `unit ${verb} does not take ${word}`, usage: unitUsage(verb) }));

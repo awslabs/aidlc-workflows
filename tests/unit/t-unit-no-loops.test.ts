@@ -61,6 +61,7 @@ import {
   UNIT,
   UTILITY,
   GIT_ENV,
+  takeIn,
 } from "../harness/team-build.ts";
 import { hostFor } from "../harness/scope-hosts.ts";
 import { AgentStandIn, type Directive, PersonScript } from "../harness/scope-run.ts";
@@ -247,7 +248,6 @@ describe("a step that waits on the person, and every way on the round added, nev
     // The home unreachable: the answer is kept, and trying again holds the Units.
     const other = teamsHome();
     git(other.dir, ["remote", "set-url", "origin", join(other.remote, "gone")]);
-    expect(run(UNIT, ["assign", "refunds=payments", "--person-words", "payments takes refunds"], other.dir).status).toBe(0);
     const kept = next(other.dir);
     expect(kept.kind, JSON.stringify(kept)).toBe("print");
     git(other.dir, ["remote", "set-url", "origin", other.remote]);
@@ -449,7 +449,6 @@ describe("a step that waits on the person, and every way on the round added, nev
 
   test("a take: a Unit the home started is refused with a way on that does not offer it; an open Unit starts for a team the lead named", () => {
     const home = teamsHome();
-    expect(run(UNIT, ["assign", "refunds=payments"], home.dir).status).toBe(0);
     expect(run(UNIT, ["share", "--plan"], home.dir).status).toBe(0);
     const homeStep = next(home.dir);
     expect(homeStep.unit, JSON.stringify(homeStep)).toBe("checkout-ui");
@@ -468,7 +467,6 @@ describe("a step that waits on the person, and every way on the round added, nev
     expect(after.out).not.toContain("Start checkout-ui");
     // An open Unit nobody started, from the default space: started for a team the lead named.
     const other = teamsHome();
-    expect(run(UNIT, ["assign", "refunds=payments", "--open", "checkout-ui"], other.dir).status).toBe(0);
     git(other.dir, ["add", "-A"]);
     git(other.dir, ["commit", "-q", "-m", "teams"]);
     git(other.dir, ["push", "-q", "origin", "main"]);
@@ -483,7 +481,6 @@ describe("a step that waits on the person, and every way on the round added, nev
       "  - name: refunds\n    depends_on: [orders]\n  - name: checkout-ui\n    depends_on: [orders]\n```\n";
     const home = makeHome({ dependencies, state: homeState().replace("- **Skeleton Stance**: off", "- **Skeleton Stance**: on") });
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
-    expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web"], home.dir).status).toBe(0);
     asLeadsOwnCheckout(home.dir);
     git(home.dir, ["add", "-A"]);
     git(home.dir, ["commit", "-q", "-m", "teams"]);
@@ -499,7 +496,7 @@ describe("a step that waits on the person, and every way on the round added, nev
   });
 
   test("mid-stage at the home, the lead says a team's Unit was turned down: the step carries the command, the board reads fresh, and the team hears it", () => {
-    const { home, alice, record } = refundsTaken(["refunds=payments"]);
+    const { home, alice, record } = refundsTaken();
     withTools(home.dir);
     // The lead builds checkout-ui here.
     const own = next(home.dir, ENV);
@@ -555,7 +552,7 @@ describe("a step that waits on the person, and every way on the round added, nev
     git(home.dir, ["add", "-A"]);
     git(home.dir, ["commit", "-q", "-m", "plan approved"]);
     git(home.dir, ["push", "-q", "origin", "main"]);
-    const took = run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD, "--team", "web"], cloneOf(home.remote, "carol"));
+    const took = takeIn("web", ["checkout-ui", "--home", HOME_RECORD], cloneOf(home.remote, "carol"));
     expect(took.status, took.out).toBe(0);
     // A clone made under the lead's own git name is a clone all the same: carrying the work on is not offered there.
     const clone = next(withTools(cloneOf(home.remote, "lead")), ENV);
@@ -598,7 +595,7 @@ describe("a step that waits on the person, and every way on the round added, nev
   });
 
   test("a clone where nothing is ready: words for new work start it, and the take opens once the home moves", () => {
-    const { hosts, home, alice, record } = refundsTaken(["refunds=payments", "checkout-ui=web", "reporting=data"]);
+    const { hosts, home, alice, record } = refundsTaken();
     const dana = withTools(cloneOf(home.remote, "dana"));
     expect(run(UTILITY, ["space-create", "data"], dana).status).toBe(0);
     expect(run(UTILITY, ["space", "data"], dana).status).toBe(0);
@@ -628,13 +625,13 @@ const REPORTING_IN_BOTH = DEPENDENCIES.replace("repos: [billing]\n    depends_on
 
 function earlyThenMerged(how: "squash" | "merge" | "rebase", pushedFirst: boolean) {
   expect(REPORTING_IN_BOTH).not.toBe(DEPENDENCIES);
-  const taken = refundsTaken(undefined, undefined, REPORTING_IN_BOTH);
+  const taken = refundsTaken(undefined, REPORTING_IN_BOTH);
   codeGenerated(taken.alice, taken.record);
   expect(run(UNIT, ["push"], taken.alice).status).toBe(0);
   git(taken.home.dir, ["fetch", "-q", "origin"]);
   const dana = withTools(cloneOf(taken.home.remote, "dana"));
   for (const [name, host] of Object.entries(taken.hosts)) cloneCode(host, dana, name, "dana");
-  const took = run(UNIT, ["take", "reporting", "--home", HOME_RECORD, "--early", "--team", "data"], dana);
+  const took = takeIn("data", ["reporting", "--home", HOME_RECORD, "--early"], dana);
   expect(took.status, took.out).toBe(0);
   const intents = join(dana, "aidlc", "spaces", "data", "intents");
   const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-reporting"))!);
@@ -801,7 +798,6 @@ describe("the take's own line reaches the person with the build's next step, onc
     const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
     const home = makeHome({ repos: hosts });
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
-    expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web"], home.dir).status).toBe(0);
     git(home.dir, ["add", "-A"]);
     git(home.dir, ["commit", "-q", "-m", "teams"]);
     git(home.dir, ["push", "-q", "origin", "main"]);

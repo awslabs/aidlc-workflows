@@ -204,8 +204,6 @@ export type UnitGrammar = {
   name: boolean;
   /** The one word it takes that is not a Unit's name, as its usage shows it (`lead-sign-off on|off`). */
   word?: string;
-  /** It takes `<unit>=<team>` pairs as its words (`assign`). */
-  pairs?: true;
   /** The options the verb reads that take a value, as aidlc-lib.ts parseArgs keys them. */
   options: readonly string[];
   /** The options it reads that take none, so the word after one is never its value. */
@@ -230,10 +228,8 @@ export const UNIT_GRAMMAR: Readonly<Record<string, UnitGrammar>> = {
   },
   assign: {
     name: false,
-    pairs: true,
-    options: ["open", "here", "started-here", "request-file", "person-words"],
-    usage: "unit assign <unit>=<team> [<unit>=<team> ...] [--open <unit>[,<unit>...]] [--started-here <unit>[,<unit>...]] " +
-      "[--request-file <file> | --person-words <text>] | --open | --here <unit>[,<unit>...]",
+    options: ["here", "request-file", "person-words"],
+    usage: "unit assign --here <unit>[,<unit>...] [--request-file <file> | --person-words <text>]",
   },
   claim: {
     name: true,
@@ -305,9 +301,9 @@ export const UNIT_GRAMMAR: Readonly<Record<string, UnitGrammar>> = {
   status: { name: false, options: [], usage: "unit status" },
   take: {
     name: true,
-    options: ["home", "home-space", "team", "from"],
+    options: ["home", "home-space", "from"],
     switches: ["early", "lead-rules"],
-    usage: "unit take <unit> --home <record> [--home-space <space>] [--from <lead's project address>] [--team <label>] [--early] [--lead-rules]",
+    usage: "unit take <unit> --home <record> [--home-space <space>] [--from <lead's project address>] [--early] [--lead-rules]",
   },
   "turned-down": {
     name: true,
