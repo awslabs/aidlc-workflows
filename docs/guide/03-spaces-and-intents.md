@@ -599,8 +599,11 @@ multi-root workspace.
 
 [`/aidlc intent add-repo <name>`](12-cli-commands.md#aidlc-intent-add-repo-name-add-a-sibling-repo-to-work-already-under-way)
 writes this file too. A repo that work needs but nobody cloned here is cloned
-from its entry; a repo with no entry is cloned from `org` (or the address you
-give) and gets one, with the file's comments and layout kept. With no `repos.json` yet, a hosted
+from its entry; a repo with no entry is cloned from the address you give and
+gets one, with the file's comments and layout kept, and without an address you
+are asked for one. A repo that `repos.json` lists by name alone is cloned from
+github.com under the list's org, so a team on GitHub can add a line with the
+repo's name and then add it by name. With no `repos.json` yet, a hosted
 `--url` (a host, an owner and a name) creates one whose `org` is that owner, so
 commit it to share the list with your team. An address written here never keeps
 its credentials.
