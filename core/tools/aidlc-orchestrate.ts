@@ -17199,9 +17199,10 @@ function unitMajorWalkStep(
     }
     return null;
   };
-  // Other Units go on only while the walked Units' own work is reopened (the
-  // person's redo): an approval that is only stale is checked again first.
-  const reopened = units.some((u) => stopFor(u)?.kind === "work");
+  // Before the skeleton's approval, other Units go on only while its own work
+  // is reopened (the person's redo): an approval that is only stale is
+  // checked again first.
+  const reopened = units.length < allUnits.length && units.some((u) => stopFor(u)?.kind === "work");
   const walked = allUnits.filter((u) => units.includes(u) || (reopened && (waitedFor.has(u) || inProgress.has(u))));
   const waiting: UnitMajorWalkStep[] = [];
   const order = [...walked.filter((u) => inProgress.has(u)), ...walked.filter((u) => !inProgress.has(u))];

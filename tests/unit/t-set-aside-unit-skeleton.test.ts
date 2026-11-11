@@ -6,8 +6,8 @@
 // its own step, its plan question and its recorded answer, and a Unit set
 // aside for it is offered again once it is done, as when the skeleton is
 // approved. When the skeleton's approval is only stale (a file it covers
-// changed under Guard Policy strict), its re-check comes first, as on main,
-// and never a set-aside Unit's question that cannot be resumed.
+// changed under Guard Policy strict), its re-check comes first, and never a
+// set-aside Unit's question that cannot be resumed.
 //
 // Driven through the shipped tools; the stage documents and completion rows
 // are written the way t342's helpers write them.
@@ -240,8 +240,8 @@ function planApproved(p: string, unit: string): void {
   expect(next(p).plan_approval).toEqual({ status: "approved" });
 }
 
-// What main does before the re-check: the building Unit's plan answer and its
-// completion are refused, and nothing of it is recorded.
+// Before the re-check: the building Unit's plan answer and its completion are
+// refused, and nothing of it is recorded.
 function refusedUntilRecheck(p: string, unit: string): void {
   personSays(p, "approve");
   const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_UNATTENDED: "0" };
@@ -347,7 +347,7 @@ describe("while the walking skeleton is not approved: the person's redo and go-b
     ownStep(next(p), "alpha");
   });
 
-  test("both at once, the person's redo and a changed file under strict: beta goes on, then alpha's redo, whose checkpoint checks the change", () => {
+  test("both at once, the person's redo and a changed file under strict: beta goes on, then alpha's redo comes back", () => {
     const p = backToBetaBeforeTheRedoStarts(true);
     ownStep(next(p), "beta");
     codeDone(p, "beta");
@@ -423,7 +423,7 @@ describe("while the walking skeleton is not approved: the person's redo and go-b
     ownStep(next(p), "gamma");
   });
 
-  test("nothing set aside, a changed file under strict: the skeleton's re-check comes first, as on main, then beta's plan records", () => {
+  test("nothing set aside, a changed file under strict: the skeleton's re-check comes first, then beta's plan records", () => {
     const p = skeletonChangedWhileBetaBuilds();
     recheck(next(p));
     refusedUntilRecheck(p, "beta");
