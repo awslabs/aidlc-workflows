@@ -31,6 +31,7 @@ import {
   git,
   GIT_ENV,
   HOME_RECORD,
+  homeState,
   makeHome,
   mergeOnHost,
   next,
@@ -88,6 +89,27 @@ function leadsChat(dir: string, options: StandInOptions): Directive {
 }
 
 const isBoard = (d: Directive): boolean => d.kind === "print" && d.board_note !== undefined;
+
+// A live run (Claude Code, Linux): the share question said every Unit was open
+// while the thin slice was the lead's to build and the others waited on it.
+describe("with a thin slice first, the plan is shared once the slice is approved", () => {
+  const isShare = (d: Directive): boolean =>
+    d.kind === "ask" && d.ask_type === "team-handover" && ((d.handovers ?? []) as string[]).includes("share");
+  test("the lead builds the slice through its gates, then the share question comes, its words as today", () => {
+    const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
+    const home = makeHome({ repos: hosts, state: homeState().replace("- **Skeleton Stance**: off", "- **Skeleton Stance**: on") });
+    // Teams chosen and nothing shared yet.
+    const teams = run(STATE, ["set-unit-ownership", "team"], home.dir);
+    expect(teams.status, teams.out).toBe(0);
+    const end = leadsChat(home.dir, { until: isShare });
+    expect(isShare(end), JSON.stringify(end).slice(0, 600)).toBe(true);
+    expect(end.question).toBe(
+      "The Units are open for any team to take. Share the plan with them now? I'd commit the plan here (AI-DLC's record, " +
+        "nothing else of yours) and push main to origin, so each team can take its Unit by opening its own clone and running /aidlc.",
+    );
+    expect(teamBoard(home.dir)).toContain("- checkout-ui, here: done");
+  });
+});
 
 describe("a Unit the lead's project builds reads where its Unit Progress has it", () => {
   test("built through their gates, refunds and reporting read done, and reporting never waits on refunds", () => {

@@ -399,22 +399,38 @@ describe("the walking skeleton is built at the lead's project first, and every o
     for (const unit of UNITS) expect(String(board.narration)).toContain(`- ${unit}, open: waiting for a team to take it`);
   });
 
-  test("on, it is built here first, no question names it, and every other Unit is open", () => {
-    const home = makeHome({ state: homeState().replace("- **Skeleton Stance**: off", "- **Skeleton Stance**: on") });
+  // A live run (Claude Code, Linux): the share question said every Unit was
+  // open while the slice was the lead's to build and the others waited on it.
+  // As main does: its handout line, once, and the share once the slice is approved.
+  const HANDOUT = "No team has taken a Unit yet, so this session builds them here, starting with the checkout ui Unit, " +
+    "the walking skeleton the others build on. Once it is built and approved, I'll offer to share the work so each team can take one of the others.";
+  const SHARE = "The Units are open for any team to take. Share the plan with them now? I'd commit the plan here (AI-DLC's record, " +
+    "nothing else of yours) and push main to origin, so each team can take its Unit by opening its own clone and running /aidlc.";
+  const sliceOn = () => makeHome({ state: homeState().replace("- **Skeleton Stance**: off", "- **Skeleton Stance**: on") });
+  // Once the slice is approved the share question comes as today (t-unit-board).
+  test("on and not approved: the lead's look says main's handout line once, builds the slice, and puts no share question", () => {
+    const home = sliceOn();
     chooseTeams(home.dir);
-    const ask = next(home.dir);
-    expect(isShare(ask), JSON.stringify(ask)).toBe(true);
-    expect(String(ask.question)).not.toContain("first");
-    expect(String(ask.question)).not.toContain("walking skeleton");
-    share(home.dir);
-    // The skeleton is the first Unit of the plan's first batch, checkout-ui.
-    expect(next(home.dir)).toMatchObject({ kind: "run-stage", unit: "checkout-ui" });
-    const board = run(ORCH, ["team-board"], home.dir);
-    expect(board.status, board.out).toBe(0);
-    expect(board.stdout).toContain("- refunds, open: waiting for a team to take it");
-    expect(board.stdout).toContain("- reporting, open: waiting for a team to take it");
-    expect(board.stdout).not.toContain("- checkout-ui, open");
+    const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "lead-slice" };
+    const first = next(home.dir, chat);
+    expect(isShare(first), JSON.stringify(first).slice(0, 600)).toBe(false);
+    expect(first).toMatchObject({ kind: "run-stage", unit: "checkout-ui" });
+    expect((first.change_notices ?? []) as string[], JSON.stringify(first).slice(0, 900)).toContain(HANDOUT);
+    const again = next(home.dir, chat);
+    expect(isShare(again), JSON.stringify(again).slice(0, 600)).toBe(false);
+    expect(JSON.stringify(again)).not.toContain(HANDOUT);
     expect(stance(home.dir)).toBe("on");
+  });
+
+  test("on, then the lead leaves it to the teams (the slice turned off): the share question comes at once, as today", () => {
+    const home = sliceOn();
+    chooseTeams(home.dir);
+    expect(isShare(next(home.dir))).toBe(false);
+    const off = run(ORCH, ["report", "--skeleton-stance", "off"], home.dir);
+    expect(off.status, off.out).toBe(0);
+    const ask = next(home.dir);
+    expect(isShare(ask), JSON.stringify(ask).slice(0, 600)).toBe(true);
+    expect(ask.question).toBe(SHARE);
   });
 
   // The skeleton's approvals at the lead's project come before the board, and

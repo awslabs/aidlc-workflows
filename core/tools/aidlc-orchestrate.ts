@@ -808,7 +808,7 @@ import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts
 import { unitMemoryPath, unitStageMemoryPath } from "./aidlc-stage-diary.ts";
 import { bringStateUpToDate } from "./aidlc-state-upgrade.ts";
 import { renderEngineInvocation, sameGuardOperation } from "./aidlc-guard-operation.ts";
-import { claimedCheckoutMovesElsewhere, claimedCheckoutReopens } from "./aidlc-unit-landing.ts";
+import { claimedCheckoutMovesElsewhere, claimedCheckoutReopens, completedUnits } from "./aidlc-unit-landing.ts";
 import { isHookPreDispatch, withAuditLock } from "./aidlc-locks.ts";
 import {
   askedQuestionFields,
@@ -5732,8 +5732,14 @@ function constructionStaffingAsk(
   if (teams && teamsClone(projectDir, stateContent)) return null;
   // Teams building each Unit as work of their own: every Unit is open, and the
   // step goes on to the plan's share and the board, or a Unit the lead's walk
-  // builds, which offer the rhythm.
-  if (teams && homeLocation(stateContent) !== null) return null;
+  // builds, which offer the rhythm. While a thin slice is built here first, the
+  // share waits for its approval (buildOutShareOffer) and main's line says so.
+  if (teams && homeLocation(stateContent) !== null) {
+    const slice = sliceBuiltFirst(projectDir, stateContent);
+    const handout = slice === null ? null : teamHandoutLine(projectDir, stateContent, slice);
+    if (handout !== null) sayWithStepOnce(projectDir, handout);
+    return null;
+  }
   const evidence = routingEvidenceFor(projectDir, stateContent);
   const dag = resolveBoltBatches(projectDir, evidence);
   if (dag.state !== "ok" || dag.units.length < 2) return null;
@@ -5903,6 +5909,24 @@ function teamShareOffer(
   });
 }
 
+// The thin slice (the walking skeleton) the lead's project builds first, while
+// it is not approved yet: the plan's first Unit, which every other one waits
+// on. Null when the slice is off or done.
+function sliceBuiltFirst(projectDir: string, stateContent: string): string | null {
+  if (!teamSkeletonOn(stateContent)) return null;
+  const dag = resolveBoltDag(projectDir);
+  const first = dag.state === "ok" ? dag.batches[0]?.[0] ?? null : null;
+  if (first === null) return null;
+  // Its approval as the step's own Unit Progress has it, before the file's projection catches up.
+  let progress = stateContent;
+  try {
+    progress = deriveTeamUnitProgressModel(projectDir, stateContent, sortAttemptEvents(readAuditShardEvents(projectDir))).section;
+  } catch {
+    // The file's own rows stand.
+  }
+  return completedUnits(progress).has(first) ? null : first;
+}
+
 // At a home whose teams build across repos: every Unit is open, and the plan
 // reaches the teams' clones only once the home's main is pushed, so main's
 // share question is put here too, once; Not now is kept. A Unit the lead adds
@@ -5915,6 +5939,8 @@ function buildOutShareOffer(projectDir: string): AskDirective | null {
   const target = shareOfferTarget(projectDir);
   if (target === null) return null;
   const added = planUnshared(projectDir, target) ? null : unitsNotShared(projectDir, target);
+  // A thin slice built here first: nothing is open to a team until it is approved, so the plan is shared then, as main does.
+  if (added === null && sliceBuiltFirst(projectDir, readStateFile(projectDir)) !== null) return null;
   if (added !== null && added.length === 0) return null;
   const mark = teamHandoverMarkName("share", added === null ? "plan" : `plan-${added.join("-")}`);
   if (handoverOffered(projectDir, mark)) return null;
