@@ -900,7 +900,7 @@ Utilities:
   plugin sync       Compose installed plugins into the current install
   plugin validate [path]  Validate authored plugin content (--with <base-root> checks a base plugin's agents; --json for structured output)
   plugin build <harness> [outDir]  Build a host plugin projection (--plugin-root <path>)
-  knowledge onboard [path]  Index customer documents into the space DocumentKB
+  knowledge onboard [path ...]  Index customer documents into the space DocumentKB
   knowledge sync    Reconcile the catalog with disk; retries extractor_unavailable rows
   knowledge list    The DocumentKB catalog (--json for structured output)
   knowledge show <id>  One document's record, plus its extracted text
@@ -10869,6 +10869,24 @@ function gitIgnoredAmong(projectRoot: string, absPaths: string[]): Set<string> {
   );
 }
 
+/** Which cap a set of documents would pass, or null when none. */
+type KnowledgeCopyCapBreach =
+  | { cap: "document"; file: string; size: number }
+  | { cap: "count"; count: number }
+  | { cap: "bytes"; count: number; bytes: number };
+
+function knowledgeCopyCapBreach(
+  entries: ReadonlyArray<{ file: string; size: number }>,
+  kb: typeof import("./aidlc-knowledge.ts"),
+): KnowledgeCopyCapBreach | null {
+  const big = entries.find((entry) => entry.size > kb.EXTRACT_INPUT_BYTE_CAP);
+  if (big !== undefined) return { cap: "document", file: big.file, size: big.size };
+  if (entries.length > kb.EXTRACT_BATCH_DOC_CAP) return { cap: "count", count: entries.length };
+  const bytes = entries.reduce((total, entry) => total + entry.size, 0);
+  if (bytes > kb.EXTRACT_BATCH_BYTE_CAP) return { cap: "bytes", count: entries.length, bytes };
+  return null;
+}
+
 /**
  * Why the engine will not copy what the person named: a single document over
  * the per-document cap, or a folder over a batch cap. Checked BEFORE the copy,
@@ -10882,22 +10900,19 @@ function knowledgeCopyCapRefusal(
   kb: typeof import("./aidlc-knowledge.ts"),
 ): string | null {
   const smaller = "Name a subfolder, or one document at a time.";
-  const big = entries.find((entry) => entry.size > kb.EXTRACT_INPUT_BYTE_CAP);
-  if (big !== undefined) {
-    return `${toPosix(relative(projectDir, big.file))} is ${big.size} bytes, over the ` +
+  const breach = knowledgeCopyCapBreach(entries, kb);
+  if (breach === null) return null;
+  if (breach.cap === "document") {
+    return `${toPosix(relative(projectDir, breach.file))} is ${breach.size} bytes, over the ` +
       `${kb.EXTRACT_INPUT_BYTE_CAP}-byte per-document cap; nothing was copied. Split it or reduce it ` +
       "below the cap, then name it again.";
   }
-  if (entries.length > kb.EXTRACT_BATCH_DOC_CAP) {
-    return `${shown} holds ${entries.length} documents, over the ${kb.EXTRACT_BATCH_DOC_CAP}-document ` +
+  if (breach.cap === "count") {
+    return `${shown} holds ${breach.count} documents, over the ${kb.EXTRACT_BATCH_DOC_CAP}-document ` +
       `batch cap; nothing was copied or indexed. ${smaller}`;
   }
-  const bytes = entries.reduce((total, entry) => total + entry.size, 0);
-  if (bytes > kb.EXTRACT_BATCH_BYTE_CAP) {
-    return `${shown} holds ${entries.length} documents of ${bytes} bytes, over the ` +
-      `${kb.EXTRACT_BATCH_BYTE_CAP}-byte batch cap; nothing was copied or indexed. ${smaller}`;
-  }
-  return null;
+  return `${shown} holds ${breach.count} documents of ${breach.bytes} bytes, over the ` +
+    `${kb.EXTRACT_BATCH_BYTE_CAP}-byte batch cap; nothing was copied or indexed. ${smaller}`;
 }
 
 /** What the command layer copied in for the person, for the line it says. */
@@ -10911,22 +10926,27 @@ export interface KnowledgeDocumentCopy {
   leftOut: number;
 }
 
-export function copyNamedDocumentIntoKnowledge(
+/** A named document or folder, read for copying but not yet copied. */
+interface NamedDocumentCopyPlan {
+  real: string;
+  shown: string;
+  folder: boolean;
+  gitIgnored: "yes" | "no" | "unknown";
+  copyable: Array<{ file: string; size: number }>;
+  leftOut: number;
+}
+
+function planNamedDocumentCopy(
   projectDir: string,
   kb: typeof import("./aidlc-knowledge.ts"),
-  space: string,
   absPath: string,
-): KnowledgeDocumentCopy | { refusal: string } {
-  const documentsReal = ensureKnowledgeDocumentsFolder(projectDir, kb, space);
+): NamedDocumentCopyPlan {
   const shown = toPosix(relative(projectDir, absPath));
   const gitIgnored = documentInputGitIgnored(projectDir, shown);
   const real = realpathSync(absPath);
   const named = statSync(real);
   if (!named.isDirectory()) {
-    const refusal = knowledgeCopyCapRefusal(projectDir, shown, [{ file: real, size: named.size }], kb);
-    if (refusal !== null) return { refusal };
-    const { target } = copyIntoDocuments(kb, documentsReal, basename(real), readFileSync(real));
-    return { target, files: 1, gitIgnored, leftOut: 0 };
+    return { real, shown, folder: false, gitIgnored, copyable: [{ file: real, size: named.size }], leftOut: 0 };
   }
   const found: Array<{ file: string; size: number }> = [];
   for (const file of kb.walkDocuments(real)) {
@@ -10942,10 +10962,18 @@ export function copyNamedDocumentIntoKnowledge(
     ? gitIgnoredAmong(projectDir, found.map((entry) => entry.file))
     : new Set<string>();
   const copyable = found.filter((entry) => !ignoredInside.has(entry.file));
-  const refusal = knowledgeCopyCapRefusal(projectDir, shown, copyable, kb);
-  if (refusal !== null) return { refusal };
-  if (copyable.length === 0) {
-    throw new Error(`${shown} holds no documents to add`);
+  return { real, shown, folder: true, gitIgnored, copyable, leftOut: found.length - copyable.length };
+}
+
+function carryOutNamedDocumentCopy(
+  kb: typeof import("./aidlc-knowledge.ts"),
+  documentsReal: string,
+  plan: NamedDocumentCopyPlan,
+): KnowledgeDocumentCopy {
+  const { real, gitIgnored, copyable, leftOut } = plan;
+  if (!plan.folder) {
+    const { target } = copyIntoDocuments(kb, documentsReal, basename(real), readFileSync(real));
+    return { target, files: 1, gitIgnored, leftOut };
   }
   // A folder of its own name, never merged into one already there: the copy is
   // this folder as it is now, not a blend of two.
@@ -10962,7 +10990,105 @@ export function copyNamedDocumentIntoKnowledge(
     mkdirSync(dirname(target), { recursive: true });
     writeFileSync(target, readFileSync(entry.file), { flag: "wx" });
   }
-  return { target: root, files: copyable.length, gitIgnored, leftOut: found.length - copyable.length };
+  return { target: root, files: copyable.length, gitIgnored, leftOut };
+}
+
+export function copyNamedDocumentIntoKnowledge(
+  projectDir: string,
+  kb: typeof import("./aidlc-knowledge.ts"),
+  space: string,
+  absPath: string,
+): KnowledgeDocumentCopy | { refusal: string } {
+  const documentsReal = ensureKnowledgeDocumentsFolder(projectDir, kb, space);
+  const plan = planNamedDocumentCopy(projectDir, kb, absPath);
+  const refusal = knowledgeCopyCapRefusal(projectDir, plan.shown, plan.copyable, kb);
+  if (refusal !== null) return { refusal };
+  if (plan.folder && plan.copyable.length === 0) {
+    throw new Error(`${plan.shown} holds no documents to add`);
+  }
+  return carryOutNamedDocumentCopy(kb, documentsReal, plan);
+}
+
+/**
+ * Several documents or folders named in one onboard, copied in together. Each
+ * is checked on its own first, and one that cannot be copied (an empty folder,
+ * or one over a cap by itself) is left out with why, so it never costs the
+ * person the others. The rest, with the named paths already under
+ * `documents/` (`inPlace`), are one batch: over a batch cap together, nothing
+ * is copied, because the verb would refuse them after the copies were made.
+ */
+export function copyNamedDocumentsIntoKnowledge(
+  projectDir: string,
+  kb: typeof import("./aidlc-knowledge.ts"),
+  space: string,
+  toCopy: readonly string[],
+  inPlace: readonly string[],
+  namedCount: number,
+): { outcomes: Array<KnowledgeDocumentCopy | { reason: string }> } | { refusal: string } {
+  const documentsReal = ensureKnowledgeDocumentsFolder(projectDir, kb, space);
+  const plans = toCopy.map((absPath): NamedDocumentCopyPlan | { reason: string } => {
+    const plan = planNamedDocumentCopy(projectDir, kb, absPath);
+    const breach = knowledgeCopyCapBreach(plan.copyable, kb);
+    if (breach?.cap === "document") {
+      const which = breach.file === plan.real ? "it" : `${toPosix(relative(projectDir, breach.file))} in it`;
+      return { reason: `${which} is ${breach.size} bytes, over the ${kb.EXTRACT_INPUT_BYTE_CAP}-byte per-document cap` };
+    }
+    if (breach?.cap === "count") {
+      return { reason: `it holds ${breach.count} documents, over the ${kb.EXTRACT_BATCH_DOC_CAP}-document batch cap` };
+    }
+    if (breach?.cap === "bytes") {
+      return {
+        reason: `it holds ${breach.count} documents of ${breach.bytes} bytes, over the ` +
+          `${kb.EXTRACT_BATCH_BYTE_CAP}-byte batch cap`,
+      };
+    }
+    if (plan.folder && plan.copyable.length === 0) {
+      return { reason: plan.leftOut > 0 ? "every file in it is kept out of git" : "it holds no documents" };
+    }
+    return plan;
+  });
+  const batch = new Map<string, { file: string; size: number }>();
+  for (const plan of plans) {
+    if ("reason" in plan) continue;
+    for (const entry of plan.copyable) batch.set(entry.file, entry);
+  }
+  const inPlaceFiles = inPlace.flatMap((absPath) => {
+    const real = realpathSync(absPath);
+    return statSync(real).isDirectory() ? kb.walkDocuments(real) : [real];
+  });
+  for (const work of kb.onboardBatchWork(projectDir, space, inPlaceFiles)) {
+    batch.set(work.abs, { file: work.abs, size: work.bytes });
+  }
+  const together = knowledgeCopyCapBreach(
+    [...batch.values()].filter((entry) => entry.size <= kb.EXTRACT_INPUT_BYTE_CAP),
+    kb,
+  );
+  if (together?.cap === "count") {
+    return {
+      refusal: `The ${namedCount} paths you named hold ${together.count} documents, over the ` +
+        `${kb.EXTRACT_BATCH_DOC_CAP}-document batch cap; nothing was copied or indexed. Name ` +
+        `${kb.EXTRACT_BATCH_DOC_CAP} or fewer documents at a time.`,
+    };
+  }
+  if (together?.cap === "bytes") {
+    return {
+      refusal: `The ${namedCount} paths you named hold ${together.count} documents of ${together.bytes} bytes, ` +
+        `over the ${kb.EXTRACT_BATCH_BYTE_CAP}-byte batch cap; nothing was copied or indexed. Name fewer ` +
+        "documents at a time.",
+    };
+  }
+  // The same original named twice is one copy.
+  const copied = new Map<string, KnowledgeDocumentCopy>();
+  return {
+    outcomes: plans.map((plan) => {
+      if ("reason" in plan) return plan;
+      const earlier = copied.get(plan.real);
+      if (earlier !== undefined) return earlier;
+      const copy = carryOutNamedDocumentCopy(kb, documentsReal, plan);
+      copied.set(plan.real, copy);
+      return copy;
+    }),
+  };
 }
 
 // Why an onboarded document came back with no text, in the person's terms.

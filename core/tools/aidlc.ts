@@ -1047,7 +1047,7 @@ export const ROUTES: readonly Route[] = [
       { command: "knowledge <verb>", summary: "index and read customer documents" },
     ],
     all: [
-      "onboard [path]", "sync", "list", "show <id>",
+      "onboard [path ...]", "sync", "list", "show <id>",
       "associate <id> --intent [slug]", "dissociate <id> --intent [slug]",
       "rebind <id> --to <path>",
       "summarize <id> --text-file <path> --source-revision <sha256>",
@@ -3274,44 +3274,45 @@ async function runSensorScriptFile(
 }
 
 /**
- * `knowledge onboard <path>` for a document the person named outside the
+ * `knowledge onboard <path> ...` for documents the person named outside the
  * space's `documents/` folder: the copy happens here, at the command layer, and
- * the verb then indexes the copy. Before this, the knowledge tool refused and
+ * the verb then indexes the copies. Before this, the knowledge tool refused and
  * told the person to make the folder and copy the file themselves, which is
  * work the engine can do for them. The copy lives in aidlc-utility.ts, which
  * already owns it for `document-input --onboard`; the knowledge module is left
  * alone, so its own writes stay confined to `documentkb/`.
  *
  * Only a path inside the project is copied. A path outside it, a symlink that
- * leaves it, and a path already under `documents/` all reach the verb
- * unchanged: the first two are refused there as before, and the last is
- * indexed where it lies. The returned args carry the copy's path and what to
- * say about it. A document over the per-document cap, or a folder over a batch
- * cap, is refused here instead: the refusal is said and nothing is copied, so
- * the verb's own after-the-fact refusal no longer leaves copies behind.
+ * leaves it, a path that does not exist and a path already under `documents/`
+ * all reach the verb unchanged: the verb refuses the first three, or names
+ * them when several were named, and indexes the last where it lies. A document
+ * over the per-document cap, or a folder over a batch cap, is refused here
+ * instead, before anything is copied. With several paths, one that cannot be
+ * copied is left out with why and the rest go in; together over a batch cap,
+ * nothing is copied. `--copied` tells the verb what was copied and left out.
  */
-// The knowledge verbs' flags that take a value, so the path is found as the
-// one token that is neither a flag nor a flag's value.
+// The knowledge verbs' flags that take a value, so the paths are found as the
+// tokens that are neither a flag nor a flag's value.
 const KNOWLEDGE_VALUE_FLAGS = new Set([
-  "--space", "--to", "--text-file", "--source-revision", "--project-dir",
-  "--copied-from", "--copied-ignored", "--copied-left-out",
+  "--space", "--to", "--text-file", "--source-revision", "--project-dir", "--copied",
 ]);
 
-function knowledgePositionalAt(args: readonly string[]): number {
+function knowledgePositionals(args: readonly string[]): number[] {
+  const found: number[] = [];
   for (let index = 1; index < args.length; index++) {
     const token = args[index];
     if (token.startsWith("--")) continue;
     if (KNOWLEDGE_VALUE_FLAGS.has(args[index - 1])) continue;
     // `--intent` takes an optional value: a token after it is that value.
     if (args[index - 1] === "--intent") continue;
-    return index;
+    found.push(index);
   }
-  return -1;
+  return found;
 }
 
 async function withNamedDocumentCopied(args: string[]): Promise<string[] | { refusal: string }> {
   if (args[0] !== "onboard") return args;
-  const at = knowledgePositionalAt(args);
+  const positions = knowledgePositionals(args);
   try {
     const kb = await import("./aidlc-knowledge.ts");
     const utility = await import("./aidlc-utility.ts");
@@ -3321,28 +3322,56 @@ async function withNamedDocumentCopied(args: string[]): Promise<string[] | { ref
     // The folder the verb reads from is the person's to fill, and an empty one
     // is not a refusal: a sweep of it simply finds nothing to add.
     utility.ensureKnowledgeDocumentsFolder(projectDir, kb, space);
-    if (at === -1) return args;
-    const given = args[at];
-    const absolute = isAbsolute(given) ? given : resolve(projectDir, given);
-    if (!existsSync(absolute)) return args;
-    const real = realpathSync(absolute);
-    const inside = (root: string): boolean =>
-      real === root || real.startsWith(root.endsWith(sep) ? root : `${root}${sep}`);
-    if (!inside(realpathSync(projectDir))) return args;
+    const projectReal = realpathSync(projectDir);
     const documents = kb.documentsDir(projectDir, space);
-    if (existsSync(documents) && inside(realpathSync(documents))) return args;
-    const copied = utility.copyNamedDocumentIntoKnowledge(projectDir, kb, space, absolute);
-    // Over a cap: the person hears why in their own terms, and nothing was
-    // copied, so a retry adds no second folder.
-    if ("refusal" in copied) return copied;
+    const documentsReal = existsSync(documents) ? realpathSync(documents) : undefined;
+    const inside = (root: string, real: string): boolean =>
+      real === root || real.startsWith(root.endsWith(sep) ? root : `${root}${sep}`);
+    const named = positions.map((at, place) => {
+      const given = args[at];
+      const absolute = isAbsolute(given) ? given : resolve(projectDir, given);
+      if (!existsSync(absolute)) return { at, place, given, absolute, route: "verb" as const };
+      const real = realpathSync(absolute);
+      if (!inside(projectReal, real)) return { at, place, given, absolute, route: "verb" as const };
+      if (documentsReal !== undefined && inside(documentsReal, real)) {
+        return { at, place, given, absolute, route: "in-place" as const };
+      }
+      return { at, place, given, absolute, route: "copy" as const };
+    });
+    const toCopy = named.filter((entry) => entry.route === "copy");
+    if (toCopy.length === 0) return args;
+    if (positions.length === 1) {
+      const [one] = toCopy;
+      const copied = utility.copyNamedDocumentIntoKnowledge(projectDir, kb, space, one.absolute);
+      // Over a cap: the person hears why in their own terms, and nothing was
+      // copied, so a retry adds no second folder.
+      if ("refusal" in copied) return copied;
+      const next = [...args];
+      next[one.at] = copied.target;
+      const copies = [{ from: one.given, to: copied.target, ignored: copied.gitIgnored, leftOut: copied.leftOut }];
+      return [...next, "--copied", JSON.stringify({ copies })];
+    }
+    const planned = utility.copyNamedDocumentsIntoKnowledge(
+      projectDir, kb, space,
+      toCopy.map((entry) => entry.absolute),
+      named.filter((entry) => entry.route === "in-place").map((entry) => entry.absolute),
+      positions.length,
+    );
+    if ("refusal" in planned) return planned;
     const next = [...args];
-    next[at] = copied.target;
-    return [
-      ...next,
-      "--copied-from", given,
-      "--copied-ignored", copied.gitIgnored,
-      ...(copied.leftOut > 0 ? ["--copied-left-out", String(copied.leftOut)] : []),
-    ];
+    const copies: Array<{ from: string; to: string; ignored: string; leftOut: number }> = [];
+    const notAdded: Array<{ at: number; path: string; reason: string }> = [];
+    toCopy.forEach((entry, index) => {
+      const outcome = planned.outcomes[index];
+      if ("reason" in outcome) {
+        notAdded.push({ at: entry.place, path: entry.given, reason: outcome.reason });
+        return;
+      }
+      next[entry.at] = outcome.target;
+      if (copies.some((copy) => copy.to === outcome.target)) return;
+      copies.push({ from: entry.given, to: outcome.target, ignored: outcome.gitIgnored, leftOut: outcome.leftOut });
+    });
+    return [...next, "--copied", JSON.stringify({ copies, notAdded })];
   } catch {
     // Nothing copied and nothing said: the verb runs on what it was given and
     // reports its own refusal.
