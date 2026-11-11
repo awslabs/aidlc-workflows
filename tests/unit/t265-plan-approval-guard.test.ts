@@ -3864,6 +3864,14 @@ describe("t265b hook lifecycle", () => {
         const result = runHook(proj, BASH(command));
         expect({ code: result.code, stderr: result.stderr.trim() }, command).toEqual({ code: 2, stderr: unread });
       }
+      // A patch the walk read stays read when the rest of the line is read as
+      // before, and a program the walk never takes is not apply_patch's.
+      for (const command of [
+        `apply_patch <<'PATCH'\n${patch(["*** Add File: /tmp/t265-outside.js", "+x"])}\nPATCH\nnode /tmp/t265-outside.js`,
+        `./apply_patch <<'PATCH'\n${patch([`*** Add File: ${plan}`, "+# Plan"])}\nPATCH`,
+      ]) {
+        expect(runHook(proj, BASH(command)).code, command).toBe(0);
+      }
       // A heredoc with something else in its pipeline is read as before.
       expect(runHook(proj, BASH(`apply_patch <<'PATCH' | tee log.txt\n${patch(add(plan))}\nPATCH`)).stderr)
         .toContain("Code generation cannot modify workspace paths");

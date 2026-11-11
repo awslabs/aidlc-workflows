@@ -2026,8 +2026,9 @@ export function unseenPatch(text: string, read: number): "bare" | "held" | null 
   for (const segment of shellCommandSegments(text)) {
     const invocation = shellInvocation(shellWords(withoutRedirections(segment)));
     if (!invocation || (invocation.name !== "apply_patch" && invocation.name !== "applypatch") || invocation.args.length > 0) continue;
-    if (segment.includes("<<")) held = true;
-    else bare++;
+    if (!segment.includes("<<")) bare++;
+    // Only a call the walk could take: any other spelling names another program.
+    else if ((invocation.executable ?? invocation.name) === invocation.name) held = true;
   }
   return bare > read ? "bare" : held ? "held" : null;
 }

@@ -2191,7 +2191,9 @@ async function mutationIntent(
     // An apply_patch whose patch the command holds writes what its patch names;
     // one fed its patch later, or a heredoc the reading kept, writes what
     // nobody has read.
-    const unseen = powerShellLine ? null : unseenPatch(read, reading?.patches.length ?? 0);
+    // Read from the walk's text even where the rest of the line is read as before.
+    const walked = powerShellLine ? null : reading ?? heredocReading(command);
+    const unseen = walked === null ? null : unseenPatch(walked.text, walked.patches.length);
     patchUnseen = unseen === "bare";
     const dynamic =
       shellUsesDynamicEvaluation(analysed) ||
