@@ -11137,6 +11137,25 @@ function claimsOpenAtPlanChange(projectDir: string, stateContent: string, target
     "again first.";
 }
 
+// Main moving on past the Unit stages while teams build them: one line naming
+// each Unit still open there and whose it is, as the board names them. The
+// jump tool says it with its own line (handleExecute). null when none is.
+export function unitsStillOpenLine(projectDir: string): string | null {
+  let overview: UnitClaimOverview;
+  try {
+    overview = cachedUnitClaimOverview(projectDir, { writeCache: false });
+  } catch {
+    return null;
+  }
+  const taken = [...overview.claimed].sort((a, b) => compareBoardKeys(a.unit, b.unit));
+  const untaken = [...overview.claimable, ...overview.waiting.map((row) => row.unit)].sort(compareBoardKeys);
+  const open = [
+    ...taken.map((claim) => `${claim.unit} (${claim.owner})`),
+    ...untaken.map((unit) => `${unit}, not taken yet`),
+  ];
+  return open.length === 0 ? null : `Still open on main, and landing as they finish: ${open.join("; ")}.`;
+}
+
 // Main is redoing a stage that comes before the per-Unit block (Units
 // Generation reopened to change the Unit plan): its own step runs, whatever
 // the team's claims; the dispatcher board holds main again from the block on.
@@ -13998,7 +14017,14 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
         const unitWorkLeft = dag.state === "ok" &&
           dag.batches.flat().some((unit) => !model.mergedUnits.has(unit));
         const teamsTakeUnits = cachedClaimFanoutActive(pd) || teamSharedHere(pd) || planMadeElsewhere(pd);
-        if (board.awaitingMerge.length > 0 || (unitWorkLeft && teamsTakeUnits)) {
+        // Main moved on past the Unit stages while teams build them: its own
+        // step is the walk's, and each Unit still lands through the offer above
+        // as it finishes. A teammate's clone of it came for a Unit and keeps
+        // the board.
+        const lastUnitStage = constructionUnitMajorBlock(scope, stateContent, true).at(-1);
+        const mainMovedOn = lastUnitStage !== undefined && cursorPastStage(stateContent, lastUnitStage.slug) &&
+          !planMadeElsewhere(pd);
+        if (board.awaitingMerge.length > 0 || (unitWorkLeft && teamsTakeUnits && !mainMovedOn)) {
           lastSeen();
           emit(noticeDirective(
             renderTeamConstructionBoard(board, "dispatcher"),
@@ -19503,6 +19529,11 @@ function emitJumpDirective(
         `${direction === "backward" ? " and the steps after it" : ""} for every unit.`
       : "";
     const everyUnitLine = everyUnitSaid ? ` Then tell the person in one line: "${everyUnitSaid}"` : "";
+    // Whether a team has taken a Unit decides what a move ahead keeps
+    // (handleExecute), so it reads the teams' claims as the remote has them now.
+    if (direction === "forward" && isTeamUnitOwnership(unitMajorState) && !isReadOnlyEngineProbe()) {
+      refreshClaimRefs(projectDir);
+    }
     const unitMajor = direction === "forward"
       ? unitMajorForwardJump(projectDir, scope, unitMajorState, targetSlug, flags.everyUnit === true)
       : null;
