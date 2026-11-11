@@ -608,6 +608,7 @@ import { broughtFileNames, broughtFilesNote, unheardBroughtFilesLine } from "./a
 import { newChatStep } from "./aidlc-new-chat.ts";
 import { resolveSwarmCheckpoint, swarmBuildingChat } from "./aidlc-swarm-checkpoints.ts";
 import {
+  belowRepoTop,
   cachedUnitClaimOverview,
   claimsOpenHere,
   defaultTeamLabel,
@@ -5666,6 +5667,8 @@ function teamHandoutLine(projectDir: string, stateContent: string, first: string
   // With a remote, the step that starts a Unit here offers to share the work
   // (teamShareOffer); without one, the line says how.
   const offered = shareBlocker(projectDir) === null;
+  // Below its repository's top no team can take one (belowRepoTop), so the line says that instead.
+  const below = offered ? null : belowRepoTop(projectDir);
   const take = `each team then runs \`${entrySkillInvocation()}\` in its own clone to take one.`;
   const building = `No team has taken a Unit yet, so this session builds them here, starting with the ` +
     `${unitPlainName(first)} Unit`;
@@ -5673,10 +5676,10 @@ function teamHandoutLine(projectDir: string, stateContent: string, first: string
     return offered
       ? `${building}, the walking skeleton the others build on. Once it is built and approved, I'll offer to share ` +
         "the work so each team can take one of the others."
-      : `${building}, the walking skeleton the others build on. To hand the others to teams, share this work ` +
-        `through git once it is built and approved; ${take}`;
+      : `${building}, the walking skeleton the others build on. ${below ?? "To hand the others to teams, share " +
+        `this work through git once it is built and approved; ${take}`}`;
   }
-  return offered ? null : `${building}. To hand Units to teams instead, share this work through git; ${take}`;
+  return offered ? null : `${building}. ${below ?? `To hand Units to teams instead, share this work through git; ${take}`}`;
 }
 
 // What reading a large repo set costs, said once with the step that starts
