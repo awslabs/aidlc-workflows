@@ -250,6 +250,30 @@ describe("the plan's share fits the team's own git: a protected main, a branch o
     expect(isShare(again), JSON.stringify(again).slice(0, 600)).toBe(true);
   });
 
+  // Off the branch the share commits AI-DLC's record only, by pathspec, typed with --plan or not.
+  test("a lead on a branch of their own: the share commits AI-DLC's record there and nothing else of theirs, pushes nothing, and says how it reaches main", () => {
+    for (const args of [["share", "--plan"], ["share"]]) {
+      const home = makeHome();
+      git(home.dir, ["switch", "-q", "-c", "plan-review"]);
+      chooseTeams(home.dir);
+      writeFileSync(join(home.dir, "z-deploy.env"), "KEY=1\n");
+      writeFileSync(join(home.dir, "staged-only.txt"), "staged\n");
+      git(home.dir, ["add", "staged-only.txt"]);
+      const before = git(home.remote, ["rev-parse", "main"]);
+      const shared = run(UNIT, args, home.dir);
+      expect(shared.status, shared.out).not.toBe(0);
+      expect(shared.json?.error, args.join(" ")).toBe(`This checkout is on plan-review, not main. ${WAY_ON}`);
+      expect(git(home.remote, ["rev-parse", "main"])).toBe(before);
+      expect(git(home.remote, ["branch", "--list", "plan-review"])).toBe("");
+      expect(git(home.dir, ["log", "-1", "--format=%s"])).toBe("Share the plan with the teams");
+      expect(git(home.dir, ["status", "--porcelain", "--", "aidlc"])).toBe("");
+      const went = git(home.dir, ["diff-tree", "-r", "--no-commit-id", "--name-only", "HEAD"]).split("\n").filter(Boolean);
+      expect(went.filter((path) => !path.startsWith("aidlc/")), went.join(", ")).toEqual([]);
+      expect(git(home.dir, ["diff", "--cached", "--name-only"])).toBe("staged-only.txt");
+      expect(git(home.dir, ["status", "--porcelain", "--", "z-deploy.env"])).toBe("?? z-deploy.env");
+    }
+  });
+
   test("a file the person staged stays theirs, staged, and the share counts what it committed", () => {
     const home = makeHome();
     chooseTeams(home.dir);

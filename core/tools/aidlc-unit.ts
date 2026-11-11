@@ -5483,24 +5483,32 @@ export function skeletonHeldBackOnShare(projectDir: string): string | null {
 
 // Whether a share can run here: team work, a checkout holding no Unit claim, a
 // remote, and HEAD on the integration branch. Null when it can; the reason
-// otherwise. The share offer is put only where this is null.
-export function shareBlocker(projectDir: string): string | null {
+// otherwise, with `off` when the one reason is HEAD on another branch (the
+// share then commits AI-DLC's record there and pushes nothing, shareMain).
+// The share offer is put only where this is null.
+export function shareRefusal(projectDir: string): { reason: string; off?: { current: string; branch: string } } | null {
   const pd = resolveProjectDir(projectDir);
   try {
-    if (readApplicableTeamUnitScopeStamp(pd)) return "This checkout holds a Unit claim; share main from a checkout that holds none.";
-    if (!isTeamUnitOwnership(readStateFile(pd))) return "Sharing main is for work that several teams build.";
-    if (!repositoryRemote(pd)) return "This repository has no remote to share main with. Add one (git remote add origin <url>), then share again.";
+    if (readApplicableTeamUnitScopeStamp(pd)) return { reason: "This checkout holds a Unit claim; share main from a checkout that holds none." };
+    if (!isTeamUnitOwnership(readStateFile(pd))) return { reason: "Sharing main is for work that several teams build." };
+    if (!repositoryRemote(pd)) {
+      return { reason: "This repository has no remote to share main with. Add one (git remote add origin <url>), then share again." };
+    }
     // The branch is read from the Way of Working words first, by the share's own step.
     if (integrationBranchToRead(pd) !== null) return null;
     const target = shareTarget(pd)!;
     const current = currentBranch(pd);
     if (current !== target.branch) {
-      return `This checkout is on ${current}, not ${target.branch}. Switch to ${target.branch}, then share again.`;
+      return { reason: `This checkout is on ${current}, not ${target.branch}.`, off: { current, branch: target.branch } };
     }
     return null;
   } catch (error) {
-    return errorMessage(error);
+    return { reason: errorMessage(error) };
   }
+}
+
+export function shareBlocker(projectDir: string): string | null {
+  return shareRefusal(projectDir)?.reason ?? null;
 }
 
 // How the plan reaches the teams when the share cannot push it: by the
@@ -5521,8 +5529,10 @@ export function planWayOn(branch: string, committed: boolean): string {
 // person's other files here is committed.
 function shareMain(args: string[], projectDir?: string): void {
   const pd = resolveProjectDir(projectDir);
-  const blocker = shareBlocker(pd);
-  if (blocker !== null) fail(blocker);
+  const refused = shareRefusal(pd);
+  // On a branch of the person's own, the share goes on to commit AI-DLC's
+  // record there and pushes nothing (below).
+  if (refused !== null && refused.off === undefined) fail(refused.reason);
   const planOnly = parseArgs(args).bareFlags.has("plan");
   // The branch the share pushes, read from the team's own words before
   // anything is committed or pushed; the offers stay due in case the share
@@ -5560,11 +5570,13 @@ function shareMain(args: string[], projectDir?: string): void {
   const message = landed.length > 0 ? `Record the ${landed.join(" and ")} landing` : "Share the plan with the teams";
   let committed: number;
   try {
-    committed = planOnly ? commitPlanHere(pd, message) : commitWorkHere(pd, message).committed;
+    committed = planOnly || refused !== null ? commitPlanHere(pd, message) : commitWorkHere(pd, message).committed;
   } catch (error) {
     clearTeamHandoverMarks(pd, ["share", "push"]);
     fail(`${errorMessage(error)} Then share again.`);
   }
+  // Their branch reaches the integration branch their own way: never pushed from here.
+  if (refused !== null) fail(`${refused.reason} ${planWayOn(branch, true)}`);
   const pushed = git(pd, ["push", remote, `HEAD:refs/heads/${branch}`], { GIT_TERMINAL_PROMPT: "0" });
   // The plan's push to a home that does not answer: there is nothing to pull,
   // and its question is not put again each turn; the person asks when it can.
