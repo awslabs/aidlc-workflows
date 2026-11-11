@@ -8440,7 +8440,7 @@ export function buildClaimNotes(projectDir: string, stateContent: string, sessio
     if (proposal.answer === "approved") lines.push(`The lead approved your change to the ${inputName(proposal.input)}.`);
     if (proposal.answer === "turned down") {
       lines.push(`The lead turned down your change to the ${inputName(proposal.input)}` +
-        `${proposal.answer_words ? `: "${proposal.answer_words}"` : ""}. I'm carrying on with the approved one.`);
+        `${proposal.answer_words ? `: "${proposal.answer_words}"` : ""}${/[.!?]$/.test(proposal.answer_words?.trim() ?? "") ? "" : "."} I'm carrying on with the approved one.`);
     }
   }
   // A Unit it started early on that is now done is offered as the move onto

@@ -653,6 +653,21 @@ describe("a change to a shared input", () => {
     );
   });
 
+  // The fork leg (P2): the lead's words ended in a full stop, and the line put
+  // another after the quote.
+  for (const words of ["Partial refunds wait for phase two.", "Not this time!", "Can it wait?"]) {
+    test(`turned down in words that end in ${words.at(-1)}: no second stop after them`, () => {
+      const { home, alice } = proposed();
+      next(home.dir);
+      const down = run(UNIT, ["amend", "refunds", "--input", REQUIREMENTS, "--answer", "reject", "--person-words", words], home.dir);
+      expect(down.status, down.out).toBe(0);
+      git(alice, ["fetch", "-q", "origin"]);
+      expect(notices(next(alice))).toContain(
+        `The lead turned down your change to the requirements: "${words}" I'm carrying on with the approved one.`,
+      );
+    });
+  }
+
   test("the answer is the person's: only with a turn of theirs behind it", () => {
     const { home } = proposed();
     const guarded: NodeJS.ProcessEnv = { ...ENV, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "" };
