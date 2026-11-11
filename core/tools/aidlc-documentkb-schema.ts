@@ -132,6 +132,19 @@ export interface DocumentRow {
   // A tombstone: the original is gone. Metadata-only by design, because a rule
   // promoted later cites this id and the citation must not dangle.
   removed_at?: string;
+  /**
+   * Present on a copy the command layer made of a file the person named
+   * elsewhere in the project: that file's project-relative path, and the
+   * sha256 of the bytes copied. Naming the same file again writes its new bytes
+   * over this copy while the copy still holds `sha256` (nobody edited it), so
+   * the document keeps its id and intents. OMITTED for every other row.
+   */
+  copied_from?: CopiedFrom;
+}
+
+export interface CopiedFrom {
+  path: string;
+  sha256: string;
 }
 
 export interface DocumentIndex {
@@ -488,6 +501,22 @@ function validateRow(raw: unknown, where: string, errors: string[]): void {
     errors.push(`${where}.indexed_at must be an ISO timestamp string`);
   }
   validateSource(raw.source, where, errors);
+  if ("copied_from" in raw && raw.copied_from !== undefined) {
+    const from = raw.copied_from;
+    if (!isObject(from)) {
+      errors.push(`${where}.copied_from must be an object with path and sha256 when present`);
+    } else {
+      if (!validDocumentPath(from.path)) {
+        errors.push(
+          `${where}.copied_from.path must be a relative POSIX path with no ".." segment ` +
+            `(got ${JSON.stringify(from.path)})`,
+        );
+      }
+      if (typeof from.sha256 !== "string" || !SHA256_REGEX.test(from.sha256)) {
+        errors.push(`${where}.copied_from.sha256 must be a lowercase sha256 hex digest`);
+      }
+    }
+  }
   validateExtraction(raw.extraction, where, errors);
   validateSummary(raw.summary, raw.id, where, errors);
 

@@ -197,10 +197,10 @@ workflow.
 
 The install ships:
 
-- `.kiro/skills/aidlc/SKILL.md`: AI-DLC's instructions to the aidlc agent. The
-  agent has them, with `question-rendering.md` and `composer.md` beside them,
-  from the first line of every chat, so it reads no file before acting on your
-  request.
+- `.kiro/skills/aidlc/SKILL.md` and `workflow.md`: AI-DLC's instructions to the
+  aidlc agent. The agent has them, with `question-rendering.md` and `composer.md`
+  beside them, from the first line of every chat, so it reads no file before
+  acting on your request.
 - `.kiro/agents/aidlc-aidlc.md` — the same conductor exposed in the workspace agent
   selector (named so it sorts before the `aidlc-*-agent.md` specialists: Kiro
   lists agents in file-name order, so `aidlc` comes first in the picker and in
@@ -333,10 +333,11 @@ and Kiro IDE does not read that file. So in each new Kiro IDE chat:
 3. Picking `aidlc` from the `/` menu does not change which agent the chat
    uses. If the chat is still on **Default**, AI-DLC's first move on your
    first request is its own command, which Kiro asks you to approve, and then
-   each command it runs asks. To avoid that, choose **aidlc** in the agent picker first (step 1).
+   each command it runs asks, unless Kiro's **Approve for me** mode is on.
+   To avoid that, choose **aidlc** in the agent picker first (step 1).
    On **Default** (or **Default v2**), AI-DLC says this once in the chat when you
    type an `/aidlc` request, unless you already chose **Always allow** for
-   AI-DLC's commands on one of Kiro's approval cards.
+   AI-DLC's commands on one of Kiro's approval cards or Approve for me is on.
    The `aidlc-...-agent` entries in the `/` menu are the specialists AI-DLC
    brings in during a workflow; you do not start them yourself.
 
@@ -345,28 +346,42 @@ With the `aidlc` agent selected you can also ask in plain words, for example
 Kiro's welcome panel (Spec, Plan, Bug Fix, Quick Spec) lists Kiro's own
 workflows; AI-DLC does not appear there, so start it from the chat as above.
 
-### Supervised or Autopilot
+### Supervised, Autopilot or Approve for me
 
-The **Autopilot** switch at the bottom right of the chat box (also under
-**Settings > Agent > Agent Autonomy**) sets how often Kiro itself asks you to
-approve what the agent does. You can change it at any time, even in the middle
-of a workflow. It does not change which AI-DLC checkpoints stop for you.
+In Kiro IDE, the **Autopilot** switch at the bottom right of the chat box (also
+under **Settings > Agent > Agent Autonomy**) sets how often Kiro itself asks
+you to approve what the agent does. In a chat where Kiro offers **Approve for
+me** (Kiro IDE 1.4.154 or later), that switch is a menu of three modes
+instead: **Supervised**, **Accept file changes** (formerly Autopilot) and
+**Approve for me**. You can change the mode at any time, even in the middle of
+a workflow. It does not change which AI-DLC checkpoints stop for you.
 
 - **Supervised** (switch off): after each turn that changes files, Kiro shows a
   **Review changes** card and waits until you choose **Accept** or **Reject**.
   AI-DLC keeps its questions, stage documents, and plans in files, so a
   workflow shows many of these cards on top of AI-DLC's own questions.
-- **Autopilot** (switch on): file changes go through without the card. Select
-  **View changes** in the chat to see what changed.
-- In both modes, Kiro asks you to **Allow** any command that the `aidlc` agent
-  does not already allow, such as your project's test command, a `git push`
-  or a recursive delete. Your own commands meet no AI-DLC rule, so once you
-  choose **Always allow** for one, Kiro remembers it, redirects and chains
-  included. AI-DLC's own commands ask
-  when one holds a redirect, a chain or a substitution (`>`, `&&`, `$(...)`),
-  so an allowed AI-DLC command cannot be stretched into another. Kiro also asks
-  before the two AI-DLC commands held back on purpose (see
-  [Native channel](#native-channel-recommended)).
+- **Accept file changes**, or **Autopilot** (switch on) where Kiro shows the
+  switch: file changes go through without the card. Select **View changes** in
+  the chat to see what changed.
+- **Approve for me**: file changes go through without the card too. For a
+  command or another action, your deny, ask and allow rules and the ones
+  AI-DLC installs decide first, so what AI-DLC's rules hold back or ask about
+  is held back or asked about as in the other modes. For an action no rule
+  settles, Kiro's model decides instead of asking you: it approves one it
+  judges safe, blocks one it judges unsafe, and asks you when it is unsure.
+- In Kiro CLI 2.36 or later (its v3 engine), the same choice is under
+  `/permissions` → **Policies**, where Kiro offers it: **approve for me** works
+  as in Kiro IDE, Kiro keeps the choice for this project, and the status line
+  shows **approve for me** while it is on.
+- In Supervised and Accept file changes (Autopilot), Kiro asks you to **Allow**
+  any command that the `aidlc` agent does not already allow, such as your
+  project's test command, a `git push` or a recursive delete. Your own commands
+  meet no AI-DLC rule, so once you choose **Always allow** for one, Kiro
+  remembers it, redirects and chains included.
+- In every mode, AI-DLC's own commands ask when one holds a redirect, a chain
+  or a substitution (`>`, `&&`, `$(...)`), so an allowed AI-DLC command cannot
+  be stretched into another. Kiro also asks before the two AI-DLC commands
+  held back on purpose (see [Native channel](#native-channel-recommended)).
 - In Kiro CLI (its v3 engine), when a side-by-side build's workers or
   reviewers ask, Kiro gathers their requests in a "tool approval pending" box;
   (f) **Approve all pending and auto-approve future subagent requests** lets
@@ -382,24 +397,27 @@ of a workflow. It does not change which AI-DLC checkpoints stop for you.
   lets the same command run again without a card, and a command with different
   arguments, such as another test file, is not covered by that rule.
 
-In both modes, AI-DLC still stops and waits for your typed reply at each of its
+In every mode, AI-DLC still stops and waits for your typed reply at each of its
 questions, at every approval gate, and at Code Generation's **Approve Plan**
 when plan approval is on (the default in every shipped scope except express
 and poc, and yours to switch; see
-[Plan approval](../13-customization.md#plan-approval)). Kiro's switch cannot
-skip these. AI-DLC's hooks run in either mode: one refuses code changes
+[Plan approval](../13-customization.md#plan-approval)). Kiro's modes cannot
+skip these. AI-DLC's hooks run in every mode: one refuses code changes
 until the plan is approved or, with plan approval off, until AI-DLC has
 recorded that it builds the plan without asking. AI-DLC also accepts an answer
 or an approval only after you have typed a reply to the question. The AI-DLC
 setting that skips routine approvals is its own Construction choice
 **Continue automatically** (see
 [Your First Workflow](../02-your-first-workflow.md#construction-phase)), not
-Kiro's Autopilot.
+Kiro's Accept file changes or Approve for me.
 
 Use Supervised when you want to read every file change as it happens, for
 example on your first workflow or in code where every change matters. Use
-Autopilot when you want far fewer clicks: you still answer every AI-DLC
-checkpoint in chat, and can look over the changes afterwards.
+Accept file changes (Autopilot) when you want far fewer clicks: you still
+answer every AI-DLC checkpoint in chat, and can look over the changes
+afterwards. With Approve for me, Kiro's model can also answer command
+approvals for you; the ones it is unsure of, and the ones your rules or
+AI-DLC's ask about, still come to you.
 
 ### When the chat fills up
 
@@ -1081,6 +1099,19 @@ Start `kiro-cli --v2` in the project, then invoke the conductor with
 navigation uses `/aidlc intent [name]`, `/aidlc space [name]`, and
 `/aidlc space-create <name>`. The per-stage (`/aidlc-domain-design`) and
 per-scope (`/aidlc-feature`) runner skills are installed too.
+
+**What Kiro changes in a request.** On Kiro CLI 3.2.0 (measured on Linux), the
+v2 engine changes what you type or paste after `/aidlc` before AI-DLC receives
+it: line breaks, tabs and runs of spaces become single spaces, and a word or
+phrase wrapped in double quotes, such as `""` or `"open"`, loses them. This
+happens to a short request too. Code in a pasted spec loses its indentation
+and some of its quotes, and `<document>` markers do not prevent it. To have the
+workflow read a spec from a file instead, save it in the project and name the
+file in your request, for example
+`/aidlc Read ./spec.md and build what it describes`
+([Starting from an existing document](../02-your-first-workflow.md#starting-from-an-existing-document)).
+In the same measurement, a reply typed later in the chat, with no slash
+command, kept its line break and quotes.
 
 Status, doctor, help, version, and workspace-navigation commands are dispatched
 by the Kiro hook before the model can turn them into workflow work. Their child

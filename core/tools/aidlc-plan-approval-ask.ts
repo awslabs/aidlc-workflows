@@ -72,6 +72,7 @@ import {
   visibleMarkdownLines,
   withActiveDirectiveLock,
   withAuditLock,
+  withRepoBaselineAdditions,
   workspaceSourceFailureSuffix,
   workspaceSourceState,
   writeFileAtomic,
@@ -569,7 +570,9 @@ function targetView(projectDir: string, unit: string | null, changed: string | n
  * previous plan approval in this stage (the workspace snapshot kept at each
  * approval), so a later Unit's question does not repeat what the person saw
  * when they approved the earlier one, and a unit-major run's first question
- * does not reach back into earlier stages. The files the plans approved since
+ * does not reach back into earlier stages. A repo that joined the work since
+ * that start counts from what it held when it joined, as the stage's own
+ * baseline counts it (withRepoBaselineAdditions). The files the plans approved since
  * that start name are their own build, not something that ran ahead, and
  * AI-DLC's own files (an update the person took) are nobody's. Nothing
  * is said when the start is not on record or cannot be read, or nothing changed.
@@ -578,7 +581,8 @@ function changedBeforeApprovalLine(projectDir: string): string | null {
   try {
     const current = workspaceSourceState(projectDir);
     if (current === null) return null;
-    const rows = readAuditShardEvents(projectDir)
+    const events = readAuditShardEvents(projectDir);
+    const rows = events
       .filter((row) =>
         auditBlockField(row.block, "Stage") === STAGE &&
         (row.event === "STAGE_STARTED" || row.event === "PLAN_APPROVAL_RECORDED" || row.event === "PLAN_APPROVAL_SKIPPED"))
@@ -604,6 +608,8 @@ function changedBeforeApprovalLine(projectDir: string): string | null {
       start = recorded === null ? null : recordedSourceListingUnderCurrentBoundary(recorded, current.listing);
     }
     if (start === null) return null;
+    const joined = withRepoBaselineAdditions(projectDir, STAGE, { state: "ready", listing: start }, events, last);
+    if (joined.state !== "ready") return null;
     // The plans approved since this stage started: what they name is their build.
     const approved: Array<string | null> = [];
     for (let index = rows.length - 1; index >= 0 && rows[index].event !== "STAGE_STARTED"; index--) {
@@ -613,7 +619,7 @@ function changedBeforeApprovalLine(projectDir: string): string | null {
     const theirBuild = (path: string): boolean =>
       named.some((entry) =>
         path === entry || path.startsWith(`${entry}/`) || (!entry.includes("/") && path.split("/").at(-1) === entry));
-    const changed = sourceChangedOutsideAidlc(projectDir, start, current.listing).filter((path) => !theirBuild(path));
+    const changed = sourceChangedOutsideAidlc(projectDir, joined.listing, current.listing).filter((path) => !theirBuild(path));
     if (changed.length === 0) return null;
     return changed.length === 1
       ? `Already changed before you approved: ${renderChangedPaths(changed)}.`
@@ -1701,13 +1707,16 @@ function planQuestionDue(projectDir: string): boolean {
 /**
  * The engine's Plan Approval question while it is the open step: whether every
  * plan it asks about has an answer, the choice on record when every plan has
- * the same one, and whether the person is editing the files. It reads none of
- * the person's words: the conductor reads their reply and records the choice.
- * Null when it is not the open step.
+ * the same one, whether the person is editing the files, and its question id
+ * (null on a record from before ids). It reads none of the person's words: the
+ * conductor reads their reply and records the choice. Null when it is not the
+ * open step.
  */
 export function openPlanApprovalQuestion(
   projectDir: string,
-): { answered: boolean; editing: boolean; recorded: PlanApprovalAnswerChoice | null } | null {
+): {
+  answered: boolean; editing: boolean; recorded: PlanApprovalAnswerChoice | null; questionId: string | null;
+} | null {
   try {
     const open = currentPlanApprovalAsk(projectDir, "all");
     if (open === null) return null;
@@ -1719,6 +1728,7 @@ export function openPlanApprovalQuestion(
       answered,
       editing: record.mode === "editing",
       recorded: record.mode === "editing" ? "edit" : answered && only !== null && only !== "repair" ? only : null,
+      questionId: record.questionId ?? null,
     };
   } catch {
     return null;
@@ -2288,8 +2298,9 @@ export function openEngineQuestion(projectDir: string): string | null {
 
 /**
  * The person sent the words of this message to separate new work, to a
- * reshape, or to park the work: the code plan question of this piece of work
- * keeps none of them as its reply.
+ * reshape, or to park the work, or sent them in a chat that was not shown the
+ * question as it stands: the code plan question of this piece of work keeps
+ * none of them as its reply.
  */
 export function withdrawPlanApprovalReplies(projectDir: string, which: { messageId: string }): void {
   const drop = (reply: PlanApprovalAskReply): boolean => reply.messageId === which.messageId;

@@ -36,7 +36,7 @@ import {
   readdirSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 import {
   reviewArtifactFingerprint,
   resolveStage,
@@ -868,7 +868,7 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
       "--user-input",
       "Approve",
     ]);
-    expect(unpromoted.kind).toBe("error");
+    expect(unpromoted.kind).toBe("print");
     expect(unpromoted.message).toContain(
       "approved practices have not been saved yet",
     );
@@ -890,7 +890,7 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
       "--user-input",
       "Approve",
     ]);
-    expect(malformed.kind).toBe("error");
+    expect(malformed.kind).toBe("print");
     expect(malformed.message).toContain(
       "approved practices have not been saved yet",
     );
@@ -912,7 +912,7 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
       "--user-input",
       "Approve",
     ]);
-    expect(forged.kind).toBe("error");
+    expect(forged.kind).toBe("print");
     expect(forged.message).toContain("approved practices have not been saved yet");
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(
       forgedBefore.state,
@@ -935,7 +935,7 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
       "--user-input",
       "Approve",
     ]);
-    expect(stale.kind).toBe("error");
+    expect(stale.kind).toBe("print");
     expect(stale.message).toContain("approved practices have not been saved yet");
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(
       staleBefore.state,
@@ -956,7 +956,7 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
       "--user-input",
       "Approve",
     ]);
-    expect(mismatched.kind).toBe("error");
+    expect(mismatched.kind).toBe("print");
     expect(mismatched.message).toContain("approved practices have not been saved yet");
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(
       mismatchedBefore.state,
@@ -1018,7 +1018,7 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
       "--user-input",
       "Approve",
     ]);
-    expect(stale.kind).toBe("error");
+    expect(stale.kind).toBe("print");
     expect(stale.message).toContain("approved practices have not been saved yet");
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(
       staleBefore.state,
@@ -1041,6 +1041,66 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
       "Approve",
     ]);
     expectApprovalCommitted(proj, repromoted, before, "practices-discovery");
+  });
+
+  // An agent that reports the person's Approve before Step 7's promotion is
+  // handed the promotion as its next step, not an error that stops the run:
+  // run as printed from the project root, then the same report, it records the
+  // approval they gave, with no reply of theirs in between.
+  test("an approval reported before the promotion: the promotion as printed, then the same report, records it", () => {
+    const proj = seedPracticesProject("[-]");
+    seedAidlcMemory(proj);
+    appendAuditEvent(proj, "STAGE_STARTED", "2026-07-17T14:01:00Z", {
+      Stage: "practices-discovery",
+      Agent: "aidlc-pipeline-deploy-agent",
+    });
+    for (const agent of PRACTICES_SUPPORTS) {
+      writeContribution(proj, agent, undefined, "inception", "practices-discovery");
+    }
+    const draftDir = join(seededRecordDir(proj), "inception", "practices-discovery");
+    mkdirSync(draftDir, { recursive: true });
+    writeFileSync(
+      join(draftDir, "team-practices.md"),
+      "# Team Practices\n\n## Testing Posture\n\n- **Methodology**: test-after\n- **Ordering**: one sentence.\n",
+      "utf-8",
+    );
+    writeFileSync(
+      join(draftDir, "discovered-rules.md"),
+      "# Discovered Rules\n\n## Mandated\n\n- Keep the greeter's output on one line\n\n## Forbidden\n\n- No new dependencies\n",
+      "utf-8",
+    );
+    const opened = runReport(proj, ["--stage", "practices-discovery", "--result", "awaiting-approval"]);
+    expect(opened.kind, opened.message).toBe("print");
+
+    const approve = ["--stage", "practices-discovery", "--result", "approved", "--user-input", "Approve"];
+    const heldBefore = mutationSnapshot(proj);
+    const held = runReport(proj, approve);
+    expect(held.kind, held.message).toBe("print");
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(heldBefore.state);
+    const named = /practices-promote --team-practices (\S+) --discovered-rules (\S+?)`/.exec(held.message ?? "");
+    expect(named, held.message).not.toBeNull();
+    const [, teamPractices, discoveredRules] = named as RegExpExecArray;
+    const record = relative(proj, seededRecordDir(proj)).split(sep).join("/");
+    expect(teamPractices).toBe(`${record}/inception/practices-discovery/team-practices.md`);
+    expect(discoveredRules).toBe(`${record}/inception/practices-discovery/discovered-rules.md`);
+    expect(held.message).toContain("report --stage practices-discovery --result approved");
+
+    const promote = spawnSync(
+      BUN,
+      [STATE, "practices-promote", "--team-practices", teamPractices, "--discovered-rules", discoveredRules],
+      {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        encoding: "utf-8",
+        cwd: proj,
+        env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj },
+      },
+    );
+    expect(promote.status, `${promote.stdout}${promote.stderr}`).toBe(0);
+    expect(eventCount(auditText(proj), "PRACTICES_AFFIRMED")).toBe(1);
+
+    const before = mutationSnapshot(proj);
+    const approved = runReport(proj, approve);
+    expectApprovalCommitted(proj, approved, before, "practices-discovery");
   });
 
   test("an unrelated stage's rejection does not invalidate the practices receipt", () => {

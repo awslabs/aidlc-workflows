@@ -46,8 +46,11 @@ import {
   resolveTestingPostureFromSections,
 } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 import {
+  AIDLC_SRC,
   cleanupTestProject,
   createTestProject,
+  dropRepoBaselineAdditions,
+  intentsDirOf,
   seededAuditShard,
   seededRecordDir,
   SYNC_FOLDER_WORDS,
@@ -372,6 +375,86 @@ describe("t334 (4) strict refuses drift before the answer, in the human's words,
       const rows = acceptedRows(project);
       expect(rows.map((row) => auditBlockField(row.block, "Changed"))).toEqual(theirs ? ["src/late.ts"] : []);
     }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // Work that records its repos: app-a and payments as folders under the
+  // project, `inWork` the repos it records when the plan is approved under strict.
+  function approvedWithRepos(inWork: string[]): string {
+    const project = createProject("strict");
+    const registry = join(intentsDirOf(project), "intents.json");
+    const rows = JSON.parse(readFileSync(registry, "utf-8"));
+    rows[0].repos = inWork;
+    writeFileSync(registry, `${JSON.stringify(rows, null, 2)}\n`);
+    const repos: Record<string, Record<string, string>> = {
+      "app-a": { "app.ts": "export const a = 1;\n" },
+      payments: { "src/api.ts": "export const api = 1;\n", "README.md": "# payments\n" },
+    };
+    for (const [repo, files] of Object.entries(repos)) {
+      for (const [path, body] of Object.entries(files)) {
+        mkdirSync(join(project, repo, path, ".."), { recursive: true });
+        writeFileSync(join(project, repo, path), body);
+      }
+      for (const args of [["init", "-q"], ["add", "-A"], ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "seed"]]) {
+        const run = Bun.spawnSync(["git", ...args], { cwd: join(project, repo), stdout: "pipe", stderr: "pipe" });
+        expect(run.exitCode, run.stderr.toString()).toBe(0);
+      }
+    }
+    const questions = presentPlan(project);
+    startSession(project, "strict-add-repo");
+    expect(decide(project, questions, "strict-add-repo").code).toBe(0);
+    humanTurn(project, "strict-add-repo");
+    expect(answer(project, questions, "strict-add-repo").code).toBe(0);
+    return project;
+  }
+
+  function repoVerb(project: string, verb: "add-repo" | "remove-repo", name: string): void {
+    const changed = runChangeControlTool(
+      [BUN, join(AIDLC_SRC, "tools", "aidlc-utility.ts"), "intent", verb, name, "--project-dir", project],
+      project,
+    );
+    expect(changed.code, `${changed.stdout}${changed.stderr}`).toBe(0);
+  }
+
+  // A repo added to the work after approval (intent add-repo of a folder
+  // already there) joins as it was at the add: nothing in it moved since the
+  // approval, so the start says nothing, as for an AI-DLC update.
+  test("a repo added to the work after approval starts the build with no line", () => {
+    const project = approvedWithRepos(["app-a"]);
+    repoVerb(project, "add-repo", "payments");
+    const started = begin(project);
+    expect(started.code, started.stderr).toBe(0);
+    expect(changeNotices(started.stdout)).toEqual([]);
+    expect(acceptedRows(project)).toHaveLength(0);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a file changed in a repo after it joined the work is named alone as the build starts", () => {
+    const project = approvedWithRepos(["app-a"]);
+    repoVerb(project, "add-repo", "payments");
+    writeFileSync(join(project, "payments", "README.md"), "# payments, edited after the add\n");
+    const started = begin(project);
+    expect(started.code, started.stderr).toBe(0);
+    expect(changeNotices(started.stdout)).toEqual([movedNotice("1 file", "payments/README.md")]);
+    expect(acceptedRows(project).map((row) => auditBlockField(row.block, "Changed"))).toEqual(["payments/README.md"]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a repo taken off the work after approval starts the build with no line", () => {
+    const project = approvedWithRepos(["app-a", "payments"]);
+    repoVerb(project, "remove-repo", "payments");
+    const started = begin(project);
+    expect(started.code, started.stderr).toBe(0);
+    expect(changeNotices(started.stdout)).toEqual([]);
+    expect(acceptedRows(project)).toHaveLength(0);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // Without the add's snapshot the repo cannot be read as it joined: the start
+  // compares as it did before the repo joined.
+  test("a repo added after approval whose snapshot is not on this machine is named as before", () => {
+    const project = approvedWithRepos(["app-a"]);
+    repoVerb(project, "add-repo", "payments");
+    expect(dropRepoBaselineAdditions(project)).toBeGreaterThan(0);
+    const started = begin(project);
+    expect(started.code, started.stderr).toBe(0);
+    expect(changeNotices(started.stdout)).toEqual([movedNotice("2 files", "payments/README.md, payments/src/api.ts")]);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 

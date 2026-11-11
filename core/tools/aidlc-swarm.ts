@@ -326,7 +326,9 @@ function runTool(toolFile: string, args: string[], projectDir: string): ToolRun 
 // resolved from the parent intent.
 // With `showOutput` the command's own output goes to this tool's stderr as it
 // runs, so a worker sees its tests as if it had run them; stdout keeps the one
-// verdict line.
+// verdict line. Without it the output goes nowhere: the verdict reads only the
+// exit status, and held output over spawnSync's buffer limit would stop a
+// passing command and lose its status.
 function checkConverged(cwd: string, checkCmd: string, showOutput = false): boolean {
   const shell =
     process.platform !== "win32" && existsSync("/bin/bash")
@@ -334,10 +336,9 @@ function checkConverged(cwd: string, checkCmd: string, showOutput = false): bool
       : true;
   const result = spawnSync(checkCmd, {
     cwd,
-    encoding: "utf-8",
     timeout: EXTENDED_SUBPROCESS_TIMEOUT_MS,
     shell,
-    ...(showOutput ? { stdio: ["ignore", 2, 2] as const } : {}),
+    stdio: showOutput ? ["ignore", 2, 2] : "ignore",
   });
   return result.status === 0;
 }

@@ -29,13 +29,14 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { readConductorSurface } from "../harness/conductor-skill.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 
 const PROTOCOL_REL = "core/aidlc-common/protocols/stage-protocol.md";
 
 function read(rel: string): string {
-  return readFileSync(join(REPO_ROOT, rel), "utf-8");
+  return readConductorSurface(rel);
 }
 
 function authoredSkills(): Array<{ name: string; rel: string }> {

@@ -20,6 +20,7 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { readConductorSurface } from "../harness/conductor-skill.ts";
 import {
   AIDLC_SRC, cleanupTestProject, createTestProject, REPO_ROOT, runOrchestrateNext, seedAidlcMemory,
 } from "../harness/fixtures.ts";
@@ -203,7 +204,7 @@ describe("said once: the agent is not asked to word it itself", () => {
 
   test("no harness skill and no stage rule asks for the agent's own account of a check turned off", () => {
     for (const harness of ["claude", "codex", "copilot", "cursor", "kiro", "kiro-ide", "opencode"]) {
-      const skill = readFileSync(join(REPO_ROOT, "harness", harness, "skills", "aidlc", "SKILL.md"), "utf-8");
+      const skill = readConductorSurface(join(REPO_ROOT, "harness", harness, "skills", "aidlc", "SKILL.md"));
       expect(skill, harness).toContain("When they ask to turn a check off for this piece of work");
       expect(skill, harness).not.toContain("say in one line that it is off for this piece of work");
     }

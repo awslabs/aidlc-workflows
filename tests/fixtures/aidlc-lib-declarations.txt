@@ -46,7 +46,6 @@ AttemptView
 AuditShardNote
 Authority
 AuthorityActor
-AuthorityCover
 AuthorityGrantSource
 BLOCKING_SENSOR_BOUNDARY_EVENTS
 BLOCKING_SENSOR_OVERRIDE_CHOICE
@@ -450,7 +449,6 @@ STEERING_TOKEN_KEY_BYTES
 STEERING_TOKEN_KEY_FILE
 STRUCTURED_FIELD_HEAD
 STRUCTURED_FIELD_NAMES
-SUBAGENT_INFLIGHT_TTL_MS
 SUMMARY_AUTHORIZATION_DIR
 SUMMARY_AUTHORIZATION_FIELD
 SUMMARY_AUTHORIZATION_ID_RE
@@ -482,11 +480,6 @@ StageAnswerMode
 StageEntry
 StaleReviewProgress
 StateVersionClassification
-SubagentInflightEntry
-SubagentInflightLedger
-SubagentInflightMatch
-SubagentInflightRead
-SubagentInflightSummary
 SummaryAuthorization
 SummaryConfirmationEvidence
 SummaryConfirmationStage
@@ -631,7 +624,6 @@ authorityFor
 authorityStateText
 authorizedConstructionPolicyChange
 authorizedVerificationCommand
-backgroundAgentOutSince
 backwardJumpBoundary
 baselineSourceSnapshotMissing
 beforeDelimiter
@@ -727,7 +719,6 @@ committedTextBytes
 committedTextParts
 committedTextSha256
 comparablePath
-completeSubagentInflight
 completedPipelineLinks
 completionCarriesVerifiedReview
 composeGateOpen
@@ -867,7 +858,6 @@ formatGuardsOffLine
 formatGuardsOnLine
 freshActiveDirectiveMarker
 freshReviewReceipts
-freshSubagentEntries
 frontmatterBlock
 gateEstimateSeconds
 gateEventCovers
@@ -979,7 +969,6 @@ ignoredSourceClaimReason
 inertPath
 inspectArtifactPath
 inspectContinuationCursor
-inspectSubagentInflight
 installPlanApprovalLegacyOffer
 installedHarnessName
 installedHarnessNameForTarget
@@ -1143,9 +1132,7 @@ markPersonLinesHeard
 markProtectedQuestionReplied
 markSelectedWork
 markStageWorkLogged
-markSubagentInflight
 markTurnEnd
-matchSubagentInflight
 materializeCommitTree
 materializeRawGitTree
 memoryChangeControlDeclarations
@@ -1398,7 +1385,6 @@ readShippedHarnessData
 readSourceSnapshot
 readStableReviewArtifacts
 readStageBaseline
-readSubagentInflightLedger
 readSummaryAuthorization
 readSyncBufferedBytes
 readSyncBufferedLine
@@ -1730,8 +1716,6 @@ stripYamlComment
 structuredField
 structuredFieldSpan
 subagentDispatchesShowNoReviewer
-subagentInflightMarkerPath
-subagentSessionIdentity
 summaryAnswerCleared
 summaryAnswerFromFile
 summaryAnswerLines
@@ -1952,7 +1936,6 @@ writeSessionPidRecord
 writeSessionRebindOffer
 writeSessionSelectionNotice
 writeSourceSnapshot
-writeSubagentInflightLedger
 writeSummaryAuthorization
 writeUnitClaimRegistryCache
 writeUnitMergeTransaction

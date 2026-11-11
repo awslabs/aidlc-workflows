@@ -337,14 +337,17 @@ const childCwd = process.env.AIDLC_PROJECT_DIR ? projectDir : process.cwd();
 // anchor `... engine orchestrate next <ARGS>` bare (no shell capture, no pipe).
 // The body also holds prose examples of `next` (`next --stage <slug>`,
 // `next compose ...`) ahead of that anchor, so only the span followed by
-// "bare" is the person's dispatch, or the only span when there is one. The
+// "bare" carries the person's arguments, or the only span when there is one. The
 // repo's live kiro-cli 2.6.1 fixture carries plain prompt text, while issue
 // #776 measured Kiro IDE 1.0.309 and kiro-cli 2.18.1 --v3 delivering the raw
 // typed `/aidlc ...` text. The fallback recovers argv directly from that raw
 // shape.
 // The step-1 line of the expanded body, from its opening words to its closing
-// ones: what lies between its `next` and the closing words is exactly what the
-// person typed, newlines and backticks included.
+// ones: what lies between its `next` and the closing words is Kiro's
+// `$ARGUMENTS`, as Kiro wrote it there, not the person's own text. Kiro CLI
+// 3.2.0 `--v2` (measured on Linux) writes their words and double-quoted runs
+// joined with one space, the quotes of a run dropped, so their line breaks
+// and those quotes do not reach this hook.
 const NEXT_ANCHOR_LINE = "printed by running `";
 const NEXT_ANCHOR_CLOSE = "` bare (no shell capture, no pipe)";
 
@@ -509,8 +512,8 @@ function extractNextInvocation(
   if (rawInvocation === undefined) return { raw: "", args: [], typed: prompt, forwarded: "" };
   // An anchor Kiro left unexpanded carries no typed args.
   const raw = rawInvocation.trim() === "$ARGUMENTS" ? "" : rawInvocation.trim();
-  // What the person typed: the prompt itself, or for an expanded body the
-  // `/aidlc` line the body was expanded from.
+  // The `/aidlc` line: the prompt itself, or for an expanded body the line
+  // rebuilt from the arguments Kiro put in it.
   const typed = payload !== null || anchor ? `/aidlc${raw ? ` ${raw}` : ""}` : prompt;
   // A line break inside a quoted argument reads as a space, so the call the
   // agent runs stays on one line and matches what the guard compares.
@@ -533,6 +536,21 @@ function hookContextText(stdout: string): string {
     } catch { /* a line that is not hook JSON carries no context */ }
   }
   return parts.length > 0 ? `${sanitizeHarnessPlainText(parts.join("\n"))}\n\n` : "";
+}
+
+/**
+ * The human-turn hook's first-step note for a long `/aidlc` line it kept whole
+ * (its `firstStepNote` key, printed only because this adapter asks), or "".
+ */
+function hookFirstStepNote(stdout: string): string {
+  for (const line of stdout.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const note = (JSON.parse(line) as { firstStepNote?: unknown }).firstStepNote;
+      if (typeof note === "string" && note.trim()) return sanitizeHarnessPlainText(note.trim());
+    } catch { /* a line that is not hook JSON carries no note */ }
+  }
+  return "";
 }
 
 const PRE_DISPATCH_FLAGS = new Set([
@@ -619,6 +637,7 @@ if (target === "verb-intercept") {
   // turn-scoped, no time window, no wedge. Best-effort; failure fails open.
   let turn = 0;
   let preface = "";
+  let firstStepNote = "";
   try {
     const cwd = projectDir;
     mkdirSync(join(cwd, "aidlc"), { recursive: true });
@@ -645,8 +664,8 @@ if (target === "verb-intercept") {
   // only the authority-bearing ledger event while retaining the conversational
   // marker. See the marker family in aidlc-lib.ts.
   try {
-    // The person's own words, not the skill body Kiro expanded them into, so a
-    // typed switch (`/aidlc --guard-policy off`) is read as typed. Its lines
+    // The `/aidlc` line, not the skill body Kiro expanded it into, so a typed
+    // switch (`/aidlc --guard-policy off`) is read as a switch. Its lines
     // (what the switch did) lead whatever this seam writes: plain stdout is
     // Kiro's only context channel here.
     // Who sent the turn (kiroTurnOrigin): a message Kiro's own chat record
@@ -665,10 +684,27 @@ if (target === "verb-intercept") {
       }),
       // This seam runs a command the person typed and hands its output over below.
       relays_terminal_output: true,
+      // A long line it keeps whole: the hook says whether the agent's first
+      // step is a bare `next`, which reads that copy (firstStepNote).
+      wants_first_step_note: true,
     });
     preface = hookContextText(recorded.stdout);
+    firstStepNote = hookFirstStepNote(recorded.stdout);
   } catch { /* presence best-effort - record-human-turn never blocks the turn */ }
   if (cmd === null) {
+    // AI-DLC kept the whole line, so the agent runs `next` with nothing after
+    // it instead of typing it all again as one command, which splits the
+    // person's quote marks and line breaks away and can pass what a Windows
+    // command line holds. No latch: the bare call is the right one, and a latch
+    // left with this turn's number (a turn counter that could not be written)
+    // would refuse it.
+    if (firstStepNote !== "") {
+      try {
+        rmSync(join(projectDir, "aidlc", ".aidlc-forwarding-latch"), { force: true });
+      } catch { /* best-effort, as the latch's own write */ }
+      process.stdout.write(`${preface}${firstStepNote}\n`);
+      return 0;
+    }
     // Pure, explicit engine reads do not need the model to reconstruct the
     // first tool call. Dispatch them here with the exact recovered argv and
     // inject a small, non-steering directive. Steering must arrive complete
@@ -780,12 +816,14 @@ if (target === "verb-intercept") {
     out = cmd.error;
   } else {
     const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
-    // Which tool owns the subcommand. Every terminal family before DocumentKB
-    // lived in aidlc-utility.ts, so this was a constant; `knowledge` verbs live
-    // in their own tool, so the non-compiled path must pick one. Getting this
-    // wrong is Kiro-only and silent -- the compiled path masks it.
-    const toolFile = cmd.source === "knowledge-verb" ? "aidlc-knowledge.ts" : "aidlc-utility.ts";
-    const utilArgs = [join(".kiro", "tools", toolFile), cmd.subcommand, ...forwarded];
+    // A `knowledge` verb goes through the dispatcher, as the compiled path
+    // does: `onboard`'s copy of a document named outside documents/, and making
+    // that folder, run there (withNamedDocumentCopied in aidlc.ts), and
+    // aidlc-knowledge.ts run alone refuses the path instead. Getting this wrong
+    // is Kiro-only and silent -- the compiled path masks it.
+    const utilArgs = cmd.source === "knowledge-verb"
+      ? [join(".kiro", "tools", "aidlc.ts"), ...terminalDispatcherArgv(cmd)]
+      : [join(".kiro", "tools", "aidlc-utility.ts"), cmd.subcommand, ...forwarded];
     // Reuse the exact bun binary running this adapter; the child must not depend on
     // PATH containing bun (the hook environment often lacks the bun install dir).
     const run = Bun.spawnSync(

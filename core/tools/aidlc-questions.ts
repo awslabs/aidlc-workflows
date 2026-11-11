@@ -2,8 +2,9 @@
 // that asks it, and each turn of the person's carries the ids of the questions
 // open where they replied and what the stage's questions file said then. The
 // ids are the one space mintQuestionId keeps, so a stored question's id is its
-// question's id. Nothing reads these records to decide anything yet; the proof
-// that ties an answer to its question will live here too. The lib never imports
+// question's id. Which chats were shown a question as it stands (shownHere)
+// decides whether a reply there can answer it yet; the proof that ties an
+// answer to its question will live here too. The lib never imports
 // this module (a load-time cycle): callers import it directly, and the audit
 // writer reaches the ledger by a lazy require.
 import { createHash } from "node:crypto";
@@ -148,33 +149,56 @@ export interface RecordedQuestion {
   stage: string | null;
   unit: string | null;
   shows: string | null;
-  chats: Set<string>;
+  /** The chats shown it since it last changed what it shows ("" for a command that named no chat). */
+  currentIn: Set<string>;
   /** The questions file it was asked from, when it was asked from one. */
   questionsFile: string | null;
 }
 
-/** The question with this id on the record, with every chat it was asked or shown in. */
+/** The question with this id on the record, with the chats shown it as it stands. */
 export function recordedQuestion(projectDir: string, id: string): RecordedQuestion | null {
-  let found: RecordedQuestion | null = null;
-  for (const row of readAuditShardEvents(projectDir)) {
-    if (auditBlockField(row.block, QUESTION_ID_FIELD) !== id) continue;
-    const chat = auditBlockField(row.block, QUESTION_CHAT_FIELD);
-    if (found === null && ASKING_ROWS.has(row.event)) {
-      found = {
-        id,
-        type: auditBlockField(row.block, QUESTION_TYPE_FIELD) ?? "",
-        stage: auditBlockField(row.block, "Stage"),
-        unit: auditBlockField(row.block, "Unit"),
-        shows: auditBlockField(row.block, QUESTION_SHOWS_FIELD),
-        chats: new Set(),
-        questionsFile: auditBlockField(row.block, "Questions File"),
-      };
+  // Its asking and showing rows (a reply row carries its id too), in time
+  // order: shards are read clone by clone, and another clone's showing can
+  // sort before the row that asked it.
+  const rows = readAuditShardEvents(projectDir)
+    .filter((row) => (ASKING_ROWS.has(row.event) || row.event === QUESTION_SHOWN) &&
+      auditBlockField(row.block, QUESTION_ID_FIELD) === id)
+    .sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+  const asked = rows.find((row) => ASKING_ROWS.has(row.event));
+  if (asked === undefined) return null;
+  const found: RecordedQuestion = {
+    id,
+    type: auditBlockField(asked.block, QUESTION_TYPE_FIELD) ?? "",
+    stage: auditBlockField(asked.block, "Stage"),
+    unit: auditBlockField(asked.block, "Unit"),
+    shows: null,
+    currentIn: new Set(),
+    questionsFile: auditBlockField(asked.block, "Questions File"),
+  };
+  for (const row of rows) {
+    const shows = auditBlockField(row.block, QUESTION_SHOWS_FIELD);
+    if (shows !== null && shows !== found.shows) {
+      found.currentIn.clear();
+      found.shows = shows;
     }
-    if (found === null) continue;
-    if (chat !== null) found.chats.add(chat);
-    found.shows = auditBlockField(row.block, QUESTION_SHOWS_FIELD) ?? found.shows;
+    found.currentIn.add(auditBlockField(row.block, QUESTION_CHAT_FIELD) ?? "");
   }
   return found;
+}
+
+/**
+ * Whether this chat was shown the question as it stands: one of its asking or
+ * showing rows names this chat (no chat, for a command that names none) since
+ * it last changed what it shows. Null when no row asks it or the record cannot
+ * be read. shownAgainFields writes a row whenever this is false (and when what
+ * it shows changed), so a chat shown it once reads true until it changes.
+ */
+export function shownHere(projectDir: string, id: string, chat: string | null): boolean | null {
+  try {
+    return recordedQuestion(projectDir, id)?.currentIn.has(chat ?? "") ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -260,6 +284,17 @@ function blockFields(block: string): Record<string, string> {
   return fields;
 }
 
+/**
+ * The open gate's own question: the stage's latest gate row (the Unit's, at a
+ * team Unit gate). The gate shown again records this id, and a reply to the gate
+ * is read against it.
+ */
+export function gateQuestion(
+  projectDir: string, stage: string, unit: string | null,
+): { id: string; shows: string | null } | null {
+  return latestAskedQuestion(projectDir, { event: "STAGE_AWAITING_APPROVAL", type: "gate", stage, unit });
+}
+
 /** The latest asking row of this type for a stage and Unit, with its id. */
 export function latestAskedQuestion(
   projectDir: string,
@@ -282,10 +317,11 @@ export function latestAskedQuestion(
 }
 
 /**
- * The fields of a QUESTION_SHOWN row when the question is shown in a chat it
- * was neither asked nor shown in, or shows something else than it last did
- * (its plans edited while it waits), with what it shows now; null when that
- * chat already saw it as it is, or no chat can be named.
+ * The fields of a QUESTION_SHOWN row when the question is shown in a chat that
+ * was not shown it as it stands (shownHere: a new chat, one that saw it before
+ * its plans were edited, or a command that names no chat after a chat was
+ * named), or it shows something else than it last did, with what it shows
+ * now; null when that chat already saw it as it is.
  */
 export function shownAgainFields(
   projectDir: string,
@@ -296,7 +332,7 @@ export function shownAgainFields(
   const question = recordedQuestion(projectDir, id);
   if (question === null) return null;
   const changed = shows !== undefined && shows !== null && shows !== question.shows;
-  if (!changed && (!chat || question.chats.has(chat))) return null;
+  if (!changed && question.currentIn.has(chat ?? "")) return null;
   const now = shows ?? question.shows;
   return {
     [QUESTION_ID_FIELD]: id,

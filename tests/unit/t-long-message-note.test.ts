@@ -6,16 +6,18 @@
 // `next` with nothing after it: the person's words go from their paste to the work without the model typing tens of
 // thousands of characters again, and nothing past a command line's limit is ever a command line. In core one place
 // (firstStepNote) owns the words and when they are said, and each tool's hook only delivers them: Claude Code and
-// Codex in the hook's context line, opencode through one key on the hook's output that only it asks for. Kiro IDE's
-// adapter (Kiro IDE and Kiro CLI's V3 engine) says the same sentence its own way (firstStepLine), held to these words
-// by a test here, and the Kiro adapters' turns get nothing new; Copilot and Cursor drop a prompt hook's output, so
+// Codex in the hook's context line, opencode and Kiro CLI's V2 engine through one key on the hook's output that only
+// they ask for. On V2 the note stands in for the whole-line first call, whose word split drops the person's quote
+// marks and line breaks (#3747) and can pass a Windows command line's limit (#3748), and no forwarding latch holds
+// the agent to it. Kiro IDE's adapter (Kiro IDE and Kiro CLI's V3 engine) says the same sentence its own way
+// (firstStepLine), held to these words by a test here; Copilot and Cursor drop a prompt hook's output, so
 // nothing reaches theirs. A short message, a line with a flag or a verb, a paste holding a flag-shaped token `next`
 // does not take, work already open, a message with no whole copy, a payload with no chat, a host's turn and a turn
 // whose record is withheld (an unattended run; a swarm worker's worktree withholds it the same way) get no note and no
 // key. No long text is an argument past what a Windows command line holds: it reaches the hook as a stdin file.
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { cleanupTestProject, createTestProject, seedAidlcMemory } from "../harness/fixtures.ts";
 import {
@@ -190,6 +192,39 @@ describe("a long /aidlc paste: the agent is told AI-DLC has it whole and runs ne
     expect(card.stdout).not.toContain(KEY);
     await bareNextTakesIt(proj, words);
   });
+
+  // Kiro CLI hands its V2 prompt hook the line as typed, or the aidlc skill's body with the line in place of every
+  // $ARGUMENTS; the hook reads the person's line out of either.
+  const skillBody = (): string => readFileSync(join(REPO_ROOT, "dist", "kiro", ".kiro", "skills", "aidlc", "SKILL.md"), "utf-8");
+  for (const [shape, prompt] of [
+    ["the line as typed", (words: string) => `/aidlc ${words}`],
+    ["the skill's body", (words: string) => skillBody().replaceAll("$ARGUMENTS", () => words)],
+  ] as Array<[string, (words: string) => string]>) {
+    test(`Kiro CLI V2, ${shape}: the agent is told to run next with nothing after it, and the guard lets that call run`, async () => {
+      const proj = await project("fresh");
+      // A call held for the turn this paste arrives on (the turn counter could not move past it), which would refuse
+      // the bare next.
+      const latch = join(proj, "aidlc", ".aidlc-forwarding-latch");
+      mkdirSync(join(proj, "aidlc"), { recursive: true });
+      writeFileSync(latch, `${JSON.stringify({ turn: 1, raw: "fix the sales report end date", args: ["fix", "the", "sales", "report", "end", "date"] })}\n`);
+      const words = markdownSpec(30_000);
+      const said = await say(proj, prompt(words), "kiro");
+      expect(said.status, said.stderr).toBe(0);
+      expect(notes(said.stdout), said.stdout.slice(0, 400)).toBe(1);
+      expect(said.stdout).not.toContain("Your first tool call is exactly the call below");
+      expect(said.stdout, "the paste is not handed back to be typed again").not.toContain(LAST);
+      expect(existsSync(latch), "no call is held for the agent to match").toBe(false);
+      const call = /Run `([^`]+ engine orchestrate next)` now/.exec(said.stdout)?.[1];
+      expect(call, said.stdout.slice(0, 400)).toBeDefined();
+      const guard = await exec([process.execPath, join(proj, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), "guard-tool-call"], {
+        cwd: proj,
+        env: { ...env(proj), CLAUDE_PROJECT_DIR: undefined, USER_PROMPT: undefined },
+        input: JSON.stringify({ hook_event_name: "preToolUse", session_id: SESSION, cwd: proj, tool_name: "shell", tool_input: { command: call } }),
+      });
+      expect(guard.status, guard.stderr).toBe(0);
+      await bareNextTakesIt(proj, words);
+    });
+  }
 
   test("the note is Kiro's own first-step sentence, word for word", async () => {
     const kiro = readFileSync(join(REPO_ROOT, "harness", "kiro-ide", "hooks", "aidlc-kiro-adapter.ts"), "utf-8");

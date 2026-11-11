@@ -563,6 +563,43 @@ export function hookSessionProjectDir(hostDir: string, payload: string): string 
   return (dir === null ? null : hostWorktreeProjectDir(hostDir, dir)) ?? hostDir;
 }
 
+// A folder that is an AI-DLC project of its own: it holds AI-DLC's records
+// (`aidlc/spaces/`), an AI-DLC install, or is a Unit's worktree AI-DLC made,
+// which reads its worker's identity from its own folder. A session folder a
+// run left behind (`aidlc/.aidlc-sessions/`) is none of these.
+export function isAidlcProjectFolder(dir: string): boolean {
+  return existsSync(join(dir, "aidlc", "spaces")) ||
+    existsSync(join(dir, ".aidlc", "worktree-meta.json")) ||
+    discoverProjectHarnesses(dir).length > 0;
+}
+
+// The project these modules' own path names (`<project>/<harness>/tools/`: the
+// copy channel, a Bun-run tree), or null for the compiled engine, whose modules
+// live in the runtime payload, and for a source checkout.
+export function moduleProjectDir(): string | null {
+  if (isCompiledExecutable()) return null;
+  return basename(MODULE_TOOLS_DIR) === "tools" && /^\.[a-z0-9][a-z0-9._-]*$/i.test(basename(MODULE_HARNESS_ROOT))
+    ? dirname(MODULE_HARNESS_ROOT)
+    : null;
+}
+
+// The AI-DLC project a folder sits in when it is not one itself (a code repo
+// cloned into the workspace, a plain subfolder): the nearest folder above it
+// that is one. Null for a project, for a folder in no project, and when a
+// folder on the way up cannot be read.
+export function enclosingProjectDir(dir: string): string | null {
+  let current = resolve(dir);
+  try {
+    if (isAidlcProjectFolder(current)) return null;
+    for (let parent = dirname(current); parent !== current; current = parent, parent = dirname(parent)) {
+      if (isAidlcProjectFolder(parent)) return parent;
+    }
+  } catch {
+    // An unreadable folder: the command keeps the folder it was run in.
+  }
+  return null;
+}
+
 function within(parent: string, path: string): boolean {
   const rel = relative(resolve(parent), resolve(path));
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
