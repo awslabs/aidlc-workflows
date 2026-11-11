@@ -106,16 +106,12 @@ describe("merged, whichever way the team merges", () => {
   test("a rebase merge of two commits over a main that changed the same file far away", () => {
     const dir = repo();
     const lines = Array.from({ length: 20 }, (_, at) => `line ${at + 1}`);
-    const text = (edit: (all: string[]) => void): string => {
-      const all = [...lines];
-      edit(all);
-      return `${all.join("\n")}\n`;
-    };
-    commit(dir, "long file", { "long.txt": text(() => {}) });
+    const text = (edits: Record<number, string>): string => `${lines.map((line, at) => edits[at] ?? line).join("\n")}\n`;
+    commit(dir, "long file", { "long.txt": text({}) });
     const base = git(dir, ["rev-parse", "main"]);
     git(dir, ["switch", "-q", "-c", "refunds"]);
-    commit(dir, "refunds one", { "long.txt": text((all) => (all[1] = "LINE 2")) });
-    const head = commit(dir, "refunds two", { "long.txt": text((all) => ((all[1] = "LINE 2"), (all[2] = "LINE 3"))) });
+    commit(dir, "refunds one", { "long.txt": text({ 1: "LINE 2" }) });
+    const head = commit(dir, "refunds two", { "long.txt": text({ 1: "LINE 2", 2: "LINE 3" }) });
     git(dir, ["switch", "-q", "main"]);
     const at = blobsAt(dir, head, ["long.txt"]);
     const unit: RepoResult = {
@@ -126,7 +122,7 @@ describe("merged, whichever way the team merges", () => {
       paths: { "long.txt": at.get("long.txt") ?? null },
       patch_id: patchIdOf(dir, base, head, ["long.txt"]) ?? undefined,
     };
-    commit(dir, "elsewhere in the file", { "long.txt": text((all) => (all[19] = "LINE 20")) });
+    commit(dir, "elsewhere in the file", { "long.txt": text({ 19: "LINE 20" }) });
     git(dir, ["cherry-pick", `${base}..refunds`]);
     const last = git(dir, ["rev-parse", "HEAD"]);
     expect(unitMergeVerdict(dir, "main", unit)).toEqual({ merged: true, commit: last, how: "same change" });

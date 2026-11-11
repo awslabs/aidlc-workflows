@@ -52,6 +52,9 @@ import {
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
+// A claim's result, as the tests read it.
+type SentResult = { repos: Array<{ repo: string; base: string; heads: string[] }> };
+
 const JUMP = join(AIDLC_SRC, "tools", "aidlc-jump.ts");
 
 afterEach(cleanupTeamBuild);
@@ -986,11 +989,11 @@ describe("at the home", () => {
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     const id8 = fixtureIntentId8(home.dir);
-    const pushed = claimPayload(home.remote, id8, "refunds")?.result?.repos.find((repo) => repo.repo === "checkout-api")?.heads;
+    const pushed = (claimPayload(home.remote, id8, "refunds")?.result as SentResult | undefined)?.repos.find((repo) => repo.repo === "checkout-api")?.heads;
     expect(pushed).toHaveLength(1);
     const fix = commitOnHost(hosts["checkout-api"], "refunds", { "src/refunds.ts": "export const refunds = 1; // reviewed\n" }, "review fix");
     next(alice);
-    const sent = claimPayload(home.remote, id8, "refunds")?.result?.repos.find((repo) => repo.repo === "checkout-api");
+    const sent = (claimPayload(home.remote, id8, "refunds")?.result as SentResult | undefined)?.repos.find((repo) => repo.repo === "checkout-api");
     expect(sent?.heads).toEqual([...pushed!, fix]);
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
     mergeOnHost(hosts.billing, "refunds", "squash");
@@ -1012,7 +1015,7 @@ describe("at the home", () => {
     writeFileSync(join(api, "src", "refunds.ts"), "export const refunds = 1; // by hand, then AI-DLC\n");
     const again = run(UNIT, ["push"], alice);
     expect(again.status, again.out).toBe(0);
-    const heads = claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.result?.repos
+    const heads = (claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.result as SentResult | undefined)?.repos
       .find((repo) => repo.repo === "checkout-api")?.heads ?? [];
     expect(heads).toHaveLength(3);
     expect(heads[1]).toBe(byHand);

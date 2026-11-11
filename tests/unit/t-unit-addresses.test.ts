@@ -35,6 +35,9 @@ import {
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
+// A claim's result, as the tests read it.
+type SentResult = { repos: Array<{ repo: string; base: string; heads: string[] }> };
+
 const servers: Array<{ kill: () => void }> = [];
 afterEach(() => {
   while (servers.length > 0) servers.pop()!.kill();
@@ -158,7 +161,7 @@ describe("the person's own git, on steps nobody typed", () => {
       .map((line) => (JSON.parse(line) as { argv: string[] }).argv)
       .filter((argv) => (argv.includes("fetch") || argv.includes("ls-remote")) && argv.includes("origin") && !argv.some((arg) => arg.includes("claim")));
     expect(looks.length).toBeGreaterThan(0);
-    for (const argv of looks) expect(["main", "refs/heads/refunds", "+refs/heads/refunds:refs/remotes/origin/refunds"]).toContain(argv.at(-1));
+    for (const argv of looks) expect(["main", "refs/heads/refunds", "+refs/heads/refunds:refs/remotes/origin/refunds"]).toContain(argv.at(-1) ?? "");
     expect(looks.some((argv) => argv.at(-1) === "main")).toBe(true);
   });
 });
@@ -241,7 +244,7 @@ describe("the push goes where git would push it", () => {
     const pushed = run(UNIT, ["push"], alice);
     expect(pushed.status, pushed.out).toBe(0);
     expect(spawnSync("git", ["merge-base", "--is-ancestor", moved, "refunds"], { cwd: fork }).status).toBe(0);
-    const result = claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.result;
+    const result = claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.result as SentResult | undefined;
     expect(result?.repos.find((repo) => repo.repo === "checkout-api")?.base).toBe(moved);
   });
 });
