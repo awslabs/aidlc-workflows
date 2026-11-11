@@ -159,8 +159,8 @@ function leadWithNothingLeft(claimed = true): string {
   return lead;
 }
 
-const jump = (lead: string, unit: string) =>
-  JSON.parse(runMergeTool(ORCH, ["next", "--stage", FD, "--unit", unit], lead).stdout) as { kind: string; message: string };
+const jump = (lead: string, unit: string, stage = FD) =>
+  JSON.parse(runMergeTool(ORCH, ["next", "--stage", stage, "--unit", unit], lead).stdout) as { kind: string; message: string };
 
 describe("the lead's own finished Unit after a team claimed another", () => {
   test("asked to redo alpha, the line says alpha is finished and names what this checkout builds", () => {
@@ -197,6 +197,15 @@ describe("the lead's own finished Unit after a team claimed another", () => {
       message: "alpha is finished, so it is not redone here; this checkout builds no Unit now.",
     });
     expect(jumps()).toBe(before);
+  });
+
+  test("with no Unit left to build here, a stage done once for all Units keeps its question", () => {
+    const said = jump(leadWithNothingLeft(), "alpha", "build-and-test");
+    expect(said.kind, JSON.stringify(said)).toBe("print");
+    expect(said.message).toContain(
+      "Build and Test is done once for all units, so it cannot be redone for one unit. Nothing changed. " +
+        "Do you want me to redo it for every unit?",
+    );
   });
 
   test("a lead whose work no team has taken a Unit from goes on to redo alpha as before", () => {
