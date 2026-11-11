@@ -2261,6 +2261,7 @@ are recorded before cleanup is scheduled. The worker rechecks paths and hashes,
 refuses reparse points, and deletes files individually after the running command
 exits; uninstall is done when the `aidlc` command is no longer found. An
 interrupted continuation can resume only with its validated file plan.
-Older journals without such a plan are refused and left for inspection. See
+An older journal without such a plan is never run; `aidlc uninstall` or the
+installer removes it. See
 [Transactions and Recovery](#transactions-and-recovery) for how a failed
 cleanup is reported and retried.

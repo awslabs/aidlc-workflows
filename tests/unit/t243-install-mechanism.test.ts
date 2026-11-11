@@ -8579,7 +8579,6 @@ describe("t243 release lifecycle", () => {
       const tampered = scanWindowsUninstallJournals();
       expect(tampered.pending).toEqual([]);
       expect(tampered.invalid).toContain(journalPath);
-      expect(() => recoverWindowsUninstallContinuations()).toThrow("invalid Windows uninstall journal(s)");
 
       writeFileSync(journalPath, `${JSON.stringify(journal, null, 2)}\n`);
       const intact = scanWindowsUninstallJournals();
