@@ -448,11 +448,11 @@ describe("a changed original named again updates its copy", () => {
     expect(onboard(proj, ["./orig/a.md"]).status).toBe(0);
     const recorded = rows(proj)[0].copied_from as { path: string; sha256: string };
     expect(recorded.path).toBe("orig/a.md");
-    expect(recorded.sha256).toBe(rows(proj)[0].sha256);
+    expect(recorded.sha256).toBe(rows(proj)[0].sha256 as string);
     writeFileSync(join(proj, "orig", "a.md"), "two\n", "utf-8");
     expect(onboard(proj, ["orig/a.md"]).status).toBe(0);
     const moved = rows(proj)[0];
-    expect((moved.copied_from as { sha256: string }).sha256).toBe(moved.sha256);
+    expect((moved.copied_from as { sha256: string }).sha256).toBe(moved.sha256 as string);
     writeFileSync(join(proj, "orig", "a.md"), "three\n", "utf-8");
     expect(onboard(proj, ["orig/a.md"]).status).toBe(0);
     expect(rows(proj)).toHaveLength(1);
