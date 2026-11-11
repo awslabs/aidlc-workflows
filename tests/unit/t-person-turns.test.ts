@@ -598,6 +598,15 @@ describe("person-turn check", () => {
     row(dir, "STAGE_AWAITING_APPROVAL", { Stage: "code-generation" }, fresh);
     row(dir, "GATE_APPROVED", { Stage: "code-generation" }, fresh);
     expect(drive.unbacked()).toEqual([]);
+    // A rejection in that clone takes its Unit's approval back for the other
+    // clone too: a stage approval there is the person's to give again.
+    row(dir, "DECISION_RECORDED", { Stage: "code-generation", Checkpoint: "Construction Unit Approval", Unit: "extra", Kind: "unit" }, fresh);
+    drive.sent('{"Approve this completed extra?":"Request Changes"}');
+    row(dir, "GATE_REJECTED", { Stage: "code-generation", Checkpoint: "construction-unit", Unit: "extra", "Gate Stages": "code-generation" }, fresh);
+    row(dir, "STAGE_AWAITING_APPROVAL", { Stage: "code-generation" });
+    row(dir, "GATE_APPROVED", { Stage: "code-generation" });
+    expect(drive.unbacked()).toHaveLength(1);
+    expect(drive.unbacked()[0]).toContain("GATE_APPROVED code-generation");
   });
 
   test("a gate in a single-stage run is not opened by the main workflow's gate", () => {
