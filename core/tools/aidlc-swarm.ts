@@ -356,12 +356,13 @@ function checkConverged(
   };
 }
 
-// The limit a check runs under: --timeout-ms when given, validated as the
-// checkpoint's own verification limit is, else the 30-minute default.
+// The limit a check runs under: --timeout-ms when given, read and validated
+// exactly as `bolt checkpoint --action verify` reads its own, else the
+// 30-minute default.
 function swarmCheckTimeout(flags: Record<string, string>): number {
   const raw = flags["timeout-ms"] as string | undefined;
   try {
-    return raw === undefined ? verificationTimeoutMs() : verificationTimeoutMs(/^\d+$/.test(raw) ? Number(raw) : Number.NaN);
+    return verificationTimeoutMs(raw === undefined ? undefined : Number(raw));
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error));
   }
