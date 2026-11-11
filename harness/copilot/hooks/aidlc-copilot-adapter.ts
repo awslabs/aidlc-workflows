@@ -2626,7 +2626,7 @@ export async function run(
             tool_input: { file_path: target.filePath },
           });
           runCore("aidlc-write-audit-log.ts", fwd);
-          // A file a patch deleted or moved away leaves nothing for a sensor to read.
+          // A target that is gone (a patch deleted or moved it) leaves a sensor nothing to read.
           if (existsSync(target.filePath)) runCore("aidlc-run-sensors.ts", fwd);
         }
         return 0;

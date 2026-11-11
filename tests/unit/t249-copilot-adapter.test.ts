@@ -794,8 +794,6 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       ).toBe("deny");
     }
   });
-  // Copilot CLI hands its apply_patch to the hooks AI-DLC registers as Edit,
-  // with the patch text itself as tool_input (live-captured on 1.0.109).
   test("0b: an apply_patch Copilot CLI names Edit waits for the approved plan like any write", () => {
     const dir = scratchProject(true);
     seedUnapprovedCodeGeneration(dir);
@@ -1354,9 +1352,6 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(audit).toContain("as-json.md");
   });
 
-  // The PostToolUse of an apply_patch on Copilot CLI: tool_name Edit, the patch
-  // text as tool_input (live-captured on 1.0.109). Each file the patch touches
-  // is recorded as its own write, with LF or CRLF line ends.
   test("17d: an apply_patch Copilot CLI names Edit records each file it adds, updates, deletes or moves", () => {
     for (const eol of ["\n", "\r\n"]) {
       const dir = scratchProject(true);
@@ -1406,8 +1401,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
-  // At build-and-test every .ts write is type-checked: no sensor is asked to
-  // read a file the patch deleted or moved away.
+  // At build-and-test the stage graph type-checks every .ts write.
   test("17e: an apply_patch that deletes or moves a file runs no sensor on the file that is gone", () => {
     const dir = scratchProject(true);
     const statePath = seededStateFile(dir);
