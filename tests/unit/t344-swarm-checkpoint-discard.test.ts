@@ -111,7 +111,7 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
     const pd = fixture(["alpha"], check);
     const failed = interruptAfterBoltStart(pd, false);
     expect(failed.code, `${failed.out}\n${failed.err}`).toBe(2);
-    expect(failed.out).toContain("aidlc-worktree discard");
+    expect(failed.out).toContain("engine worktree discard");
     expect(readFileSync(join(wt(pd), "src", "alpha.ts"), "utf-8")).toContain("alpha = 1");
     expect(readFileSync(seededStateFile(pd), "utf-8")).toContain("**Bolt Refs**: [empty list]");
     const marker = join(wt(pd), ".aidlc", "unbound-check-ran");

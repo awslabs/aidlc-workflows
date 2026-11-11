@@ -1413,18 +1413,18 @@ X. Other (please specify)
         "reset the existing consolidated-summary `[Answer]:` tag to blank",
       );
       expect(result.out).toContain(
-        'decision --checkpoint summary-confirmation --stage \\"feasibility\\"',
+        "decision --checkpoint summary-confirmation --stage feasibility",
       );
       expect(result.out).toContain(
-        'answer --checkpoint summary-confirmation --stage \\"feasibility\\"',
+        "answer --checkpoint summary-confirmation --stage feasibility",
       );
       expect(result.out).toContain("retry the stage completion command");
       expect(result.out).toContain("If a completion gate is already open");
       expect(result.out).toContain(
-        'report --stage \\"feasibility\\" --result rejected',
+        "report --stage feasibility --result rejected",
       );
       expect(result.out).toContain(
-        "--user-input \\\"Request Changes\\\" --reason '<requested changes>'",
+        "--user-input 'Request Changes' --reason '<requested changes>'",
       );
       expect(result.out).toContain("Re-save each generated artifact");
       expect(result.out).toContain("rerun the section-12a reviewer");
