@@ -409,8 +409,11 @@ order: the state-transition, reviewer-scope, review-freeze and plan-approval
 guards, each as the same case it ran as its own handler, and each guard's core
 hook runs inside that process too (imported from beside the adapter and called,
 never spawned as a second engine). Every member runs even after one refuses; the
-call is refused when any member refuses, with each refusal once on stderr and
-nothing on stdout, and when every member lets it through nothing is printed: the
+call is refused when any member refuses, with each refusal once on stderr, exit
+2 and nothing on stdout (on Windows, where Codex runs a call whose hook exits 2,
+the same words go as exit 0 with a `permissionDecision` of `deny` on stdout, which
+Codex holds and shows the agent in the same frame; `deliver-stage-rules` refuses
+the same way), and when every member lets it through nothing is printed: the
 command runs with the words the agent wrote (Codex gives it the session as
 `CODEX_THREAD_ID`, which the tools read), so the shipped
 `.codex/rules/default.rules` prefixes match it. A member that fails on its own
