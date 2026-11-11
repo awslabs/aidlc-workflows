@@ -712,9 +712,7 @@ export function mutationBlockReason(
     `the plan, unit-test instructions, and current Testing Contract do not have a current ` +
     `matching approval.${detail ? ` Reason: ${detail.replace(/\.+$/, "")}.` : ""}` +
     (unread ? " A read written out, naming each file (for example `cat src/app.ts`), runs while the plan waits." : "") +
-    // On Windows Codex's apply_patch.bat takes no patch on stdin and no patch
-    // over more than one line, so no form this could name works there.
-    (unread && patchUnseen && process.platform !== "win32"
+    (unread && patchUnseen
       ? " An apply_patch with its patch in the command itself (`apply_patch <<'PATCH'`, the patch, then `PATCH` on its own line) is read as the writes it names."
       : "") +
     " Writes inside the selected code-generation record directory remain " +
