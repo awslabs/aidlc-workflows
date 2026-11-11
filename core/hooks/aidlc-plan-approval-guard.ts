@@ -684,6 +684,9 @@ export function mutationBlockReason(
   finished = false,
   unreadShell = false,
   patchUnseen = false,
+  // Codex on Windows: an agent there takes the heredoc form for one PowerShell
+  // cannot run, and Codex applies it before any shell does.
+  codexOnWindows = false,
 ): string {
   const scope = unit === null ? "the zero-Unit stage-level implementation" : `unit ${unit}`;
   const unread = opaqueShell && unreadShell;
@@ -714,7 +717,8 @@ export function mutationBlockReason(
     `matching approval.${detail ? ` Reason: ${detail.replace(/\.+$/, "")}.` : ""}` +
     (unread ? " A read written out, naming each file (for example `cat src/app.ts`), runs while the plan waits." : "") +
     (unread && patchUnseen
-      ? " An apply_patch with its patch in the command itself (`apply_patch <<'PATCH'`, the patch, then `PATCH` on its own line) is read as the writes it names."
+      ? " An apply_patch with its patch in the command itself (`apply_patch <<'PATCH'`, the patch, then `PATCH` on its own line) is read as the writes it names." +
+        (codexOnWindows ? " On Windows Codex applies that form itself, before PowerShell reads it, so it works there too." : "")
       : "") +
     " Writes inside the selected code-generation record directory remain " +
     `available for planning. When the plan is ready, run ${nextOnItsOwn()}: ${nextAfterPlanClause(planApprovalOff, false)}`
@@ -3108,6 +3112,7 @@ async function evaluate(
           blockedMutation.finished,
           blockedMutation.unreadShell === true,
           blockedMutation.patchUnseen === true,
+          process.platform === "win32" && runtimeHarnessName(projectDir) === "codex",
         )
       : verdict.appendixInBrief
       ? appendixBlockReason(verdict.mentioned)

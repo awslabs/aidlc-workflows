@@ -3930,6 +3930,16 @@ describe("t265b hook lifecycle", () => {
         const result = runHook(proj, BASH(command));
         expect({ code: result.code, stderr: result.stderr.trim() }, command).toEqual({ code: 2, stderr: bare });
       }
+      // For Codex on Windows the sentence also says the form works there: Codex
+      // applies it itself, before PowerShell reads it. Said nowhere else.
+      const clause = "On Windows Codex applies that form itself, before PowerShell reads it, so it works there too.";
+      const asCodex = runHook(proj, BASH("apply_patch"), { AIDLC_HARNESS_NAME: "codex" }).stderr;
+      expect(asCodex.includes(clause), "the clause on win32 for Codex only").toBe(process.platform === "win32");
+      expect(bare).not.toContain(clause);
+      const both = (codexOnWindows: boolean) => mutationBlockReason(null, true, null, false, false, true, true, codexOnWindows);
+      expect(both(true)).toContain(`is read as the writes it names. ${clause} Writes inside`);
+      expect(both(false)).not.toContain(clause);
+      expect(mutationBlockReason(null, true, null, false, false, true, false, true)).not.toContain(clause);
       // With no operand the binary writes nothing; a flag after the first word is some other command's,
       // and another program given the flag first is no patch: it is read as that program.
       expect(runHook(proj, BASH("codex --codex-run-as-apply-patch")).code).toBe(0);
