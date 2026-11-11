@@ -3719,6 +3719,12 @@ describe("t265b hook lifecycle", () => {
         [`cat > ${plan} <<PLAN-EOF\nplain words\nPLAN-EOF\nprintf x > src/x.ts\nPLAN`, "cannot modify workspace paths"],
         [`cat > ${plan} <<'EOF' # it's the plan\nthe person's tasks\nEOF\nprintf x > src/x.ts`, "cannot modify workspace paths"],
         [`echo a\\ #; ((x=1+\ncat > ${plan} <<EOF\n+0))\nprintf y > src/x.ts\nEOF`, "cannot modify workspace paths"],
+        // A line continuation before a `#`: the shell joins the lines, so the
+        // `#` starts a comment and the `<<` in it is no heredoc.
+        [`cat \\\n# cat > ${plan} <<'EOF'\nprintf x > src/x.ts\nEOF`, "cannot modify workspace paths"],
+        [`cat ${plan} \\\n# cat > ${plan} <<'EOF'\nprintf x > src/x.ts\nEOF`, "cannot modify workspace paths"],
+        [`cat > ${plan} \\\n# cat <<'EOF'\nprintf x > src/x.ts\nEOF`, "cannot modify workspace paths"],
+        [`cat > ${plan} \\\n# <<'EOF'\nprintf x > src/x.ts\nEOF`, "cannot modify workspace paths"],
         [`tee src/*.ts <<'EOF'\nbody\nEOF`, "cannot modify workspace paths"],
         [`LD_PRELOAD=/tmp/x.so cat > ${plan} <<'EOF'\n${body}EOF`, "could not be read"],
         // A rest of the line it cannot read keeps the line's reading, heredoc and all.

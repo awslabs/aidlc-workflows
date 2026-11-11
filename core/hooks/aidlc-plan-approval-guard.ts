@@ -2103,11 +2103,11 @@ function shellUsesDynamicEvaluation(command: string): boolean {
 // else returns the command as written, read as before: any other heredoc, an
 // expansion, a glob, a bracket, brace or parenthesis outside a body (arithmetic
 // and subscripts read `<<` as a shift), an assignment before the cat or tee, a
-// carriage return, a quote in a comment, a `<<` it cannot span, whose delimiter
-// word holds a backslash or runs into the next word, a second `<<`, a pipe, `&`
-// or `\` ending the header line, a quote open at its end, or a body no line
-// ends. mutationIntent reads the line as before, too, when the rest of it is a
-// command it cannot read.
+// carriage return, a line continuation, a quote in a comment, a `<<` it cannot
+// span, whose delimiter word holds a backslash or runs into the next word, a
+// second `<<`, a pipe, `&` or `\` ending the header line, a quote open at its
+// end, or a body no line ends. mutationIntent reads the line as before, too,
+// when the rest of it is a command it cannot read.
 function dataHeredocsBlanked(
   command: string,
   invocationsOf: (text: string) => Array<{
@@ -2132,6 +2132,9 @@ function dataHeredocsBlanked(
       continue;
     }
     if (ch === "\\") {
+      // A line continuation joins the next line to this one before the shell
+      // reads a comment or a heredoc there.
+      if (command[i + 1] === "\n") return command;
       escaped = ++i;
       continue;
     }
