@@ -683,6 +683,32 @@ describe("documentation parity derives current behavior from authored implementa
     );
   });
 
+  test("no guide page says a redo deletes the stage's artifacts", () => {
+    // A redo or a jump resets progress marks, not files: the artifacts stay on disk.
+    const stale = /\bredo\b[^.]*\bartifacts (?:are )?deleted/i;
+    const copies = filesBelow(at("docs", "guide"), ".md").filter((file) =>
+      stale.test(normalized(readFileSync(file, "utf8"))),
+    );
+    expect(copies).toEqual([]);
+  });
+
+  test("the bugfix walkthrough's end state has Code Generation where a run with no Units writes it", () => {
+    // Without Units Generation there is no Unit folder: Code Generation writes <record>/construction/code-generation/.
+    expect(scopeGrid.bugfix.stages["units-generation"]).not.toBe("EXECUTE");
+    const walkthrough = sliceBetween(
+      read("docs", "guide", "16-worked-examples.md"),
+      "## Bugfix Walkthrough",
+      "## Feature Walkthrough",
+    );
+    const tree = sliceBetween(walkthrough, "### End state", "\n### ").split(/\r?\n/);
+    const indent = (line: string): number => line.length - line.trimStart().length;
+    const construction = tree.findIndex((line) => line.trim() === "construction/");
+    expect(construction, "the end state lists construction/").toBeGreaterThan(-1);
+    const next = tree[construction + 1] ?? "";
+    expect(next.trimStart(), "the first entry under construction/").toMatch(/^code-generation\//);
+    expect(indent(next), "code-generation/ sits right under construction/").toBe(indent(tree[construction]) + 2);
+  });
+
   test("no copy says the Construction checkpoint re-check holds under every Guard Policy", () => {
     // It runs under strict only; relaxed and off accept the change with one line.
     const stale = /exception holds under every (?:Guard Policy|value)/;
