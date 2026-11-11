@@ -1358,7 +1358,11 @@ describe("the claims' home is the lead's address", () => {
       renameSync(away, home.remote);
     }
     expect(held.status, held.out).toBe(0);
-    expect(String(held.json?.notice)).toMatch(onFork("refunds", fork));
+    expect(String(held.json?.notice)).toMatch(new RegExp(
+      "The lead's project did not answer just now, so your take of refunds is on \\S*pay-push-up\\.git; " +
+        "the lead and the other teams see it once the lead adds that address to their workspace as a git remote\\.",
+    ));
+    expect(held.out).not.toContain("takes no push from you");
     expect(held.out).not.toContain("Unit claim registry read failed");
     const id8 = fixtureIntentId8(home.dir);
     expect(claimPayload(fork, id8, "refunds")).toMatchObject({ status: "claimed" });
@@ -1410,6 +1414,27 @@ describe("the claims' home is the lead's address", () => {
     expect(claimPayload(fork, id8, "refunds")?.result).toBeDefined();
     expect(claimPayload(home.remote, id8, "refunds")).toBeNull();
     expect(next(pay).ask_type ?? null).not.toBe("unit-push");
+  });
+
+  // The fork leg: a lead who only looked at status or the board saw no take a
+  // team's fork held until a look took it in.
+  test("the lead's status and team-board show a take its team's fork holds, and write no claim and push nothing", () => {
+    const { home, hosts, id8 } = forkedLead();
+    committedByPusher(home.remote);
+    const { dir: pay, fork } = forkedTeam(home, hosts, "pay");
+    expect(takeFrom("payments", pay, "refunds").status).toBe(0);
+    git(home.dir, ["remote", "add", "team-a", fork]);
+    const onTheFork = claimTip(fork, id8, "refunds");
+    const row = /^- refunds, payments space: building, taken by pay$/m;
+    const board = run(ORCH, ["team-board"], home.dir);
+    expect(board.status, board.out).toBe(0);
+    expect(board.out).toMatch(row);
+    const status = run(UTILITY, ["status"], home.dir);
+    expect(status.status, status.out).toBe(0);
+    expect(status.out).toMatch(row);
+    expect(claimPayload(home.remote, id8, "refunds")).toBeNull();
+    expect(git(home.remote, ["for-each-ref", "--format=%(refname)", `refs/heads/claim/${id8}/`]).trim()).toBe("");
+    expect(claimTip(fork, id8, "refunds")).toBe(onTheFork);
   });
 
   test("the lead adds the team's fork as a remote: the next look takes the take and the result in, and the merge is recorded done", () => {

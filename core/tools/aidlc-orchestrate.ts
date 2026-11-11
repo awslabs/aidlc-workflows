@@ -651,6 +651,7 @@ import {
   type ToldMerge,
   writeProposedText,
   newsNotTakenIn,
+  readTeamsClaims,
   refreshHomeClaims,
   takeInFromRemotes,
   refreshListedHome,
@@ -18293,7 +18294,7 @@ function teamHomeClaims(
         const back = takeInFromRemotes(projectDir, { unitOpen: open });
         for (const line of back.lines) sayWithStepOnce(projectDir, line);
         if (back.refused) sayWithStepOnce(projectDir, newsNotTakenIn("the teams"));
-      }
+      } else readTeamsClaims(projectDir);
       overview = readOverview();
       left = leftNow();
     }

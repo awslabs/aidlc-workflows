@@ -6838,7 +6838,7 @@ function takeUnit(args: string[], projectDir?: string): void {
     (home.atOrigin === undefined ? "" : ` The lead's project could not be reached at ${home.location} (${home.atOrigin.why}), so ` +
       `${unit} is recorded at ${home.atOrigin.origin}, where this clone's copy of the lead's plan comes from.`);
   const noPush = onRemote !== null
-    ? `The lead's project takes no push from you, so your take of ${unit} is on ${onRemote}; the lead and the other teams ` +
+    ? `${standsIn ? "The lead's project did not answer just now" : "The lead's project takes no push from you"}, so your take of ${unit} is on ${onRemote}; the lead and the other teams ` +
       "see it once the lead adds that address to their workspace as a git remote."
     : notRecorded === null ? null : `The lead's project takes no push from here (${notRecorded}), so the lead and the other teams ` +
       `cannot see that you took ${unit} until it does; AI-DLC records it there when a push next goes through.`;
@@ -7229,16 +7229,12 @@ export function takeInFromRemotes(projectDir: string, options: { unitOpen: boole
   if (home === null) return none;
   const identity = activeIdentity(pd);
   const id8 = identity.intentId8;
-  const others = git(pd, ["remote"]).stdout.split(/\r?\n/).map((name) => name.trim()).filter((name) => name !== "" && name !== home);
   // Said once to the lead: a remote that cannot be read, a take-in refused.
   const lines: string[] = [];
   let taken = 0;
   // This .git refused the write (Codex's sandbox): its own line, not the remote's.
   let refused = false;
-  for (const remote of others) {
-    const kept = `refs/remotes/${remote}/claim/${id8}/`;
-    const heldBefore = localGit(pd, ["for-each-ref", "--count=1", "--format=%(refname)", kept]).stdout.trim() !== "";
-    const fetched = quietFetch(pd, ["--no-tags", "--no-filter", "-q", remote, `+refs/heads/claim/${id8}/*:${kept}*`]);
+  for (const { remote, kept, heldBefore, fetched } of fetchTeamsClaims(pd, home, id8)) {
     if (!fetched.ok && localGitWriteRefused(fetched.stderr) !== null) {
       refused = true;
       continue;
@@ -7282,6 +7278,31 @@ export function takeInFromRemotes(projectDir: string, options: { unitOpen: boole
     }
   }
   return { taken, lines, refused };
+}
+
+// The lead's other git remotes (a team's fork or own repo the lead added), and
+// this work's claim branches on each fetched quietly into the refs the
+// person's own fetch of that remote uses. Only the lead's own checkout runs it.
+function fetchTeamsClaims(pd: string, home: string, id8: string): Array<{ remote: string; kept: string; heldBefore: boolean; fetched: ReturnType<typeof quietFetch> }> {
+  const others = git(pd, ["remote"]).stdout.split(/\r?\n/).map((name) => name.trim()).filter((name) => name !== "" && name !== home);
+  return others.map((remote) => {
+    const kept = `refs/remotes/${remote}/claim/${id8}/`;
+    const heldBefore = localGit(pd, ["for-each-ref", "--count=1", "--format=%(refname)", kept]).stdout.trim() !== "";
+    return { remote, kept, heldBefore, fetched: quietFetch(pd, ["--no-tags", "--no-filter", "-q", remote, `+refs/heads/claim/${id8}/*:${kept}*`]) };
+  });
+}
+
+// status and team-board at the lead's project: what the lead's other remotes
+// hold is read, never taken in, so the board shows a take a team sent there in
+// its own words; the lead's next look records it.
+export function readTeamsClaims(projectDir: string): void {
+  try {
+    const pd = resolveProjectDir(projectDir);
+    const home = repositoryRemote(pd);
+    if (home !== null) fetchTeamsClaims(pd, home, activeIdentity(pd).intentId8);
+  } catch {
+    // What the lead's project has stands.
+  }
 }
 
 // A lead's command on a team's claim (merged, send-back, turned-down,
