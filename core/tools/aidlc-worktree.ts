@@ -3157,13 +3157,13 @@ function handleMerge(args: string[]): void {
     process.exit(1);
   }
 
-  // Cleanup: remove worktree + delete branch. The merge commit at
-  // <commitSha> is now permanent on <target> — failures here leave an
-  // orphan worktree directory and/or branch but DO NOT roll back the
-  // merge. Tag the error message with [merge-succeeded:<sha>] so the
-  // ERROR_LOGGED row carries enough state for doctor to tell
-  // "merge failed entirely" from "merge landed, cleanup orphan remains"
-  // — these need different recovery actions.
+  // Cleanup: remove worktree + delete branch. The landing at <commitSha> (the
+  // commit the target was at, when there was nothing to commit) is now
+  // permanent on <target>: failures here leave an orphan worktree directory
+  // and/or branch but DO NOT roll back the merge. Tag the error message with
+  // [merge-succeeded:<sha>] so the ERROR_LOGGED row carries enough state for
+  // doctor to tell "merge failed entirely" from "merge landed, cleanup orphan
+  // remains": these need different recovery actions.
   const cleanupTag = `[merge-succeeded:${commitSha}]`;
   const landingNotices: string[] = [];
   if (sourceRecord?.kind === "bound") {
