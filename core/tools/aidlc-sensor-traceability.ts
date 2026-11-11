@@ -426,6 +426,48 @@ function storyAssignments(storyMapPath: string, units: string[], ids: Map<string
     : { assignments };
 }
 
+// The Units of the plan, with what the story map says of each item: a row of it
+// per story (`USg.s`), or per requirement when there are no stories.
+interface HandoffPlan {
+  units: string[];
+  unitIds: Map<string, string>;
+  assignments: Map<string, Set<string>>;
+  hasStories: boolean;
+}
+
+// The story-map row an `N/A` ID is carried on, with the key the row is under:
+// the story `USg.s` of an `ACg.s.c` when stories.md exists, the `FR` itself when
+// it does not. BR and NFR IDs are on no such row.
+function handoffRow(id: string, plan: Pick<HandoffPlan, "assignments" | "hasStories">): { key: string; units: Set<string> } | undefined {
+  const key = plan.hasStories
+    ? (/^AC(\d+)\.(\d+)\.\d+$/.exec(id) ? id.replace(/^AC(\d+)\.(\d+)\.\d+$/, "US$1.$2") : undefined)
+    : (/^FR\d+(?:\.\d+)?$/.test(id) ? id : undefined);
+  const units = key === undefined ? undefined : plan.assignments.get(key);
+  return key !== undefined && units !== undefined ? { key, units } : undefined;
+}
+
+// The Units, other than `except`, a free-text reason names: the Unit's name, its
+// `U{n}` ID, or (for a name declared without one) the name behind a `u{n}-`
+// prefix, each as a whole token, so `u2-profiles-old` does not name `u2-profile`.
+function unitsNamed(text: string, units: string[], unitIds: Map<string, string>, except: string): string[] {
+  const literal = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return units.filter((unit) => {
+    if (unit === except) return false;
+    const aliases = [literal(unit)];
+    const id = unitIds.get(unit);
+    if (id) aliases.push(literal(id));
+    if (!/^u\d+-/i.test(unit)) aliases.push(`u\\d+-${literal(unit)}`);
+    return new RegExp(`(?<![A-Za-z0-9_-])(?:${aliases.join("|")})(?![A-Za-z0-9_-])`, "i").test(text);
+  });
+}
+
+// The Units an `N/A` row hands its ID to: ones the reason names, for an ID the
+// story map carries. Empty when the row is not a hand-off.
+function handedTo(entry: CoverageEntry, self: string, plan: HandoffPlan): string[] {
+  if (entry.status !== "N/A" || !handoffRow(entry.id, plan)) return [];
+  return unitsNamed(entry.target ?? "", plan.units, plan.unitIds, self);
+}
+
 function resolveUnitContext(
   projectDir: string,
   outputPath: string,
@@ -489,6 +531,7 @@ function addSource(result: UpstreamResolution, source: { ids: Set<string>; reaso
 function addUnitRows(result: UpstreamResolution, storyMap: string, context: UnitContext, patterns: RegExp[]): void {
   const mapped = storyAssignments(storyMap, context.units, context.unitIds, patterns);
   if (mapped.reason) result.reasons.push(mapped.reason);
+  result.storyAssignments = mapped.assignments;
   for (const [id, units] of mapped.assignments) {
     if (units.has(context.unitName)) result.ids.add(id);
   }
@@ -784,6 +827,28 @@ function verifyTargets(
     }
   }
 
+  // A Unit's `N/A` that hands an ID to another Unit only works when that Unit is
+  // on the ID's row: otherwise nobody is asked for it.
+  if ((stage === "functional-design" || stage === "code-generation") && docsDir && upstream.unitContext && upstream.storyAssignments) {
+    const { units, unitIds, unitName } = upstream.unitContext;
+    const plan: HandoffPlan = {
+      units,
+      unitIds,
+      assignments: upstream.storyAssignments,
+      hasStories: existsSync(join(docsDir, "inception", "user-stories", "stories.md")),
+    };
+    for (const entry of data.coverage) {
+      const named = handedTo(entry, unitName, plan);
+      const row = handoffRow(entry.id, plan);
+      if (named.length === 0 || !row || named.some((unit) => row.units.has(unit))) continue;
+      const item = plan.hasStories ? `${row.key}'s row` : `${entry.id}'s row`;
+      invalidTargets.push(
+        `${entry.id}: handed to ${named.join(", ")}, none of which is on ${item} in unit-of-work-story-map.md, so no Unit is asked for ${entry.id}. ` +
+          `Add ${named.length === 1 ? "that Unit" : "one of those Units"} to the row at Units Generation, or cover ${entry.id} in this Unit`,
+      );
+    }
+  }
+
   return { invalidTargets, derivedOrphans, reasons };
 }
 
@@ -811,6 +876,8 @@ interface FinalRow {
   through?: string[];
   not_built?: string[];
   not_applicable?: string[];
+  // `N/A` rows that hand the ID to another Unit nothing built it in.
+  handed_off?: string[];
 }
 
 interface FinalCoverage {
@@ -898,6 +965,23 @@ function finalCoverage(projectDir: string): FinalCoverage {
 
   const projectRoot = resolve(projectDir);
   const add = (map: Map<string, string[]>, key: string, value: string) => map.set(key, [...(map.get(key) ?? []), value]);
+  // The plan's Units and the story map's rows, for the `N/A` rows that hand an
+  // ID to another Unit; with no Unit DAG there are none.
+  let plan: HandoffPlan | null = null;
+  const dag = resolveBoltDag(projectDir);
+  if (dag.state === "ok") {
+    const unitIds = unitIdMap(join(docsDir, "inception", "units-generation", "unit-of-work.md"), dag.units);
+    const hasStories = existsSync(storiesPath);
+    const assignments = storyAssignments(
+      join(docsDir, "inception", "units-generation", "unit-of-work-story-map.md"),
+      dag.units,
+      unitIds,
+      hasStories ? [ID_PATTERNS.US] : [ID_PATTERNS.FR],
+    ).assignments;
+    plan = { units: dag.units, unitIds, assignments, hasStories };
+  }
+  // Per ID, the `N/A` reasons that hand it to another Unit.
+  const handedOff = new Map<string, string[]>();
   const builtIn = new Map<string, string[]>();
   const badTargets = new Map<string, string[]>();
   // Each owner's own built IDs and the sub-requirements it owes: the NFRx.y its
@@ -934,6 +1018,9 @@ function finalCoverage(projectDir: string): FinalCoverage {
     for (const entry of read.data.coverage) {
       traced(2, where("code-generation"), entry);
       if (entry.status === "N/A" && entry.target?.trim()) ownNotApplicable.set(`${owner}: ${entry.id}`, entry.target.trim());
+      if (plan && owner !== "code-generation" && entry.target?.trim() && handedTo(entry, owner, plan).length > 0) {
+        add(handedOff, entry.id, `${where("code-generation")}: ${entry.target.trim()}`);
+      }
       if (entry.status !== "OK") continue;
       const problem = codeTargetProblem(projectRoot, entry.target);
       if (problem) {
@@ -988,12 +1075,17 @@ function finalCoverage(projectDir: string): FinalCoverage {
     }
     const through = [...(storyTargets.get(id) ?? [])].flatMap(criteriaOrStory);
     if (through.length > 0) {
-      const notBuilt = through.filter((part) => !builtIn.has(part) && !whyNotApplicable(part));
-      coverage.push(notBuilt.length === 0 ? { id, covered: true, through } : { id, covered: false, through, not_built: notBuilt });
+      // An `N/A` that hands a criterion to another Unit settles it only if some Unit built it.
+      const notBuilt = through.filter((part) => !builtIn.has(part) && (!whyNotApplicable(part) || handedOff.has(part)));
+      const handed = notBuilt.flatMap((part) => handedOff.get(part) ?? []);
+      coverage.push(notBuilt.length === 0
+        ? { id, covered: true, through }
+        : { id, covered: false, through, not_built: notBuilt, ...(handed.length > 0 ? { handed_off: handed } : {}) });
       continue;
     }
     const why = whyNotApplicable(id);
-    coverage.push(why ? { id, covered: true, not_applicable: why } : { id, covered: false });
+    const handed = handedOff.get(id);
+    coverage.push(why && !handed ? { id, covered: true, not_applicable: why } : { id, covered: false, ...(why && handed ? { not_applicable: why, handed_off: handed } : {}) });
   }
 
   const uncovered = coverage.filter((row) => !row.covered);

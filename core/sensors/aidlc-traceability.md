@@ -43,7 +43,12 @@ opens, on the tables as they are then:
    requirement); without that record, a table's requirements are the ones it
    lists and the ones the FR and NFR ID patterns find in requirements.md.
 5. Verifies deterministic targets where possible: stories, Unit mappings,
-   business rules, and workspace-relative code paths. A Functional Design Unit
+   business rules, and workspace-relative code paths. At Functional Design and
+   Code Generation, an `N/A` row for an acceptance criterion (or an FR when
+   there are no stories) whose reason names another Unit of the plan, by name or
+   `U{n}` ID, is a hand-off; at least one Unit it names must be on that story's
+   (or FR's) row in `unit-of-work-story-map.md`, or it is reported as an invalid
+   target. A Functional Design Unit
    whose kind writes no `rules.md` (a `ui` Unit) names one of its design files
    (`functional-spec.md`, `frontend-components.md`) on each row instead of a
    business rule.
@@ -63,7 +68,10 @@ parent alone not covering them; otherwise by its own row or, when User Stories
 ran, through the criteria of the stories User Stories traced it to. One that
 nothing builds is settled when the latest stage that traced it (User Stories,
 NFR Requirements, then Code Generation) marked it `N/A` with its reason in
-every table there that lists it; an `N/A` with no reason is not settled.
+every table there that lists it; an `N/A` with no reason is not settled. A Code
+Generation `N/A` that hands the ID to another Unit settles nothing: if no Unit
+built it, it is uncovered and its row lists the hand-offs as `handed_off`
+(`<Unit>/code-generation: <reason>`).
 
 ## Expected JSON schema
 
