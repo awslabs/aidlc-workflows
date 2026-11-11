@@ -1137,8 +1137,9 @@ export function appendUnderHeading(
 // writers of a rule file (practices-promote, learnings persist) can replace or
 // append under a heading a file lacks: a space made by `space create` starts
 // team.md and project.md as one line, and a team may trim either by hand. It
-// matches the heading the way replaceSection and appendUnderHeading do. One
-// blank line goes above the added heading, never a second one.
+// matches the heading the way replaceSection and appendUnderHeading do. A
+// blank line goes above the added heading unless the text already ends in two
+// newlines.
 export function ensureHeading(content: string, heading: string): string {
   const headingRe = new RegExp(`^${escapeRegex(heading)}[ \\t]*$`, "m");
   if (headingRe.test(content)) return content;

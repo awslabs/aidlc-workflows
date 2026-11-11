@@ -10006,8 +10006,7 @@ function handlePracticesPromote(args: string[]): void {
     }
   }
   // A section written here that ends the file ends it with one newline, so an
-  // added section leaves no blank line at the end and the same save again
-  // writes the same bytes.
+  // added section leaves no blank line at the end of the file.
   const lastHeading = [...newTeamMd.matchAll(/^## ([^\n]*)$/gm)].at(-1)?.[1];
   if (lastHeading !== undefined && sectionsWritten.includes(lastHeading)) {
     newTeamMd = newTeamMd.replace(/\n+$/, "\n");
