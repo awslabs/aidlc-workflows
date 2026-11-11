@@ -6,11 +6,14 @@
 // The person's stop goes through there as it does on solo work: a pause asked
 // at main's own stage parks the work, the next look answers that it is
 // parked, and a resume carries on at the same stage; "approve, and stop there"
-// at main's own gate records the approval and stops. A pause at the board
-// keeps nothing from the person: a Unit a team makes ready during it is
-// offered once they are back. A checkout that holds a claim parks only its
-// own Unit, there, for a pause and for an approval that asks to stop, as
-// before; solo work parks as before.
+// at main's own gate records the approval and stops, in the solo park's own
+// words. A pause at the board keeps nothing from the person: a Unit a team
+// makes ready during it is offered once they are back. A teammate's clone that
+// has not claimed yet pauses the same way, and claims a Unit after. Where a
+// Unit is in hand nothing changes: a checkout that holds a claim parks only its
+// own Unit, there, for a pause and for an approval that asks to stop, and a
+// lead who builds a Unit of their own parks the work; solo work parks as
+// before.
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -61,6 +64,9 @@ const FD = "functional-design";
 const BT = "build-and-test";
 const REVIEWER = "aidlc-architecture-reviewer-agent";
 const STOP_WORDS = "Approve, and stop there for today";
+// The solo park's words, which the lead's checkout says too.
+const PAUSED_AT_BT = "Paused at Build and Test with everything saved. Pick it back up any time here, or with /aidlc --resume in a new chat.";
+const APPROVED_AND_PAUSED = "Approved, and paused at CI Pipeline with everything saved. Pick it back up any time here, or with /aidlc --resume in a new chat.";
 
 type Directive = Record<string, unknown> & { kind: string };
 
@@ -104,9 +110,12 @@ function leadAtBuildAndTest(): string {
 describe("a lead's own checkout while a team holds a Unit claim", () => {
   test("a pause asked at Build and Test, after the Units, parks the work; the next look says so and a resume carries on there", () => {
     const lead = leadAtBuildAndTest();
+    appendMainHumanTurn(lead);
     const parked = parkAsked(lead);
     expect(parked.kind, JSON.stringify(parked)).toBe("parked");
+    expect(parked.narration).toBe(PAUSED_AT_BT);
     expect(stateField(lead, "Parked At Stage")).toBe(BT);
+    expect(stateField(lead, "Parked By")).toBe("person");
     expect(rows(lead, "WORKFLOW_PARKED", BT)).toHaveLength(1);
     expect(nextDirective(lead).kind).toBe("parked");
     const resume = directiveOf(runMergeTool(ORCH, ["next", "--resume"], lead));
@@ -142,6 +151,7 @@ describe("a lead's own checkout while a team holds a Unit claim", () => {
     ));
     expect(stopped.kind, JSON.stringify(stopped)).toBe("parked");
     expect(String(stopped.reason)).toContain(`Approved "${BT}"`);
+    expect(stopped.narration).toBe(APPROVED_AND_PAUSED);
     expect(rows(lead, "GATE_APPROVED", BT)).toHaveLength(1);
     const at = currentStage(lead);
     expect(at).not.toBe(BT);
@@ -169,6 +179,22 @@ describe("a lead's own checkout while a team holds a Unit claim", () => {
     const offered = nextDirective(lead);
     expect(offered.kind, JSON.stringify(offered)).toBe("ask");
     expect(offered.question).toBe("alpha is ready from alpha-team: review and merge it?");
+  });
+});
+
+describe("a teammate's clone that has not claimed a Unit yet", () => {
+  test("a pause parks the work there, and a claim after it starts that Unit's step", () => {
+    const { remote } = makeReplanSeed();
+    const first = clone(remote, "alpha-team");
+    expect(runMergeTool(UNIT, ["claim", "alpha", "--team", "alpha-team"], first).status).toBe(0);
+    const teammate = clone(remote, "beta-team");
+    nextDirective(teammate);
+    const parked = parkAsked(teammate);
+    expect(parked.kind, JSON.stringify(parked)).toBe("parked");
+    expect(stateField(teammate, "Parked At Stage")).toBe(FD);
+    const claimed = runMergeTool(UNIT, ["claim", "beta", "--team", "beta-team"], teammate);
+    expect(claimed.status, claimed.out).toBe(0);
+    expect(nextDirective(teammate)).toMatchObject({ kind: "run-stage", stage: FD, unit: "beta" });
   });
 });
 
@@ -204,7 +230,25 @@ function alphaAtItsGate(team: string): void {
   directiveOf(runMergeTool(ORCH, ["report", "--stage", FD, "--unit", "alpha", "--result", "awaiting-approval"], team));
 }
 
-describe("a checkout that holds a Unit claim parks only its Unit, as before", () => {
+describe("where a Unit is in hand, a stop parks as before", () => {
+  test("a lead who builds a Unit of their own while a team holds another: a pause parks the work", () => {
+    const { seed: lead, remote } = makeReplanSeed();
+    expect(nextDirective(lead)).toMatchObject({ kind: "ask", ask_type: "team-handover" });
+    expect(nextDirective(lead)).toMatchObject({ kind: "run-stage", stage: FD, unit: "alpha" });
+    expect(runMergeTool(STATE, ["unit", "start", "--stage", FD, "--unit", "alpha"], lead).status).toBe(0);
+    git(lead, ["add", "-A"]);
+    git(lead, ["commit", "-m", "the lead starts alpha"]);
+    git(lead, ["push", "origin", "main"]);
+    const team = clone(remote, "beta-team");
+    expect(runMergeTool(UNIT, ["claim", "beta", "--team", "beta-team"], team).status).toBe(0);
+    git(lead, ["fetch", "origin"]);
+    expect(nextDirective(lead)).toMatchObject({ kind: "run-stage", stage: FD, unit: "alpha" });
+    const parked = parkAsked(lead);
+    expect(parked.kind, JSON.stringify(parked)).toBe("parked");
+    expect(stateField(lead, "Parked At Stage")).toBe(FD);
+    expect(existsSync(join(lead, "aidlc", ".aidlc-unit-parked"))).toBe(false);
+  });
+
   test("a pause parks alpha in this checkout and leaves the work's state as it was", () => {
     const team = claimedCheckout();
     const before = readFileSync(seededStateFile(team), "utf-8");
@@ -269,7 +313,9 @@ ${before.map((stage) => `- [x] ${stage} \u2014 EXECUTE`).join("\n")}
 describe("solo work stops as before", () => {
   test("a pause parks the work at its stage", () => {
     const p = soloAtBuildAndTest();
-    expect(parkAsked(p).kind).toBe("parked");
+    const parked = parkAsked(p);
+    expect(parked.kind, JSON.stringify(parked)).toBe("parked");
+    expect(parked.narration).toBe(PAUSED_AT_BT);
     expect(stateField(p, "Parked At Stage")).toBe(BT);
   });
 
@@ -282,6 +328,7 @@ describe("solo work stops as before", () => {
       p,
     ));
     expect(stopped.kind, JSON.stringify(stopped)).toBe("parked");
+    expect(stopped.narration).toBe(APPROVED_AND_PAUSED);
     expect(rows(p, "GATE_APPROVED", BT)).toHaveLength(1);
     expect(stateField(p, "Parked At Stage")).toBe(currentStage(p));
   });
