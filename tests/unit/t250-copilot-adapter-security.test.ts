@@ -66,6 +66,7 @@ const ADAPTER_SRC = join(
 );
 const RUNTIME_PATHS_SRC = join(REPO_ROOT, "core", "tools", "aidlc-runtime-paths.ts");
 const LAUNCHER_VOUCHER_SRC = join(REPO_ROOT, "core", "tools", "aidlc-launcher-voucher.ts");
+const REVIEW_FREEZE_COMMAND_SRC = join(REPO_ROOT, "core", "hooks", "review-freeze-command.ts");
 // The adapter reads AI-DLC's own command routes from the real dispatcher table.
 const DISPATCHER_SRCS = ["aidlc.ts", "aidlc-command.ts", "aidlc-color.ts", "aidlc-version.ts", "aidlc-claude-turn-pending.ts"]
   .map((file) => join(REPO_ROOT, "core", "tools", file));
@@ -200,6 +201,7 @@ function scratch(): Scratch {
   mkdirSync(toolsDir, { recursive: true });
   mkdirSync(captureDir, { recursive: true });
   copyFileSync(ADAPTER_SRC, join(hooksDir, "aidlc-copilot-adapter.ts"));
+  copyFileSync(REVIEW_FREEZE_COMMAND_SRC, join(hooksDir, "review-freeze-command.ts"));
   writeFileSync(join(toolsDir, "aidlc-audit.ts"), AUDIT_TOOL_STUB, "utf-8");
   writeFileSync(join(toolsDir, "aidlc-question-store.ts"), QUESTION_STORE_STUB, "utf-8");
   writeFileSync(join(toolsDir, "aidlc-lib.ts"), LIB_TOOL_STUB, "utf-8");

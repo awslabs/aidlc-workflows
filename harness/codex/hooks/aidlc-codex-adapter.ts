@@ -83,6 +83,7 @@ import {
   stateFilePath,
   validSessionId,
 } from "../tools/aidlc-lib.ts";
+import { patchTargets } from "./review-freeze-command.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -626,16 +627,27 @@ function reconcilePriorSession(): void {
 
 // --- apply_patch envelope parsing --------------------------------------------
 
+const projectPath = (rel: string): string => isAbsolute(rel) ? rel : join(projectDir, rel);
+
 function patchedFiles(command: string): Array<{ path: string; tool: "Write" | "Edit" }> {
-  const out: Array<{ path: string; tool: "Write" | "Edit" }> = [];
-  for (const m of command.matchAll(/^\*\*\* (Add|Update) File: (.+)$/gm)) {
-    const rel = m[2].trim();
-    out.push({
-      path: isAbsolute(rel) ? rel : join(projectDir, rel),
-      tool: m[1] === "Add" ? "Write" : "Edit",
-    });
-  }
-  return out;
+  return patchTargets(command)
+    .filter((target) => target.kind === "Add" || target.kind === "Update")
+    .map((target) => ({ path: projectPath(target.path), tool: target.kind === "Add" ? "Write" : "Edit" }));
+}
+
+// Every file-path directive in the envelope is a mutation of that path:
+// Add/Update (patchedFiles, shared with the audit fan-out), then Delete File
+// and Move to in the patch's order, which patchedFiles skips for the PostToolUse
+// audit surface but ARE sibling writes for the guards (deleting or moving onto
+// a file is changing it).
+function patchedTargets(command: string): Array<{ path: string; tool: string }> {
+  return [
+    ...patchedFiles(command),
+    ...patchTargets(command)
+      .filter((target) => target.kind === "Delete" || target.kind === "Move")
+      .sort((a, b) => a.at - b.at)
+      .map((target) => ({ path: projectPath(target.path), tool: "Edit" })),
+  ];
 }
 
 // --- Targets ------------------------------------------------------------------
@@ -769,18 +781,7 @@ switch (target) {
     }
     if (tool === "apply_patch") {
       const command = (codex.tool_input?.command as string) ?? "";
-      // Every file-path directive in the envelope is a mutation of that path:
-      // Add/Update (patchedFiles - shared with the audit fan-out), plus
-      // Delete File and Move to, which patchedFiles deliberately skips for
-      // the PostToolUse audit surface but ARE sibling writes for scope
-      // purposes (deleting or moving onto a sibling's file is out of a
-      // reviewer's contract exactly like editing it).
-      const targets: Array<{ path: string; tool: string }> = patchedFiles(command);
-      for (const m of command.matchAll(/^\*\*\* (?:Delete File|Move to): (.+)$/gm)) {
-        const rel = m[1].trim();
-        targets.push({ path: isAbsolute(rel) ? rel : join(projectDir, rel), tool: "Edit" });
-      }
-      for (const f of targets) {
+      for (const f of patchedTargets(command)) {
         const fwd = JSON.stringify({
           hook_event_name: "PreToolUse",
           tool_name: f.tool,
@@ -817,12 +818,7 @@ switch (target) {
     }
     if (tool === "apply_patch") {
       const command = (codex.tool_input?.command as string) ?? "";
-      const targets: Array<{ path: string; tool: string }> = patchedFiles(command);
-      for (const m of command.matchAll(/^\*\*\* (?:Delete File|Move to): (.+)$/gm)) {
-        const rel = m[1].trim();
-        targets.push({ path: isAbsolute(rel) ? rel : join(projectDir, rel), tool: "Edit" });
-      }
-      for (const f of targets) {
+      for (const f of patchedTargets(command)) {
         const fwd = JSON.stringify({
           hook_event_name: "PreToolUse",
           tool_name: f.tool,
@@ -875,12 +871,7 @@ switch (target) {
     }
     if (tool === "apply_patch") {
       const command = (codex.tool_input?.command as string) ?? "";
-      const targets: Array<{ path: string; tool: string }> = patchedFiles(command);
-      for (const m of command.matchAll(/^\*\*\* (?:Delete File|Move to): (.+)$/gm)) {
-        const rel = m[1].trim();
-        targets.push({ path: isAbsolute(rel) ? rel : join(projectDir, rel), tool: "Edit" });
-      }
-      for (const f of targets) {
+      for (const f of patchedTargets(command)) {
         const r = await runCoreHere(
           "aidlc-plan-approval-guard.ts",
           JSON.stringify({
