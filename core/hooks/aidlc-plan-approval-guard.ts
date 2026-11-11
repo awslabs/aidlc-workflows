@@ -188,7 +188,7 @@ import {
   stepNextCommand,
   WORKER_BRIEF_SECTIONS,
 } from "../tools/aidlc-testing-posture.ts";
-import { refuseRuntimeIntegrityViolation } from "./runtime-integrity.ts";
+import { heredocAt, heredocPipeline, refuseRuntimeIntegrityViolation } from "./runtime-integrity.ts";
 import { unaskedSystemInstall } from "./system-install.ts";
 
 export { questionsFileHasPendingPlanApproval } from "../tools/aidlc-testing-posture.ts";
@@ -2093,6 +2093,104 @@ function shellUsesDynamicEvaluation(command: string): boolean {
   return false;
 }
 
+// The command with each heredoc that is only data blanked (its operator and
+// delimiter word, its body and its terminator line; newlines kept), so the
+// reading sees the write a plain redirect makes: the shell lexer has no
+// heredoc, and reads each body line as a command. A heredoc is data when its
+// pipeline is one or more unwrapped commands spelled exactly `cat` or `tee`,
+// with no grouping or expansion, and the shell expands nothing in its body (a
+// quoted delimiter, or a body with no `$`, backtick or backslash). Anything
+// else returns the command as written, read as before: any other heredoc, an
+// expansion outside a body, a carriage return, a quote in a comment, a `<<` it
+// cannot span or whose delimiter runs into the next word, a second `<<`, a
+// pipe, `&` or `\` ending the header line, a quote open at its end, or a body
+// no line ends.
+function dataHeredocsBlanked(
+  command: string,
+  invocationsOf: (text: string) => Array<{
+    name: string;
+    executable?: string;
+    ambiguous?: boolean;
+    launchers?: string[];
+    dataDriven?: boolean;
+    executableResolutionChanged?: boolean;
+  }>,
+): string {
+  if (!command.includes("<<") || command.includes("\r")) return command;
+  const spans: Array<[number, number]> = [];
+  let pending: { at: number; operatorEnd: number; newline: number; bodyEnd: number } | null = null;
+  let lineStart = 0;
+  let quote: "'" | '"' | null = null;
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    if (quote === "'") {
+      if (ch === "'") quote = null;
+      continue;
+    }
+    if (ch === "\\") {
+      i++;
+      continue;
+    }
+    if (ch === "`" || ch === "$") return command;
+    if (ch === '"') {
+      quote = quote === '"' ? null : '"';
+      continue;
+    }
+    if (quote === '"') continue;
+    if (ch === "'") {
+      quote = "'";
+      continue;
+    }
+    if (ch === "#" && (i === 0 || /[\s;&|()]/.test(command[i - 1]))) {
+      const end = command.indexOf("\n", i);
+      if (/['"]/.test(command.slice(i, end < 0 ? command.length : end))) return command;
+      if (end < 0) break;
+      i = end - 1;
+      continue;
+    }
+    if (ch === "\n") {
+      if (pending !== null) {
+        if (i !== pending.newline) return command;
+        const after = command.indexOf("\n", pending.bodyEnd);
+        const end = after < 0 ? command.length : after;
+        spans.push([pending.at, pending.operatorEnd], [pending.newline + 1, end]);
+        pending = null;
+        i = end;
+      }
+      lineStart = i + 1;
+      continue;
+    }
+    if (ch !== "<" || command[i + 1] !== "<") continue;
+    if (command[i + 2] === "<") {
+      i += 2;
+      continue;
+    }
+    const heredoc = heredocAt(command, i);
+    if (pending !== null || heredoc === null || heredoc.bodyEnd >= command.length) return command;
+    const rest = command.slice(heredoc.operatorEnd, heredoc.newline);
+    if (!/^(?:$|[ \t;&|<>])/.test(rest) || rest.includes("<<") || /[|&\\][ \t]*$/.test(rest)) return command;
+    const pipeline = heredocPipeline(command.slice(lineStart, i) + rest, i - lineStart);
+    if (/[(){}$`]/.test(pipeline.raw)) return command;
+    const calls = invocationsOf(pipeline.execution);
+    if (
+      calls.length === 0 ||
+      !calls.every((call) =>
+        (call.name === "cat" || call.name === "tee") && (call.executable ?? call.name) === call.name &&
+        !call.ambiguous && !call.launchers?.length && !call.dataDriven && !call.executableResolutionChanged
+      ) ||
+      (!heredoc.quoted && /[$`\\]/.test(heredoc.body))
+    ) return command;
+    pending = { at: i, ...heredoc };
+    i = heredoc.operatorEnd - 1;
+  }
+  if (pending !== null || quote !== null) return command;
+  let out = command;
+  for (const [start, end] of spans) {
+    out = out.slice(0, start) + out.slice(start, end).replace(/[^\n]/g, " ") + out.slice(end);
+  }
+  return out;
+}
+
 async function mutationIntent(
   projectDir: string,
   toolName: string,
@@ -2122,6 +2220,8 @@ async function mutationIntent(
       powerShellPathBoundWriter,
       shellWriteTargets,
     } = await import("./aidlc-review-freeze.ts");
+    // PowerShell has no heredoc; its line is read as written.
+    const read = powerShellHint ? command : dataHeredocsBlanked(command, shellCommandInvocationDetails);
     // A command the adapter ran in PowerShell is read as PowerShell when it is
     // plain. Anything else, and every unhinted command, keeps the POSIX
     // reading: Bash drops the backslashes a Windows path is written with.
@@ -2140,7 +2240,7 @@ async function mutationIntent(
     // `cd <folder> && <command>` runs <command> from <folder>, so it is read
     // from there, each time the line starts by moving to a folder the reader
     // is certain of. Any other move stays opaque (shellInvocationNeedsApproval).
-    let analysed = powerShellCommand ?? command;
+    let analysed = powerShellCommand ?? read;
     let from = cwd;
     const shell = dialect.powerShell ? "powershell" : "posix";
     let moves = 0;
@@ -2207,7 +2307,7 @@ async function mutationIntent(
     // is not trusted here; a variable, substitution or backtick (`dynamic`) can
     // hide a command or a write target, and a shell script run by name hides
     // commands the lexer never sees.
-    readable = !dynamic && !/[^\S \t\n]/u.test(command) && !command.includes("\\\n") && !/\\[<>&|;]/.test(command) &&
+    readable = !dynamic && !/[^\S \t\n]/u.test(read) && !read.includes("\\\n") && !/\\[<>&|;]/.test(read) &&
       !(powerShellHint && powerShellCommand === null) && !wildcardTargets &&
       !invocations.some((invocation) => {
         const program = normalizedCommandName(invocation.executable ?? invocation.name);
