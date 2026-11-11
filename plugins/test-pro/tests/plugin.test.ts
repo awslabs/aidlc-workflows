@@ -22,6 +22,7 @@ import {
   cpSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -151,5 +152,24 @@ describe(`${PLUGIN_NAME} plugin — composed doctor check`, () => {
     );
     expect(doctor.status, `${doctor.stdout ?? ""}${doctor.stderr ?? ""}`).toBe(0);
     expect(doctor.stdout).toContain("Plugin check (test-pro):");
+  });
+
+  // A contribution's step lands among the target stage's own work, before its
+  // Completion Handoff: after it, the agent hands the stage over for approval
+  // before writing what the contribution asks for.
+  test("every test-pro step lands before its target stage's Completion Handoff", () => {
+    const stagesDir = join(project, ".claude", "aidlc-common", "stages");
+    const composed = walkMarkdownFiles(stagesDir).filter((file) => readFileSync(file, "utf-8").includes("(test-pro):"));
+    expect(composed.length).toBeGreaterThan(0);
+    const late: string[] = [];
+    for (const file of composed) {
+      const text = readFileSync(file, "utf-8").replace(/\r\n/g, "\n");
+      const handoff = text.search(/^### Step \d+: Completion Handoff\b/m);
+      expect(handoff, file).toBeGreaterThan(-1);
+      for (const step of text.matchAll(/^### Step[^\n]*\(test-pro\):[^\n]*$/gm)) {
+        if ((step.index ?? 0) > handoff) late.push(`${file.slice(stagesDir.length + 1)}: ${step[0]}`);
+      }
+    }
+    expect(late).toEqual([]);
   });
 });

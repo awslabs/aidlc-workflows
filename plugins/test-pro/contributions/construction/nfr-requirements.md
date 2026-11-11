@@ -8,13 +8,13 @@ adds:
     - "Testability Requirements"
     - "Coverage Targets"
 fragments:
-  - anchor: after-step:6
+  - anchor: after-step:5
     order: 100
 ---
 
-## fragment: after-step:6
+## fragment: after-step:5
 
-### Step 6b (test-pro): Capture testability NFRs
+### Step 5b (test-pro): Capture testability NFRs
 
 For each unit of work, capture OPERATIONAL TESTABILITY requirements alongside
 the standard NFR categories. Write `test-pro-testability-requirements` to this

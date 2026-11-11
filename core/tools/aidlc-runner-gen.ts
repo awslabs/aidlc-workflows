@@ -741,8 +741,8 @@ preserving any \`--request\` id rather than rebuilding the request.
   names a distinct feature/bug/unit unrelated to the active intent's subject
   (\`${aidlcDispatcherInvocation("intent list")} --json\` gives its \`slug\` and
   \`status\`).
-- **On genuine new-work, OFFER, never auto-create.** Surface an
-  \`AskUserQuestion\` showing the active intent and the proposed new one, **including
+- **On genuine new-work, OFFER, never auto-create.** Present a
+  structured question showing the active intent and the proposed new one, **including
   the scope you'd give the new intent**. Default that scope to this runner's baked
   \`${scope}\` (the new work is likely the same flavour that made the user reach for
   this command), but if the new work clearly fits a DIFFERENT scope, propose that

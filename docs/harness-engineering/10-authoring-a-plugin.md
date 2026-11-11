@@ -217,15 +217,15 @@ adds:                         # STRUCTURAL — set-unioned into the stage node
     - "Testability Requirements"          # declared; not enforced today (below)
     - "Coverage Targets"
 fragments:                    # PROSE — spliced into the stage body
-  - anchor: after-step:6
+  - anchor: after-step:5
     order: 100
 ---
 
-## fragment: after-step:6
+## fragment: after-step:5
 
-### Step 6b (test-pro): Capture testability NFRs
+### Step 5b (test-pro): Capture testability NFRs
 
-…prose the agent will see, appended after the target stage's Step 6…
+…prose the agent will see, appended after the target stage's Step 5…
 ```
 
 What you can add (all additive — **no override or removal**, by design). "Status"
