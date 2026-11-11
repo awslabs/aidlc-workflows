@@ -17773,6 +17773,25 @@ function unitOutsideWork(
   return { said: `${unit} is not one of this work's units (${units.join(", ")}).`, nameOne: "Name one of them" };
 }
 
+// A team checkout that holds no claim and no Unit once a team has claimed one
+// builds none (validateLiveUnitScope), so a finished Unit named for a redo of
+// one of the Units' own stages there is not reopened, for one Unit or for every
+// Unit. A stage done once for all Units keeps its question. Null elsewhere.
+function finishedUnitNotRedoneHere(
+  projectDir: string,
+  stateContent: string,
+  targetSlug: string,
+  unit: string,
+): Directive | null {
+  const node = nodeForSlug(targetSlug);
+  if (
+    !node || !isPerUnit(node) ||
+    !isTeamUnitOwnership(stateContent) || readApplicableTeamUnitScopeStamp(projectDir, stateContent) ||
+    !cachedClaimFanoutActive(projectDir) || unitsHeldHere(projectDir) !== null || !completedUnits(stateContent).has(unit)
+  ) return null;
+  return errorDirective(`${unit} is finished, so it is not redone here; this checkout builds no Unit now.`);
+}
+
 // A move to a stage or phase in a checkout that claimed a Unit (`next --stage`,
 // `--phase`, the recovery question's reopen). The checkout reopens its own
 // Unit's stages itself (claimedCheckoutReopens): back to one the Unit has
@@ -19396,7 +19415,8 @@ function emitJumpDirective(
     // redoes the step for every unit. `--every-unit` asks for exactly what the
     // jump below does here, so it goes through and says so in one line.
     if (flags.jumpUnit !== undefined) {
-      emit(turnEndingPrint(unitChoiceRefusal(unitMajorState, targetSlug)));
+      emit(finishedUnitNotRedoneHere(projectDir, unitMajorState, targetSlug, flags.jumpUnit) ??
+        turnEndingPrint(unitChoiceRefusal(unitMajorState, targetSlug)));
       return;
     }
     const everyUnitSaid = flags.everyUnit && direction !== "forward"
