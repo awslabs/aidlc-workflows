@@ -106,6 +106,12 @@ describe("a printed command goes through its renderer", () => {
     expect(n, "write {{INVOKE}} engine <route> ... in a run instruction").toBe(PROTOCOL_BARE_LEFT);
   });
 
+  test("the Windows installer's messages name its parameters as PowerShell takes them", () => {
+    const messages = readFileSync(join(REPO_ROOT, "scripts", "install.ps1"), "utf-8").split("\n")
+      .filter((line) => /-Message '[^']*--[A-Z]/.test(line));
+    expect(messages).toEqual([]);
+  });
+
   test("the Construction policy refusal names the state tool as this install runs it", () => {
     expect(constructionPolicyRecovery()).toContain("run bun .claude/tools/aidlc-state.ts set-construction-checkpoints, ");
   });
