@@ -854,7 +854,14 @@ committed and pushed: your teammates see where this work stands.", status shows
 `Checked in:     yes, aidlc/ is committed and pushed`, and the reminder is left
 unsaid while it is checked in; the rows each look adds to this clone's own audit
 file are left out of that reading (a decision of yours there still counts), and
-a branch never pushed says nothing either way. A push's own lines go with the
+a branch never pushed says nothing either way.
+That fact is the branch the work merges into, as this clone last fetched it: a
+record pushed on a branch of its own, for a pull request, says once "aidlc/ is
+pushed on <branch>; your teammates see it once it is in main." (the branch the
+work merges into, in place of main), and status shows `Checked in:     pushed on
+<branch>, not in main yet` until the merge reaches this clone by your own fetch
+or pull.
+A push's own lines go with the
 step that follows it, so they are said before the next question. Asked where things stand (`/aidlc --status`), a clone also says what its
 last `git pull` that brought changes brought from other people, by who made each
 change (their git name), and where each Unit's build stands in the words the
@@ -866,6 +873,57 @@ whose repos this workspace has no copy of, or cannot reach just now, says only
 are not said. From a Unit's build, a `Yours:` line names your own other finished
 builds of the same plan in the same words, for example "Yours: u5-checkout-field
 (merged)".
+
+### Teams on GitHub Flow
+
+GitHub Flow (a short-lived branch per change, a pull request, review and
+required checks, a protected main) works with teams as built. AI-DLC pushes each
+Unit's branch and leaves the pull request, its review and its merge to you and
+your host; it never opens or reads a pull request. GitLab's merge requests and
+protected branches read the same.
+
+**Code repos.** Open the pull request from the branch AI-DLC pushed, and merge
+it any way the repo allows: a merge commit, a squash or a rebase, by anyone,
+with the branch deleted after. A review fix can go through AI-DLC (ask for the
+push again) or by hand: a commit you push with your own git, the host's
+**Commit suggestion**, or **Update branch**. The team's next look and the lead's
+next look read the branch as it is then, so its merge is seen. When a fix, the
+merge and the branch's deletion all happen between two looks, the board names
+the commit that may be the merge, once, and the lead's word records it:
+
+```text
+app has a8c3f21 "refunds (#12)" changing every file of refunds; if that is refunds merged, say so.
+```
+
+When the host refuses the branch's name, say the name you want: AI-DLC pushes
+there (`aidlc unit push --branch <name>`), keeps it for later pushes, and uses
+git's own push remote for that branch. A team that pushes to a fork starts the
+Unit's branch from the repo's own main, not the fork's.
+
+**The workspace repo.** Claims travel on branches of their own beside main
+(`claim/<intent-id8>/<unit>`), so a rule on main alone leaves takes, pushes and
+the lead's verdicts as they are. A ruleset over every branch has to leave
+`claim/**` out, or each team sends from a repo of its own (above). Never open a
+pull request for a claim branch, even when the host offers one: merging it puts
+the claim's files on main. Keep stale-branch cleaners off `claim/**`, and add
+`branches-ignore: ['claim/**']` to workflows that run `on: push`, which
+otherwise run at every claim write.
+
+**The plan and the records.** When the host takes no direct push to main, the
+lead's share says so once, with the host's words: "origin takes no direct push
+to main (<host words>). The plan is committed here: push it on a branch and get
+it merged your usual way; the teams can take Units once it is in main." A lead
+working on another branch is told the checkout is not on main, with the same way
+on. A team's record pushed on a branch whose pull request is open reads
+"aidlc/ is pushed on <branch>; your teammates see it once it is in main.", and
+status shows `Checked in:     pushed on <branch>, not in main yet`.
+Back on main before that pull request merges, the take question names your
+build: "Your build of <unit> is on branch <branch>: `git switch <branch>` to
+carry it on." A team that keeps AI-DLC's records off main says so in Practices
+Discovery (for example "We keep AI-DLC's records on a branch called records"):
+AI-DLC records the `Integration branch` line under Way of Working, the share
+and the check-ins go to that branch, the takes read it, and every clone works
+on it.
 
 ### Start early, and change a shared input
 
