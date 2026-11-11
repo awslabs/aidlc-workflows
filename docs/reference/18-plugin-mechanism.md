@@ -141,8 +141,7 @@ aidlc plugin test [plugin-root] --install <project-root> [--harness <name>] [--w
 The tool builds a projection, copies only the manifest-derived install roots
 into a disposable candidate, runs the real compose hook twice, and requires a
 drop-free first pass, a clean post-compose graph containing the plugin stages
-and scopes, and a byte-stable second pass. Shared harness leaves require
-`--harness`. `--with` composes the base's checkout into the candidate first. `--dist` is not supported; the tool refuses it.
+and scopes, and a byte-stable second pass. `--with` composes the base's checkout into the candidate first. `--dist` is not supported; the tool refuses it.
 
 Contribution paths are plugin-relative and may not escape the plugin root. The top level is **lenient** (unknown keys preserved, for forward-compat and cross-tool tolerance); the `aidlc` block is **strict** (unknown keys rejected, to catch authoring typos). Projection still discovers content by directory convention (`stages/`, `sensors/`, `tools/`, `contributions/`, `scopes/`, `agents/`, `knowledge/`), so each declared value must equal its canonical directory; configurable routing is deferred. `memory` must be `memory/`, and a plugin that ships `memory/rules.md` names the level it lands at in `aidlc.rulesLevel` (`org`, `team` or `project`). Stage numbers are display-only, so a plugin claims no number range in the manifest. `overlays` is the manifest name for canonical `contributions/`, consumed by the merge rather than copied.
 

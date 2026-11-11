@@ -3,7 +3,7 @@
 
 import { discoverInstalledPluginNames } from "./aidlc-config-diagnostics.ts";
 import { LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
-import { harnessIdFromTyped, isCompiledExecutable, typedHarnessName } from "./aidlc-runtime-paths.ts";
+import { discoverProjectHarnesses, harnessIdFromTyped, isCompiledExecutable, typedHarnessName } from "./aidlc-runtime-paths.ts";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import {
@@ -383,12 +383,15 @@ function detectHarness(
       `no known AIDLC harness tree found under ${installRoot}`,
     );
   }
-  if (candidates.length > 1) {
-    throw new PluginTestUsageError(
-      `install is ambiguous (${candidates.map(([name, target]) => `${typedHarnessName(name)}:${target.harnessLeaf}`).join(", ")}); pass --harness <name>`,
-    );
-  }
-  return { name: candidates[0][0], target: candidates[0][1] };
+  if (candidates.length === 1) return { name: candidates[0][0], target: candidates[0][1] };
+  // Kiro CLI and Kiro IDE share .kiro, Copilot and opencode share .aidlc: the
+  // install's own record says which one this project has, as doctor reads it.
+  const installed = new Set(discoverProjectHarnesses(installRoot).map((harness) => harness.distribution));
+  const recorded = candidates.filter(([name]) => installed.has(name));
+  if (recorded.length === 1) return { name: recorded[0][0], target: recorded[0][1] };
+  throw new PluginTestUsageError(
+    `install is ambiguous (${(recorded.length > 1 ? recorded : candidates).map(([name, target]) => `${typedHarnessName(name)}:${target.harnessLeaf}`).join(", ")}); pass --harness <name>`,
+  );
 }
 
 function addTestError(

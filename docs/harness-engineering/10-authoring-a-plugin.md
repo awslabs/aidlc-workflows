@@ -792,8 +792,7 @@ missing plugin node, or second-pass file change exits `1`; invalid command
 usage exits `2`. The live install is hashed before and after and is never a
 compose target.
 
-Pass `--harness` when the install is ambiguous, including `.kiro` (`kiro-v2` for
-Kiro CLI (V2) vs `kiro` for Kiro) and `.aidlc` (Copilot vs OpenCode). For a plugin built on a base,
+Pass `--harness` when the install is ambiguous. For a plugin built on a base,
 `--with <base-root>` composes your checkout of the base into the candidate
 first, as sync composes bases first, so the install does not need the base. The
 standalone tool reserves `--dist <version>` until RFC #722 milestone 2 defines
