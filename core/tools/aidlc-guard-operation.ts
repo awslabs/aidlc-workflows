@@ -449,10 +449,12 @@ export const GUARD_REMEDY_WORDING = {
   "record-unit-completion": (c) =>
     c.code === "UNIT_COMPLETION_MISSING"
       ? {
-          label: "Mark this Unit finished",
+          // It records one stage's completion for the Unit, never the Unit's:
+          // its other stages are left as they are.
+          label: `Mark ${c.stage} done`,
           description:
-            `The documents for ${c.unit ?? "this Unit"} are already in place. I'll record that it ` +
-            "is finished and bring it to you for approval.",
+            `The ${c.stage} documents for ${c.unit ?? "this Unit"} are already in place. I'll record ` +
+            `${c.stage} as done for it and bring it to you for approval.`,
         }
       : {
           label: "Finish with the review it has",

@@ -203,6 +203,13 @@ describe("a Unit done without its receipts is offered recording them", () => {
       requiresHuman: true,
       operation: { kind: "record-unit-completion", stage: SLUG, unit: "alpha" },
     });
+    // It names the stage it records, never the whole Unit as finished.
+    expect(remedies[0]).toMatchObject({
+      label: "Mark Functional Design done",
+      description:
+        "The Functional Design documents for alpha are already in place. I'll record Functional Design as " +
+        "done for it and bring it to you for approval.",
+    });
 
     // The person picks it; the hook keeps their reply, and the agent records the remedy it read.
     expect(consumeSharedDirectiveAsk(proj, "1")).toBe(true);
