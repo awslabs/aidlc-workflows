@@ -7,7 +7,6 @@ For any stage that modifies existing code or infrastructure, these safeguards ap
 | Safeguard | What It Does | When Applied |
 |-----------|-------------|--------------|
 | **Blast Radius Analysis** | Identifies affected files/components and their downstream dependents | Before code generation (stage `code-generation`, 3.5) |
-| **Diff Preview** | Shows exact proposed changes before applying | Before any file modification |
 | **Test Baseline** | Runs existing tests BEFORE changes to establish baseline | Before code generation (stage `code-generation`, 3.5) |
 | **Test Validation** | Runs existing tests AFTER changes to confirm nothing broke | After code generation (stage `build-and-test`, 3.6) |
 | **Impact Analysis** | Documents affected APIs, components, and dependencies | During reverse engineering (stage `reverse-engineering`, 2.1) and code generation (3.5) |
@@ -19,7 +18,7 @@ Before modifying existing code:
 1. List all files that will be changed
 2. For each file, identify: imports/consumers, test files, configuration references
 3. Classify impact: low (isolated change), medium (affects 2-3 dependents), high (cross-cutting)
-4. Present impact summary to user before proceeding
+4. Present impact summary to user
 
 ## Test Baseline Protocol
 
