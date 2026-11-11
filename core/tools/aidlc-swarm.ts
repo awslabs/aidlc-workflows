@@ -3189,7 +3189,7 @@ function handlePrepare(rest: string[]): void {
         worktree_path: worktreeDir,
         error: `bolt start failed: ${started.stderr.trim() || started.stdout.trim()}; ${
           resume ? "retry prepare --resume-existing to recover this revision" :
-            `source was preserved; run aidlc-worktree discard --slug ${boltSlug} before retrying prepare`}`,
+            `source was preserved; run ${aidlcDispatcherInvocation("worktree discard")} --slug ${boltSlug} before retrying prepare`}`,
       });
       continue;
     }
@@ -3201,7 +3201,7 @@ function handlePrepare(rest: string[]): void {
         unit, ok: false, worktree_path: worktreeDir,
         error: `copying the intent's records into the worktree failed: ${error instanceof Error ? error.message : String(error)}; ${
           resume ? "retry prepare --resume-existing to recover this revision" :
-            `source was preserved; run aidlc-worktree discard --slug ${boltSlug} before retrying prepare`}`,
+            `source was preserved; run ${aidlcDispatcherInvocation("worktree discard")} --slug ${boltSlug} before retrying prepare`}`,
       });
       continue;
     }
@@ -3221,7 +3221,7 @@ function handlePrepare(rest: string[]): void {
           unit, ok: false, worktree_path: worktreeDir,
           error: `worktree Plan Approval transfer failed: ${error instanceof Error ? error.message : String(error)}; ${
             resume ? "retry prepare --resume-existing to recover this revision" :
-              `source was preserved; run aidlc-worktree discard --slug ${boltSlug} before retrying prepare`}`,
+              `source was preserved; run ${aidlcDispatcherInvocation("worktree discard")} --slug ${boltSlug} before retrying prepare`}`,
         });
         continue;
       }

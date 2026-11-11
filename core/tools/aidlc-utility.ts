@@ -6336,7 +6336,7 @@ export async function collectDoctorReport(
         );
       }
       label = `Orphan worktrees: ${orphanActive.length + cleanupOrphans.length} drift - ${[...orphanActive, ...cleanupOrphans].join(", ")}`;
-      fix = `${parts.join("; ")}. Inspect the owning intent, then remove via 'aidlc-worktree discard --slug <slug> --intent <record> --space <space>'.`;
+      fix = `${parts.join("; ")}. Inspect the owning intent, then remove via '${aidlcDispatcherInvocation("worktree discard")} --slug <slug> --intent <record> --space <space>'.`;
     }
     results.push({ pass, label, fix });
   } catch (e) {
@@ -6471,7 +6471,7 @@ export async function collectDoctorReport(
       results.push({
         pass: false,
         label: `Orphan state files: ${orphan.length} drift - ${orphan.join(", ")}`,
-        fix: "Inspect unrecognised names and unknown intent ownership. Recognised state files have no owning Bolt Refs entry or WORKTREE_DISCARDED row. Recover via 'aidlc-worktree discard --slug <slug> --intent <record> --space <space>' (idempotent).",
+        fix: `Inspect unrecognised names and unknown intent ownership. Recognised state files have no owning Bolt Refs entry or WORKTREE_DISCARDED row. Recover via '${aidlcDispatcherInvocation("worktree discard")} --slug <slug> --intent <record> --space <space>' (idempotent).`,
       });
     }
   } catch (e) {

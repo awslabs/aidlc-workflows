@@ -223,7 +223,7 @@ describe("one list of Unit verbs", () => {
       timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     });
     const verbList = unknown.stderr.trim();
-    expect(verbList).toContain("Usage: aidlc-unit <");
+    expect(verbList).toContain("Usage: bun .claude/tools/aidlc.ts unit <");
     for (const verb of UNIT_VERBS.keys()) {
       const run = spawnSync(process.execPath, [tool, verb, "--project-dir", proj], {
         encoding: "utf-8",

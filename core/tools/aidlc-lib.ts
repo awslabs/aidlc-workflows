@@ -70,6 +70,7 @@ import {
   type GuardRemedyWording,
   type GuardRemedyWordingContext,
   isGuardRecoveryOperation,
+  constructionPolicyRecovery,
   renderEngineInvocation,
   renderGuardOperation,
 } from "./aidlc-guard-operation.ts";
@@ -6043,7 +6044,7 @@ export function requireProtectedResponse(
   const question = readProtectedQuestion(projectDir, session);
   const response = readProtectedResponse(projectDir, session);
   const recovery = expected.kind === "verification-command" ? verificationCommandRecovery()
-    : expected.kind === "construction-policy" ? CONSTRUCTION_POLICY_RECOVERY
+    : expected.kind === "construction-policy" ? constructionPolicyRecovery()
     : `Re-ask with ${aidlcToolInvocation("bolt")} checkpoint --action ask --unit "<unit>" --kind <unit|skeleton> or ` +
       `${aidlcToolInvocation("bolt")} swarm-checkpoint --action ask --batch <number> --units "<units>", then wait for Approve or Request Changes.`;
   // The person replied to this exact question (the hook's record); the choice
@@ -13308,12 +13309,6 @@ export function constructionPolicyChangeAllowed(projectDir: string, field: strin
   }
 }
 
-export const CONSTRUCTION_POLICY_RECOVERY =
-  "When the person asks for this Construction change, run aidlc-state.ts set-construction-checkpoints, " +
-  "set-construction-execution, or set-construction-iteration with the value they asked for and --message <id>, " +
-  "the id of the message they asked in, then say its notice line to them. Do not ask them to confirm it, and " +
-  "never change it on your own.";
-
 // --- Consolidated-summary confirmation evidence ---
 //
 // The summary checkpoint is a human judgement that authorizes artifact
@@ -14975,25 +14970,28 @@ export function checkSummaryConfirmationEvidence(
     }
 
     const hashScope = auditBlockField(receipt.block, "Hash Scope");
+    const confirm = summaryConfirmationCommands({
+      stage: stage.slug,
+      unit: workflow === undefined ? question.unit : null,
+      questionsFile: questionRelative,
+      single: workflow !== undefined,
+    });
+    const report = (...args: string[]) => renderEngineInvocation({ route: "orchestrate", args: ["report", ...args] });
     const recovery = workflow === undefined
       ? (
         "First repair the questions file: reset the existing consolidated-summary " +
         "`[Answer]:` tag to blank and remove or repair every invalid or duplicate " +
         "post-summary section named by the validation error. Only then re-present the " +
         "consolidated summary and record a fresh confirmation with " +
-        `\`aidlc-log.ts decision --checkpoint summary-confirmation --stage "${stage.slug}" ` +
-        `${question.unit ? `--unit "${question.unit}" ` : ""}` +
-        "--questions-file \"<path>\" --decision \"Does this all look correct?\"`; " +
+        `\`${confirm.decision}\`; ` +
         "end the turn, wait for the human's response, update the recorded answer, then run " +
-        `\`aidlc-log.ts answer --checkpoint summary-confirmation --stage "${stage.slug}" ` +
-        `${question.unit ? `--unit "${question.unit}" ` : ""}` +
-        "--questions-file \"<path>\" --details \"Looks correct\"`. Re-save each generated " +
+        `\`${confirm.answer}\`. Re-save each generated ` +
         "artifact, rerun the section-12a reviewer when this stage declares one, then retry " +
         "the stage completion command. If a completion gate is already open or a terminal " +
         "section-12a receipt freezes artifact writes, instead present Request Changes and " +
         "end the turn. After a fresh human turn choosing it, run " +
-        `\`aidlc-orchestrate.ts report --stage "${stage.slug}" --result rejected ` +
-        "--user-input \"Request Changes\" --reason '<requested changes>'`; then revise and re-confirm the summary, " +
+        `\`${report("--stage", stage.slug, "--result", "rejected", "--user-input", "Request Changes", "--reason", "<requested changes>")}\`; ` +
+        "then revise and re-confirm the summary, " +
         "re-save the artifacts, rerun the reviewer, and report `--result revised`."
       )
       : (
@@ -15001,14 +14999,11 @@ export function checkSummaryConfirmationEvidence(
         "`[Answer]:` tag to blank and remove or repair every invalid or duplicate " +
         "post-summary section named by the validation error. Only then re-present the " +
         "consolidated summary in the isolated run and record a fresh confirmation with " +
-        `\`aidlc-log.ts decision --checkpoint summary-confirmation --stage "${stage.slug}" ` +
-        "--questions-file \"<path>\" --single --decision \"Does this all look correct?\"`; " +
+        `\`${confirm.decision}\`; ` +
         "end the turn, wait for the human's response, update the recorded answer, then run " +
-        `\`aidlc-log.ts answer --checkpoint summary-confirmation --stage "${stage.slug}" ` +
-        "--questions-file \"<path>\" --single --details \"Looks correct\"`. Regenerate or " +
+        `\`${confirm.answer}\`. Regenerate or ` +
         "re-save each generated artifact, rerun the section-12a reviewer when this stage " +
-        "declares one, then run `aidlc-orchestrate.ts report --single " +
-        `--stage "${stage.slug}" --result completed\`.`
+        `declares one, then run \`${report("--single", "--stage", stage.slug, "--result", "completed")}\`.`
       );
     if (
       hashScope !== null &&
@@ -27018,7 +27013,7 @@ export function readCommittedUnitSourceManifest(
         ok: false,
         reason: "immutable reviewed Source Commit is unavailable or has unsafe paths; " +
           "restore the reviewed commit, or rename unsafe paths with `git mv` and commit them, " +
-          `then rerun \`aidlc-swarm check ${unit}\` before native convergence`,
+          `then rerun \`${aidlcDispatcherInvocation(`swarm check ${unit}`)}\` before native convergence`,
       };
     }
     // A private index/HEAD gives ignore, path-mode and symlink validation the

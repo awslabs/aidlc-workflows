@@ -202,7 +202,7 @@ meant to run without the human). The conductor decides deterministically from
 the Loop-Back Log's planned fix: **Modify** for the unit(s) the fix targets,
 **Keep** for all other units, **Modify** for build-and-test itself on re-entry
 (Redo is forbidden there — it would erase the Loop-Back Log). Every
-auto-decision is still audited via `aidlc-state.ts reuse-artifact <slug>
+auto-decision is still audited via `{{INVOKE}} engine state reuse-artifact <slug>
 --decision <keep|modify> --artifacts "<comma-separated list of existing
 artifacts found>"`. In receipt mode apply those decisions inside each emitted
 per-unit replay between `unit start` and the fresh reviewer / `unit complete`;
@@ -221,7 +221,7 @@ apply the planned fix through the override. In receipt mode, apply it inline
 while the units re-run. Both use **Modify** for the unit(s) the fix targets,
 **Keep** for all other units, and **Modify** for build-and-test itself on
 re-entry (Redo is forbidden there — it would erase the Loop-Back Log), audited
-via the same `aidlc-state.ts reuse-artifact <slug> --decision <keep|modify>
+via the same `{{INVOKE}} engine state reuse-artifact <slug> --decision <keep|modify>
 --artifacts "<comma-separated list of existing artifacts found>"` call. After
 those decisions, dispatch the declared reviewer for every applicable unit and
 record fresh current-attempt reviews BEFORE presenting the settle/approval
