@@ -10,13 +10,15 @@
 // from the other teams.
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { arrivedAtLastPull, checkInLine, checkInState } from "../../dist/claude/.claude/tools/aidlc-unit-teams.ts";
 import { mergedAtTeamLook, type UnitClaimPayload } from "../../dist/claude/.claude/tools/aidlc-unit.ts";
-import { fixtureIntentId8 } from "../harness/fixtures.ts";
+import { fixtureIntentId8, REPO_ROOT } from "../harness/fixtures.ts";
+import { asLeadsOwnCheckout } from "../harness/team-unit-merge.ts";
 import {
   cleanupTeamBuild,
   cloneCode,
@@ -47,6 +49,8 @@ setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 afterEach(cleanupTeamBuild);
 
 const LINE = "Your teammates see where this work stands once aidlc/ is committed and pushed.";
+const INIT = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-init.ts");
+const CLAUDE_RELEASE = join(REPO_ROOT, "dist-release", "claude");
 type Choice = { label: string; detail?: string };
 
 // The lead's work, teams chosen and every Unit open, shared.
@@ -715,3 +719,33 @@ describe("where things stand", () => {
   });
 });
 
+// A live run on Codex: a member's fresh clone of the lead's workspace ran
+// config and read "Updated. Your open work (<the lead's work>) carries on."
+describe("config in a teammate's clone", () => {
+  test("config names none of the lead's work as the person's open work; the lead's own checkout still hears it", () => {
+    const home = homeWithTeams();
+    asLeadsOwnCheckout(home.dir);
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "the lead's plan"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    // Off this machine's own install and tool homes, as t304 runs config.
+    const machine = tempDir("config-machine");
+    const env = {
+      ...Object.fromEntries(Object.entries(ENV).filter(([name]) => !/^(AIDLC_|CLAUDE_|KIRO_)/.test(name))),
+      AIDLC_INSTALL_ROOT: join(machine, "share", "aidlc"),
+      AIDLC_BIN_DIR: join(machine, "bin"),
+    };
+    const config = (dir: string): string => {
+      const done = spawnSync(process.execPath, [INIT, "config", "--project-dir", dir, "--from", CLAUDE_RELEASE, "--harness", "claude", "--mcp", "none", "--yes"], {
+        cwd: dir,
+        encoding: "utf-8",
+        env,
+      });
+      expect(done.status, `${done.stdout}${done.stderr}`).toBe(0);
+      return done.stdout;
+    };
+    const open = `Your open work (default/${HOME_RECORD}) carries on.`;
+    expect(config(cloneOf(home.remote, "ana"))).not.toContain(open);
+    expect(config(home.dir)).toContain(open);
+  });
+});

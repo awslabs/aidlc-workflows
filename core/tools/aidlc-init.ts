@@ -160,8 +160,10 @@ import {
   resolveInvokingSessionId,
   resolveProjectDir,
   resumedLine,
+  runningWorkflows,
   sameFileIdentity,
   withAuditLock,
+  workflowDisplayName,
   writeFileAtomic,
 } from "./aidlc-lib.ts";
 import {
@@ -12471,6 +12473,22 @@ function openWorkflowLine(
     : null;
 }
 
+// The running work here that is not this person's, by the name config prints:
+// another person's build a pull brought, or the lead's plan in a teammate's
+// clone (workOfAnother, status's Also open rule). The routing is loaded only
+// when work runs, and a read that fails keeps every name.
+function othersOpenWork(projectDir: string): Set<string> {
+  const running = runningWorkflows(projectDir);
+  if (running.length === 0) return new Set();
+  try {
+    const { workOfAnother } = require("./aidlc-orchestrate.ts") as typeof import("./aidlc-orchestrate.ts");
+    return new Set(running.filter((run) => workOfAnother(projectDir, run))
+      .map(({ space, dirName, slug }) => workflowDisplayName(space, { dirName, slug })));
+  } catch {
+    return new Set();
+  }
+}
+
 // A refresh that brings in release files is done while work is open too: one
 // line says so, and when it moved the project to another release, how to go
 // back. Natively a pin brings the earlier release back; a copied project takes
@@ -12493,12 +12511,14 @@ function refreshDoneLines(
     pluginsOff: ReadonlyArray<{ plugin: string; workflow: string }>;
   },
 ): string[] {
-  const open = activeWorkflowDescriptions(projectDir);
+  const theirs = othersOpenWork(projectDir);
+  const open = activeWorkflowDescriptions(projectDir).filter((name) => !theirs.has(name));
   if (open.length === 0) return [];
   const listed = (items: readonly string[]): string =>
     items.length <= 1 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
-  const stopped = [...new Set(change.pluginsOff.map((item) => item.workflow))].sort();
-  const plugins = [...new Set(change.pluginsOff.map((item) => item.plugin))].sort();
+  const pluginsOff = change.pluginsOff.filter((item) => !theirs.has(item.workflow));
+  const stopped = [...new Set(pluginsOff.map((item) => item.workflow))].sort();
+  const plugins = [...new Set(pluginsOff.map((item) => item.plugin))].sort();
   const going = open.filter((name) => !stopped.includes(name));
   const carriesOn = stopped.length === 0
     ? `Your open work (${open.join(", ")}) carries on.`
