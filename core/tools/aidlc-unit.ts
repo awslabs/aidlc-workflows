@@ -5260,7 +5260,10 @@ export function main(argv: string[]): void {
       ));
     }
     else if (command === "status") {
-      console.log(JSON.stringify(unitClaimOverview(resolveProjectDir(projectDir)), null, 2));
+      // The claims are a Map, which JSON would write as {}: the nonce a release
+      // takes (--expect-nonce) is read from here.
+      const overview = unitClaimOverview(resolveProjectDir(projectDir));
+      console.log(JSON.stringify({ ...overview, claims: Object.fromEntries(overview.claims) }, null, 2));
     } else {
       fail(
         "Usage: aidlc-unit <adopt|claim|release|participate|share|publish|pin|gate|land|merge-status|status> ...",
