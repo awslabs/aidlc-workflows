@@ -207,7 +207,7 @@ function runAdapter(
     cwd?: string;
     env?: Record<string, string | undefined>;
   } = {},
-): { stdout: string; stderr: string; code: number } {
+): { stdout: string; stderr: string; code: number; pid: number } {
   if (target === "mint") {
     try {
       const record = JSON.parse(stdin) as {
@@ -247,7 +247,7 @@ function runAdapter(
       env: env as NodeJS.ProcessEnv,
     },
   );
-  return { stdout: r.stdout ?? "", stderr: r.stderr ?? "", code: r.status ?? 0 };
+  return { stdout: r.stdout ?? "", stderr: r.stderr ?? "", code: r.status ?? 0, pid: r.pid ?? -1 };
 }
 
 /** Cursor failClosed preToolUse requires permission JSON on allow, not silence. */
@@ -1691,14 +1691,22 @@ describe("t276 cursor adapter payload conversion", () => {
     // As in the core hook group: a crashed member refuses nothing. Denying here
     // stopped every call, reads included, under every Guard Policy, with no
     // step that could fix a guard that throws on this project's state.
+    // A guard runs inside the adapter when its file exports run(), and as its
+    // own process otherwise; the shipped guards exit only as their own process.
     const crashes: Array<[string, string | null, string]> = [
       ["throws", 'throw new Error("simulated guard crash [degraded]");\n', "exited 1"],
-      ["exits 1", "process.exit(1);\n", "exited 1"],
+      ["exits 1", "if (import.meta.main) process.exit(1);\n", "exited 1"],
       ["is missing", null, "exited 1"],
+      [
+        "throws inside the adapter",
+        'export async function run(_input: string): Promise<number> { throw new Error("simulated guard crash [degraded]"); }\n' +
+          "if (import.meta.main) process.exit(await run(await Bun.stdin.text()));\n",
+        "exited 1",
+      ],
     ];
     // Windows has no POSIX signals: a killed process there reports an exit code.
     if (process.platform !== "win32") {
-      crashes.push(["is killed", 'process.kill(process.pid, "SIGKILL");\n', "was stopped by SIGKILL"]);
+      crashes.push(["is killed", 'if (import.meta.main) process.kill(process.pid, "SIGKILL");\n', "was stopped by SIGKILL"]);
     }
     for (const [how, body, said] of crashes) {
       const proj = installedProject();
@@ -4711,5 +4719,255 @@ if (import.meta.main) {
       expect(report.agent_message ?? "", label).toContain("Delegated agent");
     }
     expect(ledgerFilesFor(proj)).toHaveLength(1);
+  });
+});
+
+// --- guards: the four guards in the adapter's own process ------------------
+//
+// A child process loads the whole engine again, so a tool call whose guards ran
+// as children cost one engine load per guard. They run their core hook inside
+// the adapter's process, as on Codex and Copilot. Stand-in guards that record
+// their pid show where each one ran; the same calls through a twin project whose
+// guard files export no run() show that each decision is the one the guard's own
+// process gave (without run() the adapter starts the guard as a child, as it
+// always did).
+const GUARD_FILES = [
+  "aidlc-state-transition-guard.ts",
+  "aidlc-reviewer-scope.ts",
+  "aidlc-review-freeze.ts",
+  "aidlc-plan-approval-guard.ts",
+] as const;
+
+type StandIn = { code: number; stderr?: string; throws?: boolean; sees?: string };
+
+// A guard that records the pid it ran in (and, with `sees`, whether that path
+// existed when it ran) and answers as told.
+function standInGuard(capture: string, file: string, answer: StandIn): string {
+  return [
+    'import { appendFileSync, existsSync } from "node:fs";',
+    "export async function run(_input: string): Promise<number> {",
+    `  appendFileSync(${JSON.stringify(capture)}, JSON.stringify({ pid: process.pid, file: ${JSON.stringify(file)}${
+      answer.sees ? `, sees: existsSync(${JSON.stringify(answer.sees)})` : ""
+    } }) + "\\n");`,
+    answer.throws ? '  throw new Error("STANDIN-THREW");' : "",
+    answer.stderr ? `  process.stderr.write(${JSON.stringify(answer.stderr)});` : "",
+    `  return ${answer.code};`,
+    "}",
+    "if (import.meta.main) process.exit(await run(await Bun.stdin.text()));",
+  ].join("\n");
+}
+
+function standInGuards(dir: string, capture: string, answers: (file: string) => StandIn = () => ({ code: 0 })): void {
+  for (const file of GUARD_FILES) {
+    writeFileSync(join(dir, ".cursor", "hooks", file), standInGuard(capture, file, answers(file)), "utf-8");
+  }
+}
+
+function guardRuns(capture: string): Array<{ pid: number; file: string; sees?: boolean }> {
+  if (!existsSync(capture)) return [];
+  return readFileSync(capture, "utf-8").trim().split("\n").filter(Boolean)
+    .map((line) => JSON.parse(line) as { pid: number; file: string; sees?: boolean });
+}
+
+// The shipped guards, each behind a file whose run is no function: the adapter
+// starts the real hook as its own process, the path every call took before. The
+// file keeps the hook's other exports, since one guard imports another by name.
+function childOnlyGuards(dir: string): void {
+  for (const file of GUARD_FILES) {
+    const path = join(dir, ".cursor", "hooks", file);
+    const real = file.replace(/\.ts$/, ".real.ts");
+    cpSync(path, join(dir, ".cursor", "hooks", real));
+    writeFileSync(path, [
+      `export * from "./${real}";`,
+      "export const run = undefined;",
+      "if (import.meta.main) {",
+      `  const { run } = await import("./${real}");`,
+      "  process.exit(await run(await Bun.stdin.text()));",
+      "}",
+    ].join("\n"), "utf-8");
+  }
+}
+
+function dropLines(dir: string): string[] {
+  const health = hooksHealthDir(dir);
+  if (!existsSync(health)) return [];
+  return readdirSync(health)
+    .filter((name) => name.endsWith(".drops"))
+    .sort()
+    .flatMap((name) => readFileSync(join(health, name), "utf-8").split("\n").filter(Boolean))
+    .map((line) => line.replace(/^[^\t]*\t/, ""));
+}
+
+function inProject(text: string, dir: string): string {
+  return text
+    .replaceAll(JSON.stringify(dir).slice(1, -1), "<project>")
+    .replaceAll(dir, "<project>")
+    .replaceAll(dir.replaceAll("\\", "/"), "<project>");
+}
+
+// A construction project at Code Generation with no approved plan.
+function codeGenerationProject(): string {
+  const proj = installedProject();
+  seedStateFile(proj, "state-construction.md");
+  const statePath = join(seededRecordDir(proj), "aidlc-state.md");
+  const state = readFileSync(statePath, "utf-8").replace(
+    /^- \*\*Current Stage\*\*:.*$/m,
+    "- **Current Stage**: code-generation",
+  );
+  writeFileSync(statePath, state);
+  writeActiveDirectiveMarker(proj, { kind: "run-stage", stage: "code-generation", state_sha256: stateDigest(state) });
+  return proj;
+}
+
+describe("t276 guards run the four guards in the adapter's own process", () => {
+  test("G1: a Shell call runs the four guards inside the adapter's process, in order", () => {
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    const capture = join(proj, "guard-runs.ndjson");
+    standInGuards(proj, capture);
+    const r = runAdapter(proj, "guards", payload("preToolUseShell", proj));
+    expectAllowJson(r);
+    expect(r.pid).toBeGreaterThan(0);
+    expect(guardRuns(capture)).toEqual(GUARD_FILES.map((file) => ({ pid: r.pid, file })));
+  });
+
+  test("G2: a Read runs three guards, a Write four and a Task the plan check, inside the adapter's process", () => {
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    const capture = join(proj, "guard-runs.ndjson");
+    standInGuards(proj, capture);
+    const read = runAdapter(proj, "guards", payload("preToolUseShell", proj, {
+      tool_name: "Read",
+      tool_input: { file_path: join(proj, "README.md") },
+    }));
+    expectAllowJson(read);
+    expect(guardRuns(capture)).toEqual(GUARD_FILES.slice(0, 3).map((file) => ({ pid: read.pid, file })));
+    rmSync(capture);
+    const write = runAdapter(proj, "guards", payload("preToolUseShell", proj, {
+      tool_name: "Write",
+      tool_input: { file_path: join(proj, "src", "notes.ts") },
+    }));
+    expectAllowJson(write);
+    expect(guardRuns(capture)).toEqual(GUARD_FILES.map((file) => ({ pid: write.pid, file })));
+    rmSync(capture);
+    registerTaskParent(proj);
+    const task = runAdapter(proj, "guards", payload("preToolUseTask", proj));
+    expectAllowJson(task);
+    expect(guardRuns(capture)).toEqual([{ pid: task.pid, file: "aidlc-plan-approval-guard.ts" }]);
+  });
+
+  test("G3: every guard decision is byte for byte the one the guard's own process gave", () => {
+    const cases: Array<{ name: string; project: () => string; input: (dir: string) => string; permission: string }> = [
+      {
+        name: "an ordinary shell command",
+        project: () => {
+          const proj = installedProject();
+          seedStateFile(proj, "state-construction.md");
+          return proj;
+        },
+        input: (dir) => payload("preToolUseShell", dir),
+        permission: "allow",
+      },
+      {
+        name: "a code write before the plan is approved",
+        project: codeGenerationProject,
+        input: (dir) => payload("preToolUseShell", dir, {
+          tool_name: "Write",
+          tool_input: { file_path: join(dir, "src", "blocked.ts") },
+        }),
+        permission: "deny",
+      },
+      {
+        name: "a shell code write before the plan is approved",
+        project: codeGenerationProject,
+        input: (dir) => payload("preToolUseShell", dir, { tool_input: { command: "uniq input.txt src/blocked.txt" } }),
+        permission: "deny",
+      },
+      {
+        name: "a developer launch before the plan is approved",
+        project: codeGenerationProject,
+        input: (dir) => payload("preToolUseTask", dir, {
+          tool_input: {
+            subagent_type: "aidlc-developer-agent",
+            prompt: `AIDLC-STAGE: code-generation\nAIDLC-TESTING-CONTRACT: sha256:${"a".repeat(64)}`,
+          },
+        }),
+        permission: "deny",
+      },
+      {
+        name: "a write to a requirements file whose review is READY",
+        project: () => projectWithReadyReview().project,
+        input: (dir) => {
+          const artifact = join(seededRecordDir(dir), "inception", "requirements-analysis", "requirements.md");
+          return payload("preToolUseShell", dir, {
+            cwd: "",
+            tool_input: { command: "printf change >> requirements.md", cwd: dirname(artifact) },
+          });
+        },
+        permission: "deny",
+      },
+      {
+        name: "a reviewer deleting another unit's file",
+        project: () => {
+          const proj = installedProject();
+          activateReviewer(proj);
+          mkdirSync(join(seededRecordDir(proj), "construction", "unit-b"), { recursive: true });
+          return proj;
+        },
+        input: (dir) => payload("preToolUseSubagentRead", dir, {
+          tool_name: "Delete",
+          tool_input: { file_path: join(seededRecordDir(dir), "construction", "unit-b", "design.md") },
+        }),
+        permission: "deny",
+      },
+    ];
+    for (const item of cases) {
+      const decisions = [false, true].map((childOnly) => {
+        const dir = item.project();
+        if (childOnly) childOnlyGuards(dir);
+        const r = runAdapter(dir, "guards", item.input(dir));
+        expect(r.code, `${item.name} (${childOnly ? "child" : "here"})`).toBe(0);
+        return { stdout: inProject(r.stdout, dir), drops: dropLines(dir).map((line) => inProject(line, dir)) };
+      });
+      expect((JSON.parse(decisions[0].stdout) as { permission?: string }).permission, item.name).toBe(item.permission);
+      expect(decisions[0], item.name).toEqual(decisions[1]);
+    }
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("G4: a guard that throws fails alone with the line its own process left, and a later refusal still reaches the agent", () => {
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    const capture = join(proj, "guard-runs.ndjson");
+    standInGuards(proj, capture, (file) =>
+      file === "aidlc-state-transition-guard.ts"
+        ? { code: 0, throws: true }
+        : file === "aidlc-plan-approval-guard.ts"
+        ? { code: 2, stderr: "STANDIN-REFUSED" }
+        : { code: 0 }
+    );
+    const r = runAdapter(proj, "guards", payload("preToolUseShell", proj));
+    expect(r.code).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual({ permission: "deny", agent_message: "STANDIN-REFUSED" });
+    expect(guardRuns(capture).map((run) => run.file)).toEqual([...GUARD_FILES]);
+    expect(dropLines(proj)).toEqual([
+      "state-transition-guard exited 1 under the Cursor adapter: error: STANDIN-THREW",
+    ]);
+  });
+
+  test("G5: under the compiled engine a Claude Code turn waiting in the project is settled before the guards run", () => {
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    const pending = join(proj, "aidlc", ".aidlc-sessions", "claude-turns", "chat-waiting.json");
+    mkdirSync(dirname(pending), { recursive: true });
+    writeFileSync(pending, "[]\n");
+    const capture = join(proj, "guard-runs.ndjson");
+    standInGuards(proj, capture, () => ({ code: 0, sees: pending }));
+    // The guards run here, so the engine path is never started; it only says
+    // the adapter runs under the compiled engine, whose hook route settles first.
+    const r = runAdapter(proj, "guards", payload("preToolUseShell", proj), {
+      env: { AIDLC_COMPILED_EXECUTABLE: join(proj, "no-engine-here") },
+    });
+    expectAllowJson(r);
+    expect(guardRuns(capture)).toEqual(GUARD_FILES.map((file) => ({ pid: r.pid, file, sees: false })));
   });
 });
