@@ -188,6 +188,7 @@ import {
   stepNextCommand,
   WORKER_BRIEF_SECTIONS,
 } from "../tools/aidlc-testing-posture.ts";
+import { CODEX_PATCH_FLAG } from "./review-freeze-command.ts";
 import { refuseRuntimeIntegrityViolation } from "./runtime-integrity.ts";
 import { unaskedSystemInstall } from "./system-install.ts";
 
@@ -2099,11 +2100,16 @@ function shellUsesDynamicEvaluation(command: string): boolean {
   return false;
 }
 
-// Codex's apply_patch, run by its own name: its writes are its patch's, which
-// the shell reading names (shellWriteTargets) when the command holds the patch.
-function isPatchCall(invocation: { name: string; executable?: string; launchers?: string[]; dataDriven?: boolean }): boolean {
-  return (invocation.name === "apply_patch" || invocation.name === "applypatch") &&
-    (invocation.executable ?? invocation.name) === invocation.name && !invocation.launchers?.length && !invocation.dataDriven;
+// Codex's apply_patch, run by its own name or as its binary's patch mode: its
+// writes are its patch's, which the shell reading names (shellWriteTargets)
+// when the command holds the patch.
+function isPatchCall(
+  invocation: { name: string; args: string[]; executable?: string; launchers?: string[]; dataDriven?: boolean },
+): boolean {
+  if (invocation.launchers?.length || invocation.dataDriven) return false;
+  return (invocation.name === "codex" && invocation.args[0] === CODEX_PATCH_FLAG) ||
+    ((invocation.name === "apply_patch" || invocation.name === "applypatch") &&
+      (invocation.executable ?? invocation.name) === invocation.name);
 }
 
 async function mutationIntent(
@@ -3055,7 +3061,9 @@ async function evaluate(
             target: outsideRecord ?? (mutation.shellCommand ?? "").trim().slice(0, 160),
             unit,
             opaqueShell: outsideRecord === undefined,
-            unreadShell: outsideRecord === undefined && toolName === "Bash" && !mutation.engineRefused,
+            // A patch nobody has read is the unread kind, however the line looks.
+            unreadShell: outsideRecord === undefined && toolName === "Bash" &&
+              (!mutation.engineRefused || mutation.patchUnseen === true),
             patchUnseen: mutation.patchUnseen === true,
             detail: receiptDetail([evidence], verdict.mentioned),
             finished: !approval.ok && buildFinishes(projectDir, unit),

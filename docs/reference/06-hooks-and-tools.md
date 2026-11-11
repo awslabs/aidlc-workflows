@@ -1892,7 +1892,12 @@ in a heredoc or as its one operand, writes the files its patch names
 and opencode adapters use for their own apply_patch tool too); one fed its patch
 after it starts writes files no hook can see, so while the plan waits it is
 refused as a command that could not be read, with one more sentence naming the
-heredoc form. A patch heredoc the reading keeps as written (a
+heredoc form. Codex's binary run in that patch mode itself (`codex
+--codex-run-as-apply-patch <patch>`, which is what its `apply_patch` command runs,
+and what an agent on Windows runs because `apply_patch.bat` cannot take a
+multi-line patch) is the same apply_patch on every platform: a patch in the
+command writes the files it names, and one the reader cannot see (`$patch`, a
+substitution) gets the same refusal and sentence. A patch heredoc the reading keeps as written (a
 glob or a bracket on its line, a subshell, a redirect of its input, no closing
 line) is refused the same way, with no added sentence. A line that starts with `cd <folder>`
 joined to the rest by `&&`, `;` or a newline (and, in a line read as plain

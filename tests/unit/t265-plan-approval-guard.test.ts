@@ -3881,6 +3881,67 @@ describe("t265b hook lifecycle", () => {
     }
   });
 
+  // On Windows Codex's apply_patch.bat cannot take a multi-line patch, so an
+  // agent there runs the binary in its patch mode itself
+  // (`<codex.exe> --codex-run-as-apply-patch <patch>`), most often with the patch
+  // in a PowerShell variable. It is the same apply_patch, on every platform: a
+  // patch in the command is the writes it names, and one the reader cannot see
+  // gets the unread line with the sentence naming the form that is read, which
+  // Codex applies itself on Windows too.
+  test("Codex's patch mode run by its binary is the apply_patch it is, on Windows and every platform", () => {
+    const proj = scratchProject();
+    try {
+      const plan = reportedRunRecord(proj);
+      const patch = (lines: string[]) => `*** Begin Patch\n${lines.join("\n")}\n*** End Patch`;
+      const add = (path: string) => [`*** Add File: ${path}`, "+# Plan", "+uses `add()`"];
+      const binaries = ["codex", "codex.exe", "'C:\\Users\\p\\AppData\\Roaming\\npm\\codex.exe'", "& 'C:\\x y\\codex.exe'"];
+      const literal = (lines: string[]) => binaries.map((bin) => `${bin} --codex-run-as-apply-patch '${patch(lines)}'`);
+      for (const command of literal(add(plan))) {
+        const result = runHook(proj, BASH(command));
+        expect(result.code, `${command}\n${result.stderr}`).toBe(0);
+      }
+      // Code waits with the words printf gets.
+      const ordinary = runHook(proj, BASH("printf code > src/tasks.ts")).stderr;
+      expect(ordinary).toContain("Code generation cannot modify workspace paths");
+      for (const lines of [
+        add("src/new.ts"),
+        ["*** Update File: src/tasks.ts", "@@", "-export const x = 1;", "+export const x = 2;"],
+        [...add(plan), "*** Delete File: src/tasks.ts"],
+      ]) {
+        for (const command of literal(lines)) {
+          const result = runHook(proj, BASH(command));
+          expect({ code: result.code, stderr: result.stderr }, command).toEqual({ code: 2, stderr: ordinary });
+        }
+      }
+      // A patch the reader cannot see: the unread line and the sentence a bare
+      // apply_patch gets.
+      const bare = runHook(proj, BASH("apply_patch")).stderr.trim();
+      expect(bare).toContain("An apply_patch with its patch in the command itself (`apply_patch <<'PATCH'`");
+      const exe = "'C:\\Users\\p\\AppData\\Roaming\\npm\\node_modules\\@openai\\codex\\bin\\codex.exe'";
+      for (const command of [
+        // A reported Windows run's form, byte for byte apart from the plan's text.
+        `$patch = @'\n${patch(add(plan))}\n'@; $patch = $patch.Replace("\`r\`n", "\`n").TrimEnd("\`n"); & ${exe} --codex-run-as-apply-patch $patch`,
+        `$PSNativeCommandArgumentPassing = 'Standard'; $patch = @'\n${patch(add(plan))}\n'@; & ${exe} --codex-run-as-apply-patch $patch`,
+        // An apostrophe in the text turns the POSIX reading's quoting over.
+        `$patch = @'\n${patch([`*** Add File: ${plan}`, "+don't touch `src` yet"])}\n'@; & ${exe} --codex-run-as-apply-patch $patch`,
+        `codex --codex-run-as-apply-patch "$(cat p.patch)"`,
+        `& ${exe} --codex-run-as-apply-patch (Get-Content -Raw p.patch)`,
+      ]) {
+        const result = runHook(proj, BASH(command));
+        expect({ code: result.code, stderr: result.stderr.trim() }, command).toEqual({ code: 2, stderr: bare });
+      }
+      // With no operand the binary writes nothing; a flag after the first word is some other command's,
+      // and another program given the flag first is no patch: it is read as that program.
+      expect(runHook(proj, BASH("codex --codex-run-as-apply-patch")).code).toBe(0);
+      const script = runHook(proj, BASH("./build.sh")).stderr;
+      expect(script).toContain("Code generation cannot");
+      expect(runHook(proj, BASH("./build.sh --codex-run-as-apply-patch")).stderr).toBe(script);
+      expect(runHook(proj, BASH(`echo x --codex-run-as-apply-patch '${patch(add("src/x.ts"))}'`)).code).toBe(0);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
   // #2456: while the plan-approval guard is refusing the build, doctor and
   // status are where the person gets the whole picture of why. An agent's
   // terminal is often not at the project root - VS Code and the Copilot CLI
