@@ -2456,6 +2456,19 @@ describe("a take the lead's project could not record then", () => {
     expect(later.said).not.toContain("before your take could be recorded");
   });
 
+  // The take went to the team's own workspace repo too (Arden's option 1); the
+  // person's own fetch of it then brought that copy under their remote.
+  test("after the person's own fetch of their team's repo, a later look still records the take once the lead's project takes pushes", () => {
+    const home = homeWithTeams();
+    refusePushes(home.remote);
+    const pay = teamWorkspace(home.remote, "pay");
+    expect(takeFrom("payments", pay, "refunds").status).toBe(0);
+    git(pay, ["fetch", "-q", "origin"]);
+    takePushes(home.remote);
+    nextSaying(pay, chatOf("pay-2"));
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ owner: "payments", taken_by: "pay", generation: 1 });
+  });
+
   test("open: the claim is made at a later look once the lead's project takes pushes", () => {
     const open = "# Unit dependencies\n\n```yaml\nunits:\n  - name: refunds\n    depends_on: []\n  - name: reporting\n    depends_on: []\n```\n";
     const home = homeWithTeams(open);

@@ -1323,6 +1323,8 @@ function cachedClaimsForIdentity(
   projectDir: string,
   identity: UnitClaimIdentity,
   includeCache: boolean,
+  // The copies the caller reads: only the lead's project's own, when it says so.
+  only?: (ref: string) => boolean,
 ): Map<string, UnitClaimView> {
   const cache = readUnitClaimRegistryCache(projectDir);
   const claims = new Map<string, UnitClaimView>();
@@ -1392,6 +1394,7 @@ function cachedClaimsForIdentity(
   for (const line of refs.stdout.split(/\r?\n/).filter(Boolean)) {
     const [oid, ref] = line.trim().split(/\s+/, 2);
     if (!oid || !ref) continue;
+    if (only !== undefined && !only(ref)) continue;
     if (
       !ref.startsWith(`refs/heads/claim/${identity.intentId8}/`) &&
       !ref.startsWith(`refs/aidlc/home/${identity.intentId8}/claim/`) &&
@@ -6958,6 +6961,27 @@ type TakeStanding =
   | { state: "pending"; current: UnitClaimView | null; team: string; baseOid: string; dirName: string; space: string }
   | { state: "aside"; line: string };
 
+// The copies of a build's claims that are the lead's project's own, as this
+// clone reads them: the ones fetched by the lead's address, or through the
+// remote that is the lead's. A copy the team's own remote holds (a take sent
+// there, then fetched by the person's own git) is not the lead's. Read once
+// per process; nothing to narrow when the lead's place cannot be told.
+const leadsCopiesOf = new Map<string, ((ref: string) => boolean) | undefined>();
+function leadsClaimCopies(projectDir: string, build: UnitBuild): ((ref: string) => boolean) | undefined {
+  if (leadsCopiesOf.has(build.homeWork)) return leadsCopiesOf.get(build.homeWork);
+  let only: ((ref: string) => boolean) | undefined;
+  try {
+    const target = buildsHome(projectDir, build).target;
+    only = target === null ? undefined
+      : isGitAddress(target) ? (ref) => ref.startsWith("refs/aidlc/home/")
+      : (ref) => ref.startsWith(`refs/remotes/${target}/`) || ref.startsWith("refs/heads/claim/") || ref.startsWith("refs/aidlc/home/");
+  } catch {
+    only = undefined;
+  }
+  leadsCopiesOf.set(build.homeWork, only);
+  return only;
+}
+
 function takeStanding(projectDir: string, build: UnitBuild): TakeStanding {
   const here = findUnitBuild(projectDir, build.homeWork, build.unit);
   if (here === null) return { state: "recorded" };
@@ -6967,8 +6991,8 @@ function takeStanding(projectDir: string, build: UnitBuild): TakeStanding {
   const homeSpace = build.homeRecord.slice(0, build.homeRecord.indexOf("/"));
   let current: UnitClaimView | null;
   try {
-    current = cachedClaimsForIdentity(projectDir, { space: homeSpace, intentUuid: build.homeWork, intentId8: idSuffix(build.homeWork) }, false)
-      .get(build.unit) ?? null;
+    current = cachedClaimsForIdentity(projectDir, { space: homeSpace, intentUuid: build.homeWork, intentId8: idSuffix(build.homeWork) }, false,
+      leadsClaimCopies(projectDir, build)).get(build.unit) ?? null;
   } catch {
     return { state: "recorded" };
   }
