@@ -200,6 +200,7 @@ export function forwardJumpNotice(
   skipped: readonly { slug: string; name: string; plugin?: string }[],
   cameFrom: string,
   units: ForwardJumpUnitSteps | null = null,
+  wayBack = true,
 ): string {
   const and = (names: readonly string[]): string =>
     names.length <= 1 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
@@ -234,7 +235,7 @@ export function forwardJumpNotice(
   return [
     `Moved to ${stageLabel(target, target.slug) ?? "that stage"}${list ? `; skipped ${list}` : ""}.`,
     ...sentences,
-    `You can go back to ${stageLabel(stageOrNone(back), back) ?? "where you were"} any time.`,
+    ...(wayBack ? [`You can go back to ${stageLabel(stageOrNone(back), back) ?? "where you were"} any time.`] : []),
   ].join(" ");
 }
 
@@ -990,7 +991,10 @@ async function handleExecute(args: string[]): Promise<void> {
   let notice: string | undefined;
   if (direction === "forward") {
     const skipped = graph.filter((node) => stagesSkipped.includes(node.slug));
-    notice = forwardJumpNotice(targetStage, skipped, cameFrom, unitSteps) + (stillOpen ? ` ${stillOpen}` : "");
+    // Going back after a move that kept the Unit stages reopens only the Units
+    // this checkout builds (teamRedoNarrowed), so the line names no way back.
+    notice = forwardJumpNotice(targetStage, skipped, cameFrom, unitSteps, !keepsUnitStages) +
+      (stillOpen ? ` ${stillOpen}` : "");
   } else if (direction === "redo" && targetSlug === "reverse-engineering" && from && from.slug !== targetSlug) {
     notice = reverseEngineeringRedoNotice(from);
   } else if (direction === "backward" && from && !addedBack) {

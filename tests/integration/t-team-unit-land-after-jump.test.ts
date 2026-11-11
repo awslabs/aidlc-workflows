@@ -13,7 +13,7 @@
 // Solo work and team Units no team has taken still move on with the Unit
 // stages skipped, and a land onto a record an earlier release wrote that way
 // merges nothing and says why. Going back to Functional Design after the move
-// is not refused.
+// reopens only the Units this checkout builds (t-lead-redo-finished-unit).
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterAll, afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -63,7 +63,7 @@ const LATER = [
   "ci-pipeline", "deployment-pipeline", "environment-provisioning", "deployment-execution",
   "observability-setup", "incident-response", "performance-validation", "feedback-optimization",
 ];
-const MOVED = "Moved to Build and Test. You can go back to Functional Design any time.";
+const MOVED = "Moved to Build and Test.";
 const BOARD_BROKEN = "could not compose its local board";
 
 // --- The lead's main: Units alpha, beta and gamma; Functional Design the one
@@ -338,13 +338,16 @@ describe("a lead's main whose team holds a Unit moves on to Build and Test", () 
     expect(rowOf(lead, "gamma")).toMatch(/\| \[x\] \|$/);
   });
 
-  test("going back to Functional Design after the move is not refused and brings the board back", () => {
+  test("going back to Functional Design after the move, with nothing built here, changes nothing and says why", () => {
     const { lead } = gammaClaimed();
     moveOn(lead);
-    const back = nextSaying(lead, ["next", "--stage", FD]);
-    expect(back.directive.kind).toBe("notice");
-    expect(message(back.directive)).toContain("# Team Construction Dispatcher");
-    expect(stateOf(lead)).toContain("- **Current Stage**: functional-design");
+    const back = runMergeTool(ORCH, ["next", "--stage", FD], lead);
+    expect(JSON.parse(back.stdout)).toEqual({
+      kind: "error",
+      message: "Functional Design is not redone for every unit once a team has taken a unit: " +
+        "alpha is finished, gamma is built by team-g and beta is not taken yet.",
+    });
+    expect(stateOf(lead)).toContain("- **Current Stage**: build-and-test");
   });
 });
 
