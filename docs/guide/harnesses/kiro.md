@@ -1082,6 +1082,19 @@ navigation uses `/aidlc intent [name]`, `/aidlc space [name]`, and
 `/aidlc space-create <name>`. The per-stage (`/aidlc-domain-design`) and
 per-scope (`/aidlc-feature`) runner skills are installed too.
 
+**What Kiro changes in a request.** On Kiro CLI 3.2.0 (measured on Linux), the
+v2 engine changes what you type or paste after `/aidlc` before AI-DLC receives
+it: line breaks, tabs and runs of spaces become single spaces, and a word or
+phrase wrapped in double quotes, such as `""` or `"open"`, loses them. This
+happens to a short request too. Code in a pasted spec loses its indentation
+and some of its quotes, and `<document>` markers do not prevent it. To have the
+workflow read a spec from a file instead, save it in the project and name the
+file in your request, for example
+`/aidlc Read ./spec.md and build what it describes`
+([Starting from an existing document](../02-your-first-workflow.md#starting-from-an-existing-document)).
+In the same measurement, a reply typed later in the chat, with no slash
+command, kept its line break and quotes.
+
 Status, doctor, help, version, and workspace-navigation commands are dispatched
 by the Kiro hook before the model can turn them into workflow work. Their child
 output is decoded as UTF-8 and terminal protocol/control bytes are removed only

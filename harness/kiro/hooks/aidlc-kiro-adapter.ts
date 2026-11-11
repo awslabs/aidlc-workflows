@@ -337,14 +337,17 @@ const childCwd = process.env.AIDLC_PROJECT_DIR ? projectDir : process.cwd();
 // anchor `... engine orchestrate next <ARGS>` bare (no shell capture, no pipe).
 // The body also holds prose examples of `next` (`next --stage <slug>`,
 // `next compose ...`) ahead of that anchor, so only the span followed by
-// "bare" is the person's dispatch, or the only span when there is one. The
+// "bare" carries the person's arguments, or the only span when there is one. The
 // repo's live kiro-cli 2.6.1 fixture carries plain prompt text, while issue
 // #776 measured Kiro IDE 1.0.309 and kiro-cli 2.18.1 --v3 delivering the raw
 // typed `/aidlc ...` text. The fallback recovers argv directly from that raw
 // shape.
 // The step-1 line of the expanded body, from its opening words to its closing
-// ones: what lies between its `next` and the closing words is exactly what the
-// person typed, newlines and backticks included.
+// ones: what lies between its `next` and the closing words is Kiro's
+// `$ARGUMENTS`, as Kiro wrote it there, not the person's own text. Kiro CLI
+// 3.2.0 `--v2` (measured on Linux) writes their words and double-quoted runs
+// joined with one space, the quotes of a run dropped, so their line breaks
+// and those quotes do not reach this hook.
 const NEXT_ANCHOR_LINE = "printed by running `";
 const NEXT_ANCHOR_CLOSE = "` bare (no shell capture, no pipe)";
 
@@ -509,8 +512,8 @@ function extractNextInvocation(
   if (rawInvocation === undefined) return { raw: "", args: [], typed: prompt, forwarded: "" };
   // An anchor Kiro left unexpanded carries no typed args.
   const raw = rawInvocation.trim() === "$ARGUMENTS" ? "" : rawInvocation.trim();
-  // What the person typed: the prompt itself, or for an expanded body the
-  // `/aidlc` line the body was expanded from.
+  // The `/aidlc` line: the prompt itself, or for an expanded body the line
+  // rebuilt from the arguments Kiro put in it.
   const typed = payload !== null || anchor ? `/aidlc${raw ? ` ${raw}` : ""}` : prompt;
   // A line break inside a quoted argument reads as a space, so the call the
   // agent runs stays on one line and matches what the guard compares.
@@ -661,8 +664,8 @@ if (target === "verb-intercept") {
   // only the authority-bearing ledger event while retaining the conversational
   // marker. See the marker family in aidlc-lib.ts.
   try {
-    // The person's own words, not the skill body Kiro expanded them into, so a
-    // typed switch (`/aidlc --guard-policy off`) is read as typed. Its lines
+    // The `/aidlc` line, not the skill body Kiro expanded it into, so a typed
+    // switch (`/aidlc --guard-policy off`) is read as a switch. Its lines
     // (what the switch did) lead whatever this seam writes: plain stdout is
     // Kiro's only context channel here.
     // Who sent the turn (kiroTurnOrigin): a message Kiro's own chat record
