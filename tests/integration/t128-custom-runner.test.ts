@@ -244,7 +244,7 @@ describe("t128 custom stage → drivable runner (migrated from t128-custom-runne
     expect(run(gen, ["write", "--project-dir", proj]).status).toBe(0);
     const body = readFileSync(runnerPath(proj), "utf-8");
     // The literal `next --stage <slug> --single` appears in the runner body (the
-    // --single signature handleWrite/isRunnerSkill keys on).
+    // --single signature handleWrite and the drift check key on).
     expect(body).toContain(`next --stage ${CUSTOM_SLUG} --single`);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
