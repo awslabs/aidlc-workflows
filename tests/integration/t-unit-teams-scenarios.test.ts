@@ -14,7 +14,7 @@
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { appendFileSync, chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { fixtureIntentId8, REPO_ROOT, seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
 import { hostFor } from "../harness/scope-hosts.ts";
@@ -300,7 +300,9 @@ describe("scenario 3: each team keeps its own workspace repo", () => {
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "checkout-ui")).toMatchObject({ done: true });
   });
 
-  test("read but not write: the take goes on, and its line names git's reason and when the lead sees it", () => {
+  // Arden's option 1: the take goes to the team's own workspace repo, where the
+  // lead's look takes it in once the lead adds that address as a git remote.
+  test("read but not write: the take goes to the team's own workspace repo, and its line says where it is and when the lead sees it", () => {
     const home = makeHome();
     teamsChosen(home);
     const hook = join(home.remote, "hooks", "pre-receive");
@@ -310,10 +312,12 @@ describe("scenario 3: each team keeps its own workspace repo", () => {
     const web = teamWorkspace(home.remote, "wendy");
     const took = takeWith(kiroIde.unit, "web", ["take", "checkout-ui", "--home", HOME_RECORD], web.dir);
     expect(took.status, took.out).toBe(0);
-    expect(String(took.json?.notice)).toContain(
-      "The lead's project takes no push from here (read-only for partners (pre-receive hook declined)), so the lead and the other " +
-        "teams cannot see that you took checkout-ui until it does; AI-DLC records it there when a push next goes through.",
-    );
+    // The address as git's own To line names it (a Windows path keeps its own form).
+    const said = String(took.json?.notice);
+    expect(said).toContain("The lead's project takes no push from you, so your take of checkout-ui is on ");
+    expect(said).toContain(`${basename(web.host)}; the lead and the other teams see it once the lead adds that address to their workspace as a git remote.`);
+    expect(claimPayload(web.host, fixtureIntentId8(home.dir), "checkout-ui")).toMatchObject({ status: "claimed", taken_by: "wendy" });
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "checkout-ui")).toBeNull();
     expect(existsSync(join(web.dir, "aidlc", "spaces", "web")), "the build record was made").toBe(true);
   });
 });

@@ -652,6 +652,7 @@ import {
   writeProposedText,
   newsNotTakenIn,
   refreshHomeClaims,
+  takeInFromRemotes,
   refreshListedHome,
   auditRowsAt,
   leadOfBuild,
@@ -18261,6 +18262,11 @@ function teamHomeClaims(
     if (refreshed.unreached !== null) unreached.push(refreshed.unreached);
     if (refreshed.refused) sayWithStepOnce(projectDir, newsNotTakenIn("the teams"));
     if (refreshed.fetched) {
+      // A take or result a team sent to its own remote, which the lead added here.
+      if (!query) {
+        const back = takeInFromRemotes(projectDir, { unitOpen: open });
+        for (const line of back.unreadable) sayWithStepOnce(projectDir, line);
+      }
       overview = readOverview();
       left = leftNow();
     }

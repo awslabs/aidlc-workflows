@@ -657,10 +657,26 @@ work does: after every stage, or once at its end.
   repos has it (the lead's project records the merge at its next look). One the
   lead turns down or sends back from the lead's Build and Test is offered again,
   with those words, to the one who took it.
-- A lead's project you can read but not push to: the take goes on and the build
-  starts, and one line, said once, gives git's reason and says the lead and the
-  other teams cannot see your take until a push goes through; AI-DLC records it
-  there then, with nothing more said. A take someone else's claim beat there is
+- A lead's project you can read but not push to, while your clone pushes the
+  lead's branch to a repo of your team's own (a fork as its origin, a push URL,
+  or `remote.pushDefault`): the take goes there instead, with your login, and one
+  line says it is there and that the lead and the other teams see it once the
+  lead adds that address to their workspace as a git remote. The push then
+  sends its result there too, said once, with no question to send it again; a
+  give back or a change you propose goes there the same way. At each look the
+  lead's workspace reads this work's claim branches from its other git remotes,
+  quietly, and takes in a take or result that is ahead of the lead's own: the
+  first one taken in wins, and a team whose take another's beat there hears the
+  line below. A remote of the lead's that cannot be read is said once in a chat
+  while a Unit is still open at the lead's project, or when it held this work's
+  claims before. A clone's own remote stands in for the lead's project only
+  while it lists the same claims, so a fork that copied the lead's claim
+  branches is never taken for it; when neither the lead's project nor that
+  remote answers, one line says so and nothing is taken or sent.
+- A lead's project you can read but not push to, with nowhere else to push: the
+  take goes on and the build starts, and one line, said once, gives git's reason
+  and says the lead and the other teams cannot see your take until a push goes
+  through; AI-DLC records it there then, with nothing more said. A take someone else's claim beat there is
   said once, and your build stays for you to agree who carries it on. An early
   start waits for that: it says git's reason and the way on, ask the lead for
   push access to it, then take the Unit again.
@@ -735,7 +751,8 @@ said once, in its own words, and nothing retries.
 **Not now** pushes nothing; the end of the build says once that the Unit is not
 pushed yet. A repo the Unit changed that the lead's plan did not list is added
 to the build's repos and goes with the push, said once. When the code went but
-the lead's project did not take the result, the next step offers to send it again.
+the lead's project did not take the result, the next step offers to send it again,
+unless the result went to your team's own remote, where the lead's look takes it in.
 
 Open a pull request in each repo your usual way and merge it the way that repo
 merges: a merge commit, a squash or a rebase. The push also sends the result

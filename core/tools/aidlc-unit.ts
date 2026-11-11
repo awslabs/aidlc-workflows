@@ -949,7 +949,27 @@ function writeHomeClaim(
   ref: string,
   commitOid: string,
   expectedOid: string | null,
+  options: { outbox?: boolean } = {},
 ): { ok: boolean; refused?: string; elsewhere?: string } {
+  const sent = writeHomeClaimOnce(projectDir, home, ref, commitOid, expectedOid);
+  if (sent.ok || sent.landed || options.outbox === false || (sent.refused === undefined && sent.elsewhere === undefined)) {
+    const { landed: _landed, ...said } = sent;
+    return said;
+  }
+  // The lead's project took no push from here: the same commit goes to the
+  // team's own remote, where the lead's look takes it in.
+  const outbox = claimOutbox(projectDir, home);
+  if (outbox !== null && sendToOutbox(projectDir, outbox, ref, commitOid)) return { ok: false, elsewhere: maskUserinfo(outbox) };
+  return sent.refused !== undefined ? { ok: false, refused: sent.refused } : { ok: false };
+}
+
+function writeHomeClaimOnce(
+  projectDir: string,
+  home: { target: string | null; location: string },
+  ref: string,
+  commitOid: string,
+  expectedOid: string | null,
+): { ok: boolean; refused?: string; elsewhere?: string; landed?: boolean } {
   const target = home.target;
   const byName = target !== null && !isGitAddress(target) && isGitAddress(home.location);
   const tracking = byName ? `refs/remotes/${target}/${ref.slice("refs/heads/".length)}` : null;
@@ -966,7 +986,50 @@ function writeHomeClaim(
     localGit(projectDir, before === null ? ["update-ref", "-d", tracking] : ["update-ref", tracking, before]);
   }
   const address = to ?? git(projectDir, ["remote", "get-url", "--push", target]).stdout.trim();
-  return { ok: false, elsewhere: maskUserinfo(address) };
+  return { ok: false, elsewhere: maskUserinfo(address), ...(sent.ok ? { landed: true } : {}) };
+}
+
+// Where this clone pushes the lead's project's branch, by its push address as
+// git expands it (a push URL, pushInsteadOf), when that is not the lead's
+// project: the team's fork or own repo, where a claim the lead's project
+// refused goes. Null when this clone pushes nowhere else.
+function claimOutbox(projectDir: string, home: { location: string }): string | null {
+  try {
+    if (!isGitAddress(home.location)) return null;
+    const branch = affirmedIntegrationBranch(projectDir)?.branch ?? integrationBranch(projectDir, repositoryRemote(projectDir));
+    const remote = pushRemoteOf(projectDir, branch);
+    if (typeof remote !== "string") return null;
+    const address = git(projectDir, ["remote", "get-url", "--push", remote]).stdout.trim();
+    return isGitAddress(address) && !sameGitAddress(address, home.location) ? address : null;
+  } catch {
+    return null;
+  }
+}
+
+// A claim commit sent to the team's own remote with the team's login, its
+// lease on that remote's own tip of the claim branch. False when it does not
+// answer or does not take it.
+function sendToOutbox(projectDir: string, outbox: string, ref: string, commitOid: string): boolean {
+  return quietly(() => {
+    const listed = git(projectDir, ["ls-remote", outbox, ref]);
+    if (!listed.ok) return false;
+    const tip = listed.stdout.trim().split(/\s+/)[0] ?? "";
+    return git(projectDir, ["push", outbox, `--force-with-lease=${ref}:${tip}`, `${commitOid}:${ref}`]).ok;
+  });
+}
+
+// This build's take as the team's own remote holds it, while the lead's
+// project has not recorded it: read there, and only when it is this take's.
+function outboxTake(projectDir: string, home: { location: string }, build: UnitBuild, ref: string): { outbox: string; claim: UnitClaimView } | null {
+  const outbox = claimOutbox(projectDir, home);
+  if (outbox === null) return null;
+  try {
+    const claim = quietly(() => currentClaim(projectDir, outbox, ref));
+    const me = git(projectDir, ["config", "user.name"]).stdout.trim();
+    return claim?.status === "claimed" && claim.payload.taken_by === me && claim.generation === build.attempt ? { outbox, claim } : null;
+  } catch {
+    return null;
+  }
 }
 
 function activeIdentity(projectDir: string): {
@@ -4976,6 +5039,21 @@ function releaseUnit(args: string[], projectDir?: string): void {
 // own archive, so its record and audit stay and nothing is deleted. A claim
 // that moved on since (a pushed result, a release at the lead's project) is
 // left as it is. The person stays in the space they took it from.
+function givenBackOn(unit: string, address: string): string {
+  return `Gave ${unit} back on ${address}; the lead's project opens it again at the lead's next look.`;
+}
+
+// A taken claim given back: released, as the lead's release does, so the
+// generation moves on and the build's attempt is over.
+function releasedClaim(current: UnitClaimView): UnitClaimPayload {
+  const { taken_by: _taker, early_on: _early, ...untaken } = current.payload;
+  return {
+    ...untaken, status: "released", owner: "released", nonce: randomUUID(),
+    generation: current.generation + 1,
+    predecessor_oid: current.oid,
+  } as UnitClaimPayload;
+}
+
 function giveBack(pd: string, build: UnitBuild): void {
   const unit = build.unit;
   const home = buildsHome(pd, build);
@@ -4990,22 +5068,21 @@ function giveBack(pd: string, build: UnitBuild): void {
   let said: string;
   if (current?.status === "claimed" && current.payload.taken_by !== undefined && current.generation === build.attempt &&
     current.payload.result === undefined && takeStanding(pd, build).state === "recorded") {
-    const { taken_by: _taker, early_on: _early, ...untaken } = current.payload;
-    // Released, as the lead's release does: the generation moves on, so this
-    // build's attempt is over.
-    const payload: UnitClaimPayload = {
-      ...untaken, status: "released", owner: "released", nonce: randomUUID(),
-      generation: current.generation + 1,
-      predecessor_oid: current.oid,
-    } as UnitClaimPayload;
-    const pushed = updateClaimRef(pd, home.target, ref, createClaimCommit(pd, current.oid, payload), current.oid);
-    if (!pushed.ok) {
+    const pushed = writeHomeClaim(pd, home, ref, createClaimCommit(pd, current.oid, releasedClaim(current)), current.oid);
+    if (pushed.elsewhere !== undefined) said = givenBackOn(unit, pushed.elsewhere);
+    else if (!pushed.ok) {
       fail(`${unit} could not be given back: ${pushed.refused ?? "its claim at the lead's project moved meanwhile"}. Try again.`);
+    } else {
+      invalidateLiveClaimPayloadCache(pd, unit);
+      said = `${unit} is given back: it is open again at the lead's project.`;
     }
-    invalidateLiveClaimPayloadCache(pd, unit);
-    said = `${unit} is given back: it is open again at the lead's project.`;
   } else {
-    said = `Nothing changed for ${unit} at the lead's project, which still has it as it was.`;
+    // A take the team's own remote holds is given back there.
+    const there = takeStanding(pd, build).state === "pending" ? outboxTake(pd, home, build, ref) : null;
+    const released = there === null ? null : releasedClaim(there.claim);
+    said = there !== null && released !== null && sendToOutbox(pd, there.outbox, ref, createClaimCommit(pd, there.claim.oid, released))
+      ? givenBackOn(unit, maskUserinfo(there.outbox))
+      : `Nothing changed for ${unit} at the lead's project, which still has it as it was.`;
   }
   const dirName = resolveWorkflowSelection(pd).intent;
   const archived = dirName ? runEngineUtility(pd, ["intent", "archive", dirName, "--reason", "given back to the lead's project"]) : null;
@@ -6880,7 +6957,7 @@ function recordTakeHere(projectDir: string, build: UnitBuild, home: HomeWork, st
         me: git(projectDir, ["config", "user.name"]).stdout.trim() || "a teammate",
         baseOid: standing.baseOid, integrationRef, gateRhythm: readUnitGateRhythm(textAt(projectDir, standing.baseOid, record) ?? ""),
       });
-      const pushed = writeHomeClaim(projectDir, home, ref, createClaimCommit(projectDir, current?.oid ?? standing.baseOid, payload), current?.oid ?? null);
+      const pushed = writeHomeClaim(projectDir, home, ref, createClaimCommit(projectDir, current?.oid ?? standing.baseOid, payload), current?.oid ?? null, { outbox: false });
       if (!pushed.ok) return pushed;
       invalidateLiveClaimPayloadCache(projectDir, build.unit);
       if (generation !== build.attempt) {
@@ -7014,6 +7091,54 @@ function quietFetch(dir: string, args: string[]): GitResult {
 // could not take in is taken again once, at the chat's next look. `unreached`
 // is the remote or address that could not be reached: the last fetch stands.
 const CLAIMS_FETCHED_FILE = "claims-fetched.json";
+
+// The lead's look: this work's claim branches on the lead's workspace's other
+// git remotes (a team's fork or own repo the lead added), fetched quietly, and
+// each claim commit there that is ahead of the lead's claim (a take, a result,
+// a give back, a proposal) put on it with the compare-and-swap. The first
+// taken in wins; a copy that is not ahead (a fork's stale copy) is left as it
+// is. A remote that cannot be read is said while a Unit is open at the lead's
+// project or when it held this work's claims before; an unrelated one goes
+// quiet once every Unit is taken. Only the lead's own checkout runs it.
+export function takeInFromRemotes(projectDir: string, options: { unitOpen: boolean }): { taken: number; unreadable: string[] } {
+  const pd = resolveProjectDir(projectDir);
+  const home = repositoryRemote(pd);
+  const none = { taken: 0, unreadable: [] as string[] };
+  if (home === null) return none;
+  const identity = activeIdentity(pd);
+  const id8 = identity.intentId8;
+  const others = git(pd, ["remote"]).stdout.split(/\r?\n/).map((name) => name.trim()).filter((name) => name !== "" && name !== home);
+  const unreadable: string[] = [];
+  let taken = 0;
+  for (const remote of others) {
+    const kept = `refs/remotes/${remote}/claim/${id8}/`;
+    const heldBefore = localGit(pd, ["for-each-ref", "--count=1", "--format=%(refname)", kept]).stdout.trim() !== "";
+    const fetched = quietFetch(pd, ["--no-tags", "--no-filter", "-q", remote, `+refs/heads/claim/${id8}/*:${kept}*`]);
+    if (!fetched.ok) {
+      if (options.unitOpen || heldBefore) {
+        const address = maskUserinfo(git(pd, ["remote", "get-url", remote]).stdout.trim());
+        const why = fetched.stderr.split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? "it did not answer";
+        unreadable.push(`${remote} (${address}) could not be read just now (${why}), so a take or result a team sent there is not taken in yet.`);
+      }
+      continue;
+    }
+    for (const line of localGit(pd, ["for-each-ref", "--format=%(objectname) %(refname)", kept]).stdout.split(/\r?\n/).filter(Boolean)) {
+      const [oid, name] = line.trim().split(/\s+/, 2);
+      const unit = (name ?? "").slice(kept.length);
+      if (!oid || !unit || validateUnitName(unit)) continue;
+      const ref = claimRef(id8, unit);
+      const payload = readPayload(pd, oid, { localOnly: true });
+      if (payload === null || payload.intent_uuid !== identity.intentUuid || payload.unit !== unit || payload.claim_ref !== ref) continue;
+      const leadTip = localGit(pd, ["rev-parse", "--verify", "--quiet", `refs/remotes/${home}/claim/${id8}/${unit}`]).stdout.trim() || null;
+      if (leadTip === oid || (leadTip !== null && !localGit(pd, ["merge-base", "--is-ancestor", leadTip, oid]).ok)) continue;
+      if (quietly(() => updateClaimRef(pd, home, ref, oid, leadTip)).ok) {
+        taken++;
+        invalidateLiveClaimPayloadCache(pd, unit);
+      }
+    }
+  }
+  return { taken, unreadable };
+}
 
 export function refreshHomeClaims(
   projectDir: string,
@@ -7552,12 +7677,41 @@ function pushUnit(args: string[], projectDir?: string): void {
     by: git(pd, ["config", "user.name"]).stdout.trim() || "a teammate", repos: results, outputs,
     ...(kept.length > 0 ? { kept_edits: kept } : {}),
   };
+  // The result on a claim: the Unit outputs the lead's later stages read with it.
+  const resultOn = (on: UnitClaimView): string => {
+    const files = Object.fromEntries(outputs.map((rel) => [
+      `${RESULT_FILES_ROOT}/${rel}`,
+      outputForLead(pd, rel, readFileSync(join(activeRecordDir(pd), ...rel.split("/")), "utf-8")),
+    ]));
+    // A push after a turn-down is the team's answer to it. The lead's word that
+    // a repo merged holds only for a repo whose head did not change.
+    const saidMerged = (on.payload.said_merged ?? []).filter((entry) =>
+      earlier.get(entry.repo)?.heads.at(-1) === results.find((repo) => repo.repo === entry.repo)?.heads.at(-1));
+    const payload: UnitClaimPayload = {
+      ...on.payload,
+      predecessor_oid: on.oid,
+      result,
+      verdicts: undefined,
+      turned_down: undefined,
+      said_merged: saidMerged.length > 0 ? saidMerged : undefined,
+    };
+    return createClaimCommit(pd, on.oid, payload, undefined, undefined, files);
+  };
+  const onRemote = (address: string): string =>
+    `Its result is on ${address} too; the lead's project takes it in at the lead's next look.`;
   let homeHasIt = true;
+  // Sent to the team's own remote, where the lead's look takes it in: nothing to send again.
+  let sentElsewhere = false;
   if (standing.state === "aside") {
     lines.push(standing.line);
     homeHasIt = false;
   } else if (standing.state === "pending") {
-    lines.push(`The lead's project did not take ${unit}'s result: ${recorded?.refused ?? "its claim moved meanwhile"}. Do you want me to send it again?`);
+    // The take the team's own remote holds carries the result there too.
+    const there = outboxTake(pd, home, build, ref);
+    sentElsewhere = there !== null && sendToOutbox(pd, there.outbox, ref, resultOn(there.claim));
+    lines.push(sentElsewhere
+      ? onRemote(maskUserinfo(there!.outbox))
+      : `The lead's project did not take ${unit}'s result: ${recorded?.refused ?? "its claim moved meanwhile"}. Do you want me to send it again?`);
     homeHasIt = false;
   } else if (claim === null) {
     // The lead's project answered and holds no claim for this Unit now: the
@@ -7565,45 +7719,33 @@ function pushUnit(args: string[], projectDir?: string): void {
     lines.push(`The lead's project did not take ${unit}'s result: its claim is not there now. Do you want me to send it again?`);
     homeHasIt = false;
   } else {
-    const files = Object.fromEntries(outputs.map((rel) => [
-      `${RESULT_FILES_ROOT}/${rel}`,
-      outputForLead(pd, rel, readFileSync(join(activeRecordDir(pd), ...rel.split("/")), "utf-8")),
-    ]));
-    // A push after a turn-down is the team's answer to it. The lead's word that
-    // a repo merged holds only for a repo whose head did not change.
-    const saidMerged = (claim.payload.said_merged ?? []).filter((entry) =>
-      earlier.get(entry.repo)?.heads.at(-1) === results.find((repo) => repo.repo === entry.repo)?.heads.at(-1));
-    const payload: UnitClaimPayload = {
-      ...claim.payload,
-      predecessor_oid: claim.oid,
-      result,
-      verdicts: undefined,
-      turned_down: undefined,
-      said_merged: saidMerged.length > 0 ? saidMerged : undefined,
-    };
-    const commit = createClaimCommit(pd, claim.oid, payload, undefined, undefined, files);
-    const sent = updateClaimRef(pd, home.target, ref, commit, claim.oid);
-    if (!sent.ok) lines.push(`The lead's project did not take ${unit}'s result: ${sent.refused ?? "its claim moved meanwhile"}. Do you want me to send it again?`);
+    const sent = writeHomeClaim(pd, home, ref, resultOn(claim), claim.oid);
+    if (sent.elsewhere !== undefined) {
+      lines.push(onRemote(sent.elsewhere));
+      sentElsewhere = true;
+    } else if (!sent.ok) lines.push(`The lead's project did not take ${unit}'s result: ${sent.refused ?? "its claim moved meanwhile"}. Do you want me to send it again?`);
     else invalidateLiveClaimPayloadCache(pd, unit);
     homeHasIt = sent.ok;
   }
+  const sentOn = homeHasIt || sentElsewhere;
   withAuditLock(pd, () => {
     // Pushed once the result reached the home; until then the build offers to
     // send the result again.
-    writeStateFile(pd, setOrInsertField(readStateFile(pd), "## Runtime State", UNIT_PUSH_FIELD, homeHasIt ? "pushed" : "unsent"));
+    writeStateFile(pd, setOrInsertField(readStateFile(pd), "## Runtime State", UNIT_PUSH_FIELD, sentOn ? "pushed" : "unsent"));
     appendAuditEntryUnlocked("UNIT_PUSHED", {
       Unit: unit,
       Branch: branch,
       Repos: results.map((repo) => `${repo.repo}@${repo.heads.at(-1)}`).join(", "),
     }, pd);
   });
-  if (homeHasIt) finishBuildRecord(pd);
-  const checkIn = homeHasIt ? checkInLine(pd) : null;
+  if (sentOn) finishBuildRecord(pd);
+  const checkIn = sentOn ? checkInLine(pd) : null;
   if (checkIn !== null) lines.push(checkIn);
-  // Reached the lead's project, so no line asks anything: the lines ride the
-  // step that follows, as the take's carry-on line does, so a next run at once
-  // says them with its question; with no chat known they are printed here.
-  const forNextStep = homeHasIt && saidWithNextStep(pd, lines.join(" "));
+  // Reached the lead's project or the team's own remote, so no line asks
+  // anything: the lines ride the step that follows, as the take's carry-on
+  // line does, so a next run at once says them with its question; with no chat
+  // known they are printed here.
+  const forNextStep = sentOn && saidWithNextStep(pd, lines.join(" "));
   console.log(JSON.stringify({ pushed: true, unit, repos: results.map((repo) => repo.repo), ...(forNextStep ? {} : { notice: lines.join(" ") }) }));
 }
 
@@ -8406,7 +8548,9 @@ function proposeChange(args: string[], projectDir?: string): void {
     console.log(JSON.stringify({ proposed: false, notice: standing.line }));
     return;
   }
-  const live = currentClaim(pd, home.target, ref);
+  // A take the team's own remote holds carries the change there.
+  const there = standing.state === "pending" ? outboxTake(pd, home, build, ref) : null;
+  const live = there?.claim ?? currentClaim(pd, home.target, ref);
   if (live?.status !== "claimed") fail(`${build.unit} is not held at the lead's project, so there is no claim to send the change on.`);
   const proposal: Proposal = {
     input: match.path,
@@ -8419,15 +8563,25 @@ function proposeChange(args: string[], projectDir?: string): void {
     predecessor_oid: live.oid,
     proposals: [...(live.payload.proposals ?? []).filter((entry) => entry.input !== match.path || entry.answer !== undefined), proposal],
   };
-  const sent = updateClaimRef(pd, home.target, ref, createClaimCommit(pd, live.oid, payload, undefined, undefined, {
+  const commit = createClaimCommit(pd, live.oid, payload, undefined, undefined, {
     [`${RESULT_FILES_ROOT}/proposals/${match.path}`]: text,
-  }), live.oid);
-  if (!sent.ok) fail(`The lead's project did not take the change: ${sent.refused ?? "its claim moved meanwhile"}. Try again.`);
+  });
+  const sent = there !== null
+    ? (sendToOutbox(pd, there.outbox, ref, commit) ? { ok: false, elsewhere: maskUserinfo(there.outbox) } : { ok: false })
+    : writeHomeClaim(pd, home, ref, commit, live.oid);
+  const carryingOn = `I'm carrying on with ${flags.file !== undefined ? `the approved ${name}` : "your version here"} until the lead decides.`;
+  if (sent.elsewhere !== undefined) {
+    console.log(JSON.stringify({
+      proposed: true,
+      notice: `Sent your change to the ${name} to ${sent.elsewhere}; the lead's project takes it in at the lead's next look. ${carryingOn}`,
+    }));
+    return;
+  }
+  if (!sent.ok) fail(`The lead's project did not take the change: ${"refused" in sent && sent.refused !== undefined ? sent.refused : "its claim moved meanwhile"}. Try again.`);
   invalidateLiveClaimPayloadCache(pd, build.unit);
   console.log(JSON.stringify({
     proposed: true,
-    notice: `Sent to the lead: your change to the ${name}. I'm carrying on with ` +
-      `${flags.file !== undefined ? `the approved ${name}` : "your version here"} until the lead decides.`,
+    notice: `Sent to the lead: your change to the ${name}. ${carryingOn}`,
   }));
 }
 

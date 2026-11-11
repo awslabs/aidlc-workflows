@@ -792,10 +792,14 @@ records `UNIT_TAKEN_IN`, and is selected for this chat. Its `WORKFLOW_STARTED` r
 words of the take when the agent hands them (`--request-file` or `--person-words`), and otherwise
 `Taken from the lead's plan: <unit>`. Taking a Unit whose
 build is already in this workspace carries that build on, and says whose build it
-is when someone else took it. A lead's project that takes no push from here: the
-take goes on, says git's reason once, and is recorded there when a push next goes
-through; an early start waits for it, with git's reason and the way on, which is
-push access from the lead. Before any Unit is taken, a lead's project out of
+is when someone else took it. A lead's project that takes no push from here: when
+this clone pushes the lead's branch to a repo of the team's own (a fork as origin,
+a push URL or `remote.pushDefault`), the take goes there with the person's login
+and says so once, and the lead's look takes it in from that remote once the lead
+adds it to their workspace; with nowhere else to push, the take goes on, says
+git's reason once, and is recorded there when a push next goes through, and an
+early start waits for it, with git's reason and the way on, which is push access
+from the lead. Before any Unit is taken, a lead's project out of
 reach at its recorded address while this clone's own remote holds the lead's
 plan records the take at that remote, said once.
 `--early` starts a Unit that waits on others once each of them has pushed: its
@@ -832,7 +836,9 @@ hook's own words, and nothing retries. The result (each repo's branch, base,
 every head pushed, each changed file's blob and patch-id, and the Unit outputs
 the lead's project's later stages read) goes onto the Unit's claim at the lead's project, and
 `UNIT_PUSHED` is recorded; until the lead's project takes it (`Unit Push: unsent`), the
-next step offers to send it again. A repo the Unit changed that the lead's plan
+next step offers to send it again. When the lead's project refuses it and this
+clone pushes to a repo of the team's own, the result goes there (`Unit Push:
+pushed`), said once, and the lead's look takes it in. A repo the Unit changed that the lead's plan
 did not list is added to the build's repos first (`intent add-repo`), said once.
 A merge, rebase, cherry-pick or revert left under way in a repo is never
 committed over: the push says so with git's way to finish it or put it aside.
