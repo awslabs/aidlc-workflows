@@ -362,6 +362,7 @@ describe("a redo for every Unit once a team has taken a Unit", () => {
     const team = clone(remote, "team");
     expect(runMergeTool(UNIT, ["claim", "gamma", "--team", "team-g"], team).status).toBe(0);
     const before = stageJumps(lead);
+    expect(orch(lead, ["report", "--result", "resumed", "--choice", "redo"])).toEqual({ kind: "error", message: NOTHING_HERE });
     expect(orch(lead, ["next", "--stage", FD])).toEqual({ kind: "error", message: NOTHING_HERE });
     expect(stageJumps(lead)).toBe(before);
   });
@@ -376,10 +377,32 @@ describe("a redo for every Unit once a team has taken a Unit", () => {
     git(lead, ["push", "origin", "main"]);
     const team = clone(remote, "team");
     expect(runMergeTool(UNIT, ["claim", "gamma", "--team", "team-g"], team).status).toBe(0);
-    git(lead, ["fetch", "origin"]);
+    // The lead's checkout has not fetched since the claim.
     const said = orch(lead, ["next", "--stage", "code-generation", "--every-unit"]);
     expect(said.message).not.toContain("Redoing Code Generation");
     expect(said.message).toContain('This moves only unit "alpha" on to "code-generation"');
+  });
+
+  test("a redo for every Unit of the later Unit stage the lead's own Unit is on reopens it there", () => {
+    const { lead, remote } = leadsCheckout("EXECUTE");
+    nextDirective(lead);
+    nextDirective(lead);
+    expect(unitVerb(lead, "start", "alpha").status).toBe(0);
+    finish(lead, "alpha");
+    expect(nextDirective(lead)).toMatchObject({ stage: "code-generation", unit: "alpha" });
+    const started = runMergeTool(STATE, ["unit", "start", "--stage", "code-generation", "--unit", "alpha"], lead);
+    expect(started.status, started.out).toBe(0);
+    git(lead, ["add", "-A"]);
+    git(lead, ["commit", "-m", "alpha on code generation"]);
+    git(lead, ["push", "origin", "main"]);
+    const team = clone(remote, "team");
+    expect(runMergeTool(UNIT, ["claim", "gamma", "--team", "team-g"], team).status).toBe(0);
+    git(lead, ["fetch", "origin"]);
+    const said = orch(lead, ["next", "--stage", "code-generation", "--every-unit"]);
+    expect(said.message).toContain("aidlc-jump.ts reopen --target code-generation --stages code-generation --units alpha --via redo");
+    expect(said.message).toContain(
+      "\"Redoing Code Generation for unit alpha. gamma is built by team-g and beta is not taken yet, so they are not redone here.\"",
+    );
   });
 
   test("while main is back before the Unit stages, a finished Unit named for a redo keeps its line", () => {

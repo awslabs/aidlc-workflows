@@ -17877,7 +17877,8 @@ function unitOutsideWork(
 // one line naming the Units left and why. Null where nothing is narrowed: solo, a
 // claimed checkout, no team has taken a Unit, a target outside the Unit stages on
 // the plan (an earlier release's skip of them included), or with `fromThem` a
-// move from before them (a jump into them goes as before).
+// move from before them (a jump into them goes as before). Its callers fetch the
+// teams' claims first (teamClaimsNow).
 function teamRedoNarrowed(
   projectDir: string,
   scope: string,
@@ -17891,7 +17892,6 @@ function teamRedoNarrowed(
   if (fromThem && getField(stateContent, "Current Stage")?.trim() !== block[0] && !cursorPastStage(stateContent, block[0])) {
     return null;
   }
-  if (!isReadOnlyEngineProbe()) refreshClaimRefs(projectDir);
   const dag = resolveBoltBatches(projectDir);
   if (!cachedClaimFanoutActive(projectDir) || dag.state !== "ok") return null;
   const held = unitsHeldHere(projectDir) ?? new Set<string>();
@@ -17932,6 +17932,12 @@ function teamRedoNarrowed(
   ];
   const message = `Run \`${jumpCommandText(jump)}\`, then tell the person in one line: "${line}" Then re-run \`next\`.`;
   return { held: true, directive: jumpStepPrint(`${message} ${OTHER_UNITS_KEPT}`, jump) };
+}
+
+// The teams' claims as the remote has them now, before a redo or a move reads
+// them (the board's own one fetch); outside team work and in a probe, no fetch.
+function teamClaimsNow(projectDir: string, stateContent: string): void {
+  if (isTeamUnitOwnership(stateContent) && !isReadOnlyEngineProbe()) refreshClaimRefs(projectDir);
 }
 
 // A team checkout that holds no claim and no Unit once a team has claimed one
@@ -19556,6 +19562,7 @@ function emitJumpDirective(
       return;
     }
     const unitMajorState = loadStateFileIfPresent(projectDir) ?? "";
+    teamClaimsNow(projectDir, unitMajorState);
     // A jump back to a per-unit step reopens it for chosen Units, whichever way
     // the jump resolves: forward or redo while Current Stage is on the first
     // per-unit stage, backward once the stage gates have moved it on.
@@ -19582,12 +19589,15 @@ function emitJumpDirective(
       : "";
     const everyUnitLine = everyUnitSaid ? ` Then tell the person in one line: "${everyUnitSaid}"` : "";
     // Once a team has taken a Unit, a move ahead for every Unit is for the ones
-    // this checkout builds: the one-Unit move.
+    // this checkout builds: the one-Unit move, or at the step one is on its redo.
+    const teamTaken = flags.everyUnit === true && isTeamUnitOwnership(unitMajorState) && cachedClaimFanoutActive(projectDir);
     const unitMajor = direction === "forward"
-      ? unitMajorForwardJump(projectDir, scope, unitMajorState, targetSlug, flags.everyUnit === true && !cachedClaimFanoutActive(projectDir))
+      ? unitMajorForwardJump(projectDir, scope, unitMajorState, targetSlug, flags.everyUnit === true && !teamTaken)
       : null;
-    if (unitMajor === "route") return "route";
-    const narrowed = unitMajor === null ? teamRedoNarrowed(projectDir, scope, unitMajorState, targetSlug, true) : null;
+    if (unitMajor === "route" && !teamTaken) return "route";
+    const narrowed = unitMajor === null || unitMajor === "route"
+      ? teamRedoNarrowed(projectDir, scope, unitMajorState, targetSlug, true)
+      : null;
     if (narrowed !== null) {
       emit(narrowed.directive);
       return;
@@ -21502,6 +21512,7 @@ function redoCurrentStage(pd: string, scope: string, stateContent: string, slug:
       `This workflow's scope is not one AI-DLC knows, so its stage cannot be redone from here. Run \`${entrySkillInvocation()} --status\` to see where it stands.`,
     );
   }
+  teamClaimsNow(pd, stateContent);
   const unitRedo = unitMajorRedo(pd, scope, stateContent, slug);
   if (unitRedo !== null) return jumpStepPrint(unitRedo.message, unitRedo.jump);
   const narrowed = teamRedoNarrowed(pd, scope, stateContent, slug);
