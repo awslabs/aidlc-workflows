@@ -116,6 +116,7 @@ import {
   summaryIsCurrent,
   validateDocumentIndex,
   validateDocumentMetadata,
+  validDocumentPath,
 } from "./aidlc-documentkb-schema.ts";
 
 // --- Paths -------------------------------------------------------------------
@@ -1587,6 +1588,42 @@ function assertPublishable(candidate: DocumentIndex): void {
 }
 
 /**
+ * The copy the command layer made of `original` (that file's project-relative
+ * POSIX path) that it may write the file's new bytes over: a live row records
+ * that original, and its copy, read through the same boundary as any candidate,
+ * still holds the bytes copied (nobody edited it, by hand or by a sync after an
+ * edit) or already holds `newSha256` (a run that wrote them stopped before the
+ * index took them). Null when no copy, or more than one, qualifies: the caller
+ * then copies beside it, as it always has.
+ */
+export function copiedDocumentFor(
+  projectDir: string,
+  space: string,
+  original: string,
+  newSha256: string,
+): { copyPath: string; holdsNew: boolean } | null {
+  assertKnowledgeRootTrusted(projectDir, space);
+  const documentsAbs = documentsDir(projectDir, space);
+  if (!existsSync(documentsAbs)) return null;
+  const documentsReal = realpathSync(documentsAbs);
+  const fits: { copyPath: string; holdsNew: boolean }[] = [];
+  for (const row of readIndex(projectDir, space).documents) {
+    const from = row.copied_from;
+    if (from === undefined || from.path !== original || isTombstoned(row)) continue;
+    if (row.source.kind !== "managed" || !row.source.path.startsWith("documents/")) continue;
+    const copyPath = join(documentsReal, ...row.source.path.slice("documents/".length).split("/"));
+    let digest: string;
+    try {
+      digest = sha256Hex(readCandidate(documentsReal, copyPath));
+    } catch {
+      continue;
+    }
+    if (digest === from.sha256 || digest === newSha256) fits.push({ copyPath, holdsNew: digest === newSha256 });
+  }
+  return fits.length === 1 ? fits[0] : null;
+}
+
+/**
  * Index one path, several, or every not-yet-indexed file under `documents/`
  * when pathless.
  *
@@ -1610,6 +1647,7 @@ export function onboard(
   pathArg: string | readonly string[] | undefined,
   now: string,
   intentUuid?: string,
+  copiedFrom?: ReadonlyMap<string, string>,
 ): OnboardResult {
   assertKnowledgeRootTrusted(projectDir, space);
   const documentsAbs = documentsDir(projectDir, space);
@@ -1660,7 +1698,7 @@ export function onboard(
     candidates = statSync(real).isDirectory() ? walkDocuments(real) : [real];
   }
 
-  const result = onboardCandidates(projectDir, space, documentsReal, candidates, now, intentUuid);
+  const result = onboardCandidates(projectDir, space, documentsReal, candidates, now, intentUuid, copiedFrom);
   return notAdded.length === 0 ? result : { ...result, not_added: notAdded };
 }
 
@@ -1671,6 +1709,7 @@ function onboardCandidates(
   candidates: readonly string[],
   now: string,
   intentUuid?: string,
+  copiedFrom?: ReadonlyMap<string, string>,
 ): OnboardResult {
   const index = readIndex(projectDir, space);
 
@@ -1770,7 +1809,14 @@ function onboardCandidates(
       }
       const contentNeedsRepair = existing.extraction.state === "extracted" &&
         verifiedContentBytes(projectDir, space, existing) === null;
-      if (existing.sha256 === digest && !contentNeedsRepair) {
+      // The command layer handed this copy in for its original, and the row's
+      // record of the bytes copied lags them (a run that wrote them stopped
+      // before the index took them): refresh it, so the next change still
+      // updates this copy instead of landing beside it.
+      const original = copiedFrom?.get(abs);
+      const recordLags = original !== undefined && existing.copied_from?.path === original &&
+        existing.copied_from.sha256 !== digest;
+      if (existing.sha256 === digest && !contentNeedsRepair && !recordLags) {
         // Already indexed, unchanged. Reported, never swallowed.
         outcomes.push({
           id: existing.id,
@@ -1791,6 +1837,8 @@ function onboardCandidates(
           indexed_at: now,
           extraction: outcome.record,
         };
+        // The command layer wrote this original's new bytes over its copy.
+        if (original !== undefined) row.copied_from = { path: original, sha256: digest };
         setRowContentFields(row, outcome.text);
         editedIds.add(row.id);
         staged.push({ row, buf, abs, text: outcome.text, baseRow: structuredClone(existing) });
@@ -1798,6 +1846,8 @@ function onboardCandidates(
       continue;
     }
     const { row, text } = buildRow(projectDir, space, abs, buf, now);
+    const original = copiedFrom?.get(abs);
+    if (original !== undefined) row.copied_from = { path: original, sha256: row.sha256 };
     // Present means intent-scoped; OMITTED means space-wide. Never an empty list,
     // which the schema rejects as ambiguous between the two.
     if (intentUuid !== undefined) row.related_intent_ids = [intentUuid];
@@ -1968,6 +2018,7 @@ function onboardCandidates(
           existing.bytes = row.bytes;
           existing.indexed_at = row.indexed_at;
           existing.extraction = row.extraction;
+          if (row.copied_from !== undefined) existing.copied_from = row.copied_from;
           setRowContentFields(existing, text);
           edited.push(existing);
           editedStageIds.set(existing.id, stagedRowId);
@@ -2353,9 +2404,8 @@ export const UNTRUSTED_TAGS_NOTICE =
  * from here on, and, when their original is git-ignored, that this copy is not.
  * Null when nothing was copied. Plain words: no record paths, no flags.
  *
- * It does NOT say to add the document again after editing the original: a
- * second add copies the original beside the first (`vision-2.md`, or a new
- * folder), which would leave two live rows for one document.
+ * A changed original named again updates this copy in place (the row's
+ * copied_from), and `onboardNote` says so instead.
  */
 export function onboardCopyNote(
   projectDir: string,
@@ -2392,6 +2442,10 @@ export interface OnboardCopy {
   to: string;
   ignored: "yes" | "no" | "unknown";
   leftOut: number;
+  /** A copied file's project-relative path, recorded as the row's copied_from. */
+  original?: string;
+  /** Its new bytes were written over the copy made from it before. */
+  updated?: boolean;
 }
 
 function inWords(items: readonly string[]): string {
@@ -2414,7 +2468,7 @@ const SEVERAL_NAMES_SHOWN = 5;
 function onboardNote(
   projectDir: string,
   space: string,
-  copies: readonly OnboardCopy[],
+  allCopies: readonly OnboardCopy[],
   indexed: readonly OnboardOutcome[],
   notAdded: readonly OnboardNotAdded[],
 ): string | null {
@@ -2429,6 +2483,14 @@ function onboardNote(
     const rel = portableSourcePath(projectDir, space, copy.to);
     return indexed.filter((outcome) => outcome.path === rel || outcome.path.startsWith(`${rel}/`)).length;
   };
+  // An update is said only where the knowledge base took it (the copy's row
+  // came back `edited`); otherwise the copy reads as any other copy does.
+  const updated = allCopies.filter((copy) => {
+    if (copy.updated !== true) return false;
+    const rel = portableSourcePath(projectDir, space, copy.to);
+    return indexed.some((outcome) => outcome.path === rel && outcome.status === "edited");
+  });
+  const copies = allCopies.filter((copy) => !updated.includes(copy));
   if (copies.length === 1) {
     const [copy] = copies;
     const one = onboardCopyNote(projectDir, copy.from, copy.to, copy.ignored, under(copy), copy.leftOut);
@@ -2466,7 +2528,34 @@ function onboardNote(
     }
     parts.push(line);
   }
+  if (updated.length > 0) parts.push(updatedCopiesNote(projectDir, space, updated));
   return parts.length === 0 ? null : parts.join(" ");
+}
+
+/** What to say when a changed original's new bytes were written over its copy. */
+function updatedCopiesNote(projectDir: string, space: string, updated: readonly OnboardCopy[]): string {
+  const ignoredNote = (state: "yes" | "unknown", likely: string): string => {
+    const names = updated.filter((copy) => copy.ignored === state).map((copy) => basename(copy.from));
+    if (names.length === 0) return "";
+    const one = names.length === 1;
+    const copyIs = updated.length === 1 ? "this copy is" : one ? "its copy is" : "their copies are";
+    return ` Your ${inWords(names)} ${one ? "is" : "are"} ${likely}kept out of git, but ${copyIs} not, so ` +
+      `${one ? "it" : "they"} will be committed unless you keep ${one ? "it" : "them"} out there too.`;
+  };
+  const ignored = ignoredNote("yes", "") + ignoredNote("unknown", "likely ");
+  if (updated.length === 1) {
+    const [copy] = updated;
+    return `Updated ${toPosix(relative(projectDir, copy.to))} to your new ${basename(copy.from)}. It stays the ` +
+      "same document in the knowledge base." + ignored;
+  }
+  const documentsAbs = documentsDir(projectDir, space);
+  const names = updated.map((copy) => {
+    const name = basename(copy.from);
+    const as = toPosix(relative(realpathOrSelf(documentsAbs), realpathOrSelf(copy.to)));
+    return as === name ? name : `${as} (your ${name})`;
+  });
+  return `Updated ${inWords(names)} in ${toPosix(relative(projectDir, documentsAbs))} to your new versions. ` +
+    "Each stays the same document in the knowledge base." + ignored;
 }
 
 function emitJson(payload: Record<string, unknown>): void {
@@ -3533,6 +3622,9 @@ export function syncDocuments(
           break;
         case "moved":
           row.source = { ...row.source, path: plan.nextPath! } as DocumentRow["source"];
+          // A copy moved under documents/ is no longer the copy its original
+          // updates: naming the original again copies it in afresh.
+          delete row.copied_from;
           changes.push({ id: row.id, path: plan.nextPath!, change: "moved" });
           audits.push(() => emitDocumentUpdated(projectDir, space, row, "moved"));
           break;
@@ -4635,6 +4727,7 @@ export function rebindDocument(
     }
     const from = row.source.path;
     row.source = { kind: "managed", path: nextPath };
+    delete row.copied_from;
     row.sha256 = digest;
     row.bytes = buf.length;
     // The identity SURVIVES: same id, same intents. That is the point -- the
@@ -4742,7 +4835,9 @@ function dispatcherCopies(raw: string | undefined): {
     const count = (value: unknown): boolean => Number.isInteger(value) && (value as number) >= 0;
     const isCopy = (entry: Record<string, unknown>): boolean =>
       typeof entry.from === "string" && typeof entry.to === "string" &&
-      (entry.ignored === "yes" || entry.ignored === "no" || entry.ignored === "unknown") && count(entry.leftOut);
+      (entry.ignored === "yes" || entry.ignored === "no" || entry.ignored === "unknown") && count(entry.leftOut) &&
+      (entry.original === undefined || validDocumentPath(entry.original)) &&
+      (entry.updated === undefined || typeof entry.updated === "boolean");
     const isLeftOut = (entry: Record<string, unknown>): boolean =>
       count(entry.at) && typeof entry.path === "string" && typeof entry.reason === "string";
     if (!copies.every((entry) => typeof entry === "object" && entry !== null && isCopy(entry))) return none;
@@ -4797,9 +4892,15 @@ export function main(argv: string[]): void {
         const skipped = new Set(handed.notAdded.map((entry) => entry.at));
         const kept = positional.flatMap((token, at) => (skipped.has(at) ? [] : [{ token, at }]));
         const several = positional.length > 1;
+        // Each file the dispatcher copied, by where its copy is, to the original it came from.
+        const copiedFrom = new Map<string, string>();
+        for (const copy of handed.copies) {
+          if (copy.original === undefined || !existsSync(copy.to)) continue;
+          copiedFrom.set(realpathSync(copy.to), copy.original);
+        }
         const result = onboard(
           pd, space, several ? kept.map((entry) => entry.token) : positional[0], new Date().toISOString(),
-          resolved?.uuid,
+          resolved?.uuid, copiedFrom,
         );
         const notAdded = notAddedInOrder(kept, result.not_added ?? [], handed.notAdded);
         if (result.refused) {

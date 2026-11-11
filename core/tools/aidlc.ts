@@ -3348,7 +3348,9 @@ async function withNamedDocumentCopied(args: string[]): Promise<string[] | { ref
       if ("refusal" in copied) return copied;
       const next = [...args];
       next[one.at] = copied.target;
-      const copies = [{ from: one.given, to: copied.target, ignored: copied.gitIgnored, leftOut: copied.leftOut }];
+      const copies = [{ from: one.given, to: copied.target, ignored: copied.gitIgnored, leftOut: copied.leftOut,
+        ...(copied.original === undefined ? {} : { original: copied.original }),
+        ...(copied.updated === true ? { updated: true } : {}) }];
       return [...next, "--copied", JSON.stringify({ copies })];
     }
     const planned = utility.copyNamedDocumentsIntoKnowledge(
@@ -3359,7 +3361,9 @@ async function withNamedDocumentCopied(args: string[]): Promise<string[] | { ref
     );
     if ("refusal" in planned) return planned;
     const next = [...args];
-    const copies: Array<{ from: string; to: string; ignored: string; leftOut: number }> = [];
+    const copies: Array<{
+      from: string; to: string; ignored: string; leftOut: number; original?: string; updated?: boolean;
+    }> = [];
     const notAdded: Array<{ at: number; path: string; reason: string }> = [];
     toCopy.forEach((entry, index) => {
       const outcome = planned.outcomes[index];
@@ -3369,7 +3373,11 @@ async function withNamedDocumentCopied(args: string[]): Promise<string[] | { ref
       }
       next[entry.at] = outcome.target;
       if (copies.some((copy) => copy.to === outcome.target)) return;
-      copies.push({ from: entry.given, to: outcome.target, ignored: outcome.gitIgnored, leftOut: outcome.leftOut });
+      copies.push({
+        from: entry.given, to: outcome.target, ignored: outcome.gitIgnored, leftOut: outcome.leftOut,
+        ...(outcome.original === undefined ? {} : { original: outcome.original }),
+        ...(outcome.updated === true ? { updated: true } : {}),
+      });
     });
     return [...next, "--copied", JSON.stringify({ copies, notAdded })];
   } catch {

@@ -811,12 +811,30 @@ describe("t329 project-description and document-input boundaries", () => {
     expect(payload.document_id).toBe(first.document_id);
     expect(payload.document_path).toBe(copy);
     expect(payload.onboard_note).toBe(
-      `I updated "${copy}" from your changed "docs/report.docx"; it is still document ${first.document_id} in the ` +
-        "knowledge base, now with the new text.",
+      `I updated "${copy}" to your new "docs/report.docx"; it is still document ${first.document_id} in the ` +
+        "knowledge base.",
     );
     expect(payload.content).toBe("Report text, changed.");
     expect(readdirSync(join(dir, DOCUMENTS))).toEqual(["report.docx"]);
     expect(readFileSync(join(dir, copy)).equals(changed)).toBe(true);
+  });
+
+  // Both routes that copy a named file record it the same way, so a file added
+  // with `knowledge onboard` and later named in a request is the same document.
+  test("a Word file added by knowledge onboard and named again in a request updates the same document", () => {
+    const dir = project();
+    mkdirSync(join(dir, "docs"));
+    writeFileSync(join(dir, "docs", "report.docx"), wordBytes());
+    const added = runCommand(dir, ["engine", "knowledge", "onboard", "docs/report.docx"], join(AIDLC_SRC, "tools", "aidlc.ts"));
+    expect(added.status, added.stderr).toBe(0);
+    const id = JSON.parse(added.stdout.slice(added.stdout.indexOf("{"))).indexed[0].id;
+
+    writeFileSync(join(dir, "docs", "report.docx"), wordBytes("Report text, changed."));
+    writeRequest(dir, "docs/report.docx");
+    const again = runOnboard(dir);
+    expect(again.status, again.stderr).toBe(0);
+    expect(JSON.parse(again.stdout).document_id).toBe(id);
+    expect(readdirSync(join(dir, DOCUMENTS))).toEqual(["report.docx"]);
   });
 
   // A copy stopped between claiming the name and renaming its bytes over the

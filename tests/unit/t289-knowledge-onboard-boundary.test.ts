@@ -76,6 +76,7 @@ import {
   journalTxnDir,
   looksBinary,
   collectStaleJournals,
+  copiedDocumentFor,
   listDocuments,
   onboard,
   onboardBatchWork,
@@ -981,6 +982,8 @@ const DISK_TOUCHING_CALLS: Record<string, (p: string) => unknown> = {
   // The dispatcher counts a batch's work with it before copying anything; it
   // reads index.json.
   onboardBatchWork: (p) => onboardBatchWork(p, SPACE, []),
+  // The copy layer asks it which copy a named original was made into; it reads index.json.
+  copiedDocumentFor: (p) => copiedDocumentFor(p, SPACE, "orig/a.md", "a".repeat(64)),
   syncDocuments: (p) => syncDocuments(p, SPACE, "2026-08-07T00:00:00Z"),
   listDocuments: (p) => listDocuments(p, SPACE),
   showDocument: (p) => showDocument(p, SPACE, "any-id"),

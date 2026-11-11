@@ -486,6 +486,7 @@ export {
   releaseAuditLock,
   removeTreeSync,
   renameIntoPlace,
+  replaceWithStaged,
   ROUTE_CHECK_ENV,
   runWithOwnerStampedLock,
   sameFileIdentity,

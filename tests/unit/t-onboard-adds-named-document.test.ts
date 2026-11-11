@@ -5,7 +5,9 @@
 // function:copyNamedDocumentsIntoKnowledge, function:planNamedDocumentCopy,
 // function:carryOutNamedDocumentCopy, function:knowledgeCopyCapBreach,
 // function:onboardNote, function:describeNotAdded, function:namedOnboardFiles,
-// function:onboardBatchWork, function:dispatcherCopies, function:notAddedInOrder
+// function:onboardBatchWork, function:dispatcherCopies, function:notAddedInOrder,
+// function:copiedFromPath, function:updateCopiedDocument,
+// function:updatedCopiesNote, function:copiedDocumentFor, function:replaceWithStaged
 //
 // A person says "start with vision.md" and the document is added. Before this,
 // `knowledge onboard` refused twice over: once because `knowledge/documents/`
@@ -27,7 +29,7 @@
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { AIDLC_SRC, cleanupTestProject, createTestProject } from "../harness/fixtures.ts";
@@ -79,6 +81,16 @@ function onboard(proj: string, args: string[]): { status: number; out: string; j
     }
   }
   return { status: result.status ?? -1, out, json };
+}
+
+function knowledge(proj: string, args: string[]): { status: number; out: string } {
+  const result = spawnSync(BUN, [DISPATCHER, "engine", "knowledge", ...args, "--project-dir", proj], {
+    cwd: proj,
+    env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj },
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  return { status: result.status ?? -1, out: `${result.stdout ?? ""}${result.stderr ?? ""}` };
 }
 
 const indexedPaths = (json: Record<string, unknown>): string[] =>
@@ -424,8 +436,8 @@ describe("a changed original named again updates its copy", () => {
     expect(live).toHaveLength(1);
     expect(live[0].related_intent_ids).toEqual([INTENT_UUID]);
     expect(String(again.json.onboard_note)).toBe(
-      `Updated ${documentsShown}/contract-summary.md from your changed contract-summary.md. The knowledge base keeps ` +
-        "it as the same document, now with the new text.",
+      `Updated ${documentsShown}/contract-summary.md to your new contract-summary.md. It stays the same document in ` +
+        "the knowledge base.",
     );
   });
 
@@ -460,6 +472,82 @@ describe("a changed original named again updates its copy", () => {
     expect(readFileSync(join(proj, DOCUMENTS, "a-2.md"), "utf-8")).toBe("theirs, changed\n");
   });
 
+  for (const reindex of ["onboard", "sync"] as const) {
+    test(`an edited copy taken into the knowledge base (${reindex}) is never written over either`, () => {
+      const proj = project();
+      mkdirSync(join(proj, "orig"), { recursive: true });
+      writeFileSync(join(proj, "orig", "a.md"), "theirs\n", "utf-8");
+      expect(onboard(proj, ["orig/a.md"]).status).toBe(0);
+      writeFileSync(join(proj, DOCUMENTS, "a.md"), "the team's edit\n", "utf-8");
+      const taken = reindex === "onboard" ? onboard(proj, []) : knowledge(proj, ["sync"]);
+      expect(taken.status, taken.out).toBe(0);
+      writeFileSync(join(proj, "orig", "a.md"), "theirs, changed\n", "utf-8");
+      expect(onboard(proj, ["orig/a.md"]).status).toBe(0);
+      expect(readFileSync(join(proj, DOCUMENTS, "a.md"), "utf-8")).toBe("the team's edit\n");
+      expect(readFileSync(join(proj, DOCUMENTS, "a-2.md"), "utf-8")).toBe("theirs, changed\n");
+    });
+  }
+
+  test("after an edited copy and the copy beside it, the next change updates the one beside it", () => {
+    const proj = project();
+    mkdirSync(join(proj, "orig"), { recursive: true });
+    writeFileSync(join(proj, "orig", "a.md"), "v1\n", "utf-8");
+    expect(onboard(proj, ["orig/a.md"]).status).toBe(0);
+    writeFileSync(join(proj, DOCUMENTS, "a.md"), "the team's edit\n", "utf-8");
+    writeFileSync(join(proj, "orig", "a.md"), "v2\n", "utf-8");
+    expect(onboard(proj, ["orig/a.md"]).status).toBe(0);
+    writeFileSync(join(proj, "orig", "a.md"), "v3\n", "utf-8");
+    const third = onboard(proj, ["orig/a.md"]);
+    expect(third.status, third.out).toBe(0);
+    expect(readFileSync(join(proj, DOCUMENTS, "a-2.md"), "utf-8")).toBe("v3\n");
+    expect(existsSync(join(proj, DOCUMENTS, "a-3.md"))).toBe(false);
+    expect(readFileSync(join(proj, DOCUMENTS, "a.md"), "utf-8")).toBe("the team's edit\n");
+  });
+
+  test("a copy the team moved is theirs: the changed original is copied in afresh", () => {
+    const proj = project();
+    mkdirSync(join(proj, "orig"), { recursive: true });
+    writeFileSync(join(proj, "orig", "a.md"), "v1\n", "utf-8");
+    expect(onboard(proj, ["orig/a.md"]).status).toBe(0);
+    renameSync(join(proj, DOCUMENTS, "a.md"), join(proj, DOCUMENTS, "a-2025.md"));
+    expect(knowledge(proj, ["sync"]).status).toBe(0);
+    writeFileSync(join(proj, "orig", "a.md"), "v2\n", "utf-8");
+    expect(onboard(proj, ["orig/a.md"]).status).toBe(0);
+    expect(readFileSync(join(proj, DOCUMENTS, "a-2025.md"), "utf-8")).toBe("v1\n");
+    expect(readFileSync(join(proj, DOCUMENTS, "a.md"), "utf-8")).toBe("v2\n");
+  });
+
+  test("a run that wrote the new bytes and then stopped is finished by the next one, with one row", () => {
+    const proj = project();
+    mkdirSync(join(proj, "orig"), { recursive: true });
+    writeFileSync(join(proj, "orig", "a.md"), "v1\n", "utf-8");
+    expect(onboard(proj, ["orig/a.md"]).status).toBe(0);
+    writeFileSync(join(proj, "orig", "a.md"), "v2\n", "utf-8");
+    // An intent nobody registered stops the verb after the copy step ran.
+    const stopped = onboard(proj, ["orig/a.md", "--intent", "no-such-work"]);
+    expect(stopped.status, stopped.out).not.toBe(0);
+    const again = onboard(proj, ["orig/a.md"]);
+    expect(again.status, again.out).toBe(0);
+    expect(rows(proj)).toHaveLength(1);
+    expect(existsSync(join(proj, DOCUMENTS, "a-2.md"))).toBe(false);
+    writeFileSync(join(proj, "orig", "a.md"), "v3\n", "utf-8");
+    expect(onboard(proj, ["orig/a.md"]).status).toBe(0);
+    expect(readFileSync(join(proj, DOCUMENTS, "a.md"), "utf-8")).toBe("v3\n");
+    expect(rows(proj)).toHaveLength(1);
+  });
+
+  test("a copy whose line endings a Windows checkout changed is left as it is", () => {
+    const proj = project();
+    mkdirSync(join(proj, "orig"), { recursive: true });
+    writeFileSync(join(proj, "orig", "a.md"), "one\ntwo\n", "utf-8");
+    expect(onboard(proj, ["orig/a.md"]).status).toBe(0);
+    writeFileSync(join(proj, DOCUMENTS, "a.md"), "one\r\ntwo\r\n", "utf-8");
+    writeFileSync(join(proj, "orig", "a.md"), "one\ntwo\nthree\n", "utf-8");
+    expect(onboard(proj, ["orig/a.md"]).status).toBe(0);
+    expect(readFileSync(join(proj, DOCUMENTS, "a.md"), "utf-8")).toBe("one\r\ntwo\r\n");
+    expect(existsSync(join(proj, DOCUMENTS, "a-2.md"))).toBe(true);
+  });
+
   test("a document that was not copied in by name keeps today's behaviour", () => {
     const proj = project();
     mkdirSync(join(proj, DOCUMENTS), { recursive: true });
@@ -487,8 +575,8 @@ describe("a changed original named again updates its copy", () => {
     expect(rows(proj)).toHaveLength(3);
     expect(String(again.json.onboard_note)).toBe(
       `Copied c.md into AI-DLC's documents as ${documentsShown}/c.md and added it. The knowledge base reads that ` +
-        "copy from now on, not your own c.md. Updated a.md and b.md in " + documentsShown + " from your changed " +
-        "originals. The knowledge base keeps each as the same document, now with the new text.",
+        "copy from now on, not your own c.md. Updated a.md and b.md in " + documentsShown + " to your new " +
+        "versions. Each stays the same document in the knowledge base.",
     );
   });
 
