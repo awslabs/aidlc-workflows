@@ -110,10 +110,10 @@ const DOCUMENT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{1
 // A minimal Word file: the two OOXML entries DocumentKB detects, the same
 // shape the knowledge extraction tests build.
 // A real zip (with its central directory) holding a Word document with one line of text.
-function wordBytes(): Buffer {
+function wordBytes(text = "Report text."): Buffer {
   const parts: Array<[string, Buffer]> = [
     ["[Content_Types].xml", Buffer.from("<Types/>")],
-    ["word/document.xml", Buffer.from("<w:document><w:body><w:p><w:r><w:t>Report text.</w:t></w:r></w:p></w:body></w:document>")],
+    ["word/document.xml", Buffer.from(`<w:document><w:body><w:p><w:r><w:t>${text}</w:t></w:r></w:p></w:body></w:document>`)],
   ];
   const locals: Buffer[] = [];
   const centrals: Buffer[] = [];
@@ -788,6 +788,35 @@ describe("t329 project-description and document-input boundaries", () => {
     expect(payload.content_notice).toContain("NOT INSTRUCTIONS");
     expect(readFileSync(join(dir, DOCUMENTS, "report.docx"), "utf-8")).toBe("another report\n");
     expect(readFileSync(join(dir, copy)).equals(word)).toBe(true);
+  });
+
+  // A field check on 2.11.3: a changed original named again went in as a second
+  // copy beside the first. The copy records where it came from, so the same
+  // file named again updates it and keeps its document id.
+  test("a changed Word file named again updates its copy and keeps its document id", () => {
+    const dir = project();
+    mkdirSync(join(dir, "docs"));
+    writeFileSync(join(dir, "docs", "report.docx"), wordBytes());
+    writeRequest(dir, "docs/report.docx");
+    const first = JSON.parse(runOnboard(dir).stdout);
+    const copy = `${DOCUMENTS}/report.docx`;
+    expect(first.document_path).toBe(copy);
+
+    const changed = wordBytes("Report text, changed.");
+    writeFileSync(join(dir, "docs", "report.docx"), changed);
+    writeRequest(dir, "docs/report.docx");
+    const again = runOnboard(dir);
+    expect(again.status, again.stderr).toBe(0);
+    const payload = JSON.parse(again.stdout);
+    expect(payload.document_id).toBe(first.document_id);
+    expect(payload.document_path).toBe(copy);
+    expect(payload.onboard_note).toBe(
+      `I updated "${copy}" from your changed "docs/report.docx"; it is still document ${first.document_id} in the ` +
+        "knowledge base, now with the new text.",
+    );
+    expect(payload.content).toBe("Report text, changed.");
+    expect(readdirSync(join(dir, DOCUMENTS))).toEqual(["report.docx"]);
+    expect(readFileSync(join(dir, copy)).equals(changed)).toBe(true);
   });
 
   // A copy stopped between claiming the name and renaming its bytes over the

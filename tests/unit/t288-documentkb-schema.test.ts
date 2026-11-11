@@ -828,3 +828,27 @@ describe("t288 the reporting contract", () => {
     expect(JSON.stringify(input)).toBe(before);
   });
 });
+
+// `copied_from` says which project file a copy under documents/ was made from
+// and the bytes copied, so naming that original again updates the copy. It is a
+// committed path like source.path, so it gets the same containment check.
+describe("t288 copied_from: the original's project path and the bytes copied", () => {
+  test("a well-formed copied_from is accepted, in the index and in metadata.json", () => {
+    expect(validateDocumentIndex(index([row({ copied_from: { path: "orig/contract-summary.md", sha256: DIGEST } })])).ok)
+      .toBe(true);
+  });
+
+  for (const [what, value] of [
+    ["an absolute path", { path: "/home/someone/orig/a.md", sha256: DIGEST }],
+    ["a parent segment", { path: "orig/../../a.md", sha256: DIGEST }],
+    ["a bad digest", { path: "orig/a.md", sha256: "abc" }],
+    ["no path", { sha256: DIGEST }],
+    ["not an object", "orig/a.md"],
+  ] as const) {
+    test(`copied_from with ${what} is refused`, () => {
+      const r = validateDocumentIndex(index([row({ copied_from: value })]));
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(errorMatching(r.errors, /copied_from/)).toBeTruthy();
+    });
+  }
+});

@@ -380,6 +380,131 @@ describe("several documents named in one command are all added", () => {
   });
 });
 
+// A person changes their original and names it again (a field check on 2.11.3
+// did this after the agent advised it, and got `contract-summary-2.md`: a
+// second live row with the new text and no association, beside the old one).
+// The row records which file it was copied from and the bytes copied, so the
+// same original updates its copy in place, as long as nobody edited the copy.
+describe("a changed original named again updates its copy", () => {
+  const INTENT_UUID = "0192f000-0000-7000-8000-000000000042";
+  const documentsShown = DOCUMENTS.replaceAll("\\", "/");
+
+  function withIntent(proj: string, slug: string): void {
+    const intents = join(proj, "aidlc", "spaces", SPACE, "intents");
+    mkdirSync(join(intents, `260101-${slug}`), { recursive: true });
+    writeFileSync(join(intents, `260101-${slug}`, "aidlc-state.md"), "# AI-DLC State Tracking\n");
+    writeFileSync(
+      join(intents, "intents.json"),
+      `${JSON.stringify([{ uuid: INTENT_UUID, slug, dirName: `260101-${slug}`, status: "active" }], null, 2)}\n`,
+    );
+  }
+
+  const rows = (proj: string): Array<Record<string, unknown>> =>
+    (JSON.parse(readFileSync(join(proj, "aidlc", "spaces", SPACE, "knowledge", "documentkb", "index.json"), "utf-8")) as {
+      documents: Array<Record<string, unknown>>;
+    }).documents;
+
+  test("the same original named again writes over its copy: same id, its intent kept, one line says so", () => {
+    const proj = project();
+    withIntent(proj, "cash-transfer");
+    mkdirSync(join(proj, "orig"), { recursive: true });
+    writeFileSync(join(proj, "orig", "contract-summary.md"), "# Contract\n\nC1.\n", "utf-8");
+    const first = onboard(proj, ["orig/contract-summary.md", "--intent", "cash-transfer"]);
+    expect(first.status, first.out).toBe(0);
+    const id = (first.json.indexed as Array<{ id: string }>)[0].id;
+
+    writeFileSync(join(proj, "orig", "contract-summary.md"), "# Contract\n\nC1.\n\nCHANGE-1\n", "utf-8");
+    const again = onboard(proj, ["orig/contract-summary.md"]);
+    expect(again.status, again.out).toBe(0);
+    expect(existsSync(join(proj, DOCUMENTS, "contract-summary-2.md"))).toBe(false);
+    expect(readFileSync(join(proj, DOCUMENTS, "contract-summary.md"), "utf-8")).toBe("# Contract\n\nC1.\n\nCHANGE-1\n");
+    const outcome = (again.json.indexed as Array<{ id: string; status: string }>)[0];
+    expect(outcome).toMatchObject({ id, status: "edited" });
+    const live = rows(proj);
+    expect(live).toHaveLength(1);
+    expect(live[0].related_intent_ids).toEqual([INTENT_UUID]);
+    expect(String(again.json.onboard_note)).toBe(
+      `Updated ${documentsShown}/contract-summary.md from your changed contract-summary.md. The knowledge base keeps ` +
+        "it as the same document, now with the new text.",
+    );
+  });
+
+  test("the row records where its copy came from, and an update moves the record to the new bytes", () => {
+    const proj = project();
+    mkdirSync(join(proj, "orig"), { recursive: true });
+    writeFileSync(join(proj, "orig", "a.md"), "one\n", "utf-8");
+    expect(onboard(proj, ["./orig/a.md"]).status).toBe(0);
+    const recorded = rows(proj)[0].copied_from as { path: string; sha256: string };
+    expect(recorded.path).toBe("orig/a.md");
+    expect(recorded.sha256).toBe(rows(proj)[0].sha256);
+    writeFileSync(join(proj, "orig", "a.md"), "two\n", "utf-8");
+    expect(onboard(proj, ["orig/a.md"]).status).toBe(0);
+    const moved = rows(proj)[0];
+    expect((moved.copied_from as { sha256: string }).sha256).toBe(moved.sha256);
+    writeFileSync(join(proj, "orig", "a.md"), "three\n", "utf-8");
+    expect(onboard(proj, ["orig/a.md"]).status).toBe(0);
+    expect(rows(proj)).toHaveLength(1);
+    expect(readFileSync(join(proj, DOCUMENTS, "a.md"), "utf-8")).toBe("three\n");
+  });
+
+  test("a copy someone edited is never written over: the changed original goes in beside it", () => {
+    const proj = project();
+    mkdirSync(join(proj, "orig"), { recursive: true });
+    writeFileSync(join(proj, "orig", "a.md"), "theirs\n", "utf-8");
+    expect(onboard(proj, ["orig/a.md"]).status).toBe(0);
+    writeFileSync(join(proj, DOCUMENTS, "a.md"), "the team's edit\n", "utf-8");
+    writeFileSync(join(proj, "orig", "a.md"), "theirs, changed\n", "utf-8");
+    const again = onboard(proj, ["orig/a.md"]);
+    expect(again.status, again.out).toBe(0);
+    expect(readFileSync(join(proj, DOCUMENTS, "a.md"), "utf-8")).toBe("the team's edit\n");
+    expect(readFileSync(join(proj, DOCUMENTS, "a-2.md"), "utf-8")).toBe("theirs, changed\n");
+  });
+
+  test("a document that was not copied in by name keeps today's behaviour", () => {
+    const proj = project();
+    mkdirSync(join(proj, DOCUMENTS), { recursive: true });
+    writeFileSync(join(proj, DOCUMENTS, "a.md"), "placed by hand\n", "utf-8");
+    expect(onboard(proj, [`${documentsShown}/a.md`]).status).toBe(0);
+    expect(rows(proj)[0].copied_from).toBeUndefined();
+    mkdirSync(join(proj, "orig"), { recursive: true });
+    writeFileSync(join(proj, "orig", "a.md"), "another a\n", "utf-8");
+    expect(onboard(proj, ["orig/a.md"]).status).toBe(0);
+    expect(readFileSync(join(proj, DOCUMENTS, "a.md"), "utf-8")).toBe("placed by hand\n");
+    expect(existsSync(join(proj, DOCUMENTS, "a-2.md"))).toBe(true);
+  });
+
+  test("several paths, two of them changed originals, update both and add the new one", () => {
+    const proj = project();
+    mkdirSync(join(proj, "orig"), { recursive: true });
+    writeFileSync(join(proj, "orig", "a.md"), "a\n", "utf-8");
+    writeFileSync(join(proj, "orig", "b.md"), "b\n", "utf-8");
+    expect(onboard(proj, ["orig/a.md", "orig/b.md"]).status).toBe(0);
+    writeFileSync(join(proj, "orig", "a.md"), "a, changed\n", "utf-8");
+    writeFileSync(join(proj, "orig", "b.md"), "b, changed\n", "utf-8");
+    writeFileSync(join(proj, "orig", "c.md"), "c\n", "utf-8");
+    const again = onboard(proj, ["orig/a.md", "orig/b.md", "orig/c.md"]);
+    expect(again.status, again.out).toBe(0);
+    expect(rows(proj)).toHaveLength(3);
+    expect(String(again.json.onboard_note)).toBe(
+      `Copied c.md into AI-DLC's documents as ${documentsShown}/c.md and added it. The knowledge base reads that ` +
+        "copy from now on, not your own c.md. Updated a.md and b.md in " + documentsShown + " from your changed " +
+        "originals. The knowledge base keeps each as the same document, now with the new text.",
+    );
+  });
+
+  test("a folder named again still lands beside the first copy", () => {
+    const proj = project();
+    mkdirSync(join(proj, "design"), { recursive: true });
+    writeFileSync(join(proj, "design", "overview.md"), "v1\n", "utf-8");
+    expect(onboard(proj, ["design"]).status).toBe(0);
+    expect(rows(proj)[0].copied_from).toBeUndefined();
+    writeFileSync(join(proj, "design", "overview.md"), "v2\n", "utf-8");
+    expect(onboard(proj, ["design"]).status).toBe(0);
+    expect(readFileSync(join(proj, DOCUMENTS, "design", "overview.md"), "utf-8")).toBe("v1\n");
+    expect(readFileSync(join(proj, DOCUMENTS, "design-2", "overview.md"), "utf-8")).toBe("v2\n");
+  });
+});
+
 // A copy puts its bytes at the name in two steps: an exclusive create of the
 // empty name, then a rename of the whole bytes over it. Whatever another copy
 // left at the name, the person's bytes land whole and the line names where.
