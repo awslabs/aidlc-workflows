@@ -811,8 +811,7 @@ describe("t329 project-description and document-input boundaries", () => {
     expect(payload.document_id).toBe(first.document_id);
     expect(payload.document_path).toBe(copy);
     expect(payload.onboard_note).toBe(
-      `I updated "${copy}" to your new "docs/report.docx"; it is still document ${first.document_id} in the ` +
-        "knowledge base.",
+      `I updated "${copy}" to your new "docs/report.docx"; it stays the same document in the knowledge base.`,
     );
     expect(payload.content).toBe("Report text, changed.");
     expect(readdirSync(join(dir, DOCUMENTS))).toEqual(["report.docx"]);

@@ -10765,7 +10765,7 @@ function onboardDocumentInput(
     : ` The earlier copy, ${JSON.stringify(`${relative(projectRoot, documentsAbs).split(sep).join("/")}/${besideChanged}`)}, ` +
       "has changed since it was copied, so I left it as it is; the knowledge base now holds both.";
   const added = updated && indexed.status === "edited"
-    ? `I updated ${targetPath} to your new ${quoted}; it is still document ${indexed.id} in the knowledge base.`
+    ? `I updated ${targetPath} to your new ${quoted}; it stays the same document in the knowledge base.`
     : created
     ? `I copied ${quoted} to ${targetPath} and added it to the knowledge base as document ${indexed.id}.${earlier}`
     : indexed.status === "already"
