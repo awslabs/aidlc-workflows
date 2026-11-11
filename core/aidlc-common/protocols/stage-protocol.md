@@ -633,12 +633,12 @@ When an upstream artifact carries inline source tags or an
 
 ### Answer analysis (MANDATORY)
 After collecting answers, analyze ALL responses for:
-- Vague answers: "mix of", "not sure", "depends", "probably"
+- Vague answers: "mix of", "not sure", "depends"
 - Contradictions between answers
 - Missing details needed for the next step
 
 If ANY ambiguity found: create follow-up questions and resolve before proceeding.
-**When in doubt, ask.** Incomplete answers lead to poor designs.
+Incomplete answers lead to poor designs.
 
 **Write every pending question into the questions file before you end the turn —
 including follow-ups and chat-mode questions.** The questions file (with blank
@@ -656,7 +656,7 @@ Construction, where the loop is meant to keep running without you.
 When processing user answers from question files:
 - **Missing answers**: If any [Answer]: tag is still blank or contains only underscores, list the unanswered questions and ask the user to complete them before proceeding.
 - **Invalid answers**: If an answer does not match any provided option ({{OPTION_LETTERS}}, X) and is not a clear free-text response for "Other", ask the user to clarify which option they intended.
-- **Ambiguous answers**: If an answer like "maybe B" or "either A or C" is given, ask the user to commit to a single choice and explain their reasoning.
+- **Ambiguous answers**: If an answer like "either A or C" is given, ask the user to commit to a single choice.
 
 ### Contradiction detection (MANDATORY)
 After all answers are collected, cross-check the full answer set for:
@@ -672,10 +672,9 @@ When contradictions are detected:
 4. Do NOT proceed until contradictions are resolved
 
 ### Overconfidence prevention
-- Default to asking, not assuming. Never proceed with ambiguity.
+- Never proceed with ambiguity.
 - If an answer seems incomplete, probe deeper.
 - Red flags that require follow-up:
-  - Single-word answers to open-ended questions
   - Contradictory signals between different answers
   - Answers that dodge the question or change the subject
   - Relaxing, lowering, or disabling a previously defined quality target (e.g.

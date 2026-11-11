@@ -403,9 +403,9 @@ feasibility input.
      concurrency edge cases)
 
 3. **Collect and Analyze Answers** -- Collect answers following
-   stage-protocol.md question flow (offer interaction mode choice, collect
+   stage-protocol.md question flow (collect
    answers, write back to file). Perform MANDATORY ambiguity analysis:
-   - Identify vague answers ("mix of", "not sure", "depends", "probably")
+   - Identify vague answers ("mix of", "not sure", "depends")
    - Check for contradictions between answers
    - Flag missing details needed for artifact generation
    - If ANY ambiguity found: create follow-up questions and resolve before
@@ -625,7 +625,7 @@ infrastructure and platform input.
 
 3. **Collect and Analyze Answers** -- Collect answers following
    stage-protocol.md question flow. Perform MANDATORY ambiguity analysis:
-   - Identify vague answers ("mix of", "not sure", "depends", "probably")
+   - Identify vague answers ("mix of", "not sure", "depends")
    - Check for contradictions between answers
    - Flag missing details needed for artifact generation
    - If ANY ambiguity found: create follow-up questions and resolve before
