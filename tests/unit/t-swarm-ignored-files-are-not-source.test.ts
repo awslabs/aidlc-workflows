@@ -5,8 +5,8 @@
 // Unit's checkout gets it. One rule says so for every reader: the plans' approval at prepare, what prepare needs
 // committed and each landing's look at the main checkout (the stage's completion is in t314). Under strict nothing
 // re-asks the approval or refuses for such a file, and under relaxed nothing says it was kept. A file Git does not
-// ignore is still the person's change, as before. Neither is a repo that joins the work while the Units are built:
-// its files count from what it held at the add, at every one of those readers and the stage's completion.
+// ignore is still the person's change, as before. A repo that joins the work while the Units are built is no change
+// either: its files count from what it held at the add, at every one of those readers and the stage's completion.
 
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";

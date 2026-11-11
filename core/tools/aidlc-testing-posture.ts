@@ -6133,8 +6133,9 @@ function publishCodeGenerationStart(
     moved && stateBefore !== null &&
     onlyAidlcFilesMovedSinceApproval(projectDir, receipt, stateBefore)
   ) {
-    // An AI-DLC update the person took moved only AI-DLC's own files: no change
-    // to record or say. The source certified below keeps its listing.
+    // Nothing of the person's moved (an AI-DLC update they took, or a repo that
+    // joined or left the work since): no change to record or say. The source
+    // certified below keeps its listing.
     keepWorkspaceSourceSnapshot(projectDir, stateBefore);
   } else if (moved) {
     // A raised strict fence refuses and KEEPS the receipt: deleting the human's recorded
