@@ -649,6 +649,7 @@ import {
   leadsOwnClaims,
   takenFromSoloWork,
   type ToldMerge,
+  type MaybeMerged,
   writeProposedText,
   newsNotTakenIn,
   readTeamsClaims,
@@ -766,6 +767,7 @@ import {
   workspaceHomeLocation,
   unitWriteTargets,
   mergedStatus,
+  mergeCandidateLine,
   renderUnitBoard,
   type UnitBoardRow,
   UNIT_PUSH_FIELD,
@@ -18333,13 +18335,15 @@ function teamHomeClaims(
   const unsent: Array<{ to: string; refused?: string }> = [];
   const told: ToldMerge[] = [];
   const tookIn: string[] = [];
+  const maybe: MaybeMerged[] = [];
   if (heldElsewhere.size > 0 && !isReadOnlyEngineProbe() && unreached.length === 0) {
     try {
-      results = checkTeamResults(projectDir, unreached, unsent, told, query, tookIn);
+      results = checkTeamResults(projectDir, unreached, unsent, told, query, tookIn, maybe);
     } catch (e) {
       sayWithStepOnce(projectDir, `The teams' results could not be checked just now: ${errorMessage(e)}`);
     }
   }
+  for (const candidate of maybe) sayWithStepOnce(projectDir, mergeCandidateLine(candidate.unit, candidate.repo, candidate));
   // A merge the home saw is the one thing it writes for the teams: said once, in plain words.
   for (const merge of told) {
     sayWithStepOnce(projectDir, merge.done

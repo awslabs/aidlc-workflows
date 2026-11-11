@@ -204,6 +204,7 @@ import {
   unitLikelyReposFrom,
   unitMergeVerdict,
   resultAtTip,
+  mergeCandidate,
   unitMergesStanding,
   unitOutputsHomeReads,
   type UnitResult,
@@ -8057,7 +8058,8 @@ function joinNames(names: string[]): string {
 // no checkout of keeps the team's result as theirs until the home can check it.
 // `unreached` collects the remotes that could not be read, `unsent` the ones
 // that did not take a verdict, `told` each Unit whose newly seen merge the
-// teams now have on its claim (the repos it merged in, and whether it is done).
+// teams now have on its claim (the repos it merged in, and whether it is done),
+// `maybe` each commit that may be a merge the check cannot see.
 export interface ToldMerge {
   unit: string;
   repos: string[];
@@ -8075,9 +8077,10 @@ export function checkTeamResults(
   told?: ToldMerge[],
   readOnly = false,
   tookIn?: string[],
+  maybe?: MaybeMerged[],
 ): Map<string, { team: string; verdicts: NonNullable<UnitClaimPayload["verdicts"]>; done: boolean }> {
   const pd = resolveProjectDir(projectDir);
-  return quietly(() => checkTeamResultsQuietly(pd, unreached, unsent, told, readOnly, tookIn));
+  return quietly(() => checkTeamResultsQuietly(pd, unreached, unsent, told, readOnly, tookIn, maybe));
 }
 
 function checkTeamResultsQuietly(
@@ -8087,6 +8090,7 @@ function checkTeamResultsQuietly(
   told?: ToldMerge[],
   readOnly = false,
   tookIn?: string[],
+  maybe?: MaybeMerged[],
 ): Map<string, { team: string; verdicts: NonNullable<UnitClaimPayload["verdicts"]>; done: boolean }> {
   const found = new Map<string, { team: string; verdicts: NonNullable<UnitClaimPayload["verdicts"]>; done: boolean }>();
   const identity = activeIdentity(pd);
@@ -8109,7 +8113,7 @@ function checkTeamResultsQuietly(
     }
     const result = live?.payload.result;
     if (live?.status !== "claimed" || !result) continue;
-    const verdicts = resultVerdicts(pd, live.payload, unreached, { id8: identity.intentId8, unit });
+    const verdicts = resultVerdicts(pd, live.payload, unreached, { id8: identity.intentId8, unit, maybe });
     const done = verdicts.length > 0 && verdicts.every((verdict) => verdict.merged) &&
       (!leadSignOffOn(readStateFile(pd)) || live.payload.signoff !== undefined);
     // The one thing written back is a merge the home has seen: a look at the
@@ -8136,13 +8140,14 @@ function checkTeamResultsQuietly(
 // merged by word, else its integration branch fetched quietly (no sign-in, the
 // lead's own time limits) and the result's heads looked for there. A repo whose
 // fetch failed goes on `unreached`, its verdict the last fetch's. At the lead's
-// look (`kept`), a repo not merged as the result was sent is read again as at
-// its Unit branch's later tip (keptUnitTip).
+// look (`look`), a repo not merged as the result was sent is read again as at
+// its Unit branch's later tip (keptUnitTip), and one still not merged puts the
+// commit that may be its merge on `look.maybe` (mergeCandidate).
 function resultVerdicts(
   pd: string,
   payload: UnitClaimPayload,
   unreached?: string[],
-  kept?: { id8: string; unit: string },
+  look?: { id8: string; unit: string; maybe?: MaybeMerged[] },
 ): NonNullable<UnitClaimPayload["verdicts"]> {
   return (payload.result?.repos ?? []).map((repo) => {
     const said = payload.said_merged?.find((entry) => entry.repo === repo.repo);
@@ -8156,13 +8161,23 @@ function resultVerdicts(
       unreached?.push(repo.repo === "." ? repoRemote : repo.repo);
     }
     let verdict = unitMergeVerdict(dir, integration, repo);
-    if (!verdict.merged && kept !== undefined && repoRemote !== null) {
-      const tip = keptUnitTip(dir, repoRemote, repo, `refs/aidlc/home/${kept.id8}/unit/${kept.unit}`);
+    if (!verdict.merged && look !== undefined && repoRemote !== null) {
+      const tip = keptUnitTip(dir, repoRemote, repo, `refs/aidlc/home/${look.id8}/unit/${look.unit}`);
       const atTip = tip === null ? null : resultAtTip(dir, integration, repo, tip);
       if (atTip !== null) verdict = unitMergeVerdict(dir, integration, atTip);
     }
+    const candidate = verdict.merged || look?.maybe === undefined ? null : mergeCandidate(dir, integration, repo);
+    if (candidate !== null) look?.maybe?.push({ unit: look.unit, repo: repo.repo, ...candidate });
     return verdict.merged ? { repo: repo.repo, merged: true, commit: verdict.commit, how: verdict.how } : { repo: repo.repo, merged: false };
   });
+}
+
+// A commit that may be a Unit's merge in one of its repos (mergeCandidate).
+export interface MaybeMerged {
+  unit: string;
+  repo: string;
+  commit: string;
+  subject: string;
 }
 
 // The lead's own copy of a Unit branch's tip, in a ref of AI-DLC's own in that

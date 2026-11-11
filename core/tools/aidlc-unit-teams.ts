@@ -828,8 +828,7 @@ export function unitMergeVerdict(dir: string, integration: string, result: RepoR
   }
   const paths = Object.keys(result.paths);
   if (paths.length === 0) return { merged: false };
-  const known = gitIn(dir, ["rev-parse", "--verify", "--quiet", `${result.base}^{commit}`]).ok;
-  const range = known ? `${result.base}..${integration}` : integration;
+  const range = mergeWalkRange(dir, integration, result);
   const commits = gitIn(dir, ["rev-list", "--first-parent", "--reverse", "--max-count=500", range])
     .out.split("\n").filter(Boolean);
   for (const commit of commits) {
@@ -855,6 +854,38 @@ export function unitMergeVerdict(dir: string, integration: string, result: RepoR
     }
   }
   return { merged: false };
+}
+
+// The first-parent commits the merge check walks: those after the base, or
+// all of them when the base is not here.
+function mergeWalkRange(dir: string, integration: string, result: RepoResult): string {
+  const known = gitIn(dir, ["rev-parse", "--verify", "--quiet", `${result.base}^{commit}`]).ok;
+  return known ? `${result.base}..${integration}` : integration;
+}
+
+// For a repo the merge check finds not merged: the first first-parent commit
+// after the base that changes every file of the Unit's part there, by name (a
+// merge the check cannot see: a fix, a squash and the branch's deletion all
+// between two looks). The board asks the lead once whether it is the merge.
+export function mergeCandidate(dir: string, integration: string, result: RepoResult): { commit: string; subject: string } | null {
+  const paths = Object.keys(result.paths);
+  if (paths.length === 0) return null;
+  const commits = gitIn(dir, ["rev-list", "--first-parent", "--reverse", "--max-count=500", mergeWalkRange(dir, integration, result), "--", ...paths])
+    .out.split("\n").filter(Boolean);
+  for (const commit of commits) {
+    const changed = new Set(gitIn(dir, ["diff", "--name-only", "--no-renames", `${commit}^`, commit, "--", ...paths]).out.split("\n").filter(Boolean));
+    if (paths.every((path) => changed.has(path))) {
+      return { commit, subject: gitIn(dir, ["log", "-1", "--format=%s", commit]).out.trim() };
+    }
+  }
+  return null;
+}
+
+// The board's line for it, said once in a chat; the lead's yes is their word
+// that the repo merged (unit merged).
+export function mergeCandidateLine(unit: string, repo: string, candidate: { commit: string; subject: string }): string {
+  return `${repo === "." ? "The repo" : repo} has ${candidate.commit.slice(0, 7)} "${candidate.subject}" changing every file of ` +
+    `${unit}; if that is ${unit} merged, say so.`;
 }
 
 // A result as at a later tip of its Unit branch that AI-DLC did not push (a

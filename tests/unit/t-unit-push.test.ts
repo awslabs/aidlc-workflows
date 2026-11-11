@@ -954,6 +954,31 @@ describe("at the home", () => {
     expect((seen.change_notices ?? []) as string[]).toContain("I've told alice refunds is merged.");
   });
 
+  // Case 2 with no look between the fix and the branch's deletion: the check
+  // cannot see it, and the board asks the lead once.
+  test("a fix, a squash and the branch's deletion all between two looks: the board names the commit once", () => {
+    const { hosts, home, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    commitOnHost(hosts["checkout-api"], "refunds", { "src/refunds.ts": "export const refunds = 1; // reviewed\n" }, "review fix");
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    mergeOnHost(hosts.billing, "refunds", "squash");
+    git(hosts["checkout-api"], ["branch", "-q", "-D", "refunds"]);
+    const squash = git(hosts["checkout-api"], ["rev-parse", "--short=7", "main"]);
+    const line = `checkout-api has ${squash} "refunds (squashed)" changing every file of refunds; if that is refunds merged, say so.`;
+    const chat = personsChat("t-unit-push-maybe-merged");
+    const seen = personsNext(home.dir, chat, "t-unit-push-maybe-merged");
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.verdicts).toEqual([
+      { repo: "checkout-api", merged: false },
+      expect.objectContaining({ repo: "billing", merged: true }),
+    ]);
+    expect((seen.change_notices ?? []) as string[], JSON.stringify(seen)).toContain(line);
+    // Once in the chat.
+    const again = personsNext(home.dir, chat, "t-unit-push-maybe-merged");
+    expect(JSON.stringify(again.change_notices ?? []), JSON.stringify(again)).not.toContain("changing every file of refunds");
+  });
+
   // The GitHub run's case 3: the host's own commit of a review suggestion, then a squash, the branch kept.
   test("the host's commit of a review suggestion on the Unit's branch, then a squash: merged at the next look", () => {
     const { hosts, home, alice, record } = refundsTaken();
