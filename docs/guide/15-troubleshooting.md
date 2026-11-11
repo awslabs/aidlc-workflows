@@ -761,7 +761,7 @@ pack, update AI-DLC and refresh the project's install. Repacking the repository
 or changing jj settings is unnecessary. A genuinely missing or unreadable
 HEAD object still needs repair.
 
-If the plan's Testing Contract is refused, the message names one of three
+The plan's `## Testing Contract` block is AI-DLC's own: before it asks you to approve the plan, it writes the block into the plan when the block is missing, broken or out of date. If the plan's Testing Contract is still refused, the message names one of three
 causes: the block is missing, it is not valid JSON, or it changed after it was
 rendered. The repair is the same for all three: re-run `render` and replace the
 whole `## Testing Contract` section. A changed block usually means a shell

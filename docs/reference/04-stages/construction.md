@@ -932,8 +932,10 @@ This stage has a **two-part structure**: planning followed by generation.
    with checkboxes for each implementation step. Include story-to-code-step
    traceability -- map each plan step back to the user story it implements.
 
-   Run `aidlc-testing-posture.ts render` and paste its complete
-   `## Testing Contract` JSON block into the plan. The resolver reads
+   Run `aidlc-testing-posture.ts render` to read the Testing Contract the plan
+   follows; `next` writes its `## Testing Contract` JSON block into the plan
+   itself (a block that is missing, broken or out of date is replaced; the rest
+   of the plan is kept). The resolver reads
    org/team/project Testing Posture sections additively: a project coverage or
    integration note remains applicable but does not erase a team methodology;
    a contradictory narrower methodology is rejected.
@@ -1019,7 +1021,8 @@ This stage has a **two-part structure**: planning followed by generation.
 
 3. **Plan Approval** -- the engine asks. When both files are written, the
    conductor runs `next`. A ready plan (non-empty plan and instructions, a
-   valid and current Testing Contract, a readable workspace source) makes
+   valid and current Testing Contract, which `next` writes first, a readable
+   workspace source) makes
    `next` return a `plan-approval` ask instead of the build: the question, each
    target's summary and plan path, and **Approve Plan**, **Request Changes**,
    and **I'll edit the files**. The engine writes `code-generation-questions.md`
@@ -1046,8 +1049,8 @@ This stage has a **two-part structure**: planning followed by generation.
    it); an approval still needs a reply after the question shows, and the
    revised plan's question needs its own. The
    next `next` returns the run-stage with `plan_approval.status: "approved"`
-   (build), `revise` (with the person's words), `repair` (a Testing Contract an
-   edit broke), or `plan` (finish the files). In edit mode the person changes the
+   (build), `revise` (with the person's words), `repair` (what their answer
+   could not record), or `plan` (finish the files). In edit mode the person changes the
    files or writes their answer in the questions file and says done, and the
    conductor reads what they wrote and records their choice; the guard refuses
    the conductor's writes to those files meanwhile. A plan that is not

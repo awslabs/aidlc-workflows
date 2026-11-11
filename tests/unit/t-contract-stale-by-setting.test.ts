@@ -208,11 +208,9 @@ describe("a Testing Contract left stale by a setting the person changed", () => 
     writeFileSync(planPath(proj), readFileSync(planPath(proj), "utf-8").replace('"version": 1', '"version": 1,,'), "utf-8");
     reply(proj, "done");
     expect(answer(proj, "Approve Plan").message).toContain("broke the Testing Contract block");
-    const repair = next(proj);
-    expect(repair.kind).toBe("run-stage");
-    expect(repair.plan_approval?.status).toBe("repair");
-    writePlan(proj, "- [ ] Step 1: write slugify\n- [ ] Step 2: handle unicode\n");
+    // The engine writes the block back itself, then asks the question that names it.
     expect(next(proj).question).toBe("I repaired the plan's Testing Contract (the test rules your build follows). Build your edited plan?");
+    expect(readFileSync(planPath(proj), "utf-8")).toContain(renderTestingContract(resolveTestingPosture(proj)));
   });
 
   test("a plan with no Testing Contract section is never approved as it stands", () => {

@@ -1003,7 +1003,8 @@ describe("the plan's Testing Contract changed after the person approved it", () 
     const strict = approvedBuildThenPostureEdit("strict").proj;
     expect(said(writeSource(strict))).toContain("the approved Testing Contract is stale");
     expect(contractRows(strict)).toHaveLength(0);
-    expect(next(strict).plan_approval?.status).toBe("plan");
+    // The engine writes the moved contract into the plan and asks again.
+    expect(next(strict).ask_type).toBe("plan-approval");
   });
 });
 
