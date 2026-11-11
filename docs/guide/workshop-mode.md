@@ -669,14 +669,28 @@ work does: after every stage, or once at its end.
   commit of the lead's own with the team's claim in it (so a host that takes
   only its pusher's commits takes it): the first one taken in wins, a team whose
   take another's beat there hears the line below, and a take-in the lead's
-  project refuses is said to the lead once, with git's reason. A remote of the lead's that cannot be read is said once in a chat
-  while a Unit is still open at the lead's project, or when it held this work's
-  claims before. A clone's own remote stands in for the lead's project only
-  while it lists the same claims, or while the lead's project does not answer;
-  a claim written through it that the lead's project then does not show (a
-  fork that copied the lead's claim branches) is said as being on that remote.
-  When neither the lead's project nor that remote answers, one line says so and
-  nothing is taken or sent.
+  project refuses is said to the lead once, with git's reason. A remote of the
+  lead's that cannot be read is said once in a chat while a Unit is still open
+  at the lead's project, or when it held this work's claims before. When the
+  lead says a repo merged a Unit, sends a Unit back, says a repo turned it down,
+  signs a result off or frees a Unit, AI-DLC takes in the same way first, so it
+  acts on a take or result a team sent to its own remote, and anything the
+  take-in has to say comes first, once. The lead's status and board read those
+  remotes too: a take only a team's remote holds shows as building, taken by
+  that person, with nothing taken in or written, and the lead's next look
+  records it (a new take after a Unit was given back shows from that look). A
+  clone's own remote stands in for the lead's project only while it lists the
+  same claims, or while the lead's project does not answer; a claim written
+  through it that the lead's project then does not show (a fork that copied the
+  lead's claim branches) is said as being on that remote. A clone that fetches
+  from the lead's project and pushes to your team's own repo takes there while
+  the lead's project does not answer, on the lead's plan as the clone last
+  fetched it, and one line says the lead's project did not answer and where the
+  take is. When neither the lead's project nor that remote (or that push
+  address) answers, one line says so and nothing is taken or sent. Once the
+  lead's project records your Unit merged, the look that first brings that news
+  says once "Your <unit> is merged."; status lists it as merged among your own
+  builds.
 - A lead's project you can read but not push to, with nowhere else to push: the
   take goes on and the build starts, and one line, said once, gives git's reason
   and says the lead and the other teams cannot see your take until a push goes
