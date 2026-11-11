@@ -7382,7 +7382,9 @@ export function refreshHomeClaims(
   if (!options.now && !spoke && !again && last?.chat === chat) return { fetched: false, unreached: null };
   const into = isGitAddress(target) ? `refs/aidlc/home/${id8}/claim/${id8}` : `refs/remotes/${target}/claim/${id8}`;
   const at = isoTimestamp();
+  const before = claimTipsAt(pd, into);
   const fetched = quietFetch(pd, ["--no-tags", "--no-filter", "-q", target, `+refs/heads/claim/${id8}/*:${into}/*`]);
+  if (fetched.ok) sayOwnBuildsMerged(pd, into, before);
   // The lead's project answered, and this repository's own .git refused the
   // write (Codex's sandbox keeps it read-only): not a project that is down.
   // The first time in a chat the step stops with its way on, which an agent in
@@ -7409,6 +7411,31 @@ export function refreshHomeClaims(
   if (refused !== null && !stopped) throw new GitWriteRefused(refused);
   if (refused !== null) return { fetched: false, unreached: null, refused };
   return { fetched: ok, unreached: ok ? null : target };
+}
+
+// A plan's claim tips under `into`, the refs a fetch of its claims writes, by Unit.
+function claimTipsAt(pd: string, into: string): Map<string, string> {
+  const tips = new Map<string, string>();
+  for (const line of localGit(pd, ["for-each-ref", "--format=%(objectname) %(refname)", `${into}/`]).stdout.split(/\r?\n/).filter(Boolean)) {
+    const [oid, ref] = line.trim().split(/\s+/, 2);
+    if (oid && ref) tips.set(ref.slice(into.length + 1), oid);
+  }
+  return tips;
+}
+
+// A build of the person's own here whose claim this fetch brought to done:
+// said once, with the step that follows. A fetch that moved nothing (their own
+// pull got there first) says nothing; status's Yours line still shows it.
+function sayOwnBuildsMerged(pd: string, into: string, before: ReadonlyMap<string, string>): void {
+  for (const [unit, oid] of claimTipsAt(pd, into)) {
+    const was = before.get(unit);
+    if (was === oid) continue;
+    const now = readPayload(pd, oid, { localOnly: true });
+    if (now?.done !== true || (was !== undefined && readPayload(pd, was, { localOnly: true })?.done === true)) continue;
+    if (findUnitBuild(pd, now.intent_uuid, unit) === null) continue;
+    if (!takeIsBy(pd, oid, now, gitUserName(pd), git(pd, ["config", "user.email"]).stdout.trim())) continue;
+    saidWithNextStep(pd, `Your ${unit} is merged.`);
+  }
 }
 
 // The step's stop when the news could not be written into this workspace's

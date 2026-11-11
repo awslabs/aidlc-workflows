@@ -1652,6 +1652,32 @@ describe("the claims' home is the lead's address", () => {
     expect(claimPayload(home.remote, id8, "refunds")).toMatchObject({ done: true });
   });
 
+  // The fork leg: the lead heard "I've told pay refunds is merged." and the
+  // team heard nothing.
+  test("the team's look whose fetch brings its own Unit's merge says so once, and never again", () => {
+    const { home, hosts, id8 } = forkedLead();
+    committedByPusher(home.remote);
+    const { dir: pay, fork } = forkedTeam(home, hosts, "pay");
+    expect(takeFrom("payments", pay, "refunds").status).toBe(0);
+    git(home.dir, ["remote", "add", "team-a", fork]);
+    next(home.dir);
+    const record = buildDir(pay, "payments", "refunds");
+    codeGenerated(pay, record);
+    finishBuild(record);
+    expect(run(UNIT, ["push"], pay).status).toBe(0);
+    next(home.dir, chatOf("lead-after-result"));
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    mergeOnHost(hosts.billing, "refunds", "squash");
+    git(home.dir, ["fetch", "-q", "origin"]);
+    next(home.dir, chatOf("lead-after-merge"));
+    expect(claimPayload(home.remote, id8, "refunds")).toMatchObject({ done: true });
+    const chat = chatOf("pay-after-merge");
+    expect(nextSaying(pay, chat).said).toContain("Your refunds is merged.");
+    appendAuditEntry("HUMAN_TURN", { "Person Reply": "what next" }, pay);
+    expect(nextSaying(pay, chat).said).not.toContain("is merged.");
+    expect(nextSaying(pay, chatOf("pay-later")).said).not.toContain("is merged.");
+  });
+
   // A live run (the fork leg, runs A and B): the lead approved a team's change
   // its fork had sent; the same question came back at every later look, and
   // each Approve was refused as having nothing waiting.
