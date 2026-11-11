@@ -14,7 +14,7 @@ import { afterAll, beforeAll, describe, expect, test, setDefaultTimeout } from "
 import { spawnSync } from "node:child_process";
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { enclosingProjectDir, isAidlcProjectFolder } from "../../core/tools/aidlc-runtime-paths.ts";
 import { readAllAuditShards } from "../../core/tools/aidlc-lib.ts";
 import {
@@ -177,11 +177,12 @@ describe("t-engine-from-code-repo: enclosingProjectDir", () => {
     const hub = workspace();
     expect(isAidlcProjectFolder(hub)).toBe(true);
     expect(enclosingProjectDir(hub)).toBeNull();
-    expect(enclosingProjectDir(codeRepo(join(hub, "svc")))).toBe(hub);
-    expect(enclosingProjectDir(codeRepo(join(hub, "src", "a")))).toBe(hub);
+    // The walk names the folder in this platform's own spelling.
+    expect(enclosingProjectDir(codeRepo(join(hub, "svc")))).toBe(resolve(hub));
+    expect(enclosingProjectDir(codeRepo(join(hub, "src", "a")))).toBe(resolve(hub));
     const record = join(hub, "aidlc", "spaces", "default", "intents", "x");
     mkdirSync(record, { recursive: true });
-    expect(enclosingProjectDir(record)).toBe(hub);
+    expect(enclosingProjectDir(record)).toBe(resolve(hub));
   });
 
   test("records, an install or a Unit worktree of its own make a folder its own project", () => {
@@ -198,7 +199,7 @@ describe("t-engine-from-code-repo: enclosingProjectDir", () => {
     expect(isAidlcProjectFolder(bolt)).toBe(true);
     expect(enclosingProjectDir(bolt)).toBeNull();
     mkdirSync(join(bolt, "src"));
-    expect(enclosingProjectDir(join(bolt, "src"))).toBe(bolt);
+    expect(enclosingProjectDir(join(bolt, "src"))).toBe(resolve(bolt));
   });
 
   test("a folder in no project names none", () => {
