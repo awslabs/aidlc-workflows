@@ -259,6 +259,15 @@ function takenName(rows: readonly AuditShardEvent[], single: boolean): string | 
 // What the work's Units built before this machine picked the work up (each
 // Unit's source-manifest.json, kept with the record) is the work's own.
 function withoutUnitClaims(projectDir: string, listing: WorkspaceSourceListing): WorkspaceSourceListing {
+  const claims = unitSourceManifests(projectDir).map(({ manifest }) => manifest);
+  if (claims.length === 0) return listing;
+  return new Map([...listing].filter(([key]) => !claims.some((claim) => sourceClaimCovers(key, claim))));
+}
+
+type UnitSourceManifest = Extract<ReturnType<typeof readUnitSourceManifest>, { ok: true }>;
+
+/** Each Unit's Code Generation `source-manifest.json` kept with the record, the ones that read. */
+export function unitSourceManifests(projectDir: string): { unit: string; manifest: UnitSourceManifest }[] {
   const record = recordDir(projectDir);
   let units: string[] = [];
   try {
@@ -266,12 +275,10 @@ function withoutUnitClaims(projectDir: string, listing: WorkspaceSourceListing):
   } catch {
     // Nothing built yet.
   }
-  const claims = units.flatMap((unit) => {
+  return units.flatMap((unit) => {
     const read = readUnitSourceManifest(projectDir, STAGE, unit);
-    return read.ok ? [read] : [];
+    return read.ok ? [{ unit, manifest: read }] : [];
   });
-  if (claims.length === 0) return listing;
-  return new Map([...listing].filter(([key]) => !claims.some((claim) => sourceClaimCovers(key, claim))));
 }
 
 // The listing the person's files are read from, by the note and the gate's
@@ -319,9 +326,9 @@ function takenListing(
 
 // Where this build attempt started: the stage's own listing, or, on a machine
 // that took its own (broughtListing) and does not hold the stage's, that one.
-function attemptStart(projectDir: string, rows: readonly AuditShardEvent[], brought: Brought): WorkspaceSourceListing | null {
+function attemptStart(projectDir: string, rows: readonly AuditShardEvent[], brought: Brought | null): WorkspaceSourceListing | null {
   const stage = currentStageSourceBaseline(projectDir, STAGE, false, undefined, undefined, rows);
-  return stage.state === "ready" ? stage.listing : stage.state === "missing" && brought.taken ? brought.listing : null;
+  return stage.state === "ready" ? stage.listing : stage.state === "missing" && brought?.taken ? brought.listing : null;
 }
 
 // The files as a Unit's Code Generation found them in this attempt, taken here
@@ -330,6 +337,30 @@ function attemptStart(projectDir: string, rows: readonly AuditShardEvent[], brou
 function unitListingName(start: WorkspaceSourceListing, unit: string): string {
   const attempt = sourceListingSha256(serializeSourceListing(start));
   return `unit-${createHash("sha256").update(`${attempt}\n${unit}`).digest("hex").slice(0, 12)}.tsv`;
+}
+
+// That listing, when this machine took it.
+function unitStartListing(projectDir: string, start: WorkspaceSourceListing, unit: string): WorkspaceSourceListing | null {
+  return takenListing(projectDir, unitListingName(start, unit), false, () => null);
+}
+
+/**
+ * The files as this build found them, for the paths it changed since
+ * (`lookup source-changes`): a Unit's own listing when this machine took it,
+ * so an earlier Unit's files are not this one's (`since: "unit"`), otherwise
+ * the attempt's start (`since: "stage"`). Null when neither is here.
+ */
+export function buildStartListing(
+  projectDir: string,
+  unit: string | null,
+): { listing: WorkspaceSourceListing; since: "unit" | "stage" } | null {
+  const rows = readAuditShardEvents(projectDir);
+  const brought = broughtListing(projectDir, rows, false, false);
+  const start = attemptStart(projectDir, rows, brought);
+  if (start === null) return null;
+  // With no listing of the work's start, no Unit's own was taken either (broughtFileNames).
+  const own = unit === null || brought === null ? null : unitStartListing(projectDir, start, unit);
+  return own === null ? { listing: start, since: "stage" } : { listing: own, since: "unit" };
 }
 
 /**
@@ -351,7 +382,7 @@ export function broughtFilesChanged(
   if (brought === null) return null;
   const start = attemptStart(projectDir, rows, brought);
   if (start === null) return null;
-  const before = (unit === null ? null : takenListing(projectDir, unitListingName(start, unit), false, () => null)) ?? start;
+  const before = (unit === null ? null : unitStartListing(projectDir, start, unit)) ?? start;
   const current = workspaceSourceState(projectDir);
   if (current === null) return null;
   const greenfield = declaredProjectType(getField(stateContent, "Project Type") ?? undefined) === "Greenfield";
