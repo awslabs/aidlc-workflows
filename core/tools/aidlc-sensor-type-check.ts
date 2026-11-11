@@ -211,7 +211,7 @@ function runTsc(opts: {
 		"--tsBuildInfoFile",
 		opts.tsBuildInfoFile,
 	]);
-	const result = spawnSync(command, args, { encoding: "utf-8", timeout: LONG_SUBPROCESS_TIMEOUT_MS, cwd: opts.cwd });
+	const result = spawnSync(command, args, { encoding: "utf-8", maxBuffer: 64 * 1024 * 1024, timeout: LONG_SUBPROCESS_TIMEOUT_MS, cwd: opts.cwd });
 	// Partial diagnostics (or none) after a kill do not prove a clean compile.
 	// Preserve the dispatcher's script-error path instead of emitting pass:true.
 	if (result.error || result.signal || result.status === null) {
