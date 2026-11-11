@@ -2360,7 +2360,12 @@ returned through the actual tool call. `--single` skips hook pre-dispatch
 entirely, leaving its first issuance to that tool call. Only a line the engine
 reads exactly is pre-dispatched at all (`readNextLine`): anything it would hand
 to the agent goes to the agent untouched, so this seam never acts on the
-person's words before anyone has read them.
+person's words before anyone has read them. When the human-turn hook gives
+its first-step note (a line too long for the message record, kept whole beside
+it, under the rules `firstStepNote` owns), the line is neither pre-dispatched
+nor forwarded: the adapter says the note, which has the agent run `next` with
+nothing after it to read the kept copy, and holds no call for the guard to
+match (`t-long-message-note.test.ts`).
 
 `t147-kiro-hook-adapter.test.ts` checks the 10 KiB boundary with multibyte
 content, native shell aliases, retained terminal guards, and a real multipart
