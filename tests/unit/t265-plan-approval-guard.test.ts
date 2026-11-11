@@ -3624,6 +3624,157 @@ describe("t265b hook lifecycle", () => {
     }
   });
 
+  // An agent with no file-edit tool (Codex on a model its catalog does not
+  // list) writes the plan through the shell. A heredoc only cat or tee reads is
+  // data: the write is judged as the same write by a plain redirect, never as a
+  // command that could not be read.
+  test("a heredoc that only cat or tee reads writes the plan as a plain redirect does while the plan is written", () => {
+    const proj = scratchProject();
+    try {
+      // The record the reported run wrote into, by its own name.
+      const intent = "261111-blank-task-name";
+      renameSync(join(proj, RECORD_REL), join(proj, INTENTS_REL, intent));
+      writeFileSync(join(proj, INTENTS_REL, "active-intent"), `${intent}\n`, "utf-8");
+      const record = join(proj, INTENTS_REL, intent);
+      writeFileSync(
+        join(record, "aidlc-state.md"),
+        "# AI-DLC State Tracking\n\n## Project Information\n- **Project**: t265 fixture\n- **Scope**: bugfix\n\n" +
+          "## Current Status\n- **Lifecycle Phase**: CONSTRUCTION\n- **Current Stage**: code-generation\n",
+        "utf-8",
+      );
+      writeActiveDirectiveMarker(proj, {
+        kind: "run-stage",
+        stage: "code-generation",
+        state_sha256: stateDigest(readFileSync(join(record, "aidlc-state.md"), "utf-8")),
+      });
+      mkdirSync(join(record, "construction", "code-generation"), { recursive: true });
+      const plan = `aidlc/spaces/default/intents/${intent}/construction/code-generation/code-generation-plan.md`;
+      const instructions = plan.replace("code-generation-plan.md", "unit-test-instructions.md");
+      // The reported run's command, byte for byte.
+      const reported =
+        `cat > ${plan} <<'EOF'\n# Code Generation Plan\n\n## Summary\n\n` +
+        "- Builds: blank task-name validation for `add()`.\n" +
+        "- Touches: the existing task module and a focused Bun test file.\n" +
+        "- Tests: four focused unit tests for rejection, valid addition, and immutability.\nEOF";
+      const body = "# Plan\n\n- Builds: `add()` for the person's tasks.\n> a quote | a table cell\n";
+      const heredocs = (target: string): string[] => [
+        `cat > ${target} <<'EOF'\n${body}EOF`,
+        `cat <<'EOF' > ${target}\n${body}EOF`,
+        `cat >${target} <<"EOF"\n${body}EOF\n`,
+        `cat > ${target} <<-'EOF'\n\t# Plan\n\tEOF`,
+        `cat > ${target} <<EOF\n# Plan\n\nplain words\nEOF`,
+        `tee ${target} <<'EOF'\n${body}EOF`,
+        `tee ${target} >/dev/null <<'EOF'\n${body}EOF`,
+        `cat <<'EOF' | tee ${target}\n${body}EOF`,
+      ];
+      expect(runHook(proj, BASH(reported)).code, "the reported command").toBe(0);
+      for (const command of heredocs(plan)) {
+        const result = runHook(proj, BASH(command));
+        expect(result.code, `${command}\n${result.stderr}`).toBe(0);
+      }
+      // Both of the stage's files in one command, as an agent writes them.
+      expect(
+        runHook(proj, BASH(`cat > ${plan} <<'EOF'\n${body}EOF\ncat > ${instructions} <<'EOF'\nbun test\nEOF`)).code,
+      ).toBe(0);
+      // Each target is judged as the same write by printf: the code waits with
+      // the ordinary refusal, a document beside it goes through.
+      for (const target of ["src/tasks.ts", "NOTES.md", toPosix(join(proj, plan)), toPosix(join(proj, "src", "tasks.ts"))]) {
+        const redirect = runHook(proj, BASH(`printf plan > ${target}`));
+        for (const command of heredocs(target)) {
+          const result = runHook(proj, BASH(command));
+          expect({ code: result.code, stderr: result.stderr }, command).toEqual({ code: redirect.code, stderr: redirect.stderr });
+        }
+      }
+      expect(runHook(proj, BASH(`cat > src/tasks.ts <<'EOF'\n${body}EOF`)).stderr)
+        .toContain("Code generation cannot modify workspace paths");
+      // With a command the guard cannot read before it, the line reads as its printf twin does.
+      const folder = plan.replace("/code-generation-plan.md", "");
+      expect(runHook(proj, BASH(`mkdir -p ${folder} && cat > ${plan} <<'EOF'\n${body}EOF`)).stderr)
+        .toBe(runHook(proj, BASH(`mkdir -p ${folder} && printf plan > ${plan}`)).stderr);
+      // A body something runs is a program, an unquoted body that runs a
+      // command still runs it, and a target the reading cannot name stays
+      // unnamed: each is refused as it is without the heredoc rule.
+      for (const [command, words] of [
+        [`bash <<'EOF'\nprintf x > src/x.ts\nEOF`, "cannot modify workspace paths"],
+        [`sh <<'EOF'\nprintf x > ${plan}\nEOF`, "could not be read"],
+        [`cat <<'EOF' | sh\nprintf x > src/x.ts\nEOF`, "cannot modify workspace paths"],
+        [`cat <<'EOF' | bash\nprintf x > ${plan}\nEOF`, "could not be read"],
+        [`python3 <<'EOF'\nprint("$HOME")\nEOF`, "could not be read"],
+        ["bun run - <<'EOF'\nawait Bun.write(`src/x.ts`, 'x')\nEOF", "could not be read"],
+        [`cat > ${plan} <<EOF\n$(printf x > src/x.ts)\nEOF`, "cannot modify workspace paths"],
+        [`cat > ${plan} <<EOF\n\`touch src/x.ts\`\nEOF`, "cannot run mutation-capable shell commands"],
+        [`cat > "$OUT" <<'EOF'\n${body}EOF`, "could not be read"],
+        [`cat > "$(printf src/x.ts)" <<'EOF'\n${body}EOF`, "could not be read"],
+        [`cat > ${plan} <<'EOF'\n${body}EOF\nprintf x > src/x.ts`, "cannot modify workspace paths"],
+        [`cat ${plan} # <<EOF\nprintf x > src/x.ts\nEOF`, "cannot modify workspace paths"],
+        [`cat "<<EOF"\nprintf x > src/x.ts\nEOF`, "cannot modify workspace paths"],
+        [`cat > ${plan} <<PLAN-EOF\nplain words\nPLAN-EOF\nprintf x > src/x.ts`, "cannot modify workspace paths"],
+        [`command cat > ${plan} <<'EOF'\n${body}EOF`, "could not be read"],
+        // Each place the shell ends or reads the heredoc otherwise than the
+        // walk would: the write after it is seen, as it is without the rule.
+        [`cat > ${plan} <<"EOF\\\\"\nplan\nEOF\\\nprintf x > src/x.ts\nEOF\\\\`, "cannot modify workspace paths"],
+        [`((x=1+\ncat > ${plan} <<EOF\n+0))\nprintf y > src/x.ts\nEOF`, "cannot modify workspace paths"],
+        [`a[1+\ncat <<EOF\n+0]=5\nprintf y > src/x.ts\nEOF`, "cannot modify workspace paths"],
+        [`cat > ${plan} <<'EOF' \\\n; printf x > src/x.ts\nbody\nEOF`, "cannot modify workspace paths"],
+        [`cat > ${plan} <<'EOF' 'a\nb'; printf x > src/x.ts\nbody\nEOF`, "cannot modify workspace paths"],
+        [`cat > ${plan} <<PLAN-EOF\nplain words\nPLAN-EOF\nprintf x > src/x.ts\nPLAN`, "cannot modify workspace paths"],
+        [`cat > ${plan} <<'EOF' # it's the plan\nthe person's tasks\nEOF\nprintf x > src/x.ts`, "cannot modify workspace paths"],
+        [`echo a\\ #; ((x=1+\ncat > ${plan} <<EOF\n+0))\nprintf y > src/x.ts\nEOF`, "cannot modify workspace paths"],
+        // A line continuation before a `#`: the shell joins the lines, so the
+        // `#` starts a comment and the `<<` in it is no heredoc.
+        [`cat \\\n# cat > ${plan} <<'EOF'\nprintf x > src/x.ts\nEOF`, "cannot modify workspace paths"],
+        [`cat ${plan} \\\n# cat > ${plan} <<'EOF'\nprintf x > src/x.ts\nEOF`, "cannot modify workspace paths"],
+        [`cat > ${plan} \\\n# cat <<'EOF'\nprintf x > src/x.ts\nEOF`, "cannot modify workspace paths"],
+        [`cat > ${plan} \\\n# <<'EOF'\nprintf x > src/x.ts\nEOF`, "cannot modify workspace paths"],
+        [`tee src/*.ts <<'EOF'\nbody\nEOF`, "cannot modify workspace paths"],
+        [`LD_PRELOAD=/tmp/x.so cat > ${plan} <<'EOF'\n${body}EOF`, "could not be read"],
+        // A rest of the line it cannot read keeps the line's reading, heredoc and all.
+        [`shopt -s expand_aliases\nalias cat=sh\ncat <<'EOF'\nprintf x > src/x.ts\nEOF`, "cannot modify workspace paths"],
+      ] as const) {
+        const result = runHook(proj, BASH(command));
+        expect(result.code, command).toBe(2);
+        expect(result.stderr, command).toContain(words);
+      }
+      // Any other heredoc is read as it is without the rule, apply_patch's
+      // included: these are main's own decisions, kept as they are.
+      for (const [command, code] of [
+        ["apply_patch <<'PATCH'\n*** Begin Patch\n*** Add File: src/x.ts\n+export const y = 2;\n*** End Patch\nPATCH", 0],
+        // The reported run's own apply_patch write of the plan, byte for byte.
+        [
+          `apply_patch <<'PATCH'\n*** Begin Patch\n*** Add File: ${plan}\n+# Code Generation Plan\n+\n+## Summary\n+\n` +
+            "+- Builds: blank task-name validation for `add()`.\n" +
+            "+- Touches: the existing task module and a focused Bun test file.\n" +
+            "+- Tests: four focused unit tests for rejection, valid addition, and immutability.\n*** End Patch\nPATCH",
+          2,
+        ],
+        [`python3 <<'EOF'\nprint(1)\nEOF`, 0],
+        [`cat > ${plan} <<'EOF'\n# Plan\nEOF\npython3 <<'PY'\nprint(1)\nPY`, 2],
+        [`cat > ${plan} <<'EOF'\r\n# Plan\r\nEOF\r\n`, 2],
+      ] as const) {
+        const result = runHook(proj, BASH(command));
+        expect(result.code, `${command}\n${result.stderr}`).toBe(code);
+        if (code === 2) expect(result.stderr, command).toContain("could not be read");
+      }
+      // The runtime-integrity check reads the same heredoc spans (heredocAt):
+      // a hook write after the terminator is refused, one inside a body that
+      // only cat reads is data.
+      const hook = ".claude/hooks/aidlc-plan-approval-guard.ts";
+      for (const [open, close] of [["<<-'EOF'", "\tEOF"], ['<<"EOF"', "EOF"], ["<<'EOF'", "EOF\r"]]) {
+        const after = runHook(proj, BASH(`cat ${open}\nbody\n${close}\nprintf x > ${hook}`));
+        expect(after.code, open).toBe(2);
+        expect(after.stderr, open).toContain("hooks belong to the harness");
+        expect(runHook(proj, BASH(`cat ${open}\nprintf x > ${hook}\n${close}\n`)).stderr, open)
+          .not.toContain("hooks belong to the harness");
+      }
+      // A line read as PowerShell keeps its own reading.
+      const pwsh = runHook(proj, { ...BASH(reported), cwd: proj, aidlc_shell: "powershell" });
+      expect(pwsh.code, pwsh.stderr).toBe(2);
+      expect(pwsh.stderr).toContain("could not be read");
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
   // #2456: while the plan-approval guard is refusing the build, doctor and
   // status are where the person gets the whole picture of why. An agent's
   // terminal is often not at the project root - VS Code and the Copilot CLI
