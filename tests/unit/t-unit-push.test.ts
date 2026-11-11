@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-unit:push, subcommand:aidlc-unit:turned-down, subcommand:aidlc-unit:merged, audit:UNIT_PUSHED, audit:UNIT_MERGED, function:checkTeamResults, function:renderUnitBoard, function:teamsAcrossReposLine, function:homeResultsPastUnitStages, function:pastUnitStages
+// covers: subcommand:aidlc-unit:push, subcommand:aidlc-unit:turned-down, subcommand:aidlc-unit:merged, audit:UNIT_PUSHED, audit:UNIT_MERGED, function:checkTeamResults, function:renderUnitBoard, function:teamsAcrossReposLine, function:homeResultsPastUnitStages, function:pastUnitStages, function:resultAtTip
 //
 // A Unit's build goes home (#2410, item 5). Teams build Units across repos when
 // the workspace is in git. At the build's end the person is offered the push;
@@ -55,6 +55,19 @@ setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 const JUMP = join(AIDLC_SRC, "tools", "aidlc-jump.ts");
 
 afterEach(cleanupTeamBuild);
+
+// A commit on a Unit's branch on its code host that AI-DLC did not push: a
+// review fix by hand with plain git, or the host's own "Commit suggestion".
+function commitOnHost(host: string, branch: string, files: Record<string, string>, message: string): string {
+  const dir = join(tempDir("reviewer"), "repo");
+  git(tempDir("reviewer-parent"), ["clone", "-q", "--branch", branch, host, dir]);
+  git(dir, ["config", "user.name", "reviewer"]);
+  git(dir, ["config", "user.email", "reviewer@example.test"]);
+  for (const [path, text] of Object.entries(files)) writeFileSync(join(dir, path), text);
+  git(dir, ["commit", "-q", "-am", message]);
+  git(dir, ["push", "-q", "origin", branch]);
+  return git(dir, ["rev-parse", "HEAD"]);
+}
 
 describe("teams build Units across repos when the workspace is in git", () => {
   test("choosing teams on work across repos goes through, and no question of who builds which Unit is put", () => {
@@ -920,6 +933,62 @@ describe("at the home", () => {
     const after = next(home.dir);
     expect(git(home.remote, ["rev-parse", ref])).toBe(written);
     expect(JSON.stringify(after.change_notices ?? [])).not.toContain("I've told");
+  });
+
+  // The GitHub run's case 2: a review fix by hand, then a squash, the branch deleted.
+  test("a review fix committed by hand on the Unit's branch, a look, then a squash with the branch deleted: merged", () => {
+    const { hosts, home, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    const fix = commitOnHost(hosts["checkout-api"], "refunds", { "src/refunds.ts": "export const refunds = 1; // reviewed\n" }, "review fix");
+    next(home.dir);
+    // The lead's look keeps the branch's tip in a ref of AI-DLC's own, in that repo.
+    const kept = `refs/aidlc/home/${fixtureIntentId8(home.dir)}/unit/refunds`;
+    expect(git(join(home.dir, "checkout-api"), ["rev-parse", kept])).toBe(fix);
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    mergeOnHost(hosts.billing, "refunds", "squash");
+    git(hosts["checkout-api"], ["branch", "-q", "-D", "refunds"]);
+    const seen = next(home.dir);
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds"), JSON.stringify(seen)).toMatchObject({ done: true });
+    expect((seen.change_notices ?? []) as string[]).toContain("I've told alice refunds is merged.");
+  });
+
+  // The GitHub run's case 3: the host's own commit of a review suggestion, then a squash, the branch kept.
+  test("the host's commit of a review suggestion on the Unit's branch, then a squash: merged at the next look", () => {
+    const { hosts, home, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    commitOnHost(hosts["checkout-api"], "refunds", { "src/refunds.ts": "export const refunds = 1; // suggested\n" }, "Apply suggestions from code review");
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    mergeOnHost(hosts.billing, "refunds", "squash");
+    const seen = next(home.dir);
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds"), JSON.stringify(seen)).toMatchObject({ done: true });
+  });
+
+  test("a Unit branch rewritten on the host is not read as the Unit: its squash leaves it not merged", () => {
+    const { hosts, home, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    const other = join(tempDir("rewriter"), "repo");
+    git(tempDir("rewriter-parent"), ["clone", "-q", hosts["checkout-api"], other]);
+    git(other, ["config", "user.name", "reviewer"]);
+    git(other, ["config", "user.email", "reviewer@example.test"]);
+    git(other, ["switch", "-q", "-c", "refunds"]);
+    mkdirSync(join(other, "src"), { recursive: true });
+    writeFileSync(join(other, "src", "refunds.ts"), "export const somethingElse = 1;\n");
+    git(other, ["add", "-A"]);
+    git(other, ["commit", "-q", "-m", "another change"]);
+    git(other, ["push", "-q", "--force", "origin", "refunds"]);
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    mergeOnHost(hosts.billing, "refunds", "squash");
+    next(home.dir);
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.verdicts).toEqual([
+      { repo: "checkout-api", merged: false },
+      expect.objectContaining({ repo: "billing", merged: true }),
+    ]);
   });
 
   // A live run (Lee, model 2): taking the team's Unit in wrote its records into

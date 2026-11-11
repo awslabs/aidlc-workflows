@@ -857,6 +857,28 @@ export function unitMergeVerdict(dir: string, integration: string, result: RepoR
   return { merged: false };
 }
 
+// A result as at a later tip of its Unit branch that AI-DLC did not push (a
+// review fix by hand, a host's suggestion commit, Update branch): the tip as
+// its last head, and the files changed from where the tip leaves the
+// integration branch to the tip, each at the tip's blob. Null unless the tip
+// is here and descends from the last head.
+export function resultAtTip(dir: string, integration: string, result: RepoResult, tip: string): RepoResult | null {
+  const head = result.heads.at(-1);
+  if (!head || tip === head || !gitIn(dir, ["merge-base", "--is-ancestor", head, tip]).ok) return null;
+  const from = gitIn(dir, ["merge-base", tip, integration]).out.trim() || result.base;
+  const changed = gitIn(dir, ["diff", "--name-only", "--no-renames", from, tip]).out.split("\n").filter(Boolean);
+  const blobs = blobsAt(dir, tip, changed);
+  const id = patchIdOf(dir, from, tip, changed);
+  return {
+    repo: result.repo,
+    branch: result.branch,
+    base: result.base,
+    heads: [...result.heads, tip],
+    paths: Object.fromEntries(changed.map((path) => [path, blobs.get(path) ?? null])),
+    ...(id ? { patch_id: id } : {}),
+  };
+}
+
 // The Unit outputs the home's stages after the per-Unit ones read (Build and
 // Test reads Code Generation's summary and test instructions): record-relative
 // paths, for the scope's stages that run.

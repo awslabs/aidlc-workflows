@@ -203,6 +203,7 @@ import {
   unitLikelyRepos,
   unitLikelyReposFrom,
   unitMergeVerdict,
+  resultAtTip,
   unitMergesStanding,
   unitOutputsHomeReads,
   type UnitResult,
@@ -8108,7 +8109,7 @@ function checkTeamResultsQuietly(
     }
     const result = live?.payload.result;
     if (live?.status !== "claimed" || !result) continue;
-    const verdicts = resultVerdicts(pd, live.payload, unreached);
+    const verdicts = resultVerdicts(pd, live.payload, unreached, { id8: identity.intentId8, unit });
     const done = verdicts.length > 0 && verdicts.every((verdict) => verdict.merged) &&
       (!leadSignOffOn(readStateFile(pd)) || live.payload.signoff !== undefined);
     // The one thing written back is a merge the home has seen: a look at the
@@ -8134,8 +8135,15 @@ function checkTeamResultsQuietly(
 // The lead's merge rule for a Unit's result, read only: a repo the lead counted
 // merged by word, else its integration branch fetched quietly (no sign-in, the
 // lead's own time limits) and the result's heads looked for there. A repo whose
-// fetch failed goes on `unreached`, its verdict the last fetch's.
-function resultVerdicts(pd: string, payload: UnitClaimPayload, unreached?: string[]): NonNullable<UnitClaimPayload["verdicts"]> {
+// fetch failed goes on `unreached`, its verdict the last fetch's. At the lead's
+// look (`kept`), a repo not merged as the result was sent is read again as at
+// its Unit branch's later tip (keptUnitTip).
+function resultVerdicts(
+  pd: string,
+  payload: UnitClaimPayload,
+  unreached?: string[],
+  kept?: { id8: string; unit: string },
+): NonNullable<UnitClaimPayload["verdicts"]> {
   return (payload.result?.repos ?? []).map((repo) => {
     const said = payload.said_merged?.find((entry) => entry.repo === repo.repo);
     if (said) return { repo: repo.repo, merged: true, how: `by your word: "${said.words}"` };
@@ -8147,9 +8155,38 @@ function resultVerdicts(pd: string, payload: UnitClaimPayload, unreached?: strin
     if (repoRemote !== null && !quietFetch(dir, ["-q", repoRemote, integration.slice(repoRemote.length + 1)]).ok) {
       unreached?.push(repo.repo === "." ? repoRemote : repo.repo);
     }
-    const verdict = unitMergeVerdict(dir, integration, repo);
+    let verdict = unitMergeVerdict(dir, integration, repo);
+    if (!verdict.merged && kept !== undefined && repoRemote !== null) {
+      const tip = keptUnitTip(dir, repoRemote, repo, `refs/aidlc/home/${kept.id8}/unit/${kept.unit}`);
+      const atTip = tip === null ? null : resultAtTip(dir, integration, repo, tip);
+      if (atTip !== null) verdict = unitMergeVerdict(dir, integration, atTip);
+    }
     return verdict.merged ? { repo: repo.repo, merged: true, commit: verdict.commit, how: verdict.how } : { repo: repo.repo, merged: false };
   });
+}
+
+// The lead's own copy of a Unit branch's tip, in a ref of AI-DLC's own in that
+// repo (`ref`), so a branch deleted after its merge is still known: the branch
+// on the repo's remote, fetched quietly, when it descends from the copy kept
+// before, else that copy. A copy from before the result's last head is no
+// copy. Null with neither; a .git that takes no write keeps the tip read now
+// for this look only.
+function keptUnitTip(dir: string, remote: string, repo: RepoResult, ref: string): string | null {
+  const head = repo.heads.at(-1);
+  if (!head) return null;
+  const descends = (older: string, newer: string): boolean => git(dir, ["merge-base", "--is-ancestor", older, newer]).ok;
+  let kept: string | null = git(dir, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]).stdout.trim() || null;
+  if (kept !== null && kept !== head && !descends(head, kept)) kept = null;
+  const tracking = `refs/remotes/${remote}/${repo.branch}`;
+  if (quietFetch(dir, ["-q", remote, `+refs/heads/${repo.branch}:${tracking}`]).ok) {
+    const tip = git(dir, ["rev-parse", "--verify", "--quiet", `${tracking}^{commit}`]).stdout.trim();
+    const since = kept ?? head;
+    if (tip && tip !== since && descends(since, tip)) {
+      git(dir, ["update-ref", ref, tip]);
+      kept = tip;
+    }
+  }
+  return kept;
 }
 
 // A team's own look at a build of this checkout that is pushed and waiting:
