@@ -4967,6 +4967,33 @@ export async function collectDoctorReport(
     // bash or edit map; the person's ask or deny is gone here, said once.
     const shortForm = openCodeGlobalShortFormNote();
     if (shortForm) results.push({ pass: true, severity: "warn", label: shortForm });
+  } else if (harness === ".hermes") {
+    // Hermes Agent: the orchestrator is a project skill under .hermes/skills/
+    // (loaded with `/aidlc`), the personas are inline .md files the
+    // conductor adopts, and .hermes.md at the project root is Hermes's
+    // always-on project context. Optional profile hook wiring is not checked;
+    // the guide documents its scope and limitations.
+    for (const [file, what] of [
+      ["skills/aidlc/SKILL.md", "orchestrator project skill (loaded with `/aidlc`)"],
+      ["agents/aidlc-product-agent.md", "persona set (adopted inline by the conductor)"],
+      ["aidlc-common/protocols/stage-protocol.md", "stage protocol"],
+    ] as const) {
+      results.push({
+        pass: existsSync(join(projectDir, harness, file)),
+        label: `${harness}/${file} present (${what})`,
+        fix: projectedFileRepair("hermes", `${harness}/${file}`),
+      });
+    }
+    results.push({
+      pass: existsSync(join(projectDir, ".hermes.md")),
+      label: ".hermes.md present (Hermes reads it as always-on project context)",
+      fix: projectedFileRepair("hermes", ".hermes.md"),
+    });
+    results.push({
+      pass: insideGitRepository(projectDir),
+      label: "project is in a git repository (Hermes loads project skills only from a trusted repository)",
+      fix: "run `git init` in this project, then `hermes skills trust`",
+    });
   } else {
     const settingsPath = join(projectDir, harness, "settings.json");
     results.push({
@@ -7483,6 +7510,7 @@ const SCAN_EXCLUDE = new Set([
   ".opencode",
   ".aidlc",
   ".cursor",
+  ".hermes",
   "aidlc-docs",
   "node_modules",
   ".git",

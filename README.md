@@ -3,7 +3,7 @@
 AI-DLC (AI-Driven Development Life Cycle) turns AI coding assistants into
 structured, verifiable software-delivery workflows. One harness-neutral core
 runs natively in Claude Code, Kiro CLI, Kiro IDE, Codex CLI, Cursor, opencode,
-and GitHub Copilot.
+GitHub Copilot, and Hermes Agent.
 
 ![version](https://img.shields.io/badge/version-2.11.3-blue)
 ![license](https://img.shields.io/badge/license-MIT--0-green)
@@ -56,8 +56,8 @@ aidlc config --harness claude
 aidlc doctor
 ```
 
-Replace `claude` with `kiro`, `kiro-v2`, `codex`, `cursor`, `opencode`, or
-`copilot`. Running `aidlc config` without `--harness` starts the interactive
+Replace `claude` with `kiro`, `kiro-v2`, `codex`, `cursor`, `opencode`,
+`copilot`, or `hermes`. Running `aidlc config` without `--harness` starts the interactive
 setup when a terminal is available. If you use Kiro IDE's own terminal in a
 project folder you have not trusted yet, Kiro first asks whether you trust it.
 Choose **Trust Folder & Continue** only for your own project or one you have
@@ -73,7 +73,10 @@ Open your harness in the configured project and describe the work:
 /aidlc Build a REST API for inventory management
 ```
 
-Codex CLI uses `$aidlc` instead of `/aidlc`. In Kiro IDE, first choose **aidlc**
+Codex CLI uses `$aidlc` instead of `/aidlc`. For Hermes Agent, start
+`hermes` in the project, run
+`hermes skills trust` once so it loads `.hermes/skills/`, and type
+`/aidlc`. In Kiro IDE, first choose **aidlc**
 in the chat panel's agent picker. AI-DLC selects a workflow from the request,
 asks for missing decisions, and stops at approval gates before moving forward.
 
@@ -92,6 +95,7 @@ guide in the table below. The complete walkthrough is in
 | Cursor | `aidlc config --harness cursor` | Open Cursor or run `agent` | `/aidlc` | [Cursor](docs/guide/harnesses/cursor.md) |
 | opencode >= 1.18.29 / OpenCode 2 | `aidlc config --harness opencode` | `opencode` | `/aidlc` | [opencode](docs/guide/harnesses/opencode.md) |
 | GitHub Copilot CLI >= 1.0.74 / VS Code >= 1.130 | `aidlc config --harness copilot` | Copilot CLI or VS Code | `/aidlc` | [GitHub Copilot](docs/guide/harnesses/copilot.md) |
+| Hermes Agent >= 0.21 | `aidlc config --harness hermes` | `hermes` (run `hermes skills trust` once) | `/aidlc` | [Hermes Agent](docs/guide/harnesses/hermes.md) |
 
 AI-DLC 2.11.3 and earlier, and the 2.11.4 previews of 2026-11-04 and 2026-11-05, read the two Kiro names the other way: Kiro is `--harness kiro-ide` and Kiro CLI (V2) is `--harness kiro`, and they do not know `kiro-v2`. `--harness kiro-ide` names Kiro on those releases and on this one.
 

@@ -116,7 +116,7 @@ export type InvalidInstalledPlugin = {
 
 export type PluginInventory = {
   capability: InventoryCapability;
-  harness: "claude" | "codex" | "kiro" | "cursor" | "copilot" | "opencode";
+  harness: "claude" | "codex" | "kiro" | "cursor" | "copilot" | "opencode" | "hermes";
   source?: string;
   installed: InstalledPlugin[];
   invalid: InvalidInstalledPlugin[];
@@ -266,6 +266,7 @@ function hostManifestDirectory(harness: PluginInventory["harness"]): string {
   if (harness === "kiro") return ".kiro-plugin";
   if (harness === "cursor") return ".cursor-plugin";
   if (harness === "copilot") return ".plugin";
+  if (harness === "hermes") return ".hermes-plugin";
   return ".opencode-plugin";
 }
 
@@ -441,13 +442,15 @@ function harnessKind(harnessDir = runtimeHarnessDir(), projectDir = resolveProje
     declared === "kiro-ide" ||
     declared === "cursor" ||
     declared === "copilot" ||
-    declared === "opencode"
+    declared === "opencode" ||
+    declared === "hermes"
   ) {
     return declared === "kiro-ide" ? "kiro" : declared;
   }
   if (harnessDir === ".codex") return "codex";
   if (harnessDir === ".kiro") return "kiro";
   if (harnessDir === ".cursor") return "cursor";
+  if (harnessDir === ".hermes") return "hermes";
   return "claude";
 }
 
@@ -524,7 +527,11 @@ function deduplicateInventory(
 // rebuilt one: the host's own command removes it.
 function supersededWords(harness: PluginInventory["harness"], old: InstalledPlugin): string {
   const id = old.hostId ?? old.hostName;
-  const remove = harness === "codex" ? `codex plugin remove ${id}` : `/plugin uninstall ${id}`;
+  const remove = harness === "codex"
+    ? `codex plugin remove ${id}`
+    : harness === "hermes"
+    ? `hermes plugins remove ${id}`
+    : `/plugin uninstall ${id}`;
   return `installed twice; AI-DLC uses the rebuilt one. Remove the old copy: ${remove}`;
 }
 

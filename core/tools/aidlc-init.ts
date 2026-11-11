@@ -857,7 +857,8 @@ function modelHarness(value: string): ModelHarness {
     value === "cursor" ||
     value === "kiro" ||
     value === "kiro-ide" ||
-    value === "opencode"
+    value === "opencode" ||
+    value === "hermes"
   ) {
     return value;
   }

@@ -115,13 +115,17 @@ export type RuntimeRecord = {
 // answers use `current`, `amazon-bedrock`, or `other`.
 export type ProviderKind = "current" | "amazon-bedrock" | "builtin" | "other";
 
-// Kiro CLI and Kiro IDE provide their own model access. AI-DLC has no provider
-// decision to ask, write, or check for them, even when a legacy answer exists.
-export type BedrockOrientedHarness = Exclude<ModelHarness, "kiro" | "kiro-ide">;
+// Kiro CLI, Kiro IDE and Hermes Agent provide their own model access: Kiro's
+// comes with the Kiro session, and Hermes's from the person's own
+// `hermes model` choice in ~/.hermes/config.yaml, which no project file
+// overrides. AI-DLC has no provider decision to ask, write, or check for them,
+// even when a legacy answer exists.
+export type BedrockOrientedHarness = Exclude<ModelHarness, "kiro" | "kiro-ide" | "hermes">;
 
 const HARNESS_OWNED_MODEL_ACCESS: ReadonlySet<ModelHarness> = new Set<ModelHarness>([
   "kiro",
   "kiro-ide",
+  "hermes",
 ]);
 
 export function harnessOwnsModelAccess(
@@ -585,7 +589,8 @@ export function readConfigDiagnosticRecords(harnessRoot: string): ConfigDiagnost
     distribution !== "cursor" &&
     distribution !== "kiro" &&
     distribution !== "kiro-ide" &&
-    distribution !== "opencode"
+    distribution !== "opencode" &&
+    distribution !== "hermes"
   ) {
     throw new Error(`${path}: distribution must name a supported harness`);
   }
@@ -923,6 +928,14 @@ const HARNESS_CLI: Record<
     command: "cursor",
     required: false,
     install: "Install the Cursor CLI and ensure `cursor --version` works; IDE-only installs may omit it.",
+  },
+  // Hermes Agent runs the same install as the CLI, the desktop app and the
+  // gateway; the CLI is the probe, and a desktop-only install may omit it.
+  hermes: {
+    command: "hermes",
+    required: false,
+    minimumVersion: "0.21.0",
+    install: "Install or upgrade Hermes Agent to 0.21.0 or later and ensure `hermes --version` works.",
   },
   // The 2.x line is where the hooks, skills and workspace default agent this
   // distribution relies on shipped; the guide asks for 2.6 or later.
@@ -3437,7 +3450,10 @@ function instructionStates(
     "aidlc-manifest.json",
   );
   if (!existsSync(baselinePath)) {
-    const instructionPaths = harness === "claude" ? [] : ["AGENTS.md"];
+    // Claude keeps no shared root block, and Hermes reads its own
+    // `.hermes.md` (the onboarding path below), so neither has an AGENTS.md
+    // row to report before the first `aidlc config` records a baseline.
+    const instructionPaths = harness === "claude" || harness === "hermes" ? [] : ["AGENTS.md"];
     if (agentsPath !== "AGENTS.md") instructionPaths.push(agentsPath);
     if (onboardingPath && !instructionPaths.includes(onboardingPath)) {
       instructionPaths.push(onboardingPath);

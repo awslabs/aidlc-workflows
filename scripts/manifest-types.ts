@@ -288,7 +288,7 @@ export type HarnessManifest = {
    * new harness picks its projection shape in its manifest - the packager
    * never infers it from the harness name.
    */
-  tierFlavor: "claude" | "codex" | "kiro" | "opencode" | "copilot" | "cursor";
+  tierFlavor: "claude" | "codex" | "kiro" | "opencode" | "copilot" | "cursor" | "hermes";
   /**
    * Kiro rows only: which tree layout this row ships. `agent-v1` is the Kiro CLI
    * agent-JSON layout (JSON agents with hooks embedded in them); `kas` is the
