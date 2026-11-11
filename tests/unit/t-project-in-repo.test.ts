@@ -15,7 +15,7 @@
 // The pin at the end keeps it one owner: no other file under core/ or harness/
 // passes --show-prefix or --git-common-dir to git, but the files named in
 // NOT_YET_ON_THE_OWNER, each at most as often as it does now and with the
-// reason it is there.
+// reason it is there, and the work not on main yet named in IN_FLIGHT.
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -207,11 +207,7 @@ describe("gitCommonDirOf: git's own folders, resolved against the folder git ran
 // Each file here still passes one of the two to git itself, at most this many
 // times, and why; the fix that moves a read onto the owner lowers its count.
 const NOT_YET_ON_THE_OWNER: Record<string, { reads: number; why: string }> = {
-  "core/tools/aidlc-unit.ts": {
-    reads: 2,
-    why: "assertMainCheckout resolves the common dir against the repository's top; the line a project below " +
-      "the top is told when team work cannot run there reads the prefix",
-  },
+  "core/tools/aidlc-unit.ts": { reads: 1, why: "assertMainCheckout resolves the common dir against the top" },
   "core/tools/aidlc-lib.ts": { reads: 1, why: "isWalkingSkeletonUnitOnMain resolves the common dir against the top" },
   "core/tools/aidlc-orchestrate.ts": { reads: 1, why: "handleTeamBoard resolves the common dir against the top" },
   "core/tools/aidlc-runtime-paths.ts": { reads: 2, why: "findHostWorktree; the file imports node builtins only" },
@@ -220,9 +216,12 @@ const NOT_YET_ON_THE_OWNER: Record<string, { reads: number; why: string }> = {
     why: "assertNotSiblingWorktree and gitCommonDirRealpath resolve the common dir against the top",
   },
 };
-// Team Units work not on main yet reads them itself in these; it moves them
-// onto the owner before it lands.
+// Work not on main yet that reads them itself, on top of the counts above:
+// the line a project below its repository's top is told when team work cannot
+// run there, and the team Units work; each moves onto the owner or goes before
+// that work is done.
 const IN_FLIGHT: Record<string, number> = {
+  "core/tools/aidlc-unit.ts": 1,
   "core/tools/aidlc-unit-teams.ts": 2,
   "core/hooks/aidlc-session-start.ts": 1,
 };
@@ -268,7 +267,7 @@ describe("one owner for the project's place in its repository", () => {
     const over = files
       .filter((file) => file !== OWNER)
       .map((file) => ({ file, reads: reads(file) }))
-      .filter(({ file, reads }) => reads > (NOT_YET_ON_THE_OWNER[file]?.reads ?? IN_FLIGHT[file] ?? 0));
+      .filter(({ file, reads }) => reads > (NOT_YET_ON_THE_OWNER[file]?.reads ?? 0) + (IN_FLIGHT[file] ?? 0));
     expect(over).toEqual([]);
   });
 
