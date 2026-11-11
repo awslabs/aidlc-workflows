@@ -85,6 +85,7 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+import { codexRefusal } from "../harness/codex-hook-answer.ts";
 import { envWithoutCommandOnPath } from "../harness/test-command-paths.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -2281,9 +2282,7 @@ describe("t149 Codex guard-tool-call runs the four PreToolUse checks in one proc
     const dir = scratchProject(false);
     try {
       const r = runAdapter(dir, "guard-tool-call", shellCall(dir, "bun .codex/tools/aidlc.ts engine hook record-human-turn"));
-      expect(r.code).toBe(2);
-      expect(r.stdout).toBe("");
-      expect(r.stderr).toContain("AIDLC runtime records and hooks belong to the harness");
+      expect(codexRefusal(r)).toContain("AIDLC runtime records and hooks belong to the harness");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -2300,9 +2299,7 @@ describe("t149 Codex guard-tool-call runs the four PreToolUse checks in one proc
         tool_name: "spawn_agent",
         tool_input: { agent_type: "aidlc-developer-agent", message: "AIDLC-UNIT: todo-core\nImplement todo-core" },
       });
-      expect(r.code).toBe(2);
-      expect(r.stdout).toBe("");
-      expect(r.stderr).toContain("Code generation cannot start");
+      expect(codexRefusal(r)).toContain("Code generation cannot start");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -2340,9 +2337,7 @@ describe("t149 Codex guard-tool-call runs the four PreToolUse checks in one proc
         writeFileSync(join(dir, ".codex", "hooks", hook), standInHook(capture, hook, answers[hook]), "utf-8");
       }
       const r = runAdapter(dir, "guard-tool-call", shellCall(dir, "echo hi"));
-      expect(r.code).toBe(2);
-      expect(r.stdout).toBe("");
-      expect(r.stderr).toContain("STANDIN-FREEZE-REFUSAL");
+      expect(codexRefusal(r)).toContain("STANDIN-FREEZE-REFUSAL");
       // The one that threw does not hide the refusal, and the members after it ran.
       expect(recordedRuns(capture).map((run) => run.hook)).toEqual([...GUARD_HOOKS]);
     } finally {
@@ -2364,10 +2359,8 @@ describe("t149 Codex guard-tool-call runs the four PreToolUse checks in one proc
       const payload = shellCall(dir, "echo twice", { tool_use_id: "call-twice" });
       const first = runAdapter(dir, "guard-tool-call", payload);
       const second = runAdapter(dir, "guard-tool-call", payload);
-      expect(first.code).toBe(2);
-      expect(second.code).toBe(2);
-      expect(first.stderr).toContain("STANDIN-FREEZE-REFUSAL");
-      expect(second.stderr).toBe(first.stderr);
+      expect(codexRefusal(first)).toContain("STANDIN-FREEZE-REFUSAL");
+      expect(second).toEqual({ ...first, pid: second.pid });
       expect(recordedRuns(capture)).toHaveLength(GUARD_HOOKS.length);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -2388,6 +2381,85 @@ describe("t149 Codex guard-tool-call runs the four PreToolUse checks in one proc
       const runs = recordedRuns(capture);
       expect(runs).toHaveLength(1);
       expect(runs[0]?.pid).toBe(r.pid);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// On Windows Codex runs a call whose PreToolUse hook exits 2 (measured on Codex
+// CLI 0.167.1), and holds one answered with exit 0 and a permissionDecision
+// deny, showing the model the same reason. So on Windows (win32) the adapter's
+// two PreToolUse answers say a refusal that way, in the same words; on Linux and
+// macOS they stay exit 2 with the reason on stderr.
+describe("t149 Codex on Windows: a refusal is the deny JSON Codex holds, in the same words", () => {
+  const windows = process.platform === "win32";
+  const words = (reason: string) =>
+    `${JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } })}\n`;
+
+  test("1: refusalAnswer turns exit 2 into the deny JSON on win32 only, stdout replaced", async () => {
+    const { refusalAnswer } = await import(join(CODEX_TREE, "hooks", "aidlc-codex-adapter.ts"));
+    const refused = { stdout: "", code: 2, stderr: "Refused: line one.\nline two.\n" };
+    expect(refusalAnswer(refused, "win32")).toEqual({ stdout: words("Refused: line one.\nline two."), code: 0, stderr: "" });
+    expect(refusalAnswer({ ...refused, stdout: "{\"x\":1}\n" }, "win32").stdout).toBe(words("Refused: line one.\nline two."));
+    for (const platform of ["linux", "darwin"]) expect(refusalAnswer(refused, platform)).toEqual(refused);
+    const allowed = { stdout: "{\"hookSpecificOutput\":{}}\n", code: 0, stderr: "" };
+    expect(refusalAnswer(allowed, "win32")).toEqual(allowed);
+  });
+
+  test("2: the guard's refusal on this platform: the deny JSON on Windows, exit 2 elsewhere, and the replay the same", () => {
+    const dir = scratchProject(false);
+    try {
+      const payload = shellCall(dir, "bun .codex/tools/aidlc.ts engine hook record-human-turn", { tool_use_id: "call-held" });
+      const first = runAdapter(dir, "guard-tool-call", payload);
+      const reason = codexRefusal(first) ?? "";
+      expect(reason).toContain("AIDLC runtime records and hooks belong to the harness");
+      if (windows) {
+        expect({ code: first.code, stderr: first.stderr, stdout: first.stdout })
+          .toEqual({ code: 0, stderr: "", stdout: words(reason.replace(/\r?\n$/, "")) });
+      } else {
+        expect({ code: first.code, stderr: first.stderr, stdout: first.stdout }).toEqual({ code: 2, stderr: reason, stdout: "" });
+      }
+      const second = runAdapter(dir, "guard-tool-call", payload);
+      expect(second).toEqual({ ...first, pid: second.pid });
+      // The registered command answers the same, stdout exactly the JSON.
+      const registered = spawnSync(
+        "bun",
+        [join(dir, ".codex", "tools", "aidlc.ts"), "engine", "adapter", "codex", "guard-tool-call"],
+        {
+          cwd: dir,
+          input: JSON.stringify(shellCall(dir, "bun .codex/tools/aidlc.ts engine hook record-human-turn", { tool_use_id: "call-registered" })),
+          encoding: "utf-8",
+          env: { ...process.env, CLAUDE_PROJECT_DIR: undefined, CODEX_THREAD_ID: undefined } as NodeJS.ProcessEnv,
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        },
+      );
+      expect({ code: registered.status, stdout: registered.stdout, stderr: registered.stderr })
+        .toEqual(windows ? { code: 0, stdout: first.stdout, stderr: "" } : { code: 2, stdout: "", stderr: reason });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("3: deliver-stage-rules refuses the same way on Windows", () => {
+    const dir = scratchProject(true);
+    try {
+      const capture = join(dir, "deliver-runs.ndjson");
+      writeFileSync(
+        join(dir, ".codex", "hooks", "aidlc-deliver-stage-rules.ts"),
+        standInHook(capture, "aidlc-deliver-stage-rules.ts", { code: 2, stderr: "STANDIN-RULES-REFUSAL: the subagent was not started.\n" }),
+        "utf-8",
+      );
+      const r = runAdapter(dir, "deliver-stage-rules", {
+        hook_event_name: "PreToolUse",
+        cwd: dir,
+        tool_name: "spawn_agent",
+        tool_input: { agent_type: "aidlc-product-agent", message: "Run the stage." },
+      });
+      expect(codexRefusal(r)).toBe("STANDIN-RULES-REFUSAL: the subagent was not started.\n");
+      expect({ code: r.code, stderr: r.stderr }).toEqual(
+        windows ? { code: 0, stderr: "" } : { code: 2, stderr: "STANDIN-RULES-REFUSAL: the subagent was not started.\n" },
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

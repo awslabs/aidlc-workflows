@@ -409,8 +409,11 @@ order: the state-transition, reviewer-scope, review-freeze and plan-approval
 guards, each as the same case it ran as its own handler, and each guard's core
 hook runs inside that process too (imported from beside the adapter and called,
 never spawned as a second engine). Every member runs even after one refuses; the
-call is refused when any member refuses, with each refusal once on stderr and
-nothing on stdout, and when every member lets it through nothing is printed: the
+call is refused when any member refuses, with each refusal once on stderr, exit
+2 and nothing on stdout (on Windows, where Codex runs a call whose hook exits 2,
+the same words go as exit 0 with a `permissionDecision` of `deny` on stdout, which
+Codex holds and shows the agent in the same frame; `deliver-stage-rules` refuses
+the same way), and when every member lets it through nothing is printed: the
 command runs with the words the agent wrote (Codex gives it the session as
 `CODEX_THREAD_ID`, which the tools read), so the shipped
 `.codex/rules/default.rules` prefixes match it. A member that fails on its own
@@ -1892,7 +1895,14 @@ in a heredoc or as its one operand, writes the files its patch names
 and opencode adapters use for their own apply_patch tool too); one fed its patch
 after it starts writes files no hook can see, so while the plan waits it is
 refused as a command that could not be read, with one more sentence naming the
-heredoc form. A patch heredoc the reading keeps as written (a
+heredoc form. Codex's binary run in that patch mode itself (`codex
+--codex-run-as-apply-patch <patch>`, which is what its `apply_patch` command runs,
+and what an agent on Windows runs because `apply_patch.bat` cannot take a
+multi-line patch) is the same apply_patch on every platform: a patch in the
+command writes the files it names, and one the reader cannot see (`$patch`, a
+substitution) gets the same refusal and sentence. For Codex on Windows the sentence
+also says the heredoc form works there: Codex applies it itself, before PowerShell
+reads it. A patch heredoc the reading keeps as written (a
 glob or a bracket on its line, a subshell, a redirect of its input, no closing
 line) is refused the same way, with no added sentence. A line that starts with `cd <folder>`
 joined to the rest by `&&`, `;` or a newline (and, in a line read as plain

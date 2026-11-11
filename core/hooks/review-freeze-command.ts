@@ -1990,6 +1990,20 @@ export function patchTargets(patch: string): Array<{ kind: "Add" | "Update" | "D
   return out;
 }
 
+// Codex's own binary in its patch mode, which is what its apply_patch command
+// runs (on Windows, apply_patch.bat): the flag is its first word and the patch
+// its operand, as apply_patch's operand is.
+const CODEX_PATCH_FLAG = "--codex-run-as-apply-patch";
+export function codexPatchMode(invocation: { name: string; args: string[] }): boolean {
+  return invocation.name === "codex" && invocation.args[0] === CODEX_PATCH_FLAG;
+}
+// The patch mode given an operand the reader cannot see (a variable, a
+// substitution, a PowerShell expression), read on the text, since a quote
+// inside the patch can turn the lexer's words over; so the same words inside a
+// quoted argument (a search for them) read as one too. With no operand the
+// binary writes nothing.
+const CODEX_UNSEEN_PATCH = /codex(?:\.exe)?['"]?[ \t]+--codex-run-as-apply-patch[ \t]+["']?[$`(]/i;
+
 // A patch handed to apply_patch in the shell names its files as written, never
 // as shell words (`routes/$id.tsx`), and the binary takes its file lines
 // indented too.
@@ -2004,9 +2018,13 @@ export function shellPatchPaths(patch: string, cwd: string): string[] {
 // the command can be in.
 export function shellPatchTargets(command: string, cwd = process.cwd()): string[] {
   const { text, patches } = heredocReading(command);
-  const operands = shellCommandInvocationDetails(text)
-    .filter((invocation) => invocation.name === "apply_patch" || invocation.name === "applypatch")
-    .flatMap((invocation) => invocation.args);
+  const operands = shellCommandInvocationDetails(text).flatMap((invocation) =>
+    invocation.name === "apply_patch" || invocation.name === "applypatch"
+      ? invocation.args
+      : codexPatchMode(invocation)
+      ? invocation.args.slice(1)
+      : []
+  );
   if (patches.length + operands.length === 0) return [];
   const out = new Set<string>();
   for (const root of shellDirectoryRoots(text, cwd)) {
@@ -2018,8 +2036,9 @@ export function shellPatchTargets(command: string, cwd = process.cwd()): string[
 // An apply_patch or applypatch with no operand once its redirections are set
 // aside, whose patch nothing here has read: "bare" when the command does not
 // hold it (a segment with no heredoc, beyond the `read` heredoc patches
-// heredocReading took from `text`), "held" when it is fed a heredoc
-// heredocReading kept as written.
+// heredocReading took from `text`, or Codex's patch mode given an operand the
+// reader cannot see), "held" when it is fed a heredoc heredocReading kept as
+// written.
 export function unseenPatch(text: string, read: number): "bare" | "held" | null {
   let bare = 0;
   let held = false;
@@ -2030,7 +2049,7 @@ export function unseenPatch(text: string, read: number): "bare" | "held" | null 
     // Only a call the walk could take: any other spelling names another program.
     else if ((invocation.executable ?? invocation.name) === invocation.name) held = true;
   }
-  return bare > read ? "bare" : held ? "held" : null;
+  return bare > read || CODEX_UNSEEN_PATCH.test(text) ? "bare" : held ? "held" : null;
 }
 
 export function shellWriteTargets(

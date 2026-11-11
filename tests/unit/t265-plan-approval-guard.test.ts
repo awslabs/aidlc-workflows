@@ -3881,6 +3881,101 @@ describe("t265b hook lifecycle", () => {
     }
   });
 
+  // On Windows Codex's apply_patch.bat cannot take a multi-line patch, so an
+  // agent there runs the binary in its patch mode itself
+  // (`<codex.exe> --codex-run-as-apply-patch <patch>`), most often with the patch
+  // in a PowerShell variable. It is the same apply_patch, on every platform: a
+  // patch in the command is the writes it names, and one the reader cannot see
+  // gets the unread line with the sentence naming the form that is read, which
+  // Codex applies itself on Windows too.
+  test("Codex's patch mode run by its binary is the apply_patch it is, on Windows and every platform", () => {
+    const proj = scratchProject();
+    try {
+      const plan = reportedRunRecord(proj);
+      const patch = (lines: string[]) => `*** Begin Patch\n${lines.join("\n")}\n*** End Patch`;
+      const add = (path: string) => [`*** Add File: ${path}`, "+# Plan", "+uses `add()`"];
+      const binaries = ["codex", "codex.exe", "'C:\\Users\\p\\AppData\\Roaming\\npm\\codex.exe'", "& 'C:\\x y\\codex.exe'"];
+      const literal = (lines: string[]) => binaries.map((bin) => `${bin} --codex-run-as-apply-patch '${patch(lines)}'`);
+      for (const command of literal(add(plan))) {
+        const result = runHook(proj, BASH(command));
+        expect(result.code, `${command}\n${result.stderr}`).toBe(0);
+      }
+      // Code waits with the words printf gets.
+      const ordinary = runHook(proj, BASH("printf code > src/tasks.ts")).stderr;
+      expect(ordinary).toContain("Code generation cannot modify workspace paths");
+      for (const lines of [
+        add("src/new.ts"),
+        ["*** Update File: src/tasks.ts", "@@", "-export const x = 1;", "+export const x = 2;"],
+        [...add(plan), "*** Delete File: src/tasks.ts"],
+      ]) {
+        for (const command of literal(lines)) {
+          const result = runHook(proj, BASH(command));
+          expect({ code: result.code, stderr: result.stderr }, command).toEqual({ code: 2, stderr: ordinary });
+        }
+      }
+      // A patch the reader cannot see: the unread line and the sentence a bare
+      // apply_patch gets.
+      const bare = runHook(proj, BASH("apply_patch")).stderr.trim();
+      expect(bare).toContain("An apply_patch with its patch in the command itself (`apply_patch <<'PATCH'`");
+      const exe = "'C:\\Users\\p\\AppData\\Roaming\\npm\\node_modules\\@openai\\codex\\bin\\codex.exe'";
+      for (const command of [
+        // A reported Windows run's form, byte for byte apart from the plan's text.
+        `$patch = @'\n${patch(add(plan))}\n'@; $patch = $patch.Replace("\`r\`n", "\`n").TrimEnd("\`n"); & ${exe} --codex-run-as-apply-patch $patch`,
+        `$PSNativeCommandArgumentPassing = 'Standard'; $patch = @'\n${patch(add(plan))}\n'@; & ${exe} --codex-run-as-apply-patch $patch`,
+        // An apostrophe in the text turns the POSIX reading's quoting over.
+        `$patch = @'\n${patch([`*** Add File: ${plan}`, "+don't touch `src` yet"])}\n'@; & ${exe} --codex-run-as-apply-patch $patch`,
+        // and a `>` after it hands the reading a file the patch does not write.
+        `$patch = @'\n${patch([`*** Add File: ${plan}`, "+Don't change the API: add(a, b) -> number"])}\n'@; & ${exe} --codex-run-as-apply-patch $patch`,
+        `$patch = @'\n${patch([`*** Add File: ${plan}`, "+It's small.", "+> Note"])}\n'@; & ${exe} --codex-run-as-apply-patch $patch`,
+        `codex --codex-run-as-apply-patch "$(cat p.patch)"`,
+        `& ${exe} --codex-run-as-apply-patch (Get-Content -Raw p.patch)`,
+      ]) {
+        const result = runHook(proj, BASH(command));
+        expect({ code: result.code, stderr: result.stderr.trim() }, command).toEqual({ code: 2, stderr: bare });
+      }
+      // For Codex on Windows the sentence also says the form works there: Codex
+      // applies it itself, before PowerShell reads it. Said nowhere else.
+      const clause = "On Windows Codex applies that form itself, before PowerShell reads it, so it works there too.";
+      const asCodex = runHook(proj, BASH("apply_patch"), { AIDLC_HARNESS_NAME: "codex" }).stderr;
+      expect(asCodex.includes(clause), "the clause on win32 for Codex only").toBe(process.platform === "win32");
+      expect(bare).not.toContain(clause);
+      const both = (codexOnWindows: boolean) => mutationBlockReason(null, true, null, false, false, true, true, codexOnWindows);
+      expect(both(true)).toContain(`is read as the writes it names. ${clause} Writes inside`);
+      expect(both(false)).not.toContain(clause);
+      expect(mutationBlockReason(null, true, null, false, false, true, false, true)).not.toContain(clause);
+      // With no operand the binary writes nothing; a flag after the first word is some other command's,
+      // and another program given the flag first is no patch: it is read as that program.
+      expect(runHook(proj, BASH("codex --codex-run-as-apply-patch")).code).toBe(0);
+      const script = runHook(proj, BASH("./build.sh")).stderr;
+      expect(script).toContain("Code generation cannot");
+      expect(runHook(proj, BASH("./build.sh --codex-run-as-apply-patch")).stderr).toBe(script);
+      expect(runHook(proj, BASH(`./build.sh --codex-run-as-apply-patch '${patch(add("src/x.ts"))}'`)).stderr).toBe(script);
+      expect(runHook(proj, BASH(`echo x --codex-run-as-apply-patch '${patch(add("src/x.ts"))}'`)).code).toBe(0);
+      // A PowerShell here-string written as the operand is a patch in the command too (a backtick
+      // in a double-quoted one is PowerShell's escape, so its text here has none).
+      for (const quote of ["'", '"']) {
+        const hereString = (path: string) =>
+          `& ${exe} --codex-run-as-apply-patch @${quote}\n${patch([`*** Add File: ${path}`, "+# Plan"])}\n${quote}@`;
+        expect(runHook(proj, BASH(hereString(plan))).code, `here-string ${quote}`).toBe(0);
+        expect(runHook(proj, BASH(hereString("src/new.ts"))).code, `here-string ${quote}`).toBe(2);
+      }
+      // One apostrophe in its text turns the reading's quoting over, so the rest of the line is
+      // unread: the patch mode on a line read only in part is a patch nobody has read, with its
+      // sentence, and for Codex on Windows its clause.
+      const unpaired = `& ${exe} --codex-run-as-apply-patch @'\n${patch([`*** Add File: ${plan}`, "+Don't touch the API yet"])}\n'@`;
+      expect({ code: runHook(proj, BASH(unpaired)).code, stderr: runHook(proj, BASH(unpaired)).stderr.trim() }).toEqual({ code: 2, stderr: bare });
+      const unpairedAsCodex = runHook(proj, BASH(unpaired), { AIDLC_HARNESS_NAME: "codex" }).stderr;
+      expect(unpairedAsCodex).toContain("An apply_patch with its patch in the command itself (`apply_patch <<'PATCH'`");
+      expect(unpairedAsCodex.includes(clause), "the clause on win32 for Codex only").toBe(process.platform === "win32");
+      // A spelling the reading does not take as Codex is read as any program is: an unquoted
+      // Windows path loses its backslashes, and an operand that names no file is no patch.
+      expect(runHook(proj, BASH(`C:\\Users\\p\\AppData\\Roaming\\npm\\codex.exe --codex-run-as-apply-patch '${patch(add(plan))}'`)).code).toBe(0);
+      expect(runHook(proj, BASH("codex.cmd --codex-run-as-apply-patch (Get-Content -Raw p.patch)")).code).toBe(2);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
   // #2456: while the plan-approval guard is refusing the build, doctor and
   // status are where the person gets the whole picture of why. An agent's
   // terminal is often not at the project root - VS Code and the Copilot CLI

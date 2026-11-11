@@ -251,6 +251,25 @@ export function questionReplyWords(prompt: string): string | null {
   return answers.join("\n");
 }
 
+// A PreToolUse refusal as Codex holds it. On Windows Codex runs a call whose
+// hook exits 2 with its reason on stderr (measured on Codex CLI 0.167.1, which
+// runs hooks through cmd.exe there), and holds one answered with exit 0 and a
+// permissionDecision deny on stdout, showing the model the same reason in the
+// same frame. Elsewhere the answer goes as it came. Stdout is replaced, never
+// added to: stdout that is not one JSON object is ignored and the call runs.
+export function refusalAnswer(
+  answer: { stdout: string; code: number; stderr: string },
+  platform: string = process.platform,
+): { stdout: string; code: number; stderr: string } {
+  if (answer.code !== 2 || platform !== "win32") return answer;
+  const permissionDecisionReason = answer.stderr.replace(/\r?\n$/, "");
+  return {
+    stdout: `${JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason } })}\n`,
+    code: 0,
+    stderr: "",
+  };
+}
+
 export async function run(
   target: string,
   input: string,
@@ -761,10 +780,11 @@ switch (target) {
     // core hook's exact contract - so Bash pipes verbatim. apply_patch (the
     // edit surface) fans out one Write per touched file, agent identity
     // forwarded, and blocks when ANY file is out of scope. Everything else
-    // (spawn_agent, wait, plan, ...) allows instantly. The block contract is
-    // exit 2 + stderr (probe-verified: Codex refuses the call and relays the
-    // reason); the response cache carries stderr so the duplicate delivery
-    // replays the block faithfully. Fail-open on any spawn failure.
+    // (spawn_agent, wait, plan, ...) allows instantly. A refusal is exit 2 +
+    // stderr, which guard-tool-call reads (and answers Codex with in the form
+    // it holds, refusalAnswer); the response cache carries stderr so the
+    // duplicate delivery replays the block faithfully. Fail-open on any spawn
+    // failure.
     const tool = codex.tool_name ?? "";
     if (tool === "Bash") {
       const r = await runCoreHere("aidlc-reviewer-scope.ts", rawInput);
@@ -842,15 +862,15 @@ switch (target) {
     // The core hook recognizes spawn_agent and appends the exact active-stage
     // bundle to message/items; the adapter completes the Codex envelope.
     const r = runCoreWithStderr("aidlc-deliver-stage-rules.ts", rawInput);
-    const answeredCode = r.code === 2 ? 2 : 0;
-    const stdout = r.code === 2 ? r.stdout : allowUpdatedInput(r.stdout);
-    persistResponse(stdout, answeredCode, r.stderr);
-    if (stdout) process.stdout.write(stdout);
-    if (r.code === 2) {
-      process.stderr.write(r.stderr);
-      return 2;
-    }
-    return 0;
+    const answer = refusalAnswer({
+      stdout: r.code === 2 ? r.stdout : allowUpdatedInput(r.stdout),
+      code: r.code === 2 ? 2 : 0,
+      stderr: r.stderr,
+    });
+    persistResponse(answer.stdout, answer.code, answer.stderr);
+    if (answer.stdout) process.stdout.write(answer.stdout);
+    if (answer.code === 2) process.stderr.write(answer.stderr);
+    return answer.code;
   }
 
   case "plan-approval-guard": {
@@ -939,8 +959,9 @@ switch (target) {
     // The one PreToolUse registration: the four checks a shell call used to
     // start as four handlers run here in order, in this process. Every member
     // runs even after one refuses, as Codex ran every handler; the call is
-    // refused when any member refuses, with each refusal once on stderr and
-    // nothing on stdout. When every member lets the call through nothing is
+    // refused when any member refuses, with each refusal once, on stderr with
+    // exit 2 (on Windows as the deny JSON on stdout: refusalAnswer), and
+    // nothing else on stdout. When every member lets the call through nothing is
     // printed and the command runs as the agent wrote it. A member that fails
     // on its own (its own case answers that 0; a thrown error lands here as
     // code 1) refuses nothing, as its crashed process did not. The group
@@ -963,12 +984,11 @@ switch (target) {
         allowed += said.stdout;
       }
     }
-    const stdout = code === 0 ? allowed : "";
-    const stderr = refusals.join("");
-    persistResponse(stdout, code, stderr || undefined);
-    if (stdout) process.stdout.write(stdout);
-    if (stderr) process.stderr.write(stderr);
-    return code;
+    const answer = refusalAnswer({ stdout: code === 0 ? allowed : "", code, stderr: refusals.join("") });
+    persistResponse(answer.stdout, answer.code, answer.stderr || undefined);
+    if (answer.stdout) process.stdout.write(answer.stdout);
+    if (answer.stderr) process.stderr.write(answer.stderr);
+    return answer.code;
   }
 
   case "record-human-turn": {
