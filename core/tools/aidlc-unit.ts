@@ -1401,11 +1401,13 @@ function cachedClaimsForIdentity(
     const prior = claims.get(payload.unit);
     // The cache keeps a claim's summary only; the ref at the same commit hands
     // over its whole payload (a published candidate's commit among it).
+    const kind = homeCopy(ref);
     if (prior && prior.oid === oid) {
       prior.payload = payload;
+      // Its rank too: a fork's older copy read after it never replaces it.
+      readFrom.set(payload.unit, Math.max(readFrom.get(payload.unit) ?? 0, kind));
       continue;
     }
-    const kind = homeCopy(ref);
     const priorKind = readFrom.get(payload.unit);
     const newer = prior !== undefined && priorKind !== undefined && descends(prior.oid, oid);
     if (prior && priorKind !== undefined && !newer && descends(oid, prior.oid)) continue;

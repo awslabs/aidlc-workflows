@@ -1573,6 +1573,76 @@ describe("the claims' home is the lead's address", () => {
     expect(claimPayload(home.remote, id8, "refunds")).toMatchObject({ done: true });
   });
 
+  // A live run (the fork leg, runs A and B): the lead approved a team's change
+  // its fork had sent; the same question came back at every later look, and
+  // each Approve was refused as having nothing waiting.
+  const REQUIREMENTS = "inception/requirements-analysis/requirements.md";
+  function proposedOnFork() {
+    const { home, hosts, id8 } = forkedLead();
+    committedByPusher(home.remote);
+    const { dir: pay, fork } = forkedTeam(home, hosts, "pay");
+    expect(takeFrom("payments", pay, "refunds").status).toBe(0);
+    git(home.dir, ["remote", "add", "team-a", fork]);
+    next(home.dir, chatOf("lead-take"));
+    const record = buildDir(pay, "payments", "refunds");
+    const requirements = join(record, ...REQUIREMENTS.split("/"));
+    writeFileSync(requirements, `${readFileSync(requirements, "utf-8")}\nFR2 partial refunds.\n`);
+    const proposed = run(UNIT, ["propose", "--input", "requirements.md", "--person-words", "partial refunds too"], pay);
+    expect(proposed.status, proposed.out).toBe(0);
+    expect(String(proposed.json?.notice)).toContain("Sent your change to the requirements to ");
+    const chat = chatOf("lead-decides");
+    const ask = next(home.dir, chat);
+    expect(ask.ask_type, JSON.stringify(ask).slice(0, 600)).toBe("unit-amend");
+    return { home, pay, fork, id8, chat };
+  }
+  const answeredThere = (bare: string, id8: string): string[] =>
+    ((claimPayload(bare, id8, "refunds")?.proposals ?? []) as Array<{ answer?: string }>).map((entry) => entry.answer ?? "open");
+
+  for (const [label, answer, said] of [
+    ["approves", "approve", "yes, partial refunds"],
+    ["turns down", "reject", "no, full refunds only"],
+  ] as const) {
+    test(`the lead ${label} a change its team's fork sent: never asked again, with the fork up or down, and nothing to answer twice`, () => {
+      const { home, fork, id8, chat } = proposedOnFork();
+      appendAuditEntry("HUMAN_TURN", { "Person Reply": said }, home.dir);
+      const answered = run(UNIT, ["amend", "refunds", "--input", REQUIREMENTS, "--answer", answer, "--person-words", said], home.dir);
+      expect(answered.status, answered.out).toBe(0);
+      expect(answeredThere(home.remote, id8)).toEqual([answer === "approve" ? "approved" : "turned down"]);
+      // The next bare look, in the same chat after the person's next message, then in a new chat.
+      appendAuditEntry("HUMAN_TURN", { "Person Reply": "where are we" }, home.dir);
+      for (const env of [chat, chatOf("lead-later")]) {
+        const look = next(home.dir, env);
+        expect(look.ask_type ?? null, JSON.stringify(look).slice(0, 600)).not.toBe("unit-amend");
+        expect(JSON.stringify(look)).not.toContain("proposes a change to the requirements");
+      }
+      expect(answeredThere(home.remote, id8)).toEqual([answer === "approve" ? "approved" : "turned down"]);
+      // The fork's host down: still nothing asked.
+      const away = `${fork}-away`;
+      renameSync(fork, away);
+      try {
+        const look = next(home.dir, chatOf("lead-fork-down"));
+        expect(look.ask_type ?? null, JSON.stringify(look).slice(0, 600)).not.toBe("unit-amend");
+        expect(JSON.stringify(look)).not.toContain("proposes a change to the requirements");
+      } finally {
+        renameSync(away, fork);
+      }
+      // A later Approve has nothing to answer, and none is needed.
+      const again = run(UNIT, ["amend", "refunds", "--input", REQUIREMENTS, "--answer", "approve", "--person-words", "yes"], home.dir);
+      expect(again.out).toContain("has no change to");
+    });
+  }
+
+  test("the lead says Not now to a change its team's fork sent: it waits, asked once, on the board until answered", () => {
+    const { home, id8, chat } = proposedOnFork();
+    appendAuditEntry("HUMAN_TURN", { "Person Reply": "not now" }, home.dir);
+    const look = next(home.dir, chat);
+    expect(look.ask_type ?? null, JSON.stringify(look).slice(0, 600)).not.toBe("unit-amend");
+    expect(answeredThere(home.remote, id8)).toEqual(["open"]);
+    const answered = run(UNIT, ["amend", "refunds", "--input", REQUIREMENTS, "--answer", "approve", "--person-words", "yes"], home.dir);
+    expect(answered.status, answered.out).toBe(0);
+    expect(answeredThere(home.remote, id8)).toEqual(["approved"]);
+  });
+
   test("a give back after the take-in, then a new take on the same fork: each is taken in at the lead's next look", () => {
     const { home, hosts, id8 } = forkedLead();
     committedByPusher(home.remote);
