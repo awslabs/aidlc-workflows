@@ -197,7 +197,7 @@ describe("a parallel batch's Unit runs the approved tests through swarm check", 
     const check = () => swarm(pd, ["check", "alpha"]);
     const failed = (result: { code: number | null; out: string; err: string }) => {
       expect(result.code, `${result.out}\n${result.err}`).toBe(1);
-      expect(verdict(result.out)).toEqual({ unit: "alpha", converged: false, tampered: false, reason: null });
+      expect(result.out.trim()).toBe('{"unit":"alpha","converged":false,"tampered":false,"reason":null}');
     };
 
     recordCommand(pd, `bun -e "process.stderr.write(${LOUD})"`);
