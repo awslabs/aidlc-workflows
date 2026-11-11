@@ -365,6 +365,29 @@ describe("moving on where no team holds a Unit of the lead's", () => {
     expect(moved.said).toEqual([`${MOVED} Still open on main, and landing as they finish: gamma (team-g).`]);
   });
 
+  test("with the lead's own Unit still open, approving the last stage leaves the board up, not the work's end", () => {
+    const { lead, remote } = leadsCheckout();
+    expect(unitVerb(lead, "start", "alpha").status).toBe(0);
+    finish(lead, "alpha");
+    nextDirective(lead);
+    expect(unitVerb(lead, "start", "beta").status).toBe(0);
+    commitAndPush(lead, "the lead's alpha, and beta begun");
+    const teamG = clone(remote, "team-g");
+    expect(runMergeTool(UNIT, ["claim", "gamma", "--team", "team-g"], teamG).status).toBe(0);
+    moveOn(lead);
+    for (const args of [
+      ["report", "--stage", BT, "--result", "awaiting-approval"],
+      ["report", "--stage", BT, "--result", "approved", "--user-input", "Approve"],
+    ]) {
+      const reported = runMergeTool(ORCH, args, lead);
+      expect(reported.status, reported.out).toBe(0);
+    }
+    const end = nextDirective(lead);
+    expect(end.kind, JSON.stringify(end)).toBe("notice");
+    expect(message(end)).toContain("# Team Construction Dispatcher");
+    expect(String(end.narration ?? "")).not.toContain("Your work is finished");
+  });
+
   test("team Units no team has taken: the move skips the Unit stages and says so, as before", () => {
     const { lead } = leadsCheckout();
     expect(unitVerb(lead, "start", "alpha").status).toBe(0);
