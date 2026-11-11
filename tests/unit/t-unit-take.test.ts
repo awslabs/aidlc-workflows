@@ -1729,6 +1729,75 @@ describe("the claims' home is the lead's address", () => {
     expect(claimPayload(home.remote, id8, "refunds")).toMatchObject({ status: "released" });
   });
 
+  // The fork leg: the lead's `unit merged` refused a result its team's fork
+  // held until a look had taken it in. Each lead-side command on a team's
+  // claim takes in first.
+  function resultOnTeamsFork() {
+    const { home, hosts, id8 } = forkedLead();
+    committedByPusher(home.remote);
+    const { dir: pay, fork } = forkedTeam(home, hosts, "pay");
+    expect(takeFrom("payments", pay, "refunds").status).toBe(0);
+    const record = buildDir(pay, "payments", "refunds");
+    codeGenerated(pay, record);
+    finishBuild(record);
+    expect(run(UNIT, ["push"], pay).status).toBe(0);
+    git(home.dir, ["remote", "add", "team-a", fork]);
+    expect(claimPayload(home.remote, id8, "refunds")).toBeNull();
+    return { home, id8 };
+  }
+  for (const [verb, args, said, recorded] of [
+    ["merged", ["--repo", "checkout-api", "--person-words", "merged by hand"], "checkout-api counts as merged for refunds, in your words.", "said_merged"],
+    ["send-back", ["--person-words", "the refund total is off by one"], "Sent refunds back to ", "turned_down"],
+    ["turned-down", ["--repo", "billing", "--person-words", "needs the ledger entry"], " hears that billing was turned down, with your words", "turned_down"],
+    ["sign-off", ["--person-words", "Sign it off"], "Signed off refunds; ", "signoff"],
+  ] as const) {
+    test(`the lead's ${verb} on a result its team's fork holds: taken in first, then done`, () => {
+      const { home, id8 } = resultOnTeamsFork();
+      const done = run(UNIT, [verb, "refunds", ...args], home.dir, chatOf(`lead-${verb}`));
+      expect(done.status, done.out).toBe(0);
+      expect(String(done.json?.notice)).toContain(said);
+      const there = claimPayload(home.remote, id8, "refunds");
+      expect(there?.taken_by).toBe("pay");
+      expect(there?.[recorded]).toBeDefined();
+    });
+  }
+
+  test("the lead's release of a Unit its team's fork holds the take of: taken in first, then released", () => {
+    const { home, hosts, id8 } = forkedLead();
+    committedByPusher(home.remote);
+    const { dir: pay, fork } = forkedTeam(home, hosts, "pay");
+    expect(takeFrom("payments", pay, "refunds").status).toBe(0);
+    git(home.dir, ["remote", "add", "team-a", fork]);
+    const freed = run(UNIT, ["release", "refunds"], home.dir, chatOf("lead-release"));
+    expect(freed.status, freed.out).toBe(0);
+    expect(freed.json?.notice).toBeUndefined();
+    expect(claimPayload(home.remote, id8, "refunds")).toMatchObject({ status: "released" });
+  });
+
+  test("a remote the lead's command could not read is said before the command's own words, and the next look does not say it again", () => {
+    const { home } = resultOnTeamsFork();
+    git(home.dir, ["remote", "add", "team-b", join(tempDir("gone"), "team-b-hub.git")]);
+    const chat = chatOf("lead-merged-gone");
+    const done = run(UNIT, ["merged", "refunds", "--repo", "checkout-api", "--person-words", "merged by hand"], home.dir, chat);
+    expect(done.status, done.out).toBe(0);
+    expect(String(done.json?.notice)).toMatch(
+      /^team-b \([^)]*team-b-hub\.git\) could not be read just now \([^)]+\), so a take or result a team sent there is not taken in yet\. checkout-api counts as merged for refunds, in your words\./,
+    );
+    expect(nextSaying(home.dir, chat).said).not.toContain("could not be read just now");
+  });
+
+  test("a take-in the lead's project refuses is said before the command's refusal", () => {
+    const { home } = resultOnTeamsFork();
+    const hook = join(home.remote, "hooks", "pre-receive");
+    writeFileSync(hook, "#!/bin/sh\nwhile read old new ref; do\n  case \"$ref\" in refs/heads/claim/*/refunds) echo 'refunds is locked just now' >&2; exit 1;; esac\ndone\nexit 0\n");
+    chmodSync(hook, 0o755);
+    const refused = run(UNIT, ["merged", "refunds", "--repo", "checkout-api", "--person-words", "merged by hand"], home.dir, chatOf("lead-merged-locked"));
+    expect(refused.status, refused.out).not.toBe(0);
+    expect(refused.out).toMatch(
+      /refunds's take or result on team-a could not be taken in here \(.*refunds is locked just now.*\), so the other teams do not see it yet\. refunds has no result from its team to count merged\./,
+    );
+  });
+
   test("a take-in the lead's project refuses is said once in the lead's chat, with git's reason", () => {
     const { home, hosts } = forkedLead();
     refusePushes(home.remote);

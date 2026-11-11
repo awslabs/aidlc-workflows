@@ -110,6 +110,8 @@ import {
   OPEN_QUESTION_FIELD,
   personsGateReply,
   personsWordsText,
+  markPersonLinesHeard,
+  personLineHeard,
   relativeRecordDir,
   REVIEW_RECORDS_DIR,
   reviewRecordDigest,
@@ -4967,6 +4969,7 @@ function releaseUnit(args: string[], projectDir?: string): void {
   const identity = activeIdentity(pd);
   const integration = fetchIntegration(pd);
   const ref = claimRef(identity.intentId8, unit);
+  const heard = takeInFirst(pd);
   const current = currentClaim(pd, integration.remote, ref);
   if (current?.status === "released") {
     const pending = readPendingRelease(pd, unit, identity);
@@ -5009,7 +5012,7 @@ function releaseUnit(args: string[], projectDir?: string): void {
     }));
     return;
   }
-  if (current?.status !== "claimed") fail(`Unit "${unit}" has no live claim.`);
+  if (current?.status !== "claimed") fail(withTakeInLines(pd, heard, `Unit "${unit}" has no live claim.`));
   if (flags["expect-nonce"] && flags["expect-nonce"] !== current.nonce) {
     fail(
       `Unit "${unit}" current claim nonce does not match --expect-nonce; refusing release.`,
@@ -5103,6 +5106,7 @@ function releaseUnit(args: string[], projectDir?: string): void {
     generation: released.generation,
     claim_ref: ref,
     claim_oid: released.oid,
+    ...(heard.length > 0 ? { notice: withTakeInLines(pd, heard, "").trim() } : {}),
   }));
 }
 
@@ -7280,6 +7284,41 @@ export function takeInFromRemotes(projectDir: string, options: { unitOpen: boole
   return { taken, lines, refused };
 }
 
+// A lead's command on a team's claim (merged, send-back, turned-down,
+// sign-off, release) takes in first what the lead's other remotes hold, as the
+// lead's look does, so it acts on a take or result a team sent there. The
+// lines the take-in has for the person and not said in this chat yet come
+// back for withTakeInLines.
+function takeInFirst(pd: string): string[] {
+  try {
+    if (unitBuildOf(readStateFile(pd)) !== null) return [];
+  } catch {
+    return [];
+  }
+  if (!refreshHomeClaims(pd, { now: true }).fetched) return [];
+  const back = takeInFromRemotes(pd, { unitOpen: true });
+  const lines = [...back.lines, ...(back.refused ? [newsNotTakenIn("the teams")] : [])];
+  const chat = takeInChat(pd);
+  return chat === null ? lines : lines.filter((line) => !personLineHeard(pd, chat, line));
+}
+
+function takeInChat(pd: string): string | null {
+  try {
+    return resolveInvokingSessionId(pd) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// The command's own words (its notice or its refusal) after the take-in's
+// lines, which are then heard in this chat, so the look does not say them again.
+function withTakeInLines(pd: string, heard: readonly string[], words: string): string {
+  if (heard.length === 0) return words;
+  const chat = takeInChat(pd);
+  if (chat !== null) markPersonLinesHeard(pd, chat, heard);
+  return [...heard, words].join(" ");
+}
+
 // A team's claim commit written again as this person's own: its tree, its
 // message, its author (name, email, date), on `parent`.
 function leadsOwnClaimCommit(projectDir: string, oid: string, parent: string): string {
@@ -9083,8 +9122,9 @@ function sendBack(args: string[], projectDir?: string): void {
   const lead = leadsWord(pd, flags, "Sending a Unit back");
   const identity = activeIdentity(pd);
   const remote = repositoryRemote(pd);
+  const heard = takeInFirst(pd);
   const live = currentClaim(pd, remote, claimRef(identity.intentId8, unit));
-  if (live?.status !== "claimed" || (!live.payload.result && !live.payload.done)) fail(`${unit} has no result from a team to send back.`);
+  if (live?.status !== "claimed" || (!live.payload.result && !live.payload.done)) fail(withTakeInLines(pd, heard, `${unit} has no result from a team to send back.`));
   const { done: _done, verdicts: _verdicts, result: _result, ...rest } = live.payload;
   const payload: UnitClaimPayload = {
     ...rest,
@@ -9092,7 +9132,7 @@ function sendBack(args: string[], projectDir?: string): void {
     turned_down: { repo: "", words: failure.trim(), at: isoTimestamp(), from: "build-and-test" },
   };
   const sent = updateClaimRef(pd, remote, live.ref, createClaimCommit(pd, live.oid, payload), live.oid);
-  if (!sent.ok) fail(`${unit} could not be sent back: ${sent.refused ?? "its claim moved meanwhile"}. Try again.`);
+  if (!sent.ok) fail(withTakeInLines(pd, heard, `${unit} could not be sent back: ${sent.refused ?? "its claim moved meanwhile"}. Try again.`));
   invalidateLiveClaimPayloadCache(pd, unit);
   appendAuditEntry("UNIT_SENT_BACK", {
     Unit: unit, Owner: live.owner, "Attempt Generation": String(live.generation), ...(failure ? { Failure: failure } : {}),
@@ -9100,7 +9140,7 @@ function sendBack(args: string[], projectDir?: string): void {
   }, pd);
   console.log(JSON.stringify({
     unit,
-    notice: `Sent ${unit} back to ${builderOf(live)} with your words. It waits for them here; nothing of it is rebuilt here.`,
+    notice: withTakeInLines(pd, heard, `Sent ${unit} back to ${builderOf(live)} with your words. It waits for them here; nothing of it is rebuilt here.`),
   }));
 }
 
@@ -9115,17 +9155,18 @@ function turnedDown(args: string[], projectDir?: string): void {
   const said = leadsWord(pd, flags, "A turn-down").said;
   const identity = activeIdentity(pd);
   const remote = repositoryRemote(pd);
+  const heard = takeInFirst(pd);
   const live = currentClaim(pd, remote, claimRef(identity.intentId8, unit));
-  if (live?.status !== "claimed" || !live.payload.result) fail(`${unit} has no result from its team to turn down.`);
+  if (live?.status !== "claimed" || !live.payload.result) fail(withTakeInLines(pd, heard, `${unit} has no result from its team to turn down.`));
   const payload: UnitClaimPayload = {
     ...live.payload,
     predecessor_oid: live.oid,
     turned_down: { repo: flags.repo, words: words.trim(), at: isoTimestamp(), ...(said !== null ? { person_reply: said } : {}) },
   };
   const sent = updateClaimRef(pd, remote, live.ref, createClaimCommit(pd, live.oid, payload), live.oid);
-  if (!sent.ok) fail(`The note could not be put on ${unit}'s claim: ${sent.refused ?? "it moved meanwhile"}. Try again.`);
+  if (!sent.ok) fail(withTakeInLines(pd, heard, `The note could not be put on ${unit}'s claim: ${sent.refused ?? "it moved meanwhile"}. Try again.`));
   invalidateLiveClaimPayloadCache(pd, unit);
-  console.log(JSON.stringify({ unit, notice: `${builderOf(live)} hears that ${flags.repo} was turned down, with your words, at their next step.` }));
+  console.log(JSON.stringify({ unit, notice: withTakeInLines(pd, heard, `${builderOf(live)} hears that ${flags.repo} was turned down, with your words, at their next step.`) }));
 }
 
 // The lead says a repo merged the Unit where the merge check cannot see it (a
@@ -9146,10 +9187,11 @@ function saidMerged(args: string[], projectDir?: string): void {
   const words = leadsWord(pd, flags, "That it merged").said ?? given;
   const identity = activeIdentity(pd);
   const remote = repositoryRemote(pd);
+  const heard = takeInFirst(pd);
   const live = currentClaim(pd, remote, claimRef(identity.intentId8, unit));
-  if (live?.status !== "claimed" || !live.payload.result) fail(`${unit} has no result from its team to count merged.`);
+  if (live?.status !== "claimed" || !live.payload.result) fail(withTakeInLines(pd, heard, `${unit} has no result from its team to count merged.`));
   if (!live.payload.result.repos.some((repo) => repo.repo === flags.repo)) {
-    fail(`${unit} changed ${joinNames(live.payload.result.repos.map((repo) => repo.repo))}, not ${flags.repo}.`);
+    fail(withTakeInLines(pd, heard, `${unit} changed ${joinNames(live.payload.result.repos.map((repo) => repo.repo))}, not ${flags.repo}.`));
   }
   const payload: UnitClaimPayload = {
     ...live.payload,
@@ -9171,7 +9213,7 @@ function saidMerged(args: string[], projectDir?: string): void {
     : notMerged.length > 0
       ? `${said} ${joinNames(notMerged)} ${notMerged.length === 1 ? "has" : "have"} not merged it yet, so nothing is recorded here.`
       : said;
-  console.log(JSON.stringify({ unit, notice }));
+  console.log(JSON.stringify({ unit, notice: withTakeInLines(pd, heard, notice) }));
 }
 
 // The lead's repo list at a commit of the lead's workspace, as addresses by
@@ -9453,8 +9495,9 @@ function signOff(args: string[], projectDir?: string): void {
   const given = personWordsOf(pd, flags);
   const identity = activeIdentity(pd);
   const remote = repositoryRemote(pd);
+  const heard = takeInFirst(pd);
   const live = currentClaim(pd, remote, claimRef(identity.intentId8, unit));
-  if (live?.status !== "claimed" || !live.payload.result) fail(`${unit} has no result from its team to sign off.`);
+  if (live?.status !== "claimed" || !live.payload.result) fail(withTakeInLines(pd, heard, `${unit} has no result from its team to sign off.`));
   const lead = leadsWord(pd, flags, "The sign-off", "unit-signoff");
   const words = lead.said ?? given;
   const payload: UnitClaimPayload = { ...live.payload, predecessor_oid: live.oid, signoff: { words, at: isoTimestamp() } };
@@ -9467,9 +9510,9 @@ function signOff(args: string[], projectDir?: string): void {
   const merged = (live.payload.verdicts ?? []).length > 0 && live.payload.verdicts!.every((verdict) => verdict.merged);
   console.log(JSON.stringify({
     unit,
-    notice: merged
+    notice: withTakeInLines(pd, heard, merged
       ? `Signed off ${unit}; every repo it changed has merged, so it is done.`
-      : `Signed off ${unit}; it counts as done once every repo it changed has merged.`,
+      : `Signed off ${unit}; it counts as done once every repo it changed has merged.`),
   }));
 }
 
