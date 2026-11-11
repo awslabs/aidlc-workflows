@@ -5,14 +5,16 @@
 // alpha. The checkout no longer builds a finished Unit, and the line says so,
 // with the Units it does build; it never says alpha is not one of the work's
 // Units. A Unit a team has taken is named with the team, as the board names
-// it. A name the plan does not have keeps its line, and a Unit this checkout
-// builds is reopened as before.
+// it. With no Unit left to build here, the lead is told the same, and is not
+// offered to reopen the stage for every Unit. A name the plan does not have
+// keeps its line, a Unit this checkout builds is reopened as before, and a
+// lead whose work no team has taken a Unit from goes on as before.
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { artifactFilename, loadStageGraphAll } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { artifactFilename, loadStageGraphAll, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { AIDLC_SRC, createTestProject, seedAidlcMemory, seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
 import {
   AUTOMATIC_GIT_MAINTENANCE_OFF, ORCH, STATE, UNIT, cleanupTempDirs, clone, git, nextDirective, runMergeTool, tempDirs,
@@ -137,8 +139,28 @@ function leadAfterATeamClaimed(): string {
   return lead;
 }
 
-const jump = (lead: string, unit: string) =>
-  JSON.parse(runMergeTool(ORCH, ["next", "--stage", FD, "--unit", unit], lead).stdout) as { kind: string; message: string };
+// The lead built alpha and nothing else in their own checkout; then a team
+// claims gamma (unless `claimed` is false) and the lead's checkout fetches.
+function leadWithNothingLeft(claimed = true): string {
+  const { lead, remote } = leadsCheckout();
+  nextDirective(lead);
+  nextDirective(lead);
+  expect(unitVerb(lead, "start", "alpha").status).toBe(0);
+  finish(lead, "alpha");
+  nextDirective(lead);
+  git(lead, ["add", "-A"]);
+  git(lead, ["commit", "-m", "lead's work"]);
+  git(lead, ["push", "origin", "main"]);
+  if (claimed) {
+    const team = clone(remote, "team");
+    expect(runMergeTool(UNIT, ["claim", "gamma", "--team", "team-g"], team).status).toBe(0);
+    git(lead, ["fetch", "origin"]);
+  }
+  return lead;
+}
+
+const jump = (lead: string, unit: string, stage = FD) =>
+  JSON.parse(runMergeTool(ORCH, ["next", "--stage", stage, "--unit", unit], lead).stdout) as { kind: string; message: string };
 
 describe("the lead's own finished Unit after a team claimed another", () => {
   test("asked to redo alpha, the line says alpha is finished and names what this checkout builds", () => {
@@ -164,6 +186,32 @@ describe("the lead's own finished Unit after a team claimed another", () => {
       message: "gamma is taken by team-g and built in their checkout; this checkout builds beta. " +
         "Name a Unit this checkout builds with `/aidlc --stage functional-design --unit <name>`.",
     });
+  });
+
+  test("with no Unit left to build here, asked to redo alpha: told it is finished, never offered every Unit", () => {
+    const lead = leadWithNothingLeft();
+    const jumps = () => readAuditShardEvents(lead).filter((row) => row.event === "STAGE_JUMPED").length;
+    const before = jumps();
+    expect(jump(lead, "alpha")).toEqual({
+      kind: "error",
+      message: "alpha is finished, so it is not redone here; this checkout builds no Unit now.",
+    });
+    expect(jumps()).toBe(before);
+  });
+
+  test("with no Unit left to build here, a stage done once for all Units keeps its question", () => {
+    const said = jump(leadWithNothingLeft(), "alpha", "build-and-test");
+    expect(said.kind, JSON.stringify(said)).toBe("print");
+    expect(said.message).toContain(
+      "Build and Test is done once for all units, so it cannot be redone for one unit. Nothing changed. " +
+        "Do you want me to redo it for every unit?",
+    );
+  });
+
+  test("a lead whose work no team has taken a Unit from goes on to redo alpha as before", () => {
+    const said = jump(leadWithNothingLeft(false), "alpha");
+    expect(said.kind, JSON.stringify(said)).toBe("print");
+    expect(said.message).toContain("aidlc-jump.ts reopen --target functional-design");
   });
 
   test("a name the plan does not have keeps its line, and a Unit this checkout builds is reopened", () => {

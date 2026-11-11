@@ -41605,7 +41605,7 @@ export function sayOnceNoteLine(
  * including an older one still installed in a project, reads the top-level key
  * and rewraps it for its own host. So the line carries both, with the same text.
  * `firstStepNote` goes only to an adapter that asked the human-turn hook for
- * it, whose host takes no context line from that hook (opencode).
+ * it, to say its own way (opencode, Kiro CLI's V2 engine).
  */
 export function hookContextLine(
   event: "SessionStart" | "UserPromptSubmit" | "PostToolUse",

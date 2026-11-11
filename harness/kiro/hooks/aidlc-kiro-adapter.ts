@@ -540,6 +540,21 @@ function hookContextText(stdout: string): string {
   return parts.length > 0 ? `${sanitizeHarnessPlainText(parts.join("\n"))}\n\n` : "";
 }
 
+/**
+ * The human-turn hook's first-step note for a long `/aidlc` line it kept whole
+ * (its `firstStepNote` key, printed only because this adapter asks), or "".
+ */
+function hookFirstStepNote(stdout: string): string {
+  for (const line of stdout.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const note = (JSON.parse(line) as { firstStepNote?: unknown }).firstStepNote;
+      if (typeof note === "string" && note.trim()) return sanitizeHarnessPlainText(note.trim());
+    } catch { /* a line that is not hook JSON carries no note */ }
+  }
+  return "";
+}
+
 const PRE_DISPATCH_FLAGS = new Set([
   "--config",
   "--stage",
@@ -624,6 +639,7 @@ if (target === "verb-intercept") {
   // turn-scoped, no time window, no wedge. Best-effort; failure fails open.
   let turn = 0;
   let preface = "";
+  let firstStepNote = "";
   try {
     const cwd = projectDir;
     mkdirSync(join(cwd, "aidlc"), { recursive: true });
@@ -670,10 +686,27 @@ if (target === "verb-intercept") {
       }),
       // This seam runs a command the person typed and hands its output over below.
       relays_terminal_output: true,
+      // A long line it keeps whole: the hook says whether the agent's first
+      // step is a bare `next`, which reads that copy (firstStepNote).
+      wants_first_step_note: true,
     });
     preface = hookContextText(recorded.stdout);
+    firstStepNote = hookFirstStepNote(recorded.stdout);
   } catch { /* presence best-effort - record-human-turn never blocks the turn */ }
   if (cmd === null) {
+    // AI-DLC kept the whole line, so the agent runs `next` with nothing after
+    // it instead of typing it all again as one command, which splits the
+    // person's quote marks and line breaks away and can pass what a Windows
+    // command line holds. No latch: the bare call is the right one, and a latch
+    // left with this turn's number (a turn counter that could not be written)
+    // would refuse it.
+    if (firstStepNote !== "") {
+      try {
+        rmSync(join(projectDir, "aidlc", ".aidlc-forwarding-latch"), { force: true });
+      } catch { /* best-effort, as the latch's own write */ }
+      process.stdout.write(`${preface}${firstStepNote}\n`);
+      return 0;
+    }
     // Pure, explicit engine reads do not need the model to reconstruct the
     // first tool call. Dispatch them here with the exact recovered argv and
     // inject a small, non-steering directive. Steering must arrive complete
