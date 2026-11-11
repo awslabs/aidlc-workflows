@@ -2635,7 +2635,11 @@ function latestPlanApproval(body: string): {
   answer: string | null;
   answerLine: number | null;
   fingerprint: string | null;
+  fingerprintLine: number | null;
   plannedSource: string | null;
+  plannedSourceLine: number | null;
+  malformedFingerprintLine: number | null;
+  malformedPlannedSourceLine: number | null;
 } {
   let inPlanApproval = false;
   let awaitingNumberedQuestionText = false;
@@ -2643,7 +2647,13 @@ function latestPlanApproval(body: string): {
   let latestAnswer: string | null = null;
   let latestAnswerLine: number | null = null;
   let latestFingerprint: string | null = null;
+  let latestFingerprintLine: number | null = null;
   let latestPlannedSource: string | null = null;
+  let latestPlannedSourceLine: number | null = null;
+  // A tag line in the section whose value is not one the tag takes (a pasted
+  // placeholder): never read, only where a writer puts the real value.
+  let malformedFingerprintLine: number | null = null;
+  let malformedPlannedSourceLine: number | null = null;
   // The heading depth that opened the section. A section runs until a heading
   // at the same depth or shallower, which is how a Markdown section ends;
   // a deeper heading is a subsection of it. Closing on ANY heading let a
@@ -2667,7 +2677,11 @@ function latestPlanApproval(body: string): {
     latestAnswer = null;
     latestAnswerLine = null;
     latestFingerprint = null;
+    latestFingerprintLine = null;
     latestPlannedSource = null;
+    latestPlannedSourceLine = null;
+    malformedFingerprintLine = null;
+    malformedPlannedSourceLine = null;
   };
 
   const visible = visibleMarkdownLines(body);
@@ -2715,10 +2729,16 @@ function latestPlanApproval(body: string): {
     const fingerprint = line.match(FINGERPRINT_TAG_RE);
     if (fingerprint && !(inSubsection && latestFingerprint !== null)) {
       latestFingerprint = fingerprint[1] ?? null;
+      latestFingerprintLine = index;
+    } else if (!fingerprint && malformedFingerprintLine === null && /^\[Approval Fingerprint\]:/.test(line)) {
+      malformedFingerprintLine = index;
     }
     const plannedSource = line.match(PLANNED_SOURCE_TAG_RE);
     if (plannedSource && !(inSubsection && latestPlannedSource !== null)) {
       latestPlannedSource = plannedSource[1] ?? null;
+      latestPlannedSourceLine = index;
+    } else if (!plannedSource && malformedPlannedSourceLine === null && /^\[Planned Source\]:/.test(line)) {
+      malformedPlannedSourceLine = index;
     }
   }
   return {
@@ -2726,7 +2746,11 @@ function latestPlanApproval(body: string): {
     answer: latestAnswer,
     answerLine: latestAnswerLine,
     fingerprint: latestFingerprint,
+    fingerprintLine: latestFingerprintLine,
     plannedSource: latestPlannedSource,
+    plannedSourceLine: latestPlannedSourceLine,
+    malformedFingerprintLine,
+    malformedPlannedSourceLine,
   };
 }
 
@@ -2745,6 +2769,48 @@ export function questionsFileApprovalFingerprint(body: string): string | null {
 
 export function questionsFilePlannedSource(body: string): string | null {
   return latestPlanApproval(body).plannedSource;
+}
+
+/** The latest Plan Approval section's `[Answer]:` value as the readers above take it, or null when it has none. */
+export function questionsFilePlanApprovalAnswer(body: string): string | null {
+  return latestPlanApproval(body).answer;
+}
+
+/**
+ * The questions file with the latest Plan Approval section's two tags set to
+ * these values, for a writer that cannot run the fingerprint command: each on
+ * the line the readers above take it from, else on the section's tag line whose
+ * value they do not take (a pasted placeholder), else on a line of its own
+ * before that section's `[Answer]:`. Throws when the section has no `[Answer]:`
+ * or the result does not read back as these values.
+ */
+export function withPlanApprovalTags(body: string, fingerprint: string, plannedSource: string): string {
+  const latest = latestPlanApproval(body);
+  if (!latest.found || latest.answerLine === null) {
+    throw new Error("code-generation-questions.md has no Plan Approval section with an [Answer]: line to tag");
+  }
+  // The lines as the reader counts them (a lone CR ends a line too), each
+  // kept with its own line end; an added tag takes the answer line's.
+  const lines = body.split(/\r\n|\r|\n/);
+  const ends = body.match(/\r\n|\r|\n/g) ?? [];
+  const eol = ends[latest.answerLine] ?? ends[latest.answerLine - 1] ?? "\n";
+  const missing: string[] = [];
+  const fingerprintTag = `[Approval Fingerprint]: ${fingerprint}`;
+  const plannedSourceTag = `[Planned Source]: ${plannedSource}`;
+  const fingerprintLine = latest.fingerprintLine ?? latest.malformedFingerprintLine;
+  const plannedSourceLine = latest.plannedSourceLine ?? latest.malformedPlannedSourceLine;
+  if (fingerprintLine === null) missing.push(fingerprintTag);
+  else lines[fingerprintLine] = fingerprintTag;
+  if (plannedSourceLine === null) missing.push(plannedSourceTag);
+  else lines[plannedSourceLine] = plannedSourceTag;
+  lines.splice(latest.answerLine, 0, ...missing);
+  ends.splice(latest.answerLine, 0, ...missing.map(() => eol));
+  const written = lines.map((line, index) => line + (ends[index] ?? "")).join("");
+  const read = latestPlanApproval(written);
+  if (read.fingerprint !== fingerprint || read.plannedSource !== plannedSource) {
+    throw new Error("the Plan Approval tags written to code-generation-questions.md do not read back");
+  }
+  return written;
 }
 
 /**

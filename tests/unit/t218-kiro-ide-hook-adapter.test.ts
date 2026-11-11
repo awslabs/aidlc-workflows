@@ -63,9 +63,11 @@ import {
   approvalFingerprint,
   codeGenerationRecordDir,
   evaluateCodeGenerationApproval,
+  parseTestingContract,
   renderTestingContract,
   resolveCodeGenerationAuthority,
   resolveTestingPosture,
+  withPlanApprovalTags,
 } from "../../core/tools/aidlc-testing-posture.ts";
 import { readConductorSurface } from "../harness/conductor-skill.ts";
 import {
@@ -4073,6 +4075,198 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  test("legacy mediation replaces an out-of-date Testing Contract instead of adding a second one", () => {
+    const dir = scratchProject(true);
+    try {
+      initGitWorkspace(dir);
+      seedCodeGenerationDirective(dir);
+      seedLegacyDirectiveChoices(dir);
+      expect(runIde(dir, "session-start", null).code).toBe(0);
+      expect(
+        runIde(dir, "plan-approval-guard", JSON.stringify({ toolName: "fs_write", toolArgs: {} })).code,
+      ).toBe(0);
+      seedStageLevelPlanApproval(dir);
+      const contract = resolveTestingPosture(dir);
+      const plan = join(codeGenerationRecordDir(dir, null), "code-generation-plan.md");
+      const stale = renderTestingContract({ ...contract, contract_sha256: `sha256:${"0".repeat(64)}` });
+      writeFileSync(plan, `# Plan\n\n## Steps\n\n- [ ] Implement\n\n${stale}\n## Notes\n\nKeep this note.\n`, "utf-8");
+      const r = runIde(dir, "audit-and-sensors", ctx("fs_write", `Created the ${relative(dir, plan)} file.`));
+      expect(r.code, r.stderr).toBe(0);
+      const written = readFileSync(plan, "utf-8");
+      expect(written.match(/^## Testing Contract$/gm)?.length).toBe(1);
+      expect(written.match(/^```json$/gm)?.length).toBe(1);
+      expect(written).not.toContain("0".repeat(64));
+      expect(parseTestingContract(written)?.contract_sha256).toBe(contract.contract_sha256);
+      expect(written).toContain("- [ ] Implement");
+      expect(written).toContain("## Notes\n\nKeep this note.");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("legacy mediation reads and tags the latest Plan Approval section of a plan presented again", () => {
+    const dir = scratchProject(true);
+    try {
+      initGitWorkspace(dir, { applicationSourceOnly: true });
+      seedCodeGenerationDirective(dir);
+      const choices = seedLegacyDirectiveChoices(dir);
+      expect(runIde(dir, "session-start", null).code).toBe(0);
+      expect(
+        runIde(dir, "plan-approval-guard", JSON.stringify({ toolName: "fs_write", toolArgs: {} })).code,
+      ).toBe(0);
+      const questions = seedStageLevelPlanApproval(dir, { bareSection: true });
+      // The first presentation, answered, then the plan presented again.
+      const earlier = [
+        "## Plan Approval",
+        "",
+        `[Approval Fingerprint]: sha256:v3:${"0".repeat(64)}`,
+        "[Planned Source]: unbindable",
+        "- Approve Plan",
+        "- Request Changes",
+        "[Answer]: Request Changes",
+        "",
+      ].join("\n");
+      writeFileSync(questions, `${earlier}\n${readFileSync(questions, "utf-8")}`, "utf-8");
+
+      const decision = runIde(dir, "audit-and-sensors", ctx("fs_write", `Created the ${relative(dir, questions)} file.`));
+      expect(decision.code, decision.stderr).toBe(0);
+      expect(readAudit(dir)).toContain("DECISION_RECORDED");
+      const tagged = readFileSync(questions, "utf-8");
+      expect(tagged.startsWith(earlier)).toBe(true);
+      const latest = tagged.slice(earlier.length);
+      expect(latest).toMatch(/^\[Approval Fingerprint\]: sha256:v3:[0-9a-f]{64}$/m);
+      expect(latest).not.toContain("0".repeat(64));
+      expect(latest).toMatch(/^\[Planned Source\]: /m);
+
+      expect(runIde(dir, "record-human-turn", JSON.stringify({ prompt: choices.approve })).code).toBe(0);
+      const answered = `${earlier}${latest.replace("[Answer]:", "[Answer]: Approve Plan")}`;
+      writeFileSync(questions, answered, "utf-8");
+      const answer = runIde(dir, "audit-and-sensors", ctx("fs_write", `Created the ${relative(dir, questions)} file.`));
+      expect(answer.code, answer.stderr).toBe(0);
+      expect(readFileSync(questions, "utf-8")).toBe(answered);
+      expect(evaluateCodeGenerationApproval(dir, { unit: null }).ok).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("legacy mediation says so when the questions file has no Plan Approval section to read", () => {
+    const dir = scratchProject(true);
+    try {
+      initGitWorkspace(dir, { applicationSourceOnly: true });
+      seedCodeGenerationDirective(dir);
+      seedLegacyDirectiveChoices(dir);
+      expect(runIde(dir, "session-start", null).code).toBe(0);
+      expect(
+        runIde(dir, "plan-approval-guard", JSON.stringify({ toolName: "fs_write", toolArgs: {} })).code,
+      ).toBe(0);
+      const questions = seedStageLevelPlanApproval(dir, { bareSection: true });
+      writeFileSync(
+        questions,
+        "## Q1: Approve this exact Code Generation plan?\n\n- Approve Plan\n- Request Changes\n[Answer]:\n",
+        "utf-8",
+      );
+      const r = runIde(dir, "audit-and-sensors", ctx("fs_write", `Created the ${relative(dir, questions)} file.`));
+      expect(r.code).toBe(2);
+      expect(r.stderr).toContain("code-generation-questions.md has no Plan Approval [Answer]: line AI-DLC can read");
+      expect(r.stderr).toContain("in a `## Plan Approval` section (the last one, if there are several)");
+      expect(readAudit(dir)).not.toContain("DECISION_RECORDED");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("legacy mediation writes an out-of-date Testing Contract at the plan question, as the engine does", () => {
+    const dir = scratchProject(true);
+    try {
+      initGitWorkspace(dir, { applicationSourceOnly: true });
+      seedCodeGenerationDirective(dir);
+      seedLegacyDirectiveChoices(dir);
+      expect(runIde(dir, "session-start", null).code).toBe(0);
+      expect(
+        runIde(dir, "plan-approval-guard", JSON.stringify({ toolName: "fs_write", toolArgs: {} })).code,
+      ).toBe(0);
+      const questions = seedStageLevelPlanApproval(dir, { bareSection: true });
+      const contract = resolveTestingPosture(dir);
+      const plan = join(codeGenerationRecordDir(dir, null), "code-generation-plan.md");
+      // A plan whose block went out of date after it was written.
+      const stale = renderTestingContract({ ...contract, contract_sha256: `sha256:${"0".repeat(64)}` });
+      writeFileSync(plan, `# Plan\n\n- [ ] Implement\n\n${stale}`, "utf-8");
+      const r = runIde(dir, "audit-and-sensors", ctx("fs_write", `Created the ${relative(dir, questions)} file.`));
+      expect(r.code, r.stderr).toBe(0);
+      expect(readAudit(dir)).toContain("DECISION_RECORDED");
+      const written = readFileSync(plan, "utf-8");
+      expect(written.match(/^```json$/gm)?.length).toBe(1);
+      expect(parseTestingContract(written)?.contract_sha256).toBe(contract.contract_sha256);
+      expect(written).toContain("- [ ] Implement");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("legacy mediation leaves a plan whose Testing Contract section it cannot write, and stops on the contract", () => {
+    const dir = scratchProject(true);
+    try {
+      initGitWorkspace(dir, { applicationSourceOnly: true });
+      seedCodeGenerationDirective(dir);
+      seedLegacyDirectiveChoices(dir);
+      expect(runIde(dir, "session-start", null).code).toBe(0);
+      expect(
+        runIde(dir, "plan-approval-guard", JSON.stringify({ toolName: "fs_write", toolArgs: {} })).code,
+      ).toBe(0);
+      const questions = seedStageLevelPlanApproval(dir, { bareSection: true });
+      const contract = resolveTestingPosture(dir);
+      const plan = join(codeGenerationRecordDir(dir, null), "code-generation-plan.md");
+      const stale = renderTestingContract({ ...contract, contract_sha256: `sha256:${"0".repeat(64)}` });
+      // A plan step under the heading: the engine's writer never writes over it.
+      const text = `# Plan\n\n${stale}\n- [ ] Write the failing tests first\n`;
+      writeFileSync(plan, text, "utf-8");
+      expect(runIde(dir, "audit-and-sensors", ctx("fs_write", `Created the ${relative(dir, plan)} file.`)).code).toBe(0);
+      expect(readFileSync(plan, "utf-8")).toBe(text);
+      const r = runIde(dir, "audit-and-sensors", ctx("fs_write", `Created the ${relative(dir, questions)} file.`));
+      expect(r.code).toBe(2);
+      expect(r.stderr).toContain("requires the current Testing Contract in code-generation-plan.md");
+      expect(readFileSync(plan, "utf-8")).toBe(text);
+      expect(readAudit(dir)).not.toContain("DECISION_RECORDED");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("the Plan Approval tag writer puts the values on the section's placeholder tag lines", () => {
+    const fingerprint = `sha256:v3:${"c".repeat(64)}`;
+    const body = [
+      "## Plan Approval",
+      "",
+      "[Approval Fingerprint]: sha256:v3:<hex>",
+      "[Planned Source]: <hex or the word unbindable>",
+      "",
+      "- Approve Plan",
+      "- Request Changes",
+      "",
+      "[Answer]:",
+      "",
+    ].join("\n");
+    const tagged = withPlanApprovalTags(body, fingerprint, "unbindable");
+    expect(tagged).toBe(
+      body
+        .replace("[Approval Fingerprint]: sha256:v3:<hex>", `[Approval Fingerprint]: ${fingerprint}`)
+        .replace("[Planned Source]: <hex or the word unbindable>", "[Planned Source]: unbindable"),
+    );
+  });
+
+  test("the Plan Approval tag writer counts a lone CR as a line end and keeps each line's own end", () => {
+    const fingerprint = `sha256:v3:${"a".repeat(64)}`;
+    const body = "# Questions\rNote\r\n\r\n## Plan Approval\n\n- Approve Plan\n- Request Changes\n[Answer]:\n";
+    const tagged = withPlanApprovalTags(body, fingerprint, "unbindable");
+    expect(tagged).toBe(
+      "# Questions\rNote\r\n\r\n## Plan Approval\n\n- Approve Plan\n- Request Changes\n" +
+        `[Approval Fingerprint]: ${fingerprint}\n[Planned Source]: unbindable\n[Answer]:\n`,
+    );
+    const retagged = withPlanApprovalTags(tagged, `sha256:v3:${"b".repeat(64)}`, "unbindable");
+    expect(retagged).toBe(tagged.replace("a".repeat(64), "b".repeat(64)));
   });
 
   test("legacy same-host chats cannot consume or overwrite another challenge", () => {

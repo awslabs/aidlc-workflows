@@ -177,9 +177,11 @@ import {
   evaluateCodeGenerationApproval,
   legacyPlanApprovalGuardState,
   parseTestingContract,
-  renderTestingContract,
+  planWithTestingContract,
+  questionsFilePlanApprovalAnswer,
   resolveCodeGenerationAuthority,
   resolveTestingPosture,
+  withPlanApprovalTags,
 } from "../tools/aidlc-testing-posture.ts";
 import { normalizeRetiredGuardPolicyField } from "../tools/aidlc-guard-switch.ts";
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
@@ -351,16 +353,6 @@ function orchestrateStageOutput(result: string, stage: string): string {
   const rest = lines.slice(start + 1);
   const end = rest.findIndex((line) => /^## \S/.test(line));
   return (end < 0 ? rest : rest.slice(0, end)).join("\n").trim();
-}
-
-function upsertTestingContract(plan: string, rendered: string): string {
-  const section = /(^|\n)## Testing Contract[^\n]*\n[\s\S]*?(?=\n## |\s*$)/m;
-  if (section.test(plan)) {
-    return plan.replace(section, (_match, prefix: string) =>
-      `${prefix}${rendered.trimEnd()}\n`
-    );
-  }
-  return `${plan.trimEnd()}\n\n${rendered}`;
 }
 
 function legacyToolCommand(
@@ -559,14 +551,6 @@ function legacyRecoveryBlockReason(
     : `Legacy Plan Approval recovery failed closed: ${recovery.detail}`;
 }
 
-function latestPlanApprovalAnswer(questions: string): string | null {
-  const answers = Array.from(
-    questions.matchAll(/^\[Answer\]:[ \t]*(.*?)\s*$/gm),
-    (match) => match[1].trim(),
-  );
-  return answers.length === 0 ? null : answers[answers.length - 1];
-}
-
 // The record files the shared plan-approval guard admits in every Plan
 // Approval state, by the identity it uses: the Code Generation stage's
 // learnings diary, the composer's proposal, a file in one of the engine text
@@ -628,13 +612,13 @@ function processLegacyPlanApprovalWrite(
   if (normalizedPath === planPath) {
     const contract = resolveTestingPosture(projectDir);
     const plan = readFileSync(planPath, "utf-8");
-    if (parseTestingContract(plan)?.contract_sha256 !== contract.contract_sha256) {
-      writeFileSync(
-        planPath,
-        upsertTestingContract(plan, renderTestingContract(contract)),
-        "utf-8",
-      );
-    }
+    // The engine's own writer replaces the whole section. A plan it cannot
+    // write the block into is left as it is; the blank Plan Approval write
+    // that follows tries again before it stops on the contract.
+    const written = parseTestingContract(plan)?.contract_sha256 !== contract.contract_sha256
+      ? planWithTestingContract(plan, contract)
+      : null;
+    if (written !== null) writeFileSync(planPath, written, "utf-8");
     clearPlanApprovalLegacyWindow(projectDir, sessionId);
     return null;
   }
@@ -652,13 +636,38 @@ function processLegacyPlanApprovalWrite(
     return null;
   }
 
-  let questions = readFileSync(questionsPath, "utf-8");
-  const answer = latestPlanApprovalAnswer(questions);
+  // Read and written in the latest Plan Approval section, on the lines the
+  // engine's decision and answer tools read.
+  const questions = readFileSync(questionsPath, "utf-8");
+  const answer = questionsFilePlanApprovalAnswer(questions);
+  // An agent writes this file only for the plan question, so one the engine
+  // cannot read it from is said, with the way to write it.
+  if (answer === null) {
+    throw new LegacyPlanApprovalMediationError(
+      "code-generation-questions.md has no Plan Approval [Answer]: line AI-DLC can read: put the plan question in a " +
+        "`## Plan Approval` section (the last one, if there are several), with `[Answer]:` at the start of its own line in " +
+        "that section, then save the file again.",
+    );
+  }
   const targetArgs =
     state.target.unit === null
       ? ["--stage-level"]
       : ["--unit", state.target.unit];
   if (answer === "") {
+    // What the engine does before its own plan question: the contract block is
+    // engine output, written into the plan when it is missing, broken or out of
+    // date (codeGenerationPlanReadiness). Loaded here only, and typed by its one
+    // function, so the plan question's module graph stays out of other hooks.
+    // A preparation that fails leaves the plan as it is: the check below then
+    // stops on the contract.
+    try {
+      const ask = require("../tools/aidlc-plan-approval-ask.ts") as {
+        codeGenerationPlanReadiness(projectDir: string, unit: string | null, contract: "write"): unknown;
+      };
+      ask.codeGenerationPlanReadiness(projectDir, state.target.unit, "write");
+    } catch {
+      // The check below.
+    }
     const plan = readFileSync(planPath, "utf-8");
     const instructions = readFileSync(instructionsPath, "utf-8");
     const contract = resolveTestingPosture(projectDir);
@@ -673,15 +682,6 @@ function processLegacyPlanApprovalWrite(
       contract.contract_sha256,
       authority,
     );
-    const withFingerprint = /^\[Approval Fingerprint\]:.*$/m.test(questions)
-      ? questions.replace(
-          /^\[Approval Fingerprint\]:.*$/m,
-          `[Approval Fingerprint]: ${fingerprint}`,
-        )
-      : questions.replace(
-          /^(\[Answer\]:)/m,
-          `[Approval Fingerprint]: ${fingerprint}\n$1`,
-        );
     // Core refuses a decision whose Plan Approval section lacks the planned
     // source. The legacy channel cannot run the fingerprint command itself, so
     // the adapter records the live workspace source here, falling back to the
@@ -694,16 +694,17 @@ function processLegacyPlanApprovalWrite(
       writeWorkspaceSourceSnapshot(projectDir, "code-generation", plannedState);
     }
     const plannedSource = plannedState?.fingerprint ?? UNBINDABLE_FINGERPRINT;
-    const withPlannedSource = /^\[Planned Source\]:.*$/m.test(withFingerprint)
-      ? withFingerprint.replace(
-          /^\[Planned Source\]:.*$/m,
-          `[Planned Source]: ${plannedSource}`,
-        )
-      : withFingerprint.replace(
-          /^(\[Answer\]:)/m,
-          `[Planned Source]: ${plannedSource}\n$1`,
-        );
-    writeFileSync(questionsPath, withPlannedSource, "utf-8");
+    let tagged: string;
+    try {
+      tagged = withPlanApprovalTags(questions, fingerprint, plannedSource);
+    } catch (error) {
+      throw new LegacyPlanApprovalMediationError(
+        `legacy Plan Approval mediation could not record the approval tags: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+    writeFileSync(questionsPath, tagged, "utf-8");
     const decision = runLegacyPlanTool(projectDir, "aidlc-log.ts", [
       "decision",
       "--stage",
@@ -732,17 +733,10 @@ function processLegacyPlanApprovalWrite(
     clearPlanApprovalLegacyWindow(projectDir, sessionId);
     return null;
   }
-  if (
-    answer === "Approve Plan" ||
-    answer === "Request Changes"
-  ) {
-    questions = questions.replace(
-      /^\[Answer\]:[ \t]*.*$/m,
-      `[Answer]: ${answer}`,
-    );
-    writeFileSync(questionsPath, questions, "utf-8");
-  }
-  if (answer !== "Approve Plan" && answer !== "Request Changes") return null;
+  // Exactly one of the two choices: the line can hold the person's own words,
+  // which are never read for what they mean.
+  const choice = answer === "Approve Plan" || answer === "Request Changes" ? answer : null;
+  if (choice === null) return null;
   const recorded = runLegacyPlanTool(projectDir, "aidlc-log.ts", [
     "answer",
     "--stage",
@@ -754,7 +748,7 @@ function processLegacyPlanApprovalWrite(
     "--questions-file",
     questionsPath,
     "--details",
-    answer,
+    choice,
     ...targetArgs,
   ]);
   if (recorded.code !== 0) {

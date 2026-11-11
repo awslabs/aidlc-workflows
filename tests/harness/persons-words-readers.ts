@@ -1103,6 +1103,7 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${POSTURE}#planApprovalQuestionEvidence`]: { use: "decides", why: "O4: the plan file's [Answer]: label, written by the agent itself, checked against its own --details (blank before the question); on the engine's plan question the recorder writes the line and never runs this" },
   [`${POSTURE}#planApprovalAnswerLabel`]: { use: "keeps", why: "cuts the recorder's option letter and quotes off that label", from: [`${POSTURE}#planApprovalQuestionEvidence`] },
   [`${POSTURE}#questionsFileHasPendingPlanApproval`]: { use: "decides", why: "the presence shape: whether the plan file's [Answer]: line is still blank (or underscores)" },
+  [`${POSTURE}#questionsFilePlanApprovalAnswer`]: { use: "keeps", why: "hands the latest Plan Approval section's [Answer]: line to the Kiro IDE adapter's argument-less mediation (processLegacyPlanApprovalWrite, on ALLOWED_UNREACHED)" },
   [`${ASK}#onlyTheirAnswerDiffers`]: { use: "keeps", why: "the presence shape: the person's answer in the plan file stays while the same question stands (the engine never erases what they wrote)" },
   [`${ASK}#requestPlanApprovalReviewNow`]: { use: "keeps", why: "the presence shape: a recorded answer on the plan file's line is cleared when the person asks to review the plan again" },
   [`${ASK}#answerLineAsFound`]: { use: "decides", why: "the engine's own line: the plan file's line is left out when it is exactly a mark the engine wrote there (the recorded answer's mark, either mark while the person edits, \"Plan approval off\"), so the engine's line is never kept as theirs; nothing else of theirs is read" },
@@ -1185,6 +1186,7 @@ export const ALLOWED_UNREACHED: Record<string, Allowed> = {
   "harness/copilot/hooks/aidlc-copilot-adapter.ts#run": { use: "decides", why: "host-text identity: Copilot's subagent briefs by the digest of a brief AI-DLC recorded (P4: briefingDigest, checkBriefing)" },
   "harness/kiro/hooks/aidlc-kiro-adapter.ts#run": { use: "decides", why: "host-text identity: the Crew header and the Kiro CLI templates on the verb-intercept path (P1, P2)" },
   "harness/kiro-ide/hooks/aidlc-kiro-adapter.ts#messageOrigin": { use: "decides", why: "host-text identity: the Kiro workflow brief template (P1)" },
+  "harness/kiro-ide/hooks/aidlc-kiro-adapter.ts#processLegacyPlanApprovalWrite": { use: "decides", why: "the presence shape and an exact match, for a write that carries no tool arguments: no Plan Approval [Answer]: line is refused with how to write one, an empty one records the plan question, exactly Approve Plan or Request Changes is recorded as that choice, anything else is left; read through the dist copy of questionsFilePlanApprovalAnswer, which the scan does not follow" },
   [`${LIB}#kiroTurnOrigin`]: { use: "decides", why: "host-text identity: the Kiro templates (P1)" },
   [`${LIB}#kiroChatRecordOrigin`]: { use: "decides", why: "host-text identity: the Kiro chat record's mark for this prompt (P1)" },
   // The `[Answer]:` line read inline from a questions file's text, the person's when they answer in the file.
