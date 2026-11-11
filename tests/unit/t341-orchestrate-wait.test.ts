@@ -533,7 +533,8 @@ describe("t341 orchestrate wait: a review holds until its reviewer has finished"
     expect(reviewWait(file.rel).status).toBe("waiting");
     at(-31);
     settles(file.rel);
-    at(31);
+    // A future mtime nears now as time passes, so it sits far ahead: a slow spawn must not bring it inside the window.
+    at(300);
     settles(file.rel);
   });
 
