@@ -15,6 +15,8 @@ import {
   runtimeProjectDir,
 } from "../tools/aidlc-runtime-paths.ts";
 import {
+  heredocAt,
+  heredocPipeline,
   shellCommandInvocationDetails,
   shellDirectoryChanges,
   shellHomes,
@@ -803,81 +805,6 @@ function interpreterReadsCode(name: string, args: string[]): boolean {
     if (!arg.startsWith("-")) return false;
   }
   return true;
-}
-
-// The heredoc whose `<<` (not `<<<`) is at `index`, which the caller read
-// outside quotes: where the operator and its delimiter word end, the header
-// line's newline, the body, and where the terminator line starts (the
-// command's end when no line ends the body). Null when no delimiter word or no
-// body line follows. The plan-approval guard reads the same spans.
-export function heredocAt(command: string, index: number): {
-  operatorEnd: number;
-  newline: number;
-  body: string;
-  bodyEnd: number;
-  quoted: boolean;
-} | null {
-  if (!command.startsWith("<<", index) || command[index + 2] === "<") return null;
-  const here = /^<<(-)?[ \t]*(?:'([^']+)'|"([^"]+)"|([A-Za-z_]\w*))/.exec(command.slice(index));
-  if (!here) return null;
-  const delimiter = here[2] ?? here[3] ?? here[4];
-  const operatorEnd = index + here[0].length;
-  const newline = command.indexOf("\n", operatorEnd);
-  if (newline < 0) return null;
-  let end = newline + 1;
-  while (end < command.length) {
-    const nextLine = command.indexOf("\n", end);
-    const lineEnd = nextLine < 0 ? command.length : nextLine;
-    const line = command.slice(end, lineEnd).replace(/\r$/, "");
-    if ((here[1] ? line.replace(/^\t+/, "") : line) === delimiter) break;
-    end = nextLine < 0 ? command.length : nextLine + 1;
-  }
-  return { operatorEnd, newline, body: command.slice(newline + 1, end), bodyEnd: end, quoted: here[4] === undefined };
-}
-
-// Limit stdin consumers to this command and its downstream pipeline, excluding
-// earlier/later independent commands. Redirection filenames are not script argv.
-export function heredocPipeline(header: string, herePosition: number): { raw: string; execution: string } {
-  let quote = "";
-  let start = 0;
-  let end = header.length;
-  const redirects: Array<[number, number]> = [];
-  for (let index = 0; index < header.length; index++) {
-    const ch = header[index];
-    if (ch === "\\" && quote !== "'") { index++; continue; }
-    if (quote) { if (ch === quote) quote = ""; continue; }
-    if (ch === "'" || ch === '"') { quote = ch; continue; }
-    const redirect = /^(?:\d*)?(?:>>?|<|&>)(?:&)?[ \t]*/.exec(header.slice(index));
-    if (redirect && (ch === "<" || ch === ">" || ch === "&" ||
-      index === 0 || /\s|[;|&]/.test(header[index - 1]))) {
-      const begin = index;
-      index += redirect[0].length;
-      let targetQuote = "";
-      while (index < header.length) {
-        const current = header[index];
-        if (current === "\\" && targetQuote !== "'") { index += 2; continue; }
-        if (targetQuote) {
-          if (current === targetQuote) targetQuote = "";
-        } else if (current === "'" || current === '"') targetQuote = current;
-        else if (/\s|[;|&<>]/.test(current)) break;
-        index++;
-      }
-      redirects.push([begin, index]);
-      index--;
-      continue;
-    }
-    if (!";|&\n".includes(ch)) continue;
-    const pair = header.slice(index, index + 2);
-    const width = ["&&", "||", "|&"].includes(pair) ? 2 : 1;
-    if (index < herePosition) start = index + width;
-    else if (ch !== "|" || pair === "||") { end = index; break; }
-    index += width - 1;
-  }
-  const execution = header.split("");
-  for (const [begin, after] of redirects) {
-    for (let index = begin; index < after; index++) execution[index] = " ";
-  }
-  return { raw: header.slice(start, end), execution: execution.slice(start, end).join("") };
 }
 
 function protectedHeredoc(body: string, header: string, herePosition: number, stdin: boolean, cwd: string, depth: number): boolean {

@@ -188,7 +188,7 @@ import {
   stepNextCommand,
   WORKER_BRIEF_SECTIONS,
 } from "../tools/aidlc-testing-posture.ts";
-import { heredocAt, heredocPipeline, refuseRuntimeIntegrityViolation } from "./runtime-integrity.ts";
+import { refuseRuntimeIntegrityViolation } from "./runtime-integrity.ts";
 import { unaskedSystemInstall } from "./system-install.ts";
 
 export { questionsFileHasPendingPlanApproval } from "../tools/aidlc-testing-posture.ts";
@@ -682,6 +682,7 @@ export function mutationBlockReason(
   planApprovalOff = false,
   finished = false,
   unreadShell = false,
+  patchUnseen = false,
 ): string {
   const scope = unit === null ? "the zero-Unit stage-level implementation" : `unit ${unit}`;
   const unread = opaqueShell && unreadShell;
@@ -711,6 +712,9 @@ export function mutationBlockReason(
     `the plan, unit-test instructions, and current Testing Contract do not have a current ` +
     `matching approval.${detail ? ` Reason: ${detail.replace(/\.+$/, "")}.` : ""}` +
     (unread ? " A read written out, naming each file (for example `cat src/app.ts`), runs while the plan waits." : "") +
+    (unread && patchUnseen
+      ? " An apply_patch with its patch in the command itself (`apply_patch <<'PATCH'`, the patch, then `PATCH` on its own line) is read as the writes it names."
+      : "") +
     " Writes inside the selected code-generation record directory remain " +
     `available for planning. When the plan is ready, run ${nextOnItsOwn()}: ${nextAfterPlanClause(planApprovalOff, false)}`
   );
@@ -1295,6 +1299,8 @@ interface MutationIntent {
   engineRefused?: boolean;
   /** A line the lexer could not read whole that names AI-DLC, wrapped or not. */
   hidesEngine?: boolean;
+  /** An apply_patch fed its patch after it starts (unseenPatch). */
+  patchUnseen?: boolean;
   /** AI-DLC's own command refused as the line's only command, read whole. */
   engineAlone?: boolean;
   /** AI-DLC's own `next` on the line that carries a request file, when its reading admits it. */
@@ -2093,113 +2099,11 @@ function shellUsesDynamicEvaluation(command: string): boolean {
   return false;
 }
 
-// The command with each heredoc that is only data blanked (its operator and
-// delimiter word, its body and its terminator line; newlines kept), so the
-// reading sees the write a plain redirect makes: the shell lexer has no
-// heredoc, and reads each body line as a command. A heredoc is data when its
-// pipeline is one or more unwrapped commands spelled exactly `cat` or `tee`,
-// with no grouping or expansion, and the shell expands nothing in its body (a
-// quoted delimiter, or a body with no `$`, backtick or backslash). Anything
-// else returns the command as written, read as before: any other heredoc, an
-// expansion, a glob, a bracket, brace or parenthesis outside a body (arithmetic
-// and subscripts read `<<` as a shift), an assignment before the cat or tee, a
-// carriage return, a line continuation, a quote in a comment, a `<<` it cannot
-// span, whose delimiter word holds a backslash or runs into the next word, a
-// second `<<`, a pipe, `&` or `\` ending the header line, a quote open at its
-// end, or a body no line ends. mutationIntent reads the line as before, too,
-// when the rest of it is a command it cannot read.
-function dataHeredocsBlanked(
-  command: string,
-  invocationsOf: (text: string) => Array<{
-    name: string;
-    executable?: string;
-    ambiguous?: boolean;
-    launchers?: string[];
-    dataDriven?: boolean;
-    executableResolutionChanged?: boolean;
-  }>,
-): string {
-  if (!command.includes("<<") || command.includes("\r")) return command;
-  const spans: Array<[number, number]> = [];
-  let pending: { at: number; operatorEnd: number; newline: number; bodyEnd: number } | null = null;
-  let lineStart = 0;
-  let escaped = -1;
-  let quote: "'" | '"' | null = null;
-  for (let i = 0; i < command.length; i++) {
-    const ch = command[i];
-    if (quote === "'") {
-      if (ch === "'") quote = null;
-      continue;
-    }
-    if (ch === "\\") {
-      // A line continuation joins the next line to this one before the shell
-      // reads a comment or a heredoc there.
-      if (command[i + 1] === "\n") return command;
-      escaped = ++i;
-      continue;
-    }
-    if (ch === "`" || ch === "$") return command;
-    if (ch === '"') {
-      quote = quote === '"' ? null : '"';
-      continue;
-    }
-    if (quote === '"') continue;
-    if (ch === "'") {
-      quote = "'";
-      continue;
-    }
-    if (ch === "#" && (i === 0 || (escaped !== i - 1 && /[ \t\n;&|]/.test(command[i - 1])))) {
-      const end = command.indexOf("\n", i);
-      if (/['"]/.test(command.slice(i, end < 0 ? command.length : end))) return command;
-      if (end < 0) break;
-      i = end - 1;
-      continue;
-    }
-    if ("(){}[]*?".includes(ch)) return command;
-    if (ch === "\n") {
-      if (pending !== null) {
-        if (i !== pending.newline) return command;
-        const after = command.indexOf("\n", pending.bodyEnd);
-        const end = after < 0 ? command.length : after;
-        spans.push([pending.at, pending.operatorEnd], [pending.newline + 1, end]);
-        pending = null;
-        i = end;
-      }
-      lineStart = i + 1;
-      continue;
-    }
-    if (ch !== "<" || command[i + 1] !== "<") continue;
-    if (command[i + 2] === "<") {
-      i += 2;
-      continue;
-    }
-    const heredoc = heredocAt(command, i);
-    if (
-      pending !== null || heredoc === null || heredoc.bodyEnd >= command.length ||
-      command.slice(i, heredoc.operatorEnd).includes("\\")
-    ) return command;
-    const rest = command.slice(heredoc.operatorEnd, heredoc.newline);
-    if (!/^(?:$|[ \t;&|<>])/.test(rest) || rest.includes("<<") || /[|&\\][ \t]*$/.test(rest)) return command;
-    const pipeline = heredocPipeline(command.slice(lineStart, i) + rest, i - lineStart);
-    if (/[(){}$`=]/.test(pipeline.raw)) return command;
-    const calls = invocationsOf(pipeline.execution);
-    if (
-      calls.length === 0 ||
-      !calls.every((call) =>
-        (call.name === "cat" || call.name === "tee") && (call.executable ?? call.name) === call.name &&
-        !call.ambiguous && !call.launchers?.length && !call.dataDriven && !call.executableResolutionChanged
-      ) ||
-      (!heredoc.quoted && /[$`\\]/.test(heredoc.body))
-    ) return command;
-    pending = { at: i, ...heredoc };
-    i = heredoc.operatorEnd - 1;
-  }
-  if (pending !== null || quote !== null) return command;
-  let out = command;
-  for (const [start, end] of spans) {
-    out = out.slice(0, start) + out.slice(start, end).replace(/[^\n]/g, " ") + out.slice(end);
-  }
-  return out;
+// Codex's apply_patch, run by its own name: its writes are its patch's, which
+// the shell reading names (shellWriteTargets) when the command holds the patch.
+function isPatchCall(invocation: { name: string; executable?: string; launchers?: string[]; dataDriven?: boolean }): boolean {
+  return (invocation.name === "apply_patch" || invocation.name === "applypatch") &&
+    (invocation.executable ?? invocation.name) === invocation.name && !invocation.launchers?.length && !invocation.dataDriven;
 }
 
 async function mutationIntent(
@@ -2219,6 +2123,7 @@ async function mutationIntent(
   let hidesEngine = false;
   let engineAlone = false;
   let ownNext: EngineInvocation | undefined;
+  let patchUnseen = false;
   if (toolName === "Bash") {
     const command = toolInput?.command;
     if (typeof command !== "string") {
@@ -2230,10 +2135,14 @@ async function mutationIntent(
       shellCommandAltersExecutableResolution,
       shellCommandInvocationDetails,
       powerShellPathBoundWriter,
+      heredocReading,
+      shellPatchTargets,
       shellWriteTargets,
+      unseenPatch,
     } = await import("./aidlc-review-freeze.ts");
     // PowerShell has no heredoc; its line is read as written.
-    const read = powerShellHint || !readHeredocs ? command : dataHeredocsBlanked(command, shellCommandInvocationDetails);
+    const reading = powerShellHint || !readHeredocs ? null : heredocReading(command);
+    const read = reading?.text ?? command;
     // A command the adapter ran in PowerShell is read as PowerShell when it is
     // plain. Anything else, and every unhinted command, keeps the POSIX
     // reading: Bash drops the backslashes a Windows path is written with.
@@ -2267,19 +2176,29 @@ async function mutationIntent(
     const targetWords: string[] = [];
     targets = powerShellLine
       ? shellWriteTargets(command.slice(powerShellLine.starts[moves]), from, targetWords, "powershell")
-      : shellWriteTargets(analysed, from);
+      : [
+        ...shellWriteTargets(analysed, from),
+        // The patches the reading blanked, read from the command as written.
+        ...(reading ? shellPatchTargets(command.slice(command.length - analysed.length), from) : []),
+      ];
     // A PowerShell wildcard in a bound path names files the reading cannot
     // list, and the reading drops it from the targets.
     const wildcardTargets = targetWords.some((word) => /[*?[\]]/.test(word));
     const concreteTargets = targets.length > 0 && !wildcardTargets;
     const invocations = shellCommandInvocationDetails(analysed);
+    // An apply_patch whose patch the command holds writes what its patch names;
+    // one fed its patch later writes what nobody can see.
+    const unseen = !powerShellLine && unseenPatch(read, reading?.patches.length ?? 0);
+    patchUnseen = unseen;
     const dynamic =
       shellUsesDynamicEvaluation(analysed) ||
       shellCommandAltersExecutableResolution(analysed);
     opaqueShell =
       dynamic ||
       invocations.some((invocation) =>
-        shellInvocationNeedsApproval(projectDir, from, invocation, concreteTargets, analysed, dialect, context)
+        isPatchCall(invocation)
+          ? unseen
+          : shellInvocationNeedsApproval(projectDir, from, invocation, concreteTargets, analysed, dialect, context)
       );
     // The rest of a line it cannot read is read as before, its heredoc too.
     if (opaqueShell && read !== command) {
@@ -2324,7 +2243,7 @@ async function mutationIntent(
     // hide a command or a write target, and a shell script run by name hides
     // commands the lexer never sees.
     readable = !dynamic && !/[^\S \t\n]/u.test(read) && !read.includes("\\\n") && !/\\[<>&|;]/.test(read) &&
-      !(powerShellHint && powerShellCommand === null) && !wildcardTargets &&
+      !(powerShellHint && powerShellCommand === null) && !wildcardTargets && !unseen &&
       !invocations.some((invocation) => {
         const program = normalizedCommandName(invocation.executable ?? invocation.name);
         return SHELL_INTERPRETERS.has(program) || writesThroughOption(program, invocation.args) ||
@@ -2352,6 +2271,7 @@ async function mutationIntent(
     ...(hidesEngine ? { hidesEngine } : {}),
     ...(engineAlone ? { engineAlone } : {}),
     ...(ownNext ? { ownNext } : {}),
+    ...(patchUnseen ? { patchUnseen } : {}),
   };
 }
 
@@ -2649,6 +2569,8 @@ async function evaluate(
     opaqueShell: boolean;
     /** A shell command the reading could not read that is not AI-DLC's own. */
     unreadShell?: boolean;
+    /** That command is an apply_patch fed its patch after it starts. */
+    patchUnseen?: boolean;
     detail: string | null;
     finished: boolean;
   } | null = null;
@@ -3132,6 +3054,7 @@ async function evaluate(
             unit,
             opaqueShell: outsideRecord === undefined,
             unreadShell: outsideRecord === undefined && toolName === "Bash" && !mutation.engineRefused,
+            patchUnseen: mutation.patchUnseen === true,
             detail: receiptDetail([evidence], verdict.mentioned),
             finished: !approval.ok && buildFinishes(projectDir, unit),
           };
@@ -3174,6 +3097,7 @@ async function evaluate(
           planApprovalOff,
           blockedMutation.finished,
           blockedMutation.unreadShell === true,
+          blockedMutation.patchUnseen === true,
         )
       : verdict.appendixInBrief
       ? appendixBlockReason(verdict.mentioned)

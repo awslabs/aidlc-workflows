@@ -3624,6 +3624,28 @@ describe("t265b hook lifecycle", () => {
     }
   });
 
+  // The reported run's record, by its own name, at Code Generation with no plan
+  // yet; the plan file's path as the run wrote it.
+  const reportedRunRecord = (proj: string): string => {
+    const intent = "261111-blank-task-name";
+    renameSync(join(proj, RECORD_REL), join(proj, INTENTS_REL, intent));
+    writeFileSync(join(proj, INTENTS_REL, "active-intent"), `${intent}\n`, "utf-8");
+    const record = join(proj, INTENTS_REL, intent);
+    writeFileSync(
+      join(record, "aidlc-state.md"),
+      "# AI-DLC State Tracking\n\n## Project Information\n- **Project**: t265 fixture\n- **Scope**: bugfix\n\n" +
+        "## Current Status\n- **Lifecycle Phase**: CONSTRUCTION\n- **Current Stage**: code-generation\n",
+      "utf-8",
+    );
+    writeActiveDirectiveMarker(proj, {
+      kind: "run-stage",
+      stage: "code-generation",
+      state_sha256: stateDigest(readFileSync(join(record, "aidlc-state.md"), "utf-8")),
+    });
+    mkdirSync(join(record, "construction", "code-generation"), { recursive: true });
+    return `aidlc/spaces/default/intents/${intent}/construction/code-generation/code-generation-plan.md`;
+  };
+
   // An agent with no file-edit tool (Codex on a model its catalog does not
   // list) writes the plan through the shell. A heredoc only cat or tee reads is
   // data: the write is judged as the same write by a plain redirect, never as a
@@ -3631,24 +3653,7 @@ describe("t265b hook lifecycle", () => {
   test("a heredoc that only cat or tee reads writes the plan as a plain redirect does while the plan is written", () => {
     const proj = scratchProject();
     try {
-      // The record the reported run wrote into, by its own name.
-      const intent = "261111-blank-task-name";
-      renameSync(join(proj, RECORD_REL), join(proj, INTENTS_REL, intent));
-      writeFileSync(join(proj, INTENTS_REL, "active-intent"), `${intent}\n`, "utf-8");
-      const record = join(proj, INTENTS_REL, intent);
-      writeFileSync(
-        join(record, "aidlc-state.md"),
-        "# AI-DLC State Tracking\n\n## Project Information\n- **Project**: t265 fixture\n- **Scope**: bugfix\n\n" +
-          "## Current Status\n- **Lifecycle Phase**: CONSTRUCTION\n- **Current Stage**: code-generation\n",
-        "utf-8",
-      );
-      writeActiveDirectiveMarker(proj, {
-        kind: "run-stage",
-        stage: "code-generation",
-        state_sha256: stateDigest(readFileSync(join(record, "aidlc-state.md"), "utf-8")),
-      });
-      mkdirSync(join(record, "construction", "code-generation"), { recursive: true });
-      const plan = `aidlc/spaces/default/intents/${intent}/construction/code-generation/code-generation-plan.md`;
+      const plan = reportedRunRecord(proj);
       const instructions = plan.replace("code-generation-plan.md", "unit-test-instructions.md");
       // The reported run's command, byte for byte.
       const reported =
@@ -3735,18 +3740,9 @@ describe("t265b hook lifecycle", () => {
         expect(result.code, command).toBe(2);
         expect(result.stderr, command).toContain(words);
       }
-      // Any other heredoc is read as it is without the rule, apply_patch's
-      // included: these are main's own decisions, kept as they are.
+      // Any other heredoc is read as it is without the rule (apply_patch's
+      // has its own case below): these are main's own decisions, kept as they are.
       for (const [command, code] of [
-        ["apply_patch <<'PATCH'\n*** Begin Patch\n*** Add File: src/x.ts\n+export const y = 2;\n*** End Patch\nPATCH", 0],
-        // The reported run's own apply_patch write of the plan, byte for byte.
-        [
-          `apply_patch <<'PATCH'\n*** Begin Patch\n*** Add File: ${plan}\n+# Code Generation Plan\n+\n+## Summary\n+\n` +
-            "+- Builds: blank task-name validation for `add()`.\n" +
-            "+- Touches: the existing task module and a focused Bun test file.\n" +
-            "+- Tests: four focused unit tests for rejection, valid addition, and immutability.\n*** End Patch\nPATCH",
-          2,
-        ],
         [`python3 <<'EOF'\nprint(1)\nEOF`, 0],
         [`cat > ${plan} <<'EOF'\n# Plan\nEOF\npython3 <<'PY'\nprint(1)\nPY`, 2],
         [`cat > ${plan} <<'EOF'\r\n# Plan\r\nEOF\r\n`, 2],
@@ -3770,6 +3766,80 @@ describe("t265b hook lifecycle", () => {
       const pwsh = runHook(proj, { ...BASH(reported), cwd: proj, aidlc_shell: "powershell" });
       expect(pwsh.code, pwsh.stderr).toBe(2);
       expect(pwsh.stderr).toContain("could not be read");
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  // Codex puts an apply_patch program on the shell's PATH; an agent with no
+  // file-edit tool writes with it. Its patch names the files it writes, read as
+  // the writes they are: the plan in the record folder goes through, code waits
+  // with the refusal printf gets.
+  test("a shell apply_patch while the plan is written is the write its patch names", () => {
+    const proj = scratchProject();
+    try {
+      const plan = reportedRunRecord(proj);
+      const instructions = plan.replace("code-generation-plan.md", "unit-test-instructions.md");
+      const patch = (lines: string[]) => `*** Begin Patch\n${lines.join("\n")}\n*** End Patch`;
+      const add = (path: string) => [`*** Add File: ${path}`, "+# Plan", "+uses `add()` and $HOME"];
+      // The reported run's own write of the plan, byte for byte.
+      const reported =
+        `apply_patch <<'PATCH'\n*** Begin Patch\n*** Add File: ${plan}\n+# Code Generation Plan\n+\n+## Summary\n+\n` +
+        "+- Builds: blank task-name validation for `add()`.\n" +
+        "+- Touches: the existing task module and a focused Bun test file.\n" +
+        "+- Tests: four focused unit tests for rejection, valid addition, and immutability.\n*** End Patch\nPATCH";
+      const forms = (lines: string[]): string[] => [
+        `apply_patch <<'PATCH'\n${patch(lines)}\nPATCH`,
+        `applypatch <<"PATCH"\n${patch(lines)}\nPATCH\n`,
+        `apply_patch <<-'PATCH'\n${patch(lines).replace(/^/gm, "\t")}\n\tPATCH`,
+        `apply_patch '${patch(lines)}'`,
+        `apply_patch <<'PATCH'\n${patch(lines).replace(/^\*\*\*/gm, "  ***")}\nPATCH`,
+      ];
+      const through = runHook(proj, BASH(reported));
+      expect(through.code, through.stderr).toBe(0);
+      for (const command of [...forms(add(plan)), ...forms([...add(plan), ...add(instructions)])]) {
+        const result = runHook(proj, BASH(command));
+        expect(result.code, `${command}\n${result.stderr}`).toBe(0);
+      }
+      // A cd before it is followed as for any write (a line continuation in the body is data).
+      const sub = { cwd: join(proj, "src") };
+      expect(runHook(proj, { ...BASH(`cd ${toPosix(proj)} && apply_patch <<'PATCH'\n${patch(add(plan))}\ndocker \\\n  run\nPATCH`), ...sub }).code).toBe(0);
+      expect(runHook(proj, { ...BASH(`cd ${toPosix(proj)} && cat > ${plan} <<'EOF'\ndocker run \\\n  image\nEOF`), ...sub }).code).toBe(0);
+      // Code, or a file beside the plan the patch also names, waits with the words printf gets.
+      const ordinary = runHook(proj, BASH("printf code > src/tasks.ts")).stderr;
+      expect(ordinary).toContain("Code generation cannot modify workspace paths");
+      for (const lines of [
+        add("src/new.ts"),
+        ["*** Update File: src/tasks.ts", "@@", "-export const x = 1;", "+export const x = 2;"],
+        ["*** Delete File: src/tasks.ts"],
+        [`*** Update File: ${plan}`, "*** Move to: src/moved.ts", "@@", "+x"],
+        [...add(plan), ...add("src/routes/$id.tsx")],
+        [...add(plan), ...add("src/routes/[id].tsx")],
+      ]) {
+        for (const command of forms(lines)) {
+          const result = runHook(proj, BASH(command));
+          expect({ code: result.code, stderr: result.stderr }, command).toEqual({ code: 2, stderr: ordinary });
+        }
+      }
+      // The argument is the patch when there is one: the binary never reads the heredoc then.
+      expect(runHook(proj, BASH(`apply_patch '${patch(add("src/x.ts"))}' <<'PATCH'\n${patch(add(plan))}\nPATCH`)).code).toBe(2);
+      // An argument with no file lines writes nothing.
+      expect(runHook(proj, BASH("apply_patch --help")).code).toBe(0);
+      // A patch typed in afterwards cannot be read: today's line, and one sentence naming the way on.
+      const sentence =
+        "An apply_patch with its patch in the command itself (`apply_patch <<'PATCH'`, the patch, then `PATCH` on its own line) is read as the writes it names.";
+      const unread = "This shell command could not be read, so AI-DLC cannot tell whether it writes files. Code generation cannot run it for the zero-Unit stage-level implementation because the plan, unit-test instructions, and current Testing Contract do not have a current matching approval. Reason: code-generation-plan.md is missing or empty. A read written out, naming each file (for example `cat src/app.ts`), runs while the plan waits. Writes inside the selected code-generation record directory remain available for planning. When the plan is ready, run `bun .claude/tools/aidlc-orchestrate.ts next` exactly as written, as a command of its own (no `cd` before it, no pipe or second command after it): the engine asks the person to approve it before any code is written.";
+      const withSentence = unread.replace(" Writes inside", ` ${sentence} Writes inside`);
+      for (const command of ["apply_patch", "applypatch", "cat p.patch | apply_patch", "apply_patch < p.patch", "apply_patch 2>/dev/null"]) {
+        const result = runHook(proj, BASH(command));
+        expect(result.code, command).toBe(2);
+        expect(result.stderr.trim(), command).toBe(withSentence);
+      }
+      // Every other line the guard cannot read keeps today's words, byte for byte.
+      expect(runHook(proj, BASH(`sh <<'EOF'\nprintf x > ${plan}\nEOF`)).stderr.trim()).toBe(unread);
+      // A heredoc with something else in its pipeline is read as before.
+      expect(runHook(proj, BASH(`apply_patch <<'PATCH' | tee log.txt\n${patch(add(plan))}\nPATCH`)).stderr)
+        .toContain("Code generation cannot modify workspace paths");
     } finally {
       rmSync(proj, { recursive: true, force: true });
     }

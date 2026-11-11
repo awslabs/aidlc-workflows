@@ -951,6 +951,37 @@ describe("t221 (b) dispatch-record lifecycle (shipped hook, subprocess)", () => 
     expect(shard).toContain("**Target**: ../u05-API/design.md");
   });
 
+  test("claimed checkout: a shell apply_patch into another Unit is refused as touch is", () => {
+    const proj = scratchProject();
+    seedUnitScope(proj);
+    const patch = (path: string) => `*** Begin Patch\n*** Add File: ${path}\n+x\n*** End Patch`;
+    for (const command of [`apply_patch <<'PATCH'\n${patch("Construction/u05-API/result.md")}\nPATCH`, `apply_patch '${patch("Construction/u05-API/result.md")}'`]) {
+      const r = runHook(proj, { hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command } });
+      expect(r.code, command).toBe(2);
+      expect(r.stderr, command).toContain('This checkout is scoped to Unit "U03-scoring"');
+    }
+    const bash = (command: string) => runHook(proj, { hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command } });
+    expect(bash("touch Construction/u05-API/result.md").stderr).toContain('This checkout is scoped to Unit "U03-scoring"');
+    // A patch into this Unit is judged by the file it writes, not by its code,
+    // which may name another Unit's folder.
+    const mentions = "*** Begin Patch\n*** Add File: construction/U03-scoring/result.ts\n+import { score } from \"../U05-api/score.ts\"; // construction/U05-api/score.ts\n*** End Patch";
+    for (const command of [
+      `apply_patch <<'PATCH'\n${patch("construction/U03-scoring/result.md")}\nPATCH`,
+      `apply_patch <<'PATCH'\n${mentions}\nPATCH`,
+      `apply_patch '${mentions.replaceAll('"', "'\\''")}'`,
+    ]) {
+      const own = bash(command);
+      expect(own.code, `${command}\n${own.stderr}`).toBe(0);
+    }
+    // The same code written with cat or printf is read by its text, as on main.
+    for (const [command, code] of [
+      ["cat > construction/U03-scoring/result.ts <<'EOF'\nimport { score } from \"../U05-api/score.ts\"; // construction/U05-api/score.ts\nEOF", 2],
+      ["printf '// construction/U05-api/score.ts' > construction/U03-scoring/result.ts", 0],
+    ] as const) {
+      expect(bash(command).code, command).toBe(code);
+    }
+  });
+
   test("claimed checkout Bash matching follows the dispatch matcher", () => {
     const proj = scratchProject();
     seedUnitScope(proj);
