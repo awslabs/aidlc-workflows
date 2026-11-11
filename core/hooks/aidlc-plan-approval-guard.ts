@@ -1305,7 +1305,9 @@ interface MutationIntent {
   engineRefused?: boolean;
   /** A line the lexer could not read whole that names AI-DLC, wrapped or not. */
   hidesEngine?: boolean;
-  /** An apply_patch fed its patch after it starts (unseenPatch). */
+  /** An apply_patch whose patch nobody has read: fed after it starts, or Codex's
+   *  patch mode with an operand the reader cannot see (unseenPatch) or on a line
+   *  read only in part. */
   patchUnseen?: boolean;
   /** AI-DLC's own command refused as the line's only command, read whole. */
   engineAlone?: boolean;
@@ -2588,7 +2590,7 @@ async function evaluate(
     opaqueShell: boolean;
     /** A shell command the reading could not read that is not AI-DLC's own. */
     unreadShell?: boolean;
-    /** That command is an apply_patch fed its patch after it starts. */
+    /** That command hands apply_patch a patch nobody has read (MutationIntent.patchUnseen). */
     patchUnseen?: boolean;
     detail: string | null;
     finished: boolean;
