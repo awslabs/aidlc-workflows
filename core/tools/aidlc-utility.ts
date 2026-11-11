@@ -12779,9 +12779,12 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
           newStageProgress += `- ${marker} ${stage.slug} \u2014 ${suffix}\n`;
         }
       }
-      const stageProgressRegex = /## Stage Progress\n<!-- [^\n]* -->\n([\s\S]*?)(?=\n## (?!Stage Progress))/;
+      // A Windows clone checks the state file out with CRLF line endings, so
+      // the list is found with either ending and written back in its own.
+      const stageProgressRegex = /## Stage Progress\r?\n<!-- [^\r\n]* -->\r?\n([\s\S]*?)(?=\r?\n## (?!Stage Progress))/;
       const stageProgressHeader = "## Stage Progress\n<!-- Checkbox states: [ ] not started, [-] in progress, [?] awaiting approval (gate open), [R] revising (user rejected gate), [x] completed, [S] skipped via --stage/--phase jump -->\n";
-      content = content.replace(stageProgressRegex, stageProgressHeader + newStageProgress);
+      const stageProgressEol = stageProgressRegex.exec(content)?.[0].includes("\r\n") ? "\r\n" : "\n";
+      content = content.replace(stageProgressRegex, (stageProgressHeader + newStageProgress).replaceAll("\n", stageProgressEol));
       content = setField(content, "Scope", newScope);
       // The new scope's grid replaces any plan composed for this piece of work.
       content = removeField(content, PLAN_FIELD);
