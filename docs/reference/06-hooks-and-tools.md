@@ -1465,7 +1465,7 @@ See [Runtime Graph](13-runtime-graph.md) for the compile lifecycle and the locke
 1. **Project directory resolution:** Same multi-fallback pattern as write-audit-log.ts.
 2. **JSON parsing:** Extracts the session identity, `agent_type` (defaults to `"unknown"`), `agent_id`, and `last_assistant_message` (truncated to 200 characters).
 3. **Background entry completion:** Removes one in-flight entry for the completing session under the workspace lock, preserving overlapping workers and other sessions.
-4. **Workflow-state guard:** Exits silently unless the session-selected intent's `aidlc-state.md` has `Status: Running`. A `hook_event_name: "SubagentStart"` payload, which Cursor's and Kiro IDE's adapters forward when they let a helper go, records `SUBAGENT_DISPATCHED` (`recordSubagentDispatch`, the writer the dispatch hook shares) and stops there: no ledger change, no heartbeat, no completion.
+4. **Workflow-state guard:** Exits silently unless the session-selected work is live: its `aidlc-state.md` has `Status: Running`, or a stage run on its own (`--single`) is open on it after it finished, or no work is selected while such a run is open in the space's own record. A `hook_event_name: "SubagentStart"` payload, which Cursor's and Kiro IDE's adapters forward when they let a helper go, records `SUBAGENT_DISPATCHED` (`recordSubagentDispatch`, the writer the dispatch hook shares) and stops there: no ledger change, no heartbeat, no completion.
 5. **Health heartbeat:** Writes to `.aidlc-engine/hooks-health/log-subagent.last`.
 6. **Entry assembly:** Emits canonical `SUBAGENT_COMPLETED` event via `appendAuditEntry`. Fields: Timestamp, Event, Agent Type, and optionally Agent ID and truncated Message.
 7. **Atomic locking:** Uses the shared lock helpers for both the workspace in-flight ledger and the intent audit write.
@@ -2316,8 +2316,8 @@ A stage reported as skipped emits `STAGE_SKIPPED` instead of
 | Source | Events | When |
 |--------|--------|------|
 | `write-audit-log.ts` | `ARTIFACT_CREATED` / `ARTIFACT_UPDATED` | Every Write/Edit to the intent's record dir (except the `audit/` shards) |
-| `log-subagent.ts` | `SUBAGENT_COMPLETED`, `SUBAGENT_DISPATCHED` | Any subagent stop while the active workflow has `Status: Running`; a forwarded SubagentStart (dispatched) |
-| `deliver-stage-rules.ts` | `SUBAGENT_DISPATCHED` | Every PreToolUse dispatch it lets go while the active workflow has `Status: Running` |
+| `log-subagent.ts` | `SUBAGENT_COMPLETED`, `SUBAGENT_DISPATCHED` | Any subagent stop while the active workflow is live (`Status: Running`, or a `--single` run open on it); a forwarded SubagentStart (dispatched) |
+| `deliver-stage-rules.ts` | `SUBAGENT_DISPATCHED` | Every PreToolUse dispatch it lets go while the active workflow is live (`Status: Running`, or a `--single` run open on it) |
 | Copilot adapter `record-human-turn` | `SUBAGENT_PROMPT_UNMATCHED` | A prompt within seconds of a subagent start in the same chat that matched no recorded brief (advisory; never a human turn) |
 | `record-human-turn.ts` (Kiro CLI, Kiro IDE and Copilot adapters deciding for their hosts); `tools/aidlc-claude-turn-origin.ts` (`settleClaudeTurns`) | `HOST_TURN` | A prompt the host made for the agent reached the prompt-submit seam: a Kiro Workflows brief or finish notice, a Kiro sub-agent synthesis prompt, a Claude Code background-task notification, subagent hand-back, scheduled wake-up (taken back from its `HUMAN_TURN` by `Message Id` once Claude Code's own row for it is on record) or another Claude session's message, the Claude desktop app's own events, quit note or session brief, a Stop reason Copilot sends back (never a human turn; no kept words, reply, switch or marker; one that names a Message Id takes that turn back, with its message record and the replies kept for it) |
 | `reviewer-scope.ts` | `REVIEWER_SCOPE_BLOCKED` | A per-unit reviewer's tool call refused for sibling-unit access (PreToolUse) |
