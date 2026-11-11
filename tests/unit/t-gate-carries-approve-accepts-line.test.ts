@@ -89,7 +89,7 @@ describe("the gate carries the line that says what Approve accepts", () => {
     const opened = await report(proj, "awaiting-approval");
     expect(opened.directive?.kind, opened.out).toBe("print");
     expect(opened.directive?.change_notices?.at(-1), opened.out).toBe(LINE);
-    expect(opened.directive?.change_notices_note, opened.out).toStartWith("Say each change_notices line to the person once, as written");
+    expect(opened.directive?.change_notices_note, opened.out).toStartWith("Say each notice listed beside this note to the person once, as written");
     // The agent shows the brief, then the line; the approval's record names the kept text, which holds both.
     const shown = await brief(proj);
     await approve(proj);
@@ -108,7 +108,7 @@ describe("the gate carries the line that says what Approve accepts", () => {
     expect(shown.directive?.gate_only, shown.out).toBe(true);
     const again = shown.directive as Directive | null;
     expect(again?.change_notices, shown.out).toContain(LINE);
-    expect(again?.change_notices_note, shown.out).toStartWith("Say each change_notices line to the person once, as written");
+    expect(again?.change_notices_note, shown.out).toStartWith("Say each notice listed beside this note to the person once, as written");
     // The step stays the routed one: the person's rules come with it, as at a gate with no line to say.
     expect(again?.rules_content ?? again?.rules_held, shown.out).toBeDefined();
   });

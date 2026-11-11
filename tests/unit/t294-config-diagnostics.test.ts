@@ -2907,7 +2907,9 @@ describe("t294 post-apply outstanding actions", () => {
       "--yes",
     ], project, env);
     expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
-    expect(refreshed.stdout).toContain("bedrock-model-access");
+    // The action by its section and words; its id is shown by the check the step names.
+    expect(refreshed.stdout).toContain("\n  providers: Verify Amazon Bedrock model access in the recorded region");
+    expect(refreshed.stdout).not.toContain("bedrock-model-access");
     expect(refreshed.stdout).toContain(
       "bun .claude/tools/aidlc.ts config providers --check",
     );
