@@ -383,7 +383,11 @@ export async function run(
   ]);
   const rawToolName = copilot.tool_name ?? copilot.toolName ?? "";
   const toolName = TOOL_ALIAS[rawToolName] ?? rawToolName;
-  const isApplyPatch = rawToolName === "apply_patch" || rawToolName === "applyPatch";
+  // Copilot CLI hands its apply_patch to the PascalCase hooks as Edit, with the
+  // patch text itself as tool_input (live-captured on 1.0.109), so the envelope
+  // says it is a patch as well as the name.
+  const isApplyPatch = rawToolName === "apply_patch" || rawToolName === "applyPatch" ||
+    (typeof nativeToolInput?.input === "string" && /^\*\*\* Begin Patch$/m.test(nativeToolInput.input));
 
   // Re-serialize the payload with the canonical tool_name so verbatim pipes
   // (Bash → guards, rebuild-stage-graph) carry the name the core hooks match on.
@@ -2622,7 +2626,8 @@ export async function run(
             tool_input: { file_path: target.filePath },
           });
           runCore("aidlc-write-audit-log.ts", fwd);
-          runCore("aidlc-run-sensors.ts", fwd);
+          // A target that is gone (a patch deleted or moved it) leaves a sensor nothing to read.
+          if (existsSync(target.filePath)) runCore("aidlc-run-sensors.ts", fwd);
         }
         return 0;
       }
