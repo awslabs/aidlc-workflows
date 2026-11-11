@@ -4766,20 +4766,23 @@ function sourceKeysChangedOutsideAidlc(
 }
 
 // The paths outside AI-DLC's own files that moved since a kept listing (a
-// review's `Source Listing`), as `<repo>\0<path>` keys. Null when no listing
-// was kept or it does not read back exactly: the caller then compares
-// fingerprints.
+// review's `Source Listing`, kept at the row `from`), as `<repo>\0<path>` keys;
+// a repo that joined the work since counts from what it held when it joined
+// (withRepoBaselineAdditions). Null when no listing was kept or it does not
+// read back exactly: the caller then compares fingerprints.
 export function sourceKeysChangedOutsideAidlcSince(
   projectDir: string,
   stageSlug: string,
   listing: string | undefined,
   current: WorkspaceSourceState,
-  intent?: string,
-  space?: string,
+  rows: readonly AuditShardEvent[],
+  from: AuditShardEvent | null,
 ): Set<string> | null {
-  const recorded = listing === undefined ? null : readBaselineSourceSnapshot(projectDir, stageSlug, listing, intent, space);
+  const recorded = listing === undefined ? null : readBaselineSourceSnapshot(projectDir, stageSlug, listing);
   if (recorded === null) return null;
-  return sourceKeysChangedOutsideAidlc(projectDir, recordedSourceListingForCompare(projectDir, recorded, current, intent, space), current.listing);
+  const joined = withRepoBaselineAdditions(projectDir, stageSlug, { state: "ready", listing: recorded }, rows, from);
+  const start = joined.state === "ready" ? joined.listing : recorded;
+  return sourceKeysChangedOutsideAidlc(projectDir, recordedSourceListingForCompare(projectDir, start, current), current.listing);
 }
 
 // A kept listing as the walk would list it now, to compare with `current`.
@@ -20388,6 +20391,7 @@ export function freshReviewReceipts(
   // The listing that receipt kept (`Source Listing`), absent on receipts an
   // earlier release wrote and when the source moved during the review.
   let newestSourceListing: string | undefined;
+  let newestSourceRow: AuditShardEvent | null = null;
   let newestSourceUnit: string | null = null;
   let newestSourceProgress: StaleReviewProgress | null = null;
   let sourceRecoverySpent = false;
@@ -20722,6 +20726,7 @@ export function freshReviewReceipts(
       if (sourceFingerprint && !eventIsCrossShardTied(i)) {
         newestSourceFingerprint = sourceFingerprint;
         newestSourceListing = auditBlockField(e.block, "Source Listing") ?? undefined;
+        newestSourceRow = e;
         newestSourceUnit = unit ?? null;
         newestSourceProgress = {
           nextIteration: iteration + 1,
@@ -20900,7 +20905,7 @@ export function freshReviewReceipts(
   // back here (an earlier release, a move during the review, another machine):
   // fingerprints decide. Read for the active record, like the walk above.
   const movedKeys = fingerprintMoved && currentSourceState !== null
-    ? sourceKeysChangedOutsideAidlcSince(projectDir, stage.slug, newestSourceListing, currentSourceState)
+    ? sourceKeysChangedOutsideAidlcSince(projectDir, stage.slug, newestSourceListing, currentSourceState, allEvents, newestSourceRow)
     : null;
   const movedOutsideAidlc = movedKeys === null ? null : renderSourcePathKeys(movedKeys);
   const sourceMismatch = fingerprintMoved && (movedOutsideAidlc === null || movedOutsideAidlc.length > 0);
@@ -35529,6 +35534,8 @@ export type SwarmSourceMergeChain =
       // The listing that landing kept (`Source Listing`), absent on rows an
       // earlier release wrote.
       listing?: string;
+      // The landing that kept it.
+      row: AuditShardEvent;
       units: Set<string>;
     };
 
@@ -35599,8 +35606,9 @@ export function currentSwarmSourceOpeningFingerprint(
   }
   const rejected = /^GATE_REJECTED:(.+)#([1-9][0-9]*)$/.exec(floor);
   if (rejected !== null) {
+    const rows = auditRows ?? readAuditShardEvents(projectDir, intent, space);
     const row = rejectionAtRunFloor(
-      auditRows ?? readAuditShardEvents(projectDir, intent, space),
+      rows,
       slug,
       undefined,
       floor,
@@ -35623,11 +35631,19 @@ export function currentSwarmSourceOpeningFingerprint(
         };
       }
       // The listing that landing kept, when it reads back exactly; rows an
-      // earlier release wrote have none and are compared by fingerprint.
+      // earlier release wrote have none and are compared by fingerprint. A
+      // repo that joined the work since that landing counts from the add.
       const recorded = auditBlockField(row.block, "Prior Accepted Source Listing");
-      const listing = recorded === null
+      const kept = recorded === null
         ? null
         : readBaselineSourceSnapshot(projectDir, slug, recorded, intent, space);
+      const landing = sortAttemptEvents(rows.filter((merge) =>
+        merge.event === "SWARM_SOURCE_MERGED" && auditBlockField(merge.block, "Stage") === slug &&
+        auditBlockField(merge.block, "Source Listing") === recorded && attemptEventDefinitelyBefore(merge, row))).at(-1);
+      const joined = kept === null
+        ? null
+        : withRepoBaselineAdditions(projectDir, slug, { state: "ready", listing: kept }, rows, landing ?? null, intent, space);
+      const listing = joined?.state === "ready" ? joined.listing : kept;
       return {
         state: "ready",
         fingerprint: prior,
@@ -35714,6 +35730,7 @@ export function currentSwarmSourceMergeChain(
   const lastMerge = new Map<string, AuditShardEvent>();
   let priorFingerprint: string | null = null;
   let priorListing: string | undefined;
+  let priorRow: AuditShardEvent | null = null;
   let openingPrevious: string | null = null;
   let openingRow: AuditShardEvent | null = null;
   // A link may start from a main checkout the person changed during the build
@@ -35850,15 +35867,20 @@ export function currentSwarmSourceMergeChain(
       else units.add(unit);
       priorFingerprint = fingerprint;
       priorListing = auditBlockField(row.block, "Source Listing") ?? undefined;
+      priorRow = row;
     }
     start = end;
   }
+  // The opening link was checked against the stage baseline as it stood then:
+  // a repo that joined the work after that landing (withRepoBaselineAdditions
+  // reads its INTENT_REPOS_CHANGED row) does not move it.
   const opening = currentSwarmSourceOpeningFingerprint(
     projectDir,
     slug,
     intent,
     space,
-    allRows,
+    allRows.filter((row) =>
+      row.event !== "INTENT_REPOS_CHANGED" || openingRow === null || !attemptEventDefinitelyBefore(openingRow, row)),
   );
   if (opening.state === "invalid") {
     return opening;
@@ -35872,9 +35894,9 @@ export function currentSwarmSourceMergeChain(
       reason: `opening SWARM_SOURCE_MERGED link does not match the current ${opening.source === "prior-accepted" ? "prior accepted aggregate" : "stage baseline"}`,
     };
   }
-  return priorFingerprint === null
+  return priorFingerprint === null || priorRow === null
     ? { state: "none" }
-    : { state: "ready", fingerprint: priorFingerprint, listing: priorListing, units };
+    : { state: "ready", fingerprint: priorFingerprint, listing: priorListing, row: priorRow, units };
 }
 
 // --- A change the person asked for in the main checkout ----------------------

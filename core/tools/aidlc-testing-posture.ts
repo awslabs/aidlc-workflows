@@ -131,9 +131,11 @@ import {
   UNBINDABLE_FINGERPRINT,
   PLAN_APPROVAL_ASK_TYPE,
   validateUnitName,
+  sourceChangedOutsideAidlc,
   visibleMarkdownLines,
   withActiveDirectiveLock,
   withAuditLock,
+  withRepoBaselineAdditions,
   workspaceSourceChangedPaths,
   workspaceSourceFailureSuffix,
   workspaceSourceFingerprint,
@@ -437,7 +439,9 @@ export function planSourceMovedNotice(paths: string[] | null, unit: string | nul
  * the resolver's validation error under both. After a real approval, a verified
  * lowered plan-approval fence also permits drift under a strict policy; this
  * changes execution provenance, never the recorded human approval. After
- * approval the paths leave AI-DLC's own files out (an update the person took).
+ * approval (`approved`, the receipt) the paths come from the source the person
+ * approved (approvedSourceListing) and leave AI-DLC's own files out (an update
+ * the person took).
  */
 function judgePlanSourceDrift(
   projectDir: string,
@@ -446,9 +450,13 @@ function judgePlanSourceDrift(
   current: WorkspaceSourceState | null,
   trace: boolean,
   loweredFence = false,
-  afterApproval = false,
+  approved: PlanApprovalRuntimeReceipt | null = null,
 ): { accepted: AcceptedChange } | { refusal: PlanApprovalSourceDriftError } {
-  const paths = workspaceSourceChangedPaths(projectDir, CODE_GENERATION_STAGE, recorded, current, afterApproval);
+  const afterApproval = approved !== null;
+  const start = approved !== null && current !== null ? approvedSourceListing(projectDir, approved, current) : null;
+  const paths = !afterApproval
+    ? workspaceSourceChangedPaths(projectDir, CODE_GENERATION_STAGE, recorded, current)
+    : start === null || current === null ? null : sourceChangedOutsideAidlc(projectDir, start, current.listing);
   const unbound = current === null;
   const resolution = trace ? governedChangeControl(projectDir) : resolveChangeControl(projectDir);
   // Once the human approved the plan, source that moved elsewhere is never a
@@ -480,17 +488,40 @@ function judgePlanSourceDrift(
   };
 }
 
-// Files moved since the approval, and every one of them is AI-DLC's own (an
-// update the person took): nothing of theirs changed, so the start records no
-// change and says nothing. Read from the listing kept for the approved source.
+// Files moved since the approval, and none of them is the person's: AI-DLC's
+// own (an update they took) or a repo's that joined the work since, as it was
+// when it joined. Nothing of theirs changed, so the start records no change and
+// says nothing. Read from the listing kept for the approved source.
 function onlyAidlcFilesMovedSinceApproval(
   projectDir: string,
-  certified: string,
+  receipt: PlanApprovalRuntimeReceipt,
   current: WorkspaceSourceState,
 ): boolean {
-  const moved = workspaceSourceChangedPaths(projectDir, CODE_GENERATION_STAGE, certified, current);
-  return moved !== null && moved.length > 0 &&
-    workspaceSourceChangedPaths(projectDir, CODE_GENERATION_STAGE, certified, current, true)?.length === 0;
+  const moved = workspaceSourceChangedPaths(projectDir, CODE_GENERATION_STAGE, receipt.certifiedSourceSha256, current);
+  const start = moved !== null && moved.length > 0 ? approvedSourceListing(projectDir, receipt, current) : null;
+  return start !== null && sourceChangedOutsideAidlc(projectDir, start, current.listing).length === 0;
+}
+
+// The listing kept for the source the person approved, under the current
+// boundary, with each repo that joined the work since that approval as it was
+// when it joined (withRepoBaselineAdditions, from the approval's row); as kept
+// when a joined repo's snapshot is not on this machine. Null when none was kept.
+function approvedSourceListing(
+  projectDir: string,
+  receipt: PlanApprovalRuntimeReceipt,
+  current: WorkspaceSourceState,
+): WorkspaceSourceListing | null {
+  const recorded = readWorkspaceSourceSnapshot(projectDir, CODE_GENERATION_STAGE, receipt.certifiedSourceSha256);
+  if (recorded === null) return null;
+  const rows = readAuditShardEvents(projectDir);
+  const approval = sortAttemptEvents(rows.filter((row) =>
+    (row.event === "PLAN_APPROVAL_RECORDED" || row.event === "PLAN_APPROVAL_SKIPPED") &&
+    auditBlockField(row.block, "Plan Target") === receipt.targetId &&
+    auditBlockField(row.block, "Approval Fingerprint") === receipt.fingerprint)).at(-1);
+  const joined = withRepoBaselineAdditions(
+    projectDir, CODE_GENERATION_STAGE, { state: "ready", listing: recorded }, rows, approval ?? null,
+  );
+  return recordedSourceListingUnderCurrentBoundary(joined.state === "ready" ? joined.listing : recorded, current.listing);
 }
 
 /** Keep the listing behind the current fingerprint so a later drift can name paths. */
@@ -3561,10 +3592,10 @@ function continuationMaterial(
     if (current === null) return { artifacts };
     if (
       !sameWorkspaceSource(receipt.certifiedSourceSha256, current.fingerprint) &&
-      !onlyAidlcFilesMovedSinceApproval(projectDir, receipt.certifiedSourceSha256, current)
+      !onlyAidlcFilesMovedSinceApproval(projectDir, receipt, current)
     ) {
       const judged = judgePlanSourceDrift(
-        projectDir, authority.unit, receipt.certifiedSourceSha256, current, false, true, true,
+        projectDir, authority.unit, receipt.certifiedSourceSha256, current, false, true, receipt,
       );
       if ("refusal" in judged) return null;
       sourceChange = judged.accepted;
@@ -5452,10 +5483,8 @@ function approvedWorktreeSource(
     approved.receipt.skipped === undefined &&
     !sameWorkspaceSource(certified, parentSource.fingerprint) &&
     !guardPolicyAcceptsChanges(parent);
-  const recorded = held ? readWorkspaceSourceSnapshot(parent, CODE_GENERATION_STAGE, certified) : null;
-  const changed = recorded === null ? null : swarmSourceChanged(
-    parent, recordedSourceListingUnderCurrentBoundary(recorded, parentSource.listing), parentSource.listing,
-  );
+  const recorded = held ? approvedSourceListing(parent, approved.receipt, parentSource) : null;
+  const changed = recorded === null ? null : swarmSourceChanged(parent, recorded, parentSource.listing);
   if (
     held &&
     changed?.length !== 0 &&
@@ -6102,7 +6131,7 @@ function publishCodeGenerationStart(
   const moved = !sameWorkspaceSource(receipt.certifiedSourceSha256, sourceBefore);
   if (
     moved && stateBefore !== null &&
-    onlyAidlcFilesMovedSinceApproval(projectDir, receipt.certifiedSourceSha256, stateBefore)
+    onlyAidlcFilesMovedSinceApproval(projectDir, receipt, stateBefore)
   ) {
     // An AI-DLC update the person took moved only AI-DLC's own files: no change
     // to record or say. The source certified below keeps its listing.
@@ -6121,7 +6150,7 @@ function publishCodeGenerationStart(
       stateBefore,
       true,
       continuation !== null,
-      true,
+      receipt,
     );
     if ("refusal" in judged) throw judged.refusal;
     const recordedNotices = recordAcceptedChanges(projectDir, [judged.accepted]);
