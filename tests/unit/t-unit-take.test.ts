@@ -1425,6 +1425,106 @@ describe("the claims' home is the lead's address", () => {
     expect(claimPayload(home.remote, id8, "refunds")).toBeNull();
   });
 
+  test("a proposal and then the result, sent to the fork before the lead's next look, both stay there", () => {
+    const { home, hosts, id8 } = forkedLead();
+    refusePushes(home.remote);
+    const { dir: pay, fork } = forkedTeam(home, hosts, "pay");
+    expect(takeFrom("payments", pay, "refunds").status).toBe(0);
+    takePushes(home.remote);
+    git(home.dir, ["remote", "add", "team-a", fork]);
+    next(home.dir);
+    expect(claimPayload(home.remote, id8, "refunds")).toMatchObject({ taken_by: "pay" });
+    refusePushes(home.remote);
+    const record = buildDir(pay, "payments", "refunds");
+    const requirements = join(record, "inception", "requirements-analysis", "requirements.md");
+    writeFileSync(requirements, `${readFileSync(requirements, "utf-8")}\nFR2 partial refunds.\n`);
+    const proposed = run(UNIT, ["propose", "--input", "requirements.md", "--person-words", "partial refunds too"], pay);
+    expect(proposed.status, proposed.out).toBe(0);
+    expect(String(proposed.json?.notice)).toContain("Sent your change to the requirements to ");
+    codeGenerated(pay, record);
+    finishBuild(record);
+    const pushed = run(UNIT, ["push"], pay);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(String(pushed.json?.notice ?? pushed.out)).toMatch(resultOnFork(fork));
+    const there = claimPayload(fork, id8, "refunds");
+    expect(there?.result).toBeDefined();
+    expect(((there?.proposals ?? []) as unknown[]).length).toBe(1);
+  });
+
+  test("after the person's own fetch brings the fork's copy of the take, the push still sends the result to the fork", () => {
+    const { home, hosts, id8 } = forkedLead();
+    refusePushes(home.remote);
+    const { dir: pay, fork } = forkedTeam(home, hosts, "pay");
+    expect(takeFrom("payments", pay, "refunds").status).toBe(0);
+    git(pay, ["fetch", "-q", "origin"]);
+    const record = buildDir(pay, "payments", "refunds");
+    codeGenerated(pay, record);
+    finishBuild(record);
+    const pushed = run(UNIT, ["push"], pay);
+    expect(pushed.status, pushed.out).toBe(0);
+    const said = String(pushed.json?.notice ?? pushed.out);
+    expect(said).toMatch(resultOnFork(fork));
+    expect(said).not.toContain("send it again");
+    expect(claimPayload(fork, id8, "refunds")?.result).toBeDefined();
+  });
+
+  test("once the lead's project records the Unit done, a team clone whose origin holds an older copy reads it done", () => {
+    const { home, hosts, id8 } = forkedLead();
+    refusePushes(home.remote);
+    const { dir: pay, fork } = forkedTeam(home, hosts, "pay");
+    expect(takeFrom("payments", pay, "refunds").status).toBe(0);
+    const record = buildDir(pay, "payments", "refunds");
+    codeGenerated(pay, record);
+    finishBuild(record);
+    expect(run(UNIT, ["push"], pay).status).toBe(0);
+    takePushes(home.remote);
+    git(home.dir, ["remote", "add", "team-a", fork]);
+    next(home.dir);
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    mergeOnHost(hosts.billing, "refunds", "squash");
+    git(home.dir, ["fetch", "-q", "origin"]);
+    next(home.dir);
+    expect(claimPayload(home.remote, id8, "refunds")).toMatchObject({ done: true });
+    // The fork still holds the result without done; the team's clone has both copies.
+    git(pay, ["fetch", "-q", "origin"]);
+    writeFileSync(join(pay, "aidlc", "spaces", "payments", "intents", "active-intent"), "");
+    const look = next(pay, chatOf("pay-after-merge"));
+    expect(String(look.question ?? ""), JSON.stringify(look).slice(0, 900)).not.toContain("refunds (pushed by pay");
+  });
+
+  test("a lead's look that this .git cannot write in this session says so, never that the team's remote could not be read", () => {
+    const { home, hosts } = forkedLead();
+    refusePushes(home.remote);
+    const { dir: pay, fork } = forkedTeam(home, hosts, "pay");
+    expect(takeFrom("payments", pay, "refunds").status).toBe(0);
+    takePushes(home.remote);
+    git(home.dir, ["remote", "add", "team-a", fork]);
+    const head = join(home.dir, ".git", "FETCH_HEAD");
+    if (!existsSync(head)) writeFileSync(head, "");
+    chmodSync(head, 0o444);
+    try {
+      const look = nextSaying(home.dir, chatOf("lead-readonly"));
+      expect(look.said).not.toContain("could not be read just now");
+      expect(look.said).toContain("this workspace's .git cannot be written in this session");
+    } finally {
+      chmodSync(head, 0o644);
+    }
+  });
+
+  test("a lead whose one remote is not called origin adds the team's fork as the take line says: the next look takes it in", () => {
+    const { home, hosts, id8 } = forkedLead();
+    refusePushes(home.remote);
+    const { dir: pay, fork } = forkedTeam(home, hosts, "pay");
+    expect(takeFrom("payments", pay, "refunds").status).toBe(0);
+    takePushes(home.remote);
+    git(home.dir, ["remote", "rename", "origin", "github"]);
+    git(home.dir, ["remote", "add", "team-a", fork]);
+    const look = run(ORCH, ["next"], home.dir);
+    expect(look.out).not.toContain("Multiple git remotes are configured");
+    expect(look.status, look.out).toBe(0);
+    expect(claimPayload(home.remote, id8, "refunds")).toMatchObject({ taken_by: "pay" });
+  });
+
   test("at the lead's project, another remote's older copy of a claim never hides the lead's own: the merged Unit is recorded done", () => {
     const { hosts, home, alice, record } = refundsTaken();
     const id8 = fixtureIntentId8(home.dir);

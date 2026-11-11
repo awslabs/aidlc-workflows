@@ -670,9 +670,11 @@ work does: after every stage, or once at its end.
   line below. A remote of the lead's that cannot be read is said once in a chat
   while a Unit is still open at the lead's project, or when it held this work's
   claims before. A clone's own remote stands in for the lead's project only
-  while it lists the same claims, so a fork that copied the lead's claim
-  branches is never taken for it; when neither the lead's project nor that
-  remote answers, one line says so and nothing is taken or sent.
+  while it lists the same claims, or while the lead's project does not answer;
+  a claim written through it that the lead's project then does not show (a
+  fork that copied the lead's claim branches) is said as being on that remote.
+  When neither the lead's project nor that remote answers, one line says so and
+  nothing is taken or sent.
 - A lead's project you can read but not push to, with nowhere else to push: the
   take goes on and the build starts, and one line, said once, gives git's reason
   and says the lead and the other teams cannot see your take until a push goes

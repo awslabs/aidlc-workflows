@@ -18266,6 +18266,7 @@ function teamHomeClaims(
       if (!query) {
         const back = takeInFromRemotes(projectDir, { unitOpen: open });
         for (const line of back.unreadable) sayWithStepOnce(projectDir, line);
+        if (back.refused) sayWithStepOnce(projectDir, newsNotTakenIn("the teams"));
       }
       overview = readOverview();
       left = leftNow();
