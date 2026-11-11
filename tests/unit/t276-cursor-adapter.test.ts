@@ -4771,7 +4771,7 @@ function guardRuns(capture: string): Array<{ pid: number; file: string; sees?: b
 
 // The shipped guards, each behind a file whose run is no function: the adapter
 // starts the real hook as its own process, the path every call took before. The
-// file keeps the hook's other exports, since one guard imports another by name.
+// file keeps the hook's other exports, since another hook imports from the plan guard.
 function childOnlyGuards(dir: string): void {
   for (const file of GUARD_FILES) {
     const path = join(dir, ".cursor", "hooks", file);
@@ -4955,6 +4955,23 @@ describe("t276 guards run the four guards in the adapter's own process", () => {
     expect(dropLines(proj)).toEqual([
       "state-transition-guard exited 1 under the Cursor adapter: error: STANDIN-THREW",
     ]);
+  });
+
+  // With no engine to start, a guard that fell back to its own process could not
+  // run: the shipped guards answering at all shows each one ran here.
+  test("G6: the shipped guards run inside the adapter, so their answers arrive with no engine child to start", () => {
+    const noEngine = (dir: string) => ({ env: { AIDLC_COMPILED_EXECUTABLE: join(dir, "no-engine-here") } });
+    const ordinary = installedProject();
+    seedStateFile(ordinary, "state-construction.md");
+    expectAllowJson(runAdapter(ordinary, "guards", payload("preToolUseShell", ordinary), noEngine(ordinary)));
+    const proj = codeGenerationProject();
+    const write = runAdapter(proj, "guards", payload("preToolUseShell", proj, {
+      tool_name: "Write",
+      tool_input: { file_path: join(proj, "src", "blocked.ts") },
+    }), noEngine(proj));
+    expect(write.code, write.stderr).toBe(0);
+    expect((JSON.parse(write.stdout) as { permission?: string }).permission).toBe("deny");
+    expect(dropLines(proj)).toEqual([]);
   });
 
   test("G5: under the compiled engine a Claude Code turn waiting in the project is settled before the guards run", () => {

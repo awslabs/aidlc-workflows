@@ -1642,10 +1642,10 @@ export async function run(
   // The guards run their core hook inside this process, as on Codex and
   // Copilot: a child loads the whole engine again, so as children a shell
   // call's four guards cost five engine loads. A guard that cannot be imported
-  // or exports no run() runs as a child as before. Under the compiled engine
-  // each guard's own engine first settled the project's waiting Claude Code
-  // turns (the hook route does), so the chain does that once, before its first
-  // guard.
+  // or exports no run() runs as a child. The engine's hook route settles the
+  // project's waiting Claude Code turns before a hook runs; a guard run here
+  // skips that route, so under the compiled engine the chain settles once,
+  // before its first guard.
   let turnsSettled = false;
   async function runGuard(
     file: string,
