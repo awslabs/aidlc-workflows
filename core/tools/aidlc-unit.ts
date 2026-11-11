@@ -409,21 +409,17 @@ function repositoryRemote(projectDir: string): string | null {
 
 // With several remotes and none called origin (a lead who added a team's fork
 // beside their own remote): the one at the lead's project the work in hand
-// records, else the one remote no claims are kept under. Null when neither
-// tells it.
+// records. Null when it does not tell: a remote no claims are kept under is no
+// sign, since a team's fork not fetched yet is one too.
 function ownRemoteOf(projectDir: string, remotes: string[]): string | null {
   try {
     const location = homeLocation(readStateFile(projectDir));
-    if (location !== null && isGitAddress(location)) {
-      const at = remotes.filter((remote) => sameGitAddress(git(projectDir, ["remote", "get-url", remote]).stdout.trim(), location));
-      if (at.length === 1) return at[0];
-    }
+    if (location === null || !isGitAddress(location)) return null;
+    const at = remotes.filter((remote) => sameGitAddress(git(projectDir, ["remote", "get-url", remote]).stdout.trim(), location));
+    return at.length === 1 ? at[0] : null;
   } catch {
-    // No work in hand to read: the claims tell it, or nothing does.
+    return null;
   }
-  const clean = remotes.filter((remote) =>
-    localGit(projectDir, ["for-each-ref", "--count=1", "--format=%(refname)", `refs/remotes/${remote}/claim/`]).stdout.trim() === "");
-  return clean.length === 1 ? clean[0] : null;
 }
 
 function currentBranch(projectDir: string): string {
@@ -1080,12 +1076,19 @@ function claimToGoOn(
 // This build's take as the team's own remote holds it, while the lead's
 // project has not recorded it: read there, and only when it is this take's.
 function outboxTake(projectDir: string, home: { location: string }, build: UnitBuild, ref: string): { outbox: string; claim: UnitClaimView } | null {
+  const there = outboxClaim(projectDir, home, ref);
+  const me = git(projectDir, ["config", "user.name"]).stdout.trim();
+  return there?.claim.status === "claimed" && there.claim.payload.taken_by === me && there.claim.generation === build.attempt ? there : null;
+}
+
+// The claim the team's own remote holds, read there; null when there is none,
+// it holds none, or it does not answer.
+function outboxClaim(projectDir: string, home: { location: string }, ref: string): { outbox: string; claim: UnitClaimView } | null {
   const outbox = claimOutbox(projectDir, home);
   if (outbox === null) return null;
   try {
     const claim = quietly(() => currentClaim(projectDir, outbox, ref));
-    const me = git(projectDir, ["config", "user.name"]).stdout.trim();
-    return claim?.status === "claimed" && claim.payload.taken_by === me && claim.generation === build.attempt ? { outbox, claim } : null;
+    return claim === null ? null : { outbox, claim };
   } catch {
     return null;
   }
@@ -6668,8 +6671,13 @@ function takeUnit(args: string[], projectDir?: string): void {
   if (home === null) fail(`${unit}'s build is not here.`);
   const ref = claimRef(home.id8, unit);
   if (home.target !== null) ensureFetchedClaim(pd, home, ref);
-  const current = currentClaim(pd, home.target, ref);
-  const integration = fetchHomeIntegration(pd, home, current, byAddress?.fetched);
+  const atLead = currentClaim(pd, home.target, ref);
+  // While the lead's project has no claim of it, or a released one, the team's
+  // own remote may hold a take or give back the lead has not taken in: a take
+  // is said as taken, and a new take goes on top of a give back there.
+  const there = atLead === null || atLead.status === "released" ? outboxClaim(pd, home, ref) : null;
+  const current = there !== null && (atLead === null || claimAhead(pd, atLead.oid, there.claim.oid) === "ahead") ? there.claim : atLead;
+  const integration = fetchHomeIntegration(pd, home, atLead, byAddress?.fetched);
   const plan = homePlanAt(pd, home, integration.oid, integration.branch);
   const planChanging = unitPlanChangingStage(plan.state);
   const solo = home.solo ? soloOpening(pd, home, plan) : null;
@@ -6728,7 +6736,7 @@ function takeUnit(args: string[], projectDir?: string): void {
     gateRhythm: readUnitGateRhythm(plan.state), earlyOn,
   });
   const commit = createClaimCommit(pd, current?.oid ?? integration.oid, payload);
-  const pushed = writeHomeClaim(pd, home, ref, commit, current?.oid ?? null);
+  const pushed = writeHomeClaim(pd, home, ref, commit, atLead?.oid ?? null);
   // The lead's project took no push from here: the take goes on as the person
   // asked, and its claim is recorded there when a push next goes through
   // (recordTakeHere). An early start's claim alone holds where it started, so
@@ -7211,20 +7219,22 @@ export function takeInFromRemotes(projectDir: string, options: { unitOpen: boole
       // The lead's own commit with the team commit's tree, its author the
       // team's, on the lead's claim tip: a host that takes only its pusher's
       // commits takes it, and the team's own commit never goes there.
+      const notTakenIn = (why: string): string =>
+        `${unit}'s take or result on ${remote} could not be taken in here (${why.split(/\r?\n/).map((part) => part.trim()).find(Boolean) ?? why}), ` +
+        "so the board does not show it yet.";
+      // Under quiet git's time limit: signing that would ask for a passphrase fails, said with git's words.
       let mine: string;
       try {
-        mine = leadsOwnClaimCommit(pd, oid, leadTip ?? payload.base_oid);
-      } catch {
+        mine = quietly(() => leadsOwnClaimCommit(pd, oid, leadTip ?? payload.base_oid));
+      } catch (e) {
+        lines.push(notTakenIn(errorMessage(e).replace(/^git commit-tree failed:\s*/, "")));
         continue;
       }
       const put = quietly(() => updateClaimRef(pd, home, ref, mine, leadTip));
       if (put.ok) {
         taken++;
         invalidateLiveClaimPayloadCache(pd, unit);
-      } else if (put.refused !== undefined) {
-        const why = put.refused.split(/\r?\n/).map((part) => part.trim()).find(Boolean) ?? put.refused;
-        lines.push(`${unit}'s take or result on ${remote} could not be taken in here (${why}), so the board does not show it yet.`);
-      }
+      } else if (put.refused !== undefined) lines.push(notTakenIn(put.refused));
     }
   }
   return { taken, lines, refused };
