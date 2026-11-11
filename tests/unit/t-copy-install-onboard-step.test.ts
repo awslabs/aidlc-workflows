@@ -11,9 +11,9 @@
 // Mechanism: cli. Each case lays a harness's copy runtime into a fresh git
 // project the way the release packs it (dist/<harness> without the files
 // `copyChannelOmits` names), asks that tree's own engine for the step, and runs
-// the command the step names, as the agent does. The Kiro trees' step is checked
-// as text only: their adapters run a knowledge command themselves, before the
-// agent sees any step.
+// the command the step names, as the agent does. On the Kiro trees the adapter
+// runs a knowledge command itself, before the agent sees any step, so their
+// cases send the person's message to the tree's own prompt hook instead.
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -90,12 +90,12 @@ function project(harness: Harness, tree: "dist" | "dist-release" = "dist"): stri
   return proj;
 }
 
-function run(proj: string, argv: string[], env: NodeJS.ProcessEnv): { status: number; out: string } {
+function run(proj: string, argv: string[], env: NodeJS.ProcessEnv, input = ""): { status: number; out: string } {
   const result = spawnSync(argv[0] === "bun" ? BUN : argv[0], argv.slice(1), {
     cwd: proj,
     env,
     encoding: "utf-8",
-    input: "",
+    input,
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   return { status: result.status ?? -1, out: `${result.stdout ?? ""}${result.stderr ?? ""}` };
@@ -165,12 +165,29 @@ describe("knowledge onboard on a copy install", () => {
     expect(existsSync(join(proj, DOCUMENTS))).toBe(true);
   });
 
-  // Step text only: on these installs the adapter runs the command itself.
   for (const harness of ["kiro", "kiro-ide"] as const) {
     test(`${harness}: the engine's step names the dispatcher`, () => {
       const proj = project(harness);
       expect(knowledgeStep(proj, harness, ["onboard", "orig/requirements.md"], cleanEnv()))
         .toBe("bun .kiro/tools/aidlc.ts engine knowledge onboard orig/requirements.md");
+    });
+
+    test(`${harness}: the prompt hook copies a file outside documents/ in and adds it`, () => {
+      const proj = project(harness);
+      const env = { ...cleanEnv(), CLAUDE_PROJECT_DIR: proj };
+      const message = JSON.stringify({
+        hook_event_name: "UserPromptSubmit",
+        session_id: `copy-onboard-${harness}`,
+        cwd: proj,
+        prompt: "/aidlc knowledge onboard orig/requirements.md",
+      });
+      const result = run(proj, ["bun", join(".kiro", "hooks", "aidlc-kiro-adapter.ts"), "verb-intercept"], env, message);
+      expect(result.status, result.out).toBe(0);
+      expect(result.out).not.toContain("does not exist");
+      expect(result.out).toContain("onboard_note");
+      const original = readFileSync(join(proj, "orig", "requirements.md"), "utf-8");
+      expect(readFileSync(join(proj, DOCUMENTS, "requirements.md"), "utf-8")).toBe(original);
+      expect(indexedPaths(proj)).toEqual(["documents/requirements.md"]);
     });
   }
 

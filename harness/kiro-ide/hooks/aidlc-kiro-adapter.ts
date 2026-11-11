@@ -2121,21 +2121,20 @@ function runTerminalCommand(command: TerminalCommand): TerminalResult | null {
     };
   }
 
-  const toolFile = command.source === "knowledge-verb"
-    ? "aidlc-knowledge.ts"
-    : "aidlc-utility.ts";
+  // A `knowledge` verb goes through the dispatcher, as the compiled path does:
+  // `onboard`'s copy of a document named outside documents/, and making that
+  // folder, run there (withNamedDocumentCopied in aidlc.ts), and
+  // aidlc-knowledge.ts run alone refuses the path instead.
+  const sourceArgs = command.source === "knowledge-verb"
+    ? [join(".kiro", "tools", "aidlc.ts"), ...terminalDispatcherArgv(command)]
+    : [join(".kiro", "tools", "aidlc-utility.ts"), command.subcommand, ...forwarded];
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
 
   try {
     const result = Bun.spawnSync(
       executable
         ? [executable, ...terminalDispatcherArgv(command)]
-        : [
-            process.execPath,
-            join(".kiro", "tools", toolFile),
-            command.subcommand,
-            ...forwarded,
-          ],
+        : [process.execPath, ...sourceArgs],
       {
         cwd: projectDir,
         stdout: "pipe",
