@@ -9260,17 +9260,50 @@ function resolveIntentByName(
   return { ...match, dirName: match.dirName };
 }
 
+// A claim typed while no work is selected here (a teammate's first message in a
+// new clone) goes to the one piece of work here with a Unit by that name,
+// selected as `intent <name>` selects it; the claim then says what it says with
+// work selected. Work whose Unit plan cannot be read counts, so the claim says
+// why. Named as status names them, by record dir where `intent` needs it.
+function claimWhereTheUnitIs(projectDir: string, unit: string): void {
+  let selection: ReturnType<typeof resolveWorkflowSelection>;
+  try {
+    selection = resolveWorkflowSelection(projectDir);
+  } catch {
+    return;
+  }
+  if (selection.intent !== null) return;
+  const space = selection.space;
+  const work = (workToPickUp(projectDir, space, null) ?? []).map(({ intent }) => intent).filter((intent) => {
+    if (!isBindableIntentRecordName(intent.dirName)) return false;
+    const dag = resolveBoltDag(projectDir, intent.dirName, space);
+    return dag.state === "malformed" || (dag.state === "ok" && dag.units.includes(unit));
+  });
+  if (work.length === 0) die(`${unit} is not a Unit of any piece of work here.`);
+  if (work.length > 1) {
+    const all = listIntents(projectDir, space, null);
+    const named = work.map((intent) =>
+      all.filter((i) => i.slug === intent.slug && i.dirName !== null).length > 1 ? intent.dirName : intentDisplayLabel(intent)
+    );
+    die(`${unit} is a Unit of more than one piece of work here (${named.join(", ")}); say which one.`);
+  }
+  handleIntent(projectDir, ["intent", "switch", work[0].dirName as string], {}, new Set(), true);
+}
+
 // `/aidlc intent` (list) · `/aidlc intent <name>` (switch the active-intent
 // cursor) · `/aidlc intent archive|unarchive <name>` (lifecycle). Switching an
 // intent is a PURE cursor write (an intent has no native include — only a
 // space does). The <name> matches a record dir name exactly, or a slug (when
 // unambiguous within the space). --json on the bare list emits the structured
-// query shape; --all includes archived records in the human listing.
+// query shape; --all includes archived records in the human listing. `quiet`
+// selects and says nothing, for a command that selects on the way to its own
+// result (claimWhereTheUnitIs).
 function handleIntent(
   projectDir: string,
   positional: string[],
   flags: Record<string, string>,
   missingValueFlags: ReadonlySet<string> = new Set(),
+  quiet = false,
 ): void {
   const asJson = flags.json === "true";
   const showAll = flags.all === "true";
@@ -9355,7 +9388,7 @@ function handleIntent(
   // Only the chat this command runs in moves. One typed somewhere else moves
   // the shared selection and asks the open chat once (askTheOpenChatToFollow).
   const sid = selection.sessionId;
-  if (!sid) askTheOpenChatToFollow(projectDir, space, match.dirName, `\`${intentDisplayLabel(match)}\``);
+  if (!sid && !quiet) askTheOpenChatToFollow(projectDir, space, match.dirName, `\`${intentDisplayLabel(match)}\``);
   if (sid) {
     writeSessionBinding(projectDir, sid, space, match.dirName, "switch");
     clearSessionRebindOffer(projectDir, sid);
@@ -9374,6 +9407,7 @@ function handleIntent(
       recordSessionIntentSwitch(projectDir, sid, priorUuid, recordIntentKey(space, match.dirName));
     }
   }
+  if (quiet) return;
   // What the person sees after picking or switching: the work they are on now,
   // by the name they know it by.
   const where = space === DEFAULT_SPACE ? "" : ` in space \`${space}\``;
@@ -14299,6 +14333,7 @@ export async function main(argv: string[]): Promise<void> {
       await handleStatus(projectDir, flags);
       break;
     case "claim":
+      if (positional.length === 2 && !("help" in flags) && !rawArgs.includes("-h")) claimWhereTheUnitIs(projectDir, positional[1]);
       unitMain([
         "claim",
         ...rawArgs.slice(1),
