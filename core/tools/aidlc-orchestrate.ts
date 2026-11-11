@@ -17089,10 +17089,12 @@ function teamUnitMajorWalkBeat(
 // that Unit, then stops at the set-aside Unit to pick it up again. A Unit in
 // progress goes before the others, so a Unit picked up again comes first.
 // Before the walking skeleton is approved, routing walks the skeleton alone
-// (emitUnitMajorRunStage), and with it a Unit in progress and a Unit a pause
-// was set aside for, wherever they are in the DAG: otherwise the skeleton's
-// step or the pause comes first while another Unit is in progress, and
-// neither can start or be resumed while it is.
+// (emitUnitMajorRunStage). While the person has the skeleton's work reopened,
+// it also walks a Unit in progress and a Unit a pause was set aside for,
+// wherever they are in the DAG: otherwise the skeleton's redo or the pause
+// comes first, and neither can start or be resumed while that Unit is in
+// progress. A pause set aside for a Unit outside the skeleton never comes
+// before the skeleton's own re-check.
 type UnitMajorWalkStep =
   | {
       kind: "paused";
@@ -17190,7 +17192,6 @@ function unitMajorWalkStep(
       if (!setAside.has(cp.unit)) setAside.set(cp.unit, pause);
     }
   }
-  const walked = allUnits.filter((u) => units.includes(u) || waitedFor.has(u) || inProgress.has(u));
   // The Unit's first stop in the block, or null when it is done.
   const stopFor = (u: string): UnitMajorWalkStep | null => {
     for (const stop of unitWalkStops(projectDir, stateContent, block, ledgers, u, kinds, allUnits, recordPrefix, codekbCtx, checkpoints)) {
@@ -17198,6 +17199,10 @@ function unitMajorWalkStep(
     }
     return null;
   };
+  // Other Units go on only while the walked Units' own work is reopened (the
+  // person's redo): an approval that is only stale is checked again first.
+  const reopened = units.some((u) => stopFor(u)?.kind === "work");
+  const walked = allUnits.filter((u) => units.includes(u) || (reopened && (waitedFor.has(u) || inProgress.has(u))));
   const waiting: UnitMajorWalkStep[] = [];
   const order = [...walked.filter((u) => inProgress.has(u)), ...walked.filter((u) => !inProgress.has(u))];
   for (const u of order) {
@@ -17219,8 +17224,9 @@ function unitMajorWalkStep(
 // Construction order, team-owned Units, stage-level artifacts, no Unit DAG, an
 // unresolved skeleton stance, or a pause, summary, checkpoint, or gate stop.
 // It mirrors the emitForSlug -> emitUnitMajorRunStage route, but walks every
-// Unit: until the skeleton is approved, routing walks only the skeleton, a
-// Unit in progress and the Units a set-aside Unit waits for.
+// Unit: until the skeleton is approved, routing walks only the skeleton, and
+// while its work is reopened a Unit in progress and the Units a set-aside
+// Unit waits for.
 function unitMajorWorkBeat(
   projectDir: string,
   scope: string,

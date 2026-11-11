@@ -1,10 +1,13 @@
 // covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-state:unit, subcommand:aidlc-log:answer
 //
-// Units built one at a time with the walking skeleton on: a Unit set aside for
-// another that is now in progress is not put ahead of it while the skeleton's
-// approval is not current. The Unit in progress gets its own step, its plan
-// question and its recorded answer; the set-aside Unit is offered again once
-// the one it waits for is done, as when the skeleton is approved.
+// Units built one at a time with the walking skeleton on, while the
+// skeleton's approval is not current. When the person asked to redo the
+// skeleton and then went back to another Unit, that Unit, in progress, gets
+// its own step, its plan question and its recorded answer, and a Unit set
+// aside for it is offered again once it is done, as when the skeleton is
+// approved. When the skeleton's approval is only stale (a file it covers
+// changed under Guard Policy strict), its re-check comes first, as on main,
+// and never a set-aside Unit's question that cannot be resumed.
 //
 // Driven through the shipped tools; the stage documents and completion rows
 // are written the way t342's helpers write them.
@@ -183,11 +186,17 @@ function started(p: string, unit: string): void {
   expect(r.status, r.out).toBe(0);
 }
 
-// The Unit's own Code Generation step: its build, or its plan question, never
-// a question to pick up a paused Unit.
+// The Unit's own Code Generation step: its build or its plan question, never
+// a question to pick up a paused Unit and never its checkpoint.
 function ownStep(step: Directive, unit: string): void {
   expect(step, JSON.stringify(step)).toMatchObject({ stage: "code-generation", unit });
   expect(step.ask_type ?? "", JSON.stringify(step)).not.toBe("unit-paused");
+  expect(step.construction_checkpoint, JSON.stringify(step)).toBeUndefined();
+}
+
+// The step is the skeleton's re-check: alpha's checkpoint.
+function recheck(step: Directive): void {
+  expect(step.construction_checkpoint, JSON.stringify(step)).toMatchObject({ kind: "skeleton", unit: "alpha" });
 }
 
 // Runs, in order, every engine command the print names before it says what
@@ -204,8 +213,7 @@ function runPrinted(p: string, args: string[]): string {
   return String(printed.message);
 }
 
-// The Unit's code plan, written and asked; the person approves it in their
-// own words and the agent records that.
+// The Unit's code plan and its test instructions, as the stage writes them.
 function writePlan(p: string, unit: string): void {
   const dir = codeGenerationRecordDir(p, unit);
   mkdirSync(dir, { recursive: true });
@@ -215,6 +223,8 @@ function writePlan(p: string, unit: string): void {
   writeFileSync(join(dir, "unit-test-instructions.md"), "# Unit Test Instructions\n\nRun `bun test`.\n");
 }
 
+// The Unit's code plan, written and asked; the person approves it in their
+// own words and the agent records that.
 function planApproved(p: string, unit: string): void {
   writePlan(p, unit);
   const asked = next(p);
@@ -228,6 +238,31 @@ function planApproved(p: string, unit: string): void {
   ], env);
   expect(recorded.status, recorded.out).toBe(0);
   expect(next(p).plan_approval).toEqual({ status: "approved" });
+}
+
+// What main does before the re-check: the building Unit's plan answer and its
+// completion are refused, and nothing of it is recorded.
+function refusedUntilRecheck(p: string, unit: string): void {
+  personSays(p, "approve");
+  const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_UNATTENDED: "0" };
+  delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+  const answered = tool(p, "log", [
+    "answer", "--stage", "code-generation", "--unit", unit, "--checkpoint", "plan-approval",
+    "--details", "Approve Plan", "--session", SESSION,
+  ], env);
+  expect(answered.status, answered.out).not.toBe(0);
+  expect(answered.out.replaceAll('\\"', '"')).toContain(`approval target unit "${unit}" does not match active directive unit "alpha"`);
+  const completed = tool(p, "state", ["unit", "complete", "--stage", "code-generation", "--unit", unit]);
+  expect(completed.status, completed.out).not.toBe(0);
+}
+
+// The Unit's Code Generation done: its documents written, its plan approved,
+// its completion recorded.
+function codeDone(p: string, unit: string): void {
+  cover(p, unit, ["code-generation"], false);
+  planApproved(p, unit);
+  const completed = tool(p, "state", ["unit", "complete", "--stage", "code-generation", "--unit", unit]);
+  expect(completed.status, completed.out).toBe(0);
 }
 
 // alpha, the walking skeleton, is built and approved; beta has its design and
@@ -246,6 +281,25 @@ function backToBetaDuringSkeletonRedo(): string {
   expect(runPrinted(p, ["--stage", "code-generation", "--unit", "beta"]))
     .toContain("Paused unit alpha at Code Generation and picked unit beta up at Code Generation.");
   expect(approved(p, "alpha", "skeleton")).toBe(false);
+  return p;
+}
+
+// As a live run has it: the person asks to redo alpha's code while beta builds,
+// alpha's plan from its first build is asked again at once, so alpha's step has
+// not started, and the person goes back to beta: nothing is set aside, and
+// beta is in progress. `changed`: a file alpha's approval covers changes too,
+// under Guard Policy strict.
+function backToBetaBeforeTheRedoStarts(changed = false): string {
+  const p = fixture(["alpha", "beta"], changed ? "strict (set by you)" : undefined);
+  cover(p, "alpha");
+  approve(p, "alpha", "skeleton");
+  cover(p, "beta", STAGES.slice(0, 4));
+  expect(next(p)).toMatchObject({ stage: "code-generation", unit: "beta" });
+  started(p, "beta");
+  expect(runPrinted(p, ["--stage", "code-generation", "--unit", "alpha"])).toContain("aidlc-jump.ts reopen ");
+  expect(next(p)).toMatchObject({ kind: "ask", ask_type: "plan-approval", unit: "alpha" });
+  if (changed) writeFileSync(join(p, "src", "alpha.ts"), "export const alpha = 2;\n");
+  expect(runPrinted(p, ["--stage", "code-generation", "--unit", "beta"])).toContain("Picked unit beta up at Code Generation.");
   return p;
 }
 
@@ -270,39 +324,43 @@ function betaReopenedThenSkeletonChanged(): string {
   return p;
 }
 
-describe("a Unit set aside for the one in progress, while the skeleton is not approved", () => {
-  // As a live run has it: alpha's plan from its first build is asked again at
-  // once, so alpha's step has not started when the person goes back to beta,
-  // and nothing is set aside for beta: beta is in progress all the same.
-  test("the person redoes the skeleton's code and goes back to beta before it starts: beta's plan approval records", () => {
-    const p = fixture();
-    cover(p, "alpha");
-    approve(p, "alpha", "skeleton");
-    cover(p, "beta", STAGES.slice(0, 4));
-    expect(next(p)).toMatchObject({ stage: "code-generation", unit: "beta" });
-    started(p, "beta");
-    expect(runPrinted(p, ["--stage", "code-generation", "--unit", "alpha"])).toContain("aidlc-jump.ts reopen ");
-    expect(next(p)).toMatchObject({ kind: "ask", ask_type: "plan-approval", unit: "alpha" });
-    expect(runPrinted(p, ["--stage", "code-generation", "--unit", "beta"])).toContain("Picked unit beta up at Code Generation.");
-    const named = next(p, ["--stage", "code-generation", "--unit", "beta"]);
-    expect(named, JSON.stringify(named)).toMatchObject({ stage: "code-generation", unit: "beta" });
-    planApproved(p, "beta");
+// Under Guard Policy strict, alpha approved and beta building, a file alpha's
+// approval covers changes; nothing is set aside.
+function skeletonChangedWhileBetaBuilds(): string {
+  const p = fixture(["alpha", "beta"], "strict (set by you)");
+  cover(p, "alpha");
+  approve(p, "alpha", "skeleton");
+  cover(p, "beta", STAGES.slice(0, 4));
+  expect(next(p)).toMatchObject({ stage: "code-generation", unit: "beta" });
+  started(p, "beta");
+  writePlan(p, "beta");
+  writeFileSync(join(p, "src", "alpha.ts"), "export const alpha = 2;\n");
+  expect(approved(p, "alpha", "skeleton")).toBe(false);
+  return p;
+}
+
+describe("while the walking skeleton is not approved: the person's redo and go-back, and a stale skeleton under strict", () => {
+  test("the person redoes the skeleton's code and goes back to beta before it starts: beta's plan approval records, then alpha's redo comes back", () => {
+    const p = backToBetaBeforeTheRedoStarts();
+    ownStep(next(p, ["--stage", "code-generation", "--unit", "beta"]), "beta");
+    codeDone(p, "beta");
+    ownStep(next(p), "alpha");
   });
 
-  for (const [name, setUp, inProgress, setAside] of [
-    ["the person redoes the skeleton's code, then goes back to beta", backToBetaDuringSkeletonRedo, "beta", "alpha"],
-    ["gamma is set aside for beta, then the skeleton's approved files change", betaReopenedThenSkeletonChanged, "beta", "gamma"],
-  ] as const) {
-    test(`${name}: ${inProgress} is next, by itself and by name, and its plan approval records`, () => {
-      const p = setUp();
-      const step = next(p);
-      ownStep(step, inProgress);
-      const named = next(p, ["--stage", "code-generation", "--unit", inProgress]);
-      ownStep(named, inProgress);
-      planApproved(p, inProgress);
-      expect(next(p)).not.toMatchObject({ ask_type: "unit-paused", unit: setAside });
-    });
-  }
+  test("both at once, the person's redo and a changed file under strict: beta goes on, then alpha's redo, whose checkpoint checks the change", () => {
+    const p = backToBetaBeforeTheRedoStarts(true);
+    ownStep(next(p), "beta");
+    codeDone(p, "beta");
+    ownStep(next(p), "alpha");
+  });
+
+  test("the person redoes the skeleton's code, then goes back to beta: beta is next, by itself and by name, and its plan approval records", () => {
+    const p = backToBetaDuringSkeletonRedo();
+    ownStep(next(p), "beta");
+    ownStep(next(p, ["--stage", "code-generation", "--unit", "beta"]), "beta");
+    planApproved(p, "beta");
+    expect(next(p)).not.toMatchObject({ ask_type: "unit-paused", unit: "alpha" });
+  });
 
   test("going back and forth twice lands on the Unit named each time, and beta's plan approval records", () => {
     const p = backToBetaDuringSkeletonRedo();
@@ -310,8 +368,7 @@ describe("a Unit set aside for the one in progress, while the skeleton is not ap
     for (const [to, from] of [["alpha", "beta"], ["beta", "alpha"], ["alpha", "beta"], ["beta", "alpha"]]) {
       expect(runPrinted(p, ["--stage", "code-generation", "--unit", to]))
         .toContain(`Paused unit ${from} at Code Generation and picked unit ${to} up at Code Generation.`);
-      const step = next(p);
-      ownStep(step, to);
+      ownStep(next(p), to);
     }
     planApproved(p, "beta");
   });
@@ -340,10 +397,7 @@ describe("a Unit set aside for the one in progress, while the skeleton is not ap
 
   test("once beta's step is done and approved, alpha is offered again and picks up where it stopped", () => {
     const p = backToBetaDuringSkeletonRedo();
-    cover(p, "beta", ["code-generation"], false);
-    planApproved(p, "beta");
-    const completed = tool(p, "state", ["unit", "complete", "--stage", "code-generation", "--unit", "beta"]);
-    expect(completed.status, completed.out).toBe(0);
+    codeDone(p, "beta");
     expect(next(p).construction_checkpoint).toMatchObject({ kind: "unit", unit: "beta" });
     approve(p, "beta", "unit");
     const ask = next(p);
@@ -353,35 +407,28 @@ describe("a Unit set aside for the one in progress, while the skeleton is not ap
     ownStep(next(p), "alpha");
   });
 
-  test("once beta's code is done, the skeleton's changed work is checked again before gamma is offered", () => {
+  test("the issue's shape under strict: the skeleton's re-check comes first, never gamma's question; once approved, beta's plan records and gamma is offered after beta", () => {
     const p = betaReopenedThenSkeletonChanged();
-    cover(p, "beta", ["code-generation"], false);
-    planApproved(p, "beta");
-    const completed = tool(p, "state", ["unit", "complete", "--stage", "code-generation", "--unit", "beta"]);
-    expect(completed.status, completed.out).toBe(0);
-    const step = next(p);
-    expect(step.construction_checkpoint, JSON.stringify(step)).toMatchObject({ kind: "skeleton", unit: "alpha" });
+    writePlan(p, "beta");
+    recheck(next(p));
+    recheck(next(p, ["--stage", "code-generation", "--unit", "beta"]));
+    refusedUntilRecheck(p, "beta");
+    approve(p, "alpha", "skeleton");
+    codeDone(p, "beta");
+    expect(next(p).construction_checkpoint).toMatchObject({ kind: "unit", unit: "beta" });
+    approve(p, "beta", "unit");
+    expect(next(p)).toMatchObject({ kind: "ask", ask_type: "unit-paused", unit: "gamma", stage: "code-generation" });
+    const resumed = tool(p, "state", ["unit", "resume", "--stage", "code-generation", "--unit", "gamma"]);
+    expect(resumed.status, resumed.out).toBe(0);
+    ownStep(next(p), "gamma");
   });
 
-  // The one order this changes: with nothing set aside, a Unit in progress used
-  // to wait behind the skeleton's re-check, whose redo cannot start while that
-  // Unit is in progress. The re-check still comes, once that Unit's code is done.
-  test("nothing set aside: a Unit in progress goes before the skeleton's re-check (the order this changes)", () => {
-    const p = fixture(["alpha", "beta"], "strict (set by you)");
-    cover(p, "alpha");
+  test("nothing set aside, a changed file under strict: the skeleton's re-check comes first, as on main, then beta's plan records", () => {
+    const p = skeletonChangedWhileBetaBuilds();
+    recheck(next(p));
+    refusedUntilRecheck(p, "beta");
     approve(p, "alpha", "skeleton");
-    cover(p, "beta", STAGES.slice(0, 4));
-    expect(next(p)).toMatchObject({ stage: "code-generation", unit: "beta" });
-    started(p, "beta");
-    writeFileSync(join(p, "src", "alpha.ts"), "export const alpha = 2;\n");
-    expect(approved(p, "alpha", "skeleton")).toBe(false);
-    ownStep(next(p), "beta");
-    cover(p, "beta", ["code-generation"], false);
     planApproved(p, "beta");
-    const completed = tool(p, "state", ["unit", "complete", "--stage", "code-generation", "--unit", "beta"]);
-    expect(completed.status, completed.out).toBe(0);
-    const step = next(p);
-    expect(step.construction_checkpoint, JSON.stringify(step)).toMatchObject({ kind: "skeleton", unit: "alpha" });
   });
 
   test("the skeleton paused with nothing else in progress is still offered", () => {
