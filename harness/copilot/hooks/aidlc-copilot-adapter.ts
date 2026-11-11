@@ -139,6 +139,7 @@ import {
   validSessionId,
 } from "../tools/aidlc-lib.ts";
 import { appendCoordinationStoodAside, appendSubagentPromptUnmatched } from "../tools/aidlc-audit.ts";
+import { patchTargets } from "./review-freeze-command.ts";
 import { keptRestartRun } from "../tools/aidlc-question-store.ts";
 import { ROUTES, routePolicyFor, withoutProjectDirFlag } from "../tools/aidlc.ts";
 import { aidlcInvocation, quoteCommandArgument } from "../tools/aidlc-runtime-paths.ts";
@@ -1508,17 +1509,9 @@ export async function run(
   ): Array<{ path: string; toolName: "Write" | "Edit" }> {
     const patch = [toolInput.input, toolInput.patchText, toolInput.patch, toolInput.command]
       .find((value): value is string => typeof value === "string" && value.length > 0) ?? "";
-    const targets: Array<{ path: string; toolName: "Write" | "Edit" }> = [];
-    for (const match of patch.matchAll(/^\*\*\* (Add|Update|Delete) File: (.+)$/gm)) {
-      targets.push({
-        path: match[2].trim(),
-        toolName: match[1] === "Add" ? "Write" : "Edit",
-      });
-    }
-    for (const match of patch.matchAll(/^\*\*\* Move to: (.+)$/gm)) {
-      targets.push({ path: match[1].trim(), toolName: "Write" });
-    }
-    return targets.filter((target) => target.path.length > 0);
+    return patchTargets(patch)
+      .filter((target) => target.path.length > 0)
+      .map(({ kind, path }) => ({ path, toolName: kind === "Add" || kind === "Move" ? "Write" : "Edit" }));
   }
 
   function filePathsOf(toolInput: Record<string, unknown> | undefined): string[] {
