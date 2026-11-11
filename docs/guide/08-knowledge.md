@@ -124,7 +124,22 @@ You can name a file or folder anywhere in your project, or several in one
 command: one that is not already
 under `documents/` is copied in for you, keeping its name and a folder's layout,
 and the result says where the copy is. From then on the knowledge base reads
-that copy, so edit it under `documents/` and run `sync` to pick changes up.
+that copy. When you change your original, name it again: AI-DLC writes your new
+version over its copy, and the document keeps its ID and the work it belongs to.
+
+```text
+Updated aidlc/spaces/default/knowledge/documents/inventory-vision.md to your
+new inventory-vision.md. It stays the same document in the knowledge base.
+```
+
+That holds while the copy still holds what was copied. If it has changed (someone
+edited it under `documents/`, or a Windows clone of the project checked text files
+out with other line endings), your new version goes in beside it as
+`inventory-vision-2.md`, the earlier copy stays as it is, and the line says so. A
+folder you name again also goes in beside the first copy, as `<folder>-2`, and so
+does the first change to a copy made before AI-DLC kept a record of where its
+copies come from. To change the copy itself, edit it under `documents/` and run
+`sync`.
 Inside a folder you name, files git ignores are left where they are and the
 line says how many (name one of them directly and it is added, since you asked
 for it by name). A folder that git ignores as a whole is copied whole when you

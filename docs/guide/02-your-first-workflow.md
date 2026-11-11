@@ -87,7 +87,9 @@ A PDF or Word file works the same way: name it, for example
 [knowledge base](08-knowledge.md), tells you in one line where it copied it and
 its document id (at the latest when it asks you to approve the stage), and
 reads its text. You never run a command or type the id, and it never replaces a
-file already in that folder. When the file is git-ignored (or git cannot
+file already in that folder, except its own copy of that same file: name the file
+again after you change it and that copy takes your new version, keeping its id,
+as long as nobody has changed the copy. When the file is git-ignored (or git cannot
 say), it asks first whether you want it copied anyway, because the copy would be committed. When no
 text can be read (no extractor for that kind of file, or a scanned document),
 it says why and asks you for a text or Markdown version. Text over 200,000

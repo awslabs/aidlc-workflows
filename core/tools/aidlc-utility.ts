@@ -519,6 +519,7 @@ import {
   declaredProjectType,
   installWithoutReplacing,
   pathContainedBy,
+  replaceWithStaged,
 } from "./aidlc-lib.ts";
 import { chatTookStep, relativeRecordDirForSelection } from "./aidlc-record-core.ts";
 import { GUARD_POLICY_GLOSS, SCOPE_GLOSS } from "./aidlc-guard-fences.ts";
@@ -10705,15 +10706,18 @@ function onboardDocumentInput(
 
   let target = absPath;
   let created = false;
+  let updated = false;
+  let besideChanged: string | undefined;
+  const original = inPlace ? undefined : copiedFromPath(projectRoot, absPath);
   if (!inPlace) {
     try {
       mkdirSync(documentsAbs, { recursive: true });
       kb.assertKnowledgeRootTrusted(projectRoot, space);
-      ({ target, created } = copyIntoDocuments(
-        kb,
-        realpathSync(documentsAbs),
-        basename(portablePath),
-        bytes,
+      // The same file named again, changed: its new bytes go over the copy made
+      // from it, so the document keeps its id (copied_from on the row).
+      ({ target, created, updated, besideChanged } = copyIntoDocuments(
+        kb, realpathSync(documentsAbs), basename(portablePath), bytes,
+        original === undefined ? undefined : () => updateCopiedDocument(projectRoot, kb, space, original, bytes),
       ));
     } catch (error) {
       refuse(`cannot copy ${quoted} into the knowledge folder: ${errorMessage(error)}`);
@@ -10727,7 +10731,10 @@ function onboardDocumentInput(
   // only a refusal or an empty result proves nothing names the copy.
   let mayHaveCommitted = false;
   try {
-    const result = kb.onboard(projectRoot, space, target, new Date().toISOString());
+    const result = kb.onboard(
+      projectRoot, space, target, new Date().toISOString(), undefined,
+      original === undefined ? undefined : new Map([[realpathSync(target), original]]),
+    );
     if (result.refused) failure = result.refused.reason;
     else {
       outcome = result.indexed[0];
@@ -10755,8 +10762,14 @@ function onboardDocumentInput(
   })();
 
   const targetPath = JSON.stringify(relative(projectRoot, target).split(sep).join("/"));
-  const added = created
-    ? `I copied ${quoted} to ${targetPath} and added it to the knowledge base as document ${indexed.id}.`
+  const earlier = besideChanged === undefined
+    ? ""
+    : ` The earlier copy, ${JSON.stringify(`${relative(projectRoot, documentsAbs).split(sep).join("/")}/${besideChanged}`)}, ` +
+      "has changed since it was copied, so I left it as it is; the knowledge base now holds both.";
+  const added = updated && indexed.status === "edited"
+    ? `I updated ${targetPath} to your new ${quoted}; it stays the same document in the knowledge base.`
+    : created
+    ? `I copied ${quoted} to ${targetPath} and added it to the knowledge base as document ${indexed.id}.${earlier}`
     : indexed.status === "already"
       ? `${quoted} is already in the knowledge base as document ${indexed.id}` +
         `${inPlace ? "" : ` (copied to ${targetPath})`}.`
@@ -10926,6 +10939,57 @@ export interface KnowledgeDocumentCopy {
   gitIgnored: "yes" | "no" | "unknown";
   /** Files inside a named folder that git ignores, left where they are. */
   leftOut: number;
+  /** A copied file's project-relative path, for the row's copied_from (never a folder's). */
+  original?: string;
+  /** The file's new bytes were written over the copy made from it before. */
+  updated?: boolean;
+  /** The earlier copy made from it (documents-relative) had changed, so this one went in beside it. */
+  besideChanged?: string;
+}
+
+/**
+ * The project-relative POSIX path a copy's `copied_from` records for the file
+ * the person named, or undefined when there is none to record.
+ */
+function copiedFromPath(projectDir: string, absPath: string): string | undefined {
+  const rel = toPosix(relative(realpathSync(projectDir), realpathSync(absPath)));
+  return rel === "" || rel === ".." || rel.startsWith("../") || isAbsolute(rel) ? undefined : rel;
+}
+
+/**
+ * Writes a changed original's bytes over the copy made from it, when the
+ * knowledge tool finds that one copy (copiedDocumentFor: its row records this
+ * original and the copy still holds the bytes copied). Returns `{ target }`, the
+ * copy's path; `{ changedCopy }` when the one copy made from it has changed, so
+ * the caller copies beside it and says so; or null to copy beside it as before. The bytes are staged beside the copy
+ * under a dot name the walk skips, the copy is checked again just before the
+ * rename (an edit made meanwhile is never written over), and the rename keeps
+ * the Windows retry the atomic writers use.
+ */
+function updateCopiedDocument(
+  projectDir: string,
+  kb: typeof import("./aidlc-knowledge.ts"),
+  space: string,
+  original: string,
+  bytes: Buffer,
+): { target: string } | { changedCopy: string } | null {
+  const digest = kb.sha256Hex(bytes);
+  const found = kb.copiedDocumentFor(projectDir, space, original, digest);
+  if (found === null || "changedCopy" in found) return found;
+  if (found.holdsNew) return { target: found.copyPath };
+  const staged = documentStagingPath(dirname(found.copyPath));
+  try {
+    writeFileSync(staged, bytes, { flag: "wx" });
+    const still = kb.copiedDocumentFor(projectDir, space, original, digest);
+    if (still === null || "changedCopy" in still) return still;
+    if (still.copyPath !== found.copyPath) return null;
+    if (!still.holdsNew) replaceWithStaged(staged, found.copyPath);
+    return { target: found.copyPath };
+  } catch {
+    return null;
+  } finally {
+    try { unlinkSync(staged); } catch { /* renamed over the copy, or never written */ }
+  }
 }
 
 /** A named document or folder, read for copying but not yet copied. */
@@ -10968,14 +11032,26 @@ function planNamedDocumentCopy(
 }
 
 function carryOutNamedDocumentCopy(
+  projectDir: string,
   kb: typeof import("./aidlc-knowledge.ts"),
+  space: string,
   documentsReal: string,
   plan: NamedDocumentCopyPlan,
 ): KnowledgeDocumentCopy {
   const { real, gitIgnored, copyable, leftOut } = plan;
   if (!plan.folder) {
-    const { target } = copyIntoDocuments(kb, documentsReal, basename(real), readFileSync(real));
-    return { target, files: 1, gitIgnored, leftOut };
+    const bytes = readFileSync(real);
+    const original = copiedFromPath(projectDir, real);
+    const { target, updated, besideChanged } = copyIntoDocuments(
+      kb, documentsReal, basename(real), bytes,
+      original === undefined ? undefined : () => updateCopiedDocument(projectDir, kb, space, original, bytes),
+    );
+    return {
+      target, files: 1, gitIgnored, leftOut,
+      ...(original === undefined ? {} : { original }),
+      ...(updated ? { updated: true } : {}),
+      ...(besideChanged === undefined ? {} : { besideChanged }),
+    };
   }
   // A folder of its own name, never merged into one already there: the copy is
   // this folder as it is now, not a blend of two.
@@ -11008,7 +11084,7 @@ export function copyNamedDocumentIntoKnowledge(
   if (plan.folder && plan.copyable.length === 0) {
     throw new Error(`${plan.shown} holds no documents to add`);
   }
-  return carryOutNamedDocumentCopy(kb, documentsReal, plan);
+  return carryOutNamedDocumentCopy(projectDir, kb, space, documentsReal, plan);
 }
 
 /**
@@ -11086,7 +11162,7 @@ export function copyNamedDocumentsIntoKnowledge(
       if ("reason" in plan) return plan;
       const earlier = copied.get(plan.real);
       if (earlier !== undefined) return earlier;
-      const copy = carryOutNamedDocumentCopy(kb, documentsReal, plan);
+      const copy = carryOutNamedDocumentCopy(projectDir, kb, space, documentsReal, plan);
       copied.set(plan.real, copy);
       return copy;
     }),
@@ -11113,12 +11189,19 @@ function documentInputNoTextReason(shown: { state: string }): string {
 
 // The copy keeps the file's own name in knowledge/documents/ and never
 // replaces a file there: one with the same name and bytes is this copy already,
-// and any other moves the copy to <stem>-2<ext>, -3, and so on. Leading dots
+// and any other moves the copy to <stem>-2<ext>, -3, and so on. The one
+// exception is `update` (updateCopiedDocument): the copy made earlier from the
+// same original, while nobody has edited it, takes the new bytes in place. Leading dots
 // are dropped and the names the knowledge walk skips are passed over, so a
 // later sync still sees the copy. The bytes land in a dot-named staging file
 // first and are published with installWithoutReplacing, which never replaces a
 // name, whichever temp folder or computer the other copy runs from.
 const DOCUMENT_INPUT_COPY_NAME_LIMIT = 100;
+// A dot name the knowledge walk skips, so a sync running beside a copy never
+// indexes the bytes on their way in.
+function documentStagingPath(dir: string): string {
+  return join(dir, `.aidlc-document-input-${process.pid}-${randomUUID()}.tmp`);
+}
 // ponytail: a 0-byte file made this second may be another copy's claim that
 // fills a moment later; a claim that takes over a second to fill leaves a -2
 // copy with the same bytes.
@@ -11129,7 +11212,11 @@ function copyIntoDocuments(
   documentsReal: string,
   name: string,
   bytes: Buffer,
-): { target: string; created: boolean } {
+  update?: () => { target: string } | { changedCopy: string } | null,
+): { target: string; created: boolean; updated: boolean; besideChanged?: string } {
+  let besideChanged: string | undefined;
+  const made = (target: string) =>
+    ({ target, created: true, updated: false, ...(besideChanged === undefined ? {} : { besideChanged }) });
   const base = name.replace(/^\.+/, "") || "document";
   const ext = extname(base);
   const stem = base.slice(0, base.length - ext.length);
@@ -11157,19 +11244,26 @@ function copyIntoDocuments(
       }
     };
     if (lstatSync(target, { throwIfNoEntry: false }) !== undefined) {
-      if (holdsSameBytes()) return { target, created: false };
+      if (holdsSameBytes()) return { target, created: false, updated: false };
       continue;
     }
-    const staged = join(documentsReal, `.aidlc-document-input-${process.pid}-${randomUUID()}.tmp`);
+    // Every copy already holding these bytes was looked for first (one an older
+    // release made beside the first, say); only then is the copy made from this
+    // original updated in place, before a new name is taken.
+    const over = update?.() ?? null;
+    update = undefined;
+    if (over !== null && "target" in over) return { target: over.target, created: false, updated: true };
+    if (over !== null) besideChanged = over.changedCopy;
+    const staged = documentStagingPath(documentsReal);
     try {
       writeFileSync(staged, bytes, { flag: "wx" });
       installWithoutReplacing(staged, target);
-      return { target, created: true };
+      return made(target);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       // Another run published this name first: if it holds the same bytes it
       // is the same copy, not a reason to make a second one.
-      if (holdsSameBytes()) return { target, created: false };
+      if (holdsSameBytes()) return { target, created: false, updated: false };
     } finally {
       try { unlinkSync(staged); } catch { /* never created, or already gone */ }
     }
