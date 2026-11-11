@@ -4733,4 +4733,112 @@ if (import.meta.main) {
     }
     expect(ledger()).toEqual(ledgerBefore);
   });
+
+  test("40: under strict, relaxed and a team's locked strict a helper runs its builds, tests and searches", () => {
+    // Code Generation tells its developer helper to run each layer's tests.
+    // The helper's identity record guards two checks; a build, a test or a
+    // read cannot change that record, so only a write over it is held.
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    const statePath = join(seededRecordDir(proj), "aidlc-state.md");
+    const original = readFileSync(statePath, "utf-8");
+    const withPolicy = (line: string | null) => writeFileSync(
+      statePath,
+      line === null
+        ? original
+        : original
+          .replace(/^- \*\*(?:Guard Policy|Change Control)\*\*:.*\n/gm, "")
+          .replace(/^(- \*\*Scope\*\*:.*)$/m, `$1\n- **Guard Policy**: ${line}`),
+    );
+    const teamMemory = join(proj, "aidlc", "spaces", "default", "memory", "team.md");
+    const lockStrict = (on: boolean) => {
+      mkdirSync(dirname(teamMemory), { recursive: true });
+      const existing = existsSync(teamMemory) ? readFileSync(teamMemory, "utf-8") : "# Team\n";
+      const unlocked = existing.replace("## Guard Policy\n\nMode: strict\n", "## Guard Policy\n");
+      writeFileSync(
+        teamMemory,
+        !on
+          ? unlocked
+          : unlocked.includes("## Guard Policy\n")
+            ? unlocked.replace("## Guard Policy\n", "## Guard Policy\n\nMode: strict\n")
+            : `${unlocked.trimEnd()}\n\n## Guard Policy\n\nMode: strict\n`,
+      );
+    };
+    setCurrentStage(proj, "functional-design");
+    clearLedger(proj);
+    registerTaskParent(proj);
+    expectAllowJson(runAdapter(proj, "guards", payload("preToolUseTask", proj, {
+      tool_input: { description: "Build the unit", prompt: "Implement the unit.", subagent_type: "aidlc-developer-agent" },
+    })));
+    mkdirSync(join(proj, "scratch"), { recursive: true });
+    const health = hooksHealthDir(proj);
+    const delegateShell = (command: string) => JSON.parse(runAdapter(proj, "guards", payload("preToolUseShell", proj, {
+      conversation_id: "developer-builds-and-tests",
+      session_id: "developer-builds-and-tests",
+      tool_input: { command },
+    })).stdout) as { permission?: string; agent_message?: string };
+    // Ordinary builds, tests, lints and searches, as a helper spells them on
+    // any shell; a deny that comes back for one of them fails here.
+    const ordinary = [
+      "bun test",
+      "npm test",
+      "pytest",
+      "python -m pytest",
+      "npx vitest run",
+      "cargo test",
+      "go test ./...",
+      "make test",
+      "bash scripts/test.sh",
+      "./node_modules/.bin/jest",
+      "$VENV/bin/pytest -q",
+      "bun test ./",
+      "eslint .",
+      "pytest .",
+      "grep -rn formatPrice .",
+      "git diff",
+      "git log --oneline -5",
+      "npm test 2>&1 | tee out.log",
+      'bun test -t "a \\"b\\""',
+      'cd "$ROOT" && npm test',
+      "npm.cmd test",
+      ".\\node_modules\\.bin\\jest.cmd",
+      "$env:CI='1'; npm test",
+      "Get-ChildItem -Recurse . | Select-String foo",
+      "npm test *> test.log",
+      "Get-ChildItem scratch | Remove-Item",
+    ];
+    for (const [policy, locked] of [
+      ["strict (set by you)", false],
+      ["relaxed (set by you)", false],
+      [null, true],
+    ] as const) {
+      withPolicy(policy);
+      lockStrict(locked);
+      const label = policy ?? "team strict";
+      for (const command of ordinary) {
+        rmSync(join(health, "plan-approval-guard.last"), { force: true });
+        const out = delegateShell(command);
+        expect(out.permission, `${label}: ${command}: ${out.agent_message ?? ""}`).toBe("allow");
+        // The AI-DLC checks every harness runs still ran on it.
+        expect(existsSync(join(health, "plan-approval-guard.last")), `${label}: ${command}`).toBe(true);
+      }
+      // A write over the helper's own records is still held.
+      for (const command of [
+        "rm -rf aidlc",
+        "> aidlc/.aidlc-cursor-subagents/spawn-x.json",
+        "find . -delete",
+        "find aidlc -exec rm -rf {} +",
+      ]) {
+        const out = delegateShell(command);
+        expect(out.permission, `${label}: ${command}`).toBe("deny");
+        expect(out.agent_message ?? "", `${label}: ${command}`).toContain("attribution state");
+      }
+      // A lifecycle step is still the main chat's, said by the check every
+      // harness runs.
+      const report = delegateShell("aidlc engine orchestrate report --stage functional-design --result awaiting-approval");
+      expect(report.permission, label).toBe("deny");
+      expect(report.agent_message ?? "", label).toContain("Delegated agent");
+    }
+    expect(ledgerFilesFor(proj)).toHaveLength(1);
+  });
 });
