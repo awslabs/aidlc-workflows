@@ -2247,14 +2247,14 @@ export function flagIssues(
         issues.push({
           id: "flag-claude-default-scope-drift",
           message: `${path} does not carry the recorded default scope ${record.defaultScope}`,
-          remediation: "Run aidlc config flags again to reapply the recorded default scope.",
+          remediation: `Run ${invocationForHarness(harnessDir)} config flags again to reapply the recorded default scope.`,
         });
       }
     } catch (error) {
       issues.push({
         id: "flag-claude-settings-unreadable",
         message: error instanceof Error ? error.message : String(error),
-        remediation: "Restore .claude/settings.json, then rerun aidlc config flags.",
+        remediation: `Restore .claude/settings.json, then rerun ${invocationForHarness(harnessDir)} config flags.`,
       });
     }
   }
@@ -2435,7 +2435,7 @@ export function projectChoiceIssues(
       issues.push({
         id: "project-plugin-unknown",
         message: `Recorded plugin ${plugin} is not installed`,
-        remediation: "Install the plugin or rerun aidlc config project with the installed plugin set.",
+        remediation: `Install the plugin or rerun ${invocationForHarness(harnessDir)} config project with the installed plugin set.`,
       });
     }
   }
@@ -2455,7 +2455,7 @@ export function projectChoiceIssues(
       issues.push({
         id: "project-mcp-unreadable",
         message: `${path} is malformed`,
-        remediation: "Repair .mcp.json, then rerun aidlc config project.",
+        remediation: `Repair .mcp.json, then rerun ${invocationForHarness(harnessDir)} config project.`,
       });
       return issues;
     }
@@ -2467,7 +2467,7 @@ export function projectChoiceIssues(
     issues.push({
       id: "project-mcp-defaults-drift",
       message: "Recorded MCP consent is defaults, but one or more shipped MCP entries are absent",
-      remediation: "Run aidlc config project --mcp defaults to reapply consented entries.",
+      remediation: `Run ${invocationForHarness(harnessDir)} config project --mcp defaults to reapply consented entries.`,
     });
   }
   if (
@@ -2478,7 +2478,7 @@ export function projectChoiceIssues(
     issues.push({
       id: "project-mcp-none-drift",
       message: "Recorded MCP consent is none, but shipped MCP entries remain",
-      remediation: "Run aidlc config project --mcp none to remove framework-owned MCP entries.",
+      remediation: `Run ${invocationForHarness(harnessDir)} config project --mcp none to remove framework-owned MCP entries.`,
     });
   }
   return issues;
@@ -2495,7 +2495,7 @@ export function providerSurfaceIssues(
     issues.push({
       id,
       message,
-      remediation: `Run aidlc config providers again to reapply the recorded answer to ${file}.`,
+      remediation: `Run ${invocationForHarness(harnessDir)} config providers again to reapply the recorded answer to ${file}.`,
     });
   };
   const warning = (id: string, message: string, remediation: string): void => {
@@ -2628,7 +2628,7 @@ export function providerSurfaceIssues(
     issues.push({
       id: "provider-surface-unreadable",
       message: error instanceof Error ? error.message : String(error),
-      remediation: "Restore the selected harness configuration files, then rerun aidlc config providers.",
+      remediation: `Restore the selected harness configuration files, then rerun ${invocationForHarness(harnessDir)} config providers.`,
     });
   }
   return issues;
@@ -3954,7 +3954,7 @@ export function vscodeWorkspaceRequestCapDoctorCheck(
       pass: false,
       severity: "warn",
       label: `${label} ${where} has no settings, so a window opened from it uses your user setting or VS Code's default of 50`,
-      fix: `run aidlc system workspace-sync, which adds "settings": { "${VSCODE_REQUEST_CAP_KEY}": 200 } to ${where}, or add it yourself; ${REQUEST_CAP_PAUSES}`,
+      fix: `run ${invocationForHarness(selected.harnessDir)} system workspace-sync, which adds "settings": { "${VSCODE_REQUEST_CAP_KEY}": 200 } to ${where}, or add it yourself; ${REQUEST_CAP_PAUSES}`,
     };
   }
   if (settings === null || typeof settings !== "object" || Array.isArray(settings)) {
