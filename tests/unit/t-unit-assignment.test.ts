@@ -202,6 +202,36 @@ describe("after choosing teams the plan goes to them the way main's share questi
   });
 });
 
+// A live run on GitHub (#2783) and a read of the share: the plan's share took
+// a file the person had staged.
+describe("the plan's share fits the team's own git: a protected main, a branch of the lead's, a file the person staged", () => {
+  test("a file the person staged stays theirs, staged, and the share counts what it committed", () => {
+    const home = makeHome();
+    chooseTeams(home.dir);
+    writeFileSync(join(home.dir, "split.md"), "one\n");
+    writeFileSync(join(home.dir, "shared.ts"), "export const a = 1;\n");
+    git(home.dir, ["add", "split.md", "shared.ts"]);
+    git(home.dir, ["commit", "-q", "-m", "the person's files"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    writeFileSync(join(home.dir, "shared.ts"), "export const a = 2;\n");
+    writeFileSync(join(home.dir, "z-deploy.env"), "KEY=1\n");
+    writeFileSync(join(home.dir, "staged-only.txt"), "staged\n");
+    writeFileSync(join(home.dir, "split.md"), "one\nstaged half\n");
+    git(home.dir, ["add", "staged-only.txt", "split.md"]);
+    writeFileSync(join(home.dir, "split.md"), "one\nstaged half\nunstaged half\n");
+    const shared = run(UNIT, ["share", "--plan"], home.dir);
+    expect(shared.status, shared.out).toBe(0);
+    const went = git(home.dir, ["diff-tree", "-r", "--no-commit-id", "--name-only", "HEAD"]).split("\n").filter(Boolean);
+    expect(went.filter((path) => !path.startsWith("aidlc/")), went.join(", ")).toEqual([]);
+    expect(shared.json?.committed_paths).toBe(went.length);
+    expect(git(home.remote, ["rev-parse", "main"])).toBe(git(home.dir, ["rev-parse", "HEAD"]));
+    expect(git(home.dir, ["diff", "--cached", "--name-only"]).split("\n").sort()).toEqual(["split.md", "staged-only.txt"]);
+    expect(git(home.dir, ["show", ":split.md"])).toBe("one\nstaged half");
+    expect(readFileSync(join(home.dir, "split.md"), "utf-8")).toBe("one\nstaged half\nunstaged half\n");
+    expect(git(home.dir, ["status", "--porcelain", "--", "shared.ts", "z-deploy.env"])).toBe("M shared.ts\n?? z-deploy.env");
+  });
+});
+
 describe("after the share nothing is built at the lead's project until the lead asks", () => {
   test("the step is the board, each Unit open and waiting for a team to take it", () => {
     const home = makeHome();

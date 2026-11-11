@@ -5342,17 +5342,15 @@ export function workToCommit(projectDir: string, work?: UnitWork): WorkToCommit 
   };
 }
 
-// Commits what workToCommit names (with `only`, just the paths it keeps), as
-// the person, with their own git setup; nothing to commit commits nothing.
-// Returns how many paths it took, and what a Unit's publish left out.
+// Commits what workToCommit names, as the person, with their own git setup;
+// nothing to commit commits nothing. Returns how many paths it took, and what
+// a Unit's publish left out.
 function commitWorkHere(
   projectDir: string,
   message: string,
   work?: UnitWork,
-  only?: (path: string) => boolean,
 ): { committed: number; leftOut: string[]; unmatched: string[] } {
-  const { leftOut, unmatched, ...picked } = workToCommit(projectDir, work);
-  const paths = picked.paths.filter((path) => only === undefined || only(path));
+  const { leftOut, unmatched, paths } = workToCommit(projectDir, work);
   if (paths.length === 0) return { committed: 0, leftOut, unmatched };
   // One call whatever the count: Windows caps a command line at 32,767
   // characters, so the paths go to git on its standard input, NUL-separated,
@@ -5365,18 +5363,37 @@ function commitWorkHere(
     undefined,
     paths.map((path) => `${path}\0`).join(""),
   );
-  if (!added.ok) fail(`git add failed: ${added.stderr.trim()}`);
+  if (!added.ok) shareCommitRefused(added.stderr.trim(), true);
   const committed = git(projectDir, ["commit", "-q", "-m", message]);
-  if (!committed.ok) {
-    if (NO_GIT_IDENTITY.test(committed.stderr)) {
-      fail(
-        "Git has no name and email for your commits yet. Set them with " +
-          'git config --global user.name "Your Name" and git config --global user.email "you@example.com".',
-      );
-    }
-    fail(`git did not commit: ${(committed.stderr || committed.stdout).trim()}.`);
-  }
+  if (!committed.ok) shareCommitRefused((committed.stderr || committed.stdout).trim(), false);
   return { committed: paths.length, leftOut, unmatched };
+}
+
+// What the share and publish say when git does not take their add or commit.
+function shareCommitRefused(said: string, adding: boolean): never {
+  if (adding) fail(`git add failed: ${said}`);
+  if (NO_GIT_IDENTITY.test(said)) {
+    fail(
+      "Git has no name and email for your commits yet. Set them with " +
+        'git config --global user.name "Your Name" and git config --global user.email "you@example.com".',
+    );
+  }
+  fail(`git did not commit: ${said}.`);
+}
+
+// The plan's share: AI-DLC's record only (aidlc/, and a repos.json still at
+// the root unless the person's .gitignore lists it), committed by pathspec
+// through commitUnitPaths, so a file the person staged stays theirs, staged.
+// Pathspecs, never the file list: a plan's hundreds of files would pass the
+// 32,767 characters Windows allows a command line. Returns how many files the
+// commit took.
+function commitPlanHere(pd: string, message: string): number {
+  const head = (): string => git(pd, ["rev-parse", "--verify", "--quiet", "HEAD"]).stdout.trim();
+  const before = head();
+  const rootList = git(pd, ["check-ignore", "-q", "--", "repos.json"]).ok ? [] : ["repos.json"];
+  commitUnitPaths(pd, ["aidlc/", ...rootList], {}, "", "", "", null, { message, refused: shareCommitRefused });
+  if (head() === before) return 0;
+  return git(pd, ["diff-tree", "-r", "--root", "--no-commit-id", "--name-only", "-z", "HEAD"]).stdout.split("\0").filter(Boolean).length;
 }
 
 // The remote and integration branch a share pushes to, or null with no remote.
@@ -5533,16 +5550,10 @@ function shareMain(args: string[], projectDir?: string): void {
   }
   const { remote, branch } = shareTarget(pd)!;
   const landed = landedNotOnRemote(pd).map((row) => row.unit);
+  const message = landed.length > 0 ? `Record the ${landed.join(" and ")} landing` : "Share the plan with the teams";
   let committed: number;
   try {
-    committed = commitWorkHere(
-      pd,
-      landed.length > 0 ? `Record the ${landed.join(" and ")} landing` : "Share the plan with the teams",
-      undefined,
-      // The plan's share carries the repo list: in aidlc/, or still at the root
-      // (with its removal there once it moved).
-      planOnly ? (path) => path === "aidlc" || path.startsWith("aidlc/") || path === "repos.json" : undefined,
-    ).committed;
+    committed = planOnly ? commitPlanHere(pd, message) : commitWorkHere(pd, message).committed;
   } catch (error) {
     clearTeamHandoverMarks(pd, ["share", "push"]);
     fail(`${errorMessage(error)} Then share again.`);
@@ -6513,7 +6524,8 @@ function readTakeTree(record: string): TakeTree {
 // later push carries only the Unit's newer change. Returns the paths left out.
 // `listed` holds the source walk's names for this repo's files (the listing
 // the Code Generation review binds, keyed under `listedAs`), null when the
-// walk could not be read.
+// walk could not be read. `share` is the plan's share (commitPlanHere): its
+// own message, and its own words when git refuses the add or the commit.
 function commitUnitPaths(
   dir: string,
   paths: string[],
@@ -6522,6 +6534,7 @@ function commitUnitPaths(
   label: string,
   name: string,
   listed: { listing: ReadonlyMap<string, string>; listedAs: string } | null,
+  share?: { message: string; refused: (said: string, adding: boolean) => never },
 ): string[] {
   const scratch = mkdtempSync(join(tmpdir(), "aidlc-unit-commit-"));
   const env = { GIT_INDEX_FILE: join(scratch, "index") };
@@ -6535,7 +6548,10 @@ function commitUnitPaths(
       (existsSync(join(dir, path)) || git(dir, ["ls-files", "--error-unmatch", "--", path], env).ok));
     if (plain.length > 0) {
       const added = git(dir, ["add", "--", ...plain], env);
-      if (!added.ok) fail(`${unit}'s changes could not be added in ${name}: ${added.stderr.trim()}`);
+      if (!added.ok) {
+        if (share) share.refused(added.stderr.trim(), true);
+        fail(`${unit}'s changes could not be added in ${name}: ${added.stderr.trim()}`);
+      }
     }
     // A folder the manifest names brings what git adds from it. A new file
     // there that the source walk leaves out (a test run's __pycache__, a
@@ -6562,8 +6578,11 @@ function commitUnitPaths(
     }
     const committed = paths.filter((path) => !leftOut.includes(path));
     if (committed.length > 0 && !git(dir, ["diff", "--cached", "--quiet", "--", ...committed], env).ok) {
-      const made = git(dir, ["commit", "-q", "-m", `${unit}: ${label}`], env);
-      if (!made.ok) fail(`The commit in ${name} did not go through: ${(made.stderr || made.stdout).trim()}`);
+      const made = git(dir, ["commit", "-q", "-m", share?.message ?? `${unit}: ${label}`], env);
+      if (!made.ok) {
+        if (share) share.refused((made.stderr || made.stdout).trim(), false);
+        fail(`The commit in ${name} did not go through: ${(made.stderr || made.stdout).trim()}`);
+      }
       git(dir, ["reset", "-q", "--", ...committed]);
       for (const [path, now] of sent) own[path] = now;
     }
