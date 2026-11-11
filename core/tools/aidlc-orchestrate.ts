@@ -17081,7 +17081,7 @@ function teamUnitMajorWalkBeat(
 // set); the paused-unit hard stop mirrors emitPerUnitRunStage: a pause on ANY
 // block stage halts the walk before new (stage, unit) work. Read-only, so
 // routing (emitUnitMajorRunStage) and the skip report (unitMajorWorkBeat)
-// share one walk and cannot disagree about which beat is active.
+// share one walk.
 //
 // The person can ask for another Unit's work while one is open (#1411): the
 // open Unit is then paused, set aside for that Unit. Such a pause does not halt
@@ -17091,7 +17091,7 @@ function teamUnitMajorWalkBeat(
 // Before the walking skeleton is approved the walk covers the skeleton alone
 // (emitUnitMajorRunStage), yet the Unit a pause was set aside for is walked
 // too, wherever it is in the DAG: otherwise the pause comes first while that
-// Unit is in progress, and it cannot be resumed until that Unit is done.
+// Unit is in progress, and it cannot be resumed while that Unit is.
 type UnitMajorWalkStep =
   | {
       kind: "paused";
@@ -17217,10 +17217,9 @@ function unitMajorWalkStep(
 // the Current Stage, or null when routing is not on such a beat: another
 // Construction order, team-owned Units, stage-level artifacts, no Unit DAG, an
 // unresolved skeleton stance, or a pause, summary, checkpoint, or gate stop.
-// It mirrors the emitForSlug -> emitUnitMajorRunStage route. The skeleton-only
-// first-unit walk picks the same beat as the full walk: the two differ only
-// after the first unit's checkpoint is approved, which is exactly when the
-// skeleton-only walk stops applying.
+// It mirrors the emitForSlug -> emitUnitMajorRunStage route, but walks every
+// Unit: until the skeleton is approved, routing walks only the skeleton and
+// the Units a set-aside Unit waits for.
 function unitMajorWorkBeat(
   projectDir: string,
   scope: string,

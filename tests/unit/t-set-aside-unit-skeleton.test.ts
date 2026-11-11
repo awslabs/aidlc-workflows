@@ -47,7 +47,8 @@ type Directive = Record<string, unknown> & {
   plan_approval?: { status?: string };
 };
 
-function fixture(units: readonly string[] = ["alpha", "beta"]): string {
+// The feature scope's own Guard Policy is off; `strict` is one switch on top.
+function fixture(units: readonly string[] = ["alpha", "beta"], policy = "off (from scope feature)"): string {
   const p = createTestProject();
   projects.push(p);
   seedAidlcMemory(p);
@@ -67,7 +68,7 @@ function fixture(units: readonly string[] = ["alpha", "beta"]): string {
 - **Construction Execution**: serial
 - **Construction Autonomy Mode**: gated
 - **Review Override**: none
-- **Change Control**: strict
+- **Guard Policy**: ${policy}
 ## Scope Configuration
 - **Stages to Execute**: all
 - **Stages to Skip**: none
@@ -236,12 +237,12 @@ function backToBetaDuringSkeletonRedo(): string {
   return p;
 }
 
-// The issue's shape: alpha, the skeleton, and beta are built and approved;
-// gamma is building its code. The person reopens beta's code, so gamma is set
-// aside for beta, and then a file alpha's approval covers changes, so the
-// skeleton's approval is no longer current.
+// The issue's shape, under Guard Policy strict: alpha, the skeleton, and beta
+// are built and approved; gamma is building its code. The person reopens
+// beta's code, so gamma is set aside for beta, and then a file alpha's
+// approval covers changes, so the skeleton's approval is no longer current.
 function betaReopenedThenSkeletonChanged(): string {
-  const p = fixture(["alpha", "beta", "gamma"]);
+  const p = fixture(["alpha", "beta", "gamma"], "strict (set by you)");
   cover(p, "alpha");
   approve(p, "alpha", "skeleton");
   cover(p, "beta");
