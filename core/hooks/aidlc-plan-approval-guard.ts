@@ -229,6 +229,7 @@ const SAFE_READ_TOOLS = new Set([
   "TodoRead",
   "TaskOutput",
   "AskUserQuestion",
+  "AskQuestion",
   "fs_read",
   "file_search",
   "grep_search",
