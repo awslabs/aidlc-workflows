@@ -1016,8 +1016,12 @@ ignored files and AI-DLC's own part of `.gitignore`, `AGENTS.md` and
 `opencode.json` left out), then pushes the integration branch to the remote
 with a plain push, never forced, so the teams can take Units from the plan or
 see a Unit that landed. After it, this checkout shows the board instead of
-building Units. A push the remote refuses keeps the commit and says why; pull
-the branch, then share again. `/aidlc` offers this step itself when it is due:
+building Units. A push the remote refuses keeps the commit and says why. When it
+takes no direct push to the branch (a host's rule), push it on a branch and get
+it merged your usual way; the teams can take Units once it is in the branch.
+Otherwise, pull the branch, then share again. A checkout on another branch
+commits the plan (aidlc/) there and pushes nothing, and is told it is not on the
+branch, with the same way on. `/aidlc` offers this step itself when it is due:
 before a Unit would start on the lead's checkout, and after a land the remote
 does not have yet.
 
