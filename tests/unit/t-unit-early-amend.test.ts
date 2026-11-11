@@ -242,6 +242,11 @@ describe("a change to a shared input", () => {
     expect(approved.status, approved.out).toBe(0);
     const copy = join(record, ...REQUIREMENTS.split("/"));
     writeFileSync(copy, "# Requirements\n\nFR1 refunds, partial amounts too, in one currency only.\n");
+    // A proposal's time is kept to the second, and a person's second change
+    // comes seconds after the lead's answer: the test's own run is faster.
+    const firstAt = ((claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.proposals ?? []) as Array<{ at: string }>)[0]?.at;
+    expect(firstAt).toBeString();
+    Bun.sleepSync(Math.max(0, Date.parse(firstAt!) + 1000 - Date.now()));
     expect(run(UNIT, ["propose", "--input", "requirements.md", "--person-words", "one currency only"], alice).status).toBe(0);
     git(home.dir, ["fetch", "-q", "origin"]);
     const ask = next(home.dir);

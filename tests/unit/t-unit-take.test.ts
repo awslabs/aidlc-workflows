@@ -1313,6 +1313,60 @@ describe("the claims' home is the lead's address", () => {
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toBeNull();
   });
 
+  // The fork leg (7a): a clone that fetches from the lead's project and pushes
+  // to its fork, both hosts down, printed git's raw read failure.
+  test("a clone that fetches from the lead's project and pushes to a fork, neither answering: one line says so, and nothing is taken", () => {
+    const home = homeWithTeams(three);
+    const web = cloneOf(home.remote, "web");
+    expect(takeFrom("web", web, "checkout-ui").status).toBe(0);
+    const fork = forkOf(home.remote, "pay-push-fork", false);
+    const pay = cloneOf(home.remote, "pay");
+    git(pay, ["remote", "set-url", "--push", "origin", fork]);
+    const away = `${home.remote}-away`;
+    const forkAway = `${fork}-away`;
+    renameSync(home.remote, away);
+    renameSync(fork, forkAway);
+    try {
+      const held = takeFrom("payments", pay, "refunds");
+      expect(held.status, held.out).not.toBe(0);
+      expect(held.out).toMatch(
+        /Neither the lead's project nor \S*pay-push-fork\.git answered just now \([^)]+\), so nothing was taken or sent; it goes through when one answers\./,
+      );
+      expect(held.out).not.toContain("Unit claim registry read failed");
+    } finally {
+      renameSync(away, home.remote);
+      renameSync(forkAway, fork);
+    }
+    const id8 = fixtureIntentId8(home.dir);
+    expect(claimPayload(home.remote, id8, "refunds")).toBeNull();
+    expect(claimPayload(fork, id8, "refunds")).toBeNull();
+  });
+
+  test("a clone that fetches from the lead's project and pushes to a fork, only the lead's project not answering: the take goes to the fork, never said as recorded at the lead's", () => {
+    const home = homeWithTeams(three);
+    const web = cloneOf(home.remote, "web");
+    expect(takeFrom("web", web, "checkout-ui").status).toBe(0);
+    const fork = forkOf(home.remote, "pay-push-up", false);
+    const pay = cloneOf(home.remote, "pay");
+    git(pay, ["remote", "set-url", "--push", "origin", fork]);
+    const away = `${home.remote}-away`;
+    renameSync(home.remote, away);
+    let held: ReturnType<typeof takeFrom>;
+    try {
+      held = takeFrom("payments", pay, "refunds");
+    } finally {
+      renameSync(away, home.remote);
+    }
+    expect(held.status, held.out).toBe(0);
+    expect(String(held.json?.notice)).toMatch(onFork("refunds", fork));
+    expect(held.out).not.toContain("Unit claim registry read failed");
+    const id8 = fixtureIntentId8(home.dir);
+    expect(claimPayload(fork, id8, "refunds")).toMatchObject({ status: "claimed" });
+    expect(claimPayload(home.remote, id8, "refunds")).toBeNull();
+    // This clone's copy of the lead's claims stays as the lead's project has them.
+    expect(git(pay, ["for-each-ref", "--format=%(refname)", `refs/remotes/origin/claim/${id8}/refunds`]).trim()).toBe("");
+  });
+
   // The lead's work with its code repos, teams chosen, shared.
   function forkedLead() {
     const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };

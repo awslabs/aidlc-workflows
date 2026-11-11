@@ -651,6 +651,13 @@ function fetchClaimRefs(projectDir: string, remote: string | null): void {
 // they did not answer either (homeTarget): a read there that fails says so.
 const unansweredHomes = new Set<string>();
 
+// The one line for a take or write that neither the lead's project nor the
+// team's own remote (`other`, a remote's name or its push address) answered.
+function neitherAnswered(other: string, stderr: string): string {
+  const why = stderr.split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? "it did not answer";
+  return `Neither the lead's project nor ${other} answered just now (${why}), so nothing was taken or sent; it goes through when one answers.`;
+}
+
 function refTip(
   projectDir: string,
   remote: string | null,
@@ -659,10 +666,7 @@ function refTip(
   if (remote) {
     const found = git(projectDir, ["ls-remote", remote, ref]);
     if (!found.ok) {
-      if (unansweredHomes.has(remote)) {
-        const why = (found.stderr || found.stdout).split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? "it did not answer";
-        fail(`Neither the lead's project nor ${remote} answered just now (${why}), so nothing was taken or sent; it goes through when one answers.`);
-      }
+      if (unansweredHomes.has(remote)) fail(neitherAnswered(remote, found.stderr || found.stdout));
       fail(`Unit claim registry read failed: ${found.stderr.trim() || found.stdout.trim()}`);
     }
     const line = found.stdout.trim().split(/\r?\n/).find(Boolean);
@@ -984,9 +988,12 @@ function writeHomeClaimOnce(
   // A remote that fetches from the lead's project is read back by its name, as its reads are.
   const fetchesHome = sameGitAddress(git(projectDir, ["remote", "get-url", target]).stdout.trim(), home.location);
   const atHome = quietly(() => git(projectDir, ["ls-remote", fetchesHome ? target : home.location, ref]));
-  if (!atHome.ok) return sent;
-  const tip = atHome.stdout.trim().split(/\s+/)[0] || null;
-  if (sent.ok ? tip === commitOid : tip !== expectedOid) return sent;
+  // A remote that fetches from the lead's project and pushes to the team's own:
+  // a push that went through while the lead's project does not answer is there.
+  const outbox = fetchesHome && !atHome.ok && sent.ok ? claimOutbox(projectDir, home) : null;
+  if (!atHome.ok && outbox === null) return sent;
+  const tip = atHome.ok ? atHome.stdout.trim().split(/\s+/)[0] || null : null;
+  if (atHome.ok && (sent.ok ? tip === commitOid : tip !== expectedOid)) return sent;
   if (tracking !== null && fetchesHome) {
     localGit(projectDir, before === null ? ["update-ref", "-d", tracking] : ["update-ref", tracking, before]);
   }
@@ -6095,11 +6102,14 @@ function fetchLeadBranch(projectDir: string, address: string, location: string, 
 // The home's integration branch, fetched with the person's own login: through
 // this workspace's remote, or by the home's address into AI-DLC's own ref
 // (`prefetched`: the branch a take by the lead's address already fetched).
+// While the push address stands in for a lead's project that did not answer
+// (`standsIn`), the branch as this clone last fetched it.
 function fetchHomeIntegration(
   projectDir: string,
   home: HomeWork,
   claim: UnitClaimView | null,
   prefetched?: { branch: string; oid: string },
+  standsIn = false,
 ): { ref: string; branch: string; oid: string } {
   if (home.target === null || !isGitAddress(home.target)) {
     const remote = home.target;
@@ -6109,7 +6119,8 @@ function fetchHomeIntegration(
       const fetched = git(projectDir, ["fetch", remote, branch]);
       // Where the name came from, so the person can correct it there.
       const from = affirmed ? `, named in ${affirmed.source} under Way of Working,` : "";
-      if (!fetched.ok) fail(`The lead's project's branch ${branch}${from} could not be fetched from ${remote}: ${fetched.stderr.trim()}`);
+      const lastFetched = standsIn && localGit(projectDir, ["rev-parse", "--verify", "--quiet", `refs/remotes/${remote}/${branch}`]).ok;
+      if (!fetched.ok && !lastFetched) fail(`The lead's project's branch ${branch}${from} could not be fetched from ${remote}: ${fetched.stderr.trim()}`);
     }
     const ref = remote ? `refs/remotes/${remote}/${branch}` : `refs/heads/${branch}`;
     return { ref, branch, oid: gitOutput(projectDir, ["rev-parse", "--verify", ref], `The lead's project's branch ${branch} is not here`) };
@@ -6663,13 +6674,29 @@ function takeUnit(args: string[], projectDir?: string): void {
   if (home === null) fail(`${unit}'s build is not here.`);
   const ref = claimRef(home.id8, unit);
   if (home.target !== null) ensureFetchedClaim(pd, home, ref);
-  const atLead = currentClaim(pd, home.target, ref);
+  let atLead: UnitClaimView | null;
+  // A remote that fetches from the lead's project and pushes to the team's own
+  // (a push URL): when the lead's project does not answer, the push address
+  // stands in, as a remote holding the lead's claims does (homeTarget), and
+  // both not answering is said as for that remote.
+  let standsIn = false;
+  try {
+    atLead = currentClaim(pd, home.target, ref);
+  } catch (error) {
+    const read = errorMessage(error);
+    const outbox = read.startsWith("Unit claim registry read failed:") ? claimOutbox(pd, home) : null;
+    const answered = outbox === null ? null : quietly(() => git(pd, ["ls-remote", outbox, ref]));
+    if (outbox === null || answered === null) throw error;
+    if (!answered.ok) fail(neitherAnswered(maskUserinfo(outbox), read.slice("Unit claim registry read failed:".length).trim()));
+    atLead = null;
+    standsIn = true;
+  }
   // While the lead's project has no claim of it, or a released one, the team's
   // own remote may hold a take or give back the lead has not taken in: a take
   // is said as taken, and a new take goes on top of a give back there.
   const there = atLead === null || atLead.status === "released" ? outboxClaim(pd, home, ref) : null;
   const current = there !== null && (atLead === null || claimAhead(pd, atLead.oid, there.claim.oid) === "ahead") ? there.claim : atLead;
-  const integration = fetchHomeIntegration(pd, home, atLead, byAddress?.fetched);
+  const integration = fetchHomeIntegration(pd, home, atLead, byAddress?.fetched, standsIn);
   const plan = homePlanAt(pd, home, integration.oid, integration.branch);
   const planChanging = unitPlanChangingStage(plan.state);
   const solo = home.solo ? soloOpening(pd, home, plan) : null;
