@@ -8195,10 +8195,44 @@ function personAskedInThisChat(projectDir: string): boolean {
 // lowers a check, no team holds strict, or memory cannot be read (the setter
 // then says what is wrong).
 function teamKeepsTyped(flags: ParsedFlags, projectDir: string): string | null {
-  const fence = SWITCHABLE_GUARD_FENCES.find((candidate) =>
-    candidate !== "plan-approval" && flags.fences?.[candidate] === "off");
-  const planApprovalOff = flags.ceremony?.plan_approval === "off" || flags.fences?.["plan-approval"] === "off";
-  if (!guardPolicyLowered(flags) && fence === undefined && !planApprovalOff) return null;
+  return teamKeepsLowered(projectDir, {
+    guardPolicy: guardPolicyLowered(flags),
+    fence: SWITCHABLE_GUARD_FENCES.find((candidate) =>
+      candidate !== "plan-approval" && flags.fences?.[candidate] === "off"),
+    planApproval: flags.ceremony?.plan_approval === "off" || flags.fences?.["plan-approval"] === "off",
+  });
+}
+
+// The same fact for the settings an approval report carries (`config set` keys
+// and values): the team's line when every one of them lowers a check the
+// team's strict Guard Policy keeps, so running the report without them drops
+// nothing else the person asked for. Null otherwise.
+function teamKeepsSettings(projectDir: string, settings: ReadonlyArray<readonly [string, string]>): string | null {
+  const fenceOff = (key: string, value: string): SwitchableGuardFence | undefined =>
+    value === "off"
+      ? SWITCHABLE_GUARD_FENCES.find((fence) => fence !== "plan-approval" && guardFenceConfigKey(fence) === key)
+      : undefined;
+  const lowered = settings.map(([key, raw]) => {
+    const value = raw.trim().toLowerCase();
+    return {
+      guardPolicy: key === "guard-policy" && (value === "relaxed" || value === "off"),
+      fence: fenceOff(key, value),
+      planApproval: (key === "plan-approval" || key === "guard.plan-approval") && value === "off",
+    };
+  });
+  if (lowered.some((one) => !one.guardPolicy && one.fence === undefined && !one.planApproval)) return null;
+  return teamKeepsLowered(projectDir, {
+    guardPolicy: lowered.some((one) => one.guardPolicy),
+    fence: lowered.find((one) => one.fence !== undefined)?.fence,
+    planApproval: lowered.some((one) => one.planApproval),
+  });
+}
+
+function teamKeepsLowered(
+  projectDir: string,
+  lowered: { guardPolicy: boolean; fence: SwitchableGuardFence | undefined; planApproval: boolean },
+): string | null {
+  if (!lowered.guardPolicy && lowered.fence === undefined && !lowered.planApproval) return null;
   let held: ReturnType<typeof memoryGuardPolicyDeclarations>[number] | undefined;
   try {
     held = memoryGuardPolicyDeclarations(projectDir, { sessionId: resolveInvokingSessionId(projectDir) ?? undefined })
@@ -8207,8 +8241,8 @@ function teamKeepsTyped(flags: ParsedFlags, projectDir: string): string | null {
     return null;
   }
   if (held === undefined) return null;
-  if (guardPolicyLowered(flags)) return guardPolicyMemoryStrictRefusal(held);
-  if (fence !== undefined) return fenceMemoryLockRefusal(held, fence);
+  if (lowered.guardPolicy) return guardPolicyMemoryStrictRefusal(held);
+  if (lowered.fence !== undefined) return fenceMemoryLockRefusal(held, lowered.fence);
   return planApprovalMemoryLockRefusal(held.path);
 }
 
@@ -22810,10 +22844,15 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       return;
     }
     const set = settingsBesideDecision(pd, session, flags.settings, flags.message ?? reply.messageId);
-    // A refused setting (a team's lock, for one) is the agent's step as well:
-    // the approval is still theirs, and the same report without it records it.
+    // A refused setting is the agent's step as well: the approval is still
+    // theirs, and the same report without the setting records it. When the
+    // team's strict Guard Policy is what keeps the check, the person hears the
+    // team's line once (teamKeepsTyped's fact, as `next` says it).
     if ("refusal" in set) {
-      emit(printDirective(`${set.refusal} Nothing was approved: run this report again without the setting to record the approval.`));
+      const team = teamKeepsSettings(pd, flags.settings);
+      emit(printDirective(team === null
+        ? `${set.refusal} Nothing was approved: run this report again without the setting to record the approval.`
+        : `Tell the person in one line: "${team}" Then run this report again without the setting to record the approval.`));
       return;
     }
     settingLines.push(...set.lines);
