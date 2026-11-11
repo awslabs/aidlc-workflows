@@ -17,7 +17,7 @@
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   auditBlockField, boltSlugForUnit, pendingPersonLines, readAuditShardEvents, workspaceSourceListing,
@@ -506,25 +506,30 @@ describe("a landing over the person's own change says so once it has landed", ()
     git(pd, ["-c", "user.name=AI-DLC Tests", "-c", "user.email=tests@example.com", "commit", "-qm", message]);
   };
 
-  // Guard Policy off, as the feature scope sets it. The agent committed one of
-  // AI-DLC's own records in the Unit's worktree by hand, and the main checkout
-  // holds the same record not committed, so git does not start the landing
-  // until it is committed there.
+  // Guard Policy off, as the feature scope sets it. Claude Code installed, so
+  // .gitignore is AI-DLC's root integration: the Unit's source adds a line to
+  // it, and an update the person took left another there not committed, so git
+  // does not start the landing until it is committed in the main checkout.
   function recordInTheWay(personChanges: boolean): { pd: string; record: string } {
     const pd = fixture(["alpha"], CHECK, false, null, "off");
+    const data = join(pd, ".claude", "tools", "data");
+    mkdirSync(data, { recursive: true });
+    writeFileSync(join(data, "harness.json"), JSON.stringify({ harnessDir: ".claude" }));
+    writeFileSync(join(data, "aidlc-projection.json"), JSON.stringify({ rootIntegrations: [{ path: ".gitignore", policy: "managed-block" }] }));
+    commit(pd, ["."], "install AI-DLC");
+    appendAuditEntry("STAGE_STARTED", { Stage: STAGE, "Source Baseline": writeBaselineSourceSnapshot(pd, STAGE, workspaceSourceListing(pd)!) }, pd);
     const prepared = prepare(pd);
     expect(prepared.code, `${prepared.out}\n${prepared.err}`).toBe(0);
     writeUnitSource(pd, "alpha", 2);
+    const ignore = join(wt(pd), ".gitignore");
+    writeFileSync(ignore, `${readFileSync(ignore, "utf-8")}dist/\n`);
     const checked = swarm(pd, ["check", "alpha"]);
     expect(checked.code, `${checked.out}\n${checked.err}`).toBe(0);
-    reviewRevisedSource(pd, "alpha");
-    const manifest = join(codeGenerationRecordDir(wt(pd), "alpha"), "source-manifest.json");
-    const record = relative(wt(pd), manifest).replace(/\\/g, "/");
-    const bytes = readFileSync(manifest);
-    commit(wt(pd), [record], "the Unit's work");
+    reviewRevisedSource(pd, "alpha", ["src/alpha.ts", ".gitignore"]);
     const finalized = swarm(pd, ["finalize", "--batch", "1", "--units", "alpha", "--claimed", "alpha"]);
     expect(finalized.code, `${finalized.out}\n${finalized.err}`).toBe(0);
-    writeFileSync(join(pd, record), bytes);
+    const record = ".gitignore";
+    writeFileSync(join(pd, record), `${readFileSync(join(pd, record), "utf-8")}aidlc/active-memory/\n`);
     if (personChanges) writeFileSync(join(pd, "CHANGELOG.md"), "## Unreleased\n");
     return { pd, record };
   }
