@@ -1993,7 +1993,10 @@ export function patchTargets(patch: string): Array<{ kind: "Add" | "Update" | "D
 // Codex's own binary in its patch mode, which is what its apply_patch command
 // runs (on Windows, apply_patch.bat): the flag is its first word and the patch
 // its operand, as apply_patch's operand is.
-export const CODEX_PATCH_FLAG = "--codex-run-as-apply-patch";
+const CODEX_PATCH_FLAG = "--codex-run-as-apply-patch";
+export function codexPatchMode(invocation: { name: string; args: string[] }): boolean {
+  return invocation.name === "codex" && invocation.args[0] === CODEX_PATCH_FLAG;
+}
 // The patch mode given an operand the reader cannot see (a variable, a
 // substitution, a PowerShell expression), read on the text, since a quote
 // inside the patch can turn the lexer's words over; so the same words inside a
@@ -2018,7 +2021,7 @@ export function shellPatchTargets(command: string, cwd = process.cwd()): string[
   const operands = shellCommandInvocationDetails(text).flatMap((invocation) =>
     invocation.name === "apply_patch" || invocation.name === "applypatch"
       ? invocation.args
-      : invocation.args[0] === CODEX_PATCH_FLAG
+      : codexPatchMode(invocation)
       ? invocation.args.slice(1)
       : []
   );

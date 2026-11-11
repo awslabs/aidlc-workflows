@@ -3924,6 +3924,9 @@ describe("t265b hook lifecycle", () => {
         `$PSNativeCommandArgumentPassing = 'Standard'; $patch = @'\n${patch(add(plan))}\n'@; & ${exe} --codex-run-as-apply-patch $patch`,
         // An apostrophe in the text turns the POSIX reading's quoting over.
         `$patch = @'\n${patch([`*** Add File: ${plan}`, "+don't touch `src` yet"])}\n'@; & ${exe} --codex-run-as-apply-patch $patch`,
+        // and a `>` after it hands the reading a file the patch does not write.
+        `$patch = @'\n${patch([`*** Add File: ${plan}`, "+Don't change the API: add(a, b) -> number"])}\n'@; & ${exe} --codex-run-as-apply-patch $patch`,
+        `$patch = @'\n${patch([`*** Add File: ${plan}`, "+It's small.", "+> Note"])}\n'@; & ${exe} --codex-run-as-apply-patch $patch`,
         `codex --codex-run-as-apply-patch "$(cat p.patch)"`,
         `& ${exe} --codex-run-as-apply-patch (Get-Content -Raw p.patch)`,
       ]) {
@@ -3946,7 +3949,20 @@ describe("t265b hook lifecycle", () => {
       const script = runHook(proj, BASH("./build.sh")).stderr;
       expect(script).toContain("Code generation cannot");
       expect(runHook(proj, BASH("./build.sh --codex-run-as-apply-patch")).stderr).toBe(script);
+      expect(runHook(proj, BASH(`./build.sh --codex-run-as-apply-patch '${patch(add("src/x.ts"))}'`)).stderr).toBe(script);
       expect(runHook(proj, BASH(`echo x --codex-run-as-apply-patch '${patch(add("src/x.ts"))}'`)).code).toBe(0);
+      // A PowerShell here-string written as the operand is a patch in the command too (a backtick
+      // in a double-quoted one is PowerShell's escape, so its text here has none).
+      for (const quote of ["'", '"']) {
+        const hereString = (path: string) =>
+          `& ${exe} --codex-run-as-apply-patch @${quote}\n${patch([`*** Add File: ${path}`, "+# Plan"])}\n${quote}@`;
+        expect(runHook(proj, BASH(hereString(plan))).code, `here-string ${quote}`).toBe(0);
+        expect(runHook(proj, BASH(hereString("src/new.ts"))).code, `here-string ${quote}`).toBe(2);
+      }
+      // A spelling the reading does not take as Codex is read as any program is: an unquoted
+      // Windows path loses its backslashes, and an operand that names no file is no patch.
+      expect(runHook(proj, BASH(`C:\\Users\\p\\AppData\\Roaming\\npm\\codex.exe --codex-run-as-apply-patch '${patch(add(plan))}'`)).code).toBe(0);
+      expect(runHook(proj, BASH("codex.cmd --codex-run-as-apply-patch (Get-Content -Raw p.patch)")).code).toBe(2);
     } finally {
       rmSync(proj, { recursive: true, force: true });
     }

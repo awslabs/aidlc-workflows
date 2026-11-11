@@ -188,7 +188,7 @@ import {
   stepNextCommand,
   WORKER_BRIEF_SECTIONS,
 } from "../tools/aidlc-testing-posture.ts";
-import { CODEX_PATCH_FLAG } from "./review-freeze-command.ts";
+import { codexPatchMode, shellPatchPaths } from "./review-freeze-command.ts";
 import { refuseRuntimeIntegrityViolation } from "./runtime-integrity.ts";
 import { unaskedSystemInstall } from "./system-install.ts";
 
@@ -675,7 +675,8 @@ export function receiptDetail(
 // only read, so it is said to be unread, not a write, with the way a read gets
 // through: written out plainly, the POSIX and the PowerShell readings both read
 // it. AI-DLC's own command in a spelling the reading refused, and a tool that is
-// no shell, get the general refusal: the way on for them is not a read.
+// no shell, get the general refusal: the way on for them is not a read. A line
+// that also hands apply_patch a patch nobody has read is the unread kind.
 export function mutationBlockReason(
   unit: string | null,
   opaqueShell = false,
@@ -2104,14 +2105,17 @@ function shellUsesDynamicEvaluation(command: string): boolean {
   return false;
 }
 
-// Codex's apply_patch, run by its own name or as its binary's patch mode: its
-// writes are its patch's, which the shell reading names (shellWriteTargets)
-// when the command holds the patch.
+// Codex's apply_patch, run by its own name or as its binary's patch mode with
+// the patch written in the command: its writes are its patch's, which the shell
+// reading names (shellWriteTargets). The patch mode given an operand the patch
+// reader finds no file in is read as any program is.
 function isPatchCall(
   invocation: { name: string; args: string[]; executable?: string; launchers?: string[]; dataDriven?: boolean },
+  cwd: string,
 ): boolean {
   if (invocation.launchers?.length || invocation.dataDriven) return false;
-  return (invocation.name === "codex" && invocation.args[0] === CODEX_PATCH_FLAG) ||
+  return (codexPatchMode(invocation) &&
+    invocation.args.slice(1).some((arg) => shellPatchPaths(arg, cwd).length > 0)) ||
     ((invocation.name === "apply_patch" || invocation.name === "applypatch") &&
       (invocation.executable ?? invocation.name) === invocation.name);
 }
@@ -2209,7 +2213,7 @@ async function mutationIntent(
     opaqueShell =
       dynamic || unseen !== null ||
       invocations.some((invocation) =>
-        !isPatchCall(invocation) &&
+        !isPatchCall(invocation, from) &&
         shellInvocationNeedsApproval(projectDir, from, invocation, concreteTargets, analysed, dialect, context)
       );
     // The rest of a line it cannot read is read as before, its heredoc too.
@@ -3061,12 +3065,14 @@ async function evaluate(
           mentioned: [unit ?? `stage:${GUARDED_STAGE}`],
         };
         if (verdict.block) {
+          // A patch nobody has read is the unread kind, however the line looks:
+          // a quote inside it can hand the reading a file it does not write.
+          const named = mutation.patchUnseen === true ? undefined : outsideRecord;
           blockedMutation = {
-            target: outsideRecord ?? (mutation.shellCommand ?? "").trim().slice(0, 160),
+            target: named ?? (mutation.shellCommand ?? "").trim().slice(0, 160),
             unit,
-            opaqueShell: outsideRecord === undefined,
-            // A patch nobody has read is the unread kind, however the line looks.
-            unreadShell: outsideRecord === undefined && toolName === "Bash" &&
+            opaqueShell: named === undefined,
+            unreadShell: named === undefined && toolName === "Bash" &&
               (!mutation.engineRefused || mutation.patchUnseen === true),
             patchUnseen: mutation.patchUnseen === true,
             detail: receiptDetail([evidence], verdict.mentioned),
