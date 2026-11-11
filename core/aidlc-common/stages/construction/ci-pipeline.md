@@ -72,8 +72,6 @@ Create CI pipeline configuration (buildspec.yml, workflow YAML, or equivalent), 
 Run Construction → Operation verification check:
 - Read
   `<record>/construction/build-and-test/cross-unit-traceability.md`.
-- Read every
-  `<record>/construction/*/code-generation/traceability.json`.
 - Confirm all Units built and tested, all code-generation tables have no
   unresolved findings, and the cross-Unit FR/NFR/AC gate passed.
 - Confirm the CI quality gates enforce the build and test commands recorded by

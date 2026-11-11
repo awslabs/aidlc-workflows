@@ -128,11 +128,6 @@ Assess the user's request for:
 
 ### Step 3: Determine Depth
 
-Based on complexity assessment:
-- **Minimal**: Clear request, narrow scope, well-understood domain
-- **Standard**: Moderate scope, some unknowns, multiple stakeholders
-- **Comprehensive**: Large scope, significant unknowns, complex domain
-
 ### Step 4: Assess Current Requirements
 
 Extract and organize what is already known from the user's input:
