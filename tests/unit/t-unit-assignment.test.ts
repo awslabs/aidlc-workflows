@@ -14,7 +14,7 @@
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { auditBlockField, readAuditShardEvents, REQUEST_TEXT_DIR } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -202,9 +202,54 @@ describe("after choosing teams the plan goes to them the way main's share questi
   });
 });
 
-// A live run on GitHub (#2783) and a read of the share: the plan's share took
-// a file the person had staged.
+// A live run on GitHub (#2783) and a read of the share: a ruleset on main
+// refused the plan's share and the way on said "pull main, then share again",
+// which cannot work; and the plan's share took a file the person had staged.
 describe("the plan's share fits the team's own git: a protected main, a branch of the lead's, a file the person staged", () => {
+  const WAY_ON = "The plan is committed here: push it on a branch and get it merged your usual way; the teams can take Units once it is in main.";
+  const RULE = "origin takes no direct push to main (error: GH013: Repository rule violations found for refs/heads/main. " +
+    `- Changes must be made through a pull request. (pre-receive hook declined)). ${WAY_ON}`;
+
+  // A host whose main takes no direct push, as a ruleset refuses it; other branches go through.
+  function mainTakesNoDirectPush(bare: string): void {
+    const hook = join(bare, "hooks", "pre-receive");
+    writeFileSync(hook, "#!/bin/sh\nwhile read old new ref; do\n  if [ \"$ref\" = refs/heads/main ]; then\n" +
+      "    echo 'error: GH013: Repository rule violations found for refs/heads/main.' >&2\n" +
+      "    echo '- Changes must be made through a pull request.' >&2\n    exit 1\n  fi\ndone\nexit 0\n");
+    chmodSync(hook, 0o755);
+  }
+
+  test("main takes no direct push: the share says so with the host's words and the way on, keeps the commit, and is not asked again", () => {
+    const home = makeHome();
+    chooseTeams(home.dir);
+    expect(isShare(next(home.dir))).toBe(true);
+    mainTakesNoDirectPush(home.remote);
+    const before = git(home.remote, ["rev-parse", "main"]);
+    const shared = run(UNIT, ["share", "--plan"], home.dir);
+    expect(shared.status, shared.out).not.toBe(0);
+    expect(shared.json?.error).toBe(RULE);
+    expect(git(home.remote, ["rev-parse", "main"])).toBe(before);
+    expect(git(home.dir, ["status", "--porcelain", "--", "aidlc"])).toBe("");
+    expect(git(home.dir, ["log", "-1", "--format=%s"])).toBe("Share the plan with the teams");
+    appendAuditEntry("HUMAN_TURN", { "Person Reply": "ok" }, home.dir);
+    const look = next(home.dir);
+    expect(isShare(look), JSON.stringify(look).slice(0, 600)).toBe(false);
+  });
+
+  // Main's own flow (the teams build on the workspace's repo): the share comes
+  // before a Unit starts here, so after a refusal it is asked again, never a build here.
+  test("main's share on one repo under the same rule says the same line, and the next step asks again and builds nothing here", () => {
+    const home = makeHome({ repos: {} });
+    chooseTeams(home.dir);
+    expect(isShare(next(home.dir))).toBe(true);
+    mainTakesNoDirectPush(home.remote);
+    const shared = run(UNIT, ["share"], home.dir);
+    expect(shared.status, shared.out).not.toBe(0);
+    expect(shared.json?.error).toBe(RULE);
+    const again = next(home.dir);
+    expect(isShare(again), JSON.stringify(again).slice(0, 600)).toBe(true);
+  });
+
   test("a file the person staged stays theirs, staged, and the share counts what it committed", () => {
     const home = makeHome();
     chooseTeams(home.dir);

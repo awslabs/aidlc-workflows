@@ -5503,12 +5503,19 @@ export function shareBlocker(projectDir: string): string | null {
   }
 }
 
+// How the plan reaches the teams when the share cannot push it: by the
+// person's own branch and merge. `committed`: the share's commit ran here.
+export function planWayOn(branch: string, committed: boolean): string {
+  const way = `push it on a branch and get it merged your usual way; the teams can take Units once it is in ${branch}.`;
+  return committed ? `The plan is committed here: ${way}` : `Commit the plan (aidlc/) here, ${way}`;
+}
+
 // `aidlc unit share`: commit the work here and push the integration branch to
 // the remote, so the teams can take Units (after Inception) or see a landed
 // one. A plain push, never forced. A share that did not happen (a commit git
 // refused, a push the remote refused) keeps what it committed and leaves both
 // offers due again (their marks cleared), so the next step asks again instead
-// of building here.
+// of building here; a plan's share a host's rule refuses is said once instead.
 // `--plan`: AI-DLC's record only (the plan a team's clone takes its Unit
 // from), for a home whose teams build in repos of their own; none of the
 // person's other files here is committed.
@@ -5566,6 +5573,15 @@ function shareMain(args: string[], projectDir?: string): void {
       `${remote} could not be reached, so the plan was not shared${committed > 0 ? " (the commit is kept here)" : ""}. ` +
         `Once it can be reached, \`${aidlcInvocation()} unit share --plan\` shares it.`,
     );
+  }
+  // A host's rule on the branch (git's "[remote rejected]": a protected
+  // branch, a ruleset, a hook), not a push behind it or a lost race for its
+  // lock: the plan reaches the branch the person's own way. The plan's offer
+  // keeps its mark, so it is not put again; main's share comes before a Unit
+  // starts here, so its offers are due again, never a build here.
+  if (!pushed.ok && /\[remote rejected\]/.test(pushed.stderr) && !CLAIM_RACE_LOST.test(pushed.stderr)) {
+    if (!planOnly) clearTeamHandoverMarks(pd, ["share", "push"]);
+    fail(`${remote} takes no direct push to ${branch} (${pushRefusal(pushed.stderr)}). ${planWayOn(branch, true)}`);
   }
   if (!pushed.ok) {
     clearTeamHandoverMarks(pd, ["share", "push"]);
