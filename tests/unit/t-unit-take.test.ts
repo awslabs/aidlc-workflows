@@ -1614,7 +1614,7 @@ describe("the claims' home is the lead's address", () => {
     const chat = chatOf("lead-refused");
     expect(nextSaying(home.dir, chat).said).toContain(
       "refunds's take or result on team-a could not be taken in here (this host takes no push from here (pre-receive hook declined)), " +
-        "so the board does not show it yet.",
+        "so the other teams do not see it yet.",
     );
     expect(nextSaying(home.dir, chat).said).not.toContain("could not be taken in here");
   });
@@ -1628,7 +1628,7 @@ describe("the claims' home is the lead's address", () => {
     git(home.dir, ["config", "commit.gpgsign", "true"]);
     git(home.dir, ["config", "user.signingkey", "no-such-key-for-this-test"]);
     const said = nextSaying(home.dir, chatOf("lead-signing")).said;
-    expect(said).toMatch(/refunds's take or result on team-a could not be taken in here \([^)]+\), so the board does not show it yet\./);
+    expect(said).toMatch(/refunds's take or result on team-a could not be taken in here \([^)]+\), so the other teams do not see it yet\./);
   });
 
   test("a take after a give back the lead has not looked at yet goes on top of it on the fork, and is taken in", () => {

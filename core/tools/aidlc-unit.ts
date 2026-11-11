@@ -7221,7 +7221,7 @@ export function takeInFromRemotes(projectDir: string, options: { unitOpen: boole
       // commits takes it, and the team's own commit never goes there.
       const notTakenIn = (why: string): string =>
         `${unit}'s take or result on ${remote} could not be taken in here (${why.split(/\r?\n/).map((part) => part.trim()).find(Boolean) ?? why}), ` +
-        "so the board does not show it yet.";
+        "so the other teams do not see it yet.";
       // Under quiet git's time limit: signing that would ask for a passphrase fails, said with git's words.
       let mine: string;
       try {
