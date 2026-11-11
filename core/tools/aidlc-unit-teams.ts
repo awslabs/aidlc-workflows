@@ -815,9 +815,12 @@ export type MergeVerdict =
 // is an ancestor of it (a merge commit, a fast-forward); or a first-parent
 // commit after the base has every changed path at the head's blob and every
 // deleted path gone (a squash, a rebase; a later edit to the same files comes
-// after it); or one first-parent commit is the same change by patch-id.
-// Anything else is not merged yet.
-// ponytail: the walk reads the latest 500 first-parent commits after the base.
+// after it); or one first-parent commit, or a run of consecutive ones (a
+// rebase merge that replays the Unit's commits one by one), is the same change
+// by patch-id. Anything else is not merged yet.
+// ponytail: the walk reads the latest 500 first-parent commits after the base,
+// and a run is at most MERGE_RUN_MAX commits long.
+const MERGE_RUN_MAX = 50;
 export function unitMergeVerdict(dir: string, integration: string, result: RepoResult): MergeVerdict {
   const head = result.heads.at(-1);
   if (head && gitIn(dir, ["merge-base", "--is-ancestor", head, integration]).ok) {
@@ -826,7 +829,8 @@ export function unitMergeVerdict(dir: string, integration: string, result: RepoR
   const paths = Object.keys(result.paths);
   if (paths.length === 0) return { merged: false };
   const known = gitIn(dir, ["rev-parse", "--verify", "--quiet", `${result.base}^{commit}`]).ok;
-  const commits = gitIn(dir, ["rev-list", "--first-parent", "--reverse", "--max-count=500", known ? `${result.base}..${integration}` : integration])
+  const range = known ? `${result.base}..${integration}` : integration;
+  const commits = gitIn(dir, ["rev-list", "--first-parent", "--reverse", "--max-count=500", range])
     .out.split("\n").filter(Boolean);
   for (const commit of commits) {
     const at = blobsAt(dir, commit, paths);
@@ -837,6 +841,17 @@ export function unitMergeVerdict(dir: string, integration: string, result: RepoR
   if (result.patch_id) {
     for (const commit of commits) {
       if (patchIdOf(dir, `${commit}^`, commit, paths) === result.patch_id) return { merged: true, commit, how: "same change" };
+    }
+    // A run starts and ends at a commit that changes the Unit's files.
+    const touching = new Set(gitIn(dir, ["rev-list", "--first-parent", "--max-count=500", range, "--", ...paths]).out.split("\n").filter(Boolean));
+    const ends = commits.flatMap((commit, at) => (touching.has(commit) ? [at] : []));
+    for (const [n, from] of ends.entries()) {
+      for (const to of ends.slice(n + 1)) {
+        if (to - from >= MERGE_RUN_MAX) break;
+        if (patchIdOf(dir, `${commits[from]}^`, commits[to], paths) === result.patch_id) {
+          return { merged: true, commit: commits[to], how: "same change" };
+        }
+      }
     }
   }
   return { merged: false };
