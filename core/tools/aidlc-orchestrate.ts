@@ -12387,9 +12387,10 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   }
 
   // Branch 1e - DocumentKB verbs are terminal commands, never freeform intent
-  // text. Same shape as 1c, but the directive names aidlc-knowledge.ts: this is
-  // the first public noun whose verbs live in their own tool rather than in
-  // aidlc-utility.ts, so the tool name is part of what each site must agree on.
+  // text. The step names the dispatcher, never aidlc-knowledge.ts: `onboard`'s
+  // copy of a document named outside documents/, and making that folder, run in
+  // the dispatcher (withNamedDocumentCopied in aidlc.ts), and on a copy install
+  // the tool file run alone refuses the path instead.
   if (flags.knowledgeCommand) {
     const command = flags.knowledgeCommand;
     if (command.kind === "error") {
@@ -12400,7 +12401,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     const [verb, ...tail] = argv;
     const suffix = tail.length > 0 ? ` ${tail.map(shellArg).join(" ")}` : "";
     emit(turnEndingPrint(
-      `Run \`${aidlcToolInvocation("knowledge")} ${verb}${suffix}\`, print its output verbatim, then stop. This is a terminal utility, NOT workflow work: do NOT run \`next\` and do NOT advance, resume, or run any workflow stage.`,
+      `Run \`${aidlcDispatcherInvocation(`knowledge ${verb}`)}${suffix}\`, print its output verbatim, then stop. This is a terminal utility, NOT workflow work: do NOT run \`next\` and do NOT advance, resume, or run any workflow stage.`,
     ));
     return;
   }
