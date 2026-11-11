@@ -194,7 +194,7 @@ import {
   stagesCounted,
   checkInApplies,
   checkInState,
-  CHECKED_IN_STATUS,
+  checkInStatus,
   homeLocation,
   PROJECT_TYPE_SOURCE_FIELD,
   PROJECT_TYPE_SOURCE_HOME,
@@ -2531,8 +2531,10 @@ To get started:
   }
   const yours = selection.intent === null ? null : ownOtherBuilds(projectDir, { space: selection.space, dirName: selection.intent }, content);
   const yoursLine = yours === null ? "" : `Yours:          ${yours}\n`;
-  // Said only when it is so: a record not checked in, or one git cannot tell about, says nothing here.
-  const checkedInLine = checkInApplies(projectDir, content) && checkInState(projectDir) === "checked-in" ? `${CHECKED_IN_STATUS}\n` : "";
+  // Said only when it is so, in the branch the work merges into or pushed on a
+  // branch of its own: a record not checked in, or one git cannot tell about, says nothing here.
+  const checkedIn = checkInApplies(projectDir, content) ? checkInStatus(checkInState(projectDir, content)) : null;
+  const checkedInLine = checkedIn === null ? "" : `${checkedIn}\n`;
   // Work an older AI-DLC recorded, brought up to this one in place: said here
   // on purpose, never in chat.
   const upgrade = stateUpgradeRecord(projectDir, selection.intent ?? undefined, selection.space);

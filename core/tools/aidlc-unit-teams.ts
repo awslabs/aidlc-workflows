@@ -603,6 +603,12 @@ export function checkInNotice(state: CheckIn): string | null {
   return typeof state === "string" ? null : `aidlc/ is pushed on ${state.pushedOn}; your teammates see it once it is in ${state.into}.`;
 }
 
+// Status's Checked in field for the same, or null.
+export function checkInStatus(state: CheckIn): string | null {
+  if (state === "checked-in") return CHECKED_IN_STATUS;
+  return typeof state === "string" ? null : `Checked in:     pushed on ${state.pushedOn}, not in ${state.into} yet`;
+}
+
 // Teams across repos share AI-DLC's record by git, and the person checks it in.
 // The callers say this at the stopping points (a stop, the push or the
 // person's Not now to it, the lead's Build and Test approval), unless aidlc/ is

@@ -465,6 +465,7 @@ describe("the checked-in fact", () => {
     expect(notices(look)).not.toContain(CHECKED_IN);
     expect(notices(next(alice, chat))).not.toContain(PUSHED);
     expect(checkInLine(alice)).toBeNull();
+    expect(statusOf(alice)).toContain("Checked in:     pushed on records/refunds, not in main yet\n");
     // The pull request squash-merged on the host: main has the record as a commit of its own.
     const reviewer = cloneOf(home.remote, "reviewer");
     git(reviewer, ["fetch", "-q", "origin", "records/refunds"]);
@@ -473,6 +474,7 @@ describe("the checked-in fact", () => {
     git(reviewer, ["push", "-q", "origin", "main"]);
     git(alice, ["fetch", "-q", "origin"]);
     expect(notices(next(alice, chat))).toContain(CHECKED_IN);
+    expect(statusOf(alice)).toContain(STATUS_YES);
   });
 
   test("at the lead's own checkout the branch is read from this clone's refs, never asked of the remote, never the branch it is on", () => {
@@ -517,6 +519,7 @@ describe("the checked-in fact", () => {
     git(alice, ["push", "-q", "-u", "origin", "pr/refunds"]);
     const look = next(alice, chat);
     expect(notices(look), JSON.stringify(look)).toContain("aidlc/ is pushed on pr/refunds; your teammates see it once it is in records.");
+    expect(statusOf(alice)).toContain("Checked in:     pushed on pr/refunds, not in records yet\n");
     // Merged into records with a merge commit.
     const reviewer = cloneOf(home.remote, "reviewer");
     git(reviewer, ["checkout", "-q", "records"]);
@@ -525,6 +528,7 @@ describe("the checked-in fact", () => {
     git(reviewer, ["push", "-q", "origin", "records"]);
     git(alice, ["fetch", "-q", "origin"]);
     expect(notices(next(alice, chat))).toContain(CHECKED_IN);
+    expect(statusOf(alice)).toContain(STATUS_YES);
   });
 
   test("a branch never pushed cannot be told: no line at a look, none in status, and the stopping point says today's words", () => {
