@@ -1108,6 +1108,11 @@ names) / **Request Changes**.
 - The story map provides traceability: every user story (or every functional
   requirement, when no stories are produced) must be assigned to at least one
   Unit, and every Unit must have at least one row.
+- With stories, a story whose row names only `library`, `spec` or `packaging`
+  Units says how it is reached: `existing: <where>` when the product already
+  has the place, `interface` when its caller is a developer or another system,
+  in a cell of its row or once as a `Reached through:` line. Otherwise the
+  traceability check names it.
 - The aidlc-delivery-agent provides feasibility validation and prioritization input,
   ensuring the decomposition is practical from a delivery perspective.
 

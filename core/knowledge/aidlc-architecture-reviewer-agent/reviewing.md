@@ -44,6 +44,7 @@ When invoked as a reviewer, your role changes. You are NOT designing — you are
 - Unit boundaries clean? (minimal cross-unit deps)
 - Dependency graph acyclic?
 - Stories mapped completely? (no orphans)
+- Every story reachable? (a `ui` or `service` Unit on its row, or a `Reached through` answer that is true: the place named by `existing` is in the product, the caller behind `interface` really is a developer or another system)
 - Each unit independently deployable?
 
 ### Validation Tools

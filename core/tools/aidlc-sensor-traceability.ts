@@ -71,6 +71,9 @@ interface UpstreamResolution {
   ids: Set<string>;
   reasons: string[];
   extraGaps: string[];
+  // Units Generation: the stories no Unit on their row exposes and that do not
+  // say how they are reached, each with what to write.
+  unreached: string[];
   unitContext?: UnitContext;
   storyAssignments?: Map<string, Set<string>>;
   recorded: Map<string, RecordedRequirement> | null;
@@ -426,6 +429,73 @@ function storyAssignments(storyMapPath: string, units: string[], ids: Map<string
     : { assignments };
 }
 
+// A Unit of one of these kinds has no surface of its own: Functional Design asks
+// it for no screen (`frontend-components` is a `ui` Unit's), and nothing runs it
+// on its own. A `ui` or `service` Unit, or an untagged one (it owes every design
+// document), is where a person or a caller reaches a story.
+const KINDS_WITHOUT_SURFACE = new Set(["library", "spec", "packaging"]);
+
+interface StoryReach {
+  // A story's own answer, from its row: `interface`, `existing: <where>`, or a
+  // bare `existing` (no place, refused).
+  rows: Map<string, string>;
+  // One answer for every story that has none of its own.
+  everyStory?: string;
+}
+
+function reachAnswer(text: string): string | undefined {
+  const value = text.trim();
+  if (/^interface$/i.test(value)) return "interface";
+  // `existing` alone or `existing: <where>`; a cell that only starts with the
+  // word (a story's title) is not an answer.
+  const existing = /^existing(?:\s*:\s*(.*))?$/i.exec(value);
+  return existing ? `existing: ${(existing[1] ?? "").trim()}`.trim() : undefined;
+}
+
+// How the story map says a story is reached when no Unit on its row exposes
+// it: a cell of the story's row, or a `Reached through: <answer>` line outside
+// the tables that answers for every story.
+function storyReach(storyMapPath: string): StoryReach {
+  const reach: StoryReach = { rows: new Map() };
+  const read = readText(storyMapPath);
+  if (read.content === null) return reach;
+  for (const line of read.content.split(/\r?\n/)) {
+    const cells = markdownCells(line);
+    if (cells.length === 0) {
+      const everyStory = /^\s*(?:[-*]\s+)?\*{0,2}Reached through\*{0,2}\s*:\s*\*{0,2}\s*(.+?)\s*$/i.exec(line.replaceAll("`", ""));
+      const answer = everyStory ? reachAnswer(everyStory[1]) : undefined;
+      if (answer !== undefined) reach.everyStory = answer;
+      continue;
+    }
+    const answer = cells.map(reachAnswer).find((value) => value !== undefined);
+    if (answer === undefined) continue;
+    for (const story of extractIds(line, [ID_PATTERNS.US])) reach.rows.set(story, answer);
+  }
+  return reach;
+}
+
+// With stories, a story is planned only when someone can reach it: a Unit on
+// its row exposes it, or the map says it is reached through what the product
+// already has (`existing: <where>`) or through an interface another program
+// calls (`interface`). A story left on rows of `library`, `spec` or `packaging`
+// Units with no such answer has no one asked for its screen or entry point.
+function unreachedStories(assignments: Map<string, Set<string>>, unitKinds: Map<string, string> | null, reach: StoryReach): string[] {
+  const findings: string[] = [];
+  for (const [story, units] of assignments) {
+    const kinds = [...units].map((unit) => ({ unit, kind: unitKinds?.get(unit) }));
+    if (kinds.some(({ kind }) => kind === undefined || !KINDS_WITHOUT_SURFACE.has(kind))) continue;
+    const answer = reach.rows.get(story) ?? reach.everyStory;
+    if (answer === "interface" || (answer !== undefined && answer !== "existing:")) continue;
+    const owners = kinds.map(({ unit, kind }) => `${unit} (${kind})`).join(", ");
+    findings.push(
+      answer === undefined
+        ? `${story}: no Unit on its row exposes it: ${owners}. Add the ui or service Unit that does, or write how it is reached on its row: "existing: <where>" when the product already has the place, "interface" when its caller is a developer or another system`
+        : `${story}: "existing" needs the place the product already has, as "existing: <where>"`,
+    );
+  }
+  return findings;
+}
+
 function resolveUnitContext(
   projectDir: string,
   outputPath: string,
@@ -539,7 +609,7 @@ function resolveNfrUpstream(
 // `declared` is the table's own upstream_ids: with requirements.md's own, the
 // requirements it traces when Requirements Analysis recorded none.
 function resolveUpstream(stage: string, projectDir: string, outputPath: string, declared: readonly string[]): UpstreamResolution {
-  const result: UpstreamResolution = { ids: new Set(), reasons: [], extraGaps: [], recorded: null, unrecorded: [], requirementsFile: "" };
+  const result: UpstreamResolution = { ids: new Set(), reasons: [], extraGaps: [], unreached: [], recorded: null, unrecorded: [], requirementsFile: "" };
   const docsDir = recordDir(projectDir);
   if (!docsDir) {
     result.reasons.push("cannot resolve the active intent record directory");
@@ -592,6 +662,7 @@ function resolveUpstream(stage: string, projectDir: string, outputPath: string, 
         if (!mapped.assignments.has(id)) result.extraGaps.push(id);
       }
     }
+    if (hasStories) result.unreached = unreachedStories(mapped.assignments, dag.unitKinds, storyReach(storyMap));
     return result;
   }
 
@@ -1198,7 +1269,7 @@ export function main(argv: string[]): void {
     missing_from_table: uniqueSorted(missingFromTable),
     missing_from_upstream_ids: uniqueSorted(missingFromUpstreamIds),
     invalid_entries: uniqueSorted(invalidEntries),
-    invalid_targets: uniqueSorted(targetChecks.invalidTargets),
+    invalid_targets: uniqueSorted([...targetChecks.invalidTargets, ...upstream.unreached]),
     findings_count: 0,
   };
   result.findings_count =
