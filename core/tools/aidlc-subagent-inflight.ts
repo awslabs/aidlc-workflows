@@ -1,10 +1,11 @@
 // The background-helper ledger: one session-scoped entry for each agent sent
 // in the background, which the Stop hook reads so a turn can end while the
-// agent works. aidlc-lib.ts re-exports it.
+// agent works. aidlc-lib.ts re-exports it. Beside it, unrecordedFinishSince
+// reads the completion hook's own traces of a finish it could not record.
 import { existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 import { withAuditLock, workspaceRoot, writeFileAtomic } from "./aidlc-locks.ts";
-import { sessionsDir, validSessionId } from "./aidlc-record-core.ts";
+import { attemptEventDefinitelyBefore, auditBlockField, type AuditShardEvent, sessionsDir, validSessionId } from "./aidlc-record-core.ts";
 
 // How far the authority covering an action reaches (authorityFor in
 // aidlc-lib.ts); an entry keeps the one in force when its agent was sent.
@@ -289,6 +290,34 @@ export function backgroundAgentOutSince(projectDir: string, sinceMs: number): bo
   const current = readSubagentInflightLedger(projectDir);
   if (!current.exists || current.malformed) return false;
   return freshSubagentEntries(current.entries, Date.now()).some((entry) => entry.startedAtMs >= sinceMs);
+}
+
+/** Whether the completion hook (hooks-health folder `healthDir`) left a trace since `request` of a finish
+ *  it could not record as an agent's: a completion row since naming no agent, a run since that left no row
+ *  (its heartbeat newer than every completion row since), a failure it recorded since, or a trace or request
+ *  time that does not read. A cross-shard tie counts as since; a trace file that cannot be read throws. */
+export function unrecordedFinishSince(healthDir: string, rows: ReadonlyArray<AuditShardEvent>, request: AuditShardEvent): boolean {
+  const requested = Date.parse(request.timestamp);
+  if (!Number.isFinite(requested)) return true;
+  const since = rows.filter((row) => row.event === "SUBAGENT_COMPLETED" && !attemptEventDefinitelyBefore(row, request));
+  if (since.some((row) => [null, "", "unknown"].includes(auditBlockField(row.block, "Agent Type")))) return true;
+  const heartbeat = join(healthDir, "log-subagent.last");
+  if (existsSync(heartbeat)) {
+    const beat = Date.parse(readFileSync(heartbeat, "utf-8").trim());
+    if (!Number.isFinite(beat)) return true;
+    // The hook beats, then appends its row in the same run: a beat since the
+    // request with no completion row at or after it is a run that left none.
+    if (beat >= requested && !since.some((row) => Date.parse(row.timestamp) >= beat)) return true;
+  }
+  const drops = join(healthDir, "log-subagent.drops");
+  if (existsSync(drops)) {
+    for (const line of readFileSync(drops, "utf-8").split("\n")) {
+      if (line.trim() === "") continue;
+      const at = Date.parse(line.split("\t", 1)[0]);
+      if (!Number.isFinite(at) || at >= requested) return true;
+    }
+  }
+  return false;
 }
 
 export function inspectSubagentInflight(

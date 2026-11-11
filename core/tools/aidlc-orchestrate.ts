@@ -274,6 +274,8 @@ import {
   guardAttemptState,
   nextReviewStepFor,
   openReviewRequests,
+  latestReviewerRowAfter,
+  hooksHealthReadDir,
   personMayApproveOverUnfinishedReview,
   personSpokeSinceReviewRequest,
   type GuardAttemptState,
@@ -589,7 +591,8 @@ import {
   turnsPersonCheckOff,
   enterHookWorkflow,
 } from "./aidlc-lib.ts";
-import { chatTookStep, hostNamesThisChat, planMadeElsewhere } from "./aidlc-record-core.ts";
+import { canonicalPathKey, chatTookStep, hostNamesThisChat, planMadeElsewhere } from "./aidlc-record-core.ts";
+import { unrecordedFinishSince } from "./aidlc-subagent-inflight.ts";
 import { readRequestFileResult, REQUEST_FILE_USAGE, reviewRecoverySpentMessage, reviewVerdictStep } from "./aidlc-log.ts";
 import { LOCK_FOLDER_HELD_STEP_KEY, lockFolderHeldAgentStep } from "./aidlc-lock-line.ts";
 import {
@@ -23510,6 +23513,8 @@ const WAIT_USAGE =
   "[--unit <unit>] [--review-file <path>] [--timeout <seconds>]";
 const WAIT_DEFAULT_SECONDS = 90;
 const WAIT_MAX_SECONDS = 540;
+// A review file unchanged this long ends the wait for a reviewer whose finish left no trace.
+const WAIT_REVIEW_QUIET_MS = 30_000;
 
 function parseWaitFlags(args: string[]): WaitFlags {
   const flags: WaitFlags = {};
@@ -23575,11 +23580,37 @@ function handleWait(args: string[], projectDir: string | undefined): void {
     flags.reviewFile === undefined
       ? null
       : isAbsolute(flags.reviewFile) ? flags.reviewFile : join(pd, flags.reviewFile);
+  // While the rows show the request's reviewer still out (its latest dispatch since the request has no
+  // finish after it), the bytes are not its finished review yet, and a verdict now would come before the
+  // finish row whose digest handleReview compares. It settles on bytes, as before, on the completion hook's
+  // trace of a finish it could not record, the person's words since the request, the file unchanged for one
+  // quiet window (or a clock off by as much), or a record that does not read. A Unit's worktree, whose
+  // reviewer rows are the main folder's, has no dispatch row here and settles on bytes.
+  const reviewerStillOut = (path: string): string | null => {
+    try {
+      const { intent: chosen, space: chosenSpace } = engineSelection(pd);
+      const intent = chosen ?? undefined;
+      const space = intent ? chosenSpace : undefined;
+      const unreadable: string[] = [];
+      const rows = readAuditShardEvents(pd, intent, space, unreadable);
+      const waited = canonicalPathKey(path);
+      const request = openReviewRequests(rows).find((open) => canonicalPathKey(join(pd, prefix, ...open.reviewFile.split("/"))) === waited);
+      const sent = request && latestReviewerRowAfter(rows, "SUBAGENT_DISPATCHED", request.reviewer, request.row);
+      if (unreadable.length > 0 || !request || !sent || latestReviewerRowAfter(rows, "SUBAGENT_COMPLETED", request.reviewer, sent) !== null ||
+        unrecordedFinishSince(hooksHealthReadDir(pd, intent, space), rows, request.row) ||
+        personSpokeSinceReviewRequest(pd, request.stage, request.reviewer, request.unit ?? undefined, intent, space) ||
+        Math.abs(Date.now() - statSync(path).mtimeMs) >= WAIT_REVIEW_QUIET_MS) return null;
+      return `reviewer ${request.reviewer} (has not finished yet)`;
+    } catch {
+      return null;
+    }
+  };
   const missingNow = (): string[] => {
     const missing: string[] = [];
     if (target === "review") {
-      if (reviewPath !== null && !fileHasBytes(reviewPath)) {
-        missing.push(`review file ${flags.reviewFile} (absent or empty)`);
+      if (reviewPath !== null) {
+        const entry = fileHasBytes(reviewPath) ? reviewerStillOut(reviewPath) : `review file ${flags.reviewFile} (absent or empty)`;
+        if (entry !== null) missing.push(entry);
       }
     } else if (target === "collaborators") {
       // A lead-only run (collaborators switch off) has no spokes to wait on, so
