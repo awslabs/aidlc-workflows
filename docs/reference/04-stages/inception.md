@@ -1015,6 +1015,9 @@ actual unit artifacts.
   (`<record>/inception/domain-design/components.md`)
 - `<record>/inception/requirements-analysis/requirements.md`
 - `<record>/inception/user-stories/stories.md` (if produced)
+- `<record>/inception/refined-mockups/mockups.md` and `interaction-spec.md`
+  (if produced): the screens, controls and commands each need a Unit that
+  builds them
 
 ### Steps
 

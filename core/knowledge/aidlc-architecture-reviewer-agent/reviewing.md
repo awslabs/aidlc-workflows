@@ -44,6 +44,11 @@ When invoked as a reviewer, your role changes. You are NOT designing — you are
 - Unit boundaries clean? (minimal cross-unit deps)
 - Dependency graph acyclic?
 - Stories mapped completely? (no orphans)
+- For each story: which Unit builds the logic, which Unit builds the screen, command or endpoint it is reached through, and which Unit connects the two? Name every story where one of the three has no owner.
+- When `mockups.md` or `interaction-spec.md` is passed: does every screen, control and command they show have a Unit whose responsibilities say it builds it?
+- When a criterion is split between Units, does each Unit's text say which part it covers?
+- A story no Unit exposes, or a mockup screen no Unit builds, is Major: one finding per story or screen, naming the acceptance criteria it leaves uncovered.
+- Do not accept the plan's own statement that a gap is closed: check the Unit's text.
 - Each unit independently deployable?
 
 ### Validation Tools
