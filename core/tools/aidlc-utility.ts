@@ -561,7 +561,7 @@ import {
   tomlFragmentText,
   withFileLineEndings,
 } from "./aidlc-plugin.ts";
-import { pluginTestCommand, renderPluginTestHelp, resolveHookPath } from "./aidlc.ts";
+import { pluginAuthorCommand, renderPluginTestHelp, resolveHookPath } from "./aidlc.ts";
 import { projectPluginCommands } from "./aidlc-plugin-commands.ts";
 import { pluginScriptLaunch } from "./aidlc-plugin-script.ts";
 import { executePlan, withTransactionFix } from "./aidlc-transaction.ts";
@@ -1610,20 +1610,36 @@ function pluginAuthorCommandCode(code: number): void {
   if (code !== 0) process.exitCode = code;
 }
 
+// A plugin author verb's usage error names the command the person ran and
+// what was wrong with it.
+function pluginAuthorUsageError(usage: string, reason: string): void {
+  process.stderr.write(`Usage: ${usage}\n${reason}\n`);
+  process.exitCode = 2;
+}
+
+// Why a plugin author verb's flags or words do not fit it, or null.
+function pluginAuthorArgsProblem(
+  positional: readonly string[],
+  flags: Record<string, string>,
+  missingValueFlags: ReadonlySet<string>,
+  valued: string,
+  maxPositional: number,
+): string | null {
+  const unknown = Object.keys(flags).find((key) => key !== "json" && key !== "help" && key !== valued);
+  if (unknown !== undefined) return `unknown option "--${unknown}"`;
+  if (missingValueFlags.has(valued)) return `--${valued} requires a value`;
+  return positional.length > maxPositional ? `unexpected positional argument "${positional[maxPositional]}"` : null;
+}
+
 function handlePluginValidate(
   positional: string[],
   flags: Record<string, string>,
   missingValueFlags: ReadonlySet<string>,
 ): void {
-  const unknown = Object.keys(flags).filter(
-    (key) => key !== "json" && key !== "help" && key !== "with",
-  );
-  if (
-    unknown.length > 0 ||
-    positional.length > 2 ||
-    missingValueFlags.has("with")
-  ) {
-    pluginAuthorCommandCode(pluginValidateMain([]));
+  const { usage } = pluginAuthorCommand("validate");
+  const problem = pluginAuthorArgsProblem(positional, flags, missingValueFlags, "with", 2);
+  if (problem !== null) {
+    pluginAuthorUsageError(usage, problem);
     return;
   }
   if (
@@ -1631,13 +1647,13 @@ function handlePluginValidate(
     positional[1] === "-h" ||
     positional[1] === "--help"
   ) {
-    pluginAuthorCommandCode(pluginValidateMain(["--help"]));
+    pluginAuthorCommandCode(pluginValidateMain(["--help"], `Usage: ${usage}`));
     return;
   }
   const args = [positional[1] ?? process.cwd()];
   if (flags.with !== undefined) args.push("--with", flags.with);
   if (flags.json === "true") args.push("--json");
-  pluginAuthorCommandCode(pluginValidateMain(args));
+  pluginAuthorCommandCode(pluginValidateMain(args, `Usage: ${usage}`));
 }
 
 function handlePluginBuild(
@@ -1645,18 +1661,10 @@ function handlePluginBuild(
   flags: Record<string, string>,
   missingValueFlags: ReadonlySet<string>,
 ): void {
-  const unknown = Object.keys(flags).filter(
-    (key) =>
-      key !== "json" &&
-      key !== "help" &&
-      key !== "plugin-root",
-  );
-  if (
-    unknown.length > 0 ||
-    positional.length > 3 ||
-    missingValueFlags.has("plugin-root")
-  ) {
-    pluginAuthorCommandCode(pluginBuildMain([]));
+  const { usage } = pluginAuthorCommand("build");
+  const problem = pluginAuthorArgsProblem(positional, flags, missingValueFlags, "plugin-root", 3);
+  if (problem !== null) {
+    pluginAuthorUsageError(usage, problem);
     return;
   }
   if (
@@ -1664,7 +1672,7 @@ function handlePluginBuild(
     positional[1] === "-h" ||
     positional[1] === "--help"
   ) {
-    pluginAuthorCommandCode(pluginBuildMain(["--help"]));
+    pluginAuthorCommandCode(pluginBuildMain(["--help"], `Usage: ${usage}`));
     return;
   }
   const args = [
@@ -1673,7 +1681,7 @@ function handlePluginBuild(
     ...(positional[2] ? [positional[2]] : []),
   ];
   if (flags.json === "true") args.push("--json");
-  pluginAuthorCommandCode(pluginBuildMain(args));
+  pluginAuthorCommandCode(pluginBuildMain(args, `Usage: ${usage}`));
 }
 
 function handlePluginTest(
@@ -1681,7 +1689,7 @@ function handlePluginTest(
   flags: Record<string, string>,
   missingValueFlags: ReadonlySet<string>,
 ): void {
-  const { usage, options } = pluginTestCommand();
+  const { usage, options } = pluginAuthorCommand("test");
   // Help wherever it is asked, as the standalone tool reads it.
   if (flags.help !== undefined || positional.slice(1).includes("-h")) {
     process.stdout.write(renderPluginTestHelp());
@@ -1702,8 +1710,7 @@ function handlePluginTest(
   }
   if (paths.length > 1) reason ??= `unexpected positional argument "${paths[1]}"`;
   if (reason !== null) {
-    process.stderr.write(`Usage: ${usage}\n${reason}\n`);
-    process.exitCode = 2;
+    pluginAuthorUsageError(usage, reason);
     return;
   }
   const args = [paths[0] ?? process.cwd()];

@@ -221,14 +221,14 @@ const HUMAN_TOP_ROUTE_IDS = new Set([
 
 export const ENGINE_NAMESPACE_HELP: NamespaceHelpOptions = {
   namespace: "engine",
-  usage: "aidlc engine <noun> <verb> [args]",
+  usage: "engine <noun> <verb> [args]",
   header: "Engine machinery - generated harness surfaces only; not for human scripts:",
   excludedRouteIds: HUMAN_TOP_ROUTE_IDS,
 };
 
 export const SYSTEM_NAMESPACE_HELP: NamespaceHelpOptions = {
   namespace: "system",
-  usage: "aidlc system <noun> <verb> [args]",
+  usage: "system <noun> <verb> [args]",
   header: "Operations on this user's aidlc installation; never system-wide (root only with --allow-root):",
 };
 
@@ -1812,15 +1812,15 @@ const PLUGIN_TEST_FLAG_SUMMARIES: Readonly<Record<string, string>> = {
   "--with": "Your checkout of the base plugin this one builds on, composed into the copy first",
 };
 
-export function pluginTestCommand(): { usage: string; options: RouteOption[] } {
+export function pluginAuthorCommand(verb: "validate" | "build" | "test"): { usage: string; options: RouteOption[] } {
   const route = ROUTES.find((candidate) => candidate.id === "plugin-author");
-  const form = route ? usageFormsFor(route, "test")[0] : undefined;
-  if (!route || !form) throw new Error("dispatcher route registry is missing plugin test");
-  return { usage: `${aidlcInvocation()} plugin ${form}`, options: routeOptions(route, "test") };
+  const form = route ? usageFormsFor(route, verb)[0] : undefined;
+  if (!route || !form) throw new Error(`dispatcher route registry is missing plugin ${verb}`);
+  return { usage: `${aidlcInvocation()} plugin ${form}`, options: routeOptions(route, verb) };
 }
 
 export function renderPluginTestHelp(): string {
-  const { usage, options } = pluginTestCommand();
+  const { usage, options } = pluginAuthorCommand("test");
   const out = process.stdout;
   return [
     "Check that a plugin composes cleanly into a copy of a project, which is never changed",
@@ -1877,7 +1877,7 @@ export function renderNamespaceHelp(
   options: NamespaceHelpOptions,
   summaryOverrides: ReadonlyMap<string, string> = new Map(),
 ): string {
-  const lines: string[] = [options.usage, "", options.header];
+  const lines: string[] = [`${aidlcInvocation()} ${options.usage}`, "", options.header];
   const grouped = new Map<string, string[]>();
   const summaries = new Map<string, string>();
   const sections = new Map<string, readonly HelpSection[]>();
@@ -1929,7 +1929,7 @@ function renderConfigHelp(): string {
   const route = ROUTES.find((candidate) => candidate.id === "config");
   if (!route) throw new Error("dispatcher route registry is missing engine noun config");
   return [
-    "aidlc engine config <verb> [args] [--intent <id>] [--space <name>]",
+    `${aidlcInvocation()} engine config <verb> [args] [--intent <id>] [--space <name>]`,
     "",
     "Settings for the selected piece of work:",
     ...routeForms(route).map((form) => `  ${form}`),
@@ -1942,8 +1942,8 @@ export function renderAllHelp(): string {
     renderHumanHelp().trimEnd(),
     "",
     "Hidden namespaces:",
-    "  engine  Generated harness surfaces only; not for human scripts. Run: aidlc engine --help",
-    "  system  This user's installation; unsupported interface. Run: aidlc system --help",
+    `  engine  Generated harness surfaces only; not for human scripts. Run: ${aidlcInvocation()} engine --help`,
+    `  system  This user's installation; unsupported interface. Run: ${aidlcInvocation()} system --help`,
     "",
   ].join("\n");
 }
@@ -1952,7 +1952,7 @@ function topLevelError(command: string): Action {
   return {
     type: "error",
     code: 2,
-    message: `aidlc: unknown command or noun '${command}'; try 'aidlc --help'\n`,
+    message: `aidlc: unknown command or noun '${command}'; try '${aidlcInvocation()} --help'\n`,
   };
 }
 
@@ -1987,7 +1987,7 @@ function publicCommandError(command: string): Action {
   return {
     type: "error",
     code: 2,
-    message: `aidlc: unknown command or noun '${command}'; try 'aidlc --help'\n`,
+    message: `aidlc: unknown command or noun '${command}'; try '${aidlcInvocation()} --help'\n`,
     humanMessage:
       `${errorLabel("error:", process.stderr)} unknown command '${command}'\n${
         tip ? `\n  ${tipLabel("tip:", process.stderr)} did you mean '${nearest?.candidate}'?\n` : ""
@@ -2002,7 +2002,7 @@ function nounError(noun: string, verb: string | undefined, namespace: "engine" |
   return {
     type: "error",
     code: 2,
-    message: `aidlc: ${detail} for ${namespace} noun '${noun}'; try 'aidlc ${namespace} --help'\n`,
+    message: `aidlc: ${detail} for ${namespace} noun '${noun}'; try '${aidlcInvocation()} ${namespace} --help'\n`,
   };
 }
 

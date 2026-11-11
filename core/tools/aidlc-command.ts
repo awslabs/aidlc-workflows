@@ -376,7 +376,7 @@ function missingDispatcherWorkspaceName(
   return {
     kind: "error",
     noun,
-    message: `Usage: aidlc ${usage}`,
+    message: `Usage: ${aidlcInvocation()} engine ${usage}`,
   };
 }
 

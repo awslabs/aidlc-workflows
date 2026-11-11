@@ -3047,7 +3047,7 @@ describe("t230 dispatcher route completeness", () => {
       ok: false,
       code: 2,
       status: "usage",
-      message: "unknown command or noun 'unknown-command'; try 'aidlc --help'",
+      message: "unknown command or noun 'unknown-command'; try 'bun .claude/tools/aidlc.ts --help'",
     });
   });
 
@@ -3631,7 +3631,7 @@ describe("t230 dispatcher help and errors", () => {
       type: "help",
       scope: "system",
     });
-    expect(text).toContain("aidlc system <noun> <verb> [args]");
+    expect(text).toContain("bun .claude/tools/aidlc.ts system <noun> <verb> [args]");
     expect(text).toContain(
       "Operations on this user's aidlc installation; never system-wide (root only with --allow-root):",
     );
@@ -3656,10 +3656,10 @@ describe("t230 dispatcher help and errors", () => {
     expect(expanded).toStartWith(defaultHelp.trimEnd());
     expect(expanded).toContain("Hidden namespaces:");
     expect(expanded).toContain(
-      "engine  Generated harness surfaces only; not for human scripts. Run: aidlc engine --help",
+      "engine  Generated harness surfaces only; not for human scripts. Run: bun .claude/tools/aidlc.ts engine --help",
     );
     expect(expanded).toContain(
-      "system  This user's installation; unsupported interface. Run: aidlc system --help",
+      "system  This user's installation; unsupported interface. Run: bun .claude/tools/aidlc.ts system --help",
     );
     expect(defaultHelp).not.toContain("Hidden namespaces:");
     expect(defaultHelp).not.toContain("aidlc engine --help");
@@ -3712,7 +3712,7 @@ describe("t230 dispatcher help and errors", () => {
     expect(res.exitCode).toBe(2);
     expect(res.stdout.toString("utf-8")).toBe("");
     expect(res.stderr.toString("utf-8")).toBe(
-      "aidlc: unknown verb 'bogus' for engine noun 'state'; try 'aidlc engine --help'\n",
+      "aidlc: unknown verb 'bogus' for engine noun 'state'; try 'bun .claude/tools/aidlc.ts engine --help'\n",
     );
   });
 
@@ -3720,7 +3720,7 @@ describe("t230 dispatcher help and errors", () => {
     const res = viaDispatcher(["system", "versions"], REPO_ROOT);
     expect(res.exitCode).toBe(2);
     expect(res.stderr.toString("utf-8")).toBe(
-      "aidlc: missing verb for system noun 'versions'; try 'aidlc system --help'\n",
+      "aidlc: missing verb for system noun 'versions'; try 'bun .claude/tools/aidlc.ts system --help'\n",
     );
   });
 

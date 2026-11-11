@@ -531,7 +531,7 @@ describe("t327 team construction dispatcher", () => {
     expect(rendered).toContain("| blocked | awaiting |");
     expect(rendered).toContain("last observed ref movement 2026-08-19T12:00:00Z");
     expect(rendered).toContain("`/aidlc --claim claimable`");
-    expect(rendered).toContain("`aidlc unit gate awaiting`");
+    expect(rendered).toContain("`bun .claude/tools/aidlc.ts unit gate awaiting`");
 
     const actual = run(ORCH, ["next"], project);
     expect(actual.status, actual.out).toBe(0);
@@ -575,7 +575,7 @@ describe("t327 team construction dispatcher", () => {
       "state folded; audit finalization pending",
     );
     expect(pendingAudit.message as string).toContain(
-      "`aidlc unit land awaiting`",
+      "`bun .claude/tools/aidlc.ts unit land awaiting`",
     );
   });
 
@@ -660,7 +660,7 @@ describe("t327 team construction dispatcher", () => {
     const recoveryBoard = nextDirective(race.project);
     expect(recoveryBoard.kind).toBe("notice");
     expect(recoveryBoard.message as string).toContain(
-      "aidlc unit land awaiting --accept-released-attempt --user-input '<human acknowledgment>'",
+      "bun .claude/tools/aidlc.ts unit land awaiting --accept-released-attempt --user-input '<human acknowledgment>'",
     );
   });
 
@@ -780,7 +780,7 @@ describe("t327 team construction dispatcher", () => {
     const expected = `${renderTeamConstructionBoard(directBoard, "snapshot")}\n`;
     expect(expected).toContain("| secondary-alpha | secondary-team |");
     expect(expected).toContain("secondary-beta waits on secondary-alpha");
-    expect(expected).toContain("`aidlc unit gate secondary-alpha`");
+    expect(expected).toContain("`bun .claude/tools/aidlc.ts unit gate secondary-alpha`");
     expect(expected).not.toContain("awaiting-team");
 
     const bySpace = run(

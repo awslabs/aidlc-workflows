@@ -1491,7 +1491,7 @@ function namedRestartRequest(
     return {
       directive: errorDirective(
         `AI-DLC could not read the work this request was kept for (${errorMessage(e)}), so it was not run. ` +
-          `Run \`${aidlcDispatcherInvocation("doctor")}\` to see why.`,
+          `Run \`${entrySkillInvocation()} --doctor\` to see why.`,
       ),
     };
   }
@@ -6259,7 +6259,7 @@ export function renderTeamConstructionBoard(
   for (const row of board.awaitingMerge) {
     if (row.status === "pinned") {
       nextActions.push(
-        `- Record the pinned merge decision for \`${row.unit}\` with \`aidlc unit gate ${row.unit}\`.`,
+        `- Record the pinned merge decision for \`${row.unit}\` with \`${aidlcInvocation()} unit gate ${row.unit}\`.`,
       );
     } else if (
       row.status === "approved" ||
@@ -6274,8 +6274,8 @@ export function renderTeamConstructionBoard(
         released &&
             row.status === "git-landed" &&
             !row.releasedAfterGitAccepted
-          ? `- The landed attempt for \`${row.unit}\` was released. Inspect the merge commit, then run \`aidlc unit land ${row.unit} --accept-released-attempt --user-input '<human acknowledgment>'\`.`
-          : `- Resume \`${row.unit}\` with \`aidlc unit land ${row.unit}\`.`,
+          ? `- The landed attempt for \`${row.unit}\` was released. Inspect the merge commit, then run \`${aidlcInvocation()} unit land ${row.unit} --accept-released-attempt --user-input '<human acknowledgment>'\`.`
+          : `- Resume \`${row.unit}\` with \`${aidlcInvocation()} unit land ${row.unit}\`.`,
       );
     } else if (row.status === "rejected") {
       nextActions.push(

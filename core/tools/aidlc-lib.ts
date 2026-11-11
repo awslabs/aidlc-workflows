@@ -1797,7 +1797,7 @@ function missingWorkspaceName(
     noun,
     code: "missing-name",
     verb,
-    message: `Usage: aidlc ${usage}`,
+    message: `Usage: ${entrySkillInvocation()} ${usage}`,
   };
 }
 
@@ -1813,7 +1813,7 @@ function unexpectedWorkspaceArguments(
     noun,
     code: "unexpected-arguments",
     verb,
-    message: `Usage: aidlc ${usage}`,
+    message: `Usage: ${entrySkillInvocation()} ${usage}`,
   };
 }
 
