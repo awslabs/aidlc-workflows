@@ -1050,6 +1050,10 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
   test("an approval reported before the promotion: the promotion as printed, then the same report, records it", () => {
     const proj = seedPracticesProject("[-]");
     seedAidlcMemory(proj);
+    appendAuditEvent(proj, "STAGE_STARTED", "2026-07-17T14:01:00Z", {
+      Stage: "practices-discovery",
+      Agent: "aidlc-pipeline-deploy-agent",
+    });
     for (const agent of PRACTICES_SUPPORTS) {
       writeContribution(proj, agent, undefined, "inception", "practices-discovery");
     }

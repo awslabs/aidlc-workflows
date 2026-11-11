@@ -19198,8 +19198,7 @@ function planChangeDirective(
   }
   if (gateOpen !== null) {
     // Practices Discovery's approval waits for the practices the person
-    // approved to be saved (an approval report would be refused in engine
-    // words), so there only a change request is handed over.
+    // approved to be saved, so there only a change request is handed over.
     const held = engineProjectDir !== undefined && practicesApprovalHeld(engineProjectDir, gateOpen, plan!.stateContent);
     return kept(turnEndingPrint(`${message} ${openGateAnswerStep(gateOpen, held)}${undo}${resume}`));
   }
@@ -22645,10 +22644,20 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   }
 
   if (practicesApprovalHeld(pd, slug, stateContent)) {
-    emit(errorDirective(
+    // Their Approve stands: the promotion it waits for is the agent's step,
+    // named as the stage's Step 7 runs it, then this same report.
+    const drafts = `${engineRelativeRecordDir(pd) ?? "<record>"}/inception/practices-discovery`;
+    const promote = renderEngineInvocation({
+      route: "state",
+      args: [
+        "practices-promote",
+        "--team-practices", `${drafts}/team-practices.md`,
+        "--discovered-rules", `${drafts}/discovered-rules.md`,
+      ],
+    });
+    emit(printDirective(
       'Cannot approve "practices-discovery" because the approved practices have not been saved yet. ' +
-        "Run aidlc-state.ts practices-promote after the human approves, then report " +
-        "--result approved --user-input '<exact choice>'.",
+        `Run \`${promote}\`, then \`${renderEngineInvocation({ route: "orchestrate", args: ["report", ...args] })}\` again.`,
     ));
     return;
   }
@@ -22801,8 +22810,10 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       return;
     }
     const set = settingsBesideDecision(pd, session, flags.settings, flags.message ?? reply.messageId);
+    // A refused setting (a team's lock, for one) is the agent's step as well:
+    // the approval is still theirs, and the same report without it records it.
     if ("refusal" in set) {
-      emit(errorDirective(`${set.refusal} Nothing was approved: run this report again without the setting to record the approval.`));
+      emit(printDirective(`${set.refusal} Nothing was approved: run this report again without the setting to record the approval.`));
       return;
     }
     settingLines.push(...set.lines);
