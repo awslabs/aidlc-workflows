@@ -70,6 +70,7 @@ class Folder {
     this.dir = setupIntegrationProject({ withState: "state-brownfield-feature.md" });
     created.push(this.dir);
     if (state === "code-generation") this.planWaits();
+    this.cloneIs("clone0001", "zzzz");
     this.env = {
       ...testGuardEnvironment(process.env, "production"),
       CLAUDE_PROJECT_DIR: this.dir,
@@ -98,6 +99,11 @@ class Folder {
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "code-generation-plan.md"), this.planText("- Tests: 3 unit tests"));
     writeFileSync(join(dir, "unit-test-instructions.md"), "# Unit Test Instructions\n\nRun `bun test src/slugify.test.ts`.\n");
+  }
+
+  // This checkout's clone id: its rows go to the shard `<host>-<token>.md`, read in name order.
+  cloneIs(token: string, host: string): void {
+    writeFileSync(join(this.dir, "aidlc", ".aidlc-clone-id"), `${token}\n${host}\n`);
   }
 
   planDir(): string {
@@ -302,26 +308,38 @@ describe("t-plan-question-new-chat: the code plan question, words in a chat that
     expect(printed).not.toContain(RECORD_STEP);
   });
 
-  test("the second door: answered as the work in progress, the question is shown, not read as answered", () => {
-    const { folder } = planAskedIn(A);
-    const second = new Chat(folder, B).start();
-    const printed = second.reply("make the slugs lower case");
+  // Asked where their words belong, the person says the work in progress.
+  function routedAsTheWorkInProgress(folder: Folder, chat: Chat): Json {
+    const printed = chat.reply("make the slugs lower case");
     const request = /next --request (\S+)`/.exec(printed)?.[1];
     expect(request, printed).toBeDefined();
-    const routing = second.next(["--request", request!]);
+    const routing = chat.next(["--request", request!]);
     expect(routing.kind, JSON.stringify(routing)).toBe("ask");
     const answer = String((routing as { continue_command?: string }).continue_command ?? "");
     expect(answer, JSON.stringify(routing)).toContain("next");
-    second.said("1");
+    chat.said("1");
     const [bun, file, ...rest] = answer.trim().split(/\s+/).map((word) => word.replace(/^'|'$/g, ""));
     expect(bun).toBe("bun");
-    let step = folder.json(folder.run([BUN, join(folder.dir, file), ...rest, "--project-dir", folder.dir], B), "the routing answer");
+    let step = folder.json(folder.run([BUN, join(folder.dir, file), ...rest], chat.id), "the routing answer");
     for (let i = 0; step.kind === "load-steering" && i < 40; i++) {
       const [, tool, ...more] = String(step.next).trim().split(/\s+/);
-      step = folder.json(folder.run([BUN, join(folder.dir, tool), ...more], B), "rule part");
+      step = folder.json(folder.run([BUN, join(folder.dir, tool), ...more], chat.id), "rule part");
     }
+    return step;
+  }
+
+  test("the second door: answered as the work in progress, the question is shown, not read as answered", () => {
+    const { folder } = planAskedIn(A);
+    const step = routedAsTheWorkInProgress(folder, new Chat(folder, B).start());
     expect(step.kind, JSON.stringify(step)).toBe("ask");
     expect(step.ask_type).toBe("plan-approval");
+  });
+
+  test("the second door in the chat that showed it: their words are its answer, as today", () => {
+    const { folder, first } = planAskedIn(A);
+    const step = routedAsTheWorkInProgress(folder, first);
+    expect(step.kind, JSON.stringify(step)).toBe("print");
+    expect(String(step.message)).toContain("so their words are that answer");
   });
 });
 
@@ -356,6 +374,33 @@ describe("t-plan-question-new-chat: the chat that showed it, and what the record
     expect(folder.shownIn(null)).toBe(1);
     expect(nowhere.reply("carry on with the work")).toContain(RECORD_STEP);
     expect(folder.shownIn(null)).toBe(1);
+  });
+});
+
+// Solo work shared by git: the question was asked in one clone and is put in
+// another, whose shard sorts first, so its rows are read before the asking row.
+describe("t-plan-question-new-chat: a second clone of the same work", () => {
+  test("the plan question put in the second clone is shown there once, and the pick there records", () => {
+    const { folder } = planAskedIn(A);
+    folder.cloneIs("clone0002", "aaaa");
+    const second = new Chat(folder, B).start();
+    expect(second.reply("carry on with the work")).not.toContain(RECORD_STEP);
+    expect(second.next().ask_type).toBe("plan-approval");
+    const printed = second.reply("1");
+    expect(printed).toContain(TODAY_PLAN);
+    folder.json(second.approvePlan(), "the pick in the second clone");
+    expect(folder.rows("PLAN_APPROVAL_RECORDED")).toHaveLength(1);
+    expect(folder.shownIn(B)).toBe(1);
+  });
+
+  test("the gate shown in the second clone is shown there once, then read as its possible answer", () => {
+    const { folder } = gateOpenIn(A);
+    folder.cloneIs("clone0002", "aaaa");
+    const second = new Chat(folder, B).start();
+    expect(second.reply("carry on with the work")).not.toContain("--result approved");
+    expect(second.next()).toMatchObject({ kind: "run-stage", stage: GATE_STAGE, gate_only: true });
+    expect(second.reply("approve")).toContain(TODAY_GATE);
+    expect(folder.shownIn(B)).toBe(1);
   });
 });
 
@@ -441,16 +486,14 @@ describe("t-plan-question-new-chat: a stage approval, words in a chat that has n
     expect(folder.shownIn(B)).toBe(1);
   });
 
-  test("approved there without naming the answer, the reply joins what that chat said (today's rule)", () => {
+  test("approved there without naming the answer, the approval records with their answer in it", () => {
     const { folder } = gateOpenIn(A);
     const second = new Chat(folder, B).start();
     second.reply("carry on with the work");
     second.next();
     second.said("Approve");
     folder.json(approveGate(second), "approve without --message");
-    const reply = auditBlockField(folder.rows("GATE_APPROVED")[0].block, "Person Reply") ?? "";
-    expect(reply).toContain("carry on with the work");
-    expect(reply).toContain("Approve");
+    expect(auditBlockField(folder.rows("GATE_APPROVED")[0].block, "Person Reply") ?? "").toContain("Approve");
   });
 
   test("words in the chat that opened it get today's print", () => {

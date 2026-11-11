@@ -2298,8 +2298,9 @@ export function openEngineQuestion(projectDir: string): string | null {
 
 /**
  * The person sent the words of this message to separate new work, to a
- * reshape, or to park the work: the code plan question of this piece of work
- * keeps none of them as its reply.
+ * reshape, or to park the work, or sent them in a chat that was not shown the
+ * question as it stands: the code plan question of this piece of work keeps
+ * none of them as its reply.
  */
 export function withdrawPlanApprovalReplies(projectDir: string, which: { messageId: string }): void {
   const drop = (reply: PlanApprovalAskReply): boolean => reply.messageId === which.messageId;

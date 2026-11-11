@@ -157,22 +157,25 @@ export interface RecordedQuestion {
 
 /** The question with this id on the record, with the chats shown it as it stands. */
 export function recordedQuestion(projectDir: string, id: string): RecordedQuestion | null {
-  let found: RecordedQuestion | null = null;
-  for (const row of readAuditShardEvents(projectDir)) {
-    if (auditBlockField(row.block, QUESTION_ID_FIELD) !== id) continue;
-    if (found === null && ASKING_ROWS.has(row.event)) {
-      found = {
-        id,
-        type: auditBlockField(row.block, QUESTION_TYPE_FIELD) ?? "",
-        stage: auditBlockField(row.block, "Stage"),
-        unit: auditBlockField(row.block, "Unit"),
-        shows: auditBlockField(row.block, QUESTION_SHOWS_FIELD),
-        currentIn: new Set(),
-        questionsFile: auditBlockField(row.block, "Questions File"),
-      };
-    }
-    // Only an asking or showing row shows it: a reply row carries its id too.
-    if (found === null || (!ASKING_ROWS.has(row.event) && row.event !== QUESTION_SHOWN)) continue;
+  // Its asking and showing rows (a reply row carries its id too), in time
+  // order: shards are read clone by clone, and another clone's showing can
+  // sort before the row that asked it.
+  const rows = readAuditShardEvents(projectDir)
+    .filter((row) => (ASKING_ROWS.has(row.event) || row.event === QUESTION_SHOWN) &&
+      auditBlockField(row.block, QUESTION_ID_FIELD) === id)
+    .sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+  const asked = rows.find((row) => ASKING_ROWS.has(row.event));
+  if (asked === undefined) return null;
+  const found: RecordedQuestion = {
+    id,
+    type: auditBlockField(asked.block, QUESTION_TYPE_FIELD) ?? "",
+    stage: auditBlockField(asked.block, "Stage"),
+    unit: auditBlockField(asked.block, "Unit"),
+    shows: null,
+    currentIn: new Set(),
+    questionsFile: auditBlockField(asked.block, "Questions File"),
+  };
+  for (const row of rows) {
     const shows = auditBlockField(row.block, QUESTION_SHOWS_FIELD);
     if (shows !== null && shows !== found.shows) {
       found.currentIn.clear();
@@ -187,8 +190,8 @@ export function recordedQuestion(projectDir: string, id: string): RecordedQuesti
  * Whether this chat was shown the question as it stands: one of its asking or
  * showing rows names this chat (no chat, for a command that names none) since
  * it last changed what it shows. Null when no row asks it or the record cannot
- * be read. shownAgainFields writes a row exactly when this is false, so a chat
- * shown it once reads true until the question changes.
+ * be read. shownAgainFields writes a row whenever this is false (and when what
+ * it shows changed), so a chat shown it once reads true until it changes.
  */
 export function shownHere(projectDir: string, id: string, chat: string | null): boolean | null {
   try {

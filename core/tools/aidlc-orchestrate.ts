@@ -4275,7 +4275,7 @@ function openGateReplyDirective(
         `${requestId}\` and follow what it returns: the engine kept their words and asks them where that work ` +
         `belongs. Otherwise, answer from the files in ${folder ? `${folder}/` : "the stage's folder"} anything it ` +
         `asks about what the stage found or produced, then run bare \`${orchestrate} next\` and follow what it ` +
-        "returns, show the person the approval it brings, and end the turn.",
+        "returns.",
     );
   }
   const named = replyIdsNote(replies, "report");

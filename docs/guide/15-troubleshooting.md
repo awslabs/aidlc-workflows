@@ -729,12 +729,13 @@ anything more is built.
 
 **Symptom**: you answered the Plan Approval question, but AI-DLC shows it again.
 
-Your answer counts from any chat on this piece of work, in your own words ("1",
-"approve", "looks good", "rename the handler"): the agent records the choice
-you made, with your words beside it. The question comes back only when the
-agent could not record a choice, most often because the reply arrived before
-the question was shown, or in a chat where the harness did not pass it to
-AI-DLC. Answer the question it shows. If it keeps coming back, run
+Your answer counts from any chat on this piece of work that has shown you the
+question, in your own words ("1", "approve", "looks good", "rename the
+handler"): the agent records the choice you made, with your words beside it.
+In a new chat the question is shown to you there first, once, and your pick
+there is recorded. Otherwise the question comes back only when the agent could
+not record a choice, most often because the reply arrived before the question
+was shown, or in a chat where the harness did not pass it to AI-DLC. Answer the question it shows. If it keeps coming back, run
 `/aidlc --doctor`: a harness whose prompt hook does not run cannot record any
 reply. A long chat that compacts its context while the question waits keeps
 the question open, so your answer still counts.
