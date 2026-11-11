@@ -1351,8 +1351,8 @@ conversation, or count semantics.
 3. **Command filter:** Only `bun .claude/tools/aidlc-(state|jump|bolt|utility).ts` invocations pass the graph early exit. `aidlc-runtime.ts` is rejected explicitly (recursion guard).
 4. **Audit-existence guard:** Exits cleanly before init (no `audit/` shard yet).
 5. **Health heartbeat:** Writes `.aidlc-engine/hooks-health/rebuild-stage-graph.last`.
-6. **Tail-read:** Splits the merged `audit/` shards on `\n---\n` and takes the last 3 blocks (the upper bound a single `approve` call appends).
-7. **Event-class filter:** Recompiles only when one of the last 3 blocks carries `GATE_APPROVED`, `STAGE_STARTED`, `STAGE_AWAITING_APPROVAL`, `AUDIT_MERGED`, or `WORKFLOW_COMPLETED`. Exits on no match.
+6. **Tail-read:** Splits this clone's own `audit/` shard, where every row a command writes lands, on `\n---\n` and takes the last 3 blocks (the upper bound a single `approve` call appends).
+7. **Event-class filter:** Recompiles only when one of the last 3 blocks carries `GATE_APPROVED`, `STAGE_STARTED`, `STAGE_AWAITING_APPROVAL`, `AUDIT_MERGED`, or `WORKFLOW_COMPLETED`, or when the record has no `runtime-graph.json` yet and any of its shards holds one of them. Exits on no match.
 8. **Dispatch:** Runs `runtime compile` through the selected channel (`aidlc engine runtime compile` on a native install, `bun aidlc-runtime.ts compile` on a Bun projection). On non-zero exit, records a hook drop for `--doctor`; never blocks the parent Bash call.
 
 #### Engine error relay
