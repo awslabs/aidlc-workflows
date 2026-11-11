@@ -524,11 +524,23 @@ export function findUnitBuildOfRecord(projectDir: string, homeRecord: string, un
 }
 
 function findBuild(projectDir: string, matches: (build: UnitBuild) => boolean): { space: string; dirName: string } | null {
+  const found = unitBuildsHere(projectDir, matches, true)[0];
+  return found === undefined ? null : { space: found.space, dirName: found.dirName };
+}
+
+// The builds here whose record matches, archived ones left out, with their
+// state; the first one alone with `first`.
+export function unitBuildsHere(
+  projectDir: string,
+  matches: (build: UnitBuild, state: string) => boolean,
+  first = false,
+): Array<{ space: string; dirName: string; build: UnitBuild }> {
+  const found: Array<{ space: string; dirName: string; build: UnitBuild }> = [];
   let spaces: string[];
   try {
     spaces = readdirSync(join(projectDir, "aidlc", "spaces"));
   } catch {
-    return null;
+    return found;
   }
   for (const space of spaces) {
     for (const dirName of listIntentDirs(projectDir, space)) {
@@ -539,10 +551,12 @@ function findBuild(projectDir: string, matches: (build: UnitBuild) => boolean): 
         continue;
       }
       const build = unitBuildOf(state);
-      if (build !== null && matches(build) && getField(state, "Status")?.trim() !== "Archived") return { space, dirName };
+      if (build === null || !matches(build, state) || getField(state, "Status")?.trim() === "Archived") continue;
+      found.push({ space, dirName, build });
+      if (first) return found;
     }
   }
-  return null;
+  return found;
 }
 
 // A fact, not a task: the agent carried the earlier words (with their command

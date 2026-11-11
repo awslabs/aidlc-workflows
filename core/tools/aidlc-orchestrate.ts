@@ -771,6 +771,7 @@ import {
   unitBranchOf,
   isHomesCopiedWork,
   unitBuildOf,
+  unitBuildsHere,
   unitDependencies,
   unitLikelyRepos,
   unitLikelyReposFrom,
@@ -9251,6 +9252,30 @@ export function pulledBuildStanding(projectDir: string, built: { space: string; 
   } catch {
     return null;
   }
+}
+
+// The person's own other finished builds of the plan the build in hand is of,
+// each with where it stands in those words, for status's 'Yours' line; null
+// when the work in hand is not a build or there are none. One still running is
+// Also open's.
+export function ownOtherBuilds(projectDir: string, inHand: { space: string; dirName: string }, stateContent: string): string | null {
+  const build = unitBuildOf(stateContent);
+  if (build === null || build.homeWork === "") return null;
+  const labels = unitBuildsHere(projectDir, (other, state) =>
+    other.homeWork === build.homeWork && getField(state, "Status")?.trim() === "Completed")
+    .filter((other) => !(other.space === inHand.space && other.dirName === inHand.dirName))
+    .filter((other) => {
+      try {
+        return buildIsMine(projectDir, other, buildClaimHere(projectDir, other)) === true;
+      } catch {
+        return false;
+      }
+    })
+    .map((other) => {
+      const where = pulledBuildStanding(projectDir, other);
+      return where === null ? other.build.unit : `${other.build.unit} (${where})`;
+    });
+  return labels.length === 0 ? null : labels.join(", ");
 }
 
 // Other work here that is not this person's to switch to: another person's

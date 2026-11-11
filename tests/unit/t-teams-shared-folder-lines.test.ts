@@ -10,7 +10,7 @@
 // from the other teams.
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
@@ -542,6 +542,47 @@ describe("where things stand", () => {
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
     mergeOnHost(hosts.billing, "refunds", "merge");
     expect(fromOthers()).toBe("ana: refunds (merged)");
+  });
+
+  // Live runs (Kiro CLI, Claude Code on Windows Server): at a look from her next
+  // build the agent said her own earlier Unit was still waiting for its merge
+  // after it merged; status said only where the others' builds stood.
+  test("status names the person's own other finished builds where each stands, in the same words; none for a first build, the lead's project or solo work", () => {
+    const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
+    const home = makeHome({ repos: hosts });
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "teams"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "ana-chat" };
+    const ana = cloneOf(home.remote, "ana");
+    for (const [name, host] of Object.entries(hosts)) cloneCode(host, ana, name, "ana");
+    expect(run(UNIT, ["take", "refunds", "--home", HOME_RECORD], ana, chat).status).toBe(0);
+    const intents = join(ana, "aidlc", "spaces", "default", "intents");
+    const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-refunds"))!);
+    codeGenerated(ana, record);
+    finishBuild(record);
+    const pushed = run(UNIT, ["push"], ana, chat);
+    expect(pushed.status, pushed.out).toBe(0);
+    checkIn(ana, "refunds pushed");
+    const status = (): string => run(UTILITY, ["status"], ana, ENV).out;
+    const yours = (): string | undefined => /^Yours: +(.*)$/m.exec(status())?.[1];
+    // Her first build in hand: nothing of hers besides it.
+    expect(yours(), status()).toBeUndefined();
+    const second = run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD], ana, chat);
+    expect(second.status, second.out).toBe(0);
+    expect(status()).toContain("Yours:          refunds (pushed, waiting for its merge)\n");
+    // A repo of it not in this clone: where its merge stands cannot be read here.
+    renameSync(join(ana, "billing"), join(ana, "billing-aside"));
+    expect(yours()).toBe("refunds (pushed)");
+    renameSync(join(ana, "billing-aside"), join(ana, "billing"));
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    mergeOnHost(hosts.billing, "refunds", "merge");
+    expect(yours()).toBe("refunds (merged)");
+    // The lead's project, and work with no teams, have no such line.
+    expect(run(UTILITY, ["status"], home.dir, ENV).out).not.toContain("Yours:");
+    const solo = makeHome();
+    expect(run(UTILITY, ["status"], solo.dir, ENV).out).not.toContain("Yours:");
   });
 
   test("two builds one teammate is building are each said building, in one line", () => {

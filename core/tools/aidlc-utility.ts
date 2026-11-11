@@ -2518,9 +2518,12 @@ To get started:
     : `Also open:      ${others.join(", ")} (ask to switch to ${others.length === 1 ? "it" : "one"})\n`;
   // Teams across repos sharing one workspace by git: what the last pull here brought from the others.
   const acrossRepos = unitBuildOf(content) !== null || (isTeamUnitOwnership(content) && homeLocation(content) !== null);
-  const { pulledBuildStanding } = await import("./aidlc-orchestrate.ts");
+  const { pulledBuildStanding, ownOtherBuilds } = await import("./aidlc-orchestrate.ts");
   const arrived = acrossRepos ? arrivedAtLastPull(projectDir, (built) => pulledBuildStanding(projectDir, built)) : null;
   const arrivedLine = arrived === null ? "" : `From others, at your last pull that brought changes:    ${arrived}\n`;
+  // The person's own earlier builds of the same plan, so where they stand is said and not recalled.
+  const yours = selection.intent === null ? null : ownOtherBuilds(projectDir, { space: selection.space, dirName: selection.intent }, content);
+  const yoursLine = yours === null ? "" : `Yours:          ${yours}\n`;
   // Said only when it is so: a record not checked in, or one git cannot tell about, says nothing here.
   const checkedInLine = checkInApplies(projectDir, content) && checkInState(projectDir) === "checked-in" ? `${CHECKED_IN_STATUS}\n` : "";
   // Work an older AI-DLC recorded, brought up to this one in place: said here
@@ -2544,7 +2547,7 @@ Completion:     ${completed}/${total} stages${takesBuildUnits ? " here" : ""} ($
 
 Phase Progress:
 ${phaseProgress}
-${validityOutput ? `${validityOutput}\n` : ""}${lastLine}${nextLine}${alsoOpen}${arrivedLine}${checkedInLine}${upgradedLine}`;
+${validityOutput ? `${validityOutput}\n` : ""}${lastLine}${nextLine}${alsoOpen}${arrivedLine}${yoursLine}${checkedInLine}${upgradedLine}`;
   if (isTeamUnitOwnership(content)) {
     const selectorArgs = [
       ...(flags.intent ? ["--intent", flags.intent] : []),

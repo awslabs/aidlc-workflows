@@ -828,7 +828,9 @@ or sent back), for example "From others, at your last pull that brought
 changes: Abe Payments: u1-redeem (merged); bea: checkout-ui (building)". A build
 whose repos this workspace has no copy of, or cannot reach just now, says only
 "(pushed)"; other work is named alone; your own changes from another computer
-are not said.
+are not said. From a Unit's build, a `Yours:` line names your own other finished
+builds of the same plan in the same words, for example "Yours: u5-checkout-field
+(merged)".
 
 ### Start early, and change a shared input
 
