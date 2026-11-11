@@ -32652,7 +32652,7 @@ export function evaluateGuardRefusal(
   const openForReview = openForWork || state === "revising";
   // A review still waiting for its verdict: recording it, or retrying a request
   // whose answer never came back, is the conductor's own step wherever the
-  // Unit is built, so a side-by-side Unit is never restarted for it first.
+  // Unit is built, so a side-by-side Unit is offered them before a restart.
   const pendingReviewRemedies = (): void => {
     if (!input.attempt.pendingReview) return;
     if (
