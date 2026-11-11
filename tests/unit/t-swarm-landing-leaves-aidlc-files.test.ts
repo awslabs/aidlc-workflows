@@ -9,16 +9,22 @@
 // code only, the landing goes in on the first run, and main never tracks the
 // worktree's metadata or its folder in the state file. The Unit's documents
 // reach main the way they always do, through finalize.
+//
+// Every harness's shipped .gitignore part keeps that metadata out and leaves
+// the Unit's own checkout (and a restored one) visible: Kiro IDE applies a
+// project's .gitignore to its file reads, each file on its own, so ignoring
+// those folders would stop its side-by-side workers reading their own code.
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { boltSlugForUnit } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { seededStateFile } from "../harness/fixtures.ts";
+import { REPO_ROOT, seededStateFile } from "../harness/fixtures.ts";
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import {
-  cleanupCheckpointFixtures, fixtureWithShippedGitignore, git, prepare, reviewRevisedSource, runCheckpointTool,
-  swarm, wt, writeUnitSource,
+  cleanupCheckpointFixtures, fixtureWithShippedGitignore, git, ISOLATED_GIT_ENV, prepare, reviewRevisedSource,
+  runCheckpointTool, swarm, wt, writeUnitSource,
 } from "../harness/swarm-checkpoint.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -60,5 +66,41 @@ describe("a Bolt whose commits carry AI-DLC's own files", () => {
     expect(readFileSync(join(pd, "src", "alpha.ts"), "utf-8")).toBe("export const alpha = 2;\n");
     expect(git(pd, ["ls-files", "--", ".aidlc"])).toBe("");
     expect(readFileSync(seededStateFile(pd), "utf-8")).not.toContain(".aidlc/worktrees/");
+  });
+});
+
+describe("every harness's shipped .gitignore part", () => {
+  // Each part on its own, as Kiro reads it: a scratch repository with no
+  // template, so nothing but the part decides.
+  const ignored = (part: string, paths: string[]): string[] => {
+    const scratch = mkdtempSync(join(tmpdir(), "aidlc-shipped-ignore-"));
+    try {
+      expect(Bun.spawnSync(["git", "init", "-q", "--template=", scratch], { env: ISOLATED_GIT_ENV }).exitCode).toBe(0);
+      const check = Bun.spawnSync(
+        ["git", "-C", scratch, "-c", `core.excludesFile=${part}`, "check-ignore", "--no-index", "--stdin"],
+        { env: ISOLATED_GIT_ENV, stdin: Buffer.from(`${paths.join("\n")}\n`), stdout: "pipe", stderr: "pipe" },
+      );
+      expect([0, 1], check.stderr.toString()).toContain(check.exitCode);
+      return check.stdout.toString().split("\n").filter(Boolean);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  };
+
+  test("keeps a Unit checkout's metadata out and leaves the checkout itself readable", () => {
+    const parts = readdirSync(join(REPO_ROOT, "harness"), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => join(REPO_ROOT, "harness", entry.name, "dot-gitignore"));
+    expect(parts.length).toBeGreaterThanOrEqual(7);
+    const metadata = [".aidlc/worktree-meta.json", ".aidlc/base-source-listing.tsv"];
+    const checkouts = [
+      `.aidlc/worktrees/${boltSlugForUnit("alpha")}/src/alpha.ts`,
+      `.aidlc/worktrees/${boltSlugForUnit("alpha")}/aidlc/spaces/default/intents/x/construction/alpha/plan.md`,
+      `.aidlc/restored/${boltSlugForUnit("alpha")}-20261111T000000Z/src/alpha.ts`,
+    ];
+    for (const part of parts) {
+      expect(ignored(part, metadata), part).toEqual(metadata);
+      expect(ignored(part, checkouts), part).toEqual([]);
+    }
   });
 });
