@@ -548,7 +548,7 @@ describe("t316 standalone plugin compose test", () => {
   });
 
   test("a shared folder with no AI-DLC install record is not a harness", () => {
-    // AI-DLC's records gone: today's refusal, both Kiro names listed.
+    // AI-DLC's records gone: refused, both Kiro names listed.
     const bare = copyFixture("kiro-no-record", KIRO_INSTALL);
     for (const file of ["aidlc-stamp.json", "harness.json"]) {
       rmSync(join(bare.installRoot, ".kiro", "tools", "data", file));
