@@ -695,7 +695,7 @@ import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts
 import { unitMemoryPath, unitStageMemoryPath } from "./aidlc-stage-diary.ts";
 import { bringStateUpToDate } from "./aidlc-state-upgrade.ts";
 import { renderEngineInvocation, sameGuardOperation } from "./aidlc-guard-operation.ts";
-import { claimedCheckoutMovesElsewhere, claimedCheckoutReopens } from "./aidlc-unit-landing.ts";
+import { claimedCheckoutMovesElsewhere, claimedCheckoutReopens, completedUnits } from "./aidlc-unit-landing.ts";
 import { isHookPreDispatch, withAuditLock } from "./aidlc-locks.ts";
 import {
   askedQuestionFields,
@@ -17728,15 +17728,26 @@ function unitJumpWalk(
 
 // The one check of a Unit named for a jump to one of the walk's steps, asked
 // by `next --stage --unit` and by the re-entry report before it accepts: what
-// is wrong when the Unit is not one of this work's Units, else null.
+// is wrong when the walk does not take the Unit, and the start of the way on,
+// else null. A team checkout walks only the Units it builds, and a finished
+// one is no longer among them (unitsHeldHere).
 function unitOutsideWork(
+  stateContent: string,
   walk: { block: GraphStage[]; context: UnitWorkContext } | null,
   targetSlug: string,
   unit: string,
-): string | null {
+): { said: string; nameOne: string } | null {
   if (!walk?.block.some((stage) => stage.slug === targetSlug)) return null;
   const units = walk.context.units;
-  return units.includes(unit) ? null : `${unit} is not one of this work's units (${units.join(", ")}).`;
+  if (units.includes(unit)) return null;
+  if (completedUnits(stateContent).has(unit)) {
+    const builds = units.length < 2 ? units.join("") : `${units.slice(0, -1).join(", ")} and ${units.at(-1)}`;
+    return {
+      said: `${unit} is finished, and this checkout now builds ${builds}, so ${unit} is not redone here.`,
+      nameOne: "Name a Unit this checkout builds",
+    };
+  }
+  return { said: `${unit} is not one of this work's units (${units.join(", ")}).`, nameOne: "Name one of them" };
 }
 
 // A move to a stage or phase in a checkout that claimed a Unit (`next --stage`,
@@ -17945,11 +17956,11 @@ function unitMajorReopen(
   let reopened: string[];
   if (flags.jumpUnit !== undefined) {
     const named = flags.jumpUnit;
-    const outside = unitOutsideWork(walk, targetSlug, named);
+    const outside = unitOutsideWork(stateContent, walk, targetSlug, named);
     if (outside !== null) {
       return {
         kind: "error",
-        message: `${outside} Name one of them with \`${entrySkillInvocation()} --stage ${targetSlug} --unit <name>\`.`,
+        message: `${outside.said} ${outside.nameOne} with \`${entrySkillInvocation()} --stage ${targetSlug} --unit <name>\`.`,
       };
     }
     // The Unit in flight on the target itself: that is where the walk already is.
@@ -21431,10 +21442,10 @@ function emitTypedResumeChoice(
   // moves, so the print ends the turn and never goes through `move()`.
   const unitNotInWork = (step: string): PrintDirective | null => {
     const outside = flags.unit !== undefined && validScopes().has(scope)
-      ? unitOutsideWork(unitJumpWalk(pd, scope, stateContent, true), step, flags.unit)
+      ? unitOutsideWork(stateContent, unitJumpWalk(pd, scope, stateContent, true), step, flags.unit)
       : null;
     return outside === null ? null : turnEndingPrint(
-      `Run nothing. Tell the person in one line: "${outside} Which one did you mean?" When they say, run this ` +
+      `Run nothing. Tell the person in one line: "${outside.said} Which one did you mean?" When they say, run this ` +
         `report again with \`--unit <the unit they name>\` in place of \`--unit ${flags.unit}\`.`,
     );
   };
