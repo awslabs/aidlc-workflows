@@ -1746,7 +1746,8 @@ function sayPendingPersonLines(
   const asItComes = transported.kind === "run-stage"
     ? pending.lines.filter((line) => line.startsWith(CLEAN_CHAT_LEAD))
     : [];
-  // A print the agent stops after is its last step before they reply.
+  // A print the agent may stop after is spoken from too: its lines are said in
+  // the last message before they reply.
   if (
     !pickUp && asItComes.length === 0 && !leadsToSpeech.has(requested) && !turnEndingPrints.has(requested) &&
     !speaksToPerson(transported)

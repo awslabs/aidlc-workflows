@@ -505,7 +505,9 @@ up also hears, never by the scope it was built on. The engine
 keeps such lines for the chat (`aidlc/.aidlc-sessions/<session>.person-lines`)
 and puts them, in order and once, in the `change_notices` of the next
 directive the agent speaks from (ahead of its own): an `ask`, `present-gate`,
-`parked`, `error` or a final `done`, or any other directive that carries its own
+`parked`, `error` or a final `done`, a print the agent stops after, a reading it
+answers the person's words from (about finished work, or about the work while a
+gate, a question or a stage waits), or any other directive that carries its own
 `narration` or `change_notices`. Where the work picks up on `next --resume`
 (`withPickUpLine`) and the framework phase rules put back in a space
 (`withPhaseRulesAddedLine`) ride the same field of the step they come with.
