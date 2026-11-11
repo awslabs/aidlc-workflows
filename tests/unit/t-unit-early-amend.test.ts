@@ -257,6 +257,57 @@ describe("a change to a shared input", () => {
     expect(readFileSync(join(home.dir, at!), "utf-8")).toContain("in one currency only");
   });
 
+  // The fork leg (P4): the team's change was approved and its copy took it; a
+  // second edit of the same input was written over at the next look with no
+  // word, and never offered to send.
+  test("a second edit of an input whose first change was approved stays as the team left it, and is offered to send", () => {
+    const { home, alice, record } = proposed();
+    expect(next(home.dir).ask_type).toBe("unit-amend");
+    appendAuditEntry("HUMAN_TURN", { "Person Reply": "yes, partial refunds" }, home.dir);
+    expect(run(UNIT, ["amend", "refunds", "--input", REQUIREMENTS, "--answer", "approve", "--person-words", "yes, partial refunds"], home.dir).status).toBe(0);
+    // Her look hears the answer, and her copy holds the approved text.
+    git(alice, ["fetch", "-q", "origin"]);
+    expect(notices(next(alice))).toContain("The lead approved your change to the requirements.");
+    const copy = join(record, ...REQUIREMENTS.split("/"));
+    const edit = "# Requirements\n\nFR1 refunds, partial amounts too, in one currency only.\n";
+    writeFileSync(copy, edit);
+    const step = next(alice);
+    expect(readFileSync(copy, "utf-8")).toBe(edit);
+    expect(step.ask_type, JSON.stringify(step).slice(0, 400)).toBe("unit-propose");
+    expect(String(step.question)).toContain("You changed the requirements here.");
+  });
+
+  // The same flag: after her change was answered she edited the input again
+  // and did not send it; a later change of the lead's wrote over her edit.
+  test("an unsent edit after her change was answered stays when the lead changes the input, with the new version beside it", () => {
+    const { home, alice, record } = proposed();
+    expect(next(home.dir).ask_type).toBe("unit-amend");
+    appendAuditEntry("HUMAN_TURN", { "Person Reply": "not now, full refunds only" }, home.dir);
+    expect(run(UNIT, ["amend", "refunds", "--input", REQUIREMENTS, "--answer", "reject", "--person-words", "full refunds only"], home.dir).status).toBe(0);
+    git(alice, ["fetch", "-q", "origin"]);
+    next(alice);
+    const copy = join(record, ...REQUIREMENTS.split("/"));
+    const edit = "# Requirements\n\nFR1 refunds, partial amounts too, in one currency only.\n";
+    writeFileSync(copy, edit);
+    // Another team's change to the same input, approved by the lead.
+    const bob = cloneOf(home.remote, "bob");
+    expect(takeIn("web", ["checkout-ui", "--home", HOME_RECORD], bob).status).toBe(0);
+    const intents = join(bob, "aidlc", "spaces", "web", "intents");
+    const bobRecord = join(intents, readdirSync(intents).find((name) => name.endsWith("-checkout-ui"))!);
+    writeFileSync(join(bobRecord, ...REQUIREMENTS.split("/")), "# Requirements\n\nFR1 refunds.\nFR2 refunds by store credit.\n");
+    expect(run(UNIT, ["propose", "--input", "requirements.md", "--person-words", "store credit"], bob).status).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    expect(next(home.dir).ask_type).toBe("unit-amend");
+    appendAuditEntry("HUMAN_TURN", { "Person Reply": "yes, store credit" }, home.dir);
+    expect(run(UNIT, ["amend", "checkout-ui", "--input", REQUIREMENTS, "--answer", "approve", "--person-words", "yes, store credit"], home.dir).status).toBe(0);
+    git(alice, ["fetch", "-q", "origin"]);
+    const step = next(alice);
+    expect(readFileSync(copy, "utf-8")).toBe(edit);
+    expect(notices(step).join(" ")).toContain(
+      "The lead changed the requirements, and your copy has your own edits, so I kept yours as you left it and put the new version beside it, at ",
+    );
+  });
+
   // A live run: the lead approved a newer version of a shared input after the
   // team took its copy; approving the team's small change then wrote the
   // team's whole file over it, and the lead's newer text was gone.
@@ -288,7 +339,7 @@ describe("a change to a shared input", () => {
   // themselves, and with no way to approve that, the agent closed the proposal
   // as turned down: the record said the lead turned down what they approved.
   test("the lead's own text of the two put together is approved as written: the team hears it approved, and every team gets it", () => {
-    const { home, alice } = proposed();
+    const { home, alice, record } = proposed();
     const homeCopy = join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD, ...REQUIREMENTS.split("/"));
     writeFileSync(homeCopy, "# Requirements\n\nFR1 refunds, full amounts only.\n");
     next(home.dir);
@@ -303,6 +354,9 @@ describe("a change to a shared input", () => {
     expect(answer.amendments?.length).toBe(1);
     git(alice, ["fetch", "-q", "origin"]);
     expect(notices(next(alice))).toContain("The lead approved your change to the requirements.");
+    // Her copy, still the text she proposed, takes the lead's answer.
+    const taken = join(record, ...REQUIREMENTS.split("/"));
+    expect(readFileSync(taken, "utf-8")).toBe("# Requirements\n\nFR1 refunds, full or partial amounts.\n");
   });
 
   test("the owner is asked once at the home, and their approval reaches every team building with it", () => {

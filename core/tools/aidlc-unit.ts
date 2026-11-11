@@ -8333,9 +8333,11 @@ export function inputsKeptOverNewer(record: string): string[] {
 // A newer version of one input this build was approved with, from its claim's
 // amendments: the copy here takes it, and the stages
 // that used it read as current, on every Guard Policy; a copy the team edited
-// since it took it, and never sent home as a proposal, stays as they left it,
-// with the new version beside it and their result saying so to the lead. The
-// one line to say, or null when the copy already holds it.
+// since it took it, other than the text it proposed (`proposedHere`), stays as
+// they left it, with the new version beside it and their result saying so to
+// the lead. A version taken already is not newer: a copy that differs from it
+// is the team's own edit since, which the send question asks about. The one
+// line to say, or null when there is nothing new.
 function takeNewerInput(
   projectDir: string,
   record: string,
@@ -8355,6 +8357,7 @@ function takeNewerInput(
   }
   const name = inputName(input);
   const taken = inputsTaken(record).get(input);
+  if (taken === textFingerprint(text)) return null;
   if (!how.proposedHere && existsSync(path) && taken !== undefined && textFingerprint(readFileSync(path, "utf-8")) !== taken) {
     const beside = path.replace(/\.md$/, "") + ".from-lead.md";
     if (existsSync(beside) && textFingerprint(readFileSync(beside, "utf-8")) === textFingerprint(text)) return null;
@@ -8471,7 +8474,12 @@ export function buildClaimNotes(projectDir: string, stateContent: string, sessio
       at: amendment.at,
       done: mine.payload.done === true,
       pushed: getField(stateContent, UNIT_PUSH_FIELD)?.trim() === "pushed" && (pushedAt === undefined || amendment.at >= pushedAt),
-      proposedHere: (mine.payload.proposals ?? []).some((entry) => entry.input === amendment.input),
+      // The copy is still the text the team proposed: the lead's answer replaces it.
+      proposedHere: ((): boolean => {
+        const proposed = git(projectDir, ["show", `${mine.oid}:${RESULT_FILES_ROOT}/proposals/${amendment.input}`, "--"]);
+        const copy = join(record, ...amendment.input.split("/"));
+        return proposed.ok && existsSync(copy) && textFingerprint(readFileSync(copy, "utf-8")) === textFingerprint(proposed.stdout);
+      })(),
     }, doneNames);
     if (line !== null) lines.push(line);
   }
