@@ -33,7 +33,7 @@ Moved to [Start AI-DLC in a Kiro IDE chat](kiro.md#start-ai-dlc-in-a-kiro-ide-ch
 
 ### Supervised or Autopilot
 
-Moved to [Supervised or Autopilot](kiro.md#supervised-or-autopilot).
+Moved to [Supervised, Autopilot or Approve for me](kiro.md#supervised-autopilot-or-approve-for-me).
 
 ### When the chat fills up
 
