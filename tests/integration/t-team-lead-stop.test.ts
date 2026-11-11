@@ -1,8 +1,9 @@
 // covers: subcommand:aidlc-orchestrate:park, subcommand:aidlc-orchestrate:report, function:parkWorkflow
 //
-// A lead's own checkout of team-owned Units while a team holds a Unit claim:
-// the checkout builds no Unit, and main's own stages (Units Generation, gone
-// back to before the Units, and Build and Test after them) are worked there.
+// A lead's own checkout of team-owned Units while a team holds a Unit claim
+// (a landed Unit's claim stays live): the checkout builds no Unit, and main's
+// own stages (Units Generation, gone back to before the Units, and Build and
+// Test once the Units landed) are worked there.
 // The person's stop goes through there as it does on solo work: a pause asked
 // at main's own stage parks the work, the next look answers that it is
 // parked, and a resume carries on at the same stage; "approve, and stop there"
@@ -42,13 +43,14 @@ import {
   appendMainHumanTurn,
   cleanupTempDirs,
   clone,
+  gateAndLand,
   git,
   makeSeed,
   nextDirective,
   prepareCandidate,
   runMergeTool,
 } from "../harness/team-unit-merge.ts";
-import { currentStage, makeReplanSeed, reopenUnitsGeneration } from "../harness/team-unit-replan.ts";
+import { currentStage, dagBody, makeReplanSeed, reopenUnitsGeneration } from "../harness/team-unit-replan.ts";
 
 process.env.AIDLC_DISABLE_SENSORS = "1";
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -58,7 +60,6 @@ afterEach(() => {
   while (soloProjects.length) cleanupTestProject(soloProjects.pop());
 });
 
-const JUMP = join(AIDLC_SRC, "tools", "aidlc-jump.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const FD = "functional-design";
 const BT = "build-and-test";
@@ -93,14 +94,18 @@ function teamClaimsAlpha(lead: string, remote: string): void {
   git(lead, ["fetch", "origin"]);
 }
 
-// The lead moved main on to Build and Test while the team still builds alpha,
-// with Build and Test's documents written.
+// A plan of one team Unit: the team built alpha and the lead landed it, so main
+// went on to Build and Test, with its documents written; alpha's claim is
+// still live in the lead's checkout.
 function leadAtBuildAndTest(): string {
-  const { seed: lead, remote } = makeSeed();
-  teamClaimsAlpha(lead, remote);
-  const jumped = runMergeTool(JUMP, ["execute", "--target", BT, "--direction", "forward"], lead);
-  expect(jumped.status, jumped.out).toBe(0);
-  expect(currentStage(lead)).toBe(BT);
+  const { seed: lead, remote } = makeSeed(dagBody([
+    { name: "skeleton", depends_on: [] },
+    { name: "alpha", depends_on: ["skeleton"] },
+  ]));
+  prepareCandidate(remote, "alpha", "alpha-team");
+  gateAndLand(lead, "alpha");
+  git(lead, ["push", "origin", "main"]);
+  expect(nextDirective(lead)).toMatchObject({ kind: "run-stage", stage: BT });
   const dir = join(seededRecordDir(lead), "construction", BT);
   mkdirSync(dir, { recursive: true });
   for (const name of findStageBySlug(BT)!.produces ?? []) writeFileSync(join(dir, artifactFilename(name)), `# ${name}\n`);
@@ -108,7 +113,7 @@ function leadAtBuildAndTest(): string {
 }
 
 describe("a lead's own checkout while a team holds a Unit claim", () => {
-  test("a pause asked at Build and Test, after the Units, parks the work; the next look says so and a resume carries on there", () => {
+  test("a pause asked at Build and Test, once the Units landed, parks the work; the next look says so and a resume carries on there", () => {
     const lead = leadAtBuildAndTest();
     appendMainHumanTurn(lead);
     const parked = parkAsked(lead);
@@ -123,10 +128,7 @@ describe("a lead's own checkout while a team holds a Unit claim", () => {
     expect(String(resume.message)).toContain("unpark");
     expect(directiveOf(runMergeTool(STATE, ["unpark"], lead)).unparked).toBe(true);
     expect(stateField(lead, "Parked")).toBe("");
-    const after = nextDirective(lead);
-    expect(after.kind, JSON.stringify(after)).not.toBe("error");
-    expect(after.kind).not.toBe("parked");
-    expect(currentStage(lead)).toBe(BT);
+    expect(nextDirective(lead)).toMatchObject({ kind: "run-stage", stage: BT });
   });
 
   test("a pause asked at Units Generation, gone back to before the Units, parks the work there", () => {
