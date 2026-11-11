@@ -160,8 +160,7 @@ utility shortcuts are `/aidlc-status`, `/aidlc-jump --stage <slug>` (or
   (`preCompact`).
 - **Personas are native subagents.** The 14 persona `.md` files in
   `.cursor/agents/` are discovered by frontmatter `name`; the conductor adopts
-  them inline for most stages and delegates via the `task` tool for the two
-  subagent stages (2.1 reverse-engineering, 3.5 code-generation). Worker agents
+  them inline for most stages and delegates via the `task` tool. Worker agents
   do not get the `task` tool, so a delegate cannot delegate again.
 - **Subagent identity is reconstructed.** Cursor emits no per-subagent identity
   on hook payloads (its `subagentStart`/`subagentStop` events are documented but
