@@ -2140,3 +2140,42 @@ export async function dynWrite(pd: string, spaceName: string, id: string): Promi
     ).toBe(true);
   });
 });
+
+// The Kiro adapters on the copy channel run this tool file directly, without
+// the dispatcher's copy step, so the verb itself takes every path it is given
+// and names each one it cannot take. A field check on 2.11.3 named four
+// documents in one onboard and only the first went in, with no word about the
+// other three.
+describe("t289 several named paths are one batch, and one that cannot be taken is named", () => {
+  function knowledgeCli(p: string, ...args: string[]) {
+    return spawnSync(
+      "bun",
+      [join(AIDLC_TOOLS, "aidlc-knowledge.ts"), ...args, "--project-dir", p],
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: { ...process.env, AIDLC_ALLOW_DIRECT_AUDIT_EVENTS: "1" } },
+    );
+  }
+  const json = (stdout: string): Record<string, unknown> => JSON.parse(stdout.slice(stdout.indexOf("{"))) as Record<string, unknown>;
+
+  test("every path named under documents/ is indexed", () => {
+    const p = scratchProject();
+    const a = doc(p, "a.md", "a\n");
+    const b = doc(p, "b.md", "b\n");
+    const r = knowledgeCli(p, "onboard", a, b);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    const indexed = (json(r.stdout).indexed as Array<{ path: string; status: string }>).map((row) => row.path).sort();
+    expect(indexed).toEqual(["documents/a.md", "documents/b.md"]);
+    expect(readIndex(p, SPACE).documents.length).toBe(2);
+  });
+
+  test("a missing path among several is named, and the others are indexed", () => {
+    const p = scratchProject();
+    const a = doc(p, "a.md", "a\n");
+    const missing = join(documentsDir(p, SPACE), "typo.md");
+    const r = knowledgeCli(p, "onboard", a, missing);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    const out = json(r.stdout);
+    expect((out.indexed as Array<{ path: string }>).map((row) => row.path)).toEqual(["documents/a.md"]);
+    expect(out.not_added).toEqual([{ path: missing, reason: "no such file or folder" }]);
+    expect(String(out.onboard_note)).toBe(`Not added: ${missing} (no such file or folder). Name only that one again once it is fixed.`);
+  });
+});

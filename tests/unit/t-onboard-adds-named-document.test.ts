@@ -258,6 +258,124 @@ describe("the document a person names is added, wherever it is in their project"
   });
 });
 
+// A person names several documents in one command (a field check on 2.11.3
+// named four; only the first went in, and the result said nothing about the
+// other three). Every path is taken; one that cannot be is named with why and
+// left out, and the rest still go in. Together they are one batch, so the
+// batch caps count all of them.
+describe("several documents named in one command are all added", () => {
+  const FOUR = ["requirements.md", "contract-summary.md", "components.md", "unit-of-work.md"];
+  const documentsShown = DOCUMENTS.replaceAll("\\", "/");
+
+  function originals(proj: string, names: readonly string[]): string[] {
+    mkdirSync(join(proj, "orig"), { recursive: true });
+    for (const name of names) writeFileSync(join(proj, "orig", name), `# ${name}\n`, "utf-8");
+    return names.map((name) => `orig/${name}`);
+  }
+
+  test("four files named in one command are all copied and indexed, and one line names them", () => {
+    const proj = project();
+    const result = onboard(proj, originals(proj, FOUR));
+    expect(result.status, result.out).toBe(0);
+    for (const name of FOUR) expect(readFileSync(join(proj, DOCUMENTS, name), "utf-8")).toBe(`# ${name}\n`);
+    expect(indexedPaths(result.json).sort()).toEqual(FOUR.map((name) => `${SOURCE}/${name}`).sort());
+    expect(String(result.json.onboard_note)).toBe(
+      `Copied 4 documents into AI-DLC's documents in ${documentsShown} and added them: requirements.md, ` +
+        "contract-summary.md, components.md and unit-of-work.md. The knowledge base reads those copies from now " +
+        "on, not your own.",
+    );
+    expect(result.json.not_added).toBeUndefined();
+  });
+
+  test("a missing path among several is named, and the others are added", () => {
+    const proj = project();
+    const [first, second] = originals(proj, ["a.md", "b.md"]);
+    const result = onboard(proj, [first, "orig/typo.md", second]);
+    expect(result.status, result.out).toBe(0);
+    expect(indexedPaths(result.json).sort()).toEqual([`${SOURCE}/a.md`, `${SOURCE}/b.md`]);
+    expect(result.json.not_added).toEqual([{ path: "orig/typo.md", reason: "no such file or folder" }]);
+    expect(String(result.json.onboard_note)).toStartWith(
+      "Not added: orig/typo.md (no such file or folder). Name only that one again once it is fixed. Copied 2 documents",
+    );
+  });
+
+  test("every path that cannot be added is named in one line", () => {
+    const proj = project();
+    const outside = project();
+    writeFileSync(join(outside, "theirs.md"), "# Theirs\n", "utf-8");
+    const [first] = originals(proj, ["a.md"]);
+    mkdirSync(join(proj, "empty"), { recursive: true });
+    const result = onboard(proj, [first, "orig/typo.md", join(outside, "theirs.md"), "empty"]);
+    expect(result.status, result.out).toBe(0);
+    expect(indexedPaths(result.json)).toEqual([`${SOURCE}/a.md`]);
+    expect((result.json.not_added as Array<{ path: string }>).map((entry) => entry.path)).toEqual([
+      "orig/typo.md", join(outside, "theirs.md"), "empty",
+    ]);
+    const note = String(result.json.onboard_note);
+    expect(note).toStartWith(
+      `Not added: orig/typo.md (no such file or folder), ${join(outside, "theirs.md")} (outside your project) and ` +
+        "empty (it holds no documents). Name only those again once they are fixed.",
+    );
+    expect(existsSync(join(proj, DOCUMENTS, "empty"))).toBe(false);
+  });
+
+  test("when none of the paths named can be added, nothing is and each is named", () => {
+    const proj = project();
+    const result = onboard(proj, ["orig/typo.md", "orig/other.md"]);
+    expect(result.status, result.out).not.toBe(0);
+    expect(result.out).toContain(
+      "Nothing was added: orig/typo.md (no such file or folder) and orig/other.md (no such file or folder).",
+    );
+    expect(indexedPaths(result.json)).toEqual([]);
+  });
+
+  test("named paths that together pass the batch cap copy nothing and say how many they hold", () => {
+    const proj = project();
+    for (const folder of ["specs-a", "specs-b"]) {
+      mkdirSync(join(proj, folder), { recursive: true });
+      for (let n = 1; n <= 11; n++) writeFileSync(join(proj, folder, `s${n}.md`), `# ${folder} ${n}\n`, "utf-8");
+    }
+    const result = onboard(proj, ["specs-a", "specs-b"]);
+    expect(result.status, result.out).not.toBe(0);
+    expect(result.out).toContain(
+      "The 2 paths you named hold 22 documents, over the 20-document batch cap; nothing was copied or indexed.",
+    );
+    expect(existsSync(join(proj, DOCUMENTS, "specs-a"))).toBe(false);
+    expect(existsSync(join(proj, DOCUMENTS, "specs-b"))).toBe(false);
+  });
+
+  test("the same file named twice is one copy and one row", () => {
+    const proj = project();
+    const [only] = originals(proj, ["a.md"]);
+    const result = onboard(proj, [only, only]);
+    expect(result.status, result.out).toBe(0);
+    expect(indexedPaths(result.json)).toEqual([`${SOURCE}/a.md`]);
+    expect(readdirSync(join(proj, DOCUMENTS))).toEqual(["a.md"]);
+    expect(String(result.json.onboard_note)).toContain(`Copied a.md into AI-DLC's documents as ${documentsShown}/a.md and added it.`);
+  });
+
+  test("a copy that landed under another name is named, and a long list is cut short", () => {
+    const proj = project();
+    mkdirSync(join(proj, DOCUMENTS), { recursive: true });
+    writeFileSync(join(proj, DOCUMENTS, "a.md"), "# Another a\n", "utf-8");
+    const result = onboard(proj, originals(proj, ["a.md", "b.md", "c.md", "d.md", "e.md", "f.md", "g.md"]));
+    expect(result.status, result.out).toBe(0);
+    expect(String(result.json.onboard_note)).toContain(
+      `Copied 7 documents into AI-DLC's documents in ${documentsShown} and added them: a.md as a-2.md, b.md, ` +
+        "c.md, d.md, e.md and 2 more.",
+    );
+  });
+
+  test("an original kept out of git among several is named in the line", () => {
+    const proj = gitProject("secret.md\n");
+    const result = onboard(proj, originals(proj, ["a.md", "secret.md"]));
+    expect(result.status, result.out).toBe(0);
+    expect(String(result.json.onboard_note)).toContain(
+      "Your secret.md is kept out of git, but its copy is not, so it will be committed unless you keep it out there too.",
+    );
+  });
+});
+
 // A copy puts its bytes at the name in two steps: an exclusive create of the
 // empty name, then a rename of the whole bytes over it. Whatever another copy
 // left at the name, the person's bytes land whole and the line names where.
