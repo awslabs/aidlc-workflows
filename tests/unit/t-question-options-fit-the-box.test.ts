@@ -76,6 +76,16 @@ describe("the questions file fits the harness's question box", () => {
     expect(protocol).not.toMatch(/\bA-E\b/);
   });
 
+  test("the multi-select example names only letters the harness's questions have", () => {
+    for (const name of HARNESS_NAMES) {
+      const protocol = readFileSync(join(engineRoot(name), "aidlc-common/protocols/stage-protocol.md"), "utf-8");
+      const example = /The user writes multiple letters: `\[Answer\]: ([A-Z](?:, [A-Z])*)`/.exec(protocol)?.[1];
+      expect(example, name).toBeDefined();
+      const last = String.fromCharCode(64 + (manifests.get(name)?.questionOptions ?? 5));
+      for (const letter of example!.split(", ")) expect(letter <= last, `${name}: ${letter} past ${last}`).toBe(true);
+    }
+  });
+
   // The annex is where a harness's box size is written down: a size it names
   // is the manifest's number, and an annex with no limit leaves it unset.
   test("each harness's questionOptions is the box size its question-rendering annex names", () => {
