@@ -113,7 +113,7 @@ describe("t204 doctor transient-marker probes", () => {
     expect(out).not.toContain("proposed plan change");
     expect(out).not.toContain(".aidlc-compose-pending");
     expect(out).not.toContain("Background-subagent ledger present");
-    expect(out).not.toContain(".aidlc-subagent-inflight");
+    expect(out).not.toContain("subagent-inflight");
   });
 
   test("an open compose question renders as an advisory PASS row (normal at a live gate)", () => {
@@ -140,7 +140,7 @@ describe("t204 doctor transient-marker probes", () => {
     const marker = seedSubagentLedger(proj);
     const { out } = runDoctor(proj);
     expect(out).toContain("Background-subagent ledger present");
-    expect(out).toContain("aidlc/.aidlc-subagent-inflight");
+    expect(out).toContain("aidlc/.aidlc-sessions/subagent-inflight.json");
     expect(out).toMatch(
       /ok\s+Background-subagent ledger present \(.*1 fresh, 0 stale/,
     );
@@ -160,7 +160,7 @@ describe("t204 doctor transient-marker probes", () => {
     expect(out).toMatch(
       /fail\s+Background-subagent ledger present \(.*0 fresh, 1 stale/,
     );
-    expect(out).toContain("rm aidlc/.aidlc-subagent-inflight");
+    expect(out).toContain("delete it at your own terminal ('rm aidlc/.aidlc-sessions/subagent-inflight.json')");
     expect(status).toBe(1);
     expect(existsSync(marker)).toBe(true);
   });
