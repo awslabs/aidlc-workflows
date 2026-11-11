@@ -1892,7 +1892,8 @@ in a heredoc or as its one operand, writes the files its patch names
 and opencode adapters use for their own apply_patch tool too); one fed its patch
 after it starts writes files no hook can see, so while the plan waits it is
 refused as a command that could not be read, with one more sentence naming the
-heredoc form. A line that starts with `cd <folder>`
+heredoc form (not on Windows, where Codex's `apply_patch.bat` takes no patch of
+more than one line in any form). A line that starts with `cd <folder>`
 joined to the rest by `&&`, `;` or a newline (and, in a line read as plain
 PowerShell, joined by `;`, also `Set-Location`, `sl`, `chdir`, `pushd` or
 `Push-Location`) is read as the rest of
