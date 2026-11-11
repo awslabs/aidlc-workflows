@@ -3582,7 +3582,7 @@ function verifySettledSwarmSourceBinding(
   // (aidlc-swarm-source.ts).
   const changed = current === null || sameWorkspaceSource(chain.fingerprint, current.fingerprint)
     ? []
-    : swarmSourceChangedSince(pd, stage.slug, chain.listing, current);
+    : swarmSourceChangedSince(pd, stage.slug, chain, current);
   const moved = changed?.length !== 0;
   if (moved && current !== null && guardPolicyAcceptsChanges(pd)) {
     // Kept under relaxed or off: edits made after the last merge stay, once recorded.

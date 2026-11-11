@@ -2092,7 +2092,7 @@ function assertAggregateSourceBeforeMerge(
     }
     const changed = sameWorkspaceSource(chain.fingerprint, current.fingerprint)
       ? []
-      : swarmSourceChangedSince(pd, record.stage, chain.listing, current, intent, space);
+      : swarmSourceChangedSince(pd, record.stage, chain, current, intent, space);
     if (changed?.length !== 0) {
       if (acceptsChanges) return keepChange(chain.fingerprint, null);
       const asked = mainCheckoutChangeAllowed(pd, changed, { intent, space });
