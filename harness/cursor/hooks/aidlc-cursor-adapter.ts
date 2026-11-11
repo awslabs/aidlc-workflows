@@ -2,8 +2,9 @@
 // aidlc-cursor-adapter.ts — the Cursor hook shim (AUTHORED shell file; the
 // aidlc-*.ts hook bodies beside it are PACKAGED core, byte-shared with the
 // Claude Code harness). Modeled on codex's aidlc-codex-adapter.ts: ONE shim
-// normalizes the Cursor payload to the ClaudeCodeHookInput shape and
-// subprocess-pipes into the named core hook.
+// normalizes the Cursor payload to the ClaudeCodeHookInput shape and hands it
+// to the named core hook: the guards run inside this process, the rest as a
+// subprocess.
 //
 // Cursor payloads (live corpus, cursor-agent 2026.07.23 on Linux; the IDE
 // shares the hooks.json surface) are near-isomorphic to Claude Code's with
@@ -63,8 +64,10 @@ import {
   enterHookWorkflow,
   promptMovesSelection,
   recordHookDrop,
+  runHookHere,
   takeSessionSelectionNotice,
 } from "../tools/aidlc-lib.ts";
+import { settleClaudeTurnsFirst } from "../tools/aidlc-claude-turn-pending.ts";
 import { aidlcInvocation, knownActiveSpace } from "../tools/aidlc-runtime-paths.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
@@ -134,12 +137,14 @@ export async function run(
     ? projectDirRaw
     : resolve(process.cwd(), projectDirRaw);
   const sessionId = cursor.session_id ?? cursor.conversation_id;
-  const projectEnv = {
-    ...process.env,
+  // What a core hook is given on top of this process's environment, as a child
+  // or (runGuard) while it runs here.
+  const projectPins = {
     AIDLC_PROJECT_DIR: projectDir,
     CLAUDE_PROJECT_DIR: projectDir,
     CURSOR_PROJECT_DIR: projectDir,
   };
+  const projectEnv = { ...process.env, ...projectPins };
 
   // --- Core-hook subprocess plumbing ------------------------------------------
 
@@ -1634,12 +1639,30 @@ export async function run(
     );
   }
 
+  // The guards run their core hook inside this process, as on Codex and
+  // Copilot: a child loads the whole engine again, so as children a shell
+  // call's four guards cost five engine loads. A guard that cannot be imported
+  // or exports no run() runs as a child as before. Under the compiled engine
+  // each guard's own engine first settled the project's waiting Claude Code
+  // turns (the hook route does), so the chain does that once, before its first
+  // guard.
+  let turnsSettled = false;
+  async function runGuard(
+    file: string,
+    input: string,
+  ): Promise<{ stdout: string; stderr: string; code: number; signal: string | null }> {
+    if (!turnsSettled && process.env.AIDLC_COMPILED_EXECUTABLE) settleClaudeTurnsFirst(projectDir);
+    turnsSettled = true;
+    const here = await runHookHere(join(HOOKS_DIR, file), input, projectPins);
+    return here === null ? runCoreWithStderr(file, input) : { ...here, signal: null };
+  }
+
   // Exit 2 is a guard's refusal. A guard that fails on its own (it throws, its
   // file is missing, it is killed) refuses nothing, as in the core hook group;
   // its error line goes where doctor reads hook drops, with a severity tag in
   // it neutralized so only the hook that writes a drop decides doctor's verdict.
-  function blockedByGuard(file: string, input: string): boolean {
-    const r = runCoreWithStderr(file, input);
+  async function blockedByGuard(file: string, input: string): Promise<boolean> {
+    const r = await runGuard(file, input);
     if (r.code === 0) return false;
     if (r.code !== 2) {
       const hook = file.replace(/^aidlc-|\.ts$/g, "");
@@ -1826,7 +1849,7 @@ export async function run(
           })}\n`);
           return 0;
         }
-        if (blockedByGuard("aidlc-plan-approval-guard.ts", claudeShaped("PreToolUse"))) {
+        if (await blockedByGuard("aidlc-plan-approval-guard.ts", claudeShaped("PreToolUse"))) {
           return 0;
         }
         const sub = cursor.tool_input?.subagent_type;
@@ -1878,7 +1901,7 @@ export async function run(
       // An attributed Bash call was already classified by the exact exported
       // review-freeze target parser while checking protected attribution
       // paths. Reuse that result: an empty target set is the hook's first allow
-      // condition, so spawning a second Bun process can add no decision value.
+      // condition, so running the freeze hook again can add no decision value.
       // Undefined/null are not classifications and always retain the guard.
       if (
         toolName !== "Bash" ||
@@ -1899,7 +1922,7 @@ export async function run(
         });
       }
       for (const guard of guards) {
-        if (blockedByGuard(guard.file, guard.input)) return 0;
+        if (await blockedByGuard(guard.file, guard.input)) return 0;
       }
       writeAllow();
       return 0;
