@@ -14,6 +14,7 @@ import {
   applicableTeamUnitScopeStamp,
   auditBlockField,
   type AuditShardEvent,
+  getField,
   idSuffix,
   isTeamUnitOwnership,
   knownAuditShardName,
@@ -119,6 +120,28 @@ export function claimRegistryGit(
     stdout: result.stdout ?? "",
     stderr: result.stderr ?? "",
   };
+}
+
+// With several remotes and none called origin (a lead who added a team's fork
+// beside their own remote): the one at the lead's project the work in hand
+// records (its Home Location). Null when it does not tell. The one rule for
+// this checkout's own remote then: the claim registry's reads here and
+// repositoryRemote (aidlc-unit) both take it. aidlc-workspace-repos.ts imports
+// aidlc-lib.ts, which loads this module, so gitAddressKey is reached lazily.
+export function ownRemoteAmong(projectDir: string, remotes: readonly string[]): string | null {
+  try {
+    const location = getField(readStateFile(projectDir), "Home Location")?.trim();
+    if (!location) return null;
+    const { gitAddressKey } = require("./aidlc-workspace-repos.ts") as typeof import("./aidlc-workspace-repos.ts");
+    const key = gitAddressKey(location);
+    const at = remotes.filter((remote) => {
+      const url = claimRegistryGit(projectDir, ["remote", "get-url", remote]);
+      return url.ok && url.stdout.trim() !== "" && gitAddressKey(url.stdout.trim()) === key;
+    });
+    return at.length === 1 ? at[0] : null;
+  } catch {
+    return null;
+  }
 }
 
 // A teammate's clone of a lead's project whose plan has not reached it: the

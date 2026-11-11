@@ -164,8 +164,8 @@ import {
   type SourceClaimModel,
   workspaceSourceListing,
   type WorkspaceSourceListing,
-  ownRemoteAmong,
 } from "./aidlc-lib.js";
+import { ownRemoteAmong } from "./aidlc-unit-holders.ts";
 import {
   type Amendment,
   approvedInputsOf,
