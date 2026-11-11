@@ -37,6 +37,7 @@ import { pathToFileURL } from "node:url";
 import { QUESTION_UNAVAILABLE, readQuestion, retireRequest, startedRequestFor } from "./aidlc-question-store.ts";
 import { sayWritesBeforePick } from "./aidlc-before-pick.ts";
 import { planApprovalAskState } from "./aidlc-plan-approval-ask.ts";
+import { shownSubagentInflightPath } from "./aidlc-subagent-inflight.ts";
 import {
   appendAuditEntries,
   appendAuditEntry,
@@ -5937,10 +5938,11 @@ export async function collectDoctorReport(
       const countLabel = subagents.malformed
         ? "malformed"
         : `${subagents.freshCount} fresh, ${subagents.staleCount} stale, oldest ${ageLabel}`;
+      const ledger = shownSubagentInflightPath(projectDir);
       results.push({
         pass: !subagents.malformed && subagents.staleCount === 0,
-        label: `Background-subagent ledger present (aidlc/.aidlc-subagent-inflight, ${countLabel})`,
-        fix: "if no background subagent is actually running, delete it ('rm aidlc/.aidlc-subagent-inflight'). Stale or malformed entries never authorize the Stop hook, but the ledger should not linger.",
+        label: `Background-subagent ledger present (${ledger}, ${countLabel})`,
+        fix: `if no background subagent is actually running, delete it at your own terminal ('rm ${ledger}'). Stale or malformed entries never authorize the Stop hook, but the ledger should not linger.`,
       });
     }
   } catch {
