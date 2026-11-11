@@ -29,6 +29,7 @@ import { EARLIER_KIRO_IDE_DROPS } from "../harness/earlier-kiro-plugin-drops.ts"
 import { doctorCommandLines, vscodeVisibleOutput } from "../harness/vscode-output-trim.ts";
 import {
   applyConfigDiagnosticRecords,
+  cliVersionShown,
   codexTrustIssues,
   copilotCliTrust,
   copilotConfigPath,
@@ -1260,6 +1261,11 @@ describe("t294 runtime diagnostics", () => {
       .toBe("Harness CLI: copilot 1.0.109 at /opt/tools/copilot");
     expect(row(copilot, ".aidlc", "copilot", "GitHub Copilot CLI 1.0.60.\n"))
       .toBe("Harness CLI: optional copilot 1.0.60 is below 1.0.74");
+    // A prerelease at the end of Copilot's sentence keeps its tag, not the period.
+    expect(row(copilot, ".aidlc", "copilot", "GitHub Copilot CLI 1.0.110-0.\n"))
+      .toBe("Harness CLI: copilot 1.0.110-0 at /opt/tools/copilot");
+    expect(cliVersionShown("2026.11.11-043ef28")).toBe("2026.11.11-043ef28");
+    expect(cliVersionShown("aidlc 1.2.3-beta.1 (build)")).toBe("1.2.3-beta.1");
   });
 });
 

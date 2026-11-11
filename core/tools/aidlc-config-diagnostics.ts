@@ -968,8 +968,9 @@ function isVsCodeCopilotStandInFolder(directory: string): boolean {
 // A CLI's --version reply often says more than its version ("codex-cli
 // 0.167.1", "2.1.322 (Claude Code)", Copilot's update hint on a second line).
 // A line for the person shows the version alone; the probe keeps the reply.
+// Copilot ends its version with a period, which a prerelease tag never does.
 export function cliVersionShown(reply: string): string {
-  return /\d+\.\d+\.\d+(?:[-+][^\s)]+)?/.exec(reply)?.[0] ?? reply;
+  return /\d+\.\d+\.\d+(?:[-+][^\s)]*[^\s).])?/.exec(reply)?.[0] ?? reply;
 }
 
 function versionTuple(value: string): [number, number, number] | null {
