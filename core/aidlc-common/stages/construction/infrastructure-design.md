@@ -111,7 +111,7 @@ Focus areas:
 
 ### Step 3: Collect and Analyze Answers
 
-Collect answers following stage-protocol.md §3 question flow (offer interaction mode choice, collect answers, write back to file). After collecting answers, perform MANDATORY ambiguity analysis:
+Collect answers following stage-protocol.md §3 question flow (collect answers, write back to file). After collecting answers, perform MANDATORY ambiguity analysis:
 - Identify vague answers ("cloud-based", "auto-scale", "standard monitoring")
 - Check for contradictions between answers
 - Flag missing details needed for artifact generation

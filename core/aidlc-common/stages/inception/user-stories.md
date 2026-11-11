@@ -96,12 +96,12 @@ Create a story plan in `<record>/inception/user-stories/user-stories-questions.m
 
 ### Step 5: Collect Answers
 
-Collect answers following stage-protocol.md §3 question flow (offer interaction mode choice, collect answers, write back to file).
+Collect answers following stage-protocol.md §3 question flow (collect answers, write back to file).
 
 ### Step 6: Analyze Answers
 
 MANDATORY ambiguity analysis:
-- Scan ALL responses for vague language ("mix of", "not sure", "depends", "probably")
+- Scan ALL responses for vague language ("mix of", "not sure", "depends")
 - Check for contradictions between answers
 - Identify missing details
 - Create follow-up questions if ANY ambiguity found

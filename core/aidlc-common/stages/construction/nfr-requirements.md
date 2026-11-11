@@ -100,7 +100,7 @@ Create a questions file at `<record>/construction/{unit-name}/nfr-requirements/n
 
 ### Step 4: Collect and Analyze Answers
 
-Collect answers following stage-protocol.md §3 question flow (offer interaction mode choice, collect answers, write back to file). Perform MANDATORY ambiguity analysis:
+Collect answers following stage-protocol.md §3 question flow (collect answers, write back to file). Perform MANDATORY ambiguity analysis:
 - Identify vague answers ("fast enough", "highly available", "secure")
 - Check for contradictions between NFR targets
 - Flag missing quantitative targets
