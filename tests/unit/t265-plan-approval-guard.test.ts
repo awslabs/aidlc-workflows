@@ -79,6 +79,7 @@ import {
   workspaceSourceFingerprint,
   personCheckSwitchAllowed,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { readConductorSurface } from "../harness/conductor-skill.ts";
 import { AIDLC_SRC, FIXTURE_CLONE_ID, WORKER_BRIEF_SECTIONS_FIXTURE } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 import {
@@ -5136,10 +5137,7 @@ describe("t265c registrations", () => {
     expect(card.hooks[0].action.command).toEndWith(" engine adapter kiro-ide guard-tool-call");
     expect(readFileSync(join(ideHooks, "aidlc-kiro-tool-names.ts"), "utf-8"))
       .toContain('{ target: "plan-approval-guard", matcher: KIRO_HOOK_MATCHERS.notReadPreToolUse }');
-    const skill = readFileSync(
-      join(REPO_ROOT, "harness", "kiro-ide", "skills", "aidlc", "SKILL.md"),
-      "utf-8",
-    );
+    const skill = readConductorSurface(join(REPO_ROOT, "harness", "kiro-ide", "skills", "aidlc", "SKILL.md"));
     expect(skill).not.toContain("plan-approval guard is likewise prose-only");
   });
 

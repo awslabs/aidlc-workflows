@@ -12,6 +12,7 @@ import { join } from "node:path";
 import type { GraphStage } from "../../core/tools/aidlc-graph.ts";
 import { inlineAgentsFor, shippedInlineContextEntries } from "../../core/tools/aidlc-inline-context.ts";
 import { personaTwinRels } from "../../core/tools/aidlc-plugin.ts";
+import { readConductorSurface } from "../harness/conductor-skill.ts";
 
 const REPO = join(import.meta.dir, "..", "..");
 const DIST = join(REPO, "dist");
@@ -85,7 +86,7 @@ describe("the Kiro IDE lead reads the persona without its tool permissions", () 
   // file as well, and the saving goes: the Kiro IDE tree says to read the file
   // the roster names.
   test("the Kiro IDE skill never sends the lead to the agent file, and the ensemble binding sends it to the roster's persona file", () => {
-    const skill = readFileSync(join(KIRO_IDE, "skills", "aidlc", "SKILL.md"), "utf-8");
+    const skill = readConductorSurface(join(KIRO_IDE, "skills", "aidlc", "SKILL.md"));
     const ensemble = readFileSync(join(KIRO_IDE, "aidlc-common", "protocols", "stage-protocol-ensemble.md"), "utf-8");
     expect(skill).not.toContain("personas load inline from `.kiro/agents/");
     expect(ensemble).not.toContain("persona framing loaded from its `.md` file under `.kiro/agents/`");

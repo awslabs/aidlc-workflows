@@ -20,6 +20,7 @@
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { readConductorSurface } from "../harness/conductor-skill.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 
@@ -30,7 +31,7 @@ function skillPaths(): string[] {
 }
 
 function carryOnParagraph(rel: string): string {
-  const lines = readFileSync(join(REPO_ROOT, rel), "utf-8").split("\n");
+  const lines = readConductorSurface(rel).split("\n");
   const found = lines.filter((line) => line.startsWith(HEADING));
   expect(found.length, `${rel} carries the paragraph once`).toBe(1);
   return found[0] as string;
@@ -65,7 +66,7 @@ describe("t-stop-carries-on-line: the agent's steps for the one-line Stop note",
     for (const rel of paths) {
       const paragraph = carryOnParagraph(rel);
       for (const step of STEPS) expect(paragraph, `${rel}: ${step}`).toContain(step);
-      expect(readFileSync(join(REPO_ROOT, rel), "utf-8"), rel).not.toContain("**When your turn is stopped with a note.**");
+      expect(readConductorSurface(rel), rel).not.toContain("**When your turn is stopped with a note.**");
     }
   });
 
