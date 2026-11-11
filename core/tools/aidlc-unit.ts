@@ -164,6 +164,7 @@ import {
   type SourceClaimModel,
   workspaceSourceListing,
   type WorkspaceSourceListing,
+  ownRemoteAmong,
 } from "./aidlc-lib.js";
 import {
   type Amendment,
@@ -402,24 +403,10 @@ function repositoryRemote(projectDir: string): string | null {
   if (remotes.length === 0) return null;
   if (remotes.includes("origin")) return "origin";
   if (remotes.length === 1) return remotes[0];
-  const own = ownRemoteOf(projectDir, remotes);
+  // The remote at the lead's recorded address, by the one rule (ownRemoteAmong).
+  const own = ownRemoteAmong(projectDir, remotes);
   if (own !== null) return own;
   fail(`Multiple git remotes are configured (${remotes.join(", ")}); configure origin for Unit claims.`);
-}
-
-// With several remotes and none called origin (a lead who added a team's fork
-// beside their own remote): the one at the lead's project the work in hand
-// records. Null when it does not tell: a remote no claims are kept under is no
-// sign, since a team's fork not fetched yet is one too.
-function ownRemoteOf(projectDir: string, remotes: string[]): string | null {
-  try {
-    const location = homeLocation(readStateFile(projectDir));
-    if (location === null || !isGitAddress(location)) return null;
-    const at = remotes.filter((remote) => sameGitAddress(git(projectDir, ["remote", "get-url", remote]).stdout.trim(), location));
-    return at.length === 1 ? at[0] : null;
-  } catch {
-    return null;
-  }
 }
 
 function currentBranch(projectDir: string): string {
