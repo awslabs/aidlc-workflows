@@ -567,8 +567,8 @@ describe("where things stand", () => {
     checkIn(ana, "refunds pushed");
     const status = (): string => run(UTILITY, ["status"], ana, ENV).out;
     const yours = (): string | undefined => /^Yours: +(.*)$/m.exec(status())?.[1];
-    // Her first build in hand: nothing of hers besides it.
-    expect(yours(), status()).toBeUndefined();
+    // Her first build in hand, finished: it alone, where it stands.
+    expect(yours(), status()).toBe("refunds (pushed, waiting for its merge)");
     const second = run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD], ana, chat);
     expect(second.status, second.out).toBe(0);
     expect(status()).toContain("Yours:          refunds (pushed, waiting for its merge)\n");
@@ -583,6 +583,31 @@ describe("where things stand", () => {
     expect(run(UTILITY, ["status"], home.dir, ENV).out).not.toContain("Yours:");
     const solo = makeHome();
     expect(run(UTILITY, ["status"], solo.dir, ENV).out).not.toContain("Yours:");
+  });
+
+  // The GitHub live test: the lead's screen said "I've told Member A
+  // u6-request-id is merged.", and her look on her finished build, then status,
+  // left the agent only her earlier answer, "pushed, but not merged yet".
+  test("the build in hand, finished, is on status's Yours line where the lead's project has it: merged once the lead records it", () => {
+    const { home, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    finishBuild(record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    const status = (): string => run(UTILITY, ["status"], alice, ENV).out;
+    const yours = (): string | undefined => /^Yours: +(.*)$/m.exec(status())?.[1];
+    expect(yours(), status()).toBe("refunds (pushed, waiting for its merge)");
+    // The lead's word for each repo: only the claim says it merged.
+    git(home.dir, ["fetch", "-q", "origin"]);
+    for (const repo of ["checkout-api", "billing"]) {
+      expect(run(UNIT, ["merged", "refunds", "--repo", repo, "--person-words", `${repo} merged it`], home.dir).status).toBe(0);
+    }
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
+    // Status alone reads the lead's project for it.
+    expect(yours(), status()).toBe("refunds (merged)");
+    // Her look with words on the finished build, then status: never waiting.
+    next(alice, ENV, ["where do things stand?"]);
+    expect(status()).toContain("Yours:          refunds (merged)\n");
+    expect(status()).not.toContain("waiting for its merge");
   });
 
   test("two builds one teammate is building are each said building, in one line", () => {

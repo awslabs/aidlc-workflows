@@ -9285,16 +9285,16 @@ export function pulledBuildStanding(projectDir: string, built: { space: string; 
   }
 }
 
-// The person's own other finished builds of the plan the build in hand is of,
-// each with where it stands in those words, for status's 'Yours' line; null
-// when the work in hand is not a build or there are none. One still running is
-// Also open's.
+// The person's own finished builds of the plan the build in hand is of, each
+// with where it stands in those words, for status's 'Yours' line: the build in
+// hand too once it is finished, so where its merge stands is read and not
+// recalled; null when the work in hand is not a build or there are none. One
+// still running is Also open's.
 export function ownOtherBuilds(projectDir: string, inHand: { space: string; dirName: string }, stateContent: string): string | null {
   const build = unitBuildOf(stateContent);
   if (build === null || build.homeWork === "") return null;
   const labels = unitBuildsHere(projectDir, (other, state) =>
     other.homeWork === build.homeWork && getField(state, "Status")?.trim() === "Completed")
-    .filter((other) => !(other.space === inHand.space && other.dirName === inHand.dirName))
     .filter((other) => {
       try {
         return buildIsMine(projectDir, other, buildClaimHere(projectDir, other)) === true;
@@ -9302,6 +9302,7 @@ export function ownOtherBuilds(projectDir: string, inHand: { space: string; dirN
         return false;
       }
     })
+    .sort((a, b) => Number(b.space === inHand.space && b.dirName === inHand.dirName) - Number(a.space === inHand.space && a.dirName === inHand.dirName))
     .map((other) => {
       const where = pulledBuildStanding(projectDir, other);
       return where === null ? other.build.unit : `${other.build.unit} (${where})`;

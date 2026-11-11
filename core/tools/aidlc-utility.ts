@@ -2521,7 +2521,12 @@ To get started:
   const { pulledBuildStanding, ownOtherBuilds } = await import("./aidlc-orchestrate.ts");
   const arrived = acrossRepos ? arrivedAtLastPull(projectDir, (built) => pulledBuildStanding(projectDir, built)) : null;
   const arrivedLine = arrived === null ? "" : `From others, at your last pull that brought changes:    ${arrived}\n`;
-  // The person's own earlier builds of the same plan, so where they stand is said and not recalled.
+  // The person's own finished builds of the same plan, the one in hand too, read
+  // at the lead's project first, so where they stand is said and not recalled.
+  if (selection.intent !== null && unitBuildOf(content) !== null) {
+    const { readBuildClaims } = await import("./aidlc-unit.ts");
+    readBuildClaims(projectDir, content);
+  }
   const yours = selection.intent === null ? null : ownOtherBuilds(projectDir, { space: selection.space, dirName: selection.intent }, content);
   const yoursLine = yours === null ? "" : `Yours:          ${yours}\n`;
   // Said only when it is so: a record not checked in, or one git cannot tell about, says nothing here.

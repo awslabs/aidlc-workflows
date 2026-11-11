@@ -7457,6 +7457,18 @@ function sayOwnBuildsMerged(pd: string, into: string, before: ReadonlyMap<string
   }
 }
 
+// Status at a team's build: its claims as the lead's project has them now,
+// fetched quietly as a look does, so the build's standing is read there; it
+// writes no claim. What this workspace has stands when it cannot.
+export function readBuildClaims(projectDir: string, stateContent: string): void {
+  try {
+    const build = unitBuildOf(stateContent);
+    if (build !== null) refreshHomeClaims(projectDir, { home: buildsHome(projectDir, build), now: true });
+  } catch {
+    // The last fetch stands.
+  }
+}
+
 // The step's stop when the news could not be written into this workspace's
 // .git: every caller that takes a failed look as "the claims stand" lets this
 // one through, so the way on reaches the agent once in the chat.
