@@ -80,9 +80,8 @@ const manifest: HarnessManifest = {
           // The variant shipped before the block ignored aidlc/.aidlc-request-text/
           // (a request the engine has not read yet).
           "sha256:345fbe9fe620718510ecfe9d478233ccf4a5318522884b50fc5540559ace3eed",
-          // The variant shipped before the block ignored the Bolt worktree folders and
-          // their metadata under .aidlc/ (worktrees/, restored/, worktree-meta.json,
-          // base-source-listing.tsv).
+          // The variant shipped before the block ignored a Bolt worktree's metadata
+          // (.aidlc/worktree-meta.json, .aidlc/base-source-listing.tsv).
           "sha256:c2b1232b28a8b5474f7ef8363452f75399366ef227c59d75fa85d7aa2edca7ac",
         ],
       },

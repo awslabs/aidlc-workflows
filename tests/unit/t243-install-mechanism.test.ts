@@ -9140,7 +9140,7 @@ describe("t243 projection channel", () => {
           "sha256:a618a3a615ef7159c7eed634a5a332bf9d017f8e28d6b0f0adad9db1d2d725e0",
           "sha256:3cc1cbd212d2ca0dbf1e525eb9a40d4694a585eb7864d8b877f8fe8bd99122dc",
           "sha256:839f98012dd457ed13dcf19547b992130a2c44ef7afa73fb3faf000137a087d7",
-          "sha256:0e5df9bd37b7bf2904acbcb9a4ae22e5f597df815eecec7751b419f2c2ddb2ee",
+          "sha256:c4dbcd2ecd6243a4759c148f38bd764042f2563f6a679f732c25471cd308ec77",
         ],
       },
       codex: {
@@ -9153,7 +9153,7 @@ describe("t243 projection channel", () => {
           "sha256:51cb399f2257236cbf63e18cb2e317d75913f1771b5402707a2508cf5f81fa57",
           "sha256:345fbe9fe620718510ecfe9d478233ccf4a5318522884b50fc5540559ace3eed",
           "sha256:c2b1232b28a8b5474f7ef8363452f75399366ef227c59d75fa85d7aa2edca7ac",
-          "sha256:bf577b5db104f646933ce0660fb7466495f6926bdc9beec83b0e686d108659d3",
+          "sha256:42e2a975d46b6fd2a582fa539f6df3260a1f2722dd0a113bd312dff7dc2da204",
         ],
         "AGENTS.md": [
           "sha256:30a9f5f43d87cd29b63e75333b8ef6695f8f4e11909fd6af64e2b6cf0b8cb292",
@@ -9189,7 +9189,7 @@ describe("t243 projection channel", () => {
           "sha256:28a69800dcac189aa2a976820db237b45bcf6dd7d7e6d4fae5c1603225b9957a",
           "sha256:99b4560aa1bd95f26077eb69a0c6c2a40f81146a212e70d876c27bb84f2b1789",
           "sha256:6df8b41c1c9011d8b6d386d389f96bbfa27812386f434103c260bf58641d6b5d",
-          "sha256:eebe598300e343819ff8d5dc591726cc99c4b8d5c8e18348760eb9eb782983f5",
+          "sha256:91f5070ac1b7f2effcf608447a67261ab00dd92495385bf2277b53ca1723c6f0",
         ],
         "AGENTS.md": [
           "sha256:4f7133cc1a9bb1243245c25c28fad57c3660b35e251ea36cea3aa2db431bf55f",
@@ -9222,7 +9222,7 @@ describe("t243 projection channel", () => {
           "sha256:6c6ff7641c17829d77fdd023f340b938db11dcc26c734a0c452d5213f9bd19cf",
           "sha256:f9d49a8c823df8174ea7d8a83209380202e5673b5ee8c1ff6b9cce90bcfd550e",
           "sha256:e7c17271c65f778895fe75352413c03da8a3c37c37bca2b8bcb1c447f4c8b8f3",
-          "sha256:4bd3cb7ce5bb1ab8d45131ac7147ac369fae0b256b533b2fe945920551974700",
+          "sha256:0f3d8cce1070c43f883aeda63341bf00e7d689916ca5f810734784fedfd6009a",
         ],
         "AGENTS.md": [
           "sha256:4d539288363565feb6cf1a8d2468d1aca4373d46d354936d89e609f9862b2b9f",
@@ -9252,7 +9252,7 @@ describe("t243 projection channel", () => {
           "sha256:cf4554ef90011ebc4bc70c7fbc6ca572c513d5c1e7daa328e406d1069f98e635",
           "sha256:ae1878ec98301ceb4510e711cf79f58dfb44cb486744007acd03ae5e61860665",
           "sha256:55d4cfabe04aca4193d53032c003002d3c9c7de4eef90be0afb411d8a6f7e340",
-          "sha256:23744816b46e45294fe51b8bb7f4dcf7df801614b649a9ac621e5cd1838b3d5e",
+          "sha256:880993e2876c4e1ce73f0354928eb98c7f234a127aeecbd4268aadc508e918ab",
         ],
         "AGENTS.md": [
           "sha256:78c906200a55665f3a3ce410272c71d4bdcb5764174407da0f69d8ad6d143184",
@@ -9275,7 +9275,7 @@ describe("t243 projection channel", () => {
           "sha256:51cb399f2257236cbf63e18cb2e317d75913f1771b5402707a2508cf5f81fa57",
           "sha256:345fbe9fe620718510ecfe9d478233ccf4a5318522884b50fc5540559ace3eed",
           "sha256:c2b1232b28a8b5474f7ef8363452f75399366ef227c59d75fa85d7aa2edca7ac",
-          "sha256:bf577b5db104f646933ce0660fb7466495f6926bdc9beec83b0e686d108659d3",
+          "sha256:42e2a975d46b6fd2a582fa539f6df3260a1f2722dd0a113bd312dff7dc2da204",
         ],
         "AGENTS.md": [
           "sha256:d791057d6b667517197a450bc6ba633c36e148d62e09c90a8992d787c914a44f",
@@ -9301,7 +9301,7 @@ describe("t243 projection channel", () => {
           "sha256:a2fb9d52cb1ad3a360d7abdaddabb6920965b6b1a7acceb14881ad93b4975bbe",
           "sha256:2091d36da7f7306179da27227857564334f3a455327f365984db6c94a4cc6412",
           "sha256:0ece34fe64acc940324082a0ed97621ff2472ddc0e611e745a6d7388e532fcea",
-          "sha256:be3275873a7fdd4061e02fadb12218548a1a7c6b2501930f1da9c0a5fc23bff8",
+          "sha256:6c5a7b3d0059a0fe5067de62e20fb2733215ee43391cdadec3206b6fd05fe6d6",
         ],
         "AGENTS.md": [
           "sha256:9550b31b8f3f32992c1ae1035bfa57a782f04821530214a2f2e1fd1690e209ab",
