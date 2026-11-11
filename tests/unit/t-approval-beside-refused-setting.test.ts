@@ -189,6 +189,35 @@ describe.each(POLICIES)("Guard Policy %s: an approval asked beside a setting the
     });
   }
 
+  // Guard Policy itself and a check other than plan approval: the team's own line for each.
+  for (const [asked, flag, kept] of [
+    ["approve, and relax the Guard Policy", ["--guard-policy", "relaxed"], "so it stays strict for everyone on this repo."],
+    ["approve, and turn the review freeze off", ["--guard.review-freeze", "off"], "so review-freeze stays on for everyone on this repo."],
+  ] as const) {
+    test(`claude: ${flag[0]} ${flag[1]} beside the approval: the team's line for it is the step`, () => {
+      const proj = project("claude", policy);
+      const state = (args: string[]) => {
+        const r = run(proj, [STATE, ...args, "--project-dir", proj], GATE_ENV);
+        expect(r.status, r.out).toBe(0);
+      };
+      state(["checkbox", `${STAGE}=in-progress`]);
+      tick();
+      state(["gate-start", STAGE]);
+      tick();
+      const box = answerBox(proj, "claude", asked);
+      tick();
+      const refused = report(proj, "claude", [...flag, "--message", box]);
+      expect(refused.status, refused.out).toBe(0);
+      const directive = JSON.parse(refused.stdout.trim().split("\n").at(-1) as string) as { kind: string; message: string };
+      expect(directive.kind, refused.out).toBe("print");
+      expect(directive.message).toStartWith('Tell the person in one line: "Your team set Guard Policy to strict in ');
+      expect(directive.message).toEndWith(
+        `${kept} Changing that line there changes it." Then run this report again without the setting to record the approval.`,
+      );
+      expect(rows(proj, "GATE_APPROVED")).toHaveLength(0);
+    });
+  }
+
   // Beside a setting the team does not keep, the report without the settings
   // would drop that one too: the setter's own refusal is the step, as before.
   test("claude: a setting the team does not keep, asked with the locked one: the setter's refusal is the step", () => {
