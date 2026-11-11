@@ -368,6 +368,7 @@ function handleWrite(): string[] {
   // Prune stale stage-runner dirs: old per-init runners and runners for stages
   // now absent from the filtered graph because their plugin is disabled.
   const legacyBareSlugs = pluginOwnedStageSlugsForLegacy();
+  const knownStages = new Set(loadStageGraphAll().map((s) => s.slug));
   for (const entry of readdirSync(skillsDir, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
     const dir = join(skillsDir, entry.name);
@@ -376,7 +377,7 @@ function handleWrite(): string[] {
       entry.name,
       stageRunnerSlugFromBody,
       legacyBareSlugs,
-      compiledSet,
+      knownStages,
     );
     if (slug && !compiledSet.has(slug)) rmSync(dir, { recursive: true, force: true });
   }
@@ -415,20 +416,22 @@ function runnerSkill(
   return { slug, generated: hasRunnerGenMarker(body) || isLegacyGeneratedRunnerDirName(dirName, slug, legacyBareSlugs) };
 }
 
-// A skill prune would remove but did not write is named once, so the person
-// knows it was left in place; one whose slug is kept would not be removed
-// anyway and is not named.
+// A skill AI-DLC did not write that drives a stage or scope this install does
+// not have at all (`known`: every one installed, enabled or not), such as a
+// team's playbook for a retired stage, is named once so the person knows it was
+// left in place. A skill naming one the install has, as AI-DLC's main skill
+// names Reverse Engineering's single run, is not, whatever the plugin selection.
 function generatedRunnerSlugForPrune(
   skillMdPath: string,
   dirName: string,
   parseSlug: RunnerSlugParser,
   legacyBareSlugs: ReadonlySet<string>,
-  keep: ReadonlySet<string>,
+  known: ReadonlySet<string>,
 ): string | null {
   const runner = runnerSkill(skillMdPath, dirName, parseSlug, legacyBareSlugs);
   if (runner === null) return null;
   if (runner.generated) return runner.slug;
-  if (!keep.has(runner.slug)) console.error(`unmanaged skill, not pruned: ${dirName}`);
+  if (!known.has(runner.slug)) console.error(`unmanaged skill, not pruned: ${dirName}`);
   return null;
 }
 
@@ -864,6 +867,7 @@ function scopeRunnerSlugFromBody(body: string): string | null {
 function pruneScopeRunners(skillsDir: string, keep: ReadonlySet<string>): void {
   if (!existsSync(skillsDir)) return;
   const legacyBareSlugs = pluginOwnedScopeSlugsForLegacy();
+  const knownScopes = new Set(Object.keys(loadScopeMetadataAll()));
   for (const entry of readdirSync(skillsDir, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
     const dir = join(skillsDir, entry.name);
@@ -872,7 +876,7 @@ function pruneScopeRunners(skillsDir: string, keep: ReadonlySet<string>): void {
       entry.name,
       scopeRunnerSlugFromBody,
       legacyBareSlugs,
-      keep,
+      knownScopes,
     );
     if (slug && !keep.has(slug)) rmSync(dir, { recursive: true, force: true });
   }
