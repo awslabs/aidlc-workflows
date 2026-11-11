@@ -11112,6 +11112,25 @@ function claimsOpenAtPlanChange(projectDir: string, stateContent: string, target
     "again first.";
 }
 
+// Main moving on past the Unit stages while teams build them: one line naming
+// each Unit still open there and whose it is, as the board names them. The
+// jump tool says it with its own line (handleExecute). null when none is.
+export function unitsStillOpenLine(projectDir: string): string | null {
+  let overview: UnitClaimOverview;
+  try {
+    overview = cachedUnitClaimOverview(projectDir, { writeCache: false });
+  } catch {
+    return null;
+  }
+  const taken = [...overview.claimed].sort((a, b) => compareBoardKeys(a.unit, b.unit));
+  const untaken = [...overview.claimable, ...overview.waiting.map((row) => row.unit)].sort(compareBoardKeys);
+  const open = [
+    ...taken.map((claim) => `${claim.unit} (${claim.owner})`),
+    ...untaken.map((unit) => `${unit}, not taken yet`),
+  ];
+  return open.length === 0 ? null : `Still open on main, and landing as they finish: ${open.join("; ")}.`;
+}
+
 // Main is redoing a stage that comes before the per-Unit block (Units
 // Generation reopened to change the Unit plan): its own step runs, whatever
 // the team's claims; the dispatcher board holds main again from the block on.
@@ -13962,8 +13981,8 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
         }
         // The Unit this checkout walks without a claim is still its own once a
         // team claims another (#3610): after the offers above, the walk goes on
-        // with it instead of the board.
-        if (unitsHeldHere(pd) !== null) throw new Error("claimless-team-mode");
+        // with it instead of the board, until the walk is done.
+        if (unitsHeldHere(pd) !== null && !workflowFinished(stateContent, scope)) throw new Error("claimless-team-mode");
         // While the guard's fan-out check holds (a landed Unit's claim
         // included) it refuses Unit work in this checkout, so the board stays
         // up until the walk has no Unit left to take: every Unit merged. A
@@ -13973,7 +13992,16 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
         const unitWorkLeft = dag.state === "ok" &&
           dag.batches.flat().some((unit) => !model.mergedUnits.has(unit));
         const teamsTakeUnits = cachedClaimFanoutActive(pd) || teamSharedHere(pd) || planMadeElsewhere(pd);
-        if (board.awaitingMerge.length > 0 || (unitWorkLeft && teamsTakeUnits)) {
+        // Main moved on past the Unit stages while teams build them: while the
+        // walk has a step left it is main's, and each Unit still lands through
+        // the offer above as it finishes; a merge the lead turned down is the
+        // team's to redo. A teammate's clone of it came for a Unit and keeps
+        // the board, and so does main once the walk is done.
+        const lastUnitStage = constructionUnitMajorBlock(scope, stateContent, true).at(-1);
+        const mainMovedOn = lastUnitStage !== undefined && cursorPastStage(stateContent, lastUnitStage.slug) &&
+          !workflowFinished(stateContent, scope) && !planMadeElsewhere(pd);
+        const mergeWaits = board.awaitingMerge.some((merge) => !mainMovedOn || merge.status !== "rejected");
+        if (mergeWaits || (unitWorkLeft && teamsTakeUnits && !mainMovedOn)) {
           lastSeen();
           emit(noticeDirective(
             renderTeamConstructionBoard(board, "dispatcher"),
