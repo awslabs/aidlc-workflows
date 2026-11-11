@@ -27659,6 +27659,7 @@ function withRepoBaselineAdditions(
   for (const [key, entry] of written) listing.set(key, entry);
   return { state: "ready", listing };
 }
+export { withRepoBaselineAdditions };
 
 // What a clone's install writes at the workspace root: repos.json and
 // workspace-sync's two generated files.
