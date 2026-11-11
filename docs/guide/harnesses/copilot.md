@@ -483,8 +483,7 @@ copilot` (first install and every refresh) therefore adds
   settings file at all gets it again.
 
 The setting is window-scoped, so the project value wins over a user setting.
-AI-DLC's `.gitignore` block keeps `.vscode/*` out of git, so the value
-belongs to each checkout: config adds it where it runs. A copied project
+A copied project
 (the copy channel) has no config step that merges this file, and its
 runtime does not ship one, so add the key yourself. `/aidlc --doctor` warns
 when the project value is below 100, unset (your user setting, else VS

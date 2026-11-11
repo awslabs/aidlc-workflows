@@ -638,6 +638,37 @@ describe("documentation parity derives current behavior from authored implementa
     );
   });
 
+  test("no page says AI-DLC's .gitignore block keeps .vscode out of git while no shipped block names it", () => {
+    const blocks = [
+      ...readdirSync(at("harness")).map((name) => at("harness", name, "dot-gitignore")).filter((file) => existsSync(file)),
+      at("core", "tools", "aidlc-gitignore.ts"),
+    ];
+    expect(blocks.length, "the shipped .gitignore blocks").toBeGreaterThan(1);
+    if (blocks.some((file) => /vscode/i.test(readFileSync(file, "utf8")))) return;
+    const stale = /block keeps `?\.vscode/;
+    const copies = [...filesBelow(at("docs"), ".md"), at("README.md")].filter((file) =>
+      stale.test(normalized(readFileSync(file, "utf8"))),
+    );
+    expect(copies).toEqual([]);
+  });
+
+  test("the Kiro page does not say there is no init command while Kiro installs ship /aidlc-init", () => {
+    for (const tree of ["kiro", "kiro-ide"]) {
+      expect(existsSync(at("dist", tree, ".kiro", "skills", "aidlc-init", "SKILL.md")), `${tree} ships aidlc-init`).toBe(true);
+    }
+    const deniesInit = /\bno init command\b/i.test(normalized(read("docs", "guide", "harnesses", "kiro.md")));
+    expect(deniesInit, "docs/guide/harnesses/kiro.md says there is no init command").toBe(false);
+  });
+
+  test("no page says to finish open work before running aidlc config", () => {
+    // A refresh is done while work is open (Install and Lifecycle, Refresh Safety); nothing waits for it to finish.
+    const stale = /\b(?:finish|complete) (?:the |all |your )?active workflows?,? then run `aidlc config/i;
+    const copies = [...filesBelow(at("docs"), ".md"), at("README.md")].filter((file) =>
+      stale.test(normalized(readFileSync(file, "utf8"))),
+    );
+    expect(copies).toEqual([]);
+  });
+
   test("a review the person asks for is recorded under every Guard Policy, and no copy reads as needing strict", () => {
     const reviewer = readFileSync(at("core", "aidlc-common", "protocols", "stage-protocol-reviewer.md"), "utf8")
       .replace(/\s+/g, " ");

@@ -310,7 +310,7 @@ Identical to the Claude Code harness: `/aidlc <description>` starts a
 workflow, `/aidlc --status` reports position, `/aidlc --doctor`, `--stage`,
 `--phase`, `--depth`, `--test-strategy`, and `--config [section]` all work, and the
 per-stage (`/aidlc-domain-design`) and per-scope (`/aidlc-feature`) runner
-skills are installed. There is no init command; the shipped shell scaffolds
+skills are installed. The shipped shell scaffolds
 the workspace, and AI-DLC automatically creates the first intent on your first `/aidlc`.
 
 ### Start AI-DLC in a Kiro IDE chat
