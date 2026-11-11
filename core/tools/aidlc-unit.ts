@@ -5627,37 +5627,39 @@ function leadsWord(
   what: string,
   ask?: string,
 ): { said: string | null; fields: Record<string, string> } {
-  const { proveMessage } = require("./aidlc-message-store.ts") as typeof import("./aidlc-message-store.ts");
-  const kept = (message: import("./aidlc-message-store.ts").StoredMessage) => {
-    const text = message.words === null ? "" : personsWordsText(message.words);
-    const theirs = text.trim() !== "" && !isNonAnswer(text);
-    return { said: theirs ? text.trim() : null, fields: { "Message Id": message.id, ...(theirs ? { "Person Reply": text } : {}) } };
-  };
+  const { proveMessage, readMessage } = require("./aidlc-message-store.ts") as typeof import("./aidlc-message-store.ts");
+  // The one message their word came in, by the first way that names it.
+  let message: import("./aidlc-message-store.ts").StoredMessage | null;
   if (flags.message !== undefined) {
     const proof = proveMessage(pd, flags.message, "decision", { request: true });
     if ("refusal" in proof) fail(proof.refusal);
-    return kept(proof.message);
+    message = proof.message;
+  } else {
+    requireLeadsWord(pd, what);
+    let chat: string | null = null;
+    try {
+      chat = resolveInvokingSessionId(pd);
+    } catch {
+      // No chat to name: the window reads none as the lead's.
+    }
+    const reply = personsGateReply(pd, chat, LEAD_WORD_WINDOW);
+    const held = new Set(reply.elsewhere.map((entry) => entry.id));
+    const answered = ask === undefined || held.size === 0 ? undefined : readAuditShardEvents(pd).findLast((row) =>
+      row.event === "HUMAN_TURN" && held.has(auditBlockField(row.block, "Message Id") ?? "") &&
+      auditBlockField(row.block, OPEN_QUESTION_FIELD) === ask);
+    const id = answered === undefined ? null : auditBlockField(answered.block, "Message Id");
+    const proof = id === null ? null : proveMessage(pd, id, "decision", { request: true });
+    if (proof !== null && "message" in proof) message = proof.message;
+    else {
+      message = reply.messageId === null ? null : readMessage(pd, reply.messageId);
+      // A message the store kept only in part: named, its words left to its record.
+      if (message?.cut === true) return { said: null, fields: { "Message Id": message.id } };
+    }
   }
-  requireLeadsWord(pd, what);
-  let chat: string | null = null;
-  try {
-    chat = resolveInvokingSessionId(pd);
-  } catch {
-    // No chat to name: the window reads none as the lead's.
-  }
-  const reply = personsGateReply(pd, chat, LEAD_WORD_WINDOW);
-  const held = new Set(reply.elsewhere.map((entry) => entry.id));
-  const answered = ask === undefined || held.size === 0 ? undefined : readAuditShardEvents(pd).findLast((row) =>
-    row.event === "HUMAN_TURN" && held.has(auditBlockField(row.block, "Message Id") ?? "") &&
-    auditBlockField(row.block, OPEN_QUESTION_FIELD) === ask);
-  const id = answered === undefined ? null : auditBlockField(answered.block, "Message Id");
-  const proof = id === null ? null : proveMessage(pd, id, "decision", { request: true });
-  if (proof !== null && "message" in proof) return kept(proof.message);
-  const { readMessage } = require("./aidlc-message-store.ts") as typeof import("./aidlc-message-store.ts");
-  const latest = reply.messageId === null ? null : readMessage(pd, reply.messageId);
-  if (latest === null) return { said: null, fields: {} };
-  // A message the store kept only in part: named, its words left to its record.
-  return latest.cut === true ? { said: null, fields: { "Message Id": latest.id } } : kept(latest);
+  if (message === null) return { said: null, fields: {} };
+  const text = message.words === null ? "" : personsWordsText(message.words);
+  const theirs = text.trim() !== "" && !isNonAnswer(text);
+  return { said: theirs ? text.trim() : null, fields: { "Message Id": message.id, ...(theirs ? { "Person Reply": text } : {}) } };
 }
 
 // The lead's word to build a Unit at the lead's project (`--here <unit>`), in
