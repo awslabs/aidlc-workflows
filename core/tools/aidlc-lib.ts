@@ -27662,9 +27662,9 @@ function readStageBaseline(
 // the baseline as it was at the add, so its existing files are nobody's change;
 // so do the workspace files a clone's install, or the install of a repos.json
 // entry for a folder the person named, wrote (CLONE_WRITES_AT_ROOT). A repo of
-// the work cloned since by git itself (the agent's own clone in a plan step)
-// has no addition: it joins as the commit the clone checked out holds it
-// (clonedRepoListing). A repo the baseline already lists is never touched;
+// the work cloned since by git itself that no add on the record names (the
+// agent's own clone in a plan step) joins as the commit the clone checked out
+// holds it (clonedRepoListing). A repo the baseline already lists is never touched;
 // the latest addition for a repo wins. A repo no longer in the work leaves the
 // baseline, as it left the walk (workspaceSourceState walks intentRepos). An
 // addition missing on this machine leaves the baseline missing, as a missing
@@ -27756,7 +27756,15 @@ function withRepoBaselineAdditions(
     }
     for (const [repo, entries] of byRepo) joined.set(repo, entries);
   }
-  const arrived = [...repos].sort().filter((repo) => !listed.has(repo) && !joined.has(repo)).flatMap((repo) => {
+  const unlisted = [...repos].sort().filter((repo) => !listed.has(repo) && !joined.has(repo));
+  // A repo an add on the record names joins by that add or not at all, also
+  // when the caller hid its row: the merge chain's opening check reads the work
+  // as it stood at its first landing (currentSwarmSourceMergeChain).
+  const named = new Set(unlisted.length === 0 ? [] : [...rows, ...readAuditShardEvents(projectDir, intent, space)]
+    .filter((row) => row.event === "INTENT_REPOS_CHANGED")
+    .flatMap((row) => ["Added", "Cloned"].flatMap((field) => (auditBlockField(row.block, field) ?? "").split(",")))
+    .map((name) => name.trim()));
+  const arrived = unlisted.filter((repo) => !named.has(repo)).flatMap((repo) => {
     const dir = repoDir(projectDir, repo);
     const cloned = isGitRepoDir(dir)
       ? clonedRepoListing(dir, (commit, followLinks) => {
