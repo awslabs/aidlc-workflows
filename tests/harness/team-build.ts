@@ -18,6 +18,7 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "./fixtures.ts";
+import { readConductorSurface } from "./conductor-skill.ts";
 
 export const UNIT = join(AIDLC_SRC, "tools", "aidlc-unit.ts");
 export const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
@@ -271,7 +272,7 @@ export function kindsEverySkillHandles(): Set<string> {
     .filter((path) => existsSync(path));
   expect(skills).toHaveLength(7);
   const tables = skills.map((path) =>
-    new Set([...readFileSync(path, "utf-8").matchAll(/^\| `([a-z-]+)` \|/gm)].map((row) => row[1]).filter((kind) => kind !== "kind")));
+    new Set([...readConductorSurface(path).matchAll(/^\| `([a-z-]+)` \|/gm)].map((row) => row[1]).filter((kind) => kind !== "kind")));
   return new Set([...tables[0]].filter((kind) => tables.every((table) => table.has(kind))));
 }
 
