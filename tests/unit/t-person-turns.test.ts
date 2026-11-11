@@ -580,6 +580,26 @@ describe("person-turn check", () => {
     expect(drive.unbacked()).toHaveLength(4);
   });
 
+  // The engine reads every shard of the work for the Units' approvals, so a
+  // person who builds the second Unit in a fresh clone settles the stage there.
+  test("a Unit approved in another clone's shard counts toward the stage the engine settles in this one", () => {
+    const dir = project();
+    seedBoltDag(dir, ["core", { name: "extra", depends_on: ["core"] }]);
+    const drive = new PersonTurnLedger(dir);
+    drive.sent("start");
+    const fresh = join(dirname(seededAuditShard(dir)), "aaaa-fresh-clone.md");
+    const checkpoint = (unit: string, shard: string) => {
+      row(dir, "DECISION_RECORDED", { Stage: "code-generation", Checkpoint: "Construction Unit Approval", Unit: unit, Kind: "unit" }, shard);
+      drive.sent(`{"Approve this completed ${unit}?":"Approve"}`);
+      row(dir, "GATE_APPROVED", { Stage: "code-generation", Checkpoint: "construction-unit", Unit: unit, "Gate Stages": "code-generation" }, shard);
+    };
+    checkpoint("core", seededAuditShard(dir));
+    checkpoint("extra", fresh);
+    row(dir, "STAGE_AWAITING_APPROVAL", { Stage: "code-generation" }, fresh);
+    row(dir, "GATE_APPROVED", { Stage: "code-generation" }, fresh);
+    expect(drive.unbacked()).toEqual([]);
+  });
+
   test("a gate in a single-stage run is not opened by the main workflow's gate", () => {
     const dir = project();
     row(dir, "STAGE_AWAITING_APPROVAL", { Stage: "user-stories" });
