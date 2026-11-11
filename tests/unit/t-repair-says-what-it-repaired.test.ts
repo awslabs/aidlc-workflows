@@ -182,11 +182,7 @@ describe("a repair the person did not cause never claims their edit", () => {
     const refused = answer(proj, "Approve Plan");
     expect(refused.message).toContain("Testing Contract");
     claimsNoEditOfTheirs(refused.message, "the refusal");
-    const repair = next(proj);
-    expect(repair.kind).toBe("run-stage");
-    expect(repair.plan_approval?.status).toBe("repair");
-    claimsNoEditOfTheirs(JSON.stringify(repair), "the repair directive");
-    writePlan(proj, "- [ ] Step 2: a test for empty titles\n");
+    // The engine writes the block back itself and asks: no repair step for the agent.
     const asked = next(proj);
     expect(asked.ask_type).toBe("plan-approval");
     expect(asked.question).toBe("Approve the code plan?");
@@ -243,9 +239,6 @@ describe("a repair the person did not cause never claims their edit", () => {
     writeFileSync(planPath(proj), readFileSync(planPath(proj), "utf-8").replace('"version": 1', '"version": 1,,'), "utf-8");
     reply(proj, "done");
     expect(answer(proj, "Approve Plan").message).toContain("broke the Testing Contract block");
-    const repair = next(proj);
-    expect(repair.plan_approval?.status).toBe("repair");
-    writePlan(proj, "- [ ] Step 2: handle unicode\n");
     expect(next(proj).question).toBe("I repaired the plan's Testing Contract (the test rules your build follows). Build your edited plan?");
   });
 });

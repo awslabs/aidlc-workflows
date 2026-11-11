@@ -2675,7 +2675,11 @@ settings keeps it; such a run has no gate, so it has no line.
 `resolve`/`render` read the active space's org/team/project Testing Posture
 sections, resolve methodology/order independently from ancillary coverage and
 tooling notes, combine the active scope and Test Strategy obligations, and emit
-the structured contract plus methodology-specific plan profile.
+the structured contract plus methodology-specific plan profile. The conductor
+runs `render` only to read the contract: `next` writes the rendered block into
+`code-generation-plan.md` itself before it asks, when the block is missing,
+broken or out of date, unless its `## Testing Contract` section holds a heading
+or a plan step, or the plan is not UTF-8 text.
 `reply [--session <id>]` prints, read-only, whether the person has replied to the
 pending Plan Approval question yet, so the conductor knows whether to read their
 reply and record their choice or to wait.
