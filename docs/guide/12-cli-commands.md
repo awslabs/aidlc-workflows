@@ -752,7 +752,9 @@ It commits what git shows changed here (files git does not track included,
 ignored files and AI-DLC's own part of `.gitignore`, `AGENTS.md` and
 `opencode.json` left out), then pushes the integration branch to the remote
 with a plain push, never forced, so the teams can take Units from the plan or
-see a Unit that landed. After it, this checkout shows the board instead of
+see a Unit that landed. Once it has pushed, it names what it committed: how
+many files and, by name as changed, new or deleted, up to ten outside
+`aidlc/`, with how many more. After it, this checkout shows the board instead of
 building Units. A push the remote refuses keeps the commit and says why; pull
 the branch, then share again. `/aidlc` offers this step itself when it is due:
 before a Unit would start on the lead's checkout, and after a land the remote
@@ -767,7 +769,8 @@ commits the Unit's own work: every change to a tracked file, the record under
 `aidlc/`, and the new files the Unit's source manifest lists (what its Code
 Generation says it wrote). Other new files, such as AI-DLC's own install or a
 `node_modules` your `.gitignore` does not list, stay on disk uncommitted, and
-the publish says once how many it left out. `--include <path>` puts a new file
+the publish says once how many it left out. It names what it committed the
+same way the share does. `--include <path>` puts a new file
 or folder in as well (give it once for each, or `.` for all of them); run it
 after a publish to publish again with them:
 
