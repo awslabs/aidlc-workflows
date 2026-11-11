@@ -2631,7 +2631,10 @@ export function parkWorkflow(pd: string, opts: { attended?: boolean } = {}): Par
         "each Bolt), then park.",
     );
   }
-  const scopeStamp = validateLiveUnitScope(pd);
+  // A park is the person's stop: a checkout that holds a Unit claim parks that
+  // Unit there, and any other parks the work, a lead's whose teams hold the
+  // Units included. The Unit scope check refuses Unit work, never a stop.
+  const scopeStamp = readApplicableTeamUnitScopeStamp(pd, initialContent);
   if (scopeStamp) {
     writeFileSync(
       unitParkedPath(pd),
