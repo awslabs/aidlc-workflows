@@ -1687,11 +1687,13 @@ function hasCurrentTeamUnitActivity(
     if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
     return a.pos - b.pos;
   });
+  // A jump that kept each Unit's work with its team (aidlc-jump.ts records
+  // `Unit Work: kept`) starts no new attempt: the teams' claims carry on.
   let floor = -1;
   for (let i = 0; i < rows.length; i++) {
     if (
       rows[i].event === "WORKFLOW_STARTED" ||
-      rows[i].event === "STAGE_JUMPED"
+      (rows[i].event === "STAGE_JUMPED" && auditBlockField(rows[i].block, "Unit Work") !== "kept")
     ) {
       floor = i;
       if (
