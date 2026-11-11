@@ -55,7 +55,7 @@ import {
 export { entrySkillInvocation, repoNameProblem, repoNameRefusal, SPACE_NAME_REGEX } from "./aidlc-runtime-paths.ts";
 import { humanTurnMintAllowed, personGitNameField } from "./aidlc-git-name.ts";
 export { humanTurnMintAllowed } from "./aidlc-git-name.ts";
-import { hasRealGitEntry, submoduleLeavesProjectRepo } from "./aidlc-git.ts";
+import { gitCommonDirOf, hasRealGitEntry, submoduleLeavesProjectRepo } from "./aidlc-git.ts";
 export { hasRealGitEntry } from "./aidlc-git.ts";
 import { NEXT_VALUELESS_FLAGS, nextFlagTakesFollowing, unitCommandArgv } from "./aidlc-command.ts";
 import { pluginCommandOnLine, projectPluginCommands } from "./aidlc-plugin-commands.ts";
@@ -172,7 +172,6 @@ import {
   delegatedWorktreeIntent,
   displaySlugFromDirName,
   getField,
-  gitRevParseSingle,
   helperSessionPath,
   helperSessionRoot,
   idSuffix,
@@ -4139,17 +4138,31 @@ export function relativeCodekbDir(projectDir: string, repo: string, space?: stri
   return `aidlc/spaces/${sp}/codekb/${repo}`;
 }
 
+// The repository NAME for a checkout whose project root is a LINKED GIT
+// WORKTREE, else null so the caller keeps `basename(projectDir)`.
+//
+// `git worktree add` names its directory after a branch, so in a linked worktree
+// basename(projectDir) is a branch name rather than a repository name. The shared
+// git dir lives inside the MAIN checkout, so its parent's basename is the
+// repository name. Both git dirs are resolved against projectDir, where git
+// measured them (gitCommonDirOf), and a linked worktree is the only topology
+// where they differ (`--git-dir` is `<common>/worktrees/<name>`): a main
+// checkout, a subdirectory of one and a repository nested inside another all
+// return null and keep basename(projectDir).
+//
+// Deliberately NOT the `origin` remote: that would also cover a clone whose
+// directory name differs from the repository, but remote names are mutable (a
+// rename or a re-point would move a workspace's store) and it would change
+// resolution for every checkout whose remote and directory names differ. A
+// location is stable; widening identity to the remote is a separate decision.
 function mainCheckoutRepoName(projectDir: string): string | null {
-  const gitDirRaw = gitRevParseSingle(projectDir, "--git-dir");
-  if (gitDirRaw === null) return null; // not a git repository
-  const commonRaw = gitRevParseSingle(projectDir, "--git-common-dir");
-  if (commonRaw === null) return null;
+  const dirs = gitCommonDirOf(projectDir);
+  if (!dirs.ok) return null; // not a git repository
   let gitDirAbs: string;
   let commonAbs: string;
   try {
-    // Resolved against projectDir — the directory both were measured in.
-    gitDirAbs = realpathSync(resolvePath(projectDir, gitDirRaw));
-    commonAbs = realpathSync(resolvePath(projectDir, commonRaw));
+    gitDirAbs = realpathSync(dirs.own);
+    commonAbs = realpathSync(dirs.common);
   } catch {
     return null;
   }

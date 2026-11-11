@@ -8,7 +8,7 @@
 // swarm referee consume the same contract.
 
 import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
-import { gitSubmoduleNames } from "./aidlc-git.ts";
+import { gitCommonDirOf, gitSubmoduleNames } from "./aidlc-git.ts";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
@@ -5181,6 +5181,12 @@ function worktreeApprovalGit(cwd: string, args: string[]): string {
   return result.stdout.trim();
 }
 
+function worktreeApprovalCommonDir(cwd: string): string {
+  const dirs = gitCommonDirOf(cwd);
+  if (!dirs.ok) throw new Error(`Worktree approval Git operation refused: ${dirs.stderr || "rev-parse --git-common-dir"}`);
+  return dirs.common;
+}
+
 function approvalPathKey(path: string): string {
   const canonical = realpathSync(path).replaceAll("\\", "/");
   return process.platform === "win32" ? canonical.toLowerCase() : canonical;
@@ -5218,8 +5224,8 @@ function approvalWorktreeProvenance(parentDir: string, childDir: string, unit: s
   ));
   const creation = creations.length === 1 ? creations[0] : null;
   if (unreadable.length || !creation) throw new Error("Worktree creation authority is unavailable or ambiguous.");
-  const common = approvalPathKey(resolve(repo.cwd, worktreeApprovalGit(repo.cwd, ["rev-parse", "--git-common-dir"])));
-  const childCommon = approvalPathKey(resolve(child, worktreeApprovalGit(child, ["rev-parse", "--git-common-dir"])));
+  const common = approvalPathKey(worktreeApprovalCommonDir(repo.cwd));
+  const childCommon = approvalPathKey(worktreeApprovalCommonDir(child));
   const commonHash = createHash("sha256").update(common).digest("hex");
   const recordedPath = auditBlockField(creation.block, "Worktree path");
   const floor = latestMainWorkflowStageRunFloorForProject(parent, CODE_GENERATION_STAGE);

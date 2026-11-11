@@ -1,7 +1,7 @@
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
 import { CHECKPOINT_GLOSS } from "./aidlc-guard-fences.ts";
-import { git, isGitRepo } from "./aidlc-git.ts";
+import { git, inProject, isGitRepo, projectInRepo } from "./aidlc-git.ts";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -4706,17 +4706,14 @@ function linkedWorktrees(dir: string, outside: boolean): string[] {
 function nestedCheckouts(root: string): string[] {
   const starts: string[] = [];
   const listed = git(root, ["status", "--porcelain", "-z", "--ignored", "--untracked-files=normal", "--", "."]);
-  const prefix = listed === null ? null : git(root, ["rev-parse", "--show-prefix"]);
-  if (listed !== null && prefix !== null) {
+  const at = listed === null ? null : projectInRepo(root);
+  if (listed !== null && at !== null) {
     // Porcelain paths are relative to the repository's top, which is above the
     // project when it is a folder of a larger repo.
-    const under = prefix.trim();
     for (const entry of listed.split("\0")) {
       if (!entry.startsWith("?? ") && !entry.startsWith("!! ")) continue;
-      const path = entry.slice(3);
-      if (path.endsWith("/") && path.startsWith(under) && path.length > under.length) {
-        starts.push(path.slice(under.length, -1));
-      }
+      const path = inProject(at.prefix, entry.slice(3));
+      if (path?.endsWith("/")) starts.push(path.slice(0, -1));
     }
   } else {
     try {

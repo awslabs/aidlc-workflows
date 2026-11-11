@@ -20,6 +20,7 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { extractTarGz } from "./aidlc-archive.ts";
+import { gitCommonDirOf } from "./aidlc-git.ts";
 import {
   renderCompletion,
   type Shell,
@@ -2854,20 +2855,10 @@ export async function installPinnedRelease(options: {
 // The repository's shared git directory and this checkout's own one, resolved;
 // they differ only in a linked worktree (`git worktree add`).
 function gitDirs(dir: string): { common: string; own: string } | null {
-  const result = Bun.spawnSync(["git", "rev-parse", "--git-common-dir", "--git-dir"], {
-    cwd: dir,
-    stdin: "ignore",
-    stdout: "pipe",
-    stderr: "ignore",
-    timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
-  });
-  const [common, own] = Buffer.from(result.stdout ?? new Uint8Array())
-    .toString("utf-8")
-    .trim()
-    .split(/\r?\n/);
-  if (result.exitCode !== 0 || !common || !own) return null;
+  const dirs = gitCommonDirOf(dir);
+  if (!dirs.ok) return null;
   try {
-    return { common: realpathSync(resolve(dir, common)), own: realpathSync(resolve(dir, own)) };
+    return { common: realpathSync(dirs.common), own: realpathSync(dirs.own) };
   } catch {
     return null;
   }

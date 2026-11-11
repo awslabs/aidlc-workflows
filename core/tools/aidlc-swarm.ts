@@ -99,6 +99,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, posix, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry } from "./aidlc-audit.ts";
+import { gitCommonDirOf } from "./aidlc-git.ts";
 import { commandChat } from "./aidlc-questions.ts";
 import { hostNamesThisChat } from "./aidlc-record-core.ts";
 import { swarmBuildingChat } from "./aidlc-swarm-checkpoints.ts";
@@ -2328,6 +2329,12 @@ function resumeGit(cwd: string, args: string[]): string {
   return result.stdout.trim();
 }
 
+function resumeCommonDir(cwd: string): string {
+  const dirs = gitCommonDirOf(cwd);
+  if (!dirs.ok) throw new Error(`Cannot validate preserved worktree: ${dirs.stderr}`);
+  return dirs.common;
+}
+
 function resumePathKey(path: string): string {
   const canonical = realpathSync(path).replaceAll("\\", "/");
   return process.platform === "win32" ? canonical.toLowerCase() : canonical;
@@ -2502,8 +2509,8 @@ function validateSwarmResume(
   const meta = JSON.parse(readRegularFileNoFollowOrThrow(metaPath, "preserved worktree metadata").toString("utf-8"));
   const recordedPath = creation && auditBlockField(creation.block, "Worktree path");
   const branch = identity.branch;
-  const rootCommon = resumePathKey(resolve(repoCwd, resumeGit(repoCwd, ["rev-parse", "--git-common-dir"])));
-  const childCommon = resumePathKey(resolve(worktree, resumeGit(worktree, ["rev-parse", "--git-common-dir"])));
+  const rootCommon = resumePathKey(resumeCommonDir(repoCwd));
+  const childCommon = resumePathKey(resumeCommonDir(worktree));
   const commonHash = createHash("sha256").update(rootCommon).digest("hex");
   if (!creation || !recordedPath ||
     resumePathKey(resolveAuditWorktreePath(pd, recordedPath)) !== resumePathKey(worktree) ||
