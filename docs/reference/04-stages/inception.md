@@ -328,6 +328,10 @@ On affirmation, content is promoted to:
 - `aidlc/spaces/<active-space>/memory/project.md` -- append-under-heading
   via `appendUnderHeading` (rules accumulate; date stamps distinguish them).
 
+A heading either file lacks is added at its end first (`ensureHeading`), so the
+save also works in a space made by `space create`, whose `team.md` and
+`project.md` start as one line, and in a file a team trimmed by hand.
+
 ### Steps
 
 1. **Classify Inputs** -- Read `aidlc-state.md` to classify greenfield vs
