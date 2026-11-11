@@ -324,7 +324,7 @@ import { codeGenerationCompletionPlanWaits, deriveTeamUnitProgressModel, SWITCH_
 import {
   askedQuestionFields,
   commandChat,
-  latestAskedQuestion,
+  gateQuestion,
   QUESTION_ID_FIELD,
   questionShows,
   shownAgainFields,
@@ -7158,7 +7158,7 @@ function gateAskFields(
 // QUESTION_SHOWN row when this chat had not seen it. Record-only.
 function openGateQuestionId(pd: string, slug: string, unit: string | null): string | null {
   try {
-    const open = latestAskedQuestion(pd, { event: "STAGE_AWAITING_APPROVAL", type: "gate", stage: slug, unit });
+    const open = gateQuestion(pd, slug, unit);
     if (open === null) return null;
     const shown = shownAgainFields(pd, open.id, commandChat(pd));
     if (shown !== null) emitAudit(pd, "QUESTION_SHOWN", shown);
