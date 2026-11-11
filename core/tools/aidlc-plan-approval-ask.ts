@@ -1707,13 +1707,16 @@ function planQuestionDue(projectDir: string): boolean {
 /**
  * The engine's Plan Approval question while it is the open step: whether every
  * plan it asks about has an answer, the choice on record when every plan has
- * the same one, and whether the person is editing the files. It reads none of
- * the person's words: the conductor reads their reply and records the choice.
- * Null when it is not the open step.
+ * the same one, whether the person is editing the files, and its question id
+ * (null on a record from before ids). It reads none of the person's words: the
+ * conductor reads their reply and records the choice. Null when it is not the
+ * open step.
  */
 export function openPlanApprovalQuestion(
   projectDir: string,
-): { answered: boolean; editing: boolean; recorded: PlanApprovalAnswerChoice | null } | null {
+): {
+  answered: boolean; editing: boolean; recorded: PlanApprovalAnswerChoice | null; questionId: string | null;
+} | null {
   try {
     const open = currentPlanApprovalAsk(projectDir, "all");
     if (open === null) return null;
@@ -1725,6 +1728,7 @@ export function openPlanApprovalQuestion(
       answered,
       editing: record.mode === "editing",
       recorded: record.mode === "editing" ? "edit" : answered && only !== null && only !== "repair" ? only : null,
+      questionId: record.questionId ?? null,
     };
   } catch {
     return null;
@@ -2294,8 +2298,9 @@ export function openEngineQuestion(projectDir: string): string | null {
 
 /**
  * The person sent the words of this message to separate new work, to a
- * reshape, or to park the work: the code plan question of this piece of work
- * keeps none of them as its reply.
+ * reshape, or to park the work, or sent them in a chat that was not shown the
+ * question as it stands: the code plan question of this piece of work keeps
+ * none of them as its reply.
  */
 export function withdrawPlanApprovalReplies(projectDir: string, which: { messageId: string }): void {
   const drop = (reply: PlanApprovalAskReply): boolean => reply.messageId === which.messageId;
