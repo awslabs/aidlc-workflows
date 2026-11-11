@@ -1446,9 +1446,9 @@ export function copyChannelToolScripts(): string[] {
 }
 
 // The dispatcher's public commands, outside its engine namespace, that every
-// install pre-approves, each spelled exactly as AI-DLC runs it: the doctor,
-// status and version utilities in both spellings agents use (doctor with or
-// without `--verbose`), config's read-only forms (`--show`, with or without
+// install pre-approves, each spelled exactly as AI-DLC runs it: the doctor and
+// version utilities in both spellings agents use (doctor with or without
+// `--verbose`), status as `--status`, config's read-only forms (`--show`, with or without
 // `--json`, top level or per section, and `--help`), and
 // turning one recorded check back on
 // (`config flags --clear-bypass <switch> --yes`, the form the skills name),

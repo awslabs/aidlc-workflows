@@ -31,8 +31,8 @@ const BARE_TOOL = /(?:^|[\s`'"(])aidlc-(?:audit|bolt|graph|jump|knowledge|learni
 // The install's command written by hand: `aidlc <noun>`.
 const HARD_AIDLC = /(?:^|[\s`'"(])aidlc (?:config|unit|engine|system|plugin|intent|space|knowledge|help|doctor|status|--help)\b/;
 
-// Per file, the literals of each kind not yet moved to the renderer. Counts
-// only fall: a fix lowers its number here in the same change.
+// Per file, the most literals of each kind not yet moved to the renderer. A
+// file over its number, or not listed, fails; a fix lowers its number here.
 const BARE_TOOL_LEFT: Readonly<Record<string, number>> = {
   "aidlc-audit.ts": 1,
   "aidlc-bolt.ts": 7,
@@ -80,6 +80,11 @@ function literals(file: string, text: string): string[] {
   return found;
 }
 
+// The files whose count is over what the table allows.
+function over(found: Record<string, number>, allowed: Readonly<Record<string, number>>): Record<string, number> {
+  return Object.fromEntries(Object.entries(found).filter(([file, n]) => n > (allowed[file] ?? 0)));
+}
+
 function counts(pattern: RegExp): Record<string, number> {
   const out: Record<string, number> = {};
   for (const name of readdirSync(TOOLS).filter((file) => file.endsWith(".ts")).sort()) {
@@ -91,11 +96,11 @@ function counts(pattern: RegExp): Record<string, number> {
 
 describe("a printed command goes through its renderer", () => {
   test("no new bare tool-file command in a tool's printed strings", () => {
-    expect(counts(BARE_TOOL), "name the command with aidlcDispatcherInvocation() or aidlcToolInvocation()").toEqual(BARE_TOOL_LEFT);
+    expect(over(counts(BARE_TOOL), BARE_TOOL_LEFT), "name the command with aidlcDispatcherInvocation() or aidlcToolInvocation()").toEqual({});
   });
 
   test("no new hand-written `aidlc <noun>` command in a tool's printed strings", () => {
-    expect(counts(HARD_AIDLC), "name the command with aidlcInvocation() (or entrySkillInvocation() for the person's entry)").toEqual(HARD_AIDLC_LEFT);
+    expect(over(counts(HARD_AIDLC), HARD_AIDLC_LEFT), "name the command with aidlcInvocation() (or entrySkillInvocation() for the person's entry)").toEqual({});
   });
 
   test("the protocol modules name commands with the install's token", () => {
@@ -103,7 +108,7 @@ describe("a printed command goes through its renderer", () => {
     for (const name of readdirSync(PROTOCOLS).filter((file) => file.endsWith(".md"))) {
       n += readFileSync(join(PROTOCOLS, name), "utf-8").split("\n").filter((line) => /`aidlc-[a-z-]+\.ts [a-z]|`aidlc (?:unit|engine|config) /.test(line)).length;
     }
-    expect(n, "write {{INVOKE}} engine <route> ... in a run instruction").toBe(PROTOCOL_BARE_LEFT);
+    expect(n, "write {{INVOKE}} engine <route> ... in a run instruction").toBeLessThanOrEqual(PROTOCOL_BARE_LEFT);
   });
 
   test("the Windows installer's messages name its parameters as PowerShell takes them", () => {

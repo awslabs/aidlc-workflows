@@ -155,6 +155,13 @@ describe.skipIf(process.platform === "win32")("a plan token that no longer match
     expect(next).toStartWith("bun .claude/tools/aidlc.ts config flags --bypass AIDLC_DISABLE_SENSORS --project");
     expect(next).toContain("--dry-run");
     expect(next).not.toContain("--plan-token");
+    // Run as printed, it plans the same change and prints the token for it.
+    const [, printedTool, ...args] = words(next);
+    const replanned = run(join(project, printedTool), args, project);
+    expect(replanned.status, replanned.out).toBe(0);
+    const fresh = (JSON.parse(replanned.out) as { data: { planToken: string } }).data.planToken;
+    expect(fresh).toStartWith("sha256:");
+    expect(run(own, ["config", "flags", "--bypass", "AIDLC_DISABLE_SENSORS", "--project", "--plan-token", fresh], project).status).toBe(0);
   });
 });
 

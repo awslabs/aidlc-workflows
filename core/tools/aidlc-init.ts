@@ -2987,8 +2987,8 @@ function configMutationRerun(
 
 // A `config` command about the project's `harnessDir` tree, run as shown from
 // where the user is. A section names the harness when the project has more
-// than one, as `modelsCommand` does; bare `config` is the walk, and args that
-// name a harness already are left as they are.
+// than one, as `modelsCommand` does; bare `config` and args that name a
+// harness already are left as they are.
 function configCommandForHarness(projectDir: string, harnessDir: string, args = ""): string {
   const harness = discoverProjectHarnesses(projectDir).find((item) => item.harnessDir === harnessDir)?.distribution;
   const named = args && !args.startsWith("-") && !/(?:^| )--harness(?: |$)/.test(args) ? namedHarness(projectDir, harness) : "";
@@ -12865,7 +12865,7 @@ function recordBypassesOnly(
       emitResult(failure(
         `config plan changed after approval; run ${configCommand("--dry-run")} again`,
         EXIT.integrity,
-        configRerunAsking(input, projectDir, ["--dry-run"], ["--plan-token"]) ?? configCommand("--dry-run --json"),
+        configRerunAsking(input, projectDir, ["--dry-run", "--json"], ["--plan-token"]) ?? configCommand("--dry-run --json"),
       ), options);
       return;
     }
@@ -14386,7 +14386,7 @@ export async function main(
       emitResult(failure(
         `config plan changed after approval; run ${configCommand("--dry-run")} again`,
         EXIT.integrity,
-        configRerunAsking(input, projectDir, ["--dry-run"], ["--plan-token"]) ?? configCommand("--dry-run --json"),
+        configRerunAsking(input, projectDir, ["--dry-run", "--json"], ["--plan-token"]) ?? configCommand("--dry-run --json"),
       ), options);
       return;
     }

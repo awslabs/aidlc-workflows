@@ -47,6 +47,9 @@ describe("a Windows path with an apostrophe reads alike in both shells an agent 
   test("a backslash bash reads as an escape keeps the PowerShell form", () => {
     expect(quoteCommandArgument("C:\\it's\\", "windows")).toBe("'C:\\it''s\\'");
     expect(quoteCommandArgument("\\\\server\\it's", "windows")).toBe("'\\\\server\\it''s'");
+    // What would expand inside double quotes keeps it too, backslashes or not.
+    expect(quoteCommandArgument("C:\\O'B\\$x", "windows")).toBe("'C:\\O''B\\$x'");
+    expect(quoteCommandArgument("C:\\O'B\\`x", "windows")).toBe("'C:\\O''B\\`x'");
   });
 });
 
