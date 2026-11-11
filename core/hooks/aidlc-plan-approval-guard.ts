@@ -2189,18 +2189,18 @@ async function mutationIntent(
     const concreteTargets = targets.length > 0 && !wildcardTargets;
     const invocations = shellCommandInvocationDetails(analysed);
     // An apply_patch whose patch the command holds writes what its patch names;
-    // one fed its patch later writes what nobody can see.
-    const unseen = !powerShellLine && unseenPatch(read, reading?.patches.length ?? 0);
-    patchUnseen = unseen;
+    // one fed its patch later, or a heredoc the reading kept, writes what
+    // nobody has read.
+    const unseen = powerShellLine ? null : unseenPatch(read, reading?.patches.length ?? 0);
+    patchUnseen = unseen === "bare";
     const dynamic =
       shellUsesDynamicEvaluation(analysed) ||
       shellCommandAltersExecutableResolution(analysed);
     opaqueShell =
-      dynamic ||
+      dynamic || unseen !== null ||
       invocations.some((invocation) =>
-        isPatchCall(invocation)
-          ? unseen
-          : shellInvocationNeedsApproval(projectDir, from, invocation, concreteTargets, analysed, dialect, context)
+        !isPatchCall(invocation) &&
+        shellInvocationNeedsApproval(projectDir, from, invocation, concreteTargets, analysed, dialect, context)
       );
     // The rest of a line it cannot read is read as before, its heredoc too.
     if (opaqueShell && read !== command) {
@@ -2245,7 +2245,7 @@ async function mutationIntent(
     // hide a command or a write target, and a shell script run by name hides
     // commands the lexer never sees.
     readable = !dynamic && !/[^\S \t\n]/u.test(read) && !read.includes("\\\n") && !/\\[<>&|;]/.test(read) &&
-      !(powerShellHint && powerShellCommand === null) && !wildcardTargets && !unseen &&
+      !(powerShellHint && powerShellCommand === null) && !wildcardTargets && unseen === null &&
       !invocations.some((invocation) => {
         const program = normalizedCommandName(invocation.executable ?? invocation.name);
         return SHELL_INTERPRETERS.has(program) || writesThroughOption(program, invocation.args) ||

@@ -3848,6 +3848,22 @@ describe("t265b hook lifecycle", () => {
       ]) {
         expect(runHook(proj, BASH(command)).stderr.trim(), command).toBe(unread);
       }
+      // A patch heredoc the walk keeps as written is a write nobody has read:
+      // today's words, with no added sentence.
+      const code = patch(["*** Add File: src/x.ts", "+export const x = 1;"]);
+      for (const command of [
+        `apply_patch <<'PATCH'\n${code}`,
+        `apply_patch <<'PATCH'\n${code}\nPATCH\nls src/[a-z]*.ts`,
+        `apply_patch <<'PATCH' && ls src/*.ts\n${code}\nPATCH`,
+        `[ -d src ] && apply_patch <<'PATCH'\n${code}\nPATCH`,
+        `(apply_patch <<'PATCH'\n${code}\nPATCH\n)`,
+        `apply_patch <<'PATCH' || { echo failed; }\n${code}\nPATCH`,
+        // The binary reads a redirect of its input, never the heredoc beside it.
+        `apply_patch <<'PATCH' < p.patch\n${patch(add(plan))}\nPATCH`,
+      ]) {
+        const result = runHook(proj, BASH(command));
+        expect({ code: result.code, stderr: result.stderr.trim() }, command).toEqual({ code: 2, stderr: unread });
+      }
       // A heredoc with something else in its pipeline is read as before.
       expect(runHook(proj, BASH(`apply_patch <<'PATCH' | tee log.txt\n${patch(add(plan))}\nPATCH`)).stderr)
         .toContain("Code generation cannot modify workspace paths");

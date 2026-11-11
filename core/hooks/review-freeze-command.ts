@@ -1955,7 +1955,9 @@ export function heredocReading(command: string): { text: string; patches: string
     const literal = (call: ShellInvocationDetails, names: string[]): boolean =>
       names.includes(call.name) && (call.executable ?? call.name) === call.name &&
       !call.ambiguous && !call.launchers?.length && !call.dataDriven && !call.executableResolutionChanged;
-    const patch = calls.length === 1 && literal(calls[0], ["apply_patch", "applypatch"]) && calls[0].args.length === 0;
+    // With its input redirected the binary reads that, never this heredoc.
+    const patch = calls.length === 1 && literal(calls[0], ["apply_patch", "applypatch"]) && calls[0].args.length === 0 &&
+      !pipeline.raw.includes("<");
     if (
       !(patch || (calls.length > 0 && calls.every((call) => literal(call, ["cat", "tee"])))) ||
       (!heredoc.quoted && /[$`\\]/.test(heredoc.body))
@@ -2013,17 +2015,21 @@ export function shellPatchTargets(command: string, cwd = process.cwd()): string[
   return [...out];
 }
 
-// An apply_patch or applypatch whose patch the command does not hold: no
-// operand once its redirections are set aside, in a segment with no heredoc,
-// beyond the `read` heredoc patches heredocReading took from `text`.
-export function unseenPatch(text: string, read: number): boolean {
+// An apply_patch or applypatch with no operand once its redirections are set
+// aside, whose patch nothing here has read: "bare" when the command does not
+// hold it (a segment with no heredoc, beyond the `read` heredoc patches
+// heredocReading took from `text`), "held" when it is fed a heredoc
+// heredocReading kept as written.
+export function unseenPatch(text: string, read: number): "bare" | "held" | null {
   let bare = 0;
+  let held = false;
   for (const segment of shellCommandSegments(text)) {
-    if (segment.includes("<<")) continue;
     const invocation = shellInvocation(shellWords(withoutRedirections(segment)));
-    if (invocation && (invocation.name === "apply_patch" || invocation.name === "applypatch") && invocation.args.length === 0) bare++;
+    if (!invocation || (invocation.name !== "apply_patch" && invocation.name !== "applypatch") || invocation.args.length > 0) continue;
+    if (segment.includes("<<")) held = true;
+    else bare++;
   }
-  return bare > read;
+  return bare > read ? "bare" : held ? "held" : null;
 }
 
 export function shellWriteTargets(
