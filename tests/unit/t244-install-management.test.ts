@@ -1650,6 +1650,37 @@ describe("t244 management lifecycle", () => {
     expect(readFileSync(join(project, "keep.txt"), "utf-8")).toBe("project-owned\n");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // Kiro IDE's terminal records are AI-DLC's own files in the install folder
+  // (the shell at each chat start on Windows, a slow reply, its one warning).
+  // Uninstall keeps them with the machine's other answers without calling them
+  // files it did not install; --purge removes them and the emptied folder.
+  for (const purge of [false, true]) {
+    test(`uninstall${purge ? " --purge" : ""} takes Kiro IDE's terminal records as AI-DLC's own`, async () => {
+      const release = fixture(AIDLC_VERSION, { binary: "executable" });
+      const workspace = temp("aidlc-t244-kiro-records-");
+      const machine = join(workspace, "install");
+      const project = join(workspace, "project");
+      mkdirSync(join(project, ".git"), { recursive: true });
+      const env = envFor(machine);
+      const installed = run(LIFECYCLE, ["update", "--version", AIDLC_VERSION, "--from", release], project, env);
+      expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+      const names = ["kiro-ide-terminal-shell", "kiro-ide-terminal-dropped", "kiro-ide-terminal-warned"];
+      const records = names.map((name) => join(machine, name));
+      for (const path of records) writeFileSync(path, "recorded\n");
+      const uninstalled = run(LIFECYCLE, ["uninstall", "--yes", ...(purge ? ["--purge"] : [])], project, env);
+      expect(uninstalled.status, uninstalled.stdout + uninstalled.stderr).toBe(0);
+      const said = uninstalled.stdout + uninstalled.stderr;
+      expect(said).not.toContain(LEFT_HEADING);
+      for (const name of names) expect(said).not.toContain(name);
+      if (purge) {
+        await waitForAbsent([...records, machine]);
+      } else {
+        await waitForAbsent([join(machine, "versions", AIDLC_VERSION)]);
+        for (const path of records) expect(readFileSync(path, "utf-8"), path).toBe("recorded\n");
+      }
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
+
   for (const purge of [false, true]) {
     test(`uninstall${purge ? " --purge" : ""} preserves unowned and changed files within and outside the install`, async () => {
       const release = fixture(AIDLC_VERSION, { binary: "executable" });
