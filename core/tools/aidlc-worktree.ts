@@ -2216,10 +2216,8 @@ function statusPaths(repoCwd: string): Map<string, string> | null {
 function stagedLandingOf(repoCwd: string, strategy: string, tip: string): boolean {
   if (!/^[0-9a-f]{40,64}$/.test(tip)) return false;
   if (strategy === "squash") {
-    const path = runGit(["rev-parse", "--git-path", "SQUASH_MSG"], repoCwd);
-    if (!path.ok) return false;
-    const file = resolve(repoCwd, path.stdout.trim());
-    if (!existsSync(file)) return false;
+    const file = squashMessagePath(repoCwd);
+    if (file === null || !existsSync(file)) return false;
     return new RegExp(`^commit ${tip}\\r?$`, "m").test(readFileSync(file, "utf-8"));
   }
   if (strategy === "merge") {
@@ -2227,6 +2225,11 @@ function stagedLandingOf(repoCwd: string, strategy: string, tip: string): boolea
     return head.ok && head.stdout.trim() === tip;
   }
   return false;
+}
+
+function squashMessagePath(repoCwd: string): string | null {
+  const path = runGit(["rev-parse", "--git-path", "SQUASH_MSG"], repoCwd);
+  return path.ok ? resolve(repoCwd, path.stdout.trim()) : null;
 }
 
 // The person's hook refused `git commit`. Say so in its own words, leave the
@@ -3011,6 +3014,7 @@ function handleMerge(args: string[]): void {
   }
 
   let commitSha = "";
+  let noCommit = false;
   let stagedTree = "";
   const priorTargetHead = currentSha(repoCwd);
   const statusBefore = statusPaths(repoCwd);
@@ -3050,6 +3054,21 @@ function handleMerge(args: string[]): void {
         errorWithSlug(slug, "cannot resolve the staged squash merge tree");
       }
       stagedTree = staged;
+      // The target already holds all the landing brings (a Unit already green on
+      // a loop-back replay, or one that changed no source): git has nothing to
+      // commit, so the Unit lands on the commit the target is at. git's squash
+      // message for it goes, as a finished commit removes it.
+      if (staged === runGit(["rev-parse", "--verify", "-q", `${priorTargetHead}^{tree}`], repoCwd).stdout.trim()) {
+        const squashMessage = stagedLandingOf(repoCwd, strategy, landingTip) ? squashMessagePath(repoCwd) : null;
+        try {
+          if (squashMessage !== null) rmSync(squashMessage, { force: true });
+        } catch {
+          // Left as git wrote it: the landing stands, and the next commit clears it.
+        }
+        commitSha = priorTargetHead;
+        noCommit = true;
+        break;
+      }
       const c = runGit(["commit", "-m", message], repoCwd);
       if (!c.ok) {
         refuseLanding(slug, repoCwd, wtPath, flags.target, strategy, landingUnit, c);
@@ -3138,13 +3157,13 @@ function handleMerge(args: string[]): void {
     process.exit(1);
   }
 
-  // Cleanup: remove worktree + delete branch. The merge commit at
-  // <commitSha> is now permanent on <target> — failures here leave an
-  // orphan worktree directory and/or branch but DO NOT roll back the
-  // merge. Tag the error message with [merge-succeeded:<sha>] so the
-  // ERROR_LOGGED row carries enough state for doctor to tell
-  // "merge failed entirely" from "merge landed, cleanup orphan remains"
-  // — these need different recovery actions.
+  // Cleanup: remove worktree + delete branch. The landing at <commitSha> (the
+  // commit the target was at, when there was nothing to commit) is now
+  // permanent on <target>: failures here leave an orphan worktree directory
+  // and/or branch but DO NOT roll back the merge. Tag the error message with
+  // [merge-succeeded:<sha>] so the ERROR_LOGGED row carries enough state for
+  // doctor to tell "merge failed entirely" from "merge landed, cleanup orphan
+  // remains": these need different recovery actions.
   const cleanupTag = `[merge-succeeded:${commitSha}]`;
   const landingNotices: string[] = [];
   if (sourceRecord?.kind === "bound") {
@@ -3185,7 +3204,8 @@ function handleMerge(args: string[]): void {
         // The landing is done: an unreadable record only says the line as before.
       }
       const line = combinedLine(sourceRecord.unit, settled, flags.target);
-      const wayBack = granted ? landingWayBack(commitSha, combined, repoTarget.repo, strategy === "merge") : null;
+      // With no commit made, commitSha is another landing's or the person's own.
+      const wayBack = granted && !noCommit ? landingWayBack(commitSha, combined, repoTarget.repo, strategy === "merge") : null;
       const said = wayBack ? `${line} ${wayBack}` : line;
       const kept = granted && selection.sessionId !== null &&
         addPendingPersonLines(pd, selection.sessionId, [said], { forReply: true });
