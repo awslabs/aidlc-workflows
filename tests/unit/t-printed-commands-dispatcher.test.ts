@@ -4,10 +4,11 @@
 // plugin verb prints is a command that runs as printed on the install it came
 // from: on a copy install that is `bun <harness>/tools/aidlc.ts`, never a bare
 // `aidlc`; on Codex the entry is `$aidlc`; a step names a command that exists;
-// and a plugin author's verb shows the verb's own usage.
+// and a plugin author's verb shows the verb's own usage. Plugin sync with no
+// host plugin list and nothing composed has nothing to sync.
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -129,5 +130,43 @@ describe("a plugin author's verb shows its own usage", () => {
     const badBuild = dispatch(["plugin", "build", "--bogus"]);
     expect(badBuild.status).toBe(2);
     expect(badBuild.stderr).toContain('unknown option "--bogus"');
+  });
+});
+
+describe("plugin sync on a host with no plugin list yet", () => {
+  // A project with Claude Code's tree, and a Claude Code home that has never
+  // had a plugin installed (no installed_plugins.json).
+  function project(): { dir: string; env: NodeJS.ProcessEnv } {
+    const dir = temp("aidlc-printed-sync-");
+    mkdirSync(join(dir, ".git"));
+    cpSync(join(REPO_ROOT, "dist", "claude", ".claude"), join(dir, ".claude"), { recursive: true });
+    return {
+      dir,
+      env: { CLAUDE_CONFIG_DIR: temp("aidlc-printed-sync-home-"), CLAUDE_PLUGIN_ROOT: "", PLUGIN_ROOT: "", AIDLC_PLUGIN_ROOT: "" },
+    };
+  }
+  function sync(dir: string, env: NodeJS.ProcessEnv) {
+    const res = spawnSync(BUN, [join(dir, ".claude", "tools", "aidlc-plugin.ts"), "sync"], {
+      cwd: dir,
+      encoding: "utf-8",
+      env: { ...process.env, ...env },
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    return { status: res.status ?? -1, out: `${res.stdout ?? ""}${res.stderr ?? ""}` };
+  }
+
+  test("with nothing composed, there is nothing to sync", () => {
+    const { dir, env } = project();
+    const res = sync(dir, env);
+    expect(res.out.trim()).toBe("no installed plugins; nothing to sync");
+    expect(res.status).toBe(0);
+  });
+
+  test("with a plugin composed and no list to prove it gone, it still refuses", () => {
+    const { dir, env } = project();
+    writeFileSync(join(dir, ".claude", "tools", "data", "plugin-compose-left.json"), "{}\n");
+    const res = sync(dir, env);
+    expect(res.status).toBe(1);
+    expect(res.out).toContain("host inventory unavailable");
   });
 });
