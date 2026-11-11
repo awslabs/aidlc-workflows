@@ -14,7 +14,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
-import { arrivedAtLastPull, checkInLine } from "../../dist/claude/.claude/tools/aidlc-unit-teams.ts";
+import { arrivedAtLastPull, checkInLine, checkInState } from "../../dist/claude/.claude/tools/aidlc-unit-teams.ts";
 import { mergedAtTeamLook, type UnitClaimPayload } from "../../dist/claude/.claude/tools/aidlc-unit.ts";
 import { fixtureIntentId8 } from "../harness/fixtures.ts";
 import {
@@ -29,6 +29,7 @@ import {
   finishBuild,
   git,
   HOME_RECORD,
+  inSpace,
   makeHome,
   mergeOnHost,
   next,
@@ -39,6 +40,7 @@ import {
   UNIT,
   UTILITY,
   takeIn,
+  tempDir,
 } from "../harness/team-build.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -443,6 +445,86 @@ describe("the checked-in fact", () => {
     writeFileSync(join(audit, shard), `${readFileSync(join(audit, shard), "utf-8")}\n## Gate Approved\n**Timestamp**: 2026-11-10T12:00:00Z\n**Event**: GATE_APPROVED\n**Stage**: functional-design\n**Git Name**: alice\n\n---\n`);
     expect(statusOf(alice)).not.toContain("Checked in:");
     expect(notices(next(alice, chat))).not.toContain(CHECKED_IN);
+  });
+
+  // A live run on GitHub: a record pushed with -u on a branch whose pull
+  // request was open was said to be with the team while main had none of it.
+  test("a record pushed on a branch not merged yet is said pushed there, once, and checked in once main has it", () => {
+    const { home, alice } = refundsTaken();
+    const chat = chatOf("6c7d1e2f-2a3b-4d4c-9f5a-1b2c3d4e5f60");
+    const PUSHED = "aidlc/ is pushed on records/refunds; your teammates see it once it is in main.";
+    next(alice, chat);
+    const parked = run(ORCH, ["park"], alice, chat);
+    expect(String(parked.json?.narration), parked.out).toEndWith(LINE);
+    git(alice, ["checkout", "-q", "-b", "records/refunds"]);
+    git(alice, ["add", "aidlc"]);
+    git(alice, ["commit", "-q", "-m", "refunds parked"]);
+    git(alice, ["push", "-q", "-u", "origin", "records/refunds"]);
+    const look = next(alice, chat);
+    expect(notices(look), JSON.stringify(look)).toContain(PUSHED);
+    expect(notices(look)).not.toContain(CHECKED_IN);
+    expect(notices(next(alice, chat))).not.toContain(PUSHED);
+    expect(checkInLine(alice)).toBeNull();
+    // The pull request squash-merged on the host: main has the record as a commit of its own.
+    const reviewer = cloneOf(home.remote, "reviewer");
+    git(reviewer, ["fetch", "-q", "origin", "records/refunds"]);
+    git(reviewer, ["merge", "-q", "--squash", "FETCH_HEAD"]);
+    git(reviewer, ["commit", "-q", "-m", "refunds record (#1)"]);
+    git(reviewer, ["push", "-q", "origin", "main"]);
+    git(alice, ["fetch", "-q", "origin"]);
+    expect(notices(next(alice, chat))).toContain(CHECKED_IN);
+  });
+
+  test("at the lead's own checkout the branch is read from this clone's refs, never asked of the remote, never the branch it is on", () => {
+    const { home } = refundsTaken();
+    git(home.dir, ["checkout", "-q", "-b", "records/plan"]);
+    writeFileSync(join(home.dir, "aidlc", "notes.md"), "The plan, for its pull request.\n");
+    git(home.dir, ["add", "aidlc"]);
+    git(home.dir, ["commit", "-q", "-m", "the plan"]);
+    git(home.dir, ["push", "-q", "-u", "origin", "records/plan"]);
+    git(home.dir, ["remote", "set-url", "origin", join(home.remote, "gone")]);
+    expect(checkInState(home.dir)).toEqual({ pushedOn: "records/plan", into: "main" });
+    // Pushed only as a fork's main, a branch named like the one the work merges into: git cannot tell.
+    const fork = tempDir("fork-host");
+    git(fork, ["init", "-q", "--bare", "-b", "main"]);
+    git(home.dir, ["remote", "add", "fork", fork]);
+    git(home.dir, ["push", "-q", "-u", "fork", "records/plan:main"]);
+    expect(checkInState(home.dir)).toBe("unknown");
+  });
+
+  // Case 12 on GitHub: the team's records live on a branch called records.
+  test("where the work merges into records, a record pushed on its own branch waits for records, read from the lead's space", () => {
+    const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
+    const home = makeHome({ repos: hosts });
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    const branch = run(STATE, ["practices-branch", "--file", "team.md", "--branch", "records"], home.dir);
+    expect(branch.status, branch.out).toBe(0);
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "teams, on records"]);
+    git(home.dir, ["push", "-q", "origin", "main", "main:records"]);
+    const alice = cloneOf(home.remote, "alice");
+    git(alice, ["checkout", "-q", "records"]);
+    for (const [name, host] of Object.entries(hosts)) cloneCode(host, alice, name, "alice");
+    inSpace(alice, "payments");
+    const took = run(UNIT, ["take", "refunds", "--home", HOME_RECORD], alice);
+    expect(took.status, took.out).toBe(0);
+    const chat = chatOf("7d8e2f3a-3b4c-4e5d-8a6b-2c3d4e5f6a70");
+    next(alice, chat);
+    expect(String(run(ORCH, ["park"], alice, chat).json?.narration)).toEndWith(LINE);
+    git(alice, ["checkout", "-q", "-b", "pr/refunds"]);
+    git(alice, ["add", "aidlc"]);
+    git(alice, ["commit", "-q", "-m", "refunds parked"]);
+    git(alice, ["push", "-q", "-u", "origin", "pr/refunds"]);
+    const look = next(alice, chat);
+    expect(notices(look), JSON.stringify(look)).toContain("aidlc/ is pushed on pr/refunds; your teammates see it once it is in records.");
+    // Merged into records with a merge commit.
+    const reviewer = cloneOf(home.remote, "reviewer");
+    git(reviewer, ["checkout", "-q", "records"]);
+    git(reviewer, ["fetch", "-q", "origin", "pr/refunds"]);
+    git(reviewer, ["merge", "-q", "--no-ff", "--no-edit", "FETCH_HEAD"]);
+    git(reviewer, ["push", "-q", "origin", "records"]);
+    git(alice, ["fetch", "-q", "origin"]);
+    expect(notices(next(alice, chat))).toContain(CHECKED_IN);
   });
 
   test("a branch never pushed cannot be told: no line at a look, none in status, and the stopping point says today's words", () => {

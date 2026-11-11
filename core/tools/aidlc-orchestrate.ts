@@ -750,6 +750,7 @@ import {
   builtFromAnotherMachine,
   checkInHandedOut,
   checkInLine,
+  checkInNotice,
   checkInState,
   CHECKED_IN_LINE,
   stagesCounted,
@@ -1993,12 +1994,16 @@ function prepareEmission(directive: Directive): PreparedEmission {
   const unread = engineProjectDir ? unreadDocumentsOnce(engineProjectDir) : null;
   if (unread !== null) directive = withChangeNotices(directive, [...(directive.change_notices ?? []), unread.line]);
   // The chat that heard the check-in line hears once, at its next look after
-  // the person's own commit and push, that it is done, so no old to-do stands.
+  // the person's own commit and push, where the record is (checkInNotice), so
+  // no old to-do stands: with the team, or pushed on a branch not in it yet.
   if (engineProjectDir && engineSessionId && directive.kind !== "load-steering" && directive.kind !== "error" &&
     !isReadOnlyEngineProbe() && checkInHandedOut(engineProjectDir, engineSessionId) &&
-    !personLineHeard(engineProjectDir, engineSessionId, CHECKED_IN_LINE) && checkInState(engineProjectDir) === "checked-in") {
-    directive = withChangeNotices(directive, [...(directive.change_notices ?? []), CHECKED_IN_LINE]);
-    markPersonLinesHeard(engineProjectDir, engineSessionId, [CHECKED_IN_LINE]);
+    !personLineHeard(engineProjectDir, engineSessionId, CHECKED_IN_LINE)) {
+    const where = checkInNotice(checkInState(engineProjectDir));
+    if (where !== null && !personLineHeard(engineProjectDir, engineSessionId, where)) {
+      directive = withChangeNotices(directive, [...(directive.change_notices ?? []), where]);
+      markPersonLinesHeard(engineProjectDir, engineSessionId, [where]);
+    }
   }
   if (restartUnmarkedNotice) {
     directive = withChangeNotices(directive, [RESTART_UNMARKED_LINE, ...(directive.change_notices ?? [])]);

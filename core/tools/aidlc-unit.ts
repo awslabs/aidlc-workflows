@@ -580,11 +580,18 @@ export function recordIntegrationBranch(
   };
 }
 
-function integrationBranch(projectDir: string, remote: string | null): string {
+// `localOnly` (checkInTarget): no ls-remote, and never the branch HEAD is on,
+// which for a branch pushed with -u would make that branch its own target.
+function integrationBranch(projectDir: string, remote: string | null): string;
+function integrationBranch(projectDir: string, remote: string, localOnly: true): string | null;
+function integrationBranch(projectDir: string, remote: string | null, localOnly = false): string | null {
   if (remote) {
     const cached = git(projectDir, ["symbolic-ref", "--short", `refs/remotes/${remote}/HEAD`]);
     if (cached.ok && cached.stdout.trim().startsWith(`${remote}/`)) {
       return cached.stdout.trim().slice(remote.length + 1);
+    }
+    if (localOnly) {
+      return ["main", "master"].find((name) => git(projectDir, ["rev-parse", "--verify", "--quiet", `refs/remotes/${remote}/${name}`]).ok) ?? null;
     }
     const advertised = git(projectDir, ["ls-remote", "--symref", remote, "HEAD"]);
     const match = advertised.stdout.match(/^ref:\s+refs\/heads\/([^\s]+)\s+HEAD$/m);
@@ -5377,6 +5384,16 @@ export function shareTarget(projectDir: string): { remote: string; branch: strin
   const remote = repositoryRemote(projectDir);
   if (!remote) return null;
   return { remote, branch: affirmedIntegrationBranch(projectDir)?.branch ?? integrationBranch(projectDir, remote) };
+}
+
+// Where checkInState (aidlc-unit-teams.ts) reads a record as checked in: the
+// share's remote and branch, the branch named in `space`'s layers, else read
+// from this clone's own refs. Null when neither names one.
+export function checkInTarget(projectDir: string, space?: string): { remote: string; branch: string } | null {
+  const remote = repositoryRemote(projectDir);
+  if (!remote) return null;
+  const branch = affirmedIntegrationBranch(projectDir, space)?.branch ?? integrationBranch(projectDir, remote, true);
+  return branch === null ? null : { remote, branch };
 }
 
 // What a share or push offer names: the share target, or "the team's branch"

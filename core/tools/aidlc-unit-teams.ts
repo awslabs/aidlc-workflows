@@ -595,14 +595,24 @@ export function stagesCounted(
 export const CHECKED_IN_LINE = "aidlc/ is committed and pushed: your teammates see where this work stands.";
 export const CHECKED_IN_STATUS = "Checked in:     yes, aidlc/ is committed and pushed";
 
+// That chat's line for where the record is: with the team, or pushed on a
+// branch of its own (a pull request's) that is not in the integration branch
+// yet. Null when it is neither.
+export function checkInNotice(state: CheckIn): string | null {
+  if (state === "checked-in") return CHECKED_IN_LINE;
+  return typeof state === "string" ? null : `aidlc/ is pushed on ${state.pushedOn}; your teammates see it once it is in ${state.into}.`;
+}
+
 // Teams across repos share AI-DLC's record by git, and the person checks it in.
 // The callers say this at the stopping points (a stop, the push or the
 // person's Not now to it, the lead's Build and Test approval), unless aidlc/ is
-// checked in (checkInState). Null for other work (main's team Units on the
-// workspace's own repo commit the record for the person) and where there is no
-// remote to push.
+// checked in or pushed on a branch of its own (checkInState). Null for other
+// work (main's team Units on the workspace's own repo commit the record for the
+// person) and where there is no remote to push.
 export function checkInLine(projectDir: string, stateContent?: string): string | null {
-  if (!checkInApplies(projectDir, stateContent) || checkInState(projectDir) === "checked-in") return null;
+  if (!checkInApplies(projectDir, stateContent)) return null;
+  const state = checkInState(projectDir, stateContent);
+  if (state === "checked-in" || typeof state === "object") return null;
   // The chat is noted as handed the line, whichever step carries it, so its
   // first look after the check-in says it is done (checkInHandedOut).
   const session = resolveWorkflowSelection(projectDir).sessionId;
@@ -631,20 +641,44 @@ export function checkInApplies(projectDir: string, stateContent?: string): boole
   return remotes.status === 0 && remotes.stdout.trim() !== "";
 }
 
+// Where checkInState finds the record: in the work's integration branch on its
+// remote, or pushed on a branch of its own that is not in it yet.
+export type CheckIn = "checked-in" | "not-checked-in" | "unknown" | { pushedOn: string; into: string };
+
 // Whether aidlc/ is checked in, from local git only: nothing under it changed
 // but the rows each look adds to this clone's own audit file (onlyOwnLookRows,
-// doctor's rule too; a decision of the person's there still counts), and no
-// commit touching it is ahead of the branch's upstream. Unknown when git cannot
-// tell: no upstream (never pushed), a detached HEAD, or git failing.
-export function checkInState(projectDir: string): "checked-in" | "not-checked-in" | "unknown" {
+// doctor's rule too; a decision of the person's there still counts), and what
+// HEAD has of it is in the work's integration branch on its remote as this
+// clone last fetched it (checkInTarget), by ancestry or, after a squash or
+// rebase merge, path by path. Pushed on a branch of its own while it is not in
+// it yet. Unknown when git cannot tell: no integration branch here, a branch
+// never pushed, pushed only as one named like the integration branch (a fork's
+// main), a detached HEAD, or git failing.
+export function checkInState(projectDir: string, stateContent?: string): CheckIn {
   const run = (args: string[]) => spawnSync("git", ["-C", projectDir, ...args], { encoding: "utf-8", timeout: 10_000 });
-  const upstream = run(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"]);
+  let target: { remote: string; branch: string } | null;
+  try {
+    // A build's branch is the one its take read the plan from: the home's
+    // space, when the home's record is in this workspace.
+    let build: UnitBuild | null = null;
+    try {
+      build = unitBuildOf(stateContent ?? readStateFile(projectDir));
+    } catch {
+      // No record selected: the active space answers.
+    }
+    const [space, dirName] = build?.homeRecord.split("/") ?? [];
+    const homeHere = Boolean(space && dirName) && existsSync(join(projectDir, "aidlc", "spaces", space, "intents", dirName));
+    // Loaded only here: aidlc-unit.ts imports this file, and the hooks' own tool set leaves it out.
+    const { checkInTarget } = require("./aidlc-unit.ts") as typeof import("./aidlc-unit.ts");
+    target = checkInTarget(projectDir, homeHere ? space : undefined);
+  } catch {
+    return "unknown";
+  }
+  if (target === null) return "unknown";
+  const into = `refs/remotes/${target.remote}/${target.branch}`;
   const prefix = run(["rev-parse", "--show-prefix"]);
-  if (upstream.status !== 0 || upstream.stdout.trim() === "" || prefix.status !== 0) return "unknown";
-  const ahead = run(["log", "--format=%H", "@{upstream}..HEAD", "--", "aidlc"]);
   const changed = run(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--", "aidlc"]);
-  if (ahead.status !== 0 || changed.status !== 0) return "unknown";
-  if (ahead.stdout.trim() !== "") return "not-checked-in";
+  if (prefix.status !== 0 || changed.status !== 0 || run(["rev-parse", "--verify", "--quiet", into]).status !== 0) return "unknown";
   const root = prefix.stdout.trim();
   // -z entries: "XY path", a rename's or copy's source path after it.
   const entries = changed.stdout.split("\0").filter(Boolean);
@@ -654,7 +688,28 @@ export function checkInState(projectDir: string): "checked-in" | "not-checked-in
     if (/^[RC]/.test(entries[at])) at++;
   }
   // The rows each look adds to this clone's own audit file do not count.
-  return changes.every((change) => onlyOwnLookRows(projectDir, root, change)) ? "checked-in" : "not-checked-in";
+  if (!changes.every((change) => onlyOwnLookRows(projectDir, root, change))) return "not-checked-in";
+  const ahead = run(["log", "--format=%H", `${into}..HEAD`, "--", "aidlc"]);
+  if (ahead.status !== 0) return "unknown";
+  if (ahead.stdout.trim() === "") return "checked-in";
+  // A squash or rebase merge puts the same files in as commits of its own.
+  const names = (range: string[]): Set<string> | null => {
+    const listed = run(["diff", "--name-only", "-z", "--no-renames", ...range, "--", "aidlc"]);
+    return listed.status === 0 ? new Set(listed.stdout.split("\0").filter(Boolean)) : null;
+  };
+  const mine = names([`${into}...HEAD`]);
+  const differ = names([into, "HEAD"]);
+  if (mine === null || differ === null) return "unknown";
+  if (![...mine].some((path) => differ.has(path))) return "checked-in";
+  const head = run(["symbolic-ref", "--quiet", "HEAD"]);
+  if (head.status !== 0) return "unknown";
+  const upstream = run(["for-each-ref", "--format=%(upstream:remotename) %(upstream:remoteref)", head.stdout.trim()]);
+  const [remote = "", ref = ""] = upstream.status === 0 ? upstream.stdout.trim().split(" ") : [];
+  const pushedOn = ref.replace(/^refs\/heads\//, "");
+  if (remote === "" || remote === "." || pushedOn === ref || pushedOn === target.branch) return "unknown";
+  const unpushed = run(["log", "--format=%H", "@{upstream}..HEAD", "--", "aidlc"]);
+  if (unpushed.status !== 0) return "unknown";
+  return unpushed.stdout.trim() === "" ? { pushedOn, into: target.branch } : "not-checked-in";
 }
 
 // What the person's last `git pull` here that brought changes brought from
