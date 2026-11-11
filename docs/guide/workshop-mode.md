@@ -256,8 +256,8 @@ When the Unit is complete and approved, `/aidlc` asks once whether to commit it
 and publish it for review on main. **Commit and publish** runs
 `aidlc unit publish payments --commit`, which commits the Unit's own work (every
 tracked change, the record under `aidlc/` and the new files its source manifest
-lists; the question names how many files and up to ten new ones, as the share
-question does) and then publishes. Other new files, such as AI-DLC's own install
+lists; the question names how many files and, by name as changed, new or
+deleted, up to ten, as the share question does) and then publishes. Other new files, such as AI-DLC's own install
 or an unignored `node_modules`, stay on disk uncommitted, and the publish says
 once how many it left out; say which you want in and it publishes again with
 them (`--include <path>`). **Not now** leaves it, and the step then says it is
