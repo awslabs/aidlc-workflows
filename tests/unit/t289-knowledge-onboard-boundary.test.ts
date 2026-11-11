@@ -78,6 +78,7 @@ import {
   collectStaleJournals,
   listDocuments,
   onboard,
+  onboardBatchWork,
   rebuildIndex,
   showDocument,
   syncDocuments,
@@ -977,6 +978,9 @@ describe("t289 content sniffing reads the WHOLE buffer", () => {
 // guarded set.
 const DISK_TOUCHING_CALLS: Record<string, (p: string) => unknown> = {
   onboard: (p) => onboard(p, SPACE, undefined, "2026-08-07T00:00:00Z"),
+  // The dispatcher counts a batch's work with it before copying anything; it
+  // reads index.json.
+  onboardBatchWork: (p) => onboardBatchWork(p, SPACE, []),
   syncDocuments: (p) => syncDocuments(p, SPACE, "2026-08-07T00:00:00Z"),
   listDocuments: (p) => listDocuments(p, SPACE),
   showDocument: (p) => showDocument(p, SPACE, "any-id"),

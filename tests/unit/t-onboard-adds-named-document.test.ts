@@ -1,7 +1,11 @@
-// covers: function:withNamedDocumentCopied, function:knowledgePositionalAt,
+// covers: function:withNamedDocumentCopied, function:knowledgePositionals,
 // function:copyNamedDocumentIntoKnowledge, function:ensureKnowledgeDocumentsFolder,
 // function:gitIgnoredAmong, function:knowledgeCopyCapRefusal,
-// function:onboardCopyNote, subcommand:aidlc-knowledge:onboard
+// function:onboardCopyNote, subcommand:aidlc-knowledge:onboard,
+// function:copyNamedDocumentsIntoKnowledge, function:planNamedDocumentCopy,
+// function:carryOutNamedDocumentCopy, function:knowledgeCopyCapBreach,
+// function:onboardNote, function:describeNotAdded, function:namedOnboardFiles,
+// function:onboardBatchWork, function:dispatcherCopies, function:notAddedInOrder
 //
 // A person says "start with vision.md" and the document is added. Before this,
 // `knowledge onboard` refused twice over: once because `knowledge/documents/`

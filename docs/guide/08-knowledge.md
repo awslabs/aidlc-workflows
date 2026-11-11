@@ -110,7 +110,7 @@ The ownership split is deliberate:
 | `aidlc/spaces/<space>/knowledge/documents/` | Your team | Original documents, organised and deleted by you |
 | `aidlc/spaces/<space>/knowledge/documentkb/` | AI-DLC | Derived index, metadata, and extracted text |
 
-Use `/aidlc knowledge onboard [path]` to add one document or sweep the folder.
+Use `/aidlc knowledge onboard [path ...]` to add one or more documents, or sweep the folder.
 For example, `/aidlc knowledge onboard docs/inventory-vision.md` in a Claude
 Code chat ends with this line from AI-DLC, which the agent passes on:
 
@@ -120,7 +120,8 @@ aidlc/spaces/default/knowledge/documents/inventory-vision.md and added it. The
 knowledge base reads that copy from now on, not your own inventory-vision.md.
 ```
 
-You can name a file or folder anywhere in your project: one that is not already
+You can name a file or folder anywhere in your project, or several in one
+command: one that is not already
 under `documents/` is copied in for you, keeping its name and a folder's layout,
 and the result says where the copy is. From then on the knowledge base reads
 that copy, so edit it under `documents/` and run `sync` to pick changes up.
@@ -130,7 +131,11 @@ for it by name). A folder that git ignores as a whole is copied whole when you
 name it, and the line says the copy is not ignored, so it is committed unless
 you keep it out of git there too. A folder holding more documents than the batch cap, or a
 document over the per-document cap, is refused before anything is copied, so
-nothing is left behind to duplicate. A path outside the project is refused, and
+nothing is left behind to duplicate. When you name several, each one that
+cannot be added (it does not exist, it is outside the project, or it is a
+folder with nothing in it) is named at the start of the line with why, and the
+others are added; name only those again once they are fixed. Together they
+count toward the batch cap, and over it nothing is copied. A path outside the project is refused, and
 the folder is created if it is missing, so a sweep of an empty space adds
 nothing and says nothing is there.
 Use `sync` after files are added, edited, moved, or deleted; `list` shows every

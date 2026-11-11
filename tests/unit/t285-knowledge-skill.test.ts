@@ -131,16 +131,14 @@ function flagsInTool(source: string): Set<string> {
 // t230 enforces on the dispatcher. Named here so its absence is a decision on the
 // record rather than a gap the extractor happened to miss.
 //
-// `--copied-from`, `--copied-ignored` and `--copied-left-out` are the same
-// class, one layer up: the dispatcher sets them on the onboard it delegates
-// after copying a document the person named from elsewhere in the project
-// (withNamedDocumentCopied in aidlc.ts), so the verb can say what happened,
-// including how many files inside a named folder git ignores and were left
-// where they are. Neither a person nor an agent ever types them, and the skill
-// tells the agent to run the engine route that adds them.
-const PLUMBING_FLAGS = new Set([
-  "--project-dir", "--copied-from", "--copied-ignored", "--copied-left-out",
-]);
+// `--copied` is the same class, one layer up: the dispatcher sets it on the
+// onboard it delegates after copying documents the person named from elsewhere
+// in the project, or leaving one of several out (withNamedDocumentCopied in
+// aidlc.ts), so the verb can say what happened, including how many files
+// inside a named folder git ignores and were left where they are. Neither a
+// person nor an agent ever types it, and the skill tells the agent to run the
+// engine route that adds it.
+const PLUMBING_FLAGS = new Set(["--project-dir", "--copied"]);
 
 let proj: string | undefined;
 
@@ -947,7 +945,7 @@ describe("t285 - the knowledge skill ships everywhere, and its prose matches the
       // blank or the verb spelling drifted, `documentedEmits` would throw rather
       // than silently compare against an empty set.
       for (const verb of [
-        "onboard [path]",
+        "onboard [path ...]",
         "sync",
         "associate <id> --intent [slug]",
         "dissociate <id> --intent [slug]",

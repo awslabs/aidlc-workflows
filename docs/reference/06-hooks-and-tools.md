@@ -2793,7 +2793,7 @@ Indexes the team's own documents into a per-space catalog agents can cite. Two d
 
 | Subcommand | Purpose | Emits |
 |------------|---------|-------|
-| `onboard [path]` | Index one document, or every not-yet-indexed file under `documents/`. Idempotent — an unchanged file reports `already`, not a second row. An EDITED file at an already-indexed path refreshes that row in place and reports `edited`, so one path never carries two live rows | `DOCUMENT_INDEXED`, `DOCUMENT_UPDATED` |
+| `onboard [path ...]` | Index one or more documents, or every not-yet-indexed file under `documents/`. Several paths are one batch; a path that cannot be taken is reported in `not_added` with why, and the others still go in. Idempotent: an unchanged file reports `already`, not a second row. An EDITED file at an already-indexed path refreshes that row in place and reports `edited`, so one path never carries two live rows | `DOCUMENT_INDEXED`, `DOCUMENT_UPDATED` |
 | `sync` | Reconcile the catalog with `documents/`: index what is new, tombstone what was deleted, re-extract an invalidated row, and rebuild `index.json` from the per-document records if the index itself is gone | `DOCUMENT_INDEXED`, `DOCUMENT_UPDATED`, `DOCUMENT_REMOVED` |
 | `list [--json]` | The catalog — every row with its extraction/availability state visible | — |
 | `show <id> [--json]` | One document's record plus its extracted text, with the untrusted-content notice inline | — |
