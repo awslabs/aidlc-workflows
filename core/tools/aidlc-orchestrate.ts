@@ -17088,10 +17088,11 @@ function teamUnitMajorWalkBeat(
 // the walk while the Unit it was set aside for still has work; the walk takes
 // that Unit, then stops at the set-aside Unit to pick it up again. A Unit in
 // progress goes before the others, so a Unit picked up again comes first.
-// Before the walking skeleton is approved the walk covers the skeleton alone
-// (emitUnitMajorRunStage), yet the Unit a pause was set aside for is walked
-// too, wherever it is in the DAG: otherwise the pause comes first while that
-// Unit is in progress, and it cannot be resumed while that Unit is.
+// Before the walking skeleton is approved, routing walks the skeleton alone
+// (emitUnitMajorRunStage), and with it a Unit in progress and a Unit a pause
+// was set aside for, wherever they are in the DAG: otherwise the skeleton's
+// step or the pause comes first while another Unit is in progress, and
+// neither can start or be resumed while it is.
 type UnitMajorWalkStep =
   | {
       kind: "paused";
@@ -17189,7 +17190,7 @@ function unitMajorWalkStep(
       if (!setAside.has(cp.unit)) setAside.set(cp.unit, pause);
     }
   }
-  const walked = allUnits.filter((u) => units.includes(u) || waitedFor.has(u));
+  const walked = allUnits.filter((u) => units.includes(u) || waitedFor.has(u) || inProgress.has(u));
   // The Unit's first stop in the block, or null when it is done.
   const stopFor = (u: string): UnitMajorWalkStep | null => {
     for (const stop of unitWalkStops(projectDir, stateContent, block, ledgers, u, kinds, allUnits, recordPrefix, codekbCtx, checkpoints)) {
@@ -17218,8 +17219,8 @@ function unitMajorWalkStep(
 // Construction order, team-owned Units, stage-level artifacts, no Unit DAG, an
 // unresolved skeleton stance, or a pause, summary, checkpoint, or gate stop.
 // It mirrors the emitForSlug -> emitUnitMajorRunStage route, but walks every
-// Unit: until the skeleton is approved, routing walks only the skeleton and
-// the Units a set-aside Unit waits for.
+// Unit: until the skeleton is approved, routing walks only the skeleton, a
+// Unit in progress and the Units a set-aside Unit waits for.
 function unitMajorWorkBeat(
   projectDir: string,
   scope: string,
