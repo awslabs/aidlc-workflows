@@ -1893,7 +1893,9 @@ and opencode adapters use for their own apply_patch tool too); one fed its patch
 after it starts writes files no hook can see, so while the plan waits it is
 refused as a command that could not be read, with one more sentence naming the
 heredoc form (not on Windows, where Codex's `apply_patch.bat` takes no patch of
-more than one line in any form). A line that starts with `cd <folder>`
+more than one line in any form). A patch heredoc the reading keeps as written (a
+glob or a bracket on its line, a subshell, a redirect of its input, no closing
+line) is refused the same way, with no added sentence. A line that starts with `cd <folder>`
 joined to the rest by `&&`, `;` or a newline (and, in a line read as plain
 PowerShell, joined by `;`, also `Set-Location`, `sl`, `chdir`, `pushd` or
 `Push-Location`) is read as the rest of
