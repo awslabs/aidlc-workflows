@@ -64,6 +64,7 @@ import {
   writeActiveDirectiveMarker,
   writeSessionPidEntry,
   stateDigest,
+  subagentInflightMarkerPath,
 } from "../../dist/cursor/.cursor/tools/aidlc-lib.ts";
 import {
   createTestProject,
@@ -1227,7 +1228,8 @@ describe("t276 cursor adapter payload conversion", () => {
       .toEqual({ owner: 1, other: 0 });
     // A drop is recorded beside the completion, not under the cursor's intent.
     expect(drive((proj) => {
-      writeFileSync(join(proj, "aidlc", ".aidlc-engine", "sessions", "subagent-inflight"), "{malformed");
+      mkdirSync(dirname(subagentInflightMarkerPath(proj)), { recursive: true });
+      writeFileSync(subagentInflightMarkerPath(proj), "{malformed");
       runAdapter(proj, "session-end", payload("sessionEnd", proj, same));
     })).toEqual({ owner: 1, other: 0, ownerDrop: true, otherDrop: false });
     // sessionEnd retires the delegation witness when the Task ledger is gone.

@@ -287,6 +287,7 @@ function makeProject(withState: boolean): string {
     "aidlc-locks.ts",
     "aidlc-review-records.ts",
     "aidlc-unit-dag.ts",
+    "aidlc-subagent-inflight.ts",
     "aidlc-git.ts",
     "aidlc-record-core.ts",
     "aidlc-learned-date.ts",

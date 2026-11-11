@@ -13716,9 +13716,10 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   }
 
   // Branch 1e - DocumentKB verbs are terminal commands, never freeform intent
-  // text. Same shape as 1c, but the directive names aidlc-knowledge.ts: this is
-  // the first public noun whose verbs live in their own tool rather than in
-  // aidlc-utility.ts, so the tool name is part of what each site must agree on.
+  // text. The step names the dispatcher, never aidlc-knowledge.ts: `onboard`'s
+  // copy of a document named outside documents/, and making that folder, run in
+  // the dispatcher (withNamedDocumentCopied in aidlc.ts), and on a copy install
+  // the tool file run alone refuses the path instead.
   if (flags.knowledgeCommand) {
     const command = flags.knowledgeCommand;
     if (command.kind === "error") {
@@ -13729,7 +13730,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     const [verb, ...tail] = argv;
     const suffix = tail.length > 0 ? ` ${tail.map(shellArg).join(" ")}` : "";
     emit(turnEndingPrint(
-      `Run \`${aidlcToolInvocation("knowledge")} ${verb}${suffix}\`, print its output verbatim, then stop. This is a terminal utility, NOT workflow work: do NOT run \`next\` and do NOT advance, resume, or run any workflow stage.`,
+      `Run \`${aidlcDispatcherInvocation(`knowledge ${verb}`)}${suffix}\`, print its output verbatim, then stop. This is a terminal utility, NOT workflow work: do NOT run \`next\` and do NOT advance, resume, or run any workflow stage.`,
     ));
     return;
   }
@@ -19159,13 +19160,20 @@ export function leadWaitsHere(projectDir: string, stateContent: string): boolean
 // set); the paused-unit hard stop mirrors emitPerUnitRunStage: a pause on ANY
 // block stage halts the walk before new (stage, unit) work. Read-only, so
 // routing (emitUnitMajorRunStage) and the skip report (unitMajorWorkBeat)
-// share one walk and cannot disagree about which beat is active.
+// share one walk.
 //
 // The person can ask for another Unit's work while one is open (#1411): the
 // open Unit is then paused, set aside for that Unit. Such a pause does not halt
 // the walk while the Unit it was set aside for still has work; the walk takes
 // that Unit, then stops at the set-aside Unit to pick it up again. A Unit in
 // progress goes before the others, so a Unit picked up again comes first.
+// Before the walking skeleton is approved, routing walks the skeleton alone
+// (emitUnitMajorRunStage). While the person has the skeleton's work reopened,
+// it also walks a Unit in progress and a Unit a pause was set aside for,
+// wherever they are in the DAG: otherwise the skeleton's redo or the pause
+// comes first, and neither can start or be resumed while that Unit is in
+// progress. A pause set aside for a Unit outside the skeleton never comes
+// before the skeleton's own re-check.
 type UnitMajorWalkStep =
   | {
       kind: "paused";
@@ -19249,6 +19257,7 @@ function unitMajorWalkStep(
     block.map((k) => [k.slug, unitLedgerFor(projectDir, k.slug)]),
   );
   const setAside = new Map<string, Extract<UnitMajorWalkStep, { kind: "paused" }>>();
+  const waitedFor = new Set<string>();
   const inProgress = new Set<string>();
   for (const k of block) {
     for (const cp of ledgers.get(k.slug)?.open ?? []) {
@@ -19257,7 +19266,8 @@ function unitMajorWalkStep(
         continue;
       }
       const pause = { kind: "paused" as const, stage: k.slug, checkpoint: cp };
-      if (cp.setAsideFor === null || !units.includes(cp.setAsideFor)) return pause;
+      if (cp.setAsideFor === null || !allUnits.includes(cp.setAsideFor)) return pause;
+      waitedFor.add(cp.setAsideFor);
       if (!setAside.has(cp.unit)) setAside.set(cp.unit, pause);
     }
   }
@@ -19268,8 +19278,13 @@ function unitMajorWalkStep(
     }
     return null;
   };
+  // Before the skeleton's approval, other Units go on only while its own work
+  // is reopened (the person's redo): an approval that is only stale is
+  // checked again first.
+  const reopened = units.length < allUnits.length && units.some((u) => stopFor(u)?.kind === "work");
+  const walked = allUnits.filter((u) => units.includes(u) || (reopened && (waitedFor.has(u) || inProgress.has(u))));
   const waiting: UnitMajorWalkStep[] = [];
-  const order = [...units.filter((u) => inProgress.has(u)), ...units.filter((u) => !inProgress.has(u))];
+  const order = [...walked.filter((u) => inProgress.has(u)), ...walked.filter((u) => !inProgress.has(u))];
   for (const u of order) {
     const pause = setAside.get(u);
     if (pause) {
@@ -19288,10 +19303,10 @@ function unitMajorWalkStep(
 // the Current Stage, or null when routing is not on such a beat: another
 // Construction order, team-owned Units, stage-level artifacts, no Unit DAG, an
 // unresolved skeleton stance, or a pause, summary, checkpoint, or gate stop.
-// It mirrors the emitForSlug -> emitUnitMajorRunStage route. The skeleton-only
-// first-unit walk picks the same beat as the full walk: the two differ only
-// after the first unit's checkpoint is approved, which is exactly when the
-// skeleton-only walk stops applying.
+// It mirrors the emitForSlug -> emitUnitMajorRunStage route, but walks every
+// Unit: until the skeleton is approved, routing walks only the skeleton, and
+// while its work is reopened a Unit in progress and the Units a set-aside
+// Unit waits for.
 function unitMajorWorkBeat(
   projectDir: string,
   scope: string,
@@ -19805,15 +19820,35 @@ function unitJumpWalk(
 
 // The one check of a Unit named for a jump to one of the walk's steps, asked
 // by `next --stage --unit` and by the re-entry report before it accepts: what
-// is wrong when the Unit is not one of this work's Units, else null.
+// is wrong when the walk does not take the Unit, and the start of the way on,
+// else null. A team checkout walks only the Units it builds (unitsHeldHere): a
+// finished one and one a team has taken are not among them. The team is named
+// as the board names a claim's holder.
 function unitOutsideWork(
+  projectDir: string,
+  stateContent: string,
   walk: { block: GraphStage[]; context: UnitWorkContext } | null,
   targetSlug: string,
   unit: string,
-): string | null {
+): { said: string; nameOne: string } | null {
   if (!walk?.block.some((stage) => stage.slug === targetSlug)) return null;
   const units = walk.context.units;
-  return units.includes(unit) ? null : `${unit} is not one of this work's units (${units.join(", ")}).`;
+  if (units.includes(unit)) return null;
+  const builds = units.length < 2 ? units.join("") : `${units.slice(0, -1).join(", ")} and ${units.at(-1)}`;
+  const nameOne = "Name a Unit this checkout builds";
+  if (completedUnits(stateContent).has(unit)) {
+    return { said: `${unit} is finished, and this checkout now builds ${builds}, so ${unit} is not redone here.`, nameOne };
+  }
+  let owner: string | undefined;
+  try {
+    owner = cachedUnitClaimOverview(projectDir, { writeCache: false }).claimed.find((claim) => claim.unit === unit)?.owner;
+  } catch {
+    // An unreadable claim registry names no team.
+  }
+  if (owner !== undefined) {
+    return { said: `${unit} is taken by ${owner} and built in their checkout; this checkout builds ${builds}.`, nameOne };
+  }
+  return { said: `${unit} is not one of this work's units (${units.join(", ")}).`, nameOne: "Name one of them" };
 }
 
 // A move to a stage or phase in a checkout that claimed a Unit (`next --stage`,
@@ -20053,11 +20088,11 @@ function unitMajorReopen(
   let reopened: string[];
   if (flags.jumpUnit !== undefined) {
     const named = flags.jumpUnit;
-    const outside = unitOutsideWork(walk, targetSlug, named);
+    const outside = unitOutsideWork(projectDir, stateContent, walk, targetSlug, named);
     if (outside !== null) {
       return {
         kind: "error",
-        message: `${outside} Name one of them with \`${entrySkillInvocation()} --stage ${targetSlug} --unit <name>\`.`,
+        message: `${outside.said} ${outside.nameOne} with \`${entrySkillInvocation()} --stage ${targetSlug} --unit <name>\`.`,
       };
     }
     // The Unit in flight on the target itself: that is where the walk already is.
@@ -23553,10 +23588,10 @@ function emitTypedResumeChoice(
   // moves, so the print ends the turn and never goes through `move()`.
   const unitNotInWork = (step: string): PrintDirective | null => {
     const outside = flags.unit !== undefined && validScopes().has(scope)
-      ? unitOutsideWork(unitJumpWalk(pd, scope, stateContent, true), step, flags.unit)
+      ? unitOutsideWork(pd, stateContent, unitJumpWalk(pd, scope, stateContent, true), step, flags.unit)
       : null;
     return outside === null ? null : turnEndingPrint(
-      `Run nothing. Tell the person in one line: "${outside} Which one did you mean?" When they say, run this ` +
+      `Run nothing. Tell the person in one line: "${outside.said} Which one did you mean?" When they say, run this ` +
         `report again with \`--unit <the unit they name>\` in place of \`--unit ${flags.unit}\`.`,
     );
   };

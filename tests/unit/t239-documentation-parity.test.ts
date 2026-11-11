@@ -8,6 +8,7 @@ import { parseStageFrontmatter } from "../../core/tools/aidlc-lib.ts";
 import { compareVersions } from "../../core/tools/aidlc-channel.ts";
 import { validateStageFrontmatter } from "../../core/tools/aidlc-stage-schema.ts";
 import { harnessIdFromTyped } from "../../core/tools/aidlc-runtime-paths.ts";
+import { readConductorSurface } from "../harness/conductor-skill.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
 const at = (...parts: string[]): string => join(ROOT, ...parts);
@@ -355,7 +356,7 @@ describe("documentation parity derives current behavior from authored implementa
   });
 
   test("Kiro IDE documentation names only IDE-native enforcement and configuration surfaces", () => {
-    const skill = read("harness", "kiro-ide", "skills", "aidlc", "SKILL.md");
+    const skill = readConductorSurface(join("harness", "kiro-ide", "skills", "aidlc", "SKILL.md"));
     // The dispatch-record rule is per Unit, in the per-Unit review module.
     const reviewerProtocol = read(
       "core",

@@ -1,4 +1,4 @@
-// covers: hook:aidlc-continue-workflow, hook:aidlc-log-subagent, hook:aidlc-deliver-stage-rules, hook:aidlc-session-start, function:markSubagentInflight, function:completeSubagentInflight, function:matchSubagentInflight, function:inspectSubagentInflight, function:subagentInflightMarkerPath, function:SUBAGENT_INFLIGHT_TTL_MS, function:humanTurnMintAllowed
+// covers: hook:aidlc-continue-workflow, hook:aidlc-log-subagent, hook:aidlc-deliver-stage-rules, hook:aidlc-session-start, function:markSubagentInflight, function:completeSubagentInflight, function:matchSubagentInflight, function:inspectSubagentInflight, function:subagentInflightMarkerPath, function:SUBAGENT_INFLIGHT_TTL_MS, function:humanTurnMintAllowed, function:readSubagentInflightLedger, function:freshSubagentEntries, function:subagentSessionIdentity
 //
 // t327 - session-scoped background-subagent Stop-hook carve-out.
 //
@@ -7,7 +7,8 @@
 // concurrent sessions remain isolated. Stop honours only a fresh entry for its
 // own session, under autonomous Construction too while a person is there (an
 // unattended driver keeps the block), and prunes stale entries. A resumed chat
-// clears the entries its earlier process left; a compaction keeps them.
+// clears the entries its earlier process left; a compaction keeps them. A
+// ledger an older version left at its old place is carried over once.
 //
 // Mechanism: cli. Dispatch, completion, and Stop assertions spawn the real
 // shipped hooks; direct helper calls seed exact stale/autonomy states.
@@ -327,6 +328,38 @@ describe("t327 background-subagent Stop-hook carve-out", () => {
       '"decision":"block"',
     );
     expect(existsSync(path)).toBe(false);
+  });
+
+  test("a helper sent before an update, recorded at the old place, still lets its turn end, and its completion clears it", () => {
+    const proj = makeProject();
+    seedActive(proj);
+    bindSession(proj, "session-a");
+    // What an earlier release wrote: a fresh entry for the helper still at
+    // work and a stale one nobody cleared.
+    const oldPlace = join(proj, "aidlc", ".aidlc-subagent-inflight");
+    const startedAtMs = Date.now() - 60 * 1000;
+    writeFileSync(oldPlace, `${JSON.stringify({
+      version: 1,
+      entries: [
+        { sessionId: "session-a", startedAtMs },
+        { sessionId: "session-b", startedAtMs: Date.now() - SUBAGENT_INFLIGHT_TTL_MS - 60 * 60 * 1000 },
+      ],
+    })}\n`, "utf-8");
+    const entries = () => (JSON.parse(readFileSync(subagentInflightMarkerPath(proj), "utf-8")) as {
+      entries: Array<{ sessionId: string | null; startedAtMs: number }>;
+    }).entries;
+
+    expect(runStopHook(proj, "session-a").out).not.toContain('"decision":"block"');
+    expect(existsSync(oldPlace)).toBe(false);
+    expect(entries()).toEqual([{ sessionId: "session-a", startedAtMs }]);
+    // The next turn end does not carry it again.
+    expect(runStopHook(proj, "session-a").out).not.toContain('"decision":"block"');
+    expect(entries()).toEqual([{ sessionId: "session-a", startedAtMs }]);
+
+    expect(completeBackground(proj, "session-a", "a08bafd0cac349cb0").rc).toBe(0);
+    expect(existsSync(subagentInflightMarkerPath(proj))).toBe(false);
+    expect(existsSync(oldPlace)).toBe(false);
+    expect(runStopHook(proj, "session-a").out).toContain('"decision":"block"');
   });
 
   test("only accepted background dispatches add ledger entries", () => {

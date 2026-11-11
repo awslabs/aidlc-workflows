@@ -67,6 +67,7 @@ import {
   resolveCodeGenerationAuthority,
   resolveTestingPosture,
 } from "../../core/tools/aidlc-testing-posture.ts";
+import { readConductorSurface } from "../harness/conductor-skill.ts";
 import {
   DEFAULT_INTENT_UUID,
   DEFAULT_RECORD_DIR,
@@ -6899,7 +6900,7 @@ describe("t218 the Kiro IDE trust step", () => {
       expect(text).toContain("select Manage on the Restricted Mode banner, then Trust");
       expect(text).not.toContain("agent picker");
     }
-    const skill = readFileSync(join(KIRO_IDE_TREE, "skills", "aidlc", "SKILL.md"), "utf-8");
+    const skill = readConductorSurface(join(KIRO_IDE_TREE, "skills", "aidlc", "SKILL.md"));
     expect(skill).toContain(
       'Give the person this line and end your turn: "In Kiro IDE, trust this folder: choose Trust Folder & Continue',
     );

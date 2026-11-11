@@ -498,7 +498,10 @@ another drive, when `repos.json` gives each its `path`
 workspace then holds only AI-DLC and its records, and code pull requests carry
 only code.
 The record of the work lives once, in `aidlc/`, not once per repo, so a change
-that touches both repos has one set of requirements and one audit trail.
+that touches both repos has one set of requirements and one audit trail. A
+command run from inside one of those repos, or from any folder of the workspace
+that is not set up itself, works on the workspace's `aidlc/` too, so nothing of
+AI-DLC's is written into the repo.
 
 The folder holding them does not have to be a git repo, and AI-DLC does not
 make it one. Because it holds no `.git` or project file, `aidlc config` can ask you

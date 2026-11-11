@@ -558,7 +558,7 @@ them so agents can cite them instead of guessing.
 
 | Command | What it does |
 |---|---|
-| `/aidlc knowledge onboard [path]` | Add one file or folder from anywhere in your project (one outside `documents/` is copied in first, and the result says where), or sweep every not-yet-indexed file under `documents/` when no path is given |
+| `/aidlc knowledge onboard [path ...]` | Add one or more files or folders from anywhere in your project (one outside `documents/` is copied in first, and the result says where; a path that cannot be added is named with why, and the others still go in), or sweep every not-yet-indexed file under `documents/` when no path is given |
 | `/aidlc knowledge sync` | Reconcile the catalog with what is on disk; rebuild an index that was deleted |
 | `/aidlc knowledge list [--json]` | The catalog — every document with its state |
 | `/aidlc knowledge show <id>` | One document's full record plus its extracted text |
@@ -1246,7 +1246,7 @@ When a workflow has issues, `--doctor` also lists the structured findings in its
 | Current step out of date | Only while it lasts: the step the assistant was working from went out of date (the chat was compacted, or the workflow state changed after the step was issued). Says when and why, and, when known, which state lines changed and which AI-DLC command wrote them; the fix is `next` as its own command, which hands the current step out again and keeps an approval that still matches (warning - never fails) |
 | State drift | the active intent's `aidlc-state.md` matches the last `WORKFLOW_COMPLETED` in the audit |
 | Pending approval | When the current stage has waited at an organic approval gate for more than 24 hours, identifies it as waiting for a human rather than stuck and points to `/aidlc --status` (advisory - never fails) |
-| Background subagents | Reports fresh and stale session-scoped entries in `aidlc/.aidlc-engine/sessions/subagent-inflight`. Fresh entries are advisory; stale or malformed entries fail with exact removal guidance. Silent when absent |
+| Background subagents | Reports fresh and stale session-scoped entries in `aidlc/.aidlc-engine/sessions/subagent-inflight.json`. Fresh entries are advisory; stale or malformed entries fail with the exact removal step, run at your own terminal. Silent when absent |
 | Set-aside Bolt attempts | Informational list of saved attempts: slug, stamp, age in days, mode (`snapshot`, `branch-tip`, or `legacy` for saved heads; `evidence-only` when only reviewed source refs remain), restored checkout ownership, and typed restore/purge operations with optional safe display commands or rendering errors (purge only for evidence-only entries). These entries are neither warnings nor failures |
 | Cycle detection | `stage-graph.json` has no cycles |
 | Orphan stage files | Every slug in the graph has a matching `<phase>/<slug>.md` on disk |

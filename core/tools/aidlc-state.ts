@@ -64,6 +64,7 @@ import {
   appendSlug,
   appendUnderHeading,
   artifactFilename,
+  ensureHeading,
   BLOCKING_SENSOR_OVERRIDE_CHOICE,
   blockingSensorPicks,
   optionsList,
@@ -3602,7 +3603,7 @@ function verifySettledSwarmSourceBinding(
   // (aidlc-swarm-source.ts).
   const changed = current === null || sameWorkspaceSource(chain.fingerprint, current.fingerprint)
     ? []
-    : swarmSourceChangedSince(pd, stage.slug, chain.listing, current);
+    : swarmSourceChangedSince(pd, stage.slug, chain, current);
   const moved = changed?.length !== 0;
   if (moved && current !== null && guardPolicyAcceptsChanges(pd)) {
     // Kept under relaxed or off: edits made after the last merge stay, once recorded.
@@ -9863,6 +9864,9 @@ function handlePracticesBranch(args: string[]): void {
 //                              Forbidden), each rule stamped
 //                              with `(affirmed YYYY-MM-DD)`
 //
+// A heading either file lacks is added at its end before the write
+// (ensureHeading): a space made by `space create` starts both as one line.
+//
 // Atomicity:
 //   1. Validate every declared support contribution (fail before any write).
 //   2. Read both drafts (fail closed before any write).
@@ -10025,7 +10029,7 @@ function handlePracticesPromote(args: string[]): void {
       draftSection = promotable.section;
     }
     try {
-      newTeamMd = replaceSection(newTeamMd, heading, draftSection);
+      newTeamMd = replaceSection(ensureHeading(newTeamMd, heading), heading, draftSection);
       sectionsWritten.push(heading.slice(3));
     } catch (e) {
       fail(
@@ -10033,6 +10037,12 @@ function handlePracticesPromote(args: string[]): void {
       );
       return;
     }
+  }
+  // A section written here that ends the file ends it with one newline, so an
+  // added section leaves no blank line at the end of the file.
+  const lastHeading = [...newTeamMd.matchAll(/^## ([^\n]*)$/gm)].at(-1)?.[1];
+  if (lastHeading !== undefined && sectionsWritten.includes(lastHeading)) {
+    newTeamMd = newTeamMd.replace(/\n+$/, "\n");
   }
 
   // Step 4b: Build new project-guardrails.md by appending, under the matching
@@ -10042,7 +10052,7 @@ function handlePracticesPromote(args: string[]): void {
   for (const [heading, kind] of [["## Mandated", "mandated"], ["## Forbidden", "forbidden"]] as const) {
     for (const rule of rulesToAdd[kind]) {
       try {
-        newGuardrailsMd = appendUnderHeading(newGuardrailsMd, heading, `- ${rule} (affirmed ${today})\n`);
+        newGuardrailsMd = appendUnderHeading(ensureHeading(newGuardrailsMd, heading), heading, `- ${rule} (affirmed ${today})\n`);
         rulesAppended[kind]++;
       } catch (e) {
         fail(`appendUnderHeading failed on ${heading.slice(3)}: ${errorMessage(e)}`);

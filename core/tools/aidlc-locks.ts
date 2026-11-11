@@ -1943,6 +1943,14 @@ export function installWithoutReplacing(from: string, to: string): void {
   }
 }
 
+// Puts a fully written file over the one at a name, with the same Windows
+// retry as the atomic writers (a reader holding the target open refuses the
+// rename there for a moment). For a caller that has already decided the file
+// at `to` may be replaced: the copy of a changed original nobody edited.
+export function replaceWithStaged(from: string, to: string): void {
+  replaceAtomically(from, to);
+}
+
 // ensureDirSync / renameIntoPlace / removeTreeSync — the three raw
 // mkdir/rename/rm primitives, re-exported so a caller that has NO reason to
 // import node:fs's mutating names directly still can. This module already

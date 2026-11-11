@@ -785,12 +785,14 @@ if (target === "verb-intercept") {
     out = cmd.error;
   } else {
     const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
-    // Which tool owns the subcommand. Every terminal family before DocumentKB
-    // lived in aidlc-utility.ts, so this was a constant; `knowledge` verbs live
-    // in their own tool, so the non-compiled path must pick one. Getting this
-    // wrong is Kiro-only and silent -- the compiled path masks it.
-    const toolFile = cmd.source === "knowledge-verb" ? "aidlc-knowledge.ts" : "aidlc-utility.ts";
-    const utilArgs = [join(".kiro", "tools", toolFile), cmd.subcommand, ...forwarded];
+    // A `knowledge` verb goes through the dispatcher, as the compiled path
+    // does: `onboard`'s copy of a document named outside documents/, and making
+    // that folder, run there (withNamedDocumentCopied in aidlc.ts), and
+    // aidlc-knowledge.ts run alone refuses the path instead. Getting this wrong
+    // is Kiro-only and silent -- the compiled path masks it.
+    const utilArgs = cmd.source === "knowledge-verb"
+      ? [join(".kiro", "tools", "aidlc.ts"), ...terminalDispatcherArgv(cmd)]
+      : [join(".kiro", "tools", "aidlc-utility.ts"), cmd.subcommand, ...forwarded];
     // Reuse the exact bun binary running this adapter; the child must not depend on
     // PATH containing bun (the hook environment often lacks the bun install dir).
     const run = Bun.spawnSync(

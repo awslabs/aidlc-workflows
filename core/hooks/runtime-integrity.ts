@@ -807,9 +807,39 @@ function interpreterReadsCode(name: string, args: string[]): boolean {
   return true;
 }
 
+// The heredoc whose `<<` (not `<<<`) is at `index`, which the caller read
+// outside quotes: where the operator and its delimiter word end, the header
+// line's newline, the body, and where the terminator line starts (the
+// command's end when no line ends the body). Null when no delimiter word or no
+// body line follows. The plan-approval guard reads the same spans.
+export function heredocAt(command: string, index: number): {
+  operatorEnd: number;
+  newline: number;
+  body: string;
+  bodyEnd: number;
+  quoted: boolean;
+} | null {
+  if (!command.startsWith("<<", index) || command[index + 2] === "<") return null;
+  const here = /^<<(-)?[ \t]*(?:'([^']+)'|"([^"]+)"|([A-Za-z_]\w*))/.exec(command.slice(index));
+  if (!here) return null;
+  const delimiter = here[2] ?? here[3] ?? here[4];
+  const operatorEnd = index + here[0].length;
+  const newline = command.indexOf("\n", operatorEnd);
+  if (newline < 0) return null;
+  let end = newline + 1;
+  while (end < command.length) {
+    const nextLine = command.indexOf("\n", end);
+    const lineEnd = nextLine < 0 ? command.length : nextLine;
+    const line = command.slice(end, lineEnd).replace(/\r$/, "");
+    if ((here[1] ? line.replace(/^\t+/, "") : line) === delimiter) break;
+    end = nextLine < 0 ? command.length : nextLine + 1;
+  }
+  return { operatorEnd, newline, body: command.slice(newline + 1, end), bodyEnd: end, quoted: here[4] === undefined };
+}
+
 // Limit stdin consumers to this command and its downstream pipeline, excluding
 // earlier/later independent commands. Redirection filenames are not script argv.
-function heredocPipeline(header: string, herePosition: number): { raw: string; execution: string } {
+export function heredocPipeline(header: string, herePosition: number): { raw: string; execution: string } {
   let quote = "";
   let start = 0;
   let end = header.length;
@@ -922,34 +952,18 @@ function protectedShell(command: string, cwd: string, depth = 0, expansionsOnly 
       index = end;
       continue;
     }
-    if (!quote && !expansionsOnly && command.startsWith("<<", index) && command[index + 2] !== "<") {
-      const here = /^<<(-)?[ \t]*(?:'([^']+)'|"([^"]+)"|([A-Za-z_]\w*))/.exec(command.slice(index));
-      if (here) {
-        const delimiter = here[2] ?? here[3] ?? here[4];
-        const newline = command.indexOf("\n", index + here[0].length);
-        if (newline >= 0) {
-          let end = newline + 1;
-          const bodyStart = end;
-          while (end < command.length) {
-            const nextLine = command.indexOf("\n", end);
-            const lineEnd = nextLine < 0 ? command.length : nextLine;
-            const line = command.slice(end, lineEnd).replace(/\r$/, "");
-            if ((here[1] ? line.replace(/^\t+/, "") : line) === delimiter) break;
-            end = nextLine < 0 ? command.length : nextLine + 1;
-          }
-          const body = command.slice(bodyStart, end);
-          const descriptor = /(?:^|[ \t])(\d+)$/.exec(visible);
-          const prefix = descriptor ? visible.slice(0, -descriptor[1].length) : visible;
-          const header = prefix + command.slice(index + here[0].length, newline);
-          if (protectedHeredoc(body, header, prefix.length, !descriptor || descriptor[1] === "0", cwd, depth) ||
-            protectedShell(header, cwd, depth + 1) ||
-            here[4] !== undefined && protectedShell(body, cwd, depth + 1, true)) return true;
-          const after = command.indexOf("\n", end);
-          visible = `${header}\n`;
-          index = after < 0 ? command.length : after;
-          continue;
-        }
-      }
+    const heredoc = !quote && !expansionsOnly && ch === "<" ? heredocAt(command, index) : null;
+    if (heredoc) {
+      const descriptor = /(?:^|[ \t])(\d+)$/.exec(visible);
+      const prefix = descriptor ? visible.slice(0, -descriptor[1].length) : visible;
+      const header = prefix + command.slice(heredoc.operatorEnd, heredoc.newline);
+      if (protectedHeredoc(heredoc.body, header, prefix.length, !descriptor || descriptor[1] === "0", cwd, depth) ||
+        protectedShell(header, cwd, depth + 1) ||
+        !heredoc.quoted && protectedShell(heredoc.body, cwd, depth + 1, true)) return true;
+      const after = command.indexOf("\n", heredoc.bodyEnd);
+      visible = `${header}\n`;
+      index = after < 0 ? command.length : after;
+      continue;
     }
     // `${ cmd; }` and `${| cmd; }` (bash 5.3) run a command, as `$(...)` does,
     // so their braces stay separators.

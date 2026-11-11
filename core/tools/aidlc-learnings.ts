@@ -111,6 +111,7 @@ import {
   activeIntent,
   appendUnderHeading,
   CHANGE_CONTROL_HEADING,
+  ensureHeading,
   GUARD_POLICY_HEADING,
   LEARNINGS_SELECTIONS_DIR,
   normalizeDriveLetter,
@@ -862,18 +863,6 @@ function practiceHeading(routed: string | undefined): string {
   const t = (routed ?? "").trim();
   if (t === "") return DEFAULT_PRACTICE_HEADING;
   return t.startsWith("## ") ? t : `## ${t.replace(/^#+\s*/, "")}`;
-}
-
-// Ensure-exists a `## ` heading in a method file. appendUnderHeading throws
-// when the heading is absent (DETERMINISM safety net, aidlc-lib.ts), so the
-// orchestrator may name a heading the shipped file doesn't carry — append it
-// (with a leading blank line when the file already has content) so the
-// subsequent appendUnderHeading lands cleanly.
-function ensureHeading(content: string, heading: string): string {
-  const headingRe = new RegExp(`^${escapeRegex(heading)}[ \\t]*$`, "m");
-  if (headingRe.test(content)) return content;
-  const sep = content === "" ? "" : content.endsWith("\n") ? "\n" : "\n\n";
-  return `${content}${sep}${heading}\n`;
 }
 
 // cid marker — stable, content-addressed idempotency key per written line.

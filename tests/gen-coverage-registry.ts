@@ -112,6 +112,7 @@ const LOCKS_PATH = join(TOOLS_DIR, "aidlc-locks.ts");
 const GIT_PATH = join(TOOLS_DIR, "aidlc-git.ts");
 const REVIEW_RECORDS_PATH = join(TOOLS_DIR, "aidlc-review-records.ts");
 const UNIT_DAG_PATH = join(TOOLS_DIR, "aidlc-unit-dag.ts");
+const SUBAGENT_INFLIGHT_PATH = join(TOOLS_DIR, "aidlc-subagent-inflight.ts");
 const RECORD_CORE_PATH = join(TOOLS_DIR, "aidlc-record-core.ts");
 const UNIT_HOLDERS_PATH = join(TOOLS_DIR, "aidlc-unit-holders.ts");
 const RUNTIME_PATHS_PATH = join(TOOLS_DIR, "aidlc-runtime-paths.ts");
@@ -605,6 +606,7 @@ export function enumerateExportedFunctions(): Unit[] {
     [GIT_PATH, "dist/claude/.claude/tools/aidlc-git.ts"],
     [REVIEW_RECORDS_PATH, "dist/claude/.claude/tools/aidlc-review-records.ts"],
     [UNIT_DAG_PATH, "dist/claude/.claude/tools/aidlc-unit-dag.ts"],
+    [SUBAGENT_INFLIGHT_PATH, "dist/claude/.claude/tools/aidlc-subagent-inflight.ts"],
     [RECORD_CORE_PATH, "dist/claude/.claude/tools/aidlc-record-core.ts"],
     [UNIT_HOLDERS_PATH, "dist/claude/.claude/tools/aidlc-unit-holders.ts"],
     [GRAPH_PATH, "dist/claude/.claude/tools/aidlc-graph.ts"],

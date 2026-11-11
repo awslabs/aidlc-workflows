@@ -141,7 +141,7 @@ describe("t179 Branch 0: fresh latch -> done", () => {
     seedStateFile(proj, MID_IDEATION);
     seedLatch(proj, 3, 3, "knowledge list", "knowledge-verb");
     const out = runNext(proj, ["knowledge", "sync"]).out;
-    expect(out).toContain("aidlc-knowledge.ts sync");
+    expect(out).toContain("engine knowledge sync");
     expect(out).not.toContain('"kind":"done"');
   });
 });

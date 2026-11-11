@@ -34,8 +34,9 @@
 // conductor never parks for context on its own.
 
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { readConductorSurface } from "../harness/conductor-skill.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -52,7 +53,7 @@ function skillPath(harness: string): string {
 function readSkill(harness: string): string {
   const path = skillPath(harness);
   if (!existsSync(path)) throw new Error(`missing orchestrator skill: ${path}`);
-  return readFileSync(path, "utf-8");
+  return readConductorSurface(path);
 }
 
 describe("t330 (smoke) parking for context needs a measured figure, not a feeling", () => {
