@@ -12292,7 +12292,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     // into the named command so the documented export surface reaches the tool
     // through the real routing path, not just a direct invocation.
     const extra = flags.readOnlyArgs && flags.readOnlyArgs.length > 0
-      ? ` ${flags.readOnlyArgs.join(" ")}`
+      ? ` ${flags.readOnlyArgs.map((arg) => quoteCommandArgument(arg)).join(" ")}`
       : "";
     const readOnly = "This is a read-only utility, NOT workflow work: do NOT run `next` and do NOT advance, resume, or run any workflow stage.";
     // Here the project's pin launched this engine, and `aidlc version` would
