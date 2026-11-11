@@ -17088,6 +17088,10 @@ function teamUnitMajorWalkBeat(
 // the walk while the Unit it was set aside for still has work; the walk takes
 // that Unit, then stops at the set-aside Unit to pick it up again. A Unit in
 // progress goes before the others, so a Unit picked up again comes first.
+// Before the walking skeleton is approved the walk covers the skeleton alone
+// (emitUnitMajorRunStage), yet the Unit a pause was set aside for is walked
+// too, wherever it is in the DAG: otherwise the pause comes first while that
+// Unit is in progress, and it cannot be resumed until that Unit is done.
 type UnitMajorWalkStep =
   | {
       kind: "paused";
@@ -17171,6 +17175,7 @@ function unitMajorWalkStep(
     block.map((k) => [k.slug, unitLedgerFor(projectDir, k.slug)]),
   );
   const setAside = new Map<string, Extract<UnitMajorWalkStep, { kind: "paused" }>>();
+  const waitedFor = new Set<string>();
   const inProgress = new Set<string>();
   for (const k of block) {
     for (const cp of ledgers.get(k.slug)?.open ?? []) {
@@ -17179,10 +17184,12 @@ function unitMajorWalkStep(
         continue;
       }
       const pause = { kind: "paused" as const, stage: k.slug, checkpoint: cp };
-      if (cp.setAsideFor === null || !units.includes(cp.setAsideFor)) return pause;
+      if (cp.setAsideFor === null || !allUnits.includes(cp.setAsideFor)) return pause;
+      waitedFor.add(cp.setAsideFor);
       if (!setAside.has(cp.unit)) setAside.set(cp.unit, pause);
     }
   }
+  const walked = allUnits.filter((u) => units.includes(u) || waitedFor.has(u));
   // The Unit's first stop in the block, or null when it is done.
   const stopFor = (u: string): UnitMajorWalkStep | null => {
     for (const stop of unitWalkStops(projectDir, stateContent, block, ledgers, u, kinds, allUnits, recordPrefix, codekbCtx, checkpoints)) {
@@ -17191,7 +17198,7 @@ function unitMajorWalkStep(
     return null;
   };
   const waiting: UnitMajorWalkStep[] = [];
-  const order = [...units.filter((u) => inProgress.has(u)), ...units.filter((u) => !inProgress.has(u))];
+  const order = [...walked.filter((u) => inProgress.has(u)), ...walked.filter((u) => !inProgress.has(u))];
   for (const u of order) {
     const pause = setAside.get(u);
     if (pause) {

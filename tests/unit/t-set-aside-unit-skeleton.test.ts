@@ -273,10 +273,44 @@ describe("a Unit set aside for the one in progress, while the skeleton is not ap
     });
   }
 
+  test("going back and forth twice lands on the Unit named each time, and beta's plan approval records", () => {
+    const p = backToBetaDuringSkeletonRedo();
+    expect(next(p)).toMatchObject({ kind: "run-stage", stage: "code-generation", unit: "beta" });
+    for (const [to, from] of [["alpha", "beta"], ["beta", "alpha"], ["alpha", "beta"], ["beta", "alpha"]]) {
+      expect(runPrinted(p, ["--stage", "code-generation", "--unit", to]))
+        .toContain(`Paused unit ${from} at Code Generation and picked unit ${to} up at Code Generation.`);
+      const step = next(p);
+      expect(step, `${from} to ${to}: ${JSON.stringify(step)}`).toMatchObject({ kind: "run-stage", stage: "code-generation", unit: to });
+    }
+    planApproved(p, "beta");
+  });
+
+  test("beta parked: its own pause is asked, as with the skeleton approved, and alpha is picked up by name", () => {
+    const p = backToBetaDuringSkeletonRedo();
+    const paused = tool(p, "state", [
+      "unit", "pause", "--stage", "code-generation", "--unit", "beta",
+      "--reason", "waiting for the API key", "--next-action", "Continue Code Generation for unit beta.",
+    ]);
+    expect(paused.status, paused.out).toBe(0);
+    expect(next(p)).toMatchObject({ kind: "ask", ask_type: "unit-paused", unit: "beta", stage: "code-generation" });
+    expect(runPrinted(p, ["--stage", "code-generation", "--unit", "alpha"])).toContain("picked unit alpha up at Code Generation.");
+    expect(next(p)).toMatchObject({ kind: "run-stage", stage: "code-generation", unit: "alpha" });
+  });
+
+  test("the work parked and picked up again comes back to beta's step", () => {
+    const p = backToBetaDuringSkeletonRedo();
+    const parked = tool(p, "orchestrate", ["park"]);
+    expect(parked.status, parked.out).toBe(0);
+    expect(next(p).kind).toBe("parked");
+    const unparked = tool(p, "state", ["unpark"]);
+    expect(unparked.status, unparked.out).toBe(0);
+    expect(next(p)).toMatchObject({ kind: "run-stage", stage: "code-generation", unit: "beta" });
+  });
+
   test("once beta's step is done and approved, alpha is offered again and picks up where it stopped", () => {
     const p = backToBetaDuringSkeletonRedo();
-    planApproved(p, "beta");
     cover(p, "beta", ["code-generation"], false);
+    planApproved(p, "beta");
     const completed = tool(p, "state", ["unit", "complete", "--stage", "code-generation", "--unit", "beta"]);
     expect(completed.status, completed.out).toBe(0);
     expect(next(p).construction_checkpoint).toMatchObject({ kind: "unit", unit: "beta" });
@@ -286,6 +320,16 @@ describe("a Unit set aside for the one in progress, while the skeleton is not ap
     const resumed = tool(p, "state", ["unit", "resume", "--stage", "code-generation", "--unit", "alpha"]);
     expect(resumed.status, resumed.out).toBe(0);
     expect(next(p)).toMatchObject({ kind: "run-stage", stage: "code-generation", unit: "alpha" });
+  });
+
+  test("once beta's code is done, the skeleton's changed work is checked again before gamma is offered", () => {
+    const p = betaReopenedThenSkeletonChanged();
+    cover(p, "beta", ["code-generation"], false);
+    planApproved(p, "beta");
+    const completed = tool(p, "state", ["unit", "complete", "--stage", "code-generation", "--unit", "beta"]);
+    expect(completed.status, completed.out).toBe(0);
+    const step = next(p);
+    expect(step.construction_checkpoint, JSON.stringify(step)).toMatchObject({ kind: "skeleton", unit: "alpha" });
   });
 
   test("the skeleton paused with nothing else in progress is still offered", () => {
