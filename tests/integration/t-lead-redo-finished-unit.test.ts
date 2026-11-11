@@ -349,6 +349,79 @@ describe("a redo for every Unit once a team has taken a Unit", () => {
     expect([step.kind, step.stage]).toEqual(["run-stage", "build-and-test"]);
   });
 
+  test("a lead who has not fetched since the team's claim is answered the same", () => {
+    const { lead, remote } = leadsCheckout();
+    nextDirective(lead);
+    nextDirective(lead);
+    expect(unitVerb(lead, "start", "alpha").status).toBe(0);
+    finish(lead, "alpha");
+    nextDirective(lead);
+    git(lead, ["add", "-A"]);
+    git(lead, ["commit", "-m", "lead's work"]);
+    git(lead, ["push", "origin", "main"]);
+    const team = clone(remote, "team");
+    expect(runMergeTool(UNIT, ["claim", "gamma", "--team", "team-g"], team).status).toBe(0);
+    const before = stageJumps(lead);
+    expect(orch(lead, ["next", "--stage", FD])).toEqual({ kind: "error", message: NOTHING_HERE });
+    expect(stageJumps(lead)).toBe(before);
+  });
+
+  test("a move ahead for every Unit within the Unit stages moves the lead's own Unit on, as a bare move does", () => {
+    const { lead, remote } = leadsCheckout("EXECUTE");
+    nextDirective(lead);
+    nextDirective(lead);
+    expect(unitVerb(lead, "start", "alpha").status).toBe(0);
+    git(lead, ["add", "-A"]);
+    git(lead, ["commit", "-m", "alpha begun"]);
+    git(lead, ["push", "origin", "main"]);
+    const team = clone(remote, "team");
+    expect(runMergeTool(UNIT, ["claim", "gamma", "--team", "team-g"], team).status).toBe(0);
+    git(lead, ["fetch", "origin"]);
+    const said = orch(lead, ["next", "--stage", "code-generation", "--every-unit"]);
+    expect(said.message).not.toContain("Redoing Code Generation");
+    expect(said.message).toContain('This moves only unit "alpha" on to "code-generation"');
+  });
+
+  test("while main is back before the Unit stages, a finished Unit named for a redo keeps its line", () => {
+    const lead = leadWithNothingLeft();
+    const back = runMergeTool(join(AIDLC_SRC, "tools", "aidlc-jump.ts"), ["execute", "--target", "units-generation", "--direction", "backward"], lead);
+    expect(back.status, back.out).toBe(0);
+    expect(jump(lead, "alpha")).toEqual({
+      kind: "error",
+      message: "alpha is finished, so it is not redone here; this checkout builds no Unit now.",
+    });
+  });
+
+  test("going back from Build and Test after the move reopens the lead's own Unit only", () => {
+    const lead = leadAfterATeamClaimed();
+    const moved = runMergeTool(ORCH, ["next", "--stage", "build-and-test"], lead);
+    expect(moved.status, moved.out).toBe(0);
+    const before = { jumps: stageJumps(lead), alpha: rowOf(lead, "alpha") };
+    const said = orch(lead, ["next", "--stage", FD]);
+    expect(said.message).toContain(
+      "\"Redoing Functional Design for unit beta. alpha is finished and gamma is built by team-g, so they are not redone here.\"",
+    );
+    const command = /`[^`]*aidlc-jump\.ts (reopen [^`]+)`/.exec(said.message)?.[1];
+    const ran = runMergeTool(join(AIDLC_SRC, "tools", "aidlc-jump.ts"), command!.split(" ").map((arg) => arg.replace(/^'|'$/g, "")), lead);
+    expect(ran.status, ran.out).toBe(0);
+    const state = readFileSync(seededStateFile(lead), "utf-8");
+    expect(state).toContain("- **Current Stage**: functional-design");
+    expect(state).toContain("- [ ] build-and-test");
+    expect({ jumps: stageJumps(lead), alpha: rowOf(lead, "alpha") }).toEqual(before);
+  });
+
+  test("in a teammate's clone, the lead's own Unit begun in their checkout is not called not taken", () => {
+    const lead = leadAfterATeamClaimed();
+    git(lead, ["push", "origin", "main"]);
+    const remote = git(lead, ["remote", "get-url", "origin"]);
+    const teammate = clone(remote, "teammate");
+    expect(orch(teammate, ["next", "--stage", FD])).toEqual({
+      kind: "error",
+      message: "Functional Design is not redone for every unit once a team has taken a unit: " +
+        "alpha is finished and gamma is built by team-g.",
+    });
+  });
+
   test("a stage an earlier release's jump skipped for every Unit is gone back to as before", () => {
     const lead = leadWithNothingLeft();
     const path = seededStateFile(lead);

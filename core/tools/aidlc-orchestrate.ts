@@ -17876,30 +17876,38 @@ function unitOutsideWork(
 // the Units this checkout builds (unitsHeldHere), or with none nothing, said in
 // one line naming the Units left and why. Null where nothing is narrowed: solo, a
 // claimed checkout, no team has taken a Unit, a target outside the Unit stages on
-// the plan (an earlier release's skip of them included), or the work before them.
+// the plan (an earlier release's skip of them included), or with `fromThem` a
+// move from before them (a jump into them goes as before).
 function teamRedoNarrowed(
   projectDir: string,
   scope: string,
   stateContent: string,
   targetSlug: string,
+  fromThem = false,
 ): { held: boolean; directive: PrintDirective | ErrorDirective } | null {
   if (!isTeamUnitOwnership(stateContent) || readApplicableTeamUnitScopeStamp(projectDir, stateContent)) return null;
   const block = constructionUnitMajorBlock(scope, stateContent, true).map((stage) => stage.slug);
-  const atBlock = getField(stateContent, "Current Stage")?.trim() === block[0] || cursorPastStage(stateContent, block[0]);
-  if (!block.includes(targetSlug) || !atBlock) return null;
+  if (!block.includes(targetSlug)) return null;
+  if (fromThem && getField(stateContent, "Current Stage")?.trim() !== block[0] && !cursorPastStage(stateContent, block[0])) {
+    return null;
+  }
   if (!isReadOnlyEngineProbe()) refreshClaimRefs(projectDir);
   const dag = resolveBoltBatches(projectDir);
   if (!cachedClaimFanoutActive(projectDir) || dag.state !== "ok") return null;
   const held = unitsHeldHere(projectDir) ?? new Set<string>();
-  const here = dag.batches.flat().filter((unit) => held.has(unit));
-  const left = dag.batches.flat().filter((unit) => !held.has(unit));
-  if (left.length === 0) return null;
   let owners = new Map<string, string>();
+  let walked = new Set<string>();
   try {
-    owners = new Map(cachedUnitClaimOverview(projectDir, { writeCache: false }).claimed.map((c) => [c.unit, c.owner]));
+    const overview = cachedUnitClaimOverview(projectDir, { writeCache: false });
+    owners = new Map(overview.claimed.map((c) => [c.unit, c.owner]));
+    walked = new Set(overview.walked ?? []);
   } catch {
     // An unreadable claim registry names no team.
   }
+  // A Unit another checkout walks without a claim is that checkout's: not named.
+  const here = dag.batches.flat().filter((unit) => held.has(unit));
+  const left = dag.batches.flat().filter((unit) => !held.has(unit) && !walked.has(unit));
+  if (left.length === 0) return null;
   // The person's words, all here: finished Units, then each team's, then the untaken.
   const and = (items: readonly string[]): string =>
     items.length < 2 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;
@@ -19573,11 +19581,13 @@ function emitJumpDirective(
         `${direction === "backward" ? " and the steps after it" : ""} for every unit.`
       : "";
     const everyUnitLine = everyUnitSaid ? ` Then tell the person in one line: "${everyUnitSaid}"` : "";
+    // Once a team has taken a Unit, a move ahead for every Unit is for the ones
+    // this checkout builds: the one-Unit move.
     const unitMajor = direction === "forward"
-      ? unitMajorForwardJump(projectDir, scope, unitMajorState, targetSlug, flags.everyUnit === true)
+      ? unitMajorForwardJump(projectDir, scope, unitMajorState, targetSlug, flags.everyUnit === true && !cachedClaimFanoutActive(projectDir))
       : null;
     if (unitMajor === "route") return "route";
-    const narrowed = unitMajor === null ? teamRedoNarrowed(projectDir, scope, unitMajorState, targetSlug) : null;
+    const narrowed = unitMajor === null ? teamRedoNarrowed(projectDir, scope, unitMajorState, targetSlug, true) : null;
     if (narrowed !== null) {
       emit(narrowed.directive);
       return;
