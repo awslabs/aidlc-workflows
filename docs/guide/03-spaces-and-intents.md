@@ -492,7 +492,10 @@ my-project/           ← run `aidlc config` here
 The code repos are the folders next to `aidlc/` that have their own `.git`.
 AI-DLC finds them itself ([Multiple repos in one intent](#multiple-repos-in-one-intent)).
 The record of the work lives once, in `aidlc/`, not once per repo, so a change
-that touches both repos has one set of requirements and one audit trail.
+that touches both repos has one set of requirements and one audit trail. A
+command run from inside one of those repos, or from any folder of the workspace
+that is not set up itself, works on the workspace's `aidlc/` too, so nothing of
+AI-DLC's is written into the repo.
 
 The folder holding them does not have to be a git repo, and AI-DLC does not
 make it one. Because it holds no `.git` or project file, `aidlc config` can ask you

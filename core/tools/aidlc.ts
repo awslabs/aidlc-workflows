@@ -34,6 +34,7 @@ import { AIDLC_VERSION } from "./aidlc-version.ts";
 import {
   aidlcInvocation,
   discoverProjectHarnesses,
+  enclosingProjectDir,
   isCompiledExecutable,
   kiroTreeLayout,
   packagedDistributionRoot,
@@ -43,6 +44,7 @@ import {
   resolveHarnessPath,
   runtimeHarnessDir,
   hookSessionProjectDir,
+  moduleProjectDir,
   runtimeProjectDir,
   runtimeProjectDirFrom,
   runtimeHarnessName,
@@ -4044,6 +4046,31 @@ function renderPublicGrammarFailure(
   return code;
 }
 
+// A command that needs a project, run from a folder inside the person's
+// workspace that is not a project itself (a code repo cloned beside `aidlc/`,
+// a plain subfolder), acts on that workspace, as from its root, so AI-DLC's
+// records never land in the person's repo. Pinned once, before anything reads
+// the project, so the checks, the pin, the harness and the tool all agree; the
+// working folder is not changed. Left as they are: a project the person or
+// the host names, hooks, the statusline and adapters (the host runs them for
+// its own project), a dispatcher whose own path names its project (the copy
+// channel), and a workspace that holds AI-DLC's own machine folders.
+async function pinEnclosingProject(route: Route, argv: readonly string[]): Promise<void> {
+  if (route.projectRequirement !== "required") return;
+  if (route.routeOnly === "hook" || route.routeOnly === "statusline" || route.routeOnly === "adapter") return;
+  if (projectDirFlag(argv.slice(0, ourFlagLimit([...argv]))).value) return;
+  if (
+    process.env.AIDLC_PROJECT_DIR || process.env.CLAUDE_PROJECT_DIR || process.env.KIRO_PROJECT_DIR ||
+    process.env.AIDLC_RUNTIME_PROJECT_DIR
+  ) return;
+  if (moduleProjectDir() !== null) return;
+  const enclosing = enclosingProjectDir(process.cwd());
+  if (enclosing === null) return;
+  const { projectPathOverlapsMachineRoots } = await import("./aidlc-install-paths.ts");
+  if (projectPathOverlapsMachineRoots(enclosing)) return;
+  process.env.AIDLC_PROJECT_DIR = enclosing;
+}
+
 function projectPolicyError(route: Route, argv: readonly string[]): string | null {
   if (route.projectRequirement !== "required") return null;
   const projectDir = dispatcherProjectDirFrom(argv);
@@ -4338,6 +4365,7 @@ export async function main(rawArgv: string[]): Promise<void> {
     return;
   }
   const route = routePolicyFor(argv);
+  if (route) await pinEnclosingProject(route, argv);
   if (route) {
     const error = basicPolicyError(route, argv);
     if (error) {

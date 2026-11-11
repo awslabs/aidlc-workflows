@@ -521,6 +521,13 @@ checkout it names as the project). A worktree AI-DLC made, under
 `.aidlc/worktrees/` or holding `.aidlc/worktree-meta.json`, never counts, and
 the copy channel's hooks keep the host's directory. An adapter resolves its
 project from its host first.
+Every other route that needs a project reads it the same way, from
+`--project-dir`, the three variables, then the working directory. When nothing
+names one and that directory is not an AI-DLC project itself (no
+`aidlc/spaces/`, no AI-DLC install, not a Unit worktree AI-DLC made) but sits
+inside one, as a code repo cloned into the workspace does, the engine acts on
+that enclosing project, so its records never land in the code repo. A
+dispatcher whose own path names its project (the copy channel) keeps it.
 Kiro IDE sets no project variable. Its adapter uses the directory Kiro IDE ran
 the hook in (it does not read the payload's `cwd` field, see
 [kiro-ide-hook-payload.md](kiro-ide-hook-payload.md)) and hands that to the
