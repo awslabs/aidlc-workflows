@@ -3686,6 +3686,10 @@ describe("t265b hook lifecycle", () => {
       }
       expect(runHook(proj, BASH(`cat > src/tasks.ts <<'EOF'\n${body}EOF`)).stderr)
         .toContain("Code generation cannot modify workspace paths");
+      // With a command the guard cannot read before it, the line reads as its printf twin does.
+      const folder = plan.replace("/code-generation-plan.md", "");
+      expect(runHook(proj, BASH(`mkdir -p ${folder} && cat > ${plan} <<'EOF'\n${body}EOF`)).stderr)
+        .toBe(runHook(proj, BASH(`mkdir -p ${folder} && printf plan > ${plan}`)).stderr);
       // A body something runs is a program, an unquoted body that runs a
       // command still runs it, and a target the reading cannot name stays
       // unnamed: each is refused as it is without the heredoc rule.
@@ -3714,6 +3718,11 @@ describe("t265b hook lifecycle", () => {
         [`cat > ${plan} <<'EOF' 'a\nb'; printf x > src/x.ts\nbody\nEOF`, "cannot modify workspace paths"],
         [`cat > ${plan} <<PLAN-EOF\nplain words\nPLAN-EOF\nprintf x > src/x.ts\nPLAN`, "cannot modify workspace paths"],
         [`cat > ${plan} <<'EOF' # it's the plan\nthe person's tasks\nEOF\nprintf x > src/x.ts`, "cannot modify workspace paths"],
+        [`echo a\\ #; ((x=1+\ncat > ${plan} <<EOF\n+0))\nprintf y > src/x.ts\nEOF`, "cannot modify workspace paths"],
+        [`tee src/*.ts <<'EOF'\nbody\nEOF`, "cannot modify workspace paths"],
+        [`LD_PRELOAD=/tmp/x.so cat > ${plan} <<'EOF'\n${body}EOF`, "could not be read"],
+        // A rest of the line it cannot read keeps the line's reading, heredoc and all.
+        [`shopt -s expand_aliases\nalias cat=sh\ncat <<'EOF'\nprintf x > src/x.ts\nEOF`, "cannot modify workspace paths"],
       ] as const) {
         const result = runHook(proj, BASH(command));
         expect(result.code, command).toBe(2);

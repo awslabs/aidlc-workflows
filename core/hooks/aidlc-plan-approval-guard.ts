@@ -2101,11 +2101,13 @@ function shellUsesDynamicEvaluation(command: string): boolean {
 // with no grouping or expansion, and the shell expands nothing in its body (a
 // quoted delimiter, or a body with no `$`, backtick or backslash). Anything
 // else returns the command as written, read as before: any other heredoc, an
-// expansion, a bracket, brace or parenthesis outside a body (arithmetic and
-// subscripts read `<<` as a shift), a carriage return, a quote in a comment, a
-// `<<` it cannot span, whose delimiter word holds a backslash or runs into the
-// next word, a second `<<`, a pipe, `&` or `\` ending the header line, a quote
-// open at its end, or a body no line ends.
+// expansion, a glob, a bracket, brace or parenthesis outside a body (arithmetic
+// and subscripts read `<<` as a shift), an assignment before the cat or tee, a
+// carriage return, a quote in a comment, a `<<` it cannot span, whose delimiter
+// word holds a backslash or runs into the next word, a second `<<`, a pipe, `&`
+// or `\` ending the header line, a quote open at its end, or a body no line
+// ends. mutationIntent reads the line as before, too, when the rest of it is a
+// command it cannot read.
 function dataHeredocsBlanked(
   command: string,
   invocationsOf: (text: string) => Array<{
@@ -2121,6 +2123,7 @@ function dataHeredocsBlanked(
   const spans: Array<[number, number]> = [];
   let pending: { at: number; operatorEnd: number; newline: number; bodyEnd: number } | null = null;
   let lineStart = 0;
+  let escaped = -1;
   let quote: "'" | '"' | null = null;
   for (let i = 0; i < command.length; i++) {
     const ch = command[i];
@@ -2129,7 +2132,7 @@ function dataHeredocsBlanked(
       continue;
     }
     if (ch === "\\") {
-      i++;
+      escaped = ++i;
       continue;
     }
     if (ch === "`" || ch === "$") return command;
@@ -2142,14 +2145,14 @@ function dataHeredocsBlanked(
       quote = "'";
       continue;
     }
-    if (ch === "#" && (i === 0 || /[\s;&|()]/.test(command[i - 1]))) {
+    if (ch === "#" && (i === 0 || (escaped !== i - 1 && /[ \t\n;&|]/.test(command[i - 1])))) {
       const end = command.indexOf("\n", i);
       if (/['"]/.test(command.slice(i, end < 0 ? command.length : end))) return command;
       if (end < 0) break;
       i = end - 1;
       continue;
     }
-    if ("(){}[]".includes(ch)) return command;
+    if ("(){}[]*?".includes(ch)) return command;
     if (ch === "\n") {
       if (pending !== null) {
         if (i !== pending.newline) return command;
@@ -2175,7 +2178,7 @@ function dataHeredocsBlanked(
     const rest = command.slice(heredoc.operatorEnd, heredoc.newline);
     if (!/^(?:$|[ \t;&|<>])/.test(rest) || rest.includes("<<") || /[|&\\][ \t]*$/.test(rest)) return command;
     const pipeline = heredocPipeline(command.slice(lineStart, i) + rest, i - lineStart);
-    if (/[(){}$`]/.test(pipeline.raw)) return command;
+    if (/[(){}$`=]/.test(pipeline.raw)) return command;
     const calls = invocationsOf(pipeline.execution);
     if (
       calls.length === 0 ||
@@ -2203,6 +2206,7 @@ async function mutationIntent(
   cwd: string,
   powerShellHint = false,
   context: EngineCommandContext = NO_ENGINE_CONTEXT,
+  readHeredocs = true,
 ): Promise<MutationIntent> {
   let targets: string[] = [];
   let opaqueShell = false;
@@ -2226,7 +2230,7 @@ async function mutationIntent(
       shellWriteTargets,
     } = await import("./aidlc-review-freeze.ts");
     // PowerShell has no heredoc; its line is read as written.
-    const read = powerShellHint ? command : dataHeredocsBlanked(command, shellCommandInvocationDetails);
+    const read = powerShellHint || !readHeredocs ? command : dataHeredocsBlanked(command, shellCommandInvocationDetails);
     // A command the adapter ran in PowerShell is read as PowerShell when it is
     // plain. Anything else, and every unhinted command, keeps the POSIX
     // reading: Bash drops the backslashes a Windows path is written with.
@@ -2274,6 +2278,10 @@ async function mutationIntent(
       invocations.some((invocation) =>
         shellInvocationNeedsApproval(projectDir, from, invocation, concreteTargets, analysed, dialect, context)
       );
+    // The rest of a line it cannot read is read as before, its heredoc too.
+    if (opaqueShell && read !== command) {
+      return mutationIntent(projectDir, toolName, toolInput, cwd, powerShellHint, context, false);
+    }
     // A command that names AI-DLC and that the shell reading refused: an
     // untrusted spelling (a retained version, a copy of the tools outside the
     // trusted folder, a shim), a wrapper or a `cd` it cannot follow, a second

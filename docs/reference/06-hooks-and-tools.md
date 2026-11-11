@@ -1880,7 +1880,12 @@ does not decode, one that can hide a command or a write target (a variable, a
 shell or evaluator (`bash -c`, `sh -c`, `eval`, `source`, `pwsh`, a shell
 script run by name such as `./run.sh` or `deploy.ps1`, or a runtime given its
 program on the command line such as `bun -e` or `python -c`), or a PowerShell
-command it cannot read as plain PowerShell. A line that starts with `cd <folder>`
+command it cannot read as plain PowerShell. A heredoc that only `cat` or `tee`
+reads (`cat > <file> <<'EOF'`, `tee <file> <<'EOF'`), with a quoted delimiter or
+a body the shell does not expand, is data: its write is judged as the same
+write by a plain redirect (`dataHeredocsBlanked` in the guard, the span from
+`heredocAt` in runtime-integrity.ts); any other heredoc, and one the reading is
+not sure of, is read as before. A line that starts with `cd <folder>`
 joined to the rest by `&&`, `;` or a newline (and, in a line read as plain
 PowerShell, joined by `;`, also `Set-Location`, `sl`, `chdir`, `pushd` or
 `Push-Location`) is read as the rest of
