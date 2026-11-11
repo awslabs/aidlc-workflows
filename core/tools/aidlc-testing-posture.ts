@@ -594,6 +594,7 @@ const TESTABLE_LAYERS = [
   "Frontend behavior",
 ];
 const CONTRACT_HEADING = "## Testing Contract";
+const CONTRACT_BLOCK_RE = /```json[ \t]*\r?\n([\s\S]*?)\r?\n```/i;
 export const PLAN_APPROVAL_CHECKPOINT = "Code Generation Plan Approval";
 const CONTRACT_MARKER_RE =
   /^[ \t]*AIDLC-TESTING-CONTRACT[ \t]*:[ \t]*(sha256:[0-9a-f]{64})[ \t]*$/;
@@ -1355,6 +1356,7 @@ export function renderTestingContract(contract: TestingPostureContract): string 
 export function replaceTestingContractSection(
   plan: string,
   contract: TestingPostureContract,
+  keep = false,
 ): string | null {
   const crlf = plan.includes("\r\n");
   const lines = plan.replace(/\r\n/g, "\n").split("\n");
@@ -1380,7 +1382,12 @@ export function replaceTestingContractSection(
   if (start < 0) return null;
   const before = lines.slice(0, start).join("\n").replace(/\n+$/, "");
   const after = lines.slice(end).join("\n").replace(/^\n+/, "").replace(/\n+$/, "");
-  const rendered = renderTestingContract(contract).replace(/\n+$/, "");
+  // `keep`, after the person's own edit: the words they wrote in the section
+  // stay, after the block; only the block is the engine's.
+  const kept = keep
+    ? lines.slice(start + 1, end).join("\n").replace(CONTRACT_BLOCK_RE, "").replace(/\n{3,}/g, "\n\n").trim()
+    : "";
+  const rendered = `${renderTestingContract(contract).replace(/\n+$/, "")}${kept ? `\n\n${kept}` : ""}`;
   const text = `${before}${before ? "\n\n" : ""}${rendered}\n${after ? `\n${after}\n` : ""}`;
   return crlf ? text.replace(/\n/g, "\r\n") : text;
 }
@@ -1397,11 +1404,11 @@ const PLAN_OWN_LINE_RE = /^[ \t]*(?:#{1,6}[ \t]|(?:[-*+]|\d+[.)])[ \t]+\[[ xX-]\
  * section on over the plan's own lines), nor a plan that did not read as UTF-8
  * text (a UTF-16 or ANSI file), which writing back would garble.
  */
-export function planWithTestingContract(plan: string, contract: TestingPostureContract): string | null {
+export function planWithTestingContract(plan: string, contract: TestingPostureContract, keep = false): string | null {
   if (plan.includes("\uFFFD") || plan.includes("\u0000") || PLAN_OWN_LINE_RE.test(rawMarkdownSection(plan, CONTRACT_HEADING))) {
     return null;
   }
-  const written = replaceTestingContractSection(plan, contract) ??
+  const written = replaceTestingContractSection(plan, contract, keep) ??
     replaceTestingContractSection(`${plan}\n\n${CONTRACT_HEADING}\n`, contract);
   const read = written === null ? null : readTestingContract(written);
   return read !== null && "contract" in read && read.contract.contract_sha256 === contract.contract_sha256 ? written : null;
@@ -1439,7 +1446,7 @@ export function readTestingContract(
   plan: string,
 ): { contract: TestingPostureContract } | { defect: TestingContractDefect; detail?: string } {
   const section = rawMarkdownSection(plan, CONTRACT_HEADING);
-  const match = section.match(/```json[ \t]*\r?\n([\s\S]*?)\r?\n```/i);
+  const match = section.match(CONTRACT_BLOCK_RE);
   if (!match) return { defect: "missing" };
   let parsed: TestingPostureContract;
   try {

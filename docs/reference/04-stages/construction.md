@@ -935,7 +935,8 @@ This stage has a **two-part structure**: planning followed by generation.
    Run `aidlc-testing-posture.ts render` to read the Testing Contract the plan
    follows; `next` writes its `## Testing Contract` JSON block into the plan
    itself (a block that is missing, broken or out of date is replaced; the rest
-   of the plan is kept). The resolver reads
+   of the plan is kept, and after the person's own edit so are the words they
+   wrote in that section, after the block). The resolver reads
    org/team/project Testing Posture sections additively: a project coverage or
    integration note remains applicable but does not erase a team methodology;
    a contradictory narrower methodology is rejected.
