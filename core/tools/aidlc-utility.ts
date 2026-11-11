@@ -10957,8 +10957,9 @@ function copiedFromPath(projectDir: string, absPath: string): string | undefined
 /**
  * Writes a changed original's bytes over the copy made from it, when the
  * knowledge tool finds that one copy (copiedDocumentFor: its row records this
- * original and the copy still holds the bytes copied). Returns the copy's path,
- * or null to copy beside it as before. The bytes are staged beside the copy
+ * original and the copy still holds the bytes copied). Returns `{ target }`, the
+ * copy's path; `{ changedCopy }` when the one copy made from it has changed, so
+ * the caller copies beside it and says so; or null to copy beside it as before. The bytes are staged beside the copy
  * under a dot name the walk skips, the copy is checked again just before the
  * rename (an edit made meanwhile is never written over), and the rename keeps
  * the Windows retry the atomic writers use.

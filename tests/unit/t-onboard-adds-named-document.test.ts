@@ -516,9 +516,11 @@ describe("a changed original named again updates its copy", () => {
     renameSync(join(proj, DOCUMENTS, "a.md"), join(proj, DOCUMENTS, "a-2025.md"));
     expect(knowledge(proj, ["sync"]).status).toBe(0);
     writeFileSync(join(proj, "orig", "a.md"), "v2\n", "utf-8");
-    expect(onboard(proj, ["orig/a.md"]).status).toBe(0);
+    const afresh = onboard(proj, ["orig/a.md"]);
+    expect(afresh.status, afresh.out).toBe(0);
     expect(readFileSync(join(proj, DOCUMENTS, "a-2025.md"), "utf-8")).toBe("v1\n");
     expect(readFileSync(join(proj, DOCUMENTS, "a.md"), "utf-8")).toBe("v2\n");
+    expect(String(afresh.json.onboard_note)).not.toContain("earlier copy");
   });
 
   test("a run that wrote the new bytes and then stopped is finished by the next one, with one row", () => {
