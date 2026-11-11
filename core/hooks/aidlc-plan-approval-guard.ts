@@ -2101,10 +2101,11 @@ function shellUsesDynamicEvaluation(command: string): boolean {
 // with no grouping or expansion, and the shell expands nothing in its body (a
 // quoted delimiter, or a body with no `$`, backtick or backslash). Anything
 // else returns the command as written, read as before: any other heredoc, an
-// expansion outside a body, a carriage return, a quote in a comment, a `<<` it
-// cannot span or whose delimiter runs into the next word, a second `<<`, a
-// pipe, `&` or `\` ending the header line, a quote open at its end, or a body
-// no line ends.
+// expansion, a bracket, brace or parenthesis outside a body (arithmetic and
+// subscripts read `<<` as a shift), a carriage return, a quote in a comment, a
+// `<<` it cannot span, whose delimiter word holds a backslash or runs into the
+// next word, a second `<<`, a pipe, `&` or `\` ending the header line, a quote
+// open at its end, or a body no line ends.
 function dataHeredocsBlanked(
   command: string,
   invocationsOf: (text: string) => Array<{
@@ -2148,6 +2149,7 @@ function dataHeredocsBlanked(
       i = end - 1;
       continue;
     }
+    if ("(){}[]".includes(ch)) return command;
     if (ch === "\n") {
       if (pending !== null) {
         if (i !== pending.newline) return command;
@@ -2166,7 +2168,10 @@ function dataHeredocsBlanked(
       continue;
     }
     const heredoc = heredocAt(command, i);
-    if (pending !== null || heredoc === null || heredoc.bodyEnd >= command.length) return command;
+    if (
+      pending !== null || heredoc === null || heredoc.bodyEnd >= command.length ||
+      command.slice(i, heredoc.operatorEnd).includes("\\")
+    ) return command;
     const rest = command.slice(heredoc.operatorEnd, heredoc.newline);
     if (!/^(?:$|[ \t;&|<>])/.test(rest) || rest.includes("<<") || /[|&\\][ \t]*$/.test(rest)) return command;
     const pipeline = heredocPipeline(command.slice(lineStart, i) + rest, i - lineStart);

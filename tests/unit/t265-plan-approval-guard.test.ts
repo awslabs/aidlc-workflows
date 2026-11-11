@@ -3705,6 +3705,15 @@ describe("t265b hook lifecycle", () => {
         [`cat "<<EOF"\nprintf x > src/x.ts\nEOF`, "cannot modify workspace paths"],
         [`cat > ${plan} <<PLAN-EOF\nplain words\nPLAN-EOF\nprintf x > src/x.ts`, "cannot modify workspace paths"],
         [`command cat > ${plan} <<'EOF'\n${body}EOF`, "could not be read"],
+        // Each place the shell ends or reads the heredoc otherwise than the
+        // walk would: the write after it is seen, as it is without the rule.
+        [`cat > ${plan} <<"EOF\\\\"\nplan\nEOF\\\nprintf x > src/x.ts\nEOF\\\\`, "cannot modify workspace paths"],
+        [`((x=1+\ncat > ${plan} <<EOF\n+0))\nprintf y > src/x.ts\nEOF`, "cannot modify workspace paths"],
+        [`a[1+\ncat <<EOF\n+0]=5\nprintf y > src/x.ts\nEOF`, "cannot modify workspace paths"],
+        [`cat > ${plan} <<'EOF' \\\n; printf x > src/x.ts\nbody\nEOF`, "cannot modify workspace paths"],
+        [`cat > ${plan} <<'EOF' 'a\nb'; printf x > src/x.ts\nbody\nEOF`, "cannot modify workspace paths"],
+        [`cat > ${plan} <<PLAN-EOF\nplain words\nPLAN-EOF\nprintf x > src/x.ts\nPLAN`, "cannot modify workspace paths"],
+        [`cat > ${plan} <<'EOF' # it's the plan\nthe person's tasks\nEOF\nprintf x > src/x.ts`, "cannot modify workspace paths"],
       ] as const) {
         const result = runHook(proj, BASH(command));
         expect(result.code, command).toBe(2);
@@ -3729,6 +3738,17 @@ describe("t265b hook lifecycle", () => {
         const result = runHook(proj, BASH(command));
         expect(result.code, `${command}\n${result.stderr}`).toBe(code);
         if (code === 2) expect(result.stderr, command).toContain("could not be read");
+      }
+      // The runtime-integrity check reads the same heredoc spans (heredocAt):
+      // a hook write after the terminator is refused, one inside a body that
+      // only cat reads is data.
+      const hook = ".claude/hooks/aidlc-plan-approval-guard.ts";
+      for (const [open, close] of [["<<-'EOF'", "\tEOF"], ['<<"EOF"', "EOF"], ["<<'EOF'", "EOF\r"]]) {
+        const after = runHook(proj, BASH(`cat ${open}\nbody\n${close}\nprintf x > ${hook}`));
+        expect(after.code, open).toBe(2);
+        expect(after.stderr, open).toContain("hooks belong to the harness");
+        expect(runHook(proj, BASH(`cat ${open}\nprintf x > ${hook}\n${close}\n`)).stderr, open)
+          .not.toContain("hooks belong to the harness");
       }
       // A line read as PowerShell keeps its own reading.
       const pwsh = runHook(proj, { ...BASH(reported), cwd: proj, aidlc_shell: "powershell" });
