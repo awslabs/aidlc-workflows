@@ -643,6 +643,10 @@ function fetchClaimRefs(projectDir: string, remote: string | null): void {
   }
 }
 
+// The remotes that stand in for a lead's project that did not answer, while
+// they did not answer either (homeTarget): a read there that fails says so.
+const unansweredHomes = new Set<string>();
+
 function refTip(
   projectDir: string,
   remote: string | null,
@@ -651,6 +655,10 @@ function refTip(
   if (remote) {
     const found = git(projectDir, ["ls-remote", remote, ref]);
     if (!found.ok) {
+      if (unansweredHomes.has(remote)) {
+        const why = (found.stderr || found.stdout).split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? "it did not answer";
+        fail(`Neither the lead's project nor ${remote} answered just now (${why}), so nothing was taken or sent; it goes through when one answers.`);
+      }
       fail(`Unit claim registry read failed: ${found.stderr.trim() || found.stdout.trim()}`);
     }
     const line = found.stdout.trim().split(/\r?\n/).find(Boolean);
@@ -906,13 +914,16 @@ function updateClaimRef(
   ref: string,
   commitOid: string,
   expectedOid: string | null,
-): { ok: boolean; refused?: string } {
+): { ok: boolean; refused?: string; to?: string } {
   if (remote) {
     const lease = `--force-with-lease=${ref}:${expectedOid ?? ""}`;
     const pushed = git(projectDir, ["push", remote, lease, `${commitOid}:${ref}`]);
-    if (pushed.ok) return { ok: true };
-    if (CLAIM_RACE_LOST.test(pushed.stderr)) return { ok: false };
-    return { ok: false, refused: pushRefusal(pushed.stderr) };
+    // Where git sent it: its own "To <address>" line.
+    const to = /^To (\S.*)$/m.exec(pushed.stderr)?.[1]?.trim();
+    const at = to === undefined ? {} : { to };
+    if (pushed.ok) return { ok: true, ...at };
+    if (CLAIM_RACE_LOST.test(pushed.stderr)) return { ok: false, ...at };
+    return { ok: false, refused: pushRefusal(pushed.stderr), ...at };
   }
   const updated = git(projectDir, [
     "update-ref",
@@ -921,6 +932,41 @@ function updateClaimRef(
     expectedOid ?? ZERO_OID,
   ]);
   return { ok: updated.ok };
+}
+
+// A claim written for the lead's project through home.target, read back at the
+// recorded address when the target is a remote name: git may send that
+// remote's pushes elsewhere (a push URL, pushInsteadOf, or a fork that copied
+// the lead's claim branches standing in as the remote). A write the address
+// answers without is `elsewhere`, the address git's own To line names, user
+// and token masked; this clone's copy of the lead's claim, which git moved on
+// the push, is put back as the lead's project has it. A race lost while the
+// lead's claim did not move was lost elsewhere too. An address that does not
+// answer leaves the write as git made it.
+function writeHomeClaim(
+  projectDir: string,
+  home: { target: string | null; location: string },
+  ref: string,
+  commitOid: string,
+  expectedOid: string | null,
+): { ok: boolean; refused?: string; elsewhere?: string } {
+  const target = home.target;
+  const byName = target !== null && !isGitAddress(target) && isGitAddress(home.location);
+  const tracking = byName ? `refs/remotes/${target}/${ref.slice("refs/heads/".length)}` : null;
+  const before = tracking === null ? null : localGit(projectDir, ["rev-parse", "--verify", "--quiet", tracking]).stdout.trim() || null;
+  const { to, ...sent } = updateClaimRef(projectDir, target, ref, commitOid, expectedOid);
+  if (!byName || sent.refused !== undefined) return sent;
+  // A remote that fetches from the lead's project is read back by its name, as its reads are.
+  const fetchesHome = sameGitAddress(git(projectDir, ["remote", "get-url", target]).stdout.trim(), home.location);
+  const atHome = quietly(() => git(projectDir, ["ls-remote", fetchesHome ? target : home.location, ref]));
+  if (!atHome.ok) return sent;
+  const tip = atHome.stdout.trim().split(/\s+/)[0] || null;
+  if (sent.ok ? tip === commitOid : tip !== expectedOid) return sent;
+  if (tracking !== null && fetchesHome) {
+    localGit(projectDir, before === null ? ["update-ref", "-d", tracking] : ["update-ref", tracking, before]);
+  }
+  const address = to ?? git(projectDir, ["remote", "get-url", "--push", target]).stdout.trim();
+  return { ok: false, elsewhere: maskUserinfo(address) };
 }
 
 function activeIdentity(projectDir: string): {
@@ -1200,6 +1246,15 @@ function cachedClaimsForIdentity(
     `refs/aidlc/home/${identity.intentId8}/`,
   ]);
   if (!refs.ok) return claims;
+  // The home's copies (fetched by the lead's address, this clone's own remote,
+  // or local claim branches) are read over another remote's copy of the same
+  // claim, whatever its generation: a fork's stale or never-taken-in copy never
+  // hides the lead's own. Between copies of one kind, the rule below.
+  const ownRemote = repositoryRemote(projectDir);
+  const homeCopy = (ref: string): number =>
+    ref.startsWith("refs/aidlc/home/") || ref.startsWith("refs/heads/claim/") ||
+      (ownRemote !== null && ref.startsWith(`refs/remotes/${ownRemote}/`)) ? 1 : 0;
+  const readFrom = new Map<string, number>();
   for (const line of refs.stdout.split(/\r?\n/).filter(Boolean)) {
     const [oid, ref] = line.trim().split(/\s+/, 2);
     if (!oid || !ref) continue;
@@ -1226,8 +1281,11 @@ function cachedClaimsForIdentity(
       prior.payload = payload;
       continue;
     }
+    const kind = homeCopy(ref);
+    const priorKind = readFrom.get(payload.unit);
+    if (prior && priorKind !== undefined && kind < priorKind) continue;
     if (
-      prior &&
+      prior && !(priorKind !== undefined && kind > priorKind) &&
       (prior.generation > payload.generation ||
         (prior.generation === payload.generation &&
           (
@@ -1237,6 +1295,7 @@ function cachedClaimsForIdentity(
     ) {
       continue;
     }
+    readFrom.set(payload.unit, kind);
     claims.set(payload.unit, {
       unit: payload.unit,
       status: payload.status,
@@ -5674,17 +5733,30 @@ interface HomeWork {
 // https, a host's own ssh port or path, an ssh alias), so the claims are read
 // and written through it with the person's own login. The refs a clone kept
 // are only the hint: a clone whose origin was switched to the team's own repo
-// keeps them too, so the remote counts when it holds the claims now.
-function remoteHoldsClaims(projectDir: string, id8: string): boolean {
+// keeps them too, and a fork can copy the lead's claim branches. So while the
+// recorded address answers, the remote counts only when it lists the same
+// claims there, commit for commit; when the address does not answer, the
+// remote stands on the kept refs. `unanswered` names it when neither answers.
+function remoteHoldsClaims(
+  projectDir: string,
+  id8: string,
+  location: string,
+): { holds: boolean; unanswered?: string } {
   try {
     const remote = repositoryRemote(projectDir);
-    if (remote === null) return false;
-    if (git(projectDir, ["for-each-ref", "--count=1", "--format=%(refname)", `refs/remotes/${remote}/claim/${id8}/`]).stdout.trim() === "") return false;
-    const listed = quietly(() => git(projectDir, ["ls-remote", remote, `refs/heads/claim/${id8}/*`]));
-    // Not reached now: the clone's remote stands, as before.
-    return !listed.ok || listed.stdout.trim() !== "";
+    if (remote === null) return { holds: false };
+    if (git(projectDir, ["for-each-ref", "--count=1", "--format=%(refname)", `refs/remotes/${remote}/claim/${id8}/`]).stdout.trim() === "") return { holds: false };
+    const claims = `refs/heads/claim/${id8}/*`;
+    const listed = quietly(() => git(projectDir, ["ls-remote", remote, claims]));
+    const atHome = isGitAddress(location) ? quietly(() => git(projectDir, ["ls-remote", location, claims])) : null;
+    if (atHome === null || !atHome.ok) {
+      if (listed.ok) return { holds: listed.stdout.trim() !== "" };
+      return { holds: true, unanswered: remote };
+    }
+    const sorted = (text: string): string => text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).sort().join("\n");
+    return { holds: listed.ok && atHome.stdout.trim() !== "" && sorted(listed.stdout) === sorted(atHome.stdout) };
   } catch {
-    return false;
+    return { holds: false };
   }
 }
 
@@ -5748,9 +5820,10 @@ function homeTarget(
   plan?: { space: string; recordPrefix: string },
 ): { target: string | null; atOrigin?: { why: string; origin: string } } {
   const own = workspaceHomeLocation(projectDir);
-  if (location === "local" || (own !== null && sameGitAddress(location, own)) || remoteHoldsClaims(projectDir, id8)) {
-    return { target: repositoryRemote(projectDir) };
-  }
+  if (location === "local" || (own !== null && sameGitAddress(location, own))) return { target: repositoryRemote(projectDir) };
+  const held = remoteHoldsClaims(projectDir, id8, location);
+  if (held.unanswered !== undefined) unansweredHomes.add(held.unanswered);
+  if (held.holds) return { target: repositoryRemote(projectDir) };
   const remote = repositoryRemote(projectDir);
   if (plan === undefined || remote === null || own === null || own === "local") return { target: location };
   const reached = quietly(() => git(projectDir, ["ls-remote", "--heads", location]));
@@ -6509,13 +6582,15 @@ function takeUnit(args: string[], projectDir?: string): void {
     gateRhythm: readUnitGateRhythm(plan.state), earlyOn,
   });
   const commit = createClaimCommit(pd, current?.oid ?? integration.oid, payload);
-  const pushed = updateClaimRef(pd, home.target, ref, commit, current?.oid ?? null);
+  const pushed = writeHomeClaim(pd, home, ref, commit, current?.oid ?? null);
   // The lead's project took no push from here: the take goes on as the person
   // asked, and its claim is recorded there when a push next goes through
   // (recordTakeHere). An early start's claim alone holds where it started, so
-  // that one waits for the lead's project to take pushes.
+  // that one waits for the lead's project to take pushes. A take that went to
+  // the team's own remote instead is said with where it is.
   let notRecorded: string | null = null;
-  if (!pushed.ok) {
+  const onRemote = pushed.elsewhere ?? null;
+  if (!pushed.ok && onRemote === null) {
     const winner = currentClaim(pd, home.target, ref);
     if (winner?.status === "claimed") fail(takenLine(unit, winner));
     // Git gave no reason when the claim moved under the take.
@@ -6526,7 +6601,7 @@ function takeUnit(args: string[], projectDir?: string): void {
     }
     notRecorded = why;
   }
-  if (notRecorded === null) invalidateLiveClaimPayloadCache(pd, unit);
+  if (notRecorded === null && onRemote === null) invalidateLiveClaimPayloadCache(pd, unit);
   // A build in the lead's own space reads the lead's rules as its own already.
   const withLeadRules = (bareFlags.has("lead-rules") || flags["lead-rules"] !== undefined) && (home.leadCopy || team !== home.space);
   // The lead's rules the build reads too, in the take's own words, as its choice named them.
@@ -6585,8 +6660,11 @@ function takeUnit(args: string[], projectDir?: string): void {
       : "") +
     (home.atOrigin === undefined ? "" : ` The lead's project could not be reached at ${home.location} (${home.atOrigin.why}), so ` +
       `${unit} is recorded at ${home.atOrigin.origin}, where this clone's copy of the lead's plan comes from.`);
-  const noPush = notRecorded === null ? null : `The lead's project takes no push from here (${notRecorded}), so the lead and the other teams ` +
-    `cannot see that you took ${unit} until it does; AI-DLC records it there when a push next goes through.`;
+  const noPush = onRemote !== null
+    ? `The lead's project takes no push from you, so your take of ${unit} is on ${onRemote}; the lead and the other teams ` +
+      "see it once the lead adds that address to their workspace as a git remote."
+    : notRecorded === null ? null : `The lead's project takes no push from here (${notRecorded}), so the lead and the other teams ` +
+      `cannot see that you took ${unit} until it does; AI-DLC records it there when a push next goes through.`;
   // The take's own line waits for the build's next step, which also puts the
   // offer to clone its repos not checked out here (buildCloneOffer). The
   // no-push risk is a line of its own kept for the reply the turn ends on, so
@@ -6802,7 +6880,7 @@ function recordTakeHere(projectDir: string, build: UnitBuild, home: HomeWork, st
         me: git(projectDir, ["config", "user.name"]).stdout.trim() || "a teammate",
         baseOid: standing.baseOid, integrationRef, gateRhythm: readUnitGateRhythm(textAt(projectDir, standing.baseOid, record) ?? ""),
       });
-      const pushed = updateClaimRef(projectDir, home.target, ref, createClaimCommit(projectDir, current?.oid ?? standing.baseOid, payload), current?.oid ?? null);
+      const pushed = writeHomeClaim(projectDir, home, ref, createClaimCommit(projectDir, current?.oid ?? standing.baseOid, payload), current?.oid ?? null);
       if (!pushed.ok) return pushed;
       invalidateLiveClaimPayloadCache(projectDir, build.unit);
       if (generation !== build.attempt) {

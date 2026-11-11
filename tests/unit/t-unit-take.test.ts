@@ -1223,6 +1223,111 @@ describe("a team's own workspace, made from the home's", () => {
   });
 });
 
+// A probe of teams that push to a fork of the lead's project: the claims went
+// where the lead never reads them, the take said the Unit was theirs, and the
+// lead's board never showed it. The claims' home is the lead's address; a write
+// read back there that is not there is said with today's no-push line.
+describe("the claims' home is the lead's address", () => {
+  const three = "# Unit dependencies\n\n```yaml\nunits:\n  - name: refunds\n    depends_on: []\n" +
+    "  - name: checkout-ui\n    depends_on: []\n  - name: reporting\n    depends_on: []\n```\n";
+  // A fork on the host: a bare copy, main only (GitHub's default) or every branch.
+  function forkOf(bare: string, label: string, allBranches: boolean): string {
+    const parent = tempDir(`fork-${label}`);
+    const dir = join(parent, `${label}.git`);
+    git(parent, ["clone", "-q", "--bare", ...(allBranches ? [] : ["--single-branch", "-b", "main"]), bare, dir]);
+    return dir;
+  }
+  // Option 1's line, the address as git's own To line names it.
+  const onFork = (unit: string, fork: string): RegExp =>
+    new RegExp(`The lead's project takes no push from you, so your take of ${unit} is on \\S*${basename(fork).replace(".", "\\.")}; ` +
+      "the lead and the other teams see it once the lead adds that address to their workspace as a git remote\\.");
+
+  test("a clone that pulls from the lead's project and pushes to a fork: the take says it is on the fork, and the clone keeps no claim the lead does not have", () => {
+    const home = homeWithTeams(three);
+    refusePushes(home.remote);
+    const fork = forkOf(home.remote, "pay-hub-fork", false);
+    const pay = cloneOf(home.remote, "pay");
+    git(pay, ["remote", "set-url", "--push", "origin", fork]);
+    const held = takeFrom("payments", pay, "refunds");
+    expect(held.status, held.out).toBe(0);
+    expect(String(held.json?.notice)).toMatch(onFork("refunds", fork));
+    expect(String(held.json?.notice)).not.toContain("takes no push from here");
+    const id8 = fixtureIntentId8(home.dir);
+    expect(claimPayload(home.remote, id8, "refunds")).toBeNull();
+    expect(git(pay, ["for-each-ref", "--format=%(refname)", `refs/remotes/origin/claim/${id8}/refunds`]).trim()).toBe("");
+  });
+
+  test("a fork that copied the lead's claim branches is not the lead's project: the take says it is on the fork", () => {
+    const home = homeWithTeams(three);
+    const web = cloneOf(home.remote, "web");
+    expect(takeFrom("web", web, "checkout-ui").status).toBe(0);
+    refusePushes(home.remote);
+    const fork = forkOf(home.remote, "pay-hub-full", true);
+    const pay = cloneOf(fork, "pay");
+    git(pay, ["remote", "add", "upstream", home.remote]);
+    git(pay, ["fetch", "-q", "upstream"]);
+    const held = takeFrom("payments", pay, "refunds");
+    expect(held.status, held.out).toBe(0);
+    expect(String(held.json?.notice)).toMatch(onFork("refunds", fork));
+    const id8 = fixtureIntentId8(home.dir);
+    expect(claimPayload(home.remote, id8, "refunds")).toBeNull();
+    expect(claimPayload(fork, id8, "refunds")).toMatchObject({ status: "claimed" });
+  });
+
+  test("a clone whose own remote does not answer, while the lead's project does: the take asks the lead's project, never a raw git error", () => {
+    const home = homeWithTeams(three);
+    const web = cloneOf(home.remote, "web");
+    expect(takeFrom("web", web, "checkout-ui").status).toBe(0);
+    const pay = cloneOf(home.remote, "pay");
+    refusePushes(home.remote);
+    git(pay, ["remote", "set-url", "origin", join(tempDir("gone"), "pay-fork.git")]);
+    const held = takeFrom("payments", pay, "refunds");
+    expect(held.out).not.toContain("Unit claim registry read failed");
+    expect(held.status, held.out).toBe(0);
+    expect(String(held.json?.notice)).toContain(
+      "The lead's project takes no push from here (this host takes no push from here (pre-receive hook declined)), so the lead " +
+        "and the other teams cannot see that you took refunds until it does",
+    );
+  });
+
+  test("when neither the lead's project nor the clone's own remote answers: one line says so, and nothing is taken", () => {
+    const home = homeWithTeams(three);
+    const web = cloneOf(home.remote, "web");
+    expect(takeFrom("web", web, "checkout-ui").status).toBe(0);
+    const pay = cloneOf(home.remote, "pay");
+    git(pay, ["fetch", "-q", "origin"]);
+    git(pay, ["remote", "set-url", "origin", join(tempDir("gone"), "pay-fork.git")]);
+    const away = `${home.remote}-away`;
+    renameSync(home.remote, away);
+    try {
+      const held = takeFrom("payments", pay, "refunds");
+      expect(held.status, held.out).not.toBe(0);
+      expect(held.out).toMatch(/Neither the lead's project nor origin answered just now \([^)]+\), so nothing was taken or sent; it goes through when one answers\./);
+      expect(held.out).not.toContain("Unit claim registry read failed");
+    } finally {
+      renameSync(away, home.remote);
+    }
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toBeNull();
+  });
+
+  test("at the lead's project, another remote's older copy of a claim never hides the lead's own: the merged Unit is recorded done", () => {
+    const { hosts, home, alice, record } = refundsTaken();
+    const id8 = fixtureIntentId8(home.dir);
+    const stale = forkOf(home.remote, "team-a-hub", true);
+    codeGenerated(alice, record);
+    finishBuild(record);
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    mergeOnHost(hosts.billing, "refunds", "squash");
+    git(home.dir, ["remote", "add", "team-a", stale]);
+    git(home.dir, ["fetch", "-q", "team-a"]);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    next(home.dir);
+    expect(claimPayload(home.remote, id8, "refunds")).toMatchObject({ done: true });
+  });
+});
+
 // A take whose likely repo is not checked out yet, where repos.json has its
 // address (x2783-s9): the take offers to clone it where repos.json puts it, and
 // the offer's own command clones it, the Unit's repos as they were.
