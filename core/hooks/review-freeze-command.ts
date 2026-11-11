@@ -1991,7 +1991,7 @@ export function patchTargets(patch: string): Array<{ kind: "Add" | "Update" | "D
 // A patch handed to apply_patch in the shell names its files as written, never
 // as shell words (`routes/$id.tsx`), and the binary takes its file lines
 // indented too.
-function shellPatchPaths(patch: string, cwd: string): string[] {
+export function shellPatchPaths(patch: string, cwd: string): string[] {
   return patchTargets(patch.replace(/^[ \t]+(?=\*\*\* )/gm, ""))
     .filter(({ path }) => path.length > 0)
     .map(({ path }) => resolve(cwd, path));

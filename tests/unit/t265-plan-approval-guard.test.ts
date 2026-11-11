@@ -3825,18 +3825,29 @@ describe("t265b hook lifecycle", () => {
       expect(runHook(proj, BASH(`apply_patch '${patch(add("src/x.ts"))}' <<'PATCH'\n${patch(add(plan))}\nPATCH`)).code).toBe(2);
       // An argument with no file lines writes nothing.
       expect(runHook(proj, BASH("apply_patch --help")).code).toBe(0);
-      // A patch typed in afterwards cannot be read: today's line, and one sentence naming the way on.
+      // A patch typed in afterwards cannot be read: today's line, and one sentence
+      // naming the way on, except on Windows, where Codex's apply_patch.bat takes
+      // no patch on stdin and none over more than one line: today's line alone.
       const sentence =
         "An apply_patch with its patch in the command itself (`apply_patch <<'PATCH'`, the patch, then `PATCH` on its own line) is read as the writes it names.";
-      const unread = "This shell command could not be read, so AI-DLC cannot tell whether it writes files. Code generation cannot run it for the zero-Unit stage-level implementation because the plan, unit-test instructions, and current Testing Contract do not have a current matching approval. Reason: code-generation-plan.md is missing or empty. A read written out, naming each file (for example `cat src/app.ts`), runs while the plan waits. Writes inside the selected code-generation record directory remain available for planning. When the plan is ready, run `bun .claude/tools/aidlc-orchestrate.ts next` exactly as written, as a command of its own (no `cd` before it, no pipe or second command after it): the engine asks the person to approve it before any code is written.";
-      const withSentence = unread.replace(" Writes inside", ` ${sentence} Writes inside`);
+      const today = "This shell command could not be read, so AI-DLC cannot tell whether it writes files. Code generation cannot run it for the zero-Unit stage-level implementation because the plan, unit-test instructions, and current Testing Contract do not have a current matching approval. Reason: code-generation-plan.md is missing or empty. A read written out, naming each file (for example `cat src/app.ts`), runs while the plan waits. Writes inside the selected code-generation record directory remain available for planning. When the plan is ready, run `bun .claude/tools/aidlc-orchestrate.ts next` exactly as written, as a command of its own (no `cd` before it, no pipe or second command after it): the engine asks the person to approve it before any code is written.";
+      // Every other line the guard cannot read keeps today's words, byte for byte.
+      const unread = runHook(proj, BASH(`sh <<'EOF'\nprintf x > ${plan}\nEOF`)).stderr.trim();
+      if (process.platform !== "win32") expect(unread).toBe(today);
+      expect(unread).not.toContain(sentence);
+      const withSentence = process.platform === "win32" ? unread : unread.replace(" Writes inside", ` ${sentence} Writes inside`);
       for (const command of ["apply_patch", "applypatch", "cat p.patch | apply_patch", "apply_patch < p.patch", "apply_patch 2>/dev/null"]) {
         const result = runHook(proj, BASH(command));
         expect(result.code, command).toBe(2);
         expect(result.stderr.trim(), command).toBe(withSentence);
       }
-      // Every other line the guard cannot read keeps today's words, byte for byte.
-      expect(runHook(proj, BASH(`sh <<'EOF'\nprintf x > ${plan}\nEOF`)).stderr.trim()).toBe(unread);
+      // A heredoc form the walk keeps as written is no bare call: today's words.
+      for (const command of [
+        `mkdir -p x && apply_patch <<'PATCH'\n${patch(add(plan))}\nPATCH`,
+        `echo "$HOME"; apply_patch <<'PATCH'\n${patch(add(plan))}\nPATCH`,
+      ]) {
+        expect(runHook(proj, BASH(command)).stderr.trim(), command).toBe(unread);
+      }
       // A heredoc with something else in its pipeline is read as before.
       expect(runHook(proj, BASH(`apply_patch <<'PATCH' | tee log.txt\n${patch(add(plan))}\nPATCH`)).stderr)
         .toContain("Code generation cannot modify workspace paths");

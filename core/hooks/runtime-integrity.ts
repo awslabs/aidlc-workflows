@@ -20,6 +20,7 @@ import {
   shellCommandInvocationDetails,
   shellDirectoryChanges,
   shellHomes,
+  shellPatchPaths,
   shellWriteTargets,
   writeTargets,
 } from "./review-freeze-command.ts";
@@ -811,7 +812,14 @@ function protectedHeredoc(body: string, header: string, herePosition: number, st
   const pipeline = heredocPipeline(header, herePosition);
   const kinds = new Set<"shell" | "python" | "javascript">();
   if (stdin) {
-    for (const call of shellCommandInvocationDetails(pipeline.execution)) {
+    const calls = shellCommandInvocationDetails(pipeline.execution);
+    // apply_patch with no operand writes the files its patch names, as printf
+    // to each would.
+    if (
+      calls.length === 1 && (calls[0].name === "apply_patch" || calls[0].name === "applypatch") && calls[0].args.length === 0 &&
+      shellPatchPaths(body, cwd).some((path) => protectedWriteTarget(path, cwd))
+    ) return true;
+    for (const call of calls) {
       const kind = interpreter(call.name);
       if (kind && interpreterReadsCode(call.name, call.args)) kinds.add(kind);
     }
