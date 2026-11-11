@@ -2216,6 +2216,9 @@ async function mutationIntent(
         !isPatchCall(invocation, from) &&
         shellInvocationNeedsApproval(projectDir, from, invocation, concreteTargets, analysed, dialect, context)
       );
+    // Codex's patch mode on a line read only in part: a quote inside its patch
+    // can turn the reading over, so the patch is one nobody has read.
+    patchUnseen ||= opaqueShell && invocations.some(codexPatchMode);
     // The rest of a line it cannot read is read as before, its heredoc too.
     if (opaqueShell && read !== command) {
       return mutationIntent(projectDir, toolName, toolInput, cwd, powerShellHint, context, false);

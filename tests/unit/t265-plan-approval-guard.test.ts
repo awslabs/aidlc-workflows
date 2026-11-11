@@ -3959,6 +3959,14 @@ describe("t265b hook lifecycle", () => {
         expect(runHook(proj, BASH(hereString(plan))).code, `here-string ${quote}`).toBe(0);
         expect(runHook(proj, BASH(hereString("src/new.ts"))).code, `here-string ${quote}`).toBe(2);
       }
+      // One apostrophe in its text turns the reading's quoting over, so the rest of the line is
+      // unread: the patch mode on a line read only in part is a patch nobody has read, with its
+      // sentence, and for Codex on Windows its clause.
+      const unpaired = `& ${exe} --codex-run-as-apply-patch @'\n${patch([`*** Add File: ${plan}`, "+Don't touch the API yet"])}\n'@`;
+      expect({ code: runHook(proj, BASH(unpaired)).code, stderr: runHook(proj, BASH(unpaired)).stderr.trim() }).toEqual({ code: 2, stderr: bare });
+      const unpairedAsCodex = runHook(proj, BASH(unpaired), { AIDLC_HARNESS_NAME: "codex" }).stderr;
+      expect(unpairedAsCodex).toContain("An apply_patch with its patch in the command itself (`apply_patch <<'PATCH'`");
+      expect(unpairedAsCodex.includes(clause), "the clause on win32 for Codex only").toBe(process.platform === "win32");
       // A spelling the reading does not take as Codex is read as any program is: an unquoted
       // Windows path loses its backslashes, and an operand that names no file is no patch.
       expect(runHook(proj, BASH(`C:\\Users\\p\\AppData\\Roaming\\npm\\codex.exe --codex-run-as-apply-patch '${patch(add(plan))}'`)).code).toBe(0);
