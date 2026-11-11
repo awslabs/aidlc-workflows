@@ -176,11 +176,11 @@ once whether to share the plan with the teams, before each Unit this session
 would build:
 
 - **Share them with the teams** runs `aidlc unit share`: it commits what git
-  shows changed here (the question names how many files and, by name, up to
-  ten new files outside `aidlc/`, past ten those nearest the project's top, with
-  how many more; `git status` shows the rest before you share; ignored files
-  and AI-DLC's own part of `.gitignore`, `AGENTS.md` and `opencode.json` stay
-  out)
+  shows changed here (the question names how many files and, by name as
+  changed, new or deleted, up to ten outside `aidlc/`, past ten those nearest
+  the project's top, with how many more; `git status` shows the rest before you
+  share; ignored files and AI-DLC's own part of `.gitignore`, `AGENTS.md` and
+  `opencode.json` stay out)
   and pushes the integration branch with a plain push, never forced. This
   checkout then shows the board instead of building Units. A push the remote
   refuses (it has commits this clone lacks, or the branch is protected) keeps
@@ -188,8 +188,8 @@ would build:
 - **Build them here for now** builds that Unit in this session; the question
   comes back before the next Unit.
 
-Typed, the same step is `/aidlc unit share`, or your own commit and
-`git push origin main`.
+Typed, the same step is `/aidlc unit share`, which names what it committed
+once it has pushed, or your own commit and `git push origin main`.
 
 Claims open by dependency batch. "Delivery planning is complete" does not mean
 every Unit is claimable; a Unit remains blocked until every `depends_on` row is

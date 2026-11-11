@@ -38,6 +38,7 @@ import {
   artifactFilename,
   assertNoSymlinkInChainOrThrow,
   auditBlockField,
+  auditFilePath,
   auditShardBlocks,
   auditShardName,
   knownAuditShardName,
@@ -2212,13 +2213,14 @@ function publishUnit(args: string[], projectDir?: string): void {
   const pd = resolveProjectDir(projectDir);
   const stamp = requireLiveClaimForTeamUnit(pd, unit);
   if (!stamp) fail("Unit publication requires a scoped team checkout.");
-  let leftOut: Record<string, unknown> = {};
+  let commitFields: Record<string, unknown> = {};
   if (commitFirst) {
     // A commit git refused leaves HEAD where it was, so the offer to publish
     // at this HEAD is due again.
     try {
       const done = commitWorkHere(pd, `Complete the ${unit} Unit`, { unit, include });
-      leftOut = leftOutFields(unit, done.leftOut, done.unmatched);
+      const named = workToCommitWords(pd, unit, done.taken);
+      commitFields = { ...(named === null ? {} : { committed_files: named }), ...leftOutFields(unit, done.leftOut, done.unmatched) };
     } catch (error) {
       clearTeamHandoverMarks(pd, ["publish"]);
       fail(`${errorMessage(error)} Then publish again.`);
@@ -2307,7 +2309,7 @@ function publishUnit(args: string[], projectDir?: string): void {
       generation: current.generation,
       ...missingReviews,
       ...outsideTree,
-      ...leftOut,
+      ...commitFields,
     }));
     return;
   }
@@ -2361,7 +2363,7 @@ function publishUnit(args: string[], projectDir?: string): void {
     generation: published.generation,
     ...missingReviews,
     ...outsideTree,
-    ...leftOut,
+    ...commitFields,
   }));
 }
 
@@ -4771,9 +4773,23 @@ export interface UnitWork {
 export interface WorkToCommit {
   paths: string[];
   untracked: string[];
+  // What the commit does to each path, as workToCommitWords names it.
+  kinds: Map<string, CommitKind>;
   // New files a Unit's publish leaves out, and the --include paths that named none.
   leftOut: string[];
   unmatched: string[];
+}
+
+type CommitKind = "changed" | "new" | "deleted";
+
+// What committing a path does, from its two-letter `git status` code. An
+// unmerged path is committed as it stands; a staged new name gone from the
+// disk (AD, RD, CD) commits nothing, so it has no kind.
+function commitKind(code: string): CommitKind | null {
+  if (/^(DD|AU|UD|UA|DU|AA|UU)$/.test(code)) return "changed";
+  if (/^[ARC]D$/.test(code)) return null;
+  if (code.includes("D")) return "deleted";
+  return code === "??" || /^[ARC]/.test(code) || code[1] === "A" ? "new" : "changed";
 }
 
 // What a Unit's source manifests claim, as brought-files reads them: the
@@ -4806,9 +4822,10 @@ function unitSourceClaims(projectDir: string, unit: string): SourceClaimModel[] 
 export function workToCommit(projectDir: string, work?: UnitWork): WorkToCommit {
   const pd = resolveProjectDir(projectDir);
   const status = git(pd, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
-  if (!status.ok) return { paths: [], untracked: [], leftOut: [], unmatched: [] };
+  if (!status.ok) return { paths: [], untracked: [], kinds: new Map(), leftOut: [], unmatched: [] };
   const paths: string[] = [];
   const untracked: string[] = [];
+  const kinds = new Map<string, CommitKind>();
   const records = status.stdout.split("\u0000");
   for (let i = 0; i < records.length; i++) {
     const record = records[i];
@@ -4816,12 +4833,18 @@ export function workToCommit(projectDir: string, work?: UnitWork): WorkToCommit 
     const code = record.slice(0, 2);
     paths.push(record.slice(3));
     if (code === "??") untracked.push(record.slice(3));
-    if (/[RC]/.test(code) && records[i + 1]) paths.push(records[++i]);
+    const kind = commitKind(code);
+    if (kind !== null) kinds.set(record.slice(3), kind);
+    // A rename's old name goes; a copy's source stays as it is.
+    if (/[RC]/.test(code) && records[i + 1]) {
+      paths.push(records[++i]);
+      if (code.includes("R")) kinds.set(records[i], "deleted");
+    }
   }
   const own = aidlcOwnRootParts(pd, paths);
   const kept = paths.filter((path) => !own.has(path));
   const keptUntracked = untracked.filter((path) => !own.has(path));
-  if (work === undefined) return { paths: kept, untracked: keptUntracked, leftOut: [], unmatched: [] };
+  if (work === undefined) return { paths: kept, untracked: keptUntracked, kinds, leftOut: [], unmatched: [] };
   const claims = unitSourceClaims(pd, work.unit);
   // As the person or the agent types it, on Windows too: `\` is `/`, a folder
   // may end in `/`, and `.` is the whole project (every file left out).
@@ -4839,21 +4862,69 @@ export function workToCommit(projectDir: string, work?: UnitWork): WorkToCommit 
   return {
     paths: kept.filter((path) => !out.has(path)),
     untracked: keptUntracked.filter((path) => !out.has(path)),
+    kinds,
     leftOut,
     unmatched,
   };
 }
 
+// As many files as the share, publish and push questions name before
+// "and N more", as the brought-files note does.
+const FILES_NAMED = 10;
+
+// What a commit here takes, as the share, publish and push questions say it,
+// or what it took (`committed`), as their results say it: the count, and each
+// file outside AI-DLC's record by what the commit does to it, a handful in
+// git's order. Past ten, an unignored dependency folder would make the step
+// too long to send, so the words name the ten nearest the project's top,
+// where an unignored key usually sits (a stable sort by depth keeps git's
+// order within a depth, the same ten on every platform), and say how many
+// more. For a Unit's publish (`unit`) these are its own work. Null when
+// nothing, and for what was committed when it names no file.
+export function workToCommitWords(projectDir: string, unit?: string, committed?: WorkToCommit): string | null {
+  const pd = resolveProjectDir(projectDir);
+  const work = committed ?? workToCommit(pd, unit === undefined ? undefined : { unit });
+  if (work.paths.length === 0) return null;
+  const outside = work.paths.filter((path) => work.kinds.has(path) && path !== "aidlc" && !path.startsWith("aidlc/"));
+  if (committed !== undefined && outside.length === 0) return null;
+  const depth = (path: string): number => path.split("/").length;
+  const shown = outside.length <= FILES_NAMED
+    ? outside
+    : [...outside].sort((a, b) => depth(a) - depth(b)).slice(0, FILES_NAMED);
+  const named = (["changed", "new", "deleted"] as const).flatMap((kind) => {
+    const paths = shown.filter((path) => work.kinds.get(path) === kind);
+    return paths.length === 0 ? [] : [`${kind}: ${paths.join(", ")}`];
+  });
+  const more = outside.length - shown.length;
+  // Past one kind, ", and N more" would read as more of the last kind; after
+  // the commit `git status` shows none of them.
+  const oneKind = new Set(outside.map((path) => work.kinds.get(path))).size === 1;
+  const rest = more === 0
+    ? ""
+    : `${oneKind ? "," : ";"} and ${more} more${committed === undefined ? "; `git status` shows the rest" : ""}`;
+  const words = shown.length === 0 ? "" : ` (${named.join("; ")}${rest})`;
+  // The question's own QUESTION_ASKED row (recordQuestionStep) goes into this
+  // checkout's audit shard after these words, and the commit takes it unless
+  // git ignores it, as a team's clone's own record is.
+  const shard = relative(pd, auditFilePath(pd)).replaceAll("\\", "/");
+  const asked = committed === undefined && !work.paths.includes(shard) &&
+    !git(pd, ["check-ignore", "-q", "--", shard]).ok;
+  const count = work.paths.length + (asked ? 1 : 0);
+  const of = unit === undefined ? "" : " of its work";
+  return `the ${count} changed file${count === 1 ? "" : "s"}${of} here${words}`;
+}
+
 // Commits what workToCommit names, as the person, with their own git setup;
-// nothing to commit commits nothing. Returns how many paths it took, and what
-// a Unit's publish left out.
+// nothing to commit commits nothing. Returns how many paths it took and what
+// they were, and what a Unit's publish left out.
 function commitWorkHere(
   projectDir: string,
   message: string,
   work?: UnitWork,
-): { committed: number; leftOut: string[]; unmatched: string[] } {
-  const { paths, leftOut, unmatched } = workToCommit(projectDir, work);
-  if (paths.length === 0) return { committed: 0, leftOut, unmatched };
+): { committed: number; taken: WorkToCommit; leftOut: string[]; unmatched: string[] } {
+  const taken = workToCommit(projectDir, work);
+  const { paths, leftOut, unmatched } = taken;
+  if (paths.length === 0) return { committed: 0, taken, leftOut, unmatched };
   // One call whatever the count: Windows caps a command line at 32,767
   // characters, so the paths go to git on its standard input, NUL-separated,
   // each read as the same name an argument would be (git 2.25; core already
@@ -4876,7 +4947,7 @@ function commitWorkHere(
     }
     fail(`git did not commit: ${(committed.stderr || committed.stdout).trim()}.`);
   }
-  return { committed: paths.length, leftOut, unmatched };
+  return { committed: paths.length, taken, leftOut, unmatched };
 }
 
 // The remote and integration branch a share pushes to, or null with no remote.
@@ -5020,11 +5091,14 @@ function shareMain(projectDir?: string): void {
   const { remote, branch } = shareTarget(pd)!;
   const landed = landedNotOnRemote(pd).map((row) => row.unit);
   let committed: number;
+  let named: string | null;
   try {
-    committed = commitWorkHere(
+    const done = commitWorkHere(
       pd,
       landed.length > 0 ? `Record the ${landed.join(" and ")} landing` : "Share the plan with the teams",
-    ).committed;
+    );
+    committed = done.committed;
+    named = workToCommitWords(pd, undefined, done.taken);
   } catch (error) {
     clearTeamHandoverMarks(pd, ["share", "push"]);
     fail(`${errorMessage(error)} Then share again.`);
@@ -5044,6 +5118,7 @@ function shareMain(projectDir?: string): void {
     branch,
     commit: gitOutput(pd, ["rev-parse", "HEAD"], "Cannot resolve HEAD"),
     committed_paths: committed,
+    ...(named === null ? {} : { committed_files: named }),
     step: "Tell the person in plain words what it reports, then end your turn.",
   }));
 }
