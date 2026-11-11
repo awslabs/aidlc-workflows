@@ -4800,6 +4800,16 @@ function claimUnit(args: string[], projectDir?: string): void {
   // Where the work records its home, each team takes its Unit in its own clone
   // (take), and the lead's project is never scoped to one Unit.
   if (homeLocation(state) !== null) {
+    // In a teammate's clone the claim is that Unit's take, the command the
+    // Units offer gives it (unitTakeLook). A team named with it names no
+    // space; a rhythm typed with it is the build's.
+    const selected = resolveWorkflowSelection(pd);
+    if (selected.intent !== null && unitBuildOf(state) === null && planMadeElsewhere(pd)) {
+      takeUnit([unit, "--home", selected.intent, ...(selected.space === DEFAULT_SPACE ? [] : ["--home-space", selected.space])], pd,
+        flags.rhythm as UnitClaimPayload["gate_rhythm"] | undefined);
+      spend();
+      return;
+    }
     fail(
       `Nothing is claimed here: this work's teams each take their Unit in their own clone, with ${entrySkillInvocation()} there.`,
     );
@@ -6399,6 +6409,8 @@ function createUnitBuild(
   leadPaths: readonly string[] = [],
   // The person's own words of the take, when the agent handed them.
   takeRequest = "",
+  // The gate rhythm the person picked for this build, else the lead's plan's.
+  gateRhythm?: UnitClaimPayload["gate_rhythm"],
 ): { space: string; dirName: string } {
   const scope = getField(plan.state, "Scope") ?? "";
   const grid = loadScopeMapping()[scope];
@@ -6449,7 +6461,7 @@ function createUnitBuild(
     for (const stage of graph.filter((entry) => entry.phase === "ideation" || entry.phase === "inception")) {
       if (homeBoxes.get(stage.slug) === "completed") content = setCheckbox(content, stage.slug, "completed");
     }
-    const rhythm = readUnitGateRhythm(plan.state);
+    const rhythm = gateRhythm ?? readUnitGateRhythm(plan.state);
     for (const [field, value] of [
       ["Construction Iteration", rhythm === "unit-end" ? "unit-major" : "stage-major"],
       ["Construction Execution", "serial"],
@@ -6758,7 +6770,8 @@ function soloOpening(projectDir: string, home: HomeWork, plan: { state: string; 
 // Take a Unit of the home's work: claim it at the home, then start its build
 // in the space the person is working in (solo work's in its own space). The
 // first take wins; a Unit that waits on another is not taken yet.
-function takeUnit(args: string[], projectDir?: string): void {
+// `rhythm`: the gate rhythm the person typed with a claim (claimUnit), else the lead's plan's.
+function takeUnit(args: string[], projectDir?: string, rhythm?: UnitClaimPayload["gate_rhythm"]): void {
   const { positional, flags, bareFlags } = parseArgs(args);
   const unit = positional[0];
   if (!unit) fail(`usage: ${unitUsage("take")}`);
@@ -6880,7 +6893,7 @@ function takeUnit(args: string[], projectDir?: string): void {
   const generation = takeGeneration(current);
   const payload = takenClaimPayload(current, {
     team, home, unit, ref, generation, me, baseOid: integration.oid, integrationRef: integration.ref,
-    gateRhythm: readUnitGateRhythm(plan.state), earlyOn,
+    gateRhythm: rhythm ?? readUnitGateRhythm(plan.state), earlyOn,
   });
   const commit = createClaimCommit(pd, current?.oid ?? integration.oid, payload);
   const pushed = writeHomeClaim(pd, home, ref, commit, atLead?.oid ?? null);
@@ -6918,7 +6931,7 @@ function takeUnit(args: string[], projectDir?: string): void {
       return shown.ok ? shown.stdout : null;
     },
     approvals: (produced) => homeApprovals(homeRows, produced),
-  }, leads?.paths ?? [], takeWords);
+  }, leads?.paths ?? [], takeWords, rhythm);
   setActiveSpaceCursor(pd, build.space);
   // Early: the Unit's branch starts at each dependency's pushed head, checked
   // out where nothing of the person's is uncommitted.

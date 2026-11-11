@@ -192,6 +192,68 @@ describe("a team member's clone of the home's workspace", () => {
     expect(String(words.board_note ?? "")).not.toContain("assign <unit>=<team>");
   });
 
+  // A typed --claim of a Unit of work teams take, in a teammate's clone with
+  // the lead's work selected (a pick, an intent switch): the take the Units
+  // offer runs, never the line that sends them to their own clone.
+  test("a typed --claim of a Unit in a teammate's clone is the take of that Unit, its line at the next step", () => {
+    const home = makeHome();
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    asLeadsOwnCheckout(home.dir);
+    commitAll(home.dir, "teams");
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const ria = cloneOf(home.remote, "ria");
+    const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "ria-claim-chat" };
+    expect(run(UTILITY, ["intent", "switch", HOME], ria, chat).status).toBe(0);
+    const step = next(ria, chat, ["--claim", "refunds", "--team", "Payments"]);
+    const teamFile = /--claim refunds --request-file (\S+?)`/.exec(String(step.message))?.[1];
+    expect(teamFile, JSON.stringify(step).slice(0, 600)).toBeDefined();
+    const claimed = run(UTILITY, ["claim", "refunds", "--request-file", teamFile!], ria, chat);
+    expect(claimed.status, claimed.out).toBe(0);
+    expect(claimed.out).not.toContain("Nothing is claimed here");
+    expect(claimed.json).toMatchObject({ taken: true, unit: "refunds", space: "default" });
+    // A team named with it makes and picks no space; the build follows the lead's plan's rhythm.
+    expect(existsSync(join(ria, "aidlc", "spaces", "Payments"))).toBe(false);
+    expect(existsSync(join(ria, ...teamFile!.split("/")))).toBe(false);
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({
+      owner: "default", taken_by: "ria", gate_rhythm: "per-stage",
+    });
+    const state = readFileSync(join(buildDir(ria, "default", "refunds"), "aidlc-state.md"), "utf-8");
+    expect(field(state, "Construction Checkpoints")).toBe("disabled");
+    // The take's own line rides the build's next step, as a take from the Units offer does.
+    const after = next(ria, chat);
+    expect(JSON.stringify(after.change_notices ?? []), JSON.stringify(after).slice(0, 600)).toContain("refunds is yours.");
+  });
+
+  // --rhythm picks how the build's gates go: the build the take starts keeps the pick.
+  test("a typed --claim with --rhythm in a teammate's clone starts the build in that rhythm", () => {
+    const home = makeHome();
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    asLeadsOwnCheckout(home.dir);
+    commitAll(home.dir, "teams");
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const ria = cloneOf(home.remote, "ria");
+    expect(run(UTILITY, ["intent", "switch", HOME], ria).status).toBe(0);
+    const claimed = run(UTILITY, ["claim", "refunds", "--rhythm", "unit-end"], ria);
+    expect(claimed.status, claimed.out).toBe(0);
+    expect(claimed.json).toMatchObject({ taken: true, unit: "refunds" });
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ taken_by: "ria", gate_rhythm: "unit-end" });
+    const state = readFileSync(join(buildDir(ria, "default", "refunds"), "aidlc-state.md"), "utf-8");
+    expect(field(state, "Construction Iteration")).toBe("unit-major");
+    expect(field(state, "Construction Checkpoints")).toBe("enabled");
+  });
+
+  test("a typed --claim at the lead's own checkout of work teams take still says the teams take it in their own clones", () => {
+    const home = makeHome();
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    asLeadsOwnCheckout(home.dir);
+    commitAll(home.dir, "teams");
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const claimed = run(UTILITY, ["claim", "refunds"], home.dir);
+    expect(claimed.status).not.toBe(0);
+    expect(claimed.out).toContain("Nothing is claimed here: this work's teams each take their Unit in their own clone");
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toBeNull();
+  });
+
   test("the lead on a second machine: their own word that they lead this work, recorded, puts the lead's questions there again", () => {
     const home = makeHome();
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
