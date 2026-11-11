@@ -843,25 +843,7 @@ present only when multiple units share resources.
 ### Purpose
 
 Generate all application code, tests, and configuration for a single unit of
-work. It runs for every Unit in every scope that includes it; infra runs no
-Code Generation and no Build and Test, as its compiled plan shows:
-
-```text
-$ aidlc engine graph scope infra
-workspace-scaffold
-workspace-detection
-state-init
-practices-discovery
-requirements-analysis
-nfr-requirements
-nfr-design
-infrastructure-design
-ci-pipeline
-deployment-pipeline
-environment-provisioning
-deployment-execution
-observability-setup
-```
+work. It runs for every Unit in every scope that includes it.
 
 Code is written to the workspace root, never to
 `<record>/`.
@@ -1723,7 +1705,7 @@ through a phased construction flow:
   (pipeline-deploy-led)
 
 **Key characteristics:**
-- Stages 3.1-3.4 are CONDITIONAL; 3.5-3.6 run in every scope that includes them (infra has neither); 3.7 is CONDITIONAL
+- Stages 3.1-3.4 are CONDITIONAL; 3.5-3.6 run in every scope that includes them; 3.7 is CONDITIONAL
 - Which conditional stages are reached comes from the plan (the scope, plus any skip or add the person makes), not from Delivery Planning; each still applies its own condition
 - New source-producing solo Unit workflows default to unit-major, serial
   execution and verified Unit checkpoints. Preserve explicit iteration choices

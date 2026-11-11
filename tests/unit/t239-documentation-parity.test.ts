@@ -1058,6 +1058,52 @@ describe("documentation parity derives current behavior from authored implementa
     ).toBe(true);
   });
 
+  test("the stage reference's scope listings are the compiled plans", () => {
+    const order = (JSON.parse(read("dist", "claude", ".claude", "tools", "data", "stage-graph.json")) as Array<{
+      slug: string;
+    }>).map((stage) => stage.slug);
+    const listings = filesBelow(at("docs", "reference", "04-stages"), ".md").flatMap((file) =>
+      [...readFileSync(file, "utf8").matchAll(/^\$ aidlc engine graph scope ([a-z][a-z-]*)\r?\n([\s\S]*?)^```/gm)].map(
+        ([, scope, body]) => ({ where: `${basename(file)} ${scope}`, scope, lines: body.split(/\r?\n/).map((line) => line.trim()).filter(Boolean) }),
+      ),
+    );
+    expect(listings.length, "the stage reference shows at least one compiled plan").toBeGreaterThan(0);
+    for (const { where, scope, lines } of listings) {
+      expect(scopeGrid[scope], `${where}: a shipped scope`).toBeDefined();
+      const plan = order.filter((slug) => scopeGrid[scope].stages[slug] === "EXECUTE");
+      // A "..." line stands for stages left out; every other line is the plan's next stage.
+      let next = 0;
+      let skipped = false;
+      for (const line of lines) {
+        if (line === "...") {
+          skipped = true;
+          continue;
+        }
+        const found = plan.indexOf(line, next);
+        expect(found, `${where}: ${line} is on the plan, in order`).toBeGreaterThanOrEqual(next);
+        if (!skipped) expect(line, `${where}: the stage after ${plan[next - 1] ?? "the start"}`).toBe(plan[next]);
+        next = found + 1;
+        skipped = false;
+      }
+      if (!skipped) expect(next, `${where}: the listing ends where the plan ends`).toBe(plan.length);
+    }
+    for (const slug of ["code-generation", "build-and-test"]) expect(scopeGrid.infra.stages[slug]).toBe("EXECUTE");
+    const construction = normalized(read("docs", "reference", "04-stages", "construction.md"));
+    expect(/infra (?:runs no Code Generation|has neither)/.test(construction), "construction.md says infra skips them").toBe(false);
+  });
+
+  test("the plugin chapter does not call a plugin's house rules deferred", () => {
+    // The reference plugin ships house rules, and its own tests validate and compose it.
+    const manifest = JSON.parse(read("plugins", "test-pro", ".aidlc-plugin", "plugin.json")) as {
+      aidlc?: { contributes?: Record<string, string> };
+    };
+    expect(manifest.aidlc?.contributes?.memory).toBe("memory/");
+    expect(existsSync(at("plugins", "test-pro", "memory", "rules.md"))).toBe(true);
+    const chapter = normalized(read("docs", "reference", "18-plugin-mechanism.md"));
+    expect(/rejects a `memory` contribution/.test(chapter), "the chapter says validate rejects memory").toBe(false);
+    expect(/merge of a plugin's `memory\/` subtree/.test(chapter), "the chapter lists memory as deferred").toBe(false);
+  });
+
   test("facilitator guide quotes current scope sizes, depth defaults, and doctor rows", () => {
     const guide = read("docs", "guide", "facilitator-guide.md");
     const flat = normalized(guide);
