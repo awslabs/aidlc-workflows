@@ -509,6 +509,7 @@ import {
 } from "./aidlc-markdown.ts";
 export {
   appendUnderHeading,
+  ensureHeading,
   escapeRegex,
   extractMarkdownSection,
   markdownBlocks,
