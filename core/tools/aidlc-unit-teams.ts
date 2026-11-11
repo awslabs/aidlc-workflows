@@ -514,7 +514,19 @@ export function buildWaitsForPush(stateContent: string): boolean {
 // The build of a home's Unit in this workspace, in any space: what taking that
 // Unit again here carries on. A build given back (archived) is not carried on.
 export function findUnitBuild(projectDir: string, homeWork: string, unit: string): { space: string; dirName: string } | null {
-  return findBuild(projectDir, (build) => build.unit === unit && build.homeWork === homeWork);
+  return findBuild(projectDir, (build) => isBuildOfUnit(build, homeWork, unit));
+}
+
+// Whether a build is of the home's Unit: the one match findUnitBuild and a
+// build on another branch of this clone (buildOnBranchLine) read.
+export function isBuildOfUnit(build: UnitBuild, homeWork: string, unit: string): boolean {
+  return build.unit === unit && build.homeWork === homeWork;
+}
+
+// A build's record while it is live: one given back (archived) is left out.
+export function liveBuildOf(state: string): UnitBuild | null {
+  const build = unitBuildOf(state);
+  return build === null || getField(state, "Status")?.trim() === "Archived" ? null : build;
 }
 
 // A build here of a Unit of the lead's record (`<space>/<dirName>`), found
@@ -550,8 +562,8 @@ export function unitBuildsHere(
       } catch {
         continue;
       }
-      const build = unitBuildOf(state);
-      if (build === null || !matches(build, state) || getField(state, "Status")?.trim() === "Archived") continue;
+      const build = liveBuildOf(state);
+      if (build === null || !matches(build, state)) continue;
       found.push({ space, dirName, build });
       if (first) return found;
     }

@@ -907,6 +907,57 @@ describe("a Unit someone holds is not taken again", () => {
     expect(waiting.status).not.toBe(0);
     expect(waiting.out).toContain("reporting waits on refunds, which is not done at the lead's project yet. It opens once it is done.");
   });
+
+  // The GitHub live test: a teammate checked her finished build in on a
+  // branch of its own for a pull request, went back to main before it merged,
+  // and read her own Unit as someone's being built.
+  test("back on main with their build checked in on a branch of its own, the person is told where it is, never that it is taken", () => {
+    const home = makeHome();
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    asLeadsOwnCheckout(home.dir);
+    commitAll(home.dir, "teams");
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const bea = cloneOf(home.remote, "bea");
+    const took = take(bea, "refunds");
+    expect(took.status, took.out).toBe(0);
+    finishBuild(buildDir(bea, "default", "refunds"));
+    git(bea, ["switch", "-q", "-c", "records/refunds"]);
+    commitAll(bea, "refunds record");
+    git(bea, ["push", "-q", "-u", "origin", "records/refunds"]);
+    git(bea, ["switch", "-q", "main"]);
+    const line = "Your build of refunds is on branch records/refunds: `git switch records/refunds` to carry it on.";
+    const ask = next(bea);
+    expect(String(ask.question ?? ask.narration), JSON.stringify(ask).slice(0, 800)).toContain(line);
+    expect(JSON.stringify(ask)).not.toContain("refunds (by bea)");
+    const again = take(bea, "refunds");
+    expect(again.status).not.toBe(0);
+    expect(again.out).toContain(line);
+    expect(again.out).not.toContain("already taken");
+    // The way on is real: nothing the look or the take wrote stops the switch, and there the line is gone.
+    git(bea, ["switch", "-q", "records/refunds"]);
+    expect(JSON.stringify(next(bea))).not.toContain("Your build of refunds");
+  });
+
+  test("a teammate's take whose build is on a local branch here is still said as theirs", () => {
+    const home = makeHome();
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    asLeadsOwnCheckout(home.dir);
+    commitAll(home.dir, "teams");
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const ann = cloneOf(home.remote, "ann");
+    expect(take(ann, "refunds").status).toBe(0);
+    git(ann, ["switch", "-q", "-c", "records/refunds"]);
+    commitAll(ann, "refunds record");
+    git(ann, ["push", "-q", "-u", "origin", "records/refunds"]);
+    const bea = cloneOf(home.remote, "bea");
+    git(bea, ["branch", "-q", "records/refunds", "origin/records/refunds"]);
+    const ask = next(bea);
+    expect(String(ask.question ?? ask.narration), JSON.stringify(ask).slice(0, 800)).toContain("refunds (by ann)");
+    expect(JSON.stringify(ask)).not.toContain("Your build of refunds");
+    const taken = take(bea, "refunds");
+    expect(taken.status).not.toBe(0);
+    expect(taken.out).toContain("refunds is already taken: ann builds it.");
+  });
 });
 
 describe("who takes what", () => {

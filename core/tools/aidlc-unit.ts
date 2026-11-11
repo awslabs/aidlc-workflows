@@ -178,6 +178,8 @@ import {
   builtFromAnotherMachine,
   findUnitBuild,
   HOME_LOCATION_FIELD,
+  isBuildOfUnit,
+  liveBuildOf,
   homeLocation,
   inputName,
   LEAD_RULES_FIELD,
@@ -5871,6 +5873,43 @@ function takenLine(unit: string, claim: UnitClaimView): string {
   return `${unit} is already taken: ${builderOf(claim)} builds it${spaceWords(claim.owner)}.`;
 }
 
+// The person's own take whose build is not in this checkout but committed on
+// another branch of this clone (checked in on a branch of its own for a pull
+// request, the checkout back on main): where it is and the way to it, for the
+// take question (unitTakeLook) and the take asked again. Local reads only,
+// never a fetch or a switch: null, so the words stand as they were, when the
+// take is not theirs, no other branch free to switch to has the build, or a
+// git call is not ok.
+export function buildOnBranchLine(projectDir: string, homeWork: string, claim: UnitClaimView): string | null {
+  if (!claimIsMine(projectDir, claim)) return null;
+  // Globs whatever the person's environment says (aidlc-workspace-doctor's way).
+  const env = { GIT_LITERAL_PATHSPECS: "0" };
+  const listed = localGit(projectDir, ["for-each-ref", "--sort=-committerdate", "--format=%(worktreepath)%00%(refname)", "refs/heads/"], env);
+  if (!listed.ok) return null;
+  // A branch checked out here or in another worktree is not one to switch to.
+  const refs = listed.stdout.split(/\r?\n/).map((line) => line.split("\0"))
+    .filter(([worktree, ref]) => worktree === "" && ref?.startsWith("refs/heads/")).map(([, ref]) => ref);
+  const field = `^- \\*\\*${UNIT_BUILD_FIELD}\\*\\*:[[:blank:]]*${claim.unit.replaceAll(".", "\\.")}[[:space:]]*$`;
+  // Newest branch first, a hundred a call so no command line runs too long on Windows.
+  for (let at = 0; at < refs.length; at += 100) {
+    const found = localGit(projectDir, ["grep", "--no-color", "-z", "-l", "-E", "-e", field, ...refs.slice(at, at + 100), "--",
+      "aidlc/spaces/*/intents/*/aidlc-state.md"], env);
+    if (!found.ok && found.code === 1) continue;
+    if (!found.ok) return null;
+    for (const hit of found.stdout.split("\0").filter(Boolean)) {
+      const ref = hit.slice(0, hit.indexOf(":"));
+      const shown = localGit(projectDir, ["show", `${ref}:./${hit.slice(ref.length + 1)}`], env);
+      if (!shown.ok) return null;
+      const build = liveBuildOf(shown.stdout);
+      if (build === null || !isBuildOfUnit(build, homeWork, claim.unit)) continue;
+      const branch = ref.slice("refs/heads/".length);
+      // A backtick breaks the line's code marks, an apostrophe a PowerShell paste.
+      return /[`']/.test(branch) ? null : `Your build of ${claim.unit} is on branch ${branch}: \`git switch ${shellArg(branch)}\` to carry it on.`;
+    }
+  }
+  return null;
+}
+
 // --- Taking a Unit: a team builds it as a piece of work of its own -----------
 //
 // The home is the work where Inception ran. Its claims live at its remote:
@@ -6729,7 +6768,7 @@ function takeUnit(args: string[], projectDir?: string): void {
   if (!opening.units.includes(unit)) fail(`${unit} is not one of ${home.label}'s Units (${opening.units.join(", ")}).`);
   if (solo?.started.has(unit)) fail(`${unit} is being built on the other machine; take another Unit, or follow along.`);
   const me = git(pd, ["config", "user.name"]).stdout.trim() || "a teammate";
-  if (current?.status === "claimed") fail(takenLine(unit, current));
+  if (current?.status === "claimed") fail(buildOnBranchLine(pd, home.uuid, current) ?? takenLine(unit, current));
   if (opening.completed.has(unit)) fail(`${unit} is already done at the lead's project.`);
   const homeRows = homeAuditAt(pd, home, integration.oid);
   if (!home.solo && leadBuildsWithoutClaim(homeRows, unit, current)) {
