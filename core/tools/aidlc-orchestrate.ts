@@ -8236,10 +8236,35 @@ function personAskedInThisChat(projectDir: string): boolean {
 // lowers a check, no team holds strict, or memory cannot be read (the setter
 // then says what is wrong).
 function teamKeepsTyped(flags: ParsedFlags, projectDir: string): string | null {
-  const fence = SWITCHABLE_GUARD_FENCES.find((candidate) =>
-    candidate !== "plan-approval" && flags.fences?.[candidate] === "off");
-  const planApprovalOff = flags.ceremony?.plan_approval === "off" || flags.fences?.["plan-approval"] === "off";
-  if (!guardPolicyLowered(flags) && fence === undefined && !planApprovalOff) return null;
+  return teamKeepsLowered(projectDir, {
+    guardPolicy: guardPolicyLowered(flags),
+    fence: SWITCHABLE_GUARD_FENCES.find((candidate) =>
+      candidate !== "plan-approval" && flags.fences?.[candidate] === "off"),
+    planApproval: flags.ceremony?.plan_approval === "off" || flags.fences?.["plan-approval"] === "off",
+  });
+}
+
+// The same fact for the settings an approval report carries (`config set` keys
+// and values): the team's line when every one of them lowers a check the
+// team's strict Guard Policy keeps, so running the report without them drops
+// nothing else the person asked for. Null otherwise.
+function teamKeepsSettings(projectDir: string, settings: ReadonlyArray<readonly [string, string]>): string | null {
+  // Summary confirmation is a check the person turns off that the team's lock does not keep.
+  const kept = (key: string): boolean => key === "guard-policy" || key === "plan-approval" || guardFenceFromConfigKey(key) !== null;
+  if (!settings.every(([key, value]) => kept(key) && turnsPersonCheckOff(key, value.trim()))) return null;
+  const fences = settings.map(([key]) => guardFenceFromConfigKey(key));
+  return teamKeepsLowered(projectDir, {
+    guardPolicy: settings.some(([key]) => key === "guard-policy"),
+    fence: fences.find((fence) => fence !== null && fence !== "plan-approval") ?? undefined,
+    planApproval: settings.some(([key]) => key === "plan-approval") || fences.includes("plan-approval"),
+  });
+}
+
+function teamKeepsLowered(
+  projectDir: string,
+  lowered: { guardPolicy: boolean; fence: SwitchableGuardFence | undefined; planApproval: boolean },
+): string | null {
+  if (!lowered.guardPolicy && lowered.fence === undefined && !lowered.planApproval) return null;
   let held: ReturnType<typeof memoryGuardPolicyDeclarations>[number] | undefined;
   try {
     held = memoryGuardPolicyDeclarations(projectDir, { sessionId: resolveInvokingSessionId(projectDir) ?? undefined })
@@ -8248,8 +8273,8 @@ function teamKeepsTyped(flags: ParsedFlags, projectDir: string): string | null {
     return null;
   }
   if (held === undefined) return null;
-  if (guardPolicyLowered(flags)) return guardPolicyMemoryStrictRefusal(held);
-  if (fence !== undefined) return fenceMemoryLockRefusal(held, fence);
+  if (lowered.guardPolicy) return guardPolicyMemoryStrictRefusal(held);
+  if (lowered.fence !== undefined) return fenceMemoryLockRefusal(held, lowered.fence);
   return planApprovalMemoryLockRefusal(held.path);
 }
 
@@ -19272,8 +19297,7 @@ function planChangeDirective(
   }
   if (gateOpen !== null) {
     // Practices Discovery's approval waits for the practices the person
-    // approved to be saved (an approval report would be refused in engine
-    // words), so there only a change request is handed over.
+    // approved to be saved, so there only a change request is handed over.
     const held = engineProjectDir !== undefined && practicesApprovalHeld(engineProjectDir, gateOpen, plan!.stateContent);
     return kept(turnEndingPrint(`${message} ${openGateAnswerStep(gateOpen, held)}${undo}${resume}`));
   }
@@ -22720,10 +22744,20 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   }
 
   if (practicesApprovalHeld(pd, slug, stateContent)) {
-    emit(errorDirective(
+    // Their Approve stands: the promotion it waits for is the agent's step,
+    // named as the stage's Step 7 runs it, then this same report.
+    const drafts = `${engineRelativeRecordDir(pd) ?? "<record>"}/inception/practices-discovery`;
+    const promote = renderEngineInvocation({
+      route: "state",
+      args: [
+        "practices-promote",
+        "--team-practices", `${drafts}/team-practices.md`,
+        "--discovered-rules", `${drafts}/discovered-rules.md`,
+      ],
+    });
+    emit(printDirective(
       'Cannot approve "practices-discovery" because the approved practices have not been saved yet. ' +
-        "Run aidlc-state.ts practices-promote after the human approves, then report " +
-        "--result approved --user-input '<exact choice>'.",
+        `Run \`${promote}\`, then \`${renderEngineInvocation({ route: "orchestrate", args: ["report", ...args] })}\` again.`,
     ));
     return;
   }
@@ -22876,8 +22910,15 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       return;
     }
     const set = settingsBesideDecision(pd, session, flags.settings, flags.message ?? reply.messageId);
+    // A refused setting is the agent's step as well: the approval is still
+    // theirs, and the same report without the setting records it. When the
+    // team's strict Guard Policy is what keeps the check, the person hears the
+    // team's line once (teamKeepsTyped's fact, as `next` says it).
     if ("refusal" in set) {
-      emit(errorDirective(`${set.refusal} Nothing was approved: run this report again without the setting to record the approval.`));
+      const team = teamKeepsSettings(pd, flags.settings);
+      emit(printDirective(team === null
+        ? `${set.refusal} Nothing was approved: run this report again without the setting to record the approval.`
+        : `Tell the person in one line: "${team}" Then run this report again without the setting to record the approval.`));
       return;
     }
     settingLines.push(...set.lines);
