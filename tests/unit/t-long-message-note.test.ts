@@ -204,8 +204,8 @@ describe("a long /aidlc paste: the agent is told AI-DLC has it whole and runs ne
       const proj = await project("fresh");
       // A call held for the turn this paste arrives on (the turn counter could not move past it), which would refuse
       // the bare next.
-      const latch = join(proj, "aidlc", ".aidlc-forwarding-latch");
-      mkdirSync(join(proj, "aidlc"), { recursive: true });
+      const latch = join(proj, "aidlc", ".aidlc-engine", "sessions", "kiro-forwarding-latch");
+      mkdirSync(join(proj, "aidlc", ".aidlc-engine", "sessions"), { recursive: true });
       writeFileSync(latch, `${JSON.stringify({ turn: 1, raw: "fix the sales report end date", args: ["fix", "the", "sales", "report", "end", "date"] })}\n`);
       const words = markdownSpec(30_000);
       const said = await say(proj, prompt(words), "kiro");

@@ -702,7 +702,7 @@ if (target === "verb-intercept") {
     // would refuse it.
     if (firstStepNote !== "") {
       try {
-        rmSync(join(projectDir, "aidlc", ".aidlc-forwarding-latch"), { force: true });
+        rmSync(workspaceEngineFile(projectDir, "sessions/kiro-forwarding-latch"), { force: true });
       } catch { /* best-effort, as the latch's own write */ }
       process.stdout.write(`${preface}${firstStepNote}\n`);
       return 0;
