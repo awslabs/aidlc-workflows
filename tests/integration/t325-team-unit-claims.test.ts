@@ -20,6 +20,8 @@ import {
   activeIntentUuid,
   artifactFilename,
   eventMatchesClaimAttempt,
+  getField,
+  hooksHealthDir,
   readAllAuditShards,
   unitReleasePendingPath,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -28,6 +30,7 @@ import {
   AIDLC_SRC,
   cleanupTestProject,
   createTestProject,
+  runOrchestrateNext,
   seedAidlcMemory,
   seededRecordDir,
   seededStateFile,
@@ -1813,7 +1816,7 @@ describe("t325 a claim typed with no work selected", () => {
   // The command the agent runs for `/aidlc --claim ...`, in a chat of its own
   // (or none, as from a terminal or a tool whose commands name no chat).
   function typed(dir: string, args: string[], chat: string | null = MATE) {
-    const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1", AIDLC_PROJECT_DIR: dir };
+    const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1", AIDLC_UNATTENDED: "0", AIDLC_PROJECT_DIR: dir };
     for (const key of ["AIDLC_SESSION_OVERRIDE", "AIDLC_SESSION_OVERRIDE_SOURCE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PID", "CODEX_THREAD_ID", "KIRO_SESSION_ID"]) {
       delete env[key];
     }
@@ -1878,6 +1881,35 @@ describe("t325 a claim typed with no work selected", () => {
       git(remote, ["rev-parse", "--verify", "refs/heads/claim/000000b2/delta"]);
       git(remote, ["update-ref", "-d", "refs/heads/claim/000000b2/delta"]);
     }
+  });
+
+  // A setting typed before any work is picked is kept "for the work you pick up
+  // or start next" (t-kept-setting-follows-the-pick); the claim's pick is that
+  // work, and its line is said on the next step, not inside the claim's own.
+  test("a setting kept for the work picked next goes to the work the claim picks", () => {
+    const { remote } = teamProject();
+    const mate = clone(remote, "kept-setting");
+    const chat = { ...process.env, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0", AIDLC_UNATTENDED: "0", AIDLC_SESSION_OVERRIDE: MATE };
+    mkdirSync(hooksHealthDir(mate), { recursive: true });
+    writeFileSync(join(hooksHealthDir(mate), "record-human-turn.last"), new Date().toISOString());
+    const said = spawnSync(process.execPath, [DISPATCHER, "engine", "hook", "record-human-turn"], {
+      cwd: mate, encoding: "utf-8", env: { ...chat, CLAUDE_PROJECT_DIR: mate, AIDLC_PROJECT_DIR: mate },
+      input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: MATE, prompt: "/aidlc --guard.review-freeze off" }),
+    });
+    expect(said.status, said.stderr).toBe(0);
+    const setter = runOrchestrateNext(ORCH, mate, ["--guard.review-freeze", "off"], { cwd: mate, env: chat }).directive;
+    const named = /Run `bun \.claude\/tools\/(aidlc[a-z-]*\.ts) ([^`]+)`/.exec(String(setter?.message));
+    expect(named, JSON.stringify(setter).slice(0, 300)).not.toBeNull();
+    const kept = spawnSync(process.execPath, [join(AIDLC_SRC, "tools", named![1]), ...named![2].split(" ")], {
+      cwd: mate, encoding: "utf-8", env: { ...chat, CLAUDE_PROJECT_DIR: mate, AIDLC_PROJECT_DIR: mate },
+    });
+    expect(`${kept.stdout}${kept.stderr}`).toContain("for the work you pick up or start next");
+    const claimed = typed(mate, ["--claim", "alpha"]);
+    expect(claimed.status, claimed.out).toBe(0);
+    expect(claimKeys(claimed.stdout)).toContain("claimed");
+    expect(getField(readFileSync(seededStateFile(mate), "utf-8"), "Guards Off") ?? "").toContain("review-freeze");
+    const after = runOrchestrateNext(ORCH, mate, [], { cwd: mate, env: chat });
+    expect(after.out).toContain("The review freeze check is off for this piece of work");
   });
 
   test("no piece of work with that Unit: one line, nothing selected", () => {

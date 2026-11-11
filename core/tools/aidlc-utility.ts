@@ -9296,8 +9296,8 @@ function claimWhereTheUnitIs(projectDir: string, unit: string): void {
 // space does). The <name> matches a record dir name exactly, or a slug (when
 // unambiguous within the space). --json on the bare list emits the structured
 // query shape; --all includes archived records in the human listing. `quiet`
-// selects and says nothing, for a command that selects on the way to its own
-// result (claimWhereTheUnitIs).
+// selects for a command that says its own result (claimWhereTheUnitIs): what
+// the chat kept for the work it picks still goes to it, said on the next step.
 function handleIntent(
   projectDir: string,
   positional: string[],
@@ -9407,7 +9407,11 @@ function handleIntent(
       recordSessionIntentSwitch(projectDir, sid, priorUuid, recordIntentKey(space, match.dirName));
     }
   }
-  if (quiet) return;
+  const kept = sid ? applyKeptToPickedWork(projectDir, sid, space, match.dirName) : [];
+  if (quiet) {
+    if (sid && kept.length > 0 && !addPendingPersonLines(projectDir, sid, kept)) process.stdout.write(`${kept.join("\n")}\n`);
+    return;
+  }
   // What the person sees after picking or switching: the work they are on now,
   // by the name they know it by.
   const where = space === DEFAULT_SPACE ? "" : ` in space \`${space}\``;
@@ -9420,7 +9424,6 @@ function handleIntent(
     ? null
     : intents.filter((i) => i.slug === prior.slug && i.dirName !== null).length > 1 ? prior.dirName : intentDisplayLabel(prior);
   const back = priorName === null ? "" : ` You were on \`${priorName}\`: \`${entrySkillInvocation()} intent ${priorName}\` goes back.`;
-  const kept = sid ? applyKeptToPickedWork(projectDir, sid, space, match.dirName) : [];
   process.stdout.write(`Now working on \`${intentDisplayLabel(match)}\`${where}.${back}\n`);
   if (kept.length > 0) process.stdout.write(`${kept.join("\n")}\n`);
 }
