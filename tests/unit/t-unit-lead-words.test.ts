@@ -4,10 +4,11 @@
 // design read's S10 B). The lead answers in their chat; the agent runs the
 // verb with whatever it wrote to the request file. The record of a sign-off,
 // an answer to a proposed change, a turn-down, a merge by word and a send-back
-// keeps what the lead typed and the message it came in (main's message store:
-// the message named with `--message <id>`, the reply held for the engine's own
-// question, or this chat's replies since the last decision), never the agent's
-// text labelled as theirs. What a team hears stays the words the agent relayed.
+// keeps what the lead typed and the one message it came in (main's message
+// store: the message named with `--message <id>`, the reply held for the
+// engine's own question, or the latest message in this chat), never the chat
+// before it and never the agent's text labelled as theirs. What a team hears
+// stays the words the agent relayed.
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -138,6 +139,87 @@ describe("the lead's word is kept in their own words, with the message it came i
   });
 });
 
+// The GitHub live test: the lead's "Slugify is merged too ... Please record it."
+// went onto the claim, read by every team, with every message of the lead's
+// since the Delivery Planning gate, words about other things included.
+describe("only the message the request came in is kept, never the chat before it", () => {
+  const EARLIER = ["where do things stand?", "Keep approvals after every stage"];
+  // The lead's chat: two earlier messages, then the request; its id.
+  function chatThenRequest(dir: string, session: string, request: string): string {
+    for (const words of EARLIER) leadSays(dir, session, words);
+    return leadSays(dir, session, request);
+  }
+  const onlyThe = (row: string, id: string, request: string): void => {
+    expect(auditBlockField(row, "Person Reply")).toBe(request);
+    expect(auditBlockField(row, "Message Id")).toBe(id);
+    expect(auditBlockField(row, "Message Ids")).toBeNull();
+  };
+
+  test("a merge by the lead's word", () => {
+    const { home } = pushed();
+    const session = "t-unit-lead-words-one-merged";
+    const request = "billing is merged too: I can see its pull request was squash-merged. Please record it.";
+    chatThenRequest(home.dir, session, request);
+    const said = run(UNIT, ["merged", "refunds", "--repo", "billing", "--person-words", "merged on the host"], home.dir, personsChat(session));
+    expect(said.status, said.out).toBe(0);
+    const claim = claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds");
+    expect((claim?.said_merged as Array<{ repo: string; words: string }>)?.find((entry) => entry.repo === "billing")?.words).toBe(request);
+  });
+
+  test("a turn-down", () => {
+    const { home } = pushed();
+    const session = "t-unit-lead-words-one-down";
+    const request = "billing turned refunds down: it needs the ledger entry first";
+    chatThenRequest(home.dir, session, request);
+    const down = run(UNIT, ["turned-down", "refunds", "--repo", "billing", "--person-words", "needs the ledger entry"],
+      home.dir, personsChat(session));
+    expect(down.status, down.out).toBe(0);
+    expect((claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.turned_down as { person_reply?: string })?.person_reply)
+      .toBe(request);
+  });
+
+  test("a send-back", () => {
+    const { home } = pushed();
+    const session = "t-unit-lead-words-one-back";
+    const request = "send refunds back to payments, the browser can't call it";
+    const id = chatThenRequest(home.dir, session, request);
+    const sent = run(UNIT, ["send-back", "refunds", "--person-words", "checkout-api sends no CORS headers"], home.dir, personsChat(session));
+    expect(sent.status, sent.out).toBe(0);
+    onlyThe(lastRow(home.dir, "UNIT_SENT_BACK"), id, request);
+  });
+
+  test("a sign-off", () => {
+    const taken = refundsTaken();
+    const { home } = taken;
+    expect(run(UNIT, ["lead-sign-off", "on"], home.dir).status).toBe(0);
+    codeGenerated(taken.alice, taken.record);
+    expect(run(UNIT, ["push"], taken.alice).status).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    const session = "t-unit-lead-words-one-signoff";
+    const request = "refunds looks right, sign it off";
+    const id = chatThenRequest(home.dir, session, request);
+    const signed = run(UNIT, ["sign-off", "refunds", "--person-words", "Sign it off"], home.dir, personsChat(session));
+    expect(signed.status, signed.out).toBe(0);
+    onlyThe(lastRow(home.dir, "QUESTION_ANSWERED"), id, request);
+    expect((claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.signoff as { words?: string })?.words).toBe(request);
+  });
+
+  test("an answer to a team's proposed change", () => {
+    const taken = refundsTaken();
+    writeFileSync(join(taken.record, ...REQUIREMENTS.split("/")), "# Requirements\n\nFR1 refunds, partial amounts too.\n");
+    expect(run(UNIT, ["propose", "--input", "requirements.md", "--person-words", "refunds need partial amounts"], taken.alice).status).toBe(0);
+    git(taken.home.dir, ["fetch", "-q", "origin"]);
+    const { home } = taken;
+    const session = "t-unit-lead-words-one-amend";
+    const request = "approve the partial refunds change, finance asked for it";
+    const id = chatThenRequest(home.dir, session, request);
+    const amended = run(UNIT, ["amend", "refunds", "--input", REQUIREMENTS, "--answer", "approve", "--person-words", "Approve it"],
+      home.dir, personsChat(session));
+    expect(amended.status, amended.out).toBe(0);
+    onlyThe(lastRow(home.dir, "QUESTION_ANSWERED"), id, request);
+  });
+});
+
 describe("the message the agent names", () => {
   test("an earlier message of theirs named with --message is the one kept", () => {
     const { home } = pushed();
@@ -151,6 +233,9 @@ describe("the message the agent names", () => {
     const row = lastRow(home.dir, "QUESTION_ANSWERED");
     expect(auditBlockField(row, "Person Reply")).toBe(words);
     expect(auditBlockField(row, "Message Id")).toBe(id);
+    // That one, and nothing else of the chat.
+    expect(auditBlockField(row, "Message Ids")).toBeNull();
+    expect((claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.signoff as { words?: string })?.words).toBe(words);
   });
 
   test("a message that is not on record is refused, and nothing is recorded", () => {

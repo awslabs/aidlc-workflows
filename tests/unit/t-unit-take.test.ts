@@ -21,7 +21,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
-import { readAuditShardEvents, readIntentRegistry, shellArg } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { auditBlockField, readAuditShardEvents, readIntentRegistry, shellArg } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { leadsPlanNotHere } from "../../dist/claude/.claude/tools/aidlc-unit-holders.ts";
 import { loadGraph } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
 import { resolvedRuleBundle } from "../../dist/claude/.claude/tools/aidlc-steering.ts";
@@ -40,10 +40,12 @@ import {
   GIT_ENV,
   git,
   homeState,
+  hook,
   makeHome,
   mergeOnHost,
   next,
   ORCH,
+  personsChat,
   refundsTaken,
   DEPENDENCIES,
   run,
@@ -206,6 +208,28 @@ describe("a team member's clone of the home's workspace", () => {
     expect(row, "the lift is on the record").toBeDefined();
     const after = next(laptop, ENV);
     expect(JSON.stringify(after), JSON.stringify(after).slice(0, 600)).not.toContain("Taking a Unit starts it as your team's own piece of work here");
+  });
+
+  // The GitHub live test's rule for the lead's words: the one message the
+  // request came in, never the chat before it.
+  test("the lead's word that they lead this work here keeps only the message it came in", () => {
+    const home = makeHome();
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    asLeadsOwnCheckout(home.dir);
+    commitAll(home.dir, "teams");
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const laptop = cloneOf(home.remote, "lead");
+    expect(run(UTILITY, ["intent", "switch", HOME], laptop).status).toBe(0);
+    const session = "t-unit-take-lead-here-one";
+    const request = "I lead this work, carry it on here on my laptop";
+    for (const prompt of ["where do things stand?", "Keep approvals after every stage", request]) {
+      expect(hook(laptop, personsChat(session), { hook_event_name: "UserPromptSubmit", session_id: session, prompt }).status).toBe(0);
+    }
+    const lifted = run(UNIT, ["lead-here", "--person-words", request], laptop, personsChat(session));
+    expect(lifted.status, lifted.out).toBe(0);
+    const row = readAuditShardEvents(laptop).findLast((entry) => entry.event === "LEAD_HERE_SET");
+    expect(auditBlockField(row?.block ?? "", "Person Words")).toBe(request);
+    expect(auditBlockField(row?.block ?? "", "Message Ids")).toBeNull();
   });
 
   // A live run on Codex: after the Units offer, a teammate's words about their

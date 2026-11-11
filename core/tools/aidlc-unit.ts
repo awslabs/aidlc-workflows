@@ -5610,12 +5610,13 @@ function requireLeadsWord(pd: string, what: string): void {
 // The lead's word that settles a team's Unit, as the engine's other decisions
 // keep the person's words: the message the agent names (`--message <id>`, proved by proveMessage's
 // request form, which stands in for the turn requireLeadsWord looks for), else
-// their replies in this chat since the last decision (personsGateReply, as the
-// merge gate's row reads them, over a window no stage starts). A reply sent
-// while the engine's own question for this verb (`ask`) was on screen answers
-// that question, and the window holds it aside: the turn the hook wrote names
-// the question, so its message is taken as a named one, falling back to the
-// window when its proof fails, as `log answer` takes an inherited id. `said`
+// the one message the request came in: their latest reply in this chat since
+// the last decision (personsGateReply's window, over a window no stage starts),
+// never the chat before it, since the words go onto the claim every team reads.
+// A reply sent while the engine's own question for this verb (`ask`) was on
+// screen answers that question, and the window holds it aside: the turn the
+// hook wrote names the question, so its message is taken as a named one, as
+// `log answer` takes an inherited id. `said`
 // is what they typed, from the message store, and only it goes on a row as
 // theirs (`fields`); null when the store kept no words of theirs (hooks off, a
 // host that passed no text), where the request file's text is all there is.
@@ -5652,14 +5653,11 @@ function leadsWord(
   const id = answered === undefined ? null : auditBlockField(answered.block, "Message Id");
   const proof = id === null ? null : proveMessage(pd, id, "decision", { request: true });
   if (proof !== null && "message" in proof) return kept(proof.message);
-  return {
-    said: reply.words?.trim() || null,
-    fields: {
-      ...(reply.words ? { "Person Reply": reply.words } : {}),
-      ...(reply.messageId ? { "Message Id": reply.messageId } : {}),
-      ...windowMessageIds(reply),
-    },
-  };
+  const { readMessage } = require("./aidlc-message-store.ts") as typeof import("./aidlc-message-store.ts");
+  const latest = reply.messageId === null ? null : readMessage(pd, reply.messageId);
+  if (latest === null) return { said: null, fields: {} };
+  // A message the store kept only in part: named, its words left to its record.
+  return latest.cut === true ? { said: null, fields: { "Message Id": latest.id } } : kept(latest);
 }
 
 // The lead's word to build a Unit at the lead's project (`--here <unit>`), in
