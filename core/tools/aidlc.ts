@@ -1467,7 +1467,6 @@ export function copyChannelDispatcherCommands(): string[] {
     "--doctor",
     "--doctor --verbose",
     "--version",
-    "status",
     "--status",
     "config --help",
     // An unknown option there, answered with the config usage line and no

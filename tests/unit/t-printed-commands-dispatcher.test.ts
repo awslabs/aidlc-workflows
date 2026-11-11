@@ -1,4 +1,4 @@
-// covers: tool:aidlc, function:renderAllHelp, function:renderNamespaceHelp, tool:aidlc-machine-config, tool:aidlc-plugin, tool:aidlc-runner-gen, subcommand:aidlc-utility:plugin-validate, subcommand:aidlc-utility:plugin-build, subcommand:aidlc-orchestrate:next
+// covers: tool:aidlc, function:copyChannelDispatcherCommands, function:renderAllHelp, function:renderNamespaceHelp, tool:aidlc-machine-config, tool:aidlc-plugin, tool:aidlc-runner-gen, subcommand:aidlc-utility:plugin-validate, subcommand:aidlc-utility:plugin-build, subcommand:aidlc-orchestrate:next
 //
 // A usage line, a help pointer or a next step the dispatcher, a runner or a
 // plugin verb prints is a command that runs as printed on the install it came
@@ -12,6 +12,7 @@ import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writ
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  copyChannelDispatcherCommands,
   ENGINE_NAMESPACE_HELP,
   renderAllHelp,
   renderNamespaceHelp,
@@ -48,6 +49,13 @@ function dispatch(args: string[], cwd = join(REPO_ROOT, "dist", "claude"), env: 
 }
 
 describe("the dispatcher's own lines name the install's command", () => {
+  test("every command a copy install pre-approves is one the dispatcher runs", () => {
+    for (const command of copyChannelDispatcherCommands()) {
+      const action = resolveAction(command.split(" "));
+      expect(action.type === "error" ? `${command}: ${action.message}` : "", command).toBe("");
+    }
+  });
+
   test("an unknown verb or command points at help the install can run", () => {
     const verb = resolveAction(["engine", "state", "frob"]);
     expect(verb.type).toBe("error");

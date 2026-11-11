@@ -68,7 +68,7 @@ import {
   takeSessionSelectionNotice,
 } from "../tools/aidlc-lib.ts";
 import { settleClaudeTurnsFirst } from "../tools/aidlc-claude-turn-pending.ts";
-import { aidlcInvocation, knownActiveSpace } from "../tools/aidlc-runtime-paths.ts";
+import { aidlcDispatcherInvocation, aidlcInvocation, knownActiveSpace } from "../tools/aidlc-runtime-paths.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -1706,7 +1706,7 @@ export async function run(
             "AIDLC's own files under .cursor/ (its hooks, tools, skills, agents, " +
             "and aidlc rules); other Cursor configuration such as .cursor/mcp.json " +
             "is fine to change. Reading any of them and running " +
-            "`bun .cursor/tools/aidlc.ts status` are fine. If asked to do AIDLC " +
+            `\`${aidlcDispatcherInvocation("status")}\` are fine. If asked to do AIDLC ` +
             "work, tell the user to do it from the foreground chat. Do your task " +
             "and report back.",
         })}\n`);
