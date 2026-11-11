@@ -1881,7 +1881,7 @@ if (INPUT_TARGETS.has(target)) {
     if (raw.trim().length > 0) channel = "legacy";
   }
   if (raw.trim().length > 0) {
-    if (target === "verb-intercept" && /^\s*\/aidlc(?![\w-])/.test(raw)) {
+    if (target === "verb-intercept" && aidlcEntryWords(raw) !== null) {
       ide = { channel, prompt: raw, userPrompt: raw };
     } else {
       try {
@@ -2033,13 +2033,10 @@ interface TerminalLatch extends TerminalResult {
   ts: number;
 }
 
+// Only a message that starts with the entry is a command; one that quotes an
+// engine command in its text is the person's words for the agent.
 function promptTerminalInvocation(prompt: string): TerminalInvocation {
-  const expanded = prompt.match(/aidlc-orchestrate\.ts next ([^`\n]*)`/);
-  const rawInvocation = expanded
-    ? expanded[1]
-    : prompt.match(/^\s*\/aidlc(?![\w-])([\s\S]*)$/)?.[1];
-  if (rawInvocation === undefined) return { raw: "", args: [] };
-  const raw = rawInvocation.trim();
+  const raw = aidlcEntryWords(prompt) ?? "";
   return { raw, args: splitKiroCommandArgs(raw) };
 }
 

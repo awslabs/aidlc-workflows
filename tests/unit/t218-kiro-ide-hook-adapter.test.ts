@@ -1116,6 +1116,37 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
     }
   });
 
+  test("8c1: a message that only quotes an engine command runs nothing and holds no shell call", () => {
+    const dir = scratchProject(true);
+    try {
+      const countPath = installPlainTextUtility(dir);
+      for (const prompt of [
+        "why does `bun .kiro/tools/aidlc-orchestrate.ts next --status` fail?",
+        "Before I run `bun .kiro/tools/aidlc-orchestrate.ts next --doctor`, what does it check?",
+      ]) {
+        const r = runIdeStdin(dir, "verb-intercept", JSON.stringify({
+          session_id: "sess_quoted_command",
+          hook_event_name: "UserPromptSubmit",
+          cwd: dir,
+          prompt,
+        }));
+        expect(r.code, r.stderr).toBe(0);
+        expect(r.stdout).not.toContain("Unicode: ─ ✓ █▒ ⇄");
+        const shell = runIdeStdin(dir, "terminal-command-guard", JSON.stringify({
+          session_id: "sess_quoted_command",
+          hook_event_name: "PreToolUse",
+          cwd: dir,
+          tool_name: "execute_bash",
+          tool_input: { command: "ls" },
+        }));
+        expect(shell.code, shell.stderr).toBe(0);
+      }
+      expect(existsSync(countPath)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("8c2: relayed output cannot close its fence or speak in the harness's voice", () => {
     const dir = scratchProject(true);
     try {
