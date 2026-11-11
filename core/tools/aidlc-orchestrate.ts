@@ -6271,11 +6271,14 @@ function unitsReposAsk(projectDir: string, stateContent: string | null): AskDire
   };
 }
 
-// A line for the person said with the step this `next` emits, once per chat.
-function sayWithStepOnce(projectDir: string, line: string): void {
-  if (engineSessionId && personLineHeard(projectDir, engineSessionId, line)) return;
-  settledNotices.push(line);
-  if (engineSessionId && !isReadOnlyEngineProbe()) markPersonLinesHeard(projectDir, engineSessionId, [line]);
+// A line for the person said with the step this `next` emits, once per chat;
+// with `once`, once per chat for that key (an answer to one proposal), and a
+// text already on the step is not put on it twice.
+function sayWithStepOnce(projectDir: string, line: string, once?: string): void {
+  const heard = once === undefined ? line : `${once}\u0000${line}`;
+  if (engineSessionId && personLineHeard(projectDir, engineSessionId, heard)) return;
+  if (!settledNotices.includes(line)) settledNotices.push(line);
+  if (engineSessionId && !isReadOnlyEngineProbe()) markPersonLinesHeard(projectDir, engineSessionId, [heard]);
 }
 
 // The reclassify command for the piece of work selected now, named exactly, so
@@ -13947,7 +13950,10 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     }
   }
   // What the home said about a Unit's build reaches its team once, on any step.
-  for (const line of stateContent ? buildClaimNotes(pd, stateContent, engineSessionId) : []) sayWithStepOnce(pd, line);
+  for (const note of stateContent ? buildClaimNotes(pd, stateContent, engineSessionId) : []) {
+    if (typeof note === "string") sayWithStepOnce(pd, note);
+    else sayWithStepOnce(pd, note.line, note.once);
+  }
   // A lead's file the build follows that cannot be read now: the step goes on
   // under the team's own rules, and says so once.
   const leadUnread = stateContent !== null ? leadRulesUnreadLine(pd, stateContent) : null;

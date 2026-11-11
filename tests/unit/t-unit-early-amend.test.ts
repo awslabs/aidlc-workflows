@@ -277,6 +277,36 @@ describe("a change to a shared input", () => {
     expect(String(step.question)).toContain("You changed the requirements here.");
   });
 
+  // The fork leg (the swapped round): a second approved change to the same
+  // input was never said in the chat that had heard the first one's answer.
+  test("a second change to the same input approved: its answer is heard in the chat that heard the first", () => {
+    const { home, alice, record } = proposed();
+    expect(next(home.dir).ask_type).toBe("unit-amend");
+    appendAuditEntry("HUMAN_TURN", { "Person Reply": "yes, partial refunds" }, home.dir);
+    expect(run(UNIT, ["amend", "refunds", "--input", REQUIREMENTS, "--answer", "approve", "--person-words", "yes, partial refunds"], home.dir).status).toBe(0);
+    git(alice, ["fetch", "-q", "origin"]);
+    const chat = personsChat("alice-chat");
+    const approved = "The lead approved your change to the requirements.";
+    expect(notices(personsNext(alice, chat, "alice-chat"))).toContain(approved);
+    expect(notices(personsNext(alice, chat, "alice-chat"))).not.toContain(approved);
+    const firstAt = ((claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.proposals ?? []) as Array<{ at: string }>)[0]?.at;
+    expect(firstAt).toBeString();
+    Bun.sleepSync(Math.max(0, Date.parse(firstAt!) + 1000 - Date.now()));
+    writeFileSync(join(record, ...REQUIREMENTS.split("/")), "# Requirements\n\nFR1 refunds, partial amounts too, in one currency only.\n");
+    expect(run(UNIT, ["propose", "--input", "requirements.md", "--person-words", "one currency only"], alice).status).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    expect(next(home.dir).ask_type).toBe("unit-amend");
+    appendAuditEntry("HUMAN_TURN", { "Person Reply": "yes, one currency" }, home.dir);
+    expect(run(UNIT, ["amend", "refunds", "--input", REQUIREMENTS, "--answer", "approve", "--person-words", "yes, one currency"], home.dir).status).toBe(0);
+    git(alice, ["fetch", "-q", "origin"]);
+    expect(notices(personsNext(alice, chat, "alice-chat"))).toContain(approved);
+    expect(notices(personsNext(alice, chat, "alice-chat"))).not.toContain(approved);
+    // A new chat hears the past answers once, as before: one line for the same words.
+    const later = personsChat("alice-later");
+    expect(notices(personsNext(alice, later, "alice-later")).filter((line) => line === approved)).toHaveLength(1);
+    expect(notices(personsNext(alice, later, "alice-later"))).not.toContain(approved);
+  });
+
   // The same flag: after her change was answered she edited the input again
   // and did not send it; a later change of the lead's wrote over her edit.
   test("an unsent edit after her change was answered stays when the lead changes the input, with the new version beside it", () => {

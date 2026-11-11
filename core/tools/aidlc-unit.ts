@@ -8388,11 +8388,13 @@ function takeNewerInput(
 // answer to a proposal, a Unit it started early on that is now done or turned
 // down, and an input the home amended (the copy here takes the new version,
 // and the stages that used it read as current, on every Guard Policy).
-export function buildClaimNotes(projectDir: string, stateContent: string, sessionId?: string): string[] {
+// The home's answer to a proposal is kept heard by that proposal (`once`), so a
+// second answer to the same input is heard in a chat that heard the first.
+export function buildClaimNotes(projectDir: string, stateContent: string, sessionId?: string): Array<string | { line: string; once: string }> {
   const build = unitBuildOf(stateContent);
   if (build === null) return [];
   const space = build.homeRecord.slice(0, build.homeRecord.indexOf("/"));
-  const lines: string[] = [];
+  const lines: Array<string | { line: string; once: string }> = [];
   if (!isReadOnlyEngineProbe()) {
     let home: HomeWork | null = null;
     try {
@@ -8440,10 +8442,14 @@ export function buildClaimNotes(projectDir: string, stateContent: string, sessio
     lines.push(turnedDownLine(unit, down));
   }
   for (const proposal of mine.payload.proposals ?? []) {
-    if (proposal.answer === "approved") lines.push(`The lead approved your change to the ${inputName(proposal.input)}.`);
+    const once = `${proposal.input}@${proposal.at}`;
+    if (proposal.answer === "approved") lines.push({ line: `The lead approved your change to the ${inputName(proposal.input)}.`, once });
     if (proposal.answer === "turned down") {
-      lines.push(`The lead turned down your change to the ${inputName(proposal.input)}` +
-        `${proposal.answer_words ? `: "${proposal.answer_words}"` : ""}${/[.!?]$/.test(proposal.answer_words?.trim() ?? "") ? "" : "."} I'm carrying on with the approved one.`);
+      lines.push({
+        line: `The lead turned down your change to the ${inputName(proposal.input)}` +
+          `${proposal.answer_words ? `: "${proposal.answer_words}"` : ""}${/[.!?]$/.test(proposal.answer_words?.trim() ?? "") ? "" : "."} I'm carrying on with the approved one.`,
+        once,
+      });
     }
   }
   // A Unit it started early on that is now done is offered as the move onto
