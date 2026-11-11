@@ -335,7 +335,11 @@ describe("t-rules-travel-with-steps: the Kiro agent prompts", () => {
     test(`${tool}: the must-follow list holds without the skill`, () => {
       // The skill rides in the conductor's own resources from chat start, so the
       // first item says where it is instead of asking for a read in parts.
-      expect(prompt).toContain("the aidlc skill (.kiro/skills/aidlc/SKILL.md) and the two files beside it (question-rendering.md and composer.md) are in your context from the start of this chat: follow them, and never read them with your file tool");
+      // The Kiro row's skill goes on in workflow.md, which the Kiro CLI (V2) row does not ship.
+      const beside = tool === "Kiro IDE"
+        ? "the three files beside it (workflow.md, question-rendering.md and composer.md)"
+        : "the two files beside it (question-rendering.md and composer.md)";
+      expect(prompt).toContain(`the aidlc skill (.kiro/skills/aidlc/SKILL.md) and ${beside} are in your context from the start of this chat: follow them, and never read them with your file tool`);
       expect(prompt).toContain("say the lines AI-DLC gives you for the person (its warnings, notices and questions) to them word for word");
       expect(prompt).toContain("a question AI-DLC puts to the person is theirs to answer, never yours");
       // Live: "never answer one yourself" alone made the agent ask the person for the work's folder label.

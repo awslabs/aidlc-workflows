@@ -329,7 +329,9 @@ function runTool(toolFile: string, args: string[], projectDir: string): ToolRun 
 // resolved from the parent intent.
 // With `showOutput` the command's own output goes to this tool's stderr as it
 // runs, so a worker sees its tests as if it had run them; stdout keeps the one
-// verdict line.
+// verdict line. Without it the output goes nowhere: the verdict reads only the
+// exit status, and held output over spawnSync's buffer limit would stop a
+// passing command and lose its status.
 // `timedOut` says the run hit `timeoutMs` and was stopped before it finished:
 // its output just ends, so without it a long suite read as a failing project.
 function checkConverged(
@@ -344,10 +346,9 @@ function checkConverged(
       : true;
   const result = spawnSync(checkCmd, {
     cwd,
-    encoding: "utf-8",
     timeout: timeoutMs,
     shell,
-    ...(showOutput ? { stdio: ["ignore", 2, 2] as const } : {}),
+    stdio: showOutput ? ["ignore", 2, 2] : "ignore",
   });
   return {
     converged: result.status === 0,

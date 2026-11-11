@@ -39,7 +39,7 @@ import {
   writePlanApprovalReceipt,
   stateDigest,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { REPO_ROOT } from "../harness/fixtures.ts";
+import { readConductorSurface } from "../harness/conductor-skill.ts";
 
 const STAGE_REL = "core/aidlc-common/stages/construction/code-generation.md";
 const PRACTICES_REL =
@@ -52,7 +52,7 @@ const TEAM_REL = "core/memory/team.md";
 const PROJECT_REL = "core/memory/project.md";
 
 function read(rel: string): string {
-  return readFileSync(join(REPO_ROOT, rel), "utf-8");
+  return readConductorSurface(rel);
 }
 
 const ORG = [

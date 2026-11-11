@@ -10,6 +10,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { readConductorSurface } from "../harness/conductor-skill.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 
@@ -46,7 +47,7 @@ describe("a model or effort request runs config models", () => {
   // /aidlc skill does not repeat it on every turn (#1330).
   test("every harness's /aidlc skill leaves the command to the onboarding file", () => {
     for (const harness of HARNESS_MATRIX) {
-      const skill = readFileSync(join(harness.skillsRoot, "aidlc", "SKILL.md"), "utf-8");
+      const skill = readConductorSurface(join(harness.skillsRoot, "aidlc", "SKILL.md"));
       expect(skill, harness.name).not.toContain("**Model and effort requests.**");
     }
   });
@@ -61,7 +62,7 @@ describe("a model or effort request runs config models", () => {
       ...HARNESS_MATRIX.map((harness) => `harness/${harness.name}/skills/aidlc/SKILL.md`),
     ];
     for (const rel of sources) {
-      const text = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const text = readConductorSurface(rel);
       expect(text, rel).not.toMatch(/edit the projected (?:value|`model:`)/);
       expect(text, rel).not.toContain("add a `\"model\"` field to the agent's");
     }

@@ -62,7 +62,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { hostname, tmpdir, userInfo } from "node:os";
-import { dirname, join, relative } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   acquireAuditLock,
@@ -794,6 +794,22 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       ).toBe("deny");
     }
   });
+  test("0b: an apply_patch Copilot CLI names Edit waits for the approved plan like any write", () => {
+    const dir = scratchProject(true);
+    seedUnapprovedCodeGeneration(dir);
+    const result = runAdapter(dir, "guard-tool-call", withCwd({
+      ...FIXTURES.preToolUse_write,
+      tool_name: "Edit",
+      tool_input: "*** Begin Patch\n*** Add File: src/blocked.ts\n+export {};\n*** End Patch\n",
+    }, dir));
+    expect(result.code).toBe(0);
+    expect(
+      (JSON.parse(result.stdout || "{}") as {
+        hookSpecificOutput?: { permissionDecision?: string };
+      }).hookSpecificOutput?.permissionDecision,
+    ).toBe("deny");
+  });
+
   test("1: stop with active workflow blocks in both CLI and VS Code output shapes", () => {
     const dir = scratchProject(true);
     const r = runAdapter(dir, "continue-workflow", withCwd(FIXTURES.stop, dir));
@@ -1334,6 +1350,75 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const audit = readAudit(dir);
     expect(audit).toContain("as-text.md");
     expect(audit).toContain("as-json.md");
+  });
+
+  test("17d: an apply_patch Copilot CLI names Edit records each file it adds, updates, deletes or moves", () => {
+    for (const eol of ["\n", "\r\n"]) {
+      const dir = scratchProject(true);
+      const doc = (name: string) => join(seededRecordDir(dir), "inception", name);
+      mkdirSync(dirname(doc("added.md")), { recursive: true });
+      // The tree after the patch: deleted.md and moved-from.md are gone.
+      for (const name of ["added.md", "updated.md", "moved-to.md"]) writeFileSync(doc(name), `# ${name}\n`, "utf-8");
+      const rel = (name: string) => relative(dir, doc(name));
+      const patch = [
+        "*** Begin Patch",
+        `*** Add File: ${rel("added.md")}`, "+# added.md",
+        `*** Update File: ${rel("updated.md")}`, "@@", "-# old", "+# updated.md",
+        `*** Delete File: ${rel("deleted.md")}`,
+        `*** Update File: ${rel("moved-from.md")}`, `*** Move to: ${rel("moved-to.md")}`,
+        "*** End Patch", "",
+      ].join(eol);
+      const artifactRows = () => readAuditShardEvents(dir)
+        .filter((entry) => entry.event.startsWith("ARTIFACT_"))
+        .map((entry) => `${entry.event} ${basename(auditBlockField(entry.block, "File") ?? "")}`)
+        .sort();
+
+      const result = runAdapter(dir, "post-tool", {
+        hook_event_name: "PostToolUse",
+        cwd: dir,
+        tool_name: "Edit",
+        tool_input: patch,
+        tool_result: { result_type: "success", text_result_for_llm: "Added 2 file(s)" },
+      });
+      expect(result.code).toBe(0);
+      expect(artifactRows()).toEqual([
+        "ARTIFACT_CREATED added.md",
+        "ARTIFACT_CREATED moved-to.md",
+        "ARTIFACT_UPDATED deleted.md",
+        "ARTIFACT_UPDATED moved-from.md",
+        "ARTIFACT_UPDATED updated.md",
+      ]);
+
+      // An ordinary edit whose new text shows a patch is one edit of its own file.
+      runAdapter(dir, "post-tool", {
+        hook_event_name: "PostToolUse",
+        cwd: dir,
+        tool_name: "Edit",
+        tool_input: { path: doc("updated.md"), old_str: "# updated.md", new_str: patch },
+      });
+      expect(artifactRows().filter((row) => row === "ARTIFACT_UPDATED updated.md")).toHaveLength(2);
+      expect(artifactRows()).toHaveLength(6);
+    }
+  });
+
+  // At build-and-test the stage graph type-checks every .ts write.
+  test("17e: an apply_patch that deletes or moves a file runs no sensor on the file that is gone", () => {
+    const dir = scratchProject(true);
+    const statePath = seededStateFile(dir);
+    const state = readFileSync(statePath, "utf-8").replace(/^- \*\*Current Stage\*\*:.*$/m, "- **Current Stage**: build-and-test");
+    writeFileSync(statePath, state);
+    writeActiveDirectiveMarker(dir, { kind: "run-stage", stage: "build-and-test", state_sha256: stateDigest(state) });
+    mkdirSync(join(dir, "notes"), { recursive: true });
+    writeFileSync(join(dir, "notes", "moved.md"), "# moved\n", "utf-8");
+
+    const result = runAdapter(dir, "post-tool", {
+      hook_event_name: "PostToolUse",
+      cwd: dir,
+      tool_name: "Edit",
+      tool_input: "*** Begin Patch\n*** Delete File: src/gone.ts\n*** Update File: src/old.ts\n*** Move to: notes/moved.md\n*** End Patch\n",
+    });
+    expect(result.code).toBe(0);
+    expect(dropLines(dir)).toEqual([]);
   });
 
   test("18: VS Code agent_type/agent_id populate and clear reviewer identity", () => {

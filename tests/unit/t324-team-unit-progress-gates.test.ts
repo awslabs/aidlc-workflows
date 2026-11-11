@@ -1163,6 +1163,49 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     expect(auditBlockField(row("STAGE_REVISING"), "Feedback")).toBe(typed);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // A teammate's Unit documents are in the checkout (the team's work arrives
+  // by git): the decisions they leave open, and their checks, are that team's
+  // to decide. One Unit's gate, opened and re-opened, records its own, and its
+  // approval accepts its own open decisions only.
+  test("a team Unit's gate records only its own open decisions and checks, and its approval accepts only those", () => {
+    const proj = seedProject({ ownership: "team" });
+    const decisions = (id: string): string =>
+      `\n\`\`\`aidlc-decisions\ndecisions:\n  - id: ${id}\n    decision: Left to the person\n    owner: person\n    blocking: false\n\`\`\`\n`;
+    const spec = (unit: string): string =>
+      join(seededRecordDir(proj), "construction", unit, "functional-design", artifactFilename("functional-spec"));
+    coverUnit(proj, "beta", "functional-design");
+    writeFileSync(spec("beta"), `# functional-spec for beta\n${decisions("BETA-D1")}`);
+    const build = (): void => {
+      const body = runNext(proj);
+      expect(body).toMatchObject({ kind: "run-stage", stage: "functional-design", unit: "alpha", gate: false });
+      expect(runState(proj, ["unit", "start", "--stage", "functional-design", "--unit", "alpha"]).rc).toBe(0);
+      coverUnit(proj, "alpha", "functional-design");
+      writeFileSync(spec("alpha"), `# functional-spec for alpha\n${decisions("ALPHA-D1")}`);
+      expect(runState(proj, ["unit", "complete", "--stage", "functional-design", "--unit", "alpha"]).rc).toBe(0);
+      logReviewReady(proj, "functional-design", "alpha", String(body.reviewer));
+    };
+    build();
+    const args = ["--stage", "functional-design", "--unit", "alpha"];
+    expect(runReport(proj, [...args, "--result", "awaiting-approval"]).kind).toBe("print");
+    expect(runReport(proj, [...args, "--result", "rejected", "--user-input", "Request Changes", "--reason", "Rename it"]).kind)
+      .toBe("print");
+    build();
+    expect(runReport(proj, [...args, "--result", "revised"]).kind).toBe("print");
+    expect(runReport(proj, [...args, "--result", "approved", "--user-input", "Approve"])).toMatchObject({ kind: "done" });
+    const alphaRows = (event: string) => readAuditShardEvents(proj).filter((entry) =>
+      entry.event === event && auditBlockField(entry.block, "Unit") === "alpha");
+    const opened = alphaRows("STAGE_AWAITING_APPROVAL");
+    expect(opened).toHaveLength(2);
+    for (const open of opened) {
+      expect(auditBlockField(open.block, "Open Decisions")).toBe("1");
+      expect(auditBlockField(open.block, "Decisions")).toBe("ALPHA-D1");
+      const checks = auditBlockField(open.block, "Sensor State") ?? "";
+      expect(checks).toContain("/construction/alpha/functional-design/");
+      expect(checks).not.toContain("/construction/beta/");
+    }
+    expect(auditBlockField(alphaRows("GATE_APPROVED").at(-1)!.block, "Decisions Accepted Open")).toBe("ALPHA-D1");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   // The count Accept as-is waits on (#1083), at a team Unit's gate: the reply
   // that shows the gate again carries this Unit's own change requests, never
   // another Unit's at the same stage.

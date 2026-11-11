@@ -411,10 +411,12 @@ under `## Mandated` in its space memory.
 When the repo is not in the workspace yet, it is cloned first, beside the other
 repos, with the same code `aidlc system workspace-sync` uses and your own git
 setup (your credential helpers and `insteadOf` rules apply as at your own shell). The
-address is the one you give with `--url`, else the repo's `repos.json` entry,
-else the `repos.json` `org`. The agent never passes `--url`
-on its own, so a name it found in a code search can only be cloned from your
-team's org. The clone runs in a staging folder and is moved into place under
+address is the one you give with `--url`, else the repo's `repos.json` entry.
+A repo that `repos.json` lists by name alone is cloned from github.com under the
+list's org, so a team on GitHub can add a line with the repo's name and then add
+it by name. The agent never passes `--url` on its own, so a name it found in a
+code search is cloned only when `repos.json` lists it. The clone runs in a
+staging folder and is moved into place under
 the workspace lock; then the `repos.json` entry is written (your comments and
 layout kept), the managed `.gitignore` block and `aidlc.code-workspace` are
 refreshed, and only then is the change recorded. The line names the address,
@@ -425,8 +427,8 @@ hosted `--url` (a host, an owner and a name) creates one that names the owner as
 its `org`, and the line says so: commit it to share the list. A local path, or
 an address of another shape, adds the repo without creating the file. When the
 clone fails, nothing is recorded or changed, and the line gives git's reason
-and the `git clone` command to run by hand. With no `repos.json` org and no
-`--url`, the line asks for the address.
+and the `git clone` command to run by hand. A repo no `repos.json` lists, added
+without `--url`, is not cloned: the line asks for its address.
 
 The name must be a single folder name, and a folder already there must be a Git
 checkout (a real `.git` entry): a folder merely shaped like a repository is
@@ -523,7 +525,7 @@ them so agents can cite them instead of guessing.
 
 | Command | What it does |
 |---|---|
-| `/aidlc knowledge onboard [path]` | Add one file or folder from anywhere in your project (one outside `documents/` is copied in first, and the result says where), or sweep every not-yet-indexed file under `documents/` when no path is given |
+| `/aidlc knowledge onboard [path ...]` | Add one or more files or folders from anywhere in your project (one outside `documents/` is copied in first, and the result says where; a path that cannot be added is named with why, and the others still go in), or sweep every not-yet-indexed file under `documents/` when no path is given |
 | `/aidlc knowledge sync` | Reconcile the catalog with what is on disk; rebuild an index that was deleted |
 | `/aidlc knowledge list [--json]` | The catalog — every document with its state |
 | `/aidlc knowledge show <id>` | One document's full record plus its extracted text |
@@ -750,7 +752,9 @@ It commits what git shows changed here (files git does not track included,
 ignored files and AI-DLC's own part of `.gitignore`, `AGENTS.md` and
 `opencode.json` left out), then pushes the integration branch to the remote
 with a plain push, never forced, so the teams can take Units from the plan or
-see a Unit that landed. After it, this checkout shows the board instead of
+see a Unit that landed. Once it has pushed, it names what it committed: how
+many files and, by name as changed, new or deleted, up to ten outside
+`aidlc/`, with how many more. After it, this checkout shows the board instead of
 building Units. A push the remote refuses keeps the commit and says why; pull
 the branch, then share again. `/aidlc` offers this step itself when it is due:
 before a Unit would start on the lead's checkout, and after a land the remote
@@ -765,7 +769,8 @@ commits the Unit's own work: every change to a tracked file, the record under
 `aidlc/`, and the new files the Unit's source manifest lists (what its Code
 Generation says it wrote). Other new files, such as AI-DLC's own install or a
 `node_modules` your `.gitignore` does not list, stay on disk uncommitted, and
-the publish says once how many it left out. `--include <path>` puts a new file
+the publish says once how many it left out. It names what it committed the
+same way the share does. `--include <path>` puts a new file
 or folder in as well (give it once for each, or `.` for all of them); run it
 after a publish to publish again with them:
 
@@ -981,7 +986,7 @@ When a workflow has issues, `--doctor` also lists the structured findings in its
 | Current step out of date | Only while it lasts: the step the assistant was working from went out of date (the chat was compacted, or the workflow state changed after the step was issued). Says when and why, and, when known, which state lines changed and which AI-DLC command wrote them; the fix is `next` as its own command, which hands the current step out again and keeps an approval that still matches (warning - never fails) |
 | State drift | the active intent's `aidlc-state.md` matches the last `WORKFLOW_COMPLETED` in the audit |
 | Pending approval | When the current stage has waited at an organic approval gate for more than 24 hours, identifies it as waiting for a human rather than stuck and points to `/aidlc --status` (advisory - never fails) |
-| Background subagents | Reports fresh and stale session-scoped entries in `aidlc/.aidlc-subagent-inflight`. Fresh entries are advisory; stale or malformed entries fail with exact removal guidance. Silent when absent |
+| Background subagents | Reports fresh and stale session-scoped entries in `aidlc/.aidlc-sessions/subagent-inflight.json`. Fresh entries are advisory; stale or malformed entries fail with the exact removal step, run at your own terminal. Silent when absent |
 | Set-aside Bolt attempts | Informational list of saved attempts: slug, stamp, age in days, mode (`snapshot`, `branch-tip`, or `legacy` for saved heads; `evidence-only` when only reviewed source refs remain), restored checkout ownership, and typed restore/purge operations with optional safe display commands or rendering errors (purge only for evidence-only entries). These entries are neither warnings nor failures |
 | Cycle detection | `stage-graph.json` has no cycles |
 | Orphan stage files | Every slug in the graph has a matching `<phase>/<slug>.md` on disk |

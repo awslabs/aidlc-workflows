@@ -482,6 +482,113 @@ describe("the engine asks for Plan Approval", () => {
     expect(next(proj).plan_approval.targets?.[0].summary.at(-1)).toBe("Already changed before you approved: src/stray.ts.");
   });
 
+  // A repo that joins the work after Code Generation started (intent add-repo,
+  // a clone of a repo repos.json lists) holds the files it was cloned with:
+  // they are not something that ran ahead of the plan. A change made in it
+  // after it joined still is.
+  function seedRepo(dir: string, files: Record<string, string>): void {
+    for (const [path, body] of Object.entries(files)) {
+      mkdirSync(dirname(join(dir, path)), { recursive: true });
+      writeFileSync(join(dir, path), body, "utf-8");
+    }
+    for (const args of [["init", "-q"], ["config", "user.email", "t@test"], ["config", "user.name", "t"], ["add", "-A"], ["commit", "-qm", "seed"]]) {
+      const r = spawnSync("git", args, { cwd: dir, encoding: "utf-8" });
+      expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+    }
+  }
+
+  // The work's one repo (app-a), and a second one repos.json lists that is not cloned yet.
+  function workWithRepos(proj: string): void {
+    seedRepo(join(proj, "app-a"), { "app.ts": "export const a = 1;\n" });
+    const source = mkdtempSync(join(tmpdir(), "plan-gate-payments-"));
+    created.push(source);
+    seedRepo(source, { "src/api.ts": "export const api = 1;\n", "README.md": "# payments\n" });
+    const bare = `${source}.git`;
+    created.push(bare);
+    const cloned = spawnSync("git", ["clone", "-q", "--bare", source, bare], { encoding: "utf-8" });
+    expect(cloned.status, cloned.stderr).toBe(0);
+    writeFileSync(join(proj, "repos.json"), `${JSON.stringify({
+      org: "acme", repos: [{ name: "app-a" }, { name: "payments", url: bare }],
+    }, null, 2)}\n`, "utf-8");
+    const registry = join(intentsDirOf(proj), "intents.json");
+    const rows = JSON.parse(readFileSync(registry, "utf-8"));
+    rows[0].repos = ["app-a"];
+    writeFileSync(registry, `${JSON.stringify(rows, null, 2)}\n`, "utf-8");
+  }
+
+  function addRepo(proj: string, name: string): void {
+    const r = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc-utility.ts"), "intent", "add-repo", name, "--project-dir", proj], {
+      cwd: proj, encoding: "utf-8", env: { ...process.env, AIDLC_PROJECT_DIR: proj },
+    });
+    expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+    expect(existsSync(join(proj, name, "src", "api.ts"))).toBe(true);
+  }
+
+  test("a repo cloned for the work before the plan question is not named as already changed", () => {
+    const proj = project();
+    workWithRepos(proj);
+    const baseline = writeBaselineSourceSnapshot(proj, "code-generation", workspaceSourceListing(proj)!);
+    appendAuditEntry("STAGE_STARTED", { Stage: "code-generation", "Source Baseline": baseline }, proj);
+    addRepo(proj, "payments");
+    const asked = askFor(proj);
+    expect(asked.plan_approval.targets?.[0].summary).toEqual([
+      "Builds: slugify for titles", "Touches: src/slugify.ts", "Tests: 3 unit tests",
+    ]);
+    expect(questions(proj)).not.toContain("Already changed before you approved");
+  });
+
+  test("a file changed in a repo after it joined the work is still named as already changed", () => {
+    const proj = project();
+    workWithRepos(proj);
+    const baseline = writeBaselineSourceSnapshot(proj, "code-generation", workspaceSourceListing(proj)!);
+    appendAuditEntry("STAGE_STARTED", { Stage: "code-generation", "Source Baseline": baseline }, proj);
+    addRepo(proj, "payments");
+    writeFileSync(join(proj, "payments", "src", "api.ts"), "export const api = 2;\n", "utf-8");
+    const asked = askFor(proj);
+    expect(asked.plan_approval.targets?.[0].summary.at(-1)).toBe("Already changed before you approved: payments/src/api.ts.");
+  });
+
+  test("a repo cloned between two Units' questions is not named on the later one", () => {
+    const proj = unitProject("unit-b", "unit-a");
+    workWithRepos(proj);
+    const baseline = writeBaselineSourceSnapshot(proj, "code-generation", workspaceSourceListing(proj)!);
+    appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature", "Source Baseline": baseline }, proj);
+    appendAuditEntry("STAGE_STARTED", { Stage: "code-generation", "Source Baseline": baseline }, proj);
+    writePlan(proj, "", "unit-b");
+    writePlan(proj, "", "unit-a");
+    const first = next(proj);
+    expect(first.kind, JSON.stringify(first)).toBe("ask");
+    replyAndRecord(proj, "1", "Approve Plan");
+    expect(next(proj).kind).toBe("run-stage");
+    addRepo(proj, "payments");
+    const route = () => routeCodeGenerationPlanApproval(proj, {
+      kind: "run-stage", stage: "code-generation", unit: "unit-a",
+    } as Parameters<typeof routeCodeGenerationPlanApproval>[1]) as unknown as Emitted;
+    const quiet = route();
+    expect(quiet.kind, JSON.stringify(quiet)).toBe("ask");
+    expect((quiet.plan_approval.targets ?? [])[0].summary.filter((line) => line.startsWith("Already changed"))).toEqual([]);
+    writeFileSync(join(proj, "payments", "src", "stray.ts"), "export const stray = 1;\n", "utf-8");
+    expect(route().plan_approval.targets?.[0].summary.at(-1)).toBe("Already changed before you approved: payments/src/stray.ts.");
+  });
+
+  // The source kept at the approval, with the repo cloned since as the clone
+  // wrote it (its files and the three workspace files the clone's install writes).
+  test("a repo cloned for the work after the plan was approved starts the build with no line", () => {
+    const proj = project();
+    workWithRepos(proj);
+    const baseline = writeBaselineSourceSnapshot(proj, "code-generation", workspaceSourceListing(proj)!);
+    appendAuditEntry("STAGE_STARTED", { Stage: "code-generation", "Source Baseline": baseline }, proj);
+    askFor(proj);
+    replyAndRecord(proj, "1", "Approve Plan");
+    expect(next(proj).kind).toBe("run-stage");
+    addRepo(proj, "payments");
+    const begun = posture(proj, "begin", null);
+    expect(begun.status, begun.stderr).toBe(0);
+    expect(begun.stdout).not.toContain("changed since this plan was approved");
+    expect(readAuditShardEvents(proj).filter((row) =>
+      row.event === "CHANGE_ACCEPTED" && auditBlockField(row.block, "Checkpoint") === "plan-approval")).toEqual([]);
+  });
+
   // The status line switch is a display setting (#1407): typed while the plan
   // question is open, the chat route names the config command and ends the
   // turn, the guard lets that command through, and the plan question is still

@@ -583,7 +583,7 @@ async function run(input: string): Promise<number> {
   // fired: a host takes a hook's context only under its own event (a box
   // answer's line named UserPromptSubmit is dropped on Claude Code). And, for an
   // adapter that asked for it (wants_first_step_note), the first-step note in
-  // its own key: its host takes no context line from this hook (opencode).
+  // its own key, which it says its own way (opencode, Kiro CLI's V2 engine).
   const handover: {
     help: string | null; event: "UserPromptSubmit" | "PostToolUse"; firstStepNote: string | null;
   } = { help: null, event: "UserPromptSubmit", firstStepNote: null };
@@ -649,8 +649,8 @@ try {
   // An adapter whose host may show the person this hook's context line says
   // so; the message-id line is then left to the steps of `next`.
   let contextMayReachPerson = false;
-  // An adapter whose host takes no context line from this hook asks for the
-  // first-step note in its own key (opencode); no other output changes.
+  // An adapter that says the first-step note its own way asks for it in its
+  // own key (opencode, Kiro CLI's V2 engine); no other output changes.
   let wantsFirstStepNote = false;
   try {
     const parsed = JSON.parse(input) as {

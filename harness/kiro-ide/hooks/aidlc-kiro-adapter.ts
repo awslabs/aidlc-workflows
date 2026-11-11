@@ -2121,21 +2121,20 @@ function runTerminalCommand(command: TerminalCommand): TerminalResult | null {
     };
   }
 
-  const toolFile = command.source === "knowledge-verb"
-    ? "aidlc-knowledge.ts"
-    : "aidlc-utility.ts";
+  // A `knowledge` verb goes through the dispatcher, as the compiled path does:
+  // `onboard`'s copy of a document named outside documents/, and making that
+  // folder, run there (withNamedDocumentCopied in aidlc.ts), and
+  // aidlc-knowledge.ts run alone refuses the path instead.
+  const sourceArgs = command.source === "knowledge-verb"
+    ? [join(".kiro", "tools", "aidlc.ts"), ...terminalDispatcherArgv(command)]
+    : [join(".kiro", "tools", "aidlc-utility.ts"), command.subcommand, ...forwarded];
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
 
   try {
     const result = Bun.spawnSync(
       executable
         ? [executable, ...terminalDispatcherArgv(command)]
-        : [
-            process.execPath,
-            join(".kiro", "tools", toolFile),
-            command.subcommand,
-            ...forwarded,
-          ],
+        : [process.execPath, ...sourceArgs],
       {
         cwd: projectDir,
         stdout: "pipe",
@@ -2286,9 +2285,12 @@ function notePromptCapability(sessionId: string): void {
 }
 
 // Kiro IDE opens every new chat on its Default agent, where Kiro asks the
-// person to approve each AI-DLC command: an /aidlc request there hears once per
+// person to approve AI-DLC's commands: an /aidlc request there hears once per
 // chat the step that stops those cards. Nothing on any other agent, and nothing
-// when the person chose Always allow for AI-DLC's commands (kiroDefaultAgentName).
+// when the person chose Always allow for AI-DLC's commands or has Approve for
+// me on (kiroDefaultAgentName); a later request asks again, so the once is
+// spent only when it is said. The same hook runs in Kiro CLI on its v3 engine,
+// where the agent is changed with /agent.
 function noteDefaultAgent(sessionId: string): void {
   const noted = join(terminalSessionDir(sessionId), "default-agent-noted");
   if (aidlcEntryWords(ide.prompt ?? "") === null || existsSync(noted)) return;
@@ -2301,8 +2303,8 @@ function noteDefaultAgent(sessionId: string): void {
   }
   process.stdout.write(
     `Tell the person this once, in their language, then go on with their request: "This chat is on Kiro's ${name} ` +
-      `agent, so Kiro asks you to approve each AI-DLC command. To stop those approval cards for AI-DLC's own commands, ` +
-      `pick aidlc in the agent menu under the chat box (it says ${name} now)."\n`,
+      `agent, where Kiro asks you to approve AI-DLC's commands. To stop those approval cards for AI-DLC's own commands, ` +
+      `pick aidlc in Kiro IDE's agent menu under the chat box (it says ${name} now), or in Kiro CLI type /agent and pick aidlc."\n`,
   );
 }
 

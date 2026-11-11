@@ -15,6 +15,7 @@ import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, wri
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { readConductorSurface } from "../harness/conductor-skill.ts";
 import {
   HARNESS_MATRIX,
   manifestGrantsIdeAgentTools,
@@ -716,7 +717,14 @@ describe("t148 dist/kiro file structure", () => {
     const markdown = readFileSync(join(KI, "agents", "aidlc-aidlc.md"), "utf-8");
     const body = markdown.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n+/, "").trim();
     expect(typeof cliConductor.prompt).toBe("string");
-    expect(body).toBe(cliConductor.prompt as string);
+    // The one difference: the Kiro row's skill goes on in workflow.md, which
+    // the Kiro CLI (V2) row does not ship.
+    expect(body).toBe(
+      (cliConductor.prompt as string).replace(
+        "and the two files beside it (question-rendering.md and composer.md)",
+        "and the three files beside it (workflow.md, question-rendering.md and composer.md)",
+      ),
+    );
     // Kiro's / menu turns a bare /aidlc + Enter into a specialist's name; the
     // conductor reads that whole message as /aidlc.
     expect(body).toContain(
@@ -844,7 +852,7 @@ describe("t148 dist/kiro file structure", () => {
     for (const { tree, invoke } of KIRO_IDE_CHANNELS) {
       // The conductor, and every brief it dispatches, keep those forms out of
       // its own text, so the ask stays rare.
-      const skill = readFileSync(join(REPO_ROOT, tree, "kiro-ide", ".kiro", "skills", "aidlc", "SKILL.md"), "utf-8");
+      const skill = readConductorSurface(join(REPO_ROOT, tree, "kiro-ide", ".kiro", "skills", "aidlc", "SKILL.md"));
       expect(skill).toContain("use plain words on one line in single quotes, with no `$`, backtick, `>`, `<`, `&`, `@(`, or `@{`");
       expect(skill).toContain("Every agent brief you dispatch carries these two sentences as written.");
       const fm = frontmatter(join(REPO_ROOT, tree, "kiro-ide", ".kiro", "agents", "aidlc-aidlc.md"));
@@ -967,11 +975,26 @@ describe("t148 dist/kiro file structure", () => {
       ]) {
         expect(kiroShellEffect(fm, command), `${tree} conductor: ${command}`).toBe("allow");
       }
-      const skill = readFileSync(join(dir, "skills", "aidlc", "SKILL.md"), "utf-8");
+      const skill = readConductorSurface(join(dir, "skills", "aidlc", "SKILL.md"));
       const rule = skill.indexOf("\n**Words that would ask go to `next` in a file.** Kiro asks the person to approve an AI-DLC command holding `$`, a backtick, `>`, `<`, `&`, `@(`, `@{` or a line break");
       expect(rule, `${tree} SKILL`).toBeGreaterThan(-1);
       expect(rule, `${tree} SKILL`).toBeLessThan(skill.indexOf("\n**Free text through `execute_pwsh`.**"));
       expect(skill, `${tree} SKILL`).toContain(`keep them off the command line, on every shell: write them exactly as they are (the person's exactly as they typed them) with your file tool to \`${FILE}\`, then run the same \`next\` with \`--request-file ${FILE}\``);
+    }
+  });
+
+  // Kiro asks about a git command the person has not allowed; AI-DLC's own
+  // lookup, which the SKILL names for a Unit's source-manifest.json, asks nothing.
+  test("the Kiro IDE conductor checks a Unit's changed files with AI-DLC, a command it runs without asking", () => {
+    for (const { tree, invoke } of KIRO_IDE_CHANNELS) {
+      const dir = join(REPO_ROOT, tree, "kiro-ide", ".kiro");
+      const fm = frontmatter(join(dir, "agents", "aidlc-aidlc.md"));
+      const command = `${invoke} engine state lookup source-changes u1-tagging`;
+      expect(kiroShellEffect(fm, command), `${tree} conductor: ${command}`).toBe("allow");
+      const skill = readFileSync(join(dir, "skills", "aidlc", "SKILL.md"), "utf-8");
+      expect(skill, `${tree} SKILL`).toContain(
+        `To check that account, run \`${invoke} engine state lookup source-changes <directive.unit>\` rather than \`git status\` or \`git diff\``,
+      );
     }
   });
 
