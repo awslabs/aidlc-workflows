@@ -430,10 +430,17 @@ describe("land after main moved on past the Unit stages", () => {
     const { seed, remote } = makeSeed();
     prepareCandidate(remote, "alpha", "alpha-team");
     approveMerge(seed, "alpha");
+    // The plan's stages, as status counts them: the Unit stages still open behind
+    // Build and Test are on the plan.
+    const planTotal = () => /Completion:\s+\d+\/(\d+) stages/.exec(status(seed).out)?.[1];
+    const before = planTotal();
+    expect(before).toBeDefined();
     expect(moveMainOnToBuildAndTest(seed)).toBe(
       `${MOVED} Still open on main, and landing as they finish: alpha (alpha-team); beta, not taken yet.`,
     );
+    expect(planTotal()).toBe(before);
     landsAndMainGoesOn(seed, "alpha");
+    expect(planTotal()).toBe(before);
   });
 
   test("a merge already on main is finished and recorded", () => {
