@@ -229,7 +229,8 @@ export async function run(
   // are possible) rather than silently disabling reviewer enforcement. Each
   // attributed call refreshes the record mtimes so a long-running reviewer
   // never silently outlives the freshness window. The store lives in the
-  // project runtime tree, and delegated tools cannot access it. A second,
+  // project runtime tree, and a delegated tool cannot name it or write over it
+  // by a path its command names (touchesProtectedReviewerState). A second,
   // separately stored witness survives loss of the primary ledger so unknown
   // conversations still fail closed for every delegated role.
   const LEDGER_TTL_MS = 30 * 60 * 1000;
@@ -1422,7 +1423,8 @@ export async function run(
   }
 
   // The words a shell line writes, as the shared reader names them in either
-  // shell's reading, globs and variables kept as written. `unnamed` when it
+  // shell's reading: the target words as written (globs and variables kept),
+  // and for a directory destination its resolved child paths. `unnamed` when it
   // writes what the reader cannot name: the reader then gives back the folder
   // it reads from (a wrapper it cannot follow, xargs feeding a mutator, a
   // piped cmdlet), and it does not follow `find -exec`; or the reader failed.

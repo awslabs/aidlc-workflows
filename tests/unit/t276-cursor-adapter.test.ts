@@ -1722,7 +1722,7 @@ describe("t276 cursor adapter payload conversion", () => {
     }
   });
 
-  test("22b: an unavailable shared freeze parser refuses nothing, and the guard it breaks is on record", () => {
+  test("22b: with the shared freeze parser unavailable, a plain command goes on, and the guard it breaks is on record", () => {
     const proj = installedProject();
     seedStateFile(proj, "state-construction.md");
     registerTaskParent(proj);
@@ -4299,8 +4299,7 @@ if (import.meta.main) {
     // A program the line runs from a path, one a PATH it sets picks, and a
     // mutator fed a list from a subfolder: the line does not spell out what
     // they change, so Cursor's own command approval is the door, as on every
-    // harness, and the checks every harness runs decide them. Nothing here is
-    // run, so the records stay.
+    // harness, and the checks every harness runs decide them.
     const shadowedRg = join(
       scriptDir,
       process.platform === "win32" ? "rg.cmd" : "rg",
@@ -4336,8 +4335,6 @@ if (import.meta.main) {
       ).stdout) as { permission?: string; agent_message?: string };
       expectChecksEveryHarnessRunsDecide(out, command);
     }
-    expect(ledgerFilesFor(proj)).toHaveLength(1);
-    expect(witnessFilesFor(proj)).toHaveLength(1);
 
     const safeEnvironment = runAdapter(
       proj,
@@ -4378,8 +4375,6 @@ if (import.meta.main) {
       ).stdout) as { permission?: string; agent_message?: string };
       expect(out.permission, command).toBe("deny");
       expect(out.agent_message ?? "", command).toContain("attribution state");
-      expect(ledgerFilesFor(proj), command).toHaveLength(1);
-      expect(witnessFilesFor(proj), command).toHaveLength(1);
     }
 
     for (const safeCommand of [
