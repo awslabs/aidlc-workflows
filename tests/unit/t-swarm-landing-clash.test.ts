@@ -529,7 +529,8 @@ describe("a landing over the person's own change says so once it has landed", ()
     const finalized = swarm(pd, ["finalize", "--batch", "1", "--units", "alpha", "--claimed", "alpha"]);
     expect(finalized.code, `${finalized.out}\n${finalized.err}`).toBe(0);
     const record = ".gitignore";
-    writeFileSync(join(pd, record), `${readFileSync(join(pd, record), "utf-8")}aidlc/active-memory/\n`);
+    // At the top, away from the Unit's line at the end, so git merges the two.
+    writeFileSync(join(pd, record), `aidlc/active-memory/\n${readFileSync(join(pd, record), "utf-8")}`);
     if (personChanges) writeFileSync(join(pd, "CHANGELOG.md"), "## Unreleased\n");
     return { pd, record };
   }
