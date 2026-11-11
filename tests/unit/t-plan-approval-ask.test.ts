@@ -571,6 +571,24 @@ describe("the engine asks for Plan Approval", () => {
     expect(route().plan_approval.targets?.[0].summary.at(-1)).toBe("Already changed before you approved: payments/src/stray.ts.");
   });
 
+  // The source kept at the approval, with the repo cloned since as the clone
+  // wrote it (its files and the three workspace files the clone's install writes).
+  test("a repo cloned for the work after the plan was approved starts the build with no line", () => {
+    const proj = project();
+    workWithRepos(proj);
+    const baseline = writeBaselineSourceSnapshot(proj, "code-generation", workspaceSourceListing(proj)!);
+    appendAuditEntry("STAGE_STARTED", { Stage: "code-generation", "Source Baseline": baseline }, proj);
+    askFor(proj);
+    replyAndRecord(proj, "1", "Approve Plan");
+    expect(next(proj).kind).toBe("run-stage");
+    addRepo(proj, "payments");
+    const begun = posture(proj, "begin", null);
+    expect(begun.status, begun.stderr).toBe(0);
+    expect(begun.stdout).not.toContain("changed since this plan was approved");
+    expect(readAuditShardEvents(proj).filter((row) =>
+      row.event === "CHANGE_ACCEPTED" && auditBlockField(row.block, "Checkpoint") === "plan-approval")).toEqual([]);
+  });
+
   // The status line switch is a display setting (#1407): typed while the plan
   // question is open, the chat route names the config command and ends the
   // turn, the guard lets that command through, and the plan question is still
