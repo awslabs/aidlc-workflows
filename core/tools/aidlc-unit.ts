@@ -961,17 +961,20 @@ function writeHomeClaim(
   commitOid: string,
   expectedOid: string | null,
   options: { outbox?: boolean } = {},
-): { ok: boolean; refused?: string; elsewhere?: string } {
+): { ok: boolean; refused?: string; elsewhere?: string; notThere?: { address: string; why: string } } {
   const sent = writeHomeClaimOnce(projectDir, home, ref, commitOid, expectedOid);
   if (sent.ok || sent.landed || options.outbox === false || (sent.refused === undefined && sent.elsewhere === undefined)) {
     const { landed: _landed, ...said } = sent;
     return said;
   }
   // The lead's project took no push from here: the same commit goes to the
-  // team's own remote, where the lead's look takes it in.
+  // team's own remote, where the lead's look takes it in; when that does not
+  // take it either, git's reason there.
   const outbox = claimOutbox(projectDir, home);
-  if (outbox !== null && sendToOutbox(projectDir, outbox, ref, commitOid)) return { ok: false, elsewhere: maskUserinfo(outbox) };
-  return sent.refused !== undefined ? { ok: false, refused: sent.refused } : { ok: false };
+  const there = outbox === null ? null : sendToOutbox(projectDir, outbox, ref, commitOid);
+  if (outbox !== null && there?.ok === true) return { ok: false, elsewhere: maskUserinfo(outbox) };
+  const notThere = outbox !== null && there !== null && !there.ok && there.why !== null ? { address: maskUserinfo(outbox), why: there.why } : undefined;
+  return { ok: false, ...(sent.refused !== undefined ? { refused: sent.refused } : {}), ...(notThere !== undefined ? { notThere } : {}) };
 }
 
 function writeHomeClaimOnce(
@@ -985,10 +988,20 @@ function writeHomeClaimOnce(
   const byName = target !== null && !isGitAddress(target) && isGitAddress(home.location);
   const tracking = byName ? `refs/remotes/${target}/${ref.slice("refs/heads/".length)}` : null;
   const before = tracking === null ? null : localGit(projectDir, ["rev-parse", "--verify", "--quiet", tracking]).stdout.trim() || null;
-  const { to, ...sent } = updateClaimRef(projectDir, target, ref, commitOid, expectedOid);
-  if (!byName || sent.refused !== undefined) return sent;
   // A remote that fetches from the lead's project is read back by its name, as its reads are.
-  const fetchesHome = sameGitAddress(git(projectDir, ["remote", "get-url", target]).stdout.trim(), home.location);
+  const fetchesHome = byName && sameGitAddress(git(projectDir, ["remote", "get-url", target]).stdout.trim(), home.location);
+  // When it pushes to the team's own repo (a push URL), the push lands there,
+  // so it leases on that repo's own tip, when this commit builds on it.
+  const pushesTo = fetchesHome ? git(projectDir, ["remote", "get-url", "--push", target]).stdout.trim() : "";
+  let lease = expectedOid;
+  if (pushesTo !== "" && !sameGitAddress(pushesTo, home.location)) {
+    const there = quietly(() => git(projectDir, ["ls-remote", pushesTo, ref]));
+    const tip = there.ok ? there.stdout.trim().split(/\s+/)[0] ?? "" : null;
+    if (tip === "") lease = null;
+    else if (tip !== null && claimAhead(projectDir, tip, commitOid) === "ahead") lease = tip;
+  }
+  const { to, ...sent } = updateClaimRef(projectDir, target, ref, commitOid, lease);
+  if (!byName || sent.refused !== undefined) return sent;
   const atHome = quietly(() => git(projectDir, ["ls-remote", fetchesHome ? target : home.location, ref]));
   // A remote that fetches from the lead's project and pushes to the team's own:
   // a push that went through while the lead's project does not answer is there.
@@ -1010,7 +1023,10 @@ function writeHomeClaimOnce(
 function claimOutbox(projectDir: string, home: { location: string }): string | null {
   try {
     if (!isGitAddress(home.location)) return null;
-    const branch = affirmedIntegrationBranch(projectDir)?.branch ?? integrationBranch(projectDir, repositoryRemote(projectDir));
+    // Only to pick the remote: a layer's Way of Working words the agent has not
+    // read yet leave the remote's own default branch, never no outbox.
+    const layer = integrationBranchLayer(projectDir);
+    const branch = layer !== null && "value" in layer ? integrationBranchName(layer.value) : integrationBranch(projectDir, repositoryRemote(projectDir));
     const remote = pushRemoteOf(projectDir, branch);
     if (typeof remote !== "string") return null;
     const address = git(projectDir, ["remote", "get-url", "--push", remote]).stdout.trim();
@@ -1023,16 +1039,19 @@ function claimOutbox(projectDir: string, home: { location: string }): string | n
 // A claim commit sent to the team's own remote with the team's login, its
 // lease on that remote's own tip of the claim branch, and only on top of it:
 // what is there and not taken in yet (a proposal, a teammate's take) is never
-// written over. False when it does not answer or does not take it.
-function sendToOutbox(projectDir: string, outbox: string, ref: string, commitOid: string): boolean {
+// written over. Not ok when it does not answer or does not take it, with
+// git's reason in one line (`why`; none when its claim there parted from this
+// one).
+function sendToOutbox(projectDir: string, outbox: string, ref: string, commitOid: string): { ok: true } | { ok: false; why: string | null } {
   return quietly(() => {
     const listed = git(projectDir, ["ls-remote", outbox, ref]);
-    if (!listed.ok) return false;
+    if (!listed.ok) return { ok: false, why: listed.stderr.split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? "it did not answer" };
     const tip = listed.stdout.trim().split(/\s+/)[0] ?? "";
     const stands = tip === "" ? "ahead" : claimAhead(projectDir, tip, commitOid);
-    if (stands === "same") return true;
-    if (stands === null) return false;
-    return git(projectDir, ["push", outbox, `--force-with-lease=${ref}:${tip}`, `${commitOid}:${ref}`]).ok;
+    if (stands === "same") return { ok: true };
+    if (stands === null) return { ok: false, why: null };
+    const pushed = git(projectDir, ["push", outbox, `--force-with-lease=${ref}:${tip}`, `${commitOid}:${ref}`]);
+    return pushed.ok ? { ok: true } : { ok: false, why: pushRefusal(pushed.stderr) };
   });
 }
 
@@ -7949,14 +7968,18 @@ function pushUnit(args: string[], projectDir?: string): void {
     // The lead's project answered and holds no claim of this take now: the
     // code is pushed, and the result waits to be sent again.
     lines.push(standing.state === "pending"
-      ? `The lead's project did not take ${unit}'s result: ${recorded?.refused ?? "its claim moved meanwhile"}. Do you want me to send it again?`
+      ? `The lead's project did not take ${unit}'s result: ${recorded?.refused ?? "its claim there changed while it was being sent"}. Do you want me to send it again?`
       : `The lead's project did not take ${unit}'s result: its claim is not there now. Do you want me to send it again?`);
   } else {
     const sent = writeHomeClaim(pd, home, ref, resultOn(base), claim?.oid ?? null);
     if (sent.elsewhere !== undefined) {
       lines.push(onRemote(sent.elsewhere));
       sentElsewhere = true;
-    } else if (!sent.ok) lines.push(`The lead's project did not take ${unit}'s result: ${sent.refused ?? "its claim moved meanwhile"}. Do you want me to send it again?`);
+    } else if (!sent.ok) {
+      lines.push(sent.notThere !== undefined
+        ? `The lead's project did not take ${unit}'s result, and ${sent.notThere.address} did not either (${sent.notThere.why}). Do you want me to send it again?`
+        : `The lead's project did not take ${unit}'s result: ${sent.refused ?? "its claim there changed while it was being sent"}. Do you want me to send it again?`);
+    }
     else invalidateLiveClaimPayloadCache(pd, unit);
     homeHasIt = sent.ok;
   }

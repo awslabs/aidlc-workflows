@@ -1702,6 +1702,138 @@ describe("the claims' home is the lead's address", () => {
     expect(nextSaying(pay, chatOf("pay-later")).said).not.toContain("is merged.");
   });
 
+  // The GitHub live test (option 1's path): a clone that fetches from the
+  // lead's project and pushes to its fork; the lead's look took the take in as
+  // its own commit; the push's result then reached neither claim, said as
+  // "its claim moved meanwhile", and sending it again failed the same way.
+  test("a clone pushing to its fork through origin: after the lead took the take in, the result reaches the lead", () => {
+    const { home, hosts, id8 } = forkedLead();
+    committedByPusher(home.remote);
+    const fork = forkOf(home.remote, "pay-push-result", false);
+    const pay = cloneOf(home.remote, "pay");
+    git(pay, ["remote", "set-url", "--push", "origin", fork]);
+    for (const [name, host] of Object.entries(hosts)) cloneCode(host, pay, name, "pay");
+    expect(takeFrom("payments", pay, "refunds").status).toBe(0);
+    expect(claimPayload(home.remote, id8, "refunds")).toBeNull();
+    git(home.dir, ["remote", "add", "team-a", fork]);
+    next(home.dir);
+    expect(claimPayload(home.remote, id8, "refunds")).toMatchObject({ status: "claimed", taken_by: "pay" });
+    const record = buildDir(pay, "payments", "refunds");
+    codeGenerated(pay, record);
+    finishBuild(record);
+    const pushed = run(UNIT, ["push"], pay);
+    expect(pushed.status, pushed.out).toBe(0);
+    const said = String(pushed.json?.notice ?? pushed.out);
+    expect(said).not.toContain("moved meanwhile");
+    expect(said).not.toContain("send it again");
+    next(home.dir, chatOf("lead-after-result"));
+    expect(claimPayload(home.remote, id8, "refunds")?.result).toBeDefined();
+  });
+
+  // A rule the person kept for next time under the project's Way of Working
+  // (Code Generation's learnings, the GitHub live test): those words not read
+  // yet, the push found no team's own remote, and its result reached neither.
+  function keptUnderWayOfWorking(dir: string, space: string): void {
+    const file = join(dir, "aidlc", "spaces", space, "memory", "project.md");
+    mkdirSync(join(dir, "aidlc", "spaces", space, "memory"), { recursive: true });
+    const before = existsSync(file) ? readFileSync(file, "utf-8") : "";
+    const rule = "- Before creating a piece's branch, pull the repo's main from GitHub first. (learned 2026-11-11)\n";
+    writeFileSync(file, before.includes("## Way of Working\n")
+      ? before.replace("## Way of Working\n", `## Way of Working\n\n${rule}`)
+      : `${before}${before === "" || before.endsWith("\n") ? "" : "\n"}\n## Way of Working\n\n${rule}`);
+  }
+
+  test("after a rule is kept under the Way of Working, the result of a take the lead took in still reaches the lead", () => {
+    const { home, hosts, id8 } = forkedLead();
+    committedByPusher(home.remote);
+    const fork = forkOf(home.remote, "pay-kept-rule", false);
+    const pay = cloneOf(home.remote, "pay");
+    git(pay, ["remote", "set-url", "--push", "origin", fork]);
+    for (const [name, host] of Object.entries(hosts)) cloneCode(host, pay, name, "pay");
+    expect(takeFrom("payments", pay, "refunds").status).toBe(0);
+    git(home.dir, ["remote", "add", "team-a", fork]);
+    next(home.dir);
+    expect(claimPayload(home.remote, id8, "refunds")).toMatchObject({ status: "claimed", taken_by: "pay" });
+    const record = buildDir(pay, "payments", "refunds");
+    codeGenerated(pay, record);
+    finishBuild(record);
+    keptUnderWayOfWorking(pay, "payments");
+    const pushed = run(UNIT, ["push"], pay);
+    expect(pushed.status, pushed.out).toBe(0);
+    const said = String(pushed.json?.notice ?? pushed.out);
+    expect(said).not.toContain("moved meanwhile");
+    expect(said).toMatch(/Its result is on \S*pay-kept-rule\.git too; the lead's project takes it in at the lead's next look\./);
+    expect(claimPayload(fork, id8, "refunds")?.result).toBeDefined();
+    next(home.dir, chatOf("lead-after-kept-rule"));
+    expect(claimPayload(home.remote, id8, "refunds")?.result).toBeDefined();
+  });
+
+  test("a take while the Way of Working words are not read yet still finds the team's own remote", () => {
+    const { home, hosts, id8 } = forkedLead();
+    refusePushes(home.remote);
+    const { dir: pay, fork } = forkedTeam(home, hosts, "pay");
+    keptUnderWayOfWorking(pay, "payments");
+    const took = takeFrom("payments", pay, "refunds");
+    expect(took.status, took.out).toBe(0);
+    expect(String(took.json?.notice)).toMatch(onFork("refunds", fork));
+    expect(claimPayload(fork, id8, "refunds")).toMatchObject({ status: "claimed", taken_by: "pay" });
+  });
+
+  // The lead's words for a result that reached neither: the fork's own reason.
+  test("a result that neither the lead's project nor the fork takes: one line names the fork and git's reason", () => {
+    const { home, hosts, id8 } = forkedLead();
+    committedByPusher(home.remote);
+    const fork = forkOf(home.remote, "pay-refusing-fork", false);
+    const pay = cloneOf(home.remote, "pay");
+    git(pay, ["remote", "set-url", "--push", "origin", fork]);
+    for (const [name, host] of Object.entries(hosts)) cloneCode(host, pay, name, "pay");
+    expect(takeFrom("payments", pay, "refunds").status).toBe(0);
+    git(home.dir, ["remote", "add", "team-a", fork]);
+    next(home.dir);
+    const hook = join(fork, "hooks", "pre-receive");
+    writeFileSync(hook, "#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/heads/claim/*) " +
+      "echo 'claim branches are locked here just now' >&2; exit 1;; esac; done\nexit 0\n");
+    chmodSync(hook, 0o755);
+    const record = buildDir(pay, "payments", "refunds");
+    codeGenerated(pay, record);
+    finishBuild(record);
+    const pushed = run(UNIT, ["push"], pay);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(String(pushed.json?.notice ?? pushed.out)).toMatch(
+      /The lead's project did not take refunds's result, and \S*pay-refusing-fork\.git did not either \([^\n]*claim branches are locked here just now[^\n]*\)\. Do you want me to send it again\?/,
+    );
+    expect(String(pushed.json?.notice ?? pushed.out)).not.toContain("moved meanwhile");
+    expect(claimPayload(home.remote, id8, "refunds")?.result).toBeUndefined();
+  });
+
+  // The lead's words for a lost race at the lead's project: what changed is not
+  // named, nor whose the Unit is; the send again goes through.
+  test("a result whose claim at the lead's project changed while it was sent: said so, and sent again", () => {
+    const { home, hosts, alice, record } = refundsTaken();
+    const id8 = fixtureIntentId8(home.dir);
+    // Another write on the lead's claim while the code goes out, once.
+    const hook = join(hosts["checkout-api"], "hooks", "pre-receive");
+    writeFileSync(hook, "#!/bin/sh\ncat >/dev/null\nunset GIT_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_QUARANTINE_PATH\n" +
+      `home='${home.remote}'; ref=refs/heads/claim/${id8}/refunds\n` +
+      "[ -e \"$home/moved-once\" ] && exit 0\ntouch \"$home/moved-once\"\n" +
+      "tip=$(git --git-dir=\"$home\" rev-parse \"$ref\") || exit 0\ntree=$(git --git-dir=\"$home\" rev-parse \"$tip^{tree}\")\n" +
+      "new=$(git --git-dir=\"$home\" -c user.name=lead -c user.email=lead@example.test commit-tree \"$tree\" -p \"$tip\" -m moved)\n" +
+      "git --git-dir=\"$home\" update-ref \"$ref\" \"$new\" \"$tip\"\nexit 0\n");
+    chmodSync(hook, 0o755);
+    codeGenerated(alice, record);
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    const said = String(pushed.json?.notice ?? pushed.out);
+    expect(said).toContain(
+      "The lead's project did not take refunds's result: its claim there changed while it was being sent. Do you want me to send it again?",
+    );
+    expect(said).not.toContain("moved meanwhile");
+    expect(claimPayload(home.remote, id8, "refunds")?.result).toBeUndefined();
+    const again = run(UNIT, ["push"], alice);
+    expect(again.status, again.out).toBe(0);
+    expect(claimPayload(home.remote, id8, "refunds")?.result).toBeDefined();
+  });
+
   // A live run (the fork leg, runs A and B): the lead approved a team's change
   // its fork had sent; the same question came back at every later look, and
   // each Approve was refused as having nothing waiting.
