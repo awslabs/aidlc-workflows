@@ -5,7 +5,8 @@
 // URL are never recorded or printed; two clones that spell the home's address
 // differently are one home; the git AI-DLC runs on a step nobody typed never
 // opens a sign-in window, and uses each code repo's own ssh setup; the merge
-// check looks at and fetches only the branch a Unit merges into; a push goes to the remote
+// check looks at and fetches only the branch a Unit merges into and, while the Unit is not merged
+// there, the Unit's own branch; a push goes to the remote
 // git would push to, and only the person names one when git cannot.
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
@@ -129,7 +130,7 @@ describe("the person's own git, on steps nobody typed", () => {
     expect(((step.change_notices ?? []) as string[]).filter((line) => line.includes("could not be reached"))).toHaveLength(1);
   });
 
-  test.skipIf(process.platform === "win32")("the merge check fetches each code repo with that repo's own ssh setup, and only the branch the Unit merges into", () => {
+  test.skipIf(process.platform === "win32")("the merge check fetches each code repo with that repo's own ssh setup, and only the branch the Unit merges into and the Unit's own branch", () => {
     const { hosts, home, alice, record } = refundsTaken();
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
@@ -151,12 +152,14 @@ describe("the person's own git, on steps nobody typed", () => {
     const calls = readFileSync(log, "utf-8").trim().split("\n");
     expect(calls.length).toBeGreaterThan(0);
     expect(calls.every((line) => line.startsWith("billing -o BatchMode=yes -o ConnectTimeout=15 "))).toBe(true);
-    // Each look at a code repo (an ls-remote, and a fetch only when it moved) names only that branch.
+    // Each look at a code repo (an ls-remote, and a fetch only when it moved) names only that branch, or,
+    // while the Unit is not merged there, the Unit's own branch (a review fix on it is read).
     const looks = readFileSync(trace, "utf-8").split("\n").filter((line) => line.includes('"event":"start"'))
       .map((line) => (JSON.parse(line) as { argv: string[] }).argv)
       .filter((argv) => (argv.includes("fetch") || argv.includes("ls-remote")) && argv.includes("origin") && !argv.some((arg) => arg.includes("claim")));
     expect(looks.length).toBeGreaterThan(0);
-    for (const argv of looks) expect(argv.at(-1)).toBe("main");
+    for (const argv of looks) expect(["main", "refs/heads/refunds", "+refs/heads/refunds:refs/remotes/origin/refunds"]).toContain(argv.at(-1));
+    expect(looks.some((argv) => argv.at(-1) === "main")).toBe(true);
   });
 });
 
