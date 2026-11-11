@@ -57,6 +57,9 @@ const manifest: HarnessManifest = {
   hostShell: { env: ["CODEX_SESSION_ID", "CODEX_THREAD_ID"] },
   // A clean chat for new work started beside other work.
   newChatStep: { text: "open a new chat, then type <entry>" },
+  // request_user_input takes two or three options besides its own "None of
+  // the above" (question-rendering.md, Track 1), so a question is lettered A-C.
+  questionOptions: 3,
   harnessDir: ".codex",
   orchestratorSkillPath: ".agents/skills/aidlc/SKILL.md",
   tierFlavor: "codex",
