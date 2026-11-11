@@ -12476,12 +12476,14 @@ function openWorkflowLine(
 // The running work here that is not this person's, by the name config prints:
 // another person's build a pull brought, or the lead's plan in a teammate's
 // clone (workOfAnother, status's Also open rule). The routing is loaded only
-// when work runs, and a read that fails keeps every name.
-function othersOpenWork(projectDir: string): Set<string> {
+// when work runs, by a dynamic import: a require of it is refused where a
+// module it loads has a top-level await (a compiled install). A read that
+// fails keeps every name.
+async function othersOpenWork(projectDir: string): Promise<Set<string>> {
   const running = runningWorkflows(projectDir);
   if (running.length === 0) return new Set();
   try {
-    const { workOfAnother } = require("./aidlc-orchestrate.ts") as typeof import("./aidlc-orchestrate.ts");
+    const { workOfAnother } = await import("./aidlc-orchestrate.ts");
     return new Set(running.filter((run) => workOfAnother(projectDir, run))
       .map(({ space, dirName, slug }) => workflowDisplayName(space, { dirName, slug })));
   } catch {
@@ -12510,8 +12512,9 @@ function refreshDoneLines(
     // Open work that needs a plugin this change turned off, by plugin.
     pluginsOff: ReadonlyArray<{ plugin: string; workflow: string }>;
   },
+  // The open work that is not this person's (othersOpenWork), left unsaid.
+  theirs: ReadonlySet<string>,
 ): string[] {
-  const theirs = othersOpenWork(projectDir);
   const open = activeWorkflowDescriptions(projectDir).filter((name) => !theirs.has(name));
   if (open.length === 0) return [];
   const listed = (items: readonly string[]): string =>
@@ -14620,7 +14623,7 @@ export async function main(
         releaseBaseUrl: releaseSettings.baseUrl,
         harness: descriptor.distribution,
         pluginsOff,
-      }));
+      }, await othersOpenWork(projectDir)));
       changes.push(...treesLeftBehindLines(
         projectDir,
         { distribution: stamp.distribution, harnessDir: descriptor.harnessDir, version: stamp.frameworkVersion },
