@@ -160,10 +160,15 @@ describe.each(POLICIES)("Guard Policy %s: an approval asked beside a setting the
       const refused = report(proj, host, ["--plan-approval", "off", "--message", box]);
       expect(refused.status, refused.out).toBe(0);
       const directive = JSON.parse(refused.stdout.trim().split("\n").at(-1) as string) as { kind: string; message: string };
-      // The setter's refusal says why the setting stays, and the step records the approval the person gave.
+      // The team's line is said once, and the step records the approval the person gave.
       expect(directive.kind, refused.out).toBe("print");
-      expect(directive.message).toContain("plan approval stays on for everyone on this repo");
-      expect(directive.message).toContain("without the setting");
+      expect(directive.message).toStartWith('Tell the person in one line: "Your team set Guard Policy to strict in ');
+      expect(directive.message).toContain(join("aidlc", "spaces", "default", "memory", "team.md"));
+      expect(directive.message).toEndWith(
+        'team.md, so plan approval stays on for everyone on this repo. Changing that line there changes it." ' +
+          "Then run this report again without the setting to record the approval.",
+      );
+      expect(directive.message).not.toContain("Nothing was approved");
       expect(rows(proj, "GATE_APPROVED")).toHaveLength(0);
       // Nothing puts an engine error on the person's screen or ends the agent's turn on it.
       const shown = afterTheCall(proj, host, refused.command, refused.stdout);
@@ -183,4 +188,29 @@ describe.each(POLICIES)("Guard Policy %s: an approval asked beside a setting the
       expect(getField(readFileSync(seededStateFile(proj), "utf-8"), "Plan Approval")).not.toBe("off (set by you)");
     });
   }
+
+  // Beside a setting the team does not keep, the report without the settings
+  // would drop that one too: the setter's own refusal is the step, as before.
+  test("claude: a setting the team does not keep, asked with the locked one: the setter's refusal is the step", () => {
+    const proj = project("claude", policy);
+    const state = (args: string[]) => {
+      const r = run(proj, [STATE, ...args, "--project-dir", proj], GATE_ENV);
+      expect(r.status, r.out).toBe(0);
+    };
+    state(["checkbox", `${STAGE}=in-progress`]);
+    tick();
+    state(["gate-start", STAGE]);
+    tick();
+    const box = answerBox(proj, "claude", "approve, turn plan approval off and learnings off");
+    tick();
+
+    const refused = report(proj, "claude", ["--plan-approval", "off", "--learnings", "off", "--message", box]);
+    expect(refused.status, refused.out).toBe(0);
+    const directive = JSON.parse(refused.stdout.trim().split("\n").at(-1) as string) as { kind: string; message: string };
+    expect(directive.kind, refused.out).toBe("print");
+    expect(directive.message).not.toContain("Tell the person in one line");
+    expect(directive.message).toEndWith(" Nothing was approved: run this report again without the setting to record the approval.");
+    expect(rows(proj, "GATE_APPROVED")).toHaveLength(0);
+    expect(afterTheCall(proj, "claude", refused.command, refused.stdout)).not.toContain("systemMessage");
+  });
 });
