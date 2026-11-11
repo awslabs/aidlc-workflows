@@ -2803,9 +2803,11 @@ describe("t294 post-apply outstanding actions", () => {
     )) as { hookActivation: { recovery: string } }).hookActivation.recovery;
     const step = "in Codex, type /hooks, press t to trust all, then press Esc";
     expect(recovery.startsWith(`I${step.slice(1)}.`), recovery).toBe(true);
+    // The list names the config section, never the action's internal id.
     expect(applied.stdout).toContain(
-      `trust/codex-hook-trust-missing: Codex has not trusted this project's hooks yet - ${step}`,
+      `\n  trust: Codex has not trusted this project's hooks yet - ${step}`,
     );
+    expect(applied.stdout).not.toContain("codex-hook-trust-missing");
     expect(applied.stdout).not.toContain("config trust");
 
     const quiet = run([

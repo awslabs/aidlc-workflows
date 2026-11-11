@@ -872,8 +872,9 @@ describe("t293 config models CLI", () => {
     expect(missing).not.toContain("configured model policy");
     expect(missing).toContain("Reviewing effort: xhigh -> max in aidlc.settings.json. To undo: ");
     expect(missing).toContain(
-      "Outstanding actions:\n  runtime/runtime-aidlc-missing: aidlc is absent from the non-interactive hook PATH - run `bun .claude/tools/aidlc.ts config runtime`",
+      "Outstanding actions:\n  runtime: aidlc is absent from the non-interactive hook PATH - run `bun .claude/tools/aidlc.ts config runtime`",
     );
+    expect(missing).not.toContain("runtime-aidlc-missing");
     // JSON and --quiet keep their one message.
     const json = JSON.parse(change("high", hookPath(["aidlc", "bun"]), ["--json"])) as { message: string };
     expect(json.message).toStartWith("configured model policy for ");
