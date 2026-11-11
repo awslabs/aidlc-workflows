@@ -929,15 +929,17 @@ export const SECRET_MASKED_LINE =
   "but this chat still received it, so if it is real, change it where it was issued.";
 
 // Queue SECRET_MASKED_LINE for the chat (`session`, else the chat running
-// this command), unless it is already waiting or this turn heard it. No chat
-// named, no line; never throws, since a line the person may miss never blocks
-// a write or their turn.
-export function saySecretMaskedOnce(projectDir: string, session?: string): void {
+// this command), unless it is already waiting or this turn heard it. The
+// prompt hook queues it for each message of theirs that holds a key
+// (`message`): on finished work their turn never moves. No chat named, no
+// line; never throws, since a line the person may miss never blocks a write or
+// their turn.
+export function saySecretMaskedOnce(projectDir: string, session?: string, message = false): void {
   if (isReadOnlyEngineProbe()) return;
   try {
     const chat = validSessionId(session) ?? resolveInvokingSessionId(projectDir);
     if (chat === null) return;
-    if (personLineHeardThisTurn(projectDir, chat, SECRET_MASKED_LINE) ||
+    if ((!message && personLineHeardThisTurn(projectDir, chat, SECRET_MASKED_LINE)) ||
       pendingPersonLines(projectDir, chat).lines.includes(SECRET_MASKED_LINE)) return;
     if (addPendingPersonLines(projectDir, chat, [SECRET_MASKED_LINE])) {
       markPersonLineHeardThisTurn(projectDir, chat, SECRET_MASKED_LINE);
