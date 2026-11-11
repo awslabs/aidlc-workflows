@@ -8,11 +8,14 @@
 // repository's top, one in apps/web of a monorepo, one in a non-ASCII folder,
 // one in a linked worktree's folder, and a folder outside git. At the top the
 // project's path is "" and both helpers are the identity, so a project there
-// reads every path as it always has.
+// reads every path as it always has. Runs on Linux, macOS (darwin, where the
+// temp folder is reached through a link and a folder name may be decomposed)
+// and Windows (drive letters, git's C:/ paths).
 //
 // The pin at the end keeps it one owner: no other file under core/ or harness/
 // passes --show-prefix or --git-common-dir to git, but the files named in
-// NOT_YET_ON_THE_OWNER, each with the reason it is there.
+// NOT_YET_ON_THE_OWNER, each at most as often as it does now and with the
+// reason it is there.
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -194,23 +197,34 @@ describe("gitCommonDirOf: git's own folders, resolved against the folder git ran
     const root = scratch();
     const plain = join(root, "plain");
     mkdirSync(plain);
-    const dirs = gitCommonDirOf(plain, { env: { ...process.env, GIT_CEILING_DIRECTORIES: root } });
+    const dirs = gitCommonDirOf(plain, { env: { ...process.env, GIT_CEILING_DIRECTORIES: root, LC_ALL: "C" } });
     expect(dirs.ok).toBe(false);
     if (dirs.ok) return;
     expect(dirs.stderr).toMatch(/not a git repository/i);
   });
 });
 
-// Each file here still reads one of the two itself, and why; the owner's link
-// for it takes the file off the list.
-const NOT_YET_ON_THE_OWNER: Record<string, string> = {
-  "core/tools/aidlc-unit.ts": "assertMainCheckout resolves the common dir against the repository's top",
-  "core/tools/aidlc-lib.ts": "isWalkingSkeletonUnitOnMain resolves the common dir against the repository's top",
-  "core/tools/aidlc-orchestrate.ts": "handleTeamBoard resolves the common dir against the repository's top",
-  "core/tools/aidlc-runtime-paths.ts": "findHostWorktree; the file imports node builtins only",
-  "core/tools/aidlc-worktree.ts": "assertNotSiblingWorktree and gitCommonDirRealpath resolve against the top",
-  "core/tools/aidlc-unit-teams.ts": "team Units work not on main yet reads the prefix and the common dir itself",
-  "core/hooks/aidlc-session-start.ts": "team Units work not on main yet reads the prefix itself",
+// Each file here still passes one of the two to git itself, at most this many
+// times, and why; the fix that moves a read onto the owner lowers its count.
+const NOT_YET_ON_THE_OWNER: Record<string, { reads: number; why: string }> = {
+  "core/tools/aidlc-unit.ts": {
+    reads: 2,
+    why: "assertMainCheckout resolves the common dir against the repository's top; the line a project below " +
+      "the top is told when team work cannot run there reads the prefix",
+  },
+  "core/tools/aidlc-lib.ts": { reads: 1, why: "isWalkingSkeletonUnitOnMain resolves the common dir against the top" },
+  "core/tools/aidlc-orchestrate.ts": { reads: 1, why: "handleTeamBoard resolves the common dir against the top" },
+  "core/tools/aidlc-runtime-paths.ts": { reads: 2, why: "findHostWorktree; the file imports node builtins only" },
+  "core/tools/aidlc-worktree.ts": {
+    reads: 3,
+    why: "assertNotSiblingWorktree and gitCommonDirRealpath resolve the common dir against the top",
+  },
+};
+// Team Units work not on main yet reads them itself in these; it moves them
+// onto the owner before it lands.
+const IN_FLIGHT: Record<string, number> = {
+  "core/tools/aidlc-unit-teams.ts": 2,
+  "core/hooks/aidlc-session-start.ts": 1,
 };
 const OWNER = "core/tools/aidlc-git.ts";
 const FLAGS = new Set(["--show-prefix", "--git-common-dir"]);
@@ -226,30 +240,40 @@ function sourceFiles(dir: string): string[] {
   return found;
 }
 
-// The two flags as a string git is given (a literal, never a comment).
-function readsFlag(text: string, name: string): boolean {
+// How often the two flags are a string git is given (a literal, never a
+// comment). The parse runs only on a file that names one at all.
+function flagReads(text: string, name: string): number {
+  if (![...FLAGS].some((flag) => text.includes(flag))) return 0;
   const source = ts.createSourceFile(name, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  let found = false;
+  let reads = 0;
   const visit = (node: ts.Node): void => {
-    if ((ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) && FLAGS.has(node.text)) found = true;
-    if (!found) ts.forEachChild(node, visit);
+    if ((ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) && FLAGS.has(node.text)) reads++;
+    ts.forEachChild(node, visit);
   };
   visit(source);
-  return found;
+  return reads;
 }
 
 describe("one owner for the project's place in its repository", () => {
   const files = [...sourceFiles(join(REPO_ROOT, "core")), ...sourceFiles(join(REPO_ROOT, "harness"))]
     .map((path) => relative(REPO_ROOT, path).replaceAll("\\", "/"));
 
+  const reads = (file: string): number => flagReads(readFileSync(join(REPO_ROOT, file), "utf-8"), file);
+
   test("the owner reads both, so the scan sees them", () => {
-    expect(readsFlag(readFileSync(join(REPO_ROOT, OWNER), "utf-8"), OWNER)).toBe(true);
+    expect(reads(OWNER)).toBe(2);
   });
 
-  test("no other file reads --show-prefix or --git-common-dir", () => {
-    const readers = files.filter((file) =>
-      file !== OWNER && !(file in NOT_YET_ON_THE_OWNER) &&
-      readsFlag(readFileSync(join(REPO_ROOT, file), "utf-8"), file));
-    expect(readers).toEqual([]);
+  test("no other file reads --show-prefix or --git-common-dir, and a listed one no more than it does now", () => {
+    const over = files
+      .filter((file) => file !== OWNER)
+      .map((file) => ({ file, reads: reads(file) }))
+      .filter(({ file, reads }) => reads > (NOT_YET_ON_THE_OWNER[file]?.reads ?? IN_FLIGHT[file] ?? 0));
+    expect(over).toEqual([]);
+  });
+
+  test("every file on the list still reads one, so the list only shrinks", () => {
+    const stale = Object.keys(NOT_YET_ON_THE_OWNER).filter((file) => reads(file) === 0);
+    expect(stale).toEqual([]);
   });
 });

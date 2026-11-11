@@ -51,8 +51,9 @@ export function isGitRepo(pd: string, outside = false): boolean {
 // in a package of a monorepo ("/"-separated and ending in "/" on every
 // platform). git prints and reads some paths from the top (status and diff
 // name lists, REV:path, update-index --cacheinfo) while AI-DLC's record paths
-// are from the project folder, so every place that crosses the two frames
-// reads this answer, through inRepo and inProject. Null outside a work tree.
+// are from the project folder; this is the one reading of where the project
+// sits, and inRepo and inProject cross between the two frames. Null outside a
+// work tree.
 export interface ProjectInRepo {
   top: string;
   prefix: string;
@@ -82,7 +83,7 @@ export function inRepo(prefix: string, projectPath: string): string {
 }
 
 // A path git printed from the repository's top as a project path, or null when
-// it is outside the project: a caller names such a path, never drops it.
+// it is outside the project; what such a path is to it is each caller's.
 export function inProject(prefix: string, repoPath: string): string | null {
   return repoPath.startsWith(prefix) ? repoPath.slice(prefix.length) : null;
 }

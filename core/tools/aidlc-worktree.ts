@@ -186,7 +186,7 @@ interface GitResult {
   error?: string;
 }
 
-// Every Git call this tool makes carries GIT_PLATFORM_ARGS (see aidlc-lib).
+// Every Git call runGit makes carries GIT_PLATFORM_ARGS (see aidlc-lib).
 function runGit(args: string[], cwd?: string, env?: NodeJS.ProcessEnv): GitResult {
   const r = spawnSync("git", [...GIT_PLATFORM_ARGS, ...args], {
     cwd,

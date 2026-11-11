@@ -24,7 +24,7 @@ import {
   errorMessage,
   REQUEST_TEXT_DIR,
 } from "./aidlc-lib.ts";
-import { projectInRepo } from "./aidlc-git.ts";
+import { inProject, projectInRepo } from "./aidlc-git.ts";
 import { committedRecordIgnoreConflicts } from "./aidlc-gitignore.ts";
 import { aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
 import {
@@ -339,9 +339,10 @@ function onlyDoctorRunRows(
   change: { status: string; path: string },
   git: GitRun,
 ): boolean {
-  if ((change.status !== " M" && change.status !== "??") || !change.path.startsWith(prefix)) return false;
+  const own = inProject(prefix, change.path);
+  if ((change.status !== " M" && change.status !== "??") || own === null) return false;
   try {
-    const file = join(projectDir, ...change.path.slice(prefix.length).split("/"));
+    const file = join(projectDir, ...own.split("/"));
     if (!lstatSync(file).isFile()) return false;
     let committed = "";
     if (change.status === " M") {
