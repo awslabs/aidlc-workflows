@@ -1525,6 +1525,100 @@ describe("the claims' home is the lead's address", () => {
     expect(claimPayload(home.remote, id8, "refunds")).toMatchObject({ taken_by: "pay" });
   });
 
+  // A host that takes only commits its pusher committed (the lead's push of a
+  // team's own commit is refused; a team's push is refused too).
+  function committedByPusher(bare: string): void {
+    const hook = join(bare, "hooks", "pre-receive");
+    writeFileSync(hook, "#!/bin/sh\nwhile read old new ref; do\n  for c in $(git rev-list \"$new\" --not --all); do\n" +
+      "    if [ \"$(git log -1 --format=%ce \"$c\")\" != \"lead@example.test\" ]; then echo 'commits here must be committed by their pusher' >&2; exit 1; fi\n" +
+      "  done\ndone\nexit 0\n");
+    chmodSync(hook, 0o755);
+  }
+  const claimTip = (bare: string, id8: string, unit: string): string =>
+    git(bare, ["rev-parse", `refs/heads/claim/${id8}/${unit}`]).trim();
+
+  test("a host that takes only its pusher's commits: the take-in is the lead's own commit, with the team's claim, author and date", () => {
+    const { home, hosts, id8 } = forkedLead();
+    committedByPusher(home.remote);
+    const { dir: pay, fork } = forkedTeam(home, hosts, "pay");
+    expect(takeFrom("payments", pay, "refunds").status).toBe(0);
+    git(home.dir, ["remote", "add", "team-a", fork]);
+    next(home.dir);
+    expect(claimPayload(home.remote, id8, "refunds")).toMatchObject({ status: "claimed", taken_by: "pay" });
+    const tip = claimTip(home.remote, id8, "refunds");
+    expect(git(home.remote, ["log", "-1", "--format=%ce %ae", tip]).trim()).toBe("lead@example.test pay@example.test");
+    expect(git(home.remote, ["log", "-1", "--format=%aI", tip]).trim()).toBe(git(fork, ["log", "-1", "--format=%aI", claimTip(fork, id8, "refunds")]).trim());
+  });
+
+  test("after the lead took the take in, the team's result on its fork is taken in too, and the merge is recorded done", () => {
+    const { home, hosts, id8 } = forkedLead();
+    committedByPusher(home.remote);
+    const { dir: pay, fork } = forkedTeam(home, hosts, "pay");
+    expect(takeFrom("payments", pay, "refunds").status).toBe(0);
+    git(home.dir, ["remote", "add", "team-a", fork]);
+    next(home.dir);
+    expect(claimPayload(home.remote, id8, "refunds")).toMatchObject({ taken_by: "pay" });
+    const record = buildDir(pay, "payments", "refunds");
+    codeGenerated(pay, record);
+    finishBuild(record);
+    const pushed = run(UNIT, ["push"], pay);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(String(pushed.json?.notice ?? pushed.out)).toMatch(resultOnFork(fork));
+    next(home.dir, chatOf("lead-after-result"));
+    expect(claimPayload(home.remote, id8, "refunds")?.result).toBeDefined();
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    mergeOnHost(hosts.billing, "refunds", "squash");
+    git(home.dir, ["fetch", "-q", "origin"]);
+    next(home.dir, chatOf("lead-after-merge"));
+    expect(claimPayload(home.remote, id8, "refunds")).toMatchObject({ done: true });
+  });
+
+  test("a give back after the take-in, then a new take on the same fork: each is taken in at the lead's next look", () => {
+    const { home, hosts, id8 } = forkedLead();
+    committedByPusher(home.remote);
+    const { dir: pay, fork } = forkedTeam(home, hosts, "pay");
+    expect(takeFrom("payments", pay, "refunds").status).toBe(0);
+    git(home.dir, ["remote", "add", "team-a", fork]);
+    next(home.dir);
+    const back = run(UNIT, ["release", "refunds"], pay);
+    expect(back.status, back.out).toBe(0);
+    expect(String(back.json?.notice)).toMatch(/^Gave refunds back on /);
+    next(home.dir, chatOf("lead-after-give-back"));
+    expect(claimPayload(home.remote, id8, "refunds")).toMatchObject({ status: "released" });
+    const again = takeFrom("payments", pay, "refunds");
+    expect(again.status, again.out).toBe(0);
+    expect(String(again.json?.notice)).toMatch(onFork("refunds", fork));
+    next(home.dir, chatOf("lead-after-new-take"));
+    expect(claimPayload(home.remote, id8, "refunds")).toMatchObject({ status: "claimed", taken_by: "pay" });
+  });
+
+  test("a fork's stale copy of a claim the lead's project has moved past is never taken in", () => {
+    const { home, id8 } = forkedLead();
+    const web = cloneOf(home.remote, "web");
+    expect(takeFrom("web", web, "refunds").status).toBe(0);
+    const stale = forkOf(home.remote, "team-b-hub", true);
+    expect(run(UNIT, ["release", "refunds"], web).status).toBe(0);
+    const moved = claimTip(home.remote, id8, "refunds");
+    git(home.dir, ["remote", "add", "team-b", stale]);
+    next(home.dir);
+    expect(claimTip(home.remote, id8, "refunds")).toBe(moved);
+    expect(claimPayload(home.remote, id8, "refunds")).toMatchObject({ status: "released" });
+  });
+
+  test("a take-in the lead's project refuses is said once in the lead's chat, with git's reason", () => {
+    const { home, hosts } = forkedLead();
+    refusePushes(home.remote);
+    const { dir: pay, fork } = forkedTeam(home, hosts, "pay");
+    expect(takeFrom("payments", pay, "refunds").status).toBe(0);
+    git(home.dir, ["remote", "add", "team-a", fork]);
+    const chat = chatOf("lead-refused");
+    expect(nextSaying(home.dir, chat).said).toContain(
+      "refunds's take or result on team-a could not be taken in here (this host takes no push from here (pre-receive hook declined)), " +
+        "so the board does not show it yet.",
+    );
+    expect(nextSaying(home.dir, chat).said).not.toContain("could not be taken in here");
+  });
+
   test("at the lead's project, another remote's older copy of a claim never hides the lead's own: the merged Unit is recorded done", () => {
     const { hosts, home, alice, record } = refundsTaken();
     const id8 = fixtureIntentId8(home.dir);

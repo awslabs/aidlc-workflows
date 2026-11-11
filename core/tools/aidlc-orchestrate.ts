@@ -18265,7 +18265,7 @@ function teamHomeClaims(
       // A take or result a team sent to its own remote, which the lead added here.
       if (!query) {
         const back = takeInFromRemotes(projectDir, { unitOpen: open });
-        for (const line of back.unreadable) sayWithStepOnce(projectDir, line);
+        for (const line of back.lines) sayWithStepOnce(projectDir, line);
         if (back.refused) sayWithStepOnce(projectDir, newsNotTakenIn("the teams"));
       }
       overview = readOverview();

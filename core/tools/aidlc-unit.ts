@@ -883,6 +883,7 @@ function commitAsPerson(
   tree: string,
   parents: string[],
   message: string,
+  author?: NodeJS.ProcessEnv,
 ): string {
   // commit-tree does not read commit.gpgsign on its own; porcelain commits do.
   const signed =
@@ -895,7 +896,7 @@ function commitAsPerson(
     "-m",
     message,
   ];
-  const commit = git(projectDir, commitArgs);
+  const commit = git(projectDir, commitArgs, author);
   if (!commit.ok) {
     if (NO_GIT_IDENTITY.test(commit.stderr)) {
       fail(
@@ -1036,9 +1037,27 @@ function sendToOutbox(projectDir: string, outbox: string, ref: string, commitOid
     const listed = git(projectDir, ["ls-remote", outbox, ref]);
     if (!listed.ok) return false;
     const tip = listed.stdout.trim().split(/\s+/)[0] ?? "";
-    if (tip !== "" && tip !== commitOid && !localGit(projectDir, ["merge-base", "--is-ancestor", tip, commitOid]).ok) return false;
+    const stands = tip === "" ? "ahead" : claimAhead(projectDir, tip, commitOid);
+    if (stands === "same") return true;
+    if (stands === null) return false;
     return git(projectDir, ["push", outbox, `--force-with-lease=${ref}:${tip}`, `${commitOid}:${ref}`]).ok;
   });
+}
+
+// Where a claim commit stands against a claim tip: "ahead" when the tip is in
+// its history, or a commit there has the tip's tree (the lead takes a team's
+// commit in as a commit of its own with the same tree, so the two histories
+// part with the same claim); "same" when it holds the tip's own tree; else
+// null (it parted from the tip, or is behind it). Read from this clone's own
+// objects; a commit not here is null.
+function claimAhead(projectDir: string, tip: string, oid: string): "ahead" | "same" | null {
+  if (tip === oid) return "same";
+  if (localGit(projectDir, ["merge-base", "--is-ancestor", tip, oid]).ok) return "ahead";
+  const tipTree = localGit(projectDir, ["rev-parse", "--verify", "--quiet", `${tip}^{tree}`]).stdout.trim();
+  const trees = localGit(projectDir, ["log", "--format=%T", "--max-count=200", oid]).stdout.split(/\r?\n/).map((tree) => tree.trim()).filter(Boolean);
+  if (tipTree === "" || trees.length === 0) return null;
+  if (trees[0] === tipTree) return "same";
+  return trees.slice(1).includes(tipTree) ? "ahead" : null;
 }
 
 // The claim this build goes on from: its take as the team's own remote holds
@@ -1054,7 +1073,7 @@ function claimToGoOn(
 ): { claim: UnitClaimView | null; outbox?: string } {
   const there = outboxTake(projectDir, home, build, ref);
   if (there === null || there.claim.oid === lead?.oid) return { claim: lead };
-  if (lead !== null && !localGit(projectDir, ["merge-base", "--is-ancestor", lead.oid, there.claim.oid]).ok) return { claim: lead };
+  if (lead !== null && claimAhead(projectDir, lead.oid, there.claim.oid) === null) return { claim: lead };
   return { claim: there.claim, outbox: there.outbox };
 }
 
@@ -6872,7 +6891,8 @@ function takeIsBy(projectDir: string, oid: string, payload: UnitClaimPayload, me
     at = taking.predecessor_oid;
     taking = before;
   }
-  return localGit(projectDir, ["log", "-1", "--format=%ce", at]).stdout.trim() === myEmail;
+  // The author's: a take the lead's project took in is the lead's commit, its author the taker.
+  return localGit(projectDir, ["log", "-1", "--format=%ae", at]).stdout.trim() === myEmail;
 }
 
 // The lead's own build-here claims at the lead's work (Home Location, not a
@@ -6967,7 +6987,7 @@ function takeStanding(projectDir: string, build: UnitBuild): TakeStanding {
   const unit = build.unit;
   if (current?.status === "claimed" && current.payload.taken_by !== undefined) {
     const by = current.payload.taken_by;
-    const at = git(projectDir, ["log", "-1", "--format=%cs", current.oid]).stdout.trim();
+    const at = git(projectDir, ["log", "-1", "--format=%as", current.oid]).stdout.trim();
     return {
       state: "aside",
       line: `${unit} was taken at the lead's project by ${by}${at ? ` on ${at}` : ""}, before your take ` +
@@ -7150,15 +7170,16 @@ const CLAIMS_FETCHED_FILE = "claims-fetched.json";
 // is. A remote that cannot be read is said while a Unit is open at the lead's
 // project or when it held this work's claims before; an unrelated one goes
 // quiet once every Unit is taken. Only the lead's own checkout runs it.
-export function takeInFromRemotes(projectDir: string, options: { unitOpen: boolean }): { taken: number; unreadable: string[]; refused: boolean } {
+export function takeInFromRemotes(projectDir: string, options: { unitOpen: boolean }): { taken: number; lines: string[]; refused: boolean } {
   const pd = resolveProjectDir(projectDir);
   const home = repositoryRemote(pd);
-  const none = { taken: 0, unreadable: [] as string[], refused: false };
+  const none = { taken: 0, lines: [] as string[], refused: false };
   if (home === null) return none;
   const identity = activeIdentity(pd);
   const id8 = identity.intentId8;
   const others = git(pd, ["remote"]).stdout.split(/\r?\n/).map((name) => name.trim()).filter((name) => name !== "" && name !== home);
-  const unreadable: string[] = [];
+  // Said once to the lead: a remote that cannot be read, a take-in refused.
+  const lines: string[] = [];
   let taken = 0;
   // This .git refused the write (Codex's sandbox): its own line, not the remote's.
   let refused = false;
@@ -7174,7 +7195,7 @@ export function takeInFromRemotes(projectDir: string, options: { unitOpen: boole
       if (options.unitOpen || heldBefore) {
         const address = maskUserinfo(git(pd, ["remote", "get-url", remote]).stdout.trim());
         const why = fetched.stderr.split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? "it did not answer";
-        unreadable.push(`${remote} (${address}) could not be read just now (${why}), so a take or result a team sent there is not taken in yet.`);
+        lines.push(`${remote} (${address}) could not be read just now (${why}), so a take or result a team sent there is not taken in yet.`);
       }
       continue;
     }
@@ -7186,14 +7207,36 @@ export function takeInFromRemotes(projectDir: string, options: { unitOpen: boole
       const payload = readPayload(pd, oid, { localOnly: true });
       if (payload === null || payload.intent_uuid !== identity.intentUuid || payload.unit !== unit || payload.claim_ref !== ref) continue;
       const leadTip = localGit(pd, ["rev-parse", "--verify", "--quiet", `refs/remotes/${home}/claim/${id8}/${unit}`]).stdout.trim() || null;
-      if (leadTip === oid || (leadTip !== null && !localGit(pd, ["merge-base", "--is-ancestor", leadTip, oid]).ok)) continue;
-      if (quietly(() => updateClaimRef(pd, home, ref, oid, leadTip)).ok) {
+      if (leadTip !== null && claimAhead(pd, leadTip, oid) !== "ahead") continue;
+      // The lead's own commit with the team commit's tree, its author the
+      // team's, on the lead's claim tip: a host that takes only its pusher's
+      // commits takes it, and the team's own commit never goes there.
+      let mine: string;
+      try {
+        mine = leadsOwnClaimCommit(pd, oid, leadTip ?? payload.base_oid);
+      } catch {
+        continue;
+      }
+      const put = quietly(() => updateClaimRef(pd, home, ref, mine, leadTip));
+      if (put.ok) {
         taken++;
         invalidateLiveClaimPayloadCache(pd, unit);
+      } else if (put.refused !== undefined) {
+        const why = put.refused.split(/\r?\n/).map((part) => part.trim()).find(Boolean) ?? put.refused;
+        lines.push(`${unit}'s take or result on ${remote} could not be taken in here (${why}), so the board does not show it yet.`);
       }
     }
   }
-  return { taken, unreadable, refused };
+  return { taken, lines, refused };
+}
+
+// A team's claim commit written again as this person's own: its tree, its
+// message, its author (name, email, date), on `parent`.
+function leadsOwnClaimCommit(projectDir: string, oid: string, parent: string): string {
+  const [name, email, date] = localGit(projectDir, ["log", "-1", "--format=%an%x00%ae%x00%aI", oid]).stdout.trim().split("\0");
+  const tree = localGit(projectDir, ["rev-parse", `${oid}^{tree}`]).stdout.trim();
+  const message = localGit(projectDir, ["log", "-1", "--format=%B", oid]).stdout.trim() || "claim";
+  return commitAsPerson(projectDir, tree, [parent], message, { GIT_AUTHOR_NAME: name, GIT_AUTHOR_EMAIL: email, GIT_AUTHOR_DATE: date });
 }
 
 export function refreshHomeClaims(

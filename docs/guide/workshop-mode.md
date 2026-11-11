@@ -665,9 +665,11 @@ work does: after every stage, or once at its end.
   sends its result there too, said once, with no question to send it again; a
   give back or a change you propose goes there the same way. At each look the
   lead's workspace reads this work's claim branches from its other git remotes,
-  quietly, and takes in a take or result that is ahead of the lead's own: the
-  first one taken in wins, and a team whose take another's beat there hears the
-  line below. A remote of the lead's that cannot be read is said once in a chat
+  quietly, and takes in a take or result that is ahead of the lead's own, as a
+  commit of the lead's own with the team's claim in it (so a host that takes
+  only its pusher's commits takes it): the first one taken in wins, a team whose
+  take another's beat there hears the line below, and a take-in the lead's
+  project refuses is said to the lead once, with git's reason. A remote of the lead's that cannot be read is said once in a chat
   while a Unit is still open at the lead's project, or when it held this work's
   claims before. A clone's own remote stands in for the lead's project only
   while it lists the same claims, or while the lead's project does not answer;
