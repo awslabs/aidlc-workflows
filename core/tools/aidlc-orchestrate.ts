@@ -14017,14 +14017,16 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
         const unitWorkLeft = dag.state === "ok" &&
           dag.batches.flat().some((unit) => !model.mergedUnits.has(unit));
         const teamsTakeUnits = cachedClaimFanoutActive(pd) || teamSharedHere(pd) || planMadeElsewhere(pd);
-        // Main moved on past the Unit stages while teams build them: its own
-        // step is the walk's, and each Unit still lands through the offer above
-        // as it finishes. A teammate's clone of it came for a Unit and keeps
-        // the board.
+        // Main moved on past the Unit stages while teams build them: while the
+        // walk has a step left it is main's, and each Unit still lands through
+        // the offer above as it finishes; a merge the lead turned down is the
+        // team's to redo. A teammate's clone of it came for a Unit and keeps
+        // the board, and so does main once the walk is done.
         const lastUnitStage = constructionUnitMajorBlock(scope, stateContent, true).at(-1);
         const mainMovedOn = lastUnitStage !== undefined && cursorPastStage(stateContent, lastUnitStage.slug) &&
-          !planMadeElsewhere(pd);
-        if (board.awaitingMerge.length > 0 || (unitWorkLeft && teamsTakeUnits && !mainMovedOn)) {
+          !workflowFinished(stateContent, scope) && !planMadeElsewhere(pd);
+        const mergeWaits = board.awaitingMerge.some((merge) => !mainMovedOn || merge.status !== "rejected");
+        if (mergeWaits || (unitWorkLeft && teamsTakeUnits && !mainMovedOn)) {
           lastSeen();
           emit(noticeDirective(
             renderTeamConstructionBoard(board, "dispatcher"),
@@ -19529,11 +19531,6 @@ function emitJumpDirective(
         `${direction === "backward" ? " and the steps after it" : ""} for every unit.`
       : "";
     const everyUnitLine = everyUnitSaid ? ` Then tell the person in one line: "${everyUnitSaid}"` : "";
-    // Whether a team has taken a Unit decides what a move ahead keeps
-    // (handleExecute), so it reads the teams' claims as the remote has them now.
-    if (direction === "forward" && isTeamUnitOwnership(unitMajorState) && !isReadOnlyEngineProbe()) {
-      refreshClaimRefs(projectDir);
-    }
     const unitMajor = direction === "forward"
       ? unitMajorForwardJump(projectDir, scope, unitMajorState, targetSlug, flags.everyUnit === true)
       : null;

@@ -839,10 +839,19 @@ async function handleExecute(args: string[]): Promise<void> {
   const addedBack = direction === "backward" && addedStagesPassedOver(content, pd).includes(targetSlug);
   // Under team ownership, once a team has taken a Unit, a move past the Unit
   // stages leaves them to the Units' claims, as going back before them does:
-  // each Unit still lands into them as it finishes.
+  // each Unit still lands into them as it finishes. The teams' claims are read
+  // as the remote has them now (the board's own one fetch of the claim refs).
   const unitStages = unitMajorConstructionStageSlugs(scope, content, true);
-  const keepsUnitStages = direction === "forward" && isTeamUnitOwnership(content) && unitStages.length > 0 &&
-    stageIndex(targetSlug) > stageIndex(unitStages[unitStages.length - 1]) && cachedClaimFanoutActive(pd);
+  const pastUnitStages = direction === "forward" && isTeamUnitOwnership(content) && unitStages.length > 0 &&
+    stageIndex(targetSlug) > stageIndex(unitStages[unitStages.length - 1]);
+  if (pastUnitStages) {
+    try {
+      (await import("./aidlc-unit.ts")).refreshClaimRefs(pd);
+    } catch {
+      // The claims as this checkout last saw them.
+    }
+  }
+  const keepsUnitStages = pastUnitStages && cachedClaimFanoutActive(pd);
   // A Construction that runs one unit at a time: what this jump does to each
   // unit, read before the jump writes the state, for the jump's own line.
   // The orchestrator owns the walk; it is loaded only here, so the jump's

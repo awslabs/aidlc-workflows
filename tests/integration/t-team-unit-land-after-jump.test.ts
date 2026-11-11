@@ -5,9 +5,10 @@
 // leaves the Unit stages open on main, as going back before them does: Build
 // and Test runs there, the board and status keep working, a team's clone keeps
 // its own step, and each Unit still comes up for review and lands as it
-// finishes, also after the work's last stage is approved. The lead is told once
-// what is still open and whose. Before, the move skipped the Unit stages for
-// every Unit: main's board could not be drawn and no team's Unit could land.
+// finishes, also after the work's last stage is approved, when main's next look
+// is the board until they have. A merge the lead turns down is the team's to
+// redo and leaves main on its own step. The lead is told once what is still open
+// and whose.
 //
 // Solo work and team Units no team has taken still move on with the Unit
 // stages skipped, and a land onto a record an earlier release wrote that way
@@ -297,7 +298,22 @@ describe("a lead's main whose team holds a Unit moves on to Build and Test", () 
     expect([mains.kind, mains.stage]).toEqual(["run-stage", BT]);
   });
 
-  test("approving the last stage while a Unit is open finishes the work, and the Unit lands after", () => {
+  test("a merge the lead turns down leaves main on Build and Test", () => {
+    const { lead, teamG } = gammaClaimed();
+    moveOn(lead);
+    commitAndPush(lead, "main moved on");
+    git(teamG, ["fetch", "origin"]);
+    git(teamG, ["merge", "--no-edit", "origin/main"]);
+    teamBuilds(teamG, "gamma");
+    git(lead, ["fetch", "origin"]);
+    expect(runMergeTool(UNIT, ["pin", "gamma"], lead).status).toBe(0);
+    const rejected = runMergeTool(UNIT, ["gate", "gamma", "--decision", "reject", "--user-input", "Reject"], lead);
+    expect(rejected.status, rejected.out).toBe(0);
+    const mains = nextDirective(lead);
+    expect([mains.kind, mains.stage], message(mains)).toEqual(["run-stage", BT]);
+  });
+
+  test("approving the last stage while a Unit is open finishes the work, the board stays up, and the Unit lands after", () => {
     const { lead, teamG } = gammaClaimed();
     moveOn(lead);
     for (const args of [
@@ -308,6 +324,10 @@ describe("a lead's main whose team holds a Unit moves on to Build and Test", () 
       expect(reported.status, reported.out).toBe(0);
     }
     expect(stateOf(lead)).toContain("- **Status**: Completed");
+    const end = nextDirective(lead);
+    expect(end.kind).toBe("notice");
+    expect(message(end)).toContain("# Team Construction Dispatcher");
+    expect(String(end.narration ?? "")).not.toContain("Your work is finished");
     commitAndPush(lead, "the work's end");
     git(teamG, ["fetch", "origin"]);
     git(teamG, ["merge", "--no-edit", "origin/main"]);
@@ -376,7 +396,10 @@ function landsAndMainGoesOn(seed: string, unit: string): void {
   for (const slug of PER_UNIT) expect(stateOf(seed)).not.toContain(`- [S] ${slug}`);
   const shown = status(seed);
   expect(shown.status, shown.out).toBe(0);
-  expect(message(nextDirective(seed))).not.toContain(BOARD_BROKEN);
+  // The push offer after the land comes first; then main's own step.
+  const steps = [nextDirective(seed), nextDirective(seed)];
+  expect(steps.map((step) => message(step)).join(" ")).not.toContain(BOARD_BROKEN);
+  expect(steps.some((step) => step.kind === "run-stage" && step.stage === BT), JSON.stringify(steps)).toBe(true);
 }
 
 describe("land after main moved on past the Unit stages", () => {
