@@ -668,6 +668,8 @@ import {
   teamMergeSeen,
   moveRefusedMark,
   shareBlocker,
+  shareRefusal,
+  planWayOn,
   skeletonHeldBackOnShare,
   teamsClone,
   teamStanceToRead,
@@ -5940,9 +5942,11 @@ function sliceBuiltFirst(projectDir: string, stateContent: string): string | nul
 // reaches the teams' clones only once the home's main is pushed, so main's
 // share question is put here too, once; Not now is kept. A Unit the lead adds
 // after sharing reaches the teams the same way, so the question is put again,
-// once for those Units.
+// once for those Units. On a branch of the lead's own, where the share pushes
+// nothing, how the plan reaches the teams is said once per chat instead.
 function buildOutShareOffer(projectDir: string): AskDirective | null {
-  if (shareBlocker(projectDir) !== null) return null;
+  const refused = shareRefusal(projectDir);
+  if (refused !== null && refused.off === undefined) return null;
   // While the team's branch is still to be read, the offer names "the team's
   // branch" and the share's own step reads it first (shareMain).
   const target = shareOfferTarget(projectDir);
@@ -5953,6 +5957,10 @@ function buildOutShareOffer(projectDir: string): AskDirective | null {
   if (added !== null && added.length === 0) return null;
   const mark = teamHandoverMarkName("share", added === null ? "plan" : `plan-${added.join("-")}`);
   if (handoverOffered(projectDir, mark)) return null;
+  if (refused?.off !== undefined) {
+    sayWithStepOnce(projectDir, `${refused.reason} ${planWayOn(refused.off.branch, false)}`);
+    return null;
+  }
   const said = added !== null
     ? `${namesInProse(added)} ${added.length === 1 ? "was" : "were"} added to the plan since you shared it, so the ` +
       `teams cannot take ${added.length === 1 ? "it" : "them"} yet.`

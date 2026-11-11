@@ -274,6 +274,46 @@ describe("the plan's share fits the team's own git: a protected main, a branch o
     }
   });
 
+  // A live run (case 12): Inception ended with no share question at all.
+  test("a lead on a branch of their own hears once, with the step, how the plan reaches the teams, in place of a share question", () => {
+    const home = makeHome();
+    git(home.dir, ["switch", "-q", "-c", "plan-review"]);
+    chooseTeams(home.dir);
+    const line = "This checkout is on plan-review, not main. Commit the plan (aidlc/) here, push it on a branch and get it merged " +
+      "your usual way; the teams can take Units once it is in main.";
+    const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "lead-on-a-branch" };
+    const first = next(home.dir, chat);
+    expect(isShare(first), JSON.stringify(first).slice(0, 600)).toBe(false);
+    expect((first.change_notices ?? []) as string[], JSON.stringify(first).slice(0, 900)).toContain(line);
+    const again = next(home.dir, chat);
+    expect(JSON.stringify(again)).not.toContain(line);
+  });
+
+  // The live run's shape: the lead keeps AI-DLC's records on a branch called
+  // records, in the Way of Working words, with no Integration branch line.
+  test("a lead whose Way of Working keeps the records on a branch: the share reads it first and pushes that branch, never main", () => {
+    const home = makeHome();
+    const team = join(home.dir, "aidlc", "spaces", "default", "memory", "team.md");
+    writeFileSync(team, readFileSync(team, "utf-8").replace("## Way of Working\n",
+      "## Way of Working\n\nWe keep AI-DLC's records on a branch called records, never on main; main only gets them through a pull request.\n"));
+    git(home.dir, ["switch", "-q", "-c", "records"]);
+    chooseTeams(home.dir);
+    const before = git(home.remote, ["rev-parse", "main"]);
+    expect(isShare(next(home.dir))).toBe(true);
+    const read = run(UNIT, ["share", "--plan"], home.dir);
+    expect(read.status, read.out).toBe(0);
+    expect(read.json?.shared).toBe(false);
+    expect(String(read.json?.step)).toContain("practices-branch --file team.md");
+    const recorded = run(STATE, ["practices-branch", "--file", "team.md", "--branch", "records"], home.dir);
+    expect(recorded.status, recorded.out).toBe(0);
+    const shared = run(UNIT, ["share", "--plan"], home.dir);
+    expect(shared.status, shared.out).toBe(0);
+    expect(shared.json).toMatchObject({ shared: true, branch: "records" });
+    expect(git(home.remote, ["rev-parse", "records"])).toBe(git(home.dir, ["rev-parse", "HEAD"]));
+    expect(git(home.remote, ["rev-parse", "main"])).toBe(before);
+    expect(isShare(next(home.dir))).toBe(false);
+  });
+
   test("a file the person staged stays theirs, staged, and the share counts what it committed", () => {
     const home = makeHome();
     chooseTeams(home.dir);
