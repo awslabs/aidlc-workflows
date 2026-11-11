@@ -107,7 +107,7 @@ function windowsRecoveryCheck(): DoctorCheck | null {
     fix: failed.length > 0
       ? windowsUninstallRetryFix(failed[0].journal)
       : recovery.invalid.length > 0
-        ? "keep the listed journal, cleanup script, and fence for inspection; see Troubleshooting"
+        ? "the last uninstall stopped and its record is gone or unreadable: run `aidlc uninstall` or the installer; either one clears the listed files"
         : "finish active AI-DLC commands, then run `aidlc version` to resume cleanup",
   };
 }
