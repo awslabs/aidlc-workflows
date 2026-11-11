@@ -8249,23 +8249,14 @@ function teamKeepsTyped(flags: ParsedFlags, projectDir: string): string | null {
 // team's strict Guard Policy keeps, so running the report without them drops
 // nothing else the person asked for. Null otherwise.
 function teamKeepsSettings(projectDir: string, settings: ReadonlyArray<readonly [string, string]>): string | null {
-  const fenceOff = (key: string, value: string): SwitchableGuardFence | undefined =>
-    value === "off"
-      ? SWITCHABLE_GUARD_FENCES.find((fence) => fence !== "plan-approval" && guardFenceConfigKey(fence) === key)
-      : undefined;
-  const lowered = settings.map(([key, raw]) => {
-    const value = raw.trim().toLowerCase();
-    return {
-      guardPolicy: key === "guard-policy" && (value === "relaxed" || value === "off"),
-      fence: fenceOff(key, value),
-      planApproval: (key === "plan-approval" || key === "guard.plan-approval") && value === "off",
-    };
-  });
-  if (lowered.some((one) => !one.guardPolicy && one.fence === undefined && !one.planApproval)) return null;
+  // Summary confirmation is a check the person turns off that the team's lock does not keep.
+  const kept = (key: string): boolean => key === "guard-policy" || key === "plan-approval" || guardFenceFromConfigKey(key) !== null;
+  if (!settings.every(([key, value]) => kept(key) && turnsPersonCheckOff(key, value.trim()))) return null;
+  const fences = settings.map(([key]) => guardFenceFromConfigKey(key));
   return teamKeepsLowered(projectDir, {
-    guardPolicy: lowered.some((one) => one.guardPolicy),
-    fence: lowered.find((one) => one.fence !== undefined)?.fence,
-    planApproval: lowered.some((one) => one.planApproval),
+    guardPolicy: settings.some(([key]) => key === "guard-policy"),
+    fence: fences.find((fence) => fence !== null && fence !== "plan-approval") ?? undefined,
+    planApproval: settings.some(([key]) => key === "plan-approval") || fences.includes("plan-approval"),
   });
 }
 
