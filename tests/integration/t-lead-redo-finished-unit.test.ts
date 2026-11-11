@@ -4,8 +4,9 @@
 // the lead finished their own alpha and is building beta, and asks to redo
 // alpha. The checkout no longer builds a finished Unit, and the line says so,
 // with the Units it does build; it never says alpha is not one of the work's
-// Units. A name the plan does not have keeps its line, and a Unit this
-// checkout builds is reopened as before.
+// Units. A Unit a team has taken is named with the team, as the board names
+// it. A name the plan does not have keeps its line, and a Unit this checkout
+// builds is reopened as before.
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -154,6 +155,15 @@ describe("the lead's own finished Unit after a team claimed another", () => {
     expect(asked.message).toContain(
       "\"alpha is finished, and this checkout now builds beta, so alpha is not redone here. Which one did you mean?\"",
     );
+  });
+
+  test("asked for gamma, which a team has taken, the line names the team and what this checkout builds", () => {
+    const lead = leadAfterATeamClaimed();
+    expect(jump(lead, "gamma")).toEqual({
+      kind: "error",
+      message: "gamma is taken by team-g and built in their checkout; this checkout builds beta. " +
+        "Name a Unit this checkout builds with `/aidlc --stage functional-design --unit <name>`.",
+    });
   });
 
   test("a name the plan does not have keeps its line, and a Unit this checkout builds is reopened", () => {

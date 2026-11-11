@@ -17729,9 +17729,11 @@ function unitJumpWalk(
 // The one check of a Unit named for a jump to one of the walk's steps, asked
 // by `next --stage --unit` and by the re-entry report before it accepts: what
 // is wrong when the walk does not take the Unit, and the start of the way on,
-// else null. A team checkout walks only the Units it builds, and a finished
-// one is no longer among them (unitsHeldHere).
+// else null. A team checkout walks only the Units it builds (unitsHeldHere): a
+// finished one and one a team has taken are not among them. The team is named
+// as the board names a claim's holder.
 function unitOutsideWork(
+  projectDir: string,
   stateContent: string,
   walk: { block: GraphStage[]; context: UnitWorkContext } | null,
   targetSlug: string,
@@ -17740,12 +17742,19 @@ function unitOutsideWork(
   if (!walk?.block.some((stage) => stage.slug === targetSlug)) return null;
   const units = walk.context.units;
   if (units.includes(unit)) return null;
+  const builds = units.length < 2 ? units.join("") : `${units.slice(0, -1).join(", ")} and ${units.at(-1)}`;
+  const nameOne = "Name a Unit this checkout builds";
   if (completedUnits(stateContent).has(unit)) {
-    const builds = units.length < 2 ? units.join("") : `${units.slice(0, -1).join(", ")} and ${units.at(-1)}`;
-    return {
-      said: `${unit} is finished, and this checkout now builds ${builds}, so ${unit} is not redone here.`,
-      nameOne: "Name a Unit this checkout builds",
-    };
+    return { said: `${unit} is finished, and this checkout now builds ${builds}, so ${unit} is not redone here.`, nameOne };
+  }
+  let owner: string | undefined;
+  try {
+    owner = cachedUnitClaimOverview(projectDir, { writeCache: false }).claimed.find((claim) => claim.unit === unit)?.owner;
+  } catch {
+    // An unreadable claim registry names no team.
+  }
+  if (owner !== undefined) {
+    return { said: `${unit} is taken by ${owner} and built in their checkout; this checkout builds ${builds}.`, nameOne };
   }
   return { said: `${unit} is not one of this work's units (${units.join(", ")}).`, nameOne: "Name one of them" };
 }
@@ -17956,7 +17965,7 @@ function unitMajorReopen(
   let reopened: string[];
   if (flags.jumpUnit !== undefined) {
     const named = flags.jumpUnit;
-    const outside = unitOutsideWork(stateContent, walk, targetSlug, named);
+    const outside = unitOutsideWork(projectDir, stateContent, walk, targetSlug, named);
     if (outside !== null) {
       return {
         kind: "error",
@@ -21442,7 +21451,7 @@ function emitTypedResumeChoice(
   // moves, so the print ends the turn and never goes through `move()`.
   const unitNotInWork = (step: string): PrintDirective | null => {
     const outside = flags.unit !== undefined && validScopes().has(scope)
-      ? unitOutsideWork(stateContent, unitJumpWalk(pd, scope, stateContent, true), step, flags.unit)
+      ? unitOutsideWork(pd, stateContent, unitJumpWalk(pd, scope, stateContent, true), step, flags.unit)
       : null;
     return outside === null ? null : turnEndingPrint(
       `Run nothing. Tell the person in one line: "${outside.said} Which one did you mean?" When they say, run this ` +
