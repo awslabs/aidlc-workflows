@@ -74,7 +74,10 @@ your message. Multiline input is stored as one JSON string in committed
 the document, so Markdown lines resembling workflow fields cannot alter the
 selected scope or lifecycle state. A message that is only a document, with no
 words outside it, is taken as "Build what the pasted document describes.", and
-the plan question that follows says so.
+the plan question that follows says so. On Kiro CLI with its v2 engine, what
+you type or paste after `/aidlc` reaches AI-DLC without its line breaks and
+without the double quotes around a quoted word or phrase, so name a file there
+instead ([Kiro CLI (V2) usage](harnesses/kiro.md#kiro-cli-v2-usage)).
 
 You can also add a document yourself at any time with
 `/aidlc knowledge onboard <path> ...`, naming one or more files or folders
