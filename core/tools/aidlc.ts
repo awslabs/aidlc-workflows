@@ -3350,7 +3350,8 @@ async function withNamedDocumentCopied(args: string[]): Promise<string[] | { ref
       next[one.at] = copied.target;
       const copies = [{ from: one.given, to: copied.target, ignored: copied.gitIgnored, leftOut: copied.leftOut,
         ...(copied.original === undefined ? {} : { original: copied.original }),
-        ...(copied.updated === true ? { updated: true } : {}) }];
+        ...(copied.updated === true ? { updated: true } : {}),
+        ...(copied.besideChanged === undefined ? {} : { besideChanged: copied.besideChanged }) }];
       return [...next, "--copied", JSON.stringify({ copies })];
     }
     const planned = utility.copyNamedDocumentsIntoKnowledge(
@@ -3363,6 +3364,7 @@ async function withNamedDocumentCopied(args: string[]): Promise<string[] | { ref
     const next = [...args];
     const copies: Array<{
       from: string; to: string; ignored: string; leftOut: number; original?: string; updated?: boolean;
+      besideChanged?: string;
     }> = [];
     const notAdded: Array<{ at: number; path: string; reason: string }> = [];
     toCopy.forEach((entry, index) => {
@@ -3377,6 +3379,7 @@ async function withNamedDocumentCopied(args: string[]): Promise<string[] | { ref
         from: entry.given, to: outcome.target, ignored: outcome.gitIgnored, leftOut: outcome.leftOut,
         ...(outcome.original === undefined ? {} : { original: outcome.original }),
         ...(outcome.updated === true ? { updated: true } : {}),
+        ...(outcome.besideChanged === undefined ? {} : { besideChanged: outcome.besideChanged }),
       });
     });
     return [...next, "--copied", JSON.stringify({ copies, notAdded })];

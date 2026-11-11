@@ -470,6 +470,10 @@ describe("a changed original named again updates its copy", () => {
     expect(again.status, again.out).toBe(0);
     expect(readFileSync(join(proj, DOCUMENTS, "a.md"), "utf-8")).toBe("the team's edit\n");
     expect(readFileSync(join(proj, DOCUMENTS, "a-2.md"), "utf-8")).toBe("theirs, changed\n");
+    // Said, so nobody takes the earlier copy for a stale duplicate and deletes the edit.
+    expect(String(again.json.onboard_note)).toEndWith(
+      "The earlier copy, a.md, has changed since it was copied, so it was left as it is; the knowledge base now holds both.",
+    );
   });
 
   for (const reindex of ["onboard", "sync"] as const) {
@@ -543,9 +547,11 @@ describe("a changed original named again updates its copy", () => {
     expect(onboard(proj, ["orig/a.md"]).status).toBe(0);
     writeFileSync(join(proj, DOCUMENTS, "a.md"), "one\r\ntwo\r\n", "utf-8");
     writeFileSync(join(proj, "orig", "a.md"), "one\ntwo\nthree\n", "utf-8");
-    expect(onboard(proj, ["orig/a.md"]).status).toBe(0);
+    const beside = onboard(proj, ["orig/a.md"]);
+    expect(beside.status, beside.out).toBe(0);
     expect(readFileSync(join(proj, DOCUMENTS, "a.md"), "utf-8")).toBe("one\r\ntwo\r\n");
     expect(existsSync(join(proj, DOCUMENTS, "a-2.md"))).toBe(true);
+    expect(String(beside.json.onboard_note)).toContain("The earlier copy, a.md, has changed since it was copied");
   });
 
   test("a document that was not copied in by name keeps today's behaviour", () => {
@@ -556,9 +562,29 @@ describe("a changed original named again updates its copy", () => {
     expect(rows(proj)[0].copied_from).toBeUndefined();
     mkdirSync(join(proj, "orig"), { recursive: true });
     writeFileSync(join(proj, "orig", "a.md"), "another a\n", "utf-8");
-    expect(onboard(proj, ["orig/a.md"]).status).toBe(0);
+    const beside = onboard(proj, ["orig/a.md"]);
+    expect(beside.status, beside.out).toBe(0);
     expect(readFileSync(join(proj, DOCUMENTS, "a.md"), "utf-8")).toBe("placed by hand\n");
     expect(existsSync(join(proj, DOCUMENTS, "a-2.md"))).toBe(true);
+    expect(String(beside.json.onboard_note)).not.toContain("earlier copy");
+  });
+
+  test("a copy an older release already made of the new version is used, and the first copy is left alone", () => {
+    const proj = project();
+    mkdirSync(join(proj, "orig"), { recursive: true });
+    writeFileSync(join(proj, "orig", "a.md"), "v1\n", "utf-8");
+    expect(onboard(proj, ["orig/a.md"]).status).toBe(0);
+    writeFileSync(join(proj, "orig", "a.md"), "v2\n", "utf-8");
+    // A teammate on an older release added the changed file: it went in beside the first copy.
+    writeFileSync(join(proj, DOCUMENTS, "a-2.md"), "v2\n", "utf-8");
+    expect(onboard(proj, [`${documentsShown}/a-2.md`]).status).toBe(0);
+    const again = onboard(proj, ["orig/a.md"]);
+    expect(again.status, again.out).toBe(0);
+    expect(readFileSync(join(proj, DOCUMENTS, "a.md"), "utf-8")).toBe("v1\n");
+    expect((again.json.indexed as Array<{ path: string; status: string }>)[0]).toMatchObject({
+      path: `${SOURCE}/a-2.md`, status: "already",
+    });
+    expect(existsSync(join(proj, DOCUMENTS, "a-3.md"))).toBe(false);
   });
 
   test("several paths, two of them changed originals, update both and add the new one", () => {

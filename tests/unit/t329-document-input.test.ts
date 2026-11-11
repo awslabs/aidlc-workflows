@@ -819,6 +819,25 @@ describe("t329 project-description and document-input boundaries", () => {
     expect(readFileSync(join(dir, copy)).equals(changed)).toBe(true);
   });
 
+  test("a Word file whose earlier copy changed goes in beside it, and the line says the earlier copy changed", () => {
+    const dir = project();
+    mkdirSync(join(dir, "docs"));
+    writeFileSync(join(dir, "docs", "report.docx"), wordBytes());
+    writeRequest(dir, "docs/report.docx");
+    expect(runOnboard(dir).status).toBe(0);
+    writeFileSync(join(dir, DOCUMENTS, "report.docx"), wordBytes("The team's edit."));
+    writeFileSync(join(dir, "docs", "report.docx"), wordBytes("Report text, changed."));
+    writeRequest(dir, "docs/report.docx");
+    const again = runOnboard(dir);
+    expect(again.status, again.stderr).toBe(0);
+    const payload = JSON.parse(again.stdout);
+    expect(payload.document_path).toBe(`${DOCUMENTS}/report-2.docx`);
+    expect(payload.onboard_note).toEndWith(
+      ` The earlier copy, "${DOCUMENTS}/report.docx", has changed since it was copied, so I left it as it is; the ` +
+        "knowledge base now holds both.",
+    );
+  });
+
   // Both routes that copy a named file record it the same way, so a file added
   // with `knowledge onboard` and later named in a request is the same document.
   test("a Word file added by knowledge onboard and named again in a request updates the same document", () => {

@@ -1601,12 +1601,13 @@ export function copiedDocumentFor(
   space: string,
   original: string,
   newSha256: string,
-): { copyPath: string; holdsNew: boolean } | null {
+): { copyPath: string; holdsNew: boolean } | { changedCopy: string } | null {
   assertKnowledgeRootTrusted(projectDir, space);
   const documentsAbs = documentsDir(projectDir, space);
   if (!existsSync(documentsAbs)) return null;
   const documentsReal = realpathSync(documentsAbs);
   const fits: { copyPath: string; holdsNew: boolean }[] = [];
+  const changed: string[] = [];
   for (const row of readIndex(projectDir, space).documents) {
     const from = row.copied_from;
     if (from === undefined || from.path !== original || isTombstoned(row)) continue;
@@ -1619,8 +1620,14 @@ export function copiedDocumentFor(
       continue;
     }
     if (digest === from.sha256 || digest === newSha256) fits.push({ copyPath, holdsNew: digest === newSha256 });
+    else changed.push(row.source.path.slice("documents/".length));
   }
-  return fits.length === 1 ? fits[0] : null;
+  if (fits.length === 1) return fits[0];
+  // The one copy made from this original no longer holds what was copied: the
+  // caller copies beside it, and says so, so nobody takes the earlier copy for
+  // a stale duplicate and deletes a change made to it.
+  if (fits.length === 0 && changed.length === 1) return { changedCopy: changed[0] };
+  return null;
 }
 
 /**
@@ -1809,14 +1816,10 @@ function onboardCandidates(
       }
       const contentNeedsRepair = existing.extraction.state === "extracted" &&
         verifiedContentBytes(projectDir, space, existing) === null;
-      // The command layer handed this copy in for its original, and the row's
-      // record of the bytes copied lags them (a run that wrote them stopped
-      // before the index took them): refresh it, so the next change still
-      // updates this copy instead of landing beside it.
+      // The command layer handed this copy in for its original (its new bytes
+      // were written over it): the edited branch below records them.
       const original = copiedFrom?.get(abs);
-      const recordLags = original !== undefined && existing.copied_from?.path === original &&
-        existing.copied_from.sha256 !== digest;
-      if (existing.sha256 === digest && !contentNeedsRepair && !recordLags) {
+      if (existing.sha256 === digest && !contentNeedsRepair) {
         // Already indexed, unchanged. Reported, never swallowed.
         outcomes.push({
           id: existing.id,
@@ -2424,14 +2427,29 @@ export function onboardCopyNote(
     ? ` ${leftOut} ${leftOut === 1 ? "file" : "files"} inside it ${leftOut === 1 ? "is" : "are"} kept out of ` +
       `git, so ${leftOut === 1 ? "it was" : "they were"} not copied; name one directly to add it.`
     : "";
-  const ignored = gitIgnored === "yes" || gitIgnored === "unknown"
-    ? ` Your ${name} is ${gitIgnored === "yes" ? "" : "likely "}kept out of git, but this copy is not, ` +
-      "so it will be committed unless you keep it out there too."
-    : "";
+  const ignored = keptOutOfGitNote([{ from: copiedFrom, ignored: gitIgnored }]);
   return `Copied ${name} into AI-DLC's documents as ${where} and added ${what}.` +
     skipped +
     ` The knowledge base reads that copy from now on, not ${theirs}.` +
     ignored;
+}
+
+/**
+ * The one risk a copy line carries: a copy of something git ignores will be
+ * committed. Each such original is named, never summed; "this copy" when the
+ * line is about one copy. The one writer of this sentence for every copy line.
+ */
+function keptOutOfGitNote(copies: ReadonlyArray<{ from: string; ignored: string | undefined }>): string {
+  let note = "";
+  for (const [state, likely] of [["yes", ""], ["unknown", "likely "]] as const) {
+    const names = copies.filter((copy) => copy.ignored === state).map((copy) => basename(copy.from));
+    if (names.length === 0) continue;
+    const one = names.length === 1;
+    const copyIs = copies.length === 1 ? "this copy is" : one ? "its copy is" : "their copies are";
+    note += ` Your ${inWords(names)} ${one ? "is" : "are"} ${likely}kept out of git, but ${copyIs} not, so ` +
+      `${one ? "it" : "they"} will be committed unless you keep ${one ? "it" : "them"} out there too.`;
+  }
+  return note;
 }
 
 /** One document the dispatcher copied in for an onboard: the path the person
@@ -2446,6 +2464,8 @@ export interface OnboardCopy {
   original?: string;
   /** Its new bytes were written over the copy made from it before. */
   updated?: boolean;
+  /** The earlier copy made from it (documents-relative) had changed, so this one went in beside it. */
+  besideChanged?: string;
 }
 
 function inWords(items: readonly string[]): string {
@@ -2517,16 +2537,14 @@ function onboardNote(
         `kept out of git, so ${leftOut === 1 ? "it was" : "they were"} not copied; name one directly to add it.`;
     }
     line += " The knowledge base reads those copies from now on, not your own.";
-    // The one risk in this line: a copy of something kept out of git will be
-    // committed. Each such original is named, never summed.
-    for (const [state, likely] of [["yes", ""], ["unknown", "likely "]] as const) {
-      const names = copies.filter((copy) => copy.ignored === state).map((copy) => basename(copy.from));
-      if (names.length === 0) continue;
-      const one = names.length === 1;
-      line += ` Your ${inWords(names)} ${one ? "is" : "are"} ${likely}kept out of git, but ${one ? "its copy is" : "their copies are"} ` +
-        `not, so ${one ? "it" : "they"} will be committed unless you keep ${one ? "it" : "them"} out there too.`;
-    }
-    parts.push(line);
+    parts.push(line + keptOutOfGitNote(copies));
+  }
+  for (const copy of copies) {
+    if (copy.besideChanged === undefined) continue;
+    parts.push(
+      `The earlier copy, ${copy.besideChanged}, has changed since it was copied, so it was left as it is; the ` +
+        "knowledge base now holds both.",
+    );
   }
   if (updated.length > 0) parts.push(updatedCopiesNote(projectDir, space, updated));
   return parts.length === 0 ? null : parts.join(" ");
@@ -2534,15 +2552,7 @@ function onboardNote(
 
 /** What to say when a changed original's new bytes were written over its copy. */
 function updatedCopiesNote(projectDir: string, space: string, updated: readonly OnboardCopy[]): string {
-  const ignoredNote = (state: "yes" | "unknown", likely: string): string => {
-    const names = updated.filter((copy) => copy.ignored === state).map((copy) => basename(copy.from));
-    if (names.length === 0) return "";
-    const one = names.length === 1;
-    const copyIs = updated.length === 1 ? "this copy is" : one ? "its copy is" : "their copies are";
-    return ` Your ${inWords(names)} ${one ? "is" : "are"} ${likely}kept out of git, but ${copyIs} not, so ` +
-      `${one ? "it" : "they"} will be committed unless you keep ${one ? "it" : "them"} out there too.`;
-  };
-  const ignored = ignoredNote("yes", "") + ignoredNote("unknown", "likely ");
+  const ignored = keptOutOfGitNote(updated);
   if (updated.length === 1) {
     const [copy] = updated;
     return `Updated ${toPosix(relative(projectDir, copy.to))} to your new ${basename(copy.from)}. It stays the ` +
@@ -4837,7 +4847,8 @@ function dispatcherCopies(raw: string | undefined): {
       typeof entry.from === "string" && typeof entry.to === "string" &&
       (entry.ignored === "yes" || entry.ignored === "no" || entry.ignored === "unknown") && count(entry.leftOut) &&
       (entry.original === undefined || validDocumentPath(entry.original)) &&
-      (entry.updated === undefined || typeof entry.updated === "boolean");
+      (entry.updated === undefined || typeof entry.updated === "boolean") &&
+      (entry.besideChanged === undefined || typeof entry.besideChanged === "string");
     const isLeftOut = (entry: Record<string, unknown>): boolean =>
       count(entry.at) && typeof entry.path === "string" && typeof entry.reason === "string";
     if (!copies.every((entry) => typeof entry === "object" && entry !== null && isCopy(entry))) return none;

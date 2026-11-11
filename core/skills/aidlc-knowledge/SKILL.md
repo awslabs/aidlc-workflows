@@ -145,10 +145,12 @@ keeping its own name (a folder keeps its layout). The result then carries an
 that the knowledge base reads the copy from here on, and how many files inside a
 named folder were left out because git ignores them. When they change their
 original, naming it again updates AI-DLC's copy in place: the same document, its
-intents kept, and the `onboard_note` says so. That holds while nobody has edited
-the copy under `documents/`; an edited copy is left as it is and the new version
-goes in beside it as `<name>-2`, and a folder named again also goes in beside the
-first. A path outside the project is refused, as is a folder over the batch cap or a
+intents kept, and the `onboard_note` says so. That holds while the copy still
+holds what was copied; a copy that changed (edited under `documents/`, or checked
+out with other line endings) is left as it is, the new version goes in beside it
+as `<name>-2`, and the `onboard_note` says the earlier copy changed. A folder
+named again also goes in beside the first, and so does the first change to a copy
+made before this record existed (its row has no `copied_from`). A path outside the project is refused, as is a folder over the batch cap or a
 document over the per-document cap, which are refused before anything is copied
 (the refusal says how many documents the folder holds). Several paths are one
 batch: every one is taken, and one that cannot be (it does not exist, it is

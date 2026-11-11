@@ -834,8 +834,10 @@ describe("t288 the reporting contract", () => {
 // committed path like source.path, so it gets the same containment check.
 describe("t288 copied_from: the original's project path and the bytes copied", () => {
   test("a well-formed copied_from is accepted, in the index and in metadata.json", () => {
-    expect(validateDocumentIndex(index([row({ copied_from: { path: "orig/contract-summary.md", sha256: DIGEST } })])).ok)
-      .toBe(true);
+    const copiedFrom = { path: "orig/contract-summary.md", sha256: DIGEST };
+    expect(validateDocumentIndex(index([row({ copied_from: copiedFrom })])).ok).toBe(true);
+    expect(validateDocumentMetadata(metadata({ copied_from: copiedFrom })).ok).toBe(true);
+    expect(validateDocumentMetadata(metadata({ copied_from: { path: "../a.md", sha256: DIGEST } })).ok).toBe(false);
   });
 
   for (const [what, value] of [
