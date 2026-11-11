@@ -8555,18 +8555,21 @@ describe("t218 the person-message card names the first engine step on an /aidlc 
 });
 
 // Kiro IDE opens every new chat on its Default agent, where Kiro asks the
-// person to approve each AI-DLC command. Kiro's own record of the chat
+// person to approve AI-DLC's commands. Kiro's own record of the chat
 // (~/.kiro/sessions/<workspace id>/<chat>/session.json, written when the chat
 // opens) names the agent; Kiro keeps an Always allow in
 // ~/.kiro/workspace-roots/<workspace id>/permissions.yaml (This workspace) or
 // ~/.kiro/settings/permissions.yaml or .json (All workspaces), as Kiro IDE
-// 1.4.51 wrote them in a live run.
+// 1.4.51 wrote them in a live run. Approve for me is the chat record's
+// `approveForMe` in Kiro IDE 1.4.154 and the workspace's
+// `policies: [approve-for-me]` in Kiro CLI 3.2.0, whose chat record has no
+// such field (both from live runs).
 describe("t218 a chat on Kiro's Default agent hears once how to stop the approval cards", () => {
   const WORKSPACE = "315c17f7ffe49446";
   const said = (name: string) =>
     `Tell the person this once, in their language, then go on with their request: "This chat is on Kiro's ${name} ` +
-    `agent, so Kiro asks you to approve each AI-DLC command. To stop those approval cards for AI-DLC's own commands, ` +
-    `pick aidlc in the agent menu under the chat box (it says ${name} now)."`;
+    `agent, where Kiro asks you to approve AI-DLC's commands. To stop those approval cards for AI-DLC's own commands, ` +
+    `pick aidlc in Kiro IDE's agent menu under the chat box (it says ${name} now), or in Kiro CLI type /agent and pick aidlc."`;
   const kiroChat = (home: string, session: string, record: string, workspace = WORKSPACE) => {
     const dir = join(home, ".kiro", "sessions", workspace, session);
     mkdirSync(dir, { recursive: true });
@@ -8583,7 +8586,7 @@ describe("t218 a chat on Kiro's Default agent hears once how to stop the approva
       cwd: dir,
       prompt: line,
     }), { HOME: home, USERPROFILE: home });
-  const timesSaid = (stdout: string) => stdout.split("agent, so Kiro asks you to approve each AI-DLC command").length - 1;
+  const timesSaid = (stdout: string) => stdout.split("approval cards for AI-DLC's own commands").length - 1;
 
   test("an /aidlc request on Default or Default v2 says it once per chat; any other agent, no record, a utility or plain words say nothing", () => {
     const dir = scratchProject(false);
@@ -8656,6 +8659,67 @@ describe("t218 a chat on Kiro's Default agent hears once how to stop the approva
       mkdirSync(join(home, ".kiro", "workspace-roots", "0123456789abcdef"), { recursive: true });
       expect(heard(join(home, ".kiro", "workspace-roots", "0123456789abcdef", "permissions.yaml"), shellRule("bun *"))).toBe(1);
       expect(heard(join(workspaceRules, "permissions.yaml"), "rules:\n  - capability: shell\n    effect: allow\n    match: [bun *\n")).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("Approve for me says nothing: Kiro IDE's chat record decides, Kiro CLI's workspace policy counts only where the record does not say", () => {
+    const dir = scratchProject(false);
+    const home = join(dir, "kiro-home");
+    const workspaceRules = join(home, ".kiro", "workspace-roots", WORKSPACE);
+    const allRules = join(home, ".kiro", "settings");
+    mkdirSync(workspaceRules, { recursive: true });
+    mkdirSync(allRules, { recursive: true });
+    const workspaceYaml = join(workspaceRules, "permissions.yaml");
+    const policy = "rules: []\nworkspaceTrusted: true\npolicies:\n  - approve-for-me\n";
+    const withMode = (agentMode: string, approveForMe?: unknown) =>
+      `${JSON.stringify({ schemaVersion: "1.0.0", id: "sess", agentMode, autopilot: true, ...(approveForMe === undefined ? {} : { approveForMe }) }, null, 2)}\n`;
+    let chats = 0;
+    const heard = (record: string, files: Record<string, string> = {}): number => {
+      for (const file of [workspaceYaml, join(workspaceRules, "permissions.json"), join(allRules, "permissions.yaml"), join(allRules, "permissions.json")]) {
+        rmSync(file, { force: true });
+      }
+      for (const [file, text] of Object.entries(files)) writeFileSync(file, text, "utf-8");
+      const session = `sess_afm_${++chats}`;
+      kiroChat(home, session, record);
+      const r = prompt(dir, home, session, "/aidlc fix the docs");
+      expect(r.code, r.stderr).toBe(0);
+      return timesSaid(r.stdout);
+    };
+    try {
+      // Kiro IDE: Approve for me, on either Default agent, says nothing; Accept file changes still hears it.
+      expect(heard(withMode("vibe", true))).toBe(0);
+      expect(heard(withMode("default-v2", true))).toBe(0);
+      expect(heard(withMode("vibe", false))).toBe(1);
+      // The chat's own record outranks the workspace policy; an Always allow still counts beside it.
+      expect(heard(withMode("vibe", false), { [workspaceYaml]: policy })).toBe(1);
+      expect(heard(withMode("vibe", false), { [workspaceYaml]: shellRule("bun *") })).toBe(0);
+      // Kiro CLI: no approveForMe in the record (or not a true or false), so the workspace's policy decides.
+      expect(heard(withMode("vibe"))).toBe(1);
+      expect(heard(withMode("vibe"), { [workspaceYaml]: policy })).toBe(0);
+      expect(heard(withMode("vibe"), { [workspaceYaml]: "policies:\n  - approve-for-me\n" })).toBe(0);
+      expect(heard(withMode("vibe"), { [join(workspaceRules, "permissions.json")]: `${JSON.stringify({ policies: ["approve-for-me"] })}\n` })).toBe(0);
+      expect(heard(withMode("vibe", "yes"), { [workspaceYaml]: policy })).toBe(0);
+      expect(heard(withMode("vibe", "yes"))).toBe(1);
+      // Not approve for me: another policy, a policy that is not a list, the person's own settings
+      // folder (Kiro CLI keeps the choice per workspace), another workspace's file.
+      expect(heard(withMode("vibe"), { [workspaceYaml]: "policies:\n  - edit-workspace\n" })).toBe(1);
+      expect(heard(withMode("vibe"), { [workspaceYaml]: "policies: approve-for-me\n" })).toBe(1);
+      expect(heard(withMode("vibe"), { [join(allRules, "permissions.yaml")]: policy })).toBe(1);
+      const other = join(home, ".kiro", "workspace-roots", "0123456789abcdef");
+      mkdirSync(other, { recursive: true });
+      writeFileSync(join(other, "permissions.yaml"), policy, "utf-8");
+      expect(heard(withMode("vibe"))).toBe(1);
+      rmSync(other, { recursive: true, force: true });
+
+      // Saying nothing leaves the once unspent: with approve for me off again, the next request says it, once.
+      writeFileSync(workspaceYaml, policy, "utf-8");
+      kiroChat(home, "sess_afm_later", withMode("vibe"));
+      expect(timesSaid(prompt(dir, home, "sess_afm_later", "/aidlc fix the docs").stdout)).toBe(0);
+      rmSync(workspaceYaml, { force: true });
+      expect(timesSaid(prompt(dir, home, "sess_afm_later", "/aidlc and the readme too").stdout)).toBe(1);
+      expect(timesSaid(prompt(dir, home, "sess_afm_later", "/aidlc and the changelog").stdout)).toBe(0);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
