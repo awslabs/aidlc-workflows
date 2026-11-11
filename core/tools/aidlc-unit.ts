@@ -7578,15 +7578,27 @@ function pushRemoteOf(dir: string, branch: string, picked?: string): string | { 
   return { remotes };
 }
 
-// The Unit's repos whose push remote only the person can name, with each one's remotes.
-export function pushRemotesToPick(projectDir: string, unit: string, repos: string[]): Array<{ repo: string; remotes: string[] }> {
+// The Unit's repos whose push remote only the person can name, with each one's
+// remotes: git is asked under the branch the push uses.
+export function pushRemotesToPick(projectDir: string, branch: string, repos: string[]): Array<{ repo: string; remotes: string[] }> {
   const open: Array<{ repo: string; remotes: string[] }> = [];
   for (const repo of repos) {
     const dir = repo === "." ? projectDir : repoDir(projectDir, repo);
-    const found = isGitRepoDir(dir) ? pushRemoteOf(dir, unit) : null;
+    const found = isGitRepoDir(dir) ? pushRemoteOf(dir, branch) : null;
     if (found !== null && typeof found === "object") open.push({ repo, remotes: found.remotes });
   }
   return open;
+}
+
+// The remote whose integration branch a Unit's branch starts from: the repo's
+// own, whose main the lead's merge check reads, when the push goes to another
+// (a fork, whose main may be older); else the push remote.
+function startRemoteOf(dir: string, remote: string): string {
+  try {
+    return repositoryRemote(dir) ?? remote;
+  } catch {
+    return remote;
+  }
 }
 
 // A code repo's integration branch: where its remote's HEAD points.
@@ -7747,7 +7759,7 @@ function pushUnit(args: string[], projectDir?: string): void {
         `pushed. Ask the person whether to push it on ${own}, the branch it was built on; on their yes, run ` +
         `\`${aidlcToolInvocation("unit")} push --branch ${own}\`, and the lead's project follows that branch.`);
     }
-    const remote = pushRemoteOf(dir, unit, picked.get(repo));
+    const remote = pushRemoteOf(dir, branch, picked.get(repo));
     if (remote === null) fail(`${name} has no remote to push ${unit} to.`);
     if (typeof remote === "object") {
       fail(`${name} has the remotes ${joinNames(remote.remotes)} and none is set for pushing: ask the person which one ${unit} goes to.`);
@@ -7833,7 +7845,8 @@ function pushUnit(args: string[], projectDir?: string): void {
     }
     const from = git(dir, ["branch", "--show-current"]).stdout.trim();
     if (from !== branch) {
-      const integration = repoIntegration(dir, remote);
+      const start = startRemoteOf(dir, remote);
+      const integration = repoIntegration(dir, start);
       // A Unit branch an earlier, refused run made from the integration branch
       // holds nothing of its own yet: it is made again, as on a first push, so
       // their commits since then are never branched past.
@@ -7850,14 +7863,14 @@ function pushUnit(args: string[], projectDir?: string): void {
         // allows; the workspace itself, which holds AI-DLC's record of this
         // build, a tree that does not allow it, and their own commits holding
         // the Unit's files start where they are.
-        if (repo !== ".") git(dir, ["fetch", "-q", remote, integration.slice(remote.length + 1)]);
+        if (repo !== ".") git(dir, ["fetch", "-q", start, integration.slice(start.length + 1)]);
         const committedHere = paths.length > 0 && !git(dir, ["diff", "--quiet", integration, "HEAD", "--", ...paths]).ok;
         if (repo !== "." && !committedHere) switched = git(dir, ["switch", "-q", make, branch, integration]).ok;
         if (!switched) {
           const tried = git(dir, ["switch", "-q", make, branch]);
           switched = tried.ok;
           said = tried.stderr;
-          const comesAlong = switched ? comesAlongLine(dir, name, branch, remote, git(dir, ["rev-parse", "HEAD"]).stdout.trim()) : null;
+          const comesAlong = switched ? comesAlongLine(dir, name, branch, start, git(dir, ["rev-parse", "HEAD"]).stdout.trim()) : null;
           if (comesAlong !== null) along.push(comesAlong);
         }
       }
@@ -7901,7 +7914,7 @@ function pushUnit(args: string[], projectDir?: string): void {
     }
     const head = git(dir, ["rev-parse", "HEAD"]).stdout.trim();
     const base = earlier.get(repo)?.base ??
-      (git(dir, ["merge-base", "HEAD", repoIntegration(dir, remote)]).stdout.trim() || head);
+      (git(dir, ["merge-base", "HEAD", repoIntegration(dir, startRemoteOf(dir, remote))]).stdout.trim() || head);
     const changed = git(dir, ["diff", "--name-only", "--no-renames", base, head, "--", ...paths]).stdout.split(/\r?\n/).filter(Boolean);
     const blobs = blobsAt(dir, head, changed);
     const entry: RepoResult = {

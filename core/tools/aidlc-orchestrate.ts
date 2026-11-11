@@ -9776,7 +9776,7 @@ function unitPushAsk(projectDir: string, stateContent: string | null): AskDirect
   const names = repos.map((repo) => (repo === "." ? "the repo" : repo));
   const changed = names.length === 0 ? "" : ` It changed ${names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`}.`;
   // A repo with several remotes and none set for pushing: which one is theirs to say.
-  const pick = pushRemotesToPick(projectDir, unit, repos);
+  const pick = pushRemotesToPick(projectDir, branch, repos);
   const finishing = toFinish.length > 0;
   const detail = finishing
     ? "The merge is finished first, with your git; then only the files its Code Generation wrote, nothing else of yours."

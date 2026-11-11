@@ -185,4 +185,63 @@ describe("the push goes where git would push it", () => {
     expect(spawnSync("git", ["rev-parse", "--verify", "refs/heads/refunds"], { cwd: fork }).status).not.toBe(0);
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.result).toBeDefined();
   });
+
+  // Two remotes, none set for pushing, and the push remote git has for the branch the person named.
+  function namedBranchWithItsPushRemote(): { hosts: Record<string, string>; alice: string; record: string; fork: string } {
+    const { hosts, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    finishBuild(record);
+    const billing = join(alice, "billing");
+    git(billing, ["remote", "rename", "origin", "team"]);
+    const fork = tempDir("billing-fork");
+    git(fork, ["init", "-q", "--bare", "-b", "main"]);
+    git(billing, ["remote", "add", "fork", fork]);
+    git(billing, ["config", "branch.feature/refunds.pushRemote", "fork"]);
+    return { hosts, alice, record, fork };
+  }
+
+  test("the branch the person named for the push: git's push remote for that branch is where it goes", () => {
+    const { alice, fork } = namedBranchWithItsPushRemote();
+    const pushed = run(UNIT, ["push", "--branch", "feature/refunds"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(git(fork, ["ls-tree", "-r", "--name-only", "feature/refunds"]).split("\n")).toContain("lib/refund.ts");
+  });
+
+  test("the push question for a branch the person named asks no remote when git has one for that branch", () => {
+    const { alice, record } = namedBranchWithItsPushRemote();
+    const statePath = join(record, "aidlc-state.md");
+    const state = readFileSync(statePath, "utf-8");
+    expect(state).toContain("## Runtime State\n");
+    writeFileSync(statePath, state.replace("## Runtime State\n", "## Runtime State\n- **Unit Branch**: feature/refunds\n"));
+    const ask = next(alice);
+    expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-push");
+    const labels = (ask.choices as Array<{ label: string }>).map((choice) => choice.label);
+    expect(labels, JSON.stringify(ask)).toEqual(["Push", "Not now"]);
+  });
+
+  test("a push remote that is a fork: the Unit's branch starts from the repo's own main, not the fork's older one", () => {
+    const { hosts, home, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    finishBuild(record);
+    const fork = join(tempDir("api-fork"), "fork.git");
+    git(tempDir("api-fork-parent"), ["clone", "-q", "--bare", hosts["checkout-api"], fork]);
+    // The repo's own main moves on after the fork was made.
+    const mover = join(tempDir("api-mover"), "repo");
+    git(tempDir("api-mover-parent"), ["clone", "-q", hosts["checkout-api"], mover]);
+    git(mover, ["config", "user.name", "teammate"]);
+    git(mover, ["config", "user.email", "teammate@example.test"]);
+    writeFileSync(join(mover, "later.md"), "Merged after the fork was made.\n");
+    git(mover, ["add", "-A"]);
+    git(mover, ["commit", "-q", "-m", "later"]);
+    git(mover, ["push", "-q", "origin", "main"]);
+    const moved = git(mover, ["rev-parse", "HEAD"]);
+    const api = join(alice, "checkout-api");
+    git(api, ["remote", "add", "fork", fork]);
+    git(api, ["config", "remote.pushDefault", "fork"]);
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(spawnSync("git", ["merge-base", "--is-ancestor", moved, "refunds"], { cwd: fork }).status).toBe(0);
+    const result = claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.result;
+    expect(result?.repos.find((repo) => repo.repo === "checkout-api")?.base).toBe(moved);
+  });
 });
