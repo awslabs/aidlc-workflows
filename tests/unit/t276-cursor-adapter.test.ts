@@ -4798,11 +4798,14 @@ function dropLines(dir: string): string[] {
     .map((line) => line.replace(/^[^\t]*\t/, ""));
 }
 
+// The project folder in either separator (a Windows test project is written
+// with forward slashes, a guard names it with backslashes), JSON-escaped or not.
 function inProject(text: string, dir: string): string {
-  return text
-    .replaceAll(JSON.stringify(dir).slice(1, -1), "<project>")
-    .replaceAll(dir, "<project>")
-    .replaceAll(dir.replaceAll("\\", "/"), "<project>");
+  let out = text;
+  for (const form of [dir, dir.replaceAll("\\", "/"), dir.replaceAll("/", "\\")]) {
+    out = out.replaceAll(JSON.stringify(form).slice(1, -1), "<project>").replaceAll(form, "<project>");
+  }
+  return out;
 }
 
 // A construction project at Code Generation with no approved plan.
