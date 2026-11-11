@@ -19602,6 +19602,7 @@ function emitJumpDirective(
       emit(narrowed.directive);
       return;
     }
+    if (unitMajor === "route") return "route";
     // The jump the person asked for, with nothing to run or say around it, is
     // made here with the command the print below names, and the caller routes
     // on from the state it wrote, so their first step comes back from this
