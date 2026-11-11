@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-utility:doctor
+// covers: subcommand:aidlc-utility:doctor, function:shownSubagentInflightPath
 //
 // t204 - doctor's transient-state probes. handleDoctor (aidlc-utility.ts)
 // reports the in-flight compose question and the background-subagent

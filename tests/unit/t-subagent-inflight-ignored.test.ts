@@ -36,7 +36,7 @@ import {
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-// Where releases up to 2.11.3 kept the ledger.
+// Where earlier releases kept the ledger.
 const OLD_PLACE = (proj: string): string => join(proj, "aidlc", ".aidlc-subagent-inflight");
 
 const created: string[] = [];

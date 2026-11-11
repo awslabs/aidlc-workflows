@@ -2,21 +2,51 @@
 // in the background, which the Stop hook reads so a turn can end while the
 // agent works. aidlc-lib.ts re-exports it.
 import { existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { withAuditLock, writeFileAtomic } from "./aidlc-locks.ts";
-import { validSessionId } from "./aidlc-record-core.ts";
+import { dirname, join, relative, sep } from "node:path";
+import { withAuditLock, workspaceRoot, writeFileAtomic } from "./aidlc-locks.ts";
+import { sessionsDir, validSessionId } from "./aidlc-record-core.ts";
 
 // How far the authority covering an action reaches (authorityFor in
 // aidlc-lib.ts); an entry keeps the one in force when its agent was sent.
 export type AuthorityCover = "grant" | "instruction" | "none";
 
-// `<projectDir>/aidlc/.aidlc-subagent-inflight`: the workspace-level background
-// dispatch ledger. Entries are session-scoped and reference-counted so
-// overlapping workers cannot clear or authorize each other. The file remains
-// workspace-level because dispatch and completion hooks can run outside an
-// intent record, while each entry carries the session identity needed by Stop.
+// `<projectDir>/aidlc/.aidlc-sessions/subagent-inflight.json`: the
+// workspace-level background dispatch ledger, in the git-ignored sessions
+// folder so a `git add -A` while a helper runs cannot commit it. Entries are
+// session-scoped and reference-counted so overlapping workers cannot clear or
+// authorize each other. The file remains workspace-level because dispatch and
+// completion hooks can run outside an intent record, while each entry carries
+// the session identity needed by Stop.
 export function subagentInflightMarkerPath(projectDir: string): string {
-  return join(projectDir, "aidlc", ".aidlc-subagent-inflight");
+  return join(sessionsDir(projectDir), "subagent-inflight.json");
+}
+
+/** The ledger's path as a person types it in the project. */
+export function shownSubagentInflightPath(projectDir: string): string {
+  return relative(projectDir, subagentInflightMarkerPath(projectDir)).split(sep).join("/");
+}
+
+// Where earlier releases kept the ledger, which no shipped ignore block
+// lists. A helper sent before an update can still be at work, so the first
+// locked read after it takes the file in: removed first, so a removal that
+// fails carries nothing and one helper is never counted twice, then its fresh
+// entries join the ledger. A malformed or all-stale old file never let a turn
+// end, so it is only removed.
+const OLD_SUBAGENT_INFLIGHT_FILE = ".aidlc-subagent-inflight";
+
+function takeInOldSubagentInflight(projectDir: string): void {
+  const old = join(workspaceRoot(projectDir), OLD_SUBAGENT_INFLIGHT_FILE);
+  if (!existsSync(old)) return;
+  try {
+    const left = readSubagentInflightLedgerAt(old);
+    unlinkSync(old);
+    const carried = left.malformed ? [] : freshSubagentEntries(left.entries, Date.now());
+    if (carried.length === 0) return;
+    const current = readSubagentInflightLedger(projectDir);
+    if (!current.malformed) writeSubagentInflightLedger(projectDir, [...current.entries, ...carried]);
+  } catch {
+    // Left for the next locked read; the caller's own result stands.
+  }
 }
 
 // Freshness window for each background-subagent entry. The Stop hook honours
@@ -71,7 +101,10 @@ export function subagentSessionIdentity(
 }
 
 export function readSubagentInflightLedger(projectDir: string): SubagentInflightRead {
-  const path = subagentInflightMarkerPath(projectDir);
+  return readSubagentInflightLedgerAt(subagentInflightMarkerPath(projectDir));
+}
+
+function readSubagentInflightLedgerAt(path: string): SubagentInflightRead {
   if (!existsSync(path)) return { exists: false, malformed: false, entries: [] };
   try {
     const parsed: unknown = JSON.parse(readFileSync(path, "utf-8"));
@@ -155,10 +188,11 @@ export function markSubagentInflight(
   const identity = subagentSessionIdentity(sessionId);
   if (!identity.valid) return false;
   return withAuditLock(projectDir, () => {
+    takeInOldSubagentInflight(projectDir);
     const current = readSubagentInflightLedger(projectDir);
     if (current.malformed) {
       throw new Error(
-        "background-subagent in-flight ledger is malformed; remove aidlc/.aidlc-subagent-inflight",
+        `background-subagent in-flight ledger is malformed; remove ${shownSubagentInflightPath(projectDir)}`,
       );
     }
     const nowMs = Date.now();
@@ -183,11 +217,12 @@ export function completeSubagentInflight(
   const identity = subagentSessionIdentity(sessionId);
   if (!identity.valid) return false;
   return withAuditLock(projectDir, () => {
+    takeInOldSubagentInflight(projectDir);
     const current = readSubagentInflightLedger(projectDir);
     if (!current.exists) return false;
     if (current.malformed) {
       throw new Error(
-        "background-subagent in-flight ledger is malformed; remove aidlc/.aidlc-subagent-inflight",
+        `background-subagent in-flight ledger is malformed; remove ${shownSubagentInflightPath(projectDir)}`,
       );
     }
     const entries = freshSubagentEntries(current.entries, Date.now());
@@ -214,6 +249,7 @@ export function matchSubagentInflight(
     };
   }
   return withAuditLock(projectDir, () => {
+    takeInOldSubagentInflight(projectDir);
     const current = readSubagentInflightLedger(projectDir);
     if (!current.exists) {
       return {

@@ -1,4 +1,4 @@
-// covers: hook:aidlc-continue-workflow, hook:aidlc-log-subagent, hook:aidlc-deliver-stage-rules, hook:aidlc-session-start, function:markSubagentInflight, function:completeSubagentInflight, function:matchSubagentInflight, function:inspectSubagentInflight, function:subagentInflightMarkerPath, function:SUBAGENT_INFLIGHT_TTL_MS, function:humanTurnMintAllowed
+// covers: hook:aidlc-continue-workflow, hook:aidlc-log-subagent, hook:aidlc-deliver-stage-rules, hook:aidlc-session-start, function:markSubagentInflight, function:completeSubagentInflight, function:matchSubagentInflight, function:inspectSubagentInflight, function:subagentInflightMarkerPath, function:SUBAGENT_INFLIGHT_TTL_MS, function:humanTurnMintAllowed, function:readSubagentInflightLedger, function:freshSubagentEntries, function:subagentSessionIdentity
 //
 // t327 - session-scoped background-subagent Stop-hook carve-out.
 //
@@ -334,7 +334,7 @@ describe("t327 background-subagent Stop-hook carve-out", () => {
     const proj = makeProject();
     seedActive(proj);
     bindSession(proj, "session-a");
-    // What a release up to 2.11.3 wrote: a fresh entry for the helper still at
+    // What an earlier release wrote: a fresh entry for the helper still at
     // work and a stale one nobody cleared.
     const oldPlace = join(proj, "aidlc", ".aidlc-subagent-inflight");
     const startedAtMs = Date.now() - 60 * 1000;
