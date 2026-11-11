@@ -979,6 +979,46 @@ describe("at the home", () => {
     expect(JSON.stringify(again.change_notices ?? []), JSON.stringify(again)).not.toContain("changing every file of refunds");
   });
 
+  // The team's side of case 2: its look sends the fix home, so a lead who
+  // looks only after the branch is gone still sees the merge.
+  test("a team's look at its pushed build sends a review fix by hand home, so a squash after the branch is gone reads merged", () => {
+    const { hosts, home, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    const id8 = fixtureIntentId8(home.dir);
+    const pushed = claimPayload(home.remote, id8, "refunds")?.result?.repos.find((repo) => repo.repo === "checkout-api")?.heads;
+    expect(pushed).toHaveLength(1);
+    const fix = commitOnHost(hosts["checkout-api"], "refunds", { "src/refunds.ts": "export const refunds = 1; // reviewed\n" }, "review fix");
+    next(alice);
+    const sent = claimPayload(home.remote, id8, "refunds")?.result?.repos.find((repo) => repo.repo === "checkout-api");
+    expect(sent?.heads).toEqual([...pushed!, fix]);
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    mergeOnHost(hosts.billing, "refunds", "squash");
+    git(hosts["checkout-api"], ["branch", "-q", "-D", "refunds"]);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    const seen = next(home.dir);
+    expect(claimPayload(home.remote, id8, "refunds"), JSON.stringify(seen)).toMatchObject({ done: true });
+  });
+
+  test("a push again after a fix the person pushed with plain git keeps every head the branch had", () => {
+    const { home, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    const api = join(alice, "checkout-api");
+    writeFileSync(join(api, "src", "refunds.ts"), "export const refunds = 1; // by hand\n");
+    git(api, ["commit", "-q", "-am", "fix by hand"]);
+    git(api, ["push", "-q"]);
+    const byHand = git(api, ["rev-parse", "HEAD"]);
+    writeFileSync(join(api, "src", "refunds.ts"), "export const refunds = 1; // by hand, then AI-DLC\n");
+    const again = run(UNIT, ["push"], alice);
+    expect(again.status, again.out).toBe(0);
+    const heads = claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.result?.repos
+      .find((repo) => repo.repo === "checkout-api")?.heads ?? [];
+    expect(heads).toHaveLength(3);
+    expect(heads[1]).toBe(byHand);
+    expect(heads[2]).toBe(git(api, ["rev-parse", "HEAD"]));
+  });
+
   // The GitHub run's case 3: the host's own commit of a review suggestion, then a squash, the branch kept.
   test("the host's commit of a review suggestion on the Unit's branch, then a squash: merged at the next look", () => {
     const { hosts, home, alice, record } = refundsTaken();

@@ -7891,6 +7891,9 @@ function pushUnit(args: string[], projectDir?: string): void {
     if (takeTree[repo] !== undefined) writeTakeTree(activeRecordDir(pd), takeTree);
   }
   for (const { repo, dir, name, remote, paths } of planned) {
+    // The branch's copy on its remote as last fetched: a commit there that
+    // AI-DLC did not push and this build is on top of stays among its heads.
+    const prior = git(dir, ["rev-parse", "--verify", "--quiet", `refs/remotes/${remote}/${branch}^{commit}`]).stdout.trim();
     const pushed = git(dir, ["push", "-u", remote, branch]);
     if (!pushed.ok) {
       // Its branch on the remote holds commits this build is not on top of (a
@@ -7917,11 +7920,14 @@ function pushUnit(args: string[], projectDir?: string): void {
       (git(dir, ["merge-base", "HEAD", repoIntegration(dir, startRemoteOf(dir, remote))]).stdout.trim() || head);
     const changed = git(dir, ["diff", "--name-only", "--no-renames", base, head, "--", ...paths]).stdout.split(/\r?\n/).filter(Boolean);
     const blobs = blobsAt(dir, head, changed);
+    const last = earlier.get(repo)?.heads.at(-1);
+    const descends = (older: string, newer: string): boolean => git(dir, ["merge-base", "--is-ancestor", older, newer]).ok;
+    const between = prior && last && prior !== last && prior !== head && descends(last, prior) && descends(prior, head) ? [prior] : [];
     const entry: RepoResult = {
       repo,
       branch,
       base,
-      heads: [...new Set([...(earlier.get(repo)?.heads ?? []), head])],
+      heads: [...new Set([...(earlier.get(repo)?.heads ?? []), ...between, head])],
       paths: Object.fromEntries(changed.map((path) => [path, blobs.get(path) ?? null])),
       ...(() => {
         const id = patchIdOf(dir, base, head, changed);
@@ -8525,6 +8531,15 @@ export function buildClaimNotes(projectDir: string, stateContent: string, sessio
     // A take the lead's project did not record then, tried again when the claims were just fetched.
     const standing = home !== null && refreshed?.fetched ? takeStanding(projectDir, build) : null;
     if (home !== null && standing?.state === "pending") recordTakeHere(projectDir, build, home, standing, false);
+    if (home !== null && waits && !refreshed?.unreached) {
+      try {
+        const cached = cachedClaimsForIdentity(projectDir, { space, intentUuid: build.homeWork, intentId8: idSuffix(build.homeWork) }, false)
+          .get(build.unit);
+        if (cached !== undefined && claimIsMine(projectDir, cached)) sendBranchTipsHome(projectDir, build, home, cached);
+      } catch (e) {
+        if (e instanceof GitWriteRefused) throw e;
+      }
+    }
   }
   const aside = takeStanding(projectDir, build);
   if (aside.state === "aside") return [...lines, aside.line];
@@ -8598,6 +8613,39 @@ export function buildClaimNotes(projectDir: string, stateContent: string, sessio
 }
 
 export const BUILD_WAITING_CLAUSE = "Its build is waiting for you; say so to go back to it.";
+
+// A pushed build waiting for its merge: a commit on its Unit branch that
+// AI-DLC did not push (a review fix by hand, a host's suggestion commit,
+// Update branch) goes onto its claim as the result's last head (resultAtTip),
+// so the lead's merge check reads the branch as it is, also once it is
+// deleted. Nothing is said; a write the lead's project does not take is tried
+// again at the next look.
+function sendBranchTipsHome(pd: string, build: UnitBuild, home: HomeWork, cached: UnitClaimView): void {
+  const result = cached.payload.result;
+  if (cached.status !== "claimed" || cached.payload.done || cached.payload.turned_down || result === undefined) return;
+  const tips = new Map<string, RepoResult>();
+  for (const repo of result.repos) {
+    const dir = repo.repo === "." ? pd : repoDir(pd, repo.repo);
+    if (!isGitRepoDir(dir)) continue;
+    const remote = pushRemoteOf(dir, repo.branch);
+    if (typeof remote !== "string") continue;
+    const tracking = `refs/remotes/${remote}/${repo.branch}`;
+    if (!quietFetch(dir, ["-q", remote, `+refs/heads/${repo.branch}:${tracking}`]).ok) continue;
+    const tip = git(dir, ["rev-parse", "--verify", "--quiet", `${tracking}^{commit}`]).stdout.trim();
+    const atTip = tip ? resultAtTip(dir, repoIntegration(dir, startRemoteOf(dir, remote)), repo, tip) : null;
+    if (atTip !== null) tips.set(repo.repo, atTip);
+  }
+  if (tips.size === 0) return;
+  const ref = claimRef(home.id8, build.unit);
+  const on = claimToGoOn(pd, home, build, ref, currentClaim(pd, home.target, ref)).claim;
+  if (on?.status !== "claimed" || on.payload.result === undefined || on.payload.done) return;
+  const repos = on.payload.result.repos.map((repo) => {
+    const atTip = tips.get(repo.repo);
+    return atTip !== undefined && atTip.heads.at(-2) === repo.heads.at(-1) ? atTip : repo;
+  });
+  const payload: UnitClaimPayload = { ...on.payload, predecessor_oid: on.oid, result: { ...on.payload.result, repos } };
+  if (writeHomeClaim(pd, home, ref, createClaimCommit(pd, on.oid, payload), on.oid).ok) invalidateLiveClaimPayloadCache(pd, build.unit);
+}
 
 // The lead's turn-down of another of this clone's Unit builds, said in a chat
 // on any of its work, not only the build it is about: each line once per chat
