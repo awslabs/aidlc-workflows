@@ -161,28 +161,47 @@ export function kiroDefaultAgentName(sessionId: string | undefined, command: str
   if (approveForMe === true) return "";
   const kiro = join(homedir(), ".kiro");
   const workspace = join(kiro, "workspace-roots", basename(dirname(dirname(record))));
-  if (typeof approveForMe !== "boolean" && kiroCliApprovesForMe(workspace)) return "";
+  if (typeof approveForMe !== "boolean" && kiroPoliciesApproveForMe([workspace]) === true) return "";
   return [workspace, join(kiro, "settings")].some((dir) => kiroAlwaysAllows(dir, command)) ? "" : DEFAULT_AGENTS[mode];
 }
 
-// Kiro's permissions.yaml (or .json) in `dir`, parsed; null when there is none
-// or it cannot be read.
-function kiroPermissions(dir: string, file: string): unknown {
+// Kiro's permissions.yaml (or .json) in `dir`: its parsed value, or that there
+// is none or it cannot be read.
+function readKiroPermissions(dir: string, file: string): { value: unknown } | "missing" | "unreadable" {
+  const path = join(dir, file);
+  if (!existsSync(path)) return "missing";
   try {
-    const text = readFileSync(join(dir, file), "utf-8");
-    return file.endsWith(".json") ? JSON.parse(text) : Bun.YAML.parse(text);
+    const text = readFileSync(path, "utf-8");
+    return { value: file.endsWith(".json") ? JSON.parse(text) : Bun.YAML.parse(text) };
   } catch {
-    return null;
+    return "unreadable";
   }
 }
 
-// Kiro CLI's approve for me, as its /permissions writes it for the workspace:
-// `policies: [approve-for-me]`, beside rules or none.
-function kiroCliApprovesForMe(dir: string): boolean {
-  return ["permissions.yaml", "permissions.json"].some((file) => {
-    const policies = recordField(kiroPermissions(dir, file), "policies");
-    return Array.isArray(policies) && policies.includes("approve-for-me");
-  });
+// The same file's parsed value; null when there is none or it cannot be read.
+function kiroPermissions(dir: string, file: string): unknown {
+  const read = readKiroPermissions(dir, file);
+  return typeof read === "object" ? read.value : null;
+}
+
+// Whether Kiro CLI's permission files in `dirs` list its approve for me, as its
+// /permissions writes it: `policies: [approve-for-me]`, beside rules or none.
+// true when one lists it; null when none does and a file there cannot be read;
+// false otherwise. Each caller passes the folders it reads (the hook its chat's
+// workspace, the issue report the person's own settings too); the issue report
+// imports this from the installed tools, so it keeps no copy.
+export function kiroPoliciesApproveForMe(dirs: readonly string[]): boolean | null {
+  let unreadable = false;
+  for (const dir of dirs) {
+    for (const file of ["permissions.yaml", "permissions.json"]) {
+      const read = readKiroPermissions(dir, file);
+      if (read === "unreadable") unreadable = true;
+      if (typeof read !== "object") continue;
+      const policies = recordField(read.value, "policies");
+      if (Array.isArray(policies) && policies.includes("approve-for-me")) return true;
+    }
+  }
+  return unreadable ? null : false;
 }
 
 // A plain Always allow, as Kiro writes it in permissions.yaml (or .json):
