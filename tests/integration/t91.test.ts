@@ -18,12 +18,13 @@
 //   3. Audit-existence guard before the heartbeat write.
 //   4. Heartbeat at aidlc-docs/.aidlc-engine/hooks-health/runtime-compile.last (only
 //      written once the command filter passes).
-//   5. Tail-read the LAST 3 audit blocks (split on /\n---\n/); if any carries
-//      `**Event**: (GATE_APPROVED|STAGE_STARTED|STAGE_AWAITING_APPROVAL|
-//      AUDIT_MERGED|WORKFLOW_COMPLETED)` -> dispatch
-//      `bun run <projectDir>/.claude/tools/aidlc-runtime.ts compile` (which
-//      writes aidlc-docs/runtime-graph.json). MEMORY_EMPTY is deliberately NOT
-//      in the regex (recursion guard at the event level).
+//   5. Tail-read the LAST 3 blocks of this clone's own audit shard (split on
+//      /\n---\n/); if any carries `**Event**: (GATE_APPROVED|STAGE_STARTED|
+//      STAGE_AWAITING_APPROVAL|AUDIT_MERGED|UNIT_MERGED|WORKFLOW_COMPLETED)`, or
+//      the record has no runtime-graph.json yet and any shard carries one ->
+//      dispatch `bun run <projectDir>/.claude/tools/aidlc-runtime.ts compile`
+//      (which writes the record's runtime-graph.json). MEMORY_EMPTY is
+//      deliberately NOT in the regex (recursion guard at the event level).
 //   (The old step 6, test-run propagation to the spawned compile, was removed
 //      per #369 when the test-run mechanism was removed.)
 //
@@ -683,13 +684,15 @@ describe("t91 aidlc-rebuild-stage-graph hook (migrated from t91-runtime-compile-
   const approve = payload("bun .claude/tools/aidlc-state.ts approve --stage intent-capture");
   const status = payload("aidlc status");
 
+  // A graph is already there, so only this clone's own tail can recompile it.
   test("13: another clone's shard sorting after this clone's does not hide this clone's approval", () => {
     const p = makeProject();
+    writeFileSync(graphPath(p), "{\"kept\":true}\n", "utf-8");
     writeFileSync(auditPath(p), AUDIT_GATE_APPROVED, "utf-8");
     writeFileSync(teammatePath(p), AUDIT_NO_TRANSITION, "utf-8");
     const r = runHook(p, approve);
     expect(r.status, r.out).toBe(0);
-    expect(existsSync(graphPath(p))).toBe(true);
+    expect(readFileSync(graphPath(p), "utf-8")).not.toBe("{\"kept\":true}\n");
   });
 
   test("14: a transition at the end of another clone's shard does not make a status command recompile", () => {
