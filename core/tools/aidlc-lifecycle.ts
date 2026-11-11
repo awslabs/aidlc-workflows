@@ -2050,6 +2050,11 @@ async function installVersion(options: {
       }
       return [binaryAsset(target), releaseRuntimeAsset(manifest.version)];
     },
+    // An update of a release already installed checks the installed binary
+    // against the release and never uses a downloaded one, so the installed
+    // binary stands in for the download when its bytes are the release's.
+    onMachine: (manifest, name) =>
+      name === binaryAsset(target) ? installedExecutablePath(manifest.version) : null,
     offline: options.offline,
     baseUrl: options.baseUrl,
     caBundle: options.caBundle,
