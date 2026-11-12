@@ -14,6 +14,35 @@
 import type { HarnessManifest } from "../../scripts/manifest-types.ts";
 import onboardingFills from "./onboarding.fills.ts";
 
+// In Antigravity (`agents_parser.go`), a Markdown agent (`agents/<name>.md`)
+// that omits `tools:` receives `shared.DefaultTools` (read-only: `read_file`,
+// `send_message`, `search_web`, `schedule`), without `write_file`, `edit_file`,
+// or `run_command`. Every AI-DLC persona subagent (including the two reviewers,
+// which write their review files to `.aidlc-engine/reviews/...`, and ensemble
+// collaborators, which write `contributions/<agent>.md`) requires file-write
+// and command tools.
+const PERSONA_AGENTS = [
+  "aidlc-architect-agent",
+  "aidlc-developer-agent",
+  "aidlc-product-lead-agent",
+  "aidlc-architecture-reviewer-agent",
+  "aidlc-composer-agent",
+  "aidlc-product-agent",
+  "aidlc-design-agent",
+  "aidlc-delivery-agent",
+  "aidlc-aws-platform-agent",
+  "aidlc-compliance-agent",
+  "aidlc-devsecops-agent",
+  "aidlc-quality-agent",
+  "aidlc-pipeline-deploy-agent",
+  "aidlc-operations-agent",
+] as const;
+
+const PERSONA_PROMPT_LINES = [
+  `tools: ["read_file", "write_file", "edit_file", "run_command", "manage_task", "send_message", "search_web"]`,
+  "subagent: true",
+];
+
 const manifest: HarnessManifest = {
   name: "antigravity",
   productName: "Antigravity",
@@ -77,6 +106,12 @@ const manifest: HarnessManifest = {
   },
 
   rulesRename: null,
+
+  frontmatterAdditions: PERSONA_AGENTS.map((agent) => ({
+    file: `agents/${agent}.md`,
+    lines: PERSONA_PROMPT_LINES,
+  })),
+  pluginAgentFrontmatter: PERSONA_PROMPT_LINES,
 
   runnerFrontmatterAdditions: ["disable-model-invocation: true"],
 
