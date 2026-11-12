@@ -9,7 +9,7 @@
 //     {turn,flag,source,ts} + writes the dispatch relay to stdout.
 //     Unambiguous compose/routing invocations are pre-dispatched with the exact
 //     argv and their directive is injected; ambiguous freeform invocations
-//     stamp the exact argv in aidlc/.aidlc-forwarding-latch.
+//     stamp the exact argv in aidlc/.aidlc-sessions/.kiro-cli-forwarding-latch.json.
 //   pretool-block (preToolUse) — the hard floor: a TRULY BARE advancing
 //     `aidlc engine orchestrate next` while the latch is fresh-for-this-turn
 //     (latch.turn === counter) → exit 2 (Kiro BLOCK). Any deliberate move
@@ -36,7 +36,7 @@ import {
 } from "../harness/test-budget.ts";
 import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -115,7 +115,7 @@ function promptWithNext(args: string): string {
 const counterPath = (dir: string) => join(dir, "aidlc", ".aidlc-turn-counter");
 const latchPath = (dir: string) => join(dir, "aidlc", ".aidlc-readonly-latch");
 const forwardingPath = (dir: string) =>
-  join(dir, "aidlc", ".aidlc-forwarding-latch");
+  join(dir, "aidlc", ".aidlc-sessions", ".kiro-cli-forwarding-latch.json");
 
 describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
   test("native state-transition guard routes through the compiled hook ABI", () => {
@@ -658,6 +658,7 @@ describe("t180 pretool-block roll-forward backstop (exit-code contract)", () => 
     args: string[],
   ): void {
     writeFileSync(counterPath(dir), `${counter}\n`, "utf-8");
+    mkdirSync(dirname(forwardingPath(dir)), { recursive: true });
     writeFileSync(
       forwardingPath(dir),
       `${JSON.stringify({ turn: counter, raw, args })}\n`,

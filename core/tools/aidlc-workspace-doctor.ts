@@ -42,8 +42,11 @@ export interface DoctorCheck {
   fix?: string;
 }
 
-// Written and removed only by the Kiro CLI (V2) hook adapter
-// (harness/kiro/hooks/aidlc-kiro-adapter.ts), which owns its name.
+// The name earlier releases of the Kiro CLI (V2) hook adapter
+// (harness/kiro/hooks/aidlc-kiro-adapter.ts, forwardingLatchPath) wrote its
+// forwarding latch under; it now writes inside the git-ignored sessions
+// folder, so a file here is one left behind, which a project may have
+// committed.
 const FORWARDING_LATCH = "aidlc/.aidlc-forwarding-latch";
 
 /**
@@ -60,10 +63,10 @@ export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
   const syncCmd = aidlcToolInvocation("workspace-sync");
 
   // W1c first - Files that hold the person's words and that git can see (the
-  // request folder, the Kiro CLI (V2) forwarding latch): one committed before
-  // it was ignored stays tracked, so each later request changes it in git, and
-  // a project whose .gitignore part is older, or a later rule of the team's,
-  // leaves it unignored. Doctor names the steps and never runs them; while
+  // request folder, the forwarding latch an earlier Kiro CLI (V2) release
+  // left): one committed before it was ignored stays tracked (a request file
+  // changes in git with each later request), and a project whose .gitignore
+  // part is older, or a later rule of the team's, leaves it unignored. Doctor names the steps and never runs them; while
   // either row stands, W1 gives no commit command, since `git add aidlc/`
   // would take the words in.
   const git = (args: string[], input?: string) =>
@@ -78,9 +81,9 @@ export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
   const entries = (bytes: Uint8Array): string[] =>
     [...new Set(new TextDecoder().decode(bytes).split("\0").filter(Boolean))];
   // One row for each place that holds the person's words: the request folder,
-  // and the Kiro CLI (V2) hook's forwarding latch, the first call it named for
-  // a request of theirs, which `git add aidlc/` took in before the .gitignore
-  // part listed it.
+  // and the forwarding latch earlier Kiro CLI (V2) releases left in aidlc/, the
+  // first call the hook named for a request of theirs, which `git add aidlc/`
+  // took in before the .gitignore part listed it.
   const heldWordsRow = (held: {
     name: string;
     path: string;

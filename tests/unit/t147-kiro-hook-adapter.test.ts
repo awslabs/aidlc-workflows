@@ -1212,7 +1212,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
         writeFileSync(join(dir, "next-response.txt"), response);
         const result = runAdapter(dir, "verb-intercept", { cwd: dir, prompt });
         expect(result.code).toBe(0);
-        const latch = join(dir, "aidlc", ".aidlc-forwarding-latch");
+        const latch = join(dir, "aidlc", ".aidlc-sessions", ".kiro-cli-forwarding-latch.json");
         if (packetBytes <= 10 * 1024) {
           expect(Buffer.byteLength(result.stdout)).toBe(packetBytes);
           expect(result.stdout).toContain(`--- DIRECTIVE ---\n${response}\n--- END DIRECTIVE ---`);
@@ -1324,7 +1324,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
         expect(guard("").code).toBe(2);
         expect(guard(" --stage reverse-engineering").code).toBe(2);
         expect(guard(` ${raw}`).code).toBe(0);
-        expect(existsSync(join(dir, "aidlc", ".aidlc-forwarding-latch"))).toBe(false);
+        expect(existsSync(join(dir, "aidlc", ".aidlc-sessions", ".kiro-cli-forwarding-latch.json"))).toBe(false);
         // Actual child stdout carries the entire packet, including the final
         // token; no hook prefix or simulated truncation participates in delivery.
         const tool = runEngine(dir, ["next", ...args]);
@@ -2821,7 +2821,7 @@ describe("t147 Kiro CLI reads what the person typed from the expanded skill body
       expect(r.code, r.stderr).toBe(0);
       const call = "engine orchestrate next fix the '`parse`' step so the totals add up";
       expect(r.stdout).toContain(`${call}\n`);
-      const latch = join(dir, "aidlc", ".aidlc-forwarding-latch");
+      const latch = join(dir, "aidlc", ".aidlc-sessions", ".kiro-cli-forwarding-latch.json");
       expect(JSON.parse(readFileSync(latch, "utf8")).args).toEqual(words);
       const guard = (command: string) => runAdapter(dir, "guard-tool-call", {
         cwd: dir, tool_name: "execute_bash", tool_input: { command },
@@ -2860,7 +2860,7 @@ describe("t147 Kiro CLI reads what the person typed from the expanded skill body
         const r = runAdapter(dir, "verb-intercept", { cwd: dir, session_id: session, prompt: expanded(said) }, [], env);
         expect(r.code, r.stderr).toBe(0);
         expect(r.stdout).toContain(`engine orchestrate next ${call}\n`);
-        expect(JSON.parse(readFileSync(join(dir, "aidlc", ".aidlc-forwarding-latch"), "utf8")).args).toEqual(words);
+        expect(JSON.parse(readFileSync(join(dir, "aidlc", ".aidlc-sessions", ".kiro-cli-forwarding-latch.json"), "utf8")).args).toEqual(words);
         if (process.platform !== "win32") {
           const shell = spawnSync("sh", ["-c", `printf '%s\\n' ${call}`], { encoding: "utf-8" });
           expect(shell.status, shell.stderr).toBe(0);
@@ -2883,7 +2883,7 @@ describe("t147 Kiro CLI reads what the person typed from the expanded skill body
         cwd: dir, tool_name: "execute_bash", tool_input: { command },
       });
       const run = (line: string) => `bun .kiro/tools/aidlc.ts engine orchestrate next ${line}`;
-      const latch = join(dir, "aidlc", ".aidlc-forwarding-latch");
+      const latch = join(dir, "aidlc", ".aidlc-sessions", ".kiro-cli-forwarding-latch.json");
       // Each call line from `engine` on, whatever invocation this tree prints before it.
       const calls = (stdout: string) => stdout.replace(/^.*(?=engine orchestrate next )/gm, "");
       const said = "classic Build a notes app";
@@ -2951,12 +2951,42 @@ describe("t147 Kiro CLI reads what the person typed from the expanded skill body
       expect(cut.stderr).not.toContain("is the plan they named");
       expect(guard(run(`classic '${long.slice("classic ".length)}'`)).code).toBe(0);
 
-      // A setting after the name stays a setting: it is never folded into their text.
-      const setting = "express: --review advisory add a version flag";
-      const flagged = runAdapter(dir, "verb-intercept", { cwd: dir, session_id: session, prompt: expanded(setting) }, [], env);
-      expect(flagged.code, flagged.stderr).toBe(0);
+      // A flag-shaped word after the name may be a setting or part of what they
+      // want: the hook names the line as typed, where the engine reads the
+      // setting, and the check takes the skill's grouped call too. A `--` keeps
+      // its meaning and gets no grouped call.
+      for (const said of ["express: add a --review advisory option", "classic add a --review advisory option"]) {
+        const flagged = runAdapter(dir, "verb-intercept", { cwd: dir, session_id: session, prompt: expanded(said) }, [], env);
+        expect(flagged.code, flagged.stderr).toBe(0);
+        expect(calls(flagged.stdout)).toContain(
+          "Your first tool call is exactly the call below, every argument kept; do not run a bare `next`.\n\n" +
+            `engine orchestrate next ${said}\n`,
+        );
+        const [name, ...rest] = said.split(" ");
+        expect(guard(run(`${name} '${rest.join(" ")}'`)).code).toBe(0);
+      }
+      runAdapter(dir, "verb-intercept", { cwd: dir, session_id: session, prompt: expanded("express: add -- a version flag") }, [], env);
       expect(JSON.parse(readFileSync(latch, "utf8")).plan).toBeUndefined();
-      expect(guard(run("express: '--review advisory add a version flag'")).code).toBe(2);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  // A latch an earlier release wrote as aidlc/.aidlc-forwarding-latch may be
+  // committed in the project: a later request never writes its words there.
+  test("a forwarding latch git tracks under the earlier name is never written again", () => {
+    const dir = scratchProject(true);
+    try {
+      const g = (...args: string[]) => spawnSync("git", ["-C", dir, ...args], { encoding: "utf-8" });
+      expect(g("init", "-q").status).toBe(0);
+      const legacy = join(dir, "aidlc", ".aidlc-forwarding-latch");
+      writeFileSync(legacy, '{"turn":1,"raw":"my first words","args":["my","first","words"]}\n', "utf-8");
+      g("add", "aidlc/.aidlc-forwarding-latch");
+      g("-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "an earlier commit");
+      const r = runAdapter(dir, "verb-intercept", { cwd: dir, session_id: session, prompt: expanded("my secret token is hunter2") }, [], env);
+      expect(r.code, r.stderr).toBe(0);
+      expect(readFileSync(legacy, "utf8")).toBe('{"turn":1,"raw":"my first words","args":["my","first","words"]}\n');
+      expect(g("status", "--porcelain", "--", "aidlc/.aidlc-forwarding-latch").stdout).toBe("");
+      expect(JSON.parse(readFileSync(join(dir, "aidlc", ".aidlc-sessions", ".kiro-cli-forwarding-latch.json"), "utf8")).raw)
+        .toBe("my secret token is hunter2");
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
@@ -2965,7 +2995,11 @@ describe("t147 Kiro CLI reads what the person typed from the expanded skill body
   test("every per-turn file the adapter writes under aidlc/ is git-ignored", () => {
     const source = readFileSync(join(REPO_ROOT, "harness", "kiro", "hooks", "aidlc-kiro-adapter.ts"), "utf-8");
     const names = [...new Set([...source.matchAll(/join\([^()]*"aidlc",\s*"(\.aidlc-[^"]+)"/g)].map((m) => m[1]))];
-    expect(names).toContain(".aidlc-forwarding-latch");
+    expect(names).toContain(".aidlc-turn-counter");
+    // The forwarding latch lives in the sessions folder (forwardingLatchPath),
+    // and the name earlier releases wrote stays ignored for a file left behind.
+    expect(source).toContain('join(sessionsDir(projectDir), ".kiro-cli-forwarding-latch.json")');
+    names.push(".aidlc-sessions/.kiro-cli-forwarding-latch.json", ".aidlc-forwarding-latch");
     const repo = mkdtempSync(join(tmpdir(), "t147-ignore-"));
     try {
       expect(spawnSync("git", ["init", "-q"], { cwd: repo }).status).toBe(0);
@@ -2995,7 +3029,7 @@ describe("t147 Kiro CLI reads what the person typed from the expanded skill body
       const r = runAdapter(dir, "verb-intercept", { cwd: dir, session_id: session, prompt: expanded(said) }, [], env);
       expect(r.code, r.stderr).toBe(0);
       const words = ["fix", "it,", "it's", "broken", "and", "don't", "touch", "the", "users'", "files"];
-      const latch = join(dir, "aidlc", ".aidlc-forwarding-latch");
+      const latch = join(dir, "aidlc", ".aidlc-sessions", ".kiro-cli-forwarding-latch.json");
       expect(JSON.parse(readFileSync(latch, "utf8")).args).toEqual(words);
       // PowerShell reads a bare comma as a list and gets its own single-quoted form for every word that is not bare.
       const quoted = process.platform === "win32"
@@ -3090,7 +3124,7 @@ describe("t147 Kiro CLI reads what the person typed from the expanded skill body
       const r = runAdapter(dir, "verb-intercept", { cwd: dir, session_id: session, prompt: expanded(said) }, [], env);
       expect(r.code, r.stderr).toBe(0);
       const forwarded = /engine orchestrate next (.*)\n/.exec(r.stdout)?.[1] ?? "";
-      const latch = JSON.parse(readFileSync(join(dir, "aidlc", ".aidlc-forwarding-latch"), "utf8")).args as string[];
+      const latch = JSON.parse(readFileSync(join(dir, "aidlc", ".aidlc-sessions", ".kiro-cli-forwarding-latch.json"), "utf8")).args as string[];
       expect(forwarded.length).toBeGreaterThan(0);
       return { forwarded, latch };
     };
@@ -3231,10 +3265,10 @@ describe("the forwarded call is accepted as written", () => {
     const dir = scratchProject(true);
     try {
       const raw = String.raw`'can''t open C:\temp\x'`;
-      mkdirSync(join(dir, "aidlc"), { recursive: true });
+      mkdirSync(join(dir, "aidlc", ".aidlc-sessions"), { recursive: true });
       writeFileSync(join(dir, "aidlc", ".aidlc-turn-counter"), "1\n");
       writeFileSync(
-        join(dir, "aidlc", ".aidlc-forwarding-latch"),
+        join(dir, "aidlc", ".aidlc-sessions", ".kiro-cli-forwarding-latch.json"),
         `${JSON.stringify({ turn: 1, raw, args: [String.raw`can't open C:\temp\x`] })}\n`,
       );
       const guard = (command: string) => runAdapter(dir, "guard-tool-call", {
