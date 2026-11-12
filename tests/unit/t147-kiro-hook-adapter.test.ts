@@ -2965,8 +2965,11 @@ describe("t147 Kiro CLI reads what the person typed from the expanded skill body
         const [name, ...rest] = said.split(" ");
         expect(guard(run(`${name} '${rest.join(" ")}'`)).code).toBe(0);
       }
-      runAdapter(dir, "verb-intercept", { cwd: dir, session_id: session, prompt: expanded("express: add -- a version flag") }, [], env);
-      expect(JSON.parse(readFileSync(latch, "utf8")).plan).toBeUndefined();
+      const marked = runAdapter(dir, "verb-intercept", { cwd: dir, session_id: session, prompt: expanded("express: add -- a version flag") }, [], env);
+      expect(marked.code, marked.stderr).toBe(0);
+      const unmarked = JSON.parse(readFileSync(latch, "utf8"));
+      expect(unmarked.args).toEqual(["express:", "add", "--", "a", "version", "flag"]);
+      expect(unmarked.plan).toBeUndefined();
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
@@ -2975,12 +2978,18 @@ describe("t147 Kiro CLI reads what the person typed from the expanded skill body
   test("a forwarding latch git tracks under the earlier name is never written again", () => {
     const dir = scratchProject(true);
     try {
-      const g = (...args: string[]) => spawnSync("git", ["-C", dir, ...args], { encoding: "utf-8" });
+      // A scratch repository of its own: no hooks or repository of the caller's.
+      const gitEnv = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" } as NodeJS.ProcessEnv;
+      delete gitEnv.GIT_DIR;
+      delete gitEnv.GIT_INDEX_FILE;
+      delete gitEnv.GIT_WORK_TREE;
+      const g = (...args: string[]) => spawnSync("git", ["-C", dir, "-c", "core.hooksPath=/dev/null", ...args], { encoding: "utf-8", env: gitEnv });
       expect(g("init", "-q").status).toBe(0);
       const legacy = join(dir, "aidlc", ".aidlc-forwarding-latch");
       writeFileSync(legacy, '{"turn":1,"raw":"my first words","args":["my","first","words"]}\n', "utf-8");
-      g("add", "aidlc/.aidlc-forwarding-latch");
-      g("-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "an earlier commit");
+      expect(g("add", "aidlc/.aidlc-forwarding-latch").status).toBe(0);
+      expect(g("-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "an earlier commit").status).toBe(0);
+      expect(g("ls-files", "--", "aidlc/.aidlc-forwarding-latch").stdout.trim()).toBe("aidlc/.aidlc-forwarding-latch");
       const r = runAdapter(dir, "verb-intercept", { cwd: dir, session_id: session, prompt: expanded("my secret token is hunter2") }, [], env);
       expect(r.code, r.stderr).toBe(0);
       expect(readFileSync(legacy, "utf8")).toBe('{"turn":1,"raw":"my first words","args":["my","first","words"]}\n');

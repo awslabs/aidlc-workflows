@@ -66,9 +66,9 @@ export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
   // request folder, the forwarding latch an earlier Kiro CLI (V2) release
   // left): one committed before it was ignored stays tracked (a request file
   // changes in git with each later request), and a project whose .gitignore
-  // part is older, or a later rule of the team's, leaves it unignored. Doctor names the steps and never runs them; while
-  // either row stands, W1 gives no commit command, since `git add aidlc/`
-  // would take the words in.
+  // part is older, or a later rule of the team's, leaves it unignored. Doctor
+  // names the steps and never runs them; while either row stands, W1 gives no
+  // commit command, since `git add aidlc/` would take the words in.
   const git = (args: string[], input?: string) =>
     Bun.spawnSync({
       cmd: ["git", "-C", projectDir, ...args],
