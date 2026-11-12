@@ -1,4 +1,5 @@
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
+import { phaseReviewRole } from "./aidlc-review-granularity.ts";
 import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
 import { CHECKPOINT_GLOSS } from "./aidlc-guard-fences.ts";
 import { git, isGitRepo } from "./aidlc-git.ts";
@@ -30,6 +31,7 @@ import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import { putBackBeforePick, sayWritesDuringWork } from "./aidlc-before-pick.ts";
 import { buildStartListing, unitSourceManifests } from "./aidlc-brought-files.ts";
 import {
+  gateDispositionStages,
   approvalDispositionField,
   rejectedFindingDispositionField,
   REVIEW_FINDING_DISPOSITIONS_FIELD,
@@ -5402,6 +5404,9 @@ function verifyReviewerPrecondition(
   requireReceiptExistence = true,
   personCall?: PersonApproval,
   keptReview?: KeptReview,
+  // Set only on the recursive covered-stage check an anchor's gate runs under
+  // phase granularity; it keeps that check from reading its own deferral.
+  coveredFor?: string,
 ): void {
   if (!stage.reviewer) return; // stage declares no reviewer — nothing to enforce
 
@@ -5422,6 +5427,15 @@ function verifyReviewerPrecondition(
   if (reviewClass === "none") {
     return;
   }
+
+  // Phase granularity: a deferred ideation/inception stage owes its receipt at
+  // its reviewer's anchor stage, whose gate re-enters this same precondition
+  // for it (coveredFor), so the directive emit and this check read one rule.
+  // Computed once; the anchor branch below reuses it.
+  const phaseRole = coveredFor === undefined && !autonomousSwarm
+    ? phaseReviewRole(stage, getField(content, "Scope") ?? "", content)
+    : { role: "stage" as const };
+  if (phaseRole.role === "deferred") return;
 
   const reviewer = stage.reviewer;
 
@@ -5658,9 +5672,24 @@ function verifyReviewerPrecondition(
           reviewer,
           receipts,
           action,
+          coveredFor,
         );
       }
-      reviewerPreconditionError(pd, content, stage, reviewer, receipts, action);
+      reviewerPreconditionError(pd, content, stage, reviewer, receipts, action, coveredFor);
+    }
+    // Phase granularity: the anchor's gate also stands on each covered stage's
+    // own receipt, through this same precondition, so a grouped review that was
+    // skipped or went stale refuses here with that stage's exact next step.
+    if (phaseRole.role === "anchor") {
+      for (const covered of phaseRole.covers) {
+        const coveredNode = findStageBySlug(covered.slug);
+        if (coveredNode) {
+          verifyReviewerPrecondition(
+            pd, content, coveredNode, action, requireReceiptExistence,
+            personCall, undefined, stage.slug,
+          );
+        }
+      }
     }
     return;
   }
@@ -6071,6 +6100,10 @@ function staleReviewPreconditionError(
   reviewer: string,
   receipts: ReturnType<typeof freshReviewReceipts>,
   action: ReviewerPreconditionAction = "complete",
+  // Set when an anchor's gate runs this check for a covered stage (phase
+  // granularity): the named request carries --covered-by so the logger admits
+  // it, and the line says the receipt reopens nothing.
+  coveredBy?: string,
 ): never {
   const slug = stage.slug;
   const written = receipts.stageWrittenPaths.length > 0
@@ -6099,7 +6132,7 @@ function staleReviewPreconditionError(
     `${reviewerPreconditionPrefix(slug, action)} because an output document changed after ` +
       `${reviewer} reviewed it.${written} ${syncFolderClause(pd)}Run ` +
       `one recovery review pass with \`aidlc-log.ts review --stage ${slug} ` +
-      `--reviewer ${reviewer} --iteration <next ordinal>\`, then record the verdict ` +
+      `--reviewer ${reviewer} --iteration <next ordinal>${coveredBy === undefined ? "" : ` --covered-by "${coveredBy}"`}\`, then record the verdict ` +
       `with the same command plus \`--verdict <READY|NOT-READY>\`. After that ` +
       `review, stop editing this stage's output documents. If the recovery pass was already ` +
       `spent: ${recoveryGuidance(pd, content, slug)} Only a human Request Changes decision ` +
@@ -6133,6 +6166,10 @@ function reviewerPreconditionError(
   reviewer: string,
   receipts: ReturnType<typeof freshReviewReceipts>,
   action: ReviewerPreconditionAction = "complete",
+  // Set for an anchor gate's covered-stage check (phase granularity): the
+  // named request carries --covered-by and the line says the grouped receipt
+  // reopens nothing, so redoing the approved stage is never the only way on.
+  coveredBy?: string,
 ): never {
   const slug = stage.slug;
   const pending = receipts.stagePending;
@@ -6156,9 +6193,9 @@ function reviewerPreconditionError(
   if (action === "present-approval-gate") {
     const message =
       `Cannot present "${slug}" for approval because ${reviewer} has not reviewed the ` +
-        `current output. Apply any fixes first, then request the review with ` +
+        `current output. ${coveredBy === undefined ? "Apply any fixes first, then request" : "It is part of this gate's grouped phase review, so recording it reopens nothing: request"} the review with ` +
         `\`aidlc-log.ts review --stage ${slug} --reviewer ${reviewer} --iteration ` +
-        `${ordinal}\` and record its verdict with the same command plus ` +
+        `${ordinal}${coveredBy === undefined ? "" : ` --covered-by "${coveredBy}"`}\` and record its verdict with the same command plus ` +
         `\`--verdict <READY|NOT-READY>\`. After recording the verdict, do not edit ` +
         `this stage's output documents; include suggestions from a READY review in the ` +
         `approval summary instead.`;
@@ -6172,8 +6209,8 @@ function reviewerPreconditionError(
   }
   const message =
     `Cannot complete "${slug}" because ${reviewer} has not reviewed the current output. ` +
-      `Apply any fixes first, then request the review with \`aidlc-log.ts review --stage ` +
-      `${slug} --reviewer ${reviewer} --iteration ${ordinal}\` and record its verdict ` +
+      `${coveredBy === undefined ? "Apply any fixes first, then request" : "It is part of this gate's grouped phase review, so recording it reopens nothing: request"} the review with \`aidlc-log.ts review --stage ` +
+      `${slug} --reviewer ${reviewer} --iteration ${ordinal}${coveredBy === undefined ? "" : ` --covered-by "${coveredBy}"`}\` and record its verdict ` +
       `with the same command plus \`--verdict <READY|NOT-READY>\`. After recording the ` +
       `verdict, do not edit this stage's output documents; include suggestions from a ` +
       `READY review in the approval summary instead.`;
@@ -8548,7 +8585,9 @@ function handleApprove(args: string[]): void {
   });
   const reviewFindingDispositions = approvalDispositionField(
     pd,
-    stage,
+    // An anchor's Approve decides the grouped pass's findings too (phase
+    // granularity); everywhere else this is just [stage].
+    gateDispositionStages(pd, stage),
     undefined,
     autonomousDecision ? "nobody" : "person",
     fixFindings,
@@ -8904,7 +8943,9 @@ function handleReject(args: string[]): void {
 
   const reviewFindingDispositions = rejectedFindingDispositionField(
     pd,
-    teamGate?.stages ?? stage,
+    // A covered stage's finding shown at the anchor's gate is decidable there
+    // (phase granularity); everywhere else this is just [stage].
+    teamGate?.stages ?? gateDispositionStages(pd, stage),
     rejectedFindings,
     teamGate?.unit,
     reopenedFindings,

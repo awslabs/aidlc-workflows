@@ -10,10 +10,11 @@ import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pend
 import { CHANGE_NOTICES_NOTE, otherWorkNote, reviewRequestNote, reviewVerdictNote } from "./aidlc-directive.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
+import { phaseReviewRole, resolveReviewGranularity } from "./aidlc-review-granularity.ts";
 import { prepareReviewCopy, removeReviewCopy, sweepReviewCopies } from "./aidlc-kiro-review-copy.ts";
 import {
   askedQuestionFields,
@@ -127,6 +128,8 @@ import {
   formatReceivedReply,
   freshReviewReceipts,
   filterProducesByKind,
+  auditShardDir,
+  auditShardName,
   getField,
   guardAttemptState,
   guardRefusalOutput,
@@ -4010,6 +4013,37 @@ function completionChecksHold(pd: string, stage: string, unit: string | undefine
   }
 }
 
+// Lightweight review measurement: one JSONL line per request and per terminal
+// verdict, beside the audit shards, stamped with the effective review
+// granularity so a workshop can compare stage- and phase-granularity runs
+// (duration = a verdict row's `at` minus its matching request row's). Kept
+// PER CLONE like the audit shards themselves (`audit/review-metrics-<the
+// clone's shard stem>.jsonl`), so teammates' clones never append to one
+// committed file and a pull never meets a merge conflict in a file the tool
+// wrote. Advisory only: a failed append never blocks a receipt, and nothing
+// reads the files back; shard readers ignore non-`.md` names.
+function appendReviewMetric(
+  pd: string,
+  intent: string | undefined,
+  space: string | undefined,
+  entry: Record<string, unknown>,
+): void {
+  try {
+    const dir = auditShardDir(pd, intent, space);
+    if (dir === null) return;
+    mkdirSync(dir, { recursive: true });
+    const state = intent ? readStateFile(pd, intent, space) : "";
+    const scope = getField(state, "Scope") ?? "";
+    const stem = auditShardName(pd).replace(/\.md$/, "");
+    appendFileSync(
+      join(dir, `review-metrics-${stem}.jsonl`),
+      `${JSON.stringify({ at: isoTimestamp(), granularity: resolveReviewGranularity(scope, state), ...entry })}\n`,
+    );
+  } catch {
+    // Advisory measurement only.
+  }
+}
+
 function handleReview(args: string[]): void {
   const { flags } = parseFlags(args);
   if (!flags.stage) error("Missing --stage <slug>");
@@ -4166,6 +4200,55 @@ function handleReview(args: string[]): void {
         else budget = node.reviewer_max_iterations ?? 2;
       } catch {
         // Class resolution fails open; ordinal enforcement remains active.
+      }
+    }
+    // Phase granularity is enforced HERE, not only at directive emission: an
+    // agent that reads the stage file's `reviewer:` and dispatches anyway is
+    // refused with the anchor named, so the grouping holds on every harness.
+    // The anchor's grouped pass admits a covered stage with
+    // `--covered-by <anchor>` (validated against phaseReviewRole, never
+    // trusted), a review the person asked for with --person-asked, and a
+    // retry of an admitted pending request as before. Verdicts close
+    // already-admitted requests, so only new requests are judged.
+    if (
+      flags.verdict === undefined &&
+      !retryPending &&
+      flags.single !== "true" &&
+      flags.unit === undefined &&
+      !autonomousCandidate
+    ) {
+      const role = phaseReviewRole(node, getField(state, "Scope") ?? "", state);
+      if (role.role === "deferred") {
+        const coveredBy = flags["covered-by"];
+        // A review the person asked for lifts the deferral the way it lifts
+        // the budget: the conductor's say-so alone (--person-asked with no
+        // proved message) lifts nothing.
+        const personAsked = flags["person-asked"] === "true" && flags.message !== undefined && (() => {
+          const proof = proveMessage(pd, flags.message, "request", { request: true });
+          if ("refusal" in proof) error(proof.refusal);
+          // The same recency rule as the budget lift: the message has to have
+          // been sent since this review was last requested, so a stale id
+          // cannot reopen the deferral.
+          return messageSinceReviewRequest(
+            pd, flags.stage as string, flags.reviewer as string, flags.unit, proof.message, intent, space,
+          );
+        })();
+        if (coveredBy !== role.anchor && !personAsked) {
+          const anchorName = loadStageGraphAll().find((entry) => entry.slug === role.anchor)?.name ?? role.anchor;
+          refuseReview(
+            `Reviews are grouped per phase for this piece of work: "${flags.stage}"'s review runs at ` +
+              `${anchorName}'s step, which records this stage's own receipt, so nothing is owed here: ` +
+              `go on to this stage's approval gate. The grouped pass requests it with ` +
+              `--covered-by "${role.anchor}"; a review the person asked for runs now with ` +
+              `--person-asked --message <their message id>.`,
+          );
+        }
+      } else if (flags["covered-by"] !== undefined) {
+        refuseReview(
+          `Cannot record review for "${flags.stage}": --covered-by "${flags["covered-by"]}" does not ` +
+            `match this stage's review plan (it reviews ${role.role === "anchor" ? "as its group's anchor" : "at its own step"}). ` +
+            `Drop --covered-by and request it as the stage's own review.`,
+        );
       }
     }
     // Receipt freshness is needed only while minting REVIEW_REQUESTED (to
@@ -4634,6 +4717,17 @@ function handleReview(args: string[]): void {
         // The one request that still works when a pending review can never
         // finish (see replaceIteration below): named in every refusal that would
         // otherwise leave the conductor restoring bytes it cannot restore.
+        // A deferred stage's named next request carries --covered-by, so the
+        // step the refusal hands over is admitted first time (phase review).
+        const deferredAnchor = ((): string | null => {
+          try {
+            if (flags.unit !== undefined || flags.single === "true") return null;
+            const role = phaseReviewRole(node, getField(state, "Scope") ?? "", state);
+            return role.role === "deferred" ? role.anchor : null;
+          } catch {
+            return null;
+          }
+        })();
         const requestAgain = (n: number): string => renderReviewRequestCommand({
           projectDir: pd,
           stage: flags.stage,
@@ -4641,7 +4735,7 @@ function handleReview(args: string[]): void {
           ...(flags.unit ? { unit: flags.unit } : {}),
           ...(flags.single === "true" ? { single: true } : {}),
           iteration: n,
-        });
+        }) + (deferredAnchor === null ? "" : ` --covered-by "${deferredAnchor}"`);
         const startAgain = (n: number): string =>
           pendingStatus?.iteration === n && pendingStatus.replaceable
             ? ` It never got a verdict, so request it again instead: \`${requestAgain(n)}\`.`
@@ -5056,6 +5150,14 @@ function handleReview(args: string[]): void {
     // The reviewer is told which files another open piece of work in this
     // folder claims, as the build was, so it raises no finding about them.
     const otherWork = workspaceStage ? otherOpenWorkClaims(pd, flags.stage) : [];
+    appendReviewMetric(pd, intent, space, {
+      event: "request",
+      stage: flags.stage,
+      ...(flags.unit ? { unit: flags.unit } : {}),
+      reviewer: flags.reviewer,
+      iteration,
+      ...(retried ? { retry: true } : {}),
+    });
     // A Code Generation plan the person approved that changed and was built
     // without asking them again: the reviewer is told, so the plan-approval
     // record beside the plan does not read as a missing approval.
@@ -5114,6 +5216,9 @@ function handleReview(args: string[]): void {
   const reviewFileFlag = flags["review-file"];
   let recordPath: string | null = null;
   let reviewMarkdown: string | null = null;
+  // Findings counts for the review-metrics line, taken from the record's own
+  // findings list while it is in scope.
+  let metricFindings: Record<string, number> | null = null;
   const verdictChangeNotices: string[] = [];
   // What the verdict was recorded against, for the step it hands the agent.
   const recorded: {
@@ -5644,6 +5749,11 @@ function handleReview(args: string[]): void {
           ),
         ];
       }
+      metricFindings = {
+        findings_new: findings.filter((finding) => finding.status === "New" || finding.introducedInReview).length,
+        findings_resolved: findings.filter((finding) => finding.resolvedByReviewer || finding.status === "Resolved").length,
+        findings_total: findings.length,
+      };
       const record: ReviewRecord = {
         version: 1,
         stage: flags.stage,
@@ -5793,6 +5903,15 @@ function handleReview(args: string[]): void {
       personAsked: false,
       recovery: false,
     });
+  appendReviewMetric(pd, intent, space, {
+    event: "verdict",
+    stage: flags.stage,
+    ...(flags.unit ? { unit: flags.unit } : {}),
+    reviewer: flags.reviewer,
+    iteration,
+    verdict,
+    ...(metricFindings ?? {}),
+  });
   console.log(JSON.stringify({
     emitted: "REVIEW_COMPLETED",
     stage: flags.stage,

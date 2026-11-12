@@ -537,6 +537,7 @@ function scratchProject(): string {
   cpSync(join(AIDLC_SRC, "hooks", "review-freeze-command.ts"), join(dir, ".claude", "hooks", "review-freeze-command.ts"));
   for (const t of [
     "aidlc-lib.ts",
+    "aidlc-review-granularity.ts",
     "aidlc-artifact-vocabulary.ts",
     "aidlc-settings.ts",
     "aidlc-markdown.ts",

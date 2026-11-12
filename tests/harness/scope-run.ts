@@ -1459,6 +1459,16 @@ export class AgentStandIn {
       if (!Number.isInteger(named) || named === iteration) throw error;
       this.reviewPass(stage, unit, String(d.reviewer), named);
     }
+    // §12a Phase review: an anchor's directive lists the deferred stages the
+    // one grouped dispatch also covers; each records its own stage's receipt.
+    const covers = Array.isArray(d.review_covers)
+      ? (d.review_covers as Array<{ slug?: unknown }>)
+      : [];
+    for (const covered of covers) {
+      const slug = String(covered.slug);
+      const last = this.reviews.get(`${slug} `);
+      this.reviewPass(slug, null, String(d.reviewer), last ? last.iteration + 1 : 1, false, String(d.stage));
+    }
     this.hooks.afterReview?.(stage, unit, this);
   }
 
@@ -1473,10 +1483,11 @@ export class AgentStandIn {
     this.reviewPass(stage, unit, last.reviewer, iteration ?? last.iteration + 1, personAsked);
   }
 
-  private reviewPass(stage: string, unit: string | null, reviewer: string, iteration: number, personAsked = false): void {
+  private reviewPass(stage: string, unit: string | null, reviewer: string, iteration: number, personAsked = false, coveredBy?: string): void {
     const forUnit = unit === null ? [] : ["--unit", unit];
     const pass = String(iteration);
     const requestArgs = ["log", "review", "--stage", stage, "--reviewer", reviewer, "--iteration", pass, ...forUnit,
+      ...(coveredBy === undefined ? [] : ["--covered-by", coveredBy]),
       ...(personAsked ? ["--person-asked", "--message", this.latestMessageId()] : [])];
     let request = this.must(...requestArgs);
     // A units block the engine cannot read comes back as the agent's step, a

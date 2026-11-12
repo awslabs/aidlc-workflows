@@ -73,7 +73,7 @@ it would be without it. The rows that carry it:
   with `Source: you`.
 - `CHANGE_ACCEPTED` that carries the person's `Message Id`.
 
-## Event Registry (134 events, 27 categories)
+## Event Registry (135 events, 27 categories)
 
 ### Workflow Lifecycle (9 events)
 
@@ -146,6 +146,7 @@ human-authorship boundary.
 | `DEPTH_CHANGED` | `--depth` changed depth level | Timestamp, Old depth, New depth | `tools/aidlc-utility.ts` |
 | `TEST_STRATEGY_CHANGED` | `--test-strategy` changed test strategy | Timestamp, Old strategy, New strategy | `tools/aidlc-utility.ts` |
 | `REVIEW_CLASS_CHANGED` | `--review` changed the per-run review override | Timestamp, Old Override, New Override | `tools/aidlc-utility.ts` |
+| `REVIEW_GRANULARITY_CHANGED` | `config set review-granularity` changed where reviews run (per stage, or grouped at the phase anchor) | Timestamp, Old Granularity, New Granularity | `tools/aidlc-utility.ts` |
 | `SCOPE_DETECTED` | A scope recorded for freeform text | Timestamp, Detected scope, Input text, Source, Matched keywords (optional; present when `Source=keyword`) | `tools/aidlc-utility.ts detect-scope` |
 | `RECOMPOSED` | The adaptive composer re-shaped a running workflow's pending stages (suffix flips via `recompose`) | Timestamp, Scope, Stages skipped, Stages added, Stages in Scope | `tools/aidlc-utility.ts recompose` |
 | `WORKSPACE_RECLASSIFIED` | The person said the work is a new project or existing code (`workspace reclassify --project-type`); the folder was scanned again | Timestamp, Old Project Type, New Project Type, Scanned As, Languages, Frameworks, Build System, Nested Root (optional), Repos Recorded (optional), Reverse Engineering; optional Message Id and Person Reply (the message the agent named with `--message` as the one they said it in), or Conductor Summary (words passed in the form before `--message`, the agent's own) | `tools/aidlc-utility.ts reclassify` |

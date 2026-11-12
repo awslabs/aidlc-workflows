@@ -239,6 +239,10 @@ const VALID_EVENT_TYPES = new Set([
   // Per-run review-class override changed (config-change --review). The
   // effective class each stage runs at is resolved at directive emission.
   "REVIEW_CLASS_CHANGED",
+  // Per-run review-granularity override changed (config set review-granularity).
+  // Where each review runs (per stage, or grouped at the phase anchor) is
+  // resolved at directive emission; see resolveReviewGranularity.
+  "REVIEW_GRANULARITY_CHANGED",
   // Guard Policy (formerly Change Control): config-change/scope-change set the
   // per-intent value (GUARD_POLICY_SET; CHANGE_CONTROL_SET is the retired name
   // still read from older ledgers), and governed checkpoints observe memory
@@ -433,6 +437,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   DEPTH_CHANGED: "Depth Change",
   TEST_STRATEGY_CHANGED: "Test Strategy Change",
   REVIEW_CLASS_CHANGED: "Review Class Change",
+  REVIEW_GRANULARITY_CHANGED: "Review Granularity Change",
   GUARD_POLICY_SET: "Guard Policy Set",
   CHANGE_CONTROL_SET: "Change Control Set",
   CHANGE_ACCEPTED: "Change Accepted",

@@ -919,6 +919,7 @@ export const ROUTES: readonly Route[] = [
       "set depth",
       "set test-strategy",
       "set review",
+      "set review-granularity",
       "set guard-policy",
       "set change-control",
       "set sensors",
@@ -940,6 +941,7 @@ export const ROUTES: readonly Route[] = [
       "set depth": "config-change",
       "set test-strategy": "config-change",
       "set review": "config-change",
+      "set review-granularity": "config-change",
       "set guard-policy": "config-change",
       // Retired spelling of guard-policy, accepted for one release.
       "set change-control": "config-change",
@@ -960,7 +962,7 @@ export const ROUTES: readonly Route[] = [
       { command: "config set <key> <value>", summary: "change supported project configuration" },
       { command: "config list", summary: "list supported project configuration" },
     ],
-    all: ["set depth <value>", "set test-strategy <value>", "set review <value>", "set guard-policy <strict|relaxed|off>", "set sensors <on|off>", "set learnings <on|off>", "set summary-confirmation <on|off>", "set guard.<fence> <on|off>", "get <key>", "list"],
+    all: ["set depth <value>", "set test-strategy <value>", "set review <value>", "set review-granularity <stage|phase>", "set guard-policy <strict|relaxed|off>", "set sensors <on|off>", "set learnings <on|off>", "set summary-confirmation <on|off>", "set guard.<fence> <on|off>", "get <key>", "list"],
   },
   {
     id: "plugin",
