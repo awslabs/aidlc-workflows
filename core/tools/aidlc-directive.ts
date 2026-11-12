@@ -1286,8 +1286,10 @@ export const SAY_ONCE_BEFORE_THEY_REPLY =
   "once, as written (only a verb's tense may change to fit when you say it), as your own sentence with nothing in " +
   "front of it, in the last message you write before they reply (when you end your turn with a question, the text " +
   "you write just before it)";
+// The rest of that order for the lines a step carries for the person.
+export const ADD_NOTHING_ABOUT_WHY = "and add nothing about why";
 export const CHANGE_NOTICES_NOTE =
-  `Say each change_notices line to the person ${SAY_ONCE_BEFORE_THEY_REPLY}, and add nothing about why.`;
+  `Say each change_notices line to the person ${SAY_ONCE_BEFORE_THEY_REPLY}, ${ADD_NOTHING_ABOUT_WHY}.`;
 
 // Every question the engine asks: whose it is, and what a pick does. A choice's
 // command answers the question; a routing command returns the next step, a

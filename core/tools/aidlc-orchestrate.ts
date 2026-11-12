@@ -168,11 +168,13 @@ import {
   type ScopeCommandRow,
   type StageValidityAdvisory,
   type TeamHandover,
+  ADD_NOTHING_ABOUT_WHY,
   bodyRuns,
   numberedProseQuestion,
   otherWorkNote,
   PLAN_CHANGE_DETAILS,
   REPO_PLACEHOLDER,
+  SAY_ONCE_BEFORE_THEY_REPLY,
   showsGateAgain,
   validateDirective,
   withAgentNotes,
@@ -590,6 +592,7 @@ import {
   optionsList,
   turnsPersonCheckOff,
   enterHookWorkflow,
+  type TerminalCommand,
 } from "./aidlc-lib.ts";
 import { canonicalPathKey, chatTookStep, hostNamesThisChat, planMadeElsewhere } from "./aidlc-record-core.ts";
 import { unrecordedFinishSince } from "./aidlc-subagent-inflight.ts";
@@ -1703,6 +1706,37 @@ function withPersonLine(transported: Directive, line: string | null): Directive 
   return transported;
 }
 
+// Whether a step carries the lines waiting for the person: one that speaks to
+// them or ends the turn does, and any other one that leads to speech: for the
+// engine, a step marked so (a line kept for the reply marks every step but a
+// rules part); for a hook's relay (personLinesForRelay), a line kept for the
+// reply among them.
+function carriesPendingLines(speaksOrEndsTurn: boolean, leadsToSpeech: boolean): boolean {
+  return speaksOrEndsTurn || leadsToSpeech;
+}
+
+// The lines a prompt hook hands over with the output of a typed command it ran
+// itself (Kiro's terminal relay, `command` as classifyTerminalCommand read it),
+// where no step of the engine's runs, under the order a step gives them. `next`
+// answers such a command with a print that ends the turn, or with an error,
+// except a space or intent command it runs: a plain print, which carries them
+// only when a line kept for the reply is among them. Read before the command
+// runs, as that print is built before the agent runs it; `said()` once the
+// hook's output holds them.
+export function personLinesForRelay(
+  projectDir: string,
+  sessionId: string,
+  command: Pick<TerminalCommand, "source" | "error">,
+): { lead: string; said: () => void } | null {
+  const pending = pendingPersonLines(projectDir, sessionId);
+  const endsTurn = command.source !== "workspace-verb" || command.error !== undefined;
+  if (pending.lines.length === 0 || !carriesPendingLines(endsTurn, pending.reply)) return null;
+  return {
+    lead: `Say this to the person ${SAY_ONCE_BEFORE_THEY_REPLY}, ${ADD_NOTHING_ABOUT_WHY}:\n\n${[...new Set(pending.lines)].join("\n\n")}`,
+    said: pending.said,
+  };
+}
+
 // Person lines kept from steps the agent passed through this turn are said,
 // in order and once, with the step it speaks from, in its change_notices and
 // under their note (`withAgentNotes` again); a line kept for the reply rides
@@ -1752,8 +1786,8 @@ function sayPendingPersonLines(
   // A print the agent may stop after is spoken from too: its lines are said in
   // the last message before they reply.
   if (
-    !pickUp && asItComes.length === 0 && !leadsToSpeech.has(requested) && !turnEndingPrints.has(requested) &&
-    !speaksToPerson(transported)
+    !pickUp && asItComes.length === 0 &&
+    !carriesPendingLines(turnEndingPrints.has(requested) || speaksToPerson(transported), leadsToSpeech.has(requested))
   ) {
     return { directive: transported };
   }
