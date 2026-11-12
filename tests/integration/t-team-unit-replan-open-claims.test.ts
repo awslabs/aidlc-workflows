@@ -21,6 +21,7 @@ import { afterAll, afterEach, describe, expect, setDefaultTimeout, test } from "
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { AIDLC_SRC, seededStateFile } from "../harness/fixtures.ts";
 import {
   builtOnce,
@@ -238,6 +239,8 @@ describe("t-team-unit-replan-open-claims: a plan change while Units are claimed 
       ["execute", "--target", "build-and-test", "--direction", "forward"], seed);
     expect(moved.status, moved.out).toBe(0);
     expect(currentStage(seed)).toBe("build-and-test");
+    const jumped = readAuditShardEvents(seed).filter((row) => row.event === "STAGE_JUMPED").at(-1)!;
+    expect(auditBlockField(jumped.block, "Unit Work")).toBe("kept");
     git(seed, ["add", "-A"]);
     git(seed, ["commit", "-m", "main moved on"]);
     git(seed, ["push", "origin", "main"]);

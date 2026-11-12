@@ -884,8 +884,8 @@ async function handleExecute(args: string[]): Promise<void> {
   // back to a stage before the per-Unit block (the Unit plan changing) keeps
   // it, and a Unit goes back to work only by its own reopen (`jump reopen
   // --units`). The row says so, as does the move past the block that keeps
-  // its stages open (`keepsUnitStages`); stageJumpReaches and the Unit
-  // ownership freeze read it.
+  // its stages open (`keepsUnitStages`); stageJumpReaches and
+  // hasCurrentTeamUnitActivity (aidlc-state.ts) read it.
   const keepsTeamUnitWork = direction === "backward" && isTeamUnitOwnership(content) &&
     beforePerUnitBlock(graph, targetSlug);
   const downstreamStages = direction === "backward"
