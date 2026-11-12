@@ -173,17 +173,18 @@ utility shortcuts are `/aidlc-status`, `/aidlc-jump --stage <slug>` (or
   dispatch retires and logs its prior record (Cursor CLI emits no Task
   `postToolUse`); genuine cross-parent ambiguity stays conservative whenever a
   reviewer is live, so it cannot disable reviewer-scope enforcement. Delegated
-  tools cannot change the ledger or dispatch record, including through ancestor
-  deletes or unquoted shell glob/character-class paths, or name them outright.
-  If the primary ledger is missing or unreadable while any delegation witness
-  remains active, operations fail closed rather than losing delegated-agent
-  attribution. Delegates run builds, tests, searches and the AI-DLC commands
-  they are given like the main conversation, under the same AI-DLC checks and
-  Cursor's own approval. While the reviewer read-scope or state-transition check
-  holds for the piece of work, a Shell command that writes, moves or removes the
-  ledger or dispatch record is denied, and a Task whose record cannot be written
-  does not start; when both stand aside (Guard Policy off does that), none of
-  these delegate limits applies.
+  tools cannot write, move or remove the ledger or dispatch record by a path
+  their command names, including through ancestor deletes or unquoted shell
+  glob/character-class paths, or name them outright. If the primary ledger is
+  missing or unreadable while any delegation witness remains active, operations
+  fail closed rather than losing delegated-agent attribution. Delegates run
+  builds, tests, searches and the AI-DLC commands they are given like the main
+  conversation, under the same AI-DLC checks and Cursor's own approval. While
+  the reviewer read-scope or state-transition check holds for the piece of work,
+  a Shell command that writes, moves or removes the ledger or dispatch record by
+  a path it names is denied, and a Task whose record cannot be written does not
+  start; when both stand aside (Guard Policy off does that), none of these
+  delegate limits applies.
 - **Generated stage and scope runners are explicit-only.** Cursor receives
   `disable-model-invocation: true` on generated runner skills, including plugin
   runners, so ordinary coding prompts cannot auto-activate state-mutating
