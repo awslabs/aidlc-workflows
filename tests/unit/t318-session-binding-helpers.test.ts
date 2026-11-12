@@ -421,6 +421,42 @@ describe("t318 session binding helpers", () => {
     }
   });
 
+  test("a release check goes with its stale pid entry, an orphan one goes too, and a live entry keeps its own", () => {
+    const pidDir = sessionPidMapDir(proj);
+    mkdirSync(pidDir, { recursive: true });
+    const live = Bun.spawn([process.execPath, "-e", "setTimeout(() => {}, 60000)"]);
+    try {
+      // A dead pid's entry and its release check.
+      const dead = 999_900_321;
+      writeFileSync(join(pidDir, String(dead)), `${JSON.stringify({ sessionId: "dead-session", startTime: null })}\n`);
+      writeFileSync(join(pidDir, `${dead}.release-check`), "{}\n");
+      // A release check whose entry is gone.
+      writeFileSync(join(pidDir, "999900322.release-check"), "{}\n");
+      // A live process mapped with another start time: stale too.
+      const reused = Bun.spawn([process.execPath, "-e", "setTimeout(() => {}, 60000)"]);
+      try {
+        writeFileSync(join(pidDir, String(reused.pid)), `${JSON.stringify({ sessionId: "reused-session", startTime: "another-start" })}\n`);
+        writeFileSync(join(pidDir, `${reused.pid}.release-check`), "{}\n");
+        // A live process mapped with its own start time keeps its entry and its release check.
+        writeSessionPidEntry(proj, live.pid, "live-session");
+        writeFileSync(join(pidDir, `${live.pid}.release-check`), "{}\n");
+
+        writeSessionPidAncestry(proj, "fresh-session");
+        const left = readdirSync(pidDir).sort();
+        expect(left).not.toContain(String(dead));
+        expect(left).not.toContain(`${dead}.release-check`);
+        expect(left).not.toContain("999900322.release-check");
+        expect(left).not.toContain(`${reused.pid}.release-check`);
+        expect(left).toContain(String(live.pid));
+        expect(left).toContain(`${live.pid}.release-check`);
+      } finally {
+        reused.kill();
+      }
+    } finally {
+      live.kill();
+    }
+  });
+
   test("a deep chain is read with one ps call and its nearest entry found within the budget", () => {
     // Five hops at 15 ms per ps call: one process table reads every hop.
     const children = Array.from({ length: 4 }, () => Bun.spawn([process.execPath, "-e", "setTimeout(() => {}, 60000)"]));

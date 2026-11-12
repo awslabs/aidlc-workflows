@@ -95,6 +95,7 @@ import {
   writeOperation,
 } from "../../core/tools/aidlc-transaction.ts";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
+import { writeSessionPidEntry } from "../../core/tools/aidlc-lib.ts";
 import { copyChannelDispatcherCommands } from "../../core/tools/aidlc.ts";
 import { doctorCommandLines, vscodeVisibleOutput } from "../harness/vscode-output-trim.ts";
 import {
@@ -9693,5 +9694,184 @@ describe("t243 projection channel", () => {
     expect(() => projectionFiles(mismatched)).toThrow(
       "cannot use legacy whole-file signatures",
     );
+  });
+});
+
+// --- a pinned release is checked once per session --------------------------
+//
+// The dispatcher checks a pinned release's binary and every runtime file on its
+// first call in a session, records the pass beside the session's pid entry
+// (aidlc/.aidlc-sessions/pids/<pid>.release-check), and on later calls of that
+// chat in that process skips only the hashing. The session is the walk's
+// nearest mapped ancestor; here this test's parent process, mapped as
+// session-start maps a host. Every miss falls to the full check.
+describe("t243 a pinned release is checked once per session", () => {
+  const SESSION_A = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa";
+  const SESSION_B = "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb";
+  const argv = (project: string) => ["engine", "status", "--project-dir", project];
+  const refused = (version: string) => expect.objectContaining({
+    kind: "failure",
+    message: `this project requires ${version}, which is not installed completely`,
+  });
+
+  // One release installed and the project pinned to it, run with the scratch
+  // install root, so the dispatcher's checks read that release.
+  function pinnedProject(versions: readonly string[] = [AIDLC_VERSION], pin = versions[0]) {
+    const machine = temp("aidlc-t243-session-check-machine-");
+    const project = temp("aidlc-t243-session-check-project-");
+    mkdirSync(join(project, ".git"));
+    const env = { AIDLC_INSTALL_ROOT: machine, AIDLC_BIN_DIR: join(machine, "bin") };
+    for (const version of versions) {
+      const installed = run(LIFECYCLE, ["versions", "install", version, "--from", fixtureReleaseBytes(version)], project, env);
+      expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+    }
+    const pinned = run(INIT, ["config", "--pin", pin, "--project-dir", project], project, env);
+    expect(pinned.status, pinned.stdout + pinned.stderr).toBe(0);
+    const runtime = join(machine, "versions", pin, "runtime");
+    const file = join(runtime, walkFiles(runtime).find((path) => !path.endsWith("aidlc-stamp.json")) as string);
+    const original = readFileSync(file);
+    return {
+      machine,
+      project,
+      pidDir: join(project, "aidlc", ".aidlc-sessions", "pids"),
+      damage: () => writeFileSync(file, Buffer.concat([original, Buffer.from("\ndamaged\n")])),
+      repair: () => writeFileSync(file, original),
+    };
+  }
+
+  function withMachine<T>(machine: string, body: () => T): T {
+    const saved = { root: process.env.AIDLC_INSTALL_ROOT, bin: process.env.AIDLC_BIN_DIR };
+    process.env.AIDLC_INSTALL_ROOT = machine;
+    process.env.AIDLC_BIN_DIR = join(machine, "bin");
+    try {
+      return body();
+    } finally {
+      if (saved.root === undefined) delete process.env.AIDLC_INSTALL_ROOT;
+      else process.env.AIDLC_INSTALL_ROOT = saved.root;
+      if (saved.bin === undefined) delete process.env.AIDLC_BIN_DIR;
+      else process.env.AIDLC_BIN_DIR = saved.bin;
+    }
+  }
+
+  const releaseCheck = (pidDir: string) => join(pidDir, `${process.ppid}.release-check`);
+
+  test("a release checked once in a session is not hashed again in that session, and a new chat checks again", () => {
+    const pinned = pinnedProject();
+    withMachine(pinned.machine, () => {
+      writeSessionPidEntry(pinned.project, process.ppid, SESSION_A);
+      expect(resolvePinnedDispatch(argv(pinned.project), pinned.project, { reserve: true })).toEqual({ kind: "none" });
+      expect(existsSync(releaseCheck(pinned.pidDir))).toBe(true);
+      pinned.damage();
+      // The same chat in the same process: the pass stands, damage is caught next session.
+      expect(resolvePinnedDispatch(argv(pinned.project), pinned.project, { reserve: true })).toEqual({ kind: "none" });
+      // A new chat mapped on the same process checks in full.
+      writeSessionPidEntry(pinned.project, process.ppid, SESSION_B);
+      expect(resolvePinnedDispatch(argv(pinned.project), pinned.project, { reserve: true })).toEqual(refused(AIDLC_VERSION));
+      // So do config's own probe, doctor's inspection, and every call outside the dispatcher.
+      writeSessionPidEntry(pinned.project, process.ppid, SESSION_A);
+      expect(resolvePinnedDispatch(argv(pinned.project), pinned.project)).toEqual(refused(AIDLC_VERSION));
+      expect(inspectInstalledVersion(AIDLC_VERSION).complete).toBe(false);
+      pinned.repair();
+    });
+  });
+
+  test("a marked call still refuses a release whose runtime inventory changed", () => {
+    const pinned = pinnedProject();
+    withMachine(pinned.machine, () => {
+      writeSessionPidEntry(pinned.project, process.ppid, SESSION_A);
+      expect(resolvePinnedDispatch(argv(pinned.project), pinned.project, { reserve: true })).toEqual({ kind: "none" });
+      const runtime = join(pinned.machine, "versions", AIDLC_VERSION, "runtime");
+      const extra = join(runtime, walkFiles(runtime)[0].split(/[\\/]/)[0], "extra-file.txt");
+      writeFileSync(extra, "not in the baseline\n");
+      expect(resolvePinnedDispatch(argv(pinned.project), pinned.project, { reserve: true })).toEqual(refused(AIDLC_VERSION));
+      rmSync(extra);
+    });
+  });
+
+  test("a call with no session, or a session whose entry has no start time, checks every time", () => {
+    const pinned = pinnedProject();
+    withMachine(pinned.machine, () => {
+      // No mapped ancestor: this project's pids folder is empty.
+      expect(resolvePinnedDispatch(argv(pinned.project), pinned.project, { reserve: true })).toEqual({ kind: "none" });
+      expect(resolvePinnedDispatch(argv(pinned.project), pinned.project, { reserve: true })).toEqual({ kind: "none" });
+      expect(existsSync(pinned.pidDir) ? readdirSync(pinned.pidDir) : []).toEqual([]);
+      pinned.damage();
+      expect(resolvePinnedDispatch(argv(pinned.project), pinned.project, { reserve: true })).toEqual(refused(AIDLC_VERSION));
+      pinned.repair();
+      // An entry with no start time is no session: nothing is recorded for it.
+      writeSessionPidEntry(pinned.project, process.ppid, SESSION_A, Date.now() + 2_000, { ppid: 1, startTime: null });
+      expect(resolvePinnedDispatch(argv(pinned.project), pinned.project, { reserve: true })).toEqual({ kind: "none" });
+      expect(existsSync(releaseCheck(pinned.pidDir))).toBe(false);
+      // Not even a record written by hand for it.
+      writeFileSync(releaseCheck(pinned.pidDir), `${JSON.stringify({ sessionId: SESSION_A, startTime: null })}\n`);
+      pinned.damage();
+      expect(resolvePinnedDispatch(argv(pinned.project), pinned.project, { reserve: true })).toEqual(refused(AIDLC_VERSION));
+      pinned.repair();
+    });
+  });
+
+  test("a record for another release, distribution, executable or session checks again", () => {
+    const pinned = pinnedProject();
+    withMachine(pinned.machine, () => {
+      writeSessionPidEntry(pinned.project, process.ppid, SESSION_A);
+      expect(resolvePinnedDispatch(argv(pinned.project), pinned.project, { reserve: true })).toEqual({ kind: "none" });
+      const recorded = JSON.parse(readFileSync(releaseCheck(pinned.pidDir), "utf-8")) as Record<string, unknown>;
+      expect(recorded).toEqual(expect.objectContaining({ sessionId: SESSION_A, version: AIDLC_VERSION }));
+      pinned.damage();
+      for (const change of [
+        { version: NEXT_VERSION },
+        { distribution: "some-other-harness" },
+        { executable: join(pinned.machine, "elsewhere", "aidlc") },
+        { sessionId: SESSION_B },
+        { startTime: "another-start" },
+      ]) {
+        writeFileSync(releaseCheck(pinned.pidDir), `${JSON.stringify({ ...recorded, ...change })}\n`);
+        expect(
+          resolvePinnedDispatch(argv(pinned.project), pinned.project, { reserve: true }),
+          JSON.stringify(change),
+        ).toEqual(refused(AIDLC_VERSION));
+      }
+      pinned.repair();
+    });
+  });
+
+  test("a pin to another release is reserved when its hashing is skipped", () => {
+    const pinned = pinnedProject([AIDLC_VERSION, NEXT_VERSION], NEXT_VERSION);
+    withMachine(pinned.machine, () => {
+      writeSessionPidEntry(pinned.project, process.ppid, SESSION_A);
+      const first = resolvePinnedDispatch(argv(pinned.project), pinned.project, { reserve: true });
+      expect(first).toEqual(expect.objectContaining({ kind: "execute", version: NEXT_VERSION }));
+      if (first.kind === "execute") first.release?.();
+      expect(existsSync(releaseCheck(pinned.pidDir))).toBe(true);
+      pinned.damage();
+      const second = resolvePinnedDispatch(argv(pinned.project), pinned.project, { reserve: true });
+      expect(second).toEqual(expect.objectContaining({ kind: "execute", version: NEXT_VERSION }));
+      const reservations = join(pinned.machine, "reservations");
+      expect(readdirSync(reservations).some((name) => name.startsWith(`${NEXT_VERSION}-${process.pid}-`))).toBe(true);
+      if (second.kind === "execute") second.release?.();
+      pinned.repair();
+    });
+  });
+
+  test("the dispatcher's record sweeps a release check left beside an entry that is gone", () => {
+    const pinned = pinnedProject();
+    withMachine(pinned.machine, () => {
+      writeSessionPidEntry(pinned.project, process.ppid, SESSION_A);
+      const orphan = join(pinned.pidDir, "999900777.release-check");
+      writeFileSync(orphan, "{}\n");
+      expect(resolvePinnedDispatch(argv(pinned.project), pinned.project, { reserve: true })).toEqual({ kind: "none" });
+      expect(existsSync(orphan)).toBe(false);
+      expect(existsSync(releaseCheck(pinned.pidDir))).toBe(true);
+    });
+  });
+
+  test("only the dispatcher's call may leave out the hashing", () => {
+    const sites = readdirSync(join(REPO_ROOT, "core", "tools"))
+      .filter((name) => name.endsWith(".ts"))
+      .flatMap((name) => {
+        const text = readFileSync(join(REPO_ROOT, "core", "tools", name), "utf-8");
+        return (text.match(/hashes: false/g) ?? []).map(() => name);
+      });
+    expect(sites).toEqual(["aidlc-lifecycle.ts"]);
   });
 });
