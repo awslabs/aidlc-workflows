@@ -19,6 +19,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { unitScopePath } from "../../dist/claude/.claude/tools/aidlc-record-core.ts";
 import {
   cachedClaimFanoutActive,
   claimRegistryCachePath,
@@ -69,7 +70,7 @@ function jsonFile(path: string): Record<string, unknown> {
 // top. The claim ref, the claiming checkout's scope stamp and registry cache
 // then name the rewritten commit.
 function asNewStyle(checkout: string, unit: string): string {
-  const stampPath = join(checkout, "aidlc", ".aidlc-unit-scope.json");
+  const stampPath = unitScopePath(checkout);
   const stamp = jsonFile(stampPath);
   const old = String(stamp.claim_oid);
   const ref = String(stamp.claim_ref);
@@ -100,7 +101,7 @@ function asNewStyle(checkout: string, unit: string): string {
   git(checkout, ["push", "-q", "--force", "origin", `${rewritten}:${ref}`]);
   git(checkout, ["fetch", "-q", "origin"]);
   writeFileSync(stampPath, `${JSON.stringify({ ...stamp, claim_oid: rewritten }, null, 2)}\n`);
-  const cachePath = join(checkout, "aidlc", ".aidlc-claim-registry.json");
+  const cachePath = claimRegistryCachePath(checkout);
   if (existsSync(cachePath)) {
     const cache = jsonFile(cachePath) as { claims?: Record<string, { oid?: string }> };
     if (cache.claims?.[unit]) cache.claims[unit].oid = rewritten;
