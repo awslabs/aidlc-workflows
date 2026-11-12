@@ -1000,6 +1000,36 @@ describe("a Unit someone holds is not taken again", () => {
     expect(JSON.stringify(next(bea))).not.toContain("Your build of refunds");
   });
 
+  // The GitHub re-run's case 6b: back on main while the record's pull request
+  // was open, the teammate heard nothing after the lead recorded the merge.
+  test("back on main with their record on a branch of its own, the person hears their merge once, and a teammate never", () => {
+    const { hosts, home, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    finishBuild(record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    git(alice, ["switch", "-q", "-c", "records/refunds"]);
+    git(alice, ["add", "aidlc"]);
+    git(alice, ["commit", "-q", "-m", "refunds record"]);
+    git(alice, ["push", "-q", "-u", "origin", "records/refunds"]);
+    git(alice, ["switch", "-q", "main"]);
+    // A teammate holding alice's record branch, cloned before the merge, so her own look is the one that brings it.
+    const bea = cloneOf(home.remote, "bea");
+    git(bea, ["branch", "-q", "records/refunds", "origin/records/refunds"]);
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    mergeOnHost(hosts.billing, "refunds", "squash");
+    git(home.dir, ["fetch", "-q", "origin"]);
+    next(home.dir, chatOf("lead-after-merge"));
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
+    const chat = chatOf("alice-on-main");
+    expect(nextSaying(alice, chat).said).toContain("Your refunds is merged.");
+    appendAuditEntry("HUMAN_TURN", { "Person Reply": "what next" }, alice);
+    expect(nextSaying(alice, chat).said).not.toContain("is merged.");
+    expect(nextSaying(alice, chatOf("alice-later")).said).not.toContain("is merged.");
+    git(alice, ["switch", "-q", "records/refunds"]);
+    expect(nextSaying(alice, chatOf("alice-on-record")).said).not.toContain("is merged.");
+    expect(nextSaying(bea, chatOf("bea")).said).not.toContain("is merged.");
+  });
+
   test("a teammate's take whose build is on a local branch here is still said as theirs", () => {
     const home = makeHome();
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);

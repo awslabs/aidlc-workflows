@@ -6043,14 +6043,23 @@ function takenLine(unit: string, claim: UnitClaimView): string {
 }
 
 // The person's own take whose build is not in this checkout but committed on
-// another branch of this clone (checked in on a branch of its own for a pull
-// request, the checkout back on main): where it is and the way to it, for the
-// take question (unitTakeLook) and the take asked again. Local reads only,
-// never a fetch or a switch: null, so the words stand as they were, when the
-// take is not theirs, no other branch free to switch to has the build, or a
-// git call is not ok.
+// another branch of this clone: where it is and the way to it, for the take
+// question (unitTakeLook) and the take asked again. Null, so the words stand
+// as they were, when the take is not theirs or no branch has the build.
 export function buildOnBranchLine(projectDir: string, homeWork: string, claim: UnitClaimView): string | null {
   if (!claimIsMine(projectDir, claim)) return null;
+  const branch = branchWithBuild(projectDir, homeWork, claim.unit);
+  // A backtick breaks the line's code marks, an apostrophe a PowerShell paste.
+  return branch === null || /[`']/.test(branch)
+    ? null
+    : `Your build of ${claim.unit} is on branch ${branch}: \`git switch ${shellArg(branch)}\` to carry it on.`;
+}
+
+// The newest branch of this clone, free to switch to, whose record holds a
+// live build of the home's Unit (checked in on a branch of its own for a pull
+// request, the checkout back on main). Local reads only, never a fetch or a
+// switch: null when no such branch has it, or a git call is not ok.
+function branchWithBuild(projectDir: string, homeWork: string, unit: string): string | null {
   // Globs whatever the person's environment says (aidlc-workspace-doctor's way).
   const env = { GIT_LITERAL_PATHSPECS: "0" };
   const listed = localGit(projectDir, ["for-each-ref", "--sort=-committerdate", "--format=%(worktreepath)%00%(refname)", "refs/heads/"], env);
@@ -6058,7 +6067,7 @@ export function buildOnBranchLine(projectDir: string, homeWork: string, claim: U
   // A branch checked out here or in another worktree is not one to switch to.
   const refs = listed.stdout.split(/\r?\n/).map((line) => line.split("\0"))
     .filter(([worktree, ref]) => worktree === "" && ref?.startsWith("refs/heads/")).map(([, ref]) => ref);
-  const field = `^- \\*\\*${UNIT_BUILD_FIELD}\\*\\*:[[:blank:]]*${claim.unit.replaceAll(".", "\\.")}[[:space:]]*$`;
+  const field = `^- \\*\\*${UNIT_BUILD_FIELD}\\*\\*:[[:blank:]]*${unit.replaceAll(".", "\\.")}[[:space:]]*$`;
   // Newest branch first, a hundred a call so no command line runs too long on Windows.
   for (let at = 0; at < refs.length; at += 100) {
     const found = localGit(projectDir, ["grep", "--no-color", "-z", "-l", "-E", "-e", field, ...refs.slice(at, at + 100), "--",
@@ -6070,10 +6079,8 @@ export function buildOnBranchLine(projectDir: string, homeWork: string, claim: U
       const shown = localGit(projectDir, ["show", `${ref}:./${hit.slice(ref.length + 1)}`], env);
       if (!shown.ok) return null;
       const build = liveBuildOf(shown.stdout);
-      if (build === null || !isBuildOfUnit(build, homeWork, claim.unit)) continue;
-      const branch = ref.slice("refs/heads/".length);
-      // A backtick breaks the line's code marks, an apostrophe a PowerShell paste.
-      return /[`']/.test(branch) ? null : `Your build of ${claim.unit} is on branch ${branch}: \`git switch ${shellArg(branch)}\` to carry it on.`;
+      if (build === null || !isBuildOfUnit(build, homeWork, unit)) continue;
+      return ref.slice("refs/heads/".length);
     }
   }
   return null;
@@ -7663,17 +7670,19 @@ function claimTipsAt(pd: string, into: string): Map<string, string> {
   return tips;
 }
 
-// A build of the person's own here whose claim this fetch brought to done:
-// said once, with the step that follows. A fetch that moved nothing (their own
-// pull got there first) says nothing; status's Yours line still shows it.
+// A build of the person's own here, in this checkout or on another branch of
+// this clone (its record checked in for a pull request, the checkout back on
+// main), whose claim this fetch brought to done: said once, with the step that
+// follows. A fetch that moved nothing (their own pull got there first) says
+// nothing; with the build in this checkout, status's Yours line still shows it.
 function sayOwnBuildsMerged(pd: string, into: string, before: ReadonlyMap<string, string>): void {
   for (const [unit, oid] of claimTipsAt(pd, into)) {
     const was = before.get(unit);
     if (was === oid) continue;
     const now = readPayload(pd, oid, { localOnly: true });
     if (now?.done !== true || (was !== undefined && readPayload(pd, was, { localOnly: true })?.done === true)) continue;
-    if (findUnitBuild(pd, now.intent_uuid, unit) === null) continue;
     if (!takeIsBy(pd, oid, now, gitUserName(pd), git(pd, ["config", "user.email"]).stdout.trim())) continue;
+    if (findUnitBuild(pd, now.intent_uuid, unit) === null && branchWithBuild(pd, now.intent_uuid, unit) === null) continue;
     saidWithNextStep(pd, `Your ${unit} is merged.`);
   }
 }

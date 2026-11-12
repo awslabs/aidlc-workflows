@@ -518,7 +518,7 @@ export function findUnitBuild(projectDir: string, homeWork: string, unit: string
 }
 
 // Whether a build is of the home's Unit: the one match findUnitBuild and a
-// build on another branch of this clone (buildOnBranchLine) read.
+// build on another branch of this clone (branchWithBuild in aidlc-unit.ts) read.
 export function isBuildOfUnit(build: UnitBuild, homeWork: string, unit: string): boolean {
   return build.unit === unit && build.homeWork === homeWork;
 }
