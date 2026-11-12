@@ -410,13 +410,13 @@ follow-up instead of reopening the whole question.
 ### Tri-Mode System
 
 **Step 1: Create the questions file** in the appropriate `<record>/`
-directory using `[Answer]:` tag format with options A-E (A-D on Claude Code:
+directory using `[Answer]:` tag format with options A-E (A-D on Claude Code, A-C on Codex:
 the letters come from the harness manifest's `questionOptions`). Every ordinary
 question must end with `X. Other (please specify)`. The dedicated Consolidated
 Summary Confirmation is the sole exception: its **Looks correct / Request
 changes** options are unlettered. All `[Answer]:` tags start blank.
 Multi-select questions add "(select all that apply)" to the question text;
-answer format: `[Answer]: A, B, E`.
+answer format: `[Answer]: A, C`.
 
 The agent groups a fresh file's questions by who would answer them: each
 heading names the trade whose decision it is after its number
@@ -576,7 +576,7 @@ proceeding. **When in doubt, ask.**
 | Condition | Action |
 |-----------|--------|
 | Blank or underscore-only `[Answer]:` | List unanswered, ask user to complete |
-| Answer not matching options (A-E or A-D, X) and not clear free-text | Ask user to clarify |
+| Answer not matching options (A-E, A-D or A-C, X) and not clear free-text | Ask user to clarify |
 | Ambiguous ("maybe B", "either A or C") | Ask user to commit to single choice |
 
 **Contradiction detection** -- cross-check full answer set for:
