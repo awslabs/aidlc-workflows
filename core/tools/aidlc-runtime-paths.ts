@@ -1120,12 +1120,14 @@ export const WORKSPACE_ENGINE_DIR = ".aidlc-engine";
 // now under aidlc/.aidlc-engine/. A folder moves file by file. The background
 // helper ledger's oldest place (aidlc/.aidlc-subagent-inflight) is not here:
 // takeInOldSubagentInflight owns it, joining its fresh entries to the ledger.
+// Nor is the Kiro CLI forwarding latch's earlier name (aidlc/.aidlc-forwarding-latch):
+// a project may have committed it, so AI-DLC never moves, writes or deletes it,
+// and the doctor names the step that takes it out of git.
 const LEGACY_ENGINE_ENTRIES: ReadonlyMap<string, string> = new Map([
   [".aidlc-clone-id", "clone-id"],
   [".aidlc-sessions", "sessions"],
   [".aidlc-turn-counter", "sessions/kiro-turn-counter"],
   [".aidlc-readonly-latch", "sessions/kiro-readonly-latch"],
-  [".aidlc-forwarding-latch", "sessions/kiro-forwarding-latch"],
   [".aidlc-cursor-subagents", "sessions/cursor-subagents"],
   [".aidlc-claim-registry.json", "units/claim-registry.json"],
   [".aidlc-claim-generations.json", "units/claim-generations.json"],

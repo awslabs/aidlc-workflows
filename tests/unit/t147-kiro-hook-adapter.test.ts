@@ -3005,18 +3005,28 @@ describe("t147 Kiro CLI reads what the person typed from the expanded skill body
   test("every per-turn file the adapter writes under aidlc/ is git-ignored", () => {
     const source = readFileSync(join(REPO_ROOT, "harness", "kiro", "hooks", "aidlc-kiro-adapter.ts"), "utf-8");
     const names = [...new Set([...source.matchAll(/join\([^()]*"aidlc",\s*"(\.aidlc-[^"]+)"/g)].map((m) => m[1]))];
-    expect(names).toContain(".aidlc-turn-counter");
+    // What it writes inside AI-DLC's engine folder (aidlc/.aidlc-engine/), which
+    // ignores itself with a .gitignore of its own.
+    const engineNames = [...new Set([...source.matchAll(/workspaceEngineFile\([^,()]+,\s*"([^"]+)"\)/g)].map((m) => m[1]))];
+    // Either scan finding nothing would read nothing, so a file written beside
+    // the engine folder is still caught by the first.
+    expect(names.length + engineNames.length).toBeGreaterThan(0);
     // The forwarding latch lives in the sessions folder (forwardingLatchPath),
     // and the name earlier releases wrote stays ignored for a file left behind.
     expect(source).toContain('join(sessionsDir(projectDir), ".kiro-cli-forwarding-latch.json")');
-    names.push(".aidlc-sessions/.kiro-cli-forwarding-latch.json", ".aidlc-forwarding-latch");
+    engineNames.push("sessions/.kiro-cli-forwarding-latch.json");
+    names.push(".aidlc-forwarding-latch");
     const repo = mkdtempSync(join(tmpdir(), "t147-ignore-"));
     try {
       expect(spawnSync("git", ["init", "-q"], { cwd: repo }).status).toBe(0);
       copyFileSync(join(REPO_ROOT, "harness", "kiro", "dot-gitignore"), join(repo, ".gitignore"));
+      // The engine folder's own .gitignore, as the engine writes it (ensureWorkspaceEngineFolder).
+      mkdirSync(join(repo, "aidlc", ".aidlc-engine"), { recursive: true });
+      writeFileSync(join(repo, "aidlc", ".aidlc-engine", ".gitignore"), "*\n");
       // A folder's pattern (`aidlc/.aidlc-request-text/`) ignores what is written in it.
       const ignored = (path: string) => spawnSync("git", ["check-ignore", "-q", "--no-index", path], { cwd: repo }).status === 0;
       for (const name of names) expect(ignored(`aidlc/${name}`) || ignored(`aidlc/${name}/file`), name).toBe(true);
+      for (const name of engineNames) expect(ignored(`aidlc/.aidlc-engine/${name}`), name).toBe(true);
     } finally { rmSync(repo, { recursive: true, force: true }); }
   });
 
