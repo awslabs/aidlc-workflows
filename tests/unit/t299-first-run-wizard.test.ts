@@ -1197,6 +1197,52 @@ describe("t299 first-run setup wizard", () => {
     expect(result.stdout).toContain("Nothing written.");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("an MCP answer stays when step 1 is reopened and the harness kept", () => {
+    const result = runWizard(
+      `${["2", "", "", "", "", "2", "", "1", "", ""].join("\n")}\n`,
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain("MCP [1]:");
+    const last = result.stdout.slice(result.stdout.lastIndexOf("Your choices"));
+    expect(last).toContain("1. Harness      Claude Code");
+    expect(last).toContain("5. MCP          off");
+    expect(result.stdout).toContain("Setup complete.");
+    expect(existsSync(join(result.project, ".mcp.json"))).toBe(false);
+    expect(JSON.parse(
+      readFileSync(join(result.project, ".claude", "tools", "data", "aidlc-manifest.json"), "utf-8"),
+    ).mcpMode).toBe("none");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("an MCP answer the person picked stays when the harness changes and changes back", () => {
+    const result = runWizard(
+      `${["2", "", "", "", "", "2", "", "1", "4", "1", "1", ""].join("\n")}\n`,
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    const summaries = result.stdout.split("Your choices").slice(1);
+    expect(summaries.find((summary) => summary.includes("1. Harness      Cursor")))
+      .toContain("5. MCP          off");
+    const last = summaries.at(-1) ?? "";
+    expect(last).toContain("1. Harness      Claude Code");
+    expect(last).toContain("5. MCP          off");
+    expect(result.stdout).toContain("Setup complete.");
+    expect(existsSync(join(result.project, ".mcp.json"))).toBe(false);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("the first pass offers each harness's MCP default, and a default follows a harness change", () => {
+    const result = runWizard(
+      `${["2", "4", "", "", "", "", "1", "1", "n"].join("\n")}\n`,
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain("MCP [2]:");
+    const summaries = result.stdout.split("Your choices").slice(1);
+    expect(summaries).toHaveLength(2);
+    expect(summaries[0]).toContain("1. Harness      Cursor");
+    expect(summaries[0]).toContain("5. MCP          off");
+    expect(summaries[1]).toContain("1. Harness      Claude Code");
+    expect(summaries[1]).toContain("5. MCP          on");
+    expect(result.stdout).toContain("Nothing written.");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("review accepts a step number, re-enters it, then applies", () => {
     const result = runWizard(
       `${[

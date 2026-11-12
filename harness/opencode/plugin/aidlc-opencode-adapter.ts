@@ -61,6 +61,7 @@ import { readFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 // emit.ts points this at the projected .aidlc/tools/ copy.
 import { windowsScriptLaunch } from "../../../core/tools/aidlc-executable-path.ts";
+import { patchTargets } from "../../../core/hooks/review-freeze-command.ts";
 
 const PROJECTED_INVOKE = "{{INVOKE}}";
 const TRUSTED_NAMESPACE = "{{TRUSTED_NAMESPACE}}";
@@ -489,14 +490,7 @@ function applyPatchPaths(args: Record<string, unknown>): string[] {
     (args.patch as string) ??
     (args.command as string) ??
     "";
-  const paths: string[] = [];
-  for (const match of patch.matchAll(/^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm)) {
-    paths.push(match[1].trim());
-  }
-  for (const match of patch.matchAll(/^\*\*\* Move to: (.+)$/gm)) {
-    paths.push(match[1].trim());
-  }
-  return Array.from(new Set(paths.filter((p) => p.length > 0)));
+  return Array.from(new Set(patchTargets(patch).map((target) => target.path).filter((p) => p.length > 0)));
 }
 
 type ReviewerCall = {

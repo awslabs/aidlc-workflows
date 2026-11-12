@@ -326,7 +326,7 @@ import { codeGenerationCompletionPlanWaits, deriveTeamUnitProgressModel, SWITCH_
 import {
   askedQuestionFields,
   commandChat,
-  latestAskedQuestion,
+  gateQuestion,
   QUESTION_ID_FIELD,
   questionShows,
   shownAgainFields,
@@ -2652,7 +2652,10 @@ export function parkWorkflow(pd: string, opts: { attended?: boolean } = {}): Par
         "each Bolt), then park.",
     );
   }
-  const scopeStamp = validateLiveUnitScope(pd);
+  // A checkout that holds a Unit claim parks that Unit there; any other parks
+  // the work, a lead's whose teams hold the Units included. Not
+  // validateLiveUnitScope: it refuses Unit work, and a park is never Unit work.
+  const scopeStamp = readApplicableTeamUnitScopeStamp(pd, initialContent);
   if (scopeStamp) {
     writeFileSync(
       unitParkedPath(pd),
@@ -7159,12 +7162,12 @@ function gateAskFields(
     fields["Brief Digest"] = "none";
   }
   try {
-    fields["Sensor State"] = sensorStateAtGate(pd, stage);
+    fields["Sensor State"] = sensorStateAtGate(pd, stage, unit ?? null);
   } catch {
     fields["Sensor State"] = "none";
   }
   try {
-    Object.assign(fields, openDecisionsFields(pd, stage));
+    Object.assign(fields, openDecisionsFields(pd, stage, unit ?? null));
   } catch {
     fields["Open Decisions"] = "0";
   }
@@ -7188,7 +7191,7 @@ function gateAskFields(
 // QUESTION_SHOWN row when this chat had not seen it. Record-only.
 function openGateQuestionId(pd: string, slug: string, unit: string | null): string | null {
   try {
-    const open = latestAskedQuestion(pd, { event: "STAGE_AWAITING_APPROVAL", type: "gate", stage: slug, unit });
+    const open = gateQuestion(pd, slug, unit);
     if (open === null) return null;
     const shown = shownAgainFields(pd, open.id, commandChat(pd));
     if (shown !== null) emitAudit(pd, "QUESTION_SHOWN", shown);
@@ -7257,7 +7260,8 @@ function latestCheckResults(pd: string, stage: GateStage, unit: string | null = 
 }
 
 // The declared outputs a gate speaks for: every unit's at a stage gate, and one
-// Unit's at that Unit's own gate, so a team's Unit is not told about a sibling's.
+// Unit's at that Unit's own gate, so a team's Unit is neither told about a
+// sibling's nor recorded, at its gate or its approval, as deciding on them.
 function declaredOutputsForGate(pd: string, stage: GateStage, unit: string | null): string[] {
   const paths = existingDeclaredArtifactPaths(pd, stage);
   if (unit === null || stage.for_each !== "unit-of-work") return paths;
@@ -7276,11 +7280,11 @@ function declaredOutputsForGate(pd: string, stage: GateStage, unit: string | nul
 
 // The gate-open row's field: `id@path=passed|failed(<n>) [detail: <path>]|could-not-run|not-run`
 // for the declared outputs, failures first, at most 20 entries spelled out.
-function sensorStateAtGate(pd: string, stage: GateStage): string {
+function sensorStateAtGate(pd: string, stage: GateStage, unit: string | null): string {
   // Spelled out here, not at module level: this file runs its command before
   // later module-level declarations are initialized.
   const SENSOR_STATE_MAX_ENTRIES = 20;
-  const { failed, rest } = latestCheckResults(pd, stage);
+  const { failed, rest } = latestCheckResults(pd, stage, unit);
   const entries = [
     ...failed.map((f) => `${f.id}@${f.rel}=failed(${f.findings})${f.detail ? ` [detail: ${f.detail}]` : ""}`),
     ...rest,
@@ -7537,11 +7541,11 @@ export function unitsWithoutInputsNotice(pd: string, stage: GateStage, unit: str
 // `decision:`, `owner:` and `blocking:` beside each). The gate records the ids;
 // Approve records them as accepted open. A block the engine cannot read is
 // recorded as such and stops nothing: the block is optional.
-function openDecisionsFields(pd: string, stage: GateStage): Record<string, string> {
+function openDecisionsFields(pd: string, stage: GateStage, unit: string | null): Record<string, string> {
   const DECISIONS_FENCE = /```aidlc-decisions[^\n]*\n([\s\S]*?)```/g;
   const ids: string[] = [];
   const unreadable: string[] = [];
-  for (const path of existingDeclaredArtifactPaths(pd, stage)) {
+  for (const path of declaredOutputsForGate(pd, stage, unit)) {
     const text = readFileSync(path, "utf-8");
     for (const match of text.matchAll(DECISIONS_FENCE)) {
       const parsed = parseDecisionsBlock(match[1]);

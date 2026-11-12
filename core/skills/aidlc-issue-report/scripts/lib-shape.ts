@@ -71,10 +71,10 @@ export const PUBLIC_MODEL = new RegExp(
   `^(?:auto|(?:(?:us|eu|apac|global)\\.)?(?:anthropic\\.|openai\\.|amazon\\.)?(?:claude|gpt|o\\d|gemini|nova)${VARIANT}(?::\\d+)?(?:\\[1m\\])?)$`,
   "i",
 );
-// The hosts' own approval modes (Claude Code permissionMode, Codex approval_policy, Kiro autopilot).
+// The hosts' own approval modes (Claude Code permissionMode, Codex approval_policy, Kiro IDE autopilot and approve for me).
 const APPROVAL_MODES = new Set([
   "default", "acceptEdits", "plan", "bypassPermissions", "dontAsk", "auto",
-  "untrusted", "on-failure", "on-request", "never", "autopilot on", "autopilot off",
+  "untrusted", "on-failure", "on-request", "never", "autopilot on", "autopilot off", "approve for me",
 ]);
 // Tool denial kinds the hosts write, and the ones the Kiro and Codex readers name.
 const DENIALS = new Set([

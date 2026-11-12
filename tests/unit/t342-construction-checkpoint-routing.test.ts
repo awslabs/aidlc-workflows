@@ -118,13 +118,16 @@ ${stages.map((stage) => `- [${stage === current ? "-" : " "}] ${stage} — EXECU
   return p;
 }
 
+// A code plan still being written (its test instructions empty) routes as its
+// plan step; with both files written the engine would write the plan's Testing
+// Contract and ask the person to approve it.
 function cover(p: string, unit: string, selected = stages, receipts = true) {
   for (const slug of selected) {
     const stage = findStageBySlug(slug)!;
     const output = join(seededRecordDir(p), "construction", unit, slug);
     mkdirSync(output, { recursive: true });
     for (const name of stage.produces ?? []) {
-      writeFileSync(join(output, artifactFilename(name)), `# ${unit} ${name}\n`);
+      writeFileSync(join(output, artifactFilename(name)), name === "unit-test-instructions" ? "" : `# ${unit} ${name}\n`);
     }
     if (stage.workspace_requires) {
       writeFileSync(join(output, "source-manifest.json"), JSON.stringify({

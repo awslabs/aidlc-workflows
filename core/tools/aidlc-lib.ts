@@ -523,6 +523,7 @@ import {
   readSubagentInflightLedger,
   subagentInflightMarkerPath,
   subagentSessionIdentity,
+  unrecordedFinishSince,
 } from "./aidlc-subagent-inflight.ts";
 export {
   type AuthorityCover,
@@ -18232,28 +18233,9 @@ export function noReviewerFinishedSinceReview(
       }
       const since = rows.filter((row) =>
         row.event === "SUBAGENT_COMPLETED" && !attemptEventDefinitelyBefore(row, request.row));
-      for (const row of since) {
-        const agent = auditBlockField(row.block, "Agent Type");
-        if (agent === null || agent === "" || agent === "unknown") return false;
-        if (agent === request.reviewer && recordedReviewFileDigest(row.block, request.reviewFile) !== null) return false;
-      }
-      const health = hooksHealthReadDir(dir, selection.intent, selection.space);
-      const heartbeat = join(health, "log-subagent.last");
-      if (existsSync(heartbeat)) {
-        const beat = Date.parse(readFileSync(heartbeat, "utf-8").trim());
-        if (!Number.isFinite(beat)) return false;
-        // The hook beats, then appends its row in the same run: a beat since the
-        // request with no completion row at or after it is a run that left none.
-        if (beat >= requested && !since.some((row) => Date.parse(row.timestamp) >= beat)) return false;
-      }
-      const drops = join(health, "log-subagent.drops");
-      if (existsSync(drops)) {
-        for (const line of readFileSync(drops, "utf-8").split("\n")) {
-          if (line.trim() === "") continue;
-          const at = Date.parse(line.split("\t", 1)[0]);
-          if (!Number.isFinite(at) || at >= requested) return false;
-        }
-      }
+      if (since.some((row) => auditBlockField(row.block, "Agent Type") === request.reviewer &&
+        recordedReviewFileDigest(row.block, request.reviewFile) !== null)) return false;
+      if (unrecordedFinishSince(hooksHealthReadDir(dir, selection.intent, selection.space), rows, request.row)) return false;
     }
     return true;
   } catch {

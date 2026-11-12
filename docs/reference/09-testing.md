@@ -339,8 +339,9 @@ blocked hand-off) and opencode's plugin (loaded into one opencode process, a
 worker thread the host waits on; a refusal is the hook's thrown error).
 `tests/unit/t-scope-hosts.test.ts` pins those payloads against the ones recorded
 from each tool (`tests/fixtures/<tool>-hook-payloads`). Each tool's answer is
-read in its own form: Codex and Kiro refuse with exit 2, Copilot with a deny
-decision, Copilot runs the command its hook rewrote, and Kiro's person-turn hook
+read in its own form: Kiro refuses with exit 2, Codex with exit 2 or, on
+Windows, a deny decision (read by `tests/harness/codex-hook-answer.ts`), Copilot
+with a deny decision, Copilot runs the command its hook rewrote, and Kiro's person-turn hook
 may run the turn's first `next` itself, so the agent acts on that reply. Every
 tool call fires the hooks, so a refusal stops the run, and a hook command that
 fails is a problem. A host can also run on a project an installed release set

@@ -18,7 +18,7 @@
 //   - Request Changes carries the person's words to the revision;
 //   - edit mode: after "done" the agent records the files as the person left
 //     them, or what they wrote in the questions file, and a Testing Contract the
-//     edit broke is repaired and then asked about once;
+//     edit broke is written back by the engine and then asked about once;
 //   - after approval the build runs; code that moved elsewhere gives one line
 //     and no new question, even under strict; an edited plan asks again under
 //     strict; "review the plan" asks again on request;
@@ -55,6 +55,12 @@
 //     lands beside the run's start, and Approve Plan builds and the run
 //     finishes; Request Changes, editing the files and "review the plan" go as
 //     inside work.
+//   - the plan's Testing Contract is the engine's to write: `next` writes a
+//     block left out, broken or out of date into that section only, before the
+//     question and after it, and after an approval, under every Guard Policy,
+//     over what an agent wrote in that section instead; never under the
+//     person's edit, over a plan sent back, over a heading or plan step, into a
+//     plan that is not UTF-8 text, or from the Stop hook's read-only probe.
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -1618,13 +1624,11 @@ describe("the engine asks for Plan Approval", () => {
     writeFileSync(planPath, readFileSync(planPath, "utf-8").replace('"version": 1', '"version": 1,,'), "utf-8");
     reply(proj, "done");
     expect(answer(proj, "Approve Plan").message).toContain("broke the Testing Contract block");
-    const repair = next(proj);
-    expect(repair.kind).toBe("run-stage");
-    expect(repair.plan_approval.status).toBe("repair");
-    writePlan(proj, "- [ ] Step 2: handle unicode\n");
+    // The engine writes the contract back itself: no repair step for the agent.
     const ask = next(proj);
-    expect(ask.kind).toBe("ask");
+    expect(ask.kind, JSON.stringify(ask)).toBe("ask");
     expect(ask.question).toBe("I repaired the plan's Testing Contract (the test rules your build follows). Build your edited plan?");
+    expect(readFileSync(planPath, "utf-8")).toContain(renderTestingContract(resolveTestingPosture(proj)));
   });
 
   // The person's stop holds even when the plan they approved needs repair
@@ -1642,9 +1646,9 @@ describe("the engine asks for Plan Approval", () => {
     expect(next(proj).kind).toBe("parked");
     const unpark = spawnSync(BUN, [STATE, "unpark", "--project-dir", proj], { encoding: "utf-8" });
     expect(unpark.status, unpark.stderr).toBe(0);
-    const repair = next(proj);
-    expect(repair.kind).toBe("run-stage");
-    expect(repair.plan_approval.status).toBe("repair");
+    const ask = next(proj);
+    expect(ask.kind, JSON.stringify(ask)).toBe("ask");
+    expect(ask.question).toBe("I repaired the plan's Testing Contract (the test rules your build follows). Build your edited plan?");
   });
 
   test("after approval, code that moved elsewhere gives no new question even under strict", () => {
@@ -5053,5 +5057,388 @@ describe("what to change is what the person said, as the agent read it", () => {
     const grouped = readFileSync(join(AIDLC_SRC, "aidlc-common", "protocols", "stage-protocol-construction.md"), "utf-8")
       .replace(/\s+/g, " ");
     expect(grouped).toContain("record `Request Changes: use Stripe` for that Unit");
+  });
+});
+
+// The plan's Testing Contract is engine output, so the engine writes it into
+// the plan itself before it asks: an agent never copies it by hand, and one
+// that left it out or copied it wrong is not sent to fix it. Only that section
+// changes, and the person is asked about the plan as it is then on disk.
+describe("the engine writes the plan's Testing Contract itself", () => {
+  const planPath = (proj: string): string => join(stageDir(proj), "code-generation-plan.md");
+  const planText = (proj: string): string => readFileSync(planPath(proj), "utf-8");
+  const contract = (proj: string): string => renderTestingContract(resolveTestingPosture(proj));
+  // writePlan's plan up to its Testing Contract.
+  const STEPS = "# Code Generation Plan\n\n## Summary\n\n- Builds: slugify for titles\n- Touches: src/slugify.ts\n" +
+    "- Tests: 3 unit tests\n\n## Steps\n\n- [ ] Step 1: write slugify\n\n";
+  // The agent's plan: writePlan's, with its Testing Contract made into `block(rendered)`.
+  function agentPlan(proj: string, block: (rendered: string) => string, unit: string | null = null): string {
+    writePlan(proj, "", unit);
+    const path = join(stageDir(proj, unit), "code-generation-plan.md");
+    const plan = readFileSync(path, "utf-8").replace(contract(proj), block(contract(proj)));
+    writeFileSync(path, plan, "utf-8");
+    return plan;
+  }
+  const BROKEN: Array<[string, (rendered: string) => string]> = [
+    ["left out", () => ""],
+    // A hand copy that wrapped a long string: a line break inside it.
+    ["copied with a string broken across lines", (rendered) => rendered.replace(/(": "[^"\n]{2})/, "$1\n")],
+    ["changed after it was rendered, so its contract_sha256 no longer matches",
+      (rendered) => rendered.replace('"version": 1', '"version": 1, "note": "edited"')],
+  ];
+
+  const POLICIES = ["strict", "relaxed", "off", "locked strict"] as const;
+  // A project under one Guard Policy; "locked strict" is the team's strict line in memory.
+  function policyProject(policy: (typeof POLICIES)[number]): string {
+    const proj = project(policy === "locked strict" ? "strict" : policy);
+    if (policy === "locked strict") {
+      const memory = join(proj, "aidlc", "spaces", "default", "memory", "project.md");
+      const content = readFileSync(memory, "utf-8");
+      writeFileSync(memory, content.includes("## Guard Policy\n")
+        ? content.replace("## Guard Policy\n", "## Guard Policy\n\nMode: strict\n")
+        : `${content.trimEnd()}\n\n## Guard Policy\n\nMode: strict\n`);
+    }
+    return proj;
+  }
+  const breakBlock = (proj: string): void =>
+    writeFileSync(planPath(proj), planText(proj).replace('"version": 1', '"version": 1,,'), "utf-8");
+  const moveContract = (proj: string): void => {
+    const state = seededStateFile(proj);
+    writeFileSync(state, readFileSync(state, "utf-8").replace("- **Test Strategy**: Standard", "- **Test Strategy**: Comprehensive"));
+  };
+
+  test.each(BROKEN)("a contract %s: the engine writes it and asks once, and the approval covers the plan it wrote", (_label, block) => {
+    const proj = project();
+    agentPlan(proj, block);
+    const asked = next(proj);
+    expect(asked.kind, JSON.stringify(asked)).toBe("ask");
+    expect(asked.ask_type).toBe("plan-approval");
+    expect(planText(proj)).toBe(STEPS + contract(proj));
+    // Nothing is written twice and no step comes back: the same question.
+    const again = next(proj);
+    expect(again.kind, JSON.stringify(again)).toBe("ask");
+    expect(again.question).toBe(asked.question);
+    expect(planText(proj)).toBe(STEPS + contract(proj));
+    replyAndRecord(proj, "1", "Approve Plan");
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+  });
+
+  test("a plan that already carries the current contract is asked about as written", () => {
+    const proj = project();
+    writePlan(proj);
+    const written = planText(proj);
+    expect(next(proj).kind).toBe("ask");
+    expect(planText(proj)).toBe(written);
+  });
+
+  // A setting the person chose moves the contract: it is rendered from the
+  // record, as `render` prints it, and the plan's steps stay theirs.
+  test("a contract left out of date by a setting the person changed is rendered again from the record", () => {
+    const proj = project();
+    writePlan(proj);
+    const state = seededStateFile(proj);
+    writeFileSync(state, readFileSync(state, "utf-8").replace("- **Test Strategy**: Standard", "- **Test Strategy**: Comprehensive"));
+    const fresh = contract(proj);
+    expect(fresh).toContain('"test_strategy": "comprehensive"');
+    expect(planText(proj)).not.toContain(fresh);
+    expect(next(proj).kind).toBe("ask");
+    expect(planText(proj)).toBe(STEPS + fresh);
+  });
+
+  // Every other byte is the agent's: the section is found as the plan's
+  // contract is read (fences tracked, the first heading), and a plan with none
+  // gets it at the end. replaceTestingContractSection keeps one blank line
+  // before the section and ends the file with one newline.
+  test.each([
+    [
+      "a second Testing Contract heading after another section stays",
+      (rendered: string) => `${STEPS}${rendered.replace(/("version": )1/, "$1 1,,")}\n## Notes\n\nkeep me\n\n## Testing Contract\n\nan older copy\n`,
+      (rendered: string) => `${STEPS}${rendered}\n## Notes\n\nkeep me\n\n## Testing Contract\n\nan older copy\n`,
+    ],
+    [
+      "a heading quoted inside a code fence stays, and the section goes at the end",
+      () => `${STEPS}\`\`\`md\n## Testing Contract\n\`\`\`\n`,
+      (rendered: string) => `${STEPS}\`\`\`md\n## Testing Contract\n\`\`\`\n\n${rendered}`,
+    ],
+    [
+      "CRLF line ends stay CRLF",
+      () => STEPS.replace(/\n/g, "\r\n"),
+      (rendered: string) => `${STEPS}${rendered}`.replace(/\n/g, "\r\n"),
+    ],
+    [
+      "a plan with no trailing newline gets one",
+      () => STEPS.trimEnd(),
+      (rendered: string) => `${STEPS}${rendered}`,
+    ],
+  ] as const)("only the Testing Contract section is written: %s", (_label, plan, expected) => {
+    const proj = project();
+    writePlan(proj);
+    writeFileSync(planPath(proj), plan(contract(proj)), "utf-8");
+    const asked = next(proj);
+    expect(asked.kind, JSON.stringify(asked)).toBe("ask");
+    expect(planText(proj)).toBe(expected(contract(proj)));
+  });
+
+  test.each([...POLICIES])("under Guard Policy %s the same", (policy) => {
+    const proj = policyProject(policy);
+    agentPlan(proj, () => "");
+    const asked = next(proj);
+    expect(asked.kind, JSON.stringify(asked)).toBe("ask");
+    expect(planText(proj)).toBe(STEPS + contract(proj));
+  });
+
+  test("with plan approval off the plan is built with the contract the engine wrote", () => {
+    const proj = project("relaxed", "off");
+    agentPlan(proj, () => "");
+    const build = next(proj);
+    expect(build.kind, JSON.stringify(build)).toBe("run-stage");
+    expect(build.plan_approval?.status).toBe("approved");
+    expect(planText(proj)).toBe(STEPS + contract(proj));
+  });
+
+  // While the person edits the files the engine writes nothing under them; once
+  // they say done it writes the contract their edit broke and asks once.
+  test("while the person edits the files the plan is theirs", () => {
+    const proj = project();
+    askFor(proj);
+    replyAndRecord(proj, "I'll edit the files", "I'll edit the files");
+    const theirs = planText(proj).replace('"version": 1', '"version": 1,,');
+    writeFileSync(planPath(proj), theirs, "utf-8");
+    const editing = next(proj);
+    expect(editing.kind, JSON.stringify(editing)).toBe("ask");
+    expect(editing.plan_approval.editing).toBe(true);
+    expect(planText(proj)).toBe(theirs);
+  });
+
+  // After the question is put, a `next` that finds the block broken or out of
+  // date writes it and shows the question again over the plan as written: the
+  // question's record takes the new file, so an answer covers what was shown,
+  // and nothing outside the section changes.
+  test.each(POLICIES.flatMap((policy) => [[policy, "broken"], [policy, "out of date"]] as const))(
+    "under %s, a question already put whose contract is then %s is shown again over the plan the engine wrote",
+    (policy, how) => {
+      const proj = policyProject(policy);
+      askFor(proj);
+      const shown = questions(proj);
+      if (how === "broken") breakBlock(proj);
+      else moveContract(proj);
+      const again = next(proj);
+      expect(again.kind, JSON.stringify(again)).toBe("ask");
+      expect(again.ask_type).toBe("plan-approval");
+      expect(planText(proj)).toBe(STEPS + contract(proj));
+      // Broken with nothing moved, the block written back is the one shown: the
+      // same question over the same file. Moved, the question takes the new file.
+      if (how === "broken") expect(questions(proj)).toBe(shown);
+      else expect(questions(proj)).not.toBe(shown);
+      replyAndRecord(proj, "1", "Approve Plan");
+      const build = next(proj);
+      expect(build.kind, JSON.stringify(build)).toBe("run-stage");
+      expect(build.plan_approval?.status).toBe("approved");
+      expect(planText(proj)).toBe(STEPS + contract(proj));
+    },
+  );
+
+  // The person's own note under the heading, written while they edit the
+  // files: with the block intact nothing is written and the note stays; a note
+  // that took the block's place is written over only with the question that
+  // says the engine repaired the Testing Contract of their edited plan.
+  test("their own note beside the intact block stays, and their approval records the plan with it", () => {
+    const proj = project();
+    askFor(proj);
+    replyAndRecord(proj, "I'll edit the files", "I'll edit the files");
+    const theirs = `${planText(proj)}\nMy note: keep the slugify tests short.\n`;
+    writeFileSync(planPath(proj), theirs, "utf-8");
+    reply(proj, "done");
+    const recorded = answer(proj, "Approve Plan");
+    expect(recorded.code, recorded.message).toBe(0);
+    expect(recorded.recorded).toBe("approve");
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+    expect(planText(proj)).toBe(theirs);
+  });
+
+  test("their own note in the block's place is written over only with the line that says so", () => {
+    const proj = project();
+    askFor(proj);
+    replyAndRecord(proj, "I'll edit the files", "I'll edit the files");
+    writeFileSync(planPath(proj), `${STEPS}## Testing Contract\n\nMy note: use TDD for this one.\n`, "utf-8");
+    reply(proj, "done");
+    expect(answer(proj, "Approve Plan").message).toContain("broke the Testing Contract block");
+    const asked = next(proj);
+    expect(asked.kind, JSON.stringify(asked)).toBe("ask");
+    expect(asked.question).toBe("I repaired the plan's Testing Contract (the test rules your build follows). Build your edited plan?");
+    expect(planText(proj)).toBe(STEPS + contract(proj));
+  });
+
+  // A plan sent back waits for its change: the engine never makes it read as
+  // revised. A stale contract on it is left alone; a broken one is written
+  // back, and the plan is still the one they sent back.
+  test.each([
+    ["left out of date by a setting", (proj: string) => {
+      const state = seededStateFile(proj);
+      writeFileSync(state, readFileSync(state, "utf-8").replace("- **Test Strategy**: Standard", "- **Test Strategy**: Comprehensive"));
+    }, false],
+    ["broken by a save", (proj: string) => {
+      writeFileSync(planPath(proj), planText(proj).replace('"version": 1', '"version": 1,,'), "utf-8");
+    }, true],
+  ] as const)("a plan sent back with Request Changes and its contract %s still waits for its change", (_label, change, written) => {
+    const proj = project();
+    askFor(proj);
+    const sentBack = planText(proj);
+    reply(proj, "use a lookup table");
+    expect(answer(proj, "Request Changes: use a lookup table").code).toBe(0);
+    change(proj);
+    const before = planText(proj);
+    for (let round = 0; round < 2; round++) {
+      expect(next(proj).plan_approval).toEqual({ status: "revise", feedback: "use a lookup table" });
+      expect(planText(proj)).toBe(written ? sentBack : before);
+    }
+  });
+
+  // After an approval a broken contract stops the build under every Guard
+  // Policy, and the block is the engine's to put back: it writes back the block
+  // that was approved, so the approval holds and the build goes on.
+  test.each([...POLICIES])("under %s an approved plan whose contract later broke is written back and still builds", (policy) => {
+    const proj = policyProject(policy);
+    askFor(proj);
+    replyAndRecord(proj, "1", "Approve Plan");
+    const approved = planText(proj);
+    writeFileSync(planPath(proj), approved.replace('"version": 1', '"version": 1,,'), "utf-8");
+    const build = next(proj);
+    expect(build.kind, JSON.stringify(build)).toBe("run-stage");
+    expect(build.plan_approval).toEqual({ status: "approved" });
+    expect(planText(proj)).toBe(approved);
+  });
+
+  // A contract a setting moved after the approval, its block intact: under
+  // relaxed and off the approved plan builds and is not written; under strict
+  // the engine writes the moved block once and asks once.
+  test.each(["relaxed", "off"] as const)("under %s an approved plan whose contract a setting moved builds and is not written", (policy) => {
+    const proj = policyProject(policy);
+    askFor(proj);
+    replyAndRecord(proj, "1", "Approve Plan");
+    const approved = planText(proj);
+    moveContract(proj);
+    const build = next(proj);
+    expect(build.kind, JSON.stringify(build)).toBe("run-stage");
+    expect(build.plan_approval?.status).toBe("approved");
+    expect(planText(proj)).toBe(approved);
+  });
+
+  test.each(["strict", "locked strict"] as const)("under %s an approved plan whose contract a setting moved is written once and asked about once", (policy) => {
+    const proj = policyProject(policy);
+    askFor(proj);
+    replyAndRecord(proj, "1", "Approve Plan");
+    moveContract(proj);
+    const asked = next(proj);
+    expect(asked.kind, JSON.stringify(asked)).toBe("ask");
+    expect(planText(proj)).toBe(STEPS + contract(proj));
+    // The line that says what changed since they approved, said with the question.
+    expect(asked.plan_approval.note, JSON.stringify(asked)).toContain("Your approved plan changed before the build");
+    const again = next(proj);
+    expect(again.kind, JSON.stringify(again)).toBe("ask");
+    expect(again.question).toBe(asked.question);
+    expect(again.plan_approval.note).toBe(asked.plan_approval.note);
+    expect(planText(proj)).toBe(STEPS + contract(proj));
+  });
+
+  // A plan sent back at the gate waits for its change too: a contract moved
+  // since its approval is not written over it, so it still reads as the plan
+  // they sent back and their words reach the revision.
+  test.each([["strict", "moved"], ["relaxed", "moved"], ["strict", "broken"], ["relaxed", "broken"]] as const)(
+    "under %s a plan sent back at the gate with its contract %s is revised with their words first",
+    (policy, how) => {
+      const proj = project(policy);
+      askFor(proj);
+      replyAndRecord(proj, "1", "Approve Plan");
+      expect(next(proj).plan_approval).toEqual({ status: "approved" });
+      appendAuditEntry("GATE_REJECTED", {
+        Stage: "code-generation", "User Input": "Request Changes", Feedback: "log every slug",
+      }, proj);
+      const sentBack = planText(proj);
+      if (how === "moved") moveContract(proj);
+      else breakBlock(proj);
+      expect(next(proj).plan_approval).toEqual({ status: "revise", feedback: "log every slug" });
+      // Moved: not written. Broken: written back to the block it was sent back with.
+      expect(planText(proj)).toBe(sentBack);
+    },
+  );
+
+  // The section is the block's: what an agent wrote there instead (a summary
+  // of the contract, as an agent wrote in a live run, or a note after a bad
+  // copy) is written over.
+  test.each([
+    ["a summary of the contract in the agent's words", () =>
+      `${STEPS}## Testing Contract\n\n- **Methodology:** test-after\n- **Test strategy:** Minimal\n` +
+        "- **Contract hash:** `sha256:8b88443a8c617567a1344d4ec2a14fc8e4e0abe702a4048e68bc207a690b0910`\n"],
+    ["a note after a broken copy", (rendered: string) =>
+      `${STEPS}${rendered.replace('"version": 1', '"version": 1,,')}\nThe contract above sets the test order.\n`],
+  ] as const)("a Testing Contract section holding %s is written over", (_label, plan) => {
+    const proj = project();
+    writePlan(proj);
+    writeFileSync(planPath(proj), plan(contract(proj)), "utf-8");
+    expect(next(proj).kind).toBe("ask");
+    expect(planText(proj)).toBe(STEPS + contract(proj));
+  });
+
+  // A heading or a plan step in the section belongs to the plan (a block whose
+  // closing fence is gone runs the section on over them), and a plan that did
+  // not read as UTF-8 text would be garbled by a write: the plan step names the
+  // repair, as before, and the file is left as it is.
+  test.each([
+    ["a plan step under the heading", () => `${STEPS}## Testing Contract\n\n- [ ] Step 2: run the tests\n`],
+    ["a block whose closing fence is gone, with the plan's steps after it", (rendered: string) =>
+      `${STEPS}${rendered.replace(/```\n$/, "").replace('"version": 1', '"version": 1,,')}\n### Step 2\n\n- [ ] Step 2: handle unicode\n`],
+  ] as const)("a Testing Contract section holding %s is not written", (_label, plan) => {
+    const proj = project();
+    writePlan(proj);
+    const theirs = plan(contract(proj));
+    writeFileSync(planPath(proj), theirs, "utf-8");
+    const step = next(proj);
+    expect(step.kind, JSON.stringify(step)).toBe("run-stage");
+    expect(step.plan_approval?.status).toBe("plan");
+    expect(step.plan_approval?.note).toContain("Testing Contract");
+    expect(planText(proj)).toBe(theirs);
+  });
+
+  test("a plan saved as UTF-16 (Windows PowerShell 5.1's own redirect) is not written back", () => {
+    const proj = project();
+    writePlan(proj);
+    const utf16 = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(STEPS, "utf16le")]);
+    writeFileSync(planPath(proj), utf16);
+    const step = next(proj);
+    expect(step.kind, JSON.stringify(step)).toBe("run-stage");
+    expect(step.plan_approval?.status).toBe("plan");
+    expect(readFileSync(planPath(proj)).equals(utf16)).toBe(true);
+  });
+
+  // The Stop hook's own `next` is a read-only probe: it reads the plan as it
+  // stands and writes nothing; the agent's `next` writes the block and asks.
+  test("the Stop hook's read-only probe writes nothing, and the next `next` writes the contract", () => {
+    const proj = project();
+    agentPlan(proj, () => "");
+    const probe = runOrchestrateNext(ORCHESTRATE, proj, [], {
+      env: { ...process.env, AIDLC_UNATTENDED: "0", AIDLC_STOP_HOOK_PROBE: "1" },
+    });
+    expect(probe.status, probe.out).toBe(0);
+    expect((probe.directive as unknown as Emitted | null)?.kind, probe.out).toBe("run-stage");
+    expect(planText(proj)).toBe(STEPS);
+    expect(next(proj).kind).toBe("ask");
+    expect(planText(proj)).toBe(STEPS + contract(proj));
+  });
+
+  test("a group of Units: each plan gets its own contract and one question asks about all", () => {
+    const pd = swarmFixture(false);
+    for (const unit of GROUP) {
+      const dir = codeGenerationRecordDir(pd, unit);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "code-generation-plan.md"), `# Plan for ${unit}\n\n## Summary\n\n- Builds: ${unit}\n\n## Steps\n- [ ] Implement ${unit}\n`, "utf-8");
+      writeFileSync(join(dir, "unit-test-instructions.md"), `# Tests\n\nRun ${unit} tests.\n`, "utf-8");
+    }
+    const ask = swarmState(pd);
+    expect(ask.kind, JSON.stringify(ask)).toBe("ask");
+    for (const unit of GROUP) {
+      expect(readFileSync(join(codeGenerationRecordDir(pd, unit), "code-generation-plan.md"), "utf-8"))
+        .toBe(`# Plan for ${unit}\n\n## Summary\n\n- Builds: ${unit}\n\n## Steps\n- [ ] Implement ${unit}\n\n${contract(pd)}`);
+    }
   });
 });

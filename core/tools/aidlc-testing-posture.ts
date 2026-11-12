@@ -1396,6 +1396,28 @@ export function replaceTestingContractSection(
   return crlf ? text.replace(/\n/g, "\r\n") : text;
 }
 
+// A heading or a plan step: lines the plan owns, never written over.
+const PLAN_OWN_LINE_RE = /^[ \t]*(?:#{1,6}[ \t]|(?:[-*+]|\d+[.)])[ \t]+\[[ xX-]\])/m;
+
+/**
+ * The plan with this contract's block as its `## Testing Contract` section, the
+ * section added at the end of a plan that has none; null when the result would
+ * not read back as this contract. The section is the block's, so what an agent
+ * wrote there instead (a summary of the contract) is written over; a heading or
+ * a plan step in it is not (a block whose closing fence is gone runs the
+ * section on over the plan's own lines), nor a plan that did not read as UTF-8
+ * text (a UTF-16 or ANSI file), which writing back would garble.
+ */
+export function planWithTestingContract(plan: string, contract: TestingPostureContract): string | null {
+  if (plan.includes("\uFFFD") || plan.includes("\u0000") || PLAN_OWN_LINE_RE.test(rawMarkdownSection(plan, CONTRACT_HEADING))) {
+    return null;
+  }
+  const written = replaceTestingContractSection(plan, contract) ??
+    replaceTestingContractSection(`${plan}\n\n${CONTRACT_HEADING}\n`, contract);
+  const read = written === null ? null : readTestingContract(written);
+  return read !== null && "contract" in read && read.contract.contract_sha256 === contract.contract_sha256 ? written : null;
+}
+
 function rawMarkdownSection(content: string, heading: string): string {
   const lines = content.replace(/\r\n/g, "\n").split("\n");
   const body: string[] = [];
