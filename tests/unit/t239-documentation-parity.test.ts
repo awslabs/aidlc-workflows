@@ -1104,6 +1104,54 @@ describe("documentation parity derives current behavior from authored implementa
     expect(/merge of a plugin's `memory\/` subtree/.test(chapter), "the chapter lists memory as deferred").toBe(false);
   });
 
+  test("the stage reference says support agents take part only when collaborators are on", () => {
+    const shipsOn = scopeNames.filter(
+      (scope) => frontmatterScalar(read("core", "scopes", `aidlc-${scope}.md`), "collaborators") === "on",
+    );
+    expect(shipsOn.length, "a shipped scope runs with collaborators off").toBeLessThan(scopeNames.length);
+    const phases = new Set(
+      filesBelow(at("core", "aidlc-common", "stages"), ".md")
+        .filter((file) => /^support_agents:[ \t]*\r?\n[ \t]+-[ \t]+aidlc-/m.test(readFileSync(file, "utf8")))
+        .map((file) => file.split(/[\\/]/).at(-2) ?? ""),
+    );
+    expect(phases.size, "stages that declare support agents").toBeGreaterThan(0);
+    for (const phase of phases) {
+      const page = normalized(read("docs", "reference", "04-stages", `${phase}.md`));
+      expect(page.includes("collaborators"), `docs/reference/04-stages/${phase}.md names the collaborators setting`).toBe(true);
+    }
+    for (const file of filesBelow(at("docs", "reference", "04-stages"), ".md")) {
+      for (const clause of normalized(readFileSync(file, "utf8")).matchAll(/shipped on only for ([^;)]+)/g)) {
+        expect(nameList(clause[1]), `${basename(file)}: shipped on only for`).toEqual(shipsOn);
+      }
+    }
+    const compliance = read("docs", "reference", "05-agent-system.md")
+      .split(/\r?\n/)
+      .find((line) => line.startsWith("- aidlc-compliance-agent operates"));
+    expect(compliance?.includes("collaborators"), "05-agent-system.md: the compliance agent needs collaborators").toBe(true);
+  });
+
+  test("the pages that name the scopes running no Operation stage name every one", () => {
+    const graph = JSON.parse(read("dist", "claude", ".claude", "tools", "data", "stage-graph.json")) as Array<{
+      slug: string;
+      phase: string;
+    }>;
+    const operation = graph.filter((stage) => stage.phase === "operation").map((stage) => stage.slug);
+    const none = Object.keys(scopeGrid)
+      .filter((scope) => operation.every((slug) => scopeGrid[scope].stages[slug] !== "EXECUTE"))
+      .sort();
+    expect(none.length, "scopes that run no Operation stage").toBeGreaterThan(0);
+    for (const path of [
+      ["docs", "reference", "diagrams.md"],
+      ["docs", "guide", "04-phases-and-stages.md"],
+    ]) {
+      const text = normalized(read(...path));
+      const claims = [...text.matchAll(/([^.();]*) run none of them/g)];
+      expect(claims.length, `${path.at(-1)} names the scopes with no Operation stage`).toBeGreaterThan(0);
+      for (const claim of claims) expect(nameList(claim[1]), `${path.at(-1)}`).toEqual(none);
+      expect(text.includes("entire phase may be skipped for"), `${path.at(-1)} still says may be skipped`).toBe(false);
+    }
+  });
+
   test("facilitator guide quotes current scope sizes, depth defaults, and doctor rows", () => {
     const guide = read("docs", "guide", "facilitator-guide.md");
     const flat = normalized(guide);

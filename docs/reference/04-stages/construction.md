@@ -16,6 +16,11 @@ content, not the walk source.
 All stages follow `stage-protocol.md` for approval gates, question format,
 completion messages, and state tracking.
 
+Support agents take part when collaborators are on (the `collaborators`
+setting, shipped on only for `enterprise`; `/aidlc --collaborators on` turns it
+on for one piece of work). With collaborators off, the engine hands each stage
+an empty `support_agents` list and the lead runs alone.
+
 > **Path convention.** Each workflow's artifacts live under its **intent record
 > dir** — `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/` (where `<space>` is
 > `default` unless a non-default space is in play, and `<YYMMDD>-<label>` is the
