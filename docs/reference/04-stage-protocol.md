@@ -53,9 +53,7 @@ The conductor's Routing section defines the loading rules:
   event is detected mid-stage. This keeps error recovery and change handling
   out of context for normal forward-progress stages.
 - **`stage-protocol-governance.md`**: load at phase boundaries
-  (1.7->2.1, 2.9->3.1, 3.7->4.1) to run the Phase Boundary Verification
-  traceability check. This limits governance overhead to the points where it
-  is needed.
+  (1.7->2.1, 2.9->3.1, 3.7->4.1).
 - **`stage-protocol-learnings.md`**: load only when `protocol_modules` includes `learnings`. With `ceremony.learnings: off`, keep no diary and skip the entire ritual.
 - **`stage-protocol-reviewer.md`**: load when `protocol_modules` includes
   `reviewer`, or when the directive carries a reviewer. **`stage-protocol-reviewer-unit.md`**
@@ -1549,23 +1547,7 @@ outputs are sufficient and consistent for the next phase.
 *(`stage-protocol-governance.md` Section 13 — distinct from the Learnings
 Ritual, which is `stage-protocol-learnings.md` Section 13)*
 
-### Triggers
-
-- After last stage of each phase is approved
-- Before first stage of next phase begins
-- On demand, when the person asks for it (`/aidlc --status` only reports and
-  runs no check)
-
-### Process
-
-1. Read methodology from `.claude/knowledge/aidlc-shared/verification.md`
-2. Run phase-specific traceability checks
-3. Write results to `<record>/verification/phase-check-<phase>.md`, the name the
-   phase-ending stages and `verification.md` use (the governance protocol module
-   still calls it `[phase-boundary]-verification.md`)
-4. If failed: present issues (missing links, orphaned artifacts,
-   inconsistencies) before proceeding
-5. `PHASE_VERIFIED` is emitted by the engine at the phase boundary; do not append it
+`PHASE_VERIFIED` is emitted by the engine at the phase boundary; do not append it
 
 ### Per-Phase Checks
 

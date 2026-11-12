@@ -1677,7 +1677,7 @@ Strictly 2-option: Approve / Request Changes.
 
 - **Phase boundary verification**: This is the last stage of the Construction
   phase. It performs the Construction-to-Operation phase boundary verification
-  check (per stage-protocol-governance.md section 13), validating that architecture traces
+  check, validating that architecture traces
   to code and code traces to tests. Results are written to
   `<record>/verification/phase-check-construction.md`.
 - **Conditional execution**: This stage is skipped if the project already has

@@ -1440,8 +1440,7 @@ See `docs/guide/04-phases-and-stages.md` for the current Construction walk.
   definition
 - **Stage Protocol**: `core/aidlc-common/protocols/stage-protocol.md`
   -- Approval gates, question format, completion messages, and the §13 Learnings
-  Ritual. Phase boundary verification lives in
-  `stage-protocol-governance.md` §13.
+  Ritual.
 - **Ideation Phase**: `docs/reference/04-stages/ideation.md` -- Previous phase
   documentation
 - **Construction Phase**: `docs/reference/04-stages/construction.md` — conditional
