@@ -92,10 +92,7 @@ import {
 } from "./aidlc-install-paths.ts";
 import {
   channelPath,
-  defaultHarnessPath,
-  machineConfigPath,
   readMachineChannel,
-  updateCachePath,
   writeMachineChannel,
 } from "./aidlc-machine-config.ts";
 import {
@@ -119,6 +116,7 @@ import {
 import {
   assertSafeUninstallRoot,
   buildUninstallPlan,
+  INSTALL_ROOT_ANSWERS,
   pluginCatalogueOwnership,
   untrustedPathList,
 } from "./aidlc-uninstall-plan.ts";
@@ -2522,13 +2520,7 @@ function uninstallCommand(argv: string[]): CommandResult {
 }
 
 function scheduleWindowsUninstall(purge: boolean, plan: UninstallPlan, warning: string | null): CommandResult {
-  const preserved = [
-    machineConfigPath(),
-    updateCachePath(),
-    join(installRoot(), "pins.json"),
-    defaultHarnessPath(),
-    channelPath(),
-  ];
+  const preserved = INSTALL_ROOT_ANSWERS.map((name) => join(installRoot(), name));
   scheduleWindowsUninstallContinuation(purge, preserved, plan);
   return success(
     `${warning ? `${warning}\n` : ""}uninstall scheduled; Windows cleanup will finish after this command exits${
