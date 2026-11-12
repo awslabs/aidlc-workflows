@@ -27,15 +27,19 @@ export type RuleEntry = { rel: string; abs: string; seed?: string };
 export type RuleContent = { path: string; text: string };
 
 // These are explanatory preambles in the shipped empty team/project templates,
-// not policy. Match exact lines so any authored blockquote remains substantive.
+// not policy, in today's wording and the earlier one a team's own files keep.
+// Match exact lines so any authored blockquote remains substantive.
 const TEMPLATE_PREAMBLE_LINES = new Set([
   "> This team's affirmed practices and corrections. Loaded after `org.md` as",
   "> strict-additive guidance; contradictions with broader policy are rejected.",
+  "> strict-additive guidance.",
   "> Populated by the practices-discovery affirmation gate. Edit at the gate,",
   "> not directly.",
   "> Project-specific specialisation and corrections. Loaded after `org.md` and",
   "> `team.md` as strict-additive guidance; contradictions with broader policy",
   "> are rejected. Populated by practices-discovery and the self-learning loop.",
+  "> `team.md` as strict-additive guidance.",
+  "> Populated by practices-discovery and the self-learning loop.",
   ">",
   "> Use sparingly: most teams don't need a project layer. Reach for it",
   "> only when this specific project needs stable, durable guidance beyond the",
