@@ -45,7 +45,6 @@ const KEPT = [
   "`Yes, for this project` / `Yes, for the team` / `No`",
   "never park, report, or otherwise touch the active work",
   "stage-protocol-recovery.md",
-  "stage-protocol-governance.md",
   "read `composer.md` beside this file first",
 ];
 

@@ -186,41 +186,6 @@ If ANY ambiguity, vagueness, or contradictions found in Step 7:
 
 This step applies only when `directive.ceremony.summary_confirmation === "on"`. When it is `"off"`, proceed directly to Step 10 with no summary-confirmation prompt, entry, or receipt.
 
-MANDATORY PRE-GENERATION STOP when enabled: After every original and follow-up answer is
-filled, append or update a `## Consolidated Summary Confirmation` entry in
-`<record>/inception/requirements-analysis/requirements-analysis-questions.md`.
-The entry MUST contain:
-
-- An unordered bullet list summarizing every answer (never number these summary
-  items; the following structured question starts its own response keys at 1)
-- `Does this all look correct before I generate the requirements artifact?`
-- `Looks correct` and `Request changes` options
-- A blank `[Answer]:` tag
-
-Before presenting it, record the prompt with the checkpoint flags; a plain
-`decision` or `answer` is an ordinary question and never counts:
-
-```bash
-{{INVOKE}} engine log decision --stage requirements-analysis --checkpoint summary-confirmation --questions-file "<this questions-file path>" --decision "Does this all look correct before I generate the requirements artifact?" --options "Looks correct,Request changes"
-```
-
-Present that prompt as a structured question using the
-`Looks correct` / `Request changes` options from `stage-protocol.md`, then end
-the turn and wait for the user's response. After they respond, fill the
-confirmation `[Answer]:` with their exact choice, then record the receipt:
-
-```bash
-{{INVOKE}} engine log answer --stage requirements-analysis --checkpoint summary-confirmation --questions-file "<this questions-file path>" --details '<Looks correct or Request changes>'
-```
-
-If the user requests changes and their reply already says what should
-change, those words are the feedback. Otherwise ask **"What should change?"**
-and end the turn again, and do not update any answer until the user supplies
-that feedback. Then record the feedback, update the affected answers, reset the
-confirmation `[Answer]:` to blank, and repeat this step. Do NOT create
-`requirements.md` until the confirmation entry contains the user's explicit
-`Looks correct` answer and the receipt command succeeds.
-
 ### Step 10: Generate Requirements
 
 Create `<record>/inception/requirements-analysis/requirements.md` containing:

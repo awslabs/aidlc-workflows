@@ -493,7 +493,7 @@ large scope with significant unknowns.
    all six dimensions. Create
    `<record>/inception/requirements-analysis/requirements-analysis-questions.md`
    using the `[Answer]:` tag format. Include context-appropriate questions with
-   A-E options (A-D on Claude Code). Every ordinary clarifying question must end with `X. Other (please specify)` as
+   A-E options (A-D on Claude Code, A-C on Codex). Every ordinary clarifying question must end with `X. Other (please specify)` as
    the final option. All `[Answer]:` tags left blank.
 
 7. **Collect and Analyze Answers** -- Read the questions file, confirm all
@@ -1440,8 +1440,7 @@ See `docs/guide/04-phases-and-stages.md` for the current Construction walk.
   definition
 - **Stage Protocol**: `core/aidlc-common/protocols/stage-protocol.md`
   -- Approval gates, question format, completion messages, and the §13 Learnings
-  Ritual. Phase boundary verification lives in
-  `stage-protocol-governance.md` §13.
+  Ritual.
 - **Ideation Phase**: `docs/reference/04-stages/ideation.md` -- Previous phase
   documentation
 - **Construction Phase**: `docs/reference/04-stages/construction.md` — conditional

@@ -1694,9 +1694,9 @@ export function onboard(
     const real = realpathSync(abs);
     const documentsWithSep = documentsReal.endsWith(sep) ? documentsReal : documentsReal + sep;
     if (!real.startsWith(documentsWithSep)) {
-      // Copying an external path in is the design's default behaviour, but it
-      // belongs with the story that owns source kinds; refusing clearly beats
-      // guessing.
+      // The dispatcher copies a file named inside the project into documents/
+      // before this runs (withNamedDocumentCopied in aidlc.ts), so what reaches
+      // here is a path outside the project, or this tool run on its own.
       throw new Error(
         `${pathArg} is outside ${portableSourcePath(projectDir, space, documentsAbs)}. ` +
           `Copy it under documents/ first, then re-run.`,

@@ -50,6 +50,7 @@ const manifest: HarnessManifest = {
   harnessDir: ".agent",
   orchestratorSkillPath: ".agent/skills/aidlc/SKILL.md",
   tierFlavor: "antigravity",
+  questionOptions: 4,
   rootIntegrations: [
     {
       path: ".gitignore",
