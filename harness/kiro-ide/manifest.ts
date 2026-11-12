@@ -156,7 +156,7 @@ const KIRO_IDE_TRUST_STEP =
 const KIRO_CLI_RESTART =
   "In Kiro CLI, quit Kiro and start `kiro-cli --v3` again in this folder (if Kiro asks whether you " +
   "trust this workspace and you know what is in this folder, choose 'Trust, continue')";
-const KIRO_ACP_CLIENT = "If you drive Kiro from an ACP client, the Kiro IDE guide names what that client must send.";
+const KIRO_ACP_CLIENT = "If you drive Kiro from an ACP client, the AI-DLC guide for Kiro names what that client must send.";
 const KIRO_CLI_ACP_STEP = `${KIRO_CLI_RESTART}. ${KIRO_ACP_CLIENT}`;
 
 // A restarted Kiro CLI is a new chat, where the entry carries the work on, so
@@ -265,7 +265,7 @@ const manifest: HarnessManifest = {
   // 1.1.14 from the Restricted Mode banner, and on 1.2.4 from both the banner
   // and Trust Folder & Continue), so every copy of the step names both.
   // Another agent in the picker did not stop the hooks. What an ACP client
-  // must send to run hooks is in the Kiro IDE guide.
+  // must send to run hooks is in the AI-DLC guide for Kiro.
   hookActivation: {
     recovery: `${KIRO_IDE_TRUST_STEP} ${KIRO_CLI_ACP_RESTART_STEP}`,
     // Says what happened, that the question may come again, and gives the
