@@ -7018,7 +7018,7 @@ describe("t218 the Kiro IDE trust step", () => {
       hookActivation: { recovery: string };
     }).hookActivation;
     expect(activation.recovery).toContain(
-      "If you drive Kiro from an ACP client, the Kiro IDE guide names what that client must send.",
+      "If you drive Kiro from an ACP client, the AI-DLC guide for Kiro names what that client must send.",
     );
     expect(activation.recovery).not.toContain("hooks");
     // The cases below take the Kiro IDE step as everything before this marker.
