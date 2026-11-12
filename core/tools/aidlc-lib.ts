@@ -22727,6 +22727,7 @@ export function shapeSourceSnapshotIndex(
   repoDir: string,
   indexFile: string,
   carriesWorkspaceShell: boolean,
+  recordBase: string | null = null,
 ): SourceSnapshotIndexShape | null {
   const hasWorktreeContext = existsSync(
     join(repoDir, ".aidlc", "worktree-meta.json"),
@@ -22785,6 +22786,22 @@ export function shapeSourceSnapshotIndex(
         "--",
         ...[...AIDLC_ROOT_SETTINGS_FILES].map((name) => `:(top,literal)${name}`),
       ],
+      { env, encoding: "utf-8" },
+    );
+    if (restored.status !== 0) return null;
+  }
+  // AI-DLC's records and worktree metadata ride no Source Commit either. Given
+  // the commit a Bolt shares with the branch it lands on, they keep its bytes,
+  // so a Bolt commit that carried them (a worker's `git add -A`) does not land
+  // them there; finalize brings the Unit's records back on its own. Without it
+  // they keep HEAD's.
+  const recordPaths = effectiveCarriesWorkspaceShell
+    ? AIDLC_SHELL_PATHS.map((path) => `${path}/`)
+    : (worktreeContext?.exactPaths ?? []).map((path) => `:(top)${path}`);
+  if (recordBase !== null && recordPaths.length > 0) {
+    const restored = spawnSync(
+      "git",
+      ["-C", repoDir, "reset", "-q", recordBase, "--", ...recordPaths],
       { env, encoding: "utf-8" },
     );
     if (restored.status !== 0) return null;
