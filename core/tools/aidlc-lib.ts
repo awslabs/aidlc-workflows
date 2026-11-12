@@ -171,6 +171,7 @@ import {
   copiedAuditBlocks,
   delegatedWorktreeIntent,
   displaySlugFromDirName,
+  gcSessionPidEntries,
   getField,
   gitRevParseSingle,
   helperSessionPath,
@@ -201,7 +202,6 @@ import {
   readAuditShardTexts,
   readIntentRegistry,
   readSessionBinding,
-  readSessionPidEntry,
   readStateFile,
   readStateWrites,
   recordDirMatches,
@@ -7446,43 +7446,6 @@ export function writeSessionPidEntry(
     sessionId,
     startTime: resolvedIdentity?.startTime ?? null,
   });
-}
-
-function gcSessionPidEntries(
-  projectDir: string,
-  deadlineMs: number,
-  skip: ReadonlySet<number> = new Set(),
-  readIdentity: (pid: number) => ProcessIdentity | null = processIdentityReader(deadlineMs),
-): void {
-  let names: string[];
-  try {
-    names = readdirSync(sessionPidMapDir(projectDir));
-  } catch {
-    return;
-  }
-  for (const name of names) {
-    if (!/^\d+$/.test(name)) continue;
-    if (Date.now() >= deadlineMs) break;
-    const pid = Number.parseInt(name, 10);
-    if (skip.has(pid)) continue;
-    const entry = readSessionPidEntry(projectDir, pid);
-    let stale: boolean;
-    if (!entry || !processIsAlive(pid)) {
-      stale = true;
-    } else if (entry.startTime !== null) {
-      const identity = readIdentity(pid);
-      if (identity === null) continue;
-      stale = identity.startTime !== entry.startTime;
-    } else {
-      stale = false;
-    }
-    if (!stale) continue;
-    try {
-      unlinkSync(join(sessionPidMapDir(projectDir), name));
-    } catch {
-      /* raced with another hook or cleanup */
-    }
-  }
 }
 
 // Map the harness process and each ancestor to the current session. The hook

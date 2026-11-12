@@ -868,7 +868,6 @@ gateRejectionMatchesAttempt
 gateWordsDir
 gateWordsPath
 gateWordsSinceUnitReview
-gcSessionPidEntries
 generatedRunnerSkill
 gitAlternateEntry
 gitCommitSourceListing

@@ -10,7 +10,7 @@
 import { scopeStampLanded } from "./aidlc-unit-landing.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { accessSync, constants as fsConstants, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { accessSync, constants as fsConstants, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep } from "node:path";
 import { dlopen, FFIType, type Pointer } from "bun:ffi";
@@ -849,6 +849,43 @@ export function readSessionPidEntry(projectDir: string, pid: number): SessionPid
     return candidate as SessionPidEntry;
   } catch {
     return null;
+  }
+}
+
+export function gcSessionPidEntries(
+  projectDir: string,
+  deadlineMs: number,
+  skip: ReadonlySet<number> = new Set(),
+  readIdentity: (pid: number) => ProcessIdentity | null = processIdentityReader(deadlineMs),
+): void {
+  let names: string[];
+  try {
+    names = readdirSync(sessionPidMapDir(projectDir));
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (!/^\d+$/.test(name)) continue;
+    if (Date.now() >= deadlineMs) break;
+    const pid = Number.parseInt(name, 10);
+    if (skip.has(pid)) continue;
+    const entry = readSessionPidEntry(projectDir, pid);
+    let stale: boolean;
+    if (!entry || !processIsAlive(pid)) {
+      stale = true;
+    } else if (entry.startTime !== null) {
+      const identity = readIdentity(pid);
+      if (identity === null) continue;
+      stale = identity.startTime !== entry.startTime;
+    } else {
+      stale = false;
+    }
+    if (!stale) continue;
+    try {
+      unlinkSync(join(sessionPidMapDir(projectDir), name));
+    } catch {
+      /* raced with another hook or cleanup */
+    }
   }
 }
 
