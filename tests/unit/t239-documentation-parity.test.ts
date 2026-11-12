@@ -1122,6 +1122,100 @@ describe("documentation parity derives current behavior from authored implementa
     ).toBe(true);
   });
 
+  test("the stage reference's scope listings are the compiled plans", () => {
+    const order = (JSON.parse(read("dist", "claude", ".claude", "tools", "data", "stage-graph.json")) as Array<{
+      slug: string;
+    }>).map((stage) => stage.slug);
+    const listings = filesBelow(at("docs", "reference", "04-stages"), ".md").flatMap((file) =>
+      [...readFileSync(file, "utf8").matchAll(/^\$ aidlc engine graph scope ([a-z][a-z-]*)\r?\n([\s\S]*?)^```/gm)].map(
+        ([, scope, body]) => ({ where: `${basename(file)} ${scope}`, scope, lines: body.split(/\r?\n/).map((line) => line.trim()).filter(Boolean) }),
+      ),
+    );
+    expect(listings.length, "the stage reference shows at least one compiled plan").toBeGreaterThan(0);
+    for (const { where, scope, lines } of listings) {
+      expect(scopeGrid[scope], `${where}: a shipped scope`).toBeDefined();
+      const plan = order.filter((slug) => scopeGrid[scope].stages[slug] === "EXECUTE");
+      // A "..." line stands for stages left out; every other line is the plan's next stage.
+      let next = 0;
+      let skipped = false;
+      for (const line of lines) {
+        if (line === "...") {
+          skipped = true;
+          continue;
+        }
+        const found = plan.indexOf(line, next);
+        expect(found, `${where}: ${line} is on the plan, in order`).toBeGreaterThanOrEqual(next);
+        if (!skipped) expect(line, `${where}: the stage after ${plan[next - 1] ?? "the start"}`).toBe(plan[next]);
+        next = found + 1;
+        skipped = false;
+      }
+      if (!skipped) expect(next, `${where}: the listing ends where the plan ends`).toBe(plan.length);
+    }
+    for (const slug of ["code-generation", "build-and-test"]) expect(scopeGrid.infra.stages[slug]).toBe("EXECUTE");
+    const construction = normalized(read("docs", "reference", "04-stages", "construction.md"));
+    expect(/infra (?:runs no Code Generation|has neither)/.test(construction), "construction.md says infra skips them").toBe(false);
+  });
+
+  test("the plugin chapter does not call a plugin's house rules deferred", () => {
+    // The reference plugin ships house rules, and its own tests validate and compose it.
+    const manifest = JSON.parse(read("plugins", "test-pro", ".aidlc-plugin", "plugin.json")) as {
+      aidlc?: { contributes?: Record<string, string> };
+    };
+    expect(manifest.aidlc?.contributes?.memory).toBe("memory/");
+    expect(existsSync(at("plugins", "test-pro", "memory", "rules.md"))).toBe(true);
+    const chapter = normalized(read("docs", "reference", "18-plugin-mechanism.md"));
+    expect(/rejects a `memory` contribution/.test(chapter), "the chapter says validate rejects memory").toBe(false);
+    expect(/merge of a plugin's `memory\/` subtree/.test(chapter), "the chapter lists memory as deferred").toBe(false);
+  });
+
+  test("the stage reference says support agents take part only when collaborators are on", () => {
+    const shipsOn = scopeNames.filter(
+      (scope) => frontmatterScalar(read("core", "scopes", `aidlc-${scope}.md`), "collaborators") === "on",
+    );
+    expect(shipsOn.length, "a shipped scope runs with collaborators off").toBeLessThan(scopeNames.length);
+    const phases = new Set(
+      filesBelow(at("core", "aidlc-common", "stages"), ".md")
+        .filter((file) => /^support_agents:[ \t]*\r?\n[ \t]+-[ \t]+aidlc-/m.test(readFileSync(file, "utf8")))
+        .map((file) => file.split(/[\\/]/).at(-2) ?? ""),
+    );
+    expect(phases.size, "stages that declare support agents").toBeGreaterThan(0);
+    for (const phase of phases) {
+      const page = normalized(read("docs", "reference", "04-stages", `${phase}.md`));
+      expect(page.includes("collaborators"), `docs/reference/04-stages/${phase}.md names the collaborators setting`).toBe(true);
+    }
+    for (const file of filesBelow(at("docs", "reference", "04-stages"), ".md")) {
+      for (const clause of normalized(readFileSync(file, "utf8")).matchAll(/shipped on only for ([^;)]+)/g)) {
+        expect(nameList(clause[1]), `${basename(file)}: shipped on only for`).toEqual(shipsOn);
+      }
+    }
+    const compliance = read("docs", "reference", "05-agent-system.md")
+      .split(/\r?\n/)
+      .find((line) => line.startsWith("- aidlc-compliance-agent operates"));
+    expect(compliance?.includes("collaborators"), "05-agent-system.md: the compliance agent needs collaborators").toBe(true);
+  });
+
+  test("the pages that name the scopes running no Operation stage name every one", () => {
+    const graph = JSON.parse(read("dist", "claude", ".claude", "tools", "data", "stage-graph.json")) as Array<{
+      slug: string;
+      phase: string;
+    }>;
+    const operation = graph.filter((stage) => stage.phase === "operation").map((stage) => stage.slug);
+    const none = Object.keys(scopeGrid)
+      .filter((scope) => operation.every((slug) => scopeGrid[scope].stages[slug] !== "EXECUTE"))
+      .sort();
+    expect(none.length, "scopes that run no Operation stage").toBeGreaterThan(0);
+    for (const path of [
+      ["docs", "reference", "diagrams.md"],
+      ["docs", "guide", "04-phases-and-stages.md"],
+    ]) {
+      const text = normalized(read(...path));
+      const claims = [...text.matchAll(/([^.();]*) run none of them/g)];
+      expect(claims.length, `${path.at(-1)} names the scopes with no Operation stage`).toBeGreaterThan(0);
+      for (const claim of claims) expect(nameList(claim[1]), `${path.at(-1)}`).toEqual(none);
+      expect(text.includes("entire phase may be skipped for"), `${path.at(-1)} still says may be skipped`).toBe(false);
+    }
+  });
+
   test("facilitator guide quotes current scope sizes, depth defaults, and doctor rows", () => {
     const guide = read("docs", "guide", "facilitator-guide.md");
     const flat = normalized(guide);
