@@ -946,7 +946,9 @@ export function releaseCheckHolds(projectDir: string, session: SessionProcess, m
 
 // Written only beside an entry that already exists (never a folder), then the
 // release checks of processes that are gone are swept, since a project pinned
-// to an earlier release runs that release's own session-start cleanup.
+// to an earlier release runs that release's own session-start cleanup. A write
+// that is refused (a read-only engine probe changes no project bytes) sweeps
+// nothing either.
 export function recordReleaseCheck(projectDir: string, session: SessionProcess, mark: ReleaseCheckMark): void {
   const live = liveSession(projectDir, session);
   const path = releaseCheckPath(projectDir, session.pid);
@@ -954,7 +956,7 @@ export function recordReleaseCheck(projectDir: string, session: SessionProcess, 
   try {
     writeFileAtomic(path, `${JSON.stringify({ ...live, ...mark })}\n`);
   } catch {
-    // The next call checks again.
+    return; // The next call checks again.
   }
   const deadline = Date.now() + sessionAncestryBudgetMs();
   sweepReleaseChecks(projectDir, deadline, processIdentityReader(deadline));

@@ -9775,7 +9775,7 @@ describe("t243 a pinned release is checked once per session", () => {
     });
   });
 
-  test("a marked call still refuses a release whose runtime inventory changed", () => {
+  test("a marked call still refuses a release whose runtime inventory or file modes changed", () => {
     const pinned = pinnedProject();
     withMachine(pinned.machine, () => {
       writeSessionPidEntry(pinned.project, process.ppid, SESSION_A);
@@ -9785,6 +9785,15 @@ describe("t243 a pinned release is checked once per session", () => {
       writeFileSync(extra, "not in the baseline\n");
       expect(resolvePinnedDispatch(argv(pinned.project), pinned.project, { reserve: true })).toEqual(refused(AIDLC_VERSION));
       rmSync(extra);
+      expect(resolvePinnedDispatch(argv(pinned.project), pinned.project, { reserve: true })).toEqual({ kind: "none" });
+      // Windows keeps no POSIX mode bits to change.
+      if (process.platform !== "win32") {
+        const file = join(runtime, walkFiles(runtime)[0]);
+        const before = statSync(file).mode & 0o777;
+        chmodSync(file, before === 0o600 ? 0o644 : 0o600);
+        expect(resolvePinnedDispatch(argv(pinned.project), pinned.project, { reserve: true })).toEqual(refused(AIDLC_VERSION));
+        chmodSync(file, before);
+      }
     });
   });
 
@@ -9862,6 +9871,25 @@ describe("t243 a pinned release is checked once per session", () => {
       expect(resolvePinnedDispatch(argv(pinned.project), pinned.project, { reserve: true })).toEqual({ kind: "none" });
       expect(existsSync(orphan)).toBe(false);
       expect(existsSync(releaseCheck(pinned.pidDir))).toBe(true);
+    });
+  });
+
+  test("a read-only engine probe writes no record and sweeps nothing", () => {
+    const pinned = pinnedProject();
+    withMachine(pinned.machine, () => {
+      writeSessionPidEntry(pinned.project, process.ppid, SESSION_A);
+      const orphan = join(pinned.pidDir, "999900778.release-check");
+      writeFileSync(orphan, "{}\n");
+      const saved = process.env.AIDLC_STOP_HOOK_PROBE;
+      process.env.AIDLC_STOP_HOOK_PROBE = "1";
+      try {
+        expect(resolvePinnedDispatch(argv(pinned.project), pinned.project, { reserve: true })).toEqual({ kind: "none" });
+      } finally {
+        if (saved === undefined) delete process.env.AIDLC_STOP_HOOK_PROBE;
+        else process.env.AIDLC_STOP_HOOK_PROBE = saved;
+      }
+      expect(existsSync(releaseCheck(pinned.pidDir))).toBe(false);
+      expect(existsSync(orphan)).toBe(true);
     });
   });
 
