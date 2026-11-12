@@ -20,6 +20,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+  cachedClaimFanoutActive,
+  claimRegistryCachePath,
+} from "../../dist/claude/.claude/tools/aidlc-unit-holders.ts";
+import {
   cleanupTempDirs,
   clone,
   gateAndLand,
@@ -45,6 +49,14 @@ function claimFiles(cwd: string, oid: string): string[] {
 function claimTip(cwd: string, remote: string, unit: string): string {
   const listed = git(cwd, ["ls-remote", remote, `refs/heads/claim/*/${unit}`]);
   return listed.split(/\s+/)[0];
+}
+
+// Whether git has an object here, never fetching it.
+function hereLocally(cwd: string, oid: string): boolean {
+  return spawnSync("git", ["cat-file", "-e", oid], {
+    cwd,
+    env: { ...process.env, GIT_NO_LAZY_FETCH: "1" },
+  }).status === 0;
 }
 
 // The scope stamp and registry cache a claim leaves in the claiming checkout.
@@ -113,6 +125,10 @@ describe("a claim whose file is in the project's aidlc/ folder", () => {
     const { seed: lead, remote } = makeSeed();
     prepareCandidate(remote, "alpha", "team-a", { afterClaim: (dir) => asNewStyle(dir, "alpha"), publish: false });
     git(lead, ["fetch", "-q", "origin"]);
+    // The Stop hook's and next's read of the claims seen here, from the
+    // fetched claim ref alone.
+    expect(existsSync(claimRegistryCachePath(lead))).toBe(false);
+    expect(cachedClaimFanoutActive(lead)).toBe(true);
     const status = runMergeTool(UNIT, ["status"], lead);
     expect(status.status, status.out).toBe(0);
     expect(JSON.stringify(JSON.parse(status.stdout))).toContain('"alpha"');
@@ -136,6 +152,7 @@ describe("a claim whose file is in the project's aidlc/ folder", () => {
     git(teammate, ["commit", "-q", "-m", "continue the adopted Unit"]);
     const published = runMergeTool(UNIT, ["publish", "alpha"], teammate);
     expect(published.status, published.out).toBe(0);
+    expect(published.out).not.toContain("claim registry is unavailable");
     expect(claimFiles(teammate, claimTip(teammate, remote, "alpha"))).toEqual([NEW]);
   });
 
@@ -157,7 +174,7 @@ describe("a claim whose file is in the project's aidlc/ folder", () => {
 });
 
 describe("a claim whose file is in the project's aidlc/ folder, from a blobless partial clone", () => {
-  test("is fetched whole and released, keeping its place", () => {
+  test("with its commit fetched and its claim file not: the file is fetched, and the release keeps its place", () => {
     const { remote } = makeSeed();
     git(remote, ["config", "uploadpack.allowFilter", "true"]);
     const partial = join(mkdtempSync(join(tmpdir(), "aidlc-claim-place-partial-")), "c");
@@ -168,10 +185,15 @@ describe("a claim whose file is in the project's aidlc/ folder, from a blobless 
     const owner = clone(remote, "place-partial-owner");
     const claimed = runMergeTool(UNIT, ["claim", "alpha", "--team", "place-partial-owner"], owner);
     expect(claimed.status, claimed.out).toBe(0);
-    asNewStyle(owner, "alpha");
+    const tip = asNewStyle(owner, "alpha");
+    const blob = git(owner, ["rev-parse", `${tip}:${NEW}`]);
+    git(partial, ["fetch", "-q", "origin"]);
+    expect(hereLocally(partial, tip)).toBe(true);
+    expect(hereLocally(partial, blob)).toBe(false);
     const released = runMergeTool(UNIT, ["release", "alpha"], partial, false, { GIT_NO_LAZY_FETCH: "1" });
     expect(released.status, released.out).toBe(0);
     expect(released.out).not.toContain("missing the claim payload blob");
+    expect(hereLocally(partial, blob)).toBe(true);
     expect(claimFiles(partial, claimTip(partial, remote, "alpha"))).toEqual([NEW]);
   });
 });

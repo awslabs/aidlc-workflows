@@ -113,7 +113,7 @@ describe("reading a claim commit's file", () => {
   const inAidlc = commitHolding(dir, { [NEW]: '{"at":"aidlc"}\n' });
   const both = commitHolding(dir, { [TOP]: '{"at":"top"}\n', [NEW]: '{"at":"aidlc"}\n' });
   const none = commitHolding(dir, {});
-  const nonAscii = commitHolding(dir, { [TOP]: '{"owner":"équipe café"}\n' });
+  const nonAscii = commitHolding(dir, { [TOP]: '{"owner":"\u00e9quipe caf\u00e9"}\n' });
 
   test("each place, the aidlc/ folder first, and none", () => {
     expect(readClaimAt(dir, top, "")).toEqual({ place: TOP, text: '{"at":"top"}\n' });
@@ -124,7 +124,7 @@ describe("reading a claim commit's file", () => {
   });
 
   test("a payload's non-ASCII text whole", () => {
-    expect(readClaimAt(dir, nonAscii, "")?.text).toBe('{"owner":"équipe café"}\n');
+    expect(readClaimAt(dir, nonAscii, "")?.text).toBe('{"owner":"\u00e9quipe caf\u00e9"}\n');
   });
 
   test("the blob and its place", () => {

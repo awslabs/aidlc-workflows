@@ -51,11 +51,12 @@ export const UNIT_RESULT_DIR = ".aidlc-unit-result";
 
 // The folders a claim commit's tree may hold the claim file and the result
 // folder in, from the repository's top, in the order they are read: the
-// project's aidlc/ folder, where a newer release writes them, then, for a
+// project's aidlc/ folder, where a newer release writes both, then, for a
 // project at the repository's top, the tree's top, where this release and 2.11
-// write them. In a folder of a bigger repository only the aidlc/ folder: no
-// earlier release could claim there. `prefix` is the project's place in its
-// repository (projectInRepo), the caller's to say.
+// write the claim file (and a newer release keeps a result beside a claim
+// that started there). In a folder of a bigger repository only the aidlc/
+// folder: no earlier release could claim there. `prefix` is the project's
+// place in its repository (projectInRepo), the caller's to say.
 function claimTreeRoots(prefix: string): string[] {
   return prefix ? [`${prefix}aidlc/`] : ["aidlc/", ""];
 }

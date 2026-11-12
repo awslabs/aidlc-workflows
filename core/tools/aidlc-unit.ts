@@ -2974,8 +2974,9 @@ function isEngineMergeMetadata(
 
 // What a landing never merges onto main: AI-DLC's engine metadata, and a
 // claim's file and a Unit's results at any of their places. The metadata
-// checkpoint reads isEngineMergeMetadata alone, so it never commits a claim's
-// file a checkout happens to hold.
+// checkpoint reads isEngineMergeMetadata alone, so it never commits a claim
+// file in the project's aidlc/ folder or a Unit result a checkout happens to
+// hold.
 function leftOffMain(
   projectDir: string,
   path: string,
