@@ -33,6 +33,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -88,6 +89,9 @@ import {
 } from "../harness/test-budget.ts";
 import { writeWindowsExecutable } from "../harness/windows-native-executable.ts";
 import { resolveAction } from "../../core/tools/aidlc.ts";
+import { SECRET_MASKED_LINE } from "../../core/tools/aidlc-audit.ts";
+import { addPendingPersonLines, resolveWorkflowSelection } from "../../core/tools/aidlc-lib.ts";
+import { SAY_ONCE_BEFORE_THEY_REPLY } from "../../core/tools/aidlc-directive.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -8973,6 +8977,135 @@ describe("t218 a chat on Kiro's Default agent hears once how to stop the approva
       expect(agentName()).toBe("-");
     } finally {
       rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+// A line AI-DLC keeps for the person waits for the next step the agent speaks
+// from (sayPendingPersonLines). A terminal command typed in Kiro is run by
+// verb-intercept itself, so no engine step speaks: its relay hands the lines
+// on, before the output's fence, with the engine's order, once.
+describe("t218 a typed terminal command says the lines AI-DLC keeps for this chat", () => {
+  const LEAD = `Say this to the person ${SAY_ONCE_BEFORE_THEY_REPLY}, and add nothing about why:\n\n`;
+  const SAY = `${LEAD}${SECRET_MASKED_LINE}\n\n`;
+  // A made-up key, put together at run time: no line of this file is shaped like one.
+  const KEY = `ghp_${"aB3dE5gH7jK9mN1pQ3sT5vW7yZ9bC2eF4hJ6"}`;
+  const card = (dir: string, session: string, prompt: string) =>
+    runIdeStdin(dir, "person-message", JSON.stringify({
+      session_id: session,
+      hook_event_name: "UserPromptSubmit",
+      cwd: dir,
+      prompt,
+    }));
+
+  test("/aidlc --status after a message with a key says the key line once, before the status, in that chat only", () => {
+    const dir = scratchProject(true);
+    try {
+      const asked = card(dir, "sess_kept_a", `/aidlc where are we? the build printed ${KEY}`);
+      expect(asked.code, asked.stderr).toBe(0);
+      expect(asked.stdout).not.toContain(SECRET_MASKED_LINE);
+      // Another chat on the same project hears nothing of it.
+      const other = card(dir, "sess_kept_b", "/aidlc --status");
+      expect(other.code, other.stderr).toBe(0);
+      expect(other.stdout).toContain("The command `/aidlc --status` has already run");
+      expect(other.stdout).not.toContain(SECRET_MASKED_LINE);
+      const status = card(dir, "sess_kept_a", "/aidlc --status");
+      expect(status.code, status.stderr).toBe(0);
+      expect(status.stdout.split(SECRET_MASKED_LINE)).toHaveLength(2);
+      // The card's other members speak first; the line comes right before the relay.
+      expect(status.stdout).toContain(`${SAY}The command \`/aidlc --status\` has already run`);
+      expect(status.stdout).toMatch(/--- OUTPUT [0-9A-F]{16} \(exit 0\) ---/);
+      // Said once: the next typed command does not say it again.
+      const again = card(dir, "sess_kept_a", "/aidlc --status");
+      expect(again.code, again.stderr).toBe(0);
+      expect(again.stdout).toContain("The command `/aidlc --status` has already run");
+      expect(again.stdout).not.toContain(SECRET_MASKED_LINE);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a line the command itself queues while it runs is kept for the next step, not said with its own output", () => {
+    const dir = scratchProject(true);
+    const QUEUED = "A line the status command queued while it ran.";
+    try {
+      // The utility, wrapped: it queues a line for the chat it runs for, as
+      // `plugin sync` does with the rules it places, only for `status`, then
+      // runs as itself. The engine imports the same module, so its exports stay.
+      const tools = join(dir, ".kiro", "tools");
+      renameSync(join(tools, "aidlc-utility.ts"), join(tools, "aidlc-utility-real.ts"));
+      writeFileSync(
+        join(tools, "aidlc-utility.ts"),
+        [
+          'import { addPendingPersonLines, resolveWorkflowSelection } from "./aidlc-lib.ts";',
+          'import { main } from "./aidlc-utility-real.ts";',
+          'export * from "./aidlc-utility-real.ts";',
+          "if (import.meta.main) {",
+          '  if (process.argv[2] === "status") {',
+          "    const projectDir = process.env.AIDLC_PROJECT_DIR ?? process.cwd();",
+          "    const session = resolveWorkflowSelection(projectDir).sessionId;",
+          `    if (session) addPendingPersonLines(projectDir, session, [${JSON.stringify(QUEUED)}]);`,
+          "  }",
+          "  await main(process.argv.slice(2));",
+          "}",
+        ].join("\n"),
+        "utf-8",
+      );
+      expect(card(dir, "sess_kept_c", `/aidlc where are we? the build printed ${KEY}`).code).toBe(0);
+      const status = card(dir, "sess_kept_c", "/aidlc --status");
+      expect(status.code, status.stderr).toBe(0);
+      expect(status.stdout).toContain(`${SAY}The command \`/aidlc --status\` has already run`);
+      expect(status.stdout).not.toContain(QUEUED);
+      const version = card(dir, "sess_kept_c", "/aidlc --version");
+      expect(version.code, version.stderr).toBe(0);
+      expect(version.stdout).toContain(`${LEAD}${QUEUED}\n\nThe command \`/aidlc --version\` has already run`);
+      expect(version.stdout).not.toContain(SECRET_MASKED_LINE);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a typed workspace verb says no waiting line, as its engine print says none, and leaves it for the next", () => {
+    const dir = scratchProject(true);
+    try {
+      expect(card(dir, "sess_kept_d", `/aidlc where are we? the build printed ${KEY}`).code).toBe(0);
+      const list = card(dir, "sess_kept_d", "/aidlc intent");
+      expect(list.code, list.stderr).toBe(0);
+      expect(list.stdout).toContain("The command `/aidlc intent");
+      expect(list.stdout).not.toContain(SECRET_MASKED_LINE);
+      const status = card(dir, "sess_kept_d", "/aidlc --status");
+      expect(status.code, status.stderr).toBe(0);
+      expect(status.stdout).toContain(`${SAY}The command \`/aidlc --status\` has already run`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a typed workspace verb says the waiting lines when one is kept for the reply, as its engine print does", () => {
+    const dir = scratchProject(true);
+    const REPLY = "A line kept for the reply.";
+    const keys = ["AIDLC_SESSION_OVERRIDE", "AIDLC_SESSION_OVERRIDE_SOURCE"] as const;
+    const previous = keys.map((key) => [key, process.env[key]] as const);
+    try {
+      expect(card(dir, "sess_kept_e", `/aidlc where are we? the build printed ${KEY}`).code).toBe(0);
+      process.env.AIDLC_SESSION_OVERRIDE = "sess_kept_e";
+      process.env.AIDLC_SESSION_OVERRIDE_SOURCE = "payload";
+      const session = resolveWorkflowSelection(dir).sessionId ?? "";
+      expect(addPendingPersonLines(dir, session, [REPLY], { forReply: true })).toBe(true);
+      for (const [key, value] of previous) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      const list = card(dir, "sess_kept_e", "/aidlc intent");
+      expect(list.code, list.stderr).toBe(0);
+      expect(list.stdout).toContain(`${LEAD}${SECRET_MASKED_LINE}\n\n${REPLY}\n\nThe command \`/aidlc intent`);
+      expect(list.stdout.split(SECRET_MASKED_LINE)).toHaveLength(2);
+    } finally {
+      for (const [key, value] of previous) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });

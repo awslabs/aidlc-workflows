@@ -66,6 +66,7 @@ import {
   isAidlcAgentFile,
   leadingOrchestratorVerb,
   noteKiroCliSteerRecorded,
+  pendingPersonLines,
   sanitizeHarnessPlainText,
   splitKiroCommandArgs,
   stateFilePath,
@@ -885,6 +886,30 @@ if (target === "verb-intercept") {
 
   const cwd = projectDir;
   const forwarded = cmd.args ?? (cmd.arg !== undefined ? [cmd.arg] : []);
+  // The relay is the step the agent stops on here, where `next` would answer
+  // with a print, so the lines waiting for this chat that the print would
+  // carry ride it, ahead of the output (personLinesForRelay owns which, and
+  // their order). The engine is loaded only when a line is waiting.
+  const session = validSessionId(kiro.session_id?.trim());
+  const onThisWork = <T>(read: (chat: string) => T): T | null => {
+    if (session === null) return null;
+    let restore = (): void => {};
+    try {
+      restore = enterHookWorkflow(projectDir, session).restore;
+      return read(session);
+    } catch {
+      return null; /* the lines wait for the next step; the relay goes as it is */
+    } finally {
+      restore();
+    }
+  };
+  let kept: { lead: string; said: () => void } | null = null;
+  if (onThisWork((chat) => pendingPersonLines(projectDir, chat).lines.length > 0) === true) {
+    try {
+      const { personLinesForRelay } = await import("../tools/aidlc-orchestrate.ts");
+      kept = onThisWork((chat) => personLinesForRelay(projectDir, chat, cmd));
+    } catch { /* the lines wait for the next step */ }
+  }
   let out: string;
   if (cmd.error !== undefined) {
     out = cmd.error;
@@ -936,7 +961,16 @@ if (target === "verb-intercept") {
   const typed = cmd.source === "read-only-flag"
     ? `--${cmd.subcommand}`
     : (cmd.display ?? [cmd.subcommand, ...forwarded].join(" "));
-  process.stdout.write(preface + terminalCommandRelay(`/aidlc ${typed}`, out));
+  const relay = terminalCommandRelay(`/aidlc ${typed}`, out);
+  // They count as said once the hook's output holds them, and only when it
+  // fits in what Kiro keeps of it; otherwise they wait for the next step.
+  const withLines = kept === null ? "" : `${preface}${kept.lead}\n\n${relay}`;
+  if (kept !== null && Buffer.byteLength(withLines, "utf-8") <= PROMPT_HOOK_MAX_BYTES) {
+    process.stdout.write(withLines);
+    kept.said();
+    return 0;
+  }
+  process.stdout.write(preface + relay);
   return 0;
 }
 

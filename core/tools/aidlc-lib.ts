@@ -7119,9 +7119,9 @@ function personTurnAndWork(projectDir: string): { turn: string; work: string } {
   }
 }
 
-function readPendingPersonLines(path: string, turn: string, work: string): PendingPersonLines {
+function readPendingPersonLines(path: string, turn: string, work: string, text?: string): PendingPersonLines {
   try {
-    const saved = JSON.parse(readFileSync(path, "utf-8")) as { work?: unknown; lines?: unknown; said?: unknown };
+    const saved = JSON.parse(text ?? readFileSync(path, "utf-8")) as { work?: unknown; lines?: unknown; said?: unknown };
     const now = Date.now();
     const lines = (Array.isArray(saved.lines) ? saved.lines : []).filter((entry): entry is PendingPersonLine => {
       if (!entry || typeof entry !== "object") return false;
@@ -7174,7 +7174,9 @@ export function addPendingPersonLines(
 // (a question the agent logs before asking it) only those kept for the reply.
 // `said()` clears the ordinary lines handed out once the step carries them and
 // marks the reply lines carried, which keep riding the steps until the person
-// writes; until then every line stays waiting.
+// writes; until then every line stays waiting. What was written to the record
+// after the read (a line a command queued while its output was relayed, a
+// carry, a heard mark) stays as written.
 export function pendingPersonLines(
   projectDir: string,
   sessionId: string,
@@ -7184,18 +7186,72 @@ export function pendingPersonLines(
   const none = { lines: [], reply: false, said: () => {} };
   if (!path || !existsSync(path)) return none;
   const { turn, work } = personTurnAndWork(projectDir);
-  const saved = readPendingPersonLines(path, turn, work);
+  const record = (): string => {
+    try {
+      return readFileSync(path, "utf-8");
+    } catch {
+      return "";
+    }
+  };
+  const read = record();
+  const saved = readPendingPersonLines(path, turn, work, read);
   const handed = saved.lines.filter((entry) => entry.reply === true || options.replyOnly !== true);
   return {
     lines: handed.map((entry) => entry.line),
     // Whether a line kept for the reply is among them.
     reply: handed.some((entry) => entry.reply === true),
     said: () => {
+      // A record that could not be read is left as it is.
+      if (read === "") return;
       try {
         const waiting = saved.lines
           .filter((entry) => entry.reply === true || !handed.includes(entry))
           .map((entry) => (entry.reply === true && handed.includes(entry) ? { ...entry, handed: true as const } : entry));
-        writePendingPersonLines(projectDir, path, work, { lines: waiting, said: saved.said });
+        const now = record();
+        if (now === read) {
+          writePendingPersonLines(projectDir, path, work, { lines: waiting, said: saved.said });
+          return;
+        }
+        // Each entry as read becomes what `waiting` made of it (gone when it was
+        // handed, or out of this turn or past its age); an entry the read never
+        // saw, or one changed since, stays as it is now.
+        const raw = (text: string): { work?: unknown; lines?: unknown; said?: unknown } => {
+          try {
+            const parsed = JSON.parse(text) as unknown;
+            return parsed !== null && typeof parsed === "object" ? parsed : {};
+          } catch {
+            return {};
+          }
+        };
+        const entries = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
+        const becomes = new Map<string, Array<PendingPersonLine | null>>();
+        for (const entry of saved.lines) {
+          const key = JSON.stringify(entry);
+          const next = !handed.includes(entry) ? entry : entry.reply === true ? { ...entry, handed: true as const } : null;
+          becomes.set(key, [...(becomes.get(key) ?? []), next]);
+        }
+        const seen = new Map<string, number>();
+        for (const entry of entries(raw(read).lines)) {
+          const key = JSON.stringify(entry);
+          seen.set(key, (seen.get(key) ?? 0) + 1);
+        }
+        const current = raw(now);
+        const lines: PendingPersonLine[] = [];
+        for (const entry of entries(current.lines)) {
+          const key = JSON.stringify(entry);
+          const left = seen.get(key) ?? 0;
+          if (left === 0) {
+            lines.push(entry as PendingPersonLine);
+            continue;
+          }
+          seen.set(key, left - 1);
+          const next = becomes.get(key)?.shift();
+          if (next) lines.push(next);
+        }
+        writePendingPersonLines(projectDir, path, typeof current.work === "string" ? current.work : work, {
+          lines,
+          said: entries(current.said).filter((line): line is string => typeof line === "string"),
+        });
       } catch {
         /* the next step says them again rather than never */
       }
