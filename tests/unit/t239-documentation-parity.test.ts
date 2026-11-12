@@ -770,7 +770,6 @@ describe("documentation parity derives current behavior from authored implementa
     const nesting = /\bcp\s+-[rR]\s+(?:"[^"\n]*[^."\n]\/"|[^\s"]*[^.\s"]\/)\s/;
     // These keep their folder copy: their contents would replace a project's own files (the next case).
     const folderCopies = [
-      ["codex-cli.md", '"$RUNTIME_ROOT/codex/.codex/"'],
       ["codex-cli.md", '"$RUNTIME_ROOT/codex/aidlc/"'],
       ["opencode.md", '"$RUNTIME_ROOT/opencode/aidlc/"'],
     ];
@@ -786,11 +785,9 @@ describe("documentation parity derives current behavior from authored implementa
   });
 
   test("the opencode and Codex copy steps do not copy a runtime folder over files a project may own", () => {
-    // A project's own Codex setup uses config.toml and hooks.json too, and a team writes its phase rules into the
-    // space's phases/*.md, which the copy runtime ships (it leaves out only team.md, project.md and active-space).
-    // A contents copy would replace them with no word.
+    // A team writes its phase rules into the space's phases/*.md, which the copy runtime ships (it leaves out only
+    // team.md, project.md and active-space). A contents copy would replace them with no word.
     const owned: Array<[string, string, string[]]> = [
-      ["codex-cli.md", "codex/.codex", ["config.toml", "hooks.json"]],
       ["codex-cli.md", "codex/aidlc", ["spaces/default/memory/phases/construction.md"]],
       ["opencode.md", "opencode/aidlc", ["spaces/default/memory/phases/construction.md"]],
     ];
@@ -801,6 +798,23 @@ describe("documentation parity derives current behavior from authored implementa
       const text = read("docs", "guide", "harnesses", page);
       expect(contentsCopy.test(text), `${page} copies the runtime's ${folder}/ over the project's ${shipped.join(", ")}`).toBe(false);
     }
+  });
+
+  test("the Codex copy step saves the project's own .codex files, then copies the runtime's contents", () => {
+    // The runtime's .codex/ ships names a project's own Codex setup uses; the step saves them first and puts
+    // config.toml back for the copy's setup to merge, so the contents copy is safe on every platform.
+    const owned = ["config.toml", "hooks.json", "rules/default.rules"].filter((name) =>
+      existsSync(at("dist", "codex", ".codex", name)),
+    );
+    expect(owned.length, "the Codex runtime ships its config.toml, hooks.json and rules").toBeGreaterThan(0);
+    const lines = read("docs", "guide", "harnesses", "codex-cli.md").split(/\r?\n/).map((line) => line.trim());
+    const copy = lines.findIndex((line) => /^cp\s+-R\s+"\$RUNTIME_ROOT\/codex\/\.codex\/\."\s+your-project\/\.codex\/$/.test(line));
+    expect(copy, "codex-cli.md copies the runtime's .codex/ contents").toBeGreaterThan(-1);
+    const saves = lines.slice(0, copy).find((line) => /^for f in .+; do$/.test(line)) ?? "";
+    for (const name of owned) expect(saves.split(/[\s;]+/), `the save loop before the copy names ${name}`).toContain(name);
+    expect(lines.slice(0, copy).some((line) => line.includes(".before-aidlc")), "the loop saves as .before-aidlc").toBe(true);
+    const restores = lines.slice(copy).some((line) => line.startsWith("cp your-project/config.toml.before-aidlc your-project/.codex/config.toml"));
+    expect(restores, "the step puts the project's config.toml back after the copy").toBe(true);
   });
 
   test("the docs home page carries README's note on the two Kiro names", () => {

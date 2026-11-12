@@ -130,10 +130,34 @@ then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
    one):
 
    ```bash
-   cp -r "$RUNTIME_ROOT/codex/.codex/"  your-project/.codex/
+   mkdir -p your-project/.codex
+   # The copy replaces .codex/config.toml, hooks.json and rules/default.rules; keep the project's own first.
+   for f in config.toml hooks.json rules/default.rules; do
+     if [ -f "your-project/.codex/$f" ]; then
+       cp "your-project/.codex/$f" "your-project/$(basename "$f").before-aidlc"
+     fi
+   done
+   cp -R "$RUNTIME_ROOT/codex/.codex/." your-project/.codex/
+   if [ -f your-project/config.toml.before-aidlc ]; then
+     cp your-project/config.toml.before-aidlc your-project/.codex/config.toml
+   fi
    cp -R "$RUNTIME_ROOT/codex/.agents/." your-project/.agents/
    cp -r "$RUNTIME_ROOT/codex/aidlc/"   your-project/aidlc/      # the workspace shell (spaces/default/memory) — a sibling of .codex/, not inside it
    ```
+
+   The copy replaces `.codex/config.toml`, `.codex/hooks.json` and
+   `.codex/rules/default.rules`, so the block first saves the project's own as
+   `config.toml.before-aidlc`, `hooks.json.before-aidlc` and
+   `default.rules.before-aidlc`, then puts its `config.toml` back: step 2 adds
+   AI-DLC's settings to it and keeps yours. `hooks.json` and `default.rules` are
+   AI-DLC's in a Codex project (step 2 stops with a conflict while either differs
+   from the shipped one), so if the saved copies held hooks or rules of your own,
+   move them: Codex also runs the hooks in `~/.codex/hooks.json` and in `[hooks]`
+   tables of `.codex/config.toml` (it warns at startup when one folder has both),
+   and reads the rules in `.codex/rules/` and `~/.codex/rules/`. On a fresh install
+   there is nothing to save. The `cp -R <src>/. <dst>/` form then copies the
+   folder's contents whether `your-project/.codex` exists or not, on Linux, macOS
+   and Git Bash alike.
 
    The `aidlc/` directory is the workspace shell — it ships the pre-built
    `aidlc/spaces/default/memory/` method tree the engine reads. It is a
