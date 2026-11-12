@@ -204,7 +204,7 @@ describe("step 1: the lead shares the plan with the teams", () => {
     expect(git(remote, ["rev-parse", "main"])).toBe(git(lead, ["rev-parse", "HEAD"]));
     expect(git(lead, ["status", "--porcelain", "--untracked-files=all"])).toBe("");
     const board = boardText(nextDirective(lead));
-    expect(board).toContain("# Team Construction Dispatcher");
+    expect(board).toContain("# Team Construction Board");
   });
 
   // Once shared, the teams build the Units: the lead's "redo" with no Unit
@@ -219,7 +219,7 @@ describe("step 1: the lead shares the plan with the teams", () => {
     expect(redo.status, redo.out).toBe(0);
     const message = String((JSON.parse(redo.stdout) as { message?: string }).message);
     expect(message).not.toContain('for unit "alpha"');
-    expect(boardText(nextDirective(lead))).toContain("# Team Construction Dispatcher");
+    expect(boardText(nextDirective(lead))).toContain("# Team Construction Board");
   });
 
   // Share commits every path git shows: with a handful of new files the
@@ -482,8 +482,8 @@ describe("step 2: another clone takes a Unit", () => {
     expect(commandFor(offer, "Not now")).toMatch(/ next$/);
     const board = nextDirective(mate);
     expect(isHandover(board)).toBe(false);
-    expect(boardText(board)).toContain("# Team Construction Dispatcher");
-    expect(boardText(nextDirective(mate))).toContain("# Team Construction Dispatcher");
+    expect(boardText(board)).toContain("# Team Construction Board");
+    expect(boardText(nextDirective(mate))).toContain("# Team Construction Board");
   });
 
   // The live run: a team built its first Unit in its own clone (that Unit's

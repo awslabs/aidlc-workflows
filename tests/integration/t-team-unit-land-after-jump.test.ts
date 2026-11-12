@@ -292,7 +292,7 @@ describe("a lead's main whose team holds a Unit moves on to Build and Test", () 
     const teamC = clone(remote, "team-c");
     const board = nextDirective(teamC);
     expect(board.kind).toBe("notice");
-    expect(message(board)).toContain("# Team Construction Dispatcher");
+    expect(message(board)).toContain("# Team Construction Board");
     expect(message(board)).not.toContain(BOARD_BROKEN);
     const mains = nextDirective(lead);
     expect([mains.kind, mains.stage]).toEqual(["run-stage", BT]);
@@ -326,7 +326,7 @@ describe("a lead's main whose team holds a Unit moves on to Build and Test", () 
     expect(stateOf(lead)).toContain("- **Status**: Completed");
     const end = nextDirective(lead);
     expect(end.kind).toBe("notice");
-    expect(message(end)).toContain("# Team Construction Dispatcher");
+    expect(message(end)).toContain("# Team Construction Board");
     expect(String(end.narration ?? "")).not.toContain("Your work is finished");
     commitAndPush(lead, "the work's end");
     git(teamG, ["fetch", "origin"]);
@@ -387,7 +387,7 @@ describe("moving on where no team holds a Unit of the lead's", () => {
     }
     const end = nextDirective(lead);
     expect(end.kind, JSON.stringify(end)).toBe("notice");
-    expect(message(end)).toContain("# Team Construction Dispatcher");
+    expect(message(end)).toContain("# Team Construction Board");
     expect(String(end.narration ?? "")).not.toContain("Your work is finished");
   });
 
