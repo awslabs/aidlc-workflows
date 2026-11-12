@@ -38,8 +38,8 @@
 // and never beside a relay line.
 
 import { LONG_SUBPROCESS_TIMEOUT_MS } from "../tools/aidlc-runtime-budget.ts";
-import { existsSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { statSync } from "node:fs";
+import { basename, join } from "node:path";
 import {
   consumeCreationReceipt,
   clearSessionIntentUuid,
@@ -279,8 +279,9 @@ writeHookStatusFile(healthDir, "rebuild-stage-graph.last", isoTimestamp());
 //    Bash call. Terminal-WORKFLOW approve writes 5 rows; the last 3 are
 //    PHASE_COMPLETED + PHASE_VERIFIED + WORKFLOW_COMPLETED. A clone with no
 //    clone id wrote no row, and the hook mints none.
+const ownShardName = knownAuditShardName(projectDir);
 let ownShard = "";
-if (knownAuditShardName(projectDir) !== null) {
+if (ownShardName !== null) {
   try {
     ownShard = readAppendOnlyFileNoFollowOrThrow(auditFilePath(projectDir, intent, space), "audit shard").toString("utf-8");
   } catch {
@@ -299,10 +300,31 @@ const last3 = auditShardBlocks(ownShard).slice(-3);
 //    (before the orchestrator wrote any §13 entries).
 //    runtime-graph.json is gitignored, so each clone builds its own: one that
 //    has none yet compiles once from any shard's transition (a freshly pulled
-//    team clone), and the graph then exists.
+//    team clone), and the graph then exists. A teammate's transition arrives
+//    with a pull, in another clone's shard: one whose file is newer than the
+//    graph and holds a transition compiles once, after which the graph is the
+//    newer file. This clone's own shards (tracked, and a claimed Unit's local
+//    record) are left out, so the person's own rows never recompile every call.
 const transitionRegex = /^\*\*Event\*\*:[ \t]*(GATE_APPROVED|STAGE_STARTED|STAGE_AWAITING_APPROVAL|AUDIT_MERGED|UNIT_MERGED|WORKFLOW_COMPLETED)[ \t]*$/m;
+const graphPath = runtimeGraphPath(projectDir, intent, space);
+const pulledTransition = (graphMtime: number): boolean =>
+  auditShards(projectDir, intent, space).some((shard) => {
+    if (basename(shard) === ownShardName) return false;
+    try {
+      if (statSync(shard).mtimeMs <= graphMtime) return false;
+      return transitionRegex.test(readAppendOnlyFileNoFollowOrThrow(shard, "audit shard").toString("utf-8"));
+    } catch {
+      return false;
+    }
+  });
+let graphMtime: number | null = null;
+try {
+  graphMtime = statSync(graphPath).mtimeMs;
+} catch {
+  // No runtime-graph.json yet.
+}
 const hasTransition = last3.some((b) => transitionRegex.test(b)) ||
-  (!existsSync(runtimeGraphPath(projectDir, intent, space)) && transitionRegex.test(audit));
+  (graphMtime === null ? transitionRegex.test(audit) : pulledTransition(graphMtime));
 hookDebug(projectDir, "rebuild-stage-graph", "transition-gate", { hasTransition, last3count: last3.length });
 // Nothing to do from this record's files: the Kiro IDE front gate skips the
 // next shell command's call until one of them changes (the mark's name is

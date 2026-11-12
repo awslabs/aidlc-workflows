@@ -83,6 +83,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { basename, join } from "node:path";
@@ -683,6 +684,12 @@ describe("t91 aidlc-rebuild-stage-graph hook (migrated from t91-runtime-compile-
   // --- Team clones: another clone's shard beside this clone's -------------
   const approve = payload("bun .claude/tools/aidlc-state.ts approve --stage intent-capture");
   const status = payload("aidlc status");
+  // A file written an hour ago: a graph compiled before a pull, or a shard
+  // pulled before the last compile.
+  const anHourAgo = (path: string) => {
+    const then = new Date(Date.now() - 60 * 60 * 1000);
+    utimesSync(path, then, then);
+  };
 
   // A graph is already there, so only this clone's own tail can recompile it.
   test("13: another clone's shard sorting after this clone's does not hide this clone's approval", () => {
@@ -695,11 +702,29 @@ describe("t91 aidlc-rebuild-stage-graph hook (migrated from t91-runtime-compile-
     expect(readFileSync(graphPath(p), "utf-8")).not.toBe("{\"kept\":true}\n");
   });
 
-  test("14: a transition at the end of another clone's shard does not make a status command recompile", () => {
+  test("14: a teammate's transition pulled after the last compile recompiles the graph once; the next status call does not", () => {
     const p = makeProject();
     writeFileSync(graphPath(p), "{\"kept\":true}\n", "utf-8");
+    anHourAgo(graphPath(p));
+    writeFileSync(auditPath(p), AUDIT_NO_TRANSITION, "utf-8");
+    anHourAgo(auditPath(p));
+    writeFileSync(teammatePath(p), AUDIT_GATE_APPROVED, "utf-8");
+    const first = runHook(p, status);
+    expect(first.status, first.out).toBe(0);
+    const compiled = readFileSync(graphPath(p), "utf-8");
+    expect(compiled).not.toBe("{\"kept\":true}\n");
+    writeFileSync(graphPath(p), "{\"compiled\":true}\n", "utf-8");
+    const second = runHook(p, status);
+    expect(second.status, second.out).toBe(0);
+    expect(readFileSync(graphPath(p), "utf-8")).toBe("{\"compiled\":true}\n");
+  });
+
+  test("14b: another clone's shard unchanged since the last compile does not make a status command recompile", () => {
+    const p = makeProject();
     writeFileSync(auditPath(p), AUDIT_NO_TRANSITION, "utf-8");
     writeFileSync(teammatePath(p), AUDIT_GATE_APPROVED, "utf-8");
+    anHourAgo(teammatePath(p));
+    writeFileSync(graphPath(p), "{\"kept\":true}\n", "utf-8");
     const r = runHook(p, status);
     expect(r.status, r.out).toBe(0);
     expect(readFileSync(graphPath(p), "utf-8")).toBe("{\"kept\":true}\n");
@@ -715,8 +740,9 @@ describe("t91 aidlc-rebuild-stage-graph hook (migrated from t91-runtime-compile-
 
   test("16: a clone id with no shard of its own in the record reads as no transition", () => {
     const p = makeProject();
-    writeFileSync(graphPath(p), "{\"kept\":true}\n", "utf-8");
     writeFileSync(teammatePath(p), AUDIT_GATE_APPROVED, "utf-8");
+    anHourAgo(teammatePath(p));
+    writeFileSync(graphPath(p), "{\"kept\":true}\n", "utf-8");
     const r = runHook(p, approve);
     expect(r.status, r.out).toBe(0);
     expect(existsSync(auditPath(p))).toBe(false);
