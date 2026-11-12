@@ -192,7 +192,7 @@ describe("t256 workspace-doctor - advisory manifest rows", () => {
     g("commit", "-q", "-m", "untrack the latch");
     rows = workspaceManifestChecks(ws);
     expect(rows.some((r) => r.label.startsWith("Forwarding latch:"))).toBe(false);
-    expect(rows[0].label).toContain("`git add aidlc/ && git commit && git push`");
+    expect(rows[0].label).toContain("`git add aidlc/`, `git commit`, `git push`");
   });
 
   // When git cannot run, the records and request-folder rows say so, and the
