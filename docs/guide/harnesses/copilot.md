@@ -28,8 +28,8 @@ that ship the neutral-only block. Keep those imports when merging project instru
   orchestrator, per-stage runners, scope runners, session skills). Your
   repository's own `.github/` content (workflows, templates) is untouched:
   the install MERGES these files in, all collision-free by prefix.
-- **`.vscode/settings.json`**: one VS Code setting, `chat.agent.maxRequests`,
-  added only when your project does not set it (see
+- **`.vscode/settings.json`**: the VS Code settings `chat.agent.maxRequests`
+  and `chat.useHooks`, each added only when your project does not set it (see
   [VS Code request cap](#vs-code-request-cap)). The copy runtime leaves this
   file out.
 
@@ -45,7 +45,8 @@ that ship the neutral-only block. Keep those imports when merging project instru
   [Facilitator Guide](../facilitator-guide.md#github-copilot-on-windows)
   has a readiness check that proves the hooks run.
 - **bun** only when generating or running the source/development `dist/`
-  projection. Native installs and versioned release runtimes use `aidlc`.
+  projection or the versioned manual-copy runtime. Native installs use
+  `aidlc`.
 - **Folder trust**: each Copilot surface checks its own.
   - The Copilot CLI runs repo hooks only in a folder its `trustedFolders`
     list covers (the folder itself or a folder above it). The list is in

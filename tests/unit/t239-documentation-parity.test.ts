@@ -669,6 +669,58 @@ describe("documentation parity derives current behavior from authored implementa
     expect(copies).toEqual([]);
   });
 
+  test("the Copilot pages name every VS Code setting config adds", () => {
+    const keys = Object.keys(JSON.parse(read("harness", "copilot", "dot-vscode-settings.json")) as Record<string, unknown>);
+    expect(keys.length, "Copilot ships VS Code settings").toBeGreaterThan(0);
+    const row = read("docs", "guide", "18-install-and-lifecycle.md")
+      .split(/\r?\n/)
+      .find((line) => line.startsWith("| `.vscode/settings.json` | Copilot |"));
+    expect(row, "the install chapter's .vscode/settings.json row").toBeDefined();
+    const bullet = normalized(
+      sliceBetween(read("docs", "guide", "harnesses", "copilot.md"), "- **`.vscode/settings.json`**", "## Prerequisites"),
+    );
+    for (const key of keys) {
+      expect(row?.includes(`\`${key}\``), `install chapter row names ${key}`).toBe(true);
+      expect(bullet.includes(`\`${key}\``), `copilot.md .vscode/settings.json bullet names ${key}`).toBe(true);
+    }
+  });
+
+  test("no harness page says the manual-copy runtime it describes needs no Bun", () => {
+    // The copy runtime is the Bun projection: its setup, hooks and tools run through Bun.
+    const said = /versioned (?:release )?runtimes? (?:are self-contained|use `aidlc`|invoke `aidlc`|dispatch through)/;
+    let pages = 0;
+    for (const file of filesBelow(at("docs", "guide", "harnesses"), ".md")) {
+      const text = readFileSync(file, "utf8");
+      if (!text.includes("aidlc-copy-runtime") || !/(?:^|&& |`)bun [^\s`]+\.ts\b/m.test(text)) continue;
+      const bullets = [...text.matchAll(/^- \*\*bun\*\*[^\n]*(?:\r?\n {2}[^\n]*)*/gm)].map((match) => normalized(match[0]));
+      if (bullets.length === 0) continue;
+      pages += 1;
+      for (const bullet of bullets) expect(said.test(bullet), `${basename(file)}: ${bullet}`).toBe(false);
+      expect(normalized(text).includes("versioned runtime uses the native"), `${basename(file)} says the copy runtime uses aidlc`).toBe(false);
+    }
+    expect(pages, "harness pages with a manual-copy runtime").toBeGreaterThanOrEqual(5);
+  });
+
+  test("no copy command copies a folder into an existing one of the same name", () => {
+    // GNU cp -r "src/" dst/ nests src inside an existing dst; "src/." copies its contents on every platform.
+    const nesting = /\bcp\s+-[rR]\s+(?:"[^"\n]*[^."\n]\/"|[^\s"]*[^.\s"]\/)\s/;
+    const lines = [...filesBelow(at("docs"), ".md"), at("README.md")].flatMap((file) =>
+      readFileSync(file, "utf8")
+        .split(/\r?\n/)
+        .filter((line) => nesting.test(line))
+        .map((line) => `${basename(file)}: ${line.trim()}`),
+    );
+    expect(lines).toEqual([]);
+  });
+
+  test("the docs home page carries README's note on the two Kiro names", () => {
+    const note = read("README.md")
+      .split(/\r?\n/)
+      .find((line) => line.includes("read the two Kiro names the other way"));
+    if (note === undefined) return;
+    expect(normalized(read("docs", "README.md")).includes(normalized(note)), "docs/README.md carries the note").toBe(true);
+  });
+
   test("a review the person asks for is recorded under every Guard Policy, and no copy reads as needing strict", () => {
     const reviewer = readFileSync(at("core", "aidlc-common", "protocols", "stage-protocol-reviewer.md"), "utf8")
       .replace(/\s+/g, " ");

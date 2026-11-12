@@ -50,7 +50,7 @@ broken marker lines rather than adding another copy.
   lack reliable subagent role attribution and hyphenated agent-TOML resolution.
   `/aidlc --doctor` advises on the pin. Check with `codex --version`.
 - **bun** only when generating or running the source/development `dist/`
-  projection. Native installs and versioned release runtimes are
+  projection or the versioned manual-copy runtime. Native installs are
   self-contained.
 - **A Git repository for the target project** — Codex discovers project
   `.codex/hooks.json` only inside one. The native installer and AI-DLC runtime
@@ -130,9 +130,9 @@ then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
    one):
 
    ```bash
-   cp -r "$RUNTIME_ROOT/codex/.codex/"  your-project/.codex/
-   cp -r "$RUNTIME_ROOT/codex/.agents/" your-project/.agents/
-   cp -r "$RUNTIME_ROOT/codex/aidlc/"   your-project/aidlc/      # the workspace shell (spaces/default/memory) — a sibling of .codex/, not inside it
+   cp -R "$RUNTIME_ROOT/codex/.codex/."  your-project/.codex/
+   cp -R "$RUNTIME_ROOT/codex/.agents/." your-project/.agents/
+   cp -R "$RUNTIME_ROOT/codex/aidlc/."   your-project/aidlc/      # the workspace shell (spaces/default/memory), a sibling of .codex/, not inside it
    ```
 
    The `aidlc/` directory is the workspace shell — it ships the pre-built
@@ -203,7 +203,7 @@ then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
    bun .codex/tools/aidlc-utility.ts doctor
    ```
 
-The versioned runtime uses the native `aidlc` command. Framework developers who
+Framework developers who
 need the Bun-shaped projection can clone the repository, run
 `bun install --frozen-lockfile` and `bun scripts/package.ts`, then use the
 ignored local `dist/codex/` output. The source-checkout trust generator is

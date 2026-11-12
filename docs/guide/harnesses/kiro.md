@@ -39,7 +39,7 @@ AI-DLC 2.11.3 and earlier, and the 2.11.4 previews of 2026-11-04 and 2026-11-05,
   `kiro-cli` on the PATH is older; it cannot read the Kiro IDE version.
 - **Claude Opus 4.8** selected as the chat model (see the note above)
 - **bun** only when generating or running the source/development `dist/`
-  projection. Native installs and versioned release runtimes are
+  projection or the versioned manual-copy runtime. Native installs are
   self-contained.
 
 > [!TIP]
@@ -180,7 +180,7 @@ plan, holds one of them, the agent passes your words through a file it writes in
 `aidlc/.aidlc-request-text/` instead, so those words put no card in front of
 you.
 
-The versioned runtime uses the native `aidlc` command. Framework developers who
+Framework developers who
 need the Bun-shaped source projection can clone the repository, run
 `bun install --frozen-lockfile` and `bun scripts/package.ts`, then use the
 ignored local `dist/kiro-ide/` output instead.
@@ -918,7 +918,7 @@ install).
   - without it, start with `kiro-cli chat` and no engine flag (for example
     `kiro-cli chat --agent aidlc`).
 - **bun** only when generating or running the source/development `dist/`
-  projection. Native installs and versioned release runtimes are
+  projection or the versioned manual-copy runtime. Native installs are
   self-contained.
 
 ### Kiro CLI (V2) install
@@ -981,7 +981,7 @@ of `.kiro/`, so copy it separately (or copy the whole
 `$RUNTIME_ROOT/kiro/` tree at once).
 `/aidlc --doctor` fails its "workspace shell ready" check if it is missing.
 
-The versioned runtime uses the native `aidlc` command. Framework developers who
+Framework developers who
 need the Bun-shaped source projection can clone the repository, run
 `bun install --frozen-lockfile` and `bun scripts/package.ts`, then use the
 ignored local `dist/kiro/` output instead.
