@@ -1,8 +1,8 @@
 # Project-Level Rules
 
 > Project-specific specialisation and corrections. Loaded after `org.md` and
-> `team.md` as strict-additive guidance; contradictions with broader policy
-> are rejected. Populated by practices-discovery and the self-learning loop.
+> `team.md` as strict-additive guidance.
+> Populated by practices-discovery and the self-learning loop.
 >
 > Use sparingly: most teams don't need a project layer. Reach for it
 > only when this specific project needs stable, durable guidance beyond the

@@ -7142,9 +7142,9 @@ function personTurnAndWork(projectDir: string): { turn: string; work: string } {
   }
 }
 
-function readPendingPersonLines(path: string, turn: string, work: string): PendingPersonLines {
+function readPendingPersonLines(path: string, turn: string, work: string, text?: string): PendingPersonLines {
   try {
-    const saved = JSON.parse(readFileSync(path, "utf-8")) as { work?: unknown; lines?: unknown; said?: unknown };
+    const saved = JSON.parse(text ?? readFileSync(path, "utf-8")) as { work?: unknown; lines?: unknown; said?: unknown };
     const now = Date.now();
     const lines = (Array.isArray(saved.lines) ? saved.lines : []).filter((entry): entry is PendingPersonLine => {
       if (!entry || typeof entry !== "object") return false;
@@ -7197,7 +7197,9 @@ export function addPendingPersonLines(
 // (a question the agent logs before asking it) only those kept for the reply.
 // `said()` clears the ordinary lines handed out once the step carries them and
 // marks the reply lines carried, which keep riding the steps until the person
-// writes; until then every line stays waiting.
+// writes; until then every line stays waiting. What was written to the record
+// after the read (a line a command queued while its output was relayed, a
+// carry, a heard mark) stays as written.
 export function pendingPersonLines(
   projectDir: string,
   sessionId: string,
@@ -7207,18 +7209,72 @@ export function pendingPersonLines(
   const none = { lines: [], reply: false, said: () => {} };
   if (!path || !existsSync(path)) return none;
   const { turn, work } = personTurnAndWork(projectDir);
-  const saved = readPendingPersonLines(path, turn, work);
+  const record = (): string => {
+    try {
+      return readFileSync(path, "utf-8");
+    } catch {
+      return "";
+    }
+  };
+  const read = record();
+  const saved = readPendingPersonLines(path, turn, work, read);
   const handed = saved.lines.filter((entry) => entry.reply === true || options.replyOnly !== true);
   return {
     lines: handed.map((entry) => entry.line),
     // Whether a line kept for the reply is among them.
     reply: handed.some((entry) => entry.reply === true),
     said: () => {
+      // A record that could not be read is left as it is.
+      if (read === "") return;
       try {
         const waiting = saved.lines
           .filter((entry) => entry.reply === true || !handed.includes(entry))
           .map((entry) => (entry.reply === true && handed.includes(entry) ? { ...entry, handed: true as const } : entry));
-        writePendingPersonLines(projectDir, path, work, { lines: waiting, said: saved.said });
+        const now = record();
+        if (now === read) {
+          writePendingPersonLines(projectDir, path, work, { lines: waiting, said: saved.said });
+          return;
+        }
+        // Each entry as read becomes what `waiting` made of it (gone when it was
+        // handed, or out of this turn or past its age); an entry the read never
+        // saw, or one changed since, stays as it is now.
+        const raw = (text: string): { work?: unknown; lines?: unknown; said?: unknown } => {
+          try {
+            const parsed = JSON.parse(text) as unknown;
+            return parsed !== null && typeof parsed === "object" ? parsed : {};
+          } catch {
+            return {};
+          }
+        };
+        const entries = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
+        const becomes = new Map<string, Array<PendingPersonLine | null>>();
+        for (const entry of saved.lines) {
+          const key = JSON.stringify(entry);
+          const next = !handed.includes(entry) ? entry : entry.reply === true ? { ...entry, handed: true as const } : null;
+          becomes.set(key, [...(becomes.get(key) ?? []), next]);
+        }
+        const seen = new Map<string, number>();
+        for (const entry of entries(raw(read).lines)) {
+          const key = JSON.stringify(entry);
+          seen.set(key, (seen.get(key) ?? 0) + 1);
+        }
+        const current = raw(now);
+        const lines: PendingPersonLine[] = [];
+        for (const entry of entries(current.lines)) {
+          const key = JSON.stringify(entry);
+          const left = seen.get(key) ?? 0;
+          if (left === 0) {
+            lines.push(entry as PendingPersonLine);
+            continue;
+          }
+          seen.set(key, left - 1);
+          const next = becomes.get(key)?.shift();
+          if (next) lines.push(next);
+        }
+        writePendingPersonLines(projectDir, path, typeof current.work === "string" ? current.work : work, {
+          lines,
+          said: entries(current.said).filter((line): line is string => typeof line === "string"),
+        });
       } catch {
         /* the next step says them again rather than never */
       }
@@ -22760,6 +22816,7 @@ export function shapeSourceSnapshotIndex(
   repoDir: string,
   indexFile: string,
   carriesWorkspaceShell: boolean,
+  recordBase: string | null = null,
 ): SourceSnapshotIndexShape | null {
   const hasWorktreeContext = existsSync(
     join(repoDir, ".aidlc", "worktree-meta.json"),
@@ -22818,6 +22875,22 @@ export function shapeSourceSnapshotIndex(
         "--",
         ...[...AIDLC_ROOT_SETTINGS_FILES].map((name) => `:(top,literal)${name}`),
       ],
+      { env, encoding: "utf-8" },
+    );
+    if (restored.status !== 0) return null;
+  }
+  // AI-DLC's records and worktree metadata ride no Source Commit either. Given
+  // the commit a Bolt shares with the branch it lands on, they keep its bytes,
+  // so a Bolt commit that carried them (a worker's `git add -A`) does not land
+  // them there; finalize brings the Unit's records back on its own. Without it
+  // they keep HEAD's.
+  const recordPaths = effectiveCarriesWorkspaceShell
+    ? AIDLC_SHELL_PATHS.map((path) => `${path}/`)
+    : (worktreeContext?.exactPaths ?? []).map((path) => `:(top)${path}`);
+  if (recordBase !== null && recordPaths.length > 0) {
+    const restored = spawnSync(
+      "git",
+      ["-C", repoDir, "reset", "-q", recordBase, "--", ...recordPaths],
       { env, encoding: "utf-8" },
     );
     if (restored.status !== 0) return null;
@@ -24042,7 +24115,7 @@ function gitHeadOid(worktreeDir: string): string | null {
 // The file names the source walk counts as code by name alone: a symlinked
 // external tree keeps only these, and the snapshot always takes them.
 const SOURCE_FILE_EXTENSION =
-  /\.(?:astro|c|cc|cmake|cpp|cs|css|dart|erl|ex|exs|go|gql|graphql|h|hcl|hpp|hrl|html|java|js|jsx|json|kt|kts|lua|m|mm|php|proto|ps1|psd1|psm1|py|r|rb|rs|scala|sh|sol|sql|svelte|swift|tf|tfvars|toml|ts|tsx|vue|xml|ya?ml|zig)$/i;
+  /\.(?:astro|bat|c|cc|cjs|cmake|cmd|cpp|cs|cshtml|css|cts|dart|erl|ex|exs|fs|go|gql|gradle|graphql|groovy|h|hcl|hpp|hrl|html|java|js|jsx|json|kt|kts|less|lua|m|mjs|mm|mts|php|proto|ps1|psd1|psm1|py|r|razor|rb|rs|scala|scss|sh|sol|sql|svelte|swift|tf|tfvars|toml|ts|tsx|vb|vue|xml|ya?ml|zig)$/i;
 const SOURCE_FILE_BASENAME =
   /^(?:BUILD|CMakeLists\.txt|Dockerfile(?:\..+)?|Gemfile|Justfile|Makefile|Procfile|Tiltfile|WORKSPACE)$/i;
 export function isSourceFileName(name: string): boolean {
@@ -32500,12 +32573,49 @@ export function evaluateGuardRefusal(
   // A revision is open for its own review: reviewing the change is the
   // conductor's step before it reports the revision done.
   const openForReview = openForWork || state === "revising";
+  // A review still waiting for its verdict: recording it, or retrying a request
+  // whose answer never came back, is the conductor's own step wherever the
+  // Unit is built, so a side-by-side Unit is offered them before a restart.
+  const pendingReviewRemedies = (): void => {
+    if (!input.attempt.pendingReview) return;
+    if (
+      input.attempt.pendingReview.verdictRecordable !== false &&
+      input.attempt.summaryCoverage === "current"
+    ) {
+      remedies.push({
+        op: "record-verdict",
+        // Spell the closing call out. Requesting a review and recording its
+        // verdict are the same command with --verdict added, which is not
+        // guessable from the request's own output, so "record the verdict"
+        // alone left operators looking for a command that does not exist.
+        action:
+          `Record the verdict for pending review iteration ` +
+          `${input.attempt.pendingReview.iteration} if the reviewer returned` +
+          (input.attempt.pendingReview.recordVerdict
+            ? `: \`${input.attempt.pendingReview.recordVerdict}\`.`
+            : " using the recordVerdict command returned by the review request."),
+        requiresHuman: false,
+        executableNow: true,
+      });
+    }
+    if (input.attempt.pendingReview.retryable) {
+      remedies.push({
+        op: "retry-pending",
+        action:
+          `Retry pending review iteration ${input.attempt.pendingReview.iteration} ` +
+          "with --retry-pending.",
+        requiresHuman: false,
+        executableNow: input.attempt.summaryCoverage === "current",
+      });
+    }
+  };
 
   if (input.autonomousBolt) {
     const slug = input.autonomousBolt.slug ?? input.autonomousBolt.unit;
     const batch = input.autonomousBolt.batch
       ? ` batch ${input.autonomousBolt.batch}`
       : " the current batch";
+    pendingReviewRemedies();
     remedies.push({
       op: "abort-bolt",
       action:
@@ -32608,38 +32718,7 @@ export function evaluateGuardRefusal(
         executableNow: openForWork || state === "revising",
       });
     }
-    if (input.attempt.pendingReview) {
-      if (
-        input.attempt.pendingReview.verdictRecordable !== false &&
-        input.attempt.summaryCoverage === "current"
-      ) {
-        remedies.push({
-          op: "record-verdict",
-          // Spell the closing call out. Requesting a review and recording its
-          // verdict are the same command with --verdict added, which is not
-          // guessable from the request's own output, so "record the verdict"
-          // alone left operators looking for a command that does not exist.
-          action:
-            `Record the verdict for pending review iteration ` +
-            `${input.attempt.pendingReview.iteration} if the reviewer returned` +
-            (input.attempt.pendingReview.recordVerdict
-              ? `: \`${input.attempt.pendingReview.recordVerdict}\`.`
-              : " using the recordVerdict command returned by the review request."),
-          requiresHuman: false,
-          executableNow: true,
-        });
-      }
-      if (input.attempt.pendingReview.retryable) {
-        remedies.push({
-          op: "retry-pending",
-          action:
-            `Retry pending review iteration ${input.attempt.pendingReview.iteration} ` +
-            "with --retry-pending.",
-          requiresHuman: false,
-          executableNow: input.attempt.summaryCoverage === "current",
-        });
-      }
-    }
+    pendingReviewRemedies();
     if (input.attempt.repairReview) {
       remedies.push({
         op: "apply-repairs-then-request",

@@ -5571,16 +5571,30 @@ export function skeletonHeldBackOnShare(projectDir: string): string | null {
   }
 }
 
+// Taking, publishing, pinning and landing a Unit read and write the
+// repository's trees at its top, with the record's paths from the project, so
+// a project in a folder below the top cannot hand Units to teams yet. The line
+// that says so; null at the top.
+export function belowRepoTop(projectDir: string): string | null {
+  const prefix = git(projectDir, ["rev-parse", "--show-prefix"]);
+  const folder = prefix.ok ? prefix.stdout.trim().replace(/\/$/, "") : "";
+  if (folder === "") return null;
+  const top = git(projectDir, ["rev-parse", "--show-toplevel"]).stdout.trim();
+  return `Team work needs this project at the top of its git repository; it sits in ${folder} of ${top}.`;
+}
+
 // Whether a share can run here: team work, a checkout holding no Unit claim, a
-// remote, and HEAD on the integration branch. Null when it can; the reason
-// otherwise, with `off` when the one reason is HEAD on another branch (the
-// share then commits AI-DLC's record there and pushes nothing, shareMain).
-// The share offer is put only where this is null.
+// project at its repository's top, a remote, and HEAD on the integration branch.
+// Null when it can; the reason otherwise, with `off` when the one reason is HEAD
+// on another branch (the share then commits AI-DLC's record there and pushes
+// nothing, shareMain). The share offer is put only where this is null.
 export function shareRefusal(projectDir: string): { reason: string; off?: { current: string; branch: string } } | null {
   const pd = resolveProjectDir(projectDir);
   try {
     if (readApplicableTeamUnitScopeStamp(pd)) return { reason: "This checkout holds a Unit claim; share main from a checkout that holds none." };
     if (!isTeamUnitOwnership(readStateFile(pd))) return { reason: "Sharing main is for work that several teams build." };
+    const below = belowRepoTop(pd);
+    if (below !== null) return { reason: below };
     if (!repositoryRemote(pd)) {
       return { reason: "This repository has no remote to share main with. Add one (git remote add origin <url>), then share again." };
     }

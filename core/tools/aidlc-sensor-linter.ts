@@ -49,7 +49,7 @@ import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
-import { compiledExecutable, projectPackage } from "./aidlc-runtime-paths.ts";
+import { compiledExecutable, projectPackage, writeSensorResult } from "./aidlc-runtime-paths.ts";
 
 interface ESLintMessage {
 	ruleId: string | null;
@@ -444,8 +444,7 @@ export function main(argv: string[]): void {
 		// findings_count emitted by the script (sensor-id-agnostic dispatcher).
 		findings_count: errorCount,
 	};
-	process.stdout.write(`${JSON.stringify(out)}\n`);
-	process.exit(0);
+	writeSensorResult(out);
 }
 
 if (import.meta.main) main(process.argv.slice(2));

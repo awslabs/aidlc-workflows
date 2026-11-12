@@ -94,7 +94,7 @@ function kiroSays(proj: string, prompt: string): void {
 
 // The call the hook told the agent to run, as the shell hands it to the engine.
 function latchedArgs(proj: string): string[] {
-  const latch = JSON.parse(readFileSync(join(proj, "aidlc", ".aidlc-engine", "sessions", "kiro-forwarding-latch"), "utf-8")) as { args: string[] };
+  const latch = JSON.parse(readFileSync(join(proj, "aidlc", ".aidlc-engine", "sessions", ".kiro-cli-forwarding-latch.json"), "utf-8")) as { args: string[] };
   return latch.args;
 }
 

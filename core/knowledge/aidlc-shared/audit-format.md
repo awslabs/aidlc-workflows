@@ -7,7 +7,7 @@ completion, and skip outcomes through `tools/aidlc-orchestrate.ts report`.
 The state tool entries below are the engine's internal atomic emitters, not
 commands a stage or conductor invokes directly.
 
-> See [`docs/reference/12-state-machine.md`](../../../../docs/reference/12-state-machine.md) for the state transitions that emit each event. Events marked `✓` are MANDATORY and asserted by `tests/feature/t48-audit-event-emitters.sh`.
+> Events marked `✓` are MANDATORY.
 
 ## Naming Convention
 
@@ -95,7 +95,7 @@ it would be without it. The rows that carry it:
 |-------|------|-----------------|---------|
 | ✓ `PHASE_STARTED` | Phase begins (first in-scope stage about to run) | Timestamp, Phase, Stage count, Scope | `tools/aidlc-utility.ts intent-create` (Init phase), `tools/aidlc-state.ts advance` (phase boundary) |
 | ✓ `PHASE_COMPLETED` | Crossed a phase boundary | Timestamp, From phase, To phase, Stages completed | `tools/aidlc-state.ts advance`, `tools/aidlc-state.ts complete-workflow` |
-| `PHASE_VERIFIED` | Traceability check at boundary | Timestamp, Phase boundary, Pass/fail, Issues | `tools/aidlc-state.ts advance`, `tools/aidlc-state.ts complete-workflow` |
+| `PHASE_VERIFIED` | Crossed a phase boundary | Timestamp, Phase boundary | `tools/aidlc-state.ts advance`, `tools/aidlc-state.ts complete-workflow` |
 | `PHASE_SKIPPED` | Scope excludes phase, or a forward jump passes over it | Timestamp, Phase, Scope, Reason | `tools/aidlc-utility.ts intent-create` (per-phase scope eval), `tools/aidlc-jump.ts execute` (forward jump) |
 
 ### Stage Lifecycle (10 events)

@@ -9139,7 +9139,8 @@ describe("t243 projection channel", () => {
           "sha256:a618a3a615ef7159c7eed634a5a332bf9d017f8e28d6b0f0adad9db1d2d725e0",
           "sha256:3cc1cbd212d2ca0dbf1e525eb9a40d4694a585eb7864d8b877f8fe8bd99122dc",
           "sha256:839f98012dd457ed13dcf19547b992130a2c44ef7afa73fb3faf000137a087d7",
-          "sha256:af5101300c61b824a05bc4ccf700e71dabcf3607a512c168a8fac7406df6eda1",
+          "sha256:c4dbcd2ecd6243a4759c148f38bd764042f2563f6a679f732c25471cd308ec77",
+          "sha256:46ea9f0d1e974b79d5ce7954dfe8b31304d6a6fd05985483c300e1a4445b99bd",
         ],
       },
       codex: {
@@ -9152,7 +9153,8 @@ describe("t243 projection channel", () => {
           "sha256:51cb399f2257236cbf63e18cb2e317d75913f1771b5402707a2508cf5f81fa57",
           "sha256:345fbe9fe620718510ecfe9d478233ccf4a5318522884b50fc5540559ace3eed",
           "sha256:c2b1232b28a8b5474f7ef8363452f75399366ef227c59d75fa85d7aa2edca7ac",
-          "sha256:993405e75842caff415e3e09e51bffc852834706e326b280579a8aeac9393da2",
+          "sha256:42e2a975d46b6fd2a582fa539f6df3260a1f2722dd0a113bd312dff7dc2da204",
+          "sha256:2017c7e71f587efbc3bddae9ddf264c08a0f353d8de6fe9f001f41f8ce5cf0fc",
         ],
         "AGENTS.md": [
           "sha256:30a9f5f43d87cd29b63e75333b8ef6695f8f4e11909fd6af64e2b6cf0b8cb292",
@@ -9176,7 +9178,8 @@ describe("t243 projection channel", () => {
           "sha256:c7843449d549d4226be39169a9c31bf89694cd0b0754cb1ee68bdf61759538ce",
           "sha256:6de1298dfa4c2b6916f66d372b844faf23481c8f258eedd595c1423dab8e106d",
           "sha256:6d3bf5865f1836575715ea93d0042b9d08bcab918cc9a17a142848fe44e88bc7",
-          "sha256:f81ea662839a6293b76d236c67edd174166ef20eb2e67baad6b567cd9250f93f",
+          "sha256:04d7ca868197529d9839b62c902870157743c93a6c7fd134bcebcccc8a1d263f",
+          "sha256:2aca14c7a5b75f3a4a12192b1e760f8b91b2287244f0d45aa7c4f947ed9d1e3e",
         ],
       },
       kiro: {
@@ -9189,7 +9192,9 @@ describe("t243 projection channel", () => {
           "sha256:28a69800dcac189aa2a976820db237b45bcf6dd7d7e6d4fae5c1603225b9957a",
           "sha256:99b4560aa1bd95f26077eb69a0c6c2a40f81146a212e70d876c27bb84f2b1789",
           "sha256:6df8b41c1c9011d8b6d386d389f96bbfa27812386f434103c260bf58641d6b5d",
-          "sha256:36137bb972b373872e366f00f6c7e9e4efb9dc838a312b5e2f3bb172ee103f9e",
+          "sha256:91f5070ac1b7f2effcf608447a67261ab00dd92495385bf2277b53ca1723c6f0",
+          "sha256:d0d2e38fbc662a86e2c8e3047ace37df838b9652710c6d6ae01232c8a6180422",
+          "sha256:e23a316e00870ad313efbcb3b2022d3ab1865fd9f35620263eac4c09938631fa",
         ],
         "AGENTS.md": [
           "sha256:4f7133cc1a9bb1243245c25c28fad57c3660b35e251ea36cea3aa2db431bf55f",
@@ -9208,7 +9213,8 @@ describe("t243 projection channel", () => {
           "sha256:c8777a03505f11dcbb4fb339fef1a8072d9d2500ce401b69a06073b523ea2c67",
           "sha256:6de1298dfa4c2b6916f66d372b844faf23481c8f258eedd595c1423dab8e106d",
           "sha256:6d3bf5865f1836575715ea93d0042b9d08bcab918cc9a17a142848fe44e88bc7",
-          "sha256:f81ea662839a6293b76d236c67edd174166ef20eb2e67baad6b567cd9250f93f",
+          "sha256:04d7ca868197529d9839b62c902870157743c93a6c7fd134bcebcccc8a1d263f",
+          "sha256:2aca14c7a5b75f3a4a12192b1e760f8b91b2287244f0d45aa7c4f947ed9d1e3e",
         ],
       },
       "kiro-ide": {
@@ -9223,7 +9229,8 @@ describe("t243 projection channel", () => {
           "sha256:6c6ff7641c17829d77fdd023f340b938db11dcc26c734a0c452d5213f9bd19cf",
           "sha256:f9d49a8c823df8174ea7d8a83209380202e5673b5ee8c1ff6b9cce90bcfd550e",
           "sha256:e7c17271c65f778895fe75352413c03da8a3c37c37bca2b8bcb1c447f4c8b8f3",
-          "sha256:e7d11aa14e943834b017a94901daa3f8a58c09eba6dab3ac72662b249d6e2cf8",
+          "sha256:0f3d8cce1070c43f883aeda63341bf00e7d689916ca5f810734784fedfd6009a",
+          "sha256:96b1943a4a01d61fd7774f40d88af6374d1b0c24a2a60aa3d1758c22faa9a8c3",
         ],
         "AGENTS.md": [
           "sha256:4d539288363565feb6cf1a8d2468d1aca4373d46d354936d89e609f9862b2b9f",
@@ -9242,7 +9249,8 @@ describe("t243 projection channel", () => {
           "sha256:5f6f076a5a9d8a11e1078f568c9dee091f399d9999fae89e9dffa62d8697b797",
           "sha256:6de1298dfa4c2b6916f66d372b844faf23481c8f258eedd595c1423dab8e106d",
           "sha256:6d3bf5865f1836575715ea93d0042b9d08bcab918cc9a17a142848fe44e88bc7",
-          "sha256:f81ea662839a6293b76d236c67edd174166ef20eb2e67baad6b567cd9250f93f",
+          "sha256:04d7ca868197529d9839b62c902870157743c93a6c7fd134bcebcccc8a1d263f",
+          "sha256:2aca14c7a5b75f3a4a12192b1e760f8b91b2287244f0d45aa7c4f947ed9d1e3e",
         ],
       },
       cursor: {
@@ -9254,7 +9262,8 @@ describe("t243 projection channel", () => {
           "sha256:cf4554ef90011ebc4bc70c7fbc6ca572c513d5c1e7daa328e406d1069f98e635",
           "sha256:ae1878ec98301ceb4510e711cf79f58dfb44cb486744007acd03ae5e61860665",
           "sha256:55d4cfabe04aca4193d53032c003002d3c9c7de4eef90be0afb411d8a6f7e340",
-          "sha256:7c7dc808d15b9e7141547cf2b197d710b1420762b5e95001ff6e35a9c578db49",
+          "sha256:880993e2876c4e1ce73f0354928eb98c7f234a127aeecbd4268aadc508e918ab",
+          "sha256:f59b6f9e718d9977af37a9d3b643d751ce60e919ffa736e9d43df4574c5df7dd",
         ],
         "AGENTS.md": [
           "sha256:78c906200a55665f3a3ce410272c71d4bdcb5764174407da0f69d8ad6d143184",
@@ -9263,7 +9272,8 @@ describe("t243 projection channel", () => {
           "sha256:eeabf9f9555124da3f5ad34eb3a26b9fcbf3e2ccd65610cb9f0182701cf3ef48",
           "sha256:6de1298dfa4c2b6916f66d372b844faf23481c8f258eedd595c1423dab8e106d",
           "sha256:6d3bf5865f1836575715ea93d0042b9d08bcab918cc9a17a142848fe44e88bc7",
-          "sha256:f81ea662839a6293b76d236c67edd174166ef20eb2e67baad6b567cd9250f93f",
+          "sha256:04d7ca868197529d9839b62c902870157743c93a6c7fd134bcebcccc8a1d263f",
+          "sha256:2aca14c7a5b75f3a4a12192b1e760f8b91b2287244f0d45aa7c4f947ed9d1e3e",
         ],
         "install.ts": [
           "sha256:338e1d36257108ce908eb42992e87e5df7cf96003a45e04a72189e4d79110aba",
@@ -9278,7 +9288,8 @@ describe("t243 projection channel", () => {
           "sha256:51cb399f2257236cbf63e18cb2e317d75913f1771b5402707a2508cf5f81fa57",
           "sha256:345fbe9fe620718510ecfe9d478233ccf4a5318522884b50fc5540559ace3eed",
           "sha256:c2b1232b28a8b5474f7ef8363452f75399366ef227c59d75fa85d7aa2edca7ac",
-          "sha256:993405e75842caff415e3e09e51bffc852834706e326b280579a8aeac9393da2",
+          "sha256:42e2a975d46b6fd2a582fa539f6df3260a1f2722dd0a113bd312dff7dc2da204",
+          "sha256:2017c7e71f587efbc3bddae9ddf264c08a0f353d8de6fe9f001f41f8ce5cf0fc",
         ],
         "AGENTS.md": [
           "sha256:d791057d6b667517197a450bc6ba633c36e148d62e09c90a8992d787c914a44f",
@@ -9287,7 +9298,8 @@ describe("t243 projection channel", () => {
           "sha256:c5b990429fe6dfa084d58fc592d1d22c1170cc35aa98f9cbb2c82b9924520eda",
           "sha256:6de1298dfa4c2b6916f66d372b844faf23481c8f258eedd595c1423dab8e106d",
           "sha256:6d3bf5865f1836575715ea93d0042b9d08bcab918cc9a17a142848fe44e88bc7",
-          "sha256:f81ea662839a6293b76d236c67edd174166ef20eb2e67baad6b567cd9250f93f",
+          "sha256:04d7ca868197529d9839b62c902870157743c93a6c7fd134bcebcccc8a1d263f",
+          "sha256:2aca14c7a5b75f3a4a12192b1e760f8b91b2287244f0d45aa7c4f947ed9d1e3e",
         ],
         "opencode.json": [
           "sha256:3be60b2be72b7a423fdaa90fd7d0d9d19613875c05ad5f1a2b6e20fcb54cd1e5",
@@ -9305,7 +9317,8 @@ describe("t243 projection channel", () => {
           "sha256:a2fb9d52cb1ad3a360d7abdaddabb6920965b6b1a7acceb14881ad93b4975bbe",
           "sha256:2091d36da7f7306179da27227857564334f3a455327f365984db6c94a4cc6412",
           "sha256:0ece34fe64acc940324082a0ed97621ff2472ddc0e611e745a6d7388e532fcea",
-          "sha256:c2413361264b58a7480bb8db4aebf1ed2dc81a469af33b6f0e761be63cbf8eb3",
+          "sha256:6c5a7b3d0059a0fe5067de62e20fb2733215ee43391cdadec3206b6fd05fe6d6",
+          "sha256:f4e6d0aba6fc6118e64a6957aad7c626c254b232843600815fc91f9fa8f67ec5",
         ],
         "AGENTS.md": [
           "sha256:9550b31b8f3f32992c1ae1035bfa57a782f04821530214a2f2e1fd1690e209ab",
@@ -9334,7 +9347,8 @@ describe("t243 projection channel", () => {
           "sha256:b0f5e39317a501be8567bbb0ecbdff651116abc28a500b9c451b732ca8f2e088",
           "sha256:b87a3ec2c39cb24074c6fa37f626e9d150d435d18069fbd0c762fdbd70719c5c",
           "sha256:a885fe6b7137ba16e0c24ce168b30ef5c780fe9991fc2d6bdff10cc15ad83c05",
-          "sha256:6eee7b6d5fbc9a8559209fca6511b3b0f6d0d3aa3615c09e4ba0e0f0ef62cc6d",
+          "sha256:7b09e1c003a983ea0c328b7935b2305f35efb8a0927a0bc9f0f7c21c6b3e13d4",
+          "sha256:bef1bc44f92b13555334c03b5339410ebc10d2dd99b14ee9f465ad8ad17379ff",
         ],
       },
     };

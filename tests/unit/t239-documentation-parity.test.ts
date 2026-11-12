@@ -1,13 +1,15 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { basename, join } from "node:path";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, join, relative } from "node:path";
 import codexOnboardingFills from "../../harness/codex/onboarding.fills.ts";
 import { renderOnboarding } from "../../scripts/onboarding.ts";
 import { type Tier, TIER_PROJECTIONS, TIERS } from "../../core/tools/aidlc-tiers.ts";
-import { parseStageFrontmatter } from "../../core/tools/aidlc-lib.ts";
+import { guardStandAsideSpeaks, knowledgeDir, parseStageFrontmatter } from "../../core/tools/aidlc-lib.ts";
 import { compareVersions } from "../../core/tools/aidlc-channel.ts";
 import { validateStageFrontmatter } from "../../core/tools/aidlc-stage-schema.ts";
 import { harnessIdFromTyped } from "../../core/tools/aidlc-runtime-paths.ts";
+import { copyChannelOmits, projectionFiles } from "../../core/tools/aidlc-distribution.ts";
 import { readConductorSurface } from "../harness/conductor-skill.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
@@ -421,6 +423,69 @@ describe("documentation parity derives current behavior from authored implementa
     expect(includesSource).toContain("export function refreshActiveMemory");
   });
 
+  // Running a block again refreshes the install, so it must not save the shipped cli.json over the project's saved
+  // one; config stops on a project cli.json it did not write, but merges Kiro CLI (V2)'s mcp.json per server, so
+  // that file is left in place for config instead of being copied over. These read the block's text; they do not run it.
+  for (const [tree, row, heading] of [
+    ["kiro-ide", "Kiro", "### Versioned manual-copy alternative"],
+    ["kiro", "Kiro CLI (V2)", "#### Kiro CLI (V2) versioned manual-copy alternative"],
+  ]) {
+    test(`the ${row} manual-copy block keeps the project's own copy of every settings file the runtime ships`, () => {
+      const page = read("docs", "guide", "harnesses", "kiro.md");
+      expect(page.indexOf(heading), `kiro.md has the heading ${heading}`).toBeGreaterThan(-1);
+      const fence = page.indexOf("```bash", page.indexOf(heading));
+      const lines = page
+        .slice(fence, page.indexOf("```", fence + "```bash".length))
+        .split(/\r?\n/)
+        .map((line) => line.trim());
+      const into = /^cp -R "([^"]+)\/\." your-project\/\.kiro\/$/;
+      const copy = lines.findIndex((line) => into.test(line));
+      expect(copy, `${row}: the block copies a folder's contents into your-project/.kiro/`).toBeGreaterThan(-1);
+      expect(lines.filter((line) => into.test(line)), `${row}: one copy into your-project/.kiro/`).toHaveLength(1);
+      const source = lines[copy].match(into)?.[1] ?? "";
+      const before = lines.slice(0, copy);
+      const runtime = `$RUNTIME_ROOT/${tree}/.kiro`;
+      expect(
+        source === runtime || before.includes(`cp -R "${runtime}/." "${source}/"`),
+        `${row}: the copy into .kiro/ comes from ${runtime}`,
+      ).toBe(true);
+      // The copy runtime is dist/<tree> without the files copyChannelOmits names (scripts/package-release.ts).
+      const omitted = copyChannelOmits(projectionFiles(at("dist", tree)).descriptor);
+      const shipped = readdirSync(at("dist", tree, ".kiro", "settings"))
+        .filter((name) => !omitted.has(`.kiro/settings/${name}`))
+        .sort();
+      expect(shipped, `${tree} ships .kiro/settings/cli.json`).toContain("cli.json");
+      for (const name of shipped) {
+        if (name === "cli.json") {
+          const guard = before.indexOf(
+            "if [ -f your-project/.kiro/settings/cli.json ] && [ ! -f your-project/cli.json.before-aidlc ]; then",
+          );
+          expect(guard, `${row}: cli.json is saved only when no saved copy exists yet`).toBeGreaterThan(-1);
+          expect(before.slice(guard + 1, guard + 3)).toEqual([
+            "cp your-project/.kiro/settings/cli.json your-project/cli.json.before-aidlc",
+            "fi",
+          ]);
+          expect(lines.filter((line) => line.includes("before-aidlc")), `${row}: the guarded save is the only one`).toHaveLength(2);
+          expect(lines.some((line) => line.includes("--force")), `${row}: nothing forces config`).toBe(false);
+        } else if (name === "mcp.json") {
+          expect(source, `${row}: the copy into .kiro/ comes from a folder without settings/mcp.json`).not.toBe(runtime);
+          const made = before.indexOf(`if ${source.replace(/^\$/, "")}="$(mktemp -d)"; then`);
+          const fill = before.indexOf(`cp -R "${runtime}/." "${source}/"`);
+          const empty = before.indexOf(`rm -f "${source}/settings/mcp.json"`);
+          expect(made, `${row}: the temporary folder comes from mktemp, and nothing runs on it when mktemp fails`).toBeGreaterThan(-1);
+          expect(fill, `${row}: the temporary folder is filled from the runtime's .kiro/`).toBeGreaterThan(made);
+          expect(empty, `${row}: settings/mcp.json is removed from it after that`).toBeGreaterThan(fill);
+          expect(lines.slice(copy + 1, copy + 3), `${row}: the temporary folder is removed after the copy`).toEqual([
+            `rm -rf "${source}"`,
+            "fi",
+          ]);
+        } else {
+          throw new Error(`${row}: the runtime ships .kiro/settings/${name}; add the block's step for it and check it here`);
+        }
+      }
+    });
+  }
+
   test("documented agent roster matches agent files and reviewer frontmatter", () => {
     expect(agentNames.length).toBe(14);
     expect(domainNames.length).toBe(11);
@@ -619,6 +684,116 @@ describe("documentation parity derives current behavior from authored implementa
     );
   });
 
+  test("no guide page says a redo deletes the stage's artifacts", () => {
+    // A redo or a jump resets progress marks, not files: the artifacts stay on disk.
+    const stale = /\bredo\b[^.]*\bartifacts (?:are )?deleted/i;
+    const copies = filesBelow(at("docs", "guide"), ".md").filter((file) =>
+      stale.test(normalized(readFileSync(file, "utf8"))),
+    );
+    expect(copies).toEqual([]);
+  });
+
+  test("the bugfix walkthrough's end state has Code Generation where a run with no Units writes it", () => {
+    // Without Units Generation there is no Unit folder: Code Generation writes <record>/construction/code-generation/.
+    expect(scopeGrid.bugfix.stages["units-generation"]).not.toBe("EXECUTE");
+    const walkthrough = sliceBetween(
+      read("docs", "guide", "16-worked-examples.md"),
+      "## Bugfix Walkthrough",
+      "## Feature Walkthrough",
+    );
+    const tree = sliceBetween(walkthrough, "### End state", "\n### ").split(/\r?\n/);
+    const indent = (line: string): number => line.length - line.trimStart().length;
+    const construction = tree.findIndex((line) => line.trim() === "construction/");
+    expect(construction, "the end state lists construction/").toBeGreaterThan(-1);
+    const next = tree[construction + 1] ?? "";
+    expect(next.trimStart(), "the first entry under construction/").toMatch(/^code-generation\//);
+    expect(indent(next), "code-generation/ sits right under construction/").toBe(indent(tree[construction]) + 2);
+  });
+
+  test("each scope summary's skipped stages match its compiled plan", () => {
+    const graph = JSON.parse(read("dist", "claude", ".claude", "tools", "data", "stage-graph.json")) as Array<{
+      slug: string;
+      phase: string;
+    }>;
+    const operation = graph.filter((stage) => stage.phase === "operation").map((stage) => stage.slug);
+    const design = [
+      "user-stories",
+      "refined-mockups",
+      "domain-design",
+      "units-generation",
+      "contract-design",
+      "delivery-planning",
+      "functional-design",
+      "nfr-requirements",
+      "nfr-design",
+      "infrastructure-design",
+    ];
+    let summaries = 0;
+    for (const section of read("docs", "guide", "05-scopes-and-depth.md").split(/^(?=### )/m)) {
+      const scope = /^### ([a-z][a-z-]+)\r?\n/.exec(section)?.[1];
+      const stages = scope === undefined ? undefined : scopeGrid[scope]?.stages;
+      if (stages === undefined) continue;
+      summaries += 1;
+      const runs = (slug: string): boolean => stages[slug] === "EXECUTE";
+      const text = normalized(section);
+      const operationRuns = operation.filter(runs).length;
+      if (/\bmost Operation stages\b/.test(text)) {
+        expect(operationRuns > 0 && operationRuns < operation.length, `${scope}: "most Operation stages"`).toBe(true);
+      }
+      if (/\ball (?:\d+ )?Operation stages\b/i.test(text)) expect(operationRuns, `${scope}: "all Operation stages"`).toBe(0);
+      if (/\bfrom intent capture\b/i.test(text)) expect(runs("intent-capture"), `${scope}: "from intent capture"`).toBe(true);
+      if (/\bmost design and architecture stages\b/.test(text)) {
+        expect(design.some(runs), `${scope}: "most design and architecture stages"`).toBe(true);
+      }
+    }
+    expect(summaries, "the scopes page has a summary per shipped scope").toBe(Object.keys(scopeGrid).length);
+  });
+
+  test("the guide's add-a-skipped-stage choice is the one the stage protocol offers", () => {
+    const protocol = read("core", "aidlc-common", "protocols", "stage-protocol.md");
+    const offer = /- label: ([^\n]*\[Skipped Stage\][^\n]*)\r?\n\s*description: ([^\n]*)/.exec(protocol);
+    expect(offer, "stage-protocol.md offers to add a skipped stage").not.toBeNull();
+    const guide = normalized(read("docs", "guide", "07-interaction-modes.md"));
+    const [, label, description] = offer as RegExpExecArray;
+    for (const shown of [label.trim().replace("[Skipped Stage]", "Market Research"), description.trim().replace("[stage]", "Market Research")]) {
+      expect(guide.includes(shown), `07-interaction-modes.md shows "${shown}"`).toBe(true);
+    }
+  });
+
+  test("the knowledge guide's paths are the folder knowledgeDir resolves", () => {
+    const project = mkdtempSync(join(tmpdir(), "t239-knowledge-"));
+    let resolved: string;
+    try {
+      resolved = relative(project, knowledgeDir(project, "default")).replace(/\\/g, "/");
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
+    expect(resolved).toBe("aidlc/spaces/default/knowledge");
+    const page = read("docs", "guide", "08-knowledge.md");
+    expect(normalized(page)).toContain(`${resolved.replace("/default/", "/<space>/")}/`);
+    // The Knowledge chapter, and the guide that sends people there to save their team knowledge.
+    const short = [
+      ["08-knowledge.md", page],
+      ["writing-inputs/technical-environment-guide.md", read("docs", "guide", "writing-inputs", "technical-environment-guide.md")],
+    ].flatMap(([name, text]) =>
+      text
+        .split(/\r?\n/)
+        .filter((line) => /(?:^|[^\w./-])aidlc\/knowledge\//.test(line))
+        .map((line) => `${name}: ${line.trim()}`),
+    );
+    expect(short, "lines naming aidlc/knowledge/, a folder nothing reads").toEqual([]);
+  });
+
+  test("the stand-aside bullet says what guardStandAsideSpeaks decides", () => {
+    const bullet = normalized(
+      sliceBetween(read("docs", "guide", "13-customization.md"), "- **It stands aside.**", "- **It holds.**"),
+    );
+    const speaks = GUARD_POLICY_WORDS.filter((policy) => guardStandAsideSpeaks({ policy }));
+    const silent = GUARD_POLICY_WORDS.filter((policy) => !guardStandAsideSpeaks({ policy }));
+    for (const policy of speaks) expect(bullet, `${policy} says one line`).toMatch(new RegExp(`Under Guard Policy [^,]*\`${policy}\``));
+    for (const policy of silent) expect(bullet, `${policy} says nothing`).toContain(`Under \`${policy}\` there is no line`);
+  });
+
   test("no copy says the Construction checkpoint re-check holds under every Guard Policy", () => {
     // It runs under strict only; relaxed and off accept the change with one line.
     const stale = /exception holds under every (?:Guard Policy|value)/;
@@ -636,6 +811,115 @@ describe("documentation parity derives current behavior from authored implementa
       'A headless `copilot -p` run never asks: start `copilot` in the folder once and choose "Yes, and remember ' +
         'this folder for future sessions".',
     );
+  });
+
+  test("no page says AI-DLC's .gitignore block keeps .vscode out of git while no shipped block names it", () => {
+    const blocks = [
+      ...readdirSync(at("harness")).map((name) => at("harness", name, "dot-gitignore")).filter((file) => existsSync(file)),
+      at("core", "tools", "aidlc-gitignore.ts"),
+    ];
+    expect(blocks.length, "the shipped .gitignore blocks").toBeGreaterThan(1);
+    if (blocks.some((file) => /vscode/i.test(readFileSync(file, "utf8")))) return;
+    const stale = /block keeps `?\.vscode/;
+    const copies = [...filesBelow(at("docs"), ".md"), at("README.md")].filter((file) =>
+      stale.test(normalized(readFileSync(file, "utf8"))),
+    );
+    expect(copies).toEqual([]);
+  });
+
+  test("the Kiro page does not say there is no init command while Kiro installs ship /aidlc-init", () => {
+    for (const tree of ["kiro", "kiro-ide"]) {
+      expect(existsSync(at("dist", tree, ".kiro", "skills", "aidlc-init", "SKILL.md")), `${tree} ships aidlc-init`).toBe(true);
+    }
+    const deniesInit = /\bno init command\b/i.test(normalized(read("docs", "guide", "harnesses", "kiro.md")));
+    expect(deniesInit, "docs/guide/harnesses/kiro.md says there is no init command").toBe(false);
+  });
+
+  test("no page says to finish open work before running aidlc config", () => {
+    // A refresh is done while work is open (Install and Lifecycle, Refresh Safety); nothing waits for it to finish.
+    const stale = /\b(?:finish|complete) (?:the |all |your )?active workflows?,? then run `aidlc config/i;
+    const copies = [...filesBelow(at("docs"), ".md"), at("README.md")].filter((file) =>
+      stale.test(normalized(readFileSync(file, "utf8"))),
+    );
+    expect(copies).toEqual([]);
+  });
+
+  test("the Copilot pages name every VS Code setting config adds", () => {
+    const keys = Object.keys(JSON.parse(read("harness", "copilot", "dot-vscode-settings.json")) as Record<string, unknown>);
+    expect(keys.length, "Copilot ships VS Code settings").toBeGreaterThan(0);
+    const row = read("docs", "guide", "18-install-and-lifecycle.md")
+      .split(/\r?\n/)
+      .find((line) => line.startsWith("| `.vscode/settings.json` | Copilot |"));
+    expect(row, "the install chapter's .vscode/settings.json row").toBeDefined();
+    const bullet = normalized(
+      sliceBetween(read("docs", "guide", "harnesses", "copilot.md"), "- **`.vscode/settings.json`**", "## Prerequisites"),
+    );
+    for (const key of keys) {
+      expect(row?.includes(`\`${key}\``), `install chapter row names ${key}`).toBe(true);
+      expect(bullet.includes(`\`${key}\``), `copilot.md .vscode/settings.json bullet names ${key}`).toBe(true);
+    }
+  });
+
+  test("no harness page says the manual-copy runtime it describes needs no Bun", () => {
+    // The copy runtime is the Bun projection: its setup, hooks and tools run through Bun.
+    const said = /versioned (?:release )?runtimes? (?:are self-contained|use `aidlc`|invoke `aidlc`|dispatch through)/;
+    let pages = 0;
+    for (const file of filesBelow(at("docs", "guide", "harnesses"), ".md")) {
+      const text = readFileSync(file, "utf8");
+      if (!text.includes("aidlc-copy-runtime") || !/(?:^|&& |`)bun [^\s`]+\.ts\b/m.test(text)) continue;
+      const bullets = [...text.matchAll(/^- \*\*bun\*\*[^\n]*(?:\r?\n {2}[^\n]*)*/gm)].map((match) => normalized(match[0]));
+      if (bullets.length === 0) continue;
+      pages += 1;
+      for (const bullet of bullets) expect(said.test(bullet), `${basename(file)}: ${bullet}`).toBe(false);
+      expect(normalized(text).includes("versioned runtime uses the native"), `${basename(file)} says the copy runtime uses aidlc`).toBe(false);
+    }
+    expect(pages, "harness pages with a manual-copy runtime").toBeGreaterThanOrEqual(5);
+  });
+
+  test("no copy command copies a folder into an existing one of the same name", () => {
+    // GNU cp -r "src/" dst/ nests src inside an existing dst; "src/." copies its contents on every platform.
+    const nesting = /\bcp\s+-[rR]\s+(?:"[^"\n]*[^."\n]\/"|[^\s"]*[^.\s"]\/)\s/;
+    // These keep their folder copy: their contents would replace a project's own files (the next case).
+    const folderCopies = [
+      ["codex-cli.md", '"$RUNTIME_ROOT/codex/.codex/"'],
+      ["codex-cli.md", '"$RUNTIME_ROOT/codex/aidlc/"'],
+      ["opencode.md", '"$RUNTIME_ROOT/opencode/aidlc/"'],
+    ];
+    const keepsFolderCopy = (file: string, line: string): boolean =>
+      folderCopies.some(([page, source]) => basename(file) === page && line.includes(source));
+    const lines = [...filesBelow(at("docs"), ".md"), at("README.md")].flatMap((file) =>
+      readFileSync(file, "utf8")
+        .split(/\r?\n/)
+        .filter((line) => nesting.test(line) && !keepsFolderCopy(file, line))
+        .map((line) => `${basename(file)}: ${line.trim()}`),
+    );
+    expect(lines).toEqual([]);
+  });
+
+  test("the opencode and Codex copy steps do not copy a runtime folder over files a project may own", () => {
+    // A project's own Codex setup uses config.toml and hooks.json too, and a team writes its phase rules into the
+    // space's phases/*.md, which the copy runtime ships (it leaves out only team.md, project.md and active-space).
+    // A contents copy would replace them with no word.
+    const owned: Array<[string, string, string[]]> = [
+      ["codex-cli.md", "codex/.codex", ["config.toml", "hooks.json"]],
+      ["codex-cli.md", "codex/aidlc", ["spaces/default/memory/phases/construction.md"]],
+      ["opencode.md", "opencode/aidlc", ["spaces/default/memory/phases/construction.md"]],
+    ];
+    for (const [page, folder, names] of owned) {
+      const shipped = names.filter((name) => existsSync(at("dist", folder, name)));
+      if (shipped.length === 0) continue;
+      const contentsCopy = new RegExp(`\\bcp\\s+-[rR]\\s+"\\$RUNTIME_ROOT/${folder.replace(".", "\\.")}/\\."`);
+      const text = read("docs", "guide", "harnesses", page);
+      expect(contentsCopy.test(text), `${page} copies the runtime's ${folder}/ over the project's ${shipped.join(", ")}`).toBe(false);
+    }
+  });
+
+  test("the docs home page carries README's note on the two Kiro names", () => {
+    const note = read("README.md")
+      .split(/\r?\n/)
+      .find((line) => line.includes("read the two Kiro names the other way"));
+    if (note === undefined) return;
+    expect(normalized(read("docs", "README.md")).includes(normalized(note)), "docs/README.md carries the note").toBe(true);
   });
 
   test("a review the person asks for is recorded under every Guard Policy, and no copy reads as needing strict", () => {
@@ -1058,6 +1342,100 @@ describe("documentation parity derives current behavior from authored implementa
     ).toBe(true);
   });
 
+  test("the stage reference's scope listings are the compiled plans", () => {
+    const order = (JSON.parse(read("dist", "claude", ".claude", "tools", "data", "stage-graph.json")) as Array<{
+      slug: string;
+    }>).map((stage) => stage.slug);
+    const listings = filesBelow(at("docs", "reference", "04-stages"), ".md").flatMap((file) =>
+      [...readFileSync(file, "utf8").matchAll(/^\$ aidlc engine graph scope ([a-z][a-z-]*)\r?\n([\s\S]*?)^```/gm)].map(
+        ([, scope, body]) => ({ where: `${basename(file)} ${scope}`, scope, lines: body.split(/\r?\n/).map((line) => line.trim()).filter(Boolean) }),
+      ),
+    );
+    expect(listings.length, "the stage reference shows at least one compiled plan").toBeGreaterThan(0);
+    for (const { where, scope, lines } of listings) {
+      expect(scopeGrid[scope], `${where}: a shipped scope`).toBeDefined();
+      const plan = order.filter((slug) => scopeGrid[scope].stages[slug] === "EXECUTE");
+      // A "..." line stands for stages left out; every other line is the plan's next stage.
+      let next = 0;
+      let skipped = false;
+      for (const line of lines) {
+        if (line === "...") {
+          skipped = true;
+          continue;
+        }
+        const found = plan.indexOf(line, next);
+        expect(found, `${where}: ${line} is on the plan, in order`).toBeGreaterThanOrEqual(next);
+        if (!skipped) expect(line, `${where}: the stage after ${plan[next - 1] ?? "the start"}`).toBe(plan[next]);
+        next = found + 1;
+        skipped = false;
+      }
+      if (!skipped) expect(next, `${where}: the listing ends where the plan ends`).toBe(plan.length);
+    }
+    for (const slug of ["code-generation", "build-and-test"]) expect(scopeGrid.infra.stages[slug]).toBe("EXECUTE");
+    const construction = normalized(read("docs", "reference", "04-stages", "construction.md"));
+    expect(/infra (?:runs no Code Generation|has neither)/.test(construction), "construction.md says infra skips them").toBe(false);
+  });
+
+  test("the plugin chapter does not call a plugin's house rules deferred", () => {
+    // The reference plugin ships house rules, and its own tests validate and compose it.
+    const manifest = JSON.parse(read("plugins", "test-pro", ".aidlc-plugin", "plugin.json")) as {
+      aidlc?: { contributes?: Record<string, string> };
+    };
+    expect(manifest.aidlc?.contributes?.memory).toBe("memory/");
+    expect(existsSync(at("plugins", "test-pro", "memory", "rules.md"))).toBe(true);
+    const chapter = normalized(read("docs", "reference", "18-plugin-mechanism.md"));
+    expect(/rejects a `memory` contribution/.test(chapter), "the chapter says validate rejects memory").toBe(false);
+    expect(/merge of a plugin's `memory\/` subtree/.test(chapter), "the chapter lists memory as deferred").toBe(false);
+  });
+
+  test("the stage reference says support agents take part only when collaborators are on", () => {
+    const shipsOn = scopeNames.filter(
+      (scope) => frontmatterScalar(read("core", "scopes", `aidlc-${scope}.md`), "collaborators") === "on",
+    );
+    expect(shipsOn.length, "a shipped scope runs with collaborators off").toBeLessThan(scopeNames.length);
+    const phases = new Set(
+      filesBelow(at("core", "aidlc-common", "stages"), ".md")
+        .filter((file) => /^support_agents:[ \t]*\r?\n[ \t]+-[ \t]+aidlc-/m.test(readFileSync(file, "utf8")))
+        .map((file) => file.split(/[\\/]/).at(-2) ?? ""),
+    );
+    expect(phases.size, "stages that declare support agents").toBeGreaterThan(0);
+    for (const phase of phases) {
+      const page = normalized(read("docs", "reference", "04-stages", `${phase}.md`));
+      expect(page.includes("collaborators"), `docs/reference/04-stages/${phase}.md names the collaborators setting`).toBe(true);
+    }
+    for (const file of filesBelow(at("docs", "reference", "04-stages"), ".md")) {
+      for (const clause of normalized(readFileSync(file, "utf8")).matchAll(/shipped on only for ([^;)]+)/g)) {
+        expect(nameList(clause[1]), `${basename(file)}: shipped on only for`).toEqual(shipsOn);
+      }
+    }
+    const compliance = read("docs", "reference", "05-agent-system.md")
+      .split(/\r?\n/)
+      .find((line) => line.startsWith("- aidlc-compliance-agent operates"));
+    expect(compliance?.includes("collaborators"), "05-agent-system.md: the compliance agent needs collaborators").toBe(true);
+  });
+
+  test("the pages that name the scopes running no Operation stage name every one", () => {
+    const graph = JSON.parse(read("dist", "claude", ".claude", "tools", "data", "stage-graph.json")) as Array<{
+      slug: string;
+      phase: string;
+    }>;
+    const operation = graph.filter((stage) => stage.phase === "operation").map((stage) => stage.slug);
+    const none = Object.keys(scopeGrid)
+      .filter((scope) => operation.every((slug) => scopeGrid[scope].stages[slug] !== "EXECUTE"))
+      .sort();
+    expect(none.length, "scopes that run no Operation stage").toBeGreaterThan(0);
+    for (const path of [
+      ["docs", "reference", "diagrams.md"],
+      ["docs", "guide", "04-phases-and-stages.md"],
+    ]) {
+      const text = normalized(read(...path));
+      const claims = [...text.matchAll(/([^.();]*) run none of them/g)];
+      expect(claims.length, `${path.at(-1)} names the scopes with no Operation stage`).toBeGreaterThan(0);
+      for (const claim of claims) expect(nameList(claim[1]), `${path.at(-1)}`).toEqual(none);
+      expect(text.includes("entire phase may be skipped for"), `${path.at(-1)} still says may be skipped`).toBe(false);
+    }
+  });
+
   test("facilitator guide quotes current scope sizes, depth defaults, and doctor rows", () => {
     const guide = read("docs", "guide", "facilitator-guide.md");
     const flat = normalized(guide);
@@ -1120,8 +1498,8 @@ describe("documentation parity derives current behavior from authored implementa
       "Hooks have never executed although this workflow has progressed",
       "Hook heartbeat data",
       "Your replies are not being recorded: ",
-      "Plan Approval authority is ambiguous or stale",
-      "cannot select one approval target",
+      "AI-DLC is not on the build step",
+      "a change goes through only inside one Unit's own prepared worktree",
       "Select Construction Execution: serial",
       "AIDLC_DISABLE_PLAN_APPROVAL_GUARD",
     ]) {

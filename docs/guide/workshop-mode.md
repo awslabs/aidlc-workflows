@@ -481,7 +481,12 @@ Build and Test before then, typed (`/aidlc --stage build-and-test`) or asked
 in plain words: once a team has taken a Unit, the Unit stages stay open on
 main, the move says once which Units are still open and whose ("Still open on
 main, and landing as they finish: gamma (team-g); beta, not taken yet."), and
-each Unit still comes up for review and lands as it finishes.
+each Unit still comes up for review and lands as it finishes. Once a team has
+taken a Unit, a redo of a Unit stage for every Unit on main ("redo the functional
+design") reopens it only for the Units main itself is building and says which it
+left and why ("Redoing Functional Design for unit beta. alpha is finished and
+gamma is built by team-g, so they are not redone here."); with none, nothing
+changes and the line says so. A team's finished Unit keeps its approvals.
 
 ### Dispatcher, status, and health checks
 

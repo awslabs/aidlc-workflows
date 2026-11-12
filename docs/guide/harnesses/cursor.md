@@ -39,9 +39,8 @@ projection directly (no `emit.ts`, no split dot-dir). The distribution is:
   this install's `.cursor/` surfaces. Verified against cursor-agent 2026.07;
   hooks (`.cursor/hooks.json`) and skills (`.cursor/skills/`) are
   current-line features.
-- **bun** only for source development or the optional manual-copy
-  `install.ts` helper. Once installed, native and versioned release runtimes
-  invoke `aidlc`.
+- **bun** only for source development or the versioned manual-copy runtime
+  and its `install.ts` helper. Native installs invoke `aidlc`.
 - **A paid Cursor plan for named models** - Free accounts can only use `Auto`.
   The tiered persona surfaces ship with **no model pins** (all tiers project to
   null on Cursor: model availability is plan-dependent), so every agent
@@ -115,7 +114,8 @@ utility shortcuts are `/aidlc-status`, `/aidlc-jump --stage <slug>` (or
   (`.cursor/hooks/aidlc-cursor-adapter.ts`), which maps Cursor's camelCase hook
   events (`sessionStart`, `sessionEnd`, `beforeSubmitPrompt`, `preToolUse`,
   `postToolUse`, `postToolUseFailure`, `preCompact`, `stop`) onto the byte-shared
-  core hook bodies (run as bun subprocesses): human-turn recording on each human turn, the
+  core hook bodies (the guards before a tool call run inside the adapter's own process, the
+  rest as subprocesses): human-turn recording on each human turn, the
   state-transition, reviewer read-scope, review-freeze, and plan-approval
   guards before a tool runs, audit +
   sensors on write/edit, failed-Task attribution cleanup, stage-graph rebuilds on
@@ -174,17 +174,18 @@ utility shortcuts are `/aidlc-status`, `/aidlc-jump --stage <slug>` (or
   dispatch retires and logs its prior record (Cursor CLI emits no Task
   `postToolUse`); genuine cross-parent ambiguity stays conservative whenever a
   reviewer is live, so it cannot disable reviewer-scope enforcement. Delegated
-  tools cannot change the ledger or dispatch record, including through ancestor
-  deletes or unquoted shell glob/character-class paths, or name them outright.
-  If the primary ledger is missing or unreadable while any delegation witness
-  remains active, operations fail closed rather than losing delegated-agent
-  attribution. Delegates run builds, tests, searches and the AI-DLC commands
-  they are given like the main conversation, under the same AI-DLC checks and
-  Cursor's own approval. While the reviewer read-scope or state-transition check
-  holds for the piece of work, a Shell command that writes, moves or removes the
-  ledger or dispatch record is denied, and a Task whose record cannot be written
-  does not start; when both stand aside (Guard Policy off does that), none of
-  these delegate limits applies.
+  tools cannot write, move or remove the ledger or dispatch record by a path
+  their command names, including through ancestor deletes or unquoted shell
+  glob/character-class paths, or name them outright. If the primary ledger is
+  missing or unreadable while any delegation witness remains active, operations
+  fail closed rather than losing delegated-agent attribution. Delegates run
+  builds, tests, searches and the AI-DLC commands they are given like the main
+  conversation, under the same AI-DLC checks and Cursor's own approval. While
+  the reviewer read-scope or state-transition check holds for the piece of work,
+  a Shell command that writes, moves or removes the ledger or dispatch record by
+  a path it names is denied, and a Task whose record cannot be written does not
+  start; when both stand aside (Guard Policy off does that), none of these
+  delegate limits applies.
 - **Generated stage and scope runners are explicit-only.** Cursor receives
   `disable-model-invocation: true` on generated runner skills, including plugin
   runners, so ordinary coding prompts cannot auto-activate state-mutating

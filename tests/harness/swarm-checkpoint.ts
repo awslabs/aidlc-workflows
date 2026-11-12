@@ -19,7 +19,7 @@ import {
   renderTestingContract, resolveCodeGenerationAuthority, resolveTestingPosture,
 } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 import {
-  fixtureIntentId8, AIDLC_SRC, cleanupWorktreeFixture, resetAidlcEnv, seedAidlcMemory,
+  fixtureIntentId8, AIDLC_SRC, cleanupWorktreeFixture, REPO_ROOT, resetAidlcEnv, seedAidlcMemory,
   runOrchestrateNext, seedBoltDagBatches, seededStateFile, setupWorktreeFixture,
 } from "./fixtures.ts";
 import {
@@ -233,11 +233,15 @@ export function fixture(
 - **Lifecycle Phase**: CONSTRUCTION
 - **Status**: Running
 `);
-  writeFileSync(join(pd, ".gitignore"), [
-    ".aidlc/", "aidlc/.aidlc-*", "aidlc/active-space",
-    "aidlc/spaces/*/intents/active-intent", "aidlc/spaces/*/intents/*/audit/",
-    "aidlc/spaces/*/intents/*/runtime-graph.json", "aidlc/spaces/*/intents/*/.aidlc-*", "",
-  ].join("\n"));
+  // Most cases keep the records out of git. fixtureWithShippedGitignore takes
+  // the part AI-DLC ships instead, which commits them as a team's project does.
+  writeFileSync(join(pd, ".gitignore"), shippedGitignore
+    ? readFileSync(join(REPO_ROOT, "harness", "claude", "dot-gitignore"), "utf-8")
+    : [
+      ".aidlc/", "aidlc/.aidlc-*", "aidlc/active-space",
+      "aidlc/spaces/*/intents/active-intent", "aidlc/spaces/*/intents/*/audit/",
+      "aidlc/spaces/*/intents/*/runtime-graph.json", "aidlc/spaces/*/intents/*/.aidlc-*", "",
+    ].join("\n"));
   if (repo !== null) {
     const registry = join(pd, "aidlc", "spaces", "default", "intents", "intents.json");
     const entries = JSON.parse(readFileSync(registry, "utf-8"));
@@ -271,6 +275,19 @@ export function fixtureWithSource(addSource: (code: string) => void, units = ["a
     return fixture(units, CHECK, false, null, policy);
   } finally {
     addSourceBeforeBaseline = null;
+  }
+}
+
+// The .gitignore AI-DLC ships (Claude Code's part), so the project commits its
+// records; false for every other fixture.
+let shippedGitignore = false;
+
+export function fixtureWithShippedGitignore(units = ["alpha"]): string {
+  shippedGitignore = true;
+  try {
+    return fixture(units);
+  } finally {
+    shippedGitignore = false;
   }
 }
 

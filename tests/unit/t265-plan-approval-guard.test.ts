@@ -1780,7 +1780,7 @@ describe("t265b hook lifecycle", () => {
         const source = runHook(proj, WRITE(join(proj, "src", "inline.ts")));
         expect(source.code).toBe(2);
         expect(source.stderr).toContain("Code changes wait while AI-DLC's recovery question is open");
-        expect(source.stderr).not.toContain("authority is ambiguous or stale");
+        expect(source.stderr).not.toContain("AI-DLC is not on the build step");
 
         // A picked fix whose work happens while the question is open (finishing
         // a revision) opens its own route and the ask's record folder, nothing else.

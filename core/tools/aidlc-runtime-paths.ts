@@ -439,6 +439,14 @@ export function sensorFireUsage(id = "<id>"): string {
   return aidlcDispatcherInvocation(`sensor fire ${id} --stage <slug> --output-path <path>`);
 }
 
+// A check script's result, written whole before the process exits 0: under Bun
+// an exit straight after a large write to a pipe drops what is not yet written.
+// writeSync is no way round: once stdout is non-blocking it writes part and
+// returns; ending without an exit makes an early-closing reader an EPIPE exit 1.
+export function writeSensorResult(result: unknown): void {
+  process.stdout.write(`${JSON.stringify(result)}\n`, () => process.exit(0));
+}
+
 export function aidlcToolInvocation(
   route: string,
   sourceTool?: string,

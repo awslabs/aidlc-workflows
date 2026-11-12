@@ -170,10 +170,10 @@ describe("t130 scope-runners — structural conformance of the shipped first-bat
   for (const scope of BATCH) {
     test(`aidlc-${scope}: carries the new-work offer routed through next --new-intent`, () => {
       const body = readFileSync(runnerPath(scope), "utf-8");
-      // The section header + the AskUserQuestion offer (never auto-create) + the
+      // The section header + the structured-question offer (never auto-create) + the
       // --new-intent escape hatch driven by the CONFIRMED scope.
       expect(body).toContain("Starting unrelated new work?");
-      expect(body).toContain("AskUserQuestion");
+      expect(body.replace(/\s+/g, " ")).toContain("Present a structured question showing the active intent");
       expect(body).toContain("next --new-intent --scope <the confirmed scope>");
       expect(body).toContain("`intent-create` command");
       const retiredIntentCommand = "intent-" + "b" + "irth";

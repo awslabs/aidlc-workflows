@@ -1386,9 +1386,9 @@ const KNOWN_FIELDS_BY_KIND: Readonly<Record<DirectiveKind, readonly string[]>> =
 
 // The person's yes to the warning's redo question reopens the stage it names.
 export function stageValidityNote(invocation: string, stage: string | null): string {
-  return "Say stage_validity.warning to the person word for word, as your own sentence with nothing in front of " +
-    "it, if you have not said it in this chat yet, then carry on with this step; it is about their own change, so " +
-    "never say who made it or call it stray or a mistake." +
+  return "Say the warning beside this note about their finished stages to the person word for word, as your own " +
+    "sentence with nothing in front of it, if you have not said it in this chat yet, then carry on with this step; " +
+    "it is about their own change, so never say who made it or call it stray or a mistake." +
     (stage ? ` If their next reply says yes to it, run \`${invocation} next --stage ${stage}\` and follow the step ` +
       "it returns." : "");
 }
@@ -1401,8 +1401,10 @@ export const SAY_ONCE_BEFORE_THEY_REPLY =
   "once, as written (only a verb's tense may change to fit when you say it), as your own sentence with nothing in " +
   "front of it, in the last message you write before they reply (when you end your turn with a question, the text " +
   "you write just before it)";
+// The rest of that order for the lines a step carries for the person.
+export const ADD_NOTHING_ABOUT_WHY = "and add nothing about why";
 export const CHANGE_NOTICES_NOTE =
-  `Say each change_notices line to the person ${SAY_ONCE_BEFORE_THEY_REPLY}, and add nothing about why.`;
+  `Say each notice listed beside this note to the person ${SAY_ONCE_BEFORE_THEY_REPLY}, ${ADD_NOTHING_ABOUT_WHY}.`;
 
 // Every question the engine asks: whose it is, and what a pick does. A choice's
 // command answers the question; a routing command returns the next step, a

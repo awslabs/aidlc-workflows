@@ -33,6 +33,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -63,9 +64,11 @@ import {
   approvalFingerprint,
   codeGenerationRecordDir,
   evaluateCodeGenerationApproval,
+  parseTestingContract,
   renderTestingContract,
   resolveCodeGenerationAuthority,
   resolveTestingPosture,
+  withPlanApprovalTags,
 } from "../../core/tools/aidlc-testing-posture.ts";
 import { readConductorSurface } from "../harness/conductor-skill.ts";
 import {
@@ -86,6 +89,9 @@ import {
 } from "../harness/test-budget.ts";
 import { writeWindowsExecutable } from "../harness/windows-native-executable.ts";
 import { resolveAction } from "../../core/tools/aidlc.ts";
+import { SECRET_MASKED_LINE } from "../../core/tools/aidlc-audit.ts";
+import { addPendingPersonLines, resolveWorkflowSelection } from "../../core/tools/aidlc-lib.ts";
+import { SAY_ONCE_BEFORE_THEY_REPLY } from "../../core/tools/aidlc-directive.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -1112,6 +1118,37 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
       expect(r.stdout).not.toContain("\u0008");
       expect(r.stdout).not.toContain("Cwd=C:\\shell\\noise");
       expect(readFileSync(countPath, "utf-8").trim()).toBe("1");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("8c1: a message that only quotes an engine command runs nothing and holds no shell call", () => {
+    const dir = scratchProject(true);
+    try {
+      const countPath = installPlainTextUtility(dir);
+      for (const prompt of [
+        "why does `bun .kiro/tools/aidlc-orchestrate.ts next --status` fail?",
+        "Before I run `bun .kiro/tools/aidlc-orchestrate.ts next --doctor`, what does it check?",
+      ]) {
+        const r = runIdeStdin(dir, "verb-intercept", JSON.stringify({
+          session_id: "sess_quoted_command",
+          hook_event_name: "UserPromptSubmit",
+          cwd: dir,
+          prompt,
+        }));
+        expect(r.code, r.stderr).toBe(0);
+        expect(r.stdout).not.toContain("Unicode: ─ ✓ █▒ ⇄");
+        const shell = runIdeStdin(dir, "terminal-command-guard", JSON.stringify({
+          session_id: "sess_quoted_command",
+          hook_event_name: "PreToolUse",
+          cwd: dir,
+          tool_name: "execute_bash",
+          tool_input: { command: "ls" },
+        }));
+        expect(shell.code, shell.stderr).toBe(0);
+      }
+      expect(existsSync(countPath)).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -4045,6 +4082,198 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     }
   });
 
+  test("legacy mediation replaces an out-of-date Testing Contract instead of adding a second one", () => {
+    const dir = scratchProject(true);
+    try {
+      initGitWorkspace(dir);
+      seedCodeGenerationDirective(dir);
+      seedLegacyDirectiveChoices(dir);
+      expect(runIde(dir, "session-start", null).code).toBe(0);
+      expect(
+        runIde(dir, "plan-approval-guard", JSON.stringify({ toolName: "fs_write", toolArgs: {} })).code,
+      ).toBe(0);
+      seedStageLevelPlanApproval(dir);
+      const contract = resolveTestingPosture(dir);
+      const plan = join(codeGenerationRecordDir(dir, null), "code-generation-plan.md");
+      const stale = renderTestingContract({ ...contract, contract_sha256: `sha256:${"0".repeat(64)}` });
+      writeFileSync(plan, `# Plan\n\n## Steps\n\n- [ ] Implement\n\n${stale}\n## Notes\n\nKeep this note.\n`, "utf-8");
+      const r = runIde(dir, "audit-and-sensors", ctx("fs_write", `Created the ${relative(dir, plan)} file.`));
+      expect(r.code, r.stderr).toBe(0);
+      const written = readFileSync(plan, "utf-8");
+      expect(written.match(/^## Testing Contract$/gm)?.length).toBe(1);
+      expect(written.match(/^```json$/gm)?.length).toBe(1);
+      expect(written).not.toContain("0".repeat(64));
+      expect(parseTestingContract(written)?.contract_sha256).toBe(contract.contract_sha256);
+      expect(written).toContain("- [ ] Implement");
+      expect(written).toContain("## Notes\n\nKeep this note.");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("legacy mediation reads and tags the latest Plan Approval section of a plan presented again", () => {
+    const dir = scratchProject(true);
+    try {
+      initGitWorkspace(dir, { applicationSourceOnly: true });
+      seedCodeGenerationDirective(dir);
+      const choices = seedLegacyDirectiveChoices(dir);
+      expect(runIde(dir, "session-start", null).code).toBe(0);
+      expect(
+        runIde(dir, "plan-approval-guard", JSON.stringify({ toolName: "fs_write", toolArgs: {} })).code,
+      ).toBe(0);
+      const questions = seedStageLevelPlanApproval(dir, { bareSection: true });
+      // The first presentation, answered, then the plan presented again.
+      const earlier = [
+        "## Plan Approval",
+        "",
+        `[Approval Fingerprint]: sha256:v3:${"0".repeat(64)}`,
+        "[Planned Source]: unbindable",
+        "- Approve Plan",
+        "- Request Changes",
+        "[Answer]: Request Changes",
+        "",
+      ].join("\n");
+      writeFileSync(questions, `${earlier}\n${readFileSync(questions, "utf-8")}`, "utf-8");
+
+      const decision = runIde(dir, "audit-and-sensors", ctx("fs_write", `Created the ${relative(dir, questions)} file.`));
+      expect(decision.code, decision.stderr).toBe(0);
+      expect(readAudit(dir)).toContain("DECISION_RECORDED");
+      const tagged = readFileSync(questions, "utf-8");
+      expect(tagged.startsWith(earlier)).toBe(true);
+      const latest = tagged.slice(earlier.length);
+      expect(latest).toMatch(/^\[Approval Fingerprint\]: sha256:v3:[0-9a-f]{64}$/m);
+      expect(latest).not.toContain("0".repeat(64));
+      expect(latest).toMatch(/^\[Planned Source\]: /m);
+
+      expect(runIde(dir, "record-human-turn", JSON.stringify({ prompt: choices.approve })).code).toBe(0);
+      const answered = `${earlier}${latest.replace("[Answer]:", "[Answer]: Approve Plan")}`;
+      writeFileSync(questions, answered, "utf-8");
+      const answer = runIde(dir, "audit-and-sensors", ctx("fs_write", `Created the ${relative(dir, questions)} file.`));
+      expect(answer.code, answer.stderr).toBe(0);
+      expect(readFileSync(questions, "utf-8")).toBe(answered);
+      expect(evaluateCodeGenerationApproval(dir, { unit: null }).ok).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("legacy mediation says so when the questions file has no Plan Approval section to read", () => {
+    const dir = scratchProject(true);
+    try {
+      initGitWorkspace(dir, { applicationSourceOnly: true });
+      seedCodeGenerationDirective(dir);
+      seedLegacyDirectiveChoices(dir);
+      expect(runIde(dir, "session-start", null).code).toBe(0);
+      expect(
+        runIde(dir, "plan-approval-guard", JSON.stringify({ toolName: "fs_write", toolArgs: {} })).code,
+      ).toBe(0);
+      const questions = seedStageLevelPlanApproval(dir, { bareSection: true });
+      writeFileSync(
+        questions,
+        "## Q1: Approve this exact Code Generation plan?\n\n- Approve Plan\n- Request Changes\n[Answer]:\n",
+        "utf-8",
+      );
+      const r = runIde(dir, "audit-and-sensors", ctx("fs_write", `Created the ${relative(dir, questions)} file.`));
+      expect(r.code).toBe(2);
+      expect(r.stderr).toContain("code-generation-questions.md has no Plan Approval [Answer]: line AI-DLC can read");
+      expect(r.stderr).toContain("in a `## Plan Approval` section (the last one, if there are several)");
+      expect(readAudit(dir)).not.toContain("DECISION_RECORDED");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("legacy mediation writes an out-of-date Testing Contract at the plan question, as the engine does", () => {
+    const dir = scratchProject(true);
+    try {
+      initGitWorkspace(dir, { applicationSourceOnly: true });
+      seedCodeGenerationDirective(dir);
+      seedLegacyDirectiveChoices(dir);
+      expect(runIde(dir, "session-start", null).code).toBe(0);
+      expect(
+        runIde(dir, "plan-approval-guard", JSON.stringify({ toolName: "fs_write", toolArgs: {} })).code,
+      ).toBe(0);
+      const questions = seedStageLevelPlanApproval(dir, { bareSection: true });
+      const contract = resolveTestingPosture(dir);
+      const plan = join(codeGenerationRecordDir(dir, null), "code-generation-plan.md");
+      // A plan whose block went out of date after it was written.
+      const stale = renderTestingContract({ ...contract, contract_sha256: `sha256:${"0".repeat(64)}` });
+      writeFileSync(plan, `# Plan\n\n- [ ] Implement\n\n${stale}`, "utf-8");
+      const r = runIde(dir, "audit-and-sensors", ctx("fs_write", `Created the ${relative(dir, questions)} file.`));
+      expect(r.code, r.stderr).toBe(0);
+      expect(readAudit(dir)).toContain("DECISION_RECORDED");
+      const written = readFileSync(plan, "utf-8");
+      expect(written.match(/^```json$/gm)?.length).toBe(1);
+      expect(parseTestingContract(written)?.contract_sha256).toBe(contract.contract_sha256);
+      expect(written).toContain("- [ ] Implement");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("legacy mediation leaves a plan whose Testing Contract section it cannot write, and stops on the contract", () => {
+    const dir = scratchProject(true);
+    try {
+      initGitWorkspace(dir, { applicationSourceOnly: true });
+      seedCodeGenerationDirective(dir);
+      seedLegacyDirectiveChoices(dir);
+      expect(runIde(dir, "session-start", null).code).toBe(0);
+      expect(
+        runIde(dir, "plan-approval-guard", JSON.stringify({ toolName: "fs_write", toolArgs: {} })).code,
+      ).toBe(0);
+      const questions = seedStageLevelPlanApproval(dir, { bareSection: true });
+      const contract = resolveTestingPosture(dir);
+      const plan = join(codeGenerationRecordDir(dir, null), "code-generation-plan.md");
+      const stale = renderTestingContract({ ...contract, contract_sha256: `sha256:${"0".repeat(64)}` });
+      // A plan step under the heading: the engine's writer never writes over it.
+      const text = `# Plan\n\n${stale}\n- [ ] Write the failing tests first\n`;
+      writeFileSync(plan, text, "utf-8");
+      expect(runIde(dir, "audit-and-sensors", ctx("fs_write", `Created the ${relative(dir, plan)} file.`)).code).toBe(0);
+      expect(readFileSync(plan, "utf-8")).toBe(text);
+      const r = runIde(dir, "audit-and-sensors", ctx("fs_write", `Created the ${relative(dir, questions)} file.`));
+      expect(r.code).toBe(2);
+      expect(r.stderr).toContain("requires the current Testing Contract in code-generation-plan.md");
+      expect(readFileSync(plan, "utf-8")).toBe(text);
+      expect(readAudit(dir)).not.toContain("DECISION_RECORDED");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("the Plan Approval tag writer puts the values on the section's placeholder tag lines", () => {
+    const fingerprint = `sha256:v3:${"c".repeat(64)}`;
+    const body = [
+      "## Plan Approval",
+      "",
+      "[Approval Fingerprint]: sha256:v3:<hex>",
+      "[Planned Source]: <hex or the word unbindable>",
+      "",
+      "- Approve Plan",
+      "- Request Changes",
+      "",
+      "[Answer]:",
+      "",
+    ].join("\n");
+    const tagged = withPlanApprovalTags(body, fingerprint, "unbindable");
+    expect(tagged).toBe(
+      body
+        .replace("[Approval Fingerprint]: sha256:v3:<hex>", `[Approval Fingerprint]: ${fingerprint}`)
+        .replace("[Planned Source]: <hex or the word unbindable>", "[Planned Source]: unbindable"),
+    );
+  });
+
+  test("the Plan Approval tag writer counts a lone CR as a line end and keeps each line's own end", () => {
+    const fingerprint = `sha256:v3:${"a".repeat(64)}`;
+    const body = "# Questions\rNote\r\n\r\n## Plan Approval\n\n- Approve Plan\n- Request Changes\n[Answer]:\n";
+    const tagged = withPlanApprovalTags(body, fingerprint, "unbindable");
+    expect(tagged).toBe(
+      "# Questions\rNote\r\n\r\n## Plan Approval\n\n- Approve Plan\n- Request Changes\n" +
+        `[Approval Fingerprint]: ${fingerprint}\n[Planned Source]: unbindable\n[Answer]:\n`,
+    );
+    const retagged = withPlanApprovalTags(tagged, `sha256:v3:${"b".repeat(64)}`, "unbindable");
+    expect(retagged).toBe(tagged.replace("a".repeat(64), "b".repeat(64)));
+  });
+
   test("legacy same-host chats cannot consume or overwrite another challenge", () => {
     const dir = scratchProject(true);
     const sharedHost = {
@@ -6794,7 +7023,7 @@ describe("t218 the Kiro IDE trust step", () => {
       hookActivation: { recovery: string };
     }).hookActivation;
     expect(activation.recovery).toContain(
-      "If you drive Kiro from an ACP client, the Kiro IDE guide names what that client must send.",
+      "If you drive Kiro from an ACP client, the AI-DLC guide for Kiro names what that client must send.",
     );
     expect(activation.recovery).not.toContain("hooks");
     // The cases below take the Kiro IDE step as everything before this marker.
@@ -8749,6 +8978,135 @@ describe("t218 a chat on Kiro's Default agent hears once how to stop the approva
       expect(agentName()).toBe("-");
     } finally {
       rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+// A line AI-DLC keeps for the person waits for the next step the agent speaks
+// from (sayPendingPersonLines). A terminal command typed in Kiro is run by
+// verb-intercept itself, so no engine step speaks: its relay hands the lines
+// on, before the output's fence, with the engine's order, once.
+describe("t218 a typed terminal command says the lines AI-DLC keeps for this chat", () => {
+  const LEAD = `Say this to the person ${SAY_ONCE_BEFORE_THEY_REPLY}, and add nothing about why:\n\n`;
+  const SAY = `${LEAD}${SECRET_MASKED_LINE}\n\n`;
+  // A made-up key, put together at run time: no line of this file is shaped like one.
+  const KEY = `ghp_${"aB3dE5gH7jK9mN1pQ3sT5vW7yZ9bC2eF4hJ6"}`;
+  const card = (dir: string, session: string, prompt: string) =>
+    runIdeStdin(dir, "person-message", JSON.stringify({
+      session_id: session,
+      hook_event_name: "UserPromptSubmit",
+      cwd: dir,
+      prompt,
+    }));
+
+  test("/aidlc --status after a message with a key says the key line once, before the status, in that chat only", () => {
+    const dir = scratchProject(true);
+    try {
+      const asked = card(dir, "sess_kept_a", `/aidlc where are we? the build printed ${KEY}`);
+      expect(asked.code, asked.stderr).toBe(0);
+      expect(asked.stdout).not.toContain(SECRET_MASKED_LINE);
+      // Another chat on the same project hears nothing of it.
+      const other = card(dir, "sess_kept_b", "/aidlc --status");
+      expect(other.code, other.stderr).toBe(0);
+      expect(other.stdout).toContain("The command `/aidlc --status` has already run");
+      expect(other.stdout).not.toContain(SECRET_MASKED_LINE);
+      const status = card(dir, "sess_kept_a", "/aidlc --status");
+      expect(status.code, status.stderr).toBe(0);
+      expect(status.stdout.split(SECRET_MASKED_LINE)).toHaveLength(2);
+      // The card's other members speak first; the line comes right before the relay.
+      expect(status.stdout).toContain(`${SAY}The command \`/aidlc --status\` has already run`);
+      expect(status.stdout).toMatch(/--- OUTPUT [0-9A-F]{16} \(exit 0\) ---/);
+      // Said once: the next typed command does not say it again.
+      const again = card(dir, "sess_kept_a", "/aidlc --status");
+      expect(again.code, again.stderr).toBe(0);
+      expect(again.stdout).toContain("The command `/aidlc --status` has already run");
+      expect(again.stdout).not.toContain(SECRET_MASKED_LINE);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a line the command itself queues while it runs is kept for the next step, not said with its own output", () => {
+    const dir = scratchProject(true);
+    const QUEUED = "A line the status command queued while it ran.";
+    try {
+      // The utility, wrapped: it queues a line for the chat it runs for, as
+      // `plugin sync` does with the rules it places, only for `status`, then
+      // runs as itself. The engine imports the same module, so its exports stay.
+      const tools = join(dir, ".kiro", "tools");
+      renameSync(join(tools, "aidlc-utility.ts"), join(tools, "aidlc-utility-real.ts"));
+      writeFileSync(
+        join(tools, "aidlc-utility.ts"),
+        [
+          'import { addPendingPersonLines, resolveWorkflowSelection } from "./aidlc-lib.ts";',
+          'import { main } from "./aidlc-utility-real.ts";',
+          'export * from "./aidlc-utility-real.ts";',
+          "if (import.meta.main) {",
+          '  if (process.argv[2] === "status") {',
+          "    const projectDir = process.env.AIDLC_PROJECT_DIR ?? process.cwd();",
+          "    const session = resolveWorkflowSelection(projectDir).sessionId;",
+          `    if (session) addPendingPersonLines(projectDir, session, [${JSON.stringify(QUEUED)}]);`,
+          "  }",
+          "  await main(process.argv.slice(2));",
+          "}",
+        ].join("\n"),
+        "utf-8",
+      );
+      expect(card(dir, "sess_kept_c", `/aidlc where are we? the build printed ${KEY}`).code).toBe(0);
+      const status = card(dir, "sess_kept_c", "/aidlc --status");
+      expect(status.code, status.stderr).toBe(0);
+      expect(status.stdout).toContain(`${SAY}The command \`/aidlc --status\` has already run`);
+      expect(status.stdout).not.toContain(QUEUED);
+      const version = card(dir, "sess_kept_c", "/aidlc --version");
+      expect(version.code, version.stderr).toBe(0);
+      expect(version.stdout).toContain(`${LEAD}${QUEUED}\n\nThe command \`/aidlc --version\` has already run`);
+      expect(version.stdout).not.toContain(SECRET_MASKED_LINE);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a typed workspace verb says no waiting line, as its engine print says none, and leaves it for the next", () => {
+    const dir = scratchProject(true);
+    try {
+      expect(card(dir, "sess_kept_d", `/aidlc where are we? the build printed ${KEY}`).code).toBe(0);
+      const list = card(dir, "sess_kept_d", "/aidlc intent");
+      expect(list.code, list.stderr).toBe(0);
+      expect(list.stdout).toContain("The command `/aidlc intent");
+      expect(list.stdout).not.toContain(SECRET_MASKED_LINE);
+      const status = card(dir, "sess_kept_d", "/aidlc --status");
+      expect(status.code, status.stderr).toBe(0);
+      expect(status.stdout).toContain(`${SAY}The command \`/aidlc --status\` has already run`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a typed workspace verb says the waiting lines when one is kept for the reply, as its engine print does", () => {
+    const dir = scratchProject(true);
+    const REPLY = "A line kept for the reply.";
+    const keys = ["AIDLC_SESSION_OVERRIDE", "AIDLC_SESSION_OVERRIDE_SOURCE"] as const;
+    const previous = keys.map((key) => [key, process.env[key]] as const);
+    try {
+      expect(card(dir, "sess_kept_e", `/aidlc where are we? the build printed ${KEY}`).code).toBe(0);
+      process.env.AIDLC_SESSION_OVERRIDE = "sess_kept_e";
+      process.env.AIDLC_SESSION_OVERRIDE_SOURCE = "payload";
+      const session = resolveWorkflowSelection(dir).sessionId ?? "";
+      expect(addPendingPersonLines(dir, session, [REPLY], { forReply: true })).toBe(true);
+      for (const [key, value] of previous) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      const list = card(dir, "sess_kept_e", "/aidlc intent");
+      expect(list.code, list.stderr).toBe(0);
+      expect(list.stdout).toContain(`${LEAD}${SECRET_MASKED_LINE}\n\n${REPLY}\n\nThe command \`/aidlc intent`);
+      expect(list.stdout.split(SECRET_MASKED_LINE)).toHaveLength(2);
+    } finally {
+      for (const [key, value] of previous) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });

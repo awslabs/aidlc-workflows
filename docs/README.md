@@ -42,6 +42,8 @@ aidlc doctor
 Replace `claude` with `kiro`, `kiro-v2`, `codex`, `cursor`, `opencode`, or
 `copilot`. A bare `aidlc config` starts the interactive setup.
 
+AI-DLC 2.11.3 and earlier, and the 2.11.4 previews of 2026-11-04 and 2026-11-05, read the two Kiro names the other way: Kiro is `--harness kiro-ide` and Kiro CLI (V2) is `--harness kiro`, and they do not know `kiro-v2`. `--harness kiro-ide` names Kiro on those releases and on this one.
+
 ### 3. Start
 
 Open the configured harness and describe the work:

@@ -1997,7 +1997,7 @@ describe("t92 Group R: a check whose output passes 1 MiB is read whole", () => {
     expect(auditField(proj, "SENSOR_COULD_NOT_RUN", "Note")).toMatch(/^script-error: (signal-SIGKILL|exit-[1-9]\d*)$/);
   });
 
-  const typeCheckProject = (): { proj: string; sample: string } => {
+  const typeCheckProject = (others = 15000, own = 1): { proj: string; sample: string } => {
     const proj = makeProj();
     const sub = join(proj, "large-type-check");
     mkdirSync(sub, { recursive: true });
@@ -2005,11 +2005,11 @@ describe("t92 Group R: a check whose output passes 1 MiB is read whole", () => {
     // target's own error last.
     writeFileSync(
       join(sub, "many-type-errors-in-another-file.ts"),
-      Array.from({ length: 15000 }, (_, i) => `export const value_${i}: number = "not a number";\n`).join(""),
+      Array.from({ length: others }, (_, i) => `export const value_${i}: number = "not a number";\n`).join(""),
       "utf-8",
     );
     const sample = join(sub, "sample.ts");
-    writeFileSync(sample, 'export const v: number = "x";\n', "utf-8");
+    writeFileSync(sample, Array.from({ length: own }, (_, i) => `export const v${i}: number = "x";\n`).join(""), "utf-8");
     writeFileSync(
       join(sub, "tsconfig.json"),
       `${JSON.stringify({ compilerOptions: { noEmit: true, strict: true, skipLibCheck: true }, include: ["*.ts"] }, null, 2)}\n`,
@@ -2038,5 +2038,16 @@ describe("t92 Group R: a check whose output passes 1 MiB is read whole", () => {
     expect(res.status, `${res.stdout}${res.stderr}`).toBe(0);
     expect(auditEventCount(proj, "SENSOR_PASSED"), readAudit(proj)).toBe(1);
     expect(auditField(proj, "SENSOR_PASSED", "Note")).toBe("tool-unavailable");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // A result of about 3 MB written straight before an exit lost its tail under
+  // Bun and read as bad-output; 6,000 errors is not cut on every run, 30,000 is.
+  test("55: a file with 30,000 of its own type errors gets every one as a finding", () => {
+    const { proj, sample } = typeCheckProject(0, 30000);
+    const res = fire(["type-check", "--stage", "code-generation", "--output-path", sample], { CLAUDE_PROJECT_DIR: proj });
+    const verdict = verdictOf(res.out);
+    expect(verdict.result, readAudit(proj)).toBe("failed");
+    expect(auditField(proj, "SENSOR_FAILED", "Findings count")).toBe("30000");
+    expect(readFileSync(join(proj, verdict.detail_path as string), "utf-8")).toContain('"line": 30000');
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

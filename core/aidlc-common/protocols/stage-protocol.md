@@ -470,7 +470,7 @@ starts the questions afresh (`artifact_reuse`, or **Redo from scratch** under
   the sole exception: its two semantic options are intentionally unlettered.
 - Leave all `[Answer]:` tags blank
 
-For multi-select questions (where user may choose more than one option), add "(select all that apply)" to the question text. The user writes multiple letters: `[Answer]: A, B, E`
+For multi-select questions (where user may choose more than one option), add "(select all that apply)" to the question text. The user writes multiple letters: `[Answer]: A, C`
 
 **Group the questions by who would answer them.** One stage's questions often
 belong to different people: what the product does is the product owner's, how
@@ -1105,7 +1105,7 @@ When generating content that will be written to markdown files:
 
 ## 12. Phase Boundary Verification
 
-> See `stage-protocol-governance.md` §13 — load at phase transitions to run traceability verification. Capturing corrections as durable rules uses the conditional `learnings` protocol module (§13), not a separate guardrail flow. When that module is absent, no learning persistence runs.
+> Capturing corrections as durable rules uses the conditional `learnings` protocol module (§13), not a separate guardrail flow. When that module is absent, no learning persistence runs.
 
 ## 13. Learnings Ritual
 
@@ -1149,8 +1149,7 @@ other repositories in the same stage. Reverse Engineering `--single` Keep
 receipts require the exact CodeKB path, every graph-declared required artifact
 as an authoritative regular file, and a `CURRENT` scope fingerprint; the
 pipeline completion check independently verifies the artifact set and freshness
-again. See
-`docs/reference/12-state-machine.md` for the canonical emitter registry.
+again.
 
 This applies to ALL stages, not just jump targets: when the workflow replays forward after a backward jump, each subsequent stage will also encounter existing artifacts and offer the same choice, unless the person already said what they want for it.
 

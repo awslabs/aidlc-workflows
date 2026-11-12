@@ -489,10 +489,13 @@ export type PlanReadiness = { ready: true; written?: true } | { ready: false; no
 // read-only probe).
 export type ContractBlockUse = "write" | "count" | "as-is";
 
+// `theirEdit`: the person's own edit left the plan as it is (their repair
+// result), so their words in the section are kept after the block.
 export function codeGenerationPlanReadiness(
   projectDir: string,
   unit: string | null,
   contract: ContractBlockUse = "as-is",
+  theirEdit = false,
 ): PlanReadiness {
   const dir = codeGenerationRecordDir(projectDir, unit);
   const plan = readText(join(dir, PLAN_FILE));
@@ -514,7 +517,7 @@ export function codeGenerationPlanReadiness(
       const current = resolveTestingPosture(projectDir);
       const written = usableTestingContract(current) &&
           ("defect" in read || read.contract.contract_sha256 !== current.contract_sha256)
-        ? planWithTestingContract(plan, current)
+        ? planWithTestingContract(plan, current, theirEdit)
         : null;
       if (written !== null) {
         if (contract === "count") return { ready: true };
@@ -1191,7 +1194,10 @@ function targetState(
   const revision = rejectionRevision(projectDir, unit, intentId);
   if (revision !== null) return { unit, kind: "revise", ...revision };
   // A plan with an approval on record is no question coming: a reader counts it as it stands.
-  const readiness = codeGenerationPlanReadiness(projectDir, unit, contract === "count" && approval.approved ? "as-is" : contract);
+  const readiness = codeGenerationPlanReadiness(
+    projectDir, unit, contract === "count" && approval.approved ? "as-is" : contract,
+    result?.choice === "repair" && result.edited === true,
+  );
   // The plan's Testing Contract was written: the target is read again as it now
   // stands, so a plan sent back reads as sent back, an approved one as approved.
   if (readiness.ready && readiness.written) {
@@ -1860,7 +1866,7 @@ function approveTarget(
   let contractHash = read.contract.contract_sha256;
   let rendered: string | null = null;
   if (contractHash !== posture.contract_sha256) {
-    const refreshed = usableTestingContract(posture) ? replaceTestingContractSection(plan, posture) : null;
+    const refreshed = usableTestingContract(posture) ? replaceTestingContractSection(plan, posture, theirEdit) : null;
     if (refreshed === null) {
       return repair(`the Testing Contract in ${view.plan_path} is out of date and needs to be rendered again.`);
     }

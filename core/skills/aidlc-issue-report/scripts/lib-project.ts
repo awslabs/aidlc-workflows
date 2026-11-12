@@ -5,7 +5,7 @@ import { homedir, platform, release, arch } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { execFileSync } from "node:child_process";
-import { kiroHome } from "./lib-transcripts.ts";
+import { kiroHome, type KiroPolicyReader } from "./lib-transcripts.ts";
 import { TOOL_KEYS, type ToolKey } from "./lib-tools.ts";
 
 // The engine dirs AI-DLC's harness rows install into (AI-DLC's harness table in aidlc-lib.ts).
@@ -333,6 +333,29 @@ export async function importAidlcTools(file: string | null | undefined): Promise
     };
   }
   return tools;
+}
+
+// AI-DLC's reader of Kiro CLI's approve-for-me policy (kiroPoliciesApproveForMe), from the tools of the harness tree
+// this skill runs from, else from the first other tree that has it: the tree secretRulesFile picks may be an older
+// install without it. undefined when no installed tools have it. Installed code of another version may throw or answer
+// in another shape: that answer is undefined (not read), never a claim about the person's files, and never stops the
+// Kiro reader.
+export async function importKiroPolicyReader(project: string, scriptDir: string): Promise<KiroPolicyReader | undefined> {
+  const own = ownTree(ENGINE_DIRS.map((dir) => ({ dir })), project, scriptDir)?.dir;
+  for (const dir of new Set([own ?? ENGINE_DIRS[0], ...ENGINE_DIRS])) {
+    const read = (await importFrom(join(project, dir, "tools", "aidlc-kiro-chat-record.ts"))).kiroPoliciesApproveForMe;
+    if (typeof read === "function") {
+      return (dirs) => {
+        try {
+          const listed = read(dirs);
+          return typeof listed === "boolean" || listed === null ? listed : undefined;
+        } catch {
+          return undefined;
+        }
+      };
+    }
+  }
+  return undefined;
 }
 
 export async function importSecretRules(file: string | null | undefined): Promise<((text: string) => string) | null> {

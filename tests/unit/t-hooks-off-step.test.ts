@@ -98,7 +98,7 @@ const HARNESSES: Harness[] = [
     dir: ".kiro",
     lines: () => [
       "In Kiro CLI, quit Kiro and start `kiro-cli --v3` again in this folder (if Kiro asks whether you trust this workspace and you know what is in this folder, choose 'Trust, continue'), then type /aidlc to carry on. If you " +
-        "drive Kiro from an ACP client, the Kiro IDE guide names what that client must send.",
+        "drive Kiro from an ACP client, the AI-DLC guide for Kiro names what that client must send.",
     ],
   },
 ];

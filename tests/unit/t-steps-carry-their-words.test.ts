@@ -53,7 +53,8 @@ function namesAField(text: string): string[] {
   const plain = prose(text);
   return knownDirectiveFieldNames()
     .filter((name) => name.includes("_"))
-    .filter((name) => new RegExp(`(^|[^\\w./-])${name}(?![\\w./-])`).test(plain));
+    // A dot after the name is still the name ("stage_validity.warning", or a sentence that ends on it).
+    .filter((name) => new RegExp(`(^|[^\\w./-])${name}(?![\\w/-])`).test(plain));
 }
 
 // --- Fixtures: the steps the engine builds, as plain objects -------------------
@@ -245,6 +246,14 @@ function routingAsk(records: boolean): Json {
 }
 
 const REPO_FACTS: Json = { repositories: 12, lines: 1200, minutes_per_repository: { low: 4, high: 7 } };
+const STAGE_VALIDITY: Json = {
+  state: "drifted",
+  directly_stale: ["requirements-analysis"],
+  needs_revalidation: [],
+  untracked: [],
+  earliest_affected_stage: "requirements-analysis",
+  warning: "Requirements changed after you approved it. Redo it?",
+};
 
 const ASK_TYPES = [
   "scope-confirm", "compose-offer", "intent-pick", "unit-paused", "project-type", "plan-approval", "guard-recovery",
@@ -526,7 +535,14 @@ describe("a stage step carries its instructions, not the fields to branch on", (
       // What reading many repositories takes, with the question and on the step.
       notes(ask("project-type", { ask_type: "repo-scope", repo_facts: REPO_FACTS })),
       notes(runStage({ stage: "reverse-engineering", repo_facts: REPO_FACTS })),
+      // The lines for the person and the finished-stage warning, alone and together.
+      notes(runStage({ change_notices: ["A line for the person."] })),
+      notes(runStage({ stage_validity: STAGE_VALIDITY })),
+      notes(ask("intent-pick", { change_notices: ["A line for the person."], stage_validity: STAGE_VALIDITY })),
     ];
+    const both = steps.at(-1) as Json;
+    expect(typeof both.change_notices_note).toBe("string");
+    expect(typeof both.stage_validity_note).toBe("string");
     const leaks: string[] = [];
     for (const step of steps) {
       for (const [field, value] of Object.entries(step)) {

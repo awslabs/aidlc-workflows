@@ -217,7 +217,7 @@ flowchart TD
 
 ## 5. Operation Flow
 
-The Operation phase covers deployment, environment provisioning, observability, incident response, performance validation, and feedback. All seven stages are CONDITIONAL (the entire phase may be skipped for mvp and poc scopes). All stages run inline. Stage 4.7 is the terminal stage; upon approval, the workflow is complete.
+The Operation phase covers deployment, environment provisioning, observability, incident response, performance validation, and feedback. All seven stages are CONDITIONAL (classic, mvp and poc run none of them). All stages run inline. Stage 4.7 is the terminal stage; upon approval, the workflow is complete.
 
 ```mermaid
 flowchart TD

@@ -20,9 +20,7 @@ document belongs where every stage reads it: your space's team knowledge.
 1. Save it as
    `aidlc/spaces/<space>/knowledge/aidlc-shared/technical-environment.md`
    (`default` is the space name unless you created others). Every Markdown
-   file in `aidlc-shared/` is part of every stage's context. The
-   [Knowledge](../08-knowledge.md) chapter calls this folder
-   `aidlc/knowledge/aidlc-shared/`.
+   file in `aidlc-shared/` is part of every stage's context.
 2. Keep all of it in `aidlc-shared/`. Security, testing and cloud standards
    are read by stages that different agents lead (Code Generation, for one,
    runs as the developer agent), and an agent's own folder is read only while

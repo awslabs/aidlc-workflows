@@ -356,6 +356,7 @@ import {
   preserveKiroMcpRegion,
   harnessCliLeads,
   launchedFromEditorTerminal,
+  cliVersionShown,
   probeHarnessCli,
   probeRuntime,
   providerFiles,
@@ -2792,11 +2793,13 @@ function configCompletionMessage(
     const commands = [...new Set(actions.map((action) => action.step ?? action.command))];
     return `${base}\nOutstanding actions: ${commands.join("; ")}`;
   }
+  // The section is the one the person runs, as the setup map names it; the
+  // action's id is the diagnostic's own key and stays off the line.
   return [
     base,
     "Outstanding actions:",
     ...actions.map((action) =>
-      `  ${action.section}/${action.id}: ${action.message} - ${action.step ?? `run \`${action.command}\``}`
+      `  ${action.section}: ${action.message} - ${action.step ?? `run \`${action.command}\``}`
     ),
   ].join("\n");
 }
@@ -9840,8 +9843,7 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
   process.stdout.write("  Checked your machine and this repo:\n\n");
   const harnessDetection = detection.harnesses[candidate.stamp.distribution];
   const displayedVersion = harnessDetection?.version
-    ? /\d+\.\d+\.\d+(?:[-+][^\s)]+)?/.exec(harnessDetection.version)?.[0] ??
-      harnessDetection.version
+    ? cliVersionShown(harnessDetection.version)
     : undefined;
   const inEditor = launchedFromCandidateEditor(candidate);
   writeMenuRow(

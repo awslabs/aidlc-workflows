@@ -289,6 +289,19 @@ export function pluginCatalogueOwnership(): UninstallPlan {
   return owned;
 }
 
+/**
+ * The person's answers and AI-DLC's say-once marks and records in the install
+ * root, by name. Uninstall keeps them for a reinstall and --purge removes them.
+ * A file AI-DLC writes into the root by itself and leaves off this list is
+ * reported as one it did not install. The Windows plan check and its scheduler
+ * read the same list.
+ */
+export const INSTALL_ROOT_ANSWERS = [
+  "aidlc.settings.json", "update-check.json", "pins.json", "default-harness", "channel",
+  "kiro-ide-workflows", "kiro-cli-workflows", "kiro-ide-settings-error-told", "kiro-ide-terminal",
+  "kiro-ide-terminal-dropped", "kiro-ide-terminal-warned", "kiro-ide-terminal-shell",
+] as const;
+
 export function buildUninstallPlan(purge: boolean): UninstallPlan {
   assertSafeUninstallRoot();
   const root = resolve(installRoot());
@@ -471,7 +484,7 @@ export function buildUninstallPlan(purge: boolean): UninstallPlan {
 
   const known = [
     "active-version", "active-executable", "rollback-version", "aidlc-shim.ps1", "windows-path.json", "launcher-sha256",
-    ...(purge ? ["aidlc.settings.json", "update-check.json", "pins.json", "default-harness", "channel", "kiro-ide-workflows", "kiro-cli-workflows", "kiro-ide-settings-error-told", "kiro-ide-terminal"] : []),
+    ...(purge ? INSTALL_ROOT_ANSWERS : []),
   ];
   for (const name of known) addFile(join(root, ...name.split("/")));
   for (const [shell, name] of Object.entries({
@@ -551,7 +564,7 @@ export function buildUninstallPlan(purge: boolean): UninstallPlan {
     }
   }
   directories.add(root);
-  const keptSettings = new Set(["aidlc.settings.json", "update-check.json", "pins.json", "default-harness", "channel", "kiro-ide-workflows", "kiro-cli-workflows", "kiro-ide-settings-error-told", "kiro-ide-terminal"]);
+  const keptSettings = new Set<string>(INSTALL_ROOT_ANSWERS);
   for (const directory of directories) {
     if (within(directory, versions)) continue;
     if (!noLinks(directory, root)) {

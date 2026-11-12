@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { asksForHelp, errorMessage, printUsageAndExit } from "./aidlc-lib.ts";
-import { sensorFireUsage } from "./aidlc-runtime-paths.ts";
+import { sensorFireUsage, writeSensorResult } from "./aidlc-runtime-paths.ts";
 
 interface Result {
 	pass: boolean;
@@ -125,8 +125,8 @@ export function main(argv: string[]): void {
 			reason: "no upstream",
 			findings_count: 0,
 		};
-		process.stdout.write(`${JSON.stringify(result)}\n`);
-		process.exit(0);
+		writeSensorResult(result);
+		return;
 	}
 
 	const deliverables = (flags.deliverables ?? "")
@@ -135,7 +135,7 @@ export function main(argv: string[]): void {
 		.filter((s) => s.length > 0);
 	if (flags.pathsStdin) {
 		evaluatePathSet(consumes, deliverables);
-		process.exit(0);
+		return;
 	}
 
 	const folder = evaluateFolder(resolve(flags.outputPath as string), consumes, deliverables);
@@ -155,8 +155,8 @@ export function main(argv: string[]): void {
 			reason: "no deliverables on disk yet",
 			findings_count: 0,
 		};
-		process.stdout.write(`${JSON.stringify(result)}\n`);
-		process.exit(0);
+		writeSensorResult(result);
+		return;
 	}
 
 	const result: Result = {
@@ -167,8 +167,7 @@ export function main(argv: string[]): void {
 		// findings_count emitted by the script (sensor-id-agnostic dispatcher).
 		findings_count: folder.unreferenced.length,
 	};
-	process.stdout.write(`${JSON.stringify(result)}\n`);
-	process.exit(0);
+	writeSensorResult(result);
 }
 
 // One folder's coverage, as the fire on `firedPath` reads it.
@@ -272,14 +271,14 @@ function evaluatePathSet(consumes: Consume[], deliverables: string[]): void {
 		}
 	}
 	const findings = failing.reduce((n, f) => n + f.unreferenced.length, 0);
-	process.stdout.write(`${JSON.stringify({
+	writeSensorResult({
 		pass: failing.length === 0,
 		consumes: consumes.map((c) => c.slug),
 		findings_count: findings,
 		folders_evaluated: byFolder.size,
 		failed_outputs: failing.map((f) => f.file),
 		folders: failing,
-	})}\n`);
+	});
 }
 
 if (import.meta.main) main(process.argv.slice(2));

@@ -657,9 +657,10 @@ export interface MarkerSnapshot {
   stopHookDirExists: boolean;
 }
 
-// Freshness window past which a heartbeat is "frozen" relative to the newest
-// recorded work (newestWorkAuditMs). A hook that has not fired since well before the last
-// stage transition is the cold-hook signal (#571's rebuild-stage-graph case).
+// Freshness window past which the hooks read "frozen" relative to the newest
+// recorded work (newestWorkAuditMs): even the newest heartbeat across hooks is
+// older than this (#571's rebuild-stage-graph case). One hook's own old beat is
+// no signal, since hooks fire on different events (Rule 5).
 export const FROZEN_HEARTBEAT_MS = 24 * 60 * 60 * 1000;
 
 // Run every diagnosis rule. Order is severity-stable (errors first) only after

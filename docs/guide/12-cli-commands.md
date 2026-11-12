@@ -1270,8 +1270,9 @@ When a workflow has issues, `--doctor` also lists the structured findings in its
 | Keyword overlap | A hint more than one plan has is a warning, naming the plans (the plan proposal lists it under each) |
 | Rule drift | Surfaces live team/project headings that overlap populated org policy for contradiction review, and reports lifecycle-stale overlaps in a separate stale-suppressed row (advisory — never fails) |
 | Paired sensor coverage | Confirms every rule that names a paired Sensor resolves to a Sensor some stage actually fires (advisory — never fails) |
-| Workspace records | Reports uncommitted changes under `aidlc/` so shared records are not left only in one checkout, leaving out `aidlc/.aidlc-engine/request-text/` and this clone's own audit log when its only change is the entries each look and each doctor run add after what is committed, none a decision of yours (when those are all there is, the row passes and says so); while git tracks or shows a request file, or holds a removed one the folder does not ignore, it gives no commit command, since `git add aidlc/` would take your request in (advisory - never fails) |
+| Workspace records | Reports uncommitted changes under `aidlc/` so shared records are not left only in one checkout, leaving out `aidlc/.aidlc-engine/request-text/`, the forwarding latch earlier Kiro CLI (V2) releases wrote as `aidlc/.aidlc-forwarding-latch`, and this clone's own audit log when its only change is the entries each look and each doctor run add after what is committed, none a decision of yours (when those are all there is, the row passes and says so); while git tracks or shows a request file or the latch, or holds a removed one its ignore rules do not cover, it gives no commit command, since `git add aidlc/` would take your request in (advisory - never fails) |
 | Request folder | Only when git can see files in `aidlc/.aidlc-engine/request-text/`: they hold your own requests, so it names the steps, never running them: add the line `aidlc/.aidlc-engine/request-text/` to the project folder's `.gitignore` when the folder is not ignored yet (and check no later rule of yours un-ignores it), and, in the project folder, `git rm --cached -r -f -- aidlc/.aidlc-engine/request-text/` (the files stay) when git tracks them, then commit and push the removal and the `.gitignore` change (a refresh may have left it uncommitted) so teammates' clones drop it too; a removal not committed yet keeps the row (advisory - never fails) |
+| Forwarding latch | Only when git can see `aidlc/.aidlc-forwarding-latch`, a file earlier Kiro CLI (V2) releases left: it holds the words of a request of yours (the first call the hook named for it), and a `git add aidlc/` before the `.gitignore` part listed it took it in (the hook now writes inside `aidlc/.aidlc-engine/sessions/`): the same steps as the request folder, for that one file: the ignore line `aidlc/.aidlc-forwarding-latch` when it is not ignored yet, `git rm --cached -f -- aidlc/.aidlc-forwarding-latch` (the file stays) when git tracks it, then commit and push (advisory - never fails) |
 | Declared workspace repos | When `repos.json` exists, compares its declared set with the sibling repos runtime discovery sees on disk (advisory - never fails) |
 | Workspace gitignore | When `repos.json` exists, checks that the managed `.gitignore` block matches the declared repo set (advisory - never fails) |
 
@@ -1339,8 +1340,9 @@ The report contains:
 audit trail (stage durations, gates, revisions, gaps, and long-duration,
 incomplete or skipped flags; a skipped stage shows its skip time as Completed),
 then runs **deterministic** condition→remedy rules (no LLM) for the
-common "it will not advance" causes: unresolved approval gates, state/audit
-drift, and a missing runtime graph / cold or frozen hook heartbeats.
+common "it will not advance" causes: state/audit drift, and a missing runtime
+graph / cold or frozen hook heartbeats. A stage waiting at its approval gate is
+shown in the timeline's Gate column and is no warning.
 Findings come from the same shared `DoctorFinding` model the
 live `--doctor` uses, so the command and the report can never diverge. A remedy
 that names a recovery bypass (for example an `AIDLC_DISABLE_*` env var or an

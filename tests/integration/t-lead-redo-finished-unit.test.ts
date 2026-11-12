@@ -9,6 +9,13 @@
 // offered to reopen the stage for every Unit. A name the plan does not have
 // keeps its line, a Unit this checkout builds is reopened as before, and a
 // lead whose work no team has taken a Unit from goes on as before.
+//
+// A redo of a Unit stage for every Unit there (the stage named with no Unit,
+// --every-unit, the re-entry Redo or jump, or a move within the Unit stages)
+// reopens it only for the Units this checkout builds and says once which it
+// left and why; with none, nothing changes. The other Units' rows and
+// approvals stay, and a team's finished Unit still lands. A stage an earlier
+// release's jump skipped for every Unit is gone back to as before.
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -29,7 +36,7 @@ const FD = "functional-design";
 const REVIEWER = "aidlc-architecture-reviewer-agent";
 const UNITS = ["alpha", "beta", "gamma"];
 
-function leadsCheckout(): { lead: string; remote: string } {
+function leadsCheckout(codeGeneration = "SKIP"): { lead: string; remote: string } {
   const lead = createTestProject();
   tempDirs.push(lead);
   seedAidlcMemory(lead);
@@ -58,7 +65,7 @@ function leadsCheckout(): { lead: string; remote: string } {
 - [ ] nfr-requirements \u2014 SKIP
 - [ ] nfr-design \u2014 SKIP
 - [ ] infrastructure-design \u2014 SKIP
-- [ ] code-generation \u2014 SKIP
+- [ ] code-generation \u2014 ${codeGeneration}
 - [ ] build-and-test \u2014 EXECUTE
 
 ## Current Status
@@ -142,6 +149,10 @@ function leadAfterATeamClaimed(): string {
 // The lead built alpha and nothing else in their own checkout; then a team
 // claims gamma (unless `claimed` is false) and the lead's checkout fetches.
 function leadWithNothingLeft(claimed = true): string {
+  return leadAndTeam(claimed).lead;
+}
+
+function leadAndTeam(claimed = true): { lead: string; remote: string; team: string | null } {
   const { lead, remote } = leadsCheckout();
   nextDirective(lead);
   nextDirective(lead);
@@ -151,12 +162,11 @@ function leadWithNothingLeft(claimed = true): string {
   git(lead, ["add", "-A"]);
   git(lead, ["commit", "-m", "lead's work"]);
   git(lead, ["push", "origin", "main"]);
-  if (claimed) {
-    const team = clone(remote, "team");
-    expect(runMergeTool(UNIT, ["claim", "gamma", "--team", "team-g"], team).status).toBe(0);
-    git(lead, ["fetch", "origin"]);
-  }
-  return lead;
+  if (!claimed) return { lead, remote, team: null };
+  const team = clone(remote, "team");
+  expect(runMergeTool(UNIT, ["claim", "gamma", "--team", "team-g"], team).status).toBe(0);
+  git(lead, ["fetch", "origin"]);
+  return { lead, remote, team };
 }
 
 const jump = (lead: string, unit: string, stage = FD) =>
@@ -221,5 +231,229 @@ describe("the lead's own finished Unit after a team claimed another", () => {
       message: "zeta is not one of this work's units (beta). Name one of them with `/aidlc --stage functional-design --unit <name>`.",
     });
     expect(jump(lead, "beta").kind).not.toBe("error");
+  });
+});
+
+// --- A redo for every Unit once a team has taken a Unit ---
+
+const LEFT = "alpha is finished, gamma is built by team-g and beta is not taken yet";
+const NOTHING_HERE = `Functional Design is not redone for every unit once a team has taken a unit: ${LEFT}.`;
+const stageJumps = (lead: string) => readAuditShardEvents(lead).filter((row) => row.event === "STAGE_JUMPED").length;
+const rowOf = (checkout: string, unit: string) =>
+  readFileSync(seededStateFile(checkout), "utf-8").split("\n").find((line) => line.startsWith(`| ${unit} |`));
+const orch = (lead: string, args: string[]) =>
+  JSON.parse(runMergeTool(ORCH, args, lead).stdout) as { kind: string; message: string; stage?: string; unit?: string };
+
+describe("a redo for every Unit once a team has taken a Unit", () => {
+  test("with nothing built here, every way of asking changes nothing and says which Units it left and why", () => {
+    const lead = leadWithNothingLeft();
+    const before = { jumps: stageJumps(lead), alpha: rowOf(lead, "alpha") };
+    for (const args of [["next", "--stage", FD], ["next", "--stage", FD, "--every-unit"], ["report", "--result", "resumed", "--choice", "redo"]]) {
+      expect(orch(lead, args), args.join(" ")).toEqual({ kind: "error", message: NOTHING_HERE });
+    }
+    const reentry = orch(lead, ["report", "--result", "resumed", "--choice", "jump", "--target", FD]);
+    expect(reentry.message).toContain(`next --stage ${FD}`);
+    expect(orch(lead, ["next", "--stage", FD])).toEqual({ kind: "error", message: NOTHING_HERE });
+    expect({ jumps: stageJumps(lead), alpha: rowOf(lead, "alpha") }).toEqual(before);
+  });
+
+  test("named for a team's Unit with nothing built here, the offer to reopen it for every unit is not made", () => {
+    expect(jump(leadWithNothingLeft(), "gamma")).toEqual({ kind: "error", message: NOTHING_HERE });
+  });
+
+  test("with the lead's own Unit in progress, the redo reopens it only and says which Units it left", () => {
+    const lead = leadAfterATeamClaimed();
+    const before = { jumps: stageJumps(lead), alpha: rowOf(lead, "alpha") };
+    for (const args of [["next", "--stage", FD], ["next", "--stage", FD, "--every-unit"]]) {
+      const said = orch(lead, args);
+      expect(said.kind, args.join(" ")).toBe("print");
+      expect(said.message).toContain("aidlc-jump.ts reopen --target functional-design --stages functional-design --units beta --via redo");
+      expect(said.message).toContain(
+        "\"Redoing Functional Design for unit beta. alpha is finished and gamma is built by team-g, so they are not redone here.\"",
+      );
+    }
+    const command = /`[^`]*aidlc-jump\.ts (reopen [^`]+)`/.exec(orch(lead, ["next", "--stage", FD]).message)?.[1];
+    expect(command).toBeDefined();
+    const ran = runMergeTool(join(AIDLC_SRC, "tools", "aidlc-jump.ts"), command!.split(" ").map((arg) => arg.replace(/^'|'$/g, "")), lead);
+    expect(ran.status, ran.out).toBe(0);
+    expect(nextDirective(lead)).toMatchObject({ kind: "run-stage", stage: FD, unit: "beta" });
+    expect({ jumps: stageJumps(lead), alpha: rowOf(lead, "alpha") }).toEqual(before);
+  });
+
+  test("a team's Unit finished before the ask still lands, with no second approval asked", () => {
+    const { lead, team } = leadAndTeam();
+    expect(unitVerb(team!, "start", "gamma").status).toBe(0);
+    finish(team!, "gamma");
+    nextDirective(team!);
+    git(team!, ["add", "-A"]);
+    git(team!, ["commit", "-m", "gamma work"]);
+    expect(runMergeTool(UNIT, ["publish", "gamma"], team!).status).toBe(0);
+    expect(orch(lead, ["next", "--stage", FD])).toEqual({ kind: "error", message: NOTHING_HERE });
+    git(lead, ["fetch", "origin"]);
+    for (const args of [["pin", "gamma"], ["gate", "gamma", "--decision", "approve", "--user-input", "Approve"], ["land", "gamma"]]) {
+      const step = runMergeTool(UNIT, args, lead);
+      expect(step.status, `${args[0]}: ${step.out}`).toBe(0);
+    }
+  });
+
+  test("a move ahead within the Unit stages, with nothing built here, changes nothing and says so", () => {
+    // Code Generation on the plan; the lead builds no Unit, team-g took gamma.
+    const { lead, remote } = leadsCheckout("EXECUTE");
+    nextDirective(lead);
+    nextDirective(lead);
+    const team = clone(remote, "team");
+    expect(runMergeTool(UNIT, ["claim", "gamma", "--team", "team-g"], team).status).toBe(0);
+    git(lead, ["fetch", "origin"]);
+    const before = stageJumps(lead);
+    expect(orch(lead, ["next", "--stage", "code-generation"])).toEqual({
+      kind: "error",
+      message: "Code Generation is not redone for every unit once a team has taken a unit: " +
+        "gamma is built by team-g and alpha and beta are not taken yet.",
+    });
+    expect(stageJumps(lead)).toBe(before);
+  });
+
+  test("after every Unit landed, the redo changes nothing and main goes on with its own step", () => {
+    const { lead, remote, team } = leadAndTeam();
+    const land = (unit: string) => {
+      git(lead, ["fetch", "origin"]);
+      for (const args of [["pin", unit], ["gate", unit, "--decision", "approve", "--user-input", "Approve"], ["land", unit]]) {
+        const step = runMergeTool(UNIT, args, lead);
+        expect(step.status, `${args[0]} ${unit}: ${step.out}`).toBe(0);
+      }
+      // The land commits on main itself; the push shares it.
+      git(lead, ["push", "origin", "main"]);
+    };
+    const build = (checkout: string, unit: string) => {
+      expect(unitVerb(checkout, "start", unit).status).toBe(0);
+      finish(checkout, unit);
+      nextDirective(checkout);
+      git(checkout, ["add", "-A"]);
+      git(checkout, ["commit", "-m", `${unit} work`]);
+      expect(runMergeTool(UNIT, ["publish", unit], checkout).status).toBe(0);
+    };
+    build(team!, "gamma");
+    land("gamma");
+    const teamB = clone(remote, "team-b");
+    expect(runMergeTool(UNIT, ["claim", "beta", "--team", "team-b"], teamB).status).toBe(0);
+    build(teamB, "beta");
+    land("beta");
+    const before = stageJumps(lead);
+    expect(orch(lead, ["next", "--stage", FD])).toEqual({
+      kind: "error",
+      message: "Functional Design is not redone for every unit once a team has taken a unit: alpha, beta and gamma are finished.",
+    });
+    expect(stageJumps(lead)).toBe(before);
+    let step = nextDirective(lead);
+    if (step.kind === "ask") step = nextDirective(lead);
+    expect([step.kind, step.stage]).toEqual(["run-stage", "build-and-test"]);
+  });
+
+  test("a lead who has not fetched since the team's claim is answered the same", () => {
+    const { lead, remote } = leadsCheckout();
+    nextDirective(lead);
+    nextDirective(lead);
+    expect(unitVerb(lead, "start", "alpha").status).toBe(0);
+    finish(lead, "alpha");
+    nextDirective(lead);
+    git(lead, ["add", "-A"]);
+    git(lead, ["commit", "-m", "lead's work"]);
+    git(lead, ["push", "origin", "main"]);
+    const team = clone(remote, "team");
+    expect(runMergeTool(UNIT, ["claim", "gamma", "--team", "team-g"], team).status).toBe(0);
+    const before = stageJumps(lead);
+    expect(orch(lead, ["report", "--result", "resumed", "--choice", "redo"])).toEqual({ kind: "error", message: NOTHING_HERE });
+    expect(orch(lead, ["next", "--stage", FD])).toEqual({ kind: "error", message: NOTHING_HERE });
+    expect(stageJumps(lead)).toBe(before);
+  });
+
+  test("a move ahead for every Unit within the Unit stages moves the lead's own Unit on, as a bare move does", () => {
+    const { lead, remote } = leadsCheckout("EXECUTE");
+    nextDirective(lead);
+    nextDirective(lead);
+    expect(unitVerb(lead, "start", "alpha").status).toBe(0);
+    git(lead, ["add", "-A"]);
+    git(lead, ["commit", "-m", "alpha begun"]);
+    git(lead, ["push", "origin", "main"]);
+    const team = clone(remote, "team");
+    expect(runMergeTool(UNIT, ["claim", "gamma", "--team", "team-g"], team).status).toBe(0);
+    // The lead's checkout has not fetched since the claim.
+    const said = orch(lead, ["next", "--stage", "code-generation", "--every-unit"]);
+    expect(said.message).not.toContain("Redoing Code Generation");
+    expect(said.message).toContain('This moves only unit "alpha" on to "code-generation"');
+  });
+
+  test("a redo for every Unit of the later Unit stage the lead's own Unit is on reopens it there", () => {
+    const { lead, remote } = leadsCheckout("EXECUTE");
+    nextDirective(lead);
+    nextDirective(lead);
+    expect(unitVerb(lead, "start", "alpha").status).toBe(0);
+    finish(lead, "alpha");
+    expect(nextDirective(lead)).toMatchObject({ stage: "code-generation", unit: "alpha" });
+    const started = runMergeTool(STATE, ["unit", "start", "--stage", "code-generation", "--unit", "alpha"], lead);
+    expect(started.status, started.out).toBe(0);
+    git(lead, ["add", "-A"]);
+    git(lead, ["commit", "-m", "alpha on code generation"]);
+    git(lead, ["push", "origin", "main"]);
+    const team = clone(remote, "team");
+    expect(runMergeTool(UNIT, ["claim", "gamma", "--team", "team-g"], team).status).toBe(0);
+    git(lead, ["fetch", "origin"]);
+    const said = orch(lead, ["next", "--stage", "code-generation", "--every-unit"]);
+    expect(said.message).toContain("aidlc-jump.ts reopen --target code-generation --stages code-generation --units alpha --via redo");
+    expect(said.message).toContain(
+      "\"Redoing Code Generation for unit alpha. gamma is built by team-g and beta is not taken yet, so they are not redone here.\"",
+    );
+  });
+
+  test("while main is back before the Unit stages, a finished Unit named for a redo keeps its line", () => {
+    const lead = leadWithNothingLeft();
+    const back = runMergeTool(join(AIDLC_SRC, "tools", "aidlc-jump.ts"), ["execute", "--target", "units-generation", "--direction", "backward"], lead);
+    expect(back.status, back.out).toBe(0);
+    expect(jump(lead, "alpha")).toEqual({
+      kind: "error",
+      message: "alpha is finished, so it is not redone here; this checkout builds no Unit now.",
+    });
+  });
+
+  test("going back from Build and Test after the move reopens the lead's own Unit only", () => {
+    const lead = leadAfterATeamClaimed();
+    const moved = runMergeTool(ORCH, ["next", "--stage", "build-and-test"], lead);
+    expect(moved.status, moved.out).toBe(0);
+    const before = { jumps: stageJumps(lead), alpha: rowOf(lead, "alpha") };
+    const said = orch(lead, ["next", "--stage", FD]);
+    expect(said.message).toContain(
+      "\"Redoing Functional Design for unit beta. alpha is finished and gamma is built by team-g, so they are not redone here.\"",
+    );
+    const command = /`[^`]*aidlc-jump\.ts (reopen [^`]+)`/.exec(said.message)?.[1];
+    const ran = runMergeTool(join(AIDLC_SRC, "tools", "aidlc-jump.ts"), command!.split(" ").map((arg) => arg.replace(/^'|'$/g, "")), lead);
+    expect(ran.status, ran.out).toBe(0);
+    const state = readFileSync(seededStateFile(lead), "utf-8");
+    expect(state).toContain("- **Current Stage**: functional-design");
+    expect(state).toContain("- [ ] build-and-test");
+    expect({ jumps: stageJumps(lead), alpha: rowOf(lead, "alpha") }).toEqual(before);
+  });
+
+  test("in a teammate's clone, the lead's own Unit begun in their checkout is not called not taken", () => {
+    const lead = leadAfterATeamClaimed();
+    git(lead, ["push", "origin", "main"]);
+    const remote = git(lead, ["remote", "get-url", "origin"]);
+    const teammate = clone(remote, "teammate");
+    expect(orch(teammate, ["next", "--stage", FD])).toEqual({
+      kind: "error",
+      message: "Functional Design is not redone for every unit once a team has taken a unit: " +
+        "alpha is finished and gamma is built by team-g.",
+    });
+  });
+
+  test("a stage an earlier release's jump skipped for every Unit is gone back to as before", () => {
+    const lead = leadWithNothingLeft();
+    const path = seededStateFile(lead);
+    writeFileSync(path, readFileSync(path, "utf-8")
+      .replace("- [-] functional-design", "- [S] functional-design")
+      .replace("- [ ] build-and-test", "- [-] build-and-test")
+      .replace("- **Current Stage**: functional-design", "- **Current Stage**: build-and-test"));
+    const before = stageJumps(lead);
+    runMergeTool(ORCH, ["next", "--stage", FD], lead);
+    expect(stageJumps(lead)).toBe(before + 1);
   });
 });
