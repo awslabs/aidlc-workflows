@@ -9,6 +9,7 @@
 // route; an unverifiable stateless route requires a fresh explicit `next`.
 // Optional persona/knowledge remains path-loaded with actionable warnings.
 
+import { readConductorSurface } from "../harness/conductor-skill.ts";
 import {
   NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
   NATIVE_STARTUP_TIMEOUT_MS,
@@ -2550,7 +2551,7 @@ describe("t248 reviewer knowledge absorption", () => {
 describe("t248 the shipped skill delivers the Stop-note step for its tool", () => {
   for (const harness of HARNESS_MATRIX) {
     test(`${harness.name} ships one carrying-on paragraph that says nothing about the note`, () => {
-      const skill = readFileSync(join(harness.skillsRoot, "aidlc", "SKILL.md"), "utf-8");
+      const skill = readConductorSurface(join(harness.skillsRoot, "aidlc", "SKILL.md"));
       const paragraphs = skill.split("\n").filter((line) => line.startsWith("**When AI-DLC carries on by itself.**"));
       expect(paragraphs.length).toBe(1);
       const paragraph = paragraphs[0] as string;

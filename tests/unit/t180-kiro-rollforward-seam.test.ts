@@ -290,8 +290,9 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
       expect(latch.turn).toBe(1);
       expect(latch.source).toBe("knowledge-verb");
       expect(latch.flag).toBe("knowledge onboard --json");
-      // The NON-COMPILED path must spawn aidlc-knowledge.ts, not aidlc-utility.ts. A
-      // knowledge verb sent to the utility tool gets "unknown subcommand". Assert on
+      // The NON-COMPILED path must reach the knowledge tool, not
+      // aidlc-utility.ts. A knowledge verb sent to the utility tool gets
+      // "unknown subcommand". Assert on
       // the relayed output because that is the only observable -- and without this
       // the tool-selection line is unpinned.
       //

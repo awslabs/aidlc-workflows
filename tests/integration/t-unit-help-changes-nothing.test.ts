@@ -200,4 +200,22 @@ describe("known arguments act as before", () => {
     expect(claimed.status, claimed.out).toBe(0);
     expect(JSON.parse(claimed.stdout)).toMatchObject({ claimed: true, unit: "alpha", owner: "team-b" });
   });
+
+  // The guide's way to release a re-claimed Unit: take the claim's nonce from
+  // `unit status` and pass it as --expect-nonce. Status printed `"claims": {}`
+  // whatever was claimed, so there was no nonce to take.
+  test("status prints each claim with the nonce a release takes", () => {
+    const { seed: lead, remote } = makeSeed();
+    const mate = clone(remote, "mate");
+    const claimed = runMergeTool(UNIT, ["claim", "alpha", "--team", "team-a"], mate);
+    expect(claimed.status, claimed.out).toBe(0);
+    const status = unitTool(["status"], lead);
+    expect(status.status, status.stderr).toBe(0);
+    const claim = (JSON.parse(status.stdout) as { claims: Record<string, { owner: string; nonce: string }> })
+      .claims.alpha;
+    expect(claim).toMatchObject({ unit: "alpha", status: "claimed", owner: "team-a", generation: 1 });
+    expect(claim.nonce).toMatch(/\S/);
+    const released = unitTool(["release", "alpha", "--expect-nonce", claim.nonce], lead);
+    expect(released.status, released.stderr).toBe(0);
+  });
 });

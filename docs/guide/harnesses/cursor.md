@@ -160,8 +160,7 @@ utility shortcuts are `/aidlc-status`, `/aidlc-jump --stage <slug>` (or
   (`preCompact`).
 - **Personas are native subagents.** The 14 persona `.md` files in
   `.cursor/agents/` are discovered by frontmatter `name`; the conductor adopts
-  them inline for most stages and delegates via the `task` tool for the two
-  subagent stages (2.1 reverse-engineering, 3.5 code-generation). Worker agents
+  them inline for most stages and delegates via the `task` tool. Worker agents
   do not get the `task` tool, so a delegate cannot delegate again.
 - **Subagent identity is reconstructed.** Cursor emits no per-subagent identity
   on hook payloads (its `subagentStart`/`subagentStop` events are documented but
@@ -175,20 +174,17 @@ utility shortcuts are `/aidlc-status`, `/aidlc-jump --stage <slug>` (or
   dispatch retires and logs its prior record (Cursor CLI emits no Task
   `postToolUse`); genuine cross-parent ambiguity stays conservative whenever a
   reviewer is live, so it cannot disable reviewer-scope enforcement. Delegated
-  tools cannot access the ledger or dispatch record, including through ancestor
-  deletes or unquoted shell glob/character-class paths. If the primary ledger is
-  missing or unreadable while any delegation witness remains active, operations
-  fail closed rather than losing delegated-agent attribution. Delegates may use
-  ordinary Shell commands, but general-purpose interpreters and dynamic command
-  evaluation are denied; use Cursor's native read/search tools and let the parent
-  conversation run executable probes. AI-DLC's own commands that a delegate is
-  given, such as Reverse Engineering's scope fingerprint and its check, run as
-  their instructions spell them, one plain command at a time. These delegate
-  limits apply only while the reviewer read-scope or state-transition check
-  holds for the piece of work: when both stand aside (Guard Policy off does
-  that), delegates run builds, tests and searches like the main conversation, a
-  Task starts even when its record cannot be written, and Cursor's own approval
-  applies.
+  tools cannot change the ledger or dispatch record, including through ancestor
+  deletes or unquoted shell glob/character-class paths, or name them outright.
+  If the primary ledger is missing or unreadable while any delegation witness
+  remains active, operations fail closed rather than losing delegated-agent
+  attribution. Delegates run builds, tests, searches and the AI-DLC commands
+  they are given like the main conversation, under the same AI-DLC checks and
+  Cursor's own approval. While the reviewer read-scope or state-transition check
+  holds for the piece of work, a Shell command that writes, moves or removes the
+  ledger or dispatch record is denied, and a Task whose record cannot be written
+  does not start; when both stand aside (Guard Policy off does that), none of
+  these delegate limits applies.
 - **Generated stage and scope runners are explicit-only.** Cursor receives
   `disable-model-invocation: true` on generated runner skills, including plugin
   runners, so ordinary coding prompts cannot auto-activate state-mutating

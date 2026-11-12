@@ -22,6 +22,7 @@ import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import {
   cleanupTestProject, REPO_ROOT, seedBoltDag, seededRecordDir, seededStateFile, setupIntegrationProject,
 } from "../harness/fixtures.ts";
+import { codexRefusal } from "../harness/codex-hook-answer.ts";
 import { testGuardEnvironment } from "../harness/runner-profile.ts";
 import {
   auditBlockField,
@@ -304,8 +305,9 @@ class Work {
       const ids = { turn_id: randomUUID(), tool_use_id: randomUUID() };
       const adapter = (target: string, payload: Json) =>
         this.run([BUN, join(this.dir, ".codex", "hooks", "aidlc-codex-adapter.ts"), target], { cwd: this.dir, session_id: SESSION, ...ids, ...payload });
-      this.ok(adapter("guard-tool-call", { hook_event_name: "PreToolUse", tool_name: "apply_patch", tool_input: { command } }),
+      const admitted = this.ok(adapter("guard-tool-call", { hook_event_name: "PreToolUse", tool_name: "apply_patch", tool_input: { command } }),
         `the guard admits the patch of ${path}`);
+      expect(codexRefusal(admitted), `the guard admits the patch of ${path}`).toBeNull();
       mkdirSync(dirname(path), { recursive: true });
       writeFileSync(path, content);
       this.ok(adapter("audit-and-sensors", {

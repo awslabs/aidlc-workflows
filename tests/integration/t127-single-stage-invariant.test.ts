@@ -59,6 +59,7 @@ import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts
 import {
   createCodeGenerationProject,
   next as codeGenerationNext,
+  stageDir,
   writePlan,
 } from "../harness/code-generation-states.ts";
 import {
@@ -1002,13 +1003,21 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
     const proj = createCodeGenerationProject();
     projects.push(proj);
     writePlan(proj);
+    const planPath = join(stageDir(proj), "code-generation-plan.md");
+    const workflowPlan = readFileSync(planPath, "utf-8");
     // The workflow's Standard plan is ready: the engine asks to approve it.
-    expect(codeGenerationNext(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
-    // An isolated Comprehensive run starts and is left open.
+    const asked = codeGenerationNext(proj) as { kind: string; ask_type?: string; question_id?: string };
+    expect(asked).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+    // An isolated Comprehensive run starts and is left open: the engine writes
+    // that run's Testing Contract into the plan they share and asks about it.
     const isolated = codeGenerationNext(proj, ["--stage", "code-generation", "--single", "--test-strategy", "comprehensive"]);
-    expect(isolated).toMatchObject({ kind: "run-stage", single: true, test_strategy: "Comprehensive" });
-    // Back on the workflow, its plan still matches its own Testing Contract.
-    expect(codeGenerationNext(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+    expect(isolated).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+    expect(readFileSync(planPath, "utf-8")).not.toBe(workflowPlan);
+    // Back on the workflow, its own contract is written back and the same
+    // question is put over the plan as it was.
+    const back = codeGenerationNext(proj) as { kind: string; ask_type?: string; question_id?: string };
+    expect(back).toMatchObject({ kind: "ask", ask_type: "plan-approval", question_id: asked.question_id });
+    expect(readFileSync(planPath, "utf-8")).toBe(workflowPlan);
   });
 
   test("17d: with no workflow, next --single --test-strategy runs the stage with it", () => {

@@ -107,7 +107,7 @@ function windowsRecoveryCheck(): DoctorCheck | null {
     fix: failed.length > 0
       ? windowsUninstallRetryFix(failed[0].journal)
       : recovery.invalid.length > 0
-        ? "keep the listed journal, cleanup script, and fence for inspection; see Troubleshooting"
+        ? "the last uninstall stopped and its record is gone or unreadable: run `aidlc uninstall` or the installer; either one clears the listed files"
         : "finish active AI-DLC commands, then run `aidlc version` to resume cleanup",
   };
 }
@@ -400,9 +400,24 @@ export async function kiroSessionDoctorChecks(projectDir: string): Promise<Docto
   );
 }
 
+// The workflow findings, as warn rows after every check, so the human report,
+// --json and --quiet render and count one list. The export reads the findings
+// from the analysis itself (writeExport), so it is handed the report as
+// collected.
+function withWorkflowFindings(report: DoctorReport, analysis: DoctorAnalysis): DoctorReport {
+  const rows: DoctorCheck[] = analysis.findings
+    .filter((finding) => finding.severity !== "info")
+    .map((finding) => ({
+      pass: false,
+      severity: "warn",
+      label: `[${finding.id}] ${finding.summary}`,
+      fix: finding.remedy,
+    }));
+  return { ...report, checks: [...report.checks, ...rows], warnings: report.warnings + rows.length };
+}
+
 function humanReport(
   report: DoctorReport,
-  analysis: DoctorAnalysis,
   projectDir: string,
   verbose: boolean,
 ): string {
@@ -443,24 +458,13 @@ function humanReport(
     }
     return row;
   };
-  const findings = analysis.findings.filter((finding) => finding.severity !== "info");
-  const findingRows = findings.map((finding) =>
-    `  ${warnVerdict("warn ", out)} [${finding.id}] ${finding.summary}\n` +
-    `        ${fixLabel("fix:", out)} ${finding.remedy ?? fallbackFix}\n`
-  );
-  const renderSection = (
-    checks: readonly DoctorCheck[],
-    extraAttentionRows: readonly string[] = [],
-  ): string => {
-    if (verbose) {
-      return `${checks.map(renderCheck).join("")}${extraAttentionRows.join("")}`;
-    }
+  const renderSection = (checks: readonly DoctorCheck[]): string => {
+    if (verbose) return checks.map(renderCheck).join("");
     const passing = checks.filter((check) => status(check) === "ok");
     const attention = checks.filter((check) => status(check) !== "ok");
     let rows = attention.map(renderCheck).join("");
-    rows += extraAttentionRows.join("");
     if (passing.length > 0) {
-      const allClean = attention.length === 0 && extraAttentionRows.length === 0;
+      const allClean = attention.length === 0;
       rows += `  ${okVerdict("ok   ", out)} ${allClean ? "all " : ""}${passing.length} checks passed\n`;
     }
     return rows;
@@ -473,7 +477,7 @@ function humanReport(
       ? ` (${harness.harnessDir}, ${productName(harness.distribution)})`
       : ""
   }`, out)}\n`;
-  output += renderSection(project, findingRows);
+  output += renderSection(project);
   if (report.parked_attempts.length > 0) {
     output += `\n${heading("Parked attempts", out)}\n`;
     for (const attempt of report.parked_attempts) {
@@ -493,16 +497,15 @@ function humanReport(
   }
   output += `\n${heading("Framework integrity", out)}\n`;
   output += renderSection(framework);
-  const visibleWarnings = report.warnings + findings.length;
   const problems = `${report.failed} problem${report.failed === 1 ? "" : "s"}`;
-  const warnings = `${visibleWarnings} warning${visibleWarnings === 1 ? "" : "s"}`;
+  const warnings = `${report.warnings} warning${report.warnings === 1 ? "" : "s"}`;
   output += `\n${
     report.failed > 0 ? failVerdict(problems, out) : problems
-  }, ${visibleWarnings > 0 ? warnVerdict(warnings, out) : warnings}.\n`;
-  if (visibleWarnings > 0) {
+  }, ${report.warnings > 0 ? warnVerdict(warnings, out) : warnings}.\n`;
+  if (report.warnings > 0) {
     output += "Warnings are advisory - if everything works, ignore them.\n";
   }
-  if (report.failed === 0 && visibleWarnings === 0) {
+  if (report.failed === 0 && report.warnings === 0) {
     output += `${success("Your install is ready.", out)}\n`;
   }
   if (!verbose) {
@@ -679,26 +682,27 @@ export async function main(argv: string[]): Promise<void> {
     ? 1
     : 0;
 
+  const shown = withWorkflowFindings(report, analysis);
   if (flags.json === "true") {
     process.stdout.write(`${JSON.stringify({
       schemaVersion: 1,
       ok: code === 0,
       code,
-      status: report.failed > 0
+      status: shown.failed > 0
         ? "failed"
-        : report.warnings > 0
+        : shown.warnings > 0
         ? "warning"
         : "ok",
-      message: `${report.passed} passed, ${report.warnings} warnings, ${report.failed} failed`,
-      data: report,
+      message: `${shown.passed} passed, ${shown.warnings} warnings, ${shown.failed} failed`,
+      data: shown,
     })}\n`);
   } else if (flags.quiet === "true") {
     process.stdout.write(
-      `${report.passed} passed, ${report.warnings} warnings, ${report.failed} failed\n`,
+      `${shown.passed} passed, ${shown.warnings} warnings, ${shown.failed} failed\n`,
     );
   } else {
     process.stdout.write(
-      humanReport(report, analysis, projectDir, flags.verbose === "true"),
+      humanReport(shown, projectDir, flags.verbose === "true"),
     );
   }
   if (exportParent) writeExport(exportParent, report, analysis);

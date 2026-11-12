@@ -25,6 +25,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { compareVersions } from "../../dist/claude/.claude/tools/aidlc-channel.ts";
 import { auditShardHostSegment, cloneIdFileContent, cloneIdPath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { copilotSkillPrompt } from "./aidlc-input-corpus.ts";
+import { codexRefusal } from "./codex-hook-answer.ts";
 import { FIXTURES_DIR, REPO_ROOT } from "./fixtures.ts";
 import {
   activeRecord,
@@ -335,7 +336,7 @@ export class CodexScopeHost extends NativeScopeHost {
   }
 
   protected refusal(res: RunResult): string | null {
-    return res.status === 2 ? res.stderr : null;
+    return codexRefusal({ code: res.status, stdout: res.stdout, stderr: res.stderr });
   }
 
   protected override startChat(source: "startup" | "resume"): void {

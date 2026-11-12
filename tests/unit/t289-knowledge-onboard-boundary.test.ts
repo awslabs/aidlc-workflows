@@ -76,8 +76,10 @@ import {
   journalTxnDir,
   looksBinary,
   collectStaleJournals,
+  copiedDocumentFor,
   listDocuments,
   onboard,
+  onboardBatchWork,
   rebuildIndex,
   showDocument,
   syncDocuments,
@@ -977,6 +979,11 @@ describe("t289 content sniffing reads the WHOLE buffer", () => {
 // guarded set.
 const DISK_TOUCHING_CALLS: Record<string, (p: string) => unknown> = {
   onboard: (p) => onboard(p, SPACE, undefined, "2026-08-07T00:00:00Z"),
+  // The dispatcher counts a batch's work with it before copying anything; it
+  // reads index.json.
+  onboardBatchWork: (p) => onboardBatchWork(p, SPACE, []),
+  // The copy layer asks it which copy a named original was made into; it reads index.json.
+  copiedDocumentFor: (p) => copiedDocumentFor(p, SPACE, "orig/a.md", "a".repeat(64)),
   syncDocuments: (p) => syncDocuments(p, SPACE, "2026-08-07T00:00:00Z"),
   listDocuments: (p) => listDocuments(p, SPACE),
   showDocument: (p) => showDocument(p, SPACE, "any-id"),
@@ -2138,5 +2145,44 @@ export async function dynWrite(pd: string, spaceName: string, id: string): Promi
       violations.some((v) => v.includes("unrecognised fs import shape") && v.includes("import(")),
       `expected a violation refusing the dynamic import; got: ${violations.join("; ")}`,
     ).toBe(true);
+  });
+});
+
+// The Kiro adapters on the copy channel run this tool file directly, without
+// the dispatcher's copy step, so the verb itself takes every path it is given
+// and names each one it cannot take. A field check on 2.11.3 named four
+// documents in one onboard and only the first went in, with no word about the
+// other three.
+describe("t289 several named paths are one batch, and one that cannot be taken is named", () => {
+  function knowledgeCli(p: string, ...args: string[]) {
+    return spawnSync(
+      "bun",
+      [join(AIDLC_TOOLS, "aidlc-knowledge.ts"), ...args, "--project-dir", p],
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: { ...process.env, AIDLC_ALLOW_DIRECT_AUDIT_EVENTS: "1" } },
+    );
+  }
+  const json = (stdout: string): Record<string, unknown> => JSON.parse(stdout.slice(stdout.indexOf("{"))) as Record<string, unknown>;
+
+  test("every path named under documents/ is indexed", () => {
+    const p = scratchProject();
+    const a = doc(p, "a.md", "a\n");
+    const b = doc(p, "b.md", "b\n");
+    const r = knowledgeCli(p, "onboard", a, b);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    const indexed = (json(r.stdout).indexed as Array<{ path: string; status: string }>).map((row) => row.path).sort();
+    expect(indexed).toEqual(["documents/a.md", "documents/b.md"]);
+    expect(readIndex(p, SPACE).documents.length).toBe(2);
+  });
+
+  test("a missing path among several is named, and the others are indexed", () => {
+    const p = scratchProject();
+    const a = doc(p, "a.md", "a\n");
+    const missing = join(documentsDir(p, SPACE), "typo.md");
+    const r = knowledgeCli(p, "onboard", a, missing);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    const out = json(r.stdout);
+    expect((out.indexed as Array<{ path: string }>).map((row) => row.path)).toEqual(["documents/a.md"]);
+    expect(out.not_added).toEqual([{ path: missing, reason: "no such file or folder" }]);
+    expect(String(out.onboard_note)).toBe(`Not added: ${missing} (no such file or folder). Name only that one again once it is fixed.`);
   });
 });

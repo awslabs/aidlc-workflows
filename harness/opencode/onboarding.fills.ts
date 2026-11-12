@@ -19,7 +19,7 @@ This project uses AI-DLC (AI-Driven Development Life Cycle) for structured devel
 
     prereq_bullets_tail: "",
 
-    agents_note: `On opencode each expert role is a native subagent (\`mode: subagent\` in each \`.opencode/agents/aidlc-<role>-agent.md\`); the \`/aidlc\` session takes on those roles itself for most stages and hands work off via the \`task\` tool for the two delegated stages (2.1, 3.5).`,
+    agents_note: `On opencode each expert role is a native subagent (\`mode: subagent\` in each \`.opencode/agents/aidlc-<role>-agent.md\`); the \`/aidlc\` session takes on those roles itself for most stages and hands work off via the \`task\` tool.`,
 
     structure_extra: "",
 

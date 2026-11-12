@@ -29,6 +29,7 @@
 // refusal carries the nudge at the process boundary (t115 R12's scenario,
 // asserting the error text).
 
+import { readConductorSurface } from "../harness/conductor-skill.ts";
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   NATIVE_STARTUP_TIMEOUT_MS,
@@ -199,10 +200,7 @@ describe("t263 reviewer terminal-receipt ordering (receipt-invalidation loop fix
       "cursor",
       "copilot",
     ]) {
-      const src = readFileSync(
-        join(REPO_ROOT, "harness", harness, "skills", "aidlc", "SKILL.md"),
-        "utf-8",
-      );
+      const src = readConductorSurface(join(REPO_ROOT, "harness", harness, "skills", "aidlc", "SKILL.md"));
       expect(src).toContain(SKILL_PIN);
     }
   });

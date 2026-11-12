@@ -35,8 +35,7 @@ import { spawnSync } from "node:child_process";
 import {
   createIntent,
   turnEndIsOpen,
-  composeMarkerPath,
-  COMPOSE_MARKER_TTL_MS,
+  composeGateOpen,
   turnEndMarkerPath,
   engineTouchMarkerPath,
   humanTurnMarkerPath,
@@ -528,35 +527,40 @@ describe("t259 the engine's last word ended the turn", () => {
   });
 
   // A plan proposal waiting for the person's approve, edit or reject is a stop
-  // the engine itself put up: the Stop hook honours its marker while it is
-  // fresh. A setting typed under it must not hand the agent back to the work
-  // and walk past their pick; a stale orphan is no gate, as the hook reads it.
-  test("a setting typed while a plan proposal waits ends the turn, and a stale marker does not", async () => {
+  // the engine itself put up: the Stop hook honours its open compose question.
+  // A setting under it is either their approval of the settings it proposed
+  // (the agent goes on through `next`, which closes it) or one typed beside it
+  // (the agent stops, and it still waits): which one is the agent's to read.
+  // Once `next` has named another step, a setting goes on as it does with no
+  // proposal at all.
+  test("a setting while a plan proposal waits names both endings for the agent, and once next names another step it carries on", async () => {
     const proj = setupIntegrationProject({ withState: "state-mid-ideation.md", stripEnvScope: true });
     tempDirs.push(proj);
     const env: Record<string, string | undefined> = { ...process.env, CLAUDE_PROJECT_DIR: proj };
     delete env[STOP_HOOK_PROBE_ENV];
+    const engine = (...args: string[]) => JSON.parse(spawnSync(process.execPath, [
+      ".claude/tools/aidlc.ts", "engine", "orchestrate", "next", ...args,
+    ], { cwd: proj, encoding: "utf-8", env }).stdout);
     const setting = () => {
       markHumanTurn(proj);
-      return JSON.parse(spawnSync(process.execPath, [
-        ".claude/tools/aidlc.ts", "engine", "orchestrate", "next", "--depth", "minimal",
-      ], { cwd: proj, encoding: "utf-8", env }).stdout);
+      return engine("--depth", "minimal");
     };
-    const marker = composeMarkerPath(proj);
-    writeFileSync(marker, "{}\n", "utf-8");
+    markHumanTurn(proj);
+    expect(engine("compose", "what else can we cut?").kind).toBe("print");
+    expect(composeGateOpen(proj)).toBe(true);
     await Bun.sleep(20);
     const waiting = setting();
     expect(waiting.kind).toBe("print");
-    expect(waiting.message).toContain("print its output verbatim and stop");
-    expect(waiting.message).not.toContain("re-run next");
-    expect(existsSync(turnEndMarkerPath(proj))).toBe(true);
-    // Older than the freshness window the hook honours: no gate, so the work
-    // carries on as it does with no proposal at all.
-    const stale = (Date.now() - COMPOSE_MARKER_TTL_MS - 60_000) / 1000;
-    utimesSync(marker, stale, stale);
+    expect(waiting.message).toContain("When their message approved the settings the plan change proposed, then run");
+    expect(waiting.message).toContain("when it set something beside the plan change, which still waits for their answer, stop.");
+    expect(composeGateOpen(proj)).toBe(true);
+    // A `next` naming the stage closes it, so a setting then goes on as it
+    // does with no proposal at all.
+    expect(engine().kind).toBe("run-stage");
+    expect(composeGateOpen(proj)).toBe(false);
     await Bun.sleep(20);
-    const orphaned = setting();
-    expect(orphaned.message).toContain("re-run next to carry on");
+    const answered = setting();
+    expect(answered.message).toContain("re-run next to carry on");
     expect(existsSync(turnEndMarkerPath(proj))).toBe(false);
   });
 });

@@ -411,8 +411,8 @@ describe("a testing practice kept at the gate is for the next build", () => {
   });
 
   // The person asks to see the plan again after keeping the practice: `next`
-  // goes back to the plan (brought up to the moved contract, then asked), as it
-  // does on a plan whose contract moved, not on to the finish.
+  // goes back to the plan (the engine brings it up to the moved contract and
+  // asks), as it does on a plan whose contract moved, not on to the finish.
   test("strict: a Review the plan after the kept practice goes back to the plan, not to the finish", () => {
     const proj = inProgress("strict");
     writePlan(proj);
@@ -428,11 +428,11 @@ describe("a testing practice kept at the gate is for the next build", () => {
       .toBe("The person asked to see the code plan again: run `bun .claude/tools/aidlc-orchestrate.ts next` and follow the step it prints.");
     expect(stageLine(proj)).toContain("[-] code-generation");
     const step = next(proj);
-    expect(step.kind, JSON.stringify(step)).toBe("run-stage");
-    expect(step.plan_approval?.status, JSON.stringify(step)).toBe("plan");
-    const refused = guardOn(proj, "echo hi > src/y.ts");
+    expect(step.kind, JSON.stringify(step)).toBe("ask");
+    expect(step.ask_type, JSON.stringify(step)).toBe("plan-approval");
+    // The build waits for that question: a write to a file the plan names is held.
+    const refused = guardOn(proj, "echo hi > src/slugify.ts");
     expect(refused).toStartWith("exit 2;");
-    expect(refused).toContain("the engine asks the person to approve it before any code is written");
     expect(refused).not.toContain("applies from the next plan");
   });
 
@@ -498,8 +498,6 @@ describe("a testing practice kept at the gate is for the next build", () => {
     keepTestingPractice(proj);
     built(proj);
     expect(lastStep(runNamed(proj, OPEN_GATE).stdout).message).toBe(WAITS);
-    expect(next(proj).plan_approval?.status).toBe("plan");
-    writePlan(proj);
     expect(next(proj).ask_type).toBe("plan-approval");
     approvePlan(proj);
     expect(next(proj).plan_approval?.status).toBe("approved");
@@ -545,7 +543,7 @@ describe("a testing practice kept at the gate is for the next build", () => {
         "run `bun .claude/tools/aidlc-orchestrate.ts next` and follow the step it prints.");
     expect(auditEvents(proj).some((row) => row.event === "UNIT_COMPLETED"), "nothing moved").toBe(false);
     const step = next(proj);
-    expect(step.plan_approval?.status, JSON.stringify(step)).toBe("plan");
+    expect(step.ask_type, JSON.stringify(step)).toBe("plan-approval");
   });
 });
 

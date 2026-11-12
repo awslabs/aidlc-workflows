@@ -4,19 +4,20 @@
 // approved through AI-DLC's own `swarm check`, which the harness lets run
 // without asking again: the worker's brief and the reviewer's request name the
 // command, it runs from the main folder, and with --show-output the tests' own
-// output shows while stdout keeps the one verdict line.
+// output shows while stdout keeps the one verdict line. Check and finalize read
+// only the command's exit status, however much it prints.
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { stateDigest, writeActiveDirectiveMarker } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { codeGenerationRecordDir } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 import { AIDLC_SRC, seededStateFile } from "../harness/fixtures.ts";
 import { testGuardEnvironment } from "../harness/runner-profile.ts";
 import {
-  cleanupCheckpointFixtures, fixture, ISOLATED_GIT_ENV, prepare, reviewRevisedSource, runCheckpointTool,
-  STAGE, swarm, wt,
+  cleanupCheckpointFixtures, fixture, ISOLATED_GIT_ENV, prepare, recordCommand, reviewRevisedSource,
+  runCheckpointTool, STAGE, swarm, wt,
 } from "../harness/swarm-checkpoint.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -63,6 +64,38 @@ function hook(pd: string, file: string, toolCommand: string, agent?: string) {
       hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: toolCommand },
       session_id: "swarm-parent-session", cwd: pd, ...(agent ? { agent_type: agent } : {}),
     })),
+    stdout: "pipe", stderr: "pipe",
+  });
+  return { code: result.exitCode, out: result.stdout.toString(), err: result.stderr.toString() };
+}
+
+// Well over the 1 MiB a held output may grow to.
+const LOUD = "'x'.repeat(3000000)";
+
+// `swarm check` with only the approved command's own shell spawn given 200 ms: a
+// driver mocks node:child_process for this one subprocess, as
+// interruptAfterBoltStart does, so no production failpoint is needed.
+function checkWithShortBudget(pd: string) {
+  mkdirSync(join(pd, ".aidlc"), { recursive: true });
+  const driver = join(pd, ".aidlc", "short-check-budget.ts");
+  writeFileSync(driver, `
+import { mock } from "bun:test";
+const childProcess = await import("node:child_process");
+const realSpawn = childProcess.spawnSync;
+mock.module("node:child_process", () => ({
+  ...childProcess,
+  spawnSync(command, args, options) {
+    return args && !Array.isArray(args) && args.shell
+      ? realSpawn(command, { ...args, timeout: 200 })
+      : realSpawn(command, args, options);
+  },
+}));
+const { main } = await import(${JSON.stringify(join(AIDLC_SRC, "tools", "aidlc-swarm.ts"))});
+main(process.argv.slice(2));
+`);
+  const result = Bun.spawnSync([process.execPath, driver, "check", "alpha", "--project-dir", pd], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    cwd: pd, env: { ...ISOLATED_GIT_ENV, AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd },
     stdout: "pipe", stderr: "pipe",
   });
   return { code: result.exitCode, out: result.stdout.toString(), err: result.stderr.toString() };
@@ -156,6 +189,48 @@ describe("a parallel batch's Unit runs the approved tests through swarm check", 
       expect(refused.code, step).toBe(2);
       expect(refused.err).toContain("only the main workflow session can change stage status or routing");
     }
+  });
+
+  test("a passing command that prints 3 MB passes check and finalize; one that fails, is killed or runs out of time does not", () => {
+    const pd = prepared();
+    writeFileSync(join(wt(pd), "src", "alpha.ts"), "export const alpha = 2;\n");
+    const check = () => swarm(pd, ["check", "alpha"]);
+    const failed = (result: { code: number | null; out: string; err: string }) => {
+      expect(result.code, `${result.out}\n${result.err}`).toBe(1);
+      expect(result.out.trim()).toBe('{"unit":"alpha","converged":false,"tampered":false,"reason":null}');
+    };
+
+    recordCommand(pd, `bun -e "process.stderr.write(${LOUD})"`);
+    const loudStderr = check();
+    expect(loudStderr.code, `${loudStderr.out}\n${loudStderr.err}`).toBe(0);
+    expect(verdict(loudStderr.out)).toMatchObject({ unit: "alpha", converged: true });
+
+    recordCommand(pd, `bun -e "process.stdout.write(${LOUD}); process.exitCode = 1"`);
+    failed(check());
+    recordCommand(pd, `bun -e "process.kill(process.pid, 'SIGKILL')"`);
+    failed(check());
+    recordCommand(pd, `bun -e "setTimeout(Boolean, 2000)"`);
+    // The driver stops it at 200 ms; the verdict names the limit check itself set.
+    const stopped = checkWithShortBudget(pd);
+    expect(stopped.code, `${stopped.out}\n${stopped.err}`).toBe(1);
+    expect(stopped.out.trim()).toBe(JSON.stringify({
+      unit: "alpha", converged: false, tampered: false, reason: "error",
+      detail: "the check command was stopped after 30 minutes, before it finished, so this is no verdict on the Unit's code; " +
+        "run check again with --timeout-ms <milliseconds> to give it longer",
+    }));
+
+    recordCommand(pd, `bun -e "process.stdout.write(${LOUD})"`);
+    const loud = check();
+    expect(loud.code, `${loud.out}\n${loud.err}`).toBe(0);
+    expect(verdict(loud.out)).toMatchObject({ unit: "alpha", converged: true });
+    const shown = swarm(pd, ["check", "alpha", "--show-output"]);
+    expect(shown.code, shown.out).toBe(0);
+    expect(shown.err.length).toBeGreaterThanOrEqual(3_000_000);
+    expect(verdict(shown.out)).toMatchObject({ unit: "alpha", converged: true });
+    reviewRevisedSource(pd);
+    const finalized = swarm(pd, ["finalize", "--batch", "1", "--units", "alpha", "--claimed", "alpha"]);
+    expect(finalized.code, `${finalized.out}\n${finalized.err}`).toBe(0);
+    expect(JSON.parse(finalized.out).units[0]).toMatchObject({ unit: "alpha", status: "converged", landing_branch: "main" });
   });
 
   test("a one-at-a-time build's brief and review request name no swarm check", () => {

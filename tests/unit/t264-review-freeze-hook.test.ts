@@ -79,6 +79,7 @@ import {
   seededRecordDir,
   seedStateFile,
 } from "../harness/fixtures.ts";
+import { readConductorSurface } from "../harness/conductor-skill.ts";
 
 const BUN = process.execPath;
 const DIST_CLAUDE = join(REPO_ROOT, "dist", "claude", ".claude");
@@ -508,6 +509,28 @@ describe("t264 (a) judgeFreeze decision table", () => {
       bashTargets("sed --version; cat /a/b.md"),
     ).toEqual([]);
     expect(bashTargets("cat /a/b.md")).toEqual([]);
+  });
+
+  test("writeTargets: a shell apply_patch names each file its patch writes, as written", () => {
+    const hostPath = (value: string): string => resolve(value);
+    const patch = "*** Begin Patch\n*** Add File: /a/new.md\n+x $HOME\n*** Update File: /a/b.md\n@@\n-x\n+y\n*** Move to: /a/c.md\n*** Delete File: /a/d.md\n*** End Patch";
+    const all = ["/a/new.md", "/a/b.md", "/a/c.md", "/a/d.md"].map(hostPath).sort();
+    for (const command of [
+      `apply_patch <<'PATCH'\n${patch}\nPATCH`,
+      `applypatch <<"PATCH"\n${patch}\nPATCH\n`,
+      `apply_patch '${patch}'`,
+      `apply_patch '${patch.replaceAll("\n", "\r\n")}'`,
+    ]) {
+      expect(writeTargets("Bash", { command }).sort(), command).toEqual(all);
+    }
+    // Relative paths from the folder the shell is in; a path is a name, never a shell word.
+    expect(writeTargets("Bash", { command: "apply_patch <<'PATCH'\n*** Begin Patch\n*** Add File: routes/$id.tsx\n+x\n*** End Patch\nPATCH" }, "/p"))
+      .toEqual([hostPath("/p/routes/$id.tsx")]);
+    // The patch typed in afterwards is not in the command: nothing to name.
+    expect(writeTargets("Bash", { command: "apply_patch" })).toEqual([]);
+    // The rest of the line reads as before.
+    expect(writeTargets("Bash", { command: "printf x >> /a/e.md; apply_patch <<'PATCH'\n*** Begin Patch\n*** Add File: /a/f.md\n+x\n*** End Patch\nPATCH" }).sort())
+      .toEqual(["/a/e.md", "/a/f.md"].map(hostPath).sort());
   });
 
   test("writeTargets: content cmdlets bind their path, never a value passed by name (#1639)", () => {
@@ -1172,6 +1195,24 @@ describe("t264 (b) shipped-hook lifecycle over a real ledger", () => {
     }
   });
 
+  // Codex's shell apply_patch names the files its patch writes: a reviewed
+  // document is frozen against it as against printf.
+  test("a shell apply_patch of a reviewed document is frozen as a redirect is", () => {
+    const p = projBeforeGate();
+    const file = raArtifact(p);
+    recordReview(p, "READY");
+    openGate(p);
+    const rel = relative(p, file).replace(/\\/g, "/");
+    const patch = `*** Begin Patch\n*** Update File: ${rel}\n@@\n-a\n+b\n*** End Patch`;
+    for (const command of [`apply_patch <<'PATCH'\n${patch}\nPATCH`, `apply_patch '${patch}'`, `applypatch <<"PATCH"\n${patch}\nPATCH`]) {
+      const blocked = runHook(p, { hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command }, cwd: p });
+      expect(blocked.code, command).toBe(2);
+      expect(blocked.stderr, command).toContain(file);
+    }
+    const other = `*** Begin Patch\n*** Add File: notes/other.md\n+x\n*** End Patch`;
+    expect(runHook(p, { hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: `apply_patch <<'PATCH'\n${other}\nPATCH` }, cwd: p }).code).toBe(0);
+  });
+
   test("fail-open: empty ledger, malformed stdin, and the off-switch all allow", () => {
     const empty = createTestProject();
     tempDirs.push(empty);
@@ -1312,8 +1353,9 @@ describe("t264 (c) harness registration", () => {
     );
     expect(adapter).toContain('case "review-freeze"');
     // Delete File / Move to are sibling mutations of the receipt exactly like
-    // an Update - the fan-out must include them.
-    expect(adapter.split('case "review-freeze"')[1]).toContain("Delete File|Move to");
+    // an Update - the fan-out must include them (patchedTargets).
+    expect(adapter.split('case "review-freeze"')[1].split("case ")[0]).toContain("patchedTargets(command)");
+    expect(adapter).toMatch(/function patchedTargets[\s\S]*?"Delete" \|\| target\.kind === "Move"/);
   });
 
   test("Copilot's shared tool guard invokes review-freeze", () => {
@@ -1787,7 +1829,7 @@ describe("t264 (d) the refusal names next; next asks the recovery question", () 
     const missing: string[] = [];
     for (const harness of ["claude", "kiro", "kiro-ide", "codex", "cursor", "opencode", "copilot"]) {
       const rel = join("harness", harness, "skills", "aidlc", "SKILL.md");
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const body = readConductorSurface(rel);
       if (!body.includes(HOOK_REFUSAL_NEXT_RULE)) missing.push(rel);
     }
     expect(missing).toEqual([]);

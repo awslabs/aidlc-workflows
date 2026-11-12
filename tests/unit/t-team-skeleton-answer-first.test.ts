@@ -34,6 +34,7 @@ resetAidlcEnv();
 const BUN = process.execPath;
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
+const JUMP = join(AIDLC_SRC, "tools", "aidlc-jump.ts");
 
 const ENV: NodeJS.ProcessEnv = {
   ...process.env,
@@ -292,14 +293,21 @@ describe("the team's walking-skeleton answer is read before a team step decides"
     expect(step.stage).toBe("functional-design");
   });
 
-  test("a jump that lands on the step keeps its own line there", () => {
+  // On a team main that works every Unit itself the jump moves only the Unit
+  // in flight on, so the answer is read on the next step, and the Unit then
+  // lands on the step the person asked for.
+  test("a jump ahead has the answer read on the next step, then lands on the step", () => {
     const proj = project("functional-design", "team", NO);
     const jump = next(proj, ["--stage", "code-generation"]);
-    expectSettleStep(jump, "code-generation");
-    expect((jump.change_notices ?? []).some((line) => line.startsWith("Moved to Code Generation")), JSON.stringify(jump))
-      .toBe(true);
+    const command = /`[^`]*aidlc-jump\.ts (execute [^`]+)`/.exec(String(jump.message ?? ""))?.[1];
+    expect(command ?? "", JSON.stringify(jump)).toContain("--units alpha");
+    const ran = run(JUMP, proj, command!.split(" "));
+    expect(ran.rc, ran.out).toBe(0);
+    expectSettleStep(next(proj), "functional-design");
     expectRecorded(proj, "off");
-    expect(next(proj).change_notices ?? []).toContain(HANDOUT_LINE);
+    const step = next(proj);
+    expect(`${step.stage}/${step.unit}`, JSON.stringify(step)).toBe("code-generation/alpha");
+    expect(step.change_notices ?? []).toContain(HANDOUT_LINE);
   });
 
   test("a team's clone reads the lead's record and never records the stance", () => {

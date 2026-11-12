@@ -5,6 +5,21 @@ import { basename, isAbsolute, join, resolve } from "node:path";
 // never invalidate a receipt.
 const WRITE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
 
+// Whether the backslash at `at` escapes the next character in POSIX shell:
+// anywhere outside single quotes, but inside "..." only before $ ` " \ and a
+// newline, so a quoted Windows path keeps its separators.
+export function posixBackslashEscapes(
+  text: string,
+  at: number,
+  quote: "'" | '"' | null,
+): boolean {
+  return (
+    text[at] === "\\" &&
+    quote !== "'" &&
+    (quote !== '"' || '$`"\\\n'.includes(text[at + 1] ?? ""))
+  );
+}
+
 function shellWords(command: string): string[] {
   const words: string[] = [];
   let word = "";
@@ -24,15 +39,7 @@ function shellWords(command: string): string[] {
       escaped = false;
       continue;
     }
-    if (
-      ch === "\\" &&
-      quote === '"' &&
-      !'$`"\\\n'.includes(command[i + 1] ?? "")
-    ) {
-      word += ch;
-      continue;
-    }
-    if (ch === "\\" && quote !== "'") {
+    if (posixBackslashEscapes(command, i, quote)) {
       escaped = true;
       wordStarted = true;
       continue;
@@ -80,14 +87,7 @@ function shellCommandSegments(command: string): string[] {
       escaped = false;
       continue;
     }
-    if (
-      ch === "\\" &&
-      quote === '"' &&
-      !'$`"\\\n'.includes(command[i + 1] ?? "")
-    ) {
-      continue;
-    }
-    if (ch === "\\" && quote !== "'") {
+    if (posixBackslashEscapes(command, i, quote)) {
       escaped = true;
       continue;
     }
@@ -589,17 +589,7 @@ function shellWordAt(command: string, start: number): { word: string; end: numbe
       escaped = false;
       continue;
     }
-    // Same double-quote rule as shellWords: inside "..." a backslash escapes
-    // only $ ` " \ and newline, so a quoted Windows path keeps its separators.
-    if (
-      ch === "\\" &&
-      quote === '"' &&
-      !'$`"\\\n'.includes(command[i + 1] ?? "")
-    ) {
-      word += ch;
-      continue;
-    }
-    if (ch === "\\" && quote !== "'") {
+    if (posixBackslashEscapes(command, i, quote)) {
       escaped = true;
       continue;
     }
@@ -1802,6 +1792,266 @@ export function leadingDirectoryChange(
  * words resolution drops ($VAR, globs). A command `shell` names as
  * PowerShell is read as PowerShell (see readPowerShell).
  */
+// The heredoc whose `<<` (not `<<<`) is at `index`, which the caller read
+// outside quotes: where the operator and its delimiter word end, the header
+// line's newline, the body, and where the terminator line starts (the
+// command's end when no line ends the body). Null when no delimiter word or no
+// body line follows. Runtime integrity and heredocReading read the same spans.
+export function heredocAt(command: string, index: number): {
+  operatorEnd: number;
+  newline: number;
+  body: string;
+  bodyEnd: number;
+  quoted: boolean;
+  tabs: boolean;
+} | null {
+  if (!command.startsWith("<<", index) || command[index + 2] === "<") return null;
+  const here = /^<<(-)?[ \t]*(?:'([^']+)'|"([^"]+)"|([A-Za-z_]\w*))/.exec(command.slice(index));
+  if (!here) return null;
+  const delimiter = here[2] ?? here[3] ?? here[4];
+  const operatorEnd = index + here[0].length;
+  const newline = command.indexOf("\n", operatorEnd);
+  if (newline < 0) return null;
+  let end = newline + 1;
+  while (end < command.length) {
+    const nextLine = command.indexOf("\n", end);
+    const lineEnd = nextLine < 0 ? command.length : nextLine;
+    const line = command.slice(end, lineEnd).replace(/\r$/, "");
+    if ((here[1] ? line.replace(/^\t+/, "") : line) === delimiter) break;
+    end = nextLine < 0 ? command.length : nextLine + 1;
+  }
+  return {
+    operatorEnd, newline, body: command.slice(newline + 1, end), bodyEnd: end, quoted: here[4] === undefined, tabs: here[1] === "-",
+  };
+}
+
+// Limit stdin consumers to this command and its downstream pipeline, excluding
+// earlier/later independent commands. Redirection filenames are not script argv.
+export function heredocPipeline(header: string, herePosition: number): { raw: string; execution: string } {
+  let quote = "";
+  let start = 0;
+  let end = header.length;
+  const redirects: Array<[number, number]> = [];
+  for (let index = 0; index < header.length; index++) {
+    const ch = header[index];
+    if (ch === "\\" && quote !== "'") { index++; continue; }
+    if (quote) { if (ch === quote) quote = ""; continue; }
+    if (ch === "'" || ch === '"') { quote = ch; continue; }
+    const redirect = /^(?:\d*)?(?:>>?|<|&>)(?:&)?[ \t]*/.exec(header.slice(index));
+    if (redirect && (ch === "<" || ch === ">" || ch === "&" ||
+      index === 0 || /\s|[;|&]/.test(header[index - 1]))) {
+      const begin = index;
+      index += redirect[0].length;
+      let targetQuote = "";
+      while (index < header.length) {
+        const current = header[index];
+        if (current === "\\" && targetQuote !== "'") { index += 2; continue; }
+        if (targetQuote) {
+          if (current === targetQuote) targetQuote = "";
+        } else if (current === "'" || current === '"') targetQuote = current;
+        else if (/\s|[;|&<>]/.test(current)) break;
+        index++;
+      }
+      redirects.push([begin, index]);
+      index--;
+      continue;
+    }
+    if (!";|&\n".includes(ch)) continue;
+    const pair = header.slice(index, index + 2);
+    const width = ["&&", "||", "|&"].includes(pair) ? 2 : 1;
+    if (index < herePosition) start = index + width;
+    else if (ch !== "|" || pair === "||") { end = index; break; }
+    index += width - 1;
+  }
+  const execution = header.split("");
+  for (const [begin, after] of redirects) {
+    for (let index = begin; index < after; index++) execution[index] = " ";
+  }
+  return { raw: header.slice(start, end), execution: execution.slice(start, end).join("") };
+}
+
+// The command as the shell reads it, with each heredoc that is only data
+// blanked (its operator and delimiter word, its body and its terminator line;
+// newlines kept), and the patches it read: the shell lexer has no heredoc, and
+// reads each body line as a command. A heredoc is data when its pipeline is one
+// or more unwrapped commands spelled exactly `cat` or `tee`, or exactly one
+// `apply_patch` or `applypatch` with no operand (its body is then the patch;
+// with an operand the binary reads that instead), and the shell expands nothing
+// in its body (a quoted delimiter, or a body with no `$`, backtick or
+// backslash). Anything else returns the command as written, with no patch: any
+// other heredoc, an expansion, a glob, a bracket, brace or parenthesis outside a
+// body (arithmetic and subscripts read `<<` as a shift), an assignment in the
+// heredoc's pipeline, a carriage return, a line continuation, a quote in a
+// comment, a `<<` it cannot span, whose delimiter word holds a backslash or runs
+// into the next word, a second `<<`, a pipe, `&` or `\` ending the header line,
+// a quote open at its end, or a body no line ends.
+export function heredocReading(command: string): { text: string; patches: string[] } {
+  const unchanged = { text: command, patches: [] };
+  if (!command.includes("<<") || command.includes("\r")) return unchanged;
+  const spans: Array<[number, number]> = [];
+  const patches: string[] = [];
+  let pending: { at: number; operatorEnd: number; newline: number; bodyEnd: number } | null = null;
+  let lineStart = 0;
+  let escaped = -1;
+  let quote: "'" | '"' | null = null;
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    if (quote === "'") {
+      if (ch === "'") quote = null;
+      continue;
+    }
+    if (ch === "\\") {
+      // A line continuation joins the next line to this one before the shell
+      // reads a comment or a heredoc there.
+      if (command[i + 1] === "\n") return unchanged;
+      escaped = ++i;
+      continue;
+    }
+    if (ch === "`" || ch === "$") return unchanged;
+    if (ch === '"') {
+      quote = quote === '"' ? null : '"';
+      continue;
+    }
+    if (quote === '"') continue;
+    if (ch === "'") {
+      quote = "'";
+      continue;
+    }
+    if (ch === "#" && (i === 0 || (escaped !== i - 1 && /[ \t\n;&|]/.test(command[i - 1])))) {
+      const end = command.indexOf("\n", i);
+      if (/['"]/.test(command.slice(i, end < 0 ? command.length : end))) return unchanged;
+      if (end < 0) break;
+      i = end - 1;
+      continue;
+    }
+    if ("(){}[]*?".includes(ch)) return unchanged;
+    if (ch === "\n") {
+      if (pending !== null) {
+        if (i !== pending.newline) return unchanged;
+        const after = command.indexOf("\n", pending.bodyEnd);
+        const end = after < 0 ? command.length : after;
+        spans.push([pending.at, pending.operatorEnd], [pending.newline + 1, end]);
+        pending = null;
+        i = end;
+      }
+      lineStart = i + 1;
+      continue;
+    }
+    if (ch !== "<" || command[i + 1] !== "<") continue;
+    if (command[i + 2] === "<") {
+      i += 2;
+      continue;
+    }
+    const heredoc = heredocAt(command, i);
+    if (
+      pending !== null || heredoc === null || heredoc.bodyEnd >= command.length ||
+      command.slice(i, heredoc.operatorEnd).includes("\\")
+    ) return unchanged;
+    const rest = command.slice(heredoc.operatorEnd, heredoc.newline);
+    if (!/^(?:$|[ \t;&|<>])/.test(rest) || rest.includes("<<") || /[|&\\][ \t]*$/.test(rest)) return unchanged;
+    const pipeline = heredocPipeline(command.slice(lineStart, i) + rest, i - lineStart);
+    if (/[(){}$`=]/.test(pipeline.raw)) return unchanged;
+    const calls = shellCommandInvocationDetails(pipeline.execution);
+    const literal = (call: ShellInvocationDetails, names: string[]): boolean =>
+      names.includes(call.name) && (call.executable ?? call.name) === call.name &&
+      !call.ambiguous && !call.launchers?.length && !call.dataDriven && !call.executableResolutionChanged;
+    // With its input redirected the binary reads that, never this heredoc.
+    const patch = calls.length === 1 && literal(calls[0], ["apply_patch", "applypatch"]) && calls[0].args.length === 0 &&
+      !pipeline.raw.includes("<");
+    if (
+      !(patch || (calls.length > 0 && calls.every((call) => literal(call, ["cat", "tee"])))) ||
+      (!heredoc.quoted && /[$`\\]/.test(heredoc.body))
+    ) return unchanged;
+    if (patch) patches.push(heredoc.tabs ? heredoc.body.replace(/^\t+/gm, "") : heredoc.body);
+    pending = { at: i, ...heredoc };
+    i = heredoc.operatorEnd - 1;
+  }
+  if (pending !== null || quote !== null) return unchanged;
+  let text = command;
+  for (const [start, end] of spans) {
+    text = text.slice(0, start) + text.slice(start, end).replace(/[^\n]/g, " ") + text.slice(end);
+  }
+  return { text, patches };
+}
+
+// The files a patch names, in the order and with the lines every apply_patch
+// reader takes them: each `*** Add|Update|Delete File:` line, then each
+// `*** Move to:` line, the path trimmed (a CRLF patch reads the same) and kept
+// when empty, with the line's offset. The adapters read their own tool's patch
+// with it, and the shell reading below.
+export function patchTargets(patch: string): Array<{ kind: "Add" | "Update" | "Delete" | "Move"; path: string; at: number }> {
+  const out: Array<{ kind: "Add" | "Update" | "Delete" | "Move"; path: string; at: number }> = [];
+  for (const match of patch.matchAll(/^\*\*\* (Add|Update|Delete) File: (.+)$/gm)) {
+    out.push({ kind: match[1] as "Add" | "Update" | "Delete", path: match[2].trim(), at: match.index ?? 0 });
+  }
+  for (const match of patch.matchAll(/^\*\*\* Move to: (.+)$/gm)) {
+    out.push({ kind: "Move", path: match[1].trim(), at: match.index ?? 0 });
+  }
+  return out;
+}
+
+// Codex's own binary in its patch mode, which is what its apply_patch command
+// runs (on Windows, apply_patch.bat): the flag is its first word and the patch
+// its operand, as apply_patch's operand is.
+const CODEX_PATCH_FLAG = "--codex-run-as-apply-patch";
+export function codexPatchMode(invocation: { name: string; args: string[] }): boolean {
+  return invocation.name === "codex" && invocation.args[0] === CODEX_PATCH_FLAG;
+}
+// The patch mode given an operand the reader cannot see (a variable, a
+// substitution, a PowerShell expression), read on the text, since a quote
+// inside the patch can turn the lexer's words over; so the same words inside a
+// quoted argument (a search for them) read as one too. With no operand the
+// binary writes nothing.
+const CODEX_UNSEEN_PATCH = /codex(?:\.exe)?['"]?[ \t]+--codex-run-as-apply-patch[ \t]+["']?[$`(]/i;
+
+// A patch handed to apply_patch in the shell names its files as written, never
+// as shell words (`routes/$id.tsx`), and the binary takes its file lines
+// indented too.
+export function shellPatchPaths(patch: string, cwd: string): string[] {
+  return patchTargets(patch.replace(/^[ \t]+(?=\*\*\* )/gm, ""))
+    .filter(({ path }) => path.length > 0)
+    .map(({ path }) => resolve(cwd, path));
+}
+
+// The files the patches a POSIX command hands apply_patch write (in a heredoc,
+// or as its operand: an operand with no file line names none), from each folder
+// the command can be in.
+export function shellPatchTargets(command: string, cwd = process.cwd()): string[] {
+  const { text, patches } = heredocReading(command);
+  const operands = shellCommandInvocationDetails(text).flatMap((invocation) =>
+    invocation.name === "apply_patch" || invocation.name === "applypatch"
+      ? invocation.args
+      : codexPatchMode(invocation)
+      ? invocation.args.slice(1)
+      : []
+  );
+  if (patches.length + operands.length === 0) return [];
+  const out = new Set<string>();
+  for (const root of shellDirectoryRoots(text, cwd)) {
+    for (const patch of [...patches, ...operands]) for (const path of shellPatchPaths(patch, root)) out.add(path);
+  }
+  return [...out];
+}
+
+// An apply_patch or applypatch with no operand once its redirections are set
+// aside, whose patch nothing here has read: "bare" when the command does not
+// hold it (a segment with no heredoc, beyond the `read` heredoc patches
+// heredocReading took from `text`, or Codex's patch mode given an operand the
+// reader cannot see), "held" when it is fed a heredoc heredocReading kept as
+// written.
+export function unseenPatch(text: string, read: number): "bare" | "held" | null {
+  let bare = 0;
+  let held = false;
+  for (const segment of shellCommandSegments(text)) {
+    const invocation = shellInvocation(shellWords(withoutRedirections(segment)));
+    if (!invocation || (invocation.name !== "apply_patch" && invocation.name !== "applypatch") || invocation.args.length > 0) continue;
+    if (!segment.includes("<<")) bare++;
+    // Only a call the walk could take: any other spelling names another program.
+    else if ((invocation.executable ?? invocation.name) === invocation.name) held = true;
+  }
+  return bare > read || CODEX_UNSEEN_PATCH.test(text) ? "bare" : held ? "held" : null;
+}
+
 export function shellWriteTargets(
   command: string,
   cwd = process.cwd(),
@@ -1812,6 +2062,7 @@ export function shellWriteTargets(
   shellDirectoryRoots(command, cwd, shell).forEach((root, index) => {
     for (const target of shellWriteTargetsFrom(command, root, index === 0 ? rawWords : undefined, shell)) out.add(target);
   });
+  if (shell === "posix") for (const target of shellPatchTargets(command, cwd)) out.add(target);
   return [...out];
 }
 

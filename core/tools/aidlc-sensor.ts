@@ -766,6 +766,7 @@ function handleFire(args: string[]): void {
 				: [process.execPath, ctx.scriptAbsPath, ...ctx.scriptArgs];
 	const result = spawnSync(command[0], command.slice(1), {
 		encoding: "utf-8",
+		maxBuffer: 64 * 1024 * 1024,
 		timeout: timeoutMs,
 		cwd: projectDir,
 		...(ctx.pathSet !== null ? { input: JSON.stringify(ctx.pathSet) } : {}),

@@ -38,6 +38,7 @@ import { pathToFileURL } from "node:url";
 import { QUESTION_UNAVAILABLE, readQuestion, retireRequest, startedRequestFor } from "./aidlc-question-store.ts";
 import { sayWritesBeforePick } from "./aidlc-before-pick.ts";
 import { planApprovalAskState } from "./aidlc-plan-approval-ask.ts";
+import { shownSubagentInflightPath } from "./aidlc-subagent-inflight.ts";
 import {
   appendAuditEntries,
   appendAuditEntry,
@@ -78,7 +79,7 @@ import {
   VALID_DEPTHS,
   VALID_TEST_STRATEGIES,
 } from "./aidlc-guard-switch.ts";
-import { compareVersions, VERSION_ID } from "./aidlc-channel.ts";
+import { compareVersions, projectPinnedVersion, VERSION_ID } from "./aidlc-channel.ts";
 import { main as pluginBuildMain } from "./aidlc-plugin-build.ts";
 import { droppedPluginRegistrations } from "./aidlc-plugin-emit.ts";
 import { main as pluginTestMain } from "./aidlc-plugin-test.ts";
@@ -243,8 +244,6 @@ import {
   parseGuardPolicyStateLine,
   resolveGuardPolicy,
   composeGateOpen,
-  composeMarkerPath,
-  COMPOSE_MARKER_TTL_MS,
   defaultScope,
   defaultScopeResolution,
   DEFAULT_SPACE,
@@ -523,6 +522,7 @@ import {
   declaredProjectType,
   installWithoutReplacing,
   pathContainedBy,
+  replaceWithStaged,
 } from "./aidlc-lib.ts";
 import { chatTookStep, relativeRecordDirForSelection } from "./aidlc-record-core.ts";
 import { GUARD_POLICY_GLOSS, SCOPE_GLOSS } from "./aidlc-guard-fences.ts";
@@ -905,7 +905,7 @@ Utilities:
   plugin sync       Compose installed plugins into the current install
   plugin validate [path]  Validate authored plugin content (--with <base-root> checks a base plugin's agents; --json for structured output)
   plugin build <harness> [outDir]  Build a host plugin projection (--plugin-root <path>)
-  knowledge onboard [path]  Index customer documents into the space DocumentKB
+  knowledge onboard [path ...]  Index customer documents into the space DocumentKB
   knowledge sync    Reconcile the catalog with disk; retries extractor_unavailable rows
   knowledge list    The DocumentKB catalog (--json for structured output)
   knowledge show <id>  One document's record, plus its extracted text
@@ -3938,13 +3938,8 @@ export function harnessTreeVersionsCheck(projectDir: string): DoctorCheck | null
     };
   }
   const native = aidlcInvocation() === "aidlc";
-  let pinned: string | undefined;
-  try {
-    const pin = readFileSync(join(projectDir, ".aidlc-version"), "utf-8").trim();
-    if (VERSION_ID.test(pin)) pinned = pin;
-  } catch {
-    // No pin; a malformed one has its own row.
-  }
+  // A malformed pin has its own row.
+  const pinned = projectPinnedVersion(projectDir);
   const newest = trees.filter((tree) => tree.frameworkVersion)
     .sort((left, right) => compareVersions(right.frameworkVersion ?? "", left.frameworkVersion ?? ""))[0];
   const release = pinned ?? (native ? AIDLC_VERSION : newest.frameworkVersion ?? AIDLC_VERSION);
@@ -4387,14 +4382,7 @@ export async function collectDoctorReport(
   // every engine command (hooks, sensors, orchestration) to the pinned one, so
   // the project stamp is judged against that engine. A malformed pin is
   // reported below and leaves this check on the running release.
-  const pinnedEngine = (() => {
-    try {
-      const value = readFileSync(pinPath, "utf-8").trim();
-      return VERSION_ID.test(value) ? value : null;
-    } catch {
-      return null;
-    }
-  })();
+  const pinnedEngine = projectPinnedVersion(projectDir);
   if (existsSync(projectStamp)) {
     try {
       const stamp = JSON.parse(readFileSync(projectStamp, "utf-8")) as {
@@ -5892,35 +5880,26 @@ export async function collectDoctorReport(
     }
   }
 
-  // Orphaned compose-marker probe: a read-only tripwire. The conductor writes
-  // the compose marker before an in-flight compose gate and deletes it on
-  // resolve; the Stop hook treats a FRESH marker as a carve-out (the turn may
-  // end at the gate). A crash between write and resolve can leave the marker on
-  // disk, so doctor reports a present marker with its age and the remediation
-  // (delete it if no compose gate is actually pending). Pass/fail follows the
-  // shared freshness window: a FRESH marker is the normal state while a compose
-  // gate is legitimately open (written before the gate, deleted on resolve), so
-  // it renders as an advisory pass (running doctor in a second terminal during
-  // a live gate must not exit 1 on a healthy workspace). Only a STALE marker
-  // (older than the TTL, i.e. an orphan the Stop hook has begun ignoring) is a
-  // fault. Silent when absent (no marker means nothing to report). Read-only:
-  // doctor never deletes it (the Stop hook is the janitor for a stale one).
+  // The in-flight compose question (composeGateOpen) is healthy waiting: an
+  // advisory pass. The file an earlier version had the agent write for it is
+  // read by nothing now; doctor names it while it is there and never deletes it.
   try {
-    const composeMarker = composeMarkerPath(projectDir);
-    if (existsSync(composeMarker)) {
-      const ageMs = Date.now() - statSync(composeMarker).mtimeMs;
-      const ageHours = Math.floor(ageMs / (60 * 60 * 1000));
-      const ageLabel = ageHours >= 1 ? `${ageHours}h old` : "under 1h old";
-      const stale = ageMs > COMPOSE_MARKER_TTL_MS;
-      const staleLabel = stale ? ", stale" : ", fresh";
+    if (composeGateOpen(projectDir)) {
       results.push({
-        pass: !stale,
-        label: `Compose marker present (aidlc/.aidlc-compose-pending, ${ageLabel}${staleLabel})`,
-        fix: "if no in-flight compose gate is actually pending, delete it ('rm aidlc/.aidlc-compose-pending') or resolve the pending gate. A stale marker no longer disables the Stop hook, but it should not linger.",
+        pass: true,
+        label: "A proposed plan change is waiting for the person's answer (approve, edit or reject)",
+        fix: "answer the proposed plan change in the chat that shows it",
       });
     }
   } catch {
-    // Compose-marker probe failure is non-fatal for the doctor report.
+    // Compose-question probe failure is non-fatal for the doctor report.
+  }
+  if (existsSync(join(projectDir, "aidlc", ".aidlc-compose-pending"))) {
+    results.push({
+      pass: true,
+      label: "Left over from an earlier AI-DLC version and no longer read: aidlc/.aidlc-compose-pending (safe to delete)",
+      fix: "delete aidlc/.aidlc-compose-pending",
+    });
   }
 
   // A long-open approval gate is healthy waiting, not a hung workflow. Surface
@@ -5970,10 +5949,11 @@ export async function collectDoctorReport(
       const countLabel = subagents.malformed
         ? "malformed"
         : `${subagents.freshCount} fresh, ${subagents.staleCount} stale, oldest ${ageLabel}`;
+      const ledger = shownSubagentInflightPath(projectDir);
       results.push({
         pass: !subagents.malformed && subagents.staleCount === 0,
-        label: `Background-subagent ledger present (aidlc/.aidlc-subagent-inflight, ${countLabel})`,
-        fix: "if no background subagent is actually running, delete it ('rm aidlc/.aidlc-subagent-inflight'). Stale or malformed entries never authorize the Stop hook, but the ledger should not linger.",
+        label: `Background-subagent ledger present (${ledger}, ${countLabel})`,
+        fix: `if no background subagent is actually running, delete it at your own terminal ('rm ${ledger}'). Stale or malformed entries never authorize the Stop hook, but the ledger should not linger.`,
       });
     }
   } catch {
@@ -9305,17 +9285,50 @@ function resolveIntentByName(
   return { ...match, dirName: match.dirName };
 }
 
+// A claim typed while no work is selected here (a teammate's first message in a
+// new clone) goes to the one piece of work here with a Unit by that name,
+// selected as `intent <name>` selects it; the claim then says what it says with
+// work selected. Work whose Unit plan cannot be read counts, so the claim says
+// why. Named as status names them, by record dir where `intent` needs it.
+function claimWhereTheUnitIs(projectDir: string, unit: string): void {
+  let selection: ReturnType<typeof resolveWorkflowSelection>;
+  try {
+    selection = resolveWorkflowSelection(projectDir);
+  } catch {
+    return;
+  }
+  if (selection.intent !== null) return;
+  const space = selection.space;
+  const work = (workToPickUp(projectDir, space, null) ?? []).map(({ intent }) => intent).filter((intent) => {
+    if (!isBindableIntentRecordName(intent.dirName)) return false;
+    const dag = resolveBoltDag(projectDir, intent.dirName, space);
+    return dag.state === "malformed" || (dag.state === "ok" && dag.units.includes(unit));
+  });
+  if (work.length === 0) die(`${unit} is not a Unit of any piece of work here.`);
+  if (work.length > 1) {
+    const all = listIntents(projectDir, space, null);
+    const named = work.map((intent) =>
+      all.filter((i) => i.slug === intent.slug && i.dirName !== null).length > 1 ? intent.dirName : intentDisplayLabel(intent)
+    );
+    die(`${unit} is a Unit of more than one piece of work here (${named.join(", ")}); say which one.`);
+  }
+  handleIntent(projectDir, ["intent", "switch", work[0].dirName as string], {}, new Set(), true);
+}
+
 // `/aidlc intent` (list) · `/aidlc intent <name>` (switch the active-intent
 // cursor) · `/aidlc intent archive|unarchive <name>` (lifecycle). Switching an
 // intent is a PURE cursor write (an intent has no native include — only a
 // space does). The <name> matches a record dir name exactly, or a slug (when
 // unambiguous within the space). --json on the bare list emits the structured
-// query shape; --all includes archived records in the human listing.
+// query shape; --all includes archived records in the human listing. `quiet`
+// selects for a command that says its own result (claimWhereTheUnitIs): what
+// the chat kept for the work it picks still goes to it, said on the next step.
 function handleIntent(
   projectDir: string,
   positional: string[],
   flags: Record<string, string>,
   missingValueFlags: ReadonlySet<string> = new Set(),
+  quiet = false,
 ): void {
   const asJson = flags.json === "true";
   const showAll = flags.all === "true";
@@ -9400,7 +9413,7 @@ function handleIntent(
   // Only the chat this command runs in moves. One typed somewhere else moves
   // the shared selection and asks the open chat once (askTheOpenChatToFollow).
   const sid = selection.sessionId;
-  if (!sid) askTheOpenChatToFollow(projectDir, space, match.dirName, `\`${intentDisplayLabel(match)}\``);
+  if (!sid && !quiet) askTheOpenChatToFollow(projectDir, space, match.dirName, `\`${intentDisplayLabel(match)}\``);
   if (sid) {
     writeSessionBinding(projectDir, sid, space, match.dirName, "switch");
     clearSessionRebindOffer(projectDir, sid);
@@ -9419,6 +9432,11 @@ function handleIntent(
       recordSessionIntentSwitch(projectDir, sid, priorUuid, recordIntentKey(space, match.dirName));
     }
   }
+  const kept = sid ? applyKeptToPickedWork(projectDir, sid, space, match.dirName) : [];
+  if (quiet) {
+    if (sid && kept.length > 0 && !addPendingPersonLines(projectDir, sid, kept)) process.stdout.write(`${kept.join("\n")}\n`);
+    return;
+  }
   // What the person sees after picking or switching: the work they are on now,
   // by the name they know it by.
   const where = space === DEFAULT_SPACE ? "" : ` in space \`${space}\``;
@@ -9431,7 +9449,6 @@ function handleIntent(
     ? null
     : intents.filter((i) => i.slug === prior.slug && i.dirName !== null).length > 1 ? prior.dirName : intentDisplayLabel(prior);
   const back = priorName === null ? "" : ` You were on \`${priorName}\`: \`${entrySkillInvocation()} intent ${priorName}\` goes back.`;
-  const kept = sid ? applyKeptToPickedWork(projectDir, sid, space, match.dirName) : [];
   process.stdout.write(`Now working on \`${intentDisplayLabel(match)}\`${where}.${back}\n`);
   if (kept.length > 0) process.stdout.write(`${kept.join("\n")}\n`);
 }
@@ -9887,11 +9904,14 @@ function workspaceManifestNames(projectDir: string): string[] {
   }
 }
 
-// Where a repo not on disk is cloned from and what repos.json becomes: its own
-// entry, else the person's `--url`, else the repos.json `org`. The address goes
-// to git as given; repos.json, which the team commits, gets it without
-// credentials. With no repos.json, a hosted `--url` creates one naming its owner
-// as the org; a local path or another shape creates none, and the line says so.
+// Where a repo not on disk is cloned from and what repos.json becomes: the
+// person's `--url`, else its own entry (a name-only entry from the repos.json
+// `org`). A name no repos.json lists gets no address made up from the org: the
+// org may be another host's owner, read off the address of the repo that
+// started the list. The address goes to git as given; repos.json, which the
+// team commits, gets it without credentials. With no repos.json, a hosted
+// `--url` creates one naming its owner as the org; a local path or another
+// shape creates none, and the line says so.
 function plannedRepoClone(
   projectDir: string,
   name: string,
@@ -9916,22 +9936,22 @@ function plannedRepoClone(
       note: null,
     };
   }
-  if (url === undefined && manifest === null) {
+  if (url === undefined) {
     die(
-      `${name} is not in this workspace yet, and there is no repos.json with an org to clone it from. ` +
+      `${name} is not in this workspace yet, and no repos.json lists it, so there is no address to clone it from. ` +
         "Give its clone address with --url, or clone it beside the other repos, then add it again.",
     );
   }
-  const kept = url === undefined ? undefined : withoutCredentials(url);
-  const written: WorkspaceRepoEntry = { name, ...(kept === undefined ? {} : { url: kept }) };
+  const kept = withoutCredentials(url);
+  const written: WorkspaceRepoEntry = { name, url: kept };
   const stripped = kept !== url ? " Its address there leaves out the credential." : "";
-  const repo: WorkspaceRepoEntry = { name, ...(url === undefined ? {} : { url }) };
+  const repo: WorkspaceRepoEntry = { name, url };
   if (manifest !== null) {
     const next = workspaceManifestWith(raw, manifest.org, written);
     if (next === null) die(`${name} could not be added to repos.json, which has no repos list. Nothing was changed.`);
     return { repo, org: manifest.org, manifest: { raw, next }, note: `repos.json now lists it.${stripped}` };
   }
-  const owner = hostedAddressOwner(url!);
+  const owner = hostedAddressOwner(url);
   if (owner === null) {
     return {
       repo,
@@ -10748,15 +10768,18 @@ function onboardDocumentInput(
 
   let target = absPath;
   let created = false;
+  let updated = false;
+  let besideChanged: string | undefined;
+  const original = inPlace ? undefined : copiedFromPath(projectRoot, absPath);
   if (!inPlace) {
     try {
       mkdirSync(documentsAbs, { recursive: true });
       kb.assertKnowledgeRootTrusted(projectRoot, space);
-      ({ target, created } = copyIntoDocuments(
-        kb,
-        realpathSync(documentsAbs),
-        basename(portablePath),
-        bytes,
+      // The same file named again, changed: its new bytes go over the copy made
+      // from it, so the document keeps its id (copied_from on the row).
+      ({ target, created, updated, besideChanged } = copyIntoDocuments(
+        kb, realpathSync(documentsAbs), basename(portablePath), bytes,
+        original === undefined ? undefined : () => updateCopiedDocument(projectRoot, kb, space, original, bytes),
       ));
     } catch (error) {
       refuse(`cannot copy ${quoted} into the knowledge folder: ${errorMessage(error)}`);
@@ -10770,7 +10793,10 @@ function onboardDocumentInput(
   // only a refusal or an empty result proves nothing names the copy.
   let mayHaveCommitted = false;
   try {
-    const result = kb.onboard(projectRoot, space, target, new Date().toISOString());
+    const result = kb.onboard(
+      projectRoot, space, target, new Date().toISOString(), undefined,
+      original === undefined ? undefined : new Map([[realpathSync(target), original]]),
+    );
     if (result.refused) failure = result.refused.reason;
     else {
       outcome = result.indexed[0];
@@ -10798,8 +10824,14 @@ function onboardDocumentInput(
   })();
 
   const targetPath = JSON.stringify(relative(projectRoot, target).split(sep).join("/"));
-  const added = created
-    ? `I copied ${quoted} to ${targetPath} and added it to the knowledge base as document ${indexed.id}.`
+  const earlier = besideChanged === undefined
+    ? ""
+    : ` The earlier copy, ${JSON.stringify(`${relative(projectRoot, documentsAbs).split(sep).join("/")}/${besideChanged}`)}, ` +
+      "has changed since it was copied, so I left it as it is; the knowledge base now holds both.";
+  const added = updated && indexed.status === "edited"
+    ? `I updated ${targetPath} to your new ${quoted}; it stays the same document in the knowledge base.`
+    : created
+    ? `I copied ${quoted} to ${targetPath} and added it to the knowledge base as document ${indexed.id}.${earlier}`
     : indexed.status === "already"
       ? `${quoted} is already in the knowledge base as document ${indexed.id}` +
         `${inPlace ? "" : ` (copied to ${targetPath})`}.`
@@ -10914,6 +10946,24 @@ function gitIgnoredAmong(projectRoot: string, absPaths: string[]): Set<string> {
   );
 }
 
+/** Which cap a set of documents would pass, or null when none. */
+type KnowledgeCopyCapBreach =
+  | { cap: "document"; file: string; size: number }
+  | { cap: "count"; count: number }
+  | { cap: "bytes"; count: number; bytes: number };
+
+function knowledgeCopyCapBreach(
+  entries: ReadonlyArray<{ file: string; size: number }>,
+  kb: typeof import("./aidlc-knowledge.ts"),
+): KnowledgeCopyCapBreach | null {
+  const big = entries.find((entry) => entry.size > kb.EXTRACT_INPUT_BYTE_CAP);
+  if (big !== undefined) return { cap: "document", file: big.file, size: big.size };
+  if (entries.length > kb.EXTRACT_BATCH_DOC_CAP) return { cap: "count", count: entries.length };
+  const bytes = entries.reduce((total, entry) => total + entry.size, 0);
+  if (bytes > kb.EXTRACT_BATCH_BYTE_CAP) return { cap: "bytes", count: entries.length, bytes };
+  return null;
+}
+
 /**
  * Why the engine will not copy what the person named: a single document over
  * the per-document cap, or a folder over a batch cap. Checked BEFORE the copy,
@@ -10927,22 +10977,19 @@ function knowledgeCopyCapRefusal(
   kb: typeof import("./aidlc-knowledge.ts"),
 ): string | null {
   const smaller = "Name a subfolder, or one document at a time.";
-  const big = entries.find((entry) => entry.size > kb.EXTRACT_INPUT_BYTE_CAP);
-  if (big !== undefined) {
-    return `${toPosix(relative(projectDir, big.file))} is ${big.size} bytes, over the ` +
+  const breach = knowledgeCopyCapBreach(entries, kb);
+  if (breach === null) return null;
+  if (breach.cap === "document") {
+    return `${toPosix(relative(projectDir, breach.file))} is ${breach.size} bytes, over the ` +
       `${kb.EXTRACT_INPUT_BYTE_CAP}-byte per-document cap; nothing was copied. Split it or reduce it ` +
       "below the cap, then name it again.";
   }
-  if (entries.length > kb.EXTRACT_BATCH_DOC_CAP) {
-    return `${shown} holds ${entries.length} documents, over the ${kb.EXTRACT_BATCH_DOC_CAP}-document ` +
+  if (breach.cap === "count") {
+    return `${shown} holds ${breach.count} documents, over the ${kb.EXTRACT_BATCH_DOC_CAP}-document ` +
       `batch cap; nothing was copied or indexed. ${smaller}`;
   }
-  const bytes = entries.reduce((total, entry) => total + entry.size, 0);
-  if (bytes > kb.EXTRACT_BATCH_BYTE_CAP) {
-    return `${shown} holds ${entries.length} documents of ${bytes} bytes, over the ` +
-      `${kb.EXTRACT_BATCH_BYTE_CAP}-byte batch cap; nothing was copied or indexed. ${smaller}`;
-  }
-  return null;
+  return `${shown} holds ${breach.count} documents of ${breach.bytes} bytes, over the ` +
+    `${kb.EXTRACT_BATCH_BYTE_CAP}-byte batch cap; nothing was copied or indexed. ${smaller}`;
 }
 
 /** What the command layer copied in for the person, for the line it says. */
@@ -10954,24 +11001,80 @@ export interface KnowledgeDocumentCopy {
   gitIgnored: "yes" | "no" | "unknown";
   /** Files inside a named folder that git ignores, left where they are. */
   leftOut: number;
+  /** A copied file's project-relative path, for the row's copied_from (never a folder's). */
+  original?: string;
+  /** The file's new bytes were written over the copy made from it before. */
+  updated?: boolean;
+  /** The earlier copy made from it (documents-relative) had changed, so this one went in beside it. */
+  besideChanged?: string;
 }
 
-export function copyNamedDocumentIntoKnowledge(
+/**
+ * The project-relative POSIX path a copy's `copied_from` records for the file
+ * the person named, or undefined when there is none to record.
+ */
+function copiedFromPath(projectDir: string, absPath: string): string | undefined {
+  const rel = toPosix(relative(realpathSync(projectDir), realpathSync(absPath)));
+  return rel === "" || rel === ".." || rel.startsWith("../") || isAbsolute(rel) ? undefined : rel;
+}
+
+/**
+ * Writes a changed original's bytes over the copy made from it, when the
+ * knowledge tool finds that one copy (copiedDocumentFor: its row records this
+ * original and the copy still holds the bytes copied). Returns `{ target }`, the
+ * copy's path; `{ changedCopy }` when the one copy made from it has changed, so
+ * the caller copies beside it and says so; or null to copy beside it as before. The bytes are staged beside the copy
+ * under a dot name the walk skips, the copy is checked again just before the
+ * rename (an edit made meanwhile is never written over), and the rename keeps
+ * the Windows retry the atomic writers use.
+ */
+function updateCopiedDocument(
   projectDir: string,
   kb: typeof import("./aidlc-knowledge.ts"),
   space: string,
+  original: string,
+  bytes: Buffer,
+): { target: string } | { changedCopy: string } | null {
+  const digest = kb.sha256Hex(bytes);
+  const found = kb.copiedDocumentFor(projectDir, space, original, digest);
+  if (found === null || "changedCopy" in found) return found;
+  if (found.holdsNew) return { target: found.copyPath };
+  const staged = documentStagingPath(dirname(found.copyPath));
+  try {
+    writeFileSync(staged, bytes, { flag: "wx" });
+    const still = kb.copiedDocumentFor(projectDir, space, original, digest);
+    if (still === null || "changedCopy" in still) return still;
+    if (still.copyPath !== found.copyPath) return null;
+    if (!still.holdsNew) replaceWithStaged(staged, found.copyPath);
+    return { target: found.copyPath };
+  } catch {
+    return null;
+  } finally {
+    try { unlinkSync(staged); } catch { /* renamed over the copy, or never written */ }
+  }
+}
+
+/** A named document or folder, read for copying but not yet copied. */
+interface NamedDocumentCopyPlan {
+  real: string;
+  shown: string;
+  folder: boolean;
+  gitIgnored: "yes" | "no" | "unknown";
+  copyable: Array<{ file: string; size: number }>;
+  leftOut: number;
+}
+
+function planNamedDocumentCopy(
+  projectDir: string,
+  kb: typeof import("./aidlc-knowledge.ts"),
   absPath: string,
-): KnowledgeDocumentCopy | { refusal: string } {
-  const documentsReal = ensureKnowledgeDocumentsFolder(projectDir, kb, space);
+): NamedDocumentCopyPlan {
   const shown = toPosix(relative(projectDir, absPath));
   const gitIgnored = documentInputGitIgnored(projectDir, shown);
   const real = realpathSync(absPath);
   const named = statSync(real);
   if (!named.isDirectory()) {
-    const refusal = knowledgeCopyCapRefusal(projectDir, shown, [{ file: real, size: named.size }], kb);
-    if (refusal !== null) return { refusal };
-    const { target } = copyIntoDocuments(kb, documentsReal, basename(real), readFileSync(real));
-    return { target, files: 1, gitIgnored, leftOut: 0 };
+    return { real, shown, folder: false, gitIgnored, copyable: [{ file: real, size: named.size }], leftOut: 0 };
   }
   const found: Array<{ file: string; size: number }> = [];
   for (const file of kb.walkDocuments(real)) {
@@ -10987,10 +11090,30 @@ export function copyNamedDocumentIntoKnowledge(
     ? gitIgnoredAmong(projectDir, found.map((entry) => entry.file))
     : new Set<string>();
   const copyable = found.filter((entry) => !ignoredInside.has(entry.file));
-  const refusal = knowledgeCopyCapRefusal(projectDir, shown, copyable, kb);
-  if (refusal !== null) return { refusal };
-  if (copyable.length === 0) {
-    throw new Error(`${shown} holds no documents to add`);
+  return { real, shown, folder: true, gitIgnored, copyable, leftOut: found.length - copyable.length };
+}
+
+function carryOutNamedDocumentCopy(
+  projectDir: string,
+  kb: typeof import("./aidlc-knowledge.ts"),
+  space: string,
+  documentsReal: string,
+  plan: NamedDocumentCopyPlan,
+): KnowledgeDocumentCopy {
+  const { real, gitIgnored, copyable, leftOut } = plan;
+  if (!plan.folder) {
+    const bytes = readFileSync(real);
+    const original = copiedFromPath(projectDir, real);
+    const { target, updated, besideChanged } = copyIntoDocuments(
+      kb, documentsReal, basename(real), bytes,
+      original === undefined ? undefined : () => updateCopiedDocument(projectDir, kb, space, original, bytes),
+    );
+    return {
+      target, files: 1, gitIgnored, leftOut,
+      ...(original === undefined ? {} : { original }),
+      ...(updated ? { updated: true } : {}),
+      ...(besideChanged === undefined ? {} : { besideChanged }),
+    };
   }
   // A folder of its own name, never merged into one already there: the copy is
   // this folder as it is now, not a blend of two.
@@ -11007,7 +11130,105 @@ export function copyNamedDocumentIntoKnowledge(
     mkdirSync(dirname(target), { recursive: true });
     writeFileSync(target, readFileSync(entry.file), { flag: "wx" });
   }
-  return { target: root, files: copyable.length, gitIgnored, leftOut: found.length - copyable.length };
+  return { target: root, files: copyable.length, gitIgnored, leftOut };
+}
+
+export function copyNamedDocumentIntoKnowledge(
+  projectDir: string,
+  kb: typeof import("./aidlc-knowledge.ts"),
+  space: string,
+  absPath: string,
+): KnowledgeDocumentCopy | { refusal: string } {
+  const documentsReal = ensureKnowledgeDocumentsFolder(projectDir, kb, space);
+  const plan = planNamedDocumentCopy(projectDir, kb, absPath);
+  const refusal = knowledgeCopyCapRefusal(projectDir, plan.shown, plan.copyable, kb);
+  if (refusal !== null) return { refusal };
+  if (plan.folder && plan.copyable.length === 0) {
+    throw new Error(`${plan.shown} holds no documents to add`);
+  }
+  return carryOutNamedDocumentCopy(projectDir, kb, space, documentsReal, plan);
+}
+
+/**
+ * Several documents or folders named in one onboard, copied in together. Each
+ * is checked on its own first, and one that cannot be copied (an empty folder,
+ * or one over a cap by itself) is left out with why, so it never costs the
+ * person the others. The rest, with the named paths already under
+ * `documents/` (`inPlace`), are one batch: over a batch cap together, nothing
+ * is copied, because the verb would refuse them after the copies were made.
+ */
+export function copyNamedDocumentsIntoKnowledge(
+  projectDir: string,
+  kb: typeof import("./aidlc-knowledge.ts"),
+  space: string,
+  toCopy: readonly string[],
+  inPlace: readonly string[],
+  namedCount: number,
+): { outcomes: Array<KnowledgeDocumentCopy | { reason: string }> } | { refusal: string } {
+  const documentsReal = ensureKnowledgeDocumentsFolder(projectDir, kb, space);
+  const plans = toCopy.map((absPath): NamedDocumentCopyPlan | { reason: string } => {
+    const plan = planNamedDocumentCopy(projectDir, kb, absPath);
+    const breach = knowledgeCopyCapBreach(plan.copyable, kb);
+    if (breach?.cap === "document") {
+      const which = breach.file === plan.real ? "it" : `${toPosix(relative(projectDir, breach.file))} in it`;
+      return { reason: `${which} is ${breach.size} bytes, over the ${kb.EXTRACT_INPUT_BYTE_CAP}-byte per-document cap` };
+    }
+    if (breach?.cap === "count") {
+      return { reason: `it holds ${breach.count} documents, over the ${kb.EXTRACT_BATCH_DOC_CAP}-document batch cap` };
+    }
+    if (breach?.cap === "bytes") {
+      return {
+        reason: `it holds ${breach.count} documents of ${breach.bytes} bytes, over the ` +
+          `${kb.EXTRACT_BATCH_BYTE_CAP}-byte batch cap`,
+      };
+    }
+    if (plan.folder && plan.copyable.length === 0) {
+      return { reason: plan.leftOut > 0 ? "every file in it is kept out of git" : "it holds no documents" };
+    }
+    return plan;
+  });
+  const batch = new Map<string, { file: string; size: number }>();
+  for (const plan of plans) {
+    if ("reason" in plan) continue;
+    for (const entry of plan.copyable) batch.set(entry.file, entry);
+  }
+  const inPlaceFiles = inPlace.flatMap((absPath) => {
+    const real = realpathSync(absPath);
+    return statSync(real).isDirectory() ? kb.walkDocuments(real) : [real];
+  });
+  for (const work of kb.onboardBatchWork(projectDir, space, inPlaceFiles)) {
+    batch.set(work.abs, { file: work.abs, size: work.bytes });
+  }
+  const together = knowledgeCopyCapBreach(
+    [...batch.values()].filter((entry) => entry.size <= kb.EXTRACT_INPUT_BYTE_CAP),
+    kb,
+  );
+  if (together?.cap === "count") {
+    return {
+      refusal: `The ${namedCount} paths you named hold ${together.count} documents, over the ` +
+        `${kb.EXTRACT_BATCH_DOC_CAP}-document batch cap; nothing was copied or indexed. Name ` +
+        `${kb.EXTRACT_BATCH_DOC_CAP} or fewer documents at a time.`,
+    };
+  }
+  if (together?.cap === "bytes") {
+    return {
+      refusal: `The ${namedCount} paths you named hold ${together.count} documents of ${together.bytes} bytes, ` +
+        `over the ${kb.EXTRACT_BATCH_BYTE_CAP}-byte batch cap; nothing was copied or indexed. Name fewer ` +
+        "documents at a time.",
+    };
+  }
+  // The same original named twice is one copy.
+  const copied = new Map<string, KnowledgeDocumentCopy>();
+  return {
+    outcomes: plans.map((plan) => {
+      if ("reason" in plan) return plan;
+      const earlier = copied.get(plan.real);
+      if (earlier !== undefined) return earlier;
+      const copy = carryOutNamedDocumentCopy(projectDir, kb, space, documentsReal, plan);
+      copied.set(plan.real, copy);
+      return copy;
+    }),
+  };
 }
 
 // Why an onboarded document came back with no text, in the person's terms.
@@ -11030,12 +11251,19 @@ function documentInputNoTextReason(shown: { state: string }): string {
 
 // The copy keeps the file's own name in knowledge/documents/ and never
 // replaces a file there: one with the same name and bytes is this copy already,
-// and any other moves the copy to <stem>-2<ext>, -3, and so on. Leading dots
+// and any other moves the copy to <stem>-2<ext>, -3, and so on. The one
+// exception is `update` (updateCopiedDocument): the copy made earlier from the
+// same original, while nobody has edited it, takes the new bytes in place. Leading dots
 // are dropped and the names the knowledge walk skips are passed over, so a
 // later sync still sees the copy. The bytes land in a dot-named staging file
 // first and are published with installWithoutReplacing, which never replaces a
 // name, whichever temp folder or computer the other copy runs from.
 const DOCUMENT_INPUT_COPY_NAME_LIMIT = 100;
+// A dot name the knowledge walk skips, so a sync running beside a copy never
+// indexes the bytes on their way in.
+function documentStagingPath(dir: string): string {
+  return join(dir, `.aidlc-document-input-${process.pid}-${randomUUID()}.tmp`);
+}
 // ponytail: a 0-byte file made this second may be another copy's claim that
 // fills a moment later; a claim that takes over a second to fill leaves a -2
 // copy with the same bytes.
@@ -11046,7 +11274,11 @@ function copyIntoDocuments(
   documentsReal: string,
   name: string,
   bytes: Buffer,
-): { target: string; created: boolean } {
+  update?: () => { target: string } | { changedCopy: string } | null,
+): { target: string; created: boolean; updated: boolean; besideChanged?: string } {
+  let besideChanged: string | undefined;
+  const made = (target: string) =>
+    ({ target, created: true, updated: false, ...(besideChanged === undefined ? {} : { besideChanged }) });
   const base = name.replace(/^\.+/, "") || "document";
   const ext = extname(base);
   const stem = base.slice(0, base.length - ext.length);
@@ -11074,19 +11306,26 @@ function copyIntoDocuments(
       }
     };
     if (lstatSync(target, { throwIfNoEntry: false }) !== undefined) {
-      if (holdsSameBytes()) return { target, created: false };
+      if (holdsSameBytes()) return { target, created: false, updated: false };
       continue;
     }
-    const staged = join(documentsReal, `.aidlc-document-input-${process.pid}-${randomUUID()}.tmp`);
+    // Every copy already holding these bytes was looked for first (one an older
+    // release made beside the first, say); only then is the copy made from this
+    // original updated in place, before a new name is taken.
+    const over = update?.() ?? null;
+    update = undefined;
+    if (over !== null && "target" in over) return { target: over.target, created: false, updated: true };
+    if (over !== null) besideChanged = over.changedCopy;
+    const staged = documentStagingPath(documentsReal);
     try {
       writeFileSync(staged, bytes, { flag: "wx" });
       installWithoutReplacing(staged, target);
-      return { target, created: true };
+      return made(target);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       // Another run published this name first: if it holds the same bytes it
       // is the same copy, not a reason to make a second one.
-      if (holdsSameBytes()) return { target, created: false };
+      if (holdsSameBytes()) return { target, created: false, updated: false };
     } finally {
       try { unlinkSync(staged); } catch { /* never created, or already gone */ }
     }
@@ -12602,9 +12841,12 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
           newStageProgress += `- ${marker} ${stage.slug} \u2014 ${suffix}\n`;
         }
       }
-      const stageProgressRegex = /## Stage Progress\n<!-- [^\n]* -->\n([\s\S]*?)(?=\n## (?!Stage Progress))/;
+      // A Windows clone checks the state file out with CRLF line endings, so
+      // the list is found with either ending and written back in its own.
+      const stageProgressRegex = /## Stage Progress\r?\n<!-- [^\r\n]* -->\r?\n([\s\S]*?)(?=\r?\n## (?!Stage Progress))/;
       const stageProgressHeader = "## Stage Progress\n<!-- Checkbox states: [ ] not started, [-] in progress, [?] awaiting approval (gate open), [R] revising (user rejected gate), [x] completed, [S] skipped via --stage/--phase jump -->\n";
-      content = content.replace(stageProgressRegex, stageProgressHeader + newStageProgress);
+      const stageProgressEol = stageProgressRegex.exec(content)?.[0].includes("\r\n") ? "\r\n" : "\n";
+      content = content.replace(stageProgressRegex, (stageProgressHeader + newStageProgress).replaceAll("\n", stageProgressEol));
       content = setField(content, "Scope", newScope);
       // The new scope's grid replaces any plan composed for this piece of work.
       content = removeField(content, PLAN_FIELD);
@@ -13212,15 +13454,15 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
       : { content, audit: [], lines: [] };
     content = setField(settingsUpdate.content, "Last Updated", isoTimestamp());
 
-    // The person's approval at the in-flight compose question: its step runs
-    // this before deleting the question's marker and names nothing after it,
-    // so the work goes on from here, as after their approval at a stage's gate.
-    // The engine's other plan-change steps say what comes after themselves.
+    // The person's approval at the in-flight compose question, read before
+    // this write closes it: its step names nothing after this, so the work
+    // goes on from here, as after their approval at a stage's gate. The
+    // engine's other plan-change steps say what comes after themselves.
     let approvedAtCompose = false;
     try {
-      approvedAtCompose = composeGateOpen(projectDir);
+      approvedAtCompose = composeGateOpen(projectDir, flags.intent, flags.space);
     } catch {
-      // An unreadable marker names no step and nobody; the plan change still lands.
+      // An unreadable step names no step and nobody; the plan change still lands.
     }
 
     // Audit first, as config-change does, in one batch: a failed append leaves
@@ -13257,7 +13499,7 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
         (droppedUnitWork === null ? "" : `${droppedUnitWork}\n`) +
         settingsUpdate.lines.map((line) => `${line}\n`).join("") +
         (approvedAtCompose
-          ? "Then delete `aidlc/.aidlc-compose-pending`, apply any setting the same approval also named, and run " +
+          ? "Then apply any setting the same approval also named, and run " +
             `\`${aidlcToolInvocation("orchestrate")} next\`; follow what it returns, so the work carries on.\n`
           : ""),
     );
@@ -14123,6 +14365,7 @@ export async function main(argv: string[]): Promise<void> {
       await handleStatus(projectDir, flags);
       break;
     case "claim":
+      if (positional.length === 2 && !("help" in flags) && !rawArgs.includes("-h")) claimWhereTheUnitIs(projectDir, positional[1]);
       unitMain([
         "claim",
         ...rawArgs.slice(1),

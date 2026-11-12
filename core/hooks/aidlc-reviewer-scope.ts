@@ -35,7 +35,7 @@
 //
 // Reviewer read-scope enforcement fails open when its dispatch evidence is
 // unavailable: no record, a stale record (mtime beyond
-// REVIEWER_DISPATCH_TTL_MS - janitored like the compose marker), malformed
+// REVIEWER_DISPATCH_TTL_MS, and janitored), malformed
 // stdin or record JSON, an unknown tool, a non-reviewer agent, or any throw
 // allows the call. AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1 disables that read-scope
 // check. Claimed-checkout Unit ownership is evaluated first and remains
@@ -73,7 +73,7 @@ import {
   validSessionId,
 } from "../tools/aidlc-lib.ts";
 import { scopeStampLanded } from "../tools/aidlc-unit-landing.ts";
-import { writeTargets } from "./review-freeze-command.ts";
+import { shellPatchTargets, writeTargets } from "./review-freeze-command.ts";
 
 const HOOK_NAME = "reviewer-scope";
 
@@ -980,9 +980,19 @@ async function checkScope(input: string, projectDir: string, outside: boolean, b
       };
       // A shell call that writes nothing (a read, a listing, a search) is the
       // checkout owner's own: only a command that writes is held to this Unit.
-      const writes = toolName !== "Bash" || writeTargets("Bash", toolInput, context.cwd).length > 0;
-      if (writes) {
-        scopedVerdict = evaluateReviewerScope(toolName, toolInput, { unit: unitScope.unit, exempt: [] }, context);
+      // A line whose every write is a patch's file is judged by those files,
+      // never by the patch's text, which may name another Unit's folder.
+      const written = toolName === "Bash" ? writeTargets("Bash", toolInput, context.cwd) : [];
+      const command = typeof toolInput?.command === "string" ? toolInput.command : "";
+      const patched = toolName === "Bash" ? shellPatchTargets(command, context.cwd) : [];
+      const scope = { unit: unitScope.unit, exempt: [] };
+      if (patched.length > 0 && written.every((target) => patched.includes(target))) {
+        for (const file of patched) {
+          scopedVerdict = evaluateReviewerScope("Write", { file_path: file }, scope, context);
+          if (scopedVerdict.block) break;
+        }
+      } else if (toolName !== "Bash" || written.length > 0) {
+        scopedVerdict = evaluateReviewerScope(toolName, toolInput, scope, context);
       }
     } catch (e) {
       recordHookDrop(projectDir, HOOK_NAME, errorMessage(e));
@@ -1068,7 +1078,7 @@ async function checkScope(input: string, projectDir: string, outside: boolean, b
     if (ageMs > REVIEWER_DISPATCH_TTL_MS) {
       // Orphaned record (a session crashed between dispatch and verdict):
       // ignore it and best-effort janitor it so a stale window cannot keep
-      // refusing sibling access indefinitely. Mirrors the compose marker.
+      // refusing sibling access indefinitely.
       try {
         unlinkSync(recordPath);
       } catch {
