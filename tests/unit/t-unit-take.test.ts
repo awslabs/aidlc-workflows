@@ -1898,6 +1898,40 @@ describe("the claims' home is the lead's address", () => {
     }
   });
 
+  // Which of two claim copies is ahead reads git three times, and a look
+  // reads the claims several times: on Windows Server the fork's cases ran a
+  // fifth slower until each pair's answer was kept for the command.
+  test("a look at a result the team's fork holds reads each pair of claim copies once", () => {
+    const { home, hosts } = forkedLead();
+    committedByPusher(home.remote);
+    const { dir: pay, fork } = forkedTeam(home, hosts, "pay");
+    expect(takeFrom("payments", pay, "refunds").status).toBe(0);
+    git(home.dir, ["remote", "add", "team-a", fork]);
+    next(home.dir);
+    const record = buildDir(pay, "payments", "refunds");
+    codeGenerated(pay, record);
+    finishBuild(record);
+    expect(run(UNIT, ["push"], pay).status).toBe(0);
+    const trace = join(tempDir("trace"), "git.trace");
+    const board = run(ORCH, ["team-board"], home.dir, { ...ENV, GIT_TRACE: trace });
+    expect(board.status, board.out).toBe(0);
+    expect(board.out).toMatch(/^- refunds, payments space: built by pay, /m);
+    // Each comparison's tree reads, as the pair of claim commits it compared.
+    const pairs: string[] = [];
+    let tip: string | null = null;
+    for (const line of traced(trace)) {
+      const tree = /rev-parse --verify --quiet '?([0-9a-f]{40})\^\{tree\}/.exec(line);
+      const history = /log '?--format=%T'? '?--max-count=200'? '?([0-9a-f]{40})/.exec(line);
+      if (tree) tip = tree[1];
+      else if (history && tip !== null) {
+        pairs.push(`${tip} ${history[1]}`);
+        tip = null;
+      }
+    }
+    expect(pairs.length).toBeGreaterThan(0);
+    expect(pairs.length, pairs.join("\n")).toBe(new Set(pairs).size);
+  });
+
   // The fork leg: the lead heard "I've told pay refunds is merged." and the
   // team heard nothing.
   test("the team's look whose fetch brings its own Unit's merge says so once, and never again", () => {

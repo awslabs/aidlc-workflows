@@ -1072,15 +1072,26 @@ function sendToOutbox(projectDir: string, outbox: string, ref: string, commitOid
 // commit in as a commit of its own with the same tree, so the two histories
 // part with the same claim); "same" when it holds the tip's own tree; else
 // null (it parted from the tip, or is behind it). Read from this clone's own
-// objects; a commit not here is null.
+// objects; a commit not here is null. Two commits' answer never changes, so it
+// is kept for the command (a step reads the claims several times, and each read
+// is up to three git calls a pair, slow on Windows); one read while a commit
+// was not here yet is not kept.
+const claimsAhead = new Map<string, "ahead" | "same" | null>();
 function claimAhead(projectDir: string, tip: string, oid: string): "ahead" | "same" | null {
   if (tip === oid) return "same";
-  if (localGit(projectDir, ["merge-base", "--is-ancestor", tip, oid]).ok) return "ahead";
+  const pair = `${tip} ${oid}`;
+  const kept = claimsAhead.get(pair);
+  if (kept !== undefined) return kept;
+  const keep = (answer: "ahead" | "same" | null): "ahead" | "same" | null => {
+    claimsAhead.set(pair, answer);
+    return answer;
+  };
+  if (localGit(projectDir, ["merge-base", "--is-ancestor", tip, oid]).ok) return keep("ahead");
   const tipTree = localGit(projectDir, ["rev-parse", "--verify", "--quiet", `${tip}^{tree}`]).stdout.trim();
   const trees = localGit(projectDir, ["log", "--format=%T", "--max-count=200", oid]).stdout.split(/\r?\n/).map((tree) => tree.trim()).filter(Boolean);
   if (tipTree === "" || trees.length === 0) return null;
-  if (trees[0] === tipTree) return "same";
-  return trees.slice(1).includes(tipTree) ? "ahead" : null;
+  if (trees[0] === tipTree) return keep("same");
+  return keep(trees.slice(1).includes(tipTree) ? "ahead" : null);
 }
 
 // The claim this build goes on from: its take as the team's own remote holds
