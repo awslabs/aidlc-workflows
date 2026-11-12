@@ -736,6 +736,11 @@ default is 1,800,000 milliseconds (30 minutes). The override must be an integer
 from 1 through 2,147,483,647 and applies to each execution when verification
 reruns a check that updated its own evidence. It is accepted only with
 `--action verify`; it does not change the approved command or evidence identity.
+`aidlc engine swarm check` and `swarm finalize` take the same `--timeout-ms`, with
+the same default and range, for each run of the command in a Unit's worktree.
+A swarm run stopped at its limit reports `reason: "error"` with a `detail` that
+says so; unlike checkpoint verification, it does not retire the command's process
+group.
 
 On timeout, verification kills its owned process group on POSIX, or its process
 tree using `taskkill /T /F` on Windows, and waits for bounded cleanup before

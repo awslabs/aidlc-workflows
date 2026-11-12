@@ -2582,9 +2582,16 @@ Verification Command in each prepared Unit worktree, with or without Constructio
 Checkpoints:
 
 ```bash
-aidlc engine swarm check <Unit> [--test-file <protected spec>] [--show-output]
-aidlc engine swarm finalize --batch <N> --units "<all Units>" --claimed "<converged Units>"
+aidlc engine swarm check <Unit> [--test-file <protected spec>] [--show-output] [--timeout-ms <milliseconds>]
+aidlc engine swarm finalize --batch <N> --units "<all Units>" --claimed "<converged Units>" [--timeout-ms <milliseconds>]
 ```
+
+Each run stops the command after 30 minutes. For a longer project check, add
+`--timeout-ms` (`3600000` is one hour) to `check` and to `finalize`; the value
+must be an integer from 1 through 2147483647, as for `checkpoint --action
+verify`. A run stopped at its limit reports `"reason": "error"` with a `detail`
+that says the command was stopped before it finished, so it never reads as a
+failing project check.
 
 `--check-cmd` is optional, with or without checkpoints; if supplied, its
 canonical digest must match the authorized command. A missing authorization
