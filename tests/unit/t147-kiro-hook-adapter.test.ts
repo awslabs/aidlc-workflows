@@ -2923,6 +2923,12 @@ describe("t147 Kiro CLI reads what the person typed from the expanded skill body
           "engine orchestrate next express: 'add a version flag'\n",
       );
       expect(guard(run("express: 'add a version flag'")).code).toBe(0);
+      // A word that is a verb only first on the line is theirs after the name.
+      const composed = runAdapter(dir, "verb-intercept", {
+        cwd: dir, session_id: session, prompt: expanded("express: compose a deployment tool"),
+      }, [], env);
+      expect(calls(composed.stdout)).toContain("engine orchestrate next express: 'compose a deployment tool'\n");
+      expect(guard(run("express: 'compose a deployment tool'")).code).toBe(0);
 
       // Both calls repeat the request: one too long to write out twice in what
       // Kiro hands the agent from a hook gets the typed line alone, as any

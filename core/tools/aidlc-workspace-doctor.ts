@@ -42,11 +42,16 @@ export interface DoctorCheck {
   fix?: string;
 }
 
+// Written and removed only by the Kiro CLI (V2) hook adapter
+// (harness/kiro/hooks/aidlc-kiro-adapter.ts), which owns its name.
+const FORWARDING_LATCH = "aidlc/.aidlc-forwarding-latch";
+
 /**
  * Workspace-manifest health rows for `/aidlc --doctor` (all advisory).
  *
- * W1, the request folder (W1c) and record visibility run in any git workspace; W2/W3 run only when a repos.json manifest is
- * present at the workspace root (the declared multi-repo signal). A single-repo
+ * W1, the request folder and forwarding latch (W1c) and record visibility run
+ * in any git workspace; W2/W3 run only when a repos.json manifest is present at
+ * the workspace root (the declared multi-repo signal). A single-repo
  * install or a bare test fixture has no repos.json, so W2/W3 skip silently and
  * no manifest-specific rows are added.
  */
@@ -54,12 +59,13 @@ export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
   const results: DoctorCheck[] = [];
   const syncCmd = aidlcToolInvocation("workspace-sync");
 
-  // W1c first - Request files git can see: one committed before the folder
-  // was ignored stays tracked, so each later request changes it in git, and a
-  // project whose .gitignore part is older, or a later rule of the team's,
-  // leaves the folder unignored. Doctor names the steps and never runs them;
-  // while the row stands, W1 gives no commit command, since `git add aidlc/`
-  // would take the request in.
+  // W1c first - Files that hold the person's words and that git can see (the
+  // request folder, the Kiro CLI (V2) forwarding latch): one committed before
+  // it was ignored stays tracked, so each later request changes it in git, and
+  // a project whose .gitignore part is older, or a later rule of the team's,
+  // leaves it unignored. Doctor names the steps and never runs them; while
+  // either row stands, W1 gives no commit command, since `git add aidlc/`
+  // would take the words in.
   const git = (args: string[], input?: string) =>
     Bun.spawnSync({
       cmd: ["git", "-C", projectDir, ...args],
@@ -71,22 +77,35 @@ export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
     });
   const entries = (bytes: Uint8Array): string[] =>
     [...new Set(new TextDecoder().decode(bytes).split("\0").filter(Boolean))];
-  let requestRow: DoctorCheck | null = null;
-  let requestBlocksCommit = false;
-  try {
-    const trackedProc = git(["ls-files", "-z", "--", REQUEST_TEXT_DIR]);
-    const untrackedProc = git(["ls-files", "-z", "--others", "--exclude-standard", "--", REQUEST_TEXT_DIR]);
-    // Taken out of git but not committed yet: teammates still get the file.
-    const removedProc = git(["diff", "--cached", "--relative", "--no-renames", "--name-only", "-z", "--diff-filter=D", "--", REQUEST_TEXT_DIR]);
-    // A conflicted file is listed once per stage.
-    const tracked = trackedProc.exitCode === 0 ? entries(trackedProc.stdout) : [];
-    const removedList = removedProc.exitCode === 0 ? entries(removedProc.stdout) : [];
-    // A removed file still on disk and not ignored is counted once, as removed.
-    const untracked = untrackedProc.exitCode === 0
-      ? entries(untrackedProc.stdout).filter((path) => !removedList.includes(path)).length
-      : 0;
-    const removed = removedList.length;
-    if (tracked.length + untracked + removed > 0) {
+  // One row for each place that holds the person's words: the request folder,
+  // and the Kiro CLI (V2) hook's forwarding latch, the first call it named for
+  // a request of theirs, which `git add aidlc/` took in before the .gitignore
+  // part listed it.
+  const heldWordsRow = (held: {
+    name: string;
+    path: string;
+    folder: boolean;
+    label: (counts: string) => string;
+    // A file only one harness writes adds no row when its check fails; the
+    // records and request-folder rows, which are never quiet, say when git
+    // cannot run.
+    quietWhenSkipped?: boolean;
+  }): { row: DoctorCheck | null; blocksCommit: boolean } => {
+    const shown = held.folder ? `${held.path}/` : held.path;
+    try {
+      const trackedProc = git(["ls-files", "-z", "--", held.path]);
+      const untrackedProc = git(["ls-files", "-z", "--others", "--exclude-standard", "--", held.path]);
+      // Taken out of git but not committed yet: teammates still get the file.
+      const removedProc = git(["diff", "--cached", "--relative", "--no-renames", "--name-only", "-z", "--diff-filter=D", "--", held.path]);
+      // A conflicted file is listed once per stage.
+      const tracked = trackedProc.exitCode === 0 ? entries(trackedProc.stdout) : [];
+      const removedList = removedProc.exitCode === 0 ? entries(removedProc.stdout) : [];
+      // A removed file still on disk and not ignored is counted once, as removed.
+      const untracked = untrackedProc.exitCode === 0
+        ? entries(untrackedProc.stdout).filter((path) => !removedList.includes(path)).length
+        : 0;
+      const removed = removedList.length;
+      if (tracked.length + untracked + removed === 0) return { row: null, blocksCommit: false };
       // A file git shows as untracked is not ignored; every tracked or removed
       // one is tried against the ignore rules as if untracked.
       const tried = [...tracked, ...removedList];
@@ -94,7 +113,7 @@ export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
         ? null
         : git(["check-ignore", "--no-index", "--stdin", "-z"], `${tried.join("\0")}\0`);
       const ignored = ignoredProc !== null && entries(ignoredProc.stdout).length === tried.length;
-      const held = [
+      const counts = [
         ...(tracked.length > 0 ? [`${tracked.length} that git tracks`] : []),
         ...(untracked > 0 ? [`${untracked} not ignored`] : []),
         ...(removed > 0 ? [`${removed} taken out of git, not committed yet`] : []),
@@ -105,14 +124,14 @@ export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
         ...(ignored
           ? []
           : [
-            `add the line \`${REQUEST_TEXT_DIR}/\` to the project folder's .gitignore, ` +
+            `add the line \`${shown}\` to the project folder's .gitignore, ` +
             "and check no later rule of yours un-ignores it",
           ]),
         ...(tracked.length > 0
-          ? [
-            `in the project folder, take the tracked ones out of git, keeping the files: ` +
-            `\`git rm --cached -r -f -- ${REQUEST_TEXT_DIR}/\``,
-          ]
+          ? [held.folder
+            ? `in the project folder, take the tracked ones out of git, keeping the files: ` +
+              `\`git rm --cached -r -f -- ${shown}\``
+            : `in the project folder, take it out of git, keeping the file: \`git rm --cached -f -- ${shown}\``]
           : []),
         // The removal, and the ignore rule, reach teammates' clones only once
         // pushed; a refresh may have left the rule in .gitignore uncommitted.
@@ -122,20 +141,37 @@ export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
             : "commit and push the removal and the .gitignore change"]
           : ["commit and push the .gitignore change"]),
       ];
-      // `git add aidlc/` would take a request in while git tracks one, shows
-      // one, or holds a removed one the folder does not ignore; a staged
-      // removal in an ignored folder leaves the records row its command.
-      requestBlocksCommit = tracked.length + untracked > 0 || (removed > 0 && !ignored);
-      requestRow = {
-        pass: false,
-        severity: "warn",
-        label: `Request folder: files in ${REQUEST_TEXT_DIR}/ hold your own requests (${held.join(", ")})`,
-        fix: steps.join(", then "),
+      // `git add aidlc/` would take the words in while git tracks them, shows
+      // them, or holds a removed file the ignore rules do not cover; a staged
+      // removal of an ignored file leaves the records row its command.
+      return {
+        row: { pass: false, severity: "warn", label: held.label(counts.join(", ")), fix: steps.join(", then ") },
+        blocksCommit: tracked.length + untracked > 0 || (removed > 0 && !ignored),
+      };
+    } catch (e) {
+      return {
+        row: held.quietWhenSkipped ? null : { pass: true, label: `${held.name}: check skipped (advisory) - ${errorMessage(e)}` },
+        blocksCommit: false,
       };
     }
-  } catch (e) {
-    requestRow = { pass: true, label: `Request folder: check skipped (advisory) - ${errorMessage(e)}` };
-  }
+  };
+  const request = heldWordsRow({
+    name: "Request folder",
+    path: REQUEST_TEXT_DIR,
+    folder: true,
+    label: (counts) => `Request folder: files in ${REQUEST_TEXT_DIR}/ hold your own requests (${counts})`,
+  });
+  const latch = heldWordsRow({
+    name: "Forwarding latch",
+    path: FORWARDING_LATCH,
+    folder: false,
+    label: (counts) => `Forwarding latch: ${FORWARDING_LATCH} holds the words of a request of yours (${counts})`,
+    quietWhenSkipped: true,
+  });
+  const blockers = [
+    ...(request.blocksCommit ? ["request folder"] : []),
+    ...(latch.blocksCommit ? ["forwarding latch"] : []),
+  ].join(" and ");
 
   // W1 - Uncommitted records. Any git workspace: surface uncommitted changes
   // under aidlc/ so the shared records get committed and pushed to teammates.
@@ -160,8 +196,10 @@ export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
         "--",
         "aidlc",
         // A request left for the engine is the person's words, never a shared
-        // record; the request-folder row names it instead.
+        // record; the request-folder row names it instead, and the latch row
+        // the forwarding latch.
         `:(exclude)${REQUEST_TEXT_DIR}`,
+        `:(exclude)${FORWARDING_LATCH}`,
       ],
       // The exclude is pathspec magic, which a literal-pathspec setting turns off.
       env: { ...process.env, GIT_LITERAL_PATHSPECS: "0" },
@@ -193,17 +231,17 @@ export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
           severity: "warn",
           label:
             `Workspace records: ${dirty.length} uncommitted change(s) under aidlc/ (advisory - the shared records travel by git; ` +
-            (requestBlocksCommit
-              ? "commit & push them so teammates get them once the request folder steps below are done)"
+            (blockers !== ""
+              ? `commit & push them so teammates get them once the ${blockers} steps below are done)`
               : "commit & push so teammates get them: `git add aidlc/ && git commit && git push`)"),
-          ...(requestBlocksCommit ? { fix: "do the request folder steps below first; then this row names the commit" } : {}),
+          ...(blockers !== "" ? { fix: `do the ${blockers} steps below first; then this row names the commit` } : {}),
         });
       }
     }
   } catch (e) {
     results.push({ pass: true, label: `Workspace records: check skipped (advisory) - ${errorMessage(e)}` });
   }
-  if (requestRow) results.push(requestRow);
+  for (const row of [request.row, latch.row]) if (row) results.push(row);
 
   // W1b - A later user ignore rule can hide records even after config succeeded.
   for (const conflict of committedRecordIgnoreConflicts(projectDir)) {

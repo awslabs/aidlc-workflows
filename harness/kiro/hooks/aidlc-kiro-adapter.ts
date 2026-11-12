@@ -518,7 +518,10 @@ async function planFirstCall(args: readonly string[]): Promise<PlanFirstCall | n
   const eitherReading = reading.kind === "plan-word" && reading.scope === args[0];
   if (!eitherReading) {
     // A plan-word reading has only words after the name; a colon line may not.
-    if (!args[0].endsWith(":") || !readNextTokens(args.slice(1)).tokens.every((token) => token.role === "word")) return null;
+    // Read in place, so a word that is a verb only first (`compose`) stays theirs.
+    if (!args[0].endsWith(":") || !readNextTokens(args).tokens.every((token) => token.at === 0 || token.role === "word")) {
+      return null;
+    }
     try {
       const { parseNextFlags } = await import("../tools/aidlc-orchestrate.ts");
       if (parseNextFlags([args[0]]).positionalScope === undefined) return null;
