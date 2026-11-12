@@ -49,7 +49,13 @@ export function unitProgressTable(state: string): { header: string[]; rows: stri
 
 // The Units whose Unit Progress row is complete: every stage cell, and the
 // merged cell where land wrote one. One reading for the claim overview and the
-// lib's which-checkout-holds-a-Unit read.
+// lib's which-checkout-holds-a-Unit read. A merged cell alone also counts: an
+// Inception run again starts each Construction stage anew, so a landed Unit's
+// receipts fall below the new run floor and its stage cells read empty, while
+// its work is still on main. The projection marks it merged only for the
+// attempt that landed (unitMergedReceipts reads the attempt this checkout
+// knows), so a Unit claimed again with --reopen is not merged in the claim's
+// own checkout.
 export function completedUnits(state: string): Set<string> {
   const table = unitProgressTable(state);
   if (!table) return new Set();
@@ -64,8 +70,9 @@ export function completedUnits(state: string): Set<string> {
       mergedIndex >= 0 ? mergedIndex : undefined,
     );
     if (
-      workCells.every((cell) => cell === "[x]") &&
-      (mergedIndex < 0 || unitRowMerged(state, cells[0]))
+      mergedIndex >= 0
+        ? unitRowMerged(state, cells[0])
+        : workCells.every((cell) => cell === "[x]")
     ) {
       done.add(cells[0]);
     }
