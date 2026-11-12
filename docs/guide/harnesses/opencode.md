@@ -105,7 +105,7 @@ then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
    ```bash
    cp -R "$RUNTIME_ROOT/opencode/.aidlc/."    your-project/.aidlc/
    cp -R "$RUNTIME_ROOT/opencode/.opencode/." your-project/.opencode/
-   cp -R "$RUNTIME_ROOT/opencode/aidlc/."     your-project/aidlc/      # the workspace shell, a sibling of .aidlc/, not inside it
+   cp -r "$RUNTIME_ROOT/opencode/aidlc/"     your-project/aidlc/      # the workspace shell — a sibling of .aidlc/, not inside it
    ```
 
    The copy runtime has no `opencode.json`, so copying never replaces yours.

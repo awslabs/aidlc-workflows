@@ -130,9 +130,9 @@ then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
    one):
 
    ```bash
-   cp -R "$RUNTIME_ROOT/codex/.codex/."  your-project/.codex/
+   cp -r "$RUNTIME_ROOT/codex/.codex/"  your-project/.codex/
    cp -R "$RUNTIME_ROOT/codex/.agents/." your-project/.agents/
-   cp -R "$RUNTIME_ROOT/codex/aidlc/."   your-project/aidlc/      # the workspace shell (spaces/default/memory), a sibling of .codex/, not inside it
+   cp -r "$RUNTIME_ROOT/codex/aidlc/"   your-project/aidlc/      # the workspace shell (spaces/default/memory) — a sibling of .codex/, not inside it
    ```
 
    The `aidlc/` directory is the workspace shell — it ships the pre-built

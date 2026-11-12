@@ -704,13 +704,39 @@ describe("documentation parity derives current behavior from authored implementa
   test("no copy command copies a folder into an existing one of the same name", () => {
     // GNU cp -r "src/" dst/ nests src inside an existing dst; "src/." copies its contents on every platform.
     const nesting = /\bcp\s+-[rR]\s+(?:"[^"\n]*[^."\n]\/"|[^\s"]*[^.\s"]\/)\s/;
+    // These keep their folder copy: their contents would replace a project's own files (the next case).
+    const folderCopies = [
+      ["codex-cli.md", '"$RUNTIME_ROOT/codex/.codex/"'],
+      ["codex-cli.md", '"$RUNTIME_ROOT/codex/aidlc/"'],
+      ["opencode.md", '"$RUNTIME_ROOT/opencode/aidlc/"'],
+    ];
+    const keepsFolderCopy = (file: string, line: string): boolean =>
+      folderCopies.some(([page, source]) => basename(file) === page && line.includes(source));
     const lines = [...filesBelow(at("docs"), ".md"), at("README.md")].flatMap((file) =>
       readFileSync(file, "utf8")
         .split(/\r?\n/)
-        .filter((line) => nesting.test(line))
+        .filter((line) => nesting.test(line) && !keepsFolderCopy(file, line))
         .map((line) => `${basename(file)}: ${line.trim()}`),
     );
     expect(lines).toEqual([]);
+  });
+
+  test("the opencode and Codex copy steps do not copy a runtime folder over files a project may own", () => {
+    // A project's own Codex setup uses config.toml and hooks.json too, and a team writes its phase rules into the
+    // space's phases/*.md, which the copy runtime ships (it leaves out only team.md, project.md and active-space).
+    // A contents copy would replace them with no word.
+    const owned: Array<[string, string, string[]]> = [
+      ["codex-cli.md", "codex/.codex", ["config.toml", "hooks.json"]],
+      ["codex-cli.md", "codex/aidlc", ["spaces/default/memory/phases/construction.md"]],
+      ["opencode.md", "opencode/aidlc", ["spaces/default/memory/phases/construction.md"]],
+    ];
+    for (const [page, folder, names] of owned) {
+      const shipped = names.filter((name) => existsSync(at("dist", folder, name)));
+      if (shipped.length === 0) continue;
+      const contentsCopy = new RegExp(`\\bcp\\s+-[rR]\\s+"\\$RUNTIME_ROOT/${folder.replace(".", "\\.")}/\\."`);
+      const text = read("docs", "guide", "harnesses", page);
+      expect(contentsCopy.test(text), `${page} copies the runtime's ${folder}/ over the project's ${shipped.join(", ")}`).toBe(false);
+    }
   });
 
   test("the docs home page carries README's note on the two Kiro names", () => {
