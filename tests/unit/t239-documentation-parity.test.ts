@@ -702,6 +702,115 @@ describe("documentation parity derives current behavior from authored implementa
     );
   });
 
+  test("no page says AI-DLC's .gitignore block keeps .vscode out of git while no shipped block names it", () => {
+    const blocks = [
+      ...readdirSync(at("harness")).map((name) => at("harness", name, "dot-gitignore")).filter((file) => existsSync(file)),
+      at("core", "tools", "aidlc-gitignore.ts"),
+    ];
+    expect(blocks.length, "the shipped .gitignore blocks").toBeGreaterThan(1);
+    if (blocks.some((file) => /vscode/i.test(readFileSync(file, "utf8")))) return;
+    const stale = /block keeps `?\.vscode/;
+    const copies = [...filesBelow(at("docs"), ".md"), at("README.md")].filter((file) =>
+      stale.test(normalized(readFileSync(file, "utf8"))),
+    );
+    expect(copies).toEqual([]);
+  });
+
+  test("the Kiro page does not say there is no init command while Kiro installs ship /aidlc-init", () => {
+    for (const tree of ["kiro", "kiro-ide"]) {
+      expect(existsSync(at("dist", tree, ".kiro", "skills", "aidlc-init", "SKILL.md")), `${tree} ships aidlc-init`).toBe(true);
+    }
+    const deniesInit = /\bno init command\b/i.test(normalized(read("docs", "guide", "harnesses", "kiro.md")));
+    expect(deniesInit, "docs/guide/harnesses/kiro.md says there is no init command").toBe(false);
+  });
+
+  test("no page says to finish open work before running aidlc config", () => {
+    // A refresh is done while work is open (Install and Lifecycle, Refresh Safety); nothing waits for it to finish.
+    const stale = /\b(?:finish|complete) (?:the |all |your )?active workflows?,? then run `aidlc config/i;
+    const copies = [...filesBelow(at("docs"), ".md"), at("README.md")].filter((file) =>
+      stale.test(normalized(readFileSync(file, "utf8"))),
+    );
+    expect(copies).toEqual([]);
+  });
+
+  test("the Copilot pages name every VS Code setting config adds", () => {
+    const keys = Object.keys(JSON.parse(read("harness", "copilot", "dot-vscode-settings.json")) as Record<string, unknown>);
+    expect(keys.length, "Copilot ships VS Code settings").toBeGreaterThan(0);
+    const row = read("docs", "guide", "18-install-and-lifecycle.md")
+      .split(/\r?\n/)
+      .find((line) => line.startsWith("| `.vscode/settings.json` | Copilot |"));
+    expect(row, "the install chapter's .vscode/settings.json row").toBeDefined();
+    const bullet = normalized(
+      sliceBetween(read("docs", "guide", "harnesses", "copilot.md"), "- **`.vscode/settings.json`**", "## Prerequisites"),
+    );
+    for (const key of keys) {
+      expect(row?.includes(`\`${key}\``), `install chapter row names ${key}`).toBe(true);
+      expect(bullet.includes(`\`${key}\``), `copilot.md .vscode/settings.json bullet names ${key}`).toBe(true);
+    }
+  });
+
+  test("no harness page says the manual-copy runtime it describes needs no Bun", () => {
+    // The copy runtime is the Bun projection: its setup, hooks and tools run through Bun.
+    const said = /versioned (?:release )?runtimes? (?:are self-contained|use `aidlc`|invoke `aidlc`|dispatch through)/;
+    let pages = 0;
+    for (const file of filesBelow(at("docs", "guide", "harnesses"), ".md")) {
+      const text = readFileSync(file, "utf8");
+      if (!text.includes("aidlc-copy-runtime") || !/(?:^|&& |`)bun [^\s`]+\.ts\b/m.test(text)) continue;
+      const bullets = [...text.matchAll(/^- \*\*bun\*\*[^\n]*(?:\r?\n {2}[^\n]*)*/gm)].map((match) => normalized(match[0]));
+      if (bullets.length === 0) continue;
+      pages += 1;
+      for (const bullet of bullets) expect(said.test(bullet), `${basename(file)}: ${bullet}`).toBe(false);
+      expect(normalized(text).includes("versioned runtime uses the native"), `${basename(file)} says the copy runtime uses aidlc`).toBe(false);
+    }
+    expect(pages, "harness pages with a manual-copy runtime").toBeGreaterThanOrEqual(5);
+  });
+
+  test("no copy command copies a folder into an existing one of the same name", () => {
+    // GNU cp -r "src/" dst/ nests src inside an existing dst; "src/." copies its contents on every platform.
+    const nesting = /\bcp\s+-[rR]\s+(?:"[^"\n]*[^."\n]\/"|[^\s"]*[^.\s"]\/)\s/;
+    // These keep their folder copy: their contents would replace a project's own files (the next case).
+    const folderCopies = [
+      ["codex-cli.md", '"$RUNTIME_ROOT/codex/.codex/"'],
+      ["codex-cli.md", '"$RUNTIME_ROOT/codex/aidlc/"'],
+      ["opencode.md", '"$RUNTIME_ROOT/opencode/aidlc/"'],
+    ];
+    const keepsFolderCopy = (file: string, line: string): boolean =>
+      folderCopies.some(([page, source]) => basename(file) === page && line.includes(source));
+    const lines = [...filesBelow(at("docs"), ".md"), at("README.md")].flatMap((file) =>
+      readFileSync(file, "utf8")
+        .split(/\r?\n/)
+        .filter((line) => nesting.test(line) && !keepsFolderCopy(file, line))
+        .map((line) => `${basename(file)}: ${line.trim()}`),
+    );
+    expect(lines).toEqual([]);
+  });
+
+  test("the opencode and Codex copy steps do not copy a runtime folder over files a project may own", () => {
+    // A project's own Codex setup uses config.toml and hooks.json too, and a team writes its phase rules into the
+    // space's phases/*.md, which the copy runtime ships (it leaves out only team.md, project.md and active-space).
+    // A contents copy would replace them with no word.
+    const owned: Array<[string, string, string[]]> = [
+      ["codex-cli.md", "codex/.codex", ["config.toml", "hooks.json"]],
+      ["codex-cli.md", "codex/aidlc", ["spaces/default/memory/phases/construction.md"]],
+      ["opencode.md", "opencode/aidlc", ["spaces/default/memory/phases/construction.md"]],
+    ];
+    for (const [page, folder, names] of owned) {
+      const shipped = names.filter((name) => existsSync(at("dist", folder, name)));
+      if (shipped.length === 0) continue;
+      const contentsCopy = new RegExp(`\\bcp\\s+-[rR]\\s+"\\$RUNTIME_ROOT/${folder.replace(".", "\\.")}/\\."`);
+      const text = read("docs", "guide", "harnesses", page);
+      expect(contentsCopy.test(text), `${page} copies the runtime's ${folder}/ over the project's ${shipped.join(", ")}`).toBe(false);
+    }
+  });
+
+  test("the docs home page carries README's note on the two Kiro names", () => {
+    const note = read("README.md")
+      .split(/\r?\n/)
+      .find((line) => line.includes("read the two Kiro names the other way"));
+    if (note === undefined) return;
+    expect(normalized(read("docs", "README.md")).includes(normalized(note)), "docs/README.md carries the note").toBe(true);
+  });
+
   test("a review the person asks for is recorded under every Guard Policy, and no copy reads as needing strict", () => {
     const reviewer = readFileSync(at("core", "aidlc-common", "protocols", "stage-protocol-reviewer.md"), "utf8")
       .replace(/\s+/g, " ");

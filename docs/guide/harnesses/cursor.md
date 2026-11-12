@@ -39,9 +39,8 @@ projection directly (no `emit.ts`, no split dot-dir). The distribution is:
   this install's `.cursor/` surfaces. Verified against cursor-agent 2026.07;
   hooks (`.cursor/hooks.json`) and skills (`.cursor/skills/`) are
   current-line features.
-- **bun** only for source development or the optional manual-copy
-  `install.ts` helper. Once installed, native and versioned release runtimes
-  invoke `aidlc`.
+- **bun** only for source development or the versioned manual-copy runtime
+  and its `install.ts` helper. Native installs invoke `aidlc`.
 - **A paid Cursor plan for named models** - Free accounts can only use `Auto`.
   The tiered persona surfaces ship with **no model pins** (all tiers project to
   null on Cursor: model availability is plan-dependent), so every agent
