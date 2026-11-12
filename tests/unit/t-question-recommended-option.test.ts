@@ -115,6 +115,14 @@ describe("t-question-recommended-option: log decision keeps the choice the agent
     expect(field(proj, "DECISION_RECORDED", "Recommended")).toBe("toLowerCase()");
   });
 
+  test("a localized option keeps its recommendation when only the suffix stays English", async () => {
+    const proj = requirements();
+    const labels = ["Allégée (Recommended)", "Complète"];
+    await decision(proj, ["--options", labels.join(",")]);
+    expect(field(proj, "DECISION_RECORDED", "Options")).toBe(labels.join(","));
+    expect(field(proj, "DECISION_RECORDED", "Recommended")).toBe("Allégée");
+  });
+
   test("a batch's marks are kept question by question, whole, in the list's own form", async () => {
     const proj = requirements();
     await decision(proj, [
@@ -172,6 +180,18 @@ describe("t-question-recommended-option: a question box keeps the choice it show
     await codexBox(proj, LABELS, LABELS[0]);
     expect(field(proj, "QUESTION_REPLIED", "Reply")).toBe(LABELS[0]);
     expect(field(proj, "QUESTION_REPLIED", "Recommended")).toBe(JSON.stringify(["toLowerCase()"]));
+  });
+
+  test.each([
+    ["Claude Code", claudeBox],
+    ["Codex", codexBox],
+  ] as const)("%s: a localized option keeps its recommendation and the person's exact reply", async (_harness, box) => {
+    const proj = requirements();
+    const labels = ["Allégée (Recommended)", "Complète"];
+    await box(proj, labels, labels[0]);
+    expect(field(proj, "QUESTION_REPLIED", "Options")).toBe(JSON.stringify(labels));
+    expect(field(proj, "QUESTION_REPLIED", "Reply")).toBe(labels[0]);
+    expect(field(proj, "QUESTION_REPLIED", "Recommended")).toBe(JSON.stringify(["Allégée"]));
   });
 
   test("a box with no marked choice is recorded as before, with no recommendation", async () => {
