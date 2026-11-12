@@ -603,11 +603,16 @@ export function checkInNotice(state: CheckIn): string | null {
 }
 
 // Status's Checked in field for the same, or null. The branch is named, so a
-// record merged by its pull request is not read as still on the branch pushed for it.
+// record merged by its pull request is not read as still on the branch pushed
+// for it; a checkout that merge left ahead and behind hears how to bring it level.
 export function checkInStatus(state: CheckIn): string | null {
   if (typeof state === "string") return null;
   if ("pushedOn" in state) return `Checked in:     pushed on ${state.pushedOn}, not in ${state.into} yet`;
-  return `Checked in:     yes, aidlc/ is in ${state.into} on ${state.remote}`;
+  const yes = `Checked in:     yes, aidlc/ is in ${state.into} on ${state.remote}`;
+  if (state.split === null) return yes;
+  const theirs = `${state.remote}/${state.into}`;
+  return `${yes}\n${`Your ${state.into}:`.padEnd(15)} ${theirs} already has your work, merged as commits of its own, so yours is ` +
+    `${state.split.ahead} ahead and ${state.split.behind} behind. git reset --keep ${theirs} brings it level; nothing of yours is lost.`;
 }
 
 // Teams across repos share AI-DLC's record by git, and the person checks it in.
@@ -649,8 +654,14 @@ export function checkInApplies(projectDir: string, stateContent?: string): boole
 }
 
 // Where checkInState finds the record: in the work's integration branch on its
-// remote, or pushed on a branch of its own that is not in it yet.
-export type CheckIn = "not-checked-in" | "unknown" | { pushedOn: string; into: string } | { into: string; remote: string };
+// remote (`split`: this checkout's own copy of that branch is ahead and behind
+// it, everything it has in it by content), or pushed on a branch of its own
+// that is not in it yet.
+export type CheckIn =
+  | "not-checked-in"
+  | "unknown"
+  | { pushedOn: string; into: string }
+  | { into: string; remote: string; split: { ahead: number; behind: number } | null };
 
 // Whether aidlc/ is checked in, from local git only: nothing under it changed
 // but the rows each look adds to this clone's own audit file (onlyOwnLookRows,
@@ -682,6 +693,8 @@ export function checkInState(projectDir: string, stateContent?: string): CheckIn
     return "unknown";
   }
   if (target === null) return "unknown";
+  // Narrowed once, for the closures below.
+  const integration = target;
   const into = `refs/remotes/${target.remote}/${target.branch}`;
   const prefix = run(["rev-parse", "--show-prefix"]);
   const changed = run(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--", "aidlc"]);
@@ -696,19 +709,35 @@ export function checkInState(projectDir: string, stateContent?: string): CheckIn
   }
   // The rows each look adds to this clone's own audit file do not count.
   if (!changes.every((change) => onlyOwnLookRows(projectDir, root, change))) return "not-checked-in";
-  const ahead = run(["log", "--format=%H", `${into}..HEAD`, "--", "aidlc"]);
-  if (ahead.status !== 0) return "unknown";
-  const checkedIn = { into: target.branch, remote: target.remote };
-  if (ahead.stdout.trim() === "") return checkedIn;
   // A squash or rebase merge puts the same files in as commits of its own.
-  const names = (range: string[]): Set<string> | null => {
-    const listed = run(["diff", "--name-only", "-z", "--no-renames", ...range, "--", "aidlc"]);
+  const names = (range: string[], paths = ["aidlc"]): Set<string> | null => {
+    const listed = run(["diff", "--name-only", "-z", "--no-renames", ...range, "--", ...paths]);
     return listed.status === 0 ? new Set(listed.stdout.split("\0").filter(Boolean)) : null;
   };
+  // This checkout on the integration branch itself, ahead and behind it, when a
+  // squash or rebase merge took in everything its own commits changed, over the
+  // whole repo: then `git reset --keep` brings it level and loses nothing. Null
+  // when it would not (an uncommitted or untracked file on a file the two differ
+  // in, where reset --keep refuses) or git cannot tell.
+  const split = (): { ahead: number; behind: number } | null => {
+    if (run(["symbolic-ref", "--quiet", "HEAD"]).stdout.trim() !== `refs/heads/${integration.branch}`) return null;
+    const [ahead = 0, behind = 0] = run(["rev-list", "--left-right", "--count", `HEAD...${into}`]).stdout.trim().split(/\s+/).map(Number);
+    if (!(ahead > 0 && behind > 0)) return null;
+    const mine = names([`${into}...HEAD`], []);
+    const differ = names([into, "HEAD"], []);
+    const dirty = run(["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
+    if (mine === null || mine.size === 0 || differ === null || dirty.status !== 0 || [...mine].some((path) => differ.has(path))) return null;
+    // -z entries as above: a rename's source path stands alone.
+    return dirty.stdout.split("\0").some((entry) => differ.has(entry.slice(3)) || differ.has(entry)) ? null : { ahead, behind };
+  };
+  const checkedIn = () => ({ into: integration.branch, remote: integration.remote, split: split() });
+  const ahead = run(["log", "--format=%H", `${into}..HEAD`, "--", "aidlc"]);
+  if (ahead.status !== 0) return "unknown";
+  if (ahead.stdout.trim() === "") return checkedIn();
   const mine = names([`${into}...HEAD`]);
   const differ = names([into, "HEAD"]);
   if (mine === null || differ === null) return "unknown";
-  if (![...mine].some((path) => differ.has(path))) return checkedIn;
+  if (![...mine].some((path) => differ.has(path))) return checkedIn();
   const head = run(["symbolic-ref", "--quiet", "HEAD"]);
   if (head.status !== 0) return "unknown";
   const upstream = run(["for-each-ref", "--format=%(upstream:remotename) %(upstream:remoteref)", head.stdout.trim()]);

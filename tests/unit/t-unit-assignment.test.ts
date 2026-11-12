@@ -268,6 +268,37 @@ describe("the plan's share fits the team's own git: a protected main, a branch o
     }
   });
 
+  test("a main a squash or rebase merge left ahead and behind origin's: status says so once with the way to bring it level, which loses nothing", () => {
+    for (const [how, split] of [["squash", "1 ahead and 1 behind"], ["rebase", "1 ahead and 2 behind"]] as const) {
+      const dir = planMergedBy(how);
+      const status = statusOf(dir);
+      const line = "Your main:      origin/main already has your work, merged as commits of its own, so yours is " +
+        `${split}. git reset --keep origin/main brings it level; nothing of yours is lost.\n`;
+      expect(status, how).toContain(line);
+      expect(status.split("Your main:").length - 1, how).toBe(1);
+      // An uncommitted change of the lead's, as in the run, stays through the line's own command.
+      writeFileSync(join(dir, ".gitignore"), `${readFileSync(join(dir, ".gitignore"), "utf-8")}scratch/\n`);
+      expect(statusOf(dir), how).toContain(line);
+      const before = git(dir, ["rev-parse", "HEAD"]);
+      git(dir, ["reset", "-q", "--keep", "origin/main"]);
+      // Every file the lead's main had is there as it was; only what origin's main added is new.
+      expect(git(dir, ["diff", "--name-only", "--diff-filter=DMT", before, "HEAD"]), how).toBe("");
+      expect(readFileSync(join(dir, ".gitignore"), "utf-8"), how).toEndWith("scratch/\n");
+      const level = statusOf(dir);
+      expect(level, how).toContain(IN_MAIN);
+      expect(level, how).not.toContain("Your main:");
+    }
+    // Only behind (a merge commit), or ahead with a commit origin's main does not have: nothing is said.
+    expect(statusOf(planMergedBy("merge"))).not.toContain("Your main:");
+    const own = statusOf(planMergedBy("squash", true));
+    expect(own).toContain(IN_MAIN);
+    expect(own).not.toContain("Your main:");
+    // An uncommitted change on a file origin's main changed, where git reset --keep would refuse: nothing is said.
+    const rebased = planMergedBy("rebase");
+    writeFileSync(join(rebased, "before-plan-checkout.md"), "The lead's own, not committed.\n");
+    expect(statusOf(rebased)).not.toContain("Your main:");
+  });
+
   // Main's own flow (the teams build on the workspace's repo): the share comes
   // before a Unit starts here, so after a refusal it is asked again, never a build here.
   test("main's share on one repo under the same rule says the same line, and the next step asks again and builds nothing here", () => {
