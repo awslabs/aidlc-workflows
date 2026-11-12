@@ -771,8 +771,17 @@ describe("documentation parity derives current behavior from authored implementa
     expect(resolved).toBe("aidlc/spaces/default/knowledge");
     const page = read("docs", "guide", "08-knowledge.md");
     expect(normalized(page)).toContain(`${resolved.replace("/default/", "/<space>/")}/`);
-    const short = page.split(/\r?\n/).filter((line) => /(?:^|[^\w./-])aidlc\/knowledge\//.test(line));
-    expect(short, "08-knowledge.md lines naming aidlc/knowledge/, a folder nothing reads").toEqual([]);
+    // The Knowledge chapter, and the guide that sends people there to save their team knowledge.
+    const short = [
+      ["08-knowledge.md", page],
+      ["writing-inputs/technical-environment-guide.md", read("docs", "guide", "writing-inputs", "technical-environment-guide.md")],
+    ].flatMap(([name, text]) =>
+      text
+        .split(/\r?\n/)
+        .filter((line) => /(?:^|[^\w./-])aidlc\/knowledge\//.test(line))
+        .map((line) => `${name}: ${line.trim()}`),
+    );
+    expect(short, "lines naming aidlc/knowledge/, a folder nothing reads").toEqual([]);
   });
 
   test("the stand-aside bullet says what guardStandAsideSpeaks decides", () => {
