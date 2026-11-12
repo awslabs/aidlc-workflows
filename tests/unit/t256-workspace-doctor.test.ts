@@ -202,14 +202,16 @@ describe("t256 workspace-doctor - advisory manifest rows", () => {
     const path = process.env.PATH;
     process.env.PATH = join(ws, "no-git-here");
     try {
-      let rows = workspaceManifestChecks(ws);
-      expect(rows[0].label).toContain("Workspace records: check skipped");
-      expect(rows.find((r) => r.label.startsWith("Request folder:"))?.label).toContain("check skipped");
-      expect(rows.some((r) => r.label.startsWith("Forwarding latch:"))).toBe(false);
+      const skippedRows = () => {
+        const rows = workspaceManifestChecks(ws);
+        expect(rows.find((r) => r.label.startsWith("Workspace records:"))?.label).toContain("check skipped");
+        expect(rows.find((r) => r.label.startsWith("Request folder:"))?.label).toContain("check skipped");
+        expect(rows.some((r) => r.label.startsWith("Forwarding latch:"))).toBe(false);
+      };
+      skippedRows();
       mkdirSync(join(ws, "aidlc"), { recursive: true });
       writeFileSync(join(ws, "aidlc", ".aidlc-forwarding-latch"), '{"turn":1,"raw":"my words","args":["my","words"]}\n', "utf-8");
-      rows = workspaceManifestChecks(ws);
-      expect(rows.some((r) => r.label.startsWith("Forwarding latch:"))).toBe(false);
+      skippedRows();
     } finally {
       if (path === undefined) delete process.env.PATH;
       else process.env.PATH = path;

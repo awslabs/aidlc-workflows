@@ -86,9 +86,9 @@ export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
     path: string;
     folder: boolean;
     label: (counts: string) => string;
-    // A file only one harness writes adds no row when its check fails; the
-    // records and request-folder rows, which are never quiet, say when git
-    // cannot run.
+    // A file only one harness writes adds no row when its check cannot run
+    // (git not found): the records row and the request-folder row each say
+    // the check was skipped then.
     quietWhenSkipped?: boolean;
   }): { row: DoctorCheck | null; blocksCommit: boolean } => {
     const shown = held.folder ? `${held.path}/` : held.path;
