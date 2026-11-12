@@ -320,8 +320,9 @@ const DISPATCH_TOOLS = new Set(["Task", "Agent"]);
 // re-issues it. Both fence decisions name that remedy.
 // The engine's Plan Approval question is the active directive.
 const PLAN_APPROVAL_ASK_OPEN = "the engine is asking the person to approve the plan";
-const NO_CURRENT_DIRECTIVE =
-  "the current state has no matching v2 code-generation active directive";
+// No build step is the current one: none was handed out, it is another stage's,
+// or it is this stage's gate, a notice or a question that is not the plan's.
+const NO_CURRENT_DIRECTIVE = "AI-DLC is not on the build step";
 const ENGINE_QUESTION_OPEN =
   "the engine is waiting for the person's answer to its recovery question";
 const FINISHED_WORK_WAITS_FOR_THE_PERSON =
@@ -334,6 +335,12 @@ const FINISHED_WORK_WAITS_FOR_THE_PERSON =
 const SWARM_MAIN_CHECKOUT_HELD =
   "While the Units are built in parallel, the main checkout changes only by their landings, so each landing can check it";
 const SWARM_MAIN_CHECKOUT_LATER = "A change the person asks for in the main checkout can be made once Code Generation is over.";
+// A change the parallel build does not let through anywhere else: a folder it
+// did not prepare, a Unit's worktree after its plan changed, two worktrees at
+// once, a step that lists no Unit.
+const SWARM_CHANGE_IN_ITS_WORKTREE =
+  "while the Units are built in parallel, a change goes through only inside one Unit's own prepared worktree, " +
+  "with that Unit's plan as it was approved";
 
 // --- The decision -------------------------------------------------------------
 
@@ -813,7 +820,7 @@ function authorityBlockReason(
     return authorityRemedy(reason, standing, asked, editingReply);
   }
   return (
-    "Code generation cannot start because its Plan Approval authority is ambiguous or stale. " +
+    "Code generation cannot start: " +
     authorityRemedy(reason, standing, null, null, wayOn)
   );
 }
@@ -858,11 +865,16 @@ function planStanding(projectDir: string, marker: ActiveDirectiveMarker | null):
 }
 
 // Why the step went out of date, when the write that did it was recorded (the
-// chat compacted, the state moved): said as the refusal's reason, ahead of the
-// way out. Empty when nothing was recorded.
+// chat compacted, the state moved). Empty when nothing was recorded.
 function outOfDateClause(marker: ActiveDirectiveMarker): string {
   const why = activeDirectiveOutOfDateReason(marker);
   return why === null ? "" : `: ${why}`;
+}
+
+// The refusal's reason for a step that is not the build: why it went out of
+// date when that was recorded, else `otherwise`.
+function staleOr(marker: ActiveDirectiveMarker, otherwise: string): string {
+  return activeDirectiveOutOfDateReason(marker) ?? otherwise;
 }
 
 // --- Evidence gathering ---------------------------------------------------------
@@ -2903,9 +2915,7 @@ async function evaluate(
         // pause) carries no approval to a worker, so this is the same refusal
         // a write gets, with the fresh `next` that issues the build again.
         if (verdict.block && issuance === null) {
-          authorityFailure =
-            `the developer handoff cannot select one approval target from directive kind "${activeDirective.kind}"` +
-            outOfDateClause(activeDirective);
+          authorityFailure = staleOr(activeDirective, NO_CURRENT_DIRECTIVE);
           standing = planStanding(projectDir, activeDirective);
         } else if (
           verdict.handoff &&
@@ -3012,8 +3022,7 @@ async function evaluate(
         swarmBatchOut = true;
         authorityFailure = mainCheckoutOnly
           ? SWARM_MAIN_CHECKOUT_HELD
-          : `workspace mutation cannot select one approval target from directive kind "${activeDirective.kind}"` +
-            outOfDate;
+          : SWARM_CHANGE_IN_ITS_WORKTREE;
         if (
           theirs !== null &&
           mainCheckoutChangeRefusal(projectDir, theirs, listed, (unit) => planNamed.get(unit) ?? null) === null
@@ -3030,9 +3039,7 @@ async function evaluate(
           finished: false,
         };
       } else if (activeDirective.kind !== "run-stage" && setAside === null) {
-        authorityFailure =
-          `workspace mutation cannot select one approval target from directive kind "${activeDirective.kind}"` +
-          outOfDateClause(activeDirective);
+        authorityFailure = staleOr(activeDirective, NO_CURRENT_DIRECTIVE);
         standing = planStanding(projectDir, activeDirective);
         verdict = { block: true, mentioned: [] };
       } else {
@@ -3088,8 +3095,7 @@ async function evaluate(
     }
   } catch (e) {
     recordHookDrop(projectDir, HOOK_NAME, errorMessage(e));
-    authorityFailure =
-      `Plan Approval authority evaluation failed closed: ${errorMessage(e)}`;
+    authorityFailure = `its plan's approval could not be checked: ${errorMessage(e).replace(/\.+$/, "")}`;
     verdict = { block: true, mentioned: [] };
   }
   // No refusal names a switch. `guard.plan-approval off` is plan approval off

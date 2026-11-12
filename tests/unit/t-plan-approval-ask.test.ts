@@ -4548,7 +4548,7 @@ function approveThroughParts(proj: string, scope: string): Emitted {
   const early = guardWrite(proj, join(proj, "src", "slugify.ts"));
   expect(early.code).toBe(2);
   expect(early.stderr).toContain(`continue ${first.receipt}\``);
-  expect(early.stderr).not.toContain("cannot select one approval target");
+  expect(early.stderr).not.toContain("AI-DLC is not on the build step");
   const build = continueEachPart(proj, first);
   expect(build.kind, JSON.stringify(build)).toBe("run-stage");
   expect(build.stage).toBe("code-generation");
