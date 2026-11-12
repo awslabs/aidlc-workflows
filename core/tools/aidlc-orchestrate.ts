@@ -17908,22 +17908,85 @@ function unitOutsideWork(
   return { said: `${unit} is not one of this work's units (${units.join(", ")}).`, nameOne: "Name one of them" };
 }
 
+// Once a team has taken a Unit, a redo of a Unit stage for every Unit (or a move
+// back to one, or ahead within them) on a checkout with no claim is the reopen of
+// the Units this checkout builds (unitsHeldHere), or with none nothing, said in
+// one line naming the Units left and why. Null where nothing is narrowed: solo, a
+// claimed checkout, no team has taken a Unit, a target outside the Unit stages on
+// the plan (an earlier release's skip of them included), or with `fromThem` a
+// move from before them (a jump into them goes as before). Its callers fetch the
+// teams' claims first (teamClaimsNow).
+function teamRedoNarrowed(
+  projectDir: string,
+  scope: string,
+  stateContent: string,
+  targetSlug: string,
+  fromThem = false,
+): { held: boolean; directive: PrintDirective | ErrorDirective } | null {
+  if (!isTeamUnitOwnership(stateContent) || readApplicableTeamUnitScopeStamp(projectDir, stateContent)) return null;
+  const block = constructionUnitMajorBlock(scope, stateContent, true).map((stage) => stage.slug);
+  if (!block.includes(targetSlug)) return null;
+  if (fromThem && getField(stateContent, "Current Stage")?.trim() !== block[0] && !cursorPastStage(stateContent, block[0])) {
+    return null;
+  }
+  const dag = resolveBoltBatches(projectDir);
+  if (!cachedClaimFanoutActive(projectDir) || dag.state !== "ok") return null;
+  const held = unitsHeldHere(projectDir) ?? new Set<string>();
+  let owners = new Map<string, string>();
+  let walked = new Set<string>();
+  try {
+    const overview = cachedUnitClaimOverview(projectDir, { writeCache: false });
+    owners = new Map(overview.claimed.map((c) => [c.unit, c.owner]));
+    walked = new Set(overview.walked ?? []);
+  } catch {
+    // An unreadable claim registry names no team.
+  }
+  // A Unit another checkout walks without a claim is that checkout's: not named.
+  const here = dag.batches.flat().filter((unit) => held.has(unit));
+  const left = dag.batches.flat().filter((unit) => !held.has(unit) && !walked.has(unit));
+  if (left.length === 0) return null;
+  // The person's words, all here: finished Units, then each team's, then the untaken.
+  const and = (items: readonly string[]): string =>
+    items.length < 2 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;
+  const whyOf = (unit: string): string => completedUnits(stateContent).has(unit)
+    ? "finished"
+    : owners.has(unit) ? `built by ${owners.get(unit)}` : "not taken yet";
+  const rank = (why: string): number => why === "finished" ? 0 : why === "not taken yet" ? 2 : 1;
+  const groups = new Map<string, string[]>();
+  for (const unit of [...left].sort((a, b) => rank(whyOf(a)) - rank(whyOf(b)))) {
+    groups.set(whyOf(unit), [...(groups.get(whyOf(unit)) ?? []), unit]);
+  }
+  const why = and([...groups].map(([what, names]) => `${and(names)} ${names.length === 1 ? "is" : "are"} ${what}`));
+  const name = nodeForSlug(targetSlug)?.name || targetSlug;
+  if (here.length === 0) {
+    return { held: false, directive: errorDirective(`${name} is not redone for every unit once a team has taken a unit: ${why}.`) };
+  }
+  const line = `Redoing ${name} for unit${here.length === 1 ? "" : "s"} ${and(here)}. ${why}, so ` +
+    `${left.length === 1 ? "it is" : "they are"} not redone here.`;
+  const jump = [
+    "reopen", "--target", targetSlug, "--stages", block.slice(block.indexOf(targetSlug)).join(","),
+    "--units", here.join(","), "--via", "redo", "--scope", scope,
+  ];
+  const message = `Run \`${jumpCommandText(jump)}\`, then tell the person in one line: "${line}" Then re-run \`next\`.`;
+  return { held: true, directive: jumpStepPrint(`${message} ${OTHER_UNITS_KEPT}`, jump) };
+}
+
+// The teams' claims as the remote has them now, before a redo or a move reads
+// them (the board's own one fetch); outside team work and in a probe, no fetch.
+function teamClaimsNow(projectDir: string, stateContent: string): void {
+  if (isTeamUnitOwnership(stateContent) && !isReadOnlyEngineProbe()) refreshClaimRefs(projectDir);
+}
+
 // A team checkout that holds no claim and no Unit once a team has claimed one
 // builds none (validateLiveUnitScope), so a finished Unit named for a redo of
 // one of the Units' own stages there is not reopened, for one Unit or for every
 // Unit. A stage done once for all Units keeps its question. Null elsewhere.
 function finishedUnitNotRedoneHere(
-  projectDir: string,
+  narrowed: ReturnType<typeof teamRedoNarrowed>,
   stateContent: string,
-  targetSlug: string,
   unit: string,
 ): Directive | null {
-  const node = nodeForSlug(targetSlug);
-  if (
-    !node || !isPerUnit(node) ||
-    !isTeamUnitOwnership(stateContent) || readApplicableTeamUnitScopeStamp(projectDir, stateContent) ||
-    !cachedClaimFanoutActive(projectDir) || unitsHeldHere(projectDir) !== null || !completedUnits(stateContent).has(unit)
-  ) return null;
+  if (narrowed === null || narrowed.held || !completedUnits(stateContent).has(unit)) return null;
   return errorDirective(`${unit} is finished, so it is not redone here; this checkout builds no Unit now.`);
 }
 
@@ -19536,6 +19599,7 @@ function emitJumpDirective(
       return;
     }
     const unitMajorState = loadStateFileIfPresent(projectDir) ?? "";
+    teamClaimsNow(projectDir, unitMajorState);
     // A jump back to a per-unit step reopens it for chosen Units, whichever way
     // the jump resolves: forward or redo while Current Stage is on the first
     // per-unit stage, backward once the stage gates have moved it on.
@@ -19549,8 +19613,11 @@ function emitJumpDirective(
     // redoes the step for every unit. `--every-unit` asks for exactly what the
     // jump below does here, so it goes through and says so in one line.
     if (flags.jumpUnit !== undefined) {
-      emit(finishedUnitNotRedoneHere(projectDir, unitMajorState, targetSlug, flags.jumpUnit) ??
-        turnEndingPrint(unitChoiceRefusal(unitMajorState, targetSlug)));
+      // The offer to reopen it for every unit is not made where its yes would
+      // change nothing.
+      const narrowed = teamRedoNarrowed(projectDir, scope, unitMajorState, targetSlug);
+      emit(finishedUnitNotRedoneHere(narrowed, unitMajorState, flags.jumpUnit) ??
+        (narrowed?.held === false ? narrowed.directive : turnEndingPrint(unitChoiceRefusal(unitMajorState, targetSlug))));
       return;
     }
     const everyUnitSaid = flags.everyUnit && direction !== "forward"
@@ -19558,9 +19625,20 @@ function emitJumpDirective(
         `${direction === "backward" ? " and the steps after it" : ""} for every unit.`
       : "";
     const everyUnitLine = everyUnitSaid ? ` Then tell the person in one line: "${everyUnitSaid}"` : "";
+    // Once a team has taken a Unit, a move ahead for every Unit is for the ones
+    // this checkout builds: the one-Unit move, or at the step one is on its redo.
+    const teamTaken = flags.everyUnit === true && isTeamUnitOwnership(unitMajorState) && cachedClaimFanoutActive(projectDir);
     const unitMajor = direction === "forward"
-      ? unitMajorForwardJump(projectDir, scope, unitMajorState, targetSlug, flags.everyUnit === true)
+      ? unitMajorForwardJump(projectDir, scope, unitMajorState, targetSlug, flags.everyUnit === true && !teamTaken)
       : null;
+    if (unitMajor === "route" && !teamTaken) return "route";
+    const narrowed = unitMajor === null || unitMajor === "route"
+      ? teamRedoNarrowed(projectDir, scope, unitMajorState, targetSlug, true)
+      : null;
+    if (narrowed !== null) {
+      emit(narrowed.directive);
+      return;
+    }
     if (unitMajor === "route") return "route";
     // The jump the person asked for, with nothing to run or say around it, is
     // made here with the command the print below names, and the caller routes
@@ -21472,8 +21550,11 @@ function redoCurrentStage(pd: string, scope: string, stateContent: string, slug:
       `This workflow's scope is not one AI-DLC knows, so its stage cannot be redone from here. Run \`${entrySkillInvocation()} --status\` to see where it stands.`,
     );
   }
+  teamClaimsNow(pd, stateContent);
   const unitRedo = unitMajorRedo(pd, scope, stateContent, slug);
   if (unitRedo !== null) return jumpStepPrint(unitRedo.message, unitRedo.jump);
+  const narrowed = teamRedoNarrowed(pd, scope, stateContent, slug);
+  if (narrowed !== null) return narrowed.directive;
   const jump = ["execute", "--target", slug, "--direction", "redo", "--scope", scope];
   return jumpStepPrint(
     `Redo accepted at "${slug}". Run \`${jumpCommandText(jump)}\` to reset the current stage, then re-run \`next\` to start it over.`,
