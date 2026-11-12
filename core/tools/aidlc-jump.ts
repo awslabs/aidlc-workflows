@@ -883,7 +883,9 @@ async function handleExecute(args: string[]): Promise<void> {
   // Under team ownership each Unit's per-Unit work belongs to its claim: going
   // back to a stage before the per-Unit block (the Unit plan changing) keeps
   // it, and a Unit goes back to work only by its own reopen (`jump reopen
-  // --units`). The row says so; stageJumpReaches reads it.
+  // --units`). The row says so, as does the move past the block that keeps
+  // its stages open (`keepsUnitStages`); stageJumpReaches and the Unit
+  // ownership freeze read it.
   const keepsTeamUnitWork = direction === "backward" && isTeamUnitOwnership(content) &&
     beforePerUnitBlock(graph, targetSlug);
   const downstreamStages = direction === "backward"
@@ -962,7 +964,7 @@ async function handleExecute(args: string[]): Promise<void> {
               JSON.stringify(invalidatedDownstreamReviews),
           }
         : {}),
-      ...(keepsTeamUnitWork ? { "Unit Work": "kept" } : {}),
+      ...(keepsTeamUnitWork || keepsUnitStages ? { "Unit Work": "kept" } : {}),
       ...jumpSourceBaseline,
       ...(theirs ? personGitNameField(pd) : {}),
     });
