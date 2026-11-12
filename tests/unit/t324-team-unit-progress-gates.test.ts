@@ -128,6 +128,8 @@ const APPROVALS_LINE = "Each team will approve its Unit after every stage. Do yo
   "end of each Unit instead? I'd keep after every stage, so a wrong turn is caught at the stage where it happens.";
 const RHYTHM_STAYS_PER_STAGE = "The Units are already being approved after every stage, so that stays for this " +
   "work. Carry on with `/aidlc`.";
+const OWNERSHIP_STAYS = "The teams are already building their Units, so they keep them for this work. Carry on " +
+  "with `/aidlc`.";
 
 const tempDirs: string[] = [];
 afterEach(() => {
@@ -1593,9 +1595,7 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     );
     const frozenOwnership = runState(proj, ["set-unit-ownership", "solo"]);
     expect(frozenOwnership.rc).not.toBe(0);
-    expect(frozenOwnership.out).toContain(
-      "frozen after team Unit activity in the current workflow attempt",
-    );
+    expect(frozenOwnership.out).toContain(OWNERSHIP_STAYS);
     // A started Unit routes the same under either rhythm; its first gate
     // fixes the rhythm.
     expect(runState(proj, ["set-unit-gate-rhythm", "per-stage"]).rc).toBe(0);
@@ -1727,9 +1727,7 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
 
     const solo = runState(proj, ["set-unit-ownership", "solo"]);
     expect(solo.rc, solo.out).not.toBe(0);
-    expect(solo.out).toContain(
-      "Unit ownership is frozen after team Unit activity in the current workflow attempt (current: team).",
-    );
+    expect(solo.out).toContain(OWNERSHIP_STAYS);
     const rhythm = runState(proj, ["set-unit-gate-rhythm", "unit-end"]);
     expect(rhythm.rc, rhythm.out).not.toBe(0);
     expect(rhythm.out).toContain(RHYTHM_STAYS_PER_STAGE);

@@ -1759,7 +1759,8 @@ function handleSetUnitOwnership(given: string[]): void {
     const current = getField(content, "Unit Ownership")?.trim() || "solo";
     if (value !== current && hasCurrentTeamUnitActivity(pd, content)) {
       error(
-        `Unit ownership is frozen after team Unit activity in the current workflow attempt (current: ${current}).`,
+        "The teams are already building their Units, so they keep them for this work. " +
+          `Carry on with \`${entrySkillInvocation()}\`.`,
       );
     }
     if (value === "team") {
