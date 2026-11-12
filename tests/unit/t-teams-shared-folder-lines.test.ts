@@ -412,7 +412,7 @@ describe("the check-in line", () => {
 // aidlc/; the next look now hands it the fact.
 describe("the checked-in fact", () => {
   const CHECKED_IN = "aidlc/ is committed and pushed: your teammates see where this work stands.";
-  const STATUS_YES = "Checked in:     yes, aidlc/ is committed and pushed\n";
+  const STATUS_YES = "Checked in:     yes, aidlc/ is in main on origin\n";
   const chatOf = (session: string): NodeJS.ProcessEnv => ({ ...ENV, CLAUDE_CODE_SESSION_ID: session, CLAUDE_PID: String(process.pid) });
   const statusOf = (dir: string): string => run(UTILITY, ["status"], dir, ENV).out;
   const notices = (step: Record<string, unknown>): string[] => (step.change_notices ?? []) as string[];
@@ -532,7 +532,7 @@ describe("the checked-in fact", () => {
     git(reviewer, ["push", "-q", "origin", "records"]);
     git(alice, ["fetch", "-q", "origin"]);
     expect(notices(next(alice, chat))).toContain(CHECKED_IN);
-    expect(statusOf(alice)).toContain(STATUS_YES);
+    expect(statusOf(alice)).toContain("Checked in:     yes, aidlc/ is in records on origin\n");
   });
 
   test("a branch never pushed cannot be told: no line at a look, none in status, and the stopping point says today's words", () => {

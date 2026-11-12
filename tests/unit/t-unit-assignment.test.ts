@@ -14,7 +14,7 @@
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { auditBlockField, readAuditShardEvents, REQUEST_TEXT_DIR } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -29,6 +29,7 @@ import {
   HOME_RECORD,
   homeState,
   makeHome,
+  mergeOnHost,
   next,
   ORCH,
   run,
@@ -37,6 +38,7 @@ import {
   takeIn,
   tellsWhatToType,
   UNIT,
+  UTILITY,
 } from "../harness/team-build.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -234,6 +236,36 @@ describe("the plan's share fits the team's own git: a protected main, a branch o
     appendAuditEntry("HUMAN_TURN", { "Person Reply": "ok" }, home.dir);
     const look = next(home.dir);
     expect(isShare(look), JSON.stringify(look).slice(0, 600)).toBe(false);
+  });
+
+  // A live run on GitHub (case 7): the plan reached main by its pull request,
+  // squashed, and the lead's look still said it waited on that pull request;
+  // nothing said the lead's main was left ahead and behind origin's.
+  function planMergedBy(how: "squash" | "rebase" | "merge", ownCommit = false): string {
+    const home = makeHome();
+    chooseTeams(home.dir);
+    mainTakesNoDirectPush(home.remote);
+    expect(run(UNIT, ["share", "--plan"], home.dir).json?.error).toBe(RULE);
+    git(home.dir, ["push", "-q", "origin", "main:refs/heads/plan-checkout"]);
+    // A commit of the lead's own after the push, which origin's main never gets.
+    if (ownCommit) {
+      writeFileSync(join(home.dir, "notes.md"), "The lead's own.\n");
+      git(home.dir, ["add", "notes.md"]);
+      git(home.dir, ["commit", "-q", "-m", "the lead's notes"]);
+    }
+    // The host's own merge of the pull request, which its rule lets through.
+    unlinkSync(join(home.remote, "hooks", "pre-receive"));
+    mergeOnHost(home.remote, "plan-checkout", how);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    return home.dir;
+  }
+  const IN_MAIN = "Checked in:     yes, aidlc/ is in main on origin\n";
+  const statusOf = (dir: string) => run(UTILITY, ["status"], dir).out;
+
+  test("after the plan's pull request merges by a squash, a rebase or a merge commit, status says the plan is in main on origin", () => {
+    for (const how of ["squash", "rebase", "merge"] as const) {
+      expect(statusOf(planMergedBy(how)), how).toContain(IN_MAIN);
+    }
   });
 
   // Main's own flow (the teams build on the workspace's repo): the share comes

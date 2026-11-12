@@ -593,20 +593,21 @@ export function stagesCounted(
 // What the chat that heard CHECK_IN_LINE hears once at its first look after the
 // person's own commit and push, and status's line then (checkInState).
 export const CHECKED_IN_LINE = "aidlc/ is committed and pushed: your teammates see where this work stands.";
-export const CHECKED_IN_STATUS = "Checked in:     yes, aidlc/ is committed and pushed";
 
 // That chat's line for where the record is: with the team, or pushed on a
 // branch of its own (a pull request's) that is not in the integration branch
 // yet. Null when it is neither.
 export function checkInNotice(state: CheckIn): string | null {
-  if (state === "checked-in") return CHECKED_IN_LINE;
-  return typeof state === "string" ? null : `aidlc/ is pushed on ${state.pushedOn}; your teammates see it once it is in ${state.into}.`;
+  if (typeof state === "string") return null;
+  return "pushedOn" in state ? `aidlc/ is pushed on ${state.pushedOn}; your teammates see it once it is in ${state.into}.` : CHECKED_IN_LINE;
 }
 
-// Status's Checked in field for the same, or null.
+// Status's Checked in field for the same, or null. The branch is named, so a
+// record merged by its pull request is not read as still on the branch pushed for it.
 export function checkInStatus(state: CheckIn): string | null {
-  if (state === "checked-in") return CHECKED_IN_STATUS;
-  return typeof state === "string" ? null : `Checked in:     pushed on ${state.pushedOn}, not in ${state.into} yet`;
+  if (typeof state === "string") return null;
+  if ("pushedOn" in state) return `Checked in:     pushed on ${state.pushedOn}, not in ${state.into} yet`;
+  return `Checked in:     yes, aidlc/ is in ${state.into} on ${state.remote}`;
 }
 
 // Teams across repos share AI-DLC's record by git, and the person checks it in.
@@ -618,7 +619,7 @@ export function checkInStatus(state: CheckIn): string | null {
 export function checkInLine(projectDir: string, stateContent?: string): string | null {
   if (!checkInApplies(projectDir, stateContent)) return null;
   const state = checkInState(projectDir, stateContent);
-  if (state === "checked-in" || typeof state === "object") return null;
+  if (typeof state === "object") return null;
   // The chat is noted as handed the line, whichever step carries it, so its
   // first look after the check-in says it is done (checkInHandedOut).
   const session = resolveWorkflowSelection(projectDir).sessionId;
@@ -649,7 +650,7 @@ export function checkInApplies(projectDir: string, stateContent?: string): boole
 
 // Where checkInState finds the record: in the work's integration branch on its
 // remote, or pushed on a branch of its own that is not in it yet.
-export type CheckIn = "checked-in" | "not-checked-in" | "unknown" | { pushedOn: string; into: string };
+export type CheckIn = "not-checked-in" | "unknown" | { pushedOn: string; into: string } | { into: string; remote: string };
 
 // Whether aidlc/ is checked in, from local git only: nothing under it changed
 // but the rows each look adds to this clone's own audit file (onlyOwnLookRows,
@@ -697,7 +698,8 @@ export function checkInState(projectDir: string, stateContent?: string): CheckIn
   if (!changes.every((change) => onlyOwnLookRows(projectDir, root, change))) return "not-checked-in";
   const ahead = run(["log", "--format=%H", `${into}..HEAD`, "--", "aidlc"]);
   if (ahead.status !== 0) return "unknown";
-  if (ahead.stdout.trim() === "") return "checked-in";
+  const checkedIn = { into: target.branch, remote: target.remote };
+  if (ahead.stdout.trim() === "") return checkedIn;
   // A squash or rebase merge puts the same files in as commits of its own.
   const names = (range: string[]): Set<string> | null => {
     const listed = run(["diff", "--name-only", "-z", "--no-renames", ...range, "--", "aidlc"]);
@@ -706,7 +708,7 @@ export function checkInState(projectDir: string, stateContent?: string): CheckIn
   const mine = names([`${into}...HEAD`]);
   const differ = names([into, "HEAD"]);
   if (mine === null || differ === null) return "unknown";
-  if (![...mine].some((path) => differ.has(path))) return "checked-in";
+  if (![...mine].some((path) => differ.has(path))) return checkedIn;
   const head = run(["symbolic-ref", "--quiet", "HEAD"]);
   if (head.status !== 0) return "unknown";
   const upstream = run(["for-each-ref", "--format=%(upstream:remotename) %(upstream:remoteref)", head.stdout.trim()]);

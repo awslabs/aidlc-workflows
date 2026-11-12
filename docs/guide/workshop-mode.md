@@ -861,7 +861,7 @@ never because git status shows aidlc/ changed, since a look's own audit rows
 always change it. Your local git is read only to hand over the positive fact:
 after your own commit and push, the next look in that chat says once "aidlc/ is
 committed and pushed: your teammates see where this work stands.", status shows
-`Checked in:     yes, aidlc/ is committed and pushed`, and the reminder is left
+`Checked in:     yes, aidlc/ is in main on origin`, and the reminder is left
 unsaid while it is checked in; the rows each look adds to this clone's own audit
 file are left out of that reading (a decision of yours there still counts), and
 a branch never pushed says nothing either way.
