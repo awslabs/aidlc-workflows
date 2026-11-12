@@ -1,33 +1,6 @@
 # Delivery Planning Guide
 
-Domain-specific guidance for the Delivery Planning stage. Use this alongside `product-guide.md` when leading execution plan creation.
-
-## Stage Configuration Heuristics
-
-Derive stage configuration from the work breakdown analysis. For each conditional stage, evaluate whether it adds value based on the identified work streams, their complexity, and dependencies.
-
-### INCEPTION stages
-
-| Stage | EXECUTE when | SKIP when |
-|-------|-------------|-----------|
-| Domain Design | Work streams introduce new components/services, new architectural boundaries, greenfield projects | All streams modify existing components only, no new service boundaries |
-| Units Generation | Multiple independent work streams, cross-cutting concerns requiring sequenced delivery | Single stream or tightly coupled streams that form one natural unit |
-| Contract Design | More than one unit must integrate, or a unit exposes a public/external API to formalise before parallel build | Single self-contained unit with no inter-unit boundaries and no external API |
-
-### CONSTRUCTION stages (per-unit)
-
-| Stage | EXECUTE when | SKIP when |
-|-------|-------------|-----------|
-| Functional Design | Streams involve complex business logic, state machines, multi-step workflows, domain modeling | Simple CRUD, config changes, straightforward data transformations |
-| NFR Requirements | Streams handle security-sensitive data, performance SLAs, public-facing APIs, regulatory compliance | Internal tools, prototypes, low-risk utility functions |
-| NFR Design | NFR Requirements produced non-trivial requirements | NFR Requirements skipped or produced only basic constraints |
-| Infrastructure Design | Streams require new deployment targets, CI/CD changes, infrastructure-as-code | Existing infrastructure unchanged, deploying to established pipeline |
-
-### Configuration rationale format
-
-For each stage decision, tie the rationale to specific work streams:
-- "EXECUTE — Streams 1 and 3 introduce new service boundaries requiring architectural design"
-- "SKIP — All streams modify existing components within established architecture"
+Domain-specific guidance for the Delivery Planning stage.
 
 ## Work Stream Identification Patterns
 
@@ -76,7 +49,6 @@ Every execution plan MUST include these sections:
 3. **Detailed Analysis Summary** — scope metrics, change impact, component relationships
 4. **Risk Assessment** — risk register with likelihood, impact, and mitigation
 5. **Workflow Visualization** — Mermaid flowchart of stage execution flow
-6. **Stage Configuration** — checkbox list of stages with EXECUTE/SKIP decisions and rationale tied to work streams
 7. **Success Criteria** — measurable outcomes for project completion
 
 Optional sections (include when applicable):
