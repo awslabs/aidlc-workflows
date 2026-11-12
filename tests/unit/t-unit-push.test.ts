@@ -1890,12 +1890,17 @@ describe("a team's done Unit that the lead's Build and Test sends back", () => {
     const completions = (): number =>
       readAuditShardEvents(home.dir).filter((row) => row.event === "STAGE_COMPLETED" && row.block.includes("**Stage**: code-generation")).length;
     const before = completions();
-    // The reopen holds across every next look: Code Generation, its plan first.
+    // The reopen holds across every next look: Code Generation, its plan first,
+    // the plan that came home with the merge revised for the lead's words, never
+    // asked as it stands.
     for (let look = 0; look < 2; look++) {
       const step = next(home.dir, chat);
       expect(step.kind, JSON.stringify(step).slice(0, 600)).toBe("run-stage");
       expect(step.stage).toBe("code-generation");
       expect(String(step.narration)).toContain("Writing the code plan for Code Generation for ");
+      expect(String(step.plan_note), JSON.stringify(step.plan_approval)).toContain(
+        `was sent back from the lead's Build and Test: "${words}". Revise this plan and its test instructions for it`,
+      );
       // Said once, with the first of them.
       expect(((step.change_notices ?? []) as string[]).includes(builtHere), JSON.stringify(step.change_notices)).toBe(look === 0);
     }

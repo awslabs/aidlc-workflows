@@ -2896,26 +2896,30 @@ function routePlanApproval(directive: Directive): Directive {
 }
 
 // A Unit's build back at Code Generation after its home turned it down or sent
-// it back: the plan to write is for what the home said, so the plan step
-// carries the home's words (planNote). A plan written before that is the first
-// build's, never put up for approval again as it stands: it is revised for the
-// home's words first, and the revised plan is the one asked about.
+// it back, or a merged Unit the lead took back to fix at the lead's project:
+// the plan to write is for what the lead said, so the plan step carries the
+// lead's words (planNote). A plan written before that (the first build's, or
+// the one that came home with the merge) is never put up for approval again as
+// it stands: it is revised for the lead's words first, and the revised plan is
+// the one asked about.
 function withTurnDownForPlan(projectDir: string, routed: Directive, issued: Directive): Directive {
   const planStep = routed.kind === "run-stage" && routed.plan_approval?.status === "plan";
   const asked = routed.kind === "ask" && routed.ask_type === PLAN_APPROVAL_ASK_TYPE && issued.kind === "run-stage";
   if (!planStep && !asked) return routed;
   const state = loadStateFileIfPresent(projectDir);
   const build = unitBuildOf(state);
-  const down = state === null || build === null ? null : turnedDownBuildWaits(projectDir, state);
-  if (build === null || down === null) return routed;
-  const feedback = turnedDownLine(build.unit, down);
+  const unit = build?.unit ?? (issued.kind === "run-stage" ? issued.unit : undefined);
+  const down = state === null || unit === undefined ? null
+    : build !== null ? turnedDownBuildWaits(projectDir, state) : takenBackToFixHere(projectDir, unit);
+  if (unit === undefined || down === null) return routed;
+  const feedback = turnedDownLine(unit, down);
   if (planStep && routed.kind === "run-stage") {
     routed.plan_approval = { ...routed.plan_approval!, feedback };
     return routed;
   }
   let written: number;
   try {
-    written = statSync(join(codeGenerationRecordDir(projectDir, build.unit), "code-generation-plan.md")).mtimeMs;
+    written = statSync(join(codeGenerationRecordDir(projectDir, unit), "code-generation-plan.md")).mtimeMs;
   } catch {
     return routed;
   }
@@ -2923,6 +2927,19 @@ function withTurnDownForPlan(projectDir: string, routed: Directive, issued: Dire
   if (!(written < at) || issued.kind !== "run-stage") return routed;
   issued.plan_approval = { status: "plan", feedback };
   return issued;
+}
+
+// A merged Unit the lead took back to fix here (unitsTakenBackHere), as the
+// lead's Build and Test sending it back: the take-back's words and its time.
+function takenBackToFixHere(projectDir: string, unit: string): { repo: string; words?: string; at: string; from: "build-and-test" } | null {
+  const rows = readAuditShardEvents(projectDir);
+  if (!unitsTakenBackHere(rows).has(unit)) return null;
+  const row = rows.filter((entry) => entry.event === "UNITS_ASSIGNED" &&
+      (auditBlockField(entry.block, "Here") ?? "").split(",").some((name) => name.trim() === unit))
+    .sort((a, b) => (a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0)).at(-1);
+  if (row === undefined) return null;
+  const words = auditBlockField(row.block, "Person Words") ?? undefined;
+  return { repo: "", from: "build-and-test", at: row.timestamp, ...(words ? { words } : {}) };
 }
 
 // With plan approval off, a build keeps the record that its plan was built
