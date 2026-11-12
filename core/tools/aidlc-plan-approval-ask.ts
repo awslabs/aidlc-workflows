@@ -18,7 +18,7 @@
 // (generation start, the worker brief, the swarm, team merge, worktree
 // delegation) reads this one unchanged. What changed is who writes them.
 
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, utimesSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
@@ -518,7 +518,12 @@ export function codeGenerationPlanReadiness(
         : null;
       if (written !== null) {
         if (contract === "count") return { ready: true };
+        // The plan keeps its own time: the block is the engine's, no revision
+        // of the plan (a redo after a turn-down reads that time to tell the
+        // first build's plan from one revised for the lead's words).
+        const before = statSync(join(dir, PLAN_FILE));
         writeFileAtomic(join(dir, PLAN_FILE), written);
+        utimesSync(join(dir, PLAN_FILE), before.atime, before.mtime);
         return { ready: true, written: true };
       }
     } catch {
