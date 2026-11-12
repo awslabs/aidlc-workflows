@@ -817,7 +817,9 @@ describe("a parallel batch's writes judged from the parent", () => {
   const blocked = (pd: string) => readAuditShardEvents(pd).filter((row) => row.event === "PLAN_APPROVAL_BLOCKED").length;
   const stoodAside = (pd: string) => readAuditShardEvents(pd).filter((row) =>
     row.event === "GUARD_STOOD_ASIDE" && auditBlockField(row.block, "Guard") === "plan-approval").length;
-  const REFUSAL = "cannot select one approval target";
+  // A change the parallel build does not let through, said as where a change goes through.
+  const REFUSAL = "Code generation cannot start: while the Units are built in parallel, a change goes through only " +
+    "inside one Unit's own prepared worktree, with that Unit's plan as it was approved.";
   // A write seen only in the main checkout waits for the Units' landings, which check it.
   const HELD = "the main checkout changes only by their landings";
 
@@ -879,7 +881,7 @@ describe("a parallel batch's writes judged from the parent", () => {
       );
       expect(held.err).toContain("A change the person asks for in the main checkout can be made once Code Generation is over.");
       expect(held.err).toContain("aidlc-orchestrate.ts next");
-      expect(held.err).not.toContain("ambiguous or stale");
+      expect(held.err).not.toContain("a change goes through only inside one Unit's own prepared worktree");
       expect(held.err).not.toContain("directive kind");
     }
   });

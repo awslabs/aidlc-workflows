@@ -4548,7 +4548,7 @@ function approveThroughParts(proj: string, scope: string): Emitted {
   const early = guardWrite(proj, join(proj, "src", "slugify.ts"));
   expect(early.code).toBe(2);
   expect(early.stderr).toContain(`continue ${first.receipt}\``);
-  expect(early.stderr).not.toContain("cannot select one approval target");
+  expect(early.stderr).not.toContain("AI-DLC is not on the build step");
   const build = continueEachPart(proj, first);
   expect(build.kind, JSON.stringify(build)).toBe("run-stage");
   expect(build.stage).toBe("code-generation");
@@ -4781,7 +4781,7 @@ describe("a setting typed over the step in hand keeps that step current", () => 
     expect(kept?.stage).toBe("code-generation");
     const write = guardWrite(proj, planFile(proj));
     expect(write.code, write.stderr).toBe(0);
-    expect(write.stderr).not.toContain("no matching v2 code-generation active directive");
+    expect(write.stderr).not.toContain("AI-DLC is not on the build step");
   });
 
   test("after approval, with the build issued: a source write goes through, and the review the setting turned off is refused", () => {
