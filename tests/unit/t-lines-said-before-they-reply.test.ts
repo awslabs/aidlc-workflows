@@ -239,7 +239,7 @@ describe("t-lines-said-before-they-reply: the lines the person must hear ride ch
     for (const [harness, dir] of TREES) {
       const tree = await import(join(REPO_ROOT, "dist", harness, dir, "tools", "aidlc-directive.ts"));
       expect(tree.CHANGE_NOTICES_NOTE, harness).toBe(
-        `Say each change_notices line to the person ${tree.SAY_ONCE_BEFORE_THEY_REPLY}, and add nothing about why.`,
+        `Say each notice listed beside this note to the person ${tree.SAY_ONCE_BEFORE_THEY_REPLY}, and add nothing about why.`,
       );
       expect(tree.SAY_ONCE_BEFORE_THEY_REPLY, harness).toBe(
         "once, as written (only a verb's tense may change to fit when you say it), as your own sentence with " +

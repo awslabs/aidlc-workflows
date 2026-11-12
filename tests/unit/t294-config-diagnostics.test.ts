@@ -2803,9 +2803,11 @@ describe("t294 post-apply outstanding actions", () => {
     )) as { hookActivation: { recovery: string } }).hookActivation.recovery;
     const step = "in Codex, type /hooks, press t to trust all, then press Esc";
     expect(recovery.startsWith(`I${step.slice(1)}.`), recovery).toBe(true);
+    // The list names the config section, never the action's internal id.
     expect(applied.stdout).toContain(
-      `trust/codex-hook-trust-missing: Codex has not trusted this project's hooks yet - ${step}`,
+      `\n  trust: Codex has not trusted this project's hooks yet - ${step}`,
     );
+    expect(applied.stdout).not.toContain("codex-hook-trust-missing");
     expect(applied.stdout).not.toContain("config trust");
 
     const quiet = run([
@@ -2905,7 +2907,9 @@ describe("t294 post-apply outstanding actions", () => {
       "--yes",
     ], project, env);
     expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
-    expect(refreshed.stdout).toContain("bedrock-model-access");
+    // The action by its section and words; its id is shown by the check the step names.
+    expect(refreshed.stdout).toContain("\n  providers: Verify Amazon Bedrock model access in the recorded region");
+    expect(refreshed.stdout).not.toContain("bedrock-model-access");
     expect(refreshed.stdout).toContain(
       "bun .claude/tools/aidlc.ts config providers --check",
     );

@@ -131,7 +131,7 @@ rm -f \
   your-project/.kiro/agents/aidlc-*-agent.json \
   your-project/.kiro/hooks/aidlc-*.kiro.hook
 # The copy replaces .kiro/settings/cli.json; keep the project's own first.
-if [ -f your-project/.kiro/settings/cli.json ]; then
+if [ -f your-project/.kiro/settings/cli.json ] && [ ! -f your-project/cli.json.before-aidlc ]; then
   cp your-project/.kiro/settings/cli.json your-project/cli.json.before-aidlc
 fi
 cp -R "$RUNTIME_ROOT/kiro-ide/.kiro/." your-project/.kiro/
@@ -151,7 +151,10 @@ it. Keep your own Kiro CLI settings in the user-level `~/.kiro/settings/cli.json
 instead: Kiro CLI reads that file too, and the project file wins only for the
 keys it sets.
 If the project kept settings in `.kiro/settings/cli.json`, the block above saves
-them as `cli.json.before-aidlc` so you can move them there. Both removals are
+them as `cli.json.before-aidlc` so you can move them there; a copy saved by an
+earlier run is kept, so running the block again never writes over it. Each run
+puts AI-DLC's `.kiro/settings/cli.json` back, so make later changes in the
+user-level file. Both removals are
 no-ops on a fresh install. After that cleanup, the
 `cp -R <src>/. <dst>/` form copies the tree **contents** whether
 `your-project/.kiro` already exists or not. A plain
@@ -160,8 +163,7 @@ existing `.kiro/` and the IDE never sees the new files.
 
 The `aidlc/` directory is the workspace shell — it ships the pre-built
 `aidlc/spaces/default/memory/` method tree the engine reads. It is a **sibling**
-of `.kiro/`, so copy it separately (or copy the whole
-`$RUNTIME_ROOT/kiro-ide/` tree at once). `/aidlc --doctor` fails its
+of `.kiro/`, so copy it separately. `/aidlc --doctor` fails its
 "workspace shell ready" check if it is missing.
 
 In a copied project, the `aidlc` agent runs AI-DLC's engine commands
@@ -970,15 +972,36 @@ then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
 
 ```bash
 mkdir -p your-project/.kiro your-project/aidlc
-cp -R "$RUNTIME_ROOT/kiro/.kiro/." your-project/.kiro/
+# The copy replaces .kiro/settings/cli.json; keep the project's own first.
+if [ -f your-project/.kiro/settings/cli.json ] && [ ! -f your-project/cli.json.before-aidlc ]; then
+  cp your-project/.kiro/settings/cli.json your-project/cli.json.before-aidlc
+fi
+# Leave .kiro/settings/mcp.json to config, which merges it.
+if kiro_copy="$(mktemp -d)"; then
+  cp -R "$RUNTIME_ROOT/kiro/.kiro/." "$kiro_copy/"
+  rm -f "$kiro_copy/settings/mcp.json"
+  cp -R "$kiro_copy/." your-project/.kiro/
+  rm -rf "$kiro_copy"
+fi
 cp -R "$RUNTIME_ROOT/kiro/aidlc/." your-project/aidlc/    # the workspace shell (spaces/default/memory) — a sibling of .kiro/, not inside it
 cd your-project && bun .kiro/tools/aidlc.ts config --from "$RUNTIME_ROOT" --harness kiro-v2
 ```
 
+The copy replaces `.kiro/settings/cli.json`, which sets `chat.defaultAgent` to
+`aidlc`, and each run puts AI-DLC's file back. Keep your own Kiro CLI settings
+in the user-level `~/.kiro/settings/cli.json` instead: Kiro CLI reads that file
+too, and the project file wins only for the keys it sets. If the project kept
+settings in `.kiro/settings/cli.json`, the block above saves them as
+`cli.json.before-aidlc` so you can move them there; a copy saved by an earlier
+run is kept, so running the block again never writes over it. The block copies
+`.kiro/` through a temporary folder without `settings/mcp.json`, so a project's
+own `.kiro/settings/mcp.json` is left for `config`, which keeps your servers and
+your changes to them and adds the AI-DLC servers it does not have yet, turned
+off. A project without one gets AI-DLC's.
+
 The `aidlc/` directory is the workspace shell — it ships the pre-built
 `aidlc/spaces/default/memory/` method tree the engine reads. It is a **sibling**
-of `.kiro/`, so copy it separately (or copy the whole
-`$RUNTIME_ROOT/kiro/` tree at once).
+of `.kiro/`, so copy it separately.
 `/aidlc --doctor` fails its "workspace shell ready" check if it is missing.
 
 The versioned runtime uses the native `aidlc` command. Framework developers who

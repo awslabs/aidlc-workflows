@@ -1945,15 +1945,18 @@ function initializedSubmoduleSourceError(
 
 // Materialize the reviewed application bytes as an immutable commit without
 // moving the Bolt branch. The temporary index starts from HEAD, overlays the
-// worktree, then restores framework-owned paths from HEAD
-// (shapeSourceSnapshotIndex) so the later source merge carries application
-// source only. Recompute the fingerprint after the object is written to close a
+// worktree, then restores framework-owned paths (shapeSourceSnapshotIndex) so
+// the later source merge carries application source only: AI-DLC's records
+// from the commit the Bolt shares with `landingBranch`, which prepare
+// recorded, so records a Bolt commit carried stay behind; without it, from
+// HEAD. Recompute the fingerprint after the object is written to close a
 // concurrent-edit window; the validated value is the one carried to the
 // convergence row.
 function bindReviewedSource(
   identity: BoltIdentity,
   fingerprint: string,
   recoveryBudget: NewGitlinkRecoveryBudget,
+  landingBranch: string | null,
 ): { binding?: SourceBinding; error?: string } {
   const wt = identity.dir;
   const idx = join(tmpdir(), `aidlc-swarm-source-${process.pid}-${randomUUID().slice(0, 8)}`);
@@ -1991,7 +1994,11 @@ function bindReviewedSource(
       initialGitlinkPaths.add(record.slice(tab + 1).replace(/\\/g, "/"));
     }
     if (git(["add", "-A"]).status !== 0) return { error: "cannot stage the reviewed source snapshot" };
-    const shape = shapeSourceSnapshotIndex(wt, idx, true);
+    const shared = landingBranch === null ? null : git(["merge-base", "HEAD", `refs/heads/${landingBranch}`]);
+    const recordBase = shared?.status === 0 && /^[0-9a-f]{40,64}$/.test(shared.stdout.trim())
+      ? shared.stdout.trim()
+      : null;
+    const shape = shapeSourceSnapshotIndex(wt, idx, true, recordBase);
     if (shape === null) {
       return { error: "cannot apply the reviewed source boundary to the snapshot" };
     }
@@ -3497,6 +3504,7 @@ function handleFinalize(rest: string[]): void {
                 identity,
                 receipt.sourceFingerprint,
                 recoveryBudget,
+                preparedLandingBranch(readAuditShardEvents(projectDir), batch, unit),
               )
             : {};
           if (captured.error || !captured.snapshot) {
