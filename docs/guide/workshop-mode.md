@@ -349,10 +349,21 @@ cannot prove the pin was not tombstoned.
 Pin's output carries the merge gate (`merge_gate`): the question, its strategy
 and target, and the command that records each answer. The agent asks it in the
 pin's own turn, once. A pinned Unit lands with a regular merge (strategy
-`merge`) into the integration branch pin fetched, so the reviewed OID is a
-direct parent; that is not put to the person as a choice, and the team's merge
+`merge`) into the branch checked out at pin, so the reviewed OID is a direct
+parent; that is not put to the person as a choice, and the team's merge
 default (squash in the shipped `org.md`) holds for every other merge. The
-person's reply after the pin is the answer the gate records.
+person's reply after the pin is the answer the gate records, with that branch
+as its target.
+
+On the integration branch itself, that is the integration branch. A team whose
+integration branch takes changes only by review (a protected one, say) lands
+on a branch of its own instead: cut it from the fetched integration branch
+(`git switch -c records/payments origin/main`) before the pin. The merge question then names that branch and
+says the Unit reaches main when it is merged there; land requires the same
+branch, refuses one that does not contain the fetched integration branch as
+stale, and leaves main untouched, here and on the remote. More Units can land
+on the same branch. You push it and merge it into the integration branch; a
+Unit that depends on one landed there is claimed once the branch is merged.
 
 The integration lead presents the evidence summary and pinned OID to the human,
 then records their answer: their reply goes in the file pin's gate commands name,
@@ -375,6 +386,9 @@ publishes again, and main re-pins.
 ```bash
 aidlc unit land payments --target main
 ```
+
+`--target` is optional; given, it must name the branch the merge gate
+recorded.
 
 Landing is ordered and resumable:
 
@@ -414,7 +428,10 @@ aidlc unit merge-status payments
 ```
 
 Other teams and future claim checks observe the new integration state once the
-landed target branch is pushed. When the remote does not have the landed commit
+landed target branch is pushed. A Unit landed on a branch other than the
+integration branch says so in one line (where it landed, and that it reaches
+main when that branch is merged there); nothing offers to push it, and
+`aidlc unit share` there refuses instead of pushing the branch onto main. When the remote does not have the landed commit
 yet, the land's output names the next step, and that step asks once: "Push main
 to origin now so the other teams see payments landed?" **Push main** runs
 `aidlc unit share` (a plain push); **Not now** leaves a line on the board. By

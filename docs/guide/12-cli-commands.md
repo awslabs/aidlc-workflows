@@ -49,9 +49,9 @@ diagnostic and lifecycle routes.
 | `/aidlc --release <unit>` | Release a live Unit claim from unscoped main by publishing a tombstone |
 | `/aidlc unit adopt <unit>` | Adopt the checked-out live claim branch in a fresh clone |
 | `/aidlc unit participate` | Mark this clone for the guided Unit-claim picker |
-| `/aidlc unit share` | Commit the work here and push the integration branch so the teams can take Units, or see a landed one |
+| `/aidlc unit share` | Commit the work here and push the integration branch so the teams can take Units, or see a landed one; refused on a branch a Unit landed on instead, which reaches the integration branch when that branch is merged there |
 | `/aidlc unit publish <unit> [--commit [--include <path>]...]` | CAS-publish the scoped checkout's clean committed candidate onto its claim ref; `--commit` commits the Unit's own work first, and `--include` puts in a new file or folder it left out |
-| `/aidlc unit pin <unit>` | Pin and validate one completed candidate OID from unscoped main |
+| `/aidlc unit pin <unit>` | Pin and validate one completed candidate OID from unscoped main; the Unit will land on the branch checked out there (the integration branch, or a branch you merge into it) |
 | `/aidlc unit gate <unit> ...` | Record the merge decision against the pinned OID and generation |
 | `/aidlc unit land <unit> ...` | Run the resumable git → state → audit landing transaction |
 | `/aidlc unit merge-status <unit>` | Read the local pinned-merge transaction journal |
@@ -855,6 +855,14 @@ neither.
 ```bash
 /aidlc unit land user-profile-api --target main
 ```
+
+The Unit lands on the branch the merge gate recorded: the branch checked out at
+pin, the integration branch or a branch of your own cut from it (where the
+integration branch takes changes only by review, a protected one, say). Land
+refuses another branch checked out, and one that does not contain the fetched
+integration branch as stale. A landing on your own branch leaves the
+integration branch untouched, says in one line that the Unit reaches it when
+that branch is merged there, and offers no push; `unit share` there refuses.
 
 Landing first fetches the current integration branch and revalidates the
 approved evidence against the Unit's live entry in the Unit DAG (its kind and

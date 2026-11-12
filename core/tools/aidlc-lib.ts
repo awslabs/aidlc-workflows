@@ -29966,6 +29966,10 @@ export interface UnitMergeTransaction {
   candidate_base_oid: string;
   integration_oid: string;
   integration_branch: string;
+  /** The branch checked out at pin when it is not the integration branch (a
+   *  branch the person merges into it): where the
+   *  Unit lands. Absent, the Unit lands on the integration branch. */
+  landing_branch?: string;
   main_before_oid: string;
   pinned_at: string;
   pin_id?: string;
@@ -30111,6 +30115,7 @@ export function readUnitMergeTransaction(
       !oid(parsed.candidate_base_oid) ||
       !oid(parsed.integration_oid) ||
       typeof parsed.integration_branch !== "string" ||
+      (parsed.landing_branch !== undefined && typeof parsed.landing_branch !== "string") ||
       !oid(parsed.main_before_oid) ||
       typeof parsed.pinned_at !== "string" ||
       (parsed.audit_shard !== undefined &&
