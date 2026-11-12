@@ -132,8 +132,11 @@ then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
    ```bash
    mkdir -p your-project/.codex
    # The copy replaces .codex/config.toml, hooks.json and rules/default.rules; keep the project's own first.
-   for f in config.toml hooks.json rules/default.rules; do
-     if [ -f "your-project/.codex/$f" ]; then
+   if [ -f your-project/.codex/config.toml ]; then
+     cp your-project/.codex/config.toml your-project/config.toml.before-aidlc
+   fi
+   for f in hooks.json rules/default.rules; do
+     if [ -f "your-project/.codex/$f" ] && [ ! -f "your-project/$(basename "$f").before-aidlc" ]; then
        cp "your-project/.codex/$f" "your-project/$(basename "$f").before-aidlc"
      fi
    done
@@ -148,8 +151,9 @@ then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
    The copy replaces `.codex/config.toml`, `.codex/hooks.json` and
    `.codex/rules/default.rules`, so the block first saves the project's own as
    `config.toml.before-aidlc`, `hooks.json.before-aidlc` and
-   `default.rules.before-aidlc`, then puts its `config.toml` back: step 2 adds
-   AI-DLC's settings to it and keeps yours. `hooks.json` and `default.rules` are
+   `default.rules.before-aidlc` (a `hooks.json` or `default.rules` saved by an
+   earlier run is kept, so a re-copy never writes over it), then puts its
+   `config.toml` back: step 2 adds AI-DLC's settings to it and keeps yours. `hooks.json` and `default.rules` are
    AI-DLC's in a Codex project (step 2 stops with a conflict while either differs
    from the shipped one), so if the saved copies held hooks or rules of your own,
    move them: Codex also runs the hooks in `~/.codex/hooks.json` and in `[hooks]`

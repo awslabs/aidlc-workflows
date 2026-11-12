@@ -810,9 +810,13 @@ describe("documentation parity derives current behavior from authored implementa
     const lines = read("docs", "guide", "harnesses", "codex-cli.md").split(/\r?\n/).map((line) => line.trim());
     const copy = lines.findIndex((line) => /^cp\s+-R\s+"\$RUNTIME_ROOT\/codex\/\.codex\/\."\s+your-project\/\.codex\/$/.test(line));
     expect(copy, "codex-cli.md copies the runtime's .codex/ contents").toBeGreaterThan(-1);
-    const saves = lines.slice(0, copy).find((line) => /^for f in .+; do$/.test(line)) ?? "";
-    for (const name of owned) expect(saves.split(/[\s;]+/), `the save loop before the copy names ${name}`).toContain(name);
-    expect(lines.slice(0, copy).some((line) => line.includes(".before-aidlc")), "the loop saves as .before-aidlc").toBe(true);
+    const before = lines.slice(0, copy);
+    const words = before.join(" ").split(/[\s;"]+/);
+    for (const name of owned) expect(words, `the step saves ${name} before the copy`).toContain(name === "config.toml" ? "your-project/.codex/config.toml" : name);
+    expect(before.some((line) => line.includes(".before-aidlc")), "the step saves as .before-aidlc").toBe(true);
+    // A re-copy must not write the shipped hooks.json or default.rules over the project's own saved copy.
+    const keepsSaved = before.some((line) => line.includes('! -f "your-project/$(basename "$f").before-aidlc"'));
+    expect(keepsSaved, "hooks.json and default.rules are saved only when no saved copy exists yet").toBe(true);
     const restores = lines.slice(copy).some((line) => line.startsWith("cp your-project/config.toml.before-aidlc your-project/.codex/config.toml"));
     expect(restores, "the step puts the project's config.toml back after the copy").toBe(true);
   });
