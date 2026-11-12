@@ -605,7 +605,8 @@ describe("t276 cursor adapter payload conversion", () => {
     expect(write.code).toBe(0);
     const denied = JSON.parse(write.stdout) as { permission?: string; agent_message?: string };
     expect(denied.permission).toBe("deny");
-    expect(denied.agent_message ?? "").toContain("Plan Approval authority evaluation failed closed");
+    expect(denied.agent_message ?? "").toContain("cannot start: its plan's approval could not be checked: ");
+    expect(denied.agent_message ?? "").not.toMatch(/authority|failed closed|ambiguous or stale/);
     const next = spawnSync("bun", [join(proj, ".cursor", "tools", "aidlc-orchestrate.ts"), "next", "--project-dir", proj], {
       timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",

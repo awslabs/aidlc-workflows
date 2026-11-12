@@ -4781,7 +4781,7 @@ describe("a setting typed over the step in hand keeps that step current", () => 
     expect(kept?.stage).toBe("code-generation");
     const write = guardWrite(proj, planFile(proj));
     expect(write.code, write.stderr).toBe(0);
-    expect(write.stderr).not.toContain("no matching v2 code-generation active directive");
+    expect(write.stderr).not.toContain("AI-DLC is not on the build step");
   });
 
   test("after approval, with the build issued: a source write goes through, and the review the setting turned off is refused", () => {
