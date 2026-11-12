@@ -813,11 +813,16 @@ describe("documentation parity derives current behavior from authored implementa
     const before = lines.slice(0, copy);
     const words = before.join(" ").split(/[\s;"]+/);
     for (const name of owned) expect(words, `the step saves ${name} before the copy`).toContain(name === "config.toml" ? "your-project/.codex/config.toml" : name);
-    expect(before.some((line) => line.includes(".before-aidlc")), "the step saves as .before-aidlc").toBe(true);
+    // The saves stay inside .codex/, so a project that keeps .codex/ out of git keeps them out too, and outside
+    // .codex/rules/, which Codex reads.
+    const saved = "your-project/.codex/before-aidlc/";
+    const targets = before.flatMap((line) => [...line.matchAll(/^cp\s+\S+\s+"?(your-project\/[^"\s]+)"?$/g)].map((m) => m[1]));
+    expect(targets.length, "the step saves the project's files before the copy").toBeGreaterThan(0);
+    for (const target of targets) expect(target.startsWith(saved), `the save target ${target} is in ${saved}`).toBe(true);
     // A re-copy must not write the shipped hooks.json or default.rules over the project's own saved copy.
-    const keepsSaved = before.some((line) => line.includes('! -f "your-project/$(basename "$f").before-aidlc"'));
+    const keepsSaved = before.some((line) => line.includes(`! -f "${saved}$(basename "$f")"`));
     expect(keepsSaved, "hooks.json and default.rules are saved only when no saved copy exists yet").toBe(true);
-    const restores = lines.slice(copy).some((line) => line.startsWith("cp your-project/config.toml.before-aidlc your-project/.codex/config.toml"));
+    const restores = lines.slice(copy).some((line) => line.startsWith(`cp ${saved}config.toml your-project/.codex/config.toml`));
     expect(restores, "the step puts the project's config.toml back after the copy").toBe(true);
   });
 

@@ -130,36 +130,37 @@ then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
    one):
 
    ```bash
-   mkdir -p your-project/.codex
+   mkdir -p your-project/.codex/before-aidlc
    # The copy replaces .codex/config.toml, hooks.json and rules/default.rules; keep the project's own first.
    if [ -f your-project/.codex/config.toml ]; then
-     cp your-project/.codex/config.toml your-project/config.toml.before-aidlc
+     cp your-project/.codex/config.toml your-project/.codex/before-aidlc/config.toml
    fi
    for f in hooks.json rules/default.rules; do
-     if [ -f "your-project/.codex/$f" ] && [ ! -f "your-project/$(basename "$f").before-aidlc" ]; then
-       cp "your-project/.codex/$f" "your-project/$(basename "$f").before-aidlc"
+     if [ -f "your-project/.codex/$f" ] && [ ! -f "your-project/.codex/before-aidlc/$(basename "$f")" ]; then
+       cp "your-project/.codex/$f" "your-project/.codex/before-aidlc/$(basename "$f")"
      fi
    done
    cp -R "$RUNTIME_ROOT/codex/.codex/." your-project/.codex/
-   if [ -f your-project/config.toml.before-aidlc ]; then
-     cp your-project/config.toml.before-aidlc your-project/.codex/config.toml
+   if [ -f your-project/.codex/before-aidlc/config.toml ]; then
+     cp your-project/.codex/before-aidlc/config.toml your-project/.codex/config.toml
    fi
    cp -R "$RUNTIME_ROOT/codex/.agents/." your-project/.agents/
    cp -r "$RUNTIME_ROOT/codex/aidlc/"   your-project/aidlc/      # the workspace shell (spaces/default/memory) — a sibling of .codex/, not inside it
    ```
 
    The copy replaces `.codex/config.toml`, `.codex/hooks.json` and
-   `.codex/rules/default.rules`, so the block first saves the project's own as
-   `config.toml.before-aidlc`, `hooks.json.before-aidlc` and
-   `default.rules.before-aidlc` (a `hooks.json` or `default.rules` saved by an
+   `.codex/rules/default.rules`, so the block first saves the project's own in
+   `.codex/before-aidlc/` (inside `.codex/`, so a project that keeps `.codex/` out
+   of git keeps the copies out too; a `hooks.json` or `default.rules` saved by an
    earlier run is kept, so a re-copy never writes over it), then puts its
    `config.toml` back: step 2 adds AI-DLC's settings to it and keeps yours. `hooks.json` and `default.rules` are
    AI-DLC's in a Codex project (step 2 stops with a conflict while either differs
    from the shipped one), so if the saved copies held hooks or rules of your own,
    move them: Codex also runs the hooks in `~/.codex/hooks.json` and in `[hooks]`
    tables of `.codex/config.toml` (it warns at startup when one folder has both),
-   and reads the rules in `.codex/rules/` and `~/.codex/rules/`. On a fresh install
-   there is nothing to save. The `cp -R <src>/. <dst>/` form then copies the
+   and reads the rules in `.codex/rules/` and `~/.codex/rules/`, so a file of
+   another name there, such as `.codex/rules/project.rules`, keeps yours. On a
+   fresh install there is nothing to save. The `cp -R <src>/. <dst>/` form then copies the
    folder's contents whether `your-project/.codex` exists or not, on Linux, macOS
    and Git Bash alike.
 
