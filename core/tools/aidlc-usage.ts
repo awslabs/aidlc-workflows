@@ -822,12 +822,21 @@ export function intentUsageKey(
       );
       if (stampCounts) return `intent:${stamped}`;
     }
-    const uuid = intentUuidForSelection(projectDir, selection);
-    if (uuid) return `intent:${uuid}`;
-    return `record:${selection.space}/${selection.intent ?? "legacy"}`;
+    return selectionUsageKey(projectDir, selection);
   } catch {
     return "record:default/legacy";
   }
+}
+
+// The usage key of the piece of work a selection names: its stable UUID, or
+// for a legacy/orphan record its space + record-dir identity.
+export function selectionUsageKey(
+  projectDir: string,
+  selection: Parameters<typeof intentUuidForSelection>[1],
+): string {
+  const uuid = intentUuidForSelection(projectDir, selection);
+  if (uuid) return `intent:${uuid}`;
+  return `record:${selection.space}/${selection.intent ?? "legacy"}`;
 }
 
 // Coerce a possibly-old-shape byStage map into the StageBucket shape. An older
@@ -1355,6 +1364,26 @@ export function workflowUsageAuditFields(
   return workflow && hasAnyTokens(workflow.totals)
     ? aggregateUsageAuditFields(workflow)
     : {};
+}
+
+// What a piece of work has used so far, over every session that worked on it,
+// in plain words for status: "400k tokens in, 53.5k out, about $3.34 (2
+// sessions)". The statusline shows one session's share of the same aggregate
+// (sessionUsageAggregate), so the session count says why the two differ. The
+// cost follows the statusline's rule: left out when nothing was priceable,
+// never a made-up $0. null when the work has no recorded usage.
+export function workflowUsageSummary(
+  projectDir: string,
+  workflowKey: string,
+): string | null {
+  if (usageTrackingDisabled()) return null;
+  const workflow = loadLedger(projectDir).workflows[workflowKey];
+  if (!workflow || !hasAnyTokens(workflow.totals)) return null;
+  const { tokens, usd } = workflow.totals;
+  const cost = Number.isFinite(usd) && usd > 0 ? `, about $${usd.toFixed(2)}` : "";
+  const sessions = Object.keys(workflow.sessions).length;
+  const over = sessions > 1 ? ` (${sessions} sessions)` : "";
+  return `${fmtTokensCompact(tokens.input)} tokens in, ${fmtTokensCompact(tokens.output)} out${cost}${over}`;
 }
 
 export function sessionUsageAggregate(

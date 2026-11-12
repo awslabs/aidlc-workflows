@@ -179,6 +179,7 @@ import {
   PLAN_APPROVAL_REPAIR_SOURCE_BOUNDARY_REMEDY,
 } from "./aidlc-testing-posture.ts";
 import { unitProgress } from "./aidlc-unit-walk-view.ts";
+import { selectionUsageKey, workflowUsageSummary } from "./aidlc-usage.ts";
 import {
   isBindableIntentRecordName,
   isSafeIntentRecordName,
@@ -2445,6 +2446,16 @@ To get started:
   const upgradedLine = upgrade === null
     ? ""
     : `Brought up:     from an older AI-DLC on ${upgrade.date} (the record as it was: ${upgrade.original})\n`;
+  // What this piece of work has used over every session, where the status
+  // line counts one session and starts over in the next. Only where usage is
+  // recorded (Claude Code, tracking on); an unreadable ledger says nothing.
+  let usageLine = "";
+  try {
+    const usage = workflowUsageSummary(projectDir, selectionUsageKey(projectDir, selection));
+    if (usage !== null) usageLine = `Usage so far:   ${usage}\n`;
+  } catch {
+    // Status stays whole without the usage line.
+  }
   const output = `AI-DLC Workflow Status
 ==============================
 Project:        ${project}
@@ -2455,7 +2466,7 @@ ${currentStep}Status:         ${statusLine}
 ${agentLine}Guard Policy:   ${guardPolicyDisplay}
 ${fencesOffLine}${ceremonyDisplay}
 Completion:     ${completed}/${total} stages (${pct}%)${skippedNote}
-
+${usageLine}
 Phase Progress:
 ${phaseProgress}
 ${validityOutput ? `${validityOutput}\n` : ""}${lastLine}${nextLine}${alsoOpen}${upgradedLine}`;
