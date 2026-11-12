@@ -941,7 +941,7 @@ running a workflow stage.
 
 ---
 
-### `/aidlc --doctor` — Health check
+### `/aidlc --doctor` — Health check<a id="aidlc-doctor-health-check"></a>
 
 Validate that all of this implementation's prerequisites, configuration, and
 stage-graph integrity are in place. Clean and warnings-only reports exit 0; a
@@ -952,7 +952,7 @@ They do bring AI-DLC's own copy of the active space's memory up to date
 start does, so the command is safe to run before the first intent is created;
 once an intent exists it also records a `HEALTH_CHECKED` audit row. Plugin checks execute installed plugin code: plugin authors are required by convention to keep those scripts read-only, but the runtime cannot enforce that property.
 
-When a workflow has issues, `--doctor` also lists the structured findings in its Project section, one `warn [<id>] <summary>` row with a `fix:` line each (e.g. `gate-unresolved`, `runtime-graph-missing`), for unresolved gates, a missing runtime graph, cold hooks, and similar "it will not advance" causes. The live report and `--export` share one analysis, so the findings are identical either way.
+When a workflow has issues, `--doctor` also lists the structured findings in its Project section, one `warn [<id>] <summary>` row with a `fix:` line each (e.g. `runtime-graph-missing`), for a missing runtime graph, cold hooks, and similar "it will not advance" causes. The live report and `--export` share one analysis, so the findings are identical either way.
 
 **Syntax:**
 
@@ -1039,7 +1039,7 @@ and sensor row. Every warning or failure carries a following `fix:` action.
 
 ---
 
-### `/aidlc --doctor --export` — Write a diagnostic report
+### `/aidlc --doctor --export` — Write a diagnostic report<a id="aidlc-doctor-export-write-a-diagnostic-report"></a>
 
 Add `--export` to `--doctor` to write a small, redacted diagnostic report so a
 misbehaving workflow can be debugged without sharing your whole project
@@ -1102,7 +1102,6 @@ Diagnostic report created:
   aidlc/diagnostics/aidlc-diagnostic-report-20260714-153000-3f9a1c22.tar.gz
 
 Findings:
-  ERROR gate-unresolved
   WARNING runtime-graph-missing
 
 No source files or artifact bodies were included.
@@ -1341,7 +1340,7 @@ request at the next ordinal.
 
 ---
 
-### Workflow configuration — one atomic setter
+### Workflow configuration — one atomic setter<a id="workflow-configuration-one-atomic-setter"></a>
 
 All twelve intent settings (thirteen keys, because `guard.plan-approval` is another name for `plan-approval`) share one CLI setter, `config-change`.
 Flags from different settings can be combined in one atomic CLI command; do not
@@ -1768,7 +1767,7 @@ with a non-zero exit and this message:
 
 **Valid values:** `on`, `off`.
 
-#### `/aidlc --sensors`, `--learnings`, `--summary-confirmation` — Ceremony controls
+#### `/aidlc --sensors`, `--learnings`, `--summary-confirmation` — Ceremony controls<a id="aidlc-sensors-learnings-summary-confirmation-ceremony-controls"></a>
 
 Set these three independent policies to `on` or `off` for the active intent:
 
@@ -1982,7 +1981,7 @@ when the editor or CLI was started with the variable. During a plan-approval loc
 --bypass` passes once you have spoken since the last decision (never from an
 unattended run), and `--clear-bypass` always passes.
 
-#### `/aidlc --plan-approval` - Plan approval
+#### `/aidlc --plan-approval` - Plan approval<a id="aidlc-plan-approval-plan-approval"></a>
 
 Set whether each code plan is shown for approval before code generation builds
 it, for the active intent:
@@ -2309,7 +2308,7 @@ before later Units, even with stage-major selected. A first design-stage
 review alone does not prove a working skeleton. Already approved inline Units
 are excluded from later swarm batches.
 
-### `aidlc engine swarm prepare` - prepare a reproducible batch
+### `aidlc engine swarm prepare` - prepare a reproducible batch<a id="aidlc-engine-swarm-prepare-prepare-a-reproducible-batch"></a>
 
 Before initial protected Code Generation prepare, commit the already-approved
 parent application source so the selected base can reproduce it. This includes
@@ -2348,7 +2347,7 @@ base needs the approved parent source, preparation starts at that parent commit
 and checks its registrations. Recovery after an explicit discard instead checks
 the recorded Approval Source Commit, even if the parent has since changed.
 
-### Construction verification command — record human authorization
+### Construction verification command — record human authorization<a id="construction-verification-command-record-human-authorization"></a>
 
 For checkpoint-enabled work, Delivery Planning proposes a real project check from
 the project scan, such as `bun test`, `pytest`, or `make check`. The structured
@@ -2438,7 +2437,7 @@ even under autonomous completion. If no runnable check exists yet (greenfield),
 the human may defer during Delivery Planning; leave the field unset and the first
 checkpoint will ask. Never invent or auto-approve a placeholder command.
 
-### `aidlc engine bolt checkpoint` - verify and approve a completed Unit
+### `aidlc engine bolt checkpoint` - verify and approve a completed Unit<a id="aidlc-engine-bolt-checkpoint-verify-and-approve-a-completed-unit"></a>
 
 The engine names the Unit and checkpoint kind (`unit` or `skeleton`). The body,
 reviews, and receipts already exist; follow the checkpoint instead of rebuilding.
@@ -2584,9 +2583,16 @@ Verification Command in each prepared Unit worktree, with or without Constructio
 Checkpoints:
 
 ```bash
-aidlc engine swarm check <Unit> [--test-file <protected spec>] [--show-output]
-aidlc engine swarm finalize --batch <N> --units "<all Units>" --claimed "<converged Units>"
+aidlc engine swarm check <Unit> [--test-file <protected spec>] [--show-output] [--timeout-ms <milliseconds>]
+aidlc engine swarm finalize --batch <N> --units "<all Units>" --claimed "<converged Units>" [--timeout-ms <milliseconds>]
 ```
+
+Each run stops the command after 30 minutes. For a longer project check, add
+`--timeout-ms` (`3600000` is one hour) to `check` and to `finalize`; the value
+must be an integer from 1 through 2147483647, as for `checkpoint --action
+verify`. A run stopped at its limit reports `"reason": "error"` with a `detail`
+that says the command was stopped before it finished, so it never reads as a
+failing project check.
 
 `--check-cmd` is optional, with or without checkpoints; if supplied, its
 canonical digest must match the authorized command. A missing authorization
@@ -2779,7 +2785,7 @@ recovery.
 Per-Unit approval remains mandatory however the question is presented.
 See [Construction Execution](../reference/03-orchestrator.md#construction-execution).
 
-### `aidlc engine worktree restore` — recover files from a set-aside attempt
+### `aidlc engine worktree restore` — recover files from a set-aside attempt<a id="aidlc-engine-worktree-restore-recover-files-from-a-set-aside-attempt"></a>
 
 Run from the main project checkout:
 
@@ -2903,7 +2909,7 @@ For a Bun-based copy install, replace `aidlc engine worktree` with
 for the recovery walkthrough and [State Machine](../reference/12-state-machine.md)
 for the snapshot contract.
 
-### `aidlc engine worktree purge` — remove recovery refs
+### `aidlc engine worktree purge` — remove recovery refs<a id="aidlc-engine-worktree-purge-remove-recovery-refs"></a>
 
 ```bash
 aidlc engine worktree purge --slug <slug> [--parked <stamp> | --older-than <days>] [--repo <name|.>] [--intent <intent>] [--space <space>]
@@ -3105,7 +3111,7 @@ it, and reverting an edit restores the original fingerprint.
 
 `aidlc engine workspace reclassify --project-type <greenfield|brownfield> [--intent <slug>] [--space <name>] [--message <id>] [--then-rerun]` is the command behind a mid-workflow `/aidlc --project-type` and the answers to the "this folder now has code" question. It scans the folder again and records the type as the person's in one locked write, audited first as `WORKSPACE_RECLASSIFIED`. The step `next` prints names `--message <id>` for the agent to fill with the id of the person's message that said the type, with the ids and times of the messages it can name; the engine proves that message as it does for `config set`, and the audit row records it as `Message Id`, with its words as `Person Reply`. No words file is written. It never moves the workflow itself: when it puts Reverse Engineering back behind the current stage, the next `next` names the redo jump that runs it. On finished or archived work it records the type and leaves the plan as it is. Its reply is a `done` directive that continues the workflow (with `--then-rerun`, used when the same request asked for more, a `print` that runs the same `next` again). What you hear is said with the next step the agent speaks from: the new type and what was found, any stage that ran before the code was there and how to redo it, and, when the type changes, how to undo it. That the code gets documented next is said by the redo jump when it runs ("Once you approve the code's documentation, we're back at Practices Discovery."), so a skip of Reverse Engineering asked for in the same breath never hears it.
 
-### `aidlc-workspace-sync` - clone and reconcile the declared repo set
+### `aidlc-workspace-sync` - clone and reconcile the declared repo set<a id="aidlc-workspace-sync-clone-and-reconcile-the-declared-repo-set"></a>
 
 This is a **direct tool invocation**, not an `/aidlc workspace-sync` command. It
 reconciles a multi-repo workspace against the optional `repos.json` manifest at
@@ -3286,7 +3292,7 @@ Putting back a stage this work skipped, by the undo AI-DLC names or later in you
 
 A stage skipped where it stood (it had started when you skipped it, so it shows as skipped) goes back on the plan when you add it again, with `/aidlc --add <slug>` or in your own words, and it runs next: Reverse Engineering on existing code while Construction has not started (after it the work returns to the stage you were on), and any other stage while the work has only just entered the stage after it. Once the work has gone further, the add is refused with the way to run the stage on its own, `/aidlc --stage <slug> --single`.
 
-### `aidlc engine scope save` - keep a plan as a scope
+### `aidlc engine scope save` - keep a plan as a scope<a id="aidlc-engine-scope-save-keep-a-plan-as-a-scope"></a>
 
 `aidlc engine scope save --name <name> [--keywords <word,...>] [--intent <slug>] [--space <name>]` keeps the selected piece of work's current plan as a reusable scope. It writes the stages the plan runs, its depth, Guard Policy, the five ceremony settings (sensors, learnings, summary confirmation, plan approval, collaborators), and its review level to the durable record `aidlc/scopes/<name>.md`, then compiles, so `/aidlc --scope <name>` works at once in this harness; another harness picks it up at its next `graph compile`. The running work is left as it is. A hint another plan already has is saved as asked, with one line naming that plan. The conductor runs it when you say "save this plan as quick-fix"; picking **Approve and save as scope** at a compose gate runs the same save as part of creating the work (`--save-as`), or, when you also gave keywords, right after it instead.
 

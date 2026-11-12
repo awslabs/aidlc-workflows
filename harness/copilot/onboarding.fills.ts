@@ -41,7 +41,7 @@ This is the same AI-DLC core that ships to every harness: the same ordered steps
 - **MCP servers**: none ship (configure your own via \`copilot mcp add\` / \`.vscode/mcp.json\` if needed — note the two surfaces use different MCP config files).
 - A workflow's \`aidlc/\` workspace tree is harness-neutral: a project can move between harness installs (supported but untested — keep the trees in sync via the framework's packaging if you do this).
 
-The Copilot-specific guide (install, what differs, verification) is \`docs/guide/harnesses/copilot.md\`.
+The Copilot-specific guide (install, what differs, verification) is https://awslabs.github.io/aidlc-workflows/guide/harnesses/copilot/.
 `,
 
     sections_after_resumption: `## Method include (do not remove)

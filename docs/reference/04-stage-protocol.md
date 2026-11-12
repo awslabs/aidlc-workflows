@@ -562,12 +562,12 @@ proceed with partial answers. The file is the authoritative record.
 ### Answer Analysis
 
 After collecting answers, analyze ALL responses (mandatory):
-- **Vague answers**: "mix of", "not sure", "depends", "probably"
+- **Vague answers**: "mix of", "not sure", "depends"
 - **Contradictions** between answers
 - **Missing details** needed for next step
 
 If ANY ambiguity found, create follow-up questions and resolve before
-proceeding. **When in doubt, ask.**
+proceeding.
 
 ### Ambiguity Detection
 
@@ -592,8 +592,8 @@ When detected: present contradictory answers side by side, explain conflict,
 ask targeted follow-up. Do NOT proceed until resolved.
 
 **Overconfidence prevention:**
-- Default to asking, not assuming. Never proceed with ambiguity.
-- Red flags requiring follow-up: single-word answers to open-ended questions;
+- Never proceed with ambiguity.
+- Red flags requiring follow-up:
   contradictory signals; question-dodging; relaxing, lowering, or disabling a
   previously defined quality target (for example, a test coverage threshold)
   instead of meeting it

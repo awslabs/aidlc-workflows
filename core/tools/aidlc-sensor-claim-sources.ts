@@ -19,7 +19,7 @@ import {
 	sortAttemptEvents,
 	visibleMarkdownLines,
 } from "./aidlc-lib.ts";
-import { knownActiveSpace, sensorFireUsage } from "./aidlc-runtime-paths.ts";
+import { knownActiveSpace, sensorFireUsage, writeSensorResult } from "./aidlc-runtime-paths.ts";
 
 interface Flags {
 	stage?: string;
@@ -1085,8 +1085,8 @@ export function main(argv: string[]): void {
 			findings_count: 0,
 			reason: "no deliverables on disk yet",
 		};
-		process.stdout.write(`${JSON.stringify(result)}\n`);
-		process.exit(0);
+		writeSensorResult(result);
+		return;
 	}
 
 	const questionsPath = resolve(
@@ -1113,8 +1113,7 @@ export function main(argv: string[]): void {
 		questions_file: questionsPath,
 		findings_count: findings.length,
 	};
-	process.stdout.write(`${JSON.stringify(result)}\n`);
-	process.exit(0);
+	writeSensorResult(result);
 }
 
 if (import.meta.main) main(process.argv.slice(2));

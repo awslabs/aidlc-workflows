@@ -382,7 +382,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     expect(refusalIn({ TERM_PROGRAM: "vscode", VSCODE_PID: "4242" })).toBe(elsewhere);
     expect(refusalIn({ TERM_PROGRAM: "vscode", VSCODE_IPC_HOOK: "/tmp/vscode-ipc.sock" })).toBe(elsewhere);
     expect(elsewhere).toContain(
-      'Tell them exactly this, with nothing about why, then only the line below for the tool they are in: "Your answer was not recorded, so you may be asked for it again." In Kiro CLI, quit Kiro and start `kiro-cli --v3` again in this folder (if Kiro asks whether you trust this workspace and you know what is in this folder, choose \'Trust, continue\'). If you drive Kiro from an ACP client, the Kiro IDE guide names what that client must send.',
+      'Tell them exactly this, with nothing about why, then only the line below for the tool they are in: "Your answer was not recorded, so you may be asked for it again." In Kiro CLI, quit Kiro and start `kiro-cli --v3` again in this folder (if Kiro asks whether you trust this workspace and you know what is in this folder, choose \'Trust, continue\'). If you drive Kiro from an ACP client, the AI-DLC guide for Kiro names what that client must send.',
     );
     expect(elsewhere).not.toContain("Reload Window");
     expect(eventCount(proj, "GATE_APPROVED")).toBe(0);

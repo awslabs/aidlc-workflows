@@ -33,20 +33,22 @@
 //       creates a new child when native source landing removed the old one.
 //       Both paths require current Plan Approval or a protected continuation
 //       under a lowered plan-approval fence before dispatch.
-//   check <unit> [--check-cmd <cmd>] [--test-file <path>] [--show-output]
+//   check <unit> [--check-cmd <cmd>] [--test-file <path>] [--show-output] [--timeout-ms <ms>]
 //       Single-unit verdict: the authorized Construction Verification Command,
 //       with or without checkpoints (a supplied --check-cmd must match it)
 //       (--show-output: the command's own output on stderr as it runs, for a
 //       worker or reviewer running the Unit's tests; exit 0 = green,
 //       the AUTHORITATIVE signal — a worker's own success claim is never trusted)
 //       plus an anti-tamper compare of the protected file against its content at
-//       HEAD. Prints {unit, converged, tampered, reason}; exits 0 iff the unit is
+//       HEAD. The command is stopped after 30 minutes unless --timeout-ms sets
+//       another limit; a stopped run reports reason "error" and says so in
+//       detail. Prints {unit, converged, tampered, reason}; exits 0 iff the unit is
 //       GENUINELY converged (green AND no blocking tamper), non-zero otherwise.
 //       Emits no audit - it informs the conductor's retry decision (knowledge), it
 //       does not commit anything. Same input -> same verdict, however many times
 //       called.
 //   finalize --batch <n> --units <a,b,c> --claimed <a,b> [--check-cmd <cmd>]
-//            [--test-file <path>] [--reasons <unit>=<reason>,...]
+//            [--test-file <path>] [--reasons <unit>=<reason>,...] [--timeout-ms <ms>]
 //       The AUTHORITATIVE gate. The conductor's claimed-converged set is an
 //       explicit input and the only thing finalize trusts from it. For each
 //       claimed unit, RE-RUN the check (green + no blocking tamper) and, when the
@@ -102,6 +104,7 @@ import { appendAuditEntry } from "./aidlc-audit.ts";
 import { commandChat } from "./aidlc-questions.ts";
 import { hostNamesThisChat } from "./aidlc-record-core.ts";
 import { swarmBuildingChat } from "./aidlc-swarm-checkpoints.ts";
+import { verificationTimeoutMs } from "./aidlc-construction-checkpoints.ts";
 import {
   assertNoSymlinkInChainOrThrow,
   activeIntentUuid,
@@ -329,18 +332,52 @@ function runTool(toolFile: string, args: string[], projectDir: string): ToolRun 
 // verdict line. Without it the output goes nowhere: the verdict reads only the
 // exit status, and held output over spawnSync's buffer limit would stop a
 // passing command and lose its status.
-function checkConverged(cwd: string, checkCmd: string, showOutput = false): boolean {
+// `timedOut` says the run hit `timeoutMs` and was stopped before it finished:
+// its output just ends, so without it a long suite read as a failing project.
+function checkConverged(
+  cwd: string,
+  checkCmd: string,
+  showOutput = false,
+  timeoutMs = EXTENDED_SUBPROCESS_TIMEOUT_MS,
+): { converged: boolean; timedOut: boolean } {
   const shell =
     process.platform !== "win32" && existsSync("/bin/bash")
       ? "/bin/bash"
       : true;
   const result = spawnSync(checkCmd, {
     cwd,
-    timeout: EXTENDED_SUBPROCESS_TIMEOUT_MS,
+    timeout: timeoutMs,
     shell,
     stdio: showOutput ? ["ignore", 2, 2] : "ignore",
   });
-  return result.status === 0;
+  return {
+    converged: result.status === 0,
+    timedOut: (result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT",
+  };
+}
+
+// The limit a check runs under: --timeout-ms when given, read and validated
+// exactly as `bolt checkpoint --action verify` reads its own, else the
+// 30-minute default.
+function swarmCheckTimeout(flags: Record<string, string>): number {
+  const raw = flags["timeout-ms"] as string | undefined;
+  try {
+    return verificationTimeoutMs(raw === undefined ? undefined : Number(raw));
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+  }
+}
+
+// How long a limit is, as the person reads it.
+function limitText(ms: number): string {
+  if (ms % 60_000 === 0) return `${ms / 60_000} minute${ms === 60_000 ? "" : "s"}`;
+  if (ms % 1_000 === 0) return `${ms / 1_000} second${ms === 1_000 ? "" : "s"}`;
+  return `${ms} ms`;
+}
+
+function stoppedCheckDetail(ms: number, rerun: "check" | "finalize"): string {
+  return `the check command was stopped after ${limitText(ms)}, before it finished, so this is no verdict on the Unit's code; ` +
+    `run ${rerun} again with --timeout-ms <milliseconds> to give it longer`;
 }
 
 // Every check runs the Construction Verification Command the person approved
@@ -387,6 +424,8 @@ interface Verdict {
   exists: boolean;
   converged: boolean;
   tampered: boolean;
+  /** The limit the check command was stopped at, before it finished. */
+  timedOutMs?: number;
   confineError?: string;
   /** Under relaxed or off a changed protected test file is said, not refused. */
   tamperNotice?: string;
@@ -408,6 +447,7 @@ function verdictFor(
   checkCmd: string,
   testFile?: string,
   showOutput = false,
+  timeoutMs = EXTENDED_SUBPROCESS_TIMEOUT_MS,
 ): Verdict {
   const wt = identity.dir;
   if (!existsSync(wt)) {
@@ -431,7 +471,7 @@ function verdictFor(
       };
     }
   }
-  const converged = checkConverged(wt, checkCmd, showOutput);
+  const { converged, timedOut } = checkConverged(wt, checkCmd, showOutput, timeoutMs);
   let tampered = false;
   let confineError: string | undefined;
   let tamperNotice: string | undefined;
@@ -451,7 +491,11 @@ function verdictFor(
       }
     }
   }
-  return { exists: true, converged, tampered, confineError, ...(tamperNotice ? { tamperNotice } : {}) };
+  return {
+    exists: true, converged, tampered, confineError,
+    ...(timedOut ? { timedOutMs: timeoutMs } : {}),
+    ...(tamperNotice ? { tamperNotice } : {}),
+  };
 }
 
 interface ReviewerRequirement {
@@ -1901,15 +1945,18 @@ function initializedSubmoduleSourceError(
 
 // Materialize the reviewed application bytes as an immutable commit without
 // moving the Bolt branch. The temporary index starts from HEAD, overlays the
-// worktree, then restores framework-owned paths from HEAD
-// (shapeSourceSnapshotIndex) so the later source merge carries application
-// source only. Recompute the fingerprint after the object is written to close a
+// worktree, then restores framework-owned paths (shapeSourceSnapshotIndex) so
+// the later source merge carries application source only: AI-DLC's records
+// from the commit the Bolt shares with `landingBranch`, which prepare
+// recorded, so records a Bolt commit carried stay behind; without it, from
+// HEAD. Recompute the fingerprint after the object is written to close a
 // concurrent-edit window; the validated value is the one carried to the
 // convergence row.
 function bindReviewedSource(
   identity: BoltIdentity,
   fingerprint: string,
   recoveryBudget: NewGitlinkRecoveryBudget,
+  landingBranch: string | null,
 ): { binding?: SourceBinding; error?: string } {
   const wt = identity.dir;
   const idx = join(tmpdir(), `aidlc-swarm-source-${process.pid}-${randomUUID().slice(0, 8)}`);
@@ -1947,7 +1994,11 @@ function bindReviewedSource(
       initialGitlinkPaths.add(record.slice(tab + 1).replace(/\\/g, "/"));
     }
     if (git(["add", "-A"]).status !== 0) return { error: "cannot stage the reviewed source snapshot" };
-    const shape = shapeSourceSnapshotIndex(wt, idx, true);
+    const shared = landingBranch === null ? null : git(["merge-base", "HEAD", `refs/heads/${landingBranch}`]);
+    const recordBase = shared?.status === 0 && /^[0-9a-f]{40,64}$/.test(shared.stdout.trim())
+      ? shared.stdout.trim()
+      : null;
+    const shape = shapeSourceSnapshotIndex(wt, idx, true, recordBase);
     if (shape === null) {
       return { error: "cannot apply the reviewed source boundary to the snapshot" };
     }
@@ -3242,8 +3293,9 @@ function handleCheck(rest: string[]): void {
   const check = swarmCheckCommand(projectDir, flags["check-cmd"], "check");
   const showOutput = flags["show-output"] !== undefined;
   if (showOutput && flags["show-output"] !== "true") fail("--show-output is a boolean flag");
+  const timeoutMs = swarmCheckTimeout(flags);
 
-  const verdict = verdictFor(unit, projectDir, identity, check.command, flags["test-file"], showOutput);
+  const verdict = verdictFor(unit, projectDir, identity, check.command, flags["test-file"], showOutput, timeoutMs);
   if (!verdict.exists) {
     fail(`no worktree for unit "${unit}" - run \`prepare\` first`);
   }
@@ -3265,9 +3317,13 @@ function handleCheck(rest: string[]): void {
     unit,
     converged: verdict.converged,
     tampered: verdict.tampered,
-    reason: verdict.tampered ? "error" : null,
+    reason: verdict.tampered || verdict.timedOutMs !== undefined ? "error" : null,
   };
-  if (verdict.tampered) out.detail = "protected test file was modified";
+  const details = [
+    ...(verdict.timedOutMs !== undefined ? [stoppedCheckDetail(verdict.timedOutMs, "check")] : []),
+    ...(verdict.tampered ? ["protected test file was modified"] : []),
+  ];
+  if (details.length > 0) out.detail = details.join("; ");
   if (verdict.tamperNotice) out.change_notices = [verdict.tamperNotice];
   console.log(JSON.stringify(out));
   // Exit 0 ONLY for a genuine convergence — the seam the ultracode script and
@@ -3286,6 +3342,7 @@ function handleFinalize(rest: string[]): void {
   if (!batch || !/^[1-9][0-9]*$/.test(batch)) {
     fail("finalize requires --batch <positive integer>");
   }
+  const timeoutMs = swarmCheckTimeout(flags);
   withdrawProtectedQuestions(projectDir, "*");
   const check = swarmCheckCommand(projectDir, flags["check-cmd"], "finalize");
   const claimed = flags.claimed ? splitCsv(flags.claimed) : [];
@@ -3365,7 +3422,7 @@ function handleFinalize(rest: string[]): void {
       throw error;
     }
     if (claimedSet.has(unit)) {
-      const verdict = verdictFor(unit, projectDir, identity, check.command, testFile);
+      const verdict = verdictFor(unit, projectDir, identity, check.command, testFile, false, timeoutMs);
       const preparedAttempt = preparedSwarmAttempt(
         projectDir,
         batch,
@@ -3447,6 +3504,7 @@ function handleFinalize(rest: string[]): void {
                 identity,
                 receipt.sourceFingerprint,
                 recoveryBudget,
+                preparedLandingBranch(readAuditShardEvents(projectDir), batch, unit),
               )
             : {};
           if (captured.error || !captured.snapshot) {
@@ -3480,7 +3538,9 @@ function handleFinalize(rest: string[]): void {
           unit,
           status: "failed",
           reason: "error",
-          detail: "claimed converged but the check command did not pass on re-verify",
+          detail: verdict.timedOutMs !== undefined
+            ? `claimed converged, but on re-verify ${stoppedCheckDetail(verdict.timedOutMs, "finalize")}`
+            : "claimed converged but the check command did not pass on re-verify",
         });
       }
     } else {

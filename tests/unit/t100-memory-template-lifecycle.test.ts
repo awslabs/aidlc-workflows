@@ -90,9 +90,9 @@ const CANONICAL = [
 
 // The template's first visible line renders in the Write diff of EVERY stage, so
 // it is user-facing prose and is worded as such: no framework role names, no
-// ritual vocabulary. Pinned verbatim because the copy is LLM-driven.
-const OWNERSHIP_LINE =
-  "> This file is kept up to date automatically while the stage runs. Add observations at the review step, not by editing here directly.";
+// ritual vocabulary. Pinned verbatim because the copy is LLM-driven. It points
+// at no step: the learnings step never asks about the diary.
+const OWNERSHIP_LINE = "> This file is kept up to date automatically while the stage runs.";
 
 function templateRaw(): string {
   return readFileSync(TEMPLATE, "utf-8");

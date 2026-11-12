@@ -1351,8 +1351,8 @@ conversation, or count semantics.
 3. **Command filter:** Only `bun .claude/tools/aidlc-(state|jump|bolt|utility).ts` invocations pass the graph early exit. `aidlc-runtime.ts` is rejected explicitly (recursion guard).
 4. **Audit-existence guard:** Exits cleanly before init (no `audit/` shard yet).
 5. **Health heartbeat:** Writes `.aidlc-engine/hooks-health/rebuild-stage-graph.last`.
-6. **Tail-read:** Splits the merged `audit/` shards on `\n---\n` and takes the last 3 blocks (the upper bound a single `approve` call appends).
-7. **Event-class filter:** Recompiles only when one of the last 3 blocks carries `GATE_APPROVED`, `STAGE_STARTED`, `STAGE_AWAITING_APPROVAL`, `AUDIT_MERGED`, or `WORKFLOW_COMPLETED`. Exits on no match.
+6. **Tail-read:** Splits this clone's own `audit/` shard, where every row a command writes lands, on `\n---\n` and takes the last 3 blocks (the upper bound a single `approve` call appends).
+7. **Event-class filter:** Recompiles only when one of the last 3 blocks carries `GATE_APPROVED`, `STAGE_STARTED`, `STAGE_AWAITING_APPROVAL`, `AUDIT_MERGED`, or `WORKFLOW_COMPLETED`; when the record has no `runtime-graph.json` yet and any of its shards holds one of them; or when another clone's shard is newer than `runtime-graph.json` and holds one (a teammate's transition that came with a pull, compiled once). Exits on no match.
 8. **Dispatch:** Runs `runtime compile` through the selected channel (`aidlc engine runtime compile` on a native install, `bun aidlc-runtime.ts compile` on a Bun projection). On non-zero exit, records a hook drop for `--doctor`; never blocks the parent Bash call.
 
 #### Engine error relay
@@ -2679,7 +2679,9 @@ the structured contract plus methodology-specific plan profile. The conductor
 runs `render` only to read the contract: `next` writes the rendered block into
 `code-generation-plan.md` itself before it asks, when the block is missing,
 broken or out of date, unless its `## Testing Contract` section holds a heading
-or a plan step, or the plan is not UTF-8 text.
+or a plan step, or the plan is not UTF-8 text. After the person's own edit ("I'll
+edit the files", then done), the words they wrote in that section are kept after
+the block.
 `reply [--session <id>]` prints, read-only, whether the person has replied to the
 pending Plan Approval question yet, so the conductor knows whether to read their
 reply and record their choice or to wait.

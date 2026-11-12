@@ -274,6 +274,8 @@ import {
   guardAttemptState,
   nextReviewStepFor,
   openReviewRequests,
+  latestReviewerRowAfter,
+  hooksHealthReadDir,
   personMayApproveOverUnfinishedReview,
   personSpokeSinceReviewRequest,
   type GuardAttemptState,
@@ -589,7 +591,8 @@ import {
   turnsPersonCheckOff,
   enterHookWorkflow,
 } from "./aidlc-lib.ts";
-import { chatTookStep, hostNamesThisChat, planMadeElsewhere } from "./aidlc-record-core.ts";
+import { canonicalPathKey, chatTookStep, hostNamesThisChat, planMadeElsewhere } from "./aidlc-record-core.ts";
+import { unrecordedFinishSince } from "./aidlc-subagent-inflight.ts";
 import { readRequestFileResult, REQUEST_FILE_USAGE, reviewRecoverySpentMessage, reviewVerdictStep } from "./aidlc-log.ts";
 import { LOCK_FOLDER_HELD_STEP_KEY, lockFolderHeldAgentStep } from "./aidlc-lock-line.ts";
 import {
@@ -1587,8 +1590,9 @@ const carriesNarration = new WeakSet<Directive>();
 // Kept apart from the rest by its words, which the engine writes alone.
 const saidAsStageComes = new WeakMap<Directive, string>();
 const CLEAN_CHAT_LEAD = "To start this in a clean chat instead, ";
-// Steps the agent speaks right after, with no line of their own (the print
-// that opens a stage's gate, before the gate is shown).
+// Steps the agent speaks from, with no line of their own: the print that opens
+// a stage's gate, before the gate is shown, and a reading it may answer from
+// (saysWaitingLines).
 const leadsToSpeech = new WeakSet<Directive>();
 
 // A step the agent speaks from: one that ends its turn, or one with its own
@@ -1745,7 +1749,12 @@ function sayPendingPersonLines(
   const asItComes = transported.kind === "run-stage"
     ? pending.lines.filter((line) => line.startsWith(CLEAN_CHAT_LEAD))
     : [];
-  if (!pickUp && asItComes.length === 0 && !leadsToSpeech.has(requested) && !speaksToPerson(transported)) {
+  // A print the agent may stop after is spoken from too: its lines are said in
+  // the last message before they reply.
+  if (
+    !pickUp && asItComes.length === 0 && !leadsToSpeech.has(requested) && !turnEndingPrints.has(requested) &&
+    !speaksToPerson(transported)
+  ) {
     return { directive: transported };
   }
   const beforeReply = pending.lines.filter((line) => !asItComes.includes(line));
@@ -4266,7 +4275,7 @@ function openGateReplyDirective(
 ): PrintDirective {
   const orchestrate = aidlcToolInvocation("orchestrate");
   if (unseen) {
-    return printDirective(
+    return saysWaitingLines(printDirective(
       `Stage "${stage}" is waiting for the person's approval, and this chat has not shown it yet. If their reply ` +
         `asks for changes, run \`${orchestrate} report --stage ${shellArg(stage)} --result rejected --user-input ` +
         `"Request Changes"\` and follow what it returns. If it asks to skip this stage, run \`${orchestrate} next ` +
@@ -4276,10 +4285,10 @@ function openGateReplyDirective(
         `belongs. Otherwise, answer from the files in ${folder ? `${folder}/` : "the stage's folder"} anything it ` +
         `asks about what the stage found or produced, then run bare \`${orchestrate} next\` and follow what it ` +
         "returns.",
-    );
+    ));
   }
   const named = replyIdsNote(replies, "report");
-  return printDirective(
+  return saysWaitingLines(printDirective(
     `Stage "${stage}" is waiting for the person's approval, and their reply may answer it. Read it. If it ` +
       `approves, run \`${orchestrate} report --stage ${shellArg(stage)} --result approved --user-input "Approve"\`, ` +
       "with the `config set` flag of any setting it also asks for on that same command (`--plan-approval off`); " +
@@ -4291,7 +4300,7 @@ function openGateReplyDirective(
       `work or a change to the plan, run \`${orchestrate} next --request ${requestId}\` and follow what it returns: ` +
       "the engine kept their words and asks them where that work belongs. If you cannot tell which it is, ask the " +
       `person in one short question and follow their answer.${named}`,
-  );
+  ));
 }
 
 // The choices a question's row says it offered, in order.
@@ -4416,7 +4425,7 @@ function openQuestionReplyDirective(
     ? `: ${JSON.stringify(decision)}` +
       `${choices.length > 0 ? `, with the choices ${choices.map((choice) => JSON.stringify(choice)).join(", ")}` : ""}`
     : "";
-  return printDirective(
+  return saysWaitingLines(printDirective(
     `Stage "${stage}" has a question you asked that the person has not answered yet${asked}. Read their reply. ` +
       `If it answers that question, ${answer}, then carry on with "${stage}" from where you asked and run bare ` +
       `\`${orchestrate} next\` the next time you need the engine. If it asks to skip this stage, run ` +
@@ -4425,7 +4434,7 @@ function openQuestionReplyDirective(
       `or a change to the plan, run \`${orchestrate} next --request ${requestId}\` and follow what it returns: the ` +
       "engine kept their words and asks them where that work belongs. If you cannot tell which it is, ask the " +
       `person in one short question and follow their answer.${replyIdsNote(replies, "`log answer`")}`,
-  );
+  ));
 }
 
 // The choices of the engine's recovery question (a guard refused and asked
@@ -4443,7 +4452,7 @@ function recoveryQuestionChoices(marker: ActiveDirectiveMarker): string {
 // openQuestionReplyDirective.
 function openRecoveryReplyDirective(marker: ActiveDirectiveMarker, requestId: string, wordsAlone: boolean): PrintDirective {
   const orchestrate = aidlcToolInvocation("orchestrate");
-  return printDirective(
+  return saysWaitingLines(printDirective(
     `The recovery question for "${marker.stage}" is open, and ${recoveryQuestionChoices(marker)}. The person's ` +
       "reply may answer it. Read it. If it picks one of those choices, run that choice's command and follow what it " +
       `returns. If it asks to skip this stage, run \`${orchestrate} next --skip ${shellArg(marker.stage)}\` and follow ` +
@@ -4452,7 +4461,7 @@ function openRecoveryReplyDirective(marker: ActiveDirectiveMarker, requestId: st
       `\`${orchestrate} next --request ${requestId}\` and follow what it returns: the engine kept their words and asks ` +
       "them where that work belongs. If you cannot tell which it is, ask the person once in plain words, with the " +
       "question's choices, and follow their answer.",
-  );
+  ));
 }
 
 // The person said their words are part of the work in progress, and that work
@@ -4666,10 +4675,10 @@ function openPlanQuestionReplyDirective(
     `the plan, run \`${orchestrate} next --request ${requestId}\` and follow what it returns: the engine kept their ` +
     "words and asks them where that work belongs.";
   if (unseen && !editing && !answered) {
-    return printDirective(
+    return saysWaitingLines(printDirective(
       `${undo}The code plan question is open, and this chat has not shown it yet.${typed} ${skip} Otherwise, run ` +
         `bare \`${orchestrate} next\` and follow what it returns, show the person the question it brings, and end the turn.`,
-    );
+    ));
   }
   const answer = editing
     ? `The person is editing the code plan files themselves. If their reply says they are done, run bare \`${orchestrate} next\`.${typed}`
@@ -4681,10 +4690,10 @@ function openPlanQuestionReplyDirective(
     : "The code plan question is open, and the person's reply may answer it. Read it, with the `[Answer]:` line of " +
       `the plan's questions file when they say they answered there. If it does, record the choice they made with ` +
       `${record}, then run bare \`${orchestrate} next\`.${typed}`;
-  return printDirective(
+  return saysWaitingLines(printDirective(
     `${undo}${answer} ${skip} If you cannot tell which it is, ask the person in one short question and follow ` +
       `their answer.${replyIdsNote(replies, "`log answer`")}`,
-  );
+  ));
 }
 
 // The open code plan question waits on its answer, and this chat was not shown
@@ -4826,7 +4835,7 @@ function reentryReplyDirective(requestId: string, pd: string, undo = "", work: s
     "of another), ask them once in plain words which they meant, then stop.";
   // One piece here: its name, so the agent compares their words with it.
   const on = work.length < 2 && openWork !== "" ? ` on "${openWork}"` : "";
-  return printDirective(
+  return saysWaitingLines(printDirective(
     `${undo}Work is in progress${on}, and the person's words may ask to redo, jump to a stage, or start fresh, or may only ` +
       "ask for it to go on. Read them. If they only ask for the work to go on (such as \"carry on\", \"proceed\" or " +
       `"keep going"), run \`${orchestrate} next\` with nothing after it: the work continues where it stands. If they ` +
@@ -4839,7 +4848,7 @@ function reentryReplyDirective(requestId: string, pd: string, undo = "", work: s
       "that work belongs, and a redo or jump they say there is read the same way. When their words describe new work, " +
       "add `--propose <plan>` to that command, the plan below that fits the work, so the question " +
       `can name it.${named} Plans: ${planChoicesLine(pd)}`,
-  );
+  ));
 }
 
 // The same words in team mode (Unit Ownership: team), where the stage, gate and
@@ -4847,7 +4856,7 @@ function reentryReplyDirective(requestId: string, pd: string, undo = "", work: s
 // request the engine asks the person about.
 function teamWordsReplyDirective(requestId: string, pd: string): PrintDirective {
   const orchestrate = aidlcToolInvocation("orchestrate");
-  return printDirective(
+  return saysWaitingLines(printDirective(
     "Work is in progress, and the person's words may only ask for it to go on, or be new work or a change to this " +
       "work. Read them. If they only ask for the work to go on (such as \"carry on\" or \"proceed\"), run " +
       `\`${orchestrate} next\` with nothing after it: the work continues where it stands. ` +
@@ -4855,7 +4864,7 @@ function teamWordsReplyDirective(requestId: string, pd: string): PrintDirective 
       `\`${orchestrate} next --request ${requestId}\` and follow what it returns: the engine kept their words ` +
       "and asks the person where that work belongs. When their words describe new work, add `--propose <plan>` to " +
       `that command, the plan below that fits the work, so the question can name it. Plans: ${planChoicesLine(pd)}`,
-  );
+  ));
 }
 
 // Words alone where work is in progress but none is selected in this chat (a
@@ -4874,7 +4883,7 @@ function unselectedWordsReplyDirective(
 ): PrintDirective {
   const orchestrate = aidlcToolInvocation("orchestrate");
   const backToFinished = finished === undefined ? "" : ` ${finishedWorkReading(finished, "")}`;
-  return printDirective(
+  const step = printDirective(
     `Work is in progress here (${work.join(", ")}), and none is selected in this chat. Read the person's words. If ` +
       "they only ask for the work to go on (such as \"carry on\" or \"proceed\"), run " +
       `\`${orchestrate} next\` with nothing after it: it asks them which piece to pick up. If their words name exactly ` +
@@ -4886,6 +4895,7 @@ function unselectedWordsReplyDirective(
       "engine kept their words. When their words describe new work, add `--propose <plan>` to that command, the plan " +
       `below that fits the work, so the question can name it. Plans: ${planChoicesLine(pd)}`,
   );
+  return finished === undefined ? step : saysWaitingLines(step);
 }
 
 // The person's words on a step the engine names next: a file of their own in
@@ -5237,6 +5247,13 @@ function newWorkRoutingAskDirective(
 
 function printDirective(message: string): PrintDirective {
   return { kind: "print", message };
+}
+
+// A reading the agent may answer from and end its turn on (a question about
+// the work): a line waiting for the person is said in that answer.
+function saysWaitingLines<T extends Directive>(step: T): T {
+  leadsToSpeech.add(step);
+  return step;
 }
 
 // A print whose step is one jump command, formatted from these arguments
@@ -7509,12 +7526,13 @@ function planProposalDirective(
     ? `The person asked for new work: ${words} No plan is chosen for it yet. Read what they describe and propose `
     : `The person said: ${words} ${finishedWorkReading(finished, typedSettingsFirst(flags, pd))} If they describe new ` +
       "work, no plan is chosen for it yet, so propose ";
-  return printDirective(
+  const step = printDirective(
     `${opening}the plan below that fits it: run ` +
       `\`${next} --propose <plan> --request ${question.id}\` and it returns the question to show them (go ahead, ` +
       "a different plan, or a tailored one) with its answers; show it as given. When no ready-made plan fits, run " +
       `\`${next} --propose compose --request ${question.id}\` instead. Create nothing yourself. Plans: ${planChoicesLine(pd, flags.projectType)}`,
   );
+  return finished === undefined ? step : saysWaitingLines(step);
 }
 
 // Every plan this install ships, for the agent to propose the one that fits
@@ -11109,6 +11127,25 @@ function claimsOpenAtPlanChange(projectDir: string, stateContent: string, target
     "again first.";
 }
 
+// Main moving on past the Unit stages while teams build them: one line naming
+// each Unit still open there and whose it is, as the board names them. The
+// jump tool says it with its own line (handleExecute). null when none is.
+export function unitsStillOpenLine(projectDir: string): string | null {
+  let overview: UnitClaimOverview;
+  try {
+    overview = cachedUnitClaimOverview(projectDir, { writeCache: false });
+  } catch {
+    return null;
+  }
+  const taken = [...overview.claimed].sort((a, b) => compareBoardKeys(a.unit, b.unit));
+  const untaken = [...overview.claimable, ...overview.waiting.map((row) => row.unit)].sort(compareBoardKeys);
+  const open = [
+    ...taken.map((claim) => `${claim.unit} (${claim.owner})`),
+    ...untaken.map((unit) => `${unit}, not taken yet`),
+  ];
+  return open.length === 0 ? null : `Still open on main, and landing as they finish: ${open.join("; ")}.`;
+}
+
 // Main is redoing a stage that comes before the per-Unit block (Units
 // Generation reopened to change the Unit plan): its own step runs, whatever
 // the team's claims; the dispatcher board holds main again from the block on.
@@ -13959,8 +13996,8 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
         }
         // The Unit this checkout walks without a claim is still its own once a
         // team claims another (#3610): after the offers above, the walk goes on
-        // with it instead of the board.
-        if (unitsHeldHere(pd) !== null) throw new Error("claimless-team-mode");
+        // with it instead of the board, until the walk is done.
+        if (unitsHeldHere(pd) !== null && !workflowFinished(stateContent, scope)) throw new Error("claimless-team-mode");
         // While the guard's fan-out check holds (a landed Unit's claim
         // included) it refuses Unit work in this checkout, so the board stays
         // up until the walk has no Unit left to take: every Unit merged. A
@@ -13970,7 +14007,16 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
         const unitWorkLeft = dag.state === "ok" &&
           dag.batches.flat().some((unit) => !model.mergedUnits.has(unit));
         const teamsTakeUnits = cachedClaimFanoutActive(pd) || teamSharedHere(pd) || planMadeElsewhere(pd);
-        if (board.awaitingMerge.length > 0 || (unitWorkLeft && teamsTakeUnits)) {
+        // Main moved on past the Unit stages while teams build them: while the
+        // walk has a step left it is main's, and each Unit still lands through
+        // the offer above as it finishes; a merge the lead turned down is the
+        // team's to redo. A teammate's clone of it came for a Unit and keeps
+        // the board, and so does main once the walk is done.
+        const lastUnitStage = constructionUnitMajorBlock(scope, stateContent, true).at(-1);
+        const mainMovedOn = lastUnitStage !== undefined && cursorPastStage(stateContent, lastUnitStage.slug) &&
+          !workflowFinished(stateContent, scope) && !planMadeElsewhere(pd);
+        const mergeWaits = board.awaitingMerge.some((merge) => !mainMovedOn || merge.status !== "rejected");
+        if (mergeWaits || (unitWorkLeft && teamsTakeUnits && !mainMovedOn)) {
           lastSeen();
           emit(noticeDirective(
             renderTeamConstructionBoard(board, "dispatcher"),
@@ -23510,6 +23556,8 @@ const WAIT_USAGE =
   "[--unit <unit>] [--review-file <path>] [--timeout <seconds>]";
 const WAIT_DEFAULT_SECONDS = 90;
 const WAIT_MAX_SECONDS = 540;
+// A review file unchanged this long ends the wait for a reviewer whose finish left no trace.
+const WAIT_REVIEW_QUIET_MS = 30_000;
 
 function parseWaitFlags(args: string[]): WaitFlags {
   const flags: WaitFlags = {};
@@ -23575,11 +23623,37 @@ function handleWait(args: string[], projectDir: string | undefined): void {
     flags.reviewFile === undefined
       ? null
       : isAbsolute(flags.reviewFile) ? flags.reviewFile : join(pd, flags.reviewFile);
+  // While the rows show the request's reviewer still out (its latest dispatch since the request has no
+  // finish after it), the bytes are not its finished review yet, and a verdict now would come before the
+  // finish row whose digest handleReview compares. It settles on bytes, as before, on the completion hook's
+  // trace of a finish it could not record, the person's words since the request, the file unchanged for one
+  // quiet window (or a clock off by as much), or a record that does not read. A Unit's worktree, whose
+  // reviewer rows are the main folder's, has no dispatch row here and settles on bytes.
+  const reviewerStillOut = (path: string): string | null => {
+    try {
+      const { intent: chosen, space: chosenSpace } = engineSelection(pd);
+      const intent = chosen ?? undefined;
+      const space = intent ? chosenSpace : undefined;
+      const unreadable: string[] = [];
+      const rows = readAuditShardEvents(pd, intent, space, unreadable);
+      const waited = canonicalPathKey(path);
+      const request = openReviewRequests(rows).find((open) => canonicalPathKey(join(pd, prefix, ...open.reviewFile.split("/"))) === waited);
+      const sent = request && latestReviewerRowAfter(rows, "SUBAGENT_DISPATCHED", request.reviewer, request.row);
+      if (unreadable.length > 0 || !request || !sent || latestReviewerRowAfter(rows, "SUBAGENT_COMPLETED", request.reviewer, sent) !== null ||
+        unrecordedFinishSince(hooksHealthReadDir(pd, intent, space), rows, request.row) ||
+        personSpokeSinceReviewRequest(pd, request.stage, request.reviewer, request.unit ?? undefined, intent, space) ||
+        Math.abs(Date.now() - statSync(path).mtimeMs) >= WAIT_REVIEW_QUIET_MS) return null;
+      return `reviewer ${request.reviewer} (has not finished yet)`;
+    } catch {
+      return null;
+    }
+  };
   const missingNow = (): string[] => {
     const missing: string[] = [];
     if (target === "review") {
-      if (reviewPath !== null && !fileHasBytes(reviewPath)) {
-        missing.push(`review file ${flags.reviewFile} (absent or empty)`);
+      if (reviewPath !== null) {
+        const entry = fileHasBytes(reviewPath) ? reviewerStillOut(reviewPath) : `review file ${flags.reviewFile} (absent or empty)`;
+        if (entry !== null) missing.push(entry);
       }
     } else if (target === "collaborators") {
       // A lead-only run (collaborators switch off) has no spokes to wait on, so

@@ -4883,6 +4883,21 @@ function handleReview(args: string[]): void {
           attempt.pendingIterations.size === 0 &&
           !recoverySpent;
         if (recoverySpent && changeAccepted() && boundStands()) refuseChangeAccepted(personAskedRetry());
+        // A pending request comes before the budget and the recovery slot: the
+        // stage is waiting on its verdict, not out of passes. Saying "include the
+        // findings" for a review that never returned sent conductors to a gate
+        // that refuses, and calling a recovery request still waiting for its
+        // verdict spent said its documents changed again when they had not.
+        if (attempt.pendingIterations.size > 0) {
+          const pending = [...attempt.pendingIterations].sort((a, b) => a - b);
+          refuseAttemptGuard(
+            "REVIEW_VERDICT_PENDING",
+            "A review request receives its verdict before another request starts.",
+            `Cannot start another review for "${flags.stage}" because iteration ` +
+              `${pending.join(", ")} is still waiting for a verdict. Record that verdict, or ` +
+              "repeat the same iteration with --retry-pending if the reviewer did not run.",
+          );
+        }
         if (scopeStale && recoverySpent && boundStands()) {
           const message = reviewRecoverySpentMessage(
               flags.stage,
@@ -4937,19 +4952,6 @@ function handleReview(args: string[]): void {
             "REVIEW_RECOVERY_ALREADY_REQUESTED",
             "Only one stale-receipt recovery request exists in an attempt.",
             message,
-          );
-        }
-        // A pending request comes before the budget: the stage is waiting on its
-        // verdict, not out of passes, and saying "include the findings" for a
-        // review that never returned sent conductors to a gate that refuses.
-        if (attempt.pendingIterations.size > 0) {
-          const pending = [...attempt.pendingIterations].sort((a, b) => a - b);
-          refuseAttemptGuard(
-            "REVIEW_VERDICT_PENDING",
-            "A review request receives its verdict before another request starts.",
-            `Cannot start another review for "${flags.stage}" because iteration ` +
-              `${pending.join(", ")} is still waiting for a verdict. Record that verdict, or ` +
-              "repeat the same iteration with --retry-pending if the reviewer did not run.",
           );
         }
         // The budget is measured against the attempt's own count ONLY (`expected`,

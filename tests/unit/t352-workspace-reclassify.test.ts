@@ -1538,12 +1538,15 @@ describe("t352 the lines the person must hear ride the next step the agent speak
     expect(String(nextIn(proj).message)).toContain("execute --target reverse-engineering --direction redo");
     const step = nextIn(proj, ["--skip", "reverse-engineering"]);
     expect(String(step.message)).toContain("recompose --skip reverse-engineering");
+    // The skip's step ends the turn, so the reply to their words says the line.
+    expect(heard(step)).toStartWith("Project type is now existing code, as you said");
+    expect(heard(step)).not.toContain("approve the code's documentation");
     const skip = run(UTIL, proj, ["recompose", "--skip", "reverse-engineering", "--reason", "the person asked to skip it"], chat);
     expect(skip.status, said(skip)).toBe(0);
     const go = nextIn(proj);
     expect(go.kind).toBe("run-stage");
     expect(go.stage).toBe("practices-discovery");
-    expect(heard(go)).toStartWith("Project type is now existing code, as you said");
+    expect(heard(go)).not.toContain("Project type is now");
     expect(heard(go)).not.toContain("approve the code's documentation");
   });
 

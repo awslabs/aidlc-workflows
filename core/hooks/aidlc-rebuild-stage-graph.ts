@@ -3,8 +3,8 @@
 //
 // Fires after every Bash tool call from the agent. Filters cheaply on
 // the command (classifyRuntimeCompileCommand in aidlc-lib.ts owns the
-// allowlist). On match, tail-reads the LAST 3 audit blocks (a normal approve
-// writes 3 audit rows in a single Bash call), regex-matches `**Event**:
+// allowlist). On match, tail-reads the LAST 3 blocks of this clone's own audit
+// shard (a normal approve writes 3 audit rows in a single Bash call), regex-matches `**Event**:
 // (GATE_APPROVED|STAGE_STARTED|STAGE_AWAITING_APPROVAL|AUDIT_MERGED|
 // UNIT_MERGED|WORKFLOW_COMPLETED)` against any of them, and dispatches
 // `aidlc-runtime.ts compile` on match.
@@ -39,13 +39,15 @@
 
 import { LONG_SUBPROCESS_TIMEOUT_MS } from "../tools/aidlc-runtime-budget.ts";
 import { statSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import {
   consumeCreationReceipt,
   clearSessionIntentUuid,
   isTrustedBindingSource,
   readSessionBinding,
   workflowParticipation,
+  auditFilePath,
+  auditShardBlocks,
   auditShards,
   classifyRuntimeCompileCommand,
   type ClaudeCodeHookInput,
@@ -57,8 +59,10 @@ import {
   writeHookStatusFile,
   isClaudeCodeHookInput,
   isoTimestamp,
+  knownAuditShardName,
   listIntents,
   readAllAuditShards,
+  readAppendOnlyFileNoFollowOrThrow,
   readSessionIntentUuid,
   recordHookDrop,
   resolveWorkflowSelection,
@@ -244,12 +248,9 @@ if (!ideAuditMode) {
   }
 }
 
-// 4. Audit read — across EVERY per-clone shard of the ACTIVE intent, NOT this
-//    hook process's own clone shard. A transition can arrive from another
-//    clone; auditFilePath(projectDir) resolves only this clone's shard, so that
-//    transition would be invisible and the runtime-graph would never refresh
-//    after it. Resolve the session's selected intent and glob-merge its shards.
-//    Exit cleanly before init (no audit yet -> "").
+// 4. Audit read - every per-clone shard of the session's selected intent, for
+//    the before-init exit (no audit yet -> ""), the heartbeat, and a clone that
+//    has no runtime graph yet (step 7). Which rows the call wrote is step 6's.
 const selection = resolveWorkflowSelection(projectDir, {
   sessionId: validSessionId(parsed.session_id) ?? undefined,
 });
@@ -270,14 +271,24 @@ if (audit.length === 0) {
 const healthDir = hooksHealthDir(projectDir, intent, space);
 writeHookStatusFile(healthDir, "rebuild-stage-graph.last", isoTimestamp());
 
-// 6. Tail-read last 3 audit blocks. Three covers a normal approve's
-//    GATE_APPROVED + STAGE_COMPLETED + STAGE_STARTED in one Bash call.
-//    Terminal-WORKFLOW approve writes 5 rows; the last 3 are PHASE_COMPLETED +
-//    PHASE_VERIFIED + WORKFLOW_COMPLETED. In the common single-clone case the
-//    merged buffer is one shard, so the last 3 blocks are the just-written
-//    transition rows.
-const blocks = audit.split(/\n---\n/);
-const last3 = blocks.slice(-3);
+// 6. Tail-read the last 3 blocks of this clone's own shard, where every row a
+//    command writes lands (auditFilePath; a claimed Unit's local record when
+//    claimed). The joined buffer above ends with whichever clone's shard sorts
+//    last by name, which on a team clone is someone else's. Three covers a
+//    normal approve's GATE_APPROVED + STAGE_COMPLETED + STAGE_STARTED in one
+//    Bash call. Terminal-WORKFLOW approve writes 5 rows; the last 3 are
+//    PHASE_COMPLETED + PHASE_VERIFIED + WORKFLOW_COMPLETED. A clone with no
+//    clone id wrote no row, and the hook mints none.
+const ownShardName = knownAuditShardName(projectDir);
+let ownShard = "";
+if (ownShardName !== null) {
+  try {
+    ownShard = readAppendOnlyFileNoFollowOrThrow(auditFilePath(projectDir, intent, space), "audit shard").toString("utf-8");
+  } catch {
+    // No shard of this clone's in the selected record: it wrote no row here.
+  }
+}
+const last3 = auditShardBlocks(ownShard).slice(-3);
 
 // 7. Event-class filter — recursion guard + scope filter combined.
 //    A single Bash call can append multiple transition rows in one go
@@ -287,8 +298,33 @@ const last3 = blocks.slice(-3);
 //    runtime-graph at gate-start — without it, the gate ritual reads a
 //    stale memory_entries count snapshotted at STAGE_STARTED time
 //    (before the orchestrator wrote any §13 entries).
+//    runtime-graph.json is gitignored, so each clone builds its own: one that
+//    has none yet compiles once from any shard's transition (a freshly pulled
+//    team clone), and the graph then exists. A teammate's transition arrives
+//    with a pull, in another clone's shard: one whose file is newer than the
+//    graph and holds a transition compiles once, after which the graph is the
+//    newer file. This clone's own shards (tracked, and a claimed Unit's local
+//    record) are left out, so the person's own rows never recompile every call.
 const transitionRegex = /^\*\*Event\*\*:[ \t]*(GATE_APPROVED|STAGE_STARTED|STAGE_AWAITING_APPROVAL|AUDIT_MERGED|UNIT_MERGED|WORKFLOW_COMPLETED)[ \t]*$/m;
-const hasTransition = last3.some((b) => transitionRegex.test(b));
+const graphPath = runtimeGraphPath(projectDir, intent, space);
+const pulledTransition = (graphMtime: number): boolean =>
+  auditShards(projectDir, intent, space).some((shard) => {
+    if (basename(shard) === ownShardName) return false;
+    try {
+      if (statSync(shard).mtimeMs <= graphMtime) return false;
+      return transitionRegex.test(readAppendOnlyFileNoFollowOrThrow(shard, "audit shard").toString("utf-8"));
+    } catch {
+      return false;
+    }
+  });
+let graphMtime: number | null = null;
+try {
+  graphMtime = statSync(graphPath).mtimeMs;
+} catch {
+  // No runtime-graph.json yet.
+}
+const hasTransition = last3.some((b) => transitionRegex.test(b)) ||
+  (graphMtime === null ? transitionRegex.test(audit) : pulledTransition(graphMtime));
 hookDebug(projectDir, "rebuild-stage-graph", "transition-gate", { hasTransition, last3count: last3.length });
 // Nothing to do from this record's files: the Kiro IDE front gate skips the
 // next shell command's call until one of them changes (the mark's name is

@@ -504,6 +504,7 @@ import {
   readSubagentInflightLedger,
   subagentInflightMarkerPath,
   subagentSessionIdentity,
+  unrecordedFinishSince,
 } from "./aidlc-subagent-inflight.ts";
 export {
   type AuthorityCover,
@@ -18214,28 +18215,9 @@ export function noReviewerFinishedSinceReview(
       }
       const since = rows.filter((row) =>
         row.event === "SUBAGENT_COMPLETED" && !attemptEventDefinitelyBefore(row, request.row));
-      for (const row of since) {
-        const agent = auditBlockField(row.block, "Agent Type");
-        if (agent === null || agent === "" || agent === "unknown") return false;
-        if (agent === request.reviewer && recordedReviewFileDigest(row.block, request.reviewFile) !== null) return false;
-      }
-      const health = hooksHealthReadDir(dir, selection.intent, selection.space);
-      const heartbeat = join(health, "log-subagent.last");
-      if (existsSync(heartbeat)) {
-        const beat = Date.parse(readFileSync(heartbeat, "utf-8").trim());
-        if (!Number.isFinite(beat)) return false;
-        // The hook beats, then appends its row in the same run: a beat since the
-        // request with no completion row at or after it is a run that left none.
-        if (beat >= requested && !since.some((row) => Date.parse(row.timestamp) >= beat)) return false;
-      }
-      const drops = join(health, "log-subagent.drops");
-      if (existsSync(drops)) {
-        for (const line of readFileSync(drops, "utf-8").split("\n")) {
-          if (line.trim() === "") continue;
-          const at = Date.parse(line.split("\t", 1)[0]);
-          if (!Number.isFinite(at) || at >= requested) return false;
-        }
-      }
+      if (since.some((row) => auditBlockField(row.block, "Agent Type") === request.reviewer &&
+        recordedReviewFileDigest(row.block, request.reviewFile) !== null)) return false;
+      if (unrecordedFinishSince(hooksHealthReadDir(dir, selection.intent, selection.space), rows, request.row)) return false;
     }
     return true;
   } catch {
@@ -22745,6 +22727,7 @@ export function shapeSourceSnapshotIndex(
   repoDir: string,
   indexFile: string,
   carriesWorkspaceShell: boolean,
+  recordBase: string | null = null,
 ): SourceSnapshotIndexShape | null {
   const hasWorktreeContext = existsSync(
     join(repoDir, ".aidlc", "worktree-meta.json"),
@@ -22803,6 +22786,22 @@ export function shapeSourceSnapshotIndex(
         "--",
         ...[...AIDLC_ROOT_SETTINGS_FILES].map((name) => `:(top,literal)${name}`),
       ],
+      { env, encoding: "utf-8" },
+    );
+    if (restored.status !== 0) return null;
+  }
+  // AI-DLC's records and worktree metadata ride no Source Commit either. Given
+  // the commit a Bolt shares with the branch it lands on, they keep its bytes,
+  // so a Bolt commit that carried them (a worker's `git add -A`) does not land
+  // them there; finalize brings the Unit's records back on its own. Without it
+  // they keep HEAD's.
+  const recordPaths = effectiveCarriesWorkspaceShell
+    ? AIDLC_SHELL_PATHS.map((path) => `${path}/`)
+    : (worktreeContext?.exactPaths ?? []).map((path) => `:(top)${path}`);
+  if (recordBase !== null && recordPaths.length > 0) {
+    const restored = spawnSync(
+      "git",
+      ["-C", repoDir, "reset", "-q", recordBase, "--", ...recordPaths],
       { env, encoding: "utf-8" },
     );
     if (restored.status !== 0) return null;
@@ -32401,12 +32400,49 @@ export function evaluateGuardRefusal(
   // A revision is open for its own review: reviewing the change is the
   // conductor's step before it reports the revision done.
   const openForReview = openForWork || state === "revising";
+  // A review still waiting for its verdict: recording it, or retrying a request
+  // whose answer never came back, is the conductor's own step wherever the
+  // Unit is built, so a side-by-side Unit is offered them before a restart.
+  const pendingReviewRemedies = (): void => {
+    if (!input.attempt.pendingReview) return;
+    if (
+      input.attempt.pendingReview.verdictRecordable !== false &&
+      input.attempt.summaryCoverage === "current"
+    ) {
+      remedies.push({
+        op: "record-verdict",
+        // Spell the closing call out. Requesting a review and recording its
+        // verdict are the same command with --verdict added, which is not
+        // guessable from the request's own output, so "record the verdict"
+        // alone left operators looking for a command that does not exist.
+        action:
+          `Record the verdict for pending review iteration ` +
+          `${input.attempt.pendingReview.iteration} if the reviewer returned` +
+          (input.attempt.pendingReview.recordVerdict
+            ? `: \`${input.attempt.pendingReview.recordVerdict}\`.`
+            : " using the recordVerdict command returned by the review request."),
+        requiresHuman: false,
+        executableNow: true,
+      });
+    }
+    if (input.attempt.pendingReview.retryable) {
+      remedies.push({
+        op: "retry-pending",
+        action:
+          `Retry pending review iteration ${input.attempt.pendingReview.iteration} ` +
+          "with --retry-pending.",
+        requiresHuman: false,
+        executableNow: input.attempt.summaryCoverage === "current",
+      });
+    }
+  };
 
   if (input.autonomousBolt) {
     const slug = input.autonomousBolt.slug ?? input.autonomousBolt.unit;
     const batch = input.autonomousBolt.batch
       ? ` batch ${input.autonomousBolt.batch}`
       : " the current batch";
+    pendingReviewRemedies();
     remedies.push({
       op: "abort-bolt",
       action:
@@ -32509,38 +32545,7 @@ export function evaluateGuardRefusal(
         executableNow: openForWork || state === "revising",
       });
     }
-    if (input.attempt.pendingReview) {
-      if (
-        input.attempt.pendingReview.verdictRecordable !== false &&
-        input.attempt.summaryCoverage === "current"
-      ) {
-        remedies.push({
-          op: "record-verdict",
-          // Spell the closing call out. Requesting a review and recording its
-          // verdict are the same command with --verdict added, which is not
-          // guessable from the request's own output, so "record the verdict"
-          // alone left operators looking for a command that does not exist.
-          action:
-            `Record the verdict for pending review iteration ` +
-            `${input.attempt.pendingReview.iteration} if the reviewer returned` +
-            (input.attempt.pendingReview.recordVerdict
-              ? `: \`${input.attempt.pendingReview.recordVerdict}\`.`
-              : " using the recordVerdict command returned by the review request."),
-          requiresHuman: false,
-          executableNow: true,
-        });
-      }
-      if (input.attempt.pendingReview.retryable) {
-        remedies.push({
-          op: "retry-pending",
-          action:
-            `Retry pending review iteration ${input.attempt.pendingReview.iteration} ` +
-            "with --retry-pending.",
-          requiresHuman: false,
-          executableNow: input.attempt.summaryCoverage === "current",
-        });
-      }
-    }
+    pendingReviewRemedies();
     if (input.attempt.repairReview) {
       remedies.push({
         op: "apply-repairs-then-request",
@@ -38238,10 +38243,13 @@ export function plannedStages(
     goesBackTo ??= new Set(work ? stagesOwedBehindCursor(stateContent, work.projectDir, work.intent, work.space) : []);
     return goesBackTo.has(slug);
   };
-  const passedOver = (slug: string) =>
-    (stateOf(slug) ?? "pending") === "pending" && cursorPastStage(stateContent, slug) && !owed(slug);
+  // Under team ownership the Unit stages behind the cursor stay open for the
+  // Units still to land in them (a move past them keeps them, handleExecute).
+  const passedOver = (stage: StageEntry) =>
+    (stateOf(stage.slug) ?? "pending") === "pending" && cursorPastStage(stateContent, stage.slug) &&
+    !owed(stage.slug) && !(isPerUnitStage(stage) && isTeamUnitOwnership(stateContent));
   return loadStageGraph().filter((stage) =>
-    stage.phase !== "initialization" && runs(stage.slug) && !passedOver(stage.slug));
+    stage.phase !== "initialization" && runs(stage.slug) && !passedOver(stage));
 }
 
 // --- Plans composed for one piece of work ---

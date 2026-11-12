@@ -417,7 +417,7 @@ Kiro IDE lets you switch any project hook off in its Agent Hooks panel, and then
 
 ---
 
-## Kiro Read Denials <a id="kiro-ide-read-denials"></a>
+## Kiro Read Denials<a id="kiro-ide-read-denials"></a>
 
 ### Kiro IDE or Kiro CLI v3 denies every read under .kiro/ ("deny fs_read matching")
 
@@ -780,7 +780,7 @@ you answer in your own words, from any chat, or edit the files.
 
 ---
 
-## A Bolt attempt was set aside — getting the files back
+## A Bolt attempt was set aside — getting the files back<a id="a-bolt-attempt-was-set-aside-getting-the-files-back"></a>
 
 A recovery can set aside an attempt when its reviewed files changed again and
 its one allowed re-review was already used. The recovery abort's `--discard`
@@ -1044,7 +1044,7 @@ code. The row is absent when the records are visible, outside a Git repository,
 or when Git is unavailable.
 
 On Claude Code, doctor also reads the machine-managed `managed-settings.json` and alphabetical `managed-settings.d/` fragments. If the effective `allowManagedHooksOnly` value is `true`, organization policy blocks every hook declared by the project's `.claude/settings.json`; only your Claude Code administrator can lift that policy. When that policy is not set and heartbeats are still absent after workflow progress, set `"disableAllHooks": false` in this project's `.claude/settings.local.json`; it works in the same chat.
-When a workflow has issues, `--doctor` also prints a **Workflow diagnosis** section listing structured findings (unresolved gates, a missing runtime graph, cold hooks, and similar "it will not advance" causes) — the same analysis `--doctor --export` writes to its report.
+When a workflow has issues, `--doctor` also prints a **Workflow diagnosis** section listing structured findings (a missing runtime graph, cold hooks, and similar "it will not advance" causes), the same analysis `--doctor --export` writes to its report.
 
 See [CLI Commands](12-cli-commands.md#aidlc-doctor-health-check) for full details on what each check validates and how to fix failures.
 

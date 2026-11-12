@@ -5239,9 +5239,7 @@ describe("the engine writes the plan's Testing Contract itself", () => {
   );
 
   // The person's own note under the heading, written while they edit the
-  // files: with the block intact nothing is written and the note stays; a note
-  // that took the block's place is written over only with the question that
-  // says the engine repaired the Testing Contract of their edited plan.
+  // files: with the block intact nothing is written and the note stays.
   test("their own note beside the intact block stays, and their approval records the plan with it", () => {
     const proj = project();
     askFor(proj);
@@ -5256,17 +5254,51 @@ describe("the engine writes the plan's Testing Contract itself", () => {
     expect(planText(proj)).toBe(theirs);
   });
 
-  test("their own note in the block's place is written over only with the line that says so", () => {
+  // Their note in the block's place, or beside a block their edit broke: the
+  // engine writes the block back and keeps their words after it, in the same
+  // section, and the question says it repaired the contract of their edited plan.
+  test.each([
+    ["in the block's place", () => `${STEPS}## Testing Contract\n\nMy note: use TDD for this one.\n`, "My note: use TDD for this one."],
+    ["beside a block their edit broke", (plan: string) =>
+      `${plan.replace('"version": 1', '"version": 1,,')}\nMy note: keep the slugify tests short.\n`, "My note: keep the slugify tests short."],
+  ] as const)("their own note %s is kept after the block the engine writes back", (_label, edit, note) => {
     const proj = project();
     askFor(proj);
     replyAndRecord(proj, "I'll edit the files", "I'll edit the files");
-    writeFileSync(planPath(proj), `${STEPS}## Testing Contract\n\nMy note: use TDD for this one.\n`, "utf-8");
+    writeFileSync(planPath(proj), edit(planText(proj)), "utf-8");
     reply(proj, "done");
     expect(answer(proj, "Approve Plan").message).toContain("broke the Testing Contract block");
     const asked = next(proj);
     expect(asked.kind, JSON.stringify(asked)).toBe("ask");
     expect(asked.question).toBe("I repaired the plan's Testing Contract (the test rules your build follows). Build your edited plan?");
-    expect(planText(proj)).toBe(STEPS + contract(proj));
+    const written = `${STEPS}${contract(proj)}\n${note}\n`;
+    expect(planText(proj)).toBe(written);
+    // Read as current: no second write.
+    expect(next(proj).kind).toBe("ask");
+    expect(planText(proj)).toBe(written);
+    replyAndRecord(proj, "1", "Approve Plan");
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+    expect(planText(proj)).toBe(written);
+  });
+
+  // Their note beside an intact block that a setting left out of date while
+  // they edited: their approval renders the section again and keeps the note.
+  test("their own note beside a block a setting left out of date is kept when their approval renders it again", () => {
+    const proj = project();
+    askFor(proj);
+    replyAndRecord(proj, "I'll edit the files", "I'll edit the files");
+    writeFileSync(planPath(proj), `${planText(proj)}\nMy note: keep the slugify tests short.\n`, "utf-8");
+    // A setting changed while they edit; the question stays open over the state write.
+    const state = seededStateFile(proj);
+    const before = readFileSync(state, "utf-8");
+    moveContract(proj);
+    expect(keepPlanApprovalAskOverStateWrite(proj, before, readFileSync(state, "utf-8"))).toBe(true);
+    reply(proj, "done");
+    const recorded = answer(proj, "Approve Plan");
+    expect(recorded.code, recorded.message).toBe(0);
+    expect(recorded.message).toContain("was rendered again");
+    expect(planText(proj)).toBe(`${STEPS}${contract(proj)}\nMy note: keep the slugify tests short.\n`);
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
   });
 
   // A plan sent back waits for its change: the engine never makes it read as

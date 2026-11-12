@@ -24,7 +24,7 @@ import {
   transactionState,
   writeOperation,
 } from "./aidlc-transaction.ts";
-import { assertSafeUninstallRoot } from "./aidlc-uninstall-plan.ts";
+import { assertSafeUninstallRoot, INSTALL_ROOT_ANSWERS } from "./aidlc-uninstall-plan.ts";
 import type { UninstallPlan } from "./aidlc-uninstall-plan.ts";
 
 export type WindowsUninstallPlan = UninstallPlan;
@@ -291,9 +291,7 @@ function assertDeletionPlan(
     }
   }
   const files = new Set<string>();
-  const settings = new Set([
-    "aidlc.settings.json", "update-check.json", "pins.json", "default-harness", "channel", "kiro-ide-workflows", "kiro-cli-workflows", "kiro-ide-settings-error-told", "kiro-ide-terminal",
-  ].map((name) => planPathKey(join(root, name))));
+  const settings = new Set(INSTALL_ROOT_ANSWERS.map((name) => planPathKey(join(root, name))));
   for (const file of plan.files) {
     if (
       !file || typeof file !== "object" || Array.isArray(file) ||
