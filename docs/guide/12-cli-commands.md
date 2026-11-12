@@ -759,8 +759,8 @@ building Units. A push the remote refuses keeps the commit and says why. If the
 branch moved, pull it, then share again. If the remote's own rules refuse a
 direct push (a protected branch, a repository rule, a hook), pulling changes
 nothing: the message names a branch of your own to push the commit to, to be
-merged into the integration branch through the repository's review as a merge
-commit, and then you pull. `/aidlc` offers this step itself when it is due:
+merged into the integration branch through the repository's review (a merge
+commit, a squash or a rebase), and then you pull. `/aidlc` offers this step itself when it is due:
 before a Unit would start on the lead's checkout, and after a land the remote
 does not have yet. A landing the remote's integration branch holds as a squash
 or a rebase (a pull request merged that way) counts as there: its landing

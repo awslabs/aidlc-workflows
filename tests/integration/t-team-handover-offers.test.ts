@@ -459,7 +459,7 @@ describe("step 1: the lead shares the plan with the teams", () => {
     expect(shared.out).toContain("pre-receive hook declined");
     expect(shared.out).toContain("The commit is kept here");
     expect(shared.out).toContain("merge it into main through the repository's own review");
-    expect(shared.out).toContain("a merge commit, not a squash or a rebase");
+    expect(shared.out).not.toContain("not a squash");
     expect(shared.out).not.toContain("pull main, then share again");
     expect(git(lead, ["rev-parse", "HEAD"])).not.toBe(before);
     expect(git(lead, ["status", "--porcelain"])).toBe("");

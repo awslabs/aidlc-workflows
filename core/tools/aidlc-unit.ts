@@ -5144,17 +5144,15 @@ function shareMain(projectDir?: string): void {
     const said = `${remote} did not take ${branch}: ${pushRefusal(pushed.stderr)}. `;
     // The remote's rules refuse a direct push, so pulling changes nothing. The
     // way that works is a branch of the person's own, merged into the
-    // integration branch through the repository's review. The engine knows a
-    // landing reached the remote by finding its commit there (landedNotOnRemote),
-    // so the merge keeps the commits; a squash or a rebase makes new ones.
+    // integration branch through the repository's review. A merge commit, a
+    // squash or a rebase all bring it there (landedNotOnRemote, landingRecorded).
     if (pushRefusedByPolicy(pushed.stderr)) {
       fail(
         said +
           `${committed > 0 ? "The commit" : "The work"} is kept here. ${branch} does not take a push from you, ` +
           `so pulling will not help. Push it to a branch of your own with ` +
           `\`git push ${remote} HEAD:refs/heads/${branch}-share\`, then merge it into ${branch} through the ` +
-          `repository's own review, as a merge commit, not a squash or a rebase, so the commits reach ${branch}. ` +
-          `Then pull ${branch}.`,
+          `repository's own review. Then pull ${branch}.`,
       );
     }
     fail(`${said}${committed > 0 ? "The commit is kept here: " : ""}pull ${branch}, then share again.`);
