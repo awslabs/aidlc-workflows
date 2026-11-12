@@ -152,6 +152,33 @@ tools up) is theirs, never a defect or a threat (`AGENTS.md`, "The factory
 works with what the person brings"; `.github/prompts/ai-pr-review-common.md`,
 "What AI-DLC is, and who owns what").
 
+#### Product decisions
+
+AIDA includes a **Product Decision (advisory)** section in its existing review
+comment. It identifies new features, user-facing mechanisms, supported formats
+and intentional public-contract changes, with the behavior before and after,
+the question for the maintainer, and the changed files. New internal files,
+tests, refactors and fixes restoring existing behavior do not by themselves
+call for a product decision.
+
+This pass uses the same review context, model runner and eligible PRs as the
+technical review. It reads the complete diff even when technical findings are
+reviewed incrementally. It adds no runs on pushes or PR edits, and forks remain
+excluded. It does not change the technical finding severities, findings ledger
+or next-action labels.
+
+The maintainer decides in the normal PR discussion. The product section neither
+approves the scope nor blocks merge: there is no product approval command,
+required product check, merge-queue job or ruleset change. Relevant maintainer
+judgment in ordinary PR comments, formal reviews and inline comments is included
+in the immutable context. Maintainer status uses the ledger's repository
+write-permission check. Answered choices show AIDA's interpretation with a link
+to the maintainer's own words instead of asking again. If the product model fails or returns invalid
+output, the technical review still publishes with an unavailable note. Oversized
+product details are omitted to preserve the complete technical review.
+
+#### Findings ledger
+
 AIDA keeps one **findings ledger** comment per PR. Every finding gets a stable
 id (`F1`, `F2`, …) anchored to the exact content of the lines it cites, so a
 follow-up review recognizes the same finding across commits instead of
