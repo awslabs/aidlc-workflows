@@ -369,6 +369,77 @@ describe("t281 upstream and target verification", () => {
     expect(out.result.gaps).toContain("US1.2");
   });
 
+  // A story the team keeps out of every Unit (handled in a later phase) is
+  // recorded as Deferred with its reason, and `none` on its story-map row.
+  function seedKeptOutStory(proj: string, row: { status?: string; target?: string } | null): string {
+    seedUserStories(proj);
+    seedUnits(proj);
+    write(proj, "inception/user-stories/stories.md", [
+      "# Stories",
+      "",
+      "## US1.1 Login",
+      "- AC1.1.1 accepts valid credentials",
+      "",
+      "## US1.2 Recovery",
+      "- AC1.2.1 sends a reset link",
+      "",
+      "## US1.3 Audit export",
+      "- AC1.3.1 exports the audit trail",
+    ].join("\n"));
+    write(proj, "inception/units-generation/unit-of-work-story-map.md", [
+      "# Story Map",
+      "",
+      "| Story | Unit ID | Directory | Note |",
+      "|---|---|---|---|",
+      "| US1.1 | U1 | u1-auth | |",
+      "| US1.2 | U2 | u2-profile | |",
+      "| US1.3 | none | none | handled in the Operation phase |",
+    ].join("\n"));
+    return trace(proj, "inception/units-generation/traceability.json", {
+      stage: "units-generation",
+      upstream_ids: row === null ? ["US1.1", "US1.2"] : ["US1.1", "US1.2", "US1.3"],
+      coverage: [
+        { id: "US1.1", status: "OK", target: "U1" },
+        { id: "US1.2", status: "OK", target: "u2-profile" },
+        ...(row === null ? [] : [{ id: "US1.3", ...row }]),
+      ],
+    });
+  }
+
+  test("units-generation: a Deferred story with a reason, in no Unit, is settled", () => {
+    const proj = project();
+    const file = seedKeptOutStory(proj, { status: "Deferred", target: "handled in the Operation phase" });
+    const out = run(proj, "units-generation", file);
+    expect(out.result.gaps).toEqual([]);
+    expect(out.result.invalid_targets).toEqual([]);
+    expect(out.result.reason).toBeUndefined();
+    expect(out.result.pass).toBe(true);
+  });
+
+  test("units-generation: a Deferred story with no reason is still reported", () => {
+    const proj = project();
+    const file = seedKeptOutStory(proj, { status: "Deferred", target: "" });
+    const out = run(proj, "units-generation", file);
+    expect(out.result.pass).toBe(false);
+    expect(out.result.invalid_entries).toContain("coverage:US1.3: status Deferred requires a non-empty target");
+  });
+
+  test("units-generation: a story in no Unit with no row, a GAP row, or an N/A row is still a gap", () => {
+    const proj = project();
+    let out = run(proj, "units-generation", seedKeptOutStory(proj, null));
+    expect(out.result.pass).toBe(false);
+    expect(out.result.gaps).toContain("US1.3");
+
+    out = run(proj, "units-generation", seedKeptOutStory(proj, { status: "GAP" }));
+    expect(out.result.pass).toBe(false);
+    expect(out.result.gaps).toContain("US1.3");
+
+    // N/A at this stage is where a hand-off to another Unit lands: it settles nothing.
+    out = run(proj, "units-generation", seedKeptOutStory(proj, { status: "N/A", target: "built by U2 later" }));
+    expect(out.result.pass).toBe(false);
+    expect(out.result.gaps).toContain("US1.3");
+  });
+
   // Units Generation writes Markdown, and an agent often sets IDs and
   // directories in inline code, several Units to a cell (#2488).
   test("story-map cells in inline code, several Units to a cell, still join", () => {

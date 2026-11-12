@@ -43,7 +43,12 @@ opens, on the tables as they are then:
    requirement); without that record, a table's requirements are the ones it
    lists and the ones the FR and NFR ID patterns find in requirements.md.
 5. Verifies deterministic targets where possible: stories, Unit mappings,
-   business rules, and workspace-relative code paths. A Functional Design Unit
+   business rules, and workspace-relative code paths. At Units Generation, a
+   story or requirement no Unit's row names is a gap, unless the team keeps it
+   out of every Unit on purpose: a `Deferred` row with a non-empty target (the
+   reason, and where it is handled, say Operation) settles it, with `none` in
+   its story-map Units cell. An `N/A` row does not, since it is also how an ID
+   is handed to another Unit. A Functional Design Unit
    whose kind writes no `rules.md` (a `ui` Unit) names one of its design files
    (`functional-spec.md`, `frontend-components.md`) on each row instead of a
    business rule.
