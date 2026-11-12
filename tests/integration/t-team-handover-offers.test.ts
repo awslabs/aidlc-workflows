@@ -148,9 +148,9 @@ function personsOwnEdits(dir: string): void {
 
 const OWN_EDITS_NAMED = "(changed: src/shared.ts, src/split.ts; new: staged-only.txt, z-deploy.env; deleted: docs/old-notes.md)";
 
-// The files the last commit here took.
+// The files the last commit here took, a rename's two names apart.
 function committedHere(dir: string): string[] {
-  return git(dir, ["show", "--name-only", "--format=", "HEAD"]).split("\n").filter(Boolean);
+  return git(dir, ["show", "--no-renames", "--name-only", "--format=", "HEAD"]).split("\n").filter(Boolean);
 }
 
 // The share's result: it names what it committed in the words the question
@@ -286,6 +286,49 @@ describe("step 1: the lead shares the plan with the teams", () => {
     const words = String(JSON.parse(again.stdout).committed_files);
     expect(words).toEndWith(` here ${OWN_EDITS_NAMED}`);
     expectResultNames(again.stdout, lead, words);
+  });
+
+  // A rename and a removal the person staged with git (git mv, git rm) are in
+  // neither the index nor the disk under the old names, which git add refuses
+  // to be given, so the share stopped on "git add failed" on every try.
+  test("a rename and a removal the person staged with git: the share commits and names them", () => {
+    const { seed: lead, remote } = makeSeed();
+    asLeadsOwnCheckout(lead);
+    mkdirSync(join(lead, "docs"), { recursive: true });
+    writeFileSync(join(lead, "docs", "old-name.md"), "renamed later\n");
+    writeFileSync(join(lead, "docs", "gone.md"), "removed later\n");
+    git(lead, ["add", "docs"]);
+    git(lead, ["commit", "-m", "the person's docs"]);
+    git(lead, ["push", "origin", "HEAD"]);
+    const base = git(remote, ["rev-parse", "main"]);
+    git(lead, ["mv", "docs/old-name.md", "docs/new-name.md"]);
+    git(lead, ["rm", "-q", "docs/gone.md"]);
+    const offer = nextDirective(lead);
+    expect(isHandover(offer, "share"), JSON.stringify(offer)).toBe(true);
+    const question = String(offer.question);
+    const words = question.match(/I'd commit (the \d+ changed files here \(.*\)) and push main to origin, /)?.[1];
+    expect(words, question).toEndWith(" here (new: docs/new-name.md; deleted: docs/gone.md, docs/old-name.md)");
+    const shared = runMergeTool(UNIT, ["share"], lead);
+    expect(shared.status, shared.out).toBe(0);
+    expectResultNames(shared.stdout, lead, words as string);
+    const onRemote = git(remote, ["diff", "--no-renames", "--name-status", base, "main"]).split("\n");
+    for (const line of ["A\tdocs/new-name.md", "D\tdocs/gone.md", "D\tdocs/old-name.md"]) expect(onRemote).toContain(line);
+  });
+
+  // git's own words for a file it cannot add end without a full stop; the
+  // refusal still reads as two sentences.
+  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("a file git cannot read: the share's refusal ends git's words with a full stop", () => {
+    const { seed: lead } = makeSeed();
+    asLeadsOwnCheckout(lead);
+    writeFileSync(join(lead, "unreadable.txt"), "the person's\n");
+    chmodSync(join(lead, "unreadable.txt"), 0o000);
+    try {
+      const shared = runMergeTool(UNIT, ["share"], lead);
+      expect(shared.status, shared.out).not.toBe(0);
+      expect(shared.out).toContain("fatal: adding files failed. Then share again.");
+    } finally {
+      chmodSync(join(lead, "unreadable.txt"), 0o644);
+    }
   });
 
   // Ten names in all, whatever their kind: the ten nearest the project's top,
@@ -595,6 +638,19 @@ describe("step 3: a team publishes its finished Unit", () => {
     expect(committedHere(checkout)).toHaveLength(Number(words?.[2]));
     // A typed publish names what it put on the claim ref the same way, beside what it left out.
     expect(JSON.parse(published.stdout)).toMatchObject({ published: true, committed_files: words?.[1], left_out: 1 });
+  });
+
+  test("a removal the person staged with git in a team's clone: Commit and publish commits it", () => {
+    const { seed: lead, remote } = makeSeed();
+    withPersonsPushedFiles(lead);
+    const { checkout } = prepareCandidate(remote, "alpha", "team-a", { publish: false });
+    git(checkout, ["rm", "-q", "docs/old-notes.md"]);
+    claimAsUnitWork(checkout, ["src/alpha.ts"]);
+    expect(isHandover(doneIn(checkout), "publish")).toBe(true);
+    const published = runMergeTool(UNIT, ["publish", "alpha", "--commit"], checkout);
+    expect(published.status, published.out).toBe(0);
+    expect(committedHere(checkout)).toContain("docs/old-notes.md");
+    expect(JSON.parse(published.stdout).committed_files).toEndWith(" here (deleted: docs/old-notes.md)");
   });
 
   // A Unit whose own work (its manifest claims it) is thousands of new files:

@@ -5283,6 +5283,8 @@ export interface WorkToCommit {
   untracked: string[];
   // What the commit does to each path, as workToCommitWords names it.
   kinds: Map<string, CommitKind>;
+  // Removals git already holds staged (git rm, a rename's old name).
+  removed: Set<string>;
   // New files a Unit's publish leaves out, and the --include paths that named none.
   leftOut: string[];
   unmatched: string[];
@@ -5330,10 +5332,11 @@ function unitSourceClaims(projectDir: string, unit: string): SourceClaimModel[] 
 export function workToCommit(projectDir: string, work?: UnitWork): WorkToCommit {
   const pd = resolveProjectDir(projectDir);
   const status = git(pd, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
-  if (!status.ok) return { paths: [], untracked: [], kinds: new Map(), leftOut: [], unmatched: [] };
+  if (!status.ok) return { paths: [], untracked: [], kinds: new Map(), removed: new Set(), leftOut: [], unmatched: [] };
   const paths: string[] = [];
   const untracked: string[] = [];
   const kinds = new Map<string, CommitKind>();
+  const removed = new Set<string>();
   const records = status.stdout.split("\u0000");
   for (let i = 0; i < records.length; i++) {
     const record = records[i];
@@ -5343,16 +5346,18 @@ export function workToCommit(projectDir: string, work?: UnitWork): WorkToCommit 
     if (code === "??") untracked.push(record.slice(3));
     const kind = commitKind(code);
     if (kind !== null) kinds.set(record.slice(3), kind);
+    if (code === "D ") removed.add(record.slice(3));
     // A rename's old name goes; a copy's source stays as it is.
     if (/[RC]/.test(code) && records[i + 1]) {
       paths.push(records[++i]);
       if (code.includes("R")) kinds.set(records[i], "deleted");
+      if (code[0] === "R") removed.add(records[i]);
     }
   }
   const own = aidlcOwnRootParts(pd, paths);
   const kept = paths.filter((path) => !own.has(path));
   const keptUntracked = untracked.filter((path) => !own.has(path));
-  if (work === undefined) return { paths: kept, untracked: keptUntracked, kinds, leftOut: [], unmatched: [] };
+  if (work === undefined) return { paths: kept, untracked: keptUntracked, kinds, removed, leftOut: [], unmatched: [] };
   const claims = unitSourceClaims(pd, work.unit);
   // As the person or the agent types it, on Windows too: `\` is `/`, a folder
   // may end in `/`, and `.` is the whole project (every file left out).
@@ -5371,6 +5376,7 @@ export function workToCommit(projectDir: string, work?: UnitWork): WorkToCommit 
     paths: kept.filter((path) => !out.has(path)),
     untracked: keptUntracked.filter((path) => !out.has(path)),
     kinds,
+    removed,
     leftOut,
     unmatched,
   };
@@ -5431,20 +5437,23 @@ function commitWorkHere(
   work?: UnitWork,
 ): { committed: number; taken: WorkToCommit; leftOut: string[]; unmatched: string[] } {
   const taken = workToCommit(projectDir, work);
-  const { paths, leftOut, unmatched } = taken;
+  const { paths, removed, leftOut, unmatched } = taken;
   if (paths.length === 0) return { committed: 0, taken, leftOut, unmatched };
   // One call whatever the count: Windows caps a command line at 32,767
   // characters, so the paths go to git on its standard input, NUL-separated,
   // each read as the same name an argument would be (git 2.25; core already
-  // needs 2.29). An empty list never gets here: with -A and no path git would
+  // needs 2.29). A removal git already holds staged is in neither the index
+  // nor the checkout, which git add refuses to be given, and the commit takes
+  // it as it is. An empty list is never given: with -A and no path git would
   // take the whole tree.
-  const added = git(
+  const add = paths.filter((path) => !removed.has(path) || existsSync(join(projectDir, path)));
+  const added = add.length === 0 ? null : git(
     projectDir,
     ["add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"],
     undefined,
-    paths.map((path) => `${path}\0`).join(""),
+    add.map((path) => `${path}\0`).join(""),
   );
-  if (!added.ok) shareCommitRefused(added.stderr.trim(), true);
+  if (added !== null && !added.ok) shareCommitRefused(added.stderr.trim(), true);
   const committed = git(projectDir, ["commit", "-q", "-m", message]);
   if (!committed.ok) shareCommitRefused((committed.stderr || committed.stdout).trim(), false);
   return { committed: paths.length, taken, leftOut, unmatched };
@@ -5452,7 +5461,7 @@ function commitWorkHere(
 
 // What the share and publish say when git does not take their add or commit.
 function shareCommitRefused(said: string, adding: boolean): never {
-  if (adding) fail(`git add failed: ${said}`);
+  if (adding) fail(`git add failed: ${said}${/[.!?]$/.test(said) ? "" : "."}`);
   if (NO_GIT_IDENTITY.test(said)) {
     fail(
       "Git has no name and email for your commits yet. Set them with " +

@@ -502,20 +502,18 @@ large scope with significant unknowns.
    A-E options (A-D on Claude Code). Every ordinary clarifying question must end with `X. Other (please specify)` as
    the final option. All `[Answer]:` tags left blank.
 
-   Offer the tri-mode question flow: Guide Me / Edit File / Chat.
-
 7. **Collect and Analyze Answers** -- Read the questions file, confirm all
    `[Answer]:` tags are filled. If any are blank, present unanswered questions
    via AskUserQuestion and write answers back. Do NOT proceed with partial
    answers. Run:
    - MANDATORY ambiguity detection: scan all responses for vague language
-     ("mix of", "not sure", "depends", "probably", "maybe")
+     ("mix of", "not sure", "depends")
    - Contradiction check between answers
    - Missing detail identification
 
 8. **Follow-Up Questions** -- If ANY ambiguity, vagueness, or contradictions
    found, create follow-up questions targeting the specific issues. Resolve
-   all ambiguities before proceeding. "When in doubt, ask."
+   all ambiguities before proceeding.
 
 9. **Generate Requirements** -- Create
     `<record>/inception/requirements-analysis/requirements.md` containing:
@@ -662,11 +660,11 @@ not in the upstream reference.
      personas and story granularity
 
 5. **Collect Answers** -- Collect answers following stage-protocol.md section 3
-   question flow (offer interaction mode choice, collect answers, write back to
+   question flow (collect answers, write back to
    file).
 
 6. **Analyze Answers** -- MANDATORY ambiguity analysis: scan all responses for
-   vague language ("mix of", "not sure", "depends", "probably"). Check for
+   vague language ("mix of", "not sure", "depends"). Check for
    contradictions. Identify missing details. Create follow-up questions if ANY
    ambiguity found.
 

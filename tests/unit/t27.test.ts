@@ -515,6 +515,40 @@ describe("t27 aidlc-utility doctor", () => {
     expect(auditEventCount(auditPath(p), "HEALTH_CHECKED")).toBe(1);
   });
 
+  // A script reading --json or --quiet counts what the person reads: the
+  // workflow findings are warn rows of the one report all three render.
+  test("70: doctor --json and --quiet count the workflow findings the human report shows", () => {
+    const p = stateAuditProj();
+    const human = util(["doctor"], p, { NO_COLOR: "1" });
+    expect(human.stdout).toContain("  warn  [runtime-graph-missing] ");
+    const summary = human.stdout.match(/\n(\d+) problems?, (\d+) warnings?\.\n/);
+    expect(summary, human.stdout).not.toBeNull();
+    const [, failed, warnings] = summary!;
+    const counts = new RegExp(`, ${warnings} warnings, ${failed} failed$`);
+    const json = JSON.parse(util(["doctor", "--json"], p).stdout.trim().split("\n").at(-1) ?? "{}");
+    expect(json.message).toMatch(counts);
+    expect(json.status).toBe(failed === "0" ? "warning" : "failed");
+    expect(json.code).toBe(human.status);
+    expect(
+      json.data.checks.some((check: { severity?: string; label: string }) =>
+        check.severity === "warn" && check.label.startsWith("[runtime-graph-missing] ")
+      ),
+    ).toBe(true);
+    expect(util(["doctor", "--quiet"], p).stdout.trim()).toMatch(counts);
+  });
+
+  test("70b: the human report's workflow rows keep their words and place", () => {
+    const p = stateAuditProj();
+    const out = util(["doctor"], p, { NO_COLOR: "1" }).stdout;
+    const row = out.indexOf(
+      "  warn  [runtime-graph-missing] runtime-graph.json is missing for the active workflow.\n" +
+        "        fix: No compiled runtime graph. Re-run `",
+    );
+    expect(row, out).toBeGreaterThan(out.indexOf("\nProject"));
+    expect(row).toBeLessThan(out.indexOf("\nFramework integrity"));
+    expect(out.slice(row).split("\n").find((line) => /^ {2}ok {4}\d+ checks passed$/.test(line))).toBeDefined();
+  });
+
   // COLD-SAFE contract (#4): on a project with NO audit shard, --doctor is
   // read-only - it prints the health report (exit code aside) but creates no
   // audit side effect. bareProj() makes the workspace shell but NOT an audit

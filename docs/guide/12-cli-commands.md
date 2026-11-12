@@ -1219,7 +1219,7 @@ They do bring AI-DLC's own copy of the active space's memory up to date
 start does, so the command is safe to run before the first intent is created;
 once an intent exists it also records a `HEALTH_CHECKED` audit row. Plugin checks execute installed plugin code: plugin authors are required by convention to keep those scripts read-only, but the runtime cannot enforce that property.
 
-When a workflow has issues, `--doctor` also lists the structured findings in its Project section, one `warn [<id>] <summary>` row with a `fix:` line each (e.g. `gate-unresolved`, `runtime-graph-missing`), for unresolved gates, a missing runtime graph, cold hooks, and similar "it will not advance" causes. The live report and `--export` share one analysis, so the findings are identical either way.
+When a workflow has issues, `--doctor` also lists the structured findings in its Project section, one `warn [<id>] <summary>` row with a `fix:` line each (e.g. `runtime-graph-missing`), for a missing runtime graph, cold hooks, and similar "it will not advance" causes. The live report and `--export` share one analysis, so the findings are identical either way.
 
 **Syntax:**
 
@@ -1368,7 +1368,6 @@ Diagnostic report created:
   aidlc/diagnostics/aidlc-diagnostic-report-20260714-153000-3f9a1c22.tar.gz
 
 Findings:
-  ERROR gate-unresolved
   WARNING runtime-graph-missing
 
 No source files or artifact bodies were included.

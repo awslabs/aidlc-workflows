@@ -1044,7 +1044,7 @@ code. The row is absent when the records are visible, outside a Git repository,
 or when Git is unavailable.
 
 On Claude Code, doctor also reads the machine-managed `managed-settings.json` and alphabetical `managed-settings.d/` fragments. If the effective `allowManagedHooksOnly` value is `true`, organization policy blocks every hook declared by the project's `.claude/settings.json`; only your Claude Code administrator can lift that policy. When that policy is not set and heartbeats are still absent after workflow progress, set `"disableAllHooks": false` in this project's `.claude/settings.local.json`; it works in the same chat.
-When a workflow has issues, `--doctor` also prints a **Workflow diagnosis** section listing structured findings (unresolved gates, a missing runtime graph, cold hooks, and similar "it will not advance" causes) — the same analysis `--doctor --export` writes to its report.
+When a workflow has issues, `--doctor` also prints a **Workflow diagnosis** section listing structured findings (a missing runtime graph, cold hooks, and similar "it will not advance" causes), the same analysis `--doctor --export` writes to its report.
 
 See [CLI Commands](12-cli-commands.md#aidlc-doctor-health-check) for full details on what each check validates and how to fix failures.
 
