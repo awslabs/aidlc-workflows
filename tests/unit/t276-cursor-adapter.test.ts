@@ -225,10 +225,8 @@ function runAdapter(
   const adapterProjectDir = options.adapterProjectDir ?? projectDir;
   const env: Record<string, string | undefined> = {
     ...process.env,
-    // The adapter reads the global git config when it resolves a persisted
-    // alias, so the global scope points at an absent file and a developer's own
-    // aliases stay out of the classification. A developer's pager needs no
-    // hiding any more: the adapter no longer reads one.
+    // The global and system git config point at absent files, so a developer's
+    // own git settings stay out of the hooks the adapter runs.
     GIT_CONFIG_GLOBAL: join(projectDir, ".absent-global-gitconfig"),
     GIT_CONFIG_SYSTEM: join(projectDir, ".absent-system-gitconfig"),
     AIDLC_PROJECT_DIR: projectDir,
@@ -261,6 +259,18 @@ function expectAllowJson(
   expect(JSON.parse(r.stdout) as { permission?: string }, label).toEqual({
     permission: "allow",
   });
+}
+
+/**
+ * None of the adapter's own denies (its helper records, a helper's identity, a
+ * nested Task) answered a helper's call: the checks every harness runs decide it.
+ */
+function expectChecksEveryHarnessRunsDecide(
+  out: { permission?: string; agent_message?: string },
+  label?: string,
+): void {
+  if (out.permission === "allow") return;
+  expect(out.agent_message ?? "", label).not.toMatch(/attribution state|identity is unavailable|nested delegation/);
 }
 
 function registerTaskParent(projectDir: string): void {
@@ -1712,7 +1722,7 @@ describe("t276 cursor adapter payload conversion", () => {
     }
   });
 
-  test("22b: an unavailable shared freeze parser denies before the guard chain", () => {
+  test("22b: with the shared freeze parser unavailable, a plain command goes on, and the guard it breaks is on record", () => {
     const proj = installedProject();
     seedStateFile(proj, "state-construction.md");
     registerTaskParent(proj);
@@ -1738,15 +1748,9 @@ describe("t276 cursor adapter payload conversion", () => {
         tool_input: { command: "echo ok" },
       }),
     );
-    expect(r.code).toBe(0);
-    const out = JSON.parse(r.stdout) as {
-      permission?: string;
-      agent_message?: string;
-    };
-    expect(out.permission).toBe("deny");
-    expect(out.agent_message ?? "").toContain(
-      "general-purpose interpreters",
-    );
+    // As test 22: a guard that cannot load refuses nothing, and doctor reads why.
+    expectAllowJson(r);
+    expect(readdirSync(hooksHealthDir(proj)).some((file) => file.endsWith(".drops"))).toBe(true);
   });
 
   test("23: Shell working_directory and captured cwd feed reviewer-scope and review-freeze", () => {
@@ -1991,8 +1995,9 @@ if (import.meta.main) {
         permission?: string;
         agent_message?: string;
       };
-      expect(out.permission, runtime).toBe("deny");
-      expect(out.agent_message ?? "", runtime).toContain("general-purpose interpreters");
+      // A removal the command line does not spell out goes to Cursor's own
+      // command approval, as on every harness.
+      expect(out.permission, `${runtime}: ${out.agent_message ?? ""}`).toBe("allow");
     }
     expect(ledgerFilesFor(proj)).toHaveLength(1);
 
@@ -2026,10 +2031,7 @@ if (import.meta.main) {
         permission?: string;
         agent_message?: string;
       };
-      expect(out.permission, command).toBe("deny");
-      expect(out.agent_message ?? "", command).toContain(
-        "general-purpose interpreters",
-      );
+      expect(out.permission, `${command}: ${out.agent_message ?? ""}`).toBe("allow");
     }
 
     const dynamicRemovals = [
@@ -2064,8 +2066,7 @@ if (import.meta.main) {
         permission?: string;
         agent_message?: string;
       };
-      expect(out.permission, command).toBe("deny");
-      expect(out.agent_message ?? "", command).toContain("shell parameter expansion");
+      expect(out.permission, `${command}: ${out.agent_message ?? ""}`).toBe("allow");
     }
     expect(existsSync(dispatch)).toBe(true);
     expect(ledgerFilesFor(proj)).toHaveLength(1);
@@ -2234,10 +2235,9 @@ if (import.meta.main) {
       permission?: string;
       agent_message?: string;
     };
-    expect(dynamicOut.permission).toBe("deny");
-    expect(dynamicOut.agent_message ?? "").toContain(
-      "general-purpose interpreters",
-    );
+    // A removal the command line does not spell out goes to Cursor's own
+    // command approval; the witness keeps the helper's identity when it runs.
+    expect(dynamicOut.permission, dynamicOut.agent_message).toBe("allow");
 
     rmSync(ledgerDirFor(proj), { recursive: true, force: true });
     expect(witnessFilesFor(proj)).toHaveLength(1);
@@ -2437,7 +2437,7 @@ if (import.meta.main) {
   });
 
   // This evaluator matrix runs many adapter subprocesses sequentially.
-  test("29: Windows evaluator variants and unresolved expansion remain fail-closed", () => {
+  test("29: Windows evaluator variants and git's program settings go on to the checks every harness runs", () => {
     const proj = installedProject();
     const { dispatch } = activateReviewer(proj);
     const externalGitDir = join(proj, "scratch", "git-exec-path");
@@ -2519,8 +2519,7 @@ if (import.meta.main) {
         permission?: string;
         agent_message?: string;
       };
-      expect(out.permission, command).toBe("deny");
-      expect(out.agent_message ?? "", command).toContain("dynamic command evaluation");
+      expectChecksEveryHarnessRunsDecide(out, command);
     }
 
     const harmless = runAdapter(
@@ -2638,10 +2637,7 @@ if (import.meta.main) {
       permission?: string;
       agent_message?: string;
     };
-    expect(resetRepositoryOut.permission).toBe("deny");
-    expect(resetRepositoryOut.agent_message ?? "").toContain(
-      "dynamic command evaluation",
-    );
+    expectChecksEveryHarnessRunsDecide(resetRepositoryOut);
 
     const alternateChild = join(safeAlternateRepo, "child");
     mkdirSync(alternateChild, { recursive: true });
@@ -2722,8 +2718,7 @@ if (import.meta.main) {
       permission?: string;
       agent_message?: string;
     };
-    expect(persistedOut.permission).toBe("deny");
-    expect(persistedOut.agent_message ?? "").toContain("dynamic command evaluation");
+    expectChecksEveryHarnessRunsDecide(persistedOut);
 
     const safeAlias = spawnSync(
       "git",
@@ -2752,8 +2747,7 @@ if (import.meta.main) {
       permission?: string;
       agent_message?: string;
     };
-    expect(externalAliasOut.permission).toBe("deny");
-    expect(externalAliasOut.agent_message ?? "").toContain("dynamic command evaluation");
+    expectChecksEveryHarnessRunsDecide(externalAliasOut);
 
     const submoduleDir = join(proj, "scratch", "status-submodule");
     mkdirSync(submoduleDir, { recursive: true });
@@ -2870,10 +2864,7 @@ if (import.meta.main) {
       permission?: string;
       agent_message?: string;
     };
-    expect(resetIndexOut.permission).toBe("deny");
-    expect(resetIndexOut.agent_message ?? "").toContain(
-      "dynamic command evaluation",
-    );
+    expectChecksEveryHarnessRunsDecide(resetIndexOut);
 
 
     for (const command of [
@@ -2953,8 +2944,7 @@ if (import.meta.main) {
         permission?: string;
         agent_message?: string;
       };
-      expect(nestedOut.permission, command).toBe("deny");
-      expect(nestedOut.agent_message ?? "", command).toContain("dynamic command evaluation");
+      expectChecksEveryHarnessRunsDecide(nestedOut, command);
     }
     for (const command of [
       `git -C ${nestedRelative} st`,
@@ -3040,10 +3030,7 @@ if (import.meta.main) {
           permission?: string;
           agent_message?: string;
         };
-        expect(alternateOut.permission, command).toBe("deny");
-        expect(alternateOut.agent_message ?? "", command).toContain(
-          "dynamic command evaluation",
-        );
+        expectChecksEveryHarnessRunsDecide(alternateOut, command);
       }
 
       const ambiguousWrapperCommand =
@@ -3153,10 +3140,7 @@ if (import.meta.main) {
           permission?: string;
           agent_message?: string;
         };
-        expect(restoredOut.permission, command).toBe("deny");
-        expect(restoredOut.agent_message ?? "", command).toContain(
-          "dynamic command evaluation",
-        );
+        expectChecksEveryHarnessRunsDecide(restoredOut, command);
       }
 
       for (const command of [
@@ -3258,10 +3242,7 @@ if (import.meta.main) {
           permission?: string;
           agent_message?: string;
         };
-        expect(dangerousOut.permission, command).toBe("deny");
-        expect(dangerousOut.agent_message ?? "", command).toContain(
-          "dynamic command evaluation",
-        );
+        expectChecksEveryHarnessRunsDecide(dangerousOut, command);
       }
 
       const mainConversation = PAYLOADS.preToolUseTask.conversation_id;
@@ -4158,10 +4139,7 @@ if (import.meta.main) {
         permission?: string;
         agent_message?: string;
       };
-      expect(out.permission, command).toBe("deny");
-      expect(out.agent_message ?? "", command).toContain(
-        "dynamic command evaluation",
-      );
+      expect(out.permission, command).toBe("allow");
     }
 
     const allowed =
@@ -4284,7 +4262,7 @@ if (import.meta.main) {
     );
   });
 
-  test("37: delegated executable lookup and data-driven mutators cannot erase attribution stores", () => {
+  test("37: a program run from a path or fed a list goes on to the checks every harness runs, and a spelled-out removal is held", () => {
     const proj = installedProject();
     seedStateFile(proj, "state-construction.md");
     clearLedger(proj);
@@ -4318,107 +4296,44 @@ if (import.meta.main) {
     writeFileSync(script, destructiveBody);
     if (process.platform !== "win32") chmodSync(script, 0o755);
 
-    const command =
-      process.platform === "win32"
-        ? "scratch\\wipe-attribution.cmd"
-        : "./scratch/wipe-attribution";
-    const execution = runAdapter(
-      proj,
-      "guards",
-      payload("preToolUseShell", proj, {
-        conversation_id: "developer-project-executable-child",
-        session_id: "developer-project-executable-child",
-        tool_input: { command },
-      }),
-    );
-    const executionOut = JSON.parse(execution.stdout) as {
-      permission?: string;
-      agent_message?: string;
-    };
-    if (executionOut.permission === "allow") {
-      const result =
-        process.platform === "win32"
-          ? spawnSync(
-              process.env.ComSpec ?? "cmd.exe",
-              [
-                "/d",
-                "/s",
-                "/c",
-                `"${script}"`,
-              ],
-              { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
-            )
-          : spawnSync(script, [], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
-      expect(result.status, result.stderr).toBe(0);
-    }
-    expect(executionOut.permission).toBe("deny");
-    expect(executionOut.agent_message ?? "").toContain(
-      "general-purpose interpreters",
-    );
-    expect(ledgerFilesFor(proj)).toHaveLength(1);
-    expect(witnessFilesFor(proj)).toHaveLength(1);
-
+    // A program the line runs from a path, one a PATH it sets picks, and a
+    // mutator fed a list from a subfolder: the line does not spell out what
+    // they change, so Cursor's own command approval is the door, as on every
+    // harness, and the checks every harness runs decide them.
     const shadowedRg = join(
       scriptDir,
       process.platform === "win32" ? "rg.cmd" : "rg",
     );
     writeFileSync(shadowedRg, destructiveBody);
     if (process.platform !== "win32") chmodSync(shadowedRg, 0o755);
-    const resolutionCommands = [
-      `env PATH=${JSON.stringify(scriptDir)} rg`,
-      `PATH=${JSON.stringify(scriptDir)} rg`,
-      `PATH=${JSON.stringify(scriptDir)}; rg`,
-      `env PaTh=${JSON.stringify(scriptDir)} rg`,
-      "env PATHEXT=.CMD rg",
-      "env -uPATH rg",
-      "env --unset=PATH rg",
-      "env -i rg",
-      "env -i0 rg",
-      "env --ignore-environment rg",
-      "nice env -i rg",
-    ];
-    for (const [index, unsafeCommand] of resolutionCommands.entries()) {
-      const denied = runAdapter(
+    writeFileSync(join(scriptDir, "targets.txt"), "../aidlc\n");
+    for (const [command, cwd] of [
+      [process.platform === "win32" ? "scratch\\wipe-attribution.cmd" : "./scratch/wipe-attribution", proj],
+      [process.platform === "win32" ? "scratch\\echo.cmd harmless" : "./scratch/printf.sh harmless", proj],
+      [`env PATH=${JSON.stringify(scriptDir)} rg`, proj],
+      [`PATH=${JSON.stringify(scriptDir)} rg`, proj],
+      [`PATH=${JSON.stringify(scriptDir)}; rg`, proj],
+      [`env PaTh=${JSON.stringify(scriptDir)} rg`, proj],
+      ["env PATHEXT=.CMD rg", proj],
+      ["env -uPATH rg", proj],
+      ["env --unset=PATH rg", proj],
+      ["env -i rg", proj],
+      ["env -i0 rg", proj],
+      ["env --ignore-environment rg", proj],
+      ["nice env -i rg", proj],
+      ["xargs rm -rf < targets.txt", scriptDir],
+    ] as const) {
+      const out = JSON.parse(runAdapter(
         proj,
         "guards",
         payload("preToolUseShell", proj, {
           conversation_id: "developer-project-executable-child",
           session_id: "developer-project-executable-child",
-          tool_input: { command: unsafeCommand },
+          cwd,
+          tool_input: { command, cwd },
         }),
-      );
-      const deniedOut = JSON.parse(denied.stdout) as {
-        permission?: string;
-        agent_message?: string;
-      };
-      if (deniedOut.permission === "allow" && index === 0) {
-        const result =
-          process.platform === "win32"
-            ? spawnSync(
-                process.env.ComSpec ?? "cmd.exe",
-                ["/d", "/s", "/c", "rg"],
-                {
-                  timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
-                  cwd: proj,
-                  encoding: "utf-8",
-                  env: {
-                    ...process.env,
-                    PATH: scriptDir,
-                    PATHEXT: ".CMD",
-                  },
-                },
-              )
-            : spawnSync("rg", [], {
-                timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
-                cwd: proj,
-                encoding: "utf-8",
-                env: { ...process.env, PATH: scriptDir },
-              });
-        expect(result.status, result.stderr).toBe(0);
-      }
-      expect(deniedOut.permission, unsafeCommand).toBe("deny");
-      expect(ledgerFilesFor(proj), unsafeCommand).toHaveLength(1);
-      expect(witnessFilesFor(proj), unsafeCommand).toHaveLength(1);
+      ).stdout) as { permission?: string; agent_message?: string };
+      expectChecksEveryHarnessRunsDecide(out, command);
     }
 
     const safeEnvironment = runAdapter(
@@ -4431,35 +4346,6 @@ if (import.meta.main) {
       }),
     );
     expectAllowJson(safeEnvironment);
-
-    const targets = join(scriptDir, "targets.txt");
-    writeFileSync(targets, "../aidlc\n");
-    const dataDrivenCommand = "xargs rm -rf < targets.txt";
-    const dataDriven = runAdapter(
-      proj,
-      "guards",
-      payload("preToolUseShell", proj, {
-        conversation_id: "developer-project-executable-child",
-        session_id: "developer-project-executable-child",
-        cwd: scriptDir,
-        tool_input: { command: dataDrivenCommand, cwd: scriptDir },
-      }),
-    );
-    const dataDrivenOut = JSON.parse(dataDriven.stdout) as {
-      permission?: string;
-      agent_message?: string;
-    };
-    if (dataDrivenOut.permission === "allow" && process.platform !== "win32") {
-      const result = spawnSync("sh", ["-c", dataDrivenCommand], {
-        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
-        cwd: scriptDir,
-        encoding: "utf-8",
-      });
-      expect(result.status, result.stderr).toBe(0);
-    }
-    expect(dataDrivenOut.permission).toBe("deny");
-    expect(ledgerFilesFor(proj)).toHaveLength(1);
-    expect(witnessFilesFor(proj)).toHaveLength(1);
 
     const safeDataDriven = runAdapter(
       proj,
@@ -4476,29 +4362,19 @@ if (import.meta.main) {
     );
     expectAllowJson(safeDataDriven);
 
-    for (const unsafeCommand of [
-      process.platform === "win32"
-        ? "scratch\\echo.cmd harmless"
-        : "./scratch/printf.sh harmless",
-      "busybox rm -rf aidlc",
-      "toybox rm -rf aidlc",
-    ]) {
-      const denied = runAdapter(
+    // A removal the line spells out is held, whichever multi-call binary runs it.
+    for (const command of ["busybox rm -rf aidlc", "toybox rm -rf aidlc"]) {
+      const out = JSON.parse(runAdapter(
         proj,
         "guards",
         payload("preToolUseShell", proj, {
           conversation_id: "developer-project-executable-child",
           session_id: "developer-project-executable-child",
-          tool_input: { command: unsafeCommand },
+          tool_input: { command },
         }),
-      );
-      const deniedOut = JSON.parse(denied.stdout) as {
-        permission?: string;
-        agent_message?: string;
-      };
-      expect(deniedOut.permission, unsafeCommand).toBe("deny");
-      expect(ledgerFilesFor(proj), unsafeCommand).toHaveLength(1);
-      expect(witnessFilesFor(proj), unsafeCommand).toHaveLength(1);
+      ).stdout) as { permission?: string; agent_message?: string };
+      expect(out.permission, command).toBe("deny");
+      expect(out.agent_message ?? "", command).toContain("attribution state");
     }
 
     for (const safeCommand of [
@@ -4597,11 +4473,10 @@ if (import.meta.main) {
       }),
     ).stdout) as { permission?: string; agent_message?: string };
     expect(unrecordedTask().permission).toBe("allow");
-    // Under strict the identity checks hold, and each refusal names the step that works.
+    // Under strict the identity checks hold: a build or a test still runs (test
+    // 40), and a Task whose record cannot be written names the step that works.
     withPolicy("strict (set by you)");
-    const held = delegateShell("bun test");
-    expect(held.permission).toBe("deny");
-    expect(held.agent_message ?? "").toContain("have the parent conversation run executable probes");
+    expect(delegateShell("bun test").permission).toBe("allow");
     const heldTask = unrecordedTask();
     expect(heldTask.permission).toBe("deny");
     expect(heldTask.agent_message ?? "").toContain("Start it again");
@@ -4612,12 +4487,10 @@ if (import.meta.main) {
     })).stdout).permission).toBe("allow");
   });
 
-  test("39: under strict and relaxed a delegate runs the AI-DLC commands the core admits it, and nothing more", () => {
+  test("39: under strict and relaxed a delegate runs the AI-DLC commands it is given, and a write over its records is held", () => {
     // Reverse Engineering's helper mints and checks its scope fingerprint with
-    // AI-DLC's own command, as its template (re-artifacts.md) spells it. The
-    // core admits it to every delegate (delegateAdmittedVerbs); the
-    // interpreter and attribution-path denies refused it under strict and
-    // relaxed, so the stage stopped there on Cursor.
+    // AI-DLC's own command, as its template (re-artifacts.md) spells it; the
+    // checks every harness runs still judge it.
     const proj = installedProject();
     seedStateFile(proj, "state-construction.md");
     const statePath = join(seededRecordDir(proj), "aidlc-state.md");
@@ -4656,20 +4529,16 @@ if (import.meta.main) {
         `bun .cursor/tools/aidlc-utility.ts codekb-publish --repo proj --staged "${dirname(staged)}/" --paths ./ ` +
           "--expect-store none --expect-source 0123abcd --json",
       ]) {
-        rmSync(join(health, "review-freeze.last"), { force: true });
+        rmSync(join(health, "plan-approval-guard.last"), { force: true });
         const out = delegateShell(command);
         expect(out.permission, `${policy}: ${command}: ${out.agent_message ?? ""}`).toBe("allow");
         // The core guards still ran on it.
-        expect(existsSync(join(health, "review-freeze.last")), command).toBe(true);
+        expect(existsSync(join(health, "plan-approval-guard.last")), command).toBe(true);
       }
-      // The Windows spelling of the dispatcher path: the script itself in
-      // PowerShell, a different file name where a POSIX shell reads the
-      // backslashes as escapes.
+      // The Windows spelling of the dispatcher path.
       const windows = delegateShell("bun .cursor\\tools\\aidlc.ts engine workspace codekb-scope-diff --mint --paths ./");
-      if (process.platform === "win32") expect(windows.permission, windows.agent_message).toBe("allow");
-      else expect(windows.agent_message ?? "").toContain("general-purpose interpreters");
-      // The publish as the stage writes it, over continued lines: one command
-      // to a POSIX shell; PowerShell ends the command at the first line.
+      expect(windows.permission, windows.agent_message).toBe("allow");
+      // The publish as the stage writes it, over continued lines.
       const continued = delegateShell([
         "bun .cursor/tools/aidlc-utility.ts codekb-publish \\",
         "  --repo proj \\",
@@ -4679,29 +4548,35 @@ if (import.meta.main) {
         "  --expect-source 0123abcd \\",
         "  --json",
       ].join("\n"));
-      if (process.platform === "win32") expect(continued.agent_message ?? "").toContain("general-purpose interpreters");
-      else expect(continued.permission, continued.agent_message).toBe("allow");
+      expect(continued.permission, continued.agent_message).toBe("allow");
+      // A write over the helper's records beside AI-DLC's command is held.
+      for (const command of [
+        `${mint} \\\n> aidlc/.aidlc-engine/sessions/cursor-subagents/x.json`,
+        `${mint} > aidlc/.aidlc-engine/sessions/cursor-subagents/x.json`,
+        `rm -rf aidlc/.aidlc-engine/sessions/cursor-subagents && ${mint}`,
+      ]) {
+        const out = delegateShell(command);
+        expect(out.permission, `${policy}: ${command}`).toBe("deny");
+        expect(out.agent_message ?? "", command).toContain("attribution state");
+      }
+      // A lifecycle step is still the main chat's, said by the check every harness runs.
+      const report = delegateShell("aidlc engine orchestrate report --stage reverse-engineering --result awaiting-approval");
+      expect(report.permission, policy).toBe("deny");
+      expect(report.agent_message ?? "", policy).toContain("Delegated agent");
+      // Anything else beside or instead of AI-DLC's command goes on to those checks.
       for (const command of [
         "bun -e 'x'",
         `${mint}\nbun -e 'x'`,
-        `${mint} \\\n> aidlc/.aidlc-engine/sessions/cursor-subagents/x.json`,
         "bun --preload ./x.ts .cursor/tools/aidlc.ts engine workspace codekb-scope-diff --mint --paths ./",
-        `${mint} > aidlc/.aidlc-engine/sessions/cursor-subagents/x.json`,
-        `rm -rf aidlc/.aidlc-engine/sessions/cursor-subagents && ${mint}`,
         `FORCE=1 ${mint}`,
         "bun scratch/aidlc.ts engine workspace codekb-scope-diff --mint --paths ./",
         "bun .cursor/tools/aidlc.ts engine knowledge sync",
-        "aidlc engine orchestrate report --stage reverse-engineering --result awaiting-approval",
         "bun .cursor/tools/aidlc-utility.ts upgrade",
         "bun .cursor/tools/aidlc-log.ts review --stage reverse-engineering --verdict pass",
         "bun scratch/aidlc-utility.ts codekb-publish --repo proj",
       ]) {
-        const out = delegateShell(command);
-        expect(out.permission, `${policy}: ${command}`).toBe("deny");
-        expect(out.agent_message ?? "", command).toContain("general-purpose interpreters");
+        expectChecksEveryHarnessRunsDecide(delegateShell(command), `${policy}: ${command}`);
       }
-      // Under these policies a build or a test is still the parent's.
-      expect(delegateShell("bun test").agent_message ?? "").toContain("have the parent conversation run executable probes");
     }
     // What the shell reads inside quotes is an argument: a repo folder's name
     // as AI-DLC quotes it for each shell.
@@ -4714,7 +4589,7 @@ if (import.meta.main) {
       expect(out.permission, `${repo}: ${out.agent_message ?? ""}`).toBe("allow");
     }
     // Outside quotes they are the shell's, and so are "$" and "`" inside
-    // double quotes.
+    // double quotes: what they run goes on to the checks every harness runs.
     for (const command of [
       `${scope} --repo 'lib (copy)'; bun -e 'x'`,
       `${scope} --repo lib(copy) --mint --paths ./`,
@@ -4727,10 +4602,114 @@ if (import.meta.main) {
         ? `${scope} --repo 'a\u2019; bun -e 'x'; \u2019'`
         : `${scope} --repo "a\\"b"; bun -e 'x'; \\"`,
     ]) {
-      const out = delegateShell(command);
-      expect(out.permission, command).toBe("deny");
-      expect(out.agent_message ?? "", command).toContain("general-purpose interpreters");
+      expectChecksEveryHarnessRunsDecide(delegateShell(command), command);
     }
     expect(ledger()).toEqual(ledgerBefore);
+  });
+
+  test("40: under strict, relaxed and a team's locked strict a helper runs its builds, tests and searches", () => {
+    // Code Generation tells its developer helper to run each layer's tests.
+    // The helper's identity record guards two checks; a build, a test or a
+    // read cannot change that record, so only a write over it is held.
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    const statePath = join(seededRecordDir(proj), "aidlc-state.md");
+    const original = readFileSync(statePath, "utf-8");
+    const withPolicy = (line: string | null) => writeFileSync(
+      statePath,
+      line === null
+        ? original
+        : original
+          .replace(/^- \*\*(?:Guard Policy|Change Control)\*\*:.*\n/gm, "")
+          .replace(/^(- \*\*Scope\*\*:.*)$/m, `$1\n- **Guard Policy**: ${line}`),
+    );
+    const teamMemory = join(proj, "aidlc", "spaces", "default", "memory", "team.md");
+    const lockStrict = (on: boolean) => {
+      mkdirSync(dirname(teamMemory), { recursive: true });
+      const existing = existsSync(teamMemory) ? readFileSync(teamMemory, "utf-8") : "# Team\n";
+      const unlocked = existing.replace("## Guard Policy\n\nMode: strict\n", "## Guard Policy\n");
+      writeFileSync(
+        teamMemory,
+        !on
+          ? unlocked
+          : unlocked.includes("## Guard Policy\n")
+            ? unlocked.replace("## Guard Policy\n", "## Guard Policy\n\nMode: strict\n")
+            : `${unlocked.trimEnd()}\n\n## Guard Policy\n\nMode: strict\n`,
+      );
+    };
+    setCurrentStage(proj, "functional-design");
+    clearLedger(proj);
+    registerTaskParent(proj);
+    expectAllowJson(runAdapter(proj, "guards", payload("preToolUseTask", proj, {
+      tool_input: { description: "Build the unit", prompt: "Implement the unit.", subagent_type: "aidlc-developer-agent" },
+    })));
+    mkdirSync(join(proj, "scratch"), { recursive: true });
+    const health = hooksHealthDir(proj);
+    const delegateShell = (command: string) => JSON.parse(runAdapter(proj, "guards", payload("preToolUseShell", proj, {
+      conversation_id: "developer-builds-and-tests",
+      session_id: "developer-builds-and-tests",
+      tool_input: { command },
+    })).stdout) as { permission?: string; agent_message?: string };
+    // Ordinary builds, tests, lints and searches, as a helper spells them on
+    // any shell; a deny that comes back for one of them fails here.
+    const ordinary = [
+      "bun test",
+      "npm test",
+      "pytest",
+      "python -m pytest",
+      "npx vitest run",
+      "cargo test",
+      "go test ./...",
+      "make test",
+      "bash scripts/test.sh",
+      "./node_modules/.bin/jest",
+      "bun test ./",
+      "eslint .",
+      "pytest .",
+      "grep -rn formatPrice .",
+      "git diff",
+      "git log --oneline -5",
+      "npm test 2>&1 | tee out.log",
+      'bun test -t "a \\"b\\""',
+      'cd "$ROOT" && npm test',
+      "npm.cmd test",
+      ".\\node_modules\\.bin\\jest.cmd",
+      "Get-ChildItem -Recurse . | Select-String foo",
+      "npm test *> test.log",
+      "Get-ChildItem scratch | Remove-Item",
+    ];
+    for (const [policy, locked] of [
+      ["strict (set by you)", false],
+      ["relaxed (set by you)", false],
+      [null, true],
+    ] as const) {
+      withPolicy(policy);
+      lockStrict(locked);
+      const label = policy ?? "team strict";
+      for (const command of ordinary) {
+        rmSync(join(health, "plan-approval-guard.last"), { force: true });
+        const out = delegateShell(command);
+        expect(out.permission, `${label}: ${command}: ${out.agent_message ?? ""}`).toBe("allow");
+        // The AI-DLC checks every harness runs still ran on it.
+        expect(existsSync(join(health, "plan-approval-guard.last")), `${label}: ${command}`).toBe(true);
+      }
+      // A write over the helper's own records is still held.
+      for (const command of [
+        "rm -rf aidlc",
+        "> aidlc/.aidlc-engine/sessions/cursor-subagents/spawn-x.json",
+        "find . -delete",
+        "find aidlc -exec rm -rf {} +",
+      ]) {
+        const out = delegateShell(command);
+        expect(out.permission, `${label}: ${command}`).toBe("deny");
+        expect(out.agent_message ?? "", `${label}: ${command}`).toContain("attribution state");
+      }
+      // A lifecycle step is still the main chat's, said by the check every
+      // harness runs.
+      const report = delegateShell("aidlc engine orchestrate report --stage functional-design --result awaiting-approval");
+      expect(report.permission, label).toBe("deny");
+      expect(report.agent_message ?? "", label).toContain("Delegated agent");
+    }
+    expect(ledgerFilesFor(proj)).toHaveLength(1);
   });
 });

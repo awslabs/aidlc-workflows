@@ -21,7 +21,7 @@ This project uses AI-DLC (AI-Driven Development Life Cycle) for structured devel
 
     prereq_bullets_tail: "",
 
-    agents_note: `On Cursor each expert role is a native subagent (discovered from the persona files in \`.cursor/agents/\`); the \`/aidlc\` session takes on those roles itself for most stages and hands work off via the \`task\` tool for the two delegated stages (2.1, 3.5). They ship without \`model:\` pins — every agent inherits your session model (model availability is plan-dependent on Cursor).`,
+    agents_note: `On Cursor each expert role is a native subagent (discovered from the persona files in \`.cursor/agents/\`); the \`/aidlc\` session takes on those roles itself for most stages and hands work off via the \`task\` tool. They ship without \`model:\` pins — every agent inherits your session model (model availability is plan-dependent on Cursor).`,
 
     structure_extra: "",
 
