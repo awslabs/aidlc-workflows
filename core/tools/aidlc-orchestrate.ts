@@ -681,6 +681,7 @@ import {
   teamsClone,
   teamStanceToRead,
   shareOfferTarget,
+  practicesBranchOffCheckout,
   teamHandoverMarkName,
   teamSharedHere,
   unitBranchInTheWay,
@@ -16098,13 +16099,15 @@ function applyGateOnlyShape(
     // chats of one window one id, and a restart a new one.
     const elsewhere = asked !== null && hostNamesThisChat(projectDir) &&
       shownOnlyInOtherChats(projectDir, asked.id, engineSessionId ?? null);
-    // The rules Approve adds to the project's rules, what the person left out
-    // of the build, the files of theirs it changed, and a check that still
-    // fails on a declared output, are said with the gate, each on its own line
-    // after what the stage produced: the narration is the person's line, and
-    // the produced sentence stays whole.
+    // The rules Approve adds to the project's rules, the branch it names when
+    // this checkout is on another, what the person left out of the build, the
+    // files of theirs it changed, and a check that still fails on a declared
+    // output, are said with the gate, each on its own line after what the stage
+    // produced: the narration is the person's line, and the produced sentence
+    // stays whole.
     const narration = [
-      elsewhere ? FINISHED_IN_OTHER_CHAT : null, line, practicesRulesGateLine(projectDir, gateNode), leftOutNotice(projectDir, gateNode, unit),
+      elsewhere ? FINISHED_IN_OTHER_CHAT : null, line, practicesRulesGateLine(projectDir, gateNode),
+      practicesBranchGateLine(projectDir, gateNode), leftOutNotice(projectDir, gateNode, unit),
       unitsWithoutInputsNotice(projectDir, gateNode, unit),
       broughtFilesGateLine(projectDir, gateNode, stateContent, directive.unit_gate ? unit : null),
       failedCheckNotices(projectDir, gateNode, unit).join(" "),
@@ -23119,6 +23122,25 @@ function practicesRulesGateLine(pd: string, node: { slug: string }): string | nu
   ].join("\n");
 }
 
+// The branch Approve at Practices Discovery names for AI-DLC's records and
+// plan, said with the gate when this checkout is on another, so the person
+// sees it before the plan goes anywhere. Null when there is nothing to say.
+function practicesBranchGateLine(pd: string, node: { slug: string }): string | null {
+  if (node.slug !== "practices-discovery") return null;
+  const prefix = engineRelativeRecordDir(pd);
+  if (prefix === null) return null;
+  let draft: string;
+  try {
+    draft = readFileSync(join(pd, prefix, "inception", "practices-discovery", "team-practices.md"), "utf-8");
+  } catch {
+    return null;
+  }
+  const off = practicesBranchOffCheckout(pd, draft);
+  return off === null
+    ? null
+    : `Approve names ${off.branch} as the branch for AI-DLC's records and plan, and this checkout is on ${off.current}.`;
+}
+
 // The report that opens a stage's gate, or shows it again after a revision.
 function gateReportCommand(slug: string, result: "awaiting-approval" | "revised"): string {
   return renderEngineInvocation({ route: "orchestrate", args: ["report", "--stage", slug, "--result", result] });
@@ -24983,14 +25005,16 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         const gateState = loadStateFileIfPresent(pd);
         const unitFolders = isPerUnit(node) && !usesStageLevelPerUnitArtifacts(scope, gateState);
         const line = producedLine(node, unit, unitFolders, pd);
-        // The rules Approve adds to the project's rules, what the person left
-        // out of the build, the files of theirs it changed, and a check that
-        // still fails on a declared output, are said with the gate, each on its
-        // own line after what the stage produced:
+        // The rules Approve adds to the project's rules, the branch it names
+        // when this checkout is on another, what the person left out of the
+        // build, the files of theirs it changed, and a check that still fails
+        // on a declared output, are said with the gate, each on its own line
+        // after what the stage produced:
         // the narration is the person's line (the produced sentence stays
         // whole), and the change lines stay what changed.
         const narration = [
-          line, practicesRulesGateLine(pd, node), leftOutNotice(pd, node, unit), unitsWithoutInputsNotice(pd, node, unit),
+          line, practicesRulesGateLine(pd, node), practicesBranchGateLine(pd, node), leftOutNotice(pd, node, unit),
+          unitsWithoutInputsNotice(pd, node, unit),
           broughtFilesGateLine(pd, node, gateState), failedCheckNotices(pd, node, unit).join(" "),
         ].filter(Boolean).join("\n");
         if (narration) gateReply.narration = narration;

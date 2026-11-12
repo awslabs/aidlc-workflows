@@ -935,7 +935,9 @@ carry it on." A team that keeps AI-DLC's records off main says so in Practices
 Discovery (for example "We keep AI-DLC's records on a branch called records"):
 AI-DLC records the `Integration branch` line under Way of Working, the share
 and the check-ins go to that branch, the takes read it, and every clone works
-on it.
+on it. Where the work's code is in repos of its own, the Practices Discovery
+gate says which branch Approve names for AI-DLC's records and plan whenever
+your checkout is on another, so you can ask for the change there.
 
 ### Start early, and change a shared input
 

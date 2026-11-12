@@ -297,8 +297,13 @@ Four lead artifacts plus three spoke contributions are written to
 
 - `team-practices.md` -- descriptive, team-voice prose. Five sections matching
   `team.md` headings: Way of Working, Walking Skeleton, Testing Posture,
-  Deployment, Code Style. Testing Posture carries structured
-  `Methodology: tdd|bdd|atdd|test-after|custom` and `Ordering: ...` bullets;
+  Deployment, Code Style. Way of Working carries the
+  `Integration branch: <branch>` line team work reads; where the work's code
+  is in repos of its own and this checkout is on another branch, the gate
+  says which branch Approve names for AI-DLC's records and plan
+  (`practicesBranchOffCheckout` in `aidlc-unit.ts`). Testing Posture carries
+  structured `Methodology: tdd|bdd|atdd|test-after|custom` and `Ordering: ...`
+  bullets;
   coverage/tooling/scope notes remain additional prose. The Methodology value
   is one of those five and nothing else, with its reasons in a separate
   `Methodology evidence:` bullet: the gate does not open on a value Code

@@ -212,6 +212,7 @@ import {
   unitOutputsHomeReads,
   type UnitResult,
   workspaceHomeLocation,
+  buildOutHomeLocation,
   leadBuildsWithoutClaim,
   unitsAskedHere,
   unitWriteTargets,
@@ -463,17 +464,20 @@ function branchFreeWords(projectDir: string): Record<string, string> {
 function integrationBranchLayer(
   projectDir: string,
   space = activeSpace(projectDir),
+  // A layer's Way of Working words in place of its file's: a draft about to be promoted there.
+  sections: Partial<Record<(typeof MEMORY_LAYERS)[number], string>> = {},
 ): { value: string; source: string } | { toRead: string } | null {
   let branchFree: Record<string, string> | undefined;
   for (const name of MEMORY_LAYERS) {
     const source = memoryLayerSource(projectDir, name, space);
-    let body: string;
-    try {
-      body = readFileSync(join(projectDir, ...source.split("/")), "utf-8");
-    } catch {
-      continue;
+    let section = sections[name];
+    if (section === undefined) {
+      try {
+        section = memorySectionBody(readFileSync(join(projectDir, ...source.split("/")), "utf-8"), WAY_OF_WORKING);
+      } catch {
+        continue;
+      }
     }
-    const section = memorySectionBody(body, WAY_OF_WORKING);
     const value = structuredField(section, INTEGRATION_BRANCH_FIELD);
     if (value !== null) return { value, source };
     if (section.trim() === "") continue;
@@ -487,6 +491,32 @@ function integrationBranchLayer(
 export function integrationBranchToRead(projectDir: string, space = activeSpace(projectDir)): string | null {
   const layer = integrationBranchLayer(projectDir, space);
   return layer !== null && "toRead" in layer ? layer.toRead : null;
+}
+
+// The branch Approve at Practices Discovery names for AI-DLC's records and
+// plan, read from the draft's Way of Working (the section practices-promote
+// copies into team.md) through the one reader, with the branch git says this
+// checkout is on, when the two differ: the gate says so. Only where the work's
+// code is in repos of its own (buildOutHomeLocation), so this project's repo
+// holds nothing but those records. Null when the draft names none, a narrower
+// layer decides, git names no branch here (a detached HEAD), or anything
+// cannot be read. It says a fact and decides nothing: where the share may run
+// is shareRefusal's.
+export function practicesBranchOffCheckout(projectDir: string, draft: string): { branch: string; current: string } | null {
+  try {
+    if (buildOutHomeLocation(projectDir) === null) return null;
+    const section = memorySectionBody(draft, WAY_OF_WORKING);
+    if (section.trim() === "") return null;
+    const space = activeSpace(projectDir);
+    const layer = integrationBranchLayer(projectDir, space, { "team.md": section });
+    if (layer === null || "toRead" in layer || layer.source !== memoryLayerSource(projectDir, "team.md", space)) return null;
+    const branch = integrationBranchName(layer.value);
+    const shown = git(projectDir, ["branch", "--show-current"]);
+    const current = shown.ok ? shown.stdout.trim() : "";
+    return current === "" || current === branch ? null : { branch, current };
+  } catch {
+    return null;
+  }
 }
 
 // What the agent does before a step that needs the branch, while a layer's
