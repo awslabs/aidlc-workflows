@@ -386,8 +386,13 @@ function detectHarness(
   if (candidates.length === 1) return { name: candidates[0][0], target: candidates[0][1] };
   // Kiro CLI and Kiro IDE share .kiro, Copilot and opencode share .aidlc: the
   // install's own record says which one this project has, as doctor reads it.
-  const installed = new Set(discoverProjectHarnesses(installRoot).map((harness) => harness.distribution));
-  const recorded = candidates.filter(([name]) => installed.has(name));
+  // An install from before installs were stamped records no frameworkVersion
+  // and is named from its folder alone, which cannot tell the two apart, so a
+  // project holding one is asked to name the harness.
+  const discovered = discoverProjectHarnesses(installRoot);
+  const recorded = discovered.every((harness) => harness.frameworkVersion !== undefined)
+    ? candidates.filter(([name]) => discovered.some((harness) => harness.distribution === name))
+    : [];
   if (recorded.length === 1) return { name: recorded[0][0], target: recorded[0][1] };
   throw new PluginTestUsageError(
     `install is ambiguous (${(recorded.length > 1 ? recorded : candidates).map(([name, target]) => `${typedHarnessName(name)}:${target.harnessLeaf}`).join(", ")}); pass --harness <name>`,

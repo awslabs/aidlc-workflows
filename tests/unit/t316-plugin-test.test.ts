@@ -556,6 +556,18 @@ describe("t316 standalone plugin compose test", () => {
     const refused = run([bare.pluginRoot, "--install", bare.installRoot]);
     expect(refused.status).toBe(2);
     expect(refused.stderr).toContain("install is ambiguous (kiro-v2:.kiro, kiro:.kiro)");
+    // An install from before installs recorded their harness (2.7.0) holds
+    // only its name in harness.json; its folder cannot tell Kiro CLI from
+    // Kiro IDE, so the project is still asked which one to test.
+    const early = copyFixture("kiro-ide-before-stamps", KIRO_IDE_INSTALL);
+    rmSync(join(early.installRoot, ".kiro", "tools", "data", "aidlc-stamp.json"));
+    writeFileSync(
+      join(early.installRoot, ".kiro", "tools", "data", "harness.json"),
+      `${JSON.stringify({ name: "kiro-ide", harnessDir: ".kiro", rulesSubdir: "steering" }, null, 2)}\n`,
+    );
+    const asked = run([early.pluginRoot, "--install", early.installRoot]);
+    expect(asked.status, asked.stdout).toBe(2);
+    expect(asked.stderr).toContain("install is ambiguous (kiro-v2:.kiro, kiro:.kiro)");
     // Kiro's own .kiro folder beside AI-DLC for Claude Code: the test runs as Claude Code.
     const beside = copyFixture("claude-beside-kiro-folder", CLAUDE_INSTALL);
     mkdirSync(join(beside.installRoot, ".kiro", "steering"), { recursive: true });
