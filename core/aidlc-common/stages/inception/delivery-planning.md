@@ -110,7 +110,7 @@ Per-Bolt questions (the aidlc-delivery-agent loops these during artifact generat
 - Is this Bolt the thin end-to-end slice (the walking skeleton)? If yes, which parts of the architecture does it prove out?
 - What has to be true for this Bolt to count as done?
 - What will shipping this Bolt tell us that we do not know yet?
-- Which mob owns this Bolt? (References teams from 1.5 when 1.5 ran; when 1.5 was SKIP — mvp, classic — default to aidlc-developer-agent for all Bolts.)
+- Which mob is planned to build this Bolt? (References teams from 1.5 when 1.5 ran; when 1.5 was SKIP — mvp, classic — plan aidlc-developer-agent for all Bolts.) Who builds the Units is not this stage's question.
 
 NOTE: Bolt sequencing records the economic rationale, while the engine consumes
 the actual Unit DAG and iteration choice. When skeleton-on applies, confirm that
@@ -141,7 +141,7 @@ initials all qualify. Gloss and move on; do not restructure the artifact around
 the explanation.
 
 - `bolt-plan.md` — the ordered sequence of Bolts. Each Bolt entry: included Unit(s) of Work, walking-skeleton marker if applicable, Definition of Done for that Bolt, confidence hypothesis ("what will shipping this Bolt prove?"), expected demo.
-- `team-allocation.md` — Bolt-to-mob assignment. References teams from 1.5 when 1.5 ran (enterprise, feature). When 1.5 is SKIP (mvp, classic), states that all Bolts are executed by aidlc-developer-agent (AI). When team count > 1, this is the Program Board analog.
+- `team-allocation.md` — the planned Bolt-to-mob assignment. References teams from 1.5 when 1.5 ran (enterprise, feature). When 1.5 is SKIP (mvp, classic), plans aidlc-developer-agent (AI) for every Bolt. When team count > 1, this is the Program Board analog.
 - `risk-and-sequencing-rationale.md` — the why behind the Bolt ordering: WSJF-style scoring, risk-first argument, walking-skeleton-first argument, or value-first argument. References the heuristic used (Cohn, Reinertsen CD3, or SAFe WSJF).
 - `external-dependency-map.md` — gated items (external APIs, data availability windows, approval lead times, external-team hand-offs) mapped to the Bolts that consume them. Lightweight or empty when fully AI-contained.
 

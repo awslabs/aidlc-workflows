@@ -37,11 +37,7 @@ work. Recovery reconstructs decisions, in-stage context, the timeline, and the
 current position; it cannot recover the previous session's conversation buffer,
 so re-orient from these sources rather than trying to recreate the prior chat.
 
-The procedures below operate on these sources. For the full rationale — why
-recovery is an emergent property of the data plane rather than a bolted-on
-feature, and how the `withAuditLock` consistency constraint keeps the five
-sources in agreement — see `docs/reference/02-plane-architecture.md` § 5
-("Recovery as an emergent property").
+The procedures below operate on these sources.
 
 ### Session resume
 If `aidlc-state.md` exists, read it to determine:

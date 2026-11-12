@@ -19,7 +19,7 @@ This project uses AI-DLC (AI-Driven Development Life Cycle) for structured devel
 
     prereq_bullets_tail: "",
 
-    agents_note: `On Antigravity each expert role is a native subagent (discovered from the persona files in \`.agent/agents/\`); the \`/aidlc\` session takes on those roles itself for most stages and hands work off via the \`invoke_subagent\` tool for the two delegated stages (2.1, 3.5). They ship without \`model:\` pins — every agent inherits your session model.`,
+    agents_note: `On Antigravity each expert role is a native subagent (discovered from the persona files in \`.agent/agents/\`); the \`/aidlc\` session takes on those roles itself for most stages and hands work off via the \`invoke_subagent\` tool. They ship without \`model:\` pins — every agent inherits your session model.`,
 
     structure_extra: "",
 
@@ -32,7 +32,7 @@ This is the same AI-DLC core that ships to every harness: the same ordered steps
 - The AI-DLC method (\`aidlc/spaces/<space>/memory/*.md\`) reaches context through read instructions: \`.agent/rules/aidlc.md\` (\`trigger: always_on\`) always points to \`aidlc/active-memory/{org,team,project}.md\`, while four \`.agent/rules/phase-*.md\` (\`trigger: model_decision\`) files point to phase guidance when relevant.
 - There is **no statusline** and **no welcome message**; use \`/aidlc-status\` (or \`/aidlc --status\`) and the progress lines at gates.
 
-The Antigravity-specific guide (install, what differs, verification) is \`docs/guide/harnesses/antigravity.md\`.
+The Antigravity-specific guide (install, what differs, verification) is https://awslabs.github.io/aidlc-workflows/guide/harnesses/antigravity/.
 `,
 
     sections_after_resumption: "",

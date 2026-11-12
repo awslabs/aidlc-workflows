@@ -188,6 +188,7 @@ import {
   stepNextCommand,
   WORKER_BRIEF_SECTIONS,
 } from "../tools/aidlc-testing-posture.ts";
+import { codexPatchMode, shellPatchPaths } from "./review-freeze-command.ts";
 import { refuseRuntimeIntegrityViolation } from "./runtime-integrity.ts";
 import { unaskedSystemInstall } from "./system-install.ts";
 
@@ -319,8 +320,9 @@ const DISPATCH_TOOLS = new Set(["Task", "Agent"]);
 // re-issues it. Both fence decisions name that remedy.
 // The engine's Plan Approval question is the active directive.
 const PLAN_APPROVAL_ASK_OPEN = "the engine is asking the person to approve the plan";
-const NO_CURRENT_DIRECTIVE =
-  "the current state has no matching v2 code-generation active directive";
+// No build step is the current one: none was handed out, it is another stage's,
+// or it is this stage's gate, a notice or a question that is not the plan's.
+const NO_CURRENT_DIRECTIVE = "AI-DLC is not on the build step";
 const ENGINE_QUESTION_OPEN =
   "the engine is waiting for the person's answer to its recovery question";
 const FINISHED_WORK_WAITS_FOR_THE_PERSON =
@@ -333,6 +335,12 @@ const FINISHED_WORK_WAITS_FOR_THE_PERSON =
 const SWARM_MAIN_CHECKOUT_HELD =
   "While the Units are built in parallel, the main checkout changes only by their landings, so each landing can check it";
 const SWARM_MAIN_CHECKOUT_LATER = "A change the person asks for in the main checkout can be made once Code Generation is over.";
+// A change the parallel build does not let through anywhere else: a folder it
+// did not prepare, a Unit's worktree after its plan changed, two worktrees at
+// once, a step that lists no Unit.
+const SWARM_CHANGE_IN_ITS_WORKTREE =
+  "while the Units are built in parallel, a change goes through only inside one Unit's own prepared worktree, " +
+  "with that Unit's plan as it was approved";
 
 // --- The decision -------------------------------------------------------------
 
@@ -674,7 +682,8 @@ export function receiptDetail(
 // only read, so it is said to be unread, not a write, with the way a read gets
 // through: written out plainly, the POSIX and the PowerShell readings both read
 // it. AI-DLC's own command in a spelling the reading refused, and a tool that is
-// no shell, get the general refusal: the way on for them is not a read.
+// no shell, get the general refusal: the way on for them is not a read. A line
+// that also hands apply_patch a patch nobody has read is the unread kind.
 export function mutationBlockReason(
   unit: string | null,
   opaqueShell = false,
@@ -682,6 +691,10 @@ export function mutationBlockReason(
   planApprovalOff = false,
   finished = false,
   unreadShell = false,
+  patchUnseen = false,
+  // Codex on Windows: an agent there takes the heredoc form for one PowerShell
+  // cannot run, and Codex applies it before any shell does.
+  codexOnWindows = false,
 ): string {
   const scope = unit === null ? "the zero-Unit stage-level implementation" : `unit ${unit}`;
   const unread = opaqueShell && unreadShell;
@@ -711,6 +724,10 @@ export function mutationBlockReason(
     `the plan, unit-test instructions, and current Testing Contract do not have a current ` +
     `matching approval.${detail ? ` Reason: ${detail.replace(/\.+$/, "")}.` : ""}` +
     (unread ? " A read written out, naming each file (for example `cat src/app.ts`), runs while the plan waits." : "") +
+    (unread && patchUnseen
+      ? " An apply_patch with its patch in the command itself (`apply_patch <<'PATCH'`, the patch, then `PATCH` on its own line) is read as the writes it names." +
+        (codexOnWindows ? " On Windows Codex applies that form itself, before PowerShell reads it, so it works there too." : "")
+      : "") +
     " Writes inside the selected code-generation record directory remain " +
     `available for planning. When the plan is ready, run ${nextOnItsOwn()}: ${nextAfterPlanClause(planApprovalOff, false)}`
   );
@@ -803,7 +820,7 @@ function authorityBlockReason(
     return authorityRemedy(reason, standing, asked, editingReply);
   }
   return (
-    "Code generation cannot start because its Plan Approval authority is ambiguous or stale. " +
+    "Code generation cannot start: " +
     authorityRemedy(reason, standing, null, null, wayOn)
   );
 }
@@ -848,11 +865,16 @@ function planStanding(projectDir: string, marker: ActiveDirectiveMarker | null):
 }
 
 // Why the step went out of date, when the write that did it was recorded (the
-// chat compacted, the state moved): said as the refusal's reason, ahead of the
-// way out. Empty when nothing was recorded.
+// chat compacted, the state moved). Empty when nothing was recorded.
 function outOfDateClause(marker: ActiveDirectiveMarker): string {
   const why = activeDirectiveOutOfDateReason(marker);
   return why === null ? "" : `: ${why}`;
+}
+
+// The refusal's reason for a step that is not the build: why it went out of
+// date when that was recorded, else `otherwise`.
+function staleOr(marker: ActiveDirectiveMarker, otherwise: string): string {
+  return activeDirectiveOutOfDateReason(marker) ?? otherwise;
 }
 
 // --- Evidence gathering ---------------------------------------------------------
@@ -1295,6 +1317,10 @@ interface MutationIntent {
   engineRefused?: boolean;
   /** A line the lexer could not read whole that names AI-DLC, wrapped or not. */
   hidesEngine?: boolean;
+  /** An apply_patch whose patch nobody has read: fed after it starts, or Codex's
+   *  patch mode with an operand the reader cannot see (unseenPatch) or on a line
+   *  read only in part. */
+  patchUnseen?: boolean;
   /** AI-DLC's own command refused as the line's only command, read whole. */
   engineAlone?: boolean;
   /** AI-DLC's own `next` on the line that carries a request file, when its reading admits it. */
@@ -2093,6 +2119,21 @@ function shellUsesDynamicEvaluation(command: string): boolean {
   return false;
 }
 
+// Codex's apply_patch, run by its own name or as its binary's patch mode with
+// the patch written in the command: its writes are its patch's, which the shell
+// reading names (shellWriteTargets). The patch mode given an operand the patch
+// reader finds no file in is read as any program is.
+function isPatchCall(
+  invocation: { name: string; args: string[]; executable?: string; launchers?: string[]; dataDriven?: boolean },
+  cwd: string,
+): boolean {
+  if (invocation.launchers?.length || invocation.dataDriven) return false;
+  return (codexPatchMode(invocation) &&
+    invocation.args.slice(1).some((arg) => shellPatchPaths(arg, cwd).length > 0)) ||
+    ((invocation.name === "apply_patch" || invocation.name === "applypatch") &&
+      (invocation.executable ?? invocation.name) === invocation.name);
+}
+
 async function mutationIntent(
   projectDir: string,
   toolName: string,
@@ -2100,6 +2141,7 @@ async function mutationIntent(
   cwd: string,
   powerShellHint = false,
   context: EngineCommandContext = NO_ENGINE_CONTEXT,
+  readHeredocs = true,
 ): Promise<MutationIntent> {
   let targets: string[] = [];
   let opaqueShell = false;
@@ -2109,6 +2151,7 @@ async function mutationIntent(
   let hidesEngine = false;
   let engineAlone = false;
   let ownNext: EngineInvocation | undefined;
+  let patchUnseen = false;
   if (toolName === "Bash") {
     const command = toolInput?.command;
     if (typeof command !== "string") {
@@ -2120,8 +2163,14 @@ async function mutationIntent(
       shellCommandAltersExecutableResolution,
       shellCommandInvocationDetails,
       powerShellPathBoundWriter,
+      heredocReading,
+      shellPatchTargets,
       shellWriteTargets,
+      unseenPatch,
     } = await import("./aidlc-review-freeze.ts");
+    // PowerShell has no heredoc; its line is read as written.
+    const reading = powerShellHint || !readHeredocs ? null : heredocReading(command);
+    const read = reading?.text ?? command;
     // A command the adapter ran in PowerShell is read as PowerShell when it is
     // plain. Anything else, and every unhinted command, keeps the POSIX
     // reading: Bash drops the backslashes a Windows path is written with.
@@ -2140,7 +2189,7 @@ async function mutationIntent(
     // `cd <folder> && <command>` runs <command> from <folder>, so it is read
     // from there, each time the line starts by moving to a folder the reader
     // is certain of. Any other move stays opaque (shellInvocationNeedsApproval).
-    let analysed = powerShellCommand ?? command;
+    let analysed = powerShellCommand ?? read;
     let from = cwd;
     const shell = dialect.powerShell ? "powershell" : "posix";
     let moves = 0;
@@ -2155,20 +2204,39 @@ async function mutationIntent(
     const targetWords: string[] = [];
     targets = powerShellLine
       ? shellWriteTargets(command.slice(powerShellLine.starts[moves]), from, targetWords, "powershell")
-      : shellWriteTargets(analysed, from);
+      : [
+        ...shellWriteTargets(analysed, from),
+        // The patches the reading blanked, read from the command as written.
+        ...(reading ? shellPatchTargets(command.slice(command.length - analysed.length), from) : []),
+      ];
     // A PowerShell wildcard in a bound path names files the reading cannot
     // list, and the reading drops it from the targets.
     const wildcardTargets = targetWords.some((word) => /[*?[\]]/.test(word));
     const concreteTargets = targets.length > 0 && !wildcardTargets;
     const invocations = shellCommandInvocationDetails(analysed);
+    // An apply_patch whose patch the command holds writes what its patch names;
+    // one fed its patch later, or a heredoc the reading kept, writes what
+    // nobody has read.
+    // Read from the walk's text even where the rest of the line is read as before.
+    const walked = powerShellLine ? null : reading ?? heredocReading(command);
+    const unseen = walked === null ? null : unseenPatch(walked.text, walked.patches.length);
+    patchUnseen = unseen === "bare";
     const dynamic =
       shellUsesDynamicEvaluation(analysed) ||
       shellCommandAltersExecutableResolution(analysed);
     opaqueShell =
-      dynamic ||
+      dynamic || unseen !== null ||
       invocations.some((invocation) =>
+        !isPatchCall(invocation, from) &&
         shellInvocationNeedsApproval(projectDir, from, invocation, concreteTargets, analysed, dialect, context)
       );
+    // Codex's patch mode on a line read only in part: a quote inside its patch
+    // can turn the reading over, so the patch is one nobody has read.
+    patchUnseen ||= opaqueShell && invocations.some(codexPatchMode);
+    // The rest of a line it cannot read is read as before, its heredoc too.
+    if (opaqueShell && read !== command) {
+      return mutationIntent(projectDir, toolName, toolInput, cwd, powerShellHint, context, false);
+    }
     // A command that names AI-DLC and that the shell reading refused: an
     // untrusted spelling (a retained version, a copy of the tools outside the
     // trusted folder, a shim), a wrapper or a `cd` it cannot follow, a second
@@ -2207,8 +2275,8 @@ async function mutationIntent(
     // is not trusted here; a variable, substitution or backtick (`dynamic`) can
     // hide a command or a write target, and a shell script run by name hides
     // commands the lexer never sees.
-    readable = !dynamic && !/[^\S \t\n]/u.test(command) && !command.includes("\\\n") && !/\\[<>&|;]/.test(command) &&
-      !(powerShellHint && powerShellCommand === null) && !wildcardTargets &&
+    readable = !dynamic && !/[^\S \t\n]/u.test(read) && !read.includes("\\\n") && !/\\[<>&|;]/.test(read) &&
+      !(powerShellHint && powerShellCommand === null) && !wildcardTargets && unseen === null &&
       !invocations.some((invocation) => {
         const program = normalizedCommandName(invocation.executable ?? invocation.name);
         return SHELL_INTERPRETERS.has(program) || writesThroughOption(program, invocation.args) ||
@@ -2236,6 +2304,7 @@ async function mutationIntent(
     ...(hidesEngine ? { hidesEngine } : {}),
     ...(engineAlone ? { engineAlone } : {}),
     ...(ownNext ? { ownNext } : {}),
+    ...(patchUnseen ? { patchUnseen } : {}),
   };
 }
 
@@ -2456,6 +2525,14 @@ async function evaluate(
     (!DISPATCH_TOOLS.has(toolName) && toolName.length > 0);
   if (!guardedDispatch && !mutationCapable) return 0;
   const cwd = typeof parsed.cwd === "string" ? parsed.cwd : projectDir;
+  // The receipt reader judges a plan built without asking by the plan-approval
+  // setting too, which the router module hands it as it loads
+  // (readPlanApprovalSettingWith); this hook loads it before it judges.
+  try {
+    await import("../tools/aidlc-plan-approval-ask.ts");
+  } catch (error) {
+    recordHookDrop(projectDir, HOOK_NAME, `plan-approval setting not read: ${errorMessage(error)}`);
+  }
 
   let state: string | null = null;
   let verdict: PlanApprovalVerdict;
@@ -2525,6 +2602,8 @@ async function evaluate(
     opaqueShell: boolean;
     /** A shell command the reading could not read that is not AI-DLC's own. */
     unreadShell?: boolean;
+    /** That command hands apply_patch a patch nobody has read (MutationIntent.patchUnseen). */
+    patchUnseen?: boolean;
     detail: string | null;
     finished: boolean;
   } | null = null;
@@ -2836,9 +2915,7 @@ async function evaluate(
         // pause) carries no approval to a worker, so this is the same refusal
         // a write gets, with the fresh `next` that issues the build again.
         if (verdict.block && issuance === null) {
-          authorityFailure =
-            `the developer handoff cannot select one approval target from directive kind "${activeDirective.kind}"` +
-            outOfDateClause(activeDirective);
+          authorityFailure = staleOr(activeDirective, NO_CURRENT_DIRECTIVE);
           standing = planStanding(projectDir, activeDirective);
         } else if (
           verdict.handoff &&
@@ -2945,8 +3022,7 @@ async function evaluate(
         swarmBatchOut = true;
         authorityFailure = mainCheckoutOnly
           ? SWARM_MAIN_CHECKOUT_HELD
-          : `workspace mutation cannot select one approval target from directive kind "${activeDirective.kind}"` +
-            outOfDate;
+          : SWARM_CHANGE_IN_ITS_WORKTREE;
         if (
           theirs !== null &&
           mainCheckoutChangeRefusal(projectDir, theirs, listed, (unit) => planNamed.get(unit) ?? null) === null
@@ -2963,9 +3039,7 @@ async function evaluate(
           finished: false,
         };
       } else if (activeDirective.kind !== "run-stage" && setAside === null) {
-        authorityFailure =
-          `workspace mutation cannot select one approval target from directive kind "${activeDirective.kind}"` +
-          outOfDateClause(activeDirective);
+        authorityFailure = staleOr(activeDirective, NO_CURRENT_DIRECTIVE);
         standing = planStanding(projectDir, activeDirective);
         verdict = { block: true, mentioned: [] };
       } else {
@@ -3003,11 +3077,16 @@ async function evaluate(
           mentioned: [unit ?? `stage:${GUARDED_STAGE}`],
         };
         if (verdict.block) {
+          // A patch nobody has read is the unread kind, however the line looks:
+          // a quote inside it can hand the reading a file it does not write.
+          const named = mutation.patchUnseen === true ? undefined : outsideRecord;
           blockedMutation = {
-            target: outsideRecord ?? (mutation.shellCommand ?? "").trim().slice(0, 160),
+            target: named ?? (mutation.shellCommand ?? "").trim().slice(0, 160),
             unit,
-            opaqueShell: outsideRecord === undefined,
-            unreadShell: outsideRecord === undefined && toolName === "Bash" && !mutation.engineRefused,
+            opaqueShell: named === undefined,
+            unreadShell: named === undefined && toolName === "Bash" &&
+              (!mutation.engineRefused || mutation.patchUnseen === true),
+            patchUnseen: mutation.patchUnseen === true,
             detail: receiptDetail([evidence], verdict.mentioned),
             finished: !approval.ok && buildFinishes(projectDir, unit),
           };
@@ -3016,8 +3095,7 @@ async function evaluate(
     }
   } catch (e) {
     recordHookDrop(projectDir, HOOK_NAME, errorMessage(e));
-    authorityFailure =
-      `Plan Approval authority evaluation failed closed: ${errorMessage(e)}`;
+    authorityFailure = `its plan's approval could not be checked: ${errorMessage(e).replace(/\.+$/, "")}`;
     verdict = { block: true, mentioned: [] };
   }
   // No refusal names a switch. `guard.plan-approval off` is plan approval off
@@ -3050,6 +3128,8 @@ async function evaluate(
           planApprovalOff,
           blockedMutation.finished,
           blockedMutation.unreadShell === true,
+          blockedMutation.patchUnseen === true,
+          process.platform === "win32" && runtimeHarnessName(projectDir) === "codex",
         )
       : verdict.appendixInBrief
       ? appendixBlockReason(verdict.mentioned)

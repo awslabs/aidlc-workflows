@@ -96,7 +96,7 @@ describe("a Kiro CLI hook's exit code reaches Kiro as the hook set it", () => {
       expect(altered.stderr).toContain("Run exactly:");
       const asTold = guard(`bun .kiro/tools/aidlc.ts engine orchestrate next ${forwarded}`);
       expect(asTold.status, asTold.stderr).toBe(0);
-      expect(existsSync(join(dir, "aidlc", ".aidlc-forwarding-latch"))).toBe(false);
+      expect(existsSync(join(dir, "aidlc", ".aidlc-sessions", ".kiro-cli-forwarding-latch.json"))).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

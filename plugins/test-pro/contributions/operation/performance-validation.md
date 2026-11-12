@@ -7,11 +7,11 @@ adds:
   required_sections:
     - "Load Regression"
 fragments:
-  - anchor: end-of-steps
+  - anchor: after-step:4
     order: 100
 ---
 
-## fragment: end-of-steps
+## fragment: after-step:4
 
 ### Step (test-pro): Load regression matrix
 

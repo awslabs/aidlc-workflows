@@ -115,6 +115,7 @@ import {
   type ProtectedChoice,
   protectedChoiceDigests,
   stripRecommendedDecorator,
+  typedWordGap,
 } from "./aidlc-reply-reader.ts";
 export {
   formatReceivedReply,
@@ -249,6 +250,7 @@ import {
   worktreesDir,
   writeSessionBinding,
   writeStateFile,
+  COMPOSE_ASK_TYPE,
 } from "./aidlc-record-core.ts";
 export {
   ACTIVE_INTENT_POINTER,
@@ -352,6 +354,7 @@ export {
   worktreesDir,
   writeSessionBinding,
   writeStateFile,
+  COMPOSE_ASK_TYPE,
 } from "./aidlc-record-core.ts";
 import {
   isReviewRecordRelativePath,
@@ -483,6 +486,7 @@ export {
   releaseAuditLock,
   removeTreeSync,
   renameIntoPlace,
+  replaceWithStaged,
   ROUTE_CHECK_ENV,
   runWithOwnerStampedLock,
   sameFileIdentity,
@@ -493,6 +497,27 @@ export {
   writeBufferAtomic,
   writeFileAtomic,
 } from "./aidlc-locks.ts";
+import {
+  type AuthorityCover,
+  freshSubagentEntries,
+  inspectSubagentInflight,
+  readSubagentInflightLedger,
+  subagentInflightMarkerPath,
+  subagentSessionIdentity,
+  unrecordedFinishSince,
+} from "./aidlc-subagent-inflight.ts";
+export {
+  type AuthorityCover,
+  backgroundAgentOutSince,
+  completeSubagentInflight,
+  inspectSubagentInflight,
+  markSubagentInflight,
+  matchSubagentInflight,
+  SUBAGENT_INFLIGHT_TTL_MS,
+  type SubagentInflightMatch,
+  type SubagentInflightSummary,
+  subagentInflightMarkerPath,
+} from "./aidlc-subagent-inflight.ts";
 import {
   appendUnderHeading,
   escapeRegex,
@@ -506,6 +531,7 @@ import {
 } from "./aidlc-markdown.ts";
 export {
   appendUnderHeading,
+  ensureHeading,
   escapeRegex,
   extractMarkdownSection,
   markdownBlocks,
@@ -2095,9 +2121,8 @@ export function commandArgSpans(raw: string): CommandArgSpan[] {
 // its hooks a quoted phrase with the quotes removed and the spaces kept, so
 // "Hello,  World!" arrives as two tokens. `words` is some of the line's tokens
 // in order, separated by whitespace. When one stretch of the line's tokens,
-// side by side, spells them, each separator takes the spaces and tabs typed
-// there; any other gap (a line break, a no-break or other Unicode space) stays
-// one plain space, as the split hands it on. Read by text alone a flag's value
+// side by side, spells them, each separator takes the gap typed there as
+// typedWordGap keeps it; any other gap stays the join's. Read by text alone a flag's value
 // can spell a word too (`--scope bugfix  bugfix bugfix is broken`), so words no
 // stretch spells, or two stretches spell with different spacing, keep the
 // join's spaces. A token lines up only whole, at a whitespace boundary, and
@@ -2137,7 +2162,7 @@ function spacedFrom(words: string, raw: string, tokens: CommandArgSpan[], first:
     while (at < words.length && /\s/.test(words[at])) at++;
     if (at === words.length) return spaced + words.slice(to);
     const typed = k + 1 < tokens.length ? raw.slice(tokens[k].end, tokens[k + 1].start) : "";
-    spaced += /^[ \t]+$/.test(typed) ? typed : words.slice(to, at);
+    spaced += typedWordGap(typed) ?? words.slice(to, at);
   }
   return null;
 }
@@ -4744,20 +4769,23 @@ function sourceKeysChangedOutsideAidlc(
 }
 
 // The paths outside AI-DLC's own files that moved since a kept listing (a
-// review's `Source Listing`), as `<repo>\0<path>` keys. Null when no listing
-// was kept or it does not read back exactly: the caller then compares
-// fingerprints.
+// review's `Source Listing`, kept at the row `from`), as `<repo>\0<path>` keys;
+// a repo that joined the work since counts from what it held when it joined
+// (withRepoBaselineAdditions). Null when no listing was kept or it does not
+// read back exactly: the caller then compares fingerprints.
 export function sourceKeysChangedOutsideAidlcSince(
   projectDir: string,
   stageSlug: string,
   listing: string | undefined,
   current: WorkspaceSourceState,
-  intent?: string,
-  space?: string,
+  rows: readonly AuditShardEvent[],
+  from: AuditShardEvent | null,
 ): Set<string> | null {
-  const recorded = listing === undefined ? null : readBaselineSourceSnapshot(projectDir, stageSlug, listing, intent, space);
+  const recorded = listing === undefined ? null : readBaselineSourceSnapshot(projectDir, stageSlug, listing);
   if (recorded === null) return null;
-  return sourceKeysChangedOutsideAidlc(projectDir, recordedSourceListingForCompare(projectDir, recorded, current, intent, space), current.listing);
+  const joined = withRepoBaselineAdditions(projectDir, stageSlug, { state: "ready", listing: recorded }, rows, from);
+  const start = joined.state === "ready" ? joined.listing : recorded;
+  return sourceKeysChangedOutsideAidlc(projectDir, recordedSourceListingForCompare(projectDir, start, current), current.listing);
 }
 
 // A kept listing as the walk would list it now, to compare with `current`.
@@ -7092,9 +7120,9 @@ function personTurnAndWork(projectDir: string): { turn: string; work: string } {
   }
 }
 
-function readPendingPersonLines(path: string, turn: string, work: string): PendingPersonLines {
+function readPendingPersonLines(path: string, turn: string, work: string, text?: string): PendingPersonLines {
   try {
-    const saved = JSON.parse(readFileSync(path, "utf-8")) as { work?: unknown; lines?: unknown; said?: unknown };
+    const saved = JSON.parse(text ?? readFileSync(path, "utf-8")) as { work?: unknown; lines?: unknown; said?: unknown };
     const now = Date.now();
     const lines = (Array.isArray(saved.lines) ? saved.lines : []).filter((entry): entry is PendingPersonLine => {
       if (!entry || typeof entry !== "object") return false;
@@ -7147,7 +7175,9 @@ export function addPendingPersonLines(
 // (a question the agent logs before asking it) only those kept for the reply.
 // `said()` clears the ordinary lines handed out once the step carries them and
 // marks the reply lines carried, which keep riding the steps until the person
-// writes; until then every line stays waiting.
+// writes; until then every line stays waiting. What was written to the record
+// after the read (a line a command queued while its output was relayed, a
+// carry, a heard mark) stays as written.
 export function pendingPersonLines(
   projectDir: string,
   sessionId: string,
@@ -7157,18 +7187,72 @@ export function pendingPersonLines(
   const none = { lines: [], reply: false, said: () => {} };
   if (!path || !existsSync(path)) return none;
   const { turn, work } = personTurnAndWork(projectDir);
-  const saved = readPendingPersonLines(path, turn, work);
+  const record = (): string => {
+    try {
+      return readFileSync(path, "utf-8");
+    } catch {
+      return "";
+    }
+  };
+  const read = record();
+  const saved = readPendingPersonLines(path, turn, work, read);
   const handed = saved.lines.filter((entry) => entry.reply === true || options.replyOnly !== true);
   return {
     lines: handed.map((entry) => entry.line),
     // Whether a line kept for the reply is among them.
     reply: handed.some((entry) => entry.reply === true),
     said: () => {
+      // A record that could not be read is left as it is.
+      if (read === "") return;
       try {
         const waiting = saved.lines
           .filter((entry) => entry.reply === true || !handed.includes(entry))
           .map((entry) => (entry.reply === true && handed.includes(entry) ? { ...entry, handed: true as const } : entry));
-        writePendingPersonLines(projectDir, path, work, { lines: waiting, said: saved.said });
+        const now = record();
+        if (now === read) {
+          writePendingPersonLines(projectDir, path, work, { lines: waiting, said: saved.said });
+          return;
+        }
+        // Each entry as read becomes what `waiting` made of it (gone when it was
+        // handed, or out of this turn or past its age); an entry the read never
+        // saw, or one changed since, stays as it is now.
+        const raw = (text: string): { work?: unknown; lines?: unknown; said?: unknown } => {
+          try {
+            const parsed = JSON.parse(text) as unknown;
+            return parsed !== null && typeof parsed === "object" ? parsed : {};
+          } catch {
+            return {};
+          }
+        };
+        const entries = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
+        const becomes = new Map<string, Array<PendingPersonLine | null>>();
+        for (const entry of saved.lines) {
+          const key = JSON.stringify(entry);
+          const next = !handed.includes(entry) ? entry : entry.reply === true ? { ...entry, handed: true as const } : null;
+          becomes.set(key, [...(becomes.get(key) ?? []), next]);
+        }
+        const seen = new Map<string, number>();
+        for (const entry of entries(raw(read).lines)) {
+          const key = JSON.stringify(entry);
+          seen.set(key, (seen.get(key) ?? 0) + 1);
+        }
+        const current = raw(now);
+        const lines: PendingPersonLine[] = [];
+        for (const entry of entries(current.lines)) {
+          const key = JSON.stringify(entry);
+          const left = seen.get(key) ?? 0;
+          if (left === 0) {
+            lines.push(entry as PendingPersonLine);
+            continue;
+          }
+          seen.set(key, left - 1);
+          const next = becomes.get(key)?.shift();
+          if (next) lines.push(next);
+        }
+        writePendingPersonLines(projectDir, path, typeof current.work === "string" ? current.work : work, {
+          lines,
+          said: entries(current.said).filter((line): line is string => typeof line === "string"),
+        });
       } catch {
         /* the next step says them again rather than never */
       }
@@ -18188,28 +18272,9 @@ export function noReviewerFinishedSinceReview(
       }
       const since = rows.filter((row) =>
         row.event === "SUBAGENT_COMPLETED" && !attemptEventDefinitelyBefore(row, request.row));
-      for (const row of since) {
-        const agent = auditBlockField(row.block, "Agent Type");
-        if (agent === null || agent === "" || agent === "unknown") return false;
-        if (agent === request.reviewer && recordedReviewFileDigest(row.block, request.reviewFile) !== null) return false;
-      }
-      const health = hooksHealthReadDir(dir, selection.intent, selection.space);
-      const heartbeat = join(health, "log-subagent.last");
-      if (existsSync(heartbeat)) {
-        const beat = Date.parse(readFileSync(heartbeat, "utf-8").trim());
-        if (!Number.isFinite(beat)) return false;
-        // The hook beats, then appends its row in the same run: a beat since the
-        // request with no completion row at or after it is a run that left none.
-        if (beat >= requested && !since.some((row) => Date.parse(row.timestamp) >= beat)) return false;
-      }
-      const drops = join(health, "log-subagent.drops");
-      if (existsSync(drops)) {
-        for (const line of readFileSync(drops, "utf-8").split("\n")) {
-          if (line.trim() === "") continue;
-          const at = Date.parse(line.split("\t", 1)[0]);
-          if (!Number.isFinite(at) || at >= requested) return false;
-        }
-      }
+      if (since.some((row) => auditBlockField(row.block, "Agent Type") === request.reviewer &&
+        recordedReviewFileDigest(row.block, request.reviewFile) !== null)) return false;
+      if (unrecordedFinishSince(hooksHealthReadDir(dir, selection.intent, selection.space), rows, request.row)) return false;
     }
     return true;
   } catch {
@@ -20366,6 +20431,7 @@ export function freshReviewReceipts(
   // The listing that receipt kept (`Source Listing`), absent on receipts an
   // earlier release wrote and when the source moved during the review.
   let newestSourceListing: string | undefined;
+  let newestSourceRow: AuditShardEvent | null = null;
   let newestSourceUnit: string | null = null;
   let newestSourceProgress: StaleReviewProgress | null = null;
   let sourceRecoverySpent = false;
@@ -20700,6 +20766,7 @@ export function freshReviewReceipts(
       if (sourceFingerprint && !eventIsCrossShardTied(i)) {
         newestSourceFingerprint = sourceFingerprint;
         newestSourceListing = auditBlockField(e.block, "Source Listing") ?? undefined;
+        newestSourceRow = e;
         newestSourceUnit = unit ?? null;
         newestSourceProgress = {
           nextIteration: iteration + 1,
@@ -20878,7 +20945,7 @@ export function freshReviewReceipts(
   // back here (an earlier release, a move during the review, another machine):
   // fingerprints decide. Read for the active record, like the walk above.
   const movedKeys = fingerprintMoved && currentSourceState !== null
-    ? sourceKeysChangedOutsideAidlcSince(projectDir, stage.slug, newestSourceListing, currentSourceState)
+    ? sourceKeysChangedOutsideAidlcSince(projectDir, stage.slug, newestSourceListing, currentSourceState, allEvents, newestSourceRow)
     : null;
   const movedOutsideAidlc = movedKeys === null ? null : renderSourcePathKeys(movedKeys);
   const sourceMismatch = fingerprintMoved && (movedOutsideAidlc === null || movedOutsideAidlc.length > 0);
@@ -22717,6 +22784,7 @@ export function shapeSourceSnapshotIndex(
   repoDir: string,
   indexFile: string,
   carriesWorkspaceShell: boolean,
+  recordBase: string | null = null,
 ): SourceSnapshotIndexShape | null {
   const hasWorktreeContext = existsSync(
     join(repoDir, ".aidlc", "worktree-meta.json"),
@@ -22775,6 +22843,22 @@ export function shapeSourceSnapshotIndex(
         "--",
         ...[...AIDLC_ROOT_SETTINGS_FILES].map((name) => `:(top,literal)${name}`),
       ],
+      { env, encoding: "utf-8" },
+    );
+    if (restored.status !== 0) return null;
+  }
+  // AI-DLC's records and worktree metadata ride no Source Commit either. Given
+  // the commit a Bolt shares with the branch it lands on, they keep its bytes,
+  // so a Bolt commit that carried them (a worker's `git add -A`) does not land
+  // them there; finalize brings the Unit's records back on its own. Without it
+  // they keep HEAD's.
+  const recordPaths = effectiveCarriesWorkspaceShell
+    ? AIDLC_SHELL_PATHS.map((path) => `${path}/`)
+    : (worktreeContext?.exactPaths ?? []).map((path) => `:(top)${path}`);
+  if (recordBase !== null && recordPaths.length > 0) {
+    const restored = spawnSync(
+      "git",
+      ["-C", repoDir, "reset", "-q", recordBase, "--", ...recordPaths],
       { env, encoding: "utf-8" },
     );
     if (restored.status !== 0) return null;
@@ -23999,7 +24083,7 @@ function gitHeadOid(worktreeDir: string): string | null {
 // The file names the source walk counts as code by name alone: a symlinked
 // external tree keeps only these, and the snapshot always takes them.
 const SOURCE_FILE_EXTENSION =
-  /\.(?:astro|c|cc|cmake|cpp|cs|css|dart|erl|ex|exs|go|gql|graphql|h|hcl|hpp|hrl|html|java|js|jsx|json|kt|kts|lua|m|mm|php|proto|ps1|psd1|psm1|py|r|rb|rs|scala|sh|sol|sql|svelte|swift|tf|tfvars|toml|ts|tsx|vue|xml|ya?ml|zig)$/i;
+  /\.(?:astro|bat|c|cc|cjs|cmake|cmd|cpp|cs|cshtml|css|cts|dart|erl|ex|exs|fs|go|gql|gradle|graphql|groovy|h|hcl|hpp|hrl|html|java|js|jsx|json|kt|kts|less|lua|m|mjs|mm|mts|php|proto|ps1|psd1|psm1|py|r|razor|rb|rs|scala|scss|sh|sol|sql|svelte|swift|tf|tfvars|toml|ts|tsx|vb|vue|xml|ya?ml|zig)$/i;
 const SOURCE_FILE_BASENAME =
   /^(?:BUILD|CMakeLists\.txt|Dockerfile(?:\..+)?|Gemfile|Justfile|Makefile|Procfile|Tiltfile|WORKSPACE)$/i;
 export function isSourceFileName(name: string): boolean {
@@ -27658,6 +27742,7 @@ function withRepoBaselineAdditions(
   for (const [key, entry] of written) listing.set(key, entry);
   return { state: "ready", listing };
 }
+export { withRepoBaselineAdditions };
 
 // What a clone's install writes at the workspace root: repos.json and
 // workspace-sync's two generated files.
@@ -29827,20 +29912,11 @@ export function reviewerDispatchPath(projectDir: string, intent?: string, space?
 // Freshness window for the reviewer dispatch record. The scope hook honours a
 // record only while its mtime is younger than this; an older record is an
 // orphan (a session that crashed between dispatch and verdict) and is ignored
-// plus best-effort cleaned up — the same staleness discipline as the compose
-// marker. 6h: the worst observed pre-fix review ran ~3h, so the window covers
-// the pathological case with margin while still bounding a crashed review.
+// plus best-effort cleaned up. 6h: the worst observed pre-fix review ran ~3h,
+// so the window covers the pathological case with margin while still bounding
+// a crashed review.
 export const REVIEWER_DISPATCH_TTL_MS = 6 * 60 * 60 * 1000;
 
-// `<projectDir>/aidlc/.aidlc-compose-pending`: the in-flight compose gate
-// marker the conductor writes before presenting the approve/edit/reject gate
-// and deletes on resolve. It lives at the WORKSPACE level (not a per-intent
-// record) so a single spelling is shared by the Stop-hook carve-out (which
-// honours it as a turn-stop signal) and the doctor probe (which flags an
-// orphaned one). Hoisted here so the path is spelled once.
-export function composeMarkerPath(projectDir: string): string {
-  return join(projectDir, "aidlc", ".aidlc-compose-pending");
-}
 export const UNIT_PARKED_FILE = ".aidlc-unit-parked";
 export const CLAIM_GENERATIONS_FILE = ".aidlc-claim-generations.json";
 export const UNIT_PARTICIPANT_FILE = ".aidlc-unit-participant";
@@ -30728,297 +30804,17 @@ export function effectiveUnitGateRhythm(
     readUnitGateRhythm(stateContent);
 }
 
-// Freshness window for the compose marker. The Stop hook honours the carve-out
-// only while the marker's mtime is younger than this; an older marker is an
-// orphan (a session that crashed between write and gate-resolve) and is ignored
-// plus best-effort cleaned up, so it cannot silently disable forwarding-loop
-// enforcement forever. 24h is generous enough to cover a long human pause at an
-// open gate while still catching a stranded marker.
-export const COMPOSE_MARKER_TTL_MS = 24 * 60 * 60 * 1000;
-
-// Whether an in-flight compose proposal waits on the person's approve, edit or
-// reject: its marker is on disk and fresh. A stale orphan is no open question,
-// as the Stop hook reads it. A failed read throws; each caller decides.
-export function composeGateOpen(projectDir: string): boolean {
-  const marker = composeMarkerPath(projectDir);
-  return existsSync(marker) && Date.now() - statSync(marker).mtimeMs <= COMPOSE_MARKER_TTL_MS;
-}
-
-// `<projectDir>/aidlc/.aidlc-subagent-inflight`: the workspace-level background
-// dispatch ledger. Entries are session-scoped and reference-counted so
-// overlapping workers cannot clear or authorize each other. The file remains
-// workspace-level because dispatch and completion hooks can run outside an
-// intent record, while each entry carries the session identity needed by Stop.
-export function subagentInflightMarkerPath(projectDir: string): string {
-  return join(projectDir, "aidlc", ".aidlc-subagent-inflight");
-}
-
-// Freshness window for each background-subagent entry. The Stop hook honours
-// only matching fresh entries; older entries are orphaned dispatches and are
-// pruned under the workspace lock. 2h covers long-running agents while bounding
-// how long a crashed dispatch can relax forwarding-loop enforcement.
-export const SUBAGENT_INFLIGHT_TTL_MS = 2 * 60 * 60 * 1000;
-
-interface SubagentInflightEntry {
-  sessionId: string | null;
-  startedAtMs: number;
-  /** The authority in force when this agent was dispatched, so it inherits it
-   *  instead of being judged on its own (a dispatch cannot mint a grant). */
-  authority?: AuthorityCover;
-}
-
-interface SubagentInflightLedger {
-  version: 1;
-  entries: SubagentInflightEntry[];
-}
-
-interface SubagentInflightRead {
-  exists: boolean;
-  malformed: boolean;
-  entries: SubagentInflightEntry[];
-}
-
-export interface SubagentInflightSummary {
-  exists: boolean;
-  malformed: boolean;
-  freshCount: number;
-  staleCount: number;
-  oldestAgeMs: number | null;
-}
-
-export interface SubagentInflightMatch {
-  active: boolean;
-  staleRemoved: number;
-  malformed: boolean;
-  invalidSession: boolean;
-}
-
-function subagentSessionIdentity(
-  sessionId: unknown,
-): { valid: true; sessionId: string | null } | { valid: false } {
-  if (sessionId === undefined || sessionId === "") {
-    return { valid: true, sessionId: null };
-  }
-  if (typeof sessionId !== "string") return { valid: false };
-  const valid = validSessionId(sessionId);
-  return valid ? { valid: true, sessionId: valid } : { valid: false };
-}
-
-function readSubagentInflightLedger(projectDir: string): SubagentInflightRead {
-  const path = subagentInflightMarkerPath(projectDir);
-  if (!existsSync(path)) return { exists: false, malformed: false, entries: [] };
-  try {
-    const parsed: unknown = JSON.parse(readFileSync(path, "utf-8"));
-    if (parsed === null || typeof parsed !== "object") {
-      return { exists: true, malformed: true, entries: [] };
-    }
-    const candidate = parsed as Partial<SubagentInflightLedger>;
-    if (candidate.version !== 1 || !Array.isArray(candidate.entries)) {
-      return { exists: true, malformed: true, entries: [] };
-    }
-    const entries: SubagentInflightEntry[] = [];
-    for (const value of candidate.entries) {
-      if (value === null || typeof value !== "object") {
-        return { exists: true, malformed: true, entries: [] };
-      }
-      const entry = value as Partial<SubagentInflightEntry>;
-      const validIdentity =
-        entry.sessionId === null ||
-        (typeof entry.sessionId === "string" &&
-          validSessionId(entry.sessionId) === entry.sessionId);
-      const validAuthority =
-        entry.authority === undefined ||
-        entry.authority === "grant" ||
-        entry.authority === "instruction" ||
-        entry.authority === "none";
-      if (
-        !validIdentity ||
-        !validAuthority ||
-        typeof entry.startedAtMs !== "number" ||
-        !Number.isFinite(entry.startedAtMs) ||
-        entry.startedAtMs <= 0
-      ) {
-        return { exists: true, malformed: true, entries: [] };
-      }
-      entries.push({
-        sessionId: entry.sessionId ?? null,
-        startedAtMs: entry.startedAtMs,
-        ...(entry.authority ? { authority: entry.authority } : {}),
-      });
-    }
-    return { exists: true, malformed: false, entries };
-  } catch {
-    return existsSync(path)
-      ? { exists: true, malformed: true, entries: [] }
-      : { exists: false, malformed: false, entries: [] };
-  }
-}
-
-function writeSubagentInflightLedger(
-  projectDir: string,
-  entries: SubagentInflightEntry[],
-): void {
-  const path = subagentInflightMarkerPath(projectDir);
-  if (entries.length === 0) {
-    try {
-      unlinkSync(path);
-    } catch {
-      // Already absent or unreadable: callers retain fail-closed behavior.
-    }
-    return;
-  }
-  mkdirSync(dirname(path), { recursive: true });
-  const ledger: SubagentInflightLedger = { version: 1, entries };
-  writeFileAtomic(path, `${JSON.stringify(ledger)}\n`);
-}
-
-function freshSubagentEntries(
-  entries: SubagentInflightEntry[],
-  nowMs: number,
-): SubagentInflightEntry[] {
-  return entries.filter(
-    (entry) => nowMs - entry.startedAtMs <= SUBAGENT_INFLIGHT_TTL_MS,
-  );
-}
-
-export function markSubagentInflight(
-  projectDir: string,
-  sessionId?: unknown,
-  authority?: AuthorityCover,
-): boolean {
-  const identity = subagentSessionIdentity(sessionId);
-  if (!identity.valid) return false;
-  return withAuditLock(projectDir, () => {
-    const current = readSubagentInflightLedger(projectDir);
-    if (current.malformed) {
-      throw new Error(
-        "background-subagent in-flight ledger is malformed; remove aidlc/.aidlc-subagent-inflight",
-      );
-    }
-    const nowMs = Date.now();
-    const entries = freshSubagentEntries(current.entries, nowMs);
-    // The dispatch stamp: the authority in force at dispatch travels with the
-    // agent, so its actions are judged on what the human or the engine asked
-    // for, not on the agent's own (absent) authority.
-    entries.push({
-      sessionId: identity.sessionId,
-      startedAtMs: nowMs,
-      ...(authority ? { authority } : {}),
-    });
-    writeSubagentInflightLedger(projectDir, entries);
-    return true;
-  });
-}
-
-export function completeSubagentInflight(
-  projectDir: string,
-  sessionId?: unknown,
-): boolean {
-  const identity = subagentSessionIdentity(sessionId);
-  if (!identity.valid) return false;
-  return withAuditLock(projectDir, () => {
-    const current = readSubagentInflightLedger(projectDir);
-    if (!current.exists) return false;
-    if (current.malformed) {
-      throw new Error(
-        "background-subagent in-flight ledger is malformed; remove aidlc/.aidlc-subagent-inflight",
-      );
-    }
-    const entries = freshSubagentEntries(current.entries, Date.now());
-    const index = entries.findIndex(
-      (entry) => entry.sessionId === identity.sessionId,
-    );
-    if (index >= 0) entries.splice(index, 1);
-    writeSubagentInflightLedger(projectDir, entries);
-    return index >= 0;
-  });
-}
-
-export function matchSubagentInflight(
-  projectDir: string,
-  sessionId?: unknown,
-): SubagentInflightMatch {
-  const identity = subagentSessionIdentity(sessionId);
-  if (!identity.valid) {
-    return {
-      active: false,
-      staleRemoved: 0,
-      malformed: false,
-      invalidSession: true,
-    };
-  }
-  return withAuditLock(projectDir, () => {
-    const current = readSubagentInflightLedger(projectDir);
-    if (!current.exists) {
-      return {
-        active: false,
-        staleRemoved: 0,
-        malformed: false,
-        invalidSession: false,
-      };
-    }
-    if (current.malformed) {
-      return {
-        active: false,
-        staleRemoved: 0,
-        malformed: true,
-        invalidSession: false,
-      };
-    }
-    const entries = freshSubagentEntries(current.entries, Date.now());
-    const staleRemoved = current.entries.length - entries.length;
-    if (staleRemoved > 0) writeSubagentInflightLedger(projectDir, entries);
-    return {
-      active: entries.some(
-        (entry) => entry.sessionId === identity.sessionId,
-      ),
-      staleRemoved,
-      malformed: false,
-      invalidSession: false,
-    };
-  });
-}
-
-/** Whether an agent sent in the background at or after `sinceMs` has not
- *  returned: a fresh in-flight entry started since. The completion hook that
- *  records an agent's finish removes its entry; a missing or malformed ledger
- *  shows none. */
-export function backgroundAgentOutSince(projectDir: string, sinceMs: number): boolean {
-  const current = readSubagentInflightLedger(projectDir);
-  if (!current.exists || current.malformed) return false;
-  return freshSubagentEntries(current.entries, Date.now()).some((entry) => entry.startedAtMs >= sinceMs);
-}
-
-export function inspectSubagentInflight(
-  projectDir: string,
-): SubagentInflightSummary {
-  const current = readSubagentInflightLedger(projectDir);
-  if (!current.exists || current.malformed) {
-    return {
-      exists: current.exists,
-      malformed: current.malformed,
-      freshCount: 0,
-      staleCount: 0,
-      oldestAgeMs: null,
-    };
-  }
-  const nowMs = Date.now();
-  let freshCount = 0;
-  let staleCount = 0;
-  let oldestAgeMs: number | null = null;
-  for (const entry of current.entries) {
-    const ageMs = Math.max(0, nowMs - entry.startedAtMs);
-    oldestAgeMs = Math.max(oldestAgeMs ?? 0, ageMs);
-    if (ageMs <= SUBAGENT_INFLIGHT_TTL_MS) freshCount++;
-    else staleCount++;
-  }
-  return {
-    exists: true,
-    malformed: false,
-    freshCount,
-    staleCount,
-    oldestAgeMs,
-  };
+// Whether the in-flight compose question waits on the person's approve, edit
+// or reject: it is the step on record for the selected work (or the work
+// named), on the state it was asked on. A `next` that names another step, or
+// the plan change their approval runs, closes it; a setting written meanwhile
+// keeps it, as it keeps every step. A failed state read throws (each caller
+// decides); a step that cannot be read is no open question.
+export function composeGateOpen(projectDir: string, intent?: string, space?: string): boolean {
+  const statePath = stateFilePath(projectDir, intent, space);
+  if (!existsSync(statePath)) return false;
+  const marker = readActiveDirectiveMarker(projectDir, readFileSync(statePath, "utf-8"), intent, space);
+  return marker?.kind === "ask" && marker.ask_type === COMPOSE_ASK_TYPE;
 }
 
 // `<baseDir>/.aidlc-engine/sensors` - the sensor detail-output / tsbuildinfo directory.
@@ -32621,7 +32417,7 @@ const GUARD_REMEDY_WORDING_BY_OP: Record<GuardRemedyOp, GuardRemedyWording> = GU
 // reviewer's name. The words match the review request's own step.
 export function reviewRequestAction(lead: string, request: string | undefined): string {
   if (request === undefined) return `${lead}.`;
-  return `${lead}: run \`${request}\`, then dispatch the reviewer named in it as a subagent and have it write ` +
+  return `${lead}: run \`${request}\`, then dispatch the reviewer named in it as a new subagent and have it write ` +
     "the `reviewFile` that command returns: that file is the reviewer's, so never write it yourself and never " +
     `stand in for it (\`${harnessDir()}/aidlc-common/protocols/stage-protocol-reviewer.md\` step 1 says what to ` +
     "pass it). When its verdict is back, record it with the `recordVerdict` command the request returns.";
@@ -32663,12 +32459,49 @@ export function evaluateGuardRefusal(
   // A revision is open for its own review: reviewing the change is the
   // conductor's step before it reports the revision done.
   const openForReview = openForWork || state === "revising";
+  // A review still waiting for its verdict: recording it, or retrying a request
+  // whose answer never came back, is the conductor's own step wherever the
+  // Unit is built, so a side-by-side Unit is offered them before a restart.
+  const pendingReviewRemedies = (): void => {
+    if (!input.attempt.pendingReview) return;
+    if (
+      input.attempt.pendingReview.verdictRecordable !== false &&
+      input.attempt.summaryCoverage === "current"
+    ) {
+      remedies.push({
+        op: "record-verdict",
+        // Spell the closing call out. Requesting a review and recording its
+        // verdict are the same command with --verdict added, which is not
+        // guessable from the request's own output, so "record the verdict"
+        // alone left operators looking for a command that does not exist.
+        action:
+          `Record the verdict for pending review iteration ` +
+          `${input.attempt.pendingReview.iteration} if the reviewer returned` +
+          (input.attempt.pendingReview.recordVerdict
+            ? `: \`${input.attempt.pendingReview.recordVerdict}\`.`
+            : " using the recordVerdict command returned by the review request."),
+        requiresHuman: false,
+        executableNow: true,
+      });
+    }
+    if (input.attempt.pendingReview.retryable) {
+      remedies.push({
+        op: "retry-pending",
+        action:
+          `Retry pending review iteration ${input.attempt.pendingReview.iteration} ` +
+          "with --retry-pending.",
+        requiresHuman: false,
+        executableNow: input.attempt.summaryCoverage === "current",
+      });
+    }
+  };
 
   if (input.autonomousBolt) {
     const slug = input.autonomousBolt.slug ?? input.autonomousBolt.unit;
     const batch = input.autonomousBolt.batch
       ? ` batch ${input.autonomousBolt.batch}`
       : " the current batch";
+    pendingReviewRemedies();
     remedies.push({
       op: "abort-bolt",
       action:
@@ -32771,38 +32604,7 @@ export function evaluateGuardRefusal(
         executableNow: openForWork || state === "revising",
       });
     }
-    if (input.attempt.pendingReview) {
-      if (
-        input.attempt.pendingReview.verdictRecordable !== false &&
-        input.attempt.summaryCoverage === "current"
-      ) {
-        remedies.push({
-          op: "record-verdict",
-          // Spell the closing call out. Requesting a review and recording its
-          // verdict are the same command with --verdict added, which is not
-          // guessable from the request's own output, so "record the verdict"
-          // alone left operators looking for a command that does not exist.
-          action:
-            `Record the verdict for pending review iteration ` +
-            `${input.attempt.pendingReview.iteration} if the reviewer returned` +
-            (input.attempt.pendingReview.recordVerdict
-              ? `: \`${input.attempt.pendingReview.recordVerdict}\`.`
-              : " using the recordVerdict command returned by the review request."),
-          requiresHuman: false,
-          executableNow: true,
-        });
-      }
-      if (input.attempt.pendingReview.retryable) {
-        remedies.push({
-          op: "retry-pending",
-          action:
-            `Retry pending review iteration ${input.attempt.pendingReview.iteration} ` +
-            "with --retry-pending.",
-          requiresHuman: false,
-          executableNow: input.attempt.summaryCoverage === "current",
-        });
-      }
-    }
+    pendingReviewRemedies();
     if (input.attempt.repairReview) {
       remedies.push({
         op: "apply-repairs-then-request",
@@ -33532,7 +33334,7 @@ export interface GuardRecoveryAskData {
   detail?: string;
 }
 
-function guardRefusalPath(
+export function guardRefusalPath(
   projectDir: string,
   stage: string,
   unit?: string,
@@ -33546,7 +33348,7 @@ function guardRefusalPath(
 // The latest boundary after which a repetition is a new situation: a session
 // start or resume, a workflow start, a jump, this stage's gate rejection, or a
 // fresh Bolt attempt for this Unit.
-function guardRefusalResetToken(
+export function guardRefusalResetToken(
   projectDir: string,
   stage: string,
   unit?: string,
@@ -33594,7 +33396,7 @@ function gateEventCovers(event: AuditShardEvent, stage: string, unit?: string): 
 
 // The latest approval of this stage (or this Unit's step), so a question left
 // before it can tell that the step it was about was approved since.
-function guardRefusalApprovalToken(
+export function guardRefusalApprovalToken(
   events: AuditShardEvent[],
   stage: string,
   unit?: string,
@@ -33605,7 +33407,7 @@ function guardRefusalApprovalToken(
   return latest === undefined ? "" : `${latest.timestamp}\0${latest.shard}\0${latest.pos}`;
 }
 
-function readGuardRefusalRecord(path: string): GuardRefusalRecord | null {
+export function readGuardRefusalRecord(path: string): GuardRefusalRecord | null {
   try {
     const value: unknown = JSON.parse(readFileSync(path, "utf-8"));
     if (!isPlainObject(value) || value.version !== 1) return null;
@@ -35797,6 +35599,8 @@ export type SwarmSourceMergeChain =
       // The listing that landing kept (`Source Listing`), absent on rows an
       // earlier release wrote.
       listing?: string;
+      // The landing that kept it.
+      row: AuditShardEvent;
       units: Set<string>;
     };
 
@@ -35867,8 +35671,9 @@ export function currentSwarmSourceOpeningFingerprint(
   }
   const rejected = /^GATE_REJECTED:(.+)#([1-9][0-9]*)$/.exec(floor);
   if (rejected !== null) {
+    const rows = auditRows ?? readAuditShardEvents(projectDir, intent, space);
     const row = rejectionAtRunFloor(
-      auditRows ?? readAuditShardEvents(projectDir, intent, space),
+      rows,
       slug,
       undefined,
       floor,
@@ -35891,11 +35696,19 @@ export function currentSwarmSourceOpeningFingerprint(
         };
       }
       // The listing that landing kept, when it reads back exactly; rows an
-      // earlier release wrote have none and are compared by fingerprint.
+      // earlier release wrote have none and are compared by fingerprint. A
+      // repo that joined the work since that landing counts from the add.
       const recorded = auditBlockField(row.block, "Prior Accepted Source Listing");
-      const listing = recorded === null
+      const kept = recorded === null
         ? null
         : readBaselineSourceSnapshot(projectDir, slug, recorded, intent, space);
+      const landing = sortAttemptEvents(rows.filter((merge) =>
+        merge.event === "SWARM_SOURCE_MERGED" && auditBlockField(merge.block, "Stage") === slug &&
+        auditBlockField(merge.block, "Source Listing") === recorded && attemptEventDefinitelyBefore(merge, row))).at(-1);
+      const joined = kept === null
+        ? null
+        : withRepoBaselineAdditions(projectDir, slug, { state: "ready", listing: kept }, rows, landing ?? null, intent, space);
+      const listing = joined?.state === "ready" ? joined.listing : kept;
       return {
         state: "ready",
         fingerprint: prior,
@@ -35982,6 +35795,7 @@ export function currentSwarmSourceMergeChain(
   const lastMerge = new Map<string, AuditShardEvent>();
   let priorFingerprint: string | null = null;
   let priorListing: string | undefined;
+  let priorRow: AuditShardEvent | null = null;
   let openingPrevious: string | null = null;
   let openingRow: AuditShardEvent | null = null;
   // A link may start from a main checkout the person changed during the build
@@ -36118,15 +35932,20 @@ export function currentSwarmSourceMergeChain(
       else units.add(unit);
       priorFingerprint = fingerprint;
       priorListing = auditBlockField(row.block, "Source Listing") ?? undefined;
+      priorRow = row;
     }
     start = end;
   }
+  // The opening link was checked against the stage baseline as it stood then:
+  // a repo that joined the work after that landing (withRepoBaselineAdditions
+  // reads its INTENT_REPOS_CHANGED row) does not move it.
   const opening = currentSwarmSourceOpeningFingerprint(
     projectDir,
     slug,
     intent,
     space,
-    allRows,
+    allRows.filter((row) =>
+      row.event !== "INTENT_REPOS_CHANGED" || openingRow === null || !attemptEventDefinitelyBefore(openingRow, row)),
   );
   if (opening.state === "invalid") {
     return opening;
@@ -36140,9 +35959,9 @@ export function currentSwarmSourceMergeChain(
       reason: `opening SWARM_SOURCE_MERGED link does not match the current ${opening.source === "prior-accepted" ? "prior accepted aggregate" : "stage baseline"}`,
     };
   }
-  return priorFingerprint === null
+  return priorFingerprint === null || priorRow === null
     ? { state: "none" }
-    : { state: "ready", fingerprint: priorFingerprint, listing: priorListing, units };
+    : { state: "ready", fingerprint: priorFingerprint, listing: priorListing, row: priorRow, units };
 }
 
 // --- A change the person asked for in the main checkout ----------------------
@@ -36338,7 +36157,7 @@ const UNIT_TERMINAL_EVENTS: ReadonlySet<string> = new Set([
   "UNIT_SKIPPED",
 ]);
 
-function currentUnitLifecycleRows(
+export function currentUnitLifecycleRows(
   projectDir: string,
   audit: string,
   slug: string,
@@ -36483,7 +36302,7 @@ export function unitScopedLifecycleFloors(stateContent: string): boolean {
     getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
 }
 
-function unitMajorLifecycleMode(projectDir: string): boolean {
+export function unitMajorLifecycleMode(projectDir: string): boolean {
   try {
     const state = readStateFile(projectDir);
     return (
@@ -38483,10 +38302,13 @@ export function plannedStages(
     goesBackTo ??= new Set(work ? stagesOwedBehindCursor(stateContent, work.projectDir, work.intent, work.space) : []);
     return goesBackTo.has(slug);
   };
-  const passedOver = (slug: string) =>
-    (stateOf(slug) ?? "pending") === "pending" && cursorPastStage(stateContent, slug) && !owed(slug);
+  // Under team ownership the Unit stages behind the cursor stay open for the
+  // Units still to land in them (a move past them keeps them, handleExecute).
+  const passedOver = (stage: StageEntry) =>
+    (stateOf(stage.slug) ?? "pending") === "pending" && cursorPastStage(stateContent, stage.slug) &&
+    !owed(stage.slug) && !(isPerUnitStage(stage) && isTeamUnitOwnership(stateContent));
   return loadStageGraph().filter((stage) =>
-    stage.phase !== "initialization" && runs(stage.slug) && !passedOver(stage.slug));
+    stage.phase !== "initialization" && runs(stage.slug) && !passedOver(stage));
 }
 
 // --- Plans composed for one piece of work ---
@@ -41193,7 +41015,6 @@ export function formatFence(resolution: FenceResolution): string {
 //     AIDLC_UNATTENDED (nobody is watching).
 // ---------------------------------------------------------------------------
 
-export type AuthorityCover = "grant" | "instruction" | "none";
 export type AuthorityActor = "main" | "subagent" | "unattended";
 /** How a grant was proven, for the audit row and the printed line. */
 export type AuthorityGrantSource = "marker-sequence" | "turn-marker" | "dispatch-stamp";
@@ -41682,11 +41503,18 @@ export function sayOnceNoteLine(
  * top-level additionalContext without a word; every other harness's adapter,
  * including an older one still installed in a project, reads the top-level key
  * and rewraps it for its own host. So the line carries both, with the same text.
+ * `firstStepNote` goes only to an adapter that asked the human-turn hook for
+ * it, to say its own way (opencode, Kiro CLI's V2 engine).
  */
-export function hookContextLine(event: "SessionStart" | "UserPromptSubmit" | "PostToolUse", context: string): string {
+export function hookContextLine(
+  event: "SessionStart" | "UserPromptSubmit" | "PostToolUse",
+  context: string,
+  firstStepNote?: string,
+): string {
   return `${JSON.stringify({
     additionalContext: context,
     hookSpecificOutput: { hookEventName: event, additionalContext: context },
+    ...(firstStepNote === undefined ? {} : { firstStepNote }),
   })}\n`;
 }
 

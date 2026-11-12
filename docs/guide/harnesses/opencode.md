@@ -199,8 +199,7 @@ the project.
   editor extension), the agent still sees it, and AI-DLC keeps only what you
   typed as your words.
 - **Personas are native subagents** (`mode: subagent`); the conductor adopts
-  them inline for most stages and delegates via the `task` tool for the two
-  subagent stages (2.1 reverse-engineering, 3.5 code-generation). Their native
+  them inline for most stages and delegates via the `task` tool. Their native
   permission map denies `task`, so delegated agents cannot delegate again.
   Plugin composition emits the same `.opencode/agents/` twin for plugin personas.
 - **Space switches preserve JSONC.** `/aidlc space <name>` updates the method

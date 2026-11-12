@@ -66,6 +66,7 @@ const ADAPTER_SRC = join(
 );
 const RUNTIME_PATHS_SRC = join(REPO_ROOT, "core", "tools", "aidlc-runtime-paths.ts");
 const LAUNCHER_VOUCHER_SRC = join(REPO_ROOT, "core", "tools", "aidlc-launcher-voucher.ts");
+const REVIEW_FREEZE_COMMAND_SRC = join(REPO_ROOT, "core", "hooks", "review-freeze-command.ts");
 // The adapter reads AI-DLC's own command routes from the real dispatcher table.
 const DISPATCHER_SRCS = ["aidlc.ts", "aidlc-command.ts", "aidlc-color.ts", "aidlc-version.ts", "aidlc-claude-turn-pending.ts"]
   .map((file) => join(REPO_ROOT, "core", "tools", file));
@@ -200,6 +201,7 @@ function scratch(): Scratch {
   mkdirSync(toolsDir, { recursive: true });
   mkdirSync(captureDir, { recursive: true });
   copyFileSync(ADAPTER_SRC, join(hooksDir, "aidlc-copilot-adapter.ts"));
+  copyFileSync(REVIEW_FREEZE_COMMAND_SRC, join(hooksDir, "review-freeze-command.ts"));
   writeFileSync(join(toolsDir, "aidlc-audit.ts"), AUDIT_TOOL_STUB, "utf-8");
   writeFileSync(join(toolsDir, "aidlc-question-store.ts"), QUESTION_STORE_STUB, "utf-8");
   writeFileSync(join(toolsDir, "aidlc-lib.ts"), LIB_TOOL_STUB, "utf-8");
@@ -713,12 +715,16 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
         expect(targets, hook).toEqual(expected);
       }
 
+      // The tree after the patch: old.ts moved away and deleted.ts gone.
+      mkdirSync(join(s.projectRoot, "src"), { recursive: true });
+      for (const name of ["added.ts", "moved.ts"]) writeFileSync(join(s.projectRoot, "src", name), "export {};\n", "utf-8");
       const after = runAdapter(s, "post-tool", {
         ...payload,
         hook_event_name: "PostToolUse",
       });
       expect(after.code).toBe(0);
-      for (const hook of ["aidlc-write-audit-log.ts", "aidlc-run-sensors.ts"]) {
+      const left = expected.filter(([path]) => path.endsWith("added.ts") || path.endsWith("moved.ts"));
+      for (const [hook, want] of [["aidlc-write-audit-log.ts", expected], ["aidlc-run-sensors.ts", left]] as const) {
         const targets = capturedInputs(s.captureDir, hook)
           .map((entry) => [
             (entry.tool_input as { file_path?: string } | undefined)?.file_path ?? "",
@@ -726,7 +732,7 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
           ])
           .filter(([path]) => path)
           .sort();
-        expect(targets, hook).toEqual(expected);
+        expect(targets, hook).toEqual(want);
       }
     } finally {
       s.cleanup();
@@ -768,6 +774,8 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
           .sort(),
       ).toEqual(expected);
 
+      mkdirSync(join(s.projectRoot, "src"), { recursive: true });
+      for (const path of expected) writeFileSync(path, "export {};\n", "utf-8");
       expect(
         runAdapter(s, "post-tool", {
           ...payload,

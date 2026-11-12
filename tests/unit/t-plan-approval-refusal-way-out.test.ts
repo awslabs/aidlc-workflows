@@ -283,6 +283,16 @@ function said(refusal: { code: number; stderr: string }): string {
   return text.startsWith("{") ? (JSON.parse(text) as { error: string }).error : text;
 }
 
+// The refusal is the person's line on Codex, which shows it as written: it
+// says where the work stands, never the guard's own terms, and every sentence
+// starts as a sentence. A command or a path in backticks may say anything.
+const GUARD_TERMS = /\bv2\b|active directive|directive kind|authority|ambiguous|approval target|failed closed/i;
+function inPlainWords(words: string): void {
+  const prose = words.replace(/`[^`]*`/g, "`x`");
+  expect(prose, words).not.toMatch(GUARD_TERMS);
+  expect(prose, words).not.toMatch(/\. [a-z]/);
+}
+
 function namedCommand(words: string): string {
   const command = /[Rr]un `([^`]+)` exactly as written, as a command of its own/.exec(words)?.[1];
   expect(command, words).toBeDefined();
@@ -340,16 +350,18 @@ describe("a stale build step after approval: the refusal names the way back", ()
     approveBuildAndCompact(proj, null);
 
     const write = said(writeSource(proj));
-    const why = /directive kind "error": the Code Generation step went out of date at \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC when the chat was compacted\. /;
+    const why = /cannot start: the Code Generation step went out of date at \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC when the chat was compacted\. /;
     expect(write).toMatch(why);
+    expect(write).toStartWith(policy === "strict" ? "Code generation cannot start: " : "Code Generation cannot start: ");
+    inPlainWords(write);
     expect(write).toContain(`The plan for the zero-Unit stage-level implementation ${ALREADY_APPROVED}`);
     expect(write).toContain(`Run \`${SOURCE_NEXT}\` ${ON_ITS_OWN}, and follow the step it prints.`);
-    if (policy === "strict") expect(write).toContain("Plan Approval authority is ambiguous or stale");
-    else expect(write).toContain("The plan-approval setting is unchanged.");
+    if (policy !== "strict") expect(write).toContain("The plan-approval setting is unchanged.");
 
     // The developer handoff gets the same way back, not "not approved yet".
     const dispatched = said(handoff(proj));
     expect(dispatched).toMatch(why);
+    inPlainWords(dispatched);
     expect(dispatched).toContain(ALREADY_APPROVED);
     expect(namedCommand(dispatched)).toBe(SOURCE_NEXT);
     expect(dispatched).not.toContain("not approved yet");
@@ -1003,7 +1015,8 @@ describe("the plan's Testing Contract changed after the person approved it", () 
     const strict = approvedBuildThenPostureEdit("strict").proj;
     expect(said(writeSource(strict))).toContain("the approved Testing Contract is stale");
     expect(contractRows(strict)).toHaveLength(0);
-    expect(next(strict).plan_approval?.status).toBe("plan");
+    // The engine writes the moved contract into the plan and asks again.
+    expect(next(strict).ask_type).toBe("plan-approval");
   });
 });
 

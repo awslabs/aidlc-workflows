@@ -270,8 +270,10 @@ unit's `Run floor`, so the unit owes the stage nothing in this attempt
 kind-vacuous unit), the walk moves on, and every other unit still gets the
 stage. A unit that skipped every step that writes its code owes no
 Construction checkpoint at all: the walk goes on to the next unit, and no
-stage approval waits on it. Once a unit has finished work, a forward jump
-inside the per-unit steps moves only the unit in flight on the same way: `aidlc-jump.ts execute --units`
+stage approval waits on it. A forward jump inside the per-unit steps moves
+only the unit in flight on the same way, on the solo walk and on a team main
+that works every Unit itself, the first unit before any unit has finished work
+included: `aidlc-jump.ts execute --units`
 runs this transition for each step the walk would stop that unit at before the
 target, also for a step reopened behind its stage approval, whose checkbox and
 Current Stage stay as they are. When some units did the stage and others
@@ -734,6 +736,11 @@ default is 1,800,000 milliseconds (30 minutes). The override must be an integer
 from 1 through 2,147,483,647 and applies to each execution when verification
 reruns a check that updated its own evidence. It is accepted only with
 `--action verify`; it does not change the approved command or evidence identity.
+`aidlc engine swarm check` and `swarm finalize` take the same `--timeout-ms`, with
+the same default and range, for each run of the command in a Unit's worktree.
+A swarm run stopped at its limit reports `reason: "error"` with a `detail` that
+says so; unlike checkpoint verification, it does not retire the command's process
+group.
 
 On timeout, verification kills its owned process group on POSIX, or its process
 tree using `taskkill /T /F` on Windows, and waits for bounded cleanup before
@@ -861,8 +868,8 @@ legacy Unit-less rows retain stage-global behavior.
 | Event | Emitter | Notes |
 |---|---|---|
 | `DECISION_RECORDED` | `tools/aidlc-log.ts` | Fires before a non-gate `AskUserQuestion` so options are captured; carries the question's `Question Id`, `Question Type`, `Question Shows` and `Question Chat` (as `STAGE_AWAITING_APPROVAL` does for the gate) |
-| `QUESTION_ASKED` | `tools/aidlc-orchestrate.ts`, `tools/aidlc-plan-approval-ask.ts`, `hooks/system-install.ts` | The engine handed out one of its own questions that has no row of its own when asked (the code plan question, a question `next` asks, the go-ahead for a system install the guard held), once per question, with its `Question Id`. Recorded only: nothing decides on it yet |
-| `QUESTION_SHOWN` | `tools/aidlc-state.ts`, `tools/aidlc-orchestrate.ts`, `tools/aidlc-plan-approval-ask.ts` | A question still open was shown in a chat that had not seen it (the gate reported or shown again, an engine question handed out again, a question the agent asked shown again), or the code plan question with its plans changed. Recorded only |
+| `QUESTION_ASKED` | `tools/aidlc-orchestrate.ts`, `tools/aidlc-plan-approval-ask.ts`, `hooks/system-install.ts` | The engine handed out one of its own questions that has no row of its own when asked (the code plan question, a question `next` asks, the go-ahead for a system install the guard held), once per question, with its `Question Id`. Its `Question Chat` is read by `next` with the `QUESTION_SHOWN` rows (`shownHere`) |
+| `QUESTION_SHOWN` | `tools/aidlc-state.ts`, `tools/aidlc-orchestrate.ts`, `tools/aidlc-plan-approval-ask.ts` | A question still open was shown in a chat that had not seen it as it stands (the gate reported or shown again, an engine question handed out again, a question the agent asked shown again; a chat that saw it before it changed, and a command that names no chat after one that did, count as not having seen it), or the code plan question with its plans changed. `next` reads it (`shownHere`): words in a chat not shown the open code plan question or gate as it stands are not read as its answer until it is shown there |
 | `QUESTION_ANSWERED` | `tools/aidlc-log.ts` | Fires after a non-gate question response; approval choices are lifecycle events owned by `report` |
 | `QUESTION_REPLIED` | `hooks/aidlc-record-human-turn.ts` | A harness question box (Claude Code's `AskUserQuestion`, Codex's `request_user_input`) came back with the person's answer: one row per question, with the question as shown and the reply as given. It decides nothing and spends no turn, so the answer is on record even when no `QUESTION_ANSWERED` is logged for it. Only this hook writes it: the public `append` CLI refuses it, and a worktree's audit merge never copies it |
 | `QUESTION_UNANSWERED` | `hooks/aidlc-record-human-turn.ts` (Codex adapter) | A harness question box came back with no answer (Codex's box runs out after about two minutes). Records no human turn and spends any earlier one, so no answer or approval is recorded until the person replies again; the agent asks the question again. Only this hook writes it: the public `append` CLI refuses it, and a worktree's audit merge never copies it |
@@ -1577,7 +1584,7 @@ record-directory name and space.
 
 This is a deliberate departure from the strict audit-first invariant for stage transitions, motivated by the kill-9 / OS-crash window where neither the rollback emit nor `ERROR_LOGGED` can be guaranteed. The pattern is bounded to the events listed above. `STATE_FORKED` / `STATE_MERGED` (milestone 9) deliberately do NOT take this exception — see the previous section for the strict-first rationale (state writes are idempotent, so a failed write surfaces as recoverable drift instead of unrecoverable orphan state). `MERGE_DISPATCH_RETURNED` / `MERGE_DISPATCH_FALLBACK` are post-call emits (audit-of-result, not intent — strict-first) and don't take the exception. All other state-mutating commands stay strict-first per the section above.
 
-`SWARM_SOURCE_MERGED` is post-result authority, not an audit-of-intent row. The landing runs with the person's own git: their hooks, filters and merge drivers run, and when the landed source differs from the reviewed worktree the row records the files under `Landed changes` (and `Driver merges` for paths a configured driver merged) while the merge returns one line for the person in `notices`; a hook that refuses the commit returns `status: "commit-refused"` with the hook's own output and leaves the landing staged for the same merge to finish once the named problem is fixed. The row also names the listing the landing left (`Source Listing`), so the next landing and the stage's completion can tell an AI-DLC update from a change to source: when only AI-DLC's own files moved since then (the set `aidlcOwnedSourceKey` names, the same one Unit source accounting leaves out) or, from the second landing on, paths the `exclude` list now leaves out of the walk, and at the first landing when only AI-DLC's own files moved since the stage-entry baseline, nothing of the person's changed and nothing stops; a row without the field is compared by fingerprint as before. With the walking skeleton, the first landing reads the skeleton's files as the person approved them at its own checkpoint (`afterApprovedSkeleton`), never as a change of theirs, while the link it records still opens at the stage-entry baseline. If the Git merge commit lands but this row cannot be appended, the tool preserves the worktree and returns `[merge-succeeded:<sha>]` with a non-retryable remedy. Rerunning would merge source twice and is forbidden; restart the stage attempt, or use `AIDLC_SKIP_SOURCE_FRESHNESS=1` only after explicit human approval. If the row did land and only later cleanup failed, rerunning the same `aidlc-worktree merge` detects that authority and performs cleanup only; it never reapplies source or emits a second authority row.
+`SWARM_SOURCE_MERGED` is post-result authority, not an audit-of-intent row. The landing runs with the person's own git: their hooks, filters and merge drivers run, and when the landed source differs from the reviewed worktree the row records the files under `Landed changes` (and `Driver merges` for paths a configured driver merged) while the merge returns one line for the person in `notices`; a hook that refuses the commit returns `status: "commit-refused"` with the hook's own output and leaves the landing staged for the same merge to finish once the named problem is fixed. A squash landing that brings nothing the target does not already hold (a Unit already green on a loop-back replay) makes no commit and runs no hook: the staged tree equals the target's, and the row's `Merge commit` is the commit the target was at. The row also names the listing the landing left (`Source Listing`), so the next landing and the stage's completion can tell an AI-DLC update from a change to source: when only AI-DLC's own files moved since then (the set `aidlcOwnedSourceKey` names, the same one Unit source accounting leaves out) or, from the second landing on, paths the `exclude` list now leaves out of the walk, and at the first landing when only AI-DLC's own files moved since the stage-entry baseline, nothing of the person's changed and nothing stops; a row without the field is compared by fingerprint as before. With the walking skeleton, the first landing reads the skeleton's files as the person approved them at its own checkpoint (`afterApprovedSkeleton`), never as a change of theirs, while the link it records still opens at the stage-entry baseline. If the Git merge commit lands but this row cannot be appended, the tool preserves the worktree and returns `[merge-succeeded:<sha>]` with a non-retryable remedy. Rerunning would merge source twice and is forbidden; restart the stage attempt, or use `AIDLC_SKIP_SOURCE_FRESHNESS=1` only after explicit human approval. If the row did land and only later cleanup failed, rerunning the same `aidlc-worktree merge` detects that authority and performs cleanup only; it never reapplies source or emits a second authority row.
 
 ### Authority invariants
 
@@ -1595,7 +1602,10 @@ is the skipped record when plan approval is off for the piece of work: a receipt
 marked skipped, `[Answer]: Plan approval off`, and a `PLAN_APPROVAL_SKIPPED`
 row, written when the build is handed over (by `next`, or by the `continue`
 that delivers its last rules part). Its authority is the setting (which only the person, the scope, or the
-machine switch sets), never an answer, and no reader takes it for one. The two engine
+machine switch sets), never an answer, and no reader takes it for one. It stands only
+while plan approval is off and the questions file is still its record, or once that
+plan's build has started (the receipt at `generation`); turned on before then, `next`
+asks about that plan. The two engine
 observers (the Stop probe and the route check) write nothing at all, and a typed barrier at the durable write
 primitives makes an observer that reaches one fail loudly rather than corrupt
 authority. A guard's only move is to refuse: it does not clear a receipt, a

@@ -2,7 +2,7 @@
 
 import { describe, expect, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   existsSync,
   lstatSync,
@@ -39,6 +39,8 @@ import {
   type WindowsUninstallPlan,
 } from "../../core/tools/aidlc-windows-uninstall.ts";
 import { windowsUninstallRetryFix } from "../../core/tools/aidlc-doctor.ts";
+import { noteSlowReply, recordKiroTerminalAnswer } from "../../core/tools/aidlc-kiro-ide-terminal.ts";
+import { INSTALL_ROOT_ANSWERS } from "../../core/tools/aidlc-uninstall-plan.ts";
 
 const DISPATCHER = join(dirname(dirname(import.meta.dir)), "core", "tools", "aidlc.ts");
 const SID = "S-1-5-21-111-222-333-1001";
@@ -105,7 +107,7 @@ function fixturePlan(
     ...[
       "active-version", "active-executable", "rollback-version", "aidlc-shim.ps1", "windows-path.json",
       ...["aidlc.bash", "_aidlc", "aidlc.fish", "aidlc.ps1"].map((name) => join("completions", name)),
-      ...(purge ? ["aidlc.settings.json", "update-check.json", "pins.json", "default-harness", "channel", "kiro-ide-workflows", "kiro-cli-workflows", "kiro-ide-settings-error-told", "kiro-ide-terminal"] : []),
+      ...(purge ? INSTALL_ROOT_ANSWERS : []),
     ].map((name) => join(root, name)),
     ...additionalFiles,
   ];
@@ -362,6 +364,73 @@ describe("Windows uninstall PATH receipts and recovery journals", () => {
     });
   });
 
+  test("a stopped cleanup whose journal and script a temp clean-up removed stops no command, and uninstall clears its fence", () => {
+    withInstall(() => {
+      const pending = schedule();
+      const fence = windowsUninstallFencePath();
+      rmSync(pending.path);
+      rmSync(pending.journal.cleanupPath);
+      expect(scanWindowsUninstallJournals().invalid).toEqual([fence]);
+      const launch = spyOn(Bun, "spawnSync").mockImplementation(() => {
+        throw new Error("nothing is left to launch");
+      });
+      try {
+        expect(recoverWindowsUninstallContinuations()).toEqual({
+          resumed: 0, running: 0, failed: [], replanned: 0, retriedFailures: [],
+        });
+        expect(existsSync(fence)).toBe(true);
+        recoverWindowsUninstallContinuations(false, { retryFailed: true });
+        expect(launch).not.toHaveBeenCalled();
+      } finally {
+        launch.mockRestore();
+      }
+      expect(existsSync(fence)).toBe(false);
+      expect(scanWindowsUninstallJournals()).toEqual({ pending: [], invalid: [], finished: [] });
+      // The record held the purge choice; the uninstall asked for now picks its own.
+      expect(schedule(false).journal.purge).toBe(false);
+    });
+  });
+
+  test("a journal whose script is gone, or that cannot be read, stops no command, and uninstall clears it with the fence", () => {
+    withInstall(() => {
+      const pending = schedule();
+      rmSync(pending.journal.cleanupPath);
+      const unreadable = join(tmpdir(), `aidlc-uninstall-${randomUUID()}.json`);
+      writeFileSync(unreadable, "{cut off");
+      const fence = windowsUninstallFencePath();
+      expect(scanWindowsUninstallJournals().invalid.sort()).toEqual([pending.path, unreadable, fence].sort());
+      expect(() => recoverWindowsUninstallContinuations()).not.toThrow();
+      recoverWindowsUninstallContinuations(true, { retryFailed: true });
+      for (const path of [pending.path, unreadable, fence]) expect(existsSync(path), path).toBe(false);
+      expect(scanWindowsUninstallJournals()).toEqual({ pending: [], invalid: [], finished: [] });
+    });
+  });
+
+  test("an unreadable journal beside a running cleanup is cleared alone", () => {
+    withInstall(() => {
+      const pending = schedule();
+      const launchedAt = new Date(Date.now() - 5_000).toISOString();
+      writeFileSync(pending.path, JSON.stringify({ ...pending.journal, status: "recovering", launchedAt, attempts: 1 }));
+      const unreadable = join(tmpdir(), `aidlc-uninstall-${randomUUID()}.json`);
+      writeFileSync(unreadable, "{cut off");
+      expect(scanWindowsUninstallJournals().invalid).toEqual([unreadable]);
+      const launch = spyOn(Bun, "spawnSync").mockImplementation(() => {
+        throw new Error("a running cleanup must not be launched again");
+      });
+      try {
+        recoverWindowsUninstallContinuations(true, { retryFailed: true });
+        expect(launch).not.toHaveBeenCalled();
+      } finally {
+        launch.mockRestore();
+      }
+      expect(existsSync(unreadable)).toBe(false);
+      for (const path of [pending.path, pending.journal.cleanupPath, windowsUninstallFencePath()]) {
+        expect(existsSync(path), path).toBe(true);
+      }
+      expect(scanWindowsUninstallJournals().pending.map(({ path }) => path)).toEqual([pending.path]);
+    });
+  });
+
   test("requires an explicit file plan without creating cleanup artifacts", () => {
     withInstall(() => {
       expect(() => scheduleWindowsUninstall(true, [])).toThrow("requires an explicit file plan");
@@ -400,9 +469,12 @@ describe("Windows uninstall PATH receipts and recovery journals", () => {
         expect(readFileSync(outside, "utf-8")).toBe("outside sentinel");
         expect(readFileSync(gitFile, "utf-8")).toBe("gitdir: outside");
       }
-      const nonpurge = fixturePlan(false);
-      nonpurge.files.push({ path: join(root, "aidlc.settings.json"), expected });
-      expect(() => scheduleWindowsUninstall(false, [], nonpurge)).toThrow("invalid Windows uninstall file plan");
+      // A plain uninstall keeps every answer and mark of the machine.
+      for (const name of INSTALL_ROOT_ANSWERS) {
+        const nonpurge = fixturePlan(false);
+        nonpurge.files.push({ path: join(root, name), expected });
+        expect(() => scheduleWindowsUninstall(false, [], nonpurge), name).toThrow("invalid Windows uninstall file plan");
+      }
     });
   });
 
@@ -768,9 +840,7 @@ describe.skipIf(process.platform !== "win32")("native Windows uninstall PATH cle
             ...["aidlc.bash", "_aidlc", "aidlc.fish", "aidlc.ps1"].map((name) => join("completions", name)),
           ].map((name) => join(root, name));
           for (const path of owned) writeFileSync(path, "owned");
-          const settings = [
-            "aidlc.settings.json", "update-check.json", "pins.json", "default-harness", "channel", "kiro-ide-workflows", "kiro-cli-workflows", "kiro-ide-settings-error-told", "kiro-ide-terminal",
-          ].map((name) => join(root, name));
+          const settings = INSTALL_ROOT_ANSWERS.map((name) => join(root, name));
           for (const path of settings) writeFileSync(path, `setting: ${path}`);
           const receipt = registration(dirname(commandPath()));
           writeFileSync(join(root, "windows-path.json"), JSON.stringify(receipt));
@@ -821,6 +891,31 @@ describe.skipIf(process.platform !== "win32")("native Windows uninstall PATH cle
       });
     }, 35_000);
   }
+
+  // In Kiro IDE's Command Prompt terminal the uninstall run is itself a slow
+  // reply, and its exit notes one after the cleanup was scheduled with the
+  // dropped note's contents planned. The cleanup still finishes: it removes
+  // Kiro IDE's terminal records and the emptied install folder.
+  test("--purge removes Kiro IDE's terminal records, also when the uninstall run's own exit notes a slow reply", () => {
+    withInstall((root) => {
+      recordKiroTerminalAnswer("kept");
+      writeFileSync(join(root, "kiro-ide-terminal-shell"), "cmd\n");
+      writeFileSync(join(root, "kiro-ide-terminal-dropped"), "2026-11-01T00:00:00.000Z\n");
+      const pending = schedule();
+      expect(existsSync(windowsUninstallFencePath())).toBe(true);
+      const term = process.env.TERM_PROGRAM;
+      process.env.TERM_PROGRAM = "kiro";
+      try {
+        noteSlowReply(1500, process.env, "win32");
+      } finally {
+        if (term === undefined) delete process.env.TERM_PROGRAM;
+        else process.env.TERM_PROGRAM = term;
+      }
+      const result = nativeCleanup(pending, { current: OTHER });
+      expect(result).toMatchObject({ errors: [], journalExists: false, fenceExists: false, commandExists: false });
+      expect(existsSync(root)).toBe(false);
+    });
+  }, 35_000);
 
   test("non-purge preserves selected runtime files, subtrees and completion files in place", () => {
     withInstall((root) => {
@@ -1143,6 +1238,71 @@ describe.skipIf(process.platform !== "win32")("native Windows uninstall PATH cle
       expect(JSON.parse(readFileSync(pending.path, "utf-8"))).toMatchObject({ status: "recovering", launchedAt, attempts: 1 });
     });
   }, 60_000);
+
+  test("a journal changed after it was written is never launched, and uninstall clears it with its fence", () => {
+    withInstall((root) => {
+      writeFileSync(join(root, "windows-path.json"), JSON.stringify(registration(dirname(commandPath()))));
+      const pending = schedule();
+      const { pathRegistration: _dropped, ...withoutReceipt } = pending.journal;
+      writeFileSync(pending.path, JSON.stringify(withoutReceipt));
+      const launch = spyOn(Bun, "spawnSync").mockImplementation(() => {
+        throw new Error("a changed journal must never run");
+      });
+      try {
+        expect(recoverWindowsUninstallContinuations()).toMatchObject({ resumed: 0 });
+        expect(recoverWindowsUninstallContinuations(true, { retryFailed: true })).toMatchObject({ resumed: 0 });
+        expect(launch).not.toHaveBeenCalled();
+      } finally {
+        launch.mockRestore();
+      }
+      for (const path of [pending.path, pending.journal.cleanupPath, windowsUninstallFencePath()]) {
+        expect(existsSync(path), path).toBe(false);
+      }
+      expect(readFileSync(commandPath(), "utf-8")).toBe("owned command");
+    });
+  }, 35_000);
+
+  test("after a temp clean-up took a stopped cleanup's journal, commands and hooks run, doctor names the step, and the installer and uninstall clear the fence", () => {
+    withInstall((root) => {
+      const project = join(dirname(root), "project");
+      mkdirSync(project);
+      const aidlc = (args: string[], input?: string) => {
+        const result = spawnSync(process.execPath, [DISPATCHER, ...args], {
+          cwd: project, env: { ...process.env }, encoding: "utf-8", timeout: 90_000, input,
+        });
+        if (result.error) throw result.error;
+        return result;
+      };
+      const lose = () => {
+        const pending = schedule();
+        rmSync(pending.path);
+        rmSync(pending.journal.cleanupPath);
+      };
+      const fence = windowsUninstallFencePath();
+      lose();
+      const version = aidlc(["version"]);
+      expect(version.status, version.stdout + version.stderr).toBe(0);
+      const hook = aidlc(["engine", "hook", "deliver-stage-rules"], "{}");
+      expect(hook.stderr).not.toContain("Windows uninstall recovery failed");
+      const doctor = aidlc(["doctor", "--json"]);
+      const row = (JSON.parse(doctor.stdout).data.checks as Array<{ label: string }>)
+        .find((check) => check.label.startsWith("Windows uninstall recovery"));
+      expect(row).toMatchObject({
+        pass: false,
+        fix: "the last uninstall stopped and its record is gone or unreadable: run `aidlc uninstall` or the installer; either one clears the listed files",
+      });
+      expect(existsSync(fence)).toBe(true);
+      const reinstall = aidlc(["system", "lifecycle", "install-apply", "--version", "2.11.0", "--from", project, "--json"]);
+      expect(reinstall.stdout).not.toContain("Windows uninstall recovery failed");
+      expect(existsSync(fence)).toBe(false);
+      lose();
+      // This fixture installs no version, so after the clear uninstall stops at
+      // its own completeness check, as an install the cleanup partly removed does.
+      const uninstall = aidlc(["uninstall", "--yes", "--json"]);
+      expect(JSON.parse(uninstall.stdout).message).toBe("no complete native AI-DLC installation is active");
+      expect(existsSync(fence)).toBe(false);
+    });
+  }, 300_000);
 
   test("reads this session's real token elevation type", () => {
     expect([1, 2, 3]).toContain(currentWindowsElevationType());

@@ -208,11 +208,9 @@ describe("a Testing Contract left stale by a setting the person changed", () => 
     writeFileSync(planPath(proj), readFileSync(planPath(proj), "utf-8").replace('"version": 1', '"version": 1,,'), "utf-8");
     reply(proj, "done");
     expect(answer(proj, "Approve Plan").message).toContain("broke the Testing Contract block");
-    const repair = next(proj);
-    expect(repair.kind).toBe("run-stage");
-    expect(repair.plan_approval?.status).toBe("repair");
-    writePlan(proj, "- [ ] Step 1: write slugify\n- [ ] Step 2: handle unicode\n");
+    // The engine writes the block back itself, then asks the question that names it.
     expect(next(proj).question).toBe("I repaired the plan's Testing Contract (the test rules your build follows). Build your edited plan?");
+    expect(readFileSync(planPath(proj), "utf-8")).toContain(renderTestingContract(resolveTestingPosture(proj)));
   });
 
   test("a plan with no Testing Contract section is never approved as it stands", () => {
@@ -229,6 +227,24 @@ describe("a Testing Contract left stale by a setting the person changed", () => 
 });
 
 describe("replacing the Testing Contract section", () => {
+  // After the person's own edit their words in the section are kept, after the
+  // block, in the file's own line ends; otherwise the section is the block's.
+  test("with keep, the section's own words stay after the block; without it they go", () => {
+    const proj = project();
+    const posture = resolveTestingPosture(proj);
+    const block = renderTestingContract(posture);
+    // The fenced block alone, broken by the edit, between their two lines.
+    const fence = block.slice(block.indexOf("```json")).replace('"version": 1', '"version": 1,,');
+    const plan = "# Code Generation Plan\r\n\r\n## Testing Contract\r\n\r\nMy note first.\r\n\r\n" +
+      fence.replace(/\n/g, "\r\n") + "\r\nAnd a line after.\r\n\r\n## Steps\r\n\r\n- [ ] Step 1\r\n";
+    expect(replaceTestingContractSection(plan, posture, true)).toBe(
+      `# Code Generation Plan\n\n${block}\nMy note first.\n\nAnd a line after.\n\n## Steps\n\n- [ ] Step 1\n`.replace(/\n/g, "\r\n"),
+    );
+    expect(replaceTestingContractSection(plan, posture)).toBe(
+      `# Code Generation Plan\n\n${block}\n## Steps\n\n- [ ] Step 1\n`.replace(/\n/g, "\r\n"),
+    );
+  });
+
   test("a heading quoted inside a fenced block is not mistaken for the section", () => {
     const proj = project();
     const posture = resolveTestingPosture(proj);

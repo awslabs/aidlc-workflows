@@ -369,6 +369,28 @@ describe("t222 plugin ownership and runner naming", () => {
     expect(scopesRun.stderr).toContain("unmanaged skill, not pruned: team-playbook");
   });
 
+  // The main aidlc skill names Reverse Engineering's single run; with core
+  // switched off that stage is disabled, not gone, so the skill is never named.
+  test("with core switched off, write says nothing about AI-DLC's main skill", () => {
+    const project = setupIntegrationProject({ noAidlcDocs: true });
+    tempDirs.push(project);
+    const gen = projectRunnerGen(project);
+    setPluginSelection(project, []);
+    const compiled = spawnSync(BUN, [join(project, ".claude", "tools", "aidlc-graph.ts"), "compile"], {
+      cwd: project,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+      env: { ...process.env, AIDLC_HARNESS_DIR: ".claude" },
+    });
+    expect(compiled.status, `${compiled.stdout}${compiled.stderr}`).toBe(0);
+
+    const writeRun = runRunnerGen(gen, ["write"]);
+    expect(writeRun.status).toBe(0);
+    expect(writeRun.stdout).toContain("Wrote 0 stage-runner dirs");
+    expect(writeRun.stderr).not.toContain("unmanaged skill");
+    expect(existsSync(join(project, ".claude", "skills", "aidlc", "SKILL.md"))).toBe(true);
+  });
+
   test("legacy markerless generated stage runner is pruned by generated name", () => {
     const project = setupIntegrationProject({ noAidlcDocs: true });
     tempDirs.push(project);

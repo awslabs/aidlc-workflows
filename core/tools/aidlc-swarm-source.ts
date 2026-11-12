@@ -14,11 +14,13 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import {
+  type AuditShardEvent,
   type WorkspaceSourceListing,
   type WorkspaceSourceState,
   currentSwarmSourceMergeChain,
   currentSwarmSourceOpeningFingerprint,
   isLinkTargetListingKey,
+  readAuditShardEvents,
   readBaselineSourceSnapshot,
   recordedSourceListingForCompare,
   recordedSourceListingUnderCurrentBoundary,
@@ -27,6 +29,7 @@ import {
   sourceListingChangedKeys,
   sourcePathIsRegistered,
   splitSourcePathKey,
+  withRepoBaselineAdditions,
 } from "./aidlc-lib.ts";
 
 // Deeper than this, a submodule's paths are asked of nobody and stay source.
@@ -170,20 +173,29 @@ export function swarmSourceChanged(
   return sourceChangedOutsideAidlc(projectDir, theirs(before), theirs(after));
 }
 
-// The same since a kept listing (a landing's or the stage's `Source Listing`).
-// Null when no listing was kept or it does not read back exactly: the caller
-// then compares fingerprints.
+// The same since the listing the last landing kept (`Source Listing` on its
+// row); a repo that joined the work since that landing counts from what it held
+// when it joined (withRepoBaselineAdditions). Null when no listing was kept or
+// it does not read back exactly: the caller then compares fingerprints.
 export function swarmSourceChangedSince(
   projectDir: string,
   stageSlug: string,
-  listing: string | undefined,
+  landed: { listing?: string; row: AuditShardEvent },
   current: WorkspaceSourceState,
   intent?: string,
   space?: string,
 ): string[] | null {
-  const recorded = listing === undefined ? null : readBaselineSourceSnapshot(projectDir, stageSlug, listing, intent, space);
+  const recorded = landed.listing === undefined
+    ? null
+    : readBaselineSourceSnapshot(projectDir, stageSlug, landed.listing, intent, space);
   if (recorded === null) return null;
-  const before: WorkspaceSourceListing = recordedSourceListingForCompare(projectDir, recorded, current, intent, space);
+  const joined = withRepoBaselineAdditions(
+    projectDir, stageSlug, { state: "ready", listing: recorded }, readAuditShardEvents(projectDir, intent, space),
+    landed.row, intent, space,
+  );
+  const before: WorkspaceSourceListing = recordedSourceListingForCompare(
+    projectDir, joined.state === "ready" ? joined.listing : recorded, current, intent, space,
+  );
   return swarmSourceChanged(projectDir, before, current.listing);
 }
 
@@ -198,7 +210,7 @@ export function swarmSourceUnchangedInStage(
 ): boolean {
   try {
     const chain = currentSwarmSourceMergeChain(projectDir, slug);
-    if (chain.state === "ready") return swarmSourceChangedSince(projectDir, slug, chain.listing, current)?.length === 0;
+    if (chain.state === "ready") return swarmSourceChangedSince(projectDir, slug, chain, current)?.length === 0;
     if (chain.state !== "none") return false;
     const opening = currentSwarmSourceOpeningFingerprint(projectDir, slug);
     return opening.state === "ready" && opening.listing !== undefined && swarmSourceChanged(

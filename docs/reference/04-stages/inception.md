@@ -230,10 +230,7 @@ by `aidlc engine workspace codekb --repo <repo>`:
 
 ### Approval Gate
 
-Standard 2-option gate: **Approve** / **Request Changes**. The stage file
-labels Approve "continue to Requirements Analysis"; the engine routes to the
-next stage the plan runs, which is Practices Discovery in the scopes that
-include it.
+Standard 2-option gate: **Approve** / **Request Changes**.
 
 ### Notes
 
@@ -327,6 +324,10 @@ On affirmation, content is promoted to:
   overwrite section content rather than accumulate).
 - `aidlc/spaces/<active-space>/memory/project.md` -- append-under-heading
   via `appendUnderHeading` (rules accumulate; date stamps distinguish them).
+
+A heading either file lacks is added at its end first (`ensureHeading`), so the
+save also works in a space made by `space create`, whose `team.md` and
+`project.md` start as one line, and in a file a team trimmed by hand.
 
 ### Steps
 
@@ -459,10 +460,7 @@ large scope with significant unknowns.
    - **Scope**: Single component, multi-component, system-wide
    - **Complexity**: Simple, standard, complex
 
-3. **Determine Depth** -- Based on complexity assessment:
-   - **Minimal**: Clear request, narrow scope, well-understood domain
-   - **Standard**: Moderate scope, some unknowns, multiple stakeholders
-   - **Comprehensive**: Large scope, significant unknowns, complex domain
+3. **Determine Depth**
 
 4. **Assess Current Requirements** -- Extract and organize what is already
    known from the user's input: explicit functional requirements, implied
@@ -498,20 +496,18 @@ large scope with significant unknowns.
    A-E options (A-D on Claude Code). Every ordinary clarifying question must end with `X. Other (please specify)` as
    the final option. All `[Answer]:` tags left blank.
 
-   Offer the tri-mode question flow: Guide Me / Edit File / Chat.
-
 7. **Collect and Analyze Answers** -- Read the questions file, confirm all
    `[Answer]:` tags are filled. If any are blank, present unanswered questions
    via AskUserQuestion and write answers back. Do NOT proceed with partial
    answers. Run:
    - MANDATORY ambiguity detection: scan all responses for vague language
-     ("mix of", "not sure", "depends", "probably", "maybe")
+     ("mix of", "not sure", "depends")
    - Contradiction check between answers
    - Missing detail identification
 
 8. **Follow-Up Questions** -- If ANY ambiguity, vagueness, or contradictions
    found, create follow-up questions targeting the specific issues. Resolve
-   all ambiguities before proceeding. "When in doubt, ask."
+   all ambiguities before proceeding.
 
 9. **Generate Requirements** -- Create
     `<record>/inception/requirements-analysis/requirements.md` containing:
@@ -658,11 +654,11 @@ not in the upstream reference.
      personas and story granularity
 
 5. **Collect Answers** -- Collect answers following stage-protocol.md section 3
-   question flow (offer interaction mode choice, collect answers, write back to
+   question flow (collect answers, write back to
    file).
 
 6. **Analyze Answers** -- MANDATORY ambiguity analysis: scan all responses for
-   vague language ("mix of", "not sure", "depends", "probably"). Check for
+   vague language ("mix of", "not sure", "depends"). Check for
    contradictions. Identify missing details. Create follow-up questions if ANY
    ambiguity found.
 
@@ -1355,8 +1351,8 @@ Changes**. The user can override stage inclusion/exclusion at this gate.
   dependencies defined in the component catalogue (`components.md`) and the
   unit-of-work-dependency artifact.
 - Team allocation draws from the Team Formation artifacts (Stage 1.5) if
-  they exist; when 1.5 is SKIP (mvp, classic, workshop), all Bolts are executed by
-  aidlc-developer-agent (AI).
+  they exist; when 1.5 is SKIP (mvp, classic, workshop), every Bolt is planned
+  for aidlc-developer-agent (AI). The allocation is a plan, not the decision.
 
 ---
 

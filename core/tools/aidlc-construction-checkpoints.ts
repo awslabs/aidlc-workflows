@@ -248,7 +248,7 @@ const CHECK_TIMEOUT_MS = EXTENDED_SUBPROCESS_TIMEOUT_MS;
 /** A finite execution budget; Node timers cannot represent larger values. */
 export function verificationTimeoutMs(value: number = CHECK_TIMEOUT_MS): number {
   if (!Number.isSafeInteger(value) || value < 1 || value > 2_147_483_647) {
-    throw new Error("checkpoint --timeout-ms must be an integer between 1 and 2147483647 milliseconds.");
+    throw new Error("--timeout-ms must be an integer between 1 and 2147483647 milliseconds.");
   }
   return value;
 }

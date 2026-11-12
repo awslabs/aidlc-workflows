@@ -28,6 +28,7 @@ import {
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import { putBackBeforePick, sayWritesDuringWork } from "./aidlc-before-pick.ts";
+import { buildStartListing, unitSourceManifests } from "./aidlc-brought-files.ts";
 import {
   approvalDispositionField,
   rejectedFindingDispositionField,
@@ -63,6 +64,7 @@ import {
   appendSlug,
   appendUnderHeading,
   artifactFilename,
+  ensureHeading,
   BLOCKING_SENSOR_OVERRIDE_CHOICE,
   blockingSensorPicks,
   optionsList,
@@ -262,6 +264,9 @@ import {
   worktreeStateFilePath,
   sameWorkspaceSource,
   recordedSourceListingUnderCurrentBoundary,
+  isLinkTargetListingKey,
+  sourceListingChangedKeys,
+  splitSourcePathKey,
   workspaceSourceState,
   withWorkspaceSourceStateCache,
   writeStateFile,
@@ -304,6 +309,7 @@ import { generateFireId, recordUnfinishedFire, sensorMatchesPath, unfinishedFire
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
 import { aidlcDispatcherInvocation, aidlcToolInvocation, compiledExecutable, entrySkillInvocation, syncFolderClause } from "./aidlc-runtime-paths.ts";
 import { markdownBlocks, projectVisibleMarkdownLines } from "./aidlc-markdown.ts";
+import { type EngineUnitDirective, readEngineUnitDirective, routesUnitStep, routesWave } from "./aidlc-log.ts";
 import {
   stageLabel,
   stageValidationAuditFields,
@@ -318,7 +324,7 @@ import { codeGenerationCompletionPlanWaits, deriveTeamUnitProgressModel, SWITCH_
 import {
   askedQuestionFields,
   commandChat,
-  latestAskedQuestion,
+  gateQuestion,
   QUESTION_ID_FIELD,
   questionShows,
   shownAgainFields,
@@ -1682,11 +1688,13 @@ function hasCurrentTeamUnitActivity(
     if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
     return a.pos - b.pos;
   });
+  // A jump that kept each Unit's work with its team (aidlc-jump.ts records
+  // `Unit Work: kept`) starts no new attempt: the teams' claims carry on.
   let floor = -1;
   for (let i = 0; i < rows.length; i++) {
     if (
       rows[i].event === "WORKFLOW_STARTED" ||
-      rows[i].event === "STAGE_JUMPED"
+      (rows[i].event === "STAGE_JUMPED" && auditBlockField(rows[i].block, "Unit Work") !== "kept")
     ) {
       floor = i;
       if (
@@ -1752,7 +1760,8 @@ function handleSetUnitOwnership(given: string[]): void {
     const current = getField(content, "Unit Ownership")?.trim() || "solo";
     if (value !== current && hasCurrentTeamUnitActivity(pd, content)) {
       error(
-        `Unit ownership is frozen after team Unit activity in the current workflow attempt (current: ${current}).`,
+        "The teams are already building their Units, so they keep them for this work. " +
+          `Carry on with \`${entrySkillInvocation()}\`.`,
       );
     }
     if (value === "team") {
@@ -2626,7 +2635,10 @@ export function parkWorkflow(pd: string, opts: { attended?: boolean } = {}): Par
         "each Bolt), then park.",
     );
   }
-  const scopeStamp = validateLiveUnitScope(pd);
+  // A checkout that holds a Unit claim parks that Unit there; any other parks
+  // the work, a lead's whose teams hold the Units included. Not
+  // validateLiveUnitScope: it refuses Unit work, and a park is never Unit work.
+  const scopeStamp = readApplicableTeamUnitScopeStamp(pd, initialContent);
   if (scopeStamp) {
     writeFileSync(
       unitParkedPath(pd),
@@ -2838,13 +2850,9 @@ function handleUnit(args: string[]): void {
     // The route check is read-only and shares this lock's ledger snapshot.
     const routed = action === "complete"
       ? {}
-      : readEngineUnitDirective(pd, slug, unit, action);
+      : readEngineUnitDirective(pd, slug, unit, action, stateSessionOverride, error);
     // A Unit's questions before the wave are the wave's own step.
-    if (
-      routed.kind === "run-stage" &&
-      routed.stage === slug &&
-      (routed.wave || routed.questions_only === true)
-    ) {
+    if (routesWave(routed, slug)) {
       if (!routed.wave) {
         throw new UnitWaveRouteRefusalError(
           `Refusing unit ${action} for "${unit}" of "${slug}": this step asks ` +
@@ -3116,85 +3124,12 @@ function validateStateLineValue(label: string, value: string | undefined): void 
   }
 }
 
-interface EngineUnitDirective {
-  kind?: unknown;
-  stage?: unknown;
-  unit?: unknown;
-  wave?: unknown;
-  questions_only?: unknown;
-}
-
-function readEngineUnitDirective(
-  pd: string,
-  stage: string,
-  unit: string,
-  action: string,
-): EngineUnitDirective {
-  const executable = compiledExecutable();
-  let subargs = ["next", "--project-dir", pd];
-  let directive: unknown = null;
-  for (let attempts = 0; attempts < 1_000; attempts++) {
-    const command = executable
-      ? [executable, "engine", "orchestrate", ...subargs]
-      : [
-          process.execPath,
-          fileURLToPath(new URL("./aidlc-orchestrate.ts", import.meta.url)),
-          ...subargs,
-        ];
-    const result = spawnSync(command[0], command.slice(1), {
-      cwd: pd,
-      encoding: "utf-8",
-        env: hookChildEnv(pd, stateSessionOverride, {
-          AIDLC_PROJECT_DIR: pd,
-          [ROUTE_CHECK_ENV]: "1",
-        }),
-      timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
-    });
-    if (result.status !== 0) {
-      error(
-        `Refusing to ${action} unit "${unit}" for "${stage}": the orchestration engine could not resolve ` +
-          `the current routed unit (${(result.stderr ?? "").trim() || "no diagnostic"}).`,
-      );
-    }
-    try {
-      directive = JSON.parse((result.stdout ?? "").trim());
-    } catch {
-      error(
-        `Refusing to ${action} unit "${unit}" for "${stage}": the orchestration engine returned an ` +
-          "unparseable directive.",
-      );
-    }
-    const transport =
-      directive !== null && typeof directive === "object"
-        ? directive as { kind?: unknown; receipt?: unknown }
-        : {};
-    if (transport.kind !== "load-steering") break;
-    if (
-      typeof transport.receipt !== "string" ||
-      transport.receipt.length === 0
-    ) {
-      error(
-        `Refusing to ${action} unit "${unit}" for "${stage}": the engine's rules part ` +
-          "did not include its receipt.",
-      );
-    }
-    subargs = ["continue", transport.receipt, "--project-dir", pd];
-  }
-  return directive !== null && typeof directive === "object"
-    ? directive as EngineUnitDirective
-    : {};
-}
-
 function requireEngineRoutedUnit(
   routed: EngineUnitDirective,
   stage: string,
   unit: string,
 ): void {
-  if (
-    routed.kind !== "run-stage" ||
-    routed.stage !== stage ||
-    routed.unit !== unit
-  ) {
+  if (!routesUnitStep(routed, stage, unit)) {
     const expected =
       routed.kind === "run-stage" &&
       typeof routed.stage === "string" &&
@@ -3654,7 +3589,7 @@ function verifySettledSwarmSourceBinding(
   // (aidlc-swarm-source.ts).
   const changed = current === null || sameWorkspaceSource(chain.fingerprint, current.fingerprint)
     ? []
-    : swarmSourceChangedSince(pd, stage.slug, chain.listing, current);
+    : swarmSourceChangedSince(pd, stage.slug, chain, current);
   const moved = changed?.length !== 0;
   if (moved && current !== null && guardPolicyAcceptsChanges(pd)) {
     // Kept under relaxed or off: edits made after the last merge stay, once recorded.
@@ -5334,6 +5269,119 @@ function noteVerdictNotFinished(
   }
 }
 
+// Of the changed source paths, sorted, the ones a Unit's manifest could claim
+// (`paths`): the stage's completion and `lookup source-changes` leave out the
+// same ones. `claimed` takes out the paths the caller's Unit claims already
+// cover. `ignored` holds the ones left out as ignored by git, which the lookup
+// reads for the checkouts it cannot see into.
+function unitClaimableSourceChanges(
+  pd: string,
+  stageSlug: string,
+  changed: Iterable<string>,
+  current: ReadonlyMap<string, string>,
+  claimed: (pathKey: string) => boolean = () => false,
+): { paths: string[]; ignored: Set<string> } {
+  // AI-DLC's own files (its .gitignore block, AGENTS.md, a second tool's
+  // install, the source registry) are no Unit's to claim, and neither is a
+  // path Git ignores that a source manifest refuses to claim (build output, a
+  // test run's record), nor one the registry's exclude list now leaves out of
+  // the walk (a cache excluded after the stage started: its baseline entries
+  // are nobody's change).
+  const aidlcOwned = aidlcOwnedSourceKey(pd);
+  // A file the agent changed before the person picked this work's plan, put
+  // back since (the undo the pick's line named), holds what it held before
+  // the agent's write: nobody's change.
+  const putBack = putBackBeforePick(pd);
+  let outsideClaims = [...changed].filter((pathKey) =>
+    !aidlcOwned(pathKey) && !claimed(pathKey) && !putBack(pathKey, current.get(pathKey))
+  );
+  // Nor is a file another open piece of work in this folder claims: a second
+  // chat building its own work here made it, so it is that work's change.
+  if (outsideClaims.length > 0) {
+    const otherWork = otherOpenWorkClaims(pd, stageSlug);
+    outsideClaims = outsideClaims.filter((pathKey) => !otherWork.some((work) => sourceClaimCovers(pathKey, work.claims)));
+  }
+  const ignored = unclaimableIgnoredSourceKeys(pd, outsideClaims);
+  const unclaimable = new Set(ignored);
+  for (const key of registryExcludedSourceKeys(pd, outsideClaims)) unclaimable.add(key);
+  const paths = outsideClaims
+    .filter((pathKey) => !unclaimable.has(pathKey))
+    .sort();
+  return { paths, ignored };
+}
+
+// `lookup source-changes [<unit>]`: the source paths that changed since a
+// Unit's Code Generation began, for the agent to check its account of the
+// build against when it writes the Unit's `source-manifest.json`, so it need
+// not run git for that (Kiro asks the person about a git command they have not
+// allowed). Read-only. It sees AI-DLC's source walk, not who wrote a change:
+// `listed_by` names the other Units whose manifest lists a path, and
+// `not_listed` the places it leaves out because it cannot list them as a
+// manifest claims them: a checkout recorded with `intent add-checkout` (one
+// recorded after the build began reads as all created), a folder a link leads
+// to outside the project, and a checkout of its own the project's git ignores.
+function sourceChangesSinceBuildStart(pd: string, unit: string | null): Record<string, unknown> {
+  const named = unit === null ? {} : { unit };
+  const unavailable = {
+    ...named,
+    available: false,
+    note: "AI-DLC cannot compare the files here with where this build began: take the paths from the build's own account.",
+  };
+  try {
+    const start = buildStartListing(pd, unit);
+    const current = workspaceSourceState(pd);
+    if (start === null || current === null) return unavailable;
+    const recorded = recordedSourceListingUnderCurrentBoundary(start.listing, current.listing);
+    const { paths, ignored } = unitClaimableSourceChanges(
+      pd,
+      "code-generation",
+      sourceListingChangedKeys(recorded, current.listing),
+      current.listing,
+    );
+    const listings = [recorded, current.listing];
+    const keysOf = (mode: string): string[] => listings.flatMap((listing) =>
+      [...listing].filter(([, entry]) => entry.startsWith(`${mode} `)).map(([key]) => key));
+    // isLinkTargetListingKey decides whether a key is a link's target; the
+    // link it goes through is the one its name starts with.
+    const links = keysOf("120000");
+    const linkOf = (key: string): string | null =>
+      !listings.some((listing) => isLinkTargetListingKey(listing, key)) ? null
+        : links.find((link) => key === `${link}@target` || key.startsWith(`${link}@target/`)) ?? null;
+    // Listing keys of the links and the git-ignored checkouts the list leaves out.
+    const leftOut = new Set<string>();
+    const keys = paths.filter((key) => {
+      const link = linkOf(key);
+      if (link === null) return true;
+      leftOut.add(link);
+      return false;
+    });
+    const nestedCheckouts = ignored.size === 0 ? [] : keysOf("160000");
+    for (const key of ignored) {
+      const place = linkOf(key) ?? nestedCheckouts.find((checkout) => key === checkout || key.startsWith(`${checkout}/`));
+      if (place !== undefined) leftOut.add(place);
+    }
+    const notListed = [...new Set([
+      ...readRecordedSourceCheckouts(pd).map((entry) => entry.path.replace(/[\\/]+$/, "")),
+      ...renderSourcePathKeys(leftOut),
+    ])].sort();
+    const others = unitSourceManifests(pd).filter((entry) => entry.unit !== unit);
+    const changed = keys.flatMap((key) => {
+      const parsed = splitSourcePathKey(key);
+      if (parsed === null) return [];
+      const listedBy = others.filter(({ manifest }) => sourceClaimCovers(key, manifest)).map((entry) => entry.unit);
+      return [{
+        ...(parsed.repo === "" ? {} : { repo: parsed.repo }),
+        path: parsed.path,
+        change: !current.listing.has(key) ? "deleted" : recorded.has(key) ? "modified" : "created",
+        ...(listedBy.length === 0 ? {} : { listed_by: listedBy }),
+      }];
+    });
+    return { ...named, since: start.since, changed, ...(notListed.length === 0 ? {} : { not_listed: notListed }) };
+  } catch {
+    return unavailable;
+  }
+}
+
 function verifyReviewerPrecondition(
   pd: string,
   content: string,
@@ -5510,32 +5558,13 @@ function verifyReviewerPrecondition(
       if (!baseline.has(pathKey)) baselineChanged.add(pathKey);
     }
     const claimModels = [...receipts.freshUnitClaims.values()];
-    // AI-DLC's own files (its .gitignore block, AGENTS.md, a second tool's
-    // install, the source registry) are no Unit's to claim, and neither is a
-    // path Git ignores that a source manifest refuses to claim (build output, a
-    // test run's record), nor one the registry's exclude list now leaves out of
-    // the walk (a cache excluded after the stage started: its baseline entries
-    // are nobody's change).
-    const aidlcOwned = aidlcOwnedSourceKey(pd);
-    // A file the agent changed before the person picked this work's plan, put
-    // back since (the undo the pick's line named), holds what it held before
-    // the agent's write: nobody's change.
-    const putBack = putBackBeforePick(pd);
-    let outsideClaims = [...baselineChanged].filter((pathKey) =>
-      !aidlcOwned(pathKey) && !claimModels.some((claims) => sourceClaimCovers(pathKey, claims)) &&
-      !putBack(pathKey, receipts.currentSourceListing?.get(pathKey))
-    );
-    // Nor is a file another open piece of work in this folder claims: a second
-    // chat building its own work here made it, so it is that work's change.
-    if (outsideClaims.length > 0) {
-      const otherWork = otherOpenWorkClaims(pd, stage.slug);
-      outsideClaims = outsideClaims.filter((pathKey) => !otherWork.some((work) => sourceClaimCovers(pathKey, work.claims)));
-    }
-    const unclaimable = unclaimableIgnoredSourceKeys(pd, outsideClaims);
-    for (const key of registryExcludedSourceKeys(pd, outsideClaims)) unclaimable.add(key);
-    baselineUnclaimed = outsideClaims
-      .filter((pathKey) => !unclaimable.has(pathKey))
-      .sort();
+    baselineUnclaimed = unitClaimableSourceChanges(
+      pd,
+      stage.slug,
+      baselineChanged,
+      receipts.currentSourceListing,
+      (pathKey) => claimModels.some((claims) => sourceClaimCovers(pathKey, claims)),
+    ).paths;
   }
   const resolutionForReconciliation = perUnit ? resolveBoltDag(pd) : null;
   const applicableReconciliationUnits =
@@ -7107,12 +7136,12 @@ function gateAskFields(
     fields["Brief Digest"] = "none";
   }
   try {
-    fields["Sensor State"] = sensorStateAtGate(pd, stage);
+    fields["Sensor State"] = sensorStateAtGate(pd, stage, unit ?? null);
   } catch {
     fields["Sensor State"] = "none";
   }
   try {
-    Object.assign(fields, openDecisionsFields(pd, stage));
+    Object.assign(fields, openDecisionsFields(pd, stage, unit ?? null));
   } catch {
     fields["Open Decisions"] = "0";
   }
@@ -7136,7 +7165,7 @@ function gateAskFields(
 // QUESTION_SHOWN row when this chat had not seen it. Record-only.
 function openGateQuestionId(pd: string, slug: string, unit: string | null): string | null {
   try {
-    const open = latestAskedQuestion(pd, { event: "STAGE_AWAITING_APPROVAL", type: "gate", stage: slug, unit });
+    const open = gateQuestion(pd, slug, unit);
     if (open === null) return null;
     const shown = shownAgainFields(pd, open.id, commandChat(pd));
     if (shown !== null) emitAudit(pd, "QUESTION_SHOWN", shown);
@@ -7205,7 +7234,8 @@ function latestCheckResults(pd: string, stage: GateStage, unit: string | null = 
 }
 
 // The declared outputs a gate speaks for: every unit's at a stage gate, and one
-// Unit's at that Unit's own gate, so a team's Unit is not told about a sibling's.
+// Unit's at that Unit's own gate, so a team's Unit is neither told about a
+// sibling's nor recorded, at its gate or its approval, as deciding on them.
 function declaredOutputsForGate(pd: string, stage: GateStage, unit: string | null): string[] {
   const paths = existingDeclaredArtifactPaths(pd, stage);
   if (unit === null || stage.for_each !== "unit-of-work") return paths;
@@ -7224,11 +7254,11 @@ function declaredOutputsForGate(pd: string, stage: GateStage, unit: string | nul
 
 // The gate-open row's field: `id@path=passed|failed(<n>) [detail: <path>]|could-not-run|not-run`
 // for the declared outputs, failures first, at most 20 entries spelled out.
-function sensorStateAtGate(pd: string, stage: GateStage): string {
+function sensorStateAtGate(pd: string, stage: GateStage, unit: string | null): string {
   // Spelled out here, not at module level: this file runs its command before
   // later module-level declarations are initialized.
   const SENSOR_STATE_MAX_ENTRIES = 20;
-  const { failed, rest } = latestCheckResults(pd, stage);
+  const { failed, rest } = latestCheckResults(pd, stage, unit);
   const entries = [
     ...failed.map((f) => `${f.id}@${f.rel}=failed(${f.findings})${f.detail ? ` [detail: ${f.detail}]` : ""}`),
     ...rest,
@@ -7485,11 +7515,11 @@ export function unitsWithoutInputsNotice(pd: string, stage: GateStage, unit: str
 // `decision:`, `owner:` and `blocking:` beside each). The gate records the ids;
 // Approve records them as accepted open. A block the engine cannot read is
 // recorded as such and stops nothing: the block is optional.
-function openDecisionsFields(pd: string, stage: GateStage): Record<string, string> {
+function openDecisionsFields(pd: string, stage: GateStage, unit: string | null): Record<string, string> {
   const DECISIONS_FENCE = /```aidlc-decisions[^\n]*\n([\s\S]*?)```/g;
   const ids: string[] = [];
   const unreadable: string[] = [];
-  for (const path of existingDeclaredArtifactPaths(pd, stage)) {
+  for (const path of declaredOutputsForGate(pd, stage, unit)) {
     const text = readFileSync(path, "utf-8");
     for (const match of text.matchAll(DECISIONS_FENCE)) {
       const parsed = parseDecisionsBlock(match[1]);
@@ -9809,6 +9839,9 @@ function handlePracticesBranch(args: string[]): void {
 //                              Forbidden), each rule stamped
 //                              with `(affirmed YYYY-MM-DD)`
 //
+// A heading either file lacks is added at its end before the write
+// (ensureHeading): a space made by `space create` starts both as one line.
+//
 // Atomicity:
 //   1. Validate every declared support contribution (fail before any write).
 //   2. Read both drafts (fail closed before any write).
@@ -9971,7 +10004,7 @@ function handlePracticesPromote(args: string[]): void {
       draftSection = promotable.section;
     }
     try {
-      newTeamMd = replaceSection(newTeamMd, heading, draftSection);
+      newTeamMd = replaceSection(ensureHeading(newTeamMd, heading), heading, draftSection);
       sectionsWritten.push(heading.slice(3));
     } catch (e) {
       fail(
@@ -9979,6 +10012,12 @@ function handlePracticesPromote(args: string[]): void {
       );
       return;
     }
+  }
+  // A section written here that ends the file ends it with one newline, so an
+  // added section leaves no blank line at the end of the file.
+  const lastHeading = [...newTeamMd.matchAll(/^## ([^\n]*)$/gm)].at(-1)?.[1];
+  if (lastHeading !== undefined && sectionsWritten.includes(lastHeading)) {
+    newTeamMd = newTeamMd.replace(/\n+$/, "\n");
   }
 
   // Step 4b: Build new project-guardrails.md by appending, under the matching
@@ -9988,7 +10027,7 @@ function handlePracticesPromote(args: string[]): void {
   for (const [heading, kind] of [["## Mandated", "mandated"], ["## Forbidden", "forbidden"]] as const) {
     for (const rule of rulesToAdd[kind]) {
       try {
-        newGuardrailsMd = appendUnderHeading(newGuardrailsMd, heading, `- ${rule} (affirmed ${today})\n`);
+        newGuardrailsMd = appendUnderHeading(ensureHeading(newGuardrailsMd, heading), heading, `- ${rule} (affirmed ${today})\n`);
         rulesAppended[kind]++;
       } catch (e) {
         fail(`appendUnderHeading failed on ${heading.slice(3)}: ${errorMessage(e)}`);
@@ -10291,9 +10330,25 @@ function handleLookup(args: string[]): void {
       }
       break;
     }
+    case "source-changes": {
+      if (subArgs.length > 1) error("Usage: lookup source-changes [<unit>]");
+      const unit = subArgs[0] ?? null;
+      const pd = resolveProjectDir(projectDir);
+      if (unit !== null) {
+        const unitNameError = validateUnitName(unit);
+        if (unitNameError) error(unitNameError);
+        // A name that is no Unit of this work would be answered from the stage's start.
+        const dag = resolveBoltDag(pd);
+        if (dag.state === "ok" && !dag.units.includes(unit)) {
+          error(`No Unit named ${unit} in this work. Its Units: ${dag.units.join(", ")}.`);
+        }
+      }
+      console.log(JSON.stringify(sourceChangesSinceBuildStart(pd, unit)));
+      break;
+    }
     default:
       error(
-        `Unknown lookup subcommand: ${sub}. Valid: phase-of, next-stage, agent-for, number-of, stages-in-scope, first-in-phase, validate-stage, validate-phase`
+        `Unknown lookup subcommand: ${sub}. Valid: phase-of, next-stage, agent-for, number-of, stages-in-scope, first-in-phase, validate-stage, validate-phase, source-changes`
       );
   }
 }

@@ -34,6 +34,7 @@ import {
   machineTransactionRoot,
   projectPinTargetPath,
   readActiveExecutable,
+  targetTriple,
   windowsUninstallFencePath,
 } from "../../core/tools/aidlc-install-paths.ts";
 import { sha256File, walkFiles } from "../../core/tools/aidlc-distribution.ts";
@@ -1534,6 +1535,65 @@ describe("t244 management lifecycle", () => {
     },
   );
 
+  // A plain update on the release already installed checks the installed binary
+  // against the verified release and compares the runtime with the downloaded
+  // archive, so the binary it would download is never used: the bytes already on
+  // the machine stand in for it when they are the release's, and only the
+  // runtime archive is fetched.
+  test("a plain update on the release already installed fetches its runtime archive and not its binary", async () => {
+    const release = fixture(NEXT_VERSION, { binary: "executable", distributions: ["claude"] });
+    const server = await serveReleaseFixtureForChildren(release);
+    const machine = temp("aidlc-t244-update-current-");
+    const project = temp("aidlc-t244-update-current-project-");
+    mkdirSync(join(project, ".git"));
+    const env = { ...envFor(machine), AIDLC_RELEASE_BASE_URL: server.baseUrl, AIDLC_OFFLINE: "0", NO_PROXY: "127.0.0.1" };
+    const binaryAsset = `/download/v${NEXT_VERSION}/aidlc-${targetTriple()}${process.platform === "win32" ? ".exe" : ""}`;
+    const runtimeAsset = `/download/v${NEXT_VERSION}/aidlc-runtime-${NEXT_VERSION}.tar.gz`;
+    try {
+      const installed = await runAsync(LIFECYCLE, ["update", "--version", NEXT_VERSION, "--from", release], project, env);
+      expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+      const executable = join(machine, "versions", NEXT_VERSION, process.platform === "win32" ? "aidlc.exe" : "aidlc");
+      const bytes = readFileSync(executable);
+      server.clearRequests();
+
+      const current = await runAsync(LIFECYCLE, ["update"], project, env);
+      expect(current.status, current.stdout + current.stderr).toBe(0);
+      expect(current.stdout).toContain(`You're on the latest version of aidlc (${NEXT_VERSION}).`);
+      expect(server.requests).toContain(runtimeAsset);
+      expect(server.requests).not.toContain(binaryAsset);
+      expect(readFileSync(executable).equals(bytes)).toBe(true);
+      expect(readFileSync(join(machine, "active-version"), "utf-8").trim()).toBe(NEXT_VERSION);
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test("an installed binary that is no longer the release's is downloaded, and the update stops as it always did", async () => {
+    const release = fixture(NEXT_VERSION, { binary: "executable", distributions: ["claude"] });
+    const server = await serveReleaseFixtureForChildren(release);
+    const machine = temp("aidlc-t244-update-damaged-");
+    const project = temp("aidlc-t244-update-damaged-project-");
+    mkdirSync(join(project, ".git"));
+    const env = { ...envFor(machine), AIDLC_RELEASE_BASE_URL: server.baseUrl, AIDLC_OFFLINE: "0", NO_PROXY: "127.0.0.1" };
+    const binaryAsset = `/download/v${NEXT_VERSION}/aidlc-${targetTriple()}${process.platform === "win32" ? ".exe" : ""}`;
+    try {
+      const installed = await runAsync(LIFECYCLE, ["update", "--version", NEXT_VERSION, "--from", release], project, env);
+      expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+      const executable = join(machine, "versions", NEXT_VERSION, process.platform === "win32" ? "aidlc.exe" : "aidlc");
+      writeFileSync(executable, Buffer.concat([readFileSync(executable), Buffer.from("\n# changed after install\n")]));
+      server.clearRequests();
+
+      const damaged = await runAsync(LIFECYCLE, ["update"], project, env);
+      expect(damaged.status, damaged.stdout + damaged.stderr).toBe(4);
+      expect(damaged.stdout + damaged.stderr).toContain(
+        `existing ${NEXT_VERSION} binary does not match the verified release`,
+      );
+      expect(server.requests).toContain(binaryAsset);
+    } finally {
+      await server.stop();
+    }
+  });
+
   test("uninstall removes command and versions while preserving machine state and projects", async () => {
     const release = fixture(AIDLC_VERSION, { binary: "executable" });
     const machine = temp("aidlc-t241-uninstall-");
@@ -1649,6 +1709,37 @@ describe("t244 management lifecycle", () => {
     expect(readFileSync(join(project, ".vscode", "settings.json"), "utf-8")).toBe(teamSettings);
     expect(readFileSync(join(project, "keep.txt"), "utf-8")).toBe("project-owned\n");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // Kiro IDE's terminal records are AI-DLC's own files in the install folder
+  // (the shell at each chat start on Windows, a slow reply, its one warning).
+  // Uninstall keeps them with the machine's other answers without calling them
+  // files it did not install; --purge removes them and the emptied folder.
+  for (const purge of [false, true]) {
+    test(`uninstall${purge ? " --purge" : ""} takes Kiro IDE's terminal records as AI-DLC's own`, async () => {
+      const release = fixture(AIDLC_VERSION, { binary: "executable" });
+      const workspace = temp("aidlc-t244-kiro-records-");
+      const machine = join(workspace, "install");
+      const project = join(workspace, "project");
+      mkdirSync(join(project, ".git"), { recursive: true });
+      const env = envFor(machine);
+      const installed = run(LIFECYCLE, ["update", "--version", AIDLC_VERSION, "--from", release], project, env);
+      expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+      const names = ["kiro-ide-terminal-shell", "kiro-ide-terminal-dropped", "kiro-ide-terminal-warned"];
+      const records = names.map((name) => join(machine, name));
+      for (const path of records) writeFileSync(path, "recorded\n");
+      const uninstalled = run(LIFECYCLE, ["uninstall", "--yes", ...(purge ? ["--purge"] : [])], project, env);
+      expect(uninstalled.status, uninstalled.stdout + uninstalled.stderr).toBe(0);
+      const said = uninstalled.stdout + uninstalled.stderr;
+      expect(said).not.toContain(LEFT_HEADING);
+      for (const name of names) expect(said).not.toContain(name);
+      if (purge) {
+        await waitForAbsent([...records, machine]);
+      } else {
+        await waitForAbsent([join(machine, "versions", AIDLC_VERSION)]);
+        for (const path of records) expect(readFileSync(path, "utf-8"), path).toBe("recorded\n");
+      }
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
 
   for (const purge of [false, true]) {
     test(`uninstall${purge ? " --purge" : ""} preserves unowned and changed files within and outside the install`, async () => {

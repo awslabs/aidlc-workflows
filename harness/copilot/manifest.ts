@@ -117,6 +117,9 @@ const manifest: HarnessManifest = {
           // The variant shipped before the block ignored aidlc/.aidlc-request-text/
           // (a request the engine has not read yet).
           "sha256:2091d36da7f7306179da27227857564334f3a455327f365984db6c94a4cc6412",
+          // The variant shipped before the block ignored a Bolt worktree's metadata
+          // (.aidlc/worktree-meta.json, .aidlc/base-source-listing.tsv).
+          "sha256:0ece34fe64acc940324082a0ed97621ff2472ddc0e611e745a6d7388e532fcea",
         ],
       },
     },
@@ -205,6 +208,9 @@ const manifest: HarnessManifest = {
           // The variant whose Guards setters passed the person's words (--person-words);
           // they now name the message the person asked in (--message <id>).
           "sha256:b87a3ec2c39cb24074c6fa37f626e9d150d435d18069fbd0c762fdbd70719c5c",
+          // The variant whose Documentation section and Copilot guide line named this
+          // repository's docs/ folder.
+          "sha256:a885fe6b7137ba16e0c24ce168b30ef5c780fe9991fc2d6bdff10cc15ad83c05",
         ],
       },
     },

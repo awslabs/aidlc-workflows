@@ -270,6 +270,13 @@ approval procedure: run the stage-level learnings ritual only when
 `directive.protocol_modules` lists `learnings`, then the approval gate, and
 report the human's result. This rule applies equally after session resume.
 
+**A check stopped at its limit.** `check` and `finalize` stop the Construction
+Verification Command after 30 minutes. A result whose `detail` says the command
+was stopped before it finished is no verdict on the Unit's code: run the same
+`check` or `finalize` again with `--timeout-ms <milliseconds>` set to a limit the
+command finishes within (`3600000` is an hour), and pass that limit to this
+batch's later `check` and `finalize` calls too.
+
 **Post-finalize source landing.** After every `finalize` call, before `next` or
 the human gate, run `bun {{HARNESS_DIR}}/tools/aidlc-worktree.ts merge --slug
 <that converged result row's bolt_slug> --target <that row's landing_branch>

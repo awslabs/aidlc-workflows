@@ -160,7 +160,7 @@ access grant.
 **Observations:**
 - aidlc-architect-agent has the broadest stage involvement (10 stages across 3 phases).
 - Across the full 14-agent roster, nine agents carry the `judgment` tier, three carry the inheriting `templated` tier, and only the two `balanced` reviewers step down on Claude Code, Codex, and opencode. On Kiro, Cursor, and Copilot all tiers inherit the session model and effort. The matrix above covers the 11 domain-expert agents.
-- aidlc-compliance-agent operates purely in an advisory capacity (4 support stages, no lead stages).
+- aidlc-compliance-agent operates purely in an advisory capacity (4 support stages, no lead stages), so it takes part only when collaborators are on.
 - Six of 11 agents are expected to use Bash for CLI interaction.
 - Three agents are expected to use WebSearch for research tasks.
 

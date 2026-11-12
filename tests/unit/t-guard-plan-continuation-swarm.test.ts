@@ -817,7 +817,9 @@ describe("a parallel batch's writes judged from the parent", () => {
   const blocked = (pd: string) => readAuditShardEvents(pd).filter((row) => row.event === "PLAN_APPROVAL_BLOCKED").length;
   const stoodAside = (pd: string) => readAuditShardEvents(pd).filter((row) =>
     row.event === "GUARD_STOOD_ASIDE" && auditBlockField(row.block, "Guard") === "plan-approval").length;
-  const REFUSAL = "cannot select one approval target";
+  // A change the parallel build does not let through, said as where a change goes through.
+  const REFUSAL = "Code generation cannot start: while the Units are built in parallel, a change goes through only " +
+    "inside one Unit's own prepared worktree, with that Unit's plan as it was approved.";
   // A write seen only in the main checkout waits for the Units' landings, which check it.
   const HELD = "the main checkout changes only by their landings";
 
@@ -879,7 +881,7 @@ describe("a parallel batch's writes judged from the parent", () => {
       );
       expect(held.err).toContain("A change the person asks for in the main checkout can be made once Code Generation is over.");
       expect(held.err).toContain("aidlc-orchestrate.ts next");
-      expect(held.err).not.toContain("ambiguous or stale");
+      expect(held.err).not.toContain("a change goes through only inside one Unit's own prepared worktree");
       expect(held.err).not.toContain("directive kind");
     }
   });
@@ -1241,6 +1243,30 @@ describe("prepare with plan approval off", () => {
     expect(codeGenerationExecutionAllowed(worker, TARGET)).toBe(true);
     expect(readAuditShardEvents(pd).filter((row) => row.event === "PLAN_APPROVAL_RECORDED")).toHaveLength(0);
     expect(readFileSync(join(codeGenerationRecordDir(pd, UNIT), "code-generation-questions.md"), "utf-8")).toBe(questions);
+  });
+
+  // Turned on once the Units are being built, the build goes on: the worker
+  // builds from its delegated record and `next` hands back the batch.
+  test("plan approval turned on after prepare started the Units: the worker still builds, and nothing is asked", () => {
+    const pd = fixture(false, false);
+    const statePath = seededStateFile(pd);
+    writeFileSync(statePath, readFileSync(statePath, "utf-8").replace(
+      "- **Guard Policy**: strict (set by you)\n",
+      "- **Guard Policy**: strict (set by you)\n- **Plan Approval**: off (set by you)\n",
+    ));
+    publish(pd);
+    const directive = { kind: "invoke-swarm", stage: STAGE, units: [UNIT] } as unknown as Parameters<typeof publishPlanApprovalSkip>[1];
+    expect(publishPlanApprovalSkip(pd, directive)).toBe(true);
+    const prepared = prepare(pd);
+    expect(prepared.code, `${prepared.out}\n${prepared.err}`).toBe(0);
+    const worker = child(pd);
+    // The setter, as the agent runs it: the step in hand stays current.
+    succeeded(tool(pd, "aidlc.ts", ["engine", "config", "set", "plan-approval", "on", "--project-dir", pd]));
+    expect(readFileSync(statePath, "utf-8")).toContain("- **Plan Approval**: on (set by a command)");
+    expect(codeGenerationExecutionAllowed(worker, TARGET)).toBe(true);
+    const after = tool(pd, "aidlc-orchestrate.ts", ["next", "--project-dir", pd]);
+    succeeded(after);
+    expect(JSON.parse(after.out)).toMatchObject({ kind: "invoke-swarm", units: [UNIT] });
   });
 
   // Nobody approved this plan, so a change after the engine's record is no

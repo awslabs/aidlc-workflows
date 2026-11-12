@@ -156,7 +156,7 @@ const KIRO_IDE_TRUST_STEP =
 const KIRO_CLI_RESTART =
   "In Kiro CLI, quit Kiro and start `kiro-cli --v3` again in this folder (if Kiro asks whether you " +
   "trust this workspace and you know what is in this folder, choose 'Trust, continue')";
-const KIRO_ACP_CLIENT = "If you drive Kiro from an ACP client, the Kiro IDE guide names what that client must send.";
+const KIRO_ACP_CLIENT = "If you drive Kiro from an ACP client, the AI-DLC guide for Kiro names what that client must send.";
 const KIRO_CLI_ACP_STEP = `${KIRO_CLI_RESTART}. ${KIRO_ACP_CLIENT}`;
 
 // A restarted Kiro CLI is a new chat, where the entry carries the work on, so
@@ -265,7 +265,7 @@ const manifest: HarnessManifest = {
   // 1.1.14 from the Restricted Mode banner, and on 1.2.4 from both the banner
   // and Trust Folder & Continue), so every copy of the step names both.
   // Another agent in the picker did not stop the hooks. What an ACP client
-  // must send to run hooks is in the Kiro IDE guide.
+  // must send to run hooks is in the AI-DLC guide for Kiro.
   hookActivation: {
     recovery: `${KIRO_IDE_TRUST_STEP} ${KIRO_CLI_ACP_RESTART_STEP}`,
     // Says what happened, that the question may come again, and gives the
@@ -357,6 +357,9 @@ const manifest: HarnessManifest = {
           // The variant shipped before the block ignored .kiro/agents/aidlc-scoped-review-*.md
           // (a review's reviewer copy).
           "sha256:f9d49a8c823df8174ea7d8a83209380202e5673b5ee8c1ff6b9cce90bcfd550e",
+          // The variant shipped before the block ignored a Bolt worktree's metadata
+          // (.aidlc/worktree-meta.json, .aidlc/base-source-listing.tsv).
+          "sha256:e7c17271c65f778895fe75352413c03da8a3c37c37bca2b8bcb1c447f4c8b8f3",
         ],
       },
     },
@@ -387,6 +390,8 @@ const manifest: HarnessManifest = {
           "sha256:5f6f076a5a9d8a11e1078f568c9dee091f399d9999fae89e9dffa62d8697b797",
           // The variant shipped before the onboarding waited for the person to invoke AI-DLC.
           "sha256:6de1298dfa4c2b6916f66d372b844faf23481c8f258eedd595c1423dab8e106d",
+          // The variant whose Documentation section named this repository's docs/ folder.
+          "sha256:6d3bf5865f1836575715ea93d0042b9d08bcab918cc9a17a142848fe44e88bc7",
         ],
       },
     },
@@ -410,6 +415,7 @@ const manifest: HarnessManifest = {
   // Authored surfaces. Persona Markdown files are core projections.
   harnessFiles: [
     { src: "skills/aidlc/SKILL.md", dst: "skills/aidlc/SKILL.md" },
+    { src: "skills/aidlc/workflow.md", dst: "skills/aidlc/workflow.md" },
     { src: "skills/aidlc/question-rendering.md", dst: "skills/aidlc/question-rendering.md" },
     { src: "skills/aidlc/composer.md", dst: "skills/aidlc/composer.md" },
     { src: "skills/aidlc/tables.md", dst: "skills/aidlc/tables.md" },

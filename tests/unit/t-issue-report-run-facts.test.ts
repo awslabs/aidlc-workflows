@@ -5,7 +5,7 @@
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { type AuditRow, readHooksHealth, timeWindow } from "../../core/skills/aidlc-issue-report/scripts/lib-audit.ts";
@@ -1005,6 +1005,60 @@ console.log(JSON.stringify({ found: !!s }));`;
   const r = spawnSync(process.execPath, ["-e", code], { encoding: "utf8", env: { ...process.env, HOME: home, USERPROFILE: home } });
   expect([r.status, r.stderr]).toEqual([0, ""]);
   expect(JSON.parse(r.stdout)).toEqual({ found: true });
+});
+
+test("a Kiro IDE chat's approval mode tells Approve for me apart, and a Kiro CLI session's mode is not taken from today's permission files", () => {
+  const home = mkdtempSync(join(tmpdir(), "kiro-modes-"));
+  const kiro = join(home, ".kiro");
+  const project = join(home, "proj");
+  mkdirSync(project);
+  const ws = join(kiro, "sessions", "0123456789abcdef");
+  mkdirSync(join(kiro, "sessions", "cli"), { recursive: true });
+  const sessions: [string, Record<string, unknown>][] = [
+    ["sess_afm", { autopilot: true, approveForMe: true }],
+    ["sess_acc", { autopilot: true, approveForMe: false }],
+    ["sess_sup", { autopilot: false }],
+    // Kiro CLI 3.2.0 writes `autopilot: true` in ask for approval too.
+    ["sess_cli", { autopilot: true }],
+  ];
+  for (const [id, meta] of sessions) {
+    mkdirSync(join(ws, id), { recursive: true });
+    writeFileSync(join(ws, id, "session.json"), JSON.stringify({ workspacePaths: [project], ...meta }));
+    writeFileSync(join(ws, id, "messages.jsonl"), JSON.stringify({ timestamp: at(1), payload: { type: "user", content: `hello from ${id}` } }));
+  }
+  writeFileSync(join(kiro, "sessions", "cli", "sess_cli.history"), "");
+  // The report reads the policy with AI-DLC's own reader, as collect.ts takes it from the install.
+  const code = (withReader: boolean) => `const { kiroV3 } = await import(${JSON.stringify(resolve(import.meta.dir, "../../core/skills/aidlc-issue-report/scripts/lib-transcripts.ts"))});
+const { kiroPoliciesApproveForMe } = await import(${JSON.stringify(resolve(import.meta.dir, "../../core/tools/aidlc-kiro-chat-record.ts"))});
+const s = kiroV3(${JSON.stringify(project)}, 0, ${Date.parse(at(59))}, { prompts: [], refusals: [], errors: [] }, ${withReader ? "kiroPoliciesApproveForMe" : "undefined"});
+console.log(JSON.stringify({ modes: s?.approvalModes, notes: s?.notes.filter((n) => n.includes("approv")) }));`;
+  const read = (withReader = true) => {
+    const r = spawnSync(process.execPath, ["-e", code(withReader)], { encoding: "utf8", env: { ...process.env, HOME: home, USERPROFILE: home, KIRO_HOME: kiro } });
+    expect([r.status, r.stderr]).toEqual([0, ""]);
+    return JSON.parse(r.stdout) as { modes: Record<string, number>; notes: string[] };
+  };
+  const modes = { "approve for me": 1, "autopilot on": 1, "autopilot off": 1 };
+  const unknown = expect.stringContaining("the run's approval mode on Kiro CLI is not known");
+  expect(read()).toEqual({ modes, notes: [unknown, expect.stringContaining("no Kiro CLI permission file for this project listed")] });
+  mkdirSync(join(kiro, "workspace-roots", "0123456789abcdef"), { recursive: true });
+  writeFileSync(join(kiro, "workspace-roots", "0123456789abcdef", "permissions.yaml"), "rules: []\npolicies:\n  - approve-for-me\n");
+  const listed = expect.stringContaining("permission files for this project listed the approve-for-me policy");
+  expect(read()).toEqual({ modes, notes: [unknown, listed] });
+  // The person's own file (all workspaces) counts too.
+  rmSync(join(kiro, "workspace-roots"), { recursive: true });
+  mkdirSync(join(kiro, "settings"), { recursive: true });
+  writeFileSync(join(kiro, "settings", "permissions.yaml"), "policies:\n  - approve-for-me\n");
+  expect(read()).toEqual({ modes, notes: [unknown, listed] });
+  // A file that cannot be parsed says so, unless another file lists the policy.
+  rmSync(join(kiro, "settings"), { recursive: true });
+  mkdirSync(join(kiro, "workspace-roots", "0123456789abcdef"), { recursive: true });
+  writeFileSync(join(kiro, "workspace-roots", "0123456789abcdef", "permissions.json"), "{");
+  expect(read()).toEqual({ modes, notes: [unknown, expect.stringContaining("permission files for this project could not be read")] });
+  mkdirSync(join(kiro, "settings"), { recursive: true });
+  writeFileSync(join(kiro, "settings", "permissions.yaml"), "policies:\n  - approve-for-me\n");
+  expect(read()).toEqual({ modes, notes: [unknown, listed] });
+  // Without AI-DLC's reader from the install, the policy now is not known, and no file is said to be unreadable.
+  expect(read(false)).toEqual({ modes, notes: [unknown, expect.stringContaining("the AI-DLC installed here gave no answer on whether Kiro CLI's permission files")] });
 });
 
 test("the event stream holds the run's calls, AI-DLC commands and replies in order, and stops where this report began", async () => {

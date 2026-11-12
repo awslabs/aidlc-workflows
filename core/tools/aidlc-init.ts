@@ -1321,7 +1321,8 @@ function showModels(
       ? item.agent
       : `${MODEL_GROUPS[item.group].label} (${items.length} agents)`;
     output += `  ${label}: ${item.model ?? "inherit"} / ${item.effort ?? "inherit"}\n`;
-    if (item.group === "reviewing") {
+    // The sentence speaks of the medium baseline: under any other effort it is not so.
+    if (item.group === "reviewing" && item.effort === "medium") {
       output +=
         "    Review-only agents use the measured medium baseline; raising effort trades review time and cost for deeper correctness checking.\n";
     }
@@ -2789,11 +2790,13 @@ function configCompletionMessage(
     const commands = [...new Set(actions.map((action) => action.step ?? action.command))];
     return `${base}\nOutstanding actions: ${commands.join("; ")}`;
   }
+  // The section is the one the person runs, as the setup map names it; the
+  // action's id is the diagnostic's own key and stays off the line.
   return [
     base,
     "Outstanding actions:",
     ...actions.map((action) =>
-      `  ${action.section}/${action.id}: ${action.message} - ${action.step ?? `run \`${action.command}\``}`
+      `  ${action.section}: ${action.message} - ${action.step ?? `run \`${action.command}\``}`
     ),
   ].join("\n");
 }
@@ -9135,11 +9138,14 @@ function renderFirstRunEnding(
     "utf-8",
   )) as { files?: Record<string, string> };
   const count = Object.keys(manifest.files ?? {}).length;
-  // A receipt's detail continues under its opening parenthesis.
+  // A receipt's detail continues under its opening parenthesis. The folders are
+  // the ones the counted files were planned from (planManagedFiles), so Codex's
+  // .agents/ or Copilot's .github/ is named beside the harness folder.
+  const folders = choices.candidate.descriptor.managedDirectories.map((directory) => `${directory}/`);
   process.stdout.write("\n");
   writeMenuRow(
     `  Writing project files ... ${successText("done", process.stdout)}  `,
-    `(${choices.candidate.descriptor.harnessDir}/ and aidlc/, ${count} files)`,
+    `(${plainList(folders)}, ${count} files)`,
   );
   const harness = modelHarness(choices.candidate.stamp.distribution);
   if (choices.preset === "unchanged" && presetsChangeNothing(harness)) {
@@ -9470,6 +9476,10 @@ function firstRunDefaultPreset(distribution: string): FirstRunChoices["preset"] 
   return presetsChangeNothing(modelHarness(distribution)) ? "unchanged" : "balanced";
 }
 
+function firstRunDefaultMcp(distribution: string): FirstRunChoices["mcp"] {
+  return distribution === "claude" ? "defaults" : "none";
+}
+
 function providerForHarness(
   current: FirstRunChoices["provider"],
   distribution: string,
@@ -9493,14 +9503,15 @@ function customizeFirstRun(
     preset: firstRunDefaultPreset(initial.stamp.distribution),
     plugins: "all",
     pluginLabel: "all installed",
-    mcp: initial.stamp.distribution === "claude" ? "defaults" : "none",
+    mcp: firstRunDefaultMcp(initial.stamp.distribution),
     target: "project",
     providerVerified: detection.bedrockReachable === true,
     opencodeDefault: true,
   };
-  // Step 3 records whether the person's pick is that harness's default, so a
-  // later harness change moves only a default preset.
+  // Steps 3 and 5 record whether the person's pick is that harness's default,
+  // so a later harness change moves only a default preset or MCP answer.
   let presetIsDefault = true;
+  let mcpIsDefault = true;
   const editStep = (step: number): void => {
     if (step === 1) {
       process.stdout.write("  Step 1 of 6 - Harness\n");
@@ -9522,14 +9533,12 @@ function customizeFirstRun(
       );
       if (choices.candidate.stamp.distribution !== previousDistribution) {
         choices.kiro = undefined;
-        // The default preset follows the harness; a preset the person chose stays.
+        // A default follows the harness; what the person chose stays.
         if (presetIsDefault) {
           choices.preset = firstRunDefaultPreset(choices.candidate.stamp.distribution);
         }
+        if (mcpIsDefault) choices.mcp = firstRunDefaultMcp(choices.candidate.stamp.distribution);
       }
-      choices.mcp = choices.candidate.stamp.distribution === "claude"
-        ? "defaults"
-        : "none";
       choices.provider = providerForHarness(
         choices.provider,
         choices.candidate.stamp.distribution,
@@ -9693,6 +9702,7 @@ function customizeFirstRun(
         choices.mcp === "defaults" ? 1 : 2,
       );
       choices.mcp = selected === 1 ? "defaults" : "none";
+      mcpIsDefault = choices.mcp === firstRunDefaultMcp(choices.candidate.stamp.distribution);
       process.stdout.write(`  MCP servers ${selected === 1 ? "on" : "off"}.\n\n`);
       return;
     }
@@ -9884,7 +9894,7 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
   writeMenuRow(
     recommended,
     `${
-      candidate.stamp.distribution === "claude" ? "MCP servers on, " : ""
+      firstRunDefaultMcp(candidate.stamp.distribution) === "defaults" ? "MCP servers on, " : ""
     }all plugins, ${
       harnessOwnsModelAccess(modelHarness(candidate.stamp.distribution))
         ? `no provider settings; model access comes with ${candidate.descriptor.productName}`
@@ -9936,7 +9946,7 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
       preset: firstRunDefaultPreset(candidate.stamp.distribution),
       plugins: "all",
       pluginLabel: "all installed",
-      mcp: candidate.stamp.distribution === "claude" ? "defaults" : "none",
+      mcp: firstRunDefaultMcp(candidate.stamp.distribution),
       target: "project",
       providerVerified: detection.bedrockReachable === true,
       opencodeDefault: true,

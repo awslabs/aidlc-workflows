@@ -26,6 +26,7 @@ subagent for one advisory pass before the gate unless reviews are set to
 - Intent Capture, Scope Definition and Approval & Handoff are ALWAYS stages and
   the other four are CONDITIONAL. ALWAYS holds within a scope that includes the
   stage: mvp runs no Approval & Handoff, and poc runs only Intent Capture.
+- Support agents take part when collaborators are on (the `collaborators` setting, shipped on only for `enterprise`; `/aidlc --collaborators on` turns it on for one piece of work). With collaborators off, the engine hands each stage an empty `support_agents` list and the lead runs alone.
 
 **Scope-driven stage inclusion:**
 

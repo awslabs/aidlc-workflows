@@ -128,6 +128,8 @@ const APPROVALS_LINE = "Each team will approve its Unit after every stage. Do yo
   "end of each Unit instead? I'd keep after every stage, so a wrong turn is caught at the stage where it happens.";
 const RHYTHM_STAYS_PER_STAGE = "The Units are already being approved after every stage, so that stays for this " +
   "work. Carry on with `/aidlc`.";
+const OWNERSHIP_STAYS = "The teams are already building their Units, so they keep them for this work. Carry on " +
+  "with `/aidlc`.";
 
 const tempDirs: string[] = [];
 afterEach(() => {
@@ -1163,6 +1165,49 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     expect(auditBlockField(row("STAGE_REVISING"), "Feedback")).toBe(typed);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // A teammate's Unit documents are in the checkout (the team's work arrives
+  // by git): the decisions they leave open, and their checks, are that team's
+  // to decide. One Unit's gate, opened and re-opened, records its own, and its
+  // approval accepts its own open decisions only.
+  test("a team Unit's gate records only its own open decisions and checks, and its approval accepts only those", () => {
+    const proj = seedProject({ ownership: "team" });
+    const decisions = (id: string): string =>
+      `\n\`\`\`aidlc-decisions\ndecisions:\n  - id: ${id}\n    decision: Left to the person\n    owner: person\n    blocking: false\n\`\`\`\n`;
+    const spec = (unit: string): string =>
+      join(seededRecordDir(proj), "construction", unit, "functional-design", artifactFilename("functional-spec"));
+    coverUnit(proj, "beta", "functional-design");
+    writeFileSync(spec("beta"), `# functional-spec for beta\n${decisions("BETA-D1")}`);
+    const build = (): void => {
+      const body = runNext(proj);
+      expect(body).toMatchObject({ kind: "run-stage", stage: "functional-design", unit: "alpha", gate: false });
+      expect(runState(proj, ["unit", "start", "--stage", "functional-design", "--unit", "alpha"]).rc).toBe(0);
+      coverUnit(proj, "alpha", "functional-design");
+      writeFileSync(spec("alpha"), `# functional-spec for alpha\n${decisions("ALPHA-D1")}`);
+      expect(runState(proj, ["unit", "complete", "--stage", "functional-design", "--unit", "alpha"]).rc).toBe(0);
+      logReviewReady(proj, "functional-design", "alpha", String(body.reviewer));
+    };
+    build();
+    const args = ["--stage", "functional-design", "--unit", "alpha"];
+    expect(runReport(proj, [...args, "--result", "awaiting-approval"]).kind).toBe("print");
+    expect(runReport(proj, [...args, "--result", "rejected", "--user-input", "Request Changes", "--reason", "Rename it"]).kind)
+      .toBe("print");
+    build();
+    expect(runReport(proj, [...args, "--result", "revised"]).kind).toBe("print");
+    expect(runReport(proj, [...args, "--result", "approved", "--user-input", "Approve"])).toMatchObject({ kind: "done" });
+    const alphaRows = (event: string) => readAuditShardEvents(proj).filter((entry) =>
+      entry.event === event && auditBlockField(entry.block, "Unit") === "alpha");
+    const opened = alphaRows("STAGE_AWAITING_APPROVAL");
+    expect(opened).toHaveLength(2);
+    for (const open of opened) {
+      expect(auditBlockField(open.block, "Open Decisions")).toBe("1");
+      expect(auditBlockField(open.block, "Decisions")).toBe("ALPHA-D1");
+      const checks = auditBlockField(open.block, "Sensor State") ?? "";
+      expect(checks).toContain("/construction/alpha/functional-design/");
+      expect(checks).not.toContain("/construction/beta/");
+    }
+    expect(auditBlockField(alphaRows("GATE_APPROVED").at(-1)!.block, "Decisions Accepted Open")).toBe("ALPHA-D1");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   // The count Accept as-is waits on (#1083), at a team Unit's gate: the reply
   // that shows the gate again carries this Unit's own change requests, never
   // another Unit's at the same stage.
@@ -1377,6 +1422,8 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
   test("a Unit's Fix findings pick at a blocking check floors only that Unit's review receipt", () => {
     const proj = seedProject({ ownership: "team" });
     for (const unit of ["alpha", "beta"]) {
+      // A team Unit's records hang off its start: each teammate's own.
+      appendAuditEntry("UNIT_STARTED", { Stage: "functional-design", Unit: unit, "Run floor": "unstarted#0" }, proj);
       coverUnit(proj, unit, "functional-design");
       logReviewReady(proj, "functional-design", unit, "aidlc-architecture-reviewer-agent");
     }
@@ -1548,9 +1595,7 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     );
     const frozenOwnership = runState(proj, ["set-unit-ownership", "solo"]);
     expect(frozenOwnership.rc).not.toBe(0);
-    expect(frozenOwnership.out).toContain(
-      "frozen after team Unit activity in the current workflow attempt",
-    );
+    expect(frozenOwnership.out).toContain(OWNERSHIP_STAYS);
     // A started Unit routes the same under either rhythm; its first gate
     // fixes the rhythm.
     expect(runState(proj, ["set-unit-gate-rhythm", "per-stage"]).rc).toBe(0);
@@ -1658,6 +1703,40 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     );
     expect(runState(proj, ["set-unit-gate-rhythm", "per-stage"]).rc).toBe(0);
   });
+
+  // Going back to change the Unit plan leaves each Unit's work with its team,
+  // so the teams' work before the jump still holds both settings; a new
+  // workflow starts over.
+  test("a jump back that keeps the teams' Unit work holds ownership and the rhythm as before it", () => {
+    const proj = seedProject({ ownership: "team" });
+    settleBody(proj, runNext(proj));
+    appendAuditEntry(
+      "STAGE_AWAITING_APPROVAL",
+      { Stage: "functional-design", Unit: "alpha", "Gate Scope": "per-stage", "Gate Stages": "functional-design" },
+      proj,
+    );
+    const jump = spawnSync(BUN, [ORCH, "next", "--stage", "units-generation", "--project-dir", proj], {
+      env: ENV,
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(jump.status, `${jump.stdout}${jump.stderr}`).toBe(0);
+    expect(readAllAuditShards(proj)).toContain("**Unit Work**: kept");
+    const before = state(proj);
+    expect(before).toContain("## Unit Progress");
+
+    const solo = runState(proj, ["set-unit-ownership", "solo"]);
+    expect(solo.rc, solo.out).not.toBe(0);
+    expect(solo.out).toContain(OWNERSHIP_STAYS);
+    const rhythm = runState(proj, ["set-unit-gate-rhythm", "unit-end"]);
+    expect(rhythm.rc, rhythm.out).not.toBe(0);
+    expect(rhythm.out).toContain(RHYTHM_STAYS_PER_STAGE);
+    expect(state(proj)).toBe(before);
+
+    appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature" }, proj);
+    expect(runState(proj, ["set-unit-gate-rhythm", "unit-end"]).rc).toBe(0);
+    expect(runState(proj, ["set-unit-ownership", "solo"]).rc).toBe(0);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a switch after a Unit started and before its first gate takes effect at once, both ways", () => {
     const toEnd = seedProject({ ownership: "team" });

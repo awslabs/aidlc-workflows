@@ -29,6 +29,7 @@ import {
   seedStateFile,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
+import { readConductorSurface } from "../harness/conductor-skill.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -220,7 +221,7 @@ describe("t-collaborators-cli the agent is told how to switch collaborators", ()
   test.each(["claude", "codex", "copilot", "cursor", "kiro-ide", "kiro", "opencode"])(
     "%s: asking in plain chat to bring collaborators in or go lead-only is carried out for the person",
     (harness) => {
-      const skill = readFileSync(join(import.meta.dir, "..", "..", "harness", harness, "skills", "aidlc", "SKILL.md"), "utf-8");
+      const skill = readConductorSurface(join("harness", harness, "skills", "aidlc", "SKILL.md"));
       const rule = skill.split("\n").find((line) => line.startsWith("**Collaborators in plain chat.**"));
       expect(rule, harness).toBeDefined();
       expect(rule).toContain("engine config set collaborators on");

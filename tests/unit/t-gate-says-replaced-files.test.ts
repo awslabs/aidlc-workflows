@@ -211,6 +211,25 @@ describe("t-gate-says-replaced-files", () => {
     expect(line).not.toContain("config.yaml");
   });
 
+  test("brownfield: ES modules, stylesheets, F#, Razor, Gradle and Windows scripts are read as code by name and not named", () => {
+    const code: Record<string, string> = {
+      "src/app.mjs": "export const app = 1;\n",
+      "styles/site.scss": "$c: red;\n",
+      "Program.fs": "printfn \"hi\"\n",
+      "Views/Index.cshtml": "<p>hi</p>\n",
+      "build.gradle": "plugins {}\n",
+      "run.cmd": "@echo off\n",
+    };
+    const proj = atBuild({ type: "Brownfield", git: true, brought: { "README.md": README, ...code } });
+    write(proj, {
+      "README.md": "# Replaced\n",
+      ...Object.fromEntries(Object.entries(code).map(([path, text]) => [path, `${text}// changed\n`])),
+    });
+    const line = said(openGate(proj));
+    expect(line).toContain("The build changed README.md, a file you had before this work started.");
+    for (const path of Object.keys(code)) expect(line).not.toContain(path);
+  });
+
   test("the person's AGENTS.md rewritten by the build is named", () => {
     const proj = atBuild({ brought: { "AGENTS.md": "# Our team's rules\n" } });
     write(proj, { "AGENTS.md": "# Generated\n" });

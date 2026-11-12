@@ -315,10 +315,21 @@ export function verifyReleaseProvenance(
   });
   if (result.exitCode !== 0) {
     const stderr = Buffer.from(result.stderr ?? new Uint8Array()).toString("utf-8").trim();
+    // Name what the release was checked against: a release published from
+    // another repository fails here with only gh's issuer line otherwise.
+    // The hint leads with the safe step, because a release that was changed
+    // fails here too and must not be told only the setting that moves the
+    // check. Someone who set AIDLC_RELEASE_REPOSITORY needs no reminder of it.
+    const hint = process.env.AIDLC_RELEASE_REPOSITORY === undefined
+      ? `. Get the release from ${trust.repository}. If you meant to use a ` +
+        "release from another repository, set " +
+        "AIDLC_RELEASE_REPOSITORY=<owner>/<name> where aidlc runs."
+      : "";
     throw new Error(
-      `release provenance verification failed${
-        stderr ? `: ${stderr.split(/\r?\n/)[0]}` : ""
-      }`,
+      `release provenance verification failed against ${trust.repository} ` +
+        `(signer workflow ${trust.workflow})${
+          stderr ? `: ${stderr.split(/\r?\n/)[0]}` : ""
+        }${hint}`,
     );
   }
   return "verified";
@@ -849,10 +860,30 @@ export async function fetchReleaseMetadata(options: {
   }
 }
 
+// A file already on this machine whose bytes are a release asset's (size and
+// sha256) is written into the release folder in place of downloading it; the
+// folder is then verified as a downloaded one is. One read, hashed and written
+// as read, so the bytes checked are the bytes kept. Anything else downloads.
+function assetFromMachine(local: () => string | null, asset: ReleaseAsset, destination: string): boolean {
+  try {
+    const source = local();
+    if (source === null || statSync(source).size !== asset.bytes) return false;
+    const bytes = readFileSync(source);
+    if (bytes.byteLength !== asset.bytes) return false;
+    if (createHash("sha256").update(bytes).digest("hex") !== asset.sha256) return false;
+    writeFileSync(destination, bytes);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function acquireRelease(options: {
   version?: string;
   from?: string;
   names?: readonly string[] | ((manifest: ReleaseManifest) => readonly string[]);
+  /** A file on this machine that may already hold an asset's bytes, or null. */
+  onMachine?: (manifest: ReleaseManifest, name: string) => string | null;
   offline?: boolean;
   baseUrl?: string;
   caBundle?: string;
@@ -908,6 +939,8 @@ export async function acquireRelease(options: {
       if (releasedChecksums.get(asset.name) !== asset.sha256) {
         throw new Error(`${asset.name}: released checksum does not match version.json`);
       }
+      const local = () => options.onMachine?.(manifest, asset.name) ?? null;
+      if (assetFromMachine(local, asset, join(temporary, asset.name))) continue;
       await download(
         releaseUrl(
           settings.baseUrl ||

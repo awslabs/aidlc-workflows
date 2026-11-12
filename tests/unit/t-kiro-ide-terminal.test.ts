@@ -11,7 +11,9 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { readConductorSurface } from "../harness/conductor-skill.ts";
 import { cleanupTestProject, REPO_ROOT } from "../harness/fixtures.ts";
+import { windowsUninstallFencePath } from "../../core/tools/aidlc-install-paths.ts";
 import {
   KIRO_TERMINAL_QUESTION,
   kiroIdeTerminalAsk,
@@ -299,7 +301,7 @@ describe("config trust and doctor", () => {
 
 describe("what the agent reads", () => {
   test("Command Prompt's constant exit code -1 is not read as an untrusted folder", () => {
-    const skill = readFileSync(join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "skills", "aidlc", "SKILL.md"), "utf-8");
+    const skill = readConductorSurface(join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "skills", "aidlc", "SKILL.md"));
     expect(skill).toContain(
       "**When a result shows nothing the command printed, not its reply and not an `AI-DLC reply:` line, and ends with " +
         "exit code -1**, Kiro has not been allowed to run commands in this folder yet.",
@@ -312,7 +314,7 @@ describe("what the agent reads", () => {
   // them, or while Kiro's prompt to allow them waited for hours; the agent read it as a hung command
   // and the skill's one -1 rule sent it to the trust step.
   test("a -1 on a project command after AI-DLC's own commands ran is a declined or unanswered approval, not an untrusted folder", () => {
-    const skill = readFileSync(join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "skills", "aidlc", "SKILL.md"), "utf-8");
+    const skill = readConductorSurface(join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "skills", "aidlc", "SKILL.md"));
     expect(skill).toContain(
       "After AI-DLC's own commands have run in this chat, such a result on one of the project's commands (a build, a test, " +
         "a probe) means Kiro did not run that command: the person declined it, or has not answered Kiro's prompt to allow it yet. " +
@@ -331,7 +333,7 @@ describe("what the agent reads", () => {
   // one sentence naming lock files as advice and went looking for them, and the
   // `next` exception fed a retry spiral on replies the terminal had dropped.
   test("after a timed-out command the next step is one short read-only command, never the same command again; no lock file and no rerun is named", () => {
-    const skill = readFileSync(join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "skills", "aidlc", "SKILL.md"), "utf-8");
+    const skill = readConductorSurface(join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "skills", "aidlc", "SKILL.md"));
     expect(skill).toContain(
       "**When a command comes back with `Command timed out`**, run one short read-only command next (`bun --version` is one) " +
         "to see whether the terminal answers. Never run the timed-out command again to find out: its outcome is unknown, " +
@@ -348,7 +350,7 @@ describe("what the agent reads", () => {
   // Live on Windows (Kiro IDE 1.4.86, no shell integration): a long reply came back cut off after the pointer and the
   // agent went on from the cut-off part; another ended at the pointer and the agent went on without reading the file.
   test("a result that ends at an `AI-DLC reply:` line, or is cut off after it, is read from that file, and the command is not run again", () => {
-    const skill = readFileSync(join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "skills", "aidlc", "SKILL.md"), "utf-8");
+    const skill = readConductorSurface(join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "skills", "aidlc", "SKILL.md"));
     expect(skill).toContain(
       "**When a result ends at an `AI-DLC reply:` line, or the reply after that line is cut off (a JSON that does not close, " +
         "a list or a sentence that stops mid-way)**, take the next step from the file that line names, not from the result: " +
@@ -485,6 +487,24 @@ describe("the warning once, at the first slow reply, for a person who kept Comma
       noteSlowReply(1500, process.env);
       expect(existsSync(dropped(mac))).toBe(false);
     });
+  });
+
+  // The uninstall run is itself a slow reply in that terminal. Once it has
+  // scheduled the Windows cleanup, which plans the dropped note with its
+  // contents, a fresh note at its exit would stop the cleanup as a changed file.
+  test("a slow reply notes nothing while an uninstall is scheduled", () => {
+    for (const before of [null, "2026-11-01T00:00:00.000Z\n"]) {
+      const m = machine(CMD_WITH_COMMENTS);
+      withEnv(inTerminal(m), () => {
+        recordKiroTerminalAnswer("kept");
+        if (before !== null) writeFileSync(dropped(m), before);
+        mkdirSync(join(windowsUninstallFencePath(), ".."), { recursive: true });
+        writeFileSync(windowsUninstallFencePath(), "{}\n");
+        noteSlowReply(1500, process.env);
+        if (before === null) expect(existsSync(dropped(m))).toBe(false);
+        else expect(readFileSync(dropped(m), "utf-8")).toBe(before);
+      });
+    }
   });
 
   test("the chat's hook records which shell the running Kiro has, and the engine's own commands go by that record", () => {
@@ -917,7 +937,7 @@ describe("a PowerShell terminal whose shell integration did not run", () => {
   });
 
   test("the agent reads an empty -1 there as cut off, not as trust or a declined command, and names the check once", () => {
-    const skill = readFileSync(join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "skills", "aidlc", "SKILL.md"), "utf-8");
+    const skill = readConductorSurface(join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "skills", "aidlc", "SKILL.md"));
     expect(skill).toContain(
       "When an `AI-DLC reply:` line in this chat said Kiro's terminal here runs without its shell integration, every command " +
         "ends with exit code -1 in this terminal whatever its outcome (read a result that shows output by what it printed, " +

@@ -163,6 +163,12 @@ const manifest: HarnessManifest = {
           // The variant shipped before the block ignored aidlc/.aidlc-request-text/
           // (a request the engine has not read yet).
           "sha256:99b4560aa1bd95f26077eb69a0c6c2a40f81146a212e70d876c27bb84f2b1789",
+          // The variant shipped before the block ignored a Bolt worktree's metadata
+          // (.aidlc/worktree-meta.json, .aidlc/base-source-listing.tsv).
+          "sha256:6df8b41c1c9011d8b6d386d389f96bbfa27812386f434103c260bf58641d6b5d",
+          // The variant shipped before the block ignored aidlc/.aidlc-forwarding-latch
+          // (the name earlier releases wrote the hook's forwarding latch under).
+          "sha256:91f5070ac1b7f2effcf608447a67261ab00dd92495385bf2277b53ca1723c6f0",
         ],
       },
     },
@@ -193,6 +199,8 @@ const manifest: HarnessManifest = {
           "sha256:c8777a03505f11dcbb4fb339fef1a8072d9d2500ce401b69a06073b523ea2c67",
           // The variant shipped before the onboarding waited for the person to invoke AI-DLC.
           "sha256:6de1298dfa4c2b6916f66d372b844faf23481c8f258eedd595c1423dab8e106d",
+          // The variant whose Documentation section named this repository's docs/ folder.
+          "sha256:6d3bf5865f1836575715ea93d0042b9d08bcab918cc9a17a142848fe44e88bc7",
         ],
       },
     },

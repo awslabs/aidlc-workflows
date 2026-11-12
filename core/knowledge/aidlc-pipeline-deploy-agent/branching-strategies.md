@@ -169,7 +169,7 @@ release/v1.0 ┴──── (frozen for stabilisation) ──────►
 When dispatched for Release Branches:
 
 1. Read the active space's `## Way of Working`. Look for the release-branch pattern (`release/vX.Y` is the convention).
-2. Determine which line the Bolt belongs to from the Bolt's metadata (the orchestrator passes a `target_line: main | release/vX.Y` hint). Default to `main` when ambiguous.
+2. Determine which line the Bolt belongs to from the Bolt's metadata. Default to `main` when ambiguous.
 3. **Create**: `{{INVOKE}} engine worktree create --slug <bolt-slug> --base <line>`.
 4. **Merge**: caller on `<line>` at the main checkout. `{{INVOKE}} engine worktree merge --slug <bolt-slug> --target <line> --strategy merge`.
 5. If the Bolt was a release-branch fix, include `notes: "consider cherry-pick to main"` in the response — the operator handles the cross-merge.
@@ -221,7 +221,7 @@ When dispatched for Monorepo:
 
 ## Response contract
 
-When the orchestrator dispatches aidlc-pipeline-deploy-agent for a worktree create or merge, the agent invokes `aidlc-worktree` directly and reports the JSON envelope below back to the orchestrator. SKILL.md Step 0.5 / Step 6.75 then call `aidlc-worktree verify` as a deterministic backstop confirming the audit event landed.
+When the orchestrator dispatches aidlc-pipeline-deploy-agent for a worktree create or merge, the agent invokes `aidlc-worktree` directly and reports the JSON envelope below back to the orchestrator.
 
 ### Create response (success)
 
@@ -307,7 +307,7 @@ is preserved. Combine both sides in each listed file so each Unit keeps what its
 plan asked for, `git add` them and run the same merge again: it finishes the
 landing, records the combined files under `Landed changes` and returns one
 notice naming them. Run before they are combined, it returns this response
-again. A rebase landing's conflict is in the worktree, and its `detail` says so. See `aidlc-common/protocols/stage-protocol-construction.md` § "Halt-and-ask on failure" and `skills/aidlc/SKILL.md` § "Halt-and-ask failure handling" for the full prompt shape and preservation invariant.
+again. A rebase landing's conflict is in the worktree, and its `detail` says so. See `aidlc-common/protocols/stage-protocol-construction.md` § "Halt-and-ask on failure" for the full prompt shape and preservation invariant.
 
 ### Discard response
 
@@ -507,9 +507,7 @@ owner's record-directory name and space.
 
 ## How AIDLC reads strategy from team practices
 
-The dispatch protocol described in this section is implemented by **SKILL.md Step 0** (worktree create) and **Step 6.5** (worktree merge). `aidlc-bolt complete --merge` orchestrates around the dispatch (forkState merge-back, forkAudit merge-back) but does not call `aidlc-worktree merge` directly — the dispatch lives in SKILL.md prose.
-
-When a Bolt starts (Step 0) or completes (Step 6.5), the orchestrator dispatches a Task call to **aidlc-pipeline-deploy-agent** with two inputs:
+When a Bolt starts or completes, the orchestrator dispatches a Task call to **aidlc-pipeline-deploy-agent** with two inputs:
 
 1. The resolved `## Way of Working` statement from `aidlc/spaces/<active-space>/memory/{project,team,org}.md` (fallback chain in `shared/rules-reading.md`).
 2. The Bolt's metadata (slug, source branch, optional target-line hint for release-branch teams).

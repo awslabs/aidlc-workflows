@@ -1197,6 +1197,52 @@ describe("t299 first-run setup wizard", () => {
     expect(result.stdout).toContain("Nothing written.");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("an MCP answer stays when step 1 is reopened and the harness kept", () => {
+    const result = runWizard(
+      `${["2", "", "", "", "", "2", "", "1", "", ""].join("\n")}\n`,
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain("MCP [1]:");
+    const last = result.stdout.slice(result.stdout.lastIndexOf("Your choices"));
+    expect(last).toContain("1. Harness      Claude Code");
+    expect(last).toContain("5. MCP          off");
+    expect(result.stdout).toContain("Setup complete.");
+    expect(existsSync(join(result.project, ".mcp.json"))).toBe(false);
+    expect(JSON.parse(
+      readFileSync(join(result.project, ".claude", "tools", "data", "aidlc-manifest.json"), "utf-8"),
+    ).mcpMode).toBe("none");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("an MCP answer the person picked stays when the harness changes and changes back", () => {
+    const result = runWizard(
+      `${["2", "", "", "", "", "2", "", "1", "4", "1", "1", ""].join("\n")}\n`,
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    const summaries = result.stdout.split("Your choices").slice(1);
+    expect(summaries.find((summary) => summary.includes("1. Harness      Cursor")))
+      .toContain("5. MCP          off");
+    const last = summaries.at(-1) ?? "";
+    expect(last).toContain("1. Harness      Claude Code");
+    expect(last).toContain("5. MCP          off");
+    expect(result.stdout).toContain("Setup complete.");
+    expect(existsSync(join(result.project, ".mcp.json"))).toBe(false);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("the first pass offers each harness's MCP default, and a default follows a harness change", () => {
+    const result = runWizard(
+      `${["2", "4", "", "", "", "", "1", "1", "n"].join("\n")}\n`,
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain("MCP [2]:");
+    const summaries = result.stdout.split("Your choices").slice(1);
+    expect(summaries).toHaveLength(2);
+    expect(summaries[0]).toContain("1. Harness      Cursor");
+    expect(summaries[0]).toContain("5. MCP          off");
+    expect(summaries[1]).toContain("1. Harness      Claude Code");
+    expect(summaries[1]).toContain("5. MCP          on");
+    expect(result.stdout).toContain("Nothing written.");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("review accepts a step number, re-enters it, then applies", () => {
     const result = runWizard(
       `${[
@@ -1981,6 +2027,22 @@ describe("t299 first-run setup wizard", () => {
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
+  // Where setup says it wrote its files: the folders it manages, as the setup
+  // ending names them. Every file the install record counts sits in one of them
+  // (aidlc/ holds the project's own data, which the record does not count), so a
+  // folder a harness gains later fails here until the line names it.
+  const WRITTEN_FOLDERS: Record<string, string[]> = {
+    claude: [".claude", "aidlc"],
+    codex: [".agents", ".codex", "aidlc"],
+    copilot: [".aidlc", ".github", "aidlc"],
+    cursor: [".cursor", "aidlc"],
+    kiro: [".kiro", "aidlc"],
+    opencode: [".aidlc", ".opencode", "aidlc"],
+  };
+  const HARNESS_FOLDER: Record<string, string> = {
+    claude: ".claude", codex: ".codex", copilot: ".aidlc", cursor: ".cursor", kiro: ".kiro", opencode: ".aidlc",
+  };
+
   // Kiro IDE's first-run steps live in its own manifest; every other harness
   // keeps the open-then-/aidlc pair.
   for (
@@ -2010,6 +2072,19 @@ describe("t299 first-run setup wizard", () => {
       for (const kiroIdeWord of ["Reload Window", "Restricted Mode", "agent picker", "Kiro IDE"]) {
         expect(result.stdout).not.toContain(kiroIdeWord);
       }
+      const record = JSON.parse(readFileSync(
+        join(result.project, HARNESS_FOLDER[harness], "tools", "data", "aidlc-manifest.json"),
+        "utf-8",
+      )) as { files: Record<string, string> };
+      const counted = Object.keys(record.files);
+      for (const folder of new Set(counted.map((path) => path.split("/")[0]))) {
+        expect(WRITTEN_FOLDERS[harness], folder).toContain(folder);
+      }
+      const folders = WRITTEN_FOLDERS[harness].map((folder) => `${folder}/`);
+      expect(result.stdout).toContain(
+        `  Writing project files ... done  (${folders.slice(0, -1).join(", ")} and ${folders.at(-1)}, ` +
+          `${counted.length} files)\n`,
+      );
       // Agents on Cursor and Copilot keep the session's model and effort, so
       // the recommended defaults record no preset there.
       const settings = join(result.project, "aidlc.settings.json");
