@@ -549,7 +549,7 @@ export function parseDispatcherPluginCommand(
   }
   return {
     kind: "error",
-    message: `\`${aidlcInvocation()} engine plugin ${verb}\` is not a plugin command; the plugin commands are select, list, sync, validate, build and test`,
+    message: `\`${aidlcInvocation()} engine plugin ${verb}\` is not a plugin command; the plugin commands are select, list, sync, validate and build`,
   };
 }
 

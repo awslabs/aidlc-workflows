@@ -3733,7 +3733,7 @@ describe("t230 dispatcher help and errors", () => {
     const invalid = viaDispatcher(["engine", "plugin", "remove"], REPO_ROOT);
     expect(invalid.exitCode).toBe(1);
     expect(invalid.stderr.toString("utf-8")).toBe(
-      "`bun .claude/tools/aidlc.ts engine plugin remove` is not a plugin command; the plugin commands are select, list, sync, validate, build and test\n",
+      "`bun .claude/tools/aidlc.ts engine plugin remove` is not a plugin command; the plugin commands are select, list, sync, validate and build\n",
     );
   });
 

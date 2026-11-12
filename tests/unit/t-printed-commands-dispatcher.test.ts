@@ -183,7 +183,7 @@ describe("the person's next step names a command they can take", () => {
   test("a plugin or knowledge verb that does not exist names the ones that do", () => {
     const plugin = resolveAction(["engine", "plugin", "frob"]);
     expect(plugin.type === "error" ? plugin.message : "").toBe(
-      `\`${INVOKE} engine plugin frob\` is not a plugin command; the plugin commands are select, list, sync, validate, build and test\n`,
+      `\`${INVOKE} engine plugin frob\` is not a plugin command; the plugin commands are select, list, sync, validate and build\n`,
     );
     const help = resolveAction(["engine", "plugin"]);
     expect(help.type).toBe("noun-help");
