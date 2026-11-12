@@ -417,6 +417,36 @@ describe("the plan's share fits the team's own git: a protected main, a branch o
     expect(isShare(next(home.dir))).toBe(false);
   });
 
+  // The GitHub re-run (case 12), once the lead's records branch was recorded:
+  // the share question named it, and its Not now still said main.
+  test("a lead whose records branch is recorded: every line of the share question names it, Not now too, and Share pushes it", () => {
+    const home = makeHome();
+    git(home.dir, ["switch", "-q", "-c", "team-records"]);
+    git(home.dir, ["push", "-q", "-u", "origin", "team-records"]);
+    const recorded = run(STATE, ["practices-branch", "--file", "team.md", "--branch", "team-records"], home.dir);
+    expect(recorded.status, recorded.out).toBe(0);
+    chooseTeams(home.dir);
+    const before = git(home.remote, ["rev-parse", "main"]);
+    const offer = next(home.dir) as Record<string, unknown> & Offer;
+    expect(isShare(offer), JSON.stringify(offer).slice(0, 600)).toBe(true);
+    for (const line of [offer.question, ...offer.choices.map((choice) => choice.detail ?? "")]) expect(line).not.toMatch(/\bmain\b/);
+    expect(offer.choices.find((choice) => choice.label === "Not now")?.detail)
+      .toBe("Nothing is pushed; a team's clone sees the plan once team-records is pushed.");
+    const shared = run(UNIT, ["share", "--plan"], home.dir);
+    expect(shared.json, shared.out).toMatchObject({ shared: true, branch: "team-records" });
+    expect(git(home.remote, ["rev-parse", "team-records"])).toBe(git(home.dir, ["rev-parse", "HEAD"]));
+    expect(git(home.remote, ["rev-parse", "main"])).toBe(before);
+  });
+
+  test("a lead who named no branch: Not now still says the plan reaches the teams once main is pushed", () => {
+    const home = makeHome();
+    chooseTeams(home.dir);
+    const offer = next(home.dir) as Record<string, unknown> & Offer;
+    expect(isShare(offer), JSON.stringify(offer).slice(0, 600)).toBe(true);
+    expect(offer.choices.find((choice) => choice.label === "Not now")?.detail)
+      .toBe("Nothing is pushed; a team's clone sees the plan once main is pushed.");
+  });
+
   test("a file the person staged stays theirs, staged, and the share counts what it committed", () => {
     const home = makeHome();
     chooseTeams(home.dir);

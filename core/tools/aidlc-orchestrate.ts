@@ -6066,7 +6066,7 @@ function buildOutShareOffer(projectDir: string): AskDirective | null {
         command: `${aidlcInvocation()} unit share --plan`,
       },
     ],
-    notNow: { label: "Not now", detail: "Nothing is pushed; a team's clone sees the plan once main is pushed." },
+    notNow: { label: "Not now", detail: `Nothing is pushed; a team's clone sees the plan once ${target.branch} is pushed.` },
   });
 }
 
