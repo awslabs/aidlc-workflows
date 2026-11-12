@@ -230,10 +230,7 @@ by `aidlc engine workspace codekb --repo <repo>`:
 
 ### Approval Gate
 
-Standard 2-option gate: **Approve** / **Request Changes**. The stage file
-labels Approve "continue to Requirements Analysis"; the engine routes to the
-next stage the plan runs, which is Practices Discovery in the scopes that
-include it.
+Standard 2-option gate: **Approve** / **Request Changes**.
 
 ### Notes
 
@@ -463,10 +460,7 @@ large scope with significant unknowns.
    - **Scope**: Single component, multi-component, system-wide
    - **Complexity**: Simple, standard, complex
 
-3. **Determine Depth** -- Based on complexity assessment:
-   - **Minimal**: Clear request, narrow scope, well-understood domain
-   - **Standard**: Moderate scope, some unknowns, multiple stakeholders
-   - **Comprehensive**: Large scope, significant unknowns, complex domain
+3. **Determine Depth**
 
 4. **Assess Current Requirements** -- Extract and organize what is already
    known from the user's input: explicit functional requirements, implied
