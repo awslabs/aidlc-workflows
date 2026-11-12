@@ -368,6 +368,7 @@ function handleWrite(): string[] {
   // Prune stale stage-runner dirs: old per-init runners and runners for stages
   // now absent from the filtered graph because their plugin is disabled.
   const legacyBareSlugs = pluginOwnedStageSlugsForLegacy();
+  const knownStages = new Set(loadStageGraphAll().map((s) => s.slug));
   for (const entry of readdirSync(skillsDir, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
     const dir = join(skillsDir, entry.name);
@@ -376,6 +377,7 @@ function handleWrite(): string[] {
       entry.name,
       stageRunnerSlugFromBody,
       legacyBareSlugs,
+      knownStages,
     );
     if (slug && !compiledSet.has(slug)) rmSync(dir, { recursive: true, force: true });
   }
@@ -395,20 +397,41 @@ function isLegacyGeneratedRunnerDirName(
   return dirName === `aidlc-${slug}` || (legacyBareSlugs.has(slug) && dirName === slug);
 }
 
+// The slug of a skill dir whose SKILL.md drives one runner's command
+// (parseSlug), with whether AI-DLC generated it: the generated-by marker, or a
+// markerless runner's generated name. AI-DLC's main skill names
+// `--stage reverse-engineering --single` in its prose and is not generated;
+// neither is a project's own skill. Prune and the drift check both read runners
+// through this.
+function runnerSkill(
+  skillMdPath: string,
+  dirName: string,
+  parseSlug: RunnerSlugParser,
+  legacyBareSlugs: ReadonlySet<string>,
+): { slug: string; generated: boolean } | null {
+  if (!existsSync(skillMdPath)) return null;
+  const body = readFileSync(skillMdPath, "utf-8");
+  const slug = parseSlug(body);
+  if (!slug) return null;
+  return { slug, generated: hasRunnerGenMarker(body) || isLegacyGeneratedRunnerDirName(dirName, slug, legacyBareSlugs) };
+}
+
+// A skill AI-DLC did not write that drives a stage or scope this install does
+// not have at all (`known`: every one installed, enabled or not), such as a
+// team's playbook for a retired stage, is named once so the person knows it was
+// left in place. A skill naming one the install has, as AI-DLC's main skill
+// names Reverse Engineering's single run, is not, whatever the plugin selection.
 function generatedRunnerSlugForPrune(
   skillMdPath: string,
   dirName: string,
   parseSlug: RunnerSlugParser,
   legacyBareSlugs: ReadonlySet<string>,
+  known: ReadonlySet<string>,
 ): string | null {
-  if (!existsSync(skillMdPath)) return null;
-  const body = readFileSync(skillMdPath, "utf-8");
-  const slug = parseSlug(body);
-  if (!slug) return null;
-  if (hasRunnerGenMarker(body) || isLegacyGeneratedRunnerDirName(dirName, slug, legacyBareSlugs)) {
-    return slug;
-  }
-  console.error(`unmanaged skill, not pruned: ${dirName}`);
+  const runner = runnerSkill(skillMdPath, dirName, parseSlug, legacyBareSlugs);
+  if (runner === null) return null;
+  if (runner.generated) return runner.slug;
+  if (!known.has(runner.slug)) console.error(`unmanaged skill, not pruned: ${dirName}`);
   return null;
 }
 
@@ -421,14 +444,11 @@ function pluginOwnedScopeSlugsForLegacy(): ReadonlySet<string> {
   return new Set(Object.entries(all).filter(([, front]) => front.plugin).map(([scope]) => scope));
 }
 
-// The on-disk runner SIGNATURE: a stage-runner's SKILL.md drives
-// `aidlc-orchestrate next --stage <slug> --single`. Identifying runners by this
-// body marker — NOT by compiled-set membership — is what lets the drift guard see
-// ORPHANS: a runner skill dir that drives `--single` but whose slug is
-// no longer a compiled stage. Non-runner skills (aidlc, aidlc-replay,
-// aidlc-session-cost, aidlc-outcomes-pack, and the scope-runners, which drive
-// `--scope` not `--stage`) carry no `--stage … --single` marker, so they are
-// never mistaken for stage-runners and never flagged.
+// The command a stage-runner's SKILL.md drives:
+// `aidlc-orchestrate next --stage <slug> --single`. Reading the slug from the
+// body, not from compiled-set membership, is what lets the drift guard see
+// ORPHANS: a generated runner whose slug is no longer a compiled stage. The
+// scope-runners drive `--scope`, not `--stage`.
 const SINGLE_RUNNER_MARKER = "--stage";
 function stageRunnerSlugFromBody(body: string): string | null {
   if (!body.includes(SINGLE_RUNNER_MARKER) || !body.includes("--single")) return null;
@@ -436,20 +456,8 @@ function stageRunnerSlugFromBody(body: string): string | null {
   return m?.[1] ?? null;
 }
 
-function isRunnerSkill(skillMdPath: string): boolean {
-  if (!existsSync(skillMdPath)) return false;
-  const body = readFileSync(skillMdPath, "utf-8");
-  return stageRunnerSlugFromBody(body) !== null;
-}
-
-function runnerSlugFromSkill(skillMdPath: string): string | null {
-  if (!isRunnerSkill(skillMdPath)) return null;
-  const body = readFileSync(skillMdPath, "utf-8");
-  return stageRunnerSlugFromBody(body);
-}
-
-// The on-disk stage-runner set: every skill dir whose SKILL.md is a stage-runner
-// (carries the `--single` signature). Returns the slugs — compiled or not — so
+// The on-disk stage-runner set: every skill dir that is a stage-runner AI-DLC
+// generated (runnerSkill). Returns the slugs, compiled or not, so
 // the caller can compute BOTH missing (compiled, no runner) AND orphan (runner,
 // not compiled) divergences. Slugs are parsed from the command body because
 // plugin-owned runner dirs intentionally do not have an `aidlc-` prefix.
@@ -461,11 +469,12 @@ function onDiskRunnerEntries(): Array<{ slug: string; dir: string }> {
   const skillsDir = defaultSkillsDir();
   if (!existsSync(skillsDir)) return [];
   const found: Array<{ slug: string; dir: string }> = [];
+  const legacyBareSlugs = pluginOwnedStageSlugsForLegacy();
   for (const entry of readdirSync(skillsDir, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
     const dir = join(skillsDir, entry.name);
-    const slug = runnerSlugFromSkill(join(dir, "SKILL.md"));
-    if (slug) found.push({ slug, dir });
+    const runner = runnerSkill(join(dir, "SKILL.md"), entry.name, stageRunnerSlugFromBody, legacyBareSlugs);
+    if (runner?.generated) found.push({ slug: runner.slug, dir });
   }
   return found;
 }
@@ -858,6 +867,7 @@ function scopeRunnerSlugFromBody(body: string): string | null {
 function pruneScopeRunners(skillsDir: string, keep: ReadonlySet<string>): void {
   if (!existsSync(skillsDir)) return;
   const legacyBareSlugs = pluginOwnedScopeSlugsForLegacy();
+  const knownScopes = new Set(Object.keys(loadScopeMetadataAll()));
   for (const entry of readdirSync(skillsDir, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
     const dir = join(skillsDir, entry.name);
@@ -866,6 +876,7 @@ function pruneScopeRunners(skillsDir: string, keep: ReadonlySet<string>): void {
       entry.name,
       scopeRunnerSlugFromBody,
       legacyBareSlugs,
+      knownScopes,
     );
     if (slug && !keep.has(slug)) rmSync(dir, { recursive: true, force: true });
   }
