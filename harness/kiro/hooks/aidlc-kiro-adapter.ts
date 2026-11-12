@@ -54,6 +54,9 @@ import {
   agentsDir,
   classifyTerminalCommand,
   readNextLine,
+  readNextTokens,
+  sessionsDir,
+  validScopes,
   decodeHarnessPlainText,
   terminalCommandRelay,
   hookDebug,
@@ -475,24 +478,98 @@ async function requestFileForwarding(
   const argv = [...flags, "--request-file", REQUEST_FILE];
   return { args: argv, forwarded: forwardedArgs(argv.join(" "), argv) };
 }
+function shellWord(arg: string): string {
+  if (BARE_WORD.test(arg)) return arg;
+  if (process.platform === "win32") {
+    const word = CMD_METACHARACTER.test(arg) ? windowsArgv(arg) : arg;
+    return `'${word.replace(WIN32_SINGLE_QUOTE, (q) => q + q)}'`;
+  }
+  if (!arg.includes("'")) return `'${arg}'`;
+  if (!/["`$\\]/.test(arg)) return `"${arg}"`;
+  return `'${arg.replaceAll("'", "'\\''")}'`;
+}
+// The line as typed only when a shell reads it as the split does: in this
+// character class only a double quote quotes, so an odd count leaves one open
+// (`fix the 5" display`) and the shell stops on it.
 function forwardedArgs(raw: string, args: string[]): string {
   if (
     /^[A-Za-z0-9_@%+=:,./ \t"-]*$/.test(raw) &&
+    (raw.match(/"/g)?.length ?? 0) % 2 === 0 &&
     (process.platform !== "win32" || args.every((arg) => BARE_WORD.test(arg)))
   ) {
     return raw;
   }
-  const quote = (arg: string): string => {
-    if (BARE_WORD.test(arg)) return arg;
-    if (process.platform === "win32") {
-      const word = CMD_METACHARACTER.test(arg) ? windowsArgv(arg) : arg;
-      return `'${word.replace(WIN32_SINGLE_QUOTE, (q) => q + q)}'`;
-    }
-    if (!arg.includes("'")) return `'${arg}'`;
-    if (!/["`$\\]/.test(arg)) return `"${arg}"`;
-    return `'${arg.replaceAll("'", "'\\''")}'`;
-  };
-  return args.map(quote).join(" ");
+  return args.map(shellWord).join(" ");
+}
+
+// The call the orchestrator skill asks for when a request opens with the name
+// of a plan (`/aidlc classic Build a notes app`): the name as its own argument
+// and the rest of the request quoted into one (`next classic 'Build a notes
+// app'`), which the first-next check takes as well as the line as typed. What
+// the hook names depends on the rest: only words, and a name with its colon
+// (`express: add a version flag`) is the plan on either line, so it names the
+// skill's call; only words after a bare name, which may be their own first
+// word (`classic car rental website`), and it names both when they fit
+// (firstCallMessage); a flag-shaped word after the name (`--review advisory`),
+// which only the agent can tell is a setting or part of what they want, and it
+// names the line as typed, where the engine reads the setting. A `--` keeps
+// its meaning: no grouped call. The words are read in place, so a word that is
+// a verb only first on the line (`compose`) stays theirs. The plans are the
+// engine's own (validScopes), read as its line reading reads them.
+type PlanFirstCall = { raw: string; args: string[]; named: "both" | "grouped" | "typed" };
+function planFirstCall(args: readonly string[]): PlanFirstCall | null {
+  if (args.length < 3 || args.includes("--")) return null;
+  const colon = /^([A-Za-z][\w-]*):$/.exec(args[0]);
+  let plans: ReadonlySet<string>;
+  try {
+    plans = validScopes();
+  } catch {
+    return null;
+  }
+  if (!(colon ? plans.has(colon[1].toLowerCase()) : plans.has(args[0]))) return null;
+  const onlyWords = readNextTokens(args).tokens.every((token) => token.at === 0 || token.role === "word");
+  const call = [args[0], args.slice(1).join(" ")];
+  return { raw: call.map(shellWord).join(" "), args: call, named: !onlyWords ? "typed" : colon ? "grouped" : "both" };
+}
+// The first call this hook named for the turn's request, kept in the
+// git-ignored sessions folder. Earlier releases wrote it as
+// aidlc/.aidlc-forwarding-latch, which a project may have committed before its
+// .gitignore part listed it; writing there again would keep putting the
+// person's words into git (doctor names that file and the step that untracks
+// it).
+function forwardingLatchPath(projectDir: string): string {
+  return join(sessionsDir(projectDir), ".kiro-cli-forwarding-latch.json");
+}
+// The latch is the hook's own file; a plan entry of any other shape is no call.
+function latchPlan(value: unknown): PlanFirstCall | undefined {
+  if (value === null || typeof value !== "object") return undefined;
+  const plan = value as Partial<PlanFirstCall>;
+  return typeof plan.raw === "string" && Array.isArray(plan.args) && plan.args.length === 2 &&
+      plan.args.every((arg) => typeof arg === "string") &&
+      (plan.named === "both" || plan.named === "grouped" || plan.named === "typed")
+    ? plan as PlanFirstCall
+    : undefined;
+}
+// What the hook, and the first-next check when it refuses, say the first call
+// is. Both calls repeat the request, so when they would not fit in `room` bytes
+// (what Kiro hands the agent from a hook) only the typed line is named, as for
+// any other request; the check still takes the skill's call.
+function firstCallMessage(refusal: boolean, typed: string, plan: PlanFirstCall | undefined, room: number): string {
+  const call = (line: string) => `{{INVOKE}} engine orchestrate next ${line}`;
+  const gap = refusal ? "\n" : "\n\n";
+  const one = refusal
+    ? "The first aidlc-orchestrate next call dropped or changed the user's arguments. Run exactly: "
+    : `Your first tool call is exactly the call below, every argument kept; do not run a bare \`next\`.${gap}`;
+  if (plan?.named === "both") {
+    const name = plan.args[0];
+    const both = (refusal
+      ? "The first aidlc-orchestrate next call dropped or changed the user's arguments. Run exactly one of these."
+      : "Your first tool call is one of the two calls below, every argument kept; do not run a bare `next`.") +
+      `${gap}If \`${name}\` is the plan they named:${gap}${call(plan.raw)}${gap}` +
+      `If \`${name}\` is part of what they want built:${gap}${call(typed)}\n`;
+    if (Buffer.byteLength(both, "utf-8") <= room) return both;
+  }
+  return `${one}${call(plan?.named === "grouped" ? plan.raw : typed)}\n`;
 }
 
 function extractNextInvocation(
@@ -700,7 +777,7 @@ if (target === "verb-intercept") {
     // would refuse it.
     if (firstStepNote !== "") {
       try {
-        rmSync(join(projectDir, "aidlc", ".aidlc-forwarding-latch"), { force: true });
+        rmSync(forwardingLatchPath(projectDir), { force: true });
       } catch { /* best-effort, as the latch's own write */ }
       process.stdout.write(`${preface}${firstStepNote}\n`);
       return 0;
@@ -753,9 +830,7 @@ if (target === "verb-intercept") {
             typeof parsed.kind === "string" && parsed.kind !== "load-steering" &&
             Buffer.byteLength(preface + packet, "utf-8") <= PROMPT_HOOK_MAX_BYTES
           ) {
-            rmSync(join(cwd, "aidlc", ".aidlc-forwarding-latch"), {
-              force: true,
-            });
+            rmSync(forwardingLatchPath(cwd), { force: true });
             if (args[0] === "--config") {
               try {
                 writeFileSync(
@@ -786,23 +861,22 @@ if (target === "verb-intercept") {
       const viaFile = await requestFileForwarding(args, cwd);
       const forwardedArgv = viaFile?.args ?? args;
       const forwarded = viaFile?.forwarded ?? invocation.forwarded;
+      const plan = viaFile === null ? planFirstCall(args) : null;
       try {
+        mkdirSync(sessionsDir(cwd), { recursive: true });
         writeFileSync(
-          join(cwd, "aidlc", ".aidlc-forwarding-latch"),
+          forwardingLatchPath(cwd),
           JSON.stringify({
             turn,
             raw: forwarded,
             args: forwardedArgv,
+            ...(plan === null ? {} : { plan }),
           }) + "\n",
           "utf-8",
         );
       } catch { /* forwarding backstop best-effort */ }
-      process.stdout.write(
-        preface +
-        "Your first tool call is exactly the call below, every argument kept; " +
-          "do not run a bare `next`.\n\n" +
-          `{{INVOKE}} engine orchestrate next ${forwarded}\n`,
-      );
+      const room = PROMPT_HOOK_MAX_BYTES - Buffer.byteLength(preface, "utf-8");
+      process.stdout.write(preface + firstCallMessage(false, forwarded, plan ?? undefined, room));
     } else if (preface) {
       process.stdout.write(preface);
     }
@@ -936,11 +1010,11 @@ if (target === "guard-tool-call") {
   // Quoting and path-safe escapes normalize through splitKiroCommandArgs
   // before compare.
   try {
-    const forwardingPath = join(cwd, "aidlc", ".aidlc-forwarding-latch");
+    const forwardingPath = forwardingLatchPath(cwd);
     if (m !== null && existsSync(forwardingPath)) {
       const forwarding = JSON.parse(
         readFileSync(forwardingPath, "utf-8"),
-      ) as { turn?: number; raw?: string; args?: string[] };
+      ) as { turn?: number; raw?: string; args?: string[]; plan?: PlanFirstCall };
       if (
         forwarding.turn === counter &&
         Array.isArray(forwarding.args)
@@ -948,15 +1022,13 @@ if (target === "guard-tool-call") {
         // The call exactly as this hook asked for it is right before any
         // re-split: PowerShell's doubled apostrophe ('can''t') does not split
         // back to the word, and refusing it would ask for the same call again.
-        const matches =
-          (typeof forwarding.raw === "string" && m[1].trim() === forwarding.raw) ||
-          (forwarding.args.length === raw.length &&
-            forwarding.args.every((arg, index) => arg === raw[index]));
-        if (!matches) {
-          process.stderr.write(
-            "The first aidlc-orchestrate next call dropped or changed the user's arguments. " +
-              `Run exactly: {{INVOKE}} engine orchestrate next ${forwarding.raw ?? ""}\n`,
-          );
+        const same = (line: unknown, args: unknown): boolean =>
+          (typeof line === "string" && m[1].trim() === line) ||
+          (Array.isArray(args) && args.length === raw.length &&
+            args.every((arg, index) => arg === raw[index]));
+        const plan = latchPlan(forwarding.plan);
+        if (!same(forwarding.raw, forwarding.args) && !same(plan?.raw, plan?.args)) {
+          process.stderr.write(firstCallMessage(true, forwarding.raw ?? "", plan, PROMPT_HOOK_MAX_BYTES));
           process.exit(2);
         }
         rmSync(forwardingPath, { force: true });

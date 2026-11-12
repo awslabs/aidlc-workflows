@@ -14,6 +14,7 @@ aidlc/.aidlc-active-space-*.tmp
 aidlc/active-memory/
 aidlc/.aidlc-turn-counter
 aidlc/.aidlc-readonly-latch
+aidlc/.aidlc-forwarding-latch
 aidlc/.aidlc-sessions/
 aidlc/.aidlc-request-text/
 aidlc/spaces/*/intents/.aidlc-*

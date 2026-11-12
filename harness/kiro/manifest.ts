@@ -166,6 +166,9 @@ const manifest: HarnessManifest = {
           // The variant shipped before the block ignored a Bolt worktree's metadata
           // (.aidlc/worktree-meta.json, .aidlc/base-source-listing.tsv).
           "sha256:6df8b41c1c9011d8b6d386d389f96bbfa27812386f434103c260bf58641d6b5d",
+          // The variant shipped before the block ignored aidlc/.aidlc-forwarding-latch
+          // (the name earlier releases wrote the hook's forwarding latch under).
+          "sha256:91f5070ac1b7f2effcf608447a67261ab00dd92495385bf2277b53ca1723c6f0",
         ],
       },
     },
