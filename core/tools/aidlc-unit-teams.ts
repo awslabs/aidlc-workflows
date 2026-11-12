@@ -709,9 +709,11 @@ export function checkInState(projectDir: string, stateContent?: string): CheckIn
   }
   // The rows each look adds to this clone's own audit file do not count.
   if (!changes.every((change) => onlyOwnLookRows(projectDir, root, change))) return "not-checked-in";
-  // A squash or rebase merge puts the same files in as commits of its own.
+  // A squash or rebase merge puts the same files in as commits of its own. The
+  // person's diff.relative would narrow the whole-repo compare to this folder;
+  // -c rather than --no-relative, which git before 2.28 does not know.
   const names = (range: string[], paths = ["aidlc"]): Set<string> | null => {
-    const listed = run(["diff", "--name-only", "-z", "--no-renames", ...range, "--", ...paths]);
+    const listed = run(["-c", "diff.relative=false", "diff", "--name-only", "-z", "--no-renames", ...range, "--", ...paths]);
     return listed.status === 0 ? new Set(listed.stdout.split("\0").filter(Boolean)) : null;
   };
   // This checkout on the integration branch itself, ahead and behind it, when a

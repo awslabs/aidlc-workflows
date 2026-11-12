@@ -14,7 +14,7 @@
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { auditBlockField, readAuditShardEvents, REQUEST_TEXT_DIR } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -35,6 +35,7 @@ import {
   run,
   STATE,
   stateOf,
+  tempDir,
   takeIn,
   tellsWhatToType,
   UNIT,
@@ -297,6 +298,45 @@ describe("the plan's share fits the team's own git: a protected main, a branch o
     const rebased = planMergedBy("rebase");
     writeFileSync(join(rebased, "before-plan-checkout.md"), "The lead's own, not committed.\n");
     expect(statusOf(rebased)).not.toContain("Your main:");
+  });
+
+  // A project in a folder of its repository (teams chosen while it was a
+  // repository of its own), with the person's own git set to diff.relative,
+  // which narrows a plain git diff to the folder.
+  test("a project in a folder of its repository, with diff.relative set: a commit of the lead's outside the folder that origin's main lacks keeps the line unsaid", () => {
+    for (const outside of [false, true]) {
+      const project = makeHome();
+      chooseTeams(project.dir);
+      const repo = tempDir("monorepo");
+      cpSync(project.dir, join(repo, "proj"), { recursive: true, filter: (from) => from !== join(project.dir, ".git") });
+      writeFileSync(join(repo, "README.md"), "# The repository\n");
+      const host = tempDir("monorepo-host");
+      git(host, ["init", "-q", "--bare", "-b", "main"]);
+      git(repo, ["init", "-q", "-b", "main"]);
+      git(repo, ["config", "user.name", "lead"]);
+      git(repo, ["config", "user.email", "lead@example.test"]);
+      git(repo, ["add", "-A"]);
+      git(repo, ["commit", "-q", "-m", "teams chosen"]);
+      git(repo, ["remote", "add", "origin", host]);
+      git(repo, ["push", "-q", "-u", "origin", "main"]);
+      const dir = join(repo, "proj");
+      writeFileSync(join(seededRecordDir(dir), "inception", "units-generation", "unit-of-work.md"), "# Units of work\n\nrefunds, checkout-ui, reporting; notes added.\n");
+      git(repo, ["add", "-A"]);
+      git(repo, ["commit", "-q", "-m", "Share the plan with the teams"]);
+      git(repo, ["push", "-q", "origin", "main:refs/heads/plan-checkout"]);
+      if (outside) {
+        writeFileSync(join(repo, "notes.md"), "The lead's own, outside the project's folder.\n");
+        git(repo, ["add", "notes.md"]);
+        git(repo, ["commit", "-q", "-m", "the lead's notes"]);
+      }
+      mergeOnHost(host, "plan-checkout", "squash");
+      git(repo, ["fetch", "-q", "origin"]);
+      git(repo, ["config", "diff.relative", "true"]);
+      const status = statusOf(dir);
+      expect(status, String(outside)).toContain(IN_MAIN);
+      if (outside) expect(status).not.toContain("Your main:");
+      else expect(status).toContain("Your main:      origin/main already has your work, merged as commits of its own, so yours is 1 ahead and 1 behind.");
+    }
   });
 
   // Main's own flow (the teams build on the workspace's repo): the share comes
