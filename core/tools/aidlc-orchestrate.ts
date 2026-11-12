@@ -17922,7 +17922,7 @@ function teamRedoNarrowed(
   stateContent: string,
   targetSlug: string,
   fromThem = false,
-): { held: boolean; directive: PrintDirective | ErrorDirective } | null {
+): { held: boolean; directive: PrintDirective } | null {
   if (!isTeamUnitOwnership(stateContent) || readApplicableTeamUnitScopeStamp(projectDir, stateContent)) return null;
   const block = constructionUnitMajorBlock(scope, stateContent, true).map((stage) => stage.slug);
   if (!block.includes(targetSlug)) return null;
@@ -17959,7 +17959,8 @@ function teamRedoNarrowed(
   const why = and([...groups].map(([what, names]) => `${and(names)} ${names.length === 1 ? "is" : "are"} ${what}`));
   const name = nodeForSlug(targetSlug)?.name || targetSlug;
   if (here.length === 0) {
-    return { held: false, directive: errorDirective(`${name} is not redone for every unit once a team has taken a unit: ${why}.`) };
+    const said = `${name} is not redone for every unit once a team has taken a unit: ${why}.`;
+    return { held: false, directive: turnEndingPrint(`Run nothing. Tell the person in one line: "${said}"`) };
   }
   const line = `Redoing ${name} for unit${here.length === 1 ? "" : "s"} ${and(here)}. ${why}, so ` +
     `${left.length === 1 ? "it is" : "they are"} not redone here.`;
@@ -17987,7 +17988,9 @@ function finishedUnitNotRedoneHere(
   unit: string,
 ): Directive | null {
   if (narrowed === null || narrowed.held || !completedUnits(stateContent).has(unit)) return null;
-  return errorDirective(`${unit} is finished, so it is not redone here; this checkout builds no Unit now.`);
+  return turnEndingPrint(
+    `Run nothing. Tell the person in one line: "${unit} is finished, so it is not redone here; this checkout builds no Unit now."`,
+  );
 }
 
 // A move to a stage or phase in a checkout that claimed a Unit (`next --stage`,
@@ -21678,12 +21681,15 @@ function emitTypedResumeChoice(
   // "... and stop there": the move is made, then the workflow is parked in
   // place of the `next` that would carry on with it. --park says the person
   // asked for that; without it, the conductor still reads their words for it.
+  // A print that ends the turn moved nothing, so it goes as it is.
   const stopThere = `${flags.park === true
     ? " The person also asked to stop there for now: make"
     : " If the person also asked to stop there for now, make"} the move, following each print up to where it says ` +
     `to re-run \`next\`, then run \`${aidlcToolInvocation("orchestrate")} park --person-asked\` in place of that \`next\` and act on its \`parked\` directive.`;
   const move = (directive: PrintDirective | ErrorDirective): PrintDirective | ErrorDirective =>
-    directive.kind === "print" ? jumpStepPrint(`${directive.message}${stopThere}`, namedJumps.get(directive)) : directive;
+    directive.kind === "print" && !turnEndingPrints.has(directive)
+      ? jumpStepPrint(`${directive.message}${stopThere}`, namedJumps.get(directive))
+      : directive;
   if (choice === "resume") {
     emit(move(printDirective(
       `Resume choice accepted at "${slug}". Re-run \`next\` to continue from the last checkpoint.`,

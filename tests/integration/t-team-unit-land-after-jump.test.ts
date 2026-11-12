@@ -343,9 +343,9 @@ describe("a lead's main whose team holds a Unit moves on to Build and Test", () 
     moveOn(lead);
     const back = runMergeTool(ORCH, ["next", "--stage", FD], lead);
     expect(JSON.parse(back.stdout)).toEqual({
-      kind: "error",
-      message: "Functional Design is not redone for every unit once a team has taken a unit: " +
-        "alpha is finished, gamma is built by team-g and beta is not taken yet.",
+      kind: "print",
+      message: "Run nothing. Tell the person in one line: \"Functional Design is not redone for every unit once a team " +
+        "has taken a unit: alpha is finished, gamma is built by team-g and beta is not taken yet.\"",
     });
     expect(stateOf(lead)).toContain("- **Current Stage**: build-and-test");
   });
