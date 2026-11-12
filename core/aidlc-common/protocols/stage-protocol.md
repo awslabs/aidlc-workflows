@@ -1105,7 +1105,7 @@ When generating content that will be written to markdown files:
 
 ## 12. Phase Boundary Verification
 
-> See `stage-protocol-governance.md` §13 — load at phase transitions to run traceability verification. Capturing corrections as durable rules uses the conditional `learnings` protocol module (§13), not a separate guardrail flow. When that module is absent, no learning persistence runs.
+> Capturing corrections as durable rules uses the conditional `learnings` protocol module (§13), not a separate guardrail flow. When that module is absent, no learning persistence runs.
 
 ## 13. Learnings Ritual
 

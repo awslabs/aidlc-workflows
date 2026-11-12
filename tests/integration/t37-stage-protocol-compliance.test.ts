@@ -175,7 +175,9 @@ describe("mid-ideation fixture conforms to the template section structure", () =
 describe("SKILL.md routing mandates the static and conditional protocol files", () => {
   const routing = section(read(SKILL), /^## Routing/, /^## /);
   // Each step names the stage protocol and its modules in its own note (#1330);
-  // the routing section names the two no step names.
+  // the routing section names the one no step names. The phase-boundary check
+  // is run by the phase-ending stages themselves, so no routing line loads the
+  // governance module for it.
   const note = protocolNote(".claude/aidlc-common/stages/construction/code-generation.md", [
     "reviewer",
     "swarm",
@@ -189,8 +191,8 @@ describe("SKILL.md routing mandates the static and conditional protocol files", 
   test("routing mandates stage-protocol-recovery.md [.sh routing 2]", () => {
     expect(routing.includes("stage-protocol-recovery.md")).toBe(true);
   });
-  test("routing mandates stage-protocol-governance.md [.sh routing 3]", () => {
-    expect(routing.includes("stage-protocol-governance.md")).toBe(true);
+  test("routing sends no one to the governance module to run the phase check [.sh routing 3]", () => {
+    expect(routing.includes("stage-protocol-governance.md")).toBe(false);
   });
   for (const module of [
     "stage-protocol-reviewer.md",
