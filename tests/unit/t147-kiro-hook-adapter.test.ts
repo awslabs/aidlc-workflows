@@ -31,6 +31,7 @@ import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
   chmodSync,
+  copyFileSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -2842,6 +2843,131 @@ describe("t147 Kiro CLI reads what the person typed from the expanded skill body
       expect(hashed.stdout).toContain(`${literal}\n`);
       expect(guard(`bun .kiro/tools/aidlc.ts ${literal}`).code).toBe(0);
     } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  // Kiro CLI hands the hook a lone double quote as typed (`5"`): the call the
+  // agent is told to run quotes each word instead of leaving the quote open.
+  test("a request with one double quote gets a first call the shell reads, and the check takes it", () => {
+    const dir = scratchProject(true);
+    try {
+      const guard = (command: string) => runAdapter(dir, "guard-tool-call", {
+        cwd: dir, tool_name: "execute_bash", tool_input: { command },
+      });
+      for (const [said, call, words] of [
+        ['fix the 5" display', "fix the '5 display'", ["fix", "the", "5 display"]],
+        ['fix the 5"', "fix the 5", ["fix", "the", "5"]],
+      ] as const) {
+        const r = runAdapter(dir, "verb-intercept", { cwd: dir, session_id: session, prompt: expanded(said) }, [], env);
+        expect(r.code, r.stderr).toBe(0);
+        expect(r.stdout).toContain(`engine orchestrate next ${call}\n`);
+        expect(JSON.parse(readFileSync(join(dir, "aidlc", ".aidlc-forwarding-latch"), "utf8")).args).toEqual(words);
+        if (process.platform !== "win32") {
+          const shell = spawnSync("sh", ["-c", `printf '%s\\n' ${call}`], { encoding: "utf-8" });
+          expect(shell.status, shell.stderr).toBe(0);
+          expect(shell.stdout.trimEnd().split("\n")).toEqual([...words]);
+        }
+        expect(guard(`bun .kiro/tools/aidlc.ts engine orchestrate next ${call}`).code).toBe(0);
+      }
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  // The orchestrator skill gives a plan named first its own argument and
+  // quotes the rest; the hook names that call too, and the first-next check
+  // takes it as well as the line as typed. A bare name may be their own word,
+  // so both calls are named when they fit; a name with its colon is the plan
+  // either way.
+  test("a request that opens with a plan's name: the hook names the skill's call and the check takes it", () => {
+    const dir = scratchProject(true);
+    try {
+      const guard = (command: string) => runAdapter(dir, "guard-tool-call", {
+        cwd: dir, tool_name: "execute_bash", tool_input: { command },
+      });
+      const run = (line: string) => `bun .kiro/tools/aidlc.ts engine orchestrate next ${line}`;
+      const latch = join(dir, "aidlc", ".aidlc-forwarding-latch");
+      // Each call line from `engine` on, whatever invocation this tree prints before it.
+      const calls = (stdout: string) => stdout.replace(/^.*(?=engine orchestrate next )/gm, "");
+      const said = "classic Build a notes app";
+      const grouped = "classic 'Build a notes app'";
+      const first = runAdapter(dir, "verb-intercept", { cwd: dir, session_id: session, prompt: expanded(said) }, [], env);
+      expect(first.code, first.stderr).toBe(0);
+      expect(calls(first.stdout)).toContain(
+        "Your first tool call is one of the two calls below, every argument kept; do not run a bare `next`.\n\n" +
+          "If `classic` is the plan they named:\n\n" +
+          `engine orchestrate next ${grouped}\n\n` +
+          "If `classic` is part of what they want built:\n\n" +
+          `engine orchestrate next ${said}\n`,
+      );
+      const dropped = guard(run("classic 'Build a notes'"));
+      expect(dropped.code).toBe(2);
+      // Each call on a line of its own, so copying one takes nothing after it.
+      const refused = calls(dropped.stderr).split("\n");
+      expect(refused).toContain(`engine orchestrate next ${grouped}`);
+      expect(refused).toContain(`engine orchestrate next ${said}`);
+      // A plan entry the hook did not write in its own shape is no call: the check still holds.
+      const kept = JSON.parse(readFileSync(latch, "utf8"));
+      writeFileSync(latch, JSON.stringify({ ...kept, plan: { raw: grouped, eitherReading: true } }));
+      expect(guard(run("")).code).toBe(2);
+      expect(guard(run(grouped)).code).toBe(2);
+      writeFileSync(latch, JSON.stringify(kept));
+      expect(guard(run(grouped)).code).toBe(0);
+      expect(existsSync(latch)).toBe(false);
+      expect(runAdapter(dir, "verb-intercept", { cwd: dir, session_id: session, prompt: expanded(said) }, [], env).code).toBe(0);
+      expect(guard(run(said)).code).toBe(0);
+      expect(existsSync(latch)).toBe(false);
+
+      const colon = runAdapter(dir, "verb-intercept", {
+        cwd: dir, session_id: session, prompt: expanded("express: add a version flag"),
+      }, [], env);
+      expect(calls(colon.stdout)).toContain(
+        "Your first tool call is exactly the call below, every argument kept; do not run a bare `next`.\n\n" +
+          "engine orchestrate next express: 'add a version flag'\n",
+      );
+      expect(guard(run("express: 'add a version flag'")).code).toBe(0);
+
+      // Both calls repeat the request: one too long to write out twice in what
+      // Kiro hands the agent from a hook gets the typed line alone, as any
+      // other request does, in the hook's line and in a refusal, and the check
+      // still takes the skill's call.
+      const long = `classic ${"car rental website with a booking page ".repeat(150).trim()}`;
+      const named = runAdapter(dir, "verb-intercept", { cwd: dir, session_id: session, prompt: expanded(long) }, [], env);
+      expect(named.code, named.stderr).toBe(0);
+      expect(Buffer.byteLength(named.stdout)).toBeLessThanOrEqual(10 * 1024);
+      expect(calls(named.stdout)).toContain(
+        "Your first tool call is exactly the call below, every argument kept; do not run a bare `next`.\n\n" +
+          `engine orchestrate next ${long}\n`,
+      );
+      expect(named.stdout).not.toContain("is the plan they named");
+      const cut = guard(run("classic car rental"));
+      expect(cut.code).toBe(2);
+      expect(Buffer.byteLength(cut.stderr)).toBeLessThanOrEqual(10 * 1024);
+      expect(calls(cut.stderr)).toContain(`engine orchestrate next ${long}\n`);
+      expect(cut.stderr).toContain("Run exactly: ");
+      expect(cut.stderr).not.toContain("is the plan they named");
+      expect(guard(run(`classic '${long.slice("classic ".length)}'`)).code).toBe(0);
+
+      // A setting after the name stays a setting: it is never folded into their text.
+      const setting = "express: --review advisory add a version flag";
+      const flagged = runAdapter(dir, "verb-intercept", { cwd: dir, session_id: session, prompt: expanded(setting) }, [], env);
+      expect(flagged.code, flagged.stderr).toBe(0);
+      expect(JSON.parse(readFileSync(latch, "utf8")).plan).toBeUndefined();
+      expect(guard(run("express: '--review advisory add a version flag'")).code).toBe(2);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  // Every file this adapter writes beside the project's records for one turn
+  // is the hook's own: the shipped .gitignore keeps each one out of a commit.
+  test("every per-turn file the adapter writes under aidlc/ is git-ignored", () => {
+    const source = readFileSync(join(REPO_ROOT, "harness", "kiro", "hooks", "aidlc-kiro-adapter.ts"), "utf-8");
+    const names = [...new Set([...source.matchAll(/join\([^()]*"aidlc",\s*"(\.aidlc-[^"]+)"/g)].map((m) => m[1]))];
+    expect(names).toContain(".aidlc-forwarding-latch");
+    const repo = mkdtempSync(join(tmpdir(), "t147-ignore-"));
+    try {
+      expect(spawnSync("git", ["init", "-q"], { cwd: repo }).status).toBe(0);
+      copyFileSync(join(REPO_ROOT, "harness", "kiro", "dot-gitignore"), join(repo, ".gitignore"));
+      // A folder's pattern (`aidlc/.aidlc-request-text/`) ignores what is written in it.
+      const ignored = (path: string) => spawnSync("git", ["check-ignore", "-q", "--no-index", path], { cwd: repo }).status === 0;
+      for (const name of names) expect(ignored(`aidlc/${name}`) || ignored(`aidlc/${name}/file`), name).toBe(true);
+    } finally { rmSync(repo, { recursive: true, force: true }); }
   });
 
   // A contraction or a possessive is a word, not a quote: "it's", "don't" and

@@ -24,7 +24,7 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, wri
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { harnessArgsAsIds, harnessIdFromTyped, harnessNameFor, typedHarnessName } from "../../core/tools/aidlc-runtime-paths.ts";
+import { harnessArgsAsIds, harnessIdFromTyped, harnessNameFor, typedHarnessHosts, typedHarnessName } from "../../core/tools/aidlc-runtime-paths.ts";
 import { escapeRegex } from "../../core/tools/aidlc-markdown.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 
@@ -259,6 +259,22 @@ describe("Kiro harness names a person types", () => {
     expect(readFileSync(memory, "utf-8")).toBe(memoryText);
     // The next step the onboarding points to has a Kiro CLI part.
     expect(switched.out).toMatch(/in Kiro CLI, start `kiro-cli --v3`/);
+  });
+
+  // A project that also has a Claude Code tree keeps both on one release with
+  // the refresh an install has, in the names a person types, never with the
+  // framework repository's own build step.
+  test("a Kiro CLI (V2) project's onboarding names the refresh each harness tree takes, in the names config reads", () => {
+    for (const invoke of ["aidlc", "bun .kiro/tools/aidlc.ts"]) {
+      const { onboarding } = v2Project(invoke, invoke === "aidlc" ? RELEASE : join(REPO_ROOT, "dist", "kiro"));
+      const bullet = onboarding.split("\n").find((line) => line.includes("workspace tree is harness-neutral")) ?? "";
+      expect(bullet).not.toContain("packaging");
+      expect(bullet).toContain(`refresh each harness tree with \`${invoke} config --harness <name>\` (\`claude\`, \`kiro-v2\`)`);
+      expect(bullet).toContain(`\`${invoke} doctor\` names the commands`);
+      const typed = typedHarnessHosts().map((harness) => harness.name);
+      expect(typed).toContain("claude");
+      expect(typed).toContain("kiro-v2");
+    }
   });
 
   // The Kiro setting the onboarding says the switch also answers: with Kiro
