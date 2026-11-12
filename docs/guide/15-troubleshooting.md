@@ -383,8 +383,8 @@ On Claude Code, per-stage token usage and cost tracking is on by default: the fo
 
 Hooks are registered project-wide in the harness's native configuration. On
 Claude, verify that `.claude/settings.json` contains the expected `hooks`
-events. For a native project, complete active workflows,
-then run `aidlc config --harness claude` to restore the shipped registrations;
+events. For a native project,
+run `aidlc config --harness claude` to restore the shipped registrations;
 your own hook entries are kept. A copy-channel project instead uses
 `bun .claude/tools/aidlc.ts config --harness claude --from <the runtime/claude root you copied from>`.
 No `--force` is needed. Notes tell you when registrations were restored.

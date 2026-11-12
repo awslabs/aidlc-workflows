@@ -928,7 +928,6 @@ async function handleExecute(args: string[]): Promise<void> {
         });
         emitAudit(pd, "PHASE_VERIFIED", {
           "Phase boundary": `${currentStageForPhase.phase} → ${targetStage.phase}`,
-          Details: "Traceability verification on jump",
         });
         for (const phase of phasesJumpedOver) {
           emitAudit(pd, "PHASE_SKIPPED", {
