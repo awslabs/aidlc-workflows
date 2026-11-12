@@ -1400,7 +1400,10 @@ function cachedClaimsForIdentity(
     `refs/aidlc/home/${identity.intentId8}/`,
   ]);
   if (!refs.ok) return claims;
-  // A copy that descends from another is the newer one, whoever holds it.
+  // A copy ahead of another is the newer one, whoever holds it, by the
+  // take-in's own rule (claimAhead): the lead's take-in is a commit of the
+  // lead's with the team's tree, so a team's later result on its own remote
+  // descends from the team's take, never from the lead's copy of it.
   // Else the home's copies are read over another remote's, whatever their
   // generation: the one fetched by the lead's address first, then this
   // clone's own remote and local claim branches, so a fork's stale or
@@ -1415,8 +1418,7 @@ function cachedClaimsForIdentity(
   const homeCopy = (ref: string): number =>
     ref.startsWith("refs/aidlc/home/") ? 2
       : ref.startsWith("refs/heads/claim/") || (ownRemote !== null && ref.startsWith(`refs/remotes/${ownRemote}/`)) ? 1 : 0;
-  const descends = (older: string, newer: string): boolean =>
-    localGit(projectDir, ["merge-base", "--is-ancestor", older, newer]).ok;
+  const descends = (older: string, newer: string): boolean => claimAhead(projectDir, older, newer) === "ahead";
   const readFrom = new Map<string, number>();
   for (const line of refs.stdout.split(/\r?\n/).filter(Boolean)) {
     const [oid, ref] = line.trim().split(/\s+/, 2);
@@ -7540,8 +7542,8 @@ function fetchTeamsClaims(pd: string, home: string, id8: string): Array<{ remote
 }
 
 // status and team-board at the lead's project: what the lead's other remotes
-// hold is read, never taken in, so the board shows a take a team sent there in
-// its own words; the lead's next look records it.
+// hold is read, never taken in, so the board shows a take or result a team sent
+// there as the next step shows it; that step takes it in.
 export function readTeamsClaims(projectDir: string): void {
   try {
     const pd = resolveProjectDir(projectDir);
@@ -8358,6 +8360,9 @@ function checkTeamResultsQuietly(
       unreached?.push(remote ?? "the lead's project");
       continue;
     }
+    // A look writes nothing, so it reads the copy its board shows: a result a
+    // team's own remote holds is on the lead's project only once a step takes it in.
+    if (readOnly) live = claim;
     const result = live?.payload.result;
     if (live?.status !== "claimed" || !result) continue;
     const verdicts = resultVerdicts(pd, live.payload, unreached, { id8: identity.intentId8, unit, maybe });

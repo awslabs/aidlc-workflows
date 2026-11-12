@@ -1819,6 +1819,85 @@ describe("the claims' home is the lead's address", () => {
     expect(claimPayload(home.remote, id8, "refunds")).toMatchObject({ done: true });
   });
 
+  // The GitHub re-run: after the lead took the take in, "where do things
+  // stand?" said the Unit was still being built though its look had fetched
+  // the team's result from the fork; a plain /aidlc a minute later showed it.
+  test("after the lead took the take in, status and team-board show the result the team's fork holds, as the next step does, and write nothing", () => {
+    const { home, hosts, id8 } = forkedLead();
+    committedByPusher(home.remote);
+    const { dir: pay, fork } = forkedTeam(home, hosts, "pay");
+    expect(takeFrom("payments", pay, "refunds").status).toBe(0);
+    git(home.dir, ["remote", "add", "team-a", fork]);
+    next(home.dir);
+    const takenIn = claimTip(home.remote, id8, "refunds");
+    const record = buildDir(pay, "payments", "refunds");
+    codeGenerated(pay, record);
+    finishBuild(record);
+    expect(run(UNIT, ["push"], pay).status).toBe(0);
+    const onTheFork = claimTip(fork, id8, "refunds");
+    const row = /^- refunds, payments space: built by pay, checkout-api not merged yet, billing not merged yet \(0 of 2 merged\)$/m;
+    const board = run(ORCH, ["team-board"], home.dir);
+    expect(board.status, board.out).toBe(0);
+    expect(board.out).toMatch(row);
+    const status = run(UTILITY, ["status"], home.dir);
+    expect(status.status, status.out).toBe(0);
+    expect(status.out).toMatch(row);
+    expect(claimTip(home.remote, id8, "refunds")).toBe(takenIn);
+    expect(claimTip(fork, id8, "refunds")).toBe(onTheFork);
+    // The next step takes it in, and its board reads the same.
+    const step = nextSaying(home.dir, chatOf("lead-after-result"));
+    expect(step.said).toMatch(/refunds, payments space: built by pay, checkout-api not merged yet, billing not merged yet \(0 of 2 merged\)/);
+    expect(claimPayload(home.remote, id8, "refunds")?.result).toBeDefined();
+  });
+
+  test("after the lead took the take in, a result the team's fork holds and its repos merged reads merged on the look, and the next step records it", () => {
+    const { home, hosts, id8 } = forkedLead();
+    committedByPusher(home.remote);
+    const { dir: pay, fork } = forkedTeam(home, hosts, "pay");
+    expect(takeFrom("payments", pay, "refunds").status).toBe(0);
+    git(home.dir, ["remote", "add", "team-a", fork]);
+    next(home.dir);
+    const takenIn = claimTip(home.remote, id8, "refunds");
+    const record = buildDir(pay, "payments", "refunds");
+    codeGenerated(pay, record);
+    finishBuild(record);
+    expect(run(UNIT, ["push"], pay).status).toBe(0);
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    mergeOnHost(hosts.billing, "refunds", "squash");
+    const row = /^- refunds, payments space: built by pay, checkout-api merged, billing merged \(2 of 2 merged\), not recorded yet: the next step here records it and opens reporting$/m;
+    const board = run(ORCH, ["team-board"], home.dir);
+    expect(board.status, board.out).toBe(0);
+    expect(board.out).toMatch(row);
+    const status = run(UTILITY, ["status"], home.dir);
+    expect(status.status, status.out).toBe(0);
+    expect(status.out).toMatch(row);
+    expect(claimTip(home.remote, id8, "refunds")).toBe(takenIn);
+    next(home.dir, chatOf("lead-after-merge"));
+    expect(claimPayload(home.remote, id8, "refunds")).toMatchObject({ done: true });
+  });
+
+  test("a result the lead took in and sent back reads sent back on the look, while the team's fork still holds the result", () => {
+    const { home, hosts, id8 } = forkedLead();
+    committedByPusher(home.remote);
+    const { dir: pay, fork } = forkedTeam(home, hosts, "pay");
+    expect(takeFrom("payments", pay, "refunds").status).toBe(0);
+    git(home.dir, ["remote", "add", "team-a", fork]);
+    next(home.dir);
+    const record = buildDir(pay, "payments", "refunds");
+    codeGenerated(pay, record);
+    finishBuild(record);
+    expect(run(UNIT, ["push"], pay).status).toBe(0);
+    const back = run(UNIT, ["send-back", "refunds", "--person-words", "the refund total is off by one"], home.dir, chatOf("lead-send-back"));
+    expect(back.status, back.out).toBe(0);
+    expect(claimPayload(home.remote, id8, "refunds")?.turned_down).toBeDefined();
+    expect(claimPayload(fork, id8, "refunds")?.turned_down).toBeUndefined();
+    for (const look of [run(ORCH, ["team-board"], home.dir), run(UTILITY, ["status"], home.dir)]) {
+      expect(look.status, look.out).toBe(0);
+      expect(look.out).toMatch(/^- refunds, payments space: .*back with pay$/m);
+      expect(look.out).not.toMatch(/^- refunds, payments space: built by pay/m);
+    }
+  });
+
   // The fork leg: the lead heard "I've told pay refunds is merged." and the
   // team heard nothing.
   test("the team's look whose fetch brings its own Unit's merge says so once, and never again", () => {

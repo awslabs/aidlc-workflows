@@ -687,8 +687,10 @@ work does: after every stage, or once at its end.
   acts on a take or result a team sent to its own remote, and anything the
   take-in has to say comes first, once. The lead's status and board read those
   remotes too: a take only a team's remote holds shows as building, taken by
-  that person, with nothing taken in or written, and the lead's next look
-  records it (a new take after a Unit was given back shows from that look). A
+  that person, and a result a team sent there after the lead took its take in
+  shows as built, merged or not, as the next step shows it, with nothing taken
+  in or written, and the lead's next look records it (a new take after a Unit
+  was given back shows from that look). A
   clone's own remote stands in for the lead's project only while it lists the
   same claims, or while the lead's project does not answer; a claim written
   through it that the lead's project then does not show (a fork that copied the
