@@ -168,6 +168,9 @@ import {
   readOrchestratorLauncherOptions,
   REQUEST_TEXT_DIR,
   tailText,
+  pendingPersonLines,
+  resolveWorkflowSelection,
+  validSessionId,
 } from "../tools/aidlc-lib.ts";
 import {
   approvalFingerprint,
@@ -2514,6 +2517,32 @@ function terminalContext(result: TerminalResult): string {
   return terminalCommandRelay(`/aidlc ${result.typed}`, result.output, result.exitCode);
 }
 
+// The lines AI-DLC keeps for this chat, with the order a step gives them
+// (personLinesForRelay, which owns which typed command carries them), read for
+// the chat the command runs for: hookChildEnv's session, pinned for this hook.
+// Null when none waits, or when that cannot be read: the command and its
+// output go ahead either way.
+async function linesWaitingForChat(command: TerminalCommand): Promise<{ lead: string; said: () => void } | null> {
+  if (validSessionId(ide.sessionId?.trim()) === null) return null;
+  const child = hookChildEnv(projectDir, ide.sessionId?.trim());
+  const keys = ["AIDLC_SESSION_OVERRIDE", "AIDLC_SESSION_OVERRIDE_SOURCE"] as const;
+  const previous = keys.map((key) => [key, process.env[key]] as const);
+  for (const key of keys) process.env[key] = child[key];
+  try {
+    const session = resolveWorkflowSelection(projectDir).sessionId;
+    if (!session || pendingPersonLines(projectDir, session).lines.length === 0) return null;
+    const { personLinesForRelay } = await import("../tools/aidlc-orchestrate.ts");
+    return personLinesForRelay(projectDir, session, command);
+  } catch {
+    return null;
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+}
+
 function terminalRefusal(result: TerminalResult): string {
   return (
     "The requested command has already run inside the hook, and this shell call is refused " +
@@ -2733,10 +2762,22 @@ if (target === "verb-intercept") {
     if (step !== "") process.stdout.write(`${step}\n`);
     return 0;
   }
+  // Read before the command runs, as the engine's print for it is built
+  // before the agent runs it: a command can queue a line it also prints
+  // (`plugin sync`).
+  const waiting = await linesWaitingForChat(command);
   const result = runTerminalCommand(command);
-  if (result === null) return 0;
+  if (result === null) {
+    // The agent runs the command itself, and the lines still reach the person.
+    if (waiting !== null) {
+      process.stdout.write(`${waiting.lead}\n\n`);
+      waiting.said();
+    }
+    return 0;
+  }
   writeTerminalLatch(sessionId, turn, invocation, result);
-  process.stdout.write(terminalContext(result));
+  process.stdout.write(`${waiting === null ? "" : `${waiting.lead}\n\n`}${terminalContext(result)}`);
+  waiting?.said();
   return 0;
 }
 
