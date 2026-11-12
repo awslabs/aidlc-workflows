@@ -762,7 +762,9 @@ nothing: the message names a branch of your own to push the commit to, to be
 merged into the integration branch through the repository's review as a merge
 commit, and then you pull. `/aidlc` offers this step itself when it is due:
 before a Unit would start on the lead's checkout, and after a land the remote
-does not have yet.
+does not have yet. A landing the remote's integration branch holds as a squash
+or a rebase (a pull request merged that way) counts as there: its landing
+record is on that branch, so no push of it is offered.
 
 ### `/aidlc unit publish <unit>` — Publish a completed candidate
 

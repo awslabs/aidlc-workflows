@@ -20,7 +20,7 @@ import { basename, dirname, join, relative, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry, startClaimLocalRecord, takeHandedOverAuditRows } from "./aidlc-audit.ts";
-import { completedUnits, scopeStampLanded, unitProgressTable, unitRowMerged } from "./aidlc-unit-landing.ts";
+import { completedUnits, landingRecorded, scopeStampLanded, unitProgressTable, unitRowMerged } from "./aidlc-unit-landing.ts";
 import { gitUserName, personGitNameField } from "./aidlc-git-name.ts";
 import {
   managedBlockMarkers,
@@ -5199,7 +5199,8 @@ export function refreshClaimRefs(projectDir: string): boolean {
 }
 
 // Units landed here that the remote's integration branch, as last fetched,
-// does not have yet: the push after a land is due for them.
+// does not have yet: the push after a land is due for them. A records pull
+// request squash-merged there brought the landing too (landingRecorded).
 export function landedNotOnRemote(projectDir: string): Array<{ unit: string; commit: string }> {
   const pd = resolveProjectDir(projectDir);
   let remote: string | null;
@@ -5217,6 +5218,8 @@ export function landedNotOnRemote(projectDir: string): Array<{ unit: string; com
     if (!localGit(pd, ["rev-parse", "--verify", "--quiet", ref]).ok) continue;
     if (localGit(pd, ["merge-base", "--is-ancestor", commit, ref]).ok) continue;
     if (!localGit(pd, ["merge-base", "--is-ancestor", commit, "HEAD"]).ok) continue;
+    const landing = { unit: transaction.unit, mergeOid: commit, pinnedOid: transaction.pinned_oid, generation: transaction.generation };
+    if (landingRecorded(pd, ref, landing)) continue;
     landed.push({ unit: transaction.unit, commit });
   }
   return landed;
