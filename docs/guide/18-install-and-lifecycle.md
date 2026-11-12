@@ -1860,9 +1860,13 @@ grouped so download and mirror options and the options that only shape output
 read separately from the rest; `use` also describes the version it takes. The
 intent is that you can run a command correctly from its help alone. Config-level
 help names all six policy sections; `aidlc config <section> --help` keeps the
-section-specific help. `aidlc help --all` reveals the hidden `engine` and
-`system` namespaces and points to
-`aidlc engine --help` / `aidlc system --help` for their full inventories.
+section-specific help. `aidlc help --all` lists every command the short help
+leaves out, in three sections that each say who runs them: the public team and
+authoring commands (`next`, `unit`, `attest`, `plugin validate|build|test`),
+the `engine` commands your coding agent's harness runs, and the `system`
+commands for this user's installation. Every noun answers `--help` with its
+own usage forms, in every namespace: `aidlc plugin --help`,
+`aidlc engine plugin --help`, `aidlc system versions --help`.
 The installer places Bash, Zsh, Fish, and PowerShell files under the per-user AI-DLC data root's
 `completions/` directory, generated from the public route registry; there is
 no public completion-generation verb.

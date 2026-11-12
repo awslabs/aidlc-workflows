@@ -3646,24 +3646,104 @@ describe("t230 dispatcher help and errors", () => {
     expect(renderHumanHelp()).not.toContain("system");
   });
 
-  test("help --all reveals both hidden namespaces without changing default help", () => {
+  test("help --all lists every section without changing default help", async () => {
     const defaultHelp = renderHumanHelp();
-    const expanded = renderAllHelp();
+    const expanded = await renderAllHelp();
     expect(resolveAction(["help", "--all"])).toEqual({
       type: "help",
       scope: "all",
     });
     expect(expanded).toStartWith(defaultHelp.trimEnd());
-    expect(expanded).toContain("Hidden namespaces:");
-    expect(expanded).toContain(
-      "engine  Generated harness surfaces only; not for human scripts. Run: aidlc engine --help",
-    );
-    expect(expanded).toContain(
-      "system  This user's installation; unsupported interface. Run: aidlc system --help",
-    );
-    expect(defaultHelp).not.toContain("Hidden namespaces:");
-    expect(defaultHelp).not.toContain("aidlc engine --help");
+    for (const heading of ["TEAM WORK AND AUTHORING", "ENGINE", "SYSTEM"]) {
+      expect(expanded).toContain(`\n${heading}\n`);
+      expect(defaultHelp).not.toContain(`\n${heading}\n`);
+    }
+    // Each section says who runs its commands, so listing the engine never
+    // reads as an invitation to script it.
+    expect(expanded).toContain("Your coding agent's harness runs these");
+    expect(expanded).toContain("running one yourself changes the workflow's records");
+    expect(expanded).toContain("an unsupported interface that may change between releases");
+    // A top-level route with several verbs lists each as the command it is
+    // (`aidlc next`), not under its route id, which nobody can type.
+    const publicSection = expanded.split("\nTEAM WORK AND AUTHORING\n")[1].split("\nENGINE\n")[0];
+    expect(publicSection).toContain("\n  next: [args]\n");
+    expect(publicSection).toContain("\n  team-board: ");
+    expect(publicSection).not.toContain("orchestrate");
     expect(defaultHelp).not.toContain("aidlc system --help");
+  });
+
+  // The guard for help drifting from the routes: every verb a route accepts is
+  // listed in `help --all`, unless the route names it in `unlistedVerbs` with
+  // its reason. Removing a form from a route's `all`, or a verb from a
+  // `helpSections` list, fails here with the route and the verb.
+  test("help --all lists every verb every route accepts", async () => {
+    const expanded = await renderAllHelp();
+    const words = new Set(expanded.split(/[\s,:[\]|]+/));
+    const missing: string[] = [];
+    for (const route of ROUTES) {
+      for (const verb of route.verbs) {
+        if (verb.startsWith("<")) continue;
+        if (route.unlistedVerbs?.[verb]) continue;
+        const listed = verb.includes(" ")
+          ? expanded.includes(verb) ||
+            (verb.startsWith("set guard.") && expanded.includes("set guard.<fence>"))
+          : words.has(verb);
+        if (!listed) missing.push(`${route.id}: ${verb}`);
+      }
+    }
+    expect(missing).toEqual([]);
+    for (const route of ROUTES) {
+      for (const [verb, reason] of Object.entries(route.unlistedVerbs ?? {})) {
+        expect(route.verbs, `${route.id} hides a verb it does not accept`).toContain(verb);
+        expect(reason.length, `${route.id}: ${verb} needs its reason`).toBeGreaterThan(10);
+      }
+    }
+  });
+
+  test("engine help lists every state verb the state tool accepts", () => {
+    const text = renderNamespaceHelp(ENGINE_NAMESPACE_HELP);
+    const stateBlock = text.split("  state:\n")[1].split("\n  audit:")[0];
+    for (const route of ROUTES.filter((item) => item.namespace === "engine" && item.group === "state")) {
+      for (const verb of route.verbs) {
+        expect(stateBlock, verb).toMatch(new RegExp(`[ ,]${verb}(,|\n|$)`));
+      }
+    }
+  });
+
+  test.each([
+    ["plugin", ["validate", "build", "test"]],
+    ["attest", ["resolve", "anchor"]],
+    ["unit", ["claim", "land", "status"]],
+  ])("a public noun answers --help with its verbs: %s", (noun, verbs) => {
+    for (const flag of ["--help", "-h", "help"]) {
+      const action = resolveAction([noun, flag]);
+      expect(action.type, `${noun} ${flag}`).toBe("noun-help");
+      if (action.type !== "noun-help") continue;
+      expect(action.message).toContain(`${noun} <verb> [flags]`);
+      for (const verb of verbs) expect(action.message).toContain(` ${noun} ${verb}`);
+    }
+    const res = viaDispatcher([noun, "--help"], REPO_ROOT);
+    expect(res.exitCode, res.stderr.toString("utf-8")).toBe(0);
+    expect(res.stderr.toString("utf-8")).toBe("");
+  });
+
+  test("engine plugin --help is the plugin noun's help, not the whole engine's", () => {
+    const action = resolveAction(["engine", "plugin", "--help"]);
+    expect(action.type).toBe("noun-help");
+    if (action.type !== "noun-help") return;
+    expect(action.message).toContain("engine plugin <verb> [flags]");
+    expect(action.message).toContain("engine plugin select [names]\n");
+    expect(action.message).toContain("engine plugin build <harness> [outDir]\n");
+    expect(action.message).not.toContain("audit:");
+  });
+
+  test("engine help and engine --help print the same thing", () => {
+    for (const argv of [["engine", "help"], ["engine", "--help"], ["engine", "-h"]]) {
+      expect(launcherRouteUsesPin(argv), argv.join(" ")).toBe(false);
+      const res = viaDispatcher(argv, REPO_ROOT);
+      expect(res.exitCode, `${argv.join(" ")}: ${res.stderr.toString("utf-8")}`).toBe(0);
+      expect(res.stdout.toString("utf-8")).toContain("aidlc engine <noun> <verb> [args]");
+    }
   });
 
   test("removed alias nouns are routing errors", () => {
@@ -3727,7 +3807,7 @@ describe("t230 dispatcher help and errors", () => {
   test("plugin help and invalid plugin verbs use the shared noun grammar", () => {
     const help = viaDispatcher(["engine", "plugin", "help"], REPO_ROOT);
     expect(help.exitCode).toBe(0);
-    expect(help.stdout.toString("utf-8")).toContain("plugin: select [names]");
+    expect(help.stdout.toString("utf-8")).toContain("engine plugin select [names]\n");
 
     const invalid = viaDispatcher(["engine", "plugin", "remove"], REPO_ROOT);
     expect(invalid.exitCode).toBe(1);
