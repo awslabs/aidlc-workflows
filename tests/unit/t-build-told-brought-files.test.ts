@@ -130,6 +130,21 @@ describe("the steps that plan and build Code Generation", () => {
     );
   });
 
+  test("existing code: an ES module, a stylesheet and a Razor view are code by name and not named", () => {
+    const { plan } = atPlan({
+      type: "Brownfield",
+      brought: {
+        "README.md": README,
+        "src/app.mjs": "export const app = 1;\n",
+        "styles/site.scss": "$c: red;\n",
+        "Views/Index.cshtml": "<p>hi</p>\n",
+      },
+    });
+    expect(plan.brought_files_note).toBe(
+      `These files were in this project before this work started and are the person's: \`README.md\`. ${LEAVE}`,
+    );
+  });
+
   test("AI-DLC's own whole file is not named while it holds what AI-DLC wrote; edited, it is", () => {
     const mcp = "{\"mcpServers\":{}}\n";
     const record = (hash: string) => JSON.stringify({ files: {}, rootContributions: { ".mcp.json": { policy: "whole-file", hash } } });

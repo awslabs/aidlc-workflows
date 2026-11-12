@@ -24082,7 +24082,7 @@ function gitHeadOid(worktreeDir: string): string | null {
 // The file names the source walk counts as code by name alone: a symlinked
 // external tree keeps only these, and the snapshot always takes them.
 const SOURCE_FILE_EXTENSION =
-  /\.(?:astro|c|cc|cmake|cpp|cs|css|dart|erl|ex|exs|go|gql|graphql|h|hcl|hpp|hrl|html|java|js|jsx|json|kt|kts|lua|m|mm|php|proto|ps1|psd1|psm1|py|r|rb|rs|scala|sh|sol|sql|svelte|swift|tf|tfvars|toml|ts|tsx|vue|xml|ya?ml|zig)$/i;
+  /\.(?:astro|bat|c|cc|cjs|cmake|cmd|cpp|cs|cshtml|css|cts|dart|erl|ex|exs|fs|go|gql|gradle|graphql|groovy|h|hcl|hpp|hrl|html|java|js|jsx|json|kt|kts|less|lua|m|mjs|mm|mts|php|proto|ps1|psd1|psm1|py|r|razor|rb|rs|scala|scss|sh|sol|sql|svelte|swift|tf|tfvars|toml|ts|tsx|vb|vue|xml|ya?ml|zig)$/i;
 const SOURCE_FILE_BASENAME =
   /^(?:BUILD|CMakeLists\.txt|Dockerfile(?:\..+)?|Gemfile|Justfile|Makefile|Procfile|Tiltfile|WORKSPACE)$/i;
 export function isSourceFileName(name: string): boolean {
