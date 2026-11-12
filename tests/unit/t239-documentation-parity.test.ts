@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { basename, join } from "node:path";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, join, relative } from "node:path";
 import codexOnboardingFills from "../../harness/codex/onboarding.fills.ts";
 import { renderOnboarding } from "../../scripts/onboarding.ts";
 import { type Tier, TIER_PROJECTIONS, TIERS } from "../../core/tools/aidlc-tiers.ts";
-import { parseStageFrontmatter } from "../../core/tools/aidlc-lib.ts";
+import { guardStandAsideSpeaks, knowledgeDir, parseStageFrontmatter } from "../../core/tools/aidlc-lib.ts";
 import { compareVersions } from "../../core/tools/aidlc-channel.ts";
 import { validateStageFrontmatter } from "../../core/tools/aidlc-stage-schema.ts";
 import { harnessIdFromTyped } from "../../core/tools/aidlc-runtime-paths.ts";
@@ -707,6 +708,81 @@ describe("documentation parity derives current behavior from authored implementa
     const next = tree[construction + 1] ?? "";
     expect(next.trimStart(), "the first entry under construction/").toMatch(/^code-generation\//);
     expect(indent(next), "code-generation/ sits right under construction/").toBe(indent(tree[construction]) + 2);
+  });
+
+  test("each scope summary's skipped stages match its compiled plan", () => {
+    const graph = JSON.parse(read("dist", "claude", ".claude", "tools", "data", "stage-graph.json")) as Array<{
+      slug: string;
+      phase: string;
+    }>;
+    const operation = graph.filter((stage) => stage.phase === "operation").map((stage) => stage.slug);
+    const design = [
+      "user-stories",
+      "refined-mockups",
+      "domain-design",
+      "units-generation",
+      "contract-design",
+      "delivery-planning",
+      "functional-design",
+      "nfr-requirements",
+      "nfr-design",
+      "infrastructure-design",
+    ];
+    let summaries = 0;
+    for (const section of read("docs", "guide", "05-scopes-and-depth.md").split(/^(?=### )/m)) {
+      const scope = /^### ([a-z][a-z-]+)\r?\n/.exec(section)?.[1];
+      const stages = scope === undefined ? undefined : scopeGrid[scope]?.stages;
+      if (stages === undefined) continue;
+      summaries += 1;
+      const runs = (slug: string): boolean => stages[slug] === "EXECUTE";
+      const text = normalized(section);
+      const operationRuns = operation.filter(runs).length;
+      if (/\bmost Operation stages\b/.test(text)) {
+        expect(operationRuns > 0 && operationRuns < operation.length, `${scope}: "most Operation stages"`).toBe(true);
+      }
+      if (/\ball (?:\d+ )?Operation stages\b/i.test(text)) expect(operationRuns, `${scope}: "all Operation stages"`).toBe(0);
+      if (/\bfrom intent capture\b/i.test(text)) expect(runs("intent-capture"), `${scope}: "from intent capture"`).toBe(true);
+      if (/\bmost design and architecture stages\b/.test(text)) {
+        expect(design.some(runs), `${scope}: "most design and architecture stages"`).toBe(true);
+      }
+    }
+    expect(summaries, "the scopes page has a summary per shipped scope").toBe(Object.keys(scopeGrid).length);
+  });
+
+  test("the guide's add-a-skipped-stage choice is the one the stage protocol offers", () => {
+    const protocol = read("core", "aidlc-common", "protocols", "stage-protocol.md");
+    const offer = /- label: ([^\n]*\[Skipped Stage\][^\n]*)\r?\n\s*description: ([^\n]*)/.exec(protocol);
+    expect(offer, "stage-protocol.md offers to add a skipped stage").not.toBeNull();
+    const guide = normalized(read("docs", "guide", "07-interaction-modes.md"));
+    const [, label, description] = offer as RegExpExecArray;
+    for (const shown of [label.trim().replace("[Skipped Stage]", "Market Research"), description.trim().replace("[stage]", "Market Research")]) {
+      expect(guide.includes(shown), `07-interaction-modes.md shows "${shown}"`).toBe(true);
+    }
+  });
+
+  test("the knowledge guide's paths are the folder knowledgeDir resolves", () => {
+    const project = mkdtempSync(join(tmpdir(), "t239-knowledge-"));
+    let resolved: string;
+    try {
+      resolved = relative(project, knowledgeDir(project, "default")).replace(/\\/g, "/");
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
+    expect(resolved).toBe("aidlc/spaces/default/knowledge");
+    const page = read("docs", "guide", "08-knowledge.md");
+    expect(normalized(page)).toContain(`${resolved.replace("/default/", "/<space>/")}/`);
+    const short = page.split(/\r?\n/).filter((line) => /(?:^|[^\w./-])aidlc\/knowledge\//.test(line));
+    expect(short, "08-knowledge.md lines naming aidlc/knowledge/, a folder nothing reads").toEqual([]);
+  });
+
+  test("the stand-aside bullet says what guardStandAsideSpeaks decides", () => {
+    const bullet = normalized(
+      sliceBetween(read("docs", "guide", "13-customization.md"), "- **It stands aside.**", "- **It holds.**"),
+    );
+    const speaks = GUARD_POLICY_WORDS.filter((policy) => guardStandAsideSpeaks({ policy }));
+    const silent = GUARD_POLICY_WORDS.filter((policy) => !guardStandAsideSpeaks({ policy }));
+    for (const policy of speaks) expect(bullet, `${policy} says one line`).toMatch(new RegExp(`Under Guard Policy [^,]*\`${policy}\``));
+    for (const policy of silent) expect(bullet, `${policy} says nothing`).toContain(`Under \`${policy}\` there is no line`);
   });
 
   test("no copy says the Construction checkpoint re-check holds under every Guard Policy", () => {

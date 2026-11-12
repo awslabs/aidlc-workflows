@@ -188,7 +188,7 @@ flowchart TD
     APPROVE["Approve"]
     CHANGES["Request Changes"]
     ACCEPT["Accept as-is\n(escape hatch)"]
-    ADD_STAGE["Add Skipped Stage\n(Ideation/Inception only)"]
+    ADD_STAGE["Approve, and add\nskipped stage next\n(Ideation/Inception only)"]
 
     REVISION_COUNT{"Revision\ncycle >= 3?"}
     NOTE_2ND["After 2nd revision:\nnote that escape hatch\nactivates next cycle"]
@@ -217,7 +217,7 @@ flowchart TD
     REVISION_COUNT -->|"< 3"| NOTE_2ND --> REVISE --> REPORT_REVISED --> RE_PRESENT --> ASK
     REVISION_COUNT -->|">= 3"| REVISE
 
-    ADD_STAGE --> ADD_EXEC
+    ADD_STAGE --> ADD_EXEC --> REPORT_APPROVED
 
     style COMPLETE fill:#e8f5e9,stroke:#388e3c,color:#000
     style REPORT_AWAITING fill:#e3f2fd,stroke:#1565c0,color:#000
@@ -231,7 +231,7 @@ flowchart TD
     style NEXT_STAGE fill:#c8e6c9,stroke:#388e3c,color:#000
 ```
 
-<!-- Text fallback: Stage work completes, report awaiting-approval opens the gate (the engine records STAGE_AWAITING_APPROVAL), and AskUserQuestion presents the approval gate. Approve: report approved with the exact choice so the engine records GATE_APPROVED, completes, and routes; show progress; proceed. Request Changes: report rejected with the exact Request Changes choice and separate feedback (the engine records GATE_REJECTED), check revision count (if <3, note escape hatch coming, revise, report revised to re-open the gate, and re-present; if >=3, Accept-as-is becomes available). Accept as-is: report approved with that exact label. Add Skipped Stage (Ideation/Inception only): recompose the plan. The report calls own the gate's audit trail; no separate log entries are added for the gate prompt or choice. -->
+<!-- Text fallback: Stage work completes, report awaiting-approval opens the gate (the engine records STAGE_AWAITING_APPROVAL), and AskUserQuestion presents the approval gate. Approve: report approved with the exact choice so the engine records GATE_APPROVED, completes, and routes; show progress; proceed. Request Changes: report rejected with the exact Request Changes choice and separate feedback (the engine records GATE_REJECTED), check revision count (if <3, note escape hatch coming, revise, report revised to re-open the gate, and re-present; if >=3, Accept-as-is becomes available). Accept as-is: report approved with that exact label. Approve, and add a skipped stage next (Ideation/Inception only): recompose the plan, report approved, and the added stage runs next. The report calls own the gate's audit trail; no separate log entries are added for the gate prompt or choice. -->
 
 ---
 
@@ -261,9 +261,9 @@ During **Ideation** and **Inception** phases, the approval gate may include a co
 
 ```
 ▸ How would you like to proceed?
-  (1) Approve — Continue to Scope Definition
-  (2) Request Changes — Provide revision feedback
-  (3) Add Market Research — Include Market Research which was skipped
+  (1) Approve - Continue to Scope Definition
+  (2) Request Changes - Provide revision feedback
+  (3) Approve, and add Market Research next - Include Market Research, which was skipped, and start it now
 ```
 
 This option appears only when:
@@ -271,7 +271,7 @@ This option appears only when:
 - A stage ahead was skipped during scope routing
 - The skipped stage is relevant to the current context
 
-Selecting this option inserts the skipped stage into the workflow plan. The workflow continues normally through the added stage.
+Picking it approves this stage and adds the skipped stage to the plan; the added stage runs next.
 
 ---
 
