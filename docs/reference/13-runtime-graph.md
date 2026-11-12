@@ -184,8 +184,10 @@ neither affects the compile. It then filters cheaply:
    last 3 entries.
 5. **Event-class filter**: match
    `**Event**: (GATE_APPROVED|STAGE_STARTED|STAGE_AWAITING_APPROVAL|AUDIT_MERGED|UNIT_MERGED|WORKFLOW_COMPLETED)`
-   against any of the 3 blocks, or, when the record has no `runtime-graph.json`
-   yet, against every shard of the intent. Exit on no match.
+   against any of the 3 blocks; against every shard of the intent when the
+   record has no `runtime-graph.json` yet; and against another clone's shard
+   whose file is newer than `runtime-graph.json` (a teammate's transition that
+   came with a pull, compiled once). Exit on no match.
 6. **Dispatch** — `aidlc engine runtime compile ...`.
 
 `WORKFLOW_COMPLETED` is in the transition set so the final-stage

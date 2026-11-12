@@ -21,7 +21,8 @@
 //   5. Tail-read the LAST 3 blocks of this clone's own audit shard (split on
 //      /\n---\n/); if any carries `**Event**: (GATE_APPROVED|STAGE_STARTED|
 //      STAGE_AWAITING_APPROVAL|AUDIT_MERGED|UNIT_MERGED|WORKFLOW_COMPLETED)`, or
-//      the record has no runtime-graph.json yet and any shard carries one ->
+//      the record has no runtime-graph.json yet and any shard carries one, or
+//      another clone's shard newer than runtime-graph.json carries one ->
 //      dispatch `bun run <projectDir>/.claude/tools/aidlc-runtime.ts compile`
 //      (which writes the record's runtime-graph.json). MEMORY_EMPTY is
 //      deliberately NOT in the regex (recursion guard at the event level).
@@ -83,6 +84,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  statSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -713,10 +715,12 @@ describe("t91 aidlc-rebuild-stage-graph hook (migrated from t91-runtime-compile-
     expect(first.status, first.out).toBe(0);
     const compiled = readFileSync(graphPath(p), "utf-8");
     expect(compiled).not.toBe("{\"kept\":true}\n");
-    writeFileSync(graphPath(p), "{\"compiled\":true}\n", "utf-8");
+    // The compile's own write makes the graph the newer file: no second compile.
+    const compiledAt = statSync(graphPath(p)).mtimeMs;
     const second = runHook(p, status);
     expect(second.status, second.out).toBe(0);
-    expect(readFileSync(graphPath(p), "utf-8")).toBe("{\"compiled\":true}\n");
+    expect(statSync(graphPath(p)).mtimeMs).toBe(compiledAt);
+    expect(readFileSync(graphPath(p), "utf-8")).toBe(compiled);
   });
 
   test("14b: another clone's shard unchanged since the last compile does not make a status command recompile", () => {
