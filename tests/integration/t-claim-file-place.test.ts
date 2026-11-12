@@ -18,6 +18,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   cleanupTempDirs,
   clone,
@@ -155,11 +156,46 @@ describe("a claim whose file is in the project's aidlc/ folder", () => {
   });
 });
 
+describe("a claim whose file is in the project's aidlc/ folder, from a blobless partial clone", () => {
+  test("is fetched whole and released, keeping its place", () => {
+    const { remote } = makeSeed();
+    git(remote, ["config", "uploadpack.allowFilter", "true"]);
+    const partial = join(mkdtempSync(join(tmpdir(), "aidlc-claim-place-partial-")), "c");
+    tempDirs.push(join(partial, ".."));
+    git(tmpdir(), ["clone", "-q", "--filter=blob:none", "--no-local", pathToFileURL(remote).href, partial]);
+    git(partial, ["config", "user.name", "place-partial"]);
+    git(partial, ["config", "user.email", "place-partial@example.test"]);
+    const owner = clone(remote, "place-partial-owner");
+    const claimed = runMergeTool(UNIT, ["claim", "alpha", "--team", "place-partial-owner"], owner);
+    expect(claimed.status, claimed.out).toBe(0);
+    asNewStyle(owner, "alpha");
+    const released = runMergeTool(UNIT, ["release", "alpha"], partial, false, { GIT_NO_LAZY_FETCH: "1" });
+    expect(released.status, released.out).toBe(0);
+    expect(released.out).not.toContain("missing the claim payload blob");
+    expect(claimFiles(partial, claimTip(partial, remote, "alpha"))).toEqual([NEW]);
+  });
+});
+
 describe("a claim this release makes at the repository's top", () => {
   test("keeps its file at the tree's top through publish, as 2.11 reads it", () => {
     const { remote } = makeSeed();
     const { checkout } = prepareCandidate(remote, "alpha", "team-a");
     expect(claimFiles(checkout, claimTip(checkout, remote, "alpha"))).toEqual([TOP]);
+  });
+
+  test("with a hand-made claim file in main's aidlc/ folder: the claim holds only its own, and main keeps that file", () => {
+    const { seed: lead, remote } = makeSeed();
+    const stray = `${JSON.stringify({ unit: "beta", intent_uuid: "another" })}\n`;
+    writeFileSync(join(lead, ...NEW.split("/")), stray);
+    git(lead, ["add", "-f", "--", NEW]);
+    git(lead, ["commit", "-q", "-m", "a claim file made by hand"]);
+    git(lead, ["push", "-q", "origin", "main"]);
+    const { checkout } = prepareCandidate(remote, "alpha", "team-a");
+    expect(claimFiles(checkout, claimTip(checkout, remote, "alpha"))).toEqual([TOP]);
+    git(lead, ["pull", "--no-rebase", "--no-edit", "origin", "main"]);
+    gateAndLand(lead, "alpha");
+    expect(git(lead, ["ls-tree", "-r", "--name-only", "HEAD", "--", TOP, NEW])).toBe(NEW);
+    expect(readFileSync(join(lead, ...NEW.split("/")), "utf-8")).toBe(stray);
   });
 });
 

@@ -12,6 +12,7 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  rmdirSync,
   rmSync,
   unlinkSync,
   writeFileSync,
@@ -141,8 +142,16 @@ import {
 } from "./aidlc-runtime-paths.ts";
 import { readRequestFile } from "./aidlc-log.ts";
 import { withoutLearnedDate } from "./aidlc-learned-date.ts";
+import {
+  CLAIM_FILE,
+  claimBlobAt,
+  claimPlaces,
+  claimPrefixOf,
+  isClaimTreeFile,
+  readClaimAt,
+  unitResultRootOf,
+} from "./aidlc-unit-holders.ts";
 
-const CLAIM_FILE = ".aidlc-unit-claim.json";
 const ZERO_OID = "0000000000000000000000000000000000000000";
 
 interface GitResult {
@@ -515,14 +524,11 @@ function refTip(
 function readPayload(
   projectDir: string,
   oid: string,
-  options: { localOnly?: boolean } = {},
 ): UnitClaimPayload | null {
-  const shown = options.localOnly
-    ? localGit(projectDir, ["show", `${oid}:${CLAIM_FILE}`, "--"])
-    : git(projectDir, ["show", `${oid}:${CLAIM_FILE}`, "--"]);
-  if (!shown.ok) return null;
+  const shown = readClaimAt(projectDir, oid, claimPrefixOf(projectDir));
+  if (!shown) return null;
   try {
-    const parsed = JSON.parse(shown.stdout) as UnitClaimPayload;
+    const parsed = JSON.parse(shown.text) as UnitClaimPayload;
     if (
       parsed.version !== 1 ||
       (parsed.status !== "claimed" && parsed.status !== "released") ||
@@ -560,12 +566,8 @@ function ensureObject(
 ): void {
   const hasCommit = (): boolean =>
     localGit(projectDir, ["cat-file", "-e", `${oid}^{commit}`]).ok;
-  const payloadBlob = (): string | null => {
-    const found = localGit(projectDir, ["rev-parse", `${oid}:${CLAIM_FILE}`]);
-    return found.ok && /^[0-9a-f]{40}$/.test(found.stdout.trim())
-      ? found.stdout.trim()
-      : null;
-  };
+  const payloadBlob = (): string | null =>
+    claimBlobAt(projectDir, oid, claimPrefixOf(projectDir))?.blob ?? null;
   const hasBlob = (blob: string | null): boolean =>
     blob !== null && localGit(projectDir, ["cat-file", "-e", blob]).ok;
   let blob = payloadBlob();
@@ -620,7 +622,7 @@ function currentClaim(
   const oid = refTip(projectDir, remote, ref);
   if (!oid) return null;
   ensureObject(projectDir, remote, oid, ref);
-  const payload = readPayload(projectDir, oid, { localOnly: true });
+  const payload = readPayload(projectDir, oid);
   if (!payload) fail(`Unit claim registry payload is invalid at ${ref}.`);
   return {
     unit: payload.unit,
@@ -639,12 +641,14 @@ const NO_GIT_IDENTITY =
   /identity unknown|Please tell me who you are|auto-detect email|no (?:email|name) was given/i;
 
 // Builds a tree equal to `baseTreeOid` but with `path` replaced (or added) by
-// `content`, via a scratch index so the real worktree/index is untouched.
+// `content` and each of `dropped` left out, via a scratch index so the real
+// worktree/index is untouched. Paths are from the repository's top.
 function writeTreeWithBlob(
   projectDir: string,
   baseTreeOid: string,
   path: string,
   content: string,
+  dropped: string[] = [],
 ): string {
   const scratch = mkdtempSync(join(tmpdir(), "aidlc-unit-tree-"));
   const index = join(scratch, "index");
@@ -664,12 +668,46 @@ function writeTreeWithBlob(
       env,
     );
     if (!update.ok) fail(`git update-index failed: ${update.stderr.trim()}`);
+    if (dropped.length > 0) {
+      // Mode 0 removes an entry, and a path the index lacks is a no-op.
+      const zero = "0".repeat((blob.stdout ?? "").trim().length);
+      const removed = git(
+        projectDir,
+        ["update-index", "--index-info"],
+        env,
+        dropped.map((gone) => `0 ${zero}\t${gone}\n`).join(""),
+      );
+      if (!removed.ok) fail(`git update-index failed: ${removed.stderr.trim()}`);
+    }
     const tree = git(projectDir, ["write-tree"], env);
     if (!tree.ok) fail(`git write-tree failed: ${tree.stderr.trim()}`);
     return tree.stdout.trim();
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
+}
+
+// A claim keeps the place its file started in, so a team whose members run
+// different releases works one claim: the place in the claim commit it builds
+// on, when that is a claim of the same Unit of the intent. A claim that starts
+// here (built on the integration branch) takes the last place, which every
+// release reads.
+function claimPlaceFor(
+  projectDir: string,
+  parentOid: string,
+  payload: UnitClaimPayload,
+): string {
+  const prefix = claimPrefixOf(projectDir);
+  const parent = readClaimAt(projectDir, parentOid, prefix);
+  if (parent) {
+    try {
+      const read = JSON.parse(parent.text) as Partial<UnitClaimPayload>;
+      if (read.unit === payload.unit && read.intent_uuid === payload.intent_uuid) return parent.place;
+    } catch {
+      // Not a claim: the place a claim starts in.
+    }
+  }
+  return claimPlaces(prefix).at(-1) as string;
 }
 
 function createClaimCommit(
@@ -679,11 +717,13 @@ function createClaimCommit(
   sourceTreeOid?: string,
   additionalParentOid?: string,
 ): string {
+  const place = claimPlaceFor(projectDir, parentOid, payload);
   const tree = writeTreeWithBlob(
     projectDir,
     sourceTreeOid ?? parentOid,
-    CLAIM_FILE,
+    place,
     `${JSON.stringify(payload, null, 2)}\n`,
+    claimPlaces(claimPrefixOf(projectDir)).filter((other) => other !== place),
   );
   return commitAsPerson(
     projectDir,
@@ -1033,7 +1073,7 @@ function cachedClaimsForIdentity(
     ) {
       continue;
     }
-    const payload = readPayload(projectDir, oid, { localOnly: true });
+    const payload = readPayload(projectDir, oid);
     if (!payload || payload.intent_uuid !== identity.intentUuid) {
       throw new Error(
         `Local Unit claim registry payload is unavailable or invalid at ${ref}; ` +
@@ -1748,7 +1788,7 @@ function candidateBoundary(
   const keptRules = new Set(KEPT_RULE_SCOPES.map((scope) => keptRuleFile(space, scope)));
   const outsideUnitRecordPaths: string[] = [];
   for (const path of changedPaths) {
-    if (isEngineMergeMetadata(projectDir, path, recordPrefix)) continue;
+    if (leftOffMain(projectDir, path, recordPrefix)) continue;
     const pathKey = path.toLowerCase();
     const reviewMarkerIndex = path.indexOf(reviewUnitMarker);
     if (reviewMarkerIndex !== -1) {
@@ -2387,9 +2427,7 @@ function pinnedClaimFromTransaction(
   projectDir: string,
   transaction: UnitMergeTransaction,
 ): UnitClaimView {
-  const payload = readPayload(projectDir, transaction.pinned_oid, {
-    localOnly: true,
-  });
+  const payload = readPayload(projectDir, transaction.pinned_oid);
   if (
     payload?.status !== "claimed" ||
     payload.unit !== transaction.unit ||
@@ -2934,6 +2972,19 @@ function isEngineMergeMetadata(
   ]).has(path);
 }
 
+// What a landing never merges onto main: AI-DLC's engine metadata, and a
+// claim's file and a Unit's results at any of their places. The metadata
+// checkpoint reads isEngineMergeMetadata alone, so it never commits a claim's
+// file a checkout happens to hold.
+function leftOffMain(
+  projectDir: string,
+  path: string,
+  recordPrefix = relativeRecordDir(projectDir),
+): boolean {
+  return isEngineMergeMetadata(projectDir, path, recordPrefix) ||
+    isClaimTreeFile(claimPrefixOf(projectDir), path);
+}
+
 // A review record the candidate carries for pin (withClaimReviewRecords) that
 // this checkout's .gitignore ignores, as AI-DLC's own does for its engine
 // folder, and that main does not hold: the landing keeps it out of the merge
@@ -3152,8 +3203,9 @@ function restoreMainMetadata(
   paths: string[],
 ): void {
   const recordPrefix = relativeRecordDir(projectDir);
+  const prefix = claimPrefixOf(projectDir);
   for (const path of paths.filter((path) =>
-    isEngineMergeMetadata(projectDir, path, recordPrefix)
+    leftOffMain(projectDir, path, recordPrefix)
   )) {
     if (gitPathExistsAt(projectDir, "HEAD", path)) {
       const restored = git(projectDir, ["checkout", "HEAD", "--", path]);
@@ -3166,6 +3218,16 @@ function restoreMainMetadata(
         unlinkSync(join(projectDir, path));
       } catch {
         // Candidate-only metadata may already be absent.
+      }
+      // The result folders the merge made and this emptied go with it, up
+      // to the result folder itself; a folder still holding a file stays.
+      const root = unitResultRootOf(prefix, path);
+      for (let dir = dirname(path); root !== null && `${dir}/`.startsWith(root); dir = dirname(dir)) {
+        try {
+          rmdirSync(join(projectDir, dir));
+        } catch {
+          break;
+        }
       }
     }
   }
@@ -3281,7 +3343,7 @@ function inspectLandedTree(
     isCarriedReviewRecord(projectDir, path, recordPrefix, mainParent);
   const allowedCommitChanges = new Set(
     candidatePaths.filter((path) =>
-      !isEngineMergeMetadata(projectDir, path, recordPrefix) && !carriedOnly(path)
+      !leftOffMain(projectDir, path, recordPrefix) && !carriedOnly(path)
     ),
   );
   const actualCommitChanges = gitOutput(
@@ -3296,7 +3358,7 @@ function inspectLandedTree(
   const objectMismatches: CandidateExactDetails["object_mismatches"] = [];
   for (const path of candidatePaths) {
     const actual = gitObjectAt(projectDir, treeish, path);
-    const expectedTreeish = isEngineMergeMetadata(projectDir, path, recordPrefix) || carriedOnly(path)
+    const expectedTreeish = leftOffMain(projectDir, path, recordPrefix) || carriedOnly(path)
       ? mainParent
       : transaction.pinned_oid;
     const expected = gitObjectAt(projectDir, expectedTreeish, path);
@@ -3613,7 +3675,7 @@ function landGit(
       if (!dropped.ok) fail(`Failed to leave the review record ${path} out of the merge: ${dropped.stderr.trim()}.`);
     }
     const conflicts = conflictFiles(projectDir).filter(
-      (path) => !isEngineMergeMetadata(projectDir, path),
+      (path) => !leftOffMain(projectDir, path),
     );
     if (conflicts.length > 0) {
       git(projectDir, ["merge", "--abort"]);
@@ -4310,7 +4372,7 @@ function adoptUnit(args: string[], projectDir?: string): void {
   if (head !== claim.oid) {
     fail(`Unit adoption requires HEAD at live claim OID ${claim.oid}.`);
   }
-  const checkedOut = readPayload(pd, head, { localOnly: true });
+  const checkedOut = readPayload(pd, head);
   if (
     !checkedOut ||
     checkedOut.nonce !== claim.nonce ||
@@ -5207,7 +5269,7 @@ export function publishedAtHead(projectDir: string): boolean {
   try {
     const stamp = readApplicableTeamUnitScopeStamp(pd);
     if (!stamp?.claim_oid) return false;
-    const payload = readPayload(pd, stamp.claim_oid, { localOnly: true });
+    const payload = readPayload(pd, stamp.claim_oid);
     const head = localGit(pd, ["rev-parse", "HEAD"]);
     return payload?.candidate_head_oid !== undefined && head.ok && payload.candidate_head_oid === head.stdout.trim();
   } catch {
