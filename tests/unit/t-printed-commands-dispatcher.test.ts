@@ -196,7 +196,7 @@ describe("the person's next step names a command they can take", () => {
     });
     expect(res.status).not.toBe(0);
     expect(`${res.stdout}${res.stderr}`).toContain(
-      "2.9.0 is not installed on this machine; run aidlc use 2.9.0 to install it and switch to it, or aidlc system rollback --list for the versions kept here",
+      `2.9.0 is not installed on this machine; run ${INVOKE} use 2.9.0 to install it and switch to it, or ${INVOKE} system rollback --list for the versions kept here`,
     );
   });
 

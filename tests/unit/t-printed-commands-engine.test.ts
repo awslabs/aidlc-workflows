@@ -54,7 +54,7 @@ const HARD_AIDLC_LEFT: Readonly<Record<string, number>> = {
   "aidlc-guard-operation.ts": 1,
   "aidlc-lib.ts": 3,
   // Its lines name the native-only lifecycle commands, where `aidlc` is right.
-  "aidlc-lifecycle.ts": 10,
+  "aidlc-lifecycle.ts": 9,
   "aidlc-model-policy.ts": 1,
   "aidlc-plugin-validate.ts": 1,
   "aidlc-plugin.ts": 2,
