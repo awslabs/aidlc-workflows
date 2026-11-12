@@ -2535,6 +2535,12 @@ export const KIRO_WORKFLOW_HOST_TEMPLATES: readonly HostTurnTemplate[] = [
 // returns. Its opening is pinned; no capture of the rest exists yet.
 export const KIRO_CLI_HOST_TEMPLATES: readonly HostTurnTemplate[] = [
   { name: "kiro sub-agent synthesis", pattern: /^\[SYSTEM\] Sub-agent synthesis:/ },
+  // Kiro Crew 0.11.2, captured live: its notice for a declined tool approval,
+  // one or more whole blocks and nothing else.
+  {
+    name: "kiro crew host notice",
+    pattern: /^(?:<user_message>\r?\n\[Kiro Crew host notice\] (?:(?!<\/?user_message>)[\s\S])*\r?\n<\/user_message>\s*)+$/,
+  },
 ];
 // Claude Code 2.1.280, captured live: the turn it starts when a background task
 // finishes, one element and nothing else. Claude Code 2.1.310, captured live:
