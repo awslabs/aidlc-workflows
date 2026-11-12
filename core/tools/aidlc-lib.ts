@@ -38337,10 +38337,13 @@ export function plannedStages(
     goesBackTo ??= new Set(work ? stagesOwedBehindCursor(stateContent, work.projectDir, work.intent, work.space) : []);
     return goesBackTo.has(slug);
   };
-  const passedOver = (slug: string) =>
-    (stateOf(slug) ?? "pending") === "pending" && cursorPastStage(stateContent, slug) && !owed(slug);
+  // Under team ownership the Unit stages behind the cursor stay open for the
+  // Units still to land in them (a move past them keeps them, handleExecute).
+  const passedOver = (stage: StageEntry) =>
+    (stateOf(stage.slug) ?? "pending") === "pending" && cursorPastStage(stateContent, stage.slug) &&
+    !owed(stage.slug) && !(isPerUnitStage(stage) && isTeamUnitOwnership(stateContent));
   return loadStageGraph().filter((stage) =>
-    stage.phase !== "initialization" && runs(stage.slug) && !passedOver(stage.slug));
+    stage.phase !== "initialization" && runs(stage.slug) && !passedOver(stage));
 }
 
 // --- Plans composed for one piece of work ---

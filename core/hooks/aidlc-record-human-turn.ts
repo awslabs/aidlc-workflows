@@ -786,7 +786,7 @@ try {
     const theirText = [humanResponseText, ...picked].join("\n");
     if (!sessionId || !personHere || turnOrigin.kind === "host" || maskSecretShapes(theirText) === theirText) return;
     const session = sessionId;
-    forThePerson.push(() => saySecretMaskedOnce(projectDir, session));
+    forThePerson.push(() => saySecretMaskedOnce(projectDir, session, true));
   };
   // A help request the person typed is answered here, before any work exists
   // or this chat joins one, on every host that hands this hook's line to the

@@ -417,7 +417,7 @@ Kiro IDE lets you switch any project hook off in its Agent Hooks panel, and then
 
 ---
 
-## Kiro Read Denials <a id="kiro-ide-read-denials"></a>
+## Kiro Read Denials<a id="kiro-ide-read-denials"></a>
 
 ### Kiro IDE or Kiro CLI v3 denies every read under .kiro/ ("deny fs_read matching")
 
@@ -780,7 +780,7 @@ you answer in your own words, from any chat, or edit the files.
 
 ---
 
-## A Bolt attempt was set aside — getting the files back
+## A Bolt attempt was set aside — getting the files back<a id="a-bolt-attempt-was-set-aside-getting-the-files-back"></a>
 
 A recovery can set aside an attempt when its reviewed files changed again and
 its one allowed re-review was already used. The recovery abort's `--discard`

@@ -62,6 +62,8 @@ import {
   claimAttemptFields,
   effectiveUnitGateRhythm,
   isTeamUnitOwnership,
+  cachedClaimFanoutActive,
+  unitMajorConstructionStageSlugs,
 } from "./aidlc-lib.js";
 
 // The EFFECTIVE per-stage action: the live state file's EXECUTE/SKIP suffix
@@ -581,6 +583,7 @@ function movedState(
   scope: string,
   suffixes: Map<string, "EXECUTE" | "SKIP">,
   scopeMapping: { stages: Record<string, string> },
+  keepsUnitStages = false,
 ): {
   content: string;
   stagesSkipped: string[];
@@ -620,6 +623,7 @@ function movedState(
     for (let i = currentIdx + 1; i < targetIdx; i++) {
       const slug = graph[i].slug;
       if (effectiveAction(suffixes, scopeMapping, slug) !== "EXECUTE") continue;
+      if (keepsUnitStages && isPerUnitStage(graph[i])) continue;
       const state = checkboxMap.get(slug);
       if (state && IN_FLIGHT_STATES.includes(state)) {
         content = setCheckbox(content, slug, "skipped");
@@ -629,7 +633,8 @@ function movedState(
     // Also mark the current stage if it's in-flight AND the target is further
     // forward (target !== current). When target === current, direction is "redo"
     // not "forward" — but guard explicitly in case caller mis-specifies.
-    if (currentSlug !== targetSlug) {
+    const currentNode = graph.find((node) => node.slug === currentSlug);
+    if (currentSlug !== targetSlug && !(keepsUnitStages && currentNode && isPerUnitStage(currentNode))) {
       const currentState = checkboxMap.get(currentSlug);
       if (
         currentState &&
@@ -832,20 +837,38 @@ async function handleExecute(args: string[]): Promise<void> {
   // add's own line said what changed or an update added it (the person sees it
   // start), so the move says nothing.
   const addedBack = direction === "backward" && addedStagesPassedOver(content, pd).includes(targetSlug);
+  // Under team ownership, once a team has taken a Unit, a move past the Unit
+  // stages leaves them to the Units' claims, as going back before them does:
+  // each Unit still lands into them as it finishes. The teams' claims are read
+  // as the remote has them now (the board's own one fetch of the claim refs).
+  const unitStages = unitMajorConstructionStageSlugs(scope, content, true);
+  const pastUnitStages = direction === "forward" && isTeamUnitOwnership(content) && unitStages.length > 0 &&
+    stageIndex(targetSlug) > stageIndex(unitStages[unitStages.length - 1]);
+  if (pastUnitStages) {
+    try {
+      // This work's claims, by the one quiet fetch the board reads.
+      (await import("./aidlc-unit.ts")).refreshHomeClaims(pd, { now: true });
+    } catch {
+      // The claims as this checkout last saw them.
+    }
+  }
+  const keepsUnitStages = pastUnitStages && cachedClaimFanoutActive(pd, content);
   // A Construction that runs one unit at a time: what this jump does to each
   // unit, read before the jump writes the state, for the jump's own line.
   // The orchestrator owns the walk; it is loaded only here, so the jump's
   // other commands start without it (a compiled build takes no require() of it).
   let unitSteps: ForwardJumpUnitSteps | null = null;
+  let stillOpen: string | null = null;
   if (direction === "forward") {
     try {
-      const { forwardJumpUnitSteps } = await import("./aidlc-orchestrate.ts");
+      const { forwardJumpUnitSteps, unitsStillOpenLine } = await import("./aidlc-orchestrate.ts");
       unitSteps = forwardJumpUnitSteps(pd, scope, content, targetSlug);
+      if (keepsUnitStages) stillOpen = unitsStillOpenLine(pd);
     } catch {
       // The line names the stages instead; the jump never fails for it.
     }
   }
-  const moved = movedState(content, targetSlug, targetStage, direction, scope, suffixes, scopeMapping);
+  const moved = movedState(content, targetSlug, targetStage, direction, scope, suffixes, scopeMapping, keepsUnitStages);
   content = moved.content;
   const { stagesSkipped, stagesReset, currentStageForPhase, crossesPhaseBoundary, phasesJumpedOver, completedCount, timestamp } = moved;
 
@@ -967,7 +990,8 @@ async function handleExecute(args: string[]): Promise<void> {
   const from = graph.find((node) => node.slug === cameFrom);
   let notice: string | undefined;
   if (direction === "forward") {
-    notice = forwardJumpNotice(targetStage, graph.filter((node) => stagesSkipped.includes(node.slug)), cameFrom, unitSteps);
+    const skipped = graph.filter((node) => stagesSkipped.includes(node.slug));
+    notice = forwardJumpNotice(targetStage, skipped, cameFrom, unitSteps) + (stillOpen ? ` ${stillOpen}` : "");
   } else if (direction === "redo" && targetSlug === "reverse-engineering" && from && from.slug !== targetSlug) {
     notice = reverseEngineeringRedoNotice(from);
   } else if (direction === "backward" && from && !addedBack) {

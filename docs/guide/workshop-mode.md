@@ -476,7 +476,12 @@ git push origin main
 
 Dependents become claimable from the merged row. After the last row merges,
 the per-Unit block settles and main routes Build and Test (3.6), then CI
-Pipeline (3.7), exactly as solo Construction does.
+Pipeline (3.7), exactly as solo Construction does. Main can also move on to
+Build and Test before then, typed (`/aidlc --stage build-and-test`) or asked
+in plain words: once a team has taken a Unit, the Unit stages stay open on
+main, the move says once which Units are still open and whose ("Still open on
+main, and landing as they finish: gamma (team-g); beta, not taken yet."), and
+each Unit still comes up for review and lands as it finishes.
 
 ### Dispatcher, status, and health checks
 

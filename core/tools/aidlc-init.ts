@@ -1323,7 +1323,8 @@ function showModels(
       ? item.agent
       : `${MODEL_GROUPS[item.group].label} (${items.length} agents)`;
     output += `  ${label}: ${item.model ?? "inherit"} / ${item.effort ?? "inherit"}\n`;
-    if (item.group === "reviewing") {
+    // The sentence speaks of the medium baseline: under any other effort it is not so.
+    if (item.group === "reviewing" && item.effort === "medium") {
       output +=
         "    Review-only agents use the measured medium baseline; raising effort trades review time and cost for deeper correctness checking.\n";
     }
@@ -9134,11 +9135,14 @@ function renderFirstRunEnding(
     "utf-8",
   )) as { files?: Record<string, string> };
   const count = Object.keys(manifest.files ?? {}).length;
-  // A receipt's detail continues under its opening parenthesis.
+  // A receipt's detail continues under its opening parenthesis. The folders are
+  // the ones the counted files were planned from (planManagedFiles), so Codex's
+  // .agents/ or Copilot's .github/ is named beside the harness folder.
+  const folders = choices.candidate.descriptor.managedDirectories.map((directory) => `${directory}/`);
   process.stdout.write("\n");
   writeMenuRow(
     `  Writing project files ... ${successText("done", process.stdout)}  `,
-    `(${choices.candidate.descriptor.harnessDir}/ and aidlc/, ${count} files)`,
+    `(${plainList(folders)}, ${count} files)`,
   );
   const harness = modelHarness(choices.candidate.stamp.distribution);
   if (choices.preset === "unchanged" && presetsChangeNothing(harness)) {
