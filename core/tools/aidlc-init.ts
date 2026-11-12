@@ -353,6 +353,7 @@ import {
   preserveKiroMcpRegion,
   harnessCliLeads,
   launchedFromEditorTerminal,
+  cliVersionShown,
   probeHarnessCli,
   probeRuntime,
   providerFiles,
@@ -9839,8 +9840,7 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
   process.stdout.write("  Checked your machine and this repo:\n\n");
   const harnessDetection = detection.harnesses[candidate.stamp.distribution];
   const displayedVersion = harnessDetection?.version
-    ? /\d+\.\d+\.\d+(?:[-+][^\s)]+)?/.exec(harnessDetection.version)?.[0] ??
-      harnessDetection.version
+    ? cliVersionShown(harnessDetection.version)
     : undefined;
   const inEditor = launchedFromCandidateEditor(candidate);
   writeMenuRow(

@@ -29,6 +29,7 @@ import { EARLIER_KIRO_IDE_DROPS } from "../harness/earlier-kiro-plugin-drops.ts"
 import { doctorCommandLines, vscodeVisibleOutput } from "../harness/vscode-output-trim.ts";
 import {
   applyConfigDiagnosticRecords,
+  cliVersionShown,
   codexTrustIssues,
   copilotCliTrust,
   copilotConfigPath,
@@ -1180,7 +1181,7 @@ describe("t294 runtime diagnostics", () => {
     })).toEqual(expect.objectContaining({
       pass: false,
       severity: "warn",
-      label: "Harness CLI: optional kiro-cli kiro-cli 2.24.0 is below 2.24.1",
+      label: "Harness CLI: optional kiro-cli 2.24.0 is below 2.24.1",
     }));
 
     // Required CLIs are unchanged: missing or too old is a warning.
@@ -1189,13 +1190,82 @@ describe("t294 runtime diagnostics", () => {
     expect(cliRow(codex, ".codex", printsVersion("codex-cli 0.144.0\n"))).toEqual(expect.objectContaining({
       pass: false,
       severity: "warn",
-      label: "Harness CLI: codex codex-cli 0.144.0 is below 0.145.0",
+      label: "Harness CLI: codex 0.144.0 is below 0.145.0",
     }));
     expect(cliRow(codex, ".codex", { which: () => null })).toEqual(expect.objectContaining({
       pass: false,
       severity: "warn",
       label: "Harness CLI: codex is missing",
     }));
+  });
+
+  // Most CLIs answer --version with more than the version: "codex-cli
+  // 0.167.1", "kiro-cli 3.2.0", "2.1.322 (Claude Code)", and Copilot adds an
+  // update hint on a second line. Every line that shows it shows the version
+  // alone, on every harness the release ships.
+  test("a Harness CLI row and setup's runtime issue show the CLI's version alone, on every harness", () => {
+    const harnesses = readdirSync(join(REPO_ROOT, "harness"), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && existsSync(join(REPO_ROOT, "harness", entry.name, "manifest.ts")))
+      .map((entry) => entry.name)
+      .sort();
+    expect(harnesses.length).toBeGreaterThanOrEqual(7);
+    for (const harness of harnesses) {
+      const spec = probeHarnessCli(harness as Parameters<typeof probeHarnessCli>[0], { which: () => null });
+      if (!spec.command) continue;
+      const command = spec.command;
+      const project = temp(`aidlc-t294-cli-version-${harness}-`);
+      cpSync(join(DIST, harness), project, { recursive: true });
+      const harnessDir = readdirSync(project).find((name) => existsSync(join(project, name, "tools", "data", "harness.json")));
+      if (!harnessDir) throw new Error(`no harness folder in dist/${harness}`);
+      const replying = (stdout: string) => ({
+        interactivePath: "/opt/tools",
+        which: (name: string) => `/opt/tools/${name}`,
+        run: (path: string) => path === `/opt/tools/${command}`
+          ? { status: 0, stdout }
+          : { status: 0, stdout: "/usr/bin:/bin\n" },
+      });
+      const cliRow = (stdout: string) => {
+        const row = runtimeDoctorChecks(project, harnessDir, { runtime: replying(stdout) })
+          .find((check) => check.label.startsWith("Harness CLI:"));
+        if (!row) throw new Error(`${harness}: no Harness CLI row`);
+        return row.label;
+      };
+      expect(cliRow(`${command}-cli 9.9.9\r\nRun '${command} update' to check for updates.\r\n`), harness)
+        .toBe(`Harness CLI: ${command} 9.9.9 at /opt/tools/${command}`);
+      if (!spec.minimumVersion) continue;
+      expect(cliRow(`${command}-cli 0.0.1\n`), harness)
+        .toBe(`Harness CLI: ${spec.required ? "" : "optional "}${command} 0.0.1 is below ${spec.minimumVersion}`);
+      if (!spec.required) continue;
+      const issue = runtimeIssues(probeRuntime(project, harnessDir, spec.harness, replying(`${command}-cli 0.0.1\n`)))
+        .find((entry) => entry.id === "runtime-harness-cli-old");
+      expect(issue?.message, harness).toBe(`${command} 0.0.1 is below ${spec.minimumVersion}`);
+    }
+  });
+
+  test("the replies the real CLIs give read as their version alone", () => {
+    const claude = temp("aidlc-t294-cli-version-claude-");
+    cpSync(join(DIST, "claude"), claude, { recursive: true });
+    const copilot = temp("aidlc-t294-cli-version-copilot-");
+    cpSync(join(DIST, "copilot"), copilot, { recursive: true });
+    const row = (project: string, harnessDir: string, command: string, stdout: string) =>
+      runtimeDoctorChecks(project, harnessDir, {
+        runtime: {
+          interactivePath: "/opt/tools",
+          which: (name: string) => `/opt/tools/${name}`,
+          run: (path: string) => path === `/opt/tools/${command}` ? { status: 0, stdout } : { status: 0, stdout: "/usr/bin:/bin\n" },
+        },
+      }).find((check) => check.label.startsWith("Harness CLI:"))?.label;
+    expect(row(claude, ".claude", "claude", "2.1.322 (Claude Code)\n"))
+      .toBe("Harness CLI: claude 2.1.322 at /opt/tools/claude");
+    expect(row(copilot, ".aidlc", "copilot", "GitHub Copilot CLI 1.0.109.\nRun 'copilot update' to check for updates.\n"))
+      .toBe("Harness CLI: copilot 1.0.109 at /opt/tools/copilot");
+    expect(row(copilot, ".aidlc", "copilot", "GitHub Copilot CLI 1.0.60.\n"))
+      .toBe("Harness CLI: optional copilot 1.0.60 is below 1.0.74");
+    // A prerelease at the end of Copilot's sentence keeps its tag, not the period.
+    expect(row(copilot, ".aidlc", "copilot", "GitHub Copilot CLI 1.0.110-0.\n"))
+      .toBe("Harness CLI: copilot 1.0.110-0 at /opt/tools/copilot");
+    expect(cliVersionShown("2026.11.11-043ef28")).toBe("2026.11.11-043ef28");
+    expect(cliVersionShown("aidlc 1.2.3-beta.1 (build)")).toBe("1.2.3-beta.1");
   });
 });
 

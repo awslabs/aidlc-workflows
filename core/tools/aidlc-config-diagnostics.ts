@@ -965,6 +965,14 @@ function isVsCodeCopilotStandInFolder(directory: string): boolean {
     parts.at(-2)?.toLowerCase() === "github.copilot-chat";
 }
 
+// A CLI's --version reply often says more than its version ("codex-cli
+// 0.167.1", "2.1.322 (Claude Code)", Copilot's update hint on a second line).
+// A line for the person shows the version alone; the probe keeps the reply.
+// Copilot ends its version with a period, which a prerelease tag never does.
+export function cliVersionShown(reply: string): string {
+  return /\d+\.\d+\.\d+(?:[-+][^\s)]*[^\s).])?/.exec(reply)?.[0] ?? reply;
+}
+
 function versionTuple(value: string): [number, number, number] | null {
   const match = value.match(/(\d+)\.(\d+)\.(\d+)/);
   return match
@@ -1167,7 +1175,9 @@ export function runtimeIssues(diagnostics: RuntimeDiagnostics): DiagnosticIssue[
     issues.push({
       id: "runtime-harness-cli-old",
       message:
-        `${diagnostics.cli.command} ${diagnostics.cli.version || "unknown"} is below ${diagnostics.cli.minimumVersion}`,
+        `${diagnostics.cli.command} ${
+          diagnostics.cli.version ? cliVersionShown(diagnostics.cli.version) : "unknown"
+        } is below ${diagnostics.cli.minimumVersion}`,
       remediation: diagnostics.cli.remediation ?? "Upgrade the selected harness CLI.",
     });
   }
@@ -3769,11 +3779,13 @@ export function runtimeDoctorChecks(
       ? { severity: "warn" as const }
       : {}),
     label: cli.status === "found"
-      ? `Harness CLI: ${cli.command} ${cli.version || ""} at ${cli.path}`.trim()
+      ? `Harness CLI: ${cli.command} ${cli.version ? cliVersionShown(cli.version) : ""} at ${cli.path}`.trim()
       : cli.status === "not-applicable"
       ? `Harness CLI: none required for ${typedHarnessName(cli.harness)}`
       : cli.status === "too-old"
-      ? `Harness CLI: ${cli.required ? "" : "optional "}${cli.command} ${cli.version || "unknown"} is below ${cli.minimumVersion}`
+      ? `Harness CLI: ${cli.required ? "" : "optional "}${cli.command} ${
+        cli.version ? cliVersionShown(cli.version) : "unknown"
+      } is below ${cli.minimumVersion}`
       : cli.required
       ? `Harness CLI: ${cli.command} is missing`
       : `Harness CLI: optional ${cli.command} is not installed`,
