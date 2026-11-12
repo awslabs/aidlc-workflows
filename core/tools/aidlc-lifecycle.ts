@@ -2785,6 +2785,12 @@ function rollbackCommand(argv: string[]): ReturnType<typeof success> {
       );
     }
   }
+  if (typed && !existsSync(runtimeRoot(target))) {
+    throw new Error(
+      `${target} is not installed on this machine; run aidlc use ${target} to install it and switch to it, ` +
+        "or aidlc system rollback --list for the versions kept here",
+    );
+  }
   const active = activeVersion();
   const missing = active
     ? installedDistributions(active).filter((item) => !installedDistributions(target).includes(item))

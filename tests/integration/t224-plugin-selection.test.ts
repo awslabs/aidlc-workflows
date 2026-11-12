@@ -422,7 +422,7 @@ describe("t224 plugin selection - install chooses visible plugin surfaces", () =
 
     const result = runUtility(proj, ["select-plugins", "aidlc"]);
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("select-plugins refused");
+    expect(result.stderr).toContain("plugin select refused");
     // die() JSON-encodes the message, so quotes arrive escaped - assert on
     // quote-free substrings.
     expect(result.stderr).toContain("test-pro-validation");
@@ -622,7 +622,7 @@ describe("t224 plugin selection - install chooses visible plugin surfaces", () =
 
     const result = runUtility(proj, ["select-plugins", "aidlc,test-pro"]);
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("select-plugins failed");
+    expect(result.stderr).toContain("plugin select failed");
     expect(readFileSync(harnessPath(proj), "utf-8")).toBe(beforeHarness);
     expect(readFileSync(graphPath(proj), "utf-8")).toBe(beforeGraph);
     expect(readFileSync(gridPath(proj), "utf-8")).toBe(beforeGrid);

@@ -2062,10 +2062,17 @@ function handleConfig(route: Route, argv: string[]): Action {
   return nounError("config", key ? `set ${key}` : "set");
 }
 
+// `plugin help`: the plugin noun's commands, as the route lists them.
+function pluginHelp(): string {
+  const rows = ROUTES.find((route) => route.custom === "plugin")?.human ?? [];
+  const width = Math.max(...rows.map((row) => row.command.length));
+  return rows.map((row) => `  ${row.command.padEnd(width)}  ${row.summary}\n`).join("");
+}
+
 function handlePlugin(argv: string[]): Action {
   const command = parseDispatcherPluginCommand(argv);
   if (command.kind === "help") {
-    return { type: "help", scope: "engine" };
+    return { type: "noun-help", message: pluginHelp() };
   }
   if (command.kind === "error") {
     return { type: "error", code: 1, message: `${command.message}\n` };

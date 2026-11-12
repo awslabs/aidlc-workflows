@@ -178,3 +178,42 @@ describe("plugin sync on a host with no plugin list yet", () => {
     expect(res.out).toContain("host inventory unavailable");
   });
 });
+
+describe("the person's next step names a command they can take", () => {
+  test("a plugin or knowledge verb that does not exist names the ones that do", () => {
+    const plugin = resolveAction(["engine", "plugin", "frob"]);
+    expect(plugin.type === "error" ? plugin.message : "").toBe(
+      `\`${INVOKE} engine plugin frob\` is not a plugin command; the plugin commands are select, list, sync, validate, build and test\n`,
+    );
+    const help = resolveAction(["engine", "plugin"]);
+    expect(help.type).toBe("noun-help");
+    expect(help.type === "noun-help" ? help.message : "").toMatch(/^ {2}plugin sync \[--prune-missing\] +transactionally compose installed plugins$/m);
+  });
+
+  test("rolling back to a version this machine does not hold names the command that installs it", () => {
+    const res = dispatch(["system", "rollback", "2.9.0"], join(REPO_ROOT, "dist", "claude"), {
+      AIDLC_BIN_DIR: join(temp("aidlc-printed-rollback-bin-"), "bin"),
+    });
+    expect(res.status).not.toBe(0);
+    expect(`${res.stdout}${res.stderr}`).toContain(
+      "2.9.0 is not installed on this machine; run aidlc use 2.9.0 to install it and switch to it, or aidlc system rollback --list for the versions kept here",
+    );
+  });
+
+  test("a reference plugin's doctor fix names the entry of the harness it runs in", () => {
+    const script = join(REPO_ROOT, "plugins", "test-pro", "tools", "test-pro-doctor.ts");
+    for (const [dir, entry] of [[".claude", "/aidlc"], [".codex", "$aidlc"]]) {
+      const res = spawnSync(BUN, [script], {
+        encoding: "utf-8",
+        env: { ...process.env, AIDLC_PROJECT_DIR: temp("aidlc-printed-plugin-doctor-"), AIDLC_HARNESS_DIR: dir },
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      const fixes = (JSON.parse(res.stdout) as { checks: { fix: string }[] }).checks.map((check) => check.fix);
+      expect(fixes.length).toBeGreaterThan(0);
+      for (const fix of fixes) expect(fix, dir).toBe(`Run \`${entry} plugin sync\` (or re-run the plugin's \`hooks/compose.ts\`).`);
+    }
+    // The same entry the engine writes into each tree's runners.
+    const codexRunner = readFileSync(join(REPO_ROOT, "dist", "codex", ".agents", "skills", "aidlc-compose", "SKILL.md"), "utf-8");
+    expect(codexRunner).toContain("`$aidlc compose`");
+  });
+});

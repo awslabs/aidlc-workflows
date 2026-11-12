@@ -2190,7 +2190,7 @@ export type PluginCommand =
 export function parsePluginCommand(args: readonly string[]): PluginCommand {
   if (args[0] !== "plugin") return { kind: "not-plugin" };
   const verb = args[1];
-  if (verb === "help" || verb === "-h" || verb === "--help") {
+  if (verb === undefined || verb === "help" || verb === "-h" || verb === "--help") {
     return { kind: "help" };
   }
   const target = verb === "select"
@@ -2207,10 +2207,9 @@ export function parsePluginCommand(args: readonly string[]): PluginCommand {
   if (target !== undefined) {
     return { kind: "run", argv: [target, ...args.slice(2)] };
   }
-  const detail = verb ? `unknown verb '${verb}'` : "missing verb";
   return {
     kind: "error",
-    message: `aidlc: ${detail} for noun 'plugin'; try 'aidlc help --all'`,
+    message: `\`${entrySkillInvocation()} plugin ${verb}\` is not a plugin command; the plugin commands are select, list, sync, validate and build`,
   };
 }
 
@@ -2298,13 +2297,16 @@ export function parseKnowledgeCommand(args: readonly string[]): KnowledgeCommand
   if (verb === "help" || verb === "-h" || verb === "--help") {
     return { kind: "help" };
   }
-  if (verb !== undefined && KNOWLEDGE_VERBS.includes(verb)) {
+  if (verb === undefined) {
+    return { kind: "error", message: "aidlc: missing verb for noun 'knowledge'; try 'aidlc help --all'" };
+  }
+  if (KNOWLEDGE_VERBS.includes(verb)) {
     return { kind: "run", argv: [verb, ...args.slice(2)] };
   }
-  const detail = verb ? `unknown verb '${verb}'` : "missing verb";
   return {
     kind: "error",
-    message: `aidlc: ${detail} for noun 'knowledge'; try 'aidlc help --all'`,
+    message: `\`${entrySkillInvocation()} knowledge ${verb}\` is not a knowledge command; the knowledge commands are ` +
+      `${KNOWLEDGE_VERBS.slice(0, -1).join(", ")} and ${KNOWLEDGE_VERBS.at(-1)}`,
   };
 }
 
@@ -42108,9 +42110,8 @@ export function classifyStateVersion(stateContent: string): StateVersionClassifi
     "Incompatible workflow state: the State Version field is missing, empty, " +
     "or unparseable in aidlc-state.md, so this state cannot be matched to the " +
     `current v${CURRENT_STATE_VERSION} stage graph and cannot be advanced safely. ` +
-    "Archive your workspace ('mv aidlc aidlc.archive') and start a fresh " +
-    "workflow (describe what to build), or finish this workflow on the prior " +
-    `shell. Run \`${entrySkillInvocation()} --doctor\` for the full diagnosis.`;
+    "Put its `- **State Version**:` line back as it was (git has it if the file " +
+    `was committed), then try again. Run \`${entrySkillInvocation()} --doctor\` for the full diagnosis.`;
   // Anchor the tail with `[ \t]*$`: the schema token is a bare integer with
   // no trailing content on the line, so `State Version: 8 garbage` fails to
   // match and falls into the unparseable branch.

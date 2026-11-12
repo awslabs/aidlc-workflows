@@ -1013,7 +1013,7 @@ function requireInstalledHarness(projectDir: string): void {
   );
   if (!existsSync(installedLib)) {
     die(
-      `select-plugins requires an installed project harness at ${dirname(dirname(installedLib))}.`,
+      `plugin select requires an installed project harness at ${dirname(dirname(installedLib))}.`,
     );
   }
 }
@@ -1434,7 +1434,7 @@ function handleSelectPlugins(projectDir: string, positional: string[], rulesLeve
     ? { names: knownPluginNames().filter((name) => pluginsEnabled()?.has(name) ?? true), hasEmpty: false }
     : parsePluginSelectionArgs(positional);
   if (parsedSelection.hasEmpty || parsedSelection.names.length === 0) {
-    die("select-plugins requires at least one non-empty plugin name, or no arguments to print the current selection.");
+    die("plugin select requires at least one non-empty plugin name, or no arguments to print the current selection.");
   }
   const names = [...new Set(parsedSelection.names)].sort();
   requireInstalledHarness(projectDir);
@@ -1465,11 +1465,11 @@ function handleSelectPlugins(projectDir: string, positional: string[], rulesLeve
         .map(([plugin, base]) => `  ${plugin} would be paused: ${plugin} builds on ${base}, which this selection leaves off.\n`)
         .join("");
       die(
-        `select-plugins refused: the new selection would strand ${violations.length} active workflow dependency(ies):\n` +
+        `plugin select refused: the new selection would strand ${violations.length} active workflow dependency(ies):\n` +
           violations.map((v) => `  - ${v}`).join("\n") +
           (pausedWhy ? `\n${pausedWhy.trimEnd()}` : "") +
           `\nComplete or archive the workflow(s) first (\`${entrySkillInvocation()} intent archive <name>\`; a parked workflow ` +
-          "still needs its plugin when it resumes), or keep the plugin enabled, then re-run select-plugins.",
+          `still needs its plugin when it resumes), or keep the plugin enabled, then re-run \`${entrySkillInvocation()} plugin select <names>\`.`,
       );
     }
 
@@ -1565,7 +1565,7 @@ function handleSelectPlugins(projectDir: string, positional: string[], rulesLeve
       }
     } catch (err) {
       resetSelectionSensitiveCaches();
-      die(`select-plugins failed: ${withTransactionFix(err, errorMessage(err))}`);
+      die(`plugin select failed: ${withTransactionFix(err, errorMessage(err))}`);
     } finally {
       rmSync(stagingRoot, { recursive: true, force: true });
     }
@@ -1770,13 +1770,13 @@ async function handlePluginSync(projectDir: string, pluginRoot: string | undefin
 
   if (composePaths.length === 0) {
     die(
-      `plugin-sync: no compose hook found in ${roots.length} configured plugin root(s):\n${skippedDetails}`,
+      `plugin sync: no compose hook found in ${roots.length} configured plugin root(s):\n${skippedDetails}`,
     );
   }
 
   if (skippedRoots.length > 0) {
     process.stderr.write(
-      `plugin-sync warning: skipped ${skippedRoots.length} configured plugin root(s):\n${skippedDetails}\n`,
+      `plugin sync warning: skipped ${skippedRoots.length} configured plugin root(s):\n${skippedDetails}\n`,
     );
   }
 
@@ -1812,11 +1812,11 @@ async function handlePluginSync(projectDir: string, pluginRoot: string | undefin
           compose?: () => void | Promise<void>;
         };
         if (typeof mod.compose !== "function") {
-          die(`plugin-sync failed for ${item.root}: compose.ts does not export compose()`);
+          die(`plugin sync failed for ${item.root}: compose.ts does not export compose()`);
         }
         await mod.compose();
       } catch (error) {
-        die(`plugin-sync failed for ${item.root}: ${withTransactionFix(error, errorMessage(error))}`);
+        die(`plugin sync failed for ${item.root}: ${withTransactionFix(error, errorMessage(error))}`);
       } finally {
         for (const key of envKeys) {
           const value = previous[key];
@@ -1835,7 +1835,7 @@ async function handlePluginSync(projectDir: string, pluginRoot: string | undefin
     });
     if (result.status !== 0) {
       const detail = (result.stderr || result.stdout || `exit ${result.status ?? 1}`).trim();
-      die(`plugin-sync failed for ${item.root}: ${detail}`);
+      die(`plugin sync failed for ${item.root}: ${detail}`);
     }
     rulesLines.push(...pluginSyncRules(projectDir, item.root));
   }
@@ -1850,7 +1850,7 @@ function pluginSyncRules(projectDir: string, root: string): string[] {
     const line = mergePluginRulesFromRoot(projectDir, harnessDir(), root, isPluginEnabled);
     return line === null ? [] : [line];
   } catch (error) {
-    die(`plugin-sync failed for ${root}: ${errorMessage(error)}`);
+    die(`plugin sync failed for ${root}: ${errorMessage(error)}`);
   }
 }
 
@@ -5950,7 +5950,7 @@ export async function collectDoctorReport(
       results.push({
         pass: !subagents.malformed && subagents.staleCount === 0,
         label: `Background-subagent ledger present (${ledger}, ${countLabel})`,
-        fix: `if no background subagent is actually running, delete it at your own terminal ('rm ${ledger}'). Stale or malformed entries never authorize the Stop hook, but the ledger should not linger.`,
+        fix: `if no background subagent is actually running, delete ${ledger} yourself. Stale or malformed entries never authorize the Stop hook, but the ledger should not linger.`,
       });
     }
   } catch {

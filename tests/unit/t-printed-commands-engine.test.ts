@@ -47,14 +47,14 @@ const BARE_TOOL_LEFT: Readonly<Record<string, number>> = {
   "aidlc-worktree.ts": 1,
 };
 const HARD_AIDLC_LEFT: Readonly<Record<string, number>> = {
-  "aidlc-command.ts": 1,
   "aidlc-completions.ts": 1,
   "aidlc-config-diagnostics.ts": 1,
   "aidlc-directive.ts": 6,
   "aidlc-graph.ts": 2,
   "aidlc-guard-operation.ts": 1,
-  "aidlc-lib.ts": 4,
-  "aidlc-lifecycle.ts": 9,
+  "aidlc-lib.ts": 3,
+  // Its lines name the native-only lifecycle commands, where `aidlc` is right.
+  "aidlc-lifecycle.ts": 10,
   "aidlc-model-policy.ts": 1,
   "aidlc-plugin-validate.ts": 1,
   "aidlc-plugin.ts": 2,

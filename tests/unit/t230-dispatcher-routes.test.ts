@@ -3727,12 +3727,13 @@ describe("t230 dispatcher help and errors", () => {
   test("plugin help and invalid plugin verbs use the shared noun grammar", () => {
     const help = viaDispatcher(["engine", "plugin", "help"], REPO_ROOT);
     expect(help.exitCode).toBe(0);
-    expect(help.stdout.toString("utf-8")).toContain("plugin: select [names]");
+    expect(help.stdout.toString("utf-8")).toMatch(/^ {2}plugin select \[names\] +set enabled plugins$/m);
+    expect(help.stdout.toString("utf-8")).not.toContain("Engine machinery");
 
     const invalid = viaDispatcher(["engine", "plugin", "remove"], REPO_ROOT);
     expect(invalid.exitCode).toBe(1);
     expect(invalid.stderr.toString("utf-8")).toBe(
-      "aidlc: unknown verb 'remove' for noun 'plugin'; try 'aidlc help --all'\n",
+      "`bun .claude/tools/aidlc.ts engine plugin remove` is not a plugin command; the plugin commands are select, list, sync, validate, build and test\n",
     );
   });
 
