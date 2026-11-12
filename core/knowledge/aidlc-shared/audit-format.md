@@ -7,7 +7,7 @@ completion, and skip outcomes through `tools/aidlc-orchestrate.ts report`.
 The state tool entries below are the engine's internal atomic emitters, not
 commands a stage or conductor invokes directly.
 
-> See [`docs/reference/12-state-machine.md`](../../../../docs/reference/12-state-machine.md) for the state transitions that emit each event. Events marked `✓` are MANDATORY and asserted by `tests/feature/t48-audit-event-emitters.sh`.
+> Events marked `✓` are MANDATORY.
 
 ## Naming Convention
 

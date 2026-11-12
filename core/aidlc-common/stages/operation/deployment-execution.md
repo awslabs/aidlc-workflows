@@ -104,7 +104,7 @@ Follow stage-protocol.md question flow.
 
 ### Step 3: Execute Deployment
 
-Push artifacts through the pipeline. Run smoke tests. Validate health checks. Execute database migrations if needed: delegate to Task tool with subagent_type="aidlc-developer-agent" for migration execution.
+Push artifacts through the pipeline. Run smoke tests. Validate health checks. Execute database migrations if needed.
 
 ### Step 4: Generate Artifacts
 

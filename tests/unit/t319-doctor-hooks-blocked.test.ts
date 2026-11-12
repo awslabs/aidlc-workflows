@@ -127,7 +127,7 @@ const KIRO_IDE_ADVICE = ["Trust Folder & Continue", "Kiro IDE", "Reload Window",
 const KIRO_RECOVERY =
   "In Kiro IDE, trust this folder: choose Trust Folder & Continue when Kiro asks whether you trust it, or select Manage on the Restricted Mode banner, then Trust. Then run Developer: Reload Window from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), and say carry on. " +
   "In Kiro CLI, quit Kiro and start `kiro-cli --v3` again in this folder (if Kiro asks whether you trust this workspace and you know what is in this folder, choose 'Trust, continue'), then type /aidlc to carry on. " +
-  "If you drive Kiro from an ACP client, the Kiro IDE guide names what that client must send.";
+  "If you drive Kiro from an ACP client, the AI-DLC guide for Kiro names what that client must send.";
 
 // A PATH with a supported kiro-cli (a stand-in doctor runs for its version: a
 // .cmd on Windows, a shell script elsewhere) or with none, and the shell marks
@@ -364,10 +364,10 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
     // Trust takes effect after the reload; the agent picker does not stop the hooks.
     expect(output(run)).not.toContain("agent picker");
     expect(output(run)).toContain(KIRO_RECOVERY);
-    // What an ACP client must send is in the Kiro IDE guide, not in this line,
+    // What an ACP client must send is in the AI-DLC guide for Kiro, not in this line,
     // and the line says what to do, not how AI-DLC works.
     expect(output(run)).toContain(
-      "If you drive Kiro from an ACP client, the Kiro IDE guide names what that client must send.",
+      "If you drive Kiro from an ACP client, the AI-DLC guide for Kiro names what that client must send.",
     );
     expect(output(run)).not.toContain("for AI-DLC's hooks to run");
     expect(output(run)).not.toContain("clientCapabilities");

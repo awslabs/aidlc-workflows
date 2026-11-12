@@ -8,8 +8,9 @@
 // makes that a CLOSED, reviewable predicate rather than a free-text "is this
 // legitimately legacy?" judgement (which is trivially satisfiable by allowlisting
 // everything). It scans every docs/**/*.md line PLUS both user-facing onboarding
-// templates under core/templates/ (neutral guidance and native setup) for a
-// surviving `aidlc-docs` or `--init` occurrence and FAILS unless:
+// templates under core/templates/ (neutral guidance and native setup) PLUS every
+// core/knowledge/**/*.md file (the knowledge the agent is handed at each stage)
+// for a surviving `aidlc-docs` or `--init` occurrence and FAILS unless:
 //   (a) the occurrence is pinned in tests/fixtures/docs-legacy-refs.json by exact
 //       file + line text — so widening the allowlist needs a visible diff there; AND
 //   (b) the pinned-set size stays <= the fixture's `ceiling` — so blanket-
@@ -30,6 +31,7 @@ import { conductorSkillFileNames } from "../harness/conductor-skill.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 
 const DOCS_DIR = join(REPO_ROOT, "docs");
+const KNOWLEDGE_DIR = join(REPO_ROOT, "core", "knowledge");
 const FIXTURE = join(REPO_ROOT, "tests", "fixtures", "docs-legacy-refs.json");
 // Authored-prose surfaces OUTSIDE docs/, derived FROM DISK so a new harness's
 // SKILL.md or a new onboarding template is auto-covered without a test edit. Two
@@ -77,7 +79,7 @@ interface AllowFixture {
 
 const fixture = JSON.parse(readFileSync(FIXTURE, "utf-8")) as AllowFixture;
 
-/** Recursively list every .md file under docs/, repo-root-relative (posix). */
+/** Recursively list every .md file under a folder, repo-root-relative (posix). */
 function listDocs(dir: string): string[] {
   const out: string[] = [];
   for (const name of readdirSync(dir)) {
@@ -101,7 +103,7 @@ interface Occurrence {
 
 function scanOccurrences(): Occurrence[] {
   const out: Occurrence[] = [];
-  for (const rel of [...listDocs(DOCS_DIR), ...EXTRA_DOC_FILES]) {
+  for (const rel of [...listDocs(DOCS_DIR), ...listDocs(KNOWLEDGE_DIR), ...EXTRA_DOC_FILES]) {
     const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
     const lines = body.split("\n");
     for (let i = 0; i < lines.length; i++) {

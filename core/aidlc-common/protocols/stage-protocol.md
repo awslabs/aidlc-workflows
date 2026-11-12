@@ -1149,8 +1149,7 @@ other repositories in the same stage. Reverse Engineering `--single` Keep
 receipts require the exact CodeKB path, every graph-declared required artifact
 as an authoritative regular file, and a `CURRENT` scope fingerprint; the
 pipeline completion check independently verifies the artifact set and freshness
-again. See
-`docs/reference/12-state-machine.md` for the canonical emitter registry.
+again.
 
 This applies to ALL stages, not just jump targets: when the workflow replays forward after a backward jump, each subsequent stage will also encounter existing artifacts and offer the same choice, unless the person already said what they want for it.
 
