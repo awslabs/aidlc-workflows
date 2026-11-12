@@ -437,7 +437,7 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
 
   // validate-state beats only before a compaction on Claude Code; the audit
   // hook beats on every call.
-  test("2j: a hook that fires only at compaction does not read frozen while another hook beat after the latest work", () => {
+  test("2j: a hook that fires only at compaction does not read frozen while another hook beat within the day before the latest work", () => {
     const proj = freshProject();
     const record = seedIdleIntentBeats(proj);
     const health = join(record, ".aidlc-engine", "hooks-health");
