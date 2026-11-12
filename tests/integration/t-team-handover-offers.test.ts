@@ -11,7 +11,7 @@
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readActiveDirectiveMarker, readUnitScopeStamp } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -153,6 +153,18 @@ function committedHere(dir: string): string[] {
   return git(dir, ["show", "--no-renames", "--name-only", "--format=", "HEAD"]).split("\n").filter(Boolean);
 }
 
+// The step `next` gives in one chat (a line said once is said once a chat).
+function nextInChat(dir: string, chat: string): Record<string, unknown> {
+  const env = { AIDLC_SESSION_OVERRIDE: chat, AIDLC_SESSION_OVERRIDE_SOURCE: "payload" };
+  let result = runMergeTool(ORCH, ["next"], dir, false, env);
+  for (;;) {
+    expect(result.status, result.out).toBe(0);
+    const step = JSON.parse(result.stdout) as Record<string, unknown>;
+    if (step.kind !== "load-steering" || typeof step.receipt !== "string") return step;
+    result = runMergeTool(ORCH, ["continue", step.receipt], dir, false, env);
+  }
+}
+
 // The share's result: it names what it committed in the words the question
 // used, and counts what the commit took.
 function expectResultNames(stdout: string, dir: string, words: string): void {
@@ -174,6 +186,7 @@ describe("step 1: the lead shares the plan with the teams", () => {
     expect(commandFor(offer, "Share them with the teams")).toMatch(/ unit share$/);
     expect(commandFor(offer, "Build them here for now")).toMatch(/ next$/);
     expect(detailFor(offer, "Share them with the teams")).toBe(`Pushes ${PLAIN_PUSH}`);
+    expect(JSON.stringify(offer)).not.toContain("Team work needs this project at the top");
     // No self-loop: the reply that does not take it runs next, and the walk goes on.
     const walk = nextDirective(lead);
     expect(isHandover(walk), JSON.stringify(walk)).toBe(false);
@@ -329,6 +342,49 @@ describe("step 1: the lead shares the plan with the teams", () => {
     } finally {
       chmodSync(join(lead, "unreadable.txt"), 0o644);
     }
+  });
+
+  // Taking, publishing and landing Units read and write the repository's trees
+  // at its top, so a project in a folder below it cannot hand Units to teams
+  // yet: no share is offered that would then fail, the walk says why once, and
+  // a typed share says it before it stages, commits or pushes anything.
+  test("a project in a folder of a bigger repository: no share is offered, and a typed share says why first", () => {
+    const { seed: lead } = makeSeed();
+    asLeadsOwnCheckout(lead);
+    const outer = mkdtempSync(join(tmpdir(), "aidlc-inc3-outer-"));
+    tempDirs.push(outer);
+    git(outer, ["init", "-b", "main"]);
+    git(outer, ["config", "user.name", "outer"]);
+    git(outer, ["config", "user.email", "outer@example.test"]);
+    cpSync(lead, join(outer, "app"), { recursive: true, filter: (path) => !path.split(/[\\/]/).includes(".git") });
+    mkdirSync(join(outer, "other"), { recursive: true });
+    writeFileSync(join(outer, "other", "notes.md"), "the person's other package\n");
+    git(outer, ["add", "-A"]);
+    git(outer, ["commit", "-m", "monorepo"]);
+    const bare = mkdtempSync(join(tmpdir(), "aidlc-inc3-outer-remote-"));
+    tempDirs.push(bare);
+    git(bare, ["init", "--bare", "-b", "main"]);
+    git(outer, ["remote", "add", "origin", bare]);
+    git(outer, ["push", "-u", "origin", "main"]);
+    const app = join(outer, "app");
+    writeFileSync(join(outer, "other", "staged.md"), "staged outside the project\n");
+    git(outer, ["add", "other/staged.md"]);
+    writeFileSync(join(app, "z-deploy.env"), "API_KEY=not-for-the-team\n");
+    const line = "Team work needs this project at the top of its git repository; it sits in app of " +
+      `${git(outer, ["rev-parse", "--show-toplevel"])}.`;
+    const chat = "01995000-7a11-7000-8000-000000003822";
+    const step = nextInChat(app, chat);
+    expect(isHandover(step), JSON.stringify(step)).toBe(false);
+    expect(JSON.stringify(step)).toContain(line);
+    // Said once, beside the step that starts the build, not at every step.
+    const after = nextInChat(app, chat);
+    expect(isHandover(after), JSON.stringify(after)).toBe(false);
+    expect(JSON.stringify(after)).not.toContain(line);
+    const before = [git(outer, ["rev-parse", "HEAD"]), git(bare, ["rev-parse", "main"]), git(outer, ["status", "--porcelain"])];
+    const shared = runMergeTool(UNIT, ["share"], app);
+    expect(shared.status, shared.out).not.toBe(0);
+    expect(shared.out).toContain(JSON.stringify({ error: line }));
+    expect([git(outer, ["rev-parse", "HEAD"]), git(bare, ["rev-parse", "main"]), git(outer, ["status", "--porcelain"])]).toEqual(before);
   });
 
   // Ten names in all, whatever their kind: the ten nearest the project's top,
