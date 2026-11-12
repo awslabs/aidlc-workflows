@@ -738,6 +738,11 @@ repo. Two kinds of file are deliberately **gitignored** instead:
 | `…/knowledge/documentkb/.journal/` | One directory per in-flight document transaction. Transient and per-clone; a committed journal would be a merge conflict on every concurrent `sync`. |
 | `…/knowledge/.sources.local.json` | Where *this machine* finds documents that live outside the repo. The path is machine-specific by definition, so committing it would break every teammate's checkout. No command creates such a link today (`onboard` copies a file into `documents/`), so you will not normally see this file. |
 
+`aidlc/.aidlc-engine/` holds this computer's own files (sessions, the clone id,
+active memory); each piece of work's own `.aidlc-engine/` folder holds that
+work's scratch (reviews, its local audit log, waiting questions) and goes
+wherever the work goes. Git ignores both.
+
 Everything else under a space — `memory/**`, `knowledge/**`, `codekb/**`,
 `intents.json`, each record's `aidlc-state.md`, `audit/` shards, and artifacts — is
 committed. The rule of thumb: **cursors and runtime scratch are local; the shared
