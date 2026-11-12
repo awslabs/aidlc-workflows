@@ -1072,15 +1072,16 @@ intent ids and Unit names are hashed, and secret-like values are scrubbed.
 The report reconstructs the workflow timeline from the audit trail and runs
 deterministic condition→remedy rules. The two most common causes it catches:
 
-- **Unresolved approval gates** — a stage whose gate never resolved is the single
-  most common "it will not advance" cause.
-- **Missing runtime graph / cold hooks**: a runtime graph that is absent, or a
-  hook that last fired more than a day before the newest stage or approval step
-  recorded on the intent, points at a recompile that did not run. Opening a chat,
+- **A stage waiting at its approval gate**: the single most common reason the
+  work does not advance. The report's timeline shows its Gate as `unresolved`;
+  it is no warning, since the workflow is waiting for your answer.
+- **Missing runtime graph / cold hooks**: a runtime graph that is absent, or
+  hooks that all last fired more than a day before the newest stage or approval
+  step recorded on the intent, point at a recompile that did not run. Opening a chat,
   a prompt and doctor's own audit rows are not counted as work, so an intent
   nobody is working on does not read as having cold hooks.
 
-`report.md` inside the report lists every finding with a remedy; a remedy that
+`report.md` inside the report lists every error and warning with a remedy (`report.json` also keeps the informational findings); a remedy that
 names a recovery bypass (such as an `AIDLC_DISABLE_*` env var) is flagged
 as not safe to automate. See [CLI Commands](12-cli-commands.md#aidlc-doctor-export-write-a-diagnostic-report)
 for the full report contents and safety model.
