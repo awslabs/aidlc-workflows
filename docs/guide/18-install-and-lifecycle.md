@@ -1628,7 +1628,10 @@ keys with the same version collapse; conflicting equivalents fail closed until
 
 Commit only `.aidlc-version`. The stable `aidlc` launcher starts the
 integrity-checked active binary, whose dispatcher validates the complete pinned
-binary and runtime before selecting it. A missing, malformed, tampered, or
+binary and runtime before selecting it: in full on a session's first call, and on
+later calls of that chat every check but the hashing, so damage made during a
+session is caught in the next one. `aidlc update`, `aidlc use`,
+`aidlc config --pin` and `aidlc doctor` always check in full. A missing, malformed, tampered, or
 unavailable target fails closed with `aidlc config --pin <version>` remediation, and
 `aidlc doctor` reports the same condition. Machine lifecycle commands use the
 active binary; `doctor`, `config`, and `use` are never trapped behind a broken
