@@ -528,8 +528,8 @@ export function installedVersionFingerprint(version: string): string | null {
   }
 }
 
-// `hashes: false` leaves out only the sha256 of the binary and of each runtime
-// file: every other check runs. Only the pinned dispatch passes it, for a
+// With `hashes` set to false it leaves out only the sha256 of the binary and of
+// each runtime file: every other check runs. Only the pinned dispatch passes it, for a
 // release its session already checked in full (aidlc-lifecycle.ts).
 export function inspectInstalledVersion(
   version: string,
