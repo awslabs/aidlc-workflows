@@ -358,6 +358,12 @@ describe("t232 Phase Progress - a forward jump records only the phases it passes
     expect(phaseRows(proj).slice(before)).toEqual([
       "PHASE_COMPLETED ideation", "PHASE_VERIFIED", "PHASE_STARTED inception",
     ]);
+    // The row records the crossing; a jump runs no traceability check, so the
+    // row says nothing of one, as the advance's row does not.
+    const verified = readAuditShardEvents(proj).filter((row) => row.event === "PHASE_VERIFIED").at(-1);
+    expect(auditBlockField(verified!.block, "Phase boundary")).toContain("ideation");
+    expect(auditBlockField(verified!.block, "Details")).toBeNull();
+    expect(verified!.block).not.toContain("Traceability");
   });
 
   test("a phase the plan leaves out keeps creation's one row", () => {
