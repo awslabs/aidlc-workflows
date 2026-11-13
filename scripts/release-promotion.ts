@@ -406,6 +406,9 @@ export function promotionNotes(p: Promotion): string {
     // Copy installs use their own Bun; 1.4.4 includes the CVE-2026-111497 fix.
     `Manual-copy users must copy the complete \`runtime/<harness>/\` tree from [\`aidlc-copy-runtime-${p.version}.tar.gz\`](${download}/aidlc-copy-runtime-${p.version}.tar.gz). ` +
       `Copy it over the project following the [copy-channel instructions](${github}/blob/v${p.version}/docs/guide/18-install-and-lifecycle.md#copy-channel). ` +
+      `On Kiro, follow the guide's manual-copy steps instead: [Kiro](${github}/blob/v${p.version}/docs/guide/harnesses/kiro.md#versioned-manual-copy-alternative) ` +
+      `copies \`runtime/kiro-ide/\` and [Kiro CLI (V2)](${github}/blob/v${p.version}/docs/guide/harnesses/kiro.md#kiro-cli-v2-versioned-manual-copy-alternative) ` +
+      "copies `runtime/kiro/`, and both say how to keep the project's own Kiro settings. " +
       "This installation path requires **Bun 1.4.4 or newer** but does not require the native `aidlc` executable.",
     "Chat commands below use `/aidlc`; in Codex CLI, use `$aidlc` instead.",
     "## Fresh install",
