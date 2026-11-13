@@ -10,7 +10,7 @@
 import { scopeStampLanded } from "./aidlc-unit-landing.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { accessSync, constants as fsConstants, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { accessSync, constants as fsConstants, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep } from "node:path";
 import { dlopen, FFIType, type Pointer } from "bun:ffi";
@@ -852,12 +852,147 @@ export function readSessionPidEntry(projectDir: string, pid: number): SessionPid
   }
 }
 
+export function gcSessionPidEntries(
+  projectDir: string,
+  deadlineMs: number,
+  skip: ReadonlySet<number> = new Set(),
+  readIdentity: (pid: number) => ProcessIdentity | null = processIdentityReader(deadlineMs),
+): void {
+  let names: string[];
+  try {
+    names = readdirSync(sessionPidMapDir(projectDir));
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (!/^\d+$/.test(name)) continue;
+    if (Date.now() >= deadlineMs) break;
+    const pid = Number.parseInt(name, 10);
+    if (skip.has(pid)) continue;
+    if (pidEntryStale(projectDir, pid, readIdentity) !== true) continue;
+    try {
+      unlinkSync(join(sessionPidMapDir(projectDir), name));
+    } catch {
+      /* raced with another hook or cleanup */
+    }
+  }
+  sweepReleaseChecks(projectDir, deadlineMs, readIdentity);
+}
+
+// Whether a pid entry no longer names its process: gone, dead, or alive with
+// another start time. Null when the live process's start time cannot be read.
+function pidEntryStale(
+  projectDir: string,
+  pid: number,
+  readIdentity: (pid: number) => ProcessIdentity | null,
+): boolean | null {
+  const entry = readSessionPidEntry(projectDir, pid);
+  if (!entry || !processIsAlive(pid)) return true;
+  if (entry.startTime === null) return false;
+  const identity = readIdentity(pid);
+  if (identity === null) return null;
+  return identity.startTime !== entry.startTime;
+}
+
+// --- The pinned release a session already checked -------------------------
+//
+// The dispatcher hashes a pinned release's binary and every runtime file on a
+// session's first call and records the pass in pids/<pid>.release-check, beside
+// the entry of the session process the walk found; later calls of that chat in
+// that process leave out only the hashing (aidlc-lifecycle.ts
+// resolvePinnedDispatch). The record counts only while the live entry names the
+// same chat and the same, known start time. Session-start keeps the entry's one
+// writer; this file has its own.
+
+export interface SessionProcess {
+  pid: number;
+  startTime: string | null;
+  sessionId: string | null;
+}
+
+export interface ReleaseCheckMark {
+  version: string;
+  distribution: string | null;
+  executable: string;
+}
+
+function releaseCheckPath(projectDir: string, pid: number): string {
+  const entry = sessionPidEntryPath(projectDir, pid);
+  return entry === "" ? "" : `${entry}.release-check`;
+}
+
+// The session process and its chat as the live entry names them, or null: a
+// release check never counts for an entry with no start time or no chat.
+function liveSession(projectDir: string, session: SessionProcess): { sessionId: string; startTime: string } | null {
+  if (session.sessionId === null || session.startTime === null) return null;
+  const entry = readSessionPidEntry(projectDir, session.pid);
+  if (!entry || entry.sessionId !== session.sessionId || entry.startTime !== session.startTime) return null;
+  return { sessionId: session.sessionId, startTime: session.startTime };
+}
+
+export function releaseCheckHolds(projectDir: string, session: SessionProcess, mark: ReleaseCheckMark): boolean {
+  const live = liveSession(projectDir, session);
+  const path = releaseCheckPath(projectDir, session.pid);
+  if (live === null || path === "") return false;
+  try {
+    const recorded = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+    return recorded.sessionId === live.sessionId && recorded.startTime === live.startTime &&
+      recorded.version === mark.version && recorded.distribution === mark.distribution &&
+      recorded.executable === mark.executable;
+  } catch {
+    return false;
+  }
+}
+
+// Written only beside an entry that already exists (never a folder), then the
+// release checks of processes that are gone are swept, since a project pinned
+// to an earlier release runs that release's own session-start cleanup. A write
+// that is refused (a read-only engine probe changes no project bytes) sweeps
+// nothing either.
+export function recordReleaseCheck(projectDir: string, session: SessionProcess, mark: ReleaseCheckMark): void {
+  const live = liveSession(projectDir, session);
+  const path = releaseCheckPath(projectDir, session.pid);
+  if (live === null || path === "") return;
+  try {
+    writeFileAtomic(path, `${JSON.stringify({ ...live, ...mark })}\n`);
+  } catch {
+    return; // The next call checks again.
+  }
+  const deadline = Date.now() + sessionAncestryBudgetMs();
+  sweepReleaseChecks(projectDir, deadline, processIdentityReader(deadline));
+}
+
+// A release check goes when its pid entry is gone or stale.
+function sweepReleaseChecks(
+  projectDir: string,
+  deadlineMs: number,
+  readIdentity: (pid: number) => ProcessIdentity | null,
+): void {
+  let names: string[];
+  try {
+    names = readdirSync(sessionPidMapDir(projectDir));
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    const match = /^(\d+)\.release-check$/.exec(name);
+    if (!match) continue;
+    if (Date.now() >= deadlineMs) break;
+    if (pidEntryStale(projectDir, Number.parseInt(match[1], 10), readIdentity) !== true) continue;
+    try {
+      unlinkSync(join(sessionPidMapDir(projectDir), name));
+    } catch {
+      /* raced with another hook or cleanup */
+    }
+  }
+}
+
 // Resolve the nearest mapped ancestor of the calling process. Every failure is
 // a silent miss so tools retain cursor behavior when process metadata is absent.
 export function resolveSessionIdFromAncestry(projectDir: string): string | null {
   const cached = sessionAncestryCache.get(projectDir);
   if (cached && cached.expiresAt > Date.now()) return cached.sessionId;
-  const resolved = resolveSessionIdFromAncestryUncached(projectDir);
+  const resolved = resolveSessionIdFromAncestryUncached(projectDir)?.sessionId ?? null;
   if (resolved === null) {
     sessionAncestryCache.set(projectDir, {
       sessionId: null,
@@ -869,7 +1004,13 @@ export function resolveSessionIdFromAncestry(projectDir: string): string | null 
   return resolved;
 }
 
-function resolveSessionIdFromAncestryUncached(projectDir: string): string | null {
+// The session process the walk finds, for the pinned release check, which
+// counts it only with a known start time (releaseCheckHolds).
+export function nearestSessionProcess(projectDir: string): SessionProcess | null {
+  return resolveSessionIdFromAncestryUncached(projectDir);
+}
+
+function resolveSessionIdFromAncestryUncached(projectDir: string): SessionProcess | null {
   if (!existsSync(sessionPidMapDir(projectDir))) return null;
   const deadline = Date.now() + sessionAncestryBudgetMs();
   const windows = sessionProcessPlatform() === "win32";
@@ -891,7 +1032,7 @@ function resolveSessionIdFromAncestryUncached(projectDir: string): string | null
       entry &&
       (entry.startTime === null || entry.startTime === identity.startTime)
     ) {
-      return windows && entry.startTime === null ? null : entry.sessionId;
+      return windows && entry.startTime === null ? null : { pid, startTime: entry.startTime, sessionId: entry.sessionId };
     }
     childIdentity = identity;
     pid = identity.ppid;
