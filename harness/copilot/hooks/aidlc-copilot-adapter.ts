@@ -260,6 +260,16 @@ function toolInputOf(value: unknown): Record<string, unknown> | undefined {
   return { input: value };
 }
 
+function renderedContext(stdout: string): string {
+  if (stdout.trim().length === 0) return "";
+  try {
+    const parsed = JSON.parse(stdout) as { additionalContext?: unknown };
+    return typeof parsed.additionalContext === "string" ? parsed.additionalContext : "";
+  } catch {
+    return "";
+  }
+}
+
 export async function run(
   target: string,
   input: string,
@@ -2092,6 +2102,27 @@ export async function run(
     return valid ? join(sessionsDir(projectDir), `${valid}.copilot-stop-note`) : "";
   }
 
+  function compactionStampPath(): string {
+    return join(sessionsDir(projectDir), "copilot-compacted");
+  }
+
+  function spendCompactionStamp(): boolean {
+    const path = compactionStampPath();
+    if (!existsSync(path)) return false;
+    try {
+      rmSync(path, { force: true });
+    } catch {}
+    return true;
+  }
+
+  function inSubagentSession(): boolean {
+    if (explicitSubagentId) return true;
+    if (!sessionId) return false;
+    return readLedger().some((entry) =>
+      entry.childSessionId === sessionId || (entry.selfNamed && entry.subagentId === sessionId)
+    );
+  }
+
   // Without a record the note, when it comes back, counts as the person's.
   function armStopNote(chat: string, reason: string): void {
     const path = stopNotePath(chat);
@@ -2160,6 +2191,7 @@ export async function run(
         ...(coreSessionId ? { session_id: coreSessionId } : {}),
       });
       const r = runCore("aidlc-session-start.ts", fwd);
+      spendCompactionStamp();
       // The heartbeat doctor's "have not run in this project yet" warning
       // waits for (the manifest's notRunYet).
       recordPreWorkflowHeartbeat(projectDir, "session-start");
@@ -2605,6 +2637,16 @@ export async function run(
     case "post-tool": {
       // Matcher-free registration: self-filter on tool_name (the IDE ignores
       // matchers — difference in the wiring header). Advisory targets only.
+      if (!inSubagentSession() && spendCompactionStamp()) {
+        const context = renderedContext(
+          runCore("aidlc-session-start.ts", JSON.stringify({
+            hook_event_name: "SessionStart",
+            source: "compact",
+            ...(coreSessionId ? { session_id: coreSessionId } : {}),
+          })).stdout,
+        );
+        if (context) process.stdout.write(`${JSON.stringify({ additionalContext: context })}\n`);
+      }
       if (toolName === "Write" || toolName === "Edit") {
         for (
           const target of mutationTargetsOf(
@@ -2646,6 +2688,10 @@ export async function run(
     case "validate-state": {
       // PreCompact: the core hook reads no stdin fields — self-contained.
       runCore("aidlc-validate-state.ts", input);
+      try {
+        mkdirSync(dirname(compactionStampPath()), { recursive: true });
+        writeFileSync(compactionStampPath(), `${Date.now()}\n`, "utf-8");
+      } catch {}
       return 0;
     }
 

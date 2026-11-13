@@ -400,6 +400,27 @@ verbatim before its subagent starts: in the launching chat in VS Code, in any
 chat on the project on the CLI, where a launch's brief arrives about a second
 after the dispatch.
 
+A chat that compacts is handed the workflow contract back with its next tool
+result. Copilot runs no `sessionStart` for a compaction (its sources are `new`,
+`startup` and `resume`), does not process `preCompact` output, and drops the
+`additionalContext` a session start injected, because compaction rebuilds the
+message list from the summary and a token-bounded tail
+(`github/copilot-cli#5225`, measured on 1.0.99-2 and 1.0.100-1). So the
+"AIDLC WORKFLOW ACTIVE" block, the engine route and the CLI rules the chat was
+working from would otherwise be gone until the session resumed. Its
+`postToolUse` output is delivered to the model, so the adapter writes
+`aidlc/.aidlc-sessions/copilot-compacted` at the PreCompact it does receive and,
+on the next tool result, spends it: it runs the core SessionStart hook with
+`source: "compact"` and prints that render as the event's `additionalContext`.
+Only a successful call spends it (a failed one fires `PostToolUseFailure`,
+which the install does not register), and a call the adapter can place inside a
+live subagent does not, so the contract reaches the chat rather than the helper
+it dispatched. The stamp is the project's, not one chat's, because Copilot's
+tool-call payloads carry a per-call session id where a chat id is needed. Once
+per compaction the model reads the state block, the engine route and the CLI
+rules as the pre-compaction chat held them, and the chat's own sessionStart
+(when it comes) renders the same thing and drops any stamp still waiting.
+
 #### Codex adapter
 
 Codex starts every handler that matches an event at once. Before a shell
