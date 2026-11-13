@@ -404,8 +404,13 @@ export function promotionNotes(p: Promotion): string {
     "Open work carries on through the refresh. When a project contains multiple harnesses, run `aidlc config --harness <name> --yes` for each harness you want to refresh.",
     ...entry.steps,
     // Copy installs use their own Bun; 1.4.4 includes the CVE-2026-111497 fix.
-    `Manual-copy users must copy the complete \`runtime/<harness>/\` tree from [\`aidlc-copy-runtime-${p.version}.tar.gz\`](${download}/aidlc-copy-runtime-${p.version}.tar.gz). ` +
-      `Copy it over the project following the [copy-channel instructions](${github}/blob/v${p.version}/docs/guide/18-install-and-lifecycle.md#copy-channel). ` +
+    "Manual-copy users refresh each project by running its own setup command in the project, with `--from` at the `runtime/` folder " +
+      `extracted from [\`aidlc-copy-runtime-${p.version}.tar.gz\`](${download}/aidlc-copy-runtime-${p.version}.tar.gz): ` +
+      "`bun <harness folder>/tools/aidlc.ts config --from <that runtime folder> --harness <name>`, as the " +
+      `[copy-channel instructions](${github}/blob/v${p.version}/docs/guide/18-install-and-lifecycle.md#copy-channel) show. ` +
+      "Copying the tree over a project that already has AI-DLC replaces the setup answers and plugin choices it recorded. " +
+      "A new copy install copies the complete `runtime/<harness>/` tree, then runs the same command; so does a project copied " +
+      "before 2.11.0 or whose setup command never ran, and a project set up on 2.11.0 runs the command twice. " +
       "This installation path requires **Bun 1.4.4 or newer** but does not require the native `aidlc` executable.",
     "Chat commands below use `/aidlc`; in Codex CLI, use `$aidlc` instead.",
     "## Fresh install",
