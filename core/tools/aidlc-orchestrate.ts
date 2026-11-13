@@ -5965,26 +5965,26 @@ function observedClaimActivity(
 ): string {
   if (claim.movementObserved) {
     return claim.observedAt
-      ? `observed ref movement since ${claim.observedAt}`
-      : "observed ref movement since the prior snapshot";
+      ? `branch moved since ${claim.observedAt}`
+      : "branch moved since the last look";
   }
   return claim.observedAt
-    ? `last observed ref movement ${claim.observedAt}`
-    : "no ref movement observation recorded";
+    ? `no move seen since ${claim.observedAt}`
+    : "no activity seen yet";
 }
 
 function mergeReadiness(status: string): string {
   switch (status) {
     case "pinned":
-      return "pinned and ready for merge gate";
+      return "ready for the merge decision";
     case "approved":
-      return "merge gate approved; ready to land";
+      return "merge approved; ready to land";
     case "rejected":
-      return "merge gate rejected; revise and re-pin";
+      return "merge turned down; revise it and pin it again";
     case "git-landed":
-      return "content landed; state fold pending";
+      return "merged; the workflow record is not updated yet";
     case "state-folded":
-      return "state folded; audit finalization pending";
+      return "merged; the audit record is not finished yet";
     default:
       return status;
   }
@@ -6220,9 +6220,9 @@ export function renderTeamConstructionBoard(
 ): string {
   const title = mode === "snapshot"
     ? "# Team Construction Snapshot"
-    : "# Team Construction Dispatcher";
+    : "# Team Construction Board";
   const claimRows = board.claims.length === 0
-    ? ["| - | - | - | - | no claim refs observed |"]
+    ? ["| - | - | - | - | no claims seen |"]
     : board.claims.map(
       (claim) =>
         `| ${claim.unit} | ${claim.status} | ${claim.owner} | ${claim.generation} | ${claim.observedActivity} |`,
@@ -6298,11 +6298,11 @@ export function renderTeamConstructionBoard(
   if (nextActions.length === 0) {
     nextActions.push(
       claimedUnits.length === 0 && board.walked.length === 0
-        ? "- No dispatcher action is pending; main may resume the normal Construction walk."
+        ? "- Nothing waits on the teams: the main checkout can go on with Construction as usual."
         : mode === "dispatcher"
         ? "- Nothing runs from this checkout: every Unit not yet merged is claimed, waits on one, or is built " +
           "where it was started. Each claimed Unit is worked in its own checkout:"
-        : "- No dispatcher action is pending. Each claimed Unit is worked in its own checkout:",
+        : "- Nothing waits on this checkout. Each claimed Unit is worked in its own checkout:",
     );
   } else if (claimedUnits.length > 0 || board.walked.length > 0) {
     nextActions.push("- Each claimed Unit is worked in its own checkout:");
@@ -6322,28 +6322,28 @@ export function renderTeamConstructionBoard(
   return [
     title,
     mode === "snapshot"
-      ? "_Read-only local snapshot; observed activity is not a remote push time._"
-      : "_Turn-terminal dispatcher view; observed activity is not a remote push time._",
+      ? "_Read-only snapshot; last activity is what this checkout has seen, not when a team pushed._"
+      : "_Last activity is what this checkout has seen, not when a team pushed._",
     `**Claimed:** ${claimedSummary}. **Claimable:** ${
       board.claimable.join(", ") || "none"
     }. **Waiting:** ${blockedSummary}.`,
     "",
     board.grid,
     "",
-    "## Claim Registry",
-    "| unit | status | owner | attempt | observed activity |",
+    "## Claims",
+    "| unit | status | owner | attempt | last activity |",
     "| --- | --- | --- | ---: | --- |",
     ...claimRows,
     "",
     "## Awaiting Merge",
-    "| unit | transaction | pinned OID | readiness |",
+    "| unit | step | commit | what is next |",
     "| --- | --- | --- | --- |",
     ...mergeRows,
     "",
     `## Claimable Units\n${board.claimable.length > 0 ? board.claimable.map((unit) => `- ${unit}`).join("\n") : "- none"}`,
     "",
     "## Blocked Units",
-    "| unit | blockers |",
+    "| unit | waits on |",
     "| --- | --- |",
     ...blockedRows,
     "",
