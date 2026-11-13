@@ -393,6 +393,15 @@ describe("the stable page", () => {
     expect(thanks).not.toContain("## New Contributors");
   });
 
+  // A second copy over an installed project replaces tools/data/harness.json,
+  // where its setup answers and plugin choices are kept.
+  test("the copy-channel line refreshes a copied project with its own setup command, never a second copy over it", () => {
+    const page = promotionNotes(shipped);
+    expect(page).toContain("`bun <harness folder>/tools/aidlc.ts config --from <that runtime folder> --harness <name>`");
+    expect(page).not.toContain("Copy it over the project");
+    expect(page).not.toContain("must copy the complete");
+  });
+
   test("the copy-channel line names a Bun version with the Brotli security fix", () => {
     expect(promotionNotes(shipped)).toContain("This installation path requires **Bun 1.4.4 or newer**");
     expect(readFileSync(join(REPO_ROOT, "docs/guide/18-install-and-lifecycle.md"), "utf8")).toMatch(/^## Copy Channel$/m);

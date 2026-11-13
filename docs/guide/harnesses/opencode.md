@@ -100,6 +100,11 @@ Download and extract a specific release's `aidlc-copy-runtime-X.Y.Z.tar.gz` as d
 [Install and Lifecycle: Copy Channel](../18-install-and-lifecycle.md#copy-channel),
 then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
 
+A project already set up for opencode skips step 1: to move it to a newer
+release, set `RUNTIME_ROOT` to that release's extracted `runtime/` and run
+step 2. Running step 1 again replaces the plugin choices and setup answers the
+project recorded, and the setup asks its questions again.
+
 1. Copy the distribution into your project:
 
    ```bash

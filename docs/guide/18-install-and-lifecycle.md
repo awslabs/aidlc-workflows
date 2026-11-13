@@ -1965,8 +1965,8 @@ by default; to turn the shipped servers on, run
 `bun .claude/tools/aidlc.ts config project --harness claude --mcp defaults --yes`. It also leaves out the team's memory
 files (`aidlc/spaces/default/memory/team.md`, where Practices Discovery records
 the practices you affirmed, and `project.md`, where your project rules and
-learnings go) and your chosen space (`aidlc/active-space`). Copying a newer
-release, or a second harness, over a project therefore keeps them. In a fresh
+learnings go) and your chosen space (`aidlc/active-space`). Copying a second
+harness into a project therefore keeps them. In a fresh
 copy, AI-DLC creates the two memory files from its bundled copy the first time
 you start work. Use **Bun 1.4.4 or newer**, which includes the Brotli decoder fix
 for CVE-2026-111497; the native `aidlc` executable is not required. Updating
@@ -2005,6 +2005,17 @@ The last line is the copy's own setup, run once from the extracted runtime: it
 adds AI-DLC's lines to your `.gitignore` and `AGENTS.md` before the first chat
 and checks the rest of the setup. Without it, AI-DLC adds them when the first
 chat starts, or at the latest when you start work.
+
+To move a copied project to a newer release, run the lines above with the newer
+`tag` and leave out the `cp -R` line; on another harness, the last line is the
+setup line on that harness's page. That line, the project's own setup command,
+brings the project's AI-DLC files to the newer release and keeps what the
+project recorded: the setup answers, the plugin choices and the space's memory
+files, as a native refresh does. An AI-DLC file you changed is named for you to
+keep or replace. Run the line twice on a project copied from 2.11.0 or earlier:
+its own tool does the first run, and the newer release's tool finishes it. A
+second copy over the project replaces those answers and choices, and any AI-DLC
+file you changed, without saying so.
 
 Later, a copied project fetches releases itself. When a config command needs
 files the project does not have (a teammate's newer pin, a harness you add,

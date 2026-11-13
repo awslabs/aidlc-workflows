@@ -77,7 +77,10 @@ instructions under a clearly labeled alternative.
 After `aidlc update`, run `aidlc doctor` to see project/runtime version skew
 and refresh each project with `aidlc config`. A refresh while a workflow is open
 is done, says whether that work carries on, and names the command that goes
-back to the earlier release.
+back to the earlier release. A copied project moves to a newer release with its
+own setup command run from that release's copy runtime
+([Copy Channel](../18-install-and-lifecycle.md#copy-channel)), not a second
+copy, which replaces the setup answers and plugin choices it recorded.
 
 This set is open: a new harness gets its own chapter here, added from the same
 template. For *building* a new harness (the source contract — manifest, hook
