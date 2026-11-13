@@ -11187,12 +11187,15 @@ export function unitsStillOpenLine(projectDir: string): string | null {
 // Generation reopened to change the Unit plan): its own step runs, whatever
 // the team's claims; the dispatcher board holds main again from the block on.
 // Only the checkout that went back runs it, the one whose own audit shard
-// holds that jump (`Unit Work: kept`, aidlc-jump.ts): a teammate's clone that
-// pulls main mid-replan came for a Unit, so it keeps the board.
+// holds that jump (`Unit Work: kept` on a jump to before the block,
+// aidlc-jump.ts; a kept move on past the block is not one): a teammate's clone
+// that pulls main mid-replan came for a Unit, so it keeps the board.
 function beforeTeamUnitWork(projectDir: string, stateContent: string): boolean {
-  return beforePerUnitBlock(loadGraph(), getField(stateContent, "Current Stage")?.trim() ?? "") &&
+  const graph = loadGraph();
+  return beforePerUnitBlock(graph, getField(stateContent, "Current Stage")?.trim() ?? "") &&
     ownShardRows(projectDir).mine.some((row) =>
-      row.event === "STAGE_JUMPED" && auditBlockField(row.block, "Unit Work") === "kept"
+      row.event === "STAGE_JUMPED" && auditBlockField(row.block, "Unit Work") === "kept" &&
+      beforePerUnitBlock(graph, auditBlockField(row.block, "Target") ?? "")
     );
 }
 

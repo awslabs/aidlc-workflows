@@ -23,6 +23,7 @@ import { join } from "node:path";
 import { AIDLC_SRC, createTestProject, seedAidlcMemory, seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
 import {
   artifactFilename,
+  auditBlockField,
   loadStageGraphAll,
   readAuditShardEvents,
   readUnitMergeTransaction,
@@ -205,6 +206,7 @@ const rowOf = (checkout: string, unit: string) =>
 const eventsSince = (checkout: string, from: number) => readAuditShardEvents(checkout).slice(from).map((row) => row.event);
 const status = (checkout: string) => runMergeTool(UTIL, ["status"], checkout);
 const message = (d: Record<string, unknown>) => String(d.message ?? d.question ?? d.error ?? "");
+const lastJump = (checkout: string) => readAuditShardEvents(checkout).filter((row) => row.event === "STAGE_JUMPED").at(-1)!;
 
 function moveOn(lead: string): { directive: Record<string, unknown>; said: string[]; events: string[] } {
   const from = readAuditShardEvents(lead).length;
@@ -398,6 +400,7 @@ describe("moving on where no team holds a Unit of the lead's", () => {
     nextDirective(lead);
     const moved = moveOn(lead);
     expect(moved.events).toEqual(["STAGE_SKIPPED", "STAGE_JUMPED", "STAGE_STARTED"]);
+    expect(auditBlockField(lastJump(lead).block, "Unit Work")).toBeNull();
     expect(stateOf(lead)).toContain("- [S] functional-design");
     expect([moved.directive.kind, moved.directive.stage]).toEqual(["run-stage", BT]);
     expect(moved.said).toEqual([
@@ -472,5 +475,26 @@ describe("land after main moved on past the Unit stages", () => {
     expect(git(seed, ["rev-parse", "HEAD"])).toBe(head);
     expect(existsSync(join(seed, ".git", "MERGE_HEAD"))).toBe(false);
     expect(readUnitMergeTransaction(seed, "alpha")?.status).toBe("approved");
+  });
+});
+
+// --- After the move the teams keep their Units: the switches that would take
+// them from the teams are refused as they were before it. ---
+
+describe("after main moved on while a team holds a Unit, the teams keep their Units", () => {
+  test("the move records the Unit work as kept, and building the Units alone or changing the gate rhythm is refused as before it", () => {
+    const { lead } = gammaClaimed();
+    const switches = [["set-unit-ownership", "solo"], ["set-unit-gate-rhythm", "unit-end"]];
+    const before = switches.map((args) => runMergeTool(STATE, args, lead));
+    for (const refused of before) expect(refused.status, refused.out).not.toBe(0);
+    moveOn(lead);
+    const moved = stateOf(lead);
+    switches.forEach((args, i) => {
+      const after = runMergeTool(STATE, args, lead);
+      expect(after.status, after.out).not.toBe(0);
+      expect(after.out).toBe(before[i].out);
+    });
+    expect(stateOf(lead)).toBe(moved);
+    expect(auditBlockField(lastJump(lead).block, "Unit Work")).toBe("kept");
   });
 });
