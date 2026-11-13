@@ -823,7 +823,7 @@ import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts
 import { unitMemoryPath, unitStageMemoryPath } from "./aidlc-stage-diary.ts";
 import { bringStateUpToDate } from "./aidlc-state-upgrade.ts";
 import { renderEngineInvocation, sameGuardOperation } from "./aidlc-guard-operation.ts";
-import { claimedCheckoutMovesElsewhere, claimedCheckoutReopens, completedUnits } from "./aidlc-unit-landing.ts";
+import { claimedCheckoutMovesElsewhere, claimedCheckoutReopens, completedUnits, UNIT_PROGRESS_NOTE } from "./aidlc-unit-landing.ts";
 import { isHookPreDispatch, withAuditLock } from "./aidlc-locks.ts";
 import {
   askedQuestionFields,
@@ -18258,7 +18258,7 @@ function teamUnitProgressModel(
   const headers = block.map((stage) => stage.slug);
   const section = [
     "## Unit Progress",
-    "<!-- Derived, engine-owned projection; routing ignores hand edits. -->",
+    UNIT_PROGRESS_NOTE,
     `| unit | owner | ${headers.join(" | ")} | gate |` +
       (mergeTracking ? " merged |" : ""),
     `| --- | --- | ${headers.map(() => "---").join(" | ")} | --- |` +

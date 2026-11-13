@@ -18,7 +18,7 @@ import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, unlinkSync, wri
 import { join, relative } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { auditBlockField, readAuditShardEvents, REQUEST_TEXT_DIR } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { fixtureIntentId8, seededRecordDir } from "../harness/fixtures.ts";
+import { fixtureIntentId8, seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
 import {
   claimPayload,
   cleanupTeamBuild,
@@ -241,15 +241,26 @@ describe("the plan's share fits the team's own git: a protected main, a branch o
 
   // A live run on GitHub (case 7): the plan reached main by its pull request,
   // squashed, and the lead's look still said it waited on that pull request;
-  // nothing said the lead's main was left ahead and behind origin's.
-  function planMergedBy(how: "squash" | "rebase" | "merge", ownCommit = false): string {
+  // nothing said the lead's main was left ahead and behind origin's. `shared`:
+  // a rhythm the lead chose before the share, so the share commits it;
+  // `answer`: the look after the share and the lead's answer to its rhythm
+  // question, between the branch push and the merge, as the second run had them.
+  function planMergedBy(
+    how: "squash" | "rebase" | "merge",
+    options: { ownCommit?: boolean; shared?: Rhythm; answer?: Rhythm } = {},
+  ): string {
     const home = makeHome();
     chooseTeams(home.dir);
+    if (options.shared) setRhythm(home.dir, options.shared);
+    // The share question put first, as the second run had it: after a refused
+    // share its mark keeps it from being put again, so the board comes next.
+    if (options.answer) expect(isShare(next(home.dir))).toBe(true);
     mainTakesNoDirectPush(home.remote);
     expect(run(UNIT, ["share", "--plan"], home.dir).json?.error).toBe(RULE);
     git(home.dir, ["push", "-q", "origin", "main:refs/heads/plan-checkout"]);
+    if (options.answer) afterTheShare(home.dir, options.answer);
     // A commit of the lead's own after the push, which origin's main never gets.
-    if (ownCommit) {
+    if (options.ownCommit) {
       writeFileSync(join(home.dir, "notes.md"), "The lead's own.\n");
       git(home.dir, ["add", "notes.md"]);
       git(home.dir, ["commit", "-q", "-m", "the lead's notes"]);
@@ -260,8 +271,25 @@ describe("the plan's share fits the team's own git: a protected main, a branch o
     git(home.dir, ["fetch", "-q", "origin"]);
     return home.dir;
   }
+  type Rhythm = "per-stage" | "unit-end";
+  function setRhythm(dir: string, rhythm: Rhythm): void {
+    const set = run(STATE, ["set-unit-gate-rhythm", rhythm], dir);
+    expect(set.status, set.out).toBe(0);
+  }
+  // The look after the share (the board, which writes its Unit Progress table
+  // and the marks of the Units' own stages into the state file) and the lead's
+  // answer to the rhythm question.
+  function afterTheShare(dir: string, answer: Rhythm): void {
+    appendAuditEntry("HUMAN_TURN", { "Person Reply": "ok" }, dir);
+    next(dir);
+    expect(stateOf(dir)).toContain("## Unit Progress");
+    appendAuditEntry("HUMAN_TURN", { "Person Reply": answer }, dir);
+    setRhythm(dir, answer);
+  }
   const IN_MAIN = "Checked in:     yes, aidlc/ is in main on origin\n";
   const statusOf = (dir: string) => run(UTILITY, ["status"], dir).out;
+  // The work's state file holds writes its last commit does not.
+  const stateChanged = (dir: string) => git(dir, ["diff", "--name-only"]).split("\n").some((path) => path.endsWith("/aidlc-state.md"));
 
   test("after the plan's pull request merges by a squash, a rebase or a merge commit, status says the plan is in main on origin", () => {
     for (const how of ["squash", "rebase", "merge"] as const) {
@@ -291,7 +319,7 @@ describe("the plan's share fits the team's own git: a protected main, a branch o
     }
     // Only behind (a merge commit), or ahead with a commit origin's main does not have: nothing is said.
     expect(statusOf(planMergedBy("merge"))).not.toContain("Your main:");
-    const own = statusOf(planMergedBy("squash", true));
+    const own = statusOf(planMergedBy("squash", { ownCommit: true }));
     expect(own).toContain(IN_MAIN);
     expect(own).not.toContain("Your main:");
     // An uncommitted change on a file origin's main changed, where git reset --keep would refuse: nothing is said.
@@ -300,43 +328,141 @@ describe("the plan's share fits the team's own git: a protected main, a branch o
     expect(statusOf(rebased)).not.toContain("Your main:");
   });
 
+  // The second run on GitHub (case 7): after the share the board wrote its Unit
+  // Progress table and the stage's mark into the state file, and the lead
+  // answered its rhythm question, so the record read as never checked in and
+  // status said nothing of the plan being in main.
+  test("the share's own later writes (the board's Unit Progress, the stage's mark, a per-stage answer) still read as in main once the plan's pull request merges, and the Your main line holds", () => {
+    for (const how of ["squash", "rebase", "merge"] as const) {
+      const dir = planMergedBy(how, { answer: "per-stage" });
+      expect(stateChanged(dir), how).toBe(true);
+      expect(statusOf(dir), how).toContain(IN_MAIN);
+    }
+    for (const [how, split] of [["squash", "1 ahead and 1 behind"], ["rebase", "1 ahead and 2 behind"]] as const) {
+      const dir = planMergedBy(how, { answer: "per-stage" });
+      const status = statusOf(dir);
+      expect(status, how).toContain("Your main:      origin/main already has your work, merged as commits of its own, so yours is " +
+        `${split}. git reset --keep origin/main brings it level; nothing of yours is lost.\n`);
+      expect(status.split("Your main:").length - 1, how).toBe(1);
+      // The line's own command, with those writes in the tree: they stay, and the line goes.
+      git(dir, ["reset", "-q", "--keep", "origin/main"]);
+      expect(stateOf(dir), how).toContain("- **Unit Gate Rhythm**: per-stage");
+      expect(stateOf(dir), how).toContain("## Unit Progress");
+      const level = statusOf(dir);
+      expect(level, how).toContain(IN_MAIN);
+      expect(level, how).not.toContain("Your main:");
+    }
+  });
+
+  test("a share that pushed directly reads as in main, right after it and after the look and the answer that follow it", () => {
+    const home = makeHome();
+    chooseTeams(home.dir);
+    expect(isShare(next(home.dir))).toBe(true);
+    share(home.dir);
+    const shared = statusOf(home.dir);
+    expect(shared).toContain(IN_MAIN);
+    expect(shared).not.toContain("Your main:");
+    afterTheShare(home.dir, "per-stage");
+    expect(stateChanged(home.dir)).toBe(true);
+    const looked = statusOf(home.dir);
+    expect(looked).toContain(IN_MAIN);
+    expect(looked).not.toContain("Your main:");
+  });
+
+  // What the engine rewrites at each look is set aside, nothing else: a change
+  // of the person's, or an answer the teams do not have, reads as before.
+  test("after the plan's pull request merges, a real change in aidlc/ still reads as not in main: a stage document, a new file, the state file by hand, staged", () => {
+    const document = (dir: string, name: string) => join(seededRecordDir(dir), "inception", "requirements-analysis", name);
+    const editState = (dir: string, from: string | RegExp, to: string) => {
+      const was = stateOf(dir);
+      expect(was.replace(from, to)).not.toBe(was);
+      writeFileSync(seededStateFile(dir), was.replace(from, to));
+    };
+    const changes: Array<[string, (dir: string) => void]> = [
+      ["a stage document", (dir) => writeFileSync(document(dir, "requirements.md"), "# Requirements\n\nFR1 refunds. FR2 receipts.\n")],
+      ["a new file", (dir) => writeFileSync(document(dir, "notes.md"), "The lead's notes.\n")],
+      ["a field by hand", (dir) => editState(dir, "- **Depth**: Standard", "- **Depth**: Comprehensive")],
+      ["a line under the Unit Progress table", (dir) => editState(dir, /(^\| reporting \|.*$)/m, "$1\n\nThe lead's note on reporting.")],
+      ["a skip of a Unit's stage", (dir) => editState(dir, /^- \[ \] nfr-design (\S+) EXECUTE$/m, "- [S] nfr-design $1 SKIP: not needed")],
+      ["the state file staged", (dir) => git(dir, ["add", "--", seededStateFile(dir)])],
+    ];
+    for (const [what, change] of changes) {
+      const dir = planMergedBy("squash", { answer: "per-stage" });
+      expect(statusOf(dir), what).toContain(IN_MAIN);
+      change(dir);
+      expect(statusOf(dir), what).not.toContain("Checked in:");
+    }
+  });
+
+  test("after the plan's pull request merges, a rhythm answer the teams do not have reads as not in main, and so does an origin that changed the state file", () => {
+    // unit-end after the share, and per-stage over a unit-end the share committed: each take reads main's.
+    for (const options of [{ answer: "unit-end" }, { shared: "unit-end", answer: "per-stage" }] as const) {
+      const dir = planMergedBy("squash", options);
+      expect(stateChanged(dir), JSON.stringify(options)).toBe(true);
+      expect(statusOf(dir), JSON.stringify(options)).not.toContain("Checked in:");
+    }
+    // A change on origin's main to the state file after the merge, from a teammate's clone: neither line.
+    const dir = planMergedBy("squash", { answer: "per-stage" });
+    const remote = git(dir, ["remote", "get-url", "origin"]);
+    const theirs = cloneOf(remote, "teammate");
+    writeFileSync(seededStateFile(theirs), `${stateOf(theirs)}\n- **Note**: from a teammate\n`);
+    git(theirs, ["commit", "-q", "-am", "a teammate's change"]);
+    git(theirs, ["push", "-q", "origin", "main"]);
+    git(dir, ["fetch", "-q", "origin"]);
+    const status = statusOf(dir);
+    expect(status).not.toContain("Checked in:");
+    expect(status).not.toContain("Your main:");
+  });
+
   // A project in a folder of its repository (teams chosen while it was a
-  // repository of its own), with the person's own git set to diff.relative,
-  // which narrows a plain git diff to the folder.
+  // repository of its own), its plan merged by a squash, with the person's own
+  // git set to diff.relative, which narrows a plain git diff to the folder.
+  // `outside`: a commit of the lead's outside the folder that origin's main lacks.
+  function folderProjectMerged(outside: boolean): string {
+    const project = makeHome();
+    chooseTeams(project.dir);
+    const repo = tempDir("monorepo");
+    cpSync(project.dir, join(repo, "proj"), { recursive: true, filter: (from) => from !== join(project.dir, ".git") });
+    writeFileSync(join(repo, "README.md"), "# The repository\n");
+    const host = tempDir("monorepo-host");
+    git(host, ["init", "-q", "--bare", "-b", "main"]);
+    git(repo, ["init", "-q", "-b", "main"]);
+    git(repo, ["config", "user.name", "lead"]);
+    git(repo, ["config", "user.email", "lead@example.test"]);
+    git(repo, ["add", "-A"]);
+    git(repo, ["commit", "-q", "-m", "teams chosen"]);
+    git(repo, ["remote", "add", "origin", host]);
+    git(repo, ["push", "-q", "-u", "origin", "main"]);
+    const dir = join(repo, "proj");
+    writeFileSync(join(seededRecordDir(dir), "inception", "units-generation", "unit-of-work.md"), "# Units of work\n\nrefunds, checkout-ui, reporting; notes added.\n");
+    git(repo, ["add", "-A"]);
+    git(repo, ["commit", "-q", "-m", "Share the plan with the teams"]);
+    git(repo, ["push", "-q", "origin", "main:refs/heads/plan-checkout"]);
+    if (outside) {
+      writeFileSync(join(repo, "notes.md"), "The lead's own, outside the project's folder.\n");
+      git(repo, ["add", "notes.md"]);
+      git(repo, ["commit", "-q", "-m", "the lead's notes"]);
+    }
+    mergeOnHost(host, "plan-checkout", "squash");
+    git(repo, ["fetch", "-q", "origin"]);
+    git(repo, ["config", "diff.relative", "true"]);
+    return dir;
+  }
+
   test("a project in a folder of its repository, with diff.relative set: a commit of the lead's outside the folder that origin's main lacks keeps the line unsaid", () => {
     for (const outside of [false, true]) {
-      const project = makeHome();
-      chooseTeams(project.dir);
-      const repo = tempDir("monorepo");
-      cpSync(project.dir, join(repo, "proj"), { recursive: true, filter: (from) => from !== join(project.dir, ".git") });
-      writeFileSync(join(repo, "README.md"), "# The repository\n");
-      const host = tempDir("monorepo-host");
-      git(host, ["init", "-q", "--bare", "-b", "main"]);
-      git(repo, ["init", "-q", "-b", "main"]);
-      git(repo, ["config", "user.name", "lead"]);
-      git(repo, ["config", "user.email", "lead@example.test"]);
-      git(repo, ["add", "-A"]);
-      git(repo, ["commit", "-q", "-m", "teams chosen"]);
-      git(repo, ["remote", "add", "origin", host]);
-      git(repo, ["push", "-q", "-u", "origin", "main"]);
-      const dir = join(repo, "proj");
-      writeFileSync(join(seededRecordDir(dir), "inception", "units-generation", "unit-of-work.md"), "# Units of work\n\nrefunds, checkout-ui, reporting; notes added.\n");
-      git(repo, ["add", "-A"]);
-      git(repo, ["commit", "-q", "-m", "Share the plan with the teams"]);
-      git(repo, ["push", "-q", "origin", "main:refs/heads/plan-checkout"]);
-      if (outside) {
-        writeFileSync(join(repo, "notes.md"), "The lead's own, outside the project's folder.\n");
-        git(repo, ["add", "notes.md"]);
-        git(repo, ["commit", "-q", "-m", "the lead's notes"]);
-      }
-      mergeOnHost(host, "plan-checkout", "squash");
-      git(repo, ["fetch", "-q", "origin"]);
-      git(repo, ["config", "diff.relative", "true"]);
-      const status = statusOf(dir);
+      const status = statusOf(folderProjectMerged(outside));
       expect(status, String(outside)).toContain(IN_MAIN);
       if (outside) expect(status).not.toContain("Your main:");
       else expect(status).toContain("Your main:      origin/main already has your work, merged as commits of its own, so yours is 1 ahead and 1 behind.");
     }
+  });
+
+  test("a project in a folder of its repository: a rhythm answer written after the share still reads as in main", () => {
+    const dir = folderProjectMerged(false);
+    setRhythm(dir, "per-stage");
+    expect(stateChanged(dir)).toBe(true);
+    expect(statusOf(dir)).toContain(IN_MAIN);
   });
 
   // Main's own flow (the teams build on the workspace's repo): the share comes

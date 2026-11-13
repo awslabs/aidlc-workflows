@@ -308,6 +308,7 @@ import { swarmSourceChangedSince } from "./aidlc-swarm-source.ts";
 import { memoryDirFor, PATH_SET_SENSOR_IDS, STAGE_WIDE_SENSOR_IDS, templateEligibleArtifacts, withStageProgressRow } from "./aidlc-graph.ts";
 import { generateFireId, recordUnfinishedFire, sensorMatchesPath, unfinishedFire } from "./aidlc-sensor-record.ts";
 import { buildOutHomeLocation, buildWaitsForPush, HOME_LOCATION_FIELD, homeLocation, workspaceHomeLocation } from "./aidlc-unit-teams.js";
+import { unitProgressSectionRange } from "./aidlc-unit-landing.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
 import { aidlcDispatcherInvocation, aidlcToolInvocation, compiledExecutable, entrySkillInvocation, syncFolderClause } from "./aidlc-runtime-paths.ts";
 import { markdownBlocks, projectVisibleMarkdownLines } from "./aidlc-markdown.ts";
@@ -1639,19 +1640,6 @@ function handleSetConstructionIteration(given: string[]): void {
     updated: true, construction_iteration: value, ...constructionPolicyNotice(content, updated, "Construction Iteration"),
   }));
   });
-}
-
-function unitProgressSectionRange(
-  content: string,
-): { start: number; end: number } | null {
-  const match = /^## Unit Progress\r?$/m.exec(content);
-  if (!match) return null;
-  const afterHeading = match.index + match[0].length;
-  const next = /^## /m.exec(content.slice(afterHeading));
-  return {
-    start: match.index,
-    end: next ? afterHeading + next.index : content.length,
-  };
 }
 
 function removeUnitProgressSection(content: string): string {

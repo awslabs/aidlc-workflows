@@ -6,6 +6,26 @@
 import { spawnSync } from "node:child_process";
 import { entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 
+// The line under the Unit Progress heading the engine writes with its table.
+export const UNIT_PROGRESS_NOTE = "<!-- Derived, engine-owned projection; routing ignores hand edits. -->";
+
+// Where the Unit Progress section sits in a state file: its heading to the next
+// heading, or the end. The refresh replaces that range whole (aidlc-state.ts),
+// and the check-in reads it to set the engine's own table aside
+// (teamsReadOfState, aidlc-unit-teams.ts).
+export function unitProgressSectionRange(
+  content: string,
+): { start: number; end: number } | null {
+  const match = /^## Unit Progress\r?$/m.exec(content);
+  if (!match) return null;
+  const afterHeading = match.index + match[0].length;
+  const next = /^## /m.exec(content.slice(afterHeading));
+  return {
+    start: match.index,
+    end: next ? afterHeading + next.index : content.length,
+  };
+}
+
 // Whether the Unit Progress table records `unit` as merged: a `merged` column
 // (only land's state fold writes one) whose cell in the Unit's one row is
 // `[x]`. No column, no row, two rows or any other cell reads as not merged.

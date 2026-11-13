@@ -5,7 +5,7 @@
 
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { artifactFilename } from "./aidlc-artifact-vocabulary.ts";
 import {
@@ -38,7 +38,9 @@ import {
   readAuditShardEvents,
   readRecordedSourceCheckouts,
   readStateFile,
+  readUnitGateRhythm,
   recordedCheckoutOfListingPath,
+  removeField,
   removeRecordFileNoFollow,
   repoDir,
   REQUEST_TEXT_DIR,
@@ -50,7 +52,8 @@ import {
 } from "./aidlc-lib.ts";
 import { visibleMarkdownLines } from "./aidlc-markdown.ts";
 import { gitUserName } from "./aidlc-git-name.ts";
-import { applicableTeamUnitScopeStamp, idSuffix, listIntents, onlyOwnLookRows, resolveWorkflowSelection } from "./aidlc-record-core.ts";
+import { applicableTeamUnitScopeStamp, idSuffix, listIntents, onlyOwnLookRows, resolveWorkflowSelection, setCheckbox } from "./aidlc-record-core.ts";
+import { UNIT_PROGRESS_NOTE, unitProgressSectionRange } from "./aidlc-unit-landing.ts";
 import { isReadOnlyEngineProbe } from "./aidlc-locks.ts";
 import { gitAddressKey } from "./aidlc-workspace-repos.ts";
 import { withoutCredentials } from "./aidlc-workspace-manifest.ts";
@@ -585,9 +588,16 @@ export function stagesCounted(
   work: { projectDir: string; intent?: string; space?: string } | null,
 ): StageEntry[] {
   const planned = plannedStages(stateContent, scope, work);
-  if (!isTeamUnitOwnership(stateContent) || homeLocation(stateContent) === null || unitBuildOf(stateContent) !== null) return planned;
-  const unitStages = new Set(unitMajorConstructionStageSlugs(scope, stateContent, true));
-  return planned.filter((stage) => !unitStages.has(stage.slug));
+  const unitStages = unitStagesOfTeams(stateContent, scope);
+  return unitStages === null ? planned : planned.filter((stage) => !unitStages.has(stage.slug));
+}
+
+// At a lead's project that teams build for, the Units' own stages, which run in
+// each taker's build: status's counts leave them out (stagesCounted), and the
+// check-in reads their boxes as the engine's (teamsReadOfState). Null elsewhere.
+function unitStagesOfTeams(stateContent: string, scope: string): Set<string> | null {
+  if (!isTeamUnitOwnership(stateContent) || homeLocation(stateContent) === null || unitBuildOf(stateContent) !== null) return null;
+  return new Set(unitMajorConstructionStageSlugs(scope, stateContent, true));
 }
 
 // What the chat that heard CHECK_IN_LINE hears once at its first look after the
@@ -653,6 +663,55 @@ export function checkInApplies(projectDir: string, stateContent?: string): boole
   return remotes.status === 0 && remotes.stdout.trim() !== "";
 }
 
+// A state file at a lead's project that teams build for, as the teams read it
+// once what the engine rewrites from its own evidence at each look is set
+// aside: in the Unit Progress section only its heading, the engine's note and
+// the table rows (any other line there still counts, as for the digest), the
+// boxes of the Units' own stages and the Completed count the same refresh sets
+// from that table, and blank lines (a field setter's separators). The approval
+// rhythm is read as each take reads it (readUnitGateRhythm), so a per-stage
+// answer reads as the plan with none and a unit-end one does not. Each text
+// names its own Units' stages, so two texts that differ in them differ. Null
+// elsewhere, where every change counts.
+function teamsReadOfState(content: string): string | null {
+  const text = content.replaceAll("\r\n", "\n");
+  const unitStages = unitStagesOfTeams(text, getField(text, "Scope") ?? "");
+  if (unitStages === null) return null;
+  let kept = text;
+  const range = unitProgressSectionRange(kept);
+  if (range !== null) {
+    const others = kept.slice(range.start, range.end).split("\n")
+      .filter((line, at) => at !== 0 && line !== UNIT_PROGRESS_NOTE && !line.startsWith("|"));
+    kept = `${kept.slice(0, range.start)}${others.join("\n")}\n${kept.slice(range.end)}`;
+  }
+  for (const slug of unitStages) kept = setCheckbox(kept, slug, "pending");
+  kept = removeField(removeField(kept, "Completed"), UNIT_GATE_RHYTHM_FIELD);
+  return [`rhythm ${readUnitGateRhythm(text)}`, `unit stages ${[...unitStages].sort().join(" ")}`,
+    ...kept.split("\n").filter((line) => line.trim() !== "")].join("\n");
+}
+
+// A change git status lists under aidlc/ that is only the engine's own writes
+// since what is committed to a work's state file at a lead's project
+// (teamsReadOfState): the board's Unit Progress, the marks it sets, a rhythm
+// answer the teams read the same. Unstaged only, a file and never a link;
+// anything git or the file cannot tell counts. `change.path` is git's, from the
+// repository root; `prefix` is the project folder's place under it.
+export function onlyEngineStateWrites(projectDir: string, prefix: string, change: { status: string; path: string }): boolean {
+  if (change.status !== " M" || !change.path.startsWith(prefix)) return false;
+  const rel = change.path.slice(prefix.length);
+  if (!/^aidlc\/spaces\/[^/]+\/intents\/[^/]+\/aidlc-state\.md$/.test(rel)) return false;
+  try {
+    const file = join(projectDir, ...rel.split("/"));
+    if (!lstatSync(file).isFile()) return false;
+    const blob = spawnSync("git", ["-C", projectDir, "cat-file", "blob", `HEAD:${change.path}`], { encoding: "utf-8", timeout: 10_000 });
+    if (blob.status !== 0) return false;
+    const was = teamsReadOfState(blob.stdout);
+    return was !== null && was === teamsReadOfState(readFileSync(file, "utf-8"));
+  } catch {
+    return false;
+  }
+}
+
 // Where checkInState finds the record: in the work's integration branch on its
 // remote (`split`: this checkout's own copy of that branch is ahead and behind
 // it, everything it has in it by content), or pushed on a branch of its own
@@ -665,7 +724,9 @@ export type CheckIn =
 
 // Whether aidlc/ is checked in, from local git only: nothing under it changed
 // but the rows each look adds to this clone's own audit file (onlyOwnLookRows,
-// doctor's rule too; a decision of the person's there still counts), and what
+// doctor's rule too; a decision of the person's there still counts) and, at a
+// lead's project, the engine's own writes to a work's state file
+// (onlyEngineStateWrites; a real edit there still counts), and what
 // HEAD has of it is in the work's integration branch on its remote as this
 // clone last fetched it (checkInTarget), by ancestry or, after a squash or
 // rebase merge, path by path. Pushed on a branch of its own while it is not in
@@ -707,8 +768,11 @@ export function checkInState(projectDir: string, stateContent?: string): CheckIn
     changes.push({ status: entries[at].slice(0, 2), path: entries[at].slice(3) });
     if (/^[RC]/.test(entries[at])) at++;
   }
-  // The rows each look adds to this clone's own audit file do not count.
-  if (!changes.every((change) => onlyOwnLookRows(projectDir, root, change))) return "not-checked-in";
+  // The rows each look adds to this clone's own audit file, and the engine's own
+  // writes to a lead's state file, do not count.
+  if (!changes.every((change) => onlyOwnLookRows(projectDir, root, change) || onlyEngineStateWrites(projectDir, root, change))) {
+    return "not-checked-in";
+  }
   // A squash or rebase merge puts the same files in as commits of its own. The
   // person's diff.relative would narrow the whole-repo compare to this folder;
   // -c rather than --no-relative, which git before 2.28 does not know.

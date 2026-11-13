@@ -1874,9 +1874,11 @@ export function planMadeElsewhere(projectDir: string, rows: readonly AuditShardE
 // A change git status lists under aidlc/ that is only this clone's own audit
 // file gaining rows after what is committed, none a decision of the person's
 // (a row with their Git Name), CRLF read as LF: the rows each look and each
-// doctor run write, which nobody needs committed. One rule, read by doctor's
-// records row and by the checked-in fact. `change.path` is git's, from the
-// repository root; `prefix` is the project folder's place under it.
+// doctor run write, which nobody needs committed. Read by doctor's records row
+// and by the checked-in fact, which also sets aside the engine's own writes to
+// a lead's state file (onlyEngineStateWrites, aidlc-unit-teams.ts).
+// `change.path` is git's, from the repository root; `prefix` is the project
+// folder's place under it.
 export function onlyOwnLookRows(projectDir: string, prefix: string, change: { status: string; path: string }): boolean {
   if ((change.status !== " M" && change.status !== "??") || !change.path.startsWith(prefix)) return false;
   const rel = change.path.slice(prefix.length);
