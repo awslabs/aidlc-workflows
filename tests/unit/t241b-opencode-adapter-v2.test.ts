@@ -6,6 +6,7 @@
 // that each reaches the core hook it replaces.
 
 import { afterEach, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -260,6 +261,51 @@ describe("t241b OpenCode 2 entry point", () => {
     ).rejects.toThrow(/AIDLC bash permission allows one direct invocation/);
     // Unrelated shell commands still run.
     await v2.before({ tool: "shell", sessionID: "ses_main", agent: "build", id: "call_2", input: { command: "echo hi" } });
+  });
+
+  test("a plugin tool engine plugin sync wrote runs, and its record still decides the rest", async () => {
+    const root = freshProject();
+    const tool = join(root, ".aidlc", "tools", "apex-govcloud-target.ts");
+    writeFileSync(tool, 'console.log("apply");\n');
+    const dataDir = join(root, ".aidlc", "tools", "data");
+    mkdirSync(dataDir, { recursive: true });
+    const record = join(dataDir, "plugin-owned-apex-govcloud.json");
+    const writeRecord = () =>
+      writeFileSync(
+        record,
+        JSON.stringify({
+          schemaVersion: 1,
+          name: "apex-govcloud",
+          files: [{
+            path: ".aidlc/tools/apex-govcloud-target.ts",
+            sha256: `sha256:${createHash("sha256").update(readFileSync(tool)).digest("hex")}`,
+          }],
+        }),
+      );
+    writeRecord();
+    const v2 = await setup(root);
+    const shell = (id: string, command: string) =>
+      v2.before({ tool: "shell", sessionID: "ses_main", agent: "build", id, input: { command } });
+    const applied = "bun .aidlc/tools/apex-govcloud-target.ts apply --record r";
+    await shell("call_ok", applied);
+    await expect(shell("call_chain", `${applied} && echo done`)).rejects.toThrow(
+      /AIDLC bash permission allows one direct invocation/,
+    );
+    await expect(shell("call_redirect", `${applied} > out.json`)).rejects.toThrow(
+      /AIDLC bash permission allows one direct invocation/,
+    );
+    writeFileSync(join(root, ".aidlc", "tools", "apex-govcloud-extra.ts"), 'console.log("hand");\n');
+    await expect(shell("call_hand_written", "bun .aidlc/tools/apex-govcloud-extra.ts apply")).rejects.toThrow(
+      /\.aidlc\/tools\/apex-govcloud-extra\.ts is neither: no `engine plugin sync` record lists it/,
+    );
+    writeFileSync(tool, 'console.log("edited");\n');
+    await expect(shell("call_edited", applied)).rejects.toThrow(
+      /its bytes are no longer the ones the sync recorded/,
+    );
+    rmSync(record, { force: true });
+    await expect(shell("call_unrecorded", applied)).rejects.toThrow(
+      /\.aidlc\/tools\/apex-govcloud-target\.ts is neither: no `engine plugin sync` record lists it/,
+    );
   });
 
   test("a subagent dispatch gets the stage-rules rewrite in its input", async () => {
