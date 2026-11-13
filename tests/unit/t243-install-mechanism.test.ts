@@ -9891,28 +9891,6 @@ describe("t243 a pinned release is checked once per session", () => {
     });
   });
 
-  test("a project pinned to another release keeps its release check beside the entry that release's session-start writes", () => {
-    const pinned = pinnedProject([AIDLC_VERSION, NEXT_VERSION], NEXT_VERSION);
-    withMachine(pinned.machine, () => {
-      // An earlier release's session-start keeps its pid entries in
-      // aidlc/.aidlc-sessions/pids/; the pinned release stands in for one.
-      writeSessionPidEntry(pinned.project, process.ppid, SESSION_A);
-      const earlierDir = join(pinned.project, "aidlc", ".aidlc-sessions", "pids");
-      mkdirSync(earlierDir, { recursive: true });
-      renameSync(join(pinned.pidDir, String(process.ppid)), join(earlierDir, String(process.ppid)));
-      const first = resolvePinnedDispatch(argv(pinned.project), pinned.project, { reserve: true });
-      expect(first).toEqual(expect.objectContaining({ kind: "execute", version: NEXT_VERSION }));
-      if (first.kind === "execute") first.release?.();
-      expect(existsSync(releaseCheck(earlierDir))).toBe(true);
-      expect(existsSync(releaseCheck(pinned.pidDir))).toBe(false);
-      pinned.damage();
-      const second = resolvePinnedDispatch(argv(pinned.project), pinned.project, { reserve: true });
-      expect(second).toEqual(expect.objectContaining({ kind: "execute", version: NEXT_VERSION }));
-      if (second.kind === "execute") second.release?.();
-      pinned.repair();
-    });
-  });
-
   test("the dispatcher's record sweeps a release check left beside an entry that is gone", () => {
     const pinned = pinnedProject();
     withMachine(pinned.machine, () => {
