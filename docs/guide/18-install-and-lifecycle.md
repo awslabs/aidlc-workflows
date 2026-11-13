@@ -2007,15 +2007,21 @@ and checks the rest of the setup. Without it, AI-DLC adds them when the first
 chat starts, or at the latest when you start work.
 
 To move a copied project to a newer release, run the lines above with the newer
-`tag` and leave out the `cp -R` line; on another harness, the last line is the
-setup line on that harness's page. That line, the project's own setup command,
-brings the project's AI-DLC files to the newer release and keeps what the
-project recorded: the setup answers, the plugin choices and the space's memory
-files, as a native refresh does. An AI-DLC file you changed is named for you to
-keep or replace. Run the line twice on a project copied from 2.11.0 or earlier:
-its own tool does the first run, and the newer release's tool finishes it. A
-second copy over the project replaces those answers and choices, and any AI-DLC
-file you changed, without saying so.
+`tag` and leave out the `cp -R` line; on another harness, the last line names
+that harness's folder and the `--harness` name the project was set up with. That
+line, the project's own setup command, brings the project's AI-DLC files to the
+newer release and keeps what the project recorded: the setup answers, the plugin
+choices and the space's memory files, as a native refresh does. An AI-DLC file
+you changed is named for you to keep or replace. A second copy over the project
+replaces those answers and choices, and any AI-DLC file you changed, without
+saying so.
+
+This needs a project whose setup line ran on 2.11.0 or later; on 2.11.0, run
+the line twice: its own tool does the first run, and the newer release's tool
+finishes it. A project copied from an earlier release, or one whose setup line
+never ran (the line then stops on conflicts with the files AI-DLC copied), runs
+all the lines above, `cp -R` included. That copy turns every plugin back on, so
+turn off again any you had turned off.
 
 Later, a copied project fetches releases itself. When a config command needs
 files the project does not have (a teammate's newer pin, a harness you add,

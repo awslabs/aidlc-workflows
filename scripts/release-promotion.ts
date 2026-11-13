@@ -409,7 +409,8 @@ export function promotionNotes(p: Promotion): string {
       "`bun <harness folder>/tools/aidlc.ts config --from <that runtime folder> --harness <name>`, as the " +
       `[copy-channel instructions](${github}/blob/v${p.version}/docs/guide/18-install-and-lifecycle.md#copy-channel) show. ` +
       "Copying the tree over a project that already has AI-DLC replaces the setup answers and plugin choices it recorded. " +
-      "A new copy install copies the complete `runtime/<harness>/` tree, then runs the same command. " +
+      "A new copy install copies the complete `runtime/<harness>/` tree, then runs the same command; so does a project copied " +
+      "before 2.11.0 or whose setup command never ran, and a project set up on 2.11.0 runs the command twice. " +
       "This installation path requires **Bun 1.4.4 or newer** but does not require the native `aidlc` executable.",
     "Chat commands below use `/aidlc`; in Codex CLI, use `$aidlc` instead.",
     "## Fresh install",

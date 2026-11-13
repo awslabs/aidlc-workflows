@@ -413,6 +413,8 @@ describe("the stable page", () => {
     expect(page).toContain("`bun <harness folder>/tools/aidlc.ts config --from <that runtime folder> --harness <name>`");
     expect(page).not.toContain("Copy it over the project");
     expect(page).not.toContain("must copy the complete");
+    // An older project's own tool cannot do this refresh alone.
+    expect(page).toContain("so does a project copied before 2.11.0 or whose setup command never ran, and a project set up on 2.11.0 runs the command twice");
   });
 
   // prepare reserves the version before it prints the page, so a bullet whose
