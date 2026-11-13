@@ -18132,6 +18132,41 @@ function walkStepUnit(step: UnitJumpStep): string | null {
   return step.kind === "paused" ? step.checkpoint.unit : step.kind === "covered" ? null : step.unit;
 }
 
+function unitStepOwedOnlyReceipt(
+  projectDir: string,
+  scope: string,
+  stateContent: string,
+  walk: { step: UnitJumpStep; block: GraphStage[]; context: UnitWorkContext },
+  stageSlug: string,
+  unit: string,
+): boolean {
+  const step = walk.step;
+  if (step.kind !== "work" || step.stage.slug !== stageSlug || step.unit !== unit) return false;
+  const target = walk.block.find((stage) => stage.slug === stageSlug);
+  if (target === undefined) return false;
+  return unitReceiptOnlyStep(
+    projectDir, target, unit, walk.context.recordPrefix, walk.context.codekbCtx,
+    walk.context.kinds?.get(unit) ?? null, unitLedgerFor(projectDir, stageSlug), stateContent, scope,
+  )?.receipt === true;
+}
+
+function unitStepChangeReopen(
+  projectDir: string,
+  scope: string,
+  stateContent: string,
+  flags: ReportFlags,
+): PrintDirective | null {
+  const unit = flags.unit?.trim();
+  const stageSlug = flags.stage?.trim();
+  if (!unit || !stageSlug || !validScopes().has(scope)) return null;
+  const walk = unitJumpWalk(projectDir, scope, stateContent, true);
+  if (walk === null || !unitStepOwedOnlyReceipt(projectDir, scope, stateContent, walk, stageSlug, unit)) return null;
+  const reopen = unitMajorReopen(projectDir, scope, stateContent, stageSlug, {
+    stage: stageSlug, jumpUnit: unit, everyUnit: false, change: true,
+  });
+  return reopen !== null && reopen !== "route" && reopen.kind === "print" ? reopen : null;
+}
+
 function unitMajorReopen(
   projectDir: string,
   scope: string,
@@ -18210,7 +18245,8 @@ function unitMajorReopen(
       };
     }
     // The Unit in flight on the target itself: that is where the walk already is.
-    if (named === inFlight && liveStage === targetSlug) return "route";
+    if (named === inFlight && liveStage === targetSlug &&
+      !unitStepOwedOnlyReceipt(projectDir, scope, stateContent, walk, targetSlug, named)) return "route";
     // A Unit set aside on the target is picked up where it stopped.
     const parked = open.get(named);
     if (named !== inFlight && parked?.stage === targetSlug && parked.checkpoint.setAsideFor !== null) {
@@ -22521,6 +22557,11 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     // The person's decision (their approval, or the changes they asked for)
     // is the stage's in a solo walk: it is recorded for the stage, as the same
     // report without --unit would be, so it is never lost.
+    const change = flags.result === "rejected" ? unitStepChangeReopen(pd, scope, stateContent, flags) : null;
+    if (change !== null) {
+      emit(change);
+      return;
+    }
     flags.unit = undefined;
   } else if (flags.unit) {
     // A solo Unit cannot be reported on its own; when its work is done and
