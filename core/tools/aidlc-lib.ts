@@ -4787,7 +4787,9 @@ export function sourceKeysChangedOutsideAidlcSince(
   if (recorded === null) return null;
   const joined = withRepoBaselineAdditions(projectDir, stageSlug, { state: "ready", listing: recorded }, rows, from);
   const start = joined.state === "ready" ? joined.listing : recorded;
-  return sourceKeysChangedOutsideAidlc(projectDir, recordedSourceListingForCompare(projectDir, start, current), current.listing);
+  const changed = sourceKeysChangedOutsideAidlc(projectDir, recordedSourceListingForCompare(projectDir, start, current), current.listing);
+  for (const key of unclaimableIgnoredSourceKeys(projectDir, [...changed], false)) changed.delete(key);
+  return changed;
 }
 
 // A kept listing as the walk would list it now, to compare with `current`.
@@ -25982,6 +25984,7 @@ function ignoredPathClaimable(
 export function unclaimableIgnoredSourceKeys(
   projectDir: string,
   keys: readonly string[],
+  includeRecordedCheckouts = true,
 ): Set<string> {
   const unclaimable = new Set<string>();
   if (keys.length === 0) return unclaimable;
@@ -25992,7 +25995,7 @@ export function unclaimableIgnoredSourceKeys(
     return unclaimable;
   }
   const carriesWorkspaceShell = recordedRepos.length === 0;
-  const checkouts = readRecordedSourceCheckouts(projectDir);
+  const checkouts = includeRecordedCheckouts ? readRecordedSourceCheckouts(projectDir) : [];
   const sourceClaimValidation: GitSourceClaimValidationCache = new Map();
   const candidates: { key: string; sourceRepoDir: string; path: string }[] = [];
   for (const key of keys) {
