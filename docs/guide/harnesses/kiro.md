@@ -633,8 +633,15 @@ AI-DLC records the model and effort in `aidlc.settings.json` and writes
 `.kiro/agents/aidlc-architecture-reviewer-agent.md`; a Unit's reviewer copy
 keeps them. Kiro reads them when it next dispatches the agent, in a chat that
 is already open too. The model must be one your Kiro offers
-(`kiro-cli chat --list-models`, or Kiro IDE's model picker): one it does not
-offer can fail that agent's dispatch. An effort the model does not take runs
+(`kiro-cli chat --list-models`, or Kiro IDE's model picker): Kiro runs an
+agent whose model it does not offer on your chat's model, with that agent's
+effort, and shows no warning (measured on Kiro CLI 3.3.0 and Kiro IDE
+1.4.178). `aidlc config models`, `aidlc config models --check` and
+`aidlc doctor` compare the agent models with the list of the account
+`kiro-cli` is signed in to and name one that is not in it. When that list
+cannot be read (`kiro-cli` not found, not signed in, or offline),
+`config models` says it could not check, and doctor says so with `--verbose`.
+An effort the model does not take runs
 at the model's own default, and an agent given a model but no effort runs at
 that model's default effort, not your chat's. `--model default` and
 `--effort default` take them out again. A preset or a group effort

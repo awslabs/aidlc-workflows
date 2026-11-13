@@ -1,4 +1,4 @@
-// covers: file:tools/aidlc-model-policy.ts, function:isModelId, function:presetsChangeNothing, function:applyModelPolicyToProjection, function:modelPolicySurfaceDrift, function:sessionModelsDetail, function:kiroAgentPinsAdded, function:kiroAgentPinsNote
+// covers: file:tools/aidlc-model-policy.ts, function:isModelId, function:presetsChangeNothing, function:applyModelPolicyToProjection, function:modelPolicySurfaceDrift, function:sessionModelsDetail, function:kiroAgentPinsAdded, function:kiroAgentPinsNote, function:kiroIdeAgentFileModels, file:tools/aidlc-kiro-session.ts, function:checkKiroAgentModels, function:kiroAgentModelLines, function:kiroAgentModelDoctorFindings, file:tools/aidlc-doctor.ts, function:kiroAgentModelDoctorChecks
 //
 // On Kiro (kiro-ide) a delegated agent runs on its own `model` and
 // `effortLevel` (Kiro CLI 2.31.1 on its v3 engine, Kiro IDE 1.3.0), so
@@ -7,6 +7,11 @@
 // per-agent Kiro surface. A config run that is not a models change and writes
 // such a line for the first time (an effort recorded for another tool, which
 // every tool shares) says so with the command that takes it out.
+//
+// Kiro runs an agent whose model the account does not offer on the chat's
+// model and says nothing (Kiro CLI 3.3.0, Kiro IDE 1.4.178), so `config
+// models`, its --check and doctor name an agent model Kiro CLI's model list
+// does not have, or say they could not check; none of them stops.
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -15,6 +20,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
+import { kiroAgentModelDoctorChecks } from "../../core/tools/aidlc-doctor.ts";
 import { renderReviewCopy } from "../../core/tools/aidlc-kiro-review-copy.ts";
 import * as policy from "../../core/tools/aidlc-model-policy.ts";
 import type { ModelPolicyRecord } from "../../core/tools/aidlc-model-policy.ts";
@@ -222,21 +228,122 @@ describe("an agent's model and effort through config", () => {
       // A refresh reads the release files from here.
       AIDLC_RUNTIME_ROOT: join(REPO_ROOT, "dist-release"),
     };
-    const run = (args: string[]) => {
+    const run = (args: string[], extra: NodeJS.ProcessEnv = {}) => {
       const result = spawnSync(process.execPath, [join(REPO_ROOT, "core", "tools", "aidlc-init.ts"), ...args], {
         cwd: dir,
-        env,
+        env: { ...env, ...extra },
         encoding: "utf-8",
         timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       });
-      return { status: result.status, out: `${result.stdout}${result.stderr}` };
+      return { status: result.status, out: `${result.stdout}${result.stderr}`, stdout: result.stdout };
     };
     const install = run(["config", "--project-dir", dir, "--from", KIRO_IDE_RELEASE, "--harness", "kiro", "--mcp", "none", "--yes"]);
     expect(install.status, install.out).toBe(0);
     const agent = (file: string) => frontmatter(readFileSync(join(dir, ".kiro", "agents", file), "utf-8"));
     const models = (...args: string[]) => run(["config", "models", "--project-dir", dir, ...args]);
-    return { dir, run, models, agent };
+    // Kiro CLI's model list, through the test seam that stands in for kiro-cli.
+    const listed = (list: string[] | null, ...args: string[]) =>
+      run(["config", "models", "--project-dir", dir, ...args], {
+        AIDLC_TEST_KIRO_SESSION_JSON: JSON.stringify({ models: list?.map((id) => ({ model_id: id })) ?? null }),
+      });
+    return { dir, run, models, listed, agent };
   }
+
+  const KIRO_LIST = ["auto", "claude-opus-5.5", "gpt-5.6-terra"];
+  const notListed = (model: string) =>
+    `${REVIEWER}'s model ${model} is not in Kiro CLI's model list (\`kiro-cli chat --list-models\`); Kiro runs an agent whose model it does not offer on your chat's model.`;
+
+  test("an agent model Kiro CLI does not list is recorded and named, again on a repeat and by --check; a listed one is not", () => {
+    const p = project();
+    const set = p.listed(KIRO_LIST, "--project", "--agent", REVIEWER, "--model", "gpt-9-imaginary", "--effort", "high", "--yes");
+    expect(set.status, set.out).toBe(0);
+    expect(p.agent(REVIEWER_FILE)).toMatch(/^model: "gpt-9-imaginary"$/m);
+    expect(set.out).toContain(`  Note: ${notListed("gpt-9-imaginary")}\n`);
+    const again = p.listed(KIRO_LIST, "--project", "--agent", REVIEWER, "--model", "gpt-9-imaginary", "--yes");
+    expect(again.status, again.out).toBe(0);
+    expect(again.out).toContain("model policy unchanged");
+    expect(again.out).toContain(`  Note: ${notListed("gpt-9-imaginary")}\n`);
+    // Quiet output prints no notes, so the line comes as a warning.
+    const quiet = p.listed(KIRO_LIST, "--project", "--agent", REVIEWER, "--model", "gpt-9-imaginary", "--yes", "--quiet");
+    expect(quiet.stdout).toBe(`model policy unchanged\nWarning: ${notListed("gpt-9-imaginary")}\n`);
+    const check = p.listed(KIRO_LIST, "--check");
+    expect(check.status, check.out).toBe(0);
+    expect(check.out).toContain("model policy is reflected on kiro");
+    expect(check.out).toContain(`  Note: ${notListed("gpt-9-imaginary")}\n`);
+    const json = JSON.parse(p.listed(KIRO_LIST, "--check", "--json").stdout) as { ok: boolean; data: Record<string, unknown> };
+    expect(json.ok).toBe(true);
+    expect(json.data.agentModels).toEqual({ checked: true, notOffered: [{ agent: REVIEWER, model: "gpt-9-imaginary" }] });
+    expect(json.data.notes).toEqual([notListed("gpt-9-imaginary")]);
+    // A file that no longer matches the record is still drift, and its model is still named.
+    const file = join(p.dir, ".kiro", "agents", REVIEWER_FILE);
+    writeFileSync(file, readFileSync(file, "utf-8").replace(/^effortLevel: high$/m, "effortLevel: low"));
+    const drift = p.listed(KIRO_LIST, "--check");
+    expect(drift.status, drift.out).toBe(1);
+    expect(drift.out).toContain("model policy drift");
+    expect(drift.out).toContain(`  Note: ${notListed("gpt-9-imaginary")}\n`);
+    const fixed = p.listed(KIRO_LIST, "--project", "--agent", REVIEWER, "--model", "gpt-5.6-terra", "--effort", "high", "--yes");
+    expect(fixed.status, fixed.out).toBe(0);
+    expect(fixed.out).not.toContain("Kiro CLI's model list");
+    const clean = p.listed(KIRO_LIST, "--check", "--json");
+    expect((JSON.parse(clean.stdout) as { data: Record<string, unknown> }).data.agentModels)
+      .toEqual({ checked: true, notOffered: [] });
+    // An id AI-DLC does not print is compared as Kiro listed it, and named without its text.
+    const odd = p.listed([...KIRO_LIST, "claude-x[1m]"], "--project", "--agent", REVIEWER, "--model", "claude-x[1m]", "--yes");
+    expect(odd.status, odd.out).toBe(0);
+    expect(odd.out).not.toContain("Kiro CLI's model list");
+    const oddMissing = p.listed(KIRO_LIST, "--project", "--agent", REVIEWER, "--model", "claude-x[1m]", "--yes");
+    expect(oddMissing.status, oddMissing.out).toBe(0);
+    expect(oddMissing.out).toContain(`  Note: ${notListed("a model id AI-DLC does not print")}\n`);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 2);
+
+  test("with no kiro-cli, or a Kiro that does not answer, the model is recorded and the run says it could not check", () => {
+    const p = project();
+    const noCli = p.run(
+      ["config", "models", "--project-dir", p.dir, "--project", "--agent", REVIEWER, "--model", "gpt-5.6-terra", "--yes"],
+      { AIDLC_TEST_NAME: "t-kiro-agent-models" },
+    );
+    expect(noCli.status, noCli.out).toBe(0);
+    expect(p.agent(REVIEWER_FILE)).toMatch(/^model: "gpt-5\.6-terra"$/m);
+    expect(noCli.out).toContain(
+      `Could not check ${REVIEWER}'s model gpt-5.6-terra against Kiro CLI's model list (kiro-cli not found); Kiro runs an agent whose model it does not offer on your chat's model.`,
+    );
+    const silent = p.listed(null, "--project", "--agent", "architect", "--model", "claude-opus-5.5", "--yes", "--quiet");
+    expect(silent.status, silent.out).toBe(0);
+    expect(silent.stdout).toContain(
+      "\nWarning: Could not check architect's model claude-opus-5.5 against Kiro CLI's model list (Kiro did not answer); ",
+    );
+    // An effort alone sets no model, so nothing is checked.
+    const effort = p.listed(null, "--project", "--agent", "developer", "--effort", "high", "--yes");
+    expect(effort.status, effort.out).toBe(0);
+    expect(effort.out).not.toContain("Kiro CLI's model list");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 2);
+
+  test("doctor names an agent model Kiro CLI does not list, or says it could not check", () => {
+    const p = project();
+    expect(p.listed(KIRO_LIST, "--project", "--agent", REVIEWER, "--model", "gpt-9-imaginary", "--yes").status).toBe(0);
+    const saved = process.env.AIDLC_TEST_KIRO_SESSION_JSON;
+    try {
+      process.env.AIDLC_TEST_KIRO_SESSION_JSON = JSON.stringify({ models: KIRO_LIST.map((id) => ({ model_id: id })) });
+      const [row] = kiroAgentModelDoctorChecks(p.dir);
+      expect(row).toMatchObject({
+        pass: false,
+        severity: "warn",
+        label: `Agent ${REVIEWER}'s model gpt-9-imaginary is not in Kiro CLI's model list; Kiro runs an agent whose model it does not offer on your chat's model`,
+      });
+      expect(row.fix).toMatch(
+        new RegExp(
+          `^run \`[^\`]* config models --agent ${REVIEWER} --model <id>\` with a model from \`kiro-cli chat --list-models\`; \`[^\`]* config models --show\` shows where its model is set$`,
+        ),
+      );
+      process.env.AIDLC_TEST_KIRO_SESSION_JSON = JSON.stringify({ models: null });
+      expect(kiroAgentModelDoctorChecks(p.dir)).toEqual([
+        { pass: true, label: "Agent models: not checked against Kiro CLI's model list (Kiro did not answer)" },
+      ]);
+    } finally {
+      if (saved === undefined) delete process.env.AIDLC_TEST_KIRO_SESSION_JSON;
+      else process.env.AIDLC_TEST_KIRO_SESSION_JSON = saved;
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("on a stable release, one agent's model and effort are written, kept by a later config run, and --check agrees", () => {
     const p = project();

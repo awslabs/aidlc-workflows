@@ -27,7 +27,7 @@ import {
   type UpdateState,
 } from "./aidlc-update.ts";
 import { collectPluginStatus } from "./aidlc-plugin.ts";
-import { isKiroPreset, kiroSessionDoctorFindings } from "./aidlc-kiro-session.ts";
+import { isKiroPreset, kiroAgentModelDoctorFindings, kiroSessionDoctorFindings } from "./aidlc-kiro-session.ts";
 import {
   describeWindowsUninstallFailure,
   planPathKey,
@@ -57,6 +57,7 @@ import {
 import {
   HARNESS_PRODUCT_NAMES,
   isModelHarness,
+  kiroIdeAgentFileModels,
   modelPolicyDoctorIssues,
   modelPolicyIsEmpty,
   presetsChangeNothing,
@@ -400,6 +401,25 @@ export async function kiroSessionDoctorChecks(projectDir: string): Promise<Docto
   );
 }
 
+// On Kiro's row an agent's own model runs only when the account offers it.
+export function kiroAgentModelDoctorChecks(projectDir: string): DoctorCheck[] {
+  const harnesses = discoverProjectHarnesses(projectDir);
+  const kiro = harnesses.find((harness) => harness.distribution === "kiro-ide");
+  if (!kiro) return [];
+  let models: ReturnType<typeof kiroIdeAgentFileModels>;
+  try {
+    models = kiroIdeAgentFileModels(kiro.root);
+  } catch {
+    return [];
+  }
+  const harness = harnesses.length > 1 ? ` --harness ${typedHarnessName("kiro-ide")}` : "";
+  return kiroAgentModelDoctorFindings(models, `${aidlcInvocation()} config models${harness}`).map((finding) =>
+    finding.pass
+      ? { pass: true, label: finding.label }
+      : { pass: false, severity: "warn", label: finding.label, ...(finding.fix ? { fix: finding.fix } : {}) }
+  );
+}
+
 // The workflow findings, as warn rows after every check, so the human report,
 // --json and --quiet render and count one list. The export reads the findings
 // from the analysis itself (writeExport), so it is handed the report as
@@ -654,6 +674,7 @@ export async function main(argv: string[]): Promise<void> {
   checks.push(...settingsDoctorChecks(projectDir));
   checks.push(modelsPolicyCheck(projectDir, flags.verbose === "true"));
   checks.push(...await kiroSessionDoctorChecks(projectDir));
+  checks.push(...kiroAgentModelDoctorChecks(projectDir));
   const kiroWorkflows = kiroIdeWorkflowsDoctorCheck(projectDir, harnessDir());
   if (kiroWorkflows) checks.push(kiroWorkflows);
   const kiroCliWorkflows = kiroCliWorkflowsDoctorCheck(projectDir, harnessDir());

@@ -204,12 +204,16 @@ import {
 } from "./aidlc-runtime-paths.ts";
 import {
   applyKiroSessionPlan,
+  checkKiroAgentModels,
   hasLegacyKiroEffortMap,
   isKiroPreset,
   KIRO_AUTO_DEFINITION,
   KIRO_EFFORT_LABEL,
   KIRO_PRESET_EFFORT,
   KIRO_SAVED_MODEL_NOTE,
+  type KiroAgentModel,
+  type KiroAgentModelCheck,
+  kiroAgentModelLines,
   kiroAutoRecommendation,
   kiroCliPath,
   type KiroModel,
@@ -291,6 +295,7 @@ import {
   isModelId,
   isModelPreset,
   kiroAgentPinsAdded,
+  kiroIdeAgentFileModels,
   MODEL_EFFORTS,
   MODEL_GROUPS,
   MODEL_PRESETS,
@@ -493,6 +498,10 @@ type ModelsMutationContext = {
   tiers: AgentTiers;
   summaryLines: string[];
   notes: string[];
+  // On Kiro's row, the check of the agent models the run sets, and its lines
+  // again for quiet output, which prints no notes.
+  agentModels?: KiroAgentModelCheck;
+  warnings?: string[];
   // Absent when the recorded policy is unchanged: a repair of the kiro-ide
   // agent files that lost what the policy applies, or the models answer alone.
   settings?: SettingsMutation;
@@ -11294,6 +11303,75 @@ function planRemovedRootIntegrations(
   }
 }
 
+// The Kiro-row agent models a `config models` run records or brings into
+// effect: those of the agents whose model it changes in the file it writes or
+// in effect, and the agent it names with --model. A model recorded in one file
+// and one in effect from another are both named.
+function kiroAgentModelsSetBy(
+  argv: readonly string[],
+  policies: {
+    previous: ModelPolicyRecord | null;
+    next: ModelPolicyRecord | null;
+    targetCurrent: ModelPolicyRecord | null;
+    targetNext: ModelPolicyRecord | null;
+  },
+): KiroAgentModel[] {
+  const agents = (policy: ModelPolicyRecord | null) => normalizeModelPolicy(policy)?.agents ?? {};
+  const [previous, next, targetCurrent, targetNext] = [
+    agents(policies.previous),
+    agents(policies.next),
+    agents(policies.targetCurrent),
+    agents(policies.targetNext),
+  ];
+  const named = argv.includes("--model") && valueAfter([...argv], "--model") !== "default"
+    ? valueAfter([...argv], "--agent")
+    : undefined;
+  const found: KiroAgentModel[] = [];
+  const names = new Set([previous, next, targetCurrent, targetNext].flatMap((policy) => Object.keys(policy)));
+  for (const agent of [...names].sort()) {
+    const changed = agent === named || previous[agent]?.model !== next[agent]?.model ||
+      targetCurrent[agent]?.model !== targetNext[agent]?.model;
+    if (!changed) continue;
+    for (const model of new Set([targetNext[agent]?.model, next[agent]?.model])) {
+      if (model !== undefined && isModelId(model)) found.push({ agent, model });
+    }
+  }
+  return found;
+}
+
+type KiroAgentModelReport = { check: KiroAgentModelCheck; lines: string[] };
+
+function kiroAgentModelReport(models: readonly KiroAgentModel[]): KiroAgentModelReport | null {
+  if (models.length === 0) return null;
+  const check = checkKiroAgentModels(models);
+  return { check, lines: kiroAgentModelLines(models, check) };
+}
+
+// A result with the agent model lines after it: `Note:` lines, `Warning:`
+// lines in quiet output (which prints no notes), and the check itself in JSON.
+function emitWithKiroAgentModels(
+  result: CommandResult,
+  report: KiroAgentModelReport | null,
+  options: ReturnType<typeof globalOptions>,
+): void {
+  if (!report) {
+    emitResult(result, options);
+    return;
+  }
+  if (options.mode === "json") {
+    const data = result.data !== null && typeof result.data === "object" && !Array.isArray(result.data)
+      ? result.data as Record<string, unknown>
+      : {};
+    const notes = Array.isArray(data.notes) ? data.notes : [];
+    emitResult({ ...result, data: { ...data, agentModels: report.check, notes: [...notes, ...report.lines] } }, options);
+    return;
+  }
+  emitResult(result, options);
+  for (const line of report.lines) {
+    process.stdout.write(options.mode === "quiet" ? `Warning: ${line}\n` : `  Note: ${line}\n`);
+  }
+}
+
 type KiroModelsPlan =
   | { plan: KiroSessionPlan | null; note?: string }
   | { error: ReturnType<typeof failure> };
@@ -11551,7 +11629,10 @@ function prepareModelsSection(
     // effort, so a clean check names the session, as doctor does, not the
     // recorded policy.
     const sessionSet = harness === "cursor" || harness === "copilot";
-    emitResult(
+    // On Kiro's row the agent files' models are checked against Kiro CLI's
+    // list whether or not they match the record.
+    const agentModels = harness === "kiro-ide" ? kiroAgentModelReport(kiroIdeAgentFileModels(selected.root)) : null;
+    emitWithKiroAgentModels(
       drift.length === 0
         ? success(
             sessionSet
@@ -11564,6 +11645,7 @@ function prepareModelsSection(
             EXIT.failure,
             modelsCommand(projectDir, harness, "--show"),
           ),
+      agentModels,
       options,
     );
     return null;
@@ -11747,7 +11829,13 @@ function prepareModelsSection(
     }
     if (argv.includes("--reset") && answerRecorded) return modelsAnswerOnly(null);
     if (!hasMutationFlags) return modelsAnswerOnly(kept);
-    emitResult(success("model policy unchanged"), options);
+    emitWithKiroAgentModels(
+      success("model policy unchanged"),
+      harness === "kiro-ide"
+        ? kiroAgentModelReport(kiroAgentModelsSetBy(argv, { previous: current, next: current, targetCurrent, targetNext }))
+        : null,
+      options,
+    );
     return null;
   }
   const nextResolved = resolveAidlcSettingsWithOverride(
@@ -11792,6 +11880,9 @@ function prepareModelsSection(
     };
   }
   const summary = modelSummaryLines(current, next, tiers, harness, projectDir);
+  const agentModels = harness === "kiro-ide"
+    ? kiroAgentModelReport(kiroAgentModelsSetBy(argv, { previous: current, next, targetCurrent, targetNext }))
+    : null;
   return {
     ...(kiroPlan ? { kiro: kiroPlan } : {}),
     ...(kiroNote ? { kiroNote } : {}),
@@ -11804,7 +11895,8 @@ function prepareModelsSection(
       next,
       tiers,
       summaryLines: summary.lines,
-      notes: summary.notes,
+      notes: [...summary.notes, ...(agentModels?.lines ?? [])],
+      ...(agentModels ? { agentModels: agentModels.check, warnings: agentModels.lines } : {}),
       ...(settingsUnchanged ? {} : {
         settings: {
           target,
@@ -14216,6 +14308,7 @@ export async function main(
       ...(deepProject ? [deepProject] : []),
       ...switchWarnings,
       ...(shortForm ? [shortForm] : []),
+      ...(modelsContext?.warnings ?? []),
     ];
     const withQuietWarnings = (message: string): string =>
       options.mode === "quiet" && quietWarnings.length > 0
@@ -14342,6 +14435,7 @@ export async function main(
                   next: modelsContext.next,
                   summaries: modelsContext.summaryLines,
                   notes: modelsContext.notes,
+                  ...(modelsContext.agentModels ? { agentModels: modelsContext.agentModels } : {}),
                 },
               }
             : {}),
@@ -14759,6 +14853,7 @@ export async function main(
                 next: modelsContext.next,
                 summaries: modelsContext.summaryLines,
                 notes: modelsContext.notes,
+                ...(modelsContext.agentModels ? { agentModels: modelsContext.agentModels } : {}),
               },
             }
           : {}),
