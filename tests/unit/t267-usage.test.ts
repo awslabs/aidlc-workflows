@@ -204,9 +204,9 @@ describe("Task 1 - normalizeModel + computeCost", () => {
     expect(normalizeModel("converse/us.anthropic.claude-sonnet-5")).toBe("sonnet-5");
     expect(normalizeModel("claude-fable-5")).toBe("fable-5");
     expect(normalizeModel("fable")).toBe("fable-5");
-    // sonnet-4-5 must NOT collide with the sonnet-5 needle (it is unpriced =>
-    // null, an honest unknown generation, not a mis-price onto sonnet-5).
-    expect(normalizeModel("converse/us.anthropic.claude-sonnet-4-5")).toBeNull();
+    // sonnet-4-5 must NOT collide with the sonnet-5 needle: it resolves to its
+    // own row, never a mis-price onto sonnet-5.
+    expect(normalizeModel("converse/us.anthropic.claude-sonnet-4-5")).toBe("sonnet-4-5");
   });
 
   test("normalizeModel returns null for an UNKNOWN generation", () => {
@@ -246,6 +246,9 @@ describe("Task 1 - normalizeModel + computeCost", () => {
     expect(normalizeModel("us.anthropic.claude-haiku-5-5")).toBe("haiku-5-5");
     expect(normalizeModel("claude-fable-5-1")).toBe("fable-5-1");
     expect(normalizeModel("global.anthropic.claude-fable-5-1")).toBe("fable-5-1");
+    expect(normalizeModel("claude-fable-5-2")).toBe("fable-5-2");
+    expect(normalizeModel("us.anthropic.claude-opus-4-5-20251101-v1:0")).toBe("opus-4-5");
+    expect(normalizeModel("claude-sonnet-4-5")).toBe("sonnet-4-5");
     // The major versions keep their own rows.
     expect(normalizeModel("claude-opus-5")).toBe("opus-5");
     expect(normalizeModel("global.anthropic.claude-sonnet-5")).toBe("sonnet-5");
@@ -258,7 +261,7 @@ describe("Task 1 - normalizeModel + computeCost", () => {
     expect(normalizeModel("claude-opus-5-7")).toBeNull();
     expect(normalizeModel("global.anthropic.claude-opus-5-7[1m]")).toBeNull();
     expect(normalizeModel("claude-sonnet-5-9")).toBeNull();
-    expect(normalizeModel("us.anthropic.claude-fable-5-2")).toBeNull();
+    expect(normalizeModel("us.anthropic.claude-fable-5-3")).toBeNull();
     expect(normalizeModel("claude-opus-4-8-1")).toBeNull();
     // Only a trailing 8-digit date is a snapshot suffix.
     expect(normalizeModel("claude-opus-5-2026")).toBeNull();
@@ -290,6 +293,10 @@ describe("Task 1 - normalizeModel + computeCost", () => {
     expect(price("us.anthropic.claude-sonnet-5-5")).toEqual([2, 10, 2.5, 4, 0.1]);
     expect(price("claude-haiku-5-5")).toEqual([0.1, 0.5, 0.125, 0.2, 0.01]);
     expect(price("global.anthropic.claude-fable-5-1")).toEqual([10, 50, 12.5, 20, 0.25]);
+    // Fable 5.2, Opus 4.5 and Sonnet 4.5 have their own rows (#3964).
+    expect(price("claude-fable-5-2")).toEqual([8, 40, 10, 16, 0.2]);
+    expect(price("claude-opus-4-5")).toEqual([5, 25, 6.25, 10, 0.5]);
+    expect(price("claude-sonnet-4-5")).toEqual([3, 15, 3.75, 6, 0.3]);
     expect(price("claude-sonnet-5")).toEqual([2, 10, 2.5, 4, 0.2]);
     expect(price("claude-opus-5")).toEqual([5, 25, 6.25, 10, 0.5]);
     expect(price("claude-fable-5")).toEqual([10, 50, 12.5, 20, 1]);
