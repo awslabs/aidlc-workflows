@@ -1,11 +1,14 @@
 // Which checkout holds a team Unit's work (#3610): the claims this checkout has
 // seen (the claim registry cache and the local claim refs), the Units a checkout
 // walks without a claim, and the one reading of the Units held here that the
-// open Unit steps, the Unit writes, the walk and the claim list share. Moved out
-// of aidlc-lib.ts with the code it needs, which never imports aidlc-lib.ts.
+// open Unit steps, the Unit writes, the walk and the claim list share; and where
+// a claim commit holds its claim file, which every claim read and write asks.
+// Moved out of aidlc-lib.ts with the code it needs, which never imports
+// aidlc-lib.ts.
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { basename, join } from "node:path";
+import { projectInRepo } from "./aidlc-git.ts";
 import { activeSpace, workspaceRoot } from "./aidlc-locks.ts";
 import { escapeRegex } from "./aidlc-markdown.ts";
 import {
@@ -39,6 +42,104 @@ export interface UnitClaimRegistryCache {
   intent_uuid: string;
   claims: Record<string, CachedUnitClaim>;
   warning?: string;
+}
+
+// The claim file a claim commit holds, and the folder a Unit's results ride in
+// beside it on the claim branch: the one owner of both names and their places.
+export const CLAIM_FILE = ".aidlc-unit-claim.json";
+export const UNIT_RESULT_DIR = ".aidlc-unit-result";
+
+// The folders a claim commit's tree may hold the claim file and the result
+// folder in, from the repository's top, in the order they are read: the
+// project's aidlc/ folder, where a newer release writes both, then, for a
+// project at the repository's top, the tree's top, where this release and 2.11
+// write the claim file (and a newer release keeps a result beside a claim
+// that started there). In a folder of a bigger repository only the aidlc/
+// folder: no earlier release could claim there. `prefix` is the project's
+// place in its repository (projectInRepo), the caller's to say.
+function claimTreeRoots(prefix: string): string[] {
+  return prefix ? [`${prefix}aidlc/`] : ["aidlc/", ""];
+}
+
+// Where a claim commit's tree may hold its claim file, in reading order. The
+// last is where a claim that starts here puts it.
+export function claimPlaces(prefix: string): string[] {
+  return claimTreeRoots(prefix).map((root) => `${root}${CLAIM_FILE}`);
+}
+
+// The project's place in its repository, for a claim read from this checkout.
+export function claimPrefixOf(projectDir: string): string {
+  return projectInRepo(projectDir)?.prefix ?? "";
+}
+
+// A claim's file or a Unit result, at any of their places: a landing leaves
+// each off main. `path` is from the repository's top, as git diff names it.
+export function isClaimTreeFile(prefix: string, path: string): boolean {
+  return claimPlaces(prefix).includes(path) || unitResultRootOf(prefix, path) !== null;
+}
+
+// The result folder `path` is in ("aidlc/.aidlc-unit-result/"), or null.
+export function unitResultRootOf(prefix: string, path: string): string | null {
+  return claimTreeRoots(prefix)
+    .map((root) => `${root}${UNIT_RESULT_DIR}/`)
+    .find((root) => path.startsWith(root)) ?? null;
+}
+
+// The claim file's blob in a commit's tree and where it is, read locally (a
+// partial clone's tree lists a blob it has not fetched): the first place
+// present wins.
+export function claimBlobAt(
+  projectDir: string,
+  oid: string,
+  prefix: string,
+): { place: string; blob: string } | null {
+  const places = claimPlaces(prefix);
+  const listed = claimRegistryGit(
+    projectDir,
+    ["ls-tree", "-z", "--full-tree", oid, "--", ...places],
+    { localOnly: true },
+  );
+  if (!listed.ok) return null;
+  const blobs = new Map<string, string>();
+  for (const entry of listed.stdout.split("\0")) {
+    const tab = entry.indexOf("\t");
+    const [, type, blob] = entry.slice(0, tab).split(" ");
+    if (tab > 0 && type === "blob" && blob) blobs.set(entry.slice(tab + 1), blob);
+  }
+  const place = places.find((candidate) => blobs.has(candidate));
+  return place ? { place, blob: blobs.get(place) as string } : null;
+}
+
+// The claim file's text in a commit and where it is, in one local-only git
+// call for every place: the first place present wins. Null when the commit
+// holds none, or its blob is not here (a partial clone's git stops there).
+export function readClaimAt(
+  projectDir: string,
+  oid: string,
+  prefix: string,
+): { place: string; text: string } | null {
+  const places = claimPlaces(prefix);
+  const result = spawnSync("git", ["cat-file", "--batch"], {
+    cwd: projectDir,
+    input: places.map((place) => `${oid}:${place}\n`).join(""),
+    env: { ...process.env, GIT_NO_LAZY_FETCH: "1" },
+  });
+  if (result.status !== 0 || !result.stdout) return null;
+  const out = result.stdout;
+  let at = 0;
+  for (const place of places) {
+    const end = out.indexOf(0x0a, at);
+    if (end === -1) return null;
+    // "<oid> <type> <size>", then the content and a line end; a place the
+    // commit does not hold prints "<name> missing".
+    const header = /^[0-9a-f]+ (\S+) (\d+)$/.exec(out.subarray(at, end).toString("utf-8"));
+    at = end + 1;
+    if (!header) continue;
+    const size = Number(header[2]);
+    if (header[1] === "blob") return { place, text: out.subarray(at, at + size).toString("utf-8") };
+    at += size + 1;
+  }
+  return null;
 }
 
 export function claimRegistryCachePath(projectDir: string): string {
@@ -143,6 +244,8 @@ function claimedUnitsSeenHere(projectDir: string, first = false): Set<string> {
     }
   }
   const id8 = idSuffix(intentUuid);
+  // Asked only when a claim ref of the intent is here.
+  let prefix: string | undefined;
   const refs = claimRegistryGit(projectDir, [
     "for-each-ref",
     "--format=%(objectname) %(refname)",
@@ -162,14 +265,11 @@ function claimedUnitsSeenHere(projectDir: string, first = false): Set<string> {
     ) {
       continue;
     }
-    const shown = claimRegistryGit(
-      projectDir,
-      ["show", `${oid}:.aidlc-unit-claim.json`, "--"],
-      { localOnly: true },
-    );
-    if (!shown.ok) continue;
+    prefix ??= claimPrefixOf(projectDir);
+    const shown = readClaimAt(projectDir, oid, prefix);
+    if (!shown) continue;
     try {
-      const payload = JSON.parse(shown.stdout) as Record<string, unknown>;
+      const payload = JSON.parse(shown.text) as Record<string, unknown>;
       if (
         payload.intent_uuid === intentUuid &&
         payload.status === "claimed"

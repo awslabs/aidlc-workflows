@@ -5,8 +5,11 @@ import { withoutLearnedDate } from "./aidlc-learned-date.ts";
 import { claimedCheckoutReopens } from "./aidlc-unit-landing.ts";
 import {
   cachedClaimFanoutActive,
+  claimBlobAt,
+  claimPrefixOf,
   claimRegistryCachePath,
   claimRegistryGit,
+  readClaimAt,
   readUnitClaimRegistryCache,
   type UnitClaimRegistryCache,
   unitsHeldHere,
@@ -30320,22 +30323,14 @@ function claimPayloadAtTip(
 ): ClaimRegistryPayload {
   const remote = claimRegistryRemote(projectDir);
   const localOnly = { localOnly: true };
+  const prefix = claimPrefixOf(projectDir);
   const hasCommit = (): boolean =>
     claimRegistryGit(
       projectDir,
       ["cat-file", "-e", `${tip.oid}^{commit}`],
       localOnly,
     ).ok;
-  const payloadBlob = (): string | null => {
-    const found = claimRegistryGit(
-      projectDir,
-      ["rev-parse", `${tip.oid}:.aidlc-unit-claim.json`],
-      localOnly,
-    );
-    return found.ok && /^[0-9a-f]{40}$/.test(found.stdout.trim())
-      ? found.stdout.trim()
-      : null;
-  };
+  const payloadBlob = (): string | null => claimBlobAt(projectDir, tip.oid, prefix)?.blob ?? null;
   const hasBlob = (blob: string | null): boolean =>
     blob !== null &&
     claimRegistryGit(projectDir, ["cat-file", "-e", blob], localOnly).ok;
@@ -30371,16 +30366,12 @@ function claimPayloadAtTip(
         "the partial clone is missing the claim payload blob.",
     );
   }
-  const shown = claimRegistryGit(
-    projectDir,
-    ["show", `${tip.oid}:.aidlc-unit-claim.json`, "--"],
-    localOnly,
-  );
-  if (!shown.ok) {
+  const shown = readClaimAt(projectDir, tip.oid, prefix);
+  if (!shown) {
     throw new Error(`Unit claim registry payload is unreadable at ${tip.ref}.`);
   }
   try {
-    const payload = JSON.parse(shown.stdout) as Record<string, unknown>;
+    const payload = JSON.parse(shown.text) as Record<string, unknown>;
     if (
       (payload.status !== "claimed" && payload.status !== "released") ||
       payload.intent_uuid !== intentUuid ||
