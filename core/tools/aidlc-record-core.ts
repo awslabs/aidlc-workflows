@@ -18,6 +18,7 @@ import { runtimeHarnessDir, runtimeHarnessName, SPACE_NAME_REGEX } from "./aidlc
 import { validateUnitName } from "./aidlc-review-records.ts";
 import { activeSpace, assertNoSymlinkInChainOrThrow, ENGINE_DIR, engineDirFor, intentsDir, isPlainObject, listIntentDirs, mainCheckoutOfWorktree, readAppendOnlyFileNoFollowOrThrow, readRegularFileNoFollowOrThrow, refuseEngineObserverWrite, spaceRecordRoot, workspaceRoot, writeFileAtomic } from "./aidlc-locks.ts";
 import { escapeRegex } from "./aidlc-markdown.ts";
+import { gitCommonDirOf } from "./aidlc-git.ts";
 import { jsoncDocumentValue, withoutBom } from "./aidlc-distribution.ts";
 
 export type CheckboxState = "pending" | "in-progress" | "awaiting-approval" | "revising" | "completed" | "skipped";
@@ -137,44 +138,6 @@ export function relativeRecordDir(
   const slug = selection.intent;
   if (slug === null) return null;
   return `aidlc/spaces/${sp}/intents/${slug}`;
-}
-
-// The repository NAME for a checkout whose project root is a LINKED GIT
-// WORKTREE, else null so the caller keeps `basename(projectDir)`.
-//
-// `git worktree add` names its directory after a branch, so in a linked worktree
-// basename(projectDir) is a branch name rather than a repository name. The shared
-// git dir lives inside the MAIN checkout, so its parent's basename is the
-// repository name.
-//
-// TWO things make this safe, and both are load-bearing:
-//
-//  1. `--git-dir` and `--git-common-dir` are measured with `cwd: projectDir`, so a
-//     relative answer is relative to PROJECTDIR — never to `--show-toplevel`. The
-//     two coincide only when the project root IS the toplevel; resolving against
-//     the toplevel otherwise climbs too high, and if a git dir happens to sit
-//     there (a repository vendored in another, or a home directory that is itself
-//     a repository) it would silently return a DIFFERENT repository's name.
-//  2. A linked worktree is the only topology where those two paths differ
-//     (`--git-dir` is `<common>/worktrees/<name>`). Equal for a main checkout, for
-//     a subdirectory of one, and for a repository nested inside another — all of
-//     which return null here and keep today's answer byte-for-byte. That is what
-//     makes this change worktree-only rather than a re-definition of identity for
-//     every project root below its repository root.
-//
-// Deliberately NOT the `origin` remote: that would also cover a clone whose
-// directory name differs from the repository, but remote names are mutable (a
-// rename or a re-point would move a workspace's store) and it would change
-// resolution for every checkout whose remote and directory names differ. A
-// location is stable; widening identity to the remote is a separate decision.
-export function gitRevParseSingle(projectDir: string, flag: string): string | null {
-  const r = spawnSync("git", ["rev-parse", flag], {
-    cwd: projectDir,
-    encoding: "utf-8",
-  });
-  if (r.status !== 0) return null;
-  const out = r.stdout?.trim();
-  return out ? out : null;
 }
 
 // The id8 disambiguator: trailing 8 hex chars of the uuid (digits only, dashes
@@ -1330,9 +1293,9 @@ function localWorktreeRecord(projectDir: string): string | null {
     ) as { version?: unknown; intentRecord?: unknown; gitCommonDirHash?: unknown };
     if (meta.version !== 1 || typeof meta.intentRecord !== "string" ||
       typeof meta.gitCommonDirHash !== "string") return null;
-    const commonRaw = gitRevParseSingle(projectDir, "--git-common-dir");
-    if (commonRaw === null) return null;
-    const common = realpathSync(resolvePath(projectDir, commonRaw)).replace(/\\/g, "/");
+    const dirs = gitCommonDirOf(projectDir);
+    if (!dirs.ok) return null;
+    const common = realpathSync(dirs.common).replace(/\\/g, "/");
     const key = process.platform === "win32" ? common.toLowerCase() : common;
     return createHash("sha256").update(key).digest("hex") === meta.gitCommonDirHash
       ? meta.intentRecord

@@ -385,6 +385,7 @@ import {
   type RuntimeRecord,
   type TrustRecord,
 } from "./aidlc-config-diagnostics.ts";
+import { gitCommonDirOf } from "./aidlc-git.ts";
 import { committedRecordIgnoreConflicts } from "./aidlc-gitignore.ts";
 import { deepFolder } from "./aidlc-folder-depth.ts";
 import {
@@ -4863,13 +4864,9 @@ function planProjectSettingsMutation(
   // the lookup at another one. A linked worktree's list is in the shared dir.
   const env = { ...process.env };
   for (const name of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE"]) delete env[name];
-  const located = spawnSync("git", ["-C", projectDir, "rev-parse", "--git-common-dir"], {
-    encoding: "utf-8",
-    env,
-    timeout: 10_000,
-  });
-  if (located.status !== 0 || !located.stdout.trim()) return null;
-  const exclude = join(resolve(projectDir, located.stdout.trim()), "info", "exclude");
+  const located = gitCommonDirOf(projectDir, { env, timeout: 10_000 });
+  if (!located.ok) return null;
+  const exclude = join(located.common, "info", "exclude");
   if (regularFile(exclude) && readFileSync(exclude, "utf-8").split(/\r?\n/).includes(LOCAL_SETTINGS_FILE)) {
     return null;
   }

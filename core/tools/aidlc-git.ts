@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, lstatSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 
 export function gitSubmoduleNames(checkoutDir: string, platformArgs: readonly string[], commit?: string): Map<string, string> {
@@ -44,6 +44,77 @@ export function git(pd: string, args: string[], outside = false): string | null 
 // "true"/"false"; a non-repo exits non-zero -> git() returns null -> false.)
 export function isGitRepo(pd: string, outside = false): boolean {
   return git(pd, ["rev-parse", "--is-inside-work-tree"], outside)?.trim() === "true";
+}
+
+// Where a folder sits in its git repository: the repository's top as git
+// prints it, and the folder's path from there, "" at the top and "apps/web/"
+// in a package of a monorepo ("/"-separated and ending in "/" on every
+// platform). git prints and reads some paths from the top (status and diff
+// name lists, REV:path, update-index --cacheinfo) while AI-DLC's record paths
+// are from the project folder; this is the one reading of where the project
+// sits, and inRepo and inProject cross between the two frames. Null outside a
+// work tree.
+export interface ProjectInRepo {
+  top: string;
+  prefix: string;
+}
+
+// A found answer is kept for the process; a folder git does not know is asked
+// again, so one made a repository later in the same process is seen.
+const projectsInRepo = new Map<string, ProjectInRepo>();
+
+export function projectInRepo(dir: string): ProjectInRepo | null {
+  const key = resolve(dir);
+  const known = projectsInRepo.get(key);
+  if (known !== undefined) return known;
+  const printed = git(dir, ["rev-parse", "--show-toplevel", "--show-prefix"]);
+  if (printed === null) return null;
+  // Only the line ends are cut, so a folder name's own spaces stay.
+  const [top, prefix = ""] = printed.split(/\r?\n/);
+  if (!top) return null;
+  const found = { top, prefix };
+  projectsInRepo.set(key, found);
+  return found;
+}
+
+// A project path as git takes it from the repository's top.
+export function inRepo(prefix: string, projectPath: string): string {
+  return `${prefix}${projectPath}`;
+}
+
+// A path git printed from the repository's top as a project path, or null when
+// it is outside the project; what such a path is to it is each caller's.
+export function inProject(prefix: string, repoPath: string): string | null {
+  return repoPath.startsWith(prefix) ? repoPath.slice(prefix.length) : null;
+}
+
+export type GitDirs = { ok: true; common: string; own: string } | { ok: false; stderr: string };
+
+// The repository's shared git directory and this checkout's own one (they
+// differ only in a linked worktree), or git's own words when it cannot say.
+// git prints both relative to the folder it ran in, so they are resolved
+// against `dir`, never against the repository's top: the two are the same only
+// at the top, and from a folder the top climbs too high, where a git directory
+// that happens to sit there (a repository vendored in another, a home folder
+// that is one) would be another repository's. `env` and `timeout` are the
+// caller's, for a read that must ignore git's repository-redirect variables.
+export function gitCommonDirOf(
+  dir: string,
+  options: { env?: NodeJS.ProcessEnv; timeout?: number } = {},
+): GitDirs {
+  try {
+    const r = spawnSync("git", ["rev-parse", "--git-common-dir", "--git-dir"], {
+      cwd: dir,
+      encoding: "utf-8",
+      env: options.env,
+      timeout: options.timeout ?? DEFAULT_SUBPROCESS_TIMEOUT_MS,
+    });
+    const [common, own] = (r.stdout ?? "").trim().split(/\r?\n/);
+    if (r.status !== 0 || !common || !own) return { ok: false, stderr: (r.stderr ?? "").trim() };
+    return { ok: true, common: resolve(dir, common), own: resolve(dir, own) };
+  } catch (error) {
+    return { ok: false, stderr: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 // A folder a person made a Git checkout of: a real .git entry (a folder, or a

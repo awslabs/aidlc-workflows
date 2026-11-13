@@ -13,7 +13,7 @@
 // through matching provenance; new worktrees never use legacy names.
 // Nested checkouts are refused; external linked worktrees remain supported.
 
-import { gitSubmoduleNames } from "./aidlc-git.ts";
+import { gitSubmoduleNames, inProject, projectInRepo } from "./aidlc-git.ts";
 import { type SpawnSyncReturns, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { chmodSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -186,7 +186,7 @@ interface GitResult {
   error?: string;
 }
 
-// Every Git call this tool makes carries GIT_PLATFORM_ARGS (see aidlc-lib).
+// Every Git call runGit makes carries GIT_PLATFORM_ARGS (see aidlc-lib).
 function runGit(args: string[], cwd?: string, env?: NodeJS.ProcessEnv): GitResult {
   const r = spawnSync("git", [...GIT_PLATFORM_ARGS, ...args], {
     cwd,
@@ -3480,14 +3480,14 @@ export function stagedLandingClashFiles(projectDir: string, units: readonly stri
       const staged = (retainedSourceRefs(cwd, identity) ?? []).some(({ oid }) =>
         stagedLandingOf(cwd, "squash", oid) || stagedLandingOf(cwd, "merge", oid));
       if (!staged) continue;
-      const prefix = runGit(["rev-parse", "--show-prefix"], cwd);
-      if (!prefix.ok) continue;
-      const under = prefix.stdout.trim();
+      const at = projectInRepo(cwd);
+      if (at === null) continue;
       const unmerged = listConflictFiles(cwd);
       const combined = combinedSinceMerge(cwd);
       const toCommit = unmerged.length > 0 || combined.length > 0 ? [] : gitPaths(cwd, ["--cached"]) ?? [];
       for (const path of [...unmerged, ...combined, ...toCommit]) {
-        if (path.startsWith(under)) files.add(`${repo === null ? "" : `${repo}/`}${path.slice(under.length)}`);
+        const inside = inProject(at.prefix, path);
+        if (inside !== null) files.add(`${repo === null ? "" : `${repo}/`}${inside}`);
       }
     } catch {
       // No landing of this Unit's to finish.

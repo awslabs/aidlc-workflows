@@ -35,6 +35,7 @@ import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { jsoncSettingValue } from "./aidlc-distribution.ts";
+import { gitCommonDirOf } from "./aidlc-git.ts";
 import { discoverProjectHarnesses } from "./aidlc-runtime-paths.ts";
 import {
   discoverSiblingRepos,
@@ -187,9 +188,8 @@ function directoryHasContent(root: string): boolean {
 }
 
 function gitCommonDir(dir: string): string | null {
-  const result = git(dir, ["rev-parse", "--git-common-dir"]);
-  if (result.status !== 0 || result.stdout.trim().length === 0) return null;
-  return resolve(dir, result.stdout.trim());
+  const dirs = gitCommonDirOf(dir);
+  return dirs.ok ? dirs.common : null;
 }
 
 function worktreeSafetyReasons(dir: string): string[] {
