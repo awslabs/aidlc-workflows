@@ -1536,11 +1536,11 @@ export function onboardBatchWork(
   space: string,
   candidates: readonly string[],
   index: DocumentIndex = readIndex(projectDir, space),
-): { abs: string; bytes: number }[] {
+): { abs: string; bytes: number; indexed: boolean }[] {
   const liveBySource = new Map(
     index.documents.filter((row) => !isTombstoned(row)).map((row) => [row.source.path, row]),
   );
-  const work: { abs: string; bytes: number }[] = [];
+  const work: { abs: string; bytes: number; indexed: boolean }[] = [];
   for (const abs of candidates) {
     try {
       const stat = statSync(abs);
@@ -1552,7 +1552,7 @@ export function onboardBatchWork(
         stat.size !== existing.bytes ||
         (!Number.isNaN(indexedAt) && stat.mtimeMs > indexedAt)
       ) {
-        work.push({ abs, bytes: stat.size });
+        work.push({ abs, bytes: stat.size, indexed: existing !== undefined });
       }
     } catch { /* vanished mid-walk; readCandidate will skip or refuse it */ }
   }
@@ -1729,12 +1729,16 @@ function onboardCandidates(
   // the more important invariant.
   if (candidates.length > 1) {
     const work = onboardBatchWork(projectDir, space, candidates, index);
+    // Sync reads content, so it can pass where this stat-only count saw
+    // indexed documents touched; brand-new ones hit its own cap too.
+    const orSync = work.some((item) => item.indexed)
+      ? `, or run \`${entrySkillInvocation()} knowledge sync\` instead of a pathless onboard`
+      : "";
     if (work.length > EXTRACT_BATCH_DOC_CAP) {
       throw new Error(
         `This run would index ${work.length} new or changed documents, over the ` +
           `${EXTRACT_BATCH_DOC_CAP}-document batch cap; nothing was indexed. Onboard a ` +
-          `subdirectory or a single file at a time, or run \`${entrySkillInvocation()} knowledge sync\` ` +
-          `instead of a pathless onboard.`,
+          `subdirectory or a single file at a time${orSync}.`,
       );
     }
     const batchBytes = work.reduce((total, item) => total + item.bytes, 0);
@@ -1742,8 +1746,7 @@ function onboardCandidates(
       throw new Error(
         `This run would read ${batchBytes} bytes across ${work.length} new or changed documents, over ` +
           `the ${EXTRACT_BATCH_BYTE_CAP}-byte batch cap; nothing was indexed. Onboard a ` +
-          `subdirectory or a single file at a time, or run \`${entrySkillInvocation()} knowledge sync\` instead ` +
-          `of a pathless onboard.`,
+          `subdirectory or a single file at a time${orSync}.`,
       );
     }
   }

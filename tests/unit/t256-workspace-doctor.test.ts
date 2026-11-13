@@ -192,7 +192,7 @@ describe("t256 workspace-doctor - advisory manifest rows", () => {
     g("commit", "-q", "-m", "untrack the latch");
     rows = workspaceManifestChecks(ws);
     expect(rows.some((r) => r.label.startsWith("Forwarding latch:"))).toBe(false);
-    expect(rows[0].label).toContain("`git add aidlc/ && git commit && git push`");
+    expect(rows[0].label).toContain("`git add aidlc/`, `git commit`, `git push`");
   });
 
   // When git cannot run, the records and request-folder rows say so, and the
@@ -263,7 +263,7 @@ describe("t256 workspace-doctor - advisory manifest rows", () => {
     expect(request?.fix).toBe("commit and push the removal, with .gitignore if its change is not committed yet");
     // With only the removal left, the records row gives its command again.
     writeFileSync(join(ws, "aidlc", "note.md"), "a record\n", "utf-8");
-    expect(workspaceManifestChecks(ws)[0].label).toContain("`git add aidlc/ && git commit && git push`");
+    expect(workspaceManifestChecks(ws)[0].label).toContain("`git add aidlc/`, `git commit`, `git push`");
     rmSync(join(ws, "aidlc", "note.md"));
     g("commit", "-q", "-m", "untrack the request");
     expect(workspaceManifestChecks(ws).some((r) => r.label.startsWith("Request folder:"))).toBe(false);
@@ -640,7 +640,7 @@ describe("t256 workspace-doctor - doctor's own audit log entries", () => {
     appendFileSync(seededAuditShard(ws), STAGE_ROW, "utf-8");
     row = workspaceManifestChecks(ws)[0];
     expect(row.label).toContain("Workspace records: 2 uncommitted change(s) under aidlc/");
-    expect(row.label).toContain("`git add aidlc/ && git commit && git push`");
+    expect(row.label).toContain("`git add aidlc/`, `git commit`, `git push`");
   });
 
   test("a clone whose audit log doctor started, beside a teammate's, is not told to commit it", () => {

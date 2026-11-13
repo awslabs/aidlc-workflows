@@ -201,7 +201,9 @@ function run(
 
 // The words of a printed command, quoted as quoteCommandArgument quotes them:
 // single quotes (with '' for a quote in PowerShell, or '"'"' in a POSIX
-// shell), and double-quoted JSON strings.
+// shell), double quotes around a Windows word with an apostrophe (every
+// character as written, as PowerShell and Git Bash read it), and double-quoted
+// JSON strings (the only ones with an escaped backslash or quote).
 function printedWords(printed: string): string[] {
   const words: string[] = [];
   let word: string | null = null;
@@ -221,7 +223,7 @@ function printedWords(printed: string): string[] {
       }
     } else if (character === "\"") {
       const quoted = /^"(?:[^"\\]|\\.)*"/.exec(printed.slice(index))?.[0] ?? "\"";
-      word += JSON.parse(quoted) as string;
+      word += /\\[\\"]/.test(quoted) ? JSON.parse(quoted) as string : quoted.slice(1, -1);
       index += quoted.length - 1;
     } else {
       word += character;
@@ -1877,7 +1879,7 @@ describe("t243 project initialization", () => {
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a printed command is read back as quoteCommandArgument quoted it, on either shell", () => {
-    for (const value of ["/tmp/a b/it's.ts", "C:\\Users\\RUNNER~1\\it's here.ts", "plain/path.ts"]) {
+    for (const value of ["/tmp/a b/it's.ts", "C:\\Users\\RUNNER~1\\it's here.ts", "C:\\Users\\O'Brien\\proj", "plain/path.ts"]) {
       expect(printedWords(`bun ${quoteCommandArgument(value)} config --harness kiro-v2`))
         .toEqual(["bun", value, "config", "--harness", "kiro-v2"]);
     }
@@ -2876,7 +2878,7 @@ describe("t243 project initialization", () => {
     expect(addCodex.status).toBe(4);
     expect(addCodex.stdout).toContain("predates shared onboarding");
     expect(addCodex.stdout).toContain(
-      "run aidlc config --harness kiro-v2 first - if it still refuses afterwards, its AGENTS.md is exclusive and they cannot coexist in one project",
+      "config --harness kiro-v2 first - if it still refuses afterwards, its AGENTS.md is exclusive and they cannot coexist in one project",
     );
     expect(existsSync(join(project, ".codex"))).toBe(false);
     expect(readFileSync(join(project, "AGENTS.md"), "utf-8")).toBe(agents);
@@ -3198,7 +3200,7 @@ describe("t243 project initialization", () => {
     for (const [version, message] of [
       [
         `${AIDLC_VERSION}-preview.20260101.1`,
-        "predates shared onboarding; run aidlc config --harness copilot first - if it still refuses afterwards, its AGENTS.md is exclusive and they cannot coexist in one project",
+        "config --harness copilot first - if it still refuses afterwards, its AGENTS.md is exclusive and they cannot coexist in one project",
       ],
       ["99.0.0-preview.20260101.1", "cannot coexist"],
     ]) {

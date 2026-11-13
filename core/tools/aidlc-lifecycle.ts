@@ -130,6 +130,7 @@ import {
   windowsUninstallStillFinishingLine,
 } from "./aidlc-windows-uninstall.ts";
 import {
+  aidlcInvocation,
   compiledExecutable,
   discoverProjectHarnesses,
   isCompiledExecutable,
@@ -2784,6 +2785,12 @@ function rollbackCommand(argv: string[]): ReturnType<typeof success> {
         EXIT.integrity,
       );
     }
+  }
+  if (typed && !existsSync(runtimeRoot(target))) {
+    throw new Error(
+      `${target} is not installed on this machine; run ${aidlcInvocation()} use ${target} to install it and switch to it, ` +
+        `or ${aidlcInvocation()} system rollback --list for the versions kept here`,
+    );
   }
   const active = activeVersion();
   const missing = active

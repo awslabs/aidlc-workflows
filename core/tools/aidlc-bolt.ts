@@ -709,7 +709,7 @@ function handleComplete(args: string[]): void {
         "complete-merge",
         flags.slug,
         "merge-held",
-        `Merge held by HOLD-MERGE invariant; resolve the failed-sibling halt-and-ask sequence and run \`aidlc-bolt release-merge --slug ${flags.slug}\` before retrying.`
+        `Merge held by HOLD-MERGE invariant; resolve the failed-sibling halt-and-ask sequence and run \`${aidlcDispatcherInvocation("bolt release-merge")} --slug ${flags.slug}\` before retrying.`
       );
     }
   }
@@ -1069,7 +1069,7 @@ function setMergeHeld(pd: string, slug: string, held: boolean, intent?: string, 
   const forked = forkedState(pd, slug, intent, space);
   if (!forked) {
     error(
-      `No per-Bolt forked state file for slug "${slug}" - was \`aidlc-bolt start --worktree --slug ${slug}\` run?`
+      `No per-Bolt forked state file for slug "${slug}" - was \`${aidlcDispatcherInvocation("bolt start")} --worktree --slug ${slug}\` run?`
     );
   }
   const content = readFileSync(forked.statePath, "utf-8");
@@ -1270,7 +1270,7 @@ function handleSetAutonomy(args: string[]): void {
           "Refusing to switch Construction to autonomous: it waives every later gate, so it is granted only by the " +
             "person's answer to the ladder prompt, named with --message <id>. " +
             requestMessageStep(pd, "Run it with --message <id> after they choose it.") +
-            " Do not log the ladder choice via aidlc-log answer; the choice is recorded by set-autonomy itself." +
+            ` Do not log the ladder choice via ${aidlcDispatcherInvocation("log answer")}; the choice is recorded by set-autonomy itself.` +
             unattendedHumanPresenceHint(pd),
         );
       }

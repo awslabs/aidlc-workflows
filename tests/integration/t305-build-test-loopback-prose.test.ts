@@ -362,7 +362,7 @@ describe("t305 construction protocol module — Build-and-Test failure loop-back
     // The audit call is spelled out in full (positional slug +
     // --artifacts), never abbreviated to a form that errors if run literally.
     expect(tail).toContain(
-      'aidlc-state.ts reuse-artifact <slug>\n--decision <keep|modify> --artifacts "<comma-separated list of existing\nartifacts found>"',
+      'bun .claude/tools/aidlc.ts engine state reuse-artifact <slug>\n--decision <keep|modify> --artifacts "<comma-separated list of existing\nartifacts found>"',
     );
   });
 
@@ -385,7 +385,7 @@ describe("t305 construction protocol module — Build-and-Test failure loop-back
     expect(gated).toContain("**Keep** for all other units");
     expect(gated).toContain("**Modify** for build-and-test itself");
     expect(gated).toContain(
-      "aidlc-state.ts reuse-artifact <slug> --decision <keep|modify>",
+      "bun .claude/tools/aidlc.ts engine state reuse-artifact <slug> --decision <keep|modify>",
     );
     expect(gated).toContain(
       '--artifacts "<comma-separated list of existing artifacts found>"',

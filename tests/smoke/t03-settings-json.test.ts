@@ -319,7 +319,6 @@ describe("permissions.allow on the native release", () => {
       "aidlc engine orchestrate next",
       "aidlc doctor",
       "aidlc --doctor",
-      "aidlc status",
       "aidlc --status",
       "aidlc version",
       "aidlc --version",

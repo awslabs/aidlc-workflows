@@ -1491,7 +1491,7 @@ function namedRestartRequest(
     return {
       directive: errorDirective(
         `AI-DLC could not read the work this request was kept for (${errorMessage(e)}), so it was not run. ` +
-          `Run \`${aidlcDispatcherInvocation("doctor")}\` to see why.`,
+          `Run \`${entrySkillInvocation()} --doctor\` to see why.`,
       ),
     };
   }
@@ -6259,7 +6259,7 @@ export function renderTeamConstructionBoard(
   for (const row of board.awaitingMerge) {
     if (row.status === "pinned") {
       nextActions.push(
-        `- Record the pinned merge decision for \`${row.unit}\` with \`aidlc unit gate ${row.unit}\`.`,
+        `- Record the pinned merge decision for \`${row.unit}\` with \`${aidlcInvocation()} unit gate ${row.unit}\`.`,
       );
     } else if (
       row.status === "approved" ||
@@ -6274,8 +6274,8 @@ export function renderTeamConstructionBoard(
         released &&
             row.status === "git-landed" &&
             !row.releasedAfterGitAccepted
-          ? `- The landed attempt for \`${row.unit}\` was released. Inspect the merge commit, then run \`aidlc unit land ${row.unit} --accept-released-attempt --user-input '<human acknowledgment>'\`.`
-          : `- Resume \`${row.unit}\` with \`aidlc unit land ${row.unit}\`.`,
+          ? `- The landed attempt for \`${row.unit}\` was released. Inspect the merge commit, then run \`${aidlcInvocation()} unit land ${row.unit} --accept-released-attempt --user-input '<human acknowledgment>'\`.`
+          : `- Resume \`${row.unit}\` with \`${aidlcInvocation()} unit land ${row.unit}\`.`,
       );
     } else if (row.status === "rejected") {
       nextActions.push(
@@ -12292,7 +12292,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     // into the named command so the documented export surface reaches the tool
     // through the real routing path, not just a direct invocation.
     const extra = flags.readOnlyArgs && flags.readOnlyArgs.length > 0
-      ? ` ${flags.readOnlyArgs.join(" ")}`
+      ? ` ${flags.readOnlyArgs.map((arg) => quoteCommandArgument(arg)).join(" ")}`
       : "";
     const readOnly = "This is a read-only utility, NOT workflow work: do NOT run `next` and do NOT advance, resume, or run any workflow stage.";
     // Here the project's pin launched this engine, and `aidlc version` would

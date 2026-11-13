@@ -1420,7 +1420,7 @@ describe("t271 review iteration ceiling", () => {
     expect(spent.stderr).toContain("Do not put autonomous Unit");
     expect(spent.stderr).toContain("do not run finalize or merge");
     expect(spent.stderr).toContain("aidlc-bolt.ts abort");
-    expect(spent.stderr).toContain("aidlc-swarm.ts prepare");
+    expect(spent.stderr).toContain("engine swarm prepare");
     expect(spent.stderr).not.toContain("approval gate");
   });
 

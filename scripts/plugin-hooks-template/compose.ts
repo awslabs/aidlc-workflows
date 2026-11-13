@@ -138,6 +138,11 @@ const copyChannelTokens: ProjectTokens = (text, harnessDir) => text
 const projectPluginTokens: ProjectTokens = await import(join(HARNESS_DIR, "tools", "aidlc-command.ts"))
   .then((m) => typeof m.projectInvocationTokens === "function" ? m.projectInvocationTokens as ProjectTokens : copyChannelTokens)
   .catch(() => copyChannelTokens);
+// The installed engine's quoting for a folder in a command compose prints; a
+// tree without it gets the folder as it is.
+const quoteArgument: (value: string) => string = await import(join(HARNESS_DIR, "tools", "aidlc-runtime-paths.ts"))
+  .then((m) => typeof m.quoteCommandArgument === "function" ? (value: string) => m.quoteCommandArgument(value) as string : (value: string) => value)
+  .catch(() => (value: string) => value);
 // The person runs AI-DLC as `aidlc`: the installed tree was set up for it
 // (`aidlc plugin test` runs compose as Bun, in a copy of a native project). A
 // tree from before projectInvocationTokens has only the compiled engine's word.
@@ -422,9 +427,11 @@ function selectCommandForPlugin(): string {
 }
 
 // The engine command that adds this plugin's rules to the rule files.
-function syncCommandForPlugin(): string {
+// The engine's syncCommand rule (hostListsPlugins): only Claude Code and Codex
+// list their plugins, so every other host's sync names the plugin's folder.
+export function syncCommandForPlugin(): string {
   const sync = NATIVE_CHANNEL ? "aidlc engine plugin sync" : `bun ${HARNESS_LEAF}/tools/aidlc-plugin.ts sync`;
-  return HARNESS_NAME === "kiro" || HARNESS_NAME === "opencode" ? `${sync} --plugin-root ${PLUGIN_ROOT}` : sync;
+  return HARNESS_NAME === "claude" || HARNESS_NAME === "codex" ? sync : `${sync} --plugin-root ${quoteArgument(PLUGIN_ROOT)}`;
 }
 
 function installedToolCommand(tool: "utility" | "graph" | "runner", args: string[]): string[] {

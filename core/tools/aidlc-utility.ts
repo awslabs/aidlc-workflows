@@ -561,7 +561,7 @@ import {
   tomlFragmentText,
   withFileLineEndings,
 } from "./aidlc-plugin.ts";
-import { pluginTestCommand, renderPluginTestHelp, resolveHookPath } from "./aidlc.ts";
+import { pluginAuthorCommand, renderPluginTestHelp, resolveHookPath } from "./aidlc.ts";
 import { projectPluginCommands } from "./aidlc-plugin-commands.ts";
 import { pluginScriptLaunch } from "./aidlc-plugin-script.ts";
 import { executePlan, withTransactionFix } from "./aidlc-transaction.ts";
@@ -1013,7 +1013,7 @@ function requireInstalledHarness(projectDir: string): void {
   );
   if (!existsSync(installedLib)) {
     die(
-      `select-plugins requires an installed project harness at ${dirname(dirname(installedLib))}.`,
+      `plugin select requires an installed project harness at ${dirname(dirname(installedLib))}.`,
     );
   }
 }
@@ -1434,7 +1434,7 @@ function handleSelectPlugins(projectDir: string, positional: string[], rulesLeve
     ? { names: knownPluginNames().filter((name) => pluginsEnabled()?.has(name) ?? true), hasEmpty: false }
     : parsePluginSelectionArgs(positional);
   if (parsedSelection.hasEmpty || parsedSelection.names.length === 0) {
-    die("select-plugins requires at least one non-empty plugin name, or no arguments to print the current selection.");
+    die("plugin select requires at least one non-empty plugin name, or no arguments to print the current selection.");
   }
   const names = [...new Set(parsedSelection.names)].sort();
   requireInstalledHarness(projectDir);
@@ -1465,11 +1465,11 @@ function handleSelectPlugins(projectDir: string, positional: string[], rulesLeve
         .map(([plugin, base]) => `  ${plugin} would be paused: ${plugin} builds on ${base}, which this selection leaves off.\n`)
         .join("");
       die(
-        `select-plugins refused: the new selection would strand ${violations.length} active workflow dependency(ies):\n` +
+        `plugin select refused: the new selection would strand ${violations.length} active workflow dependency(ies):\n` +
           violations.map((v) => `  - ${v}`).join("\n") +
           (pausedWhy ? `\n${pausedWhy.trimEnd()}` : "") +
           `\nComplete or archive the workflow(s) first (\`${entrySkillInvocation()} intent archive <name>\`; a parked workflow ` +
-          "still needs its plugin when it resumes), or keep the plugin enabled, then re-run select-plugins.",
+          `still needs its plugin when it resumes), or keep the plugin enabled, then re-run \`${entrySkillInvocation()} plugin select <names>\`.`,
       );
     }
 
@@ -1565,7 +1565,7 @@ function handleSelectPlugins(projectDir: string, positional: string[], rulesLeve
       }
     } catch (err) {
       resetSelectionSensitiveCaches();
-      die(`select-plugins failed: ${withTransactionFix(err, errorMessage(err))}`);
+      die(`plugin select failed: ${withTransactionFix(err, errorMessage(err))}`);
     } finally {
       rmSync(stagingRoot, { recursive: true, force: true });
     }
@@ -1610,20 +1610,36 @@ function pluginAuthorCommandCode(code: number): void {
   if (code !== 0) process.exitCode = code;
 }
 
+// A plugin author verb's usage error names the command the person ran and
+// what was wrong with it.
+function pluginAuthorUsageError(usage: string, reason: string): void {
+  process.stderr.write(`Usage: ${usage}\n${reason}\n`);
+  process.exitCode = 2;
+}
+
+// Why a plugin author verb's flags or words do not fit it, or null.
+function pluginAuthorArgsProblem(
+  positional: readonly string[],
+  flags: Record<string, string>,
+  missingValueFlags: ReadonlySet<string>,
+  valued: string,
+  maxPositional: number,
+): string | null {
+  const unknown = Object.keys(flags).find((key) => key !== "json" && key !== "help" && key !== valued);
+  if (unknown !== undefined) return `unknown option "--${unknown}"`;
+  if (missingValueFlags.has(valued)) return `--${valued} requires a value`;
+  return positional.length > maxPositional ? `unexpected positional argument "${positional[maxPositional]}"` : null;
+}
+
 function handlePluginValidate(
   positional: string[],
   flags: Record<string, string>,
   missingValueFlags: ReadonlySet<string>,
 ): void {
-  const unknown = Object.keys(flags).filter(
-    (key) => key !== "json" && key !== "help" && key !== "with",
-  );
-  if (
-    unknown.length > 0 ||
-    positional.length > 2 ||
-    missingValueFlags.has("with")
-  ) {
-    pluginAuthorCommandCode(pluginValidateMain([]));
+  const { usage } = pluginAuthorCommand("validate");
+  const problem = pluginAuthorArgsProblem(positional, flags, missingValueFlags, "with", 2);
+  if (problem !== null) {
+    pluginAuthorUsageError(usage, problem);
     return;
   }
   if (
@@ -1631,13 +1647,13 @@ function handlePluginValidate(
     positional[1] === "-h" ||
     positional[1] === "--help"
   ) {
-    pluginAuthorCommandCode(pluginValidateMain(["--help"]));
+    pluginAuthorCommandCode(pluginValidateMain(["--help"], `Usage: ${usage}`));
     return;
   }
   const args = [positional[1] ?? process.cwd()];
   if (flags.with !== undefined) args.push("--with", flags.with);
   if (flags.json === "true") args.push("--json");
-  pluginAuthorCommandCode(pluginValidateMain(args));
+  pluginAuthorCommandCode(pluginValidateMain(args, `Usage: ${usage}`));
 }
 
 function handlePluginBuild(
@@ -1645,18 +1661,10 @@ function handlePluginBuild(
   flags: Record<string, string>,
   missingValueFlags: ReadonlySet<string>,
 ): void {
-  const unknown = Object.keys(flags).filter(
-    (key) =>
-      key !== "json" &&
-      key !== "help" &&
-      key !== "plugin-root",
-  );
-  if (
-    unknown.length > 0 ||
-    positional.length > 3 ||
-    missingValueFlags.has("plugin-root")
-  ) {
-    pluginAuthorCommandCode(pluginBuildMain([]));
+  const { usage } = pluginAuthorCommand("build");
+  const problem = pluginAuthorArgsProblem(positional, flags, missingValueFlags, "plugin-root", 3);
+  if (problem !== null) {
+    pluginAuthorUsageError(usage, problem);
     return;
   }
   if (
@@ -1664,7 +1672,7 @@ function handlePluginBuild(
     positional[1] === "-h" ||
     positional[1] === "--help"
   ) {
-    pluginAuthorCommandCode(pluginBuildMain(["--help"]));
+    pluginAuthorCommandCode(pluginBuildMain(["--help"], `Usage: ${usage}`));
     return;
   }
   const args = [
@@ -1673,7 +1681,7 @@ function handlePluginBuild(
     ...(positional[2] ? [positional[2]] : []),
   ];
   if (flags.json === "true") args.push("--json");
-  pluginAuthorCommandCode(pluginBuildMain(args));
+  pluginAuthorCommandCode(pluginBuildMain(args, `Usage: ${usage}`));
 }
 
 function handlePluginTest(
@@ -1681,7 +1689,7 @@ function handlePluginTest(
   flags: Record<string, string>,
   missingValueFlags: ReadonlySet<string>,
 ): void {
-  const { usage, options } = pluginTestCommand();
+  const { usage, options } = pluginAuthorCommand("test");
   // Help wherever it is asked, as the standalone tool reads it.
   if (flags.help !== undefined || positional.slice(1).includes("-h")) {
     process.stdout.write(renderPluginTestHelp());
@@ -1702,8 +1710,7 @@ function handlePluginTest(
   }
   if (paths.length > 1) reason ??= `unexpected positional argument "${paths[1]}"`;
   if (reason !== null) {
-    process.stderr.write(`Usage: ${usage}\n${reason}\n`);
-    process.exitCode = 2;
+    pluginAuthorUsageError(usage, reason);
     return;
   }
   const args = [paths[0] ?? process.cwd()];
@@ -1763,13 +1770,13 @@ async function handlePluginSync(projectDir: string, pluginRoot: string | undefin
 
   if (composePaths.length === 0) {
     die(
-      `plugin-sync: no compose hook found in ${roots.length} configured plugin root(s):\n${skippedDetails}`,
+      `plugin sync: no compose hook found in ${roots.length} configured plugin root(s):\n${skippedDetails}`,
     );
   }
 
   if (skippedRoots.length > 0) {
     process.stderr.write(
-      `plugin-sync warning: skipped ${skippedRoots.length} configured plugin root(s):\n${skippedDetails}\n`,
+      `plugin sync warning: skipped ${skippedRoots.length} configured plugin root(s):\n${skippedDetails}\n`,
     );
   }
 
@@ -1805,11 +1812,11 @@ async function handlePluginSync(projectDir: string, pluginRoot: string | undefin
           compose?: () => void | Promise<void>;
         };
         if (typeof mod.compose !== "function") {
-          die(`plugin-sync failed for ${item.root}: compose.ts does not export compose()`);
+          die(`plugin sync failed for ${item.root}: compose.ts does not export compose()`);
         }
         await mod.compose();
       } catch (error) {
-        die(`plugin-sync failed for ${item.root}: ${withTransactionFix(error, errorMessage(error))}`);
+        die(`plugin sync failed for ${item.root}: ${withTransactionFix(error, errorMessage(error))}`);
       } finally {
         for (const key of envKeys) {
           const value = previous[key];
@@ -1828,7 +1835,7 @@ async function handlePluginSync(projectDir: string, pluginRoot: string | undefin
     });
     if (result.status !== 0) {
       const detail = (result.stderr || result.stdout || `exit ${result.status ?? 1}`).trim();
-      die(`plugin-sync failed for ${item.root}: ${detail}`);
+      die(`plugin sync failed for ${item.root}: ${detail}`);
     }
     rulesLines.push(...pluginSyncRules(projectDir, item.root));
   }
@@ -1843,7 +1850,7 @@ function pluginSyncRules(projectDir: string, root: string): string[] {
     const line = mergePluginRulesFromRoot(projectDir, harnessDir(), root, isPluginEnabled);
     return line === null ? [] : [line];
   } catch (error) {
-    die(`plugin-sync failed for ${root}: ${errorMessage(error)}`);
+    die(`plugin sync failed for ${root}: ${errorMessage(error)}`);
   }
 }
 
@@ -5943,7 +5950,7 @@ export async function collectDoctorReport(
       results.push({
         pass: !subagents.malformed && subagents.staleCount === 0,
         label: `Background-subagent ledger present (${ledger}, ${countLabel})`,
-        fix: `if no background subagent is actually running, delete it at your own terminal ('rm ${ledger}'). Stale or malformed entries never authorize the Stop hook, but the ledger should not linger.`,
+        fix: `if no background subagent is actually running, delete ${ledger} yourself. Stale or malformed entries never authorize the Stop hook, but the ledger should not linger.`,
       });
     }
   } catch {
@@ -6329,7 +6336,7 @@ export async function collectDoctorReport(
         );
       }
       label = `Orphan worktrees: ${orphanActive.length + cleanupOrphans.length} drift - ${[...orphanActive, ...cleanupOrphans].join(", ")}`;
-      fix = `${parts.join("; ")}. Inspect the owning intent, then remove via 'aidlc-worktree discard --slug <slug> --intent <record> --space <space>'.`;
+      fix = `${parts.join("; ")}. Inspect the owning intent, then remove via '${aidlcDispatcherInvocation("worktree discard")} --slug <slug> --intent <record> --space <space>'.`;
     }
     results.push({ pass, label, fix });
   } catch (e) {
@@ -6464,7 +6471,7 @@ export async function collectDoctorReport(
       results.push({
         pass: false,
         label: `Orphan state files: ${orphan.length} drift - ${orphan.join(", ")}`,
-        fix: "Inspect unrecognised names and unknown intent ownership. Recognised state files have no owning Bolt Refs entry or WORKTREE_DISCARDED row. Recover via 'aidlc-worktree discard --slug <slug> --intent <record> --space <space>' (idempotent).",
+        fix: `Inspect unrecognised names and unknown intent ownership. Recognised state files have no owning Bolt Refs entry or WORKTREE_DISCARDED row. Recover via '${aidlcDispatcherInvocation("worktree discard")} --slug <slug> --intent <record> --space <space>' (idempotent).`,
       });
     }
   } catch (e) {

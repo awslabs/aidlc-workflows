@@ -76,7 +76,7 @@ describe("a stale approved Unit merge", () => {
         seed,
       );
       expect(reject.status).not.toBe(0);
-      expect(reject.out).toContain("run aidlc-unit pin alpha again");
+      expect(reject.out).toContain("run bun .claude/tools/aidlc.ts unit pin alpha again");
 
       const repin = runMergeTool(UNIT, ["pin", "alpha"], seed);
       expect(repin.status, repin.out).toBe(0);
@@ -112,7 +112,7 @@ describe("a stale approved Unit merge", () => {
 
     const repin = runMergeTool(UNIT, ["pin", "alpha"], seed);
     expect(repin.status).not.toBe(0);
-    expect(repin.out).toContain("recover it with aidlc unit land alpha");
+    expect(repin.out).toContain("recover it with bun .claude/tools/aidlc.ts unit land alpha");
     const landed = runMergeTool(UNIT, ["land", "alpha"], seed);
     expect(landed.status, landed.out).toBe(0);
   });

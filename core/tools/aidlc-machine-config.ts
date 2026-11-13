@@ -16,6 +16,7 @@ import {
   success,
   usage,
 } from "./aidlc-command.ts";
+import { aidlcInvocation } from "./aidlc-runtime-paths.ts";
 import {
   installRoot,
   machineTransactionRoot,
@@ -255,11 +256,14 @@ function parseValue(key: MachineConfigKey, value: string): string | boolean {
   return value;
 }
 
+const MACHINE_CONFIG_USAGE = (): string => `usage: ${aidlcInvocation()} system config global <get|set|clear|list>`;
+
 function machineConfigCommand(argv: string[]): CommandResult {
   if (argv[0] !== "global") {
-    return usage("usage: aidlc config global <get|set|clear|list>");
+    return usage(MACHINE_CONFIG_USAGE());
   }
   const verb = argv[1];
+  if (verb !== "get" && verb !== "set" && verb !== "clear" && verb !== "list") return usage(MACHINE_CONFIG_USAGE());
   let config: MachineConfig;
   try {
     config = readMachineConfig();
@@ -298,9 +302,6 @@ function machineConfigCommand(argv: string[]): CommandResult {
         error instanceof Error ? error.message : String(error),
       );
     }
-  }
-  if (verb !== "set") {
-    return usage("usage: aidlc config global <get|set|clear|list>");
   }
   const raw = argv[3];
   if (!raw || raw.startsWith("--")) {

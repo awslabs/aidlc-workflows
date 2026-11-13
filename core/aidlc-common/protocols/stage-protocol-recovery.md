@@ -270,7 +270,7 @@ Generation.
 1. Record the request with `{{INVOKE}} engine audit append-raw 'Change Request: <brief>' '<body>'`, carrying the user's exact words in the body
 2. Return to requirements-analysis or delivery-planning as appropriate
 3. Re-plan execution from that point forward
-4. If the stage set changes, run `aidlc-utility.ts recompose` (or a scope change through `aidlc-orchestrate.ts next`); never edit scope configuration in `aidlc-state.md`
+4. If the stage set changes, run `{{INVOKE}} engine recompose` (or a scope change through `{{INVOKE}} engine orchestrate next`); never edit scope configuration in `aidlc-state.md`
 
 ### Archive before change
 Before any major change that would overwrite existing artifacts:

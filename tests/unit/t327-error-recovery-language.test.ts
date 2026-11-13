@@ -111,7 +111,7 @@ describe("t327 rewritten refusal strings stay in project language", () => {
     const rewrittenErrors = reviewErrors.slice(rewrittenStart);
     expect(rewrittenErrors).toContain("output document changed after");
     expect(rewrittenErrors).toContain("has not reviewed the current output");
-    expect(rewrittenErrors).toContain("aidlc-log.ts review --stage");
+    expect(rewrittenErrors).toContain(`aidlcToolInvocation("log")} review --stage`);
     for (const leaked of [
       "terminal review receipt from",
       "fresh REVIEW_COMPLETED",

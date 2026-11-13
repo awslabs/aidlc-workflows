@@ -236,7 +236,7 @@ export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
             `Workspace records: ${dirty.length} uncommitted change(s) under aidlc/ (advisory - the shared records travel by git; ` +
             (blockers !== ""
               ? `commit & push them so teammates get them once the ${blockers} steps below are done)`
-              : "commit & push so teammates get them: `git add aidlc/ && git commit && git push`)"),
+              : "commit & push so teammates get them: `git add aidlc/`, `git commit`, `git push`)"),
           ...(blockers !== "" ? { fix: `do the ${blockers} steps below first; then this row names the commit` } : {}),
         });
       }
