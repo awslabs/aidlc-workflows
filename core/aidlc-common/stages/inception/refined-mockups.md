@@ -2,7 +2,7 @@
 slug: refined-mockups
 phase: inception
 execution: CONDITIONAL
-condition: Execute when user-facing UI exists and rough mockups were produced in Ideation; for APIs, refine interaction diagrams
+condition: Execute when user-facing UI exists; for APIs, refine interaction diagrams
 lead_agent: aidlc-design-agent
 support_agents:
   - aidlc-product-agent

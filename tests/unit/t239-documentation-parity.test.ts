@@ -1399,6 +1399,13 @@ describe("documentation parity derives current behavior from authored implementa
     expect(/infra (?:runs no Code Generation|has neither)/.test(construction), "construction.md says infra skips them").toBe(false);
   });
 
+  test("the stage reference's Refined Mockups condition is the stage's own", () => {
+    const condition = String(parseStageFrontmatter(read("core", "aidlc-common", "stages", "inception", "refined-mockups.md")).condition);
+    const metadata = sliceBetween(read("docs", "reference", "04-stages", "inception.md"), "## Stage 2.5: Refined Mockups", "### Purpose");
+    const row = metadata.match(/^\| Condition\s*\| (.*?) \|\r?$/m)?.[1];
+    expect(row).toBe(`CONDITIONAL -- ${condition[0].toLowerCase()}${condition.slice(1)}`);
+  });
+
   test("the plugin chapter does not call a plugin's house rules deferred", () => {
     // The reference plugin ships house rules, and its own tests validate and compose it.
     const manifest = JSON.parse(read("plugins", "test-pro", ".aidlc-plugin", "plugin.json")) as {
