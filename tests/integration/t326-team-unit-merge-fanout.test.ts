@@ -5,7 +5,7 @@
 // it shows the dispatcher board (or a participant's claim question) instead of
 // the next Unit's stage, so a claim runs only on the person's own
 // `/aidlc --claim`, and the guard's refusal names that step. The board's
-// header, its Claim Registry and its list of claimed Units name as claimed only
+// header, its Claims table and its list of claimed Units name as claimed only
 // Units still being worked, as its Claimable and Waiting lists read them; a
 // landed Unit's kept claim reads as landed, and only once main has merged it.
 
@@ -67,7 +67,7 @@ describe("t326 an unscoped checkout after a team Unit lands", () => {
     // and alpha, landed, is no longer listed as claimed.
     const lead = nextDirective(seed);
     expect(lead.kind).toBe("notice");
-    expect(lead.message as string).toContain("# Team Construction Dispatcher");
+    expect(lead.message as string).toContain("# Team Construction Board");
     expect(lead.message as string).toContain("**Claimed:** none. **Claimable:** beta. **Waiting:** none.");
     expect(lead.message as string).toContain("| alpha | landed | alpha-team | 1 |");
     expect(lead.message as string).not.toContain("| alpha | claimed |");

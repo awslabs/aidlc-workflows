@@ -137,7 +137,7 @@ function Get-ReleaseFile {
   }
   if ($CaBundle) {
     Stop-Install -Code 1 -Status 'failed' `
-      -Message 'curl.exe is required when --CaBundle is used'
+      -Message 'curl.exe is required when -CaBundle is used'
   }
   try {
     Invoke-WebRequest -UseBasicParsing -Uri $Url -OutFile $Output
@@ -458,7 +458,7 @@ if ($env:AIDLC_OFFLINE -eq '1') {
 }
 if ($Offline -and -not $From) {
   Stop-Install -Code 3 -Status 'unavailable' `
-    -Message '--Offline requires --From <release-directory>'
+    -Message '-Offline requires -From <release-directory>'
 }
 if ($From) {
   $Offline = $true
@@ -489,7 +489,7 @@ if (-not $From) {
 }
 if ($CaBundle -and -not [IO.Path]::IsPathRooted($CaBundle)) {
   Stop-Install -Code 2 -Status 'usage' `
-    -Message '--CaBundle must be an absolute path'
+    -Message '-CaBundle must be an absolute path'
 }
 
 $installRoot = if ($env:AIDLC_INSTALL_ROOT) {

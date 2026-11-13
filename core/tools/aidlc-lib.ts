@@ -72,7 +72,7 @@ export {
 } from "./aidlc-runtime-paths.ts";
 import { gitUserName, humanTurnMintAllowed, personGitNameField } from "./aidlc-git-name.ts";
 export { humanTurnMintAllowed } from "./aidlc-git-name.ts";
-import { hasRealGitEntry, submoduleLeavesProjectRepo } from "./aidlc-git.ts";
+import { gitCommonDirOf, hasRealGitEntry, submoduleLeavesProjectRepo } from "./aidlc-git.ts";
 export { hasRealGitEntry } from "./aidlc-git.ts";
 import { NEXT_VALUELESS_FLAGS, nextFlagTakesFollowing, unitCommandArgv } from "./aidlc-command.ts";
 import { pluginCommandOnLine, projectPluginCommands } from "./aidlc-plugin-commands.ts";
@@ -87,6 +87,7 @@ import {
   type GuardRemedyWording,
   type GuardRemedyWordingContext,
   isGuardRecoveryOperation,
+  constructionPolicyRecovery,
   renderEngineInvocation,
   renderGuardOperation,
 } from "./aidlc-guard-operation.ts";
@@ -188,8 +189,8 @@ import {
   copiedAuditBlocks,
   delegatedWorktreeIntent,
   displaySlugFromDirName,
+  gcSessionPidEntries,
   getField,
-  gitRevParseSingle,
   helperSessionPath,
   helperSessionRoot,
   idSuffix,
@@ -220,7 +221,6 @@ import {
   readAuditShardTexts,
   readIntentRegistry,
   readSessionBinding,
-  readSessionPidEntry,
   readStateFile,
   readStateWrites,
   recordDirMatches,
@@ -1805,7 +1805,7 @@ function missingWorkspaceName(
     noun,
     code: "missing-name",
     verb,
-    message: `Usage: aidlc ${usage}`,
+    message: `Usage: ${entrySkillInvocation()} ${usage}`,
   };
 }
 
@@ -1821,7 +1821,7 @@ function unexpectedWorkspaceArguments(
     noun,
     code: "unexpected-arguments",
     verb,
-    message: `Usage: aidlc ${usage}`,
+    message: `Usage: ${entrySkillInvocation()} ${usage}`,
   };
 }
 
@@ -2197,7 +2197,7 @@ export type PluginCommand =
 export function parsePluginCommand(args: readonly string[]): PluginCommand {
   if (args[0] !== "plugin") return { kind: "not-plugin" };
   const verb = args[1];
-  if (verb === "help" || verb === "-h" || verb === "--help") {
+  if (verb === undefined || verb === "help" || verb === "-h" || verb === "--help") {
     return { kind: "help" };
   }
   const target = verb === "select"
@@ -2214,10 +2214,9 @@ export function parsePluginCommand(args: readonly string[]): PluginCommand {
   if (target !== undefined) {
     return { kind: "run", argv: [target, ...args.slice(2)] };
   }
-  const detail = verb ? `unknown verb '${verb}'` : "missing verb";
   return {
     kind: "error",
-    message: `aidlc: ${detail} for noun 'plugin'; try 'aidlc help --all'`,
+    message: `\`${entrySkillInvocation()} plugin ${verb}\` is not a plugin command; the plugin commands are select, list, sync, validate and build`,
   };
 }
 
@@ -2305,13 +2304,16 @@ export function parseKnowledgeCommand(args: readonly string[]): KnowledgeCommand
   if (verb === "help" || verb === "-h" || verb === "--help") {
     return { kind: "help" };
   }
-  if (verb !== undefined && KNOWLEDGE_VERBS.includes(verb)) {
+  if (verb === undefined) {
+    return { kind: "error", message: "aidlc: missing verb for noun 'knowledge'; try 'aidlc help --all'" };
+  }
+  if (KNOWLEDGE_VERBS.includes(verb)) {
     return { kind: "run", argv: [verb, ...args.slice(2)] };
   }
-  const detail = verb ? `unknown verb '${verb}'` : "missing verb";
   return {
     kind: "error",
-    message: `aidlc: ${detail} for noun 'knowledge'; try 'aidlc help --all'`,
+    message: `\`${entrySkillInvocation()} knowledge ${verb}\` is not a knowledge command; the knowledge commands are ` +
+      `${KNOWLEDGE_VERBS.slice(0, -1).join(", ")} and ${KNOWLEDGE_VERBS.at(-1)}`,
   };
 }
 
@@ -4148,17 +4150,31 @@ export function relativeCodekbDir(projectDir: string, repo: string, space?: stri
   return `aidlc/spaces/${sp}/codekb/${repo}`;
 }
 
+// The repository NAME for a checkout whose project root is a LINKED GIT
+// WORKTREE, else null so the caller keeps `basename(projectDir)`.
+//
+// `git worktree add` names its directory after a branch, so in a linked worktree
+// basename(projectDir) is a branch name rather than a repository name. The shared
+// git dir lives inside the MAIN checkout, so its parent's basename is the
+// repository name. Both git dirs are resolved against projectDir, where git
+// measured them (gitCommonDirOf), and a linked worktree is the only topology
+// where they differ (`--git-dir` is `<common>/worktrees/<name>`): a main
+// checkout, a subdirectory of one and a repository nested inside another all
+// return null and keep basename(projectDir).
+//
+// Deliberately NOT the `origin` remote: that would also cover a clone whose
+// directory name differs from the repository, but remote names are mutable (a
+// rename or a re-point would move a workspace's store) and it would change
+// resolution for every checkout whose remote and directory names differ. A
+// location is stable; widening identity to the remote is a separate decision.
 function mainCheckoutRepoName(projectDir: string): string | null {
-  const gitDirRaw = gitRevParseSingle(projectDir, "--git-dir");
-  if (gitDirRaw === null) return null; // not a git repository
-  const commonRaw = gitRevParseSingle(projectDir, "--git-common-dir");
-  if (commonRaw === null) return null;
+  const dirs = gitCommonDirOf(projectDir);
+  if (!dirs.ok) return null; // not a git repository
   let gitDirAbs: string;
   let commonAbs: string;
   try {
-    // Resolved against projectDir — the directory both were measured in.
-    gitDirAbs = realpathSync(resolvePath(projectDir, gitDirRaw));
-    commonAbs = realpathSync(resolvePath(projectDir, commonRaw));
+    gitDirAbs = realpathSync(dirs.own);
+    commonAbs = realpathSync(dirs.common);
   } catch {
     return null;
   }
@@ -6066,7 +6082,7 @@ export function requireProtectedResponse(
   const question = readProtectedQuestion(projectDir, session);
   const response = readProtectedResponse(projectDir, session);
   const recovery = expected.kind === "verification-command" ? verificationCommandRecovery()
-    : expected.kind === "construction-policy" ? CONSTRUCTION_POLICY_RECOVERY
+    : expected.kind === "construction-policy" ? constructionPolicyRecovery()
     : `Re-ask with ${aidlcToolInvocation("bolt")} checkpoint --action ask --unit "<unit>" --kind <unit|skeleton> or ` +
       `${aidlcToolInvocation("bolt")} swarm-checkpoint --action ask --batch <number> --units "<units>", then wait for Approve or Request Changes.`;
   // The person replied to this exact question (the hook's record); the choice
@@ -7525,43 +7541,6 @@ export function writeSessionPidEntry(
     sessionId,
     startTime: resolvedIdentity?.startTime ?? null,
   });
-}
-
-function gcSessionPidEntries(
-  projectDir: string,
-  deadlineMs: number,
-  skip: ReadonlySet<number> = new Set(),
-  readIdentity: (pid: number) => ProcessIdentity | null = processIdentityReader(deadlineMs),
-): void {
-  let names: string[];
-  try {
-    names = readdirSync(sessionPidMapDir(projectDir));
-  } catch {
-    return;
-  }
-  for (const name of names) {
-    if (!/^\d+$/.test(name)) continue;
-    if (Date.now() >= deadlineMs) break;
-    const pid = Number.parseInt(name, 10);
-    if (skip.has(pid)) continue;
-    const entry = readSessionPidEntry(projectDir, pid);
-    let stale: boolean;
-    if (!entry || !processIsAlive(pid)) {
-      stale = true;
-    } else if (entry.startTime !== null) {
-      const identity = readIdentity(pid);
-      if (identity === null) continue;
-      stale = identity.startTime !== entry.startTime;
-    } else {
-      stale = false;
-    }
-    if (!stale) continue;
-    try {
-      unlinkSync(join(sessionPidMapDir(projectDir), name));
-    } catch {
-      /* raced with another hook or cleanup */
-    }
-  }
 }
 
 // Map the harness process and each ancestor to the current session. The hook
@@ -13326,12 +13305,6 @@ export function constructionPolicyChangeAllowed(projectDir: string, field: strin
   }
 }
 
-export const CONSTRUCTION_POLICY_RECOVERY =
-  "When the person asks for this Construction change, run aidlc-state.ts set-construction-checkpoints, " +
-  "set-construction-execution, or set-construction-iteration with the value they asked for and --message <id>, " +
-  "the id of the message they asked in, then say its notice line to them. Do not ask them to confirm it, and " +
-  "never change it on your own.";
-
 // --- Consolidated-summary confirmation evidence ---
 //
 // The summary checkpoint is a human judgement that authorizes artifact
@@ -14993,25 +14966,28 @@ export function checkSummaryConfirmationEvidence(
     }
 
     const hashScope = auditBlockField(receipt.block, "Hash Scope");
+    const confirm = summaryConfirmationCommands({
+      stage: stage.slug,
+      unit: workflow === undefined ? question.unit : null,
+      questionsFile: questionRelative,
+      single: workflow !== undefined,
+    });
+    const report = (...args: string[]) => renderEngineInvocation({ route: "orchestrate", args: ["report", ...args] });
     const recovery = workflow === undefined
       ? (
         "First repair the questions file: reset the existing consolidated-summary " +
         "`[Answer]:` tag to blank and remove or repair every invalid or duplicate " +
         "post-summary section named by the validation error. Only then re-present the " +
         "consolidated summary and record a fresh confirmation with " +
-        `\`aidlc-log.ts decision --checkpoint summary-confirmation --stage "${stage.slug}" ` +
-        `${question.unit ? `--unit "${question.unit}" ` : ""}` +
-        "--questions-file \"<path>\" --decision \"Does this all look correct?\"`; " +
+        `\`${confirm.decision}\`; ` +
         "end the turn, wait for the human's response, update the recorded answer, then run " +
-        `\`aidlc-log.ts answer --checkpoint summary-confirmation --stage "${stage.slug}" ` +
-        `${question.unit ? `--unit "${question.unit}" ` : ""}` +
-        "--questions-file \"<path>\" --details \"Looks correct\"`. Re-save each generated " +
+        `\`${confirm.answer}\`. Re-save each generated ` +
         "artifact, rerun the section-12a reviewer when this stage declares one, then retry " +
         "the stage completion command. If a completion gate is already open or a terminal " +
         "section-12a receipt freezes artifact writes, instead present Request Changes and " +
         "end the turn. After a fresh human turn choosing it, run " +
-        `\`aidlc-orchestrate.ts report --stage "${stage.slug}" --result rejected ` +
-        "--user-input \"Request Changes\" --reason '<requested changes>'`; then revise and re-confirm the summary, " +
+        `\`${report("--stage", stage.slug, "--result", "rejected", "--user-input", "Request Changes", "--reason", "<requested changes>")}\`; ` +
+        "then revise and re-confirm the summary, " +
         "re-save the artifacts, rerun the reviewer, and report `--result revised`."
       )
       : (
@@ -15019,14 +14995,11 @@ export function checkSummaryConfirmationEvidence(
         "`[Answer]:` tag to blank and remove or repair every invalid or duplicate " +
         "post-summary section named by the validation error. Only then re-present the " +
         "consolidated summary in the isolated run and record a fresh confirmation with " +
-        `\`aidlc-log.ts decision --checkpoint summary-confirmation --stage "${stage.slug}" ` +
-        "--questions-file \"<path>\" --single --decision \"Does this all look correct?\"`; " +
+        `\`${confirm.decision}\`; ` +
         "end the turn, wait for the human's response, update the recorded answer, then run " +
-        `\`aidlc-log.ts answer --checkpoint summary-confirmation --stage "${stage.slug}" ` +
-        "--questions-file \"<path>\" --single --details \"Looks correct\"`. Regenerate or " +
+        `\`${confirm.answer}\`. Regenerate or ` +
         "re-save each generated artifact, rerun the section-12a reviewer when this stage " +
-        "declares one, then run `aidlc-orchestrate.ts report --single " +
-        `--stage "${stage.slug}" --result completed\`.`
+        `declares one, then run \`${report("--single", "--stage", stage.slug, "--result", "completed")}\`.`
       );
     if (
       hashScope !== null &&
@@ -27089,7 +27062,7 @@ export function readCommittedUnitSourceManifest(
         ok: false,
         reason: "immutable reviewed Source Commit is unavailable or has unsafe paths; " +
           "restore the reviewed commit, or rename unsafe paths with `git mv` and commit them, " +
-          `then rerun \`aidlc-swarm check ${unit}\` before native convergence`,
+          `then rerun \`${aidlcDispatcherInvocation(`swarm check ${unit}`)}\` before native convergence`,
       };
     }
     // A private index/HEAD gives ignore, path-mode and symlink validation the
@@ -42285,9 +42258,8 @@ export function classifyStateVersion(stateContent: string): StateVersionClassifi
     "Incompatible workflow state: the State Version field is missing, empty, " +
     "or unparseable in aidlc-state.md, so this state cannot be matched to the " +
     `current v${CURRENT_STATE_VERSION} stage graph and cannot be advanced safely. ` +
-    "Archive your workspace ('mv aidlc aidlc.archive') and start a fresh " +
-    "workflow (describe what to build), or finish this workflow on the prior " +
-    `shell. Run \`${entrySkillInvocation()} --doctor\` for the full diagnosis.`;
+    "Put its `- **State Version**:` line back as it was (git has it if the file " +
+    `was committed), then try again. Run \`${entrySkillInvocation()} --doctor\` for the full diagnosis.`;
   // Anchor the tail with `[ \t]*$`: the schema token is a bare integer with
   // no trailing content on the line, so `State Version: 8 garbage` fails to
   // match and falls into the unparseable branch.

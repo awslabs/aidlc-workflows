@@ -141,6 +141,7 @@ function nativeRunnerFrontmatter(): string {
 // runner understands it never advances the main workflow.
 export function renderStageRunner(node: GraphStage): string {
   const dir = runnerDirName(node);
+  const entrySkill = treeEntrySkillInvocation();
   const descriptionLead = node.plugin
     ? `Run the ${node.plugin} plugin \`${node.slug}\` stage (${node.phase} phase) in isolation, without`
     : `Run the AI-DLC \`${node.slug}\` stage (${node.phase} phase) in isolation, without`;
@@ -152,7 +153,7 @@ name: ${dir}
 generated-by: aidlc-runner-gen
 description: >
   ${descriptionLead}
-  advancing the main workflow. Packages \`/aidlc --stage ${node.slug} --single\`:
+  advancing the main workflow. Packages \`${entrySkill} --stage ${node.slug} --single\`:
   the engine emits one run-stage directive for ${node.slug} and its gate, the
   conductor runs it, then the single-stage run commits a synthetic-id pair and
   stops. The main workflow's Current Stage is never touched.
@@ -164,7 +165,7 @@ ${nativeRunnerFrontmatter()}\
 # AI-DLC Stage Runner - ${node.slug}
 
 ${bodyLead}
-\`/aidlc --stage ${node.slug} --single\`; the same stage is always reachable via
+\`${entrySkill} --stage ${node.slug} --single\`; the same stage is always reachable via
 that flag without this skill.
 
 ## Steps
@@ -313,6 +314,7 @@ const COMPOSE_RUNNER_DIR = "aidlc-compose";
 // which compares two fresh builds for determinism; it does not inspect an
 // existing stale or hand-edited copy.
 export function renderComposeRunner(): string {
+  const entrySkill = treeEntrySkillInvocation();
   return `---
 name: ${COMPOSE_RUNNER_DIR}
 generated-by: aidlc-runner-gen
@@ -320,7 +322,7 @@ description: >
   Compose a tailored AI-DLC workflow plan - the adaptive composer reads your
   task (or a scan report), proposes the EXECUTE/SKIP stage grid that fits,
   and after your approval authors it as a scope and runs it. A typeable
-  shortcut for \`/aidlc compose\`; the same one door, forced to the full
+  shortcut for \`${entrySkill} compose\`; the same one door, forced to the full
   composer even when a stock scope would match.
 argument-hint: "[description | --report <path> | --new-scope]"
 user-invocable: true
@@ -330,9 +332,9 @@ ${nativeRunnerFrontmatter()}\
 # AI-DLC - compose a workflow plan
 
 Force the adaptive composer on a task. This is packaging over
-\`/aidlc compose ...\` - it does not add a second entry point; the engine
+\`${entrySkill} compose ...\` - it does not add a second entry point; the engine
 recognizes the compose request and names the composer dispatch, and the
-conductor runs the same forwarding loop as \`/aidlc\`.
+conductor runs the same forwarding loop as \`${entrySkill}\`.
 
 ## Steps
 
@@ -346,7 +348,7 @@ conductor runs the same forwarding loop as \`/aidlc\`.
 2. Act on the directive exactly as the \`aidlc\` skill's forwarding loop
    describes (the composer-dispatch print names the composer agent; render
    its proposal and hold the approve/edit/reject gate). From here the flow IS
-   the \`/aidlc\` flow - continue its loop until the directive says stop.
+   the \`${entrySkill}\` flow - continue its loop until the directive says stop.
 `;
 }
 

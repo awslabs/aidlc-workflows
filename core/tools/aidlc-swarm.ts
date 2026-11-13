@@ -101,6 +101,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, posix, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry } from "./aidlc-audit.ts";
+import { gitCommonDirOf } from "./aidlc-git.ts";
 import { commandChat } from "./aidlc-questions.ts";
 import { hostNamesThisChat } from "./aidlc-record-core.ts";
 import { swarmBuildingChat } from "./aidlc-swarm-checkpoints.ts";
@@ -2379,6 +2380,12 @@ function resumeGit(cwd: string, args: string[]): string {
   return result.stdout.trim();
 }
 
+function resumeCommonDir(cwd: string): string {
+  const dirs = gitCommonDirOf(cwd);
+  if (!dirs.ok) throw new Error(`Cannot validate preserved worktree: ${dirs.stderr}`);
+  return dirs.common;
+}
+
 function resumePathKey(path: string): string {
   const canonical = realpathSync(path).replaceAll("\\", "/");
   return process.platform === "win32" ? canonical.toLowerCase() : canonical;
@@ -2553,8 +2560,8 @@ function validateSwarmResume(
   const meta = JSON.parse(readRegularFileNoFollowOrThrow(metaPath, "preserved worktree metadata").toString("utf-8"));
   const recordedPath = creation && auditBlockField(creation.block, "Worktree path");
   const branch = identity.branch;
-  const rootCommon = resumePathKey(resolve(repoCwd, resumeGit(repoCwd, ["rev-parse", "--git-common-dir"])));
-  const childCommon = resumePathKey(resolve(worktree, resumeGit(worktree, ["rev-parse", "--git-common-dir"])));
+  const rootCommon = resumePathKey(resumeCommonDir(repoCwd));
+  const childCommon = resumePathKey(resumeCommonDir(worktree));
   const commonHash = createHash("sha256").update(rootCommon).digest("hex");
   if (!creation || !recordedPath ||
     resumePathKey(resolveAuditWorktreePath(pd, recordedPath)) !== resumePathKey(worktree) ||
@@ -3189,7 +3196,7 @@ function handlePrepare(rest: string[]): void {
         worktree_path: worktreeDir,
         error: `bolt start failed: ${started.stderr.trim() || started.stdout.trim()}; ${
           resume ? "retry prepare --resume-existing to recover this revision" :
-            `source was preserved; run aidlc-worktree discard --slug ${boltSlug} before retrying prepare`}`,
+            `source was preserved; run ${aidlcDispatcherInvocation("worktree discard")} --slug ${boltSlug} before retrying prepare`}`,
       });
       continue;
     }
@@ -3201,7 +3208,7 @@ function handlePrepare(rest: string[]): void {
         unit, ok: false, worktree_path: worktreeDir,
         error: `copying the intent's records into the worktree failed: ${error instanceof Error ? error.message : String(error)}; ${
           resume ? "retry prepare --resume-existing to recover this revision" :
-            `source was preserved; run aidlc-worktree discard --slug ${boltSlug} before retrying prepare`}`,
+            `source was preserved; run ${aidlcDispatcherInvocation("worktree discard")} --slug ${boltSlug} before retrying prepare`}`,
       });
       continue;
     }
@@ -3221,7 +3228,7 @@ function handlePrepare(rest: string[]): void {
           unit, ok: false, worktree_path: worktreeDir,
           error: `worktree Plan Approval transfer failed: ${error instanceof Error ? error.message : String(error)}; ${
             resume ? "retry prepare --resume-existing to recover this revision" :
-              `source was preserved; run aidlc-worktree discard --slug ${boltSlug} before retrying prepare`}`,
+              `source was preserved; run ${aidlcDispatcherInvocation("worktree discard")} --slug ${boltSlug} before retrying prepare`}`,
         });
         continue;
       }

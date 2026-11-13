@@ -441,7 +441,7 @@ function missingDispatcherWorkspaceName(
   return {
     kind: "error",
     noun,
-    message: `Usage: aidlc ${usage}`,
+    message: `Usage: ${aidlcInvocation()} engine ${usage}`,
   };
 }
 
@@ -595,7 +595,7 @@ export function parseDispatcherPluginCommand(
 ): DispatcherPluginCommand {
   if (args[0] !== "plugin") return { kind: "not-plugin" };
   const verb = args[1];
-  if (verb === "help" || verb === "-h" || verb === "--help") {
+  if (verb === undefined || verb === "help" || verb === "-h" || verb === "--help") {
     return { kind: "help" };
   }
   const target = verb === "select"
@@ -612,10 +612,9 @@ export function parseDispatcherPluginCommand(
   if (target !== undefined) {
     return { kind: "run", argv: [target, ...args.slice(2)] };
   }
-  const detail = verb ? `unknown verb '${verb}'` : "missing verb";
   return {
     kind: "error",
-    message: `aidlc: ${detail} for noun 'plugin'; try 'aidlc help --all'`,
+    message: `\`${aidlcInvocation()} engine plugin ${verb}\` is not a plugin command; the plugin commands are select, list, sync, validate and build`,
   };
 }
 

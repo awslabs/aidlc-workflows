@@ -388,6 +388,7 @@ import {
   type RuntimeRecord,
   type TrustRecord,
 } from "./aidlc-config-diagnostics.ts";
+import { gitCommonDirOf } from "./aidlc-git.ts";
 import { committedRecordIgnoreConflicts } from "./aidlc-gitignore.ts";
 import { deepFolder } from "./aidlc-folder-depth.ts";
 import {
@@ -1854,7 +1855,7 @@ function diagnosticOverrides(
 
 function compactHumanFileList<T>(
   items: readonly T[],
-  section: DiagnosticSection,
+  listAll: string,
   render: (item: T) => string,
 ): string {
   const visible = items.length > 8 ? items.slice(0, 5) : items;
@@ -1862,7 +1863,7 @@ function compactHumanFileList<T>(
   if (items.length > 8) {
     output +=
       `    ... and ${items.length - visible.length} more ` +
-      `(aidlc config ${section} --show --json lists all)\n`;
+      `(${listAll} lists all)\n`;
   }
   return output;
 }
@@ -1952,7 +1953,7 @@ function showDiagnosticSection(
     output += "  Files carrying hook commands:\n";
     output += compactHumanFileList(
       diagnostics.commandFiles,
-      "runtime",
+      configCommandForHarness(projectDir, selected.harnessDir, "runtime --show --json"),
       (file) => file,
     );
   } else if (section === "providers") {
@@ -2013,7 +2014,11 @@ function showDiagnosticSection(
       output += `  Kiro terminal: Command Prompt (${status.kiroTerminal.settingsPath})\n`;
     }
     output += "  Trust and allowlist files:\n";
-    output += compactHumanFileList(status.files, "trust", (file) => file);
+    output += compactHumanFileList(
+      status.files,
+      configCommandForHarness(projectDir, selected.harnessDir, "trust --show --json"),
+      (file) => file,
+    );
     for (const issue of status.issues) output += `  Unmet: ${issue.id} - ${issue.message}\n`;
   }
   process.stdout.write(output);
@@ -2246,7 +2251,7 @@ function diagnosticWizard(
       process.stdout.write("\n");
       writeCommandRow(
         "  Full diagnostics: ",
-        configCommandForHarness(selected.harnessDir, "runtime --show"),
+        configCommandForHarness(projectDir, selected.harnessDir, "runtime --show"),
       );
       process.stdout.write("\n");
       return records.runtime;
@@ -2984,11 +2989,14 @@ function configMutationRerun(
   return `${configCommand([section, ...args, "--yes"].join(" "))}${sameMirror(argv)}`;
 }
 
-function configCommandForHarness(harnessDir: string, args = ""): string {
-  const invoke = aidlcInvocation() === "aidlc"
-    ? "aidlc"
-    : `bun ${harnessDir}/tools/aidlc.ts`;
-  return `${invoke} config${args ? ` ${args}` : ""}`;
+// A `config` command about the project's `harnessDir` tree, run as shown from
+// where the user is. A section names the harness when the project has more
+// than one, as `modelsCommand` does; bare `config` and args that name a
+// harness already are left as they are.
+function configCommandForHarness(projectDir: string, harnessDir: string, args = ""): string {
+  const harness = discoverProjectHarnesses(projectDir).find((item) => item.harnessDir === harnessDir)?.distribution;
+  const named = args && !args.startsWith("-") && !/(?:^| )--harness(?: |$)/.test(args) ? namedHarness(projectDir, harness) : "";
+  return `${configInvocationFor(projectDir)} config${args ? ` ${args}` : ""}${named}${projectTarget(projectDir)}`;
 }
 
 let scriptedPromptAnswers: string[] | null = null;
@@ -3108,7 +3116,7 @@ function setupMapRows(
     : sessionAccess
     ? sessionProvidersDetail(
       modelHarness(distribution),
-      `\`${configCommandForHarness(harnessDir, "providers")}\``,
+      `\`${configCommandForHarness(projectDir, harnessDir, "providers")}\``,
     )
     : records.providers === null
     ? "no recorded answers; provider access unverified"
@@ -3288,7 +3296,7 @@ function setupLedgerActions(
         message:
           "No model policy is recorded, so every agent inherits your session model and effort. " +
           "Record a preset, or choose unchanged to keep it that way.",
-        command: configCommandForHarness(harnessDir, "models"),
+        command: configCommandForHarness(projectDir, harnessDir, "models"),
       });
     }
   }
@@ -3301,7 +3309,7 @@ function setupLedgerActions(
       section: "providers",
       id: "provider-record-missing",
       message: "Choose and configure a model provider, then record the completed setup.",
-      command: configCommandForHarness(harnessDir, "providers"),
+      command: configCommandForHarness(projectDir, harnessDir, "providers"),
     });
   }
   return next;
@@ -3382,7 +3390,7 @@ async function runSetupWalk(
     if ((process.exitCode ?? EXIT.ok) !== EXIT.ok) {
       process.stdout.write(
         `\n  Setup stopped while configuring ${section}. Completed answers remain recorded; rerun ${
-          configCommandForHarness(harnessDir)
+          configCommandForHarness(projectDir, harnessDir)
         } to continue.\n`,
       );
       return;
@@ -4859,13 +4867,9 @@ function planProjectSettingsMutation(
   // the lookup at another one. A linked worktree's list is in the shared dir.
   const env = { ...process.env };
   for (const name of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE"]) delete env[name];
-  const located = spawnSync("git", ["-C", projectDir, "rev-parse", "--git-common-dir"], {
-    encoding: "utf-8",
-    env,
-    timeout: 10_000,
-  });
-  if (located.status !== 0 || !located.stdout.trim()) return null;
-  const exclude = join(resolve(projectDir, located.stdout.trim()), "info", "exclude");
+  const located = gitCommonDirOf(projectDir, { env, timeout: 10_000 });
+  if (!located.ok) return null;
+  const exclude = join(located.common, "info", "exclude");
   if (regularFile(exclude) && readFileSync(exclude, "utf-8").split(/\r?\n/).includes(LOCAL_SETTINGS_FILE)) {
     return null;
   }
@@ -7169,6 +7173,7 @@ function prepareRefreshSource(
       `Removed legacy AI-DLC Bedrock defaults from ${legacyProviderMigration.path}; ` +
         `${typedHarnessName(distribution)} now uses the provider configured in the harness. To opt back in, run ` +
         `${configCommandForHarness(
+          projectDir,
           descriptor.harnessDir,
           `providers --provider amazon-bedrock --region ${legacyProviderMigration.region} --yes`,
         )}.`,
@@ -8062,9 +8067,9 @@ function selectSource(
     if (selected.length === 1) return selected[0];
     throw new MissingInstalledSource(
       requiredVersion && versionFiltered.length === 0
-        ? `project requires ${requiredVersion}, which is not installed; run aidlc config --pin ${requiredVersion}`
+        ? `project requires ${requiredVersion}, which is not installed; run ${configCommand(`--pin ${requiredVersion}`)}`
         : requiredVersion
-        ? `harness ${typedHarnessName(selectedName)} is not installed in ${requiredVersion}; run aidlc config --pin ${requiredVersion}`
+        ? `harness ${typedHarnessName(selectedName)} is not installed in ${requiredVersion}; run ${configCommand(`--pin ${requiredVersion}`)}`
         : `harness ${typedHarnessName(selectedName)} is not installed`,
       selectedName,
       requiredVersion,
@@ -8079,7 +8084,7 @@ function selectSource(
     if (versionFiltered.length > 0) {
       throw new Error(
         requiredVersion
-          ? `configured default harness ${typedHarnessName(configuredDefault)} is not installed in ${requiredVersion}; run aidlc config --pin ${requiredVersion}`
+          ? `configured default harness ${typedHarnessName(configuredDefault)} is not installed in ${requiredVersion}; run ${configCommand(`--pin ${requiredVersion}`)}`
           : `configured default harness ${typedHarnessName(configuredDefault)} is unavailable; pass --harness <name>`,
       );
     }
@@ -8088,7 +8093,7 @@ function selectSource(
   if (versionFiltered.length === 0) {
     throw new Error(
       requiredVersion
-        ? `project requires ${requiredVersion}, which is not installed; run aidlc config --pin ${requiredVersion}`
+        ? `project requires ${requiredVersion}, which is not installed; run ${configCommand(`--pin ${requiredVersion}`)}`
         : "no installed harness runtime is available",
     );
   }
@@ -9211,6 +9216,7 @@ function renderFirstRunEnding(
         writeCommandRow(
           "    Full diagnostics: ",
           configCommandForHarness(
+            projectDir,
             choices.candidate.descriptor.harnessDir,
             "runtime --show",
           ),
@@ -10712,7 +10718,7 @@ function planRootIntegrations(
         actions.push({
           path: integration.path,
           action: "conflict",
-          detail: `${typedHarnessName(missingCopy.distribution)} is missing its shipped block copy (${missingCopy.harnessDir}/tools/data/root-blocks/${marker}); run aidlc config --harness ${typedHarnessName(missingCopy.distribution)} first`,
+          detail: `${typedHarnessName(missingCopy.distribution)} is missing its shipped block copy (${missingCopy.harnessDir}/tools/data/root-blocks/${marker}); run ${configCommand(`--harness ${typedHarnessName(missingCopy.distribution)}`)} first`,
         });
         continue;
       }
@@ -12799,6 +12805,7 @@ function recordBypassesOnly(
   mutation: SettingsMutation,
   options: ReturnType<typeof globalOptions>,
   setupWalkChild: boolean,
+  input: readonly string[],
 ): void {
   try {
     // A no-layer clear changes every layer that records the bypass.
@@ -12877,9 +12884,9 @@ function recordBypassesOnly(
     }
     if (approvedToken && approvedToken !== planToken) {
       emitResult(failure(
-        "config plan changed after approval; run aidlc config --dry-run again",
+        `config plan changed after approval; run ${configCommand("--dry-run")} again`,
         EXIT.integrity,
-        configCommand("--dry-run --json"),
+        configRerunAsking(input, projectDir, ["--dry-run", "--json"], ["--plan-token"]) ?? configCommand("--dry-run --json"),
       ), options);
       return;
     }
@@ -13257,6 +13264,7 @@ export async function main(
       choicesContext.settings,
       options,
       Boolean(internal.setupWalkChild),
+      input,
     );
     return;
   }
@@ -13792,21 +13800,21 @@ export async function main(
                 if (currentHash && contribution.hash === currentHash) continue;
               }
               throw new Error(
-                `refusing to refresh ${typedHarnessName(stamp.distribution)} while installed ${typedHarnessName(sibling.distribution)} co-owns ${integration.path} but has no readable projection descriptor (${sibling.harnessDir}/tools/data/aidlc-projection.json); run aidlc config --harness ${typedHarnessName(sibling.distribution)} first`,
+                `refusing to refresh ${typedHarnessName(stamp.distribution)} while installed ${typedHarnessName(sibling.distribution)} co-owns ${integration.path} but has no readable projection descriptor (${sibling.harnessDir}/tools/data/aidlc-projection.json); run ${configCommand(`--harness ${typedHarnessName(sibling.distribution)}`)} first`,
               );
             } else if (
               sibling.frameworkVersion !== undefined && baseline === null &&
               !unchangedManagedBlockHash(projectDir, selected.root, descriptor.harnessDir, integration)
             ) {
               throw new Error(
-                `refusing to refresh ${typedHarnessName(stamp.distribution)} while installed ${typedHarnessName(sibling.distribution)} has lost its projection descriptor and ownership baseline; run aidlc config --harness ${typedHarnessName(sibling.distribution)} first`,
+                `refusing to refresh ${typedHarnessName(stamp.distribution)} while installed ${typedHarnessName(sibling.distribution)} has lost its projection descriptor and ownership baseline; run ${configCommand(`--harness ${typedHarnessName(sibling.distribution)}`)} first`,
               );
             }
           }
           continue;
         }
         throw new Error(
-          `harness ${typedHarnessName(stamp.distribution)} cannot be added while installed ${typedHarnessName(sibling.distribution)} has no readable projection descriptor (${sibling.harnessDir}/tools/data/aidlc-projection.json); run aidlc config --harness ${typedHarnessName(sibling.distribution)} first`,
+          `harness ${typedHarnessName(stamp.distribution)} cannot be added while installed ${typedHarnessName(sibling.distribution)} has no readable projection descriptor (${sibling.harnessDir}/tools/data/aidlc-projection.json); run ${configCommand(`--harness ${typedHarnessName(sibling.distribution)}`)} first`,
         );
       }
       for (const integration of descriptor.rootIntegrations) {
@@ -13826,7 +13834,7 @@ export async function main(
             predatesFrameworkVersion(sibling.frameworkVersion, stamp.frameworkVersion)
           ) {
             throw new Error(
-              `harness ${typedHarnessName(stamp.distribution)} shares ${integration.path} with installed ${typedHarnessName(sibling.distribution)}, whose install predates shared onboarding; run aidlc config --harness ${typedHarnessName(sibling.distribution)} first - if it still refuses afterwards, its ${integration.path} is exclusive and they cannot coexist in one project`,
+              `harness ${typedHarnessName(stamp.distribution)} shares ${integration.path} with installed ${typedHarnessName(sibling.distribution)}, whose install predates shared onboarding; run ${configCommand(`--harness ${typedHarnessName(sibling.distribution)}`)} first - if it still refuses afterwards, its ${integration.path} is exclusive and they cannot coexist in one project`,
             );
           }
           throw new Error(
@@ -13837,7 +13845,7 @@ export async function main(
     }
     if (requiredVersion !== undefined && requiredVersion !== stamp.frameworkVersion) {
       throw new MissingInstalledSource(
-        `project pin requires ${requiredVersion}, but source is ${stamp.frameworkVersion}; run aidlc config --pin ${requiredVersion}`,
+        `project pin requires ${requiredVersion}, but source is ${stamp.frameworkVersion}; run ${configCommand(`--pin ${requiredVersion}`)}`,
         stamp.distribution,
         requiredVersion,
       );
@@ -14196,7 +14204,7 @@ export async function main(
     if (actions.some((action) => action.detail === KEPT_GITIGNORE_LINES_DETAIL)) {
       prepared.notes.push(KEPT_GITIGNORE_LINES_NOTE);
     }
-    const kiroForce = configCommandForHarness(descriptor.harnessDir, `--harness ${typedHarnessName(stamp.distribution)} --force`);
+    const kiroForce = configCommandForHarness(projectDir, descriptor.harnessDir, `--harness ${typedHarnessName(stamp.distribution)} --force`);
     const kiroUpgraded = actions.filter((action) => action.detail === KIRO_UPGRADED_DETAIL).length;
     if (kiroUpgraded > 0) prepared.notes.push(kiroUpgradedNote(kiroUpgraded, descriptor.harnessDir, kiroForce));
     const kiroKeptChanged = actions.filter((action) => action.detail === KIRO_KEPT_CHANGED_DETAIL).length;
@@ -14397,9 +14405,9 @@ export async function main(
     }
     if (approvedToken && approvedToken !== planToken) {
       emitResult(failure(
-        "config plan changed after approval; run aidlc config --dry-run again",
+        `config plan changed after approval; run ${configCommand("--dry-run")} again`,
         EXIT.integrity,
-        configCommand("--dry-run --json"),
+        configRerunAsking(input, projectDir, ["--dry-run", "--json"], ["--plan-token"]) ?? configCommand("--dry-run --json"),
       ), options);
       return;
     }

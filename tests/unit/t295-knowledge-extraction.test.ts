@@ -833,6 +833,21 @@ describe("t295 Finding 4: EXTRACT_BATCH_DOC_CAP is enforced, not dead", () => {
       .toBe(0);
   });
 
+  // Sync has the same cap for brand-new documents, so the refusal names it
+  // only where some of the work is documents already in the index.
+  test("an all-new batch over the cap names no sync; one with indexed documents does", () => {
+    const fresh = scratchProject();
+    for (let i = 0; i < EXTRACT_BATCH_DOC_CAP + 1; i++) doc(fresh, `d${i}.txt`, `body ${i}\n`);
+    expect(() => onboard(fresh, SPACE, undefined, NOW)).toThrow(/a single file at a time\.$/);
+
+    const touched = scratchProject();
+    const first = doc(touched, "d0.txt", "body 0\n");
+    onboard(touched, SPACE, first, NOW);
+    writeFileSync(first, "body 0, edited\n");
+    for (let i = 1; i < EXTRACT_BATCH_DOC_CAP + 1; i++) doc(touched, `d${i}.txt`, `body ${i}\n`);
+    expect(() => onboard(touched, SPACE, undefined, NOW)).toThrow(/, or run `\/aidlc knowledge sync` instead of a pathless onboard\.$/);
+  });
+
   test("onboard accepts a batch AT exactly the cap (boundary, not off-by-one)", () => {
     const p = scratchProject();
     for (let i = 0; i < EXTRACT_BATCH_DOC_CAP; i++) doc(p, `d${i}.txt`, `body ${i}\n`);

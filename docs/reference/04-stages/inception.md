@@ -759,7 +759,7 @@ Changes**.
 |------------------|------------------------------------------------------------------------|
 | Phase            | Inception                                                              |
 | Stage #          | 2.5                                                                    |
-| Condition        | CONDITIONAL -- execute when user-facing UI exists and rough mockups were produced in Ideation; for APIs, refine interaction diagrams |
+| Condition        | CONDITIONAL -- execute when user-facing UI exists; for APIs, refine interaction diagrams |
 | Lead Agent       | aidlc-design-agent                                                           |
 | Support Agents   | aidlc-product-agent (validates against stories)                              |
 | Mode             | inline                                                                 |

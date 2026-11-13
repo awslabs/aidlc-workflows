@@ -6,6 +6,7 @@
 // (the §12a reviewer step). Orchestrator-callable; state tool doesn't own these
 // because they fire per-question / per-review, not per state transition.
 
+import { constructionPolicyRecovery } from "./aidlc-guard-operation.ts";
 import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
 import { CHANGE_NOTICES_NOTE, otherWorkNote, reviewRequestNote, reviewVerdictNote } from "./aidlc-directive.ts";
 import { spawnSync } from "node:child_process";
@@ -100,7 +101,6 @@ import {
   verificationCommandRecovery,
   validConstructionPolicyChange,
   CONSTRUCTION_POLICY_CHECKPOINT,
-  CONSTRUCTION_POLICY_RECOVERY,
   checkSummaryConfirmationEvidence,
   claimAttemptFields,
   clearSummaryAuthorization,
@@ -933,7 +933,7 @@ function handlePlanApprovalBatch(
 // `--session` is only an override, so the agent never hunts for a session id.
 function constructionPolicyFields(pd: string, flags: Record<string, string>): Record<string, string> {
   if (!validConstructionPolicyChange(flags.field, flags.value)) {
-    error("Construction policy requires a valid --field and --value: Construction Checkpoints (enabled|disabled), Construction Execution (serial|swarm), or Construction Iteration (unit-major|stage-major). " + CONSTRUCTION_POLICY_RECOVERY);
+    error("Construction policy requires a valid --field and --value: Construction Checkpoints (enabled|disabled), Construction Execution (serial|swarm), or Construction Iteration (unit-major|stage-major). " + constructionPolicyRecovery());
   }
   if (flags.single !== undefined || flags.unit !== undefined) {
     error("Construction policy applies to the whole intent; omit --single and --unit.");
@@ -949,7 +949,7 @@ function constructionPolicyFields(pd: string, flags: Record<string, string>): Re
   if (!session) {
     error(
       "Could not tell which session this is. Run the command again with --session set to the Runtime Session " +
-        "shown in this session's AI-DLC context. " + CONSTRUCTION_POLICY_RECOVERY,
+        "shown in this session's AI-DLC context. " + constructionPolicyRecovery(),
     );
   }
   return { Checkpoint: CONSTRUCTION_POLICY_CHECKPOINT, Field: flags.field, Value: flags.value, Session: session };
@@ -1404,7 +1404,7 @@ function handleDecision(args: string[]): void {
     Object.assign(fields, policyFields);
     const options = optionsList(flags.options);
     if (options.length !== 2 || options[0] !== "Approve" || options[1] !== "Request Changes") {
-      error('Construction policy decision requires --options "Approve,Request Changes". ' + CONSTRUCTION_POLICY_RECOVERY);
+      error('Construction policy decision requires --options "Approve,Request Changes". ' + constructionPolicyRecovery());
     }
   }
   if (planEvidence) Object.assign(fields, planApprovalFields(planEvidence));
@@ -1576,7 +1576,7 @@ function handleAnswers(args: string[]): void {
   const { positional, flags } = parseFlags(args);
   if (!flags.stage) error("Missing --stage <slug>");
   if (positional.length > 0 || Object.keys(flags).some((key) => !["stage", "unit"].includes(key))) {
-    error("Usage: aidlc-log answers --stage <slug> [--unit <unit>]");
+    error(`Usage: ${aidlcToolInvocation("log")} answers --stage <slug> [--unit <unit>]`);
   }
   const pd = resolveProjectDir(projectDir);
   // An open isolated run with no work keeps its rows in the space's own record.
@@ -2630,7 +2630,7 @@ function handleAnswer(args: string[]): void {
 
     if (policyFields) {
       if (!pendingConstructionPolicyDecision(pd, flags.stage, fields.Field, fields.Value)) {
-        error("No matching pending DECISION_RECORDED with the same Field and Value exists in the current workflow. " + CONSTRUCTION_POLICY_RECOVERY);
+        error("No matching pending DECISION_RECORDED with the same Field and Value exists in the current workflow. " + constructionPolicyRecovery());
       }
       requireProtectedResponse(pd, fields.Session, {
         kind: "construction-policy",
@@ -3022,8 +3022,8 @@ function handleAnswer(args: string[]): void {
       ) {
         error(
           "Cannot record this approval choice because no new human reply has arrived. "
-            + "After the human types their choice, use aidlc-orchestrate.ts report --result "
-            + "approved or rejected; do not use aidlc-log.ts answer for an approval."
+            + `After the human types their choice, use ${aidlcToolInvocation("orchestrate")} report --result `
+            + `approved or rejected; do not use ${aidlcToolInvocation("log")} answer for an approval.`
             + unattendedHumanPresenceHint(pd),
         );
       }
@@ -3481,10 +3481,10 @@ export function reviewRecoverySpentMessage(
       `Do not put autonomous Unit "${autonomousBolt.unit}" in --claimed and do ` +
       "not run finalize or merge it. Halt and ask the human whether to restart " +
       `the Bolt attempt. On an approved retry, return to the main workspace, run ` +
-      `\`aidlc-bolt.ts abort --name "${autonomousBolt.unit}" --slug "${slug}" ` +
+      `\`${aidlcToolInvocation("bolt")} abort --name "${autonomousBolt.unit}" --slug "${slug}" ` +
       `--reason "stale review recovery exhausted" --discard\`. After success, ` +
       "use the retry-discard SAY line in stage-protocol-swarm.md. Then rerun the " +
-      `current \`aidlc-swarm.ts prepare\` step for Unit "${autonomousBolt.unit}" in` +
+      `current \`${aidlcDispatcherInvocation("swarm prepare")}\` step for Unit "${autonomousBolt.unit}" in` +
       `${batch} with the original base/repo arguments. The fresh Bolt attempt ` +
       "restores one review allowance without claiming convergence. Do not " +
       "record a Request Changes decision on the human's behalf.",
@@ -4121,7 +4121,7 @@ function handleReview(args: string[]): void {
         refuseReview(
           `Cannot record review for "${flags.stage}" unit "${flags.unit}": no authoritative ` +
             "unit DAG exists and no matching active or merged Bolt attempt was found. Run " +
-            `\`aidlc-bolt.ts start --name "${flags.unit}" --batch 1\` before retrying this ` +
+            `\`${aidlcToolInvocation("bolt")} start --name "${flags.unit}" --batch 1\` before retrying this ` +
             "per-unit review, or remove --unit and record a stage-level no-DAG review.",
         );
       }

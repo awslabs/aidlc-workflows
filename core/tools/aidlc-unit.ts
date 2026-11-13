@@ -2906,7 +2906,7 @@ function currentPinnedClaim(
     ) {
       fail(
         `Unit "${transaction.unit}" was released after its merge commit landed. ` +
-          `Inspect the landed commit, then recover explicitly with aidlc unit land ${transaction.unit} ` +
+          `Inspect the landed commit, then recover explicitly with ${aidlcInvocation()} unit land ${transaction.unit} ` +
           "--accept-released-attempt --user-input '<human acknowledgment>'.",
       );
     }
@@ -2936,7 +2936,7 @@ function currentPinnedClaim(
     current.payload.candidate_tree_oid !== transaction.candidate_tree_oid
   ) {
     fail(
-      `Unit "${transaction.unit}" claim ref moved or changed attempt after pin; run aidlc-unit pin ${transaction.unit} again.`,
+      `Unit "${transaction.unit}" claim ref moved or changed attempt after pin; run ${aidlcInvocation()} unit pin ${transaction.unit} again.`,
     );
   }
   return { claim: current };
@@ -3159,7 +3159,7 @@ function pinUnit(args: string[], projectDir?: string): void {
   ) {
     if (!approvalOutlivedByRepublish(pd, inFlight, claim)) {
       fail(
-        `Unit "${unit}" already has a ${inFlight.status} merge transaction; recover it with aidlc unit land ${unit} instead of re-pinning.`,
+        `Unit "${unit}" already has a ${inFlight.status} merge transaction; recover it with ${aidlcInvocation()} unit land ${unit} instead of re-pinning.`,
       );
     }
     superseded = inFlight;
@@ -3288,7 +3288,7 @@ function gateUnitMerge(args: string[], projectDir?: string): void {
     liveIntegration.oid,
   );
   if (JSON.stringify(evidence) !== JSON.stringify(transaction.evidence)) {
-    fail(`Unit "${unit}" pinned evidence journal changed; run aidlc-unit pin ${unit} again.`);
+    fail(`Unit "${unit}" pinned evidence journal changed; run ${aidlcInvocation()} unit pin ${unit} again.`);
   }
   if (transaction.evidence.merge_held) {
     fail(
@@ -4431,7 +4431,7 @@ function landUnit(args: string[], projectDir?: string): void {
     if (JSON.stringify(liveEvidence) !== JSON.stringify(transaction.evidence)) {
       fail(
         `Unit "${unit}" live integration evidence changed after merge approval; ` +
-          `run aidlc unit pin ${unit} again and obtain a new merge gate.`,
+          `run ${aidlcInvocation()} unit pin ${unit} again and obtain a new merge gate.`,
       );
     }
     transaction = landGit(pd, transaction, target);
@@ -4454,7 +4454,7 @@ function landUnit(args: string[], projectDir?: string): void {
     if (skipped) {
       fail(
         `Unit "${unit}" is merged into main at ${transaction.git_commit_oid}, but not recorded yet: ${skipped}. ` +
-          `Run aidlc unit land ${unit} again once main is back on ${transaction.evidence.stages_expected[0]}.`,
+          `Run ${aidlcInvocation()} unit land ${unit} again once main is back on ${transaction.evidence.stages_expected[0]}.`,
       );
     }
     const liveState = readStateFile(pd);
@@ -10097,7 +10097,7 @@ export function main(argv: string[]): void {
       const overview = unitClaimOverview(resolveProjectDir(projectDir));
       console.log(JSON.stringify({ ...overview, claims: Object.fromEntries(overview.claims) }, null, 2));
     } else {
-      fail(`Usage: aidlc-unit <${[...UNIT_VERBS.keys()].join("|")}> ...`);
+      fail(`Usage: ${aidlcInvocation()} unit <${[...UNIT_VERBS.keys()].join("|")}> ...`);
     }
     // The command did its work: the request file its words came in is spent.
     spendWordsFile?.();

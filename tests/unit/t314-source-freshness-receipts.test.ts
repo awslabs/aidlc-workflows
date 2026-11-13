@@ -5788,7 +5788,7 @@ process.stdin.on("end", () => server.stop(true));
     const refusal = `${merge.stdout}${merge.stderr}`;
     expect(refusal).toContain("finalized with source freshness bypassed");
     expect(refusal).toContain("AIDLC_SKIP_SOURCE_FRESHNESS=1");
-    expect(refusal).toContain("aidlc-worktree discard --slug bypass");
+    expect(refusal).toContain("engine worktree discard --slug bypass");
     expect(refusal).not.toContain("re-run review and finalize with source freshness enabled");
     const after = spawnSync("git", ["-C", proj, "rev-parse", "HEAD"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" }).stdout.trim();
     expect(after).toBe(before);

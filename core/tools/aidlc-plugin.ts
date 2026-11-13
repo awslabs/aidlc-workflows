@@ -2927,6 +2927,7 @@ async function syncPluginsLocked(
   superseded: string[];
   skippedCommands: string[];
   rules: string[];
+  nothingToSync?: true;
 }> {
   const harness = harnessKind(harnessDir, projectDir);
   const inventory = currentRoots().length > 0
@@ -2968,9 +2969,16 @@ async function syncPluginsLocked(
     }
     plugins = inventory.installed;
     if (plugins.length === 0) {
-      throw new Error(
-        noPluginListLine(projectDir, harnessDir) ?? "host inventory unavailable; run sync through an installed plugin's host hook",
-      );
+      const line = noPluginListLine(projectDir, harnessDir);
+      // A host with no plugin list yet has had no plugin installed; with none
+      // composed here either there is nothing to sync. Composed content with
+      // no list to prove its plugin gone is never pruned on a guess.
+      const composed = evidence.stamps.size + evidence.ownership.size + evidence.legacy.size + evidence.held.size;
+      if (line === null && composed === 0) return {
+          synced: [], pruned: [], operations: 0, held: [], newlyHeld: [], paused: [], superseded: [], skippedCommands: [], rules: [],
+          nothingToSync: true,
+        };
+      throw new Error(line ?? "host inventory unavailable; run sync through an installed plugin's host hook");
     }
     // An old aidlc-<name> copy's own hook leaves the composing to the rebuilt
     // copy the host also lists, so the two never take turns.
@@ -3261,7 +3269,7 @@ export async function main(argv: string[]): Promise<void> {
       if (flags["harness-dir"]) pinNamedHarness(projectDir, flags["harness-dir"]);
       const result = await syncPlugins(projectDir, argv);
       sayRulesPlacement(projectDir, result.rules);
-      const message = `plugin sync complete: ${result.synced.length} plugin(s)` +
+      const message = result.nothingToSync ? "no installed plugins; nothing to sync" : `plugin sync complete: ${result.synced.length} plugin(s)` +
         (result.pruned.length > 0 ? `; pruned ${result.pruned.length} missing plugin(s)` : "") +
         result.newlyHeld.map((record) => `\n${record.reason}`).join("") +
         result.skippedCommands.map((line) => `\n${line}`).join("") +

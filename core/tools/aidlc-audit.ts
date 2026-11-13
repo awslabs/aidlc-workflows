@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
+import { aidlcDispatcherInvocation } from "./aidlc-runtime-paths.ts";
 import {
   closeSync,
   constants as fsConstants,
@@ -1761,7 +1762,7 @@ function parseSlugFlag(args: string[], subcommand: string): string {
     }
   }
   if (!slug) {
-    jsonError(`Usage: aidlc-audit ${subcommand} --slug <slug> [--project-dir <path>]`);
+    jsonError(`Usage: ${aidlcDispatcherInvocation("audit")} ${subcommand} --slug <slug> [--project-dir <path>]`);
   }
   const err = validateBoltSlug(slug);
   if (err) {
@@ -1998,7 +1999,7 @@ function handleAuditFork(args: string[], projectDir: string): void {
   }
   if (!existsSync(wtPath)) {
     jsonError(
-      `worktree directory not found at ${wtPath}; run aidlc-worktree create first`
+      `worktree directory not found at ${wtPath}; run ${aidlcDispatcherInvocation("worktree create")} first`
     );
   }
 
@@ -2625,7 +2626,7 @@ export function main(argv: string[]): void {
   const subcommand = filteredArgs[0];
 
   if (!subcommand) {
-    jsonError("Usage: aidlc-audit <append|append-batch|append-raw|history|turns|audit-fork|audit-merge> [args...]");
+    jsonError(`Usage: ${aidlcDispatcherInvocation("audit")} <append|append-batch|append-raw|history|turns|audit-fork|audit-merge> [args...]`);
   }
 
   switch (subcommand) {
@@ -2640,7 +2641,7 @@ export function main(argv: string[]): void {
     case "append": {
       const eventType = filteredArgs[1];
       if (!eventType) {
-        jsonError("Usage: aidlc-audit append <event-type> [--field key=value ...]");
+        jsonError(`Usage: ${aidlcDispatcherInvocation("audit")} append <event-type> [--field key=value ...]`);
       }
       refuseReservedCliEvent(eventType);
       const fields = parseFieldArgs(rawArgs);
@@ -2651,7 +2652,7 @@ export function main(argv: string[]): void {
     case "append-batch": {
       const entries = filteredArgs[1];
       if (!entries) {
-        jsonError("Usage: aidlc-audit append-batch <entries-json>");
+        jsonError(`Usage: ${aidlcDispatcherInvocation("audit")} append-batch <entries-json>`);
       }
       refuseReservedCliBatch(entries);
       handleAppendBatch(entries, projectDir);
@@ -2663,7 +2664,7 @@ export function main(argv: string[]): void {
       const body = filteredArgs[2];
       if (!heading || !body) {
         jsonError(
-          "Usage: aidlc-audit append-raw <heading> <body>"
+          `Usage: ${aidlcDispatcherInvocation("audit")} append-raw <heading> <body>`
         );
       }
       handleAppendRaw(heading, body, projectDir);

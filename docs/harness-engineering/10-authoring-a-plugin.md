@@ -466,16 +466,16 @@ when it owns no stage or scope.
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
-const root = join(
-  process.env.AIDLC_PROJECT_DIR ?? process.cwd(),
-  process.env.AIDLC_HARNESS_DIR ?? ".claude",
-);
+const harnessDir = process.env.AIDLC_HARNESS_DIR ?? ".claude";
+const root = join(process.env.AIDLC_PROJECT_DIR ?? process.cwd(), harnessDir);
+// The person's entry in this harness: Codex's is $aidlc.
+const entry = harnessDir === ".codex" ? "$aidlc" : "/aidlc";
 
 console.log(JSON.stringify({
   checks: [{
     pass: existsSync(join(root, "tools", "my-plugin-helper.ts")),
     label: "my-plugin helper installed",
-    fix: "Run `bun <harness-dir>/tools/aidlc-utility.ts plugin-sync` or re-run hooks/compose.ts.",
+    fix: `Run \`${entry} plugin sync\` (or re-run the plugin's \`hooks/compose.ts\`).`,
     severity: "error",
   }],
 }));

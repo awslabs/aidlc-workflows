@@ -264,6 +264,9 @@ describe("permissions.allow — pre-approved tool list [.sh tests 2-9]", () => {
     const configChange = (command: string) =>
       /^bun \.claude\/tools\/aidlc\.ts config\b/.test(command) && !/ --(?:show --json|help)$/.test(command) &&
       !raise.test(command);
+    // A Unit command changes git and reaches the remote, so it stays behind
+    // the host's own prompt (t-unit-verb-route).
+    const unitCommand = (command: string) => /^bun \.claude\/tools\/aidlc\.ts unit /.test(command);
     // The skill names the command-line tool's own help only as the command not
     // to run ("`--help` goes here too ... is the command-line tool's own help,
     // not the AI-DLC help the person asked for"), so it needs no entry.
@@ -278,7 +281,7 @@ describe("permissions.allow — pre-approved tool list [.sh tests 2-9]", () => {
           .map((name) => span.replace("AIDLC_DISABLE_<NAME>", name))
         : [span];
       for (const command of commands) {
-        expect(claudeBashEffect(command), command).toBe(configChange(command) ? "prompt" : "allow");
+        expect(claudeBashEffect(command), command).toBe(configChange(command) || unitCommand(command) ? "prompt" : "allow");
       }
     }
   });
@@ -319,7 +322,6 @@ describe("permissions.allow on the native release", () => {
       "aidlc engine orchestrate next",
       "aidlc doctor",
       "aidlc --doctor",
-      "aidlc status",
       "aidlc --status",
       "aidlc version",
       "aidlc --version",

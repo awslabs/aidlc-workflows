@@ -302,7 +302,7 @@ is not converted into solo checkpoints.
 
 **Team Unit claims and scoped checkouts.** When `next` emits
 `ask_type: unit-claim`, present its claimable/claimed/waiting lists and run
-`aidlc-unit.ts claim <unit> --team '<label>'` for the selected Unit. The claim
+`{{INVOKE}} unit claim <unit> --team '<label>'` for the selected Unit. The claim
 uses the `claim/<intent-id8>/<unit>` ref as an atomic registry and writes a
 gitignored checkout-local scope stamp. A stamped checkout executes only that
 Unit's active per-unit Construction stages and gates; every lifecycle, review,
@@ -311,32 +311,32 @@ generation. A terminal `notice` means main is acting as the fan-out dispatcher:
 print it verbatim and stop. A team's hand-overs (sharing the plan, taking a
 Unit, publishing it, reviewing a published one, pushing main after a land) come
 as `ask_type: team-handover` questions with a command for each choice. Release runs only from unscoped main via
-`aidlc-unit.ts release <unit>` and leaves a generation-bumping tombstone ref.
+`{{INVOKE}} unit release <unit>` and leaves a generation-bumping tombstone ref.
 Scoped `next`, lifecycle, decision, review, and gate writes trust the locally
 validated claim-time stamp and never require the network. Fork/release are
 claim-sensitive boundaries: recheck the registry when reachable, refuse an
 online stale attempt, and warn once plus proceed from the stamp when offline.
 
 **Pinned Unit merge-back.** When the scoped Unit is complete, `next` offers to
-publish it (`aidlc unit publish <unit> --commit`); publication CAS-updates the
-claim ref but does not integrate it. On unscoped main, `aidlc unit pin <unit>`
+publish it (`{{INVOKE}} unit publish <unit> --commit`); publication CAS-updates the
+claim ref but does not integrate it. On unscoped main, `{{INVOKE}} unit pin <unit>`
 (a review choice of that offer, or the person's own command), then
 in the same turn present the returned pinned OID + evidence summary as one merge
 gate, as its `merge_gate` says. Write the person's reply, as they typed it, to
 `aidlc/.aidlc-engine/request-text/gate-<unit>.txt` with your file tool, not a shell, and
-record it with the command it names for their choice (`aidlc unit gate <unit>
+record it with the command it names for their choice (`{{INVOKE}} unit gate <unit>
 --decision <approve|reject> --request-file aidlc/.aidlc-engine/request-text/gate-<unit>.txt`).
-On approval, the gate's `land` names `aidlc unit land
+On approval, the gate's `land` names `{{INVOKE}} unit land
 <unit> --target <branch>`, run in the same turn with no further question; it
 owns the transaction: pinned git content first with main-owned metadata retained,
 then one Unit-row fold under the intent lock, then audit/finalization. A moved
 claim ref requires re-pin, and an unavailable registry makes gate/land fail
 closed. If the exact attempt is released only after the git step landed, inspect
-the merge and continue explicitly with `aidlc unit land <unit>
+the merge and continue explicitly with `{{INVOKE}} unit land <unit>
 --accept-released-attempt --user-input '<human acknowledgment>'`; a successor
 claim is never accepted. Source conflicts abort before state folding. For
 crash recovery the same command accepts `--step git|state|audit`; each step is
-idempotent and `aidlc unit merge-status <unit>` reports the local journal.
+idempotent and `{{INVOKE}} unit merge-status <unit>` reports the local journal.
 The answer counts when a typed human turn follows the pin. The transaction
 lands with strategy `merge` into the pin's integration branch, so the reviewed
 pinned OID remains a direct parent; that is not a choice for the person, and the

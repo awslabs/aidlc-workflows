@@ -1625,7 +1625,7 @@ function namedRestartRequest(
     return {
       directive: errorDirective(
         `AI-DLC could not read the work this request was kept for (${errorMessage(e)}), so it was not run. ` +
-          `Run \`${aidlcDispatcherInvocation("doctor")}\` to see why.`,
+          `Run \`${entrySkillInvocation()} --doctor\` to see why.`,
       ),
     };
   }
@@ -6485,26 +6485,26 @@ function observedClaimActivity(
 ): string {
   if (claim.movementObserved) {
     return claim.observedAt
-      ? `observed ref movement since ${claim.observedAt}`
-      : "observed ref movement since the prior snapshot";
+      ? `branch moved since ${claim.observedAt}`
+      : "branch moved since the last look";
   }
   return claim.observedAt
-    ? `last observed ref movement ${claim.observedAt}`
-    : "no ref movement observation recorded";
+    ? `no move seen since ${claim.observedAt}`
+    : "no activity seen yet";
 }
 
 function mergeReadiness(status: string): string {
   switch (status) {
     case "pinned":
-      return "pinned and ready for merge gate";
+      return "ready for the merge decision";
     case "approved":
-      return "merge gate approved; ready to land";
+      return "merge approved; ready to land";
     case "rejected":
-      return "merge gate rejected; revise and re-pin";
+      return "merge turned down; revise it and pin it again";
     case "git-landed":
-      return "content landed; state fold pending";
+      return "merged; the workflow record is not updated yet";
     case "state-folded":
-      return "state folded; audit finalization pending";
+      return "merged; the audit record is not finished yet";
     default:
       return status;
   }
@@ -6740,9 +6740,9 @@ export function renderTeamConstructionBoard(
 ): string {
   const title = mode === "snapshot"
     ? "# Team Construction Snapshot"
-    : "# Team Construction Dispatcher";
+    : "# Team Construction Board";
   const claimRows = board.claims.length === 0
-    ? ["| - | - | - | - | no claim refs observed |"]
+    ? ["| - | - | - | - | no claims seen |"]
     : board.claims.map(
       (claim) =>
         `| ${claim.unit} | ${claim.status} | ${claim.owner} | ${claim.generation} | ${claim.observedActivity} |`,
@@ -6779,7 +6779,7 @@ export function renderTeamConstructionBoard(
   for (const row of board.awaitingMerge) {
     if (row.status === "pinned") {
       nextActions.push(
-        `- Record the pinned merge decision for \`${row.unit}\` with \`aidlc unit gate ${row.unit}\`.`,
+        `- Record the pinned merge decision for \`${row.unit}\` with \`${aidlcInvocation()} unit gate ${row.unit}\`.`,
       );
     } else if (
       row.status === "approved" ||
@@ -6794,8 +6794,8 @@ export function renderTeamConstructionBoard(
         released &&
             row.status === "git-landed" &&
             !row.releasedAfterGitAccepted
-          ? `- The landed attempt for \`${row.unit}\` was released. Inspect the merge commit, then run \`aidlc unit land ${row.unit} --accept-released-attempt --user-input '<human acknowledgment>'\`.`
-          : `- Resume \`${row.unit}\` with \`aidlc unit land ${row.unit}\`.`,
+          ? `- The landed attempt for \`${row.unit}\` was released. Inspect the merge commit, then run \`${aidlcInvocation()} unit land ${row.unit} --accept-released-attempt --user-input '<human acknowledgment>'\`.`
+          : `- Resume \`${row.unit}\` with \`${aidlcInvocation()} unit land ${row.unit}\`.`,
       );
     } else if (row.status === "rejected") {
       nextActions.push(
@@ -6818,11 +6818,11 @@ export function renderTeamConstructionBoard(
   if (nextActions.length === 0) {
     nextActions.push(
       claimedUnits.length === 0 && board.walked.length === 0
-        ? "- No dispatcher action is pending; main may resume the normal Construction walk."
+        ? "- Nothing waits on the teams: the main checkout can go on with Construction as usual."
         : mode === "dispatcher"
         ? "- Nothing runs from this checkout: every Unit not yet merged is claimed, waits on one, or is built " +
           "where it was started. Each claimed Unit is worked in its own checkout:"
-        : "- No dispatcher action is pending. Each claimed Unit is worked in its own checkout:",
+        : "- Nothing waits on this checkout. Each claimed Unit is worked in its own checkout:",
     );
   } else if (claimedUnits.length > 0 || board.walked.length > 0) {
     nextActions.push("- Each claimed Unit is worked in its own checkout:");
@@ -6842,28 +6842,28 @@ export function renderTeamConstructionBoard(
   return [
     title,
     mode === "snapshot"
-      ? "_Read-only local snapshot; observed activity is not a remote push time._"
-      : "_Turn-terminal dispatcher view; observed activity is not a remote push time._",
+      ? "_Read-only snapshot; last activity is what this checkout has seen, not when a team pushed._"
+      : "_Last activity is what this checkout has seen, not when a team pushed._",
     `**Claimed:** ${claimedSummary}. **Claimable:** ${
       board.claimable.join(", ") || "none"
     }. **Waiting:** ${blockedSummary}.`,
     "",
     board.grid,
     "",
-    "## Claim Registry",
-    "| unit | status | owner | attempt | observed activity |",
+    "## Claims",
+    "| unit | status | owner | attempt | last activity |",
     "| --- | --- | --- | ---: | --- |",
     ...claimRows,
     "",
     "## Awaiting Merge",
-    "| unit | transaction | pinned OID | readiness |",
+    "| unit | step | commit | what is next |",
     "| --- | --- | --- | --- |",
     ...mergeRows,
     "",
     `## Claimable Units\n${board.claimable.length > 0 ? board.claimable.map((unit) => `- ${unit}`).join("\n") : "- none"}`,
     "",
     "## Blocked Units",
-    "| unit | blockers |",
+    "| unit | waits on |",
     "| --- | --- |",
     ...blockedRows,
     "",
@@ -12553,12 +12553,15 @@ export function unitsStillOpenLine(projectDir: string): string | null {
 // Generation reopened to change the Unit plan): its own step runs, whatever
 // the team's claims; the dispatcher board holds main again from the block on.
 // Only the checkout that went back runs it, the one whose own audit shard
-// holds that jump (`Unit Work: kept`, aidlc-jump.ts): a teammate's clone that
-// pulls main mid-replan came for a Unit, so it keeps the board.
+// holds that jump (`Unit Work: kept` on a jump to before the block,
+// aidlc-jump.ts; a kept move on past the block is not one): a teammate's clone
+// that pulls main mid-replan came for a Unit, so it keeps the board.
 function beforeTeamUnitWork(projectDir: string, stateContent: string): boolean {
-  return beforePerUnitBlock(loadGraph(), getField(stateContent, "Current Stage")?.trim() ?? "") &&
+  const graph = loadGraph();
+  return beforePerUnitBlock(graph, getField(stateContent, "Current Stage")?.trim() ?? "") &&
     ownShardRows(projectDir).mine.some((row) =>
-      row.event === "STAGE_JUMPED" && auditBlockField(row.block, "Unit Work") === "kept"
+      row.event === "STAGE_JUMPED" && auditBlockField(row.block, "Unit Work") === "kept" &&
+      beforePerUnitBlock(graph, auditBlockField(row.block, "Target") ?? "")
     );
 }
 
@@ -13660,7 +13663,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     // into the named command so the documented export surface reaches the tool
     // through the real routing path, not just a direct invocation.
     const extra = flags.readOnlyArgs && flags.readOnlyArgs.length > 0
-      ? ` ${flags.readOnlyArgs.join(" ")}`
+      ? ` ${flags.readOnlyArgs.map((arg) => quoteCommandArgument(arg)).join(" ")}`
       : "";
     const readOnly = "This is a read-only utility, NOT workflow work: do NOT run `next` and do NOT advance, resume, or run any workflow stage.";
     // Here the project's pin launched this engine, and `aidlc version` would
@@ -20043,7 +20046,7 @@ function teamRedoNarrowed(
   stateContent: string,
   targetSlug: string,
   fromThem = false,
-): { held: boolean; directive: PrintDirective | ErrorDirective } | null {
+): { held: boolean; directive: PrintDirective } | null {
   if (!isTeamUnitOwnership(stateContent) || readApplicableTeamUnitScopeStamp(projectDir, stateContent)) return null;
   const block = constructionUnitMajorBlock(scope, stateContent, true).map((stage) => stage.slug);
   if (!block.includes(targetSlug)) return null;
@@ -20080,7 +20083,8 @@ function teamRedoNarrowed(
   const why = and([...groups].map(([what, names]) => `${and(names)} ${names.length === 1 ? "is" : "are"} ${what}`));
   const name = nodeForSlug(targetSlug)?.name || targetSlug;
   if (here.length === 0) {
-    return { held: false, directive: errorDirective(`${name} is not redone for every unit once a team has taken a unit: ${why}.`) };
+    const said = `${name} is not redone for every unit once a team has taken a unit: ${why}.`;
+    return { held: false, directive: turnEndingPrint(`Run nothing. Tell the person in one line: "${said}"`) };
   }
   const line = `Redoing ${name} for unit${here.length === 1 ? "" : "s"} ${and(here)}. ${why}, so ` +
     `${left.length === 1 ? "it is" : "they are"} not redone here.`;
@@ -20108,7 +20112,9 @@ function finishedUnitNotRedoneHere(
   unit: string,
 ): Directive | null {
   if (narrowed === null || narrowed.held || !completedUnits(stateContent).has(unit)) return null;
-  return errorDirective(`${unit} is finished, so it is not redone here; this checkout builds no Unit now.`);
+  return turnEndingPrint(
+    `Run nothing. Tell the person in one line: "${unit} is finished, so it is not redone here; this checkout builds no Unit now."`,
+  );
 }
 
 // A move to a stage or phase in a checkout that claimed a Unit (`next --stage`,
@@ -23863,12 +23869,15 @@ function emitTypedResumeChoice(
   // "... and stop there": the move is made, then the workflow is parked in
   // place of the `next` that would carry on with it. --park says the person
   // asked for that; without it, the conductor still reads their words for it.
+  // A print that ends the turn moved nothing, so it goes as it is.
   const stopThere = `${flags.park === true
     ? " The person also asked to stop there for now: make"
     : " If the person also asked to stop there for now, make"} the move, following each print up to where it says ` +
     `to re-run \`next\`, then run \`${aidlcToolInvocation("orchestrate")} park --person-asked\` in place of that \`next\` and act on its \`parked\` directive.`;
   const move = (directive: PrintDirective | ErrorDirective): PrintDirective | ErrorDirective =>
-    directive.kind === "print" ? jumpStepPrint(`${directive.message}${stopThere}`, namedJumps.get(directive)) : directive;
+    directive.kind === "print" && !turnEndingPrints.has(directive)
+      ? jumpStepPrint(`${directive.message}${stopThere}`, namedJumps.get(directive))
+      : directive;
   if (choice === "resume") {
     emit(move(printDirective(
       `Resume choice accepted at "${slug}". Re-run \`next\` to continue from the last checkpoint.`,

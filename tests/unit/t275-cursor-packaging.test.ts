@@ -300,7 +300,6 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       "bun .cursor/tools/aidlc.ts doctor",
       "bun .cursor/tools/aidlc.ts version",
       "bun .cursor/tools/aidlc.ts --doctor",
-      "bun .cursor/tools/aidlc.ts status",
       // The utility spellings agents also use, and config's own help.
       "bun .cursor/tools/aidlc.ts --status",
       "bun .cursor/tools/aidlc.ts --version",
@@ -380,7 +379,6 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       "aidlc engine orchestrate next",
       "aidlc doctor",
       "aidlc --doctor",
-      "aidlc status",
       "aidlc --status",
       "aidlc version",
       "aidlc --version",

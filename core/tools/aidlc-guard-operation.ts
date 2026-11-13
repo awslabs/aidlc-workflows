@@ -1,9 +1,19 @@
 import { isSwitchableGuardFence, type SwitchableGuardFence } from "./aidlc-guard-fences.ts";
 import {
   aidlcInvocation,
+  aidlcToolInvocation,
   quoteCommandArgument,
   runtimeHarnessDir,
 } from "./aidlc-runtime-paths.ts";
+
+// The step a Construction policy refusal names. Built when said, so it names
+// the state tool of the tree the refusal runs in.
+export function constructionPolicyRecovery(): string {
+  return `When the person asks for this Construction change, run ${aidlcToolInvocation("state")} set-construction-checkpoints, ` +
+    "set-construction-execution, or set-construction-iteration with the value they asked for and --message <id>, " +
+    "the id of the message they asked in, then say its notice line to them. Do not ask them to confirm it, and " +
+    "never change it on your own.";
+}
 
 // These are domain operations, not shell programs. Owning commands retain their
 // own checks; rendering an operation does not authenticate human selection.

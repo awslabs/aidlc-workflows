@@ -775,14 +775,14 @@ describe("t114 plugin terminal routing", () => {
     expect(out).not.toContain('"kind":"ask"');
   });
 
-  test("missing and unknown plugin verbs are deterministic errors", () => {
+  test("a plugin verb missing goes to plugin help, an unknown one is a deterministic error", () => {
     proj = createOrchestrationTestProject();
     const missing = runNext(proj, ["plugin"]).out;
     const unknown = runNext(proj, ["plugin", "remove"]).out;
-    expect(missing).toContain('"kind":"error"');
-    expect(missing).toContain("missing verb for noun 'plugin'");
+    expect(missing).toContain('"kind":"print"');
+    expect(missing).toContain("engine plugin help");
     expect(unknown).toContain('"kind":"error"');
-    expect(unknown).toContain("unknown verb 'remove' for noun 'plugin'");
+    expect(unknown).toContain("`/aidlc plugin remove` is not a plugin command; the plugin commands are select, list, sync, validate and build");
     expect(`${missing}${unknown}`).not.toContain('"kind":"ask"');
   });
 });
@@ -840,7 +840,9 @@ describe("t114 knowledge (DocumentKB) terminal routing", () => {
     expect(missing).toContain('"kind":"error"');
     expect(missing).toContain("missing verb for noun 'knowledge'");
     expect(unknown).toContain('"kind":"error"');
-    expect(unknown).toContain("unknown verb 'remove' for noun 'knowledge'");
+    expect(unknown).toContain(
+      "`/aidlc knowledge remove` is not a knowledge command; the knowledge commands are onboard, sync, list, show, associate, dissociate, rebind and summarize",
+    );
     // Not an ask: `knowledge remove` must not offer to create an intent.
     expect(`${missing}${unknown}`).not.toContain('"kind":"ask"');
   });

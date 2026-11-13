@@ -1101,7 +1101,7 @@ describe("t294 runtime diagnostics", () => {
     // A file written before this release: workspace-sync adds the key.
     const older = check(workspace());
     expect(older).toEqual(expect.objectContaining({ pass: false, severity: "warn" }));
-    expect(older?.fix).toContain("run aidlc system workspace-sync");
+    expect(older?.fix).toContain("run bun .aidlc/tools/aidlc.ts system workspace-sync");
     // A settings object without the key is the team's choice.
     expect(check(workspace({ "editor.tabSize": 2 }))?.pass).toBe(true);
     // A settings member that is not an object is broken, never the team's choice.
@@ -7013,7 +7013,7 @@ process.exit(0);
       "Unmet: provider-claude-project-override - Claude settings still carry the legacy AI-DLC Bedrock defaults",
     );
     expect(show.stdout).toContain(
-      "fix: Run aidlc config providers again to reapply the recorded answer",
+      "fix: Run bun .claude/tools/aidlc.ts config providers again to reapply the recorded answer",
     );
     expect(show.stdout).toContain("Region: not managed by AI-DLC");
     expect(show.stdout).toContain("Profile: not managed by AI-DLC");
@@ -7740,7 +7740,7 @@ process.exit(0);
     expect(runtimeHuman.stdout).not.toContain(runtimeFiles[5]);
     expect(runtimeHuman.stdout).toContain(
       `... and ${runtimeFiles.length - 5} more ` +
-        "(aidlc config runtime --show --json lists all)",
+        "(bun .claude/tools/aidlc.ts config runtime --show --json lists all)",
     );
 
     const dataPath = join(project, ".claude", "tools", "data", "harness.json");
@@ -7858,7 +7858,7 @@ process.exit(0);
     expect(human.stdout).not.toContain(files[5]);
     expect(human.stdout).toContain(
       `... and ${files.length - 5} more ` +
-        "(aidlc config trust --show --json lists all)",
+        "(bun .kiro/tools/aidlc.ts config trust --show --json lists all)",
     );
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 

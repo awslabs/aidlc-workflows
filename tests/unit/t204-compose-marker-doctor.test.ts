@@ -160,7 +160,7 @@ describe("t204 doctor transient-marker probes", () => {
     expect(out).toMatch(
       /fail\s+Background-subagent ledger present \(.*0 fresh, 1 stale/,
     );
-    expect(out).toContain("delete it at your own terminal ('rm aidlc/.aidlc-engine/sessions/subagent-inflight.json')");
+    expect(out).toContain("delete aidlc/.aidlc-engine/sessions/subagent-inflight.json yourself.");
     expect(status).toBe(1);
     expect(existsSync(marker)).toBe(true);
   });

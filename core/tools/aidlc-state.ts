@@ -1,7 +1,8 @@
+import { constructionPolicyRecovery } from "./aidlc-guard-operation.ts";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
 import { CHECKPOINT_GLOSS } from "./aidlc-guard-fences.ts";
-import { git, isGitRepo } from "./aidlc-git.ts";
+import { git, inProject, isGitRepo, projectInRepo } from "./aidlc-git.ts";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -56,7 +57,6 @@ import {
   VERIFICATION_COMMAND_CHECKPOINT,
   verificationCommandRecovery,
   constructionPolicyReceipt,
-  CONSTRUCTION_POLICY_RECOVERY,
   swarmNeedsStageMajor,
   leftOutLine,
   isPersonAskedSkipReason,
@@ -1025,10 +1025,10 @@ export function main(argv: string[]): void {
     } else {
       exitWithError(
         `Stage status cannot be changed with aidlc-state.ts ${subcommand} because that bypasses ` +
-          "the workflow's completion and approval checks. Use aidlc-orchestrate.ts report " +
+          `the workflow's completion and approval checks. Use ${aidlcToolInvocation("orchestrate")} report ` +
           "--stage <slug> --result " +
           "<awaiting-approval|approved|rejected|revised|completed|skipped>; use " +
-          "aidlc-orchestrate.ts park to pause, and next/jump to move through the workflow. " +
+          `${aidlcToolInvocation("orchestrate")} park to pause, and next/jump to move through the workflow. ` +
           // The way out is named here, so the human is not told to go and find it.
           fenceSwitchSentence(pd, "state-transition"),
       );
@@ -1296,7 +1296,7 @@ function handleSet(args: string[]): void {
         setter = 'set-construction-verification-command --command-file verification-command.txt';
         break;
     }
-    if (setter) error(`${field} cannot be changed with aidlc-state.ts set. Use aidlc-state.ts ${setter}.`);
+    if (setter) error(`${field} cannot be changed with aidlc-state.ts set. Use ${aidlcToolInvocation("state")} ${setter}.`);
   }
   const pd = resolveProjectDir(projectDir);
   // C2b lost-update safety: hold the audit lock across read→decide→write so
@@ -1521,7 +1521,7 @@ function requireHumanConstructionPolicyChange(
   // An unattended run never changes it on its own, whatever presence bypass is
   // in force: only a choice the person recorded earlier counts there.
   if (process.env.AIDLC_UNATTENDED === "1" && receipt === null) {
-    error(`An unattended run does not change ${field}: it changes when the person asks for it. ` + CONSTRUCTION_POLICY_RECOVERY);
+    error(`An unattended run does not change ${field}: it changes when the person asks for it. ` + constructionPolicyRecovery());
   }
   if (humanPresenceGuardDisabled()) return null;
   if (receipt !== null) {
@@ -1531,7 +1531,7 @@ function requireHumanConstructionPolicyChange(
   if (message === undefined) {
     error(
       requestMessageStep(pd, `No message of the person's that asks to change ${field} is named. Change it only ` +
-        "when they ask for it, never to clear a refusal or on your own.", "setting") + ` ${CONSTRUCTION_POLICY_RECOVERY}`,
+        "when they ask for it, never to clear a refusal or on your own.", "setting") + ` ${constructionPolicyRecovery()}`,
     );
   }
   const proof = proveMessage(pd, message, "setting", { request: true, lowers: field === "Construction Checkpoints" && value === "disabled" });
@@ -1855,7 +1855,7 @@ function handleSetUnitGateRhythm(args: string[]): void {
     if (!isTeamUnitOwnership(content)) {
       error(
         "Unit gate rhythm requires Unit Ownership: team. " +
-          "Run aidlc-state.ts set-unit-ownership team first.",
+          `Run ${aidlcToolInvocation("state")} set-unit-ownership team first.`,
       );
     }
     const current = readUnitGateRhythm(content);
@@ -2873,7 +2873,7 @@ function handleUnit(args: string[]): void {
         `Refusing unit ${action} for "${unit}" of "${slug}": a wave is active for this stage ` +
           "(the orchestration engine currently routes it as a batch). " +
           "A wave has no single active unit - every entry settles through " +
-          `\`aidlc-state.ts unit complete --wave --stage ${slug} --unit <name>\`. A bare ` +
+          `\`${aidlcToolInvocation("state")} unit complete --wave --stage ${slug} --unit <name>\`. A bare ` +
           `\`${action}\` would append a serial receipt and ` +
           "drop the deterministic batch path for every remaining unit of the stage. " +
           "Use `unit complete --wave` instead.",
@@ -2897,7 +2897,7 @@ function handleUnit(args: string[]): void {
         error(
           `Refusing to start unit "${unit}" for "${slug}": unit "${blocking.unit}" is ${blocking.state}` +
             `${blocking.reason ? ` (reason: ${blocking.reason})` : ""}. ` +
-            `${blocking.state === "paused" ? `Resume it (aidlc-state.ts unit resume --stage ${slug} --unit ${blocking.unit}) or complete it first.` : "Complete it first."} ` +
+            `${blocking.state === "paused" ? `Resume it (${aidlcToolInvocation("state")} unit resume --stage ${slug} --unit ${blocking.unit}) or complete it first.` : "Complete it first."} ` +
             "One active unit at a time.",
         );
       }
@@ -2951,7 +2951,7 @@ function handleUnit(args: string[]): void {
         error(
           `Refusing to complete unit "${unit}" for "${slug}": it is paused` +
             `${checkpoint.reason ? ` (reason: ${checkpoint.reason})` : ""}. Resume it first ` +
-            `(aidlc-state.ts unit resume --stage ${slug} --unit ${unit}); a paused unit's work is not done.`,
+            `(${aidlcToolInvocation("state")} unit resume --stage ${slug} --unit ${unit}); a paused unit's work is not done.`,
         );
       }
     } else if (action === "resume") {
@@ -3146,7 +3146,7 @@ function requireEngineRoutedUnit(
         : `a ${String(routed.kind ?? "non-run-stage")} directive`;
     error(
       `Refusing to start unit "${unit}" for "${stage}": the engine currently routes ${expected}. ` +
-        "Run the exact directive.stage/directive.unit pair returned by aidlc-orchestrate.ts next.",
+        `Run the exact directive.stage/directive.unit pair returned by ${aidlcToolInvocation("orchestrate")} next.`,
     );
   }
 }
@@ -4338,7 +4338,7 @@ function enforceBlockingGateSensors(
       refuse(
         `Refusing blocking sensor override for ${where}: no fresh authorization receipt ` +
           `proves that "${BLOCKING_SENSOR_OVERRIDE_CHOICE}" was offered and selected after ` +
-          "a HUMAN_TURN. Record the decision and exact answer through aidlc-log.ts, then retry.",
+          `a HUMAN_TURN. Record the decision and exact answer through ${aidlcToolInvocation("log")}, then retry.`,
       );
     }
     return;
@@ -4721,17 +4721,14 @@ function linkedWorktrees(dir: string, outside: boolean): string[] {
 function nestedCheckouts(root: string): string[] {
   const starts: string[] = [];
   const listed = git(root, ["status", "--porcelain", "-z", "--ignored", "--untracked-files=normal", "--", "."]);
-  const prefix = listed === null ? null : git(root, ["rev-parse", "--show-prefix"]);
-  if (listed !== null && prefix !== null) {
+  const at = listed === null ? null : projectInRepo(root);
+  if (listed !== null && at !== null) {
     // Porcelain paths are relative to the repository's top, which is above the
     // project when it is a folder of a larger repo.
-    const under = prefix.trim();
     for (const entry of listed.split("\0")) {
       if (!entry.startsWith("?? ") && !entry.startsWith("!! ")) continue;
-      const path = entry.slice(3);
-      if (path.endsWith("/") && path.startsWith(under) && path.length > under.length) {
-        starts.push(path.slice(under.length, -1));
-      }
+      const path = inProject(at.prefix, entry.slice(3));
+      if (path?.endsWith("/")) starts.push(path.slice(0, -1));
     }
   } else {
     try {
@@ -5479,7 +5476,7 @@ function verifyReviewerPrecondition(
     const message =
       `${reviewerPreconditionPrefix(stage.slug, action)} because the recorded review${scope} ` +
       "could not be verified and the review must be run again. Retry the pending " +
-      `request with \`aidlc-log.ts review --stage ${stage.slug}${unitFlag} --reviewer ` +
+      `request with \`${aidlcToolInvocation("log")} review --stage ${stage.slug}${unitFlag} --reviewer ` +
       `${reviewer} --iteration ${iteration} --retry-pending\`, then record the verdict ` +
       "with the same command plus `--verdict <READY|NOT-READY>`.";
     refuseStateGuard(pd, content, stage, {
@@ -5740,7 +5737,7 @@ function verifyReviewerPrecondition(
         const retry =
           pending?.state === "retry-required" ? " --retry-pending" : "";
         return [
-          `\`aidlc-log.ts review --stage ${stage.slug} --unit ${unit} ` +
+          `\`${aidlcToolInvocation("log")} review --stage ${stage.slug} --unit ${unit} ` +
             `--reviewer ${reviewer} --iteration ${iteration}${retry}\``,
         ];
       });
@@ -5782,7 +5779,7 @@ function verifyReviewerPrecondition(
     if (recoveryAvailable.length > 0) {
       guidance.push(
         `For invalidated units with recovery available (${recoveryAvailable.join(", ")}), ` +
-          `run \`aidlc-log.ts review --stage ${stage.slug} --unit <unit> --reviewer ` +
+          `run \`${aidlcToolInvocation("log")} review --stage ${stage.slug} --unit <unit> --reviewer ` +
           `${reviewer} --iteration <next ordinal>\`, then record the verdict with ` +
           `the same command plus \`--verdict <READY|NOT-READY>\` and stop editing ` +
           `this stage's output documents, that unit's source-manifest.json, and `
@@ -5809,7 +5806,7 @@ function verifyReviewerPrecondition(
     if (neverReviewed.length > 0) {
       guidance.push(
         `For never-reviewed units (${neverReviewed.join(", ")}), run the normal ` +
-          `\`aidlc-log.ts review --stage ${stage.slug} --unit <unit> --reviewer ` +
+          `\`${aidlcToolInvocation("log")} review --stage ${stage.slug} --unit <unit> --reviewer ` +
           `${reviewer} --iteration <next ordinal>\` request and record its verdict.`,
       );
     }
@@ -6107,7 +6104,7 @@ function staleReviewPreconditionError(
   const message =
     `${reviewerPreconditionPrefix(slug, action)} because an output document changed after ` +
       `${reviewer} reviewed it.${written} ${syncFolderClause(pd)}Run ` +
-      `one recovery review pass with \`aidlc-log.ts review --stage ${slug} ` +
+      `one recovery review pass with \`${aidlcToolInvocation("log")} review --stage ${slug} ` +
       `--reviewer ${reviewer} --iteration <next ordinal>\`, then record the verdict ` +
       `with the same command plus \`--verdict <READY|NOT-READY>\`. After that ` +
       `review, stop editing this stage's output documents. If the recovery pass was already ` +
@@ -6149,7 +6146,7 @@ function reviewerPreconditionError(
     const message =
       `${reviewerPreconditionPrefix(slug, action)} because the review request is still ` +
       "waiting for a verifiable recorded result. Run " +
-      `\`aidlc-log.ts review --stage ${slug} --reviewer ${reviewer} --iteration ` +
+      `\`${aidlcToolInvocation("log")} review --stage ${slug} --reviewer ${reviewer} --iteration ` +
       `${pending.iteration} --retry-pending\`, then record the verdict with the same ` +
       "command plus `--verdict <READY|NOT-READY>`.";
     refuseStateGuard(pd, content, stage, {
@@ -6166,7 +6163,7 @@ function reviewerPreconditionError(
     const message =
       `Cannot present "${slug}" for approval because ${reviewer} has not reviewed the ` +
         `current output. Apply any fixes first, then request the review with ` +
-        `\`aidlc-log.ts review --stage ${slug} --reviewer ${reviewer} --iteration ` +
+        `\`${aidlcToolInvocation("log")} review --stage ${slug} --reviewer ${reviewer} --iteration ` +
         `${ordinal}\` and record its verdict with the same command plus ` +
         `\`--verdict <READY|NOT-READY>\`. After recording the verdict, do not edit ` +
         `this stage's output documents; include suggestions from a READY review in the ` +
@@ -6181,7 +6178,7 @@ function reviewerPreconditionError(
   }
   const message =
     `Cannot complete "${slug}" because ${reviewer} has not reviewed the current output. ` +
-      `Apply any fixes first, then request the review with \`aidlc-log.ts review --stage ` +
+      `Apply any fixes first, then request the review with \`${aidlcToolInvocation("log")} review --stage ` +
       `${slug} --reviewer ${reviewer} --iteration ${ordinal}\` and record its verdict ` +
       `with the same command plus \`--verdict <READY|NOT-READY>\`. After recording the ` +
       `verdict, do not edit this stage's output documents; include suggestions from a ` +
@@ -10498,13 +10495,12 @@ function handleFork(args: string[]): void {
     const sha = sha256(mainContent);
 
     // Dedup BEFORE emit: if the slug is already in Bolt Refs, fail without
-    // emitting a phantom audit row. Recovery from a stale ref entry is the
-    // caller's responsibility (see SKILL.md Step 0.6 recovery seam — discard
-    // + re-fork is supported because the next fork sees the slug already
-    // present and exits without poisoning audit).
+    // emitting a phantom audit row. Neither merge nor worktree discard clears
+    // a stale entry (merge needs the slug's worktree), so the line names the
+    // hand edit only.
     const currentRefs = getField(mainContent, "Bolt Refs") ?? "";
     if (parseRefsList(currentRefs).includes(slug)) {
-      errorWithSlug(slug, `slug already in Bolt Refs (current: ${currentRefs.trim()}). If a prior fork failed mid-operation, run 'aidlc-worktree discard --slug ${slug}' and 'aidlc-state.ts merge --slug ${slug}' (which will exit "already merged" cleanly) or remove the stale entry from main state, then retry.`);
+      errorWithSlug(slug, `slug already in Bolt Refs (current: ${currentRefs.trim()}). If a prior fork failed mid-operation, remove the stale entry from main state, then retry.`);
     }
 
     // Append slug to main's Bolt Refs first (the side effect that "registers"

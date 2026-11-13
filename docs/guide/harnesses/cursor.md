@@ -146,7 +146,7 @@ utility shortcuts are `/aidlc-status`, `/aidlc-jump --stage <slug>` (or
   `aidlc/` or AIDLC's own files under `.cursor/` (its hooks, tools, skills,
   agents, and `aidlc` rules); your own Cursor configuration, such as
   `.cursor/mcp.json`, is fine, and so are reads and
-  `bun .cursor/tools/aidlc.ts status`. Its stops get no forwarding nudge, its prompts never count as a
+  `bun .cursor/tools/aidlc.ts engine status`. Its stops get no forwarding nudge, its prompts never count as a
   human turn, and its session end is not recorded. Nothing is blocked: the
   note is the only guard, so an agent that ignores it could still move the
   workflow, as a second session could on any harness. Cursor flags a

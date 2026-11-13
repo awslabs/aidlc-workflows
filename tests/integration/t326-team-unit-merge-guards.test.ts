@@ -605,14 +605,14 @@ describe("t326 pinned team Unit merge", () => {
     const approvedRepin = runMergeTool(UNIT, ["pin", "alpha"], seed);
     expect(approvedRepin.status).not.toBe(0);
     expect(approvedRepin.out).toContain(
-      "recover it with aidlc unit land alpha",
+      "recover it with bun .claude/tools/aidlc.ts unit land alpha",
     );
     const landed = runMergeTool(UNIT, ["land", "alpha", "--step", "git"], seed);
     expect(landed.status, landed.out).toBe(0);
     const mergeOid = JSON.parse(landed.stdout).git_commit_oid;
     const repin = runMergeTool(UNIT, ["pin", "alpha"], seed);
     expect(repin.status).not.toBe(0);
-    expect(repin.out).toContain("recover it with aidlc unit land alpha");
+    expect(repin.out).toContain("recover it with bun .claude/tools/aidlc.ts unit land alpha");
     const lost = JSON.parse(readFileSync(journalPath, "utf-8"));
     lost.status = "approved";
     delete lost.git_commit_oid;

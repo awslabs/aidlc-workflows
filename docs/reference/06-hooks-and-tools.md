@@ -586,7 +586,10 @@ shared default. A pinned dispatch waits 30 seconds to reserve its release,
 because hooks make one on every tool call; other machine reservations, such as
 install and pin, keep the five-minute default. The dispatch checks the
 release's integrity once, under the machine lock as the reservation lands (or
-just before it runs unreserved). A launched release that includes this change
+just before it runs unreserved), and in full once per session: a later call of
+the same chat in the same session process runs every check but the hashing
+(`aidlc/.aidlc-engine/sessions/pids/<pid>.release-check`, see the architecture
+reference). A launched release that includes this change
 does not check itself again; an older pinned release still does. The
 environment controls are:
 

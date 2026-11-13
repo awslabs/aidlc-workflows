@@ -387,8 +387,13 @@ export function quoteCommandArgument(
   // PowerShell reads a bare word that starts with "@" as splatting a variable.
   if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value) && !(shell !== "posix" && value.startsWith("@"))) return value;
   // The two shells quote an apostrophe differently, so it is double-quoted
-  // when both read that alike.
-  if (shell === "windows" && POWERSHELL_SINGLE_QUOTE.test(value) && readsAlikeInDoubleQuotes(value)) return `"${value}"`;
+  // when both read that alike. Inside double quotes Git Bash reads a backslash
+  // as itself, as PowerShell does, unless another backslash or the closing
+  // quote follows it, so a Windows path's own backslashes pass.
+  if (
+    shell === "windows" && POWERSHELL_SINGLE_QUOTE.test(value) && !/\\(?:\\|$)/.test(value) &&
+    readsAlikeInDoubleQuotes(value.replaceAll("\\", ""))
+  ) return `"${value}"`;
   return shell !== "posix"
     ? `'${value.replaceAll(new RegExp(POWERSHELL_SINGLE_QUOTE.source, "g"), "$&$&")}'`
     : `'${value.replaceAll("'", "'\"'\"'")}'`;

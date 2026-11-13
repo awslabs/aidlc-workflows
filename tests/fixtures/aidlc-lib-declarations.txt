@@ -85,7 +85,6 @@ CONDUCTOR_SUMMARY_FIELD
 CONFIGURATION_STEP
 CONFIG_KEYS
 CONSTRUCTION_POLICY_CHECKPOINT
-CONSTRUCTION_POLICY_RECOVERY
 CONSTRUCTION_STAFFING_ASK
 CREATION_RECEIPT_FILE
 CURRENT_FINGERPRINTS
@@ -867,7 +866,6 @@ gateRejectionMatchesAttempt
 gateWordsDir
 gateWordsPath
 gateWordsSinceUnitReview
-gcSessionPidEntries
 generatedRunnerSkill
 gitAlternateEntry
 gitCommitSourceListing
