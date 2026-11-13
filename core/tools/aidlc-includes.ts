@@ -11,6 +11,7 @@
 //     kiroIdeSteering below).
 //   - opencode: the `instructions` glob in the project-root opencode.json.
 //   - Cursor: standing + phase read pointers in <harness>/rules/*.mdc.
+//   - Antigravity: standing + phase read pointers in <harness>/rules/*.md.
 //   - Copilot: @-import lines in AI-DLC's part of the root AGENTS.md.
 //   - Codex has no include: the engine hands each step its rules.
 //

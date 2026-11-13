@@ -1,0 +1,54 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": "bun hooks/aidlc-antigravity-adapter.ts session-start",
+        "timeout": 30
+      }
+    ],
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "bun hooks/aidlc-antigravity-adapter.ts mint",
+        "timeout": 30
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun hooks/aidlc-antigravity-adapter.ts guards",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun hooks/aidlc-antigravity-adapter.ts audit-and-sensors",
+            "timeout": 30
+          },
+          {
+            "type": "command",
+            "command": "bun hooks/aidlc-antigravity-adapter.ts runtime-compile",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": "bun hooks/aidlc-antigravity-adapter.ts stop",
+        "timeout": 30
+      }
+    ]
+  }
+}

@@ -440,6 +440,12 @@ If `directive.reviewer` is present, invoke the reviewer as a sub-agent (via the 
 
 ---
 
+### Antigravity
+
+If `directive.reviewer` is present, invoke the reviewer as a sub-agent (via the `invoke_subagent` tool targeting the reviewer agent).
+
+---
+
 ### opencode
 
 If `directive.reviewer` is present, invoke the reviewer as a sub-agent (via the `task` tool targeting the reviewer agent).

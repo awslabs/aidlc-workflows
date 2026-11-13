@@ -10,6 +10,7 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 // tests/harness/harness-matrix.ts checks every harness has an entry and that
 // its manifest ships each file.
 export const CONDUCTOR_SKILL_FILES = {
+  antigravity: ["SKILL.md"],
   claude: ["SKILL.md"],
   codex: ["SKILL.md"],
   copilot: ["SKILL.md"],

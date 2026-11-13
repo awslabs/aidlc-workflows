@@ -161,6 +161,8 @@ export function providerMenuCopy(
       return { bedrock: "record the manual Copilot BYOK provider setup" };
     case "cursor":
       return { bedrock: "record the manual Cursor provider setup" };
+    case "antigravity":
+      return { bedrock: "record the manual Antigravity provider setup" };
   }
 }
 export type ProviderPendingStatus = "pending" | "done";
@@ -354,6 +356,7 @@ const PENDING_ACTION_IDS = [
   "kiro-ide-chat-model",
   "copilot-byok-configuration",
   "cursor-provider-configuration",
+  "antigravity-provider-configuration",
   "non-bedrock-provider-configuration",
 ] as const;
 export type ProviderPendingActionId = (typeof PENDING_ACTION_IDS)[number];
@@ -394,6 +397,12 @@ export const PROVIDER_PENDING_ACTIONS: Record<
       "Configure the provider in Cursor and select it for the active chat session.",
     remediation:
       "Configure the provider in Cursor settings and select the intended model in the session model picker.",
+  },
+  "antigravity-provider-configuration": {
+    label:
+      "Configure the provider in Antigravity and select it for the active chat session.",
+    remediation:
+      "Configure the provider in Antigravity settings and select the intended model in the session model picker.",
   },
   "non-bedrock-provider-configuration": {
     label:
@@ -579,6 +588,7 @@ export function readConfigDiagnosticRecords(harnessRoot: string): ConfigDiagnost
   }
   const distribution = value.distribution;
   if (
+    distribution !== "antigravity" &&
     distribution !== "claude" &&
     distribution !== "codex" &&
     distribution !== "copilot" &&
@@ -923,6 +933,11 @@ const HARNESS_CLI: Record<
     command: "cursor",
     required: false,
     install: "Install the Cursor CLI and ensure `cursor --version` works; IDE-only installs may omit it.",
+  },
+  antigravity: {
+    command: "agy",
+    required: false,
+    install: "Install the Antigravity CLI and ensure `agy --version` works; IDE-only installs may omit it.",
   },
   // The 2.x line is where the hooks, skills and workspace default agent this
   // distribution relies on shipped; the guide asks for 2.6 or later.
@@ -1289,6 +1304,7 @@ export function requiredProviderActions(
   if (harness === "codex") actions.push("codex-provider-configuration");
   if (harness === "copilot") actions.push("copilot-byok-configuration");
   if (harness === "cursor") actions.push("cursor-provider-configuration");
+  if (harness === "antigravity") actions.push("antigravity-provider-configuration");
   return actions;
 }
 
@@ -1306,6 +1322,7 @@ export function reconcileProviderActions(
       id === "codex-provider-configuration" ||
       id === "copilot-byok-configuration" ||
       id === "cursor-provider-configuration" ||
+      id === "antigravity-provider-configuration" ||
       id === "non-bedrock-provider-configuration";
     // Only an explicit acknowledgement of this mutation can complete a newly
     // required action; a stored generic acknowledgement is not sufficient.
@@ -3035,6 +3052,11 @@ export function trustFilesForHarness(
     files.push(
       join(projectDir, harnessDir, "hooks.json"),
       join(projectDir, harnessDir, "cli.json"),
+    );
+  }
+  if (harness === "antigravity") {
+    files.push(
+      join(projectDir, harnessDir, "hooks.json"),
     );
   }
   if (harness === "copilot") {
