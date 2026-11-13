@@ -64,7 +64,7 @@ const HARD_AIDLC_LEFT: Readonly<Record<string, number>> = {
   "aidlc.ts": 13,
 };
 // Bare tool commands still in the protocol modules' prose.
-const PROTOCOL_BARE_LEFT = 35;
+const PROTOCOL_BARE_LEFT = 27;
 
 function literals(file: string, text: string): string[] {
   const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
