@@ -115,7 +115,7 @@ then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
 
 ```bash
 mkdir -p your-project/.kiro your-project/aidlc
-# Safe on fresh installs; required when upgrading from v2.5.56 or earlier.
+# Safe on fresh installs; required over an install from v2.5.56 or earlier.
 for retired_hook in \
   audit-logger block mint runtime-compile stop sync-statusline \
   enforce-approval-gate plan-approval-guard review-freeze state-transition-guard \
@@ -139,7 +139,32 @@ cp -R "$RUNTIME_ROOT/kiro-ide/aidlc/." your-project/aidlc/     # the workspace s
 cd your-project && bun .kiro/tools/aidlc.ts config --from "$RUNTIME_ROOT" --harness kiro
 ```
 
-The first removal loop is the v2.5.57 hook-name migration. The second removes
+To move a project set up this way to a newer release, do not run the block
+again: its copy replaces `.kiro/tools/data/harness.json`, where the project
+keeps its plugin choices and setup answers, and your changes to the files it
+copies, without saying it reset them. Set `RUNTIME_ROOT` to the newer
+release's extracted `runtime/` directory and run only the setup command, from
+the project folder:
+
+```bash
+bun .kiro/tools/aidlc.ts config --from "$RUNTIME_ROOT"
+```
+
+It brings the project's AI-DLC files to that release and keeps the plugin
+choices and setup answers. It removes the AI-DLC files that release no longer
+ships and names them, so the removals in the copy block are not needed; if a
+change you made to an AI-DLC file conflicts with the refresh, it changes
+nothing and names the file. With no `--harness` it refreshes the one harness
+the project has; in a project that also has another harness, such as Claude
+Code's, it changes nothing and asks for one: add `--harness kiro-ide`, which
+releases before 2.11.4 also read as Kiro. This needs a project whose
+setup command ran on AI-DLC 2.11.0 or later; on 2.11.0, answer `y` if it asks
+to initialize the project, then run it once more, so that the newer release's
+own tool checks the setup. A project copied from an earlier release, or one
+whose setup command never ran, runs the whole block; that copy turns every
+plugin back on, so turn off again any you had turned off.
+
+In the copy block, the first removal loop is the v2.5.57 hook-name migration. The second removes
 Kiro CLI-format agent JSON shipped by older distributions and the IDE 0.x
 `.kiro.hook` registrations, which Kiro IDE 1.x never executes. An overlay copy
 cannot delete retired files. The copy also replaces `.kiro/settings/cli.json`,
@@ -150,10 +175,10 @@ than overwrite a copy that differs from the shipped one, and `--force` replaces
 it. Keep your own Kiro CLI settings in the user-level `~/.kiro/settings/cli.json`
 instead: Kiro CLI reads that file too, and the project file wins only for the
 keys it sets.
-If the project kept settings in `.kiro/settings/cli.json`, the block above saves
+If the project kept settings in `.kiro/settings/cli.json`, the copy block saves
 them as `cli.json.before-aidlc` so you can move them there; a copy saved by an
 earlier run is kept, so running the block again never writes over it. Each run
-puts AI-DLC's `.kiro/settings/cli.json` back, so make later changes in the
+of the block puts AI-DLC's `.kiro/settings/cli.json` back, so make later changes in the
 user-level file. Both removals are
 no-ops on a fresh install. After that cleanup, the
 `cp -R <src>/. <dst>/` form copies the tree **contents** whether
@@ -987,11 +1012,36 @@ cp -R "$RUNTIME_ROOT/kiro/aidlc/." your-project/aidlc/    # the workspace shell 
 cd your-project && bun .kiro/tools/aidlc.ts config --from "$RUNTIME_ROOT" --harness kiro-v2
 ```
 
-The copy replaces `.kiro/settings/cli.json`, which sets `chat.defaultAgent` to
-`aidlc`, and each run puts AI-DLC's file back. Keep your own Kiro CLI settings
+To move a project set up this way to a newer release, do not run the block
+again: its copy replaces `.kiro/tools/data/harness.json`, where the project
+keeps its plugin choices and setup answers, and your changes to the files it
+copies, without saying it reset them; at a terminal the setup then asks the
+Models question again. Set `RUNTIME_ROOT` to the newer release's extracted
+`runtime/` directory and run only the setup command, from the project folder:
+
+```bash
+bun .kiro/tools/aidlc.ts config --from "$RUNTIME_ROOT"
+```
+
+It brings the project's AI-DLC files to that release and keeps the plugin
+choices and setup answers. It removes the AI-DLC files that release no longer
+ships and names them; if a change you made to an AI-DLC file conflicts with
+the refresh, it changes nothing and names the file. With no `--harness` it
+refreshes the one harness the project has; in a project that also has another
+harness, such as Claude Code's, it changes nothing and asks for one: add `--harness kiro-v2` when the
+project is on AI-DLC 2.11.4 or later, and `--harness kiro` when it is on
+2.11.3 or earlier or a 2.11.4 preview of 2026-11-04 or 2026-11-05. This needs a
+project whose setup command ran on AI-DLC 2.11.0 or later; on 2.11.0, answer
+`y` if it asks to initialize the project, then run it once more, so that the
+newer release's own tool checks the setup. A project copied from an earlier
+release, or one whose setup command never ran, runs the whole block; that
+copy turns every plugin back on, so turn off again any you had turned off.
+
+The copy block replaces `.kiro/settings/cli.json`, which sets `chat.defaultAgent` to
+`aidlc`, and each run of the block puts AI-DLC's file back. Keep your own Kiro CLI settings
 in the user-level `~/.kiro/settings/cli.json` instead: Kiro CLI reads that file
 too, and the project file wins only for the keys it sets. If the project kept
-settings in `.kiro/settings/cli.json`, the block above saves them as
+settings in `.kiro/settings/cli.json`, the copy block saves them as
 `cli.json.before-aidlc` so you can move them there; a copy saved by an earlier
 run is kept, so running the block again never writes over it. The block copies
 `.kiro/` through a temporary folder without `settings/mcp.json`, so a project's
