@@ -13,15 +13,16 @@
 // that Unit's Code Generation found them (unitListingName), so its way back
 // keeps what an earlier Unit's approval kept. Silent when no listing is here or
 // one cannot be read. A file AI-DLC's install or a refresh wrote, as its install
-// record says it wrote it, is AI-DLC's and not the build's change (an `aidlc
-// update` and `aidlc config` while the work was open rewrite them).
+// record or the fingerprints config keeps of its writes (keepSetupWrites) say,
+// is AI-DLC's and not the build's change (an `aidlc update` and `aidlc config`
+// while the work was open rewrite them).
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lstatSync, readdirSync, readFileSync } from "node:fs";
-import { basename, join, relative, sep } from "node:path";
+import { basename, dirname, join, relative, sep } from "node:path";
 import { holdsRecordedWrite, markedPart, onlyMarkedPartChanged } from "./aidlc-distribution.ts";
-import { isReadOnlyEngineProbe, readRegularFileNoFollowOrThrow } from "./aidlc-locks.ts";
-import { discoverProjectHarnesses } from "./aidlc-runtime-paths.ts";
+import { isReadOnlyEngineProbe, readRegularFileNoFollowOrThrow, writeFileAtomic } from "./aidlc-locks.ts";
+import { discoverProjectHarnesses, workspaceEngineFile } from "./aidlc-runtime-paths.ts";
 import {
   type AuditShardEvent,
   auditBlockField,
@@ -191,8 +192,8 @@ function wholeAsInstalled(record: InstallRecord, path: string, bytes: Buffer): b
 
 // Whether AI-DLC's install wrote this file as it is now: the whole file, or in
 // a shared file its marked part, with the person's part as it was before the
-// build (git's copy of it). With no copy, which part changed cannot be told,
-// and the file is named.
+// build (git's copy of it). With no copy, the fingerprints config kept of its
+// own writes decide (onlySetupWroteSince).
 function writtenByInstall(projectDir: string, record: InstallRecord, file: BroughtFile): boolean {
   if (!record.whole.has(file.path) && !record.parts.has(file.path)) return false;
   const bytes = bytesNow(projectDir, file.path);
@@ -206,6 +207,92 @@ function writtenByInstall(projectDir: string, record: InstallRecord, file: Broug
     if (copy !== null && onlyMarkedPartChanged(file.path, text, copy.blob.toString("utf-8"), marker)) return true;
   }
   return false;
+}
+
+// What AI-DLC's setup and refreshes wrote to each file holding its marked part
+// (.gitignore, AGENTS.md). The listing a build starts from keeps only each
+// file's fingerprint, and with no commit holding the file as the build found
+// it, a refresh while the approval waits read as the build's change (#3981).
+// `aidlc config` keeps, in the workspace's machine-local engine folder, each
+// such file's run: the file as config found it, then as it left it after each
+// write, while each write finds the file as the run's last. Config never
+// changes the person's part, so every file in one run holds the person's part
+// as the run began. When git's HEAD holds the file as config finds it, git's
+// copy already tells the two apart (writtenByInstall) and no run is kept. Read
+// only by the approval's check; a record that cannot be read is none.
+const SETUP_WRITES = "setup-writes.json";
+// A run's newest fingerprints, as many as a long wait could need.
+const SETUP_WRITES_KEPT = 32;
+
+type SetupWrites = Record<string, string[]>;
+
+function readSetupWrites(projectDir: string): SetupWrites {
+  const runs: SetupWrites = {};
+  try {
+    const path = workspaceEngineFile(projectDir, SETUP_WRITES);
+    const value: unknown = JSON.parse(readRegularFileNoFollowOrThrow(path, "what AI-DLC's setup wrote").toString("utf-8"));
+    if (typeof value !== "object" || value === null || Array.isArray(value)) return runs;
+    for (const [file, run] of Object.entries(value)) {
+      if (Array.isArray(run) && run.length > 0 && run.every((sha) => typeof sha === "string" && /^[0-9a-f]{64}$/.test(sha))) {
+        runs[file] = run;
+      }
+    }
+  } catch {
+    // No record, or one that cannot be read: none.
+  }
+  return runs;
+}
+
+/** A file config writes: its bytes as config found them (null: not there) and as it leaves them (null: removed). */
+export interface SetupWrite {
+  path: string;
+  found: Buffer | null;
+  left: Buffer | null;
+}
+
+/**
+ * Keep the run of each file holding AI-DLC's marked part that `aidlc config`
+ * just wrote, once its changes are in. Best-effort: never throws, and writes
+ * nothing where the engine folder is a link or cannot be made.
+ */
+export function keepSetupWrites(projectDir: string, writes: readonly SetupWrite[]): void {
+  if (writes.length === 0) return;
+  try {
+    const path = workspaceEngineFile(projectDir, SETUP_WRITES);
+    const folder = lstatSync(dirname(path), { throwIfNoEntry: false });
+    if (folder === undefined || !folder.isDirectory() || folder.isSymbolicLink()) return;
+    const runs = readSetupWrites(projectDir);
+    const was = JSON.stringify(runs);
+    const found = writes.map((write) => ({
+      repo: "", path: write.path, deleted: false, sha: write.found === null ? "" : committedTextSha256(write.found),
+    }));
+    const held = heldAtHead(projectDir, found.filter((file) => file.sha !== ""));
+    writes.forEach((write, index) => {
+      const file = found[index];
+      const run = runs[write.path];
+      if (held.has(file) || write.left === null) {
+        delete runs[write.path];
+        return;
+      }
+      const from = file.sha === "" ? [] : run?.at(-1) === file.sha ? run : [file.sha];
+      runs[write.path] = [...from, committedTextSha256(write.left)].slice(-SETUP_WRITES_KEPT);
+    });
+    const now = JSON.stringify(runs);
+    if (now !== was) writeFileAtomic(path, `${JSON.stringify(runs, null, 2)}\n`);
+  } catch {
+    // The approval names the file, as with no record.
+  }
+}
+
+// Whether only AI-DLC's setup and refreshes wrote to the file since the build
+// found it as `start`: that is in the file's run, and the file now (`now`, its
+// listing entry) is the run's last.
+function onlySetupWroteSince(runs: SetupWrites, path: string, start: string, now: string | undefined): boolean {
+  const run = runs[path];
+  const sha = now?.split(" ").at(-1);
+  if (run === undefined || sha === undefined || run.at(-1) !== sha) return false;
+  const current = currentFingerprintForm(start);
+  return run.includes(start) || (current !== null && run.includes(current));
 }
 
 // A key of the source listing as the project's own file; null for a link's
@@ -389,6 +476,7 @@ export function broughtFilesChanged(
   const recorded = recordedSourceListingForCompare(projectDir, before, current);
   const files: BroughtFile[] = [];
   let install: InstallRecord | undefined;
+  let setupWrites: SetupWrites | undefined;
   for (const key of sourceListingChangedKeys(recorded, current.listing)) {
     const entry = recorded.get(key);
     if (entry === undefined || !brought.listing.has(key)) continue;
@@ -401,6 +489,8 @@ export function broughtFilesChanged(
     if (!deleted && file.repo === "") {
       install ??= installRecord(projectDir);
       if (writtenByInstall(projectDir, install, file)) continue;
+      setupWrites ??= readSetupWrites(projectDir);
+      if (onlySetupWroteSince(setupWrites, file.path, file.sha, current.listing.get(key))) continue;
     }
     files.push(file);
   }

@@ -1037,8 +1037,9 @@ ambient method delivery can still race.
 **Committed vs gitignored.** `aidlc/` is checked in so a team shares its work.
 The split (`harness/claude/dot-gitignore`): the two cursors
 (`active-space`, `active-intent`), per-clone runtime in `aidlc/.aidlc-engine/`
-(its `clone-id`, `sessions/` and `units/`, and the engine's copy of the active
-space's method in `active-memory/`, kept out of git by the folder's own
+(its `clone-id`, `sessions/` and `units/`, the engine's copy of the active
+space's method in `active-memory/`, and `setup-writes.json`, what config wrote
+to the files it shares with the team, kept out of git by the folder's own
 `.gitignore`), and derived state (`runtime-graph.json`, `.aidlc-*` under a
 record) are **gitignored**; the method (`memory/**`), knowledge (`knowledge/**`,
 `codekb/**`), the `intents.json` registry, each record's `aidlc-state.md`, the

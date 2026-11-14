@@ -325,6 +325,7 @@ settings, and machine-local derived state are ignored.
 | A Unit's build: `approved-inputs.md` (what it was approved with by the lead) and `aidlc-intent.json` (its registry entry, kept in its own folder) | |
 | | `aidlc/.aidlc-engine/active-memory/` (the engine's copy of the active space's `memory/` that every harness include reads; written at session start and on a space switch, so a switch changes no tracked file; each copied file starts with a comment naming the file to edit, and an edit made in the copy is replaced at the next refresh) |
 | | `aidlc/.aidlc-engine/request-text/` (a request the agent wrote to a file for the engine to read; removed once the command goes ahead, left there when it did not) |
+| | `aidlc/.aidlc-engine/setup-writes.json` (what `aidlc config` wrote to `.gitignore` and AGENTS.md while git does not hold them, so the build's approval does not count AI-DLC's own refresh as the build's change) |
 | | `.aidlc/worktree-meta.json`, `.aidlc/base-source-listing.tsv` (the metadata inside a side-by-side Unit's checkout; machine-local, and never carried by a Unit's landing) |
 
 ---
