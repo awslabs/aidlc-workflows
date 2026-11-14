@@ -509,7 +509,9 @@ you typed kept.
 plan, confirmation, and transaction. It never contacts a model
 provider. On Kiro CLI, choosing a session model asks Kiro CLI for your account's
 model list and that model's effort levels; with `--yes`, only `--session-model`
-does.
+does among the session settings. On Kiro, `config models`, `--check` and
+`aidlc doctor` can also read that list to name an agent model it does not have
+([One agent on its own model and effort](harnesses/kiro.md#one-agent-on-its-own-model-and-effort)).
 
 The public groups are:
 
@@ -544,7 +546,8 @@ aidlc config models --session-model claude-opus-4.8   # Kiro CLI: your personal 
 ```
 
 A change ends with what changed, its undo command and who picks it up (plus
-any setup step still outstanding); `--json` and `--quiet` output are unchanged.
+any setup step still outstanding); `--json` and `--quiet` output are unchanged,
+except for what Kiro's agent model check adds.
 
 On Claude Code, Codex, opencode and Kiro CLI, while no policy is recorded, setup
 asks about models at each refresh until you answer (on Kiro IDE, Cursor and
