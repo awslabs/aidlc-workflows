@@ -6405,10 +6405,11 @@ function tellAndStop(line: string): PrintDirective {
 // refusal (#2783 calls it too): on a native install, which updates itself, one
 // question, whose yes carries on with `carried`, the `next` arguments as they
 // were typed, kept under an id for the command after the update. Every other
-// install hears its own one step. Nothing goes under the record, which this
-// build cannot read: the kept request lives in this machine's own folder, and
-// the question has no id on the record. After an update that left this build
-// in place (`done`), the person hears that once, never the question again.
+// install, and an unattended run, where nobody is there to answer, hears its
+// own one step. The question writes nothing into the record, which this build
+// cannot read: no question row, and the kept request lives in this machine's
+// own folder. After an update that left this build in place (`done`), the
+// person hears that once, never the question again.
 function newerWorkOffer(projectDir: string, version: string, carried: readonly string[], newWork = false): Directive {
   if (updateAnswer === "done") {
     // Nothing carried on, so nothing of the kept request is said.
@@ -6420,7 +6421,9 @@ function newerWorkOffer(projectDir: string, version: string, carried: readonly s
         `cannot carry on here until \`aidlc update\` brings that release to this computer.`,
     );
   }
-  if (newerWorkInstall(projectDir).kind !== "native") return tellAndStop(newerStateStep(projectDir, version, newWork));
+  if (newerWorkInstall(projectDir).kind !== "native" || process.env.AIDLC_UNATTENDED === "1") {
+    return tellAndStop(newerStateStep(projectDir, version, newWork));
+  }
   let id: string | null = null;
   if (!isReadOnlyEngineProbe()) {
     try {
@@ -6476,7 +6479,9 @@ function updateAnswerStep(projectDir: string, answer: UpdateAnswer, rest: readon
   if (answer === "done") return null;
   const version = newerStateVersion(loadStateFileIfPresent(projectDir));
   if (version === null) return null;
-  if (newerWorkInstall(projectDir).kind !== "native") return tellAndStop(newerStateStep(projectDir, version));
+  if (newerWorkInstall(projectDir).kind !== "native" || process.env.AIDLC_UNATTENDED === "1") {
+    return tellAndStop(newerStateStep(projectDir, version));
+  }
   const carryOn = `${aidlcToolInvocation("orchestrate")} next --update-ai-dlc done${rest.length > 0 ? ` ${rest.join(" ")}` : ""}`;
   return printDirective(
     `The person chose to update AI-DLC and carry on. Run \`${aidlcInvocation()} update\`, then ` +

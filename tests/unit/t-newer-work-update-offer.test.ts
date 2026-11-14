@@ -245,6 +245,14 @@ describe("work a newer AI-DLC wrote: the update offer on a native install", () =
 });
 
 describe("work a newer AI-DLC wrote: installs AI-DLC does not update itself", () => {
+  test("an unattended run hears the step, never a question nobody is there to answer, and keeps nothing", () => {
+    const proj = project();
+    const { step } = run(NATIVE, proj, ["next", "--", "add a login page"], childEnv({ AIDLC_UNATTENDED: "1" }));
+    expect(step.kind, JSON.stringify(step)).toBe("print");
+    expect(step.message).toContain(`${OFFER}${VERSION}. To carry on: \`aidlc update\``);
+    expect(existsSync(join(proj, "aidlc", ".aidlc-sessions", "restarts"))).toBe(false);
+  });
+
   test("a copy installed by hand hears its own setup command from the newer release, never the question", () => {
     const { step } = run(COPY, project(), ["next", "--", "add a login page"]);
     expect(step.kind, JSON.stringify(step)).toBe("print");
