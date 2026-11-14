@@ -5955,7 +5955,7 @@ export function planWait(projectDir: string): PlanWait | null {
     };
     const waitsOnBranch = (): boolean => pushed.length > 0 && planUnshared(pd, target);
     if (noted() === null && !waitsOnBranch()) return null;
-    if (!isReadOnlyEngineProbe()) quietFetch(pd, ["--no-tags", "-q", target.remote, target.branch]);
+    if (!isReadOnlyEngineProbe()) CHECKOUT_STEPS.fetch.run(pd, target.remote, target.branch);
     const ahead = noted();
     if (ahead !== null && headInByContent(pd, `refs/remotes/${target.remote}/${target.branch}`) !== true) {
       const due = teamHandoverMarkName("plan-branch", ahead[0].slice(0, 12));
@@ -6074,6 +6074,26 @@ export function bringBranchLevel(dir: string, remote: string, branch: string):
     : git(dir, ["fetch", remote, `${branch}:${branch}`], { GIT_TERMINAL_PROMPT: "0" });
   return moved.ok ? { ok: true, ran } : { ok: false, ran, said: moved.stderr || moved.stdout };
 }
+
+// The steps AI-DLC runs in the person's own checkout, so no line makes them
+// the hands for one. Each step's safety check lives in its runner, never here.
+// A line naming the command an offer's choice runs (`via`), or the way back
+// once a step ran (`undo`), takes it from this table; the sentence around it,
+// and when it is said or asked, stay the caller's.
+export const CHECKOUT_STEPS = {
+  // The clone's own remote, into refs/remotes only, never a prompt: nothing of theirs moves, so nothing is said.
+  fetch: {
+    run: (dir: string, remote: string, branch?: string): GitResult =>
+      quietFetch(dir, ["--no-tags", "-q", remote, ...(branch === undefined ? [] : [branch])]),
+  },
+  // A fast-forward behind a dry run (bringBranchLevel): their own commits all stay.
+  forward: { run: bringBranchLevel, via: (): string => `${aidlcInvocation()} unit share --back` },
+  // git's own refusal keeps a change of theirs in the way; one it can carry rides along.
+  switch: {
+    run: (dir: string, branch: string): GitResult => git(dir, ["switch", "-q", "--no-overwrite-ignore", branch]),
+    undo: (from: string): string => `Switch back to ${from} any time.`,
+  },
+} as const;
 
 // --- Build and Test at the lead's project, once every Unit is merged ---------
 
@@ -6243,7 +6263,7 @@ function levelAndSwitch(pd: string, remote: string, branch: string):
     return { ok: false, at: "level", said: level.said, ownWork: ahead !== "" && ahead !== "0" };
   }
   if (here === branch) return { ok: true, from: null };
-  const switched = git(pd, ["switch", "-q", "--no-overwrite-ignore", branch]);
+  const switched = CHECKOUT_STEPS.switch.run(pd, branch);
   return switched.ok ? { ok: true, from: here || "the commit you were on" } : { ok: false, at: "switch", said: switched.stderr, ownWork: false };
 }
 
@@ -6763,7 +6783,7 @@ function bringOwnBuildHere(pd: string, homeWork: string, claim: UnitClaimView): 
   const remote = repositoryRemote(pd);
   let place = branchWithBuild(pd, homeWork, unit);
   if (place === null && remote !== null) {
-    if (!quietFetch(pd, ["--no-tags", "-q", remote]).ok) {
+    if (!CHECKOUT_STEPS.fetch.run(pd, remote).ok) {
       fail(`You took ${unit} on another computer, and its build is not in this clone yet. ${remote} could not be reached just now ` +
         "to look for it, so push it from that computer if you have not, then ask me again.");
     }
@@ -6780,12 +6800,12 @@ function bringOwnBuildHere(pd: string, homeWork: string, claim: UnitClaimView): 
   }
   const here = git(pd, ["symbolic-ref", "--quiet", "--short", "HEAD"]).stdout.trim();
   if ("switchTo" in place) {
-    const switched = git(pd, ["switch", "-q", "--no-overwrite-ignore", place.switchTo]);
+    const switched = CHECKOUT_STEPS.switch.run(pd, place.switchTo);
     if (!switched.ok) {
       fail(`Your build of ${unit} is on branch ${place.switchTo}, and you stay on ${here || "the commit you were on"}: git says ` +
         `"${gitSaid(switched.stderr || switched.stdout)}".`);
     }
-    return { before: `You're on ${place.switchTo} now, where your build of ${unit} is. `, after: ` Switch back to ${here || "the commit you were on"} any time.` };
+    return { before: `You're on ${place.switchTo} now, where your build of ${unit} is. `, after: ` ${CHECKOUT_STEPS.switch.undo(here || "the commit you were on")}` };
   }
   const { remote: from, branch } = place.level;
   const moved = levelAndSwitch(pd, from, branch);
@@ -6796,7 +6816,7 @@ function bringOwnBuildHere(pd: string, homeWork: string, claim: UnitClaimView): 
   }
   return {
     before: `Your ${branch} is up to date with ${from}/${branch} now, with your build of ${unit} in it. `,
-    after: moved.from === null ? "" : ` You're on ${branch} now. Switch back to ${moved.from} any time.`,
+    after: moved.from === null ? "" : ` You're on ${branch} now. ${CHECKOUT_STEPS.switch.undo(moved.from)}`,
   };
 }
 
@@ -10271,7 +10291,7 @@ function whereNowLine(unit: string, moved: Array<{ name: string; from: string }>
   if (moved.length === 0) return "";
   const back = [...new Set(moved.map((entry) => entry.from))];
   return ` You're on ${unit} now in ${joinNames(moved.map((entry) => entry.name))}${also}. ` +
-    `Switch back to ${back.length === 1 ? back[0] : joinNames(moved.map((entry) => `${entry.from} in ${entry.name}`))} any time.`;
+    CHECKOUT_STEPS.switch.undo(back.length === 1 ? back[0] : joinNames(moved.map((entry) => `${entry.from} in ${entry.name}`)));
 }
 
 // The person's yes to moving the build onto the integration branch: in each

@@ -648,6 +648,7 @@ import {
   pushRemotesToPick,
   changedInputs,
   ownBuildBranch,
+  CHECKOUT_STEPS,
   claimIsMine,
   buildClaimHere,
   planUnshared,
@@ -6008,7 +6009,7 @@ function planWaitStep(projectDir: string, planOnly: boolean): AskDirective | Pri
       choices: [{
         label: `Switch back to ${target.branch}`,
         detail: `I bring your ${target.branch} level with ${target.remote}'s and put your checkout on it; your own changes stay as they are.`,
-        command: `${aidlcInvocation()} unit share --back`,
+        command: CHECKOUT_STEPS.forward.via(),
       }],
       notNow: { label: "Not now", detail: `You stay on ${wait.name}.` },
     });
