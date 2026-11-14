@@ -12,7 +12,7 @@
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { hooksHealthReadDir, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -48,6 +48,13 @@ import {
   UNIT,
   UTILITY,
   takeIn,
+  commitMessage,
+  commitMessageFile,
+  expectDraftStep,
+  TICKET_HOOK_WORDS,
+  TICKET_RULE_WORDS,
+  ticketKeyHook,
+  ticketKeyRule,
 } from "../harness/team-build.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -247,7 +254,10 @@ describe("the push", () => {
     expect(String(stopped.json?.error)).toStartWith("The commit in billing did not go through: lint: lib/refund.ts needs a header. ");
     // checkout-api came first and was not pushed either; the line says where they are.
     expect(spawnSync("git", ["rev-parse", "--verify", "refs/heads/refunds"], { cwd: hosts["checkout-api"] }).status).not.toBe(0);
-    expect(String(stopped.json?.error)).toEndWith("Nothing was pushed. You're on refunds now in checkout-api and billing. Switch back to main any time.");
+    expect(String(stopped.json?.error)).toEndWith(
+      "Nothing was pushed. You're on refunds now in checkout-api and billing. Switch back to main any time. " +
+        "If it is the commit message, tell me the one to use, and I will commit with it and push again.",
+    );
     // Their commit-msg hook shapes the message, as it would for their own commit.
     writeFileSync(join(hooks, "pre-commit"), "#!/bin/sh\nexit 0\n");
     writeFileSync(join(hooks, "commit-msg"), "#!/bin/sh\nprintf 'REF-1 %s' \"$(cat \"$1\")\" > \"$1\"\n");
@@ -358,7 +368,7 @@ describe("the push", () => {
     expect(asked.ask_type, JSON.stringify(asked).slice(0, 600)).toBe("unit-push");
     expect(String(asked.question)).toContain("billing is in the middle of a merge on refunds, with nothing left to resolve.");
     const finish = (asked.choices as Array<{ label: string; command?: string }>).find((entry) => entry.label === "Finish the merge and push");
-    expect(finish?.command, JSON.stringify(asked.choices)).toEndWith("aidlc-unit.ts push --finish-merge");
+    expect(finish?.command, JSON.stringify(asked.choices)).toEndWith(`aidlc-unit.ts push --finish-merge --commit-message-file ${commitMessageFile(record)}`);
     const pushed = run(UNIT, ["push", "--finish-merge"], alice);
     expect(pushed.status, pushed.out).toBe(0);
     expect(git(hosts.billing, ["show", "refunds:MERGED.md"])).toBe("on main since");
@@ -635,7 +645,7 @@ describe("the push", () => {
     writeFileSync(statePath, readFileSync(statePath, "utf-8").replace("## Runtime State\n", "## Runtime State\n- **Unit Branch**: feature/refunds\n"));
     const ask = next(alice);
     expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-push");
-    expect(String(ask.question)).toContain("Commit its changes on branch feature/refunds in each and push them?");
+    expect(String(ask.question)).toContain("Commit its changes on branch feature/refunds in each and push them, with this commit message?");
   });
 
   test("push --help and rebase --help print their usage and change nothing", () => {
@@ -794,7 +804,8 @@ describe("the push", () => {
     expect(pushed.status).not.toBe(0);
     expect(String(pushed.json?.error)).toBe(
       "The push of refunds in billing was refused: branch protection: refunds needs a ticket (pre-receive hook declined). " +
-        "Nothing was retried. You're on refunds now in checkout-api and billing. Switch back to main any time.",
+        "Nothing was retried. You're on refunds now in checkout-api and billing. Switch back to main any time. " +
+        "If it is the commit message, tell me the one to use, and I will commit with it and push again.",
     );
   });
 
@@ -949,11 +960,15 @@ describe("the push", () => {
     expect(asked.ask_type, JSON.stringify(asked).slice(0, 500)).toBe("unit-push");
     expect(String(asked.question)).toContain("branch refunds-v2");
     const push = (asked.choices as Array<{ label: string; command?: string }>)[0];
-    expect(push.command).toEndWith("aidlc-unit.ts push --branch refunds-v2");
+    expect(push.command).toEndWith(`aidlc-unit.ts push --branch refunds-v2 --commit-message-file ${commitMessageFile(record)}`);
     // A push that names no branch never moves it back onto the first build's.
     const refused = run(UNIT, ["push"], alice);
     expect(refused.status, refused.out).not.toBe(0);
-    expect(String(refused.json?.error)).toContain("push --branch refunds-v2");
+    expect(String(refused.json?.error)).toContain("push --branch refunds-v2`");
+    // A push given the message: the way on it names carries the message on.
+    const withIt = run(UNIT, ["push", "--commit-message-file", commitMessageFile(record)], alice);
+    expect(withIt.status, withIt.out).not.toBe(0);
+    expect(String(withIt.json?.error)).toContain(`push --branch refunds-v2 --commit-message-file ${commitMessageFile(record)}\``);
     expect(git(join(alice, "billing"), ["branch", "--show-current"])).toBe("refunds-v2");
     const pushed = run(UNIT, ["push", "--branch", "refunds-v2"], alice);
     expect(pushed.status, pushed.out).toBe(0);
@@ -1067,7 +1082,7 @@ describe("the push", () => {
     const end = next(alice);
     expect(end.kind, JSON.stringify(end)).toBe("done");
     expect(JSON.stringify(end)).not.toContain("back to Code Generation");
-    expect(String(end.done_note)).toEndWith("aidlc-unit.ts push` and say its notice line.");
+    expect(String(end.done_note)).toContain(`aidlc-unit.ts push --commit-message-file ${commitMessageFile(record)}\` and say its notice line;`);
   });
 
   test("the build's end offers the push; not now pushes nothing, and the end says so once", () => {
@@ -1082,7 +1097,7 @@ describe("the push", () => {
     expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-push");
     expect(ask.question).toBe(
       "refunds is built and you approved it. It changed checkout-api and billing. Commit its changes on branch " +
-        "refunds in each and push them?",
+        "refunds in each and push them, with this commit message?\n\nrefunds: fixture",
     );
     const choices = ask.choices as Array<{ label: string; command: string }>;
     expect(choices.map((choice) => choice.label)).toEqual(["Push", "Not now"]);
@@ -1097,9 +1112,489 @@ describe("the push", () => {
     const end = next(alice);
     expect(end.kind, JSON.stringify(end)).toBe("done");
     expect((end.change_notices ?? []) as string[]).toContain(
-      "refunds is built and approved, and not pushed yet. Do you want me to push it now?",
+      "refunds is built and approved, and not pushed yet. Do you want me to push it now, with this commit message?\n\nrefunds: fixture",
     );
-    expect(String(end.done_note)).toEndWith("aidlc-unit.ts push` and say its notice line.");
+    expect(String(end.done_note)).toContain(`aidlc-unit.ts push --commit-message-file ${commitMessageFile(record)}\` and say its notice line;`);
+  });
+});
+
+// A team whose commits follow a convention (a ticket key first, a sign-off
+// line) commits the Unit the way it writes any commit: the push question shows
+// the message the commit will carry (the agent's draft in the repo's own
+// style, or today's message), and their own words replace it whole. Their hook
+// or their host refusing it is said in its words with the one way on, and the
+// step after it never puts the same push as if nothing happened. AI-DLC amends
+// only the commit it made and could not push, never a commit of theirs.
+const OWN_MESSAGE = "PAY-12 add refunds\r\n\r\nSigned-off-by: alice <alice@example.test>\r\n";
+const AS_COMMITTED = "PAY-12 add refunds\n\nSigned-off-by: alice <alice@example.test>";
+const WAY_ON = "If it is the commit message, tell me the one to use, and I will commit with it and push again.";
+const LAST_PUSH = "Its last push did not go through.";
+const UNREAD = "push --commit-message-file needs the commit message in a file directly inside " +
+  "aidlc/.aidlc-engine/request-text/ in this project, written with your file tool. Nothing was committed or pushed.";
+const BOTH = "refunds is built and you approved it. It changed checkout-api and billing.";
+const pushBoth = (message: string, refused = false): string =>
+  `${BOTH}${refused ? ` ${LAST_PUSH}` : ""} Commit its changes on branch refunds in each and push them, with this commit message?\n\n${message}`;
+const wentBefore = (repo: string): string => `${repo} keeps refunds's commit as it went before, so your message is not on it there: ` +
+  "changing it takes a force push of your own, and AI-DLC never forces a push.";
+const notOurs = (repo: string): string => `${repo} keeps its last commit as it is, so your message is not on it there: it is not ` +
+  "the commit AI-DLC made for refunds and could not push.";
+const hookDidNotTake = (repo: string, words: string): string => `${repo} keeps refunds's commit as it was, so your message is not ` +
+  `on it there: its hook did not take your message (${words}).`;
+const NOT_ON_IT = "so your message is not on it there";
+const hostRefused = (repo: string): string =>
+  `The push of refunds in ${repo} was refused: ${TICKET_RULE_WORDS} (pre-receive hook declined). Nothing was retried.`;
+const withMessage = (alice: string, record: string, text: string): string[] =>
+  ["push", "--commit-message-file", commitMessage(alice, record, text)];
+const onHost = (host: string): boolean =>
+  spawnSync("git", ["rev-parse", "--verify", "--quiet", "refs/heads/refunds"], { cwd: host }).status === 0;
+const heldFile = (alice: string, record: string): string => join(alice, ...commitMessageFile(record).split("/"));
+const pushCommands = (ask: Record<string, unknown>): string[] =>
+  (ask.choices as Array<{ label: string; command?: string }>).filter((choice) => choice.label !== "Not now").map((choice) => String(choice.command));
+
+// A commit-msg hook that wants Conventional Commits, as commitlint keeps it.
+const CONVENTIONAL_WORDS = "commitlint: type must be one of [feat, fix]";
+function conventionalHook(repo: string): void {
+  const file = join(repo, ".git", "hooks", "commit-msg");
+  writeFileSync(file, `#!/bin/sh\nhead -n 1 "$1" | grep -qE '^(feat|fix)(\\(.+\\))?: ' && exit 0\necho '${CONVENTIONAL_WORDS}' >&2\nexit 1\n`);
+  chmodSync(file, 0o755);
+}
+
+describe("the person's own commit message", () => {
+  test("with no message given, the Unit's commit carries today's message, whole, in each repo", () => {
+    const { hosts, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    for (const host of Object.values(hosts)) expect(git(host, ["log", "-1", "--format=%B", "refunds"])).toBe("refunds: fixture");
+  });
+
+  test("their commit-msg hook that wants a ticket key refuses the Unit's commit in its own words, and nothing went", () => {
+    const { hosts, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    for (const repo of Object.keys(hosts)) ticketKeyHook(join(alice, repo));
+    const refused = run(UNIT, ["push"], alice);
+    expect(refused.status).not.toBe(0);
+    expect(String(refused.json?.error)).toStartWith(`The commit in checkout-api did not go through: ${TICKET_HOOK_WORDS}. Nothing was pushed.`);
+    for (const host of Object.values(hosts)) expect(onHost(host)).toBe(false);
+  });
+
+  test("their host's rule on commit messages refuses the push in its words, and the Unit's commit there went nowhere", () => {
+    const { hosts, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    ticketKeyRule(hosts.billing);
+    const refused = run(UNIT, ["push"], alice);
+    expect(refused.status).not.toBe(0);
+    expect(String(refused.json?.error)).toStartWith(hostRefused("billing"));
+    expect(git(hosts["checkout-api"], ["log", "-1", "--format=%s", "refunds"])).toBe("refunds: fixture");
+    expect(onHost(hosts.billing)).toBe(false);
+    expect(git(join(alice, "billing"), ["log", "-1", "--format=%s", "refunds"])).toBe("refunds: fixture");
+  });
+
+  test("the push question shows the message it will carry: the agent drafts it once, over today's message, and the question shows the draft as git will take it", () => {
+    const { hosts, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    finishBuild(record);
+    // The agent's own step, said to nobody: the file holds today's message until it drafts over it.
+    const draft = next(alice, ENV, [], ORCH, { stopAtDraft: true });
+    const file = expectDraftStep(alice, draft);
+    expect(file).toBe(commitMessageFile(record));
+    expect(readFileSync(heldFile(alice, record), "utf-8").trim()).toBe("refunds: fixture");
+    writeFileSync(heldFile(alice, record), "feat(refunds): add the refund handler  \r\n\r\n\r\nRefs PAY-12\r\n");
+    const ask = next(alice, ENV, [], ORCH, { stopAtDraft: true });
+    expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-push");
+    expect(ask.question).toBe(pushBoth("feat(refunds): add the refund handler\n\nRefs PAY-12"));
+    expect(ask.commit_message_file).toBe(file);
+    for (const command of pushCommands(ask)) expect(command).toEndWith(`push --commit-message-file ${file}`);
+    expect(tellsWhatToType(ask.question, ask.choices)).toBe(false);
+    // Asked again, it is the same question: the draft step is given once.
+    expect(next(alice, ENV, [], ORCH, { stopAtDraft: true }).question).toBe(ask.question);
+    const pushed = run(UNIT, ["push", "--commit-message-file", file], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    for (const host of Object.values(hosts)) expect(git(host, ["log", "-1", "--format=%B", "refunds"])).toBe("feat(refunds): add the refund handler\n\nRefs PAY-12");
+    expect(existsSync(heldFile(alice, record)), "the message file is spent").toBe(false);
+  });
+
+  test("their own message goes on the Unit's commit whole, from the file the agent wrote, in every repo it changed", () => {
+    const { hosts, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    for (const repo of Object.keys(hosts)) ticketKeyHook(join(alice, repo));
+    const pushed = run(UNIT, withMessage(alice, record, OWN_MESSAGE), alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    // Their ticket key and their sign-off line, as git commits any message: the CRs of a Windows file are git's to drop.
+    for (const host of Object.values(hosts)) expect(git(host, ["log", "-1", "--format=%B", "refunds"])).toBe(AS_COMMITTED);
+    expect(existsSync(heldFile(alice, record)), "the message file is spent").toBe(false);
+  });
+
+  test("a direct push with no message commits today's message, even with a draft there", () => {
+    const { hosts, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    finishBuild(record);
+    expect(next(alice).ask_type).toBe("unit-push");
+    writeFileSync(heldFile(alice, record), "feat(refunds): add the refund handler\n");
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    for (const host of Object.values(hosts)) expect(git(host, ["log", "-1", "--format=%B", "refunds"])).toBe("refunds: fixture");
+    expect(existsSync(heldFile(alice, record)), "a push that went spends the build's message").toBe(false);
+  });
+
+  test("a read-only look writes no file and shows today's message", () => {
+    const { alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    finishBuild(record);
+    const probe = next(alice, { ...ENV, AIDLC_STOP_HOOK_PROBE: "1" }, [], ORCH, { stopAtDraft: true });
+    expect(probe.ask_type, JSON.stringify(probe)).toBe("unit-push");
+    expect(probe.question).toBe(pushBoth("refunds: fixture"));
+    for (const command of pushCommands(probe)) expect(command).toEndWith("aidlc-unit.ts push");
+    expect(existsSync(heldFile(alice, record))).toBe(false);
+  });
+
+  test("a message file that is there but empty, or a link: today's message, no flag, and no draft step", () => {
+    const { alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    finishBuild(record);
+    commitMessage(alice, record, " \n");
+    const empty = next(alice, ENV, [], ORCH, { stopAtDraft: true });
+    expect(empty.ask_type, JSON.stringify(empty)).toBe("unit-push");
+    expect(empty.question).toBe(pushBoth("refunds: fixture"));
+    for (const command of pushCommands(empty)) expect(command).toEndWith("aidlc-unit.ts push");
+    if (process.platform !== "win32") {
+      const elsewhere = join(tempDir("message-elsewhere"), "message.txt");
+      writeFileSync(elsewhere, "feat: from outside the project\n");
+      rmSync(heldFile(alice, record));
+      symlinkSync(elsewhere, heldFile(alice, record));
+      const linked = next(alice, ENV, [], ORCH, { stopAtDraft: true });
+      expect(linked.question).toBe(pushBoth("refunds: fixture"));
+      for (const command of pushCommands(linked)) expect(command).toEndWith("aidlc-unit.ts push");
+    }
+  });
+
+  test("their commit-msg hook refuses the Unit's commit: the line says the way on once, the next push question says the last push did not go through, and their message goes", () => {
+    const { hosts, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    finishBuild(record);
+    for (const repo of Object.keys(hosts)) ticketKeyHook(join(alice, repo));
+    const refused = run(UNIT, ["push"], alice);
+    expect(refused.status).not.toBe(0);
+    expect(String(refused.json?.error)).toBe(
+      `The commit in checkout-api did not go through: ${TICKET_HOOK_WORDS}. Nothing was pushed. You're on refunds now in ` +
+        `checkout-api. Switch back to main any time. ${WAY_ON}`,
+    );
+    const again = next(alice);
+    expect(again.ask_type, JSON.stringify(again)).toBe("unit-push");
+    expect(again.question).toBe(pushBoth("refunds: fixture", true));
+    expect(String(again.question)).not.toContain("tell me the one to use");
+    expect(tellsWhatToType(again.question, again.choices, refused.json?.error)).toBe(false);
+    // A message their hook refuses too: the same line in the hook's words, with the same way on.
+    const second = run(UNIT, withMessage(alice, record, "PAY12 add refunds\n"), alice);
+    expect(second.status).not.toBe(0);
+    expect(String(second.json?.error)).toBe(`The commit in checkout-api did not go through: ${TICKET_HOOK_WORDS}. Nothing was pushed. ${WAY_ON}`);
+    expect(next(alice).question).toBe(pushBoth("PAY12 add refunds", true));
+    const pushed = run(UNIT, withMessage(alice, record, "PAY-12 add refunds\n"), alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    for (const host of Object.values(hosts)) expect(git(host, ["log", "--format=%s", "main..refunds"])).toBe("PAY-12 add refunds");
+    expect(next(alice).ask_type ?? null).not.toBe("unit-push");
+  });
+
+  test("their host's rule on commit messages: their message goes on the commit AI-DLC made and could not push, a second refusal says the way on again, and what went is never rewritten", () => {
+    const { hosts, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    ticketKeyRule(hosts.billing);
+    const refused = run(UNIT, ["push"], alice);
+    expect(refused.status).not.toBe(0);
+    expect(String(refused.json?.error)).toBe(
+      `${hostRefused("billing")} You're on refunds now in checkout-api and billing. Switch back to main any time. ${WAY_ON}`,
+    );
+    const went = git(hosts["checkout-api"], ["rev-parse", "refunds"]);
+    const second = run(UNIT, withMessage(alice, record, "PAY12 add refunds\n"), alice);
+    expect(second.status).not.toBe(0);
+    expect(String(second.json?.error)).toBe(`${hostRefused("billing")} ${WAY_ON}`);
+    // AI-DLC's own commit took their message in its place, never as a second commit on top.
+    expect(git(join(alice, "billing"), ["log", "--format=%s", "origin/main..refunds"])).toBe("PAY12 add refunds");
+    const pushed = run(UNIT, withMessage(alice, record, "PAY-12 add refunds\n"), alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(git(hosts.billing, ["log", "--format=%s", "main..refunds"])).toBe("PAY-12 add refunds");
+    expect(git(hosts.billing, ["show", "refunds:lib/refund.ts"])).toBe("export const refund = 1;");
+    expect(git(hosts["checkout-api"], ["rev-parse", "refunds"])).toBe(went);
+    expect(String(pushed.json?.notice)).toContain(wentBefore("checkout-api"));
+  });
+
+  test("their own commits that come along: the host's refusal names no way on the retry cannot keep, and their message changes nothing of theirs", () => {
+    const { hosts, alice, record } = refundsTaken();
+    const billing = join(alice, "billing");
+    writeFileSync(join(billing, "README.md"), "# billing\n\nlocal\n");
+    git(billing, ["commit", "-q", "-am", "wip: log billing calls"]);
+    // Their uncommitted edit on top keeps git from starting the Unit's branch at origin/main.
+    writeFileSync(join(billing, "README.md"), "# billing\n\nlocal, still editing\n");
+    codeGenerated(alice, record);
+    ticketKeyRule(hosts.billing);
+    const refused = run(UNIT, ["push"], alice);
+    expect(refused.status).not.toBe(0);
+    expect(String(refused.json?.error)).toBe(
+      `${hostRefused("billing")} You're on refunds now in checkout-api and billing. Switch back to main any time. ` +
+        'Branch refunds in billing starts from where you were, so your commit not yet on origin/main comes along: "wip: log billing calls".',
+    );
+    const again = run(UNIT, withMessage(alice, record, "PAY-12 add refunds\n"), alice);
+    expect(again.status).not.toBe(0);
+    expect(String(again.json?.error)).toBe(hostRefused("billing"));
+    expect(git(billing, ["log", "--format=%s", "origin/main..refunds"]).split("\n")).toEqual(["PAY-12 add refunds", "wip: log billing calls"]);
+    expect(readFileSync(join(billing, "README.md"), "utf-8")).toBe("# billing\n\nlocal, still editing\n");
+  });
+
+  test("a commit of their own is never amended: their message, given after they committed the Unit's files themselves, leaves it as it is and says so", () => {
+    const { hosts, alice, record } = refundsTaken();
+    const billing = join(alice, "billing");
+    writeFileSync(join(billing, ".git", "refuse-once"), "");
+    writeFileSync(join(billing, ".git", "hooks", "commit-msg"),
+      "#!/bin/sh\nif [ -f .git/refuse-once ]; then rm .git/refuse-once; echo 'commit messages need a ticket' >&2; exit 1; fi\nexit 0\n");
+    chmodSync(join(billing, ".git", "hooks", "commit-msg"), 0o755);
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).not.toBe(0);
+    // Back on main, they commit the Unit's file with their own words.
+    git(billing, ["switch", "-q", "main"]);
+    git(billing, ["add", "lib/refund.ts"]);
+    git(billing, ["commit", "-q", "-m", "REF-7 refund handler"]);
+    const pushed = run(UNIT, withMessage(alice, record, "PAY-12 add refunds\n"), alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(git(hosts.billing, ["log", "--format=%s", "main..refunds"])).toBe("REF-7 refund handler");
+    // checkout-api's commit is the one AI-DLC made and could not push: it takes their message.
+    expect(git(hosts["checkout-api"], ["log", "--format=%s", "main..refunds"])).toBe("PAY-12 add refunds");
+    expect(String(pushed.json?.notice)).toContain(notOurs("billing"));
+  });
+
+  test("a commit the person amended themselves after a refusal is theirs: never amended again", () => {
+    const { hosts, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    ticketKeyRule(hosts.billing);
+    expect(run(UNIT, ["push"], alice).status).not.toBe(0);
+    const billing = join(alice, "billing");
+    git(billing, ["commit", "-q", "--amend", "-m", "PAY-1 my own words"]);
+    const pushed = run(UNIT, withMessage(alice, record, "PAY-12 add refunds\n"), alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(git(hosts.billing, ["log", "--format=%s", "main..refunds"])).toBe("PAY-1 my own words");
+    expect(String(pushed.json?.notice)).toContain(notOurs("billing"));
+  });
+
+  test("a host refusal of commits the person made by hand: the next push question says the last push did not go through", () => {
+    const { hosts, alice, record } = refundsTaken();
+    const billing = join(alice, "billing");
+    codeGenerated(alice, record);
+    finishBuild(record);
+    git(billing, ["add", "lib/refund.ts"]);
+    git(billing, ["commit", "-q", "-m", "refund handler, by hand"]);
+    ticketKeyRule(hosts.billing);
+    const refused = run(UNIT, ["push"], alice);
+    expect(refused.status).not.toBe(0);
+    expect(String(refused.json?.error)).toStartWith(hostRefused("billing"));
+    expect(String(refused.json?.error)).not.toContain(WAY_ON);
+    expect(String(next(alice).question)).toContain(LAST_PUSH);
+  });
+
+  test("in a single-branch clone, a commit that went is never amended, and with its remote out of reach nothing is", () => {
+    const { hosts, alice, record } = refundsTaken((clone) => {
+      // As git clone --single-branch leaves it: a push writes no copy of the Unit's branch here.
+      git(join(clone, "checkout-api"), ["config", "remote.origin.fetch", "+refs/heads/main:refs/remotes/origin/main"]);
+    });
+    codeGenerated(alice, record);
+    ticketKeyRule(hosts.billing);
+    expect(run(UNIT, ["push"], alice).status).not.toBe(0);
+    const api = join(alice, "checkout-api");
+    const went = git(hosts["checkout-api"], ["rev-parse", "refunds"]);
+    expect(spawnSync("git", ["rev-parse", "--verify", "--quiet", "refs/remotes/origin/refunds"], { cwd: api }).status).not.toBe(0);
+    // checkout-api's remote out of reach: AI-DLC cannot tell its commit went, so it is left as it is.
+    const address = git(api, ["remote", "get-url", "origin"]);
+    git(api, ["remote", "set-url", "origin", join(tempDir("gone"), "nowhere.git")]);
+    expect(run(UNIT, withMessage(alice, record, "PAY-12 add refunds\n"), alice).status).not.toBe(0);
+    expect(git(api, ["rev-parse", "refunds"])).toBe(went);
+    git(api, ["remote", "set-url", "origin", address]);
+    const pushed = run(UNIT, withMessage(alice, record, "PAY-12 add refunds\n"), alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(git(hosts["checkout-api"], ["rev-parse", "refunds"])).toBe(went);
+    expect(git(api, ["rev-parse", "refunds"])).toBe(went);
+    expect(git(hosts.billing, ["log", "--format=%s", "main..refunds"])).toBe("PAY-12 add refunds");
+    expect(String(pushed.json?.notice)).toContain(wentBefore("checkout-api"));
+  });
+
+  test("a hook that resets inside AI-DLC's commit never makes a commit of theirs take the message", () => {
+    const { hosts, alice, record } = refundsTaken();
+    const billing = join(alice, "billing");
+    writeFileSync(join(billing, "README.md"), "# billing\n\nlocal\n");
+    git(billing, ["commit", "-q", "-am", "local readme"]);
+    writeFileSync(join(billing, "README.md"), "# billing\n\nlocal, still editing\n");
+    // As lint-staged does when a pre-commit check fails: it resets, then refuses.
+    writeFileSync(join(billing, ".git", "refuse-once"), "");
+    writeFileSync(join(billing, ".git", "hooks", "pre-commit"),
+      "#!/bin/sh\nif [ -f .git/refuse-once ]; then rm .git/refuse-once; git reset -q HEAD; echo 'lint: needs a header' >&2; exit 1; fi\nexit 0\n");
+    chmodSync(join(billing, ".git", "hooks", "pre-commit"), 0o755);
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).not.toBe(0);
+    const pushed = run(UNIT, withMessage(alice, record, "PAY-12 add refunds\n"), alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(git(hosts.billing, ["log", "--format=%s", "main..refunds"]).split("\n")).toEqual(["PAY-12 add refunds", "local readme"]);
+    expect(git(hosts["checkout-api"], ["log", "--format=%s", "main..refunds"])).toBe("PAY-12 add refunds");
+  });
+
+  test("two repos with different message rules: an amend one of them refuses leaves that commit as it was, says so, and the push goes on", () => {
+    const { hosts, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    ticketKeyHook(join(alice, "checkout-api"));
+    conventionalHook(join(alice, "billing"));
+    expect(run(UNIT, ["push"], alice).status).not.toBe(0);
+    const second = run(UNIT, withMessage(alice, record, "PAY-12 add refunds\n"), alice);
+    expect(second.status).not.toBe(0);
+    expect(String(second.json?.error)).toStartWith(`The commit in billing did not go through: ${CONVENTIONAL_WORDS}. Nothing was pushed.`);
+    const pushed = run(UNIT, withMessage(alice, record, "feat: add refunds\n"), alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(git(hosts["checkout-api"], ["log", "--format=%s", "main..refunds"])).toBe("PAY-12 add refunds");
+    expect(git(hosts.billing, ["log", "--format=%s", "main..refunds"])).toBe("feat: add refunds");
+    expect(String(pushed.json?.notice)).toContain(hookDidNotTake("checkout-api", TICKET_HOOK_WORDS));
+  });
+
+  test("a newer Unit change is always committed: in the commit AI-DLC could not push, and an amend carrying it that their hook refuses stops the push", () => {
+    const { hosts, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    finishBuild(record);
+    ticketKeyRule(hosts.billing);
+    const file = String(next(alice).commit_message_file);
+    expect(run(UNIT, ["push", "--commit-message-file", file], alice).status).not.toBe(0);
+    const billing = join(alice, "billing");
+    writeFileSync(join(billing, "lib", "refund.ts"), "export const refund = 2;\n");
+    expect(run(UNIT, ["push", "--commit-message-file", file], alice).status).not.toBe(0);
+    expect(git(billing, ["log", "--format=%s", "origin/main..refunds"])).toBe("refunds: fixture");
+    expect(git(billing, ["show", "refunds:lib/refund.ts"])).toBe("export const refund = 2;");
+    // Their hook now turns the same message down: the amend with the newer change stops, and nothing goes.
+    ticketKeyHook(billing);
+    writeFileSync(join(billing, "lib", "refund.ts"), "export const refund = 3;\n");
+    const stopped = run(UNIT, ["push", "--commit-message-file", file], alice);
+    expect(stopped.status).not.toBe(0);
+    expect(String(stopped.json?.error)).toStartWith(`The commit in billing did not go through: ${TICKET_HOOK_WORDS}. Nothing was pushed.`);
+    expect(git(billing, ["show", "refunds:lib/refund.ts"])).toBe("export const refund = 2;");
+    expect(onHost(hosts.billing)).toBe(false);
+  });
+
+  test("a hook that reshapes the message: a plain retry neither amends again nor says the message is not on a commit", () => {
+    const { hosts, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    finishBuild(record);
+    const billing = join(alice, "billing");
+    writeFileSync(join(billing, ".git", "hooks", "commit-msg"), "#!/bin/sh\nprintf 'REF-1 %s' \"$(cat \"$1\")\" > \"$1\"\n");
+    chmodSync(join(billing, ".git", "hooks", "commit-msg"), 0o755);
+    writeFileSync(join(hosts.billing, "refuse-once"), "");
+    writeFileSync(join(hosts.billing, "hooks", "pre-receive"),
+      "#!/bin/sh\nif [ -f refuse-once ]; then rm refuse-once; echo 'pushes are paused' >&2; exit 1; fi\nexit 0\n");
+    chmodSync(join(hosts.billing, "hooks", "pre-receive"), 0o755);
+    const file = String(next(alice).commit_message_file);
+    expect(run(UNIT, ["push", "--commit-message-file", file], alice).status).not.toBe(0);
+    const made = git(billing, ["rev-parse", "refunds"]);
+    expect(git(billing, ["log", "-1", "--format=%s", "refunds"])).toBe("REF-1 refunds: fixture");
+    const pushed = run(UNIT, ["push", "--commit-message-file", file], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(git(hosts.billing, ["rev-parse", "refunds"])).toBe(made);
+    expect(String(pushed.json?.notice)).not.toContain(NOT_ON_IT);
+  });
+
+  test("a push again after one that went, with the same message: no line says the message is not on a commit", () => {
+    const { hosts, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    expect(run(UNIT, withMessage(alice, record, "PAY-12 add refunds\n"), alice).status).toBe(0);
+    const again = run(UNIT, withMessage(alice, record, "PAY-12 add refunds\n"), alice);
+    expect(again.status, again.out).toBe(0);
+    expect(String(again.json?.notice)).not.toContain(NOT_ON_IT);
+    // Another message then: the commits went, so that is the line, never that they are not AI-DLC's.
+    const other = run(UNIT, withMessage(alice, record, "PAY-13 other words\n"), alice);
+    expect(other.status, other.out).toBe(0);
+    expect(String(other.json?.notice)).toContain("checkout-api and billing keep refunds's commit as it went before, so your message is not on it there");
+    expect(String(other.json?.notice)).not.toContain("it is not the commit AI-DLC made");
+    for (const host of Object.values(hosts)) expect(git(host, ["log", "--format=%s", "main..refunds"])).toBe("PAY-12 add refunds");
+  });
+
+  test("a push that failed at the remote after its commit: the next push question says it did not go through, and their message amends that commit", () => {
+    const { hosts, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    finishBuild(record);
+    const billing = join(alice, "billing");
+    const address = git(billing, ["remote", "get-url", "origin"]);
+    git(billing, ["remote", "set-url", "origin", join(tempDir("gone"), "nowhere.git")]);
+    expect(run(UNIT, ["push"], alice).status).not.toBe(0);
+    git(billing, ["remote", "set-url", "origin", address]);
+    expect(String(next(alice).question)).toContain(LAST_PUSH);
+    const pushed = run(UNIT, withMessage(alice, record, "PAY-12 add refunds\n"), alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(git(hosts.billing, ["log", "--format=%s", "main..refunds"])).toBe("PAY-12 add refunds");
+  });
+
+  test("the push question says the last push did not go through until a push goes", () => {
+    const { hosts, home, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    finishBuild(record);
+    ticketKeyRule(hosts.billing);
+    expect(run(UNIT, ["push"], alice).status).not.toBe(0);
+    expect(String(next(alice).question)).toContain(LAST_PUSH);
+    writeFileSync(join(hosts.billing, "hooks", "pre-receive"), "#!/bin/sh\nexit 0\n");
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    // The redo after a turn-down is asked as any push is: a fresh draft, no word of the refusal.
+    git(home.dir, ["fetch", "-q", "origin"]);
+    expect(run(UNIT, ["turned-down", "refunds", "--repo", "billing", "--person-words", "needs the ledger entry"], home.dir).status).toBe(0);
+    expect(next(alice).ask_type).toBe("unit-turned-down");
+    codeGeneratedAgain(alice);
+    appendAuditEntry("GATE_APPROVED", { Stage: "code-generation" }, alice, basename(record), "payments");
+    const draft = next(alice, ENV, [], ORCH, { stopAtDraft: true });
+    expectDraftStep(alice, draft);
+    const push = next(alice);
+    expect(push.ask_type, JSON.stringify(push)).toBe("unit-push");
+    expect(String(push.question)).not.toContain(LAST_PUSH);
+  });
+
+  test("after Not now, the line that offers the push again shows the message it will carry, and yes pushes with it", () => {
+    const { hosts, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    finishBuild(record);
+    expectDraftStep(alice, next(alice, ENV, [], ORCH, { stopAtDraft: true }));
+    writeFileSync(heldFile(alice, record), "feat(refunds): add the refund handler\n");
+    expect(next(alice).question).toBe(pushBoth("feat(refunds): add the refund handler"));
+    expect(run(UNIT, ["push", "--later"], alice).status).toBe(0);
+    const end = next(alice);
+    expect(end.kind, JSON.stringify(end)).toBe("done");
+    expect((end.change_notices ?? []) as string[]).toContain(
+      "refunds is built and approved, and not pushed yet. Do you want me to push it now, with this commit message?\n\n" +
+        "feat(refunds): add the refund handler",
+    );
+    const file = commitMessageFile(record);
+    expect(String(end.done_note)).toContain(`aidlc-unit.ts push --commit-message-file ${file}\` and say its notice line;`);
+    expect(String(end.done_note)).toEndWith("with your file tool, never a shell, exactly as they gave it.");
+    expect(run(UNIT, ["push", "--commit-message-file", file], alice).status).toBe(0);
+    for (const host of Object.values(hosts)) expect(git(host, ["log", "-1", "--format=%s", "refunds"])).toBe("feat(refunds): add the refund handler");
+  });
+
+  test("the push question names the message file for the agent, and the send-again question does not", () => {
+    const { home, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    finishBuild(record);
+    const ask = next(alice);
+    expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-push");
+    expect(ask.commit_message_file).toBe(commitMessageFile(record));
+    expect(String(ask.question_note)).toContain("The commit message the question shows is the one in the file commit_message_file names");
+    // The code went and the lead's project did not take the result: a message has nothing to go on.
+    const claims = join(home.remote, "hooks", "pre-receive");
+    writeFileSync(claims, "#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/heads/claim/*) echo 'claims are closed today' >&2; exit 1;; esac; done\n");
+    chmodSync(claims, 0o755);
+    expect(run(UNIT, ["push", "--commit-message-file", String(ask.commit_message_file)], alice).status).toBe(0);
+    const again = next(alice);
+    expect(again.question, JSON.stringify(again)).toBe("refunds is pushed, but the lead's project did not take its result just now. Do you want me to send it again?");
+    expect(again.commit_message_file).toBeUndefined();
+    expect(String(again.question_note)).not.toContain("commit_message_file");
+  });
+
+  test("a message file outside its folder, or an empty one, is refused in the flag's own words, and nothing is committed", () => {
+    const { hosts, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    writeFileSync(join(alice, "message.txt"), "PAY-12 add refunds\n");
+    const outside = run(UNIT, ["push", "--commit-message-file", "message.txt"], alice);
+    expect(outside.status).not.toBe(0);
+    expect(String(outside.json?.error)).toBe(UNREAD);
+    const empty = run(UNIT, withMessage(alice, record, " \n"), alice);
+    expect(empty.status).not.toBe(0);
+    expect(String(empty.json?.error)).toBe(UNREAD);
+    for (const repo of Object.keys(hosts)) expect(git(join(alice, repo), ["branch", "--show-current"])).toBe("main");
   });
 });
 

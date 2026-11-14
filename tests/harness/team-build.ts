@@ -6,9 +6,9 @@
 
 import { expect } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -251,16 +251,51 @@ export function run(tool: string, args: string[], cwd: string, env: NodeJS.Proce
   return { status: result.status ?? -1, out: `${result.stdout ?? ""}${result.stderr ?? ""}`, stdout: result.stdout ?? "", json };
 }
 
-/** `next`, with rules delivered in parts taken as the agent takes them; `orch` is another tree's engine. */
-export function next(cwd: string, env: NodeJS.ProcessEnv = ENV, args: string[] = [], orch = ORCH): Record<string, unknown> {
+/**
+ * `next`, with rules delivered in parts taken as the agent takes them, and the
+ * agent's draft of a Unit's commit message taken as an agent that keeps today's
+ * message does (unless `stopAtDraft`): checked each time, and never given
+ * twice. `orch` is another tree's engine.
+ */
+export function next(
+  cwd: string,
+  env: NodeJS.ProcessEnv = ENV,
+  args: string[] = [],
+  orch = ORCH,
+  options: { stopAtDraft?: boolean } = {},
+): Record<string, unknown> {
   let result = run(orch, ["next", ...args], cwd, env);
+  let drafted = false;
   for (let parts = 0; parts < 50; parts++) {
     expect(result.status, result.out).toBe(0);
     const directive = JSON.parse(result.stdout) as Record<string, unknown>;
+    if (isDraftStep(directive) && !options.stopAtDraft) {
+      expect(drafted, `the draft step came twice: ${result.stdout}`).toBe(false);
+      expectDraftStep(cwd, directive);
+      drafted = true;
+      result = run(orch, ["next"], cwd, env);
+      continue;
+    }
     if (directive.kind !== "load-steering" || typeof directive.receipt !== "string") return directive;
     result = run(orch, ["continue", directive.receipt], cwd, env);
   }
   throw new Error("rules never finished arriving");
+}
+
+/** The agent's step to draft a Unit's commit message before its push question. */
+export function isDraftStep(step: Record<string, unknown>): boolean {
+  return step.kind === "print" && typeof step.commit_message_file === "string";
+}
+
+/** The draft step as the agent meets it: silent, its file holding today's message, which the step names. */
+export function expectDraftStep(cwd: string, step: Record<string, unknown>): string {
+  expect(isDraftStep(step), JSON.stringify(step)).toBe(true);
+  expect(step.narration, JSON.stringify(step)).toBeUndefined();
+  const file = String(step.commit_message_file);
+  const held = readFileSync(join(cwd, ...file.split("/")), "utf-8");
+  expect(held, `the draft file holds today's message: ${JSON.stringify(step)}`).toMatch(/^[^\n]+: [^\n]+\n?$/);
+  expect(String(step.message)).toContain(`\`${held.trim()}\``);
+  return file;
 }
 
 // A line for the person that tells them what to type, in place of an offer the
@@ -414,4 +449,40 @@ export function hook(dir: string, env: NodeJS.ProcessEnv, payload: Record<string
     cwd: dir, encoding: "utf-8", env: { ...env, CLAUDE_PROJECT_DIR: dir, AIDLC_PROJECT_DIR: dir }, input: JSON.stringify({ cwd: dir, ...payload }),
   });
   return { status: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+}
+
+// A team's commit message convention, as their own tools keep it: the first
+// line starts with a ticket key. TICKET_HOOK_WORDS is what their commit-msg
+// hook says (commitlint or a script in their repo), TICKET_RULE_WORDS what
+// their host says when a push carries a commit without one (a GitLab push rule).
+export const TICKET_HOOK_WORDS = "commit-msg: message must start with a ticket key (PAY-123 ...)";
+export const TICKET_RULE_WORDS = "GitLab: Commit message does not follow the pattern '^[A-Z]+-[0-9]+ '";
+
+/** Their commit-msg hook in a clone: a message without a ticket key is refused. */
+export function ticketKeyHook(repo: string): void {
+  const file = join(repo, ".git", "hooks", "commit-msg");
+  writeFileSync(file, `#!/bin/sh\nhead -n 1 "$1" | grep -qE '^[A-Z]+-[0-9]+ ' && exit 0\necho '${TICKET_HOOK_WORDS}' >&2\nexit 1\n`);
+  chmodSync(file, 0o755);
+}
+
+/** Their host's rule on a bare code host: a push whose new commits lack a ticket key is refused. */
+export function ticketKeyRule(host: string): void {
+  const file = join(host, "hooks", "pre-receive");
+  writeFileSync(file, "#!/bin/sh\nwhile read old new ref; do\n  for c in $(git rev-list \"$new\" --not --all); do\n" +
+    `    git log -1 --format=%s "$c" | grep -qE '^[A-Z]+-[0-9]+ ' || { echo "${TICKET_RULE_WORDS}" >&2; exit 1; }\n` +
+    "  done\ndone\nexit 0\n");
+  chmodSync(file, 0o755);
+}
+
+/** The build's message file: the commit message its push carries, one per build (its record). */
+export function commitMessageFile(record: string): string {
+  return `aidlc/.aidlc-engine/request-text/unit-push-message-${basename(record).replace(/[^A-Za-z0-9._-]+/g, "-")}.txt`;
+}
+
+/** A commit message written where the build's push reads it, as the agent writes it with its file tool. */
+export function commitMessage(workspace: string, record: string, text: string): string {
+  const file = commitMessageFile(record);
+  mkdirSync(join(workspace, "aidlc", ".aidlc-engine", "request-text"), { recursive: true });
+  writeFileSync(join(workspace, ...file.split("/")), text);
+  return file;
 }

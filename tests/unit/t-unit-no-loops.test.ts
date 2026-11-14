@@ -63,6 +63,10 @@ import {
   GIT_ENV,
   inSpace,
   takeIn,
+  commitMessage,
+  expectDraftStep,
+  ORCH,
+  ticketKeyHook,
 } from "../harness/team-build.ts";
 import { hostFor } from "../harness/scope-hosts.ts";
 import { AgentStandIn, type Directive, PersonScript } from "../harness/scope-run.ts";
@@ -399,6 +403,53 @@ describe("a step that waits on the person, and every way on the round added, nev
     const ready = next(alice, ENV);
     expect(ready.ask_type, JSON.stringify(ready)).toBe("unit-push");
     movesOn(alice, ENV, ready, choice(ready, "Push"));
+  });
+
+  test("a commit message their hook refuses: the way on, followed with the person's message, goes, and no step puts the same push as if nothing happened", () => {
+    const { hosts, alice, record } = refundsTaken((clone) => {
+      withTools(clone);
+    });
+    codeGenerated(alice, record);
+    finishBuild(record);
+    for (const repo of Object.keys(hosts)) ticketKeyHook(join(alice, repo));
+    // The agent's own step first, said to nobody: it drafts the message, here keeping today's, and runs next.
+    const draft = next(alice, ENV, [], ORCH, { stopAtDraft: true });
+    const file = expectDraftStep(alice, draft);
+    readsAsOffers(draft);
+    const push = next(alice, ENV, [], ORCH, { stopAtDraft: true });
+    expect(push.ask_type, JSON.stringify(push)).toBe("unit-push");
+    expect(key(push), JSON.stringify(push)).not.toBe(key(draft));
+    readsAsOffers(push);
+    // Push: their hook refuses the message, and the line says the one way on, in plain words.
+    const refused = runPrinted(alice, ENV, choice(push, "Push"));
+    expect(refused.status).not.toBe(0);
+    expect(refused.out).toContain("If it is the commit message, tell me the one to use, and I will commit with it and push again.");
+    expect(tellsWhatToType(refused.out)).toBe(false);
+    // The next step says the push did not go through: never the same question.
+    const after = next(alice, ENV, [], ORCH, { stopAtDraft: true });
+    expect(after.ask_type, JSON.stringify(after)).toBe("unit-push");
+    expect(key(after), JSON.stringify(after)).not.toBe(key(push));
+    readsAsOffers(after);
+    // They give a message: the agent writes it where the step says, in place of the one shown, and runs the choice's command.
+    expect(after.commit_message_file).toBe(file);
+    const withTheirs = (text: string): { status: number; out: string } => {
+      commitMessage(alice, record, text);
+      return runPrinted(alice, ENV, choice(after, "Push"));
+    };
+    // A message the hook refuses too: the same way on, and the step after it still says so, never the first question.
+    const second = withTheirs("PAY12 add refunds\n");
+    expect(second.status).not.toBe(0);
+    expect(second.out).toContain("If it is the commit message, tell me the one to use");
+    const still = next(alice, ENV, [], ORCH, { stopAtDraft: true });
+    expect(key(still), JSON.stringify(still)).not.toBe(key(push));
+    readsAsOffers(still);
+    // A message that fits goes, and the push is not put again.
+    const sent = withTheirs("PAY-12 add refunds\n");
+    expect(sent.status, sent.out).toBe(0);
+    for (const host of Object.values(hosts)) expect(git(host, ["log", "--format=%s", "main..refunds"])).toBe("PAY-12 add refunds");
+    const end = next(alice, ENV);
+    expect(end.ask_type ?? null, JSON.stringify(end)).not.toBe("unit-push");
+    readsAsOffers(end);
   });
 
   test("a merge under way on the Unit's branch: the push question offers to finish it, a push without that yes commits nothing over it, and the yes goes", () => {

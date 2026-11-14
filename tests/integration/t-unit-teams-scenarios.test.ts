@@ -414,7 +414,8 @@ describe("scenario 6: when things go wrong", () => {
     const pushed = run(kiro.unit, ["push"], alice);
     expect(pushed.status).not.toBe(0);
     expect(String(pushed.json?.error)).toBe(
-      "The push of refunds in billing was refused: branch protection: refunds needs a ticket (pre-receive hook declined). Nothing was retried. You're on refunds now in checkout-api and billing. Switch back to main any time.",
+      "The push of refunds in billing was refused: branch protection: refunds needs a ticket (pre-receive hook declined). Nothing was retried. You're on refunds now in checkout-api and billing. Switch back to main any time. " +
+        "If it is the commit message, tell me the one to use, and I will commit with it and push again.",
     );
   });
 

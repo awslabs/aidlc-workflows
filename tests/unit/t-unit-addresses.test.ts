@@ -31,6 +31,7 @@ import {
   STATE,
   tempDir,
   UNIT,
+  commitMessageFile,
 } from "../harness/team-build.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -181,7 +182,7 @@ describe("the push goes where git would push it", () => {
     const choices = ask.choices as Array<{ label: string; command?: string }>;
     expect(choices.map((choice) => choice.label)).toEqual(["Push to fork", "Push to team", "Not now"]);
     const team = choices.find((choice) => choice.label === "Push to team")!.command!;
-    expect(team).toEndWith("aidlc-unit.ts push --remote billing=team");
+    expect(team).toEndWith(`aidlc-unit.ts push --remote billing=team --commit-message-file ${commitMessageFile(record)}`);
     const picked = run(UNIT, ["push", "--remote", "billing=team"], alice);
     expect(picked.status, picked.out).toBe(0);
     expect(git(hosts.billing, ["ls-tree", "-r", "--name-only", "refunds"]).split("\n")).toContain("lib/refund.ts");
