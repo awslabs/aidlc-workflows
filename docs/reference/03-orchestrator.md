@@ -849,10 +849,23 @@ When a build has no stage left, `next` returns `ask_type: unit-push` until its
 state records `Unit Push: pushed` (written once the result reached the home's
 claim; `unsent` when the code went and the result did not, the claim refused
 it or was not there, and the ask is then **Send it again**): **Push** runs `unit push`, **Not now** runs
-`unit push --later` (then the end carries one line that it is not pushed yet).
+`unit push --later` (then the end carries one line that it is not pushed yet, with the message the push will carry).
 A repo with several remotes and none set for pushing (`pushRemotesToPick`)
 turns **Push** into one choice per remote, each running `unit push --remote
 <repo>=<name>`.
+Before the first push question of a build, `next` writes `<unit>: <work>` into the build's message
+file (`aidlc/.aidlc-engine/request-text/unit-push-message-<record>.txt`) and returns a print with no
+narration and `commit_message_file`: the agent drafts the message over it in the repos' own style, then
+runs `next`. The file's presence is the step's only record; a file it cannot write, a read-only probe, or
+a file there but empty, a link or unreadable gives the question at once with `<unit>: <work>` and no flag.
+The question then ends with the file's message as `git stripspace` gives it, carries
+`commit_message_file`, and every push choice's command gains `--commit-message-file <file>`. While
+`unit-push-refused.json` is in the record's `.aidlc-engine/` (each commit the push made, by repo, with the
+hash of the message it was given, written as each is made and at a refusal, removed once a push's code
+goes), the question says "Its last push did not go through." A retry given the message amends a repo's
+HEAD only when HEAD is that repo's recorded commit and no remote holds it (no remote-tracking ref, and
+`ls-remote --exit-code` status 2 or a fetched copy without it; any other answer, no amend), and not when it
+would only repeat the message the commit was given.
 The push's result rides the Unit's claim (`result`: per repo the branch, base,
 heads, changed blobs and patch-id; the outputs the home's later stages read, as
 files under `.aidlc-unit-result/` in the claim commit's tree). A home with

@@ -75,6 +75,8 @@ import {
   namesSourceCheckout,
   printUsageAndExit,
   recordDir,
+  writeRecordFileNoFollow,
+  removeRecordFileNoFollow,
   parseBoltDag,
   readAppendOnlyFileNoFollowOrThrow,
   readAuditShardEvents,
@@ -222,6 +224,7 @@ import {
   outputForLead,
   checkInLine,
   unitWordsArg,
+  unitWordsFile,
   builderOf,
   spaceWords,
   clearLeadWaitsOnTeams,
@@ -6886,6 +6889,124 @@ function readTakeTree(record: string): TakeTree {
   }
 }
 
+// The work a Unit's build belongs to, as its commit message names it.
+function homeLabelOf(stateContent: string, build: UnitBuild): string {
+  return getField(stateContent, "Home Label")?.trim() || build.homeRecord;
+}
+
+// The message a Unit's commit carries when the person gives none.
+export function unitDefaultMessage(stateContent: string): string {
+  const build = unitBuildOf(stateContent);
+  return build === null ? "" : `${build.unit}: ${homeLabelOf(stateContent, build)}`;
+}
+
+// The build's message file: the commit message its push carries, in the
+// request-text folder the agent writes the person's words to, one per build
+// (its record), so a file left by another build is never this one's.
+export function unitPushMessageFile(projectDir: string): string | null {
+  const record = recordDir(projectDir);
+  return record === null ? null : unitWordsFile("push-message", basename(record));
+}
+
+// A message as git commits it (`git stripspace`, its own whitespace cleanup):
+// what the push question shows, and what two messages are compared as.
+function messageAsGitTakesIt(dir: string, text: string): string {
+  const cleaned = git(dir, ["stripspace"], undefined, text);
+  return cleaned.ok ? cleaned.stdout.replace(/\n$/, "") : text.trim();
+}
+
+const messageHash = (dir: string, text: string): string =>
+  createHash("sha256").update(messageAsGitTakesIt(dir, text)).digest("hex");
+
+// Whether HEAD already carries this message, as git takes it.
+const messageOnHead = (dir: string, text: string): boolean =>
+  messageAsGitTakesIt(dir, git(dir, ["log", "-1", "--format=%B", "HEAD"]).stdout) === messageAsGitTakesIt(dir, text);
+
+// The build's message as its push question shows it, read as the push reads
+// it (a plain file directly in the request-text folder, through no link), or
+// null when there is none to show: absent, empty, a link, unreadable.
+export function unitPushMessage(projectDir: string): { file: string; text: string } | null {
+  const file = unitPushMessageFile(projectDir);
+  if (file === null || !existsSync(join(projectDir, ...file.split("/")))) return null;
+  const read = readRequestFile(projectDir, file);
+  if (typeof read === "string") return null;
+  const text = messageAsGitTakesIt(projectDir, read.text);
+  return text === "" ? null : { file, text };
+}
+
+// Today's message written into the build's message file for the agent to draft
+// over: true once written, false when there is no record or the file cannot be
+// written (the push question then shows today's message without it).
+export function writeUnitPushDraft(projectDir: string, stateContent: string): boolean {
+  const file = unitPushMessageFile(projectDir);
+  if (file === null || isReadOnlyEngineProbe()) return false;
+  try {
+    writeRecordFileNoFollow(projectDir, file, `${unitDefaultMessage(stateContent)}\n`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// The push's own commits that did not go yet, by repo: each commit's id and
+// the hash of the message it was given (never of what a hook made of it).
+// Written as each commit is made and at each refusal, removed once a push
+// goes: while it is there, the last push did not go through.
+const PUSH_REFUSED_MARK = "unit-push-refused.json";
+type PushRefusedMark = Record<string, { commit: string; message: string }>;
+
+function readPushRefused(record: string): PushRefusedMark | null {
+  const path = join(record, ENGINE_DIR, PUSH_REFUSED_MARK);
+  if (!existsSync(path)) return null;
+  try {
+    const read = JSON.parse(readFileSync(path, "utf-8")) as unknown;
+    if (read === null || typeof read !== "object" || Array.isArray(read)) return {};
+    return Object.fromEntries(Object.entries(read as Record<string, unknown>).filter((entry): entry is [string, { commit: string; message: string }] => {
+      const value = entry[1] as { commit?: unknown; message?: unknown } | null;
+      return typeof value?.commit === "string" && typeof value.message === "string";
+    }));
+  } catch {
+    return {};
+  }
+}
+
+function writePushRefused(record: string, mark: PushRefusedMark): void {
+  mkdirSync(join(record, ENGINE_DIR), { recursive: true });
+  writeFileAtomic(join(record, ENGINE_DIR, PUSH_REFUSED_MARK), `${JSON.stringify(mark, null, 2)}\n`);
+}
+
+// Whether the last push of this build did not go through.
+export function unitPushRefused(projectDir: string): boolean {
+  const record = recordDir(projectDir);
+  return record !== null && readPushRefused(record) !== null;
+}
+
+// Whether a commit went nowhere: no remote-tracking ref holds it, and the push
+// remote's branch does not either, by git's own answer (ls-remote's status 2 is
+// "no such branch"; else the branch's copy, fetched as a refused push fetches
+// it). "unknown" for any other answer: offline, sign-in, a fetch that fails.
+function wentNowhere(dir: string, remote: string, branch: string, oid: string): "nowhere" | "went" | "unknown" {
+  const unheld = git(dir, ["rev-list", "-n", "1", oid, "--not", "--remotes"]);
+  if (!unheld.ok) return "unknown";
+  if (unheld.stdout.trim() !== oid) return "went";
+  const listed = git(dir, ["ls-remote", "--exit-code", remote, `refs/heads/${branch}`]);
+  if (listed.code === 2) return "nowhere";
+  if (!listed.ok) return "unknown";
+  if (!git(dir, ["fetch", "-q", remote, `${branch}:refs/remotes/${remote}/${branch}`]).ok) return "unknown";
+  const held = git(dir, ["merge-base", "--is-ancestor", oid, `refs/remotes/${remote}/${branch}`]);
+  return held.code === 0 ? "went" : held.code === 1 ? "nowhere" : "unknown";
+}
+
+// A commit their hook did not let through: told apart from the push's other
+// failures by its kind, never by its words.
+class CommitRefused extends Error {}
+
+// The one way on after their hook or host refuses the Unit's commit.
+const MESSAGE_WAY_ON = "If it is the commit message, tell me the one to use, and I will commit with it and push again.";
+
+const COMMIT_MESSAGE_UNREAD = "push --commit-message-file needs the commit message in a file directly inside " +
+  `${REQUEST_TEXT_DIR}/ in this project, written with your file tool. Nothing was committed or pushed.`;
+
 // The Unit's commit in one repo: built in an index of its own from HEAD, so
 // nothing the person staged comes along. A file that held their own change at
 // take goes in as HEAD plus the Unit's change since then; where the two cannot
@@ -6896,6 +7017,12 @@ function readTakeTree(record: string): TakeTree {
 // the Code Generation review binds, keyed under `listedAs`), null when the
 // walk could not be read. `share` is the plan's share (commitPlanHere): its
 // own message, and its own words when git refuses the add or the commit.
+// `given` is the message the person gave the push: the commit takes it whole,
+// through git's own cleanup; `amend` puts it on HEAD, the commit this push
+// made and could not push, unless `same` (HEAD was given that message) and
+// there is no newer change of the Unit's. An amend of the message alone that
+// their hook refuses leaves HEAD as it was, with their hook's words in
+// `refused`; any other refused commit stops the push.
 function commitUnitPaths(
   dir: string,
   paths: string[],
@@ -6905,6 +7032,7 @@ function commitUnitPaths(
   name: string,
   listed: { listing: ReadonlyMap<string, string>; listedAs: string } | null,
   share?: { message: string; refused: (said: string, adding: boolean) => never },
+  given?: { message: string; amend: boolean; same: boolean; refused?: string },
 ): string[] {
   const scratch = mkdtempSync(join(tmpdir(), "aidlc-unit-commit-"));
   const env = { GIT_INDEX_FILE: join(scratch, "index") };
@@ -6947,13 +7075,22 @@ function commitUnitPaths(
       }
     }
     const committed = paths.filter((path) => !leftOut.includes(path));
-    if (committed.length > 0 && !git(dir, ["diff", "--cached", "--quiet", "--", ...committed], env).ok) {
-      const made = git(dir, ["commit", "-q", "-m", share?.message ?? `${unit}: ${label}`], env);
+    const changed = committed.length > 0 && !git(dir, ["diff", "--cached", "--quiet", "--", ...committed], env).ok;
+    const amend = given?.amend === true && (changed || !given.same);
+    if (changed || amend) {
+      const made = given === undefined
+        ? git(dir, ["commit", "-q", "-m", share?.message ?? `${unit}: ${label}`], env)
+        : git(dir, ["commit", "-q", ...(amend ? ["--amend"] : []), "-F", "-"], env, given.message);
       if (!made.ok) {
-        if (share) share.refused((made.stderr || made.stdout).trim(), false);
-        fail(`The commit in ${name} did not go through: ${(made.stderr || made.stdout).trim()}`);
+        const said = (made.stderr || made.stdout).trim();
+        if (share) share.refused(said, false);
+        if (amend && !changed && given !== undefined) {
+          given.refused = said;
+          return leftOut;
+        }
+        throw new CommitRefused(`The commit in ${name} did not go through: ${said}`);
       }
-      git(dir, ["reset", "-q", "--", ...committed]);
+      if (committed.length > 0) git(dir, ["reset", "-q", "--", ...committed]);
       for (const [path, now] of sent) own[path] = now;
     }
   } finally {
@@ -8147,6 +8284,18 @@ function pushUnit(args: string[], projectDir?: string): void {
     console.log(JSON.stringify({ pushed: false, notice: later.join(" ") }));
     return;
   }
+  // The commit message the person gave, from the file the agent wrote it to:
+  // the Unit's commit takes it whole.
+  const messageFile = flags["commit-message-file"];
+  if (bareFlags.has("commit-message-file")) fail(COMMIT_MESSAGE_UNREAD);
+  let given: { text: string; spend(): void } | null = null;
+  if (messageFile !== undefined) {
+    const read = readRequestFile(pd, messageFile);
+    if (typeof read === "string") fail(COMMIT_MESSAGE_UNREAD);
+    given = read;
+  }
+  // A way on this push names carries the message on.
+  const messageFlag = messageFile === undefined ? "" : ` --commit-message-file ${shellArg(messageFile)}`;
   // A repo the Unit changed that the home's plan did not list is fine
   // (decision 5): it is added to the build's repos, said once, and pushed.
   let manifest = readUnitSourceManifest(pd, "code-generation", unit);
@@ -8199,7 +8348,7 @@ function pushUnit(args: string[], projectDir?: string): void {
     standing = takeStanding(pd, build);
   }
   const claim = currentClaim(pd, home.target, ref);
-  const label = getField(state, "Home Label")?.trim() || build.homeRecord;
+  const label = homeLabelOf(state, build);
   // What this Unit sent before keeps each repo's base and heads across pushes:
   // its claim's result, so a push again after a merge still lists the files
   // the Unit changed.
@@ -8240,7 +8389,7 @@ function pushUnit(args: string[], projectDir?: string): void {
     if (own !== null) {
       fail(`${name} has ${unit}'s build on branch ${own}, which holds commits ${branch} does not, so nothing was switched or ` +
         `pushed. Ask the person whether to push it on ${own}, the branch it was built on; on their yes, run ` +
-        `\`${aidlcToolInvocation("unit")} push --branch ${own}\`, and the lead's project follows that branch.`);
+        `\`${aidlcToolInvocation("unit")} push --branch ${own}${messageFlag}\`, and the lead's project follows that branch.`);
     }
     const remote = pushRemoteOf(dir, branch, picked.get(repo));
     if (remote === null) fail(`${name} has no remote to push ${unit} to.`);
@@ -8317,6 +8466,31 @@ function pushUnit(args: string[], projectDir?: string): void {
   const whereNow = (done = false): string =>
     whereNowLine(branch, moved, done && ownChanges(planned) ? "; your other changes are still yours, uncommitted" : "") +
       along.map((line) => ` ${line}`).join("");
+  // Each commit this push makes, by repo, as it is made; saved at a refusal
+  // too, so the next push question says the last push did not go through.
+  const buildRecord = activeRecordDir(pd);
+  const mark: PushRefusedMark = { ...(readPushRefused(buildRecord) ?? {}) };
+  const saveMark = (): void => writePushRefused(buildRecord, mark);
+  const textHash = messageHash(pd, given?.text ?? `${unit}: ${label}`);
+  // The repos whose commit did not take the message the person gave, and why.
+  const messageKept = { went: [] as string[], notOurs: [] as string[], unknown: [] as string[], hook: [] as Array<{ name: string; words: string }> };
+  const keptLines = (only?: string): string[] => {
+    const pick = (names: string[]): string[] => names.filter((entry) => only === undefined || entry === only);
+    const keeps = (names: string[]): string => `${joinNames(names)} keep${names.length === 1 ? "s" : ""}`;
+    const went = pick(messageKept.went);
+    const notOurs = pick(messageKept.notOurs);
+    const unknown = pick(messageKept.unknown);
+    return [
+      ...(went.length === 0 ? [] : [`${keeps(went)} ${unit}'s commit as it went before, so your message is not on it there: ` +
+        "changing it takes a force push of your own, and AI-DLC never forces a push."]),
+      ...(notOurs.length === 0 ? [] : [`${keeps(notOurs)} ${notOurs.length === 1 ? "its" : "their"} last commit as it is, so your ` +
+        `message is not on it there: it is not the commit AI-DLC made for ${unit} and could not push.`]),
+      ...(unknown.length === 0 ? [] : [`${keeps(unknown)} ${unit}'s commit as it is for now, so your message is not on it there: ` +
+        "AI-DLC could not check whether it went."]),
+      ...messageKept.hook.filter((entry) => only === undefined || entry.name === only).map((entry) =>
+        `${entry.name} keeps ${unit}'s commit as it was, so your message is not on it there: its hook did not take your message (${entry.words}).`),
+    ];
+  };
   for (const { repo, dir, name, remote, paths } of planned) {
     // The Unit's branch under the name it had, now to go under the person's:
     // renamed as their own hands would while the remote has no copy of it.
@@ -8367,9 +8541,30 @@ function pushUnit(args: string[], projectDir?: string): void {
       const listedAs = targets.get(repo)?.listedAs;
       if (sourceListing === undefined && paths.some((path) => path.endsWith("/"))) sourceListing = workspaceSourceListing(pd);
       const listed = sourceListing && listedAs !== undefined ? { listing: sourceListing, listedAs } : null;
-      for (const path of commitUnitPaths(dir, paths, takeTree[repo] ?? {}, unit, label, name, listed)) leftOut.push(`${path} in ${name}`);
+      // Their message goes on the commit this push made and could not push,
+      // and on nothing else that is there.
+      const headBefore = git(dir, ["rev-parse", "--verify", "--quiet", "HEAD"]).stdout.trim();
+      const ours = headBefore !== "" && mark[repo]?.commit === headBefore;
+      const where = given !== null && ours ? wentNowhere(dir, remote, branch, headBefore) : null;
+      const offer = given === null ? undefined : { message: given.text, amend: where === "nowhere", same: ours && mark[repo]?.message === textHash } as
+        { message: string; amend: boolean; same: boolean; refused?: string };
+      for (const path of commitUnitPaths(dir, paths, takeTree[repo] ?? {}, unit, label, name, listed, undefined, offer)) leftOut.push(`${path} in ${name}`);
+      const headAfter = git(dir, ["rev-parse", "--verify", "--quiet", "HEAD"]).stdout.trim();
+      if (headAfter !== headBefore) {
+        mark[repo] = { commit: headAfter, message: textHash };
+        saveMark();
+      } else if (offer !== undefined && !offer.same && !messageOnHead(dir, offer.message)) {
+        // Their message is on no commit there: why, by git's own answer.
+        const at = where ?? wentNowhere(dir, remote, branch, headBefore);
+        if (offer.refused !== undefined) messageKept.hook.push({ name, words: offer.refused });
+        else if (at === "went") messageKept.went.push(name);
+        else if (at === "unknown") messageKept.unknown.push(name);
+        else messageKept.notOurs.push(name);
+      }
     } catch (error) {
-      fail(`${errorMessage(error).replace(/([^.!?])$/, "$1.")} Nothing was pushed.${whereNow()}`);
+      saveMark();
+      fail(`${errorMessage(error).replace(/([^.!?])$/, "$1.")} Nothing was pushed.${whereNow()}` +
+        (error instanceof CommitRefused ? ` ${MESSAGE_WAY_ON}` : ""));
     }
     if (takeTree[repo] !== undefined) writeTakeTree(activeRecordDir(pd), takeTree);
   }
@@ -8389,16 +8584,24 @@ function pushUnit(args: string[], projectDir?: string): void {
       git(dir, ["fetch", "-q", remote, `${branch}:${theirs}`]);
       const behind = git(dir, ["rev-parse", "--verify", "--quiet", theirs]).ok &&
         !git(dir, ["merge-base", "--is-ancestor", theirs, "HEAD"]).ok;
+      saveMark();
       if (behind) {
         const fresh = `${branch}-2`;
         fail(
           `${unit} was not pushed: its branch ${branch} on ${remote} in ${name} still holds the build pushed before, and ` +
             `this build is not on top of it. Ask the person whether to push it as a new branch, ${fresh}, which the ` +
-            `lead's project then follows; on their yes, run \`${aidlcToolInvocation("unit")} push --branch ${fresh}\`. ` +
+            `lead's project then follows; on their yes, run \`${aidlcToolInvocation("unit")} push --branch ${fresh}${messageFlag}\`. ` +
             `Replacing ${branch} itself takes a force push of their own; AI-DLC never forces a push.${whereNow()}`,
         );
       }
-      fail(`The push of ${unit} in ${name} was refused: ${pushRefusal(pushed.stderr)}. Nothing was retried.${whereNow()}`);
+      // The way on is said only where a message the person gives could change
+      // what this host refuses: the commit this push made is the one commit it
+      // sends that the remote lacks.
+      const tip = git(dir, ["rev-parse", "HEAD"]).stdout.trim();
+      const alone = git(dir, ["rev-list", "--count", "HEAD", "--not", "--remotes"]).stdout.trim() === "1";
+      const wayOn = mark[repo]?.commit === tip && alone ? ` ${MESSAGE_WAY_ON}` : "";
+      fail(`The push of ${unit} in ${name} was refused: ${pushRefusal(pushed.stderr)}. Nothing was retried.${whereNow()}` +
+        keptLines(name).map((line) => ` ${line}`).join("") + wayOn);
     }
     const head = git(dir, ["rev-parse", "HEAD"]).stdout.trim();
     const base = earlier.get(repo)?.base ??
@@ -8449,6 +8652,9 @@ function pushUnit(args: string[], projectDir?: string): void {
       `already had a change of yours when ${unit} was taken, and ${unit}'s own change could not be kept apart from it. ` +
       `Both are still in the file, uncommitted.`);
   }
+  lines.push(...keptLines());
+  // The code went: the last push went through.
+  rmSync(join(buildRecord, ENGINE_DIR, PUSH_REFUSED_MARK), { force: true });
   // The result goes home on the claim, with the Unit outputs the home's later
   // stages read.
   const outputs = unitOutputsHomeReads(unit, getField(state, "Scope") ?? "")
@@ -8538,6 +8744,19 @@ function pushUnit(args: string[], projectDir?: string): void {
     }, pd);
   });
   if (sentOn) finishBuildRecord(pd);
+  // The push is done once its result went too: the build's message is spent,
+  // and until then the same command runs again as written.
+  if (sentOn) {
+    given?.spend();
+    const buildMessage = unitPushMessageFile(pd);
+    if (buildMessage !== null && existsSync(join(pd, ...buildMessage.split("/")))) {
+      try {
+        removeRecordFileNoFollow(pd, buildMessage);
+      } catch {
+        // Left in its ignored folder; the next push question shows it.
+      }
+    }
+  }
   const checkIn = sentOn ? checkInLine(pd) : null;
   if (checkIn !== null) lines.push(checkIn);
   // Reached the lead's project or the team's own remote, so no line asks

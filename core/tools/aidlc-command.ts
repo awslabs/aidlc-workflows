@@ -284,9 +284,10 @@ export const UNIT_GRAMMAR: Readonly<Record<string, UnitGrammar>> = {
   },
   push: {
     name: false,
-    options: ["branch", "remote"],
+    options: ["branch", "remote", "commit-message-file"],
     switches: ["later", "finish-merge"],
-    usage: "unit push [--branch <name>] [--remote <repo>=<remote>[,<repo>=<remote>...]] [--later] [--finish-merge]",
+    usage: "unit push [--branch <name>] [--remote <repo>=<remote>[,<repo>=<remote>...]] [--commit-message-file <file>] " +
+      "[--later] [--finish-merge]",
   },
   rebase: { name: false, options: [], usage: "unit rebase" },
   release: { name: true, options: ["expect-nonce"], usage: "unit release <unit> [--expect-nonce <claim-nonce>]" },

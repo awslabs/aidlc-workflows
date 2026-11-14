@@ -49,7 +49,7 @@ diagnostic and lifecycle routes.
 | `/aidlc --release <unit>` | Release a live Unit claim from unscoped main by publishing a tombstone |
 | `/aidlc unit assign --here <unit>` | At the lead's project, build a Unit here: its claim is taken for the lead's project, like any take |
 | `/aidlc unit take <unit> --home <record>` | Take a Unit of the lead's work as your team's own piece of work, or carry its build on |
-| `/aidlc unit push [--later] [--remote <repo>=<name>] [--branch <name>] [--finish-merge]` | In a Unit's build, commit and push exactly its files on its branch in each repo, and send the result back to the lead's project |
+| `/aidlc unit push [--later] [--remote <repo>=<name>] [--branch <name>] [--commit-message-file <file>] [--finish-merge]` | In a Unit's build, commit and push exactly its files on its branch in each repo, and send the result back to the lead's project |
 | `/aidlc unit send-back <unit>` | At the lead's project, send a team's Unit back from Build and Test in the failure's words |
 | `/aidlc unit propose --input <file>` | In a Unit's build, send the lead a change to an input the Unit was approved with |
 | `/aidlc unit rebase` | In a Unit's build started early, move it onto the branch the Unit it waited on merged into |
@@ -823,8 +823,21 @@ the build; you can also run it yourself, for example after a review fix:
 /aidlc unit push --later
 /aidlc unit push --remote billing=team
 /aidlc unit push --branch feature/refunds
+/aidlc unit push --commit-message-file aidlc/.aidlc-engine/request-text/unit-push-message-<record>.txt
 /aidlc unit push --finish-merge
 ```
+
+The commit message: with `--commit-message-file`, the Unit's commit takes the
+message in that file whole (a ticket key, a `Signed-off-by:` line), through
+git's own cleanup; the file sits directly in `aidlc/.aidlc-engine/request-text/`
+and is spent once the push is done. Without it, the message is `<unit>: <work>`,
+as before. The push question shows the message it will carry, which the agent
+drafts first in the style the repos' own commits follow; your own words replace
+it whole. When your hook or your host refuses the message, the line says so in
+their words and offers once to take the message to use; the retry puts it on the
+commit AI-DLC made there and could not push (an amend), never on a commit of
+yours or one a remote holds, and a message their hook will not take on such an
+amend leaves that commit as it was.
 
 In each repo the Unit's Code Generation recorded writing to (its
 `source-manifest.json`), it switches to a branch named after the Unit (new

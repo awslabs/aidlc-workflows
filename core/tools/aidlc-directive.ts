@@ -873,6 +873,8 @@ export interface UnitPushAskDirective extends AskDirectiveBase {
   ask_type: "unit-push";
   response_route: "command";
   choices: AskChoice[];
+  /** The build's message file: the commit message the question shows, which every push choice's command carries. */
+  commit_message_file?: string;
 }
 
 export interface NewWorkRoutingAskDirective extends AskDirectiveBase {
@@ -1023,6 +1025,8 @@ export interface PrintDirective {
   accept_as_is?: "offered" | "next-revision";
   /** On the reply that opens or shows the gate: its question's id on the record. */
   question_id?: string;
+  /** The agent's step to draft a Unit's commit message: the file it drafts it in. */
+  commit_message_file?: string;
   // On a step that says where things stand and ends the turn, for the agent:
   // the commands for what the person may say back to the board, and each offer
   // the step makes the person, in their words as a question, with the choices
@@ -1320,10 +1324,12 @@ const ASK_FIELDS = [
   // The take question: someone else's builds listed as being built, each with
   // the command that carries it on (carryOnNote).
   "carry_on",
+  // The push question: the file the commit message it shows is in.
+  "commit_message_file",
 ] as const;
 const PRINT_FIELDS = [
   "kind", "message", "ends_turn", "next_stage", "document_note", "revision_cycle", "accept_as_is", "question_id", "offers",
-  "carry_on",
+  "carry_on", "commit_message_file",
 ] as const;
 const ERROR_FIELDS = ["kind", "message"] as const;
 const DONE_FIELDS = ["kind", "reason", "workflow_continues", "done_note"] as const;
@@ -1427,6 +1433,12 @@ const TEAM_NAME_NOTE = "When they take a Unit and give their team another name t
 
 // A take builds in the space the person works in; the space is theirs to name
 // where to build, and a team they mention never picks one (team names change).
+// The push question shows the commit message its build's file holds: the
+// person's own words replace it there, whole, and the choice they pick carries it.
+const COMMIT_MESSAGE_NOTE = "The commit message the question shows is the one in the file commit_message_file names: " +
+  "when they give their own, write it there with your file tool, never a shell, exactly as they gave it, in place of " +
+  "the one shown, then run the command of the push choice they pick.";
+
 export const TAKE_SPACE_NOTE = "When they say which space to build it in, in their own words (such as \"take it in the " +
   "web space\" or \"build this in payments\"), add `--space '<that space>'` to the Start choice's command; naming " +
   "themselves or their team is not that.";
@@ -2001,6 +2013,8 @@ export function withAgentNotes<T extends object>(
       ? unitAmendQuestionNote(invocation)
       : d.ask_type === "unit-take"
       ? `${questionNote(invocation, choices?.length === 1)} ${TAKE_SPACE_NOTE}${carryOnNote(d.carry_on as CarryOnCommand[] | undefined)}`
+      : d.ask_type === "unit-push" && typeof d.commit_message_file === "string"
+      ? `${questionNote(invocation, choices?.length === 1)} ${COMMIT_MESSAGE_NOTE}`
       : d.ask_type === "unit-signoff"
       ? questionNote(invocation, choices?.length === 1) + " Their words sign it off: when they do, write them, as they typed them, to the file signoff_command names with your file tool, never a shell, and run it; anything else leaves it waiting."
       : questionNote(invocation, choices?.length === 1);
@@ -2303,6 +2317,7 @@ export function validateDirective(obj: unknown): ValidationResult {
         "handovers",
         "amend_command",
         "signoff_command",
+        "commit_message_file",
       ] as const;
       const rejectUnexpected = (
         askType: string,
@@ -2397,7 +2412,11 @@ export function validateDirective(obj: unknown): ValidationResult {
           : o.ask_type === "unit-signoff" ? "signoff_command"
           : null;
         if (commandField !== null) checkString(o, commandField, kind, errors);
-        rejectUnexpected(String(o.ask_type), commandField !== null ? { [commandField]: true } : {});
+        if (o.ask_type === "unit-push" && o.commit_message_file !== undefined) checkString(o, "commit_message_file", kind, errors);
+        rejectUnexpected(String(o.ask_type), {
+          ...(commandField !== null ? { [commandField]: true } : {}),
+          ...(o.ask_type === "unit-push" ? { commit_message_file: true } : {}),
+        });
       } else if (o.ask_type === "new-work-routing") {
         if (o.response_route !== "next") {
           errors.push(`${kind}: new-work-routing response_route must be "next"`);
@@ -2501,6 +2520,7 @@ export function validateDirective(obj: unknown): ValidationResult {
       checkOptionalQuestionId(o, kind, errors);
       if (o.board_note !== undefined) checkString(o, "board_note", kind, errors);
       if (o.offers !== undefined && !Array.isArray(o.offers)) errors.push(`${kind}: offers must be an array`);
+      if (o.commit_message_file !== undefined) checkString(o, "commit_message_file", kind, errors);
       break;
     case "error":
       checkString(o, "message", kind, errors);

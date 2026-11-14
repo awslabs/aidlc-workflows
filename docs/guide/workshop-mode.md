@@ -760,8 +760,12 @@ no folder of the lead's and no remote are added.
 
 When your Unit's last stage is approved, AI-DLC offers the push: "Refunds is
 built and you approved it. It changed checkout-api and billing. Commit its
-changes on branch refunds in each and push them?" **Push** runs
-`aidlc unit push`. In each repo it puts you on a branch named after the Unit,
+changes on branch refunds in each and push them, with this commit message?",
+followed by the message. The agent drafts it first in the style the repos' own
+commits follow (their recent commits, a commitlint config or a contributing
+guide), or leaves `<unit>: <work>` when that fits; say the message you want and
+your words replace it whole, a ticket key and a `Signed-off-by:` line too.
+**Push** runs `aidlc unit push` with that message. In each repo it puts you on a branch named after the Unit,
 as your own hands would: started from the shared integration branch, fetched,
 when your working tree allows, else from where you are (and the line names any
 of your unpushed commits that come along). Then it commits exactly the files the
@@ -780,7 +784,13 @@ later push from the branch you went back to takes the Unit's files Code
 Generation changed there onto its branch as they are; when changes of your own
 are in the way, it stops with git's words, nothing moves, and the push is
 offered again once they are committed or put aside. A push the host refuses is
-said once, in its own words, and nothing retries.
+said once, in its own words, and nothing retries. When your commit-msg hook or a
+host rule on commit messages refuses it, the line also offers once to take the
+message to use, and the next push question says the last push did not go
+through. The retry commits with your message, or puts it on the commit AI-DLC
+made there and could not push (an amend with your own git); a commit of yours
+and one a remote already holds are never changed, and the line says where your
+message is not on a commit.
 **Not now** pushes nothing; the end of the build says once that the Unit is not
 pushed yet. A repo the Unit changed that the lead's plan did not list is added
 to the build's repos and goes with the push, said once. When the code went but

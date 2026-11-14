@@ -929,8 +929,14 @@ export function isHomesCopiedWork(projectDir: string, state: string): boolean {
 // the command names, with its file tool, and the command reads them from there
 // (readRequestFile, as `unit gate` does).
 export function unitWordsArg(verb: string, unit?: string): string {
-  const name = [verb, ...(unit === undefined ? [] : [unit])].join("-").replace(/[^A-Za-z0-9._-]+/g, "-");
-  return `--request-file ${REQUEST_TEXT_DIR}/unit-${name}.txt`;
+  return `--request-file ${unitWordsFile(verb, unit)}`;
+}
+
+// The file in the request-text folder for a Unit verb's words: one name rule
+// for each file the agent writes there for a Unit command.
+export function unitWordsFile(verb: string, name?: string): string {
+  const named = [verb, ...(name === undefined ? [] : [name])].join("-").replace(/[^A-Za-z0-9._-]+/g, "-");
+  return `${REQUEST_TEXT_DIR}/unit-${named}.txt`;
 }
 
 // The clause of the line solo work's switch to teams says, while the lead's

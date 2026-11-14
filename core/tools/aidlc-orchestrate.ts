@@ -669,6 +669,11 @@ import {
   leadWorkByAddress,
   takeAside,
   resendQuestion,
+  unitDefaultMessage,
+  unitPushMessage,
+  unitPushMessageFile,
+  unitPushRefused,
+  writeUnitPushDraft,
   resultTakeHold,
   resultWaitsLine,
   sendLeadsApprovedChanges,
@@ -9840,13 +9845,16 @@ function unitMoveOntoAsk(projectDir: string, stateContent: string): AskDirective
 
 // The end of a Unit's build: the offer to push it home, until the person asked
 // for the push or said not now (then the end says it once). Null for other work.
-function unitPushAsk(projectDir: string, stateContent: string | null): AskDirective | null {
+function unitPushAsk(projectDir: string, stateContent: string | null): AskDirective | PrintDirective | null {
   const build = unitBuildOf(stateContent);
   if (build === null || stateContent === null) return null;
   const push = getField(stateContent, UNIT_PUSH_FIELD)?.trim();
   const unit = build.unit;
   if (push === "later") {
-    sayWithStepOnce(projectDir, `${unit} is built and approved, and not pushed yet. Do you want me to push it now?`);
+    // The push question is not put again until a push, so this line shows the message it will carry.
+    const held = unitPushMessage(projectDir);
+    sayWithStepOnce(projectDir, `${unit} is built and approved, and not pushed yet. Do you want me to push it now` +
+      (held === null ? "?" : `, with this commit message?\n\n${held.text}`));
     return null;
   }
   if (!unitPushToOffer(projectDir, stateContent)) return null;
@@ -9904,6 +9912,17 @@ function unitPushAsk(projectDir: string, stateContent: string | null): AskDirect
       "of its branch there. Once they are committed or put aside, do you want me to push it?");
     return null;
   }
+  // The message the commit will carry: the agent drafts it once, over today's
+  // message in the build's message file, before the question is put (a file
+  // there but empty, a link or unreadable is no draft, and is never drafted
+  // again); with no file to show, today's message, pushed without the flag.
+  const draftFile = unitPushMessageFile(projectDir);
+  const held = unitPushMessage(projectDir);
+  if (held === null && draftFile !== null && !existsSync(join(projectDir, ...draftFile.split("/"))) &&
+    writeUnitPushDraft(projectDir, stateContent)) {
+    return unitPushDraftStep(unit, repos, draftFile, unitDefaultMessage(stateContent));
+  }
+  const messageFlag = held === null ? "" : ` --commit-message-file ${shellArg(held.file)}`;
   const names = repos.map((repo) => (repo === "." ? "the repo" : repo));
   const changed = names.length === 0 ? "" : ` It changed ${names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`}.`;
   // A repo with several remotes and none set for pushing: which one is theirs to say.
@@ -9915,27 +9934,56 @@ function unitPushAsk(projectDir: string, stateContent: string | null): AskDirect
   const verb = finishing ? "Finish the merge and push" : "Push";
   const finishFlag = `${finishing ? " --finish-merge" : ""}${ownBranch !== null ? ` --branch ${shellArg(ownBranch)}` : ""}`;
   const pushes = pick.length === 0
-    ? [{ label: verb, detail, command: `${unitTool} push${finishFlag}` }]
+    ? [{ label: verb, detail, command: `${unitTool} push${finishFlag}${messageFlag}` }]
     : pick[0].remotes.map((remote) => {
       const pairs = pick.filter((entry) => entry.remotes.includes(remote)).map((entry) => `${entry.repo}=${remote}`);
-      return { label: `${verb} to ${remote}`, detail, command: `${unitTool} push --remote ${shellArg(pairs.join(","))}${finishFlag}` };
+      return { label: `${verb} to ${remote}`, detail, command: `${unitTool} push --remote ${shellArg(pairs.join(","))}${finishFlag}${messageFlag}` };
     });
   const merging = !finishing ? "" : ` ${joinRepoNames(toFinish)} ${toFinish.length === 1 ? "is" : "are"} in the middle of a merge on ` +
     `${branch}, with nothing left to resolve.`;
   const several = pick.length === 0 ? "" : ` ${pick.map((entry) => (entry.repo === "." ? "The repo" : entry.repo)).join(" and ")} ` +
     `${pick.length === 1 ? "has" : "have"} several remotes and none is set for pushing.`;
+  const refused = unitPushRefused(projectDir) ? " Its last push did not go through." : "";
   return {
     kind: "ask",
     ask_type: "unit-push",
     response_route: "command",
-    question: `${unit} is built and you approved it.${changed}${several}${merging} ` +
+    question: `${unit} is built and you approved it.${changed}${several}${merging}${refused} ` +
       `${finishing ? "Finish the merge, then commit" : "Commit"} its changes on ` +
-      `branch ${branch} in ${names.length > 1 ? "each" : "it"} and push ${names.length > 1 ? "them" : "it"}?`,
+      `branch ${branch} in ${names.length > 1 ? "each" : "it"} and push ${names.length > 1 ? "them" : "it"}, with this commit message?` +
+      `\n\n${held?.text ?? unitDefaultMessage(stateContent)}`,
     choices: [
       ...pushes,
       { label: "Not now", detail: "Nothing is pushed until you want it to be.", command: `${unitTool} push --later` },
     ],
+    ...(held === null ? {} : { commit_message_file: held.file }),
   };
+}
+
+// The agent's own step before a Unit's push question, said to nobody: it
+// drafts the commit message in the repo's own style over today's message in
+// the build's message file, which the question then shows.
+function unitPushDraftStep(unit: string, repos: string[], file: string, today: string): PrintDirective {
+  return {
+    kind: "print",
+    message: `Draft ${unit}'s commit message the way ${joinRepoNames(repos)}'s own commits are written (their recent ` +
+      `commits, a commitlint config or a contributing guide say how), about what ${unit} changed. Write it with your file ` +
+      `tool, never a shell, over the message in \`${file}\`, which holds \`${today}\` now; leave that as it is when it ` +
+      `already fits. Then run \`${aidlcToolInvocation("orchestrate")} next\`.`,
+    commit_message_file: file,
+  };
+}
+
+// The build's end while its push waits: how the agent pushes when the person
+// says so, and where their own commit message goes when they give one.
+function unitPushDoneNote(projectDir: string): string {
+  const unitTool = aidlcToolInvocation("unit");
+  const held = unitPushMessage(projectDir);
+  return held === null
+    ? `When the person says push, run \`${unitTool} push\` and say its notice line.`
+    : `When the person says push, run \`${unitTool} push --commit-message-file ${shellArg(held.file)}\` and say its notice ` +
+      "line; when they give their own commit message, write it to that file first, with your file tool, never a shell, " +
+      "exactly as they gave it.";
 }
 
 // Why the send again of a result the lead's project did not take is not
@@ -15932,7 +15980,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       // loop bookkeeping (a report landed, a read-only command already ran) and
       // stay silent: the user did not ask about the round-trip.
       narration: "That is everything on the plan. Your work is finished and written up.",
-      ...(notPushed ? { done_note: `When the person says push, run \`${aidlcToolInvocation("unit")} push\` and say its notice line.` } : {}),
+      ...(notPushed ? { done_note: unitPushDoneNote(pd) } : {}),
     });
     return;
   }
