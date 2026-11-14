@@ -1534,7 +1534,9 @@ with the aidlc-devsecops-agent providing security testing expertise.
     that nothing builds is settled when the latest stage that traced it (User
     Stories, NFR Requirements, then Code Generation) marked it `N/A` with its
     reason in every table there that lists it; an `N/A` with no reason is not
-    settled. Write
+    settled. A Code Generation `N/A` whose reason hands the ID to another Unit
+    settles nothing: if no Unit built it, it is uncovered and its row lists the
+    hand-offs as `handed_off`. Write
     `cross-unit-traceability.md` from that output with the verdict, per-ID
     coverage and every uncovered ID; an uncovered ID is a finding shown at the
     approval gate.

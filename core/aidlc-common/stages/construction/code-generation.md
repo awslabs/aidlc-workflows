@@ -590,7 +590,11 @@ must be one existing workspace-relative implementation or test file. When the
 person asks to leave planned work out of this build (for example "skip the
 remaining stories"), do it: list each item they left out as `Deferred` (not
 built in this Unit), with their words as its `target`, and carry on; the
-approved plan stays as it is, and the approval says what was left out:
+approved plan stays as it is, and the approval says what was left out.
+An `N/A` row takes its reason as its `target`. A reason that hands the ID to
+another Unit names that Unit by its `U{n}` ID or directory; that Unit must be on
+the story's row in `unit-of-work-story-map.md`, and the ID counts as built only
+when that Unit builds it, so Build and Test lists it as uncovered if no Unit did:
 
 ```json
 {

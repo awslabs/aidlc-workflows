@@ -139,7 +139,11 @@ Set each ID's `coverage` row: `OK` with a `target` naming one or more
 such as a `ui` Unit, instead names on its own the file of this stage that
 covers the ID, `functional-spec.md` or `frontend-components.md`, which must
 exist); `N/A` with the reason as its `target`
-(for example `delivered by u2-profile`); `Deferred` with the later stage that
+(for example `delivered by u2-profile`). A reason that hands the ID to another Unit
+names that Unit by its `U{n}` ID or directory, and that Unit must be on the
+story's row in `unit-of-work-story-map.md` (a Unit not on the row is never asked
+for it, and the check reports the row); the ID counts as built only when that
+Unit builds it. `Deferred` with the later stage that
 covers it as its `target`; or `GAP` while this design does not cover it. Use
 the optional `reverse` array to explain rules that intentionally have no
 upstream ID; any unexplained rule is mechanically derived as an orphan:
