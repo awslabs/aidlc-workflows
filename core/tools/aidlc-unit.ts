@@ -8378,11 +8378,14 @@ function pushUnit(args: string[], projectDir?: string): void {
   }
   const nameOf = (repo: RepoResult): string => (repo.repo === "." ? "the repo" : repo.repo);
   const names = results.map(nameOf);
+  // A host's own words stand in for ours (GitLab's say "merge request"):
+  // "Open a PR" is said only for the repos whose host said nothing about it.
+  const quiet = hostSaid.filter((said) => said.words === "").map((said) => said.name);
   const lines = [
     joinSaid([
       `Pushed branch ${branch} in ${joinNames(names)}.`,
       ...hostSaid.filter((said) => said.words !== "").map((said) => hostSaysLine(names.length === 1 ? null : said.name, said.words)),
-      `Open a PR in ${names.length === 1 ? "it" : "each"} your usual way.`,
+      quiet.length === 0 ? "" : `Open a PR in ${quiet.length < names.length ? joinNames(quiet) : names.length === 1 ? "it" : "each"} your usual way.`,
       whereNow(true).trimStart(),
     ]),
   ];
@@ -8478,8 +8481,9 @@ function pushUnit(args: string[], projectDir?: string): void {
   // anything: the lines ride the step that follows, as the take's carry-on
   // line does, so a next run at once says them with its question; with no chat
   // known they are printed here.
-  const forNextStep = sentOn && saidWithNextStep(pd, lines.join(" "));
-  console.log(JSON.stringify({ pushed: true, unit, repos: results.map((repo) => repo.repo), ...(forNextStep ? {} : { notice: lines.join(" ") }) }));
+  const told = joinSaid(lines);
+  const forNextStep = sentOn && saidWithNextStep(pd, told);
+  console.log(JSON.stringify({ pushed: true, unit, repos: results.map((repo) => repo.repo), ...(forNextStep ? {} : { notice: told }) }));
 }
 
 // The build's record finishes once its push reached home or the person put it

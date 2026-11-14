@@ -119,6 +119,27 @@ echo ""
 ` : ""}`);
 }
 
+// What GitLab prints after a push of a branch: the link to create its merge
+// request, its branch %2F-encoded in the address, and once one is open (here,
+// after the first push) the link to view it.
+function printsLikeGitLab(host: string, repo: string): void {
+  hostPrints(host, `while read old new ref; do
+  b=\${ref#refs/heads/}
+  enc=$(printf '%s' "$b" | sed 's#/#%2F#g')
+  echo ""
+  case "$old" in
+    *[!0]*)
+      echo "View merge request for $b:"
+      echo "  https://gitlab.example.invalid/team/${repo}/-/merge_requests/12";;
+    *)
+      echo "To create a merge request for $b, visit:"
+      echo "  https://gitlab.example.invalid/team/${repo}/-/merge_requests/new?merge_request%5Bsource_branch%5D=$enc";;
+  esac
+  echo ""
+done
+`);
+}
+
 describe("teams build Units across repos when the workspace is in git", () => {
   test("choosing teams on work across repos goes through, and no question of who builds which Unit is put", () => {
     const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
@@ -756,7 +777,7 @@ describe("the push", () => {
     expect(notice).toStartWith(
       "Pushed branch refunds in checkout-api and billing. checkout-api's host says: Create a pull request for 'refunds' on GitHub " +
         "by visiting: https://github.com/owner/checkout-api/pull/new/refunds\nbilling's host says: Create a pull request for " +
-        "'refunds' on GitHub by visiting: https://github.com/owner/billing/pull/new/refunds\nOpen a PR in each your usual way. " +
+        "'refunds' on GitHub by visiting: https://github.com/owner/billing/pull/new/refunds\n" +
         "You're on refunds now in checkout-api and billing. Switch back to main any time.",
     );
     // Not the repo's alerts, nothing of the claim's push, none of git's own lines.
@@ -780,7 +801,7 @@ describe("the push", () => {
     const notice = String(pushed.json?.notice);
     expect(notice).toStartWith(
       "Pushed branch checkout-api in checkout-api and billing. checkout-api's host says: Create a pull request for 'checkout-api' " +
-        "on GitHub by visiting: https://github.com/owner/checkout-api/pull/new/checkout-api\nOpen a PR in each your usual way.",
+        "on GitHub by visiting: https://github.com/owner/checkout-api/pull/new/checkout-api\nOpen a PR in billing your usual way.",
     );
     expect(notice).not.toContain("vulnerabilities");
   });
@@ -796,6 +817,57 @@ describe("the push", () => {
     expect(pushed.json?.notice).toBe(
       "Pushed branch refunds in checkout-api and billing. Open a PR in each your usual way. You're on refunds now in " +
         "checkout-api and billing. Switch back to main any time. Your teammates see where this work stands once aidlc/ is committed and pushed.",
+    );
+  });
+
+  test("the push again after one repo's host refused it: the link for the repo it pushed now, and Open a PR for the other", () => {
+    const { hosts, alice, record } = refundsTaken();
+    printsLikeGitHub(hosts["checkout-api"], "checkout-api");
+    printsLikeGitHub(hosts.billing, "billing");
+    const refuse = join(hosts.billing, "hooks", "pre-receive");
+    writeFileSync(refuse, "#!/bin/sh\necho 'billing is closed today' >&2\nexit 1\n");
+    chmodSync(refuse, 0o755);
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).not.toBe(0);
+    writeFileSync(refuse, "#!/bin/sh\nexit 0\n");
+    // checkout-api went the first time, so its host has nothing new to say.
+    const again = run(UNIT, ["push"], alice);
+    expect(again.status, again.out).toBe(0);
+    expect(again.json?.notice).toBe(
+      "Pushed branch refunds in checkout-api and billing. billing's host says: Create a pull request for 'refunds' on GitHub by " +
+        `visiting: https://github.com/owner/billing/pull/new/refunds\nOpen a PR in checkout-api your usual way. ${CHECK_IN_LINE}`,
+    );
+  });
+
+  // GitLab says "merge request" in its own words; nothing decides which host it is.
+  test("on GitLab the person reads the host's merge request words and no PR, from a chat and on a later push", () => {
+    const { hosts, alice, record } = refundsTaken();
+    printsLikeGitLab(hosts["checkout-api"], "checkout-api");
+    codeGenerated(alice, record);
+    writeFileSync(join(record, "construction", "refunds", "code-generation", "source-manifest.json"), `${JSON.stringify({
+      stage: "code-generation",
+      unit: "refunds",
+      version: 1,
+      writes: [{ repo: "checkout-api", path: "src/refunds.ts" }],
+    }, null, 2)}\n`);
+    finishBuild(record);
+    const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "gitlab-chat" };
+    const pushed = run(UNIT, ["push", "--branch", "feature/refunds"], alice, chat);
+    expect(pushed.status, pushed.out).toBe(0);
+    const said = ((next(alice, chat).change_notices ?? []) as string[]).find((line) => line.startsWith("Pushed branch")) ?? "";
+    expect(said).toBe(
+      "Pushed branch feature/refunds in checkout-api. Its host says: To create a merge request for feature/refunds, visit: " +
+        "https://gitlab.example.invalid/team/checkout-api/-/merge_requests/new?merge_request%5Bsource_branch%5D=feature%2Frefunds\n" +
+        `You're on feature/refunds now in checkout-api. Switch back to main any time. ${CHECK_IN_LINE}`,
+    );
+    expect(said).not.toMatch(/\bPR\b|pull request/i);
+    // A review fix pushed again, with the merge request open: GitLab's link to it.
+    codeGeneratedAgain(alice);
+    const again = run(UNIT, ["push"], alice);
+    expect(again.status, again.out).toBe(0);
+    expect(again.json?.notice).toBe(
+      "Pushed branch feature/refunds in checkout-api. Its host says: View merge request for feature/refunds: " +
+        `https://gitlab.example.invalid/team/checkout-api/-/merge_requests/12\n${CHECK_IN_LINE}`,
     );
   });
 
