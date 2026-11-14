@@ -8597,11 +8597,15 @@ function detectedCandidateChoices(
   candidates: readonly InstalledSourceCandidate[],
   detection: FirstRunDetection,
 ): InstalledSourceCandidate[] {
-  // Both Kiro trees count a supported `kiro-cli`; when both are found, a
-  // release's own list puts Kiro CLI (V2) first, so it is the default.
   const detected = candidates.filter((candidate) =>
     detection.harnesses[candidate.stamp.distribution]?.found
   );
+  // Both Kiro trees count a supported `kiro-cli`; when both are found, Kiro
+  // (kiro-ide) goes before Kiro CLI (V2) (kiro), so it is the default. Every
+  // other harness keeps its place in the release's own list.
+  const v2 = detected.findIndex((candidate) => candidate.stamp.distribution === "kiro");
+  const kiro = detected.findIndex((candidate) => candidate.stamp.distribution === "kiro-ide");
+  if (v2 !== -1 && kiro > v2) detected.splice(v2, 0, ...detected.splice(kiro, 1));
   // In the terminal of a harness's own editor, that harness leads: it is
   // chosen outright when no other harness CLI is found, and is the default
   // when one is.
