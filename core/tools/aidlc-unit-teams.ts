@@ -20,6 +20,7 @@ import {
   getField,
   intentDisplayLabel,
   intentRepos,
+  teamsAcrossReposLine,
   intentsDir,
   isPerUnitStage,
   isTeamUnitOwnership,
@@ -52,6 +53,7 @@ import {
 } from "./aidlc-lib.ts";
 import { visibleMarkdownLines } from "./aidlc-markdown.ts";
 import { gitUserName } from "./aidlc-git-name.ts";
+import { projectInRepo } from "./aidlc-git.ts";
 import { applicableTeamUnitScopeStamp, idSuffix, listIntents, onlyOwnLookRows, resolveWorkflowSelection, setCheckbox } from "./aidlc-record-core.ts";
 import { UNIT_PROGRESS_NOTE, unitProgressSectionRange } from "./aidlc-unit-landing.ts";
 import { isReadOnlyEngineProbe } from "./aidlc-locks.ts";
@@ -99,10 +101,26 @@ export function buildOutHomeLocation(projectDir: string, teammateTook = false): 
   return teammateTook || intentRepos(projectDir).length > 0 ? workspaceHomeLocation(projectDir) : null;
 }
 
-// What to record as the home's location for a workspace, or null when it is not
-// a git repo (teams then keep today's flow in one checkout).
+// Why teams cannot each own a Unit of work that records repos here, or null
+// when they can: the one test the ownership setter and the staffing step share.
+export function buildOutBlockedLine(projectDir: string, unitCount?: number): string | null {
+  const repos = intentRepos(projectDir);
+  if (repos.length === 0 || workspaceHomeLocation(projectDir) !== null) return null;
+  const at = projectInRepo(projectDir);
+  if (at === null || at.prefix === "") return teamsAcrossReposLine(repos.length, unitCount);
+  const units = unitCount === undefined ? "its Units" : `its ${unitCount} Units`;
+  return `This project sits in ${at.prefix.replace(/\/$/, "")} of ${at.top}, not at the top of its git repository, so ` +
+    `this session builds ${units}: for teams to each own a Unit, start the work in a workspace of its own beside ` +
+    "that repository, with repos.json giving its path.";
+}
+
+// What to record as the home's location for a workspace: its repository's
+// remote, or "local" with none, when the workspace is that repository's top;
+// null outside git or in a folder below the top, where the lead's record is not
+// where a take reads it (teams then keep today's flow in one checkout).
 export function workspaceHomeLocation(projectDir: string): string | null {
-  if (!existsSync(join(projectDir, ".git"))) return null;
+  const at = projectInRepo(projectDir);
+  if (at === null || at.prefix !== "") return null;
   const read = (args: string[]): string => spawnSync("git", args, { cwd: projectDir, encoding: "utf-8" }).stdout?.trim() ?? "";
   const remotes = read(["remote"]).split(/\r?\n/).map((name) => name.trim()).filter(Boolean);
   const remote = remotes.includes("origin") ? "origin" : remotes.length === 1 ? remotes[0] : null;

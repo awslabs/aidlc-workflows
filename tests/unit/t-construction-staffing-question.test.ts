@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-state:set-unit-ownership, audit:UNIT_OWNERSHIP_SET, audit:CONSTRUCTION_POLICY_SET, function:teamsAcrossReposLine
+// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-state:set-unit-ownership, audit:UNIT_OWNERSHIP_SET, audit:CONSTRUCTION_POLICY_SET, function:teamsAcrossReposLine, function:buildOutBlockedLine
 //
 // Who builds the Units is asked once, by the engine, as Inception ends (#1395).
 // A plan of two or more Units reached Construction with nobody asked: the
@@ -9,7 +9,9 @@
 // (a resume, a second chat and a clone read it), a turn with no pick leaves
 // this session building with one line saying how to change it, and work that
 // spans several repos gets one true line instead of a choice that would be
-// refused. One Unit, or no Unit plan, is never asked.
+// refused: a workspace not in git, or a project in a folder of a bigger
+// repository, which says where it sits. One Unit, or no Unit plan, is never
+// asked.
 
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";

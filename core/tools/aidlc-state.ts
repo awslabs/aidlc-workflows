@@ -160,7 +160,6 @@ import {
   recordGuardStoodAside,
   unattendedHumanPresenceHint,
   intentRepos,
-  teamsAcrossReposLine,
   isGitRepoDir,
   isValidRepoName,
   repoDir,
@@ -307,7 +306,7 @@ import {
 import { swarmSourceChangedSince } from "./aidlc-swarm-source.ts";
 import { memoryDirFor, PATH_SET_SENSOR_IDS, STAGE_WIDE_SENSOR_IDS, templateEligibleArtifacts, withStageProgressRow } from "./aidlc-graph.ts";
 import { generateFireId, recordUnfinishedFire, sensorMatchesPath, unfinishedFire } from "./aidlc-sensor-record.ts";
-import { buildOutHomeLocation, buildWaitsForPush, HOME_LOCATION_FIELD, homeLocation, workspaceHomeLocation } from "./aidlc-unit-teams.js";
+import { buildOutBlockedLine, buildOutHomeLocation, buildWaitsForPush, HOME_LOCATION_FIELD, homeLocation } from "./aidlc-unit-teams.js";
 import { unitProgressSectionRange } from "./aidlc-unit-landing.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
 import { aidlcDispatcherInvocation, aidlcToolInvocation, compiledExecutable, entrySkillInvocation, syncFolderClause } from "./aidlc-runtime-paths.ts";
@@ -1759,10 +1758,8 @@ function handleSetUnitOwnership(given: string[]): void {
       );
     }
     if (value === "team") {
-      const repos = intentRepos(pd);
-      if (repos.length > 0 && workspaceHomeLocation(pd) === null) {
-        error(`${teamsAcrossReposLine(repos.length)} Carry on with \`${entrySkillInvocation()}\`.`);
-      }
+      const blocked = buildOutBlockedLine(pd);
+      if (blocked !== null) error(`${blocked} Carry on with \`${entrySkillInvocation()}\`.`);
       const resolution = resolveBoltDag(pd);
       if (resolution.state === "none") {
         error(

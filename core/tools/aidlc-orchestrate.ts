@@ -340,7 +340,6 @@ import {
   unitsRepoChangeAcceptance,
   unitsRepoChangeQuestion,
   unitsReposAskPassedOver,
-  teamsAcrossReposLine,
   isRefusedModifierNextArgv,
   isRetiredOnlyNextArgv,
   isRegularFile,
@@ -777,6 +776,7 @@ import {
   leadRules,
   offersLearningsCorrectionChoices,
   workspaceHomeLocation,
+  buildOutBlockedLine,
   unitWriteTargets,
   mergedStatus,
   mergeCandidateLine,
@@ -5880,9 +5880,9 @@ function constructionStaffingAsk(
     return null;
   }
   const order = readConstructionIteration(stateContent) === "unit-major" ? "one after another" : "stage by stage";
-  const repos = intentRepos(projectDir);
-  if (repos.length > 0 && workspaceHomeLocation(projectDir) === null) {
-    if (speaks) sayWithStepOnce(projectDir, teamsAcrossReposLine(repos.length, units));
+  const blocked = buildOutBlockedLine(projectDir, units);
+  if (blocked !== null) {
+    if (speaks) sayWithStepOnce(projectDir, blocked);
     return null;
   }
   if (constructionStaffingPassedOver(projectDir)) {
