@@ -18,7 +18,7 @@ import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts
 import { hooksHealthReadDir, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { pastUnitStages } from "../../dist/claude/.claude/tools/aidlc-unit.ts";
 import { CHECK_IN_LINE, pullRequestHeadRefs } from "../../dist/claude/.claude/tools/aidlc-unit-teams.ts";
-import { AIDLC_SRC, fixtureIntentId8 } from "../harness/fixtures.ts";
+import { AIDLC_SRC, fixtureIntentId8, seededStateFile } from "../harness/fixtures.ts";
 import {
   bashLine,
   claimPayload,
@@ -2963,5 +2963,255 @@ describe("a team hears the lead's turn-down from any chat on its work", () => {
     expect(first.status, first.out).not.toBe(0);
     expect(second.status, second.out).toBe(0);
     expect(third.status, third.out).toBe(0);
+  });
+});
+
+// Work whose code is the workspace's own repository, built by teams: each
+// Unit's branch is made at the push in that repository ("."), and its pull
+// request is read by the reviewer against the branch the work merges into.
+describe("a Unit on the workspace's own repository", () => {
+  const UNITS = "# Unit dependencies\n\n```yaml\nunits:\n" +
+    "  - name: refunds\n    kind: service\n    depends_on: []\n" +
+    "  - name: checkout-ui\n    kind: ui\n    depends_on: []\n" +
+    "  - name: reporting\n    kind: service\n    depends_on: [refunds]\n```\n";
+
+  // Teams chosen on the workspace's own repository, with its remote recorded
+  // as the work's home, as choosing teams on a remote records it.
+  function oneRepoTeams(): ReturnType<typeof makeHome> {
+    const home = makeHome({ repos: {}, dependencies: UNITS });
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    const path = seededStateFile(home.dir);
+    const state = readFileSync(path, "utf-8");
+    if (!state.includes("- **Home Location**:")) {
+      writeFileSync(path, state.replace("## Runtime State\n", `## Runtime State\n- **Home Location**: ${home.remote}\n`));
+    }
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "teams"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    return home;
+  }
+
+  function leadCommits(home: ReturnType<typeof makeHome>, branch: string, file: string): string {
+    if (git(home.dir, ["branch", "--show-current"]) !== branch) git(home.dir, ["switch", "-q", branch]);
+    writeFileSync(join(home.dir, file), `${file}\n`);
+    git(home.dir, ["add", "--", file]);
+    git(home.dir, ["commit", "-q", "-m", `lead: ${file}`]);
+    git(home.dir, ["push", "-q", "origin", branch]);
+    return git(home.dir, ["rev-parse", "HEAD"]);
+  }
+
+  // The team's take of a Unit and its Code Generation, in the workspace itself; the build's record folder.
+  function builtHere(dir: string, unit: string, file: string): string {
+    const took = takeIn("payments", [unit, "--home", HOME_RECORD], dir);
+    expect(took.status, took.out).toBe(0);
+    const intents = join(dir, "aidlc", "spaces", "payments", "intents");
+    const record = join(intents, readdirSync(intents).find((name) => name.endsWith(`-${unit}`))!);
+    mkdirSync(join(dir, "src"), { recursive: true });
+    writeFileSync(join(dir, "src", file), `export const built = "${unit}";\n`);
+    const stage = join(record, "construction", unit, "code-generation");
+    mkdirSync(stage, { recursive: true });
+    writeFileSync(join(stage, "source-manifest.json"), `${JSON.stringify({
+      stage: "code-generation", unit, version: 1, writes: [{ path: `src/${file}` }],
+    })}\n`);
+    writeFileSync(join(stage, "code-summary.md"), `# Code summary\n\n${unit}.\n`);
+    return record;
+  }
+
+  // What the Unit's pull request shows: the files it changes from where it left
+  // the branch it merges into, AI-DLC's record aside.
+  const prFiles = (host: string, into: string, branch: string): string[] =>
+    git(host, ["diff", "--name-only", `${into}...${branch}`]).split("\n").filter((path) => path !== "" && !path.startsWith("aidlc/"));
+
+  // A squash of the Unit's branch into `into` on the host, the branch deleted after.
+  function squashInto(host: string, into: string, branch: string): void {
+    const dir = join(tempDir("merger"), "repo");
+    git(tempDir("merger-parent"), ["clone", "-q", "--branch", into, host, dir]);
+    git(dir, ["config", "user.name", "reviewer"]);
+    git(dir, ["config", "user.email", "reviewer@example.test"]);
+    git(dir, ["fetch", "-q", "origin", branch]);
+    git(dir, ["merge", "-q", "--squash", `origin/${branch}`]);
+    git(dir, ["commit", "-q", "-m", `${branch} (squashed)`]);
+    git(dir, ["push", "-q", "origin", into]);
+    git(host, ["branch", "-D", branch]);
+  }
+
+  test("its branch starts from the lead's main as fetched, never from the clone's own main left behind", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    builtHere(alice, "refunds", "refunds.ts");
+    // The lead's main moves on after the take read the plan.
+    const leadsTip = leadCommits(home, "main", "LEAD-NOTES.md");
+    expect(git(alice, ["rev-parse", "main"])).not.toBe(leadsTip);
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(spawnSync("git", ["merge-base", "--is-ancestor", leadsTip, "refunds"], { cwd: home.remote }).status, pushed.out).toBe(0);
+    expect(prFiles(home.remote, "main", "refunds")).toEqual(["src/refunds.ts"]);
+    expect(String(pushed.json?.notice)).not.toContain("come along");
+  });
+
+  test("the next Unit's branch starts from the lead's main, never from the merged and deleted branch of the one before", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    builtHere(alice, "refunds", "refunds.ts");
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    squashInto(home.remote, "main", "refunds");
+    expect(git(alice, ["branch", "--show-current"])).toBe("refunds");
+    builtHere(alice, "checkout-ui", "cart.ts");
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(prFiles(home.remote, "main", "checkout-ui"), pushed.out).toEqual(["src/cart.ts"]);
+    expect(git(home.remote, ["log", "--format=%s", "main..checkout-ui"])).not.toContain("refunds");
+  });
+
+  test("a clone with a commit of its own on main: the branch starts where they are, and the line names the commit that comes along", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    writeFileSync(join(alice, "MY-NOTES.md"), "mine\n");
+    git(alice, ["add", "--", "MY-NOTES.md"]);
+    git(alice, ["commit", "-q", "-m", "my notes"]);
+    builtHere(alice, "refunds", "refunds.ts");
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(String(pushed.json?.notice)).toContain(
+      'Branch refunds in the repo starts from where you were, so your commit not yet on origin/main comes along: "my notes".',
+    );
+    expect(prFiles(home.remote, "main", "refunds")).toEqual(["MY-NOTES.md", "src/refunds.ts"]);
+  });
+
+  test("a team whose Way of Working names develop: the branch starts from develop, and the lead's look sees it merged there", () => {
+    const home = oneRepoTeams();
+    const team = join(home.dir, "aidlc", "spaces", "default", "memory", "team.md");
+    writeFileSync(team, readFileSync(team, "utf-8").replace("## Way of Working\n", "## Way of Working\n\n- **Integration branch**: develop\n"));
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "we merge into develop"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    git(home.dir, ["switch", "-q", "-c", "develop"]);
+    git(home.dir, ["push", "-q", "-u", "origin", "develop"]);
+    const developsTip = leadCommits(home, "develop", "DEVELOP-ONLY.md");
+    const alice = cloneOf(home.remote, "alice");
+    builtHere(alice, "refunds", "refunds.ts");
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(spawnSync("git", ["merge-base", "--is-ancestor", developsTip, "refunds"], { cwd: home.remote }).status, pushed.out).toBe(0);
+    expect(prFiles(home.remote, "develop", "refunds")).toEqual(["src/refunds.ts"]);
+    squashInto(home.remote, "develop", "refunds");
+    git(home.dir, ["fetch", "-q", "origin"]);
+    next(home.dir);
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
+  });
+  // AI-DLC's record of the build rides in the Unit's pull request: a second
+  // commit after the Unit's code, AI-DLC's own message, or the person's own
+  // with its first line marked as the record, so a rule their code commit
+  // meets the record meets too.
+  const recordWent = (unit: string): string =>
+    `AI-DLC's record of ${unit} went with it, so your teammates see where it stands once ${unit} is merged.`;
+  const committed = (host: string, rev: string): string[] =>
+    git(host, ["diff-tree", "-r", "--no-commit-id", "--name-only", rev]).split("\n").filter(Boolean);
+
+  test("AI-DLC's record of the build goes with the Unit's branch as a second commit after its code: the build's own folder and the new space's own files, nothing of the lead's record, nothing git ignores", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    const record = builtHere(alice, "refunds", "refunds.ts");
+    // A change of theirs to the lead's record in this clone stays theirs.
+    const leads = join(alice, "aidlc", "spaces", "default", "memory", "team.md");
+    writeFileSync(leads, `${readFileSync(leads, "utf-8")}\nmy note\n`);
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(git(home.remote, ["log", "--format=%s", "main..refunds"]).split("\n")).toEqual(["refunds: AI-DLC's record", "refunds: fixture"]);
+    expect(committed(home.remote, "refunds~1")).toEqual(["src/refunds.ts"]);
+    const recorded = committed(home.remote, "refunds");
+    const own = record.slice(alice.length + 1).replaceAll("\\", "/");
+    expect(recorded).toContain(`${own}/aidlc-state.md`);
+    expect(recorded.some((path) => path.startsWith("aidlc/spaces/payments/memory/")), recorded.join(", ")).toBe(true);
+    expect(recorded.filter((path) => !path.startsWith("aidlc/spaces/payments/"))).toEqual([]);
+    expect(recorded.filter((path) => path.includes("/.aidlc-"))).toEqual([]);
+    expect(git(alice, ["status", "--porcelain", "--", "aidlc/spaces/default"])).toBe("M aidlc/spaces/default/memory/team.md");
+    expect(git(alice, ["status", "--porcelain", "--", "aidlc/spaces/payments"])).toBe("");
+    expect(String(pushed.json?.notice)).toContain(recordWent("refunds"));
+  });
+
+  test("the lead's look reads the squash of the Unit's pull request, record and all, as merged, and the Unit's result names only its code", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    builtHere(alice, "refunds", "refunds.ts");
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    // Nothing else of theirs is left out of git here, so the line that asks them to check in is not said.
+    expect(String(pushed.json?.notice)).toEndWith(recordWent("refunds"));
+    expect(String(pushed.json?.notice)).not.toContain(CHECK_IN_LINE);
+    const sent = claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds") as {
+      result: { repos: Array<{ repo: string; heads: string[]; paths: Record<string, string | null> }> };
+    };
+    expect(sent.result.repos.map((repo) => [repo.repo, Object.keys(repo.paths)])).toEqual([[".", ["src/refunds.ts"]]]);
+    // Its code commit, under the record's, and a look of the team's sends nothing more.
+    expect(sent.result.repos[0].heads.at(-1)).toBe(git(home.remote, ["rev-parse", "refunds~1"]));
+    next(alice);
+    const after = claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds") as typeof sent;
+    expect(after.result.repos.map((repo) => [repo.heads.at(-1), Object.keys(repo.paths)]))
+      .toEqual([[git(home.remote, ["rev-parse", "refunds~1"]), ["src/refunds.ts"]]]);
+    squashInto(home.remote, "main", "refunds");
+    git(home.dir, ["fetch", "-q", "origin"]);
+    next(home.dir);
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
+  });
+
+  // A host rule on the Unit's branch, as a GitLab push rule on messages checks it.
+  function keyRuleOn(host: string, branch: string): void {
+    const file = join(host, "hooks", "pre-receive");
+    writeFileSync(file, `#!/bin/sh\nwhile read old new ref; do\n  [ "$ref" = refs/heads/${branch} ] || continue\n` +
+      "  for c in $(git rev-list \"$new\" --not --all); do\n" +
+      `    git log -1 --format=%s "$c" | grep -qE '^[A-Z]+-[0-9]+ ' || { echo "${TICKET_RULE_WORDS}" >&2; exit 1; }\n` +
+      "  done\ndone\nexit 0\n");
+    chmodSync(file, 0o755);
+  }
+
+  test("their own message under their host's ticket rule: the Unit's code and its record both carry their key, and both go", () => {
+    const home = oneRepoTeams();
+    keyRuleOn(home.remote, "refunds");
+    const alice = cloneOf(home.remote, "alice");
+    const record = builtHere(alice, "refunds", "refunds.ts");
+    const pushed = run(UNIT, ["push", "--commit-message-file", commitMessage(alice, record, "PAY-7 refund handler\n")], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(git(home.remote, ["log", "--format=%s", "main..refunds"]).split("\n"))
+      .toEqual(["PAY-7 refund handler (AI-DLC's record)", "PAY-7 refund handler"]);
+  });
+
+  // Their commit-msg hook keeps subjects to 50 characters: their own message
+  // fits, the record's longer one does not.
+  test("their hook refuses the record's commit: the Unit's code is pushed, the record is not, and the line says so in the hook's words", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    const hook = join(alice, ".git", "hooks", "commit-msg");
+    writeFileSync(hook, "#!/bin/sh\n[ $(head -n 1 \"$1\" | wc -c) -le 51 ] && exit 0\necho 'commit-msg: subject is longer than 50 characters' >&2\nexit 1\n");
+    chmodSync(hook, 0o755);
+    const record = builtHere(alice, "refunds", "refunds.ts");
+    const pushed = run(UNIT, ["push", "--commit-message-file", commitMessage(alice, record, "PAY-7 refund handler for the checkout totals\n")], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(git(home.remote, ["log", "--format=%s", "main..refunds"])).toBe("PAY-7 refund handler for the checkout totals");
+    expect(git(alice, ["rev-parse", "refunds"])).toBe(git(home.remote, ["rev-parse", "refunds"]));
+    const said = String(pushed.json?.notice);
+    expect(said).toContain("AI-DLC's record of refunds did not go with it: commit-msg: subject is longer than 50 characters.");
+    expect(said).toEndWith(CHECK_IN_LINE);
+  });
+
+  // A host rule on the record's files, as a GitLab push rule on file names or a
+  // secret scan refuses them: the code is pushed, the record stays theirs.
+  test("their host refuses the record's files: the Unit's code is pushed, the record is not, and nothing of theirs changed", () => {
+    const home = oneRepoTeams();
+    const file = join(home.remote, "hooks", "pre-receive");
+    writeFileSync(file, "#!/bin/sh\nwhile read old new ref; do\n  [ \"$ref\" = refs/heads/refunds ] || continue\n" +
+      "  if git diff --name-only \"$old\" \"$new\" 2>/dev/null | grep -q '^aidlc/'; then echo 'GitLab: File name aidlc/ is prohibited' >&2; exit 1; fi\n" +
+      "done\nexit 0\n");
+    chmodSync(file, 0o755);
+    const alice = cloneOf(home.remote, "alice");
+    builtHere(alice, "refunds", "refunds.ts");
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(git(home.remote, ["log", "--format=%s", "main..refunds"])).toBe("refunds: fixture");
+    expect(git(alice, ["rev-parse", "refunds"])).toBe(git(home.remote, ["rev-parse", "refunds"]));
+    expect(git(alice, ["status", "--porcelain", "--", "aidlc/spaces/payments"])).toBe("?? aidlc/spaces/payments/");
+    const said = String(pushed.json?.notice);
+    expect(said).toContain("AI-DLC's record of refunds did not go with it: GitLab: File name aidlc/ is prohibited (pre-receive hook declined).");
+    expect(said).toEndWith(CHECK_IN_LINE);
   });
 });
