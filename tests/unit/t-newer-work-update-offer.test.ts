@@ -264,7 +264,8 @@ describe("work a newer AI-DLC wrote: installs AI-DLC does not update itself", ()
     expect(step.message).toContain("the pin changes for everyone on the project");
   });
 
-  test("a package manager's install hears the manager's own upgrade", () => {
+  // Homebrew and Nix own an install only on macOS and Linux, where their paths are absolute as written.
+  test.skipIf(process.platform === "win32")("a package manager's install hears the manager's own upgrade", () => {
     const { step } = run(NATIVE, project(), ["next"], childEnv({ AIDLC_COMPILED_EXECUTABLE: "/opt/homebrew/bin/aidlc" }));
     expect(step.kind, JSON.stringify(step)).toBe("print");
     expect(step.message).toContain("from Homebrew. To carry on: brew upgrade aidlc, then `aidlc config --harness claude --yes`");
