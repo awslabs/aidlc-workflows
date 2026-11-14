@@ -14,7 +14,8 @@
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { readAuditShardEvents, unitParticipantPath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -72,9 +73,17 @@ const saysHandout = (d: Directive) =>
   (d.change_notices ?? []).some((line) => line === HANDOUT_LINE || line === SKELETON_HANDOUT_LINE);
 
 const tempDirs: string[] = [];
+const folders: string[] = [];
 afterEach(() => {
   while (tempDirs.length) cleanupTestProject(tempDirs.pop());
+  while (folders.length) rmSync(folders.pop() as string, { recursive: true, force: true });
 });
+
+function git(cwd: string, args: string[]): string {
+  const result = spawnSync("git", args, { cwd, encoding: "utf-8" });
+  if (result.status !== 0) throw new Error(`git ${args.join(" ")}: ${result.stderr}`);
+  return result.stdout.trim();
+}
 
 type Directive = Record<string, unknown> & {
   kind?: string;
@@ -473,6 +482,53 @@ describe("who builds the Units is asked once as Inception ends", () => {
     expect(teams.out).toContain("This work spans 2 repos and this workspace is not a git repository, so this " +
       "session builds its Units: for teams to each own a Unit, put the workspace in git first. Carry on with `/aidlc`.");
     expect(state(proj)).toBe(before);
+  });
+
+  // A project in apps/x of a bigger repository whose work records that
+  // repository as its code: the workspace is in git, below its top, where
+  // teams cannot take Units of work across repos yet.
+  function inAFolder(path: "../.." | "." | null): { proj: string; top: string } {
+    const top = mkdtempSync(join(tmpdir(), "aidlc-staffing-mono-"));
+    folders.push(top);
+    git(top, ["init", "-q", "-b", "main"]);
+    const proj = join(top, "apps", "x");
+    cpSync(project(), proj, { recursive: true, filter: (from) => !from.split(/[\\/]/).includes(".git") });
+    if (path !== null) {
+      const registryPath = join(proj, "aidlc", "spaces", "default", "intents", "intents.json");
+      const registry = JSON.parse(readFileSync(registryPath, "utf-8")) as Array<Record<string, unknown>>;
+      registry[0].repos = ["mono"];
+      writeFileSync(registryPath, `${JSON.stringify(registry, null, 2)}\n`);
+      writeFileSync(join(proj, "aidlc", "repos.json"), `${JSON.stringify({ repos: [{ name: "mono", path }] }, null, 2)}\n`);
+    }
+    return { proj, top: git(proj, ["rev-parse", "--show-toplevel"]) };
+  }
+  const folderLine = (top: string, units: string) =>
+    `This project sits in apps/x of ${top}, not at the top of its git repository, so this session builds ${units}: ` +
+    "for teams to each own a Unit, start the work in a workspace of its own beside that repository, with repos.json " +
+    "giving its path.";
+
+  for (const path of ["../..", "."] as const) {
+    test(`work whose code is the repository its folder sits in (at ${path}) is not asked: the folder's true line, once`, () => {
+      const { proj, top } = inAFolder(path);
+      const step = next(proj, [], CHAT);
+      expect(step.kind, JSON.stringify(step)).toBe("run-stage");
+      expect(step.change_notices ?? []).toContain(folderLine(top, "its 2 Units"));
+      expect(JSON.stringify(step)).not.toContain("not a git repository");
+      expect(next(proj, [], CHAT).change_notices ?? []).not.toContain(folderLine(top, "its 2 Units"));
+      const before = state(proj);
+      const teams = runState(proj, ["set-unit-ownership", "team"]);
+      expect(teams.rc).not.toBe(0);
+      expect(teams.out).toContain(`${folderLine(top, "its Units")} Carry on with \`/aidlc\`.`);
+      expect(teams.out).not.toContain("not a git repository");
+      expect(state(proj)).toBe(before);
+    });
+  }
+
+  test("a folder whose work records no repos is asked as before, and Several teams is taken", () => {
+    const { proj } = inAFolder(null);
+    const ask = next(proj, [], CHAT);
+    expect(isStaffingAsk(ask), JSON.stringify(ask)).toBe(true);
+    expect(runState(proj, ["set-unit-ownership", "team"]).rc).toBe(0);
   });
 
   test("Delivery Planning no longer carries the question in prose", () => {
