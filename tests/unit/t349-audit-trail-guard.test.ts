@@ -243,6 +243,15 @@ describe("t349 audit trail guard: shell commands", () => {
     }
   });
 
+  test("a shell apply_patch heredoc's body is data: a stage document's Markdown is not read as a redirect", () => {
+    const doc = `${RECORD}/inception/architecture-design/doc.md`;
+    const patch = (lines: string[]) => `apply_patch <<'PATCH'\n*** Begin Patch\n*** Add File: ${doc}\n${lines.map((l) => `+${l}`).join("\n")}\n*** End Patch\nPATCH`;
+    for (const line of ["Scale out when traffic > $5 a day.", "Alarm when retries > 3?", "> **Note** the region.", "> `x` is the key.", "A -->|$5| B"]) {
+      expect(bash(patch([line, "more"])), line).toBeNull();
+    }
+    expect(bash(patch(["<!-- Text fallback: a caller sends a body. -->"]))).toBeNull();
+  });
+
   test("shell appends, overwrites, copies, moves, removals, and directory creation aimed at a shard are refused", () => {
     for (const command of [
       `cat >> ${SHARD} <<'EOF'\n## Questions: Feasibility\n**Timestamp**: 2026-09-25T00:00:00Z\nEOF`,
