@@ -647,7 +647,7 @@ import {
   publishedAtHead,
   pushRemotesToPick,
   changedInputs,
-  buildOnBranchLine,
+  ownBuildBranch,
   claimIsMine,
   buildClaimHere,
   planUnshared,
@@ -9682,8 +9682,6 @@ function unitTakeLook(
       const ready: string[] = [];
       const waiting: string[] = [];
       const building: string[] = [];
-      // The person's own takes whose builds are on another branch here, each its own sentence.
-      const onBranches: string[] = [];
       for (const unit of unitsInPlanOrder(projectDir, opening.units)) {
         const claim = overview.claims.get(unit);
         // Done on its claim is the lead's project's word, before its Unit Progress here says so.
@@ -9720,9 +9718,10 @@ function unitTakeLook(
           continue;
         }
         if (claim?.status === "claimed") {
-          const onBranch = buildOnBranchLine(projectDir, intent.uuid, claim);
-          if (onBranch !== null) onBranches.push(onBranch);
-          else building.push(`${unit} (by ${builderOf(claim)}${spaceWords(claim.owner, true)})`);
+          const onBranch = ownBuildBranch(projectDir, intent.uuid, claim);
+          if (onBranch !== null) {
+            choices.push({ label: `Carry on ${unit}`, detail: `Your build of it, on branch ${onBranch}; I switch you there.`, command: take.replace("%s", shellArg(unit)) });
+          } else building.push(`${unit} (by ${builderOf(claim)}${spaceWords(claim.owner, true)})`);
           continue;
         }
         if (leadBuildsWithoutClaim(rows, unit, claim)) {
@@ -9772,7 +9771,6 @@ function unitTakeLook(
             (building.length > 0 ? ` Being built: ${building.join(", ")}.` : ""),
         );
       }
-      sentences.push(...onBranches);
       if (ownRules.length > 0) {
         sentences.push(`Each start follows the lead's ${brings} too, with your team's own on top, as I'd recommend; ` +
           "you can take one under your team's own rules only instead.");

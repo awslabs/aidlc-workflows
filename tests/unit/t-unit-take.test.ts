@@ -92,6 +92,11 @@ function take(dir: string, unit: string, extra: string[] = []) {
   return run(UNIT, ["take", unit, "--home", HOME, ...extra], dir);
 }
 
+// The take question's own choice to carry the person's build on where it is.
+function carryOnChoice(step: Record<string, unknown>, unit: string): { label: string; detail?: string } | undefined {
+  return (step.choices as Array<{ label: string; detail?: string }> | undefined)?.find((choice) => choice.label === `Carry on ${unit}`);
+}
+
 // A take from the space the person works in, made and switched to first.
 function takeFrom(space: string, dir: string, unit: string, extra: string[] = []) {
   inSpace(dir, space);
@@ -975,7 +980,7 @@ describe("a Unit someone holds is not taken again", () => {
   // The GitHub live test: a teammate checked her finished build in on a
   // branch of its own for a pull request, went back to main before it merged,
   // and read her own Unit as someone's being built.
-  test("back on main with their build checked in on a branch of its own, the person is told where it is, never that it is taken", () => {
+  test("back on main with their build checked in on a branch of its own: the take question offers to carry it on there, never as taken, and the take switches to it", () => {
     const home = makeHome();
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
     asLeadsOwnCheckout(home.dir);
@@ -989,16 +994,15 @@ describe("a Unit someone holds is not taken again", () => {
     commitAll(bea, "refunds record");
     git(bea, ["push", "-q", "-u", "origin", "records/refunds"]);
     git(bea, ["switch", "-q", "main"]);
-    const line = "Your build of refunds is on branch records/refunds: `git switch records/refunds` to carry it on.";
     const ask = next(bea);
-    expect(String(ask.question ?? ask.narration), JSON.stringify(ask).slice(0, 800)).toContain(line);
+    expect(carryOnChoice(ask, "refunds")?.detail, JSON.stringify(ask).slice(0, 800)).toBe("Your build of it, on branch records/refunds; I switch you there.");
     expect(JSON.stringify(ask)).not.toContain("refunds (by bea)");
+    expect(JSON.stringify(ask)).not.toContain("git switch");
+    // The take does the switch the person asked for, and carries the build on there.
     const again = take(bea, "refunds");
-    expect(again.status).not.toBe(0);
-    expect(again.out).toContain(line);
-    expect(again.out).not.toContain("already taken");
-    // The way on is real: nothing the look or the take wrote stops the switch, and there the line is gone.
-    git(bea, ["switch", "-q", "records/refunds"]);
+    expect(again.status, again.out).toBe(0);
+    expect(again.json?.notice, again.out).toBe("You're on records/refunds now, where your build of refunds is. Carrying on refunds, your build here. Switch back to main any time.");
+    expect(git(bea, ["branch", "--show-current"])).toBe("records/refunds");
     expect(JSON.stringify(next(bea))).not.toContain("Your build of refunds");
   });
 
@@ -1059,7 +1063,7 @@ describe("a Unit someone holds is not taken again", () => {
 
   // A second computer: a fresh clone holds the person's record branch only as
   // the remote's, fetched with the clone, while its pull request is open.
-  test("on another computer, their build checked in on a branch the clone has only from its remote is named, never as taken", () => {
+  test("on another computer, their build checked in on a branch the clone has only from its remote is offered to carry on, never as taken, and the take switches to it", () => {
     const home = makeHome();
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
     asLeadsOwnCheckout(home.dir);
@@ -1071,27 +1075,24 @@ describe("a Unit someone holds is not taken again", () => {
     commitAll(bea, "refunds record");
     git(bea, ["push", "-q", "-u", "origin", "records/refunds"]);
     git(bea, ["switch", "-q", "main"]);
-    const line = "Your build of refunds is on branch records/refunds: `git switch records/refunds` to carry it on.";
+    const detail = "Your build of it, on branch records/refunds; I switch you there.";
     // Her other computer under her git name, and one under another name with her email.
     const desk = cloneOf(home.remote, "bea");
     const laptop = cloneOf(home.remote, "bea-laptop");
     git(laptop, ["config", "user.email", "bea@example.test"]);
     for (const clone of [desk, laptop]) {
       const ask = next(clone);
-      expect(String(ask.question ?? ask.narration), JSON.stringify(ask).slice(0, 800)).toContain(line);
+      expect(carryOnChoice(ask, "refunds")?.detail, JSON.stringify(ask).slice(0, 800)).toBe(detail);
       expect(JSON.stringify(ask)).not.toContain("refunds (by bea)");
+      // git makes the branch from the fetched one, and the take carries the build on there.
       const again = take(clone, "refunds");
-      expect(again.status).not.toBe(0);
-      expect(again.out).toContain(line);
-      expect(again.out).not.toContain("already taken");
+      expect(again.status, again.out).toBe(0);
+      expect(again.json?.notice, again.out).toBe("You're on records/refunds now, where your build of refunds is. Carrying on refunds, your build here. Switch back to main any time.");
+      expect(git(clone, ["branch", "--show-current"])).toBe("records/refunds");
     }
-    // The way on is real: git makes the branch from the fetched one, and there the build is offered.
-    git(desk, ["switch", "-q", "records/refunds"]);
-    const there = next(desk);
-    expect(JSON.stringify(there)).not.toContain("Your build of refunds");
-    expect((there.choices as Array<{ label: string }>).map((choice) => choice.label)).toContain("Carry on refunds");
+    expect(JSON.stringify(next(desk))).not.toContain("Your build of refunds");
     // Her first computer reads it as before; another person reads who has it.
-    expect(String(next(bea).question)).toContain(line);
+    expect(carryOnChoice(next(bea), "refunds")?.detail).toBe(detail);
     const bob = cloneOf(home.remote, "bob");
     expect(String(next(bob).question)).toContain("refunds (by bea)");
     const taken = take(bob, "refunds");
@@ -1099,7 +1100,7 @@ describe("a Unit someone holds is not taken again", () => {
     expect(taken.out).toContain("refunds is already taken: bea builds it.");
   });
 
-  test("the person's own take with its build on no branch of the clone a switch reaches says it is on the other computer and to pull here, until the branch is fetched and again once the record merged; a branch with no build, or cut from main since, is never named", () => {
+  test("the person's own take with its build on no branch of the clone: nowhere on origin, the one step only they can take; pushed, the take fetches it and switches there; merged, the take brings main up to date; a branch with no build, or cut from main since, is never named", () => {
     const home = makeHome();
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
     asLeadsOwnCheckout(home.dir);
@@ -1117,6 +1118,8 @@ describe("a Unit someone holds is not taken again", () => {
     pushNotes(bea, "notes");
     git(bea, ["switch", "-q", "main"]);
     const desk = cloneOf(home.remote, "bea");
+    // Her third computer, on main, which the merge reaches later.
+    const third = cloneOf(home.remote, "bea");
     const bob = cloneOf(home.remote, "bob");
     const board = (dir: string) => {
       const ask = next(dir);
@@ -1129,37 +1132,70 @@ describe("a Unit someone holds is not taken again", () => {
       return taken.out;
     };
     const taken = "refunds is already taken: bea builds it.";
-    const pullHere = "You took refunds on another computer, and its build is not in this clone yet: push it from that " +
-      "computer if you have not, then run `git pull` here and carry on.";
-    // Her own take, with no branch of this clone holding its build: where it is, and the way to bring it here.
+    const notOnOrigin = "You took refunds on another computer, and its build is not on origin yet: push it from that " +
+      "computer, then ask me to carry it on here.";
+    // Her own take, with its build nowhere this clone or origin has it: where it is, and the one step only she can take.
     board(desk);
     const notHere = refused(desk);
-    expect(notHere).toContain(pullHere);
+    expect(notHere).toContain(notOnOrigin);
+    expect(notHere).not.toContain("git pull");
     expect(notHere).not.toContain("already taken");
     // Another person reads who has it.
     board(bob);
     expect(refused(bob)).toContain(taken);
-    // Pushed from her first computer and fetched here, the branch is named.
+    // Pushed from her first computer: the take fetches it here and switches there itself.
     git(bea, ["switch", "-q", "-c", "records/refunds"]);
     commitAll(bea, "refunds record");
     git(bea, ["push", "-q", "-u", "origin", "records/refunds"]);
-    git(desk, ["fetch", "-q", "origin"]);
-    expect(refused(desk)).toContain("Your build of refunds is on branch records/refunds: `git switch records/refunds` to carry it on.");
+    const switched = take(desk, "refunds");
+    expect(switched.status, switched.out).toBe(0);
+    expect(switched.json?.notice, switched.out).toBe("You're on records/refunds now, where your build of refunds is. Carrying on refunds, your build here. Switch back to main any time.");
     // Her record squash-merged on the host and its branch deleted; a
-    // teammate's branch cut from main since holds her build too. Her clone
-    // fetches both and merges neither: no branch is named as hers, and the
-    // pull that brings the merged record is the way on.
+    // teammate's branch cut from main since holds her build too. Her third
+    // computer, on main and behind: the take fetches both and brings main up
+    // to date, where the merged record is; no branch is named as hers.
     mergeOnHost(home.remote, "records/refunds", "squash");
     git(bea, ["push", "-q", "origin", "--delete", "records/refunds"]);
     pushNotes(bob, "bob-notes");
-    git(desk, ["fetch", "-q", "origin"]);
-    board(desk);
-    const merged = refused(desk);
-    expect(merged).toContain(pullHere);
-    expect(merged).not.toContain("records/refunds");
-    expect(merged).not.toContain("bob-notes");
-    git(desk, ["pull", "-q"]);
-    expect(take(desk, "refunds").status, "the pull brought her build here").toBe(0);
+    board(third);
+    const merged = take(third, "refunds");
+    expect(merged.status, merged.out).toBe(0);
+    expect(merged.json?.notice, merged.out).toBe(
+      "Your main is up to date with origin/main now, with your build of refunds in it. Carrying on refunds, your build here.");
+    expect(merged.out).not.toContain("records/refunds");
+    expect(merged.out).not.toContain("bob-notes");
+    expect(git(third, ["branch", "--show-current"])).toBe("main");
+    expect(git(third, ["rev-parse", "main"])).toBe(git(third, ["rev-parse", "origin/main"]));
+  });
+
+  test("the person's own take when this clone's fetch fails, or its build is checked out in another worktree: where it is, and the one step only they can take", () => {
+    const home = makeHome();
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    asLeadsOwnCheckout(home.dir);
+    commitAll(home.dir, "teams");
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const bea = cloneOf(home.remote, "bea");
+    expect(take(bea, "refunds").status).toBe(0);
+    const desk = cloneOf(home.remote, "bea");
+    git(bea, ["switch", "-q", "-c", "records/refunds"]);
+    commitAll(bea, "refunds record");
+    git(bea, ["push", "-q", "-u", "origin", "records/refunds"]);
+    // A ref of this clone's own in the way of the fetched branch's name: git's fetch fails here.
+    git(desk, ["update-ref", "refs/remotes/origin/records", "HEAD"]);
+    const failed = take(desk, "refunds");
+    expect(failed.status).not.toBe(0);
+    expect(failed.out).toContain("You took refunds on another computer, and its build is not in this clone yet. origin could not " +
+      "be reached just now to look for it, so push it from that computer if you have not, then ask me again.");
+    expect(failed.out).not.toContain("git pull");
+    // Her first computer, the branch checked out in a worktree of its own and her checkout back on main.
+    git(bea, ["switch", "-q", "main"]);
+    const folder = join(tempDir("worktree"), "records");
+    git(bea, ["worktree", "add", "-q", folder, "records/refunds"]);
+    const there = take(bea, "refunds");
+    expect(there.status).not.toBe(0);
+    expect(there.out).toContain("Your build of refunds is on branch records/refunds, which is checked out in ");
+    expect(there.out).toContain(": carry it on there.");
+    expect(git(bea, ["branch", "--show-current"])).toBe("main");
   });
 
   // A blobless partial clone keeps the record's file of a fetched branch on

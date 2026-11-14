@@ -6070,7 +6070,7 @@ export function bringBranchLevel(dir: string, remote: string, branch: string):
   }
   const ran: BranchLevelStep = git(dir, ["symbolic-ref", "--quiet", "--short", "HEAD"]).stdout.trim() === branch ? "fast-forward" : "fetch";
   const moved = ran === "fast-forward"
-    ? git(dir, ["merge", "-q", "--ff-only", theirs])
+    ? git(dir, ["merge", "-q", "--ff-only", "--no-overwrite-ignore", theirs])
     : git(dir, ["fetch", remote, `${branch}:${branch}`], { GIT_TERMINAL_PROMPT: "0" });
   return moved.ok ? { ok: true, ran } : { ok: false, ran, said: moved.stderr || moved.stdout };
 }
@@ -6229,6 +6229,29 @@ export function planShareWords(projectDir: string): string {
   return files === null ? "the plan here (AI-DLC's record, nothing else of yours)" : `${planShareName(pd)}, ${files},`;
 }
 
+// `branch` brought level with `remote`'s (bringBranchLevel), then this
+// checkout put on it when it is on another, never over an ignored file of
+// theirs; git's own words when either refused, nothing changed by the step
+// that refused. `ownWork`: the branch has commits its remote's copy does not.
+// The plan's way back and the take of the person's own merged build.
+function levelAndSwitch(pd: string, remote: string, branch: string):
+  { ok: true; from: string | null } | { ok: false; at: "level" | "switch"; said: string; ownWork: boolean } {
+  const here = git(pd, ["symbolic-ref", "--quiet", "--short", "HEAD"]).stdout.trim();
+  const level = bringBranchLevel(pd, remote, branch);
+  if (!level.ok) {
+    const ahead = git(pd, ["rev-list", "--count", `refs/remotes/${remote}/${branch}..refs/heads/${branch}`]).stdout.trim();
+    return { ok: false, at: "level", said: level.said, ownWork: ahead !== "" && ahead !== "0" };
+  }
+  if (here === branch) return { ok: true, from: null };
+  const switched = git(pd, ["switch", "-q", "--no-overwrite-ignore", branch]);
+  return switched.ok ? { ok: true, from: here || "the commit you were on" } : { ok: false, at: "switch", said: switched.stderr, ownWork: false };
+}
+
+// The branch brought level, and the switch onto it refused.
+function switchRefusedLine(branch: string, remote: string, here: string, said: string): string {
+  return `Your ${branch} is level with ${remote} now, and you stay on ${here}: git says ${gitWords(said)}`;
+}
+
 // `unit share --back`: from the plan's branch onto the integration branch once
 // the plan is in it: tried first in a copy of the index, then the branch
 // brought level with the remote's (fast-forward only) and switched to. Never a
@@ -6238,11 +6261,9 @@ function planBranchBack(pd: string): void {
   if (target === null) fail("This repository has no remote to share main with. Add one (git remote add origin <url>), then share again.");
   const { remote, branch } = target;
   const here = git(pd, ["symbolic-ref", "--quiet", "--short", "HEAD"]).stdout.trim() || "HEAD";
-  const stay = (said: string): never => fail(`You stay on ${here} and nothing changed: git says ${gitWords(said)}`);
-  const level = bringBranchLevel(pd, remote, branch);
-  if (!level.ok) stay(level.said);
-  const switched = git(pd, ["switch", "-q", branch]);
-  if (!switched.ok) fail(`Your ${branch} is level with ${remote} now, and you stay on ${here}: git says ${gitWords(switched.stderr)}`);
+  const moved = levelAndSwitch(pd, remote, branch);
+  if (!moved.ok && moved.at === "level") fail(`You stay on ${here} and nothing changed: git says ${gitWords(moved.said)}`);
+  if (!moved.ok) fail(switchRefusedLine(branch, remote, here, moved.said));
   console.log(JSON.stringify({
     switched: true,
     branch,
@@ -6722,76 +6743,124 @@ function takenLine(unit: string, claim: UnitClaimView): string {
   return `${unit} is already taken: ${builderOf(claim)} builds it${spaceWords(claim.owner)}.`;
 }
 
-// The person's own take whose build is not in this checkout but committed on
-// another branch of this clone: where it is and the way to it, for the take
-// question (unitTakeLook) and the take asked again; at the take, with no branch
-// a switch reaches holding it, that it is on the computer it was taken on, or
-// merged where this clone has not pulled, and a pull brings it here. Null, so
-// the words stand as they were, when the take is not theirs, git could not
-// read every branch, or, for the take question, no branch a switch reaches
-// has the build.
-export function buildOnBranchLine(projectDir: string, homeWork: string, claim: UnitClaimView, atTake = false): string | null {
+// The branch a switch reaches holding the person's own build of the home's
+// Unit, for the take question's Carry on choice (unitTakeLook). Null when the
+// take is not theirs, or no such branch has it.
+export function ownBuildBranch(projectDir: string, homeWork: string, claim: UnitClaimView): string | null {
   if (!claimIsMine(projectDir, claim)) return null;
-  const branch = branchWithBuild(projectDir, homeWork, claim.unit);
-  if (branch === null && atTake) {
-    return `You took ${claim.unit} on another computer, and its build is not in this clone yet: push it from that computer if you ` +
-      "have not, then run `git pull` here and carry on.";
-  }
-  // A backtick breaks the line's code marks, an apostrophe a PowerShell paste.
-  return !branch || /[`']/.test(branch)
-    ? null
-    : `Your build of ${claim.unit} is on branch ${branch}: \`git switch ${shellArg(branch)}\` to carry it on.`;
+  const place = branchWithBuild(projectDir, homeWork, claim.unit);
+  return place !== null && place !== "" && "switchTo" in place ? place.switchTo : null;
 }
 
-// The newest branch of this clone, free to switch to, whose record holds a
-// live build of the home's Unit (checked in on a branch of its own for a pull
-// request, the checkout back on main). Its own branches first, then the ones
-// it fetched from its remotes, which a fresh clone on another computer has
-// only as <remote>/<branch> and `git switch <branch>` makes its own. Local
-// reads only, never a fetch or a switch: the branch's name; null when no
-// branch a switch reaches has it (none has it, or only a fetched branch a
-// branch of this clone's own shadows, such as the merged main not pulled
-// here); "" when a git call is not ok, so nobody is sent to pull for nothing.
-function branchWithBuild(projectDir: string, homeWork: string, unit: string): string | null {
+// The person's own take whose build is not in this checkout, brought here as
+// they asked: a switch to the branch that holds it, or their branch brought up
+// to date where the record merged (this clone's own remote fetched first when
+// no branch here has it). Where it is somewhere only they can reach (another
+// computer, another worktree) the take stops with that line. Returns what is
+// said before the carry-on line and after it.
+function bringOwnBuildHere(pd: string, homeWork: string, claim: UnitClaimView): { before: string; after: string } {
+  const unit = claim.unit;
+  const remote = repositoryRemote(pd);
+  let place = branchWithBuild(pd, homeWork, unit);
+  if (place === null && remote !== null) {
+    if (!quietFetch(pd, ["--no-tags", "-q", remote]).ok) {
+      fail(`You took ${unit} on another computer, and its build is not in this clone yet. ${remote} could not be reached just now ` +
+        "to look for it, so push it from that computer if you have not, then ask me again.");
+    }
+    place = branchWithBuild(pd, homeWork, unit);
+  }
+  if (place === "") fail(takenLine(unit, claim));
+  if (place === null) {
+    fail(remote === null
+      ? `You took ${unit} on another computer, and its build is not in this clone: carry on with it on that computer.`
+      : `You took ${unit} on another computer, and its build is not on ${remote} yet: push it from that computer, then ask me to carry it on here.`);
+  }
+  if ("checkedOut" in place) {
+    fail(`Your build of ${unit} is on branch ${place.checkedOut.branch}, which is checked out in ${place.checkedOut.path}: carry it on there.`);
+  }
+  const here = git(pd, ["symbolic-ref", "--quiet", "--short", "HEAD"]).stdout.trim();
+  if ("switchTo" in place) {
+    const switched = git(pd, ["switch", "-q", "--no-overwrite-ignore", place.switchTo]);
+    if (!switched.ok) {
+      fail(`Your build of ${unit} is on branch ${place.switchTo}, and you stay on ${here || "the commit you were on"}: git says ` +
+        `"${gitSaid(switched.stderr || switched.stdout)}".`);
+    }
+    return { before: `You're on ${place.switchTo} now, where your build of ${unit} is. `, after: ` Switch back to ${here || "the commit you were on"} any time.` };
+  }
+  const { remote: from, branch } = place.level;
+  const moved = levelAndSwitch(pd, from, branch);
+  if (!moved.ok && moved.at === "switch") fail(switchRefusedLine(branch, from, here || "HEAD", moved.said));
+  if (!moved.ok) {
+    fail(`Your build of ${unit} is in ${from}/${branch}, and your ${branch} stays as it was: git says "${gitSaid(moved.said)}".` +
+      (moved.ownWork ? ` Your ${branch} has work of yours that ${from}/${branch} does not; once that is in ${from}/${branch}, ask me to carry ${unit} on here.` : ""));
+  }
+  return {
+    before: `Your ${branch} is up to date with ${from}/${branch} now, with your build of ${unit} in it. `,
+    after: moved.from === null ? "" : ` You're on ${branch} now. Switch back to ${moved.from} any time.`,
+  };
+}
+
+// Where the person's own build of the home's Unit is in this clone, when it is
+// not in this checkout: a branch a switch reaches (its own, or one it fetched,
+// which `git switch <branch>` makes its own); a branch of its own whose fetched
+// copy has it, the record merged where this clone has not pulled (`level`); a
+// branch checked out in another worktree of this clone. Its own branches
+// first, then those checked out elsewhere, then the fetched copies of its own
+// (read before the rest: once the record's pull request merged, main holds the
+// build, and so does every branch cut from it since), then the other fetched
+// ones. Local reads only, never a fetch or a switch. Null when no branch has
+// it; "" when a git call is not ok, so nobody is sent anywhere for nothing.
+type BuildPlace =
+  | { switchTo: string }
+  | { level: { remote: string; branch: string } }
+  | { checkedOut: { branch: string; path: string } };
+
+function branchWithBuild(projectDir: string, homeWork: string, unit: string): BuildPlace | null | "" {
   // Globs whatever the person's environment says (aidlc-workspace-doctor's way).
   const env = { GIT_LITERAL_PATHSPECS: "0" };
   const listed = localGit(projectDir, ["for-each-ref", "--sort=-committerdate", "--format=%(worktreepath)%00%(refname)", "refs/heads/",
     "refs/remotes/"], env);
   const remotes = localGit(projectDir, ["remote"], env);
   if (!listed.ok || !remotes.ok) return "";
+  // The branch checked out here: its build would be on disk, so it is not read.
+  const head = localGit(projectDir, ["symbolic-ref", "--quiet", "HEAD"], env).stdout.trim();
   const rows = listed.stdout.split(/\r?\n/).filter(Boolean).map((line) => line.split("\0"));
   const ownNames = new Set(rows.flatMap(([, ref]) => ref?.startsWith("refs/heads/") ? [ref.slice("refs/heads/".length)] : []));
   const prefixes = remotes.stdout.split(/\r?\n/).filter(Boolean).map((remote) => `refs/remotes/${remote}/`)
     .sort((a, b) => b.length - a.length);
-  // Each ref read, and the name `git switch` takes to it (null for none).
-  const names = new Map<string, string | null>();
-  const [own, shadowed, fetched]: string[][] = [[], [], []];
+  const places = new Map<string, BuildPlace>();
+  const [own, elsewhere, shadowed, fetched]: string[][] = [[], [], [], []];
   for (const [worktree, ref] of rows) {
     if (ref === undefined) continue;
     if (ref.startsWith("refs/heads/")) {
-      // A branch checked out here or in another worktree is not one to switch to.
+      const branch = ref.slice("refs/heads/".length);
       if (worktree === "") {
         own.push(ref);
-        names.set(ref, ref.slice("refs/heads/".length));
+        places.set(ref, { switchTo: branch });
+      } else if (ref !== head) {
+        elsewhere.push(ref);
+        places.set(ref, { checkedOut: { branch, path: worktree } });
       }
       continue;
     }
     // A fetched branch by its remote's name for it, the longest remote name
-    // first, never AI-DLC's claims or the remote's HEAD. One this clone has a
-    // branch of its own by names nothing (the switch goes to its own), and is
-    // read before the rest: once the record's pull request merged, main holds
-    // the build, and so does every branch cut from it since.
+    // first, never AI-DLC's claims or the remote's HEAD.
     const prefix = prefixes.find((start) => ref.startsWith(start));
     const name = prefix === undefined ? "" : ref.slice(prefix.length);
-    if (name === "" || name === "HEAD" || name.startsWith("claim/")) continue;
-    (ownNames.has(name) ? shadowed : fetched).push(ref);
-    names.set(ref, ownNames.has(name) ? null : name);
+    if (prefix === undefined || name === "" || name === "HEAD" || name.startsWith("claim/")) continue;
+    if (ownNames.has(name)) {
+      shadowed.push(ref);
+      places.set(ref, { level: { remote: prefix.slice("refs/remotes/".length, -1), branch: name } });
+    } else {
+      fetched.push(ref);
+      places.set(ref, { switchTo: name });
+    }
   }
   const field = `^- \\*\\*${UNIT_BUILD_FIELD}\\*\\*:[[:blank:]]*${unit.replaceAll(".", "\\.")}[[:space:]]*$`;
   // Newest branch first, a hundred a call so no command line runs too long on
   // Windows; a fetched branch never shares a call with this clone's own, so
   // one git cannot read (a partial clone's) loses no hint of theirs.
-  for (const refs of [own, shadowed, fetched]) {
+  for (const refs of [own, elsewhere, shadowed, fetched]) {
     for (let at = 0; at < refs.length; at += 100) {
       const found = localGit(projectDir, ["grep", "--no-color", "-z", "-l", "-E", "-e", field, ...refs.slice(at, at + 100), "--",
         "aidlc/spaces/*/intents/*/aidlc-state.md"], env);
@@ -6803,7 +6872,7 @@ function branchWithBuild(projectDir: string, homeWork: string, unit: string): st
         if (!shown.ok) return "";
         const build = liveBuildOf(shown.stdout);
         if (build === null || !isBuildOfUnit(build, homeWork, unit)) continue;
-        return names.get(ref) ?? null;
+        return places.get(ref) ?? null;
       }
     }
   }
@@ -7762,22 +7831,26 @@ function takeUnit(args: string[], projectDir?: string, rhythm?: UnitClaimPayload
   if (home !== null) validateClaimRefUnit(home.id8, unit);
   // Taken here before (this clone or another of this workspace): carry it on.
   const existing = builtHere ?? (home === null ? null : findUnitBuild(pd, home.uuid, unit));
-  if (existing !== null) {
-    setActiveSpaceCursor(pd, existing.space);
-    selectIntentForSession(pd, existing.dirName, existing.space, resolveWorkflowSelection(pd).sessionId ?? undefined);
+  // Carried on, with what bringing it here said before and after the line.
+  const carryOn = (found: NonNullable<typeof existing>, before = "", after = ""): void => {
+    setActiveSpaceCursor(pd, found.space);
+    selectIntentForSession(pd, found.dirName, found.space, resolveWorkflowSelection(pd).sessionId ?? undefined);
     // Whose build it is, said once, from its claim as this workspace last
     // fetched it, while it is taken: a claim given back or freed names nobody.
-    const claim = buildClaimHere(pd, existing);
+    const claim = buildClaimHere(pd, found);
     const whose = claim?.status !== "claimed" ? "its" : claimIsMine(pd, claim) ? "your" : `${builderOf(claim)}'s`;
-    const carrying = `Carrying on ${unit}, ${whose} build${existing.space === DEFAULT_SPACE ? " here" : spaceWords(existing.space)}.`;
+    const carrying = `${before}Carrying on ${unit}, ${whose} build${found.space === DEFAULT_SPACE ? " here" : spaceWords(found.space)}.${after}`;
     console.log(JSON.stringify({
       taken: true,
       resumed: true,
       unit,
-      space: existing.space,
-      record: existing.dirName,
+      space: found.space,
+      record: found.dirName,
       ...(saidWithNextStep(pd, carrying) ? {} : { notice: carrying }),
     }));
+  };
+  if (existing !== null) {
+    carryOn(existing);
     return;
   }
   if (home === null) fail(`${unit}'s build is not here.`);
@@ -7813,7 +7886,14 @@ function takeUnit(args: string[], projectDir?: string, rhythm?: UnitClaimPayload
   if (!opening.units.includes(unit)) fail(`${unit} is not one of ${home.label}'s Units (${opening.units.join(", ")}).`);
   if (solo?.started.has(unit)) fail(`${unit} is being built on the other machine; take another Unit, or follow along.`);
   const me = git(pd, ["config", "user.name"]).stdout.trim() || "a teammate";
-  if (current?.status === "claimed") fail(buildOnBranchLine(pd, home.uuid, current, true) ?? takenLine(unit, current));
+  if (current?.status === "claimed") {
+    if (!claimIsMine(pd, current)) fail(takenLine(unit, current));
+    const said = bringOwnBuildHere(pd, home.uuid, current);
+    const found = findUnitBuild(pd, home.uuid, unit);
+    if (found === null) fail(`${unit}'s build is not here.`);
+    carryOn(found, said.before, said.after);
+    return;
+  }
   if (opening.completed.has(unit)) fail(`${unit} is already done at the lead's project.`);
   const homeRows = homeAuditAt(pd, home, integration.oid);
   if (!home.solo && leadBuildsWithoutClaim(homeRows, unit, current)) {
