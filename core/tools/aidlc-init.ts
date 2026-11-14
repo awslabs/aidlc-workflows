@@ -180,6 +180,7 @@ import { addPluginProducesKinds } from "./aidlc-plugin-produces-kinds.ts";
 import { regenerateRunnerSurfaces } from "./aidlc-runner-gen.ts";
 import { KIRO_IDE_STEERING, kiroIdeSteering, refreshActiveMemory } from "./aidlc-includes.ts";
 import { moveReposManifestIntoAidlc, REPOS_MOVED_LINE } from "./aidlc-workspace-manifest.ts";
+import { keepSetupWrites, type SetupWrite } from "./aidlc-brought-files.ts";
 import {
   activeWorkflowPluginDependencies,
   canonicalScopeTableRegion,
@@ -11147,6 +11148,33 @@ function planRootIntegrations(
   }
 }
 
+// Each write or removal this run plans for a file holding AI-DLC's marked
+// part (a managed-block integration of the release or of the prior record),
+// with the file's bytes as they are before it.
+function markedPartWrites(
+  projectDir: string,
+  descriptor: Pick<ProjectionDescriptor, "rootIntegrations">,
+  prior: Baseline | null,
+  operations: readonly TransactionOperation[],
+): SetupWrite[] {
+  const marked = new Set([
+    ...descriptor.rootIntegrations.filter((integration) => integration.policy === "managed-block")
+      .map((integration) => integration.path),
+    ...Object.entries(prior?.rootContributions ?? {}).filter(([, contribution]) => contribution.policy === "managed-block")
+      .map(([path]) => path),
+  ]);
+  return operations.flatMap((operation) => {
+    if (!marked.has(operation.path) || (operation.kind !== "write" && operation.kind !== "remove")) return [];
+    let found: Buffer | null;
+    try {
+      found = readFileSync(join(projectDir, operation.path));
+    } catch {
+      found = null;
+    }
+    return [{ path: operation.path, found, left: operation.kind === "write" ? Buffer.from(operation.data, "base64") : null }];
+  });
+}
+
 function planRemovedRootIntegrations(
   projectDir: string,
   descriptor: ProjectionDescriptor,
@@ -14497,6 +14525,13 @@ export async function main(
         return new Set([...next].filter((plugin) => !paused.has(plugin)));
       })())
       : [];
+    // What this run writes to the files holding AI-DLC's marked part, kept
+    // once it is in so the build's approval does not count it as the build's
+    // (keepSetupWrites). Only this release keeps it: an earlier one's tools read
+    // their files where they keep them, and the engine folder would move them.
+    const setupWrites = recordOnly || stamp.frameworkVersion !== AIDLC_VERSION
+      ? []
+      : markedPartWrites(projectDir, descriptor, prior, operations);
     if (refreshing) {
       withAuditLock(
         projectDir,
@@ -14510,6 +14545,7 @@ export async function main(
     } else {
       executeSettingsAndProjectMutation(settingsMutation, plan);
     }
+    keepSetupWrites(projectDir, setupWrites);
     // The copy of the active space's memory that the harness includes read is
     // written now, before a chat loads them, so the first chat holds the rules
     // it loaded and is not handed them again on every step (#1330). Best-effort,

@@ -2665,7 +2665,18 @@ for every file in one `git cat-file --batch` per repo, else for a named file one
 of the last 20 commits that touched it), the line gives the
 `git checkout <commit> -- <path>` that puts it back; a path no shell quoting
 passes to git as that one file is named as held by git, with no command;
-otherwise it says there is no committed copy. The listings are AI-DLC's ignored
+otherwise it says there is no committed copy. A file AI-DLC's install or a
+refresh wrote is not the build's change: a file it writes whole while it holds
+what the install record says, and in a file it shares with the person
+(`.gitignore`, AGENTS.md) its marked part, when git holds the file as the build
+found it and the person's part around the marked part is as it was, or else
+when the fingerprints `aidlc config` keeps of its own writes link the two
+(`keepSetupWrites`, in `aidlc/.aidlc-engine/setup-writes.json`: each such file
+as config found it and as each of its writes left it, while each write finds
+the file as the last one left it; kept only while git does not hold the file as
+config finds it, written only by the release config installs, and read as none
+when it cannot be read). The build's starting content is one of those
+fingerprints and the file now is the last, or the file is named. The listings are AI-DLC's ignored
 files, so a teammate's clone does not hold them: there, the files the project
 held when its Code Generation first ran a step on this machine stand for what
 the person brought (taken then, beside the record's other engine files under
