@@ -15095,7 +15095,16 @@ function unitLedgerFor(
   stateContent?: string,
 ): UnitLedger {
   const policyState = stateContent ?? loadStateFileIfPresent(projectDir);
-  const receiptsRequired = policyState !== null && checkpointPolicyEnabled(policyState);
+  // A team Unit's gate takes its step only on UNIT_COMPLETED
+  // (verifyTeamUnitGateEvidence). With one gate at the Unit's end, a step
+  // settled here by its files alone is passed by, and that gate asks the person
+  // about the missing receipt after the Unit's later stages are built; so the
+  // walk stays on the step and its start is named (refuseWithoutUnitStart).
+  // A per-stage gate comes right after the step and asks there.
+  const receiptsRequired = policyState !== null && (
+    checkpointPolicyEnabled(policyState) ||
+    (isTeamUnitOwnership(policyState) && effectiveUnitGateRhythm(projectDir, policyState) === "unit-end")
+  );
   // A Unit's checkpoint re-checks or accepts a change to its completed work,
   // and a Guard Policy of relaxed or off accepts it at the stage's gate, so the
   // stage is not handed back for it.

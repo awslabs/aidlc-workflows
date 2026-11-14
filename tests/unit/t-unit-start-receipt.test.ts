@@ -19,7 +19,11 @@
 //      another Unit's, whose start the engine refuses while it asks;
 //   3. with the Unit's files written before its first record, the engine
 //      refuses the start, so the request is never told to run it and is
-//      recorded as before.
+//      recorded as before;
+//   4. on a unit-end walk the same files never finish the Unit's step: the
+//      team gate takes it only on its completion receipt, so the walk stays on
+//      it and the start is named, instead of the walk going on and the person
+//      being asked about the missing receipt at the Unit's end.
 //
 // SOURCE UNDER TEST (dist/claude/.claude/tools/): aidlc-log.ts review,
 // aidlc-state.ts unit start, aidlc-orchestrate.ts next, aidlc-lib.ts
@@ -66,7 +70,7 @@ afterEach(() => {
   while (tempDirs.length) cleanupTestProject(tempDirs.pop());
 });
 
-function teamState(): string {
+function teamState(rhythm?: "unit-end"): string {
   return `# AI-DLC State Tracking
 
 ## Project Information
@@ -81,7 +85,7 @@ function teamState(): string {
 - **Construction Iteration**: unit-major
 - **Construction Checkpoints**: disabled
 - **Unit Ownership**: team
-
+${rhythm ? `- **Unit Gate Rhythm**: ${rhythm}\n` : ""}
 ## Scope Configuration
 - **Stages to Execute**: all
 - **Stages to Skip**: none
@@ -124,11 +128,11 @@ function engineEnv(): NodeJS.ProcessEnv {
   return env;
 }
 
-function seedTeamProject(options: { artifacts: boolean }): string {
+function seedTeamProject(options: { artifacts: boolean; rhythm?: "unit-end" }): string {
   const proj = createTestProject();
   tempDirs.push(proj);
   seedAidlcMemory(proj);
-  writeFileSync(seededStateFile(proj), teamState());
+  writeFileSync(seededStateFile(proj), teamState(options.rhythm));
   seedBoltDag(proj, UNITS);
   if (options.artifacts) {
     for (const unit of UNITS) {
@@ -229,5 +233,29 @@ describe("a per-Unit stage's receipts hang off the Unit's start", () => {
     expect(recorded.status, `${recorded.stdout}${recorded.stderr}`).toBe(0);
     expect(recorded.stdout).toContain("REVIEW_REQUESTED");
     expect(recorded.stdout).not.toContain("has not been started");
+  });
+
+  test("4: on a unit-end walk, a Unit's files written before its start do not finish its step; the start is named", () => {
+    const proj = seedTeamProject({ artifacts: false, rhythm: "unit-end" });
+    const dir = join(seededRecordDir(proj), "construction", "alpha", SLUG);
+    mkdirSync(dir, { recursive: true });
+    for (const name of PRODUCES) writeFileSync(join(dir, artifactFilename(name)), `# ${name} for alpha\n`);
+
+    // The team gate settles a Unit's step only on its completion receipt, so
+    // the walk stays on the step: it never goes on to the Unit's next stage
+    // and leaves the missing receipt for the person at the Unit's end.
+    const routed = runOrchestrateNext(ORCH, proj, [], { env: engineEnv() });
+    expect(routed.status, routed.stderr).toBe(0);
+    expect(routed.directive).toMatchObject({ kind: "run-stage", stage: SLUG, unit: "alpha" });
+
+    const refused = requestReview(proj, "alpha");
+    expect(refused.status, `${refused.stdout}${refused.stderr}`).not.toBe(0);
+    expect(`${refused.stdout}${refused.stderr}`).toContain(`unit start --stage ${SLUG} --unit alpha`);
+
+    const started = startUnit(proj, "alpha");
+    expect(started.status, `${started.stdout}${started.stderr}`).toBe(0);
+    const recorded = requestReview(proj, "alpha");
+    expect(recorded.status, `${recorded.stdout}${recorded.stderr}`).toBe(0);
+    expect(recorded.stdout).toContain("REVIEW_REQUESTED");
   });
 });
