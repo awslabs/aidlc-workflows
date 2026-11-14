@@ -955,6 +955,32 @@ describe("a message typed while Kiro CLI works is the person's turn", () => {
     }
   });
 
+  test("Kiro CLI: a Kiro Crew host notice steered into the turn records HOST_TURN; a person's words beside it stay theirs", () => {
+    const project = scratchProject("kiro");
+    try {
+      expect(state(project, "kiro", ["gate-start", "feasibility"]).code).toBe(0);
+      const notice = "<user_message>\n[Kiro Crew host notice] This was NOT a user action: the approval expired.\n</user_message>";
+      kiroCliRecord(project.home, chat, [
+        kiroCliPrompt("Carry on with the feasibility check."),
+        kiroCliToolResults("one\n", [{ words: `${notice}\n${notice}`, id: "steer-11223344556677889900aabbccddeeff" }]),
+      ]);
+      expect(shellHook(project, NEXT_CALL).code).toBe(0);
+      expect(humanTurns(project.dir)).toBe(0);
+      expect(rows(project.dir, "HOST_TURN").length).toBe(1);
+      expect(keptWords(project.dir)).toEqual([]);
+      agentApproves(project, "kiro", false);
+
+      kiroCliRecord(project.home, chat, [
+        kiroCliPrompt("Go on."),
+        kiroCliToolResults("two\n", [{ words: `${notice}\nApprove`, id: "steer-ffeeddccbbaa00998877665544332211" }]),
+      ]);
+      expect(shellHook(project, NEXT_CALL).code).toBe(0);
+      expect(humanTurns(project.dir)).toBe(1);
+    } finally {
+      rmSync(project.dir, { recursive: true, force: true });
+    }
+  });
+
   test("Kiro CLI: a message from an earlier turn, the envelope inside a tool's output, or a shell command that is not AI-DLC's is not a turn", () => {
     const project = scratchProject("kiro");
     try {
