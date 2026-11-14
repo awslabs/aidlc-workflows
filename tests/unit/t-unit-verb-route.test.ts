@@ -205,8 +205,8 @@ describe("one list of Unit verbs", () => {
       const named = [...new Set([...grammar.usage.matchAll(/--([a-z][a-z-]*)/g)].map((match) => match[1]))];
       const switches = grammar.switches ?? [];
       expect(named.sort(), verb).toEqual([...grammar.options, ...switches].sort());
-      // A switch is shown with nothing after it to take, an option with its value.
-      for (const name of switches) expect(grammar.usage, `${verb} --${name}`).toMatch(new RegExp(`--${name}(?=$|[\\])]| --| \\[)`));
+      // A switch is shown with nothing after it to take (its alternative after a bar at most), an option with its value.
+      for (const name of switches) expect(grammar.usage, `${verb} --${name}`).toMatch(new RegExp(`--${name}(?=$|[\\])]| --| \\[| \\|)`));
       for (const name of grammar.options) expect(grammar.usage, `${verb} --${name}`).toMatch(new RegExp(`--${name} [^-\\[\\]|()]`));
     }
     expect(ROUTES.find((entry) => entry.id === "unit")?.all).toEqual(
