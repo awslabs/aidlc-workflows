@@ -1974,6 +1974,41 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
     expect(r.out).toContain(REVIEWER);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
+  function ignoredCacheWrittenAfterReview(): void {
+    writeFileSync(join(proj, ".gitignore"), ".hypothesis/\n", "utf-8");
+    git(proj, ["add", ".gitignore"]);
+    git(proj, ["commit", "-qm", "the project ignores its test cache"]);
+    appendAuditEntry(
+      "WORKFLOW_STARTED",
+      { Scope: "feature", ...sourceBaselineAuditFields(proj, "code-generation") },
+      proj,
+    );
+    const boundarySecond = Math.floor(Date.now() / 1000);
+    while (Math.floor(Date.now() / 1000) === boundarySecond) {}
+    recordReview(proj);
+    mkdirSync(join(proj, ".hypothesis", "constants"), { recursive: true });
+    writeFileSync(join(proj, ".hypothesis", "constants", "26bfa77cc03df930"), "cache\n", "utf-8");
+    writeFileSync(join(proj, ".hypothesis", "unicode_data.gz"), "gz\n", "utf-8");
+  }
+
+  test("a git-ignored test cache written during the stage is not source that moved", () => {
+    ignoredCacheWrittenAfterReview();
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(r.out).not.toContain("project source changed after");
+    expect(r.out).not.toContain(".hypothesis");
+    expect(r.rc, r.out).toBe(0);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("a tracked edit beside an ignored cache still refuses, naming only the tracked path", () => {
+    ignoredCacheWrittenAfterReview();
+    writeFileSync(src, "export const answer = 1337; // edited after review\n", "utf-8");
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(r.rc).not.toBe(0);
+    expect(r.out).toContain("project source changed after");
+    expect(r.out).toContain("app.ts");
+    expect(r.out).not.toContain(".hypothesis");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
   test("under relaxed, a post-review source edit is carried to the gate as the changed paths", () => {
     const statePath = seededStateFile(proj);
     writeFileSync(statePath, readFileSync(statePath, "utf-8").replace(
