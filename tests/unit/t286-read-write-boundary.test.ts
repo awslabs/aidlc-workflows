@@ -108,6 +108,16 @@ describe("t286 readRegularFileNoFollowOrThrow - TYPE: only a regular file", () =
     linkSync(original, linked);
     expect(() => readRegularFileNoFollowOrThrow(linked, "doctor input"))
       .toThrow(/multiply linked/);
+    // The way past it is said in words, because a chained `cp ... && mv ...`
+    // does not parse in Windows PowerShell 5.1 and cmd has no cp or mv.
+    let message = "";
+    try {
+      readRegularFileNoFollowOrThrow(linked, "doctor input");
+    } catch (error) {
+      message = String(error);
+    }
+    expect(message).toContain("Copy the file, delete the original, give the copy the original's name, then re-run.");
+    expect(message).not.toMatch(/&&|\bcp |\bmv /);
   });
 
   test("refuses a symlink WITHOUT following it, naming it as a symlink", () => {

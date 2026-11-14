@@ -887,8 +887,8 @@ See [Porting to a New Harness](../../harness-engineering/09-porting-to-a-new-har
 > kiro-v2`), which pins no Kiro engine; start it with `kiro-cli --v2` (Kiro CLI 2.21.4 or later; for an older one, see
 > [Kiro CLI (V2) prerequisites](#kiro-cli-v2-prerequisites)). The
 > interactive `aidlc config` lists it as Kiro CLI (V2); when it detects Kiro
-> CLI 2.24.1 or later, it makes it the default over Kiro, except in Kiro IDE's
-> own terminal, where Kiro leads. For Kiro's v3 engine on Kiro CLI 2.24.1 or
+> CLI 2.24.1 or later, it makes Kiro the default over it, and you take Kiro CLI
+> (V2) by its number. For Kiro's v3 engine on Kiro CLI 2.24.1 or
 > later, use the Kiro harness (`--harness kiro`), listed as Kiro: it runs in
 > Kiro CLI (started with `kiro-cli --v3`) as well as Kiro IDE. In an existing
 > Kiro CLI (V2) project, `aidlc config --harness kiro` switches `.kiro/` to it

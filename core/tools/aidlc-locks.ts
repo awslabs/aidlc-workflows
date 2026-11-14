@@ -2067,6 +2067,11 @@ export function sameFileIdentity(
   return left.dev === right.dev && left.ino === right.ino;
 }
 
+/** The way past the read boundary's hardlink refusal, shared with the
+ *  knowledge tool's stat mirror. Said in words: a chained shell command does
+ *  not parse in Windows PowerShell 5.1, and cmd has no cp or mv. */
+export const HARDLINK_REMEDY = "Copy the file, delete the original, give the copy the original's name, then re-run.";
+
 // THE read boundary for any path that came from OUTSIDE the workspace — a CLI
 // flag, a value-transport file, a committed ledger row. Returns the contents of a
 // REGULAR file or throws; it never blocks indefinitely and never follows a link.
@@ -2175,8 +2180,7 @@ export function readRegularFileNoFollowOrThrow(
       throw new Error(
         `${what} is multiply linked (a hardlink) and is not trusted: ${path}. ` +
           `A hardlink can alias content from elsewhere on the filesystem into this ` +
-          `directory. Replace it with an independent copy - ` +
-          `cp <file> <file>.copy && mv <file>.copy <file> - and re-run.`,
+          `directory. ${HARDLINK_REMEDY}`,
       );
     }
     if (maxBytes !== undefined && st.size > maxBytes) {
