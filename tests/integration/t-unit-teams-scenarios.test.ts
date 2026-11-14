@@ -21,6 +21,7 @@ import { hostFor } from "../harness/scope-hosts.ts";
 import { AgentStandIn, type Directive, PersonScript } from "../harness/scope-run.ts";
 import {
   claimPayload,
+  fetchRecords,
   cleanupTeamBuild,
   cloneCode,
   cloneOf,
@@ -102,7 +103,7 @@ function teamsChosen(home: Home): void {
 }
 
 function boardAt(home: Home): string {
-  git(home.dir, ["fetch", "-q", "origin"]);
+  fetchRecords(home.dir);
   const step = next(home.dir);
   return String(step.narration ?? step.message ?? JSON.stringify(step));
 }
@@ -155,7 +156,7 @@ describe("scenario 1: one shared workspace repo, the repos side by side", () => 
     mergeOnHost(hosts["checkout-api"], "refunds", "merge");
     expect(boardAt(home)).toContain("- refunds, payments space: built by alice, checkout-api merged, billing not merged yet (1 of 2 merged)");
     mergeOnHost(hosts.billing, "refunds", "squash");
-    git(home.dir, ["fetch", "-q", "origin"]);
+    fetchRecords(home.dir);
     next(home.dir);
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
     // reporting waited on refunds and is open now; the lead asks to build it
@@ -225,7 +226,7 @@ describe("scenario 2: one big code repo", () => {
       .toEqual(["README.md", "services/billing/lib/refund.ts", "services/checkout-api/src/refunds.ts"]);
     expect(boardAt(home)).toContain("- refunds, payments space: built by alice, platform not merged yet");
     mergeOnHost(platform, "refunds", "squash");
-    git(home.dir, ["fetch", "-q", "origin"]);
+    fetchRecords(home.dir);
     next(home.dir);
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
   });
@@ -259,7 +260,7 @@ describe("scenario 2: one big code repo", () => {
       .toEqual(["services/billing/lib/refund.ts", "services/checkout-api/src/refunds.ts"]);
     expect(boardAt(home)).toContain("- refunds, payments space: built by alice, the repo not merged yet");
     mergeOnHost(home.remote, "refunds", "squash");
-    git(home.dir, ["fetch", "-q", "origin"]);
+    fetchRecords(home.dir);
     next(home.dir);
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
   });
@@ -312,7 +313,7 @@ describe("scenario 3: each team keeps its own workspace repo", () => {
     expect(kiroIde.next(will).unit).toBe("checkout-ui");
     expect(boardAt(home)).toContain("- checkout-ui, web space: built by wendy, checkout-web not merged yet");
     mergeOnHost(hosts["checkout-web"], "checkout-ui", "rebase");
-    git(home.dir, ["fetch", "-q", "origin"]);
+    fetchRecords(home.dir);
     next(home.dir);
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "checkout-ui")).toMatchObject({ done: true });
   });
@@ -367,14 +368,14 @@ describe("scenario 5: solo work, then a second person joins", () => {
     built(buildRecord(bob, "default", "checkout-ui"), "checkout-ui", [{ repo: "checkout-web", folder: join(bob, "checkout-web"), path: "src/cart.tsx" }]);
     expect(run(opencode.unit, ["push"], bob).status).toBe(0);
 
-    git(home.dir, ["fetch", "-q", "origin"]);
+    fetchRecords(home.dir);
     const step = next(home.dir);
     expect(notices(step)).toContain("Your teammate bob took checkout-ui; this session carries on with the rest, one Unit at a time, and you can ask to sign off a teammate's result yourself before it counts as done.");
     expect(field(stateOf(home.dir), "Unit Ownership")).toBe("team");
     expect(step.unit).toBe("reporting");
     expect(next(home.dir).ask_type).toBeUndefined();
     mergeOnHost(hosts["checkout-web"], "checkout-ui", "squash");
-    git(home.dir, ["fetch", "-q", "origin"]);
+    fetchRecords(home.dir);
     next(home.dir);
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "checkout-ui")).toMatchObject({ done: true });
   });
@@ -404,11 +405,11 @@ describe("scenario 6: when things go wrong", () => {
     code();
     expect(run(kiro.unit, ["push"], alice).status).toBe(0);
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
-    git(home.dir, ["fetch", "-q", "origin"]);
+    fetchRecords(home.dir);
     const down = run(UNIT, ["turned-down", "refunds", "--repo", "billing", "--person-words", "they want the retry logic in the client"], home.dir);
     expect(down.status, down.out).toBe(0);
     expect(boardAt(home)).toContain("- refunds, payments space: turned down in billing, back with alice");
-    git(alice, ["fetch", "-q", "origin"]);
+    fetchRecords(alice);
     expect(notices(kiro.next(alice))).toContain(
       'refunds was turned down in billing by the lead: "they want the retry logic in the client".',
     );
@@ -416,7 +417,7 @@ describe("scenario 6: when things go wrong", () => {
     code("-with-retry");
     expect(run(kiro.unit, ["push"], alice).status).toBe(0);
     mergeOnHost(hosts.billing, "refunds", "merge");
-    git(home.dir, ["fetch", "-q", "origin"]);
+    fetchRecords(home.dir);
     next(home.dir);
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
     expect(git(hosts["checkout-api"], ["log", "--format=%s", "main"]).split("\n")).toContain("refunds (squashed)");
@@ -440,7 +441,7 @@ describe("scenario 6: when things go wrong", () => {
     const { hosts, home, kiro, alice, code } = refundsOnKiro();
     code();
     expect(run(kiro.unit, ["push"], alice).status).toBe(0);
-    git(home.dir, ["fetch", "-q", "origin"]);
+    fetchRecords(home.dir);
     // The data team on Claude Code starts reporting early, and walks its
     // Functional Design through to the next stage.
     const dana = cloneOf(home.remote, "dana");
@@ -467,10 +468,10 @@ describe("scenario 6: when things go wrong", () => {
     const requirements = "inception/requirements-analysis/requirements.md";
     writeFileSync(join(buildRecord(alice, "payments", "refunds"), ...requirements.split("/")), "# Requirements\n\nFR1 refunds, with a reason.\n");
     expect(run(kiro.unit, ["propose", "--input", "requirements.md", "--person-words", "add refund_reason"], alice).status).toBe(0);
-    git(home.dir, ["fetch", "-q", "origin"]);
+    fetchRecords(home.dir);
     expect(next(home.dir).ask_type).toBe("unit-amend");
     expect(run(UNIT, ["amend", "refunds", "--input", requirements, "--answer", "approve", "--person-words", "yes, add it"], home.dir).status).toBe(0);
-    git(dana, ["fetch", "-q", "origin"]);
+    fetchRecords(dana);
     const heard = agent.next();
     expect(notices(heard)).toContain(
       "Something Functional Design used changed after it finished. I'm carrying on with it as it is. Do you want me to redo Functional Design with the change?",
@@ -483,9 +484,9 @@ describe("scenario 6: when things go wrong", () => {
     // refunds merges and is done: the early team is offered once to move onto main, and keeps its work.
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
     mergeOnHost(hosts.billing, "refunds", "squash");
-    git(home.dir, ["fetch", "-q", "origin"]);
+    fetchRecords(home.dir);
     next(home.dir);
-    git(dana, ["fetch", "-q", "origin"]);
+    fetchRecords(dana);
     const move = agent.next();
     expect(move.ask_type, JSON.stringify(move)).toBe("unit-move-onto");
     expect(String(move.question)).toStartWith("refunds is merged into main. Do you want me to move reporting onto main now?");

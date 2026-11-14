@@ -47,7 +47,7 @@ const field = (content: string, name: string) => new RegExp(`^- \\*\\*${name}\\*
 const looks = (trace: string): number => existsSync(trace)
   ? readFileSync(trace, "utf-8").split("\n").filter((line) => line.includes('"event":"start"'))
     .map((line) => (JSON.parse(line) as { argv: string[] }).argv)
-    .filter((argv) => (argv.includes("ls-remote") || argv.includes("fetch")) && argv.some((arg) => arg.includes("claim/"))).length
+    .filter((argv) => (argv.includes("ls-remote") || argv.includes("fetch")) && argv.some((arg) => arg.includes("refs/aidlc/claims/"))).length
   : 0;
 
 // Solo work on machine A, one Unit at a time, refunds under way there (and,

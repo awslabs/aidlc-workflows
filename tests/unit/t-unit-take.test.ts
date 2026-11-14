@@ -35,6 +35,7 @@ import {
   cloneCode,
   cloneOf,
   codeGenerated,
+  fetchRecords,
   codeHost,
   ENV,
   finishBuild,
@@ -1391,7 +1392,7 @@ describe("builds in one workspace", () => {
     const ana = cloneOf(home.remote, "ana");
     expect(take(ana, "refunds").status).toBe(0);
     expect(alsoOpen(ana)).toBe(`${basename(buildDir(ana, "default", "reporting"))} (ask to switch to it)`);
-    // The lead's own checkout after a pull, which brings the claims too: the teammates' builds are theirs.
+    // The lead's own checkout after a pull: its status reads the claims at the lead's project first, so the teammates' builds are theirs.
     git(home.dir, ["fetch", "-q", "origin"]);
     git(home.dir, ["merge", "-q", "--no-edit", "origin/main"]);
     expect(alsoOpen(home.dir)).toBeNull();
@@ -1493,7 +1494,7 @@ describe("a team's own workspace, made from the home's", () => {
   test("a clone of the lead's workspace pointed at the team's own repo claims at the lead's project", () => {
     const home = homeWithTeams();
     const web = cloneOf(home.remote, "web");
-    git(web, ["fetch", "-q", "origin", "+refs/heads/claim/*:refs/remotes/origin/claim/*"]);
+    git(web, ["fetch", "-q", "origin", "+refs/aidlc/claims/*:refs/aidlc/remotes/origin/claims/*"]);
     const host = tempDir("web-host");
     git(host, ["init", "-q", "--bare", "-b", "main"]);
     git(web, ["remote", "set-url", "origin", host]);
@@ -1501,7 +1502,7 @@ describe("a team's own workspace, made from the home's", () => {
     const took = takeFrom("web", web, "checkout-ui");
     expect(took.status, took.out).toBe(0);
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "checkout-ui")).toMatchObject({ owner: "web", taken_by: "web" });
-    expect(git(host, ["for-each-ref", "--format=%(refname)", "refs/heads/claim/"])).toBe("");
+    expect(git(host, ["for-each-ref", "--format=%(refname)", "refs/aidlc/claims/", "refs/heads/claim/"])).toBe("");
   });
 
   // A recorded address git would read as an option is never passed to git.
@@ -1596,7 +1597,7 @@ describe("the claims' home is the lead's address", () => {
     expect(String(held.json?.notice)).not.toContain("takes no push from here");
     const id8 = fixtureIntentId8(home.dir);
     expect(claimPayload(home.remote, id8, "refunds")).toBeNull();
-    expect(git(pay, ["for-each-ref", "--format=%(refname)", `refs/remotes/origin/claim/${id8}/refunds`]).trim()).toBe("");
+    expect(git(pay, ["for-each-ref", "--format=%(refname)", `refs/aidlc/remotes/origin/claims/${id8}/refunds`]).trim()).toBe("");
   });
 
   test("a fork that copied the lead's claim branches is not the lead's project: the take says it is on the fork", () => {
@@ -1637,7 +1638,7 @@ describe("the claims' home is the lead's address", () => {
     const web = cloneOf(home.remote, "web");
     expect(takeFrom("web", web, "checkout-ui").status).toBe(0);
     const pay = cloneOf(home.remote, "pay");
-    git(pay, ["fetch", "-q", "origin"]);
+    fetchRecords(pay);
     git(pay, ["remote", "set-url", "origin", join(tempDir("gone"), "pay-fork.git")]);
     const away = `${home.remote}-away`;
     renameSync(home.remote, away);
@@ -1707,7 +1708,7 @@ describe("the claims' home is the lead's address", () => {
     expect(claimPayload(fork, id8, "refunds")).toMatchObject({ status: "claimed" });
     expect(claimPayload(home.remote, id8, "refunds")).toBeNull();
     // This clone's copy of the lead's claims stays as the lead's project has them.
-    expect(git(pay, ["for-each-ref", "--format=%(refname)", `refs/remotes/origin/claim/${id8}/refunds`]).trim()).toBe("");
+    expect(git(pay, ["for-each-ref", "--format=%(refname)", `refs/aidlc/remotes/origin/claims/${id8}/refunds`]).trim()).toBe("");
   });
 
   // The lead's work with its code repos, teams chosen, shared.
@@ -1772,7 +1773,7 @@ describe("the claims' home is the lead's address", () => {
     expect(status.status, status.out).toBe(0);
     expect(status.out).toMatch(row);
     expect(claimPayload(home.remote, id8, "refunds")).toBeNull();
-    expect(git(home.remote, ["for-each-ref", "--format=%(refname)", `refs/heads/claim/${id8}/`]).trim()).toBe("");
+    expect(git(home.remote, ["for-each-ref", "--format=%(refname)", `refs/aidlc/claims/${id8}/`]).trim()).toBe("");
     expect(claimTip(fork, id8, "refunds")).toBe(onTheFork);
   });
 
@@ -1953,7 +1954,7 @@ describe("the claims' home is the lead's address", () => {
     chmodSync(hook, 0o755);
   }
   const claimTip = (bare: string, id8: string, unit: string): string =>
-    git(bare, ["rev-parse", `refs/heads/claim/${id8}/${unit}`]).trim();
+    git(bare, ["rev-parse", `refs/aidlc/claims/${id8}/${unit}`]).trim();
 
   test("a host that takes only its pusher's commits: the take-in is the lead's own commit, with the team's claim, author and date", () => {
     const { home, hosts, id8 } = forkedLead();
@@ -2219,7 +2220,7 @@ describe("the claims' home is the lead's address", () => {
     git(home.dir, ["remote", "add", "team-a", fork]);
     next(home.dir);
     const hook = join(fork, "hooks", "pre-receive");
-    writeFileSync(hook, "#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/heads/claim/*) " +
+    writeFileSync(hook, "#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/aidlc/claims/*) " +
       "echo 'claim branches are locked here just now' >&2; exit 1;; esac; done\nexit 0\n");
     chmodSync(hook, 0o755);
     const record = buildDir(pay, "payments", "refunds");
@@ -2243,7 +2244,7 @@ describe("the claims' home is the lead's address", () => {
     for (const [name, host] of Object.entries(hosts)) cloneCode(host, pay, name, "pay");
     expect(takeFrom("payments", pay, "refunds").status).toBe(0);
     const hook = join(fork, "hooks", "pre-receive");
-    writeFileSync(hook, "#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/heads/claim/*) " +
+    writeFileSync(hook, "#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/aidlc/claims/*) " +
       "echo 'claim branches are locked here just now' >&2; exit 1;; esac; done\nexit 0\n");
     chmodSync(hook, 0o755);
     const record = buildDir(pay, "payments", "refunds");
@@ -2266,7 +2267,7 @@ describe("the claims' home is the lead's address", () => {
     // Another write on the lead's claim while the code goes out, once.
     const hook = join(hosts["checkout-api"], "hooks", "pre-receive");
     writeFileSync(hook, "#!/bin/sh\ncat >/dev/null\nunset GIT_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_QUARANTINE_PATH\n" +
-      `home='${home.remote}'; ref=refs/heads/claim/${id8}/refunds\n` +
+      `home='${home.remote}'; ref=refs/aidlc/claims/${id8}/refunds\n` +
       "[ -e \"$home/moved-once\" ] && exit 0\ntouch \"$home/moved-once\"\n" +
       "tip=$(git --git-dir=\"$home\" rev-parse \"$ref\") || exit 0\ntree=$(git --git-dir=\"$home\" rev-parse \"$tip^{tree}\")\n" +
       "new=$(git --git-dir=\"$home\" -c user.name=lead -c user.email=lead@example.test commit-tree \"$tree\" -p \"$tip\" -m moved)\n" +
@@ -2452,7 +2453,7 @@ describe("the claims' home is the lead's address", () => {
   test("a take-in the lead's project refuses is said before the command's refusal", () => {
     const { home } = resultOnTeamsFork();
     const hook = join(home.remote, "hooks", "pre-receive");
-    writeFileSync(hook, "#!/bin/sh\nwhile read old new ref; do\n  case \"$ref\" in refs/heads/claim/*/refunds) echo 'refunds is locked just now' >&2; exit 1;; esac\ndone\nexit 0\n");
+    writeFileSync(hook, "#!/bin/sh\nwhile read old new ref; do\n  case \"$ref\" in refs/aidlc/claims/*/refunds) echo 'refunds is locked just now' >&2; exit 1;; esac\ndone\nexit 0\n");
     chmodSync(hook, 0o755);
     const refused = run(UNIT, ["merged", "refunds", "--repo", "checkout-api", "--person-words", "merged by hand"], home.dir, chatOf("lead-merged-locked"));
     expect(refused.status, refused.out).not.toBe(0);
@@ -2697,7 +2698,7 @@ describe("a teammate's clone before the lead's project shared its plan", () => {
     expect(run(UNIT, ["share", "--plan"], donor.dir).status).toBe(0);
     const here = run(UNIT, ["assign", "--here", "checkout-ui"], donor.dir);
     expect(here.status, here.out).toBe(0);
-    git(home.remote, ["fetch", "-q", donor.remote, "+refs/heads/claim/*:refs/heads/claim/*"]);
+    git(home.remote, ["fetch", "-q", donor.remote, "+refs/aidlc/claims/*:refs/heads/claim/*"]);
     expect(git(home.remote, ["for-each-ref", "--format=%(refname)", "refs/heads/claim/"])).not.toBe("");
     const bob = cloneOf(home.remote, "bob");
     const host = hostFor("codex", bob, GIT_ENV);
@@ -2779,6 +2780,52 @@ describe("a teammate's clone before the lead's project shared its plan", () => {
     next(bob, ENV, [], orch);
     expect(existsSync(join(bob, "aidlc", ".gitignore"))).toBe(false);
     expect(git(bob, ["status", "--porcelain", "--untracked-files=all"])).not.toContain("aidlc/");
+  });
+
+  // The lead shares the plan by pull request: it waits on its own branch, with no Unit built here, so no claim is
+  // anywhere for a clone to tell by; or the lead pushed it to main and this clone fetched it without pulling.
+  function planWaitsElsewhere(repos: Record<string, string>, where: "its own branch" | "main, fetched") {
+    const home = makeHome({ repos });
+    const install = [".codex", ".agents"];
+    for (const name of install) cpSync(join(REPO_ROOT, "dist", "codex", name), join(home.dir, name), { recursive: true });
+    git(home.dir, ["rm", "-r", "-q", "--cached", "aidlc", ".gitignore"]);
+    git(home.dir, ["add", ...install]);
+    git(home.dir, ["commit", "-q", "-m", "setup"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    hostFor("codex", home.dir, GIT_ENV).sessionStart("startup");
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    const early = where === "main, fetched" ? cloneOf(home.remote, "bob") : null;
+    const shared = run(UNIT, where === "its own branch" ? ["share", "--branch", "--plan"] : ["share", "--plan"], home.dir);
+    expect(shared.status, shared.out).toBe(0);
+    expect(git(home.remote, ["for-each-ref", "--format=%(refname)", "refs/heads/claim/", "refs/aidlc/claims/"])).toBe("");
+    if (early !== null) git(early, ["fetch", "-q", "origin"]);
+    const bob = early ?? cloneOf(home.remote, "bob");
+    const host = hostFor("codex", bob, GIT_ENV);
+    if (early === null) host.sessionStart("startup");
+    return { home, bob, orch: join(bob, ".codex", "tools", "aidlc-orchestrate.ts") };
+  }
+
+  test("the plan on its own branch, its pull request open and no claim anywhere: the first chat writes no root file", () => {
+    const { bob, orch } = planWaitsElsewhere({ "checkout-api": codeHost("checkout-api") }, "its own branch");
+    expect(git(bob, ["for-each-ref", "--format=%(refname)", "refs/remotes/origin/"])).toMatch(/refs\/remotes\/origin\/aidlc-plan/);
+    expect(leadsPlanNotHere(bob)).toBe(true);
+    expect(git(bob, ["status", "--porcelain", "--", ".gitignore", "AGENTS.md"])).toBe("");
+    expect(next(bob, ENV, [], orch).narration).toBe(LINE);
+  });
+
+  test("the plan in the lead's main, fetched here and not pulled: still not here", () => {
+    const { bob } = planWaitsElsewhere({ "checkout-api": codeHost("checkout-api") }, "main, fetched");
+    expect(leadsPlanNotHere(bob)).toBe(true);
+  });
+
+  // Only the lead's plan is waited for: a person's own solo record on the remote's main, with this clone on a branch
+  // from before it, is their own work, not a lead's.
+  test("a clone on a branch older than its own solo record on main is not told the lead's plan has not reached it", () => {
+    const home = makeHome({ repos: {} });
+    const bob = cloneOf(home.remote, "bob");
+    git(bob, ["switch", "-q", "-c", "older", git(bob, ["commit-tree", git(bob, ["mktree"]), "-m", "before the work"])]);
+    expect(existsSync(join(bob, "aidlc", "spaces"))).toBe(false);
+    expect(leadsPlanNotHere(bob)).toBe(false);
   });
 
   test("a teammate's words there go on as their request with the risk said once, and a bare --resume hears the line", () => {
@@ -3052,7 +3099,7 @@ describe("a team's own workspace that holds no copy of the lead's", () => {
     expect(git(pay.dir, ["remote"])).toBe("origin");
     expect(existsSync(join(pay.dir, "aidlc", "spaces", "default", "intents", HOME))).toBe(false);
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ owner: "default", taken_by: "pay" });
-    expect(git(pay.host, ["for-each-ref", "--format=%(refname)", "refs/heads/claim/"])).toBe("");
+    expect(git(pay.host, ["for-each-ref", "--format=%(refname)", "refs/aidlc/claims/", "refs/heads/claim/"])).toBe("");
     const record = buildDir(pay.dir, "default", "refunds");
     expect(field(readFileSync(join(record, "aidlc-state.md"), "utf-8"), "Lead Project Rules")).toBe("aidlc/spaces/default/memory/project.md");
     // billing is not here and this workspace lists no repos: the lead's list gives its address.
@@ -3245,7 +3292,7 @@ describe("a team's own workspace that holds no copy of the lead's", () => {
     const trace = join(tempDir("trace"), "git.trace");
     const took = run(UNIT, ["take", "refunds", "--from", home.remote, "--home", HOME], pay.dir, { ...ENV, GIT_TRACE: trace });
     expect(took.status, took.out).toBe(0);
-    const branchFetches = traced(trace).filter((line) => / git fetch /.test(line) && line.includes(home.remote) && !line.includes("claim/"));
+    const branchFetches = traced(trace).filter((line) => / git fetch /.test(line) && line.includes(home.remote) && !line.includes("refs/aidlc/claims/"));
     expect(branchFetches, branchFetches.join("\n")).toHaveLength(1);
   });
 
@@ -3331,7 +3378,7 @@ function takePushes(remote: string): void {
 // A rule of the lead's host refused the result: its words, and what to ask for.
 const ruleLine = (hostWords: string, unit = "refunds"): string =>
   `The lead's project did not take the result of ${unit}: ${hostWords}. A rule on its host refuses it, so the lead cannot see it yet: ` +
-  "ask whoever owns that repository to let your pushes to its claim/ branches through, then ask me to send it again.";
+  "ask whoever owns that repository to let your pushes to refs/aidlc/claims/ through, then ask me to send it again.";
 // The build's end while its result waits on the lead's project.
 const WAITS = "The lead's project has not taken the result of refunds yet; ask me to send it again once its owner lets your pushes through.";
 
@@ -3449,7 +3496,7 @@ describe("a take the lead's project could not record then", () => {
     expect(takeFrom("payments", pal, "refunds").status).toBe(0);
     const theirs = claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds");
     expect(theirs).toMatchObject({ taken_by: "pal" });
-    const today = git(home.remote, ["log", "-1", "--format=%cs", "refs/heads/claim/00000001/refunds"]);
+    const today = git(home.remote, ["log", "-1", "--format=%cs", "refs/aidlc/claims/00000001/refunds"]);
     const chat = chatOf("pay-2");
     const look = nextSaying(pay, chat);
     expect(look.said).toContain(
@@ -3752,5 +3799,36 @@ describe("every Unit is open: whoever takes it builds it where they are, and no 
     const tom = take(cloneOf(home.remote, "tom"), "refunds");
     expect(tom.status).not.toBe(0);
     expect(tom.out).toContain("refunds is already taken: lee builds it.");
+  });
+});
+
+// AI-DLC's team records are a ref of its own on the lead's project, beside the branches, so the host lists no branch
+// for them, offers no pull request, runs no workflow and no branch rule on them, and a team's clone lists none.
+describe("where the team's records live", () => {
+  test("a take, its result and the lead's word on it are kept under refs/aidlc/claims, no claim branch anywhere, and the lead's copy follows each write", () => {
+    const { home, alice, record } = refundsTaken();
+    const id8 = fixtureIntentId8(home.dir);
+    codeGenerated(alice, record);
+    finishBuild(record);
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    const said = run(UNIT, ["merged", "refunds", "--repo", "checkout-api", "--person-words", "merged by hand"], home.dir, chatOf("lead-records"));
+    expect(said.status, said.out).toBe(0);
+    const ref = `refs/aidlc/claims/${id8}/refunds`;
+    expect(git(home.remote, ["for-each-ref", "--format=%(refname)", "refs/aidlc/claims/", "refs/heads/claim/"])).toBe(ref);
+    expect(claimPayload(home.remote, id8, "refunds")).toMatchObject({ taken_by: "alice", claim_ref: ref });
+    expect(claimPayload(home.remote, id8, "refunds")?.said_merged).toBeDefined();
+    // The lead's own copy is the record as the lead's word left it, with no look between.
+    expect(git(home.dir, ["rev-parse", `refs/aidlc/remotes/origin/claims/${id8}/refunds`])).toBe(git(home.remote, ["rev-parse", ref]));
+    // A teammate's clone, and a plain clone of the lead's project, list no branch of AI-DLC's.
+    for (const dir of [alice, cloneOf(home.remote, "carol")]) expect(git(dir, ["branch", "-a"])).not.toContain("claim");
+  });
+
+  test("a teammate's own git fetch --prune keeps AI-DLC's copy of the records", () => {
+    const { home, alice } = refundsTaken();
+    const copy = `refs/aidlc/remotes/origin/claims/${fixtureIntentId8(home.dir)}/refunds`;
+    const before = git(alice, ["rev-parse", copy]);
+    git(alice, ["fetch", "-q", "--prune", "origin"]);
+    expect(git(alice, ["rev-parse", copy])).toBe(before);
   });
 });

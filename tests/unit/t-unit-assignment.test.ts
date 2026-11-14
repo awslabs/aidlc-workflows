@@ -1363,6 +1363,15 @@ describe("work that is never asked", () => {
     expect(field(stateOf(home.dir), "Home Location")).toBeUndefined();
   });
 
+  // Main's flow is kept for its own claims only: a team's record AI-DLC keeps here under its own ref (a take of
+  // this work given back, which switched nothing) is the build-out's, so it never keeps the work on main's flow.
+  test("team work on one repo whose only claim here is a team record under refs/aidlc takes the build-out", () => {
+    const home = makeHome({ repos: {} });
+    git(home.dir, ["update-ref", `refs/aidlc/remotes/origin/claims/${fixtureIntentId8(home.dir)}/refunds`, "HEAD"]);
+    chooseTeams(home.dir);
+    expect(field(stateOf(home.dir), "Home Location")).toBe(home.remote);
+  });
+
   test("team work without a recorded home keeps the flow it started on", () => {
     const home = makeHome({ state: homeState(["- **Unit Ownership**: team"]) });
     const step = next(home.dir);

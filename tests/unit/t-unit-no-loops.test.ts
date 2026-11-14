@@ -299,7 +299,7 @@ describe("a step that waits on the person, and every way on the round added, nev
     writeFileSync(manifest, `${JSON.stringify(written, null, 2)}\n`);
     finishBuild(record);
     const hostHook = join(home.remote, "hooks", "pre-receive");
-    writeFileSync(hostHook, "#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/heads/claim/*) exit 1;; esac; done\n");
+    writeFileSync(hostHook, "#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/aidlc/claims/*) exit 1;; esac; done\n");
     chmodSync(hostHook, 0o755);
     const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "alice-push" };
     const push = next(alice, chat);
@@ -572,7 +572,7 @@ describe("a step that waits on the person, and every way on the round added, nev
     expect(board.out.trim()).toBe(String(step.narration));
     // A query: after a merge it shows it and writes nothing; the step then shows the same and records it.
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
-    const claimRef = `refs/heads/claim/${fixtureIntentId8(home.dir)}/refunds`;
+    const claimRef = `refs/aidlc/claims/${fixtureIntentId8(home.dir)}/refunds`;
     const claimBefore = git(home.remote, ["rev-parse", claimRef]);
     const rowsBefore = readAuditShardEvents(home.dir).length;
     const merged = runPrinted(home.dir, ENV, "bun .claude/tools/aidlc-orchestrate.ts team-board");

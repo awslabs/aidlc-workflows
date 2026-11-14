@@ -315,8 +315,15 @@ export function tellsWhatToType(...lines: unknown[]): boolean {
   return lines.some((line) => /\b[Ss]ay (?:["']|push\b|go back|so\b|it your way)|\btype \/aidlc/.test(JSON.stringify(line ?? "")));
 }
 
+/** The person's own fetch, and what AI-DLC's look adds to it in a clone: its copies of the teams' records, which that
+ * fetch never brings. */
+export function fetchRecords(dir: string, remote = "origin"): void {
+  git(dir, ["fetch", "-q", remote]);
+  git(dir, ["fetch", "-q", remote, `+refs/aidlc/claims/*:refs/aidlc/remotes/${remote}/claims/*`]);
+}
+
 export function claimPayload(remote: string, intentId8: string, unit: string): Record<string, unknown> | null {
-  const ref = `refs/heads/claim/${intentId8}/${unit}`;
+  const ref = `refs/aidlc/claims/${intentId8}/${unit}`;
   const tip = spawnSync("git", ["rev-parse", "--verify", ref], { cwd: remote, encoding: "utf-8", env: GIT_ENV });
   if (tip.status !== 0) return null;
   return JSON.parse(git(remote, ["show", `${tip.stdout.trim()}:.aidlc-unit-claim.json`])) as Record<string, unknown>;

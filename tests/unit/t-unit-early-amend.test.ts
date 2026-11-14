@@ -20,6 +20,7 @@ import { latestCompletionBasesFromAudit } from "../../dist/claude/.claude/tools/
 import { fixtureIntentId8 } from "../harness/fixtures.ts";
 import {
   claimPayload,
+  fetchRecords,
   cleanupTeamBuild,
   cloneCode,
   cloneOf,
@@ -160,7 +161,7 @@ describe("starting early", () => {
     );
     for (const repo of ["billing", "checkout-api"]) expect(git(join(dana, repo), ["branch", "--show-current"]), repo).toBe("main");
     expect(run(UNIT, ["turned-down", "refunds", "--repo", "billing", "--person-words", "needs the ledger"], home.dir).status).toBe(0);
-    git(dana, ["fetch", "-q", "origin"]);
+    fetchRecords(dana);
     expect(JSON.stringify(notices(next(dana)))).not.toContain("started on its branch");
   });
 
@@ -194,7 +195,7 @@ describe("starting early", () => {
     mergeOnHost(hosts.billing, "refunds", "merge");
     next(home.dir);
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
-    git(dana, ["fetch", "-q", "origin"]);
+    fetchRecords(dana);
     const step = next(dana);
     expect(step.ask_type, JSON.stringify(step)).toBe("unit-move-onto");
     expect(step.question).toBe("refunds is merged into main. Do you want me to move reporting onto main now? I'd move it now, so " +
@@ -207,7 +208,7 @@ describe("starting early", () => {
     const { home, dana } = refundsPushed();
     expect(takeIn("data", ["reporting", "--home", HOME_RECORD, "--early"], dana).status).toBe(0);
     expect(run(UNIT, ["turned-down", "refunds", "--repo", "billing", "--person-words", "needs the ledger"], home.dir).status).toBe(0);
-    git(dana, ["fetch", "-q", "origin"]);
+    fetchRecords(dana);
     const step = next(dana);
     expect(notices(step)).toContain(
       "refunds was turned down by the lead; reporting started on its branch. Nothing else changes: wait for it, or rebase when you are ready.",
@@ -248,7 +249,7 @@ describe("a change to a shared input", () => {
     expect(firstAt).toBeString();
     Bun.sleepSync(Math.max(0, Date.parse(firstAt!) + 1000 - Date.now()));
     expect(run(UNIT, ["propose", "--input", "requirements.md", "--person-words", "one currency only"], alice).status).toBe(0);
-    git(home.dir, ["fetch", "-q", "origin"]);
+    fetchRecords(home.dir);
     const ask = next(home.dir);
     expect(ask.ask_type, JSON.stringify(ask).slice(0, 400)).toBe("unit-amend");
     expect(String(ask.question)).toContain('("one currency only")');
@@ -266,7 +267,7 @@ describe("a change to a shared input", () => {
     appendAuditEntry("HUMAN_TURN", { "Person Reply": "yes, partial refunds" }, home.dir);
     expect(run(UNIT, ["amend", "refunds", "--input", REQUIREMENTS, "--answer", "approve", "--person-words", "yes, partial refunds"], home.dir).status).toBe(0);
     // Her look hears the answer, and her copy holds the approved text.
-    git(alice, ["fetch", "-q", "origin"]);
+    fetchRecords(alice);
     expect(notices(next(alice))).toContain("The lead approved your change to the requirements.");
     const copy = join(record, ...REQUIREMENTS.split("/"));
     const edit = "# Requirements\n\nFR1 refunds, partial amounts too, in one currency only.\n";
@@ -284,7 +285,7 @@ describe("a change to a shared input", () => {
     expect(next(home.dir).ask_type).toBe("unit-amend");
     appendAuditEntry("HUMAN_TURN", { "Person Reply": "yes, partial refunds" }, home.dir);
     expect(run(UNIT, ["amend", "refunds", "--input", REQUIREMENTS, "--answer", "approve", "--person-words", "yes, partial refunds"], home.dir).status).toBe(0);
-    git(alice, ["fetch", "-q", "origin"]);
+    fetchRecords(alice);
     const chat = personsChat("alice-chat");
     const approved = "The lead approved your change to the requirements.";
     expect(notices(personsNext(alice, chat, "alice-chat"))).toContain(approved);
@@ -294,11 +295,11 @@ describe("a change to a shared input", () => {
     Bun.sleepSync(Math.max(0, Date.parse(firstAt!) + 1000 - Date.now()));
     writeFileSync(join(record, ...REQUIREMENTS.split("/")), "# Requirements\n\nFR1 refunds, partial amounts too, in one currency only.\n");
     expect(run(UNIT, ["propose", "--input", "requirements.md", "--person-words", "one currency only"], alice).status).toBe(0);
-    git(home.dir, ["fetch", "-q", "origin"]);
+    fetchRecords(home.dir);
     expect(next(home.dir).ask_type).toBe("unit-amend");
     appendAuditEntry("HUMAN_TURN", { "Person Reply": "yes, one currency" }, home.dir);
     expect(run(UNIT, ["amend", "refunds", "--input", REQUIREMENTS, "--answer", "approve", "--person-words", "yes, one currency"], home.dir).status).toBe(0);
-    git(alice, ["fetch", "-q", "origin"]);
+    fetchRecords(alice);
     expect(notices(personsNext(alice, chat, "alice-chat"))).toContain(approved);
     expect(notices(personsNext(alice, chat, "alice-chat"))).not.toContain(approved);
     // A new chat hears the past answers once, as before: one line for the same words.
@@ -314,7 +315,7 @@ describe("a change to a shared input", () => {
     expect(next(home.dir).ask_type).toBe("unit-amend");
     appendAuditEntry("HUMAN_TURN", { "Person Reply": "not now, full refunds only" }, home.dir);
     expect(run(UNIT, ["amend", "refunds", "--input", REQUIREMENTS, "--answer", "reject", "--person-words", "full refunds only"], home.dir).status).toBe(0);
-    git(alice, ["fetch", "-q", "origin"]);
+    fetchRecords(alice);
     next(alice);
     const copy = join(record, ...REQUIREMENTS.split("/"));
     const edit = "# Requirements\n\nFR1 refunds, partial amounts too, in one currency only.\n";
@@ -326,11 +327,11 @@ describe("a change to a shared input", () => {
     const bobRecord = join(intents, readdirSync(intents).find((name) => name.endsWith("-checkout-ui"))!);
     writeFileSync(join(bobRecord, ...REQUIREMENTS.split("/")), "# Requirements\n\nFR1 refunds.\nFR2 refunds by store credit.\n");
     expect(run(UNIT, ["propose", "--input", "requirements.md", "--person-words", "store credit"], bob).status).toBe(0);
-    git(home.dir, ["fetch", "-q", "origin"]);
+    fetchRecords(home.dir);
     expect(next(home.dir).ask_type).toBe("unit-amend");
     appendAuditEntry("HUMAN_TURN", { "Person Reply": "yes, store credit" }, home.dir);
     expect(run(UNIT, ["amend", "checkout-ui", "--input", REQUIREMENTS, "--answer", "approve", "--person-words", "yes, store credit"], home.dir).status).toBe(0);
-    git(alice, ["fetch", "-q", "origin"]);
+    fetchRecords(alice);
     const step = next(alice);
     expect(readFileSync(copy, "utf-8")).toBe(edit);
     expect(notices(step).join(" ")).toContain(
@@ -382,7 +383,7 @@ describe("a change to a shared input", () => {
     const answer = claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds") as { proposals?: Array<{ answer?: string }>; amendments?: unknown[] };
     expect(answer.proposals?.at(-1)?.answer).toBe("approved");
     expect(answer.amendments?.length).toBe(1);
-    git(alice, ["fetch", "-q", "origin"]);
+    fetchRecords(alice);
     expect(notices(next(alice))).toContain("The lead approved your change to the requirements.");
     // Her copy, still the text she proposed, takes the lead's answer.
     const taken = join(record, ...REQUIREMENTS.split("/"));
@@ -410,7 +411,7 @@ describe("a change to a shared input", () => {
     expect(readFileSync(join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD, ...REQUIREMENTS.split("/")), "utf-8"))
       .toBe("# Requirements\n\nFR1 refunds, partial amounts too.\n");
     // bob's build takes the new copy and hears it once; nothing is asked of him.
-    git(bob, ["fetch", "-q", "origin"]);
+    fetchRecords(bob);
     const step = next(bob);
     expect(notices(step)).toContain("The lead changed the requirements; checkout-ui uses the new one from here.");
     expect(step.kind).toBe("run-stage");
@@ -419,7 +420,7 @@ describe("a change to a shared input", () => {
     expect(readFileSync(join(record, ...REQUIREMENTS.split("/")), "utf-8")).toBe("# Requirements\n\nFR1 refunds, partial amounts too.\n");
     expect(notices(next(bob))).not.toContain("The lead changed the requirements; checkout-ui uses the new one from here.");
     // The team that proposed it hears the answer.
-    git(alice, ["fetch", "-q", "origin"]);
+    fetchRecords(alice);
     expect(notices(next(alice))).toContain("The lead approved your change to the requirements.");
   });
 
@@ -441,7 +442,7 @@ describe("a change to a shared input", () => {
     expect(next(home.dir).ask_type).toBe("unit-amend");
     const amended = run(UNIT, ["amend", "refunds", "--input", REQUIREMENTS, "--answer", "approve", "--person-words", "yes, partial refunds"], home.dir);
     expect(amended.status, amended.out).toBe(0);
-    git(bob, ["fetch", "-q", "origin"]);
+    fetchRecords(bob);
     const step = next(bob);
     expect(notices(step)).toContain("The lead changed the requirements; checkout-ui uses the new one from here.");
     expect(step.kind, JSON.stringify(step).slice(0, 600)).toBe("run-stage");
@@ -464,10 +465,10 @@ describe("a change to a shared input", () => {
     expect(sent.status, sent.out).toBe(0);
     const copy = join(record, ...REQUIREMENTS.split("/"));
     writeFileSync(copy, "# Requirements\n\nFR1 refunds. FR9 the payments team's own note.\n");
-    git(home.dir, ["fetch", "-q", "origin"]);
+    fetchRecords(home.dir);
     const amended = run(UNIT, ["amend", "checkout-ui", "--input", REQUIREMENTS, "--answer", "approve", "--person-words", "yes, partial refunds"], home.dir);
     expect(amended.status, amended.out).toBe(0);
-    git(alice, ["fetch", "-q", "origin"]);
+    fetchRecords(alice);
     const beside = `${REQUIREMENTS.replace(/\.md$/, "")}.from-lead.md`;
     const line = "The lead changed the requirements, and your copy has your own edits, so I kept yours as you left it " +
       `and put the new version beside it, at aidlc/spaces/payments/intents/${basename(record)}/${beside}: compare the two and keep what you want.`;
@@ -479,7 +480,7 @@ describe("a change to a shared input", () => {
     codeGenerated(alice, record);
     const pushed = run(UNIT, ["push"], alice);
     expect(pushed.status, pushed.out).toBe(0);
-    git(home.dir, ["fetch", "-q", "origin"]);
+    fetchRecords(home.dir);
     const heard = "alice's copy of the requirements has their own edit, made on the version before your change, and they kept it: " +
       "what they built uses theirs.";
     const lead = personsChat("lead-chat");
@@ -527,7 +528,7 @@ describe("a change to a shared input", () => {
       "The requirements you changed reach the teams building with it (alice): they hear it once and carry on.",
     );
     expect((claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds") as { amendments?: unknown[] }).amendments?.length).toBe(1);
-    git(alice, ["fetch", "-q", "origin"]);
+    fetchRecords(alice);
     expect(notices(next(alice)).join(" ")).toContain("The lead changed the requirements");
     // Said once at the lead's project.
     expect(notices(personsNext(home.dir, lead, "lead-chat")).join(" ")).not.toContain("you changed reach");
@@ -544,7 +545,7 @@ describe("a change to a shared input", () => {
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
     mergeOnHost(hosts.billing, "refunds", "squash");
-    git(home.dir, ["fetch", "-q", "origin"]);
+    fetchRecords(home.dir);
     next(home.dir);
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
     const homeRecord = join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD);
@@ -554,7 +555,7 @@ describe("a change to a shared input", () => {
     appendAuditEntry("GATE_APPROVED", { Stage: "units-generation", "User Input": "Approve" }, home.dir);
     const lead = personsChat("lead-chat");
     expect(notices(personsNext(home.dir, lead, "lead-chat")).join(" ")).toContain("The requirements you changed reach the teams");
-    git(alice, ["fetch", "-q", "origin"]);
+    fetchRecords(alice);
     // One offer for both, never one per file.
     const heard = notices(next(alice));
     expect(heard).toContain(
@@ -571,7 +572,7 @@ describe("a change to a shared input", () => {
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
     mergeOnHost(hosts.billing, "refunds", "squash");
-    git(home.dir, ["fetch", "-q", "origin"]);
+    fetchRecords(home.dir);
     next(home.dir);
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
     // The lead's project is past its Unit stages, at Build and Test.
@@ -586,7 +587,7 @@ describe("a change to a shared input", () => {
     const step = personsNext(home.dir, lead, "lead-chat");
     expect(notices(step).join(" "), JSON.stringify(step).slice(0, 400)).toContain("The requirements you changed reach the teams");
     expect((claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds") as { amendments?: unknown[] }).amendments?.length).toBe(1);
-    git(alice, ["fetch", "-q", "origin"]);
+    fetchRecords(alice);
     expect(notices(next(alice))).toContain(
       "The lead changed the requirements, and refunds is already done. Do you want me to start follow-up work for it?",
     );
@@ -599,7 +600,7 @@ describe("a change to a shared input", () => {
     // The lead's step puts the change to them, seeing bob's take, and they approve it.
     expect(next(home.dir).ask_type).toBe("unit-amend");
     expect(run(UNIT, ["amend", "refunds", "--input", REQUIREMENTS, "--answer", "approve", "--person-words", "yes"], home.dir).status).toBe(0);
-    git(bob, ["fetch", "-q", "origin"]);
+    fetchRecords(bob);
     expect(notices(next(bob))).toContain("The lead changed the requirements; checkout-ui uses the new one from here.");
   });
 
@@ -621,7 +622,7 @@ describe("a change to a shared input", () => {
     appendAuditEntry("HUMAN_TURN", { "Person Reply": "yes" }, home.dir);
     expect(run(UNIT, ["amend", "refunds", "--input", REQUIREMENTS, "--answer", "approve", "--person-words", "yes"], home.dir).status).toBe(0);
     next(home.dir);
-    git(bob, ["fetch", "-q", "origin"]);
+    fetchRecords(bob);
     expect(notices(next(bob))).toContain("The lead changed the requirements; checkout-ui uses the new one from here.");
   });
 
@@ -634,7 +635,7 @@ describe("a change to a shared input", () => {
     const bob = cloneOf(home.remote, "bob");
     expect(takeIn("web", ["checkout-ui", "--home", HOME_RECORD], bob).status).toBe(0);
     next(home.dir);
-    git(bob, ["fetch", "-q", "origin"]);
+    fetchRecords(bob);
     expect(notices(next(bob))).toContain("The lead changed the requirements; checkout-ui uses the new one from here.");
   });
 
@@ -651,10 +652,10 @@ describe("a change to a shared input", () => {
     // The lead approves web's change first; it reaches payments too.
     writeFileSync(join(bobRecord, ...REQUIREMENTS.split("/")), "# Requirements\n\nFR1 refunds.\n\nFR2 the checkout shows refunds.\n");
     expect(run(UNIT, ["propose", "--input", REQUIREMENTS, "--person-words", "show refunds"], bob).status).toBe(0);
-    git(home.dir, ["fetch", "-q", "origin"]);
+    fetchRecords(home.dir);
     next(home.dir);
     expect(run(UNIT, ["amend", "checkout-ui", "--input", REQUIREMENTS, "--answer", "approve", "--person-words", "yes"], home.dir).status).toBe(0);
-    git(alice, ["fetch", "-q", "origin"]);
+    fetchRecords(alice);
     next(alice);
     const copy = join(record, ...REQUIREMENTS.split("/"));
     expect(readFileSync(copy, "utf-8")).toBe("# Requirements\n\nFR1 refunds.\n\nFR2 the checkout shows refunds.\n");
@@ -665,14 +666,14 @@ describe("a change to a shared input", () => {
     next(alice);
     expect(readFileSync(copy, "utf-8")).toBe(theirs);
     // The lead approves it: that is the copy everyone builds on, never rewritten back.
-    git(home.dir, ["fetch", "-q", "origin"]);
+    fetchRecords(home.dir);
     next(home.dir);
     expect(run(UNIT, ["amend", "refunds", "--input", REQUIREMENTS, "--answer", "approve", "--person-words", "yes"], home.dir).status).toBe(0);
-    git(alice, ["fetch", "-q", "origin"]);
+    fetchRecords(alice);
     next(alice);
     next(alice);
     expect(readFileSync(copy, "utf-8")).toBe(theirs);
-    git(bob, ["fetch", "-q", "origin"]);
+    fetchRecords(bob);
     next(bob);
     expect(readFileSync(join(bobRecord, ...REQUIREMENTS.split("/")), "utf-8")).toBe(theirs);
   });
@@ -705,9 +706,9 @@ describe("a change to a shared input", () => {
     const bobRecord = join(intents, readdirSync(intents).find((name) => name.endsWith("-checkout-ui"))!);
     writeFileSync(join(bobRecord, ...REQUIREMENTS.split("/")), "# Requirements\n\nFR1 refunds, shown in the UI.\n");
     expect(run(UNIT, ["propose", "--input", REQUIREMENTS, "--person-words", "the UI shows refunds"], bob).status).toBe(0);
-    git(home.dir, ["fetch", "-q", "origin"]);
+    fetchRecords(home.dir);
     expect(run(UNIT, ["amend", "checkout-ui", "--input", REQUIREMENTS, "--answer", "approve", "--person-words", "yes"], home.dir).status).toBe(0);
-    git(alice, ["fetch", "-q", "origin"]);
+    fetchRecords(alice);
     const step = next(alice);
     expect(notices(step)).toContain("The lead changed the requirements; refunds stays as you pushed it.");
     expect(JSON.stringify(step)).not.toContain("Do you want me to redo");
@@ -717,7 +718,7 @@ describe("a change to a shared input", () => {
     const { home } = proposed();
     const bob = cloneOf(home.remote, "bob");
     expect(takeIn("web", ["checkout-ui", "--home", HOME_RECORD], bob).status).toBe(0);
-    git(home.dir, ["fetch", "-q", "origin"]);
+    fetchRecords(home.dir);
     const hook = join(home.remote, "hooks", "pre-receive");
     writeFileSync(hook, `#!/bin/sh\nwhile read old new ref; do case "$ref" in */checkout-ui) echo 'busy' >&2; exit 1;; esac; done\n`);
     chmodSync(hook, 0o755);
@@ -731,7 +732,7 @@ describe("a change to a shared input", () => {
     next(home.dir);
     const down = run(UNIT, ["amend", "refunds", "--input", REQUIREMENTS, "--answer", "reject", "--person-words", "partial refunds wait for phase two"], home.dir);
     expect(down.status, down.out).toBe(0);
-    git(alice, ["fetch", "-q", "origin"]);
+    fetchRecords(alice);
     expect(notices(next(alice))).toContain(
       'The lead turned down your change to the requirements: "partial refunds wait for phase two". I\'m carrying on with the approved one.',
     );
@@ -745,7 +746,7 @@ describe("a change to a shared input", () => {
       next(home.dir);
       const down = run(UNIT, ["amend", "refunds", "--input", REQUIREMENTS, "--answer", "reject", "--person-words", words], home.dir);
       expect(down.status, down.out).toBe(0);
-      git(alice, ["fetch", "-q", "origin"]);
+      fetchRecords(alice);
       expect(notices(next(alice))).toContain(
         `The lead turned down your change to the requirements: "${words}" I'm carrying on with the approved one.`,
       );
@@ -781,18 +782,18 @@ describe("a change to a shared input", () => {
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
     mergeOnHost(hosts.billing, "refunds", "squash");
-    git(home.dir, ["fetch", "-q", "origin"]);
+    fetchRecords(home.dir);
     next(home.dir);
     const bob = cloneOf(home.remote, "bob");
     expect(takeIn("payments", ["checkout-ui", "--home", HOME_RECORD], bob).status).toBe(0);
     const copy = join(readdirSync(join(bob, "aidlc", "spaces", "payments", "intents")).map((name) => join(bob, "aidlc", "spaces", "payments", "intents", name)).find((dir) => dir.endsWith("-checkout-ui"))!, ...REQUIREMENTS.split("/"));
     writeFileSync(copy, "# Requirements\n\nFR1 refunds, with receipts.\n");
     expect(run(UNIT, ["propose", "--input", "requirements.md"], bob).status).toBe(0);
-    git(home.dir, ["fetch", "-q", "origin"]);
+    fetchRecords(home.dir);
     next(home.dir);
     expect(run(UNIT, ["amend", "checkout-ui", "--input", REQUIREMENTS, "--answer", "approve", "--person-words", "yes, receipts"], home.dir).status).toBe(0);
     const before = readFileSync(join(record, "aidlc-state.md"), "utf-8");
-    git(alice, ["fetch", "-q", "origin"]);
+    fetchRecords(alice);
     expect(notices(next(alice))).toContain(
       "The lead changed the requirements, and refunds is already done. Do you want me to start follow-up work for it?",
     );
@@ -844,7 +845,7 @@ describe("who hears a change to the contract summary", () => {
       const took = takeIn(team, [unit, "--home", HOME_RECORD], cloneOf(home.remote, person));
       expect(took.status, took.out).toBe(0);
     }
-    git(home.dir, ["fetch", "-q", "origin"]);
+    fetchRecords(home.dir);
     return { home, record };
   }
   const amendments = (home: { dir: string; remote: string }, unit: string) =>

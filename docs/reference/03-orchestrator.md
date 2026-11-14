@@ -875,9 +875,10 @@ would only repeat the message the commit was given.
 The push's result rides the Unit's claim (`result`: per repo the branch, base,
 heads, changed blobs and patch-id; the outputs the home's later stages read, as
 files under `.aidlc-unit-result/` in the claim commit's tree). A home with
-`Home Location`, and a Unit's build, run `refreshHomeClaims`: one
-fetch of `refs/heads/claim/<id8>/*` into the refs the person's own fetch uses
-(or, by the home's address, into `refs/aidlc/home/<id8>/`), once per chat
+`Home Location`, and a Unit's build, run `refreshHomeClaims`: one fetch of
+`refs/aidlc/claims/<id8>/*` into AI-DLC's own copies
+(`refs/aidlc/remotes/<remote>/claims/<id8>/`, or, by the home's address,
+`refs/aidlc/home/<id8>/`); main's flow's claim branches as before, once per chat
 (noted in `aidlc/.aidlc-engine/sessions/claims-fetched.json`) and, at the home, again
 at each step that shows or acts on the claims (nothing left for the home to
 build now, a result to check, a proposal to answer) and, while a team holds a
@@ -888,7 +889,10 @@ solo work built one Unit at a time (`switchSoloToTeams`) runs it once its Unit
 walk has begun (a Unit started, or the step is a per-Unit Construction stage),
 never at an Inception step: once when a chat starts and before each next Unit
 starts (never after each message inside a Unit), so a teammate's take is heard
-and its Unit is never started there too. Each of these fetches on a step nobody typed (`quietFetch`) looks
+and its Unit is never started there too. In a clone with no copy of the work's
+records yet (a second computer's fresh clone), the look that says a team's result
+past the Unit stages, and the one that sends the lead's approved change, run there
+too. Each of these fetches on a step nobody typed (`quietFetch`) looks
 first with an `ls-remote` of the refs it names and fetches only what the remote
 has that is not here yet.
 That fetch and the merge check's git go through `quietly`, whose env is built

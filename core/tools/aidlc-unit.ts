@@ -185,6 +185,8 @@ import {
   isBuildOfUnit,
   liveBuildOf,
   homeLocation,
+  claimsOnBranches,
+  claimsOnBranchesFor,
   inputName,
   LEAD_RULES_FIELD,
   leadRules as leadRulesOf,
@@ -272,11 +274,20 @@ import { readRequestFile } from "./aidlc-log.ts";
 import { withoutLearnedDate } from "./aidlc-learned-date.ts";
 import {
   CLAIM_FILE,
+  CLAIM_REF_FOLDERS,
   claimBlobAt,
+  claimBranchRef,
+  claimCopies,
+  claimCopyOf,
+  claimHere,
   claimPlaces,
   claimPrefixOf,
+  claimRecordRef,
+  claimsOnRemote,
+  gitRemotesOnce,
   isClaimTreeFile,
   leadsPlanNotHere,
+  PLAN_BRANCH,
   readClaimAt,
   unitResultRootOf,
 } from "./aidlc-unit-holders.ts";
@@ -724,17 +735,35 @@ function fetchIntegration(projectDir: string): {
   return { remote, branch, ref, oid: oid.stdout.trim() };
 }
 
+// A Unit's claim as the build-out keeps it, a record (aidlc-unit-holders.ts);
+// main's flow's own steps name its claim branch (claimBranchRef), and a step
+// that serves both takes the work's recorded flow (claimRefFor).
 function claimRef(intentId8: string, unit: string): string {
-  return `refs/heads/claim/${intentId8}/${unit}`;
+  return claimRecordRef(intentId8, unit);
 }
 
-function fetchClaimRefs(projectDir: string, remote: string | null): void {
+function claimRefFor(state: string | null, intentId8: string, unit: string): string {
+  return claimsOnBranches(state) ? claimBranchRef(intentId8, unit) : claimRecordRef(intentId8, unit);
+}
+
+// The active work's state, or null where none is read.
+function stateHere(projectDir: string): string | null {
+  try {
+    return readStateFile(projectDir);
+  } catch {
+    return null;
+  }
+}
+
+function fetchClaimRefs(projectDir: string, remote: string | null, intentId8: string, onBranches: boolean): void {
   if (!remote) return;
   const fetched = git(projectDir, [
     "fetch",
     "--no-filter",
     remote,
-    "+refs/heads/claim/*:refs/remotes/" + remote + "/claim/*",
+    onBranches
+      ? `+${claimsOnRemote(true)}*:${claimCopyOf(remote, claimsOnRemote(true))}*`
+      : `+${claimsOnRemote(false, intentId8)}*:${claimCopies(remote, false, false, intentId8)}*`,
   ]);
   if (!fetched.ok) {
     fail(`Unit claim registry fetch failed: ${fetched.stderr.trim()}`);
@@ -1120,6 +1149,11 @@ function updateClaimRef(
     // Where git sent it: its own "To <address>" line.
     const to = /^To (\S.*)$/m.exec(pushed.stderr)?.[1]?.trim();
     const at = to === undefined ? {} : { to };
+    // git moves its own copy of a branch at the push; a record's copy, AI-DLC's
+    // own, is moved here the same way, so a read before the next look sees it.
+    if (pushed.ok && ref.startsWith(claimsOnRemote(false)) && !isGitAddress(remote)) {
+      localGit(projectDir, ["update-ref", claimCopyOf(remote, ref), commitOid]);
+    }
     if (pushed.ok) return { ok: true, ...at };
     if (CLAIM_RACE_LOST.test(pushed.stderr)) return { ok: false, ...at };
     return { ok: false, refused: pushRefusal(pushed.stderr), ...(refusedByHostRule(pushed.stderr) ? { byRule: true as const } : {}), ...at };
@@ -1177,7 +1211,7 @@ function writeHomeClaimOnce(
 ): { ok: boolean; refused?: string; byRule?: true; elsewhere?: string; landed?: boolean } {
   const target = home.target;
   const byName = target !== null && !isGitAddress(target) && isGitAddress(home.location);
-  const tracking = byName ? `refs/remotes/${target}/${ref.slice("refs/heads/".length)}` : null;
+  const tracking = byName ? claimCopyOf(target, ref) : null;
   const before = tracking === null ? null : localGit(projectDir, ["rev-parse", "--verify", "--quiet", tracking]).stdout.trim() || null;
   // A remote that fetches from the lead's project is read back by its name, as its reads are.
   const fetchesHome = byName && sameGitAddress(git(projectDir, ["remote", "get-url", target]).stdout.trim(), home.location);
@@ -1424,10 +1458,11 @@ function allClaims(
   intentId8: string,
   units: string[],
 ): Map<string, UnitClaimView> {
-  fetchClaimRefs(projectDir, remote);
+  const state = stateHere(projectDir);
+  fetchClaimRefs(projectDir, remote, intentId8, claimsOnBranches(state));
   const claims = new Map<string, UnitClaimView>();
   for (const unit of units) {
-    const ref = claimRef(intentId8, unit);
+    const ref = claimRefFor(state, intentId8, unit);
     const claim = currentClaim(projectDir, remote, ref);
     if (claim) claims.set(unit, claim);
   }
@@ -1581,15 +1616,12 @@ function cachedClaimsForIdentity(
       });
     }
   }
-  const refs = localGit(projectDir, [
-    "for-each-ref",
-    "--format=%(objectname) %(refname)",
-    "refs/heads/claim/",
-    "refs/remotes/",
-    // Another workspace's copy of a home's claims (aidlc-unit take).
-    `refs/aidlc/home/${identity.intentId8}/`,
-  ]);
+  const refs = localGit(projectDir, ["for-each-ref", "--format=%(objectname) %(refname)", ...CLAIM_REF_FOLDERS]);
   if (!refs.ok) return claims;
+  // The work's own kind of claim, by its recorded flow: main's flow's branches,
+  // or the build-out's records (claimsOnBranches).
+  const onBranches = claimsOnBranchesFor(projectDir, identity.space, identity.intentUuid);
+  const remotes = gitRemotesOnce(projectDir);
   // A copy ahead of another is the newer one, whoever holds it, by the
   // take-in's own rule (claimAhead): the lead's take-in is a commit of the
   // lead's with the team's tree, so a team's later result on its own remote
@@ -1605,24 +1637,16 @@ function cachedClaimsForIdentity(
   } catch {
     // No remote this clone calls its own: no copy ranks as one.
   }
-  const homeCopy = (ref: string): number =>
-    ref.startsWith("refs/aidlc/home/") ? 2
-      : ref.startsWith("refs/heads/claim/") || (ownRemote !== null && ref.startsWith(`refs/remotes/${ownRemote}/`)) ? 1 : 0;
+  const homeCopy = (here: NonNullable<ReturnType<typeof claimHere>>): number =>
+    here.kind === "address" ? 2 : here.kind === "own" || (ownRemote !== null && here.remote === ownRemote) ? 1 : 0;
   const descends = (older: string, newer: string): boolean => claimAhead(projectDir, older, newer) === "ahead";
   const readFrom = new Map<string, number>();
   for (const line of refs.stdout.split(/\r?\n/).filter(Boolean)) {
     const [oid, ref] = line.trim().split(/\s+/, 2);
     if (!oid || !ref) continue;
     if (only !== undefined && !only(ref)) continue;
-    if (
-      !ref.startsWith(`refs/heads/claim/${identity.intentId8}/`) &&
-      !ref.startsWith(`refs/aidlc/home/${identity.intentId8}/claim/`) &&
-      !new RegExp(
-        `^refs/remotes/[^/]+/claim/${identity.intentId8.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/`,
-      ).test(ref)
-    ) {
-      continue;
-    }
+    const here = claimHere(ref, remotes);
+    if (here === null || here.id8 !== identity.intentId8 || here.onBranches !== onBranches) continue;
     const payload = readPayload(projectDir, oid);
     if (!payload || payload.intent_uuid !== identity.intentUuid) {
       throw new Error(
@@ -1633,7 +1657,7 @@ function cachedClaimsForIdentity(
     const prior = claims.get(payload.unit);
     // The cache keeps a claim's summary only; the ref at the same commit hands
     // over its whole payload (a published candidate's commit among it).
-    const kind = homeCopy(ref);
+    const kind = homeCopy(here);
     if (prior && prior.oid === oid) {
       prior.payload = payload;
       // Its rank too: a fork's older copy read after it never replaces it.
@@ -3115,7 +3139,7 @@ function assertTransactionIdentity(
     transaction.space !== identity.space ||
     transaction.intent_uuid !== identity.intentUuid ||
     transaction.intent_id8 !== identity.intentId8 ||
-    transaction.claim_ref !== claimRef(identity.intentId8, transaction.unit)
+    transaction.claim_ref !== claimBranchRef(identity.intentId8, transaction.unit)
   ) {
     fail(
       `Unit "${transaction.unit}" merge transaction belongs to another active space or intent.`,
@@ -3293,7 +3317,7 @@ function pinUnit(args: string[], projectDir?: string): void {
   const identity = activeIdentity(pd);
   const inFlight = readUnitMergeTransaction(pd, unit);
   const integration = fetchIntegration(pd);
-  const ref = claimRef(identity.intentId8, unit);
+  const ref = claimBranchRef(identity.intentId8, unit);
   const claim = currentClaim(pd, integration.remote, ref);
   let superseded: UnitMergeTransaction | null = null;
   if (
@@ -4903,7 +4927,7 @@ function adoptUnit(args: string[], projectDir?: string): void {
   const state = readStateFile(pd);
   if (!isTeamUnitOwnership(state)) fail("Unit adoption requires Unit Ownership: team.");
   const identity = activeIdentity(pd);
-  const ref = claimRef(identity.intentId8, unit);
+  const ref = claimBranchRef(identity.intentId8, unit);
   const branch = gitOutput(
     pd,
     ["symbolic-ref", "--quiet", "HEAD"],
@@ -5084,7 +5108,7 @@ function claimUnit(args: string[], projectDir?: string): void {
     );
     fail(named.join("; "));
   }
-  const ref = claimRef(identity.intentId8, unit);
+  const ref = claimBranchRef(identity.intentId8, unit);
   const current = currentClaim(pd, integration.remote, ref);
   if (current?.status === "claimed") {
     fail(`Unit "${unit}" is already claimed by "${current.owner}".`);
@@ -5225,7 +5249,7 @@ function releaseUnit(args: string[], projectDir?: string): void {
   if (!isTeamUnitOwnership(state)) fail("Unit release requires Unit Ownership: team.");
   const identity = activeIdentity(pd);
   const integration = fetchIntegration(pd);
-  const ref = claimRef(identity.intentId8, unit);
+  const ref = claimRefFor(state, identity.intentId8, unit);
   const heard = takeInFirst(pd);
   const current = currentClaim(pd, integration.remote, ref);
   if (current?.status === "released") {
@@ -5843,7 +5867,7 @@ export function planWayOn(branch: string, committed: boolean): string {
 // then `-2`, `-3` while a name is taken here or on the remote.
 function planBranchNames(pd: string): string[] {
   const work = (resolveWorkflowSelection(pd).intent ?? "").replace(/-[0-9a-f]{16}$/, "");
-  const base = work !== "" && git(pd, ["check-ref-format", "--branch", `aidlc-plan-${work}`]).ok ? `aidlc-plan-${work}` : "aidlc-plan";
+  const base = work !== "" && git(pd, ["check-ref-format", "--branch", `${PLAN_BRANCH}-${work}`]).ok ? `${PLAN_BRANCH}-${work}` : PLAN_BRANCH;
   return [base, ...Array.from({ length: 19 }, (_, at) => `${base}-${at + 2}`)];
 }
 
@@ -7037,8 +7061,8 @@ function remoteHoldsClaims(
   try {
     const remote = repositoryRemote(projectDir);
     if (remote === null) return { holds: false };
-    if (git(projectDir, ["for-each-ref", "--count=1", "--format=%(refname)", `refs/remotes/${remote}/claim/${id8}/`]).stdout.trim() === "") return { holds: false };
-    const claims = `refs/heads/claim/${id8}/*`;
+    if (git(projectDir, ["for-each-ref", "--count=1", "--format=%(refname)", claimCopies(remote, false, false, id8)]).stdout.trim() === "") return { holds: false };
+    const claims = `${claimsOnRemote(false, id8)}*`;
     const listed = quietly(() => git(projectDir, ["ls-remote", remote, claims]));
     const atHome = isGitAddress(location) ? quietly(() => git(projectDir, ["ls-remote", location, claims])) : null;
     if (atHome === null || !atHome.ok) {
@@ -8287,9 +8311,11 @@ function leadsClaimCopies(projectDir: string, build: UnitBuild): ((ref: string) 
   let only: ((ref: string) => boolean) | undefined;
   try {
     const target = buildsHome(projectDir, build).target;
+    const remotes = gitRemotesOnce(projectDir);
+    const kind = (ref: string) => claimHere(ref, remotes);
     only = target === null ? undefined
-      : isGitAddress(target) ? (ref) => ref.startsWith("refs/aidlc/home/")
-      : (ref) => ref.startsWith(`refs/remotes/${target}/`) || ref.startsWith("refs/heads/claim/") || ref.startsWith("refs/aidlc/home/");
+      : isGitAddress(target) ? (ref) => kind(ref)?.kind === "address"
+      : (ref) => { const here = kind(ref); return here !== null && (here.kind !== "remote" || here.remote === target); };
   } catch {
     only = undefined;
   }
@@ -8436,7 +8462,7 @@ export function resultWaitsLine(unit: string): string {
 // (refusedByHostRule): the host's words, and what to ask its owner for.
 function resultRefusedByRuleLine(unit: string, refused: string): string {
   return `The lead's project did not take the result of ${unit}: ${refused}. A rule on its host refuses it, so the lead cannot see ` +
-    "it yet: ask whoever owns that repository to let your pushes to its claim/ branches through, then ask me to send it again.";
+    "it yet: ask whoever owns that repository to let your pushes to refs/aidlc/claims/ through, then ask me to send it again.";
 }
 
 // A line of the take's for the person: it waits for the next step the agent
@@ -8584,7 +8610,7 @@ export function takeInFromRemotes(projectDir: string, options: { unitOpen: boole
       const ref = claimRef(id8, unit);
       const payload = readPayload(pd, oid);
       if (payload === null || payload.intent_uuid !== identity.intentUuid || payload.unit !== unit || payload.claim_ref !== ref) continue;
-      const leadTip = localGit(pd, ["rev-parse", "--verify", "--quiet", `refs/remotes/${home}/claim/${id8}/${unit}`]).stdout.trim() || null;
+      const leadTip = localGit(pd, ["rev-parse", "--verify", "--quiet", claimCopyOf(home, ref)]).stdout.trim() || null;
       if (leadTip !== null && claimAhead(pd, leadTip, oid) !== "ahead") continue;
       // The lead's own commit with the team commit's tree, its author the
       // team's, on the lead's claim tip: a host that takes only its pusher's
@@ -8616,9 +8642,9 @@ export function takeInFromRemotes(projectDir: string, options: { unitOpen: boole
 function fetchTeamsClaims(pd: string, home: string, id8: string): Array<{ remote: string; kept: string; heldBefore: boolean; fetched: ReturnType<typeof quietFetch> }> {
   const others = git(pd, ["remote"]).stdout.split(/\r?\n/).map((name) => name.trim()).filter((name) => name !== "" && name !== home);
   return others.map((remote) => {
-    const kept = `refs/remotes/${remote}/claim/${id8}/`;
+    const kept = claimCopies(remote, false, false, id8);
     const heldBefore = localGit(pd, ["for-each-ref", "--count=1", "--format=%(refname)", kept]).stdout.trim() !== "";
-    return { remote, kept, heldBefore, fetched: quietFetch(pd, ["--no-tags", "--no-filter", "-q", remote, `+refs/heads/claim/${id8}/*:${kept}*`]) };
+    return { remote, kept, heldBefore, fetched: quietFetch(pd, ["--no-tags", "--no-filter", "-q", remote, `+${claimsOnRemote(false, id8)}*:${kept}*`]) };
   });
 }
 
@@ -8710,10 +8736,12 @@ export function refreshHomeClaims(
   // run again with write access, which looks again whether or not they spoke.
   const again = last?.chat === chat && last.refused === true && last.again !== true;
   if (!options.now && !spoke && !again && last?.chat === chat) return { fetched: false, unreached: null };
-  const into = isGitAddress(target) ? `refs/aidlc/home/${id8}/claim/${id8}` : `refs/remotes/${target}/claim/${id8}`;
+  // A home named is the build-out's; the work here, by its recorded flow.
+  const onBranches = options.home === undefined && claimsOnBranches(stateHere(pd));
+  const into = claimCopies(target, onBranches, isGitAddress(target), id8).slice(0, -1);
   const at = isoTimestamp();
   const before = claimTipsAt(pd, into);
-  const fetched = quietFetch(pd, ["--no-tags", "--no-filter", "-q", target, `+refs/heads/claim/${id8}/*:${into}/*`]);
+  const fetched = quietFetch(pd, ["--no-tags", "--no-filter", "-q", target, `+${claimsOnRemote(onBranches, id8)}*:${into}/*`]);
   if (fetched.ok) sayOwnBuildsMerged(pd, into, before);
   // The lead's project answered, and this repository's own .git refused the
   // write (Codex's sandbox keeps it read-only): not a project that is down.
@@ -8840,7 +8868,7 @@ export function unitsTaken(projectDir: string, space: string, intentUuid: string
 // A claim at the home's address: fetched so its payload can be read.
 function ensureFetchedClaim(projectDir: string, home: HomeWork, ref: string): void {
   if (home.target === null || !isGitAddress(home.target)) return;
-  quietFetch(projectDir, ["--no-tags", home.target, `+${ref}:refs/aidlc/home/${home.id8}/${ref.slice("refs/heads/".length)}`]);
+  quietFetch(projectDir, ["--no-tags", home.target, `+${ref}:${claimCopies(home.target, false, true, home.id8)}${ref.slice(ref.lastIndexOf("/") + 1)}`]);
 }
 
 // --- Sending a Unit's build home ----------------------------------------------
@@ -9828,16 +9856,23 @@ const resultsBack = (projectDir: string): UnitClaimView[] => [...cachedClaims(pr
 // walk records it once the work is back on a Unit stage. While a team Unit is
 // not done, the claims are fetched once per chat and again after the person speaks.
 export function homeResultsPastUnitStages(projectDir: string, stateContent: string, sessionId?: string): string | null {
-  if (homeLocation(stateContent) === null || !hasAnyUnitClaimRefs(projectDir)) return null;
+  if (homeLocation(stateContent) === null) return null;
   const past = pastUnitStages(stateContent);
   if (past === null) return null;
   let back: UnitClaimView[];
   try {
-    const cached = cachedClaims(projectDir);
+    let cached = cachedClaims(projectDir);
+    // A clone that holds no copy of the teams' records yet (a fresh clone of the
+    // home: a plain clone brings none) looks first, the same once-a-chat look.
+    const looked = cached.size === 0 && !isReadOnlyEngineProbe();
+    if (looked) {
+      refreshHomeClaims(projectDir, { sessionId, sincePerson: true });
+      cached = cachedClaims(projectDir);
+    }
     const own = leadsOwnClaims(projectDir, stateContent, cached);
     const open = [...cached.values()].some((claim) => claim.status === "claimed" && !claim.payload.done && !own.has(claim.unit));
     if (!open) return null;
-    if (!isReadOnlyEngineProbe()) refreshHomeClaims(projectDir, { sessionId, sincePerson: true });
+    if (!looked && !isReadOnlyEngineProbe()) refreshHomeClaims(projectDir, { sessionId, sincePerson: true });
     back = resultsBack(projectDir);
   } catch (e) {
     if (e instanceof GitWriteRefused) throw e;

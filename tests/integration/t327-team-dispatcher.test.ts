@@ -1072,6 +1072,11 @@ describe("t327 team construction dispatcher", () => {
     );
     const unrelated = run(UTILITY, ["doctor", "--verbose"], clean.project);
     expect(unrelated.out).not.toContain("Orphan Unit claim refs");
+    // A team record of no work here, kept in AI-DLC's own ref rather than a branch, is one too.
+    const record = boardFixture();
+    git(record.project, ["update-ref", "refs/aidlc/claims/deadbeef/orphan", "HEAD"]);
+    const recordDoctor = run(UTILITY, ["doctor", "--verbose"], record.project);
+    expect(recordDoctor.out).toContain("Orphan Unit claim refs: 1 ref(s) match no local intent (refs/aidlc/claims/deadbeef/orphan)");
 
     const moved = boardFixture();
     const movedCachePath = join(

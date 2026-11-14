@@ -6,9 +6,14 @@ import { claimedCheckoutReopens } from "./aidlc-unit-landing.ts";
 import {
   cachedClaimFanoutActive,
   claimBlobAt,
+  claimBranchRef,
+  claimHere,
   claimPrefixOf,
+  CLAIM_REF_FOLDERS,
   claimRegistryCachePath,
   claimRegistryGit,
+  claimsOnRemote,
+  gitRemotesOnce,
   ownRemoteAmong,
   readClaimAt,
   readUnitClaimRegistryCache,
@@ -30403,7 +30408,7 @@ function claimRegistryTips(
   projectDir: string,
   intentUuid: string,
 ): Array<{ oid: string; ref: string }> {
-  const prefix = `refs/heads/claim/${idSuffix(intentUuid)}/`;
+  const prefix = claimsOnRemote(true, idSuffix(intentUuid));
   const remote = claimRegistryRemote(projectDir);
   const found = remote
     ? claimRegistryGit(projectDir, ["ls-remote", remote, `${prefix}*`])
@@ -30506,7 +30511,7 @@ function liveClaimPayload(
   if (LIVE_CLAIM_PAYLOADS.has(cacheKey)) {
     return LIVE_CLAIM_PAYLOADS.get(cacheKey) ?? null;
   }
-  const ref = `refs/heads/claim/${idSuffix(intentUuid)}/${unit}`;
+  const ref = claimBranchRef(idSuffix(intentUuid), unit);
   const tip = claimRegistryTips(projectDir, intentUuid).find(
     (candidate) => candidate.ref === ref,
   );
@@ -30537,7 +30542,9 @@ export function invalidateLiveClaimPayloadCache(
   }
 }
 
-export function hasAnyUnitClaimRefs(projectDir: string): boolean {
+// Any claim of the active work here, of either flow's kind (claimHere); with
+// `onBranchesOnly`, main's flow's own claim branches alone.
+export function hasAnyUnitClaimRefs(projectDir: string, onBranchesOnly = false): boolean {
   const localOnly = { localOnly: true };
   if (!claimRegistryGit(projectDir, ["rev-parse", "--git-dir"], localOnly).ok) {
     return false;
@@ -30548,30 +30555,21 @@ export function hasAnyUnitClaimRefs(projectDir: string): boolean {
   const id8 = idSuffix(intentUuid);
   const local = claimRegistryGit(
     projectDir,
-    [
-      "for-each-ref",
-      "--format=%(refname)",
-      "refs/heads/claim/",
-      "refs/remotes/",
-    ],
+    ["for-each-ref", "--format=%(refname)", ...CLAIM_REF_FOLDERS],
     localOnly,
   );
   if (!local.ok) return false;
-  if (
-    local.stdout
-      .split(/\r?\n/)
-      .some((ref) =>
-        ref.startsWith(`refs/heads/claim/${id8}/`) ||
-        new RegExp(`^refs/remotes/[^/]+/claim/${escapeRegex(id8)}/`).test(ref)
-      )
-  ) {
-    return true;
-  }
+  const remotes = gitRemotesOnce(projectDir);
+  const ours = (ref: string): boolean => {
+    const here = claimHere(ref, remotes);
+    return here !== null && here.id8 === id8 && (!onBranchesOnly || here.onBranches);
+  };
+  if (local.stdout.split(/\r?\n/).some(ours)) return true;
   const cache = readUnitClaimRegistryCache(projectDir);
   return !!cache &&
     cache.space === space &&
     cache.intent_uuid === intentUuid &&
-    Object.keys(cache.claims).length > 0;
+    Object.values(cache.claims).some((claim) => !onBranchesOnly || claimHere(claim.ref, remotes)?.onBranches === true);
 }
 
 export function writeUnitScopeStamp(

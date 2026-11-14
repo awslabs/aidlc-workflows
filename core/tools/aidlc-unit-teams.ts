@@ -79,6 +79,26 @@ export function homeLocation(stateContent: string | null): string | null {
   return value ? value : null;
 }
 
+// Which place a work's claims use (aidlc-unit-holders.ts names both): main's
+// flow keeps its claim branches, for team work that records no Home Location
+// and is not a Unit's build; every other work's claims are records (work that
+// records Home Location, a Unit's build, solo work one Unit at a time).
+export function claimsOnBranches(stateContent: string | null): boolean {
+  return isTeamUnitOwnership(stateContent) && homeLocation(stateContent) === null && unitBuildOf(stateContent) === null;
+}
+
+// The same for a work of `space` by its id: one not here is a home elsewhere,
+// whose claims are records.
+export function claimsOnBranchesFor(projectDir: string, space: string, intentUuid: string): boolean {
+  const dirName = listIntents(projectDir, space).find((intent) => intent.uuid === intentUuid)?.dirName ?? null;
+  if (dirName === null) return false;
+  try {
+    return claimsOnBranches(readStateFile(projectDir, dirName, space));
+  } catch {
+    return false;
+  }
+}
+
 // The offer to approve each team's Unit once at its end instead of after every
 // stage, said with the step of a Unit the lead's walk builds and put on the
 // lead's board, while it can still change (unitGateRhythmCanBe).
@@ -103,7 +123,7 @@ export function unitGateRhythmChosen(stateContent: string): boolean {
 export function buildOutHomeLocation(projectDir: string, teammateTook = false): string | null {
   const home = workspaceHomeLocation(projectDir);
   if (teammateTook || intentRepos(projectDir).length > 0) return home;
-  return home === "local" || hasAnyUnitClaimRefs(projectDir) ? null : home;
+  return home === "local" || hasAnyUnitClaimRefs(projectDir, true) ? null : home;
 }
 
 // Why teams cannot each own a Unit of the work here, or null when they can:

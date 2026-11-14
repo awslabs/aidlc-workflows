@@ -548,6 +548,7 @@ import {
   pathContainedBy,
   replaceWithStaged,
 } from "./aidlc-lib.ts";
+import { CLAIM_REF_FOLDERS, claimHere, gitRemotesOnce } from "./aidlc-unit-holders.ts";
 import { auditShardName, chatTookStep, relativeRecordDirForSelection } from "./aidlc-record-core.ts";
 import { GUARD_POLICY_GLOSS, SCOPE_GLOSS } from "./aidlc-guard-fences.ts";
 import { validateStageFrontmatter } from "./aidlc-stage-schema.ts";
@@ -2505,6 +2506,54 @@ To get started:
     currentNode !== undefined && isPerUnitStage(currentNode)
       ? `Current Step:   ${stepStage.slug} for unit ${stepUnit}\n`
       : "";
+  // Team work's own looks run first: the team board's, and a Unit build's at
+  // the lead's project, so the lines below read the claims as they are now
+  // (a plain clone or pull brings none of AI-DLC's records).
+  let board: string | null = null;
+  if (isTeamUnitOwnership(content)) {
+    const selectorArgs = [
+      ...(flags.intent ? ["--intent", flags.intent] : []),
+      ...(flags.space ? ["--space", flags.space] : []),
+    ];
+    const executable = compiledExecutable();
+    const command = executable
+      ? [
+        executable,
+        "team-board",
+        "--snapshot",
+        ...selectorArgs,
+        "--project-dir",
+        projectDir,
+      ]
+      : [
+        process.execPath,
+        resolveHarnessPath(["tools", "aidlc-orchestrate.ts"], { projectDir }),
+        "team-board",
+        "--snapshot",
+        ...selectorArgs,
+        "--project-dir",
+        projectDir,
+      ];
+    const rendered = spawnSync(command[0], command.slice(1), {
+      cwd: projectDir,
+      encoding: "utf-8",
+      env: process.env,
+    });
+    if ((rendered.status ?? 1) !== 0) {
+      die(
+        `Cannot render Team Construction snapshot: ${
+          (rendered.stderr || rendered.stdout || `exit ${rendered.status ?? 1}`).trim()
+        }`,
+      );
+    }
+    board = rendered.stdout.trimEnd();
+  }
+  // The person's own finished builds of the same plan, the one in hand too, read
+  // at the lead's project first, so where they stand is said and not recalled.
+  if (selection.intent !== null && unitBuildOf(content) !== null) {
+    const { readBuildClaims } = await import("./aidlc-unit.ts");
+    readBuildClaims(projectDir, content);
+  }
   // Other work still running in this space, so the person sees it and how to
   // reach it: the same list config and doctor use, so archived and finished
   // work stays out. A record named outside the record-name shape is not listed.
@@ -2530,12 +2579,6 @@ To get started:
   const { pulledBuildStanding, ownOtherBuilds } = await import("./aidlc-orchestrate.ts");
   const arrived = acrossRepos ? arrivedAtLastPull(projectDir, (built) => pulledBuildStanding(projectDir, built)) : null;
   const arrivedLine = arrived === null ? "" : `From others, at your last pull that brought changes:    ${arrived}\n`;
-  // The person's own finished builds of the same plan, the one in hand too, read
-  // at the lead's project first, so where they stand is said and not recalled.
-  if (selection.intent !== null && unitBuildOf(content) !== null) {
-    const { readBuildClaims } = await import("./aidlc-unit.ts");
-    readBuildClaims(projectDir, content);
-  }
   const yours = selection.intent === null ? null : ownOtherBuilds(projectDir, { space: selection.space, dirName: selection.intent }, content);
   const yoursLine = yours === null ? "" : `Yours:          ${yours}\n`;
   // Said only when it is so, in the branch the work merges into or pushed on a
@@ -2564,46 +2607,7 @@ Completion:     ${completed}/${total} stages${takesBuildUnits ? " here" : ""} ($
 Phase Progress:
 ${phaseProgress}
 ${validityOutput ? `${validityOutput}\n` : ""}${lastLine}${nextLine}${alsoOpen}${arrivedLine}${yoursLine}${checkedInLine}${upgradedLine}`;
-  if (isTeamUnitOwnership(content)) {
-    const selectorArgs = [
-      ...(flags.intent ? ["--intent", flags.intent] : []),
-      ...(flags.space ? ["--space", flags.space] : []),
-    ];
-    const executable = compiledExecutable();
-    const command = executable
-      ? [
-        executable,
-        "team-board",
-        "--snapshot",
-        ...selectorArgs,
-        "--project-dir",
-        projectDir,
-      ]
-      : [
-        process.execPath,
-        resolveHarnessPath(["tools", "aidlc-orchestrate.ts"], { projectDir }),
-        "team-board",
-        "--snapshot",
-        ...selectorArgs,
-        "--project-dir",
-        projectDir,
-      ];
-    const board = spawnSync(command[0], command.slice(1), {
-      cwd: projectDir,
-      encoding: "utf-8",
-      env: process.env,
-    });
-    if ((board.status ?? 1) !== 0) {
-      die(
-        `Cannot render Team Construction snapshot: ${
-          (board.stderr || board.stdout || `exit ${board.status ?? 1}`).trim()
-        }`,
-      );
-    }
-    process.stdout.write(`${output}\n${board.stdout.trimEnd()}\n`);
-    return;
-  }
-  process.stdout.write(output);
+  process.stdout.write(board === null ? output : `${output}\n${board}\n`);
 }
 
 // ---------------------------------------------------------------------------
@@ -6225,8 +6229,7 @@ export async function collectDoctorReport(
       [
         "for-each-ref",
         "--format=%(refname)",
-        "refs/heads/claim/",
-        "refs/remotes/",
+        ...CLAIM_REF_FOLDERS,
       ],
       {
         cwd: projectDir,
@@ -6241,16 +6244,12 @@ export async function collectDoctorReport(
           if (intent.uuid) knownIntentIds.add(idSuffix(intent.uuid));
         }
       }
+      const remotes = gitRemotesOnce(projectDir);
       const orphanRefs = [
         ...new Set(
           (refs.stdout ?? "")
             .split(/\r?\n/)
-            .map((ref) => ({
-              ref,
-              id8:
-                /^refs\/heads\/claim\/([^/]+)\/[^/]+$/.exec(ref)?.[1] ??
-                /^refs\/remotes\/[^/]+\/claim\/([^/]+)\/[^/]+$/.exec(ref)?.[1],
-            }))
+            .map((ref) => ({ ref, id8: claimHere(ref, remotes)?.id8 }))
             .filter(
               (row): row is { ref: string; id8: string } =>
                 !!row.id8 && !knownIntentIds.has(row.id8),

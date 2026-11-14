@@ -25,6 +25,7 @@ import {
   cleanupTeamBuild,
   cloneCode,
   cloneOf,
+  fetchRecords,
   codeGenerated,
   codeGeneratedAgain,
   codeHost,
@@ -474,7 +475,7 @@ describe("the push", () => {
     expect(git(hosts["checkout-api"], ["show", "refunds:src/refunds.ts"])).toBe("export const refunds = 1;");
     expect(git(hosts.billing, ["show", "refunds:lib/refund.ts"])).toBe("export const refund = 1;");
     // What the lead's checks read names the repos, where the lead's project finds the files; the team's own record is as written.
-    const tip = git(home.remote, ["rev-parse", `refs/heads/claim/${fixtureIntentId8(home.dir)}/refunds`]).trim();
+    const tip = git(home.remote, ["rev-parse", `refs/aidlc/claims/${fixtureIntentId8(home.dir)}/refunds`]).trim();
     const sent = JSON.parse(git(home.remote, ["show", `${tip}:.aidlc-unit-result/construction/refunds/code-generation/traceability.json`])) as typeof table;
     expect(sent.coverage.map((entry) => entry.target)).toEqual(["checkout-api/src/refunds.ts", "billing/lib/refund.ts"]);
     expect(readFileSync(join(stage, "traceability.json"), "utf-8")).toContain(".aidlc-worktrees/refunds/checkout-api/src/refunds.ts");
@@ -598,7 +599,7 @@ describe("the push", () => {
     finishBuild(record);
     const pushed = run(UNIT, ["push"], alice);
     expect(pushed.status, pushed.out).toBe(0);
-    const tip = git(home.remote, ["rev-parse", `refs/heads/claim/${fixtureIntentId8(home.dir)}/refunds`]).trim();
+    const tip = git(home.remote, ["rev-parse", `refs/aidlc/claims/${fixtureIntentId8(home.dir)}/refunds`]).trim();
     const sent = JSON.parse(git(home.remote, ["show", `${tip}:.aidlc-unit-result/construction/refunds/code-generation/traceability.json`])) as typeof table;
     expect(sent.coverage.map((entry) => entry.target)).toEqual(["checkout-api/src/refunds.ts", "billing/lib/refund.ts"]);
     expect(readFileSync(join(stage, "traceability.json"), "utf-8")).toContain("../checkout-api-mine/src/refunds.ts");
@@ -685,14 +686,14 @@ describe("the push", () => {
     codeGenerated(alice, record);
     finishBuild(record);
     const hook = join(home.remote, "hooks", "pre-receive");
-    writeFileSync(hook, "#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/heads/claim/*) echo 'claims are closed today' >&2; exit 1;; esac; done\n");
+    writeFileSync(hook, "#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/aidlc/claims/*) echo 'claims are closed today' >&2; exit 1;; esac; done\n");
     chmodSync(hook, 0o755);
     const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "alice-push" };
     const pushed = run(UNIT, ["push"], alice, chat);
     expect(pushed.status, pushed.out).toBe(0);
     expect(String(pushed.json?.notice)).toContain(
       "The lead's project did not take the result of refunds: claims are closed today (pre-receive hook declined). A rule on its host " +
-        "refuses it, so the lead cannot see it yet: ask whoever owns that repository to let your pushes to its claim/ branches through, " +
+        "refuses it, so the lead cannot see it yet: ask whoever owns that repository to let your pushes to refs/aidlc/claims/ through, " +
         "then ask me to send it again.",
     );
     expect(String(pushed.json?.notice)).not.toContain("Do you want me to send it again?");
@@ -739,7 +740,7 @@ describe("the push", () => {
     const { hosts, home, alice, record } = refundsTaken();
     codeGenerated(alice, record);
     finishBuild(record);
-    git(home.remote, ["update-ref", "-d", `refs/heads/claim/${fixtureIntentId8(home.dir)}/refunds`]);
+    git(home.remote, ["update-ref", "-d", `refs/aidlc/claims/${fixtureIntentId8(home.dir)}/refunds`]);
     const pushed = run(UNIT, ["push"], alice);
     expect(pushed.status, pushed.out).toBe(0);
     expect(String(pushed.json?.notice)).toContain(
@@ -828,7 +829,7 @@ describe("the push", () => {
         "You're on refunds now in checkout-api and billing. Switch back to main any time.",
     );
     // Not the repo's alerts, nothing of the claim's push, none of git's own lines.
-    for (const absent of ["vulnerabilities", "claim/", "-host-", "[new branch]", "set up to track"]) expect(notice).not.toContain(absent);
+    for (const absent of ["vulnerabilities", "claim/", "refs/aidlc", "-host-", "[new branch]", "set up to track"]) expect(notice).not.toContain(absent);
     // A review fix pushed again: the host prints no link about the branch now.
     codeGeneratedAgain(alice);
     const again = run(UNIT, ["push"], alice);
@@ -1575,7 +1576,7 @@ describe("the person's own commit message", () => {
     expect(String(ask.question_note)).toContain("The commit message the question shows is the one in the file commit_message_file names");
     // The code went and the lead's project did not take the result: a message has nothing to go on.
     const claims = join(home.remote, "hooks", "pre-receive");
-    writeFileSync(claims, "#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/heads/claim/*) echo 'claims are closed today' >&2; exit 1;; esac; done\n");
+    writeFileSync(claims, "#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/aidlc/claims/*) echo 'claims are closed today' >&2; exit 1;; esac; done\n");
     chmodSync(claims, 0o755);
     expect(run(UNIT, ["push", "--commit-message-file", String(ask.commit_message_file)], alice).status).toBe(0);
     const again = next(alice);
@@ -1616,7 +1617,7 @@ describe("at the home", () => {
     const claimLooks = readFileSync(trace, "utf-8").split("\n").filter((line) => {
       if (!line.includes('"event":"start"')) return false;
       const argv = (JSON.parse(line) as { argv: string[] }).argv;
-      return argv.includes("ls-remote") && argv.some((arg) => arg.includes("refs/heads/claim/"));
+      return argv.includes("ls-remote") && argv.some((arg) => arg.includes("refs/aidlc/claims/"));
     });
     expect(claimLooks).toHaveLength(1);
   });
@@ -1626,7 +1627,7 @@ describe("at the home", () => {
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     git(home.dir, ["fetch", "-q", "origin"]);
-    const ref = `refs/heads/claim/${fixtureIntentId8(home.dir)}/refunds`;
+    const ref = `refs/aidlc/claims/${fixtureIntentId8(home.dir)}/refunds`;
     const pushed = git(home.remote, ["rev-parse", ref]);
     next(home.dir);
     next(home.dir);
@@ -1960,13 +1961,13 @@ describe("at the home", () => {
     const { home, alice, record } = refundsTaken();
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
-    git(home.dir, ["fetch", "-q", "origin"]);
+    fetchRecords(home.dir);
     git(home.dir, ["remote", "set-url", "origin", join(home.remote, "gone")]);
     const step = next(home.dir);
     expect(step.kind, JSON.stringify(step)).toBe("print");
     expect(String(step.narration)).toContain("- refunds, payments space: built by alice, checkout-api not merged yet, billing not merged yet (0 of 2 merged)");
     expect((step.change_notices ?? []) as string[]).toEqual([
-      "origin could not be reached just now, so the board may be behind: it shows what your last fetch brought.",
+      "origin could not be reached just now, so the board may be behind: it shows what I last read from it.",
     ]);
   });
 
@@ -2240,6 +2241,25 @@ describe("at the home", () => {
     expect(readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_MERGED").map((row) => row.block).join("\n")).toContain("refunds");
   });
 
+  // The lead's laptop: a fresh clone of the home holds no copy of the teams' records (a plain clone brings none),
+  // and past the Unit stages the look that says a result back runs there all the same, at the stage's own step.
+  test("a fresh clone of the home past the Unit stages says the result a team sent back", () => {
+    const { home, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    const jumped = run(JUMP, ["execute", "--target", "build-and-test", "--direction", "forward"], home.dir);
+    expect(jumped.status, jumped.out).toBe(0);
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "on to Build and Test"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const laptop = cloneOf(home.remote, "lead-laptop");
+    const picked = run(join(AIDLC_SRC, "tools", "aidlc.ts"), ["engine", "intent", "switch", HOME_RECORD], laptop);
+    expect(picked.status, picked.out).toBe(0);
+    const step = next(laptop, { ...ENV, AIDLC_SESSION_OVERRIDE: "lead-laptop-past-unit-stages" });
+    const said = ((step.change_notices ?? []) as string[]).filter((line) => line.startsWith("refunds (from alice) is back but not recorded yet"));
+    expect(said, JSON.stringify(step).slice(0, 800)).toHaveLength(1);
+  });
+
   test("the way back named is the Unit stage the work left from, and a home still on the Unit stages is not past them", () => {
     const fromCodeGeneration = homeState()
       .replace(/^- \[-\] functional-design/m, "- [x] functional-design")
@@ -2387,7 +2407,7 @@ describe("at the home", () => {
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     next(home.dir);
     const hook = join(home.remote, "hooks", "pre-receive");
-    writeFileSync(hook, "#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/heads/claim/*) echo 'claims are read-only today' >&2; exit 1;; esac; done\n");
+    writeFileSync(hook, "#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/aidlc/claims/*) echo 'claims are read-only today' >&2; exit 1;; esac; done\n");
     chmodSync(hook, 0o755);
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
     mergeOnHost(hosts.billing, "refunds", "squash");
@@ -2627,7 +2647,7 @@ describe("a team's done Unit that the lead's Build and Test sends back", () => {
     expect(again.status, again.out).toBe(0);
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
     mergeOnHost(hosts.billing, "refunds", "squash");
-    git(home.dir, ["fetch", "-q", "origin"]);
+    fetchRecords(home.dir);
     next(home.dir);
     expect(claimPayload(home.remote, id8, "refunds")).toMatchObject({ done: true });
     expect(merges()).toBe(2);
@@ -2802,7 +2822,7 @@ function twoMergedAtBuildAndTest() {
   expect(run(UNIT, ["push"], alice).status).toBe(0);
   mergeOnHost(hosts["checkout-api"], "refunds", "squash");
   mergeOnHost(hosts.billing, "refunds", "squash");
-  git(home.dir, ["fetch", "-q", "origin"]);
+  fetchRecords(home.dir);
   next(home.dir);
   expect(takeIn("payments", ["checkout-ui", "--home", HOME_RECORD], alice).status).toBe(0);
   const intents = join(alice, "aidlc", "spaces", "payments", "intents");
@@ -2817,7 +2837,7 @@ function twoMergedAtBuildAndTest() {
   appendAuditEntry("WORKFLOW_COMPLETED", {}, alice, basename(ui), "payments");
   expect(run(UNIT, ["push"], alice).status).toBe(0);
   mergeOnHost(hosts["checkout-api"], "checkout-ui", "squash");
-  git(home.dir, ["fetch", "-q", "origin"]);
+  fetchRecords(home.dir);
   // The lead's code checkouts do not have the merges yet: brought up to date on the lead's yes.
   const asked = next(home.dir);
   expect(asked.ask_type, JSON.stringify(asked).slice(0, 400)).toBe("team-handover");

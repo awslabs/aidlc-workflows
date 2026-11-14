@@ -719,7 +719,7 @@ work does: after every stage, or once at its end.
   lead adds that address to their workspace as a git remote. The push then
   sends its result there too, said once, with no question to send it again; a
   give back or a change you propose goes there the same way. At each look the
-  lead's workspace reads this work's claim branches from its other git remotes,
+  lead's workspace reads this work's records from its other git remotes,
   quietly, and takes in a take or result that is ahead of the lead's own, as a
   commit of the lead's own with the team's claim in it (so a host that takes
   only its pusher's commits takes it): the first one taken in wins, a team whose
@@ -738,8 +738,8 @@ work does: after every stage, or once at its end.
   was given back shows from that look). A
   clone's own remote stands in for the lead's project only while it lists the
   same claims, or while the lead's project does not answer; a claim written
-  through it that the lead's project then does not show (a fork that copied the
-  lead's claim branches) is said as being on that remote. A clone that fetches
+  through it that the lead's project then does not show (a copy of the lead's
+  repository that is not the lead's project) is said as being on that remote. A clone that fetches
   from the lead's project and pushes to your team's own repo takes there while
   the lead's project does not answer, on the lead's plan as the clone last
   fetched it, and one line says the lead's project did not answer and where the
@@ -998,14 +998,19 @@ there (`aidlc unit push --branch <name>`), keeps it for later pushes, and uses
 git's own push remote for that branch. A team that pushes to a fork starts the
 Unit's branch from the repo's own main, not the fork's.
 
-**The workspace repo.** Claims travel on branches of their own beside main
-(`claim/<intent-id8>/<unit>`), so a rule on main alone leaves takes, pushes and
-the lead's verdicts as they are. A ruleset over every branch has to leave
-`claim/**` out, or each team sends from a repo of its own (above). Never open a
-pull request for a claim branch, even when the host offers one: merging it puts
-the claim's files on main. Keep stale-branch cleaners off `claim/**`, and add
-`branches-ignore: ['claim/**']` to workflows that run `on: push`, which
-otherwise run at every claim write.
+**The workspace repo.** AI-DLC keeps each Unit's record (who took it, its
+result, your verdicts) on the lead's project's remote under
+`refs/aidlc/claims/<intent-id8>/<unit>`, a ref of its own beside the branches,
+written with git's compare-and-swap push. GitHub does not treat it as a branch:
+it is not in the branch list, no pull request can be opened from it, workflows
+that run `on: push` do not run for it, and rulesets on branches and tags do not
+reach it, so there is nothing to change on GitHub. A plain clone or fetch
+does not bring it: to see the records, run `git ls-remote origin "refs/aidlc/claims/*"`,
+or ask AI-DLC for its status or the team board. Work begun on the workspace's
+own repo before teams took Units this way keeps its `claim/<intent-id8>/<unit>`
+branches until it is done (Teams on the workspace's own repo, above): until
+then, keep rulesets, stale-branch cleaners and `on: push` workflows off
+`claim/**` for it.
 
 **The plan and the records.** When the host takes no direct push to main, the
 lead's share says so once, with the host's words: "origin takes no direct push

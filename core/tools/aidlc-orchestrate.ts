@@ -18767,7 +18767,7 @@ function teamHomeClaims(
       : `What the board shows here could not be sent to ${first.to} just now; the teams may not see it yet, and the next step sends it again.`);
   }
   if (unreached.length > 0) {
-    sayWithStepOnce(projectDir, `${[...new Set(unreached)].join(", ")} could not be reached just now, so the board may be behind: it shows what your last fetch brought.`);
+    sayWithStepOnce(projectDir, `${[...new Set(unreached)].join(", ")} could not be reached just now, so the board may be behind: it shows what I last read from it.`);
   }
   return { overview, results, heldElsewhere, keepsWalk: left.keepsWalk };
 }
