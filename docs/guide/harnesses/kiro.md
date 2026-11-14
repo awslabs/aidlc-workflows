@@ -641,6 +641,10 @@ effort, and shows no warning (measured on Kiro CLI 3.3.0 and Kiro IDE
 `kiro-cli` is signed in to and name one that is not in it. When that list
 cannot be read (`kiro-cli` not found, not signed in, or offline),
 `config models` says it could not check, and doctor says so with `--verbose`.
+`config models` prints each such line as a `Note:`, or as a `Warning:` line
+with `--quiet`; with `--json` the check is `agentModels` and its lines are in
+`notes`, under `models` when the run writes files or plans to (`--dry-run`),
+and at the top of `data` for `--check` and an unchanged policy.
 An effort the model does not take runs
 at the model's own default, and an agent given a model but no effort runs at
 that model's default effort, not your chat's. `--model default` and
