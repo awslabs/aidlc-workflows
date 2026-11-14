@@ -445,6 +445,11 @@ That closes the arc: you have shaped the data surfaces (chapters 01–08) and no
 rendered the core onto a new CLI. From here:
 
 - Back to [the Harness Engineer Guide overview](00-overview.md) for the full map.
+- A host that cannot ship a packed tree, and instead calls the installed engine
+  from its own process, has its own contract:
+  [Driving the Engine from an Outside Host](11-driving-the-engine-from-a-host.md)
+  names the routes, the hook events it must deliver, and what the engine refuses
+  when one is missing.
 - The new harness gets a **user-facing chapter** alongside the others — see how
   the existing ones read in the User Guide's
   [Running on other harnesses](../guide/harnesses/README.md) family.
