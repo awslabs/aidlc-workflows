@@ -439,6 +439,7 @@ function currentBranch(projectDir: string): string {
 
 const WAY_OF_WORKING = "## Way of Working";
 const INTEGRATION_BRANCH_FIELD = "Integration branch";
+const CHANGES_REACH_FIELD = "Changes reach main";
 const MEMORY_LAYERS = ["project.md", "team.md", "org.md"] as const;
 
 // The one path both the reader (integrationBranchLayer) and the writer
@@ -466,18 +467,21 @@ function branchFreeWords(projectDir: string): Record<string, string> {
   }
 }
 
-// The branch the team wrote down on its own `Integration branch: <name>` line
-// under "## Way of Working", narrowest layer first. Only that line is read: a
-// sentence naming the repos beside the branch once gave a repo's name. A layer
-// whose section has words but no line stops the walk there until the agent has
-// read them: they may name the team's branch, so it records the line, or that
-// they name none, first; never a broader layer's line or `main` in its place
-// (an update must not move a team whose team.md says `develop` in a sentence).
-// A layer with no words (the shipped comment-only files), or words read as
-// naming none, is passed. Nothing is checked here, so the share offers can ask
-// without a refusal.
-function integrationBranchLayer(
+// The value a team wrote down on its own `<field>: <value>` line under
+// "## Way of Working", narrowest layer first; only that line is read, never the
+// prose around it. `readWords` is the Integration branch's walk: a sentence
+// naming the repos beside the branch once gave a repo's name, so a layer whose
+// section has words but no line stops the walk there until the agent has read
+// them: they may name the team's branch, so it records the line, or that they
+// name none, first; never a broader layer's line or `main` in its place (an
+// update must not move a team whose team.md says `develop` in a sentence). A
+// layer with no words (the shipped comment-only files), or words read as naming
+// none, is passed. Without `readWords`, words with no line are no line. Nothing
+// is checked here, so the share offers can ask without a refusal.
+function wayOfWorkingLayer(
   projectDir: string,
+  field: string,
+  readWords: boolean,
   space = activeSpace(projectDir),
   // A layer's Way of Working words in place of its file's: a draft about to be promoted there.
   sections: Partial<Record<(typeof MEMORY_LAYERS)[number], string>> = {},
@@ -493,13 +497,40 @@ function integrationBranchLayer(
         continue;
       }
     }
-    const value = structuredField(section, INTEGRATION_BRANCH_FIELD);
+    const value = structuredField(section, field);
     if (value !== null) return { value, source };
-    if (section.trim() === "") continue;
+    if (!readWords || section.trim() === "") continue;
     branchFree ??= branchFreeWords(projectDir);
     if (branchFree[source] !== wordsKey(section)) return { toRead: source };
   }
   return null;
+}
+
+function integrationBranchLayer(
+  projectDir: string,
+  space = activeSpace(projectDir),
+  sections: Partial<Record<(typeof MEMORY_LAYERS)[number], string>> = {},
+): { value: string; source: string } | { toRead: string } | null {
+  return wayOfWorkingLayer(projectDir, INTEGRATION_BRANCH_FIELD, true, space, sections);
+}
+
+// How the team's changes reach the branch on its Integration branch line, from
+// the narrowest layer's own `Changes reach main:` line: by pull request (GitLab's
+// "by merge request" too) or by direct push. With no such line anywhere it is
+// by pull request, the default org.md's own line says, so a project whose
+// org.md is older reads it too. A line with another value is the team's own
+// way, which no tool reads: null, and the share question marks neither choice.
+export function changesReachMain(projectDir: string): "pull request" | "direct push" | null {
+  let layer: ReturnType<typeof wayOfWorkingLayer>;
+  try {
+    layer = wayOfWorkingLayer(projectDir, CHANGES_REACH_FIELD, false);
+  } catch {
+    layer = null;
+  }
+  if (layer === null || !("value" in layer)) return "pull request";
+  const way = integrationBranchName(layer.value).toLowerCase();
+  if (way === "by pull request" || way === "by merge request") return "pull request";
+  return way === "by direct push" ? "direct push" : null;
 }
 
 // The layer whose Way of Working words are still to be read, or null.
@@ -547,7 +578,8 @@ function integrationBranchReadStep(source: string, then: string): string {
 }
 
 // A hand-written line may end in a full stop, which no git name ends in, and
-// wrap the name in a code span, which is Markdown, not the name (`dev`.).
+// wrap the name in a code span, which is Markdown, not the name (`dev`.); the
+// Changes reach main line's value is cleaned the same way.
 function integrationBranchName(value: string): string {
   return withoutLearnedDate(value).replace(/\.$/, "").replace(/^`([^`]+)`$/, "$1").trim();
 }

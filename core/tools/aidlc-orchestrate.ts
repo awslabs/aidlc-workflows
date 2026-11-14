@@ -691,6 +691,7 @@ import {
   teamsClone,
   teamStanceToRead,
   shareOfferTarget,
+  changesReachMain,
   shareTarget,
   practicesBranchOffCheckout,
   teamHandoverMarkName,
@@ -6017,6 +6018,15 @@ function planWaitStep(projectDir: string, planOnly: boolean): AskDirective | Pri
   return lineEndingTurn(line, [], atTeamHome(projectDir) ? `${asked} ${teamCommandsNote()}` : asked);
 }
 
+// The share question's two ways: the one the team's Way of Working names
+// (changesReachMain) first, marked as the one recommended; a line naming a way
+// of the team's own marks neither and keeps their order.
+function shareWays(way: ReturnType<typeof changesReachMain>, plain: AskChoice, byPullRequest: AskChoice): AskChoice[] {
+  const recommended = (choice: AskChoice): AskChoice => ({ ...choice, label: `${choice.label} (Recommended)` });
+  if (way === "pull request") return [recommended(byPullRequest), plain];
+  return way === "direct push" ? [recommended(plain), byPullRequest] : [plain, byPullRequest];
+}
+
 // Before this session starts a Unit on the lead's walk, while claims are open
 // and the plan can go to a remote: share it with the teams instead? Asked once
 // per Unit about to start here. Null when not due.
@@ -6035,20 +6045,20 @@ function teamShareOffer(
   const work = workToCommitWords(projectDir);
   const plural = unitsLeft === 1 ? "The plan's last Unit is ready for the teams. Share it now?" :
     `The plan's ${unitsLeft} Units are ready for the teams. Share them now?`;
+  const way = changesReachMain(projectDir);
   return teamHandoverAsk(projectDir, {
     handovers: ["share"],
     marks: [mark],
     question: `${plural} I'd ${work === null ? "" : `commit ${work} and `}` +
-      `push ${target.branch} to ${target.remote}, so each team can take a Unit by opening its own clone and running ` +
-      `${entrySkillInvocation()}.`,
-    choices: [
-      {
-        label: "Share them with the teams",
-        detail: `Pushes ${target.branch} to ${target.remote} as a plain push; it never overwrites what a team pushed.`,
-        command: `${aidlcInvocation()} unit share`,
-      },
-      { label: "Share by pull request", detail: planByPullRequestDetail(projectDir), command: `${aidlcInvocation()} unit share --branch` },
-    ],
+      (way === "pull request"
+        ? `push the plan on its own branch for a pull request, so each team can take a Unit once it is in ${target.branch}, `
+        : `push ${target.branch} to ${target.remote}, so each team can take a Unit `) +
+      `by opening its own clone and running ${entrySkillInvocation()}.`,
+    choices: shareWays(way, {
+      label: "Share them with the teams",
+      detail: `Pushes ${target.branch} to ${target.remote} as a plain push; it never overwrites what a team pushed.`,
+      command: `${aidlcInvocation()} unit share`,
+    }, { label: "Share by pull request", detail: planByPullRequestDetail(projectDir), command: `${aidlcInvocation()} unit share --branch` }),
     notNow: {
       label: "Build them here for now",
       detail: `This session builds the ${unitPlainName(unit)} Unit here; I'll ask again before the next one.`,
@@ -6106,22 +6116,22 @@ function buildOutShareOffer(projectDir: string): AskDirective | null {
   // A Unit built here before the share has no claim yet: the share sends it.
   const builtHere = added === null ? unitsAskedHereForShare(projectDir) : [];
   const note = builtHere.length === 0 ? null : builtHereNote(builtHere);
+  const way = changesReachMain(projectDir);
+  const byPullRequest = way === "pull request";
   return teamHandoverAsk(projectDir, {
     handovers: ["share"],
     marks: [mark],
-    question: `${said} Share the plan with them now? I'd commit the plan here (AI-DLC's record, ` +
-      `nothing else of yours) and push ${target.branch} to ${target.remote}${note === null ? "" : `, with ${note}`}, ` +
-      `so each team can take its Unit by opening its own clone and running ${entrySkillInvocation()}.`,
-    choices: [
-      {
-        label: "Share them with the teams",
-        detail: note === null
-          ? `Pushes ${target.branch} to ${target.remote} as a plain push; it never overwrites what a team pushed.`
-          : `Pushes ${target.branch}, and ${note}, to ${target.remote}; it never overwrites what a team pushed.`,
-        command: `${aidlcInvocation()} unit share --plan`,
-      },
-      { label: "Share by pull request", detail: planByPullRequestDetail(projectDir), command: `${aidlcInvocation()} unit share --branch --plan` },
-    ],
+    question: `${said} Share the plan with them now? I'd commit the plan here (AI-DLC's record, nothing else of yours) ` +
+      `and ${byPullRequest ? "push it on its own branch for a pull request" : `push ${target.branch} to ${target.remote}`}` +
+      `${note === null ? "" : `, with ${note}`}, so each team can take its Unit ` +
+      `${byPullRequest ? `once it is in ${target.branch}, ` : ""}by opening its own clone and running ${entrySkillInvocation()}.`,
+    choices: shareWays(way, {
+      label: "Share them with the teams",
+      detail: note === null
+        ? `Pushes ${target.branch} to ${target.remote} as a plain push; it never overwrites what a team pushed.`
+        : `Pushes ${target.branch}, and ${note}, to ${target.remote}; it never overwrites what a team pushed.`,
+      command: `${aidlcInvocation()} unit share --plan`,
+    }, { label: "Share by pull request", detail: planByPullRequestDetail(projectDir), command: `${aidlcInvocation()} unit share --branch --plan` }),
     notNow: { label: "Not now", detail: `Nothing is pushed; a team's clone sees the plan once ${target.branch} is pushed.` },
   });
 }

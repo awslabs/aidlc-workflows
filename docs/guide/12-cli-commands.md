@@ -1214,6 +1214,15 @@ are asked only when one sentence names two branches. A named branch that git
 cannot use, or that is not on the remote, is reported with the file it came
 from instead of being replaced by another layer's choice.
 
+Beside it, `- **Changes reach main**: by pull request` (or `by merge request`)
+or `- **Changes reach main**: by direct push` says how changes reach the branch
+on the Integration branch line, whatever that is called. It is read the same
+way, `project.md` first, and puts the matching share choice first, marked
+Recommended. With the line in no file it is by pull request, as AI-DLC's
+`org.md` says; Way of Working words with no line are no line, never read; a
+line with another value marks neither choice. Practices Discovery writes it
+into `team.md` only when your answer says how your changes reach the branch.
+
 ```
 /aidlc unit status
 ```

@@ -123,6 +123,18 @@ before each Unit this session would build:
 - **Build them here for now** builds that Unit in this session; the question
   comes back before the next Unit.
 
+The way your team works comes first, marked Recommended: **Share by pull
+request**, unless your Way of Working says `- **Changes reach main**: by direct
+push`; then **Share them with the teams**. Practices Discovery writes that line
+into `team.md` when you say how your changes reach the branch (`by merge
+request` counts as a pull request); it is about the branch on the Integration
+branch line, whatever that is called. With no such line anywhere a pull request
+is the default, also in a project set up before the line existed; on a git host
+with no pull requests, add `- **Changes reach main**: by direct push` to
+`team.md`. A line naming a way of your own marks neither choice. When the pull
+request comes first, the question itself says it would push the plan on its own
+branch for a pull request.
+
 Typed, the same step is `/aidlc unit share`, which names what it committed
 once it has pushed, or your own commit and `git push origin main`.
 
@@ -131,8 +143,8 @@ once whether to share the plan with them: **Share them with the
 teams** runs `aidlc unit share --plan`, which commits AI-DLC's record here
 (`aidlc/`, none of your other files) and pushes main with a plain push;
 **Share by pull request** runs `aidlc unit share --branch --plan`, which
-commits the same and pushes it on the plan's own branch instead; **Not
-now** leaves it, and a team's clone sees the plan once main is pushed (or push
+commits the same and pushes it on the plan's own branch instead, the two
+ordered and marked by the same line as above; **Not now** leaves it, and a team's clone sees the plan once main is pushed (or push
 it yourself with `git push origin main`). When the remote does not answer, Share says so and keeps the
 commit, and the question is not put again; run `aidlc unit share --plan` once
 it can be reached. A Unit you add to the plan after sharing it is not on the

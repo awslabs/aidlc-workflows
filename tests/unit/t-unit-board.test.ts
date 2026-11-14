@@ -95,7 +95,7 @@ const isBoard = (d: Directive): boolean => d.kind === "print" && d.board_note !=
 describe("with a thin slice first, the plan is shared once the slice is approved", () => {
   const isShare = (d: Directive): boolean =>
     d.kind === "ask" && d.ask_type === "team-handover" && ((d.handovers ?? []) as string[]).includes("share");
-  test("the lead builds the slice through its gates, then the share question comes, its words as today", () => {
+  test("the lead builds the slice through its gates, then the share question comes, by pull request as AI-DLC's default says", () => {
     const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
     const home = makeHome({ repos: hosts, state: homeState().replace("- **Skeleton Stance**: off", "- **Skeleton Stance**: on") });
     // Teams chosen and nothing shared yet.
@@ -105,7 +105,8 @@ describe("with a thin slice first, the plan is shared once the slice is approved
     expect(isShare(end), JSON.stringify(end).slice(0, 600)).toBe(true);
     expect(end.question).toBe(
       "The Units are open for any team to take. Share the plan with them now? I'd commit the plan here (AI-DLC's record, " +
-        "nothing else of yours) and push main to origin, so each team can take its Unit by opening its own clone and running /aidlc.",
+        "nothing else of yours) and push it on its own branch for a pull request, so each team can take its Unit once it is in " +
+        "main, by opening its own clone and running /aidlc.",
     );
     expect(teamBoard(home.dir)).toContain("- checkout-ui, here: done");
   });

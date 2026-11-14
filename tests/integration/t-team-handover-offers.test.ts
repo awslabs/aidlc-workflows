@@ -181,10 +181,10 @@ describe("step 1: the lead shares the plan with the teams", () => {
     const offer = nextDirective(lead);
     expect(isHandover(offer, "share"), JSON.stringify(offer)).toBe(true);
     expect(String(offer.question)).toContain("Share them now?");
-    expect(String(offer.question)).toContain("push main to origin");
-    expect(labels(offer)).toEqual(["Share them with the teams", "Share by pull request", "Build them here for now"]);
+    expect(String(offer.question)).toContain("push the plan on its own branch for a pull request");
+    expect(labels(offer)).toEqual(["Share by pull request (Recommended)", "Share them with the teams", "Build them here for now"]);
     expect(commandFor(offer, "Share them with the teams")).toMatch(/ unit share$/);
-    expect(commandFor(offer, "Share by pull request")).toMatch(/ unit share --branch$/);
+    expect(commandFor(offer, "Share by pull request (Recommended)")).toMatch(/ unit share --branch$/);
     expect(commandFor(offer, "Build them here for now")).toMatch(/ next$/);
     expect(detailFor(offer, "Share them with the teams")).toBe(`Pushes ${PLAIN_PUSH}`);
     expect(JSON.stringify(offer)).not.toContain("Team work needs this project at the top");
@@ -258,7 +258,7 @@ describe("step 1: the lead shares the plan with the teams", () => {
     const offer = nextDirective(lead);
     expect(isHandover(offer, "share"), JSON.stringify(offer)).toBe(true);
     const question = String(offer.question);
-    const words = question.match(/I'd commit (the \d+ changed files here \(.*\)) and push main to origin, /)?.[1];
+    const words = question.match(/I'd commit (the \d+ changed files here \(.*\)) and push the plan on its own branch for a pull request, /)?.[1];
     expect(words, question).toEndWith(` here ${OWN_EDITS_NAMED}`);
     const shared = runMergeTool(UNIT, ["share"], lead);
     expect(shared.status, shared.out).toBe(0);
@@ -320,7 +320,7 @@ describe("step 1: the lead shares the plan with the teams", () => {
     const offer = nextDirective(lead);
     expect(isHandover(offer, "share"), JSON.stringify(offer)).toBe(true);
     const question = String(offer.question);
-    const words = question.match(/I'd commit (the \d+ changed files here \(.*\)) and push main to origin, /)?.[1];
+    const words = question.match(/I'd commit (the \d+ changed files here \(.*\)) and push the plan on its own branch for a pull request, /)?.[1];
     expect(words, question).toEndWith(" here (new: docs/new-name.md; deleted: docs/gone.md, docs/old-name.md)");
     const shared = runMergeTool(UNIT, ["share"], lead);
     expect(shared.status, shared.out).toBe(0);
@@ -409,7 +409,7 @@ describe("step 1: the lead shares the plan with the teams", () => {
     const offer = nextDirective(lead);
     expect(isHandover(offer, "share"), JSON.stringify(offer).slice(0, 2000)).toBe(true);
     const question = String(offer.question);
-    const words = question.match(/I'd commit (the \d+ changed files here \(.*\)) and push main to origin, /)?.[1];
+    const words = question.match(/I'd commit (the \d+ changed files here \(.*\)) and push the plan on its own branch for a pull request, /)?.[1];
     expect(words, question).toEndWith(` here ${ten}; \`git status\` shows the rest)`);
     expect(question.length).toBeLessThan(1_500);
     expect(git(remote, ["rev-parse", "main"])).toBe(git(lead, ["rev-parse", "HEAD"]));

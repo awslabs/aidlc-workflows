@@ -298,7 +298,10 @@ Four lead artifacts plus three spoke contributions are written to
 - `team-practices.md` -- descriptive, team-voice prose. Five sections matching
   `team.md` headings: Way of Working, Walking Skeleton, Testing Posture,
   Deployment, Code Style. Way of Working carries the
-  `Integration branch: <branch>` line team work reads; where the work's code
+  `Integration branch: <branch>` line team work reads and, when the team's
+  answer says how changes reach that branch, the
+  `Changes reach main: by pull request|by direct push` line the share question
+  reads; where the work's code
   is in repos of its own and this checkout is on another branch, the gate
   says which branch Approve names for AI-DLC's records and plan
   (`practicesBranchOffCheckout` in `aidlc-unit.ts`). Testing Posture carries

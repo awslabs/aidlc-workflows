@@ -146,9 +146,11 @@ Working, Walking Skeleton, Testing Posture, Deployment, and Code Style.
 
 The Way of Working answer settles the one branch the team's work and AI-DLC's
 records merge into (Step 5): the branch the person keeps those records on, even
-when it reaches `main` by pull request. When nothing names one, it is the branch
-`memory/org.md` names. Ask which only when one answer names two branches and
-you cannot tell which.
+when that branch is later merged into `main`. When nothing names one, it is the
+branch `memory/org.md` names. Ask which only when one answer names two branches
+and you cannot tell which. When the answer also says how changes reach that
+branch, by pull request (a merge request on GitLab) or by pushing to it
+directly, Step 5 records which.
 
 The `memory/*.md` sections you draw the suggested answers from are written for
 this framework's own resolution rules, so they carry vocabulary the person
@@ -195,8 +197,11 @@ four declared artifacts:
 
    `## Way of Working` MUST include `- **Integration branch**: <branch>`: the
    branch Step 4 settled, as git names it and nothing else (for example `main`).
-   On a re-run whose `memory/team.md` says it only in a sentence, write the
-   branch that sentence means.
+   When Step 4's answer said how changes reach that branch, it also includes
+   `- **Changes reach main**: by pull request` or
+   `- **Changes reach main**: by direct push`; otherwise it leaves that line
+   out. On a re-run whose `memory/team.md` says either only in a sentence, write
+   what that sentence means.
 2. **discovered-rules.md** - `## Mandated` rules in `ALWAYS ...` form and
    `## Forbidden` rules in `NEVER ...` form, only for human-stated hard
    constraints. Each rule is one list item (`- ALWAYS ...`); a heading with no

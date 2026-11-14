@@ -95,15 +95,15 @@ describe("after choosing teams the plan goes to them the way main's share questi
     expect(JSON.stringify(ask)).not.toContain("Who builds which Unit");
   });
 
-  test("asked once: Share pushes main, and Not now is kept", () => {
+  test("asked once: Share by pull request first, as AI-DLC's default says, Share pushes main, and Not now is kept", () => {
     const home = makeHome();
     chooseTeams(home.dir);
     const ask = next(home.dir);
     expect(isShare(ask), JSON.stringify(ask)).toBe(true);
     const choices = ask.choices as Array<{ label: string; command?: string }>;
-    expect(choices.map((choice) => choice.label)).toEqual(["Share them with the teams", "Share by pull request", "Not now"]);
-    expect(String(choices[0].command)).toEndWith(" unit share --plan");
-    expect(String(choices[1].command)).toEndWith(" unit share --branch --plan");
+    expect(choices.map((choice) => choice.label)).toEqual(["Share by pull request (Recommended)", "Share them with the teams", "Not now"]);
+    expect(String(choices[0].command)).toEndWith(" unit share --branch --plan");
+    expect(String(choices[1].command)).toEndWith(" unit share --plan");
     // Not now: the step goes on and the question is not put again.
     appendAuditEntry("HUMAN_TURN", { "Person Reply": "not now" }, home.dir);
     for (const step of [next(home.dir), next(home.dir)]) {
@@ -120,9 +120,10 @@ describe("after choosing teams the plan goes to them the way main's share questi
     const asked = next(plain.dir);
     expect(asked.question).toBe(
       "The Units are open for any team to take. Share the plan with them now? I'd commit the plan here (AI-DLC's record, " +
-        "nothing else of yours) and push main to origin, so each team can take its Unit by opening its own clone and running /aidlc.",
+        "nothing else of yours) and push it on its own branch for a pull request, so each team can take its Unit once it is in " +
+        "main, by opening its own clone and running /aidlc.",
     );
-    expect((asked.choices as Offer["choices"])[0]).toMatchObject({
+    expect((asked.choices as Offer["choices"])[1]).toMatchObject({
       label: "Share them with the teams",
       detail: "Pushes main to origin as a plain push; it never overwrites what a team pushed.",
     });
@@ -132,17 +133,17 @@ describe("after choosing teams the plan goes to them the way main's share questi
     const withOne = next(one.dir);
     expect(withOne.question).toBe(
       "The Units are open for any team to take. Share the plan with them now? I'd commit the plan here (AI-DLC's record, " +
-        "nothing else of yours) and push main to origin, with the note that refunds is built here, so each team can take " +
-        "its Unit by opening its own clone and running /aidlc.",
+        "nothing else of yours) and push it on its own branch for a pull request, with the note that refunds is built here, " +
+        "so each team can take its Unit once it is in main, by opening its own clone and running /aidlc.",
     );
-    expect((withOne.choices as Offer["choices"])[0].detail)
+    expect((withOne.choices as Offer["choices"])[1].detail)
       .toBe("Pushes main, and the note that refunds is built here, to origin; it never overwrites what a team pushed.");
     const two = makeHome();
     chooseTeams(two.dir);
     expect(run(UNIT, ["assign", "--here", "refunds,checkout-ui", "--person-words", "build both here"], two.dir).status).toBe(0);
     const withTwo = next(two.dir);
     expect(String(withTwo.question)).toContain(", with the note that refunds and checkout-ui are built here, so each team");
-    expect((withTwo.choices as Offer["choices"])[0].detail)
+    expect((withTwo.choices as Offer["choices"])[1].detail)
       .toBe("Pushes main, and the note that refunds and checkout-ui are built here, to origin; it never overwrites what a team pushed.");
     const sharedTwo = run(UNIT, ["share", "--plan"], two.dir);
     expect(sharedTwo.status, sharedTwo.out).toBe(0);
@@ -707,7 +708,7 @@ describe("the plan's share fits the team's own git: a protected main, a branch o
     expect(isShare(ask), JSON.stringify(ask).slice(0, 600)).toBe(true);
     writeFileSync(join(home.remote, "hooks", "pre-receive"), "#!/bin/sh\necho 'error: GH013: Repository rule violations found.' >&2\nexit 1\n");
     chmodSync(join(home.remote, "hooks", "pre-receive"), 0o755);
-    const done = runPrinted(commandOf(ask, "Share by pull request"), home.dir);
+    const done = runPrinted(commandOf(ask, "Share by pull request (Recommended)"), home.dir);
     expect(done.status, done.out).not.toBe(0);
     expect(done.out).toContain(`origin did not take the branch ${PLAN_BRANCH} (`);
     expect(done.out).toContain("so nothing is pushed: the plan is committed here.");
@@ -1158,7 +1159,8 @@ describe("the walking skeleton is built at the lead's project first, and every o
   const HANDOUT = "No team has taken a Unit yet, so this session builds them here, starting with the checkout ui Unit, " +
     "the walking skeleton the others build on. Once it is built and approved, I'll offer to share the work so each team can take one of the others.";
   const SHARE = "The Units are open for any team to take. Share the plan with them now? I'd commit the plan here (AI-DLC's record, " +
-    "nothing else of yours) and push main to origin, so each team can take its Unit by opening its own clone and running /aidlc.";
+    "nothing else of yours) and push it on its own branch for a pull request, so each team can take its Unit once it is in main, " +
+    "by opening its own clone and running /aidlc.";
   const sliceOn = () => makeHome({ state: homeState().replace("- **Skeleton Stance**: off", "- **Skeleton Stance**: on") });
   // Once the slice is approved the share question comes as today (t-unit-board).
   test("on and not approved: the lead's look says main's handout line once, builds the slice, and puts no share question", () => {
