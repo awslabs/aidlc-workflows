@@ -32,6 +32,7 @@ import {
   personsChat,
   refundsTaken,
   run,
+  STATE,
   stateOf,
   tempDir,
   UNIT,
@@ -395,6 +396,51 @@ describe("a solo home looks for a teammate's take only once its Unit walk has be
     const { trace, env } = traced();
     for (let step = 0; step < 3; step++) next(home.dir, env);
     expect(looks(trace)).toBe(0);
+  });
+
+  // The remotes as the person named them: origin renamed, and a second remote
+  // (a mirror, or upstream beside a fork) when a second name is given.
+  const remotesNamed = (dir: string, [first, second]: readonly string[]) => {
+    if (first !== "origin") git(dir, ["remote", "rename", "origin", first]);
+    if (second === undefined) return;
+    const other = tempDir("other-host");
+    git(other, ["init", "-q", "--bare", "-b", "main"]);
+    git(dir, ["remote", "add", second, other]);
+  };
+
+  test("two remotes and neither named origin: each step runs as it does with no remote, with no look and nothing said about remotes", () => {
+    const alone = betweenUnits();
+    git(alone.dir, ["remote", "remove", "origin"]);
+    const expected = next(alone.dir, traced().env);
+    const home = betweenUnits();
+    remotesNamed(home.dir, ["github", "gitlab"]);
+    const { trace, env } = traced();
+    const step = next(home.dir, env);
+    expect([step.kind, step.stage, step.unit]).toEqual([expected.kind, expected.stage, expected.unit]);
+    expect(JSON.stringify(step)).not.toContain("Multiple git remotes");
+    expect(looks(trace)).toBe(0);
+    expect(field(stateOf(home.dir), "Unit Ownership")).not.toBe("team");
+  });
+
+  test("one remote of any name, or origin beside another: a teammate's take is still heard at the next step", () => {
+    for (const names of [["github"], ["origin", "gitlab"]]) {
+      const home = soloAtA(true);
+      expect(run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD], cloneOf(home.remote, "bob")).status).toBe(0);
+      remotesNamed(home.dir, names);
+      expect((next(home.dir).change_notices ?? []) as string[], names.join(" and ")).toContain(
+        "Your teammate bob took checkout-ui; this session carries on with the rest, one Unit at a time, and you can ask to sign off a teammate's result yourself before it counts as done.",
+      );
+    }
+  });
+
+  // Skipping is the solo look's alone: where the person asks for team work, the line stays.
+  test("team work with two remotes and neither named origin keeps its line where the person asks for team work", () => {
+    const home = makeHome({ repos: {} });
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    remotesNamed(home.dir, ["github", "gitlab"]);
+    const shared = run(UNIT, ["share"], home.dir);
+    expect(shared.status, shared.out).not.toBe(0);
+    expect(shared.json?.error).toBe("Multiple git remotes are configured (github, gitlab); configure origin for Unit claims.");
   });
 
   // The command lines still running that name a host stand-in's port.

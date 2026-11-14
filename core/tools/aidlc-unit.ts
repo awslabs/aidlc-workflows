@@ -9936,6 +9936,10 @@ export function switchSoloToTeams(projectDir: string, sessionId?: string): strin
   // A boundary (the Units done so far) is looked at once in a chat, however
   // many steps it takes, and once every Unit of the plan is built here nothing
   // is left for a teammate to take, so no step looks.
+  // No remote is the work's (none, or several and none of them origin): no
+  // take can switch it, so nothing is looked at, as soloElsewhereAsk offers none.
+  const location = workspaceHomeLocation(projectDir);
+  if (location === null || location === "local") return null;
   const remote = repositoryRemote(projectDir);
   const stages = unitMajorConstructionStageSlugs(getField(state, "Scope") ?? "", state, true);
   const progress = soloUnitsProgress(readAuditShardEvents(projectDir), stages.at(-1) ?? "code-generation");
@@ -9962,8 +9966,7 @@ export function switchSoloToTeams(projectDir: string, sessionId?: string): strin
   } catch {
     return null;
   }
-  const location = workspaceHomeLocation(projectDir);
-  if (taken.length === 0 || location === null || location === "local") return null;
+  if (taken.length === 0) return null;
   const who = joinNames([...new Set(taken.map((claim) => claim.payload.taken_by!))]);
   const units = joinNames(taken.map((claim) => claim.unit));
   const rhythm = readUnitGateRhythm(state);
