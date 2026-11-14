@@ -242,7 +242,7 @@ export function newerStateStep(projectDir: string, version: string, newWork = fa
         `${releaseHost()}) into one folder, then run \`${refreshCommand(projectDir)} --from <that file>\` in this project.`;
     case "pinned":
       return `${lead}, and this project is pinned to AI-DLC ${AIDLC_VERSION} in .aidlc-version. To carry on, pin it ` +
-        `to the release your teammate uses with \`aidlc config --pin <that version> --yes\`; the pin changes for ` +
+        `to the release your teammate uses with \`${aidlcInvocation()} config --pin <that version> --yes\`; the pin changes for ` +
         "everyone on the project.";
     case "managed":
       return `${lead}, and this computer has ${AIDLC_VERSION} from ${install.name}. To carry on: ` +

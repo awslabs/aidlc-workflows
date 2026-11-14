@@ -6412,10 +6412,8 @@ function tellAndStop(line: string): PrintDirective {
 // person hears that once, never the question again.
 function newerWorkOffer(projectDir: string, version: string, carried: readonly string[], newWork = false): Directive {
   if (updateAnswer === "done") {
-    // Nothing carried on, so nothing of the kept request is said.
+    // Nothing carried on, so the carry-on line is not said.
     activeKeptRequestLine = null;
-    activeRestartWords = null;
-    activeRestartAsked = null;
     return tellAndStop(
       `AI-DLC is still ${AIDLC_VERSION} on this computer, so this plan, set up with ${newerStateRelease(version)}, ` +
         `cannot carry on here until \`aidlc update\` brings that release to this computer.`,
@@ -24181,8 +24179,12 @@ export function main(argv: string[]): void {
       return;
     }
     if (keptRequest(resolvedProjectDir, restart.space)?.restart === restart.id) dropKeptRequest(resolvedProjectDir);
-    // The chat it was kept in saw the words (the AI-DLC update question's carry-on).
-    noteRestartRequest(subArgs, restart.session === undefined || restart.session !== engineSessionId);
+    // The chat it was kept in saw the words, and the AI-DLC update question's
+    // carry-on always runs in the chat that answered it.
+    noteRestartRequest(
+      subArgs,
+      updateAnswer !== "done" && (restart.session === undefined || restart.session !== engineSessionId),
+    );
   }
   spendRequestFile();
   restoreSpentRequestFile = restoreRequestFile;
