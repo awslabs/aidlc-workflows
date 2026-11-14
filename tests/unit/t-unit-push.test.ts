@@ -17,7 +17,7 @@ import { basename, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { hooksHealthReadDir, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { pastUnitStages } from "../../dist/claude/.claude/tools/aidlc-unit.ts";
-import { CHECK_IN_LINE } from "../../dist/claude/.claude/tools/aidlc-unit-teams.ts";
+import { CHECK_IN_LINE, pullRequestHeadRefs } from "../../dist/claude/.claude/tools/aidlc-unit-teams.ts";
 import { AIDLC_SRC, fixtureIntentId8 } from "../harness/fixtures.ts";
 import {
   bashLine,
@@ -70,6 +70,26 @@ function commitOnHost(host: string, branch: string, files: Record<string, string
   git(dir, ["commit", "-q", "-am", message]);
   git(dir, ["push", "-q", "origin", branch]);
   return git(dir, ["rev-parse", "HEAD"]);
+}
+
+// A pull request squashed on its code host in the host's own words, its branch
+// deleted after. GitLab's merge commit method puts the squash under a merge
+// commit (`mergeCommit`, its message).
+function squashOnHost(host: string, branch: string, message: string, mergeCommit?: string): void {
+  const dir = join(tempDir("squasher"), "repo");
+  git(tempDir("squasher-parent"), ["clone", "-q", host, dir]);
+  git(dir, ["config", "user.name", "reviewer"]);
+  git(dir, ["config", "user.email", "reviewer@example.test"]);
+  git(dir, ["fetch", "-q", "origin", branch]);
+  git(dir, ["merge", "-q", "--squash", `origin/${branch}`]);
+  git(dir, ["commit", "-q", "-m", message]);
+  if (mergeCommit !== undefined) {
+    const squash = git(dir, ["rev-parse", "HEAD"]);
+    git(dir, ["reset", "-q", "--hard", "HEAD^"]);
+    git(dir, ["merge", "-q", "--no-ff", "-m", mergeCommit, squash]);
+  }
+  git(dir, ["push", "-q", "origin", "main"]);
+  git(host, ["branch", "-q", "-D", branch]);
 }
 
 describe("teams build Units across repos when the workspace is in git", () => {
@@ -980,6 +1000,82 @@ describe("at the home", () => {
     // Once in the chat.
     const again = personsNext(home.dir, chat, "t-unit-push-maybe-merged");
     expect(JSON.stringify(again.change_notices ?? []), JSON.stringify(again)).not.toContain("changing every file of refunds");
+  });
+
+  // Case 2 on GitHub and GitLab: the host keeps the pull request's last head
+  // after its branch is deleted (refs/pull/<n>/head, refs/merge-requests/<n>/head),
+  // and the squash names the pull request in the host's own words.
+  for (const host of [
+    { name: "GitHub", ref: "refs/pull/41/head", subject: "Refunds API (#41)" },
+    { name: "GitLab", ref: "refs/merge-requests/41/head", subject: "Refunds API",
+      mergeCommit: "Merge branch 'refunds' into 'main'\n\nRefunds API\n\nSee merge request payments/checkout-api!41" },
+  ]) {
+    test(`a fix, a squash and the branch's deletion between two looks, on ${host.name}: merged, and the lead is not asked`, () => {
+      const { hosts, home, alice, record } = refundsTaken();
+      codeGenerated(alice, record);
+      expect(run(UNIT, ["push"], alice).status).toBe(0);
+      git(home.dir, ["fetch", "-q", "origin"]);
+      const fix = commitOnHost(hosts["checkout-api"], "refunds", { "src/refunds.ts": "export const refunds = 1; // reviewed\n" }, "review fix");
+      git(hosts["checkout-api"], ["update-ref", host.ref, fix]);
+      squashOnHost(hosts["checkout-api"], "refunds", host.subject, host.mergeCommit);
+      mergeOnHost(hosts.billing, "refunds", "squash");
+      const api = join(home.dir, "checkout-api");
+      const refsBefore = git(api, ["for-each-ref", "--format=%(refname)"]);
+      const chat = personsChat("t-unit-push-pr-head");
+      const seen = personsNext(home.dir, chat, "t-unit-push-pr-head");
+      expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds"), JSON.stringify(seen)).toMatchObject({ done: true });
+      expect((seen.change_notices ?? []) as string[]).toContain("I've told alice refunds is merged.");
+      expect(JSON.stringify(seen), JSON.stringify(seen)).not.toContain("changing every file of refunds");
+      // Read with the lead's own git: no remote added, none of the host's refs kept here, and the head kept as
+      // the Unit branch's tip in the ref the look keeps it in.
+      const kept = `refs/aidlc/home/${fixtureIntentId8(home.dir)}/unit/refunds`;
+      expect(git(api, ["remote"])).toBe("origin");
+      expect(git(api, ["for-each-ref", "--format=%(refname)"]).split("\n").filter((ref) => !refsBefore.split("\n").includes(ref)))
+        .toEqual([kept]);
+      expect(git(api, ["rev-parse", kept])).toBe(fix);
+    });
+  }
+
+  test("the pull request a merge names, in the hosts' own references: GitHub's squash (#41), GitLab's !41 or its address", () => {
+    const both = ["refs/pull/41/head", "refs/merge-requests/41/head"];
+    expect(pullRequestHeadRefs("Refunds API (#41)\n\n* review fix")).toEqual(both);
+    expect(pullRequestHeadRefs("Merge branch 'refunds' into 'main'\n\nRefunds API\n\nSee merge request payments/checkout-api!41")).toEqual(both);
+    expect(pullRequestHeadRefs("Merge branch 'refunds' into 'main'\r\n\r\nSee merge request https://gitlab.example/payments/checkout-api/-/merge_requests/41\r\n\r\nApproved-by: a reviewer <r@example.test>\r\n"))
+      .toEqual(both);
+    // No reference of either host: nothing read.
+    for (const message of ["refunds: fixture", "Fix #41 in refunds", "Refunds API (#41) and more", "Refunds\n\nGreat work!41"]) {
+      expect(pullRequestHeadRefs(message), message).toEqual([]);
+    }
+  });
+
+  // Where the host keeps no such head, or the one the squash names is not the
+  // Unit's, the check still cannot see it: the board asks the lead, as before.
+  test("a squash that names a pull request whose head the host does not have, or whose head is not the Unit's: the board names the commit", () => {
+    const { hosts, home, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    const host = hosts["checkout-api"];
+    const fix = commitOnHost(host, "refunds", { "src/refunds.ts": "export const refunds = 1; // reviewed\n" }, "review fix");
+    // A later head that holds the push but whose content main does not have (only the fix was squashed).
+    const later = commitOnHost(host, "refunds", { "src/refunds.ts": "export const refunds = 1; // reviewed, then more\n" }, "more");
+    git(host, ["update-ref", "refs/heads/refunds", fix]);
+    squashOnHost(host, "refunds", "Refunds API (#41)");
+    mergeOnHost(hosts.billing, "refunds", "squash");
+    const squash = git(host, ["rev-parse", "--short=7", "main"]);
+    const line = `checkout-api has ${squash} "Refunds API (#41)" changing every file of refunds; if that is refunds merged, say so.`;
+    // A host that keeps no such head; then another pull request's head under that number; then one that holds
+    // the push and more.
+    for (const [session, head] of [["t-unit-push-no-pr-head", null], ["t-unit-push-other-pr-head", "main~1"], ["t-unit-push-later-pr-head", later]]) {
+      if (head !== null) git(host, ["update-ref", "refs/pull/41/head", git(host, ["rev-parse", head!])]);
+      const seen = personsNext(home.dir, personsChat(session!), session!);
+      expect((seen.change_notices ?? []) as string[], `${session} ${JSON.stringify(seen)}`).toContain(line);
+    }
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.verdicts).toEqual([
+      { repo: "checkout-api", merged: false },
+      expect.objectContaining({ repo: "billing", merged: true }),
+    ]);
+    expect(git(join(home.dir, "checkout-api"), ["for-each-ref", `refs/aidlc/home/${fixtureIntentId8(home.dir)}/unit/refunds`])).toBe("");
   });
 
   // The team's side of case 2: its look sends the fix home, so a lead who

@@ -207,8 +207,10 @@ import {
   unitLikelyRepos,
   unitLikelyReposFrom,
   unitMergeVerdict,
+  type MergeVerdict,
   resultAtTip,
   mergeCandidate,
+  pullRequestHeadRefs,
   unitMergesStanding,
   unitOutputsHomeReads,
   type UnitResult,
@@ -8497,8 +8499,10 @@ function checkTeamResultsQuietly(
 // lead's own time limits) and the result's heads looked for there. A repo whose
 // fetch failed goes on `unreached`, its verdict the last fetch's. At the lead's
 // look (`look`), a repo not merged as the result was sent is read again as at
-// its Unit branch's later tip (keptUnitTip), and one still not merged puts the
-// commit that may be its merge on `look.maybe` (mergeCandidate).
+// its Unit branch's later tip (keptUnitTip), then, reached this look, as at its
+// pull request's last head on the host (mergedAtPullRequestHead), and one still
+// not merged puts the commit that may be its merge on `look.maybe`
+// (mergeCandidate).
 function resultVerdicts(
   pd: string,
   payload: UnitClaimPayload,
@@ -8513,14 +8517,15 @@ function resultVerdicts(
     const repoRemote = repositoryRemote(dir);
     const integration = repoRemote === null ? "HEAD" : repoIntegration(dir, repoRemote);
     // Only the branch the Unit merges into.
-    if (repoRemote !== null && !quietFetch(dir, ["-q", repoRemote, integration.slice(repoRemote.length + 1)]).ok) {
-      unreached?.push(repo.repo === "." ? repoRemote : repo.repo);
-    }
+    const reached = repoRemote !== null && quietFetch(dir, ["-q", repoRemote, integration.slice(repoRemote.length + 1)]).ok;
+    if (repoRemote !== null && !reached) unreached?.push(repo.repo === "." ? repoRemote : repo.repo);
     let verdict = unitMergeVerdict(dir, integration, repo);
     if (!verdict.merged && look !== undefined && repoRemote !== null) {
-      const tip = keptUnitTip(dir, repoRemote, repo, `refs/aidlc/home/${look.id8}/unit/${look.unit}`);
+      const kept = `refs/aidlc/home/${look.id8}/unit/${look.unit}`;
+      const tip = keptUnitTip(dir, repoRemote, repo, kept);
       const atTip = tip === null ? null : resultAtTip(dir, integration, repo, tip);
       if (atTip !== null) verdict = unitMergeVerdict(dir, integration, atTip);
+      if (!verdict.merged && reached) verdict = mergedAtPullRequestHead(dir, repoRemote, integration, repo, kept) ?? verdict;
     }
     const candidate = verdict.merged || look?.maybe === undefined ? null : mergeCandidate(dir, integration, repo);
     if (candidate !== null) look?.maybe?.push({ unit: look.unit, repo: repo.repo, ...candidate });
@@ -8541,7 +8546,8 @@ export interface MaybeMerged {
 // on the repo's remote, fetched quietly, when it descends from the copy kept
 // before, else that copy. A copy from before the result's last head is no
 // copy. Null with neither; a .git that takes no write keeps the tip read now
-// for this look only.
+// for this look only. The other source of the copy is the pull request's last
+// head on the host, once it is proven merged (mergedAtPullRequestHead).
 function keptUnitTip(dir: string, remote: string, repo: RepoResult, ref: string): string | null {
   const head = repo.heads.at(-1);
   if (!head) return null;
@@ -8558,6 +8564,32 @@ function keptUnitTip(dir: string, remote: string, repo: RepoResult, ref: string)
     }
   }
   return kept;
+}
+
+// A squash of review commits whose branch was gone before a look saw them: the
+// pull request's last head as the host keeps it (GitHub at refs/pull/<n>/head,
+// GitLab at refs/merge-requests/<n>/head for 14 days after the merge), for the
+// number the commit that may be the merge names (mergeCandidate). Both refs are
+// listed quietly in one read of the repo's own remote, and the one there is
+// fetched into FETCH_HEAD only when its commit is not here. Merged only when it
+// holds the result's last head (resultAtTip) and the integration branch has its
+// content (unitMergeVerdict); only then is it kept as the branch's tip
+// (keptUnitTip's ref). Null otherwise, and the board asks the lead as before.
+function mergedAtPullRequestHead(dir: string, remote: string, integration: string, repo: RepoResult, kept: string): MergeVerdict | null {
+  const candidate = mergeCandidate(dir, integration, repo);
+  const refs = candidate === null ? [] : pullRequestHeadRefs(git(dir, ["log", "-1", "--format=%B", candidate.commit]).stdout);
+  if (refs.length === 0) return null;
+  const head = quietly(() => {
+    const listed = git(dir, ["ls-remote", remote, ...refs]);
+    const [oid = "", ref = ""] = listed.ok ? listed.stdout.split(/\r?\n/)[0].split("\t") : [];
+    if (!/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(oid)) return null;
+    return git(dir, ["cat-file", "-e", `${oid}^{commit}`]).ok || git(dir, ["fetch", "-q", "--no-tags", remote, ref]).ok ? oid : null;
+  });
+  const atHead = head === null ? null : resultAtTip(dir, integration, repo, head);
+  const verdict = atHead === null ? null : unitMergeVerdict(dir, integration, atHead);
+  if (!verdict?.merged) return null;
+  git(dir, ["update-ref", kept, head!]);
+  return verdict;
 }
 
 // A team's own look at a build of this checkout that is pushed and waiting:

@@ -891,8 +891,8 @@ builds of the same plan in the same words, for example "Yours: u5-checkout-field
 GitHub Flow (a short-lived branch per change, a pull request, review and
 required checks, a protected main) works with teams as built. AI-DLC pushes each
 Unit's branch and leaves the pull request, its review and its merge to you and
-your host; it never opens or reads a pull request. GitLab's merge requests and
-protected branches read the same.
+your host; it never opens a pull request, and reads one only with git, as below.
+GitLab's merge requests and protected branches read the same.
 
 **Code repos.** Open the pull request from the branch AI-DLC pushed, and merge
 it any way the repo allows: a merge commit, a squash or a rebase, by anyone,
@@ -900,11 +900,16 @@ with the branch deleted after. A review fix can go through AI-DLC (ask for the
 push again) or by hand: a commit you push with your own git, the host's
 **Commit suggestion**, or **Update branch**. The team's next look and the lead's
 next look read the branch as it is then, so its merge is seen. When a fix, the
-merge and the branch's deletion all happen between two looks, the board names
+merge and the branch's deletion all happen between two looks, the lead's look
+reads the pull request's last head where the host keeps it, with the lead's own
+git: GitHub's `refs/pull/<n>/head`, and GitLab's `refs/merge-requests/<n>/head`
+for 14 days after the merge, for the number the squash or merge commit names
+("(#12)", "!12"). Where that head does not prove the merge (a rebase merge, a
+branch rewritten by force, another host, an older GitLab merge), the board names
 the commit that may be the merge, once, and the lead's word records it:
 
 ```text
-app has a8c3f21 "refunds (#12)" changing every file of refunds; if that is refunds merged, say so.
+app has a8c3f21 "refunds" changing every file of refunds; if that is refunds merged, say so.
 ```
 
 When the host refuses the branch's name, say the name you want: AI-DLC pushes

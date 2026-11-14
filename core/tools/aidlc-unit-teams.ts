@@ -1076,6 +1076,20 @@ export function mergeCandidateLine(unit: string, repo: string, candidate: { comm
     `${unit}; if that is ${unit} merged, say so.`;
 }
 
+// The host's refs for the pull request a commit that may be the merge names,
+// in the references the hosts write by default: GitHub's squash ends its
+// subject "(#41)"; GitLab's merge commit has a body line ending in
+// "group/project!41" or ".../-/merge_requests/41". Both hosts' ref names for
+// that number, since each host has only its own. They only pick which head the
+// merge check reads; whether it is the Unit's, and the merge its content, is
+// the check's.
+export function pullRequestHeadRefs(message: string): string[] {
+  const [subject = "", ...body] = message.split(/\r?\n/);
+  const number = / \(#(\d+)\)$/.exec(subject.trimEnd())?.[1] ??
+    body.map((line) => /(?:[\w.-]+\/[\w./-]*[\w.-]!|\/-\/merge_requests\/)(\d+)$/.exec(line.trim())?.[1]).find(Boolean);
+  return number === undefined ? [] : [`refs/pull/${number}/head`, `refs/merge-requests/${number}/head`];
+}
+
 // A result as at a later tip of its Unit branch that AI-DLC did not push (a
 // review fix by hand, a host's suggestion commit, Update branch): the tip as
 // its last head, and the files changed from where the tip leaves the
