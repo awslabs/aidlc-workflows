@@ -2197,6 +2197,30 @@ describe("the claims' home is the lead's address", () => {
     expect(claimPayload(home.remote, id8, "refunds")?.result).toBeUndefined();
   });
 
+  test("a take on the team's own remote the lead has not taken in, its result refused there and at the lead's project: offered again", () => {
+    const { home, hosts, id8 } = forkedLead();
+    refusePushes(home.remote);
+    const fork = forkOf(home.remote, "pay-own-fork", false);
+    const pay = cloneOf(home.remote, "pay");
+    git(pay, ["remote", "set-url", "--push", "origin", fork]);
+    for (const [name, host] of Object.entries(hosts)) cloneCode(host, pay, name, "pay");
+    expect(takeFrom("payments", pay, "refunds").status).toBe(0);
+    const hook = join(fork, "hooks", "pre-receive");
+    writeFileSync(hook, "#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/heads/claim/*) " +
+      "echo 'claim branches are locked here just now' >&2; exit 1;; esac; done\nexit 0\n");
+    chmodSync(hook, 0o755);
+    const record = buildDir(pay, "payments", "refunds");
+    codeGenerated(pay, record);
+    finishBuild(record);
+    const chat = chatOf("pay-own-fork");
+    const pushed = run(UNIT, ["push"], pay, chat);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(String(pushed.json?.notice ?? pushed.out)).toContain("did not either");
+    expect(claimPayload(home.remote, id8, "refunds")).toBeNull();
+    const offer = next(pay, chat);
+    expect(offer.ask_type, JSON.stringify(offer)).toBe("unit-push");
+  });
+
   // The lead's words for a lost race at the lead's project: what changed is not
   // named, nor whose the Unit is; the send again goes through.
   test("a result whose claim at the lead's project changed while it was sent: said so, and sent again", () => {
@@ -2220,6 +2244,10 @@ describe("the claims' home is the lead's address", () => {
     );
     expect(said).not.toContain("moved meanwhile");
     expect(claimPayload(home.remote, id8, "refunds")?.result).toBeUndefined();
+    // A send again can go through: the next step offers it, as ever.
+    finishBuild(record);
+    const offer = next(alice, chatOf("alice-race"));
+    expect(offer.ask_type, JSON.stringify(offer)).toBe("unit-push");
     const again = run(UNIT, ["push"], alice);
     expect(again.status, again.out).toBe(0);
     expect(claimPayload(home.remote, id8, "refunds")?.result).toBeDefined();
@@ -3228,6 +3256,13 @@ function takePushes(remote: string): void {
   writeFileSync(join(remote, "hooks", "pre-receive"), "#!/bin/sh\nexit 0\n");
 }
 
+// A rule of the lead's host refused the result: its words, and what to ask for.
+const ruleLine = (hostWords: string, unit = "refunds"): string =>
+  `The lead's project did not take the result of ${unit}: ${hostWords}. A rule on its host refuses it, so the lead cannot see it yet: ` +
+  "ask whoever owns that repository to let your pushes to its claim/ branches through, then ask me to send it again.";
+// The build's end while its result waits on the lead's project.
+const WAITS = "The lead's project has not taken the result of refunds yet; ask me to send it again once its owner lets your pushes through.";
+
 const chatOf = (session: string): NodeJS.ProcessEnv => ({ ...ENV, AIDLC_SESSION_OVERRIDE: session });
 
 describe("a take the lead's project could not record then", () => {
@@ -3384,7 +3419,7 @@ describe("a take the lead's project could not record then", () => {
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ taken_by: "pay" });
   });
 
-  test("its push while the lead's project still takes none: the code goes, the result waits on the way it always has", () => {
+  test("its push while the lead's project still takes none: the code goes, and the host's rule is said once with what to ask for", () => {
     const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
     const home = makeHome({ repos: hosts });
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
@@ -3398,9 +3433,8 @@ describe("a take the lead's project could not record then", () => {
     codeGenerated(pay, record);
     const pushed = run(UNIT, ["push"], pay);
     expect(pushed.status, pushed.out).toBe(0);
-    expect(String(pushed.json?.notice ?? pushed.out)).toContain(
-      "The lead's project did not take refunds's result: this host takes no push from here (pre-receive hook declined). Do you want me to send it again?",
-    );
+    expect(String(pushed.json?.notice ?? pushed.out)).toContain(ruleLine("this host takes no push from here (pre-receive hook declined)"));
+    expect(String(pushed.json?.notice ?? pushed.out)).not.toContain("Do you want me to send it again?");
     expect(field(readFileSync(join(record, "aidlc-state.md"), "utf-8"), "Unit Push")).toBe("unsent");
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.taken_by).toBeUndefined();
     // Once the lead's project takes pushes, sending it again records the take, then the result on it.
@@ -3409,6 +3443,108 @@ describe("a take the lead's project could not record then", () => {
     const claim = claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds") as { taken_by?: string; result?: unknown };
     expect(claim.taken_by).toBe("pay");
     expect(claim.result).toBeDefined();
+  });
+
+  // A clone of the lead's own workspace repo that cannot write its claim
+  // branches there: its host refuses them by a rule, or the clone has no write
+  // access. The take goes on; the build is done and approved.
+  function builtUnderRule(shape: "rule" | "no write access") {
+    const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
+    const home = makeHome({ repos: hosts });
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    commitAll(home.dir, "teams");
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const pay = cloneOf(home.remote, "pay");
+    for (const [name, host] of Object.entries(hosts)) cloneCode(host, pay, name, "pay");
+    // No write access: reads answer, and the push cannot start there (no per-ref status, as with a 403 or a refused ssh key).
+    if (shape === "rule") refusePushes(home.remote);
+    else git(pay, ["config", "remote.origin.receivepack", "no-such-receive-pack"]);
+    expect(takeFrom("payments", pay, "refunds").status).toBe(0);
+    const record = buildDir(pay, "payments", "refunds");
+    codeGenerated(pay, record);
+    finishBuild(record);
+    return { home, pay, record, id8: fixtureIntentId8(home.dir) };
+  }
+
+  test("a rule of the lead's host refuses the take and its result: said once in its words, never offered again until a push there goes through", () => {
+    const { home, pay, record, id8 } = builtUnderRule("rule");
+    const chat = chatOf("pay-push");
+    const pushed = run(UNIT, ["push"], pay, chat);
+    expect(pushed.status, pushed.out).toBe(0);
+    const said = String(pushed.json?.notice ?? pushed.out);
+    expect(said).toContain(ruleLine("this host takes no push from here (pre-receive hook declined)"));
+    expect(said).not.toContain("Do you want me to send it again?");
+    expect(field(readFileSync(join(record, "aidlc-state.md"), "utf-8"), "Unit Push")).toBe("unsent");
+    // The chat that heard it is not asked, and not told again.
+    for (const step of [nextSaying(pay, chat), nextSaying(pay, chat)]) {
+      expect(step.step.ask_type ?? null, JSON.stringify(step.step)).not.toBe("unit-push");
+      expect(step.said).not.toContain(WAITS);
+    }
+    // A new chat is told once, and not asked.
+    const other = chatOf("pay-other");
+    const first = nextSaying(pay, other);
+    expect(first.step.ask_type ?? null, JSON.stringify(first.step)).not.toBe("unit-push");
+    expect(first.said).toContain(WAITS);
+    const second = nextSaying(pay, other);
+    expect(second.step.ask_type ?? null).not.toBe("unit-push");
+    expect(second.said).not.toContain(WAITS);
+    expect(claimPayload(home.remote, id8, "refunds")).toBeNull();
+    // Its owner lets the pushes through: a new chat's look records the take, and the send is offered.
+    takePushes(home.remote);
+    const later = chatOf("pay-later");
+    const offered = nextSaying(pay, later);
+    expect(claimPayload(home.remote, id8, "refunds")).toMatchObject({ taken_by: "pay" });
+    expect(offered.step.ask_type, JSON.stringify(offered.step)).toBe("unit-push");
+    expect(offered.step.question).toBe("refunds is pushed, but the lead's project did not take its result just now. Do you want me to send it again?");
+    expect(offered.said).not.toContain(WAITS);
+    expect(run(UNIT, ["push"], pay, later).status).toBe(0);
+    expect((claimPayload(home.remote, id8, "refunds") as { result?: unknown }).result).toBeDefined();
+    expect(field(readFileSync(join(record, "aidlc-state.md"), "utf-8"), "Unit Push")).toBe("pushed");
+    expect(nextSaying(pay, chatOf("pay-after")).said).not.toContain(WAITS);
+  });
+
+  test("a team workspace that reaches the lead only by address: once its owner lets pushes through, the look's own record brings the offer back", () => {
+    const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
+    const home = makeHome({ repos: hosts });
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    commitAll(home.dir, "teams");
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    refusePushes(home.remote);
+    const pay = teamWorkspace(home.remote, "pay");
+    // No remote of its own to send a claim to: the lead's project is the only place.
+    git(pay, ["remote", "remove", "origin"]);
+    for (const [name, host] of Object.entries(hosts)) cloneCode(host, pay, name, "pay");
+    expect(takeFrom("payments", pay, "refunds").status).toBe(0);
+    const record = buildDir(pay, "payments", "refunds");
+    codeGenerated(pay, record);
+    finishBuild(record);
+    const chat = chatOf("pay-push");
+    const pushed = run(UNIT, ["push"], pay, chat);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(String(pushed.json?.notice ?? pushed.out)).toContain(ruleLine("this host takes no push from here (pre-receive hook declined)"));
+    expect(nextSaying(pay, chatOf("pay-other")).step.ask_type ?? null).not.toBe("unit-push");
+    takePushes(home.remote);
+    const later = nextSaying(pay, chatOf("pay-later"));
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ taken_by: "pay" });
+    expect(later.step.ask_type, JSON.stringify(later.step)).toBe("unit-push");
+  });
+
+  test("no write access to the lead's project: the push asks once, and the next steps wait for the take to be recorded", () => {
+    const { home, pay, id8 } = builtUnderRule("no write access");
+    const chat = chatOf("pay-push");
+    const pushed = run(UNIT, ["push"], pay, chat);
+    expect(pushed.status, pushed.out).toBe(0);
+    const said = String(pushed.json?.notice ?? pushed.out);
+    expect(said).toContain("The lead's project did not take refunds's result:");
+    expect(said).toContain("Do you want me to send it again?");
+    const after = nextSaying(pay, chat);
+    expect(after.step.ask_type ?? null, JSON.stringify(after.step)).not.toBe("unit-push");
+    expect(after.said).not.toContain(WAITS);
+    expect(nextSaying(pay, chatOf("pay-other")).step.ask_type ?? null).not.toBe("unit-push");
+    git(pay, ["config", "--unset", "remote.origin.receivepack"]);
+    const later = nextSaying(pay, chatOf("pay-later"));
+    expect(claimPayload(home.remote, id8, "refunds")).toMatchObject({ taken_by: "pay" });
+    expect(later.step.ask_type, JSON.stringify(later.step)).toBe("unit-push");
   });
 
   test("a teammate's clone of the team's workspace says and writes nothing for a take another checkout made", () => {

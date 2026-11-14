@@ -786,6 +786,10 @@ pushed yet. A repo the Unit changed that the lead's plan did not list is added
 to the build's repos and goes with the push, said once. When the code went but
 the lead's project did not take the result, the next step offers to send it again,
 unless the result went to your team's own remote, where the lead's look takes it in.
+When a rule of the lead's host refused it, the push says so once, in the host's words,
+with what to ask its owner for; until the lead's project takes a push from here again,
+each chat hears once at the build's end that the result is not there yet, and you can
+ask for the send any time.
 
 Open a pull request in each repo your usual way and merge it the way that repo
 merges: a merge commit, a squash or a rebase. The push also sends the result

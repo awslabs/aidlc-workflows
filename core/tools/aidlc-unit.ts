@@ -1058,15 +1058,23 @@ function pushRefusal(stderr: string): string {
 // The compare-and-swap: ok when the ref moved from expectedOid to commitOid.
 // A stale lease, or a ref the remote could not lock because another push got
 // there first, is another claimant winning; any other push failure is the
-// remote refusing the commit, and `refused` carries its reason for the person.
+// remote refusing the commit, and `refused` carries its reason for the person,
+// with `byRule` when that is a rule of the remote's own (refusedByHostRule).
 const CLAIM_RACE_LOST = /stale info|failed to update ref|cannot lock ref/;
+// A ref the remote's own rule refused (its hook, a ruleset, a protected
+// branch): git's per-ref status "[remote rejected]", git's own words on every
+// host and in every language, and no race lost. Sending it again meets the
+// same rule until the remote's owner changes it.
+function refusedByHostRule(stderr: string): boolean {
+  return /\[remote rejected\]/.test(stderr) && !CLAIM_RACE_LOST.test(stderr);
+}
 function updateClaimRef(
   projectDir: string,
   remote: string | null,
   ref: string,
   commitOid: string,
   expectedOid: string | null,
-): { ok: boolean; refused?: string; to?: string } {
+): { ok: boolean; refused?: string; byRule?: true; to?: string } {
   if (remote) {
     const lease = `--force-with-lease=${ref}:${expectedOid ?? ""}`;
     const pushed = git(projectDir, ["push", remote, lease, `${commitOid}:${ref}`]);
@@ -1075,7 +1083,7 @@ function updateClaimRef(
     const at = to === undefined ? {} : { to };
     if (pushed.ok) return { ok: true, ...at };
     if (CLAIM_RACE_LOST.test(pushed.stderr)) return { ok: false, ...at };
-    return { ok: false, refused: pushRefusal(pushed.stderr), ...at };
+    return { ok: false, refused: pushRefusal(pushed.stderr), ...(refusedByHostRule(pushed.stderr) ? { byRule: true as const } : {}), ...at };
   }
   const updated = git(projectDir, [
     "update-ref",
@@ -1102,7 +1110,7 @@ function writeHomeClaim(
   commitOid: string,
   expectedOid: string | null,
   options: { outbox?: boolean } = {},
-): { ok: boolean; refused?: string; elsewhere?: string; notThere?: { address: string; why: string } } {
+): { ok: boolean; refused?: string; byRule?: true; elsewhere?: string; notThere?: { address: string; why: string } } {
   const sent = writeHomeClaimOnce(projectDir, home, ref, commitOid, expectedOid);
   if (sent.ok || sent.landed || options.outbox === false || (sent.refused === undefined && sent.elsewhere === undefined)) {
     const { landed: _landed, ...said } = sent;
@@ -1115,7 +1123,10 @@ function writeHomeClaim(
   const there = outbox === null ? null : sendToOutbox(projectDir, outbox, ref, commitOid);
   if (outbox !== null && there?.ok === true) return { ok: false, elsewhere: maskUserinfo(outbox) };
   const notThere = outbox !== null && there !== null && !there.ok && there.why !== null ? { address: maskUserinfo(outbox), why: there.why } : undefined;
-  return { ok: false, ...(sent.refused !== undefined ? { refused: sent.refused } : {}), ...(notThere !== undefined ? { notThere } : {}) };
+  return {
+    ok: false, ...(sent.refused !== undefined ? { refused: sent.refused } : {}), ...(sent.byRule ? { byRule: true as const } : {}),
+    ...(notThere !== undefined ? { notThere } : {}),
+  };
 }
 
 function writeHomeClaimOnce(
@@ -1124,7 +1135,7 @@ function writeHomeClaimOnce(
   ref: string,
   commitOid: string,
   expectedOid: string | null,
-): { ok: boolean; refused?: string; elsewhere?: string; landed?: boolean } {
+): { ok: boolean; refused?: string; byRule?: true; elsewhere?: string; landed?: boolean } {
   const target = home.target;
   const byName = target !== null && !isGitAddress(target) && isGitAddress(home.location);
   const tracking = byName ? `refs/remotes/${target}/${ref.slice("refs/heads/".length)}` : null;
@@ -7518,7 +7529,7 @@ function takeStanding(projectDir: string, build: UnitBuild): TakeStanding {
 // nobody typed (`typed` false) it is not tried where commits are signed, which
 // may ask for a passphrase. The claim's attempt is the build's from then on.
 // Ok, or git's refusal (none for a race lost), and nothing is said either way.
-function recordTakeHere(projectDir: string, build: UnitBuild, home: HomeWork, standing: Extract<TakeStanding, { state: "pending" }>, typed: boolean): { ok: boolean; refused?: string } {
+function recordTakeHere(projectDir: string, build: UnitBuild, home: HomeWork, standing: Extract<TakeStanding, { state: "pending" }>, typed: boolean): { ok: boolean; refused?: string; byRule?: true } {
   if (!typed && git(projectDir, ["config", "--type=bool", "commit.gpgsign"]).stdout.trim() === "true") return { ok: false };
   try {
     return quietly(() => {
@@ -7563,6 +7574,41 @@ export function takeAside(projectDir: string, stateContent: string): boolean {
   } catch {
     return false;
   }
+}
+
+// Where the take a build's result goes on stands, for the offer to send that
+// result again: "aside" (takeAside); "waits" when the take is not on the lead's
+// claim yet and this clone sends nowhere else (claimOutbox), so the result has
+// no claim to go on until a look records the take (recordTakeHere); else null.
+export function resultTakeHold(projectDir: string, stateContent: string): "aside" | "waits" | null {
+  const build = unitBuildOf(stateContent);
+  if (build === null) return null;
+  try {
+    const standing = takeStanding(projectDir, build).state;
+    if (standing === "aside") return "aside";
+    return standing === "pending" && claimOutbox(projectDir, buildsHome(projectDir, build)) === null ? "waits" : null;
+  } catch {
+    return null;
+  }
+}
+
+// The offer to send a Unit's result again (unitPushAsk puts it): one text, so a
+// push a rule of the lead's host refused counts it as put in its chat.
+export function resendQuestion(unit: string): string {
+  return `${unit} is pushed, but the lead's project did not take its result just now. Do you want me to send it again?`;
+}
+
+// The build's end while its result waits on the lead's project: said once per
+// chat (unitPushAsk), never in the chat whose push just said why.
+export function resultWaitsLine(unit: string): string {
+  return `The lead's project has not taken the result of ${unit} yet; ask me to send it again once its owner lets your pushes through.`;
+}
+
+// The push's line when a rule of the lead's project's host refused the result
+// (refusedByHostRule): the host's words, and what to ask its owner for.
+function resultRefusedByRuleLine(unit: string, refused: string): string {
+  return `The lead's project did not take the result of ${unit}: ${refused}. A rule on its host refuses it, so the lead cannot see ` +
+    "it yet: ask whoever owns that repository to let your pushes to its claim/ branches through, then ask me to send it again.";
 }
 
 // A line of the take's for the person: it waits for the next step the agent
@@ -8442,26 +8488,43 @@ function pushUnit(args: string[], projectDir?: string): void {
   // claim as read.
   const on = standing.state === "aside" ? null : claimToGoOn(pd, home, build, ref, claim);
   const base = on === null ? null : on.outbox !== undefined ? on.claim : standing.state === "pending" ? null : claim;
+  // The result not taken is said here once. A rule of the lead's host meets a
+  // send again the same way, so its line asks nothing and this chat is not
+  // offered the send again (resendQuestion); nor does it hear the build's end
+  // line about it (resultWaitsLine) right after this one.
+  let notTaken: { byRule: boolean } | null = null;
   if (standing.state === "aside") {
     lines.push(standing.line);
   } else if (base === null) {
     // The lead's project answered and holds no claim of this take now: the
     // code is pushed, and the result waits to be sent again.
-    lines.push(standing.state === "pending"
-      ? `The lead's project did not take ${unit}'s result: ${recorded?.refused ?? "its claim there changed while it was being sent"}. Do you want me to send it again?`
-      : `The lead's project did not take ${unit}'s result: its claim is not there now. Do you want me to send it again?`);
+    notTaken = { byRule: standing.state === "pending" && recorded?.byRule === true && recorded.refused !== undefined };
+    lines.push(standing.state !== "pending"
+      ? `The lead's project did not take ${unit}'s result: its claim is not there now. Do you want me to send it again?`
+      : notTaken.byRule ? resultRefusedByRuleLine(unit, recorded!.refused!)
+      : `The lead's project did not take ${unit}'s result: ${recorded?.refused ?? "its claim there changed while it was being sent"}. Do you want me to send it again?`);
   } else {
     const sent = writeHomeClaim(pd, home, ref, resultOn(base), claim?.oid ?? null);
     if (sent.elsewhere !== undefined) {
       lines.push(onRemote(sent.elsewhere));
       sentElsewhere = true;
     } else if (!sent.ok) {
+      notTaken = { byRule: sent.notThere === undefined && sent.byRule === true && sent.refused !== undefined };
       lines.push(sent.notThere !== undefined
         ? `The lead's project did not take ${unit}'s result, and ${sent.notThere.address} did not either (${sent.notThere.why}). Do you want me to send it again?`
+        : notTaken.byRule ? resultRefusedByRuleLine(unit, sent.refused!)
         : `The lead's project did not take ${unit}'s result: ${sent.refused ?? "its claim there changed while it was being sent"}. Do you want me to send it again?`);
     }
     else invalidateLiveClaimPayloadCache(pd, unit);
     homeHasIt = sent.ok;
+  }
+  if (notTaken !== null) {
+    try {
+      const chat = resolveWorkflowSelection(pd).sessionId;
+      if (chat) markPersonLinesHeard(pd, chat, [resultWaitsLine(unit), ...(notTaken.byRule ? [resendQuestion(unit)] : [])]);
+    } catch {
+      // No chat known: the next step says and asks as it would.
+    }
   }
   const sentOn = homeHasIt || sentElsewhere;
   withAuditLock(pd, () => {
@@ -9009,9 +9072,12 @@ export function buildClaimNotes(projectDir: string, stateContent: string, sessio
     if (refreshed?.unreached) lines.push("The lead's project could not be reached just now, so news from it may be behind.");
     if (refreshed?.refused) lines.push(newsNotTakenIn("the lead's project"));
     if (home !== null && newStage) noteBuildStageLooked(projectDir, sessionId, atStage);
-    // A take the lead's project did not record then, tried again when the claims were just fetched.
+    // A take the lead's project did not record then, tried again when the claims were just fetched. One recorded
+    // by the lead's address leaves no copy here: its claim is fetched, so this step reads it recorded.
     const standing = home !== null && refreshed?.fetched ? takeStanding(projectDir, build) : null;
-    if (home !== null && standing?.state === "pending") recordTakeHere(projectDir, build, home, standing, false);
+    if (home !== null && standing?.state === "pending" && recordTakeHere(projectDir, build, home, standing, false).ok) {
+      ensureFetchedClaim(projectDir, home, claimRef(home.id8, build.unit));
+    }
     if (home !== null && waits && !refreshed?.unreached) {
       try {
         const cached = cachedClaimsForIdentity(projectDir, { space, intentUuid: build.homeWork, intentId8: idSuffix(build.homeWork) }, false)

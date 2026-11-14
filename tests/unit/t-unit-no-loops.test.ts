@@ -283,7 +283,7 @@ describe("a step that waits on the person, and every way on the round added, nev
     movesOn(alice, ENV, ask, choice(ask, "Send it to the lead"));
   });
 
-  test("the push: a repo the plan did not list goes with it; a result the home did not take is offered again as that", () => {
+  test("the push: a repo the plan did not list goes with it; a result a rule of the lead's host refuses is not offered again in that chat", () => {
     const { home, alice, record } = refundsTaken();
     withTools(alice);
     codeGenerated(alice, record);
@@ -297,12 +297,17 @@ describe("a step that waits on the person, and every way on the round added, nev
     const hostHook = join(home.remote, "hooks", "pre-receive");
     writeFileSync(hostHook, "#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/heads/claim/*) exit 1;; esac; done\n");
     chmodSync(hostHook, 0o755);
-    const push = next(alice, ENV);
+    const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "alice-push" };
+    const push = next(alice, chat);
     expect(push.ask_type, JSON.stringify(push)).toBe("unit-push");
-    const unsent = movesOn(alice, ENV, push, choice(push, "Push"));
-    expect(unsent.ask_type, JSON.stringify(unsent)).toBe("unit-push");
+    // Said once with the push: the step after is the build's end, never the offer again.
+    const end = movesOn(alice, chat, push, choice(push, "Push"));
+    expect(end.ask_type ?? null, JSON.stringify(end)).not.toBe("unit-push");
+    expect(readFileSync(join(record, "aidlc-state.md"), "utf-8")).toContain("- **Unit Push**: unsent");
+    // Once it is let through, the person's own word sends it.
     writeFileSync(hostHook, "#!/bin/sh\nexit 0\n");
-    movesOn(alice, ENV, unsent, choice(unsent, "Send it again"));
+    expect(runPrinted(alice, chat, choice(push, "Push")).status).toBe(0);
+    expect(readFileSync(join(record, "aidlc-state.md"), "utf-8")).toContain("- **Unit Push**: pushed");
   });
 
   test("the team approves its build's last stage: the report says the workflow goes on, and the next step offers the push", () => {

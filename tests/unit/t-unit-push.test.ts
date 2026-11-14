@@ -12,7 +12,7 @@
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { hooksHealthReadDir, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -670,22 +670,58 @@ describe("the push", () => {
     expect(git(hosts["checkout-api"], ["cat-file", "commit", "refunds"])).not.toContain("gpgsig");
   });
 
-  test("a result the home did not take: the push is not counted as gone, and the next step offers it again", () => {
+  test("a result a rule of the lead's host refuses: said once in its words, not offered again in that chat, and sent once it is let through", () => {
     const { home, alice, record } = refundsTaken();
     codeGenerated(alice, record);
     finishBuild(record);
     const hook = join(home.remote, "hooks", "pre-receive");
     writeFileSync(hook, "#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/heads/claim/*) echo 'claims are closed today' >&2; exit 1;; esac; done\n");
     chmodSync(hook, 0o755);
-    const pushed = run(UNIT, ["push"], alice);
+    const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "alice-push" };
+    const pushed = run(UNIT, ["push"], alice, chat);
     expect(pushed.status, pushed.out).toBe(0);
-    expect(String(pushed.json?.notice)).toContain("The lead's project did not take refunds's result:");
+    expect(String(pushed.json?.notice)).toContain(
+      "The lead's project did not take the result of refunds: claims are closed today (pre-receive hook declined). A rule on its host " +
+        "refuses it, so the lead cannot see it yet: ask whoever owns that repository to let your pushes to its claim/ branches through, " +
+        "then ask me to send it again.",
+    );
+    expect(String(pushed.json?.notice)).not.toContain("Do you want me to send it again?");
     expect(readFileSync(join(record, "aidlc-state.md"), "utf-8")).toContain("- **Unit Push**: unsent");
-    const again = next(alice);
+    const after = next(alice, chat);
+    expect(after.ask_type ?? null, JSON.stringify(after)).not.toBe("unit-push");
+    expect(JSON.stringify(after)).not.toContain("has not taken the result of refunds yet");
+    // The words-only step there does not promise a push question next.
+    const words = next(alice, chat, ["--resume", "where were we?"]);
+    expect(String(words.message)).not.toContain("its push is the next step");
+    // Its take is recorded there, so a chat that made no push is asked, as before.
+    const again = next(alice, { ...ENV, AIDLC_SESSION_OVERRIDE: "alice-other" });
     expect(again.ask_type, JSON.stringify(again)).toBe("unit-push");
     expect(again.question).toBe("refunds is pushed, but the lead's project did not take its result just now. Do you want me to send it again?");
     writeFileSync(hook, "#!/bin/sh\nexit 0\n");
-    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    expect(run(UNIT, ["push"], alice, chat).status).toBe(0);
+    expect(readFileSync(join(record, "aidlc-state.md"), "utf-8")).toContain("- **Unit Push**: pushed");
+  });
+
+  test("a result the lead's project could not be reached for, while the code went: offered again at the next step, as ever", () => {
+    const { hosts, home, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    finishBuild(record);
+    // The lead's project goes away while the code is pushed, and comes back after.
+    const away = `${home.remote}.away`;
+    const hook = join(hosts["checkout-api"], "hooks", "pre-receive");
+    writeFileSync(hook, `#!/bin/sh\ncat >/dev/null\n[ -d '${home.remote}' ] && mv '${home.remote}' '${away}'\nexit 0\n`);
+    chmodSync(hook, 0o755);
+    const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "alice-offline" };
+    const pushed = run(UNIT, ["push"], alice, chat);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(existsSync(away), pushed.out).toBe(true);
+    renameSync(away, home.remote);
+    writeFileSync(hook, "#!/bin/sh\nexit 0\n");
+    expect(String(pushed.json?.notice)).toContain("The lead's project did not take refunds's result:");
+    expect(String(pushed.json?.notice)).toContain("Do you want me to send it again?");
+    const again = next(alice, chat);
+    expect(again.ask_type, JSON.stringify(again)).toBe("unit-push");
+    expect(run(UNIT, ["push"], alice, chat).status).toBe(0);
     expect(readFileSync(join(record, "aidlc-state.md"), "utf-8")).toContain("- **Unit Push**: pushed");
   });
 

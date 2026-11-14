@@ -846,7 +846,11 @@ hook's own words, and nothing retries. The result (each repo's branch, base,
 every head pushed, each changed file's blob and patch-id, and the Unit outputs
 the lead's project's later stages read) goes onto the Unit's claim at the lead's project, and
 `UNIT_PUSHED` is recorded; until the lead's project takes it (`Unit Push: unsent`), the
-next step offers to send it again. When the lead's project refuses it and this
+next step offers to send it again. A refusal by a rule of the lead's host (git's
+`[remote rejected]`) is said once, in the host's words, with what to ask its owner for,
+and that chat is not offered the send again; while the take itself is not recorded
+there, the offer waits until a look records it, and the build's end says once per chat
+that the lead's project has not taken the result yet. When the lead's project refuses it and this
 clone pushes to a repo of the team's own, the result goes there (`Unit Push:
 pushed`), said once, and the lead's look takes it in. A repo the Unit changed that the lead's plan
 did not list is added to the build's repos first (`intent add-repo`), said once.

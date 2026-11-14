@@ -668,6 +668,9 @@ import {
   leadWorkAt,
   leadWorkByAddress,
   takeAside,
+  resendQuestion,
+  resultTakeHold,
+  resultWaitsLine,
   sendLeadsApprovedChanges,
   GitWriteRefused,
   earlyBaseMerged,
@@ -9848,17 +9851,15 @@ function unitPushAsk(projectDir: string, stateContent: string | null): AskDirect
   }
   if (!unitPushToOffer(projectDir, stateContent)) return null;
   const unitTool = aidlcToolInvocation("unit");
-  // Someone else's take or the Unit done is on the claim before this take was
-  // recorded: said once (buildClaimNotes), never offered again as a result to
-  // send.
-  if (push === "unsent" && takeAside(projectDir, stateContent)) return null;
   if (push === "unsent") {
+    const held = resendHeld(projectDir, stateContent, unit);
+    if (held === "waits") sayWithStepOnce(projectDir, resultWaitsLine(unit));
+    if (held !== null) return null;
     return {
       kind: "ask",
       ask_type: "unit-push",
       response_route: "command",
-      question: `${unit} is pushed, but the lead's project did not take its result just now. ` +
-        "Do you want me to send it again?",
+      question: resendQuestion(unit),
       choices: [
         { label: "Send it again", detail: "Nothing new is committed; the result goes to the lead's project.", command: `${unitTool} push` },
         { label: "Not now", detail: "The lead sees it once you send it.", command: `${unitTool} push --later` },
@@ -9935,6 +9936,18 @@ function unitPushAsk(projectDir: string, stateContent: string | null): AskDirect
       { label: "Not now", detail: "Nothing is pushed until you want it to be.", command: `${unitTool} push --later` },
     ],
   };
+}
+
+// Why the send again of a result the lead's project did not take is not
+// offered now: "aside", someone else's take or the Unit done is on the claim
+// before this take was recorded (said once by buildClaimNotes); "waits", its
+// take is not recorded there with nowhere else to send (a look records it once
+// the lead's project takes a push from here), or a rule of the lead's host
+// refused it in this chat (the push counted the offer as put); else null.
+function resendHeld(projectDir: string, stateContent: string, unit: string): "aside" | "waits" | null {
+  const hold = resultTakeHold(projectDir, stateContent);
+  if (hold !== null) return hold;
+  return engineSessionId !== undefined && personLineHeard(projectDir, engineSessionId, resendQuestion(unit)) ? "waits" : null;
 }
 
 // A Unit's build whose end still has its push to offer: not pushed and not put
@@ -15367,8 +15380,10 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       // A Unit's build approved and not pushed: its push question is the
       // next step, asked or not in this chat.
       const build = unitBuildOf(stateContent);
+      // A send again held where it cannot go through now (resendHeld) is no push question to come.
+      const pushField = getField(stateContent, UNIT_PUSH_FIELD)?.trim();
       const pushDue = build !== null && buildWaitsForPush(stateContent) && /^- \[x\] code-generation\s/m.test(stateContent) &&
-        getField(stateContent, UNIT_PUSH_FIELD)?.trim() !== "pushed" ? build.unit : undefined;
+        pushField !== "pushed" && !(pushField === "unsent" && resendHeld(pd, stateContent, build.unit) !== null) ? build.unit : undefined;
       emit(leadsWorkElsewhereWords(pd, stateContent, words.id) ??
         reentryReplyDirective(words.id, pd, undo, workNamesHere(pd, selection), activeWorkLabel(stateContent), pushDue));
       return;
