@@ -821,6 +821,25 @@ with what to ask its owner for; until the lead's project takes a push from here 
 each chat hears once at the build's end that the result is not there yet, and you can
 ask for the send any time.
 
+Where the Unit's code is in the workspace's own repository (the repo that holds
+`aidlc/`), its branch starts from the branch the work merges into as your take
+read the plan from (the lead's, on a fork too), fetched, so a clone whose main
+is behind, or still on the branch of a Unit merged before, starts fresh; with
+commits of your own there that the branch does not have yet, it starts where
+you are, and the line names them. Once the code is pushed, AI-DLC's record of
+the build goes with it on the same branch as a second commit made with your own
+git: the build's own folder under `aidlc/spaces/<space>/intents/`, and your
+space's own files while the space is new to git, never the lead's record or
+another build's. Its message is "refunds: AI-DLC's record", or your own
+message with " (AI-DLC's record)" after its first line, so a ticket key or a
+sign-off your code commit carries is on it too. The line then says "AI-DLC's
+record of refunds went with it, so your teammates see where it stands once
+refunds is merged." AI-DLC never pushes the record again to an open pull
+request; a later push of the Unit (a redo) carries it as it is then. When your
+hook or your host refuses the record, the code stays pushed, the branch stays
+where the code's push left it, the line says so once in their words, and the
+record is yours to check in. The lead's merge check reads only the Unit's code.
+
 Open a pull request in each repo your usual way and merge it the way that repo
 merges: a merge commit, a squash or a rebase. The push also sends the result
 back on the Unit's claim: in each repo the branch, every head pushed and each

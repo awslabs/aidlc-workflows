@@ -8547,6 +8547,31 @@ function startRemoteOf(dir: string, remote: string): string {
   }
 }
 
+// Where a Unit's branch on the workspace's own repository starts: the branch
+// its take read the plan from (fetchHomeIntegration, recorded on the claim),
+// fetched again when it is a remote's branch (a lead read by address keeps the
+// take's copy), so the branch, its base and the lead's merge check read one
+// branch, and a fork's clone starts from the lead's. Null when it is not here.
+function takeIntegrationRef(dir: string, claim: UnitClaimView | null): string | null {
+  const ref = claim?.payload.integration_ref ?? "";
+  const tracking = /^refs\/remotes\/([^/]+)\/(.+)$/.exec(ref);
+  if (tracking !== null) git(dir, ["fetch", "-q", tracking[1], tracking[2]]);
+  return ref !== "" && git(dir, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]).ok ? ref : null;
+}
+
+// The branch work merges into on the workspace's own repository, as the take
+// and the share read it (the home's Way of Working line), in the home's space,
+// a build's too; null where no layer names one, and the remote's own answers.
+function homeIntegrationBranch(pd: string): string | null {
+  try {
+    const build = unitBuildOf(readStateFile(pd));
+    const space = build === null ? undefined : build.homeRecord.slice(0, build.homeRecord.indexOf("/"));
+    return affirmedIntegrationBranch(pd, space)?.branch ?? null;
+  } catch {
+    return null;
+  }
+}
+
 // A code repo's integration branch: where its remote's HEAD points.
 function repoIntegration(dir: string, remote: string): string {
   const head = git(dir, ["symbolic-ref", "--quiet", "--short", `refs/remotes/${remote}/HEAD`]).stdout.trim();
@@ -8583,6 +8608,55 @@ export function submoduleOverOwnCode(projectDir: string, unit: string): string |
   const only = intentRepos(projectDir);
   if (only.length !== 1 || !submoduleLeavesProjectRepo(projectDir, only[0]) || isGitRepoDir(repoDir(projectDir, only[0]))) return null;
   return readUnitSourceManifest(projectDir, "code-generation", unit, { recordedRepos: [] }).ok ? only[0] : null;
+}
+
+// AI-DLC's record of the build this workspace holds, as the Unit's pull
+// request carries it: the build's own folder, and its space's own folders
+// outside its works while git has none of that space yet (a team's new space).
+// Never another work's folder, the lead's record, or a path git ignores.
+function buildRecordPaths(pd: string): string[] {
+  const own = relative(pd, activeRecordDir(pd)).split(sep).join("/");
+  const space = own.split("/").slice(0, 3).join("/");
+  if (git(pd, ["ls-files", "--", space]).stdout.trim() !== "") return [own];
+  const works = own.split("/").slice(0, 4).join("/");
+  const folders = readdirSync(join(pd, ...space.split("/")), { withFileTypes: true })
+    .filter((entry) => entry.isDirectory()).map((entry) => `${space}/${entry.name}`).filter((path) => path !== works);
+  const ignored = untrackedIgnored(pd, folders);
+  return [own, ...folders.filter((path) => !ignored.includes(path))];
+}
+
+// The record commit's message: the Unit's own commit message with its first
+// line marked as the record, so a rule the code commit meets (a ticket key, a
+// sign-off) the record meets too; AI-DLC's own when the person gave none.
+function buildRecordMessage(unit: string, given: string | null): string {
+  if (given === null) return `${unit}: AI-DLC's record`;
+  const [subject, ...rest] = given.replace(/\r\n/g, "\n").split("\n");
+  return [`${subject} (AI-DLC's record)`, ...rest].join("\n");
+}
+
+// After the Unit's code is pushed on the workspace's own repository, AI-DLC's
+// record of the build goes with it on the same branch, as a second commit made
+// with the person's own git and pushed the same plain way. A commit or push
+// that does not go leaves the branch where the code's push left it, and the
+// record the person's to check in. Its commit never joins the Unit's result
+// (resultAtTip leaves the record out). The line to say; nothing new to send
+// says nothing.
+function sendBuildRecord(pd: string, remote: string, branch: string, unit: string, given: string | null): { line: string | null; went: boolean } {
+  const notSent = (said: string) => ({ line: `AI-DLC's record of ${unit} did not go with it: ${gitSaid(said).replace(/([^.!?])$/, "$1.")}`, went: false });
+  const paths = buildRecordPaths(pd);
+  const before = git(pd, ["rev-parse", "HEAD"]).stdout.trim();
+  try {
+    commitUnitPaths(pd, paths, {}, unit, "", "the repo", null, { message: buildRecordMessage(unit, given), refused: (said) => fail(said) });
+  } catch (error) {
+    return notSent(errorMessage(error));
+  }
+  const head = git(pd, ["rev-parse", "HEAD"]).stdout.trim();
+  if (head === before) return { line: null, went: false };
+  const pushed = git(pd, ["push", remote, branch]);
+  if (pushed.ok) return { line: `AI-DLC's record of ${unit} went with it, so your teammates see where it stands once ${unit} is merged.`, went: true };
+  git(pd, ["update-ref", `refs/heads/${branch}`, before, head]);
+  git(pd, ["reset", "-q", "--", ...paths]);
+  return notSent(pushRefusal(pushed.stderr));
 }
 
 function pushUnit(args: string[], projectDir?: string): void {
@@ -8675,6 +8749,9 @@ function pushUnit(args: string[], projectDir?: string): void {
   }
   const claim = currentClaim(pd, home.target, ref);
   const label = homeLabelOf(state, build);
+  const dotStart = byRepo.has(".") ? takeIntegrationRef(pd, claim) : null;
+  const integrationOf = (repo: string, dir: string, remote: string): string =>
+    (repo === "." ? dotStart : null) ?? repoIntegration(dir, startRemoteOf(dir, remote));
   // What this Unit sent before keeps each repo's base and heads across pushes:
   // its claim's result, so a push again after a merge still lists the files
   // the Unit changed.
@@ -8829,7 +8906,7 @@ function pushUnit(args: string[], projectDir?: string): void {
     const from = git(dir, ["branch", "--show-current"]).stdout.trim();
     if (from !== branch) {
       const start = startRemoteOf(dir, remote);
-      const integration = repoIntegration(dir, start);
+      const integration = integrationOf(repo, dir, remote);
       // A Unit branch an earlier, refused run made from the integration branch
       // holds nothing of its own yet: it is made again, as on a first push, so
       // their commits since then are never branched past.
@@ -8843,12 +8920,14 @@ function pushUnit(args: string[], projectDir?: string): void {
       if (exists) ({ ok: switched, said } = switchOntoUnitBranch(dir, branch, paths));
       else {
         // From the shared integration branch, fetched, when their working tree
-        // allows; the workspace itself, which holds AI-DLC's record of this
-        // build, a tree that does not allow it, and their own commits holding
-        // the Unit's files start where they are.
+        // allows; the workspace itself from the branch its take read the plan
+        // from when nothing of theirs is left behind (every change on their
+        // branch is in it already). A tree that does not allow it, and their
+        // own commits holding the Unit's files, start where they are.
         if (repo !== ".") git(dir, ["fetch", "-q", start, integration.slice(start.length + 1)]);
         const committedHere = paths.length > 0 && !git(dir, ["diff", "--quiet", integration, "HEAD", "--", ...paths]).ok;
-        if (repo !== "." && !committedHere) switched = git(dir, ["switch", "-q", make, branch, integration]).ok;
+        const leavesNothing = repo !== "." || (dotStart !== null && headInByContent(dir, integration) === true);
+        if (leavesNothing && !committedHere) switched = git(dir, ["switch", "-q", make, branch, integration]).ok;
         if (!switched) {
           const tried = git(dir, ["switch", "-q", make, branch]);
           switched = tried.ok;
@@ -8931,7 +9010,7 @@ function pushUnit(args: string[], projectDir?: string): void {
     }
     const head = git(dir, ["rev-parse", "HEAD"]).stdout.trim();
     const base = earlier.get(repo)?.base ??
-      (git(dir, ["merge-base", "HEAD", repoIntegration(dir, startRemoteOf(dir, remote))]).stdout.trim() || head);
+      (git(dir, ["merge-base", "HEAD", integrationOf(repo, dir, remote)]).stdout.trim() || head);
     const changed = git(dir, ["diff", "--name-only", "--no-renames", base, head, "--", ...paths]).stdout.split(/\r?\n/).filter(Boolean);
     const blobs = blobsAt(dir, head, changed);
     const last = earlier.get(repo)?.heads.at(-1);
@@ -9083,7 +9162,12 @@ function pushUnit(args: string[], projectDir?: string): void {
       }
     }
   }
-  const checkIn = sentOn ? checkInLine(pd) : null;
+  // The build's record as this push leaves it goes with the code on the
+  // workspace's own repository.
+  const dot = planned.find((entry) => entry.repo === ".");
+  const record = dot === undefined ? null : sendBuildRecord(pd, dot.remote, branch, unit, given?.text ?? null);
+  if (record?.line) lines.push(record.line);
+  const checkIn = sentOn && !record?.went ? checkInLine(pd) : null;
   if (checkIn !== null) lines.push(checkIn);
   // Reached the lead's project or the team's own remote, so no line asks
   // anything: the lines ride the step that follows, as the take's carry-on
@@ -9235,7 +9319,8 @@ function resultVerdicts(
     const dir = repo.repo === "." ? pd : repoDir(pd, repo.repo);
     if (!isGitRepoDir(dir)) return { repo: repo.repo, merged: false };
     const repoRemote = repositoryRemote(dir);
-    const integration = repoRemote === null ? "HEAD" : repoIntegration(dir, repoRemote);
+    const own = repo.repo === "." && repoRemote !== null ? homeIntegrationBranch(pd) : null;
+    const integration = repoRemote === null ? "HEAD" : own !== null ? `${repoRemote}/${own}` : repoIntegration(dir, repoRemote);
     // Only the branch the Unit merges into.
     const reached = repoRemote !== null && quietFetch(dir, ["-q", repoRemote, integration.slice(repoRemote.length + 1)]).ok;
     if (repoRemote !== null && !reached) unreached?.push(repo.repo === "." ? repoRemote : repo.repo);

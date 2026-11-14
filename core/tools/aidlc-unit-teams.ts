@@ -1121,8 +1121,13 @@ export function pullRequestHeadRefs(message: string): string[] {
 export function resultAtTip(dir: string, integration: string, result: RepoResult, tip: string): RepoResult | null {
   const head = result.heads.at(-1);
   if (!head || tip === head || !gitIn(dir, ["merge-base", "--is-ancestor", head, tip]).ok) return null;
+  // On the workspace's own repository, AI-DLC's record that went with the
+  // Unit's code (its second commit) is never the Unit's work.
+  const code = (paths: string[]): string[] => result.repo === "." ? paths.filter((path) => !path.startsWith("aidlc/")) : paths;
+  const names = (from: string): string[] => code(gitIn(dir, ["diff", "--name-only", "--no-renames", from, tip]).out.split("\n").filter(Boolean));
+  if (names(head).length === 0) return null;
   const from = gitIn(dir, ["merge-base", tip, integration]).out.trim() || result.base;
-  const changed = gitIn(dir, ["diff", "--name-only", "--no-renames", from, tip]).out.split("\n").filter(Boolean);
+  const changed = names(from);
   const blobs = blobsAt(dir, tip, changed);
   const id = patchIdOf(dir, from, tip, changed);
   return {
