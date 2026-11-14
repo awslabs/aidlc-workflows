@@ -58,4 +58,16 @@ describe("org.md's defaults never speak as the person's project", () => {
     expect(section).toContain("trunk-based development");
     expect(section).toContain("squash-merge");
   });
+
+  // The share question puts this way first when a team wrote none of its own.
+  // Words about pull requests here once read as the project's practice would
+  // send a solo commit onto a branch: the section says what the line is for.
+  test("AI-DLC's own way for changes to reach main is the one line beside it, by pull request, and only sets the share's first offer", () => {
+    const section = wayOfWorking();
+    expect(section).toMatch(/^- \*\*Integration branch\*\*: main\n- \*\*Changes reach main\*\*: by pull request$/m);
+    const words = section.replace(/\s+/g, " ");
+    expect(words).toContain("The second line only sets which way AI-DLC offers first when you share a plan with the teams");
+    expect(words).toContain("by pull request, which is the default when no file says");
+    expect(words).toContain("A commit you ask for still goes where you already are.");
+  });
 });
