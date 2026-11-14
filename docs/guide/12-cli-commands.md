@@ -795,7 +795,11 @@ A change to a record outside the Unit's `construction/<unit>/` folder (an Incept
 artifact such as `contract-summary.md`, say) is still published, but pin will refuse
 that candidate, so publish names the file and says to take it out of the branch,
 change it on main instead, and publish again. Pin and land refuse it too and
-say to take it out in the checkout where the Unit is claimed.
+say to take it out in the checkout where the Unit is claimed. When the branch
+merged another Unit's landing commit by commit and the integration branch has
+that landing squashed (its pull request was squash-merged), publish and pin say
+to merge the integration branch into the Unit's branch and publish again
+instead: main already has those records.
 A claimed checkout keeps its own audit rows (sessions, turns, answers) in a
 local record under the intent record's `.aidlc-engine/audit/`, which AI-DLC's
 `.gitignore` keeps out of commits, and the claim's tracked shard takes only the

@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-unit:claim, subcommand:aidlc-unit:land, subcommand:aidlc-unit:share, subcommand:aidlc-orchestrate:next, function:scopeStampLanded, function:landedNotOnRemote
+// covers: subcommand:aidlc-unit:claim, subcommand:aidlc-unit:land, subcommand:aidlc-unit:pin, subcommand:aidlc-unit:publish, subcommand:aidlc-unit:share, subcommand:aidlc-orchestrate:next, function:scopeStampLanded, function:landedNotOnRemote
 //
 // A team whose integration branch is protected brings a landed Unit's records
 // to it through a pull request: the lead lands, pushes the landing's commits to
@@ -8,11 +8,14 @@
 // Everything that asks whether the Unit's landing reached the integration
 // branch still answers yes: the team's checkout is no longer held to the Unit
 // once it holds the squashed branch, the lead is not offered a push of a
-// landing the remote already has, and a land run again changes nothing.
+// landing the remote already has, a land run again changes nothing, and a
+// Unit branch that took the landing's commits is told, by publish and pin, to
+// merge the squashed main.
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { readFileSync, writeFileSync } from "node:fs";
+import { relative } from "node:path";
 import { seededStateFile } from "../harness/fixtures.ts";
 import {
   cleanupTempDirs,
@@ -20,9 +23,11 @@ import {
   git,
   makeSeed,
   nextDirective,
+  parallelDependencyBody,
   prepareCandidate,
   runMergeTool,
   UNIT,
+  unitProgressRow,
 } from "../harness/team-unit-merge.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -76,6 +81,41 @@ function runGit(dir: string, args: string[]): number {
 
 function handovers(directive: Record<string, unknown>): unknown[] {
   return directive.ask_type === "team-handover" ? (directive.handovers as unknown[]) ?? [] : [];
+}
+
+const SQUASHED_LANDING = 'merged the landing of "alpha" commit by commit, and origin/main has it squashed';
+
+// Alpha landed; the beta team's branch merged alpha's landing as its own
+// commits (from the records branch); then alpha's records pull request was
+// squash-merged. Beta's work is committed and not published.
+function betaHoldingSquashedLanding(): { lead: string; beta: string } {
+  const { seed: lead, remote } = makeSeed(parallelDependencyBody());
+  prepareCandidate(remote, "alpha", "alpha-team");
+  gateAndLand(lead, "alpha");
+  git(lead, ["push", "origin", "HEAD:refs/heads/records/alpha"]);
+  const { checkout: beta } = prepareCandidate(remote, "beta", "beta-team", {
+    afterClaim: (checkout) => {
+      git(checkout, ["fetch", "-q", "origin", "records/alpha"]);
+      git(checkout, ["merge", "-q", "--no-edit", "FETCH_HEAD"]);
+    },
+    publish: false,
+  });
+  squashRecordsPullRequest(lead, remote, "alpha");
+  return { lead, beta };
+}
+
+// The team merges the squashed main into its Unit branch. Plain git: the
+// squashed main and this branch both changed the Unit Progress table since
+// the main they share, so the merge stops on aidlc-state.md. This branch's
+// table already has the landing's rows, so its own side is the resolution.
+function mergeSquashedMain(beta: string): void {
+  git(beta, ["fetch", "-q", "origin"]);
+  expect(runGit(beta, ["merge", "-q", "--no-edit", "origin/main"])).not.toBe(0);
+  const state = relative(beta, seededStateFile(beta));
+  expect(git(beta, ["diff", "--name-only", "--diff-filter=U"])).toBe(state);
+  git(beta, ["checkout", "--ours", "--", state]);
+  git(beta, ["add", "-A"]);
+  git(beta, ["commit", "-qm", "merge the squashed main"]);
 }
 
 describe("a landing whose pull request was squash-merged", () => {
@@ -147,5 +187,40 @@ describe("a landing whose pull request was squash-merged", () => {
     expect(JSON.parse(again.stdout)).toMatchObject({ landed: true, status: "complete", git_commit_oid: mergeOid });
     expect(JSON.parse(again.stdout).next_step).toBeUndefined();
     expect(git(lead, ["rev-parse", "HEAD"])).toBe(head);
+  });
+
+  // (d) A Unit branch that merged another Unit's landing commit by commit
+  // before that landing's pull request was squash-merged: pin reads what the
+  // landing brought as this Unit's own change, and taking those records out
+  // would not do (main has them). Publish and pin both say to merge the
+  // squashed main; pin pins nothing, and once the team has merged and
+  // published again, pin takes it and it lands.
+  test("pin refuses a Unit branch holding the squashed landing's commits and says to merge the squashed main", () => {
+    const { lead, beta } = betaHoldingSquashedLanding();
+    const published = runMergeTool(UNIT, ["publish", "beta"], beta);
+    expect(published.status, published.out).toBe(0);
+    const note = String(JSON.parse(published.stdout).records_outside_unit_tree_note);
+    expect(note).toContain(SQUASHED_LANDING);
+    expect(note).toContain("Merge origin/main into this branch and publish again.");
+    expect(note).not.toContain("git rm");
+    onRemoteMain(lead);
+    const head = git(lead, ["rev-parse", "HEAD"]);
+    const pin = runMergeTool(UNIT, ["pin", "beta"], lead);
+    expect(pin.status).not.toBe(0);
+    const error = String(JSON.parse(pin.out).error);
+    expect(error).toContain("outside claimed Unit record tree");
+    expect(error).toContain(SQUASHED_LANDING);
+    expect(error).toContain(
+      "In the checkout where beta-team claimed beta (not this one), merge origin/main into its branch and " +
+        "publish again; then pin beta again.",
+    );
+    expect(error).not.toContain("git rm");
+    expect(git(lead, ["rev-parse", "HEAD"])).toBe(head);
+    mergeSquashedMain(beta);
+    const again = runMergeTool(UNIT, ["publish", "beta"], beta);
+    expect(again.status, again.out).toBe(0);
+    expect(JSON.parse(again.stdout).records_outside_unit_tree).toBeUndefined();
+    gateAndLand(lead, "beta");
+    expect(unitProgressRow(lead, "beta")).toMatch(/\| \[x\] \|$/);
   });
 });

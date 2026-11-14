@@ -1654,8 +1654,29 @@ function outsideUnitTreePaths(violations: string[]): string[] {
 // tree, so the three cannot drift apart. It starts mid-sentence: publish puts
 // it after "Pin will refuse this candidate:", pin and land after their refusal.
 // Pin and land run in the main checkout, so they name the owner's checkout
-// where publish, run in that checkout, says "this branch".
-function outsideUnitTreeNextStep(unit: string, integrationRef: string, owner?: string): string {
+// where publish, run in that checkout, says "this branch". `squashed` names
+// the Units whose landing the branch merged commit by commit while the
+// integration branch holds it as a squash (landingsSquashedOnIntegration):
+// those records are already there, so taking them out is not the way
+// forward; merging the integration branch is.
+function outsideUnitTreeNextStep(
+  unit: string,
+  integrationRef: string,
+  owner?: string,
+  squashed: string[] = [],
+): string {
+  const integrationName = integrationRef.replace(/^refs\/(remotes|heads)\//, "");
+  if (squashed.length > 0) {
+    const one = squashed.length === 1;
+    const merge = owner === undefined
+      ? `Merge ${integrationName} into this branch and publish again`
+      : `In the checkout where ${owner} claimed ${unit} (not this one), merge ${integrationName} into its ` +
+        `branch and publish again; then pin ${unit} again`;
+    return `the branch merged the landing${one ? "" : "s"} of ` +
+      `${namesInProse(squashed.map((name) => `"${name}"`))} commit by commit, and ${integrationName} has ` +
+      `${one ? "it" : "them"} squashed, so pin reads what ${one ? "it" : "they"} brought as ${unit}'s own ` +
+      `change. ${merge}.`;
+  }
   const where = owner === undefined
     ? "Take these out of this branch"
     : `In the checkout where ${owner} claimed ${unit} (not this one), take these out of its branch`;
@@ -1663,7 +1684,7 @@ function outsideUnitTreeNextStep(unit: string, integrationRef: string, owner?: s
     `construction/${unit}/ and its own audit shard, and a shared record (an Inception artifact ` +
     `such as contract-summary.md, or a stage-level file) is changed on main. ${where} ` +
     "(git rm a file main does not have, or " +
-    `git checkout ${integrationRef.replace(/^refs\/(remotes|heads)\//, "")} -- <path> for one it does), commit, and ` +
+    `git checkout ${integrationName} -- <path> for one it does), commit, and ` +
     "publish again.";
 }
 
@@ -1673,10 +1694,33 @@ function refuseWithNextStep(
   unit: string,
   integrationRef: string,
   owner: string,
+  squashed: () => string[] = () => [],
 ): string {
   if (outsideUnitTreePaths(violations).length === 0) return message;
-  const step = outsideUnitTreeNextStep(unit, integrationRef, owner);
+  const step = outsideUnitTreeNextStep(unit, integrationRef, owner, squashed());
   return `${message} ${step[0].toUpperCase()}${step.slice(1)}`;
+}
+
+// The other Units whose landing this branch merged as the landing's own
+// commits (a merge whose second parent is that Unit's claim commit) while the
+// integration branch holds it as a squash or a rebase of its pull request:
+// the commits are not there, and the landing's record is (landingRecorded).
+// Pin reads what such a landing brought as this Unit's own change.
+function landingsSquashedOnIntegration(
+  projectDir: string,
+  integrationOid: string,
+  headOid: string,
+  unit: string,
+): string[] {
+  const merges = localGit(projectDir, ["rev-list", "--merges", `${integrationOid}..${headOid}`]);
+  const squashed = new Set<string>();
+  for (const merge of merges.ok ? merges.stdout.split(/\r?\n/).filter(Boolean) : []) {
+    const claimed = localGit(projectDir, ["rev-parse", "--verify", "--quiet", `${merge}^2`]);
+    const payload = claimed.ok ? readPayload(projectDir, claimed.stdout.trim(), { localOnly: true }) : null;
+    if (!payload || payload.unit === unit) continue;
+    if (landingRecorded(projectDir, integrationOid, { unit: payload.unit, mergeOid: merge })) squashed.add(payload.unit);
+  }
+  return [...squashed].sort();
 }
 
 // `candidateOid` may be a tree: publish asks before it has a commit to ask about.
@@ -1923,6 +1967,7 @@ function candidateEvidence(
         claim.unit,
         claim.payload.integration_ref,
         claim.owner,
+        () => landingsSquashedOnIntegration(projectDir, liveIntegrationOid, claim.oid, claim.unit),
       ),
     );
   }
@@ -2299,7 +2344,14 @@ function publishUnit(args: string[], projectDir?: string): void {
     ? {
       records_outside_unit_tree: outside,
       records_outside_unit_tree_note:
-        `Pin will refuse this candidate: ${outsideUnitTreeNextStep(unit, publicationIntegrationRef)}`,
+        `Pin will refuse this candidate: ${
+          outsideUnitTreeNextStep(
+            unit,
+            publicationIntegrationRef,
+            undefined,
+            landingsSquashedOnIntegration(pd, integration.oid, headOid, unit),
+          )
+        }`,
     }
     : {};
   if (
