@@ -783,6 +783,15 @@ function pushRefusal(stderr: string): string {
   return (parts.length > 0 ? parts : lines).join(" ");
 }
 
+// Whether the remote refused a push by its own rules (a protected branch, a
+// repository rule, a hook) rather than because the branch moved: git marks
+// that one `[remote rejected]`, where a branch that moved is `[rejected]`
+// (fetch first, non-fast-forward). A push that lost a race for the ref is
+// `[remote rejected]` too, but pulling and trying again does change that.
+function pushRefusedByPolicy(stderr: string): boolean {
+  return /!\s*\[remote rejected\]/.test(stderr) && !CLAIM_RACE_LOST.test(stderr);
+}
+
 // The compare-and-swap: ok when the ref moved from expectedOid to commitOid.
 // A stale lease, or a ref the remote could not lock because another push got
 // there first, is another claimant winning; any other push failure is the
@@ -5195,10 +5204,23 @@ function shareMain(projectDir?: string): void {
   const pushed = git(pd, ["push", remote, `HEAD:refs/heads/${branch}`], { GIT_TERMINAL_PROMPT: "0" });
   if (!pushed.ok) {
     clearTeamHandoverMarks(pd, ["share", "push"]);
-    fail(
-      `${remote} did not take ${branch}: ${pushRefusal(pushed.stderr)}. ` +
-        `${committed > 0 ? "The commit is kept here: " : ""}pull ${branch}, then share again.`,
-    );
+    const said = `${remote} did not take ${branch}: ${pushRefusal(pushed.stderr)}. `;
+    // The remote's rules refuse a direct push, so pulling changes nothing. The
+    // way that works is a branch of the person's own, merged into the
+    // integration branch through the repository's review. The engine knows a
+    // landing reached the remote by finding its commit there (landedNotOnRemote),
+    // so the merge keeps the commits; a squash or a rebase makes new ones.
+    if (pushRefusedByPolicy(pushed.stderr)) {
+      fail(
+        said +
+          `${committed > 0 ? "The commit" : "The work"} is kept here. ${branch} does not take a push from you, ` +
+          `so pulling will not help. Push it to a branch of your own with ` +
+          `\`git push ${remote} HEAD:refs/heads/${branch}-share\`, then merge it into ${branch} through the ` +
+          `repository's own review, as a merge commit, not a squash or a rebase, so the commits reach ${branch}. ` +
+          `Then pull ${branch}.`,
+      );
+    }
+    fail(`${said}${committed > 0 ? "The commit is kept here: " : ""}pull ${branch}, then share again.`);
   }
   noteTeamShared(pd);
   console.log(JSON.stringify({
