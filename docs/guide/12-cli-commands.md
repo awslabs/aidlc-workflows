@@ -324,11 +324,14 @@ engine runs for you — not `/aidlc` flags you type. During Construction, each g
 operation (worktree, swarm, Bolt) targets one repo; the conductor passes
 `--repo <name>` to anchor it, required only when an intent spans more than one
 repo. An intent with no recorded repos is the single-repo default (git runs in the
-workspace/project dir). Team-owned Units currently require that single-repo
-default: work with recorded sibling repos is not asked who builds its Units, and
-the first Construction step says in one line that this session builds them;
-`set-unit-ownership team` refuses with the same line before changing state. See
-[Artifacts Reference](14-artifacts-reference.md).
+workspace/project dir). Work with recorded sibling repos is asked who builds its
+Units, as other work is, when the workspace is a git repository: **Several teams**
+records where the lead's project is, and each team builds a Unit as work of its
+own ([Teams across repos](workshop-mode.md#teams-across-repos)). When the
+workspace is not a git repository, it is not asked: the first Construction step
+says in one line that this session builds the Units and to put the workspace in
+git first, and `set-unit-ownership team` refuses with the same line before
+changing state. See [Artifacts Reference](14-artifacts-reference.md).
 
 ---
 
