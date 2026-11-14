@@ -6165,30 +6165,64 @@ export function buildOnBranchLine(projectDir: string, homeWork: string, claim: U
 
 // The newest branch of this clone, free to switch to, whose record holds a
 // live build of the home's Unit (checked in on a branch of its own for a pull
-// request, the checkout back on main). Local reads only, never a fetch or a
-// switch: null when no such branch has it, or a git call is not ok.
+// request, the checkout back on main). Its own branches first, then the ones
+// it fetched from its remotes, which a fresh clone on another computer has
+// only as <remote>/<branch> and `git switch <branch>` makes its own. Local
+// reads only, never a fetch or a switch: null when no such branch has it, or a
+// git call is not ok.
 function branchWithBuild(projectDir: string, homeWork: string, unit: string): string | null {
   // Globs whatever the person's environment says (aidlc-workspace-doctor's way).
   const env = { GIT_LITERAL_PATHSPECS: "0" };
-  const listed = localGit(projectDir, ["for-each-ref", "--sort=-committerdate", "--format=%(worktreepath)%00%(refname)", "refs/heads/"], env);
-  if (!listed.ok) return null;
-  // A branch checked out here or in another worktree is not one to switch to.
-  const refs = listed.stdout.split(/\r?\n/).map((line) => line.split("\0"))
-    .filter(([worktree, ref]) => worktree === "" && ref?.startsWith("refs/heads/")).map(([, ref]) => ref);
+  const listed = localGit(projectDir, ["for-each-ref", "--sort=-committerdate", "--format=%(worktreepath)%00%(refname)", "refs/heads/",
+    "refs/remotes/"], env);
+  const remotes = localGit(projectDir, ["remote"], env);
+  if (!listed.ok || !remotes.ok) return null;
+  const rows = listed.stdout.split(/\r?\n/).filter(Boolean).map((line) => line.split("\0"));
+  const ownNames = new Set(rows.flatMap(([, ref]) => ref?.startsWith("refs/heads/") ? [ref.slice("refs/heads/".length)] : []));
+  const prefixes = remotes.stdout.split(/\r?\n/).filter(Boolean).map((remote) => `refs/remotes/${remote}/`)
+    .sort((a, b) => b.length - a.length);
+  // Each ref read, and the name `git switch` takes to it (null for none).
+  const names = new Map<string, string | null>();
+  const [own, shadowed, fetched]: string[][] = [[], [], []];
+  for (const [worktree, ref] of rows) {
+    if (ref === undefined) continue;
+    if (ref.startsWith("refs/heads/")) {
+      // A branch checked out here or in another worktree is not one to switch to.
+      if (worktree === "") {
+        own.push(ref);
+        names.set(ref, ref.slice("refs/heads/".length));
+      }
+      continue;
+    }
+    // A fetched branch by its remote's name for it, the longest remote name
+    // first, never AI-DLC's claims or the remote's HEAD. One this clone has a
+    // branch of its own by names nothing (the switch goes to its own), and is
+    // read before the rest: once the record's pull request merged, main holds
+    // the build, and so does every branch cut from it since.
+    const prefix = prefixes.find((start) => ref.startsWith(start));
+    const name = prefix === undefined ? "" : ref.slice(prefix.length);
+    if (name === "" || name === "HEAD" || name.startsWith("claim/")) continue;
+    (ownNames.has(name) ? shadowed : fetched).push(ref);
+    names.set(ref, ownNames.has(name) ? null : name);
+  }
   const field = `^- \\*\\*${UNIT_BUILD_FIELD}\\*\\*:[[:blank:]]*${unit.replaceAll(".", "\\.")}[[:space:]]*$`;
-  // Newest branch first, a hundred a call so no command line runs too long on Windows.
-  for (let at = 0; at < refs.length; at += 100) {
-    const found = localGit(projectDir, ["grep", "--no-color", "-z", "-l", "-E", "-e", field, ...refs.slice(at, at + 100), "--",
-      "aidlc/spaces/*/intents/*/aidlc-state.md"], env);
-    if (!found.ok && found.code === 1) continue;
-    if (!found.ok) return null;
-    for (const hit of found.stdout.split("\0").filter(Boolean)) {
-      const ref = hit.slice(0, hit.indexOf(":"));
-      const shown = localGit(projectDir, ["show", `${ref}:./${hit.slice(ref.length + 1)}`], env);
-      if (!shown.ok) return null;
-      const build = liveBuildOf(shown.stdout);
-      if (build === null || !isBuildOfUnit(build, homeWork, unit)) continue;
-      return ref.slice("refs/heads/".length);
+  // Newest branch first, a hundred a call so no command line runs too long on
+  // Windows; a fetched branch never shares a call with this clone's own, so
+  // one git cannot read (a partial clone's) loses no hint of theirs.
+  for (const refs of [own, shadowed, fetched]) {
+    for (let at = 0; at < refs.length; at += 100) {
+      const found = localGit(projectDir, ["grep", "--no-color", "-z", "-l", "-E", "-e", field, ...refs.slice(at, at + 100), "--",
+        "aidlc/spaces/*/intents/*/aidlc-state.md"], env);
+      if (!found.ok && found.code === 1) continue;
+      if (!found.ok) return null;
+      for (const hit of found.stdout.split("\0").filter(Boolean)) {
+        const ref = hit.slice(0, hit.indexOf(":"));
+        const shown = localGit(projectDir, ["show", `${ref}:./${hit.slice(ref.length + 1)}`], env);
+        if (!shown.ok) return null;
+        const build = liveBuildOf(shown.stdout);
+        if (build === null || !isBuildOfUnit(build, homeWork, unit)) continue;
+        return names.get(ref) ?? null;
+      }
     }
   }
   return null;

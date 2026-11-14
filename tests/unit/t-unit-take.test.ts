@@ -1002,7 +1002,7 @@ describe("a Unit someone holds is not taken again", () => {
 
   // The GitHub re-run's case 6b: back on main while the record's pull request
   // was open, the teammate heard nothing after the lead recorded the merge.
-  test("back on main with their record on a branch of its own, the person hears their merge once, and a teammate never", () => {
+  test("back on main with their record on a branch of its own, the person hears their merge once on each computer, and a teammate never", () => {
     const { hosts, home, alice, record } = refundsTaken();
     codeGenerated(alice, record);
     finishBuild(record);
@@ -1015,6 +1015,8 @@ describe("a Unit someone holds is not taken again", () => {
     // A teammate holding alice's record branch, cloned before the merge, so her own look is the one that brings it.
     const bea = cloneOf(home.remote, "bea");
     git(bea, ["branch", "-q", "records/refunds", "origin/records/refunds"]);
+    // Her other computer, with the record branch only as the clone fetched it.
+    const desk = cloneOf(home.remote, "alice");
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
     mergeOnHost(hosts.billing, "refunds", "squash");
     git(home.dir, ["fetch", "-q", "origin"]);
@@ -1028,6 +1030,8 @@ describe("a Unit someone holds is not taken again", () => {
     git(alice, ["switch", "-q", "records/refunds"]);
     expect(nextSaying(alice, chatOf("alice-on-record")).said).not.toContain("is merged.");
     expect(nextSaying(bea, chatOf("bea")).said).not.toContain("is merged.");
+    expect(nextSaying(desk, chatOf("alice-desk")).said).toContain("Your refunds is merged.");
+    expect(nextSaying(desk, chatOf("alice-desk-later")).said).not.toContain("is merged.");
   });
 
   test("a teammate's take whose build is on a local branch here is still said as theirs", () => {
@@ -1049,6 +1053,88 @@ describe("a Unit someone holds is not taken again", () => {
     const taken = take(bea, "refunds");
     expect(taken.status).not.toBe(0);
     expect(taken.out).toContain("refunds is already taken: ann builds it.");
+  });
+
+  // A second computer: a fresh clone holds the person's record branch only as
+  // the remote's, fetched with the clone, while its pull request is open.
+  test("on another computer, their build checked in on a branch the clone has only from its remote is named, never as taken", () => {
+    const home = makeHome();
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    asLeadsOwnCheckout(home.dir);
+    commitAll(home.dir, "teams");
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const bea = cloneOf(home.remote, "bea");
+    expect(take(bea, "refunds").status).toBe(0);
+    git(bea, ["switch", "-q", "-c", "records/refunds"]);
+    commitAll(bea, "refunds record");
+    git(bea, ["push", "-q", "-u", "origin", "records/refunds"]);
+    git(bea, ["switch", "-q", "main"]);
+    const line = "Your build of refunds is on branch records/refunds: `git switch records/refunds` to carry it on.";
+    // Her other computer under her git name, and one under another name with her email.
+    const desk = cloneOf(home.remote, "bea");
+    const laptop = cloneOf(home.remote, "bea-laptop");
+    git(laptop, ["config", "user.email", "bea@example.test"]);
+    for (const clone of [desk, laptop]) {
+      const ask = next(clone);
+      expect(String(ask.question ?? ask.narration), JSON.stringify(ask).slice(0, 800)).toContain(line);
+      expect(JSON.stringify(ask)).not.toContain("refunds (by bea)");
+      const again = take(clone, "refunds");
+      expect(again.status).not.toBe(0);
+      expect(again.out).toContain(line);
+      expect(again.out).not.toContain("already taken");
+    }
+    // The way on is real: git makes the branch from the fetched one, and there the build is offered.
+    git(desk, ["switch", "-q", "records/refunds"]);
+    const there = next(desk);
+    expect(JSON.stringify(there)).not.toContain("Your build of refunds");
+    expect((there.choices as Array<{ label: string }>).map((choice) => choice.label)).toContain("Carry on refunds");
+    // Her first computer reads it as before; another person reads who has it.
+    expect(String(next(bea).question)).toContain(line);
+    const bob = cloneOf(home.remote, "bob");
+    expect(String(next(bob).question)).toContain("refunds (by bea)");
+    const taken = take(bob, "refunds");
+    expect(taken.status).not.toBe(0);
+    expect(taken.out).toContain("refunds is already taken: bea builds it.");
+  });
+
+  test("a branch fetched from the remote that holds no build of the Unit names none, nor one cut from main after the record merged", () => {
+    const home = makeHome();
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    asLeadsOwnCheckout(home.dir);
+    commitAll(home.dir, "teams");
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const bea = cloneOf(home.remote, "bea");
+    expect(take(bea, "refunds").status).toBe(0);
+    const pushNotes = (dir: string, branch: string) => {
+      git(dir, ["switch", "-q", "-c", branch, "origin/main"]);
+      writeFileSync(join(dir, `${branch}.md`), "Notes.\n");
+      git(dir, ["add", `${branch}.md`]);
+      git(dir, ["commit", "-q", "-m", branch]);
+      git(dir, ["push", "-q", "-u", "origin", branch]);
+    };
+    pushNotes(bea, "notes");
+    git(bea, ["switch", "-q", "main"]);
+    const desk = cloneOf(home.remote, "bea");
+    const saysTaken = () => {
+      const ask = next(desk);
+      expect(String(ask.question ?? ask.narration), JSON.stringify(ask).slice(0, 800)).toContain("refunds (by bea)");
+      expect(JSON.stringify(ask)).not.toContain("Your build of refunds");
+      const taken = take(desk, "refunds");
+      expect(taken.status).not.toBe(0);
+      expect(taken.out).toContain("refunds is already taken: bea builds it.");
+    };
+    saysTaken();
+    // Her record squash-merged on the host and its branch deleted; a teammate's
+    // branch cut from main since holds her build too. Her clone fetches both
+    // and merges neither: no branch is named as hers.
+    git(bea, ["switch", "-q", "-c", "records/refunds"]);
+    commitAll(bea, "refunds record");
+    git(bea, ["push", "-q", "-u", "origin", "records/refunds"]);
+    mergeOnHost(home.remote, "records/refunds", "squash");
+    git(bea, ["push", "-q", "origin", "--delete", "records/refunds"]);
+    pushNotes(cloneOf(home.remote, "bob"), "bob-notes");
+    git(desk, ["fetch", "-q", "origin"]);
+    saysTaken();
   });
 });
 

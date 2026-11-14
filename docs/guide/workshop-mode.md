@@ -934,7 +934,8 @@ working on another branch is told the checkout is not on main, with the same way
 on. A team's record pushed on a branch whose pull request is open reads
 "aidlc/ is pushed on <branch>; your teammates see it once it is in main.", and
 status shows `Checked in:     pushed on <branch>, not in main yet`.
-Back on main before that pull request merges, the take question names your
+Back on main before that pull request merges, or in a fresh clone on another
+computer, from the branch it fetched, the take question names your
 build: "Your build of <unit> is on branch <branch>: `git switch <branch>` to
 carry it on." A team that keeps AI-DLC's records off main says so in Practices
 Discovery (for example "We keep AI-DLC's records on a branch called records"):
