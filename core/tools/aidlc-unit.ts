@@ -123,7 +123,9 @@ import {
   sourceClaimCovers,
   sourcePathKey,
   type SourceClaimModel,
+  classifyStateVersion,
 } from "./aidlc-lib.js";
+import { newerStateStep } from "./aidlc-state-upgrade.ts";
 import {
   planApprovalPromptSha256,
   parseTestingContract,
@@ -211,6 +213,13 @@ function localGit(
 
 function fail(message: string): never {
   throw new Error(message);
+}
+
+// Work a newer AI-DLC wrote is never claimed or released from here: the person
+// hears the step that carries it on (newerStateStep), before anything is written.
+function refuseNewerWork(projectDir: string, state: string): void {
+  const verdict = classifyStateVersion(state);
+  if (verdict.kind === "future") fail(newerStateStep(projectDir, verdict.version));
 }
 
 export interface UnitClaimPayload {
@@ -4443,6 +4452,7 @@ function claimUnit(args: string[], projectDir?: string): void {
     spend = read.spend;
   }
   const state = readStateFile(pd);
+  refuseNewerWork(pd, state);
   if (!isTeamUnitOwnership(state)) fail("Unit claims require Unit Ownership: team.");
   const identity = activeIdentity(pd);
   validateClaimRefUnit(identity.intentId8, unit);
@@ -4619,6 +4629,7 @@ function releaseUnit(args: string[], projectDir?: string): void {
   const unitError = validateUnitName(unit);
   if (unitError) fail(unitError);
   const pd = resolveProjectDir(projectDir);
+  refuseNewerWork(pd, readStateFile(pd));
   if (readApplicableTeamUnitScopeStamp(pd)) {
     fail("release must run from an unscoped checkout.");
   }
