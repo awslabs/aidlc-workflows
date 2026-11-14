@@ -49,6 +49,10 @@ const UNITS = ["refunds", "checkout-ui", "reporting"];
 const RHYTHM_OFFER = "Each team will approve its Unit after every stage. Do you want them to approve once at the end of " +
   "each Unit instead? I'd keep after every stage, so a wrong turn is caught at the stage where it happens.";
 
+// Said once, last, on the lead's first share of team work that an older
+// AI-DLC stops at (State Version 9).
+const TEAMMATES = "Teammates need AI-DLC 2.12 or newer; each is offered the update the first time they open this work.";
+
 type Offer = { question: string; choices: Array<{ label: string; detail?: string; command?: string; recommended?: boolean }> };
 
 const field = (content: string, name: string) => new RegExp(`^- \\*\\*${name}\\*\\*: ?(.*)$`, "m").exec(content)?.[1]?.trim();
@@ -197,11 +201,11 @@ describe("after choosing teams the plan goes to them the way main's share questi
       .toBe("Pushes main, and the note that refunds and checkout-ui are built here, to origin; it never overwrites what a team pushed.");
     const sharedTwo = run(UNIT, ["share", "--plan"], two.dir);
     expect(sharedTwo.status, sharedTwo.out).toBe(0);
-    expect(sharedTwo.json?.notice).toBe("Pushed main, and the note that refunds and checkout-ui are built here, to origin.");
+    expect(sharedTwo.json?.notice).toBe(`Pushed main, and the note that refunds and checkout-ui are built here, to origin. ${TEAMMATES}`);
     // A share with no Unit built here says nothing of a note.
     const sharedPlain = run(UNIT, ["share", "--plan"], plain.dir);
     expect(sharedPlain.status, sharedPlain.out).toBe(0);
-    expect(sharedPlain.json?.notice).toBeUndefined();
+    expect(sharedPlain.json?.notice).toBe(TEAMMATES);
   });
 
   test("Share puts the plan on the home's remote, where a teammate's clone takes its Unit", () => {
@@ -282,7 +286,7 @@ describe("the plan's share fits the team's own git: a protected main, a branch o
     const before = git(home.remote, ["rev-parse", "main"]);
     const shared = run(UNIT, ["share", "--plan"], home.dir);
     expect(shared.status, shared.out).toBe(0);
-    expect(shared.json).toMatchObject({ shared: false, notice: NOT_SHARED });
+    expect(shared.json).toMatchObject({ shared: false, notice: `${NOT_SHARED} ${TEAMMATES}` });
     expect(git(home.remote, ["rev-parse", "main"])).toBe(before);
     expect(git(home.dir, ["status", "--porcelain", "--", "aidlc"])).toBe("");
     expect(git(home.dir, ["log", "-1", "--format=%s"])).toBe("Share the plan with the teams");
@@ -309,7 +313,7 @@ describe("the plan's share fits the team's own git: a protected main, a branch o
     // share its mark keeps it from being put again, so the board comes next.
     if (options.answer) expect(isShare(next(home.dir))).toBe(true);
     mainTakesNoDirectPush(home.remote);
-    expect(run(UNIT, ["share", "--plan"], home.dir).json?.notice).toBe(NOT_SHARED);
+    expect(run(UNIT, ["share", "--plan"], home.dir).json?.notice).toBe(`${NOT_SHARED} ${TEAMMATES}`);
     git(home.dir, ["push", "-q", "origin", "main:refs/heads/plan-checkout"]);
     // A commit of the lead's own after the push, which origin's main never gets.
     if (options.ownCommit) {
@@ -917,6 +921,8 @@ describe("the plan's share fits the team's own git: a protected main, a branch o
       const shared = run(UNIT, args, home.dir);
       expect(shared.status, shared.out).toBe(0);
       expect(shared.json, args.join(" ")).toMatchObject({ shared: true, remote: "origin", branch: "main" });
+      // Main's own team flow (State Version 8) never hears what teammates need.
+      expect(shared.json?.notice, args.join(" ")).toBe(args.length === 2 ? TEAMMATES : undefined);
       expect(git(home.dir, ["symbolic-ref", "HEAD"])).toBe("refs/heads/main");
       expect(git(home.remote, ["rev-parse", "main"])).toBe(git(home.dir, ["rev-parse", "HEAD"]));
       expect(git(home.dir, ["log", "-1", "--format=%s"])).toBe("Share the plan with the teams");
@@ -924,6 +930,33 @@ describe("the plan's share fits the team's own git: a protected main, a branch o
       expect(git(home.dir, ["status", "--porcelain", "--", "aidlc"])).toBe("");
       expect(JSON.stringify(next(home.dir))).not.toContain("own branch");
     }
+  });
+
+  // An older AI-DLC stops at this work (State Version 9), so the lead hears
+  // once, with the first share that reaches the host, what teammates need.
+  test("the lead's first share of team work says once what teammates need, on whichever way it goes first", () => {
+    // Pushed to main: said; a later share here: not again.
+    const pushed = makeHome();
+    chooseTeams(pushed.dir);
+    expect(run(UNIT, ["share", "--plan"], pushed.dir).json?.notice).toBe(TEAMMATES);
+    const again = run(UNIT, ["share", "--plan"], pushed.dir);
+    expect(again.status, again.out).toBe(0);
+    expect(again.out).not.toContain(TEAMMATES);
+    // On its own branch for a pull request: said last.
+    const byBranch = makeHome();
+    chooseTeams(byBranch.dir);
+    const onBranch = run(UNIT, ["share", "--branch", "--plan"], byBranch.dir);
+    expect(onBranch.status, onBranch.out).toBe(0);
+    expect(onBranch.json?.notice).toBe(`${onItsBranch(PLAN_BRANCH)} Get it merged your usual way. ${TEAMMATES}`);
+    // Refused by the host's rule: said there, and not again when the plan then
+    // goes on its own branch.
+    const refused = makeHome();
+    chooseTeams(refused.dir);
+    const offer = refusedThenOffered(refused.dir, refused.remote, ["share", "--plan"], chatOf("teammates"));
+    const done = runPrinted(commandOf(offer, "Put it on its own branch"), refused.dir);
+    expect(done.status, done.out).toBe(0);
+    expect(done.out).toContain(onItsBranch(PLAN_BRANCH));
+    expect(done.out).not.toContain(TEAMMATES);
   });
 
   test("a main the person had moved on with a commit of their own: the refused share keeps today's line and its commit on main, and makes no branch", () => {
@@ -1369,7 +1402,7 @@ describe("the lead's word builds a Unit here: assign --here", () => {
     expect(refs()).toBe(before);
     const shared = run(UNIT, ["share", "--plan"], home.dir);
     expect(shared.status, shared.out).toBe(0);
-    expect(shared.json?.notice).toBe("Pushed main, and the note that refunds is built here, to origin.");
+    expect(shared.json?.notice).toBe(`Pushed main, and the note that refunds is built here, to origin. ${TEAMMATES}`);
     expect(git(home.remote, ["rev-parse", "main"])).toBe(git(home.dir, ["rev-parse", "HEAD"]));
     expect(claimPayload(home.remote, id8, "refunds")).toMatchObject({ status: "claimed", owner: "default", taken_by: "lee" });
     expect(claimPayload(home.remote, id8, "checkout-ui")).toBeNull();

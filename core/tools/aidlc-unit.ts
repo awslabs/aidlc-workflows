@@ -170,7 +170,7 @@ import {
   workspaceSourceListing,
   type WorkspaceSourceListing,
 } from "./aidlc-lib.js";
-import { classifyStateVersion, newerStateStep, recordHomeLocation } from "./aidlc-state-upgrade.ts";
+import { classifyStateVersion, newerStateRelease, newerStateStep, recordHomeLocation, TEAM_STATE_VERSION } from "./aidlc-state-upgrade.ts";
 import { ownRemoteAmong } from "./aidlc-unit-holders.ts";
 import {
   type Amendment,
@@ -5505,6 +5505,16 @@ export function teamSharedHere(projectDir: string): boolean {
   return engineAskMark(projectDir, TEAM_SHARED) !== null;
 }
 
+// What the lead's first share of team work an older AI-DLC stops at (the team
+// version) says last, once: the endings that reach the host note the share.
+function teammatesNeedLine(projectDir: string): string | null {
+  if (teamSharedHere(projectDir)) return null;
+  const verdict = classifyStateVersion(readStateFile(projectDir));
+  return verdict.kind === "ok" && verdict.version === TEAM_STATE_VERSION
+    ? `Teammates need ${newerStateRelease(TEAM_STATE_VERSION)}; each is offered the update the first time they open this work.`
+    : null;
+}
+
 // A hand-over that did not happen (a commit or a push refused) is due again.
 function clearTeamHandoverMarks(projectDir: string, kinds: readonly string[]): void {
   const root = recordDir(projectDir);
@@ -6021,7 +6031,7 @@ export function planWaitLine(wait: PlanWait, branch: string): string | null {
 // back to where it left the remote's, each a compare-and-swap. The index and
 // the files are never touched. A branch the host does not take is deleted
 // again, so nothing changed. False when there is nothing to move.
-function putPlanOnItsBranch(pd: string, remote: string, branch: string, madeNow: string | null, planOnly: boolean): boolean {
+function putPlanOnItsBranch(pd: string, remote: string, branch: string, madeNow: string | null, planOnly: boolean, needs: string | null): boolean {
   const into = `refs/remotes/${remote}/${branch}`;
   // Not done: main's share comes before a Unit starts here, so its offers are
   // due again, never a build here (as after a refused push).
@@ -6072,6 +6082,7 @@ function putPlanOnItsBranch(pd: string, remote: string, branch: string, madeNow:
       `The plan is on its own branch, ${plan.name}, pushed to ${remote}${sent} and your checkout is on it; ${branch} is as it was.`,
       words === "" ? "Get it merged your usual way." : hostSaysLine(null, words),
       ...claims.lines,
+      ...(needs === null ? [] : [needs]),
     ].join(" "),
     step: "Tell the person in plain words what it reports, then end your turn.",
   }));
@@ -6502,6 +6513,7 @@ function shareMain(args: string[], projectDir?: string): void {
   // On a branch of the person's own, the share goes on to commit AI-DLC's
   // record there and pushes nothing (below).
   if (refused !== null && refused.off === undefined) fail(refused.reason);
+  const needs = teammatesNeedLine(pd);
   const planOnly = flags.has("plan");
   const given = givenCommitMessage(pd, args, "share");
   const again = `${aidlcInvocation()} unit share${flags.has("branch") ? " --branch" : ""}${planOnly ? " --plan" : ""}` +
@@ -6594,7 +6606,7 @@ function shareMain(args: string[], projectDir?: string): void {
     }));
     return;
   }
-  if (flags.has("branch") && putPlanOnItsBranch(pd, remote, branch, madeNow, planOnly)) {
+  if (flags.has("branch") && putPlanOnItsBranch(pd, remote, branch, madeNow, planOnly, needs)) {
     given?.spend();
     return;
   }
@@ -6622,7 +6634,7 @@ function shareMain(args: string[], projectDir?: string): void {
     given?.spend();
     console.log(JSON.stringify({
       shared: false,
-      notice: `${remote} takes no direct push to ${branch} (${pushRefusal(pushed.stderr)}), so the plan is not shared yet.`,
+      notice: `${remote} takes no direct push to ${branch} (${pushRefusal(pushed.stderr)}), so the plan is not shared yet.${needs === null ? "" : ` ${needs}`}`,
       step: `Tell the person in plain words what it reports, then run \`${aidlcToolInvocation("orchestrate")} next\` and follow what it returns.`,
     }));
     return;
@@ -6640,6 +6652,7 @@ function shareMain(args: string[], projectDir?: string): void {
   const notice = [
     ...(claims.sent.length > 0 ? [`Pushed ${branch}, and ${builtHereNote(claims.sent)}, to ${remote}.`] : []),
     ...claims.lines,
+    ...(needs === null ? [] : [needs]),
   ];
   console.log(JSON.stringify({
     shared: true,
