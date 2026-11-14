@@ -167,6 +167,7 @@ import {
   ORCHESTRATOR_LAUNCHER_OPTIONS,
   readOrchestratorLauncherOptions,
   REQUEST_TEXT_DIR,
+  REQUEST_TEXT_DIRS,
   tailText,
   pendingPersonLines,
   resolveWorkflowSelection,
@@ -566,7 +567,7 @@ function isGuardAdmittedRecordWrite(projectDir: string, normalizedPath: string):
     if (same(memoryFilePath(projectDir, "construction", "code-generation")) || same(composerProposalPath(projectDir))) {
       return true;
     }
-    if (dirname(path) === normalizeDriveLetter(resolve(join(projectDir, REQUEST_TEXT_DIR)))) return true;
+    if (REQUEST_TEXT_DIRS.some((dir) => dirname(path) === normalizeDriveLetter(resolve(join(projectDir, dir))))) return true;
     return ENGINE_TEXT_DIRS.some((dir) => {
       const inside = relative(normalizeDriveLetter(resolve(join(docsRoot(projectDir), dir))), path);
       return inside !== "" && !inside.startsWith("..") && !isAbsolute(inside);

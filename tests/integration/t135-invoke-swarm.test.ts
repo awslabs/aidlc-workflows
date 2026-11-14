@@ -268,7 +268,7 @@ function seedRefereeProject(units: string[]): string {
     join(proj, ".gitignore"),
     [
       "aidlc/active-space",
-      "aidlc/.aidlc-clone-id",
+      "aidlc/.aidlc-engine/clone-id",
       "aidlc/spaces/*/intents/active-intent",
       "aidlc/spaces/*/intents/*/runtime-graph.json",
       "aidlc/spaces/*/intents/*/.aidlc-*",

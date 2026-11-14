@@ -315,6 +315,9 @@ function makeProject(withState: boolean): string {
     "aidlc-guard-operation.ts",
     "aidlc-reply-reader.ts",
     "aidlc-audit.ts",
+    "aidlc-workspace-manifest.ts",
+    "aidlc-unit-teams.ts",
+    "aidlc-workspace-repos.ts",
   ]) {
     copyFileSync(join(SRC_TOOLS, t), join(proj, ".claude", "tools", t));
   }
@@ -325,7 +328,8 @@ function makeProject(withState: boolean): string {
   for (const h of ["aidlc-write-audit-log.ts", "aidlc-rebuild-stage-graph.ts"]) {
     copyFileSync(join(SRC_HOOKS, h), join(proj, ".claude", "hooks", h));
   }
-  writeFileSync(join(proj, "aidlc", ".aidlc-clone-id"), `${PINNED_CLONE_ID}\n`, "utf-8");
+  mkdirSync(join(proj, "aidlc", ".aidlc-engine"), { recursive: true });
+  writeFileSync(join(proj, "aidlc", ".aidlc-engine", "clone-id"), `${PINNED_CLONE_ID}\n`, "utf-8");
   if (withState) {
     // State into the record so the active-intent cursor resolves → the hooks
     // anchor under the record (docsRoot/auditFilePath/runtimeGraphPath).

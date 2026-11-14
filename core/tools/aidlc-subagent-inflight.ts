@@ -11,7 +11,7 @@ import { attemptEventDefinitelyBefore, auditBlockField, type AuditShardEvent, se
 // aidlc-lib.ts); an entry keeps the one in force when its agent was sent.
 export type AuthorityCover = "grant" | "instruction" | "none";
 
-// `<projectDir>/aidlc/.aidlc-sessions/subagent-inflight.json`: the
+// `<projectDir>/aidlc/.aidlc-engine/sessions/subagent-inflight.json`: the
 // workspace-level background dispatch ledger, in the git-ignored sessions
 // folder so a `git add -A` while a helper runs cannot commit it. Entries are
 // session-scoped and reference-counted so overlapping workers cannot clear or

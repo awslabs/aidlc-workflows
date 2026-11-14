@@ -15,8 +15,8 @@
 //   - Codex has no include: the engine hands each step its rules.
 //
 // Every include but Kiro IDE's (kiroIdeSteering reads the memory files
-// themselves) names ONE fixed, git-ignored location, aidlc/active-memory/
-// (ACTIVE_MEMORY_DIR): a copy of the active space's memory files that the
+// themselves) names ONE fixed, git-ignored location,
+// aidlc/.aidlc-engine/active-memory/ (ACTIVE_MEMORY_DIR): a copy of the active space's memory files that the
 // engine refreshes (refreshActiveMemory) at session start, on a space switch,
 // when a specialist is dispatched, and with each step whose rules
 // it sends in full. So a space switch changes no tracked file: the committed
@@ -27,12 +27,13 @@
 // directly and never needs the copy.
 
 import { spawnSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync } from "node:fs";
 import { basename, dirname, join, relative, sep } from "node:path";
 import {
   assertProjectionPathHasNoSymlinks,
   jsonEntriesIsSafe,
   managedBlockIsSafe,
+  managedBlockMarkers,
   mergeBlock,
   mergeJsonEntries,
   type ProjectionDescriptor,
@@ -43,7 +44,7 @@ import {
   unionBlocks,
 } from "./aidlc-distribution.ts";
 import { activeSpace, sessionsDir, writeFileAtomic } from "./aidlc-lib.ts";
-import { discoverProjectHarnesses, runtimeHarnessName } from "./aidlc-runtime-paths.ts";
+import { discoverProjectHarnesses, ensureWorkspaceEngineFolder, runtimeHarnessName } from "./aidlc-runtime-paths.ts";
 
 /** Workspace-relative POSIX memory path for a space: `aidlc/spaces/<space>/memory`.
  *  POSIX separators — these strings live in include files read identically on
@@ -241,10 +242,38 @@ export function trackedKiroIdeSteeringAsk(projectDir: string): string {
 
 /** Where the harness includes read the active space's method from: a copy of
  *  `aidlc/spaces/<space>/memory/`, git-ignored and refreshed by the engine. */
-export const ACTIVE_MEMORY_DIR = "aidlc/active-memory";
+export const ACTIVE_MEMORY_DIR = "aidlc/.aidlc-engine/active-memory";
+/** Where an earlier release's includes read it. Right after `aidlc update`, a
+ *  chat already open (no session start yet) runs this release against those
+ *  includes, so the copy is written there too until the refresh re-points them. */
+export const EARLIER_ACTIVE_MEMORY_DIR = "aidlc/active-memory";
 
-function activeMemoryCopyDir(projectDir: string): string {
-  return join(projectDir, ...ACTIVE_MEMORY_DIR.split("/"));
+// The file each harness's include is in, as AI-DLC ships it (opencode.json is
+// looked up as its integration target).
+const INCLUDE_FILES = [".claude/rules/aidlc.md", ".kiro/agents/aidlc.json", "AGENTS.md", ".cursor/rules/aidlc.mdc"];
+
+/** Each copy folder the project's installed includes name, by their text:
+ *  this release's, an earlier release's, or both while one harness is
+ *  refreshed and another is not; this release's when none names either. */
+export function activeMemoryCopyDirs(projectDir: string): string[] {
+  const texts = [...INCLUDE_FILES, rootIntegrationTarget(projectDir, "opencode.json")]
+    .map((rel) => readSafe(join(projectDir, rel)) ?? "");
+  const named = [ACTIVE_MEMORY_DIR, EARLIER_ACTIVE_MEMORY_DIR]
+    .filter((dir) => texts.some((text) => text.includes(`${dir}/`)));
+  return named.length > 0 ? named : [ACTIVE_MEMORY_DIR];
+}
+
+/** The copy folder this harness's own include names (its chat reads that one). */
+export function chatActiveMemoryCopyDir(projectDir: string, harness: string): string {
+  const file = harness === "opencode"
+    ? rootIntegrationTarget(projectDir, "opencode.json")
+    : { claude: ".claude/rules/aidlc.md", kiro: ".kiro/agents/aidlc.json", copilot: "AGENTS.md", cursor: ".cursor/rules/aidlc.mdc" }[harness];
+  const text = file === undefined ? "" : readSafe(join(projectDir, file)) ?? "";
+  return text.includes(`${EARLIER_ACTIVE_MEMORY_DIR}/`) ? EARLIER_ACTIVE_MEMORY_DIR : ACTIVE_MEMORY_DIR;
+}
+
+function activeMemoryCopyDir(projectDir: string, dir: string = ACTIVE_MEMORY_DIR): string {
+  return join(projectDir, ...dir.split("/"));
 }
 
 function spaceMemoryDir(projectDir: string, space: string): string {
@@ -275,9 +304,9 @@ function copiedText(projectDir: string, space: string, rel: string): string | nu
 /** The copy's files that are not the memory files of `space` now, by their path
  *  under memory/: missing or different ones (the header line included), and ones
  *  the space no longer has. Empty when the copy is current. */
-export function activeMemoryCopyDrift(projectDir: string, space: string): string[] {
+export function activeMemoryCopyDrift(projectDir: string, space: string, dir: string = ACTIVE_MEMORY_DIR): string[] {
   const source = spaceMemoryDir(projectDir, space);
-  const copy = activeMemoryCopyDir(projectDir);
+  const copy = activeMemoryCopyDir(projectDir, dir);
   const wanted = memoryLayerFiles(source).filter((rel) => utf8Text(join(source, rel)) !== null);
   return [
     ...wanted.filter((rel) => utf8Text(join(copy, rel)) !== copiedText(projectDir, space, rel)),
@@ -290,14 +319,51 @@ export function activeMemoryCopyDrift(projectDir: string, space: string): string
  *  Best effort: a file that cannot be copied leaves the chat to the rules the
  *  engine sends with each step, and never a write through a link. */
 export function refreshActiveMemoryCopy(projectDir: string, space: string): boolean {
-  const drift = activeMemoryCopyDrift(projectDir, space);
+  const dirs = activeMemoryCopyDirs(projectDir);
+  let changed = dirs.includes(EARLIER_ACTIVE_MEMORY_DIR) ? false : removeEarlierActiveMemoryCopy(projectDir);
+  for (const dir of dirs) {
+    if (dir === ACTIVE_MEMORY_DIR) ensureWorkspaceEngineFolder(projectDir);
+    if (writeActiveMemoryCopy(projectDir, space, dir)) changed = true;
+  }
+  return changed;
+}
+
+// The earlier release's copy once no include names it: only files AI-DLC wrote
+// there (their first line is the copy header), then each emptied folder.
+function removeEarlierActiveMemoryCopy(projectDir: string): boolean {
+  const copy = activeMemoryCopyDir(projectDir, EARLIER_ACTIVE_MEMORY_DIR);
+  if (!lstatSync(copy, { throwIfNoEntry: false })?.isDirectory()) return false;
+  let removed = false;
+  for (const rel of memoryLayerFiles(copy)) {
+    const text = utf8Text(join(copy, rel));
+    if (text === null || !text.startsWith("<!-- AI-DLC keeps this copy in step with ")) continue;
+    try {
+      rmSync(join(copy, rel));
+      removed = true;
+    } catch {
+      // Tried again at the next refresh.
+    }
+  }
+  for (const folder of [join(copy, "phases"), copy]) {
+    try {
+      rmdirSync(folder);
+      removed = true;
+    } catch {
+      // Not empty, or not there.
+    }
+  }
+  return removed;
+}
+
+function writeActiveMemoryCopy(projectDir: string, space: string, dir: string): boolean {
+  const drift = activeMemoryCopyDrift(projectDir, space, dir);
   if (drift.length === 0) return false;
-  const copy = activeMemoryCopyDir(projectDir);
+  const copy = activeMemoryCopyDir(projectDir, dir);
   let changed = false;
   for (const rel of drift) {
     const target = join(copy, rel);
     try {
-      assertProjectionPathHasNoSymlinks(projectDir, `${ACTIVE_MEMORY_DIR}/${rel}`);
+      assertProjectionPathHasNoSymlinks(projectDir, `${dir}/${rel}`);
       const text = copiedText(projectDir, space, rel);
       if (text === null) {
         rmSync(target, { force: true });
@@ -320,7 +386,7 @@ export function refreshActiveMemoryCopy(projectDir: string, space: string): bool
 export function refreshActiveMemory(projectDir: string, space?: string): string[] {
   const sp = space ?? activeSpace(projectDir);
   const written: string[] = [];
-  if (refreshActiveMemoryCopy(projectDir, sp)) written.push(ACTIVE_MEMORY_DIR);
+  if (refreshActiveMemoryCopy(projectDir, sp)) written.push(...activeMemoryCopyDirs(projectDir));
   if (refreshKiroIdeSteering(projectDir, sp)) written.push(KIRO_IDE_STEERING);
   return written;
 }
@@ -407,7 +473,62 @@ export function addRootBlocks(projectDir: string): string[] {
       // Leave the file as it was; the next session or config tries again.
     }
   }
+  dropOwnWorkingFilesIgnore(projectDir);
   return written;
+}
+
+// While the lead's plan has not reached a teammate's clone (leadsPlanNotHere),
+// AI-DLC's part of the root .gitignore is not written there, as the lead's
+// share may bring that file. AI-DLC's own working files then keep out of git
+// by a file of their own in aidlc/: the aidlc/ entries of that part, anchored
+// there, and the file itself. It hides only what the root part hides, so the
+// teammate's own record shows and commits as anywhere; a file already there is
+// left as it is, and dropOwnWorkingFilesIgnore removes this one once the root
+// part is in.
+const OWN_WORKING_FILES_IGNORE = "aidlc/.gitignore";
+
+function ownWorkingFilesIgnoreText(shipped: string): string | null {
+  const entries = shipped.split(/\r?\n/)
+    .map((line) => /^(?:\*\*\/)?aidlc\/(\S.*)$/.exec(line.trim())?.[1])
+    .filter((entry): entry is string => entry !== undefined);
+  return entries.length === 0
+    ? null
+    : `# AI-DLC: its own working files here\n${[...entries, ".gitignore"].map((entry) => `/${entry}`).join("\n")}\n`;
+}
+
+export function ignoreOwnWorkingFiles(projectDir: string): void {
+  const text = ownWorkingFilesIgnoreText(aidlcRootParts(projectDir).blocks.get(".gitignore")?.shipped ?? "");
+  if (text === null) return;
+  const target = join(projectDir, ...OWN_WORKING_FILES_IGNORE.split("/"));
+  try {
+    assertProjectionPathHasNoSymlinks(projectDir, OWN_WORKING_FILES_IGNORE);
+    if (lstatSync(target, { throwIfNoEntry: false })) return;
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileAtomic(target, text);
+  } catch {
+    // Unwritten: git shows these files until the plan is here and the root part is written.
+  }
+}
+
+// Once AI-DLC's part is in the root .gitignore (written here, or brought by a
+// pull), the file ignoreOwnWorkingFiles wrote has done its work: it is removed
+// while it holds exactly what that wrote, so the root file's rules, the team's
+// own among them, reach these paths again. A file anyone changed stays.
+export function dropOwnWorkingFilesIgnore(projectDir: string): void {
+  const target = join(projectDir, ...OWN_WORKING_FILES_IGNORE.split("/"));
+  try {
+    if (!lstatSync(target, { throwIfNoEntry: false })?.isFile()) return;
+    const part = aidlcRootParts(projectDir).blocks.get(".gitignore");
+    if (!part) return;
+    const { begin, end } = managedBlockMarkers(".gitignore", part.marker);
+    const root = readSafe(join(projectDir, ".gitignore")) ?? "";
+    if (!root.includes(begin) || !root.includes(end)) return;
+    if (readSafe(target) !== ownWorkingFilesIgnoreText(part.shipped)) return;
+    assertProjectionPathHasNoSymlinks(projectDir, OWN_WORKING_FILES_IGNORE);
+    rmSync(target);
+  } catch {
+    // Kept: it hides only what the root part hides.
+  }
 }
 
 // AI-DLC's part of each root file it shares with the team, as this project's

@@ -136,6 +136,7 @@ function personaFrontmatter(agent: string): string[] {
     "      match:",
     `        - ".kiro/**"`,
     `        - "aidlc/.aidlc-sessions/**"`,
+    `        - "aidlc/.aidlc-engine/sessions/**"`,
     // The person's words kept for a stage gate's Request Changes.
     `        - "aidlc/spaces/*/intents/*/.aidlc-engine/gate-words/**"`,
   ];
@@ -357,9 +358,12 @@ const manifest: HarnessManifest = {
           // The variant shipped before the block ignored .kiro/agents/aidlc-scoped-review-*.md
           // (a review's reviewer copy).
           "sha256:f9d49a8c823df8174ea7d8a83209380202e5673b5ee8c1ff6b9cce90bcfd550e",
-          // The variant shipped before the block ignored a Bolt worktree's metadata
+          // The variant shipped before the block ignored repos.local.json (one
+          // person's own repo paths) or a Bolt worktree's metadata
           // (.aidlc/worktree-meta.json, .aidlc/base-source-listing.tsv).
           "sha256:e7c17271c65f778895fe75352413c03da8a3c37c37bca2b8bcb1c447f4c8b8f3",
+          // The variant 2.11.4 shipped, before the block ignored repos.local.json.
+          "sha256:0f3d8cce1070c43f883aeda63341bf00e7d689916ca5f810734784fedfd6009a",
         ],
       },
     },
@@ -390,8 +394,11 @@ const manifest: HarnessManifest = {
           "sha256:5f6f076a5a9d8a11e1078f568c9dee091f399d9999fae89e9dffa62d8697b797",
           // The variant shipped before the onboarding waited for the person to invoke AI-DLC.
           "sha256:6de1298dfa4c2b6916f66d372b844faf23481c8f258eedd595c1423dab8e106d",
-          // The variant whose Documentation section named this repository's docs/ folder.
+          // The variant 2.11.3 shipped, whose Documentation section named this
+          // repository's docs/ folder, before AI-DLC's own files moved into aidlc/.aidlc-engine/.
           "sha256:6d3bf5865f1836575715ea93d0042b9d08bcab918cc9a17a142848fe44e88bc7",
+          // The variant 2.11.4 shipped, before AI-DLC's own files moved into aidlc/.aidlc-engine/.
+          "sha256:04d7ca868197529d9839b62c902870157743c93a6c7fd134bcebcccc8a1d263f",
         ],
       },
     },

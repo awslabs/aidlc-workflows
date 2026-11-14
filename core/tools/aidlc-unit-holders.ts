@@ -6,25 +6,29 @@
 // Moved out of aidlc-lib.ts with the code it needs, which never imports
 // aidlc-lib.ts.
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { projectInRepo } from "./aidlc-git.ts";
-import { activeSpace, workspaceRoot } from "./aidlc-locks.ts";
+import { activeSpace } from "./aidlc-locks.ts";
+import { workspaceEngineFile } from "./aidlc-runtime-paths.ts";
 import { escapeRegex } from "./aidlc-markdown.ts";
 import {
   activeIntentUuid,
   applicableTeamUnitScopeStamp,
   auditBlockField,
   type AuditShardEvent,
+  getField,
   idSuffix,
   isTeamUnitOwnership,
   knownAuditShardName,
   readAuditShardEvents,
   readStateFile,
+  spacesRoot,
 } from "./aidlc-record-core.ts";
 import { completedUnits } from "./aidlc-unit-landing.ts";
 
-export const CLAIM_REGISTRY_CACHE_FILE = ".aidlc-claim-registry.json";
+// Under aidlc/.aidlc-engine/ (workspaceEngineFile).
+export const CLAIM_REGISTRY_CACHE_FILE = "units/claim-registry.json";
 
 export interface CachedUnitClaim {
   status: "claimed" | "released";
@@ -143,7 +147,7 @@ export function readClaimAt(
 }
 
 export function claimRegistryCachePath(projectDir: string): string {
-  return join(workspaceRoot(projectDir), CLAIM_REGISTRY_CACHE_FILE);
+  return workspaceEngineFile(projectDir, CLAIM_REGISTRY_CACHE_FILE);
 }
 
 export function readUnitClaimRegistryCache(
@@ -219,11 +223,62 @@ export function claimRegistryGit(
   };
 }
 
+// With several remotes and none called origin (a lead who added a team's fork
+// beside their own remote): the one at the lead's project the work in hand
+// records (its Home Location). Null when it does not tell. The one rule for
+// this checkout's own remote then: the claim registry's reads here and
+// repositoryRemote (aidlc-unit) both take it. aidlc-workspace-repos.ts imports
+// aidlc-lib.ts, which loads this module, so gitAddressKey is reached lazily.
+export function ownRemoteAmong(projectDir: string, remotes: readonly string[]): string | null {
+  try {
+    const location = getField(readStateFile(projectDir), "Home Location")?.trim();
+    if (!location) return null;
+    const { gitAddressKey } = require("./aidlc-workspace-repos.ts") as typeof import("./aidlc-workspace-repos.ts");
+    const key = gitAddressKey(location);
+    const at = remotes.filter((remote) => {
+      const url = claimRegistryGit(projectDir, ["remote", "get-url", remote]);
+      return url.ok && url.stdout.trim() !== "" && gitAddressKey(url.stdout.trim()) === key;
+    });
+    return at.length === 1 ? at[0] : null;
+  } catch {
+    return null;
+  }
+}
+
+// A teammate's clone of a lead's project whose plan has not reached it: the
+// remote it came from carries Units held for teams (claim refs git tracks
+// under it) and this checkout holds no AI-DLC record yet. Its chats write none
+// of AI-DLC's parts of the root files here, so the lead's share pulls in.
+export function leadsPlanNotHere(projectDir: string): boolean {
+  let spaces: string[] = [];
+  try {
+    spaces = readdirSync(spacesRoot(projectDir));
+  } catch {
+    // No spaces yet.
+  }
+  if (spaces.some((name) => existsSync(join(spacesRoot(projectDir), name, "intents", "intents.json")))) return false;
+  const refs = claimRegistryGit(projectDir, ["for-each-ref", "--format=%(refname)", "refs/remotes/"], { localOnly: true });
+  return refs.ok && refs.stdout.split(/\r?\n/).some((ref) => /^refs\/remotes\/[^/]+\/claim\/[^/]+\/./.test(ref));
+}
+
 // The one check that team Unit fan-out is active: a claim of the active intent
 // still says `claimed`, a landed Unit's included (land never releases it). The
 // guard below and `next` in an unscoped team checkout (aidlc-orchestrate.ts,
 // routeNext) both read it, so `next` never hands out Unit work the guard refuses.
-export function cachedClaimFanoutActive(projectDir: string): boolean {
+// At the home of teams that build their Units as work of their own, a claim is
+// held for a team elsewhere and never keeps the home from the Units no team
+// holds.
+export function cachedClaimFanoutActive(projectDir: string, stateContent?: string): boolean {
+  const { homeLocation } = require("./aidlc-unit-teams.ts") as typeof import("./aidlc-unit-teams.ts");
+  let state = stateContent ?? null;
+  if (state === null) {
+    try {
+      state = readStateFile(projectDir);
+    } catch {
+      state = null;
+    }
+  }
+  if (homeLocation(state) !== null) return false;
   return claimedUnitsSeenHere(projectDir, true).size > 0;
 }
 

@@ -15,24 +15,28 @@
 // collectDoctorReport is already large) so the workspace-manifest checks read as
 // one unit; collectDoctorReport calls workspaceManifestChecks() and adds its rows.
 
-import { existsSync, lstatSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  auditBlockField,
   discoverSiblingRepos,
-  DOCTOR_RUN_AUDIT_EVENTS,
   errorMessage,
-  REQUEST_TEXT_DIR,
+  isGitRepoDir,
+  repoDir,
+  REQUEST_TEXT_DIRS,
 } from "./aidlc-lib.ts";
-import { inProject, projectInRepo } from "./aidlc-git.ts";
+import { projectInRepo } from "./aidlc-git.ts";
 import { committedRecordIgnoreConflicts } from "./aidlc-gitignore.ts";
-import { aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
+import { onlyOwnLookRows } from "./aidlc-record-core.ts";
+import { workspaceSyncInvocation } from "./aidlc-runtime-paths.ts";
 import {
   parseWorkspaceManifest,
+  readWorkspaceRepos,
+  reposManifestPath,
+  type WorkspaceManifest,
   WORKSPACE_GITIGNORE_GATE_BEGIN as GATE_BEGIN,
   WORKSPACE_GITIGNORE_GATE_END as GATE_END,
-  WORKSPACE_RECOVERY_GITIGNORE,
   WORKSPACE_STAGING_GITIGNORE,
+  workspaceGitignoreEntries,
 } from "./aidlc-workspace-manifest.ts";
 
 /** One --doctor report row. Structurally matches collectDoctorReport's results[]. */
@@ -61,7 +65,7 @@ const FORWARDING_LATCH = "aidlc/.aidlc-forwarding-latch";
  */
 export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
   const results: DoctorCheck[] = [];
-  const syncCmd = aidlcToolInvocation("workspace-sync");
+  const syncCmd = workspaceSyncInvocation();
 
   // W1c first - Files that hold the person's words and that git can see (the
   // request folder, the forwarding latch an earlier Kiro CLI (V2) release
@@ -87,29 +91,34 @@ export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
   // took in before the .gitignore part listed it.
   const heldWordsRow = (held: {
     name: string;
-    path: string;
+    // Every place it may be (the request folder: this release's and the one
+    // an earlier release named); a row names the one holding the first file.
+    paths: readonly string[];
     folder: boolean;
-    label: (counts: string) => string;
+    label: (shown: string, counts: string) => string;
     // A file only one harness writes adds no row when its check cannot run
     // (git not found): the records row and the request-folder row each say
     // the check was skipped then.
     quietWhenSkipped?: boolean;
   }): { row: DoctorCheck | null; blocksCommit: boolean } => {
-    const shown = held.folder ? `${held.path}/` : held.path;
     try {
-      const trackedProc = git(["ls-files", "-z", "--", held.path]);
-      const untrackedProc = git(["ls-files", "-z", "--others", "--exclude-standard", "--", held.path]);
+      const trackedProc = git(["ls-files", "-z", "--", ...held.paths]);
+      const untrackedProc = git(["ls-files", "-z", "--others", "--exclude-standard", "--", ...held.paths]);
       // Taken out of git but not committed yet: teammates still get the file.
-      const removedProc = git(["diff", "--cached", "--relative", "--no-renames", "--name-only", "-z", "--diff-filter=D", "--", held.path]);
+      const removedProc = git(["diff", "--cached", "--relative", "--no-renames", "--name-only", "-z", "--diff-filter=D", "--", ...held.paths]);
       // A conflicted file is listed once per stage.
       const tracked = trackedProc.exitCode === 0 ? entries(trackedProc.stdout) : [];
       const removedList = removedProc.exitCode === 0 ? entries(removedProc.stdout) : [];
       // A removed file still on disk and not ignored is counted once, as removed.
-      const untracked = untrackedProc.exitCode === 0
-        ? entries(untrackedProc.stdout).filter((path) => !removedList.includes(path)).length
-        : 0;
+      const untrackedList = untrackedProc.exitCode === 0
+        ? entries(untrackedProc.stdout).filter((path) => !removedList.includes(path))
+        : [];
+      const untracked = untrackedList.length;
       const removed = removedList.length;
       if (tracked.length + untracked + removed === 0) return { row: null, blocksCommit: false };
+      const first = [...tracked, ...untrackedList, ...removedList][0] ?? "";
+      const at = held.paths.find((path) => first === path || first.startsWith(`${path}/`)) ?? held.paths[0];
+      const shown = held.folder ? `${at}/` : at;
       // A file git shows as untracked is not ignored; every tracked or removed
       // one is tried against the ignore rules as if untracked.
       const tried = [...tracked, ...removedList];
@@ -149,7 +158,7 @@ export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
       // them, or holds a removed file the ignore rules do not cover; a staged
       // removal of an ignored file leaves the records row its command.
       return {
-        row: { pass: false, severity: "warn", label: held.label(counts.join(", ")), fix: steps.join(", then ") },
+        row: { pass: false, severity: "warn", label: held.label(shown, counts.join(", ")), fix: steps.join(", then ") },
         blocksCommit: tracked.length + untracked > 0 || (removed > 0 && !ignored),
       };
     } catch (e) {
@@ -161,15 +170,15 @@ export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
   };
   const request = heldWordsRow({
     name: "Request folder",
-    path: REQUEST_TEXT_DIR,
+    paths: REQUEST_TEXT_DIRS,
     folder: true,
-    label: (counts) => `Request folder: files in ${REQUEST_TEXT_DIR}/ hold your own requests (${counts})`,
+    label: (shown, counts) => `Request folder: files in ${shown} hold your own requests (${counts})`,
   });
   const latch = heldWordsRow({
     name: "Forwarding latch",
-    path: FORWARDING_LATCH,
+    paths: [FORWARDING_LATCH],
     folder: false,
-    label: (counts) => `Forwarding latch: ${FORWARDING_LATCH} holds the words of a request of yours (${counts})`,
+    label: (shown, counts) => `Forwarding latch: ${shown} holds the words of a request of yours (${counts})`,
     quietWhenSkipped: true,
   });
   const blockers = [
@@ -182,9 +191,9 @@ export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
   // Reports a passing row outside a git repo (smoke / fresh fixtures).
   // git status --porcelain omits gitignored per-user
   // cursors, so ignored runtime state (active-intent, runtime-graph.json, ...)
-  // never false-positives. Every doctor run writes its own rows into this
-  // clone's audit log, so a log changed only by those is not counted; else
-  // the run before would make this row ask for a commit of doctor's receipt.
+  // never false-positives. Each look and each doctor run writes its own rows
+  // into this clone's audit log, so a log changed only by those is not counted
+  // (onlyOwnLookRows); else every look would make this row ask for a commit.
   try {
     const proc = Bun.spawnSync({
       cmd: [
@@ -202,7 +211,7 @@ export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
         // A request left for the engine is the person's words, never a shared
         // record; the request-folder row names it instead, and the latch row
         // the forwarding latch.
-        `:(exclude)${REQUEST_TEXT_DIR}`,
+        ...REQUEST_TEXT_DIRS.map((dir) => `:(exclude)${dir}`),
         `:(exclude)${FORWARDING_LATCH}`,
       ],
       // The exclude is pathspec magic, which a literal-pathspec setting turns off.
@@ -220,14 +229,14 @@ export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
         // Porcelain paths start at the repository root, which may sit above
         // the project folder.
         prefix ??= projectInRepo(projectDir)?.prefix ?? "";
-        return !onlyDoctorRunRows(projectDir, prefix, change, git);
+        return !onlyOwnLookRows(projectDir, prefix, change);
       });
       if (dirty.length === 0) {
         results.push({
           pass: true,
           label: changes.length === 0
             ? "Workspace records: no uncommitted changes under aidlc/"
-            : "Workspace records: no uncommitted changes under aidlc/ other than doctor's own entries in the audit log",
+            : "Workspace records: no uncommitted changes under aidlc/ other than the entries each look adds to this clone's audit log",
         });
       } else {
         results.push({
@@ -257,15 +266,13 @@ export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
   }
 
   // W2/W3 - only when a repos.json manifest is present (the declared multi-repo signal).
-  const reposManifestPath = join(projectDir, "repos.json");
-  if (existsSync(reposManifestPath)) {
+  const manifestPath = reposManifestPath(projectDir);
+  if (existsSync(manifestPath)) {
     // Parse through the exact schema used by sync so doctor never reports a
     // manifest as synchronized when sync would reject it.
-    let manifestNames: string[] | null = null;
+    let manifest: WorkspaceManifest | null = null;
     try {
-      manifestNames = parseWorkspaceManifest(
-        readFileSync(reposManifestPath, "utf-8"),
-      ).repos.map((repo) => repo.name);
+      manifest = parseWorkspaceManifest(readFileSync(manifestPath, "utf-8"));
     } catch (e) {
       results.push({
         pass: true,
@@ -273,15 +280,18 @@ export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
       });
     }
 
-    if (manifestNames) {
-      // W2 - Manifest vs disk drift. discoverSiblingRepos scans the disk for
-      // .git siblings - the SAME set the runtime uses at intent creation - so a
-      // mismatch is exactly what the agent would (in)visibly see. Disk wins at
+    if (manifest) {
+      const manifestNames = manifest.repos.map((repo) => repo.name);
+      // W2 - Manifest vs disk drift: each declared repo at the path repoDir
+      // gives it (this person's repos.local.json included), and every immediate
+      // child repo the runtime would also find at intent creation. Disk wins at
       // runtime; the manifest only drives sync, so this row nudges, never fails.
       const declared = new Set(manifestNames);
-      const onDisk = new Set(discoverSiblingRepos(projectDir));
-      const notCloned = [...declared].filter((n) => !onDisk.has(n)).sort();
-      const notDeclared = [...onDisk].filter((n) => !declared.has(n)).sort();
+      const declaredDirs = new Set(manifestNames.map((name) => repoDir(projectDir, name)));
+      const notCloned = [...declared].filter((n) => !isGitRepoDir(repoDir(projectDir, n))).sort();
+      const notDeclared = discoverSiblingRepos(projectDir)
+        .filter((n) => !declared.has(n) && !declaredDirs.has(join(projectDir, n)))
+        .sort();
       if (notCloned.length === 0 && notDeclared.length === 0) {
         results.push({
           pass: true,
@@ -311,11 +321,7 @@ export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
       const gi = existsSync(gitignorePath) ? readFileSync(gitignorePath, "utf-8") : "";
       const b = gi.indexOf(GATE_BEGIN);
       const e = gi.indexOf(GATE_END);
-      const expected = [
-        WORKSPACE_RECOVERY_GITIGNORE,
-        WORKSPACE_STAGING_GITIGNORE,
-        ...[...manifestNames].sort().map((n) => `/${n}/`),
-      ].sort();
+      const expected = workspaceGitignoreEntries(manifest).sort();
       if (b === -1 || e === -1 || e < b) {
         results.push({
           pass: true,
@@ -345,13 +351,28 @@ export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
             : `Workspace .gitignore: managed block stale vs repos.json (advisory - run \`${syncCmd}\` to regenerate it)`,
         });
       }
+
+      // W4 - This person's repos.local.json: what in it is not read. A file
+      // that cannot be read leaves every path of theirs unused: a warning.
+      const local = readWorkspaceRepos(projectDir);
+      if (local.localError !== undefined) {
+        results.push({
+          pass: false,
+          severity: "warn",
+          label: `Your repos.local.json: ${local.localError.replace(/([^.!?])$/, "$1.")} Your own paths in it are not used until it reads. (advisory)`,
+        });
+      }
+      if (local.ignored.length > 0) {
+        results.push({
+          pass: true,
+          label: `Your repos.local.json: ${local.ignored.join(" ")} (advisory)`,
+        });
+      }
     }
   }
 
   return results;
 }
-
-type GitRun = (args: string[]) => { exitCode: number | null; stdout: Uint8Array };
 
 const AUDIT_LOG_PATH = /\/audit\/[^/]+\.md$/;
 
@@ -369,33 +390,3 @@ function porcelainChanges(bytes: Uint8Array): Array<{ status: string; path: stri
   return changes;
 }
 
-// Whether an audit log differs from its committed copy only by rows doctor
-// wrote about its own runs. Only an unstaged change to a committed log or a
-// log git does not track yet can be: anything staged or removed is the
-// person's own git work. Line endings are compared as LF because a Windows
-// checkout holds the committed part with CRLF while every append writes LF.
-function onlyDoctorRunRows(
-  projectDir: string,
-  prefix: string,
-  change: { status: string; path: string },
-  git: GitRun,
-): boolean {
-  const own = inProject(prefix, change.path);
-  if ((change.status !== " M" && change.status !== "??") || own === null) return false;
-  try {
-    const file = join(projectDir, ...own.split("/"));
-    if (!lstatSync(file).isFile()) return false;
-    let committed = "";
-    if (change.status === " M") {
-      const blob = git(["cat-file", "blob", `HEAD:${change.path}`]);
-      if (blob.exitCode !== 0) return false;
-      committed = new TextDecoder().decode(blob.stdout).replaceAll("\r\n", "\n");
-    }
-    const now = readFileSync(file, "utf-8").replaceAll("\r\n", "\n");
-    if (!now.startsWith(committed)) return false;
-    const added = now.slice(committed.length).split("\n---\n").filter((block) => block.trim().length > 0);
-    return added.length > 0 && added.every((block) => DOCTOR_RUN_AUDIT_EVENTS.has(auditBlockField(block, "Event") ?? ""));
-  } catch {
-    return false;
-  }
-}

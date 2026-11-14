@@ -6144,9 +6144,9 @@ describe("t243 project initialization", () => {
     const source = temp("aidlc-t240-polluted-runtime-");
     cpSync(KIRO_IDE_RELEASE, source, { recursive: true });
     const state = [
-      "aidlc/.aidlc-clone-id",
-      "aidlc/.aidlc-sessions/.kiro-ide-current-session",
-      "aidlc/.aidlc-sessions/kiro-terminal/0123abcd/turn",
+      "aidlc/.aidlc-engine/clone-id",
+      "aidlc/.aidlc-engine/sessions/.kiro-ide-current-session",
+      "aidlc/.aidlc-engine/sessions/kiro-terminal/0123abcd/turn",
       "aidlc/spaces/default/intents/.aidlc-engine/hooks-health/plan-approval-guard.last",
       "aidlc/spaces/default/intents/.aidlc-engine/hooks-health/kiro-adapter.drops",
     ];
@@ -6168,16 +6168,16 @@ describe("t243 project initialization", () => {
     const baseline = JSON.parse(readFileSync(manifest, "utf-8")) as { files: Record<string, string> };
     expect(Object.keys(baseline.files).filter((rel) => state.includes(rel))).toEqual([]);
 
-    const cloneId = join(project, "aidlc", ".aidlc-clone-id");
+    const cloneId = join(project, "aidlc", ".aidlc-engine", "clone-id");
     writeFileSync(cloneId, "project clone id\n");
-    baseline.files["aidlc/.aidlc-clone-id"] = sha256Bytes(readFileSync(cloneId));
+    baseline.files["aidlc/.aidlc-engine/clone-id"] = sha256Bytes(readFileSync(cloneId));
     writeFileSync(manifest, `${JSON.stringify(baseline, null, 2)}\n`);
     const refreshed = config(KIRO_IDE_RELEASE);
     expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
     expect(readFileSync(cloneId, "utf-8")).toBe("project clone id\n");
     expect(
       (JSON.parse(readFileSync(manifest, "utf-8")) as { files: Record<string, string> })
-        .files["aidlc/.aidlc-clone-id"],
+        .files["aidlc/.aidlc-engine/clone-id"],
     ).toBeUndefined();
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
@@ -9143,6 +9143,7 @@ describe("t243 projection channel", () => {
           "sha256:3cc1cbd212d2ca0dbf1e525eb9a40d4694a585eb7864d8b877f8fe8bd99122dc",
           "sha256:839f98012dd457ed13dcf19547b992130a2c44ef7afa73fb3faf000137a087d7",
           "sha256:c4dbcd2ecd6243a4759c148f38bd764042f2563f6a679f732c25471cd308ec77",
+          "sha256:46ea9f0d1e974b79d5ce7954dfe8b31304d6a6fd05985483c300e1a4445b99bd",
         ],
       },
       codex: {
@@ -9156,6 +9157,7 @@ describe("t243 projection channel", () => {
           "sha256:345fbe9fe620718510ecfe9d478233ccf4a5318522884b50fc5540559ace3eed",
           "sha256:c2b1232b28a8b5474f7ef8363452f75399366ef227c59d75fa85d7aa2edca7ac",
           "sha256:42e2a975d46b6fd2a582fa539f6df3260a1f2722dd0a113bd312dff7dc2da204",
+          "sha256:2017c7e71f587efbc3bddae9ddf264c08a0f353d8de6fe9f001f41f8ce5cf0fc",
         ],
         "AGENTS.md": [
           "sha256:30a9f5f43d87cd29b63e75333b8ef6695f8f4e11909fd6af64e2b6cf0b8cb292",
@@ -9180,6 +9182,7 @@ describe("t243 projection channel", () => {
           "sha256:6de1298dfa4c2b6916f66d372b844faf23481c8f258eedd595c1423dab8e106d",
           "sha256:6d3bf5865f1836575715ea93d0042b9d08bcab918cc9a17a142848fe44e88bc7",
           "sha256:04d7ca868197529d9839b62c902870157743c93a6c7fd134bcebcccc8a1d263f",
+          "sha256:2aca14c7a5b75f3a4a12192b1e760f8b91b2287244f0d45aa7c4f947ed9d1e3e",
         ],
       },
       kiro: {
@@ -9194,6 +9197,7 @@ describe("t243 projection channel", () => {
           "sha256:6df8b41c1c9011d8b6d386d389f96bbfa27812386f434103c260bf58641d6b5d",
           "sha256:91f5070ac1b7f2effcf608447a67261ab00dd92495385bf2277b53ca1723c6f0",
           "sha256:d0d2e38fbc662a86e2c8e3047ace37df838b9652710c6d6ae01232c8a6180422",
+          "sha256:e23a316e00870ad313efbcb3b2022d3ab1865fd9f35620263eac4c09938631fa",
         ],
         "AGENTS.md": [
           "sha256:4f7133cc1a9bb1243245c25c28fad57c3660b35e251ea36cea3aa2db431bf55f",
@@ -9213,6 +9217,7 @@ describe("t243 projection channel", () => {
           "sha256:6de1298dfa4c2b6916f66d372b844faf23481c8f258eedd595c1423dab8e106d",
           "sha256:6d3bf5865f1836575715ea93d0042b9d08bcab918cc9a17a142848fe44e88bc7",
           "sha256:04d7ca868197529d9839b62c902870157743c93a6c7fd134bcebcccc8a1d263f",
+          "sha256:2aca14c7a5b75f3a4a12192b1e760f8b91b2287244f0d45aa7c4f947ed9d1e3e",
         ],
       },
       "kiro-ide": {
@@ -9228,6 +9233,7 @@ describe("t243 projection channel", () => {
           "sha256:f9d49a8c823df8174ea7d8a83209380202e5673b5ee8c1ff6b9cce90bcfd550e",
           "sha256:e7c17271c65f778895fe75352413c03da8a3c37c37bca2b8bcb1c447f4c8b8f3",
           "sha256:0f3d8cce1070c43f883aeda63341bf00e7d689916ca5f810734784fedfd6009a",
+          "sha256:96b1943a4a01d61fd7774f40d88af6374d1b0c24a2a60aa3d1758c22faa9a8c3",
         ],
         "AGENTS.md": [
           "sha256:4d539288363565feb6cf1a8d2468d1aca4373d46d354936d89e609f9862b2b9f",
@@ -9247,6 +9253,7 @@ describe("t243 projection channel", () => {
           "sha256:6de1298dfa4c2b6916f66d372b844faf23481c8f258eedd595c1423dab8e106d",
           "sha256:6d3bf5865f1836575715ea93d0042b9d08bcab918cc9a17a142848fe44e88bc7",
           "sha256:04d7ca868197529d9839b62c902870157743c93a6c7fd134bcebcccc8a1d263f",
+          "sha256:2aca14c7a5b75f3a4a12192b1e760f8b91b2287244f0d45aa7c4f947ed9d1e3e",
         ],
       },
       cursor: {
@@ -9259,6 +9266,7 @@ describe("t243 projection channel", () => {
           "sha256:ae1878ec98301ceb4510e711cf79f58dfb44cb486744007acd03ae5e61860665",
           "sha256:55d4cfabe04aca4193d53032c003002d3c9c7de4eef90be0afb411d8a6f7e340",
           "sha256:880993e2876c4e1ce73f0354928eb98c7f234a127aeecbd4268aadc508e918ab",
+          "sha256:f59b6f9e718d9977af37a9d3b643d751ce60e919ffa736e9d43df4574c5df7dd",
         ],
         "AGENTS.md": [
           "sha256:78c906200a55665f3a3ce410272c71d4bdcb5764174407da0f69d8ad6d143184",
@@ -9268,6 +9276,7 @@ describe("t243 projection channel", () => {
           "sha256:6de1298dfa4c2b6916f66d372b844faf23481c8f258eedd595c1423dab8e106d",
           "sha256:6d3bf5865f1836575715ea93d0042b9d08bcab918cc9a17a142848fe44e88bc7",
           "sha256:04d7ca868197529d9839b62c902870157743c93a6c7fd134bcebcccc8a1d263f",
+          "sha256:2aca14c7a5b75f3a4a12192b1e760f8b91b2287244f0d45aa7c4f947ed9d1e3e",
         ],
         "install.ts": [
           "sha256:338e1d36257108ce908eb42992e87e5df7cf96003a45e04a72189e4d79110aba",
@@ -9283,6 +9292,7 @@ describe("t243 projection channel", () => {
           "sha256:345fbe9fe620718510ecfe9d478233ccf4a5318522884b50fc5540559ace3eed",
           "sha256:c2b1232b28a8b5474f7ef8363452f75399366ef227c59d75fa85d7aa2edca7ac",
           "sha256:42e2a975d46b6fd2a582fa539f6df3260a1f2722dd0a113bd312dff7dc2da204",
+          "sha256:2017c7e71f587efbc3bddae9ddf264c08a0f353d8de6fe9f001f41f8ce5cf0fc",
         ],
         "AGENTS.md": [
           "sha256:d791057d6b667517197a450bc6ba633c36e148d62e09c90a8992d787c914a44f",
@@ -9292,6 +9302,7 @@ describe("t243 projection channel", () => {
           "sha256:6de1298dfa4c2b6916f66d372b844faf23481c8f258eedd595c1423dab8e106d",
           "sha256:6d3bf5865f1836575715ea93d0042b9d08bcab918cc9a17a142848fe44e88bc7",
           "sha256:04d7ca868197529d9839b62c902870157743c93a6c7fd134bcebcccc8a1d263f",
+          "sha256:2aca14c7a5b75f3a4a12192b1e760f8b91b2287244f0d45aa7c4f947ed9d1e3e",
         ],
         "opencode.json": [
           "sha256:3be60b2be72b7a423fdaa90fd7d0d9d19613875c05ad5f1a2b6e20fcb54cd1e5",
@@ -9310,6 +9321,7 @@ describe("t243 projection channel", () => {
           "sha256:2091d36da7f7306179da27227857564334f3a455327f365984db6c94a4cc6412",
           "sha256:0ece34fe64acc940324082a0ed97621ff2472ddc0e611e745a6d7388e532fcea",
           "sha256:6c5a7b3d0059a0fe5067de62e20fb2733215ee43391cdadec3206b6fd05fe6d6",
+          "sha256:f4e6d0aba6fc6118e64a6957aad7c626c254b232843600815fc91f9fa8f67ec5",
         ],
         "AGENTS.md": [
           "sha256:9550b31b8f3f32992c1ae1035bfa57a782f04821530214a2f2e1fd1690e209ab",
@@ -9339,6 +9351,7 @@ describe("t243 projection channel", () => {
           "sha256:b87a3ec2c39cb24074c6fa37f626e9d150d435d18069fbd0c762fdbd70719c5c",
           "sha256:a885fe6b7137ba16e0c24ce168b30ef5c780fe9991fc2d6bdff10cc15ad83c05",
           "sha256:7b09e1c003a983ea0c328b7935b2305f35efb8a0927a0bc9f0f7c21c6b3e13d4",
+          "sha256:bef1bc44f92b13555334c03b5339410ebc10d2dd99b14ee9f465ad8ad17379ff",
         ],
       },
     };
@@ -9717,7 +9730,7 @@ describe("t243 projection channel", () => {
 //
 // The dispatcher checks a pinned release's binary and every runtime file on its
 // first call in a session, records the pass beside the session's pid entry
-// (aidlc/.aidlc-sessions/pids/<pid>.release-check), and on later calls of that
+// (aidlc/.aidlc-engine/sessions/pids/<pid>.release-check), and on later calls of that
 // chat in that process skips only the hashing. The session is the walk's
 // nearest mapped ancestor; here this test's parent process, mapped as
 // session-start maps a host. Every miss falls to the full check.
@@ -9749,7 +9762,7 @@ describe("t243 a pinned release is checked once per session", () => {
     return {
       machine,
       project,
-      pidDir: join(project, "aidlc", ".aidlc-sessions", "pids"),
+      pidDir: join(project, "aidlc", ".aidlc-engine", "sessions", "pids"),
       damage: () => writeFileSync(file, Buffer.concat([original, Buffer.from("\ndamaged\n")])),
       repair: () => writeFileSync(file, original),
     };

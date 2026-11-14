@@ -169,7 +169,8 @@ function scratchProject(withState: boolean): string {
     );
     // The resolved audit shard (pinned clone-id) keeps log-subagent writes
     // deterministic and seeds the "# AI-DLC Audit Log" header.
-    writeFileSync(join(dir, "aidlc", ".aidlc-clone-id"), `${PINNED_CLONE_ID}\n`, "utf-8");
+    mkdirSync(join(dir, "aidlc", ".aidlc-engine"), { recursive: true });
+    writeFileSync(join(dir, "aidlc", ".aidlc-engine", "clone-id"), `${PINNED_CLONE_ID}\n`, "utf-8");
     const auditDir = seededAuditDir(dir);
     mkdirSync(auditDir, { recursive: true });
     writeFileSync(join(auditDir, pinnedShardName()), "# AI-DLC Audit Log\n");
@@ -1212,7 +1213,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
         writeFileSync(join(dir, "next-response.txt"), response);
         const result = runAdapter(dir, "verb-intercept", { cwd: dir, prompt });
         expect(result.code).toBe(0);
-        const latch = join(dir, "aidlc", ".aidlc-sessions", ".kiro-cli-forwarding-latch.json");
+        const latch = join(dir, "aidlc", ".aidlc-engine", "sessions", ".kiro-cli-forwarding-latch.json");
         if (packetBytes <= 10 * 1024) {
           expect(Buffer.byteLength(result.stdout)).toBe(packetBytes);
           expect(result.stdout).toContain(`--- DIRECTIVE ---\n${response}\n--- END DIRECTIVE ---`);
@@ -1324,7 +1325,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
         expect(guard("").code).toBe(2);
         expect(guard(" --stage reverse-engineering").code).toBe(2);
         expect(guard(` ${raw}`).code).toBe(0);
-        expect(existsSync(join(dir, "aidlc", ".aidlc-sessions", ".kiro-cli-forwarding-latch.json"))).toBe(false);
+        expect(existsSync(join(dir, "aidlc", ".aidlc-engine", "sessions", ".kiro-cli-forwarding-latch.json"))).toBe(false);
         // Actual child stdout carries the entire packet, including the final
         // token; no hook prefix or simulated truncation participates in delivery.
         const tool = runEngine(dir, ["next", ...args]);
@@ -1350,7 +1351,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       expect(result.code).toBe(0);
       expect(result.stdout).toContain(response);
       expect(result.stdout).toContain("Act on its reply below now");
-      expect(JSON.parse(readFileSync(join(dir, "aidlc", ".aidlc-readonly-latch"), "utf8")).source)
+      expect(JSON.parse(readFileSync(join(dir, "aidlc", ".aidlc-engine", "sessions", "kiro-readonly-latch"), "utf8")).source)
         .toBe("config-alias");
       for (const tool_name of ["execute_bash", "execute_pwsh", "shell"]) {
         const guard = runAdapter(dir, "guard-tool-call", {
@@ -1752,7 +1753,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
     ["absent resources", "{}"],
     ["malformed JSON", "{not json"],
     ["missing worker file", null],
-    ["partial memory glob", JSON.stringify({ resources: ["file://aidlc/active-memory/org*.md"] })],
+    ["partial memory glob", JSON.stringify({ resources: ["file://aidlc/.aidlc-engine/active-memory/org*.md"] })],
     ["a glob for another space's files", JSON.stringify({ resources: ["file://aidlc/spaces/old-space/memory/**/*.md"] })],
   ])("native preload blocks %s and names the worker repair", (_name, config) => {
     const dir = scratchProject(false);
@@ -1774,7 +1775,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
       expect(result.code, result.stderr).toBe(2);
       expect(result.stdout).toBe("");
       expect(result.stderr).toContain(workerFile);
-      expect(result.stderr).toContain("file://aidlc/active-memory/**/*.md");
+      expect(result.stderr).toContain("file://aidlc/.aidlc-engine/active-memory/**/*.md");
       // The shipped file reads the engine's copy of the active space, so the
       // step named is the one that puts the shipped file back, and that route is real.
       expect(result.stderr).toContain("config --harness kiro-v2` in a terminal to put AI-DLC's Kiro files back");
@@ -1792,7 +1793,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
       const workerFile = join(dir, ".kiro", "agents", "aidlc-product-agent.json");
       const memory = join(dir, "aidlc", "spaces", "default", "memory");
       writeFileSync(join(memory, "org.md"), "# Organization\n\nKeep the mandated review.\n");
-      const copy = join(dir, "aidlc", "active-memory");
+      const copy = join(dir, "aidlc", ".aidlc-engine", "active-memory");
       expect(existsSync(copy)).toBe(false);
       const payload = {
         cwd: dir,
@@ -1809,7 +1810,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
         "<!-- AI-DLC keeps this copy in step with aidlc/spaces/default/memory/org.md. Edit that file; this copy is replaced. -->\n" +
           "# Organization\n\nKeep the mandated review.\n",
       );
-      expect(JSON.parse(readFileSync(workerFile, "utf-8")).resources).toContain("file://aidlc/active-memory/**/*.md");
+      expect(JSON.parse(readFileSync(workerFile, "utf-8")).resources).toContain("file://aidlc/.aidlc-engine/active-memory/**/*.md");
       // An edit reaches the copy at the next dispatch.
       writeFileSync(join(memory, "org.md"), "# Organization\n\nEvery queue has a dead-letter alarm.\n");
       expect(runAdapter(dir, "deliver-stage-rules", payload).code).toBe(0);
@@ -1820,7 +1821,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
       writeFileSync(workerFile, JSON.stringify({
         ...config,
         resources: config.resources.map((entry) =>
-          entry.replace("aidlc/active-memory/", "aidlc/spaces/default/memory/")
+          entry.replace("aidlc/.aidlc-engine/active-memory/", "aidlc/spaces/default/memory/")
         ),
       }));
       const older = runAdapter(dir, "deliver-stage-rules", payload);
@@ -1891,7 +1892,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
     try {
       const workerFile = join(dir, ".kiro", "agents", "aidlc-product-agent.json");
       writeFileSync(workerFile, JSON.stringify({
-        resources: ["file://aidlc/active-memory/**/*.md"],
+        resources: ["file://aidlc/.aidlc-engine/active-memory/**/*.md"],
       }));
       const memory = join(dir, "aidlc", "spaces", "default", "memory");
       // The scratch project seeds real memory rules; this case needs none.
@@ -1909,7 +1910,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
       expect(result.code, result.stderr).toBe(2);
       expect(result.stdout).toBe("");
       expect(result.stderr).toContain(workerFile);
-      expect(result.stderr).toContain("file://aidlc/active-memory/**/*.md");
+      expect(result.stderr).toContain("file://aidlc/.aidlc-engine/active-memory/**/*.md");
       expect(result.stderr).toContain("Put this space's method files back under aidlc/spaces/default/memory/");
       // One missing file at a time, never a checkout over the whole folder.
       expect(result.stderr).toContain("git checkout -- aidlc/spaces/default/memory/org.md` for a tracked file that is missing");
@@ -2015,11 +2016,11 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
       expect(blocked.stderr).toContain(workerFile);
       expect(blocked.stderr).toContain("resources");
       expect(blocked.stderr).toContain("plugin's agent JSON");
-      expect(blocked.stderr).toContain("file://aidlc/active-memory/**/*.md");
+      expect(blocked.stderr).toContain("file://aidlc/.aidlc-engine/active-memory/**/*.md");
       expect(blocked.stderr).not.toContain("/aidlc space switch");
       expect(blocked.stderr).not.toContain("/aidlc --doctor");
 
-      config.resources.push("file://aidlc/active-memory/**/*.md");
+      config.resources.push("file://aidlc/.aidlc-engine/active-memory/**/*.md");
       writeFileSync(workerFile, JSON.stringify(config));
       const repaired = runAdapter(dir, "deliver-stage-rules", payload);
       expect(repaired.code, repaired.stderr).toBe(0);
@@ -2431,7 +2432,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
       });
       expect(r.code).toBe(0);
       expect(
-        readFileSync(join(dir, "aidlc", ".aidlc-sessions", sid), "utf-8").trim(),
+        readFileSync(join(dir, "aidlc", ".aidlc-engine", "sessions", sid), "utf-8").trim(),
       ).toBe(created.uuid);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -2443,7 +2444,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
     // hook's per-session→intent STAMP is written (the session→intent record).
     // Proof: create an intent (live cursor resolves a uuid), fire session-start
     // with a session_id in the payload, and assert the stamp file
-    // aidlc/.aidlc-sessions/<session_id> was written with that uuid. Without
+    // aidlc/.aidlc-engine/sessions/<session_id> was written with that uuid. Without
     // the forwarded session_id the core hook's `if (sessionId)` block is inert.
     const dir = scratchProject(true);
     try {
@@ -2452,7 +2453,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
       const r = runAdapter(dir, "session-start", { ...(FIXTURES.agentSpawn as object), session_id: sid });
       expect(r.code).toBe(0);
       expect(r.stdout).toContain("AIDLC WORKFLOW ACTIVE");
-      const stampPath = join(dir, "aidlc", ".aidlc-sessions", sid);
+      const stampPath = join(dir, "aidlc", ".aidlc-engine", "sessions", sid);
       expect(existsSync(stampPath)).toBe(true);
       expect(readFileSync(stampPath, "utf-8").trim()).toBe(created.uuid);
     } finally {
@@ -2478,7 +2479,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
         source: "resume", // even a resume-shaped payload is coerced to startup
       });
       expect(first.code).toBe(0);
-      const stampPath = join(dir, "aidlc", ".aidlc-sessions", sid);
+      const stampPath = join(dir, "aidlc", ".aidlc-engine", "sessions", sid);
       expect(readFileSync(stampPath, "utf-8").trim()).toBe(a.uuid);
       // Move the live cursor to B, a genuine drift from A to B. Another
       // conversation creates B: without its session id, createIntent binds
@@ -2821,7 +2822,7 @@ describe("t147 Kiro CLI reads what the person typed from the expanded skill body
       expect(r.code, r.stderr).toBe(0);
       const call = "engine orchestrate next fix the '`parse`' step so the totals add up";
       expect(r.stdout).toContain(`${call}\n`);
-      const latch = join(dir, "aidlc", ".aidlc-sessions", ".kiro-cli-forwarding-latch.json");
+      const latch = join(dir, "aidlc", ".aidlc-engine", "sessions", ".kiro-cli-forwarding-latch.json");
       expect(JSON.parse(readFileSync(latch, "utf8")).args).toEqual(words);
       const guard = (command: string) => runAdapter(dir, "guard-tool-call", {
         cwd: dir, tool_name: "execute_bash", tool_input: { command },
@@ -2860,7 +2861,7 @@ describe("t147 Kiro CLI reads what the person typed from the expanded skill body
         const r = runAdapter(dir, "verb-intercept", { cwd: dir, session_id: session, prompt: expanded(said) }, [], env);
         expect(r.code, r.stderr).toBe(0);
         expect(r.stdout).toContain(`engine orchestrate next ${call}\n`);
-        expect(JSON.parse(readFileSync(join(dir, "aidlc", ".aidlc-sessions", ".kiro-cli-forwarding-latch.json"), "utf8")).args).toEqual(words);
+        expect(JSON.parse(readFileSync(join(dir, "aidlc", ".aidlc-engine", "sessions", ".kiro-cli-forwarding-latch.json"), "utf8")).args).toEqual(words);
         if (process.platform !== "win32") {
           const shell = spawnSync("sh", ["-c", `printf '%s\\n' ${call}`], { encoding: "utf-8" });
           expect(shell.status, shell.stderr).toBe(0);
@@ -2883,7 +2884,7 @@ describe("t147 Kiro CLI reads what the person typed from the expanded skill body
         cwd: dir, tool_name: "execute_bash", tool_input: { command },
       });
       const run = (line: string) => `bun .kiro/tools/aidlc.ts engine orchestrate next ${line}`;
-      const latch = join(dir, "aidlc", ".aidlc-sessions", ".kiro-cli-forwarding-latch.json");
+      const latch = join(dir, "aidlc", ".aidlc-engine", "sessions", ".kiro-cli-forwarding-latch.json");
       // Each call line from `engine` on, whatever invocation this tree prints before it.
       const calls = (stdout: string) => stdout.replace(/^.*(?=engine orchestrate next )/gm, "");
       const said = "classic Build a notes app";
@@ -2994,7 +2995,7 @@ describe("t147 Kiro CLI reads what the person typed from the expanded skill body
       expect(r.code, r.stderr).toBe(0);
       expect(readFileSync(legacy, "utf8")).toBe('{"turn":1,"raw":"my first words","args":["my","first","words"]}\n');
       expect(g("status", "--porcelain", "--", "aidlc/.aidlc-forwarding-latch").stdout).toBe("");
-      expect(JSON.parse(readFileSync(join(dir, "aidlc", ".aidlc-sessions", ".kiro-cli-forwarding-latch.json"), "utf8")).raw)
+      expect(JSON.parse(readFileSync(join(dir, "aidlc", ".aidlc-engine", "sessions", ".kiro-cli-forwarding-latch.json"), "utf8")).raw)
         .toBe("my secret token is hunter2");
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
@@ -3004,18 +3005,28 @@ describe("t147 Kiro CLI reads what the person typed from the expanded skill body
   test("every per-turn file the adapter writes under aidlc/ is git-ignored", () => {
     const source = readFileSync(join(REPO_ROOT, "harness", "kiro", "hooks", "aidlc-kiro-adapter.ts"), "utf-8");
     const names = [...new Set([...source.matchAll(/join\([^()]*"aidlc",\s*"(\.aidlc-[^"]+)"/g)].map((m) => m[1]))];
-    expect(names).toContain(".aidlc-turn-counter");
+    // What it writes inside AI-DLC's engine folder (aidlc/.aidlc-engine/), which
+    // ignores itself with a .gitignore of its own.
+    const engineNames = [...new Set([...source.matchAll(/workspaceEngineFile\([^,()]+,\s*"([^"]+)"\)/g)].map((m) => m[1]))];
+    // Either scan finding nothing would read nothing, so a file written beside
+    // the engine folder is still caught by the first.
+    expect(names.length + engineNames.length).toBeGreaterThan(0);
     // The forwarding latch lives in the sessions folder (forwardingLatchPath),
     // and the name earlier releases wrote stays ignored for a file left behind.
     expect(source).toContain('join(sessionsDir(projectDir), ".kiro-cli-forwarding-latch.json")');
-    names.push(".aidlc-sessions/.kiro-cli-forwarding-latch.json", ".aidlc-forwarding-latch");
+    engineNames.push("sessions/.kiro-cli-forwarding-latch.json");
+    names.push(".aidlc-forwarding-latch");
     const repo = mkdtempSync(join(tmpdir(), "t147-ignore-"));
     try {
       expect(spawnSync("git", ["init", "-q"], { cwd: repo }).status).toBe(0);
       copyFileSync(join(REPO_ROOT, "harness", "kiro", "dot-gitignore"), join(repo, ".gitignore"));
+      // The engine folder's own .gitignore, as the engine writes it (ensureWorkspaceEngineFolder).
+      mkdirSync(join(repo, "aidlc", ".aidlc-engine"), { recursive: true });
+      writeFileSync(join(repo, "aidlc", ".aidlc-engine", ".gitignore"), "*\n");
       // A folder's pattern (`aidlc/.aidlc-request-text/`) ignores what is written in it.
       const ignored = (path: string) => spawnSync("git", ["check-ignore", "-q", "--no-index", path], { cwd: repo }).status === 0;
       for (const name of names) expect(ignored(`aidlc/${name}`) || ignored(`aidlc/${name}/file`), name).toBe(true);
+      for (const name of engineNames) expect(ignored(`aidlc/.aidlc-engine/${name}`), name).toBe(true);
     } finally { rmSync(repo, { recursive: true, force: true }); }
   });
 
@@ -3038,7 +3049,7 @@ describe("t147 Kiro CLI reads what the person typed from the expanded skill body
       const r = runAdapter(dir, "verb-intercept", { cwd: dir, session_id: session, prompt: expanded(said) }, [], env);
       expect(r.code, r.stderr).toBe(0);
       const words = ["fix", "it,", "it's", "broken", "and", "don't", "touch", "the", "users'", "files"];
-      const latch = join(dir, "aidlc", ".aidlc-sessions", ".kiro-cli-forwarding-latch.json");
+      const latch = join(dir, "aidlc", ".aidlc-engine", "sessions", ".kiro-cli-forwarding-latch.json");
       expect(JSON.parse(readFileSync(latch, "utf8")).args).toEqual(words);
       // PowerShell reads a bare comma as a list and gets its own single-quoted form for every word that is not bare.
       const quoted = process.platform === "win32"
@@ -3133,7 +3144,7 @@ describe("t147 Kiro CLI reads what the person typed from the expanded skill body
       const r = runAdapter(dir, "verb-intercept", { cwd: dir, session_id: session, prompt: expanded(said) }, [], env);
       expect(r.code, r.stderr).toBe(0);
       const forwarded = /engine orchestrate next (.*)\n/.exec(r.stdout)?.[1] ?? "";
-      const latch = JSON.parse(readFileSync(join(dir, "aidlc", ".aidlc-sessions", ".kiro-cli-forwarding-latch.json"), "utf8")).args as string[];
+      const latch = JSON.parse(readFileSync(join(dir, "aidlc", ".aidlc-engine", "sessions", ".kiro-cli-forwarding-latch.json"), "utf8")).args as string[];
       expect(forwarded.length).toBeGreaterThan(0);
       return { forwarded, latch };
     };
@@ -3175,7 +3186,7 @@ describe("t147 Kiro CLI reads what the person typed from the expanded skill body
     const dir = scratchProject(true);
     try {
       const { forward, hop } = launcherChain(dir);
-      const requestFile = "aidlc/.aidlc-request-text/request.txt";
+      const requestFile = "aidlc/.aidlc-engine/request-text/request.txt";
       const said = String.raw`--scope feature rename it to 'the "Terms & Conditions" link' and 'a 27" monitor & TV' and '"&echo PWNED&"' and '"&whoami&"' and '"plain"'`;
       const { forwarded, latch } = forward(said);
       expect(latch).toEqual(["--scope", "feature", "--request-file", requestFile]);
@@ -3235,7 +3246,7 @@ describe("t147 Kiro CLI reads what the person typed from the expanded skill body
     const dir = scratchProject(true);
     try {
       const { forward, hop } = launcherChain(dir);
-      const requestFile = "aidlc/.aidlc-request-text/request.txt";
+      const requestFile = "aidlc/.aidlc-engine/request-text/request.txt";
       // An engine that prints nothing makes the hook's own compose run fall through to the agent.
       stubNext(dir, "");
       const composed = forward(String.raw`compose build the '"&echo PWNED&"' thing`);
@@ -3274,10 +3285,10 @@ describe("the forwarded call is accepted as written", () => {
     const dir = scratchProject(true);
     try {
       const raw = String.raw`'can''t open C:\temp\x'`;
-      mkdirSync(join(dir, "aidlc", ".aidlc-sessions"), { recursive: true });
-      writeFileSync(join(dir, "aidlc", ".aidlc-turn-counter"), "1\n");
+      mkdirSync(join(dir, "aidlc", ".aidlc-engine", "sessions"), { recursive: true });
+      writeFileSync(join(dir, "aidlc", ".aidlc-engine", "sessions", "kiro-turn-counter"), "1\n");
       writeFileSync(
-        join(dir, "aidlc", ".aidlc-sessions", ".kiro-cli-forwarding-latch.json"),
+        join(dir, "aidlc", ".aidlc-engine", "sessions", ".kiro-cli-forwarding-latch.json"),
         `${JSON.stringify({ turn: 1, raw, args: [String.raw`can't open C:\temp\x`] })}\n`,
       );
       const guard = (command: string) => runAdapter(dir, "guard-tool-call", {
@@ -3303,7 +3314,7 @@ describe("5e3: a delegation's own session is noted as the chat's", () => {
   const DELEGATION = "81a63708-483d-44a7-8b78-1766b546d0e9";
   function helperOf(dir: string, id: string): string | null {
     try {
-      return readFileSync(join(dir, "aidlc", ".aidlc-sessions", `${id}.helper-of`), "utf-8").trim();
+      return readFileSync(join(dir, "aidlc", ".aidlc-engine", "sessions", `${id}.helper-of`), "utf-8").trim();
     } catch {
       return null;
     }

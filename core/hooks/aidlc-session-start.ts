@@ -30,14 +30,17 @@
 // With no aidlc-state.md the hook emits no workflow event or context, but still
 // bootstraps cursors/includes and records host session identity and transcript
 // metadata so the first intent created later in the turn can bind to it.
-import { existsSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, lstatSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { runAnchor } from "../tools/aidlc-attest.ts";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import { stageGraphDrift } from "../tools/aidlc-graph.ts";
 import {
-  ACTIVE_MEMORY_DIR,
   activeMemoryCopyDrift,
+  chatActiveMemoryCopyDir,
   addRootBlocks,
+  ignoreOwnWorkingFiles,
   inlineMemoryFiles,
   refreshActiveMemory,
   trackedKiroIdeSteeringAsk,
@@ -64,6 +67,7 @@ import {
   writeHookStatusFile,
   humanPresenceGuardDisabled,
   isClaudeCodeHookInput,
+  addPendingPersonLines,
   isoTimestamp,
   intentUuidForSelection,
   readSessionBinding,
@@ -92,9 +96,26 @@ import {
   clearSessionRebindOffer,
   completeSubagentInflight,
 } from "../tools/aidlc-lib.ts";
+import { leadsPlanNotHere } from "../tools/aidlc-unit-holders.ts";
 import { writeCurrentTranscriptPath } from "../tools/aidlc-usage.ts";
 import { recordRulesLoad } from "../tools/aidlc-rules-held.ts";
-import { aidlcInvocation, aidlcToolInvocation, entrySkillInvocation, runtimeHarnessName } from "../tools/aidlc-runtime-paths.ts";
+import {
+  aidlcInvocation,
+  aidlcToolInvocation,
+  discoverProjectHarnesses,
+  entrySkillInvocation,
+  isCompiledExecutable,
+  runtimeHarnessName,
+  typedHarnessName,
+} from "../tools/aidlc-runtime-paths.ts";
+import { compareVersions } from "../tools/aidlc-channel.ts";
+import { AIDLC_VERSION } from "../tools/aidlc-version.ts";
+import {
+  catchUpChangedLine,
+  REPOS_FILE,
+  reposManifestMovedIntoAidlc,
+  trackedReposManifestAtRoot,
+} from "../tools/aidlc-workspace-manifest.ts";
 import { backOnInstructions, switchesOffLines } from "../tools/aidlc-recorded-switches.ts";
 import { applyStatusLineDefault, statusLineHarness } from "../tools/aidlc-statusline-choice.ts";
 
@@ -128,6 +149,144 @@ function completeHelpersOfEarlierProcess(projectDir: string, sessionId: string):
   } catch {
     // A malformed record stays for doctor to name; the Stop hook fails closed on it.
   }
+}
+
+// After `aidlc update`, a project's harness files are an earlier release's
+// while the hooks already run the new one (a native install's hooks call the
+// machine's aidlc; a pinned project runs its own release, and the copy channel
+// its own copy, so neither is ever behind). The first chat to open it runs
+// config's refresh for each such folder, as the person's own `aidlc config`
+// would with no terminal: it asks nothing and keeps every recorded answer;
+// without --yes it never takes an in-place switch, and the deferral leaves the
+// Kiro questions to the person. A refresh that fails says nothing (doctor's
+// version row shows the project behind) and is tried again at the next chat's
+// start. A newer stamp is never touched. Two passes, as config refreshes a
+// folder only after a sibling it shares files with. The person's line when it
+// changed files git tracks, or moved a repos.json git tracks into aidlc/; null
+// otherwise.
+function catchUpProjectFiles(projectDir: string): string | null {
+  if (!isCompiledExecutable() || existsSync(join(projectDir, ".aidlc-version"))) return null;
+  const major = AIDLC_VERSION.split(".")[0];
+  const behind = () => {
+    try {
+      return discoverProjectHarnesses(projectDir).filter((harness) => {
+        const version = harness.frameworkVersion;
+        if (!version || version.split(".")[0] !== major) return false;
+        try {
+          return compareVersions(version, AIDLC_VERSION) < 0;
+        } catch {
+          return false;
+        }
+      });
+    } catch {
+      return [];
+    }
+  };
+  let pending = behind();
+  if (pending.length === 0) return null;
+  const trackedList = trackedReposManifestAtRoot(projectDir);
+  const before = projectChanges(projectDir);
+  // The child resolves its own harness, as a typed config does: this hook's
+  // pins name the chat's harness folder, not the one being refreshed.
+  const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_CONFIG_DEFER_KIRO_SESSION: "1" };
+  for (const key of ["AIDLC_HARNESS_DIR", "AIDLC_HARNESS_DIR_GUESSED", "AIDLC_HARNESS_NAME", "AIDLC_RUNTIME_PROJECT_DIR"]) {
+    delete env[key];
+  }
+  for (let pass = 0; pass < 2 && pending.length > 0; pass++) {
+    const tried = pending.length;
+    for (const harness of pending) {
+      spawnSync(
+        process.execPath,
+        ["config", "--quiet", "--harness", typedHarnessName(harness.distribution), "--project-dir", projectDir],
+        {
+          cwd: projectDir,
+          env,
+          stdio: ["ignore", "pipe", "pipe"],
+          timeout: 600_000,
+        },
+      );
+    }
+    pending = behind();
+    // A second pass only after the first brought a folder up: one config
+    // refused stays refused, so it runs once per chat start.
+    if (pending.length === tried) break;
+  }
+  const moved = trackedList && reposManifestMovedIntoAidlc(projectDir);
+  const after = before === null ? null : projectChanges(projectDir);
+  const changed = after === null ? [] : refreshChanged(projectDir, before ?? new Map(), after, moved);
+  return catchUpChangedLine(AIDLC_VERSION, changed, moved);
+}
+
+function projectGit(projectDir: string, args: string[], input?: string) {
+  // No optional locks: a commit the person starts meanwhile never meets this one's index lock.
+  return spawnSync("git", ["--no-optional-locks", "-C", projectDir, ...args], {
+    encoding: "utf-8",
+    input,
+    timeout: 30_000,
+    maxBuffer: 64 * 1024 * 1024,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+}
+
+// What git shows changed in the project outside aidlc/ (whose records change at
+// every step), by path relative to the project folder, each with its status and
+// its content's id: a file the person had changed already and the refresh
+// rewrote reads as changed after, one it left does not. Null outside git.
+function projectChanges(projectDir: string): Map<string, string> | null {
+  const prefix = projectGit(projectDir, ["rev-parse", "--show-prefix"]);
+  const top = projectGit(projectDir, ["rev-parse", "--show-toplevel"]);
+  if (prefix.status !== 0 || top.status !== 0) return null;
+  const status = projectGit(projectDir, ["status", "--porcelain=v1", "-z", "-uall", "--", ".", ":(exclude)aidlc"]);
+  if (status.status !== 0) return null;
+  const inProject = prefix.stdout.trim();
+  // git's own paths are from the top of the repo; each row keeps that path for
+  // its content id and the project-relative one it is counted by.
+  const rows: Array<{ code: string; path: string; fromTop: string }> = [];
+  const entries = status.stdout.split("\0");
+  for (let at = 0; at < entries.length; at++) {
+    const entry = entries[at];
+    if (entry.length < 4) continue;
+    const code = entry.slice(0, 2);
+    const fromTop = entry.slice(3);
+    rows.push({ code, fromTop, path: inProject !== "" && fromTop.startsWith(inProject) ? fromTop.slice(inProject.length) : fromTop });
+    // A rename's source path follows it, in either column.
+    if ("RC".includes(code[0]) || "RC".includes(code[1])) at++;
+  }
+  const repoTop = top.stdout.trim();
+  // Only regular files have a content id (a nested repo or a submodule is a folder).
+  const present = rows.filter((row) => {
+    try {
+      return lstatSync(join(repoTop, ...row.fromTop.split("/"))).isFile();
+    } catch {
+      return false;
+    }
+  });
+  const ids = present.length === 0 ? [] : projectGit(repoTop, ["hash-object", "--stdin-paths"], `${present.map((row) => row.fromTop).join("\n")}\n`)
+    .stdout.split("\n").map((line) => line.trim());
+  const changes = new Map<string, string>();
+  for (const row of rows) {
+    const at = present.indexOf(row);
+    changes.set(row.path, `${row.code}:${at < 0 ? "-" : ids[at] ?? "?"}`);
+  }
+  return changes;
+}
+
+// The paths the refresh changed: new in git's view or with new content, a file
+// git does not track counted only in a folder git already tracks, and the
+// list's own two paths left to the move.
+function refreshChanged(projectDir: string, before: Map<string, string>, after: Map<string, string>, moved: boolean): string[] {
+  const tracked = new Map<string, boolean>();
+  const folderTracked = (folder: string): boolean => {
+    if (!tracked.has(folder)) tracked.set(folder, projectGit(projectDir, ["ls-files", "--", folder]).stdout.trim() !== "");
+    return tracked.get(folder) ?? false;
+  };
+  return [...after].filter(([path, now]) => {
+    if (before.get(path) === now) return false;
+    if (moved && path === REPOS_FILE) return false;
+    if (!now.startsWith("??")) return true;
+    const slash = path.indexOf("/");
+    return slash > 0 && folderTracked(path.slice(0, slash));
+  }).map(([path]) => path);
 }
 
 export async function run(input: string): Promise<number> {
@@ -279,7 +438,10 @@ if (sessionId) {
 // Atomically materialize a clone's missing gitignored cursor, then bring the
 // copy the harness includes read up to date with the session's space, before
 // the no-workflow early exit. A copy that config never ran in first gets
-// AI-DLC's part of .gitignore and AGENTS.md, after the team's own content.
+// AI-DLC's part of .gitignore and AGENTS.md, after the team's own content,
+// except in a teammate's clone the lead's plan has not reached yet, where the
+// lead's share may bring those files (AI-DLC's working files there ignore
+// themselves from inside aidlc/ instead).
 ensureActiveSpaceCursor(projectDir);
 // On Kiro (kiro-ide), a reviewer copy whose review in this chat's work is over
 // without its verdict (the Unit or the stage approved over it) leaves the
@@ -291,14 +453,19 @@ if (selection.intent !== null) sweepReviewCopies(projectDir, { intent: selection
 // here reaches their next request as it is, and the Kiro IDE tree never reads
 // it (its chats read the steering file); every other host read its include
 // when the chat loaded.
-let includeRepointed = addRootBlocks(projectDir).length > 0;
+const planNotHere = leadsPlanNotHere(projectDir);
+if (planNotHere) ignoreOwnWorkingFiles(projectDir);
+let includeRepointed = !planNotHere && addRootBlocks(projectDir).length > 0;
 let copyBehind: string[] = [];
+// The copy this chat's own include reads (an earlier release's place until the
+// refresh re-points it).
+const chatCopyDir = chatActiveMemoryCopyDir(projectDir, runtimeHarnessName(projectDir));
 try {
-  copyBehind = activeMemoryCopyDrift(projectDir, selection.space);
+  copyBehind = activeMemoryCopyDrift(projectDir, selection.space, chatCopyDir);
   const written = refreshActiveMemory(projectDir, selection.space);
-  if (!written.includes(ACTIVE_MEMORY_DIR)) copyBehind = [];
+  if (!written.includes(chatCopyDir)) copyBehind = [];
   const noOlderCopyInChat = ["kiro", "opencode", "kiro-ide"].includes(runtimeHarnessName(projectDir));
-  if (written.some((path) => path !== ACTIVE_MEMORY_DIR || !noOlderCopyInChat)) includeRepointed = true;
+  if (written.some((path) => path !== chatCopyDir || !noOlderCopyInChat)) includeRepointed = true;
 } catch {
   // non-fatal: the copy is written again at the next /aidlc, switch or --doctor
 }
@@ -316,7 +483,7 @@ let memoryHandoff = "";
 if (copyBehind.length > 0) {
   try {
     if (["claude", "copilot"].includes(runtimeHarnessName(projectDir))) {
-      const written = `The method files this chat's instructions import (${ACTIVE_MEMORY_DIR}/) were written for space ` +
+      const written = `The method files this chat's instructions import (${chatCopyDir}/) were written for space ` +
         `\`${selection.space}\` just now, after the instructions were read`;
       const inline = inlineMemoryFiles(projectDir, selection.space, copyBehind);
       memoryHandoff = inline !== null && inline.bytes <= HANDOFF_MAX_BYTES
@@ -385,6 +552,18 @@ if (sessionId && !rebindCheckOnly) {
     }
   } catch {
     // Kept at a later start.
+  }
+  // After the status line, whose once-only line config's own call would take.
+  // A compaction's start is mid-turn, so the refresh waits for the next chat.
+  try {
+    const caughtUp = source === "compact" ? null : catchUpProjectFiles(projectDir);
+    if (caughtUp !== null) {
+      // opencode's adapter carries no session-start context: the next step does.
+      if (runtimeHarnessName(projectDir) === "opencode") addPendingPersonLines(projectDir, sessionId, [caughtUp]);
+      else asks.push(`TELL ONCE: in your first reply, tell the person this, in their language: "${caughtUp}"`);
+    }
+  } catch {
+    // Tried again at the next chat's start.
   }
   trackedSteeringAsk = asks.filter(Boolean).join("\n");
 }
@@ -504,7 +683,7 @@ if (eventType && process.env.AIDLC_SESSION_ANCHOR === "1") {
 // A conversation works ONE intent; the active-intent cursor is durable + shared
 // across sessions. So resuming an A-chat after the cursor moved to B would
 // inject B's context silently (vision §3, the central multi-space hazard). We
-// fix it with a per-session binding and intent stamp (aidlc/.aidlc-sessions/):
+// fix it with a per-session binding and intent stamp (aidlc/.aidlc-engine/sessions/):
 //   - On a STARTED-class event, stamp the working intent's UUID for this
 //     session so a later resume can detect a cursor drift.
 //   - On RESUMED, if the owned UUID (the binding's, else the stamp's) differs

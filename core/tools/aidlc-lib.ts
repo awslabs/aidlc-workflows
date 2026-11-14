@@ -9,6 +9,7 @@ import {
   claimPrefixOf,
   claimRegistryCachePath,
   claimRegistryGit,
+  ownRemoteAmong,
   readClaimAt,
   readUnitClaimRegistryCache,
   type UnitClaimRegistryCache,
@@ -53,10 +54,26 @@ import {
   SPACE_NAME_REGEX,
   repoNameProblem,
   repoNameRefusal,
+  normalizeDriveLetter,
   typedHarnessName,
+  WORKSPACE_ENGINE_DIR,
+  workspaceEngineFile,
+  workspaceEnginePath,
 } from "./aidlc-runtime-paths.ts";
-export { entrySkillInvocation, repoNameProblem, repoNameRefusal, SPACE_NAME_REGEX } from "./aidlc-runtime-paths.ts";
-import { humanTurnMintAllowed, personGitNameField } from "./aidlc-git-name.ts";
+export {
+  ensureWorkspaceEngineFolder,
+  entrySkillInvocation,
+  normalizeDriveLetter,
+  REQUEST_TEXT_DIR,
+  REQUEST_TEXT_DIRS,
+  repoNameProblem,
+  repoNameRefusal,
+  SPACE_NAME_REGEX,
+  WORKSPACE_ENGINE_DIR,
+  workspaceEngineFile,
+  workspaceEnginePath,
+} from "./aidlc-runtime-paths.ts";
+import { gitUserName, humanTurnMintAllowed, personGitNameField } from "./aidlc-git-name.ts";
 export { humanTurnMintAllowed } from "./aidlc-git-name.ts";
 import { gitCommonDirOf, hasRealGitEntry, submoduleLeavesProjectRepo } from "./aidlc-git.ts";
 export { hasRealGitEntry } from "./aidlc-git.ts";
@@ -188,6 +205,8 @@ import {
   isoTimestamp,
   isPersonAskedSkipReason,
   isTeamUnitOwnership,
+  keepIntentEntryInRecord,
+  keepRecordKeptEntries,
   knownAuditShardName,
   legacyBoltName,
   legacyWorktreePath,
@@ -554,6 +573,7 @@ export {
 // imports loadScopeMapping/loadStageGraph from this file). Type-only
 // imports are erased at runtime so they don't create the cycle.
 import { claudeSettingsHookTargets, readRootIntegrations, withoutBom } from "./aidlc-distribution.ts";
+import { clonedRepoListing, mappedRepoDir, readWorkspaceRepos, repoNotThereLine, REPOS_FILE, rootReposManifestIsAidlcs } from "./aidlc-workspace-manifest.ts";
 import type { subgraphForScope as SubgraphForScope } from "./aidlc-graph.ts";
 import type * as SwarmCheckpoints from "./aidlc-swarm-checkpoints.ts";
 import type { ConstructionEvidence } from "./aidlc-construction-checkpoints.ts";
@@ -1405,18 +1425,6 @@ export function resolveProjectDirFromHook(importMetaUrl: string): string {
 }
 
 // --- File paths ---
-
-// Upper-case a leading Windows drive letter and leave every other character
-// alone. VS Code-based hosts (Kiro IDE) report written files as `c:\...` while
-// the project dir carries `C:\...`, and the drive letter is the one path
-// component Windows never compares case-sensitively (per-directory case
-// sensitivity applies to names, not the volume designator), so this makes root
-// prefix checks agree without conflating directories whose names differ only
-// in case. A POSIX absolute path never starts with `<letter>:`, so the call is
-// a no-op there.
-export function normalizeDriveLetter(p: string): string {
-  return /^[a-z]:(?:[\\/]|$)/.test(p) ? p[0].toUpperCase() + p.slice(1) : p;
-}
 
 // --- Terminal-command classification (the deterministic-dispatch seam) ---
 //
@@ -4747,13 +4755,21 @@ export function codekbFingerprintExcludes(projectDir: string, sourceDir: string)
 // repo holds none of these files. The source registry is AI-DLC's boundary
 // file, like its settings files, and every repo root may hold one, a recorded
 // checkout's included: known by its listing name
-// (`<label>@checkout/.aidlc-source-paths.json`), as a claim is read.
+// (`<label>@checkout/.aidlc-source-paths.json`), as a claim is read. The root
+// repos.json, when it is the workspace's repo list (rootReposManifestIsAidlcs),
+// is AI-DLC's: config's refresh moves it into aidlc/ while work may be open, and
+// that move is nobody's change to the source.
 export function aidlcOwnedSourceKey(projectDir: string): (pathKey: string) => boolean {
   const owned = codekbFingerprintExcludes(projectDir, projectDir);
+  let rootList: boolean | undefined;
   return (pathKey) => {
     const parsed = splitSourcePathKey(pathKey);
     if (parsed === null) return false;
     if (parsed.path === SOURCE_FINGERPRINT_REGISTRY) return true;
+    if (parsed.repo === "" && parsed.path === REPOS_FILE) {
+      rootList ??= rootReposManifestIsAidlcs(projectDir);
+      return rootList;
+    }
     const slash = parsed.path.indexOf("/");
     if (
       parsed.repo === "" && slash > 0 && parsed.path.slice(slash + 1) === SOURCE_FINGERPRINT_REGISTRY &&
@@ -5110,13 +5126,20 @@ export function appendIntentToRegistry(
   writeIntentRegistry(projectDir, list, space);
 }
 
+// The build-out's own module (aidlc-unit-teams.ts) imports this file, so it is
+// required lazily.
+const unitTeams = (): typeof import("./aidlc-unit-teams.ts") => require("./aidlc-unit-teams.ts");
+
 // Write a space's registry. A file git left conflicted was read as every row of
 // both sides, so this write keeps them all; the person hears once that git
 // still shows the file as conflicted. Their git is theirs: nothing is staged.
 // A file nothing can read (a hand edit gone wrong) is never written over: it is
-// kept byte for byte under a new name beside the new list.
-export function writeIntentRegistry(projectDir: string, list: IntentRegistryEntry[], space?: string): void {
+// kept byte for byte under a new name beside the new list. A row its own record
+// folder keeps (a Unit's build) is written back there.
+export function writeIntentRegistry(projectDir: string, all: IntentRegistryEntry[], space?: string): void {
+  const list = keepRecordKeptEntries(projectDir, all, space);
   const path = intentsRegistryPath(projectDir, space);
+  if (list.length === 0 && all.length > 0 && !existsSync(path)) return;
   let bytes: Buffer | null = null;
   try {
     bytes = readFileSync(path);
@@ -5218,7 +5241,7 @@ export function workToPickUp(
   const recorded = listIntents(projectDir, space, selectedIntent).filter((intent) => !isArchivedIntent(intent));
   if (recorded.length === 0 || recorded.some((intent) => intent.active)) return null;
   const unfinished = recorded.map((intent) => ({ intent, state: recordStateText(projectDir, intent, space) }))
-    .filter(({ intent, state }) => !isFinishedWork(intent, state));
+    .filter(({ intent, state }) => !isFinishedWork(intent, state) && !unitTeams().isHomesCopiedWork(projectDir, state));
   return unfinished.some(({ intent }) => intent.dirName) ? unfinished : null;
 }
 
@@ -8003,8 +8026,8 @@ export function clearSessionIntentSwitch(projectDir: string): void {
 // has no session_id, so it cannot re-stamp the live session's record on its own.
 // This marker is the bridge: the hook writes it on EVERY fire (so it always names
 // the live conversation), and the switch tool reads it to learn which session to
-// re-stamp. Lives beside the per-session records under `aidlc/.aidlc-sessions/`
-// (gitignored — dot-gitignore `aidlc/.aidlc-sessions/`): per-user runtime state.
+// re-stamp. Lives beside the per-session records under `aidlc/.aidlc-engine/sessions/`
+// (kept out of git by the engine folder's .gitignore): per-user runtime state.
 export const CURRENT_SESSION_FILE = ".current-session";
 
 function currentSessionPath(projectDir: string): string {
@@ -8131,21 +8154,20 @@ export function registerIntentRecord(
   sessionId?: string,
   request?: string,
   reposNamed = false,
+  keepInRecord = false,
 ): void {
-  appendIntentToRegistry(
-    projectDir,
-    {
-      uuid: minted.uuid,
-      slug: minted.slug,
-      dirName: minted.dirName,
-      scope,
-      repos: repos && repos.length > 0 ? repos : undefined,
-      ...(reposNamed && repos && repos.length > 0 ? { repos_named: true as const } : {}),
-      status: "in-flight",
-      ...(request ? { request } : {}),
-    },
-    minted.space,
-  );
+  const entry: IntentRegistryEntry = {
+    uuid: minted.uuid,
+    slug: minted.slug,
+    dirName: minted.dirName,
+    scope,
+    repos: repos && repos.length > 0 ? repos : undefined,
+    ...(reposNamed && repos && repos.length > 0 ? { repos_named: true as const } : {}),
+    status: "in-flight",
+    ...(request ? { request } : {}),
+  };
+  if (keepInRecord) keepIntentEntryInRecord(projectDir, entry, minted.space);
+  else appendIntentToRegistry(projectDir, entry, minted.space);
   if (selectIntentForSession(projectDir, minted.dirName, minted.space, sessionId)) return;
   leaveCreationReceipt(minted.recordDir, minted.uuid);
 }
@@ -9179,7 +9201,7 @@ export function steeringTokenKeyPathFor(projectDir: string, statePath: string): 
       ? join(record, LEGACY_SESSION_STEERING_TOKEN_KEY_FILE)
       : join(storage, STEERING_TOKEN_KEY_FILE);
   }
-  return join(projectDir, "aidlc", ".aidlc-sessions", LEGACY_SESSION_STEERING_TOKEN_KEY_FILE);
+  return join(sessionsDir(projectDir), LEGACY_SESSION_STEERING_TOKEN_KEY_FILE);
 }
 
 /** The key encoded in a key file's text, or null when it is not a well-formed key. */
@@ -13108,10 +13130,6 @@ export const LEARNINGS_SELECTIONS_DIR = `${ENGINE_DIR}/learnings`;
  *  file. The plan-approval guard and every adapter that mirrors it read this. */
 export const ENGINE_TEXT_DIRS: readonly string[] = [ANSWER_TEXT_DIR, LEARNINGS_SELECTIONS_DIR];
 
-/** The project folder where a person's request for `next --request-file` is
- *  written, so the words reach the engine without passing through any shell.
- *  The engine reads only a plain file directly inside it. */
-export const REQUEST_TEXT_DIR = "aidlc/.aidlc-request-text";
 
 /**
  * Read one answer text file the agent wrote, then remove it. The path is
@@ -21368,16 +21386,14 @@ export function legacyParkedRefPrefix(slug: string): string {
   return `refs/aidlc/parked/${slug}/`;
 }
 
-// --- Multi-repo: repos are siblings of the workspace ----------------------------
+// --- Multi-repo: the repos a workspace works on --------------------------------
 //
-// In the workspace model the projectDir is the WORKSPACE roof (`my-workspace/`),
-// which is NOT itself a git repo. Code repos are its immediate children
-// (`my-workspace/repo-a/`, `my-workspace/repo-b/`) — siblings of `aidlc/` and the
-// engine dir (vision §7). An intent records the repos it touches in its
-// intents.json row (`repos`); construction targets a specific one. P7 decouples
-// "the repo to operate on" from "the single projectDir": before P7 the worktree
-// tool ran `git worktree add` in the projectDir's own cwd (assuming projectDir IS
-// the repo); now `--repo <name>` anchors it to the sibling repo dir instead.
+// The projectDir is the WORKSPACE (the AI-DLC install, aidlc/, repos.json). Its
+// code repos are immediate children (`my-workspace/repo-a/`) or wherever
+// repos.json gives them a `path`: beside the workspace, elsewhere on disk, or the
+// workspace folder itself. An intent records the repos it touches in its
+// intents.json row (`repos`); construction targets a specific one with
+// `--repo <name>`.
 //
 // repoDir resolves the on-disk dir for a repo name; it does NOT validate that the
 // dir exists or is a git repo (the caller does, where the git op runs).
@@ -21391,9 +21407,24 @@ export function isValidRepoName(name: string): boolean {
   return repoNameProblem(name) === null;
 }
 
-// The on-disk dir for a sibling repo: an immediate child of the workspace root.
+// Where a repo's checkout lives: the one resolver. The `path` repos.json (or
+// one person's repos.local.json) gives it, against the workspace ("." is the
+// workspace itself); else the immediate child `<workspace>/<name>`.
+// A path written on Windows ("..\\billing") reads the same on every platform.
 export function repoDir(projectDir: string, repoName: string): string {
-  return join(projectDir, repoName);
+  const mapped = readWorkspaceRepos(projectDir).entries.get(repoName)?.path;
+  return mapped === undefined ? join(projectDir, repoName) : mappedRepoDir(projectDir, mapped);
+}
+
+// The repo is the workspace folder itself (repos.json gives it `"path": "."`).
+export function repoIsWorkspace(projectDir: string, repoName: string): boolean {
+  return resolvePath(repoDir(projectDir, repoName)) === resolvePath(projectDir);
+}
+
+// The workspace shell (aidlc/, the harness folders) lives only in the workspace
+// folder: the lone root, the roof of several repos, or a repo mapped to ".".
+function rootCarriesWorkspaceShell(projectDir: string, root: string): boolean {
+  return resolvePath(root) === resolvePath(projectDir);
 }
 
 // The checkouts a piece of work keeps its code in where the source walk does
@@ -21633,6 +21664,8 @@ function worktreeSourceExclusionContext(
     ".aidlc/worktree-meta.json",
     ".aidlc/base-source-listing.tsv",
     "aidlc/.aidlc-clone-id",
+    // The engine folder (the clone id, its .gitignore) is the workspace's, never the repo's source.
+    `aidlc/${WORKSPACE_ENGINE_DIR}/`,
   ];
   if ("intentRecord" in parsed) {
     if (
@@ -24069,7 +24102,9 @@ export function isSourceFileName(name: string): boolean {
 function filesystemSourceIdentity(
   root: string,
   carriesWorkspaceShell: boolean,
-  excludedTopLevel: ReadonlySet<string> = new Set(),
+  // Paths below the root the walk leaves out: a top-level name (the roof's
+  // folders) or a folder further down (another repo mapped inside this one).
+  excludedPaths: ReadonlySet<string> = new Set(),
   symlinkTargetMode: SourceSymlinkTargetMode = "follow",
   useWorktreeContext = true,
   // A materialized commit has no `.git` in its submodules; each expanded
@@ -24484,6 +24519,8 @@ function filesystemSourceIdentity(
     listing.set(listingPath, entry);
     return true;
   };
+  const foldPath = (path: string): string => (process.platform === "win32" ? path.toLowerCase() : path);
+  const excluded = new Set([...excludedPaths].map(foldPath));
   const walk = (
     dir: string,
     rel = "",
@@ -24630,8 +24667,7 @@ function filesystemSourceIdentity(
           continue;
         }
         if (
-          rel === "" &&
-          excludedTopLevel.has(entry.name) &&
+          excluded.has(foldPath(childRel)) &&
           !registeredPathRelevant(childRegistryRel)
         ) {
           continue;
@@ -25329,27 +25365,54 @@ function walkWorkspaceSource(
   const legacyLines: string[] = [];
   let legacyDiffers = false;
   const listing: WorkspaceSourceListing = new Map();
-  const roofExcluded = multiRepoRoofExcludedTopLevel(projectDir, repos);
-  if (roofExcluded === null) return null;
-  const roof = filesystemSourceIdentity(projectDir, true, roofExcluded, "follow", true, new Map(), dotnetOutputs);
-  if (roof === null) return null;
-  let dotnetOutputSeen = roof.dotnetOutputSeen;
-  lines.push(`roof=filesystem:${roof.fingerprint}`);
-  legacyLines.push(`roof=filesystem:${roof.legacyFingerprint ?? roof.fingerprint}`);
-  legacyDiffers ||= roof.legacyFingerprint !== undefined;
-  for (const [key, entry] of prefixedSourceListing(roof.listing)) {
-    listing.set(key, entry);
+  let dotnetOutputSeen = false;
+  // A repo mapped to the workspace folder itself is walked in its place: the
+  // roof is that repo, walked once with the shell left out.
+  if (!repos.some((name) => repoIsWorkspace(projectDir, name))) {
+    const roofExcluded = multiRepoRoofExcludedTopLevel(projectDir, repos);
+    if (roofExcluded === null) return null;
+    const roof = filesystemSourceIdentity(projectDir, true, roofExcluded, "follow", true, new Map(), dotnetOutputs);
+    if (roof === null) return null;
+    dotnetOutputSeen = roof.dotnetOutputSeen;
+    lines.push(`roof=filesystem:${roof.fingerprint}`);
+    legacyLines.push(`roof=filesystem:${roof.legacyFingerprint ?? roof.fingerprint}`);
+    legacyDiffers ||= roof.legacyFingerprint !== undefined;
+    for (const [key, entry] of prefixedSourceListing(roof.listing)) {
+      listing.set(key, entry);
+    }
   }
+  // Each repo's files are listed once, under its own name: a repo walked in
+  // place leaves out the folders of the other repos mapped inside it (the
+  // packages a workspace repo records as gitlinks, say).
+  const mappedDirs = [...new Set([...repos, ...readWorkspaceRepos(projectDir).entries.keys()])]
+    .map((name) => comparablePath(repoDir(projectDir, name)));
+  const reposInside = (dir: string): Set<string> => {
+    const root = comparablePath(dir);
+    const inside = new Set<string>();
+    for (const other of mappedDirs) {
+      const rel = relative(root, other);
+      if (rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel)) inside.add(rel.split(sep).join("/"));
+    }
+    return inside;
+  };
   for (const name of [...repos].sort()) {
-    // A sibling repo is a child of the roof; the shell is its SIBLING, never
-    // nested inside it, so nothing there belongs to the framework.
+    // A repo beside the workspace never holds the shell, so nothing there
+    // belongs to the framework; a repo that is the workspace folder does.
     const dir = repoDir(projectDir, name);
     if (!existsSync(dir)) {
       lines.push(`${name}=missing`);
       legacyLines.push(`${name}=missing`);
       continue;
     }
-    const source = filesystemSourceIdentity(dir, false, new Set(), "follow", true, new Map(), dotnetOutputs);
+    const source = filesystemSourceIdentity(
+      dir,
+      rootCarriesWorkspaceShell(projectDir, dir),
+      reposInside(dir),
+      "follow",
+      true,
+      new Map(),
+      dotnetOutputs,
+    );
     if (source === null) {
       // The walk recorded its own reason; name the member repo it happened in.
       if (lastSourceFailure !== null) lastSourceFailure = { ...lastSourceFailure, repo: name };
@@ -26002,13 +26065,11 @@ export function unclaimableIgnoredSourceKeys(
 ): Set<string> {
   const unclaimable = new Set<string>();
   if (keys.length === 0) return unclaimable;
-  let recordedRepos: string[];
   try {
-    recordedRepos = intentRepos(projectDir);
+    intentRepos(projectDir);
   } catch {
     return unclaimable;
   }
-  const carriesWorkspaceShell = recordedRepos.length === 0;
   const checkouts = readRecordedSourceCheckouts(projectDir);
   const sourceClaimValidation: GitSourceClaimValidationCache = new Map();
   const candidates: { key: string; sourceRepoDir: string; path: string }[] = [];
@@ -26037,7 +26098,7 @@ export function unclaimableIgnoredSourceKeys(
       // A deleted path is checked against HEAD alone.
     }
     const trackedFile = headMode !== undefined && headMode !== "040000" && !currentIsDirectory;
-    if (!ignoredPathClaimable(sourceRepoDir, path, trackedFile, carriesWorkspaceShell)) {
+    if (!ignoredPathClaimable(sourceRepoDir, path, trackedFile, rootCarriesWorkspaceShell(projectDir, sourceRepoDir))) {
       unclaimable.add(key);
     }
   }
@@ -26069,7 +26130,12 @@ function sourceKeyRegistryRoots(
     const parsed = splitSourcePathKey(key);
     if (parsed === null) return null;
     if (parsed.repo !== "") {
-      return { root: repoDir(projectDir, parsed.repo), path: parsed.path, carriesWorkspaceShell: false, shown: parsed.repo };
+      // A repo mapped to "." is the workspace folder, shell and all; one
+      // repos.json maps elsewhere is named where it is.
+      const root = repoDir(projectDir, parsed.repo);
+      const mapped = readWorkspaceRepos(projectDir).entries.get(parsed.repo)?.path;
+      const shown = mapped === undefined ? parsed.repo : rootCarriesWorkspaceShell(projectDir, root) ? "" : mapped.replaceAll("\\", "/").replace(/\/+$/, "");
+      return { root, path: parsed.path, carriesWorkspaceShell: rootCarriesWorkspaceShell(projectDir, root), shown };
     }
     const atRoot = { root: projectDir, path: parsed.path, carriesWorkspaceShell: true, shown: "" };
     if (!namesSourceCheckout(parsed.path)) return atRoot;
@@ -26734,8 +26800,10 @@ function validateUnitSourceManifestBytes(
   const recordedRepos = worktreeRelative ? [] : options.recordedRepos ?? intentRepos(projectDir);
   const recordedRepoSet = new Set(recordedRepos);
   const checkouts = worktreeRelative ? [] : readRecordedSourceCheckouts(projectDir);
-  const carriesWorkspaceShell =
-    worktreeContext?.carriesWorkspaceShell ?? recordedRepos.length === 0;
+  // The shell (aidlc/, the harness folders) is part of the root each write is
+  // in only when that root is the workspace folder.
+  const carriesShellAt = (sourceRepoDir: string): boolean =>
+    worktreeContext?.carriesWorkspaceShell ?? rootCarriesWorkspaceShell(projectDir, sourceRepoDir);
   const claims = new Set<string>();
   const prefixes: string[] = [];
   const seen = new Set<string>();
@@ -26820,6 +26888,13 @@ function validateUnitSourceManifestBytes(
 
     const normalized = normalizeManifestSourcePath(write.path);
     if ("reason" in normalized) return { ok: false, reason: `writes[${index}].path: ${normalized.reason}` };
+    const sourceRepoDir =
+      worktreeRelative
+        ? projectDir
+        : canonicalRepo === undefined
+          ? projectDir
+          : repoDir(projectDir, canonicalRepo);
+    const carriesWorkspaceShell = carriesShellAt(sourceRepoDir);
     if (
       sourcePathIsExcluded(
         normalized.path,
@@ -26830,11 +26905,7 @@ function validateUnitSourceManifestBytes(
       return { ok: false, reason: `writes[${index}].path is inside the framework record/shell exclusions` };
     }
     const claim = sourceClaimCheckout(
-      worktreeRelative
-        ? projectDir
-        : canonicalRepo === undefined
-          ? projectDir
-          : repoDir(projectDir, canonicalRepo),
+      sourceRepoDir,
       normalized.path,
       !worktreeRelative && canonicalRepo === undefined,
       checkouts,
@@ -27621,11 +27692,15 @@ function readStageBaseline(
 // A repo that joined the work after the stage's baseline was taken (intent
 // add-repo, a Source Baseline Addition on its INTENT_REPOS_CHANGED row) joins
 // the baseline as it was at the add, so its existing files are nobody's change;
-// so do the workspace files a clone's install wrote (CLONE_WRITES_AT_ROOT). A
-// repo the baseline already lists is never touched; the latest addition for a
-// repo wins. A repo no longer in the work leaves the baseline, as it left the
-// walk (workspaceSourceState walks intentRepos). An addition missing on this
-// machine leaves the baseline missing, as a missing baseline is.
+// so do the workspace files a clone's install, or the install of a repos.json
+// entry for a folder the person named, wrote (CLONE_WRITES_AT_ROOT). A repo of
+// the work cloned since by git itself that no add on the record names (the
+// agent's own clone in a plan step) joins as the commit the clone checked out
+// holds it (clonedRepoListing). A repo the baseline already lists is never touched;
+// the latest addition for a repo wins. A repo no longer in the work leaves the
+// baseline, as it left the walk (workspaceSourceState walks intentRepos). An
+// addition missing on this machine leaves the baseline missing, as a missing
+// baseline is.
 function withRepoBaselineAdditions(
   projectDir: string,
   stageSlug: string,
@@ -27662,7 +27737,6 @@ function withRepoBaselineAdditions(
     row.event === "INTENT_REPOS_CHANGED" &&
     auditBlockField(row.block, REPO_BASELINE_ADDITION_FIELD) !== null &&
     !attemptEventDefinitelyBefore(row, from)));
-  if (additions.length === 0) return kept.size === baseline.listing.size ? baseline : { state: "ready", listing: kept };
   const listed = new Set([...kept.keys()].map((key) => splitSourcePathKey(key)?.repo ?? ""));
   const joined = new Map<string, WorkspaceSourceListing>();
   const written = new Map<string, string>();
@@ -27697,7 +27771,8 @@ function withRepoBaselineAdditions(
     };
     const added = readStageBaseline(projectDir, stageSlug, auditBlockField(row.block, REPO_BASELINE_ADDITION_FIELD) ?? "", intent, space);
     if (added.state !== "ready") return added;
-    const cloned = auditBlockField(row.block, "Cloned From") !== null;
+    // A clone's install, or add-repo --path's, wrote repos.json and the two files.
+    const cloned = auditBlockField(row.block, "Cloned From") !== null || auditBlockField(row.block, "Listed At") !== null;
     const byRepo = new Map<string, WorkspaceSourceListing>();
     for (const [key, entry] of added.listing) {
       const parsed = splitSourcePathKey(key);
@@ -27713,8 +27788,34 @@ function withRepoBaselineAdditions(
     }
     for (const [repo, entries] of byRepo) joined.set(repo, entries);
   }
+  const unlisted = [...repos].sort().filter((repo) => !listed.has(repo) && !joined.has(repo));
+  // A repo an add on the record names joins by that add or not at all, also
+  // when the caller hid its row: the merge chain's opening check reads the work
+  // as it stood at its first landing (currentSwarmSourceMergeChain).
+  const named = new Set(unlisted.length === 0 ? [] : [...rows, ...readAuditShardEvents(projectDir, intent, space)]
+    .filter((row) => row.event === "INTENT_REPOS_CHANGED")
+    .flatMap((row) => ["Added", "Cloned"].flatMap((field) => (auditBlockField(row.block, field) ?? "").split(",")))
+    .map((name) => name.trim()));
+  const arrived = unlisted.filter((repo) => !named.has(repo)).flatMap((repo) => {
+    const dir = repoDir(projectDir, repo);
+    const cloned = isGitRepoDir(dir)
+      ? clonedRepoListing(dir, (commit, followLinks) => {
+        const failure = lastSourceFailure;
+        try {
+          return gitCommitSourceListing(dir, commit, rootCarriesWorkspaceShell(projectDir, dir), followLinks);
+        } finally {
+          lastSourceFailure = failure;
+        }
+      })
+      : null;
+    return cloned === null ? [] : [new Map([...cloned].map(([key, entry]) => [`${repo}${key}`, entry]))];
+  });
+  if (additions.length === 0 && arrived.length === 0) {
+    return kept.size === baseline.listing.size ? baseline : { state: "ready", listing: kept };
+  }
   const listing: WorkspaceSourceListing = new Map(kept);
   for (const entries of joined.values()) for (const [key, entry] of entries) listing.set(key, entry);
+  for (const entries of arrived) for (const [key, entry] of entries) listing.set(key, entry);
   for (const [key, entry] of written) listing.set(key, entry);
   return { state: "ready", listing };
 }
@@ -27800,14 +27901,16 @@ const NON_REPO_WORKSPACE_DIRS = new Set([
   "node_modules",
 ]);
 
-/** Unrecorded recovery candidates must be real immediate children, not symlinks or junctions. */
+/** Recovery candidates must be real checkouts, not symlinks or junctions: an
+ * immediate child, or the path repos.json gives the repo. */
 export function isWorkspaceRepoDir(projectDir: string, name: string): boolean {
   if (basename(name) !== name || name === "." || name === "..") return false;
-  const dir = join(projectDir, name);
+  const mapped = readWorkspaceRepos(projectDir).entries.get(name)?.path !== undefined;
+  const dir = repoDir(projectDir, name);
   try {
     const stat = lstatSync(dir);
     return !stat.isSymbolicLink() && stat.isDirectory() &&
-      realpathSync(dir) === join(realpathSync(projectDir), name) && isGitRepoDir(dir);
+      (mapped || realpathSync(dir) === join(realpathSync(projectDir), name)) && isGitRepoDir(dir);
   } catch {
     return false;
   }
@@ -27841,9 +27944,12 @@ export function discoverSiblingRepos(projectDir: string, leftOut = false): strin
 }
 
 // Resolve the repo set for a new intent at creation: an explicit `--repos a,b` set
-// wins (authoritative when the user names them); absent it, sibling auto-discovery
-// supplies the default. Each name is validated. Returns [] when neither yields a
-// repo (→ no repos row → lone-repo inference). Throws on an invalid explicit name.
+// wins (authoritative when the user names them); absent it, the repos repos.json
+// declares that are on disk, wherever their path puts them, plus every other
+// immediate child repo. A workspace whose only repo is the workspace itself
+// (`"path": "."`) records none, as a one-repo workspace always has. Each name is
+// validated. Returns [] when nothing yields a repo (→ no repos row → lone-repo
+// inference). Throws on an invalid explicit name.
 export function resolveIntentRepoSet(
   projectDir: string,
   explicitReposCsv?: string,
@@ -27862,7 +27968,13 @@ export function resolveIntentRepoSet(
     }
     return [...new Set(names)].sort();
   }
-  return discoverSiblingRepos(projectDir);
+  const declared = [...readWorkspaceRepos(projectDir).entries.keys()]
+    .filter((name) => isGitRepoDir(repoDir(projectDir, name)));
+  const declaredDirs = new Set(declared.map((name) => resolvePath(repoDir(projectDir, name))));
+  const found = discoverSiblingRepos(projectDir)
+    .filter((name) => declared.includes(name) || !declaredDirs.has(resolvePath(projectDir, name)));
+  const repos = [...new Set([...declared, ...found])].sort();
+  return repos.length === 1 && repoIsWorkspace(projectDir, repos[0]) ? [] : repos;
 }
 
 // The recorded repo set for an intent (its intents.json row's `repos`), or [] when
@@ -27997,14 +28109,15 @@ export function clearUnitsReposAsked(projectDir: string): void {
   clearEngineAskMark(projectDir, UNITS_REPOS_ASK);
 }
 
-// Teams each owning a Unit need the code in this project's own repo, so work
-// with recorded repos is built by one session for now. What the person hears,
-// from the engine as Construction starts and from the ownership setter alike.
+// Teams build Units across repos when the workspace is in git (its origin is
+// where the Units are given out); work with recorded repos in a workspace that
+// is not is built by one session. What the person hears, from the engine as
+// Construction starts and from the ownership setter alike.
 export function teamsAcrossReposLine(repoCount: number, unitCount?: number): string {
   const where = repoCount === 1 ? "This work's code is in a repo of its own" : `This work spans ${repoCount} repos`;
   const units = unitCount === undefined ? "its Units" : `its ${unitCount} Units`;
-  return `${where}, so this session builds ${units}: teams each owning a Unit is not available yet for ` +
-    "work across repos.";
+  return `${where} and this workspace is not a git repository, so this session builds ${units}: for teams to ` +
+    "each own a Unit, put the workspace in git first.";
 }
 
 /** Recovery operates exactly where the framework recorded parking this slug;
@@ -28076,17 +28189,13 @@ export interface RepoResolution {
 //     of the set.
 // Throws (string message) on any disambiguation failure so the tool can surface it.
 //
-// A repo NAME becomes a working DIRECTORY through repoDir (an immediate child of
-// the workspace root). That is right for a multi-repo workspace and wrong whenever
-// the workspace root IS the repository, where no such child exists — so the
-// resolved cwd is verified rather than returned unchecked, and the caller gets a
-// message naming the path instead of a downstream git failure in a missing dir.
+// A repo NAME becomes a working DIRECTORY through repoDir. A checkout missing
+// there is said with the way forward and the path, instead of a downstream git
+// failure in a missing dir.
 function repoCwdOrThrow(projectDir: string, repoName: string): string {
   const cwd = repoDir(projectDir, repoName);
   if (existsSync(cwd)) return cwd;
-  throw new Error(
-    `Repo "${repoName}" resolves to ${cwd}, which does not exist. A recorded repo (or --repo) names a checkout that must be an immediate child of the workspace root. If the workspace root IS the repository, record no repos and pass no --repo.`,
-  );
+  throw new Error(`${repoNotThereLine(projectDir, repoName)} (${cwd})`);
 }
 
 export function resolveConstructionRepo(
@@ -29891,11 +30000,12 @@ export function reviewerDispatchPath(projectDir: string, intent?: string, space?
 // a crashed review.
 export const REVIEWER_DISPATCH_TTL_MS = 6 * 60 * 60 * 1000;
 
-export const UNIT_PARKED_FILE = ".aidlc-unit-parked";
-export const CLAIM_GENERATIONS_FILE = ".aidlc-claim-generations.json";
-export const UNIT_PARTICIPANT_FILE = ".aidlc-unit-participant";
-export const UNIT_RELEASE_PENDING_FILE = ".aidlc-unit-releases";
-export const UNIT_MERGE_DIR = ".aidlc-unit-merges";
+// This checkout's Unit files, under aidlc/.aidlc-engine/ (workspaceEngineFile).
+export const UNIT_PARKED_FILE = "units/parked";
+export const CLAIM_GENERATIONS_FILE = "units/claim-generations.json";
+export const UNIT_PARTICIPANT_FILE = "units/participant";
+export const UNIT_RELEASE_PENDING_FILE = "units/releases";
+export const UNIT_MERGE_DIR = "units/merges";
 
 export interface UnitMergeEvidence {
   stages_expected: string[];
@@ -29972,15 +30082,15 @@ export interface UnitMergeTransaction {
 }
 
 export function unitParkedPath(projectDir: string): string {
-  return join(workspaceRoot(projectDir), UNIT_PARKED_FILE);
+  return workspaceEngineFile(projectDir, UNIT_PARKED_FILE);
 }
 
 export function claimGenerationsPath(projectDir: string): string {
-  return join(workspaceRoot(projectDir), CLAIM_GENERATIONS_FILE);
+  return workspaceEngineFile(projectDir, CLAIM_GENERATIONS_FILE);
 }
 
 export function unitParticipantPath(projectDir: string): string {
-  return join(workspaceRoot(projectDir), UNIT_PARTICIPANT_FILE);
+  return workspaceEngineFile(projectDir, UNIT_PARTICIPANT_FILE);
 }
 
 function identityScopedUnitPath(
@@ -30004,7 +30114,7 @@ function identityScopedUnitPath(
       throw new Error(`Invalid ${label} path segment "${value}".`);
     }
   }
-  return join(workspaceRoot(projectDir), root, resolvedSpace, resolvedIntent, `${unit}.json`);
+  return workspaceEnginePath(projectDir, ...root.split("/"), resolvedSpace, resolvedIntent, `${unit}.json`);
 }
 
 export function unitReleasePendingPath(
@@ -30166,12 +30276,7 @@ export function unitMergeTransactionsForIdentity(
   space: string,
   intentUuid: string,
 ): UnitMergeTransaction[] {
-  const dir = join(
-    workspaceRoot(projectDir),
-    UNIT_MERGE_DIR,
-    space,
-    intentUuid,
-  );
+  const dir = workspaceEnginePath(projectDir, ...UNIT_MERGE_DIR.split("/"), space, intentUuid);
   let files: string[];
   try {
     files = readdirSync(dir)
@@ -30288,6 +30393,8 @@ function claimRegistryRemote(projectDir: string): string | null {
   if (remotes.includes("origin")) return "origin";
   if (remotes.length === 0) return null;
   if (remotes.length === 1) return remotes[0];
+  const own = ownRemoteAmong(projectDir, remotes);
+  if (own !== null) return own;
   throw new Error(
     `Unit claim registry read failed: multiple remotes (${remotes.join(", ")}) and no origin.`,
   );
@@ -30524,7 +30631,7 @@ export function validateLiveUnitScope(
   if (!isTeamUnitOwnership(state)) return null;
   const stamp = applicableTeamUnitScopeStamp(pd, state);
   if (!stamp) {
-    if (cachedClaimFanoutActive(pd)) {
+    if (cachedClaimFanoutActive(pd, state)) {
       const held = unitsHeldHere(pd);
       if (held && (requestedUnit === undefined || held.has(requestedUnit))) return null;
       throw new Error(
@@ -30753,6 +30860,8 @@ export function unitMergedReceipts(
     if (row.event !== "UNIT_MERGED") continue;
     const unit = auditBlockField(row.block, "Unit");
     if (!unit || !eventMatchesClaimAttempt(projectDir, row.block, unit)) continue;
+    // A merge the lead's Build and Test sent back since no longer stands.
+    if (!unitTeams().unitMergesStanding(rows, unit).includes(row)) continue;
     merged.add(unit);
   }
   return merged;
@@ -31246,7 +31355,15 @@ export function isAutonomousMode(stateContent: string | null): boolean {
 }
 
 export function readUnitGateRhythm(stateContent: string | null): UnitGateRhythm {
-  if (!isTeamUnitOwnership(stateContent)) return "per-stage";
+  if (stateContent === null) return "per-stage";
+  // Solo work built one Unit at a time with verified checkpoints approves each
+  // Unit once, at its checkpoint: that rhythm is kept when teams join it.
+  if (!isTeamUnitOwnership(stateContent)) {
+    return getField(stateContent, "Construction Iteration")?.trim() === "unit-major" &&
+        getField(stateContent, "Construction Checkpoints")?.trim() === "enabled"
+      ? "unit-end"
+      : "per-stage";
+  }
   return getField(stateContent!, UNIT_GATE_RHYTHM_FIELD)?.trim() === "unit-end"
     ? "unit-end"
     : "per-stage";
@@ -39699,6 +39816,8 @@ export const NEXT_FLAGS: ReadonlyMap<string, NextFlagShape> = new Map<string, Ne
   ["--unit", { value: "free" }],
   ["--plan-name", { value: "free" }],
   ["--save-as", { value: "free" }],
+  // The lead's project address a team takes a Unit from, as the agent read it from the person's words.
+  ["--lead-address", { value: "free" }],
   ["--skip", { value: "free" }],
   ["--add", { value: "free" }],
   ["--claim", { value: "free", valueMayLookLikeFlag: true }],
@@ -40229,7 +40348,7 @@ export function isLearningsNoteDecision(block: string): boolean {
   const kind = auditBlockField(block, QUESTION_KIND_FIELD);
   if (kind !== null) return kind === LEARNINGS_NOTE_QUESTION_KIND;
   const offered = optionsList(auditBlockField(block, "Options"));
-  return LEARNINGS_CORRECTION_CHOICES.every((choice) => offered.includes(choice)) ||
+  return unitTeams().offersLearningsCorrectionChoices((choice) => offered.includes(choice)) ||
     LEARNINGS_NOTE_CHOICES.every((choice) => offered.includes(choice));
 }
 /** Its value for Intent Capture's Assumption Confirmation, written by the command that stage names. */
@@ -40341,6 +40460,10 @@ export interface RecordedAnswerMode {
   mode: AnswerModeChoice;
   stage: string;
   timestamp: string;
+  /** The audit shard (the clone) the answer is in. */
+  shard?: string;
+  /** Who works in that clone, by the newest Git Name its rows recorded, when one did. */
+  by?: string;
 }
 
 /**
@@ -40380,11 +40503,15 @@ export function latestRecordedAnswerMode(
       before !== null && after === null && row.event === "QUESTION_ANSWERED" && isAnswerModeDecision(before)
     ) {
       const mode = answerModeFromReply(auditBlockField(row.block, "Details"));
-      if (mode !== null) latest = { mode, stage, timestamp: row.timestamp };
+      if (mode !== null) latest = { mode, stage, timestamp: row.timestamp, shard: row.shard };
     }
     open.set(key, after);
   }
-  return latest;
+  // An answer row carries no name: the clone's newest named row says who works there.
+  const named = latest === null ? undefined
+    : rows.findLast((row) => row.shard === latest?.shard && auditBlockField(row.block, "Git Name"));
+  const by = named === undefined ? null : auditBlockField(named.block, "Git Name");
+  return latest === null || by === null ? latest : { ...latest, by };
 }
 
 export interface StageAnswerMode {
@@ -40406,13 +40533,54 @@ export function resolveStageAnswerMode(
   projectDir: string | null,
   options: { intent?: string; space?: string } = {},
 ): StageAnswerMode {
-  const recorded = projectDir === null ? null : latestRecordedAnswerMode(projectDir, options.intent, options.space);
+  let recorded = projectDir === null ? null : latestRecordedAnswerMode(projectDir, options.intent, options.space);
+  // A Unit's build with no answer yet takes this person's newest answer on
+  // their other builds of the same lead's work (answered in this clone, its own
+  // audit shard), since they were told later stages keep it; a teammate's
+  // choice is never theirs.
+  if (recorded === null && projectDir !== null) {
+    try {
+      const own = readStateFile(projectDir, options.intent, options.space);
+      const home = getField(own, "Home Work")?.trim();
+      if (getField(own, "Unit Build") !== null && home) {
+        const shard = auditShardName(projectDir);
+        for (const { name: space } of listSpaces(projectDir)) {
+          for (const entry of listIntents(projectDir, space)) {
+            if (!entry.dirName) continue;
+            const other = readStateFile(projectDir, entry.dirName, space);
+            if (getField(other, "Unit Build") === null || getField(other, "Home Work")?.trim() !== home) continue;
+            const theirs = latestRecordedAnswerMode(projectDir, entry.dirName, space);
+            if (theirs?.shard === undefined || basename(theirs.shard) !== shard) continue;
+            if (recorded === null || theirs.timestamp > recorded.timestamp) recorded = theirs;
+          }
+        }
+      }
+    } catch {
+      // Unreadable: the stage asks, as before.
+    }
+  }
   if (recorded !== null) {
+    // A Unit's build (its Unit Build field) carried on from someone else: the
+    // answer is another clone's (as buildLastWorked reads a build's last hand)
+    // and the one who works there is not this person, so the choice is theirs.
+    const carriedOn = (): boolean => {
+      try {
+        if (projectDir === null || getField(readStateFile(projectDir), "Unit Build") === null) return false;
+      } catch {
+        return false;
+      }
+      if (recorded.shard === undefined || basename(recorded.shard) === auditShardName(projectDir)) return false;
+      const me = gitUserName(projectDir);
+      return me !== null && me !== recorded.by;
+    };
+    const chose = recorded.by !== undefined && carriedOn()
+      ? `Answering the way ${recorded.by} chose for this build`
+      : "Answering the way you chose earlier";
     return {
       mode: recorded.mode,
       ask: false,
       reused_from: recorded.stage,
-      notice: `Answering the way you chose earlier: ${ANSWER_MODE_LABELS[recorded.mode]}. ` +
+      notice: `${chose}: ${ANSWER_MODE_LABELS[recorded.mode]}. ` +
         `Say if you'd rather ${ANSWER_MODE_OTHERS[recorded.mode]}.`,
     };
   }
@@ -41929,8 +42097,12 @@ function boltDagMatches(a: ResolvedBoltDag, b: ResolvedBoltDag): boolean {
 // exists: a valid cache is accepted only when its batches and unit kinds still
 // match that artifact. Callers must keep the three states distinct: "none" is a
 // real no-DAG workflow, while "malformed" means the unit set is unknowable and
-// must fail closed.
-export function resolveBoltDag(
+// must fail closed. A Unit's build sees only its own Unit.
+export function resolveBoltDag(projectDir: string, intent?: string, space?: string): BoltDagResolution {
+  return unitTeams().onlyTheBuildsUnit(projectDir, resolveAuthoredBoltDag(projectDir, intent, space), intent, space);
+}
+
+function resolveAuthoredBoltDag(
   projectDir: string,
   intent?: string,
   space?: string,

@@ -16,7 +16,7 @@
 // a first chat that ended, and a host that cannot name its chats meet what they
 // meet today.
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   auditBlockField, readActiveDirectiveMarker, readAuditShardEvents, stateFilePath,
@@ -211,7 +211,8 @@ describe("t-second-chat-batch-in-flight: a batch another chat is building is tha
   test("a batch a teammate's clone started is not called your other chat", () => {
     const pd = firstChatBuilds();
     // This checkout now writes a shard of its own: every row so far is another clone's.
-    writeFileSync(join(pd, "aidlc", ".aidlc-clone-id"), "teammate0002\nhost\n");
+    mkdirSync(join(pd, "aidlc", ".aidlc-engine"), { recursive: true });
+    writeFileSync(join(pd, "aidlc", ".aidlc-engine", "clone-id"), "teammate0002\nhost\n");
     expect(next(pd, SECOND)).toMatchObject({ kind: "invoke-swarm", units: UNITS });
   });
 

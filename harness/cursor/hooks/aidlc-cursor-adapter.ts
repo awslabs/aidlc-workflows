@@ -65,10 +65,11 @@ import {
   promptMovesSelection,
   recordHookDrop,
   runHookHere,
+  sessionsDir,
   takeSessionSelectionNotice,
 } from "../tools/aidlc-lib.ts";
 import { settleClaudeTurnsFirst } from "../tools/aidlc-claude-turn-pending.ts";
-import { aidlcDispatcherInvocation, aidlcInvocation, knownActiveSpace } from "../tools/aidlc-runtime-paths.ts";
+import { aidlcDispatcherInvocation, aidlcInvocation, CURSOR_WITNESS_DIR, knownActiveSpace, workspaceEnginePath } from "../tools/aidlc-runtime-paths.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -242,8 +243,8 @@ export async function run(
   const REVIEWER_DISPATCH_TTL_MS = 6 * 60 * 60 * 1000;
   const AMBIGUOUS_REVIEWER = "__aidlc_ambiguous_reviewer__";
   const REVIEW_AGENT_RE = /^aidlc-(architecture-reviewer|product-lead)-agent$/;
-  const AIDLC_RUNTIME_DIR = join(projectDir, "aidlc");
-  const LEDGER_DIR = join(projectDir, "aidlc", ".aidlc-cursor-subagents");
+  const WITNESS_DIR = workspaceEnginePath(projectDir, CURSOR_WITNESS_DIR);
+  const LEDGER_DIR = join(sessionsDir(projectDir), "cursor-subagents");
   const ledgerPrefix = "spawn-";
   const witnessPrefix = ".aidlc-cursor-subagent-";
 
@@ -270,10 +271,7 @@ export async function run(
   }
 
   function witnessFile(parent: string, task: string): string {
-    return join(
-      AIDLC_RUNTIME_DIR,
-      `${witnessPrefix}${digest(parent)}-${digest(task)}.json`,
-    );
+    return join(WITNESS_DIR, `${witnessPrefix}${digest(parent)}-${digest(task)}.json`);
   }
 
   function ledgerFiles(): string[] {
@@ -288,9 +286,9 @@ export async function run(
 
   function witnessFiles(): string[] {
     try {
-      return readdirSync(AIDLC_RUNTIME_DIR)
+      return readdirSync(WITNESS_DIR)
         .filter((name) => name.startsWith(witnessPrefix) && name.endsWith(".json"))
-        .map((name) => join(AIDLC_RUNTIME_DIR, name));
+        .map((name) => join(WITNESS_DIR, name));
     } catch {
       return [];
     }
@@ -1459,7 +1457,7 @@ export async function run(
     const reviewerDispatch = new RegExp(`${engineDirFor("").replaceAll("\\", "/").replaceAll(".", "\\.")}/+reviewer-dispatch\\.json`);
     if (
       reviewerDispatch.test(serialized) ||
-      [".aidlc-cursor-subagents", "aidlc-cursor-subagent-"].some((token) => serialized.includes(token))
+      ["cursor-subagents", ".aidlc-cursor-subagents", "aidlc-cursor-subagent-"].some((token) => serialized.includes(token))
     ) {
       return true;
     }

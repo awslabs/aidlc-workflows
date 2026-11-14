@@ -197,7 +197,7 @@ describe("a per-Unit stage's receipts hang off the Unit's start", () => {
       ask_type: "guard-recovery",
       stage: SLUG,
       unit: "alpha",
-      reason_codes: ["UNIT_COMPLETION_MISSING"],
+      reason_codes: ["REVIEW_EVIDENCE_MISSING"],
     });
     const state = readFileSync(seededStateFile(proj), "utf-8");
     expect(guardRecoveryAskOpenFor(proj, state, SLUG, "alpha")).toBe(true);

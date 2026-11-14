@@ -53,7 +53,7 @@ function nextIn(args: string[], lead: string[] = []): { message: string; kept: s
   });
   expect(r.status, r.stderr).toBe(0);
   const message = String((JSON.parse(r.stdout) as { message?: string }).message ?? "");
-  const dir = join(proj, "aidlc", ".aidlc-sessions", "questions");
+  const dir = join(proj, "aidlc", ".aidlc-engine", "sessions", "questions");
   const kept = existsSync(dir)
     ? readdirSync(dir)
       .filter((name) => name.endsWith(".json"))

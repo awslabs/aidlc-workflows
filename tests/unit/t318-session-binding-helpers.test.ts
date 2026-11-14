@@ -931,7 +931,7 @@ describe("t318b workflow participation", () => {
 
   test("an unrecognised source reads as absent and a null intent never participates", () => {
     const record = loneRecordWithoutCursor();
-    const sessions = join(proj, "aidlc", ".aidlc-sessions");
+    const sessions = join(proj, "aidlc", ".aidlc-engine", "sessions");
     mkdirSync(sessions, { recursive: true });
     writeFileSync(
       join(sessions, "s-odd.binding.json"),

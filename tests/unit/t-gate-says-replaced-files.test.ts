@@ -14,15 +14,16 @@
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import {
   AIDLC_SRC, cleanupTestProject, createTestProject, runOrchestrateNext, seedAidlcMemory, seedBoltDag, seededRecordDir, seededStateFile,
 } from "../harness/fixtures.ts";
 import { createCodeGenerationProject, reply, reviewText, runNamed, stageDir, writePlan } from "../harness/code-generation-states.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { broughtFilesLine, withWayBack } from "../../dist/claude/.claude/tools/aidlc-brought-files.ts";
 import {
-  artifactFilename, findStageBySlug, latestMainWorkflowStageRunFloorForProject, reviewArtifactFingerprint, sourceBaselineAuditFields,
+  artifactFilename, committedTextSha256, findStageBySlug, latestMainWorkflowStageRunFloorForProject, reviewArtifactFingerprint, sourceBaselineAuditFields,
   workspaceBaselineStageSlugs,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
@@ -367,6 +368,31 @@ describe("t-gate-says-replaced-files", () => {
 // settles after them is bookkeeping. The t-approval-says-what-was-left-out
 // fixture: one solo intent in Construction, Units alpha and beta.
 const UNIT_STAGES = ["functional-design", "nfr-requirements", "nfr-design", "infrastructure-design", "code-generation"];
+
+// A team's build whose repo sits beside the workspace (x2783-s8): the way back
+// names the folder the repo is in, read from the workspace, as git needs it.
+describe("t-gate-says-replaced-files for a repo beside the workspace", () => {
+  test("the command puts the file back from the workspace, in the folder repos.local.json puts the repo", () => {
+    const ws = createTestProject();
+    created.push(ws);
+    const outside = join(dirname(ws), `${basename(ws)}-alerts-web`);
+    created.push(outside);
+    mkdirSync(outside, { recursive: true });
+    git(outside, ["init", "-q"]);
+    writeFileSync(join(outside, "README.md"), README, "utf-8");
+    git(outside, ["add", "-A"]);
+    git(outside, ["commit", "-qm", "the team's files"]);
+    // The content the build replaced, as the walk hashes it.
+    const sha = committedTextSha256(Buffer.from(README, "utf-8"));
+    writeFileSync(join(ws, "repos.json"), `${JSON.stringify({ repos: [{ name: "alerts-web", path: "../alerts-web" }] })}\n`, "utf-8");
+    writeFileSync(join(ws, "aidlc", "repos.local.json"), `${JSON.stringify({ repos: [{ name: "alerts-web", path: `../${basename(outside)}` }] })}\n`, "utf-8");
+    writeFileSync(join(outside, "README.md"), "# Replaced\n", "utf-8");
+    const line = broughtFilesLine(withWayBack(ws, [{ repo: "alerts-web", path: "README.md", deleted: false, sha }]));
+    expect(line).toContain(`To put it back, run \`git -C ../${basename(outside)} checkout HEAD -- README.md\`.`);
+    git(ws, ["-C", `../${basename(outside)}`, "checkout", "HEAD", "--", "README.md"]);
+    expect(readFileSync(join(outside, "README.md"), "utf-8")).toBe(README);
+  });
+});
 
 function checkpointProject(review: "none" | "advisory" = "none"): string {
   const p = createTestProject();

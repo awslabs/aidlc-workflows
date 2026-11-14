@@ -205,7 +205,7 @@ describe("the lead's plan approval after their checkout claims the Unit", () => 
     test(`a question shown on ${release} is answered once the claim has reset its shard`, () => {
       const lead = leadAtPlanQuestion("relaxed");
       // Both kept no time on the question's marks; the stable release kept no shownFrom either.
-      const dir = join(lead, "aidlc", ".aidlc-sessions", "plan-approval");
+      const dir = join(lead, "aidlc", ".aidlc-engine", "sessions", "plan-approval");
       const [ask] = readdirSync(dir).filter((name) => name.startsWith("ask-")).map((name) => join(dir, name));
       const record = JSON.parse(readFileSync(ask, "utf-8")) as { repliesFrom: AuditMark; shownFrom?: AuditMark };
       delete record.repliesFrom.at;

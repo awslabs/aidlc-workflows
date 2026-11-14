@@ -117,7 +117,8 @@ function seedIntentShard(p: string): { auditDir: string; recordRoot: string } {
   // path-derived, so the fixture choice is incidental.
   seedStateFile(p, join(FIXTURES_DIR, "state-construction.md"));
   // Pin the clone-id BEFORE the hook runs (the hook reads it from disk).
-  writeFileSync(join(p, "aidlc", ".aidlc-clone-id"), `${PINNED_CLONE_ID}\n`, "utf-8");
+  mkdirSync(join(p, "aidlc", ".aidlc-engine"), { recursive: true });
+  writeFileSync(join(p, "aidlc", ".aidlc-engine", "clone-id"), `${PINNED_CLONE_ID}\n`, "utf-8");
   const auditDir = seededAuditDir(p);
   mkdirSync(auditDir, { recursive: true });
   writeFileSync(join(auditDir, pinnedShardName()), "", "utf-8");
@@ -485,6 +486,10 @@ describe("t07 audit-logger PostToolUse hook (mechanism cli — spawned hook + st
     copyFileSync(
       join(AIDLC_SRC, "tools", "aidlc-audit.ts"),
       join(proj, ".claude", "tools", "aidlc-audit.ts"),
+    );
+    copyFileSync(
+      join(AIDLC_SRC, "tools", "aidlc-workspace-manifest.ts"),
+      join(proj, ".claude", "tools", "aidlc-workspace-manifest.ts"),
     );
     fire(writeJson(join(recordRoot, "test.md")), proj, localHook, /* setEnv */ false);
     const heartbeat = join(recordRoot, ".aidlc-engine/hooks-health", "write-audit-log.last");

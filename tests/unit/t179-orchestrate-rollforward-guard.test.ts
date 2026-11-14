@@ -3,8 +3,8 @@
 // SUBJECT: Branch 0 of aidlc-orchestrate.ts handleNext - the turn-scoped
 // no-op-next guard (the Kiro roll-forward defense). On Kiro the
 // userPromptSubmit seam (harness/kiro/hooks/aidlc-kiro-adapter.ts) runs a
-// read-only/navigation command off-band, bumps aidlc/.aidlc-turn-counter, and
-// stamps aidlc/.aidlc-readonly-latch ({turn,flag,source,ts}) with the CURRENT
+// read-only/navigation command off-band, bumps aidlc/.aidlc-engine/sessions/kiro-turn-counter, and
+// stamps aidlc/.aidlc-engine/sessions/kiro-readonly-latch ({turn,flag,source,ts}) with the CURRENT
 // turn. The seam cannot block the turn, so the conductor relays the output and
 // may STILL fire a bare advancing `next`, rolling the active workflow forward.
 // Branch 0 catches that: BEFORE any state inspection, a TRULY BARE advancing

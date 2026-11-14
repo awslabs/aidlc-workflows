@@ -106,7 +106,9 @@ Three things are worth pulling out of that tree, because they are the whole idea
 An **intent** is a single run of the AI-DLC lifecycle, scoped to one task. Every
 intent owns a row in the space's `intents.json` registry — `{uuid, slug, dirName,
 scope, repos, status}` — and a **record dir** holding that run's state, audit
-trail, and artifacts. The `uuid` (a UUIDv7) is the canonical, collision-proof
+trail, and artifacts. A team's build of one Unit keeps that row in its own
+record dir, as `aidlc-intent.json`, so two builds started at once in one space
+share no file ([Take a Unit](workshop-mode.md#take-a-unit-as-your-teams-own-work)). The `uuid` (a UUIDv7) is the canonical, collision-proof
 identity; `dirName` records the human-readable record-dir name verbatim.
 A hand edit that leaves a trailing comma, a comment or a BOM still reads as every
 row. A list nothing can read is never written over: the next new piece of work
@@ -236,7 +238,7 @@ run.
 ### Concurrent sessions in one checkout
 
 Each live session keeps a machine-local binding at
-`aidlc/.aidlc-sessions/<session-id>.binding.json`. The binding records the
+`aidlc/.aidlc-engine/sessions/<session-id>.binding.json`. The binding records the
 session's space and intent, so another terminal or IDE window can move the shared
 cursors without silently moving this session's workflow.
 
@@ -328,7 +330,7 @@ environments with no binding therefore behave exactly as before.
 Session bindings isolate workflow selection across spaces, but the
 harness-native method include is still one checkout-wide surface: every
 include reads one git-ignored copy of the active space's memory files,
-`aidlc/active-memory/`, which SessionStart and the space switch verb
+`aidlc/.aidlc-engine/active-memory/`, which SessionStart and the space switch verb
 write for the selected space. So two simultaneous sessions in different spaces
 can overwrite which space's ambient rules the harness delivers next. This
 increment supports concurrent intents within one space; concurrent
@@ -415,7 +417,7 @@ When you switch spaces, two things follow the cursor automatically:
 1. **AI-DLC's own resolvers** — the next intent you start, and the practices and
    knowledge agents load, all come from the space you switched into.
 2. **The rules your harness loads into context**: switching writes the new
-   space's `memory/` files into `aidlc/active-memory/`, the git-ignored
+   space's `memory/` files into `aidlc/.aidlc-engine/active-memory/`, the git-ignored
    copy your harness's native rule include reads (Claude's `@`-import, Kiro CLI
    resources, Cursor rules, opencode's instructions, Copilot's `AGENTS.md`;
    Kiro IDE's steering file carries the text itself, and on Codex the engine
@@ -482,8 +484,7 @@ use a subfolder install only when a package is really its own project.
 ```
 my-project/           ← run `aidlc config` here
 ├── .claude/          the harness files
-├── aidlc/            records for work that spans the repos
-├── repos.json        optional: the repos to clone (see below)
+├── aidlc/            records for work that spans the repos, and repos.json, the optional list of repos to clone (see below)
 ├── .gitignore
 ├── checkout-api/     its own git repo
 └── checkout-web/     its own git repo
@@ -491,6 +492,11 @@ my-project/           ← run `aidlc config` here
 
 The code repos are the folders next to `aidlc/` that have their own `.git`.
 AI-DLC finds them itself ([Multiple repos in one intent](#multiple-repos-in-one-intent)).
+They can also live anywhere else on disk, beside the workspace folder or on
+another drive, when `repos.json` gives each its `path`
+([Declaring the repo set](#declaring-the-repo-set-optional-manifest)): the
+workspace then holds only AI-DLC and its records, and code pull requests carry
+only code.
 The record of the work lives once, in `aidlc/`, not once per repo, so a change
 that touches both repos has one set of requirements and one audit trail. A
 command run from inside one of those repos, or from any folder of the workspace
@@ -508,11 +514,11 @@ to confirm the folder (in a script, pass `--project-dir`). What that means for
   the workspace repo must not track them, so keep them out first: for the repos
   listed in `repos.json`, the
   [`aidlc-workspace-sync`](12-cli-commands.md#aidlc-workspace-sync-clone-and-reconcile-the-declared-repo-set)
-  tool does it for you; otherwise add an ignore line for each. Then run
-  `git status` and commit what it lists (everything `aidlc config` wrote that git
-  does not ignore, plus `repos.json`); the exact files differ by harness, so
-  don't pick paths by hand. A teammate clones the workspace repo and runs the
-  sync tool to clone the code repos beside it.
+  tool does it for you; otherwise add an ignore line for each. Then commit
+  `aidlc/` (the repo list, `aidlc/repos.json`, is in it) and, when the team keeps
+  one, `aidlc.settings.json`; tool folders such as `.claude/` or `.codex/` are
+  not committed. A teammate clones the workspace repo, runs `aidlc config` there
+  for their own tool, and runs the sync tool to clone the code repos beside it.
 - **Codex CLI and Cursor:** Codex finds its hooks only in a git repo, and
   Cursor may skip them outside one
   ([Getting Started](01-getting-started.md)), so run `git init` in the folder
@@ -576,25 +582,75 @@ An intent that records no repos is the ordinary single-repo case. See
 
 Auto-discovery needs the sibling repos to already be cloned. On a fresh checkout
 of a shared workspace they are not, so a teammate would have to know which repos
-to clone and where. An **optional** `repos.json` manifest at the workspace root
-records that expected set so it can be reproduced with one command:
+to clone and where. An **optional** repo list, `aidlc/repos.json`, kept with the
+team's record, records that expected set so it can be reproduced with one
+command. A `repos.json` at the workspace root, where releases before 2.12 wrote
+it, is still read, and the next refresh moves it into `aidlc/`
+([Configure or Refresh a Project](18-install-and-lifecycle.md#configure-or-refresh-a-project)):
 
 ```json
 {
-  "org": "your-github-org",
   "repos": [
-    { "name": "checkout-api", "branch": "main" },
-    { "name": "checkout-web" }
+    { "name": "checkout-api", "url": "git@github.com:your-github-org/checkout-api.git", "branch": "main" },
+    { "name": "checkout-web", "url": "https://github.com/your-github-org/checkout-web.git" },
+    { "name": "billing", "url": "https://gitlab.example.com/platform/billing.git", "path": "../billing" }
   ]
 }
 ```
 
-`org` supplies the default clone host (a repo with no `url` clones from
-`git@github.com:<org>/<name>.git`; set `url` on an entry to override). `branch`
-selects the checkout for a new clone and is an advisory expectation for a repo
-already on disk; omit it to use the repo's own default. A repo name is the name
-of one folder directly in the workspace, with the characters a discovered folder
-may have (above). The
+- `path` says where a repo's checkout lives: relative to the workspace (it may
+  point outside it, as `../billing` does), absolute, or `"."` for the workspace
+  folder itself. With no `path` the repo is the workspace's child folder of the
+  same name. A checkout already at `path` is used as it is; an empty or missing
+  folder there is cloned from `url`. A repo's folder may sit inside the
+  workspace (`"src/billing"`), also when the workspace is a repo of its own that
+  records that folder as a gitlink; each file then counts once, under its own
+  repo. When the workspace folder holds files of its own that the work changes
+  (a `docs/` folder, say), list the workspace too, as `"."`: with only the repos
+  inside it listed, the reviews and change checks leave its folders out.
+- `url` is any address git clones (GitHub https or SSH, GitLab, anything else).
+  A blank `url` counts as not set. A repo with no `url` is not cloned, and the
+  sync tool says how to add its `url`.
+- An `org` key, which releases before 2.12 used to clone a repo with no `url`
+  from `git@github.com:<org>/<name>.git`, is read and ignored.
+- `branch` selects the checkout for a new clone and is an advisory expectation
+  for a repo already on disk; omit it to use the repo's own default.
+- A repo name is the name of one folder, with the characters a discovered folder
+  may have (above).
+
+**Your own paths: `aidlc/repos.local.json`.** When your disk differs from the
+team's layout (your clones live in `C:/src`, say), put a `repos.local.json` in
+`aidlc/`, beside `aidlc/repos.json`; AI-DLC reads it only there. It has the
+same shape and is read only for `path`, `url` and `branch` of repos
+`repos.json` lists; a name `repos.json` does not list is
+ignored, and `--doctor` and the sync tool say so in one line. It is never
+committed: AI-DLC's own block in `.gitignore` lists it.
+
+```json
+{ "repos": [ { "name": "checkout-api", "path": "C:/src/checkout-api" },
+             { "name": "billing", "path": "C:/src/billing" } ] }
+```
+
+On Windows, write paths with forward slashes; a path may carry a drive letter
+or sit on another drive.
+
+Wherever a repo lives, AI-DLC treats it as part of the project: a build waits
+for its approved plan before writing there, and a Code Generation target in it
+is spelled `<repo>/<path>`. When a repo is not where the files say, AI-DLC says
+where it looked and the way forward: "billing is not at ../billing, where
+repos.json puts it. Clone it there, or give its path in aidlc/repos.local.json."
+
+**Writing it from what is here.** When work built by teams records repos, in a
+workspace with no `repos.json`, AI-DLC offers once, at a stage boundary (when
+Units are built one at a time, a Unit's first step of a stage is one), to
+write it from the repos it finds: each one's folder, and the address its own
+`origin` points to (read, never changed), blank when it has none. Your answer
+is kept; it does not ask again in this clone. The list is for teammates'
+clones, so work whose only repo is the workspace folder itself is never asked,
+and neither is one person's work on one repo; it comes once teams are chosen,
+or when the work has two or more repos.
+
+The
 [CLI Commands](12-cli-commands.md#aidlc-workspace-sync-clone-and-reconcile-the-declared-repo-set)
 guide documents the `aidlc-workspace-sync` tool that reads this file to clone
 missing repos, keep the gitignore block current, and generate a VSCode
@@ -604,20 +660,21 @@ multi-root workspace.
 writes this file too. A repo that work needs but nobody cloned here is cloned
 from its entry; a repo with no entry is cloned from the address you give and
 gets one, with the file's comments and layout kept, and without an address you
-are asked for one. A repo that `repos.json` lists by name alone is cloned from
-github.com under the list's org, so a team on GitHub can add a line with the
-repo's name and then add it by name. With no `repos.json` yet, a hosted
-`--url` (a host, an owner and a name) creates one whose `org` is that owner, so
-commit it to share the list with your team. An address written here never keeps
+are asked for one. A repo that `repos.json` lists by name alone is not cloned:
+the line asks for its `url`, which you add to its entry or give with `--url`.
+With no `repos.json` yet, a hosted `--url` (a host, an owner and a name)
+creates one that lists the repo, so commit it to share the list with your team. An address written here never keeps
 its credentials.
 
 The manifest is a convenience, not a second source of truth. **Disk wins at
-runtime**: intent creation still auto-discovers whatever siblings are actually
-present, so a repo works the moment it is cloned whether or not it is declared,
-and a declared repo that was never cloned simply is not part of the set. The
-manifest only drives the sync tool and the advisory `--doctor` rows that flag
-when the declared set and the disk have drifted apart. (This "workspace
-manifest" is unrelated to a harness `manifest.ts`, which is a packaging file.)
+runtime**: intent creation records the declared repos that are on disk,
+wherever their `path` puts them, plus every other child repo actually present,
+so a repo works the moment it is cloned, and a declared repo that was never
+cloned simply is not part of the set. A workspace whose only repo is itself
+(`"path": "."`) records none, as a one-repo workspace always has. The manifest
+also drives the sync tool and the advisory `--doctor` rows that flag when the
+declared set and the disk have drifted apart. (This "workspace manifest" is
+unrelated to a harness `manifest.ts`, which is a packaging file.)
 
 ---
 
@@ -629,7 +686,7 @@ and machines.
 
 | What | Between intents in a space | Between spaces | Between projects (separate `aidlc/` folders) |
 |---|---|---|---|
-| Rules: `org.md`, `team.md`, `project.md`, `phases/` | Shared. Each stage reads the current files | A new space gets a one-time copy of the default space's `org.md` and the framework's phase rules; its `team.md` and `project.md` start empty. After that, nothing flows | Copy the files, or start from a template repo (below) |
+| Rules: `org.md`, `team.md`, `project.md`, `phases/` | Shared. Each stage reads the current files | A new space gets a one-time copy of the default space's `org.md` and the framework's phase rules; its `team.md` and `project.md` start empty. After that, nothing flows, except that a team's Unit build that follows the lead's rules too reads the lead's `team.md` and `project.md` where they are, before its own | Copy the files, or start from a template repo (below). A team's Unit build taken by the lead's address that follows the lead's rules reads them from the lead's project, looked at again in each new chat and at each new stage; nothing is copied |
 | Learnings you keep | Land in the active space's `project.md`, or `team.md` when you promote them | Not shared. Each space has its own | Copy the lines you want |
 | Your documents (`knowledge/`) | Shared. `associate` adds an intent to a document's list and can be repeated; a document with no intent is space-wide | Not shared. Each space has its own folder | `onboard` copies a file in and refuses a path outside the project, so copy the file into the other project |
 | Code knowledge (`codekb/`) | Shared, per repo. A current scan can be reused by your choice | Not shared. Another space scans again | Each project scans its own. A teammate's clone of the same repo can reuse a scan |
@@ -675,11 +732,17 @@ repo. Two kinds of file are deliberately **gitignored** instead:
 | Gitignored (per-user, machine-local) | Why |
 |---|---|
 | `aidlc/active-space`, `…/intents/active-intent` | Cursors — "where am I right now." Committing them would turn per-user navigation into shared repository state and have teammates fight over intent creates and cursor switches. |
-| `.../intents/<id>/runtime-graph.json`, `.aidlc-*`, `aidlc/.aidlc-sessions/`, `aidlc/.aidlc-active-space-*.tmp` | Derived, machine-local runtime state, including per-session bindings and PID ancestry entries. |
-| `aidlc/.aidlc-request-text/` | A request the agent wrote to a file for the engine to read. Removed once the command goes ahead; one left there when it did not is your words, not shared work. |
+| `.../intents/<id>/runtime-graph.json`, `.aidlc-*`, `aidlc/.aidlc-engine/sessions/`, `aidlc/.aidlc-active-space-*.tmp` | Derived, machine-local runtime state, including per-session bindings and PID ancestry entries. |
+| `aidlc/.aidlc-engine/request-text/` | A request the agent wrote to a file for the engine to read. Removed once the command goes ahead; one left there when it did not is your words, not shared work. |
+| `aidlc/repos.local.json` | Where *your* clones of the workspace's repos live, when your disk differs from the team's layout in `repos.json` (see [Declaring the repo set](#declaring-the-repo-set-optional-manifest)). It is yours alone. |
 | `.aidlc/worktree-meta.json`, `.aidlc/base-source-listing.tsv` | The metadata AI-DLC writes inside a Unit's own checkout while it is built side by side. It is this machine's, so a worker's `git add -A` leaves it out; a Unit's landing never carries it to your branch either. |
 | `…/knowledge/documentkb/.journal/` | One directory per in-flight document transaction. Transient and per-clone; a committed journal would be a merge conflict on every concurrent `sync`. |
 | `…/knowledge/.sources.local.json` | Where *this machine* finds documents that live outside the repo. The path is machine-specific by definition, so committing it would break every teammate's checkout. No command creates such a link today (`onboard` copies a file into `documents/`), so you will not normally see this file. |
+
+`aidlc/.aidlc-engine/` holds this computer's own files (sessions, the clone id,
+active memory); each piece of work's own `.aidlc-engine/` folder holds that
+work's scratch (reviews, its local audit log, waiting questions) and goes
+wherever the work goes. Git ignores both.
 
 Everything else under a space — `memory/**`, `knowledge/**`, `codekb/**`,
 `intents.json`, each record's `aidlc-state.md`, `audit/` shards, and artifacts — is

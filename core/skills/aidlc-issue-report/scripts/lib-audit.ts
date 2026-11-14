@@ -194,9 +194,11 @@ export function hookHealthDirs(project: string, intents: Intent[]): string[] {
   return dirs;
 }
 
-// aidlc/.aidlc-sessions/: counts only, never the bodies.
+// aidlc/.aidlc-engine/sessions/ (aidlc/.aidlc-sessions/ where an earlier
+// release's files have not moved yet): counts only, never the bodies.
 export function readSessionsFolder(project: string) {
-  const base = join(project, "aidlc", ".aidlc-sessions");
+  const moved = join(project, "aidlc", ".aidlc-engine", "sessions");
+  const base = existsSync(moved) ? moved : join(project, "aidlc", ".aidlc-sessions");
   const count = (sub: string) => (existsSync(join(base, sub)) ? readdirSync(join(base, sub)).filter((f) => !f.startsWith(".")).length : 0);
   let unboundApprovals = 0;
   const pa = join(base, "plan-approval");

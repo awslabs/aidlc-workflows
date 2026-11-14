@@ -135,9 +135,12 @@ import {
   compiledExecutable,
   discoverProjectHarnesses,
   isCompiledExecutable,
+  leaveEarlierEngineFiles,
   runtimeHarnessDir,
   typedHarnessName,
+  WORKSPACE_ENGINE_DIR,
 } from "./aidlc-runtime-paths.ts";
+import { releaseBeforeLayout, reposListGoingBackLine } from "./aidlc-workspace-manifest.ts";
 import {
   nearestSessionProcess,
   recordReleaseCheck,
@@ -3037,8 +3040,12 @@ export async function configureProjectPin(
         );
       }
       commitProjectPin(projectDir, version);
+      const reposLine = reposListGoingBackLine(projectDir, version);
+      const engineLine = await engineFolderGoingBackLine(projectDir, version, "aidlc config --unpin");
       return success(
-        `Pinned this project to aidlc ${version}. Commit .aidlc-version to share the pin.${finish}`,
+        `Pinned this project to aidlc ${version}. Commit .aidlc-version to share the pin.${finish}${
+          reposLine ? ` ${reposLine}` : ""
+        }${engineLine ? ` ${engineLine}` : ""}`,
         { projectDir: responseProjectDir, version, pinned: true },
       );
     } finally {
@@ -3085,11 +3092,108 @@ async function useCommand(argv: string[]): Promise<CommandResult> {
       caBundle: valueAfter(argv, "--ca-bundle"),
     });
   }
+  const before = activeVersion();
   const pluginCatalogue = activate(version, { replaceLauncher });
-  return success(`active AI-DLC version set to ${version}`, {
-    version,
-    ...(pluginCatalogue ? { pluginCatalogue } : {}),
-  });
+  const reposLine = reposListGoingBackLine(projectDirFrom(argv), version);
+  const engineLine = before && before !== version
+    ? await engineFolderGoingBackLine(projectDirFrom(argv), version, `aidlc use ${before}`)
+    : null;
+  const said = [reposLine, engineLine].filter((line) => line).join(" ");
+  return success(
+    `active AI-DLC version set to ${version}${said ? `. ${said}` : ""}`,
+    {
+      version,
+      ...(pluginCatalogue ? { pluginCatalogue } : {}),
+      ...(engineLine ? { engineLine } : {}),
+    },
+  );
+}
+
+function engineFolderJson(projectDir: string, ...parts: string[]): Record<string, unknown> | null {
+  try {
+    const value: unknown = JSON.parse(readFileSync(join(projectDir, "aidlc", WORKSPACE_ENGINE_DIR, ...parts), "utf-8"));
+    return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+  } catch {
+    return null;
+  }
+}
+
+function engineFolderNames(projectDir: string, ...parts: string[]): string[] {
+  try {
+    return readdirSync(join(projectDir, "aidlc", WORKSPACE_ENGINE_DIR, ...parts)).sort();
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Said once when the person switches this project to a release from before the
+ * engine folder (`aidlc use`, `aidlc config --pin`): what that release will not
+ * see here, since it reads these files where it kept them and nothing is moved
+ * back. Null when nothing is open, the folder was never made (then nothing
+ * moved), or the project's own pin names another release (the switch does not
+ * reach it). The switch itself moves nothing. `back` is the command that brings it
+ * back.
+ */
+export async function engineFolderGoingBackLine(projectDir: string, release: string, back: string): Promise<string | null> {
+  if (!releaseBeforeLayout(release)) return null;
+  // A project whose own pin names another release keeps running that one.
+  let pinned = "";
+  try {
+    pinned = readFileSync(join(projectDir, ".aidlc-version"), "utf-8").trim();
+  } catch {
+    // No pin: the active release runs here.
+  }
+  if (pinned !== "" && pinned !== release) return null;
+  if (!existsSync(join(projectDir, "aidlc", WORKSPACE_ENGINE_DIR))) return null;
+  // The switch hands the project to that release as it is now.
+  leaveEarlierEngineFiles(projectDir);
+  const unseen: string[] = [];
+  try {
+    const lib = await import("./aidlc-lib.ts");
+    const claimed = engineFolderJson(projectDir, ...lib.UNIT_SCOPE_FILE.split("/"))?.unit;
+    if (typeof claimed === "string" && claimed !== "") unseen.push(`the Unit ${claimed} you claimed`);
+    // Approved at its gate and not landed yet: the older release asks again.
+    const merges = lib.UNIT_MERGE_DIR.split("/");
+    for (const space of engineFolderNames(projectDir, ...merges)) {
+      for (const intent of engineFolderNames(projectDir, ...merges, space)) {
+        for (const file of engineFolderNames(projectDir, ...merges, space, intent)) {
+          const journal = engineFolderJson(projectDir, ...merges, space, intent, file);
+          if (["approved", "git-landed", "state-folded"].includes(String(journal?.status)) && typeof journal?.unit === "string") {
+            unseen.push(`the merge of ${journal.unit} you approved`);
+          }
+        }
+      }
+    }
+    try {
+      const state = readFileSync(lib.stateFilePath(projectDir), "utf-8");
+      // A Code Generation plan approved and not built yet: the older release
+      // reads it as unapproved and asks for the approval again.
+      const intent = lib.activeIntentUuid(projectDir);
+      if (lib.getField(state, "Current Stage") === "code-generation" && intent) {
+        const targets = new Set<string>();
+        for (const name of engineFolderNames(projectDir, "sessions", "plan-approval")) {
+          if (!/^receipt-[0-9a-f]{64}\.json$/.test(name)) continue;
+          const receipt = engineFolderJson(projectDir, "sessions", "plan-approval", name);
+          // "approved": not started yet (a started build's receipt says "generation").
+          if (receipt?.intentId === intent && receipt.status === "approved" && typeof receipt.targetId === "string") {
+            targets.add(receipt.targetId);
+          }
+        }
+        for (const target of [...targets].sort()) {
+          unseen.push(target.startsWith("unit:") ? `the plan you approved for ${target.slice(5)}` : "the plan you approved");
+        }
+      }
+      if (lib.readActiveDirectiveMarker(projectDir, state)?.kind === "ask") unseen.push("the question waiting for your answer");
+    } catch {
+      // No work selected: no plan and no question.
+    }
+  } catch {
+    return null;
+  }
+  if (unseen.length === 0) return null;
+  const list = unseen.length === 1 ? unseen[0] : `${unseen.slice(0, -1).join(", ")} and ${unseen[unseen.length - 1]}`;
+  return `AI-DLC ${release} will not see ${list} in this project. \`${back}\` brings it back.`;
 }
 
 function installProfileCommand(argv: string[]): CommandResult {
@@ -3275,13 +3379,15 @@ export function humanLifecycleNarration(
         `Updated aidlc from ${before ?? "not installed"} to ${target}.`,
         process.stdout,
       ),
-      "Project files were not changed. Run 'aidlc config --yes' in each project to refresh them. Open work carries on.",
+      "Each project catches up the next time you open it.",
     ].join("\n");
   }
   if (command === "use") {
-    const data = result.data as { version?: string; pluginCatalogue?: PluginCatalogueRefresh } | undefined;
+    const data = result.data as { version?: string; pluginCatalogue?: PluginCatalogueRefresh; engineLine?: string } | undefined;
     const target = data?.version ?? argv[1];
     if (!target) return null;
+    const reposLine = before === target ? null : reposListGoingBackLine(projectDirFrom([...argv]), target);
+    const engineLine = before === target ? null : data?.engineLine;
     return `${successText(
       before === target
         ? `Already using aidlc ${target}.`
@@ -3289,7 +3395,7 @@ export function humanLifecycleNarration(
             before ?? "not installed"
           }; retained locally, no project changes).`,
       process.stdout,
-    )}${data?.pluginCatalogue?.warning ? `\n${data.pluginCatalogue.warning}` : ""}`;
+    )}${reposLine ? `\n${reposLine}` : ""}${engineLine ? `\n${engineLine}` : ""}${data?.pluginCatalogue?.warning ? `\n${data.pluginCatalogue.warning}` : ""}`;
   }
   if (command === "uninstall") {
     const data = result.data as {

@@ -11,7 +11,7 @@ import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pend
 import { CHANGE_NOTICES_NOTE, otherWorkNote, reviewRequestNote, reviewVerdictNote } from "./aidlc-directive.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmdirSync, rmSync } from "node:fs";
 import { dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
@@ -79,6 +79,7 @@ import {
   readVerificationCommandFile,
   readAnswerTextFile,
   REQUEST_TEXT_DIR,
+  REQUEST_TEXT_DIRS,
   isReadOnlyEngineProbe,
   protectedQuestionRelativePath,
   mintProtectedQuestion,
@@ -2237,12 +2238,12 @@ export function readRequestFileResult(
 ): { text: string; spend(): void; restore(): void } | { refusal: string; overCap?: { spend(): void } } {
   const relativePath = file.replaceAll("\\", "/");
   const parts = relativePath.split("/");
-  const folder = REQUEST_TEXT_DIR.split("/");
   const name = parts[parts.length - 1];
-  if (
-    isAbsolute(file) || parts.length !== folder.length + 1 ||
-    folder.some((part, i) => parts[i] !== part) || name === "" || name === "." || name === ".."
-  ) {
+  const dir = REQUEST_TEXT_DIRS.find((candidate) => {
+    const folder = candidate.split("/");
+    return parts.length === folder.length + 1 && folder.every((part, i) => parts[i] === part);
+  });
+  if (isAbsolute(file) || dir === undefined || name === "" || name === "." || name === "..") {
     return { refusal: REQUEST_FILE_USAGE };
   }
   const unread = `AI-DLC could not read the request in ${relativePath}. Send your request again.`;
@@ -2252,6 +2253,14 @@ export function readRequestFileResult(
       removeRecordFileNoFollow(projectDir, relativePath);
     } catch {
       // Left in its gitignored folder; the next request replaces it.
+    }
+    // An earlier release's folder goes once its last request is read.
+    if (dir !== REQUEST_TEXT_DIR) {
+      try {
+        rmdirSync(join(projectDir, ...dir.split("/")));
+      } catch {
+        // Not empty, or already gone.
+      }
     }
   };
   let text: string;

@@ -62,6 +62,7 @@ permissions:
         - "aidlc/spaces/**"
         - ".aidlc/worktrees/*/aidlc/spaces/**"
         - "{{HARNESS_DIR}}/sensors/**"
+        - "aidlc/.aidlc-engine/request-text/**"
         - "aidlc/.aidlc-request-text/**"
 ---
 

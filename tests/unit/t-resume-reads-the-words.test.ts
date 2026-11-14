@@ -42,7 +42,7 @@ const READING = "the person's words may ask to redo";
 const TEAM_READING = "the person's words may only ask for it to go on, or be new work or a change to this work";
 const PICK_UP = "Picking up where we left off";
 const UNPARK = /This workflow is parked\. Run `[^`]* unpark` to clear the park marker, then re-run `next --resume( [^`]+)?` to continue\./;
-const REQUEST_FILE = /--request-file (aidlc\/\.aidlc-request-text\/[^/\s`]+)/;
+const REQUEST_FILE = /--request-file (aidlc\/\.aidlc-engine\/request-text\/[^/\s`]+)/;
 
 async function at(state: "work-open" | "parked", clone = false): Promise<string> {
   const proj = createOrchestrationTestProject();
@@ -124,7 +124,7 @@ describe("words after --resume over selected work get the reading plain words ge
     const resumed = await next(proj, ["--resume", ...line]);
     const plain = await next(proj, line);
     expect(sameStep(resumed.directive), resumed.out).toBe(sameStep(plain.directive));
-    expect(String(resumed.directive?.message), resumed.out).toContain("next --scope bugfix --request-file aidlc/.aidlc-request-text/line-after-plan");
+    expect(String(resumed.directive?.message), resumed.out).toContain("next --scope bugfix --request-file aidlc/.aidlc-engine/request-text/line-after-plan");
     expect(String(resumed.directive?.message), resumed.out).toContain('(the task: "add rate limiting")');
     expect(resumed.out).not.toContain("--resume");
   });

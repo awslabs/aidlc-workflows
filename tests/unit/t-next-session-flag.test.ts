@@ -52,7 +52,7 @@ function openWork(): string {
   const proj = createOrchestrationTestProject();
   created.push(proj);
   writeFileSync(seededStateFile(proj), readFileSync(join(FIXTURES_DIR, "state-brownfield-feature.md"), "utf-8"), "utf-8");
-  const sessions = join(proj, "aidlc", ".aidlc-sessions");
+  const sessions = join(proj, "aidlc", ".aidlc-engine", "sessions");
   mkdirSync(sessions, { recursive: true });
   writeFileSync(join(sessions, ".current-session"), `${SESSION}\n`, "utf-8");
   return proj;

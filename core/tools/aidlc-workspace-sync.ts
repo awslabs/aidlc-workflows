@@ -28,10 +28,11 @@ import {
   readdirSync,
   realpathSync,
   renameSync,
+  rmdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { jsoncSettingValue } from "./aidlc-distribution.ts";
@@ -40,18 +41,27 @@ import { discoverProjectHarnesses } from "./aidlc-runtime-paths.ts";
 import {
   discoverSiblingRepos,
   installWithoutReplacing,
+  repoDir,
+  repoIsWorkspace,
   resolveProjectDir,
   withAuditLock,
 } from "./aidlc-lib.ts";
+import { reposManifestListsOnlyAddedWorkspace } from "./aidlc-workspace-repos.ts";
+import { isProjectSubmodule } from "./aidlc-git.ts";
 import {
+  displayRepoPath,
   parseWorkspaceManifest,
+  readWorkspaceRepos,
+  REPOS_LOCAL_PLACE,
+  reposManifestPath,
+  repoNotThereLine,
   type WorkspaceManifest,
   type WorkspaceRepoEntry,
   WORKSPACE_GITIGNORE_GATE_BEGIN as GATE_BEGIN,
   WORKSPACE_GITIGNORE_GATE_END as GATE_END,
-  WORKSPACE_RECOVERY_GITIGNORE,
-  WORKSPACE_STAGING_GITIGNORE,
-  workspaceRepoPath,
+  workspaceGitignoreEntries,
+  workspaceManifestWith,
+  withoutCredentials,
 } from "./aidlc-workspace-manifest.ts";
 
 const COLOR =
@@ -82,6 +92,8 @@ interface ReconcilePlan {
   toKeep: WorkspaceRepoEntry[];
   toRemove: string[];
   branchWarnings: string[];
+  // Repos left as they are, each with the line that says why and what to do.
+  notCloned: string[];
 }
 
 interface Move {
@@ -126,9 +138,9 @@ function git(dir: string, args: string[], input?: string): GitResult {
 function readManifest(path: string): ManifestSnapshot {
   if (!existsSync(path)) {
     throw new SyncFailure(
-      `no repos.json at ${path}. The manifest is optional; create one at the ` +
-        `workspace root declaring "org" and a "repos" array to enable clone/sync ` +
-        `(see the User Guide: "Declared workspace manifest"), then re-run.`,
+      `no repos.json at ${path}. The manifest is optional; create one there ` +
+        `with a "repos" array to enable clone/sync ` +
+        `(see the User Guide: "Declaring the repo set"), then re-run.`,
     );
   }
   try {
@@ -155,8 +167,16 @@ function detectDefaultBranch(dir: string): string | null {
   return result.stdout.trim().replace(/^origin\//, "") || null;
 }
 
-function cloneUrl(manifest: WorkspaceManifest, repo: WorkspaceRepoEntry): string {
-  return repo.url ?? `git@github.com:${manifest.org}/${repo.name}.git`;
+// The address a missing checkout is cloned from: its own `url`, null without
+// one. A repos.json `org` is read and ignored: an address made from it may name
+// a host the team never uses.
+function cloneUrl(repo: WorkspaceRepoEntry): string | null {
+  return repo.url ?? null;
+}
+
+/** The address a repo is cloned from: its url; null without one. */
+export function workspaceCloneUrl(repo: WorkspaceRepoEntry): string | null {
+  return cloneUrl(repo);
 }
 
 // What workspace-sync prints hides the userinfo of any address in it, so a
@@ -678,11 +698,7 @@ function renderGitignore(
   existing: string,
   manifest: WorkspaceManifest,
 ): string {
-  const entries = [
-    WORKSPACE_RECOVERY_GITIGNORE,
-    WORKSPACE_STAGING_GITIGNORE,
-    ...manifest.repos.map((repo) => `/${repo.name}/`),
-  ];
+  const entries = workspaceGitignoreEntries(manifest);
   const block = [GATE_BEGIN, ...entries, GATE_END].join("\n");
   const begin = existing.indexOf(GATE_BEGIN);
   const end = existing.indexOf(GATE_END);
@@ -715,7 +731,9 @@ function copilotProject(root: string): boolean {
 function renderCodeWorkspace(manifest: WorkspaceManifest, existing: string | null, copilot: boolean): string {
   const folders = [
     { path: "." },
-    ...manifest.repos.map((repo) => ({ path: repo.name })),
+    ...manifest.repos
+      .filter((repo) => repo.path === undefined || !/^\.[\\/]*$/.test(repo.path))
+      .map((repo) => ({ path: displayRepoPath(repo.path ?? repo.name) })),
   ];
   const kept = existing === null ? undefined : jsoncSettingValue(existing, "settings");
   const settings = kept ?? (copilot ? { [WORKSPACE_REQUEST_CAP_KEY]: 200 } : undefined);
@@ -784,21 +802,32 @@ function assertManifestUnchanged(path: string, raw: string | null): void {
   }
 }
 
-function parseFlags(argv: string[]): { force: boolean; projectDir?: string } {
+function parseFlags(argv: string[]): { force: boolean; writeManifest: boolean; projectDir?: string } {
   let force = false;
+  let writeManifest = false;
   let projectDir: string | undefined;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--") break;
     if (arg === "--force") {
       force = true;
+    } else if (arg === "--write-manifest") {
+      writeManifest = true;
     } else if (arg === "--project-dir") {
       projectDir = argv[++i];
     } else if (arg.startsWith("--project-dir=")) {
       projectDir = arg.slice("--project-dir=".length);
     }
   }
-  return { force, projectDir };
+  return { force, writeManifest, projectDir };
+}
+
+function isEmptyDirectory(path: string): boolean {
+  try {
+    return lstatSync(path).isDirectory() && readdirSync(path).length === 0;
+  } catch {
+    return false;
+  }
 }
 
 function preflight(
@@ -806,7 +835,9 @@ function preflight(
   manifest: WorkspaceManifest,
   force: boolean,
 ): ReconcilePlan | null {
+  const resolved = readWorkspaceRepos(root).entries;
   const manifestNames = new Set(manifest.repos.map((repo) => repo.name));
+  const declaredDirs = new Set(manifest.repos.map((repo) => resolve(repoDir(root, repo.name))));
   const toClone: WorkspaceRepoEntry[] = [];
   const toKeep: WorkspaceRepoEntry[] = [];
   const toRemove: string[] = [];
@@ -814,10 +845,20 @@ function preflight(
   const unsafe: string[] = [];
   const needForce: string[] = [];
   const branchWarnings: string[] = [];
+  const notCloned: string[] = [];
 
-  for (const repo of manifest.repos) {
-    const dir = workspaceRepoPath(root, repo.name);
-    if (!pathEntryExists(dir)) {
+  for (const declared of manifest.repos) {
+    // The person's own path, url and branch (repos.local.json) win for their disk.
+    const repo = resolved.get(declared.name) ?? declared;
+    const dir = repoDir(root, repo.name);
+    if (!repoIsWorkspace(root, repo.name) && (!pathEntryExists(dir) || isEmptyDirectory(dir))) {
+      if (cloneUrl(repo) === null) {
+        notCloned.push(
+          `${repoNotThereLine(root, repo.name)} repos.json gives it no "url" to clone it from: ` +
+            `add its "url" in repos.json, or in ${REPOS_LOCAL_PLACE} for your own copy.`,
+        );
+        continue;
+      }
       toClone.push(repo);
       continue;
     }
@@ -829,7 +870,7 @@ function preflight(
     }
     if (isSymlink || !existsSync(join(dir, ".git"))) {
       broken.push(
-        `${repo.name} exists on disk but is not a git checkout at a direct child path. ` +
+        `${repo.name} exists at ${displayRepoPath(dir)} but is not a git checkout there. ` +
           `Remove or fix ${dir}, then re-run.`,
       );
       continue;
@@ -849,7 +890,9 @@ function preflight(
 
   for (const name of discoverSiblingRepos(root)) {
     if (manifestNames.has(name)) continue;
-    const dir = workspaceRepoPath(root, name);
+    const dir = join(root, name);
+    // A checkout repos.json declares under another name, by its path, is not an orphan.
+    if (declaredDirs.has(resolve(dir))) continue;
     const reasons = orphanSafetyReasons(dir);
     if (reasons.length > 0) {
       unsafe.push(
@@ -880,7 +923,7 @@ function preflight(
     }
     return null;
   }
-  return { toClone, toKeep, toRemove, branchWarnings };
+  return { toClone, toKeep, toRemove, branchWarnings, notCloned };
 }
 
 // Windows refuses to rename a folder while another program has a file in it
@@ -962,14 +1005,13 @@ export class CloneFailure extends SyncFailure {
 
 function cloneIntoStage(
   root: string,
-  stageDir: string,
-  manifest: WorkspaceManifest,
+  stagePaths: ReadonlyMap<string, string>,
   repos: WorkspaceRepoEntry[],
   log: (line: string) => void,
 ): void {
   for (const repo of repos) {
-    const destination = join(stageDir, repo.name);
-    const url = cloneUrl(manifest, repo);
+    const destination = stagePaths.get(repo.name) ?? "";
+    const url = cloneUrl(repo) ?? "";
     log(
       `  staging clone ${repo.name} from ${maskUserinfo(url)}` +
         (repo.branch ? ` (branch ${repo.branch})` : "") +
@@ -1009,30 +1051,130 @@ function snapshotOutputs(root: string): OutputSnapshots {
   };
 }
 
-// The slow part: a transaction folder under the root, so every later move is a
-// rename on one filesystem, holding each clone. It takes no lock of its own.
+// Where each clone waits for its install, and the staging folders made beside
+// a checkout repos.json puts outside the workspace. `targets` holds a folder a
+// caller named for a clone (add-repo's --path, which repos.json lists only once
+// the install writes it); any other clone goes where repoDir puts it.
+interface StagedClones {
+  transactionDir: string;
+  stagePaths: Map<string, string>;
+  outsideStages: OutsideStage[];
+  targets: Map<string, string>;
+}
+
+// A staging folder beside a checkout outside the workspace, and the repo it
+// was made to clone.
+export interface OutsideStage {
+  dir: string;
+  repo: string;
+}
+
+const OUTSIDE_STAGE_PREFIX = ".aidlc-workspace-sync-clone-";
+// mkdtemp's own six characters after the prefix.
+const OUTSIDE_STAGE_SUFFIX_LENGTH = 6;
+
+// A staging folder outside the workspace that is still there after a run,
+// said once, after the run's own result or failure line. AI-DLC removes only a
+// folder it just made; one it could not remove, or an earlier run left, is the
+// person's to delete.
+const stagingLeft = new Set<string>();
+// Whether a folder this run made is among them (not only an earlier run's): a
+// refusal then never says nothing was changed.
+let stagingLeftThisRun = false;
+
+export function stagingLeftByThisRun(): boolean {
+  return stagingLeftThisRun;
+}
+
+export function stagingLeftLine(dir: string, repo: string): string {
+  return `AI-DLC could not remove the temporary folder ${dir} it made to clone ${repo}; nothing in it is needed, so you can delete it.`;
+}
+
+export function takeStagingLeftLines(): string[] {
+  const lines = [...stagingLeft];
+  stagingLeft.clear();
+  stagingLeftThisRun = false;
+  return lines;
+}
+
+export function removeOutsideStages(
+  stages: readonly OutsideStage[],
+  remove: (dir: string) => void = (dir) => rmSync(dir, { recursive: true, force: true }),
+): void {
+  for (const stage of stages) {
+    try {
+      remove(stage.dir);
+    } catch {
+      stagingLeft.add(stagingLeftLine(stage.dir, stage.repo));
+      stagingLeftThisRun = true;
+    }
+  }
+}
+
+// The one read for a folder an earlier run left beside this checkout (a run
+// stopped mid-clone runs no code to say it): the parent folder's own names. A
+// folder the person cannot list says nothing and still takes the clone.
+function noteEarlierStages(parent: string, repo: string): void {
+  const prefix = `${OUTSIDE_STAGE_PREFIX}${repo}-`;
+  let names: string[];
+  try {
+    names = readdirSync(parent);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (name.startsWith(prefix) && name.length === prefix.length + OUTSIDE_STAGE_SUFFIX_LENGTH) {
+      stagingLeft.add(stagingLeftLine(join(parent, name), repo));
+    }
+  }
+}
+
+function cloneDestination(root: string, staged: StagedClones, name: string): string {
+  return staged.targets.get(name) ?? repoDir(root, name);
+}
+
+// The slow part: a transaction folder under the root holding each clone, so
+// every later move is a rename on one filesystem. A clone is staged on the
+// volume its checkout goes to: inside the transaction for a repo in the
+// workspace, in a staging folder beside the destination for one repos.json
+// puts elsewhere. It takes no lock of its own.
 function stagePlan(
   root: string,
-  manifest: WorkspaceManifest,
   repos: WorkspaceRepoEntry[],
   log: (line: string) => void,
-): string {
+  targets: ReadonlyMap<string, string> = new Map(),
+): StagedClones {
   const transactionDir = mkdtempSync(join(root, ".aidlc-workspace-sync-txn-"));
+  const staged: StagedClones = { transactionDir, stagePaths: new Map(), outsideStages: [], targets: new Map(targets) };
   try {
     for (const dir of ["clones", "generated", "backups", "orphans"]) {
       mkdirSync(join(transactionDir, dir));
     }
-    cloneIntoStage(root, join(transactionDir, "clones"), manifest, repos, log);
-    return transactionDir;
+    for (const repo of repos) {
+      const destination = cloneDestination(root, staged, repo.name);
+      const rel = relative(root, destination);
+      if (rel !== "" && !rel.startsWith("..") && !isAbsolute(rel)) {
+        staged.stagePaths.set(repo.name, join(transactionDir, "clones", repo.name));
+      } else {
+        mkdirSync(dirname(destination), { recursive: true });
+        noteEarlierStages(dirname(destination), repo.name);
+        const stage = mkdtempSync(join(dirname(destination), `${OUTSIDE_STAGE_PREFIX}${repo.name}-`));
+        staged.outsideStages.push({ dir: stage, repo: repo.name });
+        staged.stagePaths.set(repo.name, join(stage, repo.name));
+      }
+    }
+    cloneIntoStage(root, staged.stagePaths, repos, log);
+    return staged;
   } catch (err) {
-    removeTransaction(transactionDir);
+    removeTransaction(staged);
     throw err;
   }
 }
 
-function removeTransaction(transactionDir: string): void {
+function removeTransaction(staged: StagedClones): void {
+  removeOutsideStages(staged.outsideStages);
   try {
-    rmSync(transactionDir, { recursive: true, force: true });
+    rmSync(staged.transactionDir, { recursive: true, force: true });
   } catch {
     // Left under a name the managed .gitignore block ignores.
   }
@@ -1046,13 +1188,13 @@ function applyPlan(
   plan: ReconcilePlan,
 ): void {
   const before = snapshotOutputs(root);
-  const transactionDir = stagePlan(root, manifest, plan.toClone, console.log);
+  const staged = stagePlan(root, plan.toClone, console.log);
   const { recoveryDir, retainedRecovery } = commitPlan(
     root,
     manifest,
     { path: manifestPath, raw: manifestRaw, next: null },
     plan,
-    transactionDir,
+    staged,
     before,
     (line) => console.error(yellow(line)),
   );
@@ -1067,10 +1209,11 @@ function commitPlan(
   manifest: WorkspaceManifest,
   manifestFile: { path: string; raw: string | null; next: string | null },
   plan: ReconcilePlan,
-  transactionDir: string,
+  staged: StagedClones,
   before: OutputSnapshots,
   warn: (line: string) => void,
 ): { recoveryDir: string; retainedRecovery: boolean } {
+  const { transactionDir, stagePaths, outsideStages } = staged;
   const manifestPath = manifestFile.path;
   const manifestRaw = manifestFile.raw;
   const liveGitignore = join(root, ".gitignore");
@@ -1091,6 +1234,9 @@ function commitPlan(
   const stagedGitignore = join(generatedDir, "gitignore");
   const stagedCodeWorkspace = join(generatedDir, CODE_WORKSPACE_NAME);
   const stagedManifest = join(generatedDir, "repos.json");
+  // Empty folders a clone goes into: removed just before the install, put back
+  // on a rollback.
+  const emptiedTargets: string[] = [];
   const moves: Move[] = [];
   const recoveryDir = join(
     root,
@@ -1109,7 +1255,8 @@ function commitPlan(
     if (manifestFile.next !== null) writeFileSync(stagedManifest, manifestFile.next, "utf-8");
 
     for (const repo of plan.toClone) {
-      if (pathEntryExists(workspaceRepoPath(root, repo.name))) {
+      const destination = cloneDestination(root, staged, repo.name);
+      if (pathEntryExists(destination) && !isEmptyDirectory(destination)) {
         throw new SyncFailure(
           `${repo.name} appeared while sync was staging; no changes were applied`,
         );
@@ -1125,7 +1272,7 @@ function commitPlan(
     // path. Path-based writers cannot modify the moved tree; writers holding an
     // open directory handle are caught by the quarantined-tree proof.
     for (const name of plan.toRemove) {
-      const source = workspaceRepoPath(root, name);
+      const source = join(root, name);
       const reasons = orphanSafetyReasons(source);
       if (reasons.length > 0) {
         throw new SyncFailure(
@@ -1180,11 +1327,14 @@ function commitPlan(
       }
     }
     for (const repo of plan.toClone) {
-      move(
-        join(clonesDir, repo.name),
-        workspaceRepoPath(root, repo.name),
-        moves,
-      );
+      const destination = cloneDestination(root, staged, repo.name);
+      if (isEmptyDirectory(destination)) {
+        rmdirSync(destination);
+        emptiedTargets.push(destination);
+      } else {
+        mkdirSync(dirname(destination), { recursive: true });
+      }
+      move(stagePaths.get(repo.name) ?? join(clonesDir, repo.name), destination, moves);
     }
     if (manifestFile.next !== null) {
       installStagedFile(stagedManifest, manifestPath, moves);
@@ -1217,6 +1367,9 @@ function commitPlan(
     committed = true;
   } catch (err) {
     const rollbackFailures = rollbackMoves(moves);
+    for (const target of emptiedTargets) {
+      if (!pathEntryExists(target)) mkdirSync(target);
+    }
     if (rollbackFailures.length > 0) {
       cleanupTransaction = false;
       throw new SyncFailure(
@@ -1233,6 +1386,8 @@ function commitPlan(
     }
     throw err;
   } finally {
+    // A staging folder outside holds only this run's clone, never recovery data.
+    removeOutsideStages(outsideStages);
     if (cleanupTransaction) {
       try {
         rmSync(transactionDir, { recursive: true, force: true });
@@ -1276,10 +1431,10 @@ function reportApplied(
     );
   }
   console.log(
-    `  ${green("✓")} .gitignore managed block → ${manifest.repos.length} child dir(s)`,
+    `  ${green("✓")} .gitignore managed block → ${workspaceGitignoreEntries(manifest).length - 2} repo dir(s) inside the workspace`,
   );
   console.log(
-    `  ${green("✓")} ${CODE_WORKSPACE_NAME} → ${manifest.repos.length} child root(s)`,
+    `  ${green("✓")} ${CODE_WORKSPACE_NAME} → ${manifest.repos.length} repo root(s)`,
   );
 }
 
@@ -1289,13 +1444,18 @@ function reportApplied(
 // file write's audit row waits on); the install runs inside the caller's.
 
 export interface StagedWorkspaceRepo {
-  transactionDir: string;
+  clones: StagedClones;
   repo: WorkspaceRepoEntry;
 }
 
-/** Clone `repo` (its `url`, else `org`'s address) into a staging folder under `root`. Throws CloneFailure. */
-export function stageWorkspaceRepo(root: string, org: string, repo: WorkspaceRepoEntry): StagedWorkspaceRepo {
-  return { transactionDir: stagePlan(root, { org, repos: [repo] }, [repo], () => {}), repo };
+/**
+ * Clone `repo` from its `url` into a staging folder on the volume its checkout
+ * goes to: `target` when the caller names the folder, else where repoDir puts
+ * it. Throws CloneFailure.
+ */
+export function stageWorkspaceRepo(root: string, repo: WorkspaceRepoEntry, target?: string): StagedWorkspaceRepo {
+  const targets = new Map(target === undefined ? [] : [[repo.name, target]]);
+  return { clones: stagePlan(root, [repo], () => {}, targets), repo };
 }
 
 /**
@@ -1309,15 +1469,23 @@ export function installWorkspaceRepo(
   staged: StagedWorkspaceRepo,
   manifest: { raw: string | null; next: string | null },
 ): void {
-  const target = workspaceRepoPath(root, staged.repo.name);
+  const target = cloneDestination(root, staged.clones, staged.repo.name);
   const text = manifest.next ?? manifest.raw;
   let committing = false;
+  // Removed once, so a refusal and its line name what is still there.
+  let cleaned = false;
   try {
-    if (pathEntryExists(target)) {
-      throw new SyncFailure(`${staged.repo.name} appeared while it was being cloned; nothing was changed`);
+    if (pathEntryExists(target) && !isEmptyDirectory(target)) {
+      removeTransaction(staged.clones);
+      cleaned = true;
+      throw new SyncFailure(
+        `${staged.repo.name} appeared while it was being cloned; ${stagingLeftByThisRun() ? "nothing in the workspace was changed" : "nothing was changed"}`,
+      );
     }
     if (text === null) {
-      move(join(staged.transactionDir, "clones", staged.repo.name), target, []);
+      if (isEmptyDirectory(target)) rmdirSync(target);
+      else mkdirSync(dirname(target), { recursive: true });
+      move(staged.clones.stagePaths.get(staged.repo.name) ?? "", target, []);
       return;
     }
     const parsed = parseWorkspaceManifest(text);
@@ -1326,24 +1494,44 @@ export function installWorkspaceRepo(
     commitPlan(
       root,
       parsed,
-      { path: join(root, "repos.json"), ...manifest },
-      { toClone: [staged.repo], toKeep: [], toRemove: [], branchWarnings: [] },
-      staged.transactionDir,
+      { path: reposManifestPath(root), ...manifest },
+      { toClone: [staged.repo], toKeep: [], toRemove: [], branchWarnings: [], notCloned: [] },
+      staged.clones,
       before,
       () => {},
     );
   } finally {
     // commitPlan removes its own transaction folder.
-    if (!committing) removeTransaction(staged.transactionDir);
+    if (!committing && !cleaned) removeTransaction(staged.clones);
   }
 }
 
+/**
+ * repos.json written as `manifest.next` for a repo already on disk, holding the
+ * workspace lock: the same install as a clone's with nothing to clone, so the
+ * .gitignore block and aidlc.code-workspace follow it, all rolled back on any
+ * error.
+ */
+export function installWorkspaceManifest(root: string, manifest: { raw: string | null; next: string }): void {
+  const parsed = parseWorkspaceManifest(manifest.next);
+  const before = snapshotOutputs(root);
+  commitPlan(
+    root,
+    parsed,
+    { path: reposManifestPath(root), ...manifest },
+    { toClone: [], toKeep: [], toRemove: [], branchWarnings: [], notCloned: [] },
+    stagePlan(root, [], () => {}),
+    before,
+    () => {},
+  );
+}
+
 export function discardStagedWorkspaceRepo(staged: StagedWorkspaceRepo): void {
-  removeTransaction(staged.transactionDir);
+  removeTransaction(staged.clones);
 }
 
 function reconcile(root: string, force: boolean): number {
-  const manifestPath = join(root, "repos.json");
+  const manifestPath = reposManifestPath(root);
   const { manifest, raw: manifestRaw } = readManifest(manifestPath);
   console.log(
     dim(
@@ -1354,29 +1542,91 @@ function reconcile(root: string, force: boolean): number {
   const plan = preflight(root, manifest, force);
   if (!plan) return 1;
   applyPlan(root, manifest, manifestPath, manifestRaw, plan);
-  for (const warning of plan.branchWarnings) {
+  const advisories = [...plan.notCloned, ...readWorkspaceRepos(root).ignored, ...plan.branchWarnings];
+  const localError = readWorkspaceRepos(root).localError;
+  if (localError !== undefined) advisories.unshift(`${localError} Your own paths in it are not used until it reads.`);
+  for (const warning of advisories) {
     console.log(yellow(`  ⚠ ${warning}`));
   }
-  if (plan.branchWarnings.length === 0) {
+  if (advisories.length === 0) {
     console.log(green("✓ workspace in sync"));
     return 0;
   }
   console.log(
     yellow(
-      `⚠ workspace synced, but NOT fully in sync - ${plan.branchWarnings.length} warning(s) above`,
+      `⚠ workspace synced, but NOT fully in sync - ${advisories.length} warning(s) above`,
     ),
   );
   return 2;
 }
 
+// The address a checkout's origin points to, read and never changed; null when
+// it has none. A caller writing it to repos.json leaves its credential out.
+export function originUrl(dir: string): string | null {
+  const result = git(dir, ["remote", "get-url", "origin"]);
+  const url = result.stdout.trim();
+  return result.status === 0 && url !== "" ? url : null;
+}
+
+// repos.json written from the repos found here: each child repo, or the
+// workspace itself (`"path": "."`) when it is the one code repo, with the
+// address its own origin points to (read, never changed; any user and token
+// left out), blank when it has none. The one add-repo made for the workspace
+// folder itself gains the repos found here that the offer named.
+function writeManifest(root: string): number {
+  const manifestPath = reposManifestPath(root);
+  const shown = relative(root, manifestPath).replaceAll("\\", "/");
+  const origin = (dir: string): string => withoutCredentials(originUrl(dir) ?? "");
+  if (pathEntryExists(manifestPath)) {
+    const raw = reposManifestListsOnlyAddedWorkspace(root) ? readFileSync(manifestPath, "utf-8") : null;
+    const manifest = raw === null ? null : parseWorkspaceManifest(raw);
+    const found = manifest === null ? [] : discoverSiblingRepos(root)
+      .filter((name) => !isProjectSubmodule(root, name) && !manifest.repos.some((repo) => repo.name === name));
+    const next = found.reduce<string | null>(
+      (text, name) => text === null ? null : workspaceManifestWith(text, { name, url: origin(join(root, name)), path: name }),
+      raw,
+    );
+    if (raw === null || next === null || found.length === 0) {
+      console.log(`${shown} is already here; nothing was written.`);
+      return 0;
+    }
+    writeFileSync(manifestPath, next, "utf-8");
+    const blank = found.filter((name) => origin(join(root, name)) === "");
+    console.log(
+      `Added ${found.join(", ")} to ${shown}: each one's folder and the address its origin points to. ` +
+        "Commit it so a teammate's clone knows where they go." +
+        (blank.length > 0 ? ` ${blank.join(", ")} has no origin, so its "url" is blank for now.` : ""),
+    );
+    return 0;
+  }
+  const children = discoverSiblingRepos(root);
+  const repos = children.length > 0
+    ? children.map((name) => ({ name, url: origin(join(root, name)), path: name }))
+    : existsSync(join(root, ".git"))
+    ? [{ name: basename(resolve(root)), url: origin(root), path: "." }]
+    : [];
+  if (repos.length === 0) {
+    console.log("No repos were found here, so repos.json was not written.");
+    return 0;
+  }
+  writeFileSync(manifestPath, `${JSON.stringify({ repos }, null, 2)}\n`, "utf-8");
+  const blank = repos.filter((repo) => repo.url === "").map((repo) => repo.name);
+  console.log(
+    `Wrote ${shown} with ${repos.map((repo) => repo.name).join(", ")}: each one's folder and the address its ` +
+      "origin points to. Commit it so a teammate's clone knows where they go." +
+      (blank.length > 0 ? ` ${blank.join(", ")} has no origin, so its "url" is blank for now.` : ""),
+  );
+  return 0;
+}
+
 export function main(argv: string[]): void {
-  const { force, projectDir } = parseFlags(argv);
+  const { force, writeManifest: writeOnly, projectDir } = parseFlags(argv);
   const root = resolveProjectDir(projectDir);
   let exitCode = 1;
   try {
     exitCode = withAuditLock(
       root,
-      () => reconcile(root, force),
+      () => writeOnly ? writeManifest(root) : reconcile(root, force),
       undefined,
       undefined,
       50,
@@ -1386,6 +1636,7 @@ export function main(argv: string[]): void {
   } catch (err) {
     console.error(red(`✗ ${(err as Error).message}`));
   }
+  for (const line of takeStagingLeftLines()) console.error(yellow(`  ⚠ ${line}`));
   process.exit(exitCode);
 }
 

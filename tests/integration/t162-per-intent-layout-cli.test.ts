@@ -16,7 +16,7 @@
 // (<host>-<pid>.md) diverged → merge re-resolved a different shard → existsSync
 // fail -> "main audit not found ... run --init first" -> every Bolt merge failed
 // on a per-intent project. The shard identity is PER-CLONE (a stable gitignored
-// aidlc/.aidlc-clone-id token), so both PIDs resolve ONE shard. Case "bolt
+// aidlc/.aidlc-engine/clone-id token), so both PIDs resolve ONE shard. Case "bolt
 // fork+merge round-trips" drives that real two-process fork->merge and asserts
 // it succeeds.
 //
@@ -183,7 +183,7 @@ function makeNewLayoutProj(recordA: string, recordB: string): string {
     join(proj, ".gitignore"),
     [
       "aidlc/active-space",
-      "aidlc/.aidlc-clone-id",
+      "aidlc/.aidlc-engine/clone-id",
       "aidlc/spaces/*/intents/active-intent",
       "aidlc/spaces/*/intents/*/runtime-graph.json",
       "aidlc/spaces/*/intents/*/.aidlc-*",

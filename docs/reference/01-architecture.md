@@ -521,7 +521,7 @@ it to PowerShell on the same kinds of answer (`--kiro-terminal powershell`) and
 keeps it in the `kiro-ide-terminal` marker. In that terminal (TERM_PROGRAM=kiro
 and the shell the chat's hook recorded) each tool entry also runs the tool as a
 child behind an `AI-DLC reply:` pointer line and keeps the reply under
-`aidlc/.aidlc-sessions/replies/` (the agent goes on from that file when the
+`aidlc/.aidlc-engine/sessions/replies/` (the agent goes on from that file when the
 result stops at the pointer or is cut off after it), and rejoins the
 single-quote pair cmd.exe left on the arguments, since the engine writes its
 reply straight to fd 1 and Kiro reads the terminal one second after sending the
@@ -753,7 +753,7 @@ dist/claude/.claude/
 |   +-- aidlc-write-audit-log.ts
 |   +-- review-freeze-command.ts, runtime-integrity.ts   # helpers the hooks import
 +-- rules/
-|   +-- aidlc.md                  # @-import stub -> ../../aidlc/active-memory/ (the engine's git-ignored copy of the active space's memory)
+|   +-- aidlc.md                  # @-import stub -> ../../aidlc/.aidlc-engine/active-memory/ (the engine's git-ignored copy of the active space's memory)
 +-- agents/
 |   +-- aidlc-product-agent.md
 |   +-- aidlc-design-agent.md
@@ -962,9 +962,9 @@ Plan Approval refuses mutations, and the engine refuses with the file to repair
 (`.aidlc/worktree-meta.json`) or the parent checkout to work from.
 
 Session bindings live at
-`aidlc/.aidlc-sessions/<safe-session-id>.binding.json`. Spawned tools discover
+`aidlc/.aidlc-engine/sessions/<safe-session-id>.binding.json`. Spawned tools discover
 their session through the nearest live entry in
-`aidlc/.aidlc-sessions/pids/<pid>`. Both stores are gitignored and best-effort;
+`aidlc/.aidlc-engine/sessions/pids/<pid>`. Both stores are gitignored and best-effort;
 the cursors remain the write-through fallback. The engine passes its resolved
 identity to child tools through `AIDLC_SESSION_OVERRIDE`, which is also the
 headless automation seam when set on the harness process.
@@ -980,7 +980,7 @@ cannot restore the previous session when process inspection recovers; explicit
 payload identity, environment identity, and the shared-cursor fallback still
 apply. A later successful SessionStart replaces the null record.
 
-Beside an entry, `aidlc/.aidlc-sessions/pids/<pid>.release-check` records that a
+Beside an entry, `aidlc/.aidlc-engine/sessions/pids/<pid>.release-check` records that a
 pinned project's release passed its whole-release check in that session
 process for that chat (the release, the project's harness and the resolved
 executable). The pinned dispatch writes it after a full check and, while the
@@ -1023,7 +1023,7 @@ explicit selector, then the session binding, then the shared cursor as the
 final fallback. Helpers that receive a resolved `intent:null` retain its
 selected space when choosing the bare space root. Switching spaces with
 `/aidlc space <name>` also
-writes the switched space's `memory/` files into `aidlc/active-memory/`,
+writes the switched space's `memory/` files into `aidlc/.aidlc-engine/active-memory/`,
 the git-ignored copy every harness-native rule include reads (the Claude
 `@`-import stub described above, Kiro CLI resources, Cursor rules, opencode's
 `instructions` glob, and Copilot's `AGENTS.md` `@`-imports; Kiro IDE's steering
@@ -1036,15 +1036,16 @@ ambient method delivery can still race.
 
 **Committed vs gitignored.** `aidlc/` is checked in so a team shares its work.
 The split (`harness/claude/dot-gitignore`): the two cursors
-(`active-space`, `active-intent`), per-clone runtime (`.aidlc-clone-id`,
-`.aidlc-sessions/`), the engine's copy of the active space's method
-(`active-memory/`), and derived state (`runtime-graph.json`, `.aidlc-*` under a
+(`active-space`, `active-intent`), per-clone runtime in `aidlc/.aidlc-engine/`
+(its `clone-id`, `sessions/` and `units/`, and the engine's copy of the active
+space's method in `active-memory/`, kept out of git by the folder's own
+`.gitignore`), and derived state (`runtime-graph.json`, `.aidlc-*` under a
 record) are **gitignored**; the method (`memory/**`), knowledge (`knowledge/**`,
 `codekb/**`), the `intents.json` registry, each record's `aidlc-state.md`, the
 `audit/` shards, and artifacts are **committed**. Audit is committed as per-clone
 shards (`audit/<host>-<clone>.md`) precisely so git never has to merge concurrent
 appends — there is intentionally no `merge=union` attribute.
-Both name parts come from `.aidlc-clone-id` (the token, and the host recorded
+Both name parts come from `aidlc/.aidlc-engine/clone-id` (the token, and the host recorded
 when it was minted), so a clone keeps one shard when the machine's name changes
 or the folder is copied to another machine. Shard files that start with the same
 first row are copies of one file (a sync tool's conflict copy, a hand copy);
@@ -1075,7 +1076,7 @@ readers read the rows they share once (`copiedAuditBlocks` in
 
 11. **Phase boundary verification** -- Traceability checks run at the end of Ideation, Inception and Construction (the Initialization->Ideation transition has none), written by the phase's last stage to `<record>/verification/`. This catches missing requirements-to-design links, orphaned artifacts, and inconsistencies before downstream stages build on incomplete foundations.
 
-12. **Hook-based audit logging** -- A PostToolUse hook on Write/Edit operations automatically logs artifact creation and modification to the intent's `audit/` shards. A PreCompact hook validates state file structure before context compaction. A SubagentStop hook logs subagent completions. The 134-event taxonomy (defined in `knowledge/aidlc-shared/audit-format.md`; see [State Machine](12-state-machine.md) for the emitter registry) enables post-hoc analysis -- key events include `STAGE_STARTED`, `STAGE_COMPLETED`, `DECISION_RECORDED`, `SCOPE_CHANGED`, and `RULE_LEARNED`.
+12. **Hook-based audit logging** -- A PostToolUse hook on Write/Edit operations automatically logs artifact creation and modification to the intent's `audit/` shards. A PreCompact hook validates state file structure before context compaction. A SubagentStop hook logs subagent completions. The 142-event taxonomy (defined in `knowledge/aidlc-shared/audit-format.md`; see [State Machine](12-state-machine.md) for the emitter registry) enables post-hoc analysis -- key events include `STAGE_STARTED`, `STAGE_COMPLETED`, `DECISION_RECORDED`, `SCOPE_CHANGED`, and `RULE_LEARNED`.
 
 13. **No nested delegation** -- The conductor (SKILL.md) performs every agent Task call. Agents never invoke each other or spawn subagents. This keeps the delegation graph flat and debuggable.
 

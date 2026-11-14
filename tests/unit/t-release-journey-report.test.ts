@@ -153,8 +153,8 @@ describe("t-release-journey-report: a turn that has not ended when the journey's
 
     // A record the tool was still writing is named, and the rest is kept.
     const proj = mkdtempSync(join(logDir, "half-written-"));
-    mkdirSync(join(proj, "aidlc", ".aidlc-sessions", "messages"), { recursive: true });
-    writeFileSync(join(proj, "aidlc", ".aidlc-sessions", "messages", "turn.json"), "{\"at\": \"2026-10-28T12:");
+    mkdirSync(join(proj, "aidlc", ".aidlc-engine", "sessions", "messages"), { recursive: true });
+    writeFileSync(join(proj, "aidlc", ".aidlc-engine", "sessions", "messages", "turn.json"), "{\"at\": \"2026-10-28T12:");
     const kept = releaseJourneyEvidence(proj);
     expect(kept.recordedLines).toEqual({ unreadable: expect.stringContaining("JSON") });
     expect(kept.work).toEqual([]);
@@ -290,7 +290,7 @@ describe("t-release-journey-report: the person's files until their pick of a pla
   function journey(harness: ReleaseJourneyHarness): ReturnType<typeof setupReleaseJourneyProject> {
     const project = setupReleaseJourneyProject(harness);
     roots.push(project.root);
-    const sessions = join(project.proj, "aidlc", ".aidlc-sessions");
+    const sessions = join(project.proj, "aidlc", ".aidlc-engine", "sessions");
     for (const [dir, record] of [["messages", { at: "2026-10-23T21:28:26Z", text: FIRST }], ["questions", { text: RELEASE_JOURNEY_REQUEST }]] as const) {
       mkdirSync(join(sessions, dir), { recursive: true });
       writeFileSync(join(sessions, dir, "first.json"), JSON.stringify(record));

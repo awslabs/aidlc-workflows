@@ -134,7 +134,7 @@ describe("t148 dist/kiro file structure", () => {
     // The AIDLC method lives at the workspace root, aidlc/spaces/default/memory/:
     // one hand-editable source of truth, identical on every harness, read by Kiro
     // via the agent JSON `resources` globs of the engine's git-ignored copy of the
-    // active space (file://aidlc/active-memory/**/*.md). It sits beside .kiro/, so
+    // active space (file://aidlc/.aidlc-engine/active-memory/**/*.md). It sits beside .kiro/, so
     // resolve from KIRO, not K.
     const mem = (...parts: string[]) =>
       join(KIRO, "aidlc", "spaces", "default", "memory", ...parts);
@@ -354,7 +354,7 @@ describe("t148 dist/kiro file structure", () => {
       // writes only its grid proposal, never a scope or the scope grid.
       const deny = fm.slice(fm.indexOf("    - capability: fs_write\n      effect: deny"));
       expect(deny, file).toContain(`        - ".kiro/**"`);
-      expect(deny, file).toContain(`        - "aidlc/.aidlc-sessions/**"`);
+      expect(deny, file).toContain(`        - "aidlc/.aidlc-engine/sessions/**"`);
       expect(deny, file).toContain(`        - "aidlc/spaces/*/intents/*/.aidlc-engine/gate-words/**"`);
       expect(deny, file).not.toContain("exclude:");
       if (file === "aidlc-composer-agent.md") {
@@ -753,7 +753,7 @@ describe("t148 dist/kiro file structure", () => {
     // The engine keeps the in-flight compose question itself: no file to allow.
     expect(fm).not.toContain(".aidlc-compose-pending");
     // The request file words that would ask go to `next` through (next --request-file).
-    expect(fm).toContain(`        - "aidlc/.aidlc-request-text/**"`);
+    expect(fm).toContain(`        - "aidlc/.aidlc-engine/request-text/**"`);
   });
 
   // Kiro's documented shell matching (kiro.dev/docs/permissions): a command
@@ -954,7 +954,7 @@ describe("t148 dist/kiro file structure", () => {
   });
 
   test("the Kiro IDE conductor sends words that would ask to next in a file on every shell", () => {
-    const FILE = "aidlc/.aidlc-request-text/request.txt";
+    const FILE = "aidlc/.aidlc-engine/request-text/request.txt";
     for (const { tree, invoke } of KIRO_IDE_CHANNELS) {
       const dir = join(REPO_ROOT, tree, "kiro-ide", ".kiro");
       // A request with a backtick or a `<` on the line hits the conductor's own

@@ -112,14 +112,14 @@ async function project(state: Parameters<typeof projectAt>[0]): Promise<string> 
 
 interface Question { id: string; text: string; createdAt: string; proposedScope?: string }
 function newest(proj: string): Question | undefined {
-  const dir = join(proj, "aidlc", ".aidlc-sessions", "questions");
+  const dir = join(proj, "aidlc", ".aidlc-engine", "sessions", "questions");
   if (!existsSync(dir)) return undefined;
   return readdirSync(dir).filter((name) => name.endsWith(".json"))
     .map((name) => JSON.parse(readFileSync(join(dir, name), "utf-8")) as Question)
     .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt)).at(-1);
 }
 const copies = (proj: string): string[] => {
-  const dir = join(proj, "aidlc", ".aidlc-sessions", "messages");
+  const dir = join(proj, "aidlc", ".aidlc-engine", "sessions", "messages");
   return existsSync(dir) ? readdirSync(dir).filter((name) => name.endsWith(".txt")) : [];
 };
 // The hook's context line as the host reads it, and the key only an adapter that asks gets.
@@ -204,7 +204,7 @@ describe("a long /aidlc paste: the agent is told AI-DLC has it whole and runs ne
       const proj = await project("fresh");
       // A call held for the turn this paste arrives on (the turn counter could not move past it), which would refuse
       // the bare next.
-      const latch = join(proj, "aidlc", ".aidlc-sessions", ".kiro-cli-forwarding-latch.json");
+      const latch = join(proj, "aidlc", ".aidlc-engine", "sessions", ".kiro-cli-forwarding-latch.json");
       mkdirSync(dirname(latch), { recursive: true });
       writeFileSync(latch, `${JSON.stringify({ turn: 1, raw: "fix the sales report end date", args: ["fix", "the", "sales", "report", "end", "date"] })}\n`);
       const words = markdownSpec(30_000);

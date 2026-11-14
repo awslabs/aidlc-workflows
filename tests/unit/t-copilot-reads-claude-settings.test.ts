@@ -39,7 +39,7 @@ function scratchProject(): string {
 }
 
 function messageRecords(project: string): string[] {
-  const dir = join(project, "aidlc", ".aidlc-sessions", "messages");
+  const dir = join(project, "aidlc", ".aidlc-engine", "sessions", "messages");
   return existsSync(dir) ? readdirSync(dir).filter((name) => name.endsWith(".json")) : [];
 }
 

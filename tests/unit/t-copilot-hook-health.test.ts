@@ -294,9 +294,9 @@ describe("Copilot: hooks that never ran are visible", () => {
     const other = readdirSync(intents).find((name) => !name.startsWith(".") && name !== "active-intent" && name !== "intents.json" && name !== cursor);
     expect(other).toBeDefined();
     // This chat joined the other workflow, as a second VS Code chat would.
-    mkdirSync(join(proj, "aidlc", ".aidlc-sessions"), { recursive: true });
+    mkdirSync(join(proj, "aidlc", ".aidlc-engine", "sessions"), { recursive: true });
     writeFileSync(
-      join(proj, "aidlc", ".aidlc-sessions", `${SESSION}.binding.json`),
+      join(proj, "aidlc", ".aidlc-engine", "sessions", `${SESSION}.binding.json`),
       JSON.stringify({ space: "default", intent: other, boundAt: "2026-10-03T00:00:00Z", source: "switch" }),
     );
     writeFileSync(
@@ -323,7 +323,7 @@ describe("Copilot: hooks that never ran are visible", () => {
     // The earlier chat worked on the other workflow; its session-end is
     // reconciled when this chat starts.
     const earlier = "99999999-8888-4777-8666-555555555555";
-    const sessions = join(proj, "aidlc", ".aidlc-sessions");
+    const sessions = join(proj, "aidlc", ".aidlc-engine", "sessions");
     mkdirSync(sessions, { recursive: true });
     writeFileSync(
       join(sessions, `${earlier}.binding.json`),

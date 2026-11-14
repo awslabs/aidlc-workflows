@@ -160,7 +160,7 @@ table); nothing a `PostToolUse` hook prints reaches the agent or the person. So
 the work AI-DLC did after a write (the audit row and the sensors) and after a
 command (the two audit-tail hooks below) has no card of its own. When
 `aidlc-guard-tool-call` lets a call through, it notes it under
-`aidlc/.aidlc-sessions/kiro-ide-pending/`: for an audited write, the target file
+`aidlc/.aidlc-engine/sessions/kiro-ide-pending/`: for an audited write, the target file
 as it was (size, time, content hash); for a command, the command and the record
 folders in every space. The next card that runs anyway (the next guard, the
 person's next message, or the turn's end) does that work first, in `catch-up`:
@@ -297,7 +297,7 @@ there, so it is not recorded again.
   the adapter owns both tags; `unbindable` when the workspace has no source
   fingerprint), and invokes the reserved decision or answer tool itself. A
   write of the stage's learnings diary, the composer's proposal, a person's
-  answer text, or a person's request directly in `aidlc/.aidlc-request-text/`
+  answer text, or a person's request directly in `aidlc/.aidlc-engine/request-text/`
   (the record files the shared guard admits while the plan waits)
   is not a planning write: the adapter clears its write window and records no
   violation. Kiro discards PostToolUse stdout, so a successful write hook remains silent; when

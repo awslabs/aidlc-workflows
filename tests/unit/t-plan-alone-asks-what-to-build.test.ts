@@ -62,7 +62,7 @@ function next(proj: string, args: string[], orch = ORCH): Directive {
 }
 
 function questionCount(proj: string): number {
-  const dir = join(proj, "aidlc", ".aidlc-sessions", "questions");
+  const dir = join(proj, "aidlc", ".aidlc-engine", "sessions", "questions");
   return existsSync(dir) ? readdirSync(dir).filter((name) => name.endsWith(".json")).length : 0;
 }
 

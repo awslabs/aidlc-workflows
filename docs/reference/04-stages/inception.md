@@ -297,8 +297,13 @@ Four lead artifacts plus three spoke contributions are written to
 
 - `team-practices.md` -- descriptive, team-voice prose. Five sections matching
   `team.md` headings: Way of Working, Walking Skeleton, Testing Posture,
-  Deployment, Code Style. Testing Posture carries structured
-  `Methodology: tdd|bdd|atdd|test-after|custom` and `Ordering: ...` bullets;
+  Deployment, Code Style. Way of Working carries the
+  `Integration branch: <branch>` line team work reads; where the work's code
+  is in repos of its own and this checkout is on another branch, the gate
+  says which branch Approve names for AI-DLC's records and plan
+  (`practicesBranchOffCheckout` in `aidlc-unit.ts`). Testing Posture carries
+  structured `Methodology: tdd|bdd|atdd|test-after|custom` and `Ordering: ...`
+  bullets;
   coverage/tooling/scope notes remain additional prose. The Methodology value
   is one of those five and nothing else, with its reasons in a separate
   `Methodology evidence:` bullet: the gate does not open on a value Code
@@ -1062,8 +1067,8 @@ All 4 artifacts written to `<record>/inception/units-generation/`:
 
 | File                            | Contents                                                    |
 |---------------------------------|-------------------------------------------------------------|
-| `unit-of-work.md`               | Unit definitions (name, description, boundaries), responsibilities, deployment model per Unit (standalone/shared/embedded), relative complexity estimate (S/M/L/XL), unit kind (`service`/`spec`/`ui`/`packaging`/`library`, drives which construction design artifacts apply), implementation notes and constraints |
-| `unit-of-work-dependency.md`    | Dependency DAG between Units (directed edges, cycle-free), integration points (APIs/shared data/events), parallel development opportunities (sets of Units with no dependency between them). Topology only, economic path-choice (recommended order, critical path) is 2.9's job. The fenced `yaml` edge block mirrors the DAG and may tag each unit with an optional `kind:` (see [Runtime graph](../13-runtime-graph.md) `bolt_dag.units[].kind`) |
+| `unit-of-work.md`               | Unit definitions (name, description, boundaries), responsibilities, deployment model per Unit (standalone/shared/embedded), relative complexity estimate (S/M/L/XL), unit kind (`service`/`spec`/`ui`/`packaging`/`library`, drives which construction design artifacts apply), implementation notes and constraints, and, when the work records repos, each Unit's likely repos (a repo, or a folder inside one big repo; a guide only) |
+| `unit-of-work-dependency.md`    | Dependency DAG between Units (directed edges, cycle-free), integration points (APIs/shared data/events), parallel development opportunities (sets of Units with no dependency between them). Topology only, economic path-choice (recommended order, critical path) is 2.9's job. The fenced `yaml` edge block mirrors the DAG and may tag each unit with an optional `kind:` (see [Runtime graph](../13-runtime-graph.md) `bolt_dag.units[].kind`) and its likely repos as `repos:` (a guide; a name the work does not record is said once after the stage and kept as written) |
 | `unit-of-work-story-map.md`     | One row per upstream item mapped to implementing Unit(s), keyed as the traceability enumeration is keyed (`USx.y` when `stories.md` is produced, and only `USx.y` rows are read; otherwise `FR`, a requirement with sub-requirements by its `FR{n}.{m}` IDs, plus optional `NFR` rows for any NFR the scope traces), cross-cutting rows spanning multiple Units, implementation order within each Unit, coverage verification (every enumerated ID assigned, every Unit has rows) |
 | `traceability.json`             | Coverage table deriving the Unit set from the generated Unit artifacts and verifying every enumerated ID maps to its declared target Unit; validated by the `traceability` sensor |
 

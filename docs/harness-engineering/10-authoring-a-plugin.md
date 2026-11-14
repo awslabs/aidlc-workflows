@@ -404,7 +404,7 @@ methodology knowledge. A plugin may also ship house rules (Method/rules, below).
   (agent-v1 JSON, naming each MCP server it uses as `@<server>` in `tools`),
   and a trust entry for it in `toolsSettings.subagent.trustedAgents` of
   `.kiro/agents/aidlc.json`; on V3 and Kiro IDE it needs neither.
-  On Kiro CLI, a natively dispatched plugin roster worker's hand-authored agent-v1 JSON must also include `file://aidlc/active-memory/**/*.md` (the engine's copy of the active space's memory, the same path on every install) in its `resources` array, resolving to at least one existing Markdown file, because plugin workers receive the same active-stage rules as core workers.
+  On Kiro CLI, a natively dispatched plugin roster worker's hand-authored agent-v1 JSON must also include `file://aidlc/.aidlc-engine/active-memory/**/*.md` (the engine's copy of the active space's memory, the same path on every install) in its `resources` array, resolving to at least one existing Markdown file, because plugin workers receive the same active-stage rules as core workers.
 - **Sensors.** Ship the manifest `sensors/aidlc-<id>.md` **and** its script under
   `tools/` (both — a manifest alone is discoverable but its script must live in
   `tools/` to run). The `aidlc-<id>.md` name at the top of `sensors/` is a hard

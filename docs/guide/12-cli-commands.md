@@ -36,7 +36,7 @@ diagnostic and lifecycle routes.
 | `/aidlc team-board [--snapshot] [--space <name>] [--intent <name>]` | Read-only Team Construction board (Unit progress, claims, merge readiness) |
 | `/aidlc intent [name]` | List intents in the active space (`--all` includes archived), or switch to an existing intent |
 | `/aidlc intent archive <name>` | Retire an in-flight or completed intent without deleting its record; `unarchive <name>` brings it back |
-| `/aidlc intent add-repo <name> [--url <address>]` | Add a sibling repo to the active piece of work at any stage, cloning it first when it is not here yet; `remove-repo <name>` takes one out |
+| `/aidlc intent add-repo <name> [--path <folder>] [--url <address>]` | Add a repo to the active piece of work at any stage, from where `repos.json` puts it or the folder you name, cloning it first when it is not here yet; `remove-repo <name>` takes one out (the last one only when the work goes back to the workspace folder: a git submodule of the project at any stage, any other repo before Construction) |
 | `/aidlc intent set-repos <name,...>` | Set exactly which sibling repos the active piece of work covers; `--all` keeps every recorded repo |
 | `/aidlc intent add-checkout <path>` | Have the review cover code kept in a worktree in the harness folder or outside the project; `remove-checkout <path>` takes it out |
 | `/aidlc space [name]` | List spaces, or switch to an existing space |
@@ -47,9 +47,21 @@ diagnostic and lifecycle routes.
 | `/aidlc --config [section]` | Configure project policy conversationally, then land exact deterministic config flags |
 | `/aidlc --claim <unit> [--team <label>] [--rhythm <per-stage\|unit-end>]` | Atomically claim an open team-owned Unit and bind this checkout to that attempt |
 | `/aidlc --release <unit>` | Release a live Unit claim from unscoped main by publishing a tombstone |
+| `/aidlc unit assign --here <unit>` | At the lead's project, build a Unit here: its claim is taken for the lead's project, like any take |
+| `/aidlc unit take <unit> --home <record>` | Take a Unit of the lead's work as your team's own piece of work, or carry its build on |
+| `/aidlc unit push [--later] [--remote <repo>=<name>] [--branch <name>] [--finish-merge]` | In a Unit's build, commit and push exactly its files on its branch in each repo, and send the result back to the lead's project |
+| `/aidlc unit send-back <unit>` | At the lead's project, send a team's Unit back from Build and Test in the failure's words |
+| `/aidlc unit propose --input <file>` | In a Unit's build, send the lead a change to an input the Unit was approved with |
+| `/aidlc unit rebase` | In a Unit's build started early, move it onto the branch the Unit it waited on merged into |
+| `/aidlc unit amend <unit> --input <file> --answer <approve\|reject>` | At the lead's project, answer a team's proposed change, in your own words |
+| `/aidlc unit lead-sign-off on\|off` | At the lead's project, make each team's result wait for your sign-off, or not (off by default) |
+| `/aidlc unit lead-here` | In a checkout that did not make the plan (the lead on another machine), record the lead's own word that they lead the work there, so the lead's questions are put there |
+| `/aidlc unit sign-off <unit>` | At the lead's project, sign a team's result off, in your own words |
+| `/aidlc unit turned-down <unit> --repo <repo>` | At the lead's project, send one repo of a team's Unit back to the team, with your words |
+| `/aidlc unit merged <unit> --repo <repo>` | At the lead's project, count one repo of a team's Unit as merged where the board does not see it, in your words |
 | `/aidlc unit adopt <unit>` | Adopt the checked-out live claim branch in a fresh clone |
 | `/aidlc unit participate` | Mark this clone for the guided Unit-claim picker |
-| `/aidlc unit share` | Commit the work here and push the integration branch so the teams can take Units, or see a landed one |
+| `/aidlc unit share [--plan]` | Commit the work here and push the integration branch so the teams can take Units, or see a landed one; `--plan` commits AI-DLC's record only, for a lead's project whose teams build in repos of their own |
 | `/aidlc unit publish <unit> [--commit [--include <path>]...]` | CAS-publish the scoped checkout's clean committed candidate onto its claim ref; `--commit` commits the Unit's own work first, and `--include` puts in a new file or folder it left out |
 | `/aidlc unit pin <unit>` | Pin and validate one completed candidate OID from unscoped main |
 | `/aidlc unit gate <unit> ...` | Record the merge decision against the pinned OID and generation |
@@ -214,12 +226,12 @@ engine through a file instead of the command line (on Kiro IDE the agent also
 sends a request holding a double quote, a typographic one such as `“` or `’`,
 one of `&`, `|`, `<`, `>`, `^`, or a trailing backslash this way, since Windows
 PowerShell or cmd.exe can change them): the agent writes it to
-`aidlc/.aidlc-request-text/request.txt` and runs `aidlc engine orchestrate next
---request-file aidlc/.aidlc-request-text/request.txt` with any other flags. On
+`aidlc/.aidlc-engine/request-text/request.txt` and runs `aidlc engine orchestrate next
+--request-file aidlc/.aidlc-engine/request-text/request.txt` with any other flags. On
 Kiro (Kiro IDE and Kiro CLI on its v3 engine) the agent sends a request this way
 on every shell when it holds `$`, a backtick, `>`, `<`, `&`, `@(`, `@{` or a line
 break, since Kiro asks you to approve an AI-DLC command holding one of them. The
-engine reads only a plain file directly inside `aidlc/.aidlc-request-text/`,
+engine reads only a plain file directly inside `aidlc/.aidlc-engine/request-text/`,
 through no link, up to 128 KiB, uses its words exactly as written, and removes
 the file once the command goes ahead.
 
@@ -312,10 +324,17 @@ engine runs for you — not `/aidlc` flags you type. During Construction, each g
 operation (worktree, swarm, Bolt) targets one repo; the conductor passes
 `--repo <name>` to anchor it, required only when an intent spans more than one
 repo. An intent with no recorded repos is the single-repo default (git runs in the
-workspace/project dir). Team-owned Units currently require that single-repo
-default: work with recorded sibling repos is not asked who builds its Units, and
-the first Construction step says in one line that this session builds them;
-`set-unit-ownership team` refuses with the same line before changing state. See
+workspace/project dir). Work with recorded sibling repos is asked who builds its
+Units, as other work is, when the workspace is the top of a git repository:
+**Several teams** records where the lead's project is, and each team builds a
+Unit as work of its own ([Teams across repos](workshop-mode.md#teams-across-repos)).
+When the workspace is not a git repository, it is not asked: the first
+Construction step says in one line that this session builds the Units and to
+put the workspace in git first, and `set-unit-ownership team` refuses with the
+same line before changing state. A workspace in a folder inside a bigger
+repository is not asked either: its line says where it sits and to start the
+work in a workspace of its own beside that repository, with `repos.json` giving
+its path, and `set-unit-ownership team` refuses with that line. See
 [Artifacts Reference](14-artifacts-reference.md).
 
 ---
@@ -411,10 +430,10 @@ under `## Mandated` in its space memory.
 When the repo is not in the workspace yet, it is cloned first, beside the other
 repos, with the same code `aidlc system workspace-sync` uses and your own git
 setup (your credential helpers and `insteadOf` rules apply as at your own shell). The
-address is the one you give with `--url`, else the repo's `repos.json` entry.
-A repo that `repos.json` lists by name alone is cloned from github.com under the
-list's org, so a team on GitHub can add a line with the repo's name and then add
-it by name. The agent never passes `--url` on its own, so a name it found in a
+address is the one you give with `--url`, else the `url` of the repo's
+`repos.json` entry. A repo that `repos.json` lists by name alone, with no `url`,
+is not cloned: the line says to add its `url` there or give it with `--url`.
+The agent never passes `--url` on its own, so a name it found in a
 code search is cloned only when `repos.json` lists it. The clone runs in a
 staging folder and is moved into place under
 the workspace lock; then the `repos.json` entry is written (your comments and
@@ -423,22 +442,43 @@ refreshed, and only then is the change recorded. The line names the address,
 with the user part of an address such as `https://user:token@host/...` shown
 as `***`; `repos.json`, which your team commits, gets the address without its
 credentials. With no `repos.json`, a
-hosted `--url` (a host, an owner and a name) creates one that names the owner as
-its `org`, and the line says so: commit it to share the list. A local path, or
+hosted `--url` (a host, an owner and a name) creates one that lists the repo,
+and the line says so: commit it to share the list. A local path, or
 an address of another shape, adds the repo without creating the file. When the
 clone fails, nothing is recorded or changed, and the line gives git's reason
 and the `git clone` command to run by hand. A repo no `repos.json` lists, added
 without `--url`, is not cloned: the line asks for its address.
 
+When the repo is already cloned somewhere else, beside the workspace say, and
+you tell the agent where ("the code is in ../billing"), it passes that folder
+with `--path`. The folder must be a Git checkout before anything is written;
+then `repos.json` lists the repo with that path (a new file when there is none,
+your comments and layout kept otherwise, with the managed `.gitignore` block and
+`aidlc.code-workspace` refreshed), and the repo is recorded. A path written on
+Windows (`..\billing`) reads the same on every platform. The line says to
+commit `repos.json` to share it, or, for a path on this machine only, that a
+teammate whose copy is elsewhere gives theirs in `aidlc/repos.local.json`. A repo
+`repos.json` already puts somewhere else is refused with where it is, and how to
+change it.
+
 The name must be a single folder name, and a folder already there must be a Git
 checkout (a real `.git` entry): a folder merely shaped like a repository is
-refused, as is a name with separators. The command serves work that already
-records repos; work that records none treats the workspace folder itself as its
-repo (`workspace reclassify` records its first repos). Removing the last
-recorded repo is refused for the same reason, unless it is a git submodule of
-the project (listed in its `.gitmodules`, the project folder a Git checkout
-itself): the work then records none and works on the workspace folder again.
-Removing a repo from work that records none changes nothing.
+refused, as is a name with separators.
+
+Work that records no repos works on the workspace folder itself. Until
+Construction has started, its first repo is recorded the same way, and the line
+says so once: "Added billing (at ../billing) to this piece of work's repos;
+until now it worked on the workspace folder itself, which it still reads." The
+workspace folder is still read as before. While nothing is built, removing that
+repo again takes the work back to the workspace folder. Once Construction has
+started, the Units' files are already recorded against the workspace folder, so
+the work records no repos from there: the line names
+`/aidlc intent add-checkout <folder>` instead, which has the review and its
+checks cover the other folder as well, and the agent runs it for you. Removing
+the last recorded repo is refused otherwise, unless it is a git submodule of the
+project (listed in its `.gitmodules`, the project folder a Git checkout itself):
+the work then records none and works on the workspace folder again, at any
+stage. Removing a repo from work that records none changes nothing.
 
 There is no cut-off: after Units Generation is approved the repo is still added
 (or removed), and what that means for the approved Units follows the work's
@@ -502,7 +542,7 @@ takes it out again.
 
 Bare `/aidlc space` lists spaces; add `--json` for structured output.
 `/aidlc space <name>` switches the per-user active-space cursor and writes that
-space's method files into `aidlc/active-memory/`, the git-ignored copy
+space's method files into `aidlc/.aidlc-engine/active-memory/`, the git-ignored copy
 the harness-native method include reads. No tracked file changes. It never
 creates a space or advances an intent. As for intents, a word that is neither a
 verb nor a space's exact name goes to the agent with the verbs and the space
@@ -637,7 +677,7 @@ Display current workflow progress without modifying anything.
 /aidlc --status
 ```
 
-**Behavior:** Reads the active intent's `aidlc-state.md` and displays: the scope (or, for a plan composed for this piece of work, its `Plan:` line instead), whether the work is a new project or existing code (`Project Type: existing code (you said so)`), and for existing code when Reverse Engineering last scanned it, also when it ran on its own (`, scanned 2026-10-03 23:17 UTC`), the depth with where it came from (`Depth: Standard (from scope feature)`, or `set for this piece of work`; for a plan composed for this piece of work, a setting that came with the stock scope it runs on reads `(from the approved plan)`, on the depth, Guard Policy and setting lines alike) and the test strategy when it differs, current phase, current stage, how many of the plan's stages are done, counted as the plan offer counted them, without setup (a stage you skipped is counted out and named, `Completion: 4/4 stages (100%), skipped: Deployment Pipeline`, and when the work ended on that stage the status says `Completed (Deployment Pipeline skipped)`; paused work says so and how to pick it up, `Paused at Deployment Pipeline (you stopped it); pick it back up with /aidlc --resume`), the reviewers setting with where it came from (`Reviewers: advisory (from scope bugfix)`, or `off (set for this piece of work)` once you turned them off for this work), the intent's Guard Policy value with where it came from (`Guard Policy: strict (from project.md)`, `off (from scope classic)`, `strict (set by you)`, or `strict (not set)` for an older intent without the field), a `Checks off:` line only when you or an environment switch turned a check off, naming each with why (`Checks off: state-transition (set by you)`; the checks a lower Guard Policy turns off go with the Guard Policy line), the stage progress list, and, when other work in this space is still open, an `Also open:` line naming it, and you can ask to switch to it (`Also open: 261003-lunch-poll (ask to switch to it)`). An invalid Guard Policy field is shown as unavailable with the validation error and the repair command. It also inspects completed-stage validation receipts: when a finished stage's inputs changed since it was approved, it says so in the line the next step uses and asks whether to redo it (`Something Practices Discovery used changed after it finished. I'm carrying on with it as it is. Do you want me to redo Practices Discovery with the change?`, or `Practices Discovery ran before the code was here. I'm carrying on with it as it is. Do you want me to redo Practices Discovery with the code?` once the work became existing code, or, when only its own documents were edited, `requirements.md changed after Requirements Analysis finished. I'm carrying on with it as it is. Do you want me to redo Requirements Analysis with your change instead?`), and names any later stage it affects (`Also affected: ...`). A finished stage that AI-DLC itself now does differently, with nothing of yours changed, is named on its own line and is not behind (`AI-DLC now does Functional Design differently from when yours ran; your work stands, and /aidlc --stage functional-design goes back to it (the stages after it reopen too).`). The check is advisory and does not change routing; receipts it cannot read, and completions without one, are not shown. When the current stage is awaiting approval, status says since when, in plain time (`waiting since 2026-10-04 12:24 UTC, about 2 minutes`). If no workflow is active, reports that no workflow is in progress; when work is here but none is selected in this conversation (a teammate's clone, for example), it names each piece of work and where it stands (finished, or the stage it is at) and says how to carry on with one or start new work.
+**Behavior:** Reads the active intent's `aidlc-state.md` and displays: the scope (or, for a plan composed for this piece of work, its `Plan:` line instead), whether the work is a new project or existing code (`Project Type: existing code (you said so)`), and for existing code when Reverse Engineering last scanned it, also when it ran on its own (`, scanned 2026-10-03 23:17 UTC`), the depth with where it came from (`Depth: Standard (from scope feature)`, or `set for this piece of work`; for a plan composed for this piece of work, a setting that came with the stock scope it runs on reads `(from the approved plan)`, on the depth, Guard Policy and setting lines alike) and the test strategy when it differs, current phase, current stage, how many of the plan's stages are done, counted as the plan offer counted them, without setup (a stage you skipped is counted out and named, `Completion: 4/4 stages (100%), skipped: Deployment Pipeline`, and when the work ended on that stage the status says `Completed (Deployment Pipeline skipped)`; paused work says so and how to pick it up, `Paused at Deployment Pipeline (you stopped it); pick it back up with /aidlc --resume`), the reviewers setting with where it came from (`Reviewers: advisory (from scope bugfix)`, or `off (set for this piece of work)` once you turned them off for this work), the intent's Guard Policy value with where it came from (`Guard Policy: strict (from project.md)`, `off (from scope classic)`, `strict (set by you)`, or `strict (not set)` for an older intent without the field), a `Checks off:` line only when you or an environment switch turned a check off, naming each with why (`Checks off: state-transition (set by you)`; the checks a lower Guard Policy turns off go with the Guard Policy line), the stage progress list, and, when other work in this space is still open, an `Also open:` line naming it, and you can ask to switch to it (`Also open: 261003-lunch-poll (ask to switch to it)`); in team work it names only work that is yours to switch to: a teammate's build a pull brought is left out, and so is the lead's plan in a teammate's clone. A build of your own made on another computer under another git name and email is left out too; you can still name it to switch to it. In teams' work by git, a `Checked in: yes, aidlc/ is in main on origin` line shows once your record is in the branch the work merges into, as this clone last fetched it (by a merge, a squash or a rebase), `Checked in: pushed on <branch>, not in main yet` while it is pushed only on a branch of its own (a pull request not merged yet; main reads as the branch the work merges into), and nothing when it is not pushed or git cannot tell; when a squash or rebase merge left your own copy of that branch ahead and behind it with all of your work in it, a line under it says so and how to bring it level (`Your main: origin/main already has your work, merged as commits of its own, so yours is 1 ahead and 1 behind. git reset --keep origin/main brings it level; nothing of yours is lost.`), and nothing when a reset would lose or refuse something of yours; and in a Unit's build, a `Yours:` line names your own other finished builds of the same lead's plan with where each stands, in the words `From others` uses (`Yours: u5-checkout-field (merged)`; `(pushed)` when a repo of it is not in this workspace or cannot be reached just now), with no line for your first build, at the lead's project or in work without teams. An invalid Guard Policy field is shown as unavailable with the validation error and the repair command. It also inspects completed-stage validation receipts: when a finished stage's inputs changed since it was approved, it says so in the line the next step uses and asks whether to redo it (`Something Practices Discovery used changed after it finished. I'm carrying on with it as it is. Do you want me to redo Practices Discovery with the change?`, or `Practices Discovery ran before the code was here. I'm carrying on with it as it is. Do you want me to redo Practices Discovery with the code?` once the work became existing code, or, when only its own documents were edited, `requirements.md changed after Requirements Analysis finished. I'm carrying on with it as it is. Do you want me to redo Requirements Analysis with your change instead?`), and names any later stage it affects (`Also affected: ...`). A finished stage that AI-DLC itself now does differently, with nothing of yours changed, is named on its own line and is not behind (`AI-DLC now does Functional Design differently from when yours ran; your work stands, and /aidlc --stage functional-design goes back to it (the stages after it reopen too).`). The check is advisory and does not change routing; receipts it cannot read, and completions without one, are not shown. When the current stage is awaiting approval, status says since when, in plain time (`waiting since 2026-10-04 12:24 UTC, about 2 minutes`). If no workflow is active, reports that no workflow is in progress; when work is here but none is selected in this conversation (a teammate's clone, for example), it names each piece of work and where it stands (finished, or the stage it is at) and says how to carry on with one or start new work.
 
 Status also shows separate **Sensors**, **Learnings**, and **Summary Confirmation**
 rows with each effective value and its source, for example `Sensors: on (from
@@ -691,6 +731,237 @@ stamped Unit. While main is back at Units Generation changing the Unit plan, a
 claim still goes ahead, and its result says once that if the approved plan
 changes that Unit's own entry, pin asks for a rebase onto main.
 
+### `/aidlc unit assign --here` - Build a Unit at the lead's project
+
+At the lead's project, once teams are chosen and `Home Location` is recorded,
+every Unit is open for anyone to take, and the lead's project builds the walking
+skeleton (when on) and a Unit only when you say so. The agent runs this from
+your own words ("build reporting here"); you can also run it yourself:
+
+```
+/aidlc unit assign --here reporting
+```
+
+It is a take like any other: the Unit's claim is written at the lead's project's
+remote (in the lead's project's own repository when it has none) with a
+compare-and-swap, held for the lead's own work by your git `user.name`, so no
+teammate takes it meanwhile, and the lead's walk builds it. A Unit someone took
+first stays theirs, and the command says who builds it. When the claim cannot be
+written, the Unit is built here all the same and the line says the teams cannot
+see that yet, with git's words. `unit release <unit>` there opens it again. The
+agent writes the words it came from to the request file the command names
+(`--request-file aidlc/.aidlc-engine/request-text/unit-assign.txt`), and they go into
+the `UNITS_ASSIGNED` audit row when a turn of yours stands behind them.
+
+A Unit someone else built and merged, named here (the lead's Build and Test
+asked to fix it at the lead's project), is taken back as a new attempt and built
+here on top of what they merged, and the line says so ("<unit> is built here
+now, on top of what <who> merged."). Its merge no longer counts: the stages
+before the earliest one reopened for it keep the work that merged, and the
+reopened stages (Code Generation, with its plan, review and approval) and the
+ones after are built here. A Unit someone is still building stays theirs.
+
+### `/aidlc unit take <unit> --home <record>` - Take a Unit as your team's own work
+
+In a team member's workspace, take one Unit of the lead's work (the record
+named by `--home`, in space `--home-space`, default `default`) and start its
+build as a piece of work of its own in the space you are working in (your
+team's space, or the default space), or in the space `--space <name>` names
+when you ask for one: a space not here yet is made as `/aidlc space-create`
+makes it, with its name rule, and you are switched to it. AI-DLC offers it when
+you run `/aidlc` with no work of your own selected; you can also run it
+yourself:
+
+```
+/aidlc unit take refunds --home 261018-checkout-revamp
+/aidlc unit take refunds --home 261018-checkout-revamp --space payments
+/aidlc unit take refunds --from git@example.com:shop/shop-ws.git --home 261018-checkout-revamp
+```
+
+`--from <address>` takes it from the lead's project at that address when this
+workspace holds nothing of the lead's: the lead's branch is fetched once into
+a git ref of AI-DLC's own (no folder, no remote added), the build starts in
+the active space, and each later step reads the lead's project from the build.
+Where the lead's record is in this workspace, `--from` changes nothing. An
+address that starts with `-` is refused before any git call.
+
+The take is the Unit's claim at the lead's project's remote, by its address when
+the workspace is the team's own, with a compare-and-swap like any claim: its
+owner is the space the build goes in and `taken_by` your git `user.name`. The
+first take wins; a Unit someone took, or the lead's project builds, is refused
+with who builds it and where. The take says its way back once: `/aidlc unit
+release <unit>` in the Unit's build gives it back, open again, and sets the
+build aside with the engine's archive, nothing deleted; you stay in your space.
+A Unit that
+waits on another is refused until that Unit is done at the lead's project. The build
+records the lead's repos. The build copies what the lead approved at its pushed commit,
+records `UNIT_TAKEN_IN`, and is selected for this chat. Its `WORKFLOW_STARTED` row records the person's own
+words of the take when the agent hands them (`--request-file` or `--person-words`), and otherwise
+`Taken from the lead's plan: <unit>`. Taking a Unit whose
+build is already in this workspace carries that build on, and says whose build it
+is when someone else took it. A lead's project that takes no push from here: when
+this clone pushes the lead's branch to a repo of the team's own (a fork as origin,
+a push URL or `remote.pushDefault`), the take goes there with the person's login
+and says so once, and the lead's look takes it in from that remote once the lead
+adds it to their workspace; with nowhere else to push, the take goes on, says
+git's reason once, and is recorded there when a push next goes through, and an
+early start waits for it, with git's reason and the way on, which is push access
+from the lead. Before any Unit is taken, a lead's project out of
+reach at its recorded address while this clone's own remote holds the lead's
+plan records the take at that remote, said once.
+`--early` starts a Unit that waits on others once each of them has pushed: its
+branch starts at their pushed heads in each repo, and the line says it may
+still change before it merges.
+
+### `/aidlc unit push` - Send a Unit's build back to the lead's project
+
+In a Unit's build, once its stages are approved. AI-DLC offers it at the end of
+the build; you can also run it yourself, for example after a review fix:
+
+```
+/aidlc unit push
+/aidlc unit push --later
+/aidlc unit push --remote billing=team
+/aidlc unit push --branch feature/refunds
+/aidlc unit push --finish-merge
+```
+
+In each repo the Unit's Code Generation recorded writing to (its
+`source-manifest.json`), it switches to a branch named after the Unit (new
+ones start from the fetched integration branch when your working tree allows,
+else from where you are, and the line names your unpushed commits that come
+along), commits exactly those files with `git commit` (your identity, signing,
+pre-commit and commit-msg hooks; in a file you had changed too, only the Unit's
+change), and once every repo is committed runs `git push -u <remote> <unit>`:
+no force, no `--no-verify`. The remote is the one git would push to
+(`branch.<unit>.pushRemote`, `remote.pushDefault`, the branch's remote, then
+`origin` or the one remote); with several and none set, `--remote
+<repo>=<name>[,...]` names it, and the push offer lists each. Your other
+uncommitted work comes along uncommitted and is never committed; the line says
+where you are and the way back. What your host prints about your branch after
+the push, with a link in it, such as GitHub's link to create a pull request or
+GitLab's to create or view a merge request, comes with the line, as the host
+printed it. A refused push is said once, in the host's or
+hook's own words, and nothing retries. The result (each repo's branch, base,
+every head pushed, each changed file's blob and patch-id, and the Unit outputs
+the lead's project's later stages read) goes onto the Unit's claim at the lead's project, and
+`UNIT_PUSHED` is recorded; until the lead's project takes it (`Unit Push: unsent`), the
+next step offers to send it again. A refusal by a rule of the lead's host (git's
+`[remote rejected]`) is said once, in the host's words, with what to ask its owner for,
+and that chat is not offered the send again; while the take itself is not recorded
+there, the offer waits until a look records it, and the build's end says once per chat
+that the lead's project has not taken the result yet. When the lead's project refuses it and this
+clone pushes to a repo of the team's own, the result goes there (`Unit Push:
+pushed`), said once, and the lead's look takes it in. A repo the Unit changed that the lead's plan
+did not list is added to the build's repos first (`intent add-repo`), said once.
+A merge, rebase, cherry-pick or revert left under way in a repo is never
+committed over: the push says so with git's way to finish it or put it aside.
+A merge on the Unit's own branch with nothing left to resolve (a redo that
+merged the newer integration branch, say) is offered instead: **Finish the
+merge and push** runs `--finish-merge`, which concludes it with your own
+`git commit --no-edit` and then pushes.
+`--later` pushes nothing and only records that you said not now.
+
+The branch is named after the Unit unless you name it: when your team's
+branches follow a rule of their own (a pre-push hook, or the host, wants
+`feature/...`), say the name and the agent passes it with `--branch <name>`.
+From then on the Unit's branch goes by that name: in a repo where it was made
+under the Unit's name and not pushed yet, it is renamed, as `git branch -m`
+would; every later push, the push offer and the result the lead's project reads use it.
+`/aidlc unit <verb> --help` prints that verb's usage and changes nothing.
+
+### `/aidlc unit propose` and `/aidlc unit amend` - Change a shared input
+
+In a Unit's build, `propose --input <file> [--file <changed text>]` sends the
+lead your change to one of the files the Unit was approved with (your edited
+copy, or the text in `--file`), with your words in the request file its command
+names (`--request-file`); the build carries on, and
+offers it once when your copy changed. At the lead's project, the owner of the shared
+plan is asked once, with the path of the team's version (the board keeps the
+choice after a "Not now"), and the agent runs
+`amend <unit> --input <file> --answer <approve|reject> --request-file <file>`
+with their reply written to that file: their own words after the question was
+shown, not empty and not the agent's. The record keeps their reply as they typed
+it, from the message it came in (the agent names another with `--message <id>`).
+A change made on an older copy is put onto
+the text approved since; where the two do not fit together, nothing changes and
+both are shown, and the text the lead puts together from them is approved as
+written with `--file <that text>`. An approved change is written into the lead's project's
+record with `SHARED_INPUT_AMENDED` for each stage there that used it, and goes
+onto the claim of every Unit whose stages read it; a team it did not reach is
+named.
+
+### `/aidlc unit send-back` - Send a team's Unit back from Build and Test
+
+At the lead's project, when Build and Test finds a Unit a team built wanting,
+`send-back <unit> --request-file <file>` sends it back to that team in the
+failure's own words (written to the file first): its result and its done come
+off its claim, the board shows it back with the team, the team hears it once
+with the words, and the lead's project records it again once it merges again
+(`UNIT_SENT_BACK`, which keeps the lead's own words to send it back and the
+message they came in, beside the failure). Nothing of it is rebuilt at the
+lead's project. To fix it at the lead's project instead, the agent takes it
+back (`unit assign --here <unit>`) and reopens its Code Generation there.
+
+### `/aidlc unit rebase` - Move an early build onto what merged
+
+In a Unit's build that started early on another Unit's pushed branch, once
+that Unit is done at the lead's project the build asks once whether to move onto the
+branch it merged into. `rebase` does it in each repo the build started early
+in: it fetches that branch and moves only the build's own commits onto it, with
+your own git (a plain rebase where the repo merged the other Unit with its
+commits kept, a rebase from the head the build started on after a squash or a
+host's rebase; a build with no commits of its own yet moves and keeps your
+uncommitted work). Nothing is pushed; a build you had pushed then needs your
+own force push. The line says where you are now and the way back to your
+branch. A conflict stops with git's words, and `git rebase --abort` in that repo
+goes back; a move your own changes kept git from making is offered again once
+they are out of the way.
+
+### `/aidlc unit lead-here` - Lead the work from another checkout
+
+In a checkout that did not make the work's plan (a fresh clone on another machine), the lead's own questions (a sign-off,
+an answer to a team's change) are not put: the step shows the board and the Units to take, as a
+teammate's clone does. When you say you lead this work and want to carry it on there, the agent runs `unit lead-here` with
+your words; it records `LEAD_HERE_SET` in that checkout's own audit, and from then on the lead's questions are put there.
+
+### `/aidlc unit lead-sign-off` and `/aidlc unit sign-off <unit>` - The lead's sign-off
+
+`lead-sign-off on|off` records `Lead Sign-off` in the work's state at the lead's project;
+it is off by default. While it is on, a Unit counts as done only once the lead
+signed its team's result off and every repo it changed merged. The lead's project asks
+once as a result arrives, and the board keeps the choice after a "Not now"; the
+agent runs `sign-off <unit> --request-file <file>` with their reply written to
+that file, under the same rules as any answer of theirs (their own words, after
+the question was shown, not the agent's). The record keeps their reply as they
+typed it, from the message it came in (the agent names another with
+`--message <id>`).
+
+### `/aidlc unit turned-down <unit> --repo <repo>` - Send a repo back
+
+At the lead's project, when a team's pull request in one repo is turned down. The agent
+runs it with your words in the request file its command names
+(`--request-file aidlc/.aidlc-engine/request-text/unit-turned-down.txt`). Your words go onto
+the Unit's claim, beside your words as you typed them in the message you said
+them in (the agent names another with `--message <id>`), and the team hears them
+once at its next step; its build asks
+once whether to take the Unit back to Code Generation so it can be changed and
+pushed again. A repo that already merged stays merged.
+
+### `/aidlc unit merged <unit> --repo <repo>` - Count a repo merged
+
+At the lead's project, when a repo merged a team's Unit in a way the board does not see (the
+change made again by hand, or merged through another branch). The agent runs it
+with your words in the request file its command names
+(`--request-file aidlc/.aidlc-engine/request-text/unit-merged.txt`). Your words, as you
+typed them in the message you said them in (the agent names another with
+`--message <id>`), go onto the Unit's claim, and the Unit's
+done record keeps them ("by your word"). Once every repo the Unit changed is merged, by the board's
+check or by your word, it is recorded at once, by the same take-in the next step runs:
+"<unit> is recorded as merged here." then the check-in line. A repo still not merged records
+nothing, and the line says which.
+In a team's own build it names the way on instead: the lead's project checks the merge itself.
+
 ### `/aidlc unit adopt <unit>` — Adopt a teammate's live claim
 
 In a fresh clone, fetch and check out the exact local claim branch, then run:
@@ -727,6 +998,12 @@ After a Unit has been released and re-claimed, a later release must include
 `--expect-nonce` from `aidlc-unit.ts status`; this binds the command to the
 successor attempt and prevents a lost-output retry from tombstoning it.
 
+In a Unit's build (a team's take of the lead's Unit), `unit release <unit>` is
+the way back from the take: the lead's project's claim is released, open again,
+and the build is archived with its record and audit kept. At the lead's project,
+`unit release <unit>` opens a Unit a team took, or one the lead built here,
+again.
+
 ### `/aidlc unit participate` — Enable the guided picker
 
 Write the gitignored participant marker for this clone. A subsequent bare
@@ -755,8 +1032,12 @@ with a plain push, never forced, so the teams can take Units from the plan or
 see a Unit that landed. Once it has pushed, it names what it committed: how
 many files and, by name as changed, new or deleted, up to ten outside
 `aidlc/`, with how many more. After it, this checkout shows the board instead of
-building Units. A push the remote refuses keeps the commit and says why; pull
-the branch, then share again. `/aidlc` offers this step itself when it is due:
+building Units. A push the remote refuses keeps the commit and says why. When it
+takes no direct push to the branch (a host's rule), push it on a branch and get
+it merged your usual way; the teams can take Units once it is in the branch.
+Otherwise, pull the branch, then share again. A checkout on another branch
+commits the plan (aidlc/) there and pushes nothing, and is told it is not on the
+branch, with the same way on. `/aidlc` offers this step itself when it is due:
 before a Unit would start on the lead's checkout, and after a land the remote
 does not have yet.
 
@@ -834,7 +1115,7 @@ main.
 Accepted decisions are `approve` and `reject`. The command records the
 person's answer when a typed human turn follows the pin (pin's output names this
 command for each answer). The person's words may come in a file instead of
-`--user-input`: `--request-file aidlc/.aidlc-request-text/<name>.txt`, which
+`--user-input`: `--request-file aidlc/.aidlc-engine/request-text/<name>.txt`, which
 AI-DLC writes when it prints the command for you (after pin, the agent writes
 your reply to the file pin's commands name), so no shell reads them on the way;
 the file goes once the decision is recorded. A pinned Unit lands with a
@@ -948,7 +1229,7 @@ stage-graph integrity are in place. Clean and warnings-only reports exit 0; a
 failed check exits 1. The full report writes to stdout in all cases so the
 orchestrator surfaces it either way. Core doctor checks change no file of yours.
 They do bring AI-DLC's own copy of the active space's memory up to date
-(`aidlc/active-memory/`, and on Kiro IDE its steering copies), as every session
+(`aidlc/.aidlc-engine/active-memory/`, and on Kiro IDE its steering copies), as every session
 start does, so the command is safe to run before the first intent is created;
 once an intent exists it also records a `HEALTH_CHECKED` audit row. Plugin checks execute installed plugin code: plugin authors are required by convention to keep those scripts read-only, but the runtime cannot enforce that property.
 
@@ -973,7 +1254,7 @@ When a workflow has issues, `--doctor` also lists the structured findings in its
 | Kiro hooks switched off | On the Kiro harness: every AI-DLC hook file in `.kiro/hooks/` (`aidlc-*.json`) that carries `"enabled": false`, which Kiro IDE writes when you switch a hook off under Agent Hooks (a committed file can carry it too). The guard hook (`aidlc-guard-tool-call`), the reply recorder (`aidlc-record-human-turn`) and the older guard files a project may still hold fail, each naming what is no longer protected; any other AI-DLC hook switched off is one warning. The fix is to turn the hook back on under Agent Hooks in Kiro IDE, or in Kiro CLI to change `"enabled": false` to `true` in the hook's file, then quit Kiro and start `kiro-cli --v3` again in the folder |
 | Kiro ignore sources | On the Kiro harness with the Markdown conductor (`.kiro/agents/aidlc-aidlc.md`, used by Kiro IDE and Kiro CLI v3): evaluates git's global excludes file (in a git repo), `~/.kiro/settings/kiroignore`, the project `.gitignore`, and `.kiroignore` independently against the reads the engine sends the agent to make through `fs_read`: for every stage `harness.json` selects in the compiled graph, the stage file and the persona and knowledge the conductor holds inline (the engine's own roster at Standard and Minimal depth, within the directive's 8 KiB `inline_context_paths` cap), plus `stage-protocol.md` and its `stage-protocol-<name>.md` modules and the files beside each skill's `SKILL.md`. Contributor-only protocol files such as `stage-definition.md` are not loaded, so they are not counted. Plugins count however they were composed. `SKILL.md` files, the conductor agent (`agents/aidlc-aidlc.md`), `aidlc-common/conductor.md`, and `tools/`, `sensors/`, `hooks/`, `scopes/`, and `steering/` are loaded by Kiro itself or the engine, not through `fs_read`, and are not counted. A rule that hides only some of them is reported with a count and the framework folders it touches. Global-source rules that hide `.kiro/` fail, naming the source and line, because Kiro's `fs_read` guard (Kiro IDE and Kiro CLI v3) then denies every stage, agent, and protocol read. Workspace-source matches warn, because doctor cannot tell which Kiro runs: in Kiro IDE they apply only when `kiroAgent.agentIgnoreFiles` names the file (the default includes `.gitignore`; `[]` disables workspace sources), and doctor cannot read that IDE setting; Kiro CLI v3 applies `.kiroignore` (so a match there denies those reads) and not `.gitignore`, and the warning says which. A source doctor cannot evaluate (for example, `git` is not on PATH, which in a git repository also hides a custom `core.excludesFile`, or git refuses a repository that exists on disk) warns as `not evaluated` rather than passing. Rows name sources by fixed names such as `~/.config/git/ignore` and `.gitignore`, never by path, rule text, or git error text. A `!.kiro/` in another file does not undo a deny |
 | Workspace shell | `.claude/` + `aidlc/spaces/default/memory/` are present (the shipped shell) |
-| Active space method copy | `aidlc/active-memory/` (the git-ignored copy every harness include reads) holds the active space's `memory/` files; the check writes it first, as every session start does, so a difference left is a file that cannot be written there (warn) |
+| Active space method copy | `aidlc/.aidlc-engine/active-memory/` (the git-ignored copy every harness include reads) holds the active space's `memory/` files; the check writes it first, as every session start does, so a difference left is a file that cannot be written there (warn) |
 | VS Code agent request cap | Copilot only: `.vscode/settings.json` sets `chat.agent.maxRequests` to 100 or more. Unset (VS Code's default of 50), lower, not a number (a number in quotes included), or unreadable warns, because VS Code then stops a long stage to ask "Continue to iterate?" and the chat waits until someone answers. The fix names the line to write in the file |
 | Submodules | If a `.gitmodules` is present, reports how many submodule paths are declared and how many are uninitialized, naming `git submodule update --init --recursive` when any are (advisory - never fails) |
 | Env scope | `AWS_AIDLC_DEFAULT_SCOPE` (if set) names a valid scope |
@@ -986,7 +1267,7 @@ When a workflow has issues, `--doctor` also lists the structured findings in its
 | Current step out of date | Only while it lasts: the step the assistant was working from went out of date (the chat was compacted, or the workflow state changed after the step was issued). Says when and why, and, when known, which state lines changed and which AI-DLC command wrote them; the fix is `next` as its own command, which hands the current step out again and keeps an approval that still matches (warning - never fails) |
 | State drift | the active intent's `aidlc-state.md` matches the last `WORKFLOW_COMPLETED` in the audit |
 | Pending approval | When the current stage has waited at an organic approval gate for more than 24 hours, identifies it as waiting for a human rather than stuck and points to `/aidlc --status` (advisory - never fails) |
-| Background subagents | Reports fresh and stale session-scoped entries in `aidlc/.aidlc-sessions/subagent-inflight.json`. Fresh entries are advisory; stale or malformed entries fail with the exact removal step, run at your own terminal. Silent when absent |
+| Background subagents | Reports fresh and stale session-scoped entries in `aidlc/.aidlc-engine/sessions/subagent-inflight.json`. Fresh entries are advisory; stale or malformed entries fail with the exact removal step, run at your own terminal. Silent when absent |
 | Set-aside Bolt attempts | Informational list of saved attempts: slug, stamp, age in days, mode (`snapshot`, `branch-tip`, or `legacy` for saved heads; `evidence-only` when only reviewed source refs remain), restored checkout ownership, and typed restore/purge operations with optional safe display commands or rendering errors (purge only for evidence-only entries). These entries are neither warnings nor failures |
 | Cycle detection | `stage-graph.json` has no cycles |
 | Orphan stage files | Every slug in the graph has a matching `<phase>/<slug>.md` on disk |
@@ -1003,9 +1284,9 @@ When a workflow has issues, `--doctor` also lists the structured findings in its
 | Keyword overlap | A hint more than one plan has is a warning, naming the plans (the plan proposal lists it under each) |
 | Rule drift | Surfaces live team/project headings that overlap populated org policy for contradiction review, and reports lifecycle-stale overlaps in a separate stale-suppressed row (advisory — never fails) |
 | Paired sensor coverage | Confirms every rule that names a paired Sensor resolves to a Sensor some stage actually fires (advisory — never fails) |
-| Workspace records | Reports uncommitted changes under `aidlc/` so shared records are not left only in one checkout, leaving out `aidlc/.aidlc-request-text/`, the forwarding latch earlier Kiro CLI (V2) releases wrote as `aidlc/.aidlc-forwarding-latch`, and an audit log whose only change is the entries doctor writes about its own runs (when those are all there is, the row passes and says so); while git tracks or shows a request file or the latch, or holds a removed one its ignore rules do not cover, it gives no commit command, since `git add aidlc/` would take your request in (advisory - never fails) |
-| Request folder | Only when git can see files in `aidlc/.aidlc-request-text/`: they hold your own requests, so it names the steps, never running them: add the line `aidlc/.aidlc-request-text/` to the project folder's `.gitignore` when the folder is not ignored yet (and check no later rule of yours un-ignores it), and, in the project folder, `git rm --cached -r -f -- aidlc/.aidlc-request-text/` (the files stay) when git tracks them, then commit and push the removal and the `.gitignore` change (a refresh may have left it uncommitted) so teammates' clones drop it too; a removal not committed yet keeps the row (advisory - never fails) |
-| Forwarding latch | Only when git can see `aidlc/.aidlc-forwarding-latch`, a file earlier Kiro CLI (V2) releases left: it holds the words of a request of yours (the first call the hook named for it), and a `git add aidlc/` before the `.gitignore` part listed it took it in (the hook now writes inside `aidlc/.aidlc-sessions/`): the same steps as the request folder, for that one file: the ignore line `aidlc/.aidlc-forwarding-latch` when it is not ignored yet, `git rm --cached -f -- aidlc/.aidlc-forwarding-latch` (the file stays) when git tracks it, then commit and push (advisory - never fails) |
+| Workspace records | Reports uncommitted changes under `aidlc/` so shared records are not left only in one checkout, leaving out `aidlc/.aidlc-engine/request-text/`, the forwarding latch earlier Kiro CLI (V2) releases wrote as `aidlc/.aidlc-forwarding-latch`, and this clone's own audit log when its only change is the entries each look and each doctor run add after what is committed, none a decision of yours (when those are all there is, the row passes and says so); while git tracks or shows a request file or the latch, or holds a removed one its ignore rules do not cover, it gives no commit command, since `git add aidlc/` would take your request in (advisory - never fails) |
+| Request folder | Only when git can see files in `aidlc/.aidlc-engine/request-text/`: they hold your own requests, so it names the steps, never running them: add the line `aidlc/.aidlc-engine/request-text/` to the project folder's `.gitignore` when the folder is not ignored yet (and check no later rule of yours un-ignores it), and, in the project folder, `git rm --cached -r -f -- aidlc/.aidlc-engine/request-text/` (the files stay) when git tracks them, then commit and push the removal and the `.gitignore` change (a refresh may have left it uncommitted) so teammates' clones drop it too; a removal not committed yet keeps the row (advisory - never fails) |
+| Forwarding latch | Only when git can see `aidlc/.aidlc-forwarding-latch`, a file earlier Kiro CLI (V2) releases left: it holds the words of a request of yours (the first call the hook named for it), and a `git add aidlc/` before the `.gitignore` part listed it took it in (the hook now writes inside `aidlc/.aidlc-engine/sessions/`): the same steps as the request folder, for that one file: the ignore line `aidlc/.aidlc-forwarding-latch` when it is not ignored yet, `git rm --cached -f -- aidlc/.aidlc-forwarding-latch` (the file stays) when git tracks it, then commit and push (advisory - never fails) |
 | Declared workspace repos | When `repos.json` exists, compares its declared set with the sibling repos runtime discovery sees on disk (advisory - never fails) |
 | Workspace gitignore | When `repos.json` exists, checks that the managed `.gitignore` block matches the declared repo set (advisory - never fails) |
 
@@ -1550,7 +1831,7 @@ assignment.
 The session-start hook keeps its `presence-bypass-<session>` stamp in the Plan
 Approval runtime directory for an attended harness launched with
 `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1`.
-Model tools cannot invoke hooks or write `aidlc/.aidlc-sessions/` or any
+Model tools cannot invoke hooks or write `aidlc/.aidlc-engine/sessions/` or any
 `.aidlc-plan-approval/` or `<record>/.aidlc-engine/gate-words/` directory, as enforced by the
 [state-transition guard](../reference/06-hooks-and-tools.md#pretooluse-aidlc-state-transition-guardts).
 Memory-held strict refuses first and overrides both the policy word and any
@@ -1884,7 +2165,7 @@ is set where you run `config flags --bypass`, the command says so for each check
 but sensors, learnings and usage tracking, instead of saying the check is off.
 Recording or clearing a switch changes only that settings file (and AI-DLC's
 gitignored note of how it was set,
-`aidlc/.aidlc-sessions/recorded-switches.json`) and refreshes no harness files,
+`aidlc/.aidlc-engine/sessions/recorded-switches.json`) and refreshes no harness files,
 so it also works while a workflow is running: the next check reads it, with no
 restart. AI-DLC's managed `.gitignore` block already lists
 `aidlc.settings.local.json`; on an install from before that, the first `--local`
@@ -2162,7 +2443,7 @@ up to 64 KiB, and removes the file once read. `log decision` takes the question 
 same way with `--decision-file`, and its choices, one a line, with `--options-file`
 (a choice holding a comma can also go as its own `--option '<choice>'`), and `learnings surface` a correction with
 `--correction-file`. A file the agent wrote for `next --request-file` works for an
-answer too: `log answer --request-file aidlc/.aidlc-request-text/request.txt` reads
+answer too: `log answer --request-file aidlc/.aidlc-engine/request-text/request.txt` reads
 it as `next` does and removes it once the answer is taken, so a refused answer
 keeps it; it is not passed beside `--details` or `--details-file`.
 
@@ -3115,13 +3396,29 @@ it, and reverting an edit restores the original fingerprint.
 ### `aidlc-workspace-sync` - clone and reconcile the declared repo set<a id="aidlc-workspace-sync-clone-and-reconcile-the-declared-repo-set"></a>
 
 This is a **direct tool invocation**, not an `/aidlc workspace-sync` command. It
-reconciles a multi-repo workspace against the optional `repos.json` manifest at
-the workspace root (see
+reconciles a multi-repo workspace against the optional repo list,
+`aidlc/repos.json` (or a `repos.json` at the workspace root that a release before
+2.12 wrote; see
 [Declaring the repo set](03-spaces-and-intents.md#declaring-the-repo-set-optional-manifest)):
 
 ```bash
 aidlc system workspace-sync [--force]
+aidlc system workspace-sync --write-manifest
 ```
+
+`--write-manifest` writes the repo list (in `aidlc/` when the workspace has that
+folder) from the repos found here (each child
+repo, or the workspace itself as `"path": "."` when it is the one code repo),
+with the address each one's `origin` points to, read and never changed; it
+writes nothing when `repos.json` already exists, except the one
+`intent add-repo` made for the workspace folder itself (`"path": "."`), unchanged
+since, which gains the repos found here; it leaves a user or token in an origin
+address out. AI-DLC offers to run it once per clone, at a stage
+boundary (when Units are built one at a time, a Unit's first step of a stage
+is one), the first time the work records repos or teams are chosen; one
+person's work on one repo is never offered it. A `repos.json` that
+`intent add-repo` made for the workspace folder itself does not stop the offer,
+which then asks to add the repos found here to it.
 
 It serializes reconciles with a workspace lock whose live owner is never reaped
 for age, then runs a read-only preflight before staging clones and generated
@@ -3133,18 +3430,27 @@ are replaced successfully remain under the ignored
 `.aidlc-workspace-sync-recovery-*` directory for inspection; a staging
 `.aidlc-workspace-sync-txn-*` folder left by a run that was cut off is ignored
 too and can be deleted. The tool clones
-repos declared in `repos.json` but missing on disk, rewrites the managed block
-in the workspace `.gitignore` to one `/{name}/` line per repo (plus its two
-own folder patterns), and writes an
-`aidlc.code-workspace` VSCode multi-root file listing the root plus each child
-repo. In a Copilot project that file also carries VS Code's agent request cap,
+repos declared in `repos.json` but missing on disk into the folder each one's
+`path` gives (yours from `aidlc/repos.local.json` when you set one; a clone into a
+path outside the workspace is staged beside that folder, so another drive works,
+and a `.aidlc-workspace-sync-clone-<repo>-*` staging folder there that could not be
+removed, or that a cut-off run left, is named once in one line and left for you to
+delete),
+rewrites the managed block in the workspace `.gitignore` to one `/{path}/` line
+per repo whose checkout sits inside the workspace (never the workspace itself,
+plus its two own folder patterns), and writes an `aidlc.code-workspace` VSCode
+multi-root file listing the root plus each repo's folder. A repo with no `url`
+to clone it from is left as it is, with one line on how to add its `url` (exit
+`2`; an `org` in `repos.json` is read and ignored), and a line of `repos.local.json` that is not read is said
+once. In a Copilot project that file also carries VS Code's agent request cap,
 `"settings": { "chat.agent.maxRequests": 200 }`, added once to a file with no
 settings yet; the keys and values already in its settings are kept (the file
 is rewritten, so comments in it are not). A declared
 `branch` is checked out for a new clone. Repos already on disk
 are never re-cloned or switched; a mismatch there remains an advisory.
 
-An orphan checkout (on disk but not in `repos.json`) blocks the run and is
+An orphan checkout (a child folder with its own `.git` that `repos.json` neither
+names nor places by `path`) blocks the run and is
 removed from the active sibling set only when you pass `--force` and the tool
 can prove it has no local-only state. That proof overrides configurable status
 defaults, includes untracked and ignored files and directories (including empty

@@ -151,7 +151,7 @@ describe("t305 construction protocol module — Build-and-Test failure loop-back
     // `bun <harnessDir>/tools/aidlc.ts`; fold both projections back before the
     // byte comparison so real prose drift still fails. Each tree ships only its
     // own tool's binding subsection, so it is compared with that cut. Only the
-    // folder is folded: `.aidlc` is also the start of `aidlc/.aidlc-request-text/`.
+    // folder is folded: `.aidlc` is also the start of `aidlc/.aidlc-engine/request-text/`.
     const normalize = (body: string, harnessDir: string) =>
       body
         .replaceAll(`${harnessDir}/`, "{{HARNESS_DIR}}/")

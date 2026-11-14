@@ -81,6 +81,9 @@ still tells you, in one line, which mode it is using:
 Answering the way you chose earlier: Guide me. Say if you'd rather edit the file or chat.
 ```
 
+On a Unit's build you carried on from a teammate, the line names whose choice
+it is ("Answering the way Wes Web chose for this build: Guide me.").
+
 To change it, just say so ("let me edit the file this time"). The agent switches
 and later stages use your new choice. However you word your answer, the agent
 records the mode you meant, so you are not asked again because of the wording.

@@ -779,7 +779,7 @@ function emptyLedger(): Ledger {
   };
 }
 
-// The gitignored runtime ledger path: `aidlc/.aidlc-sessions/usage-ledger.json`.
+// The gitignored runtime ledger path: `aidlc/.aidlc-engine/sessions/usage-ledger.json`.
 export function ledgerPath(projectDir: string): string {
   return join(sessionsDir(projectDir), "usage-ledger.json");
 }

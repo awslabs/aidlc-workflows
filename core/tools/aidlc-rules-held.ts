@@ -49,7 +49,13 @@ import { isoTimestamp, isStopHookProbe, sessionsDir, toPosix, validSessionId, wr
 import { rootIntegrationTarget } from "./aidlc-distribution.ts";
 import { runtimeHarnessDir, runtimeHarnessName } from "./aidlc-runtime-paths.ts";
 import { CHAT_NAMING_HOSTS } from "./aidlc-record-core.ts";
-import { ACTIVE_MEMORY_DIR, activeMemoryCopyDrift, KIRO_IDE_STEERING, kiroIdeSteering } from "./aidlc-includes.ts";
+import {
+  ACTIVE_MEMORY_DIR,
+  activeMemoryCopyDrift,
+  EARLIER_ACTIVE_MEMORY_DIR,
+  KIRO_IDE_STEERING,
+  kiroIdeSteering,
+} from "./aidlc-includes.ts";
 
 type LoadRecord = {
   v: 1;
@@ -182,13 +188,16 @@ function memoryDirRel(space: string): string {
   return `aidlc/spaces/${space}/memory/`;
 }
 
-// The copy of the active space's memory that every include reads.
+// The copy of the active space's memory that every include reads, and where
+// an earlier release's include reads it.
 const COPY_DIR_REL = `${ACTIVE_MEMORY_DIR}/`;
+const EARLIER_COPY_DIR_REL = `${EARLIER_ACTIVE_MEMORY_DIR}/`;
 
 // The memory file of `space` a path the host reads stands for: the same file
-// under the copy, or the file itself (an include from before the copy).
+// under either copy, or the file itself (an include from before the copy).
 function memoryFileFor(rel: string, space: string): string {
-  return rel.startsWith(COPY_DIR_REL) ? `${memoryDirRel(space)}${rel.slice(COPY_DIR_REL.length)}` : rel;
+  const copy = [COPY_DIR_REL, EARLIER_COPY_DIR_REL].find((dir) => rel.startsWith(dir));
+  return copy === undefined ? rel : `${memoryDirRel(space)}${rel.slice(copy.length)}`;
 }
 
 // The memory files the Claude @-import stub names, as project-relative paths.
@@ -217,7 +226,7 @@ function claudeImportedFiles(projectDir: string, harnessDir: string, space: stri
 // the copy or for the files of `space` themselves; null for neither.
 function includedMemoryDir(globs: unknown, space: string, prefix: string): string | null {
   if (!Array.isArray(globs)) return null;
-  for (const dir of [COPY_DIR_REL, memoryDirRel(space)]) {
+  for (const dir of [COPY_DIR_REL, EARLIER_COPY_DIR_REL, memoryDirRel(space)]) {
     if (globs.includes(`${prefix}${dir}**/*.md`)) return dir;
   }
   return null;
@@ -618,7 +627,9 @@ export function chatHoldsRules(
     }
     if (record.refresh === "per-request") {
       const dir = record.dir ?? "";
-      if (dir === "") return false;
+      // An earlier release's copy goes once the includes are re-pointed: a chat
+      // whose host reads it may read nothing, so it gets the full text.
+      if (dir === "" || dir === EARLIER_COPY_DIR_REL) return false;
       const memory = memoryDirRel(space);
       // The host reads the copy with each request: it holds the exact text only
       // while each file of the bundle is in the copy as the memory file is now.

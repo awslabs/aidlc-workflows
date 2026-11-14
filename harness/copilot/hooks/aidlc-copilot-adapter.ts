@@ -415,12 +415,7 @@ export async function run(
   // Machine-local per-user runtime state, beside the P8 session map — NOT the
   // per-intent health dir (the heartbeat outlives intents) and NOT the extinct
   // flat aidlc-docs/ root (the codex adapter's stale path — review P1-3).
-  const heartbeatFile = join(
-    projectDir,
-    "aidlc",
-    ".aidlc-sessions",
-    "copilot-heartbeat.json",
-  );
+  const heartbeatFile = join(sessionsDir(projectDir), "copilot-heartbeat.json");
 
   // --- Core-hook subprocess plumbing -----------------------------------------
 

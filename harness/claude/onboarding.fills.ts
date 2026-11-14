@@ -12,7 +12,7 @@ const fills: OnboardingFills = {
 <!--
   The @-line above pulls the AIDLC method into Claude's ambient context. It is
   the first hop of a reference chain: CLAUDE.md imports @.claude/rules/aidlc.md,
-  which imports @../../aidlc/active-memory/*.md, AI-DLC's git-ignored
+  which imports @../../aidlc/.aidlc-engine/active-memory/*.md, AI-DLC's git-ignored
   copy of the active space's method that the engine refreshes at session start
   and on a space switch. The method is authored ONCE at the workspace root
   under aidlc/spaces/<space>/memory/ (org/team/project + phases/), so edit it

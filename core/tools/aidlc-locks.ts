@@ -250,7 +250,10 @@ export const ACTIVE_DIRECTIVE_LOCK = "active-directive.lock";
 // both producers already fail safe on a non-zero engine exit: the Stop hook
 // allows the stop and records a drop, and the route check (readEngineUnitDirective)
 // surfaces the error from `unit start`, or lets the start-receipt guard stand
-// aside, instead of corrupting authority.
+// aside, instead of corrupting authority. One move is not a write and does not
+// come here: ensureWorkspaceEngineFolder (aidlc-runtime-paths.ts) relocates an
+// earlier release's engine files byte for byte in an observer too, so the
+// observer reads the same approval and open question as the next step.
 export class EngineModeViolationError extends Error {
   constructor(readonly primitive: string) {
     super(

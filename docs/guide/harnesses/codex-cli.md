@@ -301,6 +301,13 @@ implicit skill matching so 37 runner descriptions don't pollute the index).
   is. To keep it closed in this project, set `network_access = false` there;
   a refresh keeps the value you set. For one session only, start Codex with
   `codex -c sandbox_workspace_write.network_access=false`.
+- **Repos beside the workspace**: `workspace-write` lets Codex write only
+  inside the folder you start it in. When a Unit you take changes repos that
+  `repos.json` (or your `repos.local.json`) puts outside the workspace, the
+  take says Codex's own step once: start Codex in the workspace with
+  `codex --add-dir ../checkout-api --add-dir ../billing` (one `--add-dir`
+  for each folder; checked against Codex CLI 0.166.0's `--help`). AI-DLC
+  writes no sandbox setting for it; you choose which folders Codex may write.
 - **Swarm floor = developer subagents**: one `aidlc-developer-agent`
   subagent per emitted Construction Unit, side by side, each working in the
   isolated worktree for that Unit's Bolt, with the same deterministic

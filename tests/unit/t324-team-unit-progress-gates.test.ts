@@ -478,6 +478,25 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     expect(Object.values(model.stageStates)).not.toContain("completed");
   });
 
+  test("a Unit a solo walk built before teams reads done only at a home of the build-out, never in main's one-repo flow", () => {
+    const soloBuiltThenTeams = (home: boolean): string => {
+      const proj = seedProject({ ownership: "team" }, ["alpha", "beta"]);
+      if (home) writeFileSync(seededStateFile(proj), state(proj).replace("- **Unit Ownership**: team\n", "- **Unit Ownership**: team\n- **Home Location**: local\n"));
+      appendAuditEntry("UNIT_STARTED", { Unit: "alpha" }, proj);
+      appendAuditEntry("UNIT_COMPLETED", { Stage: "code-generation", Unit: "alpha" }, proj);
+      appendAuditEntry("GATE_APPROVED", { Stage: "code-generation", Unit: "alpha", "User Input": "Approve" }, proj);
+      appendAuditEntry("UNIT_OWNERSHIP_SET", { Mode: "team" }, proj);
+      return proj;
+    };
+    // Main's flow (no Home Location) derives what main derives: nothing merged, no merge column.
+    const mains = soloBuiltThenTeams(false);
+    const model = deriveTeamUnitProgressModel(mains, state(mains));
+    expect([...model.mergedUnits]).toEqual([]);
+    expect(model.section).not.toContain("| merged |");
+    const atHome = soloBuiltThenTeams(true);
+    expect([...deriveTeamUnitProgressModel(atHome, state(atHome)).mergedUnits]).toEqual(["alpha"]);
+  });
+
   const dormantStates: Array<{
     name: string;
     cover: (proj: string) => void;
@@ -1654,8 +1673,8 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
 
     const result = runState(proj, ["set-unit-ownership", "team"]);
     expect(result.rc).not.toBe(0);
-    expect(result.out).toContain("This work spans 2 repos, so this session builds its Units: teams each owning a " +
-      "Unit is not available yet for work across repos. Carry on with `/aidlc`.");
+    expect(result.out).toContain("This work spans 2 repos and this workspace is not a git repository, so this " +
+      "session builds its Units: for teams to each own a Unit, put the workspace in git first. Carry on with `/aidlc`.");
     expect(state(proj)).toBe(stateBefore);
     expect(readAllAuditShards(proj)).toContain("**Event**: ERROR_LOGGED");
     expect(readAllAuditShards(proj)).not.toContain(

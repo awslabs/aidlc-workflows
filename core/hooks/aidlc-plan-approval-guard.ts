@@ -52,6 +52,13 @@
 // those exact bytes. Missing, conflicting, unknown, stale, and
 // post-approval-modified evidence blocks instead of guessing.
 //
+// Where nothing is built at Code Generation, what the person asks for runs on
+// their turn, with a row naming their message and words: a Unit's build whose
+// Code Generation is approved, and the lead's project while its Units wait on
+// the teams (the wait `next` recorded with the board, leadWaitsOnTeams). The
+// agent's own change there waits for their word, refused in one sentence of
+// theirs that names no step.
+//
 // Fail-open outside code-generation: a missing state file, no code-generation
 // stage (active directive or Current Stage) and no explicit plan dispatch,
 // malformed stdin, a read-only tool, or a non-developer subagent target allows
@@ -92,6 +99,7 @@ import {
   acquireAuditLock,
   type ActiveDirectiveMarker,
   assertNoSymlinkInChainOrThrow,
+  type AuditShardEvent,
   auditBlockField,
   auditFilePath,
   beforeDelimiter,
@@ -99,7 +107,7 @@ import {
   composerProposalPath,
   docsRoot,
   ENGINE_TEXT_DIRS,
-  REQUEST_TEXT_DIR,
+  REQUEST_TEXT_DIRS,
   errorMessage,
   getField,
   GUARD_RECOVERY_ASK_TYPE,
@@ -163,7 +171,13 @@ import {
   LOCK_FOLDER_HELD_SAID_KEY,
   lockFolderHeldGoesOnStep,
 } from "../tools/aidlc-lock-line.ts";
-import { mainCheckoutChangeStep, personTurnStands } from "../tools/aidlc-message-store.ts";
+import {
+  mainCheckoutChangeStep,
+  personTurnStands,
+  recordStandingTurnRow,
+  standingPersonTurn,
+} from "../tools/aidlc-message-store.ts";
+import { insideProject } from "../tools/aidlc-workspace-repos.ts";
 import type { planApprovalAskState } from "../tools/aidlc-plan-approval-ask.ts";
 import { aidlcToolInvocation, quoteCommandArgument, runtimeHarnessName } from "../tools/aidlc-runtime-paths.ts";
 import { claimedCheckoutReopens } from "../tools/aidlc-unit-landing.ts";
@@ -328,6 +342,55 @@ const ENGINE_QUESTION_OPEN =
 const FINISHED_WORK_WAITS_FOR_THE_PERSON =
   "Not run: this work is finished, and this runs once the person asks for it in this chat. Tell them what it does " +
   "and let them decide.";
+// A Unit's build whose Code Generation is approved: the build stays open
+// until its push or Not now, so its stage still reads Code Generation, with
+// nothing left to approve (unitBuildPastCodeGeneration).
+const UNIT_BUILT_ASKED = "the Unit is built and approved, and its code changes only at the person's word";
+// Some hosts show the refusal to the person as written: only their sentence,
+// and no step to run, since the step is theirs.
+const UNIT_BUILT_SENTENCE = "Your Unit is built and approved: its code changes only when you ask for a change.";
+// An AI-DLC command whose spelling the shell reading refused, in such a build.
+const UNIT_BUILT_ENGINE_SPELLING = "Run AI-DLC's command exactly as the step gives it, as a command of its own (no " +
+  "`cd` before it, no pipe or second command after it).";
+// The lead's project at Code Generation while its Units wait on the teams: the
+// board is the step there, so `next` cannot be the way on (leadWaitsOnTeams).
+const TEAMS_WAIT_ASKED = "the lead's project waits on the teams, and its files change only at the person's word";
+// The wait in the person's own words for the refusal (leadWaitSentence), set where the wait is read.
+let teamsWaitSaid: string | null = null;
+
+// A Unit's build whose last stage, Code Generation, is approved ([x] in its
+// Stage Progress): it is past Code Generation until a redo starts it again.
+// The build's Unit, or null.
+async function unitBuildPastCodeGeneration(state: string | null): Promise<string | null> {
+  if (state === null || !/^- \[x\] code-generation\s/m.test(state)) return null;
+  try {
+    const { unitBuildOf } = await import("../tools/aidlc-unit-teams.ts");
+    return unitBuildOf(state)?.unit ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// The lead's project waits on the teams on this state, as its last board
+// recorded it: the wait for the row and the refusal's sentence, or null. Loaded
+// only where no current step names Code Generation.
+async function leadWaitsHere(projectDir: string, state: string | null): Promise<{ field: string; sentence: string } | null> {
+  if (state === null) return null;
+  try {
+    const { leadWaitsOnTeams, leadWaitSentence, waitingField } = await import("../tools/aidlc-unit-teams.ts");
+    const waiting = leadWaitsOnTeams(projectDir, state);
+    return waiting === null ? null : { field: waitingField(waiting), sentence: leadWaitSentence(waiting) };
+  } catch {
+    return null;
+  }
+}
+
+// The person's turn behind what they asked for where nothing is built: their
+// latest turn with no decision after it (the system install's rule), never on
+// an unattended run.
+function personsAskStands(projectDir: string): AuditShardEvent | null {
+  return process.env.AIDLC_UNATTENDED === "1" ? null : standingPersonTurn(projectDir, "plain", { requests: true });
+}
 // Under strict every landing of the stage checks the main checkout against the
 // stage's start (assertAggregateSourceBeforeMerge), so nothing else changes it
 // while a parallel batch is out but the files the person asked to change
@@ -769,6 +832,9 @@ function authorityRemedy(
   wayOn: EngineInvocation | null = null,
 ): string {
   if (reason === ENGINE_QUESTION_OPEN) return engineQuestionOpenReason();
+  if (reason === UNIT_BUILT_ASKED) return UNIT_BUILT_SENTENCE;
+  if (reason === UNIT_BUILT_ENGINE_SPELLING) return UNIT_BUILT_ENGINE_SPELLING;
+  if (reason === TEAMS_WAIT_ASKED) return teamsWaitSaid ?? reason;
   if (reason === PLAN_APPROVAL_ASK_OPEN) {
     // The question is still open, so only an approval of these exact files is
     // the person's approval; any other answer they gave is carried out by `next`.
@@ -816,7 +882,10 @@ function authorityBlockReason(
   if (reason === SWARM_MAIN_CHECKOUT_HELD) {
     return `${authorityRemedy(reason, standing)} ${heldWayOn ?? SWARM_MAIN_CHECKOUT_LATER}`;
   }
-  if (reason === ENGINE_QUESTION_OPEN || reason === PLAN_APPROVAL_ASK_OPEN) {
+  if (
+    reason === ENGINE_QUESTION_OPEN || reason === PLAN_APPROVAL_ASK_OPEN || reason === UNIT_BUILT_ASKED ||
+    reason === UNIT_BUILT_ENGINE_SPELLING || reason === TEAMS_WAIT_ASKED
+  ) {
     return authorityRemedy(reason, standing, asked, editingReply);
   }
   return (
@@ -1035,41 +1104,12 @@ function inProjectSpelling(projectDir: string, target: string): string {
   }
 }
 
-// A real path with any Windows 8.3 short name expanded: Bun's realpathSync
-// keeps the short name, realpathSync.native expands it. Where native cannot
-// answer (some volumes, such as a RAM disk), the realpathSync answer stands;
-// no test can make native fail.
-function expandedRealPath(path: string): string {
-  try {
-    return realpathSync.native(path);
-  } catch {
-    return realpathSync(path);
-  }
-}
-
-// A write outside the project is never the plan's business: the path as
-// written lies outside the project, and so does the real path of its deepest
-// existing ancestor, so a link from outside into the project counts as inside
-// (a dangling link resolves to nothing and counts as inside too).
+// A write outside the project is never the plan's business. The project is
+// the workspace and every repo the person mapped elsewhere (insideProject owns
+// that rule), so a build writing into a mapped repo waits for its plan as a
+// write into a repo inside the workspace does.
 function isOutsideProject(projectDir: string, target: string): boolean {
-  try {
-    const projectLexical = resolve(projectDir);
-    const projectReal = expandedRealPath(projectLexical);
-    const targetAbs = resolve(target);
-    if (isWithinDir(targetAbs, projectLexical) || isWithinDir(targetAbs, projectReal)) return false;
-    const suffix: string[] = [];
-    let cursor = targetAbs;
-    while (lstatSync(cursor, { throwIfNoEntry: false }) === undefined) {
-      const parent = dirname(cursor);
-      if (parent === cursor) return false;
-      suffix.unshift(basename(cursor));
-      cursor = parent;
-    }
-    const real = join(expandedRealPath(cursor), ...suffix);
-    return !isWithinDir(real, projectLexical) && !isWithinDir(real, projectReal);
-  } catch {
-    return false;
-  }
+  return !insideProject(projectDir, target);
 }
 
 // Whether the target's build is finished and `next` hands over its finish
@@ -1273,14 +1313,16 @@ function isEngineTextTarget(projectDir: string, target: string): boolean {
   }
 }
 
-// The project folder where the agent writes a person's request for `next
-// --request-file` (REQUEST_TEXT_DIR): a plain file directly inside it, the only
-// place the engine reads it, reached through no link. Writing it changes
+// A project folder where the agent writes a person's request for `next
+// --request-file` (REQUEST_TEXT_DIRS: this release's, or the one a chat that
+// loaded an earlier release's text names): a plain file directly inside it, the
+// only place the engine reads it, reached through no link. Writing it changes
 // nothing and builds nothing; the engine reads the file and removes it.
 function isRequestTextTarget(projectDir: string, target: string): boolean {
   try {
-    const folder = join(projectDir, REQUEST_TEXT_DIR);
-    if (normalizeDriveLetter(dirname(resolve(target))) !== normalizeDriveLetter(resolve(folder))) return false;
+    const folder = REQUEST_TEXT_DIRS.map((dir) => join(projectDir, dir))
+      .find((candidate) => normalizeDriveLetter(dirname(resolve(target))) === normalizeDriveLetter(resolve(candidate)));
+    if (folder === undefined) return false;
     if (!isTrustedRecordTarget(projectDir, target, folder)) return false;
     const existing = lstatSync(resolve(target), { throwIfNoEntry: false });
     return existing === undefined || (existing.isFile() && existing.nlink === 1);
@@ -1824,7 +1866,9 @@ function lastStepAdmitsPersonsMoves(projectDir: string, jump: JumpCommand, finis
 // On finished work (`finished`, read as the human-turn hook reads it) their
 // words are kept beside the record, and personTurnStands reads them there: a
 // redo of Code Generation after work finished at it, which `next --stage`
-// leaves to this door, is theirs once they asked.
+// leaves to this door, is theirs once they asked. Their word from other work
+// counts here too (broughtHere): "go back to it" said in the chat of a team's
+// finished build, whose take then moved the chat onto the build it named.
 function jumpIsPersonsMove(
   projectDir: string,
   cwd: string,
@@ -1835,7 +1879,7 @@ function jumpIsPersonsMove(
   finished: boolean,
 ): boolean | EngineInvocation {
   if (typeof command === "string" && isSelectedGuardRestartContinuation(projectDir, cwd, command, state, marker)) return true;
-  if (!personTurnStands(projectDir, "plain", { requests: true })) return false;
+  if (!personTurnStands(projectDir, "plain", { requests: true, broughtHere: true })) return false;
   const last = lastStepAdmitsPersonsMoves(projectDir, jump, finished);
   return typeof last === "boolean" || runtimeHarnessName(projectDir) === "copilot" ? last : false;
 }
@@ -2462,6 +2506,7 @@ async function evaluate(
 ): Promise<number> {
   judgedStep = null;
   judgedNext = null;
+  teamsWaitSaid = null;
   // Runtime integrity is not a fence and cannot be disabled with this hook.
   if (refuseRuntimeIntegrityViolation(parsed)) return 2;
   // Kept whatever this guard then decides, in a chat that joined no work too:
@@ -2893,11 +2938,58 @@ async function evaluate(
       besideTheBuild(projectDir, mutation, () => parkedBuildPlansNamedPaths(projectDir))
     ) return 0;
     rulesArriving = codeGenerationRulesArrivingReason(activeDirective, projectDir);
-    if (
+    // A pass on the person's turn leaves its row: the call, and their message and words.
+    const askedChange = (turn: AuditShardEvent, why: Record<string, string>): void => {
+      const command = toolName === "Bash" ? oneLine(String(toolInput.command ?? "")).trim() : "";
+      const target = guardedDispatch
+        ? `dispatch of ${subagentType}`
+        : toolName === "Bash"
+          ? command.length > 160 ? `${command.slice(0, 160)}...` : command
+          : mutation.targets.map((candidate) => relative(resolve(projectDir), resolve(candidate)).split(sep).join("/")).join(", ");
+      const session = validSessionId(typeof parsed.session_id === "string" ? parsed.session_id : undefined);
+      recordStandingTurnRow(projectDir, HOOK_NAME, "ASKED_CHANGE_ALLOWED", turn, {
+        Stage: GUARDED_STAGE, Tool: toolName, Target: target, ...why, ...(session ? { Session: session } : {}),
+      });
+    };
+    const builtUnit = await unitBuildPastCodeGeneration(state);
+    if (builtUnit !== null) {
+      // A Unit's build ends at Code Generation, so once that stage is approved
+      // it is past it: open only for its push, or finished (finished work's
+      // own rule above, walkEnded, holds it then). Open, what the person asks
+      // for runs (a change, a commit, their redo), their turn standing behind
+      // it with no decision since (the turn that approved the code is spent by
+      // that approval); the agent's own change waits for their word, and the
+      // refusal names no step to run: the step is theirs.
+      const turn = mutation.engineRefused ? null : personsAskStands(projectDir);
+      if (turn !== null) {
+        askedChange(turn, { Unit: builtUnit });
+        return 0;
+      }
+      rulesArriving = null;
+      authorityFailure = mutation.engineRefused ? UNIT_BUILT_ENGINE_SPELLING : UNIT_BUILT_ASKED;
+      verdict = { block: true, mentioned: [] };
+    } else if (
       activeDirective?.version !== 2 ||
       directiveStage !== GUARDED_STAGE
     ) {
-      authorityFailure = NO_CURRENT_DIRECTIVE;
+      // The lead's project waiting on the teams builds nothing here, and its
+      // step is the board, so `next` is no way on: what the person asks for
+      // runs on their turn, and the agent's own change waits for their word.
+      // A developer handoff is a build, and AI-DLC's own command in a spelling
+      // the reading refused or hid keeps the refusal whose `next` is right for it.
+      const wait = mutation.engineRefused || mutation.hidesEngine ? null : await leadWaitsHere(projectDir, state);
+      if (wait !== null) {
+        const turn = guardedDispatch ? null : personsAskStands(projectDir);
+        if (turn !== null) {
+          askedChange(turn, { Waiting: wait.field });
+          return 0;
+        }
+        rulesArriving = null;
+        teamsWaitSaid = wait.sentence;
+        authorityFailure = TEAMS_WAIT_ASKED;
+      } else {
+        authorityFailure = NO_CURRENT_DIRECTIVE;
+      }
       verdict = { block: true, mentioned: [] };
     } else if (rulesArriving !== null) {
       // The plan may be approved, but the run-stage that says how to build has
@@ -3209,8 +3301,9 @@ async function evaluate(
       // supplies a missing directive, target, or approval. Those refusals say
       // what they say with the fence on, so each names the step that ends it.
       if (authorityFailure && !swarmBatchOut) {
-        // The plan question is open: the same words as with the fence on.
-        const waiting = authorityFailure === PLAN_APPROVAL_ASK_OPEN;
+        // The plan or push question is open: the same words as with the fence on.
+        const waiting = authorityFailure === PLAN_APPROVAL_ASK_OPEN || authorityFailure === UNIT_BUILT_ASKED ||
+          authorityFailure === UNIT_BUILT_ENGINE_SPELLING || authorityFailure === TEAMS_WAIT_ASKED;
         return refuseExecutionIneligible(
           authorityRemedy(authorityFailure, standing, asked, editingReply, jumpWayOn), !waiting, !waiting,
           planRefusalReason(),

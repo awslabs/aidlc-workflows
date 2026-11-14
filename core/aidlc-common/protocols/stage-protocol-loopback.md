@@ -173,6 +173,13 @@ options:
     description: Stop here; the workflow can resume later.
 ```
 
+At a lead's project that teams build for, a Unit the diagnosis names that
+someone else built and merged keeps "Retry with fix" (description: it is taken
+back and fixed here, on top of what they merged), with one more option beside
+it: **Send it back to <who built it> with this failure** (description: they get
+it back in the failure's own words, and it waits for them here). The step
+`next --stage code-generation --unit <unit>` returns says how to do either.
+
 Choose the variant by whether rung 2's classify-and-estimate step actually
 produced an impact-estimated candidate fix — never render the impact-estimated template's
 `Candidate fix` / `Retry with fix` slots with placeholder or invented

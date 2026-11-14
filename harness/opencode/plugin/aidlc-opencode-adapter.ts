@@ -389,7 +389,7 @@ const UNKNOWN_SHELL =
 
 // A request `next` takes from a file instead of the command line, so no shell
 // reads the person's words on the way.
-const REQUEST_FILE = "aidlc/.aidlc-request-text/request.txt";
+const REQUEST_FILE = "aidlc/.aidlc-engine/request-text/request.txt";
 const REQUEST_FILE_STEP =
   "Write the person's request, exactly as they typed it, with your file tool to " +
   `${REQUEST_FILE} in this project, and run the same command with --request-file ${REQUEST_FILE} ` +

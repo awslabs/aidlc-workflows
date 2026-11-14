@@ -166,7 +166,7 @@ describe("log answers", () => {
       }
     }
     // Only the fixture's own no-git record (tests/harness/fixtures.ts) is there.
-    expect(readdirSync(join(pd, "aidlc", ".aidlc-sessions"))).toEqual(["no-git-said"]);
+    expect(readdirSync(join(pd, "aidlc", ".aidlc-engine", "sessions"))).toEqual(["no-git-said"]);
   });
 
   test("pairs only within the same unit, generation, and single-stage workflow", () => {

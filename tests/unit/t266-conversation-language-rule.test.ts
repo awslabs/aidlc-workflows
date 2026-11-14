@@ -344,7 +344,7 @@ describe("t266 conversation-language rule layer", () => {
     // space's memory (aidlc-includes.ts ACTIVE_MEMORY_DIR). Exact string, not a
     // substring: `r.includes("memory")` would accept `file://docs/memory-notes.md`
     // and any other path that merely has the word in it.
-    const MEMORY_GLOB = "file://aidlc/active-memory/**/*.md";
+    const MEMORY_GLOB = "file://aidlc/.aidlc-engine/active-memory/**/*.md";
     const authoredHook = readFileSync(
       join(REPO_ROOT, "core", "hooks", "aidlc-deliver-stage-rules.ts"),
       "utf-8",
@@ -407,7 +407,7 @@ describe("t266 conversation-language rule layer", () => {
     const MEMORY_DIR = "aidlc/spaces/default/memory";
     // The git-ignored copy of the active space's memory every include reads
     // (aidlc-includes.ts ACTIVE_MEMORY_DIR).
-    const COPY_DIR = "aidlc/active-memory";
+    const COPY_DIR = "aidlc/.aidlc-engine/active-memory";
     const seen = new Set<string>();
 
     for (const harness of HARNESS_MATRIX) {

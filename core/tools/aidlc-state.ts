@@ -160,7 +160,6 @@ import {
   recordGuardStoodAside,
   unattendedHumanPresenceHint,
   intentRepos,
-  teamsAcrossReposLine,
   isGitRepoDir,
   isValidRepoName,
   repoDir,
@@ -249,6 +248,7 @@ import {
   renderSourcePathKeys,
   unitCompletedReceipts,
   unitGateStatus,
+  unitLifecycleReceiptsInUse,
   unitMajorConstructionStageSlugs,
   unitParkedPath,
   unitPlainName,
@@ -306,6 +306,8 @@ import {
 import { swarmSourceChangedSince } from "./aidlc-swarm-source.ts";
 import { memoryDirFor, PATH_SET_SENSOR_IDS, STAGE_WIDE_SENSOR_IDS, templateEligibleArtifacts, withStageProgressRow } from "./aidlc-graph.ts";
 import { generateFireId, recordUnfinishedFire, sensorMatchesPath, unfinishedFire } from "./aidlc-sensor-record.ts";
+import { buildOutBlockedLine, buildOutHomeLocation, buildWaitsForPush, HOME_LOCATION_FIELD, homeLocation } from "./aidlc-unit-teams.js";
+import { unitProgressSectionRange } from "./aidlc-unit-landing.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
 import { aidlcDispatcherInvocation, aidlcToolInvocation, compiledExecutable, entrySkillInvocation, syncFolderClause } from "./aidlc-runtime-paths.ts";
 import { markdownBlocks, projectVisibleMarkdownLines } from "./aidlc-markdown.ts";
@@ -338,6 +340,7 @@ import {
   loadConstructionEvidence,
   resolveConstructionCheckpoint,
   unfinishedReviewsNotice,
+  unitReceiptsRequired,
 } from "./aidlc-construction-checkpoints.ts";
 
 // All valid checkbox states (lib.ts adds [?] awaiting-approval and [R] revising)
@@ -1638,19 +1641,6 @@ function handleSetConstructionIteration(given: string[]): void {
   });
 }
 
-function unitProgressSectionRange(
-  content: string,
-): { start: number; end: number } | null {
-  const match = /^## Unit Progress\r?$/m.exec(content);
-  if (!match) return null;
-  const afterHeading = match.index + match[0].length;
-  const next = /^## /m.exec(content.slice(afterHeading));
-  return {
-    start: match.index,
-    end: next ? afterHeading + next.index : content.length,
-  };
-}
-
 function removeUnitProgressSection(content: string): string {
   const range = unitProgressSectionRange(content);
   if (!range) return content;
@@ -1743,7 +1733,11 @@ function hasCurrentTeamUnitActivity(
 }
 
 function handleSetUnitOwnership(given: string[]): void {
-  const { values: args, message } = withMessageArg(given);
+  const { values: passed, message } = withMessageArg(given);
+  // `--teammate-took`: the switch a teammate's take of solo work brings
+  // (switchSoloToTeams), which records the home in either layout.
+  const teammateTook = passed.includes("--teammate-took");
+  const args = passed.filter((arg) => arg !== "--teammate-took");
   const values = ["team", "solo"];
   if (args.length < 1) {
     error(`Usage: aidlc-state.ts set-unit-ownership <${values.join("|")}>`);
@@ -1764,10 +1758,8 @@ function handleSetUnitOwnership(given: string[]): void {
       );
     }
     if (value === "team") {
-      const repos = intentRepos(pd);
-      if (repos.length > 0) {
-        error(`${teamsAcrossReposLine(repos.length)} Carry on with \`${entrySkillInvocation()}\`.`);
-      }
+      const blocked = buildOutBlockedLine(pd);
+      if (blocked !== null) error(`${blocked} Carry on with \`${entrySkillInvocation()}\`.`);
       const resolution = resolveBoltDag(pd);
       if (resolution.state === "none") {
         error(
@@ -1817,8 +1809,14 @@ function handleSetUnitOwnership(given: string[]): void {
       "Unit Ownership",
       value,
     );
+    // The home of team-built work, recorded once as teams are chosen: every copy
+    // of the workspace then knows where its claims are.
+    const home = value === "team" && current !== "team" && homeLocation(content) === null
+      ? buildOutHomeLocation(pd, teammateTook)
+      : null;
+    if (home !== null) content = setOrInsertField(content, "## Runtime State", HOME_LOCATION_FIELD, home);
     if (value === "solo") content = removeUnitProgressSection(content);
-    emitAudit(pd, "UNIT_OWNERSHIP_SET", { Mode: value });
+    emitAudit(pd, "UNIT_OWNERSHIP_SET", { Mode: value, ...(home !== null ? { [HOME_LOCATION_FIELD]: home } : {}) });
     writeStateFile(pd, content);
     if (switches.length > 0) keepPlanQuestionOver(pd, before, content);
     // Each switch's own line, as the two setters print it. The first team step
@@ -1858,14 +1856,7 @@ function handleSetUnitGateRhythm(args: string[]): void {
       );
     }
     const current = readUnitGateRhythm(content);
-    // Each team gate is recorded under the rhythm it was asked in (its Gate
-    // Scope), and a rhythm reads only its own; a Unit started or built so far
-    // routes the same under either. So the change holds until a Unit's first
-    // approval question opens.
-    if (
-      value !== current &&
-      hasCurrentTeamUnitActivity(pd, content, (row) => values.includes(auditBlockField(row.block, "Gate Scope") ?? ""))
-    ) {
+    if (!unitGateRhythmCanBe(pd, content, value as UnitGateScope)) {
       error(unitGateRhythmStaysLine(pd, content, current));
     }
     content = setOrInsertField(
@@ -1878,6 +1869,21 @@ function handleSetUnitGateRhythm(args: string[]): void {
     writeStateFile(pd, content);
     console.log(JSON.stringify({ updated: true, unit_gate_rhythm: value }));
   });
+}
+
+// Whether the Units' approvals can take `value` as their rhythm: the setter's
+// rule, and the lead's offer is put only while it holds. Each team gate is
+// recorded under the rhythm it was asked in (its Gate Scope), and a rhythm
+// reads only its own; a Unit started or built so far routes the same under
+// either. So the change holds until a Unit's first approval question opens
+// under another rhythm than the one asked for: a Unit built before teams,
+// asked once at its end, is the end-of-Unit rhythm's already.
+export function unitGateRhythmCanBe(pd: string, content: string, value: UnitGateScope): boolean {
+  const other = (row: AuditShardEvent): boolean => {
+    const scope = auditBlockField(row.block, "Gate Scope") ?? "";
+    return (scope === "per-stage" || scope === "unit-end") && scope !== value;
+  };
+  return value === readUnitGateRhythm(content) || !hasCurrentTeamUnitActivity(pd, content, other);
 }
 
 // The rhythm the Units' approvals began under stays for the work. A Unit
@@ -6767,7 +6773,7 @@ function teamGateContext(
   if (resolution.state !== "ok" || !resolution.units.includes(unit)) {
     error(`Unit "${unit}" is not in the authoritative unit DAG.`);
   }
-  const { scope, stages } = teamUnitGateStages(pd, content, stage);
+  const { scope, stages } = teamUnitGateStages(pd, content, stage, unit);
   if (scope === "per-stage") {
     return { unit, scope, stages };
   }
@@ -6846,6 +6852,15 @@ function verifyReviewerPreconditionForUnit(
   }
 }
 
+// A step no Unit records receipts for at its stage is done from its documents,
+// as the walk reads it (unitReceiptsRequired), once it is approved: its
+// approval on record, or the one this gate asks for when the step is the
+// gate's own. A step with nothing approved still needs its receipt.
+function stepDoneByApproval(pd: string, content: string, slug: string, context: TeamGateContext): boolean {
+  if (unitReceiptsRequired(content, unitLifecycleReceiptsInUse(pd, slug))) return false;
+  return slug === context.stages.at(-1)?.slug || unitGateStatus(pd, slug, context.unit, "per-stage") === "approved";
+}
+
 function verifyTeamUnitGateEvidence(
   pd: string,
   content: string,
@@ -6874,7 +6889,7 @@ function verifyTeamUnitGateEvidence(
         unit: context.unit,
       });
     }
-    if (!unitCompletedReceipts(pd, stage.slug).has(context.unit)) {
+    if (!unitCompletedReceipts(pd, stage.slug).has(context.unit) && !stepDoneByApproval(pd, content, stage.slug, context)) {
       const message =
         `Refusing gate for unit "${context.unit}" of "${stage.slug}": no current ` +
         "UNIT_COMPLETED receipt is recorded.";
@@ -8631,6 +8646,9 @@ function handleApprove(args: string[]): void {
     // the alreadyMarkedCompleted path and skips re-emitting STAGE_COMPLETED.
     // Reentrant call — runs under the depth-2 lock without re-acquire.
     handleAdvance([slug], validationWarning, personCall);
+  } else if (buildWaitsForPush(content)) {
+    // A Unit's build: its push finishes the work (aidlc-unit.ts push).
+    console.log(JSON.stringify({ approved: slug, completed_count: completedCount, status: getField(content, "Status") ?? null }));
   } else {
     // Final stage — complete the workflow. handleCompleteWorkflow re-sets
     // the checkbox to [x] (idempotent) and emits PHASE_COMPLETED +

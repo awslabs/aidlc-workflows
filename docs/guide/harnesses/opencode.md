@@ -112,7 +112,7 @@ then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
    Step 2 adds AI-DLC's three load-bearing parts to it, or writes the file
    when there is none: `skills.paths` (skill discovery from `.aidlc/skills`),
    `instructions` (both native onboarding at `.aidlc/onboarding.md` and the
-   method glob `aidlc/active-memory/**/*.md`, the engine's git-ignored
+   method glob `aidlc/.aidlc-engine/active-memory/**/*.md`, the engine's git-ignored
    copy of the active space's method that `/aidlc space <name>` rewrites), and
    permission rules for AIDLC bash entrypoints plus edits under
    `.aidlc/tools/` and `.aidlc/hooks/`. If you keep an `opencode.jsonc`

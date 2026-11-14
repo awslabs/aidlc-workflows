@@ -14,7 +14,7 @@ import { accessSync, constants as fsConstants, existsSync, lstatSync, mkdirSync,
 import { hostname } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep } from "node:path";
 import { dlopen, FFIType, type Pointer } from "bun:ffi";
-import { runtimeHarnessDir, runtimeHarnessName, SPACE_NAME_REGEX } from "./aidlc-runtime-paths.ts";
+import { ensureWorkspaceEngineFolder, runtimeHarnessDir, runtimeHarnessName, SPACE_NAME_REGEX, workspaceEngineFile, workspaceEnginePath } from "./aidlc-runtime-paths.ts";
 import { validateUnitName } from "./aidlc-review-records.ts";
 import { activeSpace, assertNoSymlinkInChainOrThrow, ENGINE_DIR, engineDirFor, intentsDir, isPlainObject, listIntentDirs, mainCheckoutOfWorktree, readAppendOnlyFileNoFollowOrThrow, readRegularFileNoFollowOrThrow, refuseEngineObserverWrite, spaceRecordRoot, workspaceRoot, writeFileAtomic } from "./aidlc-locks.ts";
 import { escapeRegex } from "./aidlc-markdown.ts";
@@ -257,8 +257,14 @@ export function spacesRoot(projectDir: string): string {
 // canonical "what intents exist" record for humans/ordering/status — the cheap
 // on-disk listIntentDirs() scan is the path-resolver's record-presence signal,
 // but the registry carries the uuid/status/scope/repos a human or the --json
-// consumer needs.
+// consumer needs. A Unit's build keeps its row in its own record folder, and
+// is listed here with the rest.
 export function readIntentRegistry(projectDir: string, space?: string): IntentRegistryEntry[] {
+  const listed = readListedIntents(projectDir, space);
+  return [...listed, ...recordKeptEntries(projectDir, listed, space)];
+}
+
+function readListedIntents(projectDir: string, space?: string): IntentRegistryEntry[] {
   let text: string;
   try {
     text = readFileSync(intentsRegistryPath(projectDir, space), "utf-8");
@@ -281,6 +287,73 @@ export function readIntentRegistry(projectDir: string, space?: string): IntentRe
     }
   }
   return rows;
+}
+
+// --- A build's registry row, kept in its own record folder --------------------
+//
+// Two builds started at once in one space then share no file, so the clones
+// they were started in never conflict on a pull. readIntentRegistry lists these
+// rows with the space's own; writeIntentRegistry writes them back here.
+export const RECORD_ENTRY_FILE = "aidlc-intent.json";
+
+function recordEntryPath(projectDir: string, space: string | undefined, dirName: string): string {
+  return join(intentsDir(projectDir, space), dirName, RECORD_ENTRY_FILE);
+}
+
+// The rows kept in record folders that intents.json does not list.
+export function recordKeptEntries(
+  projectDir: string,
+  listed: readonly IntentRegistryEntry[],
+  space?: string,
+): IntentRegistryEntry[] {
+  const kept: IntentRegistryEntry[] = [];
+  for (const dirName of listIntentDirs(projectDir, space)) {
+    if (listed.some((row) => row.dirName === dirName)) continue;
+    let text: string;
+    try {
+      text = readFileSync(recordEntryPath(projectDir, space, dirName), "utf-8");
+    } catch {
+      continue;
+    }
+    try {
+      const entry = JSON.parse(text) as IntentRegistryEntry;
+      if (typeof entry?.uuid !== "string" || listed.some((row) => row.uuid === entry.uuid)) continue;
+      kept.push({ ...entry, dirName });
+    } catch {
+      // A hand-broken file lists nothing; the folder still shows as a record.
+    }
+  }
+  return kept;
+}
+
+export function keepIntentEntryInRecord(projectDir: string, entry: IntentRegistryEntry, space?: string): void {
+  if (!entry.dirName) throw new Error("A row kept in its record folder needs the folder's name.");
+  writeRowIfChanged(recordEntryPath(projectDir, space, entry.dirName), entry);
+}
+
+// The rows for the space's own intents.json: a row its record folder keeps is
+// written back there instead.
+export function keepRecordKeptEntries(
+  projectDir: string,
+  all: readonly IntentRegistryEntry[],
+  space?: string,
+): IntentRegistryEntry[] {
+  return all.filter((entry) => {
+    if (!entry.dirName || !existsSync(recordEntryPath(projectDir, space, entry.dirName))) return true;
+    writeRowIfChanged(recordEntryPath(projectDir, space, entry.dirName), entry);
+    return false;
+  });
+}
+
+function writeRowIfChanged(path: string, entry: IntentRegistryEntry): void {
+  const text = `${JSON.stringify(entry, null, 2)}\n`;
+  try {
+    // A row Git checked out with CRLF (Git for Windows) is the same row.
+    if (readFileSync(path, "utf-8").replaceAll("\r\n", "\n") === text) return;
+  } catch {
+    // A new row.
+  }
+  writeFileAtomic(path, text);
 }
 
 export interface IntentInfo {
@@ -342,20 +415,21 @@ export function listIntents(
 // B's context (the central multi-space hazard, vision §3). The fix is a tiny
 // per-user, machine-local map: at session START stamp the working intent's UUID
 // keyed by session_id; on RESUME, compare the stamped UUID to the live cursor
-// and OFFER a rebind on mismatch. The map lives at `aidlc/.aidlc-sessions/`
-// (gitignored — see dot-gitignore `aidlc/.aidlc-sessions/`): it is per-user
+// and OFFER a rebind on mismatch. The map lives at `aidlc/.aidlc-engine/sessions/`
+// (kept out of git by the engine folder's own .gitignore): it is per-user
 // runtime state, never shared truth. The intent record itself is the durable,
 // harness-neutral artifact; the session merely enriches the cursor on resume.
-export const SESSIONS_DIR = ".aidlc-sessions";
+//
+// The per-chat runtime scratch dir. Exported because aidlc-usage.ts writes the
+// usage ledger and the persisted-transcript-path pointers here, and the
+// statusline/state consumers read the ledger back.
+export const SESSIONS_DIR = "sessions";
 
-// The gitignored runtime scratch dir `aidlc/.aidlc-sessions/`. Exported because
-// aidlc-usage.ts writes the usage ledger and the persisted-transcript-path
-// pointers here, and the statusline/state consumers read the ledger back.
 export function sessionsDir(projectDir: string): string {
-  return join(workspaceRoot(projectDir), SESSIONS_DIR);
+  return workspaceEnginePath(projectDir, SESSIONS_DIR);
 }
 
-// The per-session record file: `aidlc/.aidlc-sessions/<session-id>`. Session
+// The per-session record file: `aidlc/.aidlc-engine/sessions/<session-id>`. Session
 // ids must already match the canonical safe shape; normalization-changing
 // values are rejected so distinct raw identities cannot alias one record.
 function safeSessionId(sessionId: string): string {
@@ -386,7 +460,7 @@ export class SessionResolutionConflictError extends Error {
   }
 }
 
-// The per-session record file: `aidlc/.aidlc-sessions/<session-id>`. The
+// The per-session record file: `aidlc/.aidlc-engine/sessions/<session-id>`. The
 // session id is normalised to the slug shape so a host-supplied id can never
 // escape the sessions dir (path traversal / separators); an empty id yields "".
 export function sessionRecordPath(projectDir: string, sessionId: string): string {
@@ -1658,17 +1732,17 @@ export function auditFilePath(projectDir: string, intent?: string, space?: strin
   return join(resolved.dir, ...(local ? [ENGINE_DIR] : []), "audit", auditShardName(projectDir));
 }
 
-// The clone-id token file: `aidlc/.aidlc-clone-id`. Workspace-level,
-// machine-local, GITIGNORED (see the `aidlc/.aidlc-*` rule) so it never travels
-// in a commit — that is what makes the token DISTINCT across clones (a fresh
+// The clone-id token file: `aidlc/.aidlc-engine/clone-id`. Workspace-level,
+// machine-local, kept out of git by the engine folder's .gitignore so it never
+// travels in a commit — that is what makes the token DISTINCT across clones (a fresh
 // checkout has no token file and mints its own). The shard name below embeds
 // this token, so every process IN one clone resolves the SAME shard while two
 // different clones get DIFFERENT shards (no git merge-conflict on concurrent
 // appends — the whole point of per-clone sharding).
-export const CLONE_ID_FILE = ".aidlc-clone-id";
+export const CLONE_ID_FILE = "clone-id";
 
 export function cloneIdPath(projectDir: string): string {
-  return join(workspaceRoot(projectDir), CLONE_ID_FILE);
+  return workspaceEngineFile(projectDir, CLONE_ID_FILE);
 }
 
 // The host segment of a NEWLY minted shard name: hostname() is a human-readable
@@ -1745,8 +1819,8 @@ function parseCloneIdFile(raw: string): { token: string | null; host: string | n
   };
 }
 
-// The stable per-CLONE identity (not per-process). Read from the gitignored
-// `aidlc/.aidlc-clone-id` file when present; minted (12 hex chars from a v4
+// The stable per-CLONE identity (not per-process). Read from the clone-id
+// file (cloneIdPath) when present; minted (12 hex chars from a v4
 // uuid, no Math.random) and persisted on first use otherwise. Stable WITHIN a
 // clone across processes (the fork subprocess and the merge subprocess both
 // read the same file, so the same shard), DISTINCT across clones (each clone
@@ -1790,7 +1864,7 @@ export function cloneIdentity(projectDir: string): CloneIdentity {
     host: (recorded.token && existingShardHost(projectDir, recorded.token)) || auditShardHostSegment(),
   };
   try {
-    mkdirSync(workspaceRoot(projectDir), { recursive: true });
+    ensureWorkspaceEngineFolder(projectDir);
     const content = cloneIdFileContent(identity.token, identity.host);
     if (recorded.token) writeFileAtomic(path, content);
     else writeFileSync(path, content, "utf-8");
@@ -1892,10 +1966,42 @@ export function auditShardName(projectDir: string): string {
 // clone the board or the Units it can take, never the walk the lead keeps.
 export function planMadeElsewhere(projectDir: string, rows: readonly AuditShardEvent[] = readAuditShardEvents(projectDir)): boolean {
   const ownShard = knownAuditShardName(projectDir);
+  // The person's own word in this checkout that they lead this work (`unit
+  // lead-here`, the lead on another machine): its plan is theirs here.
+  if (ownShard !== null && rows.some((row) => row.event === "LEAD_HERE_SET" && basename(row.shard) === ownShard)) return false;
   const plan = rows.filter((row) =>
     (row.event.startsWith("STAGE_") || row.event.startsWith("GATE_")) && /^\*\*Unit\*\*:/m.test(row.block) === false
   );
   return plan.length > 0 && plan.every((row) => basename(row.shard) !== ownShard);
+}
+
+// A change git status lists under aidlc/ that is only this clone's own audit
+// file gaining rows after what is committed, none a decision of the person's
+// (a row with their Git Name), CRLF read as LF: the rows each look and each
+// doctor run write, which nobody needs committed. Read by doctor's records row
+// and by the checked-in fact, which also sets aside the engine's own writes to
+// a lead's state file (onlyEngineStateWrites, aidlc-unit-teams.ts).
+// `change.path` is git's, from the repository root; `prefix` is the project
+// folder's place under it.
+export function onlyOwnLookRows(projectDir: string, prefix: string, change: { status: string; path: string }): boolean {
+  if ((change.status !== " M" && change.status !== "??") || !change.path.startsWith(prefix)) return false;
+  const rel = change.path.slice(prefix.length);
+  const own = knownAuditShardName(projectDir);
+  if (own === null || basename(rel) !== own || !/^aidlc\/spaces\/[^/]+\/intents\/[^/]+\/audit\/[^/]+$/.test(rel)) return false;
+  try {
+    const file = join(projectDir, ...rel.split("/"));
+    if (!lstatSync(file).isFile()) return false;
+    let committed = "";
+    if (change.status === " M") {
+      const blob = spawnSync("git", ["-C", projectDir, "cat-file", "blob", `HEAD:${change.path}`], { encoding: "utf-8", timeout: 10_000 });
+      if (blob.status !== 0) return false;
+      committed = blob.stdout.replaceAll("\r\n", "\n");
+    }
+    const now = readFileSync(file, "utf-8").replaceAll("\r\n", "\n");
+    return now.startsWith(committed) && !/^\*\*Git Name\*\*:/m.test(now.slice(committed.length));
+  } catch {
+    return false;
+  }
 }
 
 // This clone's shard name when it is already known, without minting a token or
@@ -2389,8 +2495,6 @@ export function maximalAttemptEvents<T extends AuditShardEvent>(
   return events.filter((event) => event.timestamp === latest);
 }
 
-export const UNIT_SCOPE_FILE = ".aidlc-unit-scope.json";
-
 export interface UnitScopeStamp {
   version: 1;
   space: string;
@@ -2408,8 +2512,11 @@ export interface UnitScopeStamp {
   audit_shard?: string;
 }
 
+// Under aidlc/.aidlc-engine/, as the other Unit files of this checkout.
+export const UNIT_SCOPE_FILE = "units/claimed.json";
+
 export function unitScopePath(projectDir: string): string {
-  return join(workspaceRoot(projectDir), UNIT_SCOPE_FILE);
+  return workspaceEngineFile(projectDir, UNIT_SCOPE_FILE);
 }
 
 export function readUnitScopeStamp(projectDir: string): UnitScopeStamp | null {
