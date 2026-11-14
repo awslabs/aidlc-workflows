@@ -320,11 +320,13 @@ function projectBehind(): string {
 }
 
 describe("config's refresh moves the list", () => {
-  test("into aidlc/ when it puts this release's files in, says so once, and a rerun changes nothing", () => {
+  test("into aidlc/ when it puts this release's files in, says so once at the person's terminal with the command that shares it, and a rerun changes nothing", () => {
     const dir = projectBehind();
     const first = config(dir, ["--harness", "claude", "--from", COPY]);
     expect(first.status, first.out).toBe(0);
-    expect(first.out).toContain(REPOS_MOVED_LINE);
+    expect(first.out).toContain("AI-DLC moved repos.json into aidlc/. To share it with your team, run `git commit -m " +
+      '"AI-DLC moved repos.json into aidlc/" repos.json aidlc/repos.json`; teammates need AI-DLC 2.12 or newer.');
+    expect(first.out).not.toContain(REPOS_MOVED_LINE);
     expect(git(dir, ["status", "--porcelain"])).toContain("R  repos.json -> aidlc/repos.json");
     const status = git(dir, ["status", "--porcelain"]);
     const again = config(dir, ["--harness", "claude", "--from", COPY]);
@@ -332,6 +334,12 @@ describe("config's refresh moves the list", () => {
     expect(again.out).not.toContain("repos.json");
     expect(git(dir, ["status", "--porcelain"])).toBe(status);
     expect(existsSync(join(dir, ".mcp.json"))).toBe(false);
+    // The command it names commits the move alone; a file the person staged stays staged and out of it.
+    writeFileSync(join(dir, "notes.md"), "Staged, not committed.\n");
+    git(dir, ["add", "notes.md"]);
+    git(dir, ["commit", "-q", "-m", "AI-DLC moved repos.json into aidlc/", "repos.json", "aidlc/repos.json"]);
+    expect(git(dir, ["show", "--name-status", "--format=", "HEAD"])).toMatch(/^R\d*\trepos\.json\taidlc\/repos\.json$/);
+    expect(git(dir, ["diff", "--cached", "--name-only"])).toBe("notes.md");
   });
 
   test("never in a dry run, nor while it puts an earlier release's files in", () => {

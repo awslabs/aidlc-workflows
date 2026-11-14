@@ -239,7 +239,7 @@ import {
   unitDependencies,
 } from "./aidlc-unit-teams.js";
 import { submoduleLeavesProjectRepo } from "./aidlc-git.ts";
-import { displayRepoPath, localUnreadableLine, readWorkspaceRepos, repoCloneable, repoCloneOfferLine, repoNotThereLine, withoutCredentials, workspaceManifestAt } from "./aidlc-workspace-manifest.js";
+import { commitOwnCommand, displayRepoPath, localUnreadableLine, readWorkspaceRepos, repoCloneable, repoCloneOfferLine, repoNotThereLine, withoutCredentials, workspaceManifestAt } from "./aidlc-workspace-manifest.js";
 import { maskUserinfo, workspaceCloneUrl } from "./aidlc-workspace-sync.ts";
 import { loadGraph } from "./aidlc-graph.ts";
 import {
@@ -6138,6 +6138,8 @@ export const CHECKOUT_STEPS = {
     via: (): string => `${aidlcInvocation()} unit share --back`,
     undo: (was: string): string => `It was at ${was} before, if you ever want that back.`,
   },
+  // AI-DLC's own files only; at the person's own terminal, git's own command (aidlc config's line for the repo list's move).
+  "commit-own": { terminal: commitOwnCommand },
 } as const;
 
 // --- Build and Test at the lead's project, once every Unit is merged ---------

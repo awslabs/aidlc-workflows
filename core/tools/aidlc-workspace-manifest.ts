@@ -63,6 +63,21 @@ export const REPOS_MOVED_LINE =
   `AI-DLC moved repos.json into aidlc/. Commit it so your team gets it; teammates need AI-DLC ` +
   `${REPOS_IN_AIDLC_SINCE.major}.${REPOS_IN_AIDLC_SINCE.minor} or newer.`;
 
+// The commit of AI-DLC's own files at the person's own terminal, where the
+// command itself is said: git's own, those paths only (CHECKOUT_STEPS in
+// aidlc-unit.ts names it; it lives here, below that file, so this one can say it).
+export function commitOwnCommand(message: string, paths: readonly string[]): string {
+  return `git commit -m "${message}" ${paths.join(" ")}`;
+}
+
+// The move said at the person's own terminal (aidlc config), with the command
+// that shares it.
+export function reposMovedAtTerminalLine(): string {
+  return `AI-DLC moved repos.json into aidlc/. To share it with your team, run ` +
+    `\`${commitOwnCommand("AI-DLC moved repos.json into aidlc/", [REPOS_FILE, `aidlc/${REPOS_FILE}`])}\`; teammates need AI-DLC ` +
+    `${REPOS_IN_AIDLC_SINCE.major}.${REPOS_IN_AIDLC_SINCE.minor} or newer.`;
+}
+
 /** A release from before this layout: it reads repos.json only at the root and
  *  keeps AI-DLC's own files at the top of aidlc/, not in aidlc/.aidlc-engine/.
  *  The one reading of that for both lines said on going back. The release
