@@ -1155,6 +1155,7 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${ORCH}#parkedAfterPark`]: { use: "keeps", why: "the park's own narration, which may carry their words, with the check-in line after it" },
   [`${ORCH}#withCheckIn`]: { use: "keeps", why: "a stopping point's narration, which may carry their words, with the check-in line after it", from: [`${ORCH}#parkedAfterPark`] },
   [`${ORCH}#lineEndingTurn`]: { use: "keeps", why: "a team step's narration (the home's board, a take's line), which may carry the lead's word on a repo's merge" },
+  [`${ORCH}#leadsPlanStep`]: { use: "keeps", why: "a teammate's clone the lead's plan has not reached: the step's narration of where the plan stands, from git's own reads" },
   [`${ORCH}#parkAfterApproval`]: { use: "keeps", why: "as above" },
   [`${ORCH}#nextArgsAreOnlyWords`]: { use: "decides", why: "the presence shape: next carries only words; handed the person's own /aidlc line (firstStepNote), it reads which keys the engine's parse of it holds, never what the words say", from: [`${ORCH}#firstStepNote`] },
   [`${ORCH}#firstStepNote`]: { use: "decides", why: "the /aidlc parse: whether a line the human-turn hook just kept whole is words alone with no flag-shaped token next does not take, so the agent hears that next reads it from the copy; never what the words say", from: [`${HOOK}#respond`] },
