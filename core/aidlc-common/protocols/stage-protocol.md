@@ -27,7 +27,7 @@ what they say, in their own words and in context, and do it.
 - When they ask to turn a check off for this piece of work, in their own words
   or by picking a guard's turn-it-off choice, run the setter yourself (that
   choice's `command`, or `{{INVOKE}} engine config set guard.<fence> off --message <id>`, with `<id>` the message they asked in).
-  Never hand them a command to type.
+- Never hand them a command to type.
 - When they ask for a review of a stage or of a Unit ("review Unit 1 again",
   "have the reviewer look at the design", or yes to "Do you want me to have the
   new approach checked before you decide?"), record it through AI-DLC the first
