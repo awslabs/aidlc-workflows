@@ -1097,7 +1097,7 @@ describe("a Unit someone holds is not taken again", () => {
     expect(taken.out).toContain("refunds is already taken: bea builds it.");
   });
 
-  test("a branch fetched from the remote that holds no build of the Unit names none, nor one cut from main after the record merged", () => {
+  test("the person's own take where no branch of the clone holds its build says it is on the other computer until the branch is fetched; a branch with no build, or cut from main after the record merged, names none", () => {
     const home = makeHome();
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
     asLeadsOwnCheckout(home.dir);
@@ -1115,26 +1115,43 @@ describe("a Unit someone holds is not taken again", () => {
     pushNotes(bea, "notes");
     git(bea, ["switch", "-q", "main"]);
     const desk = cloneOf(home.remote, "bea");
-    const saysTaken = () => {
-      const ask = next(desk);
+    const bob = cloneOf(home.remote, "bob");
+    const board = (dir: string) => {
+      const ask = next(dir);
       expect(String(ask.question ?? ask.narration), JSON.stringify(ask).slice(0, 800)).toContain("refunds (by bea)");
       expect(JSON.stringify(ask)).not.toContain("Your build of refunds");
-      const taken = take(desk, "refunds");
-      expect(taken.status).not.toBe(0);
-      expect(taken.out).toContain("refunds is already taken: bea builds it.");
     };
-    saysTaken();
-    // Her record squash-merged on the host and its branch deleted; a teammate's
-    // branch cut from main since holds her build too. Her clone fetches both
-    // and merges neither: no branch is named as hers.
+    const refused = (dir: string) => {
+      const taken = take(dir, "refunds");
+      expect(taken.status).not.toBe(0);
+      return taken.out;
+    };
+    const taken = "refunds is already taken: bea builds it.";
+    // Her own take, with no branch of this clone holding its build: where it is, and the way to bring it here.
+    board(desk);
+    const notHere = refused(desk);
+    expect(notHere).toContain("You took refunds on another computer, and its build is not in this clone yet: push it from that " +
+      "computer if you have not, then run `git fetch` here and carry on.");
+    expect(notHere).not.toContain("already taken");
+    // Another person reads who has it.
+    board(bob);
+    expect(refused(bob)).toContain(taken);
+    // Pushed from her first computer and fetched here, the branch is named.
     git(bea, ["switch", "-q", "-c", "records/refunds"]);
     commitAll(bea, "refunds record");
     git(bea, ["push", "-q", "-u", "origin", "records/refunds"]);
+    git(desk, ["fetch", "-q", "origin"]);
+    expect(refused(desk)).toContain("Your build of refunds is on branch records/refunds: `git switch records/refunds` to carry it on.");
+    // Her record squash-merged on the host and its branch deleted; a
+    // teammate's branch cut from main since holds her build too. Her clone
+    // fetches both and merges neither: no branch is named as hers, and no
+    // fetch is asked for, which would change nothing.
     mergeOnHost(home.remote, "records/refunds", "squash");
     git(bea, ["push", "-q", "origin", "--delete", "records/refunds"]);
-    pushNotes(cloneOf(home.remote, "bob"), "bob-notes");
+    pushNotes(bob, "bob-notes");
     git(desk, ["fetch", "-q", "origin"]);
-    saysTaken();
+    board(desk);
+    expect(refused(desk)).toContain(taken);
   });
 });
 

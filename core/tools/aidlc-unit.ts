@@ -6152,13 +6152,19 @@ function takenLine(unit: string, claim: UnitClaimView): string {
 
 // The person's own take whose build is not in this checkout but committed on
 // another branch of this clone: where it is and the way to it, for the take
-// question (unitTakeLook) and the take asked again. Null, so the words stand
-// as they were, when the take is not theirs or no branch has the build.
-export function buildOnBranchLine(projectDir: string, homeWork: string, claim: UnitClaimView): string | null {
+// question (unitTakeLook) and the take asked again; at the take, with no branch
+// of this clone holding it, that it is still on the computer it was taken on.
+// Null, so the words stand as they were, when the take is not theirs or the
+// build is on no branch a switch reaches.
+export function buildOnBranchLine(projectDir: string, homeWork: string, claim: UnitClaimView, atTake = false): string | null {
   if (!claimIsMine(projectDir, claim)) return null;
   const branch = branchWithBuild(projectDir, homeWork, claim.unit);
+  if (branch === null && atTake) {
+    return `You took ${claim.unit} on another computer, and its build is not in this clone yet: push it from that computer if you ` +
+      "have not, then run `git fetch` here and carry on.";
+  }
   // A backtick breaks the line's code marks, an apostrophe a PowerShell paste.
-  return branch === null || /[`']/.test(branch)
+  return !branch || /[`']/.test(branch)
     ? null
     : `Your build of ${claim.unit} is on branch ${branch}: \`git switch ${shellArg(branch)}\` to carry it on.`;
 }
@@ -6168,21 +6174,22 @@ export function buildOnBranchLine(projectDir: string, homeWork: string, claim: U
 // request, the checkout back on main). Its own branches first, then the ones
 // it fetched from its remotes, which a fresh clone on another computer has
 // only as <remote>/<branch> and `git switch <branch>` makes its own. Local
-// reads only, never a fetch or a switch: null when no such branch has it, or a
-// git call is not ok.
+// reads only, never a fetch or a switch: the branch's name; "" when the build
+// is on a fetched branch no switch reaches, or a git call is not ok; null when
+// no branch has it.
 function branchWithBuild(projectDir: string, homeWork: string, unit: string): string | null {
   // Globs whatever the person's environment says (aidlc-workspace-doctor's way).
   const env = { GIT_LITERAL_PATHSPECS: "0" };
   const listed = localGit(projectDir, ["for-each-ref", "--sort=-committerdate", "--format=%(worktreepath)%00%(refname)", "refs/heads/",
     "refs/remotes/"], env);
   const remotes = localGit(projectDir, ["remote"], env);
-  if (!listed.ok || !remotes.ok) return null;
+  if (!listed.ok || !remotes.ok) return "";
   const rows = listed.stdout.split(/\r?\n/).filter(Boolean).map((line) => line.split("\0"));
   const ownNames = new Set(rows.flatMap(([, ref]) => ref?.startsWith("refs/heads/") ? [ref.slice("refs/heads/".length)] : []));
   const prefixes = remotes.stdout.split(/\r?\n/).filter(Boolean).map((remote) => `refs/remotes/${remote}/`)
     .sort((a, b) => b.length - a.length);
-  // Each ref read, and the name `git switch` takes to it (null for none).
-  const names = new Map<string, string | null>();
+  // Each ref read, and the name `git switch` takes to it ("" for none).
+  const names = new Map<string, string>();
   const [own, shadowed, fetched]: string[][] = [[], [], []];
   for (const [worktree, ref] of rows) {
     if (ref === undefined) continue;
@@ -6203,7 +6210,7 @@ function branchWithBuild(projectDir: string, homeWork: string, unit: string): st
     const name = prefix === undefined ? "" : ref.slice(prefix.length);
     if (name === "" || name === "HEAD" || name.startsWith("claim/")) continue;
     (ownNames.has(name) ? shadowed : fetched).push(ref);
-    names.set(ref, ownNames.has(name) ? null : name);
+    names.set(ref, ownNames.has(name) ? "" : name);
   }
   const field = `^- \\*\\*${UNIT_BUILD_FIELD}\\*\\*:[[:blank:]]*${unit.replaceAll(".", "\\.")}[[:space:]]*$`;
   // Newest branch first, a hundred a call so no command line runs too long on
@@ -6214,14 +6221,14 @@ function branchWithBuild(projectDir: string, homeWork: string, unit: string): st
       const found = localGit(projectDir, ["grep", "--no-color", "-z", "-l", "-E", "-e", field, ...refs.slice(at, at + 100), "--",
         "aidlc/spaces/*/intents/*/aidlc-state.md"], env);
       if (!found.ok && found.code === 1) continue;
-      if (!found.ok) return null;
+      if (!found.ok) return "";
       for (const hit of found.stdout.split("\0").filter(Boolean)) {
         const ref = hit.slice(0, hit.indexOf(":"));
         const shown = localGit(projectDir, ["show", `${ref}:./${hit.slice(ref.length + 1)}`], env);
-        if (!shown.ok) return null;
+        if (!shown.ok) return "";
         const build = liveBuildOf(shown.stdout);
         if (build === null || !isBuildOfUnit(build, homeWork, unit)) continue;
-        return names.get(ref) ?? null;
+        return names.get(ref) ?? "";
       }
     }
   }
@@ -7097,7 +7104,7 @@ function takeUnit(args: string[], projectDir?: string, rhythm?: UnitClaimPayload
   if (!opening.units.includes(unit)) fail(`${unit} is not one of ${home.label}'s Units (${opening.units.join(", ")}).`);
   if (solo?.started.has(unit)) fail(`${unit} is being built on the other machine; take another Unit, or follow along.`);
   const me = git(pd, ["config", "user.name"]).stdout.trim() || "a teammate";
-  if (current?.status === "claimed") fail(buildOnBranchLine(pd, home.uuid, current) ?? takenLine(unit, current));
+  if (current?.status === "claimed") fail(buildOnBranchLine(pd, home.uuid, current, true) ?? takenLine(unit, current));
   if (opening.completed.has(unit)) fail(`${unit} is already done at the lead's project.`);
   const homeRows = homeAuditAt(pd, home, integration.oid);
   if (!home.solo && leadBuildsWithoutClaim(homeRows, unit, current)) {
@@ -7824,7 +7831,7 @@ function sayOwnBuildsMerged(pd: string, into: string, before: ReadonlyMap<string
     const now = readPayload(pd, oid);
     if (now?.done !== true || (was !== undefined && readPayload(pd, was)?.done === true)) continue;
     if (!takeIsBy(pd, oid, now, gitUserName(pd), git(pd, ["config", "user.email"]).stdout.trim())) continue;
-    if (findUnitBuild(pd, now.intent_uuid, unit) === null && branchWithBuild(pd, now.intent_uuid, unit) === null) continue;
+    if (findUnitBuild(pd, now.intent_uuid, unit) === null && !branchWithBuild(pd, now.intent_uuid, unit)) continue;
     saidWithNextStep(pd, `Your ${unit} is merged.`);
   }
 }

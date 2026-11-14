@@ -937,7 +937,10 @@ status shows `Checked in:     pushed on <branch>, not in main yet`.
 Back on main before that pull request merges, or in a fresh clone on another
 computer, from the branch it fetched, the take question names your
 build: "Your build of <unit> is on branch <branch>: `git switch <branch>` to
-carry it on." A team that keeps AI-DLC's records off main says so in Practices
+carry it on." Taken again in a clone where no branch holds its build yet, your
+own Unit says "You took <unit> on another computer, and its build is not in
+this clone yet: push it from that computer if you have not, then run
+`git fetch` here and carry on." A team that keeps AI-DLC's records off main says so in Practices
 Discovery (for example "We keep AI-DLC's records on a branch called records"):
 AI-DLC records the `Integration branch` line under Way of Working, the share
 and the check-ins go to that branch, the takes read it, and every clone works
