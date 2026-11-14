@@ -14595,16 +14595,35 @@ const UNSAVED_REASONS = {
 } as const;
 type UnsavedReason = keyof typeof UNSAVED_REASONS;
 
+function unrecordedWriteHint(projectDir: string): string {
+  let notFiring: boolean;
+  try {
+    notFiring = hooksNeverRanHere(projectDir) || hookLiveness(projectDir).stale;
+  } catch {
+    return "";
+  }
+  if (!notFiring) return "";
+  let recovery: string;
+  try {
+    recovery = hookExecutionRecoveryText(projectDir);
+  } catch {
+    recovery = HOOK_EXECUTION_RECOVERY_OTHER;
+  }
+  return " No save can be recorded in this session: AI-DLC's hooks are not firing here, so saving the " +
+    `document again cannot produce the write this step waits for. ${recovery}`;
+}
+
 // The outputs the current summary confirmation does not authorize, in one
 // refusal sentence; one output reads as it always has.
 function unsavedOutputsMessage(
   slug: string,
   unsaved: ReadonlyArray<{ artifact: string; reason: UnsavedReason }>,
+  projectDir: string,
 ): string {
   if (unsaved.length === 1) {
     return `Refusing to continue "${slug}": this stage's output document ${unsaved[0].artifact} ` +
       `${UNSAVED_REASONS[unsaved[0].reason].one}. Save the document again, so its write descends from the current ` +
-      "confirmation, then continue.";
+      `confirmation, then continue.${unrecordedWriteHint(projectDir)}`;
   }
   const reasons = new Set(unsaved.map((entry) => entry.reason));
   const names = reasons.size === 1
@@ -14615,7 +14634,7 @@ function unsavedOutputsMessage(
     ? UNSAVED_REASONS[unsaved[0].reason].many
     : "were not saved under the current confirmation";
   return `Refusing to continue "${slug}": this stage's output documents ${list} ${why}. Save each ` +
-    "of them again, so each write descends from the current confirmation, then continue.";
+    `of them again, so each write descends from the current confirmation, then continue.${unrecordedWriteHint(projectDir)}`;
 }
 
 export function checkSummaryConfirmationEvidence(
@@ -15200,13 +15219,13 @@ export function checkSummaryConfirmationEvidence(
           "SUMMARY_ARTIFACT_ORDER_INVALID",
           `Refusing to continue "${stage.slug}": this stage's output document ` +
             `${artifact} was not saved after the confirmed answers. Save the ` +
-            "document after confirmation, then continue.",
+            `document after confirmation, then continue.${unrecordedWriteHint(projectDir)}`,
           "stale",
         );
       }
     }
     if (unsaved.length > 0) {
-      return failure("SUMMARY_ARTIFACT_UNAUTHORIZED", unsavedOutputsMessage(stage.slug, unsaved), "stale");
+      return failure("SUMMARY_ARTIFACT_UNAUTHORIZED", unsavedOutputsMessage(stage.slug, unsaved, projectDir), "stale");
     }
   }
 
