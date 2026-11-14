@@ -883,6 +883,28 @@ describe("step 5: main is pushed after a land", () => {
     expect(board.stdout).toContain("the team's branch has alpha landed here and not on origin yet");
   });
 
+  // A main that takes no direct push, as a host's ruleset refuses it: the share
+  // after a land keeps its commit on main and today's line, and makes no branch.
+  test("the push after a land that a host's rule on main refuses keeps today's line and the commit on main, and makes no branch", () => {
+    const { seed: lead, remote } = makeSeed();
+    prepareCandidate(remote, "alpha", "team-a");
+    approveMerge(lead, "alpha");
+    const landed = runMergeTool(UNIT, ["land", "alpha"], lead);
+    expect(landed.status, landed.out).toBe(0);
+    const head = git(lead, ["rev-parse", "HEAD"]);
+    const hook = join(remote, "hooks", "pre-receive");
+    writeFileSync(hook, "#!/bin/sh\nwhile read old new ref; do\n  if [ \"$ref\" = refs/heads/main ]; then\n" +
+      "    echo 'error: GH013: Repository rule violations found for refs/heads/main.' >&2\n    exit 1\n  fi\ndone\nexit 0\n");
+    chmodSync(hook, 0o755);
+    const shared = runMergeTool(UNIT, ["share"], lead);
+    expect(shared.status, shared.out).not.toBe(0);
+    expect(shared.out).toContain("origin takes no direct push to main (");
+    expect(shared.out).toContain("The plan is committed here: push it on a branch and get it merged your usual way; the teams can take Units once it is in main.");
+    expect(git(lead, ["symbolic-ref", "HEAD"])).toBe("refs/heads/main");
+    expect(git(lead, ["merge-base", "--is-ancestor", head, "HEAD"])).toBe("");
+    expect(git(lead, ["for-each-ref", "refs/heads/aidlc-plan*"])).toBe("");
+  });
+
   test("a land already on origin is not offered", () => {
     const { seed: lead, remote } = makeSeed();
     prepareCandidate(remote, "alpha", "team-a");

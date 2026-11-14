@@ -465,6 +465,259 @@ describe("the plan's share fits the team's own git: a protected main, a branch o
     expect(statusOf(dir)).toContain(IN_MAIN);
   });
 
+  // A main that takes no direct push. The share says so in the host's words
+  // and offers once to put the plan on a branch of its own; on yes AI-DLC makes
+  // the branch at its own commit, pushes it with its upstream, passes on the
+  // host's own link and only then moves the checkout onto it and puts main back.
+  // Until the plan is in main every look and status say so in place of the
+  // board; once it is, one offer to switch back, done with nothing lost. A host
+  // that takes the push, a main the person had moved on and the share after a
+  // land stay as they were.
+  const HOST = "origin takes no direct push to main (error: GH013: Repository rule violations found for refs/heads/main. " +
+    "- Changes must be made through a pull request. (pre-receive hook declined))";
+  const PLAN_BRANCH = "aidlc-plan-fixture";
+  const NOT_SHARED = `${HOST}, so the plan is not shared yet.`;
+  const BRANCH_OFFER = "Want me to put the plan on its own branch and push that, so you can open a pull request from it?";
+  const COMMITTED_HERE = "The plan is committed here and not shared yet: say when you want me to put it on its own branch and push that.";
+  const onItsBranch = (branch: string) =>
+    `The plan is on its own branch, ${branch}, pushed to origin, and your checkout is on it; main is as it was.`;
+  const WAITING = `The plan is on its own branch, ${PLAN_BRANCH}, waiting for its pull request; teams can take Units once it is in main.`;
+  const BACK_OFFER = "The plan is in main now, so teams can take Units. Want me to switch you back to main?";
+  const ON_MAIN = "You are on main now, level with origin.";
+  const STAYED = `You stay on ${PLAN_BRANCH} and nothing changed: git says`;
+  const chatOf = (name: string): NodeJS.ProcessEnv => ({ ...ENV, AIDLC_SESSION_OVERRIDE: `t-unit-assignment-plan-branch-${name}` });
+  const UNITS_FILE = join("aidlc", "spaces", "default", "intents", HOME_RECORD, "inception", "units-generation", "unit-of-work.md");
+  type Step = Record<string, unknown>;
+  const labelsOf = (step: Step) => ((step.choices ?? []) as Array<{ label: string }>).map((choice) => choice.label);
+  const commandOf = (step: Step, label: string) =>
+    String(((step.choices ?? []) as Array<{ label: string; command?: string }>).find((choice) => choice.label === label)?.command ?? "");
+  const runPrinted = (command: string, dir: string) => run(UNIT, command.replace(/^.* unit /, "").split(" "), dir);
+  const planBranches = (dir: string) => git(dir, ["for-each-ref", "--format=%(refname:short)", "refs/heads/aidlc-plan*"]);
+
+  // The host also hands back its own link for a branch it took, as GitHub does
+  // after a push (its post-receive words).
+  function hostGivesLinks(bare: string): void {
+    const hook = join(bare, "hooks", "post-receive");
+    writeFileSync(hook, "#!/bin/sh\nwhile read old new ref; do\n  case \"$ref\" in refs/heads/main) ;; refs/heads/*)\n" +
+      "    b=$(echo \"$ref\" | sed 's#^refs/heads/##')\n    echo '' >&2\n    echo \"Create a pull request for '$b' on GitHub by visiting:\" >&2\n" +
+      "    echo \"     https://github.example/team/workspace/pull/new/$b\" >&2\n    echo '' >&2 ;; esac\ndone\nexit 0\n");
+    chmodSync(hook, 0o755);
+  }
+
+  // The person's own work around the share: a file of theirs already on main
+  // that they changed, a file they staged and a new file git does not track.
+  function personsWork(dir: string): () => Record<string, string> {
+    writeFileSync(join(dir, "shared.ts"), "export const a = 1;\n");
+    git(dir, ["add", "shared.ts"]);
+    git(dir, ["commit", "-q", "-m", "the person's files"]);
+    git(dir, ["push", "-q", "origin", "main"]);
+    writeFileSync(join(dir, "shared.ts"), "export const a = 2;\n");
+    writeFileSync(join(dir, "staged-only.txt"), "staged\n");
+    git(dir, ["add", "staged-only.txt"]);
+    writeFileSync(join(dir, "z-deploy.env"), "KEY=1\n");
+    return () => Object.fromEntries(["shared.ts", "staged-only.txt", "z-deploy.env"].map((name) => [name, readFileSync(join(dir, name), "utf-8")]));
+  }
+
+  // The share refused by the host's rule, then the offer the next step puts.
+  function refusedThenOffered(dir: string, remote: string, args: string[], chat: NodeJS.ProcessEnv): Step {
+    expect(isShare(next(dir, chat))).toBe(true);
+    mainTakesNoDirectPush(remote);
+    const shared = run(UNIT, args, dir, chat);
+    expect(shared.out).toContain(NOT_SHARED);
+    expect(shared.out).not.toContain("git push");
+    const offer = next(dir, chat);
+    expect(String(offer.question), JSON.stringify(offer).slice(0, 600)).toBe(BRANCH_OFFER);
+    expect(labelsOf(offer)).toEqual(["Put it on its own branch", "Not now"]);
+    return offer;
+  }
+
+  // The host merges the plan branch's pull request its own way (its rule lets
+  // its own merge through); `edited`: someone changed the plan on the pull
+  // request first, as a suggestion committed on the host does.
+  function hostMergesPlan(remote: string, how: "squash" | "rebase" | "merge", edited = false): void {
+    unlinkSync(join(remote, "hooks", "pre-receive"));
+    if (edited) {
+      const dir = join(tempDir("plan-edit"), "repo");
+      git(tempDir("plan-edit-parent"), ["clone", "-q", "--branch", PLAN_BRANCH, remote, dir]);
+      git(dir, ["config", "user.name", "editor"]);
+      git(dir, ["config", "user.email", "editor@example.test"]);
+      writeFileSync(join(dir, UNITS_FILE), `${readFileSync(join(dir, UNITS_FILE), "utf-8")}Edited on the pull request.\n`);
+      git(dir, ["commit", "-q", "-am", "edit the plan"]);
+      git(dir, ["push", "-q", "origin", PLAN_BRANCH]);
+    }
+    mergeOnHost(remote, PLAN_BRANCH, how);
+  }
+
+  test("main takes no direct push: the share says so in the host's words with no git command, and the next step offers once to put the plan on its own branch", () => {
+    for (const args of [["share", "--plan"], ["share"]]) {
+      const home = args.length === 2 ? makeHome() : makeHome({ repos: {} });
+      chooseTeams(home.dir);
+      const chat = chatOf(`offer-${args.length}`);
+      const offer = refusedThenOffered(home.dir, home.remote, args, chat);
+      expect(commandOf(offer, "Put it on its own branch")).toMatch(args.length === 2 ? / unit share --branch --plan$/ : / unit share --branch$/);
+      expect(git(home.dir, ["symbolic-ref", "HEAD"])).toBe("refs/heads/main");
+      // Not now: no question again, never a build here; the line says it can be asked for.
+      const after = next(home.dir, chat);
+      expect(after.kind, JSON.stringify(after).slice(0, 600)).not.toBe("ask");
+      expect(after.kind).not.toBe("run-stage");
+      expect(JSON.stringify(after)).toContain(COMMITTED_HERE);
+      expect(JSON.stringify(after)).not.toContain("waiting for a team to take it");
+      expect(JSON.stringify(after)).not.toContain("Claimable");
+      expect(String(next(home.dir, chat).question ?? "")).not.toBe(BRANCH_OFFER);
+    }
+  });
+
+  test("on yes the plan's branch is made at AI-DLC's own commit and pushed with its upstream, the host's own link is passed on, and only then the checkout is on it and main is back where it was, with every file of the person's as it was", () => {
+    const home = makeHome();
+    const theirFiles = personsWork(home.dir);
+    chooseTeams(home.dir);
+    hostGivesLinks(home.remote);
+    const m0 = git(home.dir, ["rev-parse", "HEAD"]);
+    const offer = refusedThenOffered(home.dir, home.remote, ["share", "--plan"], chatOf("branch"));
+    const before = theirFiles();
+    const done = runPrinted(commandOf(offer, "Put it on its own branch"), home.dir);
+    expect(done.status, done.out).toBe(0);
+    expect(done.out).toContain(onItsBranch(PLAN_BRANCH));
+    expect(done.out).toContain(`Its host says: Create a pull request for '${PLAN_BRANCH}' on GitHub by visiting:`);
+    expect(done.out).toContain(`https://github.example/team/workspace/pull/new/${PLAN_BRANCH}`);
+    expect(git(home.dir, ["symbolic-ref", "HEAD"])).toBe(`refs/heads/${PLAN_BRANCH}`);
+    expect(git(home.dir, ["rev-parse", "--abbrev-ref", `${PLAN_BRANCH}@{upstream}`])).toBe(`origin/${PLAN_BRANCH}`);
+    expect(git(home.remote, ["rev-parse", PLAN_BRANCH])).toBe(git(home.dir, ["rev-parse", "HEAD"]));
+    expect(git(home.dir, ["rev-parse", "main"])).toBe(m0);
+    expect(git(home.remote, ["rev-parse", "main"])).toBe(m0);
+    expect(git(home.dir, ["log", "--format=%s %P", `${m0}..HEAD`])).toBe(`Share the plan with the teams ${m0}`);
+    expect(git(home.dir, ["diff", "--cached", "--name-only"])).toBe("staged-only.txt");
+    expect(git(home.dir, ["status", "--porcelain", "--", "shared.ts", "z-deploy.env"])).toBe(" M shared.ts\n?? z-deploy.env");
+    expect(theirFiles()).toEqual(before);
+  });
+
+  test("a host that refuses the plan's branch too: nothing changed, the checkout stays on main with the plan committed there, and no branch is left", () => {
+    const home = makeHome();
+    chooseTeams(home.dir);
+    const offer = refusedThenOffered(home.dir, home.remote, ["share", "--plan"], chatOf("branch-refused"));
+    const head = git(home.dir, ["rev-parse", "HEAD"]);
+    // Every branch now refused, as a branch-name ruleset refuses this one.
+    writeFileSync(join(home.remote, "hooks", "pre-receive"), "#!/bin/sh\necho 'error: GH013: Repository rule violations found.' >&2\nexit 1\n");
+    const done = runPrinted(commandOf(offer, "Put it on its own branch"), home.dir);
+    expect(done.out).toContain(`origin did not take the branch ${PLAN_BRANCH} (`);
+    expect(done.out).toContain("so nothing changed: the plan is still committed here.");
+    expect(git(home.dir, ["symbolic-ref", "HEAD"])).toBe("refs/heads/main");
+    expect(git(home.dir, ["rev-parse", "HEAD"])).toBe(head);
+    expect(planBranches(home.dir)).toBe("");
+  });
+
+  test("while the plan's branch waits for its pull request, every look and status say so in place of the board, and nothing is asked", () => {
+    for (const args of [["share", "--plan", "--branch"], ["share", "--branch"]]) {
+      const home = args.length === 3 ? makeHome() : makeHome({ repos: {} });
+      chooseTeams(home.dir);
+      const offer = refusedThenOffered(home.dir, home.remote, args.slice(0, -1), chatOf(`wait-${args.length}`));
+      expect(runPrinted(commandOf(offer, "Put it on its own branch"), home.dir).status).toBe(0);
+      for (const chat of [chatOf(`wait-${args.length}-a`), chatOf(`wait-${args.length}-b`)]) {
+        const look = next(home.dir, chat);
+        expect(look.kind, JSON.stringify(look).slice(0, 600)).not.toBe("ask");
+        expect(look.kind).not.toBe("run-stage");
+        expect(JSON.stringify(look)).toContain(WAITING);
+        expect(JSON.stringify(look)).not.toContain("waiting for a team to take it");
+        expect(JSON.stringify(look)).not.toContain("Claimable");
+      }
+      const status = run(UTILITY, ["status"], home.dir);
+      expect(status.out).toContain(WAITING);
+      expect(status.out).not.toContain("Claimable");
+    }
+  });
+
+  test("the plan's branch merged by its pull request (a squash, a rebase, a merge commit, or edited on it first): the next look sees it with no fetch of the person's, offers once to switch back, and the switch puts the lead on main, level, with what they answered meanwhile", () => {
+    for (const [how, edited] of [["squash", false], ["rebase", false], ["merge", false], ["squash", true]] as const) {
+      const home = makeHome();
+      chooseTeams(home.dir);
+      const offer = refusedThenOffered(home.dir, home.remote, ["share", "--plan"], chatOf(`merged-${how}-${edited}`));
+      expect(runPrinted(commandOf(offer, "Put it on its own branch"), home.dir).status, how).toBe(0);
+      setRhythm(home.dir, "unit-end");
+      hostMergesPlan(home.remote, how, edited);
+      const chat = chatOf(`back-${how}-${edited}`);
+      const back = next(home.dir, chat);
+      expect(String(back.question), `${how}: ${JSON.stringify(back).slice(0, 600)}`).toBe(BACK_OFFER);
+      expect(labelsOf(back)).toEqual(["Switch back to main", "Not now"]);
+      expect(commandOf(back, "Switch back to main")).toMatch(/ unit share --back$/);
+      expect(String(next(home.dir, chat).question ?? ""), how).not.toBe(BACK_OFFER);
+      const switched = runPrinted(commandOf(back, "Switch back to main"), home.dir);
+      expect(switched.status, switched.out).toBe(0);
+      expect(switched.out).toContain(ON_MAIN);
+      expect(git(home.dir, ["symbolic-ref", "HEAD"]), how).toBe("refs/heads/main");
+      expect(git(home.dir, ["rev-parse", "HEAD"]), how).toBe(git(home.remote, ["rev-parse", "main"]));
+      expect(field(stateOf(home.dir), "Unit Gate Rhythm"), how).toBe("unit-end");
+      if (edited) expect(readFileSync(join(home.dir, UNITS_FILE), "utf-8")).toContain("Edited on the pull request.");
+    }
+  });
+
+  test("the switch back that git refuses changes nothing and says why: main checked out in another worktree, main holding a commit origin lacks, or the person's own change in the way", () => {
+    for (const blocker of ["worktree", "ahead", "change"] as const) {
+      const home = makeHome();
+      chooseTeams(home.dir);
+      const offer = refusedThenOffered(home.dir, home.remote, ["share", "--plan"], chatOf(`stay-${blocker}`));
+      expect(runPrinted(commandOf(offer, "Put it on its own branch"), home.dir).status).toBe(0);
+      hostMergesPlan(home.remote, "squash", blocker === "change");
+      if (blocker === "worktree") git(home.dir, ["worktree", "add", "-q", join(tempDir("other-worktree"), "main"), "main"]);
+      if (blocker === "ahead") {
+        const tree = git(home.dir, ["rev-parse", "main^{tree}"]);
+        const own = git(home.dir, ["commit-tree", tree, "-p", "main", "-m", "the person's own"]);
+        git(home.dir, ["update-ref", "refs/heads/main", own]);
+      }
+      if (blocker === "change") writeFileSync(join(home.dir, UNITS_FILE), "the person's own edit\n");
+      const back = next(home.dir, chatOf(`stay-${blocker}-look`));
+      expect(String(back.question), blocker).toBe(BACK_OFFER);
+      const main = git(home.dir, ["rev-parse", "main"]);
+      const stayed = runPrinted(commandOf(back, "Switch back to main"), home.dir);
+      expect(stayed.out, blocker).toContain(STAYED);
+      expect(git(home.dir, ["symbolic-ref", "HEAD"]), blocker).toBe(`refs/heads/${PLAN_BRANCH}`);
+      expect(git(home.dir, ["rev-parse", "main"]), blocker).toBe(main);
+    }
+  });
+
+  test("a branch of that name already here: the plan goes on the next free name and the other branch is left as it is", () => {
+    const home = makeHome();
+    chooseTeams(home.dir);
+    git(home.dir, ["branch", PLAN_BRANCH]);
+    const theirs = git(home.dir, ["rev-parse", PLAN_BRANCH]);
+    const offer = refusedThenOffered(home.dir, home.remote, ["share", "--plan"], chatOf("taken"));
+    const done = runPrinted(commandOf(offer, "Put it on its own branch"), home.dir);
+    expect(done.out).toContain(onItsBranch(`${PLAN_BRANCH}-2`));
+    expect(git(home.dir, ["symbolic-ref", "HEAD"])).toBe(`refs/heads/${PLAN_BRANCH}-2`);
+    expect(git(home.dir, ["rev-parse", PLAN_BRANCH])).toBe(theirs);
+  });
+
+  // As they are today, and stay so.
+  test("a host that takes the push: the share pushes main as before, the checkout stays on main, no branch is made and nothing is offered", () => {
+    for (const args of [["share", "--plan"], ["share"]]) {
+      const home = args.length === 2 ? makeHome() : makeHome({ repos: {} });
+      chooseTeams(home.dir);
+      expect(isShare(next(home.dir))).toBe(true);
+      const shared = run(UNIT, args, home.dir);
+      expect(shared.status, shared.out).toBe(0);
+      expect(shared.json, args.join(" ")).toMatchObject({ shared: true, remote: "origin", branch: "main" });
+      expect(git(home.dir, ["symbolic-ref", "HEAD"])).toBe("refs/heads/main");
+      expect(git(home.remote, ["rev-parse", "main"])).toBe(git(home.dir, ["rev-parse", "HEAD"]));
+      expect(git(home.dir, ["log", "-1", "--format=%s"])).toBe("Share the plan with the teams");
+      expect(planBranches(home.dir)).toBe("");
+      expect(git(home.dir, ["status", "--porcelain", "--", "aidlc"])).toBe("");
+      expect(JSON.stringify(next(home.dir))).not.toContain("own branch");
+    }
+  });
+
+  test("a main the person had moved on with a commit of their own: the refused share keeps today's line and its commit on main, and makes no branch", () => {
+    const home = makeHome();
+    chooseTeams(home.dir);
+    expect(isShare(next(home.dir))).toBe(true);
+    writeFileSync(join(home.dir, "notes.md"), "The lead's own.\n");
+    git(home.dir, ["add", "notes.md"]);
+    git(home.dir, ["commit", "-q", "-m", "the lead's notes"]);
+    mainTakesNoDirectPush(home.remote);
+    expect(run(UNIT, ["share", "--plan"], home.dir).json?.error).toBe(RULE);
+    expect(git(home.dir, ["symbolic-ref", "HEAD"])).toBe("refs/heads/main");
+    expect(git(home.dir, ["log", "-2", "--format=%s"])).toBe("Share the plan with the teams\nthe lead's notes");
+    expect(planBranches(home.dir)).toBe("");
+  });
+
   // Main's own flow (the teams build on the workspace's repo): the share comes
   // before a Unit starts here, so after a refusal it is asked again, never a build here.
   test("main's share on one repo under the same rule says the same line, and the next step asks again and builds nothing here", () => {
