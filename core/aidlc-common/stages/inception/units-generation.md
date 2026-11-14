@@ -133,6 +133,7 @@ NOTE: This artifact describes topology only. It does NOT pick a single "recommen
 **unit-of-work-story-map.md:**
 - One row per upstream item, keyed the way the traceability enumeration below is keyed. When `stories.md` is produced, key every row by `USx.y`; only `USx.y` rows are read. Otherwise key rows by `FR`, and optionally add an `NFR` row for any NFR this scope also traces; a requirement with sub-requirements is traced through its `FR{n}.{m}` IDs, so key its rows by those. Each row names the implementing Unit `U{n}` ID and directory name, for example `| US1.1 | U1 | u1-ledger |`; separate several Units in one cell with `;`. Every Unit a row names traces all of that row's acceptance criteria in its Functional Design, so name a Unit on a row only when it implements part of that item
 - Rows that span multiple units (cross-cutting concerns)
+- How each story is reached, when `stories.md` is produced. A story someone uses needs a Unit that exposes it: a `ui` or `service` Unit on its row does (so does a Unit with no kind). When every Unit on the row is a `library`, `spec` or `packaging` Unit, add the Unit that builds the screen, command or endpoint, or say how the story is reached in a `Reached through` cell on its row: `existing: <where>` when the product already has that place and this work changes what is behind it, `interface` when the story's caller is a developer or another system. When one answer holds for every story (a library, or a fix behind screens that exist), write it once below the table as `Reached through: <answer>`. An answer states a fact the person approves at the gate: a story a person uses, with no screen in the product or in the plan, needs a Unit for that screen, not an answer
 - Implementation order within each unit
 - Coverage verification: every enumerated ID assigned, every unit has rows
 
@@ -179,7 +180,8 @@ For `unit-of-work-dependency.md`, `required-sections` also requires a
 well-formed, cycle-free fenced `yaml` edge block. `traceability` owns
 `traceability.json`, derives the Unit set, and verifies every story, or every
 fallback `FR` when `stories.md` is not produced, maps to its declared target
-Unit.
+Unit. With `stories.md` it also names every story whose row holds only
+`library`, `spec` or `packaging` Units and no `Reached through` answer.
 
 ## Learn
 

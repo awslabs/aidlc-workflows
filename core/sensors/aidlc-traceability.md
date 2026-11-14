@@ -43,7 +43,10 @@ opens, on the tables as they are then:
    requirement); without that record, a table's requirements are the ones it
    lists and the ones the FR and NFR ID patterns find in requirements.md.
 5. Verifies deterministic targets where possible: stories, Unit mappings,
-   business rules, and workspace-relative code paths. A Functional Design Unit
+   business rules, and workspace-relative code paths. At Units Generation, with
+   stories, a story whose row names only `library`, `spec` or `packaging` Units
+   says how it is reached (`existing: <where>` or `interface`, on its row or
+   once as a `Reached through:` line), or it is reported as an invalid target. A Functional Design Unit
    whose kind writes no `rules.md` (a `ui` Unit) names one of its design files
    (`functional-spec.md`, `frontend-components.md`) on each row instead of a
    business rule.
