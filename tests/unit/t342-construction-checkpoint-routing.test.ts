@@ -6,6 +6,7 @@
 // covers: function:constructionPolicyChangeAuthority, function:constructionPolicyChangeAllowed
 // covers: function:hasPendingDecision
 // covers: function:guardRecoveryAskFromRefusalText, function:unitOpenCheckpoints, subcommand:aidlc-state:unit, subcommand:aidlc-log:review, hook:aidlc-session-start
+// covers: function:unitStepOwedOnlyReceipt, function:unitStepChangeReopen
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   NATIVE_STARTUP_TIMEOUT_MS,
@@ -27,6 +28,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
+import { currentUnitLifecycleMode as libMode, unitLifecycleReceiptsInUse as libInUse } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   AIDLC_SRC, cleanupTestProject, createTestProject, resetAidlcEnv,
   runOrchestrateNext, seedAidlcMemory, seedBoltDag, seededRecordDir, seededStateFile,
@@ -4015,6 +4017,98 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
       expect(next(p)).toMatchObject({ kind: "run-stage", stage: "functional-design", unit: "beta" });
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
+
+  function betaCodeWrittenAndReviewed(): string {
+    const p = fixture({ scope: "classic" });
+    writeFileSync(seededStateFile(p), readFileSync(seededStateFile(p), "utf-8")
+      .replace("- **Review Override**: none", "- **Review Override**: adversarial"));
+    buildReviewed(p, "alpha", undefined, true);
+    approve(p, "alpha");
+    for (const slug of stages.slice(0, 4)) {
+      cover(p, "beta", [slug], false);
+      appendAuditEntry("UNIT_COMPLETED", {
+        Stage: slug, Unit: "beta", "Run floor": latestMainWorkflowStageRunFloorForProject(p, slug, true, "beta"),
+      }, p);
+    }
+    expect(next(p).stage).toBe("code-generation");
+    const started = tool(p, "state", ["unit", "start", "--stage", "code-generation", "--unit", "beta"]);
+    expect(started.status, started.out).toBe(0);
+    const plan = planApproved(p, "beta");
+    const brief = tool(p, "testing-posture", ["brief", "--unit", "beta"]);
+    expect(brief.status, brief.out).toBe(0);
+    hookCall(p, [join(AIDLC_SRC, "hooks/aidlc-plan-approval-guard.ts")], {
+      hook_event_name: "PreToolUse", tool_name: "Task",
+      tool_input: { subagent_type: "aidlc-developer-agent", prompt: brief.stdout },
+    });
+    writeFileSync(plan, readFileSync(plan, "utf-8").replaceAll("- [ ] Step", "- [x] Step"));
+    for (const n of [1, 2, 3, 4]) writeFileSync(join(p, "src", `part${n}.ts`), `export const part${n} = ${n};\n`);
+    const built = join(seededRecordDir(p), "construction", "beta", "code-generation");
+    for (const name of ["code-summary", "traceability"]) writeFileSync(join(built, artifactFilename(name)), `# beta ${name}\n`);
+    writeFileSync(join(built, "source-manifest.json"), JSON.stringify({
+      stage: "code-generation", unit: "beta", version: 1,
+      writes: [1, 2, 3, 4].map((n) => ({ path: `src/part${n}.ts` })),
+    }));
+    const reviewed = reviewThroughLog(p, codeReview("beta", 1));
+    expect(reviewed.status, reviewed.out).toBe(0);
+    return p;
+  }
+
+  function printedStep(p: string, args: string[]) {
+    const result = runOrchestrateNext(join(AIDLC_SRC, "tools/aidlc-orchestrate.ts"), p, args);
+    return (result.directive ?? { kind: "none" }) as { kind: string; message?: string };
+  }
+
+  function runPrintedCommands(p: string, message: string) {
+    for (const [, name, rest] of message.split("then tell the person")[0].matchAll(/`[^`]*aidlc-(\w+)\.ts ([^`]+)`/g)) {
+      const argv = [...rest.matchAll(/'([^']*)'|(\S+)/g)].map((match) => match[1] ?? match[2]);
+      const ran = tool(p, name, argv);
+      expect(ran.status, ran.out).toBe(0);
+    }
+  }
+
+  test("an explicit stage route naming the Unit in flight at its finished step reopens it for that Unit", () => {
+    const p = betaCodeWrittenAndReviewed();
+    expect(printedStep(p, []).kind).toBe("run-stage");
+    const step = printedStep(p, ["--stage", "code-generation", "--unit", "beta"]);
+    expect(step.kind, JSON.stringify(step)).toBe("print");
+    expect(step.message).not.toContain("unit complete");
+    expect(step.message).toContain(
+      "reopen --target code-generation --stages code-generation --units beta --scope classic",
+    );
+    expect(step.message).toContain('"Reopened Code Generation for unit beta. alpha keeps its finished work.');
+    expect(step.message).not.toContain("--via change");
+    runPrintedCommands(p, step.message!);
+    expect(unitCompletedReceipts(p, "code-generation").has("alpha")).toBe(true);
+    expect(approved(p, "alpha")).toBe(true);
+    const rejected = readAuditShardEvents(p).filter((row) => row.event === "GATE_REJECTED");
+    expect(rejected).toHaveLength(1);
+    expect(auditBlockField(rejected[0].block, "Unit")).toBe("beta");
+    expect(auditBlockField(rejected[0].block, "Reopen")).toBe("jump");
+    expect(next(p)).toMatchObject({ kind: "ask", ask_type: "plan-approval", unit: "beta" });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a Unit-scoped Request Changes reopens that Unit's finished step with the person's change", () => {
+    const p = betaCodeWrittenAndReviewed();
+    const reported = JSON.parse(tool(p, "orchestrate", [
+      "report", "--stage", "code-generation", "--result", "rejected", "--unit", "beta", "--user-input", "Request Changes",
+    ]).out.trim()) as { kind: string; message: string };
+    expect(reported.kind, JSON.stringify(reported)).toBe("print");
+    expect(reported.message).not.toContain("unit complete");
+    expect(reported.message).toContain(
+      "reopen --target code-generation --stages code-generation --units beta --scope classic --via change",
+    );
+    expect(reported.message).toContain('"Making your change in Code Generation for unit beta. alpha keeps its finished work.');
+    runPrintedCommands(p, reported.message);
+    expect(unitCompletedReceipts(p, "code-generation").has("alpha")).toBe(true);
+    expect(approved(p, "alpha")).toBe(true);
+    const rejected = readAuditShardEvents(p).filter((row) => row.event === "GATE_REJECTED");
+    expect(rejected).toHaveLength(1);
+    expect(auditBlockField(rejected[0].block, "Unit")).toBe("beta");
+    expect(auditBlockField(rejected[0].block, "Reopen")).toBe("change");
+    expect(next(p)).toMatchObject({
+      kind: "run-stage", stage: "code-generation", unit: "beta", plan_approval: { status: "revise" },
+    });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 // The walking skeleton gates the per-unit stages. Once they are all done or
