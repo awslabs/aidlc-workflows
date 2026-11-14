@@ -740,6 +740,28 @@ export type CheckIn =
   | { pushedOn: string; into: string }
   | { into: string; remote: string; split: { ahead: number; behind: number } | null };
 
+// The paths a diff of `range` names under `paths` (the whole repo when there
+// are none): the one reader of "the same files" after a squash or rebase merge
+// (checkInState, the plan's own branch). The person's diff.relative would
+// narrow a whole-repo compare to this folder; -c rather than --no-relative,
+// which git before 2.28 does not know. Null when git cannot tell.
+export function diffNames(projectDir: string, range: string[], paths: string[]): Set<string> | null {
+  const listed = spawnSync("git", ["-C", projectDir, "-c", "diff.relative=false", "diff", "--name-only", "-z", "--no-renames", ...range, "--", ...paths], {
+    encoding: "utf-8",
+    timeout: 10_000,
+  });
+  return listed.status === 0 ? new Set(listed.stdout.split("\0").filter(Boolean)) : null;
+}
+
+// Everything HEAD changed since it left `into` is the same in `into`: there by
+// ancestry, or by a squash or rebase merge that took the same files in. Null
+// when git cannot tell.
+export function headInByContent(projectDir: string, into: string): boolean | null {
+  const mine = diffNames(projectDir, [`${into}...HEAD`], []);
+  const differ = diffNames(projectDir, [into, "HEAD"], []);
+  return mine === null || differ === null ? null : ![...mine].some((path) => differ.has(path));
+}
+
 // Whether aidlc/ is checked in, from local git only: nothing under it changed
 // but the rows each look adds to this clone's own audit file (onlyOwnLookRows,
 // doctor's rule too; a decision of the person's there still counts) and, at a
@@ -791,13 +813,8 @@ export function checkInState(projectDir: string, stateContent?: string): CheckIn
   if (!changes.every((change) => onlyOwnLookRows(projectDir, root, change) || onlyEngineStateWrites(projectDir, root, change))) {
     return "not-checked-in";
   }
-  // A squash or rebase merge puts the same files in as commits of its own. The
-  // person's diff.relative would narrow the whole-repo compare to this folder;
-  // -c rather than --no-relative, which git before 2.28 does not know.
-  const names = (range: string[], paths = ["aidlc"]): Set<string> | null => {
-    const listed = run(["-c", "diff.relative=false", "diff", "--name-only", "-z", "--no-renames", ...range, "--", ...paths]);
-    return listed.status === 0 ? new Set(listed.stdout.split("\0").filter(Boolean)) : null;
-  };
+  // A squash or rebase merge puts the same files in as commits of its own.
+  const names = (range: string[], paths = ["aidlc"]): Set<string> | null => diffNames(projectDir, range, paths);
   // This checkout on the integration branch itself, ahead and behind it, when a
   // squash or rebase merge took in everything its own commits changed, over the
   // whole repo: then `git reset --keep` brings it level and loses nothing. Null
