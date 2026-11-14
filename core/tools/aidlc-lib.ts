@@ -469,6 +469,7 @@ export {
   FILE_CHANGED_DURING_READ,
   fileIdentity,
   type FileIdentity,
+  HARDLINK_REMEDY,
   holdsAuditLock,
   installWithoutReplacing,
   intentsDir,
