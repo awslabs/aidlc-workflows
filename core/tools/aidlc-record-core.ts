@@ -16,7 +16,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, 
 import { dlopen, FFIType, type Pointer } from "bun:ffi";
 import { runtimeHarnessDir, runtimeHarnessName, SPACE_NAME_REGEX } from "./aidlc-runtime-paths.ts";
 import { validateUnitName } from "./aidlc-review-records.ts";
-import { activeSpace, assertNoSymlinkInChainOrThrow, ENGINE_DIR, engineDirFor, intentsDir, isPlainObject, listIntentDirs, mainCheckoutOfWorktree, readAppendOnlyFileNoFollowOrThrow, readRegularFileNoFollowOrThrow, refuseEngineObserverWrite, spaceRecordRoot, workspaceRoot, writeFileAtomic } from "./aidlc-locks.ts";
+import { activeSpace, assertNoSymlinkInChainOrThrow, ENGINE_DIR, engineDirFor, intentsDir, isPlainObject, isReadOnlyCommand, listIntentDirs, mainCheckoutOfWorktree, readAppendOnlyFileNoFollowOrThrow, readRegularFileNoFollowOrThrow, refuseEngineObserverWrite, spaceHoldingTheWork, spaceRecordRoot, workspaceRoot, writeFileAtomic } from "./aidlc-locks.ts";
 import { escapeRegex } from "./aidlc-markdown.ts";
 import { gitCommonDirOf } from "./aidlc-git.ts";
 import { jsoncDocumentValue, withoutBom } from "./aidlc-distribution.ts";
@@ -67,6 +67,14 @@ export function readActiveIntentCursor(projectDir: string, space?: string): stri
   return null;
 }
 
+function workIntentDirs(projectDir: string, space: string): string[] {
+  const registry = readIntentRegistry(projectDir, space);
+  return listIntentDirs(projectDir, space).filter((dirName) => {
+    const row = registry.find((entry) => recordDirMatches(entry, dirName));
+    return row === undefined || !isArchivedIntent(row);
+  });
+}
+
 // The active intent's RECORD directory NAME (`<slug>-<id8>`) for a space, or
 // null when no record resolves (→ the path helpers resolve the bare space record
 // root). Precedence: explicit > active-intent cursor (if it names a real record)
@@ -90,11 +98,7 @@ export function activeIntent(
   // guessing. The registry is read ONCE and matched in memory: this is the
   // hot path of intent resolution, and an unregistered (orphan) record has no
   // status, so it stays live work.
-  const registry = readIntentRegistry(projectDir, sp);
-  const records = listIntentDirs(projectDir, sp).filter((dirName) => {
-    const row = registry.find((entry) => recordDirMatches(entry, dirName));
-    return row === undefined || !isArchivedIntent(row);
-  });
+  const records = workIntentDirs(projectDir, sp);
   if (records.length === 1) return records[0];
   // 0 records → null (bare space root); >1 with no cursor → null (the handler
   // layer prompts; a path helper cannot guess which intent the caller meant).
@@ -1067,7 +1071,7 @@ export function resolveChat(
       binding: { space: delegated.space, intent: delegated.intent, boundAt: isoTimestamp(), source: "worktree" },
     };
   }
-  const space = activeSpace(projectDir);
+  const space = spaceHoldingTheWork(projectDir);
   const resolved: WorkflowSelection = { space, intent: activeIntent(projectDir, space), sessionId: chatId, binding: null };
   const contact = classifyFirstContact(projectDir, resolved);
   writeSessionBinding(projectDir, chatId, contact.selection.space, contact.selection.intent, contact.source);
@@ -1260,12 +1264,16 @@ export function resolveWorkflowSelection(
   const chat = rawSession
     ? resolveChat(projectDir, rawSession, {
         bind: options.bind !== false && named === null &&
-          process.env.AIDLC_SESSION_OVERRIDE_SOURCE !== "payload",
+          process.env.AIDLC_SESSION_OVERRIDE_SOURCE !== "payload" && !isReadOnlyCommand(),
       })
     : null;
   const sessionId = chat?.chatId ?? null;
   const binding = chat?.binding ?? null;
-  const space = options.space ?? binding?.space ?? activeSpace(projectDir);
+  const bound = binding !== null &&
+    (binding.intent !== null || workIntentDirs(projectDir, binding.space).length > 0)
+    ? binding.space
+    : undefined;
+  const space = options.space ?? bound ?? spaceHoldingTheWork(projectDir);
   let intent: string | null;
   if (options.intent !== undefined) {
     intent = options.intent;
@@ -1275,6 +1283,14 @@ export function resolveWorkflowSelection(
     intent = activeIntent(projectDir, space);
   }
   return { space, intent, sessionId, binding };
+}
+
+export function recordInferred(projectDir: string, selection: WorkflowSelection): boolean {
+  if (selection.intent === null) return false;
+  if (delegatedWorktreeIntent(projectDir) !== null) return false;
+  if (readActiveIntentCursor(projectDir, selection.space) === selection.intent) return false;
+  const bound = selection.binding;
+  return bound === null || bound.space !== selection.space || bound.intent !== selection.intent;
 }
 
 export type WorkflowParticipation = "participant" | "outsider" | "indeterminate";
