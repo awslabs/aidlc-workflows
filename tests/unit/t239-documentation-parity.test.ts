@@ -423,9 +423,10 @@ describe("documentation parity derives current behavior from authored implementa
     expect(includesSource).toContain("export function refreshActiveMemory");
   });
 
-  // Running a block again refreshes the install, so it must not save the shipped cli.json over the project's saved
-  // one; config stops on a project cli.json it did not write, but merges Kiro CLI (V2)'s mcp.json per server, so
-  // that file is left in place for config instead of being copied over. These read the block's text; they do not run it.
+  // A block can run again over an install (a project copied before 2.11.0, or whose setup command never ran), so
+  // it must not save the shipped cli.json over the project's saved one; config stops on a project cli.json it did
+  // not write, but merges Kiro CLI (V2)'s mcp.json per server, so that file is left in place for config instead of
+  // being copied over. These read the block's text; they do not run it.
   for (const [tree, row, heading] of [
     ["kiro-ide", "Kiro", "### Versioned manual-copy alternative"],
     ["kiro", "Kiro CLI (V2)", "#### Kiro CLI (V2) versioned manual-copy alternative"],
@@ -483,6 +484,28 @@ describe("documentation parity derives current behavior from authored implementa
           throw new Error(`${row}: the runtime ships .kiro/settings/${name}; add the block's step for it and check it here`);
         }
       }
+    });
+
+    // The block's copy replaces .kiro/tools/data/harness.json, where the plugin choices and setup answers live, so a
+    // project already set up moves to a newer release with the setup command alone. It names no --harness: the
+    // project's own tool reads that name first, and before 2.11.4 `kiro` named Kiro CLI (V2) and `kiro-v2` was unknown.
+    test(`the ${row} manual-copy section moves a set-up project to a newer release with the setup command alone`, () => {
+      // The copy runtime ships the file the plugin choices and setup answers are kept in.
+      const omitted = copyChannelOmits(projectionFiles(at("dist", tree)).descriptor);
+      expect(existsSync(at("dist", tree, ".kiro", "tools", "data", "harness.json"))).toBe(true);
+      expect(omitted.has(".kiro/tools/data/harness.json"), `${tree}: the copy runtime ships harness.json`).toBe(false);
+      const page = read("docs", "guide", "harnesses", "kiro.md");
+      expect(page.indexOf(heading), `kiro.md has the heading ${heading}`).toBeGreaterThan(-1);
+      const rest = page.slice(page.indexOf(heading) + heading.length);
+      // The next heading; the blocks' shell comments start with a single "# ".
+      const end = rest.search(/\n#{2,6} /);
+      const section = end === -1 ? rest : rest.slice(0, end);
+      const blocks = [...section.matchAll(/```bash\n([\s\S]*?)```/g)].map((match) => match[1].trim());
+      expect(blocks.length, `${row}: the copy block, then the refresh command`).toBeGreaterThanOrEqual(2);
+      expect(blocks[1]).toBe('bun .kiro/tools/aidlc.ts config --from "$RUNTIME_ROOT"');
+      const prose = section.replace(/\s+/g, " ");
+      expect(prose).toContain("do not run the block again");
+      expect(prose).toContain("whose setup command ran on AI-DLC 2.11.0 or later");
     });
   }
 
