@@ -296,7 +296,7 @@ export const UNIT_GRAMMAR: Readonly<Record<string, UnitGrammar>> = {
     options: ["message", "request-file", "person-words"],
     usage: "unit send-back <unit> [--message <id>] (--request-file <file> | --person-words <text>)",
   },
-  share: { name: false, options: [], switches: ["plan"], usage: "unit share [--plan]" },
+  share: { name: false, options: [], switches: ["plan", "branch", "back"], usage: "unit share [--plan] [--branch | --back]" },
   "sign-off": {
     name: true,
     options: ["message", "request-file", "person-words"],

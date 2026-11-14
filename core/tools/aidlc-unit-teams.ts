@@ -753,12 +753,12 @@ export function diffNames(projectDir: string, range: string[], paths: string[]):
   return listed.status === 0 ? new Set(listed.stdout.split("\0").filter(Boolean)) : null;
 }
 
-// Everything HEAD changed since it left `into` is the same in `into`: there by
-// ancestry, or by a squash or rebase merge that took the same files in. Null
-// when git cannot tell.
-export function headInByContent(projectDir: string, into: string): boolean | null {
-  const mine = diffNames(projectDir, [`${into}...HEAD`], []);
-  const differ = diffNames(projectDir, [into, "HEAD"], []);
+// Everything `from` (HEAD unless named) changed since it left `into` is the
+// same in `into`: there by ancestry, or by a squash or rebase merge that took
+// the same files in. Null when git cannot tell.
+export function headInByContent(projectDir: string, into: string, from = "HEAD"): boolean | null {
+  const mine = diffNames(projectDir, [`${into}...${from}`], []);
+  const differ = diffNames(projectDir, [into, from], []);
   return mine === null || differ === null ? null : ![...mine].some((path) => differ.has(path));
 }
 

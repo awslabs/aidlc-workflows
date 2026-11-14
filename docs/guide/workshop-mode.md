@@ -112,8 +112,14 @@ before each Unit this session would build:
   `opencode.json` stay out)
   and pushes the integration branch with a plain push, never forced. This
   checkout then shows the board instead of building Units. A push the remote
-  refuses (it has commits this clone lacks, or the branch is protected) keeps
-  the commit, says why, and the question comes back: pull main, then share.
+  refuses because it has commits this clone lacks keeps the commit, says why,
+  and the question comes back: pull main, then share. When main takes no direct
+  push (a host's rule), the share says so in the host's words and offers once
+  to put the plan on its own branch (below).
+- **Share by pull request** runs `aidlc unit share --branch`: it commits the
+  same way, puts that commit on a branch of its own, `aidlc-plan-<work>`, and
+  pushes that branch, never main, passing on the host's own link to open the
+  pull request. Your checkout goes onto that branch and main stays as it was.
 - **Build them here for now** builds that Unit in this session; the question
   comes back before the next Unit.
 
@@ -123,7 +129,9 @@ once it has pushed, or your own commit and `git push origin main`.
 Where the work records code repos of its own, the step after choosing teams asks
 once whether to share the plan with them: **Share them with the
 teams** runs `aidlc unit share --plan`, which commits AI-DLC's record here
-(`aidlc/`, none of your other files) and pushes main with a plain push; **Not
+(`aidlc/`, none of your other files) and pushes main with a plain push;
+**Share by pull request** runs `aidlc unit share --branch --plan`, which
+commits the same and pushes it on the plan's own branch instead; **Not
 now** leaves it, and a team's clone sees the plan once main is pushed (or push
 it yourself with `git push origin main`). When the remote does not answer, Share says so and keeps the
 commit, and the question is not put again; run `aidlc unit share --plan` once
@@ -945,10 +953,15 @@ otherwise run at every claim write.
 
 **The plan and the records.** When the host takes no direct push to main, the
 lead's share says so once, with the host's words: "origin takes no direct push
-to main (<host words>). The plan is committed here: push it on a branch and get
-it merged your usual way; the teams can take Units once it is in main." A lead
-working on another branch is told the checkout is not on main, with the same way
-on. A team's record pushed on a branch whose pull request is open reads
+to main (<host words>), so the plan is not shared yet." The next step offers
+once to put the plan on its own branch and push that, as **Share by pull
+request** does; until the plan is in main, each look and status say where it
+waits in place of the board. Once it is in main, AI-DLC offers once to switch
+you back to main (`aidlc unit share --back`): it brings your main level with
+origin's and keeps your own changes, or says git's reason and you stay where you are.
+A lead working on another branch is told the checkout is not on main: push it
+on a branch and get it merged your usual way. A share typed on the plan's own
+branch pushes that branch, so its pull request has the newer plan. A team's record pushed on a branch whose pull request is open reads
 "aidlc/ is pushed on <branch>; your teammates see it once it is in main.", and
 status shows `Checked in:     pushed on <branch>, not in main yet`.
 Back on main before that pull request merges, or in a fresh clone on another

@@ -234,6 +234,7 @@ import {
   leadCopyRef,
   leadRecordHere,
   textAt,
+  headInByContent,
 } from "./aidlc-unit-teams.js";
 import { submoduleLeavesProjectRepo } from "./aidlc-git.ts";
 import { displayRepoPath, localUnreadableLine, readWorkspaceRepos, repoCloneable, repoCloneOfferLine, repoNotThereLine, withoutCredentials, workspaceManifestAt } from "./aidlc-workspace-manifest.js";
@@ -5801,22 +5802,275 @@ export function planWayOn(branch: string, committed: boolean): string {
   return committed ? `The plan is committed here: ${way}` : `Commit the plan (aidlc/) here, ${way}`;
 }
 
+// The plan's own branch when the integration branch takes no direct push:
+// `aidlc-plan-<work>`, the work's record folder name with its id left off,
+// then `-2`, `-3` while a name is taken here or on the remote.
+function planBranchNames(pd: string): string[] {
+  const work = (resolveWorkflowSelection(pd).intent ?? "").replace(/-[0-9a-f]{16}$/, "");
+  const base = work !== "" && git(pd, ["check-ref-format", "--branch", `aidlc-plan-${work}`]).ok ? `aidlc-plan-${work}` : "aidlc-plan";
+  return [base, ...Array.from({ length: 19 }, (_, at) => `${base}-${at + 2}`)];
+}
+
+// This work's plan branches here that `unit share --branch` pushed (its push
+// set their upstream), in name order.
+function planBranchesHere(pd: string): string[] {
+  const names = planBranchNames(pd);
+  const listed = git(pd, ["for-each-ref", "--format=%(refname:short) %(upstream)", "refs/heads/"]);
+  if (!listed.ok) return [];
+  const pushed = new Set(listed.stdout.split("\n").map((row) => row.trim().split(" "))
+    .filter(([, upstream]) => upstream !== undefined && upstream !== "").map(([name]) => name));
+  return names.filter((name) => pushed.has(name));
+}
+
+// The name the plan's branch gets now: one already at HEAD and pushed (a run
+// cut short), else the first free one.
+function planBranchFor(pd: string, remote: string, head: string): { name: string; made: boolean } | null {
+  for (const name of planBranchNames(pd)) {
+    const here = git(pd, ["rev-parse", "--verify", "--quiet", `refs/heads/${name}`]);
+    const there = git(pd, ["rev-parse", "--verify", "--quiet", `refs/remotes/${remote}/${name}`]);
+    if (here.ok && there.ok && here.stdout.trim() === head && there.stdout.trim() === head) return { name, made: false };
+  }
+  return null;
+}
+
+// A plan branch name is taken when this clone has it or knows it on the remote.
+function planBranchTaken(pd: string, remote: string, name: string): boolean {
+  return git(pd, ["rev-parse", "--verify", "--quiet", `refs/heads/${name}`]).ok ||
+    git(pd, ["rev-parse", "--verify", "--quiet", `refs/remotes/${remote}/${name}`]).ok;
+}
+
+function firstFreePlanBranch(pd: string, remote: string): string {
+  return planBranchNames(pd).find((name) => !planBranchTaken(pd, remote, name)) ?? planBranchNames(pd)[0];
+}
+
+// What the choice to share by pull request does, in the share question and
+// in the offer after a host refused the push.
+export function planByPullRequestDetail(projectDir: string): string {
+  const pd = resolveProjectDir(projectDir);
+  const target = shareOfferTarget(pd);
+  const branch = target?.branch ?? "main";
+  return `I put the plan on its own branch, ${target === null ? planBranchNames(pd)[0] : firstFreePlanBranch(pd, target.remote)}, ` +
+    "push it and give you the host's link to open the pull request. You work on that branch until it is merged; " +
+    `${branch} stays as it is.`;
+}
+
+// The share's own commits, noted when the host refused their push and the
+// integration branch had nothing else the remote lacked: the ones
+// `unit share --branch` may move.
+const shareCommitMark = (oid: string): string => teamHandoverMarkName("plan-commit", oid.slice(0, 12));
+
+// The commits the remote's branch, as last fetched, lacks from `from`, and
+// whether every one is a noted share commit. Null when this clone does not
+// know the remote's branch.
+function shareCommitsAhead(pd: string, remote: string, branch: string, from: string): { oids: string[]; noted: boolean } | null {
+  const listed = git(pd, ["rev-list", `refs/remotes/${remote}/${branch}..${from}`]);
+  if (!listed.ok) return null;
+  const oids = listed.stdout.split("\n").map((row) => row.trim()).filter(Boolean);
+  return { oids, noted: oids.every((oid) => engineAskMark(pd, shareCommitMark(oid)) !== null) };
+}
+
+// The plan's branch `name`, checked out here, is in the integration branch:
+// everything it changed is there by content, as HEAD has it or as the
+// remote's copy of the branch has it (a suggestion committed on the pull
+// request), or the host deleted that branch once the plan was in. Both
+// branches are read quietly first.
+function planBranchMerged(pd: string, target: { remote: string; branch: string }, name: string): boolean {
+  const into = `refs/remotes/${target.remote}/${target.branch}`;
+  let gone = false;
+  if (!isReadOnlyEngineProbe()) {
+    const there = quietly(() => git(pd, ["ls-remote", "--heads", target.remote, `refs/heads/${name}`]));
+    gone = there.ok && there.stdout.trim() === "";
+    quietFetch(pd, ["--no-tags", "-q", target.remote, target.branch, ...(gone ? [] : [name])]);
+  }
+  if (headInByContent(pd, into) === true) return true;
+  const theirs = `refs/remotes/${target.remote}/${name}`;
+  const known = git(pd, ["rev-parse", "--verify", "--quiet", theirs]).ok;
+  const pushedAll = !known || git(pd, ["merge-base", "--is-ancestor", "HEAD", theirs]).ok;
+  if (known && pushedAll && headInByContent(pd, into, theirs) === true) return true;
+  return gone && pushedAll && !planUnshared(pd, target);
+}
+
+// Where the plan's share stands at a checkout that asked for it here
+// (teamSharedHere): its commits noted on the integration branch and not in the
+// remote's by content, or the checkout on the plan's branch; null otherwise.
+// Only then is the remote read, quietly, so its merge is seen with no fetch of
+// the person's. The waiting states hold while a team's clone cannot take
+// Units yet (planUnshared): a later share's offer is put, and the board stays.
+// `offer` is the once-mark of the offer due now, if any.
+export type PlanWait =
+  | { state: "committed"; offer: string | null }
+  | { state: "branch"; name: string }
+  | { state: "merged"; name: string; offer: string | null };
+
+export function planWait(projectDir: string): PlanWait | null {
+  try {
+    const pd = resolveProjectDir(projectDir);
+    if (!teamSharedHere(pd)) return null;
+    const target = shareTarget(pd);
+    if (target === null) return null;
+    const head = git(pd, ["symbolic-ref", "--quiet", "--short", "HEAD"]).stdout.trim();
+    const pushed = planBranchesHere(pd);
+    if (pushed.includes(head)) {
+      if (!planBranchMerged(pd, target, head)) return planUnshared(pd, target) ? { state: "branch", name: head } : null;
+      const mark = teamHandoverMarkName("plan-back", head);
+      return { state: "merged", name: head, offer: engineAskMark(pd, mark) === null ? mark : null };
+    }
+    if (head !== target.branch) return null;
+    const noted = (): string[] | null => {
+      const ahead = shareCommitsAhead(pd, target.remote, target.branch, "HEAD");
+      return ahead?.noted && ahead.oids.length > 0 ? ahead.oids : null;
+    };
+    const waitsOnBranch = (): boolean => pushed.length > 0 && planUnshared(pd, target);
+    if (noted() === null && !waitsOnBranch()) return null;
+    if (!isReadOnlyEngineProbe()) quietFetch(pd, ["--no-tags", "-q", target.remote, target.branch]);
+    const ahead = noted();
+    if (ahead !== null && headInByContent(pd, `refs/remotes/${target.remote}/${target.branch}`) !== true) {
+      const due = teamHandoverMarkName("plan-branch", ahead[0].slice(0, 12));
+      const offer = engineAskMark(pd, due) === null ? due : null;
+      return offer === null && !planUnshared(pd, target) ? null : { state: "committed", offer };
+    }
+    return waitsOnBranch() ? { state: "branch", name: pushed[pushed.length - 1] } : null;
+  } catch {
+    return null;
+  }
+}
+
+// The one line while the plan waits, in place of the board (a look and status).
+export function planWaitLine(wait: PlanWait, branch: string): string | null {
+  if (wait.state === "committed") return "The plan is committed here and not shared yet: say when you want me to put it on its own branch and push that.";
+  if (wait.state === "branch") {
+    return `The plan is on its own branch, ${wait.name}, waiting for its pull request; teams can take Units once it is in ${branch}.`;
+  }
+  return null;
+}
+
+// `unit share --branch`: the commits the integration branch has and the
+// remote's lacks, all the share's own (made just now, or noted when the host
+// refused them), go on the plan's branch: made at HEAD and pushed with its
+// upstream while the checkout is still on the integration branch, and only
+// once the host took it, the checkout goes onto it and the integration branch
+// back to where it left the remote's, each a compare-and-swap. The index and
+// the files are never touched. A branch the host does not take is deleted
+// again, so nothing changed. False when there is nothing to move.
+function putPlanOnItsBranch(pd: string, remote: string, branch: string, madeNow: string | null, planOnly: boolean): boolean {
+  const into = `refs/remotes/${remote}/${branch}`;
+  // Not done: main's share comes before a Unit starts here, so its offers are
+  // due again, never a build here (as after a refused push).
+  const stays: (line: string) => never = (line) => {
+    if (!planOnly) clearTeamHandoverMarks(pd, ["share", "push"]);
+    return fail(line);
+  };
+  if (madeNow !== null) noteEngineAskMark(pd, shareCommitMark(madeNow));
+  const ahead = shareCommitsAhead(pd, remote, branch, "HEAD");
+  if (ahead === null) {
+    stays(`This clone knows of no ${branch} on ${remote} for a pull request to go into, so the plan stays committed here; ` +
+      `sharing it with the teams pushes ${branch} itself.`);
+  }
+  if (ahead.oids.length === 0) return false;
+  if (!ahead.noted) stays(`Your ${branch} has commits of yours that ${remote} lacks, so the plan stays committed here.`);
+  const head = ahead.oids[0];
+  const base = gitOutput(pd, ["merge-base", "HEAD", into], "Cannot read where the plan left the remote's branch");
+  let plan = planBranchFor(pd, remote, head);
+  let words = "";
+  if (plan === null) {
+    const free = planBranchNames(pd).find((name) =>
+      !planBranchTaken(pd, remote, name) && git(pd, ["update-ref", "--stdin"], undefined, `create refs/heads/${name} ${head}\n`).ok
+    );
+    if (free === undefined) stays(`${remote} takes no direct push to ${branch}. ${planWayOn(branch, true)}`);
+    plan = { name: free, made: true };
+    const pushed = git(pd, ["push", "-u", remote, free], { GIT_TERMINAL_PROMPT: "0" });
+    if (!pushed.ok) {
+      git(pd, ["update-ref", "--stdin"], undefined, `delete refs/heads/${free} ${head}\n`);
+      stays(
+        `${remote} did not take the branch ${free} (${pushRefusal(pushed.stderr)}), so ` +
+          `${madeNow === null ? "nothing changed: the plan is still committed here." : "nothing is pushed: the plan is committed here."}`,
+      );
+    }
+    words = hostLinkWords(pushed.stderr, free);
+  }
+  const moved = git(pd, ["symbolic-ref", "-m", "share: the plan on its own branch", "HEAD", `refs/heads/${plan.name}`]);
+  if (!moved.ok) fail(`The plan is on ${plan.name} on ${remote}, and your checkout stayed on ${branch}: git says ${gitWords(moved.stderr)}`);
+  git(pd, ["update-ref", "-m", `share: ${branch} back to where it was`, "--stdin"], undefined, `update refs/heads/${branch} ${base} ${head}\n`);
+  noteTeamShared(pd);
+  // A Unit the lead asked to build here gets its claim with the plan's branch, as with a push of main.
+  const claims = claimsAskedHereWithShare(pd);
+  const sent = claims.sent.length > 0 ? `, with ${builtHereNote(claims.sent)},` : ",";
+  console.log(JSON.stringify({
+    shared: false,
+    branch: plan.name,
+    remote,
+    notice: [
+      `The plan is on its own branch, ${plan.name}, pushed to ${remote}${sent} and your checkout is on it; ${branch} is as it was.`,
+      words === "" ? "Get it merged your usual way." : hostSaysLine(null, words),
+      ...claims.lines,
+    ].join(" "),
+    step: "Tell the person in plain words what it reports, then end your turn.",
+  }));
+  return true;
+}
+
+// Git's own words for the person, on one line.
+function gitWords(said: string): string {
+  return said.trim().split(/\r?\n/).map((line) => line.trim()).filter(Boolean).join(" ");
+}
+
+// `unit share --back`: from the plan's branch onto the integration branch once
+// the plan is in it: tried first in a copy of the index, then the branch
+// brought level with the remote's (fast-forward only) and switched to. Never a
+// reset, a stash, a force or a merge; when git refuses, nothing changed.
+function planBranchBack(pd: string): void {
+  const target = shareTarget(pd);
+  if (target === null) fail("This repository has no remote to share main with. Add one (git remote add origin <url>), then share again.");
+  const { remote, branch } = target;
+  const here = git(pd, ["symbolic-ref", "--quiet", "--short", "HEAD"]).stdout.trim() || "HEAD";
+  const stay = (said: string): never => fail(`You stay on ${here} and nothing changed: git says ${gitWords(said)}`);
+  const scratch = mkdtempSync(join(tmpdir(), "aidlc-share-back-"));
+  try {
+    const index = resolve(pd, gitOutput(pd, ["rev-parse", "--git-path", "index"], "Cannot find the index"));
+    if (existsSync(index)) copyFileSync(index, join(scratch, "index"));
+    const tried = git(pd, ["read-tree", "-n", "-m", "-u", "HEAD", `refs/remotes/${remote}/${branch}`], { GIT_INDEX_FILE: join(scratch, "index") });
+    if (!tried.ok) stay(tried.stderr || tried.stdout);
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+  const fetched = git(pd, ["fetch", remote, `${branch}:${branch}`], { GIT_TERMINAL_PROMPT: "0" });
+  if (!fetched.ok) stay(fetched.stderr);
+  const switched = git(pd, ["switch", "-q", branch]);
+  if (!switched.ok) fail(`Your ${branch} is level with ${remote} now, and you stay on ${here}: git says ${gitWords(switched.stderr)}`);
+  console.log(JSON.stringify({
+    switched: true,
+    branch,
+    notice: `You are on ${branch} now, level with ${remote}.`,
+    step: "Tell the person in plain words what it reports, then end your turn.",
+  }));
+}
+
 // `aidlc unit share`: commit the work here and push the integration branch to
 // the remote, so the teams can take Units (after Inception) or see a landed
 // one. A plain push, never forced. A share that did not happen (a commit git
 // refused, a push the remote refused) keeps what it committed and leaves both
 // offers due again (their marks cleared), so the next step asks again instead
-// of building here; a plan's share a host's rule refuses is said once instead.
+// of building here; a plan's share a host's rule refuses is said once instead,
+// and the next step offers to put it on a branch of its own. `--branch`: the
+// plan on that branch, pushed for a pull request (putPlanOnItsBranch);
+// `--back`: from that branch onto the integration branch once the plan is in
+// it (planBranchBack).
 // `--plan`: AI-DLC's record only (the plan a team's clone takes its Unit
 // from), for a home whose teams build in repos of their own; none of the
 // person's other files here is committed.
 function shareMain(args: string[], projectDir?: string): void {
   const pd = resolveProjectDir(projectDir);
+  const flags = parseArgs(args).bareFlags;
+  if (flags.has("back")) {
+    planBranchBack(pd);
+    return;
+  }
   const refused = shareRefusal(pd);
   // On a branch of the person's own, the share goes on to commit AI-DLC's
   // record there and pushes nothing (below).
   if (refused !== null && refused.off === undefined) fail(refused.reason);
-  const planOnly = parseArgs(args).bareFlags.has("plan");
+  const planOnly = flags.has("plan");
+  const again = `${aidlcInvocation()} unit share${flags.has("branch") ? " --branch" : ""}${planOnly ? " --plan" : ""}`;
   // The branch the share pushes, read from the team's own words before
   // anything is committed or pushed; the offers stay due in case the share
   // does not run again.
@@ -5825,8 +6079,7 @@ function shareMain(args: string[], projectDir?: string): void {
     clearTeamHandoverMarks(pd, ["share", "push"]);
     console.log(JSON.stringify({
       shared: false,
-      step: integrationBranchReadStep(toRead, `then run \`${aidlcInvocation()} unit share${planOnly ? " --plan" : ""}\` again and tell the person ` +
-        "in plain words what it reports"),
+      step: integrationBranchReadStep(toRead, `then run \`${again}\` again and tell the person in plain words what it reports`),
     }));
     return;
   }
@@ -5844,30 +6097,58 @@ function shareMain(args: string[], projectDir?: string): void {
         `${memory}/project.md over ${memory}/team.md and settle what the team says it does: on if the team always ` +
         "runs a walking skeleton, off if it says it does not run one, scope-dependent if it says neither. Run " +
         `\`${aidlcToolInvocation("orchestrate")} report --skeleton-stance <on|off|scope-dependent>\` with that stance, ` +
-        `then run \`${aidlcInvocation()} unit share${planOnly ? " --plan" : ""}\` again and tell the person in plain words what it reports.`,
+        `then run \`${again}\` again and tell the person in plain words what it reports.`,
     }));
     return;
   }
   const { remote, branch } = shareTarget(pd)!;
   const landed = landedNotOnRemote(pd).map((row) => row.unit);
   const message = landed.length > 0 ? `Record the ${landed.join(" and ")} landing` : "Share the plan with the teams";
-  let committed: number;
-  let named: string | null;
-  try {
-    if (planOnly || refused !== null) {
-      committed = commitPlanHere(pd, message);
-      named = null;
-    } else {
-      const done = commitWorkHere(pd, message);
-      committed = done.committed;
-      named = workToCommitWords(pd, undefined, done.taken);
+  const before = git(pd, ["rev-parse", "--verify", "--quiet", "HEAD"]).stdout.trim();
+  // The share's own commits a host refused earlier, the only ones on the
+  // branch the remote lacks: `--branch` moves them as they are, so a refused
+  // branch push changes nothing.
+  const ahead = landed.length === 0 && before !== "" ? shareCommitsAhead(pd, remote, branch, before) : null;
+  const earlier = ahead?.noted ? ahead.oids : null;
+  // The plan's own branch takes a typed share while its pull request is open.
+  const own = refused?.off !== undefined && planBranchesHere(pd).includes(refused.off.current) &&
+    !planBranchMerged(pd, { remote, branch }, refused.off.current) ? refused.off.current : null;
+  let committed = 0;
+  let named: string | null = null;
+  if (!(flags.has("branch") && earlier !== null && earlier.length > 0)) {
+    try {
+      if (planOnly || refused !== null) {
+        committed = commitPlanHere(pd, message);
+      } else {
+        const done = commitWorkHere(pd, message);
+        committed = done.committed;
+        named = workToCommitWords(pd, undefined, done.taken);
+      }
+    } catch (error) {
+      clearTeamHandoverMarks(pd, ["share", "push"]);
+      fail(`${errorMessage(error)} Then share again.`);
     }
-  } catch (error) {
-    clearTeamHandoverMarks(pd, ["share", "push"]);
-    fail(`${errorMessage(error)} Then share again.`);
   }
-  // Their branch reaches the integration branch their own way: never pushed from here.
-  if (refused !== null) fail(`${refused.reason} ${planWayOn(branch, true)}`);
+  const head = git(pd, ["rev-parse", "--verify", "--quiet", "HEAD"]).stdout.trim();
+  const madeNow = head !== before ? head : null;
+  // Their branch reaches the integration branch their own way: never pushed
+  // from here. The plan's own branch, which its push gave an upstream, takes
+  // the share, so its pull request carries the newer plan.
+  if (refused !== null) {
+    if (own === null) fail(`${refused.reason} ${planWayOn(branch, true)}`);
+    const sent = git(pd, ["push", remote, `HEAD:refs/heads/${own}`], { GIT_TERMINAL_PROMPT: "0" });
+    if (!sent.ok) fail(`${remote} did not take ${own}: ${pushRefusal(sent.stderr)}.`);
+    console.log(JSON.stringify({
+      shared: false,
+      branch: own,
+      remote,
+      committed_paths: committed,
+      notice: `The plan's newer changes are pushed on ${own}, so its pull request has them.`,
+      step: "Tell the person in plain words what it reports, then end your turn.",
+    }));
+    return;
+  }
+  if (flags.has("branch") && putPlanOnItsBranch(pd, remote, branch, madeNow, planOnly)) return;
   const pushed = git(pd, ["push", remote, `HEAD:refs/heads/${branch}`], { GIT_TERMINAL_PROMPT: "0" });
   // The plan's push to a home that does not answer: there is nothing to pull,
   // and its question is not put again each turn; the person asks when it can.
@@ -5877,14 +6158,24 @@ function shareMain(args: string[], projectDir?: string): void {
         `Once it can be reached, \`${aidlcInvocation()} unit share --plan\` shares it.`,
     );
   }
-  // A host's rule on the branch (git's "[remote rejected]": a protected
-  // branch, a ruleset, a hook), not a push behind it or a lost race for its
-  // lock: the plan reaches the branch the person's own way. The plan's offer
-  // keeps its mark, so it is not put again; main's share comes before a Unit
-  // starts here, so its offers are due again, never a build here.
-  if (!pushed.ok && /\[remote rejected\]/.test(pushed.stderr) && !CLAIM_RACE_LOST.test(pushed.stderr)) {
+  // A host's rule on the branch (a protected branch, a ruleset, a hook), not
+  // a push behind it or a lost race for its lock. The plan's offer keeps its
+  // mark, so it is not put again; main's share comes before a Unit starts here,
+  // so its offers are due again, never a build here. The plan's share, on a
+  // branch that had nothing else the remote lacked, is noted with its commit
+  // and counts as done here: the next step offers once to put it on a branch
+  // of its own (planWait); otherwise the person's own way on.
+  if (!pushed.ok && refusedByHostRule(pushed.stderr)) {
     if (!planOnly) clearTeamHandoverMarks(pd, ["share", "push"]);
-    fail(`${remote} takes no direct push to ${branch} (${pushRefusal(pushed.stderr)}). ${planWayOn(branch, true)}`);
+    if (earlier === null || (madeNow === null && earlier.length === 0)) fail(`${remote} takes no direct push to ${branch} (${pushRefusal(pushed.stderr)}). ${planWayOn(branch, true)}`);
+    if (madeNow !== null) noteEngineAskMark(pd, shareCommitMark(madeNow));
+    noteTeamShared(pd);
+    console.log(JSON.stringify({
+      shared: false,
+      notice: `${remote} takes no direct push to ${branch} (${pushRefusal(pushed.stderr)}), so the plan is not shared yet.`,
+      step: `Tell the person in plain words what it reports, then run \`${aidlcToolInvocation("orchestrate")} next\` and follow what it returns.`,
+    }));
+    return;
   }
   if (!pushed.ok) {
     clearTeamHandoverMarks(pd, ["share", "push"]);
@@ -6092,11 +6383,14 @@ function hereNotSeenLine(unit: string, why: string): string {
 }
 
 // The teams' clones see the work as a team home only once the remote's main
-// (as this clone last fetched it) carries its state with the home recorded.
+// (as this clone last fetched it) carries its state with the home recorded,
+// and work the teams build on this repo once that state is team work.
 export function planUnshared(projectDir: string, target: { remote: string; branch: string }): boolean {
   const state = relative(projectDir, stateFilePath(projectDir)).split("\\").join("/");
   const shown = git(projectDir, ["show", `refs/remotes/${target.remote}/${target.branch}:${state}`]);
-  return !shown.ok || homeLocation(shown.stdout) === null;
+  if (!shown.ok) return true;
+  // Work with no home (teams on this repo) is theirs once its state there is team work.
+  return homeLocation(readStateFile(projectDir)) !== null ? homeLocation(shown.stdout) === null : !isTeamUnitOwnership(shown.stdout);
 }
 
 // The Units the lead asked to build here: the share writes the claim of each

@@ -61,7 +61,7 @@ diagnostic and lifecycle routes.
 | `/aidlc unit merged <unit> --repo <repo>` | At the lead's project, count one repo of a team's Unit as merged where the board does not see it, in your words |
 | `/aidlc unit adopt <unit>` | Adopt the checked-out live claim branch in a fresh clone |
 | `/aidlc unit participate` | Mark this clone for the guided Unit-claim picker |
-| `/aidlc unit share [--plan]` | Commit the work here and push the integration branch so the teams can take Units, or see a landed one; `--plan` commits AI-DLC's record only, for a lead's project whose teams build in repos of their own |
+| `/aidlc unit share [--plan] [--branch \| --back]` | Commit the work here and push the integration branch so the teams can take Units, or see a landed one; `--plan` commits AI-DLC's record only, for a lead's project whose teams build in repos of their own; `--branch` pushes the plan on a branch of its own for a pull request; `--back` switches back to the integration branch once the plan is in it |
 | `/aidlc unit publish <unit> [--commit [--include <path>]...]` | CAS-publish the scoped checkout's clean committed candidate onto its claim ref; `--commit` commits the Unit's own work first, and `--include` puts in a new file or folder it left out |
 | `/aidlc unit pin <unit>` | Pin and validate one completed candidate OID from unscoped main |
 | `/aidlc unit gate <unit> ...` | Record the merge decision against the pinned OID and generation |
@@ -1046,11 +1046,19 @@ see a Unit that landed. Once it has pushed, it names what it committed: how
 many files and, by name as changed, new or deleted, up to ten outside
 `aidlc/`, with how many more. After it, this checkout shows the board instead of
 building Units. A push the remote refuses keeps the commit and says why. When it
-takes no direct push to the branch (a host's rule), push it on a branch and get
-it merged your usual way; the teams can take Units once it is in the branch.
-Otherwise, pull the branch, then share again. A checkout on another branch
+takes no direct push to the branch (a host's rule), it says so in the host's
+words and exits 0 with `"shared": false`, and the next step offers once to put
+the plan on its own branch. Otherwise, pull the branch, then share again.
+`--branch` puts the share's own commit on a branch of its own,
+`aidlc-plan-<work>` (`-2`, `-3` when taken), pushes it with its upstream and
+passes on the host's link to open the pull request; only then does the checkout
+go onto it and the integration branch go back where it was. A branch the host
+refuses too changes nothing. `--back`, once the plan is in the integration
+branch, brings that branch level with the remote's (fast-forward only) and
+switches to it; when git refuses, it says git's reason and the checkout stays where it is. A checkout on another branch
 commits the plan (aidlc/) there and pushes nothing, and is told it is not on the
-branch, with the same way on. `/aidlc` offers this step itself when it is due:
+branch: push it on a branch and get it merged your usual way. On the plan's own
+branch it pushes that branch, so its pull request has the newer plan. `/aidlc` offers this step itself when it is due:
 before a Unit would start on the lead's checkout, and after a land the remote
 does not have yet.
 

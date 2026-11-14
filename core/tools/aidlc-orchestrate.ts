@@ -651,6 +651,9 @@ import {
   claimIsMine,
   buildClaimHere,
   planUnshared,
+  planByPullRequestDetail,
+  planWait,
+  planWaitLine,
   unitsAskedHereForShare,
   builtHereNote,
   leadsOwnClaims,
@@ -688,6 +691,7 @@ import {
   teamsClone,
   teamStanceToRead,
   shareOfferTarget,
+  shareTarget,
   practicesBranchOffCheckout,
   teamHandoverMarkName,
   teamSharedHere,
@@ -5973,6 +5977,46 @@ function handoverOffered(projectDir: string, mark: string): boolean {
   return engineAskMark(projectDir, mark) !== null;
 }
 
+// The plan's share while it waits for its pull request (planWait): the offer to
+// put it on a branch of its own, once per commit; its one line in place of the
+// board, with the command for the agent in its board note when the person asks
+// for that branch later (never in the line); the offer to switch back once it
+// is in, once per branch. Null when nothing waits: the board as usual.
+function planWaitStep(projectDir: string, planOnly: boolean): AskDirective | PrintDirective | null {
+  const wait = planWait(projectDir);
+  const target = wait === null ? null : shareTarget(projectDir);
+  if (wait === null || target === null) return null;
+  const onItsBranch = `${aidlcInvocation()} unit share --branch${planOnly ? " --plan" : ""}`;
+  if (wait.state === "committed" && wait.offer !== null) {
+    return teamHandoverAsk(projectDir, {
+      handovers: ["share"],
+      marks: [wait.offer],
+      question: "Want me to put the plan on its own branch and push that, so you can open a pull request from it?",
+      choices: [{ label: "Put it on its own branch", detail: planByPullRequestDetail(projectDir), command: onItsBranch }],
+      notNow: { label: "Not now", detail: "Nothing is pushed; the plan stays committed here." },
+    });
+  }
+  if (wait.state === "merged") {
+    if (wait.offer === null) return null;
+    return teamHandoverAsk(projectDir, {
+      handovers: ["share"],
+      marks: [wait.offer],
+      question: `The plan is in ${target.branch} now, so teams can take Units. Want me to switch you back to ${target.branch}?`,
+      choices: [{
+        label: `Switch back to ${target.branch}`,
+        detail: `I bring your ${target.branch} level with ${target.remote}'s and put your checkout on it; your own changes stay as they are.`,
+        command: `${aidlcInvocation()} unit share --back`,
+      }],
+      notNow: { label: "Not now", detail: `You stay on ${wait.name}.` },
+    });
+  }
+  const line = planWaitLine(wait, target.branch);
+  if (line === null) return null;
+  if (wait.state !== "committed") return lineEndingTurn(line);
+  const asked = `When the person asks for it, run \`${onItsBranch}\` and tell them in plain words what it reports.`;
+  return lineEndingTurn(line, [], atTeamHome(projectDir) ? `${asked} ${teamCommandsNote()}` : asked);
+}
+
 // Before this session starts a Unit on the lead's walk, while claims are open
 // and the plan can go to a remote: share it with the teams instead? Asked once
 // per Unit about to start here. Null when not due.
@@ -6003,6 +6047,7 @@ function teamShareOffer(
         detail: `Pushes ${target.branch} to ${target.remote} as a plain push; it never overwrites what a team pushed.`,
         command: `${aidlcInvocation()} unit share`,
       },
+      { label: "Share by pull request", detail: planByPullRequestDetail(projectDir), command: `${aidlcInvocation()} unit share --branch` },
     ],
     notNow: {
       label: "Build them here for now",
@@ -6043,6 +6088,8 @@ function buildOutShareOffer(projectDir: string): AskDirective | null {
   const target = shareOfferTarget(projectDir);
   if (target === null) return null;
   const added = planUnshared(projectDir, target) ? null : unitsNotShared(projectDir, target);
+  // Shared here and waiting for its pull request: its own step says so (planWait).
+  if (added === null && teamSharedHere(projectDir)) return null;
   // A thin slice built here first: nothing is open to a team until it is approved, so the plan is shared then, as main does.
   if (added === null && sliceBuiltFirst(projectDir, readStateFile(projectDir)) !== null) return null;
   if (added !== null && added.length === 0) return null;
@@ -6073,6 +6120,7 @@ function buildOutShareOffer(projectDir: string): AskDirective | null {
           : `Pushes ${target.branch}, and ${note}, to ${target.remote}; it never overwrites what a team pushed.`,
         command: `${aidlcInvocation()} unit share --plan`,
       },
+      { label: "Share by pull request", detail: planByPullRequestDetail(projectDir), command: `${aidlcInvocation()} unit share --branch --plan` },
     ],
     notNow: { label: "Not now", detail: `Nothing is pushed; a team's clone sees the plan once ${target.branch} is pushed.` },
   });
@@ -15595,6 +15643,14 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
           emit(reading);
           return;
         }
+        // The plan's share waiting for its pull request: its offer or its one
+        // line, in place of the board.
+        const planWaits = participant || teamsClone(pd, stateContent) ? null : planWaitStep(pd, false);
+        if (planWaits !== null) {
+          lastSeen();
+          emit(planWaits);
+          return;
+        }
         // The lead's answer is recorded here and the plan the teams have still
         // waits on the first Unit as a walking skeleton: said once, while true.
         const heldBack = participant || teamsClone(pd, stateContent) || planMadeElsewhere(pd)
@@ -18850,6 +18906,11 @@ function emitTeamUnitMajorRunStage(
   const sharePlan = teamHome && !keepsWalk && !isReadOnlyEngineProbe() ? buildOutShareOffer(projectDir) : null;
   if (sharePlan !== null) {
     emit(sharePlan);
+    return;
+  }
+  const planWaits = teamHome && !keepsWalk ? planWaitStep(projectDir, true) : null;
+  if (planWaits !== null) {
+    emit(planWaits);
     return;
   }
   let model: TeamUnitProgressModel | null = null;
@@ -25617,6 +25678,14 @@ function handleTeamBoard(
     stateContent = readStateFile(pd);
     if (!isTeamUnitOwnership(stateContent)) {
       throw new Error("Team Construction board requires Unit Ownership: team.");
+    }
+    // The plan's share waiting for its pull request: its one line, in place of the board.
+    const waits = planWait(pd);
+    const target = waits === null ? null : shareTarget(pd);
+    const waitLine = waits === null || target === null ? null : planWaitLine(waits, target.branch);
+    if (waitLine !== null) {
+      process.stdout.write(`${waitLine}\n`);
+      return;
     }
     // A home teams build for: its own board, as its step shows it.
     if (homeLocation(stateContent) !== null) {
