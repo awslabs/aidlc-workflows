@@ -8957,8 +8957,7 @@ function pushUnit(args: string[], projectDir?: string): void {
       const made = git(dir, ["commit", "-q", "--no-edit"]);
       if (!made.ok) fail(`The merge in ${name} could not be finished, so nothing was pushed. Git says: "${gitSaid(made.stderr || made.stdout)}".`);
     } else if (underWay !== null) {
-      fail(`${name} is in the middle of ${underWay.what}, so nothing was committed or pushed. Finish it (${underWay.finish}) ` +
-        `or put it aside (${underWay.abort}), then I can push ${unit}.`);
+      fail(underWayLine(name, underWay, "nothing was committed or pushed", `push ${unit}`));
     }
     // A redo built on a branch of its own from the newer integration branch is
     // pushed from that branch, never moved back onto the first build's.
@@ -10160,6 +10159,14 @@ export function gitOperationUnderWay(dir: string): { what: string; finish: strin
   return null;
 }
 
+// The person's own git operation under way in a repo, never touched by
+// AI-DLC: what did not happen, git's own way to finish it and to put it aside,
+// and what AI-DLC can do once it is done. The push and the move say it alike.
+function underWayLine(name: string, underWay: { what: string; finish: string; abort: string }, outcome: string, then: string): string {
+  return `${name} is in the middle of ${underWay.what}, so ${outcome}. Finish it (${underWay.finish}) ` +
+    `or put it aside (${underWay.abort}), then I can ${then}.`;
+}
+
 // A rebase git stopped in a repo, waiting for the person.
 function rebaseUnderWay(dir: string): boolean {
   return ["rebase-merge", "rebase-apply"].some((name) => existsSync(resolve(dir, git(dir, ["rev-parse", "--git-path", name]).stdout.trim())));
@@ -10189,8 +10196,10 @@ function whereNowLine(unit: string, moved: Array<{ name: string; from: string }>
 
 // The person's yes to moving the build onto the integration branch: in each
 // repo, the integration branch fetched, then the rebase with their own git. A
-// rebase git stops (a conflict, their uncommitted changes) is said in git's
-// words with the way back; the repos before it stay moved.
+// rebase git stops on a conflict is AI-DLC's own, so it is undone at once and
+// said in git's words; one git refuses (their uncommitted changes) is said the
+// same way; a git operation of theirs already under way there is never touched,
+// and the move is offered again once it is done. The repos before it stay moved.
 function rebaseUnit(args: string[], projectDir?: string): void {
   parseArgs(args);
   const pd = resolveProjectDir(projectDir);
@@ -10206,6 +10215,14 @@ function rebaseUnit(args: string[], projectDir?: string): void {
   for (const dep of earlyBaseMerged(pd, state)) {
     for (const repo of dep.repos) {
       const branch = repo.onto.slice(repo.remote.length + 1);
+      const movedTail = (): string => (moved.length > 0 ? ` In ${joinNames(moved)} it is on ${joinNames([...onto])} now.` : "") +
+        whereNowLine(unitBranch, switched);
+      const theirs = gitOperationUnderWay(repo.dir);
+      if (theirs !== null) {
+        // Offered again once it is done (moveInTheWay reads it).
+        noteEngineAskMark(pd, moveRefusedMark(dep.unit));
+        fail(underWayLine(repo.name, theirs, `${build.unit} was not moved there`, `move ${build.unit}`) + movedTail());
+      }
       git(repo.dir, ["fetch", "-q", repo.remote, branch]);
       const from = git(repo.dir, ["branch", "--show-current"]).stdout.trim();
       const ran = git(repo.dir, repo.rebase);
@@ -10213,11 +10230,12 @@ function rebaseUnit(args: string[], projectDir?: string): void {
         const stopped = rebaseUnderWay(repo.dir);
         // Refused for their own changes: offered again once they are out of the way.
         if (!stopped) noteEngineAskMark(pd, moveRefusedMark(dep.unit));
+        const undone = stopped && git(repo.dir, ["rebase", "--abort"]).ok;
         // A stopped rebase switched to the Unit's branch first, and its abort leaves them there.
         if (stopped && from !== unitBranch) switched.push({ name: repo.name, from: from || "the commit you were on" });
         fail(`${build.unit} could not be moved onto ${branch} in ${repo.name}. Git says: "${gitSaid(ran.stderr || ran.stdout)}".` +
-          (stopped ? ` To go back to where ${build.unit} was there, run git rebase --abort in ${repo.name}.` : "") +
-          (moved.length > 0 ? ` In ${joinNames(moved)} it is on ${joinNames([...onto])} now.` : "") + whereNowLine(unitBranch, switched));
+          (undone ? ` I undid the move there, so ${build.unit} is where it was in ${repo.name}.`
+            : stopped ? ` To go back to where ${build.unit} was there, run git rebase --abort in ${repo.name}.` : "") + movedTail());
       }
       moved.push(repo.name);
       onto.add(branch);

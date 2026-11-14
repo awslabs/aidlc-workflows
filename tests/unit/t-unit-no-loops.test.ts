@@ -785,9 +785,11 @@ describe("a Unit started early whose dependency merged: the move onto main is of
   });
 
   for (const from of ["reporting", "main"] as const) {
-    test(`a move git stops on a conflict, from ${from}: git's words and the way back, and the repo before it stays moved`, () => {
+    test(`a move git stops on a conflict, from ${from}: git's words, the move undone there at once, and the repo before it stays moved`, () => {
       const { dana, hosts } = earlyThenMerged("squash", true);
       for (const repo of ["billing", "checkout-api"]) git(join(dana, repo), ["switch", "-q", from]);
+      const billing = join(dana, "billing");
+      const before = git(billing, ["rev-parse", "reporting"]);
       // A teammate's report.ts lands on main in billing meanwhile.
       const parent = tempDir("teammate");
       const other = join(parent, "billing");
@@ -804,12 +806,45 @@ describe("a Unit started early whose dependency merged: the move onto main is of
       expect(moved.status).not.toBe(0);
       const error = String((JSON.parse(moved.out) as { error?: string }).error);
       expect(error).toStartWith('reporting could not be moved onto main in billing. Git says: "could not apply ');
-      expect(error).toEndWith('". To go back to where reporting was there, run git rebase --abort in billing. In checkout-api it is on main now.' +
+      expect(error).toEndWith('". I undid the move there, so reporting is where it was in billing. In checkout-api it is on main now.' +
         (from === "main" ? " You're on reporting now in checkout-api and billing. Switch back to main any time." : ""));
-      git(join(dana, "billing"), ["rebase", "--abort"]);
-      expect(git(join(dana, "billing"), ["branch", "--show-current"])).toBe("reporting");
+      // Nothing is left half done there: no rebase under way, reporting as it was, and the move is not asked again.
+      expect(["rebase-merge", "rebase-apply"].some((name) => existsSync(join(billing, ".git", name)))).toBe(false);
+      expect(git(billing, ["branch", "--show-current"])).toBe("reporting");
+      expect(git(billing, ["rev-parse", "reporting"])).toBe(before);
+      expect(next(dana, ENV).ask_type ?? null).not.toBe("unit-move-onto");
     });
   }
+
+  test("a rebase of the person's own under way where the move goes: nothing is run there, they hear how to finish it or put it aside, and the move is offered again once it is done", () => {
+    const { dana } = earlyThenMerged("squash", true);
+    const billing = join(dana, "billing");
+    // Their own rebase, stopped on a conflict of theirs: two branches of their own changing one file.
+    for (const [branch, text] of [["mine-a", "a"], ["mine-b", "b"]] as const) {
+      git(billing, ["switch", "-q", "-c", branch, "main"]);
+      writeFileSync(join(billing, "notes.md"), `${text}\n`);
+      git(billing, ["add", "notes.md"]);
+      git(billing, ["commit", "-q", "-m", branch]);
+    }
+    expect(spawnSync("git", ["rebase", "mine-a"], { cwd: billing, encoding: "utf-8", env: GIT_ENV }).status).not.toBe(0);
+    const theirs = () => existsSync(join(billing, ".git", "rebase-merge"));
+    expect(theirs()).toBe(true);
+    const ask = next(dana, ENV);
+    expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-move-onto");
+    const moved = runPrinted(dana, ENV, choice(ask, "Move reporting onto main"));
+    expect(moved.status).not.toBe(0);
+    const error = String((JSON.parse(moved.out) as { error?: string }).error);
+    expect(error).toStartWith("billing is in the middle of a rebase, so reporting was not moved there. Finish it (git rebase --continue) " +
+      "or put it aside (git rebase --abort), then I can move reporting.");
+    expect(error).toEndWith(" In checkout-api it is on main now.");
+    // Their rebase is as they left it.
+    expect(theirs()).toBe(true);
+    expect(git(billing, ["status", "--porcelain"])).toContain("notes.md");
+    // They put it aside themselves: the move is offered again.
+    git(billing, ["rebase", "--abort"]);
+    const again = next(dana, ENV);
+    expect(again.ask_type, JSON.stringify(again)).toBe("unit-move-onto");
+  });
 });
 
 describe("a print with no offers reads as it did before the teams' steps became prints", () => {
