@@ -430,7 +430,7 @@ If `directive.reviewer` is present, invoke the reviewer as a sub-agent (via the 
 
 ### Codex CLI
 
-If `directive.reviewer` is present, invoke the reviewer as a sub-agent (spawn the agent role named in `directive.reviewer` — the harness resolves its `.codex/agents/aidlc-<role>-agent.toml`, which loads its own persona via `developer_instructions`; do not inject it in the prompt).
+If `directive.reviewer` is present, invoke the reviewer as a sub-agent with `spawn_agent`: name the role in `directive.reviewer` as `agent_type` and pass `fork_turns: "none"` with it — Codex reads an omitted `fork_turns` as a full-history fork, which inherits the parent's agent type and refuses the spawn (`Full-history forked agents inherit the parent agent type; omit agent_type, or spawn without a full-history fork`). A fresh spawn is also the review this protocol asks for, because the brief carries paths and never the parent's conversation: the harness resolves its `.codex/agents/aidlc-<role>-agent.toml`, which loads its own persona via `developer_instructions`; do not inject it in the prompt.
 
 ---
 
