@@ -848,6 +848,7 @@ function protectedShell(command: string, cwd: string, depth = 0, expansionsOnly 
   let visible = "";
   // Open `${` parameter expansions: their braces are part of a word, not a group.
   let parameter = 0;
+  const heredocBodies: Array<[number, number]> = [];
   for (let index = 0; index < command.length; index++) {
     const ch = command[index];
     if (ch === "\\" && quote !== "'") {
@@ -894,6 +895,7 @@ function protectedShell(command: string, cwd: string, depth = 0, expansionsOnly 
         protectedShell(header, cwd, depth + 1) ||
         !heredoc.quoted && protectedShell(heredoc.body, cwd, depth + 1, true)) return true;
       const after = command.indexOf("\n", heredoc.bodyEnd);
+      heredocBodies.push([heredoc.newline, after < 0 ? command.length : after]);
       visible = `${header}\n`;
       index = after < 0 ? command.length : after;
       continue;
@@ -915,7 +917,10 @@ function protectedShell(command: string, cwd: string, depth = 0, expansionsOnly 
   if (expansionsOnly) return false;
   if (HARNESS_CONTROL_ASSIGNMENTS.some((pattern) => pattern.test(visible)) ||
     shellWriteTargets(visible, cwd).some((path) => protectedWriteTarget(path, cwd))) return true;
-  if (unresolvedAuditTrailWrite(visible, command, cwd)) {
+  // A heredoc body is data; its text is not read as the command as written.
+  let withoutBodies = command;
+  for (const [from, to] of [...heredocBodies].reverse()) withoutBodies = withoutBodies.slice(0, from) + withoutBodies.slice(to);
+  if (unresolvedAuditTrailWrite(visible, withoutBodies, cwd)) {
     auditTrailMatched = true;
     return true;
   }
