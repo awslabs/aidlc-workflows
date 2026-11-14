@@ -46,7 +46,15 @@ opens, on the tables as they are then:
    business rules, and workspace-relative code paths. A Functional Design Unit
    whose kind writes no `rules.md` (a `ui` Unit) names one of its design files
    (`functional-spec.md`, `frontend-components.md`) on each row instead of a
-   business rule.
+   business rule. At Units Generation, with stories, once a Unit is finished
+   (its `merged` cell in the Unit Progress table of `aidlc-state.md` is `[x]`;
+   without that column, every stage cell and the gate cell are done), a story
+   whose row names only finished Units must have every acceptance criterion
+   built in one of them: an `OK` row, whose target is an existing file, in that
+   Unit's Code Generation table. A finished Unit is not worked again, so a
+   criterion it marked `N/A`, never listed, or got after it finished would
+   never be built; each such story is reported as an invalid target. A story
+   with a Unit that is not finished on its row is not.
 6. Derives functional-design orphans from `rules.md` rather than
    trusting only the self-reported `reverse` array.
 
@@ -64,6 +72,12 @@ ran, through the criteria of the stories User Stories traced it to. One that
 nothing builds is settled when the latest stage that traced it (User Stories,
 NFR Requirements, then Code Generation) marked it `N/A` with its reason in
 every table there that lists it; an `N/A` with no reason is not settled.
+
+`--stage units-generation --built`, with no output path, prints the same list
+before the plan is edited, as one JSON line: `finished_units`, `started_units`
+(Units with some work recorded that are not finished; information only) and
+`unbuilt` (each `{ "story", "units", "criteria" }` the rule above reports). With
+no Unit Progress table or no finished Unit, all three are empty.
 
 ## Expected JSON schema
 

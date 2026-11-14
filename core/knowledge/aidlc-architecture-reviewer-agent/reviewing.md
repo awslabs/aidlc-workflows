@@ -44,6 +44,8 @@ When invoked as a reviewer, your role changes. You are NOT designing — you are
 - Unit boundaries clean? (minimal cross-unit deps)
 - Dependency graph acyclic?
 - Stories mapped completely? (no orphans)
+- On a re-run with finished Units: does every story whose Units are all finished have its criteria built there, and does new work go only to Units that are not finished?
+- Do not take a finished Unit's `OK` row on trust when the story is in question: open the file the row names and check that something the product starts from (an entry point, a screen, the place the parts are wired together) calls it.
 - Each unit independently deployable?
 
 ### Validation Tools
