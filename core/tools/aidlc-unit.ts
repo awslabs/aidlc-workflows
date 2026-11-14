@@ -1681,6 +1681,12 @@ function outsideUnitTreePaths(violations: string[]): string[] {
     .map((violation) => violation.slice(0, -OUTSIDE_UNIT_SUFFIX.length));
 }
 
+// Where a step from main sends the Unit's owner: pin and land run in a
+// checkout that holds no claim.
+function claimedCheckout(owner: string, unit: string): string {
+  return `the checkout where ${owner} claimed ${unit} (not this one)`;
+}
+
 // The one text publish, pin and land give for a record outside the Unit's
 // tree, so the three cannot drift apart. It starts mid-sentence: publish puts
 // it after "Pin will refuse this candidate:", pin and land after their refusal.
@@ -1689,7 +1695,7 @@ function outsideUnitTreePaths(violations: string[]): string[] {
 function outsideUnitTreeNextStep(unit: string, integrationRef: string, owner?: string): string {
   const where = owner === undefined
     ? "Take these out of this branch"
-    : `In the checkout where ${owner} claimed ${unit} (not this one), take these out of its branch`;
+    : `In ${claimedCheckout(owner, unit)}, take these out of its branch`;
   return "a claimed Unit lands only " +
     `construction/${unit}/ and its own audit shard, and a shared record (an Inception artifact ` +
     `such as contract-summary.md, or a stage-level file) is changed on main. ${where} ` +
@@ -2187,8 +2193,8 @@ function candidateEvidence(
   const reviewStep = unreviewed.length === 0
     ? ""
     : `${namesInProse(unreviewed)} ${unreviewed.length === 1 ? "has" : "have"} no review that stands for ` +
-      `${unreviewed.length === 1 ? "it" : "them"} as published: in the checkout where ${claim.owner} claimed ` +
-      `${claim.unit} (not this one), have ${unreviewed.length === 1 ? "it" : "them"} reviewed again, then publish ` +
+      `${unreviewed.length === 1 ? "it" : "them"} as published: in ${claimedCheckout(claim.owner, claim.unit)}, ` +
+      `have ${unreviewed.length === 1 ? "it" : "them"} reviewed again, then publish ` +
       `${claim.unit} again.`;
   if (incomplete.length > 0 || reviewStep) {
     fail(
@@ -2765,6 +2771,15 @@ function pinUnit(args: string[], projectDir?: string): void {
     claim.payload.base_oid,
     integration.oid,
   );
+  // The merge question is asked only for a candidate that lands on main as it
+  // stands; land still refuses a conflict a Unit landed after this pin brings.
+  const conflicts = trialMergeConflicts(pd, "HEAD", claim.oid) ?? [];
+  if (conflicts.length > 0) {
+    fail(
+      `${sourceConflictsRefusal(unit, conflicts)} Nothing was pinned. ` +
+        sourceConflictsNextStep(pd, unit, claim.owner, integration.ref),
+    );
+  }
   const mainBefore = gitOutput(pd, ["rev-parse", "HEAD"], "Cannot resolve main HEAD");
   const transaction: UnitMergeTransaction = {
     version: 1,
@@ -3146,6 +3161,39 @@ function conflictFiles(projectDir: string): string[] {
     : [];
 }
 
+// The files landing `candidateOid` on `targetOid` would leave in conflict,
+// from a merge git makes of the objects alone (merge-tree --write-tree), so no
+// checkout, index or ref moves. The engine's own metadata is left out, as land
+// leaves it out. Null when this git cannot make one (before 2.38).
+function trialMergeConflicts(projectDir: string, targetOid: string, candidateOid: string): string[] | null {
+  const merged = localGit(projectDir, [
+    "merge-tree", "--write-tree", "--name-only", "--no-messages", "-z", targetOid, candidateOid,
+  ]);
+  if (merged.ok) return [];
+  if (merged.code !== 1) return null;
+  const paths = merged.stdout.split("\0").slice(1).filter(Boolean);
+  return [...new Set(paths)].filter((path) => !isEngineMergeMetadata(projectDir, path));
+}
+
+function sourceConflictsRefusal(unit: string, conflicts: string[]): string {
+  return `Unit "${unit}" source conflicts: ${conflicts.join(", ")}.`;
+}
+
+// What the Unit's owner does about a conflict pin or land found with main as
+// this checkout holds it. The owner merges the integration branch, so when
+// main here is ahead of it (a landing the lead has not pushed yet), main goes
+// there first; otherwise the owner's merge brings nothing and pin refuses again.
+function sourceConflictsNextStep(projectDir: string, unit: string, owner: string, integrationRef: string): string {
+  const ref = integrationRef.replace(/^refs\/(remotes|heads)\//, "");
+  const remote = /^refs\/remotes\/([^/]+)\/(.+)$/.exec(integrationRef);
+  const push = remote && !localGit(projectDir, ["merge-base", "--is-ancestor", "HEAD", integrationRef]).ok
+    ? `Main here has commits ${ref} does not have yet, and the merge was tried with main here: push main ` +
+      `first (aidlc unit share, or git push ${remote[1]} HEAD:${remote[2]}). Then, in`
+    : "In";
+  return `${push} ${claimedCheckout(owner, unit)}, merge ${ref}, resolve these files and publish ${unit} again; ` +
+    "then pin it again here.";
+}
+
 function checkpointMainMetadata(
   projectDir: string,
   message: string,
@@ -3401,7 +3449,6 @@ function assertLandCandidateBoundary(
     transaction.audit_shard,
   );
   if (boundary.violations.length > 0) {
-    const remote = repositoryRemote(projectDir);
     fail(
       refuseWithNextStep(
         `Unit "${transaction.unit}" landing violates claimed Unit ownership at: ${
@@ -3409,13 +3456,17 @@ function assertLandCandidateBoundary(
         }.`,
         boundary.violations,
         transaction.unit,
-        remote
-          ? `refs/remotes/${remote}/${transaction.integration_branch}`
-          : transaction.integration_branch,
+        landIntegrationRef(projectDir, transaction),
         transaction.owner,
       ),
     );
   }
+}
+
+// The integration branch a landing's next step names, as publish names it.
+function landIntegrationRef(projectDir: string, transaction: UnitMergeTransaction): string {
+  const remote = repositoryRemote(projectDir);
+  return remote ? `refs/remotes/${remote}/${transaction.integration_branch}` : transaction.integration_branch;
 }
 
 function validateLandedMerge(
@@ -3685,7 +3736,10 @@ function landGit(
         ...working,
         conflict_files: conflicts,
       });
-      fail(`Unit "${transaction.unit}" source conflicts: ${conflicts.join(", ")}.`);
+      fail(
+        `${sourceConflictsRefusal(transaction.unit, conflicts)} ` +
+          sourceConflictsNextStep(projectDir, transaction.unit, transaction.owner, landIntegrationRef(projectDir, transaction)),
+      );
     }
     if (!merged.ok && !git(projectDir, ["rev-parse", "-q", "--verify", "MERGE_HEAD"]).ok) {
       working = rollbackMetadataCheckpoint(projectDir, working);
