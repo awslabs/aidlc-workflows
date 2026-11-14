@@ -810,7 +810,7 @@ Session hooks check for the active intent's `aidlc-state.md` (under `aidlc/space
 
 ## Audit event taxonomy
 
-**134 events**, grouped below into 20 categories (the canonical `audit-format.md` registry splits the same 134 into 27 - the grouping is presentational, the event set is the invariant). Each event's permitted tool or hook emitters are listed below. `GUARD_POLICY_SET` has distinct mutation and effective-memory-observation paths; neither duplicates the other's emission. Events pre-registered for an upcoming release have an Emitter cell reading `Reserved (v0.4.0 PR N)`, `Reserved (v0.5.0 PR N)`, or `Reserved (v0.6.0 PR N)`, and a retired event name that is still read but never written reads `Reserved (retired name)`; both are skipped by the drift test's forward check. The drift test `tests/integration/t48-audit-event-emitters.test.ts` enforces forward/reverse/tertiary/pairing/MD-MD consistency between this chapter's tables and the code.
+**135 events**, grouped below into 20 categories (the canonical `audit-format.md` registry splits the same 135 into 27 - the grouping is presentational, the event set is the invariant). Each event's permitted tool or hook emitters are listed below. `GUARD_POLICY_SET` has distinct mutation and effective-memory-observation paths; neither duplicates the other's emission. Events pre-registered for an upcoming release have an Emitter cell reading `Reserved (v0.4.0 PR N)`, `Reserved (v0.5.0 PR N)`, or `Reserved (v0.6.0 PR N)`, and a retired event name that is still read but never written reads `Reserved (retired name)`; both are skipped by the drift test's forward check. The drift test `tests/integration/t48-audit-event-emitters.test.ts` enforces forward/reverse/tertiary/pairing/MD-MD consistency between this chapter's tables and the code.
 
 ### Workflow lifecycle
 
@@ -825,6 +825,7 @@ Session hooks check for the active intent's `aidlc-state.md` (under `aidlc/space
 | `STATE_UPGRADED` | `tools/aidlc-state-upgrade.ts` | the engine's state read - a record an earlier State Version wrote (7, from 2.1.x to 2.3.0) brought up to the current one in place: renamed stages, their record folders, the state as it was kept beside it |
 | `INTENT_REPOS_CHANGED` | `tools/aidlc-utility.ts` | `intent add-repo <name>` / `intent remove-repo <name>` / `intent set-repos <name,...>` (`Added` and `Removed` list every name, `Named` says the set is the person's) - a sibling repo added to or removed from a piece of work that already records repos, at any stage (an add may carry `Cloned From`, `Reason`, `Person Words` and `Source Baseline Addition`); written to that intent's own shard |
 | `INTENT_CHECKOUTS_CHANGED` | `tools/aidlc-utility.ts` | `intent add-checkout <path>` / `intent remove-checkout <path>` - a checkout recorded for the work's review, or taken out again; written to that intent's own shard |
+| `CODEKB_SOURCE_CHANGED` | `tools/aidlc-utility.ts` | `codekb-source add` / `codekb-source remove` - a code-knowledge source (a code graph another tool built) registered for a repository of the space in `aidlc/spaces/<space>/codekb-sources.json`, or taken out again; Reverse Engineering reads it before the code |
 
 ### Phase lifecycle
 

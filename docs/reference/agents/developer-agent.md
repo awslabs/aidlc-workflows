@@ -59,6 +59,7 @@ Path: `.claude/knowledge/aidlc-developer-agent/`
 |------|---------|
 | api-design-guide.md | API contract design methodology (REST/HTTP conventions, OpenAPI, AsyncAPI) |
 | code-analysis-guide.md | Codebase analysis and reverse engineering techniques |
+| code-knowledge-sources.md | How to read a registered code-knowledge source (a code graph another tool built) during Reverse Engineering, by its freshness verdict |
 | code-generation-guide.md | Code generation methodology and implementation patterns |
 | code-generation-patterns.md | Code generation principles that apply in any language (clean code, SOLID, errors, logging, organization) |
 | data-modelling-patterns.md | Data model design patterns (relational and NoSQL) |

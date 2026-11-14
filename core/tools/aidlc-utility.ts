@@ -10,6 +10,9 @@ import {
   lstatSync,
   mkdtempSync,
   mkdirSync,
+  closeSync,
+  openSync,
+  readSync,
   readdirSync,
   readFileSync,
   realpathSync,
@@ -10299,6 +10302,290 @@ function handleCodekbPath(projectDir: string, flags: Record<string, string>): vo
   process.stdout.write(`${dir}/\n`);
 }
 
+// `aidlc-utility.ts codekb-source [--repo <name>] [--json]` lists the
+// code-knowledge sources registered for a repo; `codekb-source add --kind <k>
+// --path <dir> [--repo <name>] [--commit-file <f> --commit-field <a.b>]
+// [--guide <doc>]` and `codekb-source remove --kind <k> [--repo <name>]` keep
+// the record. Behind `aidlc engine workspace codekb-source`.
+//
+// A code-knowledge source is a folder of machine-readable facts about a
+// repository that a tool outside AI-DLC built (a code graph, an inventory),
+// kept wherever that tool writes it, often outside the repository. It is
+// registered, never sniffed: one entry per repo and kind in the space's
+// `codekb-sources.json`, beside the `codekb/` store it serves, so the
+// Reverse Engineering stage reads it before it opens the code
+// (reverse-engineering.md Step 1) and the same record serves a teammate's
+// clone. Each listed source carries a freshness verdict from the commit the
+// source records against the repo's HEAD: CURRENT (the same commit), STALE
+// (another one), UNKNOWN (no commit readable, or no HEAD), MISSING (the folder
+// is not on this machine). The stage briefs the developer by that verdict; the
+// store's own fingerprint, snapshot and publish are untouched, so a source can
+// never make the store look fresher than the tree is. The list form is
+// read-only; add and remove write under the codekb lock, audit first
+// (CODEKB_SOURCE_CHANGED), and say one line with the way back.
+const CODEKB_SOURCES_FILE = "codekb-sources.json";
+const CODEKB_SOURCE_KIND = /^[a-z][a-z0-9-]*$/;
+// A commit file is read up to this much: the first line of a `.jsonl`, or a
+// whole JSON document. A graph's node file can be hundreds of megabytes, so
+// nothing reads it whole.
+const CODEKB_SOURCE_COMMIT_READ_CAP = 1_048_576;
+
+type CodekbSourceRecord = {
+  repo: string;
+  kind: string;
+  path: string;
+  commit?: { file: string; field: string };
+  guide?: string;
+};
+
+type CodekbSourceVerdict = "CURRENT" | "STALE" | "UNKNOWN" | "MISSING";
+
+// `aidlc/spaces/<space>/codekb-sources.json`: two levels above the repo's
+// store, beside the space's `codekb/`.
+function codekbSourcesFile(projectDir: string, repo: string, space: string): string {
+  return resolve(codekbDir(projectDir, repo, space), "..", "..", CODEKB_SOURCES_FILE);
+}
+
+function readCodekbSources(file: string): CodekbSourceRecord[] {
+  if (!existsSync(file)) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(file, "utf-8"));
+  } catch (error) {
+    die(`codekb-source: ${file} is not valid JSON (${errorMessage(error)}); fix it or remove it.`);
+  }
+  const sources = parsed !== null && typeof parsed === "object" ? (parsed as { sources?: unknown }).sources : undefined;
+  if (!Array.isArray(sources)) {
+    die(`codekb-source: ${file} has no "sources" list; fix it or remove it.`);
+  }
+  const out: CodekbSourceRecord[] = [];
+  for (const entry of sources) {
+    if (entry === null || typeof entry !== "object") continue;
+    const row = entry as Record<string, unknown>;
+    if (typeof row.repo !== "string" || typeof row.kind !== "string" || typeof row.path !== "string") continue;
+    const record: CodekbSourceRecord = { repo: row.repo, kind: row.kind, path: row.path };
+    const commit = row.commit;
+    if (
+      commit !== null && typeof commit === "object" &&
+      typeof (commit as Record<string, unknown>).file === "string" &&
+      typeof (commit as Record<string, unknown>).field === "string"
+    ) {
+      record.commit = { file: (commit as { file: string }).file, field: (commit as { field: string }).field };
+    }
+    if (typeof row.guide === "string" && row.guide !== "") record.guide = row.guide;
+    out.push(record);
+  }
+  return out;
+}
+
+function writeCodekbSources(file: string, sources: readonly CodekbSourceRecord[]): void {
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, `${JSON.stringify({ version: 1, sources }, null, 2)}\n`);
+}
+
+// The commit a source records, read from the named file: the first line of a
+// `.jsonl` (the graph's provenance line), else the whole document, then the
+// dotted field. Null when the file is missing, unreadable, too large to be a
+// header, or the field is not a string.
+function readCodekbSourceCommit(dir: string, locator: { file: string; field: string } | undefined): string | null {
+  if (locator === undefined) return null;
+  const path = resolve(dir, locator.file);
+  let text: string;
+  try {
+    if (!statSync(path).isFile()) return null;
+    const fd = openSync(path, "r");
+    try {
+      const buffer = Buffer.alloc(CODEKB_SOURCE_COMMIT_READ_CAP);
+      const read = readSync(fd, buffer, 0, buffer.length, 0);
+      text = buffer.subarray(0, read).toString("utf-8");
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    return null;
+  }
+  if (path.toLowerCase().endsWith(".jsonl")) {
+    const newline = text.indexOf("\n");
+    if (newline < 0 && text.length >= CODEKB_SOURCE_COMMIT_READ_CAP) return null;
+    text = newline < 0 ? text : text.slice(0, newline);
+  } else if (text.length >= CODEKB_SOURCE_COMMIT_READ_CAP) {
+    return null;
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  for (const part of locator.field.split(".")) {
+    if (value === null || typeof value !== "object") return null;
+    value = (value as Record<string, unknown>)[part];
+  }
+  return typeof value === "string" && /^[0-9a-f]{7,64}$/i.test(value) ? value.toLowerCase() : null;
+}
+
+// Two commits name the same one when the shorter is a prefix of the longer:
+// a graph may record an abbreviated SHA.
+function sameCommit(a: string, b: string): boolean {
+  const [short, long] = a.length <= b.length ? [a, b] : [b, a];
+  return short.length >= 7 && long.startsWith(short);
+}
+
+function codekbRepoHead(repoDir: string): string | null {
+  const head = spawnSync("git", ["rev-parse", "--verify", "-q", "HEAD"], {
+    cwd: repoDir,
+    encoding: "utf-8",
+    timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
+  });
+  return head.status === 0 ? head.stdout.trim().toLowerCase() : null;
+}
+
+function describeCodekbSource(
+  projectDir: string,
+  head: string | null,
+  record: CodekbSourceRecord,
+): {
+  kind: string;
+  path: string;
+  dir: string;
+  present: boolean;
+  commit: string | null;
+  verdict: CodekbSourceVerdict;
+  guide: string | null;
+  guide_present: boolean;
+} {
+  const dir = isAbsolute(record.path) ? record.path : resolve(projectDir, record.path);
+  let present = false;
+  try {
+    present = statSync(dir).isDirectory();
+  } catch {
+    present = false;
+  }
+  const commit = present ? readCodekbSourceCommit(dir, record.commit) : null;
+  let verdict: CodekbSourceVerdict;
+  if (!present) verdict = "MISSING";
+  else if (commit === null || head === null) verdict = "UNKNOWN";
+  else verdict = sameCommit(commit, head) ? "CURRENT" : "STALE";
+  const guide = record.guide ?? null;
+  let guidePresent = false;
+  if (guide !== null) {
+    try {
+      guidePresent = statSync(isAbsolute(guide) ? guide : resolve(projectDir, guide)).isFile();
+    } catch {
+      guidePresent = false;
+    }
+  }
+  return { kind: record.kind, path: record.path, dir, present, commit, verdict, guide, guide_present: guidePresent };
+}
+
+function codekbSourceLine(source: ReturnType<typeof describeCodekbSource>): string {
+  const commit = source.commit === null ? "no commit recorded" : `commit ${source.commit.slice(0, 12)}`;
+  const guide = source.guide === null
+    ? ""
+    : source.guide_present
+      ? `; guide ${source.guide}`
+      : `; guide not found: ${source.guide}`;
+  return `${source.kind}: ${source.path} (${commit}, ${source.verdict}${guide})`;
+}
+
+function handleCodekbSource(projectDir: string, positional: string[], flags: Record<string, string>): void {
+  const verb = positional[1];
+  const { space, repo, repoDir } = resolveCodekbRepo(projectDir, flags);
+  const file = codekbSourcesFile(projectDir, repo, space);
+  const engineCommand = `${entrySkillInvocation()} engine workspace codekb-source`;
+  if (verb === "add" || verb === "remove") {
+    const kind = (flags.kind ?? "").trim();
+    if (kind === "" || !CODEKB_SOURCE_KIND.test(kind)) {
+      die(`codekb-source ${verb}: pass --kind <name> (lowercase letters, digits and hyphens, starting with a letter).`);
+    }
+    const selection = resolveWorkflowSelection(projectDir);
+    let stage = "none";
+    if (selection.intent) {
+      try {
+        stage = (getField(readStateFile(projectDir, selection.intent, space), "Current Stage") ?? "").trim() || "none";
+      } catch {
+        stage = "none";
+      }
+    }
+    if (verb === "remove") {
+      const outcome = withCodekbLock(projectDir, space, repo, () => {
+        const sources = readCodekbSources(file);
+        const known = sources.find((entry) => entry.repo === repo && entry.kind === kind) ?? null;
+        if (known === null) return null;
+        appendAuditEntryUnlocked(
+          "CODEKB_SOURCE_CHANGED",
+          { Stage: stage, Repo: repo, Kind: kind, Path: known.path, Removed: kind },
+          projectDir,
+          selection.intent ?? undefined,
+          space,
+        );
+        writeCodekbSources(file, sources.filter((entry) => entry !== known));
+        return known;
+      });
+      if (outcome === null) {
+        process.stdout.write(`No ${kind} source is registered for ${repo}; nothing changed.\n`);
+      } else {
+        process.stdout.write(
+          `Removed the ${kind} source at ${outcome.path} for ${repo}; Reverse Engineering scans the code itself. ` +
+            `Add it back with: ${engineCommand} add --repo ${repo} --kind ${kind} --path ${quoteCommandArgument(outcome.path)}\n`,
+        );
+      }
+      return;
+    }
+    const path = (flags.path ?? "").trim();
+    if (path === "") die("codekb-source add: pass --path <folder the source was written to>.");
+    const commitFile = (flags["commit-file"] ?? "").trim();
+    const commitField = (flags["commit-field"] ?? "").trim();
+    if ((commitFile === "") !== (commitField === "")) {
+      die("codekb-source add: pass --commit-file <file> and --commit-field <a.b.c> together, or neither.");
+    }
+    const guide = (flags.guide ?? "").trim();
+    const record: CodekbSourceRecord = { repo, kind, path };
+    if (commitFile !== "") record.commit = { file: commitFile, field: commitField };
+    if (guide !== "") record.guide = guide;
+    withCodekbLock(projectDir, space, repo, () => {
+      const sources = readCodekbSources(file);
+      const next = sources.filter((entry) => !(entry.repo === repo && entry.kind === kind));
+      next.push(record);
+      appendAuditEntryUnlocked(
+        "CODEKB_SOURCE_CHANGED",
+        { Stage: stage, Repo: repo, Kind: kind, Path: path, Added: kind },
+        projectDir,
+        selection.intent ?? undefined,
+        space,
+      );
+      writeCodekbSources(file, next);
+    });
+    const described = describeCodekbSource(projectDir, codekbRepoHead(repoDir), record);
+    const standing = described.verdict === "MISSING"
+      ? `The folder is not on this machine yet; until it is, Reverse Engineering scans the code itself.`
+      : described.verdict === "CURRENT"
+        ? `It was built from the commit checked out, so Reverse Engineering reads it before the code.`
+        : `Its build commit ${described.commit === null ? "is not recorded" : "is not the one checked out"}, so Reverse Engineering uses it as a map and reads the code for what it records.`;
+    process.stdout.write(
+      `Recorded ${kind} at ${path} as a code-knowledge source for ${repo}. ${standing} ` +
+        `Remove it with: ${engineCommand} remove --repo ${repo} --kind ${kind}\n`,
+    );
+    return;
+  }
+  if (verb !== undefined && verb !== "list") {
+    die(`Usage: aidlc-utility codekb-source [list] [--repo <name>] [--json] | add --kind <k> --path <dir> [--commit-file <f> --commit-field <a.b>] [--guide <doc>] | remove --kind <k>`);
+  }
+  const head = codekbRepoHead(repoDir);
+  const sources = readCodekbSources(file)
+    .filter((entry) => entry.repo === repo)
+    .map((entry) => describeCodekbSource(projectDir, head, entry));
+  if (flags.json === "true") {
+    process.stdout.write(`${JSON.stringify({ repo, head_commit: head ?? "unknown", sources })}\n`);
+    return;
+  }
+  if (sources.length === 0) {
+    process.stdout.write(`No code-knowledge source is registered for ${repo}.\n`);
+    return;
+  }
+  process.stdout.write(`${sources.map(codekbSourceLine).join("\n")}\n`);
+}
+
 // `aidlc-utility.ts document-input` - read-only. Reads one selected path from
 // the active record's fixed DOCUMENT_INPUT_REQUEST_FILE, so customer-controlled
 // filename bytes never enter a shell command. Resolves that path from the
@@ -14391,6 +14678,12 @@ export async function main(argv: string[]): Promise<void> {
     // read-only intent/space query arms: no mutation, no audit, no mkdir.
     case "codekb-path":
       handleCodekbPath(projectDir, flags);
+      break;
+    // codekb-source - the code-knowledge sources registered for a repo (a code
+    // graph another tool built) with their freshness, read-only; `add` and
+    // `remove` write the space's record, audited CODEKB_SOURCE_CHANGED.
+    case "codekb-source":
+      handleCodekbSource(projectDir, positional, flags);
       break;
     // project-description - read-only exact-description authority boundary.
     // Marked records must load the JSON sidecar; only unmarked legacy records
