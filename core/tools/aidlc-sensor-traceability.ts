@@ -1181,7 +1181,15 @@ export function main(argv: string[]): void {
   }
 
   reasons.push(...upstream.reasons);
-  gaps.push(...upstream.extraGaps);
+  // Units Generation: a story the team keeps out of every Unit is settled by its own
+  // `Deferred` row, whose target says where it is handled. `N/A` is not enough: it is
+  // also how a story is handed to another Unit, and that Unit must then be on the row.
+  const keptOut = new Set(
+    stage === "units-generation"
+      ? data.coverage.filter((entry) => entry.status === "Deferred" && entry.target?.trim()).map((entry) => entry.id)
+      : [],
+  );
+  gaps.push(...upstream.extraGaps.filter((id) => !keptOut.has(id)));
   const missingFromUpstreamIds = [...required].filter((id) => !declared.has(id));
   if (upstream.ids.size === 0 && upstream.reasons.length === 0) {
     reasons.push(`upstream ID set is empty for stage "${stage}"`);
