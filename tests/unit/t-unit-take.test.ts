@@ -540,8 +540,7 @@ describe("taking a Unit starts its build in the team's space", () => {
     expect(took.status, took.out).toBe(0);
     expect(took.json).toMatchObject({ taken: true, unit: "refunds", team: "payments", space: "payments" });
     expect(String(took.json?.notice)).toStartWith(
-      "refunds is yours. Its build is its own piece of work here, in the payments space, under your team's rules, " +
-        "from what the lead approved.",
+      "refunds is yours. You build it in the payments space under your team's rules, from what the lead approved.",
     );
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({
       status: "claimed",
@@ -693,7 +692,9 @@ describe("taking a Unit starts its build in the team's space", () => {
     const took = takeFrom("payments", alice, "refunds", ["--lead-rules"]);
     expect(took.status, took.out).toBe(0);
     // The take's own line names what the person chose to follow.
-    expect(String(took.json?.notice)).toContain("under your team's rules and the lead's practices, from what the lead approved.");
+    expect(String(took.json?.notice)).toStartWith(
+      "refunds is yours. You build it in the payments space under your team's rules and the lead's practices, from what the lead approved.",
+    );
     const record = buildDir(alice, "payments", "refunds");
     expect(field(readFileSync(join(record, "aidlc-state.md"), "utf-8"), "Lead Project Rules")).toBe("aidlc/spaces/default/memory/team.md");
     const step = next(alice);
@@ -811,7 +812,7 @@ describe("taking a Unit starts its build in the team's space", () => {
     const took = take(dee, "refunds", ["--lead-rules"]);
     expect(took.status, took.out).toBe(0);
     expect(took.json?.space).toBe("default");
-    expect(String(took.json?.notice)).toStartWith("refunds is yours. Its build is its own piece of work here, under your team's rules, from what the lead approved.");
+    expect(String(took.json?.notice)).toStartWith("refunds is yours. You build it under your team's rules, from what the lead approved.");
     expect(field(readFileSync(join(buildDir(dee, "default", "refunds"), "aidlc-state.md"), "utf-8"), "Lead Project Rules")).toBeUndefined();
   });
 
@@ -2753,7 +2754,7 @@ describe("the way back from a take, and the lead's release", () => {
     const took = takeFrom("payments", sam, "refunds");
     expect(took.status, took.out).toBe(0);
     // Said once, where the take is.
-    expect(String(took.json?.notice)).toContain(" If it is not your team's to build, say so and I give it back.");
+    expect(String(took.json?.notice)).toContain(" If it is not your team's to build, tell me and I will hand it back.");
     const record = buildDir(sam, "payments", "refunds");
     const back = run(UNIT, ["release", "refunds"], sam);
     expect(back.status, back.out).toBe(0);
@@ -2876,7 +2877,7 @@ describe("a take builds where the person works, or in the space they ask for", (
     const took = take(pat, "refunds", ["--space", "web"]);
     expect(took.status, took.out).toBe(0);
     expect(took.json?.space).toBe("web");
-    expect(String(took.json?.notice ?? "")).toContain("Its build is its own piece of work here, in the web space,");
+    expect(String(took.json?.notice ?? "")).toContain("You build it in the web space under your team's rules,");
     expect(existsSync(join(pat, "aidlc", "spaces", "web", "memory", "org.md"))).toBe(true);
     expect(readFileSync(join(pat, "aidlc", "active-space"), "utf-8").trim()).toBe("web");
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ owner: "web", taken_by: "pat" });
@@ -3629,7 +3630,7 @@ describe("every Unit is open: whoever takes it builds it where they are, and no 
     const took = take(pat, "refunds");
     expect(took.status, took.out).toBe(0);
     expect(took.json?.space).toBe("pay");
-    expect(String(took.json?.notice ?? "")).toContain("Its build is its own piece of work here, in the pay space,");
+    expect(String(took.json?.notice ?? "")).toContain("You build it in the pay space under your team's rules,");
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ owner: "pay", taken_by: "pat" });
   });
 

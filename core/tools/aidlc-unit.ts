@@ -7931,10 +7931,9 @@ function takeUnit(args: string[], projectDir?: string, rhythm?: UnitClaimPayload
   }
   // The likely repos this workspace has no checkout of, said with the way to one.
   const notThere = likelyReposNotHere(pd, likely, home.repos, leadRepoAddresses(pd, integration.oid));
-  const taken = `${unit} is yours. Its build is its own ` +
-    `piece of work here,${spaceWords(build.space) === "" ? "" : `${spaceWords(build.space)},`} under your team's rules${leadsToo}, from what the lead approved.` +
+  const taken = `${unit} is yours. You build it${spaceWords(build.space)} under your team's rules${leadsToo}, from what the lead approved.` +
     // The way back (release, run in this build), said once with the take.
-    " If it is not your team's to build, say so and I give it back." +
+    " If it is not your team's to build, tell me and I will hand it back." +
     earlyLines.map((line) => ` ${line}`).join("") +
     notThere.lines +
     (planChanging !== null
