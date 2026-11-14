@@ -104,7 +104,10 @@ import {
   UNIT_MERGE_DIR,
   type UnitScopeStamp,
   unitGateStatus,
+  unitLifecycleRunFloorForProject,
   unitLifecycleSnapshot,
+  unitScopedLifecycleFloors,
+  unitSkippedUnits,
   unitDependencyPath,
   unitMergedReceipts,
   unitMergeTransactions,
@@ -4514,6 +4517,7 @@ function claimUnit(args: string[], projectDir?: string): void {
     current?.status === "released"
       ? current.generation
       : (current?.generation ?? 0) + 1;
+  const skippedOnMain = stepsSkippedOnMain(pd, state, unit);
   const nonce = randomUUID();
   const owner = claimOwnerLabel(pd, team);
   // Pin takes exactly one newly added team shard (candidateBoundary). A
@@ -4587,9 +4591,60 @@ function claimUnit(args: string[], projectDir?: string): void {
   if (recordPrefix && auditShard !== ownShard) {
     moveClaimTurnRows(pd, `${recordPrefix}/audit/${ownShard}`, `${recordPrefix}/${ENGINE_DIR}/audit/${auditShard}`, integration.oid);
   }
+  const carryWarning = carrySkipsIntoClaim(pd, state, unit, generation, skippedOnMain);
   spend();
-  const warning = [planWarning, walkedWarning].filter((line): line is string => !!line).join(" ");
+  const warning = [planWarning, walkedWarning, carryWarning].filter((line): line is string => !!line).join(" ");
   console.log(JSON.stringify({ claimed: true, ...stamp, ...(warning ? { warning } : {}) }));
+}
+
+// The Unit's steps skipped on main before any team took it: the person's skip
+// with no Unit named reaches every Unit, and main records it with no attempt.
+// Read before the claim scopes this checkout, from main's own rows for the
+// Unit; an earlier attempt's rows (stamped with its generation) are that
+// attempt's, not main's.
+function stepsSkippedOnMain(projectDir: string, state: string, unit: string): Map<string, string> {
+  const rows = readAuditShardEvents(projectDir).filter((row) =>
+    auditBlockField(row.block, "Unit") !== unit || auditBlockField(row.block, "Attempt Generation") === null
+  );
+  const skipped = new Map<string, string>();
+  for (const slug of unitMajorConstructionStageSlugs(getField(state, "Scope") ?? "", state, true)) {
+    const reason = unitSkippedUnits(projectDir, slug, rows, state).get(unit);
+    if (reason !== undefined) skipped.set(slug, reason);
+  }
+  return skipped;
+}
+
+// A claimed checkout reads only its own attempt's rows, so main's skip would
+// not reach it and the step would be handed out again. The claim records each
+// such skip for its attempt, at the floor main's row was read against, so the
+// Unit's walk passes the step and publish and the merge question read it as
+// skipped. The claim already holds, so a skip that cannot be written is said
+// once with its way back rather than undoing the claim.
+function carrySkipsIntoClaim(
+  projectDir: string,
+  state: string,
+  unit: string,
+  generation: number,
+  skipped: ReadonlyMap<string, string>,
+): string | null {
+  const lost: string[] = [];
+  const unitScoped = unitScopedLifecycleFloors(state);
+  for (const [slug, reason] of skipped) {
+    try {
+      appendAuditEntry("UNIT_SKIPPED", {
+        Stage: slug,
+        Unit: unit,
+        Reason: reason,
+        "Run floor": unitLifecycleRunFloorForProject(projectDir, slug, true, unit, undefined, unitScoped),
+        "Attempt Generation": String(generation),
+      }, projectDir);
+    } catch {
+      lost.push(slug);
+    }
+  }
+  return lost.length === 0 ? null
+    : `The skip of ${lost.join(", ")} recorded on main did not reach this claim; skip ${lost.length === 1 ? "it" : "them"} ` +
+      `again here when Unit "${unit}" reaches ${lost.length === 1 ? "it" : "them"}.`;
 }
 
 // A checkout whose own shard main already holds claims into a shard of the
