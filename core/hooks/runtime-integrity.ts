@@ -964,13 +964,16 @@ function protectedAuditTrailPath(path: unknown, cwd: string): boolean {
 // audit trail that gap is too wide: `>> $RECORD/audit/...` or
 // `P=<record>/audit/<shard>.md; ... >> $P` would forge the HUMAN_TURN evidence
 // human-presence checks read. So this pass re-reads each write word: literal
-// assignments in the command are expanded, a relative word is resolved against
-// every directory a literal cd or pushd could leave the shell in, and each
-// result is checked against the anchored audit-trail path, so a project's own
-// `src/audit/` stays writable. When a word still cannot be decided (an unknown
-// variable, a glob, a computed cd), it is refused if the command could be aiming
-// at the audit trail at all: the word names an `audit` segment, or the command
-// names an `audit` directory (AUDIT_DIRECTORY_TEXT) or the AIDLC workspace. A
+// assignments and the words of a `for` loop in the command are expanded, a
+// relative word is resolved against every directory a literal cd or pushd
+// could leave the shell in, and each result is checked against the anchored
+// audit-trail path, so a project's own `src/audit/` stays writable. When a word
+// still cannot be decided (an unknown variable, a glob, a computed cd), it is
+// refused if the command could be aiming at the audit trail at all: the word
+// names an `audit` segment, the command names an `audit` directory
+// (AUDIT_DIRECTORY_TEXT) or the AIDLC workspace, or a literal cd leaves the
+// shell inside that workspace (a split `cd aidlc; cd spaces/...` names neither
+// in one piece). A
 // backslash `\audit\` spelling, which a PowerShell host resolves but the POSIX
 // parser does not, is refused outright. The folders the shell stands in and
 // above are cut out first (withoutOwnFolders): a project under a folder named
@@ -982,6 +985,13 @@ const UNRESOLVED_WORD = /[$`*?]|__substitution__/;
 const MAX_ROOTS = 64;
 const LITERAL_ASSIGNMENT =
   /(?:^|[;&|\n(]|\s)(?:export\s+|local\s+|readonly\s+|declare\s+(?:-[A-Za-z]+\s+)*)?([A-Za-z_][A-Za-z0-9_]*)(\+?)=((?:"(?:[^"\\]|\\.)*"|'[^']*'|\\.|[^\s;&|)"'\\])*)/g;
+// `for NAME in word...` gives NAME each word in turn, as an assignment would;
+// the list ends at the `;` or newline before `do`, so only spaces and tabs
+// separate its words. Each word is one of the assignment grammar's values
+// (SHELL_WORD).
+const FOR_WORDS =
+  /(?:^|[;&|\n(]|\s)for\s+([A-Za-z_][A-Za-z0-9_]*)\s+in((?:[ \t]+(?:"(?:[^"\\]|\\.)*"|'[^']*'|\\.|[^\s;&|)"'\\])+)+)/g;
+const SHELL_WORD = /(?:"(?:[^"\\]|\\.)*"|'[^']*'|\\.|[^\s;&|)"'\\])+/g;
 
 /**
  * The value the shell builds from a word's quoting: adjacent quoted and bare
@@ -1048,6 +1058,13 @@ function literalAssignments(command: string, cwd: string): Map<string, Array<str
     }
     values.set(match[1], [...(values.get(match[1]) ?? []), ...assigned]);
   }
+  for (const match of command.matchAll(FOR_WORDS)) {
+    for (const [word] of match[2].matchAll(SHELL_WORD)) {
+      const dequoted = dequoteShellWord(word);
+      const assigned = dequoted === null ? [null] : expandWord(dequoted, values);
+      values.set(match[1], [...(values.get(match[1]) ?? []), ...assigned]);
+    }
+  }
   return values;
 }
 
@@ -1102,7 +1119,8 @@ function unresolvedAuditTrailWrite(visible: string, command: string, cwd: string
   // Quotes and escapes can split the segment (`aud""it`, `au\\dit`), and a
   // command substitution can assemble it (`$(printf au)dit`), which no text
   // test sees. An undecided word therefore also fails closed whenever the
-  // command reaches into the AIDLC workspace or already runs inside it.
+  // command reaches into the AIDLC workspace, already runs inside it, or a
+  // literal cd leaves the shell there (any root the cds can reach).
   const plain = outside.replace(/["'\\]/g, "");
   // A Windows spelling keeps its backslashes as separators (`...\audit;`), so
   // the folder tests also read the text with only its quotes removed. That
@@ -1111,7 +1129,7 @@ function unresolvedAuditTrailWrite(visible: string, command: string, cwd: string
   const spelled = outside.replace(/["']/g, "");
   const namesAudit = AUDIT_DIRECTORY_TEXT.test(plain) || AIDLC_WORKSPACE.test(plain) ||
     AUDIT_DIRECTORY_TEXT.test(spelled) || (AIDLC_WORKSPACE.test(spelled) && AUDIT_WORD.test(spelled)) ||
-    AIDLC_WORKSPACE.test(cwd);
+    roots.some((root) => AIDLC_WORKSPACE.test(root));
   return words.some((word) => expandWord(word, values).some((expanded) => {
     if (expanded === null) {
       if (authoredScriptText) {
