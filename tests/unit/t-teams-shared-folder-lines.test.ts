@@ -31,6 +31,7 @@ import {
   finishBuild,
   git,
   HOME_RECORD,
+  homeState,
   inSpace,
   makeHome,
   mergeOnHost,
@@ -396,14 +397,19 @@ describe("the check-in line", () => {
     expect(said.split(LINE).length - 1, parked.out).toBe(1);
   });
 
-  test("only for teams across repos with a remote: main's team Units on the workspace's own repo never hear it", () => {
+  test("only where teams take Units by pull request: work begun on main's flow on the workspace's own repo never hears it", () => {
     const { alice } = refundsTaken();
     expect(checkInLine(alice)).toBe(LINE);
     git(alice, ["remote", "remove", "origin"]);
     expect(checkInLine(alice)).toBeNull();
+    const begun = makeHome({ repos: {}, state: homeState(["- **Unit Ownership**: team"]) });
+    expect(checkInLine(begun.dir)).toBeNull();
+  });
+
+  test("team work chosen on the workspace's own repo with a remote hears it, as teams across repos do", () => {
     const onRepo = makeHome({ repos: {} });
     expect(run(STATE, ["set-unit-ownership", "team"], onRepo.dir).status).toBe(0);
-    expect(checkInLine(onRepo.dir)).toBeNull();
+    expect(checkInLine(onRepo.dir)).toBe(LINE);
   });
 });
 

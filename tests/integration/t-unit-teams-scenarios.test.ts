@@ -230,21 +230,38 @@ describe("scenario 2: one big code repo", () => {
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
   });
 
-  test("the workspace inside it: several teams there keep the team flow of one repo, so no home is recorded and the next step is main's share", () => {
-    // The code is the workspace's own repo (repos.json names it "."), so the
-    // work records no code repo of its own and teams claim, publish and land
-    // their Units as one repo's teams do.
+  test("the workspace inside it: teams on its remote take each Unit, push it on its own branch and merge it by pull request, and the lead's look sees the merge", () => {
+    // The code is the workspace's own repo (repos.json names it "."): the
+    // work records no code repo of its own, and its teams build as teams
+    // across repos do, each Unit on its own branch of this repository.
     const home = makeHome({ repos: {}, dependencies: MONOREPO_UNITS("") });
     writeFileSync(join(home.dir, "repos.json"), `${JSON.stringify({ repos: [{ name: "platform", path: "." }] }, null, 2)}\n`);
     writeFileSync(join(home.dir, "README.md"), "# platform\n");
     commitAll(home.dir, "AI-DLC inside platform");
+    git(home.dir, ["push", "-q", "origin", "main"]);
     const teams = run(STATE, ["set-unit-ownership", "team"], home.dir);
     expect(teams.status, teams.out).toBe(0);
-    expect(stateOf(home.dir)).not.toContain("**Home Location**");
+    expect(field(stateOf(home.dir), "Home Location")).toBe(home.remote);
     const step = next(home.dir);
-    // Main's own next hand-over on one repo: the share question.
     expect(step.ask_type, JSON.stringify(step)).toBe("team-handover");
-    expect(step.handovers, JSON.stringify(step)).toEqual(["share"]);
+    expect(String(step.question)).toStartWith("The Units are open for any team to take.");
+    expect(run(UNIT, ["share", "--plan"], home.dir).status).toBe(0);
+    const alice = cloneOf(home.remote, "alice");
+    expect(takeWith(UNIT, "payments", ["take", "refunds", "--home", HOME_RECORD], alice).status).toBe(0);
+    built(buildRecord(alice, "payments", "refunds"), "refunds", [
+      { folder: alice, path: "services/checkout-api/src/refunds.ts" },
+      { folder: alice, path: "services/billing/lib/refund.ts" },
+    ]);
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    // Its pull request holds the Unit's code and AI-DLC's record of its build.
+    expect(git(home.remote, ["diff", "--name-only", "main...refunds"]).split("\n").filter((path) => !path.startsWith("aidlc/")))
+      .toEqual(["services/billing/lib/refund.ts", "services/checkout-api/src/refunds.ts"]);
+    expect(boardAt(home)).toContain("- refunds, payments space: built by alice, the repo not merged yet");
+    mergeOnHost(home.remote, "refunds", "squash");
+    git(home.dir, ["fetch", "-q", "origin"]);
+    next(home.dir);
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
   });
 });
 

@@ -434,13 +434,22 @@ describe("a solo home looks for a teammate's take only once its Unit walk has be
   });
 
   // Skipping is the solo look's alone: where the person asks for team work, the line stays.
-  test("team work with two remotes and neither named origin keeps its line where the person asks for team work", () => {
-    const home = makeHome({ repos: {} });
-    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+  test("team work that chose teams before, with two remotes and neither named origin, keeps its line where the person asks for team work", () => {
+    const home = makeHome({ repos: {}, state: homeState(["- **Unit Ownership**: team"]) });
     remotesNamed(home.dir, ["github", "gitlab"]);
     const shared = run(UNIT, ["share"], home.dir);
     expect(shared.status, shared.out).not.toBe(0);
     expect(shared.json?.error).toBe("Multiple git remotes are configured (github, gitlab); configure origin for Unit claims.");
+  });
+
+  // Teams chosen on a remote record its address, so the share finds that remote by it.
+  test("team work chosen on a remote, its remotes renamed to two with neither named origin: the plan's share finds the home's remote", () => {
+    const home = makeHome({ repos: {} });
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    remotesNamed(home.dir, ["github", "gitlab"]);
+    const shared = run(UNIT, ["share", "--plan"], home.dir);
+    expect(shared.status, shared.out).toBe(0);
+    expect(shared.json).toMatchObject({ shared: true, remote: "github", branch: "main" });
   });
 
   // The command lines still running that name a host stand-in's port.

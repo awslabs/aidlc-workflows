@@ -526,12 +526,29 @@ describe("who builds the Units is asked once as Inception ends", () => {
     });
   }
 
-  test("a folder whose work records no repos is asked as before, and Several teams is taken", () => {
-    const { proj } = inAFolder(null);
-    const ask = next(proj, [], CHAT);
-    expect(isStaffingAsk(ask), JSON.stringify(ask)).toBe(true);
-    expect(runState(proj, ["set-unit-ownership", "team"]).rc).toBe(0);
+  // Teams take each Unit in a clone of the project's repository, which a folder
+  // below its top is not: the same true line whether or not the work records
+  // its code, and whether or not the repository has a remote.
+  for (const remote of [true, false]) {
+  test(`a folder whose work records no repos, in a repository ${remote ? "on a remote" : "with no remote"}, is not asked either: the folder's true line, once`, () => {
+    const { proj, top } = inAFolder(null);
+    if (remote) {
+      const host = mkdtempSync(join(tmpdir(), "aidlc-staffing-mono-host-"));
+      folders.push(host);
+      git(host, ["init", "-q", "--bare", "-b", "main"]);
+      git(top, ["remote", "add", "origin", host]);
+    }
+    const step = next(proj, [], CHAT);
+    expect(step.kind, JSON.stringify(step)).toBe("run-stage");
+    expect(step.change_notices ?? []).toContain(folderLine(top, "its 2 Units"));
+    expect(next(proj, [], CHAT).change_notices ?? []).not.toContain(folderLine(top, "its 2 Units"));
+    const before = state(proj);
+    const teams = runState(proj, ["set-unit-ownership", "team"]);
+    expect(teams.rc).not.toBe(0);
+    expect(teams.out).toContain(`${folderLine(top, "its Units")} Carry on with \`/aidlc\`.`);
+    expect(state(proj)).toBe(before);
   });
+  }
 
   test("Delivery Planning no longer carries the question in prose", () => {
     const text = readFileSync(STAGE_FILE, "utf-8");

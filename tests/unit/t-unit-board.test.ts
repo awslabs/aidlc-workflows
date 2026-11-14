@@ -112,6 +112,33 @@ describe("with a thin slice first, the plan is shared once the slice is approved
   });
 });
 
+// The workspace is the code repository: the slice's code goes with the plan,
+// so no team starts from a main without it.
+describe("with a thin slice first on the workspace's own repository, the share carries the slice's code", () => {
+  const isShare = (d: Directive): boolean =>
+    d.kind === "ask" && d.ask_type === "team-handover" && ((d.handovers ?? []) as string[]).includes("share");
+  const UNITS = "# Unit dependencies\n\n```yaml\nunits:\n" +
+    "  - name: refunds\n    kind: service\n    depends_on: []\n" +
+    "  - name: checkout-ui\n    kind: ui\n    depends_on: []\n" +
+    "  - name: reporting\n    kind: service\n    depends_on: [refunds]\n```\n";
+  test("the share question names the slice's code, the share commits it with the plan, and a team's take reads a main that has it", () => {
+    const home = makeHome({ repos: {}, dependencies: UNITS, state: homeState().replace("- **Skeleton Stance**: off", "- **Skeleton Stance**: on") });
+    const teams = run(STATE, ["set-unit-ownership", "team"], home.dir);
+    expect(teams.status, teams.out).toBe(0);
+    const end = leadsChat(home.dir, { until: isShare, codeRepo: () => undefined });
+    expect(isShare(end), JSON.stringify(end).slice(0, 600)).toBe(true);
+    expect(String(end.question)).toMatch(new RegExp(
+      "^The Units are open for any team to take\\. Share the plan with them now\\? I'd commit the plan and checkout-ui's code, " +
+        "the \\d+ changed files here \\(new: src/checkout-ui\\.ts, test/checkout-ui\\.test\\.ts\\), and push it on its own branch for a pull request, so each team",
+    ));
+    const shared = run(UNIT, ["share", "--plan"], home.dir);
+    expect(shared.status, shared.out).toBe(0);
+    const onMain = git(home.remote, ["ls-tree", "-r", "--name-only", "main"]).split("\n");
+    expect(onMain).toContain("src/checkout-ui.ts");
+    expect(onMain).toContain("test/checkout-ui.test.ts");
+  });
+});
+
 describe("a Unit the lead's project builds reads where its Unit Progress has it", () => {
   test("built through their gates, refunds and reporting read done, and reporting never waits on refunds", () => {
     const { home } = leadKeepsTwo();

@@ -2818,6 +2818,11 @@ function twoMergedAtBuildAndTest() {
   expect(run(UNIT, ["push"], alice).status).toBe(0);
   mergeOnHost(hosts["checkout-api"], "checkout-ui", "squash");
   git(home.dir, ["fetch", "-q", "origin"]);
+  // The lead's code checkouts do not have the merges yet: brought up to date on the lead's yes.
+  const asked = next(home.dir);
+  expect(asked.ask_type, JSON.stringify(asked).slice(0, 400)).toBe("team-handover");
+  const caught = run(UNIT, ["catch-up"], home.dir);
+  expect(caught.status, caught.out).toBe(0);
   const step = next(home.dir);
   expect(step.stage, JSON.stringify(step).slice(0, 400)).toBe("build-and-test");
   // The lead checks the record in, as the check-in line asks at this step.
@@ -2977,8 +2982,8 @@ describe("a Unit on the workspace's own repository", () => {
 
   // Teams chosen on the workspace's own repository, with its remote recorded
   // as the work's home, as choosing teams on a remote records it.
-  function oneRepoTeams(): ReturnType<typeof makeHome> {
-    const home = makeHome({ repos: {}, dependencies: UNITS });
+  function oneRepoTeams(dependencies = UNITS): ReturnType<typeof makeHome> {
+    const home = makeHome({ repos: {}, dependencies });
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
     const path = seededStateFile(home.dir);
     const state = readFileSync(path, "utf-8");
@@ -3213,5 +3218,117 @@ describe("a Unit on the workspace's own repository", () => {
     const said = String(pushed.json?.notice);
     expect(said).toContain("AI-DLC's record of refunds did not go with it: GitLab: File name aidlc/ is prohibited (pre-receive hook declined).");
     expect(said).toEndWith(CHECK_IN_LINE);
+  });
+  // Build and Test runs at the lead's project once every Unit is merged, and
+  // on one repository the merges are on the remote's main, not in this checkout.
+  const TWO = "# Unit dependencies\n\n```yaml\nunits:\n" +
+    "  - name: refunds\n    kind: service\n    depends_on: []\n" +
+    "  - name: checkout-ui\n    kind: ui\n    depends_on: []\n```\n";
+  function everyUnitMerged(): ReturnType<typeof makeHome> {
+    const home = oneRepoTeams(TWO);
+    const alice = cloneOf(home.remote, "alice");
+    builtHere(alice, "refunds", "refunds.ts");
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    squashInto(home.remote, "main", "refunds");
+    builtHere(alice, "checkout-ui", "cart.ts");
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    squashInto(home.remote, "main", "checkout-ui");
+    git(home.dir, ["fetch", "-q", "origin"]);
+    return home;
+  }
+  // The lead's next steps until Build and Test, or a question before it.
+  function toBuildAndTest(dir: string, chat: NodeJS.ProcessEnv = ENV): Record<string, unknown> {
+    for (let look = 0; look < 6; look++) {
+      const step = next(dir, chat);
+      if (step.kind === "ask" || step.stage === "build-and-test") return step;
+    }
+    throw new Error("Build and Test never came");
+  }
+  const CATCH_UP_QUESTION = "Every Unit is merged, and your main does not have checkout-ui and refunds yet. Bring it up to date with " +
+    "origin/main first, so Build and Test runs on the merged code?";
+  const RUNS_AS_IT_IS = "Build and Test runs on this checkout as it is, without checkout-ui and refunds.";
+
+  test("Build and Test with the merged Units not in this checkout: asked once, and on yes main is brought up to date and Build and Test runs", () => {
+    const home = everyUnitMerged();
+    const ask = toBuildAndTest(home.dir);
+    expect(ask.question, JSON.stringify(ask).slice(0, 800)).toBe(CATCH_UP_QUESTION);
+    const choices = ask.choices as Array<{ label: string; command: string }>;
+    expect(choices.map((choice) => choice.label)).toEqual(["Bring main up to date", "Run Build and Test on what is here"]);
+    expect(choices[0].command).toEndWith("unit catch-up");
+    const caught = run(UNIT, ["catch-up"], home.dir);
+    expect(caught.status, caught.out).toBe(0);
+    expect(caught.json?.notice).toBe("main is up to date with origin/main now, with every merged Unit.");
+    expect(existsSync(join(home.dir, "src", "refunds.ts")) && existsSync(join(home.dir, "src", "cart.ts"))).toBe(true);
+    const stage = next(home.dir);
+    expect(stage).toMatchObject({ kind: "run-stage", stage: "build-and-test" });
+    expect(JSON.stringify(stage)).not.toContain(RUNS_AS_IT_IS);
+  });
+
+  test("Run Build and Test on what is here: the stage starts with one line saying what it lacks, and the question is not put again", () => {
+    const home = everyUnitMerged();
+    const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "lead-build-and-test" };
+    expect(toBuildAndTest(home.dir, chat).question).toBe(CATCH_UP_QUESTION);
+    const stage = next(home.dir, chat);
+    expect(stage, JSON.stringify(stage).slice(0, 600)).toMatchObject({ kind: "run-stage", stage: "build-and-test" });
+    expect((stage.change_notices ?? []) as string[]).toContain(RUNS_AS_IT_IS);
+    const again = next(home.dir, chat);
+    expect(again).toMatchObject({ kind: "run-stage", stage: "build-and-test" });
+    expect(JSON.stringify(again)).not.toContain(RUNS_AS_IT_IS);
+  });
+
+  test("a file of the lead's in the way: the catch-up changes nothing and says git's words", () => {
+    const home = everyUnitMerged();
+    expect(toBuildAndTest(home.dir).question).toBe(CATCH_UP_QUESTION);
+    mkdirSync(join(home.dir, "src"), { recursive: true });
+    writeFileSync(join(home.dir, "src", "refunds.ts"), "mine\n");
+    const head = git(home.dir, ["rev-parse", "HEAD"]);
+    const caught = run(UNIT, ["catch-up"], home.dir);
+    expect(caught.status, caught.out).toBe(0);
+    const said = String(caught.json?.notice);
+    expect(said).toStartWith('main could not be brought up to date: git says "');
+    expect(said).toEndWith('". Build and Test runs on what is here.');
+    expect(said).not.toMatch(/git (reset|switch|pull|stash)/);
+    expect(git(home.dir, ["rev-parse", "HEAD"])).toBe(head);
+    expect(readFileSync(join(home.dir, "src", "refunds.ts"), "utf-8")).toBe("mine\n");
+  });
+
+  test("a main with a commit of the lead's own: the catch-up changes nothing and says git's own words, no git advice", () => {
+    const home = everyUnitMerged();
+    expect(toBuildAndTest(home.dir).question).toBe(CATCH_UP_QUESTION);
+    writeFileSync(join(home.dir, "LEAD.md"), "mine\n");
+    git(home.dir, ["add", "LEAD.md"]);
+    git(home.dir, ["commit", "-q", "-m", "a note of the lead's"]);
+    const head = git(home.dir, ["rev-parse", "HEAD"]);
+    const caught = run(UNIT, ["catch-up"], home.dir);
+    expect(caught.status, caught.out).toBe(0);
+    const said = String(caught.json?.notice);
+    expect(said).toStartWith('main could not be brought up to date: git says "');
+    expect(said).not.toMatch(/hint:|git (merge|rebase|config|reset|pull)/);
+    expect(git(home.dir, ["rev-parse", "HEAD"])).toBe(head);
+  });
+
+  test("a lead who already brought main up to date is not asked: Build and Test runs", () => {
+    const home = everyUnitMerged();
+    git(home.dir, ["merge", "-q", "--ff-only", "origin/main"]);
+    const stage = toBuildAndTest(home.dir);
+    expect(stage, JSON.stringify(stage).slice(0, 600)).toMatchObject({ kind: "run-stage", stage: "build-and-test" });
+    expect(JSON.stringify(stage)).not.toContain(RUNS_AS_IT_IS);
+  });
+
+  test("a Unit started early on the workspace's own repository starts on its dependency's pushed branch there", () => {
+    const FOLDERS = "# Unit dependencies\n\n```yaml\nunits:\n" +
+      "  - name: refunds\n    kind: service\n    repos: [services/api]\n    depends_on: []\n" +
+      "  - name: reporting\n    kind: service\n    repos: [services/report]\n    depends_on: [refunds]\n```\n";
+    const home = oneRepoTeams(FOLDERS);
+    const alice = cloneOf(home.remote, "alice");
+    builtHere(alice, "refunds", "refunds.ts");
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    const bob = cloneOf(home.remote, "bob");
+    const took = takeIn("reports", ["reporting", "--home", HOME_RECORD, "--early"], bob);
+    expect(took.status, took.out).toBe(0);
+    const claim = claimPayload(home.remote, fixtureIntentId8(home.dir), "reporting") as {
+      early_on?: Array<{ unit: string; repos: Array<{ repo: string; branch: string }> }>;
+    };
+    expect(claim.early_on?.map((dep) => [dep.unit, dep.repos.map((repo) => [repo.repo, repo.branch])])).toEqual([["refunds", [[".", "refunds"]]]]);
   });
 });

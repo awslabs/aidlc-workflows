@@ -61,6 +61,13 @@ function chooseTeams(dir: string): void {
   expect(result.status, result.out).toBe(0);
 }
 
+// Teams chosen as a release before Home Location chose them: the same choice,
+// no Home Location recorded, so the work keeps main's own flow.
+function teamsChosenBefore(dir: string): void {
+  chooseTeams(dir);
+  writeFileSync(seededStateFile(dir), stateOf(dir).replace(/^- \*\*Home Location\*\*: .*\r?\n/m, ""));
+}
+
 // The lead's yes to sharing the plan with the teams (main's `unit share`).
 function share(dir: string): void {
   const shared = run(UNIT, ["share", "--plan"], dir);
@@ -553,8 +560,9 @@ describe("the plan's share fits the team's own git: a protected main, a branch o
 
   test("main takes no direct push: the share says so in the host's words with no git command, and the next step offers once to put the plan on its own branch", () => {
     for (const args of [["share", "--plan"], ["share"]]) {
+      // Main's own share: team work on one repo that chose teams before.
       const home = args.length === 2 ? makeHome() : makeHome({ repos: {} });
-      chooseTeams(home.dir);
+      (args.length === 2 ? chooseTeams : teamsChosenBefore)(home.dir);
       const chat = chatOf(`offer-${args.length}`);
       const offer = refusedThenOffered(home.dir, home.remote, args, chat);
       expect(commandOf(offer, "Put it on its own branch")).toMatch(args.length === 2 ? / unit share --branch --plan$/ : / unit share --branch$/);
@@ -703,7 +711,7 @@ describe("the plan's share fits the team's own git: a protected main, a branch o
 
   test("Share by pull request from main's share question, every branch refused: the plan is committed and nothing pushed, and the next step asks again and builds nothing here", () => {
     const home = makeHome({ repos: {} });
-    chooseTeams(home.dir);
+    teamsChosenBefore(home.dir);
     const ask = next(home.dir);
     expect(isShare(ask), JSON.stringify(ask).slice(0, 600)).toBe(true);
     writeFileSync(join(home.remote, "hooks", "pre-receive"), "#!/bin/sh\necho 'error: GH013: Repository rule violations found.' >&2\nexit 1\n");
@@ -722,7 +730,7 @@ describe("the plan's share fits the team's own git: a protected main, a branch o
   test("while the plan's branch waits for its pull request, every look and status say so in place of the board, and nothing is asked", () => {
     for (const args of [["share", "--plan", "--branch"], ["share", "--branch"]]) {
       const home = args.length === 3 ? makeHome() : makeHome({ repos: {} });
-      chooseTeams(home.dir);
+      (args.length === 3 ? chooseTeams : teamsChosenBefore)(home.dir);
       const offer = refusedThenOffered(home.dir, home.remote, args.slice(0, -1), chatOf(`wait-${args.length}`));
       expect(runPrinted(commandOf(offer, "Put it on its own branch"), home.dir).status).toBe(0);
       for (const chat of [chatOf(`wait-${args.length}-a`), chatOf(`wait-${args.length}-b`)]) {
@@ -807,7 +815,7 @@ describe("the plan's share fits the team's own git: a protected main, a branch o
   test("a host that takes the push: the share pushes main as before, the checkout stays on main, no branch is made and nothing is offered", () => {
     for (const args of [["share", "--plan"], ["share"]]) {
       const home = args.length === 2 ? makeHome() : makeHome({ repos: {} });
-      chooseTeams(home.dir);
+      (args.length === 2 ? chooseTeams : teamsChosenBefore)(home.dir);
       expect(isShare(next(home.dir))).toBe(true);
       const shared = run(UNIT, args, home.dir);
       expect(shared.status, shared.out).toBe(0);
@@ -1258,17 +1266,48 @@ describe("work that is never asked", () => {
     expect(JSON.stringify(step)).not.toContain("Who builds which Unit");
   });
 
-  test("several teams on one repo (no code repos recorded) keep main's team flow: no home, no assignment question, no repos.json offer", () => {
+  test("several teams on one repo with a remote (no code repos recorded): the home is recorded, no assignment question, no repos.json offer", () => {
     const home = makeHome({ repos: {} });
     chooseTeams(home.dir);
-    expect(field(stateOf(home.dir), "Home Location")).toBeUndefined();
+    expect(field(stateOf(home.dir), "Home Location")).toBe(home.remote);
     const step = next(home.dir);
     expect(step.ask_type, JSON.stringify(step)).not.toBe("unit-assignment");
     expect(step.ask_type, JSON.stringify(step)).not.toBe("repos-manifest");
     expect(existsSync(join(home.dir, "repos.json"))).toBe(false);
-    // Main's own next hand-over: the share question, with the remote to share to.
-    expect(step.ask_type, JSON.stringify(step)).toBe("team-handover");
-    expect(step.handovers, JSON.stringify(step)).toEqual(["share"]);
+    // The plan's share, as for teams across repos: each team takes its Unit from its own clone.
+    expect(isShare(step), JSON.stringify(step)).toBe(true);
+    expect(String(step.question)).toStartWith("The Units are open for any team to take.");
+  });
+
+  // Main's own flow stays where nothing reaches the work but this machine, and
+  // for work that chose teams on it before.
+  test("several teams on one repo with no remote keep main's team flow: no home is recorded", () => {
+    const home = makeHome({ repos: {} });
+    git(home.dir, ["remote", "remove", "origin"]);
+    chooseTeams(home.dir);
+    expect(field(stateOf(home.dir), "Home Location")).toBeUndefined();
+    expect(String(next(home.dir).question ?? "")).not.toStartWith("The Units are open for any team to take.");
+  });
+
+  test("team work on one repo that chose teams before keeps main's flow: no home, and main's share", () => {
+    const home = makeHome({ repos: {}, state: homeState(["- **Unit Ownership**: team"]) });
+    chooseTeams(home.dir);
+    expect(field(stateOf(home.dir), "Home Location")).toBeUndefined();
+    const step = next(home.dir);
+    expect(isShare(step), JSON.stringify(step)).toBe(true);
+    expect(String(step.question)).toStartWith("The plan's 3 Units are ready for the teams. Share them now?");
+  });
+
+  test("team work on one repo with main's claims out, switched to one Unit at a time and back to teams, keeps main's flow", () => {
+    const home = makeHome({ repos: {}, state: homeState(["- **Unit Ownership**: team"]) });
+    const bob = cloneOf(home.remote, "bob");
+    const claimed = run(UNIT, ["claim", "refunds", "--team", "payments"], bob);
+    expect(claimed.status, claimed.out).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    const solo = run(STATE, ["set-unit-ownership", "solo"], home.dir);
+    expect(solo.status, solo.out).toBe(0);
+    chooseTeams(home.dir);
+    expect(field(stateOf(home.dir), "Home Location")).toBeUndefined();
   });
 
   test("team work without a recorded home keeps the flow it started on", () => {

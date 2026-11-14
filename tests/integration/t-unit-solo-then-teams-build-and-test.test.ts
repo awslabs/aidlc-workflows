@@ -102,7 +102,14 @@ describe("solo work a teammate joined", () => {
     git(home.dir, ["fetch", "-q", "origin"]);
 
     // Every Unit is done: Build and Test is next, and its gate is the lead's.
+    // The lead's web checkout does not have web-ui's merge yet: asked once,
+    // the lead says yes, and it is brought up to date first.
     stopAt = (d) => d.stage !== undefined && d.stage !== "build-and-test" && d.kind === "run-stage";
+    const asked = agent.next();
+    expect(String(asked.question), JSON.stringify(asked).slice(0, 600))
+      .toBe("Every Unit is merged, and web here does not have web-ui yet. Bring it up to date first, so Build and Test runs on the merged code?");
+    const caught = host.bash((asked.choices as Array<{ command: string }>)[0].command);
+    expect(caught.status, caught.stdout + caught.stderr).toBe(0);
     const step = agent.next();
     expect(step.stage, JSON.stringify(step).slice(0, 600)).toBe("build-and-test");
     const after = agent.drive(step);

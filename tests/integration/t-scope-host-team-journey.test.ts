@@ -355,10 +355,16 @@ describe("one piece of work, a team on every tool", () => {
     expect(look.stdout).toMatch(/^- reporting, data space: built by dana, billing merged\b.*, not recorded yet: the next step here records it$/m);
     expect(unitsMerged(home.dir)).not.toContain("reporting");
 
-    // Every Unit is in: the home records the last one, runs Build and Test, and the work ends done.
-    const last = lead.agent.next();
+    // Every Unit is in: the home records the last one, asks once to bring its
+    // code checkouts up to date with the merges, runs Build and Test on the
+    // lead's yes, and the work ends done.
+    const asked = lead.agent.next();
     expect(unitsMerged(home.dir)).toEqual(PLAN.map((p) => p.unit).sort());
     expect(claimPayload(home.remote, id8, "reporting")).toMatchObject({ done: true });
+    expect(String(asked.question), JSON.stringify(asked).slice(0, 600)).toStartWith("Every Unit is merged, and ");
+    const caught = lead.agent.host.bash((asked.choices as Array<{ command: string }>)[0].command);
+    expect(caught.status, caught.stdout + caught.stderr).toBe(0);
+    const last = lead.agent.next();
     expect(last.kind, JSON.stringify(last)).toBe("run-stage");
     expect(last.stage).toBe("build-and-test");
     const end = lead.agent.drive(last);
