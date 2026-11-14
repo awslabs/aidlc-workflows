@@ -62,10 +62,13 @@ function chooseTeams(dir: string): void {
 }
 
 // Teams chosen as a release before Home Location chose them: the same choice,
-// no Home Location recorded, so the work keeps main's own flow.
+// no Home Location recorded and the State Version that release wrote, so the
+// work keeps main's own flow.
 function teamsChosenBefore(dir: string): void {
   chooseTeams(dir);
-  writeFileSync(seededStateFile(dir), stateOf(dir).replace(/^- \*\*Home Location\*\*: .*\r?\n/m, ""));
+  writeFileSync(seededStateFile(dir), stateOf(dir)
+    .replace(/^- \*\*Home Location\*\*: .*\r?\n/m, "")
+    .replace(/^- \*\*State Version\*\*: 9$/m, "- **State Version**: 8"));
 }
 
 // The lead's yes to sharing the plan with the teams (main's `unit share`).
@@ -87,6 +90,45 @@ describe("choosing teams records where the home is", () => {
     expect(field(stateOf(home.dir), "Home Location")).toBe(home.remote);
     const set = readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_OWNERSHIP_SET");
     expect(set.at(-1)?.block).toContain(`**Home Location**: ${home.remote}`);
+  });
+
+  // An older AI-DLC has no Home Location and would build such work on main's
+  // older team flow, so the work says State Version 9, which it stops at. Only
+  // the write of Home Location raises it: work without one keeps 8.
+  test("the record of its home says State Version 9, written with it; work with no home recorded keeps 8", () => {
+    const one = makeHome({ repos: {} });
+    expect(field(stateOf(one.dir), "State Version")).toBe("8");
+    chooseTeams(one.dir);
+    expect(field(stateOf(one.dir), "Home Location")).toBe(one.remote);
+    expect(field(stateOf(one.dir), "State Version")).toBe("9");
+    // Across repos with no remote, the home is recorded as local: 9 too.
+    const across = makeHome();
+    git(across.dir, ["remote", "remove", "origin"]);
+    chooseTeams(across.dir);
+    expect(field(stateOf(across.dir), "Home Location")).toBe("local");
+    expect(field(stateOf(across.dir), "State Version")).toBe("9");
+    // A teammate's take of solo work switches it with the same setter.
+    const took = makeHome({ repos: {} });
+    const switched = run(STATE, ["set-unit-ownership", "team", "--teammate-took"], took.dir);
+    expect(switched.status, switched.out).toBe(0);
+    expect(field(stateOf(took.dir), "State Version")).toBe("9");
+    // One repo with no remote keeps main's own flow: no home, still 8.
+    const local = makeHome({ repos: {} });
+    git(local.dir, ["remote", "remove", "origin"]);
+    chooseTeams(local.dir);
+    expect(field(stateOf(local.dir), "Home Location")).toBeUndefined();
+    expect(field(stateOf(local.dir), "State Version")).toBe("8");
+  });
+
+  // The raise is from 8 only: a 7 is brought up by the engine's own step at its
+  // next read, and a version this build does not know is never lowered.
+  test("a record at another State Version keeps it when its home is recorded", () => {
+    for (const version of ["7", "10"]) {
+      const home = makeHome({ repos: {}, state: homeState().replace("- **State Version**: 8", `- **State Version**: ${version}`) });
+      chooseTeams(home.dir);
+      expect(field(stateOf(home.dir), "Home Location"), version).toBe(home.remote);
+      expect(field(stateOf(home.dir), "State Version"), version).toBe(version);
+    }
   });
 });
 

@@ -307,6 +307,7 @@ import { swarmSourceChangedSince } from "./aidlc-swarm-source.ts";
 import { memoryDirFor, PATH_SET_SENSOR_IDS, STAGE_WIDE_SENSOR_IDS, templateEligibleArtifacts, withStageProgressRow } from "./aidlc-graph.ts";
 import { generateFireId, recordUnfinishedFire, sensorMatchesPath, unfinishedFire } from "./aidlc-sensor-record.ts";
 import { buildOutBlockedLine, buildOutHomeLocation, buildWaitsForPush, HOME_LOCATION_FIELD, homeLocation } from "./aidlc-unit-teams.js";
+import { recordHomeLocation } from "./aidlc-state-upgrade.ts";
 import { unitProgressSectionRange } from "./aidlc-unit-landing.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
 import { aidlcDispatcherInvocation, aidlcToolInvocation, compiledExecutable, entrySkillInvocation, syncFolderClause } from "./aidlc-runtime-paths.ts";
@@ -1814,7 +1815,7 @@ function handleSetUnitOwnership(given: string[]): void {
     const home = value === "team" && current !== "team" && homeLocation(content) === null
       ? buildOutHomeLocation(pd, teammateTook)
       : null;
-    if (home !== null) content = setOrInsertField(content, "## Runtime State", HOME_LOCATION_FIELD, home);
+    if (home !== null) content = recordHomeLocation(content, home);
     if (value === "solo") content = removeUnitProgressSection(content);
     emitAudit(pd, "UNIT_OWNERSHIP_SET", { Mode: value, ...(home !== null ? { [HOME_LOCATION_FIELD]: home } : {}) });
     writeStateFile(pd, content);

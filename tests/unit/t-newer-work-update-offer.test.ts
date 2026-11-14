@@ -26,7 +26,7 @@ setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 2);
 
 const NATIVE = join(REPO_ROOT, "dist-release", "claude", ".claude", "tools");
 const COPY = join(REPO_ROOT, "dist", "claude", ".claude", "tools");
-const OFFER = "This plan was set up with AI-DLC 2.12 or newer, and this computer has ";
+const OFFER = "This plan was set up with a newer AI-DLC, and this computer has ";
 const NOT_NOW = "Leaving it as it is. Ask me to update AI-DLC whenever you're ready, and I'll carry on.";
 const VERSION = (readFileSync(join(REPO_ROOT, "core", "tools", "aidlc-version.ts"), "utf-8")
   .match(/AIDLC_VERSION = "([^"]+)"/) ?? [])[1];
@@ -61,7 +61,8 @@ function stateWithVersion(version: string): string {
 `;
 }
 
-function project(version = "9"): string {
+// Newer work here is 10: this build reads 8 and the 9 team work says.
+function project(version = "10"): string {
   const proj = createOrchestrationTestProject();
   projects.push(proj);
   writeFileSync(seededStateFile(proj), stateWithVersion(version), "utf-8");
@@ -188,7 +189,7 @@ describe("work a newer AI-DLC wrote: the update offer on a native install", () =
     expect(step.kind).toBe("print");
     expect(step.message).toBe(
       `Tell the person in one line: ${JSON.stringify(
-        `AI-DLC is still ${VERSION} on this computer, so this plan, set up with AI-DLC 2.12 or newer, cannot carry ` +
+        `AI-DLC is still ${VERSION} on this computer, so this plan, set up with a newer AI-DLC, cannot carry ` +
           "on here until `aidlc update` brings that release to this computer.",
       )} Then stop.`,
     );
@@ -196,18 +197,20 @@ describe("work a newer AI-DLC wrote: the update offer on a native install", () =
     expect(JSON.stringify(step)).not.toContain("add a login page");
   });
 
-  test("once the record reads here, the carry-on runs what the person typed, once, in the chat that typed it", () => {
+  // The update brings a release that reads the record: 8, or the 9 of team
+  // work a 2.11 teammate meets (this build reads both).
+  for (const reads of ["8", "9"]) test(`once the record reads here (State Version ${reads}), the carry-on runs what the person typed, once, in the chat that typed it`, () => {
     const proj = project();
     // One Claude Code chat asks and carries on: the host names it in the agent's shell.
     const chat = childEnv({ CLAUDE_CODE_SESSION_ID: randomUUID(), CLAUDE_PID: String(process.pid) });
     const asked = run(NATIVE, proj, ["next", "--", "add a login page"], chat).step;
     const yes = answerArgs(asked.choices?.[0]?.command);
     // The update stands in: the release now running reads this record.
-    writeFileSync(seededStateFile(proj), stateWithVersion("8"), "utf-8");
+    writeFileSync(seededStateFile(proj), stateWithVersion(reads), "utf-8");
     const carried = run(NATIVE, proj, ["next", "--update-ai-dlc", "done", ...yes.slice(2)], chat).step;
     expect(carried.narration).toBe("Carrying on with your earlier request.");
     // The step is the one the words get when typed on work this build reads.
-    const typed = run(NATIVE, project("8"), ["next", "--", "add a login page"]).step;
+    const typed = run(NATIVE, project(reads), ["next", "--", "add a login page"]).step;
     const ids = (step: Step) => JSON.stringify({ ...step, narration: undefined }).replace(/--request [0-9a-f]{8}/g, "--request <id>");
     expect(ids(carried)).toBe(ids(typed));
     const again = run(NATIVE, proj, ["next", "--update-ai-dlc", "done", ...yes.slice(2)], chat).step;
@@ -229,7 +232,7 @@ describe("work a newer AI-DLC wrote: the update offer on a native install", () =
   test("a request for new work names the work selected here", () => {
     const { step } = run(NATIVE, project(), ["next", "--new-intent", "--", "a separate thing"]);
     expect(step.ask_type, JSON.stringify(step)).toBe("ai-dlc-update");
-    expect(step.question).toStartWith("The work selected here was set up with AI-DLC 2.12 or newer, and this computer has ");
+    expect(step.question).toStartWith("The work selected here was set up with a newer AI-DLC, and this computer has ");
   });
 
   test("a State Version no release on this build's list writes says a newer AI-DLC", () => {
@@ -257,7 +260,7 @@ describe("work a newer AI-DLC wrote: installs AI-DLC does not update itself", ()
     const { step } = run(COPY, project(), ["next", "--", "add a login page"]);
     expect(step.kind, JSON.stringify(step)).toBe("print");
     const message = step.message ?? "";
-    expect(message).toContain("This plan was set up with AI-DLC 2.12 or newer, and this project has AI-DLC");
+    expect(message).toContain("This plan was set up with a newer AI-DLC, and this project has AI-DLC");
     expect(message).toContain("copied in by hand");
     expect(message).toContain("`bun .claude/tools/aidlc.ts config --harness claude --from <that file>`");
     expect(message).toEndWith(" Then stop.");
@@ -287,7 +290,7 @@ describe("work a newer AI-DLC wrote: the unit commands", () => {
       const before = recordFiles(proj);
       const r = run(NATIVE, proj, ["aidlc-unit.ts", verb, "u1"]);
       expect(r.status).not.toBe(0);
-      expect(r.out).toContain("This plan was set up with AI-DLC 2.12 or newer, and this computer has ");
+      expect(r.out).toContain("This plan was set up with a newer AI-DLC, and this computer has ");
       expect(r.out).toContain("`aidlc update`");
       expect(recordFiles(proj)).toEqual(before);
       expect(existsSync(join(proj, ".git", "refs", "aidlc"))).toBe(false);

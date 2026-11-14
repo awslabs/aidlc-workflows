@@ -560,7 +560,6 @@ import {
   type PlanApprovalLegacyOfferCandidate,
   workspaceCommandUtilityArgv,
   workspaceRecordExists,
-  classifyStateVersion,
   currentSwarmAttemptObligations,
   effectiveUnitGateRhythm,
   requestChangesResetIsExecutable,
@@ -846,6 +845,7 @@ import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts
 import { unitMemoryPath, unitStageMemoryPath } from "./aidlc-stage-diary.ts";
 import {
   bringStateUpToDate,
+  classifyStateVersion,
   newerStateRelease,
   newerStateStep,
   newerWorkInstall,
@@ -7005,7 +7005,7 @@ function errorDirective(message: string): ErrorDirective {
   return { kind: "error", message };
 }
 
-// State-schema-version guard. The classifier (aidlc-lib.ts
+// State-schema-version guard. The classifier (aidlc-state-upgrade.ts
 // `classifyStateVersion`) is the single source of truth for parsing and
 // classifying `- **State Version**: N` lines; runtime (next/report) and doctor
 // call it the same way so they can never disagree on whether a state is

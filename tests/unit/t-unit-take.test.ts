@@ -539,6 +539,19 @@ describe("taking a Unit starts its build in the team's space", () => {
     expect(existsSync(intents) && readdirSync(intents).some((name) => name.endsWith("-refunds"))).toBe(false);
   });
 
+  // The build records its home, which an older AI-DLC cannot read, so it says
+  // State Version 9 as the home's own record does: an older AI-DLC on that
+  // team's checkout stops at it instead of building the Unit on its own flow.
+  test("a Unit's own build says State Version 9 where it records its home", () => {
+    const home = homeWithTeams();
+    const alice = cloneOf(home.remote, "alice");
+    const took = takeFrom("payments", alice, "refunds");
+    expect(took.status, took.out).toBe(0);
+    const state = readFileSync(join(buildDir(alice, "payments", "refunds"), "aidlc-state.md"), "utf-8");
+    expect(field(state, "Home Location")).toBe(home.remote);
+    expect(field(state, "State Version")).toBe("9");
+  });
+
   test("one Unit, the home's inputs at their own paths, the home's Inception done, the claim taken", () => {
     const home = homeWithTeams();
     const alice = cloneOf(home.remote, "alice");

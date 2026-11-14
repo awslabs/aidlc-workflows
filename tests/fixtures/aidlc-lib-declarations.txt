@@ -89,7 +89,6 @@ CONSTRUCTION_STAFFING_ASK
 CREATION_RECEIPT_FILE
 CURRENT_FINGERPRINTS
 CURRENT_SESSION_FILE
-CURRENT_STATE_VERSION
 CeremonyKey
 CeremonyPolicy
 CeremonyResolution
@@ -477,7 +476,6 @@ StableArtifactStat
 StageAnswerMode
 StageEntry
 StaleReviewProgress
-StateVersionClassification
 SummaryAuthorization
 SummaryConfirmationEvidence
 SummaryConfirmationStage
@@ -661,7 +659,6 @@ claimPayloadAtTip
 claimRegistryRemote
 claimRegistryTips
 classifyRuntimeCompileCommand
-classifyStateVersion
 classifyTerminalCommand
 claudeQueuedMessageOrigin
 claudeTranscriptOrigin

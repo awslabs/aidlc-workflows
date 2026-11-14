@@ -45,7 +45,7 @@ import {
   maskSecretShapes,
   saySecretMaskedOnce,
 } from "./aidlc-audit.ts";
-import { hasStateUpgrade, newerStateStep, stateUpgradeRecord, waitsToBeBroughtUp } from "./aidlc-state-upgrade.ts";
+import { classifyStateVersion, CURRENT_STATE_VERSION, hasStateUpgrade, newerStateStep, stateUpgradeRecord, waitsToBeBroughtUp } from "./aidlc-state-upgrade.ts";
 import {
   applyIntentSettings,
   applyReviewOverride,
@@ -493,9 +493,7 @@ import {
   _resetHarnessDataForTests,
   _resetScopeMappingForTests,
   _resetStageGraphForTests,
-  classifyStateVersion,
   clearSessionRebindOffer,
-  CURRENT_STATE_VERSION,
   type AuditShardEvent,
   maximalAttemptEvents,
   idSuffix,
@@ -5956,7 +5954,7 @@ export async function collectDoctorReport(
   if (existsSync(stateMdPath)) {
     try {
       const stateContent = readFileSync(stateMdPath, "utf-8");
-      // Shared classifier (aidlc-lib.ts): the SAME parse + branch selection the
+      // Shared classifier (aidlc-state-upgrade.ts): the SAME parse + branch selection the
       // runtime guard uses, so doctor and next/report never disagree on whether
       // a state is unparseable / past / future / ok. Doctor's per-branch rows
       // let a human see WHICH kind of incompatibility the state hit rather
@@ -5989,7 +5987,7 @@ export async function collectDoctorReport(
         const upgrade = stateUpgradeRecord(projectDir, doctorIntent, doctorSelection.space);
         results.push({
           pass: true,
-          label: `State Version: ${CURRENT_STATE_VERSION}${upgrade
+          label: `State Version: ${verdict.version}${upgrade
             ? ` (brought up from ${upgrade.from} on ${upgrade.date}; the record as it was is ${upgrade.original})`
             : ""}`,
         });

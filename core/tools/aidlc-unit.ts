@@ -169,9 +169,8 @@ import {
   type SourceClaimModel,
   workspaceSourceListing,
   type WorkspaceSourceListing,
-  classifyStateVersion,
 } from "./aidlc-lib.js";
-import { newerStateStep } from "./aidlc-state-upgrade.ts";
+import { classifyStateVersion, newerStateStep, recordHomeLocation } from "./aidlc-state-upgrade.ts";
 import { ownRemoteAmong } from "./aidlc-unit-holders.ts";
 import {
   type Amendment,
@@ -7625,7 +7624,8 @@ function createUnitBuild(
       ["Home Label", home.label],
       ["Home Attempt", String(attempt)],
     ] as const) {
-      content = setOrInsertField(content, "## Runtime State", field, value);
+      // The build records its home, and with it the version an older AI-DLC stops at.
+      content = field === HOME_LOCATION_FIELD ? recordHomeLocation(content, value) : setOrInsertField(content, "## Runtime State", field, value);
     }
     if (leadPaths.length > 0) content = setOrInsertField(content, "## Runtime State", LEAD_RULES_FIELD, leadPaths.join(", "));
     // The plan as the home approved it, never its scope's defaults: each
