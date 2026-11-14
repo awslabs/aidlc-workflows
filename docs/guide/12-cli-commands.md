@@ -838,7 +838,10 @@ no force, no `--no-verify`. The remote is the one git would push to
 `origin` or the one remote); with several and none set, `--remote
 <repo>=<name>[,...]` names it, and the push offer lists each. Your other
 uncommitted work comes along uncommitted and is never committed; the line says
-where you are and the way back. A refused push is said once, in the host's or
+where you are and the way back. What your host prints about your branch after
+the push, with a link in it, such as GitHub's link to create a pull request or
+GitLab's to create or view a merge request, comes with the line, as the host
+printed it. A refused push is said once, in the host's or
 hook's own words, and nothing retries. The result (each repo's branch, base,
 every head pushed, each changed file's blob and patch-id, and the Unit outputs
 the lead's project's later stages read) goes onto the Unit's claim at the lead's project, and

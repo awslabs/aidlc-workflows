@@ -983,14 +983,71 @@ function commitAsPerson(
   return commit.stdout.trim();
 }
 
+// The host's own words in what git printed for a push: its `remote:` lines,
+// the prefix and git's padding off, in the paragraphs its blank lines make.
+// None of git's own lines. The one reader of them, for a refusal and for a
+// push that went through.
+function hostParagraphs(stderr: string): string[][] {
+  const paragraphs: string[][] = [[]];
+  for (const line of stderr.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("remote:")) continue;
+    const said = trimmed.slice("remote:".length).trim();
+    if (said === "") paragraphs.push([]);
+    else paragraphs[paragraphs.length - 1].push(said);
+  }
+  return paragraphs.filter((paragraph) => paragraph.length > 0);
+}
+
+// An address, by its syntax: a token that starts http:// or https://.
+const HOST_ADDRESS = /^https?:\/\/\S/;
+const endsInAddress = (text: string): boolean => HOST_ADDRESS.test(text.split(/\s+/).at(-1) ?? "");
+
+// Words for the person, in order: what follows an address starts on a new line,
+// so no word or full stop is taken as part of the link; else one space.
+function joinSaid(parts: readonly string[]): string {
+  return parts.filter((part) => part !== "")
+    .reduce((text, part) => (text === "" ? part : `${text}${endsInAddress(text) ? "\n" : " "}${part}`), "");
+}
+
+// What the host said about the branch a push sent, as it printed it: each
+// paragraph that holds an address and names the branch on its own, such as
+// GitHub's "Create a pull request for '<branch>' on GitHub by visiting:" or
+// GitLab's "To create a merge request for <branch>, visit:" with its link,
+// never a notice about the whole repo (an alert, a moved repo) or progress.
+// Exact structure only: an address's syntax, and the name git was given
+// matched as written (never a pattern made from it: git takes `c++`), not
+// inside a longer name or a path. A paragraph ending in words ends with a stop.
+function hostLinkWords(stderr: string, branch: string): string {
+  const inName = (char: string | undefined): boolean => char !== undefined && /[A-Za-z0-9_/-]/.test(char);
+  const namesBranch = (text: string): boolean => {
+    if (branch === "") return false;
+    for (let at = text.indexOf(branch); at !== -1; at = text.indexOf(branch, at + 1)) {
+      const before = text[at - 1];
+      const after = text[at + branch.length];
+      if (inName(before) || before === ".") continue;
+      if (inName(after) || (after === "." && /[A-Za-z0-9]/.test(text[at + branch.length + 1] ?? ""))) continue;
+      return true;
+    }
+    return false;
+  };
+  return joinSaid(hostParagraphs(stderr)
+    .map((paragraph) => paragraph.join(" "))
+    .filter((text) => text.split(/\s+/).some((token) => HOST_ADDRESS.test(token)) && namesBranch(text))
+    .map((text) => (endsInAddress(text) || /[.!?]$/.test(text) ? text : `${text}.`)));
+}
+
+// The push line's words for what a repo's host said: the one place they are
+// made. No repo name when the push went to one repo.
+function hostSaysLine(repo: string | null, words: string): string {
+  return `${repo === null ? "Its" : `${repo}'s`} host says: ${words}`;
+}
+
 // What the remote said when it refused a push: its own `remote:` lines, then
 // git's reason in parentheses; the whole stderr when it printed neither.
 function pushRefusal(stderr: string): string {
   const lines = stderr.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  const remoteSaid = lines
-    .filter((line) => line.startsWith("remote:"))
-    .map((line) => line.slice("remote:".length).trim())
-    .filter(Boolean);
+  const remoteSaid = hostParagraphs(stderr).flat();
   const reason = lines
     .map((line) => /\[(?:remote )?rejected\][^(]*\(([^)]+)\)/.exec(line)?.[1])
     .find(Boolean);
@@ -8270,6 +8327,8 @@ function pushUnit(args: string[], projectDir?: string): void {
     }
     if (takeTree[repo] !== undefined) writeTakeTree(activeRecordDir(pd), takeTree);
   }
+  // What each repo's host said about the branch, for the line; never recorded.
+  const hostSaid: Array<{ name: string; words: string }> = [];
   for (const { repo, dir, name, remote, paths } of planned) {
     // The branch's copy on its remote as last fetched: a commit there that
     // AI-DLC did not push and this build is on top of stays among its heads.
@@ -8315,12 +8374,17 @@ function pushUnit(args: string[], projectDir?: string): void {
       })(),
     };
     results.push(entry);
+    hostSaid.push({ name, words: hostLinkWords(pushed.stderr, branch) });
   }
   const nameOf = (repo: RepoResult): string => (repo.repo === "." ? "the repo" : repo.repo);
   const names = results.map(nameOf);
   const lines = [
-    `Pushed branch ${branch} in ${joinNames(names)}. Open a PR in ${names.length === 1 ? "it" : "each"} your usual way.` +
-      whereNow(true),
+    joinSaid([
+      `Pushed branch ${branch} in ${joinNames(names)}.`,
+      ...hostSaid.filter((said) => said.words !== "").map((said) => hostSaysLine(names.length === 1 ? null : said.name, said.words)),
+      `Open a PR in ${names.length === 1 ? "it" : "each"} your usual way.`,
+      whereNow(true).trimStart(),
+    ]),
   ];
   if (addedRepos.length > 0) {
     lines.push(`${joinNames(addedRepos)} ${addedRepos.length === 1 ? "was" : "were"} not in the lead's plan; ${unit} changed ` +

@@ -92,6 +92,33 @@ function squashOnHost(host: string, branch: string, message: string, mergeCommit
   git(host, ["branch", "-q", "-D", branch]);
 }
 
+// A host's post-receive hook, printing to the person through git as hosts do.
+// Printed with echo: a host's address can hold % signs.
+function hostPrints(host: string, script: string): void {
+  const hook = join(host, "hooks", "post-receive");
+  writeFileSync(hook, `#!/bin/sh\nexec 1>&2\n${script}`);
+  chmodSync(hook, 0o755);
+}
+
+// What GitHub prints after a push: its pull request block for a branch the push
+// created and, for a repo whose default branch has alerts, its Dependabot block
+// on every push.
+function printsLikeGitHub(host: string, repo: string, alerts = false): void {
+  hostPrints(host, `while read old new ref; do
+  b=\${ref#refs/heads/}
+  case "$old" in *[!0]*) continue;; esac
+  echo ""
+  echo "Create a pull request for '$b' on GitHub by visiting:"
+  echo "     https://github.com/owner/${repo}/pull/new/$b"
+  echo ""
+done
+${alerts ? `echo ""
+echo "GitHub found 2 vulnerabilities on owner/${repo}'s default branch (1 high, 1 moderate). To find out more, visit:"
+echo "     https://github.com/owner/${repo}/security/dependabot"
+echo ""
+` : ""}`);
+}
+
 describe("teams build Units across repos when the workspace is in git", () => {
   test("choosing teams on work across repos goes through, and no question of who builds which Unit is put", () => {
     const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
@@ -711,6 +738,64 @@ describe("the push", () => {
     expect(String(pushed.json?.error)).toBe(
       "The push of refunds in billing was refused: branch protection: refunds needs a ticket (pre-receive hook declined). " +
         "Nothing was retried. You're on refunds now in checkout-api and billing. Switch back to main any time.",
+    );
+  });
+
+  // After a plain git push the host's own lines give the person the link to
+  // open the review; the push line keeps them, each repo with its own, and what
+  // follows an address starts on a new line, so nothing is read as part of it.
+  test("the host's own link after a push comes with the push line, each repo with its own, and a later push reads as today", () => {
+    const { hosts, home, alice, record } = refundsTaken();
+    printsLikeGitHub(hosts["checkout-api"], "checkout-api", true);
+    printsLikeGitHub(hosts.billing, "billing");
+    printsLikeGitHub(home.remote, "workspace");
+    codeGenerated(alice, record);
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    const notice = String(pushed.json?.notice);
+    expect(notice).toStartWith(
+      "Pushed branch refunds in checkout-api and billing. checkout-api's host says: Create a pull request for 'refunds' on GitHub " +
+        "by visiting: https://github.com/owner/checkout-api/pull/new/refunds\nbilling's host says: Create a pull request for " +
+        "'refunds' on GitHub by visiting: https://github.com/owner/billing/pull/new/refunds\nOpen a PR in each your usual way. " +
+        "You're on refunds now in checkout-api and billing. Switch back to main any time.",
+    );
+    // Not the repo's alerts, nothing of the claim's push, none of git's own lines.
+    for (const absent of ["vulnerabilities", "claim/", "-host-", "[new branch]", "set up to track"]) expect(notice).not.toContain(absent);
+    // A review fix pushed again: the host prints no link about the branch now.
+    codeGeneratedAgain(alice);
+    const again = run(UNIT, ["push"], alice);
+    expect(again.status, again.out).toBe(0);
+    expect(String(again.json?.notice)).toBe(
+      "Pushed branch refunds in checkout-api and billing. Open a PR in each your usual way. " +
+        "Your teammates see where this work stands once aidlc/ is committed and pushed.",
+    );
+  });
+
+  test("a branch named as its repo: the host's alert about the repo is not about the branch", () => {
+    const { hosts, alice, record } = refundsTaken();
+    printsLikeGitHub(hosts["checkout-api"], "checkout-api", true);
+    codeGenerated(alice, record);
+    const pushed = run(UNIT, ["push", "--branch", "checkout-api"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    const notice = String(pushed.json?.notice);
+    expect(notice).toStartWith(
+      "Pushed branch checkout-api in checkout-api and billing. checkout-api's host says: Create a pull request for 'checkout-api' " +
+        "on GitHub by visiting: https://github.com/owner/checkout-api/pull/new/checkout-api\nOpen a PR in each your usual way.",
+    );
+    expect(notice).not.toContain("vulnerabilities");
+  });
+
+  test("a host that prints nothing about the branch with a link: the push line reads as today", () => {
+    const { hosts, alice, record } = refundsTaken();
+    for (const host of [hosts["checkout-api"], hosts.billing]) {
+      hostPrints(host, 'echo "Analyzing objects... (3/3) (5 ms)"\necho "Storing packfile... done (40 ms)"\necho "Storing index... done (30 ms)"\n');
+    }
+    codeGenerated(alice, record);
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(pushed.json?.notice).toBe(
+      "Pushed branch refunds in checkout-api and billing. Open a PR in each your usual way. You're on refunds now in " +
+        "checkout-api and billing. Switch back to main any time. Your teammates see where this work stands once aidlc/ is committed and pushed.",
     );
   });
 

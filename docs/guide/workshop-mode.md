@@ -772,7 +772,10 @@ work comes along uncommitted and is never committed. Every repo is committed
 before the first push, so a hook that stops one pushes nothing. Each repo's push
 goes to the remote git would push it to; with several remotes and none set, the
 offer names each. The line says where you are and the way back ("You're on
-refunds now in checkout-api and billing. Switch back to main any time."). A
+refunds now in checkout-api and billing. Switch back to main any time."). What
+your host prints about your branch after the push, with a link in it, such as
+GitHub's link to create a pull request or GitLab's to create or view a merge
+request, comes with the line, as the host printed it. A
 later push from the branch you went back to takes the Unit's files Code
 Generation changed there onto its branch as they are; when changes of your own
 are in the way, it stops with git's words, nothing moves, and the push is
