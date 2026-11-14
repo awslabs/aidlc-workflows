@@ -6153,15 +6153,17 @@ function takenLine(unit: string, claim: UnitClaimView): string {
 // The person's own take whose build is not in this checkout but committed on
 // another branch of this clone: where it is and the way to it, for the take
 // question (unitTakeLook) and the take asked again; at the take, with no branch
-// of this clone holding it, that it is still on the computer it was taken on.
-// Null, so the words stand as they were, when the take is not theirs or the
-// build is on no branch a switch reaches.
+// a switch reaches holding it, that it is on the computer it was taken on, or
+// merged where this clone has not pulled, and a pull brings it here. Null, so
+// the words stand as they were, when the take is not theirs, git could not
+// read every branch, or, for the take question, no branch a switch reaches
+// has the build.
 export function buildOnBranchLine(projectDir: string, homeWork: string, claim: UnitClaimView, atTake = false): string | null {
   if (!claimIsMine(projectDir, claim)) return null;
   const branch = branchWithBuild(projectDir, homeWork, claim.unit);
   if (branch === null && atTake) {
     return `You took ${claim.unit} on another computer, and its build is not in this clone yet: push it from that computer if you ` +
-      "have not, then run `git fetch` here and carry on.";
+      "have not, then run `git pull` here and carry on.";
   }
   // A backtick breaks the line's code marks, an apostrophe a PowerShell paste.
   return !branch || /[`']/.test(branch)
@@ -6174,9 +6176,10 @@ export function buildOnBranchLine(projectDir: string, homeWork: string, claim: U
 // request, the checkout back on main). Its own branches first, then the ones
 // it fetched from its remotes, which a fresh clone on another computer has
 // only as <remote>/<branch> and `git switch <branch>` makes its own. Local
-// reads only, never a fetch or a switch: the branch's name; "" when the build
-// is on a fetched branch no switch reaches, or a git call is not ok; null when
-// no branch has it.
+// reads only, never a fetch or a switch: the branch's name; null when no
+// branch a switch reaches has it (none has it, or only a fetched branch a
+// branch of this clone's own shadows, such as the merged main not pulled
+// here); "" when a git call is not ok, so nobody is sent to pull for nothing.
 function branchWithBuild(projectDir: string, homeWork: string, unit: string): string | null {
   // Globs whatever the person's environment says (aidlc-workspace-doctor's way).
   const env = { GIT_LITERAL_PATHSPECS: "0" };
@@ -6188,8 +6191,8 @@ function branchWithBuild(projectDir: string, homeWork: string, unit: string): st
   const ownNames = new Set(rows.flatMap(([, ref]) => ref?.startsWith("refs/heads/") ? [ref.slice("refs/heads/".length)] : []));
   const prefixes = remotes.stdout.split(/\r?\n/).filter(Boolean).map((remote) => `refs/remotes/${remote}/`)
     .sort((a, b) => b.length - a.length);
-  // Each ref read, and the name `git switch` takes to it ("" for none).
-  const names = new Map<string, string>();
+  // Each ref read, and the name `git switch` takes to it (null for none).
+  const names = new Map<string, string | null>();
   const [own, shadowed, fetched]: string[][] = [[], [], []];
   for (const [worktree, ref] of rows) {
     if (ref === undefined) continue;
@@ -6210,7 +6213,7 @@ function branchWithBuild(projectDir: string, homeWork: string, unit: string): st
     const name = prefix === undefined ? "" : ref.slice(prefix.length);
     if (name === "" || name === "HEAD" || name.startsWith("claim/")) continue;
     (ownNames.has(name) ? shadowed : fetched).push(ref);
-    names.set(ref, ownNames.has(name) ? "" : name);
+    names.set(ref, ownNames.has(name) ? null : name);
   }
   const field = `^- \\*\\*${UNIT_BUILD_FIELD}\\*\\*:[[:blank:]]*${unit.replaceAll(".", "\\.")}[[:space:]]*$`;
   // Newest branch first, a hundred a call so no command line runs too long on
@@ -6228,7 +6231,7 @@ function branchWithBuild(projectDir: string, homeWork: string, unit: string): st
         if (!shown.ok) return "";
         const build = liveBuildOf(shown.stdout);
         if (build === null || !isBuildOfUnit(build, homeWork, unit)) continue;
-        return names.get(ref) ?? "";
+        return names.get(ref) ?? null;
       }
     }
   }

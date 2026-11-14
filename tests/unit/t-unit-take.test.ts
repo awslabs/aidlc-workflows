@@ -20,6 +20,7 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { auditBlockField, readAuditShardEvents, readIntentRegistry, shellArg } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { leadsPlanNotHere } from "../../dist/claude/.claude/tools/aidlc-unit-holders.ts";
@@ -1097,7 +1098,7 @@ describe("a Unit someone holds is not taken again", () => {
     expect(taken.out).toContain("refunds is already taken: bea builds it.");
   });
 
-  test("the person's own take where no branch of the clone holds its build says it is on the other computer until the branch is fetched; a branch with no build, or cut from main after the record merged, names none", () => {
+  test("the person's own take with its build on no branch of the clone a switch reaches says it is on the other computer and to pull here, until the branch is fetched and again once the record merged; a branch with no build, or cut from main since, is never named", () => {
     const home = makeHome();
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
     asLeadsOwnCheckout(home.dir);
@@ -1127,11 +1128,12 @@ describe("a Unit someone holds is not taken again", () => {
       return taken.out;
     };
     const taken = "refunds is already taken: bea builds it.";
+    const pullHere = "You took refunds on another computer, and its build is not in this clone yet: push it from that " +
+      "computer if you have not, then run `git pull` here and carry on.";
     // Her own take, with no branch of this clone holding its build: where it is, and the way to bring it here.
     board(desk);
     const notHere = refused(desk);
-    expect(notHere).toContain("You took refunds on another computer, and its build is not in this clone yet: push it from that " +
-      "computer if you have not, then run `git fetch` here and carry on.");
+    expect(notHere).toContain(pullHere);
     expect(notHere).not.toContain("already taken");
     // Another person reads who has it.
     board(bob);
@@ -1144,14 +1146,44 @@ describe("a Unit someone holds is not taken again", () => {
     expect(refused(desk)).toContain("Your build of refunds is on branch records/refunds: `git switch records/refunds` to carry it on.");
     // Her record squash-merged on the host and its branch deleted; a
     // teammate's branch cut from main since holds her build too. Her clone
-    // fetches both and merges neither: no branch is named as hers, and no
-    // fetch is asked for, which would change nothing.
+    // fetches both and merges neither: no branch is named as hers, and the
+    // pull that brings the merged record is the way on.
     mergeOnHost(home.remote, "records/refunds", "squash");
     git(bea, ["push", "-q", "origin", "--delete", "records/refunds"]);
     pushNotes(bob, "bob-notes");
     git(desk, ["fetch", "-q", "origin"]);
     board(desk);
-    expect(refused(desk)).toContain(taken);
+    const merged = refused(desk);
+    expect(merged).toContain(pullHere);
+    expect(merged).not.toContain("records/refunds");
+    expect(merged).not.toContain("bob-notes");
+    git(desk, ["pull", "-q"]);
+    expect(take(desk, "refunds").status, "the pull brought her build here").toBe(0);
+  });
+
+  // A blobless partial clone keeps the record's file of a fetched branch on
+  // the host, and AI-DLC fetches nothing to read it: git cannot say whether
+  // that branch holds the build, so no pull is asked for.
+  test("a clone whose git cannot read a fetched branch keeps today's line for the person's own take", () => {
+    const home = makeHome();
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    asLeadsOwnCheckout(home.dir);
+    commitAll(home.dir, "teams");
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const bea = cloneOf(home.remote, "bea");
+    expect(take(bea, "refunds").status).toBe(0);
+    git(bea, ["switch", "-q", "-c", "records/refunds"]);
+    commitAll(bea, "refunds record");
+    git(bea, ["push", "-q", "-u", "origin", "records/refunds"]);
+    git(home.remote, ["config", "uploadpack.allowFilter", "true"]);
+    const desk = join(tempDir("blobless"), "workspace");
+    git(join(desk, ".."), ["clone", "-q", "--filter=blob:none", pathToFileURL(home.remote).href, desk]);
+    git(desk, ["config", "user.name", "bea"]);
+    git(desk, ["config", "user.email", "bea@example.test"]);
+    const taken = take(desk, "refunds");
+    expect(taken.status).not.toBe(0);
+    expect(taken.out).toContain("refunds is already taken: bea builds it.");
+    expect(taken.out).not.toContain("git pull");
   });
 });
 
