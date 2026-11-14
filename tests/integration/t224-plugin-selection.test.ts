@@ -121,6 +121,20 @@ function surfaceSnapshot(root: string): Record<string, string> {
   return snapshot;
 }
 
+function recordHumanTurn(project: string): void {
+  const result = spawnSync(BUN, [join(project, ".claude", "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"], {
+    cwd: project,
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
+    env: {
+      ...process.env,
+      CLAUDE_PROJECT_DIR: project,
+      AIDLC_HARNESS_DIR: ".claude",
+    },
+  });
+  if (result.status !== 0) throw new Error(`record-human-turn failed: ${result.stderr}`);
+}
+
 function runOrchestrate(project: string, args: string[]) {
   const result = runOrchestrateNext(
     join(project, ".claude", "tools", "aidlc-orchestrate.ts"),
@@ -785,5 +799,27 @@ describe("t224 plugin selection - install chooses visible plugin surfaces", () =
     const directive = JSON.parse(next.stdout.trim());
     expect(directive.kind).toBe("run-stage");
     expect(directive.stage).toBe(firstExecute);
+  });
+
+  test("a plan without the regression suite's producer keeps the full suite and says what it runs without", () => {
+    const proj = composePluginFixture({
+      plugin: PLUGIN,
+      harness: "claude",
+      projectDir: join(tmp, "when-producer-in-plan"),
+      pluginBuilt,
+    }).projectDir;
+    expect(grid(proj)["test-pro-validation"].stages["build-and-test"]).toBe("SKIP");
+    expect(grid(proj)["test-pro-validation"].stages["test-pro-full-suite"]).toBe("EXECUTE");
+    const missingLine =
+      "test-pro-full-suite will run without test-pro-regression-suite, because nothing in this plan builds it.";
+    recordHumanTurn(proj);
+
+    const validation = runOrchestrate(proj, ["--scope", "test-pro-validation", "probe the suite"]);
+    expect(validation.status, validation.stderr).toBe(0);
+    expect(JSON.parse(validation.stdout.trim()).narration).toContain(missingLine);
+
+    const enterprise = runOrchestrate(proj, ["--scope", "enterprise", "probe the suite"]);
+    expect(enterprise.status, enterprise.stderr).toBe(0);
+    expect(JSON.parse(enterprise.stdout.trim()).narration).not.toContain("will run without");
   });
 });
