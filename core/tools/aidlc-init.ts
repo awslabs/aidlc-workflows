@@ -4713,6 +4713,38 @@ function entryIdentity(path: string): string {
   return `${stat.mode}:${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
 }
 
+// The release files keep Kiro in runtime/kiro-ide/ and Kiro CLI (V2) in
+// runtime/kiro/, while `--harness kiro` names Kiro. A .kiro holding Kiro CLI
+// (V2)'s files whose ownership record is Kiro's can neither be switched to Kiro
+// (the switch plans from a Kiro CLI (V2) record) nor refreshed as Kiro CLI
+// (V2), so config says where Kiro's files are instead of asking to switch. A
+// stamp and a record that disagree do not say how they came to, so the line
+// says what is there. With no record, the refusal below names the Kiro CLI (V2)
+// refresh that records one, after which the switch goes through.
+function kiroCopyRefusal(occupant: ProjectHarness, requested: string): SwitchRefusal | null {
+  if (occupant.distribution !== "kiro" || requested !== "kiro-ide" || occupant.harnessDir !== KIRO_SWITCH_DIR) return null;
+  let baseline: Baseline | null;
+  try {
+    baseline = readBaseline(join(occupant.root, "tools", "data", "aidlc-manifest.json"));
+  } catch {
+    return null;
+  }
+  if (!baseline || baselineShapeProblem(baseline) !== null ||
+    !baselineNamesHarness(baseline, { distribution: requested, harnessDir: occupant.harnessDir })) {
+    return null;
+  }
+  return new SwitchRefusal(
+    `cannot switch ${occupant.harnessDir} to Kiro: it holds Kiro CLI (V2)'s files, which the release files keep in runtime/kiro/, ` +
+      `while its ownership record (${occupant.harnessDir}/tools/data/aidlc-manifest.json) is Kiro's; nothing changed`,
+    {
+      kind: "text",
+      text: "follow \"Versioned manual-copy alternative\" in Running AI-DLC on Kiro " +
+        "(https://awslabs.github.io/aidlc-workflows/guide/harnesses/kiro/): its steps remove Kiro CLI (V2)'s agent files, " +
+        "copy runtime/kiro-ide/ from the release files over the project, and run config",
+    },
+  );
+}
+
 // Without a usable occupant baseline nothing says which of its files are
 // AI-DLC's, so the files only it ships would be left behind. The switch never
 // changes the baseline itself: every refusal here leaves the project as it is
@@ -4720,6 +4752,8 @@ function entryIdentity(path: string): string {
 // then the stock refresh of the installed row, which picks its source as any
 // refresh does.
 function assertSwitchBaseline(occupant: ProjectHarness, requested: string): void {
+  const copied = kiroCopyRefusal(occupant, requested);
+  if (copied) throw copied;
   const rel = `${occupant.harnessDir}/tools/data/aidlc-manifest.json`;
   const path = join(occupant.root, "tools", "data", "aidlc-manifest.json");
   const lead = `cannot switch ${occupant.harnessDir} from ${typedHarnessName(occupant.distribution)} to ${typedHarnessName(requested)}: installed ${typedHarnessName(occupant.distribution)}`;
@@ -13389,6 +13423,9 @@ export async function main(
       )
       : undefined;
     const dryRun = argv.includes("--dry-run");
+    // A switch that can never go through is not asked about.
+    const copied = switchOccupant && requestedHarness ? kiroCopyRefusal(switchOccupant, requestedHarness) : null;
+    if (copied) throw copied;
     // `--harness kiro` named Kiro CLI (V2) before it named Kiro, so on a Kiro
     // CLI (V2) project it may be an older script's refresh. A copied tool from
     // before these names hands its refresh over in ids, where `kiro` is still

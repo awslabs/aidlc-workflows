@@ -1952,7 +1952,12 @@ run it twice.
 The supported manual-copy payload is the versioned `aidlc-copy-runtime-X.Y.Z.tar.gz`
 release asset. Download one exact release, extract it, and copy the complete
 `runtime/<harness>/` root so the harness tree, `aidlc/` workspace shell, and
-any project-root files the harness needs stay together. The copy runtime leaves
+any project-root files the harness needs stay together. On Kiro, follow the
+guide's manual-copy steps instead:
+[Kiro](harnesses/kiro.md#versioned-manual-copy-alternative) copies
+`runtime/kiro-ide/` and
+[Kiro CLI (V2)](harnesses/kiro.md#kiro-cli-v2-versioned-manual-copy-alternative)
+copies `runtime/kiro/`, and both say how to keep the project's own Kiro settings. The copy runtime leaves
 out files a team's editor owns, such as Copilot's `.vscode/settings.json`, so
 copying never replaces them; the [Copilot guide](harnesses/copilot.md#vs-code-request-cap)
 names the one setting to add yourself. It leaves out your `.gitignore` and

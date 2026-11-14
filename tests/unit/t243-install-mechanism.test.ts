@@ -1780,9 +1780,11 @@ describe("t243 project initialization", () => {
         rmSync(path);
         mkdirSync(path);
       }, "baseline is not a regular file"],
+      // A record naming Kiro itself is the refusal that names Kiro's own copy
+      // steps (t-kiro-typed-harness-names).
       ["another harness", (path) => {
-        writeFileSync(path, readFileSync(path, "utf-8").replace("\"distribution\": \"kiro\"", "\"distribution\": \"kiro-ide\""));
-      }, "it names kiro-ide in .kiro"],
+        writeFileSync(path, readFileSync(path, "utf-8").replace("\"distribution\": \"kiro\"", "\"distribution\": \"cursor\""));
+      }, "it names cursor in .kiro"],
       ["wrong shape", (path) => {
         writeFileSync(path, `${JSON.stringify({ ...JSON.parse(readFileSync(path, "utf-8")), files: "none" }, null, 2)}\n`);
       }, "files is not a map of hashes"],
