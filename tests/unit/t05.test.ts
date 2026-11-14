@@ -95,6 +95,7 @@ const STAGE_TABLE: ReadonlyArray<readonly [phase: string, slug: string]> = [
   ["operation", "observability-setup"],
   ["operation", "incident-response"],
   ["operation", "performance-validation"],
+  ["operation", "retrospective"],
   ["operation", "feedback-optimization"],
 ];
 
@@ -109,8 +110,8 @@ function parseStage(phase: string, slug: string): Record<string, unknown> {
 // Guard: pin the table length so a stage added/removed without updating this
 // test is caught.
 describe("t05 stage table integrity", () => {
-  test("table holds exactly 33 stages (plan 66 = 33 x 2)", () => {
-    expect(STAGE_TABLE.length).toBe(33);
+  test("table holds exactly 34 stages (plan 68 = 34 x 2)", () => {
+    expect(STAGE_TABLE.length).toBe(34);
   });
 });
 
