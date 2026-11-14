@@ -652,6 +652,8 @@ import {
   buildClaimHere,
   planUnshared,
   planByPullRequestDetail,
+  planShareWords,
+  catchUpOffer,
   planWait,
   planWaitLine,
   unitsAskedHereForShare,
@@ -6121,7 +6123,7 @@ function buildOutShareOffer(projectDir: string): AskDirective | null {
   return teamHandoverAsk(projectDir, {
     handovers: ["share"],
     marks: [mark],
-    question: `${said} Share the plan with them now? I'd commit the plan here (AI-DLC's record, nothing else of yours) ` +
+    question: `${said} Share the plan with them now? I'd commit ${planShareWords(projectDir)} ` +
       `and ${byPullRequest ? "push it on its own branch for a pull request" : `push ${target.branch} to ${target.remote}`}` +
       `${note === null ? "" : `, with ${note}`}, so each team can take its Unit ` +
       `${byPullRequest ? `once it is in ${target.branch}, ` : ""}by opening its own clone and running ${entrySkillInvocation()}.`,
@@ -20997,7 +20999,35 @@ function emitForSlug(
     emitPerUnitRunStage(node, projectType, scope, stateContent, recordPrefix, codekbCtx, projectDir);
     return;
   }
+  const catchUp = node && stateContent ? catchUpStep(projectDir, stateContent, node) : null;
+  if (catchUp !== null) {
+    emit(catchUp);
+    return;
+  }
   emitRunStageForSlug(slug, projectType, scope, stateContent, recordPrefix, codekbCtx);
+}
+
+// Before a Construction stage the lead's project runs once every Unit is done
+// (Build and Test), at a home whose teams built them: when this checkout lacks
+// a Unit merged on its remote, the one question, once for those Units; the
+// stage then runs on what is here, said once.
+function catchUpStep(projectDir: string, stateContent: string, node: GraphStage): AskDirective | null {
+  if (node.phase !== "construction" || !isTeamUnitOwnership(stateContent) || homeLocation(stateContent) === null ||
+    unitBuildOf(stateContent) !== null || isReadOnlyEngineProbe()) return null;
+  const offer = catchUpOffer(projectDir, node.name);
+  if (offer === null) return null;
+  const mark = offer.ask === null ? null : teamHandoverMarkName("catch-up", offer.ask.mark);
+  if (offer.ask === null || mark === null || handoverOffered(projectDir, mark)) {
+    sayWithStepOnce(projectDir, offer.said);
+    return null;
+  }
+  return teamHandoverAsk(projectDir, {
+    handovers: ["catch-up"],
+    marks: [mark],
+    question: offer.ask.question,
+    choices: [offer.ask.choice],
+    notNow: { label: offer.ask.notNow },
+  });
 }
 
 // --- --single stage-runner mode ---

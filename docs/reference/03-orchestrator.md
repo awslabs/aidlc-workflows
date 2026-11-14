@@ -763,9 +763,10 @@ Units ... You can go back to Units Generation any time"), and clears the mark,
 so a later change is asked about afresh. A ledger that cannot take the row
 refuses the step with that function's own repair step. Under `relaxed` or `off`
 the repo command itself writes the row at the change.
-When choosing teams recorded `Home Location` (work that records code repos of
-its own, `buildOutHomeLocation`, in a workspace that is a Git repository: its
-`origin` address, or `local`), no question names a team: every Unit is open,
+When choosing teams recorded `Home Location` (team work on a remote whatever
+repository its code is in, `buildOutHomeLocation`, in a workspace at the top of
+a Git repository: its `origin` address, or `local` for work that records code
+repos of its own), no question names a team: every Unit is open,
 and the next step is the share offer (`buildOutShareOffer`). The home walks the
 walking skeleton, a Unit started there with no claim of its own
 (`leadBuildsWithoutClaim`, the same reading the take refuses on), and a Unit
@@ -786,8 +787,13 @@ again, a clone where nothing is ready to take) is a
 `print` that ends the turn (`lineEndingTurn`): what the person reads rides as
 `narration`, the engine's own instruction is the `message`, and any `offers`
 ride with it, so every harness's skill acts on it from a fresh chat. Team work
-without `Home Location` (the code is the workspace's own repo, or the teams
-were chosen before it was recorded) keeps the dispatcher flow.
+without `Home Location` (the teams were chosen before it was recorded, or the
+code is the workspace's own repo with no remote, or its remote holds claims of
+it from before) keeps the dispatcher flow. Before a Construction stage the
+lead's project runs once every Unit is done, `emitForSlug` puts one question
+when this checkout lacks a merged Unit (`catchUpStep`, `reposBehindMergedUnits`):
+`unit catch-up` brings each repo level with `bringBranchLevel`, the one
+fast-forward the plan's way back uses too.
 
 In a team member's workspace, a plain `next` with no work selected returns
 `ask_type: unit-take` when a home with `Home Location` is visible here and the

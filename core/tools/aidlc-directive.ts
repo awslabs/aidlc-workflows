@@ -785,7 +785,8 @@ export interface UnitPlanChangeAskDirective extends AskDirectiveBase {
 // and merge a published one, push main after a land. Taking a Unit and
 // reviewing one can share one question. Each choice is one complete command;
 // the one that does not take it runs `next`.
-export type TeamHandover = "share" | "join" | "publish" | "review" | "push";
+export const TEAM_HANDOVERS = ["share", "join", "publish", "review", "push", "catch-up"] as const;
+export type TeamHandover = (typeof TEAM_HANDOVERS)[number];
 export interface TeamHandoverAskDirective extends AskDirectiveBase {
   ask_type: "team-handover";
   response_route: "command";
@@ -2398,9 +2399,9 @@ export function validateDirective(obj: unknown): ValidationResult {
         const handovers = o.handovers;
         if (
           !Array.isArray(handovers) || handovers.length === 0 ||
-          !handovers.every((entry) => ["share", "join", "publish", "review", "push"].includes(entry as string))
+          !handovers.every((entry) => (TEAM_HANDOVERS as readonly string[]).includes(entry as string))
         ) {
-          errors.push(`${kind}: team-handover handovers must list share, join, publish, review or push`);
+          errors.push(`${kind}: team-handover handovers must list ${TEAM_HANDOVERS.slice(0, -1).join(", ")} or ${TEAM_HANDOVERS.at(-1)}`);
         }
         checkOptionalString(o, "unit", kind, errors);
         rejectUnexpected("team-handover", { handovers: true, unit: true });

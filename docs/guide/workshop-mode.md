@@ -1,26 +1,30 @@
 # Multi-Team Construction and Workshop Mode
 
 Several teams can build the Units of one approved piece of work. The
-lead's project is where its Inception ran. How the teams build follows where the code lives:
+lead's project is where its Inception ran. How the teams build:
 
-- **The code is the workspace's own repository** (the work records no code
-  repos of its own; a `repos.json` that names only the workspace itself, as
-  `"."`, counts as that): teams claim, publish, pin, gate and land. The
-  integration lead works from unscoped main, each team from a checkout stamped
-  to one claimed Unit, and main lands each Unit
-  ([Teams on the workspace's own repo](#teams-on-the-workspaces-own-repo)).
-- **The code is in repos of its own** (beside the workspace, anywhere on disk,
-  or under `src/`, as `repos.json` or the work's repo set records them): each
+- **Team work on a remote, whatever repository its code is in** (repos of its
+  own beside the workspace, anywhere on disk or under `src/`, as `repos.json` or
+  the work's repo set records them, or the workspace's own repository): each
   team builds its Unit as a piece of work of its own, in its own workspace and
-  under its own rules, from a copy of what the lead approved, and merges it into
-  each repo the way that repo always merges. The lead's project sees a Unit done when
-  every repo it changed has merged, and runs Build and Test once every Unit is
-  in ([Teams across repos](#teams-across-repos)).
+  under its own rules, from a copy of what the lead approved, on a branch named
+  after the Unit, and merges it into each repo the way that repo always merges.
+  The lead's project sees a Unit done when every repo it changed has merged, and
+  runs Build and Test once every Unit is in
+  ([Teams across repos](#teams-across-repos)).
+- **Team work started before AI-DLC recorded `Home Location`, and work whose
+  code is the workspace's own repository on one machine with no remote**: teams
+  claim, publish, pin, gate and land. The integration lead works from unscoped
+  main, each team from a checkout stamped to one claimed Unit, and main lands
+  each Unit ([Teams on the workspace's own repo](#teams-on-the-workspaces-own-repo)).
 
 Which one a piece of work takes is settled when **Several teams** is chosen:
-work that records code repos records where the lead's project is (`Home Location`), and
-work on the workspace's own repo, or team work started before AI-DLC recorded
-`Home Location`, keeps the claim flow. A teammate who takes a Unit of solo work
+team work on a remote records where the lead's project is (`Home Location`);
+work on the workspace's own repo with no remote, work whose remote already holds
+claims of it from teams chosen before, and team work started before AI-DLC
+recorded `Home Location` keep the claim flow. A project in a folder below its
+repository's top is built by one session: the choice says so in one line, with
+the way that works (a workspace of its own beside that repository). A teammate who takes a Unit of solo work
 builds it as work of their own in either layout
 ([A second person on solo work](#a-second-person-on-solo-work-and-the-leads-sign-off)).
 Workshop mode is one use of this; it works the same for any scope whose plan
@@ -64,7 +68,7 @@ leaves this session building, and the first step says to ask for teams before
 the first Unit is built. Team approvals come after every stage (`per-stage`)
 unless the lead asks for one approval at the end of each Unit
 (`set-unit-gate-rhythm unit-end`) before the first team approval question;
-the first team step offers it. On the workspace's own repo, while no team has
+the first team step offers it. On the claim flow, while no team has
 taken a Unit, that step also says once that this session builds the Units
 here, starting with the first DAG Unit (the walking skeleton, when the scope
 runs one). With a shared remote, the step that would start a Unit here asks
@@ -72,11 +76,11 @@ first whether to share the plan with the teams (see below); without one, the
 line says to share the work through git, and each team then runs `/aidlc` in
 its own clone to take a Unit.
 
-When the work records code repos of its own and the workspace is a Git
-repository, choosing **Several teams** also records where the lead's project
-is: `Home Location` in the state, the address the workspace's own remote points
-to (read, never changed; a user or token in the address is left out), or
-`local` when it has no remote. Every Unit is then open: nothing names a team, and
+When the workspace is at the top of a Git repository with a remote, choosing
+**Several teams** also records where the lead's project is: `Home Location` in
+the state, the address the workspace's own remote points to (read, never
+changed; a user or token in the address is left out); work that records code
+repos of its own records `local` when it has no remote. Every Unit is then open: nothing names a team, and
 anyone takes a Unit that is ready from the space they work in. Your checkout
 stays the lead's project, never scoped to one Unit. The lead's project builds the
 walking skeleton, when the scope runs one, and a Unit only when you say so
@@ -85,8 +89,15 @@ like any other: its claim is written at the lead's project, so no teammate takes
 it meanwhile, and a Unit a teammate took first stays theirs. Otherwise it shows
 the board while a Unit waits for someone to take it or a team builds one, and
 builds nothing meanwhile ([Teams across repos](#teams-across-repos)). Work on the workspace's own repo
-records no Home Location and keeps the claim, publish, pin, gate and land flow
+with no remote records no Home Location and keeps the claim, publish, pin, gate and land flow
 ([Teams on the workspace's own repo](#teams-on-the-workspaces-own-repo)).
+
+On the workspace's own repository, code a Unit built at the lead's project
+wrote (the walking skeleton) goes with the plan: the share question names it
+("I'd commit the plan and checkout-ui's code, the 4 changed files here (new:
+src/cart.tsx), and push main to origin, ..."), and the share commits it with
+`aidlc/`, so the plan and the skeleton reach main together, by pull request on
+a protected main, before any team starts.
 
 When the scope records `skeleton: on`, the first DAG Unit is the walking
 skeleton. It runs on unscoped main before claims open and needs no merge-back
@@ -98,7 +109,7 @@ first step after several teams are chosen, before the plan is shared. While your
 have still holds every Unit behind the first, the board says so once, with the
 share that fixes it.
 
-On the workspace's own repo, teams take Units from the plan on the shared
+On the claim flow, teams take Units from the plan on the shared
 remote. Once claims are open (at once with the skeleton off, once the walking
 skeleton is approved with it on) and the repository has a remote, the step that
 would start a Unit on main asks once whether to share the plan with the teams,
@@ -138,7 +149,7 @@ branch for a pull request.
 Typed, the same step is `/aidlc unit share`, which names what it committed
 once it has pushed, or your own commit and `git push origin main`.
 
-Where the work records code repos of its own, the step after choosing teams asks
+With `Home Location` recorded, the step after choosing teams asks
 once whether to share the plan with them: **Share them with the
 teams** runs `aidlc unit share --plan`, which commits AI-DLC's record here
 (`aidlc/`, none of your other files) and pushes main with a plain push;
@@ -160,8 +171,9 @@ merged.
 
 ## Teams on the workspace's own repo
 
-Where the code is the workspace's own repository, and for team work that
-started before AI-DLC recorded `Home Location`, the integration lead works from
+For team work that started before AI-DLC recorded `Home Location`, and for
+work whose code is the workspace's own repository on one machine with no
+remote, the integration lead works from
 unscoped main and each delivery team works from a checkout stamped to one
 claimed Unit. A claimed checkout runs that Unit's exact Construction chain,
 stages 3.1 through 3.5, in graph order, and main pins, gates and lands each
@@ -594,9 +606,22 @@ registry.
 
 ## Teams across repos
 
-Where the work records code repos of its own, choosing **Several teams**
-records `Home Location`, and each team builds its Unit as a piece of work of
-its own. Each team needs to reach the lead's project's repository with its own login.
+For team work on a remote, whatever repository its code is in (code repos of
+its own, or the workspace's own repository), choosing **Several teams** records
+`Home Location`, and each team builds its Unit as a piece of work of its own.
+Each team needs to reach the lead's project's repository with its own login.
+
+Before Build and Test at the lead's project, when this checkout does not have
+every merged Unit yet (on the workspace's own repository, your main is behind
+its remote by their merges), AI-DLC asks once: "Every Unit is merged, and your
+main does not have refunds and reporting yet. Bring it up to date with
+origin/main first, so Build and Test runs on the merged code?" **Bring main up
+to date** runs `aidlc unit catch-up`, which moves each repo's branch forward to
+its remote's, a fast-forward only, after trying the move in a copy of the
+index, so nothing of yours changes; when git cannot move it (a file of yours in
+the way), the line says so in git's words and nothing changes. **Run Build and
+Test on what is here** starts the stage as it is, and says once what it
+lacks.
 
 ### The three layouts
 

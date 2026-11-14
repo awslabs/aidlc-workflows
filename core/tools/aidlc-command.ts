@@ -234,6 +234,7 @@ export const UNIT_GRAMMAR: Readonly<Record<string, UnitGrammar>> = {
     options: ["here", "request-file", "person-words"],
     usage: "unit assign --here <unit>[,<unit>...] [--request-file <file> | --person-words <text>]",
   },
+  "catch-up": { name: false, options: [], usage: "unit catch-up" },
   claim: {
     name: true,
     options: ["team", "request-file", "rhythm"],

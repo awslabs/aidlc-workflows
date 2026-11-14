@@ -217,7 +217,6 @@ import {
   unitOutputsHomeReads,
   type UnitResult,
   workspaceHomeLocation,
-  buildOutHomeLocation,
   leadBuildsWithoutClaim,
   unitsAskedHere,
   unitWriteTargets,
@@ -235,6 +234,7 @@ import {
   leadRecordHere,
   textAt,
   headInByContent,
+  unitDependencies,
 } from "./aidlc-unit-teams.js";
 import { submoduleLeavesProjectRepo } from "./aidlc-git.ts";
 import { displayRepoPath, localUnreadableLine, readWorkspaceRepos, repoCloneable, repoCloneOfferLine, repoNotThereLine, withoutCredentials, workspaceManifestAt } from "./aidlc-workspace-manifest.js";
@@ -543,14 +543,14 @@ export function integrationBranchToRead(projectDir: string, space = activeSpace(
 // plan, read from the draft's Way of Working (the section practices-promote
 // copies into team.md) through the one reader, with the branch git says this
 // checkout is on, when the two differ: the gate says so. Only where the work's
-// code is in repos of its own (buildOutHomeLocation), so this project's repo
+// code is in repos of its own (intentRepos), so this project's repo
 // holds nothing but those records. Null when the draft names none, a narrower
 // layer decides, git names no branch here (a detached HEAD), or anything
 // cannot be read. It says a fact and decides nothing: where the share may run
 // is shareRefusal's.
 export function practicesBranchOffCheckout(projectDir: string, draft: string): { branch: string; current: string } | null {
   try {
-    if (buildOutHomeLocation(projectDir) === null) return null;
+    if (intentRepos(projectDir).length === 0 || workspaceHomeLocation(projectDir) === null) return null;
     const section = memorySectionBody(draft, WAY_OF_WORKING);
     if (section.trim() === "") return null;
     const space = activeSpace(projectDir);
@@ -5683,8 +5683,9 @@ function shareCommitRefused(said: string, adding: boolean): never {
   fail(`git did not commit: ${said}.`);
 }
 
-// The plan's share: AI-DLC's record only (aidlc/, and a repos.json still at
-// the root unless the person's .gitignore lists it), committed by pathspec
+// The plan's share: AI-DLC's record (aidlc/, and a repos.json still at the
+// root unless the person's .gitignore lists it), with the code Units built here
+// wrote at a home whose code is this repository (builtHereCode), committed by pathspec
 // through commitUnitPaths, so a file the person staged stays theirs, staged.
 // Pathspecs, never the file list: a plan's hundreds of files would pass the
 // 32,767 characters Windows allows a command line. Returns how many files the
@@ -5693,7 +5694,7 @@ function commitPlanHere(pd: string, message: string): number {
   const head = (): string => git(pd, ["rev-parse", "--verify", "--quiet", "HEAD"]).stdout.trim();
   const before = head();
   const rootList = git(pd, ["check-ignore", "-q", "--", "repos.json"]).ok ? [] : ["repos.json"];
-  commitUnitPaths(pd, ["aidlc/", ...rootList], {}, "", "", "", null, { message, refused: shareCommitRefused });
+  commitUnitPaths(pd, ["aidlc/", ...rootList, ...builtHereCode(pd).paths], {}, "", "", "", null, { message, refused: shareCommitRefused });
   if (head() === before) return 0;
   return git(pd, ["diff-tree", "-r", "--root", "--no-commit-id", "--name-only", "-z", "HEAD"]).stdout.split("\0").filter(Boolean).length;
 }
@@ -5881,7 +5882,7 @@ export function planByPullRequestDetail(projectDir: string): string {
   const pd = resolveProjectDir(projectDir);
   const target = shareOfferTarget(pd);
   const branch = target?.branch ?? "main";
-  return `I put the plan on its own branch, ${target === null ? planBranchNames(pd)[0] : firstFreePlanBranch(pd, target.remote)}, ` +
+  return `I put ${planShareName(pd)} on its own branch, ${target === null ? planBranchNames(pd)[0] : firstFreePlanBranch(pd, target.remote)}, ` +
     "push it and give you the host's link to open the pull request. You work on that branch until it is merged; " +
     `${branch} stays as it is.`;
 }
@@ -6046,6 +6047,188 @@ function gitWords(said: string): string {
   return said.trim().split(/\r?\n/).map((line) => line.trim()).filter(Boolean).join(" ");
 }
 
+// Brings `branch` in `dir` level with `remote`'s copy as this clone last
+// fetched it, by a fast-forward only, never a reset, a stash, a merge commit or
+// a force: the move is tried first in a copy of the index ("dry run"), so one
+// git refuses changes nothing; then the branch moves, fetched into while
+// another branch is checked out ("fetch"), fast-forwarded in place while it is
+// ("fast-forward"). The result names the step that ran last, with git's own
+// words when it refused. The one way AI-DLC brings a checkout level (the plan's
+// way back, Build and Test's catch-up).
+export type BranchLevelStep = "dry run" | "fetch" | "fast-forward";
+export function bringBranchLevel(dir: string, remote: string, branch: string):
+  { ok: true; ran: BranchLevelStep } | { ok: false; ran: BranchLevelStep; said: string } {
+  const theirs = `refs/remotes/${remote}/${branch}`;
+  const scratch = mkdtempSync(join(tmpdir(), "aidlc-level-"));
+  try {
+    const index = resolve(dir, gitOutput(dir, ["rev-parse", "--git-path", "index"], "Cannot find the index"));
+    if (existsSync(index)) copyFileSync(index, join(scratch, "index"));
+    const tried = git(dir, ["read-tree", "-n", "-m", "-u", "HEAD", theirs], { GIT_INDEX_FILE: join(scratch, "index") });
+    if (!tried.ok) return { ok: false, ran: "dry run", said: tried.stderr || tried.stdout };
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+  const ran: BranchLevelStep = git(dir, ["symbolic-ref", "--quiet", "--short", "HEAD"]).stdout.trim() === branch ? "fast-forward" : "fetch";
+  const moved = ran === "fast-forward"
+    ? git(dir, ["merge", "-q", "--ff-only", theirs])
+    : git(dir, ["fetch", remote, `${branch}:${branch}`], { GIT_TERMINAL_PROMPT: "0" });
+  return moved.ok ? { ok: true, ran } : { ok: false, ran, said: moved.stderr || moved.stdout };
+}
+
+// --- Build and Test at the lead's project, once every Unit is merged ---------
+
+// Each repo of this checkout that does not have every Unit merged on its
+// remote yet, by the same content check the look makes against the remote,
+// here against HEAD; `branch` is the one that brings it level, when its
+// checkout is on the branch the Units merged into (null on another).
+export interface ReposBehind {
+  repo: string;
+  dir: string;
+  remote: string;
+  into: string;
+  branch: string | null;
+  units: string[];
+}
+
+export function reposBehindMergedUnits(projectDir: string): ReposBehind[] {
+  const pd = resolveProjectDir(projectDir);
+  const behind = new Map<string, ReposBehind>();
+  try {
+    for (const claim of cachedClaims(pd).values()) {
+      if (claim.status !== "claimed" || !claim.payload.done) continue;
+      for (const result of claim.payload.result?.repos ?? []) {
+        const dir = result.repo === "." ? pd : repoDir(pd, result.repo);
+        if (!isGitRepoDir(dir) || unitMergeVerdict(dir, "HEAD", result).merged) continue;
+        const remote = repositoryRemote(dir);
+        if (remote === null) continue;
+        const into = (result.repo === "." ? homeIntegrationBranch(pd) : null) ?? repoIntegration(dir, remote).slice(remote.length + 1);
+        // Everything its remote's branch has is here already (the Unit merged in a form of its own, a fix on its
+        // pull request say): there is nothing to bring.
+        const theirs = `refs/remotes/${remote}/${into}`;
+        if (!git(dir, ["rev-parse", "--verify", "--quiet", theirs]).ok || git(dir, ["merge-base", "--is-ancestor", theirs, "HEAD"]).ok) continue;
+        const on = git(dir, ["symbolic-ref", "--quiet", "--short", "HEAD"]).stdout.trim();
+        const entry = behind.get(result.repo) ?? { repo: result.repo, dir, remote, into, branch: on === into ? into : null, units: [] };
+        if (!entry.units.includes(claim.unit)) entry.units.push(claim.unit);
+        behind.set(result.repo, entry);
+      }
+    }
+  } catch {
+    // Claims that cannot be read here ask nothing; the stage runs as it is.
+    return [];
+  }
+  return [...behind.values()];
+}
+
+// The question before that stage, in one place: put once per set of Units
+// (its mark), or, once put or with no branch to move, the stage's own line.
+export function catchUpOffer(projectDir: string, stageName: string): {
+  said: string;
+  ask: { mark: string; question: string; choice: { label: string; detail: string; command: string }; notNow: string } | null;
+} | null {
+  const behind = reposBehindMergedUnits(projectDir);
+  if (behind.length === 0) return null;
+  const units = [...new Set(behind.flatMap((repo) => repo.units))].sort();
+  const said = `${stageName} runs on this checkout as it is, without ${joinNames(units)}.`;
+  if (behind.every((repo) => repo.branch === null)) return { said, ask: null };
+  const one = behind.length === 1 && behind[0].repo === "." ? behind[0] : null;
+  const names = behind.map((repo) => (repo.repo === "." ? "the repo" : repo.repo));
+  return { said, ask: {
+    mark: units.join("-"),
+    question: one !== null
+      ? `Every Unit is merged, and your ${one.into} does not have ${joinNames(units)} yet. Bring it up to date with ` +
+        `${one.remote}/${one.into} first, so ${stageName} runs on the merged code?`
+      : `Every Unit is merged, and ${joinNames(names)} here ${names.length === 1 ? "does" : "do"} not have ${joinNames(units)} yet. ` +
+        `Bring ${names.length === 1 ? "it" : "them"} up to date first, so ${stageName} runs on the merged code?`,
+    choice: {
+      label: one !== null ? `Bring ${one.into} up to date` : `Bring ${names.length === 1 ? "it" : "them"} up to date`,
+      detail: one !== null
+        ? `Moves ${one.into} forward to ${one.remote}/${one.into}; nothing of yours changes.`
+        : `Moves ${names.length === 1 ? "it" : "each"} forward to its remote's branch; nothing of yours changes.`,
+      command: `${aidlcInvocation()} unit catch-up`,
+    },
+    notNow: `Run ${stageName} on what is here`,
+  } };
+}
+
+// `aidlc unit catch-up`: each repo of this checkout that lacks a merged Unit,
+// on the branch the Units merged into, brought level with its remote
+// (bringBranchLevel); nothing else moves.
+function catchUp(projectDir?: string): void {
+  const pd = resolveProjectDir(projectDir);
+  const behind = reposBehindMergedUnits(pd).filter((repo) => repo.branch !== null);
+  const level: string[] = [];
+  const lines: string[] = [];
+  const nameOf = (repo: ReposBehind): string => (repo.repo === "." ? repo.into : repo.repo);
+  for (const repo of behind) {
+    git(repo.dir, ["fetch", "-q", repo.remote, repo.into]);
+    const moved = bringBranchLevel(repo.dir, repo.remote, repo.into);
+    if (moved.ok) level.push(nameOf(repo));
+    else lines.push(`${nameOf(repo)} could not be brought up to date: git says "${gitSaid(moved.said)}". Build and Test runs on what is here.`);
+  }
+  const one = behind.length === 1 && behind[0].repo === "." ? behind[0] : null;
+  if (level.length > 0) {
+    lines.unshift(one !== null
+      ? `${one.into} is up to date with ${one.remote}/${one.into} now, with every merged Unit.`
+      : `${joinNames(level)} ${level.length === 1 ? "is" : "are"} up to date now, with every merged Unit.`);
+  }
+  console.log(JSON.stringify({
+    caught_up: level.length === behind.length,
+    notice: lines.join(" "),
+    step: "Tell the person in plain words what it reports, then run next.",
+  }));
+}
+
+// The code Units built at the lead's project wrote in this repository (their
+// Code Generation records here, in the workspace's own repo): the plan's share
+// carries it, so the plan and what the teams build on reach the branch the
+// work merges into together. None across repos, where that code is in repos of
+// its own.
+export function builtHereCode(projectDir: string): { units: string[]; paths: string[] } {
+  const pd = resolveProjectDir(projectDir);
+  const units: string[] = [];
+  const paths: string[] = [];
+  try {
+    const state = readStateFile(pd);
+    if (homeLocation(state) === null || unitBuildOf(state) !== null || intentRepos(pd).length > 0) return { units, paths };
+  } catch {
+    return { units, paths };
+  }
+  for (const unit of unitDependencies(pd).keys()) {
+    const manifest = readUnitSourceManifest(pd, "code-generation", unit);
+    if (!manifest.ok) continue;
+    const here = unitWriteTargets(pd, manifest.manifest.writes).get(".")?.paths ?? [];
+    if (here.length === 0) continue;
+    units.push(unit);
+    paths.push(...here);
+  }
+  return { units, paths };
+}
+
+// What the plan's share commits, as its question and its pull request choice
+// name it: the plan, and the code of Units built here when that is in the
+// commit (the files it changes, as workToCommitWords says them), or the plan
+// alone, AI-DLC's record.
+function planShareName(pd: string): string {
+  const { units } = builtHereCode(pd);
+  return planShareWork(pd) === null ? "the plan" : `the plan and ${units.length === 1 ? `${units[0]}'s code` : `the code of ${joinNames(units)}`}`;
+}
+
+function planShareWork(pd: string): string | null {
+  const { paths } = builtHereCode(pd);
+  if (paths.length === 0) return null;
+  const all = workToCommit(pd);
+  const inShare = (path: string): boolean => path === "repos.json" || path.startsWith("aidlc/") ||
+    paths.some((code) => path === code || (code.endsWith("/") && path.startsWith(code)));
+  const work = { ...all, paths: all.paths.filter(inShare) };
+  return work.paths.some((path) => !path.startsWith("aidlc/") && path !== "repos.json") ? workToCommitWords(pd, undefined, work) : null;
+}
+
+export function planShareWords(projectDir: string): string {
+  const pd = resolveProjectDir(projectDir);
+  const files = planShareWork(pd);
+  return files === null ? "the plan here (AI-DLC's record, nothing else of yours)" : `${planShareName(pd)}, ${files},`;
+}
+
 // `unit share --back`: from the plan's branch onto the integration branch once
 // the plan is in it: tried first in a copy of the index, then the branch
 // brought level with the remote's (fast-forward only) and switched to. Never a
@@ -6056,17 +6239,8 @@ function planBranchBack(pd: string): void {
   const { remote, branch } = target;
   const here = git(pd, ["symbolic-ref", "--quiet", "--short", "HEAD"]).stdout.trim() || "HEAD";
   const stay = (said: string): never => fail(`You stay on ${here} and nothing changed: git says ${gitWords(said)}`);
-  const scratch = mkdtempSync(join(tmpdir(), "aidlc-share-back-"));
-  try {
-    const index = resolve(pd, gitOutput(pd, ["rev-parse", "--git-path", "index"], "Cannot find the index"));
-    if (existsSync(index)) copyFileSync(index, join(scratch, "index"));
-    const tried = git(pd, ["read-tree", "-n", "-m", "-u", "HEAD", `refs/remotes/${remote}/${branch}`], { GIT_INDEX_FILE: join(scratch, "index") });
-    if (!tried.ok) stay(tried.stderr || tried.stdout);
-  } finally {
-    rmSync(scratch, { recursive: true, force: true });
-  }
-  const fetched = git(pd, ["fetch", remote, `${branch}:${branch}`], { GIT_TERMINAL_PROMPT: "0" });
-  if (!fetched.ok) stay(fetched.stderr);
+  const level = bringBranchLevel(pd, remote, branch);
+  if (!level.ok) stay(level.said);
   const switched = git(pd, ["switch", "-q", branch]);
   if (!switched.ok) fail(`Your ${branch} is level with ${remote} now, and you stay on ${here}: git says ${gitWords(switched.stderr)}`);
   console.log(JSON.stringify({
@@ -6087,9 +6261,10 @@ function planBranchBack(pd: string): void {
 // plan on that branch, pushed for a pull request (putPlanOnItsBranch);
 // `--back`: from that branch onto the integration branch once the plan is in
 // it (planBranchBack).
-// `--plan`: AI-DLC's record only (the plan a team's clone takes its Unit
-// from), for a home whose teams build in repos of their own; none of the
-// person's other files here is committed.
+// `--plan`: AI-DLC's record (the plan a team's clone takes its Unit from), for
+// a home whose teams take Units by pull request, with the code of Units built
+// here on the workspace's own repository; none of the person's other files
+// here is committed.
 function shareMain(args: string[], projectDir?: string): void {
   const pd = resolveProjectDir(projectDir);
   const flags = parseArgs(args).bareFlags;
@@ -7671,7 +7846,7 @@ function takeUnit(args: string[], projectDir?: string, rhythm?: UnitClaimPayload
   const earlyOn = early
     ? blockers.map((dep) => ({
       unit: dep,
-      repos: (depClaims.get(dep)?.payload.result?.repos ?? []).filter((repo) => ownRepos.size === 0 || ownRepos.has(repo.repo))
+      repos: (depClaims.get(dep)?.payload.result?.repos ?? []).filter((repo) => ownRepos.size === 0 || (repo.repo === "." && home.repos.length === 0) || ownRepos.has(repo.repo))
         .map((repo) => ({
           repo: repo.repo,
           branch: repo.branch,
@@ -9916,7 +10091,8 @@ export function earlyBaseMerged(
       const dir = repo === "." ? projectDir : repoDir(projectDir, repo);
       const remote = isGitRepoDir(dir) ? repositoryRemote(dir) : null;
       if (remote === null || !git(dir, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).ok) return [];
-      const onto = repoIntegration(dir, remote);
+      const workBranch = repo === "." ? homeIntegrationBranch(projectDir) : null;
+      const onto = workBranch !== null ? `${remote}/${workBranch}` : repoIntegration(dir, remote);
       // The integration branch as its remote has it now, with the merge.
       if (look) quietFetch(dir, ["-q", remote, onto.slice(remote.length + 1)]);
       if (git(dir, ["merge-base", "--is-ancestor", onto, `refs/heads/${branch}`]).ok) return [];
@@ -10984,6 +11160,7 @@ export function main(argv: string[]): void {
     else if (command === "release") releaseUnit(args, projectDir);
     else if (command === "participate") participate(projectDir);
     else if (command === "share") shareMain(args, projectDir);
+    else if (command === "catch-up") catchUp(projectDir);
     else if (command === "publish") publishUnit(args, projectDir);
     else if (command === "pin") pinUnit(args, projectDir);
     else if (command === "gate") gateUnitMerge(args, projectDir);

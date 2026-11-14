@@ -18,6 +18,7 @@ import {
   engineDir,
   filterProducesByKind,
   getField,
+  hasAnyUnitClaimRefs,
   intentDisplayLabel,
   intentRepos,
   teamsAcrossReposLine,
@@ -91,23 +92,29 @@ export function unitGateRhythmChosen(stateContent: string): boolean {
 }
 
 // Which team flow new team work takes, decided once as teams are chosen: the
-// build-out (assign, take, push, the team's own merge) for work whose code is
-// in repos of its own, recorded for the work, where main's landing cannot
-// carry it; main's claim, publish, pin, gate and land for work whose code is
-// the workspace's own repo. The Home Location to record, or null for main's
-// flow. `teammateTook`: a teammate took a Unit of solo work (switchSoloToTeams),
-// which only the build-out carries, so the home is recorded on one repo too.
+// build-out (assign, take, push, the team's own merge) for team work on a
+// remote, whatever repository its code is in; main's claim, publish, pin, gate
+// and land where the work's code is the workspace's own repo and nothing but
+// this machine reaches it (no remote), or where its remote already holds
+// main's claims of this work (teams chosen before, then one Unit at a time,
+// then teams again). Work across repos records "local" with no remote, as
+// before. The Home Location to record, or null for main's flow.
+// `teammateTook`: a teammate took a Unit of solo work (switchSoloToTeams).
 export function buildOutHomeLocation(projectDir: string, teammateTook = false): string | null {
-  return teammateTook || intentRepos(projectDir).length > 0 ? workspaceHomeLocation(projectDir) : null;
+  const home = workspaceHomeLocation(projectDir);
+  if (teammateTook || intentRepos(projectDir).length > 0) return home;
+  return home === "local" || hasAnyUnitClaimRefs(projectDir) ? null : home;
 }
 
-// Why teams cannot each own a Unit of work that records repos here, or null
-// when they can: the one test the ownership setter and the staffing step share.
+// Why teams cannot each own a Unit of the work here, or null when they can:
+// the one test the ownership setter and the staffing step share. A project in
+// a folder below its repository's top cannot, whatever its code is.
 export function buildOutBlockedLine(projectDir: string, unitCount?: number): string | null {
   const repos = intentRepos(projectDir);
-  if (repos.length === 0 || workspaceHomeLocation(projectDir) !== null) return null;
   const at = projectInRepo(projectDir);
-  if (at === null || at.prefix === "") return teamsAcrossReposLine(repos.length, unitCount);
+  const inFolder = at !== null && at.prefix !== "";
+  if (repos.length === 0 ? !inFolder : workspaceHomeLocation(projectDir) !== null) return null;
+  if (at === null || !inFolder) return teamsAcrossReposLine(repos.length, unitCount);
   const units = unitCount === undefined ? "its Units" : `its ${unitCount} Units`;
   return `This project sits in ${at.prefix.replace(/\/$/, "")} of ${at.top}, not at the top of its git repository, so ` +
     `this session builds ${units}: for teams to each own a Unit, start the work in a workspace of its own beside ` +

@@ -61,7 +61,8 @@ diagnostic and lifecycle routes.
 | `/aidlc unit merged <unit> --repo <repo>` | At the lead's project, count one repo of a team's Unit as merged where the board does not see it, in your words |
 | `/aidlc unit adopt <unit>` | Adopt the checked-out live claim branch in a fresh clone |
 | `/aidlc unit participate` | Mark this clone for the guided Unit-claim picker |
-| `/aidlc unit share [--plan] [--branch \| --back]` | Commit the work here and push the integration branch so the teams can take Units, or see a landed one; `--plan` commits AI-DLC's record only, for a lead's project whose teams build in repos of their own; `--branch` pushes the plan on a branch of its own for a pull request; `--back` switches back to the integration branch once the plan is in it |
+| `/aidlc unit catch-up` | At the lead's project, before Build and Test, bring each repo here that lacks a merged Unit up to date with its remote, a fast-forward only |
+| `/aidlc unit share [--plan] [--branch \| --back]` | Commit the work here and push the integration branch so the teams can take Units, or see a landed one; `--plan` commits AI-DLC's record only (with the code of a Unit built here, on the workspace's own repository), for a lead's project whose teams take Units by pull request; `--branch` pushes the plan on a branch of its own for a pull request; `--back` switches back to the integration branch once the plan is in it |
 | `/aidlc unit publish <unit> [--commit [--include <path>]...]` | CAS-publish the scoped checkout's clean committed candidate onto its claim ref; `--commit` commits the Unit's own work first, and `--include` puts in a new file or folder it left out |
 | `/aidlc unit pin <unit>` | Pin and validate one completed candidate OID from unscoped main |
 | `/aidlc unit gate <unit> ...` | Record the merge decision against the pinned OID and generation |
@@ -915,6 +916,16 @@ with the words, and the lead's project records it again once it merges again
 message they came in, beside the failure). Nothing of it is rebuilt at the
 lead's project. To fix it at the lead's project instead, the agent takes it
 back (`unit assign --here <unit>`) and reopens its Code Generation there.
+
+### `/aidlc unit catch-up` - Bring this checkout up to date before Build and Test
+
+At the lead's project, once every Unit is merged on its remote, Build and Test
+asks once when this checkout does not have them yet. `catch-up` moves each such
+repo's branch (the one the Units merged into, when it is checked out) forward
+to its remote's copy: it tries the move first in a copy of the index, then
+fast-forwards, so it never resets, stashes, merges or forces. A move git
+refuses (a file of yours in the way) changes nothing and says so in git's
+words; Build and Test then runs on what is here.
 
 ### `/aidlc unit rebase` - Move an early build onto what merged
 

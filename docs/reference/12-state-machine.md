@@ -945,7 +945,7 @@ column.
 | `PLUGIN_SELECTION_CHANGED` | `tools/aidlc-utility.ts` | `select-plugins` set-mode; fields: `Previous Selection`, `New Selection` |
 | `DEPTH_CHANGED` | `tools/aidlc-guard-switch.ts` | `config set depth <value>` / `config-change --depth` |
 | `TEST_STRATEGY_CHANGED` | `tools/aidlc-guard-switch.ts` | `config set test-strategy <value>` / `config-change --test-strategy` |
-| `UNIT_OWNERSHIP_SET` | `tools/aidlc-state.ts` | `set-unit-ownership team|solo`, with `Home Location` as teams are chosen for work that records code repos of its own (`aidlc-unit.ts` runs it when a teammate took a Unit of solo work from another machine); team switches a stage-major plan to unit-major first (`CONSTRUCTION_POLICY_SET`) |
+| `UNIT_OWNERSHIP_SET` | `tools/aidlc-state.ts` | `set-unit-ownership team|solo`, with `Home Location` as teams are chosen for team work on a remote (work that records code repos of its own records `local` with no remote) (`aidlc-unit.ts` runs it when a teammate took a Unit of solo work from another machine); team switches a stage-major plan to unit-major first (`CONSTRUCTION_POLICY_SET`) |
 | `UNIT_GATE_RHYTHM_SET` | `tools/aidlc-state.ts` | `set-unit-gate-rhythm per-stage|unit-end`; team mode only |
 | `LEAD_SIGN_OFF_SET` | `tools/aidlc-unit.ts` | `lead-sign-off on|off [--request-file <file>]` at the home; fields `Mode` and the lead's own `Person Words`, whole |
 | `LEAD_HERE_SET` | `tools/aidlc-unit.ts` | `lead-here [--message <id>] (--request-file <file> \| --person-words <text>)` in a checkout that did not make the plan; the lead's own `Person Words`, whole, and `Message Id`; `planMadeElsewhere` reads it in this checkout's own shard |
