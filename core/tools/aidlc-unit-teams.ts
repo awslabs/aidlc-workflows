@@ -639,15 +639,36 @@ export function checkInNotice(state: CheckIn): string | null {
 
 // Status's Checked in field for the same, or null. The branch is named, so a
 // record merged by its pull request is not read as still on the branch pushed
-// for it; a checkout that merge left ahead and behind hears how to bring it level.
+// for it; a checkout that merge left ahead and behind hears the command that
+// brings it level, losing nothing (levelByContent).
 export function checkInStatus(state: CheckIn): string | null {
   if (typeof state === "string") return null;
   if ("pushedOn" in state) return `Checked in:     pushed on ${state.pushedOn}, not in ${state.into} yet`;
   const yes = `Checked in:     yes, aidlc/ is in ${state.into} on ${state.remote}`;
   if (state.split === null) return yes;
   const theirs = `${state.remote}/${state.into}`;
+  // Loaded only here, as checkInState loads it: aidlc-unit.ts imports this file.
+  const { CHECKOUT_STEPS } = require("./aidlc-unit.ts") as typeof import("./aidlc-unit.ts");
   return `${yes}\n${`Your ${state.into}:`.padEnd(15)} ${theirs} already has your work, merged as commits of its own, so yours is ` +
-    `${state.split.ahead} ahead and ${state.split.behind} behind. git reset --keep ${theirs} brings it level; nothing of yours is lost.`;
+    `${state.split.ahead} ahead and ${state.split.behind} behind. \`${CHECKOUT_STEPS.level.terminal()}\` brings it level; nothing of yours is lost.`;
+}
+
+// The work's checkout on its branch that a squash or rebase merge left ahead
+// and behind the remote's copy, with all of its work there (checkInState's
+// split): what the offer to bring it level names, and this commit of theirs,
+// its once. The branch is read against its upstream first, so a look that is
+// not split reads nothing more. Null when it is not so.
+export function levelDue(projectDir: string, stateContent: string):
+  { head: string; remote: string; branch: string; ahead: number; behind: number } | null {
+  const run = (args: string[]) => spawnSync("git", ["-C", projectDir, ...args], { encoding: "utf-8", timeout: 10_000 });
+  const counted = run(["rev-list", "--left-right", "--count", "HEAD...@{upstream}"]);
+  // With no upstream, checkInState reads the work's own branch.
+  const [ahead = 0, behind = 0] = counted.status === 0 ? counted.stdout.trim().split(/\s+/).map(Number) : [1, 1];
+  if (!(ahead > 0 && behind > 0) || !checkInApplies(projectDir, stateContent)) return null;
+  const state = checkInState(projectDir, stateContent);
+  if (typeof state !== "object" || !("split" in state) || state.split === null) return null;
+  const head = run(["rev-parse", "HEAD"]).stdout.trim();
+  return head === "" ? null : { head, remote: state.remote, branch: state.into, ...state.split };
 }
 
 // Teams across repos share AI-DLC's record by git, and the person checks it in.
@@ -769,6 +790,64 @@ export function headInByContent(projectDir: string, into: string, from = "HEAD")
   return mine === null || differ === null ? null : ![...mine].some((path) => differ.has(path));
 }
 
+// Why `git reset --keep` would lose something of theirs bringing a branch level
+// (levelByContent), for the line the person reads.
+export type LevelBlock =
+  | { why: "staged" }
+  | { why: "changed"; path: string }
+  | { why: "replaced"; path: string }
+  | { why: "own-work" };
+
+// A checkout on `branch` that a squash or rebase merge left ahead and behind
+// `remote`'s copy of it (as this clone last fetched it), and whether `git reset
+// --keep` to that copy's commit (`theirs`, read here) brings it level losing
+// nothing: everything its own commits changed is in that copy by content, over
+// the whole repo; nothing is staged (reset --keep would unstage it); no change
+// of theirs is on a file the two differ in (it refuses); no untracked or ignored
+// file of theirs sits where the copy adds one (it would replace an ignored one).
+// `block` names the first that stands, null when none does. Null when the
+// branch is not checked out here, it is not both ahead and behind, or git
+// cannot tell. The one proof status's line and bringBranchLevel's reset read.
+export function levelByContent(dir: string, remote: string, branch: string):
+  { ahead: number; behind: number; theirs: string; block: LevelBlock | null } | null {
+  const run = (args: string[]) => spawnSync("git", ["-C", dir, ...args], { encoding: "utf-8", timeout: 10_000 });
+  if (run(["symbolic-ref", "--quiet", "HEAD"]).stdout.trim() !== `refs/heads/${branch}`) return null;
+  const theirs = run(["rev-parse", "--verify", "--quiet", `refs/remotes/${remote}/${branch}^{commit}`]).stdout.trim();
+  if (theirs === "") return null;
+  const counted = run(["rev-list", "--left-right", "--count", `HEAD...${theirs}`]);
+  const [ahead = 0, behind = 0] = counted.stdout.trim().split(/\s+/).map(Number);
+  if (counted.status !== 0 || !(ahead > 0 && behind > 0)) return null;
+  const mine = diffNames(dir, [`${theirs}...HEAD`], []);
+  const differ = diffNames(dir, [theirs, "HEAD"], []);
+  const added = diffNames(dir, ["--diff-filter=A", "HEAD", theirs], []);
+  const top = run(["rev-parse", "--show-toplevel"]);
+  const staged = run(["diff", "--cached", "--quiet"]);
+  const dirty = run(["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
+  if (mine === null || mine.size === 0 || differ === null || added === null || top.status !== 0 || dirty.status !== 0 ||
+    (staged.status !== 0 && staged.status !== 1)) {
+    return null;
+  }
+  const level = { ahead, behind, theirs };
+  if ([...mine].some((path) => differ.has(path))) return { ...level, block: { why: "own-work" } };
+  if (staged.status === 1) return { ...level, block: { why: "staged" } };
+  // -z entries: "XY path", a rename's or copy's source path after it on its own.
+  for (const entry of dirty.stdout.split("\0").filter(Boolean)) {
+    const path = differ.has(entry) ? entry : entry.slice(3);
+    if (!differ.has(path)) continue;
+    return { ...level, block: entry.startsWith("??") ? { why: "replaced", path } : { why: "changed", path } };
+  }
+  // An ignored file git status does not list, where the copy adds one.
+  for (const path of added) {
+    try {
+      lstatSync(join(top.stdout.trim(), ...path.split("/")));
+      return { ...level, block: { why: "replaced", path } };
+    } catch {
+      // Not there: nothing of theirs in its way.
+    }
+  }
+  return { ...level, block: null };
+}
+
 // Whether aidlc/ is checked in, from local git only: nothing under it changed
 // but the rows each look adds to this clone's own audit file (onlyOwnLookRows,
 // doctor's rule too; a decision of the person's there still counts) and, at a
@@ -822,21 +901,11 @@ export function checkInState(projectDir: string, stateContent?: string): CheckIn
   }
   // A squash or rebase merge puts the same files in as commits of its own.
   const names = (range: string[], paths = ["aidlc"]): Set<string> | null => diffNames(projectDir, range, paths);
-  // This checkout on the integration branch itself, ahead and behind it, when a
-  // squash or rebase merge took in everything its own commits changed, over the
-  // whole repo: then `git reset --keep` brings it level and loses nothing. Null
-  // when it would not (an uncommitted or untracked file on a file the two differ
-  // in, where reset --keep refuses) or git cannot tell.
+  // This checkout on the integration branch itself, ahead and behind it, that
+  // AI-DLC can bring level losing nothing (levelByContent).
   const split = (): { ahead: number; behind: number } | null => {
-    if (run(["symbolic-ref", "--quiet", "HEAD"]).stdout.trim() !== `refs/heads/${integration.branch}`) return null;
-    const [ahead = 0, behind = 0] = run(["rev-list", "--left-right", "--count", `HEAD...${into}`]).stdout.trim().split(/\s+/).map(Number);
-    if (!(ahead > 0 && behind > 0)) return null;
-    const mine = names([`${into}...HEAD`], []);
-    const differ = names([into, "HEAD"], []);
-    const dirty = run(["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
-    if (mine === null || mine.size === 0 || differ === null || dirty.status !== 0 || [...mine].some((path) => differ.has(path))) return null;
-    // -z entries as above: a rename's source path stands alone.
-    return dirty.stdout.split("\0").some((entry) => differ.has(entry.slice(3)) || differ.has(entry)) ? null : { ahead, behind };
+    const level = levelByContent(projectDir, integration.remote, integration.branch);
+    return level === null || level.block !== null ? null : { ahead: level.ahead, behind: level.behind };
   };
   const checkedIn = () => ({ into: integration.branch, remote: integration.remote, split: split() });
   const ahead = run(["log", "--format=%H", `${into}..HEAD`, "--", "aidlc"]);

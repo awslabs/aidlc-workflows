@@ -291,7 +291,8 @@ describe("the plan's share fits the team's own git: a protected main, a branch o
   // answer to the rhythm question.
   function afterTheShare(dir: string, answer: Rhythm): void {
     appendAuditEntry("HUMAN_TURN", { "Person Reply": "ok" }, dir);
-    next(dir);
+    // A main the merge left ahead and behind is offered to be brought level first, once; Not now is the board.
+    if (String(next(dir).question ?? "").includes("Want me to bring your main level")) next(dir);
     expect(stateOf(dir)).toContain("## Unit Progress");
     appendAuditEntry("HUMAN_TURN", { "Person Reply": answer }, dir);
     setRhythm(dir, answer);
@@ -307,25 +308,21 @@ describe("the plan's share fits the team's own git: a protected main, a branch o
     }
   });
 
-  test("a main a squash or rebase merge left ahead and behind origin's: status says so once with the way to bring it level, which loses nothing", () => {
+  // Status, a report at the person's own terminal, names the command itself.
+  const levelLine = (split: string) => new RegExp("Your main:      origin/main already has your work, merged as commits of its own, " +
+    `so yours is ${split}\\. \`[^\`\\n]* unit share --back\` brings it level; nothing of yours is lost\\.\\n`);
+  const levelChat = (name: string): NodeJS.ProcessEnv => ({ ...ENV, AIDLC_SESSION_OVERRIDE: `t-unit-assignment-level-${name}` });
+  const levelQuestion = (split: string) => `origin/main already has your work, merged as commits of its own, so your main is ${split} it. ` +
+    "Want me to bring your main level with it? Nothing of yours is lost.";
+  type LevelChoice = { label: string; detail?: string; command?: string };
+
+  test("a main a squash or rebase merge left ahead and behind origin's: status says so once, with no git command, and that AI-DLC can bring it level", () => {
     for (const [how, split] of [["squash", "1 ahead and 1 behind"], ["rebase", "1 ahead and 2 behind"]] as const) {
       const dir = planMergedBy(how);
       const status = statusOf(dir);
-      const line = "Your main:      origin/main already has your work, merged as commits of its own, so yours is " +
-        `${split}. git reset --keep origin/main brings it level; nothing of yours is lost.\n`;
-      expect(status, how).toContain(line);
+      expect(status, how).toMatch(levelLine(split));
+      expect(status, how).not.toContain("git reset");
       expect(status.split("Your main:").length - 1, how).toBe(1);
-      // An uncommitted change of the lead's, as in the run, stays through the line's own command.
-      writeFileSync(join(dir, ".gitignore"), `${readFileSync(join(dir, ".gitignore"), "utf-8")}scratch/\n`);
-      expect(statusOf(dir), how).toContain(line);
-      const before = git(dir, ["rev-parse", "HEAD"]);
-      git(dir, ["reset", "-q", "--keep", "origin/main"]);
-      // Every file the lead's main had is there as it was; only what origin's main added is new.
-      expect(git(dir, ["diff", "--name-only", "--diff-filter=DMT", before, "HEAD"]), how).toBe("");
-      expect(readFileSync(join(dir, ".gitignore"), "utf-8"), how).toEndWith("scratch/\n");
-      const level = statusOf(dir);
-      expect(level, how).toContain(IN_MAIN);
-      expect(level, how).not.toContain("Your main:");
     }
     // Only behind (a merge commit), or ahead with a commit origin's main does not have: nothing is said.
     expect(statusOf(planMergedBy("merge"))).not.toContain("Your main:");
@@ -336,6 +333,62 @@ describe("the plan's share fits the team's own git: a protected main, a branch o
     const rebased = planMergedBy("rebase");
     writeFileSync(join(rebased, "before-plan-checkout.md"), "The lead's own, not committed.\n");
     expect(statusOf(rebased)).not.toContain("Your main:");
+    // A staged change, which git reset --keep would unstage: nothing is said.
+    const staged = planMergedBy("squash");
+    writeFileSync(join(staged, "notes.md"), "Staged, not committed.\n");
+    git(staged, ["add", "notes.md"]);
+    expect(statusOf(staged)).not.toContain("Your main:");
+    // An ignored file of the lead's own where origin's main adds one, which git reset --keep would replace: nothing is said.
+    const ignored = planMergedBy("rebase");
+    writeFileSync(join(ignored, ".git", "info", "exclude"), "before-plan-checkout.md\n");
+    writeFileSync(join(ignored, "before-plan-checkout.md"), "The lead's own, ignored.\n");
+    expect(statusOf(ignored)).not.toContain("Your main:");
+  });
+
+  test("the next look offers once to bring that main level, in a new chat too; yes brings it level losing nothing and names the old commit, and Not now never asks again", () => {
+    for (const [how, split] of [["squash", "1 ahead and 1 behind"], ["rebase", "1 ahead and 2 behind"]] as const) {
+      const dir = planMergedBy(how);
+      // An uncommitted change of the lead's, as in the run, stays through the yes.
+      writeFileSync(join(dir, ".gitignore"), `${readFileSync(join(dir, ".gitignore"), "utf-8")}scratch/\n`);
+      const before = git(dir, ["rev-parse", "HEAD"]);
+      const short = git(dir, ["rev-parse", "--short", "HEAD"]);
+      const offer = next(dir, levelChat(`yes-${how}`));
+      expect(String(offer.question), JSON.stringify(offer).slice(0, 600)).toBe(levelQuestion(split));
+      const choices = offer.choices as LevelChoice[];
+      expect(choices.map((choice) => choice.label), how).toEqual(["Bring main level", "Not now"]);
+      expect(choices[0].detail).toBe("Your main moves to origin/main; your uncommitted changes stay as they are.");
+      expect(choices[1].detail).toBe("Your main stays as it is.");
+      expect(String(choices[0].command)).toMatch(/ unit share --back$/);
+      const yes = run(UNIT, ["share", "--back"], dir);
+      expect(yes.status, yes.out).toBe(0);
+      expect(yes.json?.notice, how).toBe(`Your main is level with origin/main now, with all your work in it. It was at ${short} before, if you ever want that back.`);
+      // Every file the lead's main had is there as it was; only what origin's main added is new.
+      expect(git(dir, ["rev-parse", "HEAD"])).toBe(git(dir, ["rev-parse", "origin/main"]));
+      expect(git(dir, ["diff", "--name-only", "--diff-filter=DMT", before, "HEAD"]), how).toBe("");
+      expect(readFileSync(join(dir, ".gitignore"), "utf-8"), how).toEndWith("scratch/\n");
+      const level = statusOf(dir);
+      expect(level, how).toContain(IN_MAIN);
+      expect(level, how).not.toContain("Your main:");
+      expect(JSON.stringify(next(dir, levelChat(`after-${how}`)))).not.toContain("bring your main level");
+    }
+    // Not now: never asked again, in that chat or a new one, and the look's note carries the command for their words later.
+    const dir = planMergedBy("squash");
+    const offer = next(dir, levelChat("not-now"));
+    expect(String(offer.question)).toBe(levelQuestion("1 ahead and 1 behind"));
+    for (const chat of ["not-now", "not-now-later"]) {
+      const after = next(dir, levelChat(chat));
+      expect(String(after.question ?? ""), chat).not.toBe(levelQuestion("1 ahead and 1 behind"));
+      expect(String(after.board_note ?? ""), chat).toMatch(/When the person asks to bring their main level, run `[^`]* unit share --back` and tell them in plain words what it reports\./);
+    }
+    // Something of theirs staged since the offer: the yes says why main stays as it was, and changes nothing.
+    writeFileSync(join(dir, "notes.md"), "Staged since.\n");
+    git(dir, ["add", "notes.md"]);
+    const head = git(dir, ["rev-parse", "HEAD"]);
+    const kept = run(UNIT, ["share", "--back"], dir);
+    expect(kept.status).not.toBe(0);
+    expect(kept.out).toContain("Your main stays as it was: you have staged changes, and bringing it level would unstage them.");
+    expect(git(dir, ["rev-parse", "HEAD"])).toBe(head);
+    expect(git(dir, ["diff", "--cached", "--name-only"])).toBe("notes.md");
   });
 
   // The second run on GitHub (case 7): after the share the board wrote its Unit
@@ -351,11 +404,11 @@ describe("the plan's share fits the team's own git: a protected main, a branch o
     for (const [how, split] of [["squash", "1 ahead and 1 behind"], ["rebase", "1 ahead and 2 behind"]] as const) {
       const dir = planMergedBy(how, { answer: "per-stage" });
       const status = statusOf(dir);
-      expect(status, how).toContain("Your main:      origin/main already has your work, merged as commits of its own, so yours is " +
-        `${split}. git reset --keep origin/main brings it level; nothing of yours is lost.\n`);
+      expect(status, how).toMatch(levelLine(split));
       expect(status.split("Your main:").length - 1, how).toBe(1);
-      // The line's own command, with those writes in the tree: they stay, and the line goes.
-      git(dir, ["reset", "-q", "--keep", "origin/main"]);
+      // The yes, with those writes in the tree: they stay, and the line goes.
+      const yes = run(UNIT, ["share", "--back"], dir);
+      expect(yes.status, yes.out).toBe(0);
       expect(stateOf(dir), how).toContain("- **Unit Gate Rhythm**: per-stage");
       expect(stateOf(dir), how).toContain("## Unit Progress");
       const level = statusOf(dir);

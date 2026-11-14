@@ -649,6 +649,7 @@ import {
   changedInputs,
   ownBuildBranch,
   CHECKOUT_STEPS,
+  leadsPlanOnRemote,
   claimIsMine,
   buildClaimHere,
   planUnshared,
@@ -778,6 +779,7 @@ import {
   checkInNotice,
   checkInState,
   CHECKED_IN_LINE,
+  levelDue,
   stagesCounted,
   lastCommittedByThisPerson,
   findUnitBuild,
@@ -2090,6 +2092,13 @@ function prepareEmission(directive: Directive): PreparedEmission {
   if (directive.kind !== "load-steering" && directive.kind !== "error" && !("board_note" in directive) &&
     engineProjectDir && atTeamHome(engineProjectDir)) {
     const noted = { ...directive, board_note: teamCommandsNote() } as Directive;
+    if (Buffer.byteLength(JSON.stringify(noted), "utf-8") <= directiveMaxBytes()) directive = noted;
+  }
+  const levelNote = engineProjectDir && directive.kind !== "load-steering" && directive.kind !== "error" && directive.kind !== "ask" &&
+    !isReadOnlyEngineProbe() ? levelOfferNote(engineProjectDir) : null;
+  if (levelNote !== null) {
+    const before = "board_note" in directive && typeof directive.board_note === "string" ? directive.board_note : "";
+    const noted = { ...directive, board_note: [before, levelNote].filter(Boolean).join(" ") } as Directive;
     if (Buffer.byteLength(JSON.stringify(noted), "utf-8") <= directiveMaxBytes()) directive = noted;
   }
   // Per-unit Construction beats: `unit` is attached by callers after the
@@ -9863,6 +9872,95 @@ function unitProposeAsk(projectDir: string, stateContent: string): AskDirective 
   return null;
 }
 
+// The work's main a squash or rebase merge left ahead and behind its remote's
+// copy, with all of its work there (levelDue): bringing it level is offered
+// once for this commit of theirs. Null when not so, or already offered for it.
+function levelOfferAsk(projectDir: string, stateContent: string): AskDirective | null {
+  const due = levelDue(projectDir, stateContent);
+  if (due === null) return null;
+  const mark = teamHandoverMarkName("level", due.head.slice(0, 12));
+  if (handoverOffered(projectDir, mark)) return null;
+  const theirs = `${due.remote}/${due.branch}`;
+  return teamHandoverAsk(projectDir, {
+    handovers: ["catch-up"],
+    marks: [mark],
+    question: `${theirs} already has your work, merged as commits of its own, so your ${due.branch} is ${due.ahead} ahead and ` +
+      `${due.behind} behind it. Want me to bring your ${due.branch} level with it? Nothing of yours is lost.`,
+    choices: [{
+      label: `Bring ${due.branch} level`,
+      detail: `Your ${due.branch} moves to ${theirs}; your uncommitted changes stay as they are.`,
+      command: CHECKOUT_STEPS.level.via(),
+    }],
+    notNow: { label: "Not now", detail: `Your ${due.branch} stays as it is.` },
+  });
+}
+
+// After that offer, while the main it was put for still stands ahead and
+// behind: the command for the agent when the person asks for it in words.
+function levelOfferNote(projectDir: string): string | null {
+  const state = loadStateFileIfPresent(projectDir);
+  const due = state === null ? null : levelDue(projectDir, state);
+  if (due === null || !handoverOffered(projectDir, teamHandoverMarkName("level", due.head.slice(0, 12)))) return null;
+  return `When the person asks to bring their ${due.branch} level, run \`${CHECKOUT_STEPS.level.via()}\` and tell them in plain words what it reports.`;
+}
+
+// A teammate's clone the lead's plan has not reached (leadsPlanNotHere): with
+// the plan on the remote's branch, bringing it in is offered once in a chat,
+// then said with the command for the agent when they ask; else where it
+// stands. Nothing is written here that the lead's share would meet.
+function leadsPlanStep(pd: string): PrintDirective | AskDirective {
+  const wait = (line: string, boardNote?: string): PrintDirective => {
+    const step = turnEndingPrint(
+      "Nothing is in progress here yet. Say the line above, then wait: when they say what to build, run that as " +
+        `their request (${entrySkillInvocation()} "<their words>").`,
+    );
+    step.narration = line;
+    if (boardNote !== undefined) step.board_note = boardNote;
+    return step;
+  };
+  const plan = leadsPlanOnRemote(pd);
+  if (plan === null) return wait("The lead's plan has not reached this clone yet, so there is no Unit here to take.");
+  const theirs = `${plan.remote}/${plan.branch}`;
+  if (plan.at === "unreached") {
+    return wait(`The lead's plan has not reached this clone yet, and ${plan.remote} could not be reached just now to look for it, so ` +
+      "there is no Unit here to take. I'll look again next time.");
+  }
+  if (plan.at === "not-there") return wait(`The lead's plan is not in ${theirs} yet, so there is no Unit here to take. Once it is, I'll offer to bring it in.`);
+  const via = CHECKOUT_STEPS.forward.via();
+  const question = `The lead's plan is in ${theirs}, and this clone does not have it yet. Want me to bring your ${plan.branch} up ` +
+    "to date with it, so I can offer you the Units?";
+  const bring: AskChoice = plan.onBranch
+    ? {
+      label: `Bring ${plan.branch} up to date`,
+      detail: plan.level
+        ? `Your ${plan.branch} moves to ${theirs}, which already has all your work; your uncommitted changes stay as they are.`
+        : `Moves ${plan.branch} forward to ${theirs}; nothing of yours changes.`,
+      command: via,
+    }
+    : {
+      label: `Bring ${plan.branch} up to date and switch to it`,
+      detail: `Moves ${plan.branch} forward to ${theirs} and puts you on it; your own changes stay as they are.`,
+      command: via,
+    };
+  // Once in a chat (offersOnce: no work is selected here to hold a mark).
+  if (offersOnce(pd, [{ question, choices: [{ label: bring.label, command: via }] }]).length > 0) {
+    return {
+      kind: "ask",
+      ask_type: "team-handover",
+      response_route: "command",
+      handovers: ["catch-up"],
+      question,
+      choices: [bring, {
+        label: "Not now",
+        detail: `Nothing changes; there is no Unit here to take until ${plan.branch} has the plan.`,
+        command: `${aidlcToolInvocation("orchestrate")} next`,
+      }],
+    };
+  }
+  return wait(`The lead's plan is in ${theirs} and not in this clone yet, so there is no Unit here to take.`,
+    `When the person asks to bring the lead's plan in, run \`${via}\` and tell them in plain words what it reports.`);
+}
+
 // A Unit this build started early on, now merged at the home: the offer to move
 // the build onto the integration branch, once per Unit, and once more when the
 // build was pushed since (its next push then needs their own force push).
@@ -14258,6 +14356,13 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     emit(moveOnto);
     return;
   }
+  // The work's main left ahead and behind by a squash or rebase merge, all of its work there: offered once, at a bare look.
+  const levelAsk = stateContent !== null && plainNext && flags.intent === undefined && !isReadOnlyEngineProbe()
+    ? levelOfferAsk(pd, stateContent) : null;
+  if (levelAsk) {
+    emit(levelAsk);
+    return;
+  }
   // Archived is terminal for routing, including scoped Unit checkouts. Keep
   // this before Unit jump/park handling so every next shape returns the same
   // archived result instead of reviving or locally parking retired work.
@@ -15290,13 +15395,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     // a bare /aidlc's answer in the take offer's place: nothing to take yet, and
     // nothing written here that the lead's share would meet.
     if (leadsPlanNotHere(pd)) {
-      const wait = turnEndingPrint(
-        "Nothing is in progress here yet. Say the line above, then wait: when they say what to build, run that as " +
-          `their request (${entrySkillInvocation()} "<their words>").`,
-      );
-      wait.narration = "The lead's plan has not reached this clone yet, so there is no Unit here to take. Once the lead " +
-        "has shared it, run git pull here and I'll offer you the Units.";
-      emit(wait);
+      emit(leadsPlanStep(pd));
       return;
     }
     // Work in progress here with none selected (a teammate's fresh clone, or a

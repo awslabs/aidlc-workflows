@@ -2670,8 +2670,10 @@ describe("a likely repo this workspace has no copy of", () => {
 // was told "Tell me what to build" and wrote AI-DLC's parts of .gitignore and
 // AGENTS.md there, which the lead's share then met: their git pull aborted.
 describe("a teammate's clone before the lead's project shared its plan", () => {
-  const LINE = "The lead's plan has not reached this clone yet, so there is no Unit here to take. Once the lead has " +
-    "shared it, run git pull here and I'll offer you the Units.";
+  const LINE = "The lead's plan is not in origin/main yet, so there is no Unit here to take. Once it is, I'll offer to bring it in.";
+  const OFFER = "The lead's plan is in origin/main, and this clone does not have it yet. Want me to bring your main up to date " +
+    "with it, so I can offer you the Units?";
+  type Choice = { label: string; detail?: string; command?: string };
   const RISK = "The lead's plan has not reached this clone yet, so there is no Unit here to take, and work you start " +
     "here can stop git pull from bringing the plan in later.";
 
@@ -2703,11 +2705,12 @@ describe("a teammate's clone before the lead's project shared its plan", () => {
     return { home, bob, host, orch: join(bob, ".codex", "tools", "aidlc-orchestrate.ts") };
   }
 
-  test("the first chat writes no root file, a bare /aidlc says the plan is not here yet, and the lead's share pulls in", () => {
+  test("the first chat writes no root file, a bare /aidlc says the plan is not in origin/main yet with no git command, and once the lead shares it the look offers to bring it in", () => {
     const { home, bob, orch } = leadNotSharedYet({ "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") });
     expect(git(bob, ["status", "--porcelain", "--", ".gitignore", "AGENTS.md"])).toBe("");
     const first = next(bob, ENV, [], orch);
     expect(first.narration, JSON.stringify(first)).toBe(LINE);
+    expect(JSON.stringify(first)).not.toContain("git pull");
     // The lead's own checkout, with its record, is never read as such a clone.
     expect(leadsPlanNotHere(bob)).toBe(true);
     expect(leadsPlanNotHere(home.dir)).toBe(false);
@@ -2718,8 +2721,19 @@ describe("a teammate's clone before the lead's project shared its plan", () => {
     expect(git(bob, ["add", "-A", "--dry-run"])).toBe("");
     const shared = run(UNIT, ["share", "--plan"], home.dir);
     expect(shared.status, shared.out).toBe(0);
-    const pulled = spawnSync("git", ["pull", "-q"], { cwd: bob, encoding: "utf-8", env: GIT_ENV });
-    expect(pulled.status, pulled.stderr).toBe(0);
+    // The look reads origin's main itself and offers once to bring the plan in.
+    const offer = next(bob, ENV, [], orch);
+    expect(String(offer.question), JSON.stringify(offer).slice(0, 600)).toBe(OFFER);
+    const choices = offer.choices as Choice[];
+    expect(choices.map((choice) => choice.label)).toEqual(["Bring main up to date", "Not now"]);
+    expect(choices[0].detail).toBe("Moves main forward to origin/main; nothing of yours changes.");
+    expect(choices[1].detail).toBe("Nothing changes; there is no Unit here to take until main has the plan.");
+    expect(String(choices[0].command)).toMatch(/ unit share --back$/);
+    const brought = run(UNIT, ["share", "--back"], bob);
+    expect(brought.status, brought.out).toBe(0);
+    expect(brought.json?.notice).toBe("Your main is up to date with origin/main now, with the lead's plan.");
+    expect(String(brought.json?.step)).toContain("then run next");
+    expect(leadsPlanNotHere(bob)).toBe(false);
     // With the plan in, the teammate's own build record shows and commits as anywhere.
     const took = takeFrom("payments", bob, "refunds");
     expect(took.status, took.out).toBe(0);
@@ -2774,6 +2788,27 @@ describe("a teammate's clone before the lead's project shared its plan", () => {
     expect(words.change_notices, JSON.stringify(words)).toContain(RISK);
     expect(String(words.message)).toContain("build a refunds report for finance");
     expect(next(bob, ENV, ["--resume"], orch).narration).toBe(LINE);
+  });
+
+  test("Not now leaves where it stands with no question again in that chat, the command for their words later, and on another branch the yes puts them on main", () => {
+    const { home, bob, host, orch } = leadNotSharedYet({ "checkout-api": codeHost("checkout-api") });
+    expect(run(UNIT, ["share", "--plan"], home.dir).status).toBe(0);
+    expect(String(next(bob, ENV, [], orch).question)).toBe(OFFER);
+    const after = next(bob, ENV, [], orch);
+    expect(after.narration, JSON.stringify(after)).toBe("The lead's plan is in origin/main and not in this clone yet, so there is no Unit here to take.");
+    expect(String(after.board_note)).toMatch(/When the person asks to bring the lead's plan in, run `[^`]* unit share --back` and tell them in plain words what it reports\./);
+    // On a branch of their own, in their next chat: the yes brings main up to date and puts them on it.
+    git(bob, ["switch", "-q", "-c", "notes"]);
+    host.newSession();
+    host.sessionStart("startup");
+    const elsewhere = next(bob, ENV, [], orch);
+    const choices = elsewhere.choices as Choice[];
+    expect(choices[0].label, JSON.stringify(elsewhere).slice(0, 600)).toBe("Bring main up to date and switch to it");
+    expect(choices[0].detail).toBe("Moves main forward to origin/main and puts you on it; your own changes stay as they are.");
+    const brought = run(UNIT, ["share", "--back"], bob);
+    expect(brought.status, brought.out).toBe(0);
+    expect(git(bob, ["branch", "--show-current"])).toBe("main");
+    expect(leadsPlanNotHere(bob)).toBe(false);
   });
 });
 

@@ -234,6 +234,8 @@ import {
   leadRecordHere,
   textAt,
   headInByContent,
+  levelByContent,
+  type LevelBlock,
   unitDependencies,
 } from "./aidlc-unit-teams.js";
 import { submoduleLeavesProjectRepo } from "./aidlc-git.ts";
@@ -274,6 +276,7 @@ import {
   claimPlaces,
   claimPrefixOf,
   isClaimTreeFile,
+  leadsPlanNotHere,
   readClaimAt,
   unitResultRootOf,
 } from "./aidlc-unit-holders.ts";
@@ -6048,16 +6051,20 @@ function gitWords(said: string): string {
 }
 
 // Brings `branch` in `dir` level with `remote`'s copy as this clone last
-// fetched it, by a fast-forward only, never a reset, a stash, a merge commit or
-// a force: the move is tried first in a copy of the index ("dry run"), so one
-// git refuses changes nothing; then the branch moves, fetched into while
-// another branch is checked out ("fetch"), fast-forwarded in place while it is
-// ("fast-forward"). The result names the step that ran last, with git's own
-// words when it refused. The one way AI-DLC brings a checkout level (the plan's
-// way back, Build and Test's catch-up).
-export type BranchLevelStep = "dry run" | "fetch" | "fast-forward";
+// fetched it, never a stash, a merge commit or a force, and never over an
+// ignored file of theirs: the move is tried first in a copy of the index ("dry
+// run"), so one git refuses changes nothing; then the branch moves, fetched
+// into while another branch is checked out ("fetch"), fast-forwarded in place
+// while it is ("fast-forward"). A checked-out branch a squash or rebase merge
+// left ahead and behind, with all of its work in that copy (levelByContent),
+// is reset to the copy's commit by `git reset --keep` ("reset", `was` the
+// commit it was at), never without that proof (`block`: why not). The result
+// names the step that ran last, with git's own words when it refused. The one
+// way AI-DLC brings a checkout level (the plan's way back, Build and Test's
+// catch-up, the take of a merged build).
+export type BranchLevelStep = "dry run" | "fetch" | "fast-forward" | "reset";
 export function bringBranchLevel(dir: string, remote: string, branch: string):
-  { ok: true; ran: BranchLevelStep } | { ok: false; ran: BranchLevelStep; said: string } {
+  { ok: true; ran: BranchLevelStep; was?: string } | { ok: false; ran: BranchLevelStep; said: string; block?: LevelBlock } {
   const theirs = `refs/remotes/${remote}/${branch}`;
   const scratch = mkdtempSync(join(tmpdir(), "aidlc-level-"));
   try {
@@ -6072,7 +6079,38 @@ export function bringBranchLevel(dir: string, remote: string, branch: string):
   const moved = ran === "fast-forward"
     ? git(dir, ["merge", "-q", "--ff-only", "--no-overwrite-ignore", theirs])
     : git(dir, ["fetch", remote, `${branch}:${branch}`], { GIT_TERMINAL_PROMPT: "0" });
-  return moved.ok ? { ok: true, ran } : { ok: false, ran, said: moved.stderr || moved.stdout };
+  if (moved.ok) return { ok: true, ran };
+  const said = moved.stderr || moved.stdout;
+  const level = ran === "fast-forward" ? levelByContent(dir, remote, branch) : null;
+  if (level === null) return { ok: false, ran, said };
+  if (level.block !== null) return { ok: false, ran, said, block: level.block };
+  const was = git(dir, ["rev-parse", "--short", "HEAD"]).stdout.trim();
+  const reset = git(dir, ["reset", "-q", "--keep", level.theirs]);
+  return reset.ok ? { ok: true, ran: "reset", was } : { ok: false, ran: "reset", said: reset.stderr || reset.stdout };
+}
+
+// Said by whichever command brought a branch level by its reset: level, with
+// all of their work, and the commit it was at, the way back.
+export function levelledLine(remote: string, branch: string, was: string): string {
+  return `Your ${branch} is level with ${remote}/${branch} now, with all your work in it. ${CHECKOUT_STEPS.level.undo(was)}`;
+}
+
+// Why a branch stays as it was when the yes to bring it level was refused:
+// the proof's reason (levelByContent), else git's own words; in a teammate's
+// clone the lead's plan has not reached, with what waits on their own work.
+function levelRefusedLine(remote: string, branch: string, moved: { said: string; ownWork: boolean; block?: LevelBlock }, planNotHere: boolean): string {
+  const stays = `Your ${branch} stays as it was`;
+  const theirs = `${remote}/${branch}`;
+  const block = moved.block;
+  if (planNotHere || block === undefined) {
+    return `${stays}: git says "${gitSaid(moved.said)}".` + (planNotHere && moved.ownWork
+      ? ` Your ${branch} has work of yours that ${theirs} does not; once that is in ${theirs}, I can bring the plan in.`
+      : "");
+  }
+  return block.why === "staged" ? `${stays}: you have staged changes, and bringing it level would unstage them.`
+    : block.why === "changed" ? `${stays}: your changes to ${block.path} are on a file ${theirs} changes.`
+    : block.why === "replaced" ? `${stays}: ${block.path} is a file of yours that ${theirs} would replace.`
+    : `${stays}: it has work of yours that ${theirs} does not.`;
 }
 
 // The steps AI-DLC runs in the person's own checkout, so no line makes them
@@ -6092,6 +6130,13 @@ export const CHECKOUT_STEPS = {
   switch: {
     run: (dir: string, branch: string): GitResult => git(dir, ["switch", "-q", "--no-overwrite-ignore", branch]),
     undo: (from: string): string => `Switch back to ${from} any time.`,
+  },
+  // Main left ahead and behind with all of its work in the remote's copy: reset --keep behind levelByContent (bringBranchLevel).
+  level: {
+    run: bringBranchLevel,
+    terminal: (): string => `${aidlcInvocation()} unit share --back`,
+    via: (): string => `${aidlcInvocation()} unit share --back`,
+    undo: (was: string): string => `It was at ${was} before, if you ever want that back.`,
   },
 } as const;
 
@@ -6178,18 +6223,23 @@ function catchUp(projectDir?: string): void {
   const behind = reposBehindMergedUnits(pd).filter((repo) => repo.branch !== null);
   const level: string[] = [];
   const lines: string[] = [];
+  // A repo brought level by its reset names the commit it was at.
+  const levelled: string[] = [];
   const nameOf = (repo: ReposBehind): string => (repo.repo === "." ? repo.into : repo.repo);
   for (const repo of behind) {
     git(repo.dir, ["fetch", "-q", repo.remote, repo.into]);
     const moved = bringBranchLevel(repo.dir, repo.remote, repo.into);
-    if (moved.ok) level.push(nameOf(repo));
-    else lines.push(`${nameOf(repo)} could not be brought up to date: git says "${gitSaid(moved.said)}". Build and Test runs on what is here.`);
+    if (moved.ok) {
+      level.push(nameOf(repo));
+      if (moved.was !== undefined) levelled.push(levelledLine(repo.remote, repo.into, moved.was));
+    } else lines.push(`${nameOf(repo)} could not be brought up to date: git says "${gitSaid(moved.said)}". Build and Test runs on what is here.`);
   }
   const one = behind.length === 1 && behind[0].repo === "." ? behind[0] : null;
   if (level.length > 0) {
     lines.unshift(one !== null
       ? `${one.into} is up to date with ${one.remote}/${one.into} now, with every merged Unit.`
       : `${joinNames(level)} ${level.length === 1 ? "is" : "are"} up to date now, with every merged Unit.`);
+    lines.splice(1, 0, ...levelled);
   }
   console.log(JSON.stringify({
     caught_up: level.length === behind.length,
@@ -6255,16 +6305,19 @@ export function planShareWords(projectDir: string): string {
 // that refused. `ownWork`: the branch has commits its remote's copy does not.
 // The plan's way back and the take of the person's own merged build.
 function levelAndSwitch(pd: string, remote: string, branch: string):
-  { ok: true; from: string | null } | { ok: false; at: "level" | "switch"; said: string; ownWork: boolean } {
+  { ok: true; from: string | null; was?: string } | { ok: false; at: "level" | "switch"; said: string; ownWork: boolean; block?: LevelBlock } {
   const here = git(pd, ["symbolic-ref", "--quiet", "--short", "HEAD"]).stdout.trim();
   const level = bringBranchLevel(pd, remote, branch);
   if (!level.ok) {
-    const ahead = git(pd, ["rev-list", "--count", `refs/remotes/${remote}/${branch}..refs/heads/${branch}`]).stdout.trim();
-    return { ok: false, at: "level", said: level.said, ownWork: ahead !== "" && ahead !== "0" };
+    // Work of theirs the remote's copy lacks by content, never by commits a squash merge left behind.
+    const ownWork = level.block !== undefined ? level.block.why === "own-work"
+      : headInByContent(pd, `refs/remotes/${remote}/${branch}`, `refs/heads/${branch}`) === false;
+    return { ok: false, at: "level", said: level.said, ownWork, ...(level.block === undefined ? {} : { block: level.block }) };
   }
-  if (here === branch) return { ok: true, from: null };
+  const was = level.was === undefined ? {} : { was: level.was };
+  if (here === branch) return { ok: true, from: null, ...was };
   const switched = CHECKOUT_STEPS.switch.run(pd, branch);
-  return switched.ok ? { ok: true, from: here || "the commit you were on" } : { ok: false, at: "switch", said: switched.stderr, ownWork: false };
+  return switched.ok ? { ok: true, from: here || "the commit you were on", ...was } : { ok: false, at: "switch", said: switched.stderr, ownWork: false };
 }
 
 // The branch brought level, and the switch onto it refused.
@@ -6281,14 +6334,26 @@ function planBranchBack(pd: string): void {
   if (target === null) fail("This repository has no remote to share main with. Add one (git remote add origin <url>), then share again.");
   const { remote, branch } = target;
   const here = git(pd, ["symbolic-ref", "--quiet", "--short", "HEAD"]).stdout.trim() || "HEAD";
+  // The plan's way back from its own branch keeps its words; a main left ahead
+  // and behind, or a teammate's clone the lead's plan has not reached, hears
+  // what happened to that main.
+  const planBack = planBranchesHere(pd).includes(here);
+  const planNotHere = !planBack && leadsPlanNotHere(pd);
   const moved = levelAndSwitch(pd, remote, branch);
-  if (!moved.ok && moved.at === "level") fail(`You stay on ${here} and nothing changed: git says ${gitWords(moved.said)}`);
+  if (!moved.ok && moved.at === "level") {
+    fail(planBack ? `You stay on ${here} and nothing changed: git says ${gitWords(moved.said)}` : levelRefusedLine(remote, branch, moved, planNotHere));
+  }
   if (!moved.ok) fail(switchRefusedLine(branch, remote, here, moved.said));
+  // The lead's plan is here now: the step goes on to the Units to take.
+  const broughtPlan = planNotHere && !leadsPlanNotHere(pd);
   console.log(JSON.stringify({
     switched: true,
     branch,
-    notice: `You are on ${branch} now, level with ${remote}.`,
-    step: "Tell the person in plain words what it reports, then end your turn.",
+    notice: moved.was !== undefined ? levelledLine(remote, branch, moved.was)
+      : broughtPlan ? `Your ${branch} is up to date with ${remote}/${branch} now, with the lead's plan.`
+      : `You are on ${branch} now, level with ${remote}.`,
+    step: broughtPlan ? "Tell the person in plain words what it reports, then run next and follow what it returns."
+      : "Tell the person in plain words what it reports, then end your turn.",
   }));
 }
 
@@ -6815,9 +6880,33 @@ function bringOwnBuildHere(pd: string, homeWork: string, claim: UnitClaimView): 
       (moved.ownWork ? ` Your ${branch} has work of yours that ${from}/${branch} does not; once that is in ${from}/${branch}, ask me to carry ${unit} on here.` : ""));
   }
   return {
-    before: `Your ${branch} is up to date with ${from}/${branch} now, with your build of ${unit} in it. `,
+    before: moved.was !== undefined ? `${levelledLine(from, branch, moved.was)} `
+      : `Your ${branch} is up to date with ${from}/${branch} now, with your build of ${unit} in it. `,
     after: moved.from === null ? "" : ` You're on ${branch} now. ${CHECKOUT_STEPS.switch.undo(moved.from)}`,
   };
+}
+
+// In a teammate's clone the lead's plan has not reached (leadsPlanNotHere,
+// whose read is the claims' own): whether the branch the plan comes in on has
+// it at this clone's remote, read by the fetch a look makes (planWait's),
+// never a pull. "unreached" when that fetch failed and the copy here lacks it;
+// `level` when this checkout is on that branch and only the reset would bring
+// it level (levelByContent). Null with no remote to read.
+export function leadsPlanOnRemote(pd: string):
+  { remote: string; branch: string; at: "there" | "not-there" | "unreached"; onBranch: boolean; level: boolean } | null {
+  let target: { remote: string; branch: string } | null;
+  try {
+    target = shareTarget(pd);
+  } catch {
+    return null;
+  }
+  if (target === null) return null;
+  const fetched = isReadOnlyEngineProbe() || CHECKOUT_STEPS.fetch.run(pd, target.remote, target.branch).ok;
+  const listed = git(pd, ["ls-tree", "-r", "--name-only", `refs/remotes/${target.remote}/${target.branch}`, "--", "aidlc/spaces"]);
+  const there = listed.ok && listed.stdout.split(/\r?\n/).some((path) => /^aidlc\/spaces\/[^/]+\/intents\/intents\.json$/.test(path));
+  const onBranch = git(pd, ["symbolic-ref", "--quiet", "--short", "HEAD"]).stdout.trim() === target.branch;
+  const level = onBranch && levelByContent(pd, target.remote, target.branch)?.block === null;
+  return { ...target, at: there ? "there" : fetched ? "not-there" : "unreached", onBranch, level };
 }
 
 // Where the person's own build of the home's Unit is in this clone, when it is
