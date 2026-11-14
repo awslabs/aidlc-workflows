@@ -2564,14 +2564,17 @@ function assertTransactionIdentity(
 }
 
 // A pinned Unit lands with a regular merge, so the reviewed pinned OID stays a
-// direct parent, into the integration branch pin fetched (fetchIntegration,
-// which reads the team's Way of Working). Neither is a lookup's or the
-// person's to choose: the team's own default (squash) holds for every other
-// merge. Pin prints these terms with the gate's question; the gate records them.
+// direct parent, into the branch pin found checked out: the integration branch
+// pin fetched (fetchIntegration, which reads the team's Way of Working), or the
+// branch the person merges into it (landing_branch,
+// as a side-by-side batch lands on the branch checked out). Neither is a
+// lookup's or the person's to choose at the gate: the team's own default
+// (squash) holds for every other merge. Pin prints these terms with the gate's
+// question; the gate records them.
 function pinnedMergeGate(
   transaction: UnitMergeTransaction,
 ): { strategy: "merge"; target: string } {
-  return { strategy: "merge", target: transaction.integration_branch };
+  return { strategy: "merge", target: transaction.landing_branch ?? transaction.integration_branch };
 }
 
 // The merge gate as pin hands it to the agent: one question for the person,
@@ -2599,6 +2602,9 @@ function pinMergeGateStep(pd: string, transaction: UnitMergeTransaction): Record
     target_branch: terms.target,
     ask:
       `Ask the person now, as one question, whether to merge Unit "${transaction.unit}" into ${terms.target}` +
+      (transaction.landing_branch
+        ? ` (it reaches ${transaction.integration_branch} when ${terms.target} is merged there)`
+        : "") +
       " (Approve or Reject), with the pinned commit and the files outside the Unit's folder above, then end your" +
       ` turn. Write their reply, as they typed it, to \`${file}\` with your file tool, not a shell, and record it` +
       " with the command for their choice.",
@@ -2766,6 +2772,9 @@ function pinUnit(args: string[], projectDir?: string): void {
     integration.oid,
   );
   const mainBefore = gitOutput(pd, ["rev-parse", "HEAD"], "Cannot resolve main HEAD");
+  // The Unit lands on the branch checked out here; a detached checkout names
+  // none, and the Unit lands on the integration branch.
+  const checkedOut = git(pd, ["branch", "--show-current"]).stdout.trim();
   const transaction: UnitMergeTransaction = {
     version: 1,
     status: "pinned",
@@ -2782,6 +2791,7 @@ function pinUnit(args: string[], projectDir?: string): void {
     candidate_base_oid: claim.payload.base_oid,
     integration_oid: integration.oid,
     integration_branch: integration.branch,
+    ...(checkedOut && checkedOut !== integration.branch ? { landing_branch: checkedOut } : {}),
     main_before_oid: mainBefore,
     pinned_at: isoTimestamp(),
     pin_id: randomUUID(),
@@ -4120,8 +4130,11 @@ function landUnit(args: string[], projectDir?: string): void {
     writeUnitMergeTransaction(pd, transaction);
   }
   // A landing the remote does not have yet: the next step offers the push, in
-  // this turn, so the other teams see it (landedNotOnRemote owns when).
-  const pushDue = transaction.status === "complete" &&
+  // this turn, so the other teams see it (landedNotOnRemote owns when). A
+  // landing on another branch reaches the integration branch through the
+  // person's merge, and nothing offers to push it.
+  const landedElsewhere = transaction.status === "complete" ? transaction.landing_branch : undefined;
+  const pushDue = transaction.status === "complete" && !landedElsewhere &&
     landedNotOnRemote(pd).some((landed) => landed.unit === unit);
   console.log(JSON.stringify({
     landed: transaction.status === "complete",
@@ -4129,6 +4142,12 @@ function landUnit(args: string[], projectDir?: string): void {
     unit,
     pinned_oid: transaction.pinned_oid,
     git_commit_oid: transaction.git_commit_oid ?? null,
+    ...(landedElsewhere
+      ? {
+        notice: `${unit} landed on ${landedElsewhere}; it reaches ${transaction.integration_branch} when ` +
+          `${landedElsewhere} is merged into ${transaction.integration_branch}.`,
+      }
+      : {}),
     ...(pushDue
       ? { next_step: `Then run \`${aidlcToolInvocation("orchestrate")} next\` and follow the step it returns.` }
       : {}),
@@ -5112,9 +5131,27 @@ export function belowRepoTop(projectDir: string): string | null {
   return `Team work needs this project at the top of its git repository; it sits in ${folder} of ${top}.`;
 }
 
+// Units landed on the branch checked out here that is not the integration
+// branch (pin named it), which the remote's integration branch does not have
+// yet: they reach it when the person merges this branch there. Null when none.
+function landedOnThisBranch(projectDir: string): { units: string[]; branch: string; integration: string } | null {
+  const branch = currentBranch(projectDir);
+  const here = unitMergeTransactions(projectDir).filter((transaction) =>
+    transaction.landing_branch === branch && transaction.integration_branch !== branch
+  );
+  if (here.length === 0) return null;
+  const waiting = new Set(landedNotOnRemote(projectDir).map((row) => row.unit));
+  const landed = here.filter((transaction) => waiting.has(transaction.unit));
+  return landed.length === 0
+    ? null
+    : { units: landed.map((transaction) => transaction.unit), branch, integration: landed[0].integration_branch };
+}
+
 // Whether a share can run here: team work, a checkout holding no Unit claim, a
-// project at its repository's top, a remote, and HEAD on the integration branch. Null when it can; the reason
-// otherwise. The share offer is put only where this is null.
+// project at its repository's top, a remote, HEAD on the integration branch,
+// and no Unit landed on the branch checked out instead (a share would push that
+// branch onto the integration branch). Null when it can; the reason otherwise.
+// The share and push offers are put only where this is null.
 export function shareBlocker(projectDir: string): string | null {
   const pd = resolveProjectDir(projectDir);
   try {
@@ -5123,6 +5160,12 @@ export function shareBlocker(projectDir: string): string | null {
     const below = belowRepoTop(pd);
     if (below !== null) return below;
     if (!repositoryRemote(pd)) return "This repository has no remote to share main with. Add one (git remote add origin <url>), then share again.";
+    const elsewhere = landedOnThisBranch(pd);
+    if (elsewhere !== null) {
+      const { units, branch, integration } = elsewhere;
+      return `${units.join(" and ")} landed on ${branch}, not ${integration}; ${units.length === 1 ? "it reaches" : "they reach"} ` +
+        `${integration} when ${branch} is merged there. Push ${branch} and merge it into ${integration}.`;
+    }
     // The branch is read from the Way of Working words first, by the share's own step.
     if (integrationBranchToRead(pd) !== null) return null;
     const target = shareTarget(pd)!;
