@@ -431,10 +431,46 @@ describe("step 1: the lead shares the plan with the teams", () => {
     const shared = runMergeTool(UNIT, ["share"], lead);
     expect(shared.status, shared.out).not.toBe(0);
     expect(shared.out).toContain("pull main, then share again");
+    expect(shared.out).not.toContain("branch of your own");
     expect(git(lead, ["rev-parse", "HEAD"])).not.toBe(before);
     expect(git(lead, ["status", "--porcelain"])).toBe("");
     const again = nextDirective(lead);
     expect(isHandover(again, "share"), JSON.stringify(again)).toBe(true);
+  });
+
+  test("share refused by the remote's own rules (a protected branch): the reason, the commit kept, and a way that can work", () => {
+    const { seed: lead, remote } = makeSeed();
+    const hooks = join(remote, "hooks");
+    mkdirSync(hooks, { recursive: true });
+    writeFileSync(
+      join(hooks, "pre-receive"),
+      "#!/bin/sh\n" +
+        "while read old new ref; do\n" +
+        "  if [ \"$ref\" = refs/heads/main ]; then echo \"main takes changes only through a reviewed pull request\" >&2; exit 1; fi\n" +
+        "done\n",
+    );
+    chmodSync(join(hooks, "pre-receive"), 0o755);
+    asLeadsOwnCheckout(lead);
+    expect(isHandover(nextDirective(lead), "share")).toBe(true);
+    const before = git(lead, ["rev-parse", "HEAD"]);
+    const shared = runMergeTool(UNIT, ["share"], lead);
+    expect(shared.status, shared.out).not.toBe(0);
+    expect(shared.out).toContain("main takes changes only through a reviewed pull request");
+    expect(shared.out).toContain("pre-receive hook declined");
+    expect(shared.out).toContain("The commit is kept here");
+    expect(shared.out).toContain("merge it into main through the repository's own review");
+    expect(shared.out).not.toContain("not a squash");
+    expect(shared.out).not.toContain("pull main, then share again");
+    expect(git(lead, ["rev-parse", "HEAD"])).not.toBe(before);
+    expect(git(lead, ["status", "--porcelain"])).toBe("");
+    // The command the message names is one that works.
+    const named = /`(git push origin HEAD:refs\/heads\/[^`\s]+)`/.exec(shared.out);
+    expect(named, shared.out).not.toBeNull();
+    const pushed = spawnSync("git", (named as RegExpExecArray)[1].split(" ").slice(1), { cwd: lead, encoding: "utf-8" });
+    expect(pushed.status, pushed.stderr).toBe(0);
+    const branch = (named as RegExpExecArray)[1].split("refs/heads/")[1];
+    expect(git(remote, ["rev-parse", branch])).toBe(git(lead, ["rev-parse", "HEAD"]));
+    expect(git(remote, ["rev-parse", "main"])).toBe(before);
   });
 
   test("share whose commit git refuses (the team's own pre-commit hook): next offers share again and starts no Unit here", () => {

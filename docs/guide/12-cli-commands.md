@@ -755,10 +755,16 @@ with a plain push, never forced, so the teams can take Units from the plan or
 see a Unit that landed. Once it has pushed, it names what it committed: how
 many files and, by name as changed, new or deleted, up to ten outside
 `aidlc/`, with how many more. After it, this checkout shows the board instead of
-building Units. A push the remote refuses keeps the commit and says why; pull
-the branch, then share again. `/aidlc` offers this step itself when it is due:
+building Units. A push the remote refuses keeps the commit and says why. If the
+branch moved, pull it, then share again. If the remote's own rules refuse a
+direct push (a protected branch, a repository rule, a hook), pulling changes
+nothing: the message names a branch of your own to push the commit to, to be
+merged into the integration branch through the repository's review (a merge
+commit, a squash or a rebase), and then you pull. `/aidlc` offers this step itself when it is due:
 before a Unit would start on the lead's checkout, and after a land the remote
-does not have yet.
+does not have yet. A landing the remote's integration branch holds as a squash
+or a rebase (a pull request merged that way) counts as there: its landing
+record is on that branch, so no push of it is offered.
 
 ### `/aidlc unit publish <unit>` — Publish a completed candidate
 
@@ -789,7 +795,11 @@ A change to a record outside the Unit's `construction/<unit>/` folder (an Incept
 artifact such as `contract-summary.md`, say) is still published, but pin will refuse
 that candidate, so publish names the file and says to take it out of the branch,
 change it on main instead, and publish again. Pin and land refuse it too and
-say to take it out in the checkout where the Unit is claimed.
+say to take it out in the checkout where the Unit is claimed. When the branch
+merged another Unit's landing commit by commit and the integration branch has
+that landing squashed (its pull request was squash-merged), publish and pin say
+to merge the integration branch into the Unit's branch and publish again
+instead: main already has those records.
 A claimed checkout keeps its own audit rows (sessions, turns, answers) in a
 local record under the intent record's `.aidlc-engine/audit/`, which AI-DLC's
 `.gitignore` keeps out of commits, and the claim's tracked shard takes only the
