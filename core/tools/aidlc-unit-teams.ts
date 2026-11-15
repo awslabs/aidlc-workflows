@@ -1686,13 +1686,14 @@ export function artifactAt(rel: string): { producer: string; artifact: string } 
 // --- Solo work driven from another machine -----------------------------------------
 
 // Solo work built one Unit at a time whose active Unit last moved in another
-// clone's audit shard: it is being built from another machine. That Unit and
-// the stage it was on; null otherwise.
+// clone's audit shard: it is being built from another machine. That shard;
+// null otherwise. Its last row's stage is not where that machine is: it may
+// have finished or left it since.
 export function builtFromAnotherMachine(
   stateContent: string,
   rows: readonly AuditShardEvent[],
   ownShard: string,
-): { unit: string; stage: string; shard: string } | null {
+): { shard: string } | null {
   if (isTeamUnitOwnership(stateContent) || getField(stateContent, "Construction Iteration")?.trim() !== "unit-major") return null;
   const moves = rows
     .filter((row) => row.event.startsWith("UNIT_") && auditBlockField(row.block, "Unit") && auditBlockField(row.block, "Stage"))
@@ -1700,7 +1701,7 @@ export function builtFromAnotherMachine(
   const last = moves.at(-1);
   // A row's shard is the shard file's path; ownShard is this clone's shard name.
   if (last === undefined || basename(last.shard) === ownShard) return null;
-  return { unit: auditBlockField(last.block, "Unit")!, stage: auditBlockField(last.block, "Stage")!, shard: last.shard };
+  return { shard: last.shard };
 }
 
 // Whether the person who last committed a file is this clone's git identity

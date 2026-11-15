@@ -190,7 +190,6 @@ import {
 } from "./aidlc-unit.ts";
 import {
   arrivedAtLastPull,
-  builtFromAnotherMachine,
   stagesCounted,
   checkInApplies,
   checkInState,
@@ -547,7 +546,7 @@ import {
   replaceWithStaged,
 } from "./aidlc-lib.ts";
 import { CLAIM_REF_FOLDERS, claimHere, gitRemotesOnce } from "./aidlc-unit-holders.ts";
-import { auditShardName, chatTookStep, relativeRecordDirForSelection } from "./aidlc-record-core.ts";
+import { chatTookStep, relativeRecordDirForSelection } from "./aidlc-record-core.ts";
 import { GUARD_POLICY_GLOSS, SCOPE_GLOSS } from "./aidlc-guard-fences.ts";
 import { validateStageFrontmatter } from "./aidlc-stage-schema.ts";
 import { isRuleStale } from "./aidlc-rule-schema.ts";
@@ -2491,14 +2490,8 @@ To get started:
     ? readActiveDirectiveMarker(projectDir, content)
     : null;
   const markerUnit = marker?.delivery !== "superseded" && typeof marker?.unit === "string" ? marker.unit : "";
-  // Solo work walked on another machine, followed here: that machine's step
-  // marker stays there, so the step is read from its rows, as the question to
-  // follow along names it (builtFromAnotherMachine).
-  const elsewhere = fieldStage === undefined && !markerUnit
-    ? builtFromAnotherMachine(content, readAuditShardEvents(projectDir, selection.intent ?? undefined, selection.space), auditShardName(projectDir))
-    : null;
-  const stepStage = fieldStage ?? (markerUnit ? findStageBySlug(marker?.stage ?? "") : elsewhere ? findStageBySlug(elsewhere.stage) : undefined);
-  const stepUnit = fieldStage ? fieldUnit : markerUnit || (elsewhere?.unit ?? "");
+  const stepStage = fieldStage ?? (markerUnit ? findStageBySlug(marker?.stage ?? "") : undefined);
+  const stepUnit = fieldStage ? fieldUnit : markerUnit;
   const currentStep = !waitsHere &&
     UNIT_NAME_REGEX.test(stepUnit) && stepStage && isPerUnitStage(stepStage) && stepStage.slug !== currentStage &&
     currentNode !== undefined && isPerUnitStage(currentNode)

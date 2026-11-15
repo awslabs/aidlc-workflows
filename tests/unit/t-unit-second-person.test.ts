@@ -11,7 +11,7 @@
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -72,6 +72,12 @@ function soloAtA(refundsDone = false, reportingStarted = true) {
   return home;
 }
 
+// Follow along: the dispatcher's status for the work, in the teammate's clone.
+const followAlong = (clone: string) =>
+  spawnSync(process.execPath, [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "status", "--space", "default", "--intent", HOME_RECORD], {
+    cwd: clone, env: { ...ENV, CLAUDE_PROJECT_DIR: clone, AIDLC_PROJECT_DIR: clone }, encoding: "utf-8",
+  });
+
 describe("a teammate opens solo work built from another machine", () => {
   test("is offered the whole work to carry on, an open Unit to take, or to follow along", () => {
     const home = soloAtA();
@@ -101,16 +107,35 @@ describe("a teammate opens solo work built from another machine", () => {
   test("following along, status names the Unit and stage the other machine is on, as the question does", () => {
     const home = soloAtA(true, true);
     appendAuditEntry("UNIT_STARTED", { Stage: "nfr-requirements", Unit: "reporting", "Run floor": "0" }, home.dir);
+    // What `state unit start` writes beside its row.
+    writeFileSync(seededStateFile(home.dir), homeState([
+      "- **Active Unit**: reporting", "- **Unit Stage**: nfr-requirements", "- **Unit State**: in-progress",
+    ]));
     git(home.dir, ["add", "-A"]);
     git(home.dir, ["commit", "-q", "-m", "reporting further on"]);
     git(home.dir, ["push", "-q", "origin", "main"]);
     const bob = cloneOf(home.remote, "bob");
     expect(String(next(bob).question)).toStartWith("fixture is being built from another machine, on reporting (NFR Requirements). ");
-    const shown = spawnSync(process.execPath, [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "status", "--space", "default", "--intent", HOME_RECORD], {
-      cwd: bob, env: { ...ENV, CLAUDE_PROJECT_DIR: bob, AIDLC_PROJECT_DIR: bob }, encoding: "utf-8",
-    });
+    const shown = followAlong(bob);
     expect(shown.status, shown.stdout + shown.stderr).toBe(0);
     expect(shown.stdout).toContain("Current Step:   nfr-requirements for unit reporting\n");
+  });
+
+  test("following along after the other machine finished a stage, status names no step it finished", () => {
+    const home = makeHome({ repos: {} });
+    const row = (event: string, stage: string, unit: string) => appendAuditEntry(event, { Stage: stage, Unit: unit, "Run floor": "0" }, home.dir);
+    row("UNIT_STARTED", "functional-design", "refunds");
+    row("UNIT_COMPLETED", "functional-design", "refunds");
+    row("UNIT_STARTED", "nfr-requirements", "refunds");
+    row("UNIT_COMPLETED", "nfr-requirements", "refunds");
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "solo work under way"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const bob = cloneOf(home.remote, "bob");
+    expect(String(next(bob).question)).toStartWith("fixture is being built from another machine, on refunds. ");
+    const shown = followAlong(bob);
+    expect(shown.status, shown.stdout + shown.stderr).toBe(0);
+    expect(shown.stdout).not.toContain("Current Step:");
   });
 
   test("a stage the other machine finished since is not named: the Unit alone is", () => {
@@ -140,11 +165,15 @@ describe("a teammate opens solo work built from another machine", () => {
 
   test("between its Units, the offer names no Unit the other machine already finished", () => {
     const home = soloAtA(true, false);
-    const ask = next(cloneOf(home.remote, "bob"));
+    const bob = cloneOf(home.remote, "bob");
+    const ask = next(bob);
     expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-take");
     expect(ask.question).toBe(
       "fixture is being built from another machine. Carry on the whole work here, take an open Unit as your own, or follow along?",
     );
+    const shown = followAlong(bob);
+    expect(shown.status, shown.stdout + shown.stderr).toBe(0);
+    expect(shown.stdout).not.toContain("Current Step:");
   });
 
   test("their own words get the same offer, once in a chat, never the other person's step", () => {
