@@ -353,9 +353,12 @@ The workspace's repo list lives in `aidlc/repos.json`, checked in with the
 team's record. A refresh that puts this release's files in moves a `repos.json`
 at the project root there with its contents kept (only a file that reads as the
 repo list; any other `repos.json` stays the project's): a `git mv` when git tracks it,
-so the rename is staged and the refresh says `AI-DLC moved repos.json into
-aidlc/. Commit it so your team gets it; teammates need AI-DLC 2.12 or newer.`,
-and a plain rename otherwise. Running config again changes nothing. A refresh
+so the rename is staged; `aidlc config` at a terminal names the git command that
+commits it, and in the next chat after an update AI-DLC asks once
+whether to commit the move with its record in `aidlc/`
+(`AI-DLC moved repos.json into aidlc/. Want me to commit the move, with AI-DLC's
+record in aidlc/? Teammates need AI-DLC 2.12 or newer to find it there.`; on
+opencode it says the move and to commit it), and a plain rename otherwise. Running config again changes nothing. A refresh
 to an earlier release's files (a pin, `--from`) leaves it at the root, where
 those releases read it; with a list in both places, `aidlc/repos.json` is read.
 

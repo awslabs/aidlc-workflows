@@ -510,7 +510,7 @@ describe("intent add-repo clones a repo that is not here yet", () => {
     expect(r.rc, r.out).toBe(0);
     expect(r.out).toContain("Cloned payments from https://***@example.invalid/acme/payments.git");
     expect(r.out).toContain(
-      "repos.json is new: it lists payments; commit it to share the list with your team. " +
+      "repos.json is new: it lists payments. " +
         "Its address there leaves out the credential.",
     );
     const manifest = JSON.parse(readFileSync(join(proj, "aidlc", "repos.json"), "utf-8"));
@@ -539,7 +539,7 @@ describe("intent add-repo clones a repo that is not here yet", () => {
     const added = utility(["intent", "add-repo", "storefront", "--url", `${prefix}storefront.git`], first.env);
     expect(added.rc, added.out).toBe(0);
     expect(first.ranRemote()).toBe(true);
-    expect(added.out).toContain("repos.json is new: it lists storefront; commit it to share the list with your team.");
+    expect(added.out).toContain("repos.json is new: it lists storefront.");
     const raw = readFileSync(join(proj, "aidlc", "repos.json"), "utf-8");
     expect(JSON.parse(raw)).toEqual({ repos: [{ name: "storefront", url: `${prefix}storefront.git` }] });
 
@@ -680,7 +680,7 @@ describe("intent add-repo clones a repo that is not here yet", () => {
     expect(r.rc, r.out).toBe(0);
     expect(r.out.trim()).toBe(
       `Cloned notify from ${bare} and added it to this piece of work's repos. repos.json now lists notify at src/notify. ` +
-        "Commit it to share it with your team. Reverse Engineering will cover notify when it runs. You can remove it again any time.",
+        "Reverse Engineering will cover notify when it runs. You can remove it again any time.",
     );
     expect(existsSync(join(proj, "src", "notify", "src", "api.ts"))).toBe(true);
     expect(existsSync(join(proj, "notify"))).toBe(false);
@@ -793,7 +793,7 @@ describe("intent add-repo clones a repo that is not here yet", () => {
     expect(r.rc, r.out).toBe(0);
     expect(r.out).toContain(
       "Added notify to this piece of work's repos. repos.json now lists notify at src/notify. " +
-        "Commit it to share it with your team. Its address there leaves out the credential.",
+        "Its address there leaves out the credential.",
     );
     expect(JSON.parse(readFileSync(join(proj, "repos.json"), "utf-8")).repos).toEqual([
       { name: "app-a" },
@@ -815,7 +815,7 @@ describe("intent add-repo clones a repo that is not here yet", () => {
     const r = utility(["intent", "add-repo", "storefront", "--path", "src/storefront"]);
     expect(r.rc, r.out).toBe(0);
     expect(r.out).toContain(
-      "repos.json now lists storefront at src/storefront. Commit it to share it with your team. Its address there leaves out the credential.",
+      "repos.json now lists storefront at src/storefront. Its address there leaves out the credential.",
     );
     expect(JSON.parse(readFileSync(join(proj, "repos.json"), "utf-8")).repos).toEqual([
       { name: "app-a" },
@@ -900,7 +900,7 @@ describe("work that records no repos", () => {
     expect(repos()).toEqual(["checkout-api"]);
     expect(added.out).toBe(
       `Added checkout-api (at ${api}) to this piece of work's repos; until now it worked on the workspace folder itself, which it still reads. ` +
-        `repos.json is new: it lists checkout-api at ${api}. Commit it to share it with your team. ` +
+        `repos.json is new: it lists checkout-api at ${api}. ` +
         "Reverse Engineering will cover checkout-api when it runs. You can remove it again before Construction starts.\n",
     );
     expect(manifest()).toEqual({ repos: [{ name: "checkout-api", path: api }] });

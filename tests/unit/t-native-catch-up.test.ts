@@ -127,6 +127,16 @@ function catchUpSaid(dir: string, moved: boolean): string {
     : `${head}. ${n === 1 ? "Commit it so your team gets it." : "Commit them so your team gets them."}`;
 }
 
+// The catch-up's question when the refresh also moved the tracked list: the move offered with AI-DLC's record,
+// and the files under .claude named as the ones it leaves.
+function catchUpAsked(dir: string): string {
+  const n = git(dir, ["status", "--porcelain", "-uall", "--", ".claude"]).split("\n").filter(Boolean).length;
+  const files = `${n} file${n === 1 ? "" : "s"} under .claude`;
+  return `AI-DLC updated its own files in this project to ${AIDLC_VERSION}: ${files} changed, and repos.json moved into aidlc/. ` +
+    `Want me to commit the move, with AI-DLC's record in aidlc/? I'd leave the ${files} for you to commit with your own ` +
+    "changes. Teammates need AI-DLC 2.12 or newer to find repos.json there.";
+}
+
 function hookCommand(dir: string, event: string): string {
   const settings = JSON.parse(readFileSync(join(dir, ".claude", "settings.json"), "utf-8")) as {
     hooks?: Record<string, Array<{ hooks?: Array<{ command?: string }> }>>;
@@ -207,9 +217,12 @@ describe.skipIf(SKIP_REASON !== null)("each project catches up the next time it 
     const first = sessionStart(dir, "catch-up");
     expect(first.status, first.stdout + first.stderr).toBe(0);
     expect(stampVersion(dir)).toBe(AIDLC_VERSION);
-    // One line for both: the files the refresh changed and the list's move.
-    expect(first.stdout).toContain(catchUpSaid(dir, true));
-    expect(catchUpSaid(dir, true)).not.toContain(": 1 file under");
+    // One question for both: the list's move offered with AI-DLC's record, the files the refresh changed named as left.
+    expect(first.stdout).toContain(catchUpAsked(dir));
+    expect(first.stdout).toContain("ASK ONCE");
+    expect(first.stdout).toMatch(/On yes, run `[^`]* unit commit-record`/);
+    expect(first.stdout).not.toContain(catchUpSaid(dir, true));
+    expect(catchUpAsked(dir)).not.toContain(": 1 file under");
     expect(first.stdout).not.toContain(MOVED);
     expect(git(dir, ["status", "--porcelain"])).toContain("R  repos.json -> aidlc/repos.json");
     // Recorded answers kept: --mcp none still writes no .mcp.json.
@@ -241,7 +254,7 @@ describe.skipIf(SKIP_REASON !== null)("each project catches up the next time it 
     const first = sessionStart(dir, "catch-up, subfolder");
     expect(first.status, first.stdout + first.stderr).toBe(0);
     expect(stampVersion(dir)).toBe(AIDLC_VERSION);
-    expect(first.stdout).toContain(catchUpSaid(dir, true));
+    expect(first.stdout).toContain(catchUpAsked(dir));
   });
 
   test("a harness folder git does not track, and a project not in git, say nothing of the files", () => {

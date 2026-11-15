@@ -109,6 +109,7 @@ import {
   typedHarnessName,
 } from "../tools/aidlc-runtime-paths.ts";
 import { compareVersions } from "../tools/aidlc-channel.ts";
+import { recordCommitBlock } from "../tools/aidlc-git.ts";
 import { AIDLC_VERSION } from "../tools/aidlc-version.ts";
 import {
   catchUpChangedLine,
@@ -162,9 +163,9 @@ function completeHelpersOfEarlierProcess(projectDir: string, sessionId: string):
 // version row shows the project behind) and is tried again at the next chat's
 // start. A newer stamp is never touched. Two passes, as config refreshes a
 // folder only after a sibling it shares files with. The person's line when it
-// changed files git tracks, or moved a repos.json git tracks into aidlc/; null
-// otherwise.
-function catchUpProjectFiles(projectDir: string): string | null {
+// changed files git tracks, or moved a repos.json git tracks into aidlc/ (and,
+// for the move, the question that offers its commit); null otherwise.
+function catchUpProjectFiles(projectDir: string): { told: string; asked: string | null } | null {
   if (!isCompiledExecutable() || existsSync(join(projectDir, ".aidlc-version"))) return null;
   const major = AIDLC_VERSION.split(".")[0];
   const behind = () => {
@@ -214,7 +215,13 @@ function catchUpProjectFiles(projectDir: string): string | null {
   const moved = trackedList && reposManifestMovedIntoAidlc(projectDir);
   const after = before === null ? null : projectChanges(projectDir);
   const changed = after === null ? [] : refreshChanged(projectDir, before ?? new Map(), after, moved);
-  return catchUpChangedLine(AIDLC_VERSION, changed, moved);
+  const told = catchUpChangedLine(AIDLC_VERSION, changed, moved);
+  if (told === null) return null;
+  // The list's move is AI-DLC's own record: offered to be committed on the person's yes, when the commit could run.
+  const asked = moved && process.env.AIDLC_UNATTENDED !== "1" && recordCommitBlock(projectDir, false) === null
+    ? catchUpChangedLine(AIDLC_VERSION, changed, moved, true)
+    : null;
+  return { told, asked };
 }
 
 function projectGit(projectDir: string, args: string[], input?: string) {
@@ -559,8 +566,11 @@ if (sessionId && !rebindCheckOnly) {
     const caughtUp = source === "compact" ? null : catchUpProjectFiles(projectDir);
     if (caughtUp !== null) {
       // opencode's adapter carries no session-start context: the next step does.
-      if (runtimeHarnessName(projectDir) === "opencode") addPendingPersonLines(projectDir, sessionId, [caughtUp]);
-      else asks.push(`TELL ONCE: in your first reply, tell the person this, in their language: "${caughtUp}"`);
+      if (runtimeHarnessName(projectDir) === "opencode") addPendingPersonLines(projectDir, sessionId, [caughtUp.told]);
+      else if (caughtUp.asked !== null) {
+        asks.push(`ASK ONCE: in your first reply, ask the person this in their language: "${caughtUp.asked}" On yes, run ` +
+          `\`${aidlcInvocation()} unit commit-record\` and tell them in plain words what it reports. On no, leave it. Do not ask again.`);
+      } else asks.push(`TELL ONCE: in your first reply, tell the person this, in their language: "${caughtUp.told}"`);
     }
   } catch {
     // Tried again at the next chat's start.

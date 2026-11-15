@@ -103,7 +103,7 @@ import {
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { pinnedVersionNote, VERSION_ID } from "./aidlc-channel.ts";
 import { CONFIG_SECTIONS } from "./aidlc-command.ts";
-import { isGitRepo, isProjectSubmodule } from "./aidlc-git.ts";
+import { gitOperationUnderWay, isGitRepo, isProjectSubmodule } from "./aidlc-git.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 import { fileURLToPath } from "node:url";
 import {
@@ -649,6 +649,7 @@ import {
   changedInputs,
   ownBuildBranch,
   CHECKOUT_STEPS,
+  reposCommitOffer,
   leadsPlanOnRemote,
   claimIsMine,
   buildClaimHere,
@@ -690,7 +691,7 @@ import {
   moveRefusedMark,
   shareBlocker,
   shareRefusal,
-  planWayOn,
+  planBranchesHere,
   skeletonHeldBackOnShare,
   teamsClone,
   teamStanceToRead,
@@ -701,7 +702,6 @@ import {
   teamHandoverMarkName,
   teamSharedHere,
   unitBranchInTheWay,
-  gitOperationUnderWay,
   unitMergeToFinish,
   unitBuildOwnBranch,
   unitsTaken,
@@ -6118,8 +6118,21 @@ function buildOutShareOffer(projectDir: string): AskDirective | null {
   const mark = teamHandoverMarkName("share", added === null ? "plan" : `plan-${added.join("-")}`);
   if (handoverOffered(projectDir, mark)) return null;
   if (refused?.off !== undefined) {
-    sayWithStepOnce(projectDir, `${refused.reason} ${planWayOn(refused.off.branch, false)}`);
-    return null;
+    // On one of the plan's own branches the share pushes that branch, and its wait line says where the plan stands.
+    const here = refused.off.current;
+    const hereMark = teamHandoverMarkName("plan-here", here);
+    if (planBranchesHere(projectDir).includes(here) || handoverOffered(projectDir, hereMark)) return null;
+    return teamHandoverAsk(projectDir, {
+      handovers: ["share"],
+      marks: [hereMark],
+      question: `${refused.reason} Want me to commit the plan here, so you can push it on a branch and get it merged your usual way?`,
+      choices: [{
+        label: "Commit the plan here",
+        detail: `Commits ${planShareWords(projectDir)} on ${here}; nothing is pushed.`,
+        command: `${aidlcInvocation()} unit share --plan`,
+      }],
+      notNow: { label: "Not now", detail: "The plan stays uncommitted here." },
+    });
   }
   const said = added !== null
     ? `${namesInProse(added)} ${added.length === 1 ? "was" : "were"} added to the plan since you shared it, so the ` +
@@ -9893,6 +9906,29 @@ function levelOfferAsk(projectDir: string, stateContent: string): AskDirective |
     }],
     notNow: { label: "Not now", detail: `Your ${due.branch} stays as it is.` },
   });
+}
+
+// The repo list's commit with AI-DLC's record (reposCommitOffer), once for
+// that list. Null when not due.
+function reposCommitAsk(projectDir: string, stateContent: string, atBoundary: () => boolean = () => true): AskDirective | null {
+  if (process.env.AIDLC_UNATTENDED === "1") return null;
+  const offer = reposCommitOffer(projectDir, unitBuildOf(stateContent) !== null);
+  if (offer === null || engineAskMark(projectDir, offer.mark) !== null || !atBoundary()) return null;
+  if (!isReadOnlyEngineProbe()) noteEngineAskMark(projectDir, offer.mark);
+  return {
+    kind: "ask",
+    ask_type: "repos-manifest",
+    response_route: "command",
+    question: offer.question,
+    choices: [
+      {
+        label: "Commit it",
+        detail: "Commits everything in aidlc/, the repo list with it; nothing else outside aidlc/ goes in, and nothing is pushed.",
+        command: CHECKOUT_STEPS["commit-own"].via(),
+      },
+      { label: "Not now", detail: "The list stays uncommitted here.", command: `${aidlcToolInvocation("orchestrate")} next` },
+    ],
+  };
 }
 
 // After that offer, while the main it was put for still stands ahead and
@@ -16100,7 +16136,8 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       constructionStaffingAsk(pd, stateContent, currentSlug, scope) ??
       reverseEngineeringScopeAsk(pd, stateContent, currentSlug) ?? unitsReposAsk(pd, stateContent) ??
       (entering && stateContent !== null
-        ? reposManifestAsk(pd, stateContent, () => stepBeginsStage(pd, stateContent, scope, currentSlug))
+        ? reposManifestAsk(pd, stateContent, () => stepBeginsStage(pd, stateContent, scope, currentSlug)) ??
+          reposCommitAsk(pd, stateContent, () => stepBeginsStage(pd, stateContent, scope, currentSlug))
         : null);
     if (staffing) {
       emit(staffing);
@@ -16167,7 +16204,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   const staffing = teamStanceReadStep(pd, stateContent, next.slug, scope, projectType, recordPrefix, codekbCtx) ??
     constructionStaffingAsk(pd, stateContent, next.slug, scope) ??
     reverseEngineeringScopeAsk(pd, stateContent, next.slug) ?? unitsReposAsk(pd, stateContent) ??
-    reposManifestAsk(pd, stateContent);
+    reposManifestAsk(pd, stateContent) ?? reposCommitAsk(pd, stateContent);
   if (staffing) {
     emit(staffing);
     return;

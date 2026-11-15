@@ -240,8 +240,8 @@ import {
   type LevelBlock,
   unitDependencies,
 } from "./aidlc-unit-teams.js";
-import { submoduleLeavesProjectRepo } from "./aidlc-git.ts";
-import { commitOwnCommand, displayRepoPath, localUnreadableLine, readWorkspaceRepos, repoCloneable, repoCloneOfferLine, repoNotThereLine, withoutCredentials, workspaceManifestAt } from "./aidlc-workspace-manifest.js";
+import { gitOperationUnderWay, rebaseUnderWay, recordCommitBlock, recordPaths, submoduleLeavesProjectRepo } from "./aidlc-git.ts";
+import { commitOwnCommand, displayRepoPath, reposManifestPath, localUnreadableLine, readWorkspaceRepos, repoCloneable, repoCloneOfferLine, repoNotThereLine, withoutCredentials, workspaceManifestAt } from "./aidlc-workspace-manifest.js";
 import { maskUserinfo, workspaceCloneUrl } from "./aidlc-workspace-sync.ts";
 import { loadGraph } from "./aidlc-graph.ts";
 import {
@@ -5710,18 +5710,18 @@ function shareCommitRefused(said: string, adding: boolean): never {
   fail(`git did not commit: ${said}.`);
 }
 
-// The plan's share: AI-DLC's record (aidlc/, and a repos.json still at the
-// root unless the person's .gitignore lists it), with the code Units built here
-// wrote at a home whose code is this repository (builtHereCode), committed by pathspec
+// The plan's share: AI-DLC's record (recordPaths: aidlc/, and a repos.json
+// still at the root unless the person's .gitignore lists it), with the code
+// Units built here wrote at a home whose code is this repository (builtHereCode,
+// left out with `code` false, as `unit commit-record` asks), committed by pathspec
 // through commitUnitPaths, so a file the person staged stays theirs, staged.
 // Pathspecs, never the file list: a plan's hundreds of files would pass the
 // 32,767 characters Windows allows a command line. Returns how many files the
 // commit took.
-function commitPlanHere(pd: string, message: string): number {
+function commitPlanHere(pd: string, message: string, code = true): number {
   const head = (): string => git(pd, ["rev-parse", "--verify", "--quiet", "HEAD"]).stdout.trim();
   const before = head();
-  const rootList = git(pd, ["check-ignore", "-q", "--", "repos.json"]).ok ? [] : ["repos.json"];
-  commitUnitPaths(pd, ["aidlc/", ...rootList, ...builtHereCode(pd).paths], {}, "", "", "", null, { message, refused: shareCommitRefused });
+  commitUnitPaths(pd, [...recordPaths(pd), ...(code ? builtHereCode(pd).paths : [])], {}, "", "", "", null, { message, refused: shareCommitRefused });
   if (head() === before) return 0;
   return git(pd, ["diff-tree", "-r", "--root", "--no-commit-id", "--name-only", "-z", "HEAD"]).stdout.split("\0").filter(Boolean).length;
 }
@@ -5855,11 +5855,10 @@ export function shareBlocker(projectDir: string): string | null {
   return shareRefusal(projectDir)?.reason ?? null;
 }
 
-// How the plan reaches the teams when the share cannot push it: by the
-// person's own branch and merge. `committed`: the share's commit ran here.
-export function planWayOn(branch: string, committed: boolean): string {
-  const way = `push it on a branch and get it merged your usual way; the teams can take Units once it is in ${branch}.`;
-  return committed ? `The plan is committed here: ${way}` : `Commit the plan (aidlc/) here, ${way}`;
+// How the plan reaches the teams when the share committed it here and cannot
+// push it: by the person's own branch and merge.
+export function planWayOn(branch: string): string {
+  return `The plan is committed here: push it on a branch and get it merged your usual way; the teams can take Units once it is in ${branch}.`;
 }
 
 // The plan's own branch when the integration branch takes no direct push:
@@ -5873,7 +5872,7 @@ function planBranchNames(pd: string): string[] {
 
 // This work's plan branches here that `unit share --branch` pushed (its push
 // set their upstream), in name order.
-function planBranchesHere(pd: string): string[] {
+export function planBranchesHere(pd: string): string[] {
   const names = planBranchNames(pd);
   const listed = git(pd, ["for-each-ref", "--format=%(refname:short) %(upstream)", "refs/heads/"]);
   if (!listed.ok) return [];
@@ -6036,7 +6035,7 @@ function putPlanOnItsBranch(pd: string, remote: string, branch: string, madeNow:
     const free = planBranchNames(pd).find((name) =>
       !planBranchTaken(pd, remote, name) && git(pd, ["update-ref", "--stdin"], undefined, `create refs/heads/${name} ${head}\n`).ok
     );
-    if (free === undefined) stays(`${remote} takes no direct push to ${branch}. ${planWayOn(branch, true)}`);
+    if (free === undefined) stays(`${remote} takes no direct push to ${branch}. ${planWayOn(branch)}`);
     plan = { name: free, made: true };
     const pushed = git(pd, ["push", "-u", remote, free], { GIT_TERMINAL_PROMPT: "0" });
     if (!pushed.ok) {
@@ -6163,7 +6162,7 @@ export const CHECKOUT_STEPS = {
     undo: (was: string): string => `It was at ${was} before, if you ever want that back.`,
   },
   // AI-DLC's own files only; at the person's own terminal, git's own command (aidlc config's line for the repo list's move).
-  "commit-own": { terminal: commitOwnCommand },
+  "commit-own": { run: commitRecord, terminal: commitOwnCommand, via: (): string => `${aidlcInvocation()} unit commit-record` },
 } as const;
 
 // --- Build and Test at the lead's project, once every Unit is merged ---------
@@ -6383,6 +6382,73 @@ function planBranchBack(pd: string): void {
   }));
 }
 
+// The repo list, when its content differs from what HEAD has at either of
+// its places (new, or changed; a pure move is the update's own question), git
+// does not ignore it, and AI-DLC's record could be committed now
+// (recordCommitBlock): the repos it lists and its blob, the offer's once. Null
+// otherwise. Hashes, so a CRLF checkout of an unchanged list reads as unchanged.
+export function reposListToCommit(pd: string, unitBuild: boolean): { names: string[]; blob: string } | null {
+  const list = reposManifestPath(pd);
+  if (!existsSync(list)) return null;
+  const rel = relative(pd, list).replaceAll("\\", "/");
+  if (git(pd, ["check-ignore", "-q", "--", rel]).ok) return null;
+  const blob = git(pd, ["hash-object", "--", rel]).stdout.trim();
+  if (blob === "") return null;
+  const at = (path: string): string => git(pd, ["rev-parse", "--verify", "--quiet", `HEAD:./${path}`]).stdout.trim();
+  if (blob === at("aidlc/repos.json") || blob === at("repos.json")) return null;
+  if (recordCommitBlock(pd, unitBuild) !== null) return null;
+  // The list's own reader, which keeps its comments; one it cannot read names no repo.
+  const names = readWorkspaceRepos(pd).manifest?.repos.map((repo) => repo.name) ?? [];
+  return names.length === 0 ? null : { names, blob };
+}
+
+// The question for that list, once for its blob; null when not due.
+export function reposCommitOffer(pd: string, unitBuild: boolean): { mark: string; question: string } | null {
+  const due = reposListToCommit(pd, unitBuild);
+  if (due === null) return null;
+  return {
+    mark: teamHandoverMarkName("repos-commit", due.blob.slice(0, 12)),
+    question: `repos.json now lists ${joinNames(due.names)}, and your team gets it once it is committed. Want me to commit AI-DLC's ` +
+      "record in aidlc/, with the list?",
+  };
+}
+
+// `aidlc unit commit-record`: AI-DLC's own record (recordPaths) committed
+// here, on the person's yes to an offer, through the share's one commit path
+// (commitPlanHere), never the code Units built here. It takes no argument, so
+// nothing else of theirs can be committed through it. recordCommitBlock's
+// reason refuses it with nothing changed; nothing to commit is no failure. The
+// commit it made is in its output.
+function commitRecord(args: string[], projectDir?: string): void {
+  parseArgs(args);
+  const pd = resolveProjectDir(projectDir);
+  let state: string | null = null;
+  try {
+    state = readStateFile(pd);
+  } catch {
+    // No work selected: nothing here is a Unit's build.
+  }
+  const block = recordCommitBlock(pd, state !== null && unitBuildOf(state) !== null);
+  if (block?.why === "nothing") {
+    console.log(JSON.stringify({ committed: false, notice: "AI-DLC's record in aidlc/ has nothing new to commit." }));
+    return;
+  }
+  if (block !== null) {
+    fail(block.why === "under-way" ? underWayLine("This checkout", block.underWay, "nothing was committed", "commit AI-DLC's record")
+      : block.why === "detached" ? "This checkout is not on a branch, so nothing was committed. Switch to a branch, then I can commit AI-DLC's record."
+      : block.why === "unit-build" ? "This checkout builds a Unit, so I don't commit aidlc/ from here: it holds the lead's record too."
+      : "This folder is not in a git repository, so nothing was committed.");
+  }
+  const files = commitPlanHere(pd, "Update AI-DLC's record", false);
+  const branch = git(pd, ["symbolic-ref", "--quiet", "--short", "HEAD"]).stdout.trim();
+  const commit = git(pd, ["rev-parse", "--short", "HEAD"]).stdout.trim();
+  console.log(JSON.stringify({
+    committed: true,
+    commit,
+    notice: `AI-DLC's record in aidlc/ is committed on ${branch} as ${commit} (${files} file${files === 1 ? "" : "s"}); nothing is pushed.`,
+  }));
+}
+
 // `aidlc unit share`: commit the work here and push the integration branch to
 // the remote, so the teams can take Units (after Inception) or see a landed
 // one. A plain push, never forced. A share that did not happen (a commit git
@@ -6474,7 +6540,15 @@ function shareMain(args: string[], projectDir?: string): void {
   // from here. The plan's own branch, which its push gave an upstream, takes
   // the share, so its pull request carries the newer plan.
   if (refused !== null) {
-    if (own === null) fail(`${refused.reason} ${planWayOn(branch, true)}`);
+    // Committed on a branch of their own, which reaches main their own way: done.
+    if (own === null) {
+      console.log(JSON.stringify({
+        shared: false,
+        notice: `${refused.reason} ${planWayOn(branch)}`,
+        step: "Tell the person in plain words what it reports, then end your turn.",
+      }));
+      return;
+    }
     const sent = git(pd, ["push", remote, `HEAD:refs/heads/${own}`], { GIT_TERMINAL_PROMPT: "0" });
     if (!sent.ok) fail(`${remote} did not take ${own}: ${pushRefusal(sent.stderr)}.`);
     console.log(JSON.stringify({
@@ -6506,7 +6580,7 @@ function shareMain(args: string[], projectDir?: string): void {
   // of its own (planWait); otherwise the person's own way on.
   if (!pushed.ok && refusedByHostRule(pushed.stderr)) {
     if (!planOnly) clearTeamHandoverMarks(pd, ["share", "push"]);
-    if (earlier === null || (madeNow === null && earlier.length === 0)) fail(`${remote} takes no direct push to ${branch} (${pushRefusal(pushed.stderr)}). ${planWayOn(branch, true)}`);
+    if (earlier === null || (madeNow === null && earlier.length === 0)) fail(`${remote} takes no direct push to ${branch} (${pushRefusal(pushed.stderr)}). ${planWayOn(branch)}`);
     if (madeNow !== null) noteEngineAskMark(pd, shareCommitMark(madeNow));
     noteTeamShared(pd);
     console.log(JSON.stringify({
@@ -10349,8 +10423,6 @@ export function earlyBaseMerged(
   });
 }
 
-// The git operation of theirs under way in a repo, in plain words with git's
-// own way to finish it and to put it aside; null when none is.
 // A merge under way on the Unit's own branch with nothing left to resolve and
 // nothing staged that the merge did not bring (a redo that merged the newer
 // main, say): the push question offers to finish it, and `push --finish-merge`
@@ -10385,15 +10457,6 @@ export function unitMergeToFinish(dir: string, branch: string, own: readonly str
     .every((path) => merged.has(path) || unitsOwn(path));
 }
 
-export function gitOperationUnderWay(dir: string): { what: string; finish: string; abort: string } | null {
-  const at = (name: string): boolean => existsSync(resolve(dir, git(dir, ["rev-parse", "--git-path", name]).stdout.trim()));
-  if (rebaseUnderWay(dir)) return { what: "a rebase", finish: "git rebase --continue", abort: "git rebase --abort" };
-  if (at("MERGE_HEAD")) return { what: "a merge", finish: "git commit", abort: "git merge --abort" };
-  if (at("CHERRY_PICK_HEAD")) return { what: "a cherry-pick", finish: "git cherry-pick --continue", abort: "git cherry-pick --abort" };
-  if (at("REVERT_HEAD")) return { what: "a revert", finish: "git revert --continue", abort: "git revert --abort" };
-  return null;
-}
-
 // The person's own git operation under way in a repo, never touched by
 // AI-DLC: what did not happen, git's own way to finish it and to put it aside,
 // and what AI-DLC can do once it is done. The push and the move say it alike.
@@ -10402,10 +10465,6 @@ function underWayLine(name: string, underWay: { what: string; finish: string; ab
     `or put it aside (${underWay.abort}), then I can ${then}.`;
 }
 
-// A rebase git stopped in a repo, waiting for the person.
-function rebaseUnderWay(dir: string): boolean {
-  return ["rebase-merge", "rebase-apply"].some((name) => existsSync(resolve(dir, git(dir, ["rev-parse", "--git-path", name]).stdout.trim())));
-}
 
 // Whether something of the person's would stop the move in a repo now: a
 // rebase under way, a change to a tracked file (a rebase refuses any), or a
@@ -11412,6 +11471,7 @@ export function main(argv: string[]): void {
     else if (command === "release") releaseUnit(args, projectDir);
     else if (command === "participate") participate(projectDir);
     else if (command === "share") shareMain(args, projectDir);
+    else if (command === "commit-record") commitRecord(args, projectDir);
     else if (command === "catch-up") catchUp(projectDir);
     else if (command === "publish") publishUnit(args, projectDir);
     else if (command === "pin") pinUnit(args, projectDir);

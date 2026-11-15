@@ -1020,8 +1020,9 @@ request** does; until the plan is in main, each look and status say where it
 waits in place of the board. Once it is in main, AI-DLC offers once to switch
 you back to main (`aidlc unit share --back`): it brings your main level with
 origin's and keeps your own changes, or says git's reason and you stay where you are.
-A lead working on another branch is told the checkout is not on main: push it
-on a branch and get it merged your usual way. A share typed on the plan's own
+A lead working on another branch is asked once whether to commit the plan
+there, so they can push it on a branch and get it merged their usual way;
+nothing is pushed. A share typed on the plan's own
 branch pushes that branch, so its pull request has the newer plan. A team's record pushed on a branch whose pull request is open reads
 "aidlc/ is pushed on <branch>; your teammates see it once it is in main.", and
 status shows `Checked in:     pushed on <branch>, not in main yet`.

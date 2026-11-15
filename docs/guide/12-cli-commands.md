@@ -63,6 +63,7 @@ diagnostic and lifecycle routes.
 | `/aidlc unit participate` | Mark this clone for the guided Unit-claim picker |
 | `/aidlc unit catch-up` | At the lead's project, before Build and Test, bring each repo here that lacks a merged Unit up to date with its remote, a fast-forward only |
 | `/aidlc unit share [--plan] [--branch \| --back]` | Commit the work here and push the integration branch so the teams can take Units, or see a landed one; `--plan` commits AI-DLC's record only (with the code of a Unit built here, on the workspace's own repository), for a lead's project whose teams take Units by pull request; `--branch` pushes the plan on a branch of its own for a pull request; `--back` switches back to the integration branch once the plan is in it |
+| `/aidlc unit commit-record` | Commit AI-DLC's record in `aidlc/` (and a `repos.json` still at the project root) on this branch, nothing else, and push nothing |
 | `/aidlc unit publish <unit> [--commit [--include <path>]...]` | CAS-publish the scoped checkout's clean committed candidate onto its claim ref; `--commit` commits the Unit's own work first, and `--include` puts in a new file or folder it left out |
 | `/aidlc unit pin <unit>` | Pin and validate one completed candidate OID from unscoped main |
 | `/aidlc unit gate <unit> ...` | Record the merge decision against the pinned OID and generation |
@@ -444,7 +445,8 @@ with the user part of an address such as `https://user:token@host/...` shown
 as `***`; `repos.json`, which your team commits, gets the address without its
 credentials. With no `repos.json`, a
 hosted `--url` (a host, an owner and a name) creates one that lists the repo,
-and the line says so: commit it to share the list. A local path, or
+and the line says so; the next step offers once to commit it with AI-DLC's
+record (`unit commit-record`), so your team gets the list. A local path, or
 an address of another shape, adds the repo without creating the file. When the
 clone fails, nothing is recorded or changed, and the line gives git's reason
 and the `git clone` command to run by hand. A repo no `repos.json` lists, added
@@ -1073,11 +1075,32 @@ go onto it and the integration branch go back where it was. A branch the host
 refuses too changes nothing. `--back`, once the plan is in the integration
 branch, brings that branch level with the remote's (fast-forward only) and
 switches to it; when git refuses, it says git's reason and the checkout stays where it is. A checkout on another branch
-commits the plan (aidlc/) there and pushes nothing, and is told it is not on the
-branch: push it on a branch and get it merged your usual way. On the plan's own
+commits the plan (aidlc/) there and pushes nothing, says it is not on the
+branch: push it on a branch and get it merged your usual way, and exits 0 with
+`"shared": false`; `/aidlc` asks once there whether to commit the plan, and its
+yes runs this. On the plan's own
 branch it pushes that branch, so its pull request has the newer plan. `/aidlc` offers this step itself when it is due:
 before a Unit would start on the lead's checkout, and after a land the remote
 does not have yet.
+
+### `/aidlc unit commit-record` - Commit AI-DLC's record on this branch
+
+```bash
+/aidlc unit commit-record
+```
+
+Commits everything in `aidlc/` that git does not ignore, and a `repos.json` at
+the project root that git does not ignore, on the branch this checkout is on,
+and pushes nothing. A file you staged outside `aidlc/` stays staged and out of
+the commit; a file staged under `aidlc/` goes in as it is in your working tree.
+Your own git hooks and signing run, and a hook that refuses the commit is said
+in git's words. It names the commit and how many files went in, or says there
+is nothing new to commit (exit 0). It commits nothing and exits 1 outside a git
+repository, while a rebase, merge, cherry-pick or revert of yours is under way
+(with how to finish it or put it aside), on no branch, and in a Unit's build,
+where `aidlc/` holds the lead's record too. `/aidlc` offers it once when an
+update moved `repos.json` into `aidlc/` and when the repo list changed and is
+not committed yet.
 
 ### `/aidlc unit publish <unit>` — Publish a completed candidate
 

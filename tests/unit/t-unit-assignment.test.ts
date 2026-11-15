@@ -694,7 +694,8 @@ describe("the plan's share fits the team's own git: a protected main, a branch o
     hostMergesPlan(home.remote, "squash");
     git(home.remote, ["branch", "-D", PLAN_BRANCH]);
     const typed = run(UNIT, ["share", "--plan"], home.dir);
-    expect(typed.status, typed.out).not.toBe(0);
+    expect(typed.status, typed.out).toBe(0);
+    expect(typed.out).toContain('"shared":false');
     expect(typed.out).toContain(`This checkout is on ${PLAN_BRANCH}, not main.`);
     expect(git(home.remote, ["branch", "--list", PLAN_BRANCH])).toBe("");
   });
@@ -897,7 +898,7 @@ describe("the plan's share fits the team's own git: a protected main, a branch o
   });
 
   // Off the branch the share commits AI-DLC's record only, by pathspec, typed with --plan or not.
-  test("a lead on a branch of their own: the share commits AI-DLC's record there and nothing else of theirs, pushes nothing, and says how it reaches main", () => {
+  test("a lead on a branch of their own: the share commits AI-DLC's record there and nothing else of theirs, pushes nothing, and says how it reaches main, as a success", () => {
     for (const args of [["share", "--plan"], ["share"]]) {
       const home = makeHome();
       git(home.dir, ["switch", "-q", "-c", "plan-review"]);
@@ -907,8 +908,9 @@ describe("the plan's share fits the team's own git: a protected main, a branch o
       git(home.dir, ["add", "staged-only.txt"]);
       const before = git(home.remote, ["rev-parse", "main"]);
       const shared = run(UNIT, args, home.dir);
-      expect(shared.status, shared.out).not.toBe(0);
-      expect(shared.json?.error, args.join(" ")).toBe(`This checkout is on plan-review, not main. ${WAY_ON}`);
+      expect(shared.status, shared.out).toBe(0);
+      expect(shared.json?.shared, args.join(" ")).toBe(false);
+      expect(shared.json?.notice, args.join(" ")).toBe(`This checkout is on plan-review, not main. ${WAY_ON}`);
       expect(git(home.remote, ["rev-parse", "main"])).toBe(before);
       expect(git(home.remote, ["branch", "--list", "plan-review"])).toBe("");
       expect(git(home.dir, ["log", "-1", "--format=%s"])).toBe("Share the plan with the teams");
@@ -921,18 +923,106 @@ describe("the plan's share fits the team's own git: a protected main, a branch o
   });
 
   // A live run (case 12): Inception ended with no share question at all.
-  test("a lead on a branch of their own hears once, with the step, how the plan reaches the teams, in place of a share question", () => {
+  test("a lead on a branch of their own is asked once to have the plan committed there, the push staying theirs; yes commits it, and Not now never asks again", () => {
+    const question = "This checkout is on plan-review, not main. Want me to commit the plan here, so you can push it on a branch " +
+      "and get it merged your usual way?";
+    for (const answer of ["yes", "not now"] as const) {
+      const home = makeHome();
+      git(home.dir, ["switch", "-q", "-c", "plan-review"]);
+      chooseTeams(home.dir);
+      const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: `lead-on-a-branch-${answer}` };
+      const first = next(home.dir, chat);
+      expect(String(first.question), JSON.stringify(first).slice(0, 600)).toBe(question);
+      expect(JSON.stringify(first)).not.toContain("Commit the plan (aidlc/) here");
+      const choices = first.choices as Array<{ label: string; detail?: string; command?: string }>;
+      expect(choices.map((choice) => choice.label)).toEqual(["Commit the plan here", "Not now"]);
+      expect(choices[0].detail).toBe("Commits the plan here (AI-DLC's record, nothing else of yours) on plan-review; nothing is pushed.");
+      expect(choices[1].detail).toBe("The plan stays uncommitted here.");
+      expect(String(choices[0].command)).toMatch(/ unit share --plan$/);
+      const before = git(home.remote, ["rev-parse", "main"]);
+      if (answer === "yes") {
+        const done = run(UNIT, ["share", "--plan"], home.dir, chat);
+        expect(done.status, done.out).toBe(0);
+        expect(done.json?.notice).toBe(`This checkout is on plan-review, not main. ${WAY_ON}`);
+        expect(git(home.dir, ["log", "-1", "--format=%s"])).toBe("Share the plan with the teams");
+      }
+      expect(git(home.remote, ["rev-parse", "main"])).toBe(before);
+      expect(git(home.remote, ["branch", "--list", "plan-review"])).toBe("");
+      expect(String(next(home.dir, chat).question ?? "")).not.toBe(question);
+    }
+  });
+
+  test("a repo list whose content changed is offered once to be committed with AI-DLC's record, in a new chat too; yes commits it", () => {
     const home = makeHome();
-    git(home.dir, ["switch", "-q", "-c", "plan-review"]);
-    chooseTeams(home.dir);
-    const line = "This checkout is on plan-review, not main. Commit the plan (aidlc/) here, push it on a branch and get it merged " +
-      "your usual way; the teams can take Units once it is in main.";
-    const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "lead-on-a-branch" };
-    const first = next(home.dir, chat);
-    expect(isShare(first), JSON.stringify(first).slice(0, 600)).toBe(false);
-    expect((first.change_notices ?? []) as string[], JSON.stringify(first).slice(0, 900)).toContain(line);
-    const again = next(home.dir, chat);
-    expect(JSON.stringify(again)).not.toContain(line);
+    const dir = home.dir;
+    const list = join(dir, "repos.json");
+    const parsed = JSON.parse(readFileSync(list, "utf-8")) as { repos: Array<{ name: string }> };
+    const names = [...parsed.repos.map((repo) => repo.name), "notify"];
+    writeFileSync(list, `${JSON.stringify({ repos: [...parsed.repos, { name: "notify", url: "https://git.example.invalid/notify.git" }] }, null, 2)}\n`);
+    const listed = names.length === 2 ? `${names[0]} and ${names[1]}` : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+    const question = `repos.json now lists ${listed}, and your team gets it once it is committed. Want me to commit AI-DLC's record in ` +
+      "aidlc/, with the list?";
+    // At the stage boundary, after the questions about the work's own step, which the person answers first:
+    // this folder's code stays a new project, and one person builds the Units.
+    let offer = next(dir, chatOf("list-changed"));
+    for (let asked = 0; asked < 3 && (offer.ask_type === "project-type" || offer.ask_type === "construction-staffing"); asked++) {
+      const answered = offer.ask_type === "project-type"
+        ? run(UTILITY, ["reclassify", "--project-type", "greenfield"], dir)
+        : run(STATE, ["set-unit-ownership", "solo"], dir);
+      expect(answered.status, answered.out).toBe(0);
+      offer = next(dir, chatOf("list-changed"));
+    }
+    expect(String(offer.question), JSON.stringify(offer).slice(0, 600)).toBe(question);
+    const choices = offer.choices as Array<{ label: string; detail?: string; command?: string }>;
+    expect(choices.map((choice) => choice.label)).toEqual(["Commit it", "Not now"]);
+    expect(choices[0].detail).toBe("Commits everything in aidlc/, the repo list with it; nothing else outside aidlc/ goes in, and nothing is pushed.");
+    expect(choices[1].detail).toBe("The list stays uncommitted here.");
+    expect(String(choices[0].command)).toMatch(/ unit commit-record$/);
+    // Asked once for this list: not again in that chat, nor in a new one.
+    expect(String(next(dir, chatOf("list-changed")).question ?? "")).not.toBe(question);
+    expect(String(next(dir, chatOf("list-changed-later")).question ?? "")).not.toBe(question);
+    const yes = run(UNIT, ["commit-record"], dir);
+    expect(yes.status, yes.out).toBe(0);
+    expect(git(dir, ["status", "--porcelain", "--", "repos.json"])).toBe("");
+  });
+
+  test("unit commit-record commits only AI-DLC's record, takes no path, keeps a file staged outside aidlc/ staged and out of it, and refuses with nothing changed when it cannot", () => {
+    const home = makeHome();
+    const dir = home.dir;
+    const units = UNITS_FILE.replaceAll("\\", "/");
+    writeFileSync(join(dir, UNITS_FILE), `${readFileSync(join(dir, UNITS_FILE), "utf-8")}A note of the lead's.\n`);
+    writeFileSync(join(dir, "outside.md"), "Staged, not AI-DLC's.\n");
+    git(dir, ["add", "outside.md"]);
+    const head = git(dir, ["rev-parse", "HEAD"]);
+    expect(run(UNIT, ["commit-record", "outside.md"], dir).status).not.toBe(0);
+    // A git operation of theirs under way: nothing is committed, and the way on is theirs.
+    writeFileSync(join(dir, ".git", "MERGE_HEAD"), `${head}\n`);
+    const underWay = run(UNIT, ["commit-record"], dir);
+    expect(underWay.status).not.toBe(0);
+    expect(underWay.out).toContain("This checkout is in the middle of a merge, so nothing was committed. Finish it (git commit) or put it " +
+      "aside (git merge --abort), then I can commit AI-DLC's record.");
+    unlinkSync(join(dir, ".git", "MERGE_HEAD"));
+    // On no branch: nothing is committed, and the way on is said.
+    git(dir, ["checkout", "-q", "--detach"]);
+    const detached = run(UNIT, ["commit-record"], dir);
+    expect(detached.status).not.toBe(0);
+    expect(detached.out).toContain("This checkout is not on a branch, so nothing was committed. Switch to a branch, then I can commit AI-DLC's record.");
+    git(dir, ["switch", "-q", "main"]);
+    expect(git(dir, ["rev-parse", "HEAD"])).toBe(head);
+    // Committed: AI-DLC's record only; the file staged outside it stays staged and out of it.
+    const done = run(UNIT, ["commit-record"], dir);
+    expect(done.status, done.out).toBe(0);
+    const short = git(dir, ["rev-parse", "--short", "HEAD"]);
+    expect(String(done.json?.notice)).toMatch(new RegExp(`^AI-DLC's record in aidlc/ is committed on main as ${short} \\(\\d+ files?\\); nothing is pushed\\.$`));
+    const went = git(dir, ["show", "--name-only", "--format=", "HEAD"]).split("\n").filter(Boolean);
+    expect(went).toContain(units);
+    expect(went.filter((path) => !path.startsWith("aidlc/")), went.join(", ")).toEqual([]);
+    expect(git(dir, ["diff", "--cached", "--name-only"])).toBe("outside.md");
+    expect(git(home.remote, ["rev-parse", "main"])).toBe(head);
+    // Nothing more to commit: said, and not a failure.
+    const again = run(UNIT, ["commit-record"], dir);
+    expect(again.status, again.out).toBe(0);
+    expect(again.json?.notice).toBe("AI-DLC's record in aidlc/ has nothing new to commit.");
   });
 
   // The live run's shape: the lead keeps AI-DLC's records on a branch called

@@ -1593,8 +1593,7 @@ function writeManifest(root: string): number {
     writeFileSync(manifestPath, next, "utf-8");
     const blank = found.filter((name) => origin(join(root, name)) === "");
     console.log(
-      `Added ${found.join(", ")} to ${shown}: each one's folder and the address its origin points to. ` +
-        "Commit it so a teammate's clone knows where they go." +
+      `Added ${found.join(", ")} to ${shown}: each one's folder and the address its origin points to.` +
         (blank.length > 0 ? ` ${blank.join(", ")} has no origin, so its "url" is blank for now.` : ""),
     );
     return 0;
@@ -1613,7 +1612,7 @@ function writeManifest(root: string): number {
   const blank = repos.filter((repo) => repo.url === "").map((repo) => repo.name);
   console.log(
     `Wrote ${shown} with ${repos.map((repo) => repo.name).join(", ")}: each one's folder and the address its ` +
-      "origin points to. Commit it so a teammate's clone knows where they go." +
+      "origin points to." +
       (blank.length > 0 ? ` ${blank.join(", ")} has no origin, so its "url" is blank for now.` : ""),
   );
   return 0;

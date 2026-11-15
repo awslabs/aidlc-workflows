@@ -106,9 +106,16 @@ function joinWithAnd(parts: readonly string[]): string {
 // that the refresh changed (paths relative to the project, "/"-separated), by
 // folder with each folder's count, a root file by its name, and the list's move
 // in the same line when it moved; the move alone keeps its own line. Null when
-// nothing git tracks changed.
-export function catchUpChangedLine(version: string, paths: readonly string[], moved: boolean): string | null {
-  if (paths.length === 0) return moved ? REPOS_MOVED_LINE : null;
+// nothing git tracks changed. `asking`, with the list moved: the question that
+// offers the move with AI-DLC's record (`unit commit-record`), naming the
+// files it leaves for the person.
+export function catchUpChangedLine(version: string, paths: readonly string[], moved: boolean, asking = false): string | null {
+  const since = `${REPOS_IN_AIDLC_SINCE.major}.${REPOS_IN_AIDLC_SINCE.minor}`;
+  const offer = "Want me to commit the move, with AI-DLC's record in aidlc/?";
+  if (paths.length === 0) {
+    if (!moved) return null;
+    return asking ? `AI-DLC moved repos.json into aidlc/. ${offer} Teammates need AI-DLC ${since} or newer to find it there.` : REPOS_MOVED_LINE;
+  }
   const folders = new Map<string, number>();
   const roots: string[] = [];
   for (const path of paths) {
@@ -122,6 +129,11 @@ export function catchUpChangedLine(version: string, paths: readonly string[], mo
     ...[...roots].sort().map((file) => (SHARED_ROOT_FILES.has(file) ? `its part of ${file}` : file)),
   ];
   const head = `AI-DLC updated its own files in this project to ${version}: ${joinWithAnd(parts)} changed`;
+  if (moved && asking) {
+    const left = /^\d/.test(parts[0] ?? "") ? `the ${joinWithAnd(parts)}` : joinWithAnd(parts);
+    return `${head}, and repos.json moved into aidlc/. ${offer} I'd leave ${left} for you to commit with your own changes. ` +
+      `Teammates need AI-DLC ${since} or newer to find repos.json there.`;
+  }
   if (moved) {
     return `${head}, and repos.json moved into aidlc/. Commit them so your team gets them; teammates need AI-DLC ` +
       `${REPOS_IN_AIDLC_SINCE.major}.${REPOS_IN_AIDLC_SINCE.minor} or newer to find repos.json there.`;

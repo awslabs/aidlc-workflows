@@ -586,6 +586,11 @@ const ENV: NodeJS.ProcessEnv = {
   AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
 };
 
+// The one offer to write the list from the repos found here, told from the offer to commit a list by its choice.
+const isWriteOffer = (step: Record<string, unknown>): boolean =>
+  step.ask_type === "repos-manifest" &&
+  (step.choices as Array<{ command?: string }> | undefined)?.some((choice) => choice.command?.endsWith("--write-manifest")) === true;
+
 function next(proj: string): Record<string, unknown> {
   const result = runOrchestrateNext(ORCH, proj, [], { env: ENV });
   if (!result.directive) throw new Error(`next failed: ${result.out}`);
@@ -671,7 +676,7 @@ describe("the one offer to write repos.json", () => {
     const added = utility(proj, ["intent", "add-repo", "habits", "--path", "."]);
     expect(added.rc, added.out).toBe(0);
     expect(JSON.parse(readFileSync(join(proj, "aidlc", "repos.json"), "utf-8"))).toEqual({ repos: [{ name: "habits", path: "." }] });
-    expect(added.out).toContain("repos.json is new: it lists habits as the workspace folder itself. Commit it to share it with your team.");
+    expect(added.out).toContain("repos.json is new: it lists habits as the workspace folder itself.");
     const ask = next(proj);
     expect(ask.ask_type, JSON.stringify(ask)).toBe("repos-manifest");
     expect(ask.question).toBe(
@@ -686,7 +691,11 @@ describe("the one offer to write repos.json", () => {
       { name: "tracker-core", url: "", path: "tracker-core" },
     ]);
     const after = next(proj);
-    expect(after.ask_type, JSON.stringify(after)).not.toBe("repos-manifest");
+    expect(isWriteOffer(after), JSON.stringify(after)).toBe(false);
+    expect(after.question).toBe(
+      "repos.json now lists habits, tracker-cli and tracker-core, and your team gets it once it is committed. Want me to " +
+        "commit AI-DLC's record in aidlc/, with the list?",
+    );
   });
 
   // Only the add's own file: a repos.json the person wrote, or changed after
@@ -697,7 +706,7 @@ describe("the one offer to write repos.json", () => {
     const raw = `${JSON.stringify({ repos: [{ name: "habits", path: "." }] }, null, 2)}\n`;
     writeFileSync(join(own, "repos.json"), raw);
     const step = next(own);
-    expect(step.ask_type, JSON.stringify(step)).not.toBe("repos-manifest");
+    expect(isWriteOffer(step), JSON.stringify(step)).toBe(false);
     const kept = sync(own, ["--write-manifest"]);
     expect(kept.out).toContain("repos.json is already here; nothing was written.");
     expect(readFileSync(join(own, "repos.json"), "utf-8")).toBe(raw);
@@ -707,7 +716,7 @@ describe("the one offer to write repos.json", () => {
     expect(utility(changed, ["intent", "add-repo", "habits", "--path", "."]).rc).toBe(0);
     writeFileSync(join(changed, "aidlc", "repos.json"), `// ours\n${readFileSync(join(changed, "aidlc", "repos.json"), "utf-8")}`);
     const later = next(changed);
-    expect(later.ask_type, JSON.stringify(later)).not.toBe("repos-manifest");
+    expect(isWriteOffer(later), JSON.stringify(later)).toBe(false);
   });
 
   test("with a chat, the line about the repos.json the add wrote rides the next step the agent speaks from", () => {
@@ -720,7 +729,7 @@ describe("the one offer to write repos.json", () => {
     expect(added.out).not.toContain("repos.json is new");
     const step = runOrchestrateNext(ORCH, proj, [], { env: chat }).directive;
     expect((step?.change_notices as string[] | undefined) ?? [], JSON.stringify(step)).toContain(
-      "repos.json is new: it lists habits as the workspace folder itself. Commit it to share it with your team.",
+      "repos.json is new: it lists habits as the workspace folder itself.",
     );
   });
 
@@ -758,6 +767,9 @@ describe("the one offer to write repos.json", () => {
     const ask = next(proj);
     expect(ask.ask_type, JSON.stringify(ask).slice(0, 600)).toBe("repos-manifest");
     expect(ask.question).toStartWith("Add the 2 repos found here (tracker-cli, tracker-core) to repos.json?");
+    // Not now to it: the list the add wrote is offered for its commit, once, at the same boundary.
+    const commit = next(proj);
+    expect(commit.question, JSON.stringify(commit).slice(0, 600)).toStartWith("repos.json now lists habits, and your team gets it");
     const step = next(proj);
     expect(step.ask_type ?? null, JSON.stringify(step).slice(0, 600)).not.toBe("repos-manifest");
     expect([step.kind, step.stage, step.unit]).toEqual(["run-stage", "functional-design", "u2-tracker-cli"]);

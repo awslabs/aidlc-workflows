@@ -10171,16 +10171,17 @@ function plannedRepoPath(
   const raw = existsSync(file) ? readFileSync(file, "utf-8") : null;
   const next = workspaceManifestWith(raw, { name, path: shown, ...(kept === undefined ? {} : { url: kept }) });
   if (next === null) die(`${name} could not be added to repos.json, which has no repos list. Nothing was changed.`);
+  // Its commit is offered at the next look (reposCommitOffer), never asked of the person here.
   const share = isAbsolute(shown) || /^[A-Za-z]:\//.test(shown)
-    ? `It is a path on this machine, so a teammate whose copy is elsewhere gives theirs in ${REPOS_LOCAL_PLACE}.`
-    : "Commit it to share it with your team.";
+    ? ` It is a path on this machine, so a teammate whose copy is elsewhere gives theirs in ${REPOS_LOCAL_PLACE}.`
+    : "";
   const stripped = kept !== address ? " Its address there leaves out the credential." : "";
   const where = resolve(dir) === resolve(projectDir) ? "as the workspace folder itself" : `at ${shown}`;
   return {
     raw,
     next,
     shown,
-    note: `${raw === null ? "repos.json is new: it lists" : "repos.json now lists"} ${name} ${where}. ${share}${stripped}`,
+    note: `${raw === null ? "repos.json is new: it lists" : "repos.json now lists"} ${name} ${where}.${share}${stripped}`,
     clone: there ? null : {
       repo: { name, path: shown, url: url! },
       address: url!,
@@ -10296,7 +10297,7 @@ function plannedRepoClone(
     repo,
     address: url,
     manifest: { raw: null, next: workspaceManifestWith(null, written) },
-    note: `repos.json is new: it lists ${name}; commit it to share the list with your team.${stripped}`,
+    note: `repos.json is new: it lists ${name}.${stripped}`,
   };
 }
 
