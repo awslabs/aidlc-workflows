@@ -2675,7 +2675,9 @@ when the fingerprints `aidlc config` keeps of its own writes link the two
 as config found it and as each of its writes left it, while each write finds
 the file as the last one left it; kept only while git does not hold the file as
 config finds it, written only by the release config installs, and read as none
-when it cannot be read). The build's starting content is one of those
+when it cannot be read). On a copy install, where config never ran, the session
+start writes AI-DLC's part (`addRootBlocks`) and keeps the same fingerprints,
+whatever git holds, since no install record says which part is AI-DLC's. The build's starting content is one of those
 fingerprints and the file now is the last, or the file is named. The listings are AI-DLC's ignored
 files, so a teammate's clone does not hold them: there, the files the project
 held when its Code Generation first ran a step on this machine stand for what

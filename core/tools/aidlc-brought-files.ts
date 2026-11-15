@@ -218,8 +218,11 @@ function writtenByInstall(projectDir: string, record: InstallRecord, file: Broug
 // write, while each write finds the file as the run's last. Config never
 // changes the person's part, so every file in one run holds the person's part
 // as the run began. When git's HEAD holds the file as config finds it, git's
-// copy already tells the two apart (writtenByInstall) and no run is kept. Read
-// only by the approval's check; a record that cannot be read is none.
+// copy already tells the two apart (writtenByInstall) and no run is kept. A
+// copy install keeps no install record, so there git's copy cannot tell
+// AI-DLC's part, and the runs its session start writes (addRootBlocks) are
+// kept whatever git holds. Read only by the approval's check; a record that
+// cannot be read is none.
 const SETUP_WRITES = "setup-writes.json";
 // A run's newest fingerprints, as many as a long wait could need.
 const SETUP_WRITES_KEPT = 32;
@@ -251,11 +254,13 @@ export interface SetupWrite {
 }
 
 /**
- * Keep the run of each file holding AI-DLC's marked part that `aidlc config`
- * just wrote, once its changes are in. Best-effort: never throws, and writes
- * nothing where the engine folder is a link or cannot be made.
+ * Keep the run of each file holding AI-DLC's marked part that `aidlc config`,
+ * or a copy install's session start, just wrote, once its changes are in.
+ * `recorded` is false for a writer with no install record of its part (the
+ * session start). Best-effort: never throws, and writes nothing where the
+ * engine folder is a link or cannot be made.
  */
-export function keepSetupWrites(projectDir: string, writes: readonly SetupWrite[]): void {
+export function keepSetupWrites(projectDir: string, writes: readonly SetupWrite[], recorded = true): void {
   if (writes.length === 0) return;
   try {
     const path = workspaceEngineFile(projectDir, SETUP_WRITES);
@@ -266,7 +271,7 @@ export function keepSetupWrites(projectDir: string, writes: readonly SetupWrite[
     const found = writes.map((write) => ({
       repo: "", path: write.path, deleted: false, sha: write.found === null ? "" : committedTextSha256(write.found),
     }));
-    const held = heldAtHead(projectDir, found.filter((file) => file.sha !== ""));
+    const held = recorded ? heldAtHead(projectDir, found.filter((file) => file.sha !== "")) : new Set<BroughtFile>();
     writes.forEach((write, index) => {
       const file = found[index];
       const run = runs[write.path];

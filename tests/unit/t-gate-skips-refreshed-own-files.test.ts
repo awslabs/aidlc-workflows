@@ -1,4 +1,4 @@
-// covers: function:broughtFilesChanged, function:holdsRecordedWrite, function:keepSetupWrites, subcommand:aidlc-orchestrate:report
+// covers: function:broughtFilesChanged, function:holdsRecordedWrite, function:keepSetupWrites, function:addRootBlocks, subcommand:aidlc-orchestrate:report
 //
 // A person commits their AI-DLC setup (or does not), has work open past the
 // start of Code Generation, runs `aidlc update` and `aidlc config`, and
@@ -12,9 +12,11 @@
 // its own writes (aidlc/.aidlc-engine/setup-writes.json) tell its refresh from
 // the build's change (#3981). A file the build changed is still named, an
 // AI-DLC file included, and so is the person's part of AGENTS.md or
-// .gitignore, committed copy or not.
+// .gitignore, committed copy or not. On a copy install, where config never
+// ran, the session start writes AI-DLC's part and keeps the same fingerprints.
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -22,6 +24,7 @@ import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harne
 import { AIDLC_SRC, cleanupTestProject, REPO_ROOT, runOrchestrateNext, seededStateFile } from "../harness/fixtures.ts";
 import { createCodeGenerationProject, reviewText, runNamed, stageDir, writePlan } from "../harness/code-generation-states.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { addRootBlocks } from "../../dist/claude/.claude/tools/aidlc-includes.ts";
 import { sourceBaselineAuditFields, workspaceBaselineStageSlugs } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 // The stage's checks are not this file's subject, and its fixture documents
@@ -193,6 +196,71 @@ function builtOverUpdate(trees: Tree | readonly Tree[], options: Day = {}): stri
     }
   }
   expect(readFileSync(join(proj, ".gitignore"), "utf-8"), "the refresh rewrote .gitignore").toContain(ignored(refreshes));
+  return proj;
+}
+
+// A newer copy's part of a shared file: its own root block with `line` added,
+// and the part it replaces (the one in the project now) among the parts a
+// release shipped, as every release lists the ones before it.
+function newerCopyPart(proj: string, harnessDir: string, path: string, marker: string, line: string): void {
+  const [begin, end] = path.endsWith(".md")
+    ? [`<!-- BEGIN AI-DLC:${marker} -->`, `<!-- END AI-DLC:${marker} -->`]
+    : [`# BEGIN AI-DLC:${marker}`, `# END AI-DLC:${marker}`];
+  const current = readFileSync(join(proj, path), "utf-8");
+  const body = current.slice(current.indexOf(begin) + begin.length, current.indexOf(end)).trim().replace(/\r\n/g, "\n");
+  const data = join(proj, harnessDir, "tools", "data");
+  const projection = JSON.parse(readFileSync(join(data, "aidlc-projection.json"), "utf-8")) as {
+    rootIntegrations: Array<{ path: string; legacySignatures?: { wholeFileHashes?: string[] } }>;
+  };
+  const integration = projection.rootIntegrations.find((one) => one.path === path);
+  expect(integration, `${harnessDir} has a part of ${path}`).toBeDefined();
+  integration!.legacySignatures = {
+    ...integration!.legacySignatures,
+    wholeFileHashes: [...(integration!.legacySignatures?.wholeFileHashes ?? []), `sha256:${createHash("sha256").update(`${body}\n`).digest("hex")}`],
+  };
+  writeFileSync(join(data, "aidlc-projection.json"), `${JSON.stringify(projection, null, 2)}\n`, "utf-8");
+  appendFileSync(join(data, "root-blocks", marker), `\n${line}\n`);
+}
+
+/**
+ * A copy install's day: the copied tree only (and with `codex`, Codex CLI's
+ * copied tree beside it, the files a copy leaves out left out), so the session
+ * start adds AI-DLC's part of .gitignore and AGENTS.md (addRootBlocks); the
+ * work started and the build begun; then a newer copy over the tree and the
+ * next chat's session start, which brings each part up to date.
+ */
+function copyBuiltOverUpdate(options: { git?: "after" | false; olderSetup?: boolean; codex?: boolean } = {}): string {
+  const proj = createCodeGenerationProject("off", "off");
+  created.push(proj);
+  const stateFile = seededStateFile(proj);
+  writeFileSync(stateFile, readFileSync(stateFile, "utf-8")
+    .replace("- **Project Type**: Brownfield", "- **Project Type**: Greenfield")
+    .replace("- [ ] code-generation", "- [-] code-generation")
+    .replace(/^(- \[.\] units-generation) \u2014 EXECUTE$/m, "$1 \u2014 SKIP"), "utf-8");
+  write(proj, { "README.md": README, "src/app.js": "export const greet = (name) => \"Hello \" + name;\n" });
+  if (options.codex) {
+    for (const dir of [".codex", ".agents"]) cpSync(join(REPO_ROOT, "dist", "codex", dir), join(proj, dir), { recursive: true });
+  }
+  expect(existsSync(join(proj, ".claude", "tools", "data", "aidlc-manifest.json")), "a copy install keeps no install record").toBe(false);
+  const shared = options.codex ? [".gitignore", "AGENTS.md"] : [".gitignore"];
+  expect(addRootBlocks(proj)).toEqual(expect.arrayContaining(shared));
+  if (options.olderSetup && existsSync(join(proj, SETUP_WRITES))) unlinkSync(join(proj, SETUP_WRITES));
+  if ((options.git ?? "after") === "after") {
+    git(proj, ["init", "-q"]);
+    git(proj, ["add", "-A"]);
+    git(proj, ["commit", "-qm", "AI-DLC setup"]);
+  }
+  appendAuditEntry("WORKFLOW_STARTED", { Scope: "poc", ...sourceBaselineAuditFields(proj, workspaceBaselineStageSlugs()) }, proj);
+  appendAuditEntry("STAGE_STARTED", { Stage: "code-generation", ...sourceBaselineAuditFields(proj, "code-generation") }, proj);
+  next(proj);
+  writePlan(proj);
+  const step = next(proj);
+  expect(step.kind, JSON.stringify(step).slice(0, 600)).toBe("run-stage");
+  newerCopyPart(proj, ".claude", ".gitignore", "gitignore", IGNORED);
+  if (options.codex) newerCopyPart(proj, ".codex", "AGENTS.md", "agents", ADDED.trim());
+  expect(addRootBlocks(proj)).toEqual(expect.arrayContaining(shared));
+  expect(readFileSync(join(proj, ".gitignore"), "utf-8"), "the session start rewrote .gitignore").toContain(IGNORED);
+  if (options.codex) expect(readFileSync(join(proj, "AGENTS.md"), "utf-8"), "the session start rewrote AGENTS.md").toContain(ADDED.trim());
   return proj;
 }
 
@@ -376,6 +444,35 @@ describe("t-gate-skips-refreshed-own-files", () => {
       },
     });
     expect(openGate(proj)).toContain("The build changed .gitignore, a file you had before this work started.");
+  });
+
+  test("a copy install set up by an older copy, .gitignore committed: the session start's refresh after the upgrade is not the build's", () => {
+    const proj = copyBuiltOverUpdate({ olderSetup: true });
+    write(proj, { "README.md": "# Replaced\n" });
+    const line = openGate(proj);
+    expect(line).toContain(
+      "The build changed README.md, a file you had before this work started. To put it back, run `git checkout HEAD -- README.md`.",
+    );
+    namesNone(line, [".gitignore"]);
+  });
+
+  test("a copy install without git: the session start's refresh after the upgrade is not the build's, and the build's own line in .gitignore is", () => {
+    const proj = copyBuiltOverUpdate({ git: false });
+    write(proj, { "README.md": "# Replaced\n" });
+    expect(openGate(proj)).toContain("The build changed README.md, a file you had before this work started. There is no committed copy to put back.");
+    const other = copyBuiltOverUpdate({ git: false });
+    appendFileSync(join(other, ".gitignore"), "build-output/\n");
+    expect(openGate(other)).toContain("The build changed .gitignore, a file you had before this work started.");
+  });
+
+  test("a copy install with Codex CLI, set up by an older copy and committed: neither .gitignore nor AGENTS.md, refreshed by the session start, is named", () => {
+    const proj = copyBuiltOverUpdate({ olderSetup: true, codex: true });
+    write(proj, { "README.md": "# Replaced\n" });
+    const line = openGate(proj);
+    expect(line).toContain(
+      "The build changed README.md, a file you had before this work started. To put it back, run `git checkout HEAD -- README.md`.",
+    );
+    namesNone(line, [".gitignore", "AGENTS.md"]);
   });
 
   test("claude: a dry run leaves the record as it was", () => {

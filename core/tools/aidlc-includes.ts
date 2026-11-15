@@ -43,6 +43,7 @@ import {
   rootIntegrationTarget,
   unionBlocks,
 } from "./aidlc-distribution.ts";
+import { keepSetupWrites, type SetupWrite } from "./aidlc-brought-files.ts";
 import { activeSpace, sessionsDir, writeFileAtomic } from "./aidlc-lib.ts";
 import { discoverProjectHarnesses, ensureWorkspaceEngineFolder, runtimeHarnessName } from "./aidlc-runtime-paths.ts";
 
@@ -412,11 +413,15 @@ function readSafe(path: string): string | null {
 // corrupted, and nothing outside the project is read or written.
 export function addRootBlocks(projectDir: string): string[] {
   const written: string[] = [];
+  // What these writes did to each file, kept as config keeps its own, so the
+  // build's approval does not count them as the build's (keepSetupWrites).
+  const setupWrites: SetupWrite[] = [];
   const { blocks, entries } = aidlcRootParts(projectDir);
   for (const [path, part] of blocks) {
     if (part.configured) continue;
     const target = join(projectDir, path);
     let current = "";
+    let present = false;
     try {
       assertProjectionPathHasNoSymlinks(projectDir, path);
       const stat = lstatSync(target, { throwIfNoEntry: false });
@@ -425,6 +430,7 @@ export function addRootBlocks(projectDir: string): string[] {
         const bytes = readFileSync(target);
         current = bytes.toString("utf-8");
         if (!Buffer.from(current, "utf-8").equals(bytes)) continue;
+        present = true;
       }
     } catch {
       continue;
@@ -439,10 +445,12 @@ export function addRootBlocks(projectDir: string): string[] {
       assertProjectionPathHasNoSymlinks(projectDir, path);
       writeFileAtomic(target, merged.value);
       written.push(path);
+      setupWrites.push({ path, found: present ? Buffer.from(current, "utf-8") : null, left: Buffer.from(merged.value, "utf-8") });
     } catch {
       // Leave the file as it was; the next session or config tries again.
     }
   }
+  keepSetupWrites(projectDir, setupWrites, false);
   for (const [key, part] of entries) {
     if (part.configured) continue;
     // The team's file (the opencode.jsonc a team keeps, for opencode.json).
