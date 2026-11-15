@@ -940,12 +940,20 @@ export class AgentStandIn {
   /** The directive a `next` printed, after its load-steering continuations. */
   private follow(first: RunResult): Directive {
     let res = first;
+    let drafted = false;
     for (let i = 0; i < 50; i++) {
       const d = parseJson(res.stdout) as Directive | null;
       if (!d) this.fail(`next printed no directive (${res.status}): ${clip(res.stdout + res.stderr, 1200)}`);
       if (d.kind !== "load-steering") {
         this.directives.push(d);
         this.heard(d);
+        // The agent's draft of a commit message, said to nobody, before the question that ends in the
+        // commit: it leaves the message the file holds and runs next, as the step says.
+        if (d.kind === "print" && typeof d.commit_message_file === "string" && !drafted) {
+          drafted = true;
+          res = this.host.engine("orchestrate", "next");
+          continue;
+        }
         return d;
       }
       const cont = typeof d.next === "string" ? d.next : null;

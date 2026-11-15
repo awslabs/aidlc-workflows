@@ -40,6 +40,7 @@ import {
 import { SHAPES, SESSION, STATES } from "../harness/code-generation-states.ts";
 import { projectAt, templateProjects } from "../harness/aidlc-answers-corpus.ts";
 import { env as runEnv, exec, next as liveNext, say } from "../harness/aidlc-input-corpus.ts";
+import { isDraftStep } from "../harness/team-build.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 resetAidlcEnv();
@@ -591,10 +592,13 @@ const isWriteOffer = (step: Record<string, unknown>): boolean =>
   step.ask_type === "repos-manifest" &&
   (step.choices as Array<{ command?: string }> | undefined)?.some((choice) => choice.command?.endsWith("--write-manifest")) === true;
 
+// The agent's draft of the commit message before the question that ends in the commit is passed, as the agent leaves it.
 function next(proj: string): Record<string, unknown> {
-  const result = runOrchestrateNext(ORCH, proj, [], { env: ENV });
-  if (!result.directive) throw new Error(`next failed: ${result.out}`);
-  return result.directive;
+  for (let drafted = false; ; drafted = true) {
+    const result = runOrchestrateNext(ORCH, proj, [], { env: ENV });
+    if (!result.directive) throw new Error(`next failed: ${result.out}`);
+    if (drafted || !isDraftStep(result.directive)) return result.directive;
+  }
 }
 
 function utility(proj: string, args: string[], env: NodeJS.ProcessEnv = ENV): { rc: number; out: string } {
@@ -694,7 +698,7 @@ describe("the one offer to write repos.json", () => {
     expect(isWriteOffer(after), JSON.stringify(after)).toBe(false);
     expect(after.question).toBe(
       "repos.json now lists habits, tracker-cli and tracker-core, and your team gets it once it is committed. Want me to " +
-        "commit AI-DLC's record in aidlc/, with the list?",
+        "commit AI-DLC's record in aidlc/, with the list, using this commit message?\n\nUpdate AI-DLC's record",
     );
   });
 

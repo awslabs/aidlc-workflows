@@ -293,7 +293,9 @@ export function expectDraftStep(cwd: string, step: Record<string, unknown>): str
   expect(step.narration, JSON.stringify(step)).toBeUndefined();
   const file = String(step.commit_message_file);
   const held = readFileSync(join(cwd, ...file.split("/")), "utf-8");
-  expect(held, `the draft file holds today's message: ${JSON.stringify(step)}`).toMatch(/^[^\n]+: [^\n]+\n?$/);
+  // A Unit's push holds "<unit>: <home>"; the share's and the record's hold their own one-line fallback.
+  const shape = file.includes("/unit-push-message-") ? /^[^\n]+: [^\n]+\n?$/ : /^[^\n]+\n?$/;
+  expect(held, `the draft file holds today's message: ${JSON.stringify(step)}`).toMatch(shape);
   expect(String(step.message)).toContain(`\`${held.trim()}\``);
   return file;
 }

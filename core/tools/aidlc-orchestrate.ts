@@ -678,10 +678,11 @@ import {
   takeAside,
   resendQuestion,
   unitDefaultMessage,
-  unitPushMessage,
-  unitPushMessageFile,
+  commitMessageFile,
+  heldCommitMessage,
+  shareDefaultMessage,
+  planToCommit,
   unitPushRefused,
-  writeUnitPushDraft,
   resultTakeHold,
   resultWaitsLine,
   sendLeadsApprovedChanges,
@@ -820,6 +821,10 @@ import {
   SIGN_OFF_CLAUSE,
   UNIT_WORDS_NOTE,
   unitWordsArg,
+  commitDraftSentence,
+  OWN_MESSAGE_SENTENCE,
+  RECORD_COMMIT_MESSAGE,
+  writeCommitDraft,
   unitsTakenBackHere,
   TEAM_RHYTHM_OFFER,
   leadCopyAt,
@@ -5971,6 +5976,7 @@ function teamHandoverAsk(
     choices: AskChoice[];
     notNow?: Pick<AskChoice, "label" | "detail">;
     unit?: string;
+    messageFile?: string;
   },
 ): AskDirective {
   if (!isReadOnlyEngineProbe()) for (const mark of offer.marks) noteEngineAskMark(projectDir, mark);
@@ -5983,6 +5989,7 @@ function teamHandoverAsk(
     question: offer.question,
     choices: [...offer.choices, { ...notNow, command: `${aidlcToolInvocation("orchestrate")} next` }],
     ...(offer.unit !== undefined ? { unit: offer.unit } : {}),
+    ...(offer.messageFile !== undefined ? { commit_message_file: offer.messageFile } : {}),
   };
 }
 
@@ -6047,7 +6054,7 @@ function teamShareOffer(
   unit: string,
   unitsLeft: number,
   auditRows: readonly AuditShardEvent[],
-): AskDirective | null {
+): AskDirective | PrintDirective | null {
   if (unitsLeft < 1) return null;
   if (auditRows.some((row) => row.event === "UNIT_STARTED" && auditBlockField(row.block, "Unit") === unit)) return null;
   const mark = teamHandoverMarkName("share", unit);
@@ -6055,22 +6062,26 @@ function teamShareOffer(
   const target = shareOfferTarget(projectDir);
   if (target === null) return null;
   const work = workToCommitWords(projectDir);
+  const message = work === null ? null : shareMessageStep(projectDir, unit, work);
+  if (message !== null && "draft" in message) return message.draft;
+  const flag = message?.flag ?? "";
   const plural = unitsLeft === 1 ? "The plan's last Unit is ready for the teams. Share it now?" :
     `The plan's ${unitsLeft} Units are ready for the teams. Share them now?`;
   const way = changesReachMain(projectDir);
   return teamHandoverAsk(projectDir, {
     handovers: ["share"],
     marks: [mark],
-    question: `${plural} I'd ${work === null ? "" : `commit ${work} and `}` +
+    question: `${plural} I'd ${work === null ? "" : `commit ${work} with this commit message and `}` +
       (way === "pull request"
         ? `push the plan on its own branch for a pull request, so each team can take a Unit once it is in ${target.branch}, `
         : `push ${target.branch} to ${target.remote}, so each team can take a Unit `) +
-      `by opening its own clone and running ${entrySkillInvocation()}.`,
+      `by opening its own clone and running ${entrySkillInvocation()}.${message === null ? "" : `\n\n${message.text}`}`,
+    ...(message?.file === undefined ? {} : { messageFile: message.file }),
     choices: shareWays(way, {
       label: "Share them with the teams",
       detail: `Pushes ${target.branch} to ${target.remote} as a plain push; it never overwrites what a team pushed.`,
-      command: `${aidlcInvocation()} unit share`,
-    }, { label: "Share by pull request", detail: planByPullRequestDetail(projectDir), command: `${aidlcInvocation()} unit share --branch` }),
+      command: `${aidlcInvocation()} unit share${flag}`,
+    }, { label: "Share by pull request", detail: planByPullRequestDetail(projectDir), command: `${aidlcInvocation()} unit share --branch${flag}` }),
     notNow: {
       label: "Build them here for now",
       detail: `This session builds the ${unitPlainName(unit)} Unit here; I'll ask again before the next one.`,
@@ -6102,7 +6113,7 @@ function sliceBuiltFirst(projectDir: string, stateContent: string): string | nul
 // after sharing reaches the teams the same way, so the question is put again,
 // once for those Units. On a branch of the lead's own, where the share pushes
 // nothing, how the plan reaches the teams is said once per chat instead.
-function buildOutShareOffer(projectDir: string): AskDirective | null {
+function buildOutShareOffer(projectDir: string): AskDirective | PrintDirective | null {
   const refused = shareRefusal(projectDir);
   if (refused !== null && refused.off === undefined) return null;
   // While the team's branch is still to be read, the offer names "the team's
@@ -6115,23 +6126,28 @@ function buildOutShareOffer(projectDir: string): AskDirective | null {
   // A thin slice built here first: nothing is open to a team until it is approved, so the plan is shared then, as main does.
   if (added === null && sliceBuiltFirst(projectDir, readStateFile(projectDir)) !== null) return null;
   if (added !== null && added.length === 0) return null;
-  const mark = teamHandoverMarkName("share", added === null ? "plan" : `plan-${added.join("-")}`);
+  const shareKey = added === null ? "plan" : `plan-${added.join("-")}`;
+  const mark = teamHandoverMarkName("share", shareKey);
   if (handoverOffered(projectDir, mark)) return null;
   if (refused?.off !== undefined) {
     // On one of the plan's own branches the share pushes that branch, and its wait line says where the plan stands.
     const here = refused.off.current;
     const hereMark = teamHandoverMarkName("plan-here", here);
     if (planBranchesHere(projectDir).includes(here) || handoverOffered(projectDir, hereMark)) return null;
+    const message = shareMessageStep(projectDir, `plan-here-${here}`, planShareWords(projectDir));
+    if ("draft" in message) return message.draft;
     return teamHandoverAsk(projectDir, {
       handovers: ["share"],
       marks: [hereMark],
-      question: `${refused.reason} Want me to commit the plan here, so you can push it on a branch and get it merged your usual way?`,
+      question: `${refused.reason} Want me to commit the plan here with this commit message, so you can push it on a branch and get ` +
+        `it merged your usual way?\n\n${message.text}`,
       choices: [{
         label: "Commit the plan here",
         detail: `Commits ${planShareWords(projectDir)} on ${here}; nothing is pushed.`,
-        command: `${aidlcInvocation()} unit share --plan`,
+        command: `${aidlcInvocation()} unit share --plan${message.flag}`,
       }],
       notNow: { label: "Not now", detail: "The plan stays uncommitted here." },
+      ...(message.file === undefined ? {} : { messageFile: message.file }),
     });
   }
   const said = added !== null
@@ -6143,21 +6159,28 @@ function buildOutShareOffer(projectDir: string): AskDirective | null {
   const note = builtHere.length === 0 ? null : builtHereNote(builtHere);
   const way = changesReachMain(projectDir);
   const byPullRequest = way === "pull request";
+  // The commit's message, only where the share makes one.
+  const message = planToCommit(projectDir) ? shareMessageStep(projectDir, shareKey, planShareWords(projectDir)) : null;
+  if (message !== null && "draft" in message) return message.draft;
+  const flag = message?.flag ?? "";
   return teamHandoverAsk(projectDir, {
     handovers: ["share"],
     marks: [mark],
     question: `${said} Share the plan with them now? I'd commit ${planShareWords(projectDir)} ` +
+      `${message === null ? "" : "with this commit message "}` +
       `and ${byPullRequest ? "push it on its own branch for a pull request" : `push ${target.branch} to ${target.remote}`}` +
       `${note === null ? "" : `, with ${note}`}, so each team can take its Unit ` +
-      `${byPullRequest ? `once it is in ${target.branch}, ` : ""}by opening its own clone and running ${entrySkillInvocation()}.`,
+      `${byPullRequest ? `once it is in ${target.branch}, ` : ""}by opening its own clone and running ${entrySkillInvocation()}.` +
+      `${message === null ? "" : `\n\n${message.text}`}`,
     choices: shareWays(way, {
       label: "Share them with the teams",
       detail: note === null
         ? `Pushes ${target.branch} to ${target.remote} as a plain push; it never overwrites what a team pushed.`
         : `Pushes ${target.branch}, and ${note}, to ${target.remote}; it never overwrites what a team pushed.`,
-      command: `${aidlcInvocation()} unit share --plan`,
-    }, { label: "Share by pull request", detail: planByPullRequestDetail(projectDir), command: `${aidlcInvocation()} unit share --branch --plan` }),
+      command: `${aidlcInvocation()} unit share --plan${flag}`,
+    }, { label: "Share by pull request", detail: planByPullRequestDetail(projectDir), command: `${aidlcInvocation()} unit share --branch --plan${flag}` }),
     notNow: { label: "Not now", detail: `Nothing is pushed; a team's clone sees the plan once ${target.branch} is pushed.` },
+    ...(message?.file === undefined ? {} : { messageFile: message.file }),
   });
 }
 
@@ -6272,7 +6295,7 @@ function teamReviewOrJoinOffer(
 
 // A Unit landed here that origin does not have yet: push main so the other
 // teams see it? Asked once per landed commit. Null when not due.
-function teamPushOffer(projectDir: string): AskDirective | null {
+function teamPushOffer(projectDir: string): AskDirective | PrintDirective | null {
   const landed = landedNotOnRemote(projectDir);
   const fresh = landed.filter((row) => !handoverOffered(projectDir, teamHandoverMarkName("push", row.commit.slice(0, 12))));
   if (fresh.length === 0 || shareBlocker(projectDir) !== null) return null;
@@ -6280,17 +6303,20 @@ function teamPushOffer(projectDir: string): AskDirective | null {
   if (target === null) return null;
   const units = landed.map((row) => row.unit);
   const work = workToCommitWords(projectDir);
+  const message = work === null ? null : shareMessageStep(projectDir, fresh.map((row) => row.commit.slice(0, 12)).join("-"), work);
+  if (message !== null && "draft" in message) return message.draft;
   return teamHandoverAsk(projectDir, {
     handovers: ["push"],
     marks: fresh.map((row) => teamHandoverMarkName("push", row.commit.slice(0, 12))),
     question: `Push ${target.branch} to ${target.remote} now so the other teams see ${units.join(" and ")} landed?` +
-      (work === null ? "" : ` I'd commit ${work} first.`),
+      (message === null ? "" : ` I'd commit ${work} first, with this commit message.\n\n${message.text}`),
     choices: [{
       label: `Push ${target.branch}`,
       detail: `${work === null ? "Pushes" : "Commits, then pushes"} ${target.branch} to ${target.remote} as a plain push; ` +
         "it never overwrites what a team pushed.",
-      command: `${aidlcInvocation()} unit share`,
+      command: `${aidlcInvocation()} unit share${message?.flag ?? ""}`,
     }],
+    ...(message?.file === undefined ? {} : { messageFile: message.file }),
   });
 }
 
@@ -9910,21 +9936,26 @@ function levelOfferAsk(projectDir: string, stateContent: string): AskDirective |
 
 // The repo list's commit with AI-DLC's record (reposCommitOffer), once for
 // that list. Null when not due.
-function reposCommitAsk(projectDir: string, stateContent: string, atBoundary: () => boolean = () => true): AskDirective | null {
+function reposCommitAsk(projectDir: string, stateContent: string, atBoundary: () => boolean = () => true): AskDirective | PrintDirective | null {
   if (process.env.AIDLC_UNATTENDED === "1") return null;
   const offer = reposCommitOffer(projectDir, unitBuildOf(stateContent) !== null);
   if (offer === null || engineAskMark(projectDir, offer.mark) !== null || !atBoundary()) return null;
+  const message = commitMessageStep(projectDir, commitMessageFile(projectDir, "record", offer.key), RECORD_COMMIT_MESSAGE,
+    (file) => commitDraftStep("the commit message for AI-DLC's record", joinRepoNames(["."]), "AI-DLC's record in aidlc/, with the list",
+      file, RECORD_COMMIT_MESSAGE));
+  if ("draft" in message) return message.draft;
   if (!isReadOnlyEngineProbe()) noteEngineAskMark(projectDir, offer.mark);
   return {
     kind: "ask",
     ask_type: "repos-manifest",
     response_route: "command",
-    question: offer.question,
+    question: `${offer.question}\n\n${message.text}`,
+    ...(message.file === undefined ? {} : { commit_message_file: message.file }),
     choices: [
       {
         label: "Commit it",
         detail: "Commits everything in aidlc/, the repo list with it; nothing else outside aidlc/ goes in, and nothing is pushed.",
-        command: CHECKOUT_STEPS["commit-own"].via(),
+        command: `${CHECKOUT_STEPS["commit-own"].via()}${message.flag}`,
       },
       { label: "Not now", detail: "The list stays uncommitted here.", command: `${aidlcToolInvocation("orchestrate")} next` },
     ],
@@ -10045,7 +10076,7 @@ function unitPushAsk(projectDir: string, stateContent: string | null): AskDirect
   const unit = build.unit;
   if (push === "later") {
     // The push question is not put again until a push, so this line shows the message it will carry.
-    const held = unitPushMessage(projectDir);
+    const held = heldCommitMessage(projectDir, commitMessageFile(projectDir));
     sayWithStepOnce(projectDir, `${unit} is built and approved, and not pushed yet. Do you want me to push it now` +
       (held === null ? "?" : `, with this commit message?\n\n${held.text}`));
     return null;
@@ -10105,17 +10136,11 @@ function unitPushAsk(projectDir: string, stateContent: string | null): AskDirect
       "of its branch there. Once they are committed or put aside, do you want me to push it?");
     return null;
   }
-  // The message the commit will carry: the agent drafts it once, over today's
-  // message in the build's message file, before the question is put (a file
-  // there but empty, a link or unreadable is no draft, and is never drafted
-  // again); with no file to show, today's message, pushed without the flag.
-  const draftFile = unitPushMessageFile(projectDir);
-  const held = unitPushMessage(projectDir);
-  if (held === null && draftFile !== null && !existsSync(join(projectDir, ...draftFile.split("/"))) &&
-    writeUnitPushDraft(projectDir, stateContent)) {
-    return unitPushDraftStep(unit, repos, draftFile, unitDefaultMessage(stateContent));
-  }
-  const messageFlag = held === null ? "" : ` --commit-message-file ${shellArg(held.file)}`;
+  const today = unitDefaultMessage(stateContent);
+  const message = commitMessageStep(projectDir, commitMessageFile(projectDir), today,
+    (file) => commitDraftStep(`${unit}'s commit message`, joinRepoNames(repos), `what ${unit} changed`, file, today));
+  if ("draft" in message) return message.draft;
+  const messageFlag = message.flag;
   const names = repos.map((repo) => (repo === "." ? "the repo" : repo));
   const changed = names.length === 0 ? "" : ` It changed ${names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`}.`;
   // A repo with several remotes and none set for pushing: which one is theirs to say.
@@ -10144,39 +10169,59 @@ function unitPushAsk(projectDir: string, stateContent: string | null): AskDirect
     question: `${unit} is built and you approved it.${changed}${several}${merging}${refused} ` +
       `${finishing ? "Finish the merge, then commit" : "Commit"} its changes on ` +
       `branch ${branch} in ${names.length > 1 ? "each" : "it"} and push ${names.length > 1 ? "them" : "it"}, with this commit message?` +
-      `\n\n${held?.text ?? unitDefaultMessage(stateContent)}`,
+      `\n\n${message.text}`,
     choices: [
       ...pushes,
       { label: "Not now", detail: "Nothing is pushed until you want it to be.", command: `${unitTool} push --later` },
     ],
-    ...(held === null ? {} : { commit_message_file: held.file }),
+    ...(message.file === undefined ? {} : { commit_message_file: message.file }),
   };
 }
 
-// The agent's own step before a Unit's push question, said to nobody: it
-// drafts the commit message in the repo's own style over today's message in
-// the build's message file, which the question then shows.
-function unitPushDraftStep(unit: string, repos: string[], file: string, today: string): PrintDirective {
+// The message a commit AI-DLC makes for the person carries: the
+// agent drafts it once, over `today` in its file, before the question that
+// ends in the commit is put (a file there but empty, a link or unreadable is
+// no draft, and is never drafted again); then the question shows it and its
+// commands carry the file. With no file to show, `today`, committed without
+// the flag.
+function commitMessageStep(projectDir: string, file: string | null, today: string, draft: (file: string) => PrintDirective):
+  { draft: PrintDirective } | { text: string; flag: string; file?: string } {
+  const held = heldCommitMessage(projectDir, file);
+  if (held === null && file !== null && !existsSync(join(projectDir, ...file.split("/"))) && writeCommitDraft(projectDir, file, today)) {
+    return { draft: draft(file) };
+  }
+  return held === null ? { text: today, flag: "" } : { text: held.text, flag: ` --commit-message-file ${shellArg(held.file)}`, file: held.file };
+}
+
+// The agent's own step before that question, said to nobody: it drafts the
+// commit message in the repo's own style over `today` in the file, which the
+// question then shows. The draft step notes no offer's mark, so the question
+// comes after it.
+function commitDraftStep(whose: string, repos: string, about: string, file: string, today: string): PrintDirective {
   return {
     kind: "print",
-    message: `Draft ${unit}'s commit message the way ${joinRepoNames(repos)}'s own commits are written (their recent ` +
-      `commits, a commitlint config or a contributing guide say how), about what ${unit} changed. Write it with your file ` +
-      `tool, never a shell, over the message in \`${file}\`, which holds \`${today}\` now; leave that as it is when it ` +
-      `already fits. Then run \`${aidlcToolInvocation("orchestrate")} next\`.`,
+    message: `${commitDraftSentence(whose, repos, about, file, today)} Then run \`${aidlcToolInvocation("orchestrate")} next\`.`,
     commit_message_file: file,
   };
+}
+
+// The share's own commit message for one of its offers (`key`, the offer's
+// own once): drafted about `about`, the words the question uses for what it commits.
+function shareMessageStep(projectDir: string, key: string, about: string): ReturnType<typeof commitMessageStep> {
+  const today = shareDefaultMessage(projectDir);
+  return commitMessageStep(projectDir, commitMessageFile(projectDir, "share", key), today,
+    (file) => commitDraftStep("the commit message for this share", joinRepoNames(["."]), about, file, today));
 }
 
 // The build's end while its push waits: how the agent pushes when the person
 // says so, and where their own commit message goes when they give one.
 function unitPushDoneNote(projectDir: string): string {
   const unitTool = aidlcToolInvocation("unit");
-  const held = unitPushMessage(projectDir);
+  const held = heldCommitMessage(projectDir, commitMessageFile(projectDir));
   return held === null
     ? `When the person says push, run \`${unitTool} push\` and say its notice line.`
     : `When the person says push, run \`${unitTool} push --commit-message-file ${shellArg(held.file)}\` and say its notice ` +
-      "line; when they give their own commit message, write it to that file first, with your file tool, never a shell, " +
-      "exactly as they gave it.";
+      `line; ${OWN_MESSAGE_SENTENCE}.`;
 }
 
 // Why the send again of a result the lead's project did not take is not

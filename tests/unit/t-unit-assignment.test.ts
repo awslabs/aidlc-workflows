@@ -109,8 +109,8 @@ describe("after choosing teams the plan goes to them the way main's share questi
     expect(isShare(ask), JSON.stringify(ask)).toBe(true);
     const choices = ask.choices as Array<{ label: string; command?: string }>;
     expect(choices.map((choice) => choice.label)).toEqual(["Share by pull request (Recommended)", "Share them with the teams", "Not now"]);
-    expect(String(choices[0].command)).toEndWith(" unit share --branch --plan");
-    expect(String(choices[1].command)).toEndWith(" unit share --plan");
+    expect(String(choices[0].command)).toEndWith(` unit share --branch --plan --commit-message-file ${REQUEST_TEXT_DIR}/unit-share-message-plan.txt`);
+    expect(String(choices[1].command)).toEndWith(` unit share --plan --commit-message-file ${REQUEST_TEXT_DIR}/unit-share-message-plan.txt`);
     // Not now: the step goes on and the question is not put again.
     appendAuditEntry("HUMAN_TURN", { "Person Reply": "not now" }, home.dir);
     for (const step of [next(home.dir), next(home.dir)]) {
@@ -127,8 +127,8 @@ describe("after choosing teams the plan goes to them the way main's share questi
     const asked = next(plain.dir);
     expect(asked.question).toBe(
       "The Units are open for any team to take. Share the plan with them now? I'd commit the plan here (AI-DLC's record, " +
-        "nothing else of yours) and push it on its own branch for a pull request, so each team can take its Unit once it is in " +
-        "main, by opening its own clone and running /aidlc.",
+        "nothing else of yours) with this commit message and push it on its own branch for a pull request, so each team can take " +
+        "its Unit once it is in main, by opening its own clone and running /aidlc.\n\nShare the plan with the teams",
     );
     expect((asked.choices as Offer["choices"])[1]).toMatchObject({
       label: "Share them with the teams",
@@ -140,8 +140,9 @@ describe("after choosing teams the plan goes to them the way main's share questi
     const withOne = next(one.dir);
     expect(withOne.question).toBe(
       "The Units are open for any team to take. Share the plan with them now? I'd commit the plan here (AI-DLC's record, " +
-        "nothing else of yours) and push it on its own branch for a pull request, with the note that refunds is built here, " +
-        "so each team can take its Unit once it is in main, by opening its own clone and running /aidlc.",
+        "nothing else of yours) with this commit message and push it on its own branch for a pull request, with the note that " +
+        "refunds is built here, so each team can take its Unit once it is in main, by opening its own clone and running " +
+        "/aidlc.\n\nShare the plan with the teams",
     );
     expect((withOne.choices as Offer["choices"])[1].detail)
       .toBe("Pushes main, and the note that refunds is built here, to origin; it never overwrites what a team pushed.");
@@ -924,8 +925,9 @@ describe("the plan's share fits the team's own git: a protected main, a branch o
 
   // A live run (case 12): Inception ended with no share question at all.
   test("a lead on a branch of their own is asked once to have the plan committed there, the push staying theirs; yes commits it, and Not now never asks again", () => {
-    const question = "This checkout is on plan-review, not main. Want me to commit the plan here, so you can push it on a branch " +
-      "and get it merged your usual way?";
+    const question = "This checkout is on plan-review, not main. Want me to commit the plan here with this commit message, so you " +
+      "can push it on a branch and get it merged your usual way?\n\nShare the plan with the teams";
+    const file = `${REQUEST_TEXT_DIR}/unit-share-message-plan-here-plan-review.txt`;
     for (const answer of ["yes", "not now"] as const) {
       const home = makeHome();
       git(home.dir, ["switch", "-q", "-c", "plan-review"]);
@@ -938,13 +940,18 @@ describe("the plan's share fits the team's own git: a protected main, a branch o
       expect(choices.map((choice) => choice.label)).toEqual(["Commit the plan here", "Not now"]);
       expect(choices[0].detail).toBe("Commits the plan here (AI-DLC's record, nothing else of yours) on plan-review; nothing is pushed.");
       expect(choices[1].detail).toBe("The plan stays uncommitted here.");
-      expect(String(choices[0].command)).toMatch(/ unit share --plan$/);
+      expect(String(choices[0].command)).toEndWith(` unit share --plan --commit-message-file ${file}`);
+      expect(first.commit_message_file).toBe(file);
+      expect(String(first.question_note)).toContain("The commit message the question shows is the one in the file commit_message_file names");
       const before = git(home.remote, ["rev-parse", "main"]);
       if (answer === "yes") {
-        const done = run(UNIT, ["share", "--plan"], home.dir, chat);
+        // Their own words replace the draft, whole.
+        writeFileSync(join(home.dir, ...file.split("/")), "docs(plan): the lead's plan for refunds\n");
+        const done = run(UNIT, ["share", "--plan", "--commit-message-file", file], home.dir, chat);
         expect(done.status, done.out).toBe(0);
         expect(done.json?.notice).toBe(`This checkout is on plan-review, not main. ${WAY_ON}`);
-        expect(git(home.dir, ["log", "-1", "--format=%s"])).toBe("Share the plan with the teams");
+        expect(git(home.dir, ["log", "-1", "--format=%s"])).toBe("docs(plan): the lead's plan for refunds");
+        expect(existsSync(join(home.dir, ...file.split("/")))).toBe(false);
       }
       expect(git(home.remote, ["rev-parse", "main"])).toBe(before);
       expect(git(home.remote, ["branch", "--list", "plan-review"])).toBe("");
@@ -961,7 +968,8 @@ describe("the plan's share fits the team's own git: a protected main, a branch o
     writeFileSync(list, `${JSON.stringify({ repos: [...parsed.repos, { name: "notify", url: "https://git.example.invalid/notify.git" }] }, null, 2)}\n`);
     const listed = names.length === 2 ? `${names[0]} and ${names[1]}` : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
     const question = `repos.json now lists ${listed}, and your team gets it once it is committed. Want me to commit AI-DLC's record in ` +
-      "aidlc/, with the list?";
+      "aidlc/, with the list, using this commit message?\n\nUpdate AI-DLC's record";
+    const file = `${REQUEST_TEXT_DIR}/unit-record-message-${git(dir, ["hash-object", "repos.json"]).slice(0, 12)}.txt`;
     // At the stage boundary, after the questions about the work's own step, which the person answers first:
     // this folder's code stays a new project, and one person builds the Units.
     let offer = next(dir, chatOf("list-changed"));
@@ -977,13 +985,17 @@ describe("the plan's share fits the team's own git: a protected main, a branch o
     expect(choices.map((choice) => choice.label)).toEqual(["Commit it", "Not now"]);
     expect(choices[0].detail).toBe("Commits everything in aidlc/, the repo list with it; nothing else outside aidlc/ goes in, and nothing is pushed.");
     expect(choices[1].detail).toBe("The list stays uncommitted here.");
-    expect(String(choices[0].command)).toMatch(/ unit commit-record$/);
+    expect(String(choices[0].command)).toEndWith(` unit commit-record --commit-message-file ${file}`);
+    expect(offer.commit_message_file).toBe(file);
     // Asked once for this list: not again in that chat, nor in a new one.
     expect(String(next(dir, chatOf("list-changed")).question ?? "")).not.toBe(question);
     expect(String(next(dir, chatOf("list-changed-later")).question ?? "")).not.toBe(question);
-    const yes = run(UNIT, ["commit-record"], dir);
+    writeFileSync(join(dir, ...file.split("/")), "chore(repos): list notify\n");
+    const yes = run(UNIT, ["commit-record", "--commit-message-file", file], dir);
     expect(yes.status, yes.out).toBe(0);
     expect(git(dir, ["status", "--porcelain", "--", "repos.json"])).toBe("");
+    expect(git(dir, ["log", "-1", "--format=%s"])).toBe("chore(repos): list notify");
+    expect(existsSync(join(dir, ...file.split("/")))).toBe(false);
   });
 
   test("unit commit-record commits only AI-DLC's record, takes no path, keeps a file staged outside aidlc/ staged and out of it, and refuses with nothing changed when it cannot", () => {
@@ -1027,6 +1039,91 @@ describe("the plan's share fits the team's own git: a protected main, a branch o
 
   // The live run's shape: the lead keeps AI-DLC's records on a branch called
   // records, in the Way of Working words, with no Integration branch line.
+  test("unit commit-record takes the commit message from its file, spends it once committed, and after a commit-msg hook refuses says the one way on", () => {
+    const home = makeHome();
+    const dir = home.dir;
+    const file = `${REQUEST_TEXT_DIR}/unit-record-message-by-hand.txt`;
+    const note = (words: string) => writeFileSync(join(dir, UNITS_FILE), `${readFileSync(join(dir, UNITS_FILE), "utf-8")}${words}\n`);
+    note("A note of the lead's.");
+    // A message file outside its folder is refused in the flag's own words, and nothing is committed.
+    writeFileSync(join(dir, "message.txt"), "docs(record): by hand\n");
+    const head = git(dir, ["rev-parse", "HEAD"]);
+    const unread = run(UNIT, ["commit-record", "--commit-message-file", "message.txt"], dir);
+    expect(unread.status).not.toBe(0);
+    expect(unread.out).toContain(`commit-record --commit-message-file needs the commit message in a file directly inside ${REQUEST_TEXT_DIR}/ ` +
+      "in this project, written with your file tool. Nothing was committed.");
+    expect(git(dir, ["rev-parse", "HEAD"])).toBe(head);
+    // Their commit-msg hook turns the first commit away: git's words, one way on, nothing pushed, the file kept.
+    writeFileSync(join(dir, ".git", "refuse-once"), "");
+    writeFileSync(join(dir, ".git", "hooks", "commit-msg"),
+      "#!/bin/sh\nif [ -f .git/refuse-once ]; then rm .git/refuse-once; echo 'commit messages need a ticket' >&2; exit 1; fi\nexit 0\n");
+    chmodSync(join(dir, ".git", "hooks", "commit-msg"), 0o755);
+    mkdirSync(join(dir, REQUEST_TEXT_DIR), { recursive: true });
+    writeFileSync(join(dir, ...file.split("/")), "docs(record): the lead's note\n");
+    const refused = run(UNIT, ["commit-record", "--commit-message-file", file], dir);
+    expect(refused.status).not.toBe(0);
+    expect(refused.out).toContain("commit messages need a ticket");
+    expect(refused.out).toContain("If it is the commit message, tell me the one to use, and I will commit with it.");
+    expect(refused.out).not.toContain("push again");
+    expect(existsSync(join(dir, ...file.split("/")))).toBe(true);
+    const done = run(UNIT, ["commit-record", "--commit-message-file", file], dir);
+    expect(done.status, done.out).toBe(0);
+    expect(git(dir, ["log", "-1", "--format=%s"])).toBe("docs(record): the lead's note");
+    expect(existsSync(join(dir, ...file.split("/")))).toBe(false);
+    // The message file sits in AI-DLC's own git-ignored folder: never in the commit, and never a reason to commit.
+    expect(git(dir, ["diff-tree", "-r", "--no-commit-id", "--name-only", "HEAD"])).not.toContain("request-text");
+    writeFileSync(join(dir, ...file.split("/")), "a draft nobody used\n");
+    const nothing = run(UNIT, ["commit-record"], dir);
+    expect(nothing.status, nothing.out).toBe(0);
+    expect(nothing.json?.committed).toBe(false);
+    // With no message file, the fallback.
+    note("Another note.");
+    expect(run(UNIT, ["commit-record"], dir).status).toBe(0);
+    expect(git(dir, ["log", "-1", "--format=%s"])).toBe("Update AI-DLC's record");
+  });
+
+  test("a commit-msg hook that refuses the share's commit: git's words and one way on, push again only where the share pushes", () => {
+    for (const ownBranch of [false, true]) {
+      const home = makeHome();
+      if (ownBranch) git(home.dir, ["switch", "-q", "-c", "plan-review"]);
+      chooseTeams(home.dir);
+      writeFileSync(join(home.dir, ".git", "hooks", "commit-msg"), "#!/bin/sh\necho 'commit messages need a ticket' >&2\nexit 1\n");
+      chmodSync(join(home.dir, ".git", "hooks", "commit-msg"), 0o755);
+      const refused = run(UNIT, ["share", "--plan"], home.dir);
+      expect(refused.status, refused.out).not.toBe(0);
+      expect(refused.out).toContain("commit messages need a ticket");
+      expect(refused.out).toContain(ownBranch
+        ? "If it is the commit message, tell me the one to use, and I will commit with it."
+        : "If it is the commit message, tell me the one to use, and I will commit with it and push again.");
+      if (ownBranch) expect(refused.out).not.toContain("push again");
+      expect(refused.out).not.toContain("Then share again");
+    }
+  });
+
+  test("the share question shows the commit message drafted for it; the person's words go in, and a push that does not go keeps the file for the same command", () => {
+    const home = makeHome();
+    chooseTeams(home.dir);
+    const ask = next(home.dir);
+    expect(isShare(ask), JSON.stringify(ask).slice(0, 600)).toBe(true);
+    const file = `${REQUEST_TEXT_DIR}/unit-share-message-plan.txt`;
+    expect(ask.commit_message_file).toBe(file);
+    expect(String(ask.question)).toContain("I'd commit the plan here (AI-DLC's record, nothing else of yours) with this commit message and push");
+    expect(String(ask.question)).toEndWith("\n\nShare the plan with the teams");
+    const choices = ask.choices as Array<{ label: string; command?: string }>;
+    for (const choice of choices.slice(0, -1)) expect(String(choice.command), choice.label).toEndWith(` --commit-message-file ${file}`);
+    writeFileSync(join(home.dir, ...file.split("/")), "chore(plan): share the refunds plan\n");
+    const url = git(home.dir, ["remote", "get-url", "origin"]);
+    git(home.dir, ["remote", "set-url", "origin", join(home.remote, "gone")]);
+    const away = run(UNIT, ["share", "--plan", "--commit-message-file", file], home.dir);
+    expect(away.status).not.toBe(0);
+    expect(existsSync(join(home.dir, ...file.split("/")))).toBe(true);
+    git(home.dir, ["remote", "set-url", "origin", url]);
+    const shared = run(UNIT, ["share", "--plan", "--commit-message-file", file], home.dir);
+    expect(shared.status, shared.out).toBe(0);
+    expect(git(home.remote, ["log", "-1", "--format=%s", "main"])).toBe("chore(plan): share the refunds plan");
+    expect(existsSync(join(home.dir, ...file.split("/")))).toBe(false);
+  });
+
   test("a lead whose Way of Working keeps the records on a branch: the share reads it first and pushes that branch, never main", () => {
     const home = makeHome();
     const team = join(home.dir, "aidlc", "spaces", "default", "memory", "team.md");
@@ -1035,15 +1132,21 @@ describe("the plan's share fits the team's own git: a protected main, a branch o
     git(home.dir, ["switch", "-q", "-c", "records"]);
     chooseTeams(home.dir);
     const before = git(home.remote, ["rev-parse", "main"]);
-    expect(isShare(next(home.dir))).toBe(true);
-    const read = run(UNIT, ["share", "--plan"], home.dir);
+    const ask = next(home.dir);
+    expect(isShare(ask)).toBe(true);
+    const file = String(ask.commit_message_file);
+    writeFileSync(join(home.dir, ...file.split("/")), "chore(plan): the records branch plan\n");
+    const read = run(UNIT, ["share", "--plan", "--commit-message-file", file], home.dir);
     expect(read.status, read.out).toBe(0);
     expect(read.json?.shared).toBe(false);
     expect(String(read.json?.step)).toContain("practices-branch --file team.md");
+    // Its run again carries the message it was given.
+    expect(String(read.json?.step)).toContain(` unit share --plan --commit-message-file ${file}\` again`);
     const recorded = run(STATE, ["practices-branch", "--file", "team.md", "--branch", "records"], home.dir);
     expect(recorded.status, recorded.out).toBe(0);
-    const shared = run(UNIT, ["share", "--plan"], home.dir);
+    const shared = run(UNIT, ["share", "--plan", "--commit-message-file", file], home.dir);
     expect(shared.status, shared.out).toBe(0);
+    expect(git(home.dir, ["log", "-1", "--format=%s"])).toBe("chore(plan): the records branch plan");
     expect(shared.json).toMatchObject({ shared: true, branch: "records" });
     expect(git(home.remote, ["rev-parse", "records"])).toBe(git(home.dir, ["rev-parse", "HEAD"]));
     expect(git(home.remote, ["rev-parse", "main"])).toBe(before);
@@ -1310,8 +1413,8 @@ describe("the walking skeleton is built at the lead's project first, and every o
   const HANDOUT = "No team has taken a Unit yet, so this session builds them here, starting with the checkout ui Unit, " +
     "the walking skeleton the others build on. Once it is built and approved, I'll offer to share the work so each team can take one of the others.";
   const SHARE = "The Units are open for any team to take. Share the plan with them now? I'd commit the plan here (AI-DLC's record, " +
-    "nothing else of yours) and push it on its own branch for a pull request, so each team can take its Unit once it is in main, " +
-    "by opening its own clone and running /aidlc.";
+    "nothing else of yours) with this commit message and push it on its own branch for a pull request, so each team can take its " +
+    "Unit once it is in main, by opening its own clone and running /aidlc.\n\nShare the plan with the teams";
   const sliceOn = () => makeHome({ state: homeState().replace("- **Skeleton Stance**: off", "- **Skeleton Stance**: on") });
   // Once the slice is approved the share question comes as today (t-unit-board).
   test("on and not approved: the lead's look says main's handout line once, builds the slice, and puts no share question", () => {

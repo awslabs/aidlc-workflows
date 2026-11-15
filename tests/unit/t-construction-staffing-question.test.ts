@@ -501,6 +501,9 @@ describe("who builds the Units is asked once as Inception ends", () => {
       registry[0].repos = ["mono"];
       writeFileSync(registryPath, `${JSON.stringify(registry, null, 2)}\n`);
       writeFileSync(join(proj, "aidlc", "repos.json"), `${JSON.stringify({ repos: [{ name: "mono", path }] }, null, 2)}\n`);
+      // The repository as its people have it, the list committed with the record, so no offer to commit it comes first.
+      git(top, ["add", "-A"]);
+      git(top, ["-c", "user.name=Lead", "-c", "user.email=lead@example.invalid", "commit", "-q", "-m", "the project in apps/x"]);
     }
     return { proj, top: git(proj, ["rev-parse", "--show-toplevel"]) };
   }

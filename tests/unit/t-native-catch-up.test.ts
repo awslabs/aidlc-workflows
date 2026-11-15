@@ -133,7 +133,7 @@ function catchUpAsked(dir: string): string {
   const n = git(dir, ["status", "--porcelain", "-uall", "--", ".claude"]).split("\n").filter(Boolean).length;
   const files = `${n} file${n === 1 ? "" : "s"} under .claude`;
   return `AI-DLC updated its own files in this project to ${AIDLC_VERSION}: ${files} changed, and repos.json moved into aidlc/. ` +
-    `Want me to commit the move, with AI-DLC's record in aidlc/? I'd leave the ${files} for you to commit with your own ` +
+    `Want me to commit the move, with AI-DLC's record in aidlc/, using this commit message? I'd leave the ${files} for you to commit with your own ` +
     "changes. Teammates need AI-DLC 2.12 or newer to find repos.json there.";
 }
 
@@ -220,7 +220,13 @@ describe.skipIf(SKIP_REASON !== null)("each project catches up the next time it 
     // One question for both: the list's move offered with AI-DLC's record, the files the refresh changed named as left.
     expect(first.stdout).toContain(catchUpAsked(dir));
     expect(first.stdout).toContain("ASK ONCE");
-    expect(first.stdout).toMatch(/On yes, run `[^`]* unit commit-record`/);
+    // The message the commit carries: drafted first, said to nobody, in the move's own file, shown, the person's words replacing it.
+    const file = `aidlc/.aidlc-engine/request-text/unit-record-message-moved-${AIDLC_VERSION}.txt`;
+    expect(readFileSync(join(dir, ...file.split("/")), "utf-8")).toBe("Update AI-DLC's record\n");
+    expect(first.stdout).toContain(`over the message in \`${file}\``);
+    expect(first.stdout).toContain("with the message from that file after it");
+    expect(first.stdout).toContain("When they give their own commit message, write it to that file first");
+    expect(first.stdout).toMatch(new RegExp(`On yes, run \`[^\`]* unit commit-record --commit-message-file ${file.replaceAll(".", "\\.")}\``));
     expect(first.stdout).not.toContain(catchUpSaid(dir, true));
     expect(catchUpAsked(dir)).not.toContain(": 1 file under");
     expect(first.stdout).not.toContain(MOVED);

@@ -75,7 +75,6 @@ import {
   namesSourceCheckout,
   printUsageAndExit,
   recordDir,
-  writeRecordFileNoFollow,
   removeRecordFileNoFollow,
   parseBoltDag,
   readAppendOnlyFileNoFollowOrThrow,
@@ -226,6 +225,7 @@ import {
   checkInLine,
   unitWordsArg,
   unitWordsFile,
+  RECORD_COMMIT_MESSAGE,
   builderOf,
   spaceWords,
   clearLeadWaitsOnTeams,
@@ -240,7 +240,7 @@ import {
   type LevelBlock,
   unitDependencies,
 } from "./aidlc-unit-teams.js";
-import { gitOperationUnderWay, rebaseUnderWay, recordCommitBlock, recordPaths, submoduleLeavesProjectRepo } from "./aidlc-git.ts";
+import { gitOperationUnderWay, rebaseUnderWay, recordChanged, recordCommitBlock, recordPaths, submoduleLeavesProjectRepo } from "./aidlc-git.ts";
 import { commitOwnCommand, displayRepoPath, reposManifestPath, localUnreadableLine, readWorkspaceRepos, repoCloneable, repoCloneOfferLine, repoNotThereLine, withoutCredentials, workspaceManifestAt } from "./aidlc-workspace-manifest.js";
 import { maskUserinfo, workspaceCloneUrl } from "./aidlc-workspace-sync.ts";
 import { loadGraph } from "./aidlc-graph.ts";
@@ -5707,7 +5707,7 @@ function shareCommitRefused(said: string, adding: boolean): never {
         'git config --global user.name "Your Name" and git config --global user.email "you@example.com".',
     );
   }
-  fail(`git did not commit: ${said}.`);
+  throw new CommitRefused(`git did not commit: ${said}.`);
 }
 
 // The plan's share: AI-DLC's record (recordPaths: aidlc/, and a repos.json
@@ -6318,6 +6318,13 @@ function planShareWork(pd: string): string | null {
   return work.paths.some((path) => !path.startsWith("aidlc/") && path !== "repos.json") ? workToCommitWords(pd, undefined, work) : null;
 }
 
+// Whether the plan's share would make a commit here: AI-DLC's record changed,
+// or a Unit's code built here goes with it.
+export function planToCommit(projectDir: string): boolean {
+  const pd = resolveProjectDir(projectDir);
+  return planShareWork(pd) !== null || recordChanged(pd) === true;
+}
+
 export function planShareWords(projectDir: string): string {
   const pd = resolveProjectDir(projectDir);
   const files = planShareWork(pd);
@@ -6402,14 +6409,17 @@ export function reposListToCommit(pd: string, unitBuild: boolean): { names: stri
   return names.length === 0 ? null : { names, blob };
 }
 
-// The question for that list, once for its blob; null when not due.
-export function reposCommitOffer(pd: string, unitBuild: boolean): { mark: string; question: string } | null {
+// The question for that list, once for its blob, which also keys the file its
+// commit message is drafted in; null when not due.
+export function reposCommitOffer(pd: string, unitBuild: boolean): { mark: string; key: string; question: string } | null {
   const due = reposListToCommit(pd, unitBuild);
   if (due === null) return null;
+  const key = due.blob.slice(0, 12);
   return {
-    mark: teamHandoverMarkName("repos-commit", due.blob.slice(0, 12)),
+    mark: teamHandoverMarkName("repos-commit", key),
+    key,
     question: `repos.json now lists ${joinNames(due.names)}, and your team gets it once it is committed. Want me to commit AI-DLC's ` +
-      "record in aidlc/, with the list?",
+      "record in aidlc/, with the list, using this commit message?",
   };
 }
 
@@ -6439,7 +6449,15 @@ function commitRecord(args: string[], projectDir?: string): void {
       : block.why === "unit-build" ? "This checkout builds a Unit, so I don't commit aidlc/ from here: it holds the lead's record too."
       : "This folder is not in a git repository, so nothing was committed.");
   }
-  const files = commitPlanHere(pd, "Update AI-DLC's record", false);
+  const given = givenCommitMessage(pd, args, "commit-record");
+  let files: number;
+  try {
+    files = commitPlanHere(pd, given?.text ?? RECORD_COMMIT_MESSAGE, false);
+  } catch (error) {
+    if (error instanceof CommitRefused) fail(`${error.message} ${messageWayOn(false)}`);
+    throw error;
+  }
+  given?.spend();
   const branch = git(pd, ["symbolic-ref", "--quiet", "--short", "HEAD"]).stdout.trim();
   const commit = git(pd, ["rev-parse", "--short", "HEAD"]).stdout.trim();
   console.log(JSON.stringify({
@@ -6475,7 +6493,9 @@ function shareMain(args: string[], projectDir?: string): void {
   // record there and pushes nothing (below).
   if (refused !== null && refused.off === undefined) fail(refused.reason);
   const planOnly = flags.has("plan");
-  const again = `${aidlcInvocation()} unit share${flags.has("branch") ? " --branch" : ""}${planOnly ? " --plan" : ""}`;
+  const given = givenCommitMessage(pd, args, "share");
+  const again = `${aidlcInvocation()} unit share${flags.has("branch") ? " --branch" : ""}${planOnly ? " --plan" : ""}` +
+    (given === null ? "" : ` --commit-message-file ${shellArg(given.file)}`);
   // The branch the share pushes, read from the team's own words before
   // anything is committed or pushed; the offers stay due in case the share
   // does not run again.
@@ -6508,7 +6528,7 @@ function shareMain(args: string[], projectDir?: string): void {
   }
   const { remote, branch } = shareTarget(pd)!;
   const landed = landedNotOnRemote(pd).map((row) => row.unit);
-  const message = landed.length > 0 ? `Record the ${landed.join(" and ")} landing` : "Share the plan with the teams";
+  const message = given?.text ?? shareDefaultMessage(pd);
   const before = git(pd, ["rev-parse", "--verify", "--quiet", "HEAD"]).stdout.trim();
   // The share's own commits a host refused earlier, the only ones on the
   // branch the remote lacks: `--branch` moves them as they are, so a refused
@@ -6531,7 +6551,8 @@ function shareMain(args: string[], projectDir?: string): void {
       }
     } catch (error) {
       clearTeamHandoverMarks(pd, ["share", "push"]);
-      fail(`${errorMessage(error)} Then share again.`);
+      // A commit git or their hook turned away: the one way on, which pushes too unless the share stops at the commit here.
+      fail(`${errorMessage(error)} ${error instanceof CommitRefused ? messageWayOn(!(refused !== null && own === null)) : "Then share again."}`);
     }
   }
   const head = git(pd, ["rev-parse", "--verify", "--quiet", "HEAD"]).stdout.trim();
@@ -6542,6 +6563,7 @@ function shareMain(args: string[], projectDir?: string): void {
   if (refused !== null) {
     // Committed on a branch of their own, which reaches main their own way: done.
     if (own === null) {
+      given?.spend();
       console.log(JSON.stringify({
         shared: false,
         notice: `${refused.reason} ${planWayOn(branch)}`,
@@ -6551,6 +6573,7 @@ function shareMain(args: string[], projectDir?: string): void {
     }
     const sent = git(pd, ["push", remote, `HEAD:refs/heads/${own}`], { GIT_TERMINAL_PROMPT: "0" });
     if (!sent.ok) fail(`${remote} did not take ${own}: ${pushRefusal(sent.stderr)}.`);
+    given?.spend();
     console.log(JSON.stringify({
       shared: false,
       branch: own,
@@ -6561,7 +6584,10 @@ function shareMain(args: string[], projectDir?: string): void {
     }));
     return;
   }
-  if (flags.has("branch") && putPlanOnItsBranch(pd, remote, branch, madeNow, planOnly)) return;
+  if (flags.has("branch") && putPlanOnItsBranch(pd, remote, branch, madeNow, planOnly)) {
+    given?.spend();
+    return;
+  }
   const pushed = git(pd, ["push", remote, `HEAD:refs/heads/${branch}`], { GIT_TERMINAL_PROMPT: "0" });
   // The plan's push to a home that does not answer: there is nothing to pull,
   // and its question is not put again each turn; the person asks when it can.
@@ -6583,6 +6609,7 @@ function shareMain(args: string[], projectDir?: string): void {
     if (earlier === null || (madeNow === null && earlier.length === 0)) fail(`${remote} takes no direct push to ${branch} (${pushRefusal(pushed.stderr)}). ${planWayOn(branch)}`);
     if (madeNow !== null) noteEngineAskMark(pd, shareCommitMark(madeNow));
     noteTeamShared(pd);
+    given?.spend();
     console.log(JSON.stringify({
       shared: false,
       notice: `${remote} takes no direct push to ${branch} (${pushRefusal(pushed.stderr)}), so the plan is not shared yet.`,
@@ -6598,6 +6625,7 @@ function shareMain(args: string[], projectDir?: string): void {
     );
   }
   noteTeamShared(pd);
+  given?.spend();
   const claims = claimsAskedHereWithShare(pd);
   const notice = [
     ...(claims.sent.length > 0 ? [`Pushed ${branch}, and ${builtHereNote(claims.sent)}, to ${remote}.`] : []),
@@ -7679,10 +7707,14 @@ export function unitDefaultMessage(stateContent: string): string {
   return build === null ? "" : `${build.unit}: ${homeLabelOf(stateContent, build)}`;
 }
 
-// The build's message file: the commit message its push carries, in the
-// request-text folder the agent writes the person's words to, one per build
-// (its record), so a file left by another build is never this one's.
-export function unitPushMessageFile(projectDir: string): string | null {
+// The file a commit's message is drafted in, in the request-text folder the
+// agent writes the person's words to. A Unit's push has one per build (its
+// record), so a file left by another build is never this one's; the share's
+// and the record's commits have one per offer (`key`, the offer's own once),
+// so a draft is only ever shown for the change it was written for.
+export type CommitMessageKind = "push" | "share" | "record";
+export function commitMessageFile(projectDir: string, kind: CommitMessageKind = "push", key?: string): string | null {
+  if (kind !== "push") return key === undefined ? null : unitWordsFile(`${kind}-message`, key);
   const record = recordDir(projectDir);
   return record === null ? null : unitWordsFile("push-message", basename(record));
 }
@@ -7701,11 +7733,10 @@ const messageHash = (dir: string, text: string): string =>
 const messageOnHead = (dir: string, text: string): boolean =>
   messageAsGitTakesIt(dir, git(dir, ["log", "-1", "--format=%B", "HEAD"]).stdout) === messageAsGitTakesIt(dir, text);
 
-// The build's message as its push question shows it, read as the push reads
-// it (a plain file directly in the request-text folder, through no link), or
-// null when there is none to show: absent, empty, a link, unreadable.
-export function unitPushMessage(projectDir: string): { file: string; text: string } | null {
-  const file = unitPushMessageFile(projectDir);
+// The message as its question shows it, read as its command reads it (a plain
+// file directly in the request-text folder, through no link), or null when
+// there is none to show: absent, empty, a link, unreadable.
+export function heldCommitMessage(projectDir: string, file: string | null): { file: string; text: string } | null {
   if (file === null || !existsSync(join(projectDir, ...file.split("/")))) return null;
   const read = readRequestFile(projectDir, file);
   if (typeof read === "string") return null;
@@ -7713,18 +7744,10 @@ export function unitPushMessage(projectDir: string): { file: string; text: strin
   return text === "" ? null : { file, text };
 }
 
-// Today's message written into the build's message file for the agent to draft
-// over: true once written, false when there is no record or the file cannot be
-// written (the push question then shows today's message without it).
-export function writeUnitPushDraft(projectDir: string, stateContent: string): boolean {
-  const file = unitPushMessageFile(projectDir);
-  if (file === null || isReadOnlyEngineProbe()) return false;
-  try {
-    writeRecordFileNoFollow(projectDir, file, `${unitDefaultMessage(stateContent)}\n`);
-    return true;
-  } catch {
-    return false;
-  }
+// The message the share's own commit carries when no draft was given.
+export function shareDefaultMessage(projectDir: string): string {
+  const landed = landedNotOnRemote(projectDir).map((row) => row.unit);
+  return landed.length > 0 ? `Record the ${landed.join(" and ")} landing` : "Share the plan with the teams";
 }
 
 // The push's own commits that did not go yet, by repo: each commit's id and
@@ -7780,11 +7803,31 @@ function wentNowhere(dir: string, remote: string, branch: string, oid: string): 
 // failures by its kind, never by its words.
 class CommitRefused extends Error {}
 
-// The one way on after their hook or host refuses the Unit's commit.
-const MESSAGE_WAY_ON = "If it is the commit message, tell me the one to use, and I will commit with it and push again.";
+// The one way on after their hook or host refuses a commit AI-DLC makes for
+// them; "and push again" only where the command pushes.
+function messageWayOn(pushes = true): string {
+  return `If it is the commit message, tell me the one to use, and I will commit with it${pushes ? " and push again" : ""}.`;
+}
 
-const COMMIT_MESSAGE_UNREAD = "push --commit-message-file needs the commit message in a file directly inside " +
-  `${REQUEST_TEXT_DIR}/ in this project, written with your file tool. Nothing was committed or pushed.`;
+function commitMessageUnread(verb: "push" | "share" | "commit-record"): string {
+  return `${verb} --commit-message-file needs the commit message in a file directly inside ` +
+    `${REQUEST_TEXT_DIR}/ in this project, written with your file tool. ` +
+    (verb === "commit-record" ? "Nothing was committed." : "Nothing was committed or pushed.");
+}
+
+// The commit message the person gave, from the file the agent wrote it to,
+// taken whole; spent once the command is done, so until then the same command
+// runs again as written.
+function givenCommitMessage(pd: string, args: string[], verb: "push" | "share" | "commit-record"):
+  { file: string; text: string; spend(): void } | null {
+  const { flags, bareFlags } = parseArgs(args);
+  const file = flags["commit-message-file"];
+  if (bareFlags.has("commit-message-file")) fail(commitMessageUnread(verb));
+  if (file === undefined) return null;
+  const read = readRequestFile(pd, file);
+  if (typeof read === "string") fail(commitMessageUnread(verb));
+  return { file, text: read.text, spend: read.spend };
+}
 
 // The Unit's commit in one repo: built in an index of its own from HEAD, so
 // nothing the person staged comes along. A file that held their own change at
@@ -9162,16 +9205,9 @@ function pushUnit(args: string[], projectDir?: string): void {
   }
   // The commit message the person gave, from the file the agent wrote it to:
   // the Unit's commit takes it whole.
-  const messageFile = flags["commit-message-file"];
-  if (bareFlags.has("commit-message-file")) fail(COMMIT_MESSAGE_UNREAD);
-  let given: { text: string; spend(): void } | null = null;
-  if (messageFile !== undefined) {
-    const read = readRequestFile(pd, messageFile);
-    if (typeof read === "string") fail(COMMIT_MESSAGE_UNREAD);
-    given = read;
-  }
+  const given = givenCommitMessage(pd, args, "push");
   // A way on this push names carries the message on.
-  const messageFlag = messageFile === undefined ? "" : ` --commit-message-file ${shellArg(messageFile)}`;
+  const messageFlag = given === null ? "" : ` --commit-message-file ${shellArg(given.file)}`;
   // A repo the Unit changed that the home's plan did not list is fine
   // (decision 5): it is added to the build's repos, said once, and pushed.
   let manifest = readUnitSourceManifest(pd, "code-generation", unit);
@@ -9444,7 +9480,7 @@ function pushUnit(args: string[], projectDir?: string): void {
     } catch (error) {
       saveMark();
       fail(`${errorMessage(error).replace(/([^.!?])$/, "$1.")} Nothing was pushed.${whereNow()}` +
-        (error instanceof CommitRefused ? ` ${MESSAGE_WAY_ON}` : ""));
+        (error instanceof CommitRefused ? ` ${messageWayOn()}` : ""));
     }
     if (takeTree[repo] !== undefined) writeTakeTree(activeRecordDir(pd), takeTree);
   }
@@ -9479,7 +9515,7 @@ function pushUnit(args: string[], projectDir?: string): void {
       // sends that the remote lacks.
       const tip = git(dir, ["rev-parse", "HEAD"]).stdout.trim();
       const alone = git(dir, ["rev-list", "--count", "HEAD", "--not", "--remotes"]).stdout.trim() === "1";
-      const wayOn = mark[repo]?.commit === tip && alone ? ` ${MESSAGE_WAY_ON}` : "";
+      const wayOn = mark[repo]?.commit === tip && alone ? ` ${messageWayOn()}` : "";
       fail(`The push of ${unit} in ${name} was refused: ${pushRefusal(pushed.stderr)}. Nothing was retried.${whereNow()}` +
         keptLines(name).map((line) => ` ${line}`).join("") + wayOn);
     }
@@ -9628,7 +9664,7 @@ function pushUnit(args: string[], projectDir?: string): void {
   // and until then the same command runs again as written.
   if (sentOn) {
     given?.spend();
-    const buildMessage = unitPushMessageFile(pd);
+    const buildMessage = commitMessageFile(pd);
     if (buildMessage !== null && existsSync(join(pd, ...buildMessage.split("/")))) {
       try {
         removeRecordFileNoFollow(pd, buildMessage);

@@ -15,6 +15,7 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
+import { isDraftStep } from "../harness/team-build.ts";
 import {
   AIDLC_SRC,
   createTestProject,
@@ -115,16 +116,19 @@ function makeLead(answer: string | null): { lead: string; remote: string } {
   return { lead, remote };
 }
 
+// The agent's draft of a commit message, said to nobody, before the question that ends in the commit: passed as the agent leaves it.
 function next(dir: string): Directive {
-  let ran = runMergeTool(ORCH, ["next"], dir, false, CHAT);
-  expect(ran.status, ran.out).toBe(0);
-  let directive = JSON.parse(ran.stdout) as Directive;
-  while (directive.kind === "load-steering" && typeof directive.receipt === "string") {
-    ran = runMergeTool(ORCH, ["continue", directive.receipt], dir, false, CHAT);
+  for (let drafted = false; ; drafted = true) {
+    let ran = runMergeTool(ORCH, ["next"], dir, false, CHAT);
     expect(ran.status, ran.out).toBe(0);
-    directive = JSON.parse(ran.stdout) as Directive;
+    let directive = JSON.parse(ran.stdout) as Directive;
+    while (directive.kind === "load-steering" && typeof directive.receipt === "string") {
+      ran = runMergeTool(ORCH, ["continue", directive.receipt], dir, false, CHAT);
+      expect(ran.status, ran.out).toBe(0);
+      directive = JSON.parse(ran.stdout) as Directive;
+    }
+    if (drafted || !isDraftStep(directive as Record<string, unknown>)) return directive;
   }
-  return directive;
 }
 
 function share(dir: string): Record<string, unknown> {

@@ -1573,7 +1573,9 @@ describe("the person's own commit message", () => {
     const ask = next(alice);
     expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-push");
     expect(ask.commit_message_file).toBe(commitMessageFile(record));
-    expect(String(ask.question_note)).toContain("The commit message the question shows is the one in the file commit_message_file names");
+    expect(String(ask.question_note)).toContain("The commit message the question shows is the one in the file commit_message_file names: " +
+      "when they give their own, write it there with your file tool, never a shell, exactly as they gave it, in place of the one shown, " +
+      "then run the command of the push choice they pick.");
     // The code went and the lead's project did not take the result: a message has nothing to go on.
     const claims = join(home.remote, "hooks", "pre-receive");
     writeFileSync(claims, "#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/aidlc/claims/*) echo 'claims are closed today' >&2; exit 1;; esac; done\n");

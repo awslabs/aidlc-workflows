@@ -109,9 +109,10 @@ function joinWithAnd(parts: readonly string[]): string {
 // nothing git tracks changed. `asking`, with the list moved: the question that
 // offers the move with AI-DLC's record (`unit commit-record`), naming the
 // files it leaves for the person.
-export function catchUpChangedLine(version: string, paths: readonly string[], moved: boolean, asking = false): string | null {
+export function catchUpChangedLine(version: string, paths: readonly string[], moved: boolean, asking = false, withMessage = false): string | null {
   const since = `${REPOS_IN_AIDLC_SINCE.major}.${REPOS_IN_AIDLC_SINCE.minor}`;
-  const offer = "Want me to commit the move, with AI-DLC's record in aidlc/?";
+  // With the commit message the hook drafts for the move, which the agent shows after the question.
+  const offer = `Want me to commit the move, with AI-DLC's record in aidlc/${withMessage ? ", using this commit message" : ""}?`;
   if (paths.length === 0) {
     if (!moved) return null;
     return asking ? `AI-DLC moved repos.json into aidlc/. ${offer} Teammates need AI-DLC ${since} or newer to find it there.` : REPOS_MOVED_LINE;

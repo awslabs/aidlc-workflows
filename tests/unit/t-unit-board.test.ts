@@ -105,8 +105,8 @@ describe("with a thin slice first, the plan is shared once the slice is approved
     expect(isShare(end), JSON.stringify(end).slice(0, 600)).toBe(true);
     expect(end.question).toBe(
       "The Units are open for any team to take. Share the plan with them now? I'd commit the plan here (AI-DLC's record, " +
-        "nothing else of yours) and push it on its own branch for a pull request, so each team can take its Unit once it is in " +
-        "main, by opening its own clone and running /aidlc.",
+        "nothing else of yours) with this commit message and push it on its own branch for a pull request, so each team can " +
+        "take its Unit once it is in main, by opening its own clone and running /aidlc.\n\nShare the plan with the teams",
     );
     expect(teamBoard(home.dir)).toContain("- checkout-ui, here: done");
   });
@@ -129,7 +129,7 @@ describe("with a thin slice first on the workspace's own repository, the share c
     expect(isShare(end), JSON.stringify(end).slice(0, 600)).toBe(true);
     expect(String(end.question)).toMatch(new RegExp(
       "^The Units are open for any team to take\\. Share the plan with them now\\? I'd commit the plan and checkout-ui's code, " +
-        "the \\d+ changed files here \\(new: src/checkout-ui\\.ts, test/checkout-ui\\.test\\.ts\\), and push it on its own branch for a pull request, so each team",
+        "the \\d+ changed files here \\(new: src/checkout-ui\\.ts, test/checkout-ui\\.test\\.ts\\), with this commit message and push it on its own branch for a pull request, so each team",
     ));
     const shared = run(UNIT, ["share", "--plan"], home.dir);
     expect(shared.status, shared.out).toBe(0);

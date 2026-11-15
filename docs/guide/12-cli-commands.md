@@ -62,8 +62,8 @@ diagnostic and lifecycle routes.
 | `/aidlc unit adopt <unit>` | Adopt the checked-out live claim branch in a fresh clone |
 | `/aidlc unit participate` | Mark this clone for the guided Unit-claim picker |
 | `/aidlc unit catch-up` | At the lead's project, before Build and Test, bring each repo here that lacks a merged Unit up to date with its remote, a fast-forward only |
-| `/aidlc unit share [--plan] [--branch \| --back]` | Commit the work here and push the integration branch so the teams can take Units, or see a landed one; `--plan` commits AI-DLC's record only (with the code of a Unit built here, on the workspace's own repository), for a lead's project whose teams take Units by pull request; `--branch` pushes the plan on a branch of its own for a pull request; `--back` switches back to the integration branch once the plan is in it |
-| `/aidlc unit commit-record` | Commit AI-DLC's record in `aidlc/` (and a `repos.json` still at the project root) on this branch, nothing else, and push nothing |
+| `/aidlc unit share [--plan] [--branch \| --back] [--commit-message-file <file>]` | Commit the work here and push the integration branch so the teams can take Units, or see a landed one; `--plan` commits AI-DLC's record only (with the code of a Unit built here, on the workspace's own repository), for a lead's project whose teams take Units by pull request; `--branch` pushes the plan on a branch of its own for a pull request; `--back` switches back to the integration branch once the plan is in it |
+| `/aidlc unit commit-record [--commit-message-file <file>]` | Commit AI-DLC's record in `aidlc/` (and a `repos.json` still at the project root) on this branch, nothing else, and push nothing |
 | `/aidlc unit publish <unit> [--commit [--include <path>]...]` | CAS-publish the scoped checkout's clean committed candidate onto its claim ref; `--commit` commits the Unit's own work first, and `--include` puts in a new file or folder it left out |
 | `/aidlc unit pin <unit>` | Pin and validate one completed candidate OID from unscoped main |
 | `/aidlc unit gate <unit> ...` | Record the merge decision against the pinned OID and generation |
@@ -1081,12 +1081,17 @@ branch: push it on a branch and get it merged your usual way, and exits 0 with
 yes runs this. On the plan's own
 branch it pushes that branch, so its pull request has the newer plan. `/aidlc` offers this step itself when it is due:
 before a Unit would start on the lead's checkout, and after a land the remote
-does not have yet.
+does not have yet. Its commit takes the message in the file
+`--commit-message-file` names, whole (`Share the plan with the teams`, or
+`Record the <unit> landing` after a land, without one); each offer that ends in
+it shows the message the agent drafted for it in the repo's own style, and your
+own words replace it. The file goes once the share is done; a push that did not
+go keeps it, so the same command runs again as written.
 
 ### `/aidlc unit commit-record` - Commit AI-DLC's record on this branch
 
 ```bash
-/aidlc unit commit-record
+/aidlc unit commit-record [--commit-message-file <file>]
 ```
 
 Commits everything in `aidlc/` that git does not ignore, and a `repos.json` at
@@ -1101,6 +1106,14 @@ repository, while a rebase, merge, cherry-pick or revert of yours is under way
 where `aidlc/` holds the lead's record too. `/aidlc` offers it once when an
 update moved `repos.json` into `aidlc/` and when the repo list changed and is
 not committed yet.
+
+The commit takes the message in the file `--commit-message-file` names (a
+file directly in `aidlc/.aidlc-engine/request-text/`), whole, and `Update
+AI-DLC's record` without one. Each offer that ends in this commit shows the
+message the agent drafted for it in the repo's own style, and your own words
+replace it. A hook of yours that refuses the commit is said in git's words,
+with the way on: tell AI-DLC the message to use, and it commits with it. The
+file goes once the commit is made.
 
 ### `/aidlc unit publish <unit>` — Publish a completed candidate
 

@@ -237,6 +237,13 @@ export function recordCommitBlock(dir: string, unitBuild: boolean): RecordCommit
   const underWay = gitOperationUnderWay(dir);
   if (underWay !== null) return { why: "under-way", underWay };
   if (git(dir, ["symbolic-ref", "--quiet", "HEAD"]) === null) return { why: "detached" };
+  const changed = recordChanged(dir);
+  return changed === null ? { why: "no-git" } : changed ? null : { why: "nothing" };
+}
+
+// Whether AI-DLC's record here (recordPaths) has anything git would commit;
+// null when git cannot say.
+export function recordChanged(dir: string): boolean | null {
   const changed = git(dir, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--", ...recordPaths(dir)]);
-  return changed === null ? { why: "no-git" } : changed === "" ? { why: "nothing" } : null;
+  return changed === null ? null : changed !== "";
 }

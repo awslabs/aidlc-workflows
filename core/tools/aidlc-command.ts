@@ -240,7 +240,7 @@ export const UNIT_GRAMMAR: Readonly<Record<string, UnitGrammar>> = {
     options: ["team", "request-file", "rhythm"],
     usage: "unit claim <unit> [--team <label> | --request-file <file>] [--rhythm per-stage|unit-end]",
   },
-  "commit-record": { name: false, options: [], usage: "unit commit-record" },
+  "commit-record": { name: false, options: ["commit-message-file"], usage: "unit commit-record [--commit-message-file <file>]" },
   gate: {
     name: true,
     options: ["decision", "user-input", "request-file"],
@@ -298,7 +298,12 @@ export const UNIT_GRAMMAR: Readonly<Record<string, UnitGrammar>> = {
     options: ["message", "request-file", "person-words"],
     usage: "unit send-back <unit> [--message <id>] (--request-file <file> | --person-words <text>)",
   },
-  share: { name: false, options: [], switches: ["plan", "branch", "back"], usage: "unit share [--plan] [--branch | --back]" },
+  share: {
+    name: false,
+    options: ["commit-message-file"],
+    switches: ["plan", "branch", "back"],
+    usage: "unit share [--plan] [--branch | --back] [--commit-message-file <file>]",
+  },
   "sign-off": {
     name: true,
     options: ["message", "request-file", "person-words"],

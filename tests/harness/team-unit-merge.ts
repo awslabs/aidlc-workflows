@@ -39,6 +39,7 @@ import {
   seededStateFile,
 } from "./fixtures.ts";
 import { FILE_ATTEMPT_ENV } from "../lib/file-retry.ts";
+import { isDraftStep } from "./team-build.ts";
 
 // Git 2.47 and later start `git maintenance run --auto` in the background
 // after a command writes objects, and from 2.54 that run repacks, deleting
@@ -1095,22 +1096,26 @@ export function gateAndLand(
 }
 
 export function nextDirective(projectDir: string): Record<string, unknown> {
-  const first = runMergeTool(ORCH, ["next"], projectDir);
-  expect(first.status, first.out).toBe(0);
-  let directive = JSON.parse(first.stdout) as Record<string, unknown>;
-  while (
-    directive.kind === "load-steering" &&
-    typeof directive.receipt === "string"
-  ) {
-    const continued = runMergeTool(
-      ORCH,
-      ["continue", directive.receipt],
-      projectDir,
-    );
-    expect(continued.status, continued.out).toBe(0);
-    directive = JSON.parse(continued.stdout) as Record<string, unknown>;
+  // The agent's draft of a commit message, said to nobody, before the question that ends in the commit: it leaves
+  // the message the file holds, and the next step is that question.
+  for (let drafted = false; ; drafted = true) {
+    const first = runMergeTool(ORCH, ["next"], projectDir);
+    expect(first.status, first.out).toBe(0);
+    let directive = JSON.parse(first.stdout) as Record<string, unknown>;
+    while (
+      directive.kind === "load-steering" &&
+      typeof directive.receipt === "string"
+    ) {
+      const continued = runMergeTool(
+        ORCH,
+        ["continue", directive.receipt],
+        projectDir,
+      );
+      expect(continued.status, continued.out).toBe(0);
+      directive = JSON.parse(continued.stdout) as Record<string, unknown>;
+    }
+    if (drafted || !isDraftStep(directive)) return directive;
   }
-  return directive;
 }
 
 /** The step after a landing the remote does not have yet is the offer to push

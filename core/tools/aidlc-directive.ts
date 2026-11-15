@@ -1434,11 +1434,12 @@ const TEAM_NAME_NOTE = "When they take a Unit and give their team another name t
 
 // A take builds in the space the person works in; the space is theirs to name
 // where to build, and a team they mention never picks one (team names change).
-// The push question shows the commit message its build's file holds: the
-// person's own words replace it there, whole, and the choice they pick carries it.
-const COMMIT_MESSAGE_NOTE = "The commit message the question shows is the one in the file commit_message_file names: " +
-  "when they give their own, write it there with your file tool, never a shell, exactly as they gave it, in place of " +
-  "the one shown, then run the command of the push choice they pick.";
+// A question that ends in a commit AI-DLC makes for the person shows the
+// commit message its file holds: the person's own words replace it there,
+// whole, and the choice they pick carries it. The push's note says "push choice".
+const commitMessageNote = (choice: string): string => "The commit message the question shows is the one in the file " +
+  "commit_message_file names: when they give their own, write it there with your file tool, never a shell, exactly as " +
+  `they gave it, in place of the one shown, then run the command of the ${choice} they pick.`;
 
 export const TAKE_SPACE_NOTE = "When they say which space to build it in, in their own words (such as \"take it in the " +
   "web space\" or \"build this in payments\"), add `--space '<that space>'` to the Start choice's command; naming " +
@@ -2014,8 +2015,8 @@ export function withAgentNotes<T extends object>(
       ? unitAmendQuestionNote(invocation)
       : d.ask_type === "unit-take"
       ? `${questionNote(invocation, choices?.length === 1)} ${TAKE_SPACE_NOTE}${carryOnNote(d.carry_on as CarryOnCommand[] | undefined)}`
-      : d.ask_type === "unit-push" && typeof d.commit_message_file === "string"
-      ? `${questionNote(invocation, choices?.length === 1)} ${COMMIT_MESSAGE_NOTE}`
+      : typeof d.commit_message_file === "string"
+      ? `${questionNote(invocation, choices?.length === 1)} ${commitMessageNote(d.ask_type === "unit-push" ? "push choice" : "choice")}`
       : d.ask_type === "unit-signoff"
       ? questionNote(invocation, choices?.length === 1) + " Their words sign it off: when they do, write them, as they typed them, to the file signoff_command names with your file tool, never a shell, and run it; anything else leaves it waiting."
       : questionNote(invocation, choices?.length === 1);
@@ -2404,7 +2405,8 @@ export function validateDirective(obj: unknown): ValidationResult {
           errors.push(`${kind}: team-handover handovers must list ${TEAM_HANDOVERS.slice(0, -1).join(", ")} or ${TEAM_HANDOVERS.at(-1)}`);
         }
         checkOptionalString(o, "unit", kind, errors);
-        rejectUnexpected("team-handover", { handovers: true, unit: true });
+        checkOptionalString(o, "commit_message_file", kind, errors);
+        rejectUnexpected("team-handover", { handovers: true, unit: true, commit_message_file: true });
       } else if (COMMAND_CHOICE_ASKS.has(String(o.ask_type))) {
         if (o.response_route !== "command") {
           errors.push(`${kind}: ${o.ask_type} response_route must be "command"`);
@@ -2413,10 +2415,12 @@ export function validateDirective(obj: unknown): ValidationResult {
           : o.ask_type === "unit-signoff" ? "signoff_command"
           : null;
         if (commandField !== null) checkString(o, commandField, kind, errors);
-        if (o.ask_type === "unit-push" && o.commit_message_file !== undefined) checkString(o, "commit_message_file", kind, errors);
+        // The asks whose question ends in a commit AI-DLC makes for the person.
+        const committing = o.ask_type === "unit-push" || o.ask_type === "repos-manifest";
+        if (committing && o.commit_message_file !== undefined) checkString(o, "commit_message_file", kind, errors);
         rejectUnexpected(String(o.ask_type), {
           ...(commandField !== null ? { [commandField]: true } : {}),
-          ...(o.ask_type === "unit-push" ? { commit_message_file: true } : {}),
+          ...(committing ? { commit_message_file: true } : {}),
         });
       } else if (o.ask_type === "new-work-routing") {
         if (o.response_route !== "next") {

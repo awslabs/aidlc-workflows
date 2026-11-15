@@ -357,7 +357,9 @@ so the rename is staged; `aidlc config` at a terminal names the git command that
 commits it, and in the next chat after an update AI-DLC asks once
 whether to commit the move with its record in `aidlc/`
 (`AI-DLC moved repos.json into aidlc/. Want me to commit the move, with AI-DLC's
-record in aidlc/? Teammates need AI-DLC 2.12 or newer to find it there.`; on
+record in aidlc/, using this commit message? Teammates need AI-DLC 2.12 or newer
+to find it there.`, with the message the agent drafted in your repo's own style
+after it; on
 opencode it says the move and to commit it), and a plain rename otherwise. Running config again changes nothing. A refresh
 to an earlier release's files (a pin, `--from`) leaves it at the root, where
 those releases read it; with a list in both places, `aidlc/repos.json` is read.

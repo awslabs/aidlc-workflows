@@ -38,6 +38,7 @@ import {
   parseBoltDag,
   readAtomicReplacedFileNoFollowOrThrow,
   readAuditShardEvents,
+  writeRecordFileNoFollow,
   readRecordedSourceCheckouts,
   readStateFile,
   readUnitGateRhythm,
@@ -1050,6 +1051,36 @@ export function unitWordsArg(verb: string, unit?: string): string {
 export function unitWordsFile(verb: string, name?: string): string {
   const named = [verb, ...(name === undefined ? [] : [name])].join("-").replace(/[^A-Za-z0-9._-]+/g, "-");
   return `${REQUEST_TEXT_DIR}/unit-${named}.txt`;
+}
+
+// A commit AI-DLC makes for the person carries the message the agent drafted
+// for it in the repo's own style, shown in the question that ends in it, and
+// the person's own words replace it. These pieces are read by the
+// session-start hook too, which never loads aidlc-unit.ts.
+export const RECORD_COMMIT_MESSAGE = "Update AI-DLC's record";
+
+export const OWN_MESSAGE_SENTENCE = "when they give their own commit message, write it to that file first, with your file " +
+  "tool, never a shell, exactly as they gave it";
+
+// The agent's draft, said to nobody: over `today`, the message the commit
+// carries if the draft never comes, in `file`.
+export function commitDraftSentence(whose: string, repos: string, about: string, file: string, today: string): string {
+  return `Draft ${whose} the way ${repos}'s own commits are written (their recent ` +
+    `commits, a commitlint config or a contributing guide say how), about ${about}. Write it with your file ` +
+    `tool, never a shell, over the message in \`${file}\`, which holds \`${today}\` now; leave that as it is when it ` +
+    "already fits.";
+}
+
+// `today` written into the message file for the agent to draft over: true once
+// written, false when it cannot be (the question then shows `today` without it).
+export function writeCommitDraft(projectDir: string, file: string, today: string): boolean {
+  if (isReadOnlyEngineProbe()) return false;
+  try {
+    writeRecordFileNoFollow(projectDir, file, `${today}\n`);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // The clause of the line solo work's switch to teams says, while the lead's
