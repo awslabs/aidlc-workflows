@@ -4756,7 +4756,7 @@ function entryIdentity(path: string): string {
 // stamp and a record that disagree do not say how they came to, so the line
 // says what is there. With no record, the refusal below names the Kiro CLI (V2)
 // refresh that records one, after which the switch goes through.
-function kiroCopyRefusal(occupant: ProjectHarness, requested: string): SwitchRefusal | null {
+function kiroCopyRefusal(occupant: ProjectHarness, requested: string, run: "switch" | "refresh" = "switch"): SwitchRefusal | null {
   if (occupant.distribution !== "kiro" || requested !== "kiro-ide" || occupant.harnessDir !== KIRO_SWITCH_DIR) return null;
   let baseline: Baseline | null;
   try {
@@ -4769,13 +4769,13 @@ function kiroCopyRefusal(occupant: ProjectHarness, requested: string): SwitchRef
     return null;
   }
   return new SwitchRefusal(
-    `cannot switch ${occupant.harnessDir} to Kiro: it holds Kiro CLI (V2)'s files, which the release files keep in runtime/kiro/, ` +
+    `cannot ${run === "switch" ? `switch ${occupant.harnessDir} to` : `refresh ${occupant.harnessDir} as`} Kiro: it holds Kiro CLI (V2)'s files, which the release files keep in runtime/kiro/, ` +
       `while its ownership record (${occupant.harnessDir}/tools/data/aidlc-manifest.json) is Kiro's; nothing changed`,
     {
       kind: "text",
-      text: "follow \"Versioned manual-copy alternative\" in Running AI-DLC on Kiro " +
-        "(https://awslabs.github.io/aidlc-workflows/guide/harnesses/kiro/): its steps remove Kiro CLI (V2)'s agent files, " +
-        "copy runtime/kiro-ide/ from the release files over the project, and run config",
+      text: "run the whole copy block of \"Versioned manual-copy alternative\" in Running AI-DLC on Kiro " +
+        "(https://awslabs.github.io/aidlc-workflows/guide/harnesses/kiro/), not only its setup command: it removes Kiro CLI " +
+        "(V2)'s agent files, copies runtime/kiro-ide/ from the release files over the project, and runs config",
     },
   );
 }
@@ -13759,6 +13759,12 @@ export async function main(
   let releaseHold: (() => void) | null = null;
   const sourceNotes: string[] = [];
   try {
+    // A refresh that names no harness refreshes the one the project has, and
+    // its record names Kiro, so it gets the same refusal before the record check.
+    const unnamedCopy = !requestedHarness && !section && projectHarnesses.length === 1
+      ? kiroCopyRefusal(projectHarnesses[0], "kiro-ide", "refresh")
+      : null;
+    if (unnamedCopy) throw unnamedCopy;
     const existing = existingProject(projectDir, requestedHarness);
     // A switch that cannot proceed is refused before any release is fetched
     // for it; it runs again once the source is selected, just before planning.

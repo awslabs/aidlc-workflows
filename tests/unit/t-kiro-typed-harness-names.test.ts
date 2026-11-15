@@ -247,27 +247,30 @@ describe("Kiro harness names a person types", () => {
     cpSync(join(RELEASE, "kiro"), dir, { recursive: true });
     expect(stamp(dir)).toBe("kiro");
     const before = contents(dir);
-    const runs: Array<[string, Run]> = [
-      ["terminal", config(dir, ["--harness", "kiro"], { env: { AIDLC_TEST_CONFIG_TTY: "1", AIDLC_TEST_CONFIG_INPUT: "y\n" } })],
-      ["no terminal", config(dir, ["--harness", "kiro"])],
-      ["--yes", config(dir, ["--harness", "kiro", "--yes"])],
-      ["dry run", config(dir, ["--harness", "kiro", "--dry-run"])],
+    // The refresh the guide gives a copied project names no harness.
+    const runs: Array<[string, Run, string]> = [
+      ["terminal", config(dir, ["--harness", "kiro"], { env: { AIDLC_TEST_CONFIG_TTY: "1", AIDLC_TEST_CONFIG_INPUT: "y\n" } }), "switch .kiro to"],
+      ["no terminal", config(dir, ["--harness", "kiro"]), "switch .kiro to"],
+      ["--yes", config(dir, ["--harness", "kiro", "--yes"]), "switch .kiro to"],
+      ["dry run", config(dir, ["--harness", "kiro", "--dry-run"]), "switch .kiro to"],
+      ["no --harness", config(dir, ["--yes"]), "refresh .kiro as"],
     ];
-    for (const [label, result] of runs) {
+    for (const [label, result, run] of runs) {
       expect(result.status, `${label}: ${result.out}`).toBe(4);
       expect(result.out, label).not.toContain("[y/N]");
       expect(result.out, label).toContain(
-        "cannot switch .kiro to Kiro: it holds Kiro CLI (V2)'s files, which the release files keep in runtime/kiro/, while its ownership record " +
+        `cannot ${run} Kiro: it holds Kiro CLI (V2)'s files, which the release files keep in runtime/kiro/, while its ownership record ` +
           "(.kiro/tools/data/aidlc-manifest.json) is Kiro's; nothing changed",
       );
       expect(result.out, label).toContain(
-        "follow \"Versioned manual-copy alternative\" in Running AI-DLC on Kiro (https://awslabs.github.io/aidlc-workflows/guide/harnesses/kiro/): " +
-          "its steps remove Kiro CLI (V2)'s agent files, copy runtime/kiro-ide/ from the release files over the project, and run config",
+        "run the whole copy block of \"Versioned manual-copy alternative\" in Running AI-DLC on Kiro (https://awslabs.github.io/aidlc-workflows/guide/harnesses/kiro/), " +
+          "not only its setup command: it removes Kiro CLI (V2)'s agent files, copies runtime/kiro-ide/ from the release files over the project, and runs config",
       );
       expect(result.out, label).not.toContain("kiro-v2");
+      expect(result.out, label).not.toContain("runtime/claude/");
     }
     const json = JSON.parse(config(dir, ["--harness", "kiro", "--yes", "--json"]).stdout) as { remediation?: string };
-    expect(json.remediation).toContain("copy runtime/kiro-ide/ from the release files");
+    expect(json.remediation).toContain("copies runtime/kiro-ide/ from the release files");
     expect(contents(dir)).toBe(before);
 
     // The steps the line names, as that guide's manual-copy block takes them.
