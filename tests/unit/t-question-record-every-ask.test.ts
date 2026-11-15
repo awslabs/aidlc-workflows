@@ -232,13 +232,15 @@ describe("an engine question of teams building their Units", () => {
     expect(openIn(home.dir)).toEqual([]);
   });
 
-  test("every ask the engine hands out is on its list of engine asks, the code plan question aside", () => {
+  test("every ask the engine hands out is on its list of engine asks, the code plan question and the update offer aside", () => {
     const tools = join(REPO_ROOT, "core", "tools");
     const types = new Set<string>();
     for (const file of readdirSync(tools).filter((name) => name.endsWith(".ts"))) {
       for (const match of readFileSync(join(tools, file), "utf-8").matchAll(/ask_type: "([a-z-]+)"/g)) types.add(match[1]);
     }
     types.delete("plan-approval");
+    // The update offer is put for a record this build cannot read, so it writes no question row.
+    types.delete("ai-dlc-update");
     expect([...types].filter((type) => !ENGINE_ASK_TYPES.has(type)).sort()).toEqual([]);
   });
 });
