@@ -106,14 +106,14 @@ import {
   writeProjectHookStatusFile,
 } from "../tools/aidlc-lib.ts";
 import { appendAuditEntryUnlocked, maskSecretShapes, saySecretMaskedOnce } from "../tools/aidlc-audit.ts";
-import { aidlcToolInvocation } from "../tools/aidlc-runtime-paths.ts";
+import { aidlcToolInvocation, runtimeHarnessName } from "../tools/aidlc-runtime-paths.ts";
 import { normalizeRetiredGuardPolicyField } from "../tools/aidlc-guard-switch.ts";
 import {
   type PlanApprovalPickerQuestion,
   recordPlanApprovalHumanResponse,
   recordProtectedHumanResponse,
 } from "../tools/aidlc-testing-posture.ts";
-import { notePlanApprovalAskReply, openEngineQuestion } from "../tools/aidlc-plan-approval-ask.ts";
+import { notePlanApprovalAskReply, openEngineQuestion, planQuestionBoxAsAsked } from "../tools/aidlc-plan-approval-ask.ts";
 import { claudeTurnKey, noteClaudeTurnPending } from "../tools/aidlc-claude-turn-origin.ts";
 import { settleClaudeTurnsFirst } from "../tools/aidlc-claude-turn-pending.ts";
 import { openPlanQuestion } from "../tools/aidlc-question-store.ts";
@@ -581,10 +581,12 @@ async function run(input: string): Promise<number> {
   const forThePerson: Array<() => void> = [];
   // Besides the notes, respond hands back the help line and the event the host
   // fired: a host takes a hook's context only under its own event (a box
-  // answer's line named UserPromptSubmit is dropped on Claude Code).
-  const handover: { help: string | null; event: "UserPromptSubmit" | "PostToolUse" } = {
-    help: null, event: "UserPromptSubmit",
-  };
+  // answer's line named UserPromptSubmit is dropped on Claude Code). And, for an
+  // adapter that asked for it (wants_first_step_note), the first-step note in
+  // its own key, which it says its own way (opencode, Kiro CLI's V2 engine).
+  const handover: {
+    help: string | null; event: "UserPromptSubmit" | "PostToolUse"; firstStepNote: string | null;
+  } = { help: null, event: "UserPromptSubmit", firstStepNote: null };
   try {
     return await respond(input, notes, forThePerson, handover);
   } finally {
@@ -598,18 +600,24 @@ async function run(input: string): Promise<number> {
     if (handover.help !== null && [...notes, handover.help].join("\n").length <= PROMPT_CONTEXT_MAX_CHARS) {
       notes.push(handover.help);
     }
-    if (notes.length > 0) process.stdout.write(hookContextLine(handover.event, notes.join("\n")));
+    if (notes.length > 0 || handover.firstStepNote !== null) {
+      process.stdout.write(hookContextLine(handover.event, notes.join("\n"), handover.firstStepNote ?? undefined));
+    }
   }
 }
 
 async function respond(
-  input: string,
+  received: string,
   notes: string[],
   forThePerson: Array<() => void>,
-  handover: { help: string | null; event: "UserPromptSubmit" | "PostToolUse" },
+  handover: { help: string | null; event: "UserPromptSubmit" | "PostToolUse"; firstStepNote: string | null },
 ): Promise<number> {
 try {
   const projectDir = resolveProjectDirFromHook(import.meta.url);
+  // Claude Code's box for the code plan question showed the plan's lines under
+  // the agent's question (planQuestionBoxInput); everything below reads the box
+  // as the agent asked it.
+  const input = runtimeHarnessName() === "claude" ? planQuestionBoxAsAsked(projectDir, received) : received;
   // A turn Claude Code started itself before this one is settled first, so
   // nothing below reads it as the person's (aidlc-claude-turn-origin.ts).
   settleClaudeTurnsFirst(projectDir);
@@ -641,6 +649,9 @@ try {
   // An adapter whose host may show the person this hook's context line says
   // so; the message-id line is then left to the steps of `next`.
   let contextMayReachPerson = false;
+  // An adapter that says the first-step note its own way asks for it in its
+  // own key (opencode, Kiro CLI's V2 engine); no other output changes.
+  let wantsFirstStepNote = false;
   try {
     const parsed = JSON.parse(input) as {
       hook_event_name?: unknown;
@@ -662,9 +673,11 @@ try {
       transcript_path?: unknown;
       relays_terminal_output?: unknown;
       context_may_reach_person?: unknown;
+      wants_first_step_note?: unknown;
     };
     relaysTerminalOutput = parsed.relays_terminal_output === true;
     contextMayReachPerson = parsed.context_may_reach_person === true;
+    wantsFirstStepNote = parsed.wants_first_step_note === true;
     if (typeof parsed.session_id === "string") sessionId = validSessionId(parsed.session_id.trim()) ?? "";
     questionText = extractQuestionText(parsed.tool_input ?? parsed.toolInput);
     // A host that wraps the person's turn in its own context (Kiro Crew) hands
@@ -773,7 +786,7 @@ try {
     const theirText = [humanResponseText, ...picked].join("\n");
     if (!sessionId || !personHere || turnOrigin.kind === "host" || maskSecretShapes(theirText) === theirText) return;
     const session = sessionId;
-    forThePerson.push(() => saySecretMaskedOnce(projectDir, session));
+    forThePerson.push(() => saySecretMaskedOnce(projectDir, session, true));
   };
   // A help request the person typed is answered here, before any work exists
   // or this chat joins one, on every host that hands this hook's line to the
@@ -824,6 +837,8 @@ try {
         ? said.slice(0, MESSAGE_TEXT_MAX_CHARS)
         : said;
       const cut = full.length > MESSAGE_TEXT_MAX_CHARS || words !== said || picker?.cut === true;
+      // A typed prompt the record cuts is also kept whole beside it, so `next`
+      // takes the person's line as they typed it (wholeMessageText).
       return saveMessage(projectDir, {
         session: sessionId || null,
         at: isoTimestamp(),
@@ -833,10 +848,28 @@ try {
         picker: picker === null ? null : picker.entries,
         ...parsed,
         words,
-      }).id;
+      }, cut && promptSubmitted ? full : undefined).id;
     } catch {
       // The record is a convenience here; the turn and its row stand without it.
       return null;
+    }
+  };
+  // A typed `/aidlc` line kept whole beyond the record's cut: the agent hears
+  // that AI-DLC has it, so it runs `next` with nothing after it instead of
+  // typing it all again (firstStepNote). A Kiro adapter says its own first
+  // step (relays_terminal_output), so it gets no line of this unless it asks.
+  // A prompt no longer than the record keeps has no whole copy to read, so it
+  // loads no engine module here.
+  const sayFirstStep = async (messageId: string | null): Promise<void> => {
+    if (!messageId || !sessionId || !promptSubmitted || typedPrompt.length <= MESSAGE_TEXT_MAX_CHARS) return;
+    try {
+      const { firstStepNote } = await import("../tools/aidlc-orchestrate.ts");
+      const note = firstStepNote(projectDir, sessionId, typedPrompt, messageId);
+      if (note === "") return;
+      if (!relaysTerminalOutput) notes.push(note);
+      if (wantsFirstStepNote) handover.firstStepNote = note;
+    } catch {
+      // Without the note the agent passes the words, as it always has.
     }
   };
   // A Claude Code prompt still to be settled from its own row
@@ -886,6 +919,7 @@ try {
     if (turnOrigin.kind !== "host") {
       const kept = keepMessage();
       keepClaudeKey(kept, false);
+      await sayFirstStep(kept);
       const tookPart = workflow.participation === "participant" && selectedRecordIsFinished(projectDir, workflow.selection);
       sayMessageId(kept, typedParse?.command === true, tookPart);
       // The person wrote after work they took part in finished: a line kept for
@@ -956,6 +990,7 @@ try {
   const messageId = keepMessage();
   if (!inRecord) keepClaudeKey(messageId, false);
   sayIfKeyShaped();
+  await sayFirstStep(messageId);
   if (inRecord) {
     // With a record it lands in the record, before the mint branch and
     // apart from it, so a hook that ran but withheld its mint (AIDLC_UNATTENDED=1,

@@ -42,7 +42,11 @@ import {
   TRUSTED_ROUTE_NAMESPACE,
   trustedCommand,
 } from "./aidlc-command.ts";
-import { readBoundedRegularFile, sharedKnowledgeWithoutFormatDocs } from "./aidlc-inline-context.ts";
+import {
+  kiroKnowledgePreflightClause,
+  readBoundedRegularFile,
+  sharedKnowledgeWithoutFormatDocs,
+} from "./aidlc-inline-context.ts";
 import { committedTextBytes, runWithOwnerStampedLock } from "./aidlc-lib.ts";
 import { EXTENDED_SUBPROCESS_TIMEOUT_MS, LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { typedHarnessName } from "./aidlc-runtime-paths.ts";
@@ -296,6 +300,7 @@ function injectDelegatedKnowledgePreflight(
     `\`aidlc/spaces/<active-space>/knowledge/aidlc-shared/\`, then ` +
     `\`aidlc/spaces/<active-space>/knowledge/${agentName}/\`. ` +
     `A native resource preload satisfies this requirement; otherwise read the files now. ` +
+    kiroKnowledgePreflightClause(harnessDir) +
     `The dispatch brief supplies rules and artifact paths separately.`;
   const frontmatter = content.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/);
   if (!frontmatter) return `${block}\n\n${content.trimStart()}`;

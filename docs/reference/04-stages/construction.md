@@ -16,6 +16,11 @@ content, not the walk source.
 All stages follow `stage-protocol.md` for approval gates, question format,
 completion messages, and state tracking.
 
+Support agents take part when collaborators are on (the `collaborators`
+setting, shipped on only for `enterprise`; `/aidlc --collaborators on` turns it
+on for one piece of work). With collaborators off, the engine hands each stage
+an empty `support_agents` list and the lead runs alone.
+
 > **Path convention.** Each workflow's artifacts live under its **intent record
 > dir** — `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/` (where `<space>` is
 > `default` unless a non-default space is in play, and `<YYMMDD>-<label>` is the
@@ -403,9 +408,9 @@ feasibility input.
      concurrency edge cases)
 
 3. **Collect and Analyze Answers** -- Collect answers following
-   stage-protocol.md question flow (offer interaction mode choice, collect
+   stage-protocol.md question flow (collect
    answers, write back to file). Perform MANDATORY ambiguity analysis:
-   - Identify vague answers ("mix of", "not sure", "depends", "probably")
+   - Identify vague answers ("mix of", "not sure", "depends")
    - Check for contradictions between answers
    - Flag missing details needed for artifact generation
    - If ANY ambiguity found: create follow-up questions and resolve before
@@ -625,7 +630,7 @@ infrastructure and platform input.
 
 3. **Collect and Analyze Answers** -- Collect answers following
    stage-protocol.md question flow. Perform MANDATORY ambiguity analysis:
-   - Identify vague answers ("mix of", "not sure", "depends", "probably")
+   - Identify vague answers ("mix of", "not sure", "depends")
    - Check for contradictions between answers
    - Flag missing details needed for artifact generation
    - If ANY ambiguity found: create follow-up questions and resolve before
@@ -843,25 +848,7 @@ present only when multiple units share resources.
 ### Purpose
 
 Generate all application code, tests, and configuration for a single unit of
-work. It runs for every Unit in every scope that includes it; infra runs no
-Code Generation and no Build and Test, as its compiled plan shows:
-
-```text
-$ aidlc engine graph scope infra
-workspace-scaffold
-workspace-detection
-state-init
-practices-discovery
-requirements-analysis
-nfr-requirements
-nfr-design
-infrastructure-design
-ci-pipeline
-deployment-pipeline
-environment-provisioning
-deployment-execution
-observability-setup
-```
+work. It runs for every Unit in every scope that includes it.
 
 Code is written to the workspace root, never to
 `<record>/`.
@@ -932,8 +919,11 @@ This stage has a **two-part structure**: planning followed by generation.
    with checkboxes for each implementation step. Include story-to-code-step
    traceability -- map each plan step back to the user story it implements.
 
-   Run `aidlc-testing-posture.ts render` and paste its complete
-   `## Testing Contract` JSON block into the plan. The resolver reads
+   Run `aidlc-testing-posture.ts render` to read the Testing Contract the plan
+   follows; `next` writes its `## Testing Contract` JSON block into the plan
+   itself (a block that is missing, broken or out of date is replaced; the rest
+   of the plan is kept, and after the person's own edit so are the words they
+   wrote in that section, after the block). The resolver reads
    org/team/project Testing Posture sections additively: a project coverage or
    integration note remains applicable but does not erase a team methodology;
    a contradictory narrower methodology is rejected.
@@ -973,6 +963,19 @@ This stage has a **two-part structure**: planning followed by generation.
    Number each plan step sequentially (Step 1, Step 2, etc.) for clear
    execution ordering and traceability.
 
+   Data-model elements are named, never implied: a step that creates or
+   changes an object, entity, table, field or column names each one with the
+   requirement, acceptance criterion, business rule or design element that
+   asks for it. An element nothing upstream asks for also gets one plain line
+   (not a checkbox) under the plan's `## Assumptions`, naming the step that
+   adds it and why the work needs it, and the Summary's `Adds:` line counts
+   and names it, so the person decides it at Plan Approval rather than
+   finding it after deployment. A plan that adds no such element has neither.
+   The developer agent builds no such element the approved plan does not
+   name; one the build turns out to need goes into the plan first, as a step
+   of its own, which the after-approval rules then treat as any other plan
+   change.
+
    Resolve one code-generation record directory from the directive:
    `<record>/construction/<directive.unit>/code-generation/` when
    `directive.unit` is present, otherwise the zero-Unit stage directory
@@ -1000,12 +1003,14 @@ This stage has a **two-part structure**: planning followed by generation.
    Unit or one of its paths gets its own Unit-scoped check.
 
 
-   The plan opens with a short `## Summary` (Builds, Touches, Tests lines) that
-   the engine shows the person when it asks for approval.
+   The plan opens with a short `## Summary` (Builds, Touches and Tests lines,
+   and an Adds line when the plan adds an element no requirement asks for)
+   that the engine shows the person when it asks for approval.
 
 3. **Plan Approval** -- the engine asks. When both files are written, the
    conductor runs `next`. A ready plan (non-empty plan and instructions, a
-   valid and current Testing Contract, a readable workspace source) makes
+   valid and current Testing Contract, which `next` writes first, a readable
+   workspace source) makes
    `next` return a `plan-approval` ask instead of the build: the question, each
    target's summary and plan path, and **Approve Plan**, **Request Changes**,
    and **I'll edit the files**. The engine writes `code-generation-questions.md`
@@ -1032,8 +1037,8 @@ This stage has a **two-part structure**: planning followed by generation.
    it); an approval still needs a reply after the question shows, and the
    revised plan's question needs its own. The
    next `next` returns the run-stage with `plan_approval.status: "approved"`
-   (build), `revise` (with the person's words), `repair` (a Testing Contract an
-   edit broke), or `plan` (finish the files). In edit mode the person changes the
+   (build), `revise` (with the person's words), `repair` (what their answer
+   could not record), or `plan` (finish the files). In edit mode the person changes the
    files or writes their answer in the questions file and says done, and the
    conductor reads what they wrote and records their choice; the guard refuses
    the conductor's writes to those files meanwhile. A plan that is not
@@ -1247,7 +1252,7 @@ This stage has a **two-part structure**: planning followed by generation.
 
 | Artifact                  | Description                                                         |
 |---------------------------|---------------------------------------------------------------------|
-| code-generation-plan.md   | Detailed plan with checkboxes, story traceability, step sequencing  |
+| code-generation-plan.md   | Detailed plan with checkboxes, story traceability, step sequencing, and an Assumptions section when it adds a data-model element no requirement asks for |
 | code-generation-questions.md | Persisted Plan Approval question and explicit human answer       |
 | unit-test-instructions.md | Per-unit setup, scoped run commands, coverage, mocks, and test data |
 | code-summary.md           | Files created/modified, decisions, test coverage, plan deviations   |
@@ -1672,7 +1677,7 @@ Strictly 2-option: Approve / Request Changes.
 
 - **Phase boundary verification**: This is the last stage of the Construction
   phase. It performs the Construction-to-Operation phase boundary verification
-  check (per stage-protocol-governance.md section 13), validating that architecture traces
+  check, validating that architecture traces
   to code and code traces to tests. Results are written to
   `<record>/verification/phase-check-construction.md`.
 - **Conditional execution**: This stage is skipped if the project already has
@@ -1706,7 +1711,7 @@ through a phased construction flow:
   (pipeline-deploy-led)
 
 **Key characteristics:**
-- Stages 3.1-3.4 are CONDITIONAL; 3.5-3.6 run in every scope that includes them (infra has neither); 3.7 is CONDITIONAL
+- Stages 3.1-3.4 are CONDITIONAL; 3.5-3.6 run in every scope that includes them; 3.7 is CONDITIONAL
 - Which conditional stages are reached comes from the plan (the scope, plus any skip or add the person makes), not from Delivery Planning; each still applies its own condition
 - New source-producing solo Unit workflows default to unit-major, serial
   execution and verified Unit checkpoints. Preserve explicit iteration choices

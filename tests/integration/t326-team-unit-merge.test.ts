@@ -178,7 +178,7 @@ describe("t326 pinned team Unit merge", () => {
       seed,
     );
     expect(movedGate.status).not.toBe(0);
-    expect(movedGate.out).toContain("run aidlc-unit pin alpha again");
+    expect(movedGate.out).toContain("run bun .claude/tools/aidlc.ts unit pin alpha again");
     const repin = runMergeTool(UNIT, ["pin", "alpha"], seed);
     expect(repin.status, repin.out).toBe(0);
     expect(

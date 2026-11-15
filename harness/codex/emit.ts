@@ -52,7 +52,9 @@ const HOOK_WIRING: Array<{ event: string; matcher?: string; target: string }> = 
   // silently drop a guard, and the group beats in the record before each
   // engine command (hook health reads that heartbeat). Verified on 0.142.5:
   // subagent tool calls carry agent_type, and a PreToolUse exit 2 + stderr
-  // blocks the call with the reason relayed.
+  // blocks the call with the reason relayed; on Windows (0.167.1) exit 2 does
+  // not and the deny JSON does, so the adapter answers there with that
+  // (refusalAnswer).
   { event: "PreToolUse", target: "guard-tool-call" },
   { event: "PreToolUse", matcher: "spawn_agent", target: "deliver-stage-rules" },
   { event: "PostToolUse", matcher: "request_user_input", target: "record-human-turn" },

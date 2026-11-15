@@ -122,10 +122,9 @@ Everything above is mechanism. The irreducible knowledge-work — how to run a s
 
 ## Routing
 
-Each step names the stage protocol and the modules it runs by. Two protocols no step names are loaded at these moments:
+Each step names the stage protocol and the modules it runs by.
 
 - `{{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol-recovery.md` - load on session resume, or when a change event is detected mid-stage.
-- `{{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol-governance.md` - load at phase boundaries to run the phase-boundary traceability verification.
 
 When the step does not ask for the summary confirmation, generate directly from the stage answers with no consolidated-summary checkpoint or receipt. When `directive.ceremony.sensors === "off"`, `sensors_applicable` is empty and no sensor correction or rerun instructions apply. These switches never waive ordinary artifact verification, required decisions, Plan Approval, or the stage approval gate.
 

@@ -93,12 +93,15 @@ import {
 } from "../tools/aidlc-lib.ts";
 import { writeTargets } from "./review-freeze-command.ts";
 export {
+  heredocReading,
   leadingDirectoryChange,
   powerShellPathBoundWriter,
   shellCommandAltersExecutableResolution,
   shellCommandInvocationDetails,
   shellCommandInvocations,
+  shellPatchTargets,
   shellWriteTargets,
+  unseenPatch,
   type ShellInvocationDetails,
   type ShellInvocation,
   writeTargets,

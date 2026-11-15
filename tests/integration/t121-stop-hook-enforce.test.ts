@@ -5074,11 +5074,17 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
       seedCopilotDirective(proj);
       expect(runCopilotStop(proj).out === "", String(answered)).toBe(allowed);
     }
+    // The engine's open compose question is the step on record.
     for (const pending of [true, false]) {
       const proj = makeProject();
       seedInProgressWithQuestions(proj);
-      if (pending) writeFileSync(join(proj, "aidlc", ".aidlc-compose-pending"), "pending\n");
       seedCopilotDirective(proj);
+      if (pending) {
+        rewriteCopilotMarker(proj, (marker) => {
+          marker.kind = "ask";
+          marker.ask_type = "compose";
+        });
+      }
       expect(runCopilotStop(proj).out === "", String(pending)).toBe(pending);
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);

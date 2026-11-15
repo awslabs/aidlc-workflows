@@ -217,15 +217,15 @@ adds:                         # STRUCTURAL — set-unioned into the stage node
     - "Testability Requirements"          # declared; not enforced today (below)
     - "Coverage Targets"
 fragments:                    # PROSE — spliced into the stage body
-  - anchor: after-step:6
+  - anchor: after-step:5
     order: 100
 ---
 
-## fragment: after-step:6
+## fragment: after-step:5
 
-### Step 6b (test-pro): Capture testability NFRs
+### Step 5b (test-pro): Capture testability NFRs
 
-…prose the agent will see, appended after the target stage's Step 6…
+…prose the agent will see, appended after the target stage's Step 5…
 ```
 
 What you can add (all additive — **no override or removal**, by design). "Status"
@@ -466,16 +466,16 @@ when it owns no stage or scope.
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
-const root = join(
-  process.env.AIDLC_PROJECT_DIR ?? process.cwd(),
-  process.env.AIDLC_HARNESS_DIR ?? ".claude",
-);
+const harnessDir = process.env.AIDLC_HARNESS_DIR ?? ".claude";
+const root = join(process.env.AIDLC_PROJECT_DIR ?? process.cwd(), harnessDir);
+// The person's entry in this harness: Codex's is $aidlc.
+const entry = harnessDir === ".codex" ? "$aidlc" : "/aidlc";
 
 console.log(JSON.stringify({
   checks: [{
     pass: existsSync(join(root, "tools", "my-plugin-helper.ts")),
     label: "my-plugin helper installed",
-    fix: "Run `bun <harness-dir>/tools/aidlc-utility.ts plugin-sync` or re-run hooks/compose.ts.",
+    fix: `Run \`${entry} plugin sync\` (or re-run the plugin's \`hooks/compose.ts\`).`,
     severity: "error",
   }],
 }));
@@ -792,8 +792,7 @@ missing plugin node, or second-pass file change exits `1`; invalid command
 usage exits `2`. The live install is hashed before and after and is never a
 compose target.
 
-Pass `--harness` when the install is ambiguous, including `.kiro` (`kiro-v2` for
-Kiro CLI (V2) vs `kiro` for Kiro) and `.aidlc` (Copilot vs OpenCode). For a plugin built on a base,
+Pass `--harness` when the install is ambiguous. For a plugin built on a base,
 `--with <base-root>` composes your checkout of the base into the candidate
 first, as sync composes bases first, so the install does not need the base. The
 standalone tool reserves `--dist <version>` until RFC #722 milestone 2 defines

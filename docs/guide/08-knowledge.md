@@ -16,8 +16,8 @@ flowchart TD
 
     subgraph TIER2["Tier 2: Team Knowledge"]
         direction TB
-        TK_SHARED["aidlc/knowledge/aidlc-shared/\n(team-wide standards, optional)"]
-        TK_AGENT["aidlc/knowledge/<agent>/\n(team agent-specific, optional)"]
+        TK_SHARED["aidlc/spaces/<active-space>/knowledge/aidlc-shared/\n(team-wide standards, optional)"]
+        TK_AGENT["aidlc/spaces/<active-space>/knowledge/<agent>/\n(team agent-specific, optional)"]
     end
 
     subgraph RULES["Rules"]
@@ -72,12 +72,12 @@ The format references in `aidlc-shared/` (the audit taxonomy and the state, memo
 
 ### Tier 2: Team Knowledge
 
-**Location:** the active space — `aidlc/knowledge/` (shorthand for `aidlc/spaces/<space>/knowledge/`)
+**Location:** the active space, `aidlc/spaces/<space>/knowledge/` (`aidlc/spaces/default/knowledge/` on the default space)
 
-User-managed. Contains your company-specific standards, policies, and conventions. It belongs to one space; [what carries over](03-spaces-and-intents.md#what-carries-over-and-what-doesnt) between spaces and projects is listed in Spaces and Intents. It is a sibling of the space's `memory/`, `codekb/`, and `intents/` — so team knowledge accumulates across every intent in the space, not inside any one intent's record. It is **free-form and empty at bootstrap**: the engine just creates the empty `aidlc/knowledge/` directory on your first `/aidlc`. There is no fixed file set and no mandated structure. The convention below — an `aidlc-shared/` directory plus one per agent — is what the agent personas look for, so create the subdirectories you want as you go:
+User-managed. Contains your company-specific standards, policies, and conventions. It belongs to one space; [what carries over](03-spaces-and-intents.md#what-carries-over-and-what-doesnt) between spaces and projects is listed in Spaces and Intents. It is a sibling of the space's `memory/`, `codekb/`, and `intents/`, so team knowledge accumulates across every intent in the space, not inside any one intent's record. It is **free-form and empty at bootstrap**: the engine just creates the empty `aidlc/spaces/<space>/knowledge/` directory on your first `/aidlc`. There is no fixed file set and no mandated structure. The convention below (an `aidlc-shared/` directory plus one per agent) is what the agent personas look for, so create the subdirectories you want as you go:
 
 ```
-aidlc/knowledge/                  # empty at bootstrap; create the subdirs you need
+aidlc/spaces/<space>/knowledge/   # empty at bootstrap; create the subdirs you need
 ├── aidlc-shared/                 # if present, loaded by every agent
 │   ├── company-coding-standards.md
 │   └── company-architecture-principles.md
@@ -110,7 +110,7 @@ The ownership split is deliberate:
 | `aidlc/spaces/<space>/knowledge/documents/` | Your team | Original documents, organised and deleted by you |
 | `aidlc/spaces/<space>/knowledge/documentkb/` | AI-DLC | Derived index, metadata, and extracted text |
 
-Use `/aidlc knowledge onboard [path]` to add one document or sweep the folder.
+Use `/aidlc knowledge onboard [path ...]` to add one or more documents, or sweep the folder.
 For example, `/aidlc knowledge onboard docs/inventory-vision.md` in a Claude
 Code chat ends with this line from AI-DLC, which the agent passes on:
 
@@ -120,17 +120,37 @@ aidlc/spaces/default/knowledge/documents/inventory-vision.md and added it. The
 knowledge base reads that copy from now on, not your own inventory-vision.md.
 ```
 
-You can name a file or folder anywhere in your project: one that is not already
+You can name a file or folder anywhere in your project, or several in one
+command: one that is not already
 under `documents/` is copied in for you, keeping its name and a folder's layout,
 and the result says where the copy is. From then on the knowledge base reads
-that copy, so edit it under `documents/` and run `sync` to pick changes up.
+that copy. When you change your original, name it again: AI-DLC writes your new
+version over its copy, and the document keeps its ID and the work it belongs to.
+
+```text
+Updated aidlc/spaces/default/knowledge/documents/inventory-vision.md to your
+new inventory-vision.md. It stays the same document in the knowledge base.
+```
+
+That holds while the copy still holds what was copied. If it has changed (someone
+edited it under `documents/`, or a Windows clone of the project checked text files
+out with other line endings), your new version goes in beside it as
+`inventory-vision-2.md`, the earlier copy stays as it is, and the line says so. A
+folder you name again also goes in beside the first copy, as `<folder>-2`, and so
+does the first change to a copy made before AI-DLC kept a record of where its
+copies come from. To change the copy itself, edit it under `documents/` and run
+`sync`.
 Inside a folder you name, files git ignores are left where they are and the
 line says how many (name one of them directly and it is added, since you asked
 for it by name). A folder that git ignores as a whole is copied whole when you
 name it, and the line says the copy is not ignored, so it is committed unless
 you keep it out of git there too. A folder holding more documents than the batch cap, or a
 document over the per-document cap, is refused before anything is copied, so
-nothing is left behind to duplicate. A path outside the project is refused, and
+nothing is left behind to duplicate. When you name several, each one that
+cannot be added (it does not exist, it is outside the project, or it is a
+folder with nothing in it) is named at the start of the line with why, and the
+others are added; name only those again once they are fixed. Together they
+count toward the batch cap, and over it nothing is copied. A path outside the project is refused, and
 the folder is created if it is missing, so a sweep of an empty space adds
 nothing and says nothing is there.
 Use `sync` after files are added, edited, moved, or deleted; `list` shows every
@@ -191,21 +211,21 @@ See [CLI Commands](12-cli-commands.md) for every verb and flag, and
 
 ## Adding Company Standards
 
-Place your company-specific files in the appropriate `aidlc/knowledge/` directory. They are loaded automatically when the agent is activated — no configuration changes needed.
+Place your company-specific files in the appropriate `aidlc/spaces/<space>/knowledge/` directory. They are loaded automatically when the agent is activated, with no configuration changes needed.
 
 ### Team-wide standards (loaded by all agents)
 
-Add to `aidlc/knowledge/aidlc-shared/`:
+Add to `aidlc/spaces/<space>/knowledge/aidlc-shared/`:
 
 ```
-aidlc/knowledge/aidlc-shared/company-coding-standards.md
-aidlc/knowledge/aidlc-shared/company-architecture-principles.md
-aidlc/knowledge/aidlc-shared/naming-conventions.md
+aidlc/spaces/<space>/knowledge/aidlc-shared/company-coding-standards.md
+aidlc/spaces/<space>/knowledge/aidlc-shared/company-architecture-principles.md
+aidlc/spaces/<space>/knowledge/aidlc-shared/naming-conventions.md
 ```
 
 ### Agent-specific standards (loaded only when that agent is active)
 
-Add to `aidlc/knowledge/<agent-name>/`:
+Add to `aidlc/spaces/<space>/knowledge/<agent-name>/`:
 
 | Directory | Example Files |
 |-----------|--------------|
@@ -223,7 +243,7 @@ Add to `aidlc/knowledge/<agent-name>/`:
 
 ### Where the directories come from
 
-The team creates them. On your first `/aidlc` the engine creates the empty space-level `aidlc/knowledge/` directory — and nothing inside it. There is no scaffold command, no seeded per-agent subdirectories, and no guidance READMEs. The `aidlc-shared/` and per-agent subdirectories are a convention the agent personas look for; create the ones you have content for. Match the agent slug exactly (`aidlc-architect-agent/`, not `architect/`) — a typo'd directory name is silently ignored.
+The team creates them. On your first `/aidlc` the engine creates the empty space-level `aidlc/spaces/<space>/knowledge/` directory, and nothing inside it. There is no scaffold command, no seeded per-agent subdirectories, and no guidance READMEs. The `aidlc-shared/` and per-agent subdirectories are a convention the agent personas look for; create the ones you have content for. Match the agent slug exactly (`aidlc-architect-agent/`, not `architect/`): a typo'd directory name is silently ignored.
 
 ---
 
@@ -274,8 +294,8 @@ Error responses follow:
 
 | Wrong | Right |
 |-------|-------|
-| Editing `.claude/agents/aidlc-architect-agent.md` | Add a file under `aidlc/knowledge/aidlc-architect-agent/` |
-| Editing `.claude/knowledge/aidlc-architect-agent/architecture-guide.md` | Add a file under `aidlc/knowledge/aidlc-architect-agent/` |
+| Editing `.claude/agents/aidlc-architect-agent.md` | Add a file under `aidlc/spaces/<space>/knowledge/aidlc-architect-agent/` |
+| Editing `.claude/knowledge/aidlc-architect-agent/architecture-guide.md` | Add a file under `aidlc/spaces/<space>/knowledge/aidlc-architect-agent/` |
 | Putting everything in `knowledge/aidlc-shared/` | Use agent-specific directories unless the standard truly applies to all 14 agents |
 | One large `company-standards.md` covering API, auth, data, and logging | Split into `api-gateway-standards.md`, `auth-standards.md`, etc. |
 
@@ -309,7 +329,7 @@ The approval question stays open while you ask. If your file is missing, check t
 <record>/audit/        # per-clone shards; glob and merge by timestamp
 ```
 
-Find the most recent `STAGE_STARTED` entry for your stage and confirm the **Agent** field is the one whose knowledge directory holds your file — that tells you the right persona activated and its `aidlc/knowledge/<agent>-agent/` directory was in scope. The audit trail records which agent ran, not the individual files it read; use Option 1 to confirm a specific file was loaded.
+Find the most recent `STAGE_STARTED` entry for your stage and confirm the **Agent** field is the one whose knowledge directory holds your file: that tells you the right persona activated and its `aidlc/spaces/<space>/knowledge/<agent>-agent/` directory was in scope. The audit trail records which agent ran, not the individual files it read; use Option 1 to confirm a specific file was loaded.
 
 **Option 3 — Run a fast workflow to smoke-test.** For a lightweight end-to-end check, use a small scope that exercises the target agent:
 
@@ -350,8 +370,8 @@ Smaller focused files are easier to update, easier to review, and less likely to
 If a standard originally written for one agent turns out to apply across the team, move it up:
 
 ```
-aidlc/knowledge/aidlc-architect-agent/naming-conventions.md
-  →  aidlc/knowledge/aidlc-shared/naming-conventions.md
+aidlc/spaces/<space>/knowledge/aidlc-architect-agent/naming-conventions.md
+  ->  aidlc/spaces/<space>/knowledge/aidlc-shared/naming-conventions.md
 ```
 
 The `aidlc-shared/` directory is loaded by every agent (step 4 in the loading order).
@@ -409,11 +429,11 @@ sequenceDiagram
     Note over AM: Agent-specific methodology
     AM-->>O: Agent methodology loaded
 
-    O->>TK: Step 4: Load aidlc/knowledge/aidlc-shared/
+    O->>TK: Step 4: Load aidlc/spaces/[space]/knowledge/aidlc-shared/
     Note over TK: Team shared knowledge (if exists)
     TK-->>O: Team knowledge loaded
 
-    O->>TAK: Step 5: Load aidlc/knowledge/[agent-name]/
+    O->>TAK: Step 5: Load aidlc/spaces/[space]/knowledge/[agent-name]/
     Note over TAK: Team agent-specific knowledge (if exists)
     TAK-->>O: Team agent knowledge loaded
 
@@ -431,8 +451,8 @@ sequenceDiagram
 | 1 | `aidlc/spaces/<active-space>/memory/` | The resolved org → team → project → phase → stage rule chain | Behavioral rules — every applicable rule loads (strict-additive) |
 | 2 | `.claude/knowledge/aidlc-shared/` | Shared methodology principles | Framework-level defaults |
 | 3 | `.claude/knowledge/<agent>/` | Agent-specific methodology | Agent expertise |
-| 4 | `aidlc/knowledge/aidlc-shared/` | Team-wide standards | Your company defaults |
-| 5 | `aidlc/knowledge/<agent>/` | Team agent-specific standards | Your company + agent expertise |
+| 4 | `aidlc/spaces/<space>/knowledge/aidlc-shared/` | Team-wide standards | Your company defaults |
+| 5 | `aidlc/spaces/<space>/knowledge/<agent>/` | Team agent-specific standards | Your company + agent expertise |
 | 6 | Prior stage artifacts | Outputs from earlier stages | Runtime context |
 
 **Key points:**
@@ -467,12 +487,12 @@ If you want to **constrain** how the agent applies a methodology principle, add 
 `.claude/agents/*.md` defines the projected persona and tool access, and the
 packager adds its mandatory delegated knowledge preflight. Editing that
 generated file to add team knowledge is a common mistake — the changes are
-overwritten on framework upgrade. Always use `aidlc/knowledge/<agent>/`
+overwritten on framework upgrade. Always use `aidlc/spaces/<space>/knowledge/<agent>/`
 instead.
 
 ### Name the directories to match the agent slug
 
-The space-level `aidlc/knowledge/` directory is empty at bootstrap — you create the `aidlc-shared/` and per-agent subdirectories yourself as you accumulate standards. The directory name must match the agent slug exactly (e.g. `aidlc-architect-agent/`, not `architect/`); a typo'd name is silently ignored because the loader walks the agent's own directory by name and finds nothing.
+The space-level `aidlc/spaces/<space>/knowledge/` directory is empty at bootstrap: you create the `aidlc-shared/` and per-agent subdirectories yourself as you accumulate standards. The directory name must match the agent slug exactly (e.g. `aidlc-architect-agent/`, not `architect/`); a typo'd name is silently ignored because the loader walks the agent's own directory by name and finds nothing.
 
 ---
 

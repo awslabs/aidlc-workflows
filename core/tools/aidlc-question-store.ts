@@ -21,6 +21,7 @@ import {
   sessionRecordPath,
   SPACE_NAME_REGEX,
   sessionsDir,
+  toPosix,
   validSessionId,
   writeRecordFileNoFollow,
 } from "./aidlc-lib.ts";
@@ -160,6 +161,17 @@ export function isQuestionId(id: string): boolean {
 function questionRel(projectDir: string, id?: string): string {
   const dir = join(sessionsDir(projectDir), "questions");
   return relative(projectDir, id === undefined ? dir : join(dir, `${id}.json`));
+}
+
+export function questionCopyPath(projectDir: string, id: string): string | null {
+  if (!QUESTION_ID.test(id)) return null;
+  const rel = questionRel(projectDir, id);
+  try {
+    if (!existsSync(recordFileTargetOrThrow(projectDir, rel))) return null;
+  } catch {
+    return null;
+  }
+  return toPosix(rel);
 }
 
 function isTargetList(value: unknown): value is QuestionTarget[] {

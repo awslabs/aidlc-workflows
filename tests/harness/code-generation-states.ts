@@ -13,6 +13,7 @@ import { expect } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
+import { codexRefusal } from "./codex-hook-answer.ts";
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "./test-budget.ts";
 import {
   AIDLC_SRC,
@@ -711,6 +712,12 @@ function stderrVerdict(result: RunResult): Verdict {
   return { code: result.status === 2 ? 2 : result.status === 0 ? 0 : result.status, said: result.status === 0 ? "" : result.stderr.trim() };
 }
 
+// The Codex adapter's guard-tool-call refuses on Windows with the deny JSON.
+function codexVerdict(result: RunResult): Verdict {
+  const refusal = codexRefusal({ code: result.status, stdout: result.stdout, stderr: result.stderr });
+  return refusal === null ? stderrVerdict(result) : { code: 2, said: refusal.trim() };
+}
+
 function claudeInput(call: ToolCall, dir: string): { tool_name: string; tool_input: Record<string, unknown> } {
   switch (call.tool) {
     case "Bash": return { tool_name: "Bash", tool_input: { command: respell(call.command, dir) } };
@@ -761,7 +768,7 @@ const codex: Shape = {
       CODEX_ENV,
     ));
   },
-  mcp: (proj, session) => stderrVerdict(spawnShape(
+  mcp: (proj, session) => codexVerdict(spawnShape(
     proj, [join(proj, ".codex", "hooks", "aidlc-codex-adapter.ts"), "guard-tool-call"],
     {
       hook_event_name: "PreToolUse", cwd: proj, session_id: session,

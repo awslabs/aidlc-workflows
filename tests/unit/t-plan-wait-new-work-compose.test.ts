@@ -254,7 +254,9 @@ describe("while a code plan waits, new work the person asks for is composed", ()
         ask_type: "plan-approval",
         state_sha256: "0".repeat(64),
       });
-      expect(shell(proj, "printf x > src/other.ts").stderr).toContain("no matching v2 code-generation active directive");
+      const refused = shell(proj, "printf x > src/other.ts").stderr;
+      expect(refused).toContain("cannot start: AI-DLC is not on the build step. ");
+      expect(refused).not.toMatch(/\bv2\b|active directive|ambiguous or stale/);
       composerRuns(proj);
       expect(write(proj, join(proj, "src", "slugify.ts")).code).toBe(2);
       expect(shell(proj, "echo 'export const s = 1;' > src/slugify.ts").code).toBe(2);

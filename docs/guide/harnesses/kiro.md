@@ -39,7 +39,7 @@ AI-DLC 2.11.3 and earlier, and the 2.11.4 previews of 2026-11-04 and 2026-11-05,
   `kiro-cli` on the PATH is older; it cannot read the Kiro IDE version.
 - **Claude Opus 4.8** selected as the chat model (see the note above)
 - **bun** only when generating or running the source/development `dist/`
-  projection. Native installs and versioned release runtimes are
+  projection or the versioned manual-copy runtime. Native installs are
   self-contained.
 
 > [!TIP]
@@ -74,7 +74,8 @@ aidlc doctor
 
 The installer verifies the release metadata, executable, and all-harness runtime archive against the published SHA-256 checksums. The installed runtime does not require Bun, Node.js, or Git. Harness selection happens in `aidlc config`.
 
-On Windows, download `install.ps1` and run
+On Windows, download `install.ps1`, allow scripts in that PowerShell window
+with `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force`, and run
 `& $installer`. If Kiro was open while you installed, including when you ran
 the installer in Kiro's own terminal, quit Kiro fully and reopen it before
 your first `/aidlc`: Kiro keeps the PATH it started with, so its hooks, its
@@ -83,7 +84,8 @@ agent and its other terminals cannot find `aidlc` until it restarts, and
 for account scope, automatic User PATH registration, and `-NoModifyPath`.
 For an air-gapped package, use
 `install.sh --from <release-directory> --offline` on Unix or
-`& $installer -From <release-directory> -Offline` on Windows.
+`& $installer -From <release-directory> -Offline` on Windows, after the same
+`Set-ExecutionPolicy` line.
 
 `aidlc config` projects the Kiro shell before the project is opened. The native
 `aidlc engine *` trust grant, and the exact read-only and turn-back-on commands
@@ -113,7 +115,7 @@ then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
 
 ```bash
 mkdir -p your-project/.kiro your-project/aidlc
-# Safe on fresh installs; required when upgrading from v2.5.56 or earlier.
+# Safe on fresh installs; required over an install from v2.5.56 or earlier.
 for retired_hook in \
   audit-logger block mint runtime-compile stop sync-statusline \
   enforce-approval-gate plan-approval-guard review-freeze state-transition-guard \
@@ -129,7 +131,7 @@ rm -f \
   your-project/.kiro/agents/aidlc-*-agent.json \
   your-project/.kiro/hooks/aidlc-*.kiro.hook
 # The copy replaces .kiro/settings/cli.json; keep the project's own first.
-if [ -f your-project/.kiro/settings/cli.json ]; then
+if [ -f your-project/.kiro/settings/cli.json ] && [ ! -f your-project/cli.json.before-aidlc ]; then
   cp your-project/.kiro/settings/cli.json your-project/cli.json.before-aidlc
 fi
 cp -R "$RUNTIME_ROOT/kiro-ide/.kiro/." your-project/.kiro/
@@ -137,7 +139,32 @@ cp -R "$RUNTIME_ROOT/kiro-ide/aidlc/." your-project/aidlc/     # the workspace s
 cd your-project && bun .kiro/tools/aidlc.ts config --from "$RUNTIME_ROOT" --harness kiro
 ```
 
-The first removal loop is the v2.5.57 hook-name migration. The second removes
+To move a project set up this way to a newer release, do not run the block
+again: its copy replaces `.kiro/tools/data/harness.json`, where the project
+keeps its plugin choices and setup answers, and your changes to the files it
+copies, without saying it reset them. Set `RUNTIME_ROOT` to the newer
+release's extracted `runtime/` directory and run only the setup command, from
+the project folder:
+
+```bash
+bun .kiro/tools/aidlc.ts config --from "$RUNTIME_ROOT"
+```
+
+It brings the project's AI-DLC files to that release and keeps the plugin
+choices and setup answers. It removes the AI-DLC files that release no longer
+ships and names them, so the removals in the copy block are not needed; if a
+change you made to an AI-DLC file conflicts with the refresh, it changes
+nothing and names the file. With no `--harness` it refreshes the one harness
+the project has; in a project that also has another harness, such as Claude
+Code's, it changes nothing and asks for one: add `--harness kiro-ide`, which
+releases before 2.11.4 also read as Kiro. This needs a project whose
+setup command ran on AI-DLC 2.11.0 or later; on 2.11.0, answer `y` if it asks
+to initialize the project, then run it once more, so that the newer release's
+own tool checks the setup. A project copied from an earlier release, or one
+whose setup command never ran, runs the whole block; that copy turns every
+plugin back on, so turn off again any you had turned off.
+
+In the copy block, the first removal loop is the v2.5.57 hook-name migration. The second removes
 Kiro CLI-format agent JSON shipped by older distributions and the IDE 0.x
 `.kiro.hook` registrations, which Kiro IDE 1.x never executes. An overlay copy
 cannot delete retired files. The copy also replaces `.kiro/settings/cli.json`,
@@ -148,8 +175,11 @@ than overwrite a copy that differs from the shipped one, and `--force` replaces
 it. Keep your own Kiro CLI settings in the user-level `~/.kiro/settings/cli.json`
 instead: Kiro CLI reads that file too, and the project file wins only for the
 keys it sets.
-If the project kept settings in `.kiro/settings/cli.json`, the block above saves
-them as `cli.json.before-aidlc` so you can move them there. Both removals are
+If the project kept settings in `.kiro/settings/cli.json`, the copy block saves
+them as `cli.json.before-aidlc` so you can move them there; a copy saved by an
+earlier run is kept, so running the block again never writes over it. Each run
+of the block puts AI-DLC's `.kiro/settings/cli.json` back, so make later changes in the
+user-level file. Both removals are
 no-ops on a fresh install. After that cleanup, the
 `cp -R <src>/. <dst>/` form copies the tree **contents** whether
 `your-project/.kiro` already exists or not. A plain
@@ -158,8 +188,7 @@ existing `.kiro/` and the IDE never sees the new files.
 
 The `aidlc/` directory is the workspace shell — it ships the pre-built
 `aidlc/spaces/default/memory/` method tree the engine reads. It is a **sibling**
-of `.kiro/`, so copy it separately (or copy the whole
-`$RUNTIME_ROOT/kiro-ide/` tree at once). `/aidlc --doctor` fails its
+of `.kiro/`, so copy it separately. `/aidlc --doctor` fails its
 "workspace shell ready" check if it is missing.
 
 In a copied project, the `aidlc` agent runs AI-DLC's engine commands
@@ -178,7 +207,7 @@ plan, holds one of them, the agent passes your words through a file it writes in
 `aidlc/.aidlc-request-text/` instead, so those words put no card in front of
 you.
 
-The versioned runtime uses the native `aidlc` command. Framework developers who
+Framework developers who
 need the Bun-shaped source projection can clone the repository, run
 `bun install --frozen-lockfile` and `bun scripts/package.ts`, then use the
 ignored local `dist/kiro-ide/` output instead.
@@ -195,10 +224,10 @@ workflow.
 
 The install ships:
 
-- `.kiro/skills/aidlc/SKILL.md`: AI-DLC's instructions to the aidlc agent. The
-  agent has them, with `question-rendering.md` and `composer.md` beside them,
-  from the first line of every chat, so it reads no file before acting on your
-  request.
+- `.kiro/skills/aidlc/SKILL.md` and `workflow.md`: AI-DLC's instructions to the
+  aidlc agent. The agent has them, with `question-rendering.md` and `composer.md`
+  beside them, from the first line of every chat, so it reads no file before
+  acting on your request.
 - `.kiro/agents/aidlc-aidlc.md` — the same conductor exposed in the workspace agent
   selector (named so it sorts before the `aidlc-*-agent.md` specialists: Kiro
   lists agents in file-name order, so `aidlc` comes first in the picker and in
@@ -308,7 +337,7 @@ Identical to the Claude Code harness: `/aidlc <description>` starts a
 workflow, `/aidlc --status` reports position, `/aidlc --doctor`, `--stage`,
 `--phase`, `--depth`, `--test-strategy`, and `--config [section]` all work, and the
 per-stage (`/aidlc-domain-design`) and per-scope (`/aidlc-feature`) runner
-skills are installed. There is no init command; the shipped shell scaffolds
+skills are installed. The shipped shell scaffolds
 the workspace, and AI-DLC automatically creates the first intent on your first `/aidlc`.
 
 ### Start AI-DLC in a Kiro IDE chat
@@ -331,10 +360,11 @@ and Kiro IDE does not read that file. So in each new Kiro IDE chat:
 3. Picking `aidlc` from the `/` menu does not change which agent the chat
    uses. If the chat is still on **Default**, AI-DLC's first move on your
    first request is its own command, which Kiro asks you to approve, and then
-   each command it runs asks. To avoid that, choose **aidlc** in the agent picker first (step 1).
+   each command it runs asks, unless Kiro's **Approve for me** mode is on.
+   To avoid that, choose **aidlc** in the agent picker first (step 1).
    On **Default** (or **Default v2**), AI-DLC says this once in the chat when you
    type an `/aidlc` request, unless you already chose **Always allow** for
-   AI-DLC's commands on one of Kiro's approval cards.
+   AI-DLC's commands on one of Kiro's approval cards or Approve for me is on.
    The `aidlc-...-agent` entries in the `/` menu are the specialists AI-DLC
    brings in during a workflow; you do not start them yourself.
 
@@ -343,28 +373,42 @@ With the `aidlc` agent selected you can also ask in plain words, for example
 Kiro's welcome panel (Spec, Plan, Bug Fix, Quick Spec) lists Kiro's own
 workflows; AI-DLC does not appear there, so start it from the chat as above.
 
-### Supervised or Autopilot
+### Supervised, Autopilot or Approve for me
 
-The **Autopilot** switch at the bottom right of the chat box (also under
-**Settings > Agent > Agent Autonomy**) sets how often Kiro itself asks you to
-approve what the agent does. You can change it at any time, even in the middle
-of a workflow. It does not change which AI-DLC checkpoints stop for you.
+In Kiro IDE, the **Autopilot** switch at the bottom right of the chat box (also
+under **Settings > Agent > Agent Autonomy**) sets how often Kiro itself asks
+you to approve what the agent does. In a chat where Kiro offers **Approve for
+me** (Kiro IDE 1.4.154 or later), that switch is a menu of three modes
+instead: **Supervised**, **Accept file changes** (formerly Autopilot) and
+**Approve for me**. You can change the mode at any time, even in the middle of
+a workflow. It does not change which AI-DLC checkpoints stop for you.
 
 - **Supervised** (switch off): after each turn that changes files, Kiro shows a
   **Review changes** card and waits until you choose **Accept** or **Reject**.
   AI-DLC keeps its questions, stage documents, and plans in files, so a
   workflow shows many of these cards on top of AI-DLC's own questions.
-- **Autopilot** (switch on): file changes go through without the card. Select
-  **View changes** in the chat to see what changed.
-- In both modes, Kiro asks you to **Allow** any command that the `aidlc` agent
-  does not already allow, such as your project's test command, a `git push`
-  or a recursive delete. Your own commands meet no AI-DLC rule, so once you
-  choose **Always allow** for one, Kiro remembers it, redirects and chains
-  included. AI-DLC's own commands ask
-  when one holds a redirect, a chain or a substitution (`>`, `&&`, `$(...)`),
-  so an allowed AI-DLC command cannot be stretched into another. Kiro also asks
-  before the two AI-DLC commands held back on purpose (see
-  [Native channel](#native-channel-recommended)).
+- **Accept file changes**, or **Autopilot** (switch on) where Kiro shows the
+  switch: file changes go through without the card. Select **View changes** in
+  the chat to see what changed.
+- **Approve for me**: file changes go through without the card too. For a
+  command or another action, your deny, ask and allow rules and the ones
+  AI-DLC installs decide first, so what AI-DLC's rules hold back or ask about
+  is held back or asked about as in the other modes. For an action no rule
+  settles, Kiro's model decides instead of asking you: it approves one it
+  judges safe, blocks one it judges unsafe, and asks you when it is unsure.
+- In Kiro CLI 2.36 or later (its v3 engine), the same choice is under
+  `/permissions` → **Policies**, where Kiro offers it: **approve for me** works
+  as in Kiro IDE, Kiro keeps the choice for this project, and the status line
+  shows **approve for me** while it is on.
+- In Supervised and Accept file changes (Autopilot), Kiro asks you to **Allow**
+  any command that the `aidlc` agent does not already allow, such as your
+  project's test command, a `git push` or a recursive delete. Your own commands
+  meet no AI-DLC rule, so once you choose **Always allow** for one, Kiro
+  remembers it, redirects and chains included.
+- In every mode, AI-DLC's own commands ask when one holds a redirect, a chain
+  or a substitution (`>`, `&&`, `$(...)`), so an allowed AI-DLC command cannot
+  be stretched into another. Kiro also asks before the two AI-DLC commands
+  held back on purpose (see [Native channel](#native-channel-recommended)).
 - In Kiro CLI (its v3 engine), when a side-by-side build's workers or
   reviewers ask, Kiro gathers their requests in a "tool approval pending" box;
   (f) **Approve all pending and auto-approve future subagent requests** lets
@@ -373,25 +417,34 @@ of a workflow. It does not change which AI-DLC checkpoints stop for you.
   same chat, for example after you answer one of AI-DLC's questions; if it
   appears again, you can choose (f) again. Requests from the main chat still
   ask as before, and Kiro writes no setting for (f).
+- In Kiro CLI 3.1.0 (its v3 engine), an approval card from the main chat for
+  one of your own commands has no **Always allow** item: it includes **Allow
+  once** and **Create allow rule to approve future similar actions**. The rule
+  Kiro offers first is **exact match · session** for that command: choosing it
+  lets the same command run again without a card, and a command with different
+  arguments, such as another test file, is not covered by that rule.
 
-In both modes, AI-DLC still stops and waits for your typed reply at each of its
+In every mode, AI-DLC still stops and waits for your typed reply at each of its
 questions, at every approval gate, and at Code Generation's **Approve Plan**
 when plan approval is on (the default in every shipped scope except express
 and poc, and yours to switch; see
-[Plan approval](../13-customization.md#plan-approval)). Kiro's switch cannot
-skip these. AI-DLC's hooks run in either mode: one refuses code changes
+[Plan approval](../13-customization.md#plan-approval)). Kiro's modes cannot
+skip these. AI-DLC's hooks run in every mode: one refuses code changes
 until the plan is approved or, with plan approval off, until AI-DLC has
 recorded that it builds the plan without asking. AI-DLC also accepts an answer
 or an approval only after you have typed a reply to the question. The AI-DLC
 setting that skips routine approvals is its own Construction choice
 **Continue automatically** (see
 [Your First Workflow](../02-your-first-workflow.md#construction-phase)), not
-Kiro's Autopilot.
+Kiro's Accept file changes or Approve for me.
 
 Use Supervised when you want to read every file change as it happens, for
 example on your first workflow or in code where every change matters. Use
-Autopilot when you want far fewer clicks: you still answer every AI-DLC
-checkpoint in chat, and can look over the changes afterwards.
+Accept file changes (Autopilot) when you want far fewer clicks: you still
+answer every AI-DLC checkpoint in chat, and can look over the changes
+afterwards. With Approve for me, Kiro's model can also answer command
+approvals for you; the ones it is unsure of, and the ones your rules or
+AI-DLC's ask about, still come to you.
 
 ### When the chat fills up
 
@@ -605,8 +658,19 @@ AI-DLC records the model and effort in `aidlc.settings.json` and writes
 `.kiro/agents/aidlc-architecture-reviewer-agent.md`; a Unit's reviewer copy
 keeps them. Kiro reads them when it next dispatches the agent, in a chat that
 is already open too. The model must be one your Kiro offers
-(`kiro-cli chat --list-models`, or Kiro IDE's model picker): one it does not
-offer can fail that agent's dispatch. An effort the model does not take runs
+(`kiro-cli chat --list-models`, or Kiro IDE's model picker): Kiro runs an
+agent whose model it does not offer on your chat's model, with that agent's
+effort, and shows no warning (measured on Kiro CLI 3.3.0 and Kiro IDE
+1.4.178). `aidlc config models`, `aidlc config models --check` and
+`aidlc doctor` compare the agent models with the list of the account
+`kiro-cli` is signed in to and name one that is not in it. When that list
+cannot be read (`kiro-cli` not found, not signed in, or offline),
+`config models` says it could not check, and doctor says so with `--verbose`.
+`config models` prints each such line as a `Note:`, or as a `Warning:` line
+with `--quiet`; with `--json` the check is `agentModels` and its lines are in
+`notes`, under `models` when the run writes files or plans to (`--dry-run`),
+and at the top of `data` for `--check` and an unchanged policy.
+An effort the model does not take runs
 at the model's own default, and an agent given a model but no effort runs at
 that model's default effort, not your chat's. `--model default` and
 `--effort default` take them out again. A preset or a group effort
@@ -852,8 +916,8 @@ See [Porting to a New Harness](../../harness-engineering/09-porting-to-a-new-har
 > kiro-v2`), which pins no Kiro engine; start it with `kiro-cli --v2` (Kiro CLI 2.21.4 or later; for an older one, see
 > [Kiro CLI (V2) prerequisites](#kiro-cli-v2-prerequisites)). The
 > interactive `aidlc config` lists it as Kiro CLI (V2); when it detects Kiro
-> CLI 2.24.1 or later, it makes it the default over Kiro, except in Kiro IDE's
-> own terminal, where Kiro leads. For Kiro's v3 engine on Kiro CLI 2.24.1 or
+> CLI 2.24.1 or later, it makes Kiro the default over it, and you take Kiro CLI
+> (V2) by its number. For Kiro's v3 engine on Kiro CLI 2.24.1 or
 > later, use the Kiro harness (`--harness kiro`), listed as Kiro: it runs in
 > Kiro CLI (started with `kiro-cli --v3`) as well as Kiro IDE. In an existing
 > Kiro CLI (V2) project, `aidlc config --harness kiro` switches `.kiro/` to it
@@ -892,7 +956,7 @@ install).
   - without it, start with `kiro-cli chat` and no engine flag (for example
     `kiro-cli chat --agent aidlc`).
 - **bun** only when generating or running the source/development `dist/`
-  projection. Native installs and versioned release runtimes are
+  projection or the versioned manual-copy runtime. Native installs are
   self-contained.
 
 ### Kiro CLI (V2) install
@@ -913,12 +977,14 @@ aidlc doctor
 
 The installer verifies the release metadata, executable, and all-harness runtime archive against the published SHA-256 checksums. The installed runtime does not require Bun, Node.js, or Git. Harness selection happens in `aidlc config`.
 
-On Windows, download `install.ps1` and run
+On Windows, download `install.ps1`, allow scripts in that PowerShell window
+with `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force`, and run
 `& $installer`. See [Windows installation](../18-install-and-lifecycle.md#windows-powershell)
 for account scope, automatic User PATH registration, and `-NoModifyPath`.
 For an air-gapped package, use
 `install.sh --from <release-directory> --offline` on Unix or
-`& $installer -From <release-directory> -Offline` on Windows.
+`& $installer -From <release-directory> -Offline` on Windows, after the same
+`Set-ExecutionPolicy` line.
 
 `aidlc config` projects the Kiro shell before the first chat session. Then start
 Kiro from the project root:
@@ -942,18 +1008,64 @@ then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
 
 ```bash
 mkdir -p your-project/.kiro your-project/aidlc
-cp -R "$RUNTIME_ROOT/kiro/.kiro/." your-project/.kiro/
+# The copy replaces .kiro/settings/cli.json; keep the project's own first.
+if [ -f your-project/.kiro/settings/cli.json ] && [ ! -f your-project/cli.json.before-aidlc ]; then
+  cp your-project/.kiro/settings/cli.json your-project/cli.json.before-aidlc
+fi
+# Leave .kiro/settings/mcp.json to config, which merges it.
+if kiro_copy="$(mktemp -d)"; then
+  cp -R "$RUNTIME_ROOT/kiro/.kiro/." "$kiro_copy/"
+  rm -f "$kiro_copy/settings/mcp.json"
+  cp -R "$kiro_copy/." your-project/.kiro/
+  rm -rf "$kiro_copy"
+fi
 cp -R "$RUNTIME_ROOT/kiro/aidlc/." your-project/aidlc/    # the workspace shell (spaces/default/memory) — a sibling of .kiro/, not inside it
 cd your-project && bun .kiro/tools/aidlc.ts config --from "$RUNTIME_ROOT" --harness kiro-v2
 ```
 
+To move a project set up this way to a newer release, do not run the block
+again: its copy replaces `.kiro/tools/data/harness.json`, where the project
+keeps its plugin choices and setup answers, and your changes to the files it
+copies, without saying it reset them; at a terminal the setup then asks the
+Models question again. Set `RUNTIME_ROOT` to the newer release's extracted
+`runtime/` directory and run only the setup command, from the project folder:
+
+```bash
+bun .kiro/tools/aidlc.ts config --from "$RUNTIME_ROOT"
+```
+
+It brings the project's AI-DLC files to that release and keeps the plugin
+choices and setup answers. It removes the AI-DLC files that release no longer
+ships and names them; if a change you made to an AI-DLC file conflicts with
+the refresh, it changes nothing and names the file. With no `--harness` it
+refreshes the one harness the project has; in a project that also has another
+harness, such as Claude Code's, it changes nothing and asks for one: add `--harness kiro-v2` when the
+project is on AI-DLC 2.11.4 or later, and `--harness kiro` when it is on
+2.11.3 or earlier or a 2.11.4 preview of 2026-11-04 or 2026-11-05. This needs a
+project whose setup command ran on AI-DLC 2.11.0 or later; on 2.11.0, answer
+`y` if it asks to initialize the project, then run it once more, so that the
+newer release's own tool checks the setup. A project copied from an earlier
+release, or one whose setup command never ran, runs the whole block; that
+copy turns every plugin back on, so turn off again any you had turned off.
+
+The copy block replaces `.kiro/settings/cli.json`, which sets `chat.defaultAgent` to
+`aidlc`, and each run of the block puts AI-DLC's file back. Keep your own Kiro CLI settings
+in the user-level `~/.kiro/settings/cli.json` instead: Kiro CLI reads that file
+too, and the project file wins only for the keys it sets. If the project kept
+settings in `.kiro/settings/cli.json`, the copy block saves them as
+`cli.json.before-aidlc` so you can move them there; a copy saved by an earlier
+run is kept, so running the block again never writes over it. The block copies
+`.kiro/` through a temporary folder without `settings/mcp.json`, so a project's
+own `.kiro/settings/mcp.json` is left for `config`, which keeps your servers and
+your changes to them and adds the AI-DLC servers it does not have yet, turned
+off. A project without one gets AI-DLC's.
+
 The `aidlc/` directory is the workspace shell — it ships the pre-built
 `aidlc/spaces/default/memory/` method tree the engine reads. It is a **sibling**
-of `.kiro/`, so copy it separately (or copy the whole
-`$RUNTIME_ROOT/kiro/` tree at once).
+of `.kiro/`, so copy it separately.
 `/aidlc --doctor` fails its "workspace shell ready" check if it is missing.
 
-The versioned runtime uses the native `aidlc` command. Framework developers who
+Framework developers who
 need the Bun-shaped source projection can clone the repository, run
 `bun install --frozen-lockfile` and `bun scripts/package.ts`, then use the
 ignored local `dist/kiro/` output instead.
@@ -1071,6 +1183,19 @@ Start `kiro-cli --v2` in the project, then invoke the conductor with
 navigation uses `/aidlc intent [name]`, `/aidlc space [name]`, and
 `/aidlc space-create <name>`. The per-stage (`/aidlc-domain-design`) and
 per-scope (`/aidlc-feature`) runner skills are installed too.
+
+**What Kiro changes in a request.** On Kiro CLI 3.2.0 (measured on Linux), the
+v2 engine changes what you type or paste after `/aidlc` before AI-DLC receives
+it: line breaks, tabs and runs of spaces become single spaces, and a word or
+phrase wrapped in double quotes, such as `""` or `"open"`, loses them. This
+happens to a short request too. Code in a pasted spec loses its indentation
+and some of its quotes, and `<document>` markers do not prevent it. To have the
+workflow read a spec from a file instead, save it in the project and name the
+file in your request, for example
+`/aidlc Read ./spec.md and build what it describes`
+([Starting from an existing document](../02-your-first-workflow.md#starting-from-an-existing-document)).
+In the same measurement, a reply typed later in the chat, with no slash
+command, kept its line break and quotes.
 
 Status, doctor, help, version, and workspace-navigation commands are dispatched
 by the Kiro hook before the model can turn them into workflow work. Their child

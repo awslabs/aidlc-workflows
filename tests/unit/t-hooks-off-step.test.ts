@@ -20,6 +20,7 @@ import { chmodSync, cpSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdi
 import { tmpdir } from "node:os";
 import { dirname, join, normalize } from "node:path";
 import { HOOKS_OFF_RERUN, hooksHealthDir, unattendedHumanPresenceHint } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { REQUEST_MAX_BYTES } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import { cleanupTestProject, REPO_ROOT, toPortablePath } from "../harness/fixtures.ts";
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -97,7 +98,7 @@ const HARNESSES: Harness[] = [
     dir: ".kiro",
     lines: () => [
       "In Kiro CLI, quit Kiro and start `kiro-cli --v3` again in this folder (if Kiro asks whether you trust this workspace and you know what is in this folder, choose 'Trust, continue'), then type /aidlc to carry on. If you " +
-        "drive Kiro from an ACP client, the Kiro IDE guide names what that client must send.",
+        "drive Kiro from an ACP client, the AI-DLC guide for Kiro names what that client must send.",
     ],
   },
 ];
@@ -692,6 +693,46 @@ describe("the request the first next stopped with carries on after the restart",
       expect(noWorkflow(next(proj, h))).toBe(true);
     });
   }
+
+  // One number for how much a request can carry (REQUEST_MAX_BYTES): a request a request file can carry is kept at
+  // the stop and read back whole, never turned away by a smaller limit of the kept record's own.
+  test("a request between 64 KiB and the request size is kept at the stop and carried on with whole, once", () => {
+    const proj = installed(OPENCODE);
+    const words = Array.from({ length: 900 }, (_, i) =>
+      `Section ${i}. The ledger keeps every task a team adds, with its owner and its due day.`).join("\n");
+    expect(Buffer.byteLength(words, "utf-8")).toBeGreaterThan(64 * 1024);
+    expect(Buffer.byteLength(words, "utf-8")).toBeLessThan(REQUEST_MAX_BYTES);
+    mkdirSync(join(proj, "aidlc", ".aidlc-request-text"), { recursive: true });
+    writeFileSync(join(proj, "aidlc", ".aidlc-request-text", "request.txt"), words, "utf-8");
+    expect(isStop(next(proj, OPENCODE, {}, ["--request-file", "aidlc/.aidlc-request-text/request.txt"]))).toBe(true);
+    beat(proj, "record-human-turn");
+    const picked = next(proj, OPENCODE) as Routed;
+    expect(picked.narration ?? "", JSON.stringify(picked)).toStartWith(LINE);
+    const questions = join(proj, "aidlc", ".aidlc-sessions", "questions");
+    const texts = readdirSync(questions).filter((name) => name.endsWith(".json"))
+      .map((name) => (JSON.parse(readFileSync(join(questions, name), "utf-8")) as { text: string }).text);
+    expect(texts, "the request carried on with, whole").toContain(words);
+    expect(existsSync(kept(proj))).toBe(false);
+    expect(noWorkflow(next(proj, OPENCODE))).toBe(true);
+  });
+
+  // JSON writes most control characters as six bytes (an ESC from a terminal paste as \u001b), so a request near
+  // the size that is dense with them must still read back.
+  test("a request near the request size dense with ESC characters is kept at the stop and carried on with whole", () => {
+    const proj = installed(OPENCODE);
+    const line = (i: number) => `\x1b[1m\x1b[4mSection ${i}.\x1b[0m\x1b[0m ${"\x1b".repeat(24)} the ledger keeps every task.`;
+    const lines: string[] = [];
+    for (let i = 0; Buffer.byteLength([...lines, line(i)].join("\n"), "utf-8") < REQUEST_MAX_BYTES - 200; i++) lines.push(line(i));
+    const words = lines.join("\n");
+    expect(Buffer.byteLength(JSON.stringify(words), "utf-8")).toBeGreaterThan(2 * REQUEST_MAX_BYTES);
+    mkdirSync(join(proj, "aidlc", ".aidlc-request-text"), { recursive: true });
+    writeFileSync(join(proj, "aidlc", ".aidlc-request-text", "request.txt"), words, "utf-8");
+    expect(isStop(next(proj, OPENCODE, {}, ["--request-file", "aidlc/.aidlc-request-text/request.txt"]))).toBe(true);
+    beat(proj, "record-human-turn");
+    const picked = next(proj, OPENCODE) as Routed;
+    expect(picked.narration ?? "", JSON.stringify(picked).slice(0, 400)).toStartWith(LINE);
+    expect(existsSync(kept(proj))).toBe(false);
+  });
 
   test("a named scope is kept with the words, so the work starts as first asked", () => {
     const proj = installed(OPENCODE);

@@ -12,14 +12,17 @@
 // landed stay landed and done on the board; and that a claim opened before
 // the jump lands while Units Generation is still open; a teammate's clone,
 // fresh or a participant, that pulls main mid-replan keeps the board, since
-// only the checkout that went back runs Units Generation. Claiming while the
+// only the checkout that went back runs Units Generation; so does a lead who
+// had moved main on past the Unit stages before it. Claiming while the
 // plan is changed is in t-team-unit-replan-claim-warns.test.ts.
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterAll, afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
-import { seededStateFile } from "../harness/fixtures.ts";
+import { join } from "node:path";
+import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { AIDLC_SRC, seededStateFile } from "../harness/fixtures.ts";
 import {
   builtOnce,
   cleanupTempDirs,
@@ -227,6 +230,35 @@ describe("t-team-unit-replan-open-claims: a plan change while Units are claimed 
     const step = nextDirective(carol);
     expect(step.kind, String(step.message ?? step.kind)).not.toBe("run-stage");
     expect(String(step.message ?? "")).toContain("**Claimed:** beta (beta-team).");
+  });
+
+  test("a lead who moved main on past the Unit stages, then pulls main a teammate took back to Units Generation, keeps the board", () => {
+    const { seed, remote } = betaClaimed();
+    pull(seed);
+    const moved = runMergeTool(join(AIDLC_SRC, "tools", "aidlc-jump.ts"),
+      ["execute", "--target", "build-and-test", "--direction", "forward"], seed);
+    expect(moved.status, moved.out).toBe(0);
+    expect(currentStage(seed)).toBe("build-and-test");
+    const jumped = readAuditShardEvents(seed).filter((row) => row.event === "STAGE_JUMPED").at(-1)!;
+    expect(auditBlockField(jumped.block, "Unit Work")).toBe("kept");
+    git(seed, ["add", "-A"]);
+    git(seed, ["commit", "-m", "main moved on"]);
+    git(seed, ["push", "origin", "main"]);
+
+    const dana = clone(remote, "dana");
+    expect(reopenUnitsGeneration(dana).status).toBe(0);
+    expect(currentStage(dana)).toBe("units-generation");
+    git(dana, ["add", "-A"]);
+    git(dana, ["commit", "-m", "back to Units Generation"]);
+    git(dana, ["push", "origin", "main"]);
+
+    pull(seed);
+    git(seed, ["merge", "--ff-only", "origin/main"]);
+    expect(currentStage(seed)).toBe("units-generation");
+    const step = nextDirective(seed);
+    expect(step.kind, String(step.message ?? step.kind)).not.toBe("run-stage");
+    expect(String(step.message ?? "")).toContain("**Claimed:** beta (beta-team).");
+    expect(nextDirective(dana).stage).toBe("units-generation");
   });
 
   test("after the revised plan is approved and pushed, unit status and the board name the same claimable Units", () => {

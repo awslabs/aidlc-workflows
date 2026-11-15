@@ -278,7 +278,7 @@ describe("t198 mid-flow compose -> in-flight dispatch, not an advance", () => {
       expect(next.status, `${next.stdout}\n${next.stderr}`).toBe(0);
       const directive = directiveOf(next.stdout);
       expect(directive.kind).toBe("print");
-      const command = /on approve run `([^`]+)`/.exec(String(directive.message))?.[1];
+      const command = /on approve run `([^`]+)`/i.exec(String(directive.message))?.[1];
       expect(command).toBeDefined();
       // Fill only the approved proposal placeholders; execute the launcher
       // and route supplied to the conductor, so an invalid route cannot pass.

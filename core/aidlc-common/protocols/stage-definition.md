@@ -58,7 +58,7 @@ copies this table verbatim.
 | `summary_confirmation` | string | optional | `required` \| `if-present`. Marks stages using the consolidated answer review before artifact generation when `directive.ceremony.summary_confirmation` is `on`; `off` skips this checkpoint and receipt, not other required human decisions. `required` requires a questions file, exact `Looks correct` answer, human-backed receipt, unchanged questions-file digest, and native artifact writes after that receipt. `if-present` applies the same checks only when a conditional question flow created a questions file |
 | `for_each` | string | optional | artifact slug; stage runs once per instance of that artifact. Omit for once-per-workflow stages. Doctor validates the artifact is produced by an upstream stage |
 | `workspace_requires` | boolean | optional | Default `false`. `true` marks a stage that must write source code to the workspace root, not just planning docs under the per-intent record dir. The stage-completion artifact guard (`aidlc-state.ts` approve/advance/finalize/complete-workflow) then requires a file outside the `aidlc/` workspace tree and the harness dir, in the workspace or in one of the intent's recorded repos, before the stage can complete: a stage that wrote only its `produces[]` markdown but no code is refused. The flag also binds terminal reviews to the workspace source state (#629). On per-unit stages each terminal receipt additionally requires an engine-validated `source-manifest.json`, binds that unit's claimed paths, and completion compares the fresh claims against the stage-entry source baseline so unclaimed application-source changes fail closed (#662). The agent's writes to project files while a declaring stage is the step are never named by the line an approval says about files changed before Code Generation. Today only `code-generation` declares it |
-| `produces` | string[] | yes | empty allowed; lowercase-kebab artifact names — see [Artifact Vocabulary](../../../../docs/reference/16-artifact-vocabulary.md) for rules and the live registry tool |
+| `produces` | string[] | yes | empty allowed; lowercase-kebab artifact names |
 | `consumes` | object[] | yes | empty allowed; each entry `{artifact, required, conditional_on?, cited?}` |
 | `consumes[].artifact` | string | yes per entry | lowercase-kebab |
 | `consumes[].required` | boolean | yes per entry | Scoped to the active plan. `true` means "if the producing stage runs, this consume must be satisfied" — not a global assertion that the artifact always exists. Scopes that skip the producer (e.g., `bugfix` skipping `units-generation`) make the consume moot; the stage body handles graceful degradation. The reserved `when:` primitive will eventually let authors express richer predicates |
@@ -207,9 +207,8 @@ future contributor additions from colliding with planned primitives.
 | `blocks_on` | Completion dependency without data read. Splits today's overloaded `requires_stage` (which conflates "I consume your output" with "I run after you") |
 | `timeout`, `retry` | Execution budgets. Homed in sensor bindings and loop config, not stage frontmatter (mirrors Claude Code's task-API design — no primitive-level retry/timeout) |
 
-Precedent for the reserved-namespace pattern: the audit taxonomy in
-`docs/reference/06-hooks-and-tools.md` declares event names centrally before
-their owning tool or hook consumes them; `ERROR_LOGGED` and
+Precedent for the reserved-namespace pattern: the audit taxonomy declares
+event names centrally before their owning tool or hook consumes them; `ERROR_LOGGED` and
 `RECOVERY_COMPLETED` are current owned examples.
 
 **Consumer contract for `mode`:** orchestrator code reading the `mode` field
@@ -231,5 +230,3 @@ stderr when it sees that shape.
   flow, state tracking). This spec covers file format; stage-protocol covers
   behaviour.
 - `SKILL.md` — orchestrator routing and dispatch.
-- `docs/reference/15-stage-definition.md` — narrative counterpart for
-  contributors.

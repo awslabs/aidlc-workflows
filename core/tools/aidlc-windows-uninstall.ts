@@ -24,7 +24,7 @@ import {
   transactionState,
   writeOperation,
 } from "./aidlc-transaction.ts";
-import { assertSafeUninstallRoot } from "./aidlc-uninstall-plan.ts";
+import { assertSafeUninstallRoot, INSTALL_ROOT_ANSWERS } from "./aidlc-uninstall-plan.ts";
 import type { UninstallPlan } from "./aidlc-uninstall-plan.ts";
 
 export type WindowsUninstallPlan = UninstallPlan;
@@ -249,7 +249,7 @@ function deletionScopeBinding(journal: WindowsUninstallJournal): string {
   }), "utf-8").toString("base64");
 }
 
-function planPathKey(path: string): string {
+export function planPathKey(path: string): string {
   const full = resolve(path);
   return process.platform === "win32" ? full.toLowerCase() : full;
 }
@@ -291,9 +291,7 @@ function assertDeletionPlan(
     }
   }
   const files = new Set<string>();
-  const settings = new Set([
-    "aidlc.settings.json", "update-check.json", "pins.json", "default-harness", "channel", "kiro-ide-workflows", "kiro-cli-workflows", "kiro-ide-settings-error-told", "kiro-ide-terminal",
-  ].map((name) => planPathKey(join(root, name))));
+  const settings = new Set(INSTALL_ROOT_ANSWERS.map((name) => planPathKey(join(root, name))));
   for (const file of plan.files) {
     if (
       !file || typeof file !== "object" || Array.isArray(file) ||
@@ -1200,20 +1198,22 @@ export type WindowsUninstallRecovery = {
   retriedFailures: WindowsUninstallFailure[];
 };
 
+function removeWindowsUninstallFence(fencePath: string): void {
+  const root = machineTransactionRoot();
+  executePlan({
+    schemaVersion: 1,
+    root,
+    operations: [{
+      kind: "remove",
+      path: relative(root, fencePath),
+      expected: transactionState(fencePath),
+    }],
+  }, { allowPendingWindowsUninstall: true });
+}
+
 function settleFinishedJournal(path: string): void {
   const fencePath = windowsUninstallFencePath();
-  if (existsSync(fencePath) && fenceReferencesJournal(fencePath, path)) {
-    const root = machineTransactionRoot();
-    executePlan({
-      schemaVersion: 1,
-      root,
-      operations: [{
-        kind: "remove",
-        path: relative(root, fencePath),
-        expected: transactionState(fencePath),
-      }],
-    }, { allowPendingWindowsUninstall: true });
-  }
+  if (existsSync(fencePath) && fenceReferencesJournal(fencePath, path)) removeWindowsUninstallFence(fencePath);
   // A completion interrupted after the fence went can leave the emptied root.
   try {
     const journal = JSON.parse(readFileSync(path, "utf-8")) as { installRoot?: unknown; retired?: unknown };
@@ -1260,10 +1260,14 @@ export function recoverWindowsUninstallContinuations(
     resumed: 0, running: 0, failed: [], replanned: 0, retriedFailures: [],
   };
   const scan = scanWindowsUninstallJournals();
-  if (scan.invalid.length > 0) {
-    throw new Error(
-      `invalid Windows uninstall journal(s): ${scan.invalid.join(", ")}`,
-    );
+  // A leftover nothing can run (its journal gone, unreadable or changed) is
+  // never launched and stops no command; the fence still holds machine
+  // changes. Uninstall and a reinstall, which the person asked for, clear it.
+  if (options.retryFailed === true) {
+    for (const path of scan.invalid) {
+      if (path === windowsUninstallFencePath()) removeWindowsUninstallFence(path);
+      else for (const file of [path, path.replace(/\.json$/, ".ps1")]) rmSync(file, { force: true });
+    }
   }
   const now = Date.now();
   const classified = scan.pending.map((item) => ({

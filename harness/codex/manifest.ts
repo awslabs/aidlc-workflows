@@ -57,6 +57,9 @@ const manifest: HarnessManifest = {
   hostShell: { env: ["CODEX_SESSION_ID", "CODEX_THREAD_ID"] },
   // A clean chat for new work started beside other work.
   newChatStep: { text: "open a new chat, then type <entry>" },
+  // request_user_input takes two or three options besides its own "None of
+  // the above" (question-rendering.md, Track 1), so a question is lettered A-C.
+  questionOptions: 3,
   harnessDir: ".codex",
   orchestratorSkillPath: ".agents/skills/aidlc/SKILL.md",
   tierFlavor: "codex",
@@ -83,6 +86,9 @@ const manifest: HarnessManifest = {
           // The variant shipped before the block ignored aidlc/.aidlc-request-text/
           // (a request the engine has not read yet).
           "sha256:345fbe9fe620718510ecfe9d478233ccf4a5318522884b50fc5540559ace3eed",
+          // The variant shipped before the block ignored a Bolt worktree's metadata
+          // (.aidlc/worktree-meta.json, .aidlc/base-source-listing.tsv).
+          "sha256:c2b1232b28a8b5474f7ef8363452f75399366ef227c59d75fa85d7aa2edca7ac",
         ],
       },
     },
@@ -118,6 +124,8 @@ const manifest: HarnessManifest = {
           "sha256:c7843449d549d4226be39169a9c31bf89694cd0b0754cb1ee68bdf61759538ce",
           // The variant shipped before the onboarding waited for the person to invoke AI-DLC.
           "sha256:6de1298dfa4c2b6916f66d372b844faf23481c8f258eedd595c1423dab8e106d",
+          // The variant whose Documentation section named this repository's docs/ folder.
+          "sha256:6d3bf5865f1836575715ea93d0042b9d08bcab918cc9a17a142848fe44e88bc7",
         ],
       },
     },

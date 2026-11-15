@@ -108,17 +108,17 @@ function embedShippedEntrypoints(raw: string, distRoot: string): string {
   return raw.replace(marker, `/* @aidlc-shipped-entrypoints@ */ ${rendered}`);
 }
 
-// The adapter imports its leaf tools from core/ in this repository; in a
+// The adapter imports its leaf modules from core/ in this repository; in a
 // project they sit in the engine tree beside .opencode/ (both channels ship
 // it), never inside .opencode/, which opencode scans for tools.
-const PLUGIN_TOOL_IMPORTS = ["aidlc-executable-path.ts"];
+const PLUGIN_LEAF_IMPORTS = ["tools/aidlc-executable-path.ts", "hooks/review-freeze-command.ts"];
 
 function projectedToolImports(raw: string, harnessDir: string): string {
   let out = raw;
-  for (const file of PLUGIN_TOOL_IMPORTS) {
-    const authored = `"../../../core/tools/${file}"`;
-    if (!out.includes(authored)) throw new Error(`opencode adapter no longer imports ${file} from core/tools.`);
-    out = out.replaceAll(authored, `"../../${harnessDir}/tools/${file}"`);
+  for (const file of PLUGIN_LEAF_IMPORTS) {
+    const authored = `"../../../core/${file}"`;
+    if (!out.includes(authored)) throw new Error(`opencode adapter no longer imports ${file} from core.`);
+    out = out.replaceAll(authored, `"../../${harnessDir}/${file}"`);
   }
   return out;
 }

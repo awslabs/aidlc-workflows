@@ -20,6 +20,8 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative, sep } from "node:path";
 import { renderCompletion, type Shell } from "../../core/tools/aidlc-completions.ts";
 import { preservedUninstallPaths, windowsPosixShim } from "../../core/tools/aidlc-lifecycle.ts";
+import * as kiroTerminal from "../../core/tools/aidlc-kiro-ide-terminal.ts";
+import * as kiroWorkflows from "../../core/tools/aidlc-kiro-ide-workflows.ts";
 import { buildUninstallPlan, untrustedPathList } from "../../core/tools/aidlc-uninstall-plan.ts";
 
 const VERSION = "1.2.3";
@@ -209,13 +211,28 @@ describe("uninstall file ownership plans", () => {
     });
   }
 
-  test("purge plans the Kiro settings-error and Kiro CLI Workflows markers with the machine's other answers; uninstall keeps them", () => {
+  // Every file AI-DLC writes into the install root by itself is one of its own:
+  // uninstall keeps it with the machine's other answers and never lists it as a
+  // file it did not install; --purge removes it. Kiro IDE's terminal records are
+  // written there at each chat start on Windows, after a slow reply and with its
+  // one warning. A record added to either Kiro module later fails here.
+  test("purge plans the Kiro markers and terminal records with the machine's other answers; uninstall keeps them unlisted", () => {
     withInstall((fixture) => {
-      for (const name of ["kiro-ide-settings-error-told", "kiro-cli-workflows"]) {
+      const exported = [...Object.entries(kiroTerminal), ...Object.entries(kiroWorkflows)]
+        .filter(([name, value]) => name.endsWith("_FILE") && typeof value === "string")
+        .map(([, value]) => value as string);
+      const names = new Set([
+        "kiro-ide-settings-error-told", "kiro-cli-workflows",
+        "kiro-ide-terminal-dropped", "kiro-ide-terminal-warned", "kiro-ide-terminal-shell",
+        ...exported,
+      ]);
+      for (const name of names) {
         const marker = join(fixture.root, name);
         put(marker, "told\n");
         expect(plan(fixture, true).files.some((file) => file.path === marker), name).toBe(true);
         expect(plan(fixture, false).files.some((file) => file.path === marker), name).toBe(false);
+        expect(plan(fixture, false).preserved, name).not.toContain(marker);
+        expect(plan(fixture, true).preserved, name).not.toContain(marker);
       }
     });
   });

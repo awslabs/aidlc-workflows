@@ -128,11 +128,6 @@ Assess the user's request for:
 
 ### Step 3: Determine Depth
 
-Based on complexity assessment:
-- **Minimal**: Clear request, narrow scope, well-understood domain
-- **Standard**: Moderate scope, some unknowns, multiple stakeholders
-- **Comprehensive**: Large scope, significant unknowns, complex domain
-
 ### Step 4: Assess Current Requirements
 
 Extract and organize what is already known from the user's input:
@@ -167,7 +162,7 @@ PROACTIVE: Always generate clarifying questions unless requirements are exceptio
 
 Create `<record>/inception/requirements-analysis/requirements-analysis-questions.md` using the [Answer]: tag format from stage-protocol.md. Include context-appropriate questions with {{OPTION_LETTERS}} options. Every ordinary clarifying question MUST end with `X. Other (please specify)` as the final option; the later Consolidated Summary Confirmation is the unlettered exception. Leave all [Answer]: tags blank.
 
-Then follow the unified question flow from stage-protocol.md section 3: offer the user a choice between guided (interactive) and self-guided (file edit) modes. In either case, ensure all answers are written to the file before proceeding.
+Then follow the unified question flow from stage-protocol.md section 3.
 
 ### Step 7: Collect and Analyze Answers
 
@@ -176,7 +171,7 @@ After all answers are collected:
 2. Confirm ALL `[Answer]:` tags are filled in. If any are blank, present the unanswered questions as structured questions and write answers back. Do NOT proceed with partial answers.
 3. Then proceed with ambiguity detection and contradiction analysis on the full answer set.
 
-- MANDATORY ambiguity detection: scan ALL responses for vague language ("mix of", "not sure", "depends", "probably", "maybe")
+- MANDATORY ambiguity detection: scan ALL responses for vague language ("mix of", "not sure", "depends")
 - Check for contradictions between answers
 - Identify missing details needed for requirements generation
 
@@ -185,46 +180,11 @@ After all answers are collected:
 If ANY ambiguity, vagueness, or contradictions found in Step 7:
 - Create follow-up questions targeting the specific ambiguities
 - Resolve all ambiguities before proceeding
-- When in doubt, ask. Incomplete answers lead to poor designs.
+- Incomplete answers lead to poor designs.
 
 ### Step 9: Confirm the Consolidated Summary
 
 This step applies only when `directive.ceremony.summary_confirmation === "on"`. When it is `"off"`, proceed directly to Step 10 with no summary-confirmation prompt, entry, or receipt.
-
-MANDATORY PRE-GENERATION STOP when enabled: After every original and follow-up answer is
-filled, append or update a `## Consolidated Summary Confirmation` entry in
-`<record>/inception/requirements-analysis/requirements-analysis-questions.md`.
-The entry MUST contain:
-
-- An unordered bullet list summarizing every answer (never number these summary
-  items; the following structured question starts its own response keys at 1)
-- `Does this all look correct before I generate the requirements artifact?`
-- `Looks correct` and `Request changes` options
-- A blank `[Answer]:` tag
-
-Before presenting it, record the prompt with the checkpoint flags; a plain
-`decision` or `answer` is an ordinary question and never counts:
-
-```bash
-{{INVOKE}} engine log decision --stage requirements-analysis --checkpoint summary-confirmation --questions-file "<this questions-file path>" --decision "Does this all look correct before I generate the requirements artifact?" --options "Looks correct,Request changes"
-```
-
-Present that prompt as a structured question using the
-`Looks correct` / `Request changes` options from `stage-protocol.md`, then end
-the turn and wait for the user's response. After they respond, fill the
-confirmation `[Answer]:` with their exact choice, then record the receipt:
-
-```bash
-{{INVOKE}} engine log answer --stage requirements-analysis --checkpoint summary-confirmation --questions-file "<this questions-file path>" --details '<Looks correct or Request changes>'
-```
-
-If the user requests changes and their reply already says what should
-change, those words are the feedback. Otherwise ask **"What should change?"**
-and end the turn again, and do not update any answer until the user supplies
-that feedback. Then record the feedback, update the affected answers, reset the
-confirmation `[Answer]:` to blank, and repeat this step. Do NOT create
-`requirements.md` until the confirmation entry contains the user's explicit
-`Looks correct` answer and the receipt command succeeds.
 
 ### Step 10: Generate Requirements
 

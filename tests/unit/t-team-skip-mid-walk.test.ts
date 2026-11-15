@@ -496,7 +496,8 @@ describe("a jump that names one Unit on a team main that works every Unit itself
     expect(`${at.kind} ${at.stage}/${at.unit} ${at.gate ?? false}`, JSON.stringify(at)).toBe("run-stage functional-design/alpha false");
   });
 
-  // A jump that names no Unit, or asks for every Unit, is not read on the team walk.
+  // A jump that names no Unit, or asks for every Unit, back to a step alpha
+  // finished is not a reopen on the team walk: it goes as the plain jump.
   test("a jump naming no Unit, or every Unit, goes as it does without a Unit named", () => {
     for (const args of [["--stage", "nfr-design"], ["--stage", "nfr-design", "--every-unit"]]) {
       const proj = walk(["alpha", "beta"]);
@@ -515,5 +516,76 @@ describe("a jump that names one Unit on a team main that works every Unit itself
     ]);
     expect(res.status, res.out).toBe(0);
     expect(res.out).toContain("gamma is not one of this work's units (alpha, beta). Which one did you mean?");
+  });
+});
+
+// A forward jump on a team main that works every Unit itself moves only the
+// Unit in flight on, as on the solo walk: no step is marked skipped for
+// every Unit, so a later Unit still starts at its own first step.
+describe("a forward jump on a team main that works every Unit itself", () => {
+  const stageWideSkips = (proj: string): string[] =>
+    (readFileSync(stateFile(proj), "utf-8").match(/^- \[S\] (functional-design|nfr-requirements|nfr-design|infrastructure-design|code-generation)\b/gm) ?? []);
+  const jumped = (proj: string): number => readAuditShardEvents(proj).filter((row) => row.event === "STAGE_JUMPED").length;
+
+  test("before alpha has written anything: only alpha skips its design steps, and beta starts at Functional Design", () => {
+    const proj = walk(["alpha", "beta"], false);
+    const step = next(proj, ["--stage", "code-generation"]);
+    expect(commands(step)[0], JSON.stringify(step)).toBe(
+      "bun .claude/tools/aidlc-jump.ts execute --target code-generation --direction forward --units alpha " +
+        "--stages functional-design,nfr-requirements,nfr-design,infrastructure-design --scope feature",
+    );
+    const ran = runNamed(proj, commands(step)[0]);
+    expect(ran.status, ran.out).toBe(0);
+    expect(stageWideSkips(proj)).toEqual([]);
+    expect(jumped(proj)).toBe(0);
+    for (const stage of Object.keys(DESIGN)) expect(unitSkips(proj, stage), stage).toEqual(["alpha"]);
+    const at = next(proj);
+    expect(`${at.stage}/${at.unit}`, JSON.stringify(at)).toBe("code-generation/alpha");
+    // alpha's Code Generation is left out here (skipped for alpha), so the walk
+    // reaches alpha's approval and then the next Unit.
+    expect(runNamed(proj, report("code-generation", "alpha")).status).toBe(0);
+    approveAlpha(proj, "code-generation");
+    const beta = next(proj);
+    expect(`${beta.stage}/${beta.unit}`, JSON.stringify(beta)).toBe("functional-design/beta");
+  });
+
+  test("alpha waiting at its Functional Design approval: alpha skips the steps after it, and the approval stays", () => {
+    const proj = walk(["alpha", "beta"], 1, "per-stage");
+    const step = next(proj, ["--stage", "code-generation"]);
+    expect(commands(step)[0], JSON.stringify(step)).toBe(
+      "bun .claude/tools/aidlc-jump.ts execute --target code-generation --direction forward --units alpha " +
+        "--stages nfr-requirements,nfr-design,infrastructure-design --scope feature",
+    );
+    const ran = runNamed(proj, commands(step)[0]);
+    expect(ran.status, ran.out).toBe(0);
+    expect(stageWideSkips(proj)).toEqual([]);
+    expect(unitSkips(proj, "functional-design")).toEqual([]);
+    approveAlpha(proj, "functional-design");
+    const at = next(proj);
+    expect(`${at.stage}/${at.unit}`, JSON.stringify(at)).toBe("code-generation/alpha");
+  });
+
+  test("a jump to the step alpha is on lands there with nothing skipped", () => {
+    const proj = walk(["alpha", "beta"], 2);
+    const before = readFileSync(stateFile(proj), "utf-8");
+    const step = next(proj, ["--stage", "nfr-design"]);
+    expect(`${step.stage}/${step.unit}`, JSON.stringify(step)).toBe("nfr-design/alpha");
+    expect(String(step.message ?? "")).not.toContain("aidlc-jump.ts execute");
+    expect(readFileSync(stateFile(proj), "utf-8")).toBe(before);
+    expect(jumped(proj)).toBe(0);
+  });
+
+  test("a jump asked for every Unit stays stage-wide: every Unit skips the steps", () => {
+    const proj = walk(["alpha", "beta"], 1, "per-stage");
+    const step = next(proj, ["--stage", "code-generation", "--every-unit"]);
+    const named = commands(step).find((command) => command.includes("aidlc-jump.ts execute"));
+    expect(named ?? "", JSON.stringify(step)).not.toContain("--units");
+    if (named !== undefined) {
+      const ran = runNamed(proj, named);
+      expect(ran.status, ran.out).toBe(0);
+    }
+    expect(jumped(proj)).toBe(1);
+    expect(stageWideSkips(proj).length, JSON.stringify(step)).toBeGreaterThan(0);
+    for (const stage of Object.keys(DESIGN)) expect(unitSkips(proj, stage), stage).toEqual([]);
   });
 });

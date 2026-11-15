@@ -13,15 +13,17 @@
 // main checkout (an AI-DLC update to .gitignore) names the file and the step.
 // A change of the person's own that the landing keeps (Guard Policy off) is said
 // once the Unit has landed: not by a landing git did not start or that clashed,
-// and once by the same merge when it then lands.
+// and once by the same merge when it then lands. A Unit with nothing to change
+// lands with no commit and the batch goes on; settled by hand to what main
+// already has, it names no commit to undo.
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
-  auditBlockField, boltSlugForUnit, pendingPersonLines, readAuditShardEvents, workspaceSourceListing,
-  writeBaselineSourceSnapshot,
+  auditBlockField, boltSlugForUnit, currentSwarmSourceMergeChain, pendingPersonLines, readAuditShardEvents,
+  workspaceSourceListing, writeBaselineSourceSnapshot,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { codeGenerationRecordDir } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 import {
@@ -506,25 +508,31 @@ describe("a landing over the person's own change says so once it has landed", ()
     git(pd, ["-c", "user.name=AI-DLC Tests", "-c", "user.email=tests@example.com", "commit", "-qm", message]);
   };
 
-  // Guard Policy off, as the feature scope sets it. The agent committed one of
-  // AI-DLC's own records in the Unit's worktree by hand, and the main checkout
-  // holds the same record not committed, so git does not start the landing
-  // until it is committed there.
+  // Guard Policy off, as the feature scope sets it. Claude Code installed, so
+  // .gitignore is AI-DLC's root integration: the Unit's source adds a line to
+  // it, and an update the person took left another there not committed, so git
+  // does not start the landing until it is committed in the main checkout.
   function recordInTheWay(personChanges: boolean): { pd: string; record: string } {
     const pd = fixture(["alpha"], CHECK, false, null, "off");
+    const data = join(pd, ".claude", "tools", "data");
+    mkdirSync(data, { recursive: true });
+    writeFileSync(join(data, "harness.json"), JSON.stringify({ harnessDir: ".claude" }));
+    writeFileSync(join(data, "aidlc-projection.json"), JSON.stringify({ rootIntegrations: [{ path: ".gitignore", policy: "managed-block" }] }));
+    commit(pd, ["."], "install AI-DLC");
+    appendAuditEntry("STAGE_STARTED", { Stage: STAGE, "Source Baseline": writeBaselineSourceSnapshot(pd, STAGE, workspaceSourceListing(pd)!) }, pd);
     const prepared = prepare(pd);
     expect(prepared.code, `${prepared.out}\n${prepared.err}`).toBe(0);
     writeUnitSource(pd, "alpha", 2);
+    const ignore = join(wt(pd), ".gitignore");
+    writeFileSync(ignore, `${readFileSync(ignore, "utf-8")}dist/\n`);
     const checked = swarm(pd, ["check", "alpha"]);
     expect(checked.code, `${checked.out}\n${checked.err}`).toBe(0);
-    reviewRevisedSource(pd, "alpha");
-    const manifest = join(codeGenerationRecordDir(wt(pd), "alpha"), "source-manifest.json");
-    const record = relative(wt(pd), manifest).replace(/\\/g, "/");
-    const bytes = readFileSync(manifest);
-    commit(wt(pd), [record], "the Unit's work");
+    reviewRevisedSource(pd, "alpha", ["src/alpha.ts", ".gitignore"]);
     const finalized = swarm(pd, ["finalize", "--batch", "1", "--units", "alpha", "--claimed", "alpha"]);
     expect(finalized.code, `${finalized.out}\n${finalized.err}`).toBe(0);
-    writeFileSync(join(pd, record), bytes);
+    const record = ".gitignore";
+    // At the top, away from the Unit's line at the end, so git merges the two.
+    writeFileSync(join(pd, record), `aidlc/active-memory/\n${readFileSync(join(pd, record), "utf-8")}`);
     if (personChanges) writeFileSync(join(pd, "CHANGELOG.md"), "## Unreleased\n");
     return { pd, record };
   }
@@ -584,5 +592,145 @@ describe("a landing over the person's own change says so once it has landed", ()
     expect(landedNotices(landed))
       .toEqual([said, "Landed Unit alpha with src/alpha.ts settled by hand against what was already on main."]);
     expect(readFileSync(join(pd, "src", "alpha.ts"), "utf-8")).toBe("export const alpha = 7;\n");
+  });
+});
+
+// A Unit with nothing to change: on a loop-back replay the Units the fix does
+// not touch are already green and get no builder turn, so their reviewed source
+// is the base they forked from, and the squash brings nothing the main checkout
+// does not already hold. git has nothing to commit, so no commit is made, no
+// hook runs, and the Unit lands on the commit main is at.
+describe("a parallel Unit with nothing to change lands without a commit", () => {
+  const squashMessage = (pd: string) => join(pd, ".git", "SQUASH_MSG");
+  const merged = (pd: string) => readAuditShardEvents(pd).filter((row) => row.event === "SWARM_SOURCE_MERGED");
+
+  // Units built in parallel; only those in `changed` write their file. Each converges and is reviewed READY.
+  function built(units: string[], changed: string[]): string {
+    const pd = fixture(units);
+    const prepared = swarm(pd, ["prepare", "--batch", "1", "--units", units.join(","), "--base", "main"]);
+    expect(prepared.code, `${prepared.out}\n${prepared.err}`).toBe(0);
+    units.forEach((unit, index) => {
+      if (changed.includes(unit)) writeUnitSource(pd, unit, index + 2);
+      const checked = swarm(pd, ["check", unit]);
+      expect(checked.code, `${checked.out}\n${checked.err}`).toBe(0);
+      reviewRevisedSource(pd, unit, changed.includes(unit) ? [`src/${unit}.ts`] : []);
+    });
+    const finalized = swarm(pd, ["finalize", "--batch", "1", "--units", units.join(","), "--claimed", units.join(",")]);
+    expect(finalized.code, `${finalized.out}\n${finalized.err}`).toBe(0);
+    return pd;
+  }
+
+  function refuseEveryCommit(pd: string): void {
+    const dir = join(pd, ".git", "hooks");
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir, "pre-commit");
+    writeFileSync(path, "#!/bin/sh\necho 'no commits today' >&2\nexit 1\n");
+    chmodSync(path, 0o755);
+  }
+
+  test("its row is written, the batch goes on, no hook runs, and the same merge again changes nothing", () => {
+    const pd = built(["alpha", "beta"], ["alpha"]);
+    expect(land(pd, "alpha").code).toBe(0);
+    refuseEveryCommit(pd);
+    const head = git(pd, ["rev-parse", "HEAD"]);
+    const landed = land(pd, "beta");
+    expect(landed.code, `${landed.out}\n${landed.err}`).toBe(0);
+    const out = JSON.parse(landed.out) as { emitted: string; commit_sha: string; notices?: string[] };
+    expect(out.emitted).toBe("WORKTREE_MERGED");
+    expect(out.commit_sha).toBe(head);
+    expect(out.notices).toBeUndefined();
+    expect(git(pd, ["rev-parse", "HEAD"])).toBe(head);
+    expect(merged(pd).map((row) => auditBlockField(row.block, "Unit name"))).toEqual(["alpha", "beta"]);
+    expect(auditBlockField(merged(pd)[1].block, "Merge commit")).toBe(head);
+    expect(auditBlockField(merged(pd)[1].block, "Landed changes")).toBeNull();
+    expect(existsSync(squashMessage(pd))).toBe(false);
+    expect(existsSync(wt(pd, "beta"))).toBe(false);
+    expect((nextDirective(pd) as { kind: string }).kind).toBe("run-stage");
+    const again = land(pd, "beta");
+    expect(again.code, `${again.out}\n${again.err}`).toBe(0);
+    expect(JSON.parse(again.out)).toMatchObject({ emitted: null, source_authority: head, cleanup_reconciled: true });
+    expect(merged(pd)).toHaveLength(2);
+  });
+
+  test("when no Unit has anything to change, each lands on the commit the batch started from", () => {
+    const pd = built(["alpha", "beta"], []);
+    const head = git(pd, ["rev-parse", "HEAD"]);
+    for (const unit of ["alpha", "beta"]) {
+      const landed = land(pd, unit);
+      expect(landed.code, `${landed.out}\n${landed.err}`).toBe(0);
+    }
+    expect(git(pd, ["rev-parse", "HEAD"])).toBe(head);
+    expect(merged(pd).map((row) => auditBlockField(row.block, "Merge commit"))).toEqual([head, head]);
+    const chain = currentSwarmSourceMergeChain(pd, STAGE);
+    expect(chain.state).toBe("ready");
+    expect(chain.state === "ready" ? [...chain.units].sort() : []).toEqual(["alpha", "beta"]);
+    expect(existsSync(squashMessage(pd))).toBe(false);
+    expect((nextDirective(pd) as { kind: string }).kind).toBe("run-stage");
+  });
+
+  test("a landing an earlier release left staged with nothing in it lands on the same merge", () => {
+    const pd = built(["alpha", "beta"], ["alpha"]);
+    expect(land(pd, "alpha").code).toBe(0);
+    // What that release's landing ran before its `git commit` found nothing to commit.
+    const source = auditBlockField(readAuditShardEvents(pd).filter((row) =>
+      row.event === "SWARM_UNIT_CONVERGED" && auditBlockField(row.block, "Unit name") === "beta").at(-1)!.block, "Source Commit")!;
+    git(pd, ["merge", "--squash", source]);
+    expect(readFileSync(squashMessage(pd), "utf-8")).toContain(`commit ${source}`);
+    const head = git(pd, ["rev-parse", "HEAD"]);
+    const landed = land(pd, "beta");
+    expect(landed.code, `${landed.out}\n${landed.err}`).toBe(0);
+    expect(git(pd, ["rev-parse", "HEAD"])).toBe(head);
+    expect(merged(pd).map((row) => auditBlockField(row.block, "Unit name"))).toEqual(["alpha", "beta"]);
+    expect(existsSync(squashMessage(pd))).toBe(false);
+  });
+
+  test("a clash settled by keeping what main has lands without a commit, and offers no undo", () => {
+    const pd = fixture(["alpha", "beta"]);
+    const prepared = swarm(pd, ["prepare", "--batch", "1", "--units", "alpha,beta", "--base", "main"]);
+    expect(prepared.code, `${prepared.out}\n${prepared.err}`).toBe(0);
+    // alpha builds its own file and the shared one; beta only the shared one.
+    writeUnitSource(pd, "alpha", 2);
+    writeFileSync(join(wt(pd, "alpha"), "src", "shared.ts"), "export const shared = 2;\n");
+    writeFileSync(join(wt(pd, "beta"), "src", "shared.ts"), "export const shared = 3;\n");
+    for (const [unit, writes] of [["alpha", ["src/alpha.ts", "src/shared.ts"]], ["beta", ["src/shared.ts"]]] as const) {
+      const checked = swarm(pd, ["check", unit]);
+      expect(checked.code, `${checked.out}\n${checked.err}`).toBe(0);
+      reviewRevisedSource(pd, unit, [...writes]);
+    }
+    const finalized = swarm(pd, ["finalize", "--batch", "1", "--units", "alpha,beta", "--claimed", "alpha,beta"]);
+    expect(finalized.code, `${finalized.out}\n${finalized.err}`).toBe(0);
+    continueAutomatically(pd);
+    expect(landInChat(pd, "alpha").code).toBe(0);
+    expect(landInChat(pd, "beta").code).toBe(1);
+    git(pd, ["checkout", "--ours", "--", "src/shared.ts"]);
+    git(pd, ["add", "src/shared.ts"]);
+    const head = git(pd, ["rev-parse", "HEAD"]);
+    const landed = landInChat(pd, "beta");
+    expect(landed.code, `${landed.out}\n${landed.err}`).toBe(0);
+    expect(git(pd, ["rev-parse", "HEAD"])).toBe(head);
+    expect((JSON.parse(landed.out) as { notices?: string[] }).notices ?? []).toEqual([]);
+    // No commit was made, so there is nothing to show or revert: a revert of main's commit would undo alpha.
+    expect(pendingPersonLines(pd, CHAT).lines)
+      .toEqual(["Landed Unit beta with src/shared.ts settled by hand against what was already on main."]);
+    expect(existsSync(squashMessage(pd))).toBe(false);
+    // git's clash hint stays: only comment lines, which git strips from the person's next commit message.
+    const mergeMessage = join(pd, ".git", "MERGE_MSG");
+    const kept = existsSync(mergeMessage) ? readFileSync(mergeMessage, "utf-8").split(/\r?\n/) : [];
+    expect(kept.filter((text) => text.trim() !== "" && !text.startsWith("#"))).toEqual([]);
+    expect(merged(pd).map((row) => auditBlockField(row.block, "Unit name"))).toEqual(["alpha", "beta"]);
+  });
+
+  test("landed as a merge commit, a Unit with nothing to change still gets its merge commit", () => {
+    const pd = built(["alpha", "beta"], ["alpha"]);
+    expect(land(pd, "alpha").code).toBe(0);
+    const head = git(pd, ["rev-parse", "HEAD"]);
+    const landed = runCheckpointTool(pd, "tools/aidlc-worktree.ts", [
+      "merge", "--slug", boltSlugForUnit("beta"), "--target", "main", "--strategy", "merge", "--project-dir", pd,
+    ]);
+    expect(landed.code, `${landed.out}\n${landed.err}`).toBe(0);
+    const sha = (JSON.parse(landed.out) as { commit_sha: string }).commit_sha;
+    expect(sha).not.toBe(head);
+    expect(git(pd, ["rev-list", "--parents", "-n", "1", sha]).split(" ")).toHaveLength(3);
+    expect(auditBlockField(merged(pd)[1].block, "Merge commit")).toBe(sha);
   });
 });

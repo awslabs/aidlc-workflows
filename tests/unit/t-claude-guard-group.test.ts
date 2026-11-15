@@ -140,18 +140,21 @@ describe("t-claude-guard-group settings.json wiring", () => {
     }
   });
 
-  test("the row matches exactly the tools its members match, and nothing else", () => {
+  // The question box rides the row too, for the code plan question's lines;
+  // no member runs for it.
+  test("the row matches exactly the tools its members match, the question box, and nothing else", () => {
     const pre = shippedSettings().hooks.PreToolUse ?? [];
     const row = pre.find((group) => group.hooks.some((hook) => hook.command === GROUP_COMMAND));
     expect(row).toBeDefined();
     const rowMatcher = new RegExp(`^(?:${row?.matcher})$`);
     const everyTool = [
       "Read", "NotebookRead", "Edit", "MultiEdit", "Write", "NotebookEdit", "LS", "Glob", "Grep",
-      "Bash", "Task", "Agent", "WebFetch", "TodoWrite",
+      "Bash", "Task", "Agent", "WebFetch", "TodoWrite", "AskUserQuestion",
     ];
     for (const tool of everyTool) {
       const anyMember = MEMBERS.some((member) => new RegExp(member.matcher).test(tool));
-      expect(rowMatcher.test(tool), tool).toBe(anyMember);
+      expect(anyMember && tool === "AskUserQuestion", tool).toBe(false);
+      expect(rowMatcher.test(tool), tool).toBe(anyMember || tool === "AskUserQuestion");
     }
   });
 

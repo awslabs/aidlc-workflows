@@ -113,9 +113,25 @@ $installer = Join-Path $download install.ps1
 Invoke-WebRequest `
   -Uri https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.ps1 `
   -OutFile $installer
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
 & $installer
 Remove-Item -Recurse -Force $download
 ```
+
+`install.ps1` is not signed, and Windows PowerShell runs a script file only
+when the execution policy allows it: on Windows 10 and 11 the default is
+`Restricted`, which runs no script file. The `Set-ExecutionPolicy` line allows
+scripts in this PowerShell window, and in PowerShell started from it, until you
+close it; your saved execution policy is not changed. A Group Policy execution
+policy (a `MachinePolicy` or `UserPolicy` row in `Get-ExecutionPolicy -List`;
+when both are set, `MachinePolicy` is the one in effect) overrides that line.
+Unless that policy is `Bypass`, the line then prints an error: Windows
+PowerShell names it `ExecutionPolicyOverride`, and in English it says the
+policy was `updated … successfully, but the setting is overridden`. Under
+`Bypass`, `RemoteSigned` or `Unrestricted` the installer still runs. Under
+`AllSigned` it refuses the installer as not digitally signed, and under
+`Restricted` because running scripts is disabled: ask your administrator how to
+install it.
 
 Windows installs versions under `%LOCALAPPDATA%\aidlc\versions\` and keeps the
 `aidlc` command in `%LOCALAPPDATA%\aidlc\bin\`: `aidlc.exe`, a copy of the AI-DLC
@@ -389,7 +405,7 @@ numbered harness picker first; no detected harness gets the complete picker
 without a default. A Kiro CLI at 2.24.1 or later counts for both Kiro
 harnesses. The picker lists Kiro CLI (V2) (`--harness kiro-v2`): it pins no
 engine and is built for Kiro CLI's v2 engine. It lists Kiro (`--harness kiro`),
-for Kiro IDE and Kiro CLI on its v3 engine. Of the two, Kiro CLI (V2) comes first, so Enter
+for Kiro IDE and Kiro CLI on its v3 engine. Of the two, Kiro is the default, so Enter
 takes it unless an earlier detected harness leads the list or setup runs in a
 harness editor's own terminal, whose harness comes first.
 
@@ -493,7 +509,9 @@ you typed kept.
 plan, confirmation, and transaction. It never contacts a model
 provider. On Kiro CLI, choosing a session model asks Kiro CLI for your account's
 model list and that model's effort levels; with `--yes`, only `--session-model`
-does.
+does among the session settings. On Kiro, `config models`, `--check` and
+`aidlc doctor` can also read that list to name an agent model it does not have
+([One agent on its own model and effort](harnesses/kiro.md#one-agent-on-its-own-model-and-effort)).
 
 The public groups are:
 
@@ -528,7 +546,8 @@ aidlc config models --session-model claude-opus-4.8   # Kiro CLI: your personal 
 ```
 
 A change ends with what changed, its undo command and who picks it up (plus
-any setup step still outstanding); `--json` and `--quiet` output are unchanged.
+any setup step still outstanding); `--json` and `--quiet` output are unchanged,
+except for what Kiro's agent model check adds.
 
 On Claude Code, Codex, opencode and Kiro CLI, while no policy is recorded, setup
 asks about models at each refresh until you answer (on Kiro IDE, Cursor and
@@ -1272,7 +1291,7 @@ the entries AI-DLC wrote.
 | `.kiro/settings/mcp.json` / `mcpServers` | Kiro CLI | Per server, as `.mcp.json`: follow the release only for AI-DLC's servers you have not changed; keep the servers you add and a shipped server you turn on; a file the project already had at setup is merged, not refused |
 | `AGENTS.md` | Kiro CLI, Kiro IDE, Codex, Cursor, OpenCode, Copilot | One marked block; harness-neutral and shared (`shared: "identical"`) except Copilot, whose block carries its `@`-imports; preserve project instructions |
 | `opencode.json` | OpenCode | `json-entries`: add AI-DLC's entries (`$schema`, its `skills.paths` and `instructions` strings, its `permission` rules) only where absent, its rules for the team's own commands (the asks before `rm -r...` and `git push`) first in a map so the team's rules after them still decide; keep the team's model, provider, own instructions and rules, comments, and layout; record what AI-DLC wrote, follow or retire only entries still holding that value. A file AI-DLC wrote whole in an earlier release is adopted. The copy runtime leaves this file out; its setup (or the first session where setup never ran) adds AI-DLC's part |
-| `.vscode/settings.json` | Copilot | `jsonc-settings`: add `chat.agent.maxRequests` (200) only when the project does not set it; never change a value someone else set, other keys, or comments; record only what AI-DLC added, and on retirement remove it only while it holds the value AI-DLC wrote; once added, a key the team takes out of a file it keeps is not added back. The copy runtime leaves this file out |
+| `.vscode/settings.json` | Copilot | `jsonc-settings`: add `chat.agent.maxRequests` (200) and `chat.useHooks` (true), each only when the project does not set it; never change a value someone else set, other keys, or comments; record only what AI-DLC added, and on retirement remove it only while it holds the value AI-DLC wrote; once added, a key the team takes out of a file it keeps is not added back. The copy runtime leaves this file out |
 
 **More than one harness in a project.** Harnesses may coexist when their engine
 directories differ and they do not share an exclusive managed block. `AGENTS.md`
@@ -1451,6 +1470,7 @@ step names Kiro CLI first: start `kiro-cli --v3` in this project, then run
 | `aidlc update` | Install the newest release of the machine's channel with the complete all-harness runtime, then atomically activate. Accepts `--version <version>`, `--channel <stable\|preview>`, `--from <release-dir>`, `--release-base-url <url>`, `--release-api-url <url>`, `--ca-bundle <path>`, `--offline`, and `--dry-run`. |
 | `aidlc update --check` | Refresh update metadata for the channel without installing. Returns 5 when the channel has a release newer than the running one, 0 when current (a running release newer than the channel's newest is current), 3 when unavailable/offline, and 1 when checks are disabled. |
 | `aidlc use <version>` | Install the exact stable or preview version when it is not retained, then make it machine-active without changing project files. |
+| `aidlc version` | Print the machine-active release as `aidlc X.Y.Z (runtime X.Y.Z)`. It runs on that release even in a pinned project, and there, run at a terminal, it also names the pin on stderr (`aidlc: this project is pinned to aidlc 2.10.0, which runs its workflow (machine active: 2.9.0)`); redirected or captured, it prints only that line. `--json` adds `pinnedVersion`. The stdout line is the same in every folder, because an update checks the release it activates against it. |
 | `aidlc config --channel [stable\|preview]` | Set the machine release channel, or print it when no value is given. Set from a release of the other channel, it says what the next `aidlc update` does: `aidlc update moves to <version> now` when that channel has a newer release, otherwise that it waits for one and how to go now. |
 | `aidlc config --pin <version>` | Install and validate the exact version when needed, then atomically write `.aidlc-version`, record its machine-local resolved target, and register the project pin without changing the machine-active pointer. |
 | `aidlc config --unpin` | Remove `.aidlc-version`, its machine-local resolved target, and its registry entry. |
@@ -1589,9 +1609,14 @@ exact retained version whatever the machine follows.
 
 Previews are `main` as it stands, including project state-schema changes. A
 preview that raises the state schema writes project state a stable build does
-not understand, and the code refuses to open state newer than the build; that
-project cannot be walked back to stable until a stable release ships the same
-schema. Use the preview channel on projects you can recreate, or pin them.
+not understand. A build never advances work newer than it reads: on a native
+install it asks once whether to update AI-DLC and carry on ("This plan was set
+up with AI-DLC 2.12 or newer, and this computer has 2.11.5. Want me to update
+AI-DLC now and carry on?"), and on yes runs `aidlc update` and the project's
+refresh and carries on with what you asked; a copied, pinned or
+package-managed install says its own one step instead. That project cannot be
+walked back to stable until a stable release ships the same schema. Use the
+preview channel on projects you can recreate, or pin them.
 
 ## Project Pins and CI
 
@@ -1611,7 +1636,10 @@ keys with the same version collapse; conflicting equivalents fail closed until
 
 Commit only `.aidlc-version`. The stable `aidlc` launcher starts the
 integrity-checked active binary, whose dispatcher validates the complete pinned
-binary and runtime before selecting it. A missing, malformed, tampered, or
+binary and runtime before selecting it: in full at the start of each session, and
+on later calls of that chat every check but the hashing, so damage made during a
+session is caught in the next one. `aidlc update`, `aidlc use`,
+`aidlc config --pin` and `aidlc doctor` always check in full. A missing, malformed, tampered, or
 unavailable target fails closed with `aidlc config --pin <version>` remediation, and
 `aidlc doctor` reports the same condition. Machine lifecycle commands use the
 active binary; `doctor`, `config`, and `use` are never trapped behind a broken
@@ -1684,6 +1712,7 @@ bash ./aidlc-offline/install.sh \
 ```
 
 ```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
 & .\aidlc-offline\install.ps1 `
   -From .\aidlc-offline -Offline
 ```
@@ -1920,7 +1949,8 @@ active-version pointers, and the active `aidlc.exe`) is removed last, after ever
 User PATH entry, so a failed cleanup still leaves a command to retry it. Because
 the PATH entry may already be gone, run that command by its full path, which
 `aidlc doctor` prints (by default
-`& "$env:LOCALAPPDATA\aidlc\bin\aidlc.cmd" uninstall`). If the failure
+`& "$env:LOCALAPPDATA\aidlc\bin\aidlc.exe" uninstall`, or the recorded `aidlc.cmd`
+when `aidlc.exe` and `aidlc.cmd` in bin are not both as AI-DLC installed them). If the failure
 happened while removing those last files and the command no longer runs, run
 the installer again: it retries the pending cleanup first, so you may need to
 run it twice.
@@ -2242,6 +2272,7 @@ are recorded before cleanup is scheduled. The worker rechecks paths and hashes,
 refuses reparse points, and deletes files individually after the running command
 exits; uninstall is done when the `aidlc` command is no longer found. An
 interrupted continuation can resume only with its validated file plan.
-Older journals without such a plan are refused and left for inspection. See
+An older journal without such a plan is never run; `aidlc uninstall` or the
+installer removes it. See
 [Transactions and Recovery](#transactions-and-recovery) for how a failed
 cleanup is reported and retried.

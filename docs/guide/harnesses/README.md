@@ -44,7 +44,8 @@ aidlc config
 The installer always includes every harness runtime. `aidlc config --harness <name>` selects the project surface. Host prerequisites still apply: Codex requires
 the target project to be a Git repository for project hook discovery.
 
-On Windows, download `install.ps1` and invoke it as
+On Windows, download `install.ps1`, allow scripts in that PowerShell window
+with `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force`, and run
 `& $installer`. See [Windows installation](../18-install-and-lifecycle.md#windows-powershell)
 for account scope, automatic User PATH registration, and `-NoModifyPath`.
 

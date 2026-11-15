@@ -79,6 +79,7 @@ import {
   workspaceSourceFingerprint,
   personCheckSwitchAllowed,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { readConductorSurface } from "../harness/conductor-skill.ts";
 import { AIDLC_SRC, FIXTURE_CLONE_ID, WORKER_BRIEF_SECTIONS_FIXTURE } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 import {
@@ -507,6 +508,7 @@ function scratchProject(): string {
     "aidlc-locks.ts",
     "aidlc-review-records.ts",
     "aidlc-unit-dag.ts",
+    "aidlc-subagent-inflight.ts",
     "aidlc-record-core.ts",
     "aidlc-learned-date.ts",
     "aidlc-git-name.ts",
@@ -1752,7 +1754,7 @@ describe("t265b hook lifecycle", () => {
         const source = runHook(proj, WRITE(join(proj, "src", "inline.ts")));
         expect(source.code).toBe(2);
         expect(source.stderr).toContain("Code changes wait while AI-DLC's recovery question is open");
-        expect(source.stderr).not.toContain("authority is ambiguous or stale");
+        expect(source.stderr).not.toContain("AI-DLC is not on the build step");
 
         // A picked fix whose work happens while the question is open (finishing
         // a revision) opens its own route and the ask's record folder, nothing else.
@@ -3622,6 +3624,358 @@ describe("t265b hook lifecycle", () => {
     }
   });
 
+  // The reported run's record, by its own name, at Code Generation with no plan
+  // yet; the plan file's path as the run wrote it.
+  const reportedRunRecord = (proj: string): string => {
+    const intent = "261111-blank-task-name";
+    renameSync(join(proj, RECORD_REL), join(proj, INTENTS_REL, intent));
+    writeFileSync(join(proj, INTENTS_REL, "active-intent"), `${intent}\n`, "utf-8");
+    const record = join(proj, INTENTS_REL, intent);
+    writeFileSync(
+      join(record, "aidlc-state.md"),
+      "# AI-DLC State Tracking\n\n## Project Information\n- **Project**: t265 fixture\n- **Scope**: bugfix\n\n" +
+        "## Current Status\n- **Lifecycle Phase**: CONSTRUCTION\n- **Current Stage**: code-generation\n",
+      "utf-8",
+    );
+    writeActiveDirectiveMarker(proj, {
+      kind: "run-stage",
+      stage: "code-generation",
+      state_sha256: stateDigest(readFileSync(join(record, "aidlc-state.md"), "utf-8")),
+    });
+    mkdirSync(join(record, "construction", "code-generation"), { recursive: true });
+    return `aidlc/spaces/default/intents/${intent}/construction/code-generation/code-generation-plan.md`;
+  };
+
+  // An agent with no file-edit tool (Codex on a model its catalog does not
+  // list) writes the plan through the shell. A heredoc only cat or tee reads is
+  // data: the write is judged as the same write by a plain redirect, never as a
+  // command that could not be read.
+  test("a heredoc that only cat or tee reads writes the plan as a plain redirect does while the plan is written", () => {
+    const proj = scratchProject();
+    try {
+      const plan = reportedRunRecord(proj);
+      const instructions = plan.replace("code-generation-plan.md", "unit-test-instructions.md");
+      // The reported run's command, byte for byte.
+      const reported =
+        `cat > ${plan} <<'EOF'\n# Code Generation Plan\n\n## Summary\n\n` +
+        "- Builds: blank task-name validation for `add()`.\n" +
+        "- Touches: the existing task module and a focused Bun test file.\n" +
+        "- Tests: four focused unit tests for rejection, valid addition, and immutability.\nEOF";
+      const body = "# Plan\n\n- Builds: `add()` for the person's tasks.\n> a quote | a table cell\n";
+      const heredocs = (target: string): string[] => [
+        `cat > ${target} <<'EOF'\n${body}EOF`,
+        `cat <<'EOF' > ${target}\n${body}EOF`,
+        `cat >${target} <<"EOF"\n${body}EOF\n`,
+        `cat > ${target} <<-'EOF'\n\t# Plan\n\tEOF`,
+        `cat > ${target} <<EOF\n# Plan\n\nplain words\nEOF`,
+        `tee ${target} <<'EOF'\n${body}EOF`,
+        `tee ${target} >/dev/null <<'EOF'\n${body}EOF`,
+        `cat <<'EOF' | tee ${target}\n${body}EOF`,
+      ];
+      expect(runHook(proj, BASH(reported)).code, "the reported command").toBe(0);
+      for (const command of heredocs(plan)) {
+        const result = runHook(proj, BASH(command));
+        expect(result.code, `${command}\n${result.stderr}`).toBe(0);
+      }
+      // Both of the stage's files in one command, as an agent writes them.
+      expect(
+        runHook(proj, BASH(`cat > ${plan} <<'EOF'\n${body}EOF\ncat > ${instructions} <<'EOF'\nbun test\nEOF`)).code,
+      ).toBe(0);
+      // Each target is judged as the same write by printf: the code waits with
+      // the ordinary refusal, a document beside it goes through.
+      for (const target of ["src/tasks.ts", "NOTES.md", toPosix(join(proj, plan)), toPosix(join(proj, "src", "tasks.ts"))]) {
+        const redirect = runHook(proj, BASH(`printf plan > ${target}`));
+        for (const command of heredocs(target)) {
+          const result = runHook(proj, BASH(command));
+          expect({ code: result.code, stderr: result.stderr }, command).toEqual({ code: redirect.code, stderr: redirect.stderr });
+        }
+      }
+      expect(runHook(proj, BASH(`cat > src/tasks.ts <<'EOF'\n${body}EOF`)).stderr)
+        .toContain("Code generation cannot modify workspace paths");
+      // With a command the guard cannot read before it, the line reads as its printf twin does.
+      const folder = plan.replace("/code-generation-plan.md", "");
+      expect(runHook(proj, BASH(`mkdir -p ${folder} && cat > ${plan} <<'EOF'\n${body}EOF`)).stderr)
+        .toBe(runHook(proj, BASH(`mkdir -p ${folder} && printf plan > ${plan}`)).stderr);
+      // A body something runs is a program, an unquoted body that runs a
+      // command still runs it, and a target the reading cannot name stays
+      // unnamed: each is refused as it is without the heredoc rule.
+      for (const [command, words] of [
+        [`bash <<'EOF'\nprintf x > src/x.ts\nEOF`, "cannot modify workspace paths"],
+        [`sh <<'EOF'\nprintf x > ${plan}\nEOF`, "could not be read"],
+        [`cat <<'EOF' | sh\nprintf x > src/x.ts\nEOF`, "cannot modify workspace paths"],
+        [`cat <<'EOF' | bash\nprintf x > ${plan}\nEOF`, "could not be read"],
+        [`python3 <<'EOF'\nprint("$HOME")\nEOF`, "could not be read"],
+        ["bun run - <<'EOF'\nawait Bun.write(`src/x.ts`, 'x')\nEOF", "could not be read"],
+        [`cat > ${plan} <<EOF\n$(printf x > src/x.ts)\nEOF`, "cannot modify workspace paths"],
+        [`cat > ${plan} <<EOF\n\`touch src/x.ts\`\nEOF`, "cannot run mutation-capable shell commands"],
+        [`cat > "$OUT" <<'EOF'\n${body}EOF`, "could not be read"],
+        [`cat > "$(printf src/x.ts)" <<'EOF'\n${body}EOF`, "could not be read"],
+        [`cat > ${plan} <<'EOF'\n${body}EOF\nprintf x > src/x.ts`, "cannot modify workspace paths"],
+        [`cat ${plan} # <<EOF\nprintf x > src/x.ts\nEOF`, "cannot modify workspace paths"],
+        [`cat "<<EOF"\nprintf x > src/x.ts\nEOF`, "cannot modify workspace paths"],
+        [`cat > ${plan} <<PLAN-EOF\nplain words\nPLAN-EOF\nprintf x > src/x.ts`, "cannot modify workspace paths"],
+        [`command cat > ${plan} <<'EOF'\n${body}EOF`, "could not be read"],
+        // Each place the shell ends or reads the heredoc otherwise than the
+        // walk would: the write after it is seen, as it is without the rule.
+        [`cat > ${plan} <<"EOF\\\\"\nplan\nEOF\\\nprintf x > src/x.ts\nEOF\\\\`, "cannot modify workspace paths"],
+        [`((x=1+\ncat > ${plan} <<EOF\n+0))\nprintf y > src/x.ts\nEOF`, "cannot modify workspace paths"],
+        [`a[1+\ncat <<EOF\n+0]=5\nprintf y > src/x.ts\nEOF`, "cannot modify workspace paths"],
+        [`cat > ${plan} <<'EOF' \\\n; printf x > src/x.ts\nbody\nEOF`, "cannot modify workspace paths"],
+        [`cat > ${plan} <<'EOF' 'a\nb'; printf x > src/x.ts\nbody\nEOF`, "cannot modify workspace paths"],
+        [`cat > ${plan} <<PLAN-EOF\nplain words\nPLAN-EOF\nprintf x > src/x.ts\nPLAN`, "cannot modify workspace paths"],
+        [`cat > ${plan} <<'EOF' # it's the plan\nthe person's tasks\nEOF\nprintf x > src/x.ts`, "cannot modify workspace paths"],
+        [`echo a\\ #; ((x=1+\ncat > ${plan} <<EOF\n+0))\nprintf y > src/x.ts\nEOF`, "cannot modify workspace paths"],
+        // A line continuation before a `#`: the shell joins the lines, so the
+        // `#` starts a comment and the `<<` in it is no heredoc.
+        [`cat \\\n# cat > ${plan} <<'EOF'\nprintf x > src/x.ts\nEOF`, "cannot modify workspace paths"],
+        [`cat ${plan} \\\n# cat > ${plan} <<'EOF'\nprintf x > src/x.ts\nEOF`, "cannot modify workspace paths"],
+        [`cat > ${plan} \\\n# cat <<'EOF'\nprintf x > src/x.ts\nEOF`, "cannot modify workspace paths"],
+        [`cat > ${plan} \\\n# <<'EOF'\nprintf x > src/x.ts\nEOF`, "cannot modify workspace paths"],
+        [`tee src/*.ts <<'EOF'\nbody\nEOF`, "cannot modify workspace paths"],
+        [`LD_PRELOAD=/tmp/x.so cat > ${plan} <<'EOF'\n${body}EOF`, "could not be read"],
+        // A rest of the line it cannot read keeps the line's reading, heredoc and all.
+        [`shopt -s expand_aliases\nalias cat=sh\ncat <<'EOF'\nprintf x > src/x.ts\nEOF`, "cannot modify workspace paths"],
+      ] as const) {
+        const result = runHook(proj, BASH(command));
+        expect(result.code, command).toBe(2);
+        expect(result.stderr, command).toContain(words);
+      }
+      // Any other heredoc is read as it is without the rule (apply_patch's
+      // has its own case below): these are main's own decisions, kept as they are.
+      for (const [command, code] of [
+        [`python3 <<'EOF'\nprint(1)\nEOF`, 0],
+        [`cat > ${plan} <<'EOF'\n# Plan\nEOF\npython3 <<'PY'\nprint(1)\nPY`, 2],
+        [`cat > ${plan} <<'EOF'\r\n# Plan\r\nEOF\r\n`, 2],
+      ] as const) {
+        const result = runHook(proj, BASH(command));
+        expect(result.code, `${command}\n${result.stderr}`).toBe(code);
+        if (code === 2) expect(result.stderr, command).toContain("could not be read");
+      }
+      // The runtime-integrity check reads the same heredoc spans (heredocAt):
+      // a hook write after the terminator is refused, one inside a body that
+      // only cat reads is data.
+      const hook = ".claude/hooks/aidlc-plan-approval-guard.ts";
+      for (const [open, close] of [["<<-'EOF'", "\tEOF"], ['<<"EOF"', "EOF"], ["<<'EOF'", "EOF\r"]]) {
+        const after = runHook(proj, BASH(`cat ${open}\nbody\n${close}\nprintf x > ${hook}`));
+        expect(after.code, open).toBe(2);
+        expect(after.stderr, open).toContain("hooks belong to the harness");
+        expect(runHook(proj, BASH(`cat ${open}\nprintf x > ${hook}\n${close}\n`)).stderr, open)
+          .not.toContain("hooks belong to the harness");
+      }
+      // A line read as PowerShell keeps its own reading.
+      const pwsh = runHook(proj, { ...BASH(reported), cwd: proj, aidlc_shell: "powershell" });
+      expect(pwsh.code, pwsh.stderr).toBe(2);
+      expect(pwsh.stderr).toContain("could not be read");
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  // Codex puts an apply_patch program on the shell's PATH; an agent with no
+  // file-edit tool writes with it. Its patch names the files it writes, read as
+  // the writes they are: the plan in the record folder goes through, code waits
+  // with the refusal printf gets.
+  test("a shell apply_patch while the plan is written is the write its patch names", () => {
+    const proj = scratchProject();
+    try {
+      const plan = reportedRunRecord(proj);
+      const instructions = plan.replace("code-generation-plan.md", "unit-test-instructions.md");
+      const patch = (lines: string[]) => `*** Begin Patch\n${lines.join("\n")}\n*** End Patch`;
+      const add = (path: string) => [`*** Add File: ${path}`, "+# Plan", "+uses `add()` and $HOME"];
+      // The reported run's own write of the plan, byte for byte.
+      const reported =
+        `apply_patch <<'PATCH'\n*** Begin Patch\n*** Add File: ${plan}\n+# Code Generation Plan\n+\n+## Summary\n+\n` +
+        "+- Builds: blank task-name validation for `add()`.\n" +
+        "+- Touches: the existing task module and a focused Bun test file.\n" +
+        "+- Tests: four focused unit tests for rejection, valid addition, and immutability.\n*** End Patch\nPATCH";
+      const forms = (lines: string[]): string[] => [
+        `apply_patch <<'PATCH'\n${patch(lines)}\nPATCH`,
+        `applypatch <<"PATCH"\n${patch(lines)}\nPATCH\n`,
+        `apply_patch <<-'PATCH'\n${patch(lines).replace(/^/gm, "\t")}\n\tPATCH`,
+        `apply_patch '${patch(lines)}'`,
+        `apply_patch <<'PATCH'\n${patch(lines).replace(/^\*\*\*/gm, "  ***")}\nPATCH`,
+      ];
+      const through = runHook(proj, BASH(reported));
+      expect(through.code, through.stderr).toBe(0);
+      for (const command of [...forms(add(plan)), ...forms([...add(plan), ...add(instructions)])]) {
+        const result = runHook(proj, BASH(command));
+        expect(result.code, `${command}\n${result.stderr}`).toBe(0);
+      }
+      // A cd before it is followed as for any write (a line continuation in the body is data).
+      const sub = { cwd: join(proj, "src") };
+      expect(runHook(proj, { ...BASH(`cd ${toPosix(proj)} && apply_patch <<'PATCH'\n${patch(add(plan))}\ndocker \\\n  run\nPATCH`), ...sub }).code).toBe(0);
+      expect(runHook(proj, { ...BASH(`cd ${toPosix(proj)} && cat > ${plan} <<'EOF'\ndocker run \\\n  image\nEOF`), ...sub }).code).toBe(0);
+      // Code, or a file beside the plan the patch also names, waits with the words printf gets.
+      const ordinary = runHook(proj, BASH("printf code > src/tasks.ts")).stderr;
+      expect(ordinary).toContain("Code generation cannot modify workspace paths");
+      for (const lines of [
+        add("src/new.ts"),
+        ["*** Update File: src/tasks.ts", "@@", "-export const x = 1;", "+export const x = 2;"],
+        ["*** Delete File: src/tasks.ts"],
+        [`*** Update File: ${plan}`, "*** Move to: src/moved.ts", "@@", "+x"],
+        [...add(plan), ...add("src/routes/$id.tsx")],
+        [...add(plan), ...add("src/routes/[id].tsx")],
+      ]) {
+        for (const command of forms(lines)) {
+          const result = runHook(proj, BASH(command));
+          expect({ code: result.code, stderr: result.stderr }, command).toEqual({ code: 2, stderr: ordinary });
+        }
+      }
+      // The argument is the patch when there is one: the binary never reads the heredoc then.
+      expect(runHook(proj, BASH(`apply_patch '${patch(add("src/x.ts"))}' <<'PATCH'\n${patch(add(plan))}\nPATCH`)).code).toBe(2);
+      // An argument with no file lines writes nothing.
+      expect(runHook(proj, BASH("apply_patch --help")).code).toBe(0);
+      // A patch typed in afterwards cannot be read: today's line, and one sentence
+      // naming the way on, on every platform (Codex applies the heredoc form
+      // itself, on Windows too).
+      const sentence =
+        "An apply_patch with its patch in the command itself (`apply_patch <<'PATCH'`, the patch, then `PATCH` on its own line) is read as the writes it names.";
+      const today = "This shell command could not be read, so AI-DLC cannot tell whether it writes files. Code generation cannot run it for the zero-Unit stage-level implementation because the plan, unit-test instructions, and current Testing Contract do not have a current matching approval. Reason: code-generation-plan.md is missing or empty. A read written out, naming each file (for example `cat src/app.ts`), runs while the plan waits. Writes inside the selected code-generation record directory remain available for planning. When the plan is ready, run `bun .claude/tools/aidlc-orchestrate.ts next` exactly as written, as a command of its own (no `cd` before it, no pipe or second command after it): the engine asks the person to approve it before any code is written.";
+      // Every other line the guard cannot read keeps today's words, byte for byte.
+      const unread = runHook(proj, BASH(`sh <<'EOF'\nprintf x > ${plan}\nEOF`)).stderr.trim();
+      if (process.platform !== "win32") expect(unread).toBe(today);
+      expect(unread).not.toContain(sentence);
+      const withSentence = unread.replace(" Writes inside", ` ${sentence} Writes inside`);
+      expect(withSentence).toContain(sentence);
+      for (const command of ["apply_patch", "applypatch", "cat p.patch | apply_patch", "apply_patch < p.patch", "apply_patch 2>/dev/null"]) {
+        const result = runHook(proj, BASH(command));
+        expect(result.code, command).toBe(2);
+        expect(result.stderr.trim(), command).toBe(withSentence);
+      }
+      // A heredoc form the walk keeps as written is no bare call: today's words.
+      for (const command of [
+        `mkdir -p x && apply_patch <<'PATCH'\n${patch(add(plan))}\nPATCH`,
+        `echo "$HOME"; apply_patch <<'PATCH'\n${patch(add(plan))}\nPATCH`,
+      ]) {
+        expect(runHook(proj, BASH(command)).stderr.trim(), command).toBe(unread);
+      }
+      // A patch heredoc the walk keeps as written is a write nobody has read:
+      // today's words, with no added sentence.
+      const code = patch(["*** Add File: src/x.ts", "+export const x = 1;"]);
+      for (const command of [
+        `apply_patch <<'PATCH'\n${code}`,
+        `apply_patch <<'PATCH'\n${code}\nPATCH\nls src/[a-z]*.ts`,
+        `apply_patch <<'PATCH' && ls src/*.ts\n${code}\nPATCH`,
+        `[ -d src ] && apply_patch <<'PATCH'\n${code}\nPATCH`,
+        `(apply_patch <<'PATCH'\n${code}\nPATCH\n)`,
+        `apply_patch <<'PATCH' || { echo failed; }\n${code}\nPATCH`,
+        // The binary reads a redirect of its input, never the heredoc beside it.
+        `apply_patch <<'PATCH' < p.patch\n${patch(add(plan))}\nPATCH`,
+      ]) {
+        const result = runHook(proj, BASH(command));
+        expect({ code: result.code, stderr: result.stderr.trim() }, command).toEqual({ code: 2, stderr: unread });
+      }
+      // A patch the walk read stays read when the rest of the line is read as
+      // before, and a program the walk never takes is not apply_patch's.
+      for (const command of [
+        `apply_patch <<'PATCH'\n${patch(["*** Add File: /tmp/t265-outside.js", "+x"])}\nPATCH\nnode /tmp/t265-outside.js`,
+        `./apply_patch <<'PATCH'\n${patch([`*** Add File: ${plan}`, "+# Plan"])}\nPATCH`,
+      ]) {
+        expect(runHook(proj, BASH(command)).code, command).toBe(0);
+      }
+      // A heredoc with something else in its pipeline is read as before.
+      expect(runHook(proj, BASH(`apply_patch <<'PATCH' | tee log.txt\n${patch(add(plan))}\nPATCH`)).stderr)
+        .toContain("Code generation cannot modify workspace paths");
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  // On Windows Codex's apply_patch.bat cannot take a multi-line patch, so an
+  // agent there runs the binary in its patch mode itself
+  // (`<codex.exe> --codex-run-as-apply-patch <patch>`), most often with the patch
+  // in a PowerShell variable. It is the same apply_patch, on every platform: a
+  // patch in the command is the writes it names, and one the reader cannot see
+  // gets the unread line with the sentence naming the form that is read, which
+  // Codex applies itself on Windows too.
+  test("Codex's patch mode run by its binary is the apply_patch it is, on Windows and every platform", () => {
+    const proj = scratchProject();
+    try {
+      const plan = reportedRunRecord(proj);
+      const patch = (lines: string[]) => `*** Begin Patch\n${lines.join("\n")}\n*** End Patch`;
+      const add = (path: string) => [`*** Add File: ${path}`, "+# Plan", "+uses `add()`"];
+      const binaries = ["codex", "codex.exe", "'C:\\Users\\p\\AppData\\Roaming\\npm\\codex.exe'", "& 'C:\\x y\\codex.exe'"];
+      const literal = (lines: string[]) => binaries.map((bin) => `${bin} --codex-run-as-apply-patch '${patch(lines)}'`);
+      for (const command of literal(add(plan))) {
+        const result = runHook(proj, BASH(command));
+        expect(result.code, `${command}\n${result.stderr}`).toBe(0);
+      }
+      // Code waits with the words printf gets.
+      const ordinary = runHook(proj, BASH("printf code > src/tasks.ts")).stderr;
+      expect(ordinary).toContain("Code generation cannot modify workspace paths");
+      for (const lines of [
+        add("src/new.ts"),
+        ["*** Update File: src/tasks.ts", "@@", "-export const x = 1;", "+export const x = 2;"],
+        [...add(plan), "*** Delete File: src/tasks.ts"],
+      ]) {
+        for (const command of literal(lines)) {
+          const result = runHook(proj, BASH(command));
+          expect({ code: result.code, stderr: result.stderr }, command).toEqual({ code: 2, stderr: ordinary });
+        }
+      }
+      // A patch the reader cannot see: the unread line and the sentence a bare
+      // apply_patch gets.
+      const bare = runHook(proj, BASH("apply_patch")).stderr.trim();
+      expect(bare).toContain("An apply_patch with its patch in the command itself (`apply_patch <<'PATCH'`");
+      const exe = "'C:\\Users\\p\\AppData\\Roaming\\npm\\node_modules\\@openai\\codex\\bin\\codex.exe'";
+      for (const command of [
+        // A reported Windows run's form, byte for byte apart from the plan's text.
+        `$patch = @'\n${patch(add(plan))}\n'@; $patch = $patch.Replace("\`r\`n", "\`n").TrimEnd("\`n"); & ${exe} --codex-run-as-apply-patch $patch`,
+        `$PSNativeCommandArgumentPassing = 'Standard'; $patch = @'\n${patch(add(plan))}\n'@; & ${exe} --codex-run-as-apply-patch $patch`,
+        // An apostrophe in the text turns the POSIX reading's quoting over.
+        `$patch = @'\n${patch([`*** Add File: ${plan}`, "+don't touch `src` yet"])}\n'@; & ${exe} --codex-run-as-apply-patch $patch`,
+        // and a `>` after it hands the reading a file the patch does not write.
+        `$patch = @'\n${patch([`*** Add File: ${plan}`, "+Don't change the API: add(a, b) -> number"])}\n'@; & ${exe} --codex-run-as-apply-patch $patch`,
+        `$patch = @'\n${patch([`*** Add File: ${plan}`, "+It's small.", "+> Note"])}\n'@; & ${exe} --codex-run-as-apply-patch $patch`,
+        `codex --codex-run-as-apply-patch "$(cat p.patch)"`,
+        `& ${exe} --codex-run-as-apply-patch (Get-Content -Raw p.patch)`,
+      ]) {
+        const result = runHook(proj, BASH(command));
+        expect({ code: result.code, stderr: result.stderr.trim() }, command).toEqual({ code: 2, stderr: bare });
+      }
+      // For Codex on Windows the sentence also says the form works there: Codex
+      // applies it itself, before PowerShell reads it. Said nowhere else.
+      const clause = "On Windows Codex applies that form itself, before PowerShell reads it, so it works there too.";
+      const asCodex = runHook(proj, BASH("apply_patch"), { AIDLC_HARNESS_NAME: "codex" }).stderr;
+      expect(asCodex.includes(clause), "the clause on win32 for Codex only").toBe(process.platform === "win32");
+      expect(bare).not.toContain(clause);
+      const both = (codexOnWindows: boolean) => mutationBlockReason(null, true, null, false, false, true, true, codexOnWindows);
+      expect(both(true)).toContain(`is read as the writes it names. ${clause} Writes inside`);
+      expect(both(false)).not.toContain(clause);
+      expect(mutationBlockReason(null, true, null, false, false, true, false, true)).not.toContain(clause);
+      // With no operand the binary writes nothing; a flag after the first word is some other command's,
+      // and another program given the flag first is no patch: it is read as that program.
+      expect(runHook(proj, BASH("codex --codex-run-as-apply-patch")).code).toBe(0);
+      const script = runHook(proj, BASH("./build.sh")).stderr;
+      expect(script).toContain("Code generation cannot");
+      expect(runHook(proj, BASH("./build.sh --codex-run-as-apply-patch")).stderr).toBe(script);
+      expect(runHook(proj, BASH(`./build.sh --codex-run-as-apply-patch '${patch(add("src/x.ts"))}'`)).stderr).toBe(script);
+      expect(runHook(proj, BASH(`echo x --codex-run-as-apply-patch '${patch(add("src/x.ts"))}'`)).code).toBe(0);
+      // A PowerShell here-string written as the operand is a patch in the command too (a backtick
+      // in a double-quoted one is PowerShell's escape, so its text here has none).
+      for (const quote of ["'", '"']) {
+        const hereString = (path: string) =>
+          `& ${exe} --codex-run-as-apply-patch @${quote}\n${patch([`*** Add File: ${path}`, "+# Plan"])}\n${quote}@`;
+        expect(runHook(proj, BASH(hereString(plan))).code, `here-string ${quote}`).toBe(0);
+        expect(runHook(proj, BASH(hereString("src/new.ts"))).code, `here-string ${quote}`).toBe(2);
+      }
+      // One apostrophe in its text turns the reading's quoting over, so the rest of the line is
+      // unread: the patch mode on a line read only in part is a patch nobody has read, with its
+      // sentence, and for Codex on Windows its clause.
+      const unpaired = `& ${exe} --codex-run-as-apply-patch @'\n${patch([`*** Add File: ${plan}`, "+Don't touch the API yet"])}\n'@`;
+      expect({ code: runHook(proj, BASH(unpaired)).code, stderr: runHook(proj, BASH(unpaired)).stderr.trim() }).toEqual({ code: 2, stderr: bare });
+      const unpairedAsCodex = runHook(proj, BASH(unpaired), { AIDLC_HARNESS_NAME: "codex" }).stderr;
+      expect(unpairedAsCodex).toContain("An apply_patch with its patch in the command itself (`apply_patch <<'PATCH'`");
+      expect(unpairedAsCodex.includes(clause), "the clause on win32 for Codex only").toBe(process.platform === "win32");
+      // A spelling the reading does not take as Codex is read as any program is: an unquoted
+      // Windows path loses its backslashes, and an operand that names no file is no patch.
+      expect(runHook(proj, BASH(`C:\\Users\\p\\AppData\\Roaming\\npm\\codex.exe --codex-run-as-apply-patch '${patch(add(plan))}'`)).code).toBe(0);
+      expect(runHook(proj, BASH("codex.cmd --codex-run-as-apply-patch (Get-Content -Raw p.patch)")).code).toBe(2);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
   // #2456: while the plan-approval guard is refusing the build, doctor and
   // status are where the person gets the whole picture of why. An agent's
   // terminal is often not at the project root - VS Code and the Copilot CLI
@@ -5136,10 +5490,7 @@ describe("t265c registrations", () => {
     expect(card.hooks[0].action.command).toEndWith(" engine adapter kiro-ide guard-tool-call");
     expect(readFileSync(join(ideHooks, "aidlc-kiro-tool-names.ts"), "utf-8"))
       .toContain('{ target: "plan-approval-guard", matcher: KIRO_HOOK_MATCHERS.notReadPreToolUse }');
-    const skill = readFileSync(
-      join(REPO_ROOT, "harness", "kiro-ide", "skills", "aidlc", "SKILL.md"),
-      "utf-8",
-    );
+    const skill = readConductorSurface(join(REPO_ROOT, "harness", "kiro-ide", "skills", "aidlc", "SKILL.md"));
     expect(skill).not.toContain("plan-approval guard is likewise prose-only");
   });
 

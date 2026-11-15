@@ -20,6 +20,7 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { extractTarGz } from "./aidlc-archive.ts";
+import { gitCommonDirOf } from "./aidlc-git.ts";
 import {
   renderCompletion,
   type Shell,
@@ -92,10 +93,7 @@ import {
 } from "./aidlc-install-paths.ts";
 import {
   channelPath,
-  defaultHarnessPath,
-  machineConfigPath,
   readMachineChannel,
-  updateCachePath,
   writeMachineChannel,
 } from "./aidlc-machine-config.ts";
 import {
@@ -119,6 +117,7 @@ import {
 import {
   assertSafeUninstallRoot,
   buildUninstallPlan,
+  INSTALL_ROOT_ANSWERS,
   pluginCatalogueOwnership,
   untrustedPathList,
 } from "./aidlc-uninstall-plan.ts";
@@ -132,12 +131,20 @@ import {
   windowsUninstallStillFinishingLine,
 } from "./aidlc-windows-uninstall.ts";
 import {
+  aidlcInvocation,
   compiledExecutable,
   discoverProjectHarnesses,
   isCompiledExecutable,
   runtimeHarnessDir,
   typedHarnessName,
 } from "./aidlc-runtime-paths.ts";
+import {
+  nearestSessionProcess,
+  recordReleaseCheck,
+  releaseCheckHolds,
+  type ReleaseCheckMark,
+  type SessionProcess,
+} from "./aidlc-record-core.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 
 // A release's harnesses as a person types them after --harness; the JSON
@@ -488,6 +495,7 @@ class IncompleteVersionError extends LifecycleCommandError {
 export function reserveDispatchedVersion(
   version: string,
   distribution: string | null = null,
+  checkedThisSession = false,
 ): (() => void) | null {
   const raw = process.env.AIDLC_PIN_RESERVATION_TIMEOUT_MS;
   const configured = raw?.trim() ? Number(raw) : NaN;
@@ -495,7 +503,7 @@ export function reserveDispatchedVersion(
     ? configured
     : DISPATCH_RESERVATION_WAIT_MS;
   const check = () => {
-    const inspection = inspectPinnedVersion(version, distribution);
+    const inspection = inspectPinnedVersion(version, distribution, checkedThisSession);
     if (!inspection.complete) throw new IncompleteVersionError(version, inspection.reason);
   };
   try {
@@ -857,13 +865,15 @@ export type PinnedDispatchResult =
       release?: (() => void) | null;
     };
 
-// An inspection that throws counts as incomplete.
+// An inspection that throws counts as incomplete. A release this session's
+// dispatcher already checked in full leaves out only the hashing.
 function inspectPinnedVersion(
   version: string,
   distribution: string | null,
+  checkedThisSession = false,
 ): { complete: boolean; reason?: string } {
   try {
-    return inspectInstalledVersion(version, distribution);
+    return inspectInstalledVersion(version, distribution, checkedThisSession ? { hashes: false } : {});
   } catch (error) {
     return { complete: false, reason: error instanceof Error ? error.message : String(error) };
   }
@@ -872,8 +882,19 @@ function inspectPinnedVersion(
 function completePinnedVersion(
   version: string,
   distribution: string | null,
+  checkedThisSession = false,
 ): boolean {
-  return inspectPinnedVersion(version, distribution).complete;
+  return inspectPinnedVersion(version, distribution, checkedThisSession).complete;
+}
+
+// The session process this dispatch runs under, or null: every miss is a full
+// check (record-core nearestSessionProcess, releaseCheckHolds).
+function dispatchSession(projectDir: string): SessionProcess | null {
+  try {
+    return nearestSessionProcess(projectDir);
+  } catch {
+    return null;
+  }
 }
 
 // The dispatcher resolves the project once (explicit flag before `--`, then the
@@ -955,16 +976,27 @@ export function resolvePinnedDispatch(
   // The release a dispatcher launched was checked by it just before.
   if (dispatched && version === AIDLC_VERSION) return { kind: "none" };
   const runsHere = dispatched || version === AIDLC_VERSION;
+  // Only the dispatcher's own call checks once per session; config's probe and
+  // every other caller of the check hash in full.
+  const session = options.reserve === true ? dispatchSession(projectDir) : null;
+  const mark: ReleaseCheckMark = { version, distribution, executable: target.target };
+  const checked = session !== null && releaseCheckHolds(projectDir, session, mark);
+  const recordPass = () => {
+    if (session !== null && !checked) recordReleaseCheck(projectDir, session, mark);
+  };
   if (runsHere || !options.reserve) {
-    if (!completePinnedVersion(version, distribution)) return incomplete;
+    if (!completePinnedVersion(version, distribution, checked)) return incomplete;
+    recordPass();
     return runsHere ? { kind: "none" } : { kind: "execute", executable: target.target, version };
   }
   try {
+    const release = reserveDispatchedVersion(version, distribution, checked);
+    recordPass();
     return {
       kind: "execute",
       executable: target.target,
       version,
-      release: reserveDispatchedVersion(version, distribution),
+      release,
     };
   } catch (error) {
     if (error instanceof IncompleteVersionError) return incomplete;
@@ -2050,6 +2082,11 @@ async function installVersion(options: {
       }
       return [binaryAsset(target), releaseRuntimeAsset(manifest.version)];
     },
+    // An update of a release already installed checks the installed binary
+    // against the release and never uses a downloaded one, so the installed
+    // binary stands in for the download when its bytes are the release's.
+    onMachine: (manifest, name) =>
+      name === binaryAsset(target) ? installedExecutablePath(manifest.version) : null,
     offline: options.offline,
     baseUrl: options.baseUrl,
     caBundle: options.caBundle,
@@ -2522,13 +2559,7 @@ function uninstallCommand(argv: string[]): CommandResult {
 }
 
 function scheduleWindowsUninstall(purge: boolean, plan: UninstallPlan, warning: string | null): CommandResult {
-  const preserved = [
-    machineConfigPath(),
-    updateCachePath(),
-    join(installRoot(), "pins.json"),
-    defaultHarnessPath(),
-    channelPath(),
-  ];
+  const preserved = INSTALL_ROOT_ANSWERS.map((name) => join(installRoot(), name));
   scheduleWindowsUninstallContinuation(purge, preserved, plan);
   return success(
     `${warning ? `${warning}\n` : ""}uninstall scheduled; Windows cleanup will finish after this command exits${
@@ -2788,6 +2819,12 @@ function rollbackCommand(argv: string[]): ReturnType<typeof success> {
       );
     }
   }
+  if (typed && !existsSync(runtimeRoot(target))) {
+    throw new Error(
+      `${target} is not installed on this machine; run ${aidlcInvocation()} use ${target} to install it and switch to it, ` +
+        `or ${aidlcInvocation()} system rollback --list for the versions kept here`,
+    );
+  }
   const active = activeVersion();
   const missing = active
     ? installedDistributions(active).filter((item) => !installedDistributions(target).includes(item))
@@ -2854,20 +2891,10 @@ export async function installPinnedRelease(options: {
 // The repository's shared git directory and this checkout's own one, resolved;
 // they differ only in a linked worktree (`git worktree add`).
 function gitDirs(dir: string): { common: string; own: string } | null {
-  const result = Bun.spawnSync(["git", "rev-parse", "--git-common-dir", "--git-dir"], {
-    cwd: dir,
-    stdin: "ignore",
-    stdout: "pipe",
-    stderr: "ignore",
-    timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
-  });
-  const [common, own] = Buffer.from(result.stdout ?? new Uint8Array())
-    .toString("utf-8")
-    .trim()
-    .split(/\r?\n/);
-  if (result.exitCode !== 0 || !common || !own) return null;
+  const dirs = gitCommonDirOf(dir);
+  if (!dirs.ok) return null;
   try {
-    return { common: realpathSync(resolve(dir, common)), own: realpathSync(resolve(dir, own)) };
+    return { common: realpathSync(dirs.common), own: realpathSync(dirs.own) };
   } catch {
     return null;
   }

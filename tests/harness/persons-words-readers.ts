@@ -974,6 +974,7 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${LIB}#forgetGateWords`]: { use: "keeps", why: "the gate-words record's own write: forgets a message by its offset" },
   [`${LIB}#gateWordsSinceUnitReview`]: { use: "keeps", why: "the gate-words record: hands a checkpoint the replies typed while its review ran, blank ones left out" },
   [`${STORE}#parseMessage`]: { use: "keeps", why: "the message store's own read: checks a record's shape" },
+  [`${STORE}#saveMessage`]: { use: "keeps", why: "the message store's own write: a typed prompt the record cut, kept whole beside it up to REQUEST_MAX_BYTES", from: ["core/hooks/aidlc-record-human-turn.ts#respond"] },
   [`${STORE}#isPickerList`]: { use: "keeps", why: "the message store's own read: checks the box entries' shape", from: [`${STORE}#parseMessage`] },
   [`${STORE}#latestMessage`]: { use: "keeps", why: "the presence shape: a message with words or none (words === null)" },
   [`${STORE}#messageIsReply`]: { use: "keeps", why: "the presence shape: a message with words or none (words === null)" },
@@ -1039,12 +1040,15 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${ORCH}#planProposalDirective`]: { use: "decides", why: "keeps the request as a question and previews it; reuses the question the words came through without comparing them", from: [`${ORCH}#freshWorkRoute`, `${ORCH}#routeNext`] },
   [`${ORCH}#saveReadingQuestion`]: { use: "keeps", why: "keeps the words as a routing question with the message they came in", from: [`${ORCH}#newWorkRoutingAskDirective`, `${ORCH}#routeNext`] },
   [`${ORCH}#takePersonsOwnLine`]: { use: "keeps", why: "the /aidlc parse of the person's own line; already read is the message id" },
+  [`${ORCH}#cutLineGoesOn`]: { use: "keeps", why: "hands the parse of a cut line with no whole copy to the agent's one step", from: [`${ORCH}#takePersonsOwnLine`] },
+  [`${ORCH}#cutMessageStep`]: { use: "keeps", why: "the agent's one step for a cut line: the parse's plan, verb and reading in its command", from: [`${ORCH}#cutLineGoesOn`] },
+  [`${ORCH}#cutMessageArgs`]: { use: "keeps", why: "the plan, verb and settings of a cut line's parse as next's arguments", from: [`${ORCH}#cutMessageStep`] },
   [`${ORCH}#keptWordsStep`]: { use: "decides", why: "the pick step's command: the words a reading step kept from this message, handed on as kept (wordsForNextStep)" },
   [`${ORCH}#resumeWithWords`]: { use: "keeps", why: "a resume with words beside it: whether words are there, then the line read again without --resume" },
   [`${ORCH}#resumeAgain`]: { use: "decides", why: "the unpark step's re-run: the words typed with the resume, handed on as typed (wordsForNextStep)" },
   [`${ORCH}#wordsForNextStep`]: { use: "decides", why: "a step's command: the words go to a request file of their own as given, or quoted onto the line when that file cannot be written", from: [`${ORCH}#keptWordsStep`, `${ORCH}#reshapeReplyArgument`, `${ORCH}#resumeAgain`, `${ORCH}#routeNext`, `${ORCH}#routingQuestionReplyDirective`, `${ORCH}#unitPlanChangeAsk`] },
   [`${ORCH}#requestFileFor`]: { use: "keeps", why: "writes the request file a step's command names, with the words as given", from: [`${ORCH}#wordsForNextStep`] },
-  [`${LIB}#writeRecordFileNoFollow`]: { use: "keeps", why: "writes a step's request file with the words as given, and the isolated run's request", from: [`${ORCH}#requestFileFor`, `${LIB}#keepSingleRunRequest`] },
+  [`${LIB}#writeRecordFileNoFollow`]: { use: "keeps", why: "writes a step's request file with the words as given, the isolated run's request, and a cut message's whole copy", from: [`${ORCH}#requestFileFor`, `${LIB}#keepSingleRunRequest`, `${STORE}#saveMessage`] },
   [`${LOCKS}#writeBufferAtomic`]: { use: "keeps", why: "the atomic write under writeRecordFileNoFollow", from: [`${LIB}#writeRecordFileNoFollow`] },
   [`${ORCH}#emit`]: { use: "decides", why: "the words the person said belong to the work in progress are kept once as the code plan question's reply (keepRoutedPlanApprovalReply), and leave it by their message id" },
   [`${ORCH}#withParkedReply`]: { use: "keeps", why: "the resume re-show: the words they parked the work with" },
@@ -1099,6 +1103,7 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${POSTURE}#planApprovalQuestionEvidence`]: { use: "decides", why: "O4: the plan file's [Answer]: label, written by the agent itself, checked against its own --details (blank before the question); on the engine's plan question the recorder writes the line and never runs this" },
   [`${POSTURE}#planApprovalAnswerLabel`]: { use: "keeps", why: "cuts the recorder's option letter and quotes off that label", from: [`${POSTURE}#planApprovalQuestionEvidence`] },
   [`${POSTURE}#questionsFileHasPendingPlanApproval`]: { use: "decides", why: "the presence shape: whether the plan file's [Answer]: line is still blank (or underscores)" },
+  [`${POSTURE}#questionsFilePlanApprovalAnswer`]: { use: "keeps", why: "hands the latest Plan Approval section's [Answer]: line to the Kiro IDE adapter's argument-less mediation (processLegacyPlanApprovalWrite, on ALLOWED_UNREACHED)" },
   [`${ASK}#onlyTheirAnswerDiffers`]: { use: "keeps", why: "the presence shape: the person's answer in the plan file stays while the same question stands (the engine never erases what they wrote)" },
   [`${ASK}#requestPlanApprovalReviewNow`]: { use: "keeps", why: "the presence shape: a recorded answer on the plan file's line is cleared when the person asks to review the plan again" },
   [`${ASK}#answerLineAsFound`]: { use: "decides", why: "the engine's own line: the plan file's line is left out when it is exactly a mark the engine wrote there (the recorded answer's mark, either mark while the person edits, \"Plan approval off\"), so the engine's line is never kept as theirs; nothing else of theirs is read" },
@@ -1110,7 +1115,7 @@ export const ALLOWED: Record<string, Allowed> = {
   "core/tools/aidlc-runtime-paths.ts#readsAlikeInDoubleQuotes": { use: "decides", why: "whether every shell reads their words alike in double quotes, for quoteCommandArgument", from: ["core/tools/aidlc-runtime-paths.ts#quoteCommandArgument"] },
   [`${LIB}#parseLiteralShellInvocation`]: { use: "decides", why: "as above", from: [`${LIB}#isTerminalConfigurationDispatch`] },
   [`${LIB}#isTerminalConfigurationDispatch`]: { use: "decides", why: "reads the engine's own step message (which may quote their request) for a configuration command" },
-  [`${LIB}#addPendingPersonLines`]: { use: "keeps", why: "keeps a step's narration, or a setter's lines, for the person's next line", from: [`${ORCH}#sayPendingPersonLines`, `core/tools/aidlc-utility.ts#handleScopeChange`] },
+  [`${LIB}#addPendingPersonLines`]: { use: "keeps", why: "keeps a step's narration, or a setter's lines, for the person's next line", from: [`${ORCH}#sayPendingPersonLines`, `core/tools/aidlc-utility.ts#handleIntent`, `core/tools/aidlc-utility.ts#handleScopeChange`] },
   [`${LIB}#authoritativeProjectDescription`]: { use: "decides", why: "a shape read: splits a pasted <document> block, exact markers, from the directions around it", from: [`${ORCH}#authoritativeRequest`, `${ORCH}#documentSplitSentence`, `${ORCH}#namedDocumentNote`, `${ORCH}#pastedDocumentNote`] },
   "core/tools/aidlc-question-store.ts#parseQuestion": { use: "keeps", why: "the question store's own read: checks a record's shape" },
   "core/tools/aidlc-question-store.ts#saveQuestion": { use: "keeps", why: "the question store's writer: keeps the request as the question's text", from: [`${ORCH}#composeOfferAskDirective`, `${ORCH}#createPrintDirective`, `${ORCH}#planProposalDirective`, `${ORCH}#routeNext`, `${ORCH}#saveReadingQuestion`, `${ORCH}#scopeConfirmAskDirective`] },
@@ -1120,8 +1125,8 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${ORCH}#speaksToPerson`]: { use: "keeps", why: "as above" },
   [`${ORCH}#sayPendingPersonLines`]: { use: "keeps", why: "a step's narration, which may carry their request" },
   [`${ORCH}#prepareEmission`]: { use: "decides", why: "the step's text cut at a character boundary" },
-  [`${ORCH}#authoritativeRequest`]: { use: "decides", why: "the request a question shows back: its directions outside a pasted document", from: [`${ORCH}#composeDispatchDirective`, `${ORCH}#newWorkRoutingAskDirective`, `${ORCH}#requestPreview`] },
-  [`${ORCH}#requestPreview`]: { use: "decides", why: "the request a question shows back, cut to 240 characters", from: [`${ORCH}#freshWorkOfferDirective`, `${ORCH}#intentPickPromptIfRecordsExist`, `${ORCH}#newestRequestReplaces`, `${ORCH}#planProposalDirective`, `${ORCH}#routeNext`] },
+  [`${ORCH}#authoritativeRequest`]: { use: "decides", why: "the request a question shows back: its directions outside a pasted document", from: [`${ORCH}#composeDispatchDirective`, `${ORCH}#requestPreview`] },
+  [`${ORCH}#requestPreview`]: { use: "decides", why: "the request a question shows back, cut to 240 characters", from: [`${ORCH}#freshWorkOfferDirective`, `${ORCH}#intentPickPromptIfRecordsExist`, `${ORCH}#newWorkRoutingAskDirective`, `${ORCH}#newestRequestReplaces`, `${ORCH}#planProposalDirective`, `${ORCH}#routeNext`] },
   [`${ORCH}#newestRequestReplaces`]: { use: "decides", why: "the line that says the newer request is used shows it back, as a question does", from: [`${ORCH}#createPrintDirective`, `${ORCH}#planProposalDirective`, `${ORCH}#routeNext`] },
   [`${ORCH}#documentSplitSentence`]: { use: "decides", why: "the one line a question adds when the request carries a pasted document", from: [`${ORCH}#createPrintDirective`, `${ORCH}#freshWorkOfferDirective`, `${ORCH}#intentPickPromptIfRecordsExist`, `${ORCH}#planProposalDirective`, `${ORCH}#routeNext`] },
   [`${ORCH}#scopeConfirmAskDirective`]: { use: "keeps", why: "as above (the scope confirmation)", from: [`${ORCH}#freshWorkOfferDirective`] },
@@ -1131,12 +1136,13 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${ORCH}#reshapeReplyArgument`]: { use: "decides", why: "a print between a reshape answer and the composer hands their reply on in a request file its command names, when the answer carried one" },
   [`${ORCH}#unitPlanChangeAsk`]: { use: "decides", why: "the Unit-change question's separate-work answer hands the request on in a request file its command names, when the request carried words" },
   [`${ORCH}#newWorkRoutingAskDirective`]: { use: "decides", why: "as above (the routing question)", from: [`${ORCH}#intentPickPromptIfRecordsExist`, `${ORCH}#routeNext`] },
-  [`${ORCH}#printDirective`]: { use: "keeps", why: "prints a step, which may carry their request", from: [`${ORCH}#jumpStepPrint`, `${ORCH}#routeNext`, `${ORCH}#routingQuestionReplyDirective`] },
+  [`${ORCH}#printDirective`]: { use: "keeps", why: "prints a step, which may carry their request", from: [`${ORCH}#jumpStepPrint`, `${ORCH}#routeNext`] },
   [`${ORCH}#jumpStepPrint`]: { use: "keeps", why: "as above, for a step that names one jump", from: [`${ORCH}#emitTypedResumeChoice`] },
   [`${ORCH}#projectTypeIsWholeRequest`]: { use: "keeps", why: "the presence shape: the line is only the project type" },
   [`${ORCH}#parkedDirective`]: { use: "keeps", why: "a step's narration, which may carry their words", from: [`${ORCH}#parkAfterApproval`] },
   [`${ORCH}#parkAfterApproval`]: { use: "keeps", why: "as above" },
-  [`${ORCH}#nextArgsAreOnlyWords`]: { use: "keeps", why: "the presence shape: next carries only words" },
+  [`${ORCH}#nextArgsAreOnlyWords`]: { use: "decides", why: "the presence shape: next carries only words; handed the person's own /aidlc line (firstStepNote), it reads which keys the engine's parse of it holds, never what the words say", from: [`${ORCH}#firstStepNote`] },
+  [`${ORCH}#firstStepNote`]: { use: "decides", why: "the /aidlc parse: whether a line the human-turn hook just kept whole is words alone with no flag-shaped token next does not take, so the agent hears that next reads it from the copy; never what the words say", from: [`${HOOK}#respond`] },
   [`${ORCH}#planTypedAloneBesideWork`]: { use: "keeps", why: "the presence shape: a plan's name with no words after it" },
   [`${ORCH}#freshWorkOfferDirective`]: { use: "decides", why: "as above (the plan offer)" },
   [`${ORCH}#createPrintDirective`]: { use: "decides", why: "a question that shows their request back and keeps it in the question store" },
@@ -1180,6 +1186,7 @@ export const ALLOWED_UNREACHED: Record<string, Allowed> = {
   "harness/copilot/hooks/aidlc-copilot-adapter.ts#run": { use: "decides", why: "host-text identity: Copilot's subagent briefs by the digest of a brief AI-DLC recorded (P4: briefingDigest, checkBriefing)" },
   "harness/kiro/hooks/aidlc-kiro-adapter.ts#run": { use: "decides", why: "host-text identity: the Crew header and the Kiro CLI templates on the verb-intercept path (P1, P2)" },
   "harness/kiro-ide/hooks/aidlc-kiro-adapter.ts#messageOrigin": { use: "decides", why: "host-text identity: the Kiro workflow brief template (P1)" },
+  "harness/kiro-ide/hooks/aidlc-kiro-adapter.ts#processLegacyPlanApprovalWrite": { use: "decides", why: "the presence shape and an exact match, for a write that carries no tool arguments: no Plan Approval [Answer]: line is refused with how to write one, an empty one records the plan question, exactly Approve Plan or Request Changes is recorded as that choice, anything else is left; read through the dist copy of questionsFilePlanApprovalAnswer, which the scan does not follow" },
   [`${LIB}#kiroTurnOrigin`]: { use: "decides", why: "host-text identity: the Kiro templates (P1)" },
   [`${LIB}#kiroChatRecordOrigin`]: { use: "decides", why: "host-text identity: the Kiro chat record's mark for this prompt (P1)" },
   // The `[Answer]:` line read inline from a questions file's text, the person's when they answer in the file.
@@ -1189,9 +1196,9 @@ export const ALLOWED_UNREACHED: Record<string, Allowed> = {
   "core/tools/aidlc-sensor-claim-sources.ts#answerIsFilled": { use: "decides", why: "the presence shape: an [Answer]: line holds more than blanks or underscores", from: ["core/tools/aidlc-sensor-claim-sources.ts#parseSourceUniverse"] },
 };
 
-/** The places that make a record's words PersonsWords: the two records' writers and their own reads of the file. */
+/** The places that make a record's words PersonsWords: the two records' writers and their own reads of the files. */
 export const BRAND_WRITERS: readonly string[] = [
-  `${STORE}#saveMessage`, `${STORE}#parseMessage`, `${LIB}#recordGateWords`, `${LIB}#readGateWords`,
+  `${STORE}#saveMessage`, `${STORE}#parseMessage`, `${STORE}#wholeMessageText`, `${LIB}#recordGateWords`, `${LIB}#readGateWords`,
 ];
 
 /** The agent-argument checks (O4): they read the agent's argv or the file it wrote, never the person's words. */

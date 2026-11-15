@@ -10,7 +10,7 @@
 import { scopeStampLanded } from "./aidlc-unit-landing.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { accessSync, constants as fsConstants, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { accessSync, constants as fsConstants, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep } from "node:path";
 import { dlopen, FFIType, type Pointer } from "bun:ffi";
@@ -18,6 +18,7 @@ import { runtimeHarnessDir, runtimeHarnessName, SPACE_NAME_REGEX } from "./aidlc
 import { validateUnitName } from "./aidlc-review-records.ts";
 import { activeSpace, assertNoSymlinkInChainOrThrow, ENGINE_DIR, engineDirFor, intentsDir, isPlainObject, listIntentDirs, mainCheckoutOfWorktree, readAppendOnlyFileNoFollowOrThrow, readRegularFileNoFollowOrThrow, refuseEngineObserverWrite, spaceRecordRoot, workspaceRoot, writeFileAtomic } from "./aidlc-locks.ts";
 import { escapeRegex } from "./aidlc-markdown.ts";
+import { gitCommonDirOf } from "./aidlc-git.ts";
 import { jsoncDocumentValue, withoutBom } from "./aidlc-distribution.ts";
 
 export type CheckboxState = "pending" | "in-progress" | "awaiting-approval" | "revising" | "completed" | "skipped";
@@ -137,44 +138,6 @@ export function relativeRecordDir(
   const slug = selection.intent;
   if (slug === null) return null;
   return `aidlc/spaces/${sp}/intents/${slug}`;
-}
-
-// The repository NAME for a checkout whose project root is a LINKED GIT
-// WORKTREE, else null so the caller keeps `basename(projectDir)`.
-//
-// `git worktree add` names its directory after a branch, so in a linked worktree
-// basename(projectDir) is a branch name rather than a repository name. The shared
-// git dir lives inside the MAIN checkout, so its parent's basename is the
-// repository name.
-//
-// TWO things make this safe, and both are load-bearing:
-//
-//  1. `--git-dir` and `--git-common-dir` are measured with `cwd: projectDir`, so a
-//     relative answer is relative to PROJECTDIR — never to `--show-toplevel`. The
-//     two coincide only when the project root IS the toplevel; resolving against
-//     the toplevel otherwise climbs too high, and if a git dir happens to sit
-//     there (a repository vendored in another, or a home directory that is itself
-//     a repository) it would silently return a DIFFERENT repository's name.
-//  2. A linked worktree is the only topology where those two paths differ
-//     (`--git-dir` is `<common>/worktrees/<name>`). Equal for a main checkout, for
-//     a subdirectory of one, and for a repository nested inside another — all of
-//     which return null here and keep today's answer byte-for-byte. That is what
-//     makes this change worktree-only rather than a re-definition of identity for
-//     every project root below its repository root.
-//
-// Deliberately NOT the `origin` remote: that would also cover a clone whose
-// directory name differs from the repository, but remote names are mutable (a
-// rename or a re-point would move a workspace's store) and it would change
-// resolution for every checkout whose remote and directory names differ. A
-// location is stable; widening identity to the remote is a separate decision.
-export function gitRevParseSingle(projectDir: string, flag: string): string | null {
-  const r = spawnSync("git", ["rev-parse", flag], {
-    cwd: projectDir,
-    encoding: "utf-8",
-  });
-  if (r.status !== 0) return null;
-  const out = r.stdout?.trim();
-  return out ? out : null;
 }
 
 // The id8 disambiguator: trailing 8 hex chars of the uuid (digits only, dashes
@@ -852,12 +815,147 @@ export function readSessionPidEntry(projectDir: string, pid: number): SessionPid
   }
 }
 
+export function gcSessionPidEntries(
+  projectDir: string,
+  deadlineMs: number,
+  skip: ReadonlySet<number> = new Set(),
+  readIdentity: (pid: number) => ProcessIdentity | null = processIdentityReader(deadlineMs),
+): void {
+  let names: string[];
+  try {
+    names = readdirSync(sessionPidMapDir(projectDir));
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (!/^\d+$/.test(name)) continue;
+    if (Date.now() >= deadlineMs) break;
+    const pid = Number.parseInt(name, 10);
+    if (skip.has(pid)) continue;
+    if (pidEntryStale(projectDir, pid, readIdentity) !== true) continue;
+    try {
+      unlinkSync(join(sessionPidMapDir(projectDir), name));
+    } catch {
+      /* raced with another hook or cleanup */
+    }
+  }
+  sweepReleaseChecks(projectDir, deadlineMs, readIdentity);
+}
+
+// Whether a pid entry no longer names its process: gone, dead, or alive with
+// another start time. Null when the live process's start time cannot be read.
+function pidEntryStale(
+  projectDir: string,
+  pid: number,
+  readIdentity: (pid: number) => ProcessIdentity | null,
+): boolean | null {
+  const entry = readSessionPidEntry(projectDir, pid);
+  if (!entry || !processIsAlive(pid)) return true;
+  if (entry.startTime === null) return false;
+  const identity = readIdentity(pid);
+  if (identity === null) return null;
+  return identity.startTime !== entry.startTime;
+}
+
+// --- The pinned release a session already checked -------------------------
+//
+// The dispatcher hashes a pinned release's binary and every runtime file on a
+// session's first call and records the pass in pids/<pid>.release-check, beside
+// the entry of the session process the walk found; later calls of that chat in
+// that process leave out only the hashing (aidlc-lifecycle.ts
+// resolvePinnedDispatch). The record counts only while the live entry names the
+// same chat and the same, known start time. Session-start keeps the entry's one
+// writer; this file has its own.
+
+export interface SessionProcess {
+  pid: number;
+  startTime: string | null;
+  sessionId: string | null;
+}
+
+export interface ReleaseCheckMark {
+  version: string;
+  distribution: string | null;
+  executable: string;
+}
+
+function releaseCheckPath(projectDir: string, pid: number): string {
+  const entry = sessionPidEntryPath(projectDir, pid);
+  return entry === "" ? "" : `${entry}.release-check`;
+}
+
+// The session process and its chat as the live entry names them, or null: a
+// release check never counts for an entry with no start time or no chat.
+function liveSession(projectDir: string, session: SessionProcess): { sessionId: string; startTime: string } | null {
+  if (session.sessionId === null || session.startTime === null) return null;
+  const entry = readSessionPidEntry(projectDir, session.pid);
+  if (!entry || entry.sessionId !== session.sessionId || entry.startTime !== session.startTime) return null;
+  return { sessionId: session.sessionId, startTime: session.startTime };
+}
+
+export function releaseCheckHolds(projectDir: string, session: SessionProcess, mark: ReleaseCheckMark): boolean {
+  const live = liveSession(projectDir, session);
+  const path = releaseCheckPath(projectDir, session.pid);
+  if (live === null || path === "") return false;
+  try {
+    const recorded = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+    return recorded.sessionId === live.sessionId && recorded.startTime === live.startTime &&
+      recorded.version === mark.version && recorded.distribution === mark.distribution &&
+      recorded.executable === mark.executable;
+  } catch {
+    return false;
+  }
+}
+
+// Written only beside an entry that already exists (never a folder), then the
+// release checks of processes that are gone are swept, since a project pinned
+// to an earlier release runs that release's own session-start cleanup. A write
+// that is refused (a read-only engine probe changes no project bytes) sweeps
+// nothing either.
+export function recordReleaseCheck(projectDir: string, session: SessionProcess, mark: ReleaseCheckMark): void {
+  const live = liveSession(projectDir, session);
+  const path = releaseCheckPath(projectDir, session.pid);
+  if (live === null || path === "") return;
+  try {
+    writeFileAtomic(path, `${JSON.stringify({ ...live, ...mark })}\n`);
+  } catch {
+    return; // The next call checks again.
+  }
+  const deadline = Date.now() + sessionAncestryBudgetMs();
+  sweepReleaseChecks(projectDir, deadline, processIdentityReader(deadline));
+}
+
+// A release check goes when its pid entry is gone or stale.
+function sweepReleaseChecks(
+  projectDir: string,
+  deadlineMs: number,
+  readIdentity: (pid: number) => ProcessIdentity | null,
+): void {
+  let names: string[];
+  try {
+    names = readdirSync(sessionPidMapDir(projectDir));
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    const match = /^(\d+)\.release-check$/.exec(name);
+    if (!match) continue;
+    if (Date.now() >= deadlineMs) break;
+    if (pidEntryStale(projectDir, Number.parseInt(match[1], 10), readIdentity) !== true) continue;
+    try {
+      unlinkSync(join(sessionPidMapDir(projectDir), name));
+    } catch {
+      /* raced with another hook or cleanup */
+    }
+  }
+}
+
 // Resolve the nearest mapped ancestor of the calling process. Every failure is
 // a silent miss so tools retain cursor behavior when process metadata is absent.
 export function resolveSessionIdFromAncestry(projectDir: string): string | null {
   const cached = sessionAncestryCache.get(projectDir);
   if (cached && cached.expiresAt > Date.now()) return cached.sessionId;
-  const resolved = resolveSessionIdFromAncestryUncached(projectDir);
+  const resolved = resolveSessionIdFromAncestryUncached(projectDir)?.sessionId ?? null;
   if (resolved === null) {
     sessionAncestryCache.set(projectDir, {
       sessionId: null,
@@ -869,7 +967,13 @@ export function resolveSessionIdFromAncestry(projectDir: string): string | null 
   return resolved;
 }
 
-function resolveSessionIdFromAncestryUncached(projectDir: string): string | null {
+// The session process the walk finds, for the pinned release check, which
+// counts it only with a known start time (releaseCheckHolds).
+export function nearestSessionProcess(projectDir: string): SessionProcess | null {
+  return resolveSessionIdFromAncestryUncached(projectDir);
+}
+
+function resolveSessionIdFromAncestryUncached(projectDir: string): SessionProcess | null {
   if (!existsSync(sessionPidMapDir(projectDir))) return null;
   const deadline = Date.now() + sessionAncestryBudgetMs();
   const windows = sessionProcessPlatform() === "win32";
@@ -891,7 +995,7 @@ function resolveSessionIdFromAncestryUncached(projectDir: string): string | null
       entry &&
       (entry.startTime === null || entry.startTime === identity.startTime)
     ) {
-      return windows && entry.startTime === null ? null : entry.sessionId;
+      return windows && entry.startTime === null ? null : { pid, startTime: entry.startTime, sessionId: entry.sessionId };
     }
     childIdentity = identity;
     pid = identity.ppid;
@@ -1189,9 +1293,9 @@ function localWorktreeRecord(projectDir: string): string | null {
     ) as { version?: unknown; intentRecord?: unknown; gitCommonDirHash?: unknown };
     if (meta.version !== 1 || typeof meta.intentRecord !== "string" ||
       typeof meta.gitCommonDirHash !== "string") return null;
-    const commonRaw = gitRevParseSingle(projectDir, "--git-common-dir");
-    if (commonRaw === null) return null;
-    const common = realpathSync(resolvePath(projectDir, commonRaw)).replace(/\\/g, "/");
+    const dirs = gitCommonDirOf(projectDir);
+    if (!dirs.ok) return null;
+    const common = realpathSync(dirs.common).replace(/\\/g, "/");
     const key = process.platform === "win32" ? common.toLowerCase() : common;
     return createHash("sha256").update(key).digest("hex") === meta.gitCommonDirHash
       ? meta.intentRecord
@@ -1397,6 +1501,13 @@ export function stateFilePath(projectDir: string, intent?: string, space?: strin
   }
   return join(resolved.dir, "aidlc-state.md");
 }
+
+// The in-flight compose question's ask type on the active-directive marker
+// below. The agent shows the question from the composer's proposal, so the
+// engine hands out a print, and the print is published as the question's step,
+// as every question the engine asks is (prepareEmission; read by
+// composeGateOpen).
+export const COMPOSE_ASK_TYPE = "compose";
 
 // The engine's final validated run-stage is the active execution cursor. Most
 // stages match aidlc-state.md's Current Stage, but unit-major Construction can

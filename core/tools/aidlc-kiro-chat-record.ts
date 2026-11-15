@@ -130,30 +130,78 @@ function modelName(value: unknown): string | null {
     : null;
 }
 
-// Kiro IDE's agent menu names for the session.json `agentMode` of its built-in
-// agents that ask the person to approve each command (Kiro IDE 1.4.51).
+// Kiro's names for the session.json `agentMode` of its built-in agents, which
+// leave each command to Kiro's approval: Kiro IDE's agent menu (Kiro IDE
+// 1.4.51); Kiro CLI 3.2.0 on its v3 engine writes `vibe` for its Default too.
 const DEFAULT_AGENTS: Readonly<Record<string, string>> = { vibe: "Default", "default-v2": "Default v2" };
 
 /**
- * The agent menu's name for this chat's agent when its session.json says one
- * of Kiro IDE's Default agents; "" for any other agent, no readable record, or
- * when the person chose Always allow for `command`: Kiro keeps that choice in
+ * The name of this chat's agent when its session.json says one of Kiro's
+ * Default agents; "" for any other agent, no readable record, or when Kiro
+ * does not ask the person about `command`: they chose Always allow for it, or
+ * Approve for me is on. Kiro keeps an Always allow in
  * ~/.kiro/workspace-roots/<workspace id>/ (This workspace; the chat record's
- * workspace id) or ~/.kiro/settings/ (All workspaces).
+ * workspace id) or ~/.kiro/settings/ (All workspaces). Kiro IDE 1.4.154 keeps
+ * Approve for me in the chat's session.json (`approveForMe`, true only in that
+ * mode), which then decides. Kiro CLI 3.2.0's session.json has no such field:
+ * its approve for me is the workspace's `policies: [approve-for-me]`.
  */
 export function kiroDefaultAgentName(sessionId: string | undefined, command: string): string {
   const [record] = kiroChatRecordPaths(sessionId, "session.json");
   if (record === undefined) return "";
-  let mode: unknown;
+  let session: unknown;
   try {
-    mode = (JSON.parse(readFileSync(record, "utf-8")) as { agentMode?: unknown }).agentMode;
+    session = JSON.parse(readFileSync(record, "utf-8"));
   } catch {
     return "";
   }
+  const mode = recordField(session, "agentMode");
   if (typeof mode !== "string" || !Object.hasOwn(DEFAULT_AGENTS, mode)) return "";
+  const approveForMe = recordField(session, "approveForMe");
+  if (approveForMe === true) return "";
   const kiro = join(homedir(), ".kiro");
-  const ruleDirs = [join(kiro, "workspace-roots", basename(dirname(dirname(record)))), join(kiro, "settings")];
-  return ruleDirs.some((dir) => kiroAlwaysAllows(dir, command)) ? "" : DEFAULT_AGENTS[mode];
+  const workspace = join(kiro, "workspace-roots", basename(dirname(dirname(record))));
+  if (typeof approveForMe !== "boolean" && kiroPoliciesApproveForMe([workspace]) === true) return "";
+  return [workspace, join(kiro, "settings")].some((dir) => kiroAlwaysAllows(dir, command)) ? "" : DEFAULT_AGENTS[mode];
+}
+
+// Kiro's permissions.yaml (or .json) in `dir`: its parsed value, or that there
+// is none or it cannot be read.
+function readKiroPermissions(dir: string, file: string): { value: unknown } | "missing" | "unreadable" {
+  const path = join(dir, file);
+  if (!existsSync(path)) return "missing";
+  try {
+    const text = readFileSync(path, "utf-8");
+    return { value: file.endsWith(".json") ? JSON.parse(text) : Bun.YAML.parse(text) };
+  } catch {
+    return "unreadable";
+  }
+}
+
+// The same file's parsed value; null when there is none or it cannot be read.
+function kiroPermissions(dir: string, file: string): unknown {
+  const read = readKiroPermissions(dir, file);
+  return typeof read === "object" ? read.value : null;
+}
+
+// Whether Kiro CLI's permission files in `dirs` list its approve for me, as its
+// /permissions writes it: `policies: [approve-for-me]`, beside rules or none.
+// true when one lists it; null when none does and a file there cannot be read;
+// false otherwise. Each caller passes the folders it reads (the hook its chat's
+// workspace, the issue report the person's own settings too); the issue report
+// imports this from the installed tools, so it keeps no copy.
+export function kiroPoliciesApproveForMe(dirs: readonly string[]): boolean | null {
+  let unreadable = false;
+  for (const dir of dirs) {
+    for (const file of ["permissions.yaml", "permissions.json"]) {
+      const read = readKiroPermissions(dir, file);
+      if (read === "unreadable") unreadable = true;
+      if (typeof read !== "object") continue;
+      const policies = recordField(read.value, "policies");
+      if (Array.isArray(policies) && policies.includes("approve-for-me")) return true;
+    }
+  }
+  return unreadable ? null : false;
 }
 
 // A plain Always allow, as Kiro writes it in permissions.yaml (or .json):
@@ -161,13 +209,7 @@ export function kiroDefaultAgentName(sessionId: string | undefined, command: str
 // any text. A rule with anything more, or a file that cannot be read, is not.
 function kiroAlwaysAllows(dir: string, command: string): boolean {
   for (const file of ["permissions.yaml", "permissions.json"]) {
-    let rules: unknown;
-    try {
-      const text = readFileSync(join(dir, file), "utf-8");
-      rules = ((file.endsWith(".json") ? JSON.parse(text) : Bun.YAML.parse(text)) as { rules?: unknown } | null)?.rules;
-    } catch {
-      continue;
-    }
+    const rules = recordField(kiroPermissions(dir, file), "rules");
     if (!Array.isArray(rules)) continue;
     for (const rule of rules as Array<Record<string, unknown> | null>) {
       if (rule === null || typeof rule !== "object" || rule.capability !== "shell" || rule.effect !== "allow") continue;

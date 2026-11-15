@@ -176,11 +176,11 @@ once whether to share the plan with the teams, before each Unit this session
 would build:
 
 - **Share them with the teams** runs `aidlc unit share`: it commits what git
-  shows changed here (the question names how many files and, by name, up to
-  ten new files outside `aidlc/`, past ten those nearest the project's top, with
-  how many more; `git status` shows the rest before you share; ignored files
-  and AI-DLC's own part of `.gitignore`, `AGENTS.md` and `opencode.json` stay
-  out)
+  shows changed here (the question names how many files and, by name as
+  changed, new or deleted, up to ten outside `aidlc/`, past ten those nearest
+  the project's top, with how many more; `git status` shows the rest before you
+  share; ignored files and AI-DLC's own part of `.gitignore`, `AGENTS.md` and
+  `opencode.json` stay out)
   and pushes the integration branch with a plain push, never forced. This
   checkout then shows the board instead of building Units. A push the remote
   refuses (it has commits this clone lacks, or the branch is protected) keeps
@@ -188,8 +188,8 @@ would build:
 - **Build them here for now** builds that Unit in this session; the question
   comes back before the next Unit.
 
-Typed, the same step is `/aidlc unit share`, or your own commit and
-`git push origin main`.
+Typed, the same step is `/aidlc unit share`, which names what it committed
+once it has pushed, or your own commit and `git push origin main`.
 
 Claims open by dependency batch. "Delivery planning is complete" does not mean
 every Unit is claimable; a Unit remains blocked until every `depends_on` row is
@@ -256,8 +256,8 @@ When the Unit is complete and approved, `/aidlc` asks once whether to commit it
 and publish it for review on main. **Commit and publish** runs
 `aidlc unit publish payments --commit`, which commits the Unit's own work (every
 tracked change, the record under `aidlc/` and the new files its source manifest
-lists; the question names how many files and up to ten new ones, as the share
-question does) and then publishes. Other new files, such as AI-DLC's own install
+lists; the question names how many files and, by name as changed, new or
+deleted, up to ten, as the share question does) and then publishes. Other new files, such as AI-DLC's own install
 or an unignored `node_modules`, stay on disk uncommitted, and the publish says
 once how many it left out; say which you want in and it publishes again with
 them (`--include <path>`). **Not now** leaves it, and the step then says it is
@@ -426,7 +426,17 @@ git push origin main
 
 Dependents become claimable from the merged row. After the last row merges,
 the per-Unit block settles and main routes Build and Test (3.6), then CI
-Pipeline (3.7), exactly as solo Construction does.
+Pipeline (3.7), exactly as solo Construction does. Main can also move on to
+Build and Test before then, typed (`/aidlc --stage build-and-test`) or asked
+in plain words: once a team has taken a Unit, the Unit stages stay open on
+main, the move says once which Units are still open and whose ("Still open on
+main, and landing as they finish: gamma (team-g); beta, not taken yet."), and
+each Unit still comes up for review and lands as it finishes. Once a team has
+taken a Unit, a redo of a Unit stage for every Unit on main ("redo the functional
+design") reopens it only for the Units main itself is building and says which it
+left and why ("Redoing Functional Design for unit beta. alpha is finished and
+gamma is built by team-g, so they are not redone here."); with none, nothing
+changes and the line says so. A team's finished Unit keeps its approvals.
 
 ---
 

@@ -23,7 +23,6 @@ imports them as the matching phase rule.
 
 ## Traceability
 
-- Every requirement must trace back to an ideation artifact (intent, feasibility, or scope)
 - Do not introduce new requirements in inception without documenting their origin
 
 ## Corrections
