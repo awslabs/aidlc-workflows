@@ -9041,9 +9041,14 @@ function untrackedIgnored(dir: string, paths: readonly string[]): string[] {
   return checked.status === 0 ? checked.stdout.split("\0").filter(Boolean) : [];
 }
 
-// Whether a repo of the push holds changes of the person's beyond the Unit's.
-function ownChanges(planned: ReadonlyArray<{ dir: string }>): boolean {
-  return planned.some(({ dir }) => git(dir, ["status", "--porcelain"]).stdout.trim() !== "");
+// Whether a repo of the push holds changes of the person's beyond the Unit's,
+// and on the workspace's own repository beyond AI-DLC's record of the build,
+// which the push commits next (sendBuildRecord).
+function ownChanges(pd: string, planned: ReadonlyArray<{ repo: string; dir: string }>): boolean {
+  return planned.some(({ repo, dir }) => {
+    const record = repo === "." ? ["--", ...buildRecordPaths(pd).map((path) => `:(exclude)${path}`)] : [];
+    return git(dir, ["status", "--porcelain", ...record]).stdout.trim() !== "";
+  });
 }
 
 function buildsHome(projectDir: string, build: UnitBuild): HomeWork {
@@ -9404,7 +9409,7 @@ function pushUnit(args: string[], projectDir?: string): void {
   // whatever line the run ends with.
   const along: string[] = [];
   const whereNow = (done = false): string =>
-    whereNowLine(branch, moved, done && ownChanges(planned) ? "; your other changes are still yours, uncommitted" : "") +
+    whereNowLine(branch, moved, done && ownChanges(pd, planned) ? "; your other changes are still yours, uncommitted" : "") +
       along.map((line) => ` ${line}`).join("");
   // Each commit this push makes, by repo, as it is made; saved at a refusal
   // too, so the next push question says the last push did not go through.

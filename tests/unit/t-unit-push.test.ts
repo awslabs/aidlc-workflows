@@ -3155,6 +3155,8 @@ describe("a Unit on the workspace's own repository", () => {
     expect(git(alice, ["status", "--porcelain", "--", "aidlc/spaces/default"])).toBe("M aidlc/spaces/default/memory/team.md");
     expect(git(alice, ["status", "--porcelain", "--", "aidlc/spaces/payments"])).toBe("");
     expect(String(pushed.json?.notice)).toContain(recordWent("refunds"));
+    // Their change to the lead's record is still theirs, uncommitted, and the line says so.
+    expect(String(pushed.json?.notice)).toContain("; your other changes are still yours, uncommitted.");
   });
 
   test("the lead's look reads the squash of the Unit's pull request, record and all, as merged, and the Unit's result names only its code", () => {
@@ -3163,9 +3165,11 @@ describe("a Unit on the workspace's own repository", () => {
     builtHere(alice, "refunds", "refunds.ts");
     const pushed = run(UNIT, ["push"], alice);
     expect(pushed.status, pushed.out).toBe(0);
-    // Nothing else of theirs is left out of git here, so the line that asks them to check in is not said.
+    // Nothing else of theirs is left out of git here, so the line that asks them to check in is not said, and nothing
+    // is said to be still theirs: the record this push commits is AI-DLC's.
     expect(String(pushed.json?.notice)).toEndWith(recordWent("refunds"));
     expect(String(pushed.json?.notice)).not.toContain(CHECK_IN_LINE);
+    expect(String(pushed.json?.notice)).not.toContain("your other changes are still yours");
     const sent = claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds") as {
       result: { repos: Array<{ repo: string; heads: string[]; paths: Record<string, string | null> }> };
     };
