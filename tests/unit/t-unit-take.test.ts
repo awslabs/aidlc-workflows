@@ -1798,6 +1798,46 @@ describe("the claims' home is the lead's address", () => {
     expect(claimPayload(home.remote, id8, "refunds")).toMatchObject({ done: true });
   });
 
+  // A walk on one repository: the lead merged the team's pull request from its fork and pulled, then added the fork
+  // as a remote, as the take line says. That step's first look at the lead's project was the chat's one look, and
+  // the board took in from the fork only when its own look fetched again, so the Unit read open for that step.
+  test("one repository: the lead's first step after adding the team's fork as a remote takes the team's records in", () => {
+    const home = makeHome({ repos: {}, dependencies: three });
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    commitAll(home.dir, "teams");
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    committedByPusher(home.remote);
+    const id8 = fixtureIntentId8(home.dir);
+    const fork = forkOf(home.remote, "pay-fork", false);
+    const pay = cloneOf(fork, "pay");
+    git(pay, ["remote", "add", "upstream", home.remote]);
+    git(pay, ["fetch", "-q", "upstream"]);
+    expect(takeFrom("payments", pay, "refunds").status).toBe(0);
+    const record = buildDir(pay, "payments", "refunds");
+    mkdirSync(join(pay, "src"), { recursive: true });
+    writeFileSync(join(pay, "src", "refunds.ts"), "export const refunds = 1;\n");
+    const stage = join(record, "construction", "refunds", "code-generation");
+    mkdirSync(stage, { recursive: true });
+    writeFileSync(join(stage, "source-manifest.json"), `${JSON.stringify({ stage: "code-generation", unit: "refunds", version: 1, writes: [{ path: "src/refunds.ts" }] })}\n`);
+    writeFileSync(join(stage, "code-summary.md"), "# Code summary\n\nRefunds.\n");
+    finishBuild(record);
+    expect(run(UNIT, ["push"], pay).status).toBe(0);
+    // The host squashes the fork's pull request into the lead's main; the lead pulls it.
+    const merger = cloneOf(home.remote, "lead");
+    git(merger, ["fetch", "-q", fork, "+refs/heads/refunds:refs/pr/refunds"]);
+    git(merger, ["merge", "-q", "--squash", "refs/pr/refunds"]);
+    git(merger, ["commit", "-q", "-m", "refunds (#1)"]);
+    git(merger, ["push", "-q", "origin", "main"]);
+    git(home.dir, ["pull", "-q", "--ff-only", "origin", "main"]);
+    next(home.dir, chatOf("lead-before-the-fork"));
+    expect(claimPayload(home.remote, id8, "refunds")).toBeNull();
+    git(home.dir, ["remote", "add", "pay-fork", fork]);
+    // One step of a new chat, with no message of the person's recorded since its first look.
+    const step = next(home.dir, chatOf("lead-first-step-with-the-fork"));
+    expect(claimPayload(home.remote, id8, "refunds"), JSON.stringify(step).slice(0, 400)).toMatchObject({ taken_by: "pay" });
+    expect(String(step.narration ?? step.question ?? "")).not.toContain("- refunds, open");
+  });
+
   test("two teams' forks hold a take of one Unit: the first taken in wins, and the other team hears today's line", () => {
     const { home, hosts, id8 } = forkedLead();
     refusePushes(home.remote);
