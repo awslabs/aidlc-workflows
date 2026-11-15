@@ -18,7 +18,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
-import { REPO_ROOT } from "../harness/fixtures.ts";
+import { FIXTURES_DIR, REPO_ROOT, seededStateFile, seedWorkspaceShell } from "../harness/fixtures.ts";
 import { gitBashPath, gitBashSkipReason } from "../harness/git-bash.ts";
 import { serveReleaseFixture, writeReleaseFixture } from "../harness/release-fixture.ts";
 import { testGuardEnvironment } from "../harness/runner-profile.ts";
@@ -253,6 +253,21 @@ describe.skipIf(SKIP_REASON !== null)("each project catches up the next time it 
     expect(existsSync(join(dir, "aidlc", "repos.json"))).toBe(true);
     expect(first.stdout).not.toContain("repos.json");
     expect(first.stdout).toContain(catchUpSaid(dir, false));
+  });
+
+  // An offer never ends in a refusal: commit-record refuses in a Unit's build,
+  // where aidlc/ holds the lead's record too, so there the move is said as today.
+  test("in a checkout that builds a Unit, the move is said as it was and never offered", () => {
+    const dir = project(earlierTree);
+    seedWorkspaceShell(dir);
+    writeFileSync(seededStateFile(dir), readFileSync(join(FIXTURES_DIR, "state-construction.md"), "utf-8")
+      .replace("- **Revision Count**: 0\n", "- **Revision Count**: 0\n- **Unit Build**: refunds\n"));
+    const first = sessionStart(dir, "catch-up, a Unit's build");
+    expect(first.status, first.stdout + first.stderr).toBe(0);
+    expect(first.stdout).toContain(catchUpSaid(dir, true));
+    expect(first.stdout).not.toContain("Want me to commit the move");
+    expect(first.stdout).not.toContain("unit commit-record");
+    expect(existsSync(join(dir, "aidlc", ".aidlc-engine", "request-text", `unit-record-message-moved-${AIDLC_VERSION}.txt`))).toBe(false);
   });
 
   test("a project in a folder of its repo: the line counts its own folders", () => {

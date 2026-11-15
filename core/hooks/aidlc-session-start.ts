@@ -114,6 +114,7 @@ import {
   commitDraftSentence,
   OWN_MESSAGE_SENTENCE,
   RECORD_COMMIT_MESSAGE,
+  unitBuildOf,
   unitWordsFile,
   writeCommitDraft,
 } from "../tools/aidlc-unit-teams.ts";
@@ -173,7 +174,7 @@ function completeHelpersOfEarlierProcess(projectDir: string, sessionId: string):
 // changed files git tracks, or moved a repos.json git tracks into aidlc/ (and,
 // for the move, the question that offers its commit, with the file its commit
 // message is drafted in when the hook could write it); null otherwise.
-function catchUpProjectFiles(projectDir: string): { told: string; asked: string | null; messageFile: string | null } | null {
+function catchUpProjectFiles(projectDir: string, unitBuild: boolean): { told: string; asked: string | null; messageFile: string | null } | null {
   if (!isCompiledExecutable() || existsSync(join(projectDir, ".aidlc-version"))) return null;
   const major = AIDLC_VERSION.split(".")[0];
   const behind = () => {
@@ -227,7 +228,7 @@ function catchUpProjectFiles(projectDir: string): { told: string; asked: string 
   if (told === null) return null;
   // The list's move is AI-DLC's own record: offered to be committed on the person's yes, when the commit could run,
   // with the message the agent drafts for it over the fallback this hook writes into the move's own file.
-  const asking = moved && process.env.AIDLC_UNATTENDED !== "1" && recordCommitBlock(projectDir, false) === null;
+  const asking = moved && process.env.AIDLC_UNATTENDED !== "1" && recordCommitBlock(projectDir, unitBuild) === null;
   const file = unitWordsFile("record-message", `moved-${AIDLC_VERSION}`);
   const drafted = asking && (existsSync(join(projectDir, ...file.split("/"))) || writeCommitDraft(projectDir, file, RECORD_COMMIT_MESSAGE));
   const asked = asking ? catchUpChangedLine(AIDLC_VERSION, changed, moved, true, drafted) : null;
@@ -573,7 +574,16 @@ if (sessionId && !rebindCheckOnly) {
   // After the status line, whose once-only line config's own call would take.
   // A compaction's start is mid-turn, so the refresh waits for the next chat.
   try {
-    const caughtUp = source === "compact" ? null : catchUpProjectFiles(projectDir);
+    // The work this chat reads, as commit-record reads it (no state read is no Unit's build): in a Unit's build it
+    // refuses, so nothing is offered there.
+    const unitBuild = (): boolean => {
+      try {
+        return unitBuildOf(readFileSync(stateFilePathForSelection(projectDir, selection), "utf-8")) !== null;
+      } catch {
+        return false;
+      }
+    };
+    const caughtUp = source === "compact" ? null : catchUpProjectFiles(projectDir, unitBuild());
     if (caughtUp !== null) {
       // opencode's adapter carries no session-start context: the next step does.
       if (runtimeHarnessName(projectDir) === "opencode") addPendingPersonLines(projectDir, sessionId, [caughtUp.told]);
