@@ -112,12 +112,14 @@ describe("t282 state-version doctor gate", () => {
     expect(status).not.toBe(0);
   });
 
-  test("a FUTURE (v9) state fails the compatible row with upgrade guidance, not archive-and-reinit", () => {
+  test("a FUTURE (v9) state fails the compatible row with the step that carries it on, not archive-and-reinit", () => {
     const { status, out } = runDoctor("9");
     expect(out).toMatch(/state version compatible/);
     expect(out).not.toMatch(/state version current/);
-    expect(out).toMatch(/is newer than the current/);
-    expect(out).toMatch(/Upgrade the framework/);
+    // The release that writes it and this install's one step, in plain words.
+    expect(out).toContain("This plan was set up with AI-DLC 2.12 or newer");
+    expect(out).toContain("To carry on");
+    expect(out).not.toMatch(/Upgrade the framework|state schema/);
     // The past-version's archive path template ('mv aidlc aidlc.v9-archive')
     // MUST NOT appear — that would be the wrong remediation for a future state.
     expect(out).not.toMatch(/aidlc\.v9-archive/);
@@ -240,14 +242,14 @@ describe("t282 runtime state-version guard (next / report)", () => {
     expect(r.out).toMatch(UNPARSEABLE);
   });
 
-  // A FUTURE numeric schema (v9) is incompatible with THIS build's v8 graph, but
-  // it does not "predate" v8 — it must be reported as newer, with upgrade (not
-  // archive-and-reinit) guidance.
-  test("`next` refuses a FUTURE (v9) state as newer, not as predating v8", () => {
+  // A FUTURE numeric schema (v9) is one this build cannot read, but it does
+  // not "predate" v8: a copied project hears the release that writes it and its
+  // own step to carry on (t-newer-work-update-offer owns the native offer).
+  test("`next` on a FUTURE (v9) state names the newer release and the step, not a past-version refusal", () => {
     const r = runOrchestrate("next", "9");
-    expect(r.kind).toBe("error");
-    expect(r.out).toMatch(/State Version 9 is newer than the current/);
-    expect(r.out).not.toMatch(/predates the current/);
+    expect(r.kind).toBe("print");
+    expect(r.out).toContain("This plan was set up with AI-DLC 2.12 or newer");
+    expect(r.out).not.toMatch(/predates the current|Upgrade the framework/);
   });
 
   // A parser that captures only the first non-whitespace token accepts anything
@@ -279,7 +281,8 @@ describe("t282 runtime state-version guard (next / report)", () => {
   });
 });
 
-// All three refusals point at doctor. The pointer must name the harness's own
+// The past and unparseable refusals point at doctor (a newer state names its own
+// step instead). The pointer must name the harness's own
 // skill prefix: Codex routes `$aidlc`, so a literal `/aidlc --doctor` sends a
 // Codex user to a command their harness does not have.
 describe("t282 state-version refusals name doctor through the harness skill prefix", () => {
@@ -298,7 +301,7 @@ describe("t282 state-version refusals name doctor through the harness skill pref
     });
     return `${res.stdout ?? ""}${res.stderr ?? ""}`;
   };
-  for (const [branch, version] of [["past", "6"], ["future", "9"], ["unparseable", "8 garbage"]]) {
+  for (const [branch, version] of [["past", "6"], ["unparseable", "8 garbage"]]) {
     test(`the ${branch} refusal says $aidlc --doctor on Codex and /aidlc --doctor on Claude`, () => {
       const codex = nextOn(CODEX_ORCH, version);
       expect(codex).toContain("Run `$aidlc --doctor`");

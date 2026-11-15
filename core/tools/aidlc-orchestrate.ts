@@ -700,7 +700,14 @@ import {
 } from "./aidlc-audit.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
 import { unitMemoryPath, unitStageMemoryPath } from "./aidlc-stage-diary.ts";
-import { bringStateUpToDate } from "./aidlc-state-upgrade.ts";
+import {
+  bringStateUpToDate,
+  newerStateRelease,
+  newerStateStep,
+  newerWorkInstall,
+  newerWorkLead,
+  newerWorkRefresh,
+} from "./aidlc-state-upgrade.ts";
 import { renderEngineInvocation, sameGuardOperation } from "./aidlc-guard-operation.ts";
 import { claimedCheckoutMovesElsewhere, claimedCheckoutReopens, completedUnits } from "./aidlc-unit-landing.ts";
 import { isHookPreDispatch, withAuditLock } from "./aidlc-locks.ts";
@@ -2103,7 +2110,11 @@ function prepareEmission(directive: Directive): PreparedEmission {
   // The bytes the host's tool panel shows first are the person's words.
   transported = withPersonsWordsFirst(transported);
   // A question for the person goes out with its id on the record (aidlc-questions.ts).
-  if (transported.kind === "ask" && transported.question_id === undefined && askState !== null && engineProjectDir) {
+  // The AI-DLC update question has none: the record it is about is one this build cannot read.
+  if (
+    transported.kind === "ask" && transported.question_id === undefined && askState !== null && engineProjectDir &&
+    transported.ask_type !== AI_DLC_UPDATE_ASK_TYPE
+  ) {
     const id = askQuestionId(engineProjectDir, transported, askState);
     if (id !== null) transported.question_id = id;
   }
@@ -6369,6 +6380,111 @@ function errorDirective(message: string): ErrorDirective {
 function staleStateVersionError(stateContent: string): string | null {
   const verdict = classifyStateVersion(stateContent);
   return verdict.kind === "ok" ? null : verdict.message;
+}
+
+// The State Version of a record a newer AI-DLC wrote, which this build cannot
+// read; null for any other record, or none.
+function newerStateVersion(stateContent: string | null): string | null {
+  if (stateContent === null) return null;
+  const verdict = classifyStateVersion(stateContent);
+  return verdict.kind === "future" ? verdict.version : null;
+}
+
+export const AI_DLC_UPDATE_ASK_TYPE = "ai-dlc-update";
+const UPDATE_ANSWERS = ["now", "later", "done"] as const;
+type UpdateAnswer = (typeof UPDATE_ANSWERS)[number];
+// The answer `next --update-ai-dlc` carried in this command (see takeUpdateAnswer).
+let updateAnswer: UpdateAnswer | null = null;
+const NOT_NOW_LINE = "Leaving it as it is. Ask me to update AI-DLC whenever you're ready, and I'll carry on.";
+
+function tellAndStop(line: string): PrintDirective {
+  return turnEndingPrint(`Tell the person in one line: ${JSON.stringify(line)} Then stop.`);
+}
+
+// The step for a record a newer AI-DLC wrote, in place of next's or report's
+// refusal (#2783 calls it too): on a native install, which updates itself, one
+// question, whose yes carries on with `carried`, the `next` arguments as they
+// were typed, kept under an id for the command after the update. Every other
+// install, and an unattended run, where nobody is there to answer, hears its
+// own one step. The question writes nothing into the record, which this build
+// cannot read: no question row, and the kept request lives in this machine's
+// own folder. After an update that left this build in place (`done`), the
+// person hears that once, never the question again.
+function newerWorkOffer(projectDir: string, version: string, carried: readonly string[], newWork = false): Directive {
+  if (updateAnswer === "done") {
+    // Nothing carried on, so the carry-on line is not said.
+    activeKeptRequestLine = null;
+    return tellAndStop(
+      `AI-DLC is still ${AIDLC_VERSION} on this computer, so this plan, set up with ${newerStateRelease(version)}, ` +
+        `cannot carry on here until \`aidlc update\` brings that release to this computer.`,
+    );
+  }
+  if (newerWorkInstall(projectDir).kind !== "native" || process.env.AIDLC_UNATTENDED === "1") {
+    return tellAndStop(newerStateStep(projectDir, version, newWork));
+  }
+  let id: string | null = null;
+  if (!isReadOnlyEngineProbe()) {
+    try {
+      const selection = engineSelection(projectDir);
+      const uuid = selection.intent === null ? null : intentUuidForSelection(projectDir, selection);
+      const workflow = selection.intent !== null && uuid !== null ? { intent: selection.intent, uuid } : null;
+      id = saveRestartRequest(projectDir, carried, selection.space, workflow, undefined, engineSessionId);
+    } catch {
+      // Not kept: the yes carries on with a bare `next`, and the person's words stay in this chat.
+      id = null;
+    }
+  }
+  const answer = (value: UpdateAnswer) =>
+    `${aidlcToolInvocation("orchestrate")} next --update-ai-dlc ${value}${id === null ? "" : ` --request ${id}`}`;
+  return {
+    kind: "ask",
+    ask_type: AI_DLC_UPDATE_ASK_TYPE,
+    response_route: "command",
+    question: `${newerWorkLead(version, newWork)}, and this computer has ${AIDLC_VERSION}. ` +
+      "Want me to update AI-DLC now and carry on?",
+    choices: [
+      {
+        label: "Update and carry on",
+        detail: "Updates AI-DLC on this computer to its newest release and this project's AI-DLC files, then carries " +
+          "on with what you asked.",
+        command: answer("now"),
+      },
+      { label: "Not now", detail: "Leaves this work as it is.", command: answer("later") },
+    ],
+  };
+}
+
+// `next --update-ai-dlc <now|later|done> [--request <id>]`: the AI-DLC update
+// question's answer, read before the kept request it names runs and never part
+// of it. A string is the refusal; null when the flag is not there.
+function takeUpdateAnswer(args: readonly string[]): { answer: UpdateAnswer; rest: string[] } | string | null {
+  const at = beforeDelimiter(args).indexOf("--update-ai-dlc");
+  if (at < 0) return null;
+  const value = args[at + 1];
+  const rest = [...args.slice(0, at), ...args.slice(at + 2)];
+  if (!(UPDATE_ANSWERS as readonly string[]).includes(value ?? "") || !(rest.length === 0 || keptRestartLine(rest) !== null)) {
+    return "--update-ai-dlc answers the AI-DLC update question; run the command that question supplied.";
+  }
+  return { answer: value as UpdateAnswer, rest };
+}
+
+// What an answer does before its kept request runs: Not now says its line;
+// yes, while this build still cannot read the record, hands the agent the
+// update, the project's refresh and the command that carries on. Null runs the
+// kept request (or a bare `next`): `done`, or a yes once the record reads here.
+function updateAnswerStep(projectDir: string, answer: UpdateAnswer, rest: readonly string[]): Directive | null {
+  if (answer === "later") return tellAndStop(NOT_NOW_LINE);
+  if (answer === "done") return null;
+  const version = newerStateVersion(loadStateFileIfPresent(projectDir));
+  if (version === null) return null;
+  if (newerWorkInstall(projectDir).kind !== "native" || process.env.AIDLC_UNATTENDED === "1") {
+    return tellAndStop(newerStateStep(projectDir, version));
+  }
+  const carryOn = `${aidlcToolInvocation("orchestrate")} next --update-ai-dlc done${rest.length > 0 ? ` ${rest.join(" ")}` : ""}`;
+  return printDirective(
+    `The person chose to update AI-DLC and carry on. Run \`${aidlcInvocation()} update\`, then ` +
+      `\`${newerWorkRefresh(projectDir)}\`, then \`${carryOn}\`, and follow what it returns.`,
+  );
 }
 
 // parked - the terminal directive a parked workflow emits (issue #367). Carries
@@ -12143,6 +12259,12 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   }
 
   if (flags.claim || flags.release) {
+    // A Unit of work a newer AI-DLC wrote is never claimed or released here.
+    const newer = newerStateVersion(loadStateFileIfPresent(resolveProjectDir(projectDir)));
+    if (newer !== null) {
+      emit(newerWorkOffer(resolveProjectDir(projectDir), newer, args));
+      return;
+    }
     if (flags.claim && flags.release) {
       emit(errorDirective("Cannot combine --claim and --release."));
       return;
@@ -12680,6 +12802,11 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   // archived never stands in its way.
   if (question?.newWork && stateContent !== null) flags.newIntent = true;
   if (stateContent !== null) {
+    const newer = newerStateVersion(stateContent);
+    if (newer !== null) {
+      emit(newerWorkOffer(pd, newer, args, flags.newIntent === true));
+      return;
+    }
     const stale = staleStateVersionError(stateContent);
     if (stale) {
       emit(errorDirective(stale));
@@ -21920,6 +22047,11 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     // `!== null` (not truthiness): a present but zero-byte state file returns ""
     // and must still be refused, not treated as an absent file.
     if (sc !== null) {
+      const newer = newerStateVersion(sc);
+      if (newer !== null) {
+        emit(newerWorkOffer(pd, newer, []));
+        return;
+      }
       const stale = staleStateVersionError(sc);
       if (stale) {
         emit(errorDirective(stale));
@@ -23988,6 +24120,23 @@ export function main(argv: string[]): void {
   let restart: RestartRequest | null = null;
   // The command as it was run, which the host claimed: a kept stop's id, not its arguments.
   const ranArgs = subArgs;
+  // The AI-DLC update question's answer comes off before the kept request it names runs.
+  if (subcommand === "next") {
+    const taken = takeUpdateAnswer(subArgs);
+    if (typeof taken === "string") {
+      emit(errorDirective(taken));
+      return;
+    }
+    if (taken !== null) {
+      const step = updateAnswerStep(resolvedProjectDir, taken.answer, taken.rest);
+      if (step !== null) {
+        emit(step);
+        return;
+      }
+      updateAnswer = taken.answer;
+      subArgs = taken.rest;
+    }
+  }
   if (subcommand === "next") {
     const named = namedRestartRequest(resolvedProjectDir, resolvedSelection, subArgs, unjoined);
     if (named !== null && "directive" in named) {
@@ -24030,7 +24179,12 @@ export function main(argv: string[]): void {
       return;
     }
     if (keptRequest(resolvedProjectDir, restart.space)?.restart === restart.id) dropKeptRequest(resolvedProjectDir);
-    noteRestartRequest(subArgs, true);
+    // The chat it was kept in saw the words, and the AI-DLC update question's
+    // carry-on always runs in the chat that answered it.
+    noteRestartRequest(
+      subArgs,
+      updateAnswer !== "done" && (restart.session === undefined || restart.session !== engineSessionId),
+    );
   }
   spendRequestFile();
   restoreSpentRequestFile = restoreRequestFile;
@@ -24091,6 +24245,7 @@ export function main(argv: string[]): void {
     activeCutMessageLine = null;
     pendingCutMessageStep = null;
     overCapRequest = null;
+    updateAnswer = null;
     activeRestartWords = null;
     activeRestartAsked = null;
     restartUnmarkedNotice = false;
