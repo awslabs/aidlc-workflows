@@ -4,12 +4,19 @@
 // One owner: the engine's state read (loadStateFileIfPresent in
 // aidlc-orchestrate.ts) calls bringStateUpToDate, and doctor and status read
 // hasStateUpgrade and stateUpgradeRecord, so they never disagree with it.
+// A record a newer AI-DLC wrote is never brought down: newerStateStep names
+// the release it needs and the person's step, for next, report, doctor and the
+// unit commands alike.
 import { existsSync, renameSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import { classifyStateVersion, findStageBySlug, nextInScopeStage } from "./aidlc-lib.ts";
 import { isReadOnlyEngineProbe, withAuditLock, writeFileAtomic } from "./aidlc-locks.ts";
 import { auditBlockField, getField, readAuditShardEvents, setField, writeStateFile } from "./aidlc-record-core.ts";
+import { packageManagerForExecutable } from "./aidlc-install-paths.ts";
+import { releaseHostLabel } from "./aidlc-release.ts";
+import { aidlcInvocation, compiledExecutable, runtimeHarnessName, typedHarnessName } from "./aidlc-runtime-paths.ts";
+import { AIDLC_VERSION } from "./aidlc-version.ts";
 
 export const STATE_UPGRADED_EVENT = "STATE_UPGRADED";
 
@@ -156,5 +163,92 @@ export function stateUpgradeRecord(
     };
   } catch {
     return null;
+  }
+}
+
+// --- A record a newer AI-DLC wrote ---
+//
+// The first release that writes each State Version newer than this build
+// reads, so the person hears which AI-DLC their teammate's work needs. 2.12
+// writes 9 on team work (#2783). The schema names the first release that
+// writes it, never the one that did, so it is said "or newer".
+export const STATE_VERSION_RELEASES: Readonly<Record<string, string>> = Object.freeze({ "9": "2.12" });
+
+/** The AI-DLC a newer State Version needs, as the person reads it. */
+export function newerStateRelease(version: string): string {
+  return Object.hasOwn(STATE_VERSION_RELEASES, version)
+    ? `AI-DLC ${STATE_VERSION_RELEASES[version]} or newer`
+    : "a newer AI-DLC";
+}
+
+/**
+ * How this computer gets a newer AI-DLC: the native `aidlc` updates itself; a
+ * copy installed by hand, a pinned project and a package manager's install
+ * each have their own step, which AI-DLC names and never takes for them.
+ */
+export type NewerWorkInstall =
+  | { kind: "native" }
+  | { kind: "copy" }
+  | { kind: "pinned" }
+  | { kind: "managed"; name: string; remediation: string };
+
+export function newerWorkInstall(projectDir: string): NewerWorkInstall {
+  if (aidlcInvocation() !== "aidlc") return { kind: "copy" };
+  if (existsSync(join(projectDir, ".aidlc-version"))) return { kind: "pinned" };
+  const executable = compiledExecutable();
+  const manager = executable ? packageManagerForExecutable(executable) : null;
+  return manager ? { kind: "managed", ...manager } : { kind: "native" };
+}
+
+// The project's own refresh, for the harness this runs in.
+function refreshCommand(projectDir: string): string {
+  return `${aidlcInvocation()} config --harness ${typedHarnessName(runtimeHarnessName(projectDir))}`;
+}
+
+/** The refresh the update is followed by, as the agent runs it. */
+export function newerWorkRefresh(projectDir: string): string {
+  return `${refreshCommand(projectDir)} --yes`;
+}
+
+/** What the work's first sentence names: the plan asked about, or the work selected when the request is new work. */
+export function newerWorkLead(version: string, newWork = false): string {
+  return `${newWork ? "The work selected here" : "This plan"} was set up with ${newerStateRelease(version)}`;
+}
+
+// The release host a copy's runtime comes from, as config names it; an
+// unreadable machine setting names the configured mirror.
+function releaseHost(): string {
+  try {
+    return releaseHostLabel();
+  } catch {
+    return "the configured release mirror";
+  }
+}
+
+/**
+ * The person's one line for a record a newer AI-DLC wrote, with this
+ * install's one step to carry on: for every place that cannot ask (doctor,
+ * the terminal unit commands, and the installs AI-DLC does not update itself).
+ */
+export function newerStateStep(projectDir: string, version: string, newWork = false): string {
+  const lead = newerWorkLead(version, newWork);
+  const needs = newerStateRelease(version);
+  const install = newerWorkInstall(projectDir);
+  const refresh = `\`${newerWorkRefresh(projectDir)}\``;
+  switch (install.kind) {
+    case "copy":
+      return `${lead}, and this project has AI-DLC ${AIDLC_VERSION}, copied in by hand. To carry on, get the copy ` +
+        `runtime of ${needs} (aidlc-copy-runtime-<version>.tar.gz and its .sha256, from the releases on ` +
+        `${releaseHost()}) into one folder, then run \`${refreshCommand(projectDir)} --from <that file>\` in this project.`;
+    case "pinned":
+      return `${lead}, and this project is pinned to AI-DLC ${AIDLC_VERSION} in .aidlc-version. To carry on, pin it ` +
+        `to the release your teammate uses with \`${aidlcInvocation()} config --pin <that version> --yes\`; the pin changes for ` +
+        "everyone on the project.";
+    case "managed":
+      return `${lead}, and this computer has ${AIDLC_VERSION} from ${install.name}. To carry on: ` +
+        `${install.remediation}, then ${refresh} in this project.`;
+    default:
+      return `${lead}, and this computer has ${AIDLC_VERSION}. To carry on: \`aidlc update\`, then ${refresh} in ` +
+        "this project.";
   }
 }

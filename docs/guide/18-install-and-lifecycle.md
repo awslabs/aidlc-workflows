@@ -420,7 +420,7 @@ numbered harness picker first; no detected harness gets the complete picker
 without a default. A Kiro CLI at 2.24.1 or later counts for both Kiro
 harnesses. The picker lists Kiro CLI (V2) (`--harness kiro-v2`): it pins no
 engine and is built for Kiro CLI's v2 engine. It lists Kiro (`--harness kiro`),
-for Kiro IDE and Kiro CLI on its v3 engine. Of the two, Kiro CLI (V2) comes first, so Enter
+for Kiro IDE and Kiro CLI on its v3 engine. Of the two, Kiro is the default, so Enter
 takes it unless an earlier detected harness leads the list or setup runs in a
 harness editor's own terminal, whose harness comes first.
 
@@ -1643,9 +1643,14 @@ exact retained version whatever the machine follows.
 
 Previews are `main` as it stands, including project state-schema changes. A
 preview that raises the state schema writes project state a stable build does
-not understand, and the code refuses to open state newer than the build; that
-project cannot be walked back to stable until a stable release ships the same
-schema. Use the preview channel on projects you can recreate, or pin them.
+not understand. A build never advances work newer than it reads: on a native
+install it asks once whether to update AI-DLC and carry on ("This plan was set
+up with AI-DLC 2.12 or newer, and this computer has 2.11.5. Want me to update
+AI-DLC now and carry on?"), and on yes runs `aidlc update` and the project's
+refresh and carries on with what you asked; a copied, pinned or
+package-managed install says its own one step instead. That project cannot be
+walked back to stable until a stable release ships the same schema. Use the
+preview channel on projects you can recreate, or pin them.
 
 ## Project Pins and CI
 

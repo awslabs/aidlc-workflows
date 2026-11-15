@@ -79,6 +79,7 @@ import {
   errorMessage,
   type FileIdentity,
   fileIdentity,
+  HARDLINK_REMEDY,
   intentsDir,
   isPidAlive,
   knowledgeDir,
@@ -1454,10 +1455,7 @@ function statOnlyRefusal(real: string, rel: string): string | null {
   // every sync quietly passed over it — the exact list/sync disagreement the
   // present_but_refused state exists to prevent.
   if (st.nlink !== 1) {
-    return (
-      `${rel} is multiply linked (a hardlink) and is not trusted. Replace it with an ` +
-      `independent copy - cp <file> <file>.copy && mv <file>.copy <file> - and re-run.`
-    );
+    return `${rel} is multiply linked (a hardlink) and is not trusted. ${HARDLINK_REMEDY}`;
   }
   try {
     // fs.constants.R_OK, as a literal: this file's restricted fs allowlist

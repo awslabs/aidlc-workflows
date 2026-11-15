@@ -169,7 +169,9 @@ import {
   type SourceClaimModel,
   workspaceSourceListing,
   type WorkspaceSourceListing,
+  classifyStateVersion,
 } from "./aidlc-lib.js";
+import { newerStateStep } from "./aidlc-state-upgrade.ts";
 import { ownRemoteAmong } from "./aidlc-unit-holders.ts";
 import {
   type Amendment,
@@ -366,6 +368,13 @@ function localGit(
 
 function fail(message: string): never {
   throw new Error(message);
+}
+
+// Work a newer AI-DLC wrote is never claimed or released from here: the person
+// hears the step that carries it on (newerStateStep), before anything is written.
+function refuseNewerWork(projectDir: string, state: string): void {
+  const verdict = classifyStateVersion(state);
+  if (verdict.kind === "future") fail(newerStateStep(projectDir, verdict.version));
 }
 
 export interface UnitClaimPayload {
@@ -5037,6 +5046,7 @@ function claimUnit(args: string[], projectDir?: string): void {
     spend = read.spend;
   }
   const state = readStateFile(pd);
+  refuseNewerWork(pd, state);
   if (!isTeamUnitOwnership(state)) fail("Unit claims require Unit Ownership: team.");
   // Where the work records its home, each team takes its Unit in its own clone
   // (take), and the lead's project is never scoped to one Unit.
@@ -5229,6 +5239,7 @@ function releaseUnit(args: string[], projectDir?: string): void {
   const unitError = validateUnitName(unit);
   if (unitError) fail(unitError);
   const pd = resolveProjectDir(projectDir);
+  refuseNewerWork(pd, readStateFile(pd));
   // In the Unit's own build, release is the way back from its take.
   const build = ((): UnitBuild | null => {
     try {

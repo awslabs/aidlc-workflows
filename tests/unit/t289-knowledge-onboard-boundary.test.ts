@@ -49,6 +49,7 @@ import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   existsSync,
+  linkSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -634,6 +635,24 @@ describe("t289 non-regular files: SKIPPED by the walk, REFUSED when named", () =
     expect(result.indexed).toEqual([]);
     expect(existsSync(indexPath(p, SPACE))).toBe(false);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+});
+
+describe("t289 a hardlinked document", () => {
+  test("a hardlinked document named DIRECTLY is refused with a way past it every shell's person can follow", () => {
+    const p = scratchProject();
+    const original = join(p, "original.md");
+    writeFileSync(original, "text\n");
+    const linked = join(documentsDir(p, SPACE), "linked.md");
+    linkSync(original, linked);
+    const result = onboard(p, SPACE, linked, NOW);
+    expect(result.refused?.path).toBe("linked.md");
+    expect(result.refused?.reason).toMatch(/multiply linked/);
+    expect(result.refused?.reason).toContain(
+      "Copy the file, delete the original, give the copy the original's name, then re-run.",
+    );
+    expect(result.refused?.reason).not.toMatch(/&&|\bcp |\bmv /);
+    expect(result.indexed).toEqual([]);
+  });
 });
 
 describe("t289 a batch is ALL-OR-NOTHING", () => {

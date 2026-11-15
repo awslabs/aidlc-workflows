@@ -45,7 +45,7 @@ import {
   maskSecretShapes,
   saySecretMaskedOnce,
 } from "./aidlc-audit.ts";
-import { hasStateUpgrade, stateUpgradeRecord, waitsToBeBroughtUp } from "./aidlc-state-upgrade.ts";
+import { hasStateUpgrade, newerStateStep, stateUpgradeRecord, waitsToBeBroughtUp } from "./aidlc-state-upgrade.ts";
 import {
   applyIntentSettings,
   applyReviewOverride,
@@ -5983,7 +5983,7 @@ export async function collectDoctorReport(
         results.push({
           pass: false,
           label: "state version compatible",
-          fix: verdict.message,
+          fix: newerStateStep(projectDir, verdict.version),
         });
       } else {
         const upgrade = stateUpgradeRecord(projectDir, doctorIntent, doctorSelection.space);
