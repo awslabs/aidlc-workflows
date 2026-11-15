@@ -8705,13 +8705,17 @@ function leadsOwnClaimCommit(projectDir: string, oid: string, parent: string): s
   return commitAsPerson(projectDir, tree, [parent], message, { GIT_AUTHOR_NAME: name, GIT_AUTHOR_EMAIL: email, GIT_AUTHOR_DATE: date });
 }
 
+// The homes whose claims an earlier step of this command fetched (refreshHomeClaims).
+const homesFetchedThisCommand = new Set<string>();
+
 export function refreshHomeClaims(
   projectDir: string,
   options: { home?: { target: string | null; id8: string; leadCopy?: boolean }; sessionId?: string; now?: boolean; sincePerson?: boolean } = {},
-): { fetched: boolean; unreached: string | null; refused?: string } {
+): { fetched: boolean; unreached: string | null; refused?: string; lookedThisCommand?: true } {
   const pd = resolveProjectDir(projectDir);
   const { target, id8 } = options.home ?? { target: repositoryRemote(pd), id8: activeIdentity(pd).intentId8 };
   if (target === null) return { fetched: false, unreached: null };
+  const home = `${pd}\0${target}\0${id8}`;
   const mark = join(sessionsDir(pd), CLAIMS_FETCHED_FILE);
   let chats: Record<string, string | { chat: string; at: string; reached: boolean; refused?: boolean; again?: boolean }> = {};
   try {
@@ -8735,7 +8739,11 @@ export function refreshHomeClaims(
   // The look .git refused stopped the step with its way on: the same command
   // run again with write access, which looks again whether or not they spoke.
   const again = last?.chat === chat && last.refused === true && last.again !== true;
-  if (!options.now && !spoke && !again && last?.chat === chat) return { fetched: false, unreached: null };
+  // Already looked in this chat: said with whether this command's own earlier step looked, so what reads the
+  // look (the board's take-in from the lead's other remotes) still runs in the step that made it.
+  if (!options.now && !spoke && !again && last?.chat === chat) {
+    return { fetched: false, unreached: null, ...(homesFetchedThisCommand.has(home) ? { lookedThisCommand: true as const } : {}) };
+  }
   // A home named is the build-out's; the work here, by its recorded flow.
   const onBranches = options.home === undefined && claimsOnBranches(stateHere(pd));
   const into = claimCopies(target, onBranches, isGitAddress(target), id8).slice(0, -1);
@@ -8751,6 +8759,7 @@ export function refreshHomeClaims(
   // missed; after that the step goes on and says it plainly, never a loop.
   const refused = fetched.ok ? null : localGitWriteRefused(fetched.stderr);
   const ok = fetched.ok;
+  if (ok) homesFetchedThisCommand.add(home);
   // A lead read by its address: the copy of the lead's workspace (the plan and
   // the lead's rules a build follows) comes with the claims, when the lead's
   // HEAD moved; a lead whose HEAD names no branch leaves the copy as it was.

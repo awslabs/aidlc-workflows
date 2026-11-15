@@ -18704,7 +18704,7 @@ function teamHomeClaims(
     const refreshed = refreshHomeClaims(projectDir, { sessionId: engineSessionId, now, sincePerson: teamBuilding || open });
     if (refreshed.unreached !== null) unreached.push(refreshed.unreached);
     if (refreshed.refused) sayWithStepOnce(projectDir, newsNotTakenIn("the teams"));
-    if (refreshed.fetched) {
+    if (refreshed.fetched || refreshed.lookedThisCommand === true) {
       // A take or result a team sent to its own remote, which the lead added here.
       if (!query) {
         const back = takeInFromRemotes(projectDir, { unitOpen: open });
