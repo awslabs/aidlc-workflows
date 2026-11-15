@@ -1026,13 +1026,17 @@ branch pushes that branch, so its pull request has the newer plan. A team's reco
 "aidlc/ is pushed on <branch>; your teammates see it once it is in main.", and
 status shows `Checked in:     pushed on <branch>, not in main yet`.
 Back on main before that pull request merges, or in a fresh clone on another
-computer, from the branch it fetched, the take question names your
-build: "Your build of <unit> is on branch <branch>: `git switch <branch>` to
-carry it on." Taken again in a clone where no branch you can switch to holds
-its build yet, or where main has it merged and the clone has not pulled, your
-own Unit says "You took <unit> on another computer, and its build is not in
-this clone yet: push it from that computer if you have not, then run
-`git pull` here and carry on." A team that keeps AI-DLC's records off main says so in Practices
+computer, from the branch it fetched, the take question offers **Carry on
+<unit>** ("Your build of it, on branch <branch>; I switch you there."), and on
+yes AI-DLC switches you there and carries it on: "You're on <branch> now, where
+your build of <unit> is." with "Switch back to <branch you were on> any time."
+Taken again in a clone where no branch you can switch to holds its build yet,
+AI-DLC fetches origin first. Where origin's main has it merged, it brings your
+main up to date and carries it on ("Your main is up to date with origin/main
+now, with your build of <unit> in it."). Where origin does not have it yet,
+your own Unit says "You took <unit> on another computer, and its build is not
+on origin yet: push it from that computer, then ask me to carry it on here."
+A team that keeps AI-DLC's records off main says so in Practices
 Discovery (for example "We keep AI-DLC's records on a branch called records"):
 AI-DLC records the `Integration branch` line under Way of Working, the share
 and the check-ins go to that branch, the takes read it, and every clone works

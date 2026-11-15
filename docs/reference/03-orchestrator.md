@@ -963,7 +963,10 @@ with the person's own git (`earlyBaseMerged`): a plain rebase where the repo
 merged with its commits kept (`ancestry`), `rebase --onto <remote>/<branch>
 <head it started on>` after a squash or a host's rebase, and `reset --keep` for
 a branch the person is on that has no commits of its own yet. A rebase git stops
-is said in its words, with `git rebase --abort` as the way back. At the home, a claim with a proposal nobody answered makes the
+on a conflict is AI-DLC's own, so it is undone at once (`rebase --abort`) and
+said in git's words; a git operation of the person's own already under way there
+(`gitOperationUnderWay`) is never touched: its finish and put-aside commands are
+said (`underWayLine`), and the move is offered again once it is done. At the home, a claim with a proposal nobody answered makes the
 step `ask_type: unit-amend` (noted with an engine ask mark; after the person
 spoke without answering, the step carries one line instead and the board's
 `offers` carry the answer), with `amend_command` for the person's words and the
