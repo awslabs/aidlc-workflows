@@ -8270,7 +8270,7 @@ function takeUnit(args: string[], projectDir?: string, rhythm?: UnitClaimPayload
       git(dir, ["fetch", "-q", remote, `+refs/heads/${repo.branch}:refs/remotes/${remote}/${repo.branch}`]);
       const start = `${remote}/${repo.branch}`;
       const name = repo.repo === "." ? "the repo" : repo.repo;
-      const clean = git(dir, ["status", "--porcelain"]).stdout.trim() === "";
+      const clean = !ownChanges(pd, [{ repo: repo.repo, dir }]);
       // Without tracking: the dependency's branch is another team's, so a plain
       // git push before AI-DLC's own (which sets the Unit's upstream) never goes there.
       if (clean && git(dir, ["switch", "-q", "--no-track", "-c", unit, start]).ok) earlyLines.push(`You are on branch ${unit} in ${name} now.`);
@@ -9041,9 +9041,9 @@ function untrackedIgnored(dir: string, paths: readonly string[]): string[] {
   return checked.status === 0 ? checked.stdout.split("\0").filter(Boolean) : [];
 }
 
-// Whether a repo of the push holds changes of the person's beyond the Unit's,
-// and on the workspace's own repository beyond AI-DLC's record of the build,
-// which the push commits next (sendBuildRecord).
+// Whether a repo holds changes of the person's, beyond the Unit's and, on the
+// workspace's own repository, beyond AI-DLC's record of the build: the push
+// commits it next (sendBuildRecord), and an early take has just written it.
 function ownChanges(pd: string, planned: ReadonlyArray<{ repo: string; dir: string }>): boolean {
   return planned.some(({ repo, dir }) => {
     const record = repo === "." ? ["--", ...buildRecordPaths(pd).map((path) => `:(exclude)${path}`)] : [];

@@ -3159,6 +3159,38 @@ describe("a Unit on the workspace's own repository", () => {
     expect(String(pushed.json?.notice)).toContain("; your other changes are still yours, uncommitted.");
   });
 
+  // An early start here: AI-DLC's new space and the build's record are not the
+  // person's, so a clone with nothing of theirs uncommitted is switched.
+  function earlyTake(ownChange: boolean): { dana: string; home: ReturnType<typeof makeHome>; notice: string } {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    builtHere(alice, "refunds", "refunds.ts");
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    const dana = cloneOf(home.remote, "dana");
+    if (ownChange) {
+      const leads = join(dana, "aidlc", "spaces", "default", "memory", "team.md");
+      writeFileSync(leads, `${readFileSync(leads, "utf-8")}\nmy note\n`);
+    }
+    const took = takeIn("data", ["reporting", "--home", HOME_RECORD, "--early"], dana);
+    expect(took.status, took.out).toBe(0);
+    return { dana, home, notice: String(took.json?.notice) };
+  }
+
+  test("an early start with nothing of theirs uncommitted puts them on the Unit's branch, at the pushed head it waits on", () => {
+    const { dana, home, notice } = earlyTake(false);
+    expect(notice).toContain(
+      "It starts early on the pushed branch of refunds in the repo. It may still change before it merges. You are on branch reporting in the repo now.",
+    );
+    expect(git(dana, ["branch", "--show-current"])).toBe("reporting");
+    expect(git(dana, ["rev-parse", "HEAD"])).toBe(git(home.remote, ["rev-parse", "refunds"]));
+  });
+
+  test("an early start with a change of theirs uncommitted keeps them on their branch, and says so", () => {
+    const { dana, notice } = earlyTake(true);
+    expect(notice).toContain("Branch reporting in the repo starts there; your uncommitted changes kept you on your branch, so switch when you are ready.");
+    expect(git(dana, ["branch", "--show-current"])).toBe("main");
+  });
+
   test("the lead's look reads the squash of the Unit's pull request, record and all, as merged, and the Unit's result names only its code", () => {
     const home = oneRepoTeams();
     const alice = cloneOf(home.remote, "alice");
