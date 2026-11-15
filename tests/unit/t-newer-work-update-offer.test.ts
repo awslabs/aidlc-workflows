@@ -21,6 +21,7 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
+import { cleanupTeamBuild, cloneOf, git, HOME_RECORD, homeState, inSpace, makeHome, run as teamRun, STATE } from "../harness/team-build.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 2);
 
@@ -34,6 +35,7 @@ const VERSION = (readFileSync(join(REPO_ROOT, "core", "tools", "aidlc-version.ts
 const projects: string[] = [];
 afterAll(() => {
   for (const proj of projects) cleanupTestProject(proj);
+  cleanupTeamBuild();
 }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 function stateWithVersion(version: string): string {
@@ -296,4 +298,82 @@ describe("work a newer AI-DLC wrote: the unit commands", () => {
       expect(existsSync(join(proj, ".git", "refs", "aidlc"))).toBe(false);
     });
   }
+});
+
+// #2783's own doors: a teammate's clone of team work, with nothing selected,
+// where the lead's work on disk is one a newer AI-DLC set up. The look and a
+// teammate's first words put the same question; its yes runs the update; after
+// it the work carries on to its Units, or says once that this build is still
+// the older one; the take says the step a claim says.
+describe("work a newer AI-DLC wrote, in a teammate's clone with nothing selected", () => {
+  function teammateClone(): { clone: string; leadState: string } {
+    const home = makeHome({ state: homeState().replace("- **State Version**: 8", "- **State Version**: 10") });
+    expect(teamRun(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "teams"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const clone = cloneOf(home.remote, "bob");
+    return { clone, leadState: join(clone, "aidlc", "spaces", "default", "intents", HOME_RECORD, "aidlc-state.md") };
+  }
+  const chatEnv = () => childEnv({ CLAUDE_CODE_SESSION_ID: randomUUID(), CLAUDE_PID: String(process.pid), GIT_TERMINAL_PROMPT: "0" });
+  // `next` with the person's words after its flags, as the agent hands them on.
+  function nextIn(clone: string, words: string[], env: NodeJS.ProcessEnv): Step {
+    const r = spawnSync(process.execPath, [join(NATIVE, "aidlc-orchestrate.ts"), "next", "--project-dir", clone, ...words], {
+      cwd: clone, encoding: "utf-8", env, timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    try {
+      return JSON.parse((r.stdout ?? "").trim()) as Step;
+    } catch {
+      return {};
+    }
+  }
+
+  // A teammate's first words as the agent hands them on unmarked (words after
+  // `--` are read by the routing question instead, which selects the work).
+  for (const typed of [[], ["we want to take refunds"]]) {
+    test(`${typed.length === 0 ? "a bare look" : "a teammate's first words"}: the question, its yes the update, then the work's Units or the still line once`, () => {
+      const { clone, leadState } = teammateClone();
+      const chat = chatEnv();
+      const asked = nextIn(clone, typed, chat);
+      expect(asked.kind, JSON.stringify(asked).slice(0, 600)).toBe("ask");
+      expect(asked.question).toStartWith(OFFER);
+      // Not now: main's one line.
+      expect(String(run(NATIVE, clone, ["next", ...answerArgs(asked.choices?.[1]?.command)], chat).step.message)).toContain(NOT_NOW);
+      // Yes: the update, the project's refresh, then the carry-on with the kept request.
+      const yes = answerArgs(asked.choices?.[0]?.command);
+      const update = run(NATIVE, clone, ["next", ...yes], chat).step;
+      expect(update.kind, JSON.stringify(update).slice(0, 600)).toBe("print");
+      expect(update.message).toContain("aidlc update");
+      expect(update.message).toContain(`next --update-ai-dlc done ${yes.slice(2).join(" ")}`);
+      // The update left this build in place: said once, never the question.
+      const still = run(NATIVE, clone, ["next", "--update-ai-dlc", "done", ...yes.slice(2)], chat).step;
+      expect(still.kind).not.toBe("ask");
+      expect(String(still.message)).toContain("cannot carry on here until `aidlc update` brings that release to this computer");
+      // Once the release running reads the work: its Units.
+      const again = nextIn(clone, typed, chat);
+      const yesAgain = answerArgs(again.choices?.[0]?.command);
+      writeFileSync(leadState, readFileSync(leadState, "utf-8").replace("- **State Version**: 10", "- **State Version**: 9"));
+      const carried = JSON.stringify(run(NATIVE, clone, ["next", "--update-ai-dlc", "done", ...yesAgain.slice(2)], chat).step);
+      expect(carried, carried.slice(0, 600)).toContain("refunds");
+      expect(carried).not.toContain(OFFER);
+    });
+  }
+
+  test("the take of one of its Units says the step a claim says there, and writes nothing", () => {
+    const { clone } = teammateClone();
+    inSpace(clone, "payments");
+    const take = run(NATIVE, clone, ["aidlc-unit.ts", "take", "refunds", "--home", HOME_RECORD]);
+    expect(take.status, take.out).not.toBe(0);
+    expect(take.out).toContain(`${OFFER}${VERSION}. To carry on: \`aidlc update\`, then \`aidlc config --harness claude --yes\` in this project.`);
+    // The claim of it, with the lead's work selected, says the same line.
+    inSpace(clone, "default");
+    const picked = run(NATIVE, clone, ["aidlc-utility.ts", "intent", "switch", HOME_RECORD]);
+    expect(picked.status, picked.out).toBe(0);
+    const claim = run(NATIVE, clone, ["aidlc-unit.ts", "claim", "refunds"]);
+    const line = (out: string) => out.match(/This plan was set up with[^"]*/)?.[0];
+    expect(line(claim.out), claim.out).toBeDefined();
+    expect(line(take.out)).toBe(line(claim.out));
+    expect(existsSync(join(clone, "aidlc", "spaces", "payments", "intents")) &&
+      readdirSync(join(clone, "aidlc", "spaces", "payments", "intents")).some((name) => name.endsWith("-refunds"))).toBe(false);
+  });
 });

@@ -8156,6 +8156,8 @@ function takeUnit(args: string[], projectDir?: string, rhythm?: UnitClaimPayload
   const current = there !== null && (atLead === null || claimAhead(pd, atLead.oid, there.claim.oid) === "ahead") ? there.claim : atLead;
   const integration = fetchHomeIntegration(pd, home, atLead, byAddress?.fetched, standsIn);
   const plan = homePlanAt(pd, home, integration.oid, integration.branch);
+  // A plan a newer AI-DLC wrote is never taken here: the step that carries it on, before anything is written.
+  refuseNewerWork(pd, plan.state);
   const planChanging = unitPlanChangingStage(plan.state);
   const solo = home.solo ? soloOpening(pd, home, plan) : null;
   const opening = solo ?? openingStatusFrom(plan.state, plan.dependencies);

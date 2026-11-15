@@ -552,6 +552,36 @@ describe("taking a Unit starts its build in the team's space", () => {
     expect(field(state, "State Version")).toBe("9");
   });
 
+  // Work a newer AI-DLC set up (a State Version this build cannot read) is
+  // never taken or offered here: the take says the one step that carries it
+  // on before it writes anything, and a look in a teammate's clone gives the
+  // update offer, in the words next's other doors say, in place of its Units.
+  test("team work a newer AI-DLC set up: the take says the step and writes nothing, and a look gives the update offer, never its Units", () => {
+    const home = makeHome({ state: homeState().replace("- **State Version**: 8", "- **State Version**: 10") });
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    expect(field(readFileSync(join(home.dir, "aidlc", "spaces", "default", "intents", HOME, "aidlc-state.md"), "utf-8"), "State Version")).toBe("10");
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "teams"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const NEWER = "This plan was set up with a newer AI-DLC";
+    const alice = cloneOf(home.remote, "alice");
+    const took = takeFrom("payments", alice, "refunds");
+    expect(took.status, took.out).not.toBe(0);
+    expect(took.out).toContain(NEWER);
+    expect(took.out).toContain("To carry on");
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toBeNull();
+    const intents = join(alice, "aidlc", "spaces", "payments", "intents");
+    expect(existsSync(intents) && readdirSync(intents).some((name) => name.endsWith("-refunds"))).toBe(false);
+    // A bare look, and a teammate's first words, in a clone with nothing selected.
+    const bob = cloneOf(home.remote, "bob");
+    for (const words of [[], ["we want to take refunds"]]) {
+      const said = JSON.stringify(next(bob, ENV, words));
+      expect(said, said.slice(0, 600)).toContain(NEWER);
+      expect(said).not.toContain("Ready to take");
+      expect(said).not.toContain("Taking a Unit starts it");
+    }
+  });
+
   test("one Unit, the home's inputs at their own paths, the home's Inception done, the claim taken", () => {
     const home = homeWithTeams();
     const alice = cloneOf(home.remote, "alice");

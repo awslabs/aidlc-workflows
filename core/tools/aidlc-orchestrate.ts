@@ -7112,7 +7112,9 @@ function takeUpdateAnswer(args: readonly string[]): { answer: UpdateAnswer; rest
 function updateAnswerStep(projectDir: string, answer: UpdateAnswer, rest: readonly string[]): Directive | null {
   if (answer === "later") return tellAndStop(NOT_NOW_LINE);
   if (answer === "done") return null;
-  const version = newerStateVersion(loadStateFileIfPresent(projectDir));
+  // With nothing selected, the team work on disk the two looks met (#2783's doors).
+  const selected = loadStateFileIfPresent(projectDir);
+  const version = selected === null ? newerTeamWorkHere(projectDir) : newerStateVersion(selected);
   if (version === null) return null;
   if (newerWorkInstall(projectDir).kind !== "native" || process.env.AIDLC_UNATTENDED === "1") {
     return tellAndStop(newerStateStep(projectDir, version));
@@ -9470,6 +9472,18 @@ function unselectedRecordsDigest(selectable: UnselectedRecords["selectable"]): s
 // line says so and offers nothing, so no step of the home's own work runs in
 // this clone. Null when there is nothing to take, carry on or wait for, or the
 // person has other work here to pick up.
+// The State Version of the lead's work on disk here that a newer AI-DLC wrote,
+// for the two looks with nothing selected: they give its update offer
+// (newerWorkOffer), never its Units. Here, not in unitTakeAsk, whose other
+// callers frame what it returns as Units to take. Null when there is none.
+function newerTeamWorkHere(projectDir: string): string | null {
+  for (const home of homesOnDisk(projectDir)) {
+    const newer = newerStateVersion(home.state);
+    if (newer !== null) return newer;
+  }
+  return null;
+}
+
 function unitTakeAsk(projectDir: string): AskDirective | PrintDirective | null {
   // Each home's claims once per chat; while nothing is ready the person waits,
   // so each look fetches them again.
@@ -15452,6 +15466,11 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   // chain ends.
   if (!stateContent && onlyProse && flags.intent !== undefined && flags.markedWords !== true && flags.request === undefined) {
     const here = unselectedRecords(pd);
+    const newerHere = newerTeamWorkHere(pd);
+    if (newerHere !== null) {
+      emit(newerWorkOffer(pd, newerHere, args));
+      return;
+    }
     // A teammate's first words in a clone of work teams build ("what's ours?",
     // "take u1"): the Units to take are what is theirs, put as a bare `next`
     // puts them, once in a chat; picking the work itself is the lead's, and in
@@ -15593,6 +15612,11 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     }
     // A Unit to take or carry on, for a team member opening a workspace with no
     // work of their own here.
+    const newerHere = newerTeamWorkHere(pd);
+    if (newerHere !== null) {
+      emit(newerWorkOffer(pd, newerHere, args));
+      return;
+    }
     const take = unitTakeAsk(pd) ?? soloElsewhereAsk(pd);
     if (take) {
       if (take.kind === "ask") noteTakeOfferedOnWords(pd);
