@@ -190,11 +190,17 @@ describe("the plan is shared as a ref of its own in the work's first code reposi
     run(UNIT, ["share", "--plan"], home.dir, { ...ENV, GIT_TRACE2_EVENT: trace });
     const argv = readFileSync(trace, "utf-8").split("\n").filter((line) => line.includes('"event":"start"'))
       .map((line) => (JSON.parse(line) as { argv: string[] }).argv.join(" "));
-    // git's own remote helper is handed the rewritten address, as it is for any
-    // push from that clone; no command AI-DLC runs carries the sign-in.
-    const helper = (line: string): boolean => /(^|\/)git[ -]remote-https? /.test(line);
+    // No command AI-DLC runs carries the password. The push still signs in:
+    // git's own remote helper is handed the rewritten address, as for any push
+    // from that clone. Its path is the platform's own, and a git that keeps the
+    // password out of its trace (Git for Windows) shows the address with the
+    // lead's user name only: the plain address has none, so only the rewrite
+    // to the signed one puts it there. The host here never answers, so the push
+    // itself does not go through.
+    const helper = (line: string): boolean => /(^|[\\/])git(\.exe)?[ -]remote-https?(\.exe)? /i.test(line);
     expect(argv.filter((line) => line.includes("tok3n") && !helper(line))).toEqual([]);
-    expect(argv.some((line) => helper(line) && line.includes(signed))).toBe(true);
+    expect(argv.some((line) => helper(line) && /https:\/\/lead:[^@\s]+@127\.0\.0\.1:9\/acme\/checkout-api\.git/.test(line)),
+      JSON.stringify(argv.filter((line) => /remote-https?/i.test(line)))).toBe(true);
     expect(argv.some((line) => line.includes(` push ${plain} `))).toBe(true);
     const via = gitTargetFor(home.dir, plain, "push");
     expect(via.target).toBe(plain);
