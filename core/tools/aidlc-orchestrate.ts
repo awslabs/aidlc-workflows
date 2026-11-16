@@ -681,6 +681,7 @@ import {
   buildOutOpening,
   planGoneLine,
   planLastChange,
+  planSharedOverLine,
   planTakeWords,
   planUnreadableLine,
   keepSaidPlan,
@@ -14580,6 +14581,9 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     if (take !== null && take.kind === "ask" && (take.choices ?? []).some((choice) => choice.label.startsWith("Start ")) &&
       offersOnce(pd, [{ question: take.question, choices: take.choices ?? [] }]).length > 0) {
       noteTakeOfferedOnWords(pd);
+      // This build's own news goes with the offer that takes its step's place.
+      const over = planSharedOverLine(pd, stateContent);
+      if (over !== null) sayWithStepOnce(pd, over);
       emit(take);
       return;
     }

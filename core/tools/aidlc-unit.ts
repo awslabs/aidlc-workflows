@@ -8387,15 +8387,20 @@ export function planAt(projectDir: string, place: PlanPlace, commit?: string): P
 // however they spelled the address (an ssh host alias, a port).
 export function planAtCopy(pd: string, copy: string, options: { commit?: string; found?: boolean } = {}):
   { kind: "read"; oid: string; plan: PlanJson } | { kind: "newer"; format: number } | { kind: "unreadable"; format: number } {
-  const named = homeCopyOf(copy);
-  if (named?.kind !== "plan") return { kind: "unreadable", format: 0 };
+  if (homeCopyOf(copy)?.kind !== "plan") return { kind: "unreadable", format: 0 };
   const oid = options.commit ?? localGit(pd, ["rev-parse", "--verify", "--quiet", copy]).stdout.trim();
   const shown = oid === "" ? null : localGit(pd, ["show", `${oid}:plan.json`, "--"]);
-  if (shown === null || !shown.ok) return { kind: "unreadable", format: 0 };
-  const parsed = planJsonOf(shown.stdout);
+  return planReadOf(copy, oid, shown?.ok ? shown.stdout : null, options.found);
+}
+
+// plan.json's text at `oid` of `copy`, read as planAtCopy reads it.
+function planReadOf(copy: string, oid: string, text: string | null, found?: boolean): ReturnType<typeof planAtCopy> {
+  const named = homeCopyOf(copy);
+  if (named?.kind !== "plan" || text === null) return { kind: "unreadable", format: 0 };
+  const parsed = planJsonOf(text);
   if (parsed.plan === null) return parsed.format > PLAN_FORMAT ? { kind: "newer", format: parsed.format } : { kind: "unreadable", format: parsed.format };
   if (idSuffix(parsed.plan.work.id) !== named.id8) return { kind: "unreadable", format: parsed.format };
-  if (options.found === true && repoCopyKey(parsed.plan.plan_repo.address) !== named.key) return { kind: "unreadable", format: parsed.format };
+  if (found === true && repoCopyKey(parsed.plan.plan_repo.address) !== named.key) return { kind: "unreadable", format: parsed.format };
   return { kind: "read", oid, plan: parsed.plan };
 }
 
@@ -10668,6 +10673,64 @@ export function refreshHomeClaims(
   return { fetched: ok, unreached, ...(planGone ? { planGone: true as const } : {}) };
 }
 
+// The plan as this build's copy has it now, when it was shared again over the
+// history the build took from (`taken`, its take's Home Commit): a new history
+// (`taken` is not in it, or no longer here), or written over a tip that was not
+// a plan (a commit since `taken` reads as none). Null for a plan that moved on
+// top of what was taken, or that does not read now. The commits since the take
+// are read in one git call, the last 200 of them.
+function planSharedOver(pd: string, copy: string, taken: string): PlanJson | null {
+  const tip = localGit(pd, ["rev-parse", "--verify", "--quiet", copy]).stdout.trim();
+  if (tip === "" || tip === taken) return null;
+  const now = planAtCopy(pd, copy, { commit: tip });
+  if (now.kind !== "read") return null;
+  if (!localGit(pd, ["merge-base", "--is-ancestor", taken, tip]).ok) return now.plan;
+  const since = localGit(pd, ["rev-list", "--first-parent", "--max-count=200", `${taken}..${tip}`]).stdout.split(/\r?\n/)
+    .filter((commit) => commit !== "" && commit !== tip);
+  return plansAtCommits(pd, copy, since).some((read) => read.kind !== "read") ? now.plan : null;
+}
+
+// plan.json at each of `commits`, read as planAtCopy reads it, in one git call.
+function plansAtCommits(pd: string, copy: string, commits: readonly string[]): Array<ReturnType<typeof planAtCopy>> {
+  if (commits.length === 0) return [];
+  const out = gitBytes(pd, ["cat-file", "--batch"], { GIT_NO_LAZY_FETCH: "1" }, commits.map((commit) => `${commit}:plan.json\n`).join("")).stdout;
+  const reads: Array<ReturnType<typeof planAtCopy>> = [];
+  let at = 0;
+  for (const commit of commits) {
+    const end = out.indexOf(0x0a, at);
+    if (end < 0) break;
+    const header = out.subarray(at, end).toString("utf-8").split(" ");
+    at = end + 1;
+    if (header[1] !== "blob") {
+      reads.push(planReadOf(copy, commit, null));
+      continue;
+    }
+    const size = Number(header[2]);
+    reads.push(planReadOf(copy, commit, out.subarray(at, at + size).toString("utf-8")));
+    at += size + 1;
+  }
+  return reads;
+}
+
+const planSharedOverMark = (unit: string): string => `unit-plan-shared-over-${unit}.json`;
+
+// The line for a build whose plan was shared again over its history since its
+// take, said once for the build (its engine ask mark); null otherwise. Read
+// from the take's Home Commit against the copy as it is now, whichever look
+// moved the copy.
+export function planSharedOverLine(projectDir: string, stateContent: string): string | null {
+  const build = unitBuildOf(stateContent);
+  if (build === null || !takenFromPlan(projectDir, build) || engineAskMark(projectDir, planSharedOverMark(build.unit)) !== null) return null;
+  const taken = auditBlockField(readAuditShardEvents(projectDir).findLast((row) => row.event === "UNIT_TAKEN_IN")?.block ?? "", "Home Commit");
+  if (!taken) return null;
+  const copy = copyOf(build.homeLocation, planRecordRef(idSuffix(build.homeWork)));
+  const over = planSharedOver(projectDir, copy, taken);
+  if (over === null) return null;
+  noteEngineAskMark(projectDir, planSharedOverMark(build.unit));
+  return `The plan of ${over.work.label || idSuffix(over.work.id)} in ${over.plan_repo.name} was shared again since you took ` +
+    `${build.unit}; what you took stays as it was.`;
+}
+
 // The repositories that hold a work's records, each once: the ones the plan
 // names (units[].record); for the solo second person, or work with no plan
 // here, the place recordPlaceOf gives.
@@ -12125,6 +12188,8 @@ export function buildClaimNotes(projectDir: string, stateContent: string, sessio
       lines.push(`${joinNames(names)} could not be read just now (${refreshed.unreached[0].said}), so news from ` +
         `${names.length === 1 ? "it" : "them"} may be behind.`);
     }
+    const over = planSharedOverLine(projectDir, stateContent);
+    if (over !== null) lines.push(over);
     if (refreshed?.refused && home !== null) {
       lines.push(newsNotTakenIn(joinNames([...new Set(recordPlacesOfWork(projectDir, home.id8, home).map((place) => place.repo))])));
     }

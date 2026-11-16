@@ -20,6 +20,7 @@ import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts
 import {
   cleanupTeamBuild,
   cloneOf,
+  codeGenerated,
   codeHost,
   ENV,
   git,
@@ -38,6 +39,7 @@ import {
   teamWorkspace,
   tempDir,
   UNIT,
+  UTILITY,
 } from "../harness/team-build.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -660,3 +662,94 @@ describe("a team takes a Unit from the plan where it is shared", () => {
     }
   });
 });
+
+describe("a build whose plan was shared again over its history hears it once", () => {
+  // pay takes refunds from the plan; what the build holds of its take, to compare after.
+  function takenBuild(repos = ["billing"]): { home: PlanHome; plan: string; pay: string; kept: () => string } {
+    const home = makePlanHome();
+    const plan = home.hosts["checkout-api"];
+    const pay = teamWorkspace(home.hosts, "pay", repos);
+    expect(run(UNIT, ["take", "refunds", "--plan", home.id8, "--from", plan], pay).status).toBe(0);
+    const record = buildDir(pay, "refunds");
+    const kept = (): string => JSON.stringify([
+      readFileSync(join(record, "approved-inputs.md"), "utf-8"),
+      readdirSync(join(record, "audit")).map((name) => readFileSync(join(record, "audit", name), "utf-8")).join("\n").match(/UNIT_TAKEN_IN[\s\S]*?\n---/)?.[0],
+      recordAt(home, "refunds")?.json,
+    ]);
+    return { home, plan, pay, kept };
+  }
+  const heard = (step: Record<string, unknown>): string[] =>
+    ((step.change_notices ?? []) as string[]).filter((line) => line.includes("was shared again since you took refunds"));
+  const line = "The plan of fixture in checkout-api was shared again since you took refunds; what you took stays as it was.";
+
+  test("gone and shared again: the build's next look says it once, the look after says nothing, and what it took stays", () => {
+    const { home, plan, pay, kept } = takenBuild();
+    const before = kept();
+    git(plan, ["update-ref", "-d", planRefOf(home.id8)]);
+    const shared = run(UNIT, ["share", "--plan"], home.dir);
+    expect(shared.status, shared.out).toBe(0);
+    const first = next(pay, { ...ENV, AIDLC_SESSION_OVERRIDE: "pay-later" });
+    expect(heard(first), JSON.stringify(first).slice(0, 900)).toEqual([line]);
+    const after = next(pay, { ...ENV, AIDLC_SESSION_OVERRIDE: "pay-later-2" });
+    expect(heard(after), JSON.stringify(after).slice(0, 900)).toEqual([]);
+    expect(kept()).toBe(before);
+  });
+
+  test("written over a tip that was not a plan: the build's next look says it once", () => {
+    const { home, pay } = takenBuild();
+    pushEditedPlan(home, (json) => ({ ...json, units: "none" }));
+    const shared = run(UNIT, ["share", "--plan"], home.dir);
+    expect(shared.status, shared.out).toBe(0);
+    const first = next(pay, { ...ENV, AIDLC_SESSION_OVERRIDE: "pay-later" });
+    expect(heard(first), JSON.stringify(first).slice(0, 900)).toEqual([line]);
+  });
+
+  // Who moves the workspace's one copy of the plan first does not matter: the take's own commit is what is compared.
+  test("next --units looks first: it says it once, and the build's steps after say nothing", () => {
+    const { home, plan, pay } = takenBuild();
+    git(plan, ["update-ref", "-d", planRefOf(home.id8)]);
+    expect(run(UNIT, ["share", "--plan"], home.dir).status).toBe(0);
+    const asked = next(pay, { ...ENV, AIDLC_SESSION_OVERRIDE: "pay-later" }, ["--units"]);
+    expect(heard(asked), JSON.stringify(asked).slice(0, 900)).toEqual([line]);
+    expect(heard(next(pay, { ...ENV, AIDLC_SESSION_OVERRIDE: "pay-later" }))).toEqual([]);
+  });
+
+  test("status moves the copy first and says nothing: the build's next step says it once", () => {
+    const { home, plan, pay } = takenBuild();
+    git(plan, ["update-ref", "-d", planRefOf(home.id8)]);
+    expect(run(UNIT, ["share", "--plan"], home.dir).status).toBe(0);
+    const status = run(UTILITY, ["status"], pay, { ...ENV, AIDLC_SESSION_OVERRIDE: "pay-later" });
+    expect(status.status).toBe(0);
+    expect(status.out).not.toContain("was shared again since you took refunds");
+    const step = next(pay, { ...ENV, AIDLC_SESSION_OVERRIDE: "pay-later" });
+    expect(heard(step), JSON.stringify(step).slice(0, 900)).toEqual([line]);
+    expect(heard(next(pay, { ...ENV, AIDLC_SESSION_OVERRIDE: "pay-later-2" }))).toEqual([]);
+  });
+
+  test("a look while the plan's tip is not a plan says nothing of it; the share over it is said once at the next", () => {
+    const { home, pay } = takenBuild();
+    pushEditedPlan(home, (json) => ({ ...json, units: "none" }));
+    expect(heard(next(pay, { ...ENV, AIDLC_SESSION_OVERRIDE: "pay-later" }))).toEqual([]);
+    expect(run(UNIT, ["share", "--plan"], home.dir).status).toBe(0);
+    const step = next(pay, { ...ENV, AIDLC_SESSION_OVERRIDE: "pay-later-2" });
+    expect(heard(step), JSON.stringify(step).slice(0, 900)).toEqual([line]);
+  });
+
+  test("a build already pushed hears it once at its next bare step", () => {
+    const { home, plan, pay } = takenBuild(["checkout-api", "billing"]);
+    codeGenerated(pay, buildDir(pay, "refunds"));
+    expect(run(UNIT, ["push"], pay).status).toBe(0);
+    git(plan, ["update-ref", "-d", planRefOf(home.id8)]);
+    expect(run(UNIT, ["share", "--plan"], home.dir).status).toBe(0);
+    const step = next(pay, { ...ENV, AIDLC_SESSION_OVERRIDE: "pay-later" });
+    expect(heard(step), JSON.stringify(step).slice(0, 900)).toEqual([line]);
+  });
+
+  test("a share on top of the plan it took says nothing of it", () => {
+    const { home, pay } = takenBuild();
+    pushEditedPlan(home, (json) => json);
+    const first = next(pay, { ...ENV, AIDLC_SESSION_OVERRIDE: "pay-later" });
+    expect(heard(first), JSON.stringify(first).slice(0, 900)).toEqual([]);
+  });
+});
+
