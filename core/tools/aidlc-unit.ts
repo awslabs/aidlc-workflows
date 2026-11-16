@@ -6467,8 +6467,14 @@ function commitRecord(args: string[], projectDir?: string): void {
   }
   const outside = leave.find((path) => path === "" || path.startsWith("-") || isAbsolute(path) || /^[A-Za-z]:/.test(path) ||
     path.split(/[\\/]/).includes(".."));
+  // The agent's line, as checkUnitWords' is: met only when the command was not run as the session start wrote it.
   if (outside !== undefined) {
-    fail(`--leave takes a path inside this project, as the session start wrote it (such as .claude/settings.json), not ${JSON.stringify(outside)}; nothing was committed.`);
+    console.error(JSON.stringify({
+      error: `unit commit-record --leave takes a path inside this project, as the session start wrote it (such as ` +
+        `.claude/settings.json), not ${JSON.stringify(outside)}: run the command exactly as it was written. Nothing was committed.`,
+      usage: unitUsage("commit-record"),
+    }));
+    process.exit(2);
   }
   const pd = resolveProjectDir(projectDir);
   let state: string | null = null;

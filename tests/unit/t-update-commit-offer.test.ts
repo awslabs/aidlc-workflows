@@ -393,7 +393,9 @@ describe("unit commit-record --update", () => {
     for (const path of ["-x", "../outside.json", "/etc/hosts", "C:/Windows/win.ini", ".claude/../../outside.json"]) {
       const refused = run(UNIT, ["commit-record", "--update", "--leave", path], dir);
       expect(refused.status, path).not.toBe(0);
-      expect(refused.out).toContain("--leave takes a path inside this project, as the session start wrote it (such as .claude/settings.json)");
+      expect(refused.status, path).toBe(2);
+      expect(refused.out).toContain("unit commit-record --leave takes a path inside this project, as the session start wrote it (such as .claude/settings.json)");
+      expect(refused.out).toContain("run the command exactly as it was written. Nothing was committed.");
     }
     expect(git(dir, ["rev-parse", "HEAD"])).toBe(head);
   });
