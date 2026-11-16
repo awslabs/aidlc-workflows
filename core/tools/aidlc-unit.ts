@@ -8145,20 +8145,21 @@ export function planPlaceForShare(projectDir: string, named?: string):
 // in a clone's URL never goes on git's command line, where anyone on the
 // machine can read it while git runs: the URL goes there without it, and `env`
 // holds the command-scope setting (url.<theirs>.insteadOf) that hands git
-// theirs. An address that starts with "-" would be read as an option and is
-// never passed on.
+// theirs; so does a sign-in in the address itself, with no clone of it. An
+// address that starts with "-" would be read as an option and is never
+// passed on.
 export function gitTargetFor(projectDir: string, address: string, use: "fetch" | "push"): { target: string; env: NodeJS.ProcessEnv } {
   refuseOptionAddress(address, optionAddressRefusal(address));
   const spelled = cloneSpelling(projectDir, address, use);
-  if (spelled === null) return { target: address, env: {} };
-  if (spelled.remote !== undefined) return { target: spelled.remote, env: {} };
-  const shown = withoutCredentials(spelled.url);
-  if (shown === spelled.url) return { target: spelled.url, env: {} };
+  if (spelled?.remote !== undefined) return { target: spelled.remote, env: {} };
+  const url = spelled?.url ?? address;
+  const shown = withoutCredentials(url);
+  if (shown === url) return { target: url, env: {} };
   const configured = Number.parseInt(process.env.GIT_CONFIG_COUNT ?? "0", 10);
   const index = Number.isSafeInteger(configured) && configured > 0 ? configured : 0;
   return {
     target: shown,
-    env: { GIT_CONFIG_COUNT: String(index + 1), [`GIT_CONFIG_KEY_${index}`]: `url.${spelled.url}.insteadOf`, [`GIT_CONFIG_VALUE_${index}`]: shown },
+    env: { GIT_CONFIG_COUNT: String(index + 1), [`GIT_CONFIG_KEY_${index}`]: `url.${url}.insteadOf`, [`GIT_CONFIG_VALUE_${index}`]: shown },
   };
 }
 
@@ -8194,7 +8195,7 @@ function cloneSpelling(projectDir: string, address: string, use: "fetch" | "push
     const url = urlOf(projectDir, remote);
     if (url !== "" && gitAddressKey(url) === key) return { remote, url };
   }
-  for (const name of new Set([...intentRepos(projectDir), ...readWorkspaceRepos(projectDir).entries.keys()])) {
+  for (const name of workspaceRepoNames(projectDir)) {
     const dir = repoDir(projectDir, name);
     if (resolve(dir) === resolve(projectDir) || !isGitRepoDir(dir)) continue;
     for (const remote of remotes(dir)) {
@@ -8594,11 +8595,17 @@ function workspaceAddresses(pd: string): Array<{ name: string; address: string }
   const own = soleRemote(pd);
   add(repoNameOf(urlOf(pd, own)) || basename(pd), urlOf(pd, own));
   for (const [name, entry] of readWorkspaceRepos(pd).entries) add(name, entry.url ? absoluteAddress(pd, entry.url) : "");
-  for (const name of new Set([...intentRepos(pd), ...discoverSiblingRepos(pd), ...readWorkspaceRepos(pd).entries.keys()])) {
+  for (const name of workspaceRepoNames(pd)) {
     const dir = repoDir(pd, name);
     if (isGitRepoDir(dir) && resolve(dir) !== resolve(pd)) add(name, urlOf(dir, soleRemote(dir)));
   }
   return found;
+}
+
+// The repositories this workspace has by name, the one list the sweep and
+// gitTargetFor read: the work's, repos.json's, and each clone found on disk.
+function workspaceRepoNames(pd: string): Set<string> {
+  return new Set([...intentRepos(pd), ...discoverSiblingRepos(pd), ...readWorkspaceRepos(pd).entries.keys()]);
 }
 
 // The plans this workspace can read with nothing said but the person's ask:

@@ -504,6 +504,23 @@ describe("a team takes a Unit from the plan where it is shared", () => {
     expect(calls.filter((line) => /trace: (built-in|run_command): git .*refs\/aidlc\/plans/.test(line))).toEqual([]);
   });
 
+  test("a sign-in in an unlisted clone's URL or in a repos.json url never goes on git's command line at the ask", () => {
+    const pay = teamWorkspace({}, "pay", []);
+    // A clone on disk that repos.json does not list, whose URL carries a sign-in.
+    const billing = join(pay, "billing");
+    git(pay, ["init", "-q", "-b", "main", billing]);
+    git(billing, ["remote", "add", "origin", "https://lead:s3cret@example.invalid/org/billing.git"]);
+    // A repos.json url that carries one, with no clone on disk.
+    writeFileSync(join(pay, "repos.json"), `${JSON.stringify({ repos: [{ name: "ledger", url: "https://lead:t0ken@example.invalid/org/ledger.git" }] })}\n`);
+    const trace = join(tempDir("trace"), "git.trace");
+    run(ORCH, ["next", "--units"], pay, { ...ENV, GIT_TRACE: trace });
+    // AI-DLC's own git calls (git's helper for https is handed the URL by git itself, as for any fetch in that clone).
+    const calls = readFileSync(trace, "utf-8").split("\n").filter((line) => /trace: (built-in|exec|run_command): git fetch/.test(line));
+    expect(calls.some((line) => line.includes("example.invalid/org/billing.git")), calls.join("\n")).toBe(true);
+    expect(calls.some((line) => line.includes("example.invalid/org/ledger.git")), calls.join("\n")).toBe(true);
+    expect(calls.filter((line) => /s3cret|t0ken/.test(line)), calls.join("\n")).toEqual([]);
+  });
+
   test("records are read with a clone's own sign-in when its URL carries one, which never goes on git's command line", async () => {
     const pay = teamWorkspace({}, "pay", []);
     const clone = join(pay, "checkout-api");
