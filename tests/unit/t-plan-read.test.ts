@@ -357,6 +357,30 @@ describe("a team takes a Unit from the plan where it is shared", () => {
     expect((again.json?.plan as { repo: string }).repo).toBe("checkout-api");
   });
 
+  test("a plan ref pushed into another repository of the workspace is never read as the lead's word: a Unit another team took stays taken", () => {
+    const home = makePlanHome();
+    const plan = home.hosts["checkout-api"];
+    const web = teamWorkspace(home.hosts, "web", ["checkout-web"]);
+    const took = run(UNIT, ["take", "checkout-ui", "--plan", home.id8, "--from", plan], web);
+    expect(took.status, took.out).toBe(0);
+    const generation = recordAt(home, "checkout-ui")?.json.generation;
+    // Pushed into billing by anyone who can push there: the same plan, later, with an open-again word on checkout-ui.
+    pushEditedPlan(home, (json) => ({
+      ...json,
+      units: (json.units as Array<Record<string, unknown>>).map((unit) =>
+        unit.name === "checkout-ui" ? { ...unit, word: { generation, open_again: { at: "2099-01-01T00:00:00Z" } } } : unit),
+    }), home.hosts.billing);
+    // A workspace with every repository asks what it can take: the sweep reads each of them.
+    const sam = teamWorkspace(home.hosts, "sam");
+    const ask = next(sam, ENV, ["--units"]);
+    expect(ask.ask_type, JSON.stringify(ask).slice(0, 600)).toBe("unit-take");
+    expect((ask.choices as Array<{ label: string }>).map((choice) => choice.label)).not.toContain("Start checkout-ui");
+    const again = run(UNIT, ["take", "checkout-ui", "--plan", home.id8, "--from", plan], sam);
+    expect(again.status, again.out).not.toBe(0);
+    expect(again.out).toContain("checkout-ui is already taken");
+    expect(recordAt(home, "checkout-ui")?.json).toMatchObject({ taken_by: "web" });
+  });
+
   test("asked for the Units with no plan in this workspace's repositories: the ask is for the address it is shared in", () => {
     const home = makePlanHome({ share: false });
     const pay = teamWorkspace(home.hosts, "pay", ["billing"]);
@@ -462,6 +486,39 @@ describe("a team takes a Unit from the plan where it is shared", () => {
         expect(await openCodeSays(shell, platform, command), `${shell} on ${platform}: ${command}`).toBe("");
       }
     }
+  });
+
+  test("the first look in a fresh clone of the lead's workspace reads each record where the plan puts it: a Unit another team took is not offered", () => {
+    const home = makePlanHomeWithRemote();
+    const plan = home.hosts["checkout-api"];
+    const web = teamWorkspace(home.hosts, "web", ["checkout-web"]);
+    const took = run(UNIT, ["take", "checkout-ui", "--plan", home.id8, "--from", plan], web);
+    expect(took.status, took.out).toBe(0);
+    const bob = cloneOf(home.remote, "bob");
+    const ask = next(bob);
+    expect(ask.ask_type, JSON.stringify(ask).slice(0, 600)).toBe("unit-take");
+    expect((ask.choices as Array<{ label: string }>).map((choice) => choice.label)).not.toContain("Start checkout-ui");
+  });
+
+  test("a take asked by another spelling of the plan's repository, with no clone of it here, writes the record there by the spelling the person gave", () => {
+    const home = makePlanHome();
+    const lead = "ssh://git@plans.example/org/checkout-api.git";
+    const theirs = "https://plans.example/org/checkout-api.git";
+    let unit = "";
+    // The lead spells the plan's repository by ssh; this computer reaches it by https only.
+    pushEditedPlan(home, (json) => {
+      const own = json.plan_repo as { name: string };
+      unit = (json.units as Array<{ name: string; record?: string }>).find((entry) => entry.record === own.name)!.name;
+      return { ...json, plan_repo: { ...own, address: lead } };
+    });
+    const pay = teamWorkspace(home.hosts, "pay", ["billing"]);
+    const https = {
+      ...ENV, GIT_SSH_COMMAND: "false", GIT_CONFIG_COUNT: "3",
+      GIT_CONFIG_KEY_2: `url.${home.hosts["checkout-api"]}.insteadOf`, GIT_CONFIG_VALUE_2: theirs,
+    };
+    const took = run(UNIT, ["take", unit, "--plan", home.id8, "--from", theirs], pay, https);
+    expect(took.status, took.out).toBe(0);
+    expect(recordAt(home, unit)?.json).toMatchObject({ unit, taken_by: "pay" });
   });
 
   test("a plan that names another work than the one asked for is not taken", () => {
@@ -573,7 +630,7 @@ describe("a team takes a Unit from the plan where it is shared", () => {
 
   // A sh script named git on PATH notes the call and its settings; git for Windows is found as git.exe, never as a
   // script. The command line half is the sign-in case above, by git's own trace, on every platform.
-  test.skipIf(process.platform === "win32")("records are read with a clone's own sign-in when its URL carries one, which never goes on git's command line", async () => {
+  test.skipIf(process.platform === "win32")("the plan and the records are read with a clone's own sign-in when its URL carries one, which never goes on git's command line", async () => {
     const pay = teamWorkspace({}, "pay", []);
     const clone = join(pay, "checkout-api");
     git(pay, ["init", "-q", "-b", "main", clone]);
@@ -584,7 +641,7 @@ describe("a team takes a Unit from the plan where it is shared", () => {
     // A git that notes each call's arguments and its command-scope settings, then gives up.
     const bin = tempDir("git-bin");
     const log = join(bin, "calls.log");
-    writeFileSync(join(bin, "git"), `#!/bin/sh\ncase "$*" in *refs/aidlc/claims*) echo "$* | $(env | grep '^GIT_CONFIG_' | tr '\\n' ' ')" >> '${log}'; exit 1;; esac\nexec ${Bun.which("git")} "$@"\n`);
+    writeFileSync(join(bin, "git"), `#!/bin/sh\ncase "$*" in fetch*refs/aidlc/*) echo "$* | $(env | grep '^GIT_CONFIG_' | tr '\\n' ' ')" >> '${log}'; exit 1;; esac\nexec ${Bun.which("git")} "$@"\n`);
     chmodSync(join(bin, "git"), 0o755);
     const path = process.env.PATH;
     process.env.PATH = `${bin}:${path}`;
@@ -593,8 +650,13 @@ describe("a team takes a Unit from the plan where it is shared", () => {
     } finally {
       process.env.PATH = path;
     }
-    const [args, settings] = readFileSync(log, "utf-8").split("\n")[0].split(" | ");
-    expect(args).not.toContain("s3cret");
-    expect(settings).toContain("insteadOf");
+    // With no copy of the plan here, the plan is read first, the same way.
+    const calls = readFileSync(log, "utf-8").split("\n").filter(Boolean);
+    expect(calls.length).toBeGreaterThan(0);
+    for (const call of calls) {
+      const [args, settings] = call.split(" | ");
+      expect(args).not.toContain("s3cret");
+      expect(settings).toContain("insteadOf");
+    }
   });
 });

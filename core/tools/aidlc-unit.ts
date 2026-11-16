@@ -1035,8 +1035,14 @@ function createClaimCommit(
     projectDir,
     tree,
     [parentOid, ...(additionalParentOid ? [additionalParentOid] : [])],
-    `aidlc unit ${payload.status}: ${payload.unit} generation ${payload.generation}`,
+    unitCommitSubject(payload.status, `${payload.unit} generation ${payload.generation}`),
   );
+}
+
+// The subject of a commit on a Unit's claim or its record, "aidlc unit <x>:
+// <what>", written in one place: it names the commit, never a command to run.
+function unitCommitSubject(head: string, what: string): string {
+  return `aidlc unit ${head}: ${what}`;
 }
 
 // A claim commit, and the handover commit publish puts under it, are the
@@ -1473,7 +1479,7 @@ function createRecordCommit(
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
-  return commitAsPerson(projectDir, tree, parent === null ? [] : [parent], `aidlc unit ${payload.unit}: ${what}`);
+  return commitAsPerson(projectDir, tree, parent === null ? [] : [parent], unitCommitSubject(payload.unit, what));
 }
 
 // Where a Unit's record is: the repository the plan names for it, by that
@@ -7726,8 +7732,8 @@ interface HomeWork {
 // the places this workspace knows of (recordPlacesOfWork).
 function recordPlaceOf(projectDir: string, home: HomeWork, unit: string): RecordPlace {
   if (home.solo) return { repo: workspaceRepoEntry(projectDir).name, address: home.location };
-  const plan = home.plan ?? planOfWork(projectDir, home.id8) ?? planLookedFor(projectDir, home.location, home.id8);
-  return plan === null ? { repo: repoNameOf(home.location), address: home.location } : recordPlaceIn(plan, unit);
+  const plan = home.plan ?? planOfWork(projectDir, home.id8, home.location) ?? planLookedFor(projectDir, home.location, home.id8);
+  return plan === null ? { repo: repoNameOf(home.location), address: home.location } : recordPlaceIn(plan, unit, home.location);
 }
 
 // The plan at `location` as this workspace's copy of it holds it, looked at
@@ -7750,10 +7756,15 @@ function planLookedFor(projectDir: string, location: string, id8: string): PlanJ
 
 // The repository a plan names for a Unit's record; a Unit it names none for,
 // the plan's own.
-function recordPlaceIn(plan: PlanJson, unit: string): RecordPlace {
+//
+// `readAt`, the address this workspace read the plan at: a record in that same
+// repository is reached by it, the person's own spelling with no clone of it
+// here; one in another repository by the plan's, or the person's own clone.
+function recordPlaceIn(plan: PlanJson, unit: string, readAt?: string): RecordPlace {
   const named = plan.units.find((entry) => entry.name === unit)?.record;
   const entry = [plan.plan_repo, ...plan.repos].find((repo) => repo.name === named && repo.address !== null);
-  return entry !== undefined ? { repo: entry.name, address: entry.address! } : { repo: plan.plan_repo.name, address: plan.plan_repo.address };
+  const place = entry !== undefined ? { repo: entry.name, address: entry.address! } : { repo: plan.plan_repo.name, address: plan.plan_repo.address };
+  return readAt !== undefined && isGitAddress(readAt) && sameGitAddress(place.address, readAt) ? { ...place, address: readAt } : place;
 }
 
 // The work a record of `home`'s is read for.
@@ -8094,21 +8105,29 @@ function keptPlan(pd: string, id8: string): { ref: string; commit: string; plan:
   return read.kind === "read" ? { ref, commit: read.oid, plan: read.plan } : null;
 }
 
-// A work's plan by its id as this workspace last read it: the copy at the work
-// here's Home Location (keptPlan), else the newest copy of it here, for a
-// workspace whose active work is another or none (a fresh clone's look, a
-// team's build of another work).
-function planOfWork(pd: string, id8: string): PlanJson | null {
+// A work's plan by its id as this workspace last read it, from a place it was
+// given: the copy at `at` (the address a look or a take is for), else the copy
+// at the work here's Home Location (keptPlan), else, for a workspace whose
+// active work is another or none, the one copy here read from the repository
+// its plan.json names as its own (planAtCopy's `found`). A copy of the ref
+// pushed into any other repository is no plan, and two that pass leave none:
+// never the newer by date.
+function planOfWork(pd: string, id8: string, at?: string): PlanJson | null {
+  if (at !== undefined && isGitAddress(at)) {
+    const read = planAtCopy(pd, copyOf(at, planRecordRef(id8)));
+    if (read.kind === "read") return read.plan;
+  }
   const kept = keptPlan(pd, id8);
   if (kept !== null) return kept.plan;
-  const listed = localGit(pd, ["for-each-ref", "--sort=-committerdate", "--format=%(refname)", `refs/aidlc/home/${id8}/`]);
+  const listed = localGit(pd, ["for-each-ref", "--format=%(refname)", `refs/aidlc/home/${id8}/`]);
+  const found: PlanJson[] = [];
   for (const ref of listed.ok ? listed.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean) : []) {
     const copy = homeCopyOf(ref);
     if (copy?.kind !== "plan" || copy.id8 !== id8) continue;
-    const read = planAtCopy(pd, ref);
-    if (read.kind === "read") return read.plan;
+    const read = planAtCopy(pd, ref, { found: true });
+    if (read.kind === "read") found.push(read.plan);
   }
-  return null;
+  return found.length === 1 ? found[0] : null;
 }
 
 // The Units the plan as this computer last wrote or read it lists, or null
@@ -10568,17 +10587,18 @@ export function refreshHomeClaims(
   // record repository answered: its copy holds the Units, the lead's rules a
   // build follows and the lead's word on its Unit, whichever step looked first
   // in the chat, and its look counts as theirs does. Solo work has no plan.
-  // The lead's own look reads it as well, so another computer of the lead's
-  // has the plan from its first look, and reads it first there, so the
-  // records are read where the plan names them.
+  // The lead's own look reads it as well. A look with no copy of the plan yet
+  // (another computer of the lead's, a fresh clone of a shared workspace, a
+  // builder's second computer) reads it first, so the records are read where
+  // the plan names them.
   const leadState = options.home === undefined && !onBranches ? stateHere(pd) ?? "" : "";
   const planAddress = options.home !== undefined
     ? options.home.solo !== true ? options.home.location : undefined
     : isTeamUnitOwnership(leadState) && unitBuildOf(leadState) === null ? homeLocation(leadState) ?? undefined : undefined;
-  const planBefore = planOfWork(pd, id8);
+  const planBefore = planOfWork(pd, id8, planAddress);
   let recordPlaces = places;
   let planFirst = false;
-  if (refused === null && options.home === undefined && planBefore === null && planAddress !== undefined && isGitAddress(planAddress)) {
+  if (refused === null && planBefore === null && planAddress !== undefined && isGitAddress(planAddress)) {
     planFirst = true;
     const plan = lookAt(pd, planAddress, [planRecordRef(id8)]);
     if (plan.ok) recordPlaces = recordPlacesOfWork(pd, id8, options.home);
@@ -10615,7 +10635,7 @@ export function refreshHomeClaims(
       unreached.push({ repo: repoNameOf(planAddress), address: planAddress, said: plan.firstLine ?? "it did not answer in time" });
     }
   }
-  if (refused === null) sayOwnBuildsMerged(pd, id8, planBefore, options.home);
+  if (refused === null) sayOwnBuildsMerged(pd, id8, planBefore, planAddress, options.home);
   const ok = refused === null && unreached.length === 0;
   if (ok) homesFetchedThisCommand.add(home);
   const stopped = refused !== null && last?.chat === chat && last.refused === true;
@@ -10642,14 +10662,14 @@ function recordPlacesOfWork(
   id8: string,
   home?: { location?: string; solo?: boolean; plan?: PlanJson },
 ): RecordPlace[] {
-  const plan = home?.solo === true ? null : home?.plan ?? planOfWork(projectDir, id8);
+  const plan = home?.solo === true ? null : home?.plan ?? planOfWork(projectDir, id8, home?.location);
   if (plan === null) {
     const address = home?.location ?? workspaceHomeLocation(projectDir);
     return address === null || address === "local" ? [] : [{ repo: repoNameOf(address), address }];
   }
   const seen = new Map<string, RecordPlace>();
   for (const unit of plan.units) {
-    const place = recordPlaceIn(plan, unit.name);
+    const place = recordPlaceIn(plan, unit.name, home?.location);
     if (!seen.has(gitAddressKey(place.address))) seen.set(gitAddressKey(place.address), place);
   }
   return [...seen.values()];
@@ -10660,8 +10680,8 @@ function recordPlacesOfWork(
 // main), that the plan this look read says done and the copy before it did
 // not: said once, with the step that follows. A look that moved nothing says
 // nothing; with the build in this checkout, status's Yours line still shows it.
-function sayOwnBuildsMerged(pd: string, id8: string, before: PlanJson | null, home?: { space?: string }): void {
-  const after = planOfWork(pd, id8);
+function sayOwnBuildsMerged(pd: string, id8: string, before: PlanJson | null, at: string | undefined, home?: { space?: string }): void {
+  const after = planOfWork(pd, id8, at);
   if (after === null) return;
   for (const entry of after.units) {
     if ((entry.word as UnitWord).done !== true || (before !== null && unitWordIn(before, entry.name).done === true)) continue;
