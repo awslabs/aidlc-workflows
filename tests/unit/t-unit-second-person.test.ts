@@ -478,7 +478,8 @@ describe("a solo home looks for a teammate's take only once its Unit walk has be
     remotesNamed(home.dir, ["github", "gitlab"]);
     const shared = run(UNIT, ["share", "--plan"], home.dir);
     expect(shared.status, shared.out).toBe(0);
-    expect(shared.json).toMatchObject({ shared: true, remote: "github", branch: "main" });
+    expect(shared.json).toMatchObject({ shared: true, plan: { address: home.remote } });
+    expect(git(home.remote, ["for-each-ref", "--format=%(refname)", "refs/aidlc/plans"])).not.toBe("");
   });
 
   // The command lines still running that name a host stand-in's port.

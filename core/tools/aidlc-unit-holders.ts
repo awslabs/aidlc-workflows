@@ -75,6 +75,11 @@ export function claimRecordRef(id8: string, unit: string): string {
   return `${CLAIM_RECORDS}${id8}/${unit}`;
 }
 
+// The plan a lead shares with the teams, in one code repository.
+export function planRecordRef(id8: string): string {
+  return `refs/aidlc/plans/${id8}`;
+}
+
 // A work's claims on a remote (every work's without `id8`), as a refspec's
 // source folder (`<it>*`).
 export function claimsOnRemote(onBranches: boolean, id8?: string): string {

@@ -652,7 +652,15 @@ import {
   leadsPlanOnRemote,
   claimIsMine,
   buildClaimHere,
+  planPlaceForShare,
+  planUnitsKept,
+  planNoRemoteLine,
+  PLAN_NOT_NOW,
   planUnshared,
+  skeletonCodeName,
+  planBranchOffered,
+  planShareWork,
+  sharesPlanRef,
   planByPullRequestDetail,
   planShareWords,
   catchUpOffer,
@@ -6018,11 +6026,12 @@ function planWaitStep(projectDir: string, planOnly: boolean): AskDirective | Pri
   const target = wait === null ? null : shareTarget(projectDir);
   if (wait === null || target === null) return null;
   const onItsBranch = `${aidlcInvocation()} unit share --branch${planOnly ? " --plan" : ""}`;
+  const code = skeletonCodeName(projectDir);
   if (wait.state === "committed" && wait.offer !== null) {
     return teamHandoverAsk(projectDir, {
       handovers: ["share"],
       marks: [wait.offer],
-      question: "Want me to put the plan on its own branch and push that, so you can open a pull request from it?",
+      question: `Want me to put ${code?.name ?? "the plan"} on its own branch and push that, so you can open a pull request from it?`,
       choices: [{ label: "Put it on its own branch", detail: planByPullRequestDetail(projectDir), command: onItsBranch }],
       notNow: { label: "Not now", detail: "Nothing is pushed; the plan stays committed here." },
     });
@@ -6032,7 +6041,9 @@ function planWaitStep(projectDir: string, planOnly: boolean): AskDirective | Pri
     return teamHandoverAsk(projectDir, {
       handovers: ["share"],
       marks: [wait.offer],
-      question: `The plan is in ${target.branch} now, so teams can take Units. Want me to switch you back to ${target.branch}?`,
+      question: code === null
+        ? `The plan is in ${target.branch} now, so teams can take Units. Want me to switch you back to ${target.branch}?`
+        : `${code.name} ${code.is} in ${target.branch} now. Want me to switch you back to ${target.branch}?`,
       choices: [{
         label: `Switch back to ${target.branch}`,
         detail: `I bring your ${target.branch} level with ${target.remote}'s and put your checkout on it; your own changes stay as they are.`,
@@ -6041,7 +6052,7 @@ function planWaitStep(projectDir: string, planOnly: boolean): AskDirective | Pri
       notNow: { label: "Not now", detail: `You stay on ${wait.name}.` },
     });
   }
-  const line = planWaitLine(wait, target.branch);
+  const line = planWaitLine(wait, target.branch, projectDir);
   if (line === null) return null;
   if (wait.state !== "committed") return lineEndingTurn(line);
   const asked = `When the person asks for it, run \`${onItsBranch}\` and tell them in plain words what it reports.`;
@@ -6127,6 +6138,7 @@ function sliceBuiltFirst(projectDir: string, stateContent: string): string | nul
 function buildOutShareOffer(projectDir: string): AskDirective | PrintDirective | null {
   const refused = shareRefusal(projectDir);
   if (refused !== null && refused.off === undefined) return null;
+  if (sharesPlanRef(projectDir)) return planRefShareOffer(projectDir);
   // While the team's branch is still to be read, the offer names "the team's
   // branch" and the share's own step reads it first (shareMain).
   const target = shareOfferTarget(projectDir);
@@ -6161,6 +6173,10 @@ function buildOutShareOffer(projectDir: string): AskDirective | PrintDirective |
       ...(message.file === undefined ? {} : { messageFile: message.file }),
     });
   }
+  const way = changesReachMain(projectDir);
+  // The walking skeleton's code built here goes with the plan's first share.
+  const code = added === null ? skeletonCodeName(projectDir) : null;
+  if (code !== null) return skeletonShareOffer(projectDir, target, way, code, shareKey, mark);
   const said = added !== null
     ? `${namesInProse(added)} ${added.length === 1 ? "was" : "were"} added to the plan since you shared it, so the ` +
       `teams cannot take ${added.length === 1 ? "it" : "them"} yet.`
@@ -6168,7 +6184,6 @@ function buildOutShareOffer(projectDir: string): AskDirective | PrintDirective |
   // A Unit built here before the share has no claim yet: the share sends it.
   const builtHere = added === null ? unitsAskedHereForShare(projectDir) : [];
   const note = builtHere.length === 0 ? null : builtHereNote(builtHere);
-  const way = changesReachMain(projectDir);
   const byPullRequest = way === "pull request";
   // The commit's message, only where the share makes one.
   const message = planToCommit(projectDir) ? shareMessageStep(projectDir, shareKey, planShareWords(projectDir)) : null;
@@ -6195,11 +6210,122 @@ function buildOutShareOffer(projectDir: string): AskDirective | PrintDirective |
   });
 }
 
+// The plan's first share at the lead's work teams build, with the walking
+// skeleton's code built in the workspace's own repository: the plan goes to
+// its repository, and the code with AI-DLC's record is committed here and
+// pushed, by pull request unless the team's line says otherwise.
+function skeletonShareOffer(
+  projectDir: string,
+  target: { remote: string; branch: string },
+  way: ReturnType<typeof changesReachMain>,
+  code: NonNullable<ReturnType<typeof skeletonCodeName>>,
+  shareKey: string,
+  mark: string,
+): AskDirective | PrintDirective {
+  const place = planPlaceForShare(projectDir);
+  if (!("ref" in place)) {
+    if (!isReadOnlyEngineProbe()) noteEngineAskMark(projectDir, mark);
+    return lineEndingTurn(planNoRemoteLine("repo" in place ? place.repo : place.named));
+  }
+  const message = shareMessageStep(projectDir, shareKey, planShareWords(projectDir));
+  if ("draft" in message) return message.draft;
+  const ask = teamHandoverAsk(projectDir, {
+    handovers: ["share"],
+    marks: [mark],
+    question: `Do you want me to share the plan with the teams? I'd put it in ${place.repo}: ${planContents(projectDir)}; ` +
+      `everyone who can read ${place.repo} can read it. I'd also commit ${code.name}, ${planShareWork(projectDir)}, and AI-DLC's ` +
+      "record, using this commit message, and " +
+      // After a push to main it has the code, so only the pull request's form says what waits.
+      (way === "direct push" ? `push ${target.branch} to ${target.remote}.`
+        : `push that on its own branch for a pull request. The other Units wait on ${code.units} until ` +
+          `${code.is === "is" ? "it is" : "they are"} in ${target.branch}.`) +
+      `\n\n${message.text}`,
+    choices: shareWays(way, {
+      label: `Share the plan and push ${target.branch}`,
+      detail: `Pushes the plan, and ${target.branch} with ${code.name}, to ${place.repo}; a plain push, it never overwrites what anyone pushed.`,
+      command: `${aidlcInvocation()} unit share --plan${message.flag}`,
+    }, {
+      label: `Share the plan, ${code.units} by pull request`,
+      detail: `Pushes the plan to ${place.repo}, and puts ${code.name} and AI-DLC's record on its own branch, ${planBranchOffered(projectDir)}, ` +
+        `with the host's link for the pull request; you work on that branch until it is merged; ${target.branch} stays as it is.`,
+      command: `${aidlcInvocation()} unit share --branch --plan${message.flag}`,
+    }),
+    notNow: { label: "Not now", detail: PLAN_NOT_NOW },
+    ...(message.file === undefined ? {} : { messageFile: message.file }),
+  });
+  return Object.assign(ask, { board_note: PLAN_REPO_NOTE() });
+}
+
+// For the agent, on the plan's share question: the person may name the repository.
+const PLAN_REPO_NOTE = (): string =>
+  `When the person names another repository for the plan, add \`--repo <its name or address>\` to the share's command. ${teamCommandsNote()}`;
+
+// What the plan holds, as its share question says it: each Unit's
+// repositories (five at most, so a long plan's question stays a question) and
+// the lead's own rules.
+function planContents(projectDir: string): string {
+  const dag = resolveBoltDag(projectDir);
+  const unitsOf = unitLikelyRepos(projectDir);
+  const where = dag.state !== "ok" ? [] : unitsInPlanOrder(projectDir, dag.units).filter((unit) => (unitsOf.get(unit) ?? []).length > 0)
+    .map((unit) => `${unit} in ${namesInProse([...new Set(unitsOf.get(unit)!.map((repo) => repo.split("/")[0]))])}`);
+  const named = where.length > 5 ? [...where.slice(0, 5), `and ${where.length - 5} more`] : where;
+  const lead = leadRules(projectDir, engineSelection(projectDir).space);
+  const rules = lead.practices.length > 0 && lead.project.length > 0 ? ", with your team's practices and project rules"
+    : lead.practices.length > 0 ? ", with your team's practices" : lead.project.length > 0 ? ", with your project rules" : "";
+  return `the Units${named.length > 0 ? ` (${named.join(", ")})` : ""} and what each is built from${rules}`;
+}
+
+// The share of the plan's own ref, at the lead's work teams build with no
+// walking skeleton's code here for main: asked once, and again once for Units
+// added since, naming the repository it goes to and who can read it there.
+function planRefShareOffer(projectDir: string): AskDirective | PrintDirective | null {
+  const dag = resolveBoltDag(projectDir);
+  if (dag.state !== "ok") return null;
+  const kept = planUnitsKept(projectDir);
+  const added = kept === null ? null : dag.units.filter((unit) => !kept.includes(unit)).sort(compareBoardKeys);
+  if (added !== null && added.length === 0) return null;
+  // A thin slice built here first: nothing is open to a team until it is approved, so the plan is shared then.
+  if (added === null && sliceBuiltFirst(projectDir, readStateFile(projectDir)) !== null) return null;
+  const mark = teamHandoverMarkName("share", added === null ? "plan" : `plan-${added.join("-")}`);
+  if (handoverOffered(projectDir, mark)) return null;
+  const place = planPlaceForShare(projectDir);
+  if (!("ref" in place)) {
+    if (!isReadOnlyEngineProbe()) noteEngineAskMark(projectDir, mark);
+    return lineEndingTurn(planNoRemoteLine("repo" in place ? place.repo : place.named, added !== null));
+  }
+  const builtHere = added === null ? unitsAskedHereForShare(projectDir) : [];
+  const question = added === null
+    ? `Do you want me to share the plan with the teams? I'd put it in ${place.repo}: ${planContents(projectDir)}. ` +
+      "Nothing is added to a branch or to your files. " +
+      `Everyone who can read ${place.repo} can read it.` +
+      (builtHere.length > 0 ? ` I'd also record that ${namesInProse(builtHere)} ${builtHere.length === 1 ? "is" : "are"} built here.` : "")
+    : `The plan in ${place.repo} does not have ${namesInProse(added)} yet: you added ${added.length === 1 ? "it" : "them"} after ` +
+      "you shared the plan. Do you want me to share it again? Nothing is added to a branch or to your files.";
+  const ask = teamHandoverAsk(projectDir, {
+    handovers: ["share"],
+    marks: [mark],
+    question,
+    choices: [{
+      label: added === null ? "Share the plan" : "Share the plan again",
+      detail: added === null ? `One push to ${place.repo} with your own git; nothing else changes.`
+        : `One push to ${place.repo}, on top of what is there; nothing else changes.`,
+      command: `${aidlcInvocation()} unit share --plan`,
+    }],
+    notNow: { label: "Not now", detail: PLAN_NOT_NOW },
+  });
+  // An ask's board note rides as at every team-home step (atTeamHome's note).
+  return Object.assign(ask, { board_note: PLAN_REPO_NOTE() });
+}
+
 // The plan's Units here that the remote's main, as this clone last fetched it,
 // does not list: a teammate's clone reads the plan from there.
 function unitsNotShared(projectDir: string, target: { remote: string; branch: string }): string[] {
   const dag = resolveBoltDag(projectDir);
   if (dag.state !== "ok") return [];
+  if (homeLocation(readStateFile(projectDir)) !== null) {
+    const kept = planUnitsKept(projectDir);
+    return kept === null ? [] : dag.units.filter((unit) => !kept.includes(unit)).sort(compareBoardKeys);
+  }
   const plan = relative(projectDir, unitDependencyPath(projectDir)).split("\\").join("/");
   const shown = Bun.spawnSync({
     cmd: ["git", "show", `refs/remotes/${target.remote}/${target.branch}:${plan}`],
@@ -26058,7 +26184,7 @@ function handleTeamBoard(
     // The plan's share waiting for its pull request: its one line, in place of the board.
     const waits = planWait(pd);
     const target = waits === null ? null : shareTarget(pd);
-    const waitLine = waits === null || target === null ? null : planWaitLine(waits, target.branch);
+    const waitLine = waits === null || target === null ? null : planWaitLine(waits, target.branch, pd);
     if (waitLine !== null) {
       process.stdout.write(`${waitLine}\n`);
       return;

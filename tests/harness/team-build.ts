@@ -132,6 +132,16 @@ export interface Home {
 
 /** The home workspace, committed and pushed to its own bare host. */
 export function makeHome(options: { state?: string; dependencies?: string; repos?: Record<string, string> } = {}): Home {
+  const dir = homeWorkspace(options);
+  const remote = tempDir("home-host");
+  git(remote, ["init", "-q", "--bare", "-b", "main"]);
+  git(dir, ["remote", "add", "origin", remote]);
+  git(dir, ["push", "-q", "-u", "origin", "main"]);
+  return { dir, remote };
+}
+
+/** The home workspace at the first Construction step, committed, with no remote. */
+function homeWorkspace(options: { state?: string; dependencies?: string; repos?: Record<string, string> }): string {
   const dir = createTestProject();
   projects.push(dir);
   seedAidlcMemory(dir);
@@ -170,11 +180,44 @@ export function makeHome(options: { state?: string; dependencies?: string; repos
   git(dir, ["config", "user.email", "lead@example.test"]);
   git(dir, ["add", "-A"]);
   git(dir, ["commit", "-q", "-m", "inception"]);
-  const remote = tempDir("home-host");
-  git(remote, ["init", "-q", "--bare", "-b", "main"]);
-  git(dir, ["remote", "add", "origin", remote]);
-  git(dir, ["push", "-q", "-u", "origin", "main"]);
-  return { dir, remote };
+  return dir;
+}
+
+export interface PlanHome {
+  /** The lead's workspace: a git repository with no remote of its own. */
+  dir: string;
+  /** Each code repository's bare host, by name, in the work's order. */
+  hosts: Record<string, string>;
+  /** The work's id, as the plan's ref names it. */
+  id8: string;
+  /** The plan's commit on its host after the share, or null when not shared. */
+  plan: string | null;
+}
+
+/** The plan's ref at a host for a work id. */
+export const planRefOf = (id8: string): string => `refs/aidlc/plans/${id8}`;
+
+/**
+ * The lead's workspace whose plan goes to a code repository: a git repository
+ * with no remote of its own, each code repository a bare host cloned beside
+ * it, several teams chosen unless `teams` is false, and the plan shared
+ * unless `share` is false.
+ */
+export function makePlanHome(
+  options: { state?: string; dependencies?: string; repos?: Record<string, string>; share?: boolean; teams?: boolean } = {},
+): PlanHome {
+  const hosts = options.repos ?? { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing"), "checkout-web": codeHost("checkout-web") };
+  const dir = homeWorkspace({ ...options, repos: hosts });
+  const registry = JSON.parse(readFileSync(join(dir, "aidlc", "spaces", "default", "intents", "intents.json"), "utf-8")) as Array<{ uuid: string }>;
+  const id8 = registry[0].uuid.replace(/-/g, "").slice(-8);
+  if (options.teams === false) return { dir, hosts, id8, plan: null };
+  const chose = run(STATE, ["set-unit-ownership", "team"], dir);
+  expect(chose.status, chose.out).toBe(0);
+  if (options.share === false) return { dir, hosts, id8, plan: null };
+  const shared = run(UNIT, ["share", "--plan"], dir);
+  expect(shared.status, shared.out).toBe(0);
+  const first = Object.values(hosts)[0];
+  return { dir, hosts, id8, plan: git(first, ["rev-parse", planRefOf(id8)]) };
 }
 
 /** A code repo's bare host with one commit on main. */

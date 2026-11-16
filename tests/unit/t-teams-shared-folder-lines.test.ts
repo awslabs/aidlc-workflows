@@ -4,7 +4,8 @@
 // is offered only for the person's own take, by their git name, whatever space
 // their clone is in: another's build is said, with who builds it and where, and
 // carried on only when they ask; one pushed waits for its merge. The check-in
-// line is said once at a stop, at the push and at a Unit's end, never from
+// line is said once at a stop, at the push and at a Unit's end in a Unit's
+// build (never at the lead's own work, whose record the teams never read), never from
 // what git status shows (AI-DLC's own audit rows always change aidlc/), and
 // never names the person's tool folder. Status says what the last pull brought
 // from the other teams.
@@ -326,16 +327,23 @@ describe("the check-in line", () => {
     }
   });
 
-  test("said at the lead's own Build and Test end, with the approval", () => {
+  // The teams read the plan, never the lead's record, so the lead's own work
+  // never hears that its record is not checked in: not with the approval, not
+  // kept for a chat's reply, not at a stop in the same turn.
+  test("not said at the lead's own Build and Test end: the approval, a chat's reply and a stop after it carry none of it", () => {
     const home = homeWithTeams();
     const statePath = join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD, "aidlc-state.md");
     writeFileSync(statePath, readFileSync(statePath, "utf-8")
       .replace(/^- \[[-? ]\] (functional-design|nfr-requirements|nfr-design|infrastructure-design|code-generation) /gm, "- [x] $1 ")
       .replace(/^- \[ \] build-and-test /m, "- [?] build-and-test ")
       .replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: build-and-test"));
-    const approved = run(ORCH, ["report", "--stage", "build-and-test", "--result", "approved", "--user-input", "Approve"], home.dir);
+    const chat: NodeJS.ProcessEnv = { ...ENV, CLAUDE_CODE_SESSION_ID: "7d8e2f3a-3b4c-4e5d-9a6b-2c3d4e5f6a70", CLAUDE_PID: String(process.pid) };
+    const approved = run(ORCH, ["report", "--stage", "build-and-test", "--result", "approved", "--user-input", "Approve"], home.dir, chat);
     expect(approved.status, approved.out).toBe(0);
-    expect(String(approved.json?.narration), approved.out).toEndWith(LINE);
+    expect(approved.out).not.toContain(LINE);
+    const parked = run(ORCH, ["park", "--person-asked"], home.dir, chat);
+    expect(parked.status, parked.out).toBe(0);
+    expect(parked.out).not.toContain(LINE);
   });
 
   // A live run (Kiro CLI, the lead's Build and Test): the step said '15 of 23'
@@ -357,46 +365,6 @@ describe("the check-in line", () => {
     expect([step![1], step![2]]).toEqual([status![1], status![2]]);
   });
 
-  // A live run (the lead's pull and Build and Test): the approval went straight
-  // on to CI Pipeline and the line, in the approval's own narration, never
-  // reached the person. In a chat it is kept for the reply the turn ends on.
-  test("from a chat, the lead's Build and Test end keeps the line for the reply, and the next step carries it", () => {
-    const home = homeWithTeams();
-    const statePath = join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD, "aidlc-state.md");
-    writeFileSync(statePath, readFileSync(statePath, "utf-8")
-      .replace(/^- \[[-? ]\] (functional-design|nfr-requirements|nfr-design|infrastructure-design|code-generation) /gm, "- [x] $1 ")
-      .replace(/^- \[ \] build-and-test /m, "- [?] build-and-test ")
-      .replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: build-and-test"));
-    const session = "7d8e2f3a-3b4c-4e5d-9a6b-2c3d4e5f6a70";
-    const chat: NodeJS.ProcessEnv = { ...ENV, CLAUDE_CODE_SESSION_ID: session, CLAUDE_PID: String(process.pid) };
-    const approved = run(ORCH, ["report", "--stage", "build-and-test", "--result", "approved", "--user-input", "Approve"], home.dir, chat);
-    expect(approved.status, approved.out).toBe(0);
-    expect(String(approved.json?.narration ?? "")).not.toContain(LINE);
-    const kept = JSON.parse(readFileSync(join(home.dir, "aidlc", ".aidlc-engine", "sessions", `${session}.person-lines`), "utf-8")) as {
-      lines: Array<{ line: string; reply?: boolean }>;
-    };
-    expect(kept.lines.find((entry) => entry.line === LINE)?.reply, JSON.stringify(kept)).toBe(true);
-    const step = next(home.dir, chat);
-    expect((step.change_notices ?? []) as string[], JSON.stringify(step)).toContain(LINE);
-  });
-
-  test("from a chat, the lead's Build and Test end with a stop in the same turn says the line once", () => {
-    const home = homeWithTeams();
-    const statePath = join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD, "aidlc-state.md");
-    writeFileSync(statePath, readFileSync(statePath, "utf-8")
-      .replace(/^- \[[-? ]\] (functional-design|nfr-requirements|nfr-design|infrastructure-design|code-generation) /gm, "- [x] $1 ")
-      .replace(/^- \[ \] build-and-test /m, "- [?] build-and-test ")
-      .replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: build-and-test"));
-    const chat: NodeJS.ProcessEnv = { ...ENV, CLAUDE_CODE_SESSION_ID: "8e9f3a4b-4c5d-4f6e-8b7c-3d4e5f6a7b81", CLAUDE_PID: String(process.pid) };
-    const approved = run(ORCH, ["report", "--stage", "build-and-test", "--result", "approved", "--user-input", "Approve"], home.dir, chat);
-    expect(approved.status, approved.out).toBe(0);
-    const parked = run(ORCH, ["park", "--person-asked"], home.dir, chat);
-    expect(parked.status, parked.out).toBe(0);
-    expect(parked.json?.kind, parked.out).toBe("parked");
-    const said = [String(parked.json?.narration ?? ""), ...((parked.json?.change_notices ?? []) as string[])].join("\n");
-    expect(said.split(LINE).length - 1, parked.out).toBe(1);
-  });
-
   test("only where teams take Units by pull request: work begun on main's flow on the workspace's own repo never hears it", () => {
     const { alice } = refundsTaken();
     expect(checkInLine(alice)).toBe(LINE);
@@ -406,10 +374,10 @@ describe("the check-in line", () => {
     expect(checkInLine(begun.dir)).toBeNull();
   });
 
-  test("team work chosen on the workspace's own repo with a remote hears it, as teams across repos do", () => {
+  test("team work chosen on the workspace's own repo with a remote never hears it at the lead's own work, as teams across repos do not", () => {
     const onRepo = makeHome({ repos: {} });
     expect(run(STATE, ["set-unit-ownership", "team"], onRepo.dir).status).toBe(0);
-    expect(checkInLine(onRepo.dir)).toBe(LINE);
+    expect(checkInLine(onRepo.dir)).toBeNull();
   });
 });
 

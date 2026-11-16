@@ -8,6 +8,7 @@ import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { artifactFilename } from "./aidlc-artifact-vocabulary.ts";
+import { validateUnitName } from "./aidlc-unit-dag.ts";
 import {
   type AuditShardEvent,
   auditBlockField,
@@ -25,6 +26,8 @@ import {
   intentsDir,
   isPerUnitStage,
   isTeamUnitOwnership,
+  isValidRepoName,
+  SPACE_NAME_REGEX,
   LEARNINGS_CORRECTION_CHOICES,
   listIntentDirs,
   plannedStages,
@@ -149,11 +152,16 @@ export function buildOutBlockedLine(projectDir: string, unitCount?: number): str
 export function workspaceHomeLocation(projectDir: string): string | null {
   const at = projectInRepo(projectDir);
   if (at === null || at.prefix !== "") return null;
-  const read = (args: string[]): string => spawnSync("git", args, { cwd: projectDir, encoding: "utf-8" }).stdout?.trim() ?? "";
-  const remotes = read(["remote"]).split(/\r?\n/).map((name) => name.trim()).filter(Boolean);
-  const remote = remotes.includes("origin") ? "origin" : remotes.length === 1 ? remotes[0] : null;
-  const address = remote === null ? "" : read(["remote", "get-url", remote]);
-  return address ? withoutCredentials(address.trim()) : "local";
+  const remote = soleRemote(projectDir);
+  const address = remote === null ? "" : spawnSync("git", ["remote", "get-url", remote], { cwd: projectDir, encoding: "utf-8" }).stdout?.trim() ?? "";
+  return address ? withoutCredentials(address) : "local";
+}
+
+// A repository's own remote: origin, else its one remote; null with none or several.
+export function soleRemote(dir: string): string | null {
+  const listed = spawnSync("git", ["remote"], { cwd: dir, encoding: "utf-8" }).stdout ?? "";
+  const remotes = listed.split(/\r?\n/).map((name) => name.trim()).filter(Boolean);
+  return remotes.includes("origin") ? "origin" : remotes.length === 1 ? remotes[0] : null;
 }
 
 // Each Unit's likely repos, as Units Generation proposed them (a guide only),
@@ -316,6 +324,111 @@ export function leadCopyRef(homeId8: string): string {
 export function leadCopyAt(projectDir: string, homeId8: string): string | null {
   const read = spawnSync("git", ["rev-parse", "--verify", "--quiet", leadCopyRef(homeId8)], { cwd: projectDir, encoding: "utf-8" });
   return read.status === 0 && read.stdout.trim() !== "" ? read.stdout.trim() : null;
+}
+
+// --- The plan the lead shares: its format (aidlc-unit.ts writes it) ---------
+//
+// The plan is a commit of plan.json, inputs/<rel> and rules/<file> on a ref of
+// AI-DLC's own in one code repository. plan.json is the index: what a team's
+// take and look read of the lead's record, so nobody reads the lead's
+// workspace. A reader of an older release meets a format above its own and
+// reads nothing of it.
+export const PLAN_FORMAT = 1;
+
+export interface PlanJson {
+  format: number;
+  // The n of the commit's message, so no reader reads a message a host rule
+  // or the person changed.
+  version: number;
+  work: { id: string; label: string; space: string };
+  // The repository this plan is in: a copy of it anywhere else is not the plan.
+  plan_repo: { name: string; address: string };
+  repos: Array<{ name: string; address: string | null; branch: string | null }>;
+  units: Array<{ name: string; waits_on: string[]; repos: string[]; record: string; word: Record<string, unknown> }>;
+  skeleton: string | null;
+  settings: Record<string, string>;
+  stages: Record<string, string>;
+  unit_stages: string[];
+  inputs: Array<{ path: string; fingerprint: string; approved?: string }>;
+  [key: string]: unknown;
+}
+
+// Every setting a build copies from the lead's state, by the state's own field
+// name; the ceremonies' and the Guard Policy's are read as their parsed value.
+export const PLAN_SETTINGS = [
+  "Scope", "Depth", "Test Strategy", "Review Override", "Construction Autonomy Mode", "Guard Policy",
+  "Sensors", "Learnings", "Summary Confirmation", "Plan Approval", "Collaborators",
+  "Project Type", UNIT_GATE_RHYTHM_FIELD, "Lead Sign-off",
+] as const;
+
+// The one reading of plan.json: the format its text carries (0 when it has
+// none or does not read), and the plan, null above PLAN_FORMAT or when any
+// part of it is not what a plan holds. Anyone who can push to the plan's
+// repository can write this text, and its names become paths and git
+// arguments in every team's workspace, so each is checked here, once.
+export function planJsonOf(text: string): { format: number; plan: PlanJson | null } {
+  let read: unknown;
+  try {
+    read = JSON.parse(text);
+  } catch {
+    return { format: 0, plan: null };
+  }
+  const value = read as Record<string, unknown> | null;
+  const format = typeof value?.format === "number" && Number.isInteger(value.format) ? value.format : 0;
+  return { format, plan: format >= 1 && format <= PLAN_FORMAT && value !== null && planShaped(value) ? value as PlanJson : null };
+}
+
+const isString = (value: unknown): value is string => typeof value === "string";
+const isObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+// A branch git is given as a name, never an option or a refspec.
+const isPlainBranch = (value: unknown): boolean =>
+  isString(value) && value !== "" && !value.startsWith("-") && !/[\s:~^?*[\\]|\.\.|@\{/.test(value) && !value.endsWith("/");
+// A path inside a build's record, as homeInputPaths writes it: never a climb,
+// an absolute path, a backslash, the record's state or its audit.
+const isRecordPath = (value: unknown): boolean =>
+  isString(value) && value !== "" && !value.startsWith("/") && !value.includes("\\") && !/^[A-Za-z]:/.test(value) &&
+  value.split("/").every((part) => part !== "" && part !== "." && part !== "..") &&
+  value !== "aidlc-state.md" && !value.startsWith("audit/") && !value.startsWith(".aidlc-engine/");
+
+// One line of text: a value that goes into a state field or a message.
+const isLine = (value: unknown): value is string => isString(value) && !/[\r\n]/.test(value);
+const isRepo = (value: unknown): value is string => isString(value) && isValidRepoName(value);
+const isUnit = (value: unknown): value is string => isString(value) && validateUnitName(value) === null;
+const isStage = (value: unknown): value is string => isString(value) && /^[a-z0-9][a-z0-9-]*$/.test(value);
+const isAddress = (value: unknown): value is string => isLine(value) && value !== "" && !value.startsWith("-");
+
+function planShaped(plan: Record<string, unknown>): boolean {
+  const work = plan.work;
+  const home = plan.plan_repo;
+  return Number.isInteger(plan.version) &&
+    isObject(work) && isLine(work.id) && isLine(work.label) && isString(work.space) && SPACE_NAME_REGEX.test(work.space) &&
+    isObject(home) && isRepo(home.name) && isAddress(home.address) &&
+    Array.isArray(plan.repos) && plan.repos.every((repo) => isObject(repo) && isRepo(repo.name) &&
+      (repo.address === null || isAddress(repo.address)) && (repo.branch === null || isPlainBranch(repo.branch))) &&
+    Array.isArray(plan.units) && plan.units.every((unit) => isObject(unit) && isUnit(unit.name) &&
+      Array.isArray(unit.waits_on) && unit.waits_on.every(isUnit) && Array.isArray(unit.repos) && unit.repos.every(isRepo) &&
+      isRepo(unit.record) && isObject(unit.word)) &&
+    (plan.skeleton === null || isUnit(plan.skeleton)) &&
+    isObject(plan.settings) && Object.values(plan.settings).every(isLine) &&
+    isObject(plan.stages) && Object.keys(plan.stages).every(isStage) && Object.values(plan.stages).every(isStage) &&
+    Array.isArray(plan.unit_stages) && plan.unit_stages.every(isStage) &&
+    Array.isArray(plan.inputs) && plan.inputs.every((input) => isObject(input) && isRecordPath(input.path) && isLine(input.fingerprint) &&
+      (input.approved === undefined || isLine(input.approved)));
+}
+
+// One folder per repository read under refs/aidlc/home/<id8>/: the same for
+// every spelling of one repository's address (gitAddressKey), so a fetch with
+// prune on into one never removes another's copies.
+export function repoCopyKey(address: string): string {
+  return createHash("sha256").update(gitAddressKey(address)).digest("hex").slice(0, 12);
+}
+
+// This workspace's copy of a ref read at `address`, never pushed.
+export function copyOf(address: string, ref: string): string {
+  const plan = /^refs\/aidlc\/plans\/([0-9a-f]+)$/.exec(ref);
+  if (plan === null) throw new Error(`No copy is kept for ${ref}.`);
+  return `refs/aidlc/home/${plan[1]}/${repoCopyKey(address)}/plan`;
 }
 
 // A path of the lead's workspace at a commit here, or null.
@@ -700,6 +813,14 @@ export function levelDue(projectDir: string, stateContent: string):
 // person) and where there is no remote to push.
 export function checkInLine(projectDir: string, stateContent?: string): string | null {
   if (!checkInApplies(projectDir, stateContent)) return null;
+  // The lead's own work shares its plan by the plan's ref: the teams never
+  // read the lead's record, so its check-in is the lead's own business.
+  try {
+    const state = stateContent ?? readStateFile(projectDir);
+    if (unitBuildOf(state) === null) return null;
+  } catch {
+    return null;
+  }
   const state = checkInState(projectDir, stateContent);
   if (typeof state === "object") return null;
   // The chat is noted as handed the line, whichever step carries it, so its

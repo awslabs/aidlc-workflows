@@ -14,7 +14,7 @@
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { cpSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { fixtureIntentId8, REPO_ROOT } from "../harness/fixtures.ts";
@@ -103,10 +103,9 @@ describe("with a thin slice first, the plan is shared once the slice is approved
     expect(teams.status, teams.out).toBe(0);
     const end = leadsChat(home.dir, { until: isShare });
     expect(isShare(end), JSON.stringify(end).slice(0, 600)).toBe(true);
-    expect(end.question).toBe(
-      "The Units are open for any team to take. Share the plan with them now? I'd commit the plan here (AI-DLC's record, " +
-        "nothing else of yours) with this commit message and push it on its own branch for a pull request, so each team can " +
-        "take its Unit once it is in main, by opening its own clone and running /aidlc.\n\nShare the plan with the teams",
+    expect(String(end.question)).toStartWith(
+      "Do you want me to share the plan with the teams? I'd put it in checkout-api: the Units (refunds in checkout-api and billing, " +
+        "checkout-ui in checkout-web, reporting in billing) and what each is built from",
     );
     expect(teamBoard(home.dir)).toContain("- checkout-ui, here: done");
   });
@@ -128,14 +127,26 @@ describe("with a thin slice first on the workspace's own repository, the share c
     const end = leadsChat(home.dir, { until: isShare, codeRepo: () => undefined });
     expect(isShare(end), JSON.stringify(end).slice(0, 600)).toBe(true);
     expect(String(end.question)).toMatch(new RegExp(
-      "^The Units are open for any team to take\\. Share the plan with them now\\? I'd commit the plan and checkout-ui's code, " +
-        "the \\d+ changed files here \\(new: src/checkout-ui\\.ts, test/checkout-ui\\.test\\.ts\\), with this commit message and push it on its own branch for a pull request, so each team",
+      `^Do you want me to share the plan with the teams\\? I'd put it in ${basename(home.remote)}: the Units and what each is built from` +
+        `(, with your [a-z' ]+)?; everyone who can read ${basename(home.remote)} can read it\\. I'd also commit checkout-ui's code, ` +
+        "the \\d+ changed files here \\(new: src/checkout-ui\\.ts, test/checkout-ui\\.test\\.ts\\), and AI-DLC's record, using this " +
+        "commit message, and push that on its own branch for a pull request\\. The other Units wait on checkout-ui until it is in main\\.\n\n",
     ));
+    const choices = (end.choices ?? []) as Array<{ label: string; detail?: string }>;
+    expect(choices.map((choice) => choice.label)).toEqual([
+      "Share the plan, checkout-ui by pull request (Recommended)", "Share the plan and push main", "Not now",
+    ]);
+    expect(choices[2].detail).toBe("Nothing is pushed; say when you want it shared.");
     const shared = run(UNIT, ["share", "--plan"], home.dir);
     expect(shared.status, shared.out).toBe(0);
     const onMain = git(home.remote, ["ls-tree", "-r", "--name-only", "main"]).split("\n");
     expect(onMain).toContain("src/checkout-ui.ts");
     expect(onMain).toContain("test/checkout-ui.test.ts");
+    // The plan went first, as a ref of its own in that same repository, its skeleton not yet done.
+    const plan = JSON.parse(git(home.remote, ["show", `refs/aidlc/plans/${fixtureIntentId8(home.dir)}:plan.json`]));
+    expect(shared.json?.plan).toMatchObject({ commit: git(home.remote, ["rev-parse", `refs/aidlc/plans/${fixtureIntentId8(home.dir)}`]) });
+    expect(typeof plan.skeleton).toBe("string");
+    expect(plan.units.find((unit: { name: string }) => unit.name === plan.skeleton)?.word).toEqual({});
   });
 });
 

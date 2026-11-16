@@ -157,7 +157,7 @@ describe("teams build Units across repos when the workspace is in git", () => {
     // Every Unit is open for any team: the step after is the offer to share the plan.
     const step = next(home.dir);
     expect(step.ask_type, JSON.stringify(step).slice(0, 400)).not.toBe("unit-assignment");
-    expect(String(step.question)).toStartWith("The Units are open for any team to take. Share the plan with them now?");
+    expect(String(step.question)).toStartWith("Do you want me to share the plan with the teams? I'd put it in checkout-api:");
   });
 });
 
@@ -1846,9 +1846,9 @@ describe("at the home", () => {
     ]);
   });
 
-  // A live run (Lee, model 2): taking the team's Unit in wrote its records into
-  // the lead's checkout, uncommitted, and no check-in line came.
-  test("the lead's step that takes a team's merged Unit in says the check-in line, once", () => {
+  // The teams read the plan, never the lead's record, so taking a team's Unit
+  // in at the lead's own work says nothing of checking aidlc/ in.
+  test("the lead's step that takes a team's merged Unit in says no check-in line", () => {
     const { hosts, home, alice, record } = refundsTaken();
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
@@ -1859,7 +1859,7 @@ describe("at the home", () => {
     const seen = next(home.dir);
     const notices = (seen.change_notices ?? []) as string[];
     expect(notices, JSON.stringify(seen)).toContain("I've told alice refunds is merged.");
-    expect(notices.filter((line) => line === CHECK_IN_LINE), JSON.stringify(notices)).toHaveLength(1);
+    expect(notices.filter((line) => line === CHECK_IN_LINE), JSON.stringify(notices)).toHaveLength(0);
     const after = next(home.dir);
     expect((after.change_notices ?? []) as string[]).not.toContain(CHECK_IN_LINE);
   });
@@ -2290,7 +2290,7 @@ describe("at the home", () => {
     const said = run(UNIT, ["merged", "refunds", "--repo", "billing", "--person-words", "billing merged it by hand last night"], home.dir);
     expect(said.status, said.out).toBe(0);
     // Recorded when the lead says it, by the take-in the next step runs, with the check-in line.
-    expect(said.json?.notice).toBe(`refunds is recorded as merged here. ${CHECK_IN_LINE}`);
+    expect(said.json?.notice).toBe("refunds is recorded as merged here.");
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
     const merged = () => readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_MERGED");
     expect(merged()).toHaveLength(1);
@@ -2304,7 +2304,7 @@ describe("at the home", () => {
 
   // A live run (the lead in a workspace of their own): the lead asked to record
   // a merge the board had seen, and only that; the agent ran merged, which put
-  // their words on the claim and recorded nothing, and no check-in line came.
+  // their words on the claim and recorded nothing.
   test("the lead's word for a merge the check sees: recorded at once, saying so, with no next step", () => {
     const { hosts, home, alice, record } = refundsTaken();
     codeGenerated(alice, record);
@@ -2314,7 +2314,7 @@ describe("at the home", () => {
     git(home.dir, ["fetch", "-q", "origin"]);
     const said = run(UNIT, ["merged", "refunds", "--repo", "billing", "--person-words", "record the refunds merge, just the merge"], home.dir);
     expect(said.status, said.out).toBe(0);
-    expect(said.json?.notice).toBe(`refunds is recorded as merged here. ${CHECK_IN_LINE}`);
+    expect(said.json?.notice).toBe("refunds is recorded as merged here.");
     const rows = readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_MERGED");
     expect(rows).toHaveLength(1);
     expect(rows[0].block).toContain("by your word");

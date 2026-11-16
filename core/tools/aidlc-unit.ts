@@ -53,6 +53,8 @@ import {
   clearEngineAskMark,
   clearUnitScopeStamp,
   committedTextBytes,
+  folderRepoName,
+  UNIT_GATE_RHYTHM_FIELD,
   ENGINE_DIR,
   ensureCloneId,
   errorMessage,
@@ -240,11 +242,19 @@ import {
   levelByContent,
   type LevelBlock,
   unitDependencies,
+  copyOf,
+  repoCopyKey,
+  type PlanJson,
+  PLAN_FORMAT,
+  PLAN_SETTINGS,
+  planJsonOf,
+  soleRemote,
 } from "./aidlc-unit-teams.js";
 import { gitOperationUnderWay, rebaseUnderWay, recordChanged, recordCommitBlock, recordPaths, submoduleLeavesProjectRepo } from "./aidlc-git.ts";
 import { ownFilesToCommit } from "./aidlc-brought-files.ts";
 import { commitOwnCommand, displayRepoPath, leftFilesNamed, UPDATE_COMMIT_MESSAGE, UPDATE_MESSAGE_KEY, reposManifestPath, localUnreadableLine, readWorkspaceRepos, repoCloneable, repoCloneOfferLine, repoNotThereLine, withoutCredentials, workspaceManifestAt } from "./aidlc-workspace-manifest.js";
 import { maskUserinfo, workspaceCloneUrl } from "./aidlc-workspace-sync.ts";
+import { gitAddressKey } from "./aidlc-workspace-repos.ts";
 import { loadGraph } from "./aidlc-graph.ts";
 import {
   captureStageValidationBasis,
@@ -290,6 +300,7 @@ import {
   isClaimTreeFile,
   leadsPlanNotHere,
   PLAN_BRANCH,
+  planRecordRef,
   readClaimAt,
   unitResultRootOf,
 } from "./aidlc-unit-holders.ts";
@@ -5512,7 +5523,7 @@ function teammatesNeedLine(projectDir: string): string | null {
   if (teamSharedHere(projectDir)) return null;
   const verdict = classifyStateVersion(readStateFile(projectDir));
   return verdict.kind === "ok" && verdict.version === TEAM_STATE_VERSION
-    ? `Teammates need ${newerStateRelease(TEAM_STATE_VERSION)}; each is offered the update the first time they open this work.`
+    ? `Taking a Unit of this work needs ${newerStateRelease(TEAM_STATE_VERSION)}.`
     : null;
 }
 
@@ -5857,6 +5868,9 @@ export function shareRefusal(projectDir: string): { reason: string; off?: { curr
     if (!isTeamUnitOwnership(readStateFile(pd))) return { reason: "Sharing main is for work that several teams build." };
     const below = belowRepoTop(pd);
     if (below !== null) return { reason: below };
+    // The plan goes to a code repository by its address: neither this
+    // repository's remote nor its branch is used.
+    if (sharesPlanRef(pd)) return null;
     if (!repositoryRemote(pd)) {
       return { reason: "This repository has no remote to share main with. Add one (git remote add origin <url>), then share again." };
     }
@@ -5870,6 +5884,22 @@ export function shareRefusal(projectDir: string): { reason: string; off?: { curr
     return null;
   } catch (error) {
     return { reason: errorMessage(error) };
+  }
+}
+
+// The lead's own work that teams build each Unit of, with no walking
+// skeleton's code built here for main: its share is the plan's ref alone.
+export function sharesPlanRef(projectDir: string): boolean {
+  return leadsOwnTeamWork(projectDir) && builtHereCode(projectDir).paths.length === 0;
+}
+
+// The lead's own work that teams build each Unit of (not a Unit's build).
+function leadsOwnTeamWork(projectDir: string): boolean {
+  try {
+    const state = readStateFile(projectDir);
+    return homeLocation(state) !== null && unitBuildOf(state) === null;
+  } catch {
+    return false;
   }
 }
 
@@ -5928,11 +5958,17 @@ function firstFreePlanBranch(pd: string, remote: string): string {
 // in the offer after a host refused the push.
 export function planByPullRequestDetail(projectDir: string): string {
   const pd = resolveProjectDir(projectDir);
-  const target = shareOfferTarget(pd);
-  const branch = target?.branch ?? "main";
-  return `I put ${planShareName(pd)} on its own branch, ${target === null ? planBranchNames(pd)[0] : firstFreePlanBranch(pd, target.remote)}, ` +
+  const branch = shareOfferTarget(pd)?.branch ?? "main";
+  return `I put ${planShareName(pd)} on ${skeletonCodeName(pd) === null ? "its" : "their"} own branch, ${planBranchOffered(pd)}, ` +
     "push it and give you the host's link to open the pull request. You work on that branch until it is merged; " +
     `${branch} stays as it is.`;
+}
+
+// The branch `unit share --branch` would put the share's commit on.
+export function planBranchOffered(projectDir: string): string {
+  const pd = resolveProjectDir(projectDir);
+  const target = shareOfferTarget(pd);
+  return target === null ? planBranchNames(pd)[0] : firstFreePlanBranch(pd, target.remote);
 }
 
 // The share's own commits, noted when the host refused their push and the
@@ -5984,6 +6020,10 @@ export type PlanWait =
   | { state: "merged"; name: string; offer: string | null };
 
 export function planWait(projectDir: string): PlanWait | null {
+  // At the lead's own work teams build, the branch waits for the skeleton's
+  // code to reach main, whatever the plan's ref says.
+  const codeWaits = (pd: string, target: { remote: string; branch: string }): boolean =>
+    skeletonCodeName(pd) !== null || planUnshared(pd, target);
   try {
     const pd = resolveProjectDir(projectDir);
     if (!teamSharedHere(pd)) return null;
@@ -5992,7 +6032,7 @@ export function planWait(projectDir: string): PlanWait | null {
     const head = git(pd, ["symbolic-ref", "--quiet", "--short", "HEAD"]).stdout.trim();
     const pushed = planBranchesHere(pd);
     if (pushed.includes(head)) {
-      if (!planBranchMerged(pd, target, head)) return planUnshared(pd, target) ? { state: "branch", name: head } : null;
+      if (!planBranchMerged(pd, target, head)) return codeWaits(pd, target) ? { state: "branch", name: head } : null;
       const mark = teamHandoverMarkName("plan-back", head);
       return { state: "merged", name: head, offer: engineAskMark(pd, mark) === null ? mark : null };
     }
@@ -6001,14 +6041,14 @@ export function planWait(projectDir: string): PlanWait | null {
       const ahead = shareCommitsAhead(pd, target.remote, target.branch, "HEAD");
       return ahead?.noted && ahead.oids.length > 0 ? ahead.oids : null;
     };
-    const waitsOnBranch = (): boolean => pushed.length > 0 && planUnshared(pd, target);
+    const waitsOnBranch = (): boolean => pushed.length > 0 && codeWaits(pd, target);
     if (noted() === null && !waitsOnBranch()) return null;
     if (!isReadOnlyEngineProbe()) CHECKOUT_STEPS.fetch.run(pd, target.remote, target.branch);
     const ahead = noted();
     if (ahead !== null && headInByContent(pd, `refs/remotes/${target.remote}/${target.branch}`) !== true) {
       const due = teamHandoverMarkName("plan-branch", ahead[0].slice(0, 12));
       const offer = engineAskMark(pd, due) === null ? due : null;
-      return offer === null && !planUnshared(pd, target) ? null : { state: "committed", offer };
+      return offer === null && !codeWaits(pd, target) ? null : { state: "committed", offer };
     }
     return waitsOnBranch() ? { state: "branch", name: pushed[pushed.length - 1] } : null;
   } catch {
@@ -6017,12 +6057,28 @@ export function planWait(projectDir: string): PlanWait | null {
 }
 
 // The one line while the plan waits, in place of the board (a look and status).
-export function planWaitLine(wait: PlanWait, branch: string): string | null {
-  if (wait.state === "committed") return "The plan is committed here and not shared yet: say when you want me to put it on its own branch and push that.";
+export function planWaitLine(wait: PlanWait, branch: string, projectDir?: string): string | null {
+  const code = projectDir === undefined ? null : skeletonCodeName(projectDir);
+  if (wait.state === "committed") {
+    return code === null
+      ? "The plan is committed here and not shared yet: say when you want me to put it on its own branch and push that."
+      : `${code.name} ${code.is} committed here and not pushed yet: say when you want me to put it on its own branch and push that.`;
+  }
   if (wait.state === "branch") {
-    return `The plan is on its own branch, ${wait.name}, waiting for its pull request; teams can take Units once it is in ${branch}.`;
+    return code === null
+      ? `The plan is on its own branch, ${wait.name}, waiting for its pull request; teams can take Units once it is in ${branch}.`
+      : `${code.name} ${code.is} on its own branch, ${wait.name}, and not in ${branch} yet. The other Units wait on ${code.units} until it is.`;
   }
   return null;
+}
+
+// At the lead's own work teams build, what the plan's branch carries for main
+// is a walking skeleton's code built here, never the plan: its words. Null elsewhere.
+export function skeletonCodeName(projectDir: string): { name: string; is: string; units: string } | null {
+  if (!leadsOwnTeamWork(projectDir)) return null;
+  const { units } = builtHereCode(projectDir);
+  if (units.length === 0) return null;
+  return { name: namesInProse(units.map((unit) => `${unit}'s code`)), is: units.length === 1 ? "is" : "are", units: namesInProse(units) };
 }
 
 // `unit share --branch`: the commits the integration branch has and the
@@ -6081,7 +6137,9 @@ function putPlanOnItsBranch(pd: string, remote: string, branch: string, madeNow:
     branch: plan.name,
     remote,
     notice: [
-      `The plan is on its own branch, ${plan.name}, pushed to ${remote}${sent} and your checkout is on it; ${branch} is as it was.`,
+      skeletonCodeName(pd) === null
+        ? `The plan is on its own branch, ${plan.name}, pushed to ${remote}${sent} and your checkout is on it; ${branch} is as it was.`
+        : `${planShareName(pd)} are on their own branch, ${plan.name}, pushed to ${remote}${sent} and your checkout is on it; ${branch} is as it was.`,
       words === "" ? "Get it merged your usual way." : hostSaysLine(null, words),
       ...claims.lines,
       ...(needs === null ? [] : [needs]),
@@ -6327,11 +6385,13 @@ export function builtHereCode(projectDir: string): { units: string[]; paths: str
 // commit (the files it changes, as workToCommitWords says them), or the plan
 // alone, AI-DLC's record.
 function planShareName(pd: string): string {
+  const code = skeletonCodeName(pd);
+  if (code !== null) return `${code.name} and AI-DLC's record`;
   const { units } = builtHereCode(pd);
   return planShareWork(pd) === null ? "the plan" : `the plan and ${units.length === 1 ? `${units[0]}'s code` : `the code of ${joinNames(units)}`}`;
 }
 
-function planShareWork(pd: string): string | null {
+export function planShareWork(pd: string): string | null {
   const { paths } = builtHereCode(pd);
   if (paths.length === 0) return null;
   const all = workToCommit(pd);
@@ -6521,6 +6581,102 @@ function commitRecord(args: string[], projectDir?: string): void {
   }));
 }
 
+// `unit share --plan` for the lead's own work teams build: the plan's ref,
+// pushed to its repository; nothing is committed here and no branch is pushed.
+function sharePlanRef(pd: string, given: ReturnType<typeof givenCommitMessage>, needs: string | null, named?: string): void {
+  const plan = writeSharedPlan(pd, given?.text, named);
+  if ("notShared" in plan) {
+    console.log(JSON.stringify({ shared: false, ...plan.notShared }));
+    return;
+  }
+  noteTeamShared(pd);
+  given?.spend();
+  const claims = workspaceHomeLocation(pd) === "local" ? { sent: [], lines: [] } : claimsAskedHereWithShare(pd);
+  // The claim of a Unit built here goes to this workspace's own repository.
+  const recorded = claims.sent.length === 0 ? [] :
+    [`Recorded in ${workspaceRepoEntry(pd).name} that ${namesInProse(claims.sent)} ${claims.sent.length === 1 ? "is" : "are"} built here.`];
+  const notice = [plan.said, ...recorded, ...claims.lines, ...(needs === null ? [] : [needs])];
+  console.log(JSON.stringify({
+    shared: true,
+    plan: { repo: plan.repo, address: plan.address, commit: plan.commit },
+    notice: notice.join(" "),
+    step: "Tell the person in plain words what it reports, then end your turn.",
+  }));
+}
+
+// The plan's repository has no address here: said once, with the way on
+// (another repository only before the plan is shared).
+export const planNoRemoteLine = (repo: string, later = false): string =>
+  `${repo} has no remote here, so there is nowhere to put the plan yet. ` +
+  (later ? "Give me its address and I'll share it." : "Give me its address, or name another repository the teams can read, and I'll share it there.");
+export const PLAN_NOT_NOW = "Nothing is pushed; say when you want it shared.";
+
+// The share's write of the plan: where it goes, written on its tip, and what
+// the share says of it; a write that did not go stops the share with its line.
+type SharedPlan = { repo: string; address: string; commit: string; said: string } | { notShared: { notice: string; step: string } };
+function writeSharedPlan(pd: string, message?: string, named?: string): SharedPlan {
+  const place = planPlaceForShare(pd, named);
+  if ("refused" in place) {
+    fail(place.refused === "option"
+      ? `${JSON.stringify(place.named)} starts with "-", so git would read it as an option; nothing was pushed.`
+      : `${place.named} is not a repository of this work or of repos.json, and not a git address, so nothing was pushed. ` +
+        "Give me its address and I'll share the plan there.");
+  }
+  // Once the plan is shared, the way on is where it is.
+  const later = planUnitsKept(pd) !== null;
+  if (!("ref" in place)) fail(planNoRemoteLine(place.repo, later));
+  const retry = later ? "Say when to try again." : "Say when to try again, or name another repository the teams can read.";
+  let added: string[] = [];
+  const what = (tip: PlanJson | null): string => {
+    added = tip === null ? [] : unitsNotIn(pd, tip.units.map((unit) => unit.name));
+    return tip === null ? "shared" : added.length > 0 ? `${added.join(", ")} added` : "shared again";
+  };
+  // The share is the lead's own yes, so a tip that is not a plan is written
+  // over as a commit on top, nothing lost; one of a newer AI-DLC never is.
+  const written = writePlan(pd, place, { what, ...(message === undefined ? {} : { message }), overUnreadable: true });
+  const repo = place.repo;
+  const address = maskUserinfo(place.address);
+  if (written.kind === "unchanged") return { repo, address, commit: written.commit, said: `The plan in ${repo} already has everything here.` };
+  if (written.kind === "written") {
+    const said = written.regained
+      ? `The plan was no longer in ${repo}, so I shared it again, with what you decided on each Unit as this computer last had it.`
+      : written.over !== undefined
+        ? `The plan in ${repo} is shared again over what was there, ` + (written.over.carried
+          ? "with what was decided on each Unit as the plan last had it."
+          : "from your own record here. What you had decided on its Units was not there to carry, so it is not on the plan now.")
+      : written.created
+        ? `The plan is shared in ${repo}. AI-DLC sends no notice of it: the teams hear it from you. A team whose workspace has no ` +
+          `${repo} needs this address: ${address}`
+        : added.length > 0 ? `The plan in ${repo} has ${namesInProse(added)} now.` : `The plan is shared in ${repo}.`;
+    return { repo, address, commit: written.commit, said };
+  }
+  if (written.kind === "unreached") {
+    fail(`${repo} could not be reached, so the plan is not shared${written.words === null ? "." : `: git says "${written.words}".`} Say when to try again.`);
+  }
+  if (written.kind === "stale") fail(`The plan in ${repo} kept changing while I wrote on it, so nothing was written. Say when to try again.`);
+  if (written.kind === "unreadable") {
+    fail(`The plan in ${repo} was set up with a newer AI-DLC, so nothing was written over it. Update AI-DLC here, then say when to share it.`);
+  }
+  // A rule of the host's (a message rule among them): the person's own
+  // message has a way in, though the share asked for none.
+  if (written.byRule) {
+    const file = commitMessageFile(pd, "share", "plan");
+    return { notShared: {
+      notice: `${repo} did not take the plan: ${written.words}. If it is the commit message, tell me the one to use, and I will share it with that.`,
+      step: "Tell the person in plain words what it reports, then end your turn. When they give the commit message, write it to " +
+        `${file} with your file tool, exactly as they gave it, then run ` +
+        `\`${aidlcInvocation()} unit share --plan${named === undefined ? "" : ` --repo ${shellArg(named)}`} --commit-message-file ${file}\` ` +
+        "and tell them in plain words what it reports.",
+    } };
+  }
+  fail(`${repo} did not take the plan: ${written.words}. ${retry}`);
+}
+
+// The Units of the lead's Unit plan here that `listed` does not name.
+function unitsNotIn(pd: string, listed: readonly string[]): string[] {
+  return [...unitDependencies(pd).keys()].filter((unit) => !listed.includes(unit));
+}
+
 // `aidlc unit share`: commit the work here and push the integration branch to
 // the remote, so the teams can take Units (after Inception) or see a landed
 // one. A plain push, never forced. A share that did not happen (a commit git
@@ -6537,7 +6693,9 @@ function commitRecord(args: string[], projectDir?: string): void {
 // here is committed.
 function shareMain(args: string[], projectDir?: string): void {
   const pd = resolveProjectDir(projectDir);
-  const flags = parseArgs(args).bareFlags;
+  const parsed = parseArgs(args);
+  const flags = parsed.bareFlags;
+  const repoNamed = parsed.flags.repo;
   if (flags.has("back")) {
     planBranchBack(pd);
     return;
@@ -6550,6 +6708,7 @@ function shareMain(args: string[], projectDir?: string): void {
   const planOnly = flags.has("plan");
   const given = givenCommitMessage(pd, args, "share");
   const again = `${aidlcInvocation()} unit share${flags.has("branch") ? " --branch" : ""}${planOnly ? " --plan" : ""}` +
+    (repoNamed === undefined ? "" : ` --repo ${shellArg(repoNamed)}`) +
     (given === null ? "" : ` --commit-message-file ${shellArg(given.file)}`);
   // The branch the share pushes, read from the team's own words before
   // anything is committed or pushed; the offers stay due in case the share
@@ -6579,6 +6738,17 @@ function shareMain(args: string[], projectDir?: string): void {
         `\`${aidlcToolInvocation("orchestrate")} report --skeleton-stance <on|off|scope-dependent>\` with that stance, ` +
         `then run \`${again}\` again and tell the person in plain words what it reports.`,
     }));
+    return;
+  }
+  if (planOnly && sharesPlanRef(pd)) {
+    sharePlanRef(pd, given, needs, repoNamed);
+    return;
+  }
+  // A walking skeleton's code built here goes to main with the lead's record,
+  // after the plan's own ref, so the teams' plan never waits on main.
+  const planFirst = planOnly && leadsOwnTeamWork(pd) ? writeSharedPlan(pd, undefined, repoNamed) : null;
+  if (planFirst !== null && "notShared" in planFirst) {
+    console.log(JSON.stringify({ shared: false, ...planFirst.notShared }));
     return;
   }
   const { remote, branch } = shareTarget(pd)!;
@@ -6667,7 +6837,10 @@ function shareMain(args: string[], projectDir?: string): void {
     given?.spend();
     console.log(JSON.stringify({
       shared: false,
-      notice: `${remote} takes no direct push to ${branch} (${pushRefusal(pushed.stderr)}), so the plan is not shared yet.${needs === null ? "" : ` ${needs}`}`,
+      notice: (planFirst === null
+        ? `${remote} takes no direct push to ${branch} (${pushRefusal(pushed.stderr)}), so the plan is not shared yet.`
+        : `The plan is shared in ${planFirst.repo}, and ${remote} takes no direct push to ${branch} (${pushRefusal(pushed.stderr)}), so ` +
+          `${namesInProse(builtHereCode(pd).units.map((unit) => `${unit}'s code`))} is not in ${branch} yet.`) + (needs === null ? "" : ` ${needs}`),
       step: `Tell the person in plain words what it reports, then run \`${aidlcToolInvocation("orchestrate")} next\` and follow what it returns.`,
     }));
     return;
@@ -6683,6 +6856,7 @@ function shareMain(args: string[], projectDir?: string): void {
   given?.spend();
   const claims = claimsAskedHereWithShare(pd);
   const notice = [
+    ...(planFirst === null ? [] : [planFirst.said]),
     ...(claims.sent.length > 0 ? [`Pushed ${branch}, and ${builtHereNote(claims.sent)}, to ${remote}.`] : []),
     ...claims.lines,
     ...(needs === null ? [] : [needs]),
@@ -6693,6 +6867,7 @@ function shareMain(args: string[], projectDir?: string): void {
     branch,
     commit: gitOutput(pd, ["rev-parse", "HEAD"], "Cannot resolve HEAD"),
     committed_paths: committed,
+    ...(planFirst === null ? {} : { plan: { repo: planFirst.repo, address: planFirst.address, commit: planFirst.commit } }),
     ...(notice.length > 0 ? { notice: notice.join(" ") } : {}),
     ...(named === null ? {} : { committed_files: named }),
     step: "Tell the person in plain words what it reports, then end your turn.",
@@ -6883,11 +7058,14 @@ function hereNotSeenLine(unit: string, why: string): string {
 // (as this clone last fetched it) carries its state with the home recorded,
 // and work the teams build on this repo once that state is team work.
 export function planUnshared(projectDir: string, target: { remote: string; branch: string }): boolean {
+  // The lead's own work teams build: shared once its plan's ref is written or read here.
+  const own = readStateFile(projectDir);
+  if (homeLocation(own) !== null && unitBuildOf(own) === null) return keptPlan(projectDir, activeIdentity(projectDir).intentId8) === null;
   const state = relative(projectDir, stateFilePath(projectDir)).split("\\").join("/");
   const shown = git(projectDir, ["show", `refs/remotes/${target.remote}/${target.branch}:${state}`]);
   if (!shown.ok) return true;
   // Work with no home (teams on this repo) is theirs once its state there is team work.
-  return homeLocation(readStateFile(projectDir)) !== null ? homeLocation(shown.stdout) === null : !isTeamUnitOwnership(shown.stdout);
+  return homeLocation(own) !== null ? homeLocation(shown.stdout) === null : !isTeamUnitOwnership(shown.stdout);
 }
 
 // The Units the lead asked to build here: the share writes the claim of each
@@ -7540,13 +7718,467 @@ export function auditRowsAt(projectDir: string, recordPrefix: string, oid: strin
 // The home's approvals of the stages that produced the copy, as data: when
 // each was approved at the home. Never this build's own approval.
 function homeApprovals(rows: readonly AuditShardEvent[], slugs: Set<string>): string[] {
+  return [...approvalTimes(rows, slugs)].sort(([a], [b]) => a.localeCompare(b)).map(([stage, when]) => `${stage} approved by the lead ${when}`.trim());
+}
+
+// When each of these stages was last approved, by its GATE_APPROVED row.
+function approvalTimes(rows: readonly AuditShardEvent[], slugs: Set<string>): Map<string, string> {
   const approvals = new Map<string, string>();
   for (const row of rows) {
     if (row.event !== "GATE_APPROVED") continue;
     const stage = auditBlockField(row.block, "Stage");
     if (stage && slugs.has(stage)) approvals.set(stage, row.timestamp);
   }
-  return [...approvals].sort(([a], [b]) => a.localeCompare(b)).map(([stage, when]) => `${stage} approved by the lead ${when}`.trim());
+  return approvals;
+}
+
+// --- The plan, shared as a ref of AI-DLC's own in one code repository -------
+//
+// Built from the lead's own record, as a team's build reads it, so no team
+// reads the lead's workspace. Every git call runs in the workspace's own
+// repository by the code repository's address: nothing of AI-DLC's goes into a
+// code clone, no remote is added, and the person's own hooks in the workspace
+// run as for any push of theirs.
+
+export interface PlanPlace {
+  // As recorded: never with a sign-in in it.
+  address: string;
+  repo: string;
+  id8: string;
+  uuid: string;
+  work: string;
+  ref: string;
+  copy: string;
+}
+
+// A repository of the work as the plan names it: its address as the lead's own
+// clone spells its remote, else repos.json's url, with no sign-in; its branch as
+// the lead's merge check reads it.
+function planRepoEntry(pd: string, name: string): PlanJson["repos"][number] {
+  const dir = repoDir(pd, name);
+  const remote = isGitRepoDir(dir) ? soleRemote(dir) : null;
+  const listed = readWorkspaceRepos(pd).entries.get(name);
+  const url = (remote === null ? "" : git(dir, ["remote", "get-url", remote]).stdout.trim()) || listed?.url || "";
+  return {
+    name,
+    address: url === "" ? null : withoutCredentials(url),
+    branch: remote !== null ? repoIntegration(dir, remote).slice(remote.length + 1) : listed?.branch ?? null,
+  };
+}
+
+// The name a plain git clone gives a repository, from its address.
+function repoNameOf(address: string): string {
+  return folderRepoName(address.replace(/[\\/]+$/, "").replace(/\.git$/i, "").split(/[\\/:]/).at(-1) ?? "");
+}
+
+// The work's repositories as the plan lists them, in the work's own order; the
+// workspace's own repository, named as its clone would be, when the work names none.
+function planRepos(pd: string, dirName?: string, space?: string): PlanJson["repos"] {
+  const names = intentRepos(pd, dirName, space);
+  return names.length > 0 ? names.map((name) => planRepoEntry(pd, name)) : [workspaceRepoEntry(pd, space)];
+}
+
+function workspaceRepoEntry(pd: string, space?: string): PlanJson["repos"][number] {
+  // The workspace's own remote by the rule its claims use (origin, its one
+  // remote, else the one at its recorded address).
+  let remote: string | null = null;
+  try {
+    remote = repositoryRemote(pd);
+  } catch {
+    // Several remotes and none of them the work's: no address.
+  }
+  const url = remote === null ? "" : git(pd, ["remote", "get-url", remote]).stdout.trim();
+  return {
+    name: (url === "" ? "" : repoNameOf(url)) || folderRepoName(basename(pd)) || "project",
+    address: url === "" ? null : withoutCredentials(url),
+    branch: affirmedIntegrationBranch(pd, space)?.branch ?? (remote === null ? null : integrationBranch(pd, remote)),
+  };
+}
+
+// Where the plan goes when the lead names nowhere else: the first repository
+// of the work's own list, else the workspace's own; null with no address.
+export function planHomeAddress(projectDir: string, dirName: string, space: string): string | null {
+  return planRepos(projectDir, dirName, space)[0]?.address ?? null;
+}
+
+// This workspace's copy of the work's plan, as last written or read here: the
+// newest when it was read in more than one repository.
+function keptPlan(pd: string, id8: string): { ref: string; commit: string; plan: PlanJson } | null {
+  const listed = localGit(pd, ["for-each-ref", "--sort=-committerdate", "--format=%(refname)", `refs/aidlc/home/${id8}/`]);
+  for (const ref of listed.ok ? listed.stdout.split(/\r?\n/).map((line) => line.trim()) : []) {
+    const read = planAtCopy(pd, ref);
+    if (read !== null) return { ref, ...read };
+  }
+  return null;
+}
+
+// The plan at a copy here. One AI-DLC found by itself counts only when that
+// copy was read from the repository the plan names as its own: a copy of the
+// ref anywhere else (a mirror, a fork, a push by anyone who can push there) is
+// no plan. One at a place the person named (`named`) is the plan as read
+// there, however they spelled the address (an ssh host alias, a port).
+export function planAtCopy(projectDir: string, copy: string, options: { named?: boolean } = {}): { commit: string; plan: PlanJson } | null {
+  const at = /^refs\/aidlc\/home\/([0-9a-f]+)\/([0-9a-f]{12})\/plan$/.exec(copy);
+  if (at === null) return null;
+  const commit = localGit(projectDir, ["rev-parse", "--verify", "--quiet", copy]).stdout.trim();
+  const shown = commit === "" ? null : localGit(projectDir, ["show", `${commit}:plan.json`]);
+  const plan = shown?.ok ? planJsonOf(shown.stdout).plan : null;
+  if (plan === null || idSuffix(plan.work.id) !== at[1]) return null;
+  if (options.named !== true && repoCopyKey(plan.plan_repo.address) !== at[2]) return null;
+  return { commit, plan };
+}
+
+// The Units the plan as this computer last wrote or read it lists, or null
+// when it has no copy of this work's plan.
+export function planUnitsKept(projectDir: string): string[] | null {
+  return keptPlan(projectDir, activeIdentity(projectDir).intentId8)?.plan.units.map((unit) => unit.name) ?? null;
+}
+
+// Where a share writes: the repository the lead named (by its name in the
+// work or repos.json, else an address), else where this computer's copy says
+// the plan is, else the place rule's. `refused` when the name cannot be one.
+export function planPlaceForShare(projectDir: string, named?: string):
+  PlanPlace | { repo: string; address: null } | { refused: "option" | "unknown"; named: string } {
+  const pd = resolveProjectDir(projectDir);
+  const { space, intentUuid, intentId8 } = activeIdentity(pd);
+  const work = readIntentRegistry(pd, space).find((entry) => entry.uuid === intentUuid)?.slug ?? intentId8;
+  const ref = planRecordRef(intentId8);
+  const at = (repo: string, address: string | null): PlanPlace | { repo: string; address: null } | { refused: "option"; named: string } =>
+    address === null ? { repo, address: null }
+    : address.startsWith("-") ? { refused: "option", named: address }
+    : { address, repo, id8: intentId8, uuid: intentUuid, work, ref, copy: copyOf(address, ref) };
+  if (named !== undefined) {
+    if (named.startsWith("-")) return { refused: "option", named };
+    const known = planRepos(pd).find((entry) => entry.name === named) ??
+      (readWorkspaceRepos(pd).entries.has(named) ? planRepoEntry(pd, named) : null);
+    if (known !== null) return at(known.name, known.address);
+    return isGitAddress(named) ? at(repoNameOf(named) || folderRepoName(withoutCredentials(named)) || "plan", withoutCredentials(named)) : { refused: "unknown", named };
+  }
+  const kept = keptPlan(pd, intentId8)?.plan.plan_repo;
+  if (kept !== undefined) return at(kept.name, kept.address);
+  const first = planRepos(pd)[0];
+  return at(first.name, first.address);
+}
+
+// What git is given for an address, for a fetch or a push, so the person's own
+// sign-in and spelling are used and never stored: a remote of the workspace's
+// own repository at that address, by its name; else that URL as one of the
+// workspace's clones spells it; else the address. A sign-in in a clone's URL
+// never goes on git's command line, where anyone on the machine can read it
+// while git runs: the URL goes there without it, and `env` holds the
+// command-scope setting (url.<theirs>.insteadOf) that hands git theirs.
+export function gitTargetFor(projectDir: string, address: string, use: "fetch" | "push"): { target: string; env: NodeJS.ProcessEnv } {
+  const key = gitAddressKey(address);
+  const remotes = (dir: string): string[] => git(dir, ["remote"]).stdout.split(/\r?\n/).map((name) => name.trim()).filter(Boolean);
+  const urlOf = (dir: string, remote: string): string =>
+    git(dir, ["remote", "get-url", ...(use === "push" ? ["--push"] : []), remote]).stdout.trim();
+  for (const remote of remotes(projectDir)) {
+    const url = urlOf(projectDir, remote);
+    if (url !== "" && gitAddressKey(url) === key) return { target: remote, env: {} };
+  }
+  for (const name of new Set([...intentRepos(projectDir), ...readWorkspaceRepos(projectDir).entries.keys()])) {
+    const dir = repoDir(projectDir, name);
+    if (resolve(dir) === resolve(projectDir) || !isGitRepoDir(dir)) continue;
+    for (const remote of remotes(dir)) {
+      const url = urlOf(dir, remote);
+      if (url === "" || gitAddressKey(url) !== key) continue;
+      const shown = withoutCredentials(url);
+      if (shown === url) return { target: url, env: {} };
+      const configured = Number.parseInt(process.env.GIT_CONFIG_COUNT ?? "0", 10);
+      const index = Number.isSafeInteger(configured) && configured > 0 ? configured : 0;
+      return {
+        target: shown,
+        env: { GIT_CONFIG_COUNT: String(index + 1), [`GIT_CONFIG_KEY_${index}`]: `url.${url}.insteadOf`, [`GIT_CONFIG_VALUE_${index}`]: shown },
+      };
+    }
+  }
+  return { target: address, env: {} };
+}
+
+// The plan's tip at its repository, fetched into this workspace's copy by one
+// fetch of the exact ref (a pattern, so a remote without it is no error, and
+// prune takes the copy away when the remote's is gone). `unreached` holds git's
+// words when it could not be read, null at a time limit; the tip is then the copy.
+export function lookAtPlan(projectDir: string, place: PlanPlace): { tip: string | null; unreached?: string | null } {
+  const via = gitTargetFor(projectDir, place.address, "fetch");
+  // The star after the work id on both sides: a longer name at the remote
+  // lands under another work's folder, never under this one.
+  const copied = place.copy.replace(`refs/aidlc/home/${place.id8}/`, `refs/aidlc/home/${place.id8}*/`);
+  const fetched = git(projectDir, [
+    "fetch", "--no-tags", "--no-write-fetch-head", "--prune", "-q", via.target, `+${place.ref}*:${copied}`,
+  ], { ...via.env, GIT_TERMINAL_PROMPT: "0" });
+  const tip = localGit(projectDir, ["rev-parse", "--verify", "--quiet", place.copy]).stdout.trim() || null;
+  if (fetched.ok) return { tip };
+  const refused = localGitWriteRefused(fetched.stderr);
+  if (refused !== null) throw new GitWriteRefused(refused);
+  return { tip, unreached: /ETIMEDOUT/.test(fetched.stderr) ? null : maskUserinfo(gitWords(fetched.stderr)) };
+}
+
+// This computer's copy of the plan, as last written or read.
+export function planShared(projectDir: string, place: PlanPlace): { commit: string; plan: PlanJson } | null {
+  return planAtCopy(projectDir, place.copy, { named: true });
+}
+
+// Each setting a build copies, as plan.json holds it: the ceremonies' and the
+// Guard Policy's parsed value, the gate rhythm as the build reads it, the rest
+// as the lead's state has it.
+function planSettings(state: string): Record<string, string> {
+  const ceremonies = new Set<string>(Object.values(CEREMONY_FIELDS));
+  const settings: Record<string, string> = {};
+  for (const name of PLAN_SETTINGS) {
+    const policyField = name === "Guard Policy" ? guardPolicyStateField(state) : null;
+    const value = name === "Guard Policy" ? (policyField === null ? null : parseGuardPolicyStateLine(getField(state, policyField))?.value ?? null)
+      : ceremonies.has(name) ? parseCeremonyStateLine(getField(state, name))?.value ?? null
+      : name === UNIT_GATE_RHYTHM_FIELD ? readUnitGateRhythm(state)
+      : getField(state, name)?.trim() || null;
+    if (value !== null) settings[name] = String(value);
+  }
+  return settings;
+}
+
+// A file of the lead's record as the plan carries it: CRLF read as LF, so two
+// computers write the same plan.
+function planText(path: string): string | null {
+  try {
+    return committedTextBytes(readFileSync(path)).toString("utf-8");
+  } catch {
+    return null;
+  }
+}
+
+// The plan as a share builds it from the lead's record now: plan.json and each
+// file of its commit (null for one the tip has that this plan no longer does).
+// The lead's word and every key the tip has that this does not own are taken
+// from the tip as it is, so a second computer of the lead's keeps them.
+export function planFilesNow(projectDir: string, tip: PlanJson | null, place: PlanPlace):
+  { plan: PlanJson; files: Record<string, string | null> } {
+  const pd = resolveProjectDir(projectDir);
+  const { space } = activeIdentity(pd);
+  const state = readStateFile(pd);
+  const record = recordDir(pd);
+  if (record === null) fail("Cannot resolve the active intent record path.");
+  const dependencies = readFileSync(unitDependencyPath(pd), "utf-8");
+  const parsed = parseBoltDag(dependencies);
+  if (!parsed.ok) fail(`Cannot resolve Unit dependencies: ${parsed.reason}: ${parsed.detail}`);
+  const likely = unitLikelyReposFrom(dependencies);
+  const skeleton = teamSkeletonOn(state) ? parsed.batches[0]?.[0] ?? null : null;
+  const done = completedUnits(state);
+  const unitStages = unitMajorConstructionStageSlugs(getField(state, "Scope") ?? "", state, true);
+  const files: Record<string, string | null> = {};
+  const inputs: PlanJson["inputs"] = [];
+  const paths = homeInputPaths(unitStages, state);
+  const times = approvalTimes(readAuditShardEvents(pd), new Set(paths.map((path) => path.split("/")[1])));
+  for (const path of paths) {
+    const text = planText(join(record, ...path.split("/")));
+    if (text === null) continue;
+    files[`inputs/${path}`] = text;
+    const approved = times.get(path.split("/")[1]);
+    inputs.push({ path, fingerprint: textFingerprint(text), ...(approved === undefined ? {} : { approved }) });
+  }
+  for (const gone of tip?.inputs ?? []) if (!(`inputs/${gone.path}` in files)) files[`inputs/${gone.path}`] = null;
+  const rules = leadRulesOf(pd, space).paths;
+  for (const file of ["team.md", "project.md"]) {
+    const path = rules.find((rule) => rule.endsWith(`/${file}`));
+    files[`rules/${file}`] = path === undefined ? null : planText(join(pd, ...path.split("/")));
+  }
+  // A Unit a teammate took while the work was solo keeps its record where it
+  // is, in the workspace's own repository, which the plan then lists.
+  let claims = new Map<string, UnitClaimView>();
+  try {
+    claims = cachedClaims(pd);
+  } catch {
+    // No claims read here: none taken from solo work.
+  }
+  const own = leadsOwnClaims(pd, state, claims);
+  const soloTaken = new Set([...claims.values()]
+    .filter((claim) => claim.status === "claimed" && !own.has(claim.unit) && takenWhileSolo(pd, claim)).map((claim) => claim.unit));
+  const repos = planRepos(pd);
+  const workspace = soloTaken.size > 0 ? workspaceRepoEntry(pd, space) : null;
+  if (workspace !== null && !repos.some((repo) => repo.name === workspace.name)) repos.push(workspace);
+  const unitRepos = new Map<string, string[]>(parsed.units.map((edge) =>
+    [edge.name, [...new Set((likely.get(edge.name) ?? []).map((repo) => repo.split("/")[0]))]]));
+  // A repository a Unit names that the work's list lacks is listed too, with
+  // what the lead has of it, so every name in the plan reads there.
+  for (const name of new Set([...unitRepos.values()].flat())) {
+    if (!repos.some((repo) => repo.name === name)) repos.push(planRepoEntry(pd, name));
+  }
+  // A record goes where it can be written: the first of the Unit's
+  // repositories with an address, else the plan's own.
+  const addressed = (name: string): boolean => repos.some((repo) => repo.name === name && repo.address !== null);
+  const plan: PlanJson = {
+    format: PLAN_FORMAT,
+    version: (tip?.version ?? 0) + 1,
+    work: { id: place.uuid, label: place.work, space },
+    plan_repo: { name: place.repo, address: place.address },
+    repos,
+    units: parsed.units.map((edge) => {
+      const named = unitRepos.get(edge.name) ?? [];
+      const word = tip === null
+        ? (done.has(edge.name) && edge.name !== skeleton ? { done: true } : {})
+        : tip.units.find((unit) => unit.name === edge.name)?.word ?? {};
+      const record = workspace !== null && soloTaken.has(edge.name) ? workspace.name : named.find(addressed) ?? place.repo;
+      return { name: edge.name, waits_on: [...edge.depends_on], repos: named, record, word };
+    }),
+    skeleton,
+    settings: planSettings(state),
+    stages: Object.fromEntries(parseCheckboxes(state).map((box) => [box.slug, box.state])),
+    unit_stages: unitStages,
+    inputs,
+  };
+  for (const [key, value] of Object.entries(tip ?? {})) if (!(key in plan)) plan[key] = value;
+  return { plan, files };
+}
+
+// The plan's tree: `parent`'s (none when null) with each file written, or
+// taken out when null, and plan.json from `plan`, built in an index of its own
+// so the person's index and files are never touched. Every path goes to git on
+// standard input, never the command line, so a plan with many inputs stays
+// inside the length Windows allows a command.
+function planTree(pd: string, parent: string | null, plan: PlanJson, files: Record<string, string | null>): string {
+  const scratch = mkdtempSync(join(tmpdir(), "aidlc-plan-"));
+  try {
+    const env = { GIT_INDEX_FILE: join(scratch, "index") };
+    if (parent !== null) {
+      const read = git(pd, ["read-tree", parent], env);
+      if (!read.ok) fail(`git read-tree failed: ${read.stderr.trim()}`);
+    }
+    const all: Record<string, string | null> = { ...files, "plan.json": `${JSON.stringify(plan, null, 2)}\n` };
+    const written = Object.entries(all).filter((entry): entry is [string, string] => entry[1] !== null);
+    for (const [at, [, text]] of written.entries()) writeFileSync(join(scratch, `${at}.blob`), text, "utf-8");
+    const blobs = git(pd, ["hash-object", "-w", "--no-filters", "--stdin-paths"], env,
+      written.map((_, at) => `${join(scratch, `${at}.blob`)}\n`).join(""));
+    if (!blobs.ok) fail(`git hash-object failed: ${blobs.stderr.trim()}`);
+    const oids = blobs.stdout.split(/\r?\n/).filter(Boolean);
+    const zero = "0".repeat(oids[0].length);
+    const entries = [
+      ...written.map(([path], at) => `100644 ${oids[at]}\t${path}\n`),
+      ...Object.entries(all).filter(([, text]) => text === null).map(([path]) => `0 ${zero}\t${path}\n`),
+    ];
+    const updated = git(pd, ["update-index", "--index-info"], env, entries.join(""));
+    if (!updated.ok) fail(`git update-index failed: ${updated.stderr.trim()}`);
+    const tree = git(pd, ["write-tree"], env);
+    if (!tree.ok) fail(`git write-tree failed: ${tree.stderr.trim()}`);
+    return tree.stdout.trim();
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
+// The plan's commit on `parent` (none at the first), as the person's own commit.
+export function planCommit(projectDir: string, parent: string | null, plan: PlanJson, files: Record<string, string | null>,
+  what: string, message?: string): string {
+  return commitAsPerson(projectDir, planTree(projectDir, parent, plan, files), parent === null ? [] : [parent],
+    message ?? `aidlc plan ${plan.work.label} ${plan.version}: ${what}`);
+}
+
+// The push of the plan's commit with a lease on exactly `lease` (the tip read;
+// null: none there). `lost` is git's own race classes, `byRule` a rule of the
+// remote's; `words` are git's and the host's own.
+export function pushPlan(projectDir: string, place: PlanPlace, commit: string, lease: string | null):
+  { ok: true } | { ok: false; lost: boolean; byRule: boolean; words: string; timedOut: boolean } {
+  const via = gitTargetFor(projectDir, place.address, "push");
+  const pushed = git(projectDir, [
+    "push", via.target, `--force-with-lease=${place.ref}:${lease ?? ""}`, `${commit}:${place.ref}`,
+  ], { ...via.env, GIT_TERMINAL_PROMPT: "0" });
+  if (pushed.ok) {
+    localGit(projectDir, ["update-ref", place.copy, commit]);
+    return { ok: true };
+  }
+  return {
+    ok: false,
+    lost: CLAIM_RACE_LOST.test(pushed.stderr),
+    byRule: refusedByHostRule(pushed.stderr),
+    words: maskUserinfo(pushRefusal(pushed.stderr)),
+    timedOut: /ETIMEDOUT/.test(pushed.stderr),
+  };
+}
+
+export type PlanWrite =
+  // `over`: written over a tip that was not a plan; `carried`, the lead's
+  // decisions on its Units were found to carry.
+  | { kind: "written"; commit: string; version: number; created: boolean; regained?: true; over?: { carried: boolean } }
+  | { kind: "unchanged"; commit: string }
+  | { kind: "unreached"; words: string | null }
+  | { kind: "refused"; words: string; byRule: boolean }
+  | { kind: "stale"; words: string }
+  | { kind: "unreadable"; format: number };
+
+// The one write of the plan: on the remote's tip, never over it. A first write
+// with nothing kept here goes create-only with no look first; a lost lease is
+// another writer only when the look after it shows another tip, and is tried
+// again on that tip, three writes in all; a plan that would hold what the tip
+// holds is not written. A write nobody asked for runs quietly.
+export function writePlan(
+  projectDir: string,
+  place: PlanPlace,
+  // `what` may be worked out from the tip's plan (null at the first write).
+  // `overUnreadable`: the person's yes to share again over a tip that is not a
+  // plan (never one of a newer format): a commit on that tip, with the lease.
+  change: { what: string | ((tip: PlanJson | null) => string); message?: string; unasked?: true; overUnreadable?: true },
+): PlanWrite {
+  const write = (): PlanWrite => {
+    let tip: string | null = null;
+    // A plan this computer had that is gone from its repository is written
+    // again with what this computer last read on it, so no word on it is lost.
+    let gone: PlanJson | null = null;
+    const last = planShared(projectDir, place);
+    if (localGit(projectDir, ["rev-parse", "--verify", "--quiet", place.copy]).ok) {
+      const look = lookAtPlan(projectDir, place);
+      if (look.unreached !== undefined) return { kind: "unreached", words: look.unreached };
+      tip = look.tip;
+      if (tip === null && last !== null) gone = last.plan;
+    }
+    for (let writes = 1; ; writes++) {
+      const shown = tip === null ? null : localGit(projectDir, ["show", `${tip}:plan.json`]);
+      const read = shown === null ? null : planJsonOf(shown.ok ? shown.stdout : "");
+      const over = read !== null && read.plan === null && read.format <= PLAN_FORMAT && change.overUnreadable === true;
+      if (read !== null && read.plan === null && !over) return { kind: "unreadable", format: read.format };
+      const before = read?.plan ?? (tip === null ? gone : over ? planBelow(projectDir, tip, place.uuid) ?? last?.plan ?? null : null);
+      const built = planFilesNow(projectDir, before, place);
+      // Its version follows the tip's history, which has no plan to read it from.
+      if (over && tip !== null) built.plan.version = Number(localGit(projectDir, ["rev-list", "--count", tip]).stdout.trim()) + 1;
+      if (tip !== null && before !== null &&
+        planTree(projectDir, tip, { ...built.plan, version: before.version }, built.files) ===
+          localGit(projectDir, ["rev-parse", `${tip}^{tree}`]).stdout.trim()) {
+        return { kind: "unchanged", commit: tip };
+      }
+      const what = typeof change.what === "string" ? change.what : change.what(before);
+      const commit = planCommit(projectDir, tip, built.plan, built.files, what, change.message);
+      const pushed = pushPlan(projectDir, place, commit, tip);
+      if (pushed.ok) {
+        return {
+          kind: "written", commit, version: built.plan.version, created: tip === null && gone === null,
+          ...(tip === null && gone !== null ? { regained: true as const } : {}),
+          ...(over ? { over: { carried: before !== null } } : {}),
+        };
+      }
+      if (pushed.timedOut) return { kind: "unreached", words: null };
+      const look = lookAtPlan(projectDir, place);
+      // git ends a push with one fatal exit whether the host was not reached or
+      // answered with no push access or no sign-in: the read after it tells.
+      if (!pushed.lost) {
+        return look.unreached !== undefined ? { kind: "unreached", words: pushed.words } : { kind: "refused", words: pushed.words, byRule: pushed.byRule };
+      }
+      if (look.unreached !== undefined) return { kind: "unreached", words: look.unreached };
+      if (look.tip === tip) return { kind: "refused", words: pushed.words, byRule: false };
+      if (writes === 3) return { kind: "stale", words: pushed.words };
+      tip = look.tip;
+    }
+  };
+  return change.unasked ? quietly(write) : write();
+}
+
+// The newest plan of this work (`id`) that reads under a tip that does not:
+// what was pushed on top of the plan keeps it in its history, so the lead's
+// decisions on its Units are carried over it. Null when the history holds none.
+// ponytail: the 50 newest commits only; a longer history of non-plans carries nothing.
+function planBelow(projectDir: string, tip: string, id: string): PlanJson | null {
+  for (const commit of localGit(projectDir, ["rev-list", "--max-count=50", `${tip}^@`]).stdout.split("\n").filter(Boolean)) {
+    const shown = localGit(projectDir, ["show", `${commit}:plan.json`]);
+    const plan = shown.ok ? planJsonOf(shown.stdout).plan : null;
+    if (plan !== null && plan.work.id === id) return plan;
+  }
+  return null;
 }
 
 // Another AI-DLC tool, run as this install runs its tools.
@@ -8450,17 +9082,19 @@ export function leadsOwnClaims(projectDir: string, stateContent: string, claims:
 // carries on with the rest, as its switch says.
 const SOLO_AT_OID = new Map<string, boolean>();
 export function takenFromSoloWork(projectDir: string, claims: ReadonlyMap<string, UnitClaimView>, own: ReadonlySet<string>): boolean {
+  return [...claims.values()].some((claim) => !own.has(claim.unit) && takenWhileSolo(projectDir, claim));
+}
+
+// A claim taken from the lead's commit while the work was still solo.
+function takenWhileSolo(projectDir: string, claim: UnitClaimView): boolean {
   const relative = relativeRecordDir(projectDir);
   if (!relative) return false;
-  return [...claims.values()].some((claim) => {
-    if (own.has(claim.unit)) return false;
-    const key = `${claim.payload.base_oid}:${relative}`;
-    if (!SOLO_AT_OID.has(key)) {
-      const shown = localGit(projectDir, ["show", `${claim.payload.base_oid}:${relative}/aidlc-state.md`, "--"]);
-      SOLO_AT_OID.set(key, shown.ok && !isTeamUnitOwnership(shown.stdout));
-    }
-    return SOLO_AT_OID.get(key) === true;
-  });
+  const key = `${claim.payload.base_oid}:${relative}`;
+  if (!SOLO_AT_OID.has(key)) {
+    const shown = localGit(projectDir, ["show", `${claim.payload.base_oid}:${relative}/aidlc-state.md`, "--"]);
+    SOLO_AT_OID.set(key, shown.ok && !isTeamUnitOwnership(shown.stdout));
+  }
+  return SOLO_AT_OID.get(key) === true;
 }
 
 // A build's claim at the lead's project as this workspace last fetched it.

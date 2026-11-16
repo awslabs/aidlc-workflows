@@ -306,7 +306,7 @@ import {
 import { swarmSourceChangedSince } from "./aidlc-swarm-source.ts";
 import { memoryDirFor, PATH_SET_SENSOR_IDS, STAGE_WIDE_SENSOR_IDS, templateEligibleArtifacts, withStageProgressRow } from "./aidlc-graph.ts";
 import { generateFireId, recordUnfinishedFire, sensorMatchesPath, unfinishedFire } from "./aidlc-sensor-record.ts";
-import { buildOutBlockedLine, buildOutHomeLocation, buildWaitsForPush, HOME_LOCATION_FIELD, homeLocation } from "./aidlc-unit-teams.js";
+import { buildOutBlockedLine, buildOutHomeLocation, buildWaitsForPush, HOME_LOCATION_FIELD, homeLocation, workspaceHomeLocation } from "./aidlc-unit-teams.js";
 import { recordHomeLocation } from "./aidlc-state-upgrade.ts";
 import { unitProgressSectionRange } from "./aidlc-unit-landing.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
@@ -1823,8 +1823,11 @@ function handleSetUnitOwnership(given: string[]): void {
     // Each switch's own line, as the two setters print it. The first team step
     // the agent speaks from offers approving once at the end of each Unit; the
     // command that takes the offer is here for the agent.
-    const notice = switches
-      .map((change) => constructionPolicyNotice(change.from, change.to, change.field).notice)
+    // With no remote, the lead's own record of the work has no copy anywhere else.
+    const onlyHere = home !== null && workspaceHomeLocation(pd) === "local"
+      ? "This workspace has no remote, so AI-DLC's record of this work and your approvals are only on this computer."
+      : null;
+    const notice = [...switches.map((change) => constructionPolicyNotice(change.from, change.to, change.field).notice), onlyHere]
       .filter((line): line is string => typeof line === "string")
       .join(" ");
     console.log(JSON.stringify({

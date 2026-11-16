@@ -355,16 +355,17 @@ describe("config's refresh moves the list", () => {
 });
 
 describe("the plan's share carries the repo list", () => {
-  test("a root list the person changed, and its removal after a rename by hand, are in the share's commit", () => {
+  // The plan's share commits nothing here; the lead's record goes in by its own commit.
+  test("a root list the person changed, and its removal after a rename by hand, are in the commit of AI-DLC's record", () => {
     const home = makeHome();
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
     const changed = `${JSON.stringify({ repos: [{ name: "app" }, { name: "ledger" }] }, null, 2)}\n`;
     writeFileSync(join(home.dir, "repos.json"), changed);
-    const shared = run(UNIT, ["share", "--plan"], home.dir);
+    const shared = run(UNIT, ["commit-record"], home.dir);
     expect(shared.status, shared.out).toBe(0);
     expect(git(home.dir, ["show", "HEAD:repos.json"])).toBe(changed.trim());
     renameSync(join(home.dir, "repos.json"), join(home.dir, "aidlc", "repos.json"));
-    const again = run(UNIT, ["share", "--plan"], home.dir);
+    const again = run(UNIT, ["commit-record"], home.dir);
     expect(again.status, again.out).toBe(0);
     expect(git(home.dir, ["ls-tree", "--name-only", "HEAD"]).split("\n")).not.toContain("repos.json");
     expect(git(home.dir, ["show", "HEAD:aidlc/repos.json"])).toBe(changed.trim());

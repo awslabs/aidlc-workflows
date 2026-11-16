@@ -7,10 +7,11 @@
 // anywhere it is by pull request, the default org.md's own line says, so a
 // project set up before the line existed reads it too. Way of Working words
 // with no line are no line: nothing reads them, asks or writes. The share
-// question puts the matching choice first, marked "(Recommended)", in both its
-// forms (the one-repo question before a Unit on the lead's walk, and a home's
-// whose teams build in repos of their own), and when the pull request is the
-// recommended one its own sentence says so. A narrower layer's line with
+// question puts the matching choice first, marked "(Recommended)", wherever it
+// offers both ways (main's own team flow, here at a home and at the lead's own
+// checkout; and at work teams build in repos of their own, the share that
+// carries a walking skeleton's code built here, pinned in t-unit-board), and
+// when the pull request is the recommended one its own sentence says so. A narrower layer's line with
 // another value marks nothing and never falls through to a broader layer's.
 // The commands each choice runs and their details never change.
 //
@@ -34,14 +35,12 @@ const PLAIN = "Share them with the teams";
 const BY_PR = "Share by pull request";
 const MARK = " (Recommended)";
 const PLAIN_PUSH = "Pushes main to origin as a plain push; it never overwrites what a team pushed.";
-const OPEN = "The Units are open for any team to take. Share the plan with them now? I'd commit the plan here " +
-  "(AI-DLC's record, nothing else of yours) with this commit message and ";
-// The message the share's commit carries, shown after the question, and the file each choice's command names.
+// The message the share's commit carries, shown after the question.
 const MESSAGE = "\n\nShare the plan with the teams";
-const PLAN_FLAG = " --commit-message-file aidlc/.aidlc-engine/request-text/unit-share-message-plan.txt";
-const HOME_QUESTION = `${OPEN}push main to origin, so each team can take its Unit by opening its own clone and running /aidlc.${MESSAGE}`;
-const HOME_PR_QUESTION = `${OPEN}push it on its own branch for a pull request, so each team can take its Unit once it is ` +
-  `in main, by opening its own clone and running /aidlc.${MESSAGE}`;
+const HERE = "Build them here for now";
+const PR_COMMAND = / unit share --branch --commit-message-file \S+\/unit-share-message-[^/ ]+\.txt$/;
+const PLAIN_COMMAND = / unit share --commit-message-file \S+\/unit-share-message-[^/ ]+\.txt$/;
+const DIRECT = "push main to origin, so each team can take a Unit by opening its own clone";
 const ONE_REPO_PR = "push the plan on its own branch for a pull request, so each team can take a Unit once it is in main, " +
   `by opening its own clone and running /aidlc.${MESSAGE}`;
 
@@ -76,13 +75,16 @@ function olderOrg(dir: string): void {
 const teamLine = (value: string) => (dir: string) =>
   wayOfWorking(dir, "team.md", ["- **Integration branch**: main", `- **Changes reach main**: ${value}`]);
 
-// A home whose teams build in repos of their own, teams chosen: the first step
-// is its share question.
+// A home on one repository whose teams were chosen before Home Location was
+// recorded (main's own team flow): the first step is its share question.
 function homeShare(memory: (dir: string) => void = () => {}): Record<string, unknown> {
-  const home = makeHome();
+  const home = makeHome({ repos: {} });
   memory(home.dir);
   const chosen = run(STATE, ["set-unit-ownership", "team"], home.dir);
   expect(chosen.status, chosen.out).toBe(0);
+  writeFileSync(seededStateFile(home.dir), readFileSync(seededStateFile(home.dir), "utf-8")
+    .replace(/^- \*\*Home Location\*\*: .*\r?\n/m, "")
+    .replace(/^- \*\*State Version\*\*: 9$/m, "- **State Version**: 8"));
   const ask = next(home.dir);
   expect(isShare(ask), JSON.stringify(ask)).toBe(true);
   return ask;
@@ -107,20 +109,19 @@ function oneRepoShare(memory: (dir: string) => void = () => {}): Record<string, 
 // By pull request first and marked, each choice running what it ran, and the
 // question's own sentence saying the pull request.
 function expectPullRequestFirst(ask: Record<string, unknown>): void {
-  expect(labels(ask)).toEqual([`${BY_PR}${MARK}`, PLAIN, "Not now"]);
-  expect(String(choice(ask, `${BY_PR}${MARK}`).command)).toEndWith(` unit share --branch --plan${PLAN_FLAG}`);
-  expect(String(choice(ask, `${BY_PR}${MARK}`).detail)).toStartWith("I put the plan on its own branch, aidlc-plan-");
-  expect(String(choice(ask, PLAIN).command)).toEndWith(` unit share --plan${PLAN_FLAG}`);
+  expect(labels(ask)).toEqual([`${BY_PR}${MARK}`, PLAIN, HERE]);
+  expect(String(choice(ask, `${BY_PR}${MARK}`).command)).toMatch(PR_COMMAND);
+  expect(String(choice(ask, PLAIN).command)).toMatch(PLAIN_COMMAND);
   expect(choice(ask, PLAIN).detail).toBe(PLAIN_PUSH);
-  expect(ask.question).toBe(HOME_PR_QUESTION);
+  expect(String(ask.question)).toEndWith(ONE_REPO_PR);
 }
 
-describe("a home's share question follows the team's Changes reach main line", () => {
+describe("a home's share question on main's own team flow follows the team's Changes reach main line", () => {
   test("AI-DLC's own default, by pull request: Share by pull request comes first, marked Recommended, and the question says so", () => {
     const ask = homeShare();
     expectPullRequestFirst(ask);
     // Where there is no picker, the numbered question carries the same mark.
-    expect(String(ask.numbered_prose_question)).toContain(`1. **${BY_PR}${MARK}** - I put the plan on its own branch, aidlc-plan-`);
+    expect(String(ask.numbered_prose_question)).toContain(`1. **${BY_PR}${MARK}** - `);
     expect(String(ask.numbered_prose_question)).toContain(`2. **${PLAIN}** - ${PLAIN_PUSH}`);
   });
 
@@ -138,11 +139,11 @@ describe("a home's share question follows the team's Changes reach main line", (
 
   test("team.md says by direct push: Share them with the teams comes first, marked Recommended, and the question is as it was", () => {
     const ask = homeShare(teamLine("by direct push"));
-    expect(labels(ask)).toEqual([`${PLAIN}${MARK}`, BY_PR, "Not now"]);
-    expect(String(choice(ask, `${PLAIN}${MARK}`).command)).toEndWith(` unit share --plan${PLAN_FLAG}`);
+    expect(labels(ask)).toEqual([`${PLAIN}${MARK}`, BY_PR, HERE]);
+    expect(String(choice(ask, `${PLAIN}${MARK}`).command)).toMatch(PLAIN_COMMAND);
     expect(choice(ask, `${PLAIN}${MARK}`).detail).toBe(PLAIN_PUSH);
-    expect(String(choice(ask, BY_PR).command)).toEndWith(` unit share --branch --plan${PLAN_FLAG}`);
-    expect(ask.question).toBe(HOME_QUESTION);
+    expect(String(choice(ask, BY_PR).command)).toMatch(PR_COMMAND);
+    expect(String(ask.question)).toContain(DIRECT);
   });
 
   test("project.md's line is read before team.md's, a hand-written one too", () => {
@@ -150,7 +151,7 @@ describe("a home's share question follows the team's Changes reach main line", (
       teamLine("by pull request")(dir);
       wayOfWorking(dir, "project.md", ["- **Integration branch**: main", "Changes reach main: By direct push."]);
     });
-    expect(labels(ask)).toEqual([`${PLAIN}${MARK}`, BY_PR, "Not now"]);
+    expect(labels(ask)).toEqual([`${PLAIN}${MARK}`, BY_PR, HERE]);
   });
 
   test("GitLab's words, by merge request, read as by pull request", () => {
@@ -159,8 +160,8 @@ describe("a home's share question follows the team's Changes reach main line", (
 
   test("a narrower layer's line with another value marks nothing, and never takes a broader layer's in its place", () => {
     const ask = homeShare(teamLine("by carrier pigeon"));
-    expect(labels(ask)).toEqual([PLAIN, BY_PR, "Not now"]);
-    expect(ask.question).toBe(HOME_QUESTION);
+    expect(labels(ask)).toEqual([PLAIN, BY_PR, HERE]);
+    expect(String(ask.question)).toContain(DIRECT);
     expect(JSON.stringify(ask)).not.toContain("Recommended");
   });
 });
@@ -168,9 +169,9 @@ describe("a home's share question follows the team's Changes reach main line", (
 describe("the one-repo share question follows the same line", () => {
   test("AI-DLC's own default: Share by pull request first, marked Recommended, its command unchanged, the question saying so", () => {
     const ask = oneRepoShare();
-    expect(labels(ask)).toEqual([`${BY_PR}${MARK}`, PLAIN, "Build them here for now"]);
-    expect(String(choice(ask, `${BY_PR}${MARK}`).command)).toMatch(/ unit share --branch --commit-message-file \S+\/unit-share-message-[^/ ]+\.txt$/);
-    expect(String(choice(ask, PLAIN).command)).toMatch(/ unit share --commit-message-file \S+\/unit-share-message-[^/ ]+\.txt$/);
+    expect(labels(ask)).toEqual([`${BY_PR}${MARK}`, PLAIN, HERE]);
+    expect(String(choice(ask, `${BY_PR}${MARK}`).command)).toMatch(PR_COMMAND);
+    expect(String(choice(ask, PLAIN).command)).toMatch(PLAIN_COMMAND);
     expect(choice(ask, PLAIN).detail).toBe(PLAIN_PUSH);
     expect(String(ask.question)).toStartWith("The plan's ");
     expect(String(ask.question)).toEndWith(ONE_REPO_PR);

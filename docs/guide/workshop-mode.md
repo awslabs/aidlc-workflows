@@ -149,17 +149,20 @@ branch for a pull request.
 Typed, the same step is `/aidlc unit share`, which names what it committed
 once it has pushed, or your own commit and `git push origin main`.
 
-With `Home Location` recorded, the step after choosing teams asks
-once whether to share the plan with them: **Share them with the
-teams** runs `aidlc unit share --plan`, which commits AI-DLC's record here
-(`aidlc/`, none of your other files) and pushes main with a plain push;
-**Share by pull request** runs `aidlc unit share --branch --plan`, which
-commits the same and pushes it on the plan's own branch instead, the two
-ordered and marked by the same line as above; **Not now** leaves it, and a team's clone sees the plan once main is pushed (or push
-it yourself with `git push origin main`). When the remote does not answer, Share says so and keeps the
-commit, and the question is not put again; run `aidlc unit share --plan` once
-it can be reached. A Unit you add to the plan after sharing it is not on the
-remote until you share again, so the question comes back once, naming it. Until
+With `Home Location` recorded, the step after choosing teams asks once
+whether to share the plan with them, naming the code repository it goes to
+and each Unit's repositories: **Share the plan** runs `aidlc unit share
+--plan`, which puts the plan in that repository as a ref of its own, one push
+with your own git; nothing is added to a branch or to your files, and nothing
+is committed here. **Not now** leaves it until you say you want it shared. To
+put it in another repository the teams can read, say so: the share takes
+`--repo <name or address>`. AI-DLC sends no notice of the share, so the teams
+hear it from you; a team whose workspace has no clone of that repository needs
+the address the share gives. When the repository does not answer or refuses
+the push, the share says so in git's words and writes nothing, and the
+question is not put again; ask again when it can be reached. A Unit you add to
+the plan after sharing it is not in the shared plan until you share again, so
+the question comes back once, naming it. Until
 you answer it, the board asks whether each team approves its Unit after every
 stage, as it does by default, or once at the end of each Unit.
 
