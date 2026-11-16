@@ -9827,9 +9827,12 @@ function takeUnit(args: string[], projectDir?: string, rhythm?: UnitClaimPayload
   const builtHere = fromPlan ? findUnitBuildOfWork(pd, flags.plan!, unit) : null;
   const source = builtHere !== null ? null : fromPlan ? planTakeSource(pd, flags.plan!, flags.from!) : null;
   const home = builtHere === null ? source?.home ?? findHomeWork(pd, flags.home!, homeSpace) : null;
-  // Work teams build is taken from its plan, never from the lead's record here.
-  if (!fromPlan && home !== null && !home.solo && isGitAddress(home.location)) {
-    fail(`${flags.home} is built by teams: its Units are taken from the plan. Run \`${aidlcInvocation()} next\` for what is ready to take.`);
+  // Work teams build is taken from its plan, never from the lead's record here,
+  // whether or not the plan has a place yet: with none, the ask for its address
+  // is next --units's step.
+  if (!fromPlan && home !== null && !home.solo) {
+    const step = isGitAddress(home.location) ? "next" : "next --units";
+    fail(`${flags.home} is built by teams: its Units are taken from the plan. Run \`${aidlcInvocation()} ${step}\` for what is ready to take.`);
   }
   if (home !== null) validateClaimRefUnit(home.id8, unit);
   // Taken here before (this clone or another of this workspace): carry it on.

@@ -465,6 +465,28 @@ describe("a team takes a Unit from the plan where it is shared", () => {
     expect(recordAt(home, "refunds")).toBeNull();
   });
 
+  test("a --home take of work teams build whose plan has nowhere to go yet is refused the same way, and nothing is taken", () => {
+    // The work's one repository has no address, so its Home Location is "local" and no plan is shared anywhere.
+    const home = makeHome({ repos: { ledger: "" } });
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    expect(field(readFileSync(join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD, "aidlc-state.md"), "utf-8"), "Home Location")).toBe("local");
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "teams"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const bea = cloneOf(home.remote, "bea");
+    const before = git(home.remote, ["for-each-ref", "refs/aidlc"]);
+    const took = run(UNIT, ["take", "refunds", "--home", HOME_RECORD], bea);
+    expect(took.status, took.out).not.toBe(0);
+    expect(took.out).toContain(`${HOME_RECORD} is built by teams: its Units are taken from the plan. Run \``);
+    expect(took.out).toContain(" next --units` for what is ready to take.");
+    expect(readdirSync(join(bea, "aidlc", "spaces", "default", "intents")).some((name) => name.endsWith("-refunds"))).toBe(false);
+    expect(git(home.remote, ["for-each-ref", "refs/aidlc"])).toBe(before);
+    expect(git(bea, ["for-each-ref", "refs/aidlc"])).toBe("");
+    // The step it names finds no plan and asks where it is shared.
+    const asked = next(bea, ENV, ["--units"]);
+    expect(String(asked.narration), JSON.stringify(asked).slice(0, 600)).toMatch(/What is the address of the repository it is shared in\?$/);
+  });
+
   // A pin of the solo second person's path: its look reads its claims and no plan.
   test("a solo second person's build looks at no plan", () => {
     const home = makeHome({ repos: {} });
