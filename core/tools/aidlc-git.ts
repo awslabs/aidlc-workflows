@@ -227,16 +227,19 @@ export function recordPaths(dir: string): string[] {
 
 // Why AI-DLC's record cannot be committed here now, or null when it can: the
 // one check `unit commit-record` and every offer of it read, so an offer is
-// never put that the commit would refuse.
+// never put that the commit would refuse. With `paths` (AI-DLC's own files
+// after an update, ownFilesToCommit) it is those, none under aidlc/, so a
+// Unit's build does not stop them.
 export type RecordCommitBlock =
   | { why: "no-git" | "unit-build" | "detached" | "nothing" }
   | { why: "under-way"; underWay: { what: string; finish: string; abort: string } };
-export function recordCommitBlock(dir: string, unitBuild: boolean): RecordCommitBlock | null {
+export function recordCommitBlock(dir: string, unitBuild: boolean, paths?: readonly string[]): RecordCommitBlock | null {
   if (git(dir, ["rev-parse", "--git-dir"]) === null) return { why: "no-git" };
-  if (unitBuild) return { why: "unit-build" };
+  if (unitBuild && paths === undefined) return { why: "unit-build" };
   const underWay = gitOperationUnderWay(dir);
   if (underWay !== null) return { why: "under-way", underWay };
   if (git(dir, ["symbolic-ref", "--quiet", "HEAD"]) === null) return { why: "detached" };
+  if (paths !== undefined) return paths.length > 0 ? null : { why: "nothing" };
   const changed = recordChanged(dir);
   return changed === null ? { why: "no-git" } : changed ? null : { why: "nothing" };
 }

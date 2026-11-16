@@ -1,4 +1,4 @@
-// covers: function:ownFilesToCommit, function:writtenByInstall, function:reposMoveToCommit, file:core/tools/aidlc-brought-files.ts
+// covers: function:ownFilesToCommit, function:writtenByInstall, function:reposMoveToCommit, function:recordCommitBlock, subcommand:aidlc-unit:commit-record, file:core/tools/aidlc-brought-files.ts
 //
 // After an update, AI-DLC's own files that git shows changed are worked out
 // from the install record and git alone: the ones that still hold exactly what
@@ -8,17 +8,20 @@
 // scope file rendered into the stage tables, and a file they edited after the
 // refresh are never taken. The same release committed from an LF checkout and
 // from a CRLF one (Git for Windows' default) is the same tree, so two machines
-// that both commit an update commit the same bytes.
+// that both commit an update commit the same bytes. `unit commit-record --update`
+// makes that commit on the person's branch through their own git, hooks
+// included, with the message drafted for it, pushes nothing, and takes a
+// settings file config merges only where the update's offer drafted its message.
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, cpSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { ownFilesToCommit } from "../../dist/claude/.claude/tools/aidlc-brought-files.ts";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
-import { REPO_ROOT } from "../harness/fixtures.ts";
-import { cleanupTeamBuild, git, tempDir } from "../harness/team-build.ts";
+import { FIXTURES_DIR, REPO_ROOT, seededStateFile, seedWorkspaceShell } from "../harness/fixtures.ts";
+import { cleanupTeamBuild, git, run, tempDir, UNIT } from "../harness/team-build.ts";
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -249,4 +252,74 @@ describe("two machines commit the same bytes for the same release", () => {
       expect(trees[1]).toBe(trees[0]);
     });
   }
+});
+
+describe("unit commit-record --update", () => {
+  const draft = `aidlc/.aidlc-engine/request-text/unit-record-message-update-${AIDLC_VERSION}.txt`;
+  const shown = (dir: string): string[] => git(dir, ["show", "--name-only", "--format=", "HEAD"]).split("\n").filter(Boolean).sort();
+
+  test("one commit of AI-DLC's own files on the branch, with the drafted message, a file staged elsewhere kept staged, nothing pushed", () => {
+    const { dir } = projectBehind("claude");
+    const remote = tempDir("remote");
+    git(remote, ["init", "-q", "--bare"]);
+    git(dir, ["remote", "add", "origin", remote]);
+    git(dir, ["push", "-q", "origin", "main"]);
+    const pushed = git(remote, ["rev-parse", "main"]);
+    const changedBefore = refresh(dir, "claude");
+    const expected = [...ownFilesToCommit(dir, false, changedBefore).commit].sort();
+    expect(expected).toContain(".claude/settings.json");
+    writeFileSync(join(dir, "notes.txt"), "mine\n");
+    git(dir, ["add", "notes.txt"]);
+    // The draft the offer writes, which the person's own words replace.
+    mkdirSync(join(dir, "aidlc", ".aidlc-engine", "request-text"), { recursive: true });
+    writeFileSync(join(dir, ...draft.split("/")), "chore: take AI-DLC's update\n");
+    const yes = run(UNIT, ["commit-record", "--update", "--commit-message-file", draft], dir);
+    expect(yes.status, yes.out).toBe(0);
+    expect(yes.json).toMatchObject({ committed: true, branch: "main", left: [] });
+    expect(git(dir, ["log", "-1", "--format=%s"])).toBe("chore: take AI-DLC's update");
+    expect(shown(dir)).toEqual(expected);
+    expect(git(dir, ["status", "--porcelain"])).toBe("A  notes.txt");
+    expect(existsSync(join(dir, ...draft.split("/")))).toBe(false);
+    expect(git(remote, ["rev-parse", "main"])).toBe(pushed);
+  });
+
+  test("asked with no offer drafted for this release, the settings file config merges stays out", () => {
+    const { dir } = projectBehind("claude");
+    refresh(dir, "claude");
+    const yes = run(UNIT, ["commit-record", "--update"], dir);
+    expect(yes.status, yes.out).toBe(0);
+    expect(yes.json).toMatchObject({ committed: true, left: [".claude/settings.json"] });
+    expect(git(dir, ["log", "-1", "--format=%s"])).toBe(`Update AI-DLC to ${AIDLC_VERSION}`);
+    expect(shown(dir)).not.toContain(".claude/settings.json");
+    expect(git(dir, ["status", "--porcelain"])).toBe("M .claude/settings.json");
+  });
+
+  test("in a checkout that builds a Unit it commits AI-DLC's files and nothing of aidlc/", () => {
+    const { dir } = projectBehind("claude");
+    seedWorkspaceShell(dir);
+    writeFileSync(seededStateFile(dir), readFileSync(join(FIXTURES_DIR, "state-construction.md"), "utf-8")
+      .replace("- **Revision Count**: 0\n", "- **Revision Count**: 0\n- **Unit Build**: refunds\n"));
+    refresh(dir, "claude");
+    const yes = run(UNIT, ["commit-record", "--update"], dir);
+    expect(yes.status, yes.out).toBe(0);
+    expect(shown(dir).filter((path) => path.startsWith("aidlc/"))).toEqual([]);
+    expect(shown(dir)).toContain(".claude/skills/aidlc/SKILL.md");
+  });
+
+  test("on no branch, with a merge under way, or when their hook refuses, nothing is committed", () => {
+    const { dir } = projectBehind("claude");
+    refresh(dir, "claude");
+    const head = git(dir, ["rev-parse", "HEAD"]);
+    git(dir, ["checkout", "-q", "--detach"]);
+    expect(run(UNIT, ["commit-record", "--update"], dir).status).not.toBe(0);
+    git(dir, ["checkout", "-q", "main"]);
+    writeFileSync(join(dir, ".git", "MERGE_HEAD"), `${head}\n`);
+    expect(run(UNIT, ["commit-record", "--update"], dir).status).not.toBe(0);
+    unlinkSync(join(dir, ".git", "MERGE_HEAD"));
+    writeFileSync(join(dir, ".git", "hooks", "pre-commit"), "#!/bin/sh\necho no commits today >&2\nexit 1\n", { mode: 0o755 });
+    const refused = run(UNIT, ["commit-record", "--update"], dir);
+    expect(refused.status).not.toBe(0);
+    expect(refused.out).toContain("no commits today");
+    expect(git(dir, ["rev-parse", "HEAD"])).toBe(head);
+  });
 });

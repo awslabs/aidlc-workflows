@@ -240,7 +240,12 @@ export const UNIT_GRAMMAR: Readonly<Record<string, UnitGrammar>> = {
     options: ["team", "request-file", "rhythm"],
     usage: "unit claim <unit> [--team <label> | --request-file <file>] [--rhythm per-stage|unit-end]",
   },
-  "commit-record": { name: false, options: ["commit-message-file"], usage: "unit commit-record [--commit-message-file <file>]" },
+  "commit-record": {
+    name: false,
+    options: ["commit-message-file"],
+    switches: ["update"],
+    usage: "unit commit-record [--update] [--commit-message-file <file>]",
+  },
   gate: {
     name: true,
     options: ["decision", "user-input", "request-file"],

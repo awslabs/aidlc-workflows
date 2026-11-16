@@ -242,7 +242,8 @@ import {
   unitDependencies,
 } from "./aidlc-unit-teams.js";
 import { gitOperationUnderWay, rebaseUnderWay, recordChanged, recordCommitBlock, recordPaths, submoduleLeavesProjectRepo } from "./aidlc-git.ts";
-import { commitOwnCommand, displayRepoPath, reposManifestPath, localUnreadableLine, readWorkspaceRepos, repoCloneable, repoCloneOfferLine, repoNotThereLine, withoutCredentials, workspaceManifestAt } from "./aidlc-workspace-manifest.js";
+import { ownFilesToCommit } from "./aidlc-brought-files.ts";
+import { commitOwnCommand, displayRepoPath, UPDATE_COMMIT_MESSAGE, UPDATE_MESSAGE_KEY, reposManifestPath, localUnreadableLine, readWorkspaceRepos, repoCloneable, repoCloneOfferLine, repoNotThereLine, withoutCredentials, workspaceManifestAt } from "./aidlc-workspace-manifest.js";
 import { maskUserinfo, workspaceCloneUrl } from "./aidlc-workspace-sync.ts";
 import { loadGraph } from "./aidlc-graph.ts";
 import {
@@ -5736,12 +5737,13 @@ function shareCommitRefused(said: string, adding: boolean): never {
 // left out with `code` false, as `unit commit-record` asks), committed by pathspec
 // through commitUnitPaths, so a file the person staged stays theirs, staged.
 // Pathspecs, never the file list: a plan's hundreds of files would pass the
-// 32,767 characters Windows allows a command line. Returns how many files the
-// commit took.
-function commitPlanHere(pd: string, message: string, code = true): number {
+// 32,767 characters Windows allows a command line. `paths` in their place:
+// what the update's own commit takes (ownFilesToCommit). Returns how many
+// files the commit took.
+function commitPlanHere(pd: string, message: string, code = true, paths?: readonly string[]): number {
   const head = (): string => git(pd, ["rev-parse", "--verify", "--quiet", "HEAD"]).stdout.trim();
   const before = head();
-  commitUnitPaths(pd, [...recordPaths(pd), ...(code ? builtHereCode(pd).paths : [])], {}, "", "", "", null, { message, refused: shareCommitRefused });
+  commitUnitPaths(pd, paths ? [...paths] : [...recordPaths(pd), ...(code ? builtHereCode(pd).paths : [])], {}, "", "", "", null, { message, refused: shareCommitRefused });
   if (head() === before) return 0;
   return git(pd, ["diff-tree", "-r", "--root", "--no-commit-id", "--name-only", "-z", "HEAD"]).stdout.split("\0").filter(Boolean).length;
 }
@@ -6449,9 +6451,13 @@ export function reposCommitOffer(pd: string, unitBuild: boolean): { mark: string
 // (commitPlanHere), never the code Units built here. It takes no argument, so
 // nothing else of theirs can be committed through it. recordCommitBlock's
 // reason refuses it with nothing changed; nothing to commit is no failure. The
-// commit it made is in its output.
+// commit it made is in its output. `--update`: AI-DLC's own files after an
+// update in its place (ownFilesToCommit), in a Unit's build too. A settings
+// file config merges goes in only where the session start's offer for this
+// release drafted its message, as it offers only when it saw that file
+// unchanged before the refresh; asked any other way, it is left.
 function commitRecord(args: string[], projectDir?: string): void {
-  parseArgs(args);
+  const update = parseArgs(args).bareFlags.has("update");
   const pd = resolveProjectDir(projectDir);
   let state: string | null = null;
   try {
@@ -6459,9 +6465,12 @@ function commitRecord(args: string[], projectDir?: string): void {
   } catch {
     // No work selected: nothing here is a Unit's build.
   }
-  const block = recordCommitBlock(pd, state !== null && unitBuildOf(state) !== null);
+  const unitBuild = state !== null && unitBuildOf(state) !== null;
+  const offered = existsSync(join(pd, ...unitWordsFile("record-message", UPDATE_MESSAGE_KEY).split("/")));
+  const own = update ? ownFilesToCommit(pd, unitBuild, offered ? () => false : null) : null;
+  const block = recordCommitBlock(pd, unitBuild, own?.commit);
   if (block?.why === "nothing") {
-    console.log(JSON.stringify({ committed: false, notice: "AI-DLC's record in aidlc/ has nothing new to commit." }));
+    console.log(JSON.stringify(own ? { committed: false, left: own.left } : { committed: false, notice: "AI-DLC's record in aidlc/ has nothing new to commit." }));
     return;
   }
   if (block !== null) {
@@ -6473,7 +6482,7 @@ function commitRecord(args: string[], projectDir?: string): void {
   const given = givenCommitMessage(pd, args, "commit-record");
   let files: number;
   try {
-    files = commitPlanHere(pd, given?.text ?? RECORD_COMMIT_MESSAGE, false);
+    files = commitPlanHere(pd, given?.text ?? (own ? UPDATE_COMMIT_MESSAGE : RECORD_COMMIT_MESSAGE), false, own?.commit);
   } catch (error) {
     if (error instanceof CommitRefused) fail(`${error.message} ${messageWayOn(false)}`);
     throw error;
@@ -6481,7 +6490,7 @@ function commitRecord(args: string[], projectDir?: string): void {
   given?.spend();
   const branch = git(pd, ["symbolic-ref", "--quiet", "--short", "HEAD"]).stdout.trim();
   const commit = git(pd, ["rev-parse", "--short", "HEAD"]).stdout.trim();
-  console.log(JSON.stringify({
+  console.log(JSON.stringify(own ? { committed: true, branch, commit, files, left: own.left } : {
     committed: true,
     commit,
     notice: `AI-DLC's record in aidlc/ is committed on ${branch} as ${commit} (${files} file${files === 1 ? "" : "s"}); nothing is pushed.`,

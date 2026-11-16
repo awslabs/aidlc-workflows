@@ -63,6 +63,11 @@ export const REPOS_MOVED_LINE =
   `AI-DLC moved repos.json into aidlc/. Commit it so your team gets it; teammates need AI-DLC ` +
   `${REPOS_IN_AIDLC_SINCE.major}.${REPOS_IN_AIDLC_SINCE.minor} or newer.`;
 
+// The update's own commit (unit commit-record --update): the message it takes
+// when none was drafted, and the key of the file its message is drafted in.
+export const UPDATE_COMMIT_MESSAGE = `Update AI-DLC to ${AIDLC_VERSION}`;
+export const UPDATE_MESSAGE_KEY = `update-${AIDLC_VERSION}`;
+
 // The commit of AI-DLC's own files at the person's own terminal, where the
 // command itself is said: git's own, those paths only (CHECKOUT_STEPS in
 // aidlc-unit.ts names it; it lives here, below that file, so this one can say it).
