@@ -298,7 +298,7 @@ describe("a team takes a Unit from the plan where it is shared", () => {
     const pay = teamWorkspace({}, "pay", []);
     const nowhere = join(tempDir("gone"), "nowhere.git");
     const step = run(ORCH, ["next", "--lead-address", nowhere], pay);
-    expect(step.out).toContain(`${nowhere} could not be read: `);
+    expect(String(step.json?.message ?? step.json?.error), step.out).toContain(`${nowhere} could not be read: `);
     expect(step.out).not.toContain("has no plan shared in it");
   });
 
@@ -314,7 +314,9 @@ describe("a team takes a Unit from the plan where it is shared", () => {
     expect(planLastChange(sam, edited)).toEqual({ what: "edited", name: "lead", day: "1 Jan" });
   });
 
-  test("the address said is read first, as the person's own step: never quiet, and never skipped for a silent repository on its host", () => {
+  // A sh script stands in for ssh, which git for Windows never runs as one; the order and the quiet read are
+  // the same code on every platform.
+  test.skipIf(process.platform === "win32")("the address said is read first, as the person's own step: never quiet, and never skipped for a silent repository on its host", () => {
     const sam = teamWorkspace({}, "sam", []);
     const silent = join(sam, "reports");
     git(sam, ["init", "-q", "-b", "main", silent]);
@@ -379,7 +381,7 @@ describe("a team takes a Unit from the plan where it is shared", () => {
     // With no copy here, the address alone.
     const sam = teamWorkspace(home.hosts, "sam", ["billing"]);
     const fresh = run(UNIT, ["take", "refunds", "--plan", home.id8, "--from", plan], sam);
-    expect(fresh.out).toContain(`${plan} does not have this plan now.`);
+    expect(String(fresh.json?.error), fresh.out).toBe(`${plan} does not have this plan now.`);
   });
 
   test("a build whose plan is gone from its repository: said once, none of its Units offered, and looked at again each step until it is back", () => {
@@ -569,7 +571,9 @@ describe("a team takes a Unit from the plan where it is shared", () => {
     expect(calls.filter((line) => /s3cret|t0ken/.test(line)), calls.join("\n")).toEqual([]);
   });
 
-  test("records are read with a clone's own sign-in when its URL carries one, which never goes on git's command line", async () => {
+  // A sh script named git on PATH notes the call and its settings; git for Windows is found as git.exe, never as a
+  // script. The command line half is the sign-in case above, by git's own trace, on every platform.
+  test.skipIf(process.platform === "win32")("records are read with a clone's own sign-in when its URL carries one, which never goes on git's command line", async () => {
     const pay = teamWorkspace({}, "pay", []);
     const clone = join(pay, "checkout-api");
     git(pay, ["init", "-q", "-b", "main", clone]);

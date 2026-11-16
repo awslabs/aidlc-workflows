@@ -2364,7 +2364,7 @@ describe("a team's own workspace that reads the lead's plan where it is shared",
     const home = makePlanHome({ share: false });
     const pay = ownWorkspace(home.hosts, "pay", ["billing"]);
     const ask = next(pay, ENV, ["--lead-address", planHost(home)]);
-    expect(JSON.stringify(ask)).toContain(`${planHost(home)} has no plan shared in it yet.`);
+    expect(String(ask.narration), JSON.stringify(ask)).toBe(`${planHost(home)} has no plan shared in it yet.`);
     const intents = join(pay, "aidlc", "spaces", "default", "intents");
     expect(existsSync(intents) ? readdirSync(intents).filter((name) => name !== "intents.json") : []).toEqual([]);
   });

@@ -169,7 +169,12 @@ function pick(team: { agent: AgentStandIn; person: PersonScript }, d: Directive,
   const choice = choices.find((c) => c.label === label);
   expect(choice?.command, `${label} in ${JSON.stringify(d)}`).toBeString();
   team.person.pick(String(d.question), choices.map((c) => c.label), label);
-  const ran = team.agent.host.bash(choice!.command!);
+  // As the agent types it on opencode on Windows, whose shell is cmd.exe: its skill has single-quoted words put
+  // in double quotes.
+  const typed = team.agent.host instanceof OpencodeScopeHost && process.platform === "win32"
+    ? choice!.command!.replaceAll("'", '"')
+    : choice!.command!;
+  const ran = team.agent.host.bash(typed);
   expect(ran.status, ran.stdout + ran.stderr).toBe(0);
   return JSON.parse(ran.stdout.trim().split("\n").at(-1) ?? "{}") as Record<string, unknown>;
 }
