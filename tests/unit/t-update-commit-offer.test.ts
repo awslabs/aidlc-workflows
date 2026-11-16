@@ -1,0 +1,252 @@
+// covers: function:ownFilesToCommit, function:writtenByInstall, function:reposMoveToCommit, file:core/tools/aidlc-brought-files.ts
+//
+// After an update, AI-DLC's own files that git shows changed are worked out
+// from the install record and git alone: the ones that still hold exactly what
+// AI-DLC wrote, with nothing of the person's changed since the last commit, are
+// what the update's own commit takes; every other file of AI-DLC's that changed
+// is left for the person. Their uncommitted words in a shared file, their own
+// scope file rendered into the stage tables, and a file they edited after the
+// refresh are never taken. The same release committed from an LF checkout and
+// from a CRLF one (Git for Windows' default) is the same tree, so two machines
+// that both commit an update commit the same bytes.
+
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { appendFileSync, cpSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { join } from "node:path";
+import { ownFilesToCommit } from "../../dist/claude/.claude/tools/aidlc-brought-files.ts";
+import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
+import { REPO_ROOT } from "../harness/fixtures.ts";
+import { cleanupTeamBuild, git, tempDir } from "../harness/team-build.ts";
+import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+afterEach(cleanupTeamBuild);
+
+const DIRS = { claude: ".claude", codex: ".codex", cursor: ".cursor" } as const;
+type Harness = keyof typeof DIRS;
+
+function earlier(version: string): string {
+  const [major, minor, patch] = version.split("-")[0].split(".").map(Number);
+  return patch > 0 ? `${major}.${minor}.${patch - 1}` : `${major}.${minor - 1}.0`;
+}
+
+// This release's tree stamped as the one before, with a few files that release
+// wrote otherwise, as a real step changes them.
+function earlierTree(harness: Harness): string {
+  const root = tempDir(`earlier-${harness}`);
+  cpSync(join(REPO_ROOT, "dist", harness), root, { recursive: true });
+  const data = join(root, DIRS[harness], "tools", "data");
+  const stamp = join(data, "aidlc-stamp.json");
+  writeFileSync(stamp, `${JSON.stringify({ ...JSON.parse(readFileSync(stamp, "utf-8")), frameworkVersion: earlier(AIDLC_VERSION) }, null, 2)}\n`);
+  const skills = [join(root, DIRS[harness], "skills"), join(root, ".agents", "skills")].find((dir) => existsSync(join(dir, "aidlc", "SKILL.md")));
+  appendFileSync(join(skills ?? "", "aidlc", "SKILL.md"), "\n<!-- the release before -->\n");
+  for (const name of ["stage-graph.json", "scope-grid.json"]) appendFileSync(join(data, name), "\n");
+  const harnessJson = join(data, "harness.json");
+  writeFileSync(harnessJson, `${JSON.stringify({ ...JSON.parse(readFileSync(harnessJson, "utf-8")), productName: "The release before" }, null, 2)}\n`);
+  writeFileSync(join(root, DIRS[harness], "aidlc-common", "retired-note.md"), "A file the next release does not ship.\n");
+  if (harness === "cursor") appendFileSync(join(root, "AGENTS.md"), "\nA line the next release drops.\n");
+  if (harness === "claude") {
+    // Its own announcement, and an allow entry this release no longer ships (the refresh keeps that one, as it
+    // keeps the person's own), as 2.11.3's settings.json differs from 2.11.4's.
+    const settings = join(root, DIRS[harness], "settings.json");
+    const value = JSON.parse(readFileSync(settings, "utf-8")) as { permissions: { allow: string[] } };
+    writeFileSync(settings, `${JSON.stringify({ ...value, companyAnnouncements: ["The release before."], permissions: { ...value.permissions, allow: [...value.permissions.allow, "Bash(aidlc retired)"] } }, null, 2)}\n`);
+  }
+  return root;
+}
+
+function config(project: string, harness: Harness, from: string): void {
+  const home = tempDir("home");
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    HOME: home,
+    USERPROFILE: home,
+    CLAUDE_CONFIG_DIR: join(home, ".claude"),
+    CODEX_HOME: join(home, ".codex"),
+    XDG_CONFIG_HOME: join(home, ".config"),
+    AIDLC_INSTALL_ROOT: join(home, "machine"),
+    AIDLC_BIN_DIR: join(home, "machine", "bin"),
+    NO_COLOR: "1",
+  };
+  for (const key of ["CLAUDE_PROJECT_DIR", "AIDLC_PROJECT_DIR", "AIDLC_TEST_CONFIG_TTY"]) delete env[key];
+  const tool = join(REPO_ROOT, "dist", harness, DIRS[harness], "tools", "aidlc.ts");
+  const r = spawnSync(process.execPath, [tool, "config", "--harness", harness, "--mcp", "none", "--yes", "--quiet", "--from", from, "--project-dir", project], {
+    cwd: project,
+    encoding: "utf-8",
+    env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+}
+
+function repo(dir: string, autocrlf = "false"): void {
+  git(dir, ["config", "user.name", "lee"]);
+  git(dir, ["config", "user.email", "lee@example.test"]);
+  git(dir, ["config", "core.autocrlf", autocrlf]);
+}
+
+// A project the earlier release set up, all committed; `before` runs first.
+function projectBehind(harness: Harness, before?: (dir: string) => void): { dir: string; tree: string } {
+  const dir = tempDir(`update-${harness}`);
+  git(dir, ["init", "-q", "-b", "main"]);
+  repo(dir);
+  const tree = earlierTree(harness);
+  config(dir, harness, tree);
+  before?.(dir);
+  git(dir, ["add", "-A"]);
+  git(dir, ["commit", "-q", "-m", "setup"]);
+  return { dir, tree };
+}
+
+// What git shows changed against HEAD, and new files it does not ignore.
+const changed = (dir: string): Set<string> =>
+  new Set([...git(dir, ["diff", "--name-only", "HEAD"]).split("\n"), ...git(dir, ["ls-files", "--others", "--exclude-standard"]).split("\n")].filter(Boolean));
+
+// The refresh, as the session start runs it: git's changes listed first.
+function refresh(dir: string, harness: Harness): (path: string) => boolean {
+  const before = changed(dir);
+  config(dir, harness, join(REPO_ROOT, "dist", harness));
+  return (path) => before.has(path);
+}
+
+describe("what the update's own commit takes", () => {
+  test("every file the refresh wrote, the data files and a file it removed; nothing left", () => {
+    const { dir } = projectBehind("claude");
+    const changedBefore = refresh(dir, "claude");
+    const { commit, left } = ownFilesToCommit(dir, false, changedBefore);
+    for (const path of [
+      ".claude/skills/aidlc/SKILL.md",
+      ".claude/tools/data/aidlc-stamp.json",
+      ".claude/tools/data/aidlc-manifest.json",
+      ".claude/tools/data/harness.json",
+      ".claude/tools/data/stage-graph.json",
+      ".claude/tools/data/scope-grid.json",
+      ".claude/aidlc-common/retired-note.md",
+      ".claude/settings.json",
+    ]) expect(commit).toContain(path);
+    expect(left).toEqual([]);
+    // What git shows changed is exactly what it takes.
+    expect([...commit].sort()).toEqual([...changed(dir)].sort());
+  });
+
+  test("the person's uncommitted words in .gitignore and settings.json leave those two files out", () => {
+    const { dir } = projectBehind("claude");
+    appendFileSync(join(dir, ".gitignore"), "\n# ours\nnode_modules/\n");
+    const settings = join(dir, ".claude", "settings.json");
+    const value = JSON.parse(readFileSync(settings, "utf-8")) as { permissions?: { allow?: string[] } };
+    writeFileSync(settings, `${JSON.stringify({ ...value, permissions: { ...value.permissions, allow: [...(value.permissions?.allow ?? []), "Bash(make test)"] } }, null, 2)}\n`);
+    const changedBefore = refresh(dir, "claude");
+    const { commit, left, held } = ownFilesToCommit(dir, false, changedBefore);
+    expect(left).toEqual([".claude/settings.json", ".gitignore"]);
+    expect(held).toBe(true);
+    expect(commit).not.toContain(".gitignore");
+    expect(commit).not.toContain(".claude/settings.json");
+    expect(commit).toContain(".claude/skills/aidlc/SKILL.md");
+    expect(readFileSync(settings, "utf-8")).toContain("Bash(make test)");
+  });
+
+  test("AI-DLC's part of AGENTS.md goes in unless the person's own part changed too", () => {
+    const clean = projectBehind("cursor");
+    expect(ownFilesToCommit(clean.dir, false, refresh(clean.dir, "cursor")).commit).toContain("AGENTS.md");
+    const ours = projectBehind("cursor", (dir) => writeFileSync(join(dir, "AGENTS.md"), `# Our project\n\n${readFileSync(join(dir, "AGENTS.md"), "utf-8")}`));
+    appendFileSync(join(ours.dir, "AGENTS.md"), "\nOur own line, not committed yet.\n");
+    const { commit, left } = ownFilesToCommit(ours.dir, false, refresh(ours.dir, "cursor"));
+    expect(left).toContain("AGENTS.md");
+    expect(commit).not.toContain("AGENTS.md");
+  });
+
+  test("asked with nothing known of before the refresh, a settings file config merges is left and the rest goes", () => {
+    const { dir } = projectBehind("claude");
+    refresh(dir, "claude");
+    const { commit, left } = ownFilesToCommit(dir, false, null);
+    expect(left).toEqual([".claude/settings.json"]);
+    expect(commit).toContain(".claude/skills/aidlc/SKILL.md");
+  });
+
+  test("a file edited after the refresh is left; the rest still goes", () => {
+    const { dir } = projectBehind("claude");
+    const changedBefore = refresh(dir, "claude");
+    appendFileSync(join(dir, ".claude", "skills", "aidlc", "SKILL.md"), "\nmine\n");
+    const { commit, left } = ownFilesToCommit(dir, false, changedBefore);
+    expect(left).toEqual([".claude/skills/aidlc/SKILL.md"]);
+    expect(commit).toContain(".claude/tools/data/aidlc-stamp.json");
+  });
+
+  test("the person's own scope file rendered into the tables leaves the tables, the graph and the grid out", () => {
+    const { dir } = projectBehind("claude");
+    const shipped = readFileSync(join(dir, ".claude", "scopes", "aidlc-feature.md"), "utf-8");
+    writeFileSync(join(dir, ".claude", "scopes", "aidlc-ours.md"), shipped.replace(/^name: .*$/m, "name: ours"));
+    const { commit, left } = ownFilesToCommit(dir, false, refresh(dir, "claude"));
+    for (const path of [".claude/tools/data/stage-graph.json", ".claude/tools/data/scope-grid.json", ".claude/skills/aidlc/tables.md"]) {
+      expect(left).toContain(path);
+      expect(commit).not.toContain(path);
+    }
+    expect(commit).not.toContain(".claude/scopes/aidlc-ours.md");
+    expect(left).not.toContain(".claude/scopes/aidlc-ours.md");
+  });
+
+  test("the repo list's move goes with the files, nothing else of aidlc/; in a Unit's build it stays out", () => {
+    const { dir } = projectBehind("claude", (d) => writeFileSync(join(d, "repos.json"), `${JSON.stringify({ repos: [{ name: "billing" }] }, null, 2)}\n`));
+    writeFileSync(join(dir, "aidlc", "notes.md"), "work not shared yet\n");
+    const changedBefore = refresh(dir, "claude");
+    expect(git(dir, ["status", "--porcelain"])).toContain("R  repos.json -> aidlc/repos.json");
+    const { commit } = ownFilesToCommit(dir, false, changedBefore);
+    expect(commit).toContain("repos.json");
+    expect(commit).toContain("aidlc/repos.json");
+    expect(commit.filter((path: string) => path.startsWith("aidlc/"))).toEqual(["aidlc/repos.json"]);
+    expect(ownFilesToCommit(dir, true, changedBefore).commit.filter((path: string) => path === "repos.json" || path.startsWith("aidlc/"))).toEqual([]);
+  });
+});
+
+// Every hash the committed record names is the sha256 of the blob committed at
+// that path, and its keys are "/"-separated in the order a refresh walks them.
+function recordMatchesCommit(dir: string, harness: Harness): void {
+  const manifest = JSON.parse(git(dir, ["show", `HEAD:${DIRS[harness]}/tools/data/aidlc-manifest.json`])) as { files: Record<string, string> };
+  const keys = Object.keys(manifest.files);
+  expect(keys.filter((key) => key.includes("\\"))).toEqual([]);
+  for (const [path, hash] of Object.entries(manifest.files)) {
+    const blob = spawnSync("git", ["cat-file", "blob", `HEAD:${path}`], { cwd: dir, maxBuffer: 64 * 1024 * 1024 });
+    expect(blob.status, path).toBe(0);
+    expect(`sha256:${createHash("sha256").update(blob.stdout).digest("hex")}`, path).toBe(hash);
+  }
+  const byFolder = (a: string, b: string): number => {
+    const x = a.split("/");
+    const y = b.split("/");
+    for (let at = 0; at < Math.min(x.length, y.length); at++) {
+      if (x[at] === y[at]) continue;
+      // A folder's files come after the files beside it only by name, as the walk sorts each folder's entries.
+      return x[at] < y[at] ? -1 : 1;
+    }
+    return x.length - y.length;
+  };
+  const inFolder = (prefix: string) => keys.filter((key) => key.startsWith(prefix));
+  const own = inFolder(`${DIRS[harness]}/`);
+  expect(own).toEqual([...own].sort(byFolder));
+}
+
+describe("two machines commit the same bytes for the same release", () => {
+  for (const harness of ["claude", "codex"] as const) {
+    test(`${harness}: an LF checkout and a CRLF checkout commit the same tree`, () => {
+      const { dir: origin } = projectBehind(harness);
+      const trees: string[] = [];
+      for (const autocrlf of ["false", "true"]) {
+        const clone = tempDir(`clone-${harness}-${autocrlf}`);
+        git(clone, ["-c", `core.autocrlf=${autocrlf}`, "clone", "-q", origin, "."]);
+        repo(clone, autocrlf);
+        const { commit, left } = ownFilesToCommit(clone, false, refresh(clone, harness));
+        expect(left).toEqual([]);
+        expect(commit.length).toBeGreaterThan(0);
+        git(clone, ["add", "--", ...commit]);
+        git(clone, ["commit", "-q", "-m", "Update AI-DLC"]);
+        expect(git(clone, ["status", "--porcelain"])).toBe("");
+        recordMatchesCommit(clone, harness);
+        trees.push(git(clone, ["rev-parse", "HEAD^{tree}"]));
+      }
+      const release = spawnSync("git", ["--git-dir", join(origin, ".git"), "rev-parse", "HEAD^{tree}"], { encoding: "utf-8" }).stdout.trim();
+      console.log(`${harness} on ${process.platform}: start tree ${release}, update tree ${trees[0]}`);
+      expect(trees[1]).toBe(trees[0]);
+    });
+  }
+});

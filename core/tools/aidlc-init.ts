@@ -48,6 +48,7 @@ import {
   aidlcHookRegistrations,
   aidlcHookTarget,
   assertProjectionPathHasNoSymlinks,
+  HARNESS_IDENTITY_KEYS,
   hostToolPath,
   emptyJsonObject,
   insertJsoncSetting,
@@ -5414,27 +5415,6 @@ function generatedOverlayCandidate(rel: string, harnessDir: string): boolean {
     rel.startsWith(".github/skills/") ||
     rel.startsWith(".github/agents/");
 }
-
-// Keys the installed source owns: a refresh takes them from the new tree, not
-// the project's copy. `name` and `kiroLayout` belong here with `distribution`:
-// a project moved to another row that kept its old name or layout would still
-// read as the old row to every reader that keys on them.
-const HARNESS_IDENTITY_KEYS = new Set([
-  "schemaVersion",
-  "distribution",
-  "name",
-  "kiroLayout",
-  "productName",
-  "configNextStep",
-  "hookActivation",
-  "newChatStep",
-  "directiveMaxBytes",
-  "harnessDir",
-  "rulesSubdir",
-  "statusLine",
-  "agentFinishRecorded",
-  "hostShell",
-]);
 
 const CLAUDE_SHIPPED_KEYS = [
   "companyAnnouncements",

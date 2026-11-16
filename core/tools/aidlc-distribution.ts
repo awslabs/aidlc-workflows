@@ -1885,3 +1885,67 @@ export function missingJsonEntries(current: string, shippedText: string, under: 
     })
     .map((entry) => entry.id);
 }
+
+// The Kiro IDE steering file AI-DLC writes the active space's memory text into
+// (aidlc-includes.ts kiroIdeSteering).
+export const KIRO_IDE_STEERING = ".kiro/steering/aidlc-active-memory.md";
+
+// The folders outside the harness dir where a harness keeps the skills and
+// agents the engine generates and a plugin composes: Codex's `.agents/`, and
+// Copilot's `.github/` (its skills and agent files both live there).
+export const SHARED_SURFACE_DIRS = [".agents", ".github"] as const;
+
+// The skills folders a refresh looks in for the /aidlc skill, the harness's
+// own first.
+export function aidlcSkillsDirs(harnessDir: string): string[] {
+  return [`${harnessDir}/skills`, ...SHARED_SURFACE_DIRS.map((dir) => `${dir}/skills`)];
+}
+
+// Written by the engine from project state, so never recorded as shipped: a
+// refresh writes the staged copy over whatever is there, and never reports it
+// as a local change. Kiro IDE's steering file carries the project's memory text
+// (aidlc-includes.ts kiroIdeSteering).
+export function unbaselinedGenerated(harnessDir: string): string[] {
+  return [
+    ...["harness.json", "stage-graph.json", "scope-grid.json"].map((name) => `${harnessDir}/tools/data/${name}`),
+    ...(harnessDir === ".kiro" ? [KIRO_IDE_STEERING] : []),
+  ];
+}
+
+// The /aidlc skill: in the first skills folder that holds it. Config asks of
+// the staged tree; doctor asks of this install's record, so another harness's
+// skill folder in the project does not move its pick.
+export function aidlcSkillRel(harnessDir: string, present: (rel: string) => boolean): string {
+  const dirs = aidlcSkillsDirs(harnessDir);
+  return `${dirs.find((dir) => present(`${dir}/aidlc/SKILL.md`)) ?? dirs[0]}/aidlc/SKILL.md`;
+}
+
+// The scope and stage tables beside that skill, when they are there. They are
+// recorded as shipped, and a refresh renders them again from the compiled
+// graph, a plugin's rows included, so it stops on them only when they are not
+// a regular file.
+export function refreshedTablesRel(harnessDir: string, present: (rel: string) => boolean): string | undefined {
+  const rel = aidlcSkillRel(harnessDir, present).replace(/SKILL\.md$/, "tables.md");
+  return present(rel) ? rel : undefined;
+}
+
+// Keys the installed source owns: a refresh takes them from the new tree, not
+// the project's copy. `name` and `kiroLayout` belong here with `distribution`:
+// a project moved to another row that kept its old name or layout would still
+// read as the old row to every reader that keys on them.
+export const HARNESS_IDENTITY_KEYS = new Set([
+  "schemaVersion",
+  "distribution",
+  "name",
+  "kiroLayout",
+  "productName",
+  "configNextStep",
+  "hookActivation",
+  "newChatStep",
+  "directiveMaxBytes",
+  "harnessDir",
+  "rulesSubdir",
+  "statusLine",
+  "agentFinishRecorded",
+  "hostShell",
+]);

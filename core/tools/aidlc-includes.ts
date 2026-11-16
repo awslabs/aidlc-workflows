@@ -32,6 +32,7 @@ import { basename, dirname, join, relative, sep } from "node:path";
 import {
   assertProjectionPathHasNoSymlinks,
   jsonEntriesIsSafe,
+  KIRO_IDE_STEERING,
   managedBlockIsSafe,
   managedBlockMarkers,
   mergeBlock,
@@ -65,7 +66,7 @@ function spaceMemoryRel(space: string): string {
 // A memory too large to put in every chat keeps the reference form, and the
 // engine then sends the rules with each step, as it does on every tool.
 
-export const KIRO_IDE_STEERING = ".kiro/steering/aidlc-active-memory.md";
+export { KIRO_IDE_STEERING };
 
 // The rule layers, in the order the memory resolver applies them; any other
 // Markdown file beside them or under phases/ follows, sorted.

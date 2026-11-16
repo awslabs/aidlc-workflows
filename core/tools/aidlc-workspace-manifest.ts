@@ -210,6 +210,18 @@ export function trackedReposManifestAtRoot(root: string): boolean {
   return entryAt(join(root, REPOS_FILE))?.isFile() === true && rootFileIsTheList(root) && gitTracks(root, REPOS_FILE);
 }
 
+// The move as a refresh made it, not committed yet: HEAD has the list at the
+// root and none in aidlc/, the root has none now, and aidlc/'s holds HEAD's
+// bytes. Its two paths, for the update's own commit; none otherwise.
+export function reposMoveToCommit(root: string): string[] {
+  const id = (args: string[]): string =>
+    spawnSync("git", ["-C", root, ...args], { encoding: "utf-8", timeout: 10_000 }).stdout?.trim() ?? "";
+  if (entryAt(join(root, REPOS_FILE)) || !entryAt(join(root, "aidlc", REPOS_FILE))?.isFile()) return [];
+  const was = id(["rev-parse", "--verify", "--quiet", `HEAD:./${REPOS_FILE}`]);
+  if (was === "" || id(["rev-parse", "--verify", "--quiet", `HEAD:./aidlc/${REPOS_FILE}`]) !== "") return [];
+  return id(["hash-object", "--", `aidlc/${REPOS_FILE}`]) === was ? [REPOS_FILE, `aidlc/${REPOS_FILE}`] : [];
+}
+
 export function reposManifestMovedIntoAidlc(root: string): boolean {
   return !entryAt(join(root, REPOS_FILE)) && entryAt(join(root, "aidlc", REPOS_FILE))?.isFile() === true;
 }
