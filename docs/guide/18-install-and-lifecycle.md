@@ -1530,12 +1530,13 @@ commit message drafted in your repo's style after it (your own words replace
 it). A yes commits only AI-DLC's own files that still hold exactly what it
 wrote, with nothing of yours changed in them since your last commit, and
 `repos.json`'s move into `aidlc/` with them when the refresh made it, through
-your own git (hooks and signing), on your branch; the question names any file it
-leaves for you to look over and commit. A no is not asked again for that
-release. Unattended, on no branch, while a rebase, merge, cherry-pick or revert
-of yours is under way, or when a settings file the refresh merged held your own
-uncommitted changes, it says the same line ending "Commit them so your team gets
-them." instead, and on opencode that line comes with the next step; nothing is
+your own git (hooks and signing), on your branch. The question names any file it
+leaves out, as it cannot be sure they hold only AI-DLC's changes: they are yours
+to look over and commit. A settings file the refresh merged that held your own
+uncommitted changes is one of them, and the rest is still offered. A no is not
+asked again for that release. Unattended, on no branch, or while a rebase, merge,
+cherry-pick or revert of yours is under way, it says the same line ending "Commit
+them so your team gets them." instead, and on opencode that line comes with the next step; nothing is
 said when nothing git tracks changed or the project is not in git. A pinned
 project runs its pinned release and is left as it is. A refresh that cannot
 finish says nothing in the chat and is tried again when the next chat starts;
