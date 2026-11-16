@@ -152,6 +152,35 @@ describe("a take writes the Unit's record where its code goes", () => {
   });
 });
 
+// A record is written by anyone who can push to its repository: its
+// integration_ref is read only in the shapes AI-DLC writes.
+describe("a record's integration_ref is read only as AI-DLC writes it", () => {
+  test("a record commit made by plain git with another shape: the build's view has none", () => {
+    const { home, web, took } = takeCheckoutUi();
+    expect(took.status, took.out).toBe(0);
+    const host = recordHostOf(home, "checkout-ui");
+    const ref = `refs/aidlc/claims/${home.id8}/checkout-ui`;
+    const scratch = tempDir("record-writer");
+    git(scratch, ["init", "-q"]);
+    git(scratch, ["config", "user.name", "someone"]);
+    git(scratch, ["config", "user.email", "someone@example.test"]);
+    git(scratch, ["fetch", "-q", host, `${ref}:refs/tip`]);
+    git(scratch, ["read-tree", "refs/tip"]);
+    const json = JSON.parse(git(scratch, ["show", "refs/tip:unit.json"])) as Record<string, unknown>;
+    json.integration_ref = "refs/tags/v1";
+    const blob = spawnSync("git", ["hash-object", "-w", "--stdin"], { cwd: scratch, input: `${JSON.stringify(json, null, 2)}\n`, encoding: "utf-8" });
+    git(scratch, ["update-index", "--cacheinfo", `100644,${blob.stdout.trim()},unit.json`]);
+    const commit = git(scratch, ["commit-tree", git(scratch, ["write-tree"]), "-p", "refs/tip", "-m", "another shape"]);
+    git(scratch, ["push", "-q", host, `${commit}:${ref}`]);
+    next(web);
+    const build = buildOf(web, "checkout-ui");
+    expect(build).not.toBeNull();
+    const view = unitTools.buildClaimHere(web, { space: "default", dirName: build!.split(/[\\/]/).at(-1)! });
+    expect(view?.payload.unit).toBe("checkout-ui");
+    expect(view?.payload.integration_ref).toBe("");
+  });
+});
+
 describe("a give back writes the record's next commit", () => {
   test("given back from the build: released, the generation one more, on the take's own commit", () => {
     const { home, web, took } = takeCheckoutUi();

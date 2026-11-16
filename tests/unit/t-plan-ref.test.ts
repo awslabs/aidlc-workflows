@@ -11,7 +11,7 @@
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { gitTargetFor, planAtCopy, planFilesNow, planPlaceForShare, planUnitsKept, writePlan } from "../../dist/claude/.claude/tools/aidlc-unit.ts";
@@ -20,6 +20,7 @@ import { seededRecordDir } from "../harness/fixtures.ts";
 import {
   cleanupTeamBuild,
   cloneOf,
+  codeGenerated,
   codeHost,
   DEPENDENCIES,
   ENV,
@@ -29,8 +30,10 @@ import {
   makePlanHome,
   next,
   planRefOf,
+  refundsTaken,
   run,
   STATE,
+  teamWorkspace,
   tempDir,
   TICKET_RULE_WORDS,
   ticketKeyRule,
@@ -70,8 +73,8 @@ function keepTheirChange(dir: string): void {
 }
 
 // A commit on the plan's tip made with plain git, as another writer of the
-// plan would make it: `edit` changes its plan.json.
-function writeOnTip(host: string, id8: string, edit: (plan: Plan) => void): string {
+// plan would make it: `edit` changes its plan.json, `files` adds files beside it.
+function writeOnTip(host: string, id8: string, edit: (plan: Plan) => void, files: Record<string, string> = {}): string {
   const scratch = tempDir("plan-writer");
   git(scratch, ["init", "-q"]);
   git(scratch, ["config", "user.name", "lead"]);
@@ -82,6 +85,7 @@ function writeOnTip(host: string, id8: string, edit: (plan: Plan) => void): stri
   edit(plan);
   const blob = spawnHash(scratch, `${JSON.stringify(plan, null, 2)}\n`);
   git(scratch, ["update-index", "--cacheinfo", `100644,${blob},plan.json`]);
+  for (const [path, text] of Object.entries(files)) git(scratch, ["update-index", "--add", "--cacheinfo", `100644,${spawnHash(scratch, text)},${path}`]);
   const tree = git(scratch, ["write-tree"]);
   const commit = git(scratch, ["commit-tree", tree, "-p", "refs/tip", "-m", `aidlc plan word ${plan.version}`]);
   git(scratch, ["push", "-q", host, `${commit}:${planRefOf(id8)}`]);
@@ -398,6 +402,20 @@ describe("plan.json is read only as a plan holds it", () => {
       ["no stages", (plan) => { delete plan.stages; }],
       ["no per-Unit stages", (plan) => { delete plan.unit_stages; }],
       ["a setting of two lines", (plan) => { plan.settings.Depth = "Standard\n- **Guard Policy**: off"; }],
+      // Case-blind and dot-dropping file systems read these as the record's own files.
+      ["the record's state in capitals", (plan) => { plan.inputs[0].path = "AIDLC-STATE.md"; }],
+      ["the record's audit in capitals", (plan) => { plan.inputs[0].path = "Audit/2026.md"; }],
+      ["a folder ending in a dot", (plan) => { plan.inputs[0].path = "inception./x.md"; }],
+      ["a name ending in a space", (plan) => { plan.inputs[0].path = "inception/x.md "; }],
+      ["an input outside ideation and inception", (plan) => { plan.inputs[0].path = "notes/x.md"; }],
+      ["an input of two lines", (plan) => { plan.inputs[0].path = "inception/x.md\ny.md"; }],
+      ["a word whose generation is text", (plan) => { plan.units[0].word = { generation: "1" }; }],
+      ["a word whose done is not true", (plan) => { plan.units[0].word = { done: "yes" }; }],
+      ["a word whose amendments are not a list", (plan) => { plan.units[0].word = { amendments: {} }; }],
+      ["a word whose amendment has no blob", (plan) => {
+        plan.units[0].word = { amendments: [{ input: plan.inputs[0].path, at: "t", words: "" }] };
+      }],
+      ["a word whose sign-off has no time", (plan) => { plan.units[0].word = { signoff: { words: "ok" } }; }],
     ];
     for (const [what, edit] of bad) {
       const plan = structuredClone(good);
@@ -406,6 +424,52 @@ describe("plan.json is read only as a plan holds it", () => {
     }
     expect(planJsonOf("not json")).toEqual({ format: 0, plan: null });
     expect(planJsonOf(JSON.stringify({ ...good, format: 2 }))).toEqual({ format: 2, plan: null });
+    // An amendment is kept only for one of the plan's own inputs, by a full object id.
+    const listed = structuredClone(good);
+    const blob = "0123456789abcdef0123456789abcdef01234567";
+    listed.units[0].word = { generation: 1, amendments: [
+      { input: listed.inputs[0].path, at: "t", words: "", blob },
+      { input: "inception/not-listed.md", at: "t", words: "", blob },
+      { input: listed.inputs[0].path, at: "t", words: "", blob: "0123abc" },
+    ] };
+    expect(planJsonOf(JSON.stringify(listed)).plan?.units[0].word).toEqual({ generation: 1, amendments: [
+      { input: listed.inputs[0].path, at: "t", words: "", blob },
+    ] });
+  });
+
+  // A word AI-DLC writes never makes the plan unreadable, whatever the lead's words hold.
+  test("every word the lead's steps write reads back: a merge said in two lines, a sign-off, a turn-down, a send-back from Build and Test, opened again", () => {
+    const { home, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    const host = Object.values(home.hosts)[0];
+    const steps: Array<[string, string[]]> = [
+      ["a merge said in two lines", ["merged", "refunds", "--repo", "billing", "--person-words", "merged by hand\nafter the review"]],
+      ["the sign-off setting", ["lead-sign-off", "on"]],
+      ["a sign-off", ["sign-off", "refunds", "--person-words", "looks right"]],
+      ["a turn-down", ["turned-down", "refunds", "--repo", "billing", "--person-words", "the totals are wrong"]],
+      ["a send-back from Build and Test", ["send-back", "refunds", "--person-words", "the totals are wrong"]],
+      ["opened again", ["release", "refunds"]],
+    ];
+    for (const [what, args] of steps) {
+      const done = run(UNIT, args, home.dir);
+      expect(done.status, `${what}: ${done.out}`).toBe(0);
+      expect(planJsonOf(git(host, ["show", `${planRefOf(home.id8)}:plan.json`])).plan, what).not.toBeNull();
+    }
+  });
+
+  test("a plan listing an input outside ideation/ and inception/ is not read, so a take writes nothing of it into the build", () => {
+    const home = makePlanHome();
+    const host = home.hosts["checkout-api"];
+    writeOnTip(host, home.id8, (plan) => {
+      plan.version = 2;
+      plan.inputs.push({ path: "AIDLC-STATE.md", fingerprint: "x" });
+    }, { "inputs/AIDLC-STATE.md": "# Not this build's state\n" });
+    const web = teamWorkspace(home.hosts, "web", ["checkout-web"]);
+    run(UNIT, ["take", "checkout-ui", "--plan", home.id8, "--from", host], web);
+    const intents = join(web, "aidlc", "spaces", "default", "intents");
+    const found = existsSync(intents) ? readdirSync(intents, { recursive: true }).map(String) : [];
+    expect(found.filter((path) => path.endsWith("AIDLC-STATE.md"))).toEqual([]);
   });
 
   test("the plan the share builds always reads back, even for a repository named by an address with no name of its own", () => {

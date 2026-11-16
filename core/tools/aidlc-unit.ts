@@ -1240,6 +1240,20 @@ function payloadAt(projectDir: string, oid: string): UnitClaimPayload | null {
   return readPayload(projectDir, oid) ?? recordPayloadAt(projectDir, oid);
 }
 
+// integration_ref as AI-DLC writes it: a branch here, a remote's branch, or
+// this workspace's copy of the plan. A record is written by anyone who can push
+// to its repository, so any other value reads as none, and takeIntegrationRef
+// then gives way to the plan's branch.
+function recordIntegrationRef(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const plain = (name: string): boolean => name !== "" && !name.startsWith("-") && validGitRefName(`refs/heads/${name}`);
+  const branch = /^refs\/heads\/(.+)$/.exec(value);
+  if (branch !== null) return plain(branch[1]) ? value : "";
+  const tracking = /^refs\/remotes\/([^/]+)\/(.+)$/.exec(value);
+  if (tracking !== null) return plain(tracking[1]) && plain(tracking[2]) ? value : "";
+  return homeCopyOf(value)?.kind === "plan" ? value : "";
+}
+
 // The payload a record commit's unit.json holds, read with no check of the
 // work it is for (a walk back through the record's own history reads it so);
 // null when the commit holds no record this release reads.
@@ -1277,7 +1291,7 @@ function recordPayloadAt(projectDir: string, oid: string): UnitClaimPayload | nu
     generation: read.generation as number,
     nonce: read.nonce,
     base_oid: typeof read.base_oid === "string" ? read.base_oid : "",
-    integration_ref: typeof read.integration_ref === "string" ? read.integration_ref : "",
+    integration_ref: recordIntegrationRef(read.integration_ref),
     claim_ref: claimRecordRef(idSuffix(read.intent_uuid), read.unit),
     predecessor_oid: (read.predecessor_oid as string | null) ?? null,
     gate_rhythm: "per-stage",

@@ -375,7 +375,18 @@ export function planJsonOf(text: string): { format: number; plan: PlanJson | nul
   }
   const value = read as Record<string, unknown> | null;
   const format = typeof value?.format === "number" && Number.isInteger(value.format) ? value.format : 0;
-  return { format, plan: format >= 1 && format <= PLAN_FORMAT && value !== null && planShaped(value) ? value as PlanJson : null };
+  if (!(format >= 1 && format <= PLAN_FORMAT && value !== null && planShaped(value))) return { format, plan: null };
+  const plan = value as PlanJson;
+  // An amendment's text is written at its input in a build: kept only for one
+  // of this plan's own inputs, by its full object id.
+  const inputs = new Set(plan.inputs.map((input) => input.path));
+  for (const unit of plan.units) {
+    const amendments = unit.word.amendments;
+    if (Array.isArray(amendments)) {
+      unit.word.amendments = amendments.filter((entry: { input: string; blob: unknown }) => inputs.has(entry.input) && isOid(entry.blob));
+    }
+  }
+  return { format, plan };
 }
 
 const isString = (value: unknown): value is string => typeof value === "string";
@@ -384,12 +395,12 @@ const isObject = (value: unknown): value is Record<string, unknown> =>
 // A branch git is given as a name, never an option or a refspec.
 const isPlainBranch = (value: unknown): boolean =>
   isString(value) && value !== "" && !value.startsWith("-") && !/[\s:~^?*[\\]|\.\.|@\{/.test(value) && !value.endsWith("/");
-// A path inside a build's record, as homeInputPaths writes it: never a climb,
-// an absolute path, a backslash, the record's state or its audit.
+// A path inside a build's record, as homeInputPaths writes it: under ideation/
+// or inception/ only, so no file system's own reading of a name (case, a
+// trailing dot or space) reaches the record's state, audit or engine folder.
 const isRecordPath = (value: unknown): boolean =>
-  isString(value) && value !== "" && !value.startsWith("/") && !value.includes("\\") && !/^[A-Za-z]:/.test(value) &&
-  value.split("/").every((part) => part !== "" && part !== "." && part !== "..") &&
-  value !== "aidlc-state.md" && !value.startsWith("audit/") && !value.startsWith(".aidlc-engine/");
+  isLine(value) && /^(ideation|inception)\//.test(value) && !/[\\:]/.test(value) &&
+  value.split("/").every((part) => part !== "" && part !== "." && part !== ".." && part.trim() === part && !part.endsWith("."));
 
 // One line of text: a value that goes into a state field or a message.
 const isLine = (value: unknown): value is string => isString(value) && !/[\r\n]/.test(value);
@@ -397,6 +408,33 @@ const isRepo = (value: unknown): value is string => isString(value) && isValidRe
 const isUnit = (value: unknown): value is string => isString(value) && validateUnitName(value) === null;
 const isStage = (value: unknown): value is string => isString(value) && /^[a-z0-9][a-z0-9-]*$/.test(value);
 const isAddress = (value: unknown): value is string => isLine(value) && value !== "" && !value.startsWith("-");
+const isOid = (value: unknown): boolean => isString(value) && /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(value);
+
+// The lead's word on a Unit as UnitWord holds it: each field
+// of its shape, or absent; a field this release does not know is carried. A
+// repository is a name or "." (the workspace's own, as a record names it); a
+// Build and Test send-back names none; the lead's words may hold line breaks.
+function isWord(word: unknown): boolean {
+  if (!isObject(word)) return false;
+  const isWordRepo = (value: unknown): boolean => value === "." || isRepo(value);
+  const may = (value: unknown, check: (value: unknown) => boolean): boolean => value === undefined || check(value);
+  const each = (list: unknown, check: (entry: Record<string, unknown>) => boolean): boolean =>
+    list === undefined || (Array.isArray(list) && list.every((entry) => isObject(entry) && check(entry)));
+  return may(word.generation, Number.isInteger) && may(word.done, (value) => value === true) &&
+    each(word.verdicts, (entry) => isWordRepo(entry.repo) && typeof entry.merged === "boolean" &&
+      may(entry.head, isLine) && may(entry.commit, isLine) && may(entry.how, isString)) &&
+    may(word.turned_down, (down) => isObject(down) && (isWordRepo(down.repo) || (down.repo === "" && down.from === "build-and-test")) &&
+      isObject(down.heads) &&
+      Object.entries(down.heads).every(([repo, head]) => isWordRepo(repo) && isLine(head)) && isString(down.words) && isLine(down.at) &&
+      may(down.from, (from) => from === "build-and-test") && may(down.person_reply, isString)) &&
+    may(word.signoff, (signoff) => isObject(signoff) && isString(signoff.words) && isLine(signoff.at)) &&
+    each(word.said_merged, (entry) => isWordRepo(entry.repo) && may(entry.head, isLine) && isString(entry.words) && isLine(entry.at)) &&
+    // An answer's time is the proposal's, as its builder's record gave it.
+    each(word.answers, (entry) => isLine(entry.input) && isString(entry.at) &&
+      (entry.answer === "approved" || entry.answer === "turned down") && may(entry.words, isString)) &&
+    each(word.amendments, (entry) => isLine(entry.input) && isLine(entry.at) && isString(entry.words) && isString(entry.blob)) &&
+    may(word.open_again, (open) => isObject(open) && isLine(open.at));
+}
 
 function planShaped(plan: Record<string, unknown>): boolean {
   const work = plan.work;
@@ -408,7 +446,7 @@ function planShaped(plan: Record<string, unknown>): boolean {
       (repo.address === null || isAddress(repo.address)) && (repo.branch === null || isPlainBranch(repo.branch))) &&
     Array.isArray(plan.units) && plan.units.every((unit) => isObject(unit) && isUnit(unit.name) &&
       Array.isArray(unit.waits_on) && unit.waits_on.every(isUnit) && Array.isArray(unit.repos) && unit.repos.every(isRepo) &&
-      isRepo(unit.record) && isObject(unit.word)) &&
+      isRepo(unit.record) && isWord(unit.word)) &&
     (plan.skeleton === null || isUnit(plan.skeleton)) &&
     isObject(plan.settings) && Object.values(plan.settings).every(isLine) &&
     isObject(plan.stages) && Object.keys(plan.stages).every(isStage) && Object.values(plan.stages).every(isStage) &&
