@@ -822,9 +822,10 @@ export function mergeBlock(
   // recorded from LF), so a refresh never rewrites the record for it. The
   // records are matched in order, this harness's own first, so another
   // harness's record of the same part in other line endings never stands in.
+  // A part no record matches is recorded in its LF form (sha256Lf).
   const firstMatching = (text: string, known: readonly (string | undefined)[]): string =>
     known.find((hash): hash is string => hash !== undefined && sha256Matching(text, [hash]) === hash) ??
-      sha256Bytes(text);
+      sha256Lf(text);
   const blockHash = firstMatching(block, recorded);
   if (beginAt >= 0) {
     if (endAt < beginAt) return { error: "managed end marker precedes its begin marker" };
@@ -951,7 +952,7 @@ export function sha256File(path: string): string {
 export function sha256Matching(value: string | Buffer, known: readonly (string | undefined)[]): string {
   const own = sha256Bytes(value);
   if (known.length === 0 || known.includes(own)) return own;
-  const lf = Buffer.from(value).toString("latin1").replaceAll("\r\n", "\n");
+  const lf = lfForm(value);
   for (const form of [lf, lf.replaceAll("\n", "\r\n")]) {
     const hash = sha256Bytes(Buffer.from(form, "latin1"));
     if (known.includes(hash)) return hash;
@@ -966,6 +967,19 @@ export function sha256Matching(value: string | Buffer, known: readonly (string |
 export function holdsRecordedWrite(content: string | Buffer, hash: string): boolean {
   const text = typeof content === "string" ? content : content.toString("utf-8");
   return sha256Matching(content, [hash]) === hash || sha256Matching(withSpace(text, "default"), [hash]) === hash;
+}
+
+// The bytes with every CRLF made LF (latin1 keeps each byte as it is).
+function lfForm(value: string | Buffer): string {
+  return Buffer.from(value).toString("latin1").replaceAll("\r\n", "\n");
+}
+
+// The hash config records for a file or part it writes: its LF form's, the
+// form git commits from a CRLF checkout and an LF one alike, so two machines
+// that refresh the same project write the same record. Readers match it
+// through sha256Matching.
+export function sha256Lf(value: string | Buffer): string {
+  return sha256Bytes(Buffer.from(lfForm(value), "latin1"));
 }
 
 export function sha256FileMatching(path: string, known: readonly (string | undefined)[]): string {

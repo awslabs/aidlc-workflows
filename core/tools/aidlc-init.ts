@@ -79,6 +79,7 @@ import {
   sha256Bytes,
   sha256File,
   sha256FileMatching,
+  sha256Lf,
   sha256Matching,
   shippedRootIntegrationPath,
   unionBlocks,
@@ -10216,10 +10217,11 @@ function planManagedFiles(
           (priorHash !== undefined && modelStamped.has(rel) && composedRecords.has(rel));
         // A file staged from the project's own CRLF checkout (Codex's
         // config.toml, Kiro CLI's mcp.json) keeps the record it equals once
-        // line endings are set aside, so a clone's refresh leaves it as committed.
+        // line endings are set aside, so a clone's refresh leaves it as
+        // committed; any other is recorded in its LF form (sha256Lf).
         const recordHash = priorHash !== undefined && hash !== priorHash && sha256FileMatching(source, [priorHash]) === priorHash
           ? priorHash
-          : hash;
+          : sha256Lf(readFileSync(source));
         const nextHash = retainBaseline
           ? regenerated.has(rel) && targetRegular && unmodified ? composedRecords.get(rel) ?? recordHash : priorHash
           : composedRecords.get(rel) ?? recordHash;

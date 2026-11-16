@@ -4894,7 +4894,8 @@ describe("t243 project initialization", () => {
       const contribution = {
         policy: "managed-block",
         marker: "gitignore",
-        hash: sha256Bytes(block),
+        // Recorded in its LF form, as git commits it.
+        hash: sha256Bytes(block.replaceAll("\r\n", "\n")),
       };
       const baseline = JSON.parse(readFileSync(manifestPath, "utf-8")) as {
         files: Record<string, string>;

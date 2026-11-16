@@ -258,6 +258,64 @@ describe("two machines commit the same bytes for the same release", () => {
       expect(trees[1]).toBe(trees[0]);
     });
   }
+
+  // An origin the earlier release set up, cloned with an LF and a CRLF checkout, each refreshed and its update
+  // committed as the offer takes it; `check` reads each clone after its refresh. Returns the two update trees.
+  function bothCheckouts(origin: string, harness: Harness, check: (clone: string, commit: string[]) => void): string[] {
+    return ["false", "true"].map((autocrlf) => {
+      const clone = tempDir(`clone-${harness}-${autocrlf}`);
+      git(clone, ["-c", `core.autocrlf=${autocrlf}`, "clone", "-q", origin, "."]);
+      repo(clone, autocrlf);
+      const { commit, left } = ownFilesToCommit(clone, refresh(clone, harness));
+      expect(left).toEqual([]);
+      check(clone, commit);
+      git(clone, ["add", "--", ...commit]);
+      git(clone, ["commit", "-q", "-m", "Update AI-DLC"]);
+      recordMatchesCommit(clone, harness);
+      return git(clone, ["rev-parse", "HEAD^{tree}"]);
+    });
+  }
+
+  function originAt(harness: Harness, tree: string, before?: (dir: string) => void): string {
+    const origin = tempDir(`update-${harness}-origin`);
+    git(origin, ["init", "-q", "-b", "main"]);
+    repo(origin);
+    config(origin, harness, tree);
+    before?.(origin);
+    git(origin, ["add", "-A"]);
+    git(origin, ["commit", "-q", "-m", "setup"]);
+    return origin;
+  }
+
+  test("codex: a release that changes config.toml, refreshed on an LF and a CRLF checkout, commits the same tree", () => {
+    const origin = originAt("codex", earlierTree("codex", true));
+    const trees = bothCheckouts(origin, "codex", (_clone, commit) => expect(commit).toContain(".codex/config.toml"));
+    expect(trees[1]).toBe(trees[0]);
+  });
+
+  test("cursor: a release that changes AI-DLC's part of AGENTS.md commits the same tree from both checkouts", () => {
+    const origin = originAt("cursor", earlierTree("cursor"));
+    const trees = bothCheckouts(origin, "cursor", (_clone, commit) => expect(commit).toContain("AGENTS.md"));
+    expect(trees[1]).toBe(trees[0]);
+  });
+
+  test("codex: config.toml with the team's own table, recorded in CRLF by an earlier release on Windows, keeps the table and commits the same tree", () => {
+    const tree = earlierTree("codex", true);
+    const origin = originAt("codex", tree, (dir) => {
+      appendFileSync(join(dir, ".codex", "config.toml"), "\n[profiles.ours]\nmodel = \"ours\"\n");
+      config(dir, "codex", tree);
+      const manifestPath = join(dir, ".codex", "tools", "data", "aidlc-manifest.json");
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as { files: Record<string, string> };
+      const crlf = readFileSync(join(dir, ".codex", "config.toml"), "utf-8").replaceAll("\n", "\r\n");
+      manifest.files[".codex/config.toml"] = `sha256:${createHash("sha256").update(crlf).digest("hex")}`;
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    });
+    const trees = bothCheckouts(origin, "codex", (clone, commit) => {
+      expect(readFileSync(join(clone, ".codex", "config.toml"), "utf-8")).toContain("[profiles.ours]");
+      expect(commit).toContain(".codex/config.toml");
+    });
+    expect(trees[1]).toBe(trees[0]);
+  });
 });
 
 describe("unit commit-record --update", () => {
