@@ -242,9 +242,9 @@ export const UNIT_GRAMMAR: Readonly<Record<string, UnitGrammar>> = {
   },
   "commit-record": {
     name: false,
-    options: ["commit-message-file"],
+    options: ["commit-message-file", "leave"],
     switches: ["update"],
-    usage: "unit commit-record [--update] [--commit-message-file <file>]",
+    usage: "unit commit-record [--update [--leave <path>]...] [--commit-message-file <file>]",
   },
   gate: {
     name: true,

@@ -261,7 +261,7 @@ describe.skipIf(SKIP_REASON !== null)("each project catches up the next time it 
     expect(first.stdout).toContain(catchUpAsked(dir, false));
   });
 
-  test("unattended, on no branch, or with a settings file holding their uncommitted words, today's line and no offer", () => {
+  test("unattended or on no branch, today's line and no offer; a settings file that held their words is left and named", () => {
     const unattended = project(earlierTree);
     const saved = env;
     env = { ...env, AIDLC_UNATTENDED: "1" };
@@ -282,10 +282,11 @@ describe.skipIf(SKIP_REASON !== null)("each project catches up the next time it 
     const settings = join(held, ".claude", "settings.json");
     const value = JSON.parse(readFileSync(settings, "utf-8")) as { permissions?: { allow?: string[] } };
     writeFileSync(settings, `${JSON.stringify({ ...value, permissions: { ...value.permissions, allow: [...(value.permissions?.allow ?? []), "Bash(make test)"] } }, null, 2)}\n`);
+    // The rest is offered; the settings file that held their words is named and left by the yes.
     const words = sessionStart(held, "catch-up, settings with their words");
-    expect(words.stdout).toContain("TELL ONCE");
-    expect(words.stdout).toContain("Commit them so your team gets them.");
-    expect(words.stdout).not.toContain("Want me to commit");
+    expect(words.stdout).toContain("Want me to commit them on main, as one commit of their own? Nothing is pushed. I'd leave " +
+      ".claude/settings.json out, as I cannot be sure it holds only AI-DLC's changes: it is yours to look over and commit.");
+    expect(words.stdout).toContain("unit commit-record --update --leave .claude/settings.json --commit-message-file");
   });
 
   // In a Unit's build the update's own commit is offered as anywhere, the list's move with it: none of its files is

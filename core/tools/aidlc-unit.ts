@@ -6454,10 +6454,22 @@ export function reposCommitOffer(pd: string, unitBuild: boolean): { mark: string
 // commit it made is in its output. `--update`: AI-DLC's own files after an
 // update in its place (ownFilesToCommit), in a Unit's build too. A settings
 // file config merges goes in only where the session start's offer for this
-// release drafted its message, as it offers only when it saw that file
-// unchanged before the refresh; asked any other way, it is left.
+// release drafted its message; asked any other way, it is left. `--leave`,
+// once per file the session start saw changed before the refresh (it writes the
+// whole command), leaves that file; a path that is not one inside the project
+// is refused before git is asked anything.
 function commitRecord(args: string[], projectDir?: string): void {
   const update = parseArgs(args).bareFlags.has("update");
+  const leave: string[] = [];
+  for (let at = 0; at < args.length && args[at] !== "--"; at++) {
+    if (args[at] === "--leave") leave.push(args[++at] ?? "");
+    else if (args[at].startsWith("--leave=")) leave.push(args[at].slice("--leave=".length));
+  }
+  const outside = leave.find((path) => path === "" || path.startsWith("-") || isAbsolute(path) || /^[A-Za-z]:/.test(path) ||
+    path.split(/[\\/]/).includes(".."));
+  if (outside !== undefined) {
+    fail(`--leave takes a path inside this project, as the session start wrote it (such as .claude/settings.json), not ${JSON.stringify(outside)}; nothing was committed.`);
+  }
   const pd = resolveProjectDir(projectDir);
   let state: string | null = null;
   try {
@@ -6467,7 +6479,11 @@ function commitRecord(args: string[], projectDir?: string): void {
   }
   const unitBuild = state !== null && unitBuildOf(state) !== null;
   const offered = existsSync(join(pd, ...unitWordsFile("record-message", UPDATE_MESSAGE_KEY).split("/")));
-  const own = update ? ownFilesToCommit(pd, offered ? () => false : null) : null;
+  const found = update ? ownFilesToCommit(pd, offered ? () => false : null) : null;
+  const own = found && {
+    commit: found.commit.filter((path) => !leave.includes(path)),
+    left: [...found.left, ...found.commit.filter((path) => leave.includes(path))].sort(),
+  };
   const block = recordCommitBlock(pd, unitBuild, own?.commit);
   const what = own ? "AI-DLC's own files" : "AI-DLC's record";
   const left = own && own.left.length > 0 ? ` I left ${leftFilesNamed(own.left)} for you to look over and commit.` : "";

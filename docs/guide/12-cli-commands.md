@@ -63,7 +63,7 @@ diagnostic and lifecycle routes.
 | `/aidlc unit participate` | Mark this clone for the guided Unit-claim picker |
 | `/aidlc unit catch-up` | At the lead's project, before Build and Test, bring each repo here that lacks a merged Unit up to date with its remote, a fast-forward only |
 | `/aidlc unit share [--plan] [--branch \| --back] [--commit-message-file <file>]` | Commit the work here and push the integration branch so the teams can take Units, or see a landed one; `--plan` commits AI-DLC's record only (with the code of a Unit built here, on the workspace's own repository), for a lead's project whose teams take Units by pull request; `--branch` pushes the plan on a branch of its own for a pull request; `--back` switches back to the integration branch once the plan is in it |
-| `/aidlc unit commit-record [--update] [--commit-message-file <file>]` | Commit AI-DLC's record in `aidlc/` (and a `repos.json` still at the project root) on this branch, nothing else, and push nothing; with `--update`, AI-DLC's own files an update changed instead |
+| `/aidlc unit commit-record [--update [--leave <path>]...] [--commit-message-file <file>]` | Commit AI-DLC's record in `aidlc/` (and a `repos.json` still at the project root) on this branch, nothing else, and push nothing; with `--update`, AI-DLC's own files an update changed instead |
 | `/aidlc unit publish <unit> [--commit [--include <path>]...]` | CAS-publish the scoped checkout's clean committed candidate onto its claim ref; `--commit` commits the Unit's own work first, and `--include` puts in a new file or folder it left out |
 | `/aidlc unit pin <unit>` | Pin and validate one completed candidate OID from unscoped main |
 | `/aidlc unit gate <unit> ...` | Record the merge decision against the pinned OID and generation |
@@ -1091,7 +1091,7 @@ go keeps it, so the same command runs again as written.
 ### `/aidlc unit commit-record` - Commit AI-DLC's record on this branch
 
 ```bash
-/aidlc unit commit-record [--update] [--commit-message-file <file>]
+/aidlc unit commit-record [--update [--leave <path>]...] [--commit-message-file <file>]
 ```
 
 Commits everything in `aidlc/` that git does not ignore, and a `repos.json` at
@@ -1115,9 +1115,11 @@ you, such as `AGENTS.md` or `.gitignore`, only when your own part is as last
 committed), a file the update removed, and the update's move of `repos.json`
 into `aidlc/` outside a Unit's build; nothing else of `aidlc/`. A settings file
 AI-DLC merges with your own settings goes in only when the offer after the
-update drafted the commit's message, as that offer is made only when the file
-held none of your uncommitted changes before the update. Without a message file
-the commit says `Update AI-DLC to <version>`. Every file of AI-DLC's it leaves
+update drafted the commit's message. `--leave <path>`, once for each settings file
+that held changes of yours before the update (the offer writes the whole command),
+leaves that file out; a path that starts with `-` or is not inside the project is
+refused before git is asked anything. Without a message file the commit says
+`Update AI-DLC to <version>`. Every file of AI-DLC's it leaves
 is in its output.
 
 The commit takes the message in the file `--commit-message-file` names (a

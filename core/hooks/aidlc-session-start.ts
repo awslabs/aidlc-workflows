@@ -177,13 +177,14 @@ function completeHelpersOfEarlierProcess(projectDir: string, sessionId: string):
 // changed files git tracks, or moved a repos.json git tracks into aidlc/, and
 // the question that offers their commit when it can run (`update`: AI-DLC's
 // own files, the move with them, or in a Unit's build the move alone, naming what
-// its message is about; else the move alone with AI-DLC's record),
+// its message is about and the files its yes leaves; else the move alone with
+// AI-DLC's record),
 // with the file its commit message is drafted in when the hook could write it;
 // null otherwise.
 function catchUpProjectFiles(
   projectDir: string,
   unitBuild: boolean,
-): { told: string; asked: string | null; messageFile: string | null; update: string | null } | null {
+): { told: string; asked: string | null; messageFile: string | null; update: string | null; leave: string[] } | null {
   if (!isCompiledExecutable() || existsSync(join(projectDir, ".aidlc-version"))) return null;
   const major = AIDLC_VERSION.split(".")[0];
   const behind = () => {
@@ -235,15 +236,15 @@ function catchUpProjectFiles(
   const changed = after === null ? [] : refreshChanged(projectDir, before ?? new Map(), after, moved);
   const told = catchUpChangedLine(AIDLC_VERSION, changed, moved);
   if (told === null) return null;
-  if (process.env.AIDLC_UNATTENDED === "1") return { told, asked: null, messageFile: null, update: null };
+  if (process.env.AIDLC_UNATTENDED === "1") return { told, asked: null, messageFile: null, update: null, leave: [] };
   // The update's own commit, offered when it can run: AI-DLC's files that still hold what it wrote, the move with
-  // them. A settings file config merges counts only when git showed it unchanged before this refresh; when this
-  // refresh rewrote one that held the person's words then, nothing is offered. The draft file is the verb's sign that
-  // this offer was made.
+  // them. A settings file config merges counts only when git showed it unchanged before this refresh: one that held
+  // the person's words then is left by the yes (--leave), and named when this refresh rewrote it. The draft file is
+  // the verb's sign that this offer was made.
   const own = before === null ? null : ownFilesToCommit(projectDir, (path) => before.has(path));
   const files = own?.commit.some((path) => path !== REPOS_FILE && path !== `aidlc/${REPOS_FILE}`) === true;
   if (
-    own !== null && !own.held.some((path) => changed.includes(path)) && (files || (unitBuild && own.commit.length > 0)) &&
+    own !== null && (files || (unitBuild && own.commit.length > 0)) &&
     recordCommitBlock(projectDir, unitBuild, own.commit) === null
   ) {
     const file = unitWordsFile("record-message", UPDATE_MESSAGE_KEY);
@@ -253,7 +254,7 @@ function catchUpProjectFiles(
     const branch = projectGit(projectDir, ["symbolic-ref", "--quiet", "--short", "HEAD"]).stdout.trim();
     const asked = catchUpChangedLine(AIDLC_VERSION, changed, moved, true, drafted, { branch, left });
     const about = files ? `AI-DLC's own files updated to ${AIDLC_VERSION}${moved ? " and the move of repos.json into aidlc/" : ""}` : "the move of repos.json into aidlc/";
-    return { told, asked, messageFile: drafted ? file : null, update: about };
+    return { told, asked, messageFile: drafted ? file : null, update: about, leave: own.held };
   }
   // The list's move alone is AI-DLC's own record: offered to be committed on the person's yes, when the commit could
   // run, with the message the agent drafts for it over the fallback this hook writes into the move's own file.
@@ -261,7 +262,7 @@ function catchUpProjectFiles(
   const file = unitWordsFile("record-message", `moved-${AIDLC_VERSION}`);
   const drafted = asking && (existsSync(join(projectDir, ...file.split("/"))) || writeCommitDraft(projectDir, file, RECORD_COMMIT_MESSAGE));
   const asked = asking ? catchUpChangedLine(AIDLC_VERSION, changed, moved, true, drafted) : null;
-  return { told, asked, messageFile: drafted ? file : null, update: null };
+  return { told, asked, messageFile: drafted ? file : null, update: null, leave: [] };
 }
 
 function projectGit(projectDir: string, args: string[], input?: string) {
@@ -624,11 +625,11 @@ if (sessionId && !rebindCheckOnly) {
         asks.push(`ASK ONCE: first, said to nobody: ${draft} ` +
           `Then in your first reply, ask the person this in their language, with the message from that file after it: "${caughtUp.asked}" ` +
           `${OWN_MESSAGE_SENTENCE.charAt(0).toUpperCase()}${OWN_MESSAGE_SENTENCE.slice(1)}. On yes, run ` +
-          `\`${aidlcInvocation()} unit commit-record${caughtUp.update !== null ? " --update" : ""} --commit-message-file ${file}\` and tell them in plain words what it reports. ` +
+          `\`${aidlcInvocation()} unit commit-record${caughtUp.update !== null ? ` --update${caughtUp.leave.map((path) => ` --leave ${path}`).join("")}` : ""} --commit-message-file ${file}\` and tell them in plain words what it reports. ` +
           "On no, leave it. Do not ask again.");
       } else if (caughtUp.asked !== null) {
         asks.push(`ASK ONCE: in your first reply, ask the person this in their language: "${caughtUp.asked}" On yes, run ` +
-          `\`${aidlcInvocation()} unit commit-record${caughtUp.update !== null ? " --update" : ""}\` and tell them in plain words what it reports. On no, leave it. Do not ask again.`);
+          `\`${aidlcInvocation()} unit commit-record${caughtUp.update !== null ? ` --update${caughtUp.leave.map((path) => ` --leave ${path}`).join("")}` : ""}\` and tell them in plain words what it reports. On no, leave it. Do not ask again.`);
       } else asks.push(`TELL ONCE: in your first reply, tell the person this, in their language: "${caughtUp.told}"`);
     }
   } catch {

@@ -37,8 +37,9 @@ function earlier(version: string): string {
 }
 
 // This release's tree stamped as the one before, with a few files that release
-// wrote otherwise, as a real step changes them.
-function earlierTree(harness: Harness): string {
+// wrote otherwise, as a real step changes them; with `codexConfig`, Codex's
+// config.toml too.
+function earlierTree(harness: Harness, codexConfig = false): string {
   const root = tempDir(`earlier-${harness}`);
   cpSync(join(REPO_ROOT, "dist", harness), root, { recursive: true });
   const data = join(root, DIRS[harness], "tools", "data");
@@ -51,6 +52,10 @@ function earlierTree(harness: Harness): string {
   writeFileSync(harnessJson, `${JSON.stringify({ ...JSON.parse(readFileSync(harnessJson, "utf-8")), productName: "The release before" }, null, 2)}\n`);
   writeFileSync(join(root, DIRS[harness], "aidlc-common", "retired-note.md"), "A file the next release does not ship.\n");
   if (harness === "cursor") appendFileSync(join(root, "AGENTS.md"), "\nA line the next release drops.\n");
+  if (harness === "codex" && codexConfig) {
+    const toml = join(root, DIRS[harness], "config.toml");
+    writeFileSync(toml, readFileSync(toml, "utf-8").replace("# AI-DLC on Codex CLI\n", "# AI-DLC on Codex CLI\n\nThe release before.\n"));
+  }
   if (harness === "claude") {
     // Its own announcement, and an allow entry this release no longer ships (the refresh keeps that one, as it
     // keeps the person's own), as 2.11.3's settings.json differs from 2.11.4's.
@@ -352,6 +357,45 @@ describe("unit commit-record --update", () => {
     const yes = run(UNIT, ["commit-record", "--update"], dir);
     expect(yes.status, yes.out).toBe(0);
     expect(shown(dir)).toEqual(["aidlc/repos.json", "repos.json"]);
+  });
+
+  test("with two harnesses, --leave keeps out the settings file that held their words and the clean one goes in", () => {
+    const dir = tempDir("update-two");
+    git(dir, ["init", "-q", "-b", "main"]);
+    repo(dir);
+    config(dir, "claude", earlierTree("claude"));
+    config(dir, "codex", earlierTree("codex", true));
+    git(dir, ["add", "-A"]);
+    git(dir, ["commit", "-q", "-m", "setup"]);
+    const settings = join(dir, ".claude", "settings.json");
+    const value = JSON.parse(readFileSync(settings, "utf-8")) as { permissions?: { allow?: string[] } };
+    writeFileSync(settings, `${JSON.stringify({ ...value, permissions: { ...value.permissions, allow: [...(value.permissions?.allow ?? []), "Bash(make test)"] } }, null, 2)}\n`);
+    const before = changed(dir);
+    config(dir, "claude", join(REPO_ROOT, "dist", "claude"));
+    config(dir, "codex", join(REPO_ROOT, "dist", "codex"));
+    const own = ownFilesToCommit(dir, (path) => before.has(path));
+    expect(own.held).toEqual([".claude/settings.json"]);
+    expect(own.commit).toContain(".codex/config.toml");
+    mkdirSync(join(dir, "aidlc", ".aidlc-engine", "request-text"), { recursive: true });
+    writeFileSync(join(dir, ...draft.split("/")), "chore: take AI-DLC's update\n");
+    const yes = run(UNIT, ["commit-record", "--update", "--leave", ".claude/settings.json", "--commit-message-file", draft], dir);
+    expect(yes.status, yes.out).toBe(0);
+    expect(shown(dir)).toContain(".codex/config.toml");
+    expect(shown(dir)).not.toContain(".claude/settings.json");
+    expect(String(yes.json?.notice)).toEndWith("I left .claude/settings.json for you to look over and commit.");
+    expect(readFileSync(settings, "utf-8")).toContain("Bash(make test)");
+  });
+
+  test("--leave refuses a path that is not one inside the project, before anything is committed", () => {
+    const { dir } = projectBehind("claude");
+    refresh(dir, "claude");
+    const head = git(dir, ["rev-parse", "HEAD"]);
+    for (const path of ["-x", "../outside.json", "/etc/hosts", "C:/Windows/win.ini", ".claude/../../outside.json"]) {
+      const refused = run(UNIT, ["commit-record", "--update", "--leave", path], dir);
+      expect(refused.status, path).not.toBe(0);
+      expect(refused.out).toContain("--leave takes a path inside this project, as the session start wrote it (such as .claude/settings.json)");
+    }
+    expect(git(dir, ["rev-parse", "HEAD"])).toBe(head);
   });
 
   test("on no branch, with a merge under way, or when their hook refuses, nothing is committed", () => {
