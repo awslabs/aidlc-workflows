@@ -1,4 +1,4 @@
-// covers: function:parseReScope, function:codekbScopeFingerprint, function:gitAlternateEntry, function:scopePathCovered, function:codekbFingerprintExcludes, function:aidlcRootIntegrations, subcommand:aidlc-utility:codekb-scope-diff
+// covers: function:parseReScope, function:codekbScopeFingerprint, function:codekbScopeChangedFiles, function:codekbScopeSnapshot, function:codekbScopeManifestTree, function:codekbScopeManifestPath, function:readCodekbScopeManifest, function:writeCodekbScopeManifest, function:gitAlternateEntry, function:scopePathCovered, function:codekbFingerprintExcludes, function:aidlcRootIntegrations, subcommand:aidlc-utility:codekb-scope-diff, subcommand:aidlc-utility:codekb-publish
 //
 // t248 — codekb scope guard (deterministic, no-LLM). Pins the reverse-
 // engineering rerun guard at two layers:
@@ -7,13 +7,19 @@
 //      parseReScope (the fenced-yaml Scope of Analysis block in
 //      reverse-engineering-timestamp.md), codekbScopeFingerprint (temp-index
 //      `git write-tree` over the analyzed paths — content-addressed, so an
-//      edit flips it and a revert restores it), and scopePathCovered (the
-//      compare mode's literal/dir-prefix coverage test).
+//      edit flips it and a revert restores it), codekbScopeSnapshot (the same
+//      fingerprint plus its manifest, the temp index's `ls-files -s -z`),
+//      codekbScopeChangedFiles (the STALE delta: the manifest publish
+//      recorded, trusted only when codekbScopeManifestTree rebuilds the stored
+//      fingerprint from it, diffed against the current snapshot's manifest;
+//      no or unproven manifest -> null, never a wrong delta), and
+//      scopePathCovered (the compare mode's literal/dir-prefix coverage test).
 //   2. The `codekb-scope-diff` UTILITY VERB (spawned as the real CLI surface):
 //      status verdicts NO_STORE / CURRENT / STALE / UNVERIFIED / UNKNOWN_SCOPE,
 //      compare verdicts COVERS / NARROWER (+ the exact discard list), and the
 //      --mint fingerprint printer the stage's Step 3 pastes from — each with
-//      --json shape.
+//      --json shape — and codekb-publish recording the manifest the next STALE
+//      verdict's changed_files is computed from.
 //
 // MECHANISM = cli (the subcommand claim needs a SPAWNED tool to prove routing;
 // the function claims clear `none` via the in-process imports).
@@ -43,11 +49,16 @@ import {
 import {
   aidlcRootIntegrations,
   codekbFingerprintExcludes,
+  type CodekbScopeSnapshot,
+  codekbScopeChangedFiles,
   codekbScopeFingerprint,
+  codekbScopeManifestTree,
+  codekbScopeSnapshot,
   codekbStoreIsCurrent,
   gitAlternateEntry,
   parseReScope,
   scopePathCovered,
+  writeCodekbScopeManifest,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -55,6 +66,17 @@ setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const BUN = process.execPath;
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const UTILITY = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-utility.ts");
+const CODEKB_ARTIFACTS = [
+  "api-documentation.md",
+  "architecture.md",
+  "business-overview.md",
+  "code-quality-assessment.md",
+  "code-structure.md",
+  "component-inventory.md",
+  "dependencies.md",
+  "reverse-engineering-timestamp.md",
+  "technology-stack.md",
+];
 const SHA1_EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
 resetAidlcEnv();
@@ -160,6 +182,12 @@ function seedStore(proj: string, body: string): string {
   const p = join(dir, "reverse-engineering-timestamp.md");
   writeFileSync(p, body);
   return p;
+}
+
+// Record the manifest publish would have written beside the store.
+function seedManifest(proj: string, snapshot: CodekbScopeSnapshot | null): void {
+  expect(snapshot).not.toBeNull();
+  writeCodekbScopeManifest(proj, basename(proj), (snapshot as CodekbScopeSnapshot).manifest, DEFAULT_SPACE);
 }
 
 function runVerb(proj: string, ...args: string[]) {
@@ -422,6 +450,200 @@ describe("t248 codekbScopeFingerprint — scoped write-tree", () => {
 });
 
 // ============================================================================
+// 2b. codekbScopeChangedFiles — the per-file delta behind a STALE verdict.
+// ============================================================================
+describe("t248 codekbScopeChangedFiles — manifest delta", () => {
+  // A snapshot, asserted present: the delta tests need both halves.
+  const snap = (proj: string, paths: string[]): CodekbScopeSnapshot => {
+    const s = codekbScopeSnapshot(proj, paths);
+    expect(s).not.toBeNull();
+    return s as CodekbScopeSnapshot;
+  };
+  const delta = (proj: string, stored: CodekbScopeSnapshot, current: CodekbScopeSnapshot) =>
+    codekbScopeChangedFiles(proj, stored.fingerprint, stored.manifest, current);
+
+  test("the snapshot's fingerprint is the mint's, and its manifest rebuilds that tree", () => {
+    const proj = freshProject();
+    gitInit(proj);
+    mkdirSync(join(proj, "src", "payments"), { recursive: true });
+    writeFileSync(join(proj, "src", "payments", "gw.ts"), "a\n");
+    const s = snap(proj, ["src/payments/"]);
+    expect(s.fingerprint).toBe(codekbScopeFingerprint(proj, ["src/payments/"]) as string);
+    expect(codekbScopeManifestTree(proj, s.manifest)).toBe(s.fingerprint);
+    expect(looseObjects(proj)).toEqual([]); // rebuilding writes nothing to the repo's store
+  });
+
+  test("lists only the changed files inside the analyzed scope", () => {
+    const proj = freshProject();
+    gitInit(proj);
+    mkdirSync(join(proj, "src", "payments"), { recursive: true });
+    writeFileSync(join(proj, "src", "payments", "gw.ts"), "a\n");
+    writeFileSync(join(proj, "src", "payments", "util.ts"), "u\n");
+    const stored = snap(proj, ["src/payments/"]);
+    // one file changes, the other is untouched
+    writeFileSync(join(proj, "src", "payments", "gw.ts"), "a changed\n");
+    expect(delta(proj, stored, snap(proj, ["src/payments/"]))).toEqual(["src/payments/gw.ts"]);
+  });
+
+  test("a new file inside scope appears in the delta", () => {
+    const proj = freshProject();
+    gitInit(proj);
+    mkdirSync(join(proj, "src", "payments"), { recursive: true });
+    writeFileSync(join(proj, "src", "payments", "gw.ts"), "a\n");
+    const stored = snap(proj, ["src/payments/"]);
+    writeFileSync(join(proj, "src", "payments", "new.ts"), "n\n");
+    expect(delta(proj, stored, snap(proj, ["src/payments/"]))).toEqual(["src/payments/new.ts"]);
+  });
+
+  test("a mode change alone appears in the delta", () => {
+    if (process.platform === "win32") return; // no executable bit to flip
+    const proj = freshProject();
+    gitInit(proj);
+    mkdirSync(join(proj, "src"), { recursive: true });
+    writeFileSync(join(proj, "src", "run.sh"), "echo\n");
+    const stored = snap(proj, ["src/"]);
+    chmodSync(join(proj, "src", "run.sh"), 0o755);
+    expect(delta(proj, stored, snap(proj, ["src/"]))).toEqual(["src/run.sh"]);
+  });
+
+  test("equal fingerprints → empty delta (never null)", () => {
+    const proj = freshProject();
+    gitInit(proj);
+    mkdirSync(join(proj, "src", "payments"), { recursive: true });
+    writeFileSync(join(proj, "src", "payments", "gw.ts"), "a\n");
+    const stored = snap(proj, ["src/payments/"]);
+    expect(delta(proj, stored, stored)).toEqual([]);
+  });
+
+  test("changes OUTSIDE the analyzed scope are not in the delta", () => {
+    const proj = freshProject();
+    gitInit(proj);
+    mkdirSync(join(proj, "src", "payments"), { recursive: true });
+    mkdirSync(join(proj, "src", "auth"), { recursive: true });
+    writeFileSync(join(proj, "src", "payments", "gw.ts"), "a\n");
+    writeFileSync(join(proj, "src", "auth", "login.ts"), "b\n");
+    const stored = snap(proj, ["src/payments/"]);
+    writeFileSync(join(proj, "src", "auth", "login.ts"), "b changed\n");
+    // the payments-scoped tree is unchanged, so stored===current → []
+    expect(delta(proj, stored, snap(proj, ["src/payments/"]))).toEqual([]);
+  });
+
+  test("a renamed in-scope file emits BOTH the old and new path", () => {
+    // A rescan must revisit the deleted source and the new dest; rename-collapsed
+    // output would list only the dest and leave stale knowledge for the old path.
+    const proj = freshProject();
+    gitInit(proj);
+    spawnSync("git", ["-C", proj, "config", "diff.renames", "true"], { encoding: "utf-8" });
+    mkdirSync(join(proj, "src", "payments"), { recursive: true });
+    writeFileSync(join(proj, "src", "payments", "gw.ts"), "export const gateway = 1;\n".repeat(20));
+    const stored = snap(proj, ["src/payments/"]);
+    writeFileSync(join(proj, "src", "payments", "gw2.ts"), "export const gateway = 1;\n".repeat(20));
+    rmSync(join(proj, "src", "payments", "gw.ts"));
+    expect(delta(proj, stored, snap(proj, ["src/payments/"]))).toEqual([
+      "src/payments/gw.ts",
+      "src/payments/gw2.ts",
+    ]);
+  });
+
+  test("a changed filename with invalid UTF-8 bytes → null (never a corrupted path)", () => {
+    // git paths are bytes; a non-UTF-8 filename (legal on Unix) must fail to
+    // null (rescan full), not be rewritten with U+FFFD and mislead a rescan.
+    const proj = freshProject();
+    gitInit(proj);
+    mkdirSync(join(proj, "src"), { recursive: true });
+    const badPath = Buffer.concat([Buffer.from(`${proj}/src/bad-`), Buffer.from([0xff]), Buffer.from(".ts")]);
+    try {
+      writeFileSync(badPath, "a\n");
+    } catch {
+      return; // filesystem rejected the byte sequence; skip on such platforms
+    }
+    const stored = snap(proj, ["src/"]);
+    writeFileSync(badPath, "a changed\n");
+    const current = snap(proj, ["src/"]);
+    if (stored.fingerprint === current.fingerprint) return; // fs normalized the name away
+    expect(delta(proj, stored, current)).toBeNull();
+  });
+
+  test("a store with no recorded manifest (published by an older version) → null, never a delta", () => {
+    const proj = freshProject();
+    gitInit(proj);
+    mkdirSync(join(proj, "src"), { recursive: true });
+    writeFileSync(join(proj, "src", "a.ts"), "a\n");
+    const stored = snap(proj, ["src/"]);
+    writeFileSync(join(proj, "src", "a.ts"), "a changed\n");
+    expect(codekbScopeChangedFiles(proj, stored.fingerprint, null, snap(proj, ["src/"]))).toBeNull();
+  });
+
+  test("a manifest that does not rebuild the stored fingerprint → null, never a wrong delta", () => {
+    const proj = freshProject();
+    gitInit(proj);
+    mkdirSync(join(proj, "src"), { recursive: true });
+    writeFileSync(join(proj, "src", "a.ts"), "a\n");
+    writeFileSync(join(proj, "src", "b.ts"), "b\n");
+    const older = snap(proj, ["src/"]);
+    writeFileSync(join(proj, "src", "a.ts"), "a2\n");
+    const stored = snap(proj, ["src/"]);
+    writeFileSync(join(proj, "src", "b.ts"), "b2\n");
+    const current = snap(proj, ["src/"]);
+    // the manifest left from an earlier publish, beside a newer store fingerprint:
+    // diffing it would wrongly list a.ts, so it must be refused.
+    expect(codekbScopeChangedFiles(proj, stored.fingerprint, older.manifest, current)).toBeNull();
+    // an edited manifest: one entry's hash rewritten
+    const edited = Buffer.from(
+      stored.manifest.toString("latin1").replace(/ [0-9a-f]{40,64} 0\tsrc\/a\.ts/, ` ${"1".repeat(40)} 0\tsrc/a.ts`),
+      "latin1",
+    );
+    expect(edited.equals(stored.manifest)).toBe(false);
+    expect(codekbScopeChangedFiles(proj, stored.fingerprint, edited, current)).toBeNull();
+    // the true manifest gives the true delta
+    expect(codekbScopeChangedFiles(proj, stored.fingerprint, stored.manifest, current)).toEqual(["src/b.ts"]);
+  });
+
+  test("a stored fingerprint that is a commit, not a tree → null, not a whole-repo delta", () => {
+    const proj = freshProject();
+    gitInit(proj);
+    mkdirSync(join(proj, "src", "payments"), { recursive: true });
+    writeFileSync(join(proj, "src", "payments", "gw.ts"), "a\n");
+    spawnSync("git", ["-C", proj, "add", "-A"], { encoding: "utf-8" });
+    spawnSync("git", ["-C", proj, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"], { encoding: "utf-8" });
+    const commit = spawnSync("git", ["-C", proj, "rev-parse", "HEAD"], { encoding: "utf-8" }).stdout.trim();
+    expect(commit).toMatch(/^[0-9a-f]{40,64}$/);
+    const earlier = snap(proj, ["src/payments/"]);
+    writeFileSync(join(proj, "src", "payments", "gw.ts"), "a changed\n");
+    const current = snap(proj, ["src/payments/"]);
+    expect(commit).not.toBe(current.fingerprint);
+    // a real manifest beside it does not make the commit a tree it rebuilds
+    expect(codekbScopeChangedFiles(proj, commit, earlier.manifest, current)).toBeNull();
+  });
+
+  test("null / malformed fingerprint or manifest on either side → null (fall back to full rescan)", () => {
+    const proj = freshProject();
+    gitInit(proj);
+    mkdirSync(join(proj, "src"), { recursive: true });
+    writeFileSync(join(proj, "src", "a.ts"), "a\n");
+    const good = snap(proj, ["src/"]);
+    expect(codekbScopeChangedFiles(proj, null, good.manifest, good)).toBeNull();
+    expect(codekbScopeChangedFiles(proj, good.fingerprint, good.manifest, null)).toBeNull();
+    expect(codekbScopeChangedFiles(proj, "unknown", good.manifest, good)).toBeNull();
+    expect(
+      codekbScopeChangedFiles(proj, good.fingerprint, good.manifest, { fingerprint: "not-a-hash", manifest: good.manifest }),
+    ).toBeNull();
+    expect(codekbScopeChangedFiles(proj, "0".repeat(40), Buffer.from("garbage\0"), good)).toBeNull();
+    expect(codekbScopeChangedFiles(proj, "0".repeat(40), Buffer.alloc(0), good)).toBeNull();
+  });
+
+  test("filenames are returned verbatim (no trimming of surrounding paths)", () => {
+    const proj = freshProject();
+    gitInit(proj);
+    mkdirSync(join(proj, "src", "pay ments"), { recursive: true });
+    writeFileSync(join(proj, "src", "pay ments", "gw.ts"), "a\n");
+    const stored = snap(proj, ["src/"]);
+    writeFileSync(join(proj, "src", "pay ments", "gw.ts"), "a changed\n");
+    expect(delta(proj, stored, snap(proj, ["src/"]))).toEqual(["src/pay ments/gw.ts"]);
+  });
+});
+
+// ============================================================================
 // 3. scopePathCovered — the compare mode's coverage test.
 // ============================================================================
 describe("t248 scopePathCovered", () => {
@@ -496,6 +718,150 @@ describe("t248 codekb-scope-diff verb — status mode", () => {
     const parsed = JSON.parse(stale.stdout);
     expect(parsed.verdict).toBe("STALE");
     expect(parsed.store_intent).toBe("fix-payment-timeout");
+  });
+
+  test("STALE carries the per-file changed_files delta", () => {
+    const proj = freshProject();
+    gitInit(proj);
+    mkdirSync(join(proj, "src", "payments"), { recursive: true });
+    writeFileSync(join(proj, "src", "payments", "gw.ts"), "a\n");
+    writeFileSync(join(proj, "src", "payments", "util.ts"), "u\n");
+    const snapshot = codekbScopeSnapshot(proj, ["src/payments/"]);
+    seedStore(proj, timestampBody({ fingerprint: snapshot?.fingerprint as string }));
+    seedManifest(proj, snapshot);
+    // only gw.ts changes
+    writeFileSync(join(proj, "src", "payments", "gw.ts"), "a changed\n");
+    const res = runVerb(proj, "--json");
+    expect(res.status).toBe(0);
+    const parsed = JSON.parse(res.stdout);
+    expect(parsed.verdict).toBe("STALE");
+    expect(parsed.changed_files).toEqual(["src/payments/gw.ts"]);
+    const human = runVerb(proj);
+    expect(human.stdout).toContain("changed files (1):");
+    expect(human.stdout).toContain('- "src/payments/gw.ts"');
+  });
+
+  test("human output escapes changed filenames (no raw terminal control bytes)", () => {
+    const proj = freshProject();
+    gitInit(proj);
+    mkdirSync(join(proj, "src", "payments"), { recursive: true });
+    // a filename carrying an ESC byte: raw interpolation would inject a
+    // terminal control sequence; the human output must render it escaped.
+    const evil = "src/payments/g\u001b[31mw.ts";
+    writeFileSync(join(proj, evil), "a\n");
+    const snapshot = codekbScopeSnapshot(proj, ["src/payments/"]);
+    seedStore(proj, timestampBody({ fingerprint: snapshot?.fingerprint as string }));
+    seedManifest(proj, snapshot);
+    writeFileSync(join(proj, evil), "a changed\n");
+    const parsed = JSON.parse(runVerb(proj, "--json").stdout);
+    expect(parsed.verdict).toBe("STALE");
+    expect(parsed.changed_files).toEqual([evil]); // JSON carries the exact path
+    const human = runVerb(proj);
+    // the raw ESC byte must not appear verbatim in the human line
+    expect(human.stdout).not.toContain("\u001b[31m");
+    // it appears escaped instead (JSON.stringify renders \u001b)
+    expect(human.stdout).toContain("\\u001b[31m");
+  });
+
+  test("STALE with an absent stored tree surfaces changed_files: null (rescan-full signal)", () => {
+    const proj = freshProject();
+    gitInit(proj);
+    mkdirSync(join(proj, "src", "payments"), { recursive: true });
+    writeFileSync(join(proj, "src", "payments", "gw.ts"), "a\n");
+    // store a well-formed sha that is NOT the current tree and not in the DB,
+    // so the verdict is STALE (fingerprint mismatch) but the delta is unknown.
+    seedStore(proj, timestampBody({ fingerprint: "0".repeat(40) }));
+    const res = runVerb(proj, "--json");
+    expect(res.status).toBe(0);
+    const parsed = JSON.parse(res.stdout);
+    expect(parsed.verdict).toBe("STALE");
+    expect(parsed.changed_files).toBeNull();
+    const human = runVerb(proj);
+    expect(human.stdout).toContain("changed-file delta unavailable");
+  });
+
+  test("a store published before manifests were recorded → STALE with changed_files: null", () => {
+    // The upgrade case: a real, once-current fingerprint and no manifest beside it.
+    const proj = freshProject();
+    gitInit(proj);
+    mkdirSync(join(proj, "src", "payments"), { recursive: true });
+    writeFileSync(join(proj, "src", "payments", "gw.ts"), "a\n");
+    const fp = codekbScopeFingerprint(proj, ["src/payments/"]);
+    seedStore(proj, timestampBody({ fingerprint: fp as string }));
+    writeFileSync(join(proj, "src", "payments", "gw.ts"), "a changed\n");
+    const parsed = JSON.parse(runVerb(proj, "--json").stdout);
+    expect(parsed.verdict).toBe("STALE");
+    expect(parsed.changed_files).toBeNull();
+    expect(runVerb(proj).stdout).toContain("changed-file delta unavailable");
+  });
+
+  test("a manifest left from an earlier store → STALE with changed_files: null, never its delta", () => {
+    const proj = freshProject();
+    gitInit(proj);
+    mkdirSync(join(proj, "src", "payments"), { recursive: true });
+    writeFileSync(join(proj, "src", "payments", "gw.ts"), "a\n");
+    writeFileSync(join(proj, "src", "payments", "util.ts"), "u\n");
+    seedManifest(proj, codekbScopeSnapshot(proj, ["src/payments/"]));
+    writeFileSync(join(proj, "src", "payments", "gw.ts"), "a2\n");
+    const fp = codekbScopeFingerprint(proj, ["src/payments/"]);
+    seedStore(proj, timestampBody({ fingerprint: fp as string }));
+    writeFileSync(join(proj, "src", "payments", "util.ts"), "u2\n");
+    const parsed = JSON.parse(runVerb(proj, "--json").stdout);
+    expect(parsed.verdict).toBe("STALE");
+    expect(parsed.changed_files).toBeNull();
+  });
+
+  test("a publish records the manifest, and the next STALE lists exactly what moved", () => {
+    const proj = freshProject();
+    gitInit(proj);
+    mkdirSync(join(proj, "src", "payments"), { recursive: true });
+    writeFileSync(join(proj, "src", "payments", "gw.ts"), "a\n");
+    writeFileSync(join(proj, "src", "payments", "util.ts"), "u\n");
+    const paths = ["src/payments/"];
+    const snap = spawnSync(BUN, [UTILITY, "codekb-snapshot", "--project-dir", proj, "--paths", paths.join(","), "--json"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+      env: childEnv(),
+    });
+    expect(snap.status, snap.stderr).toBe(0);
+    const baseline = JSON.parse(snap.stdout) as { store_generation: string; source_fingerprint: string };
+    const staged = join(proj, "staged-codekb");
+    mkdirSync(staged);
+    for (const name of CODEKB_ARTIFACTS) {
+      writeFileSync(
+        join(staged, name),
+        name === "reverse-engineering-timestamp.md"
+          ? timestampBody({ fingerprint: codekbScopeFingerprint(proj, paths) as string })
+          : `# ${name}\n`,
+      );
+    }
+    const published = spawnSync(
+      BUN,
+      [
+        UTILITY, "codekb-publish", "--project-dir", proj, "--staged", staged, "--paths", paths.join(","),
+        "--expect-store", baseline.store_generation, "--expect-source", baseline.source_fingerprint, "--json",
+      ],
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: childEnv() },
+    );
+    expect(published.status, published.stderr).toBe(0);
+    expect(published.stderr).not.toContain("scope manifest");
+    expect(JSON.parse(runVerb(proj, "--json").stdout).verdict).toBe("CURRENT");
+    writeFileSync(join(proj, "src", "payments", "util.ts"), "u changed\n");
+    const parsed = JSON.parse(runVerb(proj, "--json").stdout);
+    expect(parsed.verdict).toBe("STALE");
+    expect(parsed.changed_files).toEqual(["src/payments/util.ts"]);
+  });
+
+  test("CURRENT does not carry a changed_files field", () => {
+    const proj = freshProject();
+    gitInit(proj);
+    mkdirSync(join(proj, "src", "payments"), { recursive: true });
+    writeFileSync(join(proj, "src", "payments", "gw.ts"), "a\n");
+    const fp = codekbScopeFingerprint(proj, ["src/payments/"]);
+    seedStore(proj, timestampBody({ fingerprint: fp as string }));
+    const parsed = JSON.parse(runVerb(proj, "--json").stdout);
+    expect(parsed.verdict).toBe("CURRENT");
+    expect(parsed.changed_files).toBeUndefined();
   });
 
   test("full-root fingerprint excludes its own codekb store", () => {
