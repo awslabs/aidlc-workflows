@@ -1396,6 +1396,7 @@ function writeAuditBlockAtPath(
     const verifyExpectedPrefix = (): void => {
       if (!expectedIdentity) return;
       const current = fstatSync(fd as number);
+      // Strict even for a sync client's upload link: a merge must prove the shard is shared with no other file.
       if (current.nlink !== 1) throw new Error(`Audit shard became multiply linked: ${shardPath}`);
       const prefix = Buffer.alloc(expectedIdentity.prefixLength);
       let offset = 0;
@@ -1455,6 +1456,8 @@ function readAuditSnapshot(projectDir: string, shardPath: string): {
   const fd = openSync(shardPath, fsConstants.O_RDONLY | noFollow | fsConstants.O_NONBLOCK);
   try {
     const opened = fstatSync(fd);
+    // Strict even for a sync client's upload link (acceptsSyncUploadLinks): a fork or merge must
+    // prove the shard is shared with no other file; the ordinary append path above is already tolerant.
     if (!opened.isFile() || opened.nlink !== 1) {
       throw new Error(`Refusing non-regular or multiply-linked audit shard: ${shardPath}`);
     }

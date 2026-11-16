@@ -13,6 +13,7 @@ import { linkSync, mkdirSync, statSync, symlinkSync, writeFileSync } from "node:
 import { dirname, join } from "node:path";
 import {
   acceptsSyncUploadLinks,
+  HARDLINK_REMEDY,
   hardLinkRefusal,
   linksSteadyWhileReading,
   resetSyncUploadCacheForTests,
@@ -137,7 +138,8 @@ describe("t-sync-upload-hardlinks a record file linked only by Drive's upload fo
     const refusal = hardLinkRefusal("record file", file, stat.nlink, result);
     expect(refusal).toContain("Another link exists outside the folders AI-DLC checks, and AI-DLC cannot see where.");
     expect(refusal).toContain("backup and sync clients commonly make them");
-    expect(refusal).toContain("cp <file> <file>.copy && mv <file>.copy <file>");
+    expect(refusal).toContain(HARDLINK_REMEDY);
+    expect(refusal).not.toMatch(/&&|\bcp |\bmv /);
     // Several links: counted, in the plural.
     expect(hardLinkRefusal("record file", file, 3, result)).toContain("2 other links exist outside");
     const two = { service: SERVICE, paths: ["/u/a", "/u/b"], complete: true };
