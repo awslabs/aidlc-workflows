@@ -1980,6 +1980,13 @@ export function workspaceCommandUtilityArgv(
 // stay bare, anything else is POSIX single-quoted.
 export function shellArg(value: string): string {
   if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value)) return value;
+  return shellQuoted(value);
+}
+
+// One argv value, always POSIX single-quoted: a value that a shell other than
+// POSIX may split or refuse bare (an address's @ or \ under cmd.exe or
+// PowerShell), so each harness's skill has a quote to put in its own form.
+export function shellQuoted(value: string): string {
   return `'${value.replaceAll("'", "'\"'\"'")}'`;
 }
 

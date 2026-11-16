@@ -11,14 +11,16 @@
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { repoCopyKey } from "../../dist/claude/.claude/tools/aidlc-unit-teams.ts";
 import { AIDLC_SRC, seededStateFile } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   cleanupTeamBuild,
   cloneOf,
+  codeHost,
   ENV,
   git,
   HOME_RECORD,
@@ -47,6 +49,25 @@ const tools = async () => ({
   ...(await import("../../dist/claude/.claude/tools/aidlc-unit-holders.ts")),
 });
 const copyName = (address: string, id8: string): string => `refs/aidlc/home/${id8}/${repoCopyKey(address)}/plan`;
+
+// What the shipped opencode plugin says of a command under a shell setting, as on `platform`: "" when it lets
+// the command run, else its refusal.
+async function openCodeSays(shell: string, platform: NodeJS.Platform, command: string): Promise<string> {
+  const real = process.platform;
+  Object.defineProperty(process, "platform", { value: platform });
+  try {
+    const { default: createAdapter } = await import("../../dist/opencode/.opencode/plugin/aidlc-opencode-adapter.ts");
+    const client = { session: { get: async () => ({ data: {} }), prompt: async () => {} }, config: { get: async () => ({ data: { shell } }) } };
+    const adapter = await createAdapter.server({ client: client as never, directory: mkdtempSync(join(tmpdir(), "aidlc-oc-")) } as never);
+    const before = (adapter as Record<string, (a: unknown, b: unknown) => Promise<void>>)["tool.execute.before"];
+    await before({ tool: "bash", sessionID: "plan-read", callID: "plan-read" }, { args: { command } });
+    return "";
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  } finally {
+    Object.defineProperty(process, "platform", { value: real });
+  }
+}
 
 // What a code clone holds of git's own: its refs, its remotes and its settings.
 function cloneState(dir: string): string {
@@ -411,6 +432,33 @@ describe("a team takes a Unit from the plan where it is shared", () => {
       expect(said[0]).not.toContain("Could not read from remote repository");
     } finally {
       renameSync(`${plan}-away`, plan);
+    }
+  });
+
+  test("the Start choice names the plan's address quoted: it runs under posix as written, and under cmd.exe and PowerShell as the opencode skill has it typed", async () => {
+    // The plan's repository at an address with an @ in it, as an ssh address has.
+    const at = join(tempDir("at"), "team@host", "checkout-api.git");
+    mkdirSync(dirname(at), { recursive: true });
+    git(tempDir("at-parent"), ["clone", "-q", "--bare", codeHost("checkout-api"), at]);
+    const home = makePlanHome({ repos: { "checkout-api": at, billing: codeHost("billing"), "checkout-web": codeHost("checkout-web") } });
+    const pay = teamWorkspace(home.hosts, "pay", ["billing"]);
+    const ask = next(pay, ENV, ["--lead-address", at]);
+    const start = (ask.choices as Array<{ label: string; command?: string }>).find((choice) => choice.label === "Start refunds")?.command;
+    expect(start, JSON.stringify(ask).slice(0, 600)).toContain(`--from '${at}'`);
+    // As written, a POSIX shell hands the take the address as one word.
+    const words = Bun.spawnSync({ cmd: ["bash", "-c", `set -- ${start!.replace(/^.*? take /, "")}; printf '%s\\0' "$@"`] }).stdout.toString().split("\0").filter(Boolean);
+    expect(words).toEqual(["refunds", "--plan", home.id8, "--from", at]);
+    expect(run(UNIT, ["take", ...words], pay).status).toBe(0);
+    // The same words for ssh addresses, through the plugin as opencode runs it.
+    const { planTakeWords } = await tools();
+    for (const address of [at, "git@github.com:acme/checkout-api.git", "ssh://git@github.com/acme/checkout-api.git"]) {
+      const command = `bun .aidlc/tools/aidlc-unit.ts take refunds ${planTakeWords(home.id8, address)}`;
+      expect(await openCodeSays("bash", "linux", command), command).toBe("");
+      // The opencode skill: cmd.exe groups no single quotes, so the agent puts them in double quotes.
+      expect(await openCodeSays("cmd.exe", "win32", command.replaceAll("'", '"')), command).toBe("");
+      for (const [shell, platform] of [["pwsh", "linux"], ["powershell.exe", "win32"], ["pwsh", "win32"]] as const) {
+        expect(await openCodeSays(shell, platform, command), `${shell} on ${platform}: ${command}`).toBe("");
+      }
     }
   });
 

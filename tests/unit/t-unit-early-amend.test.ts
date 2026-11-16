@@ -94,8 +94,9 @@ describe("starting early", () => {
     expect(own, choices.map((choice) => choice.label).join(" | ")).toBeDefined();
     expect(own!.command).toContain(" --early");
     expect(own!.command).not.toContain("--team");
+    // As a POSIX shell reads the printed words: each single-quoted one is one word.
     const took = run(UNIT, own!.command.replace(/^.*aidlc-unit\.ts /, "").replace("'<the Unit>'", "reporting")
-      .split(" ").filter(Boolean), dana);
+      .split(" ").filter(Boolean).map((word) => word.replace(/^'(.*)'$/, "$1")), dana);
     expect(took.status, took.out).toBe(0);
     expect(String(took.json?.notice)).toContain("It starts early on the pushed branch of refunds in billing.");
   });

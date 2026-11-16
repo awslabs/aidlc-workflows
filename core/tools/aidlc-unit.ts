@@ -107,6 +107,7 @@ import {
   parseGuardPolicyStateLine,
   setGuardPolicyLine,
   shellArg,
+  shellQuoted,
   unattendedHumanPresenceHint,
   parseAuditShardEvents,
   parseReviewRecordBytes,
@@ -7871,6 +7872,11 @@ export function planTakeFlags(id8: string, address: string): string[] {
   return ["--plan", id8, "--from", address];
 }
 
+// The same flags as a printed command writes them, the address always quoted.
+export function planTakeWords(id8: string, address: string): string {
+  return planTakeFlags(id8, address).map((word) => (word === address ? shellQuoted(word) : word)).join(" ");
+}
+
 // The command that takes (or carries on) a Unit of a build's lead's work:
 // from the plan where it is shared, or, for solo work here, from it.
 function takeCommandOf(projectDir: string, build: UnitBuild): string {
@@ -7880,7 +7886,7 @@ function takeCommandOf(projectDir: string, build: UnitBuild): string {
     return `${aidlcToolInvocation("unit")} take ${unit} --home ${shellArg(here.dirName)}` +
       (here.space === DEFAULT_SPACE ? "" : ` --home-space ${shellArg(here.space)}`);
   }
-  return `${aidlcToolInvocation("unit")} take ${unit} ${planTakeFlags(idSuffix(build.homeWork), build.homeLocation).map(shellArg).join(" ")}`;
+  return `${aidlcToolInvocation("unit")} take ${unit} ${planTakeWords(idSuffix(build.homeWork), build.homeLocation)}`;
 }
 
 // The home's integration branch for the solo second person's take, fetched with
@@ -13279,7 +13285,7 @@ function likelyReposNotHere(
           ...cloneable.map((repo) => ({ label: `Clone ${repo}`, command: `${aidlcToolInvocation("utility")} intent add-repo ${shellArg(repo)}` })),
           ...fromLead.map((repo) => ({
             label: `Clone ${repo}`,
-            command: `${aidlcToolInvocation("utility")} intent add-repo ${shellArg(repo)} --url ${shellArg(leadAddresses.get(repo)!)}`,
+            command: `${aidlcToolInvocation("utility")} intent add-repo ${shellArg(repo)} --url ${shellQuoted(leadAddresses.get(repo)!)}`,
           })),
           { label: "Not now" },
         ],

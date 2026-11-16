@@ -15,7 +15,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
-import { hooksHealthReadDir, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { hooksHealthReadDir, readAuditShardEvents, shellQuoted } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { pastUnitStages } from "../../dist/claude/.claude/tools/aidlc-unit.ts";
 import { CHECK_IN_LINE, pullRequestHeadRefs } from "../../dist/claude/.claude/tools/aidlc-unit-teams.ts";
 import { AIDLC_SRC, fixtureIntentId8, seededStateFile } from "../harness/fixtures.ts";
@@ -2956,7 +2956,7 @@ describe("a team hears the lead's turn-down from any chat on its work", () => {
     const step = personsNext(alice, chat, "alice-chat");
     const line = 'refunds was turned down in billing by the lead: "needs the ledger entry". Its build is waiting for you; say so to go back to it.';
     expect((step.change_notices ?? []) as string[], JSON.stringify(step).slice(0, 600)).toContain(line);
-    expect(String(step.change_notices_note)).toContain(`take refunds ${planFrom(home).join(" ")}`);
+    expect(String(step.change_notices_note)).toContain(`take refunds --plan ${home.id8} --from ${shellQuoted(planFrom(home)[3])}`);
     expect((personsNext(alice, chat, "alice-chat").change_notices ?? []) as string[]).not.toContain(line);
   });
 
@@ -2972,7 +2972,7 @@ describe("a team hears the lead's turn-down from any chat on its work", () => {
     expect(hook(alice, chat, { hook_event_name: "UserPromptSubmit", session_id: session, prompt: "anything new for us?" }).status).toBe(0);
     const step = next(alice, chat);
     expect((step.change_notices ?? []) as string[], JSON.stringify(step).slice(0, 900)).toContain(sentBack);
-    expect(String(step.change_notices_note)).toContain(`take refunds ${planFrom(home).join(" ")}`);
+    expect(String(step.change_notices_note)).toContain(`take refunds --plan ${home.id8} --from ${shellQuoted(planFrom(home)[3])}`);
     expect((next(alice, chat).change_notices ?? []) as string[]).not.toContain(sentBack);
   });
 

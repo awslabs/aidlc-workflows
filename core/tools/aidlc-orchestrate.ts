@@ -681,7 +681,7 @@ import {
   buildOutOpening,
   planGoneLine,
   planLastChange,
-  planTakeFlags,
+  planTakeWords,
   planUnreadableLine,
   keepSaidPlan,
   lookForPlans,
@@ -10058,7 +10058,7 @@ function unitTakeLook(
       continue;
     }
     if (onDisk && space === active) homeHere.push(intent);
-    const take = `${unitTool} take %s ${planTakeFlags(snapshot.place.id8, snapshot.place.address).map(shellArg).join(" ")}`;
+    const take = `${unitTool} take %s ${planTakeWords(snapshot.place.id8, snapshot.place.address)}`;
     const likely = new Map(plan.units.map((unit) => [unit.name, [...unit.repos]]));
     // One start per Unit: its build goes in the space the person is in.
     const start = (unit: string, label: string, detail: string, extra = ""): AskChoice[] =>
