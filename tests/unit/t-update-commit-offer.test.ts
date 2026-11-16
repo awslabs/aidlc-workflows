@@ -306,6 +306,29 @@ describe("unit commit-record --update", () => {
     expect(shown(dir)).toContain(".claude/skills/aidlc/SKILL.md");
   });
 
+  // More than any platform's command line holds (Linux and macOS a few hundred kilobytes to 2 MB, Windows 32,767
+  // characters), as an update to two harnesses on Windows can be.
+  test("an update naming more files than a command line holds is committed in one go", () => {
+    const { dir } = projectBehind("claude");
+    refresh(dir, "claude");
+    const manifestPath = join(dir, ".claude", "tools", "data", "aidlc-manifest.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as { files: Record<string, string> };
+    const folder = join(dir, ".claude", "aidlc-common", "many");
+    mkdirSync(folder, { recursive: true });
+    const pad = "x".repeat(160);
+    for (let at = 0; at < 12_000; at++) {
+      const name = `file-${String(at).padStart(5, "0")}-${pad}.md`;
+      const text = `${at}\n`;
+      writeFileSync(join(folder, name), text);
+      manifest.files[`.claude/aidlc-common/many/${name}`] = `sha256:${createHash("sha256").update(text).digest("hex")}`;
+    }
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    const yes = run(UNIT, ["commit-record", "--update"], dir);
+    expect(yes.status, yes.out.slice(0, 2000)).toBe(0);
+    expect(Number(yes.json?.files)).toBeGreaterThan(12_000);
+    expect(git(dir, ["status", "--porcelain", "--", ".claude"])).toBe("M .claude/settings.json");
+  });
+
   test("on no branch, with a merge under way, or when their hook refuses, nothing is committed", () => {
     const { dir } = projectBehind("claude");
     refresh(dir, "claude");

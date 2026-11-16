@@ -7892,6 +7892,10 @@ function commitUnitPaths(
   const scratch = mkdtempSync(join(tmpdir(), "aidlc-unit-commit-"));
   const env = { GIT_INDEX_FILE: join(scratch, "index") };
   const leftOut: string[] = [];
+  // The paths go to git on its standard input, NUL-separated and read as names, never patterns: Windows caps a
+  // command line at 32,767 characters, and an update's own commit names hundreds of AI-DLC's files.
+  const named = (list: readonly string[]): string => list.map((path) => `${path}\0`).join("");
+  const fromInput = ["--pathspec-from-file=-", "--pathspec-file-nul"];
   try {
     const head = git(dir, ["rev-parse", "--verify", "--quiet", "HEAD"]).ok;
     git(dir, head ? ["read-tree", "HEAD"] : ["read-tree", "--empty"], env);
@@ -7900,7 +7904,7 @@ function commitUnitPaths(
     const plain = paths.filter((path) => own[path] === undefined &&
       (existsSync(join(dir, path)) || git(dir, ["ls-files", "--error-unmatch", "--", path], env).ok));
     if (plain.length > 0) {
-      const added = git(dir, ["add", "--", ...plain], env);
+      const added = git(dir, ["--literal-pathspecs", "add", ...fromInput], env, named(plain));
       if (!added.ok) {
         if (share) share.refused(added.stderr.trim(), true);
         fail(`${unit}'s changes could not be added in ${name}: ${added.stderr.trim()}`);
@@ -7930,7 +7934,8 @@ function commitUnitPaths(
       }
     }
     const committed = paths.filter((path) => !leftOut.includes(path));
-    const changed = committed.length > 0 && !git(dir, ["diff", "--cached", "--quiet", "--", ...committed], env).ok;
+    // The index started at HEAD and only these paths changed in it, so all of it is theirs to compare.
+    const changed = committed.length > 0 && !git(dir, ["diff", "--cached", "--quiet"], env).ok;
     const amend = given?.amend === true && (changed || !given.same);
     if (changed || amend) {
       const made = given === undefined
@@ -7945,7 +7950,7 @@ function commitUnitPaths(
         }
         throw new CommitRefused(`The commit in ${name} did not go through: ${said}`);
       }
-      if (committed.length > 0) git(dir, ["reset", "-q", "--", ...committed]);
+      if (committed.length > 0) git(dir, ["--literal-pathspecs", "reset", "-q", ...fromInput], undefined, named(committed));
       for (const [path, now] of sent) own[path] = now;
     }
   } finally {
