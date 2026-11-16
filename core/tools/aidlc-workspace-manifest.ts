@@ -134,6 +134,11 @@ export function catchUpChangedLine(
   const offer = `Want me to commit the move, with AI-DLC's record in aidlc/${withMessage ? ", using this commit message" : ""}?`;
   if (paths.length === 0) {
     if (!moved) return null;
+    // The move alone where the record's commit does not run (a Unit's build): the update's own commit takes it.
+    if (update !== undefined) {
+      return `AI-DLC moved repos.json into aidlc/. Want me to commit the move on ${update.branch}, as one commit of its own? ` +
+        `Nothing is pushed. Teammates need AI-DLC ${since} or newer to find it there.${withMessage ? " I'd use this commit message:" : ""}`;
+    }
     return asking ? `AI-DLC moved repos.json into aidlc/. ${offer} Teammates need AI-DLC ${since} or newer to find it there.` : REPOS_MOVED_LINE;
   }
   const folders = new Map<string, number>();

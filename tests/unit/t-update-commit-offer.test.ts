@@ -339,6 +339,21 @@ describe("unit commit-record --update", () => {
     expect(git(dir, ["status", "--porcelain", "--", ".claude"])).toBe("M .claude/settings.json");
   });
 
+  test("in a checkout that builds a Unit, the move alone is committed as one commit of its own", () => {
+    const { dir } = projectBehind("claude", (d) => writeFileSync(join(d, "repos.json"), `${JSON.stringify({ repos: [{ name: "billing" }] }, null, 2)}\n`));
+    seedWorkspaceShell(dir);
+    writeFileSync(seededStateFile(dir), readFileSync(join(FIXTURES_DIR, "state-construction.md"), "utf-8")
+      .replace("- **Revision Count**: 0\n", "- **Revision Count**: 0\n- **Unit Build**: refunds\n"));
+    const changedBefore = refresh(dir, "claude");
+    // The files went in already; only the move is left to commit.
+    git(dir, ["add", "--", ".claude"]);
+    git(dir, ["commit", "-q", "-m", "the files", "--", ".claude"]);
+    expect(ownFilesToCommit(dir, changedBefore).commit).toEqual(["repos.json", "aidlc/repos.json"]);
+    const yes = run(UNIT, ["commit-record", "--update"], dir);
+    expect(yes.status, yes.out).toBe(0);
+    expect(shown(dir)).toEqual(["aidlc/repos.json", "repos.json"]);
+  });
+
   test("on no branch, with a merge under way, or when their hook refuses, nothing is committed", () => {
     const { dir } = projectBehind("claude");
     refresh(dir, "claude");
@@ -378,6 +393,13 @@ describe("the question after an update", () => {
       "I'd leave .claude/f0.md, .claude/f1.md, .claude/f2.md, .claude/f3.md, .claude/f4.md, .claude/f5.md, .claude/f6.md, .claude/f7.md, " +
         ".claude/f8.md, .claude/f9.md and 2 more out, as I cannot be sure they hold only AI-DLC's changes: they are yours to look over and commit. " +
         "I'd use this commit message:",
+    );
+  });
+
+  test("the move alone where the record's commit does not run", () => {
+    expect(catchUpChangedLine("2.12.1", [], true, true, true, { branch: "refunds", left: [] })).toBe(
+      "AI-DLC moved repos.json into aidlc/. Want me to commit the move on refunds, as one commit of its own? Nothing is pushed. " +
+        "Teammates need AI-DLC 2.12 or newer to find it there. I'd use this commit message:",
     );
   });
 

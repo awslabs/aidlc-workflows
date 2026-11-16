@@ -739,6 +739,6 @@ export function ownFilesToCommit(
     const harness = generated.get(path) ?? "";
     (composed || sources(harness) || bytesNow(projectDir, path) === null ? left : commit).push(path);
   }
-  if (commit.length > 0) commit.push(...reposMoveToCommit(projectDir));
+  commit.push(...reposMoveToCommit(projectDir));
   return { commit, left, held };
 }

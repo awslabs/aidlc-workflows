@@ -302,6 +302,21 @@ describe.skipIf(SKIP_REASON !== null)("each project catches up the next time it 
     expect(existsSync(join(dir, "aidlc", ".aidlc-engine", "request-text", `unit-record-message-moved-${AIDLC_VERSION}.txt`))).toBe(false);
   });
 
+  test("in a checkout that builds a Unit, the move alone is offered as one commit of its own", () => {
+    const dir = project(earlierTree, { harnessCommitted: false });
+    seedWorkspaceShell(dir);
+    writeFileSync(seededStateFile(dir), readFileSync(join(FIXTURES_DIR, "state-construction.md"), "utf-8")
+      .replace("- **Revision Count**: 0\n", "- **Revision Count**: 0\n- **Unit Build**: refunds\n"));
+    const first = sessionStart(dir, "catch-up, the move alone in a Unit's build");
+    expect(first.status, first.stdout + first.stderr).toBe(0);
+    expect(first.stdout).toContain(
+      "AI-DLC moved repos.json into aidlc/. Want me to commit the move on main, as one commit of its own? Nothing is pushed. " +
+        "Teammates need AI-DLC 2.12 or newer to find it there. I'd use this commit message:",
+    );
+    expect(first.stdout).toContain("unit commit-record --update --commit-message-file");
+    expect(first.stdout).toContain("about the move of repos.json into aidlc/");
+  });
+
   test("a project in a folder of its repo: the line counts its own folders", () => {
     const dir = project(earlierTree, { subfolder: true });
     const first = sessionStart(dir, "catch-up, subfolder");
