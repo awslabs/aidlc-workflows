@@ -2436,6 +2436,22 @@ function refusePushes(remote: string): void {
 }
 
 // A record repository that takes no push of AI-DLC's records; its code pushes go through.
+// The lead's word on a Unit, done for its record's `generation`, written on the
+// plan's tip as one commit by hand.
+function doneOnPlanByHand(host: string, unit: string, generation: number): void {
+  const ref = planRefOf("00000001");
+  const tip = git(host, ["rev-parse", ref]);
+  const plan = JSON.parse(git(host, ["show", `${tip}:plan.json`])) as { units: Array<{ name: string; word: Record<string, unknown> }> };
+  for (const entry of plan.units) if (entry.name === unit) entry.word = { ...entry.word, generation, done: true };
+  // The lead's own name on the commit, so a box with no git identity of its own makes it too.
+  const env = { ...ENV, GIT_AUTHOR_NAME: "lead", GIT_AUTHOR_EMAIL: "lead@example.test", GIT_COMMITTER_NAME: "lead", GIT_COMMITTER_EMAIL: "lead@example.test" };
+  const out = (args: string[], input?: string): string => spawnSync("git", args, { cwd: host, encoding: "utf-8", env, input }).stdout.trim();
+  const blob = out(["hash-object", "-w", "--stdin"], `${JSON.stringify(plan, null, 2)}\n`);
+  const entries = out(["ls-tree", tip]).split("\n").map((line) => (line.endsWith("\tplan.json") ? `100644 blob ${blob}\tplan.json` : line));
+  const commit = out(["commit-tree", out(["mktree"], `${entries.join("\n")}\n`), "-p", tip, "-m", `aidlc plan fixture 9: ${unit} done`]);
+  git(host, ["update-ref", ref, commit]);
+}
+
 function refuseRecords(host: string): void {
   const hook = join(host, "hooks", "pre-receive");
   writeFileSync(hook, "#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/aidlc/*) " +
@@ -2558,6 +2574,30 @@ describe("a take the lead's project could not record then", () => {
     expect(claim).toMatchObject({ taken_by: "pay", generation: 2 });
     expect(claim.result).toBeDefined();
     expect(field(readFileSync(join(record, "aidlc-state.md"), "utf-8"), "Unit Push")).toBe("pushed");
+  });
+
+  test("done on the plan meanwhile: said once, that the take was never written on its record, with the way on", () => {
+    const { hosts, home } = recordsHome();
+    // A teammate took it and gave it back, so its record stands given back.
+    const pal = teamWorkspace(home.remote, "pal");
+    expect(takeFrom("payments", pal, "refunds").status).toBe(0);
+    expect(run(UNIT, ["release", "refunds"], pal).status).toBe(0);
+    refuseRecords(hosts["checkout-api"]);
+    const pay = teamWorkspace(home.remote, "pay");
+    for (const [name, host] of Object.entries(hosts)) cloneCode(host, pay, name, "pay");
+    expect(takeFrom("payments", pay, "refunds").status).toBe(0);
+    takePushes(hosts["checkout-api"]);
+    // The lead's word meanwhile: done, for the record as it stands, written on the plan by hand (no lead command
+    // writes done for a record given back).
+    const generation = (recordJson(home, "refunds") as { generation: number }).generation;
+    doneOnPlanByHand(hosts["checkout-api"], "refunds", generation);
+    const chat = chatOf("pay-done");
+    const look = nextSaying(pay, chat);
+    expect(look.said).toContain(
+      "refunds is done on the plan in checkout-api now, and your take of it was never written on its record in checkout-api. " +
+        "Your build is still here: agree with the lead who carries it on, or give yours back.",
+    );
+    expect(nextSaying(pay, chat).said).not.toContain("your take of it was never written");
   });
 
   test("taken by a teammate meanwhile: said once with who and when, their claim never written over, a give back sets the build aside here only", () => {

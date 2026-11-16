@@ -10251,10 +10251,12 @@ function takeStanding(projectDir: string, build: UnitBuild): TakeStanding {
   if (row === undefined || own === null || basename(row.shard) !== own) return { state: "recorded" };
   let current: UnitClaimView | null;
   let repo: string;
+  let planRepo: string;
   try {
     const home = buildsHome(projectDir, build);
     const place = recordPlaceOf(projectDir, home, build.unit);
     repo = place.repo;
+    planRepo = planOfWork(projectDir, home.id8, home.location)?.plan_repo.name ?? repo;
     current = recordCopied(projectDir, place, recordWork(home), build.unit);
   } catch {
     return { state: "recorded" };
@@ -10307,8 +10309,8 @@ function takeStanding(projectDir: string, build: UnitBuild): TakeStanding {
   if (current?.payload.done === true) {
     return {
       state: "aside",
-      line: `${unit}'s claim at the lead's project changed before your take could be recorded there: it is done there now, so the lead ` +
-        "and the other teams do not see your take. Your build is still here: agree with the lead who carries it on, or give yours back.",
+      line: `${unit} is done on the plan in ${planRepo} now, and your take of it was never written on its record in ${repo}. ` +
+        "Your build is still here: agree with the lead who carries it on, or give yours back.",
     };
   }
   return {
