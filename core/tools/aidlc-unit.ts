@@ -12984,7 +12984,7 @@ function amendInput(args: string[], projectDir?: string): void {
     // In the plan's order, as the board lists them.
     const order = keptPlan(pd, activeIdentity(pd).intentId8)?.plan.units.map((entry) => entry.name) ?? [];
     const units = [...hearing.keys()].sort((a, b) => order.indexOf(a) - order.indexOf(b));
-    lines.unshift(`The ${name} is changed here and on the plan, for ${joinNames(units)}.`);
+    lines.unshift(`The ${name} ${name.endsWith("s") ? "are" : "is"} changed here and on the plan, for ${joinNames(units)}.`);
   } else {
     const sent = writeUnitWord(pd, live, `${name} change from ${unit} turned down`, withAnswer);
     failUnlessWritten(pd, sent, `your answer on ${builderOf(live)}'s change to the ${name}`, lead.fields["Message Id"]);

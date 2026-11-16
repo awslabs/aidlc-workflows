@@ -413,7 +413,7 @@ describe("a change to a shared input", () => {
     const amended = run(UNIT, ["amend", "refunds", "--input", REQUIREMENTS, "--answer", "approve", "--person-words", "yes, partial refunds"], home.dir);
     expect(amended.status, amended.out).toBe(0);
     expect(amended.json?.notice).toBe(
-      "The requirements is changed here and on the plan, for refunds and checkout-ui.",
+      "The requirements are changed here and on the plan, for refunds and checkout-ui.",
     );
     expect(readFileSync(join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD, ...REQUIREMENTS.split("/")), "utf-8"))
       .toBe("# Requirements\n\nFR1 refunds, partial amounts too.\n");
