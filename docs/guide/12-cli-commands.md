@@ -55,6 +55,7 @@ diagnostic and lifecycle routes.
 | `/aidlc unit rebase` | In a Unit's build started early, move it onto the branch the Unit it waited on merged into |
 | `/aidlc unit amend <unit> --input <file> --answer <approve\|reject>` | At the lead's project, answer a team's proposed change, in your own words |
 | `/aidlc unit lead-sign-off on\|off` | At the lead's project, make each team's result wait for your sign-off, or not (off by default) |
+| `/aidlc unit plan-change keep\|take-out --tip <commit>` | At the lead's project, answer the question about a change on the shared plan that this computer did not write: keep it, or put the plan back as you last had it at your next write to it |
 | `/aidlc unit lead-here` | In a checkout that did not make the plan (the lead on another machine), record the lead's own word that they lead the work there, so the lead's questions are put there |
 | `/aidlc unit sign-off <unit>` | At the lead's project, sign a team's result off, in your own words |
 | `/aidlc unit turned-down <unit> --repo <repo>` | At the lead's project, send one repo of a team's Unit back to the team, with your words |

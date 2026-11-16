@@ -155,7 +155,8 @@ import {
   writeFileAtomic,
   harnessDir,
 } from "./aidlc-lib.ts";
-import { learningsCorrectionChoices } from "./aidlc-unit-teams.ts";
+import { homeLocation, learningsCorrectionChoices, unitBuildOf } from "./aidlc-unit-teams.ts";
+import { leadsPlanWrite, planWriteNote } from "./aidlc-unit.ts";
 import { constructionCheckpointKind, resolveConstructionCheckpoint } from "./aidlc-construction-checkpoints.ts";
 import { LEARNED_DATE_SOURCE, learnedDate } from "./aidlc-learned-date.ts";
 import { TESTING_HEADING } from "./aidlc-testing-posture.ts";
@@ -1183,7 +1184,23 @@ function handlePersist(args: string[], projectDir: string): void {
     fail(`persist failed: ${errorMessage(e)}`, 1);
   }
 
+  // At a lead's project teams build for, a learning kept for the project or
+  // the team goes on the shared plan's rules, where a team's take reads them.
+  // One that does not go is said once, with the share that carries it.
+  let planNote: ReturnType<typeof planWriteNote> = null;
+  if (lockResult.rule_learned > 0) {
+    const state = readStateFile(projectDir, pinnedIntent, pinnedSpace);
+    if (homeLocation(state) !== null && unitBuildOf(state) === null) {
+      const what = "the practice you chose";
+      try {
+        planNote = planWriteNote(projectDir, leadsPlanWrite(projectDir, { what: "practices changed", take: { rules: true } }), what);
+      } catch (e) {
+        planNote = planWriteNote(projectDir, { kind: "refused", words: errorMessage(e), byRule: false }, what);
+      }
+    }
+  }
   const notes: string[] = [];
+  if (planNote !== null) notes.push(planNote.line);
   if (lockResult.bound_stages.length > 0) {
     const uniq = [...new Set(lockResult.bound_stages)];
     notes.push(
@@ -1196,6 +1213,9 @@ function handlePersist(args: string[], projectDir: string): void {
       rule_learned: lockResult.rule_learned,
       sensor_proposed: lockResult.sensor_proposed,
       notes,
+      ...(planNote === null ? {} : planNote.ask === undefined
+        ? { again: planNote.again }
+        : { ask_type: "lead-plan-change", choices: planNote.ask.choices, after_answer: planNote.again }),
     })
   );
 }

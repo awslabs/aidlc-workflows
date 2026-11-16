@@ -652,6 +652,10 @@ import {
   buildClaimHere,
   planPlaceForShare,
   planUnitsKept,
+  leadPlanChange,
+  planChangeQuestion,
+  planMark,
+  takePlanNotes,
   planNoRemoteLine,
   PLAN_NOT_NOW,
   planUnshared,
@@ -682,6 +686,7 @@ import {
   keepSaidPlan,
   lookForPlans,
   planAt,
+  mergesSeenHere,
   planClaimOverview,
   planPlace,
   type PlanPlace,
@@ -10041,9 +10046,14 @@ function unitTakeLook(
     // A plan or a record copy here that does not read leaves that work out of the look, never the step.
     let opening: ReturnType<typeof buildOutOpening>;
     let overview: ReturnType<typeof planClaimOverview>;
+    let done: ReadonlySet<string>;
     try {
-      opening = buildOutOpening(plan);
-      overview = planClaimOverview(projectDir, plan);
+      // A Unit a team's own git reads merged opens the Units waiting on it
+      // here, and is still listed as merged until the plan says it is done.
+      const seen = mergesSeenHere(projectDir, plan, planClaimOverview(projectDir, plan).claims);
+      opening = buildOutOpening(plan, seen);
+      overview = planClaimOverview(projectDir, plan, seen);
+      done = buildOutOpening(plan).completed;
     } catch {
       continue;
     }
@@ -10089,7 +10099,7 @@ function unitTakeLook(
     for (const unit of opening.units) {
       const claim = overview.claims.get(unit);
       // Done on its claim is the lead's project's word, before its Unit Progress here says so.
-      if (opening.completed.has(unit) || unit === skeleton || claim?.payload.done === true) continue;
+      if (done.has(unit) || unit === skeleton || claim?.payload.done === true) continue;
       const built = findUnitBuild(projectDir, intent.uuid, unit);
       if (built !== null) {
         // Carry on is offered for the person's own take, on any computer;
@@ -10106,7 +10116,7 @@ function unitTakeLook(
         const mine = buildIsMine(projectDir, built, live, worked.by) === true;
         if (standing.kind !== "building" && standing.kind !== "turned-down") {
           // Merged in every repo by the lead's own rule, read here and never written (teamMergeSeen).
-          building.push(`${unit} (pushed by ${who}${where}, ${standing.kind === "merged" ? "merged; the lead's project records it at its next look" : "waiting for its merge"})`);
+          building.push(`${unit} (pushed by ${who}${where}, ${standing.kind === "merged" ? "merged" : "waiting for its merge"})`);
           continue;
         }
         if (!mine) {
@@ -19079,6 +19089,9 @@ function teamHomeClaims(
   const leftNow = () => teamHome ? leftForTakesAtHome(projectDir, overview) : { units: new Set<string>(), keepsWalk: true, own: new Set<string>() };
   let left = leftNow();
   const unreached: string[] = [];
+  // The record repositories this look could not read: their Units keep the
+  // board's last read; every other Unit is checked.
+  const unread = new Set<string>();
   if (teamHome && !isReadOnlyEngineProbe()) {
     // No Unit left to take is the board, except while the home builds the
     // walking skeleton, which every other Unit waits on.
@@ -19097,7 +19110,10 @@ function teamHomeClaims(
       !(overview?.walked ?? []).includes(claim.unit));
     const open = left.keepsWalk || [...left.units].some((unit) => overview?.claims.get(unit)?.status !== "claimed");
     const refreshed = refreshHomeClaims(projectDir, { sessionId: engineSessionId, now, sincePerson: teamBuilding || open });
-    for (const unread of refreshed.unreached) unreached.push(unread.repo);
+    for (const repo of refreshed.unreached) {
+      unreached.push(repo.repo);
+      unread.add(repo.repo);
+    }
     if (refreshed.refused) sayWithStepOnce(projectDir, newsNotTakenIn("the teams"));
     if (refreshed.fetched || refreshed.lookedThisCommand === true) {
       overview = readOverview();
@@ -19111,8 +19127,8 @@ function teamHomeClaims(
     if (claim.status === "claimed" && claim.payload.done !== true && claim.payload.turned_down) heldElsewhere.add(unit);
   }
   for (const unit of left.units) heldElsewhere.add(unit);
-  // The lead's own approved change to an input the teams build with goes onto
-  // their claims, said once (a look writes nothing): a team whose Unit is done
+  // The lead's own approved change to an input the teams build with goes on
+  // the plan, said once (a look writes nothing else): a team whose Unit is done
   // hears it too, so a done team Unit is reason enough to look.
   const teamDone = [...(overview?.claims.values() ?? [])].some((claim) =>
     claim.status === "claimed" && claim.payload.done === true && claim.payload.taken_by !== undefined);
@@ -19121,39 +19137,40 @@ function teamHomeClaims(
       // Each is said with the step that wrote it: the write itself happens once.
       settledNotices.push(...sendLeadsApprovedChanges(projectDir));
     } catch (e) {
-      sayWithStepOnce(projectDir, `A change you approved could not be sent to the teams just now: ${errorMessage(e)}`);
+      if (e instanceof GitWriteRefused) throw e;
+      // Not written: the next step writes it.
     }
   }
   // What came back from the teams, checked against each repo once per step
-  // (with the home unreached, the board is the last fetch's).
+  // (a Unit whose record could not be read keeps the last fetch's).
   let results: ReturnType<typeof checkTeamResults> = new Map();
-  const unsent: Array<{ to: string; refused?: string }> = [];
+  const unsent: Array<{ line: string; shareAgain?: true }> = [];
   const told: ToldMerge[] = [];
   const tookIn: string[] = [];
   const maybe: MaybeMerged[] = [];
-  if (heldElsewhere.size > 0 && !isReadOnlyEngineProbe() && unreached.length === 0) {
+  if (heldElsewhere.size > 0 && !isReadOnlyEngineProbe()) {
     try {
-      results = checkTeamResults(projectDir, unreached, unsent, told, query, tookIn, maybe);
+      results = checkTeamResults(projectDir, unreached, unsent, told, query, tookIn, maybe, unread);
     } catch (e) {
       sayWithStepOnce(projectDir, `The teams' results could not be checked just now: ${errorMessage(e)}`);
     }
   }
   for (const candidate of maybe) sayWithStepOnce(projectDir, mergeCandidateLine(candidate.unit, candidate.repo, candidate));
-  // A merge the home saw is the one thing it writes for the teams: said once, in plain words.
+  // A merge the lead's look saw is the one thing it writes on the plan unasked: said once, in plain words.
   for (const merge of told) {
     sayWithStepOnce(projectDir, merge.done
-      ? `I've told ${merge.to} ${merge.unit} is merged.`
-      : `I've told ${merge.to} ${joinRepoNames(merge.repos)} merged ${merge.unit}.`);
+      ? `${merge.unit} is merged in ${joinRepoNames(merge.repos)}. Written on the plan.`
+      : `${joinRepoNames(merge.repos)} merged ${merge.unit}. Written on the plan.`);
   }
   // Taking a Unit in wrote its records here: one of the check-in line's stopping points.
   const checkIn = tookIn.length > 0 ? checkInLine(projectDir) : null;
   if (checkIn !== null) sayWithStepOnce(projectDir, checkIn);
   // In git's words when git refused it (a hook of theirs, the host), as the push and take lines are.
   if (unsent.length > 0) {
-    const [first] = unsent;
-    sayWithStepOnce(projectDir, first.refused !== undefined
-      ? `What the board shows here could not be sent to ${first.to}: ${first.refused.replace(/([^.!?])$/, "$1.")} The teams may not see it yet, and the next step sends it again.`
-      : `What the board shows here could not be sent to ${first.to} just now; the teams may not see it yet, and the next step sends it again.`);
+    sayWithStepOnce(projectDir, unsent[0].line);
+    if (unsent[0].shareAgain) {
+      handoverFollowUps.set(unsent[0].line, `When the person says yes, run \`${aidlcInvocation()} unit share --plan\` and tell them in plain words what it reports.`);
+    }
   }
   if (unreached.length > 0) {
     sayWithStepOnce(projectDir, `${[...new Set(unreached)].join(", ")} could not be reached just now, so the board may be behind: it shows what I last read from it.`);
@@ -19381,6 +19398,23 @@ function emitTeamUnitMajorRunStage(
     return;
   }
   const { overview, results, heldElsewhere, keepsWalk } = teamHomeClaims(projectDir, teamHome);
+  // The plan as the look read it: a computer with no baseline carries on from
+  // it, said once; a change on it this computer did not write is asked about
+  // once per tip, before anything of the lead's is written on it.
+  if (teamHome && !isReadOnlyEngineProbe()) {
+    const read = leadPlanChange(projectDir);
+    for (const line of [...(read.first === null ? [] : [read.first]), ...takePlanNotes()]) sayWithStepOnce(projectDir, line);
+    if (read.change !== null) {
+      const askName = planMark("asked", read.change.tip);
+      const mark = engineAskMark(projectDir, askName);
+      if (mark === null || !personRepliedAfter(projectDir, mark)) {
+        noteEngineAskMark(projectDir, askName);
+        const ask = planChangeQuestion(read.change);
+        emit({ kind: "ask", ask_type: "lead-plan-change", response_route: "command", question: ask.question, choices: ask.choices });
+        return;
+      }
+    }
+  }
   // A team's result built on its own edit of a shared input, made on the
   // version before the lead's change: said once.
   for (const claim of teamHome && !isReadOnlyEngineProbe() ? overview?.claims.values() ?? [] : []) {
@@ -19600,9 +19634,9 @@ function emitTeamUnitMajorRunStage(
           `${proposal.entry.words ? ` ("${proposal.entry.words}")` : ""}.${at !== null ? ` Their version is at ${at}.` : ""} ` +
           "Approve it for every Unit that uses it, or turn it down?",
         choices: [
-          { label: "Approve it", detail: "Your copy changes; each team building with it hears it once and carries on." },
+          { label: "Approve it", detail: "Your copy changes, and the plan gets it for every Unit that uses it." },
           { label: "Not now", detail: "It waits for your answer." },
-          { label: "Turn it down", detail: `${builderOf(proposal.claim)} carries on with the approved one, and hears your words.` },
+          { label: "Turn it down", detail: "Your words go on the plan; their change is not taken in." },
         ],
         amend_command: `${aidlcToolInvocation("unit")} amend ${shellArg(proposal.claim.unit)} --input ${shellArg(proposal.entry.input)} ` +
           `--answer <approve|reject> ${unitWordsArg("amend", proposal.claim.unit)}`,

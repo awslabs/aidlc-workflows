@@ -27,7 +27,6 @@ import {
   AIDLC_SRC,
   cleanupTestProject,
   createTestProject,
-  fixtureIntentId8,
   REPO_ROOT,
   removeWorkspaceRecord,
 } from "../harness/fixtures.ts";
@@ -51,7 +50,7 @@ import {
   next,
   personsChat,
   personsNext,
-  recordAt,
+  planWordAt,
   recordHost,
   refundsTakenInClone,
   run,
@@ -70,6 +69,7 @@ import {
   ticketKeyHook,
   sharePlan,
   planFrom,
+  planRefOf,
 } from "../harness/team-build.ts";
 import { hostFor } from "../harness/scope-hosts.ts";
 import { AgentStandIn, type Directive, PersonScript } from "../harness/scope-run.ts";
@@ -151,7 +151,7 @@ describe("no step of the build-out comes back after its own command ran", () => 
     // Sharing the plan with the teams is asked once; its yes pushes it, and the board follows.
     const share = next(home.dir);
     expect(share.ask_type, JSON.stringify(share)).toBe("team-handover");
-    movesOn(home.dir, ENV, share, choice(share, "Share them with the teams"));
+    movesOn(home.dir, ENV, share, choice(share, "Share the plan"));
     // A teammate asks what they can take and takes refunds from the offer, from the space they work in; the
     // offer is not put again.
     const alice = withTools(cloneOf(home.remote, "alice"));
@@ -560,7 +560,7 @@ describe("a step that waits on the person, and every way on the round added, nev
     expect(command, JSON.stringify(step).slice(0, 400)).toBeDefined();
     const down = runPrinted(home.dir, ENV, command!.replace("<unit>", "refunds").replace("<repo>", "billing"));
     expect(down.status, down.out).toBe(0);
-    expect(recordAt(home, "refunds")?.json?.turned_down).toBeDefined();
+    expect(planWordAt(home, "refunds")?.turned_down).toBeDefined();
     // The team, mid-build, hears it at its next step.
     const heard = next(alice, ENV);
     expect((heard.change_notices ?? []) as string[], JSON.stringify(heard)).toContain(
@@ -580,16 +580,16 @@ describe("a step that waits on the person, and every way on the round added, nev
     expect(board.out.trim()).toBe(String(step.narration));
     // A query: after a merge it shows it and writes nothing; the step then shows the same and records it.
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
-    const claimRef = `refs/aidlc/claims/${fixtureIntentId8(home.dir)}/refunds`;
-    const claimBefore = git(recordHost(home), ["rev-parse", claimRef]);
+    const planRef = planRefOf(home.id8);
+    const planBefore = git(recordHost(home), ["rev-parse", planRef]);
     const rowsBefore = readAuditShardEvents(home.dir).length;
     const merged = runPrinted(home.dir, ENV, "bun .claude/tools/aidlc-orchestrate.ts team-board");
     expect(merged.out).toContain("- refunds, payments space: built by alice, checkout-api merged, billing not merged yet (1 of 2 merged)");
-    expect(git(recordHost(home), ["rev-parse", claimRef])).toBe(claimBefore);
+    expect(git(recordHost(home), ["rev-parse", planRef])).toBe(planBefore);
     expect(readAuditShardEvents(home.dir)).toHaveLength(rowsBefore);
     const after = next(home.dir, ENV);
     expect(merged.out.trim()).toBe(String(after.narration));
-    expect(git(recordHost(home), ["rev-parse", claimRef])).not.toBe(claimBefore);
+    expect(git(recordHost(home), ["rev-parse", planRef])).not.toBe(planBefore);
   });
 
   test("a copy of the lead's own checkout with nothing to take: carrying the work on here is offered, recommended, and taking it moves on", () => {
@@ -697,7 +697,7 @@ function earlyThenMerged(how: "squash" | "merge" | "rebase", pushedFirst: boolea
   }
   for (const host of Object.values(taken.hosts)) mergeOnHost(host, "refunds", how);
   next(taken.home.dir);
-  expect(recordAt(taken.home, "refunds")?.json).toMatchObject({ done: true });
+  expect(planWordAt(taken.home, "refunds")).toMatchObject({ done: true });
   git(dana, ["fetch", "-q", "origin"]);
   return { ...taken, dana, record };
 }

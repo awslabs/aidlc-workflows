@@ -34,7 +34,7 @@ import {
   mergeOnHost,
   next,
   ORCH,
-  recordAt,
+  planWordAt,
   refundsTakenInClone,
   run,
   STATE,
@@ -69,6 +69,9 @@ function teamsChosen(dir: string): void {
   expect(teams.status, teams.out).toBe(0);
   const here = run(UNIT, ["assign", "--here", "refunds,reporting"], dir);
   expect(here.status, here.out).toBe(0);
+  // The plan goes to the teams by its own share; the push below is the lead's record.
+  const shared = run(UNIT, ["share", "--plan"], dir);
+  expect(shared.status, shared.out).toBe(0);
   git(dir, ["add", "-A"]);
   git(dir, ["commit", "-q", "-m", "teams chosen"]);
   git(dir, ["push", "-q", "origin", "main"]);
@@ -198,7 +201,7 @@ describe("a teammate's take offer", () => {
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
     mergeOnHost(hosts.billing, "refunds", "merge");
     next(home.dir);
-    expect(recordAt(home, "refunds")?.json).toMatchObject({ done: true });
+    expect(planWordAt(home, "refunds")).toMatchObject({ done: true });
     // The lead's state as last pushed, before this record of the merge.
     const bob = cloneOf(home.remote, "bob");
     const offer = next(bob);
@@ -221,7 +224,7 @@ describe("a look at the board records nothing, and says so", () => {
         "the next step here records it and opens reporting",
     );
     expect(readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_MERGED")).toEqual([]);
-    expect(recordAt(home, "refunds")?.json).not.toMatchObject({ done: true });
+    expect(planWordAt(home, "refunds")).not.toMatchObject({ done: true });
     next(home.dir);
     expect(readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_MERGED")).toHaveLength(1);
     const after = teamBoard(home.dir);
@@ -254,7 +257,7 @@ describe("a look at the board records nothing, and says so", () => {
     appendAuditEntry("HUMAN_TURN", { "Person Reply": "carry on" }, home.dir);
     next(home.dir, chat);
     expect(readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_MERGED")).toHaveLength(1);
-    expect(recordAt(plan, "refunds")?.json).toMatchObject({ done: true });
+    expect(planWordAt(plan, "refunds")).toMatchObject({ done: true });
   });
 });
 

@@ -117,6 +117,7 @@ import {
   personsWordsText,
   markPersonLinesHeard,
   personLineHeard,
+  rowsAfterMark,
   relativeRecordDir,
   REVIEW_RECORDS_DIR,
   reviewRecordDigest,
@@ -199,7 +200,6 @@ import {
   lastCommittedByThisPerson,
   patchIdOf,
   type Proposal,
-  RESULT_FILES_ROOT,
   type RepoResult,
   sameGitAddress,
   PROJECT_TYPE_SOURCE_FIELD,
@@ -383,11 +383,12 @@ function localGit(
   projectDir: string,
   args: string[],
   env?: NodeJS.ProcessEnv,
+  input?: string,
 ): GitResult {
   return git(projectDir, args, {
     GIT_NO_LAZY_FETCH: "1",
     ...env,
-  });
+  }, input);
 }
 
 function fail(message: string): never {
@@ -1316,7 +1317,106 @@ function recordView(
   // A proposal is for one of the plan's approved inputs exactly, where the plan is here to say.
   const inputs = (filled.proposals ?? []).length === 0 ? null : planOfWork(projectDir, named[1])?.inputs.map((input) => input.path) ?? null;
   if (inputs !== null) filled.proposals = filled.proposals!.filter((entry) => inputs.includes(entry.input));
-  return { unit: filled.unit, status: filled.status, owner: filled.owner, generation: filled.generation, nonce: filled.nonce, oid, ref, payload: filled };
+  return withLeadsWord(projectDir, {
+    unit: filled.unit, status: filled.status, owner: filled.owner, generation: filled.generation, nonce: filled.nonce, oid, ref, payload: filled,
+  });
+}
+
+// The lead's word on one Unit (plan.json's units[].word): what only the lead
+// writes, on the plan, never in a record. `generation` is the take it is for.
+// An entry with a `head` holds while the result still ends there in that repo
+// (a push clears the lead's verdicts and a turn-down; a commit added to a pushed
+// branch moves the head the same way); a turn-down holds while every repo still
+// ends where it was turned down. An amendment's text is the blob it names, in
+// the plan's history.
+export interface UnitWord {
+  generation?: number;
+  verdicts?: Array<{ repo: string; head?: string; merged: boolean; commit?: string; how?: string }>;
+  done?: true;
+  turned_down?: { repo: string; heads: Record<string, string>; words: string; at: string; from?: "build-and-test"; person_reply?: string };
+  signoff?: { words: string; at: string };
+  said_merged?: Array<{ repo: string; head?: string; words: string; at: string }>;
+  answers?: Array<{ input: string; at: string; answer: "approved" | "turned down"; words?: string }>;
+  amendments?: Array<Amendment & { blob: string }>;
+  open_again?: { at: string };
+}
+
+export function unitWordIn(plan: PlanJson, unit: string): UnitWord {
+  return (plan.units.find((entry) => entry.name === unit)?.word ?? {}) as UnitWord;
+}
+
+// Where a result ends in each of its repos.
+export function resultHeads(payload: UnitClaimPayload): Record<string, string> {
+  return Object.fromEntries((payload.result?.repos ?? []).map((repo) => [repo.repo, repo.heads.at(-1) ?? ""]));
+}
+
+// A record's view with the lead's word on it, where the word is for this take
+// and push. A Build and Test send-back that holds leaves the view with no result
+// and not done, so the lead's look does not count the old merge again; a take
+// opened again reads as given back.
+export function viewWithWord(view: UnitClaimView, word: UnitWord): UnitClaimView {
+  if (word.generation === undefined || word.generation !== view.generation) return view;
+  const heads = resultHeads(view.payload);
+  const holds = (entry: { repo: string; head?: string }): boolean => entry.head === undefined || heads[entry.repo] === entry.head;
+  const payload: UnitClaimPayload = { ...view.payload };
+  const verdicts = (word.verdicts ?? []).filter(holds);
+  if (verdicts.length > 0) payload.verdicts = verdicts;
+  const said = (word.said_merged ?? []).filter(holds);
+  if (said.length > 0) payload.said_merged = said;
+  if (word.done) payload.done = true;
+  if (word.signoff) payload.signoff = word.signoff;
+  if ((word.amendments ?? []).length > 0) payload.amendments = word.amendments;
+  if (payload.proposals !== undefined && (word.answers ?? []).length > 0) {
+    payload.proposals = payload.proposals.map((entry) => {
+      const answer = word.answers!.find((given) => given.input === entry.input && given.at === entry.at);
+      return answer === undefined ? entry : { ...entry, answer: answer.answer, ...(answer.words ? { answer_words: answer.words } : {}) };
+    });
+  }
+  const down = word.turned_down;
+  if (down !== undefined && turnDownHolds(down, heads)) {
+    payload.turned_down = down;
+    if (down.from === "build-and-test") {
+      delete payload.result;
+      delete payload.done;
+      delete payload.verdicts;
+    }
+  }
+  // The view reads as given back; its payload keeps the record's own status
+  // and owner, which only the builder writes.
+  if (word.open_again !== undefined) {
+    payload.open_again = word.open_again;
+    return { ...view, status: "released", owner: "released", payload };
+  }
+  return { ...view, payload };
+}
+
+// The lead's turn-down holds for a result that ends where it was said of, in
+// each of its repositories and no other. A record's own turn-down field (one
+// written by hand or by an older build) names no heads, so it holds for none.
+function turnDownHolds(down: { repo: string; heads?: Record<string, string> }, heads: Record<string, string>): boolean {
+  const said = down.heads ?? {};
+  return Object.keys(heads).length === Object.keys(said).length && Object.entries(said).every(([repo, head]) => heads[repo] === head);
+}
+
+// A record's view with the lead's word from the plan of its work, as this
+// workspace last read or wrote it.
+function withLeadsWord(projectDir: string, view: UnitClaimView): UnitClaimView {
+  const plan = wordPlanOf(projectDir, view.payload.intent_id8);
+  if (plan !== null) return viewWithWord(view, unitWordIn(plan, view.unit));
+  // No plan shared yet (solo work a teammate took): the lead's own record says
+  // what it counted merged.
+  return recordedMergedHere(projectDir, view) ? { ...view, payload: { ...view.payload, done: true } } : view;
+}
+
+// The lead's own record holds this take's merge (UNIT_MERGED, recordUnitDone).
+function recordedMergedHere(projectDir: string, view: UnitClaimView): boolean {
+  try {
+    if (activeIdentity(projectDir).intentUuid !== view.payload.intent_uuid) return false;
+    return unitMergesStanding(readAuditShardEvents(projectDir), view.unit).some((row) =>
+      auditBlockField(row.block, "Attempt Generation") === String(view.generation));
+  } catch {
+    return false;
+  }
 }
 
 // The text of one file at a record commit (`result/<rel>`, `proposals/<input>`).
@@ -1909,9 +2009,34 @@ export function cachedUnitClaimOverview(
 
 // The claims of a plan's work as this workspace last read them, over what the
 // plan says is open.
-export function planClaimOverview(projectDir: string, plan: PlanJson): UnitClaimOverview {
+export function planClaimOverview(projectDir: string, plan: PlanJson, seen: ReadonlySet<string> = new Set()): UnitClaimOverview {
   const claims = cachedClaimsForIdentity(resolveProjectDir(projectDir), { space: plan.work.space, intentUuid: plan.work.id, intentId8: idSuffix(plan.work.id) }, true);
-  return buildOverview(buildOutOpening(plan), claims, new Set());
+  return buildOverview(buildOutOpening(plan, seen), claims, new Set());
+}
+
+// A Unit this workspace's own git reads merged in every repo of its result: a
+// team takes the Unit waiting on it without waiting for the lead's look. With
+// the lead's sign-off on, only once the plan says signed off.
+export function mergedAsReadHere(projectDir: string, view: UnitClaimView | null | undefined, plan: PlanJson): boolean {
+  return view?.status === "claimed" && view.payload.result !== undefined && view.payload.done !== true &&
+    countsDone(teamMergeSeen(projectDir, view.payload) === true, plan.settings[LEAD_SIGNOFF_FIELD] === "on", view.payload);
+}
+
+// The rule for a take that counts done, the lead's and a team's: merged in
+// every repo of its result, and signed off where the lead's sign-off is on.
+function countsDone(merged: boolean, signOffOn: boolean, payload: UnitClaimPayload): boolean {
+  return merged && (!signOffOn || payload.signoff !== undefined);
+}
+
+function allMerged(verdicts: ReadonlyArray<{ merged: boolean }>): boolean {
+  return verdicts.length > 0 && verdicts.every((verdict) => verdict.merged);
+}
+
+// The Units others wait on that this workspace's own git reads merged.
+export function mergesSeenHere(projectDir: string, plan: PlanJson, claims: ReadonlyMap<string, UnitClaimView>): Set<string> {
+  const done = buildOutOpening(plan).completed;
+  const waitedOn = new Set(plan.units.filter((unit) => !done.has(unit.name)).flatMap((unit) => unit.waits_on).filter((dep) => !done.has(dep)));
+  return new Set([...waitedOn].filter((dep) => mergedAsReadHere(projectDir, claims.get(dep), plan)));
 }
 
 export function localUnitClaimOverviewForIntent(
@@ -5413,6 +5538,23 @@ function moveClaimTurnRows(projectDir: string, shardPath: string, localPath: str
   git(projectDir, ["checkout", "HEAD", "--", shardPath]);
 }
 
+// The lead's word that a taken Unit is open again, on the plan.
+function openAgain(pd: string, unit: string): void {
+  const live = leadsRecordNow(pd, unit);
+  if (live?.status !== "claimed") {
+    console.log(JSON.stringify({ released: false, unit, notice: `${unit} is not taken, so it is open already.` }));
+    return;
+  }
+  if (live.payload.done) {
+    fail(`${unit} is done, so it is not opened again as it stands. I can send it back from your Build and Test, or build it again here: say which.`);
+  }
+  const sent = writeUnitWord(pd, live, `${unit} open again`, (word) => ({ ...word, open_again: { at: isoTimestamp() } }));
+  failUnlessWritten(pd, sent, `${unit}'s reopening`);
+  console.log(JSON.stringify({
+    released: true, unit, generation: live.generation, claim_ref: live.ref, claim_oid: live.oid, notice: withPlanNotes(`Written on the plan: ${unit} is open again.`),
+  }));
+}
+
 function releaseUnit(args: string[], projectDir?: string): void {
   const { positional, flags } = parseArgs(args);
   const unit = positional[0];
@@ -5439,6 +5581,12 @@ function releaseUnit(args: string[], projectDir?: string): void {
   assertMainCheckout(pd);
   const state = readStateFile(pd);
   if (!isTeamUnitOwnership(state)) fail("Unit release requires Unit Ownership: team.");
+  // Work teams build: the lead opens the take again on the plan, and the next
+  // take writes over it; the record stays its builder's.
+  if (homeLocation(state) !== null) {
+    openAgain(pd, unit);
+    return;
+  }
   const identity = activeIdentity(pd);
   const integration = fetchIntegration(pd);
   const ref = claimRefFor(state, identity.intentId8, unit);
@@ -6788,7 +6936,11 @@ function writeSharedPlan(pd: string, message?: string, named?: string): SharedPl
   };
   // The share is the lead's own yes, so a tip that is not a plan is written
   // over as a commit on top, nothing lost; one of a newer AI-DLC never is.
-  const written = writePlan(pd, place, { what, ...(message === undefined ? {} : { message }), overUnreadable: true });
+  const written = writePlan(pd, place, {
+    what, ...(message === undefined ? {} : { message }), overUnreadable: true,
+    // A change this computer did not write is asked about before the share lands on it.
+    stopIf: (tip) => tip === null ? undefined : planChangeAt(pd, tip.commit, tip.plan).change ?? undefined,
+  });
   const repo = place.repo;
   const address = maskUserinfo(place.address);
   // The work's Home Location is the plan's repository, where the lead put it.
@@ -6811,7 +6963,7 @@ function writeSharedPlan(pd: string, message?: string, named?: string): SharedPl
         ? `The plan is shared in ${repo}. AI-DLC sends no notice of it: the teams hear it from you. A team whose workspace has no ` +
           `${repo} needs this address: ${address}`
         : added.length > 0 ? `The plan in ${repo} has ${namesInProse(added)} now.` : `The plan is shared in ${repo}.`;
-    return { repo, address, commit: written.commit, said };
+    return { repo, address, commit: written.commit, said: written.back === undefined ? said : `${said} ${planBackLine(repo, written.back)}` };
   }
   if (written.kind === "unreached") {
     fail(`${repo} could not be reached, so the plan is not shared${written.words === null ? "." : `: git says "${written.words}".`} Say when to try again.`);
@@ -6819,6 +6971,11 @@ function writeSharedPlan(pd: string, message?: string, named?: string): SharedPl
   if (written.kind === "stale") fail(`The plan in ${repo} kept changing while I wrote on it, so nothing was written. Say when to try again.`);
   // Only a plan of a newer AI-DLC is never written over: the update step.
   if (written.kind === "unreadable") fail(newerPlanStep(pd));
+  // The lead's question first: once they answer, the same share again.
+  if (written.kind === "stopped") {
+    const ask = planChangeQuestion(written.detail as PlanChange);
+    throw new LeadWordUnwritten(ask.question, [aidlcToolInvocation("unit"), ...invokedArgs.map(shellArg)].join(" "), ask);
+  }
   // A rule of the host's (a message rule among them): the person's own
   // message has a way in, though the share asked for none.
   if (written.byRule) {
@@ -7225,6 +7382,14 @@ function writeHereClaim(
     return { kind: "unseen", why: "refused" in pushed ? pushed.refused.replace(/\.+$/, "") : "it changed meanwhile", repo: place.repo };
   }
   invalidateLiveClaimPayloadCache(pd, unit);
+  // A done Unit taken back to build here is not done on the plan any more.
+  if (takenBack) {
+    try {
+      leadsPlanWrite(pd, { what: `${unit} taken back`, words: (name) => name === unit ? { generation: payload.generation } : null });
+    } catch {
+      // The record says the new take; the plan's done no longer holds for it.
+    }
+  }
   return { kind: "here", repo: place.repo };
 }
 
@@ -8220,6 +8385,160 @@ export function planLastChange(projectDir: string, commit: string): { what: stri
   return { what, name, day: `${Number(at[2])} ${MONTHS[Number(at[1]) - 1]}` };
 }
 
+// What this computer has of the plan's history, kept with the question's own
+// marks in the work's engine folder: a plan commit it wrote, or one the lead
+// kept or carried on from (`here`); a change the lead said to take out at the
+// next write (`out`); the question put about a tip (`asked`).
+export function planMark(kind: "here" | "out" | "asked", commit: string): string {
+  return `plan-${kind}-${commit}.json`;
+}
+
+// The plan commits this computer wrote or said yes to, newest first by when it
+// marked each.
+function planCommitsHere(projectDir: string): string[] {
+  const root = recordDir(projectDir);
+  let names: string[] = [];
+  try {
+    names = root === null ? [] : readdirSync(join(root, ENGINE_DIR));
+  } catch {
+    // No engine folder: none marked.
+  }
+  return names.flatMap((name) => {
+    const commit = /^plan-here-([0-9a-f]+)\.json$/.exec(name)?.[1];
+    const mark = commit === undefined ? null : engineAskMark(projectDir, name);
+    return commit === undefined || mark === null ? [] : [{ commit, at: mark.at ?? "", offset: mark.offset }];
+  }).sort((a, b) => (a.at === b.at ? b.offset - a.offset : a.at < b.at ? 1 : -1)).map((entry) => entry.commit);
+}
+
+// The plan commits on `tip` outside the history of every one this computer
+// wrote or said yes to, oldest first, and the newest of those it has (`base`):
+// a history put in place of the plan's, or merged under someone else's, is
+// listed whole. Null when it has none (a computer that never wrote on the plan
+// or answered about it).
+function planChangesNotHere(projectDir: string, tip: string): { commits: string[]; base: string } | null {
+  const here = planCommitsHere(projectDir);
+  if (here.length === 0) return null;
+  // On standard input, as many as there are; one git no longer has is left out.
+  const listed = localGit(projectDir, ["rev-list", "--ignore-missing", "--stdin"], undefined, `${tip}\n${here.map((commit) => `^${commit}\n`).join("")}`);
+  const commits = listed.ok ? listed.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean) : [];
+  return { commits: commits.reverse(), base: here[0] };
+}
+
+// A change on the plan this computer did not write, waiting for the lead's
+// answer: the tip asked about and each commit's name, day and words, oldest first.
+export type PlanChange = { tip: string; work: string; repo: string; changes: Array<{ name: string; day: string; what: string }> };
+
+// The plan at `tip`, read at the lead's project: a change someone else wrote
+// since this computer's last write or yes, unanswered; on a computer with
+// no baseline, the plan as it stands is where it carries on from, said once
+// (`first`), and nothing is asked.
+function planChangeAt(pd: string, tip: string, plan: PlanJson): { change: PlanChange | null; first: string | null } {
+  const found = planChangesNotHere(pd, tip);
+  if (found === null) {
+    noteEngineAskMark(pd, planMark("here", tip));
+    const last = planLastChange(pd, tip);
+    return {
+      change: null,
+      first: last === null ? null : `The plan of ${plan.work.label} in ${plan.plan_repo.name} was last changed by ${last.name}, ${last.day}. ` +
+        `Its commit says "${last.what}". This computer carries on from it.`,
+    };
+  }
+  if (found.commits.length === 0 || engineAskMark(pd, planMark("out", tip)) !== null) return { change: null, first: null };
+  const changes = found.commits.map((commit) => planLastChange(pd, commit)).filter((entry) => entry !== null);
+  return { change: { tip, work: plan.work.label, repo: plan.plan_repo.name, changes }, first: null };
+}
+
+// The plan a view's lead word is read from: as this workspace last read it;
+// at the lead's project, while a change someone else wrote on it waits for the
+// lead's answer (or for the write that takes it out), as this computer had it
+// before that change, so nothing is read as the lead's own word before they say.
+function wordPlanOf(pd: string, id8: string): PlanJson | null {
+  const plan = planOfWork(pd, id8);
+  if (plan === null) return null;
+  try {
+    if (unitBuildOf(stateHere(pd) ?? "") !== null || activeIdentity(pd).intentId8 !== id8) return plan;
+    const kept = keptPlan(pd, id8);
+    if (kept === null) return plan;
+    const key = `${pd}\0${kept.commit}`;
+    let base = planBaselines.get(key);
+    if (base === undefined) {
+      const found = planChangesNotHere(pd, kept.commit);
+      base = found === null || found.commits.length === 0 || engineAskMark(pd, planMark("here", kept.commit)) !== null ? null : found.base;
+      planBaselines.set(key, base);
+    }
+    if (base === null) return plan;
+    const read = planAtCopy(pd, kept.ref, { commit: base });
+    return read.kind === "read" ? read.plan : plan;
+  } catch {
+    return plan;
+  }
+}
+
+// A view is read many times a step: the baseline of a plan tip, once per command.
+const planBaselines = new Map<string, string | null>();
+
+// The lead's own work, as this computer last read its plan (the look reads it first).
+export function leadPlanChange(projectDir: string): { change: PlanChange | null; first: string | null } {
+  const pd = resolveProjectDir(projectDir);
+  try {
+    const kept = keptPlan(pd, activeIdentity(pd).intentId8);
+    return kept === null ? { change: null, first: null } : planChangeAt(pd, kept.commit, kept.plan);
+  } catch {
+    return { change: null, first: null };
+  }
+}
+
+// The lead's question about a change on the plan this computer did not write,
+// with its two answers (`unit plan-change`); several changes are listed, oldest
+// first, the ten newest past ten.
+export function planChangeQuestion(change: PlanChange): { question: string; choices: Array<{ label: string; detail: string; command: string }> } {
+  const answer = (verb: string): string => `${aidlcToolInvocation("unit")} plan-change ${verb} --tip ${change.tip}`;
+  const keep = { detail: "The plan stays as it is, and what you decide next goes on top.", command: answer("keep") };
+  const put = (it: string, stays: string): string => `At my next write to the plan I put it back as you last had it, in a new commit on top. ` +
+    `Until then ${it} ${stays} in ${change.repo}, and ${it} ${stays} in the plan's history after.`;
+  const line = (entry: { name: string; day: string; what: string }): string => `${entry.name}, ${entry.day}. Its commit says "${entry.what}".`;
+  if (change.changes.length === 1) {
+    return {
+      question: `The plan of ${change.work} in ${change.repo} has a change this computer did not write, by ${line(change.changes[0])} Keep it on the plan?`,
+      choices: [{ label: "Keep it", ...keep }, { label: "Take it out", detail: put("it", "stays"), command: answer("take-out") }],
+    };
+  }
+  const shown = change.changes.slice(-10);
+  const earlier = change.changes.length - shown.length;
+  return {
+    question: `The plan of ${change.work} in ${change.repo} has ${change.changes.length} changes this computer did not write:\n` +
+      `${shown.map(line).join("\n")}${earlier > 0 ? `\nand ${earlier} earlier` : ""}\nKeep them on the plan?`,
+    choices: [{ label: "Keep them", ...keep }, { label: "Take them out", detail: put("they", "stay"), command: answer("take-out") }],
+  };
+}
+
+// The lead's answer about a change on the plan: kept on this computer only,
+// for the next write; nothing is written and nothing is said.
+function planChangeAnswer(args: string[], projectDir?: string): void {
+  const { positional, flags } = parseArgs(args);
+  const answer = positional[0];
+  const tip = flags.tip ?? "";
+  if ((answer !== "keep" && answer !== "take-out") || !/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(tip)) fail(`usage: ${unitUsage("plan-change")}`);
+  const pd = resolveProjectDir(projectDir);
+  noteEngineAskMark(pd, planMark(answer === "keep" ? "here" : "out", tip));
+  console.log(JSON.stringify({ answered: answer, tip }));
+}
+
+// Lines a lead's plan write leaves for the person beside its own: the plan put
+// back as they last had it, or where a computer with no baseline carries on from.
+let planNotes: string[] = [];
+
+export function takePlanNotes(): string[] {
+  const notes = planNotes;
+  planNotes = [];
+  return notes;
+}
+
+// A notice with the plan's lines that came with its write.
+function withPlanNotes(notice: string): string {
+  return [notice, ...takePlanNotes()].join(" ");
+}
+
 // This computer's copy of the plan, as last written or read.
 export function planShared(projectDir: string, place: PlanPlace): { commit: string; plan: PlanJson } | null {
   const read = planAt(projectDir, place);
@@ -8528,13 +8847,18 @@ export function pushPlan(projectDir: string, place: PlanPlace, commit: string, l
 
 export type PlanWrite =
   // `over`: written over a tip that was not a plan; `carried`, the lead's
-  // decisions on its Units were found to carry.
-  | { kind: "written"; commit: string; version: number; created: boolean; regained?: true; over?: { carried: boolean } }
+  // decisions on its Units were found to carry. `back`: the changes the lead
+  // said to take out, put back under it (planPutBack).
+  | { kind: "written"; commit: string; version: number; created: boolean; regained?: true; over?: { carried: boolean }; back?: { count: number; name: string } }
   | { kind: "unchanged"; commit: string }
   | { kind: "unreached"; words: string | null }
   | { kind: "refused"; words: string; byRule: boolean }
   | { kind: "stale"; words: string }
-  | { kind: "unreadable"; format: number };
+  | { kind: "unreadable"; format: number }
+  | { kind: "stopped"; detail: unknown };
+
+// What a write builds on: the tip's commit and plan, null at the first write.
+export type PlanTip = { commit: string; plan: PlanJson } | null;
 
 // The one write of the plan: on the remote's tip, never over it. A first write
 // with nothing kept here goes create-only with no look first; a lost lease is
@@ -8547,7 +8871,17 @@ export function writePlan(
   // `what` may be worked out from the tip's plan (null at the first write).
   // `overUnreadable`: the person's yes to share again over a tip that is not a
   // plan (never one of a newer format): a commit on that tip, with the lease.
-  change: { what: string | ((tip: PlanJson | null) => string); message?: string; unasked?: true; overUnreadable?: true },
+  // `edit` changes what the share would build (null: nothing to write);
+  // `stopIf` stops the write before anything is built when it gives a reason.
+  change: {
+    what: string | ((tip: PlanJson | null) => string);
+    message?: string;
+    unasked?: true;
+    overUnreadable?: true;
+    edit?: (built: { plan: PlanJson; files: Record<string, string | null> }, tip: PlanTip) =>
+      { plan: PlanJson; files: Record<string, string | null> } | null;
+    stopIf?: (tip: PlanTip) => unknown;
+  },
 ): PlanWrite {
   const write = (): PlanWrite => {
     let tip: string | null = null;
@@ -8566,11 +8900,23 @@ export function writePlan(
       const read = tip === null ? null : planAtCopy(projectDir, place.copy, { commit: tip });
       const over = read !== null && read.kind === "unreadable" && change.overUnreadable === true;
       if (read !== null && read.kind !== "read" && !over) return { kind: "unreadable", format: read.format };
-      const before = read?.kind === "read" ? read.plan
-        : tip === null ? gone : over ? planBelow(projectDir, tip, place.uuid) ?? last?.plan ?? null : null;
-      const built = planFilesNow(projectDir, before, place);
+      // Over a tip that is not a plan, what is carried: the newest plan in its history, else this computer's copy.
+      const carried = over && tip !== null ? planBelow(projectDir, tip, place.uuid) ?? last : null;
+      const before = read?.kind === "read" ? read.plan : tip === null ? gone : carried?.plan ?? null;
+      // `stopIf` reads the plan the write builds on: the tip, or what is carried over it.
+      const at: PlanTip = read?.kind === "read" && tip !== null ? { commit: tip, plan: read.plan } : carried;
+      const stop = change.stopIf?.(at);
+      if (stop !== undefined && stop !== null) return { kind: "stopped", detail: stop };
+      // Changes the lead said to take out: the write builds on the plan as this
+      // computer last had it, every file they touched as it was then.
+      const back = at === null ? null : planPutBack(projectDir, place, at.commit);
+      const fresh = planFilesNow(projectDir, back?.plan ?? before, place);
+      if (back !== null && at !== null) fresh.plan.version = at.plan.version + 1;
       // Its version follows the tip's history, which has no plan to read it from.
-      if (over && tip !== null) built.plan.version = Number(localGit(projectDir, ["rev-list", "--count", tip]).stdout.trim()) + 1;
+      if (over && tip !== null) fresh.plan.version = Number(localGit(projectDir, ["rev-list", "--count", tip]).stdout.trim()) + 1;
+      const edited = change.edit === undefined ? fresh : change.edit(fresh, back === null || at === null ? at : { commit: at.commit, plan: back.plan });
+      if (edited === null) return { kind: "unchanged", commit: tip ?? "" };
+      const built = back === null ? edited : { plan: edited.plan, files: { ...back.files, ...edited.files } };
       if (tip !== null && before !== null &&
         planTree(projectDir, tip, { ...built.plan, version: before.version }, built.files) ===
           localGit(projectDir, ["rev-parse", `${tip}^{tree}`]).stdout.trim()) {
@@ -8580,10 +8926,12 @@ export function writePlan(
       const commit = planCommit(projectDir, tip, built.plan, built.files, what, change.message);
       const pushed = pushPlan(projectDir, place, commit, tip);
       if (pushed.ok) {
+        noteEngineAskMark(projectDir, planMark("here", commit));
         return {
           kind: "written", commit, version: built.plan.version, created: tip === null && gone === null,
           ...(tip === null && gone !== null ? { regained: true as const } : {}),
           ...(over ? { over: { carried: before !== null } } : {}),
+          ...(back === null ? {} : { back: { count: back.count, name: back.name } }),
         };
       }
       if (pushed.timedOut) return { kind: "unreached", words: null };
@@ -8602,17 +8950,137 @@ export function writePlan(
   return change.unasked ? quietly(write) : write();
 }
 
+// The plan as this computer last had it, under a tip whose changes the lead
+// said to take out (`unit plan-change take-out`): its plan.json whole and
+// every other file those changes touched as it had them (null: not there),
+// with how many changes there were and whose the first was. Null when there is
+// nothing to put back.
+function planPutBack(projectDir: string, place: PlanPlace, tip: string):
+  { plan: PlanJson; files: Record<string, string | null>; count: number; name: string } | null {
+  if (engineAskMark(projectDir, planMark("out", tip)) === null) return null;
+  const out = planChangesNotHere(projectDir, tip);
+  const base = out === null || out.commits.length === 0 ? null : planAtCopy(projectDir, place.copy, { commit: out.base });
+  if (out === null || base?.kind !== "read") return null;
+  const files: Record<string, string | null> = {};
+  const changed = localGit(projectDir, ["diff", "--name-only", "--no-renames", out.base, tip, "--"]).stdout.split(/\r?\n/).map((path) => path.trim());
+  for (const path of changed.filter((entry) => entry !== "" && entry !== "plan.json")) {
+    const shown = localGit(projectDir, ["show", `${out.base}:${path}`, "--"]);
+    files[path] = shown.ok ? shown.stdout : null;
+  }
+  return { plan: base.plan, files, count: out.commits.length, name: planLastChange(projectDir, out.commits[0])?.name ?? "" };
+}
+
+// The line after a write that put the plan back.
+function planBackLine(repo: string, back: { count: number; name: string }): string {
+  return `The plan in ${repo} is back as you last had it. ` +
+    (back.count === 1 ? `The change by ${back.name} stays in its history.` : `The ${back.count} changes stay in its history.`);
+}
+
 // The newest plan of this work (`id`) that reads under a tip that does not:
 // what was pushed on top of the plan keeps it in its history, so the lead's
 // decisions on its Units are carried over it. Null when the history holds none.
 // ponytail: the 50 newest commits only; a longer history of non-plans carries nothing.
-function planBelow(projectDir: string, tip: string, id: string): PlanJson | null {
+function planBelow(projectDir: string, tip: string, id: string): { commit: string; plan: PlanJson } | null {
   for (const commit of localGit(projectDir, ["rev-list", "--max-count=50", `${tip}^@`]).stdout.split("\n").filter(Boolean)) {
     const shown = localGit(projectDir, ["show", `${commit}:plan.json`]);
     const plan = shown.ok ? planJsonOf(shown.stdout).plan : null;
-    if (plan !== null && plan.work.id === id) return plan;
+    if (plan !== null && plan.work.id === id) return { commit, plan };
   }
   return null;
+}
+
+// A lead's step writing on the plan, on the plan as its tip has it (as this
+// computer last had it, under changes the lead said to take out): its word on
+// the Units (`words`, from each Unit's word there; null leaves a Unit's as it
+// is) and only what the step is for of the lead's record now (`take`: an
+// input's text it approved, a setting, the rules). Everything else stays as
+// the share left it, so a Unit added or an input edited since is shared only by
+// the share. Work whose plan is not shared, or whose plan is not there, has
+// nowhere for it, and nothing is written: a lead's step never shares the plan.
+// `gone`: the plan this computer had is not in its repository now.
+export type LeadWrite = PlanWrite | { kind: "unshared"; gone?: PlanJson };
+
+export function leadsPlanWrite(projectDir: string, change: {
+  what: string | ((tip: PlanJson | null) => string);
+  unasked?: true;
+  words?: (unit: string, word: UnitWord) => UnitWord | null;
+  take?: { inputs?: Record<string, string>; settings?: readonly string[]; rules?: true };
+}): LeadWrite {
+  const pd = resolveProjectDir(projectDir);
+  const write = (): LeadWrite => {
+    const place = planPlaceForShare(pd);
+    if (!("ref" in place)) return { kind: "unshared" };
+    const had = keptPlan(pd, place.id8);
+    if (had === null) {
+      const look = lookAtPlan(pd, place);
+      if (look.tip === null) return look.unreached === undefined ? { kind: "unshared" } : { kind: "unreached", words: look.unreached };
+    }
+    let gone = false;
+    const written = writePlan(pd, place, {
+      what: change.what,
+      ...(change.unasked ? { unasked: true as const } : {}),
+      // A change this computer did not write, unanswered: the lead's question
+      // first, and nothing is written.
+      stopIf: (tip) => {
+        if (tip === null) return undefined;
+        const read = planChangeAt(pd, tip.commit, tip.plan);
+        if (read.first !== null) planNotes.push(read.first);
+        return read.change ?? undefined;
+      },
+      edit: (built, tip) => {
+        gone = tip === null;
+        if (tip === null) return null;
+        const files: Record<string, string | null> = {};
+        const plan: PlanJson = { ...tip.plan, version: built.plan.version };
+        if (change.words !== undefined) {
+          plan.units = plan.units.map((entry) => {
+            const word = change.words!(entry.name, entry.word as UnitWord);
+            return word === null ? entry : { ...entry, word: word as Record<string, unknown> };
+          });
+        }
+        for (const [path, text] of Object.entries(change.take?.inputs ?? {})) {
+          files[`inputs/${path}`] = planFileText(text);
+          const was = built.plan.inputs.find((entry) => entry.path === path) ?? tip.plan.inputs.find((entry) => entry.path === path);
+          const entry = { ...(was ?? {}), path, fingerprint: textFingerprint(text) };
+          plan.inputs = plan.inputs.some((input) => input.path === path)
+            ? plan.inputs.map((input) => (input.path === path ? entry : input))
+            : [...plan.inputs, entry];
+        }
+        {
+          // The lead's sign-off setting goes with every write of theirs: one set
+          // while a write did not go reaches the plan with the next.
+          const settings = { ...plan.settings };
+          for (const key of new Set([LEAD_SIGNOFF_FIELD, ...(change.take?.settings ?? [])])) {
+            if (built.plan.settings[key] === undefined) delete settings[key];
+            else settings[key] = built.plan.settings[key];
+          }
+          plan.settings = settings;
+        }
+        if (change.take?.rules) for (const file of ["rules/team.md", "rules/project.md"]) files[file] = built.files[file] ?? null;
+        return { plan, files };
+      },
+    });
+    if (written.kind === "written" && written.back !== undefined) planNotes.push(planBackLine(place.repo, written.back));
+    if (!gone) return written;
+    return had === null ? { kind: "unshared" } : { kind: "unshared", gone: had.plan };
+  };
+  return change.unasked ? quietly(write) : write();
+}
+
+// A text as the plan keeps it (the plan byte rule: CRLF as LF), and the blob it is kept as.
+function planFileText(text: string): string {
+  return committedTextBytes(Buffer.from(text, "utf-8")).toString("utf-8");
+}
+
+// git's words for a write of the lead's that did not go, for the lines that
+// name why (none when the tip only kept moving).
+export function leadWriteWords(written: LeadWrite): string | undefined {
+  return written.kind === "refused" ? written.words : written.kind === "unreached" ? written.words ?? undefined : undefined;
+}
+
+// The blob a plan file's text is kept as, so a word can name it.
+function planBlobOf(pd: string, text: string): string {
+  return git(pd, ["hash-object", "--no-filters", "--stdin"], undefined, planFileText(text)).stdout.trim();
 }
 
 // Another AI-DLC tool, run as this install runs its tools.
@@ -9320,10 +9788,12 @@ function planTakeSource(pd: string, id8: string, from: string): TakeSource {
 // What is open in a plan as shared: its Units in its order, what each waits on
 // that the plan does not say is done, and the walking skeleton every Unit
 // waits on until the plan says it is done. A Unit is done when the lead's word
-// on the plan says so.
-export function buildOutOpening(plan: PlanJson): OpeningStatus {
+// on the plan says so, or, for the Units waiting on it, when this workspace's
+// own git reads its merge (`seen`, mergedAsReadHere).
+export function buildOutOpening(plan: PlanJson, seen: ReadonlySet<string> = new Set()): OpeningStatus {
   const units = plan.units.map((unit) => unit.name);
-  const completed = new Set(plan.units.filter((unit) => (unit.word as { done?: unknown }).done === true).map((unit) => unit.name));
+  const completed = new Set(plan.units.filter((unit) => (unit.word as { done?: unknown }).done === true || seen.has(unit.name))
+    .map((unit) => unit.name));
   const skeletonBlocked = plan.skeleton !== null && !completed.has(plan.skeleton);
   const blockers = new Map(plan.units.map((unit) => {
     const waiting = unit.waits_on.filter((dep) => !completed.has(dep));
@@ -9425,7 +9895,7 @@ function takeUnit(args: string[], projectDir?: string, rhythm?: UnitClaimPayload
   const blockers = (opening.blockers.get(unit) ?? []).filter((dep) => {
     if (dep === "walking-skeleton") return true;
     depClaims.set(dep, depRecord(dep));
-    return depClaims.get(dep)?.payload.done !== true;
+    return depClaims.get(dep)?.payload.done !== true && !(home.plan !== undefined && mergedAsReadHere(pd, depClaims.get(dep), home.plan));
   });
   // Starting early, on the branches its dependencies pushed (the person asked).
   const pushedDeps = blockers.every((dep) => depClaims.get(dep)?.payload.result !== undefined);
@@ -10078,12 +10548,34 @@ export function refreshHomeClaims(
       unreached.push({ repo: target, address: target, said: maskUserinfo(fetched.stderr.trim().split(/\r?\n/)[0]?.trim() ?? "") });
     }
   }
-  const moved = new Map<string, { now: string | null; was: string | null }>();
-  for (const place of places) {
+  // A build's look reads the plan where it is shared too, whether or not every
+  // record repository answered: its copy holds the Units, the lead's rules a
+  // build follows and the lead's word on its Unit, whichever step looked first
+  // in the chat, and its look counts as theirs does. Solo work has no plan.
+  // The lead's own look reads it as well, so another computer of the lead's
+  // has the plan from its first look, and reads it first there, so the
+  // records are read where the plan names them.
+  const leadState = options.home === undefined && !onBranches ? stateHere(pd) ?? "" : "";
+  const planAddress = options.home !== undefined
+    ? options.home.solo !== true ? options.home.location : undefined
+    : isTeamUnitOwnership(leadState) && unitBuildOf(leadState) === null ? homeLocation(leadState) ?? undefined : undefined;
+  const planBefore = planOfWork(pd, id8);
+  let recordPlaces = places;
+  let planFirst = false;
+  if (refused === null && options.home === undefined && planBefore === null && planAddress !== undefined && isGitAddress(planAddress)) {
+    planFirst = true;
+    const plan = lookAt(pd, planAddress, [planRecordRef(id8)]);
+    if (plan.ok) recordPlaces = recordPlacesOfWork(pd, id8, options.home);
+    else if ("refused" in plan) {
+      refused = plan.refused;
+      refusedFrom = repoNameOf(planAddress);
+    } else unreached.push({ repo: repoNameOf(planAddress), address: planAddress, said: plan.firstLine ?? "it did not answer in time" });
+  }
+  for (const place of refused === null ? recordPlaces : []) {
+    if (unreached.some((entry) => sameGitAddress(entry.address, place.address))) continue;
     const looked = lookAt(pd, place.address, [claimsOnRemote(false, id8)]);
-    if (looked.ok) {
-      for (const [ref, seen] of Object.entries(looked.refs)) moved.set(ref.slice(ref.lastIndexOf("/") + 1), seen);
-    } else if ("refused" in looked) {
+    if (looked.ok) continue;
+    if ("refused" in looked) {
       refused = looked.refused;
       refusedFrom = place.repo;
       break;
@@ -10091,13 +10583,8 @@ export function refreshHomeClaims(
       unreached.push({ repo: place.repo, address: place.address, said: looked.firstLine ?? "it did not answer in time" });
     }
   }
-  if (refused === null) sayOwnBuildsMerged(pd, id8, moved, options.home);
-  // A plan read where it is shared: its copy (the Units, the lead's rules a
-  // build follows) comes with the claims, whichever step looked first in the
-  // chat, and its look counts as theirs does. Solo work has no plan.
-  const planAddress = options.home !== undefined && options.home.solo !== true ? options.home.location : undefined;
   let planGone = false;
-  if (refused === null && unreached.length === 0 && planAddress !== undefined && isGitAddress(planAddress)) {
+  if (refused === null && planAddress !== undefined && isGitAddress(planAddress) && !planFirst) {
     const plan = lookAt(pd, planAddress, [planRecordRef(id8)]);
     if (plan.ok) {
       // A plan gone from its repository (its copy here kept): the chat is not
@@ -10108,10 +10595,11 @@ export function refreshHomeClaims(
     } else if ("refused" in plan) {
       refused = plan.refused;
       refusedFrom = repoNameOf(planAddress);
-    } else {
+    } else if (!unreached.some((entry) => sameGitAddress(entry.address, planAddress))) {
       unreached.push({ repo: repoNameOf(planAddress), address: planAddress, said: plan.firstLine ?? "it did not answer in time" });
     }
   }
+  if (refused === null) sayOwnBuildsMerged(pd, id8, planBefore, options.home);
   const ok = refused === null && unreached.length === 0;
   if (ok) homesFetchedThisCommand.add(home);
   const stopped = refused !== null && last?.chat === chat && last.refused === true;
@@ -10153,37 +10641,21 @@ function recordPlacesOfWork(
 
 // A build of the person's own here, in this checkout or on another branch of
 // this clone (its record checked in for a pull request, the checkout back on
-// main), whose claim this fetch brought to done: said once, with the step that
-// follows. A fetch that moved nothing (their own pull got there first) says
+// main), that the plan this look read says done and the copy before it did
+// not: said once, with the step that follows. A look that moved nothing says
 // nothing; with the build in this checkout, status's Yours line still shows it.
-function sayOwnBuildsMerged(
-  pd: string,
-  id8: string,
-  moved: ReadonlyMap<string, { now: string | null; was: string | null }>,
-  home?: { space?: string; plan?: PlanJson },
-): void {
-  if (moved.size === 0) return;
-  // The work these records are for: the plan's, else the work here.
-  const here = (): string | null => {
-    try {
-      const identity = activeIdentity(pd);
-      return identity.intentId8 === id8 ? identity.intentUuid : null;
-    } catch {
-      return null;
-    }
-  };
-  const uuid = home?.plan?.work.id ?? planOfWork(pd, id8)?.work.id ?? here();
-  if (uuid === null) return;
-  const work = { uuid, space: home?.space ?? "" };
-  for (const [unit, { now: oid, was }] of moved) {
-    if (oid === null || was === oid) continue;
-    const ref = claimRecordRef(id8, unit);
-    const view = recordView(pd, ref, oid, work);
-    const before = was === null ? null : recordView(pd, ref, was, work);
-    if (view?.payload.done !== true || before?.payload.done === true) continue;
+function sayOwnBuildsMerged(pd: string, id8: string, before: PlanJson | null, home?: { space?: string }): void {
+  const after = planOfWork(pd, id8);
+  if (after === null) return;
+  for (const entry of after.units) {
+    if ((entry.word as UnitWord).done !== true || (before !== null && unitWordIn(before, entry.name).done === true)) continue;
+    const ref = claimRecordRef(id8, entry.name);
+    const oid = localGit(pd, ["rev-parse", "--verify", "--quiet", copyOf(recordPlaceIn(after, entry.name).address, ref)]).stdout.trim();
+    const view = oid === "" ? null : recordView(pd, ref, oid, { uuid: after.work.id, space: home?.space ?? "" });
+    if (view?.payload.done !== true) continue;
     if (!takeIsBy(pd, oid, view.payload, gitUserName(pd), git(pd, ["config", "user.email"]).stdout.trim())) continue;
-    if (findUnitBuild(pd, uuid, unit) === null && !branchWithBuild(pd, uuid, unit)) continue;
-    saidWithNextStep(pd, `Your ${unit} is merged.`);
+    if (findUnitBuild(pd, after.work.id, entry.name) === null && !branchWithBuild(pd, after.work.id, entry.name)) continue;
+    saidWithNextStep(pd, `Your ${entry.name} is merged.`);
   }
 }
 
@@ -10543,8 +11015,10 @@ function pushUnit(args: string[], projectDir?: string): void {
   const place = recordPlaceOf(pd, home, unit);
   // A take its record's repository did not take then is recorded first, so
   // the result goes onto this build's own take, never onto anyone else's: read
-  // against the record as its repository has it now.
+  // against the record as its repository has it now, and the lead's word on it
+  // as the plan has it now (an open-again since the take).
   typedRecordRead(pd, place, recordWork(home), unit);
+  if (!home.solo && isGitAddress(home.location)) lookAt(pd, home.location, [planRecordRef(home.id8)]);
   let standing = takeStanding(pd, build);
   const recorded = standing.state === "pending" ? recordTakeHere(pd, build, home, standing, true) : null;
   if (recorded?.ok) standing = takeStanding(pd, build);
@@ -10845,6 +11319,13 @@ function pushUnit(args: string[], projectDir?: string): void {
       whereNow(true).trimStart(),
     ]),
   ];
+  // The lead's turn-down is about the commits it was said of: a push of those
+  // very commits again keeps it, said once here.
+  const down = claim?.payload.turned_down;
+  if (down !== undefined && down.from !== "build-and-test" &&
+    turnDownHolds(down, Object.fromEntries(results.map((repo) => [repo.repo, repo.heads.at(-1) ?? ""])))) {
+    lines.push(`These are the commits that were turned down in ${down.repo}, so ${unit} stays turned down there.`);
+  }
   if (addedRepos.length > 0) {
     lines.push(`${joinNames(addedRepos)} ${addedRepos.length === 1 ? "was" : "were"} not in the lead's plan; ${unit} changed ` +
       `${addedRepos.length === 1 ? "it" : "them"}, so ${addedRepos.length === 1 ? "it is" : "they are"} now among ${unit}'s repos and went with the push.`);
@@ -10993,22 +11474,22 @@ function joinNames(names: string[]): string {
 
 // --- At the home: what came back, and what merged -----------------------------
 //
-// For each Unit a team holds with a result on its claim and not yet done: fetch
-// each repo's integration branch with the person's own login, check whether
-// the Unit's part is merged, put the verdicts on the claim, and once every repo
-// merged record the Unit done (UNIT_MERGED, under the per-intent lock), write
-// the Unit outputs the home's later stages read into its record, and mark the
-// claim done so the Units waiting on it open everywhere. A repo the home has
-// no checkout of keeps the team's result as theirs until the home can check it.
-// `unreached` collects the remotes that could not be read, `unsent` the ones
-// that did not take a verdict, `told` each Unit whose newly seen merge the
-// teams now have on its claim (the repos it merged in, and whether it is done),
-// `maybe` each commit that may be a merge the check cannot see.
+// For each Unit a team holds with a result in its record and not yet done:
+// fetch each repo's integration branch with the person's own login, check
+// whether the Unit's part is merged, and once every repo merged record the
+// Unit done (UNIT_MERGED, under the per-intent lock) and write the Unit outputs
+// the home's later stages read into its record; the verdicts and done go on the
+// plan in one write, so the Units waiting on it open everywhere. A repo the home
+// has no checkout of keeps the team's result as theirs until the home can check
+// it. `unreached` collects the remotes that could not be read, `unsent` the ones
+// that did not take the write, `told` each Unit whose newly seen merge is now on
+// the plan (the repos it merged in, and whether it is done), `maybe` each commit
+// that may be a merge the check cannot see.
 export interface ToldMerge {
   unit: string;
   repos: string[];
   done: boolean;
-  // Who was told, in words: the team holding the Unit, or the person.
+  // Who built it, in words: the team holding the Unit, or the person.
   to: string;
 }
 
@@ -11017,70 +11498,145 @@ export interface ToldMerge {
 export function checkTeamResults(
   projectDir: string,
   unreached?: string[],
-  unsent?: Array<{ to: string; refused?: string }>,
+  unsent?: Array<{ line: string; shareAgain?: true }>,
   told?: ToldMerge[],
   readOnly = false,
   tookIn?: string[],
   maybe?: MaybeMerged[],
+  // Record repositories the look could not read: their Units are not checked.
+  unread: ReadonlySet<string> = new Set(),
 ): Map<string, { team: string; verdicts: NonNullable<UnitClaimPayload["verdicts"]>; done: boolean }> {
   const pd = resolveProjectDir(projectDir);
-  return quietly(() => checkTeamResultsQuietly(pd, unreached, unsent, told, readOnly, tookIn, maybe));
+  return quietly(() => checkTeamResultsQuietly(pd, unreached, unsent, told, readOnly, tookIn, maybe, unread));
 }
 
 function checkTeamResultsQuietly(
   pd: string,
   unreached?: string[],
-  unsent?: Array<{ to: string; refused?: string }>,
+  unsent?: Array<{ line: string; shareAgain?: true }>,
   told?: ToldMerge[],
   readOnly = false,
   tookIn?: string[],
   maybe?: MaybeMerged[],
+  unread: ReadonlySet<string> = new Set(),
 ): Map<string, { team: string; verdicts: NonNullable<UnitClaimPayload["verdicts"]>; done: boolean }> {
   const found = new Map<string, { team: string; verdicts: NonNullable<UnitClaimPayload["verdicts"]>; done: boolean }>();
   const identity = activeIdentity(pd);
-  const remote = repositoryRemote(pd);
-  for (const [unit, claim] of cachedClaims(pd)) {
-    if (claim.status !== "claimed" || claim.payload.result === undefined) continue;
-    // Done on its claim is the home's own word, wherever it was recorded: a
-    // fresh clone or another machine of the home records it here too.
+  const state = readStateFile(pd);
+  const claims = cachedClaims(pd);
+  const plan = keptPlan(pd, identity.intentId8)?.plan ?? null;
+  const notRead = (unit: string): boolean => unread.size > 0 && plan !== null && unread.has(recordPlaceIn(plan, unit).repo);
+  // The merges seen this look, written on the plan in one write.
+  const seen = new Map<string, { view: UnitClaimView; verdicts: NonNullable<UnitClaimPayload["verdicts"]>; done: boolean; told: ToldMerge }>();
+  for (const [unit, claim] of claims) {
+    if (claim.status !== "claimed" || claim.payload.result === undefined || notRead(unit)) continue;
+    // Done on the plan is the lead's own word, wherever it was written: a
+    // fresh clone or another machine of the lead's records it here too.
     if (claim.payload.done) {
       if (!readOnly && recordUnitDone(pd, claim, claim.payload.verdicts ?? [])) tookIn?.push(unit);
       found.set(unit, { team: claim.owner, verdicts: claim.payload.verdicts ?? [], done: true });
       continue;
     }
-    let live: UnitClaimView | null;
-    try {
-      live = currentClaim(pd, remote, claimRef(identity.intentId8, unit));
-    } catch {
-      unreached?.push(remote ?? "the lead's project");
-      continue;
-    }
-    // A look writes nothing, so it reads the copy its board shows: a result a
-    // team's own remote holds is on the lead's project only once a step takes it in.
-    if (readOnly) live = claim;
-    const result = live?.payload.result;
-    if (live?.status !== "claimed" || !result) continue;
-    const verdicts = resultVerdicts(pd, live.payload, unreached, { id8: identity.intentId8, unit, maybe });
-    const done = verdicts.length > 0 && verdicts.every((verdict) => verdict.merged) &&
-      (!leadSignOffOn(readStateFile(pd)) || live.payload.signoff !== undefined);
-    // The one thing written back is a merge the home has seen: a look at the
-    // board that sees no new merge leaves the claim as the team sent it.
+    // The record as the look before this read it: its builder's, with the lead's word from the plan.
+    const verdicts = resultVerdicts(pd, claim.payload, unreached, { id8: identity.intentId8, unit, maybe });
+    const done = countsDone(allMerged(verdicts), leadSignOffOn(state), claim.payload);
+    // The one thing written unasked is a merge the lead's project has seen: a
+    // look that sees no new merge writes nothing.
     const newlyMerged = verdicts.filter((verdict) => verdict.merged &&
-      !(live.payload.verdicts ?? []).some((before) => before.repo === verdict.repo && before.merged)).map((verdict) => verdict.repo);
-    if (done && !readOnly && recordUnitDone(pd, live, verdicts)) tookIn?.push(unit);
+      !(claim.payload.verdicts ?? []).some((before) => before.repo === verdict.repo && before.merged)).map((verdict) => verdict.repo);
+    if (done && !readOnly && recordUnitDone(pd, claim, verdicts)) tookIn?.push(unit);
     if (!readOnly && (newlyMerged.length > 0 || done)) {
-      const payload: UnitClaimPayload = { ...live.payload, predecessor_oid: live.oid, verdicts, ...(done ? { done: true as const } : {}) };
-      const commit = createClaimCommit(pd, live.oid, payload);
-      // Unwritten, the verdict stays here and the next step writes it again.
-      const sent = updateClaimRef(pd, remote, live.ref, commit, live.oid);
-      if (sent.ok) {
-        invalidateLiveClaimPayloadCache(pd, unit);
-        told?.push({ unit, repos: newlyMerged, done, to: builderOf(live) });
-      } else unsent?.push({ to: remote ?? "the lead's project", ...(sent.refused ? { refused: sent.refused } : {}) });
+      const repos = done ? verdicts.filter((verdict) => verdict.merged).map((verdict) => verdict.repo) : newlyMerged;
+      seen.set(unit, { view: claim, verdicts, done, told: { unit, repos, done, to: builderOf(claim) } });
     }
-    found.set(unit, { team: live.owner, verdicts, done });
+    found.set(unit, { team: claim.owner, verdicts, done });
+  }
+  const ownDone = readOnly ? new Set<string>() : leadsOwnDone(pd, state, claims);
+  // The plan's own repository not read this look: nothing is written to it now.
+  const planUnread = plan !== null && unread.has(plan.plan_repo.name);
+  // A write the plan's repository refused, or a plan that does not read, is
+  // not tried again in the chat that heard it.
+  const chat = ((): string | null => {
+    try {
+      return resolveWorkflowSelection(pd).sessionId ?? null;
+    } catch {
+      return null;
+    }
+  })();
+  const held = `${identity.intentId8}\u0000the merge write waits for the next chat`;
+  if ((seen.size > 0 || ownDone.size > 0) && !planUnread && !(chat !== null && personLineHeard(pd, chat, held))) {
+    const named = [...seen.keys(), ...ownDone];
+    const to = plan?.plan_repo.name ?? "the plan's repository";
+    let sent: LeadWrite;
+    try {
+      sent = leadsPlanWrite(pd, {
+        what: `${joinNames(named)} merged`,
+        unasked: true,
+        words: (unit, word) => {
+          const merge = seen.get(unit);
+          if (merge !== undefined) {
+            return { ...wordForTake(word, merge.view), verdicts: wordVerdicts(merge.view, merge.verdicts), ...(merge.done ? { done: true as const } : {}) };
+          }
+          return ownDone.has(unit) && word.done !== true ? { ...word, done: true } : null;
+        },
+      });
+    } catch (error) {
+      // A commit that could not be made here (a key that wants its passphrase, no git identity): unsent, in git's words.
+      if (error instanceof GitWriteRefused) throw error;
+      sent = { kind: "refused", words: errorMessage(error), byRule: false };
+    }
+    // Unwritten, the merge is seen again at the next step, which writes it then.
+    if (sent.kind === "written" || sent.kind === "unchanged") told?.push(...[...seen.values()].map((merge) => merge.told));
+    else if (sent.kind === "unshared" && sent.gone !== undefined) {
+      unsent?.push({ shareAgain: true, line: planGoneOffer(sent.gone) });
+      if (chat !== null) markPersonLinesHeard(pd, chat, [held]);
+    }
+    // A change on the plan this computer did not write: the step's question comes first, and the merge waits for it.
+    else if (sent.kind !== "unshared" && sent.kind !== "stopped") {
+      const merge = `The merge of ${joinNames(named)} could not be written on the plan in ${to}`;
+      const words = (said: string): string => said.trim().replace(/[.!?]+$/, "");
+      const over = sent.kind === "unreadable" && sent.format <= PLAN_FORMAT;
+      unsent?.push({
+        ...(over ? { shareAgain: true as const } : {}),
+        line: sent.kind === "unreadable" ? `${unreadablePlanLine(pd, sent.format)}${over ? ` ${SHARE_AGAIN_OVER}` : ""}`
+          : sent.kind === "refused" && sent.byRule
+            ? `${merge}: ${words(sent.words)}. If it is the commit message, tell me the one to use, and I will write it with that.`
+          : sent.kind === "refused" ? `${merge}: ${words(sent.words)}. I'll try again in your next chat.`
+          : `${merge} just now. The next step tries again.`,
+      });
+      if (chat !== null && (sent.kind === "refused" || sent.kind === "unreadable")) markPersonLinesHeard(pd, chat, [held]);
+    }
   }
   return found;
+}
+
+// The Units the lead's own project built that its state has done and the
+// plan does not say so yet: the plan says done for them, so the Units that
+// wait on them open for every team. The walking skeleton only once its code is
+// in main (skeletonCodeInMain).
+function leadsOwnDone(pd: string, state: string, claims: ReadonlyMap<string, UnitClaimView>): Set<string> {
+  const plan = keptPlan(pd, activeIdentity(pd).intentId8)?.plan ?? null;
+  if (plan === null) return new Set();
+  const own = leadsOwnClaims(pd, state, claims);
+  const completed = completedUnits(state);
+  return new Set(plan.units.filter((entry) => completed.has(entry.name) && (entry.word as UnitWord).done !== true &&
+    (own.has(entry.name) || claims.get(entry.name)?.status !== "claimed") &&
+    (entry.name !== plan.skeleton || skeletonCodeInMain(pd, entry.name))).map((entry) => entry.name));
+}
+
+// The walking skeleton's code is in main: it wrote nothing in the workspace's
+// own repository here (no code of it waits to go there), or every file it
+// wrote there is on the share's branch as it is here, read after a quiet
+// fetch of that branch. A pull request still open has it on its own branch only.
+export function skeletonCodeInMain(pd: string, skeleton: string): boolean {
+  const manifest = readUnitSourceManifest(pd, "code-generation", skeleton);
+  const paths = manifest.ok ? unitWriteTargets(pd, manifest.manifest.writes).get(".")?.paths ?? [] : [];
+  if (paths.length === 0) return true;
+  const target = shareTarget(pd);
+  if (target === null) return false;
+  quietFetch(pd, ["-q", "--no-tags", target.remote, target.branch]);
+  const blob = (at: string, path: string): string => git(pd, ["rev-parse", "--verify", "--quiet", `${at}:${path}`]).stdout.trim();
+  return paths.every((path) => blob("HEAD", path) !== "" && blob(`refs/remotes/${target.remote}/${target.branch}`, path) === blob("HEAD", path));
 }
 
 // The lead's merge rule for a Unit's result, read only: a repo the lead counted
@@ -11277,17 +11833,15 @@ export function homeResultsPastUnitStages(projectDir: string, stateContent: stri
 // Once per Unit and attempt: its outputs written into the home's record, then UNIT_MERGED.
 // True when this wrote the Unit's records here (they are the person's to check in).
 function recordUnitDone(projectDir: string, claim: UnitClaimView, verdicts: NonNullable<UnitClaimPayload["verdicts"]>): boolean {
-  const recorded = (): boolean => unitMergesStanding(readAuditShardEvents(projectDir), claim.unit).some((row) =>
-    auditBlockField(row.block, "Attempt Generation") === String(claim.generation)
-  );
+  const recorded = (): boolean => recordedMergedHere(projectDir, claim);
   if (recorded()) return false;
   const record = activeRecordDir(projectDir);
   const reads = new Set(unitOutputsHomeReads(claim.unit, getField(readStateFile(projectDir), "Scope") ?? ""));
   for (const rel of (claim.payload.result?.outputs ?? []).filter((output) => reads.has(output))) {
-    const shown = git(projectDir, ["show", `${claim.oid}:${RESULT_FILES_ROOT}/${rel}`, "--"]);
-    if (!shown.ok) continue;
+    const shown = recordText(projectDir, claim.oid, `result/${rel}`);
+    if (shown === null) continue;
     mkdirSync(dirname(join(record, ...rel.split("/"))), { recursive: true });
-    writeFileSync(join(record, ...rel.split("/")), shown.stdout, "utf-8");
+    writeFileSync(join(record, ...rel.split("/")), shown, "utf-8");
   }
   let wrote = false;
   withAuditLock(projectDir, () => {
@@ -11332,6 +11886,27 @@ export function turnedDownLine(unit: string, down: { repo: string; words?: strin
     : `${unit} was turned down in ${down.repo} by the lead${words}.`;
 }
 
+// A turn-down as this build has heard it, kept with the engine's own once-marks
+// in the build's engine folder: where the record stood when it was first heard
+// here (`heard`), and that the build was opened again for it (`reopened`).
+function turnDownMarkName(down: { at?: string }, kind: "heard" | "reopened"): string {
+  return `unit-turned-down-${kind}-${(down.at ?? "").replace(/[^0-9A-Za-z]+/g, "")}.json`;
+}
+
+// The lead's turn-down still open at this build: heard here (`note` keeps
+// where), and not answered by a push of the build after that, even of the
+// commits that were turned down; the plan keeps the lead's word for the lead
+// to read. A mark this record cannot place a push against keeps it open.
+function turnDownOpen(projectDir: string, down: { at?: string }, note: boolean): boolean {
+  const heard = engineAskMark(projectDir, turnDownMarkName(down, "heard"));
+  if (heard === null) {
+    if (note && !isReadOnlyEngineProbe()) noteEngineAskMark(projectDir, turnDownMarkName(down, "heard"));
+    return true;
+  }
+  const after = rowsAfterMark(projectDir, heard);
+  return after === null || !readAuditShardEvents(projectDir).some((row) => row.event === "UNIT_PUSHED" && after(row));
+}
+
 export function reopenTurnedDownBuild(
   projectDir: string,
   stateContent: string,
@@ -11344,8 +11919,12 @@ export function reopenTurnedDownBuild(
       .get(build.unit);
     const down = mine?.payload.turned_down && !mine.payload.done ? mine.payload.turned_down : null;
     if (!down) return null;
-    if (getField(stateContent, "Status") === "Completed" && !isReadOnlyEngineProbe()) {
+    if (!turnDownOpen(projectDir, down, true)) return null;
+    // Opened again once for this turn-down.
+    const reopened = turnDownMarkName(down, "reopened");
+    if (engineAskMark(projectDir, reopened) === null && getField(stateContent, "Status") === "Completed" && !isReadOnlyEngineProbe()) {
       withAuditLock(projectDir, () => writeStateFile(projectDir, setField(readStateFile(projectDir), "Status", "Running")));
+      noteEngineAskMark(projectDir, reopened);
     }
     return {
       repo: down.repo,
@@ -11525,7 +12104,7 @@ export function buildClaimNotes(projectDir: string, stateContent: string, sessio
   if (mine === undefined) return lines;
   const unit = build.unit;
   const down = mine.payload.turned_down;
-  if (down) {
+  if (down && turnDownOpen(projectDir, down, true)) {
     lines.push(turnedDownLine(unit, down));
   }
   for (const proposal of mine.payload.proposals ?? []) {
@@ -11557,21 +12136,21 @@ export function buildClaimNotes(projectDir: string, stateContent: string, sessio
     // The team's own proposed copy is theirs while the lead decides: never
     // written back while that proposal waits.
     if ((mine.payload.proposals ?? []).some((entry) => entry.input === amendment.input && entry.answer === undefined)) continue;
-    const shown = git(projectDir, ["show", `${mine.oid}:${RESULT_FILES_ROOT}/amendments/${amendment.input}`, "--"]);
-    if (!shown.ok) continue;
+    const shown = amendmentText(projectDir, amendment);
+    if (shown === null) continue;
     // Pushed after the change came: it was built on the older one, and its stages hear it as stale.
     // Both times are to the second, so a change of the push's own second reads as after it.
     const pushedAt = readAuditShardEvents(projectDir).filter((row) => row.event === "UNIT_PUSHED")
       .map((row) => row.timestamp).sort().at(-1);
-    const line = takeNewerInput(projectDir, record, unit, amendment.input, shown.stdout, {
+    const line = takeNewerInput(projectDir, record, unit, amendment.input, shown, {
       at: amendment.at,
       done: mine.payload.done === true,
       pushed: getField(stateContent, UNIT_PUSH_FIELD)?.trim() === "pushed" && (pushedAt === undefined || amendment.at >= pushedAt),
       // The copy is still the text the team proposed: the lead's answer replaces it.
       proposedHere: ((): boolean => {
-        const proposed = git(projectDir, ["show", `${mine.oid}:${RESULT_FILES_ROOT}/proposals/${amendment.input}`, "--"]);
+        const proposed = recordText(projectDir, mine.oid, `proposals/${amendment.input}`);
         const copy = join(record, ...amendment.input.split("/"));
-        return proposed.ok && existsSync(copy) && textFingerprint(readFileSync(copy, "utf-8")) === textFingerprint(proposed.stdout);
+        return proposed !== null && existsSync(copy) && textFingerprint(readFileSync(copy, "utf-8")) === textFingerprint(proposed);
       })(),
     }, doneNames);
     if (line !== null) lines.push(line);
@@ -11979,12 +12558,12 @@ function changeOntoCurrent(projectDir: string, path: string, taken: string | nul
 // (never committed) so its owner can read it before deciding: the path, or
 // null when the claim does not carry it.
 export function writeProposedText(projectDir: string, claim: UnitClaimView, input: string): string | null {
-  const shown = git(projectDir, ["show", `${claim.oid}:${RESULT_FILES_ROOT}/proposals/${input}`, "--"]);
+  const shown = recordText(projectDir, claim.oid, `proposals/${input}`);
   const record = recordDir(projectDir);
-  if (!shown.ok || record === null) return null;
+  if (shown === null || record === null) return null;
   const path = join(record, ENGINE_DIR, "proposed", claim.unit, ...input.split("/"));
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, shown.stdout, "utf-8");
+  writeFileSync(path, shown, "utf-8");
   return relative(projectDir, path).split(sep).join("/");
 }
 
@@ -12017,10 +12596,9 @@ export function changedInputs(projectDir: string, stateContent: string): Array<{
   }
   const sentOrAnswered = (input: string, fingerprint: string): boolean => mine !== undefined &&
     (mine.payload.proposals?.some((entry) => entry.input === input && entry.answer === undefined) ||
-      ["proposals", "amendments"].some((kind) => {
-        const shown = git(projectDir, ["show", `${mine!.oid}:${RESULT_FILES_ROOT}/${kind}/${input}`, "--"]);
-        return shown.ok && textFingerprint(shown.stdout) === fingerprint;
-      }));
+      [recordText(projectDir, mine.oid, `proposals/${input}`),
+        ...(mine.payload.amendments ?? []).filter((entry) => entry.input === input).map((entry) => amendmentText(projectDir, entry))]
+        .some((shown) => shown !== null && textFingerprint(shown) === fingerprint));
   return approvedInputsOf(record).filter((entry) => !entry.path.endsWith("unit-of-work-dependency.md")).flatMap((entry) => {
     let text: string;
     try {
@@ -12043,42 +12621,10 @@ export function amendAskName(unit: string, input: string, at = ""): string {
   return `amend-${unit}-${input.replace(/[^A-Za-z0-9.-]+/g, "_")}${at ? `-${at.replace(/[^0-9A-Za-z]+/g, "")}` : ""}.json`;
 }
 
-// One amendment onto a team's claim, with the text it carries: a claim that
-// moved meanwhile is read again and written once more. "missed" when it could
-// not be written, null when the claim is no longer held; else "sent".
-function amendClaim(
-  pd: string,
-  remote: string | null,
-  claim: UnitClaimView,
-  amendment: Amendment,
-  text: string,
-  extra?: (payload: UnitClaimPayload) => Partial<UnitClaimPayload>,
-  stillNeeded: (current: UnitClaimView) => boolean = () => true,
-): "sent" | "missed" | null {
-  const amended = (current: UnitClaimView): ReturnType<typeof updateClaimRef> => updateClaimRef(pd, remote, current.ref, createClaimCommit(pd, current.oid, {
-    ...current.payload,
-    predecessor_oid: current.oid,
-    amendments: [...(current.payload.amendments ?? []).filter((entry) => entry.input !== amendment.input), amendment],
-    ...(extra?.(current.payload) ?? {}),
-  }, undefined, undefined, {
-    [`${RESULT_FILES_ROOT}/amendments/${amendment.input}`]: text,
-  }), current.oid);
-  let current = currentClaim(pd, remote, claim.ref);
-  if (current?.status !== "claimed" || !stillNeeded(current)) return null;
-  // A claim that moved meanwhile is read again, and written once more if it still needs it.
-  if (!amended(current).ok) {
-    current = currentClaim(pd, remote, claim.ref);
-    if (current?.status !== "claimed" || !stillNeeded(current)) return null;
-    if (!amended(current).ok) return "missed";
-  }
-  invalidateLiveClaimPayloadCache(pd, claim.unit);
-  return "sent";
-}
-
 // At the home: the lead's own change to an input teams build with (a redo of
 // Requirements Analysis, say), once its stage's gate approved it: each team
 // building a Unit that hears it (unitsHearing) and still has an older copy
-// (its last amendment of it, else the copy it took) gets it on its claim, as
+// (its last amendment of it, else the copy it took) gets it on the plan, as
 // an approved proposal does, and hears it once (buildClaimNotes). Approved
 // means by the record: the stage's own approval row is newer than that copy
 // (not in the audit the copy was taken with, or after the amendment), and the
@@ -12096,14 +12642,15 @@ export function sendLeadsApprovedChanges(projectDir: string): string[] {
     const claims = [...cached.values()].filter((claim) =>
       claim.status === "claimed" && claim.payload.taken_by !== undefined && !own.has(claim.unit)
     );
-    const recordRel = relativeRecordDir(pd)?.split(sep).join("/") ?? null;
-    if (claims.length === 0 || recordRel === null) return lines;
+    if (claims.length === 0) return lines;
     const record = activeRecordDir(pd);
-    const remote = repositoryRemote(pd);
+    const recordRel = relativeRecordDir(pd)?.split(sep).join("/") ?? null;
+    const texts: Record<string, string> = {};
     const state = readStateFile(pd);
     const graph = loadGraph();
     const rows = readAuditShardEvents(pd);
     const receipts = latestCompletionBasesFromAudit(readAllAuditShards(pd));
+    const kept = keptPlan(pd, activeIdentity(pd).intentId8);
     // The lead's latest word on an input: its stage's gate, or a team's change
     // to it the lead approved (SHARED_INPUT_AMENDED), which reaches a Unit
     // taken after it too.
@@ -12111,20 +12658,10 @@ export function sendLeadsApprovedChanges(projectDir: string): string[] {
       .filter((row) => (row.event === "GATE_APPROVED" && auditBlockField(row.block, "Stage") === stage && !auditBlockField(row.block, "Unit")) ||
         (row.event === "SHARED_INPUT_AMENDED" && auditBlockField(row.block, "Input") === input))
       .sort((a, b) => (a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0)).at(-1);
-    // Per commit a team took its copies from: the inputs that differ here now
-    // (one diff), and the approval rows its audit already held.
-    const taken = new Map<string, { changed: Set<string>; approvals: Set<string> }>();
-    const takenFrom = (base: string) => {
-      if (!taken.has(base)) {
-        const diff = git(pd, ["diff", "--name-only", "--relative", base, "--", recordRel]);
-        taken.set(base, {
-          changed: new Set(diff.ok ? diff.stdout.split("\n").filter(Boolean).map((path) => path.slice(recordRel.length + 1)) : []),
-          approvals: new Set(auditRowsAt(pd, recordRel, base).filter((row) => row.event === "GATE_APPROVED" || row.event === "SHARED_INPUT_AMENDED")
-            .map((row) => row.block)),
-        });
-      }
-      return taken.get(base)!;
-    };
+    // Each input changed and approved since a team's copy, by Unit: what the
+    // one write puts on the plan.
+    const reaches = new Map<string, { view: UnitClaimView; inputs: string[] }>();
+    const changed: string[] = [];
     for (const input of approvedInputPathsHere(pd)) {
       const at = artifactAt(input);
       const approved = at === null ? undefined : approval(at.producer, input);
@@ -12140,40 +12677,88 @@ export function sendLeadsApprovedChanges(projectDir: string): string[] {
       } catch {
         continue;
       }
-      const reached: string[] = [];
+      let any = false;
       for (const claim of claims) {
         // A team's own change waiting for the lead's answer is that answer's to settle.
         if ((claim.payload.proposals ?? []).some((entry) => entry.input === input && entry.answer === undefined)) continue;
-        const last = (claim.payload.amendments ?? []).find((entry) => entry.input === input);
-        let copy: string;
+        const last = (claim.payload.amendments ?? []).find((entry) => entry.input === input) as (Amendment & { blob?: string }) | undefined;
+        let copy: string | null;
         if (last !== undefined) {
-          const shown = git(pd, ["show", `${claim.oid}:${RESULT_FILES_ROOT}/amendments/${input}`, "--"]);
-          if (!shown.ok || Date.parse(approved.timestamp) <= Date.parse(last.at)) continue;
-          copy = shown.stdout;
+          if (Date.parse(approved.timestamp) <= Date.parse(last.at)) continue;
+          copy = amendmentText(pd, last);
         } else {
-          const base = takenFrom(claim.payload.base_oid);
-          if (!base.changed.has(input) || base.approvals.has(approved.block)) continue;
-          const shown = git(pd, ["show", `${claim.payload.base_oid}:${recordRel}/${input}`, "--"]);
-          if (!shown.ok) continue;
-          copy = shown.stdout;
+          // The copy the take read: the plan at the commit it was taken from;
+          // a take of solo work read the lead's own record at that commit.
+          const taken = kept === null ? null : planAtCopy(pd, kept.ref, { commit: claim.payload.base_oid });
+          if (taken?.kind === "read") {
+            const then = taken.plan.inputs.find((entry) => entry.path === input)?.approved;
+            if (then !== undefined && Date.parse(approved.timestamp) <= Date.parse(then)) continue;
+            copy = recordText(pd, claim.payload.base_oid, `inputs/${input}`);
+          } else {
+            if (recordRel === null || auditRowsAt(pd, recordRel, claim.payload.base_oid).some((row) => row.block === approved.block)) continue;
+            copy = recordText(pd, claim.payload.base_oid, `${recordRel}/${input}`);
+          }
         }
-        if (textFingerprint(copy) === textFingerprint(text) || !unitsHearing(pd, input, copy, text).has(claim.unit)) continue;
-        const differs = (current: UnitClaimView): boolean => {
-          const now = git(pd, ["show", `${current.oid}:${RESULT_FILES_ROOT}/amendments/${input}`, "--"]);
-          return !now.ok || textFingerprint(now.stdout) !== textFingerprint(text);
-        };
-        const sent = amendClaim(pd, remote, claim, { input, at: isoTimestamp(), words: "" }, text, undefined, differs);
-        if (sent === null || sent === "missed") continue;
-        reached.push(builderOf(claim));
+        if (copy === null || textFingerprint(copy) === textFingerprint(text) || !unitsHearing(pd, input, copy, text).has(claim.unit)) continue;
+        const entry = reaches.get(claim.unit) ?? { view: claim, inputs: [] };
+        entry.inputs.push(input);
+        reaches.set(claim.unit, entry);
+        any = true;
       }
-      if (reached.length > 0) {
-        const name = inputName(input);
-        lines.unshift(`The ${name} you changed ${name.endsWith("s") ? "reach" : "reaches"} the teams building with it ` +
-          `(${joinNames([...new Set(reached)])}): they hear it once and carry on.`);
+      if (any) {
+        changed.push(input);
+        texts[input] = text;
       }
+    }
+    if (reaches.size === 0) return lines;
+    const reached = new Map<string, string[]>();
+    let sent: LeadWrite;
+    try {
+      sent = leadsPlanWrite(pd, {
+      what: `${joinNames(changed.map(inputName))} changed`,
+      take: { inputs: texts },
+      words: (unit, word) => {
+        const entry = reaches.get(unit);
+        if (entry === undefined) return null;
+        const next = wordForTake(word, entry.view);
+        for (const input of entry.inputs) {
+          const blob = planBlobOf(pd, texts[input]);
+          if ((next.amendments ?? []).some((amendment) => amendment.input === input && amendment.blob === blob)) continue;
+          next.amendments = [...(next.amendments ?? []).filter((amendment) => amendment.input !== input), { input, at: isoTimestamp(), words: "", blob }];
+          reached.set(input, [...(reached.get(input) ?? []), entry.view.unit]);
+        }
+        return next;
+      },
+    });
+    } catch (error) {
+      // A commit that could not be made here: not written, in git's words.
+      if (error instanceof GitWriteRefused) throw error;
+      sent = { kind: "refused", words: errorMessage(error), byRule: false };
+    }
+    if (sent.kind !== "written") {
+      // The step's question comes first when a change this computer did not write stopped it.
+      if (sent.kind === "unchanged" || sent.kind === "unshared" || sent.kind === "stopped") return lines;
+      const what = changed.length === 1 ? `the change to the ${inputName(changed[0])}` : `the changes to the ${joinNames(changed.map(inputName))}`;
+      return [sent.kind === "unreadable" ? unreadablePlanLine(pd, sent.format) : planWriteRefusedLine(pd, sent, what, false)];
+    }
+    for (const input of changed) {
+      const units = reached.get(input);
+      if (units === undefined) continue;
+      const name = inputName(input);
+      // In the plan's order, as the board lists them.
+      const order = kept?.plan.units.map((entry) => entry.name) ?? [];
+      const listed = [...new Set(units)].sort((a, b) => order.indexOf(a) - order.indexOf(b));
+      lines.unshift(`The ${name} you changed ${name.endsWith("s") ? "are" : "is"} on the plan now, for ${joinNames(listed)}.`);
     }
     return lines;
   });
+}
+
+// The text of a change the lead approved to an input, as the plan keeps it.
+function amendmentText(pd: string, amendment: Amendment & { blob?: string }): string | null {
+  if (amendment.blob === undefined || !/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(amendment.blob)) return null;
+  const shown = localGit(pd, ["cat-file", "blob", amendment.blob]);
+  return shown.ok ? shown.stdout : null;
 }
 
 // Who hears a change to an input: each Unit whose stages read it; for the
@@ -12200,7 +12785,8 @@ function approvedInputPathsHere(pd: string): string[] {
 // own words, under the rules for a person's answer (their reply after it was
 // shown, not empty, not a cancellation, not the agent's). An approved change
 // is written into the home's record, the home's stages that used it read as
-// current, and every team building with it gets it on its claim.
+// current, and every team building with it gets it on the plan, in one write
+// made before anything here changes.
 function amendInput(args: string[], projectDir?: string): void {
   const { positional, flags } = parseArgs(args);
   const unit = positional[0];
@@ -12213,29 +12799,36 @@ function amendInput(args: string[], projectDir?: string): void {
   // notice is said once by its text, so the lead's typed words go only on the
   // lead's own records (`lead`).
   const words = personWordsOf(pd, flags);
-  const identity = activeIdentity(pd);
-  const remote = repositoryRemote(pd);
-  const live = currentClaim(pd, remote, claimRef(identity.intentId8, unit));
+  const live = leadsRecordNow(pd, unit);
   const proposal = live?.payload.proposals?.find((entry) => entry.input === flags.input && entry.answer === undefined);
   if (!live || proposal === undefined) fail(`${unit} has no change to ${flags.input} waiting for an answer.`);
   const lead = leadsWord(pd, flags, "The answer to a proposed change", "unit-amend");
   const name = inputName(proposal.input);
-  const answered: Proposal = { ...proposal, answer: answer === "approve" ? "approved" : "turned down", ...(words ? { answer_words: words } : {}) };
+  const reply: NonNullable<UnitWord["answers"]>[number] = {
+    input: proposal.input, at: proposal.at, answer: answer === "approve" ? "approved" : "turned down", ...(words ? { words } : {}),
+  };
+  const answered = { ...proposal, answer: reply.answer };
   const lines: string[] = [];
+  // The proposer's answer on the plan, beside the word already there for it.
+  const withAnswer = (word: UnitWord): UnitWord => ({
+    ...word, answers: [...(word.answers ?? []).filter((entry) => !(entry.input === reply.input && entry.at === reply.at)), reply],
+  });
   if (answer === "approve") {
-    const shown = git(pd, ["show", `${live.oid}:${RESULT_FILES_ROOT}/proposals/${proposal.input}`, "--"]);
-    if (!shown.ok) fail(`The proposed ${name} is not on ${unit}'s claim; ask the team to send it again.`);
+    const proposed = recordText(pd, live.oid, `proposals/${proposal.input}`);
+    if (proposed === null) fail(`The proposed ${name} is not on ${unit}'s claim; ask the team to send it again.`);
     const path = join(activeRecordDir(pd), ...proposal.input.split("/"));
     // Only the team's change goes in: made on the copy the team took, it is put
     // onto the text approved here since, never written over it.
     // The copy the team changed: the lead's last change it took in, else the one it took.
-    const amendedBefore = git(pd, ["show", `${live.oid}:${RESULT_FILES_ROOT}/amendments/${proposal.input}`, "--"]);
-    const taken = amendedBefore.ok
-      ? amendedBefore
-      : git(pd, ["show", `${live.payload.base_oid}:${relative(pd, path).split(sep).join("/")}`, "--"]);
+    const last = (live.payload.amendments ?? []).find((entry) => entry.input === proposal.input);
+    // A take reads the plan at its commit; a take of solo work, the lead's own record there.
+    const recordRel = relativeRecordDir(pd)?.split(sep).join("/") ?? null;
+    const taken = last !== undefined ? amendmentText(pd, last)
+      : recordText(pd, live.payload.base_oid, `inputs/${proposal.input}`) ??
+        (recordRel === null ? null : recordText(pd, live.payload.base_oid, `${recordRel}/${proposal.input}`));
     // The lead's own text of the two put together (--file), approved as written.
     const own = flags.file !== undefined ? readFileSync(resolve(pd, flags.file), "utf-8") : null;
-    const text = own ?? changeOntoCurrent(pd, path, taken.ok ? taken.stdout : null, shown.stdout);
+    const text = own ?? changeOntoCurrent(pd, path, taken, proposed);
     if (text === null) {
       const theirs = writeProposedText(pd, live, proposal.input);
       fail(
@@ -12248,38 +12841,39 @@ function amendInput(args: string[], projectDir?: string): void {
       );
     }
     const before = existsSync(path) ? readFileSync(path, "utf-8") : null;
+    const readers = unitsHearing(pd, proposal.input, before, text);
+    const cached = cachedClaims(pd);
+    const leads = leadsOwnClaims(pd, readStateFile(pd), cached);
+    // Only the Units whose stages read it hear it; the proposing team always hears its answer.
+    const hearing = new Map([...cached].filter(([other, claim]) =>
+      claim.status === "claimed" && !leads.has(other) && (other === unit || readers.has(other))));
+    const blob = planBlobOf(pd, text);
+    // The plan first: until it holds the change and the answer, nothing here is changed.
+    const sent = leadsPlanWrite(pd, {
+      what: `${name} changed, from ${unit}`,
+      take: { inputs: { [proposal.input]: text } },
+      words: (other, word) => {
+        const claim = hearing.get(other);
+        if (claim === undefined) return null;
+        const next = wordForTake(word, claim);
+        next.amendments = [...(next.amendments ?? []).filter((entry) => entry.input !== proposal.input),
+          { input: proposal.input, at: isoTimestamp(), words, blob }];
+        return other === unit ? withAnswer(next) : next;
+      },
+    });
+    failUnlessWritten(pd, sent, `your answer on ${builderOf(live)}'s change to the ${name}`, lead.fields["Message Id"]);
     writeFileSync(path, text, "utf-8");
     renewForAmendedInput(pd, proposal.input, {
       "Proposed By": `${proposal.by} (${live.owner})`, ...(lead.said !== null ? { "Person Words": lead.said } : {}),
     });
-    const amendment: Amendment = { input: proposal.input, at: isoTimestamp(), words };
-    const readers = unitsHearing(pd, proposal.input, before, text);
-    const missed: string[] = [];
-    const cached = cachedClaims(pd);
-    const leads = leadsOwnClaims(pd, readStateFile(pd), cached);
-    for (const [other, claim] of cached) {
-      // Only the Units whose stages read it hear it; the proposing team always hears its answer.
-      if (claim.status !== "claimed" || leads.has(other) || (other !== unit && !readers.has(other))) continue;
-      const sent = amendClaim(pd, remote, claim, amendment, text, other === unit
-        ? (payload) => ({ proposals: (payload.proposals ?? []).map((entry) => (entry.input === proposal.input && entry.answer === undefined ? answered : entry)) })
-        : undefined);
-      if (sent === "missed") missed.push(builderOf(claim));
-    }
-    lines.unshift(`The ${name} is changed here. The teams building with it hear it once and carry on; nobody approves anything again.`);
-    if (missed.length > 0) {
-      const teams = [...new Set(missed)];
-      lines.push(`It did not reach ${joinNames(teams)} just now (${teams.length === 1 ? "its claim" : "their claims"} moved meanwhile), so ${teams.length === 1 ? "that team does" : "those teams do"} not have it yet.`);
-    }
+    // In the plan's order, as the board lists them.
+    const order = keptPlan(pd, activeIdentity(pd).intentId8)?.plan.units.map((entry) => entry.name) ?? [];
+    const units = [...hearing.keys()].sort((a, b) => order.indexOf(a) - order.indexOf(b));
+    lines.unshift(`The ${name} is changed here and on the plan, for ${joinNames(units)}.`);
   } else {
-    const payload: UnitClaimPayload = {
-      ...live.payload,
-      predecessor_oid: live.oid,
-      proposals: (live.payload.proposals ?? []).map((entry) => (entry.input === proposal.input && entry.answer === undefined ? answered : entry)),
-    };
-    const sent = updateClaimRef(pd, remote, live.ref, createClaimCommit(pd, live.oid, payload), live.oid);
-    if (!sent.ok) fail(`${unit}'s claim moved meanwhile: ${sent.refused ?? "try again"}.`);
-    invalidateLiveClaimPayloadCache(pd, unit);
-    lines.push(`Turned down ${builderOf(live)}'s change to the ${name}; they hear it once, with your words.`);
+    const sent = writeUnitWord(pd, live, `${name} change from ${unit} turned down`, withAnswer);
+    failUnlessWritten(pd, sent, `your answer on ${builderOf(live)}'s change to the ${name}`, lead.fields["Message Id"]);
+    lines.push(`Turned down ${builderOf(live)}'s change to the ${name}. Written on the plan, with your words.${noNoticeOnce(pd)}`);
   }
   appendAuditEntry("QUESTION_ANSWERED", {
     Question: `${builderOf(live)} proposes a change to the ${name} for ${unit}`,
@@ -12288,15 +12882,175 @@ function amendInput(args: string[], projectDir?: string): void {
     [QUESTION_TYPE_FIELD]: "unit-amend",
     ...lead.fields,
   }, pd);
-  console.log(JSON.stringify({ answered: answered.answer, unit, notice: lines.join(" ") }));
+  console.log(JSON.stringify({ answered: answered.answer, unit, notice: withPlanNotes(lines.join(" ")) }));
 }
 
-// The home's person turned a Unit's repo down: their words go on the claim,
-// and the team hears them, once, at its next step.
+// A Unit's record as its repository has it now, with the lead's word on it,
+// at a lead's step the person asked for: in the repository the plan names for
+// it, or, before a plan is shared, in the workspace's own (a Unit a teammate
+// took of solo work).
+function leadsRecordNow(pd: string, unit: string): UnitClaimView | null {
+  const identity = activeIdentity(pd);
+  const plan = keptPlan(pd, identity.intentId8)?.plan ?? null;
+  const address = workspaceHomeLocation(pd);
+  const place = plan !== null ? recordPlaceIn(plan, unit)
+    : address === null || address === "local" ? null : { repo: repoNameOf(address), address };
+  return place === null ? null : typedRecordRead(pd, place, { uuid: identity.intentUuid, space: identity.space }, unit);
+}
+
+// The word on the plan for this take of a Unit: a word about an earlier take
+// starts again.
+function wordForTake(word: UnitWord, view: UnitClaimView): UnitWord {
+  return word.generation === view.generation ? { ...word } : { generation: view.generation };
+}
+
+// The lead's merge verdicts as a word keeps them: each with the head it was read at.
+function wordVerdicts(view: UnitClaimView, verdicts: NonNullable<UnitClaimPayload["verdicts"]>): NonNullable<UnitWord["verdicts"]> {
+  const heads = resultHeads(view.payload);
+  return verdicts.map(({ repo, merged, commit, how }) => ({
+    repo, merged, ...(commit ? { commit } : {}), ...(how ? { how } : {}), ...(heads[repo] ? { head: heads[repo] } : {}),
+  }));
+}
+
+// The arguments this command was run with, for the same command again.
+let invokedArgs: string[] = [];
+
+// A lead's word not written, with the same command naming the message their
+// words came in (`again`), so trying again never asks for them twice; with the
+// lead's question first (`ask`), the command to run once they answer it.
+class LeadWordUnwritten extends Error {
+  constructor(message: string, readonly again: string, readonly ask?: ReturnType<typeof planChangeQuestion>, readonly onYes?: string) {
+    super(message);
+  }
+}
+
+// A lead's write that did not go stops the step: on a plan a newer AI-DLC
+// wrote, the update offer; on a tip that is not a plan, that; on work whose
+// plan is not shared yet, that `what` (the word, "refunds's sign-off") waits
+// for the share; else why, in git's or the host's words, and that `what` is
+// not written. `message`: the message the lead's words came in, kept for the
+// same command.
+function failUnlessWritten(pd: string, written: LeadWrite, what: string, message?: string): void {
+  if (written.kind === "written" || written.kind === "unchanged") return;
+  const same = [aidlcToolInvocation("unit"), ...invokedArgs.filter((arg, at, all) => arg !== "--message" && all[at - 1] !== "--message").map(shellArg)];
+  const again = message === undefined ? null : [...same, "--message", shellArg(message)].join(" ");
+  const stop = (said: string): never => {
+    if (again === null) fail(said);
+    throw new LeadWordUnwritten(said, again);
+  };
+  // A change on the plan this computer did not write: the lead's question again, never silence.
+  if (written.kind === "stopped") {
+    const ask = planChangeQuestion(written.detail as PlanChange);
+    throw new LeadWordUnwritten(`Before I write ${what}: ${ask.question}`, again ?? same.join(" "), ask);
+  }
+  // A plan to share again first (a tip that is not a plan, or a plan gone
+  // from its repository): the share, then this word, on the lead's yes.
+  const shareFirst = (said: string): never => {
+    const word = again ?? same.join(" ");
+    throw new LeadWordUnwritten(said, word, undefined, shareThenWord(word));
+  };
+  if (written.kind === "unreadable") {
+    if (written.format > PLAN_FORMAT) stop(unreadablePlanLine(pd, written.format));
+    shareFirst(`${unreadablePlanLine(pd, written.format)} ${SHARE_AGAIN_OVER}`);
+  }
+  if (written.kind === "unshared") {
+    if (written.gone !== undefined) shareFirst(planGoneOffer(written.gone));
+    const { space, intentUuid, intentId8 } = activeIdentity(pd);
+    const work = readIntentRegistry(pd, space).find((entry) => entry.uuid === intentUuid)?.slug ?? intentId8;
+    stop(`The plan of ${work} is not shared yet, so ${what} is not written. Once the plan is shared, ask me again and I'll write it ` +
+      "with the words you gave.");
+  }
+  stop(planWriteRefusedLine(pd, written, what, again !== null));
+}
+
+// A lead's write the plan's repository did not take, said for every lead
+// writer the same way: why, what is not written, and the way on.
+function planWriteRefusedLine(pd: string, written: LeadWrite, what: string, kept: boolean): string {
+  const place = planPlaceForShare(pd);
+  const repo = keptPlan(pd, activeIdentity(pd).intentId8)?.plan.plan_repo.name ?? ("repo" in place ? place.repo : "the plan's repository");
+  const way = `Say when to try again${kept ? "; I have your words" : ""}.`;
+  const words = (said: string): string => said.trim().replace(/[.!?]+$/, "");
+  if (written.kind === "unreached") {
+    return `${repo} could not be reached, so ${what} is not written: ` +
+      `${written.words === null ? "it did not answer in time" : `git says "${words(written.words)}"`}. ${way}`;
+  }
+  if (written.kind === "refused") return `${repo} did not take the change to the plan (${words(written.words)}), so ${what} is not written. ${way}`;
+  return `The plan in ${repo} kept changing while I wrote on it, so ${what} is not written. ${way}`;
+}
+
+// A plan this computer had that is gone from its repository, at the lead's
+// project: their yes runs the share, which writes it again.
+const planGoneOffer = (plan: PlanJson): string => `${planGoneLine(plan)} I can share it again from your own record here: say if you want that.`;
+
+// The way on over a plan tip that is not a plan, at the lead's project: their
+// yes runs the share, which writes over it.
+const SHARE_AGAIN_OVER = "I can share the plan again from your own record here, as a new commit over what is there: say if you want that.";
+
+// The agent's step for a lead's word that waits on the share again: one
+// instruction for one turn, the share first, then the word with the lead's own
+// words; a share that does not go is the answer.
+function shareThenWord(word: string): string {
+  return `When the person says yes, run \`${aidlcInvocation()} unit share --plan\`; once it shares the plan, run \`${word}\` in the same turn, ` +
+    "and tell them in plain words what each reports. If the share does not go, its own line is the answer: leave the word's command unrun.";
+}
+
+// A lead write that carries no word of theirs (the learnings choice) and did
+// not go: its line, once, and the command that writes it when tried again (the
+// share carries the rules); the lead's question first when a change this
+// computer did not write stopped it. Null when it went, or there is no plan.
+export function planWriteNote(
+  projectDir: string,
+  written: LeadWrite,
+  what: string,
+): { line: string; again: string; ask?: ReturnType<typeof planChangeQuestion> } | null {
+  const pd = resolveProjectDir(projectDir);
+  const again = `${aidlcInvocation()} unit share --plan`;
+  if (written.kind === "written" || written.kind === "unchanged" || written.kind === "unshared") return null;
+  if (written.kind === "stopped") {
+    const ask = planChangeQuestion(written.detail as PlanChange);
+    return { line: ask.question, again, ask };
+  }
+  if (written.kind === "unreadable") {
+    return { line: written.format > PLAN_FORMAT ? newerPlanStep(pd) : `${unreadablePlanLine(pd, written.format)} ${SHARE_AGAIN_OVER}`, again };
+  }
+  return { line: planWriteRefusedLine(pd, written, what, false), again };
+}
+
+// A plan tip that does not read: written by a newer AI-DLC (the update
+// offer), or not a plan at all.
+function unreadablePlanLine(pd: string, format: number): string {
+  if (format > PLAN_FORMAT) return newerPlanStep(pd);
+  const place = planPlaceForShare(pd);
+  return `The plan in ${"repo" in place ? place.repo : "the plan's repository"} could not be read: what is there is not a plan this AI-DLC can read.`;
+}
+
+const NO_NOTICE_LINE = "AI-DLC sends no notice of it.";
+
+// The lead's word for a team goes on the plan and nowhere else: said the first
+// time in a chat, then left out.
+function noNoticeOnce(pd: string): string {
+  try {
+    const chat = resolveWorkflowSelection(pd).sessionId;
+    if (chat) {
+      if (personLineHeard(pd, chat, NO_NOTICE_LINE)) return "";
+      markPersonLinesHeard(pd, chat, [NO_NOTICE_LINE]);
+    }
+  } catch {
+    // No chat known: said.
+  }
+  return ` ${NO_NOTICE_LINE}`;
+}
+
+// One Unit's word changed by a lead's step, on the plan.
+function writeUnitWord(pd: string, view: UnitClaimView, what: string, change: (word: UnitWord) => UnitWord): LeadWrite {
+  return leadsPlanWrite(pd, { what, words: (unit, word) => unit === view.unit ? change(wordForTake(word, view)) : null });
+}
+
 // The lead's Build and Test found a Unit a team built wanting: it goes back to
-// that team in the failure's words, a turn-down from Build and Test. Its result
-// and done come off its claim, and UNIT_SENT_BACK sets aside its earlier merge
-// here, so it waits for the team and its next merge is recorded again.
+// that team in the failure's words, a turn-down from Build and Test, on the
+// plan. While it holds, the Unit reads with no result and not done, and
+// UNIT_SENT_BACK sets aside its earlier merge here, so it waits for the team and
+// its next merge is recorded again.
 function sendBack(args: string[], projectDir?: string): void {
   const { positional, flags } = parseArgs(args);
   const unit = positional[0];
@@ -12306,56 +13060,50 @@ function sendBack(args: string[], projectDir?: string): void {
   // hears; the lead's own word to send it back goes on the row.
   const failure = personWordsOf(pd, flags);
   const lead = leadsWord(pd, flags, "Sending a Unit back");
-  const identity = activeIdentity(pd);
-  const remote = repositoryRemote(pd);
-  const live = currentClaim(pd, remote, claimRef(identity.intentId8, unit));
+  const live = leadsRecordNow(pd, unit);
   if (live?.status !== "claimed" || (!live.payload.result && !live.payload.done)) fail(`${unit} has no result from a team to send back.`);
-  const { done: _done, verdicts: _verdicts, result: _result, ...rest } = live.payload;
-  const payload: UnitClaimPayload = {
-    ...rest,
-    predecessor_oid: live.oid,
-    turned_down: { repo: "", words: failure.trim(), at: isoTimestamp(), from: "build-and-test" },
-  };
-  const sent = updateClaimRef(pd, remote, live.ref, createClaimCommit(pd, live.oid, payload), live.oid);
-  if (!sent.ok) fail(`${unit} could not be sent back: ${sent.refused ?? "its claim moved meanwhile"}. Try again.`);
-  invalidateLiveClaimPayloadCache(pd, unit);
+  const heads = resultHeads(live.payload);
+  const sent = writeUnitWord(pd, live, `${unit} sent back`, ({ done: _done, verdicts: _verdicts, ...word }) => ({
+    ...word, turned_down: { repo: "", heads, words: failure.trim(), at: isoTimestamp(), from: "build-and-test" },
+  }));
+  failUnlessWritten(pd, sent, `${unit}'s send-back`, lead.fields["Message Id"]);
   appendAuditEntry("UNIT_SENT_BACK", {
     Unit: unit, Owner: live.owner, "Attempt Generation": String(live.generation), ...(failure ? { Failure: failure } : {}),
     ...lead.fields,
   }, pd);
   console.log(JSON.stringify({
     unit,
-    notice: `Sent ${unit} back to ${builderOf(live)} with your words. It waits for them here; nothing of it is rebuilt here.`,
+    notice: withPlanNotes(`${unit} is sent back from your Build and Test, with your words. Written on the plan.${noNoticeOnce(pd)} ` +
+      `Build and Test waits here for a new push of ${unit}; nothing of it is rebuilt here.`),
   }));
 }
 
+// The lead turned a Unit's repo down: their words go on the plan, and the team
+// reads them at its next step.
 function turnedDown(args: string[], projectDir?: string): void {
   const { positional, flags } = parseArgs(args);
   const unit = positional[0];
   if (!unit || !flags.repo) fail(`usage: ${unitUsage("turned-down")}`);
   const pd = resolveProjectDir(projectDir);
   // The team hears the words the agent relays; the lead's typed words, from
-  // the message store, stay on the claim beside them, read by no line.
+  // the message store, stay on the plan beside them, read by no line.
   const words = personWordsOf(pd, flags);
-  const said = leadsWord(pd, flags, "A turn-down").said;
-  const identity = activeIdentity(pd);
-  const remote = repositoryRemote(pd);
-  const live = currentClaim(pd, remote, claimRef(identity.intentId8, unit));
+  const lead = leadsWord(pd, flags, "A turn-down");
+  const said = lead.said;
+  const live = leadsRecordNow(pd, unit);
   if (live?.status !== "claimed" || !live.payload.result) fail(`${unit} has no result from its team to turn down.`);
-  const payload: UnitClaimPayload = {
-    ...live.payload,
-    predecessor_oid: live.oid,
-    turned_down: { repo: flags.repo, words: words.trim(), at: isoTimestamp(), ...(said !== null ? { person_reply: said } : {}) },
-  };
-  const sent = updateClaimRef(pd, remote, live.ref, createClaimCommit(pd, live.oid, payload), live.oid);
-  if (!sent.ok) fail(`The note could not be put on ${unit}'s claim: ${sent.refused ?? "it moved meanwhile"}. Try again.`);
-  invalidateLiveClaimPayloadCache(pd, unit);
-  console.log(JSON.stringify({ unit, notice: `${builderOf(live)} hears that ${flags.repo} was turned down, with your words, at their next step.` }));
+  const heads = resultHeads(live.payload);
+  const sent = writeUnitWord(pd, live, `${unit} turned down in ${flags.repo}`, (word) => ({
+    ...word,
+    turned_down: { repo: flags.repo!, heads, words: words.trim(), at: isoTimestamp(), ...(said !== null ? { person_reply: said } : {}) },
+  }));
+  failUnlessWritten(pd, sent, `${unit}'s turn-down in ${flags.repo}`, lead.fields["Message Id"]);
+  console.log(JSON.stringify({ unit, notice: withPlanNotes(`Written on the plan: ${unit} turned down in ${flags.repo}, with your words.${noNoticeOnce(pd)}`) }));
 }
 
 // The lead says a repo merged the Unit where the merge check cannot see it (a
 // change made again by hand, a branch merged elsewhere): their words go on the
-// claim, and the home counts that repo merged at its next step.
+// plan with the verdicts and done they make, in one write.
 function saidMerged(args: string[], projectDir?: string): void {
   const { positional, flags } = parseArgs(args);
   const unit = positional[0];
@@ -12364,39 +13112,82 @@ function saidMerged(args: string[], projectDir?: string): void {
   // At a team's own build there is no claim of its result to write on: the
   // lead's project checks the repos itself.
   if (unitBuildOf(readStateFile(pd)) !== null) {
-    fail(`The lead's project checks at its own next step whether ${unit} merged; a merge it cannot see, the lead counts in ` +
-      "their own words there. Nothing needs sending from here.");
+    fail("Only the lead can count a merge git cannot see: it is their word on the plan. Nothing was written here.");
   }
   const given = personWordsOf(pd, flags);
-  const words = leadsWord(pd, flags, "That it merged").said ?? given;
-  const identity = activeIdentity(pd);
-  const remote = repositoryRemote(pd);
-  const live = currentClaim(pd, remote, claimRef(identity.intentId8, unit));
-  if (live?.status !== "claimed" || !live.payload.result) fail(`${unit} has no result from its team to count merged.`);
+  const lead = leadsWord(pd, flags, "That it merged");
+  const words = lead.said ?? given;
+  const live = leadsRecordNow(pd, unit);
+  if (live?.status !== "claimed" || !live.payload.result) {
+    saidMergedWithNoRecord(pd, unit, flags.repo, words, lead.fields["Message Id"]);
+    return;
+  }
   if (!live.payload.result.repos.some((repo) => repo.repo === flags.repo)) {
     fail(`${unit} changed ${joinNames(live.payload.result.repos.map((repo) => repo.repo))}, not ${flags.repo}.`);
   }
-  const payload: UnitClaimPayload = {
-    ...live.payload,
-    predecessor_oid: live.oid,
-    said_merged: [...(live.payload.said_merged ?? []).filter((entry) => entry.repo !== flags.repo), { repo: flags.repo, words, at: isoTimestamp() }],
-  };
-  const sent = updateClaimRef(pd, remote, live.ref, createClaimCommit(pd, live.oid, payload), live.oid);
-  if (!sent.ok) fail(`${unit}'s claim moved meanwhile: ${sent.refused ?? "try again"}.`);
-  invalidateLiveClaimPayloadCache(pd, unit);
-  // Recorded now, once every repo it changed is merged by the check or by the
-  // lead's word.
-  const tookIn: string[] = [];
-  const checked = checkTeamResults(pd, [], [], [], false, tookIn).get(unit);
+  const said_merged = [...(live.payload.said_merged ?? []).filter((entry) => entry.repo !== flags.repo),
+    { repo: flags.repo, words, at: isoTimestamp(), ...(resultHeads(live.payload)[flags.repo] ? { head: resultHeads(live.payload)[flags.repo] } : {}) }];
+  // The merge check with the lead's word in it, so the word, the verdicts and
+  // done go on the plan in one write.
+  const counted: UnitClaimView = { ...live, payload: { ...live.payload, said_merged } };
+  const identity = activeIdentity(pd);
+  const verdicts = quietly(() => resultVerdicts(pd, counted.payload, [], { id8: identity.intentId8, unit }));
+  const done = countsDone(allMerged(verdicts), leadSignOffOn(readStateFile(pd)), live.payload);
+  const entry = said_merged.at(-1)!;
+  // On the word as the tip has it, so a word another computer of the lead's wrote since stays.
+  const sent = writeUnitWord(pd, live, `${flags.repo} counted merged for ${unit}`, (word) => ({
+    ...word, said_merged: [...(word.said_merged ?? []).filter((said) => said.repo !== entry.repo), entry],
+    verdicts: wordVerdicts(live, verdicts), ...(done ? { done: true as const } : {}),
+  }));
+  failUnlessWritten(pd, sent, `${unit}'s merge in ${flags.repo}`, lead.fields["Message Id"]);
+  const tookIn = done && recordUnitDone(pd, counted, verdicts);
   const said = `${flags.repo} counts as merged for ${unit}, in your words.`;
-  const notMerged = (checked?.verdicts ?? []).filter((verdict) => !verdict.merged).map((verdict) => verdict.repo);
-  const checkIn = tookIn.includes(unit) ? checkInLine(pd) : null;
-  const notice = checked?.done
+  const notMerged = verdicts.filter((verdict) => !verdict.merged).map((verdict) => verdict.repo);
+  const checkIn = tookIn ? checkInLine(pd) : null;
+  const notice = done
     ? [`${unit} is recorded as merged here.`, checkIn].filter((line) => line !== null).join(" ")
     : notMerged.length > 0
       ? `${said} ${joinNames(notMerged)} ${notMerged.length === 1 ? "has" : "have"} not merged it yet, so nothing is recorded here.`
       : said;
-  console.log(JSON.stringify({ unit, notice }));
+  console.log(JSON.stringify({ unit, notice: withPlanNotes(notice) }));
+}
+
+// A Unit whose record holds no result (its take or its push never reached its
+// record repository): the lead's word alone counts it, against its
+// repositories on the plan, and it is done once each of them is counted.
+function saidMergedWithNoRecord(pd: string, unit: string, repo: string, words: string, message?: string): void {
+  const plan = keptPlan(pd, activeIdentity(pd).intentId8)?.plan ?? null;
+  const repos = plan?.units.find((entry) => entry.name === unit)?.repos ?? [];
+  if (repos.length === 0) fail(`${unit} has no result from its team to count merged.`);
+  if (!repos.includes(repo)) fail(`${unit} changed ${joinNames(repos)}, not ${repo}.`);
+  const signOffOn = leadSignOffOn(readStateFile(pd));
+  let counted: string[] = [];
+  let done = false;
+  const sent = leadsPlanWrite(pd, {
+    what: `${repo} counted merged for ${unit}`,
+    words: (other, word) => {
+      if (other !== unit) return null;
+      const said_merged = [...(word.said_merged ?? []).filter((said) => said.repo !== repo), { repo, words, at: isoTimestamp() }];
+      counted = said_merged.map((said) => said.repo);
+      done = repos.every((name) => counted.includes(name)) && (!signOffOn || word.signoff !== undefined);
+      return { ...word, said_merged, ...(done ? { done: true as const } : {}) };
+    },
+  });
+  failUnlessWritten(pd, sent, `${unit}'s merge in ${repo}`, message);
+  if (done) {
+    withAuditLock(pd, () => {
+      if (unitMergesStanding(readAuditShardEvents(pd), unit).length > 0) return;
+      appendAuditEntryUnlocked("UNIT_MERGED", {
+        Unit: unit, Owner: "", "Built By": "", "Merged In": counted.map((name) => `${name} (by your word)`).join(", "), "Attempt Generation": "0",
+      }, pd);
+    });
+  }
+  const notMerged = repos.filter((name) => !counted.includes(name));
+  const said = `${repo} counts as merged for ${unit}, in your words.`;
+  const notice = done ? `${unit} is recorded as merged here.`
+    : notMerged.length > 0 ? `${said} ${joinNames(notMerged)} ${notMerged.length === 1 ? "has" : "have"} not merged it yet, so nothing is recorded here.`
+    : said;
+  console.log(JSON.stringify({ unit, notice: withPlanNotes(notice) }));
 }
 
 // The lead's repo list at a commit of the lead's workspace, as addresses by
@@ -12661,11 +13452,29 @@ function leadSignOffSetting(args: string[], projectDir?: string): void {
     writeStateFile(pd, setOrInsertField(readStateFile(pd), "## Runtime State", LEAD_SIGNOFF_FIELD, value));
     appendAuditEntryUnlocked("LEAD_SIGN_OFF_SET", { Mode: value, ...(words ? { "Person Words": words } : {}) }, pd);
   });
+  // Teams read the setting from the plan: once it is shared, the plan carries
+  // it now. A write that does not go leaves the setting here, and every lead
+  // write after it carries it (leadsPlanWrite).
+  let unwritten: string | null = null;
+  if (homeLocation(readStateFile(pd)) !== null) {
+    let sent: LeadWrite;
+    try {
+      sent = leadsPlanWrite(pd, { what: `lead sign-off ${value}`, take: { settings: [LEAD_SIGNOFF_FIELD] } });
+    } catch (error) {
+      if (error instanceof GitWriteRefused) throw error;
+      sent = { kind: "refused", words: errorMessage(error), byRule: false };
+    }
+    if (sent.kind === "stopped") failUnlessWritten(pd, sent, "the sign-off setting");
+    if (sent.kind === "unreadable") unwritten = unreadablePlanLine(pd, sent.format);
+    else if (sent.kind !== "written" && sent.kind !== "unchanged" && sent.kind !== "unshared") {
+      unwritten = `${planWriteRefusedLine(pd, sent, "the sign-off setting", false)} The sign-off setting is changed here only; the plan gets it with my next write to it.`;
+    }
+  }
   console.log(JSON.stringify({
     lead_sign_off: value,
-    notice: value === "on"
+    notice: withPlanNotes(unwritten ?? (value === "on"
       ? "Each team's result now waits for your sign-off before its Unit counts as done."
-      : "A team's Unit counts as done once every repo it changed has merged; no sign-off is asked.",
+      : "A team's Unit counts as done once every repo it changed has merged; no sign-off is asked.")),
   }));
 }
 
@@ -12681,25 +13490,21 @@ function signOff(args: string[], projectDir?: string): void {
   if (!unit) fail(`usage: ${unitUsage("sign-off")}`);
   const pd = resolveProjectDir(projectDir);
   const given = personWordsOf(pd, flags);
-  const identity = activeIdentity(pd);
-  const remote = repositoryRemote(pd);
-  const live = currentClaim(pd, remote, claimRef(identity.intentId8, unit));
+  const live = leadsRecordNow(pd, unit);
   if (live?.status !== "claimed" || !live.payload.result) fail(`${unit} has no result from its team to sign off.`);
   const lead = leadsWord(pd, flags, "The sign-off", "unit-signoff");
   const words = lead.said ?? given;
-  const payload: UnitClaimPayload = { ...live.payload, predecessor_oid: live.oid, signoff: { words, at: isoTimestamp() } };
-  const sent = updateClaimRef(pd, remote, live.ref, createClaimCommit(pd, live.oid, payload), live.oid);
-  if (!sent.ok) fail(`${unit}'s claim moved meanwhile: ${sent.refused ?? "try again"}.`);
-  invalidateLiveClaimPayloadCache(pd, unit);
+  const sent = writeUnitWord(pd, live, `${unit} signed off`, (word) => ({ ...word, signoff: { words, at: isoTimestamp() } }));
+  failUnlessWritten(pd, sent, `${unit}'s sign-off`, lead.fields["Message Id"]);
   appendAuditEntry("QUESTION_ANSWERED", {
     Question: `Sign off ${unit} from ${builderOf(live)}`, Answer: "Sign it off", [QUESTION_TYPE_FIELD]: "unit-signoff", ...lead.fields,
   }, pd);
   const merged = (live.payload.verdicts ?? []).length > 0 && live.payload.verdicts!.every((verdict) => verdict.merged);
   console.log(JSON.stringify({
     unit,
-    notice: merged
+    notice: withPlanNotes(merged
       ? `Signed off ${unit}; every repo it changed has merged, so it is done.`
-      : `Signed off ${unit}; it counts as done once every repo it changed has merged.`,
+      : `Signed off ${unit}; it counts as done once every repo it changed has merged.`),
   }));
 }
 
@@ -12748,6 +13553,7 @@ let projectDir: string | undefined;
 const UNIT_LEAD_WAIT_ENDS = new Set(["assign", "merged", "sign-off", "release", "lead-here"]);
 
 export function main(argv: string[]): void {
+  invokedArgs = [...argv];
   const args = [...argv];
   const projectIdx = args.indexOf("--project-dir");
   if (projectIdx !== -1 && projectIdx + 1 < args.length) {
@@ -12771,6 +13577,7 @@ export function main(argv: string[]): void {
     else if (command === "rebase") rebaseUnit(args, projectDir);
     else if (command === "amend") amendInput(args, projectDir);
     else if (command === "lead-sign-off") leadSignOffSetting(args, projectDir);
+    else if (command === "plan-change") planChangeAnswer(args, projectDir);
     else if (command === "lead-here") leadHere(args, projectDir);
     else if (command === "sign-off") signOff(args, projectDir);
     else if (command === "turned-down") turnedDown(args, projectDir);
@@ -12810,6 +13617,10 @@ export function main(argv: string[]): void {
     console.error(JSON.stringify({
       error: errorMessage(error),
       ...(error instanceof CandidateExactPolicyError ? { candidate_exact: error.details } : {}),
+      ...(error instanceof LeadWordUnwritten
+        ? error.onYes !== undefined ? { on_yes: error.onYes }
+        : error.ask === undefined ? { again: error.again } : { ask_type: "lead-plan-change", choices: error.ask.choices, after_answer: error.again }
+        : {}),
     }));
     process.exit(1);
   }

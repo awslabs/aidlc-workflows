@@ -38,6 +38,7 @@ import {
   mergeOnHost,
   next,
   ORCH,
+  planWordAt,
   recordAt,
   refundsTakenInClone,
   run,
@@ -161,9 +162,9 @@ describe("Carry on in a shared workspace", () => {
     expect(look()).toContain("refunds (pushed by alice in payments, waiting for its merge)");
     mergeOnHost(hosts.billing, "refunds", "squash");
     const merged = look();
-    expect(merged).toContain("refunds (pushed by alice in payments, merged; the lead's project records it at its next look)");
+    expect(merged).toContain("refunds (pushed by alice in payments, merged)");
     expect(merged).not.toContain("waiting for its merge");
-    expect(recordAt(home, "refunds")?.json?.verdicts).toBeUndefined();
+    expect(planWordAt(home, "refunds")?.verdicts).toBeUndefined();
   });
 
   test("the lead's merge rule, read at a team's checkout: merged once every repo has it, with nothing written to the claim", () => {
@@ -177,7 +178,7 @@ describe("Carry on in a shared workspace", () => {
     expect(mergedAtTeamLook(alice, payload)).toBe(false);
     mergeOnHost(hosts.billing, "refunds", "squash");
     expect(mergedAtTeamLook(alice, payload)).toBe(true);
-    expect(recordAt(home, "refunds")?.json?.verdicts).toBeUndefined();
+    expect(planWordAt(home, "refunds")?.verdicts).toBeUndefined();
   });
 
   test("a code repo offline, refusing, asking for a sign-in or never answering reads as not merged, asks nothing and keeps the lead's time limit", async () => {
@@ -666,7 +667,7 @@ describe("where things stand", () => {
     for (const repo of ["checkout-api", "billing"]) {
       expect(run(UNIT, ["merged", "refunds", "--repo", repo, "--person-words", `${repo} merged it`], home.dir).status).toBe(0);
     }
-    expect(recordAt(home, "refunds")?.json).toMatchObject({ done: true });
+    expect(planWordAt(home, "refunds")).toMatchObject({ done: true });
     // Status alone reads the lead's project for it.
     expect(yours(), status()).toBe("refunds (merged)");
     // Her look with words on the finished build, then status: never waiting.

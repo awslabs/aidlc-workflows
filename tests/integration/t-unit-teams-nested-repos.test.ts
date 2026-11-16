@@ -35,7 +35,7 @@ import {
   run,
   STATE,
   sharePlan,
-  recordAt,
+  planWordAt,
 } from "../harness/team-build.ts";
 
 setDefaultTimeout(20 * 60_000);
@@ -156,6 +156,6 @@ describe("the packages inside the workspace's own repo, as gitlinks", () => {
     mergeOnHost(hosts["pkg-b"], "refunds", "merge");
     git(home.dir, ["fetch", "-q", "origin"]);
     next(home.dir);
-    expect(recordAt(plan, "refunds")?.json).toMatchObject({ done: true });
+    expect(planWordAt(plan, "refunds")).toMatchObject({ done: true });
   });
 });

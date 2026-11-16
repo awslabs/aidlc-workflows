@@ -1244,14 +1244,12 @@ export interface UnitResult {
   by: string;
   repos: RepoResult[];
   // Record-relative paths of the Unit outputs the home's later stages read,
-  // carried as files in the claim commit's tree under RESULT_FILES_ROOT.
+  // carried as files under result/ in the Unit's record.
   outputs: string[];
   // Shared inputs the team's own edit was kept for, made on the version before
   // the home's change (record-relative).
   kept_edits?: string[];
 }
-
-export const RESULT_FILES_ROOT = ".aidlc-unit-result";
 
 function gitIn(dir: string, args: string[], input?: string): { ok: boolean; out: string } {
   const result = spawnSync("git", args, { cwd: dir, encoding: "utf-8", input, maxBuffer: 64 * 1024 * 1024 });

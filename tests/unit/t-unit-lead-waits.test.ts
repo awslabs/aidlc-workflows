@@ -20,7 +20,7 @@ import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { AIDLC_SRC, seededStateFile } from "../harness/fixtures.ts";
+import { AIDLC_SRC, fixtureIntentId8, seededStateFile } from "../harness/fixtures.ts";
 import {
   cleanupTeamBuild,
   cloneCode,
@@ -91,14 +91,15 @@ function leadWaits(policy?: "relaxed" | "off") {
     ...(policy ? { state: homeState([`- **Guard Policy**: ${policy} (set by you)`]) } : {}),
   });
   expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
-  expect(run(UNIT, ["share", "--plan"], home.dir).status).toBe(0);
+  // Its one repository has no address here, so the lead names the workspace's own for the plan.
+  expect(run(UNIT, ["share", "--plan", "--repo", home.remote], home.dir).status).toBe(0);
   const payer = cloneOf(home.remote, "pat");
   cloneCode(codeHost("ledger"), payer, "ledger", "pat");
-  const paying = takeIn("payments", ["refunds", "--home", HOME_RECORD], payer);
+  const paying = takeIn("payments", ["refunds", "--plan", fixtureIntentId8(home.dir), "--from", home.remote], payer);
   expect(paying.status, paying.out).toBe(0);
   const partner = cloneOf(home.remote, "dana");
   cloneCode(codeHost("ledger"), partner, "ledger", "dana");
-  const took = takeIn("data", ["reporting", "--home", HOME_RECORD], partner);
+  const took = takeIn("data", ["reporting", "--plan", fixtureIntentId8(home.dir), "--from", home.remote], partner);
   expect(took.status, took.out).toBe(0);
   const intents = join(partner, "aidlc", "spaces", "data", "intents");
   const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-reporting"))!);
@@ -200,10 +201,10 @@ describe("while the lead's project waits on the teams at Code Generation", () =>
   test("a Unit the lead builds here keeps its plan: the person's word to build it here ends the wait's pass", () => {
     const home = makeHome({ dependencies: OPEN, repos: { ledger: "" } });
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
-    expect(run(UNIT, ["share", "--plan"], home.dir).status).toBe(0);
+    expect(run(UNIT, ["share", "--plan", "--repo", home.remote], home.dir).status).toBe(0);
     const partner = cloneOf(home.remote, "dana");
     cloneCode(codeHost("ledger"), partner, "ledger", "dana");
-    const took = takeIn("data", ["reporting", "--home", HOME_RECORD], partner);
+    const took = takeIn("data", ["reporting", "--plan", fixtureIntentId8(home.dir), "--from", home.remote], partner);
     expect(took.status, took.out).toBe(0);
     const statePath = seededStateFile(home.dir);
     writeFileSync(statePath, readFileSync(statePath, "utf-8").replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: code-generation"));

@@ -779,6 +779,14 @@ export interface UnitPlanChangeAskDirective extends AskDirectiveBase {
   choices: AskChoice[];
 }
 
+// A change on the shared plan that the lead's computer did not write: keep it,
+// or take it out at the lead's next write. Each choice is one complete command.
+export interface LeadPlanChangeAskDirective extends AskDirectiveBase {
+  ask_type: "lead-plan-change";
+  response_route: "command";
+  choices: AskChoice[];
+}
+
 // In team-owned Construction on the workspace's own repository, a hand-over
 // between people put as one question at the moment it is due: share the plan
 // with the teams, take a Unit in another clone, publish a finished Unit, review
@@ -995,6 +1003,7 @@ export type AskDirective =
   | RepoScopeAskDirective
   | UnitsReposAskDirective
   | UnitPlanChangeAskDirective
+  | LeadPlanChangeAskDirective
   | TeamHandoverAskDirective
   | ReposManifestAskDirective
   | UnitTakeAskDirective
@@ -1853,7 +1862,7 @@ export function ceremonyNote(state: "on" | "off", questionsOnly = false): string
 // the numbers: a reply of "2" is read against this order, and the agent
 // renders nothing of its own. One builder, so every question has one shape.
 // Engine questions answered by running the picked choice's command.
-const COMMAND_CHOICE_ASKS = new Set(["construction-staffing", "repo-scope", "units-repos", "unit-plan-change", "repos-manifest", "unit-take", "unit-push", "unit-amend", "unit-signoff", "unit-turned-down", "unit-propose", "unit-move-onto", "unit-clone"]);
+const COMMAND_CHOICE_ASKS = new Set(["construction-staffing", "repo-scope", "units-repos", "unit-plan-change", "repos-manifest", "unit-take", "unit-push", "unit-amend", "unit-signoff", "unit-turned-down", "unit-propose", "unit-move-onto", "unit-clone", "lead-plan-change"]);
 
 export interface AskChoice {
   label: string;

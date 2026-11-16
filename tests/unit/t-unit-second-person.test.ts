@@ -30,7 +30,7 @@ import {
   mergeOnHost,
   next,
   personsChat,
-  recordAt,
+  planWordAt,
   refundsTaken,
   run,
   STATE,
@@ -525,7 +525,7 @@ describe("the lead's sign-off", () => {
     mergeOnHost(hosts.billing, "refunds", "squash");
     git(home.dir, ["fetch", "-q", "origin"]);
     expect(next(home.dir).ask_type).not.toBe("unit-signoff");
-    expect(recordAt(home, "refunds")?.json).toMatchObject({ done: true });
+    expect(planWordAt(home, "refunds")).toMatchObject({ done: true });
   });
 
   test("on: the result waits for the lead's own word, asked once as it arrives", () => {
@@ -556,12 +556,12 @@ describe("the lead's sign-off", () => {
     for (const command of ["sign-off <unit>", "amend <unit> --input <file>", "lead-sign-off on", "release <unit>"]) {
       expect(String(board.board_note)).toContain(command);
     }
-    expect(recordAt(home, "refunds")?.json?.done).toBeUndefined();
+    expect(planWordAt(home, "refunds")?.done).toBeUndefined();
     const signed = run(UNIT, ["sign-off", "refunds", "--person-words", "looks right, sign it off"], home.dir);
     expect(signed.status, signed.out).toBe(0);
     // Every repo it changed has merged: it is done now, not once they merge.
     expect(String(signed.json?.notice)).toBe("Signed off refunds; every repo it changed has merged, so it is done.");
     next(home.dir);
-    expect(recordAt(home, "refunds")?.json).toMatchObject({ done: true });
+    expect(planWordAt(home, "refunds")).toMatchObject({ done: true });
   });
 });

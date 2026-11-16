@@ -16,11 +16,11 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { appendFileSync, chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { fixtureIntentId8, REPO_ROOT, seededStateFile } from "../harness/fixtures.ts";
 import { hostFor } from "../harness/scope-hosts.ts";
 import { AgentStandIn, type Directive, PersonScript } from "../harness/scope-run.ts";
 import {
-  claimPayload,
   fetchRecords,
   cleanupTeamBuild,
   cloneCode,
@@ -42,7 +42,7 @@ import {
   inSpace,
   sharePlan,
   planFrom,
-  recordAt,
+  planWordAt,
   type PlanHome,
 } from "../harness/team-build.ts";
 
@@ -163,7 +163,7 @@ describe("scenario 1: one shared workspace repo, the repos side by side", () => 
     mergeOnHost(hosts.billing, "refunds", "squash");
     fetchRecords(home.dir);
     next(home.dir);
-    expect(recordAt(plan, "refunds")?.json).toMatchObject({ done: true });
+    expect(planWordAt(plan, "refunds")).toMatchObject({ done: true });
     // reporting waited on refunds and is open now; the lead asks to build it
     // at their own project, where their repos.local.json puts billing: the
     // lead's chat builds it through every stage, and the board shows it done.
@@ -233,7 +233,7 @@ describe("scenario 2: one big code repo", () => {
     mergeOnHost(platform, "refunds", "squash");
     fetchRecords(home.dir);
     next(home.dir);
-    expect(recordAt(plan, "refunds")?.json).toMatchObject({ done: true });
+    expect(planWordAt(plan, "refunds")).toMatchObject({ done: true });
   });
 
   test("the workspace inside it: teams on its remote take each Unit, push it on its own branch and merge it by pull request, and the lead's look sees the merge", () => {
@@ -250,7 +250,7 @@ describe("scenario 2: one big code repo", () => {
     expect(field(stateOf(home.dir), "Home Location")).toBe(home.remote);
     const step = next(home.dir);
     expect(step.ask_type, JSON.stringify(step)).toBe("team-handover");
-    expect(String(step.question)).toStartWith("The Units are open for any team to take.");
+    expect(String(step.question)).toStartWith("Do you want me to share the plan with the teams?");
     expect(run(UNIT, ["share", "--plan"], home.dir).status).toBe(0);
     const alice = cloneOf(home.remote, "alice");
     expect(takeWith(UNIT, "payments", ["take", "refunds", "--plan", fixtureIntentId8(home.dir), "--from", home.remote], alice).status).toBe(0);
@@ -267,7 +267,9 @@ describe("scenario 2: one big code repo", () => {
     mergeOnHost(home.remote, "refunds", "squash");
     fetchRecords(home.dir);
     next(home.dir);
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
+    // The plan is shared in the workspace's own repository here.
+    const shared = { dir: home.dir, hosts: { workspace: home.remote }, id8: fixtureIntentId8(home.dir), plan: null };
+    expect(planWordAt(shared, "refunds")).toMatchObject({ done: true });
   });
 });
 
@@ -308,7 +310,8 @@ describe("scenario 5: solo work, then a second person joins", () => {
     mergeOnHost(hosts["checkout-web"], "checkout-ui", "squash");
     fetchRecords(home.dir);
     next(home.dir);
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "checkout-ui")).toMatchObject({ done: true });
+    // No plan is shared for solo work a teammate took: the lead's own record keeps the merge it saw.
+    expect(readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_MERGED").map((row) => row.block).join("\n")).toContain("checkout-ui");
   });
 });
 
@@ -350,7 +353,7 @@ describe("scenario 6: when things go wrong", () => {
     mergeOnHost(hosts.billing, "refunds", "merge");
     fetchRecords(home.dir);
     next(home.dir);
-    expect(recordAt(home, "refunds")?.json).toMatchObject({ done: true });
+    expect(planWordAt(home, "refunds")).toMatchObject({ done: true });
     expect(git(hosts["checkout-api"], ["log", "--format=%s", "main"]).split("\n")).toContain("refunds (squashed)");
   });
 

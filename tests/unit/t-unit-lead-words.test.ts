@@ -22,7 +22,7 @@ import {
   hook,
   next,
   personsChat,
-  recordAt,
+  planWordAt,
   refundsTakenInClone,
   run,
   UNIT,
@@ -76,7 +76,7 @@ describe("the lead's word is kept in their own words, with the message it came i
     const row = lastRow(home.dir, "QUESTION_ANSWERED");
     expect(auditBlockField(row, "Person Reply")).toBe(words);
     expect(auditBlockField(row, "Message Id")).toBe(id);
-    expect((recordAt(home, "refunds")?.json?.signoff as { words?: string })?.words).toBe(words);
+    expect((planWordAt(home, "refunds")?.signoff as { words?: string })?.words).toBe(words);
   });
 
   test("an answer to a team's proposed change", () => {
@@ -105,8 +105,8 @@ describe("the lead's word is kept in their own words, with the message it came i
     const down = run(UNIT, ["turned-down", "refunds", "--repo", "billing", "--person-words", "needs the ledger entry"],
       home.dir, personsChat(session));
     expect(down.status, down.out).toBe(0);
-    // The team hears what the agent relayed; the claim keeps what the lead typed beside it.
-    const claimed = recordAt(home, "refunds")?.json?.turned_down as { words?: string; person_reply?: string };
+    // The team hears what the agent relayed; the plan keeps what the lead typed beside it.
+    const claimed = planWordAt(home, "refunds")?.turned_down as { words?: string; person_reply?: string };
     expect(claimed?.person_reply).toBe(words);
     expect(claimed?.words).toBe("needs the ledger entry");
   });
@@ -118,8 +118,8 @@ describe("the lead's word is kept in their own words, with the message it came i
     leadSays(home.dir, session, words);
     const said = run(UNIT, ["merged", "refunds", "--repo", "billing", "--person-words", "merged by hand"], home.dir, personsChat(session));
     expect(said.status, said.out).toBe(0);
-    const claim = recordAt(home, "refunds")?.json;
-    expect((claim?.said_merged as Array<{ repo: string; words: string }>)?.find((entry) => entry.repo === "billing")?.words).toBe(words);
+    const word = planWordAt(home, "refunds");
+    expect((word?.said_merged as Array<{ repo: string; words: string }>)?.find((entry) => entry.repo === "billing")?.words).toBe(words);
   });
 
   test("a send-back: the failure goes to the team, the lead's own words go on the record", () => {
@@ -133,8 +133,8 @@ describe("the lead's word is kept in their own words, with the message it came i
     const row = lastRow(home.dir, "UNIT_SENT_BACK");
     expect(auditBlockField(row, "Person Reply")).toBe(words);
     expect(auditBlockField(row, "Message Id")).toBe(id);
-    const claim = recordAt(home, "refunds")?.json;
-    expect((claim?.turned_down as { words?: string })?.words).toBe(failure);
+    const word = planWordAt(home, "refunds");
+    expect((word?.turned_down as { words?: string })?.words).toBe(failure);
   });
 });
 
@@ -161,8 +161,8 @@ describe("only the message the request came in is kept, never the chat before it
     chatThenRequest(home.dir, session, request);
     const said = run(UNIT, ["merged", "refunds", "--repo", "billing", "--person-words", "merged on the host"], home.dir, personsChat(session));
     expect(said.status, said.out).toBe(0);
-    const claim = recordAt(home, "refunds")?.json;
-    expect((claim?.said_merged as Array<{ repo: string; words: string }>)?.find((entry) => entry.repo === "billing")?.words).toBe(request);
+    const word = planWordAt(home, "refunds");
+    expect((word?.said_merged as Array<{ repo: string; words: string }>)?.find((entry) => entry.repo === "billing")?.words).toBe(request);
   });
 
   test("a turn-down", () => {
@@ -173,7 +173,7 @@ describe("only the message the request came in is kept, never the chat before it
     const down = run(UNIT, ["turned-down", "refunds", "--repo", "billing", "--person-words", "needs the ledger entry"],
       home.dir, personsChat(session));
     expect(down.status, down.out).toBe(0);
-    expect((recordAt(home, "refunds")?.json?.turned_down as { person_reply?: string })?.person_reply)
+    expect((planWordAt(home, "refunds")?.turned_down as { person_reply?: string })?.person_reply)
       .toBe(request);
   });
 
@@ -200,7 +200,7 @@ describe("only the message the request came in is kept, never the chat before it
     const signed = run(UNIT, ["sign-off", "refunds", "--person-words", "Sign it off"], home.dir, personsChat(session));
     expect(signed.status, signed.out).toBe(0);
     onlyThe(lastRow(home.dir, "QUESTION_ANSWERED"), id, request);
-    expect((recordAt(home, "refunds")?.json?.signoff as { words?: string })?.words).toBe(request);
+    expect((planWordAt(home, "refunds")?.signoff as { words?: string })?.words).toBe(request);
   });
 
   test("an answer to a team's proposed change", () => {
@@ -234,7 +234,7 @@ describe("the message the agent names", () => {
     expect(auditBlockField(row, "Message Id")).toBe(id);
     // That one, and nothing else of the chat.
     expect(auditBlockField(row, "Message Ids")).toBeNull();
-    expect((recordAt(home, "refunds")?.json?.signoff as { words?: string })?.words).toBe(words);
+    expect((planWordAt(home, "refunds")?.signoff as { words?: string })?.words).toBe(words);
   });
 
   test("a message that is not on record is refused, and nothing is recorded", () => {
@@ -244,7 +244,7 @@ describe("the message the agent names", () => {
     const said = run(UNIT, ["merged", "refunds", "--repo", "billing", "--message", "msg-not-on-record"], home.dir, personsChat(session));
     expect(said.status).not.toBe(0);
     expect(String(said.json?.error ?? said.out)).toContain("no message record msg-not-on-record exists in this project");
-    expect(recordAt(home, "refunds")?.json?.said_merged).toBeUndefined();
+    expect(planWordAt(home, "refunds")?.said_merged).toBeUndefined();
   });
 });
 
@@ -268,7 +268,7 @@ describe("once the lead answers the engine's question, their next words are thei
     const down = run(UNIT, ["turned-down", "refunds", "--repo", "billing", "--person-words", "needs the ledger entry"],
       home.dir, personsChat(session));
     expect(down.status, down.out).toBe(0);
-    expect((recordAt(home, "refunds")?.json?.turned_down as { person_reply?: string })?.person_reply)
+    expect((planWordAt(home, "refunds")?.turned_down as { person_reply?: string })?.person_reply)
       .toBe(words);
     leadSays(home.dir, "t-unit-lead-words-after-signoff-2", "and how is checkout-ui coming along?");
     expect(auditBlockField(lastRow(home.dir, "HUMAN_TURN"), "Open Question")).toBeNull();

@@ -399,14 +399,34 @@ export function tellsWhatToType(...lines: unknown[]): boolean {
 }
 
 /** The person's own fetch, and what AI-DLC's look adds to it in a clone: its copies of the teams' records, which that
- * fetch never brings. */
-export function fetchRecords(dir: string, remote = "origin"): void {
-  git(dir, ["fetch", "-q", remote]);
-  // AI-DLC's look in this clone: each work's records into its copy of them by the remote's address.
-  const address = git(dir, ["remote", "get-url", remote]);
-  const works = new Set(git(dir, ["ls-remote", remote, "refs/aidlc/claims/*"]).split("\n")
-    .map((line) => /\trefs\/aidlc\/claims\/([^/]+)\//.exec(line)?.[1]).filter((id8): id8 is string => id8 !== undefined));
-  for (const id8 of works) git(dir, ["fetch", "-q", "--no-tags", remote, `+refs/aidlc/claims/${id8}/*:${copyOf(address, `refs/aidlc/claims/${id8}/`)}*`]);
+ * fetch never brings. With a plan copied here, the look also reads the plan where it is shared and each Unit's record
+ * in the repository the plan names for it. */
+export function fetchRecords(dir: string, remote?: string): void {
+  const origin = remote ?? (git(dir, ["remote"]).split("\n").includes("origin") ? "origin" : null);
+  if (origin !== null) {
+    git(dir, ["fetch", "-q", origin]);
+    // AI-DLC's look in this clone: each work's records into its copy of them by the remote's address.
+    const address = git(dir, ["remote", "get-url", origin]);
+    const works = new Set(git(dir, ["ls-remote", origin, "refs/aidlc/claims/*"]).split("\n")
+      .map((line) => /\trefs\/aidlc\/claims\/([^/]+)\//.exec(line)?.[1]).filter((id8): id8 is string => id8 !== undefined));
+    for (const id8 of works) git(dir, ["fetch", "-q", "--no-tags", origin, `+refs/aidlc/claims/${id8}/*:${copyOf(address, `refs/aidlc/claims/${id8}/`)}*`]);
+  }
+  const plans = git(dir, ["for-each-ref", "--format=%(refname)", "refs/aidlc/home/"]).split("\n").filter((ref) => ref.endsWith("/plan"));
+  for (const ref of plans) {
+    const id8 = ref.split("/")[3];
+    const plan = JSON.parse(git(dir, ["show", `${ref}:plan.json`])) as {
+      plan_repo: { address: string }; repos: Array<{ name: string; address: string | null }>; units: Array<{ record: string }>;
+    };
+    const quiet = (args: string[]): void => {
+      spawnSync("git", args, { cwd: dir, encoding: "utf-8", env: GIT_ENV });
+    };
+    quiet(["fetch", "-q", "--no-tags", plan.plan_repo.address, `+refs/aidlc/plans/${id8}:${copyOf(plan.plan_repo.address, `refs/aidlc/plans/${id8}`)}`]);
+    const records = new Set(plan.units.map((unit) => plan.repos.find((repo) => repo.name === unit.record)?.address ?? null)
+      .filter((address): address is string => address !== null));
+    for (const address of records) {
+      quiet(["fetch", "-q", "--no-tags", address, `+refs/aidlc/claims/${id8}/*:${copyOf(address, `refs/aidlc/claims/${id8}/`)}*`]);
+    }
+  }
 }
 
 // A Unit's record at a host: a claim commit's claim file (main's flow), else
@@ -443,6 +463,14 @@ export function recordAt(home: PlanHome, unit: string): { json: Record<string, u
     message,
     parents: parents === "" ? [] : parents.split(" "),
   };
+}
+
+/** The lead's word on a Unit as the plan at its host holds it (plan.json's units[].word); undefined for a Unit it lacks. */
+export function planWordAt(home: PlanHome, unit: string): Record<string, unknown> | undefined {
+  const plan = JSON.parse(git(Object.values(home.hosts)[0], ["show", `${planRefOf(home.id8)}:plan.json`])) as {
+    units: Array<{ name: string; word: Record<string, unknown> }>;
+  };
+  return plan.units.find((entry) => entry.name === unit)?.word;
 }
 
 /** The bare host of the repository the shared plan names for a Unit's record (plan.json's units[].record). */

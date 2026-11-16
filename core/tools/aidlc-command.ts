@@ -278,6 +278,7 @@ export const UNIT_GRAMMAR: Readonly<Record<string, UnitGrammar>> = {
   },
   participate: { name: false, options: [], usage: "unit participate" },
   pin: { name: true, options: [], usage: "unit pin <unit>" },
+  "plan-change": { name: false, word: "keep|take-out", options: ["tip"], usage: "unit plan-change keep|take-out --tip <plan commit>" },
   propose: {
     name: false,
     options: ["input", "file", "request-file", "person-words"],

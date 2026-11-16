@@ -13,7 +13,7 @@
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { latestCompletionBasesFromAudit } from "../../dist/claude/.claude/tools/aidlc-validity.ts";
@@ -36,6 +36,7 @@ import {
   personsChat,
   personsNext,
   type PlanHome,
+  planWordAt,
   recordAt,
   refundsTakenInClone,
   run,
@@ -187,7 +188,7 @@ describe("starting early", () => {
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
     mergeOnHost(hosts.billing, "refunds", "merge");
     next(home.dir);
-    expect(recordAt(home, "refunds")?.json).toMatchObject({ done: true });
+    expect(planWordAt(home, "refunds")).toMatchObject({ done: true });
     const step = next(dana, chat);
     expect(step.ask_type, JSON.stringify(step).slice(0, 400)).toBe("unit-move-onto");
   });
@@ -198,7 +199,7 @@ describe("starting early", () => {
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
     mergeOnHost(hosts.billing, "refunds", "merge");
     next(home.dir);
-    expect(recordAt(home, "refunds")?.json).toMatchObject({ done: true });
+    expect(planWordAt(home, "refunds")).toMatchObject({ done: true });
     fetchRecords(dana);
     const step = next(dana);
     expect(step.ask_type, JSON.stringify(step)).toBe("unit-move-onto");
@@ -385,8 +386,8 @@ describe("a change to a shared input", () => {
       "--person-words", "apply it to the current requirements yourself"], home.dir);
     expect(amended.status, amended.out).toBe(0);
     expect(readFileSync(homeCopy, "utf-8")).toBe("# Requirements\n\nFR1 refunds, full or partial amounts.\n");
-    const answer = recordAt(home, "refunds")?.json as { proposals?: Array<{ answer?: string }>; amendments?: unknown[] };
-    expect(answer.proposals?.at(-1)?.answer).toBe("approved");
+    const answer = planWordAt(home, "refunds") as { answers?: Array<{ answer?: string }>; amendments?: unknown[] };
+    expect(answer.answers?.at(-1)?.answer).toBe("approved");
     expect(answer.amendments?.length).toBe(1);
     fetchRecords(alice);
     expect(notices(next(alice))).toContain("The lead approved your change to the requirements.");
@@ -411,7 +412,7 @@ describe("a change to a shared input", () => {
     const amended = run(UNIT, ["amend", "refunds", "--input", REQUIREMENTS, "--answer", "approve", "--person-words", "yes, partial refunds"], home.dir);
     expect(amended.status, amended.out).toBe(0);
     expect(amended.json?.notice).toBe(
-      "The requirements is changed here. The teams building with it hear it once and carry on; nobody approves anything again.",
+      "The requirements is changed here and on the plan, for refunds and checkout-ui.",
     );
     expect(readFileSync(join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD, ...REQUIREMENTS.split("/")), "utf-8"))
       .toBe("# Requirements\n\nFR1 refunds, partial amounts too.\n");
@@ -527,14 +528,14 @@ describe("a change to a shared input", () => {
     writeFileSync(homeCopy, "# Requirements\n\nFR1 refunds. FR2 no alerts on refunds.\n");
     // Not approved yet: nothing goes to the teams.
     next(home.dir);
-    expect((recordAt(home, "refunds")?.json as { amendments?: unknown[] }).amendments ?? []).toEqual([]);
+    expect((planWordAt(home, "refunds") as { amendments?: unknown[] }).amendments ?? []).toEqual([]);
     appendAuditEntry("GATE_APPROVED", { Stage: "requirements-analysis", "User Input": "Approve" }, home.dir);
     const lead = personsChat("lead-chat");
     const step = personsNext(home.dir, lead, "lead-chat");
     expect(notices(step).join(" "), JSON.stringify(step).slice(0, 400)).toContain(
-      "The requirements you changed reach the teams building with it (alice): they hear it once and carry on.",
+      "The requirements you changed are on the plan now, for refunds.",
     );
-    expect((recordAt(home, "refunds")?.json as { amendments?: unknown[] }).amendments?.length).toBe(1);
+    expect((planWordAt(home, "refunds") as { amendments?: unknown[] }).amendments?.length).toBe(1);
     fetchRecords(alice);
     expect(notices(next(alice)).join(" ")).toContain("The lead changed the requirements");
     // Said once at the lead's project.
@@ -554,14 +555,14 @@ describe("a change to a shared input", () => {
     mergeOnHost(hosts.billing, "refunds", "squash");
     fetchRecords(home.dir);
     next(home.dir);
-    expect(recordAt(home, "refunds")?.json).toMatchObject({ done: true });
+    expect(planWordAt(home, "refunds")).toMatchObject({ done: true });
     const homeRecord = join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD);
     writeFileSync(join(homeRecord, ...REQUIREMENTS.split("/")), "# Requirements\n\nFR1 refunds, said the new way.\n");
     writeFileSync(join(homeRecord, "inception", "units-generation", "unit-of-work.md"), "# Units of work\n\nrefunds, checkout-ui, reporting, said the new way.\n");
     appendAuditEntry("GATE_APPROVED", { Stage: "requirements-analysis", "User Input": "Approve" }, home.dir);
     appendAuditEntry("GATE_APPROVED", { Stage: "units-generation", "User Input": "Approve" }, home.dir);
     const lead = personsChat("lead-chat");
-    expect(notices(personsNext(home.dir, lead, "lead-chat")).join(" ")).toContain("The requirements you changed reach the teams");
+    expect(notices(personsNext(home.dir, lead, "lead-chat")).join(" ")).toContain("The requirements you changed are on the plan now, for refunds.");
     fetchRecords(alice);
     // One offer for both, never one per file.
     const heard = notices(next(alice));
@@ -581,7 +582,7 @@ describe("a change to a shared input", () => {
     mergeOnHost(hosts.billing, "refunds", "squash");
     fetchRecords(home.dir);
     next(home.dir);
-    expect(recordAt(home, "refunds")?.json).toMatchObject({ done: true });
+    expect(planWordAt(home, "refunds")).toMatchObject({ done: true });
     // The lead's project is past its Unit stages, at Build and Test.
     const statePath = join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD, "aidlc-state.md");
     writeFileSync(statePath, readFileSync(statePath, "utf-8")
@@ -592,8 +593,8 @@ describe("a change to a shared input", () => {
     appendAuditEntry("GATE_APPROVED", { Stage: "requirements-analysis", "User Input": "Approve" }, home.dir);
     const lead = personsChat("lead-chat");
     const step = personsNext(home.dir, lead, "lead-chat");
-    expect(notices(step).join(" "), JSON.stringify(step).slice(0, 400)).toContain("The requirements you changed reach the teams");
-    expect((recordAt(home, "refunds")?.json as { amendments?: unknown[] }).amendments?.length).toBe(1);
+    expect(notices(step).join(" "), JSON.stringify(step).slice(0, 400)).toContain("The requirements you changed are on the plan now, for refunds.");
+    expect((planWordAt(home, "refunds") as { amendments?: unknown[] }).amendments?.length).toBe(1);
     fetchRecords(alice);
     expect(notices(next(alice))).toContain(
       "The lead changed the requirements, and refunds is already done. Do you want me to start follow-up work for it?",
@@ -633,7 +634,8 @@ describe("a change to a shared input", () => {
     expect(notices(next(bob))).toContain("The lead changed the requirements; checkout-ui uses the new one from here.");
   });
 
-  test("a Unit taken after the approval, from the plan as last pushed, hears the approved change at the lead's next step", () => {
+  // The approval is on the plan at once, so a take after it reads the approved text there.
+  test("a Unit taken after the approval takes the approved change from the plan, with nothing to hear about it", () => {
     const { home } = proposed();
     receiptHere(home.dir);
     expect(next(home.dir).ask_type).toBe("unit-amend");
@@ -641,9 +643,12 @@ describe("a change to a shared input", () => {
     expect(run(UNIT, ["amend", "refunds", "--input", REQUIREMENTS, "--answer", "approve", "--person-words", "yes"], home.dir).status).toBe(0);
     const bob = cloneOf(home.remote, "bob");
     expect(takeIn("web", ["checkout-ui", ...planFrom(home)], bob).status).toBe(0);
+    const intents = join(bob, "aidlc", "spaces", "web", "intents");
+    const bobRecord = join(intents, readdirSync(intents).find((name) => name.endsWith("-checkout-ui"))!);
+    expect(readFileSync(join(bobRecord, ...REQUIREMENTS.split("/")), "utf-8")).toBe("# Requirements\n\nFR1 refunds, partial amounts too.\n");
     next(home.dir);
     fetchRecords(bob);
-    expect(notices(next(bob))).toContain("The lead changed the requirements; checkout-ui uses the new one from here.");
+    expect(notices(next(bob)).join(" ")).not.toContain("The lead changed the requirements");
   });
 
   // A live run: a team's own proposed copy was written back to an older
@@ -719,19 +724,6 @@ describe("a change to a shared input", () => {
     const step = next(alice);
     expect(notices(step)).toContain("The lead changed the requirements; refunds stays as you pushed it.");
     expect(JSON.stringify(step)).not.toContain("Do you want me to redo");
-  });
-
-  test("an approved change that does not reach a build just now names who took it", () => {
-    const { home } = proposed();
-    const bob = cloneOf(home.remote, "bob");
-    expect(takeIn("web", ["checkout-ui", ...planFrom(home)], bob).status).toBe(0);
-    fetchRecords(home.dir);
-    const hook = join(home.remote, "hooks", "pre-receive");
-    writeFileSync(hook, `#!/bin/sh\nwhile read old new ref; do case "$ref" in */checkout-ui) echo 'busy' >&2; exit 1;; esac; done\n`);
-    chmodSync(hook, 0o755);
-    const amended = run(UNIT, ["amend", "refunds", "--input", REQUIREMENTS, "--answer", "approve", "--person-words", "yes"], home.dir);
-    expect(amended.status, amended.out).toBe(0);
-    expect(String(amended.json?.notice)).toContain("It did not reach bob just now (its claim moved meanwhile), so that team does not have it yet.");
   });
 
   test("turned down: the team hears the owner's words and carries on with the approved one", () => {
@@ -857,7 +849,7 @@ describe("who hears a change to the contract summary", () => {
     return { home: plan, record };
   }
   const amendments = (home: PlanHome, unit: string) =>
-    ((recordAt(home, unit)?.json as { amendments?: unknown[] } | undefined)?.amendments ?? []).length;
+    ((planWordAt(home, unit) as { amendments?: unknown[] } | undefined)?.amendments ?? []).length;
   const approveContracts = (home: { dir: string }) =>
     appendAuditEntry("GATE_APPROVED", { Stage: "contract-design", "User Input": "Approve" }, home.dir);
 
@@ -867,7 +859,7 @@ describe("who hears a change to the contract summary", () => {
     approveContracts(home);
     const step = next(home.dir);
     expect(notices(step).join(" "), JSON.stringify(step).slice(0, 400)).toContain(
-      "The contract summary you changed reaches the teams building with it (bob and alice): they hear it once and carry on.",
+      "The contract summary you changed is on the plan now, for refunds and checkout-ui.",
     );
     expect([amendments(home, "refunds"), amendments(home, "checkout-ui"), amendments(home, "reporting")]).toEqual([1, 1, 0]);
   });

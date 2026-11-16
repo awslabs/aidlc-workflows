@@ -41,6 +41,8 @@ import {
   hook,
   personsChat,
   personsNext,
+  planRefOf,
+  planWordAt,
   recordAt,
   recordHost,
   refundsTakenInClone,
@@ -1626,29 +1628,29 @@ describe("at the home", () => {
     expect(claimLooks).toHaveLength(1);
   });
 
-  test("a look at the board writes nothing back to the claim until the home sees a new merge", () => {
+  test("a look at the board writes nothing on the plan until the lead's look sees a new merge", () => {
     const { hosts, home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
-    git(home.dir, ["fetch", "-q", "origin"]);
-    const ref = `refs/aidlc/claims/${fixtureIntentId8(home.dir)}/refunds`;
-    const pushed = git(home.remote, ["rev-parse", ref]);
+    const ref = planRefOf(home.id8);
+    const plan = Object.values(home.hosts)[0];
+    const pushed = git(plan, ["rev-parse", ref]);
     next(home.dir);
     next(home.dir);
-    expect(git(home.remote, ["rev-parse", ref])).toBe(pushed);
+    expect(git(plan, ["rev-parse", ref])).toBe(pushed);
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
     const seen = next(home.dir);
-    expect(git(home.remote, ["rev-parse", ref])).not.toBe(pushed);
-    expect(recordAt(home, "refunds")?.json?.verdicts).toEqual([
+    expect(git(plan, ["rev-parse", ref])).not.toBe(pushed);
+    expect(planWordAt(home, "refunds")?.verdicts).toEqual([
       expect.objectContaining({ repo: "checkout-api", merged: true }),
-      { repo: "billing", merged: false },
+      expect.objectContaining({ repo: "billing", merged: false }),
     ]);
     // The one write the home makes for the teams, said once in plain words.
-    expect((seen.change_notices ?? []) as string[]).toContain("I've told alice checkout-api merged refunds.");
-    const written = git(home.remote, ["rev-parse", ref]);
+    expect((seen.change_notices ?? []) as string[]).toContain("checkout-api merged refunds. Written on the plan.");
+    const written = git(plan, ["rev-parse", ref]);
     const after = next(home.dir);
-    expect(git(home.remote, ["rev-parse", ref])).toBe(written);
-    expect(JSON.stringify(after.change_notices ?? [])).not.toContain("I've told");
+    expect(git(plan, ["rev-parse", ref])).toBe(written);
+    expect(JSON.stringify(after.change_notices ?? [])).not.toContain("Written on the plan");
   });
 
   // The GitHub run's case 2: a review fix by hand, then a squash, the branch deleted.
@@ -1666,8 +1668,8 @@ describe("at the home", () => {
     mergeOnHost(hosts.billing, "refunds", "squash");
     git(hosts["checkout-api"], ["branch", "-q", "-D", "refunds"]);
     const seen = next(home.dir);
-    expect(recordAt(home, "refunds")?.json, JSON.stringify(seen)).toMatchObject({ done: true });
-    expect((seen.change_notices ?? []) as string[]).toContain("I've told alice refunds is merged.");
+    expect(planWordAt(home, "refunds"), JSON.stringify(seen)).toMatchObject({ done: true });
+    expect((seen.change_notices ?? []) as string[]).toContain("refunds is merged in checkout-api and billing. Written on the plan.");
   });
 
   // Case 2 with no look between the fix and the branch's deletion: the check
@@ -1685,8 +1687,8 @@ describe("at the home", () => {
     const line = `checkout-api has ${squash} "refunds (squashed)" changing every file of refunds; if that is refunds merged, say so.`;
     const chat = personsChat("t-unit-push-maybe-merged");
     const seen = personsNext(home.dir, chat, "t-unit-push-maybe-merged");
-    expect(recordAt(home, "refunds")?.json?.verdicts).toEqual([
-      { repo: "checkout-api", merged: false },
+    expect(planWordAt(home, "refunds")?.verdicts).toEqual([
+      expect.objectContaining({ repo: "checkout-api", merged: false }),
       expect.objectContaining({ repo: "billing", merged: true }),
     ]);
     expect((seen.change_notices ?? []) as string[], JSON.stringify(seen)).toContain(line);
@@ -1716,8 +1718,8 @@ describe("at the home", () => {
       const refsBefore = git(api, ["for-each-ref", "--format=%(refname)"]);
       const chat = personsChat("t-unit-push-pr-head");
       const seen = personsNext(home.dir, chat, "t-unit-push-pr-head");
-      expect(recordAt(home, "refunds")?.json, JSON.stringify(seen)).toMatchObject({ done: true });
-      expect((seen.change_notices ?? []) as string[]).toContain("I've told alice refunds is merged.");
+      expect(planWordAt(home, "refunds"), JSON.stringify(seen)).toMatchObject({ done: true });
+      expect((seen.change_notices ?? []) as string[]).toContain("refunds is merged in checkout-api and billing. Written on the plan.");
       expect(JSON.stringify(seen), JSON.stringify(seen)).not.toContain("changing every file of refunds");
       // Read with the lead's own git: no remote added, none of the host's refs kept here, and the head kept as
       // the Unit branch's tip in the ref the look keeps it in.
@@ -1764,8 +1766,8 @@ describe("at the home", () => {
       const seen = personsNext(home.dir, personsChat(session!), session!);
       expect((seen.change_notices ?? []) as string[], `${session} ${JSON.stringify(seen)}`).toContain(line);
     }
-    expect(recordAt(home, "refunds")?.json?.verdicts).toEqual([
-      { repo: "checkout-api", merged: false },
+    expect(planWordAt(home, "refunds")?.verdicts).toEqual([
+      expect.objectContaining({ repo: "checkout-api", merged: false }),
       expect.objectContaining({ repo: "billing", merged: true }),
     ]);
     expect(git(join(home.dir, "checkout-api"), ["for-each-ref", `refs/aidlc/home/${fixtureIntentId8(home.dir)}/unit/refunds`])).toBe("");
@@ -1788,7 +1790,7 @@ describe("at the home", () => {
     git(hosts["checkout-api"], ["branch", "-q", "-D", "refunds"]);
     git(home.dir, ["fetch", "-q", "origin"]);
     const seen = next(home.dir);
-    expect(recordAt(home, "refunds")?.json, JSON.stringify(seen)).toMatchObject({ done: true });
+    expect(planWordAt(home, "refunds"), JSON.stringify(seen)).toMatchObject({ done: true });
   });
 
   test("a push again after a fix the person pushed with plain git keeps every head the branch had", () => {
@@ -1820,7 +1822,7 @@ describe("at the home", () => {
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
     mergeOnHost(hosts.billing, "refunds", "squash");
     const seen = next(home.dir);
-    expect(recordAt(home, "refunds")?.json, JSON.stringify(seen)).toMatchObject({ done: true });
+    expect(planWordAt(home, "refunds"), JSON.stringify(seen)).toMatchObject({ done: true });
   });
 
   test("a Unit branch rewritten on the host is not read as the Unit: its squash leaves it not merged", () => {
@@ -1841,8 +1843,8 @@ describe("at the home", () => {
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
     mergeOnHost(hosts.billing, "refunds", "squash");
     next(home.dir);
-    expect(recordAt(home, "refunds")?.json?.verdicts).toEqual([
-      { repo: "checkout-api", merged: false },
+    expect(planWordAt(home, "refunds")?.verdicts).toEqual([
+      expect.objectContaining({ repo: "checkout-api", merged: false }),
       expect.objectContaining({ repo: "billing", merged: true }),
     ]);
   });
@@ -1859,7 +1861,7 @@ describe("at the home", () => {
     mergeOnHost(hosts.billing, "refunds", "squash");
     const seen = next(home.dir);
     const notices = (seen.change_notices ?? []) as string[];
-    expect(notices, JSON.stringify(seen)).toContain("I've told alice refunds is merged.");
+    expect(notices, JSON.stringify(seen)).toContain("refunds is merged in checkout-api and billing. Written on the plan.");
     expect(notices.filter((line) => line === CHECK_IN_LINE), JSON.stringify(notices)).toHaveLength(0);
     const after = next(home.dir);
     expect((after.change_notices ?? []) as string[]).not.toContain(CHECK_IN_LINE);
@@ -1878,7 +1880,7 @@ describe("at the home", () => {
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
     mergeOnHost(hosts.billing, "refunds", "merge");
     next(home.dir);
-    expect(recordAt(home, "refunds")?.json).toMatchObject({ done: true });
+    expect(planWordAt(home, "refunds")).toMatchObject({ done: true });
     const homeUnit = join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD, "construction", "refunds");
     expect(JSON.parse(readFileSync(join(homeUnit, "code-generation", "traceability.json"), "utf-8"))).toEqual(table);
     expect(readFileSync(join(homeUnit, "nfr-requirements", "performance-requirements.md"), "utf-8")).toContain("NFR1.1");
@@ -1913,7 +1915,7 @@ describe("at the home", () => {
     const merged = readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_MERGED");
     expect(merged).toHaveLength(1);
     expect(merged[0].block).toContain("**Built By**: alice");
-    expect(recordAt(home, "refunds")?.json).toMatchObject({ done: true });
+    expect(planWordAt(home, "refunds")).toMatchObject({ done: true });
     expect(readFileSync(join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD, "construction", "refunds", "code-generation", "code-summary.md"), "utf-8"))
       .toBe("# Code summary\n\nRefunds.\n");
     expect(String(after.narration), JSON.stringify(after).slice(0, 600)).toContain("- refunds, payments space: built by alice, done");
@@ -1934,7 +1936,7 @@ describe("at the home", () => {
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
     mergeOnHost(hosts.billing, "refunds", "merge");
     next(home.dir);
-    expect(recordAt(home, "refunds")?.json).toMatchObject({ done: true });
+    expect(planWordAt(home, "refunds")).toMatchObject({ done: true });
     // The lead's laptop: the home's work as last pushed, without this machine's record of the merge.
     const laptop = cloneOf(home.remote, "lead-laptop");
     const picked = run(join(AIDLC_SRC, "tools", "aidlc.ts"), ["engine", "intent", "switch", HOME_RECORD], laptop);
@@ -1960,17 +1962,17 @@ describe("at the home", () => {
     );
   });
 
-  test("a home remote that cannot be reached: the board is the last fetch's, with one line that it may be behind", () => {
-    const { home, alice, record } = refundsTakenInClone();
+  test("a record repository that cannot be reached: the board is the last look's, with one line that it may be behind", () => {
+    const { hosts, home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     fetchRecords(home.dir);
-    git(home.dir, ["remote", "set-url", "origin", join(home.remote, "gone")]);
+    renameSync(hosts["checkout-api"], `${hosts["checkout-api"]}-gone`);
     const step = next(home.dir);
     expect(step.kind, JSON.stringify(step)).toBe("print");
     expect(String(step.narration)).toContain("- refunds, payments space: built by alice, checkout-api not merged yet, billing not merged yet (0 of 2 merged)");
-    expect((step.change_notices ?? []) as string[]).toEqual([
-      "origin could not be reached just now, so the board may be behind: it shows what I last read from it.",
+    expect((step.change_notices ?? []) as string[], JSON.stringify(step)).toEqual([
+      "checkout-api could not be reached just now, so the board may be behind: it shows what I last read from it.",
     ]);
   });
 
@@ -2167,7 +2169,7 @@ describe("at the home", () => {
     mergeOnHost(home.remote, "refunds", "squash");
     git(home.dir, ["pull", "-q", "origin", "main"]);
     next(home.dir);
-    expect(recordAt(plan, "refunds")?.json).toMatchObject({ done: true });
+    expect(planWordAt(plan, "refunds")).toMatchObject({ done: true });
   });
 
   // A live run: the same work in a teammate's fresh clone, where git leaves the
@@ -2238,12 +2240,12 @@ describe("at the home", () => {
         "until then.",
     ]);
     expect(readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_MERGED")).toEqual([]);
-    expect(recordAt(home, "refunds")?.json?.done).toBeUndefined();
+    expect(planWordAt(home, "refunds")?.done).toBeUndefined();
     // Back on the Unit stages, the walk checks the result and records it.
     const back = run(JUMP, ["execute", "--target", "functional-design", "--direction", "backward"], home.dir);
     expect(back.status, back.out).toBe(0);
     next(home.dir, chat);
-    expect(recordAt(home, "refunds")?.json).toMatchObject({ done: true });
+    expect(planWordAt(home, "refunds")).toMatchObject({ done: true });
     expect(readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_MERGED").map((row) => row.block).join("\n")).toContain("refunds");
   });
 
@@ -2295,7 +2297,7 @@ describe("at the home", () => {
     expect(said.status, said.out).toBe(0);
     // Recorded when the lead says it, by the take-in the next step runs, with the check-in line.
     expect(said.json?.notice).toBe("refunds is recorded as merged here.");
-    expect(recordAt(home, "refunds")?.json).toMatchObject({ done: true });
+    expect(planWordAt(home, "refunds")).toMatchObject({ done: true });
     const merged = () => readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_MERGED");
     expect(merged()).toHaveLength(1);
     expect(merged()[0]?.block).toContain('billing (by your word: "billing merged it by hand last night")');
@@ -2333,7 +2335,7 @@ describe("at the home", () => {
     expect(said.status, said.out).toBe(0);
     expect(said.json?.notice).toBe("billing counts as merged for refunds, in your words. checkout-api has not merged it yet, so nothing is recorded here.");
     expect(readAuditShardEvents(home.dir).some((row) => row.event === "UNIT_MERGED")).toBe(false);
-    expect(recordAt(home, "refunds")?.json?.done).toBeUndefined();
+    expect(planWordAt(home, "refunds")?.done).toBeUndefined();
   });
 
   // A live run: the member said the merge request merged and the agent ran the
@@ -2347,8 +2349,7 @@ describe("at the home", () => {
     const said = run(UNIT, ["merged", "refunds", "--repo", "billing", "--person-words", "billing is merged now"], alice);
     expect(said.status, said.out).not.toBe(0);
     expect(String(said.json?.error), said.out).toBe(
-      "The lead's project checks at its own next step whether refunds merged; a merge it cannot see, the lead counts in " +
-        "their own words there. Nothing needs sending from here.",
+      "Only the lead can count a merge git cannot see: it is their word on the plan. Nothing was written here.",
     );
     expect(recordAt(home, "refunds")?.json).toEqual(before);
   });
@@ -2388,44 +2389,50 @@ describe("at the home", () => {
     expect(String(waiting.json?.error)).toEndWith("The person has not answered yet: end your turn; their next reply answers it.");
   });
 
-  test("the lead's own pre-push hook turns the board's send away: the line says the hook's words, and the next step sends it", () => {
+  test("the lead's own pre-push hook turns the merge write away: the line says the hook's words, that chat does not try again, and the next chat writes it", () => {
     const { hosts, home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
-    next(home.dir);
+    const chat = { ...ENV, AIDLC_SESSION_OVERRIDE: "lead-chat" };
+    next(home.dir, chat);
     const hook = join(home.dir, ".git", "hooks", "pre-push");
     writeFileSync(hook, "#!/bin/sh\necho 'run the test gate before you push: npm test' >&2\nexit 1\n");
     chmodSync(hook, 0o755);
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
     mergeOnHost(hosts.billing, "refunds", "squash");
-    const step = next(home.dir);
-    const line = ((step.change_notices ?? []) as string[]).find((said) => said.startsWith("What the board shows here")) ?? "";
-    expect(line).toStartWith("What the board shows here could not be sent to origin: run the test gate before you push: npm test");
-    expect(line).toEndWith("The teams may not see it yet, and the next step sends it again.");
+    const step = next(home.dir, chat);
+    const line = ((step.change_notices ?? []) as string[]).find((said) => said.startsWith("The merge of refunds")) ?? "";
+    expect(line, JSON.stringify(step)).toStartWith("The merge of refunds could not be written on the plan in checkout-api: ");
+    expect(line).toContain("run the test gate before you push: npm test");
+    expect(line).toEndWith("I'll try again in your next chat.");
     writeFileSync(hook, "#!/bin/sh\nexit 0\n");
-    next(home.dir);
-    expect(recordAt(home, "refunds")?.json).toMatchObject({ done: true });
+    next(home.dir, chat);
+    expect(planWordAt(home, "refunds")?.done).toBeUndefined();
+    next(home.dir, { ...ENV, AIDLC_SESSION_OVERRIDE: "lead-next-chat" });
+    expect(planWordAt(home, "refunds")).toMatchObject({ done: true });
   });
 
-  test("a verdict the home's remote does not take stays here, said once, and goes at the next step", () => {
+  test("a merge the plan's repository does not take by a rule of its host stays here, said once with the way on, and goes in the next chat", () => {
     const { hosts, home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
-    next(home.dir);
-    const hook = join(home.remote, "hooks", "pre-receive");
-    writeFileSync(hook, "#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/aidlc/claims/*) echo 'claims are read-only today' >&2; exit 1;; esac; done\n");
+    const chat = { ...ENV, AIDLC_SESSION_OVERRIDE: "lead-chat" };
+    next(home.dir, chat);
+    const hook = join(hosts["checkout-api"], "hooks", "pre-receive");
+    writeFileSync(hook, "#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/aidlc/plans/*) echo 'plans are read-only today' >&2; exit 1;; esac; done\n");
     chmodSync(hook, 0o755);
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
     mergeOnHost(hosts.billing, "refunds", "squash");
-    const step = next(home.dir);
-    const line = ((step.change_notices ?? []) as string[]).find((said) => said.startsWith("What the board shows here")) ?? "";
-    expect(line).toStartWith("What the board shows here could not be sent to origin: claims are read-only today");
-    expect(line).toEndWith("The teams may not see it yet, and the next step sends it again.");
+    const step = next(home.dir, chat);
+    const line = ((step.change_notices ?? []) as string[]).find((said) => said.startsWith("The merge of refunds")) ?? "";
+    expect(line, JSON.stringify(step)).toStartWith("The merge of refunds could not be written on the plan in checkout-api: ");
+    expect(line).toContain("plans are read-only today");
+    expect(line).toEndWith("If it is the commit message, tell me the one to use, and I will write it with that.");
     expect(readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_MERGED")).toHaveLength(1);
-    expect(recordAt(home, "refunds")?.json?.done).toBeUndefined();
+    expect(planWordAt(home, "refunds")?.done).toBeUndefined();
     writeFileSync(hook, "#!/bin/sh\nexit 0\n");
-    next(home.dir);
-    expect(recordAt(home, "refunds")?.json).toMatchObject({ done: true });
+    next(home.dir, { ...ENV, AIDLC_SESSION_OVERRIDE: "lead-next-chat" });
+    expect(planWordAt(home, "refunds")).toMatchObject({ done: true });
     expect(readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_MERGED")).toHaveLength(1);
   });
 
@@ -2462,7 +2469,8 @@ describe("at the home", () => {
     // Pushed again, the turn-down is answered: the build is finished once more.
     writeFileSync(join(alice, "billing", "lib", "refund.ts"), "export const refund = 2;\n");
     expect(run(UNIT, ["push"], alice).status).toBe(0);
-    expect(recordAt(home, "refunds")?.json?.turned_down).toBeUndefined();
+    // The plan keeps the lead's word about the commits it was said of; the new push is the answer to it.
+    expect(planWordAt(home, "refunds")?.turned_down).toBeDefined();
     expect(personsNext(alice, chat, "t-unit-push-waits").kind).toBe("done");
   });
 
@@ -2616,7 +2624,7 @@ describe("a team's done Unit that the lead's Build and Test sends back", () => {
     mergeOnHost(hosts.billing, "refunds", "squash");
     git(home.dir, ["fetch", "-q", "origin"]);
     next(home.dir);
-    expect(recordAt(home, "refunds")?.json).toMatchObject({ done: true });
+    expect(planWordAt(home, "refunds")).toMatchObject({ done: true });
     const merges = () => readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_MERGED" && row.block.includes("**Unit**: refunds")).length;
     expect(merges()).toBe(1);
     // The retry for refunds sends it back to alice's build; nothing of it is reopened here.
@@ -2626,10 +2634,11 @@ describe("a team's done Unit that the lead's Build and Test sends back", () => {
     const words = "checkout-api sends no CORS headers for the web page";
     const sent = run(UNIT, ["send-back", "refunds", "--person-words", words], home.dir);
     expect(sent.status, sent.out).toBe(0);
-    expect(sent.json?.notice).toBe("Sent refunds back to alice with your words. It waits for them here; nothing of it is rebuilt here.");
-    const claim = recordAt(home, "refunds")?.json as Record<string, unknown>;
-    expect(claim.done).toBeUndefined();
-    expect(claim.result).toBeUndefined();
+    expect(sent.json?.notice).toBe("refunds is sent back from your Build and Test, with your words. Written on the plan. " +
+      "AI-DLC sends no notice of it. Build and Test waits here for a new push of refunds; nothing of it is rebuilt here.");
+    const word = planWordAt(home, "refunds") as Record<string, unknown>;
+    expect(word.done).toBeUndefined();
+    expect(word.turned_down).toMatchObject({ from: "build-and-test", words });
     // Nothing of it is built here: the board says it was sent back, never a turn-down in no repo.
     const board = String(next(home.dir).narration ?? "");
     expect(board).not.toContain("refunds, payments: done");
@@ -2654,7 +2663,7 @@ describe("a team's done Unit that the lead's Build and Test sends back", () => {
     mergeOnHost(hosts.billing, "refunds", "squash");
     fetchRecords(home.dir);
     next(home.dir);
-    expect(recordAt(home, "refunds")?.json).toMatchObject({ done: true });
+    expect(planWordAt(home, "refunds")).toMatchObject({ done: true });
     expect(merges()).toBe(2);
   });
 
@@ -2899,18 +2908,16 @@ function sentBackWhileOnFinishedBuild(session: string, typedLook = true) {
   return { home, hosts, alice, record, chat };
 }
 
-// This .git's FETCH_HEAD cannot be written while `step` runs: git's own stop in
-// Codex's sandbox, which keeps the repository's .git read-only.
+// This .git cannot be written while `step` runs, as Codex's sandbox keeps the
+// repository's .git read-only: a look's fetch stops on its refs and objects.
 function withReadOnlyGit<T>(dir: string, step: () => T): T {
   const head = join(dir, ".git", "FETCH_HEAD");
   if (!existsSync(head)) writeFileSync(head, "");
-  chmodSync(head, 0o444);
-  chmodSync(join(dir, ".git"), 0o555);
+  spawnSync("chmod", ["-R", "a-w", join(dir, ".git")]);
   try {
     return step();
   } finally {
-    chmodSync(join(dir, ".git"), 0o755);
-    chmodSync(head, 0o644);
+    spawnSync("chmod", ["-R", "u+w", join(dir, ".git")]);
   }
 }
 
@@ -2949,7 +2956,7 @@ describe("a team hears the lead's turn-down from any chat on its work", () => {
     const step = personsNext(alice, chat, "alice-chat");
     const line = 'refunds was turned down in billing by the lead: "needs the ledger entry". Its build is waiting for you; say so to go back to it.';
     expect((step.change_notices ?? []) as string[], JSON.stringify(step).slice(0, 600)).toContain(line);
-    expect(String(step.change_notices_note)).toContain(`take refunds --home ${HOME_RECORD}`);
+    expect(String(step.change_notices_note)).toContain(`take refunds ${planFrom(home).join(" ")}`);
     expect((personsNext(alice, chat, "alice-chat").change_notices ?? []) as string[]).not.toContain(line);
   });
 
@@ -2961,15 +2968,16 @@ describe("a team hears the lead's turn-down from any chat on its work", () => {
 
   test("in a finished build's chat, their first bare /aidlc hears the send-back of another build, once", () => {
     const session = "t-unit-push-finished-bare";
-    const { alice, chat } = sentBackWhileOnFinishedBuild(session);
+    const { home, alice, chat } = sentBackWhileOnFinishedBuild(session);
     expect(hook(alice, chat, { hook_event_name: "UserPromptSubmit", session_id: session, prompt: "anything new for us?" }).status).toBe(0);
     const step = next(alice, chat);
     expect((step.change_notices ?? []) as string[], JSON.stringify(step).slice(0, 900)).toContain(sentBack);
-    expect(String(step.change_notices_note)).toContain(`take refunds --home ${HOME_RECORD}`);
+    expect(String(step.change_notices_note)).toContain(`take refunds ${planFrom(home).join(" ")}`);
     expect((next(alice, chat).change_notices ?? []) as string[]).not.toContain(sentBack);
   });
 
-  test("their first words hear it too, after a look this .git could not write stopped once for write access", () => {
+  // Windows lets no test make a folder unwritable, so the sandbox's read-only .git is not made there.
+  test.skipIf(process.platform === "win32")("their first words hear it too, after a look this .git could not write stopped once for write access", () => {
     const session = "t-unit-push-finished-words";
     const { alice, chat } = sentBackWhileOnFinishedBuild(session);
     const words = "anything new for payments?";
@@ -2984,7 +2992,7 @@ describe("a team hears the lead's turn-down from any chat on its work", () => {
     expect((again.json?.change_notices ?? []) as string[], again.out.slice(0, 900)).toContain(sentBack);
   });
 
-  test("a look this .git still cannot write after its one stop goes on, never a second stop", () => {
+  test.skipIf(process.platform === "win32")("a look this .git still cannot write after its one stop goes on, never a second stop", () => {
     const session = "t-unit-push-finished-refused";
     const { alice, chat } = sentBackWhileOnFinishedBuild(session);
     const words = "anything new for payments?";
@@ -3134,7 +3142,8 @@ describe("a Unit on the workspace's own repository", () => {
     squashInto(home.remote, "develop", "refunds");
     git(home.dir, ["fetch", "-q", "origin"]);
     next(home.dir);
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
+    // No plan is shared in this repository, so the lead's own record keeps the merge it saw.
+    expect(readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_MERGED").map((row) => row.block).join("\n")).toContain("refunds");
   });
   // AI-DLC's record of the build rides in the Unit's pull request: a second
   // commit after the Unit's code, AI-DLC's own message, or the person's own
@@ -3225,7 +3234,8 @@ describe("a Unit on the workspace's own repository", () => {
     squashInto(home.remote, "main", "refunds");
     git(home.dir, ["fetch", "-q", "origin"]);
     next(home.dir);
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
+    // No plan is shared in this repository, so the lead's own record keeps the merge it saw.
+    expect(readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_MERGED").map((row) => row.block).join("\n")).toContain("refunds");
   });
 
   // A host rule on the Unit's branch, as a GitLab push rule on messages checks it.

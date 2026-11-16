@@ -59,6 +59,16 @@ const share = (dir: string) => {
   return shared;
 };
 
+// The share asks first about a change on the plan this computer did not write
+// (writeOnTip's): the lead keeps it, and the share then goes on top of it.
+function keepTheirChange(dir: string): void {
+  const asked = run(UNIT, ["share", "--plan"], dir);
+  expect(asked.json?.ask_type, asked.out).toBe("lead-plan-change");
+  const keep = (asked.json?.choices as Array<{ label: string; command: string }>)[0];
+  expect(keep.label).toBe("Keep it");
+  expect(run(UNIT, ["plan-change", "keep", "--tip", /--tip (\S+)/.exec(keep.command)![1]], dir).status).toBe(0);
+}
+
 // A commit on the plan's tip made with plain git, as another writer of the
 // plan would make it: `edit` changes its plan.json.
 function writeOnTip(host: string, id8: string, edit: (plan: Plan) => void): string {
@@ -283,6 +293,7 @@ describe("a later share goes on the plan's tip and keeps what is on it", () => {
       plan.units[0].word = { done: true };
     });
     addUnit(home.dir);
+    keepTheirChange(home.dir);
     share(home.dir);
     const ref = planRefOf(home.id8);
     expect(git(host, ["rev-parse", `${ref}^`])).toBe(worded);
@@ -303,6 +314,7 @@ describe("a later share goes on the plan's tip and keeps what is on it", () => {
       plan.units[2].word = { signoff: { words: "ship it", at: "2026-11-16T00:00:00Z" } };
     });
     addUnit(home.dir);
+    keepTheirChange(home.dir);
     share(home.dir);
     const ref = planRefOf(home.id8);
     expect(git(host, ["rev-parse", `${ref}^`])).toBe(worded);
@@ -484,6 +496,7 @@ describe("what the lead reads", () => {
       plan.version = 2;
       plan.units[0].word = { done: true };
     });
+    keepTheirChange(home.dir);
     share(home.dir);
     git(host, ["update-ref", "-d", planRefOf(home.id8)]);
     expect(share(home.dir).json?.notice).toBe(
@@ -568,6 +581,7 @@ describe("what the lead reads", () => {
       plan.version = 3;
       plan.inputs[0].path = "../../outside.md";
     });
+    keepTheirChange(home.dir);
     const shared = run(UNIT, ["share", "--plan"], home.dir);
     expect(shared.status, shared.out).toBe(0);
     expect(String(shared.json?.notice)).toStartWith(

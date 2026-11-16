@@ -54,7 +54,9 @@ import {
   type PlanHome,
   planFrom,
   planRefOf,
+  planWordAt,
   recordAt,
+  recordHostOf,
   refundsTaken,
   refundsTakenInClone,
   sharePlan,
@@ -457,7 +459,7 @@ describe("a team member's clone of the home's workspace", () => {
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
     mergeOnHost(hosts.billing, "refunds", "merge");
     next(home.dir);
-    expect(recordAt(plan, "refunds")?.json).toMatchObject({ done: true });
+    expect(planWordAt(plan, "refunds")).toMatchObject({ done: true });
     const offered = next(alice, chat);
     expect(offered.ask_type, JSON.stringify(offered).slice(0, 500)).toBe("unit-take");
     expect((offered.choices as Array<{ label: string }>).map((choice) => choice.label)).toContain("Start reporting");
@@ -489,7 +491,7 @@ describe("a team member's clone of the home's workspace", () => {
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
     mergeOnHost(hosts.billing, "refunds", "merge");
     next(home.dir);
-    expect(recordAt(plan, "refunds")?.json).toMatchObject({ done: true });
+    expect(planWordAt(plan, "refunds")).toMatchObject({ done: true });
     const later = next(ana, { ...ENV, AIDLC_SESSION_OVERRIDE: "ana-next-day" });
     expect(later.ask_type, JSON.stringify(later).slice(0, 600)).toBe("unit-take");
     expect((later.choices as Array<{ label: string }>).map((choice) => choice.label)).toContain("Start reporting");
@@ -538,7 +540,7 @@ describe("a team member's clone of the home's workspace", () => {
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
     mergeOnHost(hosts.billing, "refunds", "merge");
     next(home.dir);
-    expect(recordAt(home, "refunds")?.json).toMatchObject({ done: true });
+    expect(planWordAt(home, "refunds")).toMatchObject({ done: true });
     const ready = next(dana);
     expect(ready.ask_type, JSON.stringify(ready)).toBe("unit-take");
     expect((ready.choices as Array<{ label: string }>).map((choice) => choice.label)).toContain("Start reporting");
@@ -1116,7 +1118,7 @@ describe("a Unit someone holds is not taken again", () => {
     mergeOnHost(hosts.billing, "refunds", "squash");
     git(home.dir, ["fetch", "-q", "origin"]);
     next(home.dir, chatOf("lead-after-merge"));
-    expect(recordAt(home, "refunds")?.json).toMatchObject({ done: true });
+    expect(planWordAt(home, "refunds")).toMatchObject({ done: true });
     const chat = chatOf("alice-on-main");
     expect(nextSaying(alice, chat).said).toContain("Your refunds is merged.");
     appendAuditEntry("HUMAN_TURN", { "Person Reply": "what next" }, alice);
@@ -2301,7 +2303,7 @@ describe("a team's own workspace that reads the lead's plan where it is shared",
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
     mergeOnHost(hosts.billing, "refunds", "merge");
     next(home.dir);
-    expect(recordAt(home, "refunds")?.json).toMatchObject({ done: true });
+    expect(planWordAt(home, "refunds")).toMatchObject({ done: true });
     const offered = next(pay.dir, chat);
     expect(offered.ask_type, JSON.stringify(offered).slice(0, 600)).toBe("unit-take");
     const start = (offered.choices as Array<{ label: string; command?: string }>).find((choice) => choice.label.startsWith("Start reporting"));
@@ -2865,26 +2867,27 @@ describe("every Unit is open: whoever takes it builds it where they are, and no 
   });
 });
 
-// AI-DLC's team records are a ref of its own on the lead's project, beside the branches, so the host lists no branch
-// for them, offers no pull request, runs no workflow and no branch rule on them, and a team's clone lists none.
+// AI-DLC's team records are a ref of its own in each Unit's repository, beside the branches, so the host lists no
+// branch for them, offers no pull request, runs no workflow and no branch rule on them, and a team's clone lists none.
 describe("where the team's records live", () => {
-  test("a take, its result and the lead's word on it are kept under refs/aidlc/claims, no claim branch anywhere, and the lead's copy follows each write", () => {
+  test("a take and its result are kept under refs/aidlc/claims and the lead's word on the plan, no claim branch anywhere, and the lead's copy of the plan follows each write", () => {
     const { home, alice, record } = refundsTakenHere();
-    const id8 = fixtureIntentId8(home.dir);
     codeGenerated(alice, record);
     finishBuild(record);
     const pushed = run(UNIT, ["push"], alice);
     expect(pushed.status, pushed.out).toBe(0);
     const said = run(UNIT, ["merged", "refunds", "--repo", "checkout-api", "--person-words", "merged by hand"], home.dir, chatOf("lead-records"));
     expect(said.status, said.out).toBe(0);
-    const ref = `refs/aidlc/claims/${id8}/refunds`;
-    expect(git(home.remote, ["for-each-ref", "--format=%(refname)", "refs/aidlc/claims/", "refs/heads/claim/"])).toBe(ref);
-    expect(recordAt(home, "refunds")?.json).toMatchObject({ taken_by: "alice", claim_ref: ref });
-    expect(recordAt(home, "refunds")?.json?.said_merged).toBeDefined();
-    // The lead's own copy is the record as the lead's word left it, with no look between.
-    expect(git(home.dir, ["rev-parse", `refs/aidlc/remotes/origin/claims/${id8}/refunds`])).toBe(git(home.remote, ["rev-parse", ref]));
-    // A teammate's clone, and a plain clone of the lead's project, list no branch of AI-DLC's.
-    for (const dir of [alice, cloneOf(home.remote, "carol")]) expect(git(dir, ["branch", "-a"])).not.toContain("claim");
+    const ref = `refs/aidlc/claims/${home.id8}/refunds`;
+    expect(git(recordHostOf(home, "refunds"), ["for-each-ref", "--format=%(refname)", "refs/aidlc/claims/", "refs/heads/claim/"])).toBe(ref);
+    expect(recordAt(home, "refunds")?.json).toMatchObject({ taken_by: "alice" });
+    expect(planWordAt(home, "refunds")?.said_merged).toBeDefined();
+    // The lead's own copy of the plan is the plan as the lead's word left it, with no look between.
+    const copies = git(home.dir, ["for-each-ref", "--format=%(refname) %(objectname)", `refs/aidlc/home/${home.id8}/`])
+      .split("\n").filter((line) => line.split(" ")[0].endsWith("/plan"));
+    expect(copies.map((line) => line.split(" ")[1])).toEqual([git(planHost(home), ["rev-parse", planRefOf(home.id8)])]);
+    // A teammate's clone, and a plain clone of the record's repository, list no branch of AI-DLC's.
+    for (const dir of [alice, cloneOf(recordHostOf(home, "refunds"), "carol")]) expect(git(dir, ["branch", "-a"])).not.toContain("claim");
   });
 
   test("a teammate's own git fetch --prune keeps AI-DLC's copy of the records", () => {

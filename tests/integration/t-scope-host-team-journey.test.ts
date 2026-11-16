@@ -45,6 +45,7 @@ import {
   makeHome,
   mergeOnHost,
   type PlanHome,
+  planWordAt,
   recordAt,
   run,
   sharePlan,
@@ -332,7 +333,7 @@ describe("one piece of work, a team on every tool", () => {
     for (const p of FIRST) for (const { repo, merge } of p.repos) mergeOnHost(hosts[repo], p.unit, merge);
     const seen = lead.agent.next();
     expect(unitsMerged(home.dir), JSON.stringify(seen)).toEqual(FIRST.map((p) => p.unit).sort());
-    for (const p of FIRST) expect(recordAt(home, p.unit)?.json, p.unit).toMatchObject({ done: true });
+    for (const p of FIRST) expect(planWordAt(home, p.unit), p.unit).toMatchObject({ done: true });
     expect(String(seen.narration)).toContain("- refunds, payments space: built by alice, done");
 
     // refunds is done, so reporting opens, and dana builds it on Cursor. The
@@ -363,7 +364,7 @@ describe("one piece of work, a team on every tool", () => {
     // lead's yes, and the work ends done.
     const asked = lead.agent.next();
     expect(unitsMerged(home.dir)).toEqual(PLAN.map((p) => p.unit).sort());
-    expect(recordAt(home, "reporting")?.json).toMatchObject({ done: true });
+    expect(planWordAt(home, "reporting")).toMatchObject({ done: true });
     expect(String(asked.question), JSON.stringify(asked).slice(0, 600)).toStartWith("Every Unit is merged, and ");
     const caught = lead.agent.host.bash((asked.choices as Array<{ command: string }>)[0].command);
     expect(caught.status, caught.stdout + caught.stderr).toBe(0);
@@ -402,7 +403,7 @@ describe("the lead's project builds a Unit of its own while a team's Unit merges
     const step = goOn(lead, lead.agent.personTypes("/aidlc carry on"));
     expect(step, JSON.stringify(step).slice(0, 400)).toMatchObject({ kind: "run-stage", stage: "functional-design" });
     expect(unitsMerged(home.dir)).toEqual(["refund-button"]);
-    expect(recordAt(home, "refund-button")?.json).toMatchObject({ done: true });
+    expect(planWordAt(home, "refund-button")).toMatchObject({ done: true });
   });
 });
 
@@ -420,7 +421,7 @@ describe("a team's pushed build, asked for the team's next Unit", () => {
     const lead = homeStandIn(home);
     lead.person.say("/aidlc");
     lead.agent.next();
-    expect(recordAt(home, "receipts")?.json).toMatchObject({ done: true });
+    expect(planWordAt(home, "receipts")).toMatchObject({ done: true });
     // x2783-s9 14: in the chat of his pushed build he asks for more, and met the finished work's doors and new work.
     const more = frank.agent.personTypes("/aidlc Anything else for the finance team?");
     expect(more.ask_type, JSON.stringify(more).slice(0, 800)).toBe("unit-take");

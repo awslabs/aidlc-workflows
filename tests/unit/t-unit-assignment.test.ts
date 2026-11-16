@@ -1298,7 +1298,7 @@ describe("the lead's word builds a Unit here: assign --here", () => {
     const offer = next(ana);
     expect(((offer.choices ?? []) as Array<{ label: string }>).map((choice) => choice.label), JSON.stringify(offer).slice(0, 600))
       .not.toContain("Start refunds");
-    const took = run(UNIT, ["take", "refunds", "--home", HOME_RECORD], ana);
+    const took = run(UNIT, ["take", "refunds", "--plan", id8, "--from", app], ana);
     expect(took.status, took.out).not.toBe(0);
     expect(took.out).toContain("lee");
   });
@@ -1544,9 +1544,9 @@ describe("a Unit the lead's project started stays there", () => {
     pushAll(home.dir);
     expect(next(home.dir)).toMatchObject({ kind: "run-stage", unit: "refunds" });
     const sam = cloneOf(home.remote, "sam");
-    const took = takeIn("web", ["refunds", "--home", HOME_RECORD], sam);
+    const took = takeIn("web", ["refunds", "--plan", fixtureIntentId8(home.dir), "--from", git(join(home.dir, "app"), ["remote", "get-url", "origin"])], sam);
     expect(took.status).not.toBe(0);
-    expect(took.out).toContain("refunds is being built at the lead's project, so it is not open to take.");
+    expect(took.out).toContain("refunds is already taken: lead builds it.");
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toBeNull();
   });
 });
