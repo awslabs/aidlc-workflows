@@ -6194,7 +6194,7 @@ export function belowRepoTop(projectDir: string): string | null {
 // Null when it can; the reason otherwise, with `off` when the one reason is HEAD
 // on another branch (the share then commits AI-DLC's record there and pushes
 // nothing, shareMain). The share offer is put only where this is null.
-export function shareRefusal(projectDir: string): { reason: string; off?: { current: string; branch: string } } | null {
+export function shareRefusal(projectDir: string, plan = true): { reason: string; off?: { current: string; branch: string } } | null {
   const pd = resolveProjectDir(projectDir);
   try {
     if (readApplicableTeamUnitScopeStamp(pd)) return { reason: "This checkout holds a Unit claim; share main from a checkout that holds none." };
@@ -6202,8 +6202,9 @@ export function shareRefusal(projectDir: string): { reason: string; off?: { curr
     const below = belowRepoTop(pd);
     if (below !== null) return { reason: below };
     // The plan goes to a code repository by its address: neither this
-    // repository's remote nor its branch is used.
-    if (sharesPlanRef(pd)) return null;
+    // repository's remote nor its branch is used. A share without --plan
+    // (`plan` false) commits and pushes here, so it meets both checks.
+    if (plan && sharesPlanRef(pd)) return null;
     if (!repositoryRemote(pd)) {
       return { reason: "This repository has no remote to share main with. Add one (git remote add origin <url>), then share again." };
     }
@@ -7408,7 +7409,7 @@ function shareMain(args: string[], projectDir?: string): void {
     planBranchBack(pd);
     return;
   }
-  const refused = shareRefusal(pd);
+  const refused = shareRefusal(pd, flags.has("plan"));
   // On a branch of the person's own, the share goes on to commit AI-DLC's
   // record there and pushes nothing (below).
   if (refused !== null && refused.off === undefined) fail(refused.reason);

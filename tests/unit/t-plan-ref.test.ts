@@ -28,6 +28,7 @@ import {
   HOME_RECORD,
   makeHome,
   makePlanHome,
+  makePlanHomeWithRemote,
   next,
   planRefOf,
   refundsTaken,
@@ -255,6 +256,37 @@ function spawnShow(dir: string, spec: string): string {
 }
 
 describe("nothing else moves", () => {
+  test("a share without --plan, typed on a branch of the lead's own, commits only AI-DLC's record there and pushes nothing; with no remote it says so and commits nothing", () => {
+    const home = makePlanHomeWithRemote();
+    writeFileSync(join(home.dir, "app.txt"), "one\n");
+    git(home.dir, ["add", "app.txt"]);
+    git(home.dir, ["commit", "-q", "-m", "app"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const main = git(home.remote, ["rev-parse", "refs/heads/main"]);
+    git(home.dir, ["checkout", "-q", "-b", "my-work"]);
+    writeFileSync(join(home.dir, "app.txt"), "two\n");
+    writeFileSync(join(home.dir, "draft.txt"), "mine\n");
+    const shared = run(UNIT, ["share"], home.dir);
+    expect(shared.status, shared.out).toBe(0);
+    expect(shared.json?.shared).toBe(false);
+    expect(String(shared.json?.notice)).toStartWith("This checkout is on my-work, not main.");
+    expect(git(home.remote, ["rev-parse", "refs/heads/main"])).toBe(main);
+    expect(git(home.remote, ["for-each-ref", "refs/heads/my-work"])).toBe("");
+    const status = git(home.dir, ["status", "--porcelain", "--", "app.txt", "draft.txt"]);
+    expect(status).toMatch(/^ ?M app\.txt$/m);
+    expect(status).toContain("?? draft.txt");
+    expect(git(home.dir, ["log", "-1", "--format=%H", "main"])).toBe(main);
+
+    const alone = makePlanHome();
+    writeFileSync(join(alone.dir, "draft.txt"), "mine\n");
+    const before = git(alone.dir, ["rev-parse", "HEAD"]);
+    const none = run(UNIT, ["share"], alone.dir);
+    expect(none.status, none.out).not.toBe(0);
+    expect(none.json?.error).toBe("This repository has no remote to share main with. Add one (git remote add origin <url>), then share again.");
+    expect(git(alone.dir, ["rev-parse", "HEAD"])).toBe(before);
+    expect(git(alone.dir, ["status", "--porcelain", "--", "draft.txt"])).toBe("?? draft.txt");
+  });
+
   test("no commit, branch or file of the lead's changes; no code clone gains a ref, a remote or a setting; a plain clone does not bring the plan", () => {
     const home = makePlanHome({ share: false });
     const clones = Object.keys(home.hosts).map((name) => join(home.dir, name));
