@@ -396,7 +396,15 @@ export function quoteCommandArgument(
   ) return `"${value}"`;
   return shell !== "posix"
     ? `'${value.replaceAll(new RegExp(POWERSHELL_SINGLE_QUOTE.source, "g"), "$&$&")}'`
-    : `'${value.replaceAll("'", "'\"'\"'")}'`;
+    : shellSingleQuote(value);
+}
+
+// One argument always in POSIX single quotes, whatever it holds: for a value
+// a shell other than POSIX may split or refuse bare (an address's @ under
+// cmd.exe or PowerShell), so each harness's skill has a quote to turn into
+// its own form.
+export function shellSingleQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\"'\"'")}'`;
 }
 
 export function aidlcInvocation(): string {

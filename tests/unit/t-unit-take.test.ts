@@ -23,7 +23,8 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
-import { auditBlockField, readAuditShardEvents, readIntentRegistry, shellQuoted } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { auditBlockField, readAuditShardEvents, readIntentRegistry } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { shellSingleQuote } from "../../dist/claude/.claude/tools/aidlc-runtime-paths.ts";
 import { leadsPlanNotHere } from "../../dist/claude/.claude/tools/aidlc-unit-holders.ts";
 import { loadGraph } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
 import { resolvedRuleBundle } from "../../dist/claude/.claude/tools/aidlc-steering.ts";
@@ -96,7 +97,7 @@ function refundsTakenHere(...args: Parameters<typeof refundsTaken>): ReturnType<
 }
 // The take command the Units offer prints for a Unit of a shared plan.
 const takeCommand = (home: PlanHome, unit: string): string =>
-  `take ${unit} --plan ${home.id8} --from ${shellQuoted(Object.values(home.hosts)[0])}`;
+  `take ${unit} --plan ${home.id8} --from ${shellSingleQuote(Object.values(home.hosts)[0])}`;
 // The lead shares the plan of a home whose teams this case chose; take() takes from it.
 function planShared(home: Home): PlanHome & Home {
   const plan = sharePlan(home);
@@ -2335,7 +2336,7 @@ describe("a team's own workspace that reads the lead's plan where it is shared",
     expect((offer.choices as Array<{ label: string }> | undefined ?? []).map((choice) => choice.label)).not.toContain("Carry on refunds");
     const carryOn = /When their words ask to carry on a build the question lists as being built, run its command: refunds: `([^`]+)`/
       .exec(String(offer.question_note ?? offer.board_note ?? ""))?.[1];
-    expect(carryOn, JSON.stringify(offer).slice(0, 1600)).toBe(`bun .claude/tools/aidlc-unit.ts take refunds --plan ${home.id8} --from ${shellQuoted(plan)}`);
+    expect(carryOn, JSON.stringify(offer).slice(0, 1600)).toBe(`bun .claude/tools/aidlc-unit.ts take refunds --plan ${home.id8} --from ${shellSingleQuote(plan)}`);
     const took = run(UNIT, ["take", "refunds", "--plan", home.id8, "--from", plan], pay2, chat);
     expect(took.status, took.out).toBe(0);
     expect(took.json).toMatchObject({ resumed: true, space: "default" });

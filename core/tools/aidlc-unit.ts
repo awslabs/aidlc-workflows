@@ -107,7 +107,6 @@ import {
   parseGuardPolicyStateLine,
   setGuardPolicyLine,
   shellArg,
-  shellQuoted,
   unattendedHumanPresenceHint,
   parseAuditShardEvents,
   parseReviewRecordBytes,
@@ -283,6 +282,7 @@ import {
   isCompiledExecutable,
   quoteCommandArgument,
   runtimeHarnessName,
+  shellSingleQuote,
   WORKSPACE_ENGINE_DIR,
 } from "./aidlc-runtime-paths.ts";
 import { readRequestFile } from "./aidlc-log.ts";
@@ -7899,7 +7899,7 @@ export function planTakeFlags(id8: string, address: string): string[] {
 
 // The same flags as a printed command writes them, the address always quoted.
 export function planTakeWords(id8: string, address: string): string {
-  return planTakeFlags(id8, address).map((word) => (word === address ? shellQuoted(word) : word)).join(" ");
+  return planTakeFlags(id8, address).map((word) => (word === address ? shellSingleQuote(word) : word)).join(" ");
 }
 
 // The command that takes (or carries on) a Unit of a build's lead's work:
@@ -13319,7 +13319,7 @@ function likelyReposNotHere(
           ...cloneable.map((repo) => ({ label: `Clone ${repo}`, command: `${aidlcToolInvocation("utility")} intent add-repo ${shellArg(repo)}` })),
           ...fromLead.map((repo) => ({
             label: `Clone ${repo}`,
-            command: `${aidlcToolInvocation("utility")} intent add-repo ${shellArg(repo)} --url ${shellQuoted(leadAddresses.get(repo)!)}`,
+            command: `${aidlcToolInvocation("utility")} intent add-repo ${shellArg(repo)} --url ${shellSingleQuote(leadAddresses.get(repo)!)}`,
           })),
           { label: "Not now" },
         ],

@@ -137,6 +137,7 @@ import {
   isCompiledExecutable,
   leaveEarlierEngineFiles,
   runtimeHarnessDir,
+  shellSingleQuote,
   typedHarnessName,
   WORKSPACE_ENGINE_DIR,
 } from "./aidlc-runtime-paths.ts";
@@ -1573,10 +1574,6 @@ export function activate(
   } finally {
     releaseReservation();
   }
-}
-
-function shellSingleQuote(value: string): string {
-  return `'${value.replaceAll("'", "'\"'\"'")}'`;
 }
 
 // The launcher re-validates the active version marker before trusting the

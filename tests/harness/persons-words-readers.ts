@@ -1125,6 +1125,7 @@ export const ALLOWED: Record<string, Allowed> = {
   // into a command, kept; each with its reason.
   "core/tools/aidlc-runtime-paths.ts#quoteCommandArgument": { use: "decides", why: "shell-quotes their words onto a step's line, only when the step's request file cannot be written", from: [`${ORCH}#wordsForNextStep`] },
   "core/tools/aidlc-runtime-paths.ts#readsAlikeInDoubleQuotes": { use: "decides", why: "whether every shell reads their words alike in double quotes, for quoteCommandArgument", from: ["core/tools/aidlc-runtime-paths.ts#quoteCommandArgument"] },
+  "core/tools/aidlc-runtime-paths.ts#shellSingleQuote": { use: "keeps", why: "copies their words into POSIX single quotes, for quoteCommandArgument's POSIX form", from: ["core/tools/aidlc-runtime-paths.ts#quoteCommandArgument"] },
   [`${LIB}#parseLiteralShellInvocation`]: { use: "decides", why: "as above", from: [`${LIB}#isTerminalConfigurationDispatch`] },
   [`${LIB}#isTerminalConfigurationDispatch`]: { use: "decides", why: "reads the engine's own step message (which may quote their request) for a configuration command" },
   [`${LIB}#addPendingPersonLines`]: { use: "keeps", why: "keeps a step's narration, or a setter's lines, for the person's next line", from: [`${ORCH}#sayPendingPersonLines`, `core/tools/aidlc-utility.ts#handleIntent`, `core/tools/aidlc-utility.ts#handleScopeChange`] },
