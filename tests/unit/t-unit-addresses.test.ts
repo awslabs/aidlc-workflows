@@ -119,14 +119,15 @@ async function signInHost(): Promise<string> {
 }
 
 describe("the person's own git, on steps nobody typed", () => {
-  test("a home whose remote wants a sign-in: the step opens no sign-in window, comes back, and says once that it could not reach it", async () => {
+  test("a home whose records' repository wants a sign-in: the step opens no sign-in window, comes back, and says once that it could not reach it", async () => {
     const home = makeHome();
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
     git(home.dir, ["add", "-A"]);
     git(home.dir, ["commit", "-q", "-m", "teams"]);
     git(home.dir, ["push", "-q", "origin", "main"]);
-    sharePlan(home);
-    git(home.dir, ["remote", "set-url", "origin", await signInHost()]);
+    const plan = sharePlan(home);
+    // The work's records are in app, where the plan is: the lead's git now reaches it at a host that wants a sign-in.
+    git(home.dir, ["config", `url.${await signInHost()}.insteadOf`, plan.hosts.app]);
     const marker = join(tempDir("askpass"), "asked");
     const askpass = join(tempDir("askpass-bin"), "askpass.sh");
     writeFileSync(askpass, `#!/bin/sh\necho asked >> '${marker}'\necho nobody\n`);

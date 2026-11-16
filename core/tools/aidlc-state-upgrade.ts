@@ -339,6 +339,12 @@ export function newerPlanStep(projectDir: string): string {
   return newerWorkStep(projectDir, "This plan was set up with a newer AI-DLC", "a newer AI-DLC");
 }
 
+// The same step for a Unit's record a newer AI-DLC wrote (its unit.json is
+// of a version above this release's): the take writes nothing over it.
+export function newerRecordStep(projectDir: string, unit: string, repo: string): string {
+  return newerWorkStep(projectDir, `${unit}'s record in ${repo} was written by a newer AI-DLC`, "a newer AI-DLC");
+}
+
 function newerWorkStep(projectDir: string, lead: string, needs: string): string {
   const install = newerWorkInstall(projectDir);
   const refresh = `\`${newerWorkRefresh(projectDir)}\``;

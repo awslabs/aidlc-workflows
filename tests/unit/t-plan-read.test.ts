@@ -406,7 +406,9 @@ describe("a team takes a Unit from the plan where it is shared", () => {
       const step = next(bob, { ...ENV, AIDLC_SESSION_OVERRIDE: "bob-later" });
       const said = ((step.change_notices ?? []) as string[]).filter((line) => line.includes("could not be read just now"));
       expect(said, JSON.stringify(step).slice(0, 800)).toHaveLength(1);
-      expect(said[0]).toMatch(new RegExp(`^${repo} could not be read just now \\(.+\\), so what is ready to take in fixture may be behind\\.$`));
+      // The plan's repository holds records of its Units too: one line says both.
+      expect(said[0]).toMatch(new RegExp(`^${repo} could not be read just now \\(fatal: .+\\), so what is ready to take in fixture, and who has taken what, may be behind\\.$`));
+      expect(said[0]).not.toContain("Could not read from remote repository");
     } finally {
       renameSync(`${plan}-away`, plan);
     }
@@ -487,7 +489,7 @@ describe("a team takes a Unit from the plan where it is shared", () => {
     git(clone, ["remote", "add", "origin", "https://lead:s3cret@example.invalid/org/checkout-api.git"]);
     const address = "https://example.invalid/org/checkout-api.git";
     writeFileSync(join(pay, "repos.json"), `${JSON.stringify({ repos: [{ name: "checkout-api", url: address }] })}\n`);
-    const { homeTarget, refreshHomeClaims } = await tools();
+    const { refreshHomeClaims } = await tools();
     // A git that notes each call's arguments and its command-scope settings, then gives up.
     const bin = tempDir("git-bin");
     const log = join(bin, "calls.log");
@@ -496,7 +498,7 @@ describe("a team takes a Unit from the plan where it is shared", () => {
     const path = process.env.PATH;
     process.env.PATH = `${bin}:${path}`;
     try {
-      refreshHomeClaims(pay, { home: { target: homeTarget(pay, address), id8: "00000001", location: address }, now: true });
+      refreshHomeClaims(pay, { home: { id8: "00000001", location: address }, now: true });
     } finally {
       process.env.PATH = path;
     }

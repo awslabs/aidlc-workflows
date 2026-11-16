@@ -288,11 +288,11 @@ describe("a step that waits on the person, and every way on the round added, nev
     writeFileSync(join(record, "inception", "requirements-analysis", "requirements.md"), "# Requirements\n\nFR1 refunds, faster.\n");
     const ask = next(alice);
     expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-propose");
-    movesOn(alice, ENV, ask, choice(ask, "Send it to the lead"));
+    movesOn(alice, ENV, ask, choice(ask, "Put it on the record"));
   });
 
   test("the push: a repo the plan did not list goes with it; a result a rule of the lead's host refuses is not offered again in that chat", () => {
-    const { home, alice, record } = refundsTakenInClone();
+    const { hosts, alice, record } = refundsTakenInClone();
     withTools(alice);
     codeGenerated(alice, record);
     cloneCode(codeHost("ledger"), alice, "ledger", "alice");
@@ -302,7 +302,8 @@ describe("a step that waits on the person, and every way on the round added, nev
     written.writes.push({ repo: "ledger", path: "entries.ts" });
     writeFileSync(manifest, `${JSON.stringify(written, null, 2)}\n`);
     finishBuild(record);
-    const hostHook = join(home.remote, "hooks", "pre-receive");
+    // refunds's record is in checkout-api, whose host refuses records by a rule.
+    const hostHook = join(hosts["checkout-api"], "hooks", "pre-receive");
     writeFileSync(hostHook, "#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/aidlc/claims/*) exit 1;; esac; done\n");
     chmodSync(hostHook, 0o755);
     const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "alice-push" };
@@ -507,8 +508,9 @@ describe("a step that waits on the person, and every way on the round added, nev
     const after = runPrinted(carol, ENV, way!);
     expect(after.status, after.out).toBe(0);
     expect(after.out).not.toContain("Start checkout-ui");
-    // An open Unit nobody started, from the default space: started there.
+    // An open Unit nobody started, from the default space: started there, from the plan the lead shared.
     const other = teamsHome();
+    sharePlan(other);
     git(other.dir, ["add", "-A"]);
     git(other.dir, ["commit", "-q", "-m", "teams"]);
     git(other.dir, ["push", "-q", "origin", "main"]);

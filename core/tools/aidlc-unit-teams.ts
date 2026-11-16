@@ -1236,6 +1236,8 @@ export interface RepoResult {
   heads: string[];
   paths: Record<string, string | null>;
   patch_id?: string;
+  // A repository the lead's plan did not list: where the lead reaches it.
+  address?: string;
 }
 
 export interface UnitResult {

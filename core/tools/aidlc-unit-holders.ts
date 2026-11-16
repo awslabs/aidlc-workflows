@@ -55,15 +55,15 @@ export const UNIT_RESULT_DIR = ".aidlc-unit-result";
 // Where a Unit's claim lives on a remote, and this clone's copies of it: the one
 // owner of every claim ref name. Main's flow (claim, publish, pin, gate, land)
 // keeps each claim on a branch, claim/<id8>/<unit>, whose commits carry the
-// candidate its publish pushes and its adopt checks out. Every other team
-// record (the build-out's take, result, verdicts, sign-off, proposals, and a
-// teammate's take of solo work) is a ref of AI-DLC's own beside the branches,
-// which a host does not list as a branch, offer a pull request for, run CI or
-// branch rules on, or clean up. Which one a work uses is its recorded flow
+// candidate its publish pushes and its adopt checks out. The build-out's
+// record of a Unit (its take, result and proposals, and a teammate's take of
+// solo work) is a ref of AI-DLC's own in the Unit's own repository, which a
+// host does not list as a branch, offer a pull request for, run CI or branch
+// rules on, or clean up. Which one a work uses is its recorded flow
 // (claimsOnBranches, aidlc-unit-teams.ts). A branch's copy is where git's own
-// fetch keeps it; a record's is under refs/aidlc/remotes/<remote>/, which git's
-// own prune and remote commands leave alone; one read by the lead's address is
-// under refs/aidlc/home/<id8>/ either way.
+// fetch keeps it; a record's is read by its repository's address into
+// refs/aidlc/home/<id8>/<key>/claims/<unit> (homeCopyName), one folder per
+// repository read.
 const CLAIM_BRANCHES = "refs/heads/claim/";
 const CLAIM_RECORDS = "refs/aidlc/claims/";
 
@@ -104,59 +104,46 @@ export function claimsOnRemote(onBranches: boolean, id8?: string): string {
   return `${onBranches ? CLAIM_BRANCHES : CLAIM_RECORDS}${id8 === undefined ? "" : `${id8}/`}`;
 }
 
-// The folder this clone keeps its copies of a work's claims in, read from
-// `target`: a remote's name, or the lead's address (`byAddress`).
-export function claimCopies(target: string, onBranches: boolean, byAddress: boolean, id8: string): string {
-  if (byAddress) return `refs/aidlc/home/${id8}/claim/${id8}/`;
-  return onBranches ? `refs/remotes/${target}/claim/${id8}/` : `refs/aidlc/remotes/${target}/claims/${id8}/`;
+// The folder this clone keeps its copies of a work's claim branches in, as
+// git's own fetch of the remote named `target` keeps them.
+export function claimCopies(target: string, id8: string): string {
+  return `refs/remotes/${target}/claim/${id8}/`;
 }
 
-// This clone's copy of a claim ref on the remote named `remote` (of a folder of
-// them, given its folder).
+// This clone's copy of a claim branch on the remote named `remote` (of a folder
+// of them, given its folder).
 export function claimCopyOf(remote: string, ref: string): string {
-  return ref.startsWith(CLAIM_RECORDS)
-    ? `refs/aidlc/remotes/${remote}/claims/${ref.slice(CLAIM_RECORDS.length)}`
-    : `refs/remotes/${remote}/claim/${ref.slice(CLAIM_BRANCHES.length)}`;
+  return `refs/remotes/${remote}/claim/${ref.slice(CLAIM_BRANCHES.length)}`;
 }
+
+// A build-out record's own file: the builder's side of its Unit.
+export const RECORD_FILE = "unit.json";
 
 // The folders every claim and copy of one in this clone sits in, for one
 // for-each-ref.
-export const CLAIM_REF_FOLDERS = [CLAIM_BRANCHES, CLAIM_RECORDS, "refs/remotes/", "refs/aidlc/remotes/", "refs/aidlc/home/"];
+export const CLAIM_REF_FOLDERS = [CLAIM_BRANCHES, CLAIM_RECORDS, "refs/remotes/", "refs/aidlc/home/"];
 
 export interface ClaimHere {
   id8: string;
   unit: string;
   onBranches: boolean;
-  // This repository's own claim, a copy read through a remote's name, or one
-  // read by the lead's address.
+  // This repository's own claim, a claim branch's copy through a remote's
+  // name, or a record's copy read by its repository's address.
   kind: "own" | "remote" | "address";
   remote?: string;
 }
 
-// A ref in this clone that is a claim, or a copy of one. A record's copy under
-// a remote's name counts only while `git remote` lists that remote (`remotes`,
-// asked only when one is met): removing or renaming a remote leaves AI-DLC's
-// copies behind.
-export function claimHere(ref: string, remotes: () => ReadonlySet<string>): ClaimHere | null {
+// A ref in this clone that is a claim, or a copy of one: a record's copy is
+// read by homeCopyOf, the one reading of those names.
+export function claimHere(ref: string): ClaimHere | null {
   let at = /^refs\/heads\/claim\/([^/]+)\/([^/]+)$/.exec(ref);
   if (at) return { id8: at[1], unit: at[2], onBranches: true, kind: "own" };
   at = /^refs\/aidlc\/claims\/([^/]+)\/([^/]+)$/.exec(ref);
   if (at) return { id8: at[1], unit: at[2], onBranches: false, kind: "own" };
   at = /^refs\/remotes\/([^/]+)\/claim\/([^/]+)\/([^/]+)$/.exec(ref);
   if (at) return { id8: at[2], unit: at[3], onBranches: true, kind: "remote", remote: at[1] };
-  at = /^refs\/aidlc\/remotes\/([^/]+)\/claims\/([^/]+)\/([^/]+)$/.exec(ref);
-  if (at) return remotes().has(at[1]) ? { id8: at[2], unit: at[3], onBranches: false, kind: "remote", remote: at[1] } : null;
-  at = /^refs\/aidlc\/home\/[^/]+\/claim\/([^/]+)\/([^/]+)$/.exec(ref);
-  return at ? { id8: at[1], unit: at[2], onBranches: false, kind: "address" } : null;
-}
-
-// `git remote`'s names, read once for a caller of claimHere.
-export function gitRemotesOnce(projectDir: string): () => ReadonlySet<string> {
-  let names: ReadonlySet<string> | null = null;
-  return () => {
-    names ??= new Set(claimRegistryGit(projectDir, ["remote"], { localOnly: true }).stdout.split(/\r?\n/).map((name) => name.trim()).filter(Boolean));
-    return names;
-  };
+  const copy = homeCopyOf(ref);
+  return copy?.kind === "record" ? { id8: copy.id8, unit: copy.unit, onBranches: false, kind: "address" } : null;
 }
 
 // The first word of the plan's own branch (aidlc-unit's planBranchNames: the
@@ -472,28 +459,34 @@ function claimedUnitsSeenHere(projectDir: string, first = false): Set<string> {
   } catch {
     // No state here: the work's claims are the build-out's.
   }
-  const remotes = gitRemotesOnce(projectDir);
   let prefix: string | undefined;
   const refs = claimRegistryGit(projectDir, [
     "for-each-ref",
     "--format=%(objectname) %(refname)",
-    ...CLAIM_REF_FOLDERS.filter((folder) => !folder.startsWith("refs/aidlc/home/")),
+    ...CLAIM_REF_FOLDERS,
   ], { localOnly: true });
   if (!refs.ok) return claimed;
   for (const line of refs.stdout.split(/\r?\n/).filter(Boolean)) {
     const [oid, ref] = line.trim().split(/\s+/, 2);
-    const here = !oid || !ref ? null : claimHere(ref, remotes);
+    const here = !oid || !ref ? null : claimHere(ref);
     if (here === null || here.id8 !== id8 || here.onBranches !== onBranches) continue;
     prefix ??= claimPrefixOf(projectDir);
-    const shown = readClaimAt(projectDir, oid, prefix);
+    // A claim commit's claim file, or a build-out record's unit.json, read for
+    // its status alone (recordView in aidlc-unit.ts reads a record whole).
+    const shown = here.kind === "address"
+      ? ((record) => (record.ok ? { text: record.stdout } : null))(claimRegistryGit(projectDir, ["show", `${oid}:${RECORD_FILE}`], { localOnly: true }))
+      : readClaimAt(projectDir, oid, prefix);
     if (!shown) continue;
     try {
       const payload = JSON.parse(shown.text) as Record<string, unknown>;
+      const unit = ref.slice(ref.lastIndexOf("/") + 1);
+      // A record speaks only for the Unit its ref names.
       if (
         payload.intent_uuid === intentUuid &&
-        payload.status === "claimed"
+        payload.status === "claimed" &&
+        (here.kind !== "address" || payload.unit === unit)
       ) {
-        claimed.add(typeof payload.unit === "string" ? payload.unit : ref.slice(ref.lastIndexOf("/") + 1));
+        claimed.add(typeof payload.unit === "string" ? payload.unit : unit);
         if (first) return claimed;
       }
     } catch {

@@ -13,7 +13,6 @@ import {
   claimRegistryCachePath,
   claimRegistryGit,
   claimsOnRemote,
-  gitRemotesOnce,
   ownRemoteAmong,
   readClaimAt,
   readUnitClaimRegistryCache,
@@ -23913,7 +23912,7 @@ function gitObjectTypeByOid(
   return null;
 }
 
-function validGitRefName(ref: string): boolean {
+export function validGitRefName(ref: string): boolean {
   const forbiddenCharacter = [...ref].some((character) => {
     const code = character.charCodeAt(0);
     return (
@@ -30563,9 +30562,8 @@ export function hasAnyUnitClaimRefs(projectDir: string, onBranchesOnly = false):
     localOnly,
   );
   if (!local.ok) return false;
-  const remotes = gitRemotesOnce(projectDir);
   const ours = (ref: string): boolean => {
-    const here = claimHere(ref, remotes);
+    const here = claimHere(ref);
     return here !== null && here.id8 === id8 && (!onBranchesOnly || here.onBranches);
   };
   if (local.stdout.split(/\r?\n/).some(ours)) return true;
@@ -30573,7 +30571,7 @@ export function hasAnyUnitClaimRefs(projectDir: string, onBranchesOnly = false):
   return !!cache &&
     cache.space === space &&
     cache.intent_uuid === intentUuid &&
-    Object.values(cache.claims).some((claim) => !onBranchesOnly || claimHere(claim.ref, remotes)?.onBranches === true);
+    Object.values(cache.claims).some((claim) => !onBranchesOnly || claimHere(claim.ref)?.onBranches === true);
 }
 
 export function writeUnitScopeStamp(

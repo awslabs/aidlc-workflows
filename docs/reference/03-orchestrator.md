@@ -875,13 +875,17 @@ goes), the question says "Its last push did not go through." A retry given the m
 HEAD only when HEAD is that repo's recorded commit and no remote holds it (no remote-tracking ref, and
 `ls-remote --exit-code` status 2 or a fetched copy without it; any other answer, no amend), and not when it
 would only repeat the message the commit was given.
-The push's result rides the Unit's claim (`result`: per repo the branch, base,
-heads, changed blobs and patch-id; the outputs the home's later stages read, as
-files under `.aidlc-unit-result/` in the claim commit's tree). A home with
-`Home Location`, and a Unit's build, run `refreshHomeClaims`: one fetch of
-`refs/aidlc/claims/<id8>/*` into AI-DLC's own copies
-(`refs/aidlc/remotes/<remote>/claims/<id8>/`, or, by the home's address,
-`refs/aidlc/home/<id8>/`); main's flow's claim branches as before, once per chat
+The push's result rides the Unit's record (`result` in its `unit.json`: per repo
+the branch, base, heads, changed blobs and patch-id, and the address of a repo the
+plan does not list; the outputs the home's later stages read, as files under
+`result/` in the record commit's tree). A Unit's record is in the repository the
+plan names for it (`units[].record`), written only by its builder (`recordView`
+is the one place a record becomes a view; `createRecordCommit` writes only the
+record's own keys). A home with `Home Location`, and a Unit's build, run
+`refreshHomeClaims`: one fetch of `refs/aidlc/claims/<id8>/*` in each repository
+the plan names for a record, by its address, into AI-DLC's own copies
+(`refs/aidlc/home/<id8>/<key>/claims/`, one folder per repository read); main's
+flow's claim branches as before, once per chat
 (noted in `aidlc/.aidlc-engine/sessions/claims-fetched.json`) and, at the home, again
 at each step that shows or acts on the claims (nothing left for the home to
 build now, a result to check, a proposal to answer) and, while a team holds a

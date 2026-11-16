@@ -805,13 +805,11 @@ records `UNIT_TAKEN_IN`, and is selected for this chat. Its `WORKFLOW_STARTED` r
 words of the take when the agent hands them (`--request-file` or `--person-words`), and otherwise
 `Taken from the lead's plan: <unit>`. Taking a Unit whose
 build is already in this workspace carries that build on, and says whose build it
-is when someone else took it. A lead's project that takes no push from here: when
-this clone pushes the lead's branch to a repo of the team's own (a fork as origin,
-a push URL or `remote.pushDefault`), the take goes there with the person's login
-and says so once, and the lead's look takes it in from that remote once the lead
-adds it to their workspace; with nowhere else to push, the take goes on, says
-git's reason once, and is recorded there when a push next goes through, and an
-early start waits for it, with git's reason and the way on, which is push access
+is when someone else took it. The take's record goes to the repository the plan
+names for the Unit, by its address, from this workspace's own repository. A
+repository that takes no push from here: the take goes on, says git's reason
+once, and is recorded there when a push next goes through, and an early start
+waits for it, with git's reason and the way on, which is push access
 from the lead. Before any Unit is taken, a lead's project out of
 reach at its recorded address while this clone's own remote holds the lead's
 plan records the take at that remote, said once.
@@ -869,9 +867,7 @@ next step offers to send it again. A refusal by a rule of the lead's host (git's
 `[remote rejected]`) is said once, in the host's words, with what to ask its owner for,
 and that chat is not offered the send again; while the take itself is not recorded
 there, the offer waits until a look records it, and the build's end says once per chat
-that the lead's project has not taken the result yet. When the lead's project refuses it and this
-clone pushes to a repo of the team's own, the result goes there (`Unit Push:
-pushed`), said once, and the lead's look takes it in. A repo the Unit changed that the lead's plan
+that the lead's project has not taken the result yet. A repo the Unit changed that the lead's plan
 did not list is added to the build's repos first (`intent add-repo`), said once.
 A merge, rebase, cherry-pick or revert left under way in a repo is never
 committed over: the push says so with git's way to finish it or put it aside.
@@ -992,7 +988,7 @@ with your words in the request file its command names
 typed them in the message you said them in (the agent names another with
 `--message <id>`), go onto the Unit's claim, and the Unit's
 done record keeps them ("by your word"). Once every repo the Unit changed is merged, by the board's
-check or by your word, it is recorded at once, by the same take-in the next step runs:
+check or by your word, it is recorded at once:
 "<unit> is recorded as merged here." then the check-in line. A repo still not merged records
 nothing, and the line says which.
 In a team's own build it names the way on instead: the lead's project checks the merge itself.

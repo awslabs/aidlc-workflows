@@ -333,7 +333,7 @@ import {
   shownAgainFields,
 } from "./aidlc-questions.ts";
 import { codeGenerationPlanWaitsStep, promotableTestingPosture } from "./aidlc-testing-posture.ts";
-import { planHomeAddress, recordIntegrationBranch } from "./aidlc-unit.ts";
+import { planHomeAddress, recordIntegrationBranch, recordLeadsOwnStart } from "./aidlc-unit.ts";
 import {
   approvedOverUnfinishedReview,
   approvedUnitChanges,
@@ -3085,6 +3085,8 @@ function handleUnit(args: string[]): void {
     } catch (e) {
       error(`Audit emission failed: ${errorMessage(e)}`);
     }
+    // A Unit the lead's project starts that nobody has a record of gets one, as the lead's own take.
+    if (action === "start") recordLeadsOwnStart(pd, unit);
 
     // Mirror the latest checkpoint into runtime state for cheap status reads
     // (audit stays the source of truth — these fields are a cache, exactly like

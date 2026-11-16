@@ -545,7 +545,7 @@ import {
   pathContainedBy,
   replaceWithStaged,
 } from "./aidlc-lib.ts";
-import { CLAIM_REF_FOLDERS, claimHere, gitRemotesOnce } from "./aidlc-unit-holders.ts";
+import { CLAIM_REF_FOLDERS, claimHere } from "./aidlc-unit-holders.ts";
 import { chatTookStep, relativeRecordDirForSelection } from "./aidlc-record-core.ts";
 import { GUARD_POLICY_GLOSS, SCOPE_GLOSS } from "./aidlc-guard-fences.ts";
 import { validateStageFrontmatter } from "./aidlc-stage-schema.ts";
@@ -6233,14 +6233,22 @@ export async function collectDoctorReport(
       for (const space of listSpaces(projectDir)) {
         for (const intent of listIntents(projectDir, space.name)) {
           if (intent.uuid) knownIntentIds.add(idSuffix(intent.uuid));
+          // A Unit's build reads its lead's work's records: that work is known here too.
+          if (!intent.dirName) continue;
+          let homeWork = "";
+          try {
+            homeWork = unitBuildOf(readStateFile(projectDir, intent.dirName, space.name))?.homeWork ?? "";
+          } catch {
+            // No state: nothing more is known of it.
+          }
+          if (homeWork) knownIntentIds.add(idSuffix(homeWork));
         }
       }
-      const remotes = gitRemotesOnce(projectDir);
       const orphanRefs = [
         ...new Set(
           (refs.stdout ?? "")
             .split(/\r?\n/)
-            .map((ref) => ({ ref, id8: claimHere(ref, remotes)?.id8 }))
+            .map((ref) => ({ ref, id8: claimHere(ref)?.id8 }))
             .filter(
               (row): row is { ref: string; id8: string } =>
                 !!row.id8 && !knownIntentIds.has(row.id8),
@@ -10062,7 +10070,7 @@ function handleIntentRepos(
           lines.push(`Cloned ${name} from ${maskUserinfo(clone.address)} and added it to this piece of work's repos.`);
           sayNote(clone.note, clone.manifest);
         } else if (outcome.unit !== undefined) {
-          lines.push(`Added ${name} to ${outcome.unit}'s repos: the lead's plan did not list it, and ${outcome.unit}'s change there goes to the lead's project with its push.`);
+          lines.push(`Added ${name} to ${outcome.unit}'s repos: the lead's plan did not list it, so ${outcome.unit}'s record carries its address when you push.`);
         } else if (outcome.first) {
           const at = repoIsWorkspaceChild(projectDir, name) ? "" : ` (at ${displayRepoPath(readWorkspaceRepos(projectDir).entries.get(name)?.path ?? name)})`;
           lines.push(`Added ${name}${at} to this piece of work's repos; until now it worked on the workspace folder itself, which it still reads.`);

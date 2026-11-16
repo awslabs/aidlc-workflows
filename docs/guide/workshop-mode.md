@@ -715,30 +715,7 @@ work does: after every stage, or once at its end.
   repos has it (the lead's project records the merge at its next look). One the
   lead turns down or sends back from the lead's Build and Test is offered again,
   with those words, to the one who took it.
-- A lead's project you can read but not push to, while your clone pushes the
-  lead's branch to a repo of your team's own (a fork as its origin, a push URL,
-  or `remote.pushDefault`): the take goes there instead, with your login, and one
-  line says it is there and that the lead and the other teams see it once the
-  lead adds that address to their workspace as a git remote. The push then
-  sends its result there too, said once, with no question to send it again; a
-  give back or a change you propose goes there the same way. At each look the
-  lead's workspace reads this work's records from its other git remotes,
-  quietly, and takes in a take or result that is ahead of the lead's own, as a
-  commit of the lead's own with the team's claim in it (so a host that takes
-  only its pusher's commits takes it): the first one taken in wins, a team whose
-  take another's beat there hears the line below, and a take-in the lead's
-  project refuses is said to the lead once, with git's reason. A remote of the
-  lead's that cannot be read is said once in a chat while a Unit is still open
-  at the lead's project, or when it held this work's claims before. When the
-  lead says a repo merged a Unit, sends a Unit back, says a repo turned it down,
-  signs a result off or frees a Unit, AI-DLC takes in the same way first, so it
-  acts on a take or result a team sent to its own remote, and anything the
-  take-in has to say comes first, once. The lead's status and board read those
-  remotes too: a take only a team's remote holds shows as building, taken by
-  that person, and a result a team sent there after the lead took its take in
-  shows as built, merged or not, as the next step shows it, with nothing taken
-  in or written, and the lead's next look records it (a new take after a Unit
-  was given back shows from that look). A
+- A
   clone's own remote stands in for the lead's project only while it lists the
   same claims, or while the lead's project does not answer; a claim written
   through it that the lead's project then does not show (a copy of the lead's
@@ -842,8 +819,7 @@ message is not on a commit.
 **Not now** pushes nothing; the end of the build says once that the Unit is not
 pushed yet. A repo the Unit changed that the lead's plan did not list is added
 to the build's repos and goes with the push, said once. When the code went but
-the lead's project did not take the result, the next step offers to send it again,
-unless the result went to your team's own remote, where the lead's look takes it in.
+the lead's project did not take the result, the next step offers to send it again.
 When a rule of the lead's host refused it, the push says so once, in the host's words,
 with what to ask its owner for; until the lead's project takes a push from here again,
 each chat hears once at the build's end that the result is not there yet, and you can
@@ -1001,14 +977,19 @@ there (`aidlc unit push --branch <name>`), keeps it for later pushes, and uses
 git's own push remote for that branch. A team that pushes to a fork starts the
 Unit's branch from the repo's own main, not the fork's.
 
-**The workspace repo.** AI-DLC keeps each Unit's record (who took it, its
-result, your verdicts) on the lead's project's remote under
-`refs/aidlc/claims/<intent-id8>/<unit>`, a ref of its own beside the branches,
-written with git's compare-and-swap push. GitHub does not treat it as a branch:
+**The workspace repo.** AI-DLC keeps each Unit's record (who took it, what was
+pushed, a change the team proposes) in the repository the shared plan names for
+that Unit, the one its code goes to, under
+`refs/aidlc/claims/<intent-id8>/<unit>`, a ref of its own beside the branches.
+Only the Unit's builder writes it, from their own workspace's repository by that
+repository's address, with git's compare-and-swap push: nothing of AI-DLC's goes
+into a code clone, and the first take wins. Each record commit holds only
+`unit.json`, the Unit's outputs under `result/` and a proposed text under
+`proposals/`, with no history but the record's own. GitHub does not treat it as a branch:
 it is not in the branch list, no pull request can be opened from it, workflows
 that run `on: push` do not run for it, and rulesets on branches and tags do not
 reach it, so there is nothing to change on GitHub. A plain clone or fetch
-does not bring it: to see the records, run `git ls-remote origin "refs/aidlc/claims/*"`,
+does not bring it: to see the records, run `git ls-remote <that repository> "refs/aidlc/claims/*"`,
 or ask AI-DLC for its status or the team board. Work begun on the workspace's
 own repo before teams took Units this way keeps its `claim/<intent-id8>/<unit>`
 branches until it is done (Teams on the workspace's own repo, above): until

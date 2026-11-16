@@ -19,6 +19,7 @@ import {
   seededStateFile,
 } from "./fixtures.ts";
 import { readConductorSurface } from "./conductor-skill.ts";
+import { copyOf } from "../../dist/claude/.claude/tools/aidlc-unit-teams.ts";
 
 export const UNIT = join(AIDLC_SRC, "tools", "aidlc-unit.ts");
 export const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
@@ -401,14 +402,21 @@ export function tellsWhatToType(...lines: unknown[]): boolean {
  * fetch never brings. */
 export function fetchRecords(dir: string, remote = "origin"): void {
   git(dir, ["fetch", "-q", remote]);
-  git(dir, ["fetch", "-q", remote, `+refs/aidlc/claims/*:refs/aidlc/remotes/${remote}/claims/*`]);
+  // AI-DLC's look in this clone: each work's records into its copy of them by the remote's address.
+  const address = git(dir, ["remote", "get-url", remote]);
+  const works = new Set(git(dir, ["ls-remote", remote, "refs/aidlc/claims/*"]).split("\n")
+    .map((line) => /\trefs\/aidlc\/claims\/([^/]+)\//.exec(line)?.[1]).filter((id8): id8 is string => id8 !== undefined));
+  for (const id8 of works) git(dir, ["fetch", "-q", "--no-tags", remote, `+refs/aidlc/claims/${id8}/*:${copyOf(address, `refs/aidlc/claims/${id8}/`)}*`]);
 }
 
+// A Unit's record at a host: a claim commit's claim file (main's flow), else
+// a build-out record's unit.json.
 export function claimPayload(remote: string, intentId8: string, unit: string): Record<string, unknown> | null {
   const ref = `refs/aidlc/claims/${intentId8}/${unit}`;
   const tip = spawnSync("git", ["rev-parse", "--verify", ref], { cwd: remote, encoding: "utf-8", env: GIT_ENV });
   if (tip.status !== 0) return null;
-  return JSON.parse(git(remote, ["show", `${tip.stdout.trim()}:.aidlc-unit-claim.json`])) as Record<string, unknown>;
+  const claim = spawnSync("git", ["show", `${tip.stdout.trim()}:.aidlc-unit-claim.json`], { cwd: remote, encoding: "utf-8", env: GIT_ENV });
+  return JSON.parse(claim.status === 0 ? claim.stdout : git(remote, ["show", `${tip.stdout.trim()}:unit.json`])) as Record<string, unknown>;
 }
 
 /** The host the work's records are written to: the plan's repository here. */
@@ -418,23 +426,31 @@ export const recordHost = (home: PlanHome): string => Object.values(home.hosts)[
 export const planFrom = (home: PlanHome): string[] => ["--plan", home.id8, "--from", Object.values(home.hosts)[0]];
 
 /**
- * A Unit's record at the host it is written to, as the build-out writes it: the record's JSON, every path in the
- * record commit's tree, the tip's subject and parents. Null when the host has no such record. Callers name the plan
- * home and the Unit, never a host: every record of the work is in the plan's repository (its first host) here.
+ * A Unit's record at the host it is written to, as the build-out writes it: its unit.json, every path in the record
+ * commit's tree, the tip's subject and parents. Null when the host has no such record. Callers name the plan home and
+ * the Unit, never a host: the record is in the repository the shared plan names for that Unit.
  */
 export function recordAt(home: PlanHome, unit: string): { json: Record<string, unknown>; files: string[]; message: string; parents: string[] } | null {
-  const host = recordHost(home);
+  const host = recordHostOf(home, unit);
   const ref = `refs/aidlc/claims/${home.id8}/${unit}`;
   const tip = spawnSync("git", ["rev-parse", "--verify", "--quiet", ref], { cwd: host, encoding: "utf-8", env: GIT_ENV });
   if (tip.status !== 0) return null;
   const oid = tip.stdout.trim();
   const [message, parents] = git(host, ["log", "-1", "--format=%s%x00%P", oid]).split("\0");
   return {
-    json: JSON.parse(git(host, ["show", `${oid}:.aidlc-unit-claim.json`])) as Record<string, unknown>,
+    json: JSON.parse(git(host, ["show", `${oid}:unit.json`])) as Record<string, unknown>,
     files: git(host, ["ls-tree", "-r", "--name-only", oid]).split("\n").filter(Boolean),
     message,
     parents: parents === "" ? [] : parents.split(" "),
   };
+}
+
+/** The bare host of the repository the shared plan names for a Unit's record (plan.json's units[].record). */
+export function recordHostOf(home: PlanHome, unit: string): string {
+  const plan = JSON.parse(git(Object.values(home.hosts)[0], ["show", `${planRefOf(home.id8)}:plan.json`])) as { units: Array<{ name: string; record: string }> };
+  const name = plan.units.find((entry) => entry.name === unit)?.record;
+  if (name === undefined || home.hosts[name] === undefined) throw new Error(`the plan names no host for ${unit}'s record`);
+  return home.hosts[name];
 }
 
 export function stateOf(dir: string): string {

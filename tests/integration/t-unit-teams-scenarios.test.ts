@@ -14,9 +14,9 @@
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { appendFileSync, chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
-import { fixtureIntentId8, REPO_ROOT, seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
+import { fixtureIntentId8, REPO_ROOT, seededStateFile } from "../harness/fixtures.ts";
 import { hostFor } from "../harness/scope-hosts.ts";
 import { AgentStandIn, type Directive, PersonScript } from "../harness/scope-run.ts";
 import {
@@ -33,7 +33,6 @@ import {
   makeHome,
   mergeOnHost,
   next,
-  offerText,
   run,
   STATE,
   stateOf,
@@ -269,80 +268,6 @@ describe("scenario 2: one big code repo", () => {
     fetchRecords(home.dir);
     next(home.dir);
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
-  });
-});
-
-// A team's own workspace repo made from the home's: the home's record comes
-// with it, its origin is the team's host.
-function teamWorkspace(homeRemote: string, label: string): { dir: string; host: string } {
-  const seed = cloneOf(homeRemote, `${label}-seed`);
-  const host = tempDir(`${label}-host`);
-  git(host, ["init", "-q", "--bare", "-b", "main"]);
-  git(seed, ["remote", "set-url", "origin", host]);
-  git(seed, ["push", "-q", "origin", "main"]);
-  return { dir: cloneOf(host, label), host };
-}
-
-describe("scenario 3: each team keeps its own workspace repo", () => {
-  test("the web team's workspace reaches the home by its address: its build and record stay in its own repo, the result goes home", () => {
-    const hosts = { "checkout-web": codeHost("checkout-web") };
-    const home = makeHome({ repos: hosts });
-    teamsChosen(home);
-    const kiroIde = tree("kiro-ide");
-    const web = teamWorkspace(home.remote, "wendy");
-    cloneCode(hosts["checkout-web"], web.dir, "checkout-web", "wendy");
-    const remotes = git(web.dir, ["remote"]);
-    const offer = kiroIde.next(web.dir);
-    expect(offerText(offer.question)).toMatch(/^fixture is shared in [^ .]+\./);
-    expect((offer.choices as Array<{ label: string }>).map((c) => c.label)).not.toContain("Carry on fixture");
-    const took = takeWith(kiroIde.unit, "web", ["take", "checkout-ui", "--home", HOME_RECORD], web.dir);
-    expect(took.status, took.out).toBe(0);
-    const record = buildRecord(web.dir, "web", "checkout-ui");
-    built(record, "checkout-ui", [{ repo: "checkout-web", folder: join(web.dir, "checkout-web"), path: "src/cart.tsx" }]);
-    expect(run(kiroIde.unit, ["push"], web.dir).status).toBe(0);
-    // The team's record goes to its own repo like any record; the home's main is untouched.
-    const homeMain = git(home.remote, ["rev-parse", "main"]);
-    commitAll(web.dir, "checkout-ui built");
-    git(web.dir, ["push", "-q", "origin", "main"]);
-    expect(git(home.remote, ["rev-parse", "main"])).toBe(homeMain);
-    expect(git(web.dir, ["remote"])).toBe(remotes);
-    // The home's copied work in their workspace is left as it is.
-    expect(git(web.dir, ["diff", "--name-only", "origin/main~1", "origin/main", "--", seededRecordDir(web.dir).slice(web.dir.length + 1)])).toBe("");
-    // A teammate clones the team's workspace and carries the build on.
-    const will = cloneOf(web.host, "will");
-    const carry = kiroIde.next(will);
-    // A pushed build waits for its merge: it is said, never offered to carry on; its take still carries it on.
-    expect(String(carry.question), JSON.stringify(carry)).toContain("checkout-ui (pushed by wendy in web, waiting for its merge)");
-    expect(takeWith(kiroIde.unit, "web", ["take", "checkout-ui", "--home", HOME_RECORD], will).json).toMatchObject({ resumed: true });
-    // Its repo is not checked out in this clone: the build's step offers to clone it, once.
-    expect(kiroIde.next(will).ask_type).toBe("unit-clone");
-    expect(kiroIde.next(will).unit).toBe("checkout-ui");
-    expect(boardAt(home)).toContain("- checkout-ui, web space: built by wendy, checkout-web not merged yet");
-    mergeOnHost(hosts["checkout-web"], "checkout-ui", "rebase");
-    fetchRecords(home.dir);
-    next(home.dir);
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "checkout-ui")).toMatchObject({ done: true });
-  });
-
-  // Arden's option 1: the take goes to the team's own workspace repo, where the
-  // lead's look takes it in once the lead adds that address as a git remote.
-  test("read but not write: the take goes to the team's own workspace repo, and its line says where it is and when the lead sees it", () => {
-    const home = makeHome();
-    teamsChosen(home);
-    const hook = join(home.remote, "hooks", "pre-receive");
-    writeFileSync(hook, "#!/bin/sh\necho 'read-only for partners' >&2\nexit 1\n");
-    chmodSync(hook, 0o755);
-    const kiroIde = tree("kiro-ide");
-    const web = teamWorkspace(home.remote, "wendy");
-    const took = takeWith(kiroIde.unit, "web", ["take", "checkout-ui", "--home", HOME_RECORD], web.dir);
-    expect(took.status, took.out).toBe(0);
-    // The address as git's own To line names it (a Windows path keeps its own form).
-    const said = String(took.json?.notice);
-    expect(said).toContain("The lead's project takes no push from you, so your take of checkout-ui is on ");
-    expect(said).toContain(`${basename(web.host)}; the lead and the other teams see it once the lead adds that address to their workspace as a git remote.`);
-    expect(claimPayload(web.host, fixtureIntentId8(home.dir), "checkout-ui")).toMatchObject({ status: "claimed", taken_by: "wendy" });
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "checkout-ui")).toBeNull();
-    expect(existsSync(join(web.dir, "aidlc", "spaces", "web")), "the build record was made").toBe(true);
   });
 });
 

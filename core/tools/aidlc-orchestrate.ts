@@ -665,19 +665,16 @@ import {
   planWait,
   planWaitLine,
   unitsAskedHereForShare,
-  builtHereNote,
+  builtHereRecordClause,
   leadsOwnClaims,
   takenFromSoloWork,
   type ToldMerge,
   type MaybeMerged,
   writeProposedText,
   newsNotTakenIn,
-  readTeamsClaims,
   refreshHomeClaims,
-  takeInFromRemotes,
   refreshListedHome,
   buildOutOpening,
-  homeTarget,
   planGoneLine,
   planLastChange,
   planTakeFlags,
@@ -691,6 +688,7 @@ import {
   type PlanSnapshot,
   takeAside,
   resendQuestion,
+  buildRecordRepo,
   unitDefaultMessage,
   commitMessageFile,
   heldCommitMessage,
@@ -822,7 +820,6 @@ import {
   unitBuildsHere,
   unitDependencies,
   unitLikelyRepos,
-  leadBuildsWithoutClaim,
   unitsLeftForTakes,
   unitStartedBeforeTeams,
   unitGateRhythmChosen,
@@ -6181,9 +6178,9 @@ function buildOutShareOffer(projectDir: string): AskDirective | PrintDirective |
     ? `${namesInProse(added)} ${added.length === 1 ? "was" : "were"} added to the plan since you shared it, so the ` +
       `teams cannot take ${added.length === 1 ? "it" : "them"} yet.`
     : "The Units are open for any team to take.";
-  // A Unit built here before the share has no claim yet: the share sends it.
+  // A Unit built here before the share has no record yet: the share writes it.
   const builtHere = added === null ? unitsAskedHereForShare(projectDir) : [];
-  const note = builtHere.length === 0 ? null : builtHereNote(builtHere);
+  const note = builtHereRecordClause(projectDir, builtHere);
   const byPullRequest = way === "pull request";
   // The commit's message, only where the share makes one.
   const message = planToCommit(projectDir) ? shareMessageStep(projectDir, shareKey, planShareWords(projectDir)) : null;
@@ -6195,14 +6192,13 @@ function buildOutShareOffer(projectDir: string): AskDirective | PrintDirective |
     question: `${said} Share the plan with them now? I'd commit ${planShareWords(projectDir)} ` +
       `${message === null ? "" : "with this commit message "}` +
       `and ${byPullRequest ? "push it on its own branch for a pull request" : `push ${target.branch} to ${target.remote}`}` +
-      `${note === null ? "" : `, with ${note}`}, so each team can take its Unit ` +
+      `, so each team can take its Unit ` +
       `${byPullRequest ? `once it is in ${target.branch}, ` : ""}by opening its own clone and running ${entrySkillInvocation()}.` +
+      `${note === null ? "" : ` ${note}`}` +
       `${message === null ? "" : `\n\n${message.text}`}`,
     choices: shareWays(way, {
       label: "Share them with the teams",
-      detail: note === null
-        ? `Pushes ${target.branch} to ${target.remote} as a plain push; it never overwrites what a team pushed.`
-        : `Pushes ${target.branch}, and ${note}, to ${target.remote}; it never overwrites what a team pushed.`,
+      detail: `Pushes ${target.branch} to ${target.remote} as a plain push; it never overwrites what a team pushed.`,
       command: `${aidlcInvocation()} unit share --plan${flag}`,
     }, { label: "Share by pull request", detail: planByPullRequestDetail(projectDir), command: `${aidlcInvocation()} unit share --branch --plan${flag}` }),
     notNow: { label: "Not now", detail: `Nothing is pushed; a team's clone sees the plan once ${target.branch} is pushed.` },
@@ -9879,7 +9875,7 @@ type LookedHome = {
   space: string;
   snapshot: PlanSnapshot;
   onDisk: boolean;
-  refreshed?: { fetched: boolean; unreached: string | null; said?: string | null };
+  refreshed?: { fetched: boolean; unreached: Array<{ repo: string; address: string; said: string }> };
 };
 
 // What a look read beyond the plans it offers: the repositories the person's
@@ -9889,8 +9885,11 @@ type LookedHome = {
 type LookedBeyond = {
   read?: string[]; unread?: Array<{ name: string; said: string | null }>;
   goneAtAddress?: PlanJson[]; unreadableAtAddress?: string[]; unreadable: string[];
-  // Plans whose repository did not answer at this look, as the plan names them (or as recorded, with no copy here).
-  unreached: Array<{ repo: string; label: string; said: string | null }>;
+  // Plans whose repository did not answer at this look, as the plan names them (or as recorded, with no copy here),
+  // and whether that repository holds records of the plan's Units too.
+  unreached: Array<{ repo: string; label: string; said: string | null; records?: true }>;
+  // Repositories holding records only that did not answer, with git's words for the first.
+  recordsUnreached: Array<{ repos: string[]; said: string }>;
   // Plans gone from their repository, with whether a build of that work is here.
   gone: Array<{ plan: PlanJson; built: boolean }>;
 };
@@ -9922,7 +9921,7 @@ function homesOnDisk(projectDir: string): Array<{ intent: IntentInfo; space: str
 function plansLooked(projectDir: string, now: boolean, asked?: { address?: string }): {
   homes: LookedHome[]; readAtAddress: number | null; unreadAtAddress?: string | null;
 } & LookedBeyond {
-  const beyond: LookedBeyond = { unreadable: [], unreached: [], gone: [] };
+  const beyond: LookedBeyond = { unreadable: [], unreached: [], recordsUnreached: [], gone: [] };
   const built = new Set<string>();
   const places = new Map<string, { place: PlanPlace; onDisk: { dirName: string; space: string } | null }>();
   for (const { intent, space, state } of homesOnDisk(projectDir)) {
@@ -9968,9 +9967,8 @@ function plansLooked(projectDir: string, now: boolean, asked?: { address?: strin
   for (const { place, onDisk } of places.values()) {
     let refreshed: LookedHome["refreshed"];
     if (!isReadOnlyEngineProbe()) {
-      const target = homeTarget(projectDir, place.address);
-      const looked = refreshHomeClaims(projectDir, { home: { target, id8: place.id8, location: place.address }, sessionId: engineSessionId, now });
-      refreshed = { fetched: looked.fetched, unreached: looked.unreached, ...(looked.said !== undefined ? { said: looked.said } : {}) };
+      const looked = refreshHomeClaims(projectDir, { home: { id8: place.id8, location: place.address }, sessionId: engineSessionId, now });
+      refreshed = { fetched: looked.fetched, unreached: looked.unreached };
       // A plan gone from its repository: none of its Units is offered from the copy kept here.
       if (looked.planGone) {
         const kept = planAt(projectDir, place);
@@ -9979,10 +9977,18 @@ function plansLooked(projectDir: string, now: boolean, asked?: { address?: strin
       }
     }
     const read = planAt(projectDir, place);
-    if (refreshed?.unreached) {
+    const unread = refreshed?.unreached ?? [];
+    const atPlan = (entry: { address: string }): boolean => sameGitAddress(entry.address, place.address);
+    const planUnread = unread.find(atPlan);
+    if (planUnread !== undefined) {
       const named = read.kind === "read" ? read.plan.plan : null;
-      beyond.unreached.push({ repo: named?.plan_repo.name ?? place.repo, label: named?.work.label || place.work, said: refreshed.said ?? null });
+      beyond.unreached.push({
+        repo: named?.plan_repo.name ?? place.repo, label: named?.work.label || place.work, said: planUnread.said,
+        ...(named?.units.some((unit) => unit.record === named.plan_repo.name) ? { records: true as const } : {}),
+      });
     }
+    const others = unread.filter((entry) => !atPlan(entry));
+    if (others.length > 0) beyond.recordsUnreached.push({ repos: [...new Set(others.map((entry) => entry.repo))], said: others[0].said });
     if (read.kind === "unreadable" && onDisk === null && textAt(projectDir, place.copy, "plan.json") !== null) beyond.unreadable.push(place.repo);
     if (read.kind !== "read") continue;
     const plan = read.plan.plan;
@@ -10021,13 +10027,17 @@ function unitTakeLook(
       ? `${planGoneLine(plan)} This build carries on from the copy here; no other Unit of it can be taken while it is gone.`
       : planGoneLine(plan));
   }
-  for (const { repo, label, said } of looked.unreached) {
-    sayWithStepOnce(projectDir, `${repo} could not be read just now (${said ?? "it did not answer in time"}), so what is ready to take in ${label} may be behind.`);
+  for (const { repo, label, said, records } of looked.unreached) {
+    sayWithStepOnce(projectDir, `${repo} could not be read just now (${said ?? "it did not answer in time"}), so what is ready to take in ${label}` +
+      `${records ? ", and who has taken what," : ""} may be behind.`);
+  }
+  for (const { repos, said } of looked.recordsUnreached) {
+    sayWithStepOnce(projectDir, `${namesInProse(repos)} could not be read just now (${said}), so who has taken what there may be behind.`);
   }
   for (const { intent, space, snapshot, onDisk, refreshed } of looked.homes) {
     if (!intent.uuid) continue;
     const plan = snapshot.plan;
-    if (refreshed !== undefined && !refreshed.fetched && refreshed.unreached === null) stale = true;
+    if (refreshed !== undefined && !refreshed.fetched && refreshed.unreached.length === 0) stale = true;
     // A plan or a record copy here that does not read leaves that work out of the look, never the step.
     let opening: ReturnType<typeof buildOutOpening>;
     let overview: ReturnType<typeof planClaimOverview>;
@@ -10040,9 +10050,6 @@ function unitTakeLook(
     if (onDisk && space === active) homeHere.push(intent);
     const take = `${unitTool} take %s ${planTakeFlags(snapshot.place.id8, snapshot.place.address).map(shellArg).join(" ")}`;
     const likely = new Map(plan.units.map((unit) => [unit.name, [...unit.repos]]));
-    // A Unit the lead's project builds with no claim of its own is the lead's
-    // (leadBuildsWithoutClaim): read from the lead's audit when it is here.
-    const rows = onDisk && intent.dirName ? readAuditShardEvents(projectDir, intent.dirName, space) : [];
     // One start per Unit: its build goes in the space the person is in.
     const start = (unit: string, label: string, detail: string, extra = ""): AskChoice[] =>
       [{ label, detail, command: `${take.replace("%s", shellArg(unit))}${extra}` }];
@@ -10121,10 +10128,6 @@ function unitTakeLook(
         } else building.push(`${unit} (by ${builderOf(claim)}${spaceWords(claim.owner, true)})`);
         continue;
       }
-      if (leadBuildsWithoutClaim(rows, unit, claim)) {
-        building.push(`${unit} (at the lead's project)`);
-        continue;
-      }
       const blockers = [...new Set((opening.blockers.get(unit) ?? [])
         .map((dep) => (dep === "walking-skeleton" ? skeleton ?? dep : dep))
         .filter((dep) => overview.claims.get(dep)?.payload.done !== true))];
@@ -10176,7 +10179,7 @@ function unitTakeLook(
     sentences, choices, carryOn, homeHere, stale, readAtAddress: looked.readAtAddress,
     ...(looked.unreadAtAddress !== undefined ? { unreadAtAddress: looked.unreadAtAddress } : {}),
     read: looked.read, unread: looked.unread, goneAtAddress: looked.goneAtAddress, unreadableAtAddress: looked.unreadableAtAddress,
-    unreadable: looked.unreadable, unreached: looked.unreached, gone: looked.gone,
+    unreadable: looked.unreadable, unreached: looked.unreached, recordsUnreached: looked.recordsUnreached, gone: looked.gone,
   };
 }
 
@@ -10243,15 +10246,16 @@ function unitProposeAsk(projectDir: string, stateContent: string): AskDirective 
     const askName = `unit-propose-${changed.path.replace(/[^A-Za-z0-9.-]+/g, "_")}-${changed.fingerprint.slice("sha256:".length, 19)}.json`;
     if (engineAskMark(projectDir, askName) !== null) continue;
     noteEngineAskMark(projectDir, askName);
+    const repo = buildRecordRepo(projectDir, build);
     return {
       kind: "ask",
       ask_type: "unit-propose",
       response_route: "command",
-      question: `You changed the ${changed.name} here. Do you want me to send your change to the lead to approve? ` +
-        "I'd send it, so every team builds from the same version.",
+      question: `You changed the ${changed.name} here. Do you want me to put your change on ${build.unit}'s record in ${repo}, for ` +
+        "the lead to decide? I'd put it there: if the lead approves it, the plan has it for every Unit that uses it.",
       choices: [
         {
-          label: "Send it to the lead",
+          label: "Put it on the record",
           detail: `${build.unit} carries on with your version meanwhile.`,
           command: `${aidlcToolInvocation("unit")} propose --input ${shellArg(changed.path)} ${unitWordsArg("propose")}`,
         },
@@ -10378,17 +10382,18 @@ function unitPushAsk(projectDir: string, stateContent: string | null): AskDirect
   if (!unitPushToOffer(projectDir, stateContent)) return null;
   const unitTool = aidlcToolInvocation("unit");
   if (push === "unsent") {
-    const held = resendHeld(projectDir, stateContent, unit);
-    if (held === "waits") sayWithStepOnce(projectDir, resultWaitsLine(unit));
+    const repo = buildRecordRepo(projectDir, build);
+    const held = resendHeld(projectDir, stateContent, unit, repo);
+    if (held === "waits") sayWithStepOnce(projectDir, resultWaitsLine(unit, repo));
     if (held !== null) return null;
     return {
       kind: "ask",
       ask_type: "unit-push",
       response_route: "command",
-      question: resendQuestion(unit),
+      question: resendQuestion(unit, repo),
       choices: [
-        { label: "Send it again", detail: "Nothing new is committed; the result goes to the lead's project.", command: `${unitTool} push` },
-        { label: "Not now", detail: "The lead sees it once you send it.", command: `${unitTool} push --later` },
+        { label: "Send it again", detail: `Nothing new is committed; the result goes to ${unit}'s record in ${repo}.`, command: `${unitTool} push` },
+        { label: "Not now", detail: `Its record in ${repo} has no result until you send it.`, command: `${unitTool} push --later` },
       ],
     };
   }
@@ -10518,16 +10523,16 @@ function unitPushDoneNote(projectDir: string): string {
       `line; ${OWN_MESSAGE_SENTENCE}.`;
 }
 
-// Why the send again of a result the lead's project did not take is not
-// offered now: "aside", someone else's take or the Unit done is on the claim
-// before this take was recorded (said once by buildClaimNotes); "waits", its
-// take is not recorded there with nowhere else to send (a look records it once
-// the lead's project takes a push from here), or a rule of the lead's host
-// refused it in this chat (the push counted the offer as put); else null.
-function resendHeld(projectDir: string, stateContent: string, unit: string): "aside" | "waits" | null {
+// Why the send again of a result its record's repository did not take is not
+// offered now: "aside", someone else's take or the Unit done is on the record
+// before this take was written (said once by buildClaimNotes); "waits", its
+// take is not written there (a look writes it once the repository takes a push
+// from here), or a rule of its host refused it in this chat (the push counted
+// the offer as put); else null.
+function resendHeld(projectDir: string, stateContent: string, unit: string, repo: string): "aside" | "waits" | null {
   const hold = resultTakeHold(projectDir, stateContent);
   if (hold !== null) return hold;
-  return engineSessionId !== undefined && personLineHeard(projectDir, engineSessionId, resendQuestion(unit)) ? "waits" : null;
+  return engineSessionId !== undefined && personLineHeard(projectDir, engineSessionId, resendQuestion(unit, repo)) ? "waits" : null;
 }
 
 // A Unit's build whose end still has its push to offer: not pushed and not put
@@ -15978,7 +15983,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       // A send again held where it cannot go through now (resendHeld) is no push question to come.
       const pushField = getField(stateContent, UNIT_PUSH_FIELD)?.trim();
       const pushDue = build !== null && buildWaitsForPush(stateContent) && /^- \[x\] code-generation\s/m.test(stateContent) &&
-        pushField !== "pushed" && !(pushField === "unsent" && resendHeld(pd, stateContent, build.unit) !== null) ? build.unit : undefined;
+        pushField !== "pushed" && !(pushField === "unsent" && resendHeld(pd, stateContent, build.unit, buildRecordRepo(pd, build)) !== null) ? build.unit : undefined;
       emit(leadsWorkElsewhereWords(pd, stateContent, words.id) ??
         reentryReplyDirective(words.id, pd, undo, workNamesHere(pd, selection), activeWorkLabel(stateContent), pushDue));
       return;
@@ -16113,7 +16118,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
           try {
             const looked = refreshHomeClaims(pd, { sessionId: engineSessionId, now: true });
             refused = looked.refused !== undefined;
-            return looked.unreached === null && !refused;
+            return looked.unreached.length === 0 && !refused;
           } catch (e) {
             if (e instanceof GitWriteRefused) throw e;
             return false;
@@ -19092,15 +19097,9 @@ function teamHomeClaims(
       !(overview?.walked ?? []).includes(claim.unit));
     const open = left.keepsWalk || [...left.units].some((unit) => overview?.claims.get(unit)?.status !== "claimed");
     const refreshed = refreshHomeClaims(projectDir, { sessionId: engineSessionId, now, sincePerson: teamBuilding || open });
-    if (refreshed.unreached !== null) unreached.push(refreshed.unreached);
+    for (const unread of refreshed.unreached) unreached.push(unread.repo);
     if (refreshed.refused) sayWithStepOnce(projectDir, newsNotTakenIn("the teams"));
     if (refreshed.fetched || refreshed.lookedThisCommand === true) {
-      // A take or result a team sent to its own remote, which the lead added here.
-      if (!query) {
-        const back = takeInFromRemotes(projectDir, { unitOpen: open });
-        for (const line of back.lines) sayWithStepOnce(projectDir, line);
-        if (back.refused) sayWithStepOnce(projectDir, newsNotTakenIn("the teams"));
-      } else readTeamsClaims(projectDir);
       overview = readOverview();
       left = leftNow();
     }

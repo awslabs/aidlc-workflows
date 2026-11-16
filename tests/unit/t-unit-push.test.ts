@@ -480,7 +480,7 @@ describe("the push", () => {
     expect(git(hosts.billing, ["show", "refunds:lib/refund.ts"])).toBe("export const refund = 1;");
     // What the lead's checks read names the repos, where the lead's project finds the files; the team's own record is as written.
     const tip = git(recordHost(home), ["rev-parse", `refs/aidlc/claims/${fixtureIntentId8(home.dir)}/refunds`]).trim();
-    const sent = JSON.parse(git(recordHost(home), ["show", `${tip}:.aidlc-unit-result/construction/refunds/code-generation/traceability.json`])) as typeof table;
+    const sent = JSON.parse(git(recordHost(home), ["show", `${tip}:result/construction/refunds/code-generation/traceability.json`])) as typeof table;
     expect(sent.coverage.map((entry) => entry.target)).toEqual(["checkout-api/src/refunds.ts", "billing/lib/refund.ts"]);
     expect(readFileSync(join(stage, "traceability.json"), "utf-8")).toContain(".aidlc-worktrees/refunds/checkout-api/src/refunds.ts");
   });
@@ -605,7 +605,7 @@ describe("the push", () => {
     const pushed = run(UNIT, ["push"], alice);
     expect(pushed.status, pushed.out).toBe(0);
     const tip = git(recordHost(plan), ["rev-parse", `refs/aidlc/claims/${plan.id8}/refunds`]).trim();
-    const sent = JSON.parse(git(recordHost(plan), ["show", `${tip}:.aidlc-unit-result/construction/refunds/code-generation/traceability.json`])) as typeof table;
+    const sent = JSON.parse(git(recordHost(plan), ["show", `${tip}:result/construction/refunds/code-generation/traceability.json`])) as typeof table;
     expect(sent.coverage.map((entry) => entry.target)).toEqual(["checkout-api/src/refunds.ts", "billing/lib/refund.ts"]);
     expect(readFileSync(join(stage, "traceability.json"), "utf-8")).toContain("../checkout-api-mine/src/refunds.ts");
   });
@@ -687,19 +687,19 @@ describe("the push", () => {
   });
 
   test("a result a rule of the lead's host refuses: said once in its words, not offered again in that chat, and sent once it is let through", () => {
-    const { home, alice, record } = refundsTakenInClone();
+    const { hosts, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     finishBuild(record);
-    const hook = join(home.remote, "hooks", "pre-receive");
+    // refunds's record is in checkout-api, whose host refuses records by a rule.
+    const hook = join(hosts["checkout-api"], "hooks", "pre-receive");
     writeFileSync(hook, "#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/aidlc/claims/*) echo 'claims are closed today' >&2; exit 1;; esac; done\n");
     chmodSync(hook, 0o755);
     const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "alice-push" };
     const pushed = run(UNIT, ["push"], alice, chat);
     expect(pushed.status, pushed.out).toBe(0);
     expect(String(pushed.json?.notice)).toContain(
-      "The lead's project did not take the result of refunds: claims are closed today (pre-receive hook declined). A rule on its host " +
-        "refuses it, so the lead cannot see it yet: ask whoever owns that repository to let your pushes to refs/aidlc/claims/ through, " +
-        "then ask me to send it again.",
+      "checkout-api did not take the result of refunds: claims are closed today (pre-receive hook declined). A rule on its host " +
+        "refuses it: ask whoever owns checkout-api to let your pushes to refs/aidlc/claims/ through, then ask me to send it again.",
     );
     expect(String(pushed.json?.notice)).not.toContain("Do you want me to send it again?");
     expect(readFileSync(join(record, "aidlc-state.md"), "utf-8")).toContain("- **Unit Push**: unsent");
@@ -712,28 +712,29 @@ describe("the push", () => {
     // Its take is recorded there, so a chat that made no push is asked, as before.
     const again = next(alice, { ...ENV, AIDLC_SESSION_OVERRIDE: "alice-other" });
     expect(again.ask_type, JSON.stringify(again)).toBe("unit-push");
-    expect(again.question).toBe("refunds is pushed, but the lead's project did not take its result just now. Do you want me to send it again?");
+    expect(again.question).toBe("refunds is pushed, but checkout-api did not take its result just now. Do you want me to send it again?");
     writeFileSync(hook, "#!/bin/sh\nexit 0\n");
     expect(run(UNIT, ["push"], alice, chat).status).toBe(0);
     expect(readFileSync(join(record, "aidlc-state.md"), "utf-8")).toContain("- **Unit Push**: pushed");
   });
 
   test("a result the lead's project could not be reached for, while the code went: offered again at the next step, as ever", () => {
-    const { hosts, home, alice, record } = refundsTakenInClone();
+    const { hosts, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     finishBuild(record);
-    // The lead's project goes away while the code is pushed, and comes back after.
-    const away = `${home.remote}.away`;
-    const hook = join(hosts["checkout-api"], "hooks", "pre-receive");
-    writeFileSync(hook, `#!/bin/sh\ncat >/dev/null\n[ -d '${home.remote}' ] && mv '${home.remote}' '${away}'\nexit 0\n`);
+    // refunds's record's repository, checkout-api, goes away while billing's code is pushed, and comes back after.
+    const api = hosts["checkout-api"];
+    const away = `${api}.away`;
+    const hook = join(hosts.billing, "hooks", "pre-receive");
+    writeFileSync(hook, `#!/bin/sh\ncat >/dev/null\n[ -d '${api}' ] && mv '${api}' '${away}'\nexit 0\n`);
     chmodSync(hook, 0o755);
     const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "alice-offline" };
     const pushed = run(UNIT, ["push"], alice, chat);
     expect(pushed.status, pushed.out).toBe(0);
     expect(existsSync(away), pushed.out).toBe(true);
-    renameSync(away, home.remote);
+    renameSync(away, api);
     writeFileSync(hook, "#!/bin/sh\nexit 0\n");
-    expect(String(pushed.json?.notice)).toContain("The lead's project did not take refunds's result:");
+    expect(String(pushed.json?.notice)).toContain("checkout-api did not take refunds's result:");
     expect(String(pushed.json?.notice)).toContain("Do you want me to send it again?");
     const again = next(alice, chat);
     expect(again.ask_type, JSON.stringify(again)).toBe("unit-push");
@@ -741,25 +742,20 @@ describe("the push", () => {
     expect(readFileSync(join(record, "aidlc-state.md"), "utf-8")).toContain("- **Unit Push**: pushed");
   });
 
-  test("a push when the lead's project holds no claim for the Unit: its code goes, and its result is offered again", () => {
+  // The record a take wrote was taken away by hand: the push records the take
+  // again before its result, as for a take its repository did not take then.
+  test("a push when the Unit's record is not there now: its code goes, and the take and its result are written there again", () => {
     const { hosts, home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     finishBuild(record);
-    git(home.remote, ["update-ref", "-d", `refs/aidlc/claims/${fixtureIntentId8(home.dir)}/refunds`]);
+    git(hosts["checkout-api"], ["update-ref", "-d", `refs/aidlc/claims/${fixtureIntentId8(home.dir)}/refunds`]);
     const pushed = run(UNIT, ["push"], alice);
     expect(pushed.status, pushed.out).toBe(0);
-    expect(String(pushed.json?.notice)).toContain(
-      "The lead's project did not take refunds's result: its claim is not there now. Do you want me to send it again?",
-    );
     expect(git(hosts.billing, ["rev-parse", "--verify", "refunds"])).toMatch(/^[0-9a-f]{40}/);
+    expect(recordAt(home, "refunds")?.json).toMatchObject({ status: "claimed", taken_by: "alice" });
+    expect(recordAt(home, "refunds")?.json.result).toBeDefined();
     expect(existsSync(join(alice, "aidlc", "handoff")), "no result file is written").toBe(false);
-    expect(readFileSync(join(record, "aidlc-state.md"), "utf-8")).toContain("- **Unit Push**: unsent");
-    const again = next(alice);
-    expect(again.ask_type, JSON.stringify(again)).toBe("unit-push");
-    expect(again.question).toBe("refunds is pushed, but the lead's project did not take its result just now. Do you want me to send it again?");
-    const later = run(UNIT, ["push", "--later"], alice);
-    expect(later.status, later.out).toBe(0);
-    expect(next(alice).ask_type ?? null).not.toBe("unit-push");
+    expect(readFileSync(join(record, "aidlc-state.md"), "utf-8")).toContain("- **Unit Push**: pushed");
   });
 
   test("a push after a turn-down keeps the lead's word that a repo merged only where that repo's head did not change", () => {
@@ -1572,7 +1568,7 @@ describe("the person's own commit message", () => {
   });
 
   test("the push question names the message file for the agent, and the send-again question does not", () => {
-    const { home, alice, record } = refundsTakenInClone();
+    const { hosts, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     finishBuild(record);
     const ask = next(alice);
@@ -1582,12 +1578,12 @@ describe("the person's own commit message", () => {
       "when they give their own, write it there with your file tool, never a shell, exactly as they gave it, in place of the one shown, " +
       "then run the command of the push choice they pick.");
     // The code went and the lead's project did not take the result: a message has nothing to go on.
-    const claims = join(home.remote, "hooks", "pre-receive");
+    const claims = join(hosts["checkout-api"], "hooks", "pre-receive");
     writeFileSync(claims, "#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/aidlc/claims/*) echo 'claims are closed today' >&2; exit 1;; esac; done\n");
     chmodSync(claims, 0o755);
     expect(run(UNIT, ["push", "--commit-message-file", String(ask.commit_message_file)], alice).status).toBe(0);
     const again = next(alice);
-    expect(again.question, JSON.stringify(again)).toBe("refunds is pushed, but the lead's project did not take its result just now. Do you want me to send it again?");
+    expect(again.question, JSON.stringify(again)).toBe("refunds is pushed, but checkout-api did not take its result just now. Do you want me to send it again?");
     expect(again.commit_message_file).toBeUndefined();
     expect(String(again.question_note)).not.toContain("commit_message_file");
   });
@@ -1621,11 +1617,11 @@ describe("at the home", () => {
       const directive = next(home.dir, { ...ENV, GIT_TRACE2_EVENT: trace });
       expect(directive.unit, JSON.stringify(directive)).toBe("orders");
     }
-    // One look at the claims in the chat (an ls-remote, and a fetch only when the home has something new).
+    // One look at the records in the chat: one fetch of the work's records.
     const claimLooks = readFileSync(trace, "utf-8").split("\n").filter((line) => {
       if (!line.includes('"event":"start"')) return false;
       const argv = (JSON.parse(line) as { argv: string[] }).argv;
-      return argv.includes("ls-remote") && argv.some((arg) => arg.includes("refs/aidlc/claims/"));
+      return argv.includes("fetch") && argv.some((arg) => arg.includes("refs/aidlc/claims/"));
     });
     expect(claimLooks).toHaveLength(1);
   });
@@ -2042,7 +2038,7 @@ describe("at the home", () => {
       expect(step.out).not.toContain("Run the same command again");
       expect(step.out).not.toContain("could not be reached");
     }
-    expect(after.map((step) => step.out).join("\n")).toContain("News from the lead's project could not be taken in here");
+    expect(after.map((step) => step.out).join("\n")).toContain("could not be taken in here: this workspace's .git cannot be written in this session");
     expect((next(alice, chat).change_notices ?? []) as string[]).toContain(
       'refunds was turned down in billing by the lead: "billing needs the ledger entry too".',
     );

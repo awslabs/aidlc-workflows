@@ -229,7 +229,8 @@ describe("a change to a shared input", () => {
     const sent = run(UNIT, ["propose", "--input", "requirements.md", "--person-words", "refunds need partial amounts"], taken.alice);
     expect(sent.status, sent.out).toBe(0);
     expect(sent.json?.notice).toBe(
-      "Sent to the lead: your change to the requirements. I'm carrying on with your version here until the lead decides.",
+      "Your change to the requirements is on refunds's record in checkout-api. AI-DLC sends no notice of it. " +
+        "I'm carrying on with your version here until the lead decides.",
     );
     git(taken.home.dir, ["fetch", "-q", "origin"]);
     return taken;
@@ -690,11 +691,11 @@ describe("a change to a shared input", () => {
     const ask = next(alice);
     expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-propose");
     expect(ask.question).toBe(
-      "You changed the requirements here. Do you want me to send your change to the lead to approve? " +
-        "I'd send it, so every team builds from the same version.",
+      "You changed the requirements here. Do you want me to put your change on refunds's record in checkout-api, for the lead " +
+        "to decide? I'd put it there: if the lead approves it, the plan has it for every Unit that uses it.",
     );
     const choices = ask.choices as Array<{ label: string; command?: string }>;
-    expect(choices.map((choice) => choice.label)).toEqual(["Send it to the lead", "Keep it here only"]);
+    expect(choices.map((choice) => choice.label)).toEqual(["Put it on the record", "Keep it here only"]);
     expect(String(choices[0].command)).toEndWith(`aidlc-unit.ts propose --input ${REQUIREMENTS} --request-file aidlc/.aidlc-engine/request-text/unit-propose.txt`);
     expect(run(UNIT, ["propose", "--input", REQUIREMENTS, "--person-words", "send it"], alice).status).toBe(0);
     expect(next(alice).ask_type).not.toBe("unit-propose");

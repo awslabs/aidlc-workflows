@@ -15,7 +15,7 @@
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { auditBlockField, readAuditShardEvents, REQUEST_TEXT_DIR } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { fixtureIntentId8, seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
@@ -23,6 +23,7 @@ import {
   claimPayload,
   cleanupTeamBuild,
   cloneOf,
+  codeHost,
   DEPENDENCIES,
   ENV,
   git,
@@ -192,7 +193,8 @@ describe("after choosing teams the plan goes to them the way main's share questi
     expect(String(next(two.dir).question)).toEndWith("I'd also record that refunds and checkout-ui are built here.");
     const sharedTwo = run(UNIT, ["share", "--plan"], two.dir);
     expect(sharedTwo.status, sharedTwo.out).toBe(0);
-    expect(String(sharedTwo.json?.notice)).toContain(`Recorded in ${basename(two.remote).replace(/\.git$/, "")} that refunds and checkout-ui are built here. ${TEAMMATES}`);
+    // Each record goes to its Unit's own repository, here the plan's.
+    expect(String(sharedTwo.json?.notice)).toContain(`Recorded in app that refunds and checkout-ui are built here. ${TEAMMATES}`);
     // A share with no Unit built here says nothing of a record.
     const sharedPlain = run(UNIT, ["share", "--plan"], plain.dir);
     expect(sharedPlain.status, sharedPlain.out).toBe(0);
@@ -1228,7 +1230,9 @@ describe("after the share nothing is built at the lead's project until the lead 
 
 describe("the lead's word builds a Unit here: assign --here", () => {
   test("a take for the lead's project: its claim, one record with the lead's words, its line, and the next step builds it", () => {
-    const home = makeHome();
+    // The work's one repository holds the plan, and the record of a Unit the plan names no other repository for.
+    const hosts = { app: codeHost("app") };
+    const home = makeHome({ repos: hosts });
     git(home.dir, ["config", "user.name", "lee"]);
     chooseTeams(home.dir);
     share(home.dir);
@@ -1238,9 +1242,9 @@ describe("the lead's word builds a Unit here: assign --here", () => {
     expect(here.json?.notice).toBe("refunds is built here now, no longer open for the teams.");
     expect(tellsWhatToType(here.json?.notice)).toBe(false);
     const id8 = fixtureIntentId8(home.dir);
-    expect(claimPayload(home.remote, id8, "refunds")).toMatchObject({ status: "claimed", owner: "default", taken_by: "lee" });
-    expect(claimPayload(home.remote, id8, "checkout-ui")).toBeNull();
-    expect(claimPayload(home.remote, id8, "reporting")).toBeNull();
+    expect(claimPayload(hosts.app, id8, "refunds")).toMatchObject({ status: "claimed", owner: "default", taken_by: "lee" });
+    expect(claimPayload(hosts.app, id8, "checkout-ui")).toBeNull();
+    expect(claimPayload(hosts.app, id8, "reporting")).toBeNull();
     // The lead's checkout stays the home's: it is never scoped to the Unit.
     expect(existsSync(join(home.dir, "aidlc", ".aidlc-engine", "units", "claimed.json"))).toBe(false);
     const rows = readAuditShardEvents(home.dir).filter((row) => row.event === "UNITS_ASSIGNED");
@@ -1284,9 +1288,9 @@ describe("the lead's word builds a Unit here: assign --here", () => {
     expect(shared.status, shared.out).toBe(0);
     const app = git(join(home.dir, "app"), ["remote", "get-url", "origin"]);
     expect(shared.json?.notice).toBe("The plan is shared in app. AI-DLC sends no notice of it: the teams hear it from you. " +
-      `A team whose workspace has no app needs this address: ${app} Recorded in ${basename(home.remote)} that refunds is built here. ${TEAMMATES}`);
-    expect(claimPayload(home.remote, id8, "refunds")).toMatchObject({ status: "claimed", owner: "default", taken_by: "lee" });
-    expect(claimPayload(home.remote, id8, "checkout-ui")).toBeNull();
+      `A team whose workspace has no app needs this address: ${app} Recorded in app that refunds is built here. ${TEAMMATES}`);
+    expect(claimPayload(app, id8, "refunds")).toMatchObject({ status: "claimed", owner: "default", taken_by: "lee" });
+    expect(claimPayload(app, id8, "checkout-ui")).toBeNull();
     // The lead's record reaches main their own way, as a team's clone reads it today.
     pushAll(home.dir);
     // A teammate's clone: it is not offered, and a take by name says who builds it.

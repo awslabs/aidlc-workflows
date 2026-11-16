@@ -172,8 +172,10 @@ import {
   type SourceClaimModel,
   workspaceSourceListing,
   type WorkspaceSourceListing,
+  isValidRepoName,
+  validGitRefName,
 } from "./aidlc-lib.js";
-import { classifyStateVersion, newerPlanStep, newerStateRelease, newerStateStep, recordHomeLocation, TEAM_STATE_VERSION } from "./aidlc-state-upgrade.ts";
+import { classifyStateVersion, newerPlanStep, newerRecordStep, newerStateRelease, newerStateStep, recordHomeLocation, TEAM_STATE_VERSION } from "./aidlc-state-upgrade.ts";
 import { ownRemoteAmong } from "./aidlc-unit-holders.ts";
 import {
   type Amendment,
@@ -222,7 +224,7 @@ import {
   unitOutputsHomeReads,
   type UnitResult,
   workspaceHomeLocation,
-  leadBuildsWithoutClaim,
+  unitsStartedAtLeadsProject,
   unitsAskedHere,
   unitWriteTargets,
   outputForLead,
@@ -296,7 +298,6 @@ import {
   claimPrefixOf,
   claimRecordRef,
   claimsOnRemote,
-  gitRemotesOnce,
   isClaimTreeFile,
   leadsPlanNotHere,
   PLAN_BRANCH,
@@ -305,6 +306,7 @@ import {
   saidPlans,
   writeSaidPlans,
   readClaimAt,
+  RECORD_FILE,
   unitResultRootOf,
 } from "./aidlc-unit-holders.ts";
 
@@ -435,6 +437,8 @@ export interface UnitClaimPayload {
   signoff?: { words: string; at: string };
   // The lead's word that a repo merged the Unit where the check cannot see it.
   said_merged?: Array<{ repo: string; words: string; at: string }>;
+  // The lead opened this take again, on the plan (in a view only, never a record's).
+  open_again?: { at: string };
 }
 
 export interface UnitClaimView {
@@ -786,26 +790,18 @@ function stateHere(projectDir: string): string | null {
   }
 }
 
-function fetchClaimRefs(projectDir: string, remote: string | null, intentId8: string, onBranches: boolean): void {
+// Main's flow's claim branches, fetched through the workspace's remote.
+function fetchClaimRefs(projectDir: string, remote: string | null): void {
   if (!remote) return;
   const fetched = git(projectDir, [
     "fetch",
     "--no-filter",
     remote,
-    onBranches
-      ? `+${claimsOnRemote(true)}*:${claimCopyOf(remote, claimsOnRemote(true))}*`
-      : `+${claimsOnRemote(false, intentId8)}*:${claimCopies(remote, false, false, intentId8)}*`,
+    `+${claimsOnRemote(true)}*:${claimCopyOf(remote, claimsOnRemote(true))}*`,
   ]);
   if (!fetched.ok) {
     fail(`Unit claim registry fetch failed: ${fetched.stderr.trim()}`);
   }
-}
-
-// The one line for a take or write that neither the lead's project nor the
-// team's own remote (`other`, a remote's name or its push address) answered.
-function neitherAnswered(other: string, stderr: string): string {
-  const why = stderr.split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? "it did not answer";
-  return `Neither the lead's project nor ${other} answered just now (${why}), so nothing was taken or sent; it goes through when one answers.`;
 }
 
 function refTip(
@@ -1175,11 +1171,6 @@ function updateClaimRef(
     // Where git sent it: its own "To <address>" line.
     const to = /^To (\S.*)$/m.exec(pushed.stderr)?.[1]?.trim();
     const at = to === undefined ? {} : { to };
-    // git moves its own copy of a branch at the push; a record's copy, AI-DLC's
-    // own, is moved here the same way, so a read before the next look sees it.
-    if (pushed.ok && ref.startsWith(claimsOnRemote(false)) && !isGitAddress(remote)) {
-      localGit(projectDir, ["update-ref", claimCopyOf(remote, ref), commitOid]);
-    }
     if (pushed.ok) return { ok: true, ...at };
     if (CLAIM_RACE_LOST.test(pushed.stderr)) return { ok: false, ...at };
     return { ok: false, refused: pushRefusal(pushed.stderr), ...(refusedByHostRule(pushed.stderr) ? { byRule: true as const } : {}), ...at };
@@ -1193,117 +1184,291 @@ function updateClaimRef(
   return { ok: updated.ok };
 }
 
-// A claim written for the lead's project through home.target, read back at the
-// recorded address when the target is a remote name: git may send that
-// remote's pushes elsewhere (a push URL, pushInsteadOf, or a fork that copied
-// the lead's claim branches standing in as the remote). A write the address
-// answers without is `elsewhere`, the address git's own To line names, user
-// and token masked; this clone's copy of the lead's claim, which git moved on
-// the push, is put back as the lead's project has it. A race lost while the
-// lead's claim did not move was lost elsewhere too. An address that does not
-// answer leaves the write as git made it.
-function writeHomeClaim(
-  projectDir: string,
-  home: { target: string | null; location: string },
-  ref: string,
-  commitOid: string,
-  expectedOid: string | null,
-  options: { outbox?: boolean } = {},
-): { ok: boolean; refused?: string; byRule?: true; elsewhere?: string; notThere?: { address: string; why: string } } {
-  const sent = writeHomeClaimOnce(projectDir, home, ref, commitOid, expectedOid);
-  if (sent.ok || sent.landed || options.outbox === false || (sent.refused === undefined && sent.elsewhere === undefined)) {
-    const { landed: _landed, ...said } = sent;
-    return said;
-  }
-  // The lead's project took no push from here: the same commit goes to the
-  // team's own remote, where the lead's look takes it in; when that does not
-  // take it either, git's reason there.
-  const outbox = claimOutbox(projectDir, home);
-  const there = outbox === null ? null : sendToOutbox(projectDir, outbox, ref, commitOid);
-  if (outbox !== null && there?.ok === true) return { ok: false, elsewhere: maskUserinfo(outbox) };
-  const notThere = outbox !== null && there !== null && !there.ok && there.why !== null ? { address: maskUserinfo(outbox), why: there.why } : undefined;
-  return {
-    ok: false, ...(sent.refused !== undefined ? { refused: sent.refused } : {}), ...(sent.byRule ? { byRule: true as const } : {}),
-    ...(notThere !== undefined ? { notThere } : {}),
-  };
+// --- A Unit's record, where the Unit's code goes ---------------------------
+//
+// The build-out keeps each Unit's record (claimRecordRef) in the repository
+// the shared plan names for that Unit, a ref of AI-DLC's own whose commits hold
+// only unit.json, the Unit's outputs under result/ and the team's proposed
+// texts under proposals/, with no history but the record's own. Only its
+// builder writes it, from the workspace's own repository by the record
+// repository's address, so nothing of AI-DLC's goes into a code clone and no
+// code clone's hook runs for it. Main's own team flow keeps its claim branches
+// and createClaimCommit.
+
+const RECORD_RESULT = "result/";
+const RECORD_PROPOSALS = "proposals/";
+
+// The keys a record's unit.json holds: the builder's side of a Unit. A view
+// carries the lead's word too (from the plan), which never goes into a record.
+const RECORD_KEYS = [
+  "version", "status", "unit", "intent_uuid", "owner", "taken_by", "generation", "nonce",
+  "base_oid", "integration_ref", "predecessor_oid", "early_on", "result", "proposals",
+] as const;
+
+const OID = /^[0-9a-f]{40}$/;
+
+// A record-relative path a record may name: no climb, no absolute path, no
+// backslash, so a record pushed by anyone with push access names nothing
+// outside the work's record.
+function recordRelativePath(path: unknown): path is string {
+  return typeof path === "string" && path !== "" && !path.startsWith("/") && !path.includes("\\") &&
+    !path.split("/").some((part) => part === "" || part === "." || part === "..");
 }
 
-function writeHomeClaimOnce(
-  projectDir: string,
-  home: { target: string | null; location: string },
-  ref: string,
-  commitOid: string,
-  expectedOid: string | null,
-): { ok: boolean; refused?: string; byRule?: true; elsewhere?: string; landed?: boolean } {
-  const target = home.target;
-  const byName = target !== null && !isGitAddress(target) && isGitAddress(home.location);
-  const tracking = byName ? claimCopyOf(target, ref) : null;
-  const before = tracking === null ? null : localGit(projectDir, ["rev-parse", "--verify", "--quiet", tracking]).stdout.trim() || null;
-  // A remote that fetches from the lead's project is read back by its name, as its reads are.
-  const fetchesHome = byName && sameGitAddress(git(projectDir, ["remote", "get-url", target]).stdout.trim(), home.location);
-  // When it pushes to the team's own repo (a push URL), the push lands there,
-  // so it leases on that repo's own tip, when this commit builds on it.
-  const pushesTo = fetchesHome ? git(projectDir, ["remote", "get-url", "--push", target]).stdout.trim() : "";
-  let lease = expectedOid;
-  if (pushesTo !== "" && !sameGitAddress(pushesTo, home.location)) {
-    const there = quietly(() => git(projectDir, ["ls-remote", pushesTo, ref]));
-    const tip = there.ok ? there.stdout.trim().split(/\s+/)[0] ?? "" : null;
-    if (tip === "") lease = null;
-    else if (tip !== null && claimAhead(projectDir, tip, commitOid) === "ahead") lease = tip;
-  }
-  const { to, ...sent } = updateClaimRef(projectDir, target, ref, commitOid, lease);
-  if (!byName || sent.refused !== undefined) return sent;
-  const atHome = quietly(() => git(projectDir, ["ls-remote", fetchesHome ? target : home.location, ref]));
-  // A remote that fetches from the lead's project and pushes to the team's own:
-  // a push that went through while the lead's project does not answer is there.
-  const outbox = fetchesHome && !atHome.ok && sent.ok ? claimOutbox(projectDir, home) : null;
-  if (!atHome.ok && outbox === null) return sent;
-  const tip = atHome.ok ? atHome.stdout.trim().split(/\s+/)[0] || null : null;
-  if (atHome.ok && (sent.ok ? tip === commitOid : tip !== expectedOid)) return sent;
-  if (tracking !== null && fetchesHome) {
-    localGit(projectDir, before === null ? ["update-ref", "-d", tracking] : ["update-ref", tracking, before]);
-  }
-  const address = to ?? git(projectDir, ["remote", "get-url", "--push", target]).stdout.trim();
-  return { ok: false, elsewhere: maskUserinfo(address), ...(sent.ok ? { landed: true } : {}) };
+// A repository a record names, as the tools may act on it: "." or a repo
+// name (never a path out of the project), a plain branch name, and commits by
+// their full id only.
+function recordRepoAt(repo: unknown, heads: unknown): boolean {
+  if (repo === null || typeof repo !== "object") return false;
+  const { repo: name, branch } = repo as { repo?: unknown; branch?: unknown };
+  return typeof name === "string" && (name === "." || isValidRepoName(name)) &&
+    typeof branch === "string" && !branch.startsWith("-") && validGitRefName(`refs/heads/${branch}`) &&
+    Array.isArray(heads) && heads.every((head) => OID.test(String(head)));
 }
 
-// Where this clone pushes the lead's project's branch, by its push address as
-// git expands it (a push URL, pushInsteadOf), when that is not the lead's
-// project: the team's fork or own repo, where a claim the lead's project
-// refused goes. Null when this clone pushes nowhere else.
-function claimOutbox(projectDir: string, home: { location: string }): string | null {
+// A commit's payload in either flow, for a walk back through its own history:
+// main's claim file, else a build-out record's unit.json.
+function payloadAt(projectDir: string, oid: string): UnitClaimPayload | null {
+  return readPayload(projectDir, oid) ?? recordPayloadAt(projectDir, oid);
+}
+
+// The payload a record commit's unit.json holds, read with no check of the
+// work it is for (a walk back through the record's own history reads it so);
+// null when the commit holds no record this release reads.
+function recordPayloadAt(projectDir: string, oid: string): UnitClaimPayload | null {
+  const shown = localGit(projectDir, ["show", `${oid}:${RECORD_FILE}`, "--"]);
+  if (!shown.ok) return null;
+  let read: Record<string, unknown>;
   try {
-    if (!isGitAddress(home.location)) return null;
-    // Only to pick the remote: a layer's Way of Working words the agent has not
-    // read yet leave the remote's own default branch, never no outbox.
-    const layer = integrationBranchLayer(projectDir);
-    const branch = layer !== null && "value" in layer ? integrationBranchName(layer.value) : integrationBranch(projectDir, repositoryRemote(projectDir));
-    const remote = pushRemoteOf(projectDir, branch);
-    if (typeof remote !== "string") return null;
-    const address = git(projectDir, ["remote", "get-url", "--push", remote]).stdout.trim();
-    return isGitAddress(address) && !sameGitAddress(address, home.location) ? address : null;
+    read = JSON.parse(shown.stdout) as Record<string, unknown>;
   } catch {
     return null;
   }
+  if (read === null || typeof read !== "object" || read.version !== 1 ||
+    (read.status !== "claimed" && read.status !== "released") || typeof read.unit !== "string" ||
+    typeof read.intent_uuid !== "string" || typeof read.owner !== "string" || typeof read.nonce !== "string" ||
+    !Number.isInteger(read.generation) || (read.generation as number) < 1 ||
+    (read.predecessor_oid !== null && !OID.test(String(read.predecessor_oid)))) {
+    return null;
+  }
+  const result = read.result as UnitResult | undefined;
+  const proposals = Array.isArray(read.proposals) ? read.proposals as Proposal[] : undefined;
+  const earlyOn = Array.isArray(read.early_on) ? (read.early_on as unknown[]).flatMap((dep) => {
+    const { unit, repos } = (dep ?? {}) as { unit?: unknown; repos?: unknown };
+    if (typeof unit !== "string" || !Array.isArray(repos)) return [];
+    return [{ unit, repos: repos.filter((repo) => recordRepoAt(repo, (repo as { head?: unknown } | null)?.head === "" ? [] : [(repo as { head?: unknown }).head])) }];
+  }) as UnitClaimPayload["early_on"] : undefined;
+  return {
+    version: 1,
+    status: read.status,
+    owner: read.owner,
+    space: "",
+    intent_uuid: read.intent_uuid,
+    intent_id8: idSuffix(read.intent_uuid),
+    unit: read.unit,
+    generation: read.generation as number,
+    nonce: read.nonce,
+    base_oid: typeof read.base_oid === "string" ? read.base_oid : "",
+    integration_ref: typeof read.integration_ref === "string" ? read.integration_ref : "",
+    claim_ref: claimRecordRef(idSuffix(read.intent_uuid), read.unit),
+    predecessor_oid: (read.predecessor_oid as string | null) ?? null,
+    gate_rhythm: "per-stage",
+    ...(typeof read.taken_by === "string" ? { taken_by: read.taken_by } : {}),
+    ...(earlyOn !== undefined ? { early_on: earlyOn } : {}),
+    // A pushed repository's address is read only where it is a git address git
+    // would not take as an option, with no sign-in in it.
+    ...(result !== undefined && result !== null && typeof result === "object" && Array.isArray(result.repos) ? {
+      result: {
+        ...result,
+        repos: (result.repos as unknown[]).filter((repo) => recordRepoAt(repo, (repo as { heads?: unknown } | null)?.heads) &&
+          ((repo as RepoResult).base === "" || OID.test(String((repo as RepoResult).base))))
+          .map((repo) => {
+            const { address, ...rest } = repo as RepoResult & { address?: unknown };
+            return typeof address === "string" && isGitAddress(address) && !address.startsWith("-") ? { ...rest, address: withoutCredentials(address) } : rest;
+          }),
+        outputs: Array.isArray(result.outputs) ? result.outputs.filter(recordRelativePath) : [],
+      },
+    } : {}),
+    // The lead's answer is never a record's; a proposal names a path inside the work's record only.
+    ...(proposals !== undefined ? {
+      proposals: proposals.filter((entry) => recordRelativePath(entry?.input))
+        .map(({ input, by, words, at }) => ({ input, by, words, at })),
+    } : {}),
+  } as UnitClaimPayload;
 }
 
-// A claim commit sent to the team's own remote with the team's login, its
-// lease on that remote's own tip of the claim branch, and only on top of it:
-// what is there and not taken in yet (a proposal, a teammate's take) is never
-// written over. Not ok when it does not answer or does not take it, with
-// git's reason in one line (`why`; none when its claim there parted from this
-// one).
-function sendToOutbox(projectDir: string, outbox: string, ref: string, commitOid: string): { ok: true } | { ok: false; why: string | null } {
-  return quietly(() => {
-    const listed = git(projectDir, ["ls-remote", outbox, ref]);
-    if (!listed.ok) return { ok: false, why: listed.stderr.split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? "it did not answer" };
-    const tip = listed.stdout.trim().split(/\s+/)[0] ?? "";
-    const stands = tip === "" ? "ahead" : claimAhead(projectDir, tip, commitOid);
-    if (stands === "same") return { ok: true };
-    if (stands === null) return { ok: false, why: null };
-    const pushed = git(projectDir, ["push", outbox, `--force-with-lease=${ref}:${tip}`, `${commitOid}:${ref}`]);
-    return pushed.ok ? { ok: true } : { ok: false, why: pushRefusal(pushed.stderr) };
-  });
+// Where a build-out record becomes a view: its unit.json at `oid`,
+// read only where it is for this Unit of this work (the ref's own name and the
+// work's uuid), so a record in one repository never speaks for a Unit whose
+// record is in another. Null when it is not a record this release reads.
+function recordView(
+  projectDir: string,
+  ref: string,
+  oid: string,
+  work: { uuid: string; space: string; rhythm?: UnitClaimPayload["gate_rhythm"] },
+): UnitClaimView | null {
+  const named = /^refs\/aidlc\/claims\/([^/]+)\/([^/]+)$/.exec(ref);
+  const payload = named === null ? null : recordPayloadAt(projectDir, oid);
+  if (payload === null || named === null || payload.unit !== named[2] || payload.intent_uuid !== work.uuid || idSuffix(work.uuid) !== named[1]) {
+    return null;
+  }
+  const filled: UnitClaimPayload = { ...payload, space: work.space, claim_ref: ref, gate_rhythm: work.rhythm ?? "per-stage" };
+  // A proposal is for one of the plan's approved inputs exactly, where the plan is here to say.
+  const inputs = (filled.proposals ?? []).length === 0 ? null : planOfWork(projectDir, named[1])?.inputs.map((input) => input.path) ?? null;
+  if (inputs !== null) filled.proposals = filled.proposals!.filter((entry) => inputs.includes(entry.input));
+  return { unit: filled.unit, status: filled.status, owner: filled.owner, generation: filled.generation, nonce: filled.nonce, oid, ref, payload: filled };
+}
+
+// The text of one file at a record commit (`result/<rel>`, `proposals/<input>`).
+export function recordText(projectDir: string, oid: string, path: string): string | null {
+  const shown = localGit(projectDir, ["show", `${oid}:${path}`, "--"]);
+  return shown.ok ? shown.stdout : null;
+}
+
+// A record commit: unit.json with the builder's keys only, whatever the
+// payload it is given carries, and the files under result/ and proposals/,
+// built in one scratch index so the person's worktree and index are untouched;
+// its one parent is the record's tip as read (none for a record not there),
+// which is its predecessor. Every write but a take keeps the parent's files it
+// does not replace; a take starts with unit.json alone. The person's own
+// commit: their name, email and signing apply.
+function createRecordCommit(
+  projectDir: string,
+  parent: string | null,
+  payload: UnitClaimPayload,
+  what: string,
+  files: { result?: Record<string, string>; proposals?: Record<string, string> } = {},
+  options: { take?: boolean } = {},
+): string {
+  const kept: Record<string, unknown> = {};
+  const given = { ...payload, predecessor_oid: parent } as unknown as Record<string, unknown>;
+  for (const key of RECORD_KEYS) if (given[key] !== undefined) kept[key] = given[key];
+  if (Array.isArray(kept.proposals)) {
+    kept.proposals = (kept.proposals as Proposal[]).map(({ input, by, words, at }) => ({ input, by, words, at }));
+  }
+  const entries: Array<[string, string]> = [
+    [RECORD_FILE, `${JSON.stringify(kept, null, 2)}\n`],
+    ...Object.entries(files.result ?? {}).map(([rel, text]): [string, string] => [`${RECORD_RESULT}${rel}`, text]),
+    ...Object.entries(files.proposals ?? {}).map(([rel, text]): [string, string] => [`${RECORD_PROPOSALS}${rel}`, text]),
+  ];
+  const scratch = mkdtempSync(join(tmpdir(), "aidlc-unit-record-"));
+  let tree: string;
+  try {
+    const env = { GIT_INDEX_FILE: join(scratch, "index") };
+    if (parent !== null && options.take !== true) {
+      const read = git(projectDir, ["read-tree", parent], env);
+      if (!read.ok) fail(`git read-tree failed: ${read.stderr.trim()}`);
+    }
+    const lines = entries.map(([path, text]) => {
+      const blob = git(projectDir, ["hash-object", "-w", "--stdin"], undefined, text);
+      if (!blob.ok) fail(`git hash-object failed: ${blob.stderr.trim()}`);
+      return `100644 ${blob.stdout.trim()}\t${path}\n`;
+    });
+    const indexed = git(projectDir, ["update-index", "--add", "--index-info"], env, lines.join(""));
+    if (!indexed.ok) fail(`git update-index failed: ${indexed.stderr.trim()}`);
+    const written = git(projectDir, ["write-tree"], env);
+    if (!written.ok) fail(`git write-tree failed: ${written.stderr.trim()}`);
+    tree = written.stdout.trim();
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+  return commitAsPerson(projectDir, tree, parent === null ? [] : [parent], `aidlc unit ${payload.unit}: ${what}`);
+}
+
+// Where a Unit's record is: the repository the plan names for it, by that
+// repository's address.
+export interface RecordPlace {
+  repo: string;
+  address: string;
+}
+
+// The push of a record commit by its repository's address, from the workspace's
+// own repository, with the lease on the tip it was built on (none: the record
+// is not there yet, so the first take wins). git's own refusal classes tell a
+// take or write that lost (CLAIM_RACE_LOST) from a refusal, and a rule of the
+// host from any other (refusedByHostRule). On ok this workspace's copy of the
+// record follows, so a read before the next look sees it.
+function writeUnitRecord(
+  projectDir: string,
+  place: RecordPlace,
+  ref: string,
+  commit: string,
+  expected: string | null,
+): { ok: true } | { ok: false; lost: true } | { ok: false; refused: string; byRule?: true } {
+  const via = gitTargetFor(projectDir, place.address, "push");
+  const pushed = git(projectDir, ["push", via.target, `--force-with-lease=${ref}:${expected ?? ""}`, `${commit}:${ref}`], via.env);
+  if (pushed.ok) {
+    localGit(projectDir, ["update-ref", copyOf(place.address, ref), commit]);
+    return { ok: true };
+  }
+  if (CLAIM_RACE_LOST.test(pushed.stderr)) return { ok: false, lost: true };
+  return { ok: false, refused: maskUserinfo(pushRefusal(pushed.stderr)), ...(refusedByHostRule(pushed.stderr) ? { byRule: true as const } : {}) };
+}
+
+// A record repository that could not be read: its name and git's own words
+// (null at the look's own time limit).
+export class RecordUnread extends Error {
+  constructor(readonly repo: string, readonly said: string | null) {
+    super(repo);
+  }
+}
+
+// A Unit's record as its repository has it now: one look by its address into
+// this workspace's copy, then the copy read through recordView. Null when the
+// repository has no record of the Unit, or one this release does not read.
+function readUnitRecord(
+  projectDir: string,
+  place: RecordPlace,
+  work: { uuid: string; space: string; rhythm?: UnitClaimPayload["gate_rhythm"] },
+  unit: string,
+  options: { typed?: boolean } = {},
+): UnitClaimView | null {
+  const ref = claimRecordRef(idSuffix(work.uuid), unit);
+  const looked = lookAt(projectDir, place.address, [ref], options);
+  if (!looked.ok) {
+    if ("refused" in looked) throw new GitWriteRefused(looked.refused, place.repo);
+    throw new RecordUnread(place.repo, looked.firstLine);
+  }
+  const tip = looked.refs[ref]?.now ?? null;
+  return tip === null ? null : recordView(projectDir, ref, tip, work);
+}
+
+// A record read at a step the person typed: a repository that does not answer
+// stops the step with git's own words, before anything is written; at a take
+// (`taking`, the Unit taken), in the take's own words.
+function typedRecordRead(
+  projectDir: string, place: RecordPlace, work: { uuid: string; space: string }, unit: string, taking?: string,
+): UnitClaimView | null {
+  try {
+    return readUnitRecord(projectDir, place, work, unit, { typed: true });
+  } catch (error) {
+    if (!(error instanceof RecordUnread)) throw error;
+    const why = error.said ?? "it did not answer in time";
+    if (taking !== undefined) fail(`${taking} was not taken: ${error.repo} could not be read (${why}). Nothing was written; say when to try again.`);
+    fail(`Unit claim registry read failed: ${why}`);
+  }
+}
+
+// Whether this workspace's copy of a Unit's record is one a newer AI-DLC
+// wrote: its unit.json names a version above this release's, so recordView
+// reads nothing there and a take must not write over it.
+function recordNewerHere(projectDir: string, place: RecordPlace, id8: string, unit: string): boolean {
+  const tip = localGit(projectDir, ["rev-parse", "--verify", "--quiet", copyOf(place.address, claimRecordRef(id8, unit))]).stdout.trim();
+  const shown = tip === "" ? null : localGit(projectDir, ["show", `${tip}:${RECORD_FILE}`, "--"]);
+  if (shown === null || !shown.ok) return false;
+  try {
+    const version = (JSON.parse(shown.stdout) as { version?: unknown }).version;
+    return typeof version === "number" && version > 1;
+  } catch {
+    return false;
+  }
+}
+
+// A record as this workspace last read it (its copy), with no look.
+function recordCopied(projectDir: string, place: RecordPlace, work: { uuid: string; space: string }, unit: string): UnitClaimView | null {
+  const ref = claimRecordRef(idSuffix(work.uuid), unit);
+  const tip = localGit(projectDir, ["rev-parse", "--verify", "--quiet", copyOf(place.address, ref)]).stdout.trim();
+  return tip === "" ? null : recordView(projectDir, ref, tip, work);
 }
 
 // Where a claim commit stands against a claim tip: "ahead" when the tip is in
@@ -1331,44 +1496,6 @@ function claimAhead(projectDir: string, tip: string, oid: string): "ahead" | "sa
   if (tipTree === "" || trees.length === 0) return null;
   if (trees[0] === tipTree) return keep("same");
   return keep(trees.slice(1).includes(tipTree) ? "ahead" : null);
-}
-
-// The claim this build goes on from: its take as the team's own remote holds
-// it, when that is ahead of the lead's claim (or the lead's project has none),
-// so a proposal or result sent there before the lead's next look is built on;
-// else the lead's claim as read.
-function claimToGoOn(
-  projectDir: string,
-  home: { location: string },
-  build: UnitBuild,
-  ref: string,
-  lead: UnitClaimView | null,
-): { claim: UnitClaimView | null; outbox?: string } {
-  const there = outboxTake(projectDir, home, build, ref);
-  if (there === null || there.claim.oid === lead?.oid) return { claim: lead };
-  if (lead !== null && claimAhead(projectDir, lead.oid, there.claim.oid) === null) return { claim: lead };
-  return { claim: there.claim, outbox: there.outbox };
-}
-
-// This build's take as the team's own remote holds it, while the lead's
-// project has not recorded it: read there, and only when it is this take's.
-function outboxTake(projectDir: string, home: { location: string }, build: UnitBuild, ref: string): { outbox: string; claim: UnitClaimView } | null {
-  const there = outboxClaim(projectDir, home, ref);
-  const me = git(projectDir, ["config", "user.name"]).stdout.trim();
-  return there?.claim.status === "claimed" && there.claim.payload.taken_by === me && there.claim.generation === build.attempt ? there : null;
-}
-
-// The claim the team's own remote holds, read there; null when there is none,
-// it holds none, or it does not answer.
-function outboxClaim(projectDir: string, home: { location: string }, ref: string): { outbox: string; claim: UnitClaimView } | null {
-  const outbox = claimOutbox(projectDir, home);
-  if (outbox === null) return null;
-  try {
-    const claim = quietly(() => currentClaim(projectDir, outbox, ref));
-    return claim === null ? null : { outbox, claim };
-  } catch {
-    return null;
-  }
 }
 
 function activeIdentity(projectDir: string): {
@@ -1485,7 +1612,17 @@ function allClaims(
   units: string[],
 ): Map<string, UnitClaimView> {
   const state = stateHere(projectDir);
-  fetchClaimRefs(projectDir, remote, intentId8, claimsOnBranches(state));
+  // The build-out's records: each where the plan says it is, read now.
+  if (!claimsOnBranches(state)) {
+    for (const place of recordPlacesOfWork(projectDir, intentId8)) {
+      const looked = lookAt(projectDir, place.address, [claimsOnRemote(false, intentId8)], { typed: true });
+      if (!looked.ok) fail(`Unit claim registry fetch failed: ${"refused" in looked ? looked.refused : looked.said ?? "it did not answer in time"}`);
+    }
+    const identity = activeIdentity(projectDir);
+    const records = recordsCopied(projectDir, { space: identity.space, intentUuid: identity.intentUuid, intentId8 }, new Map());
+    return new Map([...records].filter(([unit]) => units.includes(unit)));
+  }
+  fetchClaimRefs(projectDir, remote);
   const claims = new Map<string, UnitClaimView>();
   for (const unit of units) {
     const ref = claimRefFor(state, intentId8, unit);
@@ -1597,12 +1734,36 @@ interface UnitClaimIdentity {
   intentId8: string;
 }
 
+// The build-out's records of a work as this workspace last read them: each
+// Unit's copy from the one repository the plan names for its record (the
+// workspace's own for the solo second person), through recordView. A copy
+// read from any other repository is never this Unit's record.
+function recordsCopied(
+  projectDir: string,
+  identity: UnitClaimIdentity,
+  claims: Map<string, UnitClaimView>,
+): Map<string, UnitClaimView> {
+  const plan = planOfWork(projectDir, identity.intentId8);
+  const own = workspaceHomeLocation(projectDir);
+  const placeKey = (unit: string): string | null =>
+    plan !== null ? repoCopyKey(recordPlaceIn(plan, unit).address) : own !== null && own !== "local" ? repoCopyKey(own) : null;
+  const listed = localGit(projectDir, ["for-each-ref", "--format=%(objectname) %(refname)", `refs/aidlc/home/${identity.intentId8}/`]);
+  for (const line of listed.ok ? listed.stdout.split(/\r?\n/).filter(Boolean) : []) {
+    const [oid, ref] = line.trim().split(/\s+/, 2);
+    const copy = ref === undefined ? null : homeCopyOf(ref);
+    if (!oid || copy?.kind !== "record" || copy.id8 !== identity.intentId8 || placeKey(copy.unit) !== copy.key) continue;
+    const view = recordView(projectDir, claimRecordRef(identity.intentId8, copy.unit), oid, { uuid: identity.intentUuid, space: identity.space });
+    if (view === null) continue;
+    const prior = claims.get(copy.unit);
+    claims.set(copy.unit, { ...view, ...(prior?.observedAt !== undefined ? { observedAt: prior.observedAt } : {}), movementObserved: false });
+  }
+  return claims;
+}
+
 function cachedClaimsForIdentity(
   projectDir: string,
   identity: UnitClaimIdentity,
   includeCache: boolean,
-  // The copies the caller reads: only the lead's project's own, when it says so.
-  only?: (ref: string) => boolean,
 ): Map<string, UnitClaimView> {
   const cache = readUnitClaimRegistryCache(projectDir);
   const claims = new Map<string, UnitClaimView>();
@@ -1647,16 +1808,11 @@ function cachedClaimsForIdentity(
   // The work's own kind of claim, by its recorded flow: main's flow's branches,
   // or the build-out's records (claimsOnBranches).
   const onBranches = claimsOnBranchesFor(projectDir, identity.space, identity.intentUuid);
-  const remotes = gitRemotesOnce(projectDir);
-  // A copy ahead of another is the newer one, whoever holds it, by the
-  // take-in's own rule (claimAhead): the lead's take-in is a commit of the
-  // lead's with the team's tree, so a team's later result on its own remote
-  // descends from the team's take, never from the lead's copy of it.
-  // Else the home's copies are read over another remote's, whatever their
-  // generation: the one fetched by the lead's address first, then this
-  // clone's own remote and local claim branches, so a fork's stale or
-  // never-taken-in copy never hides the lead's own. Between copies of one
-  // kind, the rule below.
+  if (!onBranches) return recordsCopied(projectDir, identity, claims);
+  // A copy ahead of another is the newer one, whoever holds it (claimAhead).
+  // Else this clone's own remote's copies and local claim branches are read
+  // over another remote's, whatever their generation, so a fork's stale copy
+  // never hides the home's own. Between copies of one kind, the rule below.
   let ownRemote: string | null = null;
   try {
     ownRemote = repositoryRemote(projectDir);
@@ -1664,14 +1820,13 @@ function cachedClaimsForIdentity(
     // No remote this clone calls its own: no copy ranks as one.
   }
   const homeCopy = (here: NonNullable<ReturnType<typeof claimHere>>): number =>
-    here.kind === "address" ? 2 : here.kind === "own" || (ownRemote !== null && here.remote === ownRemote) ? 1 : 0;
+    here.kind === "own" || (ownRemote !== null && here.remote === ownRemote) ? 1 : 0;
   const descends = (older: string, newer: string): boolean => claimAhead(projectDir, older, newer) === "ahead";
   const readFrom = new Map<string, number>();
   for (const line of refs.stdout.split(/\r?\n/).filter(Boolean)) {
     const [oid, ref] = line.trim().split(/\s+/, 2);
     if (!oid || !ref) continue;
-    if (only !== undefined && !only(ref)) continue;
-    const here = claimHere(ref, remotes);
+    const here = claimHere(ref);
     if (here === null || here.id8 !== identity.intentId8 || here.onBranches !== onBranches) continue;
     const payload = readPayload(projectDir, oid);
     if (!payload || payload.intent_uuid !== identity.intentUuid) {
@@ -5287,7 +5442,6 @@ function releaseUnit(args: string[], projectDir?: string): void {
   const identity = activeIdentity(pd);
   const integration = fetchIntegration(pd);
   const ref = claimRefFor(state, identity.intentId8, unit);
-  const heard = takeInFirst(pd);
   const current = currentClaim(pd, integration.remote, ref);
   if (current?.status === "released") {
     const pending = readPendingRelease(pd, unit, identity);
@@ -5330,7 +5484,7 @@ function releaseUnit(args: string[], projectDir?: string): void {
     }));
     return;
   }
-  if (current?.status !== "claimed") fail(withTakeInLines(pd, heard, `Unit "${unit}" has no live claim.`));
+  if (current?.status !== "claimed") fail(`Unit "${unit}" has no live claim.`);
   if (flags["expect-nonce"] && flags["expect-nonce"] !== current.nonce) {
     fail(
       `Unit "${unit}" current claim nonce does not match --expect-nonce; refusing release.`,
@@ -5424,17 +5578,7 @@ function releaseUnit(args: string[], projectDir?: string): void {
     generation: released.generation,
     claim_ref: ref,
     claim_oid: released.oid,
-    ...(heard.length > 0 ? { notice: withTakeInLines(pd, heard, "").trim() } : {}),
   }));
-}
-
-// The way back from a take, run in the Unit's build: the claim at the lead's
-// project is released, open again, and the build is set aside by the engine's
-// own archive, so its record and audit stay and nothing is deleted. A claim
-// that moved on since (a pushed result, a release at the lead's project) is
-// left as it is. The person stays in the space they took it from.
-function givenBackOn(unit: string, address: string): string {
-  return `Gave ${unit} back on ${address}; the lead's project opens it again at the lead's next look.`;
 }
 
 // A taken claim given back: released, as the lead's release does, so the
@@ -5452,33 +5596,33 @@ function giveBack(pd: string, build: UnitBuild): void {
   const unit = build.unit;
   const home = buildsHome(pd, build);
   const ref = claimRef(home.id8, unit);
+  const place = recordPlaceOf(pd, home, unit);
   let current: UnitClaimView | null;
   try {
-    if (home.target !== null) ensureFetchedClaim(pd, home, ref);
-    current = currentClaim(pd, home.target, ref);
-  } catch {
-    fail(`The lead's project could not be reached, so ${unit} is not given back yet and its build here stays as it is. Try again when it can be reached.`);
+    current = readUnitRecord(pd, place, recordWork(home), unit, { typed: true });
+  } catch (error) {
+    if (!(error instanceof RecordUnread)) throw error;
+    fail(`${place.repo} could not be reached (${error.said ?? "it did not answer in time"}), so ${unit} is not given back yet and its build ` +
+      "here stays as it is. Say when to try again.");
   }
   let said: string;
   const standing = takeStanding(pd, build).state;
-  // The take the team's own remote holds, when it is ahead of the lead's claim, is the one given back.
-  const on = standing === "aside" ? { claim: current } : claimToGoOn(pd, home, build, ref, current);
-  const taken = on.claim;
+  const taken = current;
   if (taken?.status === "claimed" && taken.payload.taken_by !== undefined && taken.generation === build.attempt &&
-    taken.payload.result === undefined && (on.outbox !== undefined || standing === "recorded")) {
-    const pushed = writeHomeClaim(pd, home, ref, createClaimCommit(pd, taken.oid, releasedClaim(taken)), current?.oid ?? null);
-    if (pushed.elsewhere !== undefined) said = givenBackOn(unit, pushed.elsewhere);
-    else if (!pushed.ok) {
-      fail(`${unit} could not be given back: ${pushed.refused ?? "its claim at the lead's project moved meanwhile"}. Try again.`);
+    taken.payload.result === undefined && standing === "recorded") {
+    const pushed = writeUnitRecord(pd, place, ref, createRecordCommit(pd, taken.oid, releasedClaim(taken), "given back"), taken.oid);
+    if (!pushed.ok) {
+      fail(`${unit} could not be given back: ${"refused" in pushed ? pushed.refused : `its record in ${place.repo} changed while I was writing it`}. ` +
+        "Say when to try again.");
     } else {
       invalidateLiveClaimPayloadCache(pd, unit);
-      said = `${unit} is given back: it is open again at the lead's project.`;
+      said = `${unit} is given back. Written on its record in ${place.repo}.`;
     }
   } else {
-    said = `Nothing changed for ${unit} at the lead's project, which still has it as it was.`;
+    said = `Nothing changed for ${unit}: its record in ${place.repo} is as it was.`;
   }
   const dirName = resolveWorkflowSelection(pd).intent;
-  const archived = dirName ? runEngineUtility(pd, ["intent", "archive", dirName, "--reason", "given back to the lead's project"]) : null;
+  const archived = dirName ? runEngineUtility(pd, ["intent", "archive", dirName, "--reason", "given back"]) : null;
   if (archived !== null && !archived.ok) fail(`${said} Its build here could not be set aside: ${(archived.stderr || archived.stdout).trim()}`);
   console.log(JSON.stringify({
     released: true,
@@ -6144,17 +6288,16 @@ function putPlanOnItsBranch(pd: string, remote: string, branch: string, madeNow:
   if (!moved.ok) fail(`The plan is on ${plan.name} on ${remote}, and your checkout stayed on ${branch}: git says ${gitWords(moved.stderr)}`);
   git(pd, ["update-ref", "-m", `share: ${branch} back to where it was`, "--stdin"], undefined, `update refs/heads/${branch} ${base} ${head}\n`);
   noteTeamShared(pd);
-  // A Unit the lead asked to build here gets its claim with the plan's branch, as with a push of main.
+  // A Unit the lead asked to build here gets its record with the plan's branch, as with a push of main.
   const claims = claimsAskedHereWithShare(pd);
-  const sent = claims.sent.length > 0 ? `, with ${builtHereNote(claims.sent)},` : ",";
   console.log(JSON.stringify({
     shared: false,
     branch: plan.name,
     remote,
     notice: [
       skeletonCodeName(pd) === null
-        ? `The plan is on its own branch, ${plan.name}, pushed to ${remote}${sent} and your checkout is on it; ${branch} is as it was.`
-        : `${planShareName(pd)} are on their own branch, ${plan.name}, pushed to ${remote}${sent} and your checkout is on it; ${branch} is as it was.`,
+        ? `The plan is on its own branch, ${plan.name}, pushed to ${remote}, and your checkout is on it; ${branch} is as it was.`
+        : `${planShareName(pd)} are on their own branch, ${plan.name}, pushed to ${remote}, and your checkout is on it; ${branch} is as it was.`,
       words === "" ? "Get it merged your usual way." : hostSaysLine(null, words),
       ...claims.lines,
       ...(needs === null ? [] : [needs]),
@@ -6606,11 +6749,8 @@ function sharePlanRef(pd: string, given: ReturnType<typeof givenCommitMessage>, 
   }
   noteTeamShared(pd);
   given?.spend();
-  const claims = workspaceHomeLocation(pd) === "local" ? { sent: [], lines: [] } : claimsAskedHereWithShare(pd);
-  // The claim of a Unit built here goes to this workspace's own repository.
-  const recorded = claims.sent.length === 0 ? [] :
-    [`Recorded in ${workspaceRepoEntry(pd).name} that ${namesInProse(claims.sent)} ${claims.sent.length === 1 ? "is" : "are"} built here.`];
-  const notice = [plan.said, ...recorded, ...claims.lines, ...(needs === null ? [] : [needs])];
+  const claims = claimsAskedHereWithShare(pd);
+  const notice = [plan.said, ...claims.lines, ...(needs === null ? [] : [needs])];
   console.log(JSON.stringify({
     shared: true,
     plan: { repo: plan.repo, address: plan.address, commit: plan.commit },
@@ -6879,7 +7019,6 @@ function shareMain(args: string[], projectDir?: string): void {
   const claims = claimsAskedHereWithShare(pd);
   const notice = [
     ...(planFirst === null ? [] : [planFirst.said]),
-    ...(claims.sent.length > 0 ? [`Pushed ${branch}, and ${builtHereNote(claims.sent)}, to ${remote}.`] : []),
     ...claims.lines,
     ...(needs === null ? [] : [needs]),
   ];
@@ -7045,35 +7184,75 @@ function assignUnits(args: string[], projectDir?: string): void {
 function writeHereClaim(
   pd: string,
   identity: ReturnType<typeof activeIdentity>,
-  integration: ReturnType<typeof fetchIntegration>,
   unit: string,
   state: string,
-): { kind: "here" } | { kind: "theirs"; line: string } | { kind: "unseen"; why: string } {
+  options: { onlyIfNone?: boolean } = {},
+): { kind: "here"; repo: string } | { kind: "kept" } | { kind: "theirs"; line: string } | { kind: "unseen"; why: string; repo: string } {
   validateClaimRefUnit(identity.intentId8, unit);
   const ref = claimRef(identity.intentId8, unit);
-  const current = currentClaim(pd, integration.remote, ref);
+  // Every caller returns first while the plan is not shared.
+  const kept = keptPlan(pd, identity.intentId8)!;
+  const place = recordPlaceIn(kept.plan, unit);
+  const work = { uuid: identity.intentUuid, space: identity.space };
+  const read = (): UnitClaimView | null => readUnitRecord(pd, place, work, unit, { typed: true });
+  let current: UnitClaimView | null;
+  try {
+    current = read();
+  } catch (error) {
+    if (error instanceof RecordUnread) return { kind: "unseen", why: error.said ?? "it did not answer in time", repo: place.repo };
+    throw error;
+  }
+  if (current !== null && options.onlyIfNone === true) return { kind: "kept" };
   const takenBack = current?.status === "claimed" && current.payload.done === true &&
     !(current.owner === identity.space && claimIsMine(pd, current));
   if (current?.status === "claimed" && !takenBack) {
-    return current.owner === identity.space && claimIsMine(pd, current) ? { kind: "here" } : { kind: "theirs", line: takenLine(unit, current) };
+    return current.owner === identity.space && claimIsMine(pd, current) ? { kind: "here", repo: place.repo } : { kind: "theirs", line: takenLine(unit, current) };
   }
   const payload = takenClaimPayload(current, {
     team: identity.space, home: { space: identity.space, uuid: identity.intentUuid, id8: identity.intentId8 }, unit, ref,
     generation: takenBack ? (current?.generation ?? 0) + 1 : takeGeneration(current), me: gitUserName(pd) ?? "a teammate",
-    baseOid: integration.oid, integrationRef: integration.ref, gateRhythm: readUnitGateRhythm(state),
+    baseOid: kept.commit, integrationRef: kept.ref, gateRhythm: readUnitGateRhythm(state),
   });
-  const pushed = updateClaimRef(pd, integration.remote, ref, createClaimCommit(pd, current?.oid ?? integration.oid, payload), current?.oid ?? null);
+  const pushed = writeUnitRecord(pd, place, ref, createRecordCommit(pd, current?.oid ?? null, payload, "taken", {}, { take: true }), current?.oid ?? null);
   if (!pushed.ok) {
-    const winner = currentClaim(pd, integration.remote, ref);
+    let winner: UnitClaimView | null = null;
+    try {
+      winner = read();
+    } catch {
+      // The refusal's own words below.
+    }
     if (winner?.status === "claimed") return { kind: "theirs", line: takenLine(unit, winner) };
-    return { kind: "unseen", why: pushed.refused?.replace(/\.+$/, "") ?? "it changed meanwhile" };
+    return { kind: "unseen", why: "refused" in pushed ? pushed.refused.replace(/\.+$/, "") : "it changed meanwhile", repo: place.repo };
   }
   invalidateLiveClaimPayloadCache(pd, unit);
-  return { kind: "here" };
+  return { kind: "here", repo: place.repo };
 }
 
-function hereNotSeenLine(unit: string, why: string): string {
-  return `${unit} is built here now. The teams cannot see that yet (${why}), so a teammate could still take it meanwhile.`;
+// At the lead's shared work, the walk's first start of a Unit (its one
+// UNIT_STARTED row, just written) that nobody holds writes that Unit's record
+// as the lead's project's own take, as `assign --here` does, over a record
+// given back too, so no team takes a Unit being built here; nothing is said
+// unless it cannot be written. A later stage's start writes nothing.
+export function recordLeadsOwnStart(projectDir: string, unit: string): void {
+  try {
+    const state = readStateFile(projectDir);
+    if (homeLocation(state) === null || unitBuildOf(state) !== null || !isTeamUnitOwnership(state)) return;
+    const identity = activeIdentity(projectDir);
+    const kept = keptPlan(projectDir, identity.intentId8);
+    if (kept === null || !kept.plan.units.some((entry) => entry.name === unit)) return;
+    const starts = readAuditShardEvents(projectDir).filter((row) => row.event === "UNIT_STARTED" && auditBlockField(row.block, "Unit") === unit);
+    if (starts.length !== 1) return;
+    if (recordCopied(projectDir, recordPlaceIn(kept.plan, unit), { uuid: identity.intentUuid, space: identity.space }, unit)?.status === "claimed") return;
+    const claimed = quietly(() => writeHereClaim(projectDir, identity, unit, state));
+    if (claimed.kind === "unseen") saidWithNextStep(projectDir, hereNotSeenLine(unit, claimed.repo, claimed.why));
+    else if (claimed.kind === "theirs") saidWithNextStep(projectDir, claimed.line);
+  } catch {
+    // The walk goes on; a look reads the record as it is.
+  }
+}
+
+function hereNotSeenLine(unit: string, repo: string, why: string): string {
+  return `${unit} is built here now. Its record in ${repo} could not be written (${why}), so a teammate could still take it meanwhile.`;
 }
 
 // The teams' clones see the work as a team home only once the remote's main
@@ -7097,40 +7276,58 @@ export function unitsAskedHereForShare(pd: string): string[] {
   return [...unitsAskedHere(readAuditShardEvents(pd))];
 }
 
-// The words for the claim of a Unit built here that a share sends: the share
-// question, its choice and the share's own line say it the same way.
-export function builtHereNote(units: string[]): string {
-  return `the note that ${namesInProse(units)} ${units.length === 1 ? "is" : "are"} built here`;
+// Where the record of each Unit built here goes, said the same way by the
+// share question ("I'd also record ...") and the share's own line ("Recorded
+// ..."): "in <repo> that <X> is built here", one part a repository.
+export function builtHereWords(records: ReadonlyArray<{ unit: string; repo: string }>): string {
+  const byRepo = new Map<string, string[]>();
+  for (const { unit, repo } of records) byRepo.set(repo, [...(byRepo.get(repo) ?? []), unit]);
+  return [...byRepo].map(([repo, units]) => `in ${repo} that ${namesInProse(units)} ${units.length === 1 ? "is" : "are"} built here`)
+    .join(", and ");
+}
+
+// The share question's words for the Units built here: where their records
+// will go, by the plan the share writes. Null with none, or no plan place yet.
+export function builtHereRecordClause(projectDir: string, units: readonly string[]): string | null {
+  if (units.length === 0) return null;
+  const pd = resolveProjectDir(projectDir);
+  const place = planPlaceForShare(pd);
+  if (!("ref" in place)) return null;
+  try {
+    const plan = planFilesNow(pd, keptPlan(pd, place.id8)?.plan ?? null, place).plan;
+    return `I'd also record ${builtHereWords(units.map((unit) => ({ unit, repo: recordPlaceIn(plan, unit).repo })))}.`;
+  } catch {
+    // The plan cannot be put together yet: the share itself says what stops it.
+    return null;
+  }
 }
 
 // At the share, a Unit the lead asked to build here before it, with no claim
 // yet, gets its claim, so a team's clone sees it taken from its first look:
 // the Units whose claim went, and the lines for one that could not be written.
-function claimsAskedHereWithShare(pd: string): { sent: string[]; lines: string[] } {
-  const asked = unitsAskedHereForShare(pd);
-  if (asked.length === 0) return { sent: [], lines: [] };
-  let integration: ReturnType<typeof fetchIntegration> | null = null;
-  let why = "it could not be read just now";
-  try {
-    integration = fetchIntegration(pd);
-  } catch (e) {
-    why = errorMessage(e).replace(/\.+$/, "");
-  }
+function claimsAskedHereWithShare(pd: string): { sent: Array<{ unit: string; repo: string }>; lines: string[] } {
   const identity = activeIdentity(pd);
-  const state = readStateFile(pd);
-  const sent: string[] = [];
-  const lines: string[] = [];
-  for (const unit of asked) {
-    if (integration === null) {
-      lines.push(hereNotSeenLine(unit, why));
-      continue;
-    }
-    if (currentClaim(pd, integration.remote, claimRef(identity.intentId8, unit)) !== null) continue;
-    const claimed = writeHereClaim(pd, identity, integration, unit, state);
-    if (claimed.kind === "here") sent.push(unit);
-    else if (claimed.kind === "unseen") lines.push(hereNotSeenLine(unit, claimed.why));
-    else lines.push(claimed.line);
+  const kept = keptPlan(pd, identity.intentId8);
+  if (kept === null) return { sent: [], lines: [] };
+  let rows: AuditShardEvent[] = [];
+  try {
+    rows = readAuditShardEvents(pd);
+  } catch {
+    // No audit to read: the Units asked here are none either.
   }
+  const builds = unitsLeadsProjectBuilds(rows, kept.plan.skeleton);
+  const state = readStateFile(pd);
+  const sent: Array<{ unit: string; repo: string }> = [];
+  const lines: string[] = [];
+  for (const unit of kept.plan.units.map((entry) => entry.name).filter((name) => builds.has(name))) {
+    // A Unit with a record already is left as it is: whoever holds it, or gave it back.
+    const claimed = writeHereClaim(pd, identity, unit, state, { onlyIfNone: true });
+    if (claimed.kind === "here") sent.push({ unit, repo: claimed.repo });
+    else if (claimed.kind === "unseen") lines.push(hereNotSeenLine(unit, claimed.repo, claimed.why));
+    else if (claimed.kind === "theirs") lines.push(claimed.line);
+  }
+  // What this share wrote, and where, said first.
+  if (sent.length > 0) lines.unshift(`Recorded ${builtHereWords(sent)}.`);
   return { sent, lines };
 }
 
@@ -7142,46 +7339,23 @@ function buildLeftOpenHere(pd: string, state: string, units: string[], words: st
   }
   const identity = activeIdentity(pd);
   affirmedIntegrationBranch(pd);
-  // Before the plan is shared no team's clone can see its Units: nothing is
-  // pushed, and the claim goes with the share (claimsAskedHereWithShare).
-  let target: ReturnType<typeof shareTarget> = null;
-  try {
-    target = shareTarget(pd);
-  } catch {
-    // No remote to read: the claim's own write below says why.
-  }
-  const unshared = target !== null && planUnshared(pd, target);
-  let integration: ReturnType<typeof fetchIntegration> | null = null;
-  let unseen: string | null = null;
-  if (!unshared) {
-    try {
-      integration = fetchIntegration(pd);
-    } catch (e) {
-      unseen = errorMessage(e).replace(/\.+$/, "");
-    }
-  }
+  // Before the plan is shared no team can see its Units: nothing is written,
+  // and the record goes with the share (claimsAskedHereWithShare).
+  const unshared = keptPlan(pd, identity.intentId8) === null;
   const lines: string[] = [];
   const here: string[] = [];
-  const notSeen: string[] = [];
+  const notSeen = new Map<string, { repo: string; why: string }>();
   for (const unit of units) {
     if (unshared) {
       here.push(unit);
       continue;
     }
-    if (integration === null) {
-      here.push(unit);
-      notSeen.push(unit);
-      continue;
-    }
-    const claimed = writeHereClaim(pd, identity, integration, unit, state);
+    const claimed = writeHereClaim(pd, identity, unit, state);
     if (claimed.kind === "theirs") {
       lines.push(claimed.line);
       continue;
     }
-    if (claimed.kind === "unseen") {
-      unseen ??= claimed.why;
-      notSeen.push(unit);
-    }
+    if (claimed.kind === "unseen") notSeen.set(unit, { repo: claimed.repo, why: claimed.why });
     here.push(unit);
   }
   // Who merged a Unit taken back here, read before this row sets that merge aside.
@@ -7194,8 +7368,8 @@ function buildLeftOpenHere(pd: string, state: string, units: string[], words: st
     }, pd);
   }
   const notice = [
-    ...here.map((unit) => notSeen.includes(unit)
-      ? hereNotSeenLine(unit, unseen ?? "it changed meanwhile")
+    ...here.map((unit) => notSeen.has(unit)
+      ? hereNotSeenLine(unit, notSeen.get(unit)!.repo, notSeen.get(unit)!.why)
       : mergedBy.get(unit)
         ? `${unit} is built here now, on top of what ${mergedBy.get(unit)} merged.`
         : `${unit} is built here now, no longer open for the teams.`),
@@ -7373,6 +7547,52 @@ interface HomeWork {
   // A take from the plan: what it builds is read from this workspace's copy of
   // the plan (copyOf the plan's ref at `location`), not from a record here.
   leadCopy?: boolean;
+  // The plan as this take read it, which names each Unit's record repository.
+  plan?: PlanJson;
+}
+
+// Where a Unit of `home`'s work keeps its record: the repository the plan
+// names for it (units[].record), by its address as the plan carries it; for the
+// solo second person, the workspace's own repository, where a teammate's take
+// of solo work is recorded. With no copy of the plan here, the plan is looked
+// for at the work's Home Location before a record is written there; work not
+// shared yet keeps its records there. A look of all the work's records reads
+// the places this workspace knows of (recordPlacesOfWork).
+function recordPlaceOf(projectDir: string, home: HomeWork, unit: string): RecordPlace {
+  if (home.solo) return { repo: workspaceRepoEntry(projectDir).name, address: home.location };
+  const plan = home.plan ?? planOfWork(projectDir, home.id8) ?? planLookedFor(projectDir, home.location, home.id8);
+  return plan === null ? { repo: repoNameOf(home.location), address: home.location } : recordPlaceIn(plan, unit);
+}
+
+// The plan at `location` as this workspace's copy of it holds it, looked at
+// once a command when there is no copy yet (a clone that never read it: solo
+// work a teammate took, shared since). Null when it is not there or the
+// repository did not answer.
+const plansLookedFor = new Set<string>();
+function planLookedFor(projectDir: string, location: string, id8: string): PlanJson | null {
+  if (!isGitAddress(location)) return null;
+  const copy = copyOf(location, planRecordRef(id8));
+  const kept = planAtCopy(projectDir, copy);
+  if (kept.kind === "read") return kept.plan;
+  const key = `${projectDir}\0${location}\0${id8}`;
+  if (plansLookedFor.has(key)) return null;
+  plansLookedFor.add(key);
+  lookAt(projectDir, location, [planRecordRef(id8)]);
+  const read = planAtCopy(projectDir, copy);
+  return read.kind === "read" ? read.plan : null;
+}
+
+// The repository a plan names for a Unit's record; a Unit it names none for,
+// the plan's own.
+function recordPlaceIn(plan: PlanJson, unit: string): RecordPlace {
+  const named = plan.units.find((entry) => entry.name === unit)?.record;
+  const entry = [plan.plan_repo, ...plan.repos].find((repo) => repo.name === named && repo.address !== null);
+  return entry !== undefined ? { repo: entry.name, address: entry.address! } : { repo: plan.plan_repo.name, address: plan.plan_repo.address };
+}
+
+// The work a record of `home`'s is read for.
+function recordWork(home: HomeWork): { uuid: string; space: string } {
+  return { uuid: home.uuid, space: home.space };
 }
 
 function findHomeWork(projectDir: string, dirName: string, space: string): HomeWork {
@@ -7444,6 +7664,11 @@ const spelledTargets = new Map<string, string>();
 // lead is not an address.
 export function planHomeOfBuild(projectDir: string, build: UnitBuild): HomeWork | null {
   if (leadWorkHere(projectDir, build.homeWork) !== null || !isGitAddress(build.homeLocation)) return null;
+  return planHomeAt(projectDir, build);
+}
+
+// The plan's place a build was taken from, by its own Home Location.
+function planHomeAt(projectDir: string, build: UnitBuild): HomeWork {
   const here = findUnitBuild(projectDir, build.homeWork, build.unit);
   refuseOptionAddress(build.homeLocation, recordedAddressRefusal(here?.dirName ?? build.unit));
   const id8 = idSuffix(build.homeWork);
@@ -7494,13 +7719,10 @@ function takeCommandOf(projectDir: string, build: UnitBuild): string {
 }
 
 // The home's integration branch for the solo second person's take, fetched with
-// the person's own login through this workspace's remote. While the push
-// address stands in for a remote that did not answer (`standsIn`), the branch
-// as this clone last fetched it.
+// the person's own login through this workspace's remote.
 function fetchHomeIntegration(
   projectDir: string,
   home: HomeWork,
-  standsIn = false,
 ): { ref: string; branch: string; oid: string } {
   const remote = home.target;
   const affirmed = affirmedIntegrationBranch(projectDir, home.space);
@@ -7509,8 +7731,7 @@ function fetchHomeIntegration(
     const fetched = git(projectDir, ["fetch", remote, branch]);
     // Where the name came from, so the person can correct it there.
     const from = affirmed ? `, named in ${affirmed.source} under Way of Working,` : "";
-    const lastFetched = standsIn && localGit(projectDir, ["rev-parse", "--verify", "--quiet", `refs/remotes/${remote}/${branch}`]).ok;
-    if (!fetched.ok && !lastFetched) fail(`The lead's project's branch ${branch}${from} could not be fetched from ${remote}: ${fetched.stderr.trim()}`);
+    if (!fetched.ok) fail(`The lead's project's branch ${branch}${from} could not be fetched from ${remote}: ${fetched.stderr.trim()}`);
   }
   const ref = remote ? `refs/remotes/${remote}/${branch}` : `refs/heads/${branch}`;
   return { ref, branch, oid: gitOutput(projectDir, ["rev-parse", "--verify", ref], `The lead's project's branch ${branch} is not here`) };
@@ -7702,6 +7923,23 @@ function keptPlan(pd: string, id8: string): { ref: string; commit: string; plan:
   return read.kind === "read" ? { ref, commit: read.oid, plan: read.plan } : null;
 }
 
+// A work's plan by its id as this workspace last read it: the copy at the work
+// here's Home Location (keptPlan), else the newest copy of it here, for a
+// workspace whose active work is another or none (a fresh clone's look, a
+// team's build of another work).
+function planOfWork(pd: string, id8: string): PlanJson | null {
+  const kept = keptPlan(pd, id8);
+  if (kept !== null) return kept.plan;
+  const listed = localGit(pd, ["for-each-ref", "--sort=-committerdate", "--format=%(refname)", `refs/aidlc/home/${id8}/`]);
+  for (const ref of listed.ok ? listed.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean) : []) {
+    const copy = homeCopyOf(ref);
+    if (copy?.kind !== "plan" || copy.id8 !== id8) continue;
+    const read = planAtCopy(pd, ref);
+    if (read.kind === "read") return read.plan;
+  }
+  return null;
+}
+
 // The Units the plan as this computer last wrote or read it lists, or null
 // when it has no copy of this work's plan.
 export function planUnitsKept(projectDir: string): string[] | null {
@@ -7815,8 +8053,9 @@ function cloneSpelling(projectDir: string, address: string, use: "fetch" | "push
 // rules and the commit it took from.
 export type LookResult =
   | { ok: true; refs: Record<string, { now: string | null; was: string | null }> }
-  // git's own words, sign-in masked; null when it did not answer in time.
-  | { ok: false; said: string | null }
+  // git's own words, sign-in masked, and its first line for a line that says
+  // why in a parenthesis; both null when it did not answer in time.
+  | { ok: false; said: string | null; firstLine: string | null }
   // This repository's own .git could not be written (Codex's sandbox).
   | { ok: false; refused: string };
 
@@ -7863,7 +8102,9 @@ export function lookAt(projectDir: string, address: string, refs: readonly strin
     const stderr = fetched.stderr;
     const refused = localGitWriteRefused(stderr);
     if (refused !== null) return { ok: false, refused };
-    return { ok: false, said: fetched.timedOut ? null : maskUserinfo(gitWords(stderr)) };
+    if (fetched.timedOut) return { ok: false, said: null, firstLine: null };
+    const said = maskUserinfo(gitWords(stderr));
+    return { ok: false, said, firstLine: maskUserinfo(stderr.trim().split(/\r?\n/)[0]?.trim() ?? "") || said };
   }
   const after = copiesAt(projectDir, key);
   const found: Record<string, { now: string | null; was: string | null }> = {};
@@ -8463,6 +8704,8 @@ function createUnitBuild(
   takeRequest = "",
   // The gate rhythm the person picked for this build, else the lead's plan's.
   gateRhythm?: UnitClaimPayload["gate_rhythm"],
+  // An early take's starts (its row's Early On), which its record holds once written.
+  earlyOn?: UnitClaimPayload["early_on"],
 ): { space: string; dirName: string } {
   const scope = plan.settings.Scope ?? "";
   const grid = loadScopeMapping()[scope];
@@ -8559,6 +8802,7 @@ function createUnitBuild(
       "Home Commit": baseOid,
       "Copy Fingerprint": fingerprint,
       "Home Approvals": approvals.join("; ") || "none recorded",
+      ...(earlyOn ? { "Early On": earlyOnField(earlyOn) } : {}),
     }, projectDir, dirName, space);
   });
   recordTakeTree(projectDir, record, intentRepos(projectDir, dirName, space));
@@ -8663,6 +8907,8 @@ export function shareDefaultMessage(projectDir: string): string {
 // the hash of the message it was given (never of what a hook made of it).
 // Written as each commit is made and at each refusal, removed once a push
 // goes: while it is there, the last push did not go through.
+// Said once for a build whose take its record's repository never took (pushUnit).
+const takeNotWrittenMark = (unit: string): string => `unit-take-not-written-${unit}.json`;
 const PUSH_REFUSED_MARK = "unit-push-refused.json";
 type PushRefusedMark = Record<string, { commit: string; message: string }>;
 
@@ -8996,8 +9242,8 @@ interface TakeSource {
 }
 
 // The solo second person's take: the lead's record in this clone.
-function recordTakeSource(pd: string, home: HomeWork, standsIn: boolean): TakeSource {
-  const integration = fetchHomeIntegration(pd, home, standsIn);
+function recordTakeSource(pd: string, home: HomeWork): TakeSource {
+  const integration = fetchHomeIntegration(pd, home);
   const plan = homePlanAt(pd, home, integration.oid, integration.branch);
   // A plan a newer AI-DLC wrote is never taken here: the step that carries it on, before anything is written.
   refuseNewerWork(pd, plan.state);
@@ -9053,7 +9299,7 @@ function planTakeSource(pd: string, id8: string, from: string): TakeSource {
     target: homeTarget(pd, address), recordPrefix: "",
     repos: plan.repos.filter((repo) => repo.address !== null && !(own !== null && own !== "local" && sameGitAddress(repo.address, own)))
       .map((repo) => repo.name),
-    solo: false, leadCopy: true,
+    solo: false, leadCopy: true, plan,
   };
   return {
     home,
@@ -9142,30 +9388,10 @@ function takeUnit(args: string[], projectDir?: string, rhythm?: UnitClaimPayload
   }
   if (home === null) fail(`${unit}'s build is not here.`);
   const ref = claimRef(home.id8, unit);
-  if (home.target !== null) ensureFetchedClaim(pd, home, ref);
-  let atLead: UnitClaimView | null;
-  // A remote that fetches from the lead's project and pushes to the team's own
-  // (a push URL): when the lead's project does not answer, the push address
-  // stands in, as a remote holding the lead's claims does (homeTarget), and
-  // both not answering is said as for that remote.
-  let standsIn = false;
-  try {
-    atLead = currentClaim(pd, home.target, ref);
-  } catch (error) {
-    const read = errorMessage(error);
-    const outbox = !fromPlan && read.startsWith("Unit claim registry read failed:") ? claimOutbox(pd, home) : null;
-    const answered = outbox === null ? null : quietly(() => git(pd, ["ls-remote", outbox, ref]));
-    if (outbox === null || answered === null) throw error;
-    if (!answered.ok) fail(neitherAnswered(maskUserinfo(outbox), read.slice("Unit claim registry read failed:".length).trim()));
-    atLead = null;
-    standsIn = true;
-  }
-  // While the lead's project has no claim of it, or a released one, the team's
-  // own remote may hold a take or give back the lead has not taken in: a take
-  // is said as taken, and a new take goes on top of a give back there.
-  const there = !fromPlan && (atLead === null || atLead.status === "released") ? outboxClaim(pd, home, ref) : null;
-  const current = there !== null && (atLead === null || claimAhead(pd, atLead.oid, there.claim.oid) === "ahead") ? there.claim : atLead;
-  const src = source ?? recordTakeSource(pd, home, standsIn);
+  const place = recordPlaceOf(pd, home, unit);
+  const current = typedRecordRead(pd, place, recordWork(home), unit, unit);
+  if (current === null && recordNewerHere(pd, place, home.id8, unit)) fail(newerRecordStep(pd, unit, place.repo));
+  const src = source ?? recordTakeSource(pd, home);
   const { integration, build: plan } = src;
   const planChanging = src.planChanging;
   const solo = src.solo;
@@ -9173,7 +9399,7 @@ function takeUnit(args: string[], projectDir?: string, rhythm?: UnitClaimPayload
   if (!opening.units.includes(unit)) fail(`${unit} is not one of ${home.label}'s Units (${opening.units.join(", ")}).`);
   if (solo?.started.has(unit)) fail(`${unit} is being built on the other machine; take another Unit, or follow along.`);
   const me = git(pd, ["config", "user.name"]).stdout.trim() || "a teammate";
-  if (current?.status === "claimed") {
+  if (current?.status === "claimed" && current.payload.open_again === undefined) {
     if (!claimIsMine(pd, current)) fail(takenLine(unit, current));
     const said = bringOwnBuildHere(pd, home.uuid, current);
     const found = findUnitBuild(pd, home.uuid, unit);
@@ -9182,22 +9408,28 @@ function takeUnit(args: string[], projectDir?: string, rhythm?: UnitClaimPayload
     return;
   }
   if (opening.completed.has(unit)) fail(`${unit} is already done at the lead's project.`);
-  const homeRows = src.rows;
-  if (!home.solo && leadBuildsWithoutClaim(homeRows, unit, current)) {
-    fail(`${unit} is being built at the lead's project, so it is not open to take. Run \`${aidlcToolInvocation("orchestrate")} next\` for what is.`);
-  }
   // A Unit the home marked done on its claim counts as done, pushed state or not.
+  // A dependency's record stops the take when it cannot be read only where the
+  // person asked to start early on it; otherwise it is read as last seen here.
+  const askedEarly = bareFlags.has("early") || flags.early !== undefined;
+  const depRecord = (dep: string): UnitClaimView | null => {
+    const at = recordPlaceOf(pd, home, dep);
+    if (askedEarly) return typedRecordRead(pd, at, recordWork(home), dep, unit);
+    try {
+      return readUnitRecord(pd, at, recordWork(home), dep);
+    } catch {
+      return recordCopied(pd, at, recordWork(home), dep);
+    }
+  };
   const depClaims = new Map<string, UnitClaimView | null>();
   const blockers = (opening.blockers.get(unit) ?? []).filter((dep) => {
     if (dep === "walking-skeleton") return true;
-    const depRef = claimRef(home.id8, dep);
-    if (home.target !== null) ensureFetchedClaim(pd, home, depRef);
-    depClaims.set(dep, currentClaim(pd, home.target, depRef));
+    depClaims.set(dep, depRecord(dep));
     return depClaims.get(dep)?.payload.done !== true;
   });
   // Starting early, on the branches its dependencies pushed (the person asked).
   const pushedDeps = blockers.every((dep) => depClaims.get(dep)?.payload.result !== undefined);
-  const early = (bareFlags.has("early") || flags.early !== undefined) && blockers.length > 0 && pushedDeps;
+  const early = askedEarly && blockers.length > 0 && pushedDeps;
   if (blockers.length > 0 && !early) {
     fail(
       `${unit} waits on ${blockers.join(", ")}, which ${blockers.length === 1 ? "is" : "are"} not done at the lead's project yet. ` +
@@ -9230,29 +9462,21 @@ function takeUnit(args: string[], projectDir?: string, rhythm?: UnitClaimPayload
     team, home, unit, ref, generation, me, baseOid: integration.oid, integrationRef: integration.ref,
     gateRhythm: rhythm ?? src.rhythm, earlyOn,
   });
-  const commit = createClaimCommit(pd, current?.oid ?? integration.oid, payload);
-  // A take from the plan goes only where the plan's records are read, never to
-  // the team's own remote.
-  const pushed = writeHomeClaim(pd, home, ref, commit, atLead?.oid ?? null, fromPlan ? { outbox: false } : {});
-  // The lead's project took no push from here: the take goes on as the person
-  // asked, and its claim is recorded there when a push next goes through
-  // (recordTakeHere). An early start's claim alone holds where it started, so
-  // that one waits for the lead's project to take pushes. A take that went to
-  // the team's own remote instead is said with where it is.
+  const commit = createRecordCommit(pd, current?.oid ?? null, payload, earlyOn ? "taken early" : "taken", {}, { take: true });
+  const pushed = writeUnitRecord(pd, place, ref, commit, current?.oid ?? null);
+  // The record's repository took no push from here: the take goes on as the
+  // person asked, and its record is written there when a push next goes
+  // through (recordTakeHere). An early take too: its take row's Early On holds
+  // where it started until then.
   let notRecorded: string | null = null;
-  const onRemote = pushed.elsewhere ?? null;
-  if (!pushed.ok && onRemote === null) {
-    const winner = currentClaim(pd, home.target, ref);
+  if (!pushed.ok) {
+    const winner = typedRecordRead(pd, place, recordWork(home), unit, unit);
     if (winner?.status === "claimed") fail(takenLine(unit, winner));
-    // Git gave no reason when the claim moved under the take.
-    if (pushed.refused === undefined) fail(`${unit} was not taken: its claim at the lead's project moved meanwhile. Try again.`);
-    const why = pushed.refused.replace(/\.+$/, "");
-    if (earlyOn) {
-      fail(`${unit} is open at the lead's project, which takes no push from here: ${why}. Ask the lead for push access to it, then take ${unit} again.`);
-    }
-    notRecorded = why;
+    // Git gave no reason when the record moved under the take.
+    if ("lost" in pushed) fail(`${unit} was not taken: its record in ${place.repo} changed while I was writing it. Say when to try again.`);
+    notRecorded = pushed.refused.replace(/\.+$/, "");
   }
-  if (notRecorded === null && onRemote === null) invalidateLiveClaimPayloadCache(pd, unit);
+  if (notRecorded === null) invalidateLiveClaimPayloadCache(pd, unit);
   // A build in the lead's own space, beside the lead's work (a clone of a
   // workspace several teams share), reads the lead's rules as its own already.
   const ownSpace = team === home.space && (!home.leadCopy || leadWorkHere(pd, home.uuid) !== null);
@@ -9263,7 +9487,7 @@ function takeUnit(args: string[], projectDir?: string, rhythm?: UnitClaimPayload
   const leadsToo = leads === null || leads.paths.length === 0 ? ""
     : ` and the lead's ${leads.practices.length > 0 && leads.project.length > 0 ? "practices and project rules"
       : leads.practices.length > 0 ? "practices" : "project rules"}`;
-  const build = createUnitBuild(pd, home, plan, integration.oid, unit, team, generation, src.copy, leads?.paths ?? [], takeWords, rhythm);
+  const build = createUnitBuild(pd, home, plan, integration.oid, unit, team, generation, src.copy, leads?.paths ?? [], takeWords, rhythm, earlyOn);
   // The build's Home Location holds the plan's address from now on.
   if (fromPlan) dropSaidPlan(pd, home.location);
   setActiveSpaceCursor(pd, build.space);
@@ -9305,11 +9529,8 @@ function takeUnit(args: string[], projectDir?: string, rhythm?: UnitClaimPayload
     (planChanging !== null
       ? ` The lead is changing the Unit plan (${planChanging} is open again there), so ${unit} is taken on the plan as it stands there.`
       : "");
-  const noPush = onRemote !== null
-    ? `${standsIn ? "The lead's project did not answer just now" : "The lead's project takes no push from you"}, so your take of ${unit} is on ${onRemote}; the lead and the other teams ` +
-      "see it once the lead adds that address to their workspace as a git remote."
-    : notRecorded === null ? null : `The lead's project takes no push from here (${notRecorded}), so the lead and the other teams ` +
-      `cannot see that you took ${unit} until it does; AI-DLC records it there when a push next goes through.`;
+  const noPush = notRecorded === null ? null
+    : `${place.repo} takes no push from you (${notRecorded}), so your take of ${unit} is not written there, and someone else could still take it.`;
   // The take's own line waits for the build's next step, which also puts the
   // offer to clone its repos not checked out here (buildCloneOffer). The
   // no-push risk is a line of its own kept for the reply the turn ends on, so
@@ -9327,8 +9548,46 @@ function takeUnit(args: string[], projectDir?: string, rhythm?: UnitClaimPayload
   }));
 }
 
-// The generation a take writes: a released claim's own, else the next.
+// An early take's row field Early On: each Unit it started on, "; " between
+// them, as "<unit>: <repo> <branch> <head>, ..." with each repository it started
+// from there (a head not known is left off); a Unit that changed none of the
+// take's repositories is its name alone. Read back exactly by earlyOnFrom.
+function earlyOnField(earlyOn: NonNullable<UnitClaimPayload["early_on"]>): string {
+  return earlyOn.map((dep) => dep.repos.length === 0 ? dep.unit
+    : `${dep.unit}: ${dep.repos.map((repo) => [repo.repo, repo.branch, repo.head].filter(Boolean).join(" ")).join(", ")}`).join("; ");
+}
+
+function earlyOnFrom(field: string | null): UnitClaimPayload["early_on"] {
+  if (!field || field.trim() === "") return undefined;
+  return field.split("; ").map((part) => {
+    const at = part.indexOf(": ");
+    if (at === -1) return { unit: part.trim(), repos: [] };
+    return {
+      unit: part.slice(0, at).trim(),
+      repos: part.slice(at + 2).split(", ").map((entry) => {
+        const [repo = "", branch = "", head = ""] = entry.trim().split(" ");
+        return { repo, branch, head };
+      }),
+    };
+  });
+}
+
+// The Units a build started early on, by its own take row (read in any clone
+// of the workspace it was committed in), else, for a build taken before the
+// row carried them, by its record.
+export function buildEarlyOn(projectDir: string, build: UnitBuild, record?: UnitClaimView | null): NonNullable<UnitClaimPayload["early_on"]> {
+  const here = findUnitBuild(projectDir, build.homeWork, build.unit);
+  const row = here === null ? undefined
+    : readAuditShardEvents(projectDir, here.dirName, here.space).findLast((entry) => entry.event === "UNIT_TAKEN_IN");
+  const field = row === undefined ? null : auditBlockField(row.block, "Early On");
+  return earlyOnFrom(field) ?? record?.payload.early_on ?? [];
+}
+
+// The generation a take writes: one more over a take the lead opened again
+// (its view reads released while the lead's word applies), a released claim's
+// own, else the next.
 function takeGeneration(current: UnitClaimView | null): number {
+  if (current?.payload.open_again !== undefined) return current.generation + 1;
   return current?.status === "claimed" || current?.status === "released" ? current.generation : (current?.generation ?? 0) + 1;
 }
 
@@ -9385,31 +9644,40 @@ function takeIsBy(projectDir: string, oid: string, payload: UnitClaimPayload, me
   let at = oid;
   let taking = payload;
   for (let steps = 0; taking.predecessor_oid !== null && steps < 200; steps++) {
-    const before = readPayload(projectDir, taking.predecessor_oid);
+    const before = payloadAt(projectDir, taking.predecessor_oid);
     if (before === null || before.taken_by !== taking.taken_by) break;
     at = taking.predecessor_oid;
     taking = before;
   }
-  // The author's: a take the lead's project took in is the lead's commit, its author the taker.
+  // The author's: the commit that made the take, by its author's email.
   return localGit(projectDir, ["log", "-1", "--format=%ae", at]).stdout.trim() === myEmail;
 }
 
-// The lead's own build-here claims at the lead's work (Home Location, not a
-// Unit's build): a Unit the lead asked to build at the lead's project (`assign
-// --here`) whose claim is this person's take for the work's own space. The
-// lead's walk builds it; it is no team's.
+// The lead's own takes at the lead's work (Home Location, not a Unit's
+// build): a Unit the lead's project builds (asked here with `assign --here`,
+// the walking skeleton, one its walk started) has a record like any builder's,
+// whose take is this person's for the work's own space. The lead's walk builds
+// it; it is no team's.
 export function leadsOwnClaims(projectDir: string, stateContent: string, claims: ReadonlyMap<string, UnitClaimView>): Set<string> {
   if (homeLocation(stateContent) === null || unitBuildOf(stateContent) !== null) return new Set();
-  let asked: Set<string>;
+  let builds: Set<string>;
   try {
-    asked = unitsAskedHere(readAuditShardEvents(projectDir));
+    builds = unitsLeadsProjectBuilds(readAuditShardEvents(projectDir), keptPlan(projectDir, activeIdentity(projectDir).intentId8)?.plan.skeleton ?? null);
   } catch {
     return new Set();
   }
-  if (asked.size === 0) return new Set();
   const space = activeSpace(projectDir);
   return new Set([...claims].filter(([unit, claim]) =>
-    asked.has(unit) && claim.status === "claimed" && claim.owner === space && claimIsMine(projectDir, claim)).map(([unit]) => unit));
+    builds.has(unit) && claim.status === "claimed" && claim.owner === space && claimIsMine(projectDir, claim)).map(([unit]) => unit));
+}
+
+// The Units the lead's project builds in its own walk: asked here, the plan's
+// walking skeleton, and one its walk started. A take of this person's that made
+// a build of its own is that build's, never the walk's.
+function unitsLeadsProjectBuilds(rows: readonly AuditShardEvent[], skeleton: string | null): Set<string> {
+  const builds = new Set([...unitsAskedHere(rows), ...unitsStartedAtLeadsProject(rows)]);
+  if (skeleton !== null) builds.add(skeleton);
+  return builds;
 }
 
 // Whether the lead's work went to teams by a teammate's take of solo work: a
@@ -9448,31 +9716,8 @@ export function buildClaimHere(projectDir: string, built: { space: string; dirNa
 
 type TakeStanding =
   | { state: "recorded" }
-  | { state: "pending"; current: UnitClaimView | null; team: string; baseOid: string; dirName: string; space: string }
+  | { state: "pending"; current: UnitClaimView | null; team: string; baseOid: string; dirName: string; space: string; earlyOn?: UnitClaimPayload["early_on"] }
   | { state: "aside"; line: string };
-
-// The copies of a build's claims that are the lead's project's own, as this
-// clone reads them: the ones fetched by the lead's address, or through the
-// remote that is the lead's. A copy the team's own remote holds (a take sent
-// there, then fetched by the person's own git) is not the lead's. Read once
-// per process; nothing to narrow when the lead's place cannot be told.
-const leadsCopiesOf = new Map<string, ((ref: string) => boolean) | undefined>();
-function leadsClaimCopies(projectDir: string, build: UnitBuild): ((ref: string) => boolean) | undefined {
-  if (leadsCopiesOf.has(build.homeWork)) return leadsCopiesOf.get(build.homeWork);
-  let only: ((ref: string) => boolean) | undefined;
-  try {
-    const target = buildsHome(projectDir, build).target;
-    const remotes = gitRemotesOnce(projectDir);
-    const kind = (ref: string) => claimHere(ref, remotes);
-    only = target === null ? undefined
-      : isGitAddress(target) ? (ref) => kind(ref)?.kind === "address"
-      : (ref) => { const here = kind(ref); return here !== null && (here.kind !== "remote" || here.remote === target); };
-  } catch {
-    only = undefined;
-  }
-  leadsCopiesOf.set(build.homeWork, only);
-  return only;
-}
 
 function takeStanding(projectDir: string, build: UnitBuild): TakeStanding {
   const here = findUnitBuild(projectDir, build.homeWork, build.unit);
@@ -9480,11 +9725,13 @@ function takeStanding(projectDir: string, build: UnitBuild): TakeStanding {
   const row = readAuditShardEvents(projectDir, here.dirName, here.space).findLast((entry) => entry.event === "UNIT_TAKEN_IN");
   const own = knownAuditShardName(projectDir);
   if (row === undefined || own === null || basename(row.shard) !== own) return { state: "recorded" };
-  const homeSpace = buildHomeSpace(projectDir, build);
   let current: UnitClaimView | null;
+  let repo: string;
   try {
-    current = cachedClaimsForIdentity(projectDir, { space: homeSpace, intentUuid: build.homeWork, intentId8: idSuffix(build.homeWork) }, false,
-      leadsClaimCopies(projectDir, build)).get(build.unit) ?? null;
+    const home = buildsHome(projectDir, build);
+    const place = recordPlaceOf(projectDir, home, build.unit);
+    repo = place.repo;
+    current = recordCopied(projectDir, place, recordWork(home), build.unit);
   } catch {
     return { state: "recorded" };
   }
@@ -9498,11 +9745,15 @@ function takeStanding(projectDir: string, build: UnitBuild): TakeStanding {
   } catch {
     // The caller's stands.
   }
-  // The claim's own history, back from what git fetched: this take there once
-  // is recorded, whatever the lead did with the Unit since (takeIsBy).
-  let oid = current?.oid ?? null;
+  // Only a Unit's builder writes its record, so a take of someone else's at
+  // its tip is the record's take now, even over this build's own once there.
+  const theirs = current?.status === "claimed" && current.payload.taken_by !== undefined &&
+    !(current.generation === attempt && takeIsBy(projectDir, current.oid, current.payload, me, myEmail));
+  // The record's own history, back from what was read: this take there once is
+  // recorded, whatever happened to the Unit since (takeIsBy).
+  let oid = theirs ? null : current?.oid ?? null;
   for (let steps = 0; oid !== null && steps < 200; steps++) {
-    const payload = readPayload(projectDir, oid);
+    const payload = payloadAt(projectDir, oid);
     if (payload === null) break;
     if (payload.generation === attempt && takeIsBy(projectDir, oid, payload, me, myEmail)) return { state: "recorded" };
     oid = payload.predecessor_oid;
@@ -9512,11 +9763,21 @@ function takeStanding(projectDir: string, build: UnitBuild): TakeStanding {
   if (current?.status === "claimed" && current.payload.taken_by !== undefined) {
     const by = current.payload.taken_by;
     const at = git(projectDir, ["log", "-1", "--format=%as", current.oid]).stdout.trim();
+    const on = at ? ` on ${at}` : "";
+    const after = "Your build is still here: agree with " + by + " who carries it on, or give yours back.";
+    // This build's own take under the tip: the lead opened it again, and a take after that is on top now.
+    let under = current.payload.predecessor_oid;
+    for (let steps = 0; under !== null && steps < 200; steps++) {
+      const payload = payloadAt(projectDir, under);
+      if (payload === null) break;
+      if (payload.generation === attempt && takeIsBy(projectDir, under, payload, me, myEmail)) {
+        return { state: "aside", line: `${unit} was taken by ${by}${on} after the lead opened it again, so its record in ${repo} has their take now, not yours. ${after}` };
+      }
+      under = payload.predecessor_oid;
+    }
     return {
       state: "aside",
-      line: `${unit} was taken at the lead's project by ${by}${at ? ` on ${at}` : ""}, before your take ` +
-        `could be recorded there, so the lead and the other teams see theirs, not yours. Your build is still here: agree with ${by} ` +
-        "who carries it on, or give yours back.",
+      line: `${unit} was taken by ${by}${on}, written on its record in ${repo} before your take could be, so the record has theirs, not yours. ${after}`,
     };
   }
   if (current?.payload.done === true) {
@@ -9526,7 +9787,10 @@ function takeStanding(projectDir: string, build: UnitBuild): TakeStanding {
         "and the other teams do not see your take. Your build is still here: agree with the lead who carries it on, or give yours back.",
     };
   }
-  return { state: "pending", current, team, baseOid: auditBlockField(row.block, "Home Commit") ?? "", dirName: here.dirName, space: here.space };
+  return {
+    state: "pending", current, team, baseOid: auditBlockField(row.block, "Home Commit") ?? "", dirName: here.dirName, space: here.space,
+    earlyOn: earlyOnFrom(auditBlockField(row.block, "Early On")),
+  };
 }
 
 // The gate rhythm a take read at its commit: the plan's, or the lead's record's.
@@ -9557,9 +9821,11 @@ function recordTakeHere(projectDir: string, build: UnitBuild, home: HomeWork, st
         team: standing.team, home, unit: build.unit, ref, generation,
         me: git(projectDir, ["config", "user.name"]).stdout.trim() || "a teammate",
         baseOid: standing.baseOid, integrationRef, gateRhythm: takeRhythmAt(projectDir, home, standing.baseOid, record),
+        earlyOn: standing.earlyOn,
       });
-      const pushed = writeHomeClaim(projectDir, home, ref, createClaimCommit(projectDir, current?.oid ?? standing.baseOid, payload), current?.oid ?? null, { outbox: false });
-      if (!pushed.ok) return pushed;
+      const pushed = writeUnitRecord(projectDir, recordPlaceOf(projectDir, home, build.unit), ref,
+        createRecordCommit(projectDir, current?.oid ?? null, payload, standing.earlyOn ? "taken early" : "taken", {}, { take: true }), current?.oid ?? null);
+      if (!pushed.ok) return "lost" in pushed ? { ok: false } : { ok: false, refused: pushed.refused, ...(pushed.byRule ? { byRule: true as const } : {}) };
       invalidateLiveClaimPayloadCache(projectDir, build.unit);
       if (generation !== build.attempt) {
         withAuditLock(projectDir, () => {
@@ -9589,38 +9855,43 @@ export function takeAside(projectDir: string, stateContent: string): boolean {
 }
 
 // Where the take a build's result goes on stands, for the offer to send that
-// result again: "aside" (takeAside); "waits" when the take is not on the lead's
-// claim yet and this clone sends nowhere else (claimOutbox), so the result has
-// no claim to go on until a look records the take (recordTakeHere); else null.
+// result again: "aside" (takeAside); "waits" when the take is not on its record
+// yet, so the result has nothing to go on until a look or a push records the
+// take (recordTakeHere); else null.
 export function resultTakeHold(projectDir: string, stateContent: string): "aside" | "waits" | null {
   const build = unitBuildOf(stateContent);
   if (build === null) return null;
   try {
     const standing = takeStanding(projectDir, build).state;
     if (standing === "aside") return "aside";
-    return standing === "pending" && claimOutbox(projectDir, buildsHome(projectDir, build)) === null ? "waits" : null;
+    return standing === "pending" ? "waits" : null;
   } catch {
     return null;
   }
 }
 
 // The offer to send a Unit's result again (unitPushAsk puts it): one text, so a
-// push a rule of the lead's host refused counts it as put in its chat.
-export function resendQuestion(unit: string): string {
-  return `${unit} is pushed, but the lead's project did not take its result just now. Do you want me to send it again?`;
+// push a rule of its record's repository refused counts it as put in its chat.
+export function resendQuestion(unit: string, repo: string): string {
+  return `${unit} is pushed, but ${repo} did not take its result just now. Do you want me to send it again?`;
 }
 
-// The build's end while its result waits on the lead's project: said once per
-// chat (unitPushAsk), never in the chat whose push just said why.
-export function resultWaitsLine(unit: string): string {
-  return `The lead's project has not taken the result of ${unit} yet; ask me to send it again once its owner lets your pushes through.`;
+// The build's end while its result waits on its record's repository: said once
+// per chat (unitPushAsk), never in the chat whose push just said why.
+export function resultWaitsLine(unit: string, repo: string): string {
+  return `${repo} has not taken the result of ${unit} yet; ask me to send it again once its owner lets your pushes through.`;
 }
 
-// The push's line when a rule of the lead's project's host refused the result
-// (refusedByHostRule): the host's words, and what to ask its owner for.
-function resultRefusedByRuleLine(unit: string, refused: string): string {
-  return `The lead's project did not take the result of ${unit}: ${refused}. A rule on its host refuses it, so the lead cannot see ` +
-    "it yet: ask whoever owns that repository to let your pushes to refs/aidlc/claims/ through, then ask me to send it again.";
+// The push's line when a rule of the record's repository's host refused the
+// result (refusedByHostRule): the host's words, and what to ask its owner for.
+function resultRefusedByRuleLine(unit: string, repo: string, refused: string): string {
+  return `${repo} did not take the result of ${unit}: ${refused}. A rule on its host refuses it: ask whoever owns ${repo} to let ` +
+    "your pushes to refs/aidlc/claims/ through, then ask me to send it again.";
+}
+
+// The repository a build's record is in, by its name in the plan.
+export function buildRecordRepo(projectDir: string, build: UnitBuild): string {
+  return recordPlaceOf(projectDir, buildsHome(projectDir, build), build.unit).repo;
 }
 
 // A line of the take's for the person: it waits for the next step the agent
@@ -9731,155 +10002,36 @@ function quietFetch(dir: string, args: string[]): GitResult {
 // once the last fetch reached the home (both stamps are to the second, so a
 // message in the fetch's own second counts as after it). A look this .git
 // could not take in is taken again once, at the chat's next look. `unreached`
-// is the remote or address that could not be reached: the last fetch stands.
+// lists each repository that could not be read: the last look stands for it.
 const CLAIMS_FETCHED_FILE = "claims-fetched.json";
-
-// The lead's look: this work's claim branches on the lead's workspace's other
-// git remotes (a team's fork or own repo the lead added), fetched quietly, and
-// each claim commit there that is ahead of the lead's claim (a take, a result,
-// a give back, a proposal) put on it with the compare-and-swap. The first
-// taken in wins; a copy that is not ahead (a fork's stale copy) is left as it
-// is. A remote that cannot be read is said while a Unit is open at the lead's
-// project or when it held this work's claims before; an unrelated one goes
-// quiet once every Unit is taken. Only the lead's own checkout runs it.
-export function takeInFromRemotes(projectDir: string, options: { unitOpen: boolean }): { taken: number; lines: string[]; refused: boolean } {
-  const pd = resolveProjectDir(projectDir);
-  const home = repositoryRemote(pd);
-  const none = { taken: 0, lines: [] as string[], refused: false };
-  if (home === null) return none;
-  const identity = activeIdentity(pd);
-  const id8 = identity.intentId8;
-  // Said once to the lead: a remote that cannot be read, a take-in refused.
-  const lines: string[] = [];
-  let taken = 0;
-  // This .git refused the write (Codex's sandbox): its own line, not the remote's.
-  let refused = false;
-  for (const { remote, kept, heldBefore, fetched } of fetchTeamsClaims(pd, home, id8)) {
-    if (!fetched.ok && localGitWriteRefused(fetched.stderr) !== null) {
-      refused = true;
-      continue;
-    }
-    if (!fetched.ok) {
-      if (options.unitOpen || heldBefore) {
-        const address = maskUserinfo(git(pd, ["remote", "get-url", remote]).stdout.trim());
-        const why = fetched.stderr.split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? "it did not answer";
-        lines.push(`${remote} (${address}) could not be read just now (${why}), so a take or result a team sent there is not taken in yet.`);
-      }
-      continue;
-    }
-    for (const line of localGit(pd, ["for-each-ref", "--format=%(objectname) %(refname)", kept]).stdout.split(/\r?\n/).filter(Boolean)) {
-      const [oid, name] = line.trim().split(/\s+/, 2);
-      const unit = (name ?? "").slice(kept.length);
-      if (!oid || !unit || validateUnitName(unit)) continue;
-      const ref = claimRef(id8, unit);
-      const payload = readPayload(pd, oid);
-      if (payload === null || payload.intent_uuid !== identity.intentUuid || payload.unit !== unit || payload.claim_ref !== ref) continue;
-      const leadTip = localGit(pd, ["rev-parse", "--verify", "--quiet", claimCopyOf(home, ref)]).stdout.trim() || null;
-      if (leadTip !== null && claimAhead(pd, leadTip, oid) !== "ahead") continue;
-      // The lead's own commit with the team commit's tree, its author the
-      // team's, on the lead's claim tip: a host that takes only its pusher's
-      // commits takes it, and the team's own commit never goes there.
-      const notTakenIn = (why: string): string =>
-        `${unit}'s take or result on ${remote} could not be taken in here (${why.split(/\r?\n/).map((part) => part.trim()).find(Boolean) ?? why}), ` +
-        "so the other teams do not see it yet.";
-      // Under quiet git's time limit: signing that would ask for a passphrase fails, said with git's words.
-      let mine: string;
-      try {
-        mine = quietly(() => leadsOwnClaimCommit(pd, oid, leadTip ?? payload.base_oid));
-      } catch (e) {
-        lines.push(notTakenIn(errorMessage(e).replace(/^git commit-tree failed:\s*/, "")));
-        continue;
-      }
-      const put = quietly(() => updateClaimRef(pd, home, ref, mine, leadTip));
-      if (put.ok) {
-        taken++;
-        invalidateLiveClaimPayloadCache(pd, unit);
-      } else if (put.refused !== undefined) lines.push(notTakenIn(put.refused));
-    }
-  }
-  return { taken, lines, refused };
-}
-
-// The lead's other git remotes (a team's fork or own repo the lead added), and
-// this work's claim branches on each fetched quietly into the refs the
-// person's own fetch of that remote uses. Only the lead's own checkout runs it.
-function fetchTeamsClaims(pd: string, home: string, id8: string): Array<{ remote: string; kept: string; heldBefore: boolean; fetched: ReturnType<typeof quietFetch> }> {
-  const others = git(pd, ["remote"]).stdout.split(/\r?\n/).map((name) => name.trim()).filter((name) => name !== "" && name !== home);
-  return others.map((remote) => {
-    const kept = claimCopies(remote, false, false, id8);
-    const heldBefore = localGit(pd, ["for-each-ref", "--count=1", "--format=%(refname)", kept]).stdout.trim() !== "";
-    return { remote, kept, heldBefore, fetched: quietFetch(pd, ["--no-tags", "--no-filter", "-q", remote, `+${claimsOnRemote(false, id8)}*:${kept}*`]) };
-  });
-}
-
-// status and team-board at the lead's project: what the lead's other remotes
-// hold is read, never taken in, so the board shows a take or result a team sent
-// there as the next step shows it; that step takes it in.
-export function readTeamsClaims(projectDir: string): void {
-  try {
-    const pd = resolveProjectDir(projectDir);
-    const home = repositoryRemote(pd);
-    if (home !== null) fetchTeamsClaims(pd, home, activeIdentity(pd).intentId8);
-  } catch {
-    // What the lead's project has stands.
-  }
-}
-
-// A lead's command on a team's claim (merged, send-back, turned-down,
-// sign-off, release) takes in first what the lead's other remotes hold, as the
-// lead's look does, so it acts on a take or result a team sent there. The
-// lines the take-in has for the person and not said in this chat yet come
-// back for withTakeInLines.
-function takeInFirst(pd: string): string[] {
-  try {
-    if (unitBuildOf(readStateFile(pd)) !== null) return [];
-  } catch {
-    return [];
-  }
-  if (!refreshHomeClaims(pd, { now: true }).fetched) return [];
-  const back = takeInFromRemotes(pd, { unitOpen: true });
-  const lines = [...back.lines, ...(back.refused ? [newsNotTakenIn("the teams")] : [])];
-  const chat = takeInChat(pd);
-  return chat === null ? lines : lines.filter((line) => !personLineHeard(pd, chat, line));
-}
-
-function takeInChat(pd: string): string | null {
-  try {
-    return resolveInvokingSessionId(pd) ?? null;
-  } catch {
-    return null;
-  }
-}
-
-// The command's own words (its notice or its refusal) after the take-in's
-// lines, which are then heard in this chat, so the look does not say them again.
-function withTakeInLines(pd: string, heard: readonly string[], words: string): string {
-  if (heard.length === 0) return words;
-  const chat = takeInChat(pd);
-  if (chat !== null) markPersonLinesHeard(pd, chat, heard);
-  return [...heard, words].join(" ");
-}
-
-// A team's claim commit written again as this person's own: its tree, its
-// message, its author (name, email, date), on `parent`.
-function leadsOwnClaimCommit(projectDir: string, oid: string, parent: string): string {
-  const [name, email, date] = localGit(projectDir, ["log", "-1", "--format=%an%x00%ae%x00%aI", oid]).stdout.trim().split("\0");
-  const tree = localGit(projectDir, ["rev-parse", `${oid}^{tree}`]).stdout.trim();
-  const message = localGit(projectDir, ["log", "-1", "--format=%B", oid]).stdout.trim() || "claim";
-  return commitAsPerson(projectDir, tree, [parent], message, { GIT_AUTHOR_NAME: name, GIT_AUTHOR_EMAIL: email, GIT_AUTHOR_DATE: date });
-}
 
 // The homes whose claims an earlier step of this command fetched (refreshHomeClaims).
 const homesFetchedThisCommand = new Set<string>();
 
+// A repository a look could not read: its name, its address, git's own words.
+export interface RecordRepoUnread {
+  repo: string;
+  address: string;
+  said: string;
+}
+
 export function refreshHomeClaims(
   projectDir: string,
-  options: { home?: { target: string | null; id8: string; location?: string; solo?: boolean }; sessionId?: string; now?: boolean; sincePerson?: boolean } = {},
-): { fetched: boolean; unreached: string | null; said?: string | null; planGone?: true; refused?: string; lookedThisCommand?: true } {
+  options: {
+    home?: { id8: string; location?: string; solo?: boolean; plan?: PlanJson; space?: string };
+    sessionId?: string; now?: boolean; sincePerson?: boolean;
+  } = {},
+): { fetched: boolean; unreached: RecordRepoUnread[]; planGone?: true; refused?: string; lookedThisCommand?: true } {
   const pd = resolveProjectDir(projectDir);
-  const { target, id8 } = options.home ?? { target: repositoryRemote(pd), id8: activeIdentity(pd).intentId8 };
-  if (target === null) return { fetched: false, unreached: null };
-  const home = `${pd}\0${target}\0${id8}`;
+  const id8 = options.home?.id8 ?? activeIdentity(pd).intentId8;
+  // A home named is the build-out's; the work here, by its recorded flow:
+  // main's flow reads its claim branches through this workspace's remote; the
+  // build-out each record where the plan says it is.
+  const onBranches = options.home === undefined && claimsOnBranches(stateHere(pd));
+  const target = onBranches ? repositoryRemote(pd) : null;
+  const places = onBranches ? [] : recordPlacesOfWork(pd, id8, options.home);
+  if (onBranches ? target === null : places.length === 0) return { fetched: false, unreached: [] };
+  const home = `${pd}\0${onBranches ? target : places.map((place) => place.address).join("\0")}\0${id8}`;
   const mark = join(sessionsDir(pd), CLAIMS_FETCHED_FILE);
   let chats: Record<string, string | { chat: string; at: string; reached: boolean; refused?: boolean; again?: boolean }> = {};
   try {
@@ -9904,36 +10056,64 @@ export function refreshHomeClaims(
   // run again with write access, which looks again whether or not they spoke.
   const again = last?.chat === chat && last.refused === true && last.again !== true;
   // Already looked in this chat: said with whether this command's own earlier step looked, so what reads the
-  // look (the board's take-in from the lead's other remotes) still runs in the step that made it.
+  // look still runs in the step that made it.
   if (!options.now && !spoke && !again && last?.chat === chat) {
-    return { fetched: false, unreached: null, ...(homesFetchedThisCommand.has(home) ? { lookedThisCommand: true as const } : {}) };
+    return { fetched: false, unreached: [], ...(homesFetchedThisCommand.has(home) ? { lookedThisCommand: true as const } : {}) };
   }
-  // A home named is the build-out's; the work here, by its recorded flow.
-  const onBranches = options.home === undefined && claimsOnBranches(stateHere(pd));
-  const into = claimCopies(target, onBranches, isGitAddress(target), id8).slice(0, -1);
   const at = isoTimestamp();
-  const before = claimTipsAt(pd, into);
-  const fetched = quietFetch(pd, ["--no-tags", "--no-filter", "-q", target, `+${claimsOnRemote(onBranches, id8)}*:${into}/*`]);
-  if (fetched.ok) sayOwnBuildsMerged(pd, into, before);
-  // The lead's project answered, and this repository's own .git refused the
-  // write (Codex's sandbox keeps it read-only): not a project that is down.
+  const unreached: RecordRepoUnread[] = [];
+  // A repository that answered, and this repository's own .git refused the
+  // write (Codex's sandbox keeps it read-only): not a repository that is down.
   // The first time in a chat the step stops with its way on, which an agent in
   // that sandbox takes with the write access the session grants (AI-DLC's
   // shipped rules allow its engine commands), so the news is read rather than
   // missed; after that the step goes on and says it plainly, never a loop.
-  const refused = fetched.ok ? null : localGitWriteRefused(fetched.stderr);
-  const ok = fetched.ok;
-  if (ok) homesFetchedThisCommand.add(home);
+  let refused: string | null = null;
+  let refusedFrom: string | undefined;
+  if (onBranches && target !== null) {
+    const into = claimCopies(target, id8).slice(0, -1);
+    const fetched = quietFetch(pd, ["--no-tags", "--no-filter", "-q", target, `+${claimsOnRemote(true, id8)}*:${into}/*`]);
+    refused = fetched.ok ? null : localGitWriteRefused(fetched.stderr);
+    if (!fetched.ok && refused === null) {
+      unreached.push({ repo: target, address: target, said: maskUserinfo(fetched.stderr.trim().split(/\r?\n/)[0]?.trim() ?? "") });
+    }
+  }
+  const moved = new Map<string, { now: string | null; was: string | null }>();
+  for (const place of places) {
+    const looked = lookAt(pd, place.address, [claimsOnRemote(false, id8)]);
+    if (looked.ok) {
+      for (const [ref, seen] of Object.entries(looked.refs)) moved.set(ref.slice(ref.lastIndexOf("/") + 1), seen);
+    } else if ("refused" in looked) {
+      refused = looked.refused;
+      refusedFrom = place.repo;
+      break;
+    } else {
+      unreached.push({ repo: place.repo, address: place.address, said: looked.firstLine ?? "it did not answer in time" });
+    }
+  }
+  if (refused === null) sayOwnBuildsMerged(pd, id8, moved, options.home);
   // A plan read where it is shared: its copy (the Units, the lead's rules a
   // build follows) comes with the claims, whichever step looked first in the
-  // chat. Solo work has no plan.
+  // chat, and its look counts as theirs does. Solo work has no plan.
   const planAddress = options.home !== undefined && options.home.solo !== true ? options.home.location : undefined;
-  const planLook = ok && planAddress !== undefined && isGitAddress(planAddress) ? lookAt(pd, planAddress, [planRecordRef(id8)]) : null;
-  // A plan gone from its repository (its copy here kept): the chat is not
-  // noted, so each step looks again, quietly, until the plan is back, and a
-  // plan that is gone is never offered from its copy.
-  const seen = planLook?.ok ? planLook.refs[planRecordRef(id8)] : undefined;
-  const planGone = seen !== undefined && seen.now === null && seen.was !== null;
+  let planGone = false;
+  if (refused === null && unreached.length === 0 && planAddress !== undefined && isGitAddress(planAddress)) {
+    const plan = lookAt(pd, planAddress, [planRecordRef(id8)]);
+    if (plan.ok) {
+      // A plan gone from its repository (its copy here kept): the chat is not
+      // noted, so each step looks again, quietly, until the plan is back, and a
+      // plan that is gone is never offered from its copy.
+      const seen = plan.refs[planRecordRef(id8)];
+      planGone = seen !== undefined && seen.now === null && seen.was !== null;
+    } else if ("refused" in plan) {
+      refused = plan.refused;
+      refusedFrom = repoNameOf(planAddress);
+    } else {
+      unreached.push({ repo: repoNameOf(planAddress), address: planAddress, said: plan.firstLine ?? "it did not answer in time" });
+    }
+  }
+  const ok = refused === null && unreached.length === 0;
+  if (ok) homesFetchedThisCommand.add(home);
   const stopped = refused !== null && last?.chat === chat && last.refused === true;
   if (!planGone) {
     try {
@@ -9945,21 +10125,30 @@ export function refreshHomeClaims(
       // Unnoted, the next step fetches again.
     }
   }
-  if (refused !== null && !stopped) throw new GitWriteRefused(refused);
-  if (refused !== null) return { fetched: false, unreached: null, refused };
-  // What git said when it did not answer: its first line, or null at the look's time limit.
-  const said = ok ? undefined : /ETIMEDOUT/.test(fetched.stderr) ? null : maskUserinfo(fetched.stderr.trim().split(/\r?\n/)[0] ?? "");
-  return { fetched: ok, unreached: ok ? null : target, ...(said !== undefined ? { said } : {}), ...(planGone ? { planGone: true as const } : {}) };
+  if (refused !== null && !stopped) throw new GitWriteRefused(refused, refusedFrom);
+  if (refused !== null) return { fetched: false, unreached: [], refused };
+  return { fetched: ok, unreached, ...(planGone ? { planGone: true as const } : {}) };
 }
 
-// A plan's claim tips under `into`, the refs a fetch of its claims writes, by Unit.
-function claimTipsAt(pd: string, into: string): Map<string, string> {
-  const tips = new Map<string, string>();
-  for (const line of localGit(pd, ["for-each-ref", "--format=%(objectname) %(refname)", `${into}/`]).stdout.split(/\r?\n/).filter(Boolean)) {
-    const [oid, ref] = line.trim().split(/\s+/, 2);
-    if (oid && ref) tips.set(ref.slice(into.length + 1), oid);
+// The repositories that hold a work's records, each once: the ones the plan
+// names (units[].record); for the solo second person, or work with no plan
+// here, the place recordPlaceOf gives.
+function recordPlacesOfWork(
+  projectDir: string,
+  id8: string,
+  home?: { location?: string; solo?: boolean; plan?: PlanJson },
+): RecordPlace[] {
+  const plan = home?.solo === true ? null : home?.plan ?? planOfWork(projectDir, id8);
+  if (plan === null) {
+    const address = home?.location ?? workspaceHomeLocation(projectDir);
+    return address === null || address === "local" ? [] : [{ repo: repoNameOf(address), address }];
   }
-  return tips;
+  const seen = new Map<string, RecordPlace>();
+  for (const unit of plan.units) {
+    const place = recordPlaceIn(plan, unit.name);
+    if (!seen.has(gitAddressKey(place.address))) seen.set(gitAddressKey(place.address), place);
+  }
+  return [...seen.values()];
 }
 
 // A build of the person's own here, in this checkout or on another branch of
@@ -9967,14 +10156,33 @@ function claimTipsAt(pd: string, into: string): Map<string, string> {
 // main), whose claim this fetch brought to done: said once, with the step that
 // follows. A fetch that moved nothing (their own pull got there first) says
 // nothing; with the build in this checkout, status's Yours line still shows it.
-function sayOwnBuildsMerged(pd: string, into: string, before: ReadonlyMap<string, string>): void {
-  for (const [unit, oid] of claimTipsAt(pd, into)) {
-    const was = before.get(unit);
-    if (was === oid) continue;
-    const now = readPayload(pd, oid);
-    if (now?.done !== true || (was !== undefined && readPayload(pd, was)?.done === true)) continue;
-    if (!takeIsBy(pd, oid, now, gitUserName(pd), git(pd, ["config", "user.email"]).stdout.trim())) continue;
-    if (findUnitBuild(pd, now.intent_uuid, unit) === null && !branchWithBuild(pd, now.intent_uuid, unit)) continue;
+function sayOwnBuildsMerged(
+  pd: string,
+  id8: string,
+  moved: ReadonlyMap<string, { now: string | null; was: string | null }>,
+  home?: { space?: string; plan?: PlanJson },
+): void {
+  if (moved.size === 0) return;
+  // The work these records are for: the plan's, else the work here.
+  const here = (): string | null => {
+    try {
+      const identity = activeIdentity(pd);
+      return identity.intentId8 === id8 ? identity.intentUuid : null;
+    } catch {
+      return null;
+    }
+  };
+  const uuid = home?.plan?.work.id ?? planOfWork(pd, id8)?.work.id ?? here();
+  if (uuid === null) return;
+  const work = { uuid, space: home?.space ?? "" };
+  for (const [unit, { now: oid, was }] of moved) {
+    if (oid === null || was === oid) continue;
+    const ref = claimRecordRef(id8, unit);
+    const view = recordView(pd, ref, oid, work);
+    const before = was === null ? null : recordView(pd, ref, was, work);
+    if (view?.payload.done !== true || before?.payload.done === true) continue;
+    if (!takeIsBy(pd, oid, view.payload, gitUserName(pd), git(pd, ["config", "user.email"]).stdout.trim())) continue;
+    if (findUnitBuild(pd, uuid, unit) === null && !branchWithBuild(pd, uuid, unit)) continue;
     saidWithNextStep(pd, `Your ${unit} is merged.`);
   }
 }
@@ -9995,8 +10203,9 @@ export function readBuildClaims(projectDir: string, stateContent: string): void 
 // .git: every caller that takes a failed look as "the claims stand" lets this
 // one through, so the way on reaches the agent once in the chat.
 export class GitWriteRefused extends Error {
-  constructor(gitLine: string) {
-    super(`The news from the lead's project reached this workspace, but its .git cannot be written in this session ` +
+  // `from`: the repository a look read, where it is known.
+  constructor(gitLine: string, from?: string) {
+    super(`${from === undefined ? "The news from the lead's project" : `What was read from ${from}`} reached this workspace, but its .git cannot be written in this session ` +
       `(git: ${gitLine}), so it was not taken in. Run the same command again with write access to it (on Codex, ` +
       "with escalated permissions, or with the repository's .git in writable_roots as the shipped config.toml shows); " +
       "nothing else changes.");
@@ -10029,12 +10238,12 @@ export function refreshListedHome(
   dirName: string,
   space: string,
   options: { sessionId?: string; now?: boolean },
-): { fetched: boolean; unreached: string | null } {
+): { fetched: boolean; unreached: RecordRepoUnread[] } {
   try {
     return refreshHomeClaims(projectDir, { home: findHomeWork(projectDir, dirName, space), ...options });
   } catch (e) {
     if (e instanceof GitWriteRefused) throw e;
-    return { fetched: false, unreached: null };
+    return { fetched: false, unreached: [] };
   }
 }
 
@@ -10046,12 +10255,6 @@ export function unitsTaken(projectDir: string, space: string, intentUuid: string
   } catch {
     return new Set();
   }
-}
-
-// A claim at the home's address: fetched so its payload can be read.
-function ensureFetchedClaim(projectDir: string, home: HomeWork, ref: string): void {
-  if (home.target === null || !isGitAddress(home.target)) return;
-  quietFetch(projectDir, ["--no-tags", home.target, `+${ref}:${claimCopies(home.target, false, true, home.id8)}${ref.slice(ref.lastIndexOf("/") + 1)}`]);
 }
 
 // --- Sending a Unit's build home ----------------------------------------------
@@ -10084,7 +10287,19 @@ function ownChanges(pd: string, planned: ReadonlyArray<{ repo: string; dir: stri
 
 function buildsHome(projectDir: string, build: UnitBuild): HomeWork {
   const here = leadWorkHere(projectDir, build.homeWork);
-  if (here !== null) return findHomeWork(projectDir, here.dirName, here.space);
+  if (here !== null) {
+    // The home is where the take was made: a build taken from the plan at an
+    // address the lead's work here does not record (a clone made before the
+    // lead's share reached it) reads that plan, so its writes go where its take went.
+    let found: HomeWork | null = null;
+    try {
+      found = findHomeWork(projectDir, here.dirName, here.space);
+    } catch (error) {
+      if (!isGitAddress(build.homeLocation)) throw error;
+    }
+    if (found !== null && (!isGitAddress(build.homeLocation) || sameGitAddress(found.location, build.homeLocation))) return found;
+    return planHomeAt(projectDir, build);
+  }
   const lead = planHomeOfBuild(projectDir, build);
   if (lead === null) fail(`${build.unit}'s build names no plan to read.`);
   return lead;
@@ -10325,21 +10540,15 @@ function pushUnit(args: string[], projectDir?: string): void {
     .filter((pair): pair is [string, string] => pair.length === 2 && pair[0] !== "" && pair[1] !== ""));
   const home = buildsHome(pd, build);
   const ref = claimRef(home.id8, unit);
-  if (home.target !== null) ensureFetchedClaim(pd, home, ref);
-  // A take the lead's project did not record then is recorded first, so the
-  // result goes onto this build's own claim, never onto anyone else's: read
-  // against the claims as the lead's project has them now.
+  const place = recordPlaceOf(pd, home, unit);
+  // A take its record's repository did not take then is recorded first, so
+  // the result goes onto this build's own take, never onto anyone else's: read
+  // against the record as its repository has it now.
+  typedRecordRead(pd, place, recordWork(home), unit);
   let standing = takeStanding(pd, build);
-  if (standing.state === "pending") {
-    refreshHomeClaims(pd, { home, now: true });
-    standing = takeStanding(pd, build);
-  }
   const recorded = standing.state === "pending" ? recordTakeHere(pd, build, home, standing, true) : null;
-  if (recorded?.ok) {
-    if (home.target !== null) ensureFetchedClaim(pd, home, ref);
-    standing = takeStanding(pd, build);
-  }
-  const claim = currentClaim(pd, home.target, ref);
+  if (recorded?.ok) standing = takeStanding(pd, build);
+  const claim = recordCopied(pd, place, recordWork(home), unit);
   const label = homeLabelOf(state, build);
   const dotStart = byRepo.has(".") ? takeIntegrationRef(pd, claim) ?? planBranchStart(pd, build) : null;
   const integrationOf = (repo: string, dir: string, remote: string): string =>
@@ -10617,6 +10826,8 @@ function pushUnit(args: string[], projectDir?: string): void {
         const id = patchIdOf(dir, base, head, changed);
         return id ? { patch_id: id } : {};
       })(),
+      // A repository the plan does not list: the lead reaches it by this address, with no sign-in in it.
+      ...(addedRepos.includes(repo) ? { address: recordedAddress(dir, git(dir, ["remote", "get-url", remote]).stdout.trim()) } : {}),
     };
     results.push(entry);
     hostSaid.push({ name, words: hostLinkWords(pushed.stderr, branch) });
@@ -10660,62 +10871,46 @@ function pushUnit(args: string[], projectDir?: string): void {
     by: git(pd, ["config", "user.name"]).stdout.trim() || "a teammate", repos: results, outputs,
     ...(kept.length > 0 ? { kept_edits: kept } : {}),
   };
-  // The result on a claim: the Unit outputs the lead's later stages read with it.
+  // The result on the Unit's record, with the Unit outputs the lead's later
+  // stages read under result/.
   const resultOn = (on: UnitClaimView): string => {
     const files = Object.fromEntries(outputs.map((rel) => [
-      `${RESULT_FILES_ROOT}/${rel}`,
+      rel,
       outputForLead(pd, rel, readFileSync(join(activeRecordDir(pd), ...rel.split("/")), "utf-8")),
     ]));
-    // A push after a turn-down is the team's answer to it. The lead's word that
-    // a repo merged holds only for a repo whose head did not change.
-    const saidMerged = (on.payload.said_merged ?? []).filter((entry) =>
-      earlier.get(entry.repo)?.heads.at(-1) === results.find((repo) => repo.repo === entry.repo)?.heads.at(-1));
-    const payload: UnitClaimPayload = {
-      ...on.payload,
-      predecessor_oid: on.oid,
-      result,
-      verdicts: undefined,
-      turned_down: undefined,
-      said_merged: saidMerged.length > 0 ? saidMerged : undefined,
-    };
-    return createClaimCommit(pd, on.oid, payload, undefined, undefined, files);
+    return createRecordCommit(pd, on.oid, { ...on.payload, result }, "pushed", { result: files });
   };
-  const onRemote = (address: string): string =>
-    `Its result is on ${address} too; the lead's project takes it in at the lead's next look.`;
   let homeHasIt = false;
-  // Sent to the team's own remote, where the lead's look takes it in: nothing to send again.
-  let sentElsewhere = false;
-  // On the take the team's own remote holds when it is ahead of the lead's
-  // claim (a proposal sent there, a take not taken in yet), else on the lead's
-  // claim as read.
-  const on = standing.state === "aside" ? null : claimToGoOn(pd, home, build, ref, claim);
-  const base = on === null ? null : on.outbox !== undefined ? on.claim : standing.state === "pending" ? null : claim;
-  // The result not taken is said here once. A rule of the lead's host meets a
-  // send again the same way, so its line asks nothing and this chat is not
+  // On this build's take as its record holds it.
+  const base = standing.state === "aside" || standing.state === "pending" ? null : claim;
+  // The result not taken is said here once. A rule of its host meets a send
+  // again the same way, so its line asks nothing and this chat is not
   // offered the send again (resendQuestion); nor does it hear the build's end
   // line about it (resultWaitsLine) right after this one.
   let notTaken: { byRule: boolean } | null = null;
   if (standing.state === "aside") {
     lines.push(standing.line);
+  } else if (standing.state === "pending") {
+    // The take was never written there, and is not now: said once for the
+    // build, and nothing is asked; a later push the repository takes writes both.
+    notTaken = { byRule: true };
+    if (engineAskMark(pd, takeNotWrittenMark(unit)) === null) {
+      lines.push(`${place.repo} still takes no push of ${unit}'s record from you (${recorded?.refused ?? "it changed while I was writing it"}), ` +
+        "so neither your take nor this result is written there.");
+      noteEngineAskMark(pd, takeNotWrittenMark(unit));
+    }
   } else if (base === null) {
-    // The lead's project answered and holds no claim of this take now: the
-    // code is pushed, and the result waits to be sent again.
-    notTaken = { byRule: standing.state === "pending" && recorded?.byRule === true && recorded.refused !== undefined };
-    lines.push(standing.state !== "pending"
-      ? `The lead's project did not take ${unit}'s result: its claim is not there now. Do you want me to send it again?`
-      : notTaken.byRule ? resultRefusedByRuleLine(unit, recorded!.refused!)
-      : `The lead's project did not take ${unit}'s result: ${recorded?.refused ?? "its claim there changed while it was being sent"}. Do you want me to send it again?`);
+    // The record's repository answered and holds no record of this take now:
+    // the code is pushed, and the result waits to be sent again.
+    notTaken = { byRule: false };
+    lines.push(`${place.repo} did not take ${unit}'s result: its record is not there now. Do you want me to send it again?`);
   } else {
-    const sent = writeHomeClaim(pd, home, ref, resultOn(base), claim?.oid ?? null);
-    if (sent.elsewhere !== undefined) {
-      lines.push(onRemote(sent.elsewhere));
-      sentElsewhere = true;
-    } else if (!sent.ok) {
-      notTaken = { byRule: sent.notThere === undefined && sent.byRule === true && sent.refused !== undefined };
-      lines.push(sent.notThere !== undefined
-        ? `The lead's project did not take ${unit}'s result, and ${sent.notThere.address} did not either (${sent.notThere.why}). Do you want me to send it again?`
-        : notTaken.byRule ? resultRefusedByRuleLine(unit, sent.refused!)
-        : `The lead's project did not take ${unit}'s result: ${sent.refused ?? "its claim there changed while it was being sent"}. Do you want me to send it again?`);
+    const sent = writeUnitRecord(pd, place, ref, resultOn(base), base.oid);
+    if (!sent.ok) {
+      const refused = "refused" in sent ? sent : null;
+      notTaken = { byRule: refused?.byRule === true };
+      lines.push(notTaken.byRule ? resultRefusedByRuleLine(unit, place.repo, refused!.refused)
+        : `${place.repo} did not take ${unit}'s result: ${refused?.refused ?? "its record there changed while it was being sent"}. Do you want me to send it again?`);
     }
     else invalidateLiveClaimPayloadCache(pd, unit);
     homeHasIt = sent.ok;
@@ -10723,12 +10918,12 @@ function pushUnit(args: string[], projectDir?: string): void {
   if (notTaken !== null) {
     try {
       const chat = resolveWorkflowSelection(pd).sessionId;
-      if (chat) markPersonLinesHeard(pd, chat, [resultWaitsLine(unit), ...(notTaken.byRule ? [resendQuestion(unit)] : [])]);
+      if (chat) markPersonLinesHeard(pd, chat, [resultWaitsLine(unit, place.repo), ...(notTaken.byRule ? [resendQuestion(unit, place.repo)] : [])]);
     } catch {
       // No chat known: the next step says and asks as it would.
     }
   }
-  const sentOn = homeHasIt || sentElsewhere;
+  const sentOn = homeHasIt;
   withAuditLock(pd, () => {
     // Pushed once the result reached the home; until then the build offers to
     // send the result again.
@@ -10760,10 +10955,9 @@ function pushUnit(args: string[], projectDir?: string): void {
   if (record?.line) lines.push(record.line);
   const checkIn = sentOn && !record?.went ? checkInLine(pd) : null;
   if (checkIn !== null) lines.push(checkIn);
-  // Reached the lead's project or the team's own remote, so no line asks
-  // anything: the lines ride the step that follows, as the take's carry-on
-  // line does, so a next run at once says them with its question; with no chat
-  // known they are printed here.
+  // With the result on the Unit's record no line asks anything: the lines ride
+  // the step that follows, as the take's carry-on line does, so a next run at
+  // once says them with its question; with no chat known they are printed here.
   const told = joinSaid(lines);
   const forNextStep = sentOn && saidWithNextStep(pd, told);
   console.log(JSON.stringify({ pushed: true, unit, repos: results.map((repo) => repo.repo), ...(forNextStep ? {} : { notice: told }) }));
@@ -11289,7 +11483,7 @@ export function buildClaimNotes(projectDir: string, stateContent: string, sessio
     const waitsOnEarly = ((): boolean => {
       try {
         const cached = cachedClaimsForIdentity(projectDir, { space, intentUuid: build.homeWork, intentId8: idSuffix(build.homeWork) }, false);
-        return (cached.get(build.unit)?.payload.early_on ?? []).some((dep) => dep.repos.length > 0 && cached.get(dep.unit)?.payload.done !== true);
+        return buildEarlyOn(projectDir, build, cached.get(build.unit)).some((dep) => dep.repos.length > 0 && cached.get(dep.unit)?.payload.done !== true);
       } catch {
         return false;
       }
@@ -11297,16 +11491,19 @@ export function buildClaimNotes(projectDir: string, stateContent: string, sessio
     const atStage = `${recordDir(projectDir) ?? ""}:${getField(stateContent, "Current Stage")?.trim() ?? ""}`;
     const newStage = buildStageLooked(projectDir, sessionId) !== atStage;
     const refreshed = home === null ? null : refreshHomeClaims(projectDir, { home, sessionId, now: waits || newStage || waitsOnEarly });
-    if (refreshed?.unreached) lines.push("The lead's project could not be reached just now, so news from it may be behind.");
-    if (refreshed?.refused) lines.push(newsNotTakenIn("the lead's project"));
-    if (home !== null && newStage) noteBuildStageLooked(projectDir, sessionId, atStage);
-    // A take the lead's project did not record then, tried again when the claims were just fetched. One recorded
-    // by the lead's address leaves no copy here: its claim is fetched, so this step reads it recorded.
-    const standing = home !== null && refreshed?.fetched ? takeStanding(projectDir, build) : null;
-    if (home !== null && standing?.state === "pending" && recordTakeHere(projectDir, build, home, standing, false).ok) {
-      ensureFetchedClaim(projectDir, home, claimRef(home.id8, build.unit));
+    if (refreshed !== null && refreshed.unreached.length > 0) {
+      const names = [...new Set(refreshed.unreached.map((unread) => unread.repo))];
+      lines.push(`${joinNames(names)} could not be read just now (${refreshed.unreached[0].said}), so news from ` +
+        `${names.length === 1 ? "it" : "them"} may be behind.`);
     }
-    if (home !== null && waits && !refreshed?.unreached) {
+    if (refreshed?.refused && home !== null) {
+      lines.push(newsNotTakenIn(joinNames([...new Set(recordPlacesOfWork(projectDir, home.id8, home).map((place) => place.repo))])));
+    }
+    if (home !== null && newStage) noteBuildStageLooked(projectDir, sessionId, atStage);
+    // A take its record's repository did not take then, tried again when the records were just read.
+    const standing = home !== null && refreshed?.fetched ? takeStanding(projectDir, build) : null;
+    if (home !== null && standing?.state === "pending") recordTakeHere(projectDir, build, home, standing, false);
+    if (home !== null && waits && (refreshed?.unreached.length ?? 0) === 0) {
       try {
         const cached = cachedClaimsForIdentity(projectDir, { space, intentUuid: build.homeWork, intentId8: idSuffix(build.homeWork) }, false)
           .get(build.unit);
@@ -11345,7 +11542,7 @@ export function buildClaimNotes(projectDir: string, stateContent: string, sessio
   // A Unit it started early on that is now done is offered as the move onto
   // the integration branch (earlyBaseMerged), not as a line.
   // One that changed none of this Unit's repos left nothing here on its branch.
-  for (const dep of mine.payload.early_on ?? []) {
+  for (const dep of buildEarlyOn(projectDir, build, mine)) {
     const theirs = claims.get(dep.unit)?.payload;
     if (!theirs?.done && theirs?.turned_down && dep.repos.length > 0) {
       lines.push(`${dep.unit} was turned down by the lead; ${unit} started on its branch. Nothing else changes: wait for it, ` +
@@ -11412,14 +11609,21 @@ function sendBranchTipsHome(pd: string, build: UnitBuild, home: HomeWork, cached
   }
   if (tips.size === 0) return;
   const ref = claimRef(home.id8, build.unit);
-  const on = claimToGoOn(pd, home, build, ref, currentClaim(pd, home.target, ref)).claim;
+  const place = recordPlaceOf(pd, home, build.unit);
+  let on: UnitClaimView | null;
+  try {
+    on = readUnitRecord(pd, place, recordWork(home), build.unit);
+  } catch (error) {
+    if (error instanceof RecordUnread) return;
+    throw error;
+  }
   if (on?.status !== "claimed" || on.payload.result === undefined || on.payload.done) return;
   const repos = on.payload.result.repos.map((repo) => {
     const atTip = tips.get(repo.repo);
     return atTip !== undefined && atTip.heads.at(-2) === repo.heads.at(-1) ? atTip : repo;
   });
-  const payload: UnitClaimPayload = { ...on.payload, predecessor_oid: on.oid, result: { ...on.payload.result, repos } };
-  if (writeHomeClaim(pd, home, ref, createClaimCommit(pd, on.oid, payload), on.oid).ok) invalidateLiveClaimPayloadCache(pd, build.unit);
+  const payload: UnitClaimPayload = { ...on.payload, result: { ...on.payload.result, repos } };
+  if (writeUnitRecord(pd, place, ref, createRecordCommit(pd, on.oid, payload, "branch moved"), on.oid).ok) invalidateLiveClaimPayloadCache(pd, build.unit);
 }
 
 // The lead's turn-down of another of this clone's Unit builds, said in a chat
@@ -11503,8 +11707,8 @@ export function earlyBaseMerged(
     return [];
   }
   const branch = unitBranchOf(stateContent, build.unit);
-  const earlyOn = claims.get(build.unit)?.payload.early_on ?? [];
-  if (earlyOn.length === 0 || takeStanding(projectDir, build).state !== "recorded") return [];
+  const earlyOn = buildEarlyOn(projectDir, build, claims.get(build.unit));
+  if (earlyOn.length === 0 || takeStanding(projectDir, build).state === "aside") return [];
   return earlyOn.flatMap((dep) => {
     const theirs = claims.get(dep.unit)?.payload;
     if (!theirs?.done || skip(dep.unit)) return [];
@@ -11708,23 +11912,18 @@ function proposeChange(args: string[], projectDir?: string): void {
   }
   const home = buildsHome(pd, build);
   const ref = claimRef(home.id8, build.unit);
-  if (home.target !== null) ensureFetchedClaim(pd, home, ref);
-  // Never onto a claim this build's take is not on; one the lead's project did
-  // not record then is recorded first.
+  const place = recordPlaceOf(pd, home, build.unit);
+  // Never onto a record this build's take is not on; one its repository did
+  // not take then is recorded first.
+  typedRecordRead(pd, place, recordWork(home), build.unit);
   let standing = takeStanding(pd, build);
-  if (standing.state === "pending") {
-    refreshHomeClaims(pd, { home, now: true });
-    standing = takeStanding(pd, build);
-    if (standing.state === "pending" && recordTakeHere(pd, build, home, standing, true).ok) standing = takeStanding(pd, build);
-  }
+  if (standing.state === "pending" && recordTakeHere(pd, build, home, standing, true).ok) standing = takeStanding(pd, build);
   if (standing.state === "aside") {
     console.log(JSON.stringify({ proposed: false, notice: standing.line }));
     return;
   }
-  // On the take the team's own remote holds when it is ahead of the lead's claim.
-  const atLead = currentClaim(pd, home.target, ref);
-  const live = claimToGoOn(pd, home, build, ref, atLead).claim;
-  if (live?.status !== "claimed") fail(`${build.unit} is not held at the lead's project, so there is no claim to send the change on.`);
+  const live = recordCopied(pd, place, recordWork(home), build.unit);
+  if (live?.status !== "claimed") fail(`Your take of ${build.unit} is not on its record in ${place.repo}, so there is nowhere to put the change.`);
   const proposal: Proposal = {
     input: match.path,
     by: git(pd, ["config", "user.name"]).stdout.trim() || "a teammate",
@@ -11733,28 +11932,27 @@ function proposeChange(args: string[], projectDir?: string): void {
   };
   const payload: UnitClaimPayload = {
     ...live.payload,
-    predecessor_oid: live.oid,
-    proposals: [...(live.payload.proposals ?? []).filter((entry) => entry.input !== match.path || entry.answer !== undefined), proposal],
+    proposals: [...(live.payload.proposals ?? []).filter((entry) => entry.input !== match.path), proposal],
   };
-  const commit = createClaimCommit(pd, live.oid, payload, undefined, undefined, {
-    [`${RESULT_FILES_ROOT}/proposals/${match.path}`]: text,
-  });
-  const sent = writeHomeClaim(pd, home, ref, commit, atLead?.oid ?? null);
+  const commit = createRecordCommit(pd, live.oid, payload, `proposed a change to ${match.path}`, { proposals: { [match.path]: text } });
+  const sent = writeUnitRecord(pd, place, ref, commit, live.oid);
   const carryingOn = `I'm carrying on with ${flags.file !== undefined ? `the approved ${name}` : "your version here"} until the lead decides.`;
-  if (sent.elsewhere !== undefined) {
-    console.log(JSON.stringify({
-      proposed: true,
-      notice: `Sent your change to the ${name} to ${sent.elsewhere}; the lead's project takes it in at the lead's next look. ${carryingOn}`,
-    }));
-    return;
+  if (!sent.ok) {
+    fail(`${place.repo} did not take the change: ${"refused" in sent ? sent.refused : "its record changed while I was writing it"}. Say when to try again.`);
   }
-  if (!sent.ok) fail(`The lead's project did not take the change: ${sent.refused ?? "its claim moved meanwhile"}. Try again.`);
   invalidateLiveClaimPayloadCache(pd, build.unit);
+  // Nobody is told of it: said the first time in a chat.
+  const chat = resolveWorkflowSelection(pd).sessionId;
+  const noNotice = chat !== null && chat !== undefined && personLineHeard(pd, chat, NO_NOTICE) ? "" : ` ${NO_NOTICE}`;
+  if (noNotice !== "" && chat) markPersonLinesHeard(pd, chat, [NO_NOTICE]);
   console.log(JSON.stringify({
     proposed: true,
-    notice: `Sent to the lead: your change to the ${name}. ${carryingOn}`,
+    notice: `Your change to the ${name} is on ${build.unit}'s record in ${place.repo}.${noNotice} ${carryingOn}`,
   }));
 }
+
+// What a proposal's line says once in a chat: the lead hears of it at their own look.
+const NO_NOTICE = "AI-DLC sends no notice of it.";
 
 // The team's proposed text put onto the current one: as proposed when the
 // current text is still the copy the team changed (`taken`); else a three-way
@@ -12110,9 +12308,8 @@ function sendBack(args: string[], projectDir?: string): void {
   const lead = leadsWord(pd, flags, "Sending a Unit back");
   const identity = activeIdentity(pd);
   const remote = repositoryRemote(pd);
-  const heard = takeInFirst(pd);
   const live = currentClaim(pd, remote, claimRef(identity.intentId8, unit));
-  if (live?.status !== "claimed" || (!live.payload.result && !live.payload.done)) fail(withTakeInLines(pd, heard, `${unit} has no result from a team to send back.`));
+  if (live?.status !== "claimed" || (!live.payload.result && !live.payload.done)) fail(`${unit} has no result from a team to send back.`);
   const { done: _done, verdicts: _verdicts, result: _result, ...rest } = live.payload;
   const payload: UnitClaimPayload = {
     ...rest,
@@ -12120,7 +12317,7 @@ function sendBack(args: string[], projectDir?: string): void {
     turned_down: { repo: "", words: failure.trim(), at: isoTimestamp(), from: "build-and-test" },
   };
   const sent = updateClaimRef(pd, remote, live.ref, createClaimCommit(pd, live.oid, payload), live.oid);
-  if (!sent.ok) fail(withTakeInLines(pd, heard, `${unit} could not be sent back: ${sent.refused ?? "its claim moved meanwhile"}. Try again.`));
+  if (!sent.ok) fail(`${unit} could not be sent back: ${sent.refused ?? "its claim moved meanwhile"}. Try again.`);
   invalidateLiveClaimPayloadCache(pd, unit);
   appendAuditEntry("UNIT_SENT_BACK", {
     Unit: unit, Owner: live.owner, "Attempt Generation": String(live.generation), ...(failure ? { Failure: failure } : {}),
@@ -12128,7 +12325,7 @@ function sendBack(args: string[], projectDir?: string): void {
   }, pd);
   console.log(JSON.stringify({
     unit,
-    notice: withTakeInLines(pd, heard, `Sent ${unit} back to ${builderOf(live)} with your words. It waits for them here; nothing of it is rebuilt here.`),
+    notice: `Sent ${unit} back to ${builderOf(live)} with your words. It waits for them here; nothing of it is rebuilt here.`,
   }));
 }
 
@@ -12143,18 +12340,17 @@ function turnedDown(args: string[], projectDir?: string): void {
   const said = leadsWord(pd, flags, "A turn-down").said;
   const identity = activeIdentity(pd);
   const remote = repositoryRemote(pd);
-  const heard = takeInFirst(pd);
   const live = currentClaim(pd, remote, claimRef(identity.intentId8, unit));
-  if (live?.status !== "claimed" || !live.payload.result) fail(withTakeInLines(pd, heard, `${unit} has no result from its team to turn down.`));
+  if (live?.status !== "claimed" || !live.payload.result) fail(`${unit} has no result from its team to turn down.`);
   const payload: UnitClaimPayload = {
     ...live.payload,
     predecessor_oid: live.oid,
     turned_down: { repo: flags.repo, words: words.trim(), at: isoTimestamp(), ...(said !== null ? { person_reply: said } : {}) },
   };
   const sent = updateClaimRef(pd, remote, live.ref, createClaimCommit(pd, live.oid, payload), live.oid);
-  if (!sent.ok) fail(withTakeInLines(pd, heard, `The note could not be put on ${unit}'s claim: ${sent.refused ?? "it moved meanwhile"}. Try again.`));
+  if (!sent.ok) fail(`The note could not be put on ${unit}'s claim: ${sent.refused ?? "it moved meanwhile"}. Try again.`);
   invalidateLiveClaimPayloadCache(pd, unit);
-  console.log(JSON.stringify({ unit, notice: withTakeInLines(pd, heard, `${builderOf(live)} hears that ${flags.repo} was turned down, with your words, at their next step.`) }));
+  console.log(JSON.stringify({ unit, notice: `${builderOf(live)} hears that ${flags.repo} was turned down, with your words, at their next step.` }));
 }
 
 // The lead says a repo merged the Unit where the merge check cannot see it (a
@@ -12175,11 +12371,10 @@ function saidMerged(args: string[], projectDir?: string): void {
   const words = leadsWord(pd, flags, "That it merged").said ?? given;
   const identity = activeIdentity(pd);
   const remote = repositoryRemote(pd);
-  const heard = takeInFirst(pd);
   const live = currentClaim(pd, remote, claimRef(identity.intentId8, unit));
-  if (live?.status !== "claimed" || !live.payload.result) fail(withTakeInLines(pd, heard, `${unit} has no result from its team to count merged.`));
+  if (live?.status !== "claimed" || !live.payload.result) fail(`${unit} has no result from its team to count merged.`);
   if (!live.payload.result.repos.some((repo) => repo.repo === flags.repo)) {
-    fail(withTakeInLines(pd, heard, `${unit} changed ${joinNames(live.payload.result.repos.map((repo) => repo.repo))}, not ${flags.repo}.`));
+    fail(`${unit} changed ${joinNames(live.payload.result.repos.map((repo) => repo.repo))}, not ${flags.repo}.`);
   }
   const payload: UnitClaimPayload = {
     ...live.payload,
@@ -12189,8 +12384,8 @@ function saidMerged(args: string[], projectDir?: string): void {
   const sent = updateClaimRef(pd, remote, live.ref, createClaimCommit(pd, live.oid, payload), live.oid);
   if (!sent.ok) fail(`${unit}'s claim moved meanwhile: ${sent.refused ?? "try again"}.`);
   invalidateLiveClaimPayloadCache(pd, unit);
-  // Recorded now, by the take-in the next step runs, once every repo it
-  // changed is merged by the check or by the lead's word.
+  // Recorded now, once every repo it changed is merged by the check or by the
+  // lead's word.
   const tookIn: string[] = [];
   const checked = checkTeamResults(pd, [], [], [], false, tookIn).get(unit);
   const said = `${flags.repo} counts as merged for ${unit}, in your words.`;
@@ -12201,7 +12396,7 @@ function saidMerged(args: string[], projectDir?: string): void {
     : notMerged.length > 0
       ? `${said} ${joinNames(notMerged)} ${notMerged.length === 1 ? "has" : "have"} not merged it yet, so nothing is recorded here.`
       : said;
-  console.log(JSON.stringify({ unit, notice: withTakeInLines(pd, heard, notice) }));
+  console.log(JSON.stringify({ unit, notice }));
 }
 
 // The lead's repo list at a commit of the lead's workspace, as addresses by
@@ -12398,7 +12593,7 @@ export function switchSoloToTeams(projectDir: string, sessionId?: string): strin
     const between = progress.started.size > 0 && [...progress.started].every((unit) => progress.done.has(unit));
     const boundary = [...progress.done].sort().join(",");
     const fresh = between && soloBoundaryLooked(projectDir, sessionId) !== boundary;
-    refreshHomeClaims(projectDir, { home: { target: remote, id8: activeIdentity(projectDir).intentId8 }, sessionId, now: fresh });
+    refreshHomeClaims(projectDir, { home: { id8: activeIdentity(projectDir).intentId8 }, sessionId, now: fresh });
     if (fresh) noteSoloBoundaryLooked(projectDir, sessionId, boundary);
   }
   if (!hasAnyUnitClaimRefs(projectDir)) return null;
@@ -12488,9 +12683,8 @@ function signOff(args: string[], projectDir?: string): void {
   const given = personWordsOf(pd, flags);
   const identity = activeIdentity(pd);
   const remote = repositoryRemote(pd);
-  const heard = takeInFirst(pd);
   const live = currentClaim(pd, remote, claimRef(identity.intentId8, unit));
-  if (live?.status !== "claimed" || !live.payload.result) fail(withTakeInLines(pd, heard, `${unit} has no result from its team to sign off.`));
+  if (live?.status !== "claimed" || !live.payload.result) fail(`${unit} has no result from its team to sign off.`);
   const lead = leadsWord(pd, flags, "The sign-off", "unit-signoff");
   const words = lead.said ?? given;
   const payload: UnitClaimPayload = { ...live.payload, predecessor_oid: live.oid, signoff: { words, at: isoTimestamp() } };
@@ -12503,9 +12697,9 @@ function signOff(args: string[], projectDir?: string): void {
   const merged = (live.payload.verdicts ?? []).length > 0 && live.payload.verdicts!.every((verdict) => verdict.merged);
   console.log(JSON.stringify({
     unit,
-    notice: withTakeInLines(pd, heard, merged
+    notice: merged
       ? `Signed off ${unit}; every repo it changed has merged, so it is done.`
-      : `Signed off ${unit}; it counts as done once every repo it changed has merged.`),
+      : `Signed off ${unit}; it counts as done once every repo it changed has merged.`,
   }));
 }
 
