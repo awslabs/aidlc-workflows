@@ -1045,6 +1045,67 @@ describe("a build follows a plan the lead moved to another repository", () => {
   });
 });
 
+describe("a teammate's clone of work teams build with no plan known", () => {
+  // A teammate's clone (another git user, a chat of its own) of the lead's
+  // workspace, pushed after teams were chosen and before any plan was shared.
+  function teammateClone(repos: Record<string, string>, notNow: boolean): string {
+    const home = makeHome({ repos });
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    // The lead planned it there: the plan's own rows are in the lead's checkout.
+    asLeadsOwnCheckout(home.dir);
+    if (notNow) {
+      const share = next(home.dir);
+      expect(share.ask_type, JSON.stringify(share).slice(0, 400)).toBe("team-handover");
+    }
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "--allow-empty", "-m", "teams"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const bea = cloneOf(home.remote, "bea");
+    git(bea, ["config", "user.name", "Bea Teammate"]);
+    git(bea, ["config", "user.email", "bea.teammate@example.test"]);
+    return bea;
+  }
+
+  for (const [label, repos, notNow] of [
+    ["its one repository has no address", () => ({ ledger: "" }), false],
+    ["the lead said Not now to the share", () => ({ "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") }), true],
+  ] as const) {
+    test(`a bare next is the step next --units gives, and the lead's work is never offered to carry on (${label})`, () => {
+      const bea = teammateClone(repos(), notNow);
+      const env = { ...ENV, AIDLC_SESSION_OVERRIDE: "bea-chat" };
+      const bare = next(bea, env);
+      const units = next(bea, { ...env, AIDLC_SESSION_OVERRIDE: "bea-chat-2" }, ["--units"]);
+      expect(bare.ask_type ?? null, JSON.stringify(bare).slice(0, 600)).not.toBe("intent-pick");
+      expect(JSON.stringify(bare)).not.toContain("Carry on with");
+      expect(String(bare.narration), JSON.stringify(bare).slice(0, 600)).toBe(String(units.narration));
+      expect(String(bare.narration)).toMatch(/What is the address of the repository it is shared in\?$/);
+    });
+  }
+
+  // Unchanged: work that is not built by teams, and a team's work with no Home Location (its claims on branches).
+  for (const [label, made] of [
+    ["solo work", (home: ReturnType<typeof makeHome>) => home],
+    ["a team's work with its claims on branches", (home: ReturnType<typeof makeHome>) => {
+      expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+      asLeadsOwnCheckout(home.dir);
+      const state = seededStateFile(home.dir);
+      writeFileSync(state, readFileSync(state, "utf-8").replace(/^- \*\*Home Location\*\*:.*\n/m, ""));
+      return home;
+    }],
+  ] as const) {
+    test(`${label}: a bare next in a clone still puts that work to the person to carry on`, () => {
+      const home = made(makeHome({ repos: { ledger: "" } }));
+      git(home.dir, ["add", "-A"]);
+      git(home.dir, ["commit", "-q", "--allow-empty", "-m", "work"]);
+      git(home.dir, ["push", "-q", "origin", "main"]);
+      const bea = cloneOf(home.remote, "bea");
+      const bare = next(bea, { ...ENV, AIDLC_SESSION_OVERRIDE: "bea-chat" });
+      expect(bare.ask_type, JSON.stringify(bare).slice(0, 600)).toBe("intent-pick");
+      expect(String(bare.question)).toContain("Carry on with");
+    });
+  }
+});
+
 describe("a build reads the plan at an address its builder says, after the repository moved hosts", () => {
   const notices = (step: Record<string, unknown>): string[] => ((step.change_notices ?? []) as string[]).filter((line) => line.startsWith("The plan of fixture"));
   const homeLocation = (pay: string): string | null => field(readFileSync(join(buildDir(pay, "refunds"), "aidlc-state.md"), "utf-8"), "Home Location");

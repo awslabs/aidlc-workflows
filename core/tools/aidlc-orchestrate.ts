@@ -9768,6 +9768,13 @@ function takeOfferOf(looked: ReturnType<typeof unitTakeLook>): Directive {
   };
 }
 
+// The records here a person may pick: the lead's work built by teams, in a
+// clone that did not make its plan (a teammate's), never is.
+function pickableHere(pd: string, here: NonNullable<ReturnType<typeof unselectedRecords>>): NonNullable<ReturnType<typeof unselectedRecords>>["selectable"] {
+  return here.selectable.filter(({ state, selector }) =>
+    !(isTeamUnitOwnership(state) && homeLocation(state) !== null && !planMadeHere(pd, selector, here.space)));
+}
+
 // Whether this checkout made the plan of a piece of work here: its plan's rows
 // are in this checkout's own audit shard (planMadeElsewhere). The lead's own
 // checkout, or a copy of it, is the one place the lead's work built by teams
@@ -15765,11 +15772,8 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       }
     }
     if (here !== null && here.selectable.length > 0) {
-      // The lead's work built by teams, in a clone that did not make its plan
-      // (a teammate's), is never theirs to pick: their words after the Units
-      // offer are read against its choices.
-      const pickable = here.selectable.filter(({ state, selector }) =>
-        !(isTeamUnitOwnership(state) && homeLocation(state) !== null && !planMadeHere(pd, selector, here.space)));
+      // Their words after the Units offer are read against its choices.
+      const pickable = pickableHere(pd, here);
       const offer = pickable.length === 0 ? unitTakeAsk(pd) : null;
       const words = saveReadingQuestion(pd, flags.intent, "", "routing", {
         space: here.space,
@@ -15890,6 +15894,18 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       if (take.kind === "ask") noteTakeOfferedOnWords(pd);
       emit(take);
       return;
+    }
+    // Only the lead's work built by teams that this clone did not plan, with
+    // no plan known for it: the step is the one next --units gives (its
+    // Units, or the ask for the address of the plan's repository), never that
+    // work to carry on.
+    const unpicked = unselectedRecords(pd);
+    if (unpicked !== null && unpicked.selectable.length > 0 && pickableHere(pd, unpicked).length === 0) {
+      const units = unitsAskedStep(pd);
+      if (units !== null) {
+        emit(units);
+        return;
+      }
     }
     // Work in progress here with none selected (a teammate's fresh clone, or a
     // conversation that has not joined the record it found) is put to the
