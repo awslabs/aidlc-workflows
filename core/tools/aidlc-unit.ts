@@ -6467,7 +6467,7 @@ function commitRecord(args: string[], projectDir?: string): void {
   }
   const unitBuild = state !== null && unitBuildOf(state) !== null;
   const offered = existsSync(join(pd, ...unitWordsFile("record-message", UPDATE_MESSAGE_KEY).split("/")));
-  const own = update ? ownFilesToCommit(pd, unitBuild, offered ? () => false : null) : null;
+  const own = update ? ownFilesToCommit(pd, offered ? () => false : null) : null;
   const block = recordCommitBlock(pd, unitBuild, own?.commit);
   const what = own ? "AI-DLC's own files" : "AI-DLC's record";
   const left = own && own.left.length > 0 ? ` I left ${leftFilesNamed(own.left)} for you to look over and commit.` : "";

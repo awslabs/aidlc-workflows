@@ -19,6 +19,7 @@ import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, unlinkSync
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { ownFilesToCommit } from "../../dist/claude/.claude/tools/aidlc-brought-files.ts";
+import { catchUpChangedLine } from "../../dist/claude/.claude/tools/aidlc-workspace-manifest.ts";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
 import { FIXTURES_DIR, REPO_ROOT, seededStateFile, seedWorkspaceShell } from "../harness/fixtures.ts";
 import { cleanupTeamBuild, git, run, tempDir, UNIT } from "../harness/team-build.ts";
@@ -118,7 +119,7 @@ describe("what the update's own commit takes", () => {
   test("every file the refresh wrote, the data files and a file it removed; nothing left", () => {
     const { dir } = projectBehind("claude");
     const changedBefore = refresh(dir, "claude");
-    const { commit, left } = ownFilesToCommit(dir, false, changedBefore);
+    const { commit, left } = ownFilesToCommit(dir, changedBefore);
     for (const path of [
       ".claude/skills/aidlc/SKILL.md",
       ".claude/tools/data/aidlc-stamp.json",
@@ -141,9 +142,9 @@ describe("what the update's own commit takes", () => {
     const value = JSON.parse(readFileSync(settings, "utf-8")) as { permissions?: { allow?: string[] } };
     writeFileSync(settings, `${JSON.stringify({ ...value, permissions: { ...value.permissions, allow: [...(value.permissions?.allow ?? []), "Bash(make test)"] } }, null, 2)}\n`);
     const changedBefore = refresh(dir, "claude");
-    const { commit, left, held } = ownFilesToCommit(dir, false, changedBefore);
+    const { commit, left, held } = ownFilesToCommit(dir, changedBefore);
     expect(left).toEqual([".claude/settings.json", ".gitignore"]);
-    expect(held).toBe(true);
+    expect(held).toEqual([".claude/settings.json"]);
     expect(commit).not.toContain(".gitignore");
     expect(commit).not.toContain(".claude/settings.json");
     expect(commit).toContain(".claude/skills/aidlc/SKILL.md");
@@ -152,10 +153,10 @@ describe("what the update's own commit takes", () => {
 
   test("AI-DLC's part of AGENTS.md goes in unless the person's own part changed too", () => {
     const clean = projectBehind("cursor");
-    expect(ownFilesToCommit(clean.dir, false, refresh(clean.dir, "cursor")).commit).toContain("AGENTS.md");
+    expect(ownFilesToCommit(clean.dir, refresh(clean.dir, "cursor")).commit).toContain("AGENTS.md");
     const ours = projectBehind("cursor", (dir) => writeFileSync(join(dir, "AGENTS.md"), `# Our project\n\n${readFileSync(join(dir, "AGENTS.md"), "utf-8")}`));
     appendFileSync(join(ours.dir, "AGENTS.md"), "\nOur own line, not committed yet.\n");
-    const { commit, left } = ownFilesToCommit(ours.dir, false, refresh(ours.dir, "cursor"));
+    const { commit, left } = ownFilesToCommit(ours.dir, refresh(ours.dir, "cursor"));
     expect(left).toContain("AGENTS.md");
     expect(commit).not.toContain("AGENTS.md");
   });
@@ -163,7 +164,7 @@ describe("what the update's own commit takes", () => {
   test("asked with nothing known of before the refresh, a settings file config merges is left and the rest goes", () => {
     const { dir } = projectBehind("claude");
     refresh(dir, "claude");
-    const { commit, left } = ownFilesToCommit(dir, false, null);
+    const { commit, left } = ownFilesToCommit(dir, null);
     expect(left).toEqual([".claude/settings.json"]);
     expect(commit).toContain(".claude/skills/aidlc/SKILL.md");
   });
@@ -172,7 +173,7 @@ describe("what the update's own commit takes", () => {
     const { dir } = projectBehind("claude");
     const changedBefore = refresh(dir, "claude");
     appendFileSync(join(dir, ".claude", "skills", "aidlc", "SKILL.md"), "\nmine\n");
-    const { commit, left } = ownFilesToCommit(dir, false, changedBefore);
+    const { commit, left } = ownFilesToCommit(dir, changedBefore);
     expect(left).toEqual([".claude/skills/aidlc/SKILL.md"]);
     expect(commit).toContain(".claude/tools/data/aidlc-stamp.json");
   });
@@ -181,7 +182,7 @@ describe("what the update's own commit takes", () => {
     const { dir } = projectBehind("claude");
     const shipped = readFileSync(join(dir, ".claude", "scopes", "aidlc-feature.md"), "utf-8");
     writeFileSync(join(dir, ".claude", "scopes", "aidlc-ours.md"), shipped.replace(/^name: .*$/m, "name: ours"));
-    const { commit, left } = ownFilesToCommit(dir, false, refresh(dir, "claude"));
+    const { commit, left } = ownFilesToCommit(dir, refresh(dir, "claude"));
     for (const path of [".claude/tools/data/stage-graph.json", ".claude/tools/data/scope-grid.json", ".claude/skills/aidlc/tables.md"]) {
       expect(left).toContain(path);
       expect(commit).not.toContain(path);
@@ -190,16 +191,16 @@ describe("what the update's own commit takes", () => {
     expect(left).not.toContain(".claude/scopes/aidlc-ours.md");
   });
 
-  test("the repo list's move goes with the files, nothing else of aidlc/; in a Unit's build it stays out", () => {
+  test("the repo list's move goes with the files, and nothing else of aidlc/", () => {
     const { dir } = projectBehind("claude", (d) => writeFileSync(join(d, "repos.json"), `${JSON.stringify({ repos: [{ name: "billing" }] }, null, 2)}\n`));
     writeFileSync(join(dir, "aidlc", "notes.md"), "work not shared yet\n");
     const changedBefore = refresh(dir, "claude");
     expect(git(dir, ["status", "--porcelain"])).toContain("R  repos.json -> aidlc/repos.json");
-    const { commit } = ownFilesToCommit(dir, false, changedBefore);
+    const { commit } = ownFilesToCommit(dir, changedBefore);
     expect(commit).toContain("repos.json");
     expect(commit).toContain("aidlc/repos.json");
     expect(commit.filter((path: string) => path.startsWith("aidlc/"))).toEqual(["aidlc/repos.json"]);
-    expect(ownFilesToCommit(dir, true, changedBefore).commit.filter((path: string) => path === "repos.json" || path.startsWith("aidlc/"))).toEqual([]);
+
   });
 });
 
@@ -238,7 +239,7 @@ describe("two machines commit the same bytes for the same release", () => {
         const clone = tempDir(`clone-${harness}-${autocrlf}`);
         git(clone, ["-c", `core.autocrlf=${autocrlf}`, "clone", "-q", origin, "."]);
         repo(clone, autocrlf);
-        const { commit, left } = ownFilesToCommit(clone, false, refresh(clone, harness));
+        const { commit, left } = ownFilesToCommit(clone, refresh(clone, harness));
         expect(left).toEqual([]);
         expect(commit.length).toBeGreaterThan(0);
         git(clone, ["add", "--", ...commit]);
@@ -256,7 +257,7 @@ describe("two machines commit the same bytes for the same release", () => {
 
 describe("unit commit-record --update", () => {
   const draft = `aidlc/.aidlc-engine/request-text/unit-record-message-update-${AIDLC_VERSION}.txt`;
-  const shown = (dir: string): string[] => git(dir, ["show", "--name-only", "--format=", "HEAD"]).split("\n").filter(Boolean).sort();
+  const shown = (dir: string): string[] => git(dir, ["show", "--name-only", "--no-renames", "--format=", "HEAD"]).split("\n").filter(Boolean).sort();
 
   test("one commit of AI-DLC's own files on the branch, with the drafted message, a file staged elsewhere kept staged, nothing pushed", () => {
     const { dir } = projectBehind("claude");
@@ -266,7 +267,7 @@ describe("unit commit-record --update", () => {
     git(dir, ["push", "-q", "origin", "main"]);
     const pushed = git(remote, ["rev-parse", "main"]);
     const changedBefore = refresh(dir, "claude");
-    const expected = [...ownFilesToCommit(dir, false, changedBefore).commit].sort();
+    const expected = [...ownFilesToCommit(dir, changedBefore).commit].sort();
     expect(expected).toContain(".claude/settings.json");
     writeFileSync(join(dir, "notes.txt"), "mine\n");
     git(dir, ["add", "notes.txt"]);
@@ -302,15 +303,16 @@ describe("unit commit-record --update", () => {
     expect(git(dir, ["status", "--porcelain"])).toBe("M .claude/settings.json");
   });
 
-  test("in a checkout that builds a Unit it commits AI-DLC's files and nothing of aidlc/", () => {
-    const { dir } = projectBehind("claude");
+  test("in a checkout that builds a Unit it commits AI-DLC's files and the list's move, nothing else of aidlc/", () => {
+    const { dir } = projectBehind("claude", (d) => writeFileSync(join(d, "repos.json"), `${JSON.stringify({ repos: [{ name: "billing" }] }, null, 2)}\n`));
     seedWorkspaceShell(dir);
     writeFileSync(seededStateFile(dir), readFileSync(join(FIXTURES_DIR, "state-construction.md"), "utf-8")
       .replace("- **Revision Count**: 0\n", "- **Revision Count**: 0\n- **Unit Build**: refunds\n"));
     refresh(dir, "claude");
     const yes = run(UNIT, ["commit-record", "--update"], dir);
     expect(yes.status, yes.out).toBe(0);
-    expect(shown(dir).filter((path) => path.startsWith("aidlc/"))).toEqual([]);
+    expect(shown(dir).filter((path) => path.startsWith("aidlc/"))).toEqual(["aidlc/repos.json"]);
+    expect(shown(dir)).toContain("repos.json");
     expect(shown(dir)).toContain(".claude/skills/aidlc/SKILL.md");
   });
 
@@ -357,5 +359,32 @@ describe("unit commit-record --update", () => {
     expect(refused.status).not.toBe(0);
     expect(refused.out).toContain("no commits today");
     expect(git(dir, ["rev-parse", "HEAD"])).toBe(head);
+  });
+});
+
+describe("the question after an update", () => {
+  const head = "AI-DLC updated its own files in this project to 2.12.1:";
+  test("the files, as one commit of their own on the branch, with what it leaves and the message after it", () => {
+    expect(catchUpChangedLine("2.12.1", [".claude/a.md"], false, true, true, { branch: "main", left: [] })).toBe(
+      `${head} 1 file under .claude changed. Want me to commit it on main, as one commit of its own? Nothing is pushed. ` +
+        "I'd use this commit message:",
+    );
+    expect(catchUpChangedLine("2.12.1", [".claude/a.md", ".claude/b.md", "AGENTS.md"], false, true, false, { branch: "work", left: ["AGENTS.md"] })).toBe(
+      `${head} 2 files under .claude and its part of AGENTS.md changed. Want me to commit them on work, as one commit of their own? ` +
+        "Nothing is pushed. I'd leave AGENTS.md out, as I cannot be sure it holds only AI-DLC's changes: it is yours to look over and commit.",
+    );
+    const many = Array.from({ length: 12 }, (_, at) => `.claude/f${at}.md`);
+    expect(catchUpChangedLine("2.12.1", many, false, true, true, { branch: "main", left: many })).toContain(
+      "I'd leave .claude/f0.md, .claude/f1.md, .claude/f2.md, .claude/f3.md, .claude/f4.md, .claude/f5.md, .claude/f6.md, .claude/f7.md, " +
+        ".claude/f8.md, .claude/f9.md and 2 more out, as I cannot be sure they hold only AI-DLC's changes: they are yours to look over and commit. " +
+        "I'd use this commit message:",
+    );
+  });
+
+  test("with the repo list's move, the move is in them and teammates are told what they need", () => {
+    expect(catchUpChangedLine("2.12.1", [".claude/a.md"], true, true, true, { branch: "refunds", left: [] })).toBe(
+      `${head} 1 file under .claude changed, and repos.json moved into aidlc/. Want me to commit them on refunds, as one commit of ` +
+        "their own? Nothing is pushed. Teammates need AI-DLC 2.12 or newer to find repos.json there. I'd use this commit message:",
+    );
   });
 });

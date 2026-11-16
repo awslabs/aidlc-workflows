@@ -1523,11 +1523,20 @@ opened. A native install's hooks run the machine's release, so the first chat's
 start in a project whose harness files an earlier release wrote runs the refresh
 `aidlc config` does, with no terminal and every recorded answer kept (it asks
 nothing, switches no harness and answers no Kiro question for you). When the refresh changed files git tracks, the first
-reply says so once, with each folder's count, for example "AI-DLC updated its
-own files in this project to 2.12.1: 120 files under .claude changed. Commit
-them so your team gets them." (with `repos.json` moved into `aidlc/` too, the
-same line says that); nothing is said when nothing git tracks changed or the
-project is not in git. A pinned
+reply asks once, with each folder's count, for example "AI-DLC updated its own
+files in this project to 2.12.1: 120 files under .claude changed. Want me to
+commit them on main, as one commit of their own? Nothing is pushed.", with the
+commit message drafted in your repo's style after it (your own words replace
+it). A yes commits only AI-DLC's own files that still hold exactly what it
+wrote, with nothing of yours changed in them since your last commit, and
+`repos.json`'s move into `aidlc/` with them when the refresh made it, through
+your own git (hooks and signing), on your branch; the question names any file it
+leaves for you to look over and commit. A no is not asked again for that
+release. Unattended, on no branch, while a rebase, merge, cherry-pick or revert
+of yours is under way, or when a settings file the refresh merged held your own
+uncommitted changes, it says the same line ending "Commit them so your team gets
+them." instead, and on opencode that line comes with the next step; nothing is
+said when nothing git tracks changed or the project is not in git. A pinned
 project runs its pinned release and is left as it is. A refresh that cannot
 finish says nothing in the chat and is tried again when the next chat starts;
 `aidlc doctor` shows the project still on the earlier release, and

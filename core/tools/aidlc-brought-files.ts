@@ -641,7 +641,7 @@ function changedTopKeys(text: string, before: string): string[] | null {
  * What a yes to the offer after an update commits: AI-DLC's own files that git
  * shows changed here (outside aidlc/, a new one only in a folder git already
  * tracks), each still holding exactly what AI-DLC wrote with nothing of the
- * person's changed since HEAD, and the repo list's move outside a Unit's build.
+ * person's changed since HEAD, and the repo list's move with them.
  * `left` is the rest of AI-DLC's changed files, for the person to commit. Worked
  * out from the install records and git each time, so nothing is kept and the
  * person's work since the refresh counts.
@@ -650,17 +650,16 @@ function changedTopKeys(text: string, before: string): string[] | null {
  * keeps the person's uncommitted words in what it records as its write, so its
  * hash cannot tell them apart: it goes in only when `changedBefore` says git
  * showed it unchanged before the refresh (the session start lists git's changes
- * before it refreshes), and with `changedBefore` null it is left. `held` says
- * one was left because it had changed before the refresh.
+ * before it refreshes), and with `changedBefore` null it is left. `held` names
+ * the ones left because they had changed before the refresh.
  */
 export function ownFilesToCommit(
   projectDir: string,
-  unitBuild: boolean,
   changedBefore: ((path: string) => boolean) | null,
-): { commit: string[]; left: string[]; held: boolean } {
+): { commit: string[]; left: string[]; held: string[] } {
   const commit: string[] = [];
   const left: string[] = [];
-  let held = false;
+  const held: string[] = [];
   if (git(projectDir, ["rev-parse", "--verify", "--quiet", "HEAD"]) === null) return { commit, left, held };
   const record = installRecord(projectDir);
   const text = (out: Buffer | null): string[] => out?.toString("utf-8").split("\0").filter(Boolean) ?? [];
@@ -714,7 +713,7 @@ export function ownFilesToCommit(
       continue;
     } else if (record.whole.has(path) || record.parts.has(path)) {
       const merged = record.merged.has(path);
-      if (merged && changedBefore?.(path) === true) held = true;
+      if (merged && changedBefore?.(path) === true) held.push(path);
       ours = bytes !== null && holdsInstallWrite(record, path, bytes, () => atHead(path) ?? "") &&
         (!merged || changedBefore?.(path) === false);
     } else if (record.unhashed.has(path) || dir !== undefined) {
@@ -740,6 +739,6 @@ export function ownFilesToCommit(
     const harness = generated.get(path) ?? "";
     (composed || sources(harness) || bytesNow(projectDir, path) === null ? left : commit).push(path);
   }
-  if (!unitBuild && commit.length > 0) commit.push(...reposMoveToCommit(projectDir));
+  if (commit.length > 0) commit.push(...reposMoveToCommit(projectDir));
   return { commit, left, held };
 }

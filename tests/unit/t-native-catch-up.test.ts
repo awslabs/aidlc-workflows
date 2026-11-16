@@ -4,9 +4,12 @@
 // native install's hooks run the machine's release, so the first chat's start in
 // a project whose harness files an earlier release wrote runs config's refresh
 // for it, unattended, every recorded answer kept. 2.12's refresh moves a tracked
-// root repos.json into aidlc/; the first reply says, in one line, how many files
-// under each folder git tracks the refresh changed and that the list moved, for
-// the person to commit; an untracked list moves silently, and a folder git does not
+// root repos.json into aidlc/; the first reply asks once whether to commit the
+// files git tracks that the refresh changed, the list's move with them, as one
+// commit of their own on the branch, saying how many under each folder (in a
+// Unit's build too); unattended, on no branch, or with a settings file that held
+// the person's uncommitted words, it says so in one line for the person to
+// commit instead; an untracked list moves silently, and a folder git does not
 // track or a project not in git says nothing. A second start and a later `aidlc config` change nothing. A pinned
 // project, a newer stamp, the status line and a tool call's hook are left alone.
 // The release comes through a served mirror, as an organisation's would; the
@@ -80,6 +83,9 @@ function stampedTree(version: string): string {
   // A second file that release wrote otherwise, so the refresh changes more than the stamp.
   const skill = join(dir, ".claude", "skills", "aidlc", "SKILL.md");
   writeFileSync(skill, `${readFileSync(skill, "utf-8")}\n<!-- ${version} -->\n`);
+  // And its own settings.json, which config merges with the project's own.
+  const settings = join(dir, ".claude", "settings.json");
+  writeFileSync(settings, `${JSON.stringify({ ...JSON.parse(readFileSync(settings, "utf-8")), companyAnnouncements: [`AI-DLC ${version}`] }, null, 2)}\n`);
   return dir;
 }
 
@@ -127,14 +133,14 @@ function catchUpSaid(dir: string, moved: boolean): string {
     : `${head}. ${n === 1 ? "Commit it so your team gets it." : "Commit them so your team gets them."}`;
 }
 
-// The catch-up's question when the refresh also moved the tracked list: the move offered with AI-DLC's record,
-// and the files under .claude named as the ones it leaves.
-function catchUpAsked(dir: string): string {
+// The catch-up's question: the update's own commit of the files the refresh changed, on the branch, the list's move
+// with them when it moved, with the drafted message after it.
+function catchUpAsked(dir: string, moved = true, branch = "main"): string {
   const n = git(dir, ["status", "--porcelain", "-uall", "--", ".claude"]).split("\n").filter(Boolean).length;
   const files = `${n} file${n === 1 ? "" : "s"} under .claude`;
-  return `AI-DLC updated its own files in this project to ${AIDLC_VERSION}: ${files} changed, and repos.json moved into aidlc/. ` +
-    `Want me to commit the move, with AI-DLC's record in aidlc/, using this commit message? I'd leave the ${files} for you to commit with your own ` +
-    "changes. Teammates need AI-DLC 2.12 or newer to find repos.json there.";
+  return `AI-DLC updated its own files in this project to ${AIDLC_VERSION}: ${files} changed${moved ? ", and repos.json moved into aidlc/" : ""}. ` +
+    `Want me to commit them on ${branch}, as one commit of their own? Nothing is pushed.` +
+    `${moved ? " Teammates need AI-DLC 2.12 or newer to find repos.json there." : ""} I'd use this commit message:`;
 }
 
 function hookCommand(dir: string, event: string): string {
@@ -217,16 +223,16 @@ describe.skipIf(SKIP_REASON !== null)("each project catches up the next time it 
     const first = sessionStart(dir, "catch-up");
     expect(first.status, first.stdout + first.stderr).toBe(0);
     expect(stampVersion(dir)).toBe(AIDLC_VERSION);
-    // One question for both: the list's move offered with AI-DLC's record, the files the refresh changed named as left.
+    // One question for both: the files the refresh changed and the list's move, as one commit of their own.
     expect(first.stdout).toContain(catchUpAsked(dir));
     expect(first.stdout).toContain("ASK ONCE");
-    // The message the commit carries: drafted first, said to nobody, in the move's own file, shown, the person's words replacing it.
-    const file = `aidlc/.aidlc-engine/request-text/unit-record-message-moved-${AIDLC_VERSION}.txt`;
-    expect(readFileSync(join(dir, ...file.split("/")), "utf-8")).toBe("Update AI-DLC's record\n");
+    // The message the commit carries: drafted first, said to nobody, in the update's own file, shown, the person's words replacing it.
+    const file = `aidlc/.aidlc-engine/request-text/unit-record-message-update-${AIDLC_VERSION}.txt`;
+    expect(readFileSync(join(dir, ...file.split("/")), "utf-8")).toBe(`Update AI-DLC to ${AIDLC_VERSION}\n`);
     expect(first.stdout).toContain(`over the message in \`${file}\``);
     expect(first.stdout).toContain("with the message from that file after it");
     expect(first.stdout).toContain("When they give their own commit message, write it to that file first");
-    expect(first.stdout).toMatch(new RegExp(`On yes, run \`[^\`]* unit commit-record --commit-message-file ${file.replaceAll(".", "\\.")}\``));
+    expect(first.stdout).toMatch(new RegExp(`On yes, run \`[^\`]* unit commit-record --update --commit-message-file ${file.replaceAll(".", "\\.")}\``));
     expect(first.stdout).not.toContain(catchUpSaid(dir, true));
     expect(catchUpAsked(dir)).not.toContain(": 1 file under");
     expect(first.stdout).not.toContain(MOVED);
@@ -245,28 +251,54 @@ describe.skipIf(SKIP_REASON !== null)("each project catches up the next time it 
     expect(git(dir, ["status", "--porcelain", "--", ":!aidlc"])).toBe(status);
   });
 
-  test("an untracked list moves with nothing said of it; the files the refresh changed are", () => {
+  test("an untracked list moves with nothing said of it; the files the refresh changed are offered", () => {
     const dir = project(earlierTree, { tracked: false });
     const first = sessionStart(dir, "catch-up, untracked list");
     expect(first.status, first.stdout + first.stderr).toBe(0);
     expect(stampVersion(dir)).toBe(AIDLC_VERSION);
     expect(existsSync(join(dir, "aidlc", "repos.json"))).toBe(true);
     expect(first.stdout).not.toContain("repos.json");
-    expect(first.stdout).toContain(catchUpSaid(dir, false));
+    expect(first.stdout).toContain(catchUpAsked(dir, false));
   });
 
-  // An offer never ends in a refusal: commit-record refuses in a Unit's build,
-  // where aidlc/ holds the lead's record too, so there the move is said as today.
-  test("in a checkout that builds a Unit, the move is said as it was and never offered", () => {
+  test("unattended, on no branch, or with a settings file holding their uncommitted words, today's line and no offer", () => {
+    const unattended = project(earlierTree);
+    const saved = env;
+    env = { ...env, AIDLC_UNATTENDED: "1" };
+    try {
+      const quiet = sessionStart(unattended, "catch-up, unattended");
+      expect(quiet.stdout).toContain("TELL ONCE");
+      expect(quiet.stdout).toContain("Commit them so your team gets them");
+      expect(quiet.stdout).not.toContain("Want me to commit");
+    } finally {
+      env = saved;
+    }
+    const detached = project(earlierTree, { tracked: false });
+    git(detached, ["checkout", "-q", "--detach"]);
+    const away = sessionStart(detached, "catch-up, no branch");
+    expect(away.stdout).toContain(catchUpSaid(detached, false));
+    expect(away.stdout).not.toContain("Want me to commit");
+    const held = project(earlierTree, { tracked: false });
+    const settings = join(held, ".claude", "settings.json");
+    const value = JSON.parse(readFileSync(settings, "utf-8")) as { permissions?: { allow?: string[] } };
+    writeFileSync(settings, `${JSON.stringify({ ...value, permissions: { ...value.permissions, allow: [...(value.permissions?.allow ?? []), "Bash(make test)"] } }, null, 2)}\n`);
+    const words = sessionStart(held, "catch-up, settings with their words");
+    expect(words.stdout).toContain("TELL ONCE");
+    expect(words.stdout).toContain("Commit them so your team gets them.");
+    expect(words.stdout).not.toContain("Want me to commit");
+  });
+
+  // In a Unit's build the update's own commit is offered as anywhere, the list's move with it: none of its files is
+  // the lead's record.
+  test("in a checkout that builds a Unit, the files and the move are offered as one commit", () => {
     const dir = project(earlierTree);
     seedWorkspaceShell(dir);
     writeFileSync(seededStateFile(dir), readFileSync(join(FIXTURES_DIR, "state-construction.md"), "utf-8")
       .replace("- **Revision Count**: 0\n", "- **Revision Count**: 0\n- **Unit Build**: refunds\n"));
     const first = sessionStart(dir, "catch-up, a Unit's build");
     expect(first.status, first.stdout + first.stderr).toBe(0);
-    expect(first.stdout).toContain(catchUpSaid(dir, true));
-    expect(first.stdout).not.toContain("Want me to commit the move");
-    expect(first.stdout).not.toContain("unit commit-record");
+    expect(first.stdout).toContain(catchUpAsked(dir));
+    expect(first.stdout).toContain("unit commit-record --update");
     expect(existsSync(join(dir, "aidlc", ".aidlc-engine", "request-text", `unit-record-message-moved-${AIDLC_VERSION}.txt`))).toBe(false);
   });
 

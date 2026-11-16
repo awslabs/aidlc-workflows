@@ -117,10 +117,18 @@ export function leftFilesNamed(paths: readonly string[]): string {
 // that the refresh changed (paths relative to the project, "/"-separated), by
 // folder with each folder's count, a root file by its name, and the list's move
 // in the same line when it moved; the move alone keeps its own line. Null when
-// nothing git tracks changed. `asking`, with the list moved: the question that
-// offers the move with AI-DLC's record (`unit commit-record`), naming the
-// files it leaves for the person.
-export function catchUpChangedLine(version: string, paths: readonly string[], moved: boolean, asking = false, withMessage = false): string | null {
+// nothing git tracks changed. `asking` with the move alone: the question that
+// offers the move with AI-DLC's record (`unit commit-record`). `update`: the
+// question that offers the update's own commit (`unit commit-record --update`)
+// on that branch, the move with it, naming the files it leaves.
+export function catchUpChangedLine(
+  version: string,
+  paths: readonly string[],
+  moved: boolean,
+  asking = false,
+  withMessage = false,
+  update?: { branch: string; left: readonly string[] },
+): string | null {
   const since = `${REPOS_IN_AIDLC_SINCE.major}.${REPOS_IN_AIDLC_SINCE.minor}`;
   // With the commit message the hook drafts for the move, which the agent shows after the question.
   const offer = `Want me to commit the move, with AI-DLC's record in aidlc/${withMessage ? ", using this commit message" : ""}?`;
@@ -141,10 +149,14 @@ export function catchUpChangedLine(version: string, paths: readonly string[], mo
     ...[...roots].sort().map((file) => (SHARED_ROOT_FILES.has(file) ? `its part of ${file}` : file)),
   ];
   const head = `AI-DLC updated its own files in this project to ${version}: ${joinWithAnd(parts)} changed`;
-  if (moved && asking) {
-    const left = /^\d/.test(parts[0] ?? "") ? `the ${joinWithAnd(parts)}` : joinWithAnd(parts);
-    return `${head}, and repos.json moved into aidlc/. ${offer} I'd leave ${left} for you to commit with your own changes. ` +
-      `Teammates need AI-DLC ${since} or newer to find repos.json there.`;
+  if (update !== undefined) {
+    const one = paths.length === 1 && !moved;
+    const single = update.left.length === 1;
+    const left = update.left.length === 0 ? "" : ` I'd leave ${leftFilesNamed(update.left)} out, as I cannot be sure ` +
+      `${single ? "it holds" : "they hold"} only AI-DLC's changes: ${single ? "it is" : "they are"} yours to look over and commit.`;
+    return `${head}${moved ? ", and repos.json moved into aidlc/" : ""}. Want me to commit ${one ? "it" : "them"} on ${update.branch}, ` +
+      `as one commit of ${one ? "its" : "their"} own? Nothing is pushed.${left}` +
+      `${moved ? ` Teammates need AI-DLC ${since} or newer to find repos.json there.` : ""}${withMessage ? " I'd use this commit message:" : ""}`;
   }
   if (moved) {
     return `${head}, and repos.json moved into aidlc/. Commit them so your team gets them; teammates need AI-DLC ` +
