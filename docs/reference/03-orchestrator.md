@@ -843,7 +843,14 @@ is here, else in the plan's `rules/`, named `the lead's <path>` in
 lead's. Steering, Testing Posture and the take question read through it; a
 lead's file that cannot be read never stops the step, which goes on under the
 team's own rules and says so once (`leadRulesUnreadLine`). The build's record
-keeps the address without a sign-in (`withoutCredentials`). Where the lead's
+keeps the address without a sign-in (`withoutCredentials`). A build's `Home
+Location` becomes an address said with `--lead-address` only when the plan
+read there names another repository and is not behind the plan in the
+build's copy (`planAgainst`: a repository that moved hosts, taken over at the
+new place), with one line said once: the moved line where its history holds
+the build's plan, the line for a plan shared again where the two have parted;
+of two plans of one work that a look finds, the one whose history holds the
+other is offered. Where the lead's
 address said holds no work built by teams, the step says so; with nothing to
 offer otherwise, it goes on as a plain `next`.
 

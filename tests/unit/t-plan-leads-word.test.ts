@@ -17,10 +17,11 @@ import { chmodSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileS
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { skeletonCodeInMain, viewWithWord, type UnitClaimView, type UnitWord } from "../../dist/claude/.claude/tools/aidlc-unit.ts";
+import { planNotFollowedLine, planShareAgainOffer, skeletonCodeInMain, viewWithWord, type UnitClaimView, type UnitWord } from "../../dist/claude/.claude/tools/aidlc-unit.ts";
 import { AIDLC_SRC, seededRecordDir, seededStateFile, writeLearningsSelections } from "../harness/fixtures.ts";
 import {
   cleanupTeamBuild,
+  cloneCode,
   cloneOf,
   codeGenerated,
   ENV,
@@ -498,6 +499,176 @@ function notAPlanAt(host: string, id8: string, onTop = false): void {
   const parent = onTop ? ["-p", git(host, ["rev-parse", planRefOf(id8)])] : [];
   git(host, ["update-ref", planRefOf(id8), out(["commit-tree", tree, ...parent, "-m", "notes"])]);
 }
+
+describe("a moved plan whose note cannot be followed here", () => {
+  test("is said in one shape by every caller, each naming what it did not do and its own way on", () => {
+    const at = { label: "checkout", repo: "billing", address: "https://lead:tok3n@git.example.invalid/billing.git" };
+    expect(planNotFollowedLine({ kind: "unread", ...at, said: "fatal: repository not found." }, "refunds's sign-off is not written", "Say when to try again."))
+      .toBe("The plan of checkout moved to billing (https://***@git.example.invalid/billing.git), which could not be read (fatal: repository not found), so refunds's sign-off is not written. Say when to try again.");
+    expect(planNotFollowedLine({ kind: "unread", ...at, said: null }, "the plan is not shared", "Say when to try again."))
+      .toContain("which could not be read (it did not answer in time), so the plan is not shared.");
+    const empty = { kind: "not-followed" as const, ...at, holds: "nothing" as const };
+    expect(planNotFollowedLine(empty, "the merge of refunds is not written", planShareAgainOffer(empty, "checkout-api")))
+      .toBe("The plan of checkout says it moved, but billing does not hold it, so the merge of refunds is not written. I can share the plan again in billing from your own record here: say if you want that.");
+    const other = { ...empty, holds: "other" as const };
+    expect(planNotFollowedLine(other, "the plan is not shared", planShareAgainOffer(other, "checkout-api")))
+      .toBe("The plan of checkout says it moved, but billing does not hold it, so the plan is not shared. I can share the plan again in checkout-api, over the note that it moved, from your own record here: say if you want that.");
+  });
+});
+
+// The move as the plan writer makes it, made by hand at the hosts: at `to`
+// the plan as one commit on the old tip naming `to` as its own, at the old
+// place a pointer on top of the old plan, and the moving computer's Home
+// Location the new address.
+function movedByHand(home: ReturnType<typeof refundsTaken>["home"], to: string): void {
+  const lead = { ...GIT_ENV, GIT_AUTHOR_NAME: "lead", GIT_AUTHOR_EMAIL: "lead@example.test", GIT_COMMITTER_NAME: "lead", GIT_COMMITTER_EMAIL: "lead@example.test" };
+  const at = (host: string) => (args: string[], input?: string): string =>
+    spawnSync("git", args, { cwd: host, encoding: "utf-8", env: lead, input }).stdout.trim();
+  const old = at(home.hosts["checkout-api"]);
+  const fresh = at(home.hosts[to]);
+  const ref = planRefOf(home.id8);
+  const tip = old(["rev-parse", ref]);
+  fresh(["fetch", "-q", home.hosts["checkout-api"], `${ref}:${ref}`]);
+  const plan = JSON.parse(fresh(["show", `${tip}:plan.json`])) as HandPlan & { version: number; plan_repo: unknown; work: { label: string } };
+  plan.plan_repo = { name: to, address: home.hosts[to] };
+  plan.version += 1;
+  const blob = fresh(["hash-object", "-w", "--stdin"], `${JSON.stringify(plan, null, 2)}\n`);
+  const entries = fresh(["ls-tree", tip]).split("\n").map((line) => (line.endsWith("\tplan.json") ? `100644 blob ${blob}\tplan.json` : line));
+  const moved = fresh(["commit-tree", fresh(["mktree"], `${entries.join("\n")}\n`), "-p", tip, "-m", `aidlc plan ${plan.work.label} ${plan.version}: shared again`]);
+  fresh(["update-ref", ref, moved]);
+  const pointer = { format: 1, work: plan.work, moved_to: { name: to, address: home.hosts[to] } };
+  const note = old(["hash-object", "-w", "--stdin"], `${JSON.stringify(pointer, null, 2)}\n`);
+  old(["update-ref", ref, old(["commit-tree", old(["mktree"], `100644 blob ${note}\tplan.json\n`), "-p", tip, "-m", `aidlc plan ${plan.work.label}: moved to ${to}`])]);
+  followedTo(home.dir, home.hosts[to]);
+}
+
+// A computer of the lead's whose Home Location names `address`, as the
+// plan writer's follow leaves it.
+function followedTo(dir: string, address: string): void {
+  const state = seededStateFile(dir);
+  writeFileSync(state, readFileSync(state, "utf-8").replace(/^- \*\*Home Location\*\*: .*$/m, `- **Home Location**: ${address}`));
+}
+
+const planAtHost = (host: string, id8: string): HandPlan & { plan_repo: { name: string } } =>
+  JSON.parse(git(host, ["show", `${planRefOf(id8)}:plan.json`]));
+
+describe("a plan moved to another repository, at the lead's other computers", () => {
+  test("a word asked for at the lead's other computer follows it there, never with the offer to share the plan again", () => {
+    const { home, hosts } = refundsPushed();
+    const laptop = leadsLaptop(home);
+    next(laptop);
+    movedByHand(home, "billing");
+    const set = run(UNIT, ["lead-sign-off", "on"], laptop);
+    expect(set.status, set.out).toBe(0);
+    expect(set.out).not.toContain("share the plan again");
+    expect(set.out).not.toContain("could not be read");
+    expect(planAtHost(hosts.billing, home.id8)).toMatchObject({ plan_repo: { name: "billing" }, settings: { "Lead Sign-off": "on" } });
+    expect(JSON.parse(git(hosts["checkout-api"], ["show", `${planRefOf(home.id8)}:plan.json`]))).toHaveProperty("moved_to");
+  });
+
+  test("a co-lead's computer with a merge to write follows it there, and says no offer to share again", () => {
+    const { home, hosts } = refundsPushed();
+    const colead = leadsLaptop(home);
+    // The co-lead has the code repositories, as the lead does, so its look sees their merges.
+    for (const name of ["checkout-api", "billing"] as const) cloneCode(hosts[name], colead, name, "co-lead");
+    next(colead);
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    mergeOnHost(hosts.billing, "refunds", "squash");
+    movedByHand(home, "billing");
+    // The look that finds the note follows it; the merge is written at the place it moved to.
+    for (const step of [next(colead), next(colead)]) {
+      expect(step.ask_type, JSON.stringify(step)).not.toBe("lead-plan-change");
+      expect(JSON.stringify(step)).not.toContain("share the plan with the teams");
+      expect(JSON.stringify(step)).not.toContain("share the plan again");
+      expect(JSON.stringify(step)).not.toContain("could not be written on the plan");
+    }
+    expect(planAtHost(hosts.billing, home.id8).units.find((unit) => unit.name === "refunds")?.word).toMatchObject({ done: true });
+    expect(JSON.parse(git(hosts["checkout-api"], ["show", `${planRefOf(home.id8)}:plan.json`]))).toHaveProperty("moved_to");
+  });
+
+  // The lead's other computer, its baseline read, after a move made on the lead's computer.
+  function laptopAfterTheMove() {
+    const { home, hosts } = refundsPushed();
+    const laptop = leadsLaptop(home);
+    next(laptop);
+    movedByHand(home, "billing");
+    return { home, hosts, laptop };
+  }
+
+  test("a word where the place the note names cannot be read says so, names what is not written, and keeps the way on", () => {
+    const { hosts, laptop } = laptopAfterTheMove();
+    renameSync(hosts.billing, `${hosts.billing}-gone`);
+    const released = run(UNIT, ["release", "refunds"], laptop);
+    expect(released.status, released.out).not.toBe(0);
+    expect(String(released.json?.error)).toMatch(
+      /^The plan of \S+ moved to billing \(.+\), which could not be read \(.+\), so refunds's reopening is not written\. Say when to try again\.$/,
+    );
+  });
+
+  test("a word where the place the note names holds no plan offers to share it again there, then the word", () => {
+    const { home, hosts, laptop } = laptopAfterTheMove();
+    git(hosts.billing, ["update-ref", "-d", planRefOf(home.id8)]);
+    const released = run(UNIT, ["release", "refunds"], laptop);
+    expect(released.status, released.out).not.toBe(0);
+    expect(String(released.json?.error)).toMatch(
+      /^The plan of \S+ says it moved, but billing does not hold it, so refunds's reopening is not written\. I can share the plan again in billing from your own record here: say if you want that\.$/,
+    );
+    const onYes = String(released.json?.on_yes);
+    expect(onYes).toContain("unit share --plan --repo billing");
+    expect(onYes.indexOf("release refunds")).toBeGreaterThan(onYes.indexOf("unit share --plan --repo billing"));
+  });
+
+  test("a word where the place the note names holds something else offers to share it again over the note, then the word", () => {
+    const { home, hosts, laptop } = laptopAfterTheMove();
+    notAPlanAt(hosts.billing, home.id8);
+    const released = run(UNIT, ["release", "refunds"], laptop);
+    expect(released.status, released.out).not.toBe(0);
+    expect(String(released.json?.error)).toMatch(
+      /^The plan of \S+ says it moved, but billing does not hold it, so refunds's reopening is not written\. I can share the plan again in checkout-api, over the note that it moved, from your own record here: say if you want that\.$/,
+    );
+    expect(String(released.json?.on_yes)).toContain("unit share --plan --repo checkout-api");
+  });
+
+  test("once this computer follows it, the move itself is never asked about: no Keep it or Take it out for it", () => {
+    const { home, hosts } = refundsPushed();
+    const laptop = leadsLaptop(home);
+    next(laptop);
+    movedByHand(home, "billing");
+    followedTo(laptop, hosts.billing);
+    const step = next(laptop);
+    expect(step.ask_type, JSON.stringify(step)).not.toBe("lead-plan-change");
+    expect(JSON.stringify(step)).not.toContain("Take it out");
+  });
+
+  // A word the moving computer wrote before the move, unseen here.
+  function changedThenMoved() {
+    const { home, hosts } = refundsPushed();
+    const laptop = leadsLaptop(home);
+    next(laptop);
+    expect(run(UNIT, ["turned-down", "refunds", "--repo", "billing", "--person-words", "the totals are wrong"], home.dir).status).toBe(0);
+    movedByHand(home, "billing");
+    followedTo(laptop, hosts.billing);
+    return { home, hosts, laptop, ask: next(laptop) };
+  }
+
+  test("a change the moving computer made before the move is asked about alone", () => {
+    const { ask } = changedThenMoved();
+    expect(ask.ask_type, JSON.stringify(ask)).toBe("lead-plan-change");
+    expect(String(ask.question)).toMatch(/has a change this computer did not write, by lead, .*Its commit says "refunds turned down in billing"\. Keep it on the plan\?$/);
+  });
+
+  test("Take it out of a change made before the move puts the plan back where it is now, never where it was", () => {
+    const { home, hosts, laptop, ask } = changedThenMoved();
+    expect(ask.ask_type, JSON.stringify(ask)).toBe("lead-plan-change");
+    const out = (ask.choices as Array<{ label: string; command: string }>).find((choice) => choice.label.startsWith("Take"))!;
+    expect(run(UNIT, ["plan-change", "take-out", "--tip", tipOf(out.command)], laptop).status).toBe(0);
+    const set = run(UNIT, ["lead-sign-off", "on"], laptop);
+    expect(set.status, set.out).toBe(0);
+    const plan = planAtHost(hosts.billing, home.id8);
+    expect(plan.plan_repo.name).toBe("billing");
+    expect(plan.units.find((unit) => unit.name === "refunds")?.word.turned_down).toBeUndefined();
+  });
+});
 
 describe("a plan to share again before the lead's word goes on it", () => {
   test("over a tip that is not a plan: the stop names the share, then the word; after the share the word is written with the lead's words", () => {

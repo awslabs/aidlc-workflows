@@ -46,6 +46,7 @@ import {
   auditShardBlocks,
   auditShardName,
   knownAuditShardName,
+  type ActiveDirectiveMarker,
   type AuditShardEvent,
   type CachedUnitClaim,
   candidateReviewCoverageProjection,
@@ -73,6 +74,7 @@ import {
   loadStageGraphAll,
   engineAskMark,
   noteEngineAskMark,
+  readActiveDirectiveMarker,
   parseArgs,
   namesSourceCheckout,
   printUsageAndExit,
@@ -190,6 +192,7 @@ import {
   HOME_LOCATION_FIELD,
   isBuildOfUnit,
   liveBuildOf,
+  unitBuildsHere,
   homeLocation,
   claimsOnBranches,
   claimsOnBranchesFor,
@@ -247,6 +250,8 @@ import {
   copyOf,
   repoCopyKey,
   type PlanJson,
+  type PlanPointer,
+  planCommitOf,
   PLAN_FORMAT,
   PLAN_SETTINGS,
   planJsonOf,
@@ -6222,7 +6227,7 @@ export function sharesPlanRef(projectDir: string): boolean {
 }
 
 // The lead's own work that teams build each Unit of (not a Unit's build).
-function leadsOwnTeamWork(projectDir: string): boolean {
+export function leadsOwnTeamWork(projectDir: string): boolean {
   try {
     const state = readStateFile(projectDir);
     return homeLocation(state) !== null && unitBuildOf(state) === null;
@@ -6950,6 +6955,28 @@ function writeSharedPlan(pd: string, message?: string, named?: string): SharedPl
   const later = planUnitsKept(pd) !== null;
   if (!("ref" in place)) fail(planNoRemoteLine(place.repo, later));
   const retry = later ? "Say when to try again." : "Say when to try again, or name another repository the teams can read.";
+  // Another repository named once the plan is shared: the plan moves there.
+  const kept = named === undefined ? null : keptPlan(pd, place.id8);
+  if (kept !== null && repoCopyKey(kept.plan.plan_repo.address) !== repoCopyKey(place.address)) {
+    return movePlan(pd, { ...place, repo: kept.plan.plan_repo.name, address: kept.plan.plan_repo.address,
+      copy: copyOf(kept.plan.plan_repo.address, place.ref) }, place, message);
+  }
+  // Another repository named where Home Location holds what a newer AI-DLC
+  // wrote (a plan or its note): this one never shares beside it, as the plain
+  // share there gives the update step.
+  const home = named === undefined || kept !== null ? null : homeLocation(stateHere(pd) ?? "");
+  if (home !== null && isGitAddress(home) && repoCopyKey(home) !== repoCopyKey(place.address)) {
+    const at = { ...place, address: home, copy: copyOf(home, place.ref) };
+    // This computer's copy first; with none here, one look there.
+    if (!localGit(pd, ["rev-parse", "--verify", "--quiet", at.copy]).ok) {
+      try {
+        lookAtPlan(pd, at);
+      } catch {
+        // Not read there: the share goes on as it would.
+      }
+    }
+    if (planAtCopy(pd, at.copy).kind === "newer") fail(newerPlanStep(pd));
+  }
   let added: string[] = [];
   const what = (tip: PlanJson | null): string => {
     added = tip === null ? [] : unitsNotIn(pd, tip.units.map((unit) => unit.name));
@@ -6957,25 +6984,36 @@ function writeSharedPlan(pd: string, message?: string, named?: string): SharedPl
   };
   // The share is the lead's own yes, so a tip that is not a plan is written
   // over as a commit on top, nothing lost; one of a newer AI-DLC never is.
+  // Named: the place a note of this work at Home Location says the plan went,
+  // which holds no plan now: the plan goes back there, from the plan under the note.
+  const under = named === undefined ? null : planUnderNoteFor(pd, place);
   const written = writePlan(pd, place, {
-    what, ...(message === undefined ? {} : { message }), overUnreadable: true,
+    what, ...(message === undefined ? {} : { message }), overUnreadable: true, ...(named === undefined ? {} : { onNote: true as const }),
+    ...(under === null ? {} : { regainFrom: under }),
     // A change this computer did not write is asked about before the share lands on it.
     stopIf: (tip) => tip === null ? undefined : planChangeAt(pd, tip.commit, tip.plan).change ?? undefined,
   });
-  const repo = place.repo;
-  const address = maskUserinfo(place.address);
-  // The work's Home Location is the plan's repository, where the lead put it.
-  if (written.kind === "written" || written.kind === "unchanged") {
-    withAuditLock(pd, () => {
-      const state = readStateFile(pd);
-      const recorded = homeLocation(state);
-      if (recorded !== null && !sameGitAddress(recorded, place.address)) writeStateFile(pd, recordHomeLocation(state, place.address));
-    });
+  if (written.kind === "unfollowed") {
+    if (written.follow.kind === "unread") fail(planNotFollowedLine(written.follow, "the plan is not shared", "Say when to try again."));
+    return planNotHeldWay(pd, written.follow, place, "the plan is not shared");
   }
-  if (written.kind === "unchanged") return { repo, address, commit: written.commit, said: `The plan in ${repo} already has everything here.` };
+  // A write that followed the plan to where it moved went there, with the line said once for it.
+  const went = (written.kind === "written" || written.kind === "unchanged") && written.followed !== undefined ? written.followed : null;
+  const repo = went?.place.repo ?? place.repo;
+  const address = maskUserinfo(went?.place.address ?? place.address);
+  const followedLine = went === null ? [] : [went.line];
+  // The work's Home Location is the plan's repository, where the lead put it.
+  if (written.kind === "written" || written.kind === "unchanged") planHomeHere(pd, went?.place.address ?? place.address);
+  if (written.kind === "unchanged") {
+    return { repo, address, commit: written.commit, said: [...followedLine, `The plan in ${repo} already has everything here.`].join(" ") };
+  }
   if (written.kind === "written") {
-    const said = written.regained
+    const said = written.underNote
+      ? `The plan was no longer in ${repo}, so I shared it again, with what was decided on each Unit as the plan had it when it moved.`
+      : written.regained
       ? `The plan was no longer in ${repo}, so I shared it again, with what you decided on each Unit as this computer last had it.`
+      : written.over?.onNote
+        ? `The plan is shared again in ${repo}, over the note that it moved, with what was decided on each Unit as the plan had it when it moved.`
       : written.over !== undefined
         ? `The plan in ${repo} is shared again over what was there, ` + (written.over.carried
           ? "with what was decided on each Unit as the plan last had it."
@@ -6984,7 +7022,8 @@ function writeSharedPlan(pd: string, message?: string, named?: string): SharedPl
         ? `The plan is shared in ${repo}. AI-DLC sends no notice of it: the teams hear it from you. A team whose workspace has no ` +
           `${repo} needs this address: ${address}`
         : added.length > 0 ? `The plan in ${repo} has ${namesInProse(added)} now.` : `The plan is shared in ${repo}.`;
-    return { repo, address, commit: written.commit, said: written.back === undefined ? said : `${said} ${planBackLine(repo, written.back)}` };
+    const told = written.back === undefined ? said : `${said} ${planBackLine(repo, written.back)}`;
+    return { repo, address, commit: written.commit, said: [...followedLine, told].join(" ") };
   }
   if (written.kind === "unreached") {
     fail(`${repo} could not be reached, so the plan is not shared${written.words === null ? "." : `: git says "${written.words}".`} Say when to try again.`);
@@ -6995,21 +7034,350 @@ function writeSharedPlan(pd: string, message?: string, named?: string): SharedPl
   // The lead's question first: once they answer, the same share again.
   if (written.kind === "stopped") {
     const ask = planChangeQuestion(written.detail as PlanChange);
-    throw new LeadWordUnwritten(ask.question, [aidlcToolInvocation("unit"), ...invokedArgs.map(shellArg)].join(" "), ask);
+    const question = written.followed === undefined ? ask.question : `${written.followed.line} ${ask.question}`;
+    throw new LeadWordUnwritten(question, [aidlcToolInvocation("unit"), ...invokedArgs.map(shellArg)].join(" "), ask);
   }
   // A rule of the host's (a message rule among them): the person's own
   // message has a way in, though the share asked for none.
   if (written.byRule) {
-    const file = commitMessageFile(pd, "share", "plan");
-    return { notShared: {
-      notice: `${repo} did not take the plan: ${written.words}. If it is the commit message, tell me the one to use, and I will share it with that.`,
-      step: "Tell the person in plain words what it reports, then end your turn. When they give the commit message, write it to " +
-        `${file} with your file tool, exactly as they gave it, then run ` +
-        `\`${aidlcInvocation()} unit share --plan${named === undefined ? "" : ` --repo ${shellArg(named)}`} --commit-message-file ${file}\` ` +
-        "and tell them in plain words what it reports.",
-    } };
+    return messageWayIn(pd, `${repo} did not take the plan: ${written.words}. If it is the commit message, tell me the one to use, and I will share it with that.`,
+      named);
   }
   fail(`${repo} did not take the plan: ${written.words}. ${retry}`);
+}
+
+// A host rule that may be on the commit message: the person's own message is
+// the way in, written to the share's message file and passed with the same
+// command (`named`, its --repo).
+function messageWayIn(pd: string, notice: string, named?: string): SharedPlan {
+  const file = commitMessageFile(pd, "share", "plan");
+  return { notShared: {
+    notice,
+    step: "Tell the person in plain words what it reports, then end your turn. When they give the commit message, write it to " +
+      `${file} with your file tool, exactly as they gave it, then run ` +
+      `\`${aidlcInvocation()} unit share --plan${named === undefined ? "" : ` --repo ${shellArg(named)}`} --commit-message-file ${file}\` ` +
+      "and tell them in plain words what it reports.",
+  } };
+}
+
+// The way on at this work's note whose place does not hold the plan: the share
+// again where the note says, when that place holds nothing; else on top of the
+// note where it is. `then`: the move asked for, run after the share's yes in
+// the same step, so the person never asks for it twice.
+function planNotHeldWay(pd: string, follow: Extract<PlanFollow, { kind: "not-followed" }>, place: PlanPlace, tail: string,
+  then?: string): SharedPlan {
+  const yes = planShareAgainRepo(pd, follow, place);
+  return { notShared: {
+    notice: planNotFollowedLine(follow, tail, planShareAgainOffer(follow, place.repo)),
+    step: "Tell the person in plain words what it reports, then end your turn. " + (then === undefined
+      ? `When they say yes, run \`${aidlcInvocation()} unit share --plan --repo ${shellArg(yes)}\` and tell them in plain words what it reports.`
+      : shareThenWord(then, yes, "the move's")),
+  } };
+}
+
+// What a place's tip is to a move: nothing, this work's plan, this work's note,
+// a plan of a newer AI-DLC, or something else.
+type MoveTip = { kind: "none" } | { kind: "plan"; commit: string; plan: PlanJson } | { kind: "note"; commit: string } |
+  { kind: "newer" } | { kind: "other"; commit: string };
+function moveTipAt(pd: string, place: PlanPlace, tip: string | null): MoveTip {
+  if (tip === null) return { kind: "none" };
+  const read = planAtCopy(pd, place.copy, { commit: tip });
+  return read.kind === "read" ? { kind: "plan", commit: tip, plan: read.plan } : read.kind === "moved" ? { kind: "note", commit: tip }
+    : read.kind === "newer" ? { kind: "newer" } : { kind: "other", commit: tip };
+}
+
+// The note a moved plan leaves: plan.json alone, the pointer, on `parent`.
+function pointerCommit(pd: string, parent: string | null, pointer: PlanPointer, message: string): string {
+  const blob = git(pd, ["hash-object", "-w", "--no-filters", "--stdin"], undefined, `${JSON.stringify(pointer, null, 2)}\n`);
+  if (!blob.ok) fail(`git hash-object failed: ${blob.stderr.trim()}`);
+  const tree = git(pd, ["mktree"], undefined, `100644 blob ${blob.stdout.trim()}\tplan.json\n`);
+  if (!tree.ok) fail(`git mktree failed: ${tree.stderr.trim()}`);
+  return commitAsPerson(pd, tree.stdout.trim(), parent === null ? [] : [parent], message);
+}
+
+// The plan just written at a place taken back, only while nothing came on top:
+// what was there before (`was`, this work's note at a move back) goes back,
+// and where nothing was, the ref goes.
+function takeBackPlan(pd: string, place: PlanPlace, commit: string, was: string | null): boolean {
+  const via = gitTargetFor(pd, place.address, "push");
+  const back = git(pd, ["push", via.target, `--force-with-lease=${place.ref}:${commit}`, `${was ?? ""}:${place.ref}`],
+    { ...via.env, GIT_TERMINAL_PROMPT: "0" });
+  if (back.ok) localGit(pd, was === null ? ["update-ref", "-d", place.copy] : ["update-ref", place.copy, was]);
+  return back.ok;
+}
+
+// The once-mark of the plan's share question: the first share, or the Units added since.
+export function planShareMarkName(added: readonly string[] | null): string {
+  return teamHandoverMarkName("share", added === null ? "plan" : `plan-${[...added].sort().join("-")}`);
+}
+
+// The share question for the Units the plan does not have yet is the step this
+// work last handed out: a share run now is its yes.
+// `marker` is the step read before the move wrote anything here: Home
+// Location is in the state the marker is bound to.
+function shareQuestionOpen(pd: string, marker: ActiveDirectiveMarker | null, added: readonly string[]): boolean {
+  if (added.length === 0) return false;
+  return marker?.kind === "ask" && marker.ask_type === "team-handover" && engineAskMark(pd, planShareMarkName(added)) !== null;
+}
+
+// The person's request to put the shared plan in another repository: the plan
+// at the new place as one commit on the old tip (its history with it, only
+// where it lives and its version changed), then the note at the old place on
+// that same tip; a note the old place does not take leaves no second plan (the
+// one just written is taken back). Then the lead's Home Location is the new
+// place, and what the share question it answers asked for is shared there.
+function movePlan(pd: string, start: PlanPlace, to: PlanPlace, message: string | undefined): SharedPlan {
+  const address = maskUserinfo(to.address);
+  const step = readActiveDirectiveMarker(pd, readStateFile(pd));
+  let from = start;
+  let kept = planShared(pd, from);
+  // Said first when the plan had moved already, on another computer: its
+  // Home Location is changed by then, so no later step says it.
+  const followedLines: string[] = [];
+  const end: (line: string) => never = (line) => fail([...followedLines, line].join(" "));
+  const tries = 3;
+  for (let attempt = 1; ; attempt++) {
+    const lookOld = lookAtPlan(pd, from);
+    // Not reached: the move goes on from this computer's copy of the old place
+    // only to a new place that holds a copy of the plan or nothing, and writes
+    // nothing at the old one.
+    const gone = lookOld.unreached;
+    const notReached = `${from.repo} could not be reached, so the plan was not moved${gone === null || gone === undefined ? "." : `: git says "${gone}".`} ` +
+      "Say when to try again.";
+    if (gone !== undefined && lookOld.tip === null) end(notReached);
+    const old = moveTipAt(pd, from, lookOld.tip);
+    if (old.kind === "newer") end(newerPlanStep(pd));
+    // Moved already from there, on another computer: followed, then moved from where it is.
+    if (old.kind === "note") {
+      const met = followMoved(pd, from.id8, from.address, true, { say: false });
+      const follow = met?.follow ?? null;
+      if (follow === null || follow.kind === "newer") end(newerPlanStep(pd));
+      if (follow.kind === "unread") end(planNotFollowedLine(follow, `it was not moved on to ${to.repo}`, "Say when to try again."));
+      if (follow.kind === "not-followed") {
+        const named = planRepos(pd).some((entry) => entry.name === to.repo) ? to.repo : to.address;
+        return planNotHeldWay(pd, follow, from, `it was not moved on to ${to.repo}`, `${aidlcInvocation()} unit share --plan --repo ${shellArg(named)}`);
+      }
+      const line = met?.leadLine ?? null;
+      if (line !== null) followedLines.push(line);
+      from = { ...from, repo: follow.repo, address: follow.address, copy: follow.copy };
+      kept = planShared(pd, from);
+      if (repoCopyKey(from.address) === repoCopyKey(to.address)) {
+        const shared = writeSharedPlan(pd, message);
+        return "said" in shared ? { ...shared, said: [...followedLines, shared.said].join(" ") } : shared;
+      }
+      attempt--;
+      continue;
+    }
+    // What moves: the old tip's plan, the plan under what is there now, or
+    // this computer's copy of a plan that is no longer there.
+    const below = old.kind === "other" ? planBelow(pd, old.commit, from.uuid) : null;
+    const fromCopy = old.kind === "none" || (old.kind === "other" && below === null);
+    const base = old.kind === "plan" ? old : below ?? kept;
+    // No copy here either: the plan from the lead's own record, as a first share builds it.
+    const fromRecord = base === null ? planFilesNow(pd, null, to) : null;
+    if (old.kind === "plan") {
+      const change = planChangeAt(pd, old.commit, old.plan).change;
+      if (change !== null) {
+        const ask = planChangeQuestion(change);
+        throw new LeadWordUnwritten([...followedLines, `Before I write the plan's move to ${to.repo}: ${ask.question}`].join(" "),
+          [aidlcToolInvocation("unit"), ...invokedArgs.map(shellArg)].join(" "), ask);
+      }
+    }
+    const lookNew = lookAtPlan(pd, to);
+    if (lookNew.unreached !== undefined) {
+      end(`${to.repo} could not be reached, so the plan stays in ${from.repo}${lookNew.unreached === null ? "." : `: git says "${lookNew.unreached}".`} Say when to try again.`);
+    }
+    const there = moveTipAt(pd, to, lookNew.tip);
+    if (there.kind === "newer") end(newerPlanStep(pd));
+    const elsewhere = `${to.repo} already holds something else where the plan would go, so nothing was moved: the plan stays in ${from.repo}.`;
+    // This work's plan there naming the old place: a copy of it (a mirror made
+    // to move hosts), or the same repository under another name, which only
+    // the old place can tell after the write below. It is taken over only on
+    // the old tip read here, when that holds it.
+    const copyThere = there.kind === "plan" && repoCopyKey(there.plan.plan_repo.address) === repoCopyKey(from.address);
+    // With the old place not reached, the copy there may be newer than this
+    // computer's: the plan is then written on it.
+    const copyNewer = gone !== undefined && copyThere && old.kind === "plan" && there.commit !== old.commit &&
+      localGit(pd, ["merge-base", "--is-ancestor", old.commit, there.commit]).ok;
+    if (copyThere && !copyNewer && (old.kind !== "plan" || !localGit(pd, ["merge-base", "--is-ancestor", there.commit, old.commit]).ok)) {
+      end(gone === undefined ? elsewhere : notReached);
+    }
+    if (copyNewer && there.kind === "plan") {
+      const change = planChangeAt(pd, there.commit, there.plan).change;
+      if (change !== null) {
+        const ask = planChangeQuestion(change);
+        throw new LeadWordUnwritten([...followedLines, `Before I write the plan's move to ${to.repo}: ${ask.question}`].join(" "),
+          [aidlcToolInvocation("unit"), ...invokedArgs.map(shellArg)].join(" "), ask);
+      }
+    }
+    // This work's plan there naming that place, with the old tip under it: the
+    // plan is there already (taken over from another computer of the lead's),
+    // and written again it would lose what was written there since.
+    const already = there.kind === "plan" && !copyThere && repoCopyKey(there.plan.plan_repo.address) === repoCopyKey(to.address) &&
+      old.kind === "plan" && localGit(pd, ["merge-base", "--is-ancestor", old.commit, there.commit]).ok;
+    if (there.kind === "other" || (there.kind === "plan" && !copyThere && repoCopyKey(there.plan.plan_repo.address) !== repoCopyKey(to.address))) {
+      end(elsewhere);
+    }
+    // Where the plan is now, followed as a note is: Home Location there, the
+    // builds here re-keyed, said once; nothing written over it.
+    const followThere = (now: PlanJson, oid: string): SharedPlan => {
+      const line = leadFollowsPlan(pd, undefined, { kind: "followed", label: now.work.label, repo: to.repo, address: to.address, copy: to.copy, oid, plan: now });
+      const read = planAt(pd, to);
+      if (read.kind === "read") followBuildsTo(pd, read.plan, from.address);
+      return { repo: to.repo, address, commit: oid, said: [...followedLines, line ?? ""].join(" ").trim() };
+    };
+    // Written there by another computer and parted from the old tip (each
+    // holds what the other does not): a write on the old tip would replace the
+    // living plan there.
+    if (there.kind === "plan" && !copyThere && !already && old.kind === "plan" && engineAskMark(pd, planMark("here", there.commit)) === null &&
+      !localGit(pd, ["merge-base", "--is-ancestor", there.commit, old.commit]).ok) {
+      return followThere(there.plan, there.commit);
+    }
+    // The old place not reached: the plan already there is followed; past
+    // that, only a copy of it or nothing there lets the move go on.
+    if (gone !== undefined && already && there.kind === "plan") return followThere(there.plan, there.commit);
+    if (gone !== undefined && !copyThere && there.kind !== "none") end(notReached);
+    // At the new place: nothing, a move that stopped there before, this work's note (a move back), or a copy.
+    const lease = there.kind === "none" ? null : there.commit;
+    // A copy taken over names the plan's repositories as the lead's workspace
+    // spells them now: a Unit's record resolves by them, so a build's record
+    // push would otherwise still go to the old host.
+    const spelled = (repos: PlanJson["repos"]): PlanJson["repos"] => repos.map((repo) =>
+      ({ ...repo, address: planRepos(pd).find((entry) => entry.name === repo.name && entry.address !== null)?.address ?? repo.address }));
+    const source = copyNewer && there.kind === "plan" ? { commit: there.commit, plan: there.plan } : base;
+    // The repository the plan was in stays listed: a Unit's record may be
+    // there, read by the list once the plan names another place, and the
+    // work's list may not name it (a first share outside it).
+    const listed = (repos: PlanJson["repos"], was: PlanJson["plan_repo"]): PlanJson["repos"] =>
+      repos.some((repo) => repo.name === was.name) ? repos : [...repos, { name: was.name, address: was.address, branch: null }];
+    const plan: PlanJson = source === null ? fromRecord!.plan
+      : { ...source.plan, plan_repo: { name: to.repo, address: to.address }, version: source.plan.version + 1,
+        repos: listed(copyThere || gone !== undefined ? spelled(source.plan.repos) : source.plan.repos, source.plan.plan_repo) };
+    // From this computer's copy, the plan goes on that copy, so nothing that
+    // stood in its place at the old place is carried into the new repository.
+    const moved = already && there.kind === "plan" ? there.commit : base === null ? planCommit(pd, null, plan, fromRecord!.files, "shared", message)
+      : planCommit(pd, copyNewer && there.kind === "plan" ? there.commit : fromCopy ? base.commit : old.commit, plan, {}, "shared again", message);
+    const placed = already ? { ok: true as const } : pushPlan(pd, to, moved, lease);
+    if (!placed.ok) {
+      const after = placed.timedOut ? { unreached: null } : lookAtPlan(pd, to);
+      if (after.unreached !== undefined) {
+        end(`${to.repo} could not be reached, so the plan stays in ${from.repo}${after.unreached === null ? "." : `: git says "${after.unreached}".`} Say when to try again.`);
+      }
+      if (placed.lost && attempt < tries) continue;
+      end(placed.lost ? `The plan in ${from.repo} kept changing while I moved it, so nothing was moved. Say when to try again.`
+        : `${to.repo} did not take the plan, so it stays in ${from.repo}: ${placed.words}. Say when to try again.`);
+    }
+    if (!already) noteEngineAskMark(pd, planMark("here", moved));
+    // One repository under two names shows the plan just written at the old
+    // name too: taken back, as the teams read it. Any other change there since
+    // the look is another writer's: taken back, and the next try.
+    if (copyThere && old.kind === "plan" && gone === undefined) {
+      const shown = lookAtPlan(pd, from);
+      if (shown.unreached !== undefined || shown.tip !== old.commit) {
+        const back = takeBackPlan(pd, to, moved, lease);
+        localGit(pd, ["update-ref", from.copy, old.commit]);
+        if (shown.tip === moved) end(`${to.repo} is the same repository as ${from.repo} under another name, so the plan stays in ${from.repo}.`);
+        if (shown.unreached !== undefined) {
+          end(`${from.repo} could not be reached, so the plan was not moved${shown.unreached === null ? "." : `: git says "${shown.unreached}".`} Say when to try again.`);
+        }
+        if (back && attempt < tries) continue;
+        break;
+      }
+    }
+    const pointer: PlanPointer = { format: PLAN_FORMAT, work: plan.work, moved_to: { name: to.repo, address: to.address } };
+    const noteOid = pointerCommit(pd, old.kind === "none" ? null : old.commit, pointer, message ?? `aidlc plan ${plan.work.label}: moved to ${to.repo}`);
+    const noted = gone !== undefined ? { ok: true as const } : pushPlan(pd, from, noteOid, old.kind === "none" ? null : old.commit);
+    let overLine: string | null = gone === undefined ? null :
+      `The plan is in ${to.repo} now, with what you decided on each Unit as this computer last had it. ${from.repo} could not be reached` +
+      `${gone === null ? "" : ` (git says "${gone}")`}, so nothing was written there and ${from.repo} does not say where the plan went. Give each team ` +
+      `${to.repo}'s address: until a team's AI-DLC has it, its builds look for the plan in ${from.repo}. Its earlier versions are readable in ${to.repo}.`;
+    if (!noted.ok) {
+      const after = noted.timedOut ? { unreached: null } : lookAtPlan(pd, from);
+      // The old place refusing the note, still as it was: it refuses the lead's
+      // other writes too, so the plan stays where it is now, and the lead hears
+      // that the old place does not say so.
+      const keep = !noted.lost && !noted.timedOut && after.unreached === undefined && after.tip === (old.kind === "none" ? null : old.commit);
+      // Where the old place took the plan under the person's own message, a
+      // rule on the message is likely: their message is the way in first.
+      if (keep && message === undefined && old.kind === "plan" && !/^aidlc plan /.test(localGit(pd, ["log", "-1", "--format=%s", old.commit]).stdout.trim())) {
+        if (!already) takeBackPlan(pd, to, moved, lease);
+        const named = planRepos(pd).some((entry) => entry.name === to.repo) ? to.repo : to.address;
+        return messageWayIn(pd, `${from.repo} did not take the note that the plan moved: ${noted.words}. If it is the commit message, tell me the one ` +
+          "to use, and I will move the plan with that.", named);
+      }
+      if (keep && already && there.kind === "plan") return followThere(there.plan, moved);
+      if (keep) {
+        overLine = `The plan is in ${to.repo} now, with what was decided on each Unit. ${from.repo} did not take the note that the plan moved ` +
+          `(${noted.words}), so nothing was written there and ${from.repo} does not say where the plan went. Give each team ${to.repo}'s address: ` +
+          `until a team's AI-DLC has it, its builds read the plan in ${from.repo} as it was. Its earlier versions stay readable in both.`;
+      }
+    }
+    if (!noted.ok && overLine === null) {
+      const after = noted.timedOut ? { unreached: null } : lookAtPlan(pd, from);
+      if (noted.lost && after.unreached === undefined && attempt < tries) {
+        if (!takeBackPlan(pd, to, moved, lease)) break;
+        continue;
+      }
+      const copyLeft = takeBackPlan(pd, to, moved, lease) ? "" :
+        ` A copy of it is still in ${to.repo} and is not kept up to date; trying again finishes the move or takes the copy back.`;
+      end((noted.lost ? `The plan in ${from.repo} kept changing while I moved it, so nothing was moved.`
+        : after.unreached !== undefined
+          ? `${from.repo} could not be reached to write the note that the plan moved, so the plan stays in ${from.repo}` +
+            `${after.unreached === null ? "." : `: git says "${after.unreached}".`}`
+          : `${from.repo} did not take the note that the plan moved, so the plan stays in ${from.repo}: ${noted.words}.`) +
+        `${copyLeft} Say when to try again.`);
+    }
+    if (overLine === null) noteEngineAskMark(pd, planMark("here", noteOid));
+    planHomeHere(pd, to.address);
+    if (overLine !== null) {
+      const read = planAt(pd, to);
+      if (read.kind === "read") followBuildsTo(pd, read.plan, from.address);
+    }
+    const added = unitsNotIn(pd, plan.units.map((unit) => unit.name));
+    const moveLine = overLine ?? (base === null
+      ? `The plan was no longer in ${from.repo}, and this computer had no copy of it; it is in ${to.repo} now from your own record here, and ` +
+        `${from.repo} says where it went. What was decided on its Units before was not there to carry, so it is not on the plan now.`
+      : fromCopy
+      ? `The plan was no longer in ${from.repo}; it is in ${to.repo} now, with what you decided on each Unit as this computer last had it, and ${from.repo} says where it went. ` +
+        `Its earlier versions are readable in ${to.repo}.`
+      : `The plan is in ${to.repo} now, with what was decided on each Unit, and ${from.repo} says where it went. ` +
+        // Its history is under the note there and under the plan here; a
+        // plan moved from this computer's copy has none under the note.
+        "Its earlier versions stay readable in both.");
+    const readAccess = `Each team needs read access to ${to.repo}; AI-DLC sends no notice of the move.`;
+    const addressLine = `${to.repo}'s address: ${address}`;
+    // The share rides the move only as the yes of the open share question.
+    if (!shareQuestionOpen(pd, step, added)) {
+      const notYet = added.length === 0 ? [] : [`${namesInProse(added)} ${added.length === 1 ? "is" : "are"} not on it yet: say when to share it.`];
+      return { repo: to.repo, address, commit: moved, said: [...followedLines, moveLine, readAccess, ...notYet, addressLine].join(" ") };
+    }
+    const shared = writePlan(pd, to, {
+      what: `${added.join(", ")} added`, ...(message === undefined ? {} : { message }),
+      stopIf: (tip) => tip === null ? undefined : planChangeAt(pd, tip.commit, tip.plan).change ?? undefined,
+    });
+    const said = [...followedLines, moveLine, readAccess, addressLine];
+    // The lead's question first, with the move said: once they answer, the same command shares.
+    if (shared.kind === "stopped") {
+      const ask = planChangeQuestion(shared.detail as PlanChange);
+      throw new LeadWordUnwritten([...said, ask.question].join(" "), [aidlcToolInvocation("unit"), ...invokedArgs.map(shellArg)].join(" "), ask);
+    }
+    const names = namesInProse(added);
+    const shareLine = shared.kind === "written" || shared.kind === "unchanged" ? `The plan in ${to.repo} has ${names} now.`
+      : shared.kind === "unreached"
+        ? `${to.repo} could not be reached, so ${names} ${added.length === 1 ? "is" : "are"} not on the plan yet` +
+          `${shared.words === null ? "." : `: git says "${shared.words}".`} Say when to try again.`
+      : shared.kind === "refused" ? `${to.repo} did not take ${names} onto the plan: ${shared.words}. Say when to try again.`
+      : null;
+    // Any other end (the plan kept changing, a note or a plan of a newer
+    // AI-DLC there by now): the move-only line, which says the Units are not on it.
+    if (shareLine === null) {
+      return { repo: to.repo, address, commit: moved,
+        said: [...followedLines, moveLine, readAccess, `${names} ${added.length === 1 ? "is" : "are"} not on it yet: say when to share it.`, addressLine].join(" ") };
+    }
+    return { repo: to.repo, address, commit: shared.kind === "written" || shared.kind === "unchanged" ? shared.commit : moved, said: [...said, shareLine].join(" ") };
+  }
+  end(`The plan in ${from.repo} kept changing while I moved it, so nothing was moved. A copy of it is still in ${to.repo} and is not kept ` +
+    "up to date; trying again finishes the move or takes the copy back. Say when to try again.");
 }
 
 // The Units of the lead's Unit plan here that `listed` does not name.
@@ -7764,6 +8132,8 @@ function planLookedFor(projectDir: string, location: string, id8: string): PlanJ
   if (plansLookedFor.has(key)) return null;
   plansLookedFor.add(key);
   lookAt(projectDir, location, [planRecordRef(id8)]);
+  const met = followMoved(projectDir, id8, location, false);
+  if (met?.follow.kind === "followed") return met.follow.plan;
   const read = planAtCopy(projectDir, copy);
   return read.kind === "read" ? read.plan : null;
 }
@@ -7873,7 +8243,8 @@ function planHomeAt(projectDir: string, build: UnitBuild): HomeWork {
       // The build's own fields stand.
     }
   }
-  const kept = planAtCopy(projectDir, copyOf(build.homeLocation, planRecordRef(id8)));
+  const copy = copyOf(build.homeLocation, planRecordRef(id8));
+  const kept = planAtCopy(projectDir, copy, { commit: planCommitOf(projectDir, copy) });
   return {
     space: kept.kind === "read" ? kept.plan.work.space : DEFAULT_SPACE, dirName: "", uuid: build.homeWork, id8, label,
     location: build.homeLocation, target: homeTarget(projectDir, build.homeLocation), recordPrefix: "", repos, solo: false,
@@ -7887,7 +8258,8 @@ function buildHomeSpace(projectDir: string, build: UnitBuild): string {
   const here = leadWorkHere(projectDir, build.homeWork);
   if (here !== null) return here.space;
   if (!isGitAddress(build.homeLocation)) return DEFAULT_SPACE;
-  const kept = planAtCopy(projectDir, copyOf(build.homeLocation, planRecordRef(idSuffix(build.homeWork))));
+  const copy = copyOf(build.homeLocation, planRecordRef(idSuffix(build.homeWork)));
+  const kept = planAtCopy(projectDir, copy, { commit: planCommitOf(projectDir, copy) });
   return kept.kind === "read" ? kept.plan.work.space || DEFAULT_SPACE : DEFAULT_SPACE;
 }
 
@@ -8133,6 +8505,13 @@ function planOfWork(pd: string, id8: string, at?: string): PlanJson | null {
   }
   const kept = keptPlan(pd, id8);
   if (kept !== null) return kept.plan;
+  // A build of this work whose plan moved and is not followed yet reads the plan under the note.
+  const build = unitBuildOf(stateHere(pd) ?? "");
+  if (build !== null && idSuffix(build.homeWork) === id8 && isGitAddress(build.homeLocation)) {
+    const copy = copyOf(build.homeLocation, planRecordRef(id8));
+    const under = planAtCopy(pd, copy, { commit: planCommitOf(pd, copy) });
+    if (under.kind === "read") return under.plan;
+  }
   const listed = localGit(pd, ["for-each-ref", "--format=%(refname)", `refs/aidlc/home/${id8}/`]);
   const found: PlanJson[] = [];
   for (const ref of listed.ok ? listed.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean) : []) {
@@ -8172,6 +8551,13 @@ export function planPlaceForShare(projectDir: string, named?: string):
   }
   const kept = keptPlan(pd, intentId8)?.plan.plan_repo;
   if (kept !== undefined) return at(kept.name, kept.address);
+  // A copy at the work's Home Location that reads as no plan (a pointer, after a
+  // move made on another computer): the write looks there first, and follows it.
+  const home = homeLocation(stateHere(pd) ?? "");
+  if (home !== null && isGitAddress(home) && localGit(pd, ["rev-parse", "--verify", "--quiet", copyOf(home, ref)]).ok) {
+    const listed = planRepos(pd).find((entry) => entry.address !== null && sameGitAddress(entry.address, home));
+    return at(listed?.name ?? (repoNameOf(home) || folderRepoName(home) || "plan"), home);
+  }
   const first = planRepos(pd)[0];
   return at(first.name, first.address);
 }
@@ -8362,9 +8748,9 @@ export interface PlanSnapshot {
 export type PlanRead = { kind: "read"; plan: PlanSnapshot } | { kind: "newer"; format: number; place: PlanPlace } | { kind: "unreadable"; place: PlanPlace };
 
 export function planAt(projectDir: string, place: PlanPlace, commit?: string): PlanRead {
-  const read = planAtCopy(projectDir, place.copy, { commit });
+  const read = planAtCopy(projectDir, place.copy, { commit: commit ?? planCommitOf(projectDir, place.copy) });
   if (read.kind === "newer") return { kind: "newer", format: read.format, place };
-  if (read.kind === "unreadable") return { kind: "unreadable", place };
+  if (read.kind !== "read") return { kind: "unreadable", place };
   const oid = read.oid;
   return {
     kind: "read",
@@ -8384,9 +8770,11 @@ export function planAt(projectDir: string, place: PlanPlace, commit?: string): P
 // when it was read from the repository plan.json names as its own: a copy of
 // the ref anywhere else (a mirror, a fork, a push by anyone who can push there)
 // is no plan. One at a place the person named is the plan as read there,
-// however they spelled the address (an ssh host alias, a port).
+// however they spelled the address (an ssh host alias, a port). `moved`: this
+// work's plan moved, and its pointer says where (followPlan reads it).
 export function planAtCopy(pd: string, copy: string, options: { commit?: string; found?: boolean } = {}):
-  { kind: "read"; oid: string; plan: PlanJson } | { kind: "newer"; format: number } | { kind: "unreadable"; format: number } {
+  { kind: "read"; oid: string; plan: PlanJson } | { kind: "moved"; oid: string; pointer: PlanPointer } | { kind: "newer"; format: number } |
+  { kind: "unreadable"; format: number } {
   if (homeCopyOf(copy)?.kind !== "plan") return { kind: "unreadable", format: 0 };
   const oid = options.commit ?? localGit(pd, ["rev-parse", "--verify", "--quiet", copy]).stdout.trim();
   const shown = oid === "" ? null : localGit(pd, ["show", `${oid}:plan.json`, "--"]);
@@ -8398,6 +8786,7 @@ function planReadOf(copy: string, oid: string, text: string | null, found?: bool
   const named = homeCopyOf(copy);
   if (named?.kind !== "plan" || text === null) return { kind: "unreadable", format: 0 };
   const parsed = planJsonOf(text);
+  if (parsed.moved !== undefined && idSuffix(parsed.moved.work.id) === named.id8) return { kind: "moved", oid, pointer: parsed.moved };
   if (parsed.plan === null) return parsed.format > PLAN_FORMAT ? { kind: "newer", format: parsed.format } : { kind: "unreadable", format: parsed.format };
   if (idSuffix(parsed.plan.work.id) !== named.id8) return { kind: "unreadable", format: parsed.format };
   if (found === true && repoCopyKey(parsed.plan.plan_repo.address) !== named.key) return { kind: "unreadable", format: parsed.format };
@@ -8412,6 +8801,145 @@ export function planGoneLine(plan: PlanJson): string {
 // A plan whose plan.json this AI-DLC does not read, or that names another work.
 export function planUnreadableLine(repo: string): string {
   return `The plan in ${repo} could not be read: what is there is not a plan this AI-DLC can read.`;
+}
+
+// Where a moved plan is now, from its pointer at `from`, the one reader of a
+// move for every caller (a build, a teammate, the lead's other computer). Each
+// place it names is looked at, quietly unless typed, and counts only when the
+// plan there names this work and that repository as its own, so a pointer
+// leads only to the plan itself. At most three pointers in one look, never back
+// to a repository already passed; `repo` is then the last one read. It re-keys
+// nothing and says nothing: Home Location, writes and lines are the caller's.
+export type PlanFollow =
+  | { kind: "followed"; label: string; repo: string; address: string; copy: string; oid: string; plan: PlanJson }
+  | { kind: "unread"; label: string; repo: string; address: string; said: string | null }
+  // `holds`: the last place answered and holds nothing at the plan's ref, or something not this work's plan.
+  | { kind: "not-followed"; label: string; repo: string; address: string; holds: "nothing" | "other" }
+  | { kind: "newer"; format: number };
+
+export function followPlan(pd: string, from: string, id8: string, pointer: PlanPointer, typed: boolean): PlanFollow {
+  const label = pointer.work.label || id8;
+  const ref = planRecordRef(id8);
+  const passed = new Set([repoCopyKey(from)]);
+  let to = pointer.moved_to;
+  let last = to;
+  for (let hops = 0; hops < 3 && !passed.has(repoCopyKey(to.address)); hops++) {
+    passed.add(repoCopyKey(to.address));
+    last = to;
+    const looked = lookAt(pd, to.address, [ref], { typed });
+    if (!looked.ok) {
+      if ("refused" in looked) throw new GitWriteRefused(looked.refused);
+      return { kind: "unread", label, repo: to.name, address: to.address, said: typed ? looked.said : looked.firstLine };
+    }
+    // Nothing there now: a copy kept here from before is never followed.
+    if ((looked.refs[ref]?.now ?? null) === null) return { kind: "not-followed", label, repo: to.name, address: to.address, holds: "nothing" };
+    const copy = copyOf(to.address, ref);
+    const read = planAtCopy(pd, copy, { found: true });
+    if (read.kind === "read") return { kind: "followed", label, repo: to.name, address: recordedAddress(pd, to.address), copy, oid: read.oid, plan: read.plan };
+    if (read.kind === "newer") return { kind: "newer", format: read.format };
+    if (read.kind !== "moved") break;
+    to = read.pointer.moved_to;
+  }
+  return { kind: "not-followed", label, repo: last.name, address: last.address, holds: "other" };
+}
+
+// What the person reads where a moved plan was met: at a build's look, at a
+// look with no build, or as a typed take's answer for `unit`.
+export function planMovedLine(follow: Exclude<PlanFollow, { kind: "newer" }>, at: "build" | "look" | "take", unit = ""): string {
+  const address = maskUserinfo(follow.address);
+  const its = at === "take" ? `${unit} was not taken: the plan of ${follow.label}` : `The plan of ${follow.label}`;
+  if (follow.kind === "followed") {
+    return at === "build" ? `${its} moved to ${follow.repo} (${address}); this build reads it there now.` : `${its} moved to ${follow.repo}.`;
+  }
+  if (follow.kind === "unread") {
+    const said = `${its} moved to ${follow.repo} (${address}), which could not be read (${follow.said ?? "it did not answer in time"})`;
+    const tail = at === "take" ? ". Say when to try again." : at === "build" ? ", so this build carries on from the copy here; no other Unit of it can be taken until it can be read." : ".";
+    return `${said}${tail} If you reach ${follow.repo} by another address, tell me which.`;
+  }
+  const said = `${its} says it moved, but ${follow.repo} does not hold it`;
+  const mended = "until the lead's project has put that right.";
+  return at === "build" ? `${said}, so this build carries on from the copy here; no other Unit of it can be taken ${mended}`
+    : `${said}; no Unit of it can be taken ${mended}`;
+}
+
+// A build here of the work `id8` that reads its plan at `from`, re-keyed to
+// where the plan is now, with its line for the next step. The work is matched
+// as the copy reader matches a note to its copy: by the work id's suffix.
+function buildsFollow(pd: string, id8: string, from: string, follow: Exclude<PlanFollow, { kind: "newer" }>, parted = false): boolean {
+  const builds = unitBuildsHere(pd, (build) => idSuffix(build.homeWork) === id8 && sameGitAddress(build.homeLocation, from));
+  if (builds.length === 0) return false;
+  if (follow.kind === "followed") {
+    withAuditLock(pd, () => {
+      for (const { space, dirName } of builds) writeStateFile(pd, recordHomeLocation(readStateFile(pd, dirName, space), follow.address), dirName, space);
+    });
+    // A plan that parted from the build's: the line for a plan shared again over its history, in place of the moved
+    // line, said at the move whatever was said before.
+    if (parted) {
+      for (const { build } of builds) {
+        saidWithNextStep(pd, planSharedOverWords(follow.plan, build.unit));
+        noteEngineAskMark(pd, planSharedOverMark(build.unit));
+      }
+      return true;
+    }
+  }
+  const line = planMovedLine(follow, "build");
+  const chat = resolveWorkflowSelection(pd).sessionId ?? null;
+  // Followed, it is said once by itself (the next look reads the new place); not followed, once a chat.
+  if (follow.kind === "followed" || chat === null || !personLineHeard(pd, chat, line)) {
+    saidWithNextStep(pd, line);
+    if (chat !== null && follow.kind !== "followed") markPersonLinesHeard(pd, chat, [line]);
+  }
+  return true;
+}
+
+// The builds here that read this work's plan at `from`, re-keyed to where it
+// was read now (`plan`, read by the one reader), with their line: a plan that
+// `parted` from theirs is said as a plan shared again.
+export function followBuildsTo(pd: string, plan: PlanSnapshot, from: string, parted = false): boolean {
+  return buildsFollow(pd, plan.place.id8, from, {
+    kind: "followed", label: plan.plan.work.label || plan.place.id8, repo: plan.plan.plan_repo.name, address: plan.place.address,
+    copy: plan.place.copy, oid: plan.oid, plan: plan.plan,
+  }, parted);
+}
+
+// Where a plan read in another repository stands against `own`, this
+// computer's plan of the same work: "holds" when its history holds `own` (a
+// take-over at the new place is one commit on the old tip), "parted" when
+// neither history holds the other; null where it names the same repository or
+// is behind `own`, so a look never goes back to the plan that is behind.
+export function planAgainst(pd: string, there: PlanSnapshot, own: PlanSnapshot): "holds" | "parted" | null {
+  if (there.oid === own.oid || repoCopyKey(there.plan.plan_repo.address) === repoCopyKey(own.plan.plan_repo.address)) return null;
+  if (localGit(pd, ["merge-base", "--is-ancestor", own.oid, there.oid]).ok) return "holds";
+  return localGit(pd, ["merge-base", "--is-ancestor", there.oid, own.oid]).ok ? null : "parted";
+}
+
+// The one act after each fetch of a plan's ref at `from`: null when the copy
+// there is no pointer; else where it leads (followPlan), every build here that
+// reads it at `from` re-keyed and told, and the lead's own work here that reads
+// it at `from` handed to the lead's side (leadFollowsPlan), its line queued for
+// the next step unless the caller says it itself (`say: false`, the writer and
+// the lead's offer). `built`: a build here was told, so a look says nothing more.
+export function followMoved(pd: string, id8: string, from: string, typed: boolean, options: { say?: boolean } = {}):
+  { follow: PlanFollow; built: boolean; leadLine: string | null } | null {
+  const at = planAtCopy(pd, copyOf(from, planRecordRef(id8)));
+  if (at.kind !== "moved") return null;
+  const follow = followPlan(pd, from, id8, at.pointer, typed);
+  if (follow.kind === "newer") return { follow, built: false, leadLine: null };
+  const lead = leadWorkHere(pd, at.pointer.work.id);
+  const leadState = lead === null ? "" : (() => {
+    try {
+      return readStateFile(pd, lead.dirName, lead.space);
+    } catch {
+      return "";
+    }
+  })();
+  // The lead's side only where this checkout leads the work by the one rule (planMadeElsewhere, lifted by
+  // `unit lead-here`): a teammate's clone of the team's workspace has the lead's record on disk and is not the lead.
+  const leads = lead !== null && isTeamUnitOwnership(leadState) && unitBuildOf(leadState) === null &&
+    sameGitAddress(homeLocation(leadState) ?? "", from) && !planMadeElsewhere(pd, readAuditShardEvents(pd, lead.dirName, lead.space));
+  const leadLine = leads ? leadFollowsPlan(pd, lead, follow) : null;
+  if (leadLine !== null && options.say !== false) saidWithNextStep(pd, leadLine);
+  return { follow, built: buildsFollow(pd, id8, from, follow), leadLine };
 }
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -8466,7 +8994,26 @@ function planChangesNotHere(projectDir: string, tip: string): { commits: string[
   // On standard input, as many as there are; one git no longer has is left out.
   const listed = localGit(projectDir, ["rev-list", "--ignore-missing", "--stdin"], undefined, `${tip}\n${here.map((commit) => `^${commit}\n`).join("")}`);
   const commits = listed.ok ? listed.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean) : [];
-  return { commits: commits.reverse(), base: here[0] };
+  // The baseline is the marked plan commit nearest the tip in its history, so
+  // two marks made in one second (a move marks its plan and its note) never
+  // read in the wrong order; the note, which is not a plan, is never it.
+  const marked = new Set(here);
+  const isPlan = (commit: string): boolean => planJsonOf(localGit(projectDir, ["show", `${commit}:plan.json`, "--"]).stdout).plan !== null;
+  const history = localGit(projectDir, ["rev-list", tip]).stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const base = history.find((commit) => marked.has(commit) && isPlan(commit)) ?? here.find(isPlan) ?? here[0];
+  return { commits: commits.filter((commit) => !onlyMovedThePlan(projectDir, commit)).reverse(), base };
+}
+
+// A commit that only moved the plan (its tree is its parent's but for
+// plan.json, which names another place and the next version, nothing else):
+// nobody's decision, so this computer's baseline steps over it.
+function onlyMovedThePlan(projectDir: string, commit: string): boolean {
+  const changed = localGit(projectDir, ["diff", "--name-only", "--no-renames", `${commit}^`, commit, "--"]);
+  if (!changed.ok || changed.stdout.trim() !== "plan.json") return false;
+  const [before, after] = [`${commit}^`, commit].map((at) => planJsonOf(localGit(projectDir, ["show", `${at}:plan.json`, "--"]).stdout).plan);
+  if (before === null || after === null) return false;
+  const rest = (plan: PlanJson): string => JSON.stringify({ ...plan, plan_repo: null, version: null });
+  return JSON.stringify(before.plan_repo) !== JSON.stringify(after.plan_repo) && rest(before) === rest(after);
 }
 
 // A change on the plan this computer did not write, waiting for the lead's
@@ -8652,6 +9199,10 @@ function workspaceRepoNames(pd: string): Set<string> {
   return new Set([...intentRepos(pd), ...discoverSiblingRepos(pd), ...readWorkspaceRepos(pd).entries.keys()]);
 }
 
+// Each pointer a look for plans met, from where: whether a build here was told
+// of it (`built`) and whether the said list already held where it went (`held`).
+export type PlansMoved = Array<{ from: string; built: boolean; held: boolean; follow: Exclude<PlanFollow, { kind: "newer" }> }>;
+
 // The plans this workspace can read with nothing said but the person's ask:
 // one look per repository it has and per address said (one fetch of every plan
 // ref there, by prefix), a host that did not answer not asked again in the same
@@ -8664,7 +9215,7 @@ function workspaceRepoNames(pd: string): Set<string> {
 // git's words when the address said now could not be read (null at the limit).
 export function lookForPlans(projectDir: string, said?: string): {
   plans: PlanRead[]; read: string[]; unread: Array<{ name: string; address: string; said: string | null }>; refused?: string;
-  saidUnread?: string | null; saidGone?: PlanJson[];
+  saidUnread?: string | null; saidGone?: PlanJson[]; moved: PlansMoved;
 } {
   const pd = resolveProjectDir(projectDir);
   if (said !== undefined) refuseOptionAddress(said, optionAddressRefusal(said));
@@ -8684,6 +9235,7 @@ export function lookForPlans(projectDir: string, said?: string): {
   let saidUnread: string | null | undefined;
   // Plans the address said now had (a copy here) and has no longer.
   const saidGone: PlanJson[] = [];
+  const moved: PlansMoved = [];
   const silentHosts = new Set<string>();
   const hostOf = (address: string): string => gitAddressKey(absoluteAddress(pd, address)).split("/")[0] ?? "";
   for (const { named, now, ...place } of places) {
@@ -8694,7 +9246,7 @@ export function lookForPlans(projectDir: string, said?: string): {
     }
     const looked = lookAt(pd, place.address, ["refs/aidlc/plans/"], now ? { typed: true } : {});
     if (!looked.ok) {
-      if ("refused" in looked) return { plans, read, unread, refused: looked.refused };
+      if ("refused" in looked) return { plans, read, unread, moved, refused: looked.refused };
       if (looked.said === null && !now) silentHosts.add(hostOf(place.address));
       if (now) saidUnread = looked.said;
       unread.push({ ...place, said: looked.said });
@@ -8710,6 +9262,17 @@ export function lookForPlans(projectDir: string, said?: string): {
         if (now && at.kind === "read") saidGone.push(at.plan);
         continue;
       }
+      if (at.kind === "moved") {
+        const met = followMoved(pd, id8, place.address, now === true);
+        if (met === null || met.follow.kind === "newer") continue;
+        const follow = met.follow;
+        moved.push({ from: place.address, built: met.built, follow,
+          held: follow.kind === "followed" && saidPlans(pd).some((entry) => sameGitAddress(entry.address, follow.address)) });
+        if (follow.kind === "followed") {
+          plans.push(planAt(pd, { address: follow.address, repo: follow.repo, id8, uuid: follow.plan.work.id, work: follow.label, ref, copy: follow.copy }));
+        }
+        continue;
+      }
       const kept: PlanPlace = { address: recordedAddress(pd, place.address), repo: place.name, id8, uuid: "", work: id8, ref, copy };
       if (at.kind === "newer") plans.push({ kind: "newer", format: at.format, place: kept });
       // At a place the person named, a plan that is there and does not read is said; one found is passed by.
@@ -8719,7 +9282,7 @@ export function lookForPlans(projectDir: string, said?: string): {
       plans.push(planAt(pd, placed));
     }
   }
-  return { plans, read, unread, ...(saidUnread !== undefined ? { saidUnread } : {}), ...(saidGone.length > 0 ? { saidGone } : {}) };
+  return { plans, read, unread, moved, ...(saidUnread !== undefined ? { saidUnread } : {}), ...(saidGone.length > 0 ? { saidGone } : {}) };
 }
 
 // Each setting a build copies, as plan.json holds it: the ceremonies' and the
@@ -8806,8 +9369,18 @@ export function planFilesNow(projectDir: string, tip: PlanJson | null, place: Pl
     if (!repos.some((repo) => repo.name === name)) repos.push(planRepoEntry(pd, name));
   }
   // A record goes where it can be written: the first of the Unit's
-  // repositories with an address, else the plan's own.
+  // repositories with an address, else the plan's own. A Unit the plan lists
+  // keeps the record place it has, wherever the plan is now (a move, a later
+  // share), so a take recorded there is never looked for elsewhere; its
+  // repository stays listed as the plan had it.
   const addressed = (name: string): boolean => repos.some((repo) => repo.name === name && repo.address !== null);
+  for (const unit of tip?.units ?? []) {
+    if (repos.some((repo) => repo.name === unit.record)) continue;
+    // A record at the plan's own repository, which the work's list may not name.
+    const listed = tip?.repos.find((repo) => repo.name === unit.record) ??
+      (tip?.plan_repo.name === unit.record ? { name: tip.plan_repo.name, address: tip.plan_repo.address, branch: null } : undefined);
+    if (listed !== undefined) repos.push(listed);
+  }
   const plan: PlanJson = {
     format: PLAN_FORMAT,
     version: (tip?.version ?? 0) + 1,
@@ -8819,7 +9392,8 @@ export function planFilesNow(projectDir: string, tip: PlanJson | null, place: Pl
       const word = tip === null
         ? (done.has(edge.name) && edge.name !== skeleton ? { done: true } : {})
         : tip.units.find((unit) => unit.name === edge.name)?.word ?? {};
-      const record = workspace !== null && soloTaken.has(edge.name) ? workspace.name : named.find(addressed) ?? place.repo;
+      const record = tip?.units.find((unit) => unit.name === edge.name)?.record ??
+        (workspace !== null && soloTaken.has(edge.name) ? workspace.name : named.find(addressed) ?? place.repo);
       return { name: edge.name, waits_on: [...edge.depends_on], repos: named, record, word };
     }),
     skeleton,
@@ -8896,17 +9470,74 @@ export function pushPlan(projectDir: string, place: PlanPlace, commit: string, l
   };
 }
 
+export type PlanFollowed = { place: PlanPlace; line: string };
+
 export type PlanWrite =
   // `over`: written over a tip that was not a plan; `carried`, the lead's
   // decisions on its Units were found to carry. `back`: the changes the lead
   // said to take out, put back under it (planPutBack).
-  | { kind: "written"; commit: string; version: number; created: boolean; regained?: true; over?: { carried: boolean }; back?: { count: number; name: string } }
-  | { kind: "unchanged"; commit: string }
+  // `followed`: written where the plan moved to, with the line said once for it.
+  // `over.onNote`: written on top of this work's own note; `underNote`: put
+  // back where a note says it went, on the plan under that note.
+  | { kind: "written"; commit: string; version: number; created: boolean; regained?: true; over?: { carried: boolean; onNote?: true }; back?: { count: number; name: string }; followed?: PlanFollowed; underNote?: true }
+  | { kind: "unchanged"; commit: string; followed?: PlanFollowed }
   | { kind: "unreached"; words: string | null }
   | { kind: "refused"; words: string; byRule: boolean }
   | { kind: "stale"; words: string }
   | { kind: "unreadable"; format: number }
-  | { kind: "stopped"; detail: unknown };
+  | { kind: "stopped"; detail: unknown; followed?: PlanFollowed }
+  // The tip is this work's pointer and followPlan did not reach the plan.
+  | { kind: "unfollowed"; follow: Extract<PlanFollow, { kind: "unread" | "not-followed" }> };
+
+// The lead's look at its own work: a copy at its Home Location that is this
+// work's note is followed (as a write follows it), so no question is put on the
+// note itself. `line` is the line to say once; `unfollowed` when the note could not
+// be followed (the lead's writers say why when one is asked for).
+export function leadFollowsHere(pd: string): { line: string } | { unfollowed: true } | null {
+  const home = homeLocation(stateHere(pd) ?? "");
+  if (home === null || !isGitAddress(home) || unitBuildOf(stateHere(pd) ?? "") !== null) return null;
+  const met = followMoved(pd, activeIdentity(pd).intentId8, home, false, { say: false });
+  if (met === null) return null;
+  return met.leadLine === null ? { unfollowed: true } : { line: met.leadLine };
+}
+
+// The plan under this work's note at the lead's Home Location, when the note
+// says the plan went to `place`: what a share that puts it back there carries.
+function planUnderNoteFor(pd: string, place: PlanPlace): { commit: string; plan: PlanJson } | null {
+  const home = homeLocation(stateHere(pd) ?? "");
+  if (home === null || !isGitAddress(home)) return null;
+  const copy = copyOf(home, place.ref);
+  const at = planAtCopy(pd, copy);
+  if (at.kind !== "moved" || repoCopyKey(at.pointer.moved_to.address) !== repoCopyKey(place.address)) return null;
+  const commit = planCommitOf(pd, copy);
+  const read = commit === "" ? null : planAtCopy(pd, copy, { commit });
+  return read?.kind === "read" ? { commit, plan: read.plan } : null;
+}
+
+// The lead's half of a plan that moved, on the lead's other computer or a
+// co-lead's (a clone of a shared workspace counts), whose Home Location still
+// names the old place: on `followed`, that work's Home Location goes where
+// followPlan found the plan, and the line to say once for it comes back (the
+// caller says it: a look with its step, a write in its notice; Home Location
+// then names the new place, so no later look finds the note). Null otherwise:
+// what is not followed is said by the caller, in its own terms.
+// `lead`: the lead's work it is (the active work when absent).
+export function leadFollowsPlan(pd: string, lead: { dirName: string; space: string } | undefined, follow: PlanFollow): string | null {
+  if (follow.kind !== "followed") return null;
+  planHomeHere(pd, follow.address, lead);
+  return `The plan of ${follow.label} moved to ${follow.repo} (${maskUserinfo(follow.address)}); this computer writes it there now.`;
+}
+
+// The lead's Home Location is the repository the plan is in (the active work, or `work`).
+function planHomeHere(pd: string, address: string, work?: { dirName: string; space: string }): void {
+  withAuditLock(pd, () => {
+    const state = readStateFile(pd, work?.dirName, work?.space);
+    const recorded = homeLocation(state);
+    if (recorded !== null && !sameGitAddress(recorded, address)) {
+      writeStateFile(pd, recordHomeLocation(state, address), work?.dirName, work?.space);
+    }
+  }, work?.dirName, work?.space);
+}
 
 // What a write builds on: the tip's commit and plan, null at the first write.
 export type PlanTip = { commit: string; plan: PlanJson } | null;
@@ -8932,6 +9563,14 @@ export function writePlan(
     edit?: (built: { plan: PlanJson; files: Record<string, string | null> }, tip: PlanTip) =>
       { plan: PlanJson; files: Record<string, string | null> } | null;
     stopIf?: (tip: PlanTip) => unknown;
+    // A write already sent on from a moved plan's pointer: it follows no further.
+    followed?: true;
+    // The person named the repository holding this work's pointer, whose plan
+    // is not where it points: the plan is written on top of the pointer there.
+    onNote?: true;
+    // The plan a first write here carries, and builds on, when it is put back
+    // where a note says it went (the plan under that note).
+    regainFrom?: { commit: string; plan: PlanJson };
   },
 ): PlanWrite {
   const write = (): PlanWrite => {
@@ -8946,11 +9585,26 @@ export function writePlan(
       tip = look.tip;
       if (tip === null && last !== null) gone = last.plan;
     }
+    if (tip === null && gone === null && change.regainFrom !== undefined) gone = change.regainFrom.plan;
     for (let writes = 1; ; writes++) {
+      // This work's pointer is never written over: the write goes where the plan moved.
+      const pointer = tip === null || change.followed ? null : planAtCopy(projectDir, place.copy, { commit: tip });
+      const met = pointer?.kind === "moved" ? followMoved(projectDir, place.id8, place.address, change.unasked !== true, { say: false }) : null;
+      if (met !== null) {
+        const follow = met.follow;
+        if (follow.kind === "newer") return { kind: "unreadable", format: follow.format };
+        if (follow.kind === "followed") {
+          const line = met.leadLine ?? "";
+          const to: PlanPlace = { ...place, repo: follow.repo, address: follow.address, copy: follow.copy };
+          const there = writePlan(projectDir, to, { ...change, followed: true });
+          return there.kind === "written" || there.kind === "unchanged" || there.kind === "stopped" ? { ...there, followed: { place: to, line } } : there;
+        }
+        if (follow.kind === "unread" || change.onNote !== true) return { kind: "unfollowed", follow };
+      }
       // The one reader of a copy: a plan of another work is no plan, and only a newer AI-DLC's is never written over.
       const read = tip === null ? null : planAtCopy(projectDir, place.copy, { commit: tip });
-      const over = read !== null && read.kind === "unreadable" && change.overUnreadable === true;
-      if (read !== null && read.kind !== "read" && !over) return { kind: "unreadable", format: read.format };
+      const over = read !== null && ((read.kind === "unreadable" && change.overUnreadable === true) || (read.kind === "moved" && change.onNote === true));
+      if (read !== null && read.kind !== "read" && !over) return { kind: "unreadable", format: read.kind === "moved" ? read.pointer.format : read.format };
       // Over a tip that is not a plan, what is carried: the newest plan in its history, else this computer's copy.
       const carried = over && tip !== null ? planBelow(projectDir, tip, place.uuid) ?? last : null;
       const before = read?.kind === "read" ? read.plan : tip === null ? gone : carried?.plan ?? null;
@@ -8974,14 +9628,17 @@ export function writePlan(
         return { kind: "unchanged", commit: tip };
       }
       const what = typeof change.what === "string" ? change.what : change.what(before);
-      const commit = planCommit(projectDir, tip, built.plan, built.files, what, change.message);
+      // Put back where a note says it went, the plan builds on the history under that note.
+      const parent = tip ?? (gone !== null && change.regainFrom !== undefined ? change.regainFrom.commit : null);
+      const commit = planCommit(projectDir, parent, built.plan, built.files, what, change.message);
       const pushed = pushPlan(projectDir, place, commit, tip);
       if (pushed.ok) {
         noteEngineAskMark(projectDir, planMark("here", commit));
         return {
           kind: "written", commit, version: built.plan.version, created: tip === null && gone === null,
           ...(tip === null && gone !== null ? { regained: true as const } : {}),
-          ...(over ? { over: { carried: before !== null } } : {}),
+          ...(over ? { over: { carried: before !== null, ...(read?.kind === "moved" ? { onNote: true as const } : {}) } } : {}),
+          ...(parent !== null && tip === null ? { underNote: true as const } : {}),
           ...(back === null ? {} : { back: { count: back.count, name: back.name } }),
         };
       }
@@ -9018,7 +9675,10 @@ function planPutBack(projectDir: string, place: PlanPlace, tip: string):
     const shown = localGit(projectDir, ["show", `${out.base}:${path}`, "--"]);
     files[path] = shown.ok ? shown.stdout : null;
   }
-  return { plan: base.plan, files, count: out.commits.length, name: planLastChange(projectDir, out.commits[0])?.name ?? "" };
+  // The plan's own place stays as the tip has it, so a put-back never moves the plan back.
+  const at = planAtCopy(projectDir, place.copy, { commit: tip });
+  const plan = at.kind === "read" ? { ...base.plan, plan_repo: at.plan.plan_repo } : base.plan;
+  return { plan, files, count: out.commits.length, name: planLastChange(projectDir, out.commits[0])?.name ?? "" };
 }
 
 // The line after a write that put the plan back.
@@ -9758,6 +10418,8 @@ interface TakeSource {
   rules: () => ReturnType<typeof leadRulesOf>;
   copy: BuildSource;
   addresses: Map<string, string>;
+  // The plan moved: the take read it where it went, and says so with its line.
+  moved?: string;
 }
 
 // The solo second person's take: the lead's record in this clone.
@@ -9792,11 +10454,11 @@ function recordTakeSource(pd: string, home: HomeWork): TakeSource {
 
 // A team's take: the plan as shared at `from`, read now with the person's own
 // login into this workspace's copy, and nothing else of the lead's.
-function planTakeSource(pd: string, id8: string, from: string): TakeSource {
+function planTakeSource(pd: string, id8: string, from: string, unit: string): TakeSource {
   refuseOptionAddress(from, optionAddressRefusal(from));
   const address = recordedAddress(pd, from);
   const ref = planRecordRef(id8);
-  const place: PlanPlace = { address, repo: repoNameOf(address), id8, uuid: "", work: id8, ref, copy: copyOf(address, ref) };
+  let place: PlanPlace = { address, repo: repoNameOf(address), id8, uuid: "", work: id8, ref, copy: copyOf(address, ref) };
   const looked = lookAtPlan(pd, place);
   if (looked.unreached !== undefined) fail(`${maskUserinfo(address)} could not be read: ${looked.unreached ?? "it did not answer in time"}`);
   if (looked.tip === null) {
@@ -9804,7 +10466,15 @@ function planTakeSource(pd: string, id8: string, from: string): TakeSource {
     const kept = planAtCopy(pd, place.copy);
     fail(kept.kind === "read" ? planGoneLine(kept.plan) : `${maskUserinfo(address)} does not have this plan now.`);
   }
-  const read = planAt(pd, place, looked.tip);
+  let tip = looked.tip;
+  const met = followMoved(pd, id8, address, true);
+  if (met !== null && met.follow.kind === "newer") fail(newerPlanStep(pd));
+  if (met !== null && met.follow.kind !== "newer") {
+    if (met.follow.kind !== "followed") fail(planMovedLine(met.follow, "take", unit));
+    place = { ...place, address: met.follow.address, repo: met.follow.repo, copy: met.follow.copy };
+    tip = met.follow.oid;
+  }
+  const read = planAt(pd, place, tip);
   if (read.kind === "newer") fail(newerPlanStep(pd));
   if (read.kind === "unreadable") fail(planUnreadableLine(place.repo));
   const snapshot = read.plan;
@@ -9814,8 +10484,8 @@ function planTakeSource(pd: string, id8: string, from: string): TakeSource {
   // repository is "." to a build made in it, never a repo of its own.
   const own = workspaceHomeLocation(pd);
   const home: HomeWork = {
-    space: plan.work.space, dirName: "", uuid: plan.work.id, id8, label: plan.work.label || id8, location: address,
-    target: homeTarget(pd, address), recordPrefix: "",
+    space: plan.work.space, dirName: "", uuid: plan.work.id, id8, label: plan.work.label || id8, location: place.address,
+    target: homeTarget(pd, place.address), recordPrefix: "",
     repos: plan.repos.filter((repo) => repo.address !== null && !(own !== null && own !== "local" && sameGitAddress(repo.address, own)))
       .map((repo) => repo.name),
     solo: false, leadCopy: true, plan,
@@ -9833,6 +10503,7 @@ function planTakeSource(pd: string, id8: string, from: string): TakeSource {
     rules: () => leadRulesOf(pd, home.space, (rel) => snapshot.text(rel), (file) => `rules/${file}`),
     copy: { read: (rel) => snapshot.text(`inputs/${rel}`), approvals: (produced) => planApprovals(plan, produced) },
     addresses: new Map(plan.repos.flatMap((repo) => (repo.address === null ? [] : [[repo.name, repo.address] as [string, string]]))),
+    ...(met?.follow.kind === "followed" && !met.built ? { moved: planMovedLine(met.follow, "look") } : {}),
   };
 }
 
@@ -9876,7 +10547,7 @@ function takeUnit(args: string[], projectDir?: string, rhythm?: UnitClaimPayload
   const homeSpace = flags["home-space"] ?? DEFAULT_SPACE;
   // A build of it here is carried on with nothing of the plan read.
   const builtHere = fromPlan ? findUnitBuildOfWork(pd, flags.plan!, unit) : null;
-  const source = builtHere !== null ? null : fromPlan ? planTakeSource(pd, flags.plan!, flags.from!) : null;
+  const source = builtHere !== null ? null : fromPlan ? planTakeSource(pd, flags.plan!, flags.from!, unit) : null;
   const home = builtHere === null ? source?.home ?? findHomeWork(pd, flags.home!, homeSpace) : null;
   // Work teams build is taken from its plan, never from the lead's record here,
   // whether or not the plan has a place yet: with none, the ask for its address
@@ -10045,7 +10716,7 @@ function takeUnit(args: string[], projectDir?: string, rhythm?: UnitClaimPayload
   }
   // The likely repos this workspace has no checkout of, said with the way to one.
   const notThere = likelyReposNotHere(pd, likely, home.repos, src.addresses);
-  const taken = `${unit} is yours. You build it${spaceWords(build.space)} under your team's rules${leadsToo}, from what the lead approved.` +
+  const taken = `${src.moved === undefined ? "" : `${src.moved} `}${unit} is yours. You build it${spaceWords(build.space)} under your team's rules${leadsToo}, from what the lead approved.` +
     // The way back (release, run in this build), said once with the take.
     " If it is not your team's to build, tell me and I will hand it back." +
     earlyLines.map((line) => ` ${line}`).join("") +
@@ -10547,7 +11218,11 @@ export function refreshHomeClaims(
     home?: { id8: string; location?: string; solo?: boolean; plan?: PlanJson; space?: string };
     sessionId?: string; now?: boolean; sincePerson?: boolean;
   } = {},
-): { fetched: boolean; unreached: RecordRepoUnread[]; planGone?: true; refused?: string; lookedThisCommand?: true } {
+): {
+  fetched: boolean; unreached: RecordRepoUnread[]; planGone?: true; refused?: string; lookedThisCommand?: true;
+  // The plan moved: read where it went now (`followed`), or not followed, so none of its Units is offered.
+  followed?: string; planMoved?: true;
+} {
   const pd = resolveProjectDir(projectDir);
   const id8 = options.home?.id8 ?? activeIdentity(pd).intentId8;
   // A home named is the build-out's; the work here, by its recorded flow:
@@ -10619,9 +11294,22 @@ export function refreshHomeClaims(
   const planBefore = planOfWork(pd, id8, planAddress);
   let recordPlaces = places;
   let planFirst = false;
+  let planMoved = false;
+  // A plan the lead moved: this look reads it where it went instead.
+  const moved = (from: string): ReturnType<typeof refreshHomeClaims> | null => {
+    const met = followMoved(pd, id8, from, false);
+    if (met === null || met.follow.kind === "newer") return null;
+    if (met.follow.kind !== "followed" || options.home === undefined) {
+      planMoved = met.follow.kind !== "followed";
+      return null;
+    }
+    return { ...refreshHomeClaims(pd, { ...options, home: { ...options.home, location: met.follow.address, plan: undefined }, now: true }), followed: met.follow.address };
+  };
   if (refused === null && planBefore === null && planAddress !== undefined && isGitAddress(planAddress)) {
     planFirst = true;
     const plan = lookAt(pd, planAddress, [planRecordRef(id8)]);
+    const there = plan.ok ? moved(planAddress) : null;
+    if (there !== null) return there;
     if (plan.ok) recordPlaces = recordPlacesOfWork(pd, id8, options.home);
     else if ("refused" in plan) {
       refused = plan.refused;
@@ -10649,6 +11337,8 @@ export function refreshHomeClaims(
       // plan that is gone is never offered from its copy.
       const seen = plan.refs[planRecordRef(id8)];
       planGone = seen !== undefined && seen.now === null && seen.was !== null;
+      const there = moved(planAddress);
+      if (there !== null) return there;
     } else if ("refused" in plan) {
       refused = plan.refused;
       refusedFrom = repoNameOf(planAddress);
@@ -10672,7 +11362,7 @@ export function refreshHomeClaims(
   }
   if (refused !== null && !stopped) throw new GitWriteRefused(refused, refusedFrom);
   if (refused !== null) return { fetched: false, unreached: [], refused };
-  return { fetched: ok, unreached, ...(planGone ? { planGone: true as const } : {}) };
+  return { fetched: ok, unreached, ...(planGone ? { planGone: true as const } : {}), ...(planMoved ? { planMoved: true as const } : {}) };
 }
 
 // The plan as this build's copy has it now, when it was shared again over the
@@ -10729,8 +11419,12 @@ export function planSharedOverLine(projectDir: string, stateContent: string): st
   const over = planSharedOver(projectDir, copy, taken);
   if (over === null) return null;
   noteEngineAskMark(projectDir, planSharedOverMark(build.unit));
-  return `The plan of ${over.work.label || idSuffix(over.work.id)} in ${over.plan_repo.name} was shared again since you took ` +
-    `${build.unit}; what you took stays as it was.`;
+  return planSharedOverWords(over, build.unit);
+}
+
+function planSharedOverWords(plan: PlanJson, unit: string): string {
+  return `The plan of ${plan.work.label || idSuffix(plan.work.id)} in ${plan.plan_repo.name} was shared again since you took ${unit}; ` +
+    "what you took stays as it was.";
 }
 
 // The repositories that hold a work's records, each once: the ones the plan
@@ -10952,7 +11646,8 @@ function planBranchStart(pd: string, build: UnitBuild): string | null {
   const own = workspaceHomeLocation(pd);
   const remote = repositoryRemote(pd);
   if (!isGitAddress(build.homeLocation) || own === null || own === "local" || remote === null) return null;
-  const read = planAtCopy(pd, copyOf(build.homeLocation, planRecordRef(idSuffix(build.homeWork))));
+  const copy = copyOf(build.homeLocation, planRecordRef(idSuffix(build.homeWork)));
+  const read = planAtCopy(pd, copy, { commit: planCommitOf(pd, copy) });
   const branch = read.kind === "read" ? read.plan.repos.find((repo) => repo.address !== null && sameGitAddress(repo.address, own))?.branch : null;
   if (!branch) return null;
   git(pd, ["fetch", "-q", remote, branch]);
@@ -11125,6 +11820,13 @@ function pushUnit(args: string[], projectDir?: string): void {
   // The person's pick of a push remote, per repo: `--remote <repo>=<name>[,...]`.
   const picked = new Map((flags.remote ?? "").split(",").map((pair) => pair.split("=").map((part) => part.trim()))
     .filter((pair): pair is [string, string] => pair.length === 2 && pair[0] !== "" && pair[1] !== ""));
+  // A plan the lead moved is followed before the push reads it, so the take
+  // and the result go where the plan is now.
+  if (takenFromPlan(pd, build)) {
+    lookAt(pd, build.homeLocation, [planRecordRef(idSuffix(build.homeWork))]);
+    const met = followMoved(pd, idSuffix(build.homeWork), build.homeLocation, false);
+    if (met?.follow.kind === "followed") build.homeLocation = met.follow.address;
+  }
   const home = buildsHome(pd, build);
   const ref = claimRef(home.id8, unit);
   const place = recordPlaceOf(pd, home, unit);
@@ -11613,7 +12315,7 @@ export interface ToldMerge {
 export function checkTeamResults(
   projectDir: string,
   unreached?: string[],
-  unsent?: Array<{ line: string; shareAgain?: true }>,
+  unsent?: Array<{ line: string; shareAgain?: true; repo?: string }>,
   told?: ToldMerge[],
   readOnly = false,
   tookIn?: string[],
@@ -11628,7 +12330,7 @@ export function checkTeamResults(
 function checkTeamResultsQuietly(
   pd: string,
   unreached?: string[],
-  unsent?: Array<{ line: string; shareAgain?: true }>,
+  unsent?: Array<{ line: string; shareAgain?: true; repo?: string }>,
   told?: ToldMerge[],
   readOnly = false,
   tookIn?: string[],
@@ -11704,6 +12406,10 @@ function checkTeamResultsQuietly(
     if (sent.kind === "written" || sent.kind === "unchanged") told?.push(...[...seen.values()].map((merge) => merge.told));
     else if (sent.kind === "unshared" && sent.gone !== undefined) {
       unsent?.push({ shareAgain: true, line: planGoneOffer(sent.gone) });
+      if (chat !== null) markPersonLinesHeard(pd, chat, [held]);
+    } else if (sent.kind === "unfollowed") {
+      const said = planUnfollowedSay(pd, sent.follow, `the merge of ${joinNames(named)}`, false);
+      unsent?.push({ line: said.line, ...(said.repo === undefined ? {} : { shareAgain: true as const, repo: said.repo }) });
       if (chat !== null) markPersonLinesHeard(pd, chat, [held]);
     }
     // A change on the plan this computer did not write: the step's question comes first, and the merge waits for it.
@@ -12185,10 +12891,19 @@ export function buildClaimNotes(projectDir: string, stateContent: string, sessio
     const atStage = `${recordDir(projectDir) ?? ""}:${getField(stateContent, "Current Stage")?.trim() ?? ""}`;
     const newStage = buildStageLooked(projectDir, sessionId) !== atStage;
     const refreshed = home === null ? null : refreshHomeClaims(projectDir, { home, sessionId, now: waits || newStage || waitsOnEarly });
+    // Its plan moved and it reads it where it went now: the rest is read from its state as it is now, once, only
+    // when its Home Location did change, so a look that followed and re-keyed nothing never goes round again.
+    if (refreshed?.followed !== undefined) {
+      const moved = readStateFile(projectDir);
+      if (!sameGitAddress(unitBuildOf(moved)?.homeLocation ?? "", build.homeLocation)) return buildClaimNotes(projectDir, moved, sessionId);
+    }
     if (refreshed !== null && refreshed.unreached.length > 0) {
       const names = [...new Set(refreshed.unreached.map((unread) => unread.repo))];
+      // The plan's own repository among them: the way on for a plan that moved, the new address the builder can give.
+      const plan = refreshed.unreached.find((unread) => sameGitAddress(unread.address, build.homeLocation));
       lines.push(`${joinNames(names)} could not be read just now (${refreshed.unreached[0].said}), so news from ` +
-        `${names.length === 1 ? "it" : "them"} may be behind.`);
+        `${names.length === 1 ? "it" : "them"} may be behind.` + (plan === undefined ? ""
+          : ` If the plan of ${homeLabelOf(stateContent, build)} has moved from ${plan.repo}, tell me its new address and this build will read it there.`));
     }
     const over = planSharedOverLine(projectDir, stateContent);
     if (over !== null) lines.push(over);
@@ -12197,7 +12912,7 @@ export function buildClaimNotes(projectDir: string, stateContent: string, sessio
     }
     if (home !== null && newStage) noteBuildStageLooked(projectDir, sessionId, atStage);
     // A take its record's repository did not take then, tried again when the records were just read.
-    const standing = home !== null && refreshed?.fetched ? takeStanding(projectDir, build) : null;
+    const standing = home !== null && (refreshed?.fetched || refreshed?.lookedThisCommand === true) ? takeStanding(projectDir, build) : null;
     if (home !== null && standing?.state === "pending") recordTakeHere(projectDir, build, home, standing, false);
     if (home !== null && waits && (refreshed?.unreached.length ?? 0) === 0) {
       try {
@@ -12855,8 +13570,12 @@ export function sendLeadsApprovedChanges(projectDir: string): string[] {
     if (sent.kind !== "written") {
       // The step's question comes first when a change this computer did not write stopped it.
       if (sent.kind === "unchanged" || sent.kind === "unshared" || sent.kind === "stopped") return lines;
+      // A moved plan not followed: said when its place could not be read; the
+      // offer to share it again, which needs its command, is the merge write's.
+      if (sent.kind === "unfollowed" && sent.follow.kind === "not-followed") return lines;
       const what = changed.length === 1 ? `the change to the ${inputName(changed[0])}` : `the changes to the ${joinNames(changed.map(inputName))}`;
-      return [sent.kind === "unreadable" ? unreadablePlanLine(pd, sent.format) : planWriteRefusedLine(pd, sent, what, false)];
+      return [sent.kind === "unreadable" ? unreadablePlanLine(pd, sent.format)
+        : sent.kind === "unfollowed" ? planUnfollowedSay(pd, sent.follow, what, false).line : planWriteRefusedLine(pd, sent, what, false)];
     }
     for (const input of changed) {
       const units = reached.get(input);
@@ -13062,10 +13781,15 @@ function failUnlessWritten(pd: string, written: LeadWrite, what: string, message
   }
   // A plan to share again first (a tip that is not a plan, or a plan gone
   // from its repository): the share, then this word, on the lead's yes.
-  const shareFirst = (said: string): never => {
+  const shareFirst = (said: string, repo?: string): never => {
     const word = again ?? same.join(" ");
-    throw new LeadWordUnwritten(said, word, undefined, shareThenWord(word));
+    throw new LeadWordUnwritten(said, word, undefined, shareThenWord(word, repo));
   };
+  if (written.kind === "unfollowed") {
+    const said = planUnfollowedSay(pd, written.follow, what, again !== null);
+    if (said.repo === undefined) stop(said.line);
+    shareFirst(said.line, said.repo);
+  }
   if (written.kind === "unreadable") {
     if (written.format > PLAN_FORMAT) stop(unreadablePlanLine(pd, written.format));
     shareFirst(`${unreadablePlanLine(pd, written.format)} ${SHARE_AGAIN_OVER}`);
@@ -13095,6 +13819,45 @@ function planWriteRefusedLine(pd: string, written: LeadWrite, what: string, kept
   return `The plan in ${repo} kept changing while I wrote on it, so ${what} is not written. ${way}`;
 }
 
+// A moved plan whose note cannot be followed here, in the one shape every lead
+// writer and the share say it: what was not done (`undone`: "<what> is not
+// written", "the plan is not shared") and the caller's own way on (`way`).
+// Where the place the note names does not hold the plan, the way on is
+// planShareAgainOffer's: a share there when it holds nothing at the plan's ref,
+// else on top of the note at `old`, the place the note is at.
+export function planShareAgainOffer(follow: Extract<PlanFollow, { kind: "not-followed" }>, old: string): string {
+  return follow.holds === "nothing"
+    ? `I can share the plan again in ${follow.repo} from your own record here: say if you want that.`
+    : `I can share the plan again in ${old}, over the note that it moved, from your own record here: say if you want that.`;
+}
+
+// A moved plan whose note cannot be followed at the lead's project, as every
+// lead writer says it: its place not read (say when to try again, with the
+// lead's words kept when the command has them), or not holding the plan (the
+// offer to share it again, and `repo`, the share's --repo for the lead's yes).
+function planUnfollowedSay(pd: string, follow: Extract<PlanFollow, { kind: "unread" | "not-followed" }>, what: string, kept: boolean):
+  { line: string; repo?: string } {
+  const place = planPlaceForShare(pd);
+  if (follow.kind === "unread" || !("ref" in place)) {
+    return { line: planNotFollowedLine(follow, `${what} is not written`, `Say when to try again${kept ? "; I have your words" : ""}.`) };
+  }
+  return { line: planNotFollowedLine(follow, `${what} is not written`, planShareAgainOffer(follow, place.repo)), repo: planShareAgainRepo(pd, follow, place) };
+}
+
+// What the share that answers planShareAgainOffer names with --repo: where the
+// note says when that holds nothing, else where the note is; by the name the
+// work's repositories list, else by its address.
+export function planShareAgainRepo(pd: string, follow: Extract<PlanFollow, { kind: "not-followed" }>, place: PlanPlace): string {
+  const there = follow.holds === "nothing" ? { repo: follow.repo, address: follow.address } : place;
+  return planRepos(pd).some((entry) => entry.name === there.repo) ? there.repo : there.address;
+}
+
+export function planNotFollowedLine(follow: Extract<PlanFollow, { kind: "unread" | "not-followed" }>, undone: string, way: string): string {
+  if (follow.kind === "not-followed") return `The plan of ${follow.label} says it moved, but ${follow.repo} does not hold it, so ${undone}. ${way}`;
+  const said = follow.said === null ? "it did not answer in time" : follow.said.trim().replace(/[.!?]+$/, "");
+  return `The plan of ${follow.label} moved to ${follow.repo} (${maskUserinfo(follow.address)}), which could not be read (${said}), so ${undone}. ${way}`;
+}
+
 // A plan this computer had that is gone from its repository, at the lead's
 // project: their yes runs the share, which writes it again.
 const planGoneOffer = (plan: PlanJson): string => `${planGoneLine(plan)} I can share it again from your own record here: say if you want that.`;
@@ -13106,9 +13869,9 @@ const SHARE_AGAIN_OVER = "I can share the plan again from your own record here, 
 // The agent's step for a lead's word that waits on the share again: one
 // instruction for one turn, the share first, then the word with the lead's own
 // words; a share that does not go is the answer.
-function shareThenWord(word: string): string {
-  return `When the person says yes, run \`${aidlcInvocation()} unit share --plan\`; once it shares the plan, run \`${word}\` in the same turn, ` +
-    "and tell them in plain words what each reports. If the share does not go, its own line is the answer: leave the word's command unrun.";
+function shareThenWord(word: string, repo?: string, whose = "the word's"): string {
+  return `When the person says yes, run \`${aidlcInvocation()} unit share --plan${repo === undefined ? "" : ` --repo ${shellArg(repo)}`}\`; once it shares the plan, run \`${word}\` in the same turn, ` +
+    `and tell them in plain words what each reports. If the share does not go, its own line is the answer: leave ${whose} command unrun.`;
 }
 
 // A lead write that carries no word of theirs (the learnings choice) and did
@@ -13129,6 +13892,10 @@ export function planWriteNote(
   }
   if (written.kind === "unreadable") {
     return { line: written.format > PLAN_FORMAT ? newerPlanStep(pd) : `${unreadablePlanLine(pd, written.format)} ${SHARE_AGAIN_OVER}`, again };
+  }
+  if (written.kind === "unfollowed") {
+    const said = planUnfollowedSay(pd, written.follow, what, false);
+    return { line: said.line, again: said.repo === undefined ? again : `${again} --repo ${shellArg(said.repo)}` };
   }
   return { line: planWriteRefusedLine(pd, written, what, false), again };
 }
@@ -13347,7 +14114,8 @@ export function buildCloneOffer(pd: string, stateContent: string): { question: s
   const build = unitBuildOf(stateContent);
   if (build === null) return null;
   // The lead's list: the plan's, as this workspace's copy has it; the lead's own repos.json where its work is here.
-  const kept = isGitAddress(build.homeLocation) ? planAtCopy(pd, copyOf(build.homeLocation, planRecordRef(idSuffix(build.homeWork)))) : null;
+  const copy = copyOf(build.homeLocation, planRecordRef(idSuffix(build.homeWork)));
+  const kept = isGitAddress(build.homeLocation) ? planAtCopy(pd, copy, { commit: planCommitOf(pd, copy) }) : null;
   const addresses = kept?.kind === "read"
     ? new Map(kept.plan.repos.flatMap((repo) => (repo.address === null ? [] : [[repo.name, repo.address] as [string, string]])))
     : leadRepoAddresses(pd, auditBlockField(readAuditShardEvents(pd).findLast((row) => row.event === "UNIT_TAKEN_IN")?.block ?? "", "Home Commit"));
@@ -13581,9 +14349,11 @@ function leadSignOffSetting(args: string[], projectDir?: string): void {
       if (error instanceof GitWriteRefused) throw error;
       sent = { kind: "refused", words: errorMessage(error), byRule: false };
     }
-    if (sent.kind === "stopped") failUnlessWritten(pd, sent, "the sign-off setting");
+    if (sent.kind === "stopped" || (sent.kind === "unfollowed" && sent.follow.kind === "not-followed")) failUnlessWritten(pd, sent, "the sign-off setting");
     if (sent.kind === "unreadable") unwritten = unreadablePlanLine(pd, sent.format);
-    else if (sent.kind !== "written" && sent.kind !== "unchanged" && sent.kind !== "unshared") {
+    else if (sent.kind === "unfollowed") {
+      unwritten = `${planUnfollowedSay(pd, sent.follow, "the sign-off setting", false).line} The sign-off setting is changed here only; the plan gets it with my next write to it.`;
+    } else if (sent.kind !== "written" && sent.kind !== "unchanged" && sent.kind !== "unshared") {
       unwritten = `${planWriteRefusedLine(pd, sent, "the sign-off setting", false)} The sign-off setting is changed here only; the plan gets it with my next write to it.`;
     }
   }

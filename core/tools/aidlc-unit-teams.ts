@@ -366,7 +366,17 @@ export const PLAN_SETTINGS = [
 // part of it is not what a plan holds. Anyone who can push to the plan's
 // repository can write this text, and its names become paths and git
 // arguments in every team's workspace, so each is checked here, once.
-export function planJsonOf(text: string): { format: number; plan: PlanJson | null } {
+// What a plan moved to another repository leaves at its old place, and nothing
+// else: the work it is, and where it went, as plan_repo is written there (a
+// name, and an address with no sign-in).
+export interface PlanPointer {
+  format: number;
+  work: PlanJson["work"];
+  moved_to: { name: string; address: string };
+}
+
+// `moved`: the text is a moved plan's pointer (plan is null then).
+export function planJsonOf(text: string): { format: number; plan: PlanJson | null; moved?: PlanPointer } {
   let read: unknown;
   try {
     read = JSON.parse(text);
@@ -375,6 +385,9 @@ export function planJsonOf(text: string): { format: number; plan: PlanJson | nul
   }
   const value = read as Record<string, unknown> | null;
   const format = typeof value?.format === "number" && Number.isInteger(value.format) ? value.format : 0;
+  if (format >= 1 && format <= PLAN_FORMAT && value !== null && pointerShaped(value)) {
+    return { format, plan: null, moved: value as unknown as PlanPointer };
+  }
   if (!(format >= 1 && format <= PLAN_FORMAT && value !== null && planShaped(value))) return { format, plan: null };
   const plan = value as PlanJson;
   // An amendment's text is written at its input in a build: kept only for one
@@ -436,11 +449,22 @@ function isWord(word: unknown): boolean {
     may(word.open_again, (open) => isObject(open) && isLine(open.at));
 }
 
+const isWork = (work: unknown): boolean =>
+  isObject(work) && isLine(work.id) && isLine(work.label) && isString(work.space) && SPACE_NAME_REGEX.test(work.space);
+
+// Exactly a pointer's three keys, so no plan reads as one and no pointer as a plan.
+function pointerShaped(value: Record<string, unknown>): boolean {
+  const to = value.moved_to;
+  return Object.keys(value).sort().join(",") === "format,moved_to,work" && isWork(value.work) &&
+    isObject(to) && Object.keys(to).sort().join(",") === "address,name" && isRepo(to.name) &&
+    isAddress(to.address) && withoutCredentials(to.address) === to.address;
+}
+
 function planShaped(plan: Record<string, unknown>): boolean {
   const work = plan.work;
   const home = plan.plan_repo;
   return Number.isInteger(plan.version) &&
-    isObject(work) && isLine(work.id) && isLine(work.label) && isString(work.space) && SPACE_NAME_REGEX.test(work.space) &&
+    isWork(work) &&
     isObject(home) && isRepo(home.name) && isAddress(home.address) &&
     Array.isArray(plan.repos) && plan.repos.every((repo) => isObject(repo) && isRepo(repo.name) &&
       (repo.address === null || isAddress(repo.address)) && (repo.branch === null || isPlainBranch(repo.branch))) &&
@@ -478,6 +502,17 @@ export function textAt(projectDir: string, commit: string, rel: string): string 
   return shown.status === 0 ? shown.stdout : null;
 }
 
+// The commit a copy of a plan is read at: its tip, or, where the tip is the
+// note a moved plan left, the plan under it (the note's parent), so a build
+// that cannot follow the note yet still reads what it took its rules and the
+// lead's word from. Empty when there is no copy.
+export function planCommitOf(projectDir: string, copy: string): string {
+  const tip = spawnSync("git", ["rev-parse", "--verify", "--quiet", copy], { cwd: projectDir, encoding: "utf-8" }).stdout?.trim() ?? "";
+  const text = tip === "" ? null : textAt(projectDir, tip, "plan.json");
+  if (text === null || planJsonOf(text).moved === undefined) return tip;
+  return spawnSync("git", ["rev-parse", "--verify", "--quiet", `${tip}^`], { cwd: projectDir, encoding: "utf-8" }).stdout?.trim() ?? "";
+}
+
 // The lead's files a team's build follows (LEAD_RULES_FIELD), each read where
 // it is: in this checkout when the lead's work is here, else in this
 // workspace's copy of the plan (rules/...), so the team's own default memory is
@@ -490,8 +525,8 @@ export function leadRuleFiles(projectDir: string, stateContent: string): Array<{
   if (build === null || !takenFromPlan(projectDir, build)) {
     return paths.map((path) => ({ path, text: readTextOrNull(join(projectDir, ...path.split("/"))), fromCopy: false }));
   }
-  const copy = copyOf(build.homeLocation, planRecordRef(idSuffix(build.homeWork)));
-  return paths.map((path) => ({ path, text: textAt(projectDir, copy, path), fromCopy: true }));
+  const at = planCommitOf(projectDir, copyOf(build.homeLocation, planRecordRef(idSuffix(build.homeWork))));
+  return paths.map((path) => ({ path, text: at === "" ? null : textAt(projectDir, at, path), fromCopy: true }));
 }
 
 // The lead's work a build is of, when its record is in this workspace (a clone

@@ -658,10 +658,13 @@ import {
   takePlanNotes,
   planNoRemoteLine,
   PLAN_NOT_NOW,
+  leadFollowsHere,
+  planShareMarkName,
   planUnshared,
   skeletonCodeName,
   planBranchOffered,
   planShareWork,
+  leadsOwnTeamWork,
   sharesPlanRef,
   planByPullRequestDetail,
   planShareWords,
@@ -687,6 +690,10 @@ import {
   keepSaidPlan,
   lookForPlans,
   planAt,
+  planAtCopy,
+  planMovedLine,
+  followBuildsTo,
+  planAgainst,
   mergesSeenHere,
   planClaimOverview,
   planPlace,
@@ -846,6 +853,7 @@ import {
   type PlanJson,
   sameGitAddress,
   textAt,
+  copyOf,
 } from "./aidlc-unit-teams.ts";
 import { terminalDispatcherArgv } from "./aidlc.ts";
 import {
@@ -2118,7 +2126,7 @@ function prepareEmission(directive: Directive): PreparedEmission {
   // about a team's Unit is recorded from whatever step the chat is at.
   if (directive.kind !== "load-steering" && directive.kind !== "error" && !("board_note" in directive) &&
     engineProjectDir && atTeamHome(engineProjectDir)) {
-    const noted = { ...directive, board_note: teamCommandsNote() } as Directive;
+    const noted = { ...directive, board_note: teamCommandsNote(engineProjectDir) } as Directive;
     if (Buffer.byteLength(JSON.stringify(noted), "utf-8") <= directiveMaxBytes()) directive = noted;
   }
   const levelNote = engineProjectDir && directive.kind !== "load-steering" && directive.kind !== "error" && directive.kind !== "ask" &&
@@ -5649,9 +5657,16 @@ let restoreSpentRequestFile: (() => void) | null = null;
 type StepOffer = NonNullable<PrintDirective["offers"]>[number];
 
 // For the agent at a team home: the commands for the lead's words about the
-// teams' Units, whatever the step is.
-function teamCommandsNote(): string {
+// teams' Units, whatever the step is. At the lead's own work whose plan is a
+// ref of its own, the person saying the plan is in another repository now is
+// the move there, which every step says, so the lead's other computer has it
+// when a write there ends at the old place.
+function teamCommandsNote(projectDir?: string): string {
   const unitTool = aidlcToolInvocation("unit");
+  const moved = projectDir !== undefined && leadsOwnTeamWork(projectDir)
+    ? " When the person says the plan is in another repository now, that is the move to it on this computer: run " +
+      `\`${aidlcInvocation()} unit share --plan --repo <that repository>\`.`
+    : "";
   return "When the person says a repo turned a Unit down, run " +
     `\`${unitTool} turned-down <unit> --repo <repo> ${unitWordsArg("turned-down")}\`; when they say a repo merged it ` +
     `where the board does not see it, run \`${unitTool} merged <unit> --repo <repo> ${unitWordsArg("merged")}\`. ` +
@@ -5661,7 +5676,7 @@ function teamCommandsNote(): string {
     `When they ask for their sign-off on every team's result, run \`${unitTool} lead-sign-off on\` (\`off\` to stop); ` +
     `when they ask to free a Unit, run \`${unitTool} release <unit>\`; when they ask to build a Unit ` +
     `left open here, run \`${unitTool} assign --here <unit> ${unitWordsArg("assign")}\`. ` +
-    `${UNIT_WORDS_NOTE} Say the notice line each prints.`;
+    `${UNIT_WORDS_NOTE} Say the notice line each prints.${moved}`;
 }
 
 // The offers a step has not put to the person in this chat yet; each is put
@@ -6059,7 +6074,7 @@ function planWaitStep(projectDir: string, planOnly: boolean): AskDirective | Pri
   if (line === null) return null;
   if (wait.state !== "committed") return lineEndingTurn(line);
   const asked = `When the person asks for it, run \`${onItsBranch}\` and tell them in plain words what it reports.`;
-  return lineEndingTurn(line, [], atTeamHome(projectDir) ? `${asked} ${teamCommandsNote()}` : asked);
+  return lineEndingTurn(line, [], atTeamHome(projectDir) ? `${asked} ${teamCommandsNote(projectDir)}` : asked);
 }
 
 // The share question's two ways: the one the team's Way of Working names
@@ -6258,9 +6273,13 @@ function skeletonShareOffer(
   return Object.assign(ask, { board_note: PLAN_REPO_NOTE() });
 }
 
-// For the agent, on the plan's share question: the person may name the repository.
-const PLAN_REPO_NOTE = (): string =>
-  `When the person names another repository for the plan, add \`--repo <its name or address>\` to the share's command. ${teamCommandsNote()}`;
+// For the agent, on the plan's share question: the person may name the
+// repository. Once the plan is shared, `--repo` moves it, and the move carries
+// the added Units only as this question's yes.
+const PLAN_REPO_NOTE = (added: string[] | null = null): string =>
+  "When the person names another repository for the plan, add `--repo <its name or address>` to the share's command. " +
+  (added === null ? "" : `When the person wants the plan moved and ${namesInProse(added)} not shared yet, run the question's Not now first, then the move. `) +
+  teamCommandsNote();
 
 // What the plan holds, as its share question says it: each Unit's
 // repositories (five at most, so a long plan's question stays a question) and
@@ -6283,12 +6302,17 @@ function planContents(projectDir: string): string {
 function planRefShareOffer(projectDir: string): AskDirective | PrintDirective | null {
   const dag = resolveBoltDag(projectDir);
   if (dag.state !== "ok") return null;
+  // A note of this work at the lead's Home Location (the plan moved, on another
+  // computer): followed first, so the question is never put on the note.
+  const moved = isReadOnlyEngineProbe() ? null : leadFollowsHere(projectDir);
+  if (moved !== null && "unfollowed" in moved) return null;
+  if (moved !== null) sayWithStepOnce(projectDir, moved.line);
   const kept = planUnitsKept(projectDir);
   const added = kept === null ? null : dag.units.filter((unit) => !kept.includes(unit)).sort(compareBoardKeys);
   if (added !== null && added.length === 0) return null;
   // A thin slice built here first: nothing is open to a team until it is approved, so the plan is shared then.
   if (added === null && sliceBuiltFirst(projectDir, readStateFile(projectDir)) !== null) return null;
-  const mark = teamHandoverMarkName("share", added === null ? "plan" : `plan-${added.join("-")}`);
+  const mark = planShareMarkName(added);
   if (handoverOffered(projectDir, mark)) return null;
   const place = planPlaceForShare(projectDir);
   if (!("ref" in place)) {
@@ -6316,7 +6340,7 @@ function planRefShareOffer(projectDir: string): AskDirective | PrintDirective | 
     notNow: { label: "Not now", detail: PLAN_NOT_NOW },
   });
   // An ask's board note rides as at every team-home step (atTeamHome's note).
-  return Object.assign(ask, { board_note: PLAN_REPO_NOTE() });
+  return Object.assign(ask, { board_note: PLAN_REPO_NOTE(added) });
 }
 
 // The plan's Units here that the remote's main, as this clone last fetched it,
@@ -9688,6 +9712,7 @@ function leadAddressStep(projectDir: string, address: string): Directive | null 
     return errorDirective(`${maskUserinfo(address)} could not be read: ${looked.unreadAtAddress ?? "it did not answer in time"}`);
   }
   if (looked.choices.length === 0 && looked.sentences.length === 0) {
+    if ((looked.movedAtAddress ?? []).length > 0) return lineEndingTurn(looked.movedAtAddress!.join(" "));
     const unreadable = looked.unreadableAtAddress ?? [];
     const gone = looked.goneAtAddress ?? [];
     if (unreadable.length > 0) return lineEndingTurn([...new Set(unreadable)].map(planUnreadableLine).join(" "));
@@ -9898,6 +9923,9 @@ type LookedBeyond = {
   recordsUnreached: Array<{ repos: string[]; said: string }>;
   // Plans gone from their repository, with whether a build of that work is here.
   gone: Array<{ plan: PlanJson; built: boolean }>;
+  // What a moved plan's look says, where no build here was told of it; and at the address said, a move that
+  // could not be followed, which ends that step.
+  moved: string[]; movedAtAddress?: string[];
 };
 
 // The lead's team work on disk here, by its state: read for the update offer
@@ -9919,6 +9947,14 @@ function homesOnDisk(projectDir: string): Array<{ intent: IntentInfo; space: str
   return homes;
 }
 
+// What the home said about this checkout's Unit build, each note said once with the step.
+function sayBuildNotes(pd: string, state: string | null): void {
+  for (const note of state ? buildClaimNotes(pd, state, engineSessionId) : []) {
+    if (typeof note === "string") sayWithStepOnce(pd, note);
+    else sayWithStepOnce(pd, note.line, note.once);
+  }
+}
+
 // The plans a look reads: the lead's team work on disk here, each Unit build's
 // here, and each address the person said; on the person's words (`asked`,
 // with `address` when they said one) every plan in the repositories this
@@ -9927,7 +9963,7 @@ function homesOnDisk(projectDir: string): Array<{ intent: IntentInfo; space: str
 function plansLooked(projectDir: string, now: boolean, asked?: { address?: string }): {
   homes: LookedHome[]; readAtAddress: number | null; unreadAtAddress?: string | null;
 } & LookedBeyond {
-  const beyond: LookedBeyond = { unreadable: [], unreached: [], recordsUnreached: [], gone: [] };
+  const beyond: LookedBeyond = { unreadable: [], unreached: [], recordsUnreached: [], gone: [], moved: [] };
   const built = new Set<string>();
   const places = new Map<string, { place: PlanPlace; onDisk: { dirName: string; space: string } | null }>();
   for (const { intent, space, state } of homesOnDisk(projectDir)) {
@@ -9952,6 +9988,7 @@ function plansLooked(projectDir: string, now: boolean, asked?: { address?: strin
   }
   let readAtAddress: number | null = null;
   let unreadAtAddress: string | null | undefined;
+  let movedHere = false;
   if (asked !== undefined && !isReadOnlyEngineProbe()) {
     const found = lookForPlans(projectDir, asked.address);
     if (found.refused !== undefined) throw new GitWriteRefused(found.refused);
@@ -9965,16 +10002,59 @@ function plansLooked(projectDir: string, now: boolean, asked?: { address?: strin
       beyond.unreadableAtAddress = there.flatMap((read) => (read.kind === "unreadable" ? [read.place.repo] : []));
       if (there.some((read) => read.kind === "read")) keepSaidPlan(projectDir, asked.address);
     }
+    for (const { from, built: told, held, follow } of found.moved) {
+      const atAddress = asked.address !== undefined && sameGitAddress(from, asked.address);
+      if (follow.kind === "followed") {
+        keepSaidPlan(projectDir, follow.address);
+        if (atAddress) readAtAddress = (readAtAddress ?? 0) + 1;
+      }
+      if (told) continue;
+      if (atAddress && follow.kind !== "followed") beyond.movedAtAddress = [...(beyond.movedAtAddress ?? []), planMovedLine(follow, "look")];
+      else if (atAddress || !held) beyond.moved.push(planMovedLine(follow, "look"));
+    }
+    // The works whose place is one the sweep found, not the lead's work or a build here.
+    const swept = new Set<string>();
     for (const read of found.plans) {
-      if (read.kind === "read" && !places.has(read.plan.place.uuid)) places.set(read.plan.place.uuid, { place: read.plan.place, onDisk: null });
+      if (read.kind !== "read") continue;
+      const uuid = read.plan.place.uuid;
+      const kept = places.get(uuid);
+      if (kept === undefined) {
+        places.set(uuid, { place: read.plan.place, onDisk: null });
+        swept.add(uuid);
+        continue;
+      }
+      // A build whose copy is a pointer it could not follow reads the plan where it was found now (the person's own
+      // spelling of the new address, say), the same work by the one reader.
+      if (planAtCopy(projectDir, kept.place.copy).kind === "moved") {
+        if (followBuildsTo(projectDir, read.plan, kept.place.address)) {
+          places.set(uuid, { place: read.plan.place, onDisk: kept.onDisk });
+          movedHere = true;
+        }
+        continue;
+      }
+      // The lead's own work here moves with the lead's own share.
+      if (kept.onDisk !== null) continue;
+      const was = planAt(projectDir, kept.place);
+      const against = was.kind === "read" ? planAgainst(projectDir, read.plan, was.plan) : null;
+      if (against === null) continue;
+      // Of two plans the sweep found, the later is the plan; a build here reads it only at the address said now, a plan
+      // parted from its own too.
+      const saidHere = asked.address !== undefined && sameGitAddress(read.plan.place.address, asked.address);
+      if (against === "holds" && swept.has(uuid)) places.set(uuid, { place: read.plan.place, onDisk: null });
+      else if (saidHere && followBuildsTo(projectDir, read.plan, kept.place.address, against === "parted")) {
+        places.set(uuid, { place: read.plan.place, onDisk: null });
+        movedHere = true;
+      }
     }
   }
   const homes: LookedHome[] = [];
-  for (const { place, onDisk } of places.values()) {
+  for (const { place: listed, onDisk } of places.values()) {
+    let place = listed;
     let refreshed: LookedHome["refreshed"];
     if (!isReadOnlyEngineProbe()) {
       const looked = refreshHomeClaims(projectDir, { home: { id8: place.id8, location: place.address }, sessionId: engineSessionId, now });
       refreshed = { fetched: looked.fetched, unreached: looked.unreached };
+      if (looked.followed !== undefined) place = { ...place, address: looked.followed, copy: copyOf(looked.followed, place.ref) };
       // A plan gone from its repository: none of its Units is offered from the copy kept here.
       if (looked.planGone) {
         const kept = planAt(projectDir, place);
@@ -9982,6 +10062,8 @@ function plansLooked(projectDir: string, now: boolean, asked?: { address?: strin
         continue;
       }
     }
+    // A plan that moved and is not read where it went: none of its Units is offered from the copy here.
+    if (planAtCopy(projectDir, place.copy).kind === "moved") continue;
     const read = planAt(projectDir, place);
     const unread = refreshed?.unreached ?? [];
     const atPlan = (entry: { address: string }): boolean => sameGitAddress(entry.address, place.address);
@@ -10003,6 +10085,9 @@ function plansLooked(projectDir: string, now: boolean, asked?: { address?: strin
       space: onDisk?.space ?? plan.work.space, snapshot: read.plan, onDisk: onDisk !== null, refreshed,
     });
   }
+  // A build this look moved reads its new place's news in the same step, its take recorded there, before who has taken
+  // what is read from the homes.
+  if (movedHere) sayBuildNotes(projectDir, loadStateFileIfPresent(projectDir));
   return { homes, readAtAddress, ...(unreadAtAddress !== undefined ? { unreadAtAddress } : {}), ...beyond };
 }
 
@@ -10028,6 +10113,7 @@ function unitTakeLook(
   const looked = plansLooked(projectDir, now, asked);
   // A build's plan that does not read, or whose repository did not answer: said once, and the rest offered.
   for (const repo of new Set(looked.unreadable)) sayWithStepOnce(projectDir, planUnreadableLine(repo));
+  for (const line of looked.moved) sayWithStepOnce(projectDir, line);
   for (const { plan, built } of looked.gone) {
     sayWithStepOnce(projectDir, built
       ? `${planGoneLine(plan)} This build carries on from the copy here; no other Unit of it can be taken while it is gone.`
@@ -10191,6 +10277,7 @@ function unitTakeLook(
     ...(looked.unreadAtAddress !== undefined ? { unreadAtAddress: looked.unreadAtAddress } : {}),
     read: looked.read, unread: looked.unread, goneAtAddress: looked.goneAtAddress, unreadableAtAddress: looked.unreadableAtAddress,
     unreadable: looked.unreadable, unreached: looked.unreached, recordsUnreached: looked.recordsUnreached, gone: looked.gone,
+    moved: looked.moved, ...(looked.movedAtAddress !== undefined ? { movedAtAddress: looked.movedAtAddress } : {}),
   };
 }
 
@@ -14729,13 +14816,11 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     }
   }
   // What the home said about a Unit's build reaches its team once, on any step.
-  for (const note of stateContent ? buildClaimNotes(pd, stateContent, engineSessionId) : []) {
-    if (typeof note === "string") sayWithStepOnce(pd, note);
-    else sayWithStepOnce(pd, note.line, note.once);
-  }
+  sayBuildNotes(pd, stateContent);
   // A lead's file the build follows that cannot be read now: the step goes on
   // under the team's own rules, and says so once.
-  const leadUnread = stateContent !== null ? leadRulesUnreadLine(pd, stateContent) : null;
+  // Read again: the look above may have moved the build to where its plan went.
+  const leadUnread = stateContent !== null ? leadRulesUnreadLine(pd, loadStateFileIfPresent(pd) ?? stateContent) : null;
   if (leadUnread !== null) sayWithStepOnce(pd, leadUnread);
   // The plan by the address the person said, or every plan this workspace's
   // repositories hold when they asked with none: its Units to take.
@@ -19148,7 +19233,7 @@ function teamHomeClaims(
   // What came back from the teams, checked against each repo once per step
   // (a Unit whose record could not be read keeps the last fetch's).
   let results: ReturnType<typeof checkTeamResults> = new Map();
-  const unsent: Array<{ line: string; shareAgain?: true }> = [];
+  const unsent: Array<{ line: string; shareAgain?: true; repo?: string }> = [];
   const told: ToldMerge[] = [];
   const tookIn: string[] = [];
   const maybe: MaybeMerged[] = [];
@@ -19173,7 +19258,8 @@ function teamHomeClaims(
   if (unsent.length > 0) {
     sayWithStepOnce(projectDir, unsent[0].line);
     if (unsent[0].shareAgain) {
-      handoverFollowUps.set(unsent[0].line, `When the person says yes, run \`${aidlcInvocation()} unit share --plan\` and tell them in plain words what it reports.`);
+      const repo = unsent[0].repo === undefined ? "" : ` --repo ${shellArg(unsent[0].repo)}`;
+      handoverFollowUps.set(unsent[0].line, `When the person says yes, run \`${aidlcInvocation()} unit share --plan${repo}\` and tell them in plain words what it reports.`);
     }
   }
   if (unreached.length > 0) {
@@ -19732,7 +19818,7 @@ function emitTeamUnitMajorRunStage(
     emit(lineEndingTurn(
       renderUnitBoard(workLabel(projectDir), rows),
       allOffers,
-      `Show the board as it is. ${teamCommandsNote()}`,
+      `Show the board as it is. ${teamCommandsNote(projectDir)}`,
     ));
     return;
   }

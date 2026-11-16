@@ -17,8 +17,10 @@ import { dirname, join } from "node:path";
 import { repoCopyKey } from "../../dist/claude/.claude/tools/aidlc-unit-teams.ts";
 import { AIDLC_SRC, seededStateFile } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { asLeadsOwnCheckout } from "../harness/team-unit-merge.ts";
 import {
   cleanupTeamBuild,
+  cloneCode,
   cloneOf,
   codeGenerated,
   codeHost,
@@ -49,6 +51,7 @@ afterEach(cleanupTeamBuild);
 const tools = async () => ({
   ...(await import("../../dist/claude/.claude/tools/aidlc-unit.ts")),
   ...(await import("../../dist/claude/.claude/tools/aidlc-unit-holders.ts")),
+  ...(await import("../../dist/claude/.claude/tools/aidlc-unit-teams.ts")),
 });
 const copyName = (address: string, id8: string): string => `refs/aidlc/home/${id8}/${repoCopyKey(address)}/plan`;
 
@@ -103,6 +106,46 @@ function pushEditedPlan(home: PlanHome, edit: (json: Record<string, unknown>) =>
   const commit = Bun.spawnSync({ cmd: ["git", "commit-tree", tree, "-p", home.plan!, "-m", "edited"], cwd: scratch, env: later }).stdout.toString().trim();
   git(scratch, ["push", "-q", "--force", host, `${commit}:${planRefOf(home.id8)}`]);
   return commit;
+}
+
+// A plan.json written as one commit on `onto` at `host`'s plan ref, as anyone who can push there could: the plan's
+// other files kept, or plan.json alone (a pointer's tree). Returns the commit.
+function pushPlanJson(home: PlanHome, host: string, json: Record<string, unknown>, onto: string, files: "all" | "plan only", message: string): string {
+  const from = home.hosts["checkout-api"];
+  const scratch = join(tempDir("plan-json"), "repo");
+  git(tempDir("plan-json-parent"), ["clone", "-q", "--bare", from, scratch]);
+  git(scratch, ["config", "user.name", "lead"]);
+  git(scratch, ["config", "user.email", "lead@example.test"]);
+  // Every host's plan refs, so `onto` may be a commit only one of them has.
+  for (const [i, each] of [...Object.values(home.hosts), host].entries()) git(scratch, ["fetch", "-q", each, `+refs/aidlc/*:refs/hosts/${i}/*`]);
+  const env = { ...ENV, GIT_INDEX_FILE: join(scratch, "plan-json-index"), GIT_COMMITTER_DATE: "2099-01-01T00:00:00Z", GIT_AUTHOR_DATE: "2099-01-01T00:00:00Z" };
+  const at = (args: string[], input?: string): string =>
+    Bun.spawnSync({ cmd: ["git", ...args], cwd: scratch, env, stdin: input === undefined ? undefined : Buffer.from(input) }).stdout.toString().trim();
+  const blob = at(["hash-object", "-w", "--stdin"], `${JSON.stringify(json, null, 2)}\n`);
+  at(files === "all" ? ["read-tree", onto] : ["read-tree", "--empty"]);
+  at(["update-index", "--add", "--cacheinfo", `100644,${blob},plan.json`]);
+  const commit = at(["commit-tree", at(["write-tree"]), "-p", onto, "-m", message]);
+  expect(commit).toMatch(/^[0-9a-f]{40,64}$/);
+  git(scratch, ["push", "-q", "--force", host, `${commit}:${planRefOf(home.id8)}`]);
+  return commit;
+}
+
+// The lead's move, as the lead makes it: `unit share --plan --repo <to>`. Returns the plan's commit at `to`.
+function movePlan(home: PlanHome, to: string): string {
+  const moved = run(UNIT, ["share", "--plan", "--repo", to], home.dir);
+  expect(moved.status, moved.out).toBe(0);
+  return git(home.hosts[to], ["rev-parse", planRefOf(home.id8)]);
+}
+
+// A move as it would be with a note naming the new place by another spelling (`address`) than the host it is
+// pushed to: the plan at `to` as one commit on the old tip, and at the old place a note on the old tip.
+function movePlanByHand(home: PlanHome, to: string, address = home.hosts[to]): { moved: string; pointer: string } {
+  const tip = git(home.hosts["checkout-api"], ["rev-parse", planRefOf(home.id8)]);
+  const json = JSON.parse(git(home.hosts["checkout-api"], ["show", `${tip}:plan.json`])) as Record<string, unknown> & { version: number };
+  const moved = pushPlanJson(home, home.hosts[to], { ...json, version: json.version + 1, plan_repo: { name: to, address } }, tip, "all", "aidlc plan fixture");
+  const pointer = pushPlanJson(home, home.hosts["checkout-api"], { format: 1, work: json.work, moved_to: { name: to, address } }, tip, "plan only",
+    `aidlc plan fixture: moved to ${to}`);
+  return { moved, pointer };
 }
 
 describe("a team takes a Unit from the plan where it is shared", () => {
@@ -753,3 +796,498 @@ describe("a build whose plan was shared again over its history hears it once", (
   });
 });
 
+describe("followPlan reads where a moved plan is now, and only the plan itself", () => {
+  // A teammate's workspace that has looked at the old place: its copy there is the pointer.
+  async function lookedAtOld(home: PlanHome): Promise<{ pay: string; follow: (typed?: boolean) => Promise<Record<string, unknown>> }> {
+    const t = await tools();
+    const pay = teamWorkspace(home.hosts, "pay", ["checkout-web"]);
+    const from = home.hosts["checkout-api"];
+    expect(t.lookAt(pay, from, [planRefOf(home.id8)]).ok).toBe(true);
+    const at = t.planAtCopy(pay, copyName(from, home.id8));
+    expect(at.kind).toBe("moved");
+    if (at.kind !== "moved") throw new Error("no pointer at the old place");
+    const pointer = at.pointer;
+    return { pay, follow: async (typed = false) => t.followPlan(pay, from, home.id8, pointer, typed) as unknown as Record<string, unknown> };
+  }
+  const pointerTo = (home: PlanHome, at: string, name: string, address: string): void => {
+    const tip = git(home.hosts["checkout-api"], ["rev-parse", planRefOf(home.id8)]);
+    const work = (JSON.parse(git(home.hosts["checkout-api"], ["show", `${home.plan}:plan.json`])) as { work: unknown }).work;
+    pushPlanJson(home, at, { format: 1, work, moved_to: { name, address } }, tip, "plan only", `aidlc plan fixture: moved to ${name}`);
+  };
+
+  test("a plan moved once is read where it went: the work, that repository as its own, its commit", async () => {
+    const home = makePlanHome();
+    const moved = movePlan(home, "billing");
+    const { follow } = await lookedAtOld(home);
+    const followed = await follow();
+    expect(followed).toMatchObject({ kind: "followed", label: "fixture", repo: "billing", address: home.hosts.billing, oid: moved });
+    expect((followed.plan as { plan_repo: unknown }).plan_repo).toEqual({ name: "billing", address: home.hosts.billing });
+  });
+
+  test("moved twice: each pointer is followed on to the plan", async () => {
+    const home = makePlanHome();
+    movePlan(home, "billing");
+    const web = home.hosts["checkout-web"];
+    movePlan(home, "checkout-web");
+    const { follow } = await lookedAtOld(home);
+    expect(await follow()).toMatchObject({ kind: "followed", repo: "checkout-web", address: web });
+  });
+
+  test("the new place could not be read: git's words when typed, its first line when quiet", async () => {
+    const home = makePlanHome();
+    movePlan(home, "billing");
+    const { follow } = await lookedAtOld(home);
+    renameSync(home.hosts.billing, `${home.hosts.billing}.gone`);
+    for (const typed of [true, false]) {
+      const unread = await follow(typed);
+      expect(unread).toMatchObject({ kind: "unread", label: "fixture", repo: "billing", address: home.hosts.billing });
+      expect(String(unread.said)).toContain(home.hosts.billing);
+    }
+  });
+
+  test("where it points does not hold it: a pointer back and a plan naming another repository hold something else; no plan there holds nothing", async () => {
+    const back = makePlanHome();
+    movePlan(back, "billing");
+    pointerTo(back, back.hosts.billing, "checkout-api", back.hosts["checkout-api"]);
+    expect(await (await lookedAtOld(back)).follow()).toMatchObject({ kind: "not-followed", repo: "billing", address: back.hosts.billing, holds: "other" });
+
+    const none = makePlanHome();
+    pointerTo(none, none.hosts["checkout-api"], "checkout-web", none.hosts["checkout-web"]);
+    expect(await (await lookedAtOld(none)).follow()).toMatchObject({ kind: "not-followed", repo: "checkout-web", holds: "nothing" });
+
+    const mirror = makePlanHome();
+    movePlan(mirror, "billing");
+    const tip = git(mirror.hosts.billing, ["rev-parse", planRefOf(mirror.id8)]);
+    const json = JSON.parse(git(mirror.hosts.billing, ["show", `${tip}:plan.json`])) as Record<string, unknown>;
+    pushPlanJson(mirror, mirror.hosts.billing, { ...json, plan_repo: { name: "checkout-web", address: mirror.hosts["checkout-web"] } }, tip, "all", "mirror");
+    expect(await (await lookedAtOld(mirror)).follow()).toMatchObject({ kind: "not-followed", repo: "billing", holds: "other" });
+  });
+
+  test("a plan deleted where it went holds nothing, though this workspace kept a copy of it from before", async () => {
+    const home = makePlanHome();
+    movePlan(home, "billing");
+    const { follow } = await lookedAtOld(home);
+    expect(await follow()).toMatchObject({ kind: "followed", repo: "billing" });
+    git(home.hosts.billing, ["update-ref", "-d", planRefOf(home.id8)]);
+    expect(await follow()).toMatchObject({ kind: "not-followed", repo: "billing", holds: "nothing" });
+  });
+
+  test("while the note is not followed, the plan under it is what a copy is read at", async () => {
+    const home = makePlanHome();
+    const t = await tools();
+    const tip = git(home.hosts["checkout-api"], ["rev-parse", planRefOf(home.id8)]);
+    movePlan(home, "billing");
+    const { pay } = await lookedAtOld(home);
+    const copy = copyName(home.hosts["checkout-api"], home.id8);
+    expect(t.planCommitOf(pay, copy)).toBe(tip);
+    const place = { address: home.hosts["checkout-api"], repo: "checkout-api", id8: home.id8, uuid: "", work: home.id8, ref: planRefOf(home.id8), copy };
+    expect(t.planAt(pay, place)).toMatchObject({ kind: "read", plan: { oid: tip } });
+    expect(t.planAtCopy(pay, copy).kind).toBe("moved");
+  });
+
+  test("a chain past three pointers is not followed, and the fourth place is never read", async () => {
+    const home = makePlanHome();
+    const hops = ["hop-one", "hop-two", "hop-three", "hop-four"].map((name) => ({ name, address: codeHost(name) }));
+    pointerTo(home, home.hosts["checkout-api"], hops[0].name, hops[0].address);
+    for (const [i, hop] of hops.slice(0, 3).entries()) pointerTo(home, hop.address, hops[i + 1].name, hops[i + 1].address);
+    const { pay, follow } = await lookedAtOld(home);
+    expect(await follow()).toMatchObject({ kind: "not-followed", repo: "hop-three", address: hops[2].address });
+    expect(git(pay, ["for-each-ref", "--format=%(refname)", `refs/aidlc/home/${home.id8}/`]).split("\n").filter((ref) => ref.includes(repoCopyKey(hops[3].address)))).toEqual([]);
+  });
+
+  test("a pointer that is not this work's, or names an address git would read as an option, is no pointer: nothing is followed", async () => {
+    const home = makePlanHome();
+    const t = await tools();
+    const tip = git(home.hosts["checkout-api"], ["rev-parse", planRefOf(home.id8)]);
+    const work = (JSON.parse(git(home.hosts["checkout-api"], ["show", `${tip}:plan.json`])) as { work: Record<string, unknown> }).work;
+    const pay = teamWorkspace(home.hosts, "pay", ["checkout-web"]);
+    for (const pointer of [
+      { format: 1, work: { ...work, id: "00000000-0000-4000-8000-00000000beef" }, moved_to: { name: "billing", address: home.hosts.billing } },
+      { format: 1, work, moved_to: { name: "billing", address: "-x" } },
+    ]) {
+      pushPlanJson(home, home.hosts["checkout-api"], pointer, tip, "plan only", "pointer");
+      expect(t.lookAt(pay, home.hosts["checkout-api"], [planRefOf(home.id8)]).ok).toBe(true);
+      expect(t.planAtCopy(pay, copyName(home.hosts["checkout-api"], home.id8)).kind).toBe("unreadable");
+    }
+  });
+});
+
+describe("a build follows a plan the lead moved to another repository", () => {
+  const notices = (step: Record<string, unknown>): string[] => ((step.change_notices ?? []) as string[]).filter((line) => line.startsWith("The plan of fixture"));
+  const homeLocation = (pay: string): string | null => field(readFileSync(join(buildDir(pay, "refunds"), "aidlc-state.md"), "utf-8"), "Home Location");
+  const chat = (name: string): NodeJS.ProcessEnv => ({ ...ENV, AIDLC_SESSION_OVERRIDE: name });
+  function took(repos = ["billing"]): { home: PlanHome; pay: string } {
+    const home = makePlanHome();
+    const pay = teamWorkspace(home.hosts, "pay", repos);
+    expect(run(UNIT, ["take", "refunds", "--plan", home.id8, "--from", home.hosts["checkout-api"]], pay).status).toBe(0);
+    return { home, pay };
+  }
+
+  test("at the build's next look: it reads the plan where it went, says so once with the address, and never that it was shared again", () => {
+    const { home, pay } = took();
+    movePlan(home, "billing");
+    const step = next(pay, chat("pay-later"));
+    expect(notices(step), JSON.stringify(step).slice(0, 900)).toEqual([`The plan of fixture moved to billing (${home.hosts.billing}); this build reads it there now.`]);
+    expect(homeLocation(pay)).toBe(home.hosts.billing);
+    const after = [next(pay, chat("pay-later")), next(pay, chat("pay-later-2"))];
+    expect(after.flatMap(notices), JSON.stringify(after[1]).slice(0, 900)).toEqual([]);
+  });
+
+  test("the new place could not be read: said once a chat with the way on, the lead's practices still read, nothing offered; it follows once it reads", () => {
+    const { home, pay } = took();
+    movePlan(home, "billing");
+    renameSync(home.hosts.billing, `${home.hosts.billing}.away`);
+    const step = next(pay, chat("pay-later"));
+    const said = notices(step);
+    expect(said.length, JSON.stringify(step).slice(0, 900)).toBe(1);
+    expect(said[0]).toStartWith(`The plan of fixture moved to billing (${home.hosts.billing}), which could not be read (`);
+    expect(said[0]).toEndWith("), so this build carries on from the copy here; no other Unit of it can be taken until it can be read. If you reach billing by another address, tell me which.");
+    expect(JSON.stringify(step)).not.toContain("could not be read just now, so this step follows your team's own rules");
+    expect(homeLocation(pay)).toBe(home.hosts["checkout-api"]);
+    expect(notices(next(pay, chat("pay-later")))).toEqual([]);
+    const offer = next(pay, chat("pay-later"), ["--units"]);
+    expect(JSON.stringify(offer)).not.toContain("Start checkout-ui");
+    renameSync(`${home.hosts.billing}.away`, home.hosts.billing);
+    expect(notices(next(pay, chat("pay-later-2")))).toEqual([`The plan of fixture moved to billing (${home.hosts.billing}); this build reads it there now.`]);
+    expect(homeLocation(pay)).toBe(home.hosts.billing);
+  });
+
+  test("where it points does not hold it: said once with whose it is to mend, and the build stays where it was", () => {
+    const { home, pay } = took();
+    const tip = git(home.hosts["checkout-api"], ["rev-parse", planRefOf(home.id8)]);
+    const work = (JSON.parse(git(home.hosts["checkout-api"], ["show", `${tip}:plan.json`])) as { work: unknown }).work;
+    pushPlanJson(home, home.hosts["checkout-api"], { format: 1, work, moved_to: { name: "checkout-web", address: home.hosts["checkout-web"] } }, tip, "plan only", "moved");
+    const step = next(pay, chat("pay-later"));
+    expect(notices(step), JSON.stringify(step).slice(0, 900)).toEqual([
+      "The plan of fixture says it moved, but checkout-web does not hold it, so this build carries on from the copy here; no other Unit of it can be taken until the lead's project has put that right.",
+    ]);
+    expect(homeLocation(pay)).toBe(home.hosts["checkout-api"]);
+  });
+
+  test("another spelling of the new address, said by the person, is where a build that cannot read the note's address follows", () => {
+    const { home, pay } = took();
+    const leads = join(tempDir("leads-spelling"), "billing.git");
+    movePlanByHand(home, "billing", leads);
+    expect(notices(next(pay, chat("pay-later")))[0]).toContain("If you reach billing by another address, tell me which.");
+    const said = next(pay, chat("pay-later"), ["--lead-address", home.hosts.billing]);
+    expect(notices(said), JSON.stringify(said).slice(0, 900)).toContain(`The plan of fixture moved to billing (${home.hosts.billing}); this build reads it there now.`);
+    expect(homeLocation(pay)).toBe(home.hosts.billing);
+  });
+
+  test("a note naming the work by another full id with the same suffix: the build follows it once and the step ends", () => {
+    const { home, pay } = took();
+    const tip = git(home.hosts["checkout-api"], ["rev-parse", planRefOf(home.id8)]);
+    movePlan(home, "billing");
+    const note = JSON.parse(git(home.hosts["checkout-api"], ["show", `${planRefOf(home.id8)}:plan.json`])) as { work: { id: string } };
+    const other = `${note.work.id.startsWith("f") ? "e" : "f"}${note.work.id.slice(1)}`;
+    pushPlanJson(home, home.hosts["checkout-api"], { ...note, work: { ...note.work, id: other } }, tip, "plan only", "aidlc plan fixture: moved to billing");
+    const step = next(pay, chat("pay-later"));
+    expect(notices(step), JSON.stringify(step).slice(0, 900)).toEqual([`The plan of fixture moved to billing (${home.hosts.billing}); this build reads it there now.`]);
+    expect(homeLocation(pay)).toBe(home.hosts.billing);
+  });
+
+  test("the old address said, with no build here: the offer is the plan where it went, its takes name that address, and the said list keeps it", () => {
+    const home = makePlanHome();
+    const pay = teamWorkspace(home.hosts, "pay", ["checkout-web"]);
+    movePlan(home, "billing");
+    const ask = next(pay, ENV, ["--lead-address", home.hosts["checkout-api"]]);
+    expect(ask.ask_type, JSON.stringify(ask).slice(0, 900)).toBe("unit-take");
+    expect(notices(ask)).toEqual(["The plan of fixture moved to billing."]);
+    expect(String(ask.question)).toStartWith("fixture is shared in billing");
+    const start = (ask.choices as Array<{ label: string; command?: string }>).find((choice) => choice.label === "Start refunds");
+    expect(start?.command?.replaceAll("'", "")).toContain(`take refunds --plan ${home.id8} --from ${home.hosts.billing}`);
+    expect(JSON.parse(readFileSync(join(pay, "aidlc", ".aidlc-engine", "units", "claim-registry.json"), "utf-8")).said_plans)
+      .toEqual([{ address: home.hosts.billing, at: expect.any(String) }]);
+  });
+
+  test("the old address said and the new place could not be read: the step ends with that, never that nothing is shared there", () => {
+    const home = makePlanHome();
+    const pay = teamWorkspace(home.hosts, "pay", ["checkout-web"]);
+    movePlan(home, "billing");
+    renameSync(home.hosts.billing, `${home.hosts.billing}.away`);
+    const step = run(ORCH, ["next", "--lead-address", home.hosts["checkout-api"]], pay);
+    const said = String(step.json?.narration ?? step.json?.error ?? step.out);
+    expect(said).toContain(`The plan of fixture moved to billing (${home.hosts.billing}), which could not be read (`);
+    expect(said).toContain("If you reach billing by another address, tell me which.");
+    expect(said).not.toContain("has no plan shared in it yet");
+  });
+
+  test("a take typed at the old address takes from where the plan went and records it; when that cannot be read, nothing is taken", () => {
+    const home = makePlanHome();
+    const pay = teamWorkspace(home.hosts, "pay", ["checkout-web"]);
+    movePlan(home, "billing");
+    renameSync(home.hosts.billing, `${home.hosts.billing}.away`);
+    const refused = run(UNIT, ["take", "refunds", "--plan", home.id8, "--from", home.hosts["checkout-api"]], pay);
+    expect(refused.status).not.toBe(0);
+    expect(String(refused.json?.error)).toContain(`refunds was not taken: the plan of fixture moved to billing (${home.hosts.billing}), which could not be read (`);
+    expect(String(refused.json?.error)).toContain("Say when to try again. If you reach billing by another address, tell me which.");
+    renameSync(`${home.hosts.billing}.away`, home.hosts.billing);
+    const taken = run(UNIT, ["take", "refunds", "--plan", home.id8, "--from", home.hosts["checkout-api"]], pay);
+    expect(taken.status, taken.out).toBe(0);
+    expect(homeLocation(pay)).toBe(home.hosts.billing);
+    expect(taken.json?.notice).toStartWith("The plan of fixture moved to billing. refunds is yours.");
+  });
+
+  test("a silent look first (status, then a push): the build's next step still says it once, and its record is written only where it was", () => {
+    const { home, pay } = took(["checkout-api", "billing"]);
+    codeGenerated(pay, buildDir(pay, "refunds"));
+    movePlan(home, "billing");
+    const holding = (): string[] => Object.entries(home.hosts)
+      .filter(([, host]) => git(host, ["for-each-ref", `refs/aidlc/claims/${home.id8}/refunds`]) !== "").map(([name]) => name);
+    const before = holding();
+    expect(run(UTILITY, ["status"], pay, chat("pay-later")).status).toBe(0);
+    const pushed = run(UNIT, ["push"], pay, chat("pay-later"));
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(holding()).toEqual(before);
+    expect(homeLocation(pay)).toBe(home.hosts.billing);
+    const step = next(pay, chat("pay-later"));
+    expect(notices(step), JSON.stringify(step).slice(0, 900)).toEqual([`The plan of fixture moved to billing (${home.hosts.billing}); this build reads it there now.`]);
+  });
+});
+
+describe("a build reads the plan at an address its builder says, after the repository moved hosts", () => {
+  const notices = (step: Record<string, unknown>): string[] => ((step.change_notices ?? []) as string[]).filter((line) => line.startsWith("The plan of fixture"));
+  const homeLocation = (pay: string): string | null => field(readFileSync(join(buildDir(pay, "refunds"), "aidlc-state.md"), "utf-8"), "Home Location");
+  const chat = (name: string): NodeJS.ProcessEnv => ({ ...ENV, AIDLC_SESSION_OVERRIDE: name });
+  // A copy of a repository at another path, every ref and commit kept, as a host move's mirror makes it.
+  const mirrorOf = (host: string, label: string): string => {
+    const at = join(tempDir(label), "repo.git");
+    git(tempDir(`${label}-parent`), ["clone", "-q", "--mirror", host, at]);
+    return at;
+  };
+  // pay took refunds at the old place; the repository moved hosts: a mirror at the new host, and the lead's take-over
+  // there, one commit on the mirror's tip naming the new place as its own; nothing written at the old place.
+  function movedHosts(units = ["refunds"]): { home: PlanHome; pay: string; old: string; mirror: string } {
+    const home = makePlanHome();
+    const old = home.hosts["checkout-api"];
+    const pay = teamWorkspace(home.hosts, "pay", ["billing", "checkout-web"]);
+    for (const unit of units) expect(run(UNIT, ["take", unit, "--plan", home.id8, "--from", old], pay).status).toBe(0);
+    const mirror = mirrorOf(old, "new-host");
+    const tip = git(mirror, ["rev-parse", planRefOf(home.id8)]);
+    const json = JSON.parse(git(mirror, ["show", `${tip}:plan.json`])) as Record<string, unknown> & { version: number };
+    pushPlanJson(home, mirror, { ...json, version: json.version + 1, plan_repo: { name: "checkout-api", address: mirror } }, tip, "all", "aidlc plan fixture");
+    return { home, pay, old, mirror };
+  }
+  const heard18b = (step: Record<string, unknown>): string[] =>
+    ((step.change_notices ?? []) as string[]).filter((line) => line.includes("was shared again since you took"));
+
+  for (const [label, oldGone] of [["the old place still answers, read only", false], ["the old place is gone", true]] as const) {
+    test(`the builder says the new address once: the build reads the plan there from then on, said once (${label})`, () => {
+      const { pay, old, mirror } = movedHosts();
+      if (oldGone) renameSync(old, `${old}.away`);
+      else writeFileSync(join(old, "hooks", "pre-receive"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+      const said = next(pay, chat("pay-later"), ["--lead-address", mirror]);
+      expect(notices(said), JSON.stringify(said).slice(0, 900)).toEqual([`The plan of fixture moved to checkout-api (${mirror}); this build reads it there now.`]);
+      expect(homeLocation(pay)).toBe(mirror);
+      const after = [next(pay, chat("pay-later")), next(pay, chat("pay-later-2"))];
+      expect(after.flatMap(notices), JSON.stringify(after[1]).slice(0, 900)).toEqual([]);
+      expect([said, ...after].flatMap(heard18b)).toEqual([]);
+    });
+  }
+
+  test("another spelling of the new place, typed by the builder, is followed too: the two plans are compared, not the spelling", () => {
+    const { pay, mirror } = movedHosts();
+    const spelled = mirrorOf(mirror, "new-host-spelled");
+    const said = next(pay, chat("pay-later"), ["--lead-address", spelled]);
+    expect(notices(said), JSON.stringify(said).slice(0, 900)).toEqual([`The plan of fixture moved to checkout-api (${spelled}); this build reads it there now.`]);
+    expect(homeLocation(pay)).toBe(spelled);
+  });
+
+  test("a copy of the old place, or the new place before the take-over, typed by the builder: the build stays where it reads", () => {
+    const home = makePlanHome();
+    const old = home.hosts["checkout-api"];
+    const pay = teamWorkspace(home.hosts, "pay", ["billing"]);
+    expect(run(UNIT, ["take", "refunds", "--plan", home.id8, "--from", old], pay).status).toBe(0);
+    for (const [i, copy] of [mirrorOf(old, "old-alias"), mirrorOf(old, "new-host-early")].entries()) {
+      const said = next(pay, chat(`pay-later-${i}`), ["--lead-address", copy]);
+      expect(notices(said), JSON.stringify(said).slice(0, 900)).toEqual([]);
+      expect(homeLocation(pay)).toBe(old);
+    }
+  });
+
+  test("two builds of the work here are both read at the new place from the one address said", () => {
+    const { pay, mirror } = movedHosts(["refunds", "checkout-ui"]);
+    const said = next(pay, chat("pay-later"), ["--lead-address", mirror]);
+    expect(notices(said).length, JSON.stringify(said).slice(0, 900)).toBeGreaterThan(0);
+    for (const unit of ["refunds", "checkout-ui"]) {
+      expect(field(readFileSync(join(buildDir(pay, unit), "aidlc-state.md"), "utf-8"), "Home Location"), unit).toBe(mirror);
+    }
+  });
+
+  test("the old address said again after the build reads the new place: nothing changes and nothing is said", () => {
+    const { pay, old, mirror } = movedHosts();
+    expect(notices(next(pay, chat("pay-later"), ["--lead-address", mirror])).length).toBe(1);
+    const back = next(pay, chat("pay-later-2"), ["--lead-address", old]);
+    expect(notices(back), JSON.stringify(back).slice(0, 900)).toEqual([]);
+    expect(homeLocation(pay)).toBe(mirror);
+  });
+
+  test("a workspace with both repositories and no build: of the two plans of the work, the one whose history holds the other is offered", () => {
+    const { home, old, mirror } = movedHosts();
+    const sam = teamWorkspace({ ...home.hosts, "checkout-api-moved": mirror }, "sam", ["checkout-api", "checkout-api-moved", "checkout-web"]);
+    const offer = next(sam, chat("sam-later"), ["--units"]);
+    const takes = ((offer.choices ?? []) as Array<{ command?: string }>).flatMap((choice) => (choice.command?.includes(" take ") ? [choice.command] : []));
+    expect(takes.length, JSON.stringify(offer).slice(0, 900)).toBeGreaterThan(0);
+    for (const take of takes) {
+      expect(take).toContain(mirror);
+      expect(take).not.toContain(old);
+    }
+  });
+
+  // pay took refunds at the old place; the mirror is cut; a later word is written at the old place and pay reads it;
+  // then the take-over at the mirror, one commit on the tip the mirror was cut at: neither plan holds the other.
+  function parted(heardBefore: boolean): { home: PlanHome; pay: string; mirror: string } {
+    const home = makePlanHome();
+    const old = home.hosts["checkout-api"];
+    const pay = teamWorkspace(home.hosts, "pay", ["billing"]);
+    expect(run(UNIT, ["take", "refunds", "--plan", home.id8, "--from", old], pay).status).toBe(0);
+    const json = JSON.parse(git(old, ["show", `${planRefOf(home.id8)}:plan.json`])) as Record<string, unknown> & { version: number };
+    if (heardBefore) {
+      // Shared again over what pay took, once already: a commit that is no plan, then the plan on it.
+      const none = pushPlanJson(home, old, { ...json, units: "none" }, git(old, ["rev-parse", planRefOf(home.id8)]), "all", "edited");
+      pushPlanJson(home, old, { ...json, version: json.version + 1 }, none, "all", "aidlc plan fixture");
+      expect(heard18b(next(pay, chat("pay-heard")))).toHaveLength(1);
+    }
+    const mirror = mirrorOf(old, "parted-host");
+    const cut = git(mirror, ["rev-parse", planRefOf(home.id8)]);
+    pushPlanJson(home, old, { ...json, version: json.version + 2 }, cut, "all", "aidlc plan fixture");
+    next(pay, chat("pay-reads-later-word"));
+    pushPlanJson(home, mirror, { ...json, version: json.version + 3, plan_repo: { name: "checkout-api", address: mirror } }, cut, "all", "aidlc plan fixture");
+    return { home, pay, mirror };
+  }
+
+  for (const [label, heardBefore] of [["", false], [", though it heard that line before", true]] as const) {
+    test(`a build whose plan has parted from the plan at the address said reads it there and hears once that the plan was shared again${label}`, () => {
+      const { pay, mirror } = parted(heardBefore);
+      const said = next(pay, chat("pay-later"), ["--lead-address", mirror]);
+      // The one line of the plan, in place of the moved line.
+      expect(notices(said), JSON.stringify(said).slice(0, 900)).toEqual(["The plan of fixture in checkout-api was shared again since you took refunds; what you took stays as it was."]);
+      expect(homeLocation(pay)).toBe(mirror);
+      const after = [next(pay, chat("pay-later")), next(pay, chat("pay-later-2"))];
+      expect(after.flatMap(notices), JSON.stringify(after[1]).slice(0, 900)).toEqual([]);
+    });
+  }
+
+  test("a build whose record the move did not carry: the step where its builder says the new address records the take there first and offers it to carry on", () => {
+    const home = makePlanHome();
+    const old = home.hosts["checkout-api"];
+    const pay = teamWorkspace(home.hosts, "pay", ["billing"]);
+    expect(run(UNIT, ["take", "refunds", "--plan", home.id8, "--from", old], pay).status).toBe(0);
+    // A move that carries the plan's ref and none of the records, and the take-over naming the new place for both.
+    const moved = mirrorOf(old, "record-left-behind");
+    const claim = `refs/aidlc/claims/${home.id8}/refunds`;
+    git(moved, ["update-ref", "-d", claim]);
+    const tip = git(moved, ["rev-parse", planRefOf(home.id8)]);
+    const json = JSON.parse(git(moved, ["show", `${tip}:plan.json`])) as Record<string, unknown> & { version: number; repos: Array<{ name: string; address: string | null }> };
+    pushPlanJson(home, moved, { ...json, version: json.version + 1, plan_repo: { name: "checkout-api", address: moved },
+      repos: json.repos.map((repo) => (repo.name === "checkout-api" ? { ...repo, address: moved } : repo)) }, tip, "all", "aidlc plan fixture");
+    const said = next(pay, chat("pay-later"), ["--lead-address", moved]);
+    expect(notices(said), JSON.stringify(said).slice(0, 900)).toEqual([`The plan of fixture moved to checkout-api (${moved}); this build reads it there now.`]);
+    expect(String(said.question), JSON.stringify(said).slice(0, 900)).not.toContain("by a teammate");
+    expect(((said.choices ?? []) as Array<{ label: string }>).map((choice) => choice.label)).toContain("Carry on refunds");
+    expect(git(moved, ["for-each-ref", "--format=%(refname)", claim])).toBe(claim);
+  });
+
+  test("a build whose plan's repository cannot be read is told it can give the plan's new address; a record's repository alone is not", () => {
+    const home = makePlanHome();
+    const pay = teamWorkspace(home.hosts, "pay", ["billing"]);
+    expect(run(UNIT, ["take", "refunds", "--plan", home.id8, "--from", home.hosts["checkout-api"]], pay).status).toBe(0);
+    const unread = (step: Record<string, unknown>, repo: string): string[] =>
+      ((step.change_notices ?? []) as string[]).filter((line) => line.startsWith(`${repo} could not be read just now`) && line.includes("so news from"));
+    renameSync(home.hosts.billing, `${home.hosts.billing}.away`);
+    const records = next(pay, chat("pay-records"));
+    expect(unread(records, "billing"), JSON.stringify(records).slice(0, 900)).toHaveLength(1);
+    expect(unread(records, "billing")[0]).toEndWith("so news from it may be behind.");
+    renameSync(`${home.hosts.billing}.away`, home.hosts.billing);
+    renameSync(home.hosts["checkout-api"], `${home.hosts["checkout-api"]}.away`);
+    const plan = next(pay, chat("pay-plan"));
+    expect(unread(plan, "checkout-api"), JSON.stringify(plan).slice(0, 900)).toHaveLength(1);
+    expect(unread(plan, "checkout-api")[0]).toEndWith("so news from it may be behind. If the plan of fixture has moved from checkout-api, " +
+      "tell me its new address and this build will read it there.");
+  });
+
+  // An ordinary move to a mirror the old place is still copied into: the plan at the mirror, one commit on the old tip
+  // naming it, and the note at the old place; then the mirror's next copy writes the old place's tip, the note, over it.
+  function movedToCopiedMirror(followFirst: boolean): { pay: string; old: string; mirror: string } {
+    const home = makePlanHome();
+    const old = home.hosts["checkout-api"];
+    const pay = teamWorkspace(home.hosts, "pay", ["billing"]);
+    expect(run(UNIT, ["take", "refunds", "--plan", home.id8, "--from", old], pay).status).toBe(0);
+    const mirror = mirrorOf(old, "kept-mirror");
+    const tip = git(old, ["rev-parse", planRefOf(home.id8)]);
+    const json = JSON.parse(git(old, ["show", `${tip}:plan.json`])) as Record<string, unknown> & { version: number; work: unknown };
+    pushPlanJson(home, mirror, { ...json, version: json.version + 1, plan_repo: { name: "checkout-api", address: mirror } }, tip, "all", "aidlc plan fixture");
+    pushPlanJson(home, old, { format: 1, work: json.work, moved_to: { name: "checkout-api", address: mirror } }, tip, "plan only",
+      "aidlc plan fixture: moved to checkout-api");
+    if (followFirst) {
+      expect(notices(next(pay, chat("pay-follows")))).toEqual([`The plan of fixture moved to checkout-api (${mirror}); this build reads it there now.`]);
+      expect(homeLocation(pay)).toBe(mirror);
+    }
+    git(mirror, ["fetch", "-q", "--prune", "origin"]);
+    expect(git(mirror, ["rev-parse", planRefOf(home.id8)])).toBe(git(old, ["rev-parse", planRefOf(home.id8)]));
+    return { pay, old, mirror };
+  }
+
+  for (const [label, followFirst] of [["before the build followed the move", false], ["after the build followed it", true]] as const) {
+    test(`the mirror copied again over the plan that moved there (${label}): the build hears once that the plan is not held there`, () => {
+      const { pay, old, mirror } = movedToCopiedMirror(followFirst);
+      const step = next(pay, chat("pay-later"));
+      expect(step.error, JSON.stringify(step).slice(0, 900)).toBeUndefined();
+      expect(notices(step), JSON.stringify(step).slice(0, 900)).toEqual(["The plan of fixture says it moved, but checkout-api does not hold it, so this " +
+        "build carries on from the copy here; no other Unit of it can be taken until the lead's project has put that right."]);
+      expect(notices(next(pay, chat("pay-later")))).toEqual([]);
+      expect(homeLocation(pay)).toBe(followFirst ? mirror : old);
+    });
+  }
+
+  test("a look nobody typed never moves a build: the sweep finds the plan at the new place through a clone, and the build stays", () => {
+    const { home, mirror, old } = movedHosts();
+    const sam = teamWorkspace({ ...home.hosts, "checkout-api": mirror }, "sam", ["checkout-api", "checkout-web"]);
+    expect(run(UNIT, ["take", "checkout-ui", "--plan", home.id8, "--from", old], sam).status).toBe(0);
+    const swept = next(sam, chat("sam-later"), ["--units"]);
+    expect(notices(swept), JSON.stringify(swept).slice(0, 900)).toEqual([]);
+    expect(field(readFileSync(join(buildDir(sam, "checkout-ui"), "aidlc-state.md"), "utf-8"), "Home Location")).toBe(old);
+  });
+});
+
+describe("a clone of the team's workspace when the lead moves the plan", () => {
+  const chat = (name: string): NodeJS.ProcessEnv => ({ ...ENV, AIDLC_SESSION_OVERRIDE: name });
+
+  test("a teammate's clone: its build follows and says so, the lead's line is never said there, and the lead's record there is left as it is", () => {
+    const home = makePlanHomeWithRemote();
+    // The lead planned the work in the lead's own checkout: the plan's own rows are in the lead's shard.
+    asLeadsOwnCheckout(home.dir);
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "planned"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const alice = cloneOf(home.remote, "alice");
+    for (const name of ["checkout-api", "billing"]) cloneCode(home.hosts[name], alice, name, "alice");
+    inSpace(alice, "payments");
+    const took = run(UNIT, ["take", "refunds", "--plan", home.id8, "--from", home.hosts["checkout-api"]], alice);
+    expect(took.status, took.out).toBe(0);
+    const lead = seededStateFile(alice);
+    const before = readFileSync(lead, "utf-8");
+    movePlan(home, "billing");
+    const step = next(alice, chat("alice-later"));
+    expect((step.change_notices ?? []) as string[], JSON.stringify(step).slice(0, 900))
+      .toContain(`The plan of fixture moved to billing (${home.hosts.billing}); this build reads it there now.`);
+    expect(JSON.stringify(step)).not.toContain("this computer writes it there now");
+    expect(readFileSync(lead, "utf-8")).toBe(before);
+  });
+
+  test("a second computer of the lead's that said it leads the work here follows as the lead", () => {
+    const home = makePlanHomeWithRemote();
+    const old = home.hosts["checkout-api"];
+    const laptop = cloneOf(home.remote, "lead");
+    expect(run(UTILITY, ["intent", "switch", HOME_RECORD], laptop).status).toBe(0);
+    const lifted = run(UNIT, ["lead-here", "--person-words", "I lead this work, carry it on here on my laptop"], laptop);
+    expect(lifted.status, lifted.out).toBe(0);
+    movePlan(home, "billing");
+    // The look fetches the plan, as the lead's look does.
+    git(laptop, ["fetch", "-q", old, `+${planRefOf(home.id8)}:${copyName(old, home.id8)}`]);
+    const step = next(laptop, chat("laptop-later"));
+    expect((step.change_notices ?? []) as string[], JSON.stringify(step).slice(0, 900))
+      .toContain(`The plan of fixture moved to billing (${home.hosts.billing}); this computer writes it there now.`);
+    expect(readFileSync(seededStateFile(laptop), "utf-8")).toContain(`- **Home Location**: ${home.hosts.billing}`);
+  });
+});

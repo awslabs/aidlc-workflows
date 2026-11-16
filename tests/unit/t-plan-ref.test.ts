@@ -11,12 +11,12 @@
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { gitTargetFor, planAtCopy, planFilesNow, planPlaceForShare, planUnitsKept, writePlan } from "../../dist/claude/.claude/tools/aidlc-unit.ts";
-import { checkInLine, planJsonOf, repoCopyKey } from "../../dist/claude/.claude/tools/aidlc-unit-teams.ts";
-import { seededRecordDir } from "../harness/fixtures.ts";
+import { checkInLine, copyOf, planJsonOf, repoCopyKey } from "../../dist/claude/.claude/tools/aidlc-unit-teams.ts";
+import { seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
 import {
   cleanupTeamBuild,
   cloneOf,
@@ -38,6 +38,7 @@ import {
   TICKET_RULE_WORDS,
   ticketKeyRule,
   UNIT,
+  UTILITY,
 } from "../harness/team-build.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -49,6 +50,7 @@ const registryOf = (dir: string): Array<{ uuid: string; slug: string }> =>
 interface Plan {
   version: number;
   work: { id: string; label: string; space: string };
+  plan_repo: { name: string; address: string };
   units: Array<{ name: string; waits_on: string[]; repos: string[]; record: string; word: Record<string, unknown> }>;
   inputs: Array<{ path: string; fingerprint: string }>;
   [key: string]: unknown;
@@ -90,6 +92,30 @@ function writeOnTip(host: string, id8: string, edit: (plan: Plan) => void, files
   const commit = git(scratch, ["commit-tree", tree, "-p", "refs/tip", "-m", `aidlc plan word ${plan.version}`]);
   git(scratch, ["push", "-q", host, `${commit}:${planRefOf(id8)}`]);
   return commit;
+}
+
+// A move made on another computer of the lead's, by plain git: the plan in `to`
+// as one commit on the old tip naming `to` as its own, and this work's pointer
+// on the old tip at `from`.
+function movedByHand(home: { hosts: Record<string, string>; id8: string }, from: string, to: string): void {
+  const ref = planRefOf(home.id8);
+  const scratch = tempDir("plan-move");
+  git(scratch, ["init", "-q"]);
+  git(scratch, ["config", "user.name", "lead"]);
+  git(scratch, ["config", "user.email", "lead@example.test"]);
+  git(scratch, ["fetch", "-q", home.hosts[from], `${ref}:refs/tip`]);
+  git(scratch, ["read-tree", "refs/tip"]);
+  const plan = JSON.parse(git(scratch, ["show", "refs/tip:plan.json"])) as Plan;
+  plan.version += 1;
+  plan.plan_repo = { name: to, address: home.hosts[to] };
+  git(scratch, ["update-index", "--cacheinfo", `100644,${spawnHash(scratch, `${JSON.stringify(plan, null, 2)}\n`)},plan.json`]);
+  const moved = git(scratch, ["commit-tree", git(scratch, ["write-tree"]), "-p", "refs/tip", "-m", "a move"]);
+  git(scratch, ["push", "-q", home.hosts[to], `${moved}:${ref}`]);
+  const pointer = { format: 1, work: plan.work, moved_to: { name: to, address: home.hosts[to] } };
+  const blob = spawnHash(scratch, `${JSON.stringify(pointer, null, 2)}\n`);
+  const tree = spawnSync("git", ["mktree"], { cwd: scratch, input: `100644 blob ${blob}\tplan.json\n`, encoding: "utf-8" }).stdout.trim();
+  const note = git(scratch, ["commit-tree", tree, "-p", "refs/tip", "-m", `aidlc plan ${plan.work.label}: moved to ${to}`]);
+  git(scratch, ["push", "-q", home.hosts[from], `${note}:${ref}`]);
 }
 
 function spawnHash(dir: string, text: string): string {
@@ -172,13 +198,14 @@ describe("the plan is shared as a ref of its own in the work's first code reposi
     // checkout-ui names checkout-web, which the work does not list and the lead has no address for.
     expect((plan.repos as unknown[]).at(-1)).toEqual({ name: "checkout-web", address: null, branch: null });
     expect(plan.units.find((unit) => unit.name === "checkout-ui")).toMatchObject({ repos: ["checkout-web"], record: "checkout-api" });
-    // Once repos.json gives it an address, its record goes there.
+    // Once repos.json gives it an address, its record stays where the plan has
+    // it, since a take may be recorded there already.
     const repos = JSON.parse(readFileSync(join(home.dir, "repos.json"), "utf-8"));
     repos.repos.push({ name: "checkout-web", url: "https://example.test/acme/checkout-web.git" });
     writeFileSync(join(home.dir, "repos.json"), `${JSON.stringify(repos, null, 2)}\n`);
     share(home.dir);
     const again = planAt(host, planRefOf(home.id8));
-    expect(again.units.find((unit) => unit.name === "checkout-ui")).toMatchObject({ record: "checkout-web" });
+    expect(again.units.find((unit) => unit.name === "checkout-ui")).toMatchObject({ record: "checkout-api" });
   });
 
   test("a sign-in in a clone's address goes on no command AI-DLC runs: the address goes without it, and the person's own by a setting of that command", () => {
@@ -478,6 +505,27 @@ describe("plan.json is read only as a plan holds it", () => {
     expect(found.filter((path) => path.endsWith("AIDLC-STATE.md"))).toEqual([]);
   });
 
+  test("a moved plan's pointer reads as moved, with the work it is and where it went, and only in its own shape", () => {
+    const home = makePlanHome();
+    const good = planAt(home.hosts["checkout-api"], planRefOf(home.id8));
+    const pointer = { format: 1, work: good.work, moved_to: { name: "billing", address: home.hosts.billing } };
+    expect(planJsonOf(JSON.stringify(pointer))).toEqual({ format: 1, plan: null, moved: pointer });
+    expect(planJsonOf(JSON.stringify(good)).moved).toBeUndefined();
+    const bad: Array<[string, Record<string, unknown>]> = [
+      ["another key", { ...pointer, version: 2 }],
+      ["no work", { format: 1, moved_to: pointer.moved_to }],
+      ["a name with a path", { ...pointer, moved_to: { ...pointer.moved_to, name: "../billing" } }],
+      ["an address with a sign-in", { ...pointer, moved_to: { ...pointer.moved_to, address: "https://lead:tok3n@git.example.invalid/billing.git" } }],
+      ["an address git would read as an option", { ...pointer, moved_to: { ...pointer.moved_to, address: "-x" } }],
+      ["another key where it went", { ...pointer, moved_to: { ...pointer.moved_to, branch: "main" } }],
+      ["a format above this release's", { ...pointer, format: 2 }],
+    ];
+    for (const [what, value] of bad) {
+      const read = planJsonOf(JSON.stringify(value));
+      expect({ what, plan: read.plan, moved: read.moved }).toEqual({ what, plan: null, moved: undefined });
+    }
+  });
+
   test("the plan the share builds always reads back, even for a repository named by an address with no name of its own", () => {
     const home = makePlanHome({ share: false });
     for (const named of [undefined, "git@plans.example:"]) {
@@ -503,6 +551,662 @@ describe("plan.json is read only as a plan holds it", () => {
   });
 });
 
+describe("the lead moves the shared plan to another repository", () => {
+  const moveTo = (dir: string, repo: string) => run(UNIT, ["share", "--plan", "--repo", repo], dir);
+  const note = (host: string, id8: string) => planJsonOf(git(host, ["show", `${planRefOf(id8)}:plan.json`])).moved;
+  const homeOf = (dir: string): string | undefined => /^- \*\*Home Location\*\*: (.*)$/m.exec(readFileSync(seededStateFile(dir), "utf-8"))?.[1];
+  const OTHER = DEPENDENCIES.replace("```\n", "  - name: notes\n    kind: service\n    repos: []\n    depends_on: []\n```\n");
+  const ADDED = (dir: string): void => {
+    const path = join(seededRecordDir(dir), "inception", "units-generation", "unit-of-work-dependency.md");
+    writeFileSync(path, readFileSync(path, "utf-8").replace("```\n", "  - name: ledger-sync\n    kind: service\n    repos: [billing]\n    depends_on: []\n```\n"));
+  };
+
+  test("moved: the plan in the new repository on the old tip, the note on the old tip, Home Location there, and the next share writes there", () => {
+    const home = makePlanHome({ dependencies: OTHER });
+    const ref = planRefOf(home.id8);
+    const api = home.hosts["checkout-api"];
+    const old = writeOnTip(api, home.id8, (plan) => {
+      plan.version = 2;
+      plan.units[0].word = { done: true };
+    });
+    keepTheirChange(home.dir);
+    const moved = moveTo(home.dir, "billing");
+    expect(moved.status, moved.out).toBe(0);
+    expect(moved.json?.notice).toBe("The plan is in billing now, with what was decided on each Unit, and checkout-api says where it went. " +
+      "Its earlier versions stay readable in both. " +
+      `Each team needs read access to billing; AI-DLC sends no notice of the move. billing's address: ${home.hosts.billing}`);
+    // The plan there: one commit on the old tip, only where it lives and its version changed, each record where it was.
+    expect(git(home.hosts.billing, ["rev-parse", `${ref}^`])).toBe(old);
+    const there = planAt(home.hosts.billing, ref);
+    expect(there.plan_repo).toEqual({ name: "billing", address: home.hosts.billing });
+    expect(there.version).toBe(3);
+    expect(there.units[0].word).toEqual({ done: true });
+    expect(there.units.find((unit) => unit.name === "notes")?.record).toBe("checkout-api");
+    // The note at the old place, on the old tip.
+    expect(git(api, ["rev-parse", `${ref}^`])).toBe(old);
+    expect(note(api, home.id8)?.moved_to).toEqual({ name: "billing", address: home.hosts.billing });
+    expect(git(api, ["log", "-1", "--format=%s", ref])).toBe(`aidlc plan ${registryOf(home.dir)[0].slug}: moved to billing`);
+    expect(homeOf(home.dir)).toBe(home.hosts.billing);
+    const pointer = git(api, ["rev-parse", ref]);
+    ADDED(home.dir);
+    expect(share(home.dir).json?.notice).toBe("The plan in billing has ledger-sync now.");
+    expect(git(api, ["rev-parse", ref])).toBe(pointer);
+    // A Unit taken from it reads its record where it was: the next share keeps it.
+    expect(planAt(home.hosts.billing, ref).units.find((unit) => unit.name === "notes")?.record).toBe("checkout-api");
+    // And back again: the plan takes the note's place, as one commit on the
+    // plan in billing, and billing gets the note.
+    const last = git(home.hosts.billing, ["rev-parse", ref]);
+    const back = moveTo(home.dir, "checkout-api");
+    expect(String(back.json?.notice), back.out).toStartWith("The plan is in checkout-api now, with what was decided on each Unit, and billing says " +
+      "where it went. Its earlier versions stay readable in both.");
+    expect(git(api, ["rev-parse", `${ref}^`])).toBe(last);
+    expect(git(home.hosts.billing, ["rev-parse", `${ref}^`])).toBe(last);
+    expect(planAt(api, ref).plan_repo.name).toBe("checkout-api");
+    expect(note(home.hosts.billing, home.id8)?.moved_to.name).toBe("checkout-api");
+  });
+
+  test("a Unit whose record is in the plan's own repository, the plan first shared outside the work's list: after the move it is still taken", () => {
+    const home = makePlanHome({ dependencies: OTHER, share: false });
+    const ref = planRefOf(home.id8);
+    const docs = codeHost("docs");
+    expect(run(UNIT, ["share", "--plan", "--repo", docs], home.dir).status).toBe(0);
+    const first = planAt(docs, ref);
+    expect(first.units.find((unit) => unit.name === "notes")?.record).toBe(first.plan_repo.name);
+    const pay = teamWorkspace(home.hosts, "pay", ["billing"]);
+    const took = run(UNIT, ["take", "notes", "--plan", home.id8, "--from", docs], pay);
+    expect(took.status, took.out).toBe(0);
+    expect(moveTo(home.dir, "billing").status).toBe(0);
+    const there = planAt(home.hosts.billing, ref);
+    expect(there.units.find((unit) => unit.name === "notes")?.record).toBe(first.plan_repo.name);
+    expect((there.repos as Array<{ name: string; address: string | null }>).find((repo) => repo.name === first.plan_repo.name)?.address).toBe(docs);
+    const web = teamWorkspace(home.hosts, "web", ["checkout-web"]);
+    const second = run(UNIT, ["take", "notes", "--plan", home.id8, "--from", home.hosts.billing], web);
+    expect(second.json?.taken, second.out).not.toBe(true);
+  });
+
+  // The move marks two commits of its own within one second; which reads as
+  // the newer then falls to the folder's order, so the case is run a few times.
+  test("on the computer that moved the plan, Take it out for a change another computer wrote there takes it out", () => {
+    for (let round = 0; round < 4; round++) {
+      const home = makePlanHome();
+      const ref = planRefOf(home.id8);
+      expect(moveTo(home.dir, "billing").status).toBe(0);
+      writeOnTip(home.hosts.billing, home.id8, (plan) => {
+        plan.version += 1;
+        plan.units[0].word = { done: true };
+      });
+      const asked = run(UNIT, ["share", "--plan"], home.dir);
+      expect(asked.json?.ask_type, asked.out).toBe("lead-plan-change");
+      const out = (asked.json?.choices as Array<{ label: string; command: string }>).find((choice) => choice.label === "Take it out")!;
+      expect(run(UNIT, ["plan-change", "take-out", "--tip", /--tip (\S+)/.exec(out.command)![1]], home.dir).status).toBe(0);
+      ADDED(home.dir);
+      const shared = share(home.dir);
+      expect(String(shared.json?.notice), `round ${round}: ${shared.out}`).toContain("The plan in billing is back as you last had it.");
+      expect(planAt(home.hosts.billing, ref).units[0].word).toEqual({});
+    }
+  });
+
+  for (const first of ["after the plain share met it", "with no copy of it here"] as const) {
+    test(`a note of a newer AI-DLC at the plan's place, ${first}: a share naming another repository gives the update step and shares nothing there`, () => {
+      const home = makePlanHome();
+      const api = home.hosts["checkout-api"];
+      writeOnTip(api, home.id8, (plan) => {
+        for (const key of Object.keys(plan)) if (key !== "work") delete plan[key];
+        Object.assign(plan, { format: 2, moved_to: { name: "billing", address: home.hosts.billing } });
+      });
+      if (first === "after the plain share met it") expect(run(UNIT, ["share", "--plan"], home.dir).out).toContain("newer AI-DLC");
+      else git(home.dir, ["update-ref", "-d", copyOf(api, planRefOf(home.id8))]);
+      const named = moveTo(home.dir, "checkout-web");
+      expect(named.status, named.out).not.toBe(0);
+      expect(named.out).toContain("newer AI-DLC");
+      expect(git(home.hosts["checkout-web"], ["for-each-ref", "refs/aidlc"])).toBe("");
+      expect(homeOf(home.dir)).toBe(api);
+    });
+  }
+
+  test("a copy of the plan in another repository whose old place takes the note: an ordinary move, the copy replaced by the plan", () => {
+    const home = makePlanHome();
+    const ref = planRefOf(home.id8);
+    git(home.hosts["checkout-api"], ["push", "-q", home.hosts.billing, `${ref}:${ref}`]);
+    const tip = git(home.hosts["checkout-api"], ["rev-parse", ref]);
+    const moved = moveTo(home.dir, "billing");
+    expect(moved.status, moved.out).toBe(0);
+    expect(String(moved.json?.notice)).toStartWith("The plan is in billing now, with what was decided on each Unit, and checkout-api says where it went.");
+    expect(planAt(home.hosts.billing, ref).plan_repo.name).toBe("billing");
+    expect(git(home.hosts.billing, ["rev-parse", `${ref}^`])).toBe(tip);
+    expect(note(home.hosts["checkout-api"], home.id8)?.moved_to.name).toBe("billing");
+    expect(homeOf(home.dir)).toBe(home.hosts.billing);
+  });
+
+  test("the new repository refusing: nothing changes; the old one refusing the note: the plan stays in the new one, nothing written at the old", () => {
+    const home = makePlanHome();
+    const ref = planRefOf(home.id8);
+    const refuse = (host: string) => {
+      writeFileSync(join(host, "hooks", "pre-receive"), "#!/bin/sh\necho 'error: no pushes here' >&2\nexit 1\n");
+      chmodSync(join(host, "hooks", "pre-receive"), 0o755);
+    };
+    const tip = git(home.hosts["checkout-api"], ["rev-parse", ref]);
+    refuse(home.hosts.billing);
+    const refused = moveTo(home.dir, "billing");
+    expect(String(refused.json?.error)).toMatch(/^billing did not take the plan, so it stays in checkout-api: .+\. Say when to try again\.$/);
+    unlinkSync(join(home.hosts.billing, "hooks", "pre-receive"));
+    expect(git(home.hosts.billing, ["for-each-ref", "refs/aidlc"])).toBe("");
+    expect(homeOf(home.dir)).toBe(home.hosts["checkout-api"]);
+    // An old place that refuses the note refuses every other write of the lead's too.
+    refuse(home.hosts["checkout-api"]);
+    const noNote = moveTo(home.dir, "billing");
+    expect(noNote.status, noNote.out).toBe(0);
+    expect(String(noNote.json?.notice)).toStartWith("The plan is in billing now, with what was decided on each Unit. checkout-api did not take the note " +
+      "that the plan moved (");
+    expect(String(noNote.json?.notice)).toContain("), so nothing was written there and checkout-api does not say where the plan went. Give each team " +
+      "billing's address: until a team's AI-DLC has it, its builds read the plan in checkout-api as it was. Its earlier versions stay readable in both.");
+    expect(git(home.hosts["checkout-api"], ["rev-parse", ref])).toBe(tip);
+    expect(planAt(home.hosts.billing, ref).plan_repo.name).toBe("billing");
+    expect(homeOf(home.dir)).toBe(home.hosts.billing);
+  });
+
+  test("the old place refusing the note where it took the plan under the person's own message: the message is asked for first, then the move goes with it", () => {
+    const home = makePlanHome({ share: false });
+    const ref = planRefOf(home.id8);
+    const api = home.hosts["checkout-api"];
+    ticketKeyRule(api);
+    const write = (step: unknown, text: string): string => {
+      const file = /write it to (\S+) with your file tool/.exec(String(step))?.[1] ?? "";
+      mkdirSync(dirname(join(home.dir, ...file.split("/"))), { recursive: true });
+      writeFileSync(join(home.dir, ...file.split("/")), text);
+      return file;
+    };
+    const first = run(UNIT, ["share", "--plan"], home.dir);
+    expect(run(UNIT, ["share", "--plan", "--commit-message-file", write(first.json?.step, "ABC-1 share the plan\n")], home.dir).status).toBe(0);
+    const tip = git(api, ["rev-parse", ref]);
+    const asked = moveTo(home.dir, "billing");
+    expect(asked.status, asked.out).toBe(0);
+    expect(asked.json?.shared).toBe(false);
+    expect(String(asked.json?.notice)).toStartWith("checkout-api did not take the note that the plan moved: ");
+    expect(String(asked.json?.notice)).toEndWith("If it is the commit message, tell me the one to use, and I will move the plan with that.");
+    expect(String(asked.json?.step)).toContain(" unit share --plan --repo billing --commit-message-file ");
+    expect(git(home.hosts.billing, ["for-each-ref", "refs/aidlc"])).toBe("");
+    expect(git(api, ["rev-parse", ref])).toBe(tip);
+    expect(homeOf(home.dir)).toBe(api);
+    // With their message the note goes: an ordinary move.
+    const moved = run(UNIT, ["share", "--plan", "--repo", "billing", "--commit-message-file", write(asked.json?.step, "ABC-2 move the plan\n")], home.dir);
+    expect(String(moved.json?.notice), moved.out).toStartWith("The plan is in billing now, with what was decided on each Unit, and checkout-api says where it went.");
+    expect(note(api, home.id8)?.moved_to.name).toBe("billing");
+  });
+
+  test("a change on the plan this computer did not write stops the move for the lead's word, and so does one made while it moves, with no copy left", () => {
+    const home = makePlanHome();
+    const ref = planRefOf(home.id8);
+    const api = home.hosts["checkout-api"];
+    const keep = (asked: ReturnType<typeof run>) => {
+      const choice = (asked.json?.choices as Array<{ label: string; command: string }>)[0];
+      expect(choice.label).toBe("Keep it");
+      expect(run(UNIT, ["plan-change", "keep", "--tip", /--tip (\S+)/.exec(choice.command)![1]], home.dir).status).toBe(0);
+    };
+    const word = writeOnTip(api, home.id8, (plan) => {
+      plan.version = 2;
+      plan.units[0].word = { done: true };
+    });
+    const asked = moveTo(home.dir, "billing");
+    expect(asked.json?.ask_type, asked.out).toBe("lead-plan-change");
+    expect(String(asked.json?.error)).toStartWith("Before I write the plan's move to billing: ");
+    expect(git(home.hosts.billing, ["for-each-ref", "refs/aidlc"])).toBe("");
+    expect(git(api, ["rev-parse", ref])).toBe(word);
+    keep(asked);
+    // Another computer's word lands on the old place while the plan goes to billing.
+    const later = writeOnTip(api, home.id8, (plan) => {
+      plan.version = 3;
+      plan.units[0].word = {};
+    });
+    git(api, ["update-ref", ref, word]);
+    const hook = join(home.hosts.billing, "hooks", "pre-receive");
+    writeFileSync(hook, "#!/bin/sh\nunset GIT_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_QUARANTINE_PATH\n" +
+      `git --git-dir="${api.replaceAll("\\", "/")}" update-ref ${ref} ${later}\nrm -f "$0"\n`);
+    chmodSync(hook, 0o755);
+    const raced = moveTo(home.dir, "billing");
+    expect(raced.json?.ask_type, raced.out).toBe("lead-plan-change");
+    expect(git(home.hosts.billing, ["for-each-ref", "refs/aidlc"])).toBe("");
+    expect(git(api, ["rev-parse", ref])).toBe(later);
+    keep(raced);
+    const moved = moveTo(home.dir, "billing");
+    expect(moved.status, moved.out).toBe(0);
+    expect(git(home.hosts.billing, ["rev-parse", `${ref}^`])).toBe(later);
+    expect(git(api, ["rev-parse", `${ref}^`])).toBe(later);
+  });
+
+  test("the share question for a Unit added later, answered with another repository, moves the plan and shares the Unit; a move on its own does not", () => {
+    for (const answer of ["move there", "not now, then move"] as const) {
+      const home = makePlanHome();
+      ADDED(home.dir);
+      const ask = next(home.dir);
+      expect(String(ask.question), JSON.stringify(ask).slice(0, 400)).toStartWith("The plan in checkout-api does not have ledger-sync yet");
+      expect(String(ask.board_note)).toContain("When the person wants the plan moved and ledger-sync not shared yet, run the question's Not now first, then the move.");
+      if (answer === "not now, then move") next(home.dir);
+      const moved = moveTo(home.dir, "billing");
+      expect(moved.status, moved.out).toBe(0);
+      const units = planAt(home.hosts.billing, planRefOf(home.id8)).units.map((unit) => unit.name);
+      if (answer === "move there") {
+        expect(String(moved.json?.notice)).toEndWith(`billing's address: ${home.hosts.billing} The plan in billing has ledger-sync now.`);
+        expect(units).toContain("ledger-sync");
+      } else {
+        expect(String(moved.json?.notice)).toEndWith(`ledger-sync is not on it yet: say when to share it. billing's address: ${home.hosts.billing}`);
+        expect(units).not.toContain("ledger-sync");
+      }
+    }
+  });
+
+  test("a move asked at the lead's other computer, after the plan moved from there: it follows the note, says so once, and moves the plan from where it is", () => {
+    const home = makePlanHome();
+    const ref = planRefOf(home.id8);
+    const api = home.hosts["checkout-api"];
+    movedByHand(home, "checkout-api", "billing");
+    const first = git(api, ["rev-parse", ref]);
+    // The commit that moved the plan to billing holds nobody's decision, so nothing is asked: one move, with the follow said once.
+    const moved = moveTo(home.dir, "checkout-web");
+    expect(String(moved.json?.notice), moved.out).toStartWith(`The plan of ${registryOf(home.dir)[0].slug} moved to billing (${home.hosts.billing}); ` +
+      "this computer writes it there now. The plan is in checkout-web now, with what was decided on each Unit, and billing says where it went. " +
+      "Its earlier versions stay readable in both.");
+    expect(note(home.hosts.billing, home.id8)?.moved_to.name).toBe("checkout-web");
+    expect(planAt(home.hosts["checkout-web"], ref).plan_repo.name).toBe("checkout-web");
+    expect(git(api, ["rev-parse", ref])).toBe(first);
+    expect(homeOf(home.dir)).toBe(home.hosts["checkout-web"]);
+  });
+
+  test("a move back whose note the current place refuses keeps the plan at the first place, over its note", () => {
+    const home = makePlanHome();
+    const ref = planRefOf(home.id8);
+    const api = home.hosts["checkout-api"];
+    expect(moveTo(home.dir, "billing").status).toBe(0);
+    const first = git(api, ["rev-parse", ref]);
+    const hook = join(home.hosts.billing, "hooks", "pre-receive");
+    writeFileSync(hook, "#!/bin/sh\necho 'error: no pushes here' >&2\nexit 1\n");
+    chmodSync(hook, 0o755);
+    const back = moveTo(home.dir, "checkout-api");
+    expect(back.status, back.out).toBe(0);
+    expect(String(back.json?.notice)).toStartWith("The plan is in checkout-api now, with what was decided on each Unit. billing did not take the note");
+    expect(git(api, ["rev-parse", ref])).not.toBe(first);
+    expect(planAt(api, ref).plan_repo.name).toBe("checkout-api");
+    expect(planAt(home.hosts.billing, ref).plan_repo.name).toBe("billing");
+    expect(homeOf(home.dir)).toBe(api);
+  });
+
+  test("a move at the lead's other computer whose note leads to a repository it cannot read: said, and nothing is moved on", () => {
+    const home = makePlanHome();
+    movedByHand(home, "checkout-api", "billing");
+    renameSync(home.hosts.billing, `${home.hosts.billing}-gone`);
+    const asked = moveTo(home.dir, "checkout-web");
+    expect(asked.status, asked.out).not.toBe(0);
+    expect(String(asked.json?.error)).toMatch(new RegExp(`^The plan of ${registryOf(home.dir)[0].slug} moved to billing \\(.+\\), which could not be read ` +
+      "\\(.+\\), so it was not moved on to checkout-web\\. Say when to try again\\.$"));
+    expect(git(home.hosts["checkout-web"], ["for-each-ref", "refs/aidlc"])).toBe("");
+  });
+
+  test("a move at the lead's other computer whose note leads to a repository holding no plan now: the share's offer, with its command for the yes", () => {
+    const home = makePlanHome();
+    const ref = planRefOf(home.id8);
+    movedByHand(home, "checkout-api", "billing");
+    git(home.hosts.billing, ["update-ref", "-d", ref]);
+    const asked = moveTo(home.dir, "checkout-web");
+    expect(asked.status, asked.out).toBe(0);
+    expect(asked.json?.shared).toBe(false);
+    expect(asked.json?.notice).toBe(`The plan of ${registryOf(home.dir)[0].slug} says it moved, but billing does not hold it, so it was not moved on ` +
+      "to checkout-web. I can share the plan again in billing from your own record here: say if you want that.");
+    const yes = /`[^`]* unit share (--plan --repo \S+)`/.exec(String(asked.json?.step))?.[1].split(" ");
+    expect(yes, String(asked.json?.step)).toEqual(["--plan", "--repo", "billing"]);
+    expect(git(home.hosts["checkout-web"], ["for-each-ref", "refs/aidlc"])).toBe("");
+    // The yes shares it there, then the move goes on in the same step: the person never asks for it twice.
+    const step = String(asked.json?.step);
+    const then = /once it shares the plan, run `[^`]* unit share (--plan --repo \S+)` in the same turn/.exec(step)?.[1].split(" ");
+    expect(then, step).toEqual(["--plan", "--repo", "checkout-web"]);
+    expect(step).toContain("If the share does not go, its own line is the answer: leave the move's command unrun.");
+    const again = run(UNIT, ["share", ...yes!], home.dir);
+    expect(again.json?.notice, again.out).toBe("The plan was no longer in billing, so I shared it again, with what was decided on each Unit as the plan had it when it moved.");
+    const moved = run(UNIT, ["share", ...then!], home.dir);
+    expect(String(moved.json?.notice), moved.out).toStartWith("The plan is in checkout-web now, with what was decided on each Unit, and billing says where it went.");
+  });
+
+  test("the share riding a move that meets another computer's change at the new place: the move is said, then the lead's question, and the share once they answer", () => {
+    const home = makePlanHome();
+    ADDED(home.dir);
+    next(home.dir);
+    const hook = join(home.hosts.billing, "hooks", "post-receive");
+    writeFileSync(hook, "#!/bin/sh\nread old new ref\n" +
+      "c=$(GIT_AUTHOR_NAME=someone GIT_AUTHOR_EMAIL=someone@example.test GIT_COMMITTER_NAME=someone GIT_COMMITTER_EMAIL=someone@example.test " +
+      "git commit-tree \"$new^{tree}\" -p \"$new\" -m 'a word from another computer')\ngit update-ref \"$ref\" \"$c\"\nrm -f \"$0\"\n");
+    chmodSync(hook, 0o755);
+    const moved = moveTo(home.dir, "billing");
+    expect(moved.json?.ask_type, moved.out).toBe("lead-plan-change");
+    expect(String(moved.json?.error)).toStartWith("The plan is in billing now, with what was decided on each Unit, and checkout-api says where it went. " +
+      "Its earlier versions stay readable in both. " +
+      `Each team needs read access to billing; AI-DLC sends no notice of the move. billing's address: ${home.hosts.billing} `);
+    expect(planAt(home.hosts.billing, planRefOf(home.id8)).units.map((unit) => unit.name)).not.toContain("ledger-sync");
+    const keep = (moved.json?.choices as Array<{ command: string }>)[0].command;
+    expect(run(UNIT, ["plan-change", "keep", "--tip", /--tip (\S+)/.exec(keep)![1]], home.dir).status).toBe(0);
+    expect(moveTo(home.dir, "billing").json?.notice).toBe("The plan in billing has ledger-sync now.");
+  });
+
+  // A symlink stands for one repository under a second spelling, which Windows
+  // makes only with a privilege.
+  test.skipIf(process.platform === "win32")("a plan gone from its repository with no copy of it here: moved from the lead's own record, with the note made there", () => {
+    const home = makePlanHome();
+    const ref = planRefOf(home.id8);
+    const api = home.hosts["checkout-api"];
+    // The plan names its place by another spelling of the same repository, whose copy this computer never had.
+    const alias = `${api}-alias`;
+    symlinkSync(api, alias);
+    const named = writeOnTip(api, home.id8, (plan) => {
+      plan.plan_repo = { name: "checkout-api", address: alias };
+    });
+    git(home.dir, ["fetch", "-q", api, `+${named}:${copyOf(api, ref)}`]);
+    git(api, ["update-ref", "-d", ref]);
+    const moved = moveTo(home.dir, "billing");
+    expect(moved.status, moved.out).toBe(0);
+    expect(String(moved.json?.notice)).toStartWith("The plan was no longer in checkout-api, and this computer had no copy of it; it is in billing now " +
+      "from your own record here, and checkout-api says where it went. What was decided on its Units before was not there to carry, so it is not on " +
+      "the plan now. Each team needs read access to billing;");
+    const there = planAt(home.hosts.billing, ref);
+    expect(there.plan_repo).toEqual({ name: "billing", address: home.hosts.billing });
+    expect(git(home.hosts.billing, ["rev-list", "--count", ref])).toBe("1");
+    expect(note(api, home.id8)?.moved_to.name).toBe("billing");
+  });
+
+  test("a move over something that is not a plan, with nothing of this work under it, carries nothing of it into the new repository", () => {
+    const home = makePlanHome();
+    const ref = planRefOf(home.id8);
+    const scratch = tempDir("plan-other");
+    git(scratch, ["init", "-q"]);
+    git(scratch, ["config", "user.name", "someone"]);
+    git(scratch, ["config", "user.email", "someone@example.test"]);
+    writeFileSync(join(scratch, "README.md"), "not a plan\n");
+    git(scratch, ["add", "README.md"]);
+    git(scratch, ["commit", "-q", "-m", "not a plan"]);
+    const other = git(scratch, ["rev-parse", "HEAD"]);
+    git(scratch, ["push", "-q", "--force", home.hosts["checkout-api"], `HEAD:${ref}`]);
+    const moved = moveTo(home.dir, "billing");
+    expect(moved.status, moved.out).toBe(0);
+    expect(spawnSync("git", ["cat-file", "-e", `${other}^{commit}`], { cwd: home.hosts.billing }).status).not.toBe(0);
+    // The plan there sits on this computer's copy of it.
+    expect(git(home.hosts.billing, ["rev-parse", `${ref}^`])).toBe(String(home.plan));
+  });
+
+  test("a plan gone from its repository, or with something else in its place, moved in the same step: from this computer's copy, with the note made there", () => {
+    for (const there of ["nothing", "something else", "an unreadable plan on top"] as const) {
+      const home = makePlanHome();
+      const ref = planRefOf(home.id8);
+      const api = home.hosts["checkout-api"];
+      let other: string | null = null;
+      if (there === "nothing") git(api, ["update-ref", "-d", ref]);
+      else if (there === "an unreadable plan on top") {
+        writeOnTip(api, home.id8, (plan) => {
+          (plan as unknown as { units: string }).units = "none";
+        });
+        const moved = moveTo(home.dir, "billing");
+        expect(String(moved.json?.notice), moved.out).toStartWith("The plan is in billing now, with what was decided on each Unit, and checkout-api says where it went. " +
+          "Its earlier versions stay readable in both.");
+        const written = planAt(home.hosts.billing, ref);
+        expect(written.plan_repo.name).toBe("billing");
+        expect(written.units.map((unit) => unit.name)).toContain("checkout-ui");
+        expect(note(api, home.id8)?.moved_to.name).toBe("billing");
+        continue;
+      } else {
+        const scratch = tempDir("plan-other");
+        git(scratch, ["init", "-q"]);
+        git(scratch, ["config", "user.name", "someone"]);
+        git(scratch, ["config", "user.email", "someone@example.test"]);
+        writeFileSync(join(scratch, "README.md"), "not a plan\n");
+        git(scratch, ["add", "README.md"]);
+        git(scratch, ["commit", "-q", "-m", "not a plan"]);
+        other = git(scratch, ["rev-parse", "HEAD"]);
+        git(scratch, ["push", "-q", "--force", api, `HEAD:${ref}`]);
+      }
+      const moved = moveTo(home.dir, "billing");
+      // From this computer's copy, with its history: readable in billing, not under the note in checkout-api.
+      expect(String(moved.json?.notice), moved.out).toStartWith("The plan was no longer in checkout-api; it is in billing now, with what you " +
+        "decided on each Unit as this computer last had it, and checkout-api says where it went. Its earlier versions are readable in billing.");
+      expect(planAt(home.hosts.billing, ref).plan_repo.name).toBe("billing");
+      expect(note(api, home.id8)?.moved_to.name).toBe("billing");
+      if (other !== null) expect(git(api, ["rev-parse", `${ref}^`])).toBe(other);
+    }
+  });
+});
+
+describe("a repository that moved hosts: the plan taken over where it is now", () => {
+  const moveTo = (dir: string, repo: string) => run(UNIT, ["share", "--plan", "--repo", repo], dir);
+  const note = (host: string, id8: string) => planJsonOf(git(host, ["show", `${planRefOf(id8)}:plan.json`])).moved;
+  const homeOf = (dir: string): string | undefined => /^- \*\*Home Location\*\*: (.*)$/m.exec(readFileSync(seededStateFile(dir), "utf-8"))?.[1];
+  const refuse = (host: string) => {
+    writeFileSync(join(host, "hooks", "pre-receive"), "#!/bin/sh\necho 'error: no pushes here' >&2\nexit 1\n");
+    chmodSync(join(host, "hooks", "pre-receive"), 0o755);
+  };
+  const ADDED = (dir: string): void => {
+    const path = join(seededRecordDir(dir), "inception", "units-generation", "unit-of-work-dependency.md");
+    writeFileSync(path, readFileSync(path, "utf-8").replace("```\n", "  - name: ledger-sync\n    kind: service\n    repos: [billing]\n    depends_on: []\n```\n"));
+  };
+  const takenOver = (old: string, now: string, address: string) =>
+    `${old} does not say where the plan went. Give each team ${now}'s address: until a team's AI-DLC has it, its builds read the plan in ${old} as it ` +
+    `was. Its earlier versions stay readable in both. Each team needs read access to ${now}; AI-DLC sends no notice of the move. ${now}'s address: ${address}`;
+
+  for (const lists of ["the same", "different"] as const) {
+    test(`its old place taking no pushes, the two ref lists ${lists}: the plan is taken over at the new place, nothing is written at the old one, and the lead hears what to do`, () => {
+      const home = makePlanHome();
+      const ref = planRefOf(home.id8);
+      const api = home.hosts["checkout-api"];
+      const billing = home.hosts.billing;
+      git(api, ["push", "-q", "--mirror", billing]);
+      if (lists === "different") {
+        const scratch = tempDir("moved-host");
+        git(scratch, ["clone", "-q", billing, "."]);
+        git(scratch, ["config", "user.name", "someone"]);
+        git(scratch, ["config", "user.email", "someone@example.test"]);
+        writeFileSync(join(scratch, "NEW.md"), "on the new host\n");
+        git(scratch, ["add", "NEW.md"]);
+        git(scratch, ["commit", "-q", "-m", "on the new host"]);
+        git(scratch, ["push", "-q", "origin", "HEAD"]);
+      }
+      const tip = git(api, ["rev-parse", ref]);
+      refuse(api);
+      const moved = moveTo(home.dir, "billing");
+      expect(moved.status, moved.out).toBe(0);
+      const said = String(moved.json?.notice);
+      expect(said).toStartWith("The plan is in billing now, with what was decided on each Unit. checkout-api did not take the note that the plan moved (");
+      expect(said).toContain("), so nothing was written there and ");
+      expect(said).toEndWith(takenOver("checkout-api", "billing", billing));
+      expect(git(api, ["rev-parse", ref])).toBe(tip);
+      expect(note(api, home.id8)).toBeUndefined();
+      expect(planAt(billing, ref).plan_repo).toEqual({ name: "billing", address: billing });
+      expect(git(billing, ["rev-parse", `${ref}^`])).toBe(tip);
+      expect(homeOf(home.dir)).toBe(billing);
+      // The plan is the lead's there from now on.
+      expect(share(home.dir).json?.notice).toBe("The plan in billing already has everything here.");
+    });
+  }
+
+  test("a build in the lead's own workspace reads the plan where it was taken over", () => {
+    const home = makePlanHome();
+    const api = home.hosts["checkout-api"];
+    expect(run(UNIT, ["take", "checkout-ui", "--plan", home.id8, "--from", api], home.dir).status).toBe(0);
+    expect(run(UTILITY, ["intent", "switch", registryOf(home.dir)[0].slug], home.dir).status).toBe(0);
+    const intents = join(home.dir, "aidlc", "spaces", "default", "intents");
+    const build = join(intents, readdirSync(intents).find((name) => name.endsWith("-checkout-ui"))!, "aidlc-state.md");
+    git(api, ["push", "-q", "--mirror", home.hosts.billing]);
+    refuse(api);
+    const moved = moveTo(home.dir, "billing");
+    expect(moved.status, moved.out).toBe(0);
+    expect(/^- \*\*Home Location\*\*: (.*)$/m.exec(readFileSync(build, "utf-8"))?.[1]).toBe(home.hosts.billing);
+  });
+
+  test("the lead's other computer holding a word the plan taken over lacks: its move writes nothing over the plan there and follows it", () => {
+    const home = makePlanHome();
+    const ref = planRefOf(home.id8);
+    const api = home.hosts["checkout-api"];
+    const billing = home.hosts.billing;
+    git(api, ["push", "-q", "--mirror", billing]);
+    // The take-over on another computer, on the plan before this computer's word.
+    const scratch = tempDir("taken-over");
+    git(scratch, ["init", "-q"]);
+    git(scratch, ["config", "user.name", "lead"]);
+    git(scratch, ["config", "user.email", "lead@example.test"]);
+    git(scratch, ["fetch", "-q", billing, `${ref}:refs/tip`]);
+    const plan = JSON.parse(git(scratch, ["show", "refs/tip:plan.json"])) as Plan;
+    plan.version += 1;
+    plan.plan_repo = { name: "billing", address: billing };
+    git(scratch, ["read-tree", "refs/tip"]);
+    git(scratch, ["update-index", "--cacheinfo", `100644,${spawnHash(scratch, `${JSON.stringify(plan, null, 2)}\n`)},plan.json`]);
+    const over = git(scratch, ["commit-tree", git(scratch, ["write-tree"]), "-p", "refs/tip", "-m", "taken over"]);
+    git(scratch, ["push", "-q", billing, `${over}:${ref}`]);
+    // This computer's word, written at the old place before it stopped taking pushes.
+    ADDED(home.dir);
+    expect(share(home.dir).json?.notice).toBe("The plan in checkout-api has ledger-sync now.");
+    refuse(api);
+    const moved = moveTo(home.dir, "billing");
+    expect(moved.status, moved.out).toBe(0);
+    expect(String(moved.json?.notice)).toStartWith(`The plan of ${registryOf(home.dir)[0].slug} moved to billing (${billing}); this computer writes it there now.`);
+    expect(git(billing, ["rev-parse", ref])).toBe(over);
+    expect(homeOf(home.dir)).toBe(billing);
+  });
+
+  for (const there of ["a copy of the plan", "nothing"] as const) {
+    test(`its old place not reached, the new place holding ${there}: the plan is written there from what this computer and the copy have, and the lead hears what to do`, () => {
+      const home = makePlanHome();
+      const ref = planRefOf(home.id8);
+      const api = home.hosts["checkout-api"];
+      const billing = home.hosts.billing;
+      if (there === "a copy of the plan") git(api, ["push", "-q", "--mirror", billing]);
+      const tip = git(api, ["rev-parse", ref]);
+      renameSync(api, `${api}-gone`);
+      const moved = moveTo(home.dir, "billing");
+      expect(moved.status, moved.out).toBe(0);
+      const said = String(moved.json?.notice);
+      expect(said).toStartWith("The plan is in billing now, with what you decided on each Unit as this computer last had it. checkout-api could not " +
+        "be reached (git says \"");
+      expect(said).toContain("\"), so nothing was written there and checkout-api does not say where the plan went. Give each team billing's address: " +
+        "until a team's AI-DLC has it, its builds look for the plan in checkout-api. Its earlier versions are readable in billing. Each team needs " +
+        `read access to billing; AI-DLC sends no notice of the move. billing's address: ${billing}`);
+      expect(planAt(billing, ref).plan_repo).toEqual({ name: "billing", address: billing });
+      expect(git(billing, ["rev-parse", `${ref}^`])).toBe(tip);
+      expect(homeOf(home.dir)).toBe(billing);
+      renameSync(`${api}-gone`, api);
+      expect(git(api, ["rev-parse", ref])).toBe(tip);
+    });
+  }
+
+  test("a mirror synced again after the move, its note over the plan there: the lead's look and share end at the offer to share it again, and a move back puts it right", () => {
+    const home = makePlanHome();
+    const ref = planRefOf(home.id8);
+    const api = home.hosts["checkout-api"];
+    const billing = home.hosts.billing;
+    git(api, ["push", "-q", "--mirror", billing]);
+    expect(moveTo(home.dir, "billing").status).toBe(0);
+    // The person's mirror job runs again: the old place's tip, the note, lands over the plan.
+    git(api, ["push", "-q", "--mirror", billing]);
+    const looked = JSON.stringify(next(home.dir));
+    ADDED(home.dir);
+    const shared = share(home.dir);
+    const offer = String(shared.json?.notice ?? shared.json?.error);
+    expect(offer, shared.out).toContain("says it moved, but billing does not hold it");
+    expect(offer).toMatch(/I can share the plan again in (billing|checkout-api)/);
+    expect(looked).not.toContain("Cannot ");
+    const back = moveTo(home.dir, "checkout-api");
+    expect(back.status, back.out).toBe(0);
+    expect(planAt(api, ref).plan_repo.name).toBe("checkout-api");
+  });
+
+  test("the plan's repositories as the lead's workspace spells them now, not as the copy has them", () => {
+    const home = makePlanHome();
+    const ref = planRefOf(home.id8);
+    const api = home.hosts["checkout-api"];
+    writeOnTip(api, home.id8, (plan) => {
+      plan.repos = (plan.repos as Array<{ name: string; address: string | null }>)
+        .map((repo) => repo.name === "checkout-web" ? { ...repo, address: "/nowhere/checkout-web.git" } : repo);
+    });
+    keepTheirChange(home.dir);
+    git(api, ["push", "-q", "--mirror", home.hosts.billing]);
+    refuse(api);
+    expect(moveTo(home.dir, "billing").status).toBe(0);
+    const web = (planAt(home.hosts.billing, ref).repos as Array<{ name: string; address: string | null }>).find((repo) => repo.name === "checkout-web");
+    expect(web?.address).toBe(home.hosts["checkout-web"]);
+  });
+
+  // A symlink stands for one repository under a second spelling, which Windows
+  // makes only with a privilege.
+  test.skipIf(process.platform === "win32")("one repository under two names: the write there is taken back, and the plan stays as the teams read it", () => {
+    const home = makePlanHome();
+    const ref = planRefOf(home.id8);
+    const api = home.hosts["checkout-api"];
+    const alias = `${api}-alias`;
+    symlinkSync(api, alias);
+    const repos = JSON.parse(readFileSync(join(home.dir, "repos.json"), "utf-8"));
+    repos.repos.push({ name: "checkout-api-alias", url: alias });
+    writeFileSync(join(home.dir, "repos.json"), `${JSON.stringify(repos, null, 2)}\n`);
+    const tip = git(api, ["rev-parse", ref]);
+    const moved = moveTo(home.dir, "checkout-api-alias");
+    expect(moved.status, moved.out).not.toBe(0);
+    expect(moved.json?.error).toBe("checkout-api-alias is the same repository as checkout-api under another name, so the plan stays in checkout-api.");
+    expect(git(api, ["rev-parse", ref])).toBe(tip);
+    expect(planAt(api, ref).plan_repo.name).toBe("checkout-api");
+    expect(homeOf(home.dir)).toBe(api);
+  });
+
+  test("the lead's other computer after a take-over: its move follows the plan where it is now, writes nothing over it, and says so once", () => {
+    const home = makePlanHome();
+    const ref = planRefOf(home.id8);
+    const api = home.hosts["checkout-api"];
+    const billing = home.hosts.billing;
+    git(api, ["push", "-q", "--mirror", billing]);
+    // The take-over, made on the lead's first computer, then a word written there.
+    const scratch = tempDir("taken-over");
+    git(scratch, ["init", "-q"]);
+    git(scratch, ["config", "user.name", "lead"]);
+    git(scratch, ["config", "user.email", "lead@example.test"]);
+    git(scratch, ["fetch", "-q", billing, `${ref}:refs/tip`]);
+    const plan = JSON.parse(git(scratch, ["show", "refs/tip:plan.json"])) as Plan;
+    plan.version += 1;
+    plan.plan_repo = { name: "billing", address: billing };
+    git(scratch, ["read-tree", "refs/tip"]);
+    git(scratch, ["update-index", "--cacheinfo", `100644,${spawnHash(scratch, `${JSON.stringify(plan, null, 2)}\n`)},plan.json`]);
+    const over = git(scratch, ["commit-tree", git(scratch, ["write-tree"]), "-p", "refs/tip", "-m", "taken over"]);
+    git(scratch, ["push", "-q", billing, `${over}:${ref}`]);
+    const word = writeOnTip(billing, home.id8, (later) => {
+      later.version += 1;
+      later.units[0].word = { done: true };
+    });
+    const tip = git(api, ["rev-parse", ref]);
+    refuse(api);
+    const moved = moveTo(home.dir, "billing");
+    expect(moved.status, moved.out).toBe(0);
+    expect(String(moved.json?.notice)).toStartWith(`The plan of ${registryOf(home.dir)[0].slug} moved to billing (${billing}); this computer writes it there now.`);
+    expect(git(billing, ["rev-parse", ref])).toBe(word);
+    expect(git(api, ["rev-parse", ref])).toBe(tip);
+    expect(homeOf(home.dir)).toBe(billing);
+  });
+
+  test("the lead's other computer after a take-over, the old host gone: its move follows the plan where it is now and writes nothing over it", () => {
+    const home = makePlanHome();
+    const ref = planRefOf(home.id8);
+    const api = home.hosts["checkout-api"];
+    const billing = home.hosts.billing;
+    git(api, ["push", "-q", "--mirror", billing]);
+    const scratch = tempDir("taken-over");
+    git(scratch, ["init", "-q"]);
+    git(scratch, ["config", "user.name", "lead"]);
+    git(scratch, ["config", "user.email", "lead@example.test"]);
+    git(scratch, ["fetch", "-q", billing, `${ref}:refs/tip`]);
+    const plan = JSON.parse(git(scratch, ["show", "refs/tip:plan.json"])) as Plan;
+    plan.version += 1;
+    plan.plan_repo = { name: "billing", address: billing };
+    git(scratch, ["read-tree", "refs/tip"]);
+    git(scratch, ["update-index", "--cacheinfo", `100644,${spawnHash(scratch, `${JSON.stringify(plan, null, 2)}\n`)},plan.json`]);
+    const over = git(scratch, ["commit-tree", git(scratch, ["write-tree"]), "-p", "refs/tip", "-m", "taken over"]);
+    git(scratch, ["push", "-q", billing, `${over}:${ref}`]);
+    renameSync(api, `${api}-gone`);
+    const moved = moveTo(home.dir, "billing");
+    expect(moved.status, moved.out).toBe(0);
+    expect(String(moved.json?.notice)).toStartWith(`The plan of ${registryOf(home.dir)[0].slug} moved to billing (${billing}); this computer writes it there now.`);
+    expect(git(billing, ["rev-parse", ref])).toBe(over);
+    expect(homeOf(home.dir)).toBe(billing);
+  });
+});
+
 describe("what the lead reads", () => {
   const ADDED = (dir: string): void => {
     const path = join(seededRecordDir(dir), "inception", "units-generation", "unit-of-work-dependency.md");
@@ -510,6 +1214,17 @@ describe("what the lead reads", () => {
   };
   const isShare = (step: Record<string, unknown>): boolean =>
     step.kind === "ask" && ((step.handovers ?? []) as string[]).includes("share");
+
+  test("every step at the lead's work tells the agent that the person saying the plan is in another repository now is the move there; main's team work does not", () => {
+    const sentence = "When the person says the plan is in another repository now, that is the move to it on this computer: run ";
+    const home = makePlanHome();
+    const step = next(home.dir);
+    expect(String(step.board_note), JSON.stringify(step).slice(0, 600)).toContain(sentence);
+    expect(String(step.board_note)).toContain(" unit share --plan --repo <that repository>`.");
+    const main = makeHome();
+    expect(run(STATE, ["set-unit-ownership", "team"], main.dir).status).toBe(0);
+    expect(JSON.stringify(next(main.dir))).not.toContain(sentence);
+  });
 
   test("the share question names where the plan goes, each Unit's repositories and who can read it; Share the plan or Not now", () => {
     const home = makePlanHome({ share: false });
@@ -694,6 +1409,75 @@ describe("what the lead reads", () => {
     expect(String(run(UNIT, ["share", "--plan"], home.dir).json?.error)).toStartWith("This plan was set up with a newer AI-DLC");
     expect(git(host, ["rev-parse", ref])).toBe(newer);
   });
+
+  test("the lead's other computer after a move: its share follows the pointer, writes where the plan is now, says so once, and never writes over the pointer", () => {
+    const home = makePlanHome();
+    const ref = planRefOf(home.id8);
+    movedByHand(home, "checkout-api", "billing");
+    const note = git(home.hosts["checkout-api"], ["rev-parse", ref]);
+    ADDED(home.dir);
+    // The move's own commit holds nobody's decision, so nothing is asked: the share goes there, with the move said once.
+    expect(share(home.dir).json?.notice).toBe(
+      `The plan of ${registryOf(home.dir)[0].slug} moved to billing (${home.hosts.billing}); this computer writes it there now. ` +
+        "The plan in billing has ledger-sync now.",
+    );
+    expect(planAt(home.hosts.billing, ref).units.map((unit) => unit.name)).toContain("ledger-sync");
+    expect(git(home.hosts["checkout-api"], ["rev-parse", ref])).toBe(note);
+    expect(readFileSync(seededStateFile(home.dir), "utf-8")).toContain(`- **Home Location**: ${home.hosts.billing}`);
+  });
+
+  test("the lead's other computer after a move: its look follows the note, says so once, and puts no share question on the note", () => {
+    const home = makePlanHome();
+    movedByHand(home, "checkout-api", "billing");
+    // The look fetches the plan, as the lead's look does.
+    git(home.dir, ["fetch", "-q", home.hosts["checkout-api"], `+${planRefOf(home.id8)}:${git(home.dir, ["for-each-ref", "--format=%(refname)", "refs/aidlc/home"]).split("\n")[0]}`]);
+    const look = next(home.dir);
+    expect(String(look.question ?? ""), JSON.stringify(look).slice(0, 600)).not.toStartWith("Do you want me to share the plan with the teams?");
+    expect((look.change_notices ?? []) as string[], JSON.stringify(look).slice(0, 600))
+      .toContain(`The plan of ${registryOf(home.dir)[0].slug} moved to billing (${home.hosts.billing}); this computer writes it there now.`);
+    expect(readFileSync(seededStateFile(home.dir), "utf-8")).toContain(`- **Home Location**: ${home.hosts.billing}`);
+    expect(JSON.stringify(next(home.dir))).not.toContain("this computer writes it there now");
+  });
+
+  // A note the share cannot follow: the way on is the share again where the note
+  // says when that place holds nothing (the plan deleted there), else on top of
+  // the note where it is.
+  for (const holds of ["nothing", "other"] as const) {
+    test(`a note whose new place holds ${holds === "nothing" ? "no plan" : "something else"}: the share says so with its way on, and its yes shares ${holds === "nothing" ? "there" : "on top of the note"}`, () => {
+      const home = makePlanHome();
+      const ref = planRefOf(home.id8);
+      const decided = writeOnTip(home.hosts["checkout-api"], home.id8, (plan) => {
+        plan.version = 2;
+        plan.units[0].word = { done: true };
+      });
+      keepTheirChange(home.dir);
+      movedByHand(home, "checkout-api", "billing");
+      if (holds === "nothing") git(home.hosts.billing, ["update-ref", "-d", ref]);
+      else writeOnTip(home.hosts.billing, home.id8, (plan) => { plan.plan_repo = { name: "checkout-web", address: home.hosts["checkout-web"] }; });
+      const note = git(home.hosts["checkout-api"], ["rev-parse", ref]);
+      const asked = share(home.dir);
+      expect(asked.json?.shared).toBe(false);
+      expect(asked.json?.notice).toBe(`The plan of ${registryOf(home.dir)[0].slug} says it moved, but billing does not hold it, so the plan is not shared. ` +
+        (holds === "nothing" ? "I can share the plan again in billing from your own record here: say if you want that."
+          : "I can share the plan again in checkout-api, over the note that it moved, from your own record here: say if you want that."));
+      expect(git(home.hosts["checkout-api"], ["rev-parse", ref])).toBe(note);
+      const yes = /`[^`]* unit share (--plan --repo \S+)`/.exec(String(asked.json?.step))?.[1].split(" ");
+      expect(yes, String(asked.json?.step)).toEqual(["--plan", "--repo", holds === "nothing" ? "billing" : "checkout-api"]);
+      const again = run(UNIT, ["share", ...yes!], home.dir);
+      if (holds === "nothing") {
+        expect(again.json?.notice, again.out).toBe("The plan was no longer in billing, so I shared it again, with what was decided on each Unit " +
+          "as the plan had it when it moved.");
+        expect(git(home.hosts.billing, ["rev-parse", `${ref}^`])).toBe(decided);
+        expect(planAt(home.hosts.billing, ref).units[0].word).toEqual({ done: true });
+        expect(git(home.hosts["checkout-api"], ["rev-parse", ref])).toBe(note);
+      } else {
+        expect(again.json?.notice, again.out).toBe("The plan is shared again in checkout-api, over the note that it moved, with what was decided " +
+          "on each Unit as the plan had it when it moved.");
+        expect(git(home.hosts["checkout-api"], ["rev-parse", `${ref}^`])).toBe(note);
+        expect(planAt(home.hosts["checkout-api"], ref).units[0].word).toEqual({ done: true });
+      }
+    });
+  }
 
   test("teams chosen in a workspace with no remote say once that the lead's record is only here; with a remote nothing is said", () => {
     const LINE = "This workspace has no remote, so AI-DLC's record of this work and your approvals are only on this computer.";

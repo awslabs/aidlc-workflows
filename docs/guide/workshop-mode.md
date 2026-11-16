@@ -156,7 +156,9 @@ and each Unit's repositories: **Share the plan** runs `aidlc unit share
 with your own git; nothing is added to a branch or to your files, and nothing
 is committed here. **Not now** leaves it until you say you want it shared. To
 put it in another repository the teams can read, say so: the share takes
-`--repo <name or address>`. AI-DLC sends no notice of the share, so the teams
+`--repo <name or address>`, and once the plan is shared it moves the plan
+there, leaving a note in the old repository that says where it went (its
+earlier versions stay readable in both). AI-DLC sends no notice of the share, so the teams
 hear it from you; a team whose workspace has no clone of that repository needs
 the address the share gives. When the repository does not answer or refuses
 the push, the share says so in git's words and writes nothing, and the
