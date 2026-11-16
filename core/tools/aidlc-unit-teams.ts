@@ -63,12 +63,13 @@ import { applicableTeamUnitScopeStamp, idSuffix, listIntents, onlyOwnLookRows, r
 import { UNIT_PROGRESS_NOTE, unitProgressSectionRange } from "./aidlc-unit-landing.ts";
 import { isReadOnlyEngineProbe } from "./aidlc-locks.ts";
 import { gitAddressKey } from "./aidlc-workspace-repos.ts";
+import { homeCopyName, planRecordRef } from "./aidlc-unit-holders.ts";
 import { withoutCredentials } from "./aidlc-workspace-manifest.ts";
 
-// Where the home of team-built work is: the address the workspace's own
-// remote points to (origin, else its one remote; read, never set, with any user
-// and token left out), or "local" for a workspace with no remote. Recorded once, when teams are chosen; every copy of the workspace
-// reads it. Its presence puts the work on teams building each Unit as a piece of
+// Where the home of team-built work is: the address of the code repository its
+// plan is shared in (with any user and token left out), or "local" while there
+// is none. Recorded as teams are chosen, and again when the plan is shared in
+// another repository; every copy of the workspace reads it. Its presence puts the work on teams building each Unit as a piece of
 // work of their own; team work without it keeps the claim, publish, pin, gate
 // and land flow it started on.
 export const HOME_LOCATION_FIELD = "Home Location";
@@ -121,12 +122,22 @@ export function unitGateRhythmChosen(stateContent: string): boolean {
 // and land where the work's code is the workspace's own repo and nothing but
 // this machine reaches it (no remote), or where its remote already holds
 // main's claims of this work (teams chosen before, then one Unit at a time,
-// then teams again). Work across repos records "local" with no remote, as
-// before. The Home Location to record, or null for main's flow.
+// then teams again). Work across repos records where its plan goes, the
+// first of its repositories with an address (`planAddress`, planHomeAddress in
+// aidlc-unit.ts, which imports this file), and "local" while none has one. The
+// Home Location to record, or null for main's flow.
 // `teammateTook`: a teammate took a Unit of solo work (switchSoloToTeams).
-export function buildOutHomeLocation(projectDir: string, teammateTook = false): string | null {
+export function buildOutHomeLocation(
+  projectDir: string,
+  teammateTook: boolean,
+  planAddress: (dirName: string, space: string) => string | null,
+): string | null {
   const home = workspaceHomeLocation(projectDir);
-  if (teammateTook || intentRepos(projectDir).length > 0) return home;
+  if (teammateTook) return home;
+  if (intentRepos(projectDir).length > 0) {
+    const { intent, space } = resolveWorkflowSelection(projectDir);
+    return (intent === null ? null : planAddress(intent, space)) ?? "local";
+  }
   return home === "local" || hasAnyUnitClaimRefs(projectDir, true) ? null : home;
 }
 
@@ -284,14 +295,15 @@ export const LEAD_RULES_FIELD = "Lead Project Rules";
 // The lead's rules a team's take can follow: the files, as LEAD_RULES_FIELD
 // records them, and the headings of each that hold one of the lead's own, not
 // only the template's notes, for the take question to name. `read` reads a
-// path of the lead's workspace: this checkout's file, or the lead's commit
-// when the lead's project is reached by its address.
+// path where the lead's rules are: this checkout's file, or the plan's rules/
+// (`path` names where each file sits there).
 export function leadRules(
   projectDir: string,
   homeSpace: string,
   read: (rel: string) => string | null = (rel) => readTextOrNull(join(projectDir, ...rel.split("/"))),
+  // Where each file is: the lead's space's memory, or the plan's rules/.
+  path: (file: string) => string = (file) => `aidlc/spaces/${homeSpace}/memory/${file}`,
 ): { paths: string[]; practices: string[]; project: string[] } {
-  const path = (file: string) => `aidlc/spaces/${homeSpace}/memory/${file}`;
   const practices = memoryRuleNames(read(path("team.md")));
   const project = memoryRuleNames(read(path("project.md")));
   return {
@@ -312,18 +324,6 @@ function readTextOrNull(path: string): string | null {
 // A lead's project address git is given, as opposed to a remote's name.
 export function isGitAddress(target: string): boolean {
   return /[:/\\]/.test(target);
-}
-
-// Where the lead's copy of their workspace is kept in a team's workspace that
-// reaches the lead's project by its address (aidlc-unit take).
-export function leadCopyRef(homeId8: string): string {
-  return `refs/aidlc/home/${homeId8}/integration`;
-}
-
-// The commit of the lead's copy here, or null when it is not here.
-export function leadCopyAt(projectDir: string, homeId8: string): string | null {
-  const read = spawnSync("git", ["rev-parse", "--verify", "--quiet", leadCopyRef(homeId8)], { cwd: projectDir, encoding: "utf-8" });
-  return read.status === 0 && read.stdout.trim() !== "" ? read.stdout.trim() : null;
 }
 
 // --- The plan the lead shares: its format (aidlc-unit.ts writes it) ---------
@@ -424,11 +424,14 @@ export function repoCopyKey(address: string): string {
   return createHash("sha256").update(gitAddressKey(address)).digest("hex").slice(0, 12);
 }
 
-// This workspace's copy of a ref read at `address`, never pushed.
+// This workspace's copy of a ref read at `address`, never pushed: the plan, a
+// Unit's record, or a work's records folder (ending in "/").
 export function copyOf(address: string, ref: string): string {
-  const plan = /^refs\/aidlc\/plans\/([0-9a-f]+)$/.exec(ref);
-  if (plan === null) throw new Error(`No copy is kept for ${ref}.`);
-  return `refs/aidlc/home/${plan[1]}/${repoCopyKey(address)}/plan`;
+  const plan = /^refs\/aidlc\/plans\/([^/]+)$/.exec(ref);
+  if (plan !== null) return homeCopyName(plan[1], repoCopyKey(address), "plan");
+  const record = /^refs\/aidlc\/claims\/([^/]+)\/([^/]*)$/.exec(ref);
+  if (record !== null) return homeCopyName(record[1], repoCopyKey(address), `claims/${record[2]}`);
+  throw new Error(`No copy is kept for ${ref}.`);
 }
 
 // A path of the lead's workspace at a commit here, or null.
@@ -438,27 +441,46 @@ export function textAt(projectDir: string, commit: string, rel: string): string 
 }
 
 // The lead's files a team's build follows (LEAD_RULES_FIELD), each read where
-// it is: in this checkout when the lead's record is here, else in the lead's
-// copy AI-DLC fetched with the claims (leadCopyRef), at the same paths, so the
-// team's own default memory is never read as the lead's. `text` is null for a
-// file that cannot be read now; `fromCopy` marks one read from the copy.
+// it is: in this checkout when the lead's work is here, else in this
+// workspace's copy of the plan (rules/...), so the team's own default memory is
+// never read as the lead's. `text` is null for a file that cannot be read now;
+// `fromCopy` marks one read from the copy.
 export function leadRuleFiles(projectDir: string, stateContent: string): Array<{ path: string; text: string | null; fromCopy: boolean }> {
   const paths = (getField(stateContent, LEAD_RULES_FIELD) ?? "").split(",").map((entry) => entry.trim()).filter(Boolean);
   if (paths.length === 0) return [];
   const build = unitBuildOf(stateContent);
-  if (build === null || leadRecordHere(projectDir, build.homeRecord) || !isGitAddress(build.homeLocation)) {
+  if (build === null || !takenFromPlan(projectDir, build)) {
     return paths.map((path) => ({ path, text: readTextOrNull(join(projectDir, ...path.split("/"))), fromCopy: false }));
   }
-  const copy = leadCopyRef(idSuffix(build.homeWork));
+  const copy = copyOf(build.homeLocation, planRecordRef(idSuffix(build.homeWork)));
   return paths.map((path) => ({ path, text: textAt(projectDir, copy, path), fromCopy: true }));
 }
 
-// Whether the lead's record (`<space>/<dirName>`, a build's Home Record) is in
-// this workspace: a clone of the lead's, or the lead's own. A record name
-// without a space is taken as here, so nothing is read from elsewhere for it.
-export function leadRecordHere(projectDir: string, homeRecord: string): boolean {
-  const at = homeRecord.indexOf("/");
-  return at < 0 || existsSync(join(intentsDir(projectDir, homeRecord.slice(0, at)), homeRecord.slice(at + 1), "aidlc-state.md"));
+// The lead's work a build is of, when its record is in this workspace (a clone
+// of a workspace several teams share, or solo work's second person): found by
+// the work's id in any space.
+export function leadWorkHere(projectDir: string, homeWork: string): { space: string; dirName: string } | null {
+  if (homeWork === "") return null;
+  let spaces: string[] = [];
+  try {
+    spaces = readdirSync(join(projectDir, "aidlc", "spaces"));
+  } catch {
+    return null;
+  }
+  for (const space of spaces) {
+    const row = listIntents(projectDir, space).find((intent) => intent.uuid === homeWork && intent.dirName);
+    if (row?.dirName && existsSync(join(intentsDir(projectDir, space), row.dirName, "aidlc-state.md"))) return { space, dirName: row.dirName };
+  }
+  return null;
+}
+
+// A build taken from the plan where it is shared: of team work, wherever the
+// lead's work is (a clone of a workspace several teams share has it on disk).
+// Solo work's second person takes from the lead's work here.
+export function takenFromPlan(projectDir: string, build: UnitBuild): boolean {
+  if (!isGitAddress(build.homeLocation)) return false;
+  const here = leadWorkHere(projectDir, build.homeWork);
+  return here === null || isTeamUnitOwnership(readStateFile(projectDir, here.dirName, here.space));
 }
 
 // The line said once when a lead's file the build follows cannot be read: the
@@ -649,7 +671,6 @@ export interface UnitBuild {
   unit: string;
   homeLocation: string;
   homeWork: string;
-  homeRecord: string;
   attempt: number;
 }
 
@@ -661,7 +682,6 @@ export function unitBuildOf(stateContent: string | null): UnitBuild | null {
     unit,
     homeLocation: getField(stateContent, HOME_LOCATION_FIELD)?.trim() ?? "",
     homeWork: getField(stateContent, "Home Work")?.trim() ?? "",
-    homeRecord: getField(stateContent, "Home Record")?.trim() ?? "",
     attempt: Number.parseInt(getField(stateContent, "Home Attempt")?.trim() ?? "1", 10) || 1,
   };
 }
@@ -691,10 +711,9 @@ export function liveBuildOf(state: string): UnitBuild | null {
   return build === null || getField(state, "Status")?.trim() === "Archived" ? null : build;
 }
 
-// A build here of a Unit of the lead's record (`<space>/<dirName>`), found
-// with no read of the lead's project.
-export function findUnitBuildOfRecord(projectDir: string, homeRecord: string, unit: string): { space: string; dirName: string } | null {
-  return findBuild(projectDir, (build) => build.unit === unit && build.homeRecord === homeRecord);
+// The build here of a Unit of the work with this id, in any space.
+export function findUnitBuildOfWork(projectDir: string, id8: string, unit: string): { space: string; dirName: string } | null {
+  return findBuild(projectDir, (build) => build.unit === unit && idSuffix(build.homeWork) === id8);
 }
 
 function findBuild(projectDir: string, matches: (build: UnitBuild) => boolean): { space: string; dirName: string } | null {
@@ -1013,11 +1032,10 @@ export function checkInState(projectDir: string, stateContent?: string): CheckIn
     } catch {
       // No record selected: the active space answers.
     }
-    const [space, dirName] = build?.homeRecord.split("/") ?? [];
-    const homeHere = Boolean(space && dirName) && existsSync(join(projectDir, "aidlc", "spaces", space, "intents", dirName));
+    const here = build === null ? null : leadWorkHere(projectDir, build.homeWork);
     // Loaded only here: aidlc-unit.ts imports this file, and the hooks' own tool set leaves it out.
     const { checkInTarget } = require("./aidlc-unit.ts") as typeof import("./aidlc-unit.ts");
-    target = checkInTarget(projectDir, homeHere ? space : undefined);
+    target = checkInTarget(projectDir, here?.space);
   } catch {
     return "unknown";
   }
@@ -1148,15 +1166,6 @@ export function onlyTheBuildsUnit(
 // Two spellings of one git address (gitAddressKey).
 export function sameGitAddress(a: string, b: string): boolean {
   return gitAddressKey(a) === gitAddressKey(b);
-}
-
-// The home's work that git copied into a team's own workspace: its recorded
-// home is not this workspace's own origin. It is the home's, read only, never
-// this team's to carry on; nothing in the copy is changed.
-export function isHomesCopiedWork(projectDir: string, state: string): boolean {
-  const home = isTeamUnitOwnership(state) ? homeLocation(state) : null;
-  if (home === null || home === "local") return false;
-  return !sameGitAddress(home, workspaceHomeLocation(projectDir) ?? "");
 }
 
 // The person's words for a Unit command never go on its line (a shell would

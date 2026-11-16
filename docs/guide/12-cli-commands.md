@@ -48,7 +48,7 @@ diagnostic and lifecycle routes.
 | `/aidlc --claim <unit> [--team <label>] [--rhythm <per-stage\|unit-end>]` | Atomically claim an open team-owned Unit and bind this checkout to that attempt |
 | `/aidlc --release <unit>` | Release a live Unit claim from unscoped main by publishing a tombstone |
 | `/aidlc unit assign --here <unit>` | At the lead's project, build a Unit here: its claim is taken for the lead's project, like any take |
-| `/aidlc unit take <unit> --home <record>` | Take a Unit of the lead's work as your team's own piece of work, or carry its build on |
+| `/aidlc unit take <unit> --plan <work id> --from <address>` | Take a Unit of the lead's plan, shared in the code repository at that address, as your team's own piece of work, or carry its build on |
 | `/aidlc unit push [--later] [--remote <repo>=<name>] [--branch <name>] [--commit-message-file <file>] [--finish-merge]` | In a Unit's build, commit and push exactly its files on its branch in each repo, and send the result back to the lead's project |
 | `/aidlc unit send-back <unit>` | At the lead's project, send a team's Unit back from Build and Test in the failure's words |
 | `/aidlc unit propose --input <file>` | In a Unit's build, send the lead a change to an input the Unit was approved with |
@@ -764,11 +764,11 @@ before the earliest one reopened for it keep the work that merged, and the
 reopened stages (Code Generation, with its plan, review and approval) and the
 ones after are built here. A Unit someone is still building stays theirs.
 
-### `/aidlc unit take <unit> --home <record>` - Take a Unit as your team's own work
+### `/aidlc unit take <unit> --plan <work id> --from <address>` - Take a Unit as your team's own work
 
-In a team member's workspace, take one Unit of the lead's work (the record
-named by `--home`, in space `--home-space`, default `default`) and start its
-build as a piece of work of its own in the space you are working in (your
+In a team member's workspace, take one Unit of the lead's plan (the work
+`--plan` names, shared in the code repository at the address `--from` names)
+and start its build as a piece of work of its own in the space you are working in (your
 team's space, or the default space), or in the space `--space <name>` names
 when you ask for one: a space not here yet is made as `/aidlc space-create`
 makes it, with its name rule, and you are switched to it. AI-DLC offers it when
@@ -776,20 +776,23 @@ you run `/aidlc` with no work of your own selected; you can also run it
 yourself:
 
 ```
-/aidlc unit take refunds --home 261018-checkout-revamp
-/aidlc unit take refunds --home 261018-checkout-revamp --space payments
-/aidlc unit take refunds --from git@example.com:shop/shop-ws.git --home 261018-checkout-revamp
+/aidlc unit take refunds --plan 3f9c2a1b --from git@example.com:shop/checkout-api.git
+/aidlc unit take refunds --plan 3f9c2a1b --from git@example.com:shop/checkout-api.git --space payments
 ```
 
-`--from <address>` takes it from the lead's project at that address when this
-workspace holds nothing of the lead's: the lead's branch is fetched once into
-a git ref of AI-DLC's own (no folder, no remote added), the build starts in
-the active space, and each later step reads the lead's project from the build.
-Where the lead's record is in this workspace, `--from` changes nothing. An
-address that starts with `-` is refused before any git call.
+The plan is read where the lead shared it: its ref (`refs/aidlc/plans/<work
+id>`) in that code repository is fetched once, by the address and with your
+own sign-in, into a copy in your workspace's own repository. Nothing is added
+to a code clone, no remote is added and no setting changes. The build records
+the plan's repository as its `Home Location` and the plan's commit, and each
+later step reads the plan from there. An address that starts with `-` is
+refused before any git call. `--home <record>` (with `--home-space <space>`)
+takes a Unit of solo work whose record is in this clone, for a second person
+building it one Unit at a time; for work teams build it is refused with the
+way to the plan.
 
-The take is the Unit's claim at the lead's project's remote, by its address when
-the workspace is the team's own, with a compare-and-swap like any claim: its
+The take is the Unit's claim where the plan is shared, with a compare-and-swap
+like any claim: its
 owner is the space the build goes in and `taken_by` your git `user.name`. The
 first take wins; a Unit someone took, or the lead's project builds, is refused
 with who builds it and where. The take says its way back once: `/aidlc unit

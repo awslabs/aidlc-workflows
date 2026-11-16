@@ -14,9 +14,8 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { AIDLC_SRC, fixtureIntentId8, seededStateFile } from "../harness/fixtures.ts";
+import { AIDLC_SRC, seededStateFile } from "../harness/fixtures.ts";
 import {
-  claimPayload,
   cleanupTeamBuild,
   cloneOf,
   codeGenerated,
@@ -26,12 +25,14 @@ import {
   HOME_RECORD,
   makeHome,
   next,
-  refundsTaken,
+  recordAt,
+  refundsTakenInClone,
   run,
   STATE,
   tempDir,
   UNIT,
   commitMessageFile,
+  sharePlan,
 } from "../harness/team-build.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -71,16 +72,16 @@ describe("addresses", () => {
   test("an origin with a token in it: teams are chosen and repos.json is written, and neither the record nor the file holds the token", () => {
     const home = makeHome();
     git(home.dir, ["remote", "set-url", "origin", `https://lead:${TOKEN}@example.test/org/ws.git`]);
+    // The code repo's origin carries the token too: the home is the plan's repository, the work's first.
+    git(join(home.dir, "app"), ["remote", "set-url", "origin", `https://lead:${TOKEN}@example.test/org/app.git`]);
     const teams = run(STATE, ["set-unit-ownership", "team"], home.dir);
     expect(teams.status, teams.out).toBe(0);
-    expect(readFileSync(seededStateFile(home.dir), "utf-8")).toContain("- **Home Location**: https://example.test/org/ws.git");
+    expect(readFileSync(seededStateFile(home.dir), "utf-8")).toContain("- **Home Location**: https://example.test/org/app.git");
     const record = join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD);
     const audit = readdirSync(join(record, "audit")).map((shard) => readFileSync(join(record, "audit", shard), "utf-8")).join("\n");
     expect(audit).not.toContain(TOKEN);
     expect(readFileSync(seededStateFile(home.dir), "utf-8")).not.toContain(TOKEN);
-    // The code repo's origin carries the token too, and repos.json is written
-    // from what is here.
-    git(join(home.dir, "app"), ["remote", "set-url", "origin", `https://lead:${TOKEN}@example.test/org/app.git`]);
+    // repos.json is written from what is here.
     rmSync(join(home.dir, "repos.json"));
     const written = run(join(AIDLC_SRC, "tools", "aidlc-workspace-sync.ts"), ["--write-manifest"], home.dir);
     expect(written.status, written.out).toBe(0);
@@ -95,6 +96,7 @@ describe("addresses", () => {
     git(home.dir, ["add", "-A"]);
     git(home.dir, ["commit", "-q", "-m", "teams"]);
     git(home.dir, ["push", "-q", "origin", "main"]);
+    sharePlan(home);
     const alice = cloneOf(`file://${home.remote}`, "alice");
     expect(git(alice, ["remote", "get-url", "origin"])).toBe(`file://${home.remote}`);
     const take = next(alice);
@@ -123,6 +125,7 @@ describe("the person's own git, on steps nobody typed", () => {
     git(home.dir, ["add", "-A"]);
     git(home.dir, ["commit", "-q", "-m", "teams"]);
     git(home.dir, ["push", "-q", "origin", "main"]);
+    sharePlan(home);
     git(home.dir, ["remote", "set-url", "origin", await signInHost()]);
     const marker = join(tempDir("askpass"), "asked");
     const askpass = join(tempDir("askpass-bin"), "askpass.sh");
@@ -135,7 +138,7 @@ describe("the person's own git, on steps nobody typed", () => {
   });
 
   test.skipIf(process.platform === "win32")("the merge check fetches each code repo with that repo's own ssh setup, and only the branch the Unit merges into and the Unit's own branch", () => {
-    const { hosts, home, alice, record } = refundsTaken();
+    const { hosts, home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     git(home.dir, ["fetch", "-q", "origin"]);
@@ -169,7 +172,7 @@ describe("the person's own git, on steps nobody typed", () => {
 
 describe("the push goes where git would push it", () => {
   test("a repo with two remotes and none set for pushing: the push offers each, and the pick is where it goes", () => {
-    const { hosts, home, alice, record } = refundsTaken();
+    const { hosts, home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     finishBuild(record);
     const billing = join(alice, "billing");
@@ -187,12 +190,12 @@ describe("the push goes where git would push it", () => {
     expect(picked.status, picked.out).toBe(0);
     expect(git(hosts.billing, ["ls-tree", "-r", "--name-only", "refunds"]).split("\n")).toContain("lib/refund.ts");
     expect(spawnSync("git", ["rev-parse", "--verify", "refs/heads/refunds"], { cwd: fork }).status).not.toBe(0);
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.result).toBeDefined();
+    expect(recordAt(home, "refunds")?.json?.result).toBeDefined();
   });
 
   // Two remotes, none set for pushing, and the push remote git has for the branch the person named.
   function namedBranchWithItsPushRemote(): { hosts: Record<string, string>; alice: string; record: string; fork: string } {
-    const { hosts, alice, record } = refundsTaken();
+    const { hosts, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     finishBuild(record);
     const billing = join(alice, "billing");
@@ -224,7 +227,7 @@ describe("the push goes where git would push it", () => {
   });
 
   test("a push remote that is a fork: the Unit's branch starts from the repo's own main, not the fork's older one", () => {
-    const { hosts, home, alice, record } = refundsTaken();
+    const { hosts, home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     finishBuild(record);
     const fork = join(tempDir("api-fork"), "fork.git");
@@ -245,7 +248,7 @@ describe("the push goes where git would push it", () => {
     const pushed = run(UNIT, ["push"], alice);
     expect(pushed.status, pushed.out).toBe(0);
     expect(spawnSync("git", ["merge-base", "--is-ancestor", moved, "refunds"], { cwd: fork }).status).toBe(0);
-    const result = claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.result as SentResult | undefined;
+    const result = recordAt(home, "refunds")?.json?.result as SentResult | undefined;
     expect(result?.repos.find((repo) => repo.repo === "checkout-api")?.base).toBe(moved);
   });
 });

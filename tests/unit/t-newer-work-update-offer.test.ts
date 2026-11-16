@@ -21,7 +21,7 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
-import { cleanupTeamBuild, cloneOf, git, HOME_RECORD, homeState, inSpace, makeHome, run as teamRun, STATE } from "../harness/team-build.ts";
+import { cleanupTeamBuild, cloneOf, git, HOME_RECORD, homeState, makeHome, run as teamRun, sharePlan, STATE } from "../harness/team-build.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 2);
 
@@ -312,6 +312,7 @@ describe("work a newer AI-DLC wrote, in a teammate's clone with nothing selected
     git(home.dir, ["add", "-A"]);
     git(home.dir, ["commit", "-q", "-m", "teams"]);
     git(home.dir, ["push", "-q", "origin", "main"]);
+    sharePlan(home);
     const clone = cloneOf(home.remote, "bob");
     return { clone, leadState: join(clone, "aidlc", "spaces", "default", "intents", HOME_RECORD, "aidlc-state.md") };
   }
@@ -359,21 +360,15 @@ describe("work a newer AI-DLC wrote, in a teammate's clone with nothing selected
     });
   }
 
-  test("the take of one of its Units says the step a claim says there, and writes nothing", () => {
+  // A take reads the plan's own format, which this release reads (t-plan-read has the take of a newer plan).
+  test("the claim of one of its Units, the lead's work selected, says the step, and writes nothing", () => {
     const { clone } = teammateClone();
-    inSpace(clone, "payments");
-    const take = run(NATIVE, clone, ["aidlc-unit.ts", "take", "refunds", "--home", HOME_RECORD]);
-    expect(take.status, take.out).not.toBe(0);
-    expect(take.out).toContain(`${OFFER}${VERSION}. To carry on: \`aidlc update\`, then \`aidlc config --harness claude --yes\` in this project.`);
-    // The claim of it, with the lead's work selected, says the same line.
-    inSpace(clone, "default");
     const picked = run(NATIVE, clone, ["aidlc-utility.ts", "intent", "switch", HOME_RECORD]);
     expect(picked.status, picked.out).toBe(0);
     const claim = run(NATIVE, clone, ["aidlc-unit.ts", "claim", "refunds"]);
-    const line = (out: string) => out.match(/This plan was set up with[^"]*/)?.[0];
-    expect(line(claim.out), claim.out).toBeDefined();
-    expect(line(take.out)).toBe(line(claim.out));
-    expect(existsSync(join(clone, "aidlc", "spaces", "payments", "intents")) &&
-      readdirSync(join(clone, "aidlc", "spaces", "payments", "intents")).some((name) => name.endsWith("-refunds"))).toBe(false);
+    expect(claim.status, claim.out).not.toBe(0);
+    expect(claim.out).toContain(`${OFFER}${VERSION}. To carry on: \`aidlc update\`, then \`aidlc config --harness claude --yes\` in this project.`);
+    expect(readdirSync(join(clone, "aidlc", "spaces")).some((space) => existsSync(join(clone, "aidlc", "spaces", space, "intents")) &&
+      readdirSync(join(clone, "aidlc", "spaces", space, "intents")).some((name) => name.endsWith("-refunds")))).toBe(false);
   });
 });

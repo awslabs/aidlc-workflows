@@ -15,16 +15,15 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { fixtureIntentId8 } from "../harness/fixtures.ts";
 import {
-  claimPayload,
   cleanupTeamBuild,
   codeGenerated,
   git,
   hook,
   next,
   personsChat,
-  refundsTaken,
+  recordAt,
+  refundsTakenInClone,
   run,
   UNIT,
 } from "../harness/team-build.ts";
@@ -52,7 +51,7 @@ function lastRow(dir: string, event: string): string {
 }
 
 function pushed() {
-  const taken = refundsTaken();
+  const taken = refundsTakenInClone();
   codeGenerated(taken.alice, taken.record);
   expect(run(UNIT, ["push"], taken.alice).status).toBe(0);
   git(taken.home.dir, ["fetch", "-q", "origin"]);
@@ -61,7 +60,7 @@ function pushed() {
 
 describe("the lead's word is kept in their own words, with the message it came in", () => {
   test("a sign-off", () => {
-    const taken = refundsTaken();
+    const taken = refundsTakenInClone();
     const { home } = taken;
     expect(run(UNIT, ["lead-sign-off", "on"], home.dir).status).toBe(0);
     codeGenerated(taken.alice, taken.record);
@@ -77,11 +76,11 @@ describe("the lead's word is kept in their own words, with the message it came i
     const row = lastRow(home.dir, "QUESTION_ANSWERED");
     expect(auditBlockField(row, "Person Reply")).toBe(words);
     expect(auditBlockField(row, "Message Id")).toBe(id);
-    expect((claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.signoff as { words?: string })?.words).toBe(words);
+    expect((recordAt(home, "refunds")?.json?.signoff as { words?: string })?.words).toBe(words);
   });
 
   test("an answer to a team's proposed change", () => {
-    const taken = refundsTaken();
+    const taken = refundsTakenInClone();
     writeFileSync(join(taken.record, ...REQUIREMENTS.split("/")), "# Requirements\n\nFR1 refunds, partial amounts too.\n");
     expect(run(UNIT, ["propose", "--input", "requirements.md", "--person-words", "refunds need partial amounts"], taken.alice).status).toBe(0);
     git(taken.home.dir, ["fetch", "-q", "origin"]);
@@ -107,7 +106,7 @@ describe("the lead's word is kept in their own words, with the message it came i
       home.dir, personsChat(session));
     expect(down.status, down.out).toBe(0);
     // The team hears what the agent relayed; the claim keeps what the lead typed beside it.
-    const claimed = claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.turned_down as { words?: string; person_reply?: string };
+    const claimed = recordAt(home, "refunds")?.json?.turned_down as { words?: string; person_reply?: string };
     expect(claimed?.person_reply).toBe(words);
     expect(claimed?.words).toBe("needs the ledger entry");
   });
@@ -119,7 +118,7 @@ describe("the lead's word is kept in their own words, with the message it came i
     leadSays(home.dir, session, words);
     const said = run(UNIT, ["merged", "refunds", "--repo", "billing", "--person-words", "merged by hand"], home.dir, personsChat(session));
     expect(said.status, said.out).toBe(0);
-    const claim = claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds");
+    const claim = recordAt(home, "refunds")?.json;
     expect((claim?.said_merged as Array<{ repo: string; words: string }>)?.find((entry) => entry.repo === "billing")?.words).toBe(words);
   });
 
@@ -134,7 +133,7 @@ describe("the lead's word is kept in their own words, with the message it came i
     const row = lastRow(home.dir, "UNIT_SENT_BACK");
     expect(auditBlockField(row, "Person Reply")).toBe(words);
     expect(auditBlockField(row, "Message Id")).toBe(id);
-    const claim = claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds");
+    const claim = recordAt(home, "refunds")?.json;
     expect((claim?.turned_down as { words?: string })?.words).toBe(failure);
   });
 });
@@ -162,7 +161,7 @@ describe("only the message the request came in is kept, never the chat before it
     chatThenRequest(home.dir, session, request);
     const said = run(UNIT, ["merged", "refunds", "--repo", "billing", "--person-words", "merged on the host"], home.dir, personsChat(session));
     expect(said.status, said.out).toBe(0);
-    const claim = claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds");
+    const claim = recordAt(home, "refunds")?.json;
     expect((claim?.said_merged as Array<{ repo: string; words: string }>)?.find((entry) => entry.repo === "billing")?.words).toBe(request);
   });
 
@@ -174,7 +173,7 @@ describe("only the message the request came in is kept, never the chat before it
     const down = run(UNIT, ["turned-down", "refunds", "--repo", "billing", "--person-words", "needs the ledger entry"],
       home.dir, personsChat(session));
     expect(down.status, down.out).toBe(0);
-    expect((claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.turned_down as { person_reply?: string })?.person_reply)
+    expect((recordAt(home, "refunds")?.json?.turned_down as { person_reply?: string })?.person_reply)
       .toBe(request);
   });
 
@@ -189,7 +188,7 @@ describe("only the message the request came in is kept, never the chat before it
   });
 
   test("a sign-off", () => {
-    const taken = refundsTaken();
+    const taken = refundsTakenInClone();
     const { home } = taken;
     expect(run(UNIT, ["lead-sign-off", "on"], home.dir).status).toBe(0);
     codeGenerated(taken.alice, taken.record);
@@ -201,11 +200,11 @@ describe("only the message the request came in is kept, never the chat before it
     const signed = run(UNIT, ["sign-off", "refunds", "--person-words", "Sign it off"], home.dir, personsChat(session));
     expect(signed.status, signed.out).toBe(0);
     onlyThe(lastRow(home.dir, "QUESTION_ANSWERED"), id, request);
-    expect((claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.signoff as { words?: string })?.words).toBe(request);
+    expect((recordAt(home, "refunds")?.json?.signoff as { words?: string })?.words).toBe(request);
   });
 
   test("an answer to a team's proposed change", () => {
-    const taken = refundsTaken();
+    const taken = refundsTakenInClone();
     writeFileSync(join(taken.record, ...REQUIREMENTS.split("/")), "# Requirements\n\nFR1 refunds, partial amounts too.\n");
     expect(run(UNIT, ["propose", "--input", "requirements.md", "--person-words", "refunds need partial amounts"], taken.alice).status).toBe(0);
     git(taken.home.dir, ["fetch", "-q", "origin"]);
@@ -235,7 +234,7 @@ describe("the message the agent names", () => {
     expect(auditBlockField(row, "Message Id")).toBe(id);
     // That one, and nothing else of the chat.
     expect(auditBlockField(row, "Message Ids")).toBeNull();
-    expect((claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.signoff as { words?: string })?.words).toBe(words);
+    expect((recordAt(home, "refunds")?.json?.signoff as { words?: string })?.words).toBe(words);
   });
 
   test("a message that is not on record is refused, and nothing is recorded", () => {
@@ -245,7 +244,7 @@ describe("the message the agent names", () => {
     const said = run(UNIT, ["merged", "refunds", "--repo", "billing", "--message", "msg-not-on-record"], home.dir, personsChat(session));
     expect(said.status).not.toBe(0);
     expect(String(said.json?.error ?? said.out)).toContain("no message record msg-not-on-record exists in this project");
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.said_merged).toBeUndefined();
+    expect(recordAt(home, "refunds")?.json?.said_merged).toBeUndefined();
   });
 });
 
@@ -253,7 +252,7 @@ describe("the message the agent names", () => {
 // held that message for the sign-off question already answered, so the turn-down kept none of the lead's words.
 describe("once the lead answers the engine's question, their next words are their own", () => {
   test("a turn-down after a sign-off, in the same chat and in the next", () => {
-    const taken = refundsTaken();
+    const taken = refundsTakenInClone();
     const { home } = taken;
     expect(run(UNIT, ["lead-sign-off", "on"], home.dir).status).toBe(0);
     codeGenerated(taken.alice, taken.record);
@@ -269,14 +268,14 @@ describe("once the lead answers the engine's question, their next words are thei
     const down = run(UNIT, ["turned-down", "refunds", "--repo", "billing", "--person-words", "needs the ledger entry"],
       home.dir, personsChat(session));
     expect(down.status, down.out).toBe(0);
-    expect((claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.turned_down as { person_reply?: string })?.person_reply)
+    expect((recordAt(home, "refunds")?.json?.turned_down as { person_reply?: string })?.person_reply)
       .toBe(words);
     leadSays(home.dir, "t-unit-lead-words-after-signoff-2", "and how is checkout-ui coming along?");
     expect(auditBlockField(lastRow(home.dir, "HUMAN_TURN"), "Open Question")).toBeNull();
   });
 
   test("the lead's words after answering a team's proposed change", () => {
-    const taken = refundsTaken();
+    const taken = refundsTakenInClone();
     writeFileSync(join(taken.record, ...REQUIREMENTS.split("/")), "# Requirements\n\nFR1 refunds, partial amounts too.\n");
     expect(run(UNIT, ["propose", "--input", "requirements.md", "--person-words", "refunds need partial amounts"], taken.alice).status).toBe(0);
     git(taken.home.dir, ["fetch", "-q", "origin"]);

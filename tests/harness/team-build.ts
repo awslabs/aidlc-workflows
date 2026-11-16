@@ -220,6 +220,40 @@ export function makePlanHome(
   return { dir, hosts, id8, plan: git(first, ["rev-parse", planRefOf(id8)]) };
 }
 
+/**
+ * The plan home of a lead who keeps their workspace on a host of its own: the
+ * workspace, teams chosen, committed and pushed to `remote` as origin, then the
+ * plan shared, so the lead's own pushes and fetches and a teammate's clone of it
+ * go there, and the plan still goes to its code repository.
+ */
+export function makePlanHomeWithRemote(options: { state?: string; dependencies?: string; repos?: Record<string, string> } = {}): PlanHome & Home {
+  const home = makeHome({ ...options, repos: options.repos ?? { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing"), "checkout-web": codeHost("checkout-web") } });
+  const chose = run(STATE, ["set-unit-ownership", "team"], home.dir);
+  expect(chose.status, chose.out).toBe(0);
+  git(home.dir, ["add", "-A"]);
+  git(home.dir, ["commit", "-q", "-m", "teams"]);
+  git(home.dir, ["push", "-q", "origin", "main"]);
+  return sharePlan(home);
+}
+
+/**
+ * The lead's `unit share --plan` on a home whose teams are chosen: the plan goes
+ * to the work's first code repository, and the home reads as a plan home.
+ */
+export function sharePlan(home: Home): PlanHome & Home {
+  const shared = run(UNIT, ["share", "--plan"], home.dir);
+  expect(shared.status, shared.out).toBe(0);
+  // The plan's repository first, as the share names it, then the work's others.
+  const plan = shared.json?.plan as { repo: string; address: string; commit: string };
+  const listed = existsSync(join(home.dir, "repos.json"))
+    ? (JSON.parse(readFileSync(join(home.dir, "repos.json"), "utf-8")) as { repos: Array<{ name: string; url?: string }> }).repos
+    : [];
+  const hosts = Object.fromEntries([[plan.repo, plan.address],
+    ...listed.filter((repo) => repo.name !== plan.repo && repo.url).map((repo) => [repo.name, repo.url!])]);
+  const registry = JSON.parse(readFileSync(join(home.dir, "aidlc", "spaces", "default", "intents", "intents.json"), "utf-8")) as Array<{ uuid: string }>;
+  return { ...home, hosts, id8: registry[0].uuid.replace(/-/g, "").slice(-8), plan: plan.commit };
+}
+
 /** A code repo's bare host with one commit on main. */
 export function codeHost(label: string): string {
   const seed = tempDir(`${label}-seed`);
@@ -293,6 +327,9 @@ export function run(tool: string, args: string[], cwd: string, env: NodeJS.Proce
   }
   return { status: result.status ?? -1, out: `${result.stdout ?? ""}${result.stderr ?? ""}`, stdout: result.stdout ?? "", json };
 }
+
+/** A take offer's text without who last changed the plan and when, for a case that reads the rest of it. */
+export const offerText = (text: unknown): string => String(text).replace(/ \(the plan's last commit: [^)]*\)/, "");
 
 /**
  * `next`, with rules delivered in parts taken as the agent takes them, and the
@@ -374,6 +411,32 @@ export function claimPayload(remote: string, intentId8: string, unit: string): R
   return JSON.parse(git(remote, ["show", `${tip.stdout.trim()}:.aidlc-unit-claim.json`])) as Record<string, unknown>;
 }
 
+/** The host the work's records are written to: the plan's repository here. */
+export const recordHost = (home: PlanHome): string => Object.values(home.hosts)[0];
+
+/** A take's `--plan` and `--from` for a Unit of a shared plan. */
+export const planFrom = (home: PlanHome): string[] => ["--plan", home.id8, "--from", Object.values(home.hosts)[0]];
+
+/**
+ * A Unit's record at the host it is written to, as the build-out writes it: the record's JSON, every path in the
+ * record commit's tree, the tip's subject and parents. Null when the host has no such record. Callers name the plan
+ * home and the Unit, never a host: every record of the work is in the plan's repository (its first host) here.
+ */
+export function recordAt(home: PlanHome, unit: string): { json: Record<string, unknown>; files: string[]; message: string; parents: string[] } | null {
+  const host = recordHost(home);
+  const ref = `refs/aidlc/claims/${home.id8}/${unit}`;
+  const tip = spawnSync("git", ["rev-parse", "--verify", "--quiet", ref], { cwd: host, encoding: "utf-8", env: GIT_ENV });
+  if (tip.status !== 0) return null;
+  const oid = tip.stdout.trim();
+  const [message, parents] = git(host, ["log", "-1", "--format=%s%x00%P", oid]).split("\0");
+  return {
+    json: JSON.parse(git(host, ["show", `${oid}:.aidlc-unit-claim.json`])) as Record<string, unknown>,
+    files: git(host, ["ls-tree", "-r", "--name-only", oid]).split("\n").filter(Boolean),
+    message,
+    parents: parents === "" ? [] : parents.split(" "),
+  };
+}
+
 export function stateOf(dir: string): string {
   return readFileSync(seededStateFile(dir), "utf-8");
 }
@@ -397,23 +460,53 @@ export function takeIn(space: string, args: string[], dir: string, env: NodeJS.P
   return run(UNIT, ["take", ...args], dir, env);
 }
 
-// The home of work across checkout-api and billing, teams chosen and every Unit
-// open, pushed; a teammate's clone with both repos, working in the payments
-// space, refunds taken there. Another Unit plan (`dependencies`) replaces
-// DEPENDENCIES.
+// A team's own workspace: a git repository with no remote, nothing of the
+// lead's in it, the code repositories it builds in (`repos`, by name in
+// `hosts`) cloned beside it as `label`.
+export function teamWorkspace(hosts: Record<string, string>, label: string, repos: string[] = Object.keys(hosts)): string {
+  const dir = join(tempDir(`${label}-ws`), "workspace");
+  mkdirSync(dir, { recursive: true });
+  seedAidlcMemory(dir);
+  writeFileSync(join(dir, ".gitignore"), "aidlc/.aidlc-engine/\naidlc/active-space\naidlc/spaces/*/intents/active-intent\n" +
+    "**/aidlc/spaces/*/intents/**/.aidlc-engine/\n" + repos.map((name) => `/${name}/\n`).join(""));
+  git(dir, ["init", "-q", "-b", "main"]);
+  git(dir, ["config", "user.name", label]);
+  git(dir, ["config", "user.email", `${label}@example.test`]);
+  git(dir, ["add", "-A"]);
+  git(dir, ["commit", "-q", "-m", "workspace"]);
+  for (const name of repos) cloneCode(hosts[name], dir, name, label);
+  return dir;
+}
+
+// The plan of work across checkout-api and billing, teams chosen and the plan
+// shared in checkout-api, the lead's workspace on a host of its own; a
+// teammate's workspace of her own with both repos, working in the payments
+// space, refunds taken there from the plan. Another Unit plan (`dependencies`)
+// replaces DEPENDENCIES. The work's records are read with recordAt.
 export function refundsTaken(beforeTake?: (alice: string) => void, dependencies?: string) {
   const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
-  const home = makeHome({ repos: hosts, ...(dependencies === undefined ? {} : { dependencies }) });
-  const teams = run(STATE, ["set-unit-ownership", "team"], home.dir);
-  expect(teams.status, teams.out).toBe(0);
-  git(home.dir, ["add", "-A"]);
-  git(home.dir, ["commit", "-q", "-m", "teams"]);
-  git(home.dir, ["push", "-q", "origin", "main"]);
+  const home = makePlanHomeWithRemote({ repos: hosts, ...(dependencies === undefined ? {} : { dependencies }) });
+  const alice = teamWorkspace(hosts, "alice");
+  beforeTake?.(alice);
+  inSpace(alice, "payments");
+  const took = run(UNIT, ["take", "refunds", "--plan", home.id8, "--from", hosts["checkout-api"]], alice);
+  expect(took.status, took.out).toBe(0);
+  const intents = join(alice, "aidlc", "spaces", "payments", "intents");
+  const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-refunds"))!);
+  return { hosts, home, alice, record };
+}
+
+// refunds taken as refundsTaken takes it, by a teammate whose workspace is a
+// clone of the lead's, which several teams share: the lead's work is on disk in
+// it, and its origin is the lead's workspace's own host.
+export function refundsTakenInClone(beforeTake?: (alice: string) => void, dependencies?: string) {
+  const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
+  const home = makePlanHomeWithRemote({ repos: hosts, ...(dependencies === undefined ? {} : { dependencies }) });
   const alice = cloneOf(home.remote, "alice");
   for (const [name, host] of Object.entries(hosts)) cloneCode(host, alice, name, "alice");
   beforeTake?.(alice);
   inSpace(alice, "payments");
-  const took = run(UNIT, ["take", "refunds", "--home", HOME_RECORD], alice);
+  const took = run(UNIT, ["take", "refunds", ...planFrom(home)], alice);
   expect(took.status, took.out).toBe(0);
   const intents = join(alice, "aidlc", "spaces", "payments", "intents");
   const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-refunds"))!);

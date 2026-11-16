@@ -330,8 +330,16 @@ function releaseHost(): string {
  * the terminal unit commands, and the installs AI-DLC does not update itself).
  */
 export function newerStateStep(projectDir: string, version: string, newWork = false): string {
-  const lead = newerWorkLead(version, newWork);
-  const needs = newerStateRelease(version);
+  return newerWorkStep(projectDir, newerWorkLead(version, newWork), newerStateRelease(version));
+}
+
+// The same step for a plan whose format number is above this release's: the
+// release is named by no table, so it is "a newer AI-DLC".
+export function newerPlanStep(projectDir: string): string {
+  return newerWorkStep(projectDir, "This plan was set up with a newer AI-DLC", "a newer AI-DLC");
+}
+
+function newerWorkStep(projectDir: string, lead: string, needs: string): string {
   const install = newerWorkInstall(projectDir);
   const refresh = `\`${newerWorkRefresh(projectDir)}\``;
   switch (install.kind) {

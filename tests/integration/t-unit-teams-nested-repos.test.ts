@@ -17,11 +17,10 @@ import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { workspaceSourceListing } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { AIDLC_SRC, fixtureIntentId8, REPO_ROOT } from "../harness/fixtures.ts";
+import { AIDLC_SRC, REPO_ROOT } from "../harness/fixtures.ts";
 import { hostFor } from "../harness/scope-hosts.ts";
 import { AgentStandIn, type Directive, PersonScript } from "../harness/scope-run.ts";
 import {
-  claimPayload,
   cleanupTeamBuild,
   cloneCode,
   cloneOf,
@@ -35,6 +34,8 @@ import {
   next,
   run,
   STATE,
+  sharePlan,
+  recordAt,
 } from "../harness/team-build.ts";
 
 setDefaultTimeout(20 * 60_000);
@@ -93,6 +94,7 @@ describe("the packages inside the workspace's own repo, as gitlinks", () => {
     git(home.dir, ["add", "-A"]);
     git(home.dir, ["commit", "-q", "-m", "teams chosen"]);
     git(home.dir, ["push", "-q", "origin", "main"]);
+    const plan = sharePlan(home);
 
     // A teammate's clone: the package folders come empty, and the sync fills each from its address.
     const alice = cloneOf(home.remote, "alice");
@@ -154,6 +156,6 @@ describe("the packages inside the workspace's own repo, as gitlinks", () => {
     mergeOnHost(hosts["pkg-b"], "refunds", "merge");
     git(home.dir, ["fetch", "-q", "origin"]);
     next(home.dir);
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
+    expect(recordAt(plan, "refunds")?.json).toMatchObject({ done: true });
   });
 });

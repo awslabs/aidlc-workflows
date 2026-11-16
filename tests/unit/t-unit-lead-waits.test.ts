@@ -34,7 +34,7 @@ import {
   makeHome,
   next,
   personsChat,
-  refundsTaken,
+  refundsTakenInClone,
   run,
   STATE,
   UNIT,
@@ -226,7 +226,7 @@ describe("while the lead's project waits on the teams at Code Generation", () =>
 // leaves the same row, with the build's Unit.
 describe("in a Unit's build whose Code Generation is approved", () => {
   test("the person's own ask runs, with a row naming their message, their words and the Unit", () => {
-    const { alice, record } = refundsTaken();
+    const { alice, record } = refundsTakenInClone();
     const chat = "t-unit-lead-waits-alice";
     next(alice, { ...ENV, AIDLC_SESSION_OVERRIDE: chat });
     const statePath = join(record, "aidlc-state.md");

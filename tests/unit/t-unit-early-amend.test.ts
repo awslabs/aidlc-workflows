@@ -17,9 +17,7 @@ import { chmodSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "
 import { basename, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { latestCompletionBasesFromAudit } from "../../dist/claude/.claude/tools/aidlc-validity.ts";
-import { fixtureIntentId8 } from "../harness/fixtures.ts";
 import {
-  claimPayload,
   fetchRecords,
   cleanupTeamBuild,
   cloneCode,
@@ -37,11 +35,15 @@ import {
   next,
   personsChat,
   personsNext,
-  refundsTaken,
+  type PlanHome,
+  recordAt,
+  refundsTakenInClone,
   run,
   STATE,
   UNIT,
   takeIn,
+  planFrom,
+  sharePlan,
 } from "../harness/team-build.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -52,7 +54,7 @@ const REQUIREMENTS = "inception/requirements-analysis/requirements.md";
 // refunds pushed from the payments space; dana's clone with billing and
 // checkout-api, ready to take reporting, which waits on refunds and is open.
 function refundsPushed(dependencies?: string) {
-  const taken = refundsTaken(undefined, dependencies);
+  const taken = refundsTakenInClone(undefined, dependencies);
   codeGenerated(taken.alice, taken.record);
   expect(run(UNIT, ["push"], taken.alice).status).toBe(0);
   git(taken.home.dir, ["fetch", "-q", "origin"]);
@@ -71,12 +73,14 @@ describe("starting early", () => {
   // picked the own-rules row, then a Unit, and the take refused it as not
   // ready and asked whether to start it early: a third question.
   test("under the team's own rules only, a Unit that can only start early starts early from the one row", () => {
-    const taken = refundsTaken();
+    const taken = refundsTakenInClone();
     const practices = join(taken.home.dir, "aidlc", "spaces", "default", "memory", "team.md");
     writeFileSync(practices, readFileSync(practices, "utf-8").replace("## Testing Posture\n", "## Testing Posture\nTest first for the refund amount.\n"));
     git(taken.home.dir, ["add", "-A"]);
     git(taken.home.dir, ["commit", "-q", "-m", "the lead's practices"]);
     git(taken.home.dir, ["push", "-q", "origin", "main"]);
+    // The lead shares the plan again, with the practices in it.
+    expect(run(UNIT, ["share", "--plan"], taken.home.dir).status).toBe(0);
     codeGenerated(taken.alice, taken.record);
     expect(run(UNIT, ["push"], taken.alice).status).toBe(0);
     const dana = cloneOf(taken.home.remote, "dana");
@@ -101,7 +105,7 @@ describe("starting early", () => {
     const labels = (ask.choices as Array<{ label: string; command: string }>).map((choice) => choice.label);
     // reporting is open: one start, early, for whoever takes it.
     expect(labels.filter((label) => label.startsWith("Start reporting")), JSON.stringify(ask)).toEqual(["Start reporting early"]);
-    const took = takeIn("data", ["reporting", "--home", HOME_RECORD, "--early"], dana);
+    const took = takeIn("data", ["reporting", ...planFrom(home), "--early"], dana);
     expect(took.status, took.out).toBe(0);
     expect(String(took.json?.notice)).toContain(
       "It starts early on the pushed branch of refunds in billing. It may still change before it merges.",
@@ -116,8 +120,8 @@ describe("starting early", () => {
   // it, a plain git push before AI-DLC's own (which sets the Unit's upstream)
   // was refused, or with push.default=upstream went onto that team's branch.
   test("an early start's branch tracks nothing: a plain git push never lands on the dependency's branch", () => {
-    const { dana, hosts } = refundsPushed();
-    const took = takeIn("data", ["reporting", "--home", HOME_RECORD, "--early"], dana);
+    const { dana, hosts, home } = refundsPushed();
+    const took = takeIn("data", ["reporting", ...planFrom(home), "--early"], dana);
     expect(took.status, took.out).toBe(0);
     const billing = join(dana, "billing");
     expect(git(billing, ["branch", "--show-current"])).toBe("reporting");
@@ -139,7 +143,7 @@ describe("starting early", () => {
     const { dana, home } = refundsPushed();
     writeFileSync(join(dana, "billing", "README.md"), "# billing\n\nTheir own note.\n");
     const apiBefore = git(join(dana, "checkout-api"), ["rev-parse", "HEAD"]);
-    const took = takeIn("data", ["reporting", "--home", HOME_RECORD, "--early"], dana);
+    const took = takeIn("data", ["reporting", ...planFrom(home), "--early"], dana);
     expect(took.status, took.out).toBe(0);
     const notice = String(took.json?.notice);
     expect(notice).toContain("It starts early on the pushed branch of refunds in billing.");
@@ -148,13 +152,13 @@ describe("starting early", () => {
     expect(git(join(dana, "checkout-api"), ["branch", "--show-current"])).toBe("main");
     expect(git(join(dana, "checkout-api"), ["rev-parse", "HEAD"])).toBe(apiBefore);
     expect(git(join(dana, "checkout-api"), ["branch", "--list", "reporting"])).toBe("");
-    const early = (claimPayload(home.remote, fixtureIntentId8(home.dir), "reporting") ?? {}) as { early_on?: Array<{ repos: Array<{ repo: string }> }> };
+    const early = (recordAt(home, "reporting")?.json ?? {}) as { early_on?: Array<{ repos: Array<{ repo: string }> }> };
     expect(early.early_on?.flatMap((dep) => dep.repos.map((repo) => repo.repo))).toEqual(["billing"]);
   });
 
   test("an early start whose dependency changed none of the Unit's repos switches nothing, says so, and a turn-down of it says nothing of a branch", () => {
     const { home, dana } = refundsPushed(DEPENDENCIES.replace("repos: [billing]\n    depends_on: [refunds]", "repos: [ledger]\n    depends_on: [refunds]"));
-    const took = takeIn("data", ["reporting", "--home", HOME_RECORD, "--early"], dana);
+    const took = takeIn("data", ["reporting", ...planFrom(home), "--early"], dana);
     expect(took.status, took.out).toBe(0);
     expect(String(took.json?.notice)).toContain(
       "It starts early, before refunds is done; refunds changed none of reporting's repos, so nothing here was switched.",
@@ -166,9 +170,9 @@ describe("starting early", () => {
   });
 
   test("without the dependency pushed, the Unit waits, and the line says when it opens", () => {
-    const taken = refundsTaken();
+    const taken = refundsTakenInClone();
     const dana = cloneOf(taken.home.remote, "dana");
-    const early = run(UNIT, ["take", "reporting", "--home", HOME_RECORD, "--early"], dana);
+    const early = run(UNIT, ["take", "reporting", ...planFrom(taken.home), "--early"], dana);
     expect(early.status).not.toBe(0);
     expect(early.out).toContain("reporting waits on refunds, which is not done at the lead's project yet. It opens once it is done.");
   });
@@ -177,24 +181,24 @@ describe("starting early", () => {
   // merged only after its own push, since its chat stayed in one stage.
   test("the early team's next step hears its dependency's merge in the same stage, with no fetch by hand", () => {
     const { home, hosts, dana } = refundsPushed();
-    expect(takeIn("data", ["reporting", "--home", HOME_RECORD, "--early"], dana).status).toBe(0);
+    expect(takeIn("data", ["reporting", ...planFrom(home), "--early"], dana).status).toBe(0);
     const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "dana-chat" };
     expect(next(dana, chat).kind).toBe("run-stage");
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
     mergeOnHost(hosts.billing, "refunds", "merge");
     next(home.dir);
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
+    expect(recordAt(home, "refunds")?.json).toMatchObject({ done: true });
     const step = next(dana, chat);
     expect(step.ask_type, JSON.stringify(step).slice(0, 400)).toBe("unit-move-onto");
   });
 
   test("the early team hears once when its dependency is done, with the offer to move onto what merged, and keeps its work", () => {
     const { home, hosts, dana } = refundsPushed();
-    expect(takeIn("data", ["reporting", "--home", HOME_RECORD, "--early"], dana).status).toBe(0);
+    expect(takeIn("data", ["reporting", ...planFrom(home), "--early"], dana).status).toBe(0);
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
     mergeOnHost(hosts.billing, "refunds", "merge");
     next(home.dir);
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
+    expect(recordAt(home, "refunds")?.json).toMatchObject({ done: true });
     fetchRecords(dana);
     const step = next(dana);
     expect(step.ask_type, JSON.stringify(step)).toBe("unit-move-onto");
@@ -206,7 +210,7 @@ describe("starting early", () => {
 
   test("the early team hears once when its dependency is turned down, and nothing else changes", () => {
     const { home, dana } = refundsPushed();
-    expect(takeIn("data", ["reporting", "--home", HOME_RECORD, "--early"], dana).status).toBe(0);
+    expect(takeIn("data", ["reporting", ...planFrom(home), "--early"], dana).status).toBe(0);
     expect(run(UNIT, ["turned-down", "refunds", "--repo", "billing", "--person-words", "needs the ledger"], home.dir).status).toBe(0);
     fetchRecords(dana);
     const step = next(dana);
@@ -219,7 +223,7 @@ describe("starting early", () => {
 
 describe("a change to a shared input", () => {
   function proposed() {
-    const taken = refundsTaken();
+    const taken = refundsTakenInClone();
     const copy = join(taken.record, ...REQUIREMENTS.split("/"));
     writeFileSync(copy, "# Requirements\n\nFR1 refunds, partial amounts too.\n");
     const sent = run(UNIT, ["propose", "--input", "requirements.md", "--person-words", "refunds need partial amounts"], taken.alice);
@@ -245,7 +249,7 @@ describe("a change to a shared input", () => {
     writeFileSync(copy, "# Requirements\n\nFR1 refunds, partial amounts too, in one currency only.\n");
     // A proposal's time is kept to the second, and a person's second change
     // comes seconds after the lead's answer: the test's own run is faster.
-    const firstAt = ((claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.proposals ?? []) as Array<{ at: string }>)[0]?.at;
+    const firstAt = ((recordAt(home, "refunds")?.json?.proposals ?? []) as Array<{ at: string }>)[0]?.at;
     expect(firstAt).toBeString();
     Bun.sleepSync(Math.max(0, Date.parse(firstAt!) + 1000 - Date.now()));
     expect(run(UNIT, ["propose", "--input", "requirements.md", "--person-words", "one currency only"], alice).status).toBe(0);
@@ -290,7 +294,7 @@ describe("a change to a shared input", () => {
     const approved = "The lead approved your change to the requirements.";
     expect(notices(personsNext(alice, chat, "alice-chat"))).toContain(approved);
     expect(notices(personsNext(alice, chat, "alice-chat"))).not.toContain(approved);
-    const firstAt = ((claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.proposals ?? []) as Array<{ at: string }>)[0]?.at;
+    const firstAt = ((recordAt(home, "refunds")?.json?.proposals ?? []) as Array<{ at: string }>)[0]?.at;
     expect(firstAt).toBeString();
     Bun.sleepSync(Math.max(0, Date.parse(firstAt!) + 1000 - Date.now()));
     writeFileSync(join(record, ...REQUIREMENTS.split("/")), "# Requirements\n\nFR1 refunds, partial amounts too, in one currency only.\n");
@@ -322,7 +326,7 @@ describe("a change to a shared input", () => {
     writeFileSync(copy, edit);
     // Another team's change to the same input, approved by the lead.
     const bob = cloneOf(home.remote, "bob");
-    expect(takeIn("web", ["checkout-ui", "--home", HOME_RECORD], bob).status).toBe(0);
+    expect(takeIn("web", ["checkout-ui", ...planFrom(home)], bob).status).toBe(0);
     const intents = join(bob, "aidlc", "spaces", "web", "intents");
     const bobRecord = join(intents, readdirSync(intents).find((name) => name.endsWith("-checkout-ui"))!);
     writeFileSync(join(bobRecord, ...REQUIREMENTS.split("/")), "# Requirements\n\nFR1 refunds.\nFR2 refunds by store credit.\n");
@@ -380,7 +384,7 @@ describe("a change to a shared input", () => {
       "--person-words", "apply it to the current requirements yourself"], home.dir);
     expect(amended.status, amended.out).toBe(0);
     expect(readFileSync(homeCopy, "utf-8")).toBe("# Requirements\n\nFR1 refunds, full or partial amounts.\n");
-    const answer = claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds") as { proposals?: Array<{ answer?: string }>; amendments?: unknown[] };
+    const answer = recordAt(home, "refunds")?.json as { proposals?: Array<{ answer?: string }>; amendments?: unknown[] };
     expect(answer.proposals?.at(-1)?.answer).toBe("approved");
     expect(answer.amendments?.length).toBe(1);
     fetchRecords(alice);
@@ -393,7 +397,7 @@ describe("a change to a shared input", () => {
   test("the owner is asked once at the home, and their approval reaches every team building with it", () => {
     const { home, alice } = proposed();
     const bob = cloneOf(home.remote, "bob");
-    expect(takeIn("web", ["checkout-ui", "--home", HOME_RECORD], bob).status).toBe(0);
+    expect(takeIn("web", ["checkout-ui", ...planFrom(home)], bob).status).toBe(0);
     const ask = next(home.dir);
     expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-amend");
     const proposedAt = `aidlc/spaces/default/intents/${HOME_RECORD}/.aidlc-engine/proposed/refunds/${REQUIREMENTS}`;
@@ -434,8 +438,10 @@ describe("a change to a shared input", () => {
     git(home.dir, ["add", "-A"]);
     git(home.dir, ["commit", "-q", "-m", "strict"]);
     git(home.dir, ["push", "-q", "origin", "main"]);
+    // The lead shares the plan again, with its Guard Policy.
+    expect(run(UNIT, ["share", "--plan"], home.dir).status).toBe(0);
     const bob = cloneOf(home.remote, "bob");
-    expect(takeIn("web", ["checkout-ui", "--home", HOME_RECORD], bob).status).toBe(0);
+    expect(takeIn("web", ["checkout-ui", ...planFrom(home)], bob).status).toBe(0);
     const intents = join(bob, "aidlc", "spaces", "web", "intents");
     const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-checkout-ui"))!);
     expect(readFileSync(join(record, "aidlc-state.md"), "utf-8")).toMatch(/^- \*\*Guard Policy\*\*: strict/m);
@@ -454,10 +460,10 @@ describe("a change to a shared input", () => {
   // by the lead's change. Their edit stays as they left it, the new version
   // goes beside it, said once, and the lead hears it was made on the older one.
   test("a team that edited its copy keeps its edit, gets the lead's new version beside it once, and the lead hears it", () => {
-    const { home, alice, record } = refundsTaken();
+    const { home, alice, record } = refundsTakenInClone();
     // web proposes a change; payments edited its own copy meanwhile.
     const bob = cloneOf(home.remote, "bob");
-    expect(takeIn("web", ["checkout-ui", "--home", HOME_RECORD], bob).status).toBe(0);
+    expect(takeIn("web", ["checkout-ui", ...planFrom(home)], bob).status).toBe(0);
     const intents = join(bob, "aidlc", "spaces", "web", "intents");
     const bobRecord = join(intents, readdirSync(intents).find((name) => name.endsWith("-checkout-ui"))!);
     writeFileSync(join(bobRecord, ...REQUIREMENTS.split("/")), "# Requirements\n\nFR1 refunds, partial amounts too.\n");
@@ -494,7 +500,7 @@ describe("a change to a shared input", () => {
   test("a change approved while a team's chat is open is heard at its next stage, and one before its push is never called after it", () => {
     const { home } = proposed();
     const bob = cloneOf(home.remote, "bob");
-    expect(takeIn("web", ["checkout-ui", "--home", HOME_RECORD], bob).status).toBe(0);
+    expect(takeIn("web", ["checkout-ui", ...planFrom(home)], bob).status).toBe(0);
     const chat = personsChat("bob-chat");
     // bob's chat has looked at its claim once already.
     personsNext(bob, chat, "bob-chat");
@@ -515,19 +521,19 @@ describe("a change to a shared input", () => {
   // the redone Requirements Analysis; no team's claim got the change, the
   // team heard nothing, and the agent made up its own question about it.
   test("the lead's own approved change to an input teams build with reaches each of them once; an edit not approved does not", () => {
-    const { home, alice } = refundsTaken();
+    const { home, alice } = refundsTakenInClone();
     const homeCopy = join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD, ...REQUIREMENTS.split("/"));
     writeFileSync(homeCopy, "# Requirements\n\nFR1 refunds. FR2 no alerts on refunds.\n");
     // Not approved yet: nothing goes to the teams.
     next(home.dir);
-    expect((claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds") as { amendments?: unknown[] }).amendments ?? []).toEqual([]);
+    expect((recordAt(home, "refunds")?.json as { amendments?: unknown[] }).amendments ?? []).toEqual([]);
     appendAuditEntry("GATE_APPROVED", { Stage: "requirements-analysis", "User Input": "Approve" }, home.dir);
     const lead = personsChat("lead-chat");
     const step = personsNext(home.dir, lead, "lead-chat");
     expect(notices(step).join(" "), JSON.stringify(step).slice(0, 400)).toContain(
       "The requirements you changed reach the teams building with it (alice): they hear it once and carry on.",
     );
-    expect((claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds") as { amendments?: unknown[] }).amendments?.length).toBe(1);
+    expect((recordAt(home, "refunds")?.json as { amendments?: unknown[] }).amendments?.length).toBe(1);
     fetchRecords(alice);
     expect(notices(next(alice)).join(" ")).toContain("The lead changed the requirements");
     // Said once at the lead's project.
@@ -540,14 +546,14 @@ describe("a change to a shared input", () => {
   test("the lead's own approved change reaches a Unit already done and merged, with the offer of follow-up work", () => {
     // The team's Unit is the only one taken: once it is done, nobody builds a
     // Unit, and the change still reaches it.
-    const { home, hosts, alice, record } = refundsTaken();
+    const { home, hosts, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
     mergeOnHost(hosts.billing, "refunds", "squash");
     fetchRecords(home.dir);
     next(home.dir);
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
+    expect(recordAt(home, "refunds")?.json).toMatchObject({ done: true });
     const homeRecord = join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD);
     writeFileSync(join(homeRecord, ...REQUIREMENTS.split("/")), "# Requirements\n\nFR1 refunds, said the new way.\n");
     writeFileSync(join(homeRecord, "inception", "units-generation", "unit-of-work.md"), "# Units of work\n\nrefunds, checkout-ui, reporting, said the new way.\n");
@@ -567,14 +573,14 @@ describe("a change to a shared input", () => {
   // A live run: every Unit was done, the lead's own too, so the step after
   // the lead's approved redo was Build and Test, which never sent the change.
   test("the lead's approved change reaches a done team Unit from the lead's step past the Units too", () => {
-    const { home, hosts, alice, record } = refundsTaken();
+    const { home, hosts, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
     mergeOnHost(hosts.billing, "refunds", "squash");
     fetchRecords(home.dir);
     next(home.dir);
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
+    expect(recordAt(home, "refunds")?.json).toMatchObject({ done: true });
     // The lead's project is past its Unit stages, at Build and Test.
     const statePath = join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD, "aidlc-state.md");
     writeFileSync(statePath, readFileSync(statePath, "utf-8")
@@ -586,7 +592,7 @@ describe("a change to a shared input", () => {
     const lead = personsChat("lead-chat");
     const step = personsNext(home.dir, lead, "lead-chat");
     expect(notices(step).join(" "), JSON.stringify(step).slice(0, 400)).toContain("The requirements you changed reach the teams");
-    expect((claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds") as { amendments?: unknown[] }).amendments?.length).toBe(1);
+    expect((recordAt(home, "refunds")?.json as { amendments?: unknown[] }).amendments?.length).toBe(1);
     fetchRecords(alice);
     expect(notices(next(alice))).toContain(
       "The lead changed the requirements, and refunds is already done. Do you want me to start follow-up work for it?",
@@ -596,7 +602,7 @@ describe("a change to a shared input", () => {
   test("a team that left its copy as it was takes the lead's new version, as before", () => {
     const { home } = proposed();
     const bob = cloneOf(home.remote, "bob");
-    expect(takeIn("web", ["checkout-ui", "--home", HOME_RECORD], bob).status).toBe(0);
+    expect(takeIn("web", ["checkout-ui", ...planFrom(home)], bob).status).toBe(0);
     // The lead's step puts the change to them, seeing bob's take, and they approve it.
     expect(next(home.dir).ask_type).toBe("unit-amend");
     expect(run(UNIT, ["amend", "refunds", "--input", REQUIREMENTS, "--answer", "approve", "--person-words", "yes"], home.dir).status).toBe(0);
@@ -618,7 +624,7 @@ describe("a change to a shared input", () => {
     receiptHere(home.dir);
     expect(next(home.dir).ask_type).toBe("unit-amend");
     const bob = cloneOf(home.remote, "bob");
-    expect(takeIn("web", ["checkout-ui", "--home", HOME_RECORD], bob).status).toBe(0);
+    expect(takeIn("web", ["checkout-ui", ...planFrom(home)], bob).status).toBe(0);
     appendAuditEntry("HUMAN_TURN", { "Person Reply": "yes" }, home.dir);
     expect(run(UNIT, ["amend", "refunds", "--input", REQUIREMENTS, "--answer", "approve", "--person-words", "yes"], home.dir).status).toBe(0);
     next(home.dir);
@@ -633,7 +639,7 @@ describe("a change to a shared input", () => {
     appendAuditEntry("HUMAN_TURN", { "Person Reply": "yes" }, home.dir);
     expect(run(UNIT, ["amend", "refunds", "--input", REQUIREMENTS, "--answer", "approve", "--person-words", "yes"], home.dir).status).toBe(0);
     const bob = cloneOf(home.remote, "bob");
-    expect(takeIn("web", ["checkout-ui", "--home", HOME_RECORD], bob).status).toBe(0);
+    expect(takeIn("web", ["checkout-ui", ...planFrom(home)], bob).status).toBe(0);
     next(home.dir);
     fetchRecords(bob);
     expect(notices(next(bob))).toContain("The lead changed the requirements; checkout-ui uses the new one from here.");
@@ -644,9 +650,9 @@ describe("a change to a shared input", () => {
   // with its version until the lead decides, and again after the lead
   // approved it.
   test("a team's proposed copy stays its own while the proposal waits; once approved, that is the copy it builds on", () => {
-    const { home, alice, record } = refundsTaken();
+    const { home, alice, record } = refundsTakenInClone();
     const bob = cloneOf(home.remote, "bob");
-    expect(takeIn("web", ["checkout-ui", "--home", HOME_RECORD], bob).status).toBe(0);
+    expect(takeIn("web", ["checkout-ui", ...planFrom(home)], bob).status).toBe(0);
     const bobIntents = join(bob, "aidlc", "spaces", "web", "intents");
     const bobRecord = join(bobIntents, readdirSync(bobIntents).find((name) => name.endsWith("-checkout-ui"))!);
     // The lead approves web's change first; it reaches payments too.
@@ -679,7 +685,7 @@ describe("a change to a shared input", () => {
   });
 
   test("a team that changed its copy is asked once whether to send it home, and the send is not asked again", () => {
-    const { alice, record, home } = refundsTaken();
+    const { alice, record, home } = refundsTakenInClone();
     writeFileSync(join(record, ...REQUIREMENTS.split("/")), "# Requirements\n\nFR1 refunds, in two steps.\n");
     const ask = next(alice);
     expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-propose");
@@ -692,16 +698,16 @@ describe("a change to a shared input", () => {
     expect(String(choices[0].command)).toEndWith(`aidlc-unit.ts propose --input ${REQUIREMENTS} --request-file aidlc/.aidlc-engine/request-text/unit-propose.txt`);
     expect(run(UNIT, ["propose", "--input", REQUIREMENTS, "--person-words", "send it"], alice).status).toBe(0);
     expect(next(alice).ask_type).not.toBe("unit-propose");
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.proposals).toEqual([expect.objectContaining({ input: REQUIREMENTS })]);
+    expect(recordAt(home, "refunds")?.json?.proposals).toEqual([expect.objectContaining({ input: REQUIREMENTS })]);
   });
 
   test("a pushed build hears an approved change as a fact, with nothing reopened or asked", () => {
-    const { home, alice, record } = refundsTaken();
+    const { home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     // web proposes a change to the input refunds was built with too; the home approves it.
     const bob = cloneOf(home.remote, "bob");
-    expect(takeIn("web", ["checkout-ui", "--home", HOME_RECORD], bob).status).toBe(0);
+    expect(takeIn("web", ["checkout-ui", ...planFrom(home)], bob).status).toBe(0);
     const intents = join(bob, "aidlc", "spaces", "web", "intents");
     const bobRecord = join(intents, readdirSync(intents).find((name) => name.endsWith("-checkout-ui"))!);
     writeFileSync(join(bobRecord, ...REQUIREMENTS.split("/")), "# Requirements\n\nFR1 refunds, shown in the UI.\n");
@@ -717,7 +723,7 @@ describe("a change to a shared input", () => {
   test("an approved change that does not reach a build just now names who took it", () => {
     const { home } = proposed();
     const bob = cloneOf(home.remote, "bob");
-    expect(takeIn("web", ["checkout-ui", "--home", HOME_RECORD], bob).status).toBe(0);
+    expect(takeIn("web", ["checkout-ui", ...planFrom(home)], bob).status).toBe(0);
     fetchRecords(home.dir);
     const hook = join(home.remote, "hooks", "pre-receive");
     writeFileSync(hook, `#!/bin/sh\nwhile read old new ref; do case "$ref" in */checkout-ui) echo 'busy' >&2; exit 1;; esac; done\n`);
@@ -777,7 +783,7 @@ describe("a change to a shared input", () => {
   });
 
   test("a Unit already done hears it with an offer of follow-up work, and is never reopened", () => {
-    const { home, hosts, alice, record } = refundsTaken();
+    const { home, hosts, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
@@ -785,7 +791,7 @@ describe("a change to a shared input", () => {
     fetchRecords(home.dir);
     next(home.dir);
     const bob = cloneOf(home.remote, "bob");
-    expect(takeIn("payments", ["checkout-ui", "--home", HOME_RECORD], bob).status).toBe(0);
+    expect(takeIn("payments", ["checkout-ui", ...planFrom(home)], bob).status).toBe(0);
     const copy = join(readdirSync(join(bob, "aidlc", "spaces", "payments", "intents")).map((name) => join(bob, "aidlc", "spaces", "payments", "intents", name)).find((dir) => dir.endsWith("-checkout-ui"))!, ...REQUIREMENTS.split("/"));
     writeFileSync(copy, "# Requirements\n\nFR1 refunds, with receipts.\n");
     expect(run(UNIT, ["propose", "--input", "requirements.md"], bob).status).toBe(0);
@@ -841,15 +847,16 @@ describe("who hears a change to the contract summary", () => {
     git(home.dir, ["add", "-A"]);
     git(home.dir, ["commit", "-q", "-m", "teams"]);
     git(home.dir, ["push", "-q", "origin", "main"]);
+    const plan = sharePlan(home);
     for (const [unit, person, team] of [["refunds", "alice", "payments"], ["checkout-ui", "bob", "web"], ["reporting", "dana", "data"]]) {
-      const took = takeIn(team, [unit, "--home", HOME_RECORD], cloneOf(home.remote, person));
+      const took = takeIn(team, [unit, ...planFrom(plan)], cloneOf(home.remote, person));
       expect(took.status, took.out).toBe(0);
     }
     fetchRecords(home.dir);
-    return { home, record };
+    return { home: plan, record };
   }
-  const amendments = (home: { dir: string; remote: string }, unit: string) =>
-    ((claimPayload(home.remote, fixtureIntentId8(home.dir), unit) as { amendments?: unknown[] } | null)?.amendments ?? []).length;
+  const amendments = (home: PlanHome, unit: string) =>
+    ((recordAt(home, unit)?.json as { amendments?: unknown[] } | undefined)?.amendments ?? []).length;
   const approveContracts = (home: { dir: string }) =>
     appendAuditEntry("GATE_APPROVED", { Stage: "contract-design", "User Input": "Approve" }, home.dir);
 

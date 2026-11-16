@@ -1331,7 +1331,8 @@ export function resolveTestingPosture(
   // team's own, so the team's Testing Posture wins where it says one (a
   // template's notes say none: a team's own default space keeps them).
   for (const lead of leadRuleFiles(projectDir, state)) {
-    const layer = (["team", "project"] as const).find((name) => lead.path.endsWith(`/memory/${name}.md`));
+    // By its file name: the lead's memory file, or the plan's rules/ copy of it.
+    const layer = (["team", "project"] as const).find((name) => lead.path.slice(lead.path.lastIndexOf("/") + 1) === `${name}.md`);
     if (layer === undefined || visiblePostureText(sections[layer] ?? "") !== "" || lead.text === null) continue;
     sections[layer] = extractTestingPostureSection(lead.text);
   }

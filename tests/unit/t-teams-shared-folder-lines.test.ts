@@ -18,7 +18,7 @@ import { join } from "node:path";
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { arrivedAtLastPull, checkInLine, checkInState } from "../../dist/claude/.claude/tools/aidlc-unit-teams.ts";
 import { mergedAtTeamLook, type UnitClaimPayload } from "../../dist/claude/.claude/tools/aidlc-unit.ts";
-import { fixtureIntentId8, REPO_ROOT } from "../harness/fixtures.ts";
+import { REPO_ROOT } from "../harness/fixtures.ts";
 import { asLeadsOwnCheckout } from "../harness/team-unit-merge.ts";
 import {
   cleanupTeamBuild,
@@ -27,7 +27,6 @@ import {
   codeGenerated,
   codeHost,
   DEPENDENCIES,
-  claimPayload,
   ENV,
   finishBuild,
   git,
@@ -35,16 +34,20 @@ import {
   homeState,
   inSpace,
   makeHome,
+  makePlanHomeWithRemote,
   mergeOnHost,
   next,
   ORCH,
-  refundsTaken,
+  recordAt,
+  refundsTakenInClone,
   run,
   STATE,
   UNIT,
   UTILITY,
   takeIn,
   tempDir,
+  sharePlan,
+  planFrom,
 } from "../harness/team-build.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -55,14 +58,9 @@ const INIT = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-init.t
 const CLAUDE_RELEASE = join(REPO_ROOT, "dist-release", "claude");
 type Choice = { label: string; detail?: string };
 
-// The lead's work, teams chosen and every Unit open, shared.
+// The lead's work, teams chosen and every Unit open, its workspace pushed and its plan shared.
 function homeWithTeams() {
-  const home = makeHome();
-  expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
-  git(home.dir, ["add", "-A"]);
-  git(home.dir, ["commit", "-q", "-m", "teams"]);
-  git(home.dir, ["push", "-q", "origin", "main"]);
-  return home;
+  return makePlanHomeWithRemote({ repos: { app: codeHost("app") } });
 }
 
 // What a person does by hand: commit the team's record and push it.
@@ -80,10 +78,10 @@ describe("Carry on in a shared workspace", () => {
   test("a fresh clone is offered only the builds its own git name took; another's is said with who and where, and carried on when asked", () => {
     const home = homeWithTeams();
     const ana = cloneOf(home.remote, "ana");
-    expect(takeIn("payments", ["refunds", "--home", HOME_RECORD], ana).status).toBe(0);
+    expect(takeIn("payments", ["refunds", ...planFrom(home)], ana).status).toBe(0);
     checkIn(ana, "payments: refunds started");
     const bea = cloneOf(home.remote, "bea");
-    expect(takeIn("web", ["checkout-ui", "--home", HOME_RECORD], bea).status).toBe(0);
+    expect(takeIn("web", ["checkout-ui", ...planFrom(home)], bea).status).toBe(0);
     checkIn(bea, "web: checkout-ui started");
 
     // Someone who took neither, in the default space: each build is said, nothing is offered to carry on.
@@ -101,13 +99,13 @@ describe("Carry on in a shared workspace", () => {
       expect.objectContaining({ label: "Carry on refunds", detail: "Your build of it in the payments space, from another computer." }),
     ]);
     expect(String(own.question), JSON.stringify(own)).toContain("checkout-ui (being built by bea in web, on another computer)");
-    const mine = run(UNIT, ["take", "refunds", "--home", HOME_RECORD], laptop);
+    const mine = run(UNIT, ["take", "refunds", ...planFrom(home)], laptop);
     expect(mine.status, mine.out).toBe(0);
     expect(mine.json?.notice).toBe("Carrying on refunds, your build in the payments space.");
     expect(readFileSync(join(laptop, "aidlc", "active-space"), "utf-8").trim()).toBe("payments");
 
     // Abe asks to carry on ana's build all the same: it is carried on, said as hers.
-    const carried = run(UNIT, ["take", "refunds", "--home", HOME_RECORD], abe);
+    const carried = run(UNIT, ["take", "refunds", ...planFrom(home)], abe);
     expect(carried.status, carried.out).toBe(0);
     expect(carried.json?.notice).toBe("Carrying on refunds, ana's build in the payments space.");
     expect(readFileSync(join(abe, "aidlc", "active-space"), "utf-8").trim()).toBe("payments");
@@ -118,7 +116,7 @@ describe("Carry on in a shared workspace", () => {
   });
 
   test("a pushed build waits for its merge and is not offered; one the lead turned down is said so and stays its taker's to carry on", () => {
-    const { home, alice, record } = refundsTaken();
+    const { home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     finishBuild(record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
@@ -150,7 +148,7 @@ describe("Carry on in a shared workspace", () => {
   // the lead's own merge rule, read only (mergedAtTeamLook), for its own pushed
   // build.
   test("a pushed build of this checkout reads as merged at its own look once every repo has it, with nothing written to the claim", () => {
-    const { hosts, home, alice, record } = refundsTaken();
+    const { hosts, home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     finishBuild(record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
@@ -165,31 +163,31 @@ describe("Carry on in a shared workspace", () => {
     const merged = look();
     expect(merged).toContain("refunds (pushed by alice in payments, merged; the lead's project records it at its next look)");
     expect(merged).not.toContain("waiting for its merge");
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.verdicts).toBeUndefined();
+    expect(recordAt(home, "refunds")?.json?.verdicts).toBeUndefined();
   });
 
   test("the lead's merge rule, read at a team's checkout: merged once every repo has it, with nothing written to the claim", () => {
-    const { hosts, home, alice, record } = refundsTaken();
+    const { hosts, home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     finishBuild(record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
-    const payload = claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds") as unknown as UnitClaimPayload;
+    const payload = recordAt(home, "refunds")?.json as unknown as UnitClaimPayload;
     expect(mergedAtTeamLook(alice, payload)).toBe(false);
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
     expect(mergedAtTeamLook(alice, payload)).toBe(false);
     mergeOnHost(hosts.billing, "refunds", "squash");
     expect(mergedAtTeamLook(alice, payload)).toBe(true);
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.verdicts).toBeUndefined();
+    expect(recordAt(home, "refunds")?.json?.verdicts).toBeUndefined();
   });
 
   test("a code repo offline, refusing, asking for a sign-in or never answering reads as not merged, asks nothing and keeps the lead's time limit", async () => {
-    const { hosts, home, alice, record } = refundsTaken();
+    const { hosts, home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     finishBuild(record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
     mergeOnHost(hosts.billing, "refunds", "squash");
-    const payload = claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds") as unknown as UnitClaimPayload;
+    const payload = recordAt(home, "refunds")?.json as unknown as UnitClaimPayload;
     const dir = mkdtempSync(join(tmpdir(), "aidlc-merge-row-"));
     const log = join(dir, "requests.log");
     const marker = join(dir, "asked.txt");
@@ -237,7 +235,7 @@ describe("Carry on in a shared workspace", () => {
   });
 
   test("no merge check runs for a build that is not pushed and waiting", async () => {
-    const { alice, record } = refundsTaken();
+    const { alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     const dir = mkdtempSync(join(tmpdir(), "aidlc-merge-row-"));
     const log = join(dir, "requests.log");
@@ -264,7 +262,7 @@ describe("Carry on in a shared workspace", () => {
   });
 
   test("a build the lead sent back from Build and Test says it was the lead's Build and Test", () => {
-    const { home, alice, record } = refundsTaken();
+    const { home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     finishBuild(record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
@@ -286,7 +284,7 @@ describe("Carry on in a shared workspace", () => {
 
 describe("the check-in line", () => {
   test("said at the person's stop, once: a plain look over the parked work does not say it again", () => {
-    const { alice } = refundsTaken();
+    const { alice } = refundsTakenInClone();
     next(alice);
     const parked = run(ORCH, ["park"], alice);
     expect(parked.status, parked.out).toBe(0);
@@ -297,7 +295,7 @@ describe("the check-in line", () => {
   });
 
   test("said at the push, last, and never the tool folder", () => {
-    const { alice, record } = refundsTaken();
+    const { alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     finishBuild(record);
     const pushed = run(UNIT, ["push"], alice);
@@ -307,7 +305,7 @@ describe("the check-in line", () => {
   });
 
   test("said when the push is put off, and not again by a later look at the finished build", () => {
-    const { alice, record } = refundsTaken();
+    const { alice, record } = refundsTakenInClone();
     const step = next(alice);
     expect(JSON.stringify(step)).not.toContain("git add aidlc");
     codeGenerated(alice, record);
@@ -366,7 +364,7 @@ describe("the check-in line", () => {
   });
 
   test("only where teams take Units by pull request: work begun on main's flow on the workspace's own repo never hears it", () => {
-    const { alice } = refundsTaken();
+    const { alice } = refundsTakenInClone();
     expect(checkInLine(alice)).toBe(LINE);
     git(alice, ["remote", "remove", "origin"]);
     expect(checkInLine(alice)).toBeNull();
@@ -392,7 +390,7 @@ describe("the checked-in fact", () => {
   const notices = (step: Record<string, unknown>): string[] => (step.change_notices ?? []) as string[];
 
   test("after the person's own commit and push, the chat that heard the line hears once that it is checked in, and status says yes", () => {
-    const { alice } = refundsTaken();
+    const { alice } = refundsTakenInClone();
     const chat = chatOf("5b6c0d1e-1f2a-4c3b-8e4f-0a1b2c3d4e50");
     next(alice, chat);
     const parked = run(ORCH, ["park"], alice, chat);
@@ -407,7 +405,7 @@ describe("the checked-in fact", () => {
   });
 
   test("a change not checked in, or a decision of theirs only in this clone's audit, says nothing at a look or in status", () => {
-    const { alice, record } = refundsTaken();
+    const { alice, record } = refundsTakenInClone();
     const chat = chatOf("4a5b9c0d-0e1f-4b2a-8d3e-9f0a1b2c3d40");
     next(alice, chat);
     expect(run(ORCH, ["park"], alice, chat).status).toBe(0);
@@ -428,7 +426,7 @@ describe("the checked-in fact", () => {
   // A live run on GitHub: a record pushed with -u on a branch whose pull
   // request was open was said to be with the team while main had none of it.
   test("a record pushed on a branch not merged yet is said pushed there, once, and checked in once main has it", () => {
-    const { home, alice } = refundsTaken();
+    const { home, alice } = refundsTakenInClone();
     const chat = chatOf("6c7d1e2f-2a3b-4d4c-9f5a-1b2c3d4e5f60");
     const PUSHED = "aidlc/ is pushed on records/refunds; your teammates see it once it is in main.";
     next(alice, chat);
@@ -456,7 +454,7 @@ describe("the checked-in fact", () => {
   });
 
   test("at the lead's own checkout the branch is read from this clone's refs, never asked of the remote, never the branch it is on", () => {
-    const { home } = refundsTaken();
+    const { home } = refundsTakenInClone();
     git(home.dir, ["checkout", "-q", "-b", "records/plan"]);
     writeFileSync(join(home.dir, "aidlc", "notes.md"), "The plan, for its pull request.\n");
     git(home.dir, ["add", "aidlc"]);
@@ -482,11 +480,12 @@ describe("the checked-in fact", () => {
     git(home.dir, ["add", "-A"]);
     git(home.dir, ["commit", "-q", "-m", "teams, on records"]);
     git(home.dir, ["push", "-q", "origin", "main", "main:records"]);
+    const plan = sharePlan(home);
     const alice = cloneOf(home.remote, "alice");
     git(alice, ["checkout", "-q", "records"]);
     for (const [name, host] of Object.entries(hosts)) cloneCode(host, alice, name, "alice");
     inSpace(alice, "payments");
-    const took = run(UNIT, ["take", "refunds", "--home", HOME_RECORD], alice);
+    const took = run(UNIT, ["take", "refunds", ...planFrom(plan)], alice);
     expect(took.status, took.out).toBe(0);
     const chat = chatOf("7d8e2f3a-3b4c-4e5d-8a6b-2c3d4e5f6a70");
     next(alice, chat);
@@ -510,7 +509,7 @@ describe("the checked-in fact", () => {
   });
 
   test("a branch never pushed cannot be told: no line at a look, none in status, and the stopping point says today's words", () => {
-    const { alice } = refundsTaken();
+    const { alice } = refundsTakenInClone();
     git(alice, ["checkout", "-q", "-b", "local-only"]);
     const chat = chatOf("3f4a8b9c-9d0e-4a1f-8c2d-8e9f0a1b2c30");
     next(alice, chat);
@@ -527,11 +526,11 @@ describe("where things stand", () => {
   test("status says what the last pull brought from the other teams", () => {
     const home = homeWithTeams();
     const ana = cloneOf(home.remote, "ana");
-    expect(takeIn("payments", ["refunds", "--home", HOME_RECORD], ana).status).toBe(0);
+    expect(takeIn("payments", ["refunds", ...planFrom(home)], ana).status).toBe(0);
     checkIn(ana, "payments: refunds started");
     expect(arrivedAtLastPull(ana)).toBeNull();
     const bea = cloneOf(home.remote, "bea");
-    expect(takeIn("web", ["checkout-ui", "--home", HOME_RECORD], bea).status).toBe(0);
+    expect(takeIn("web", ["checkout-ui", ...planFrom(home)], bea).status).toBe(0);
     checkIn(bea, "web: checkout-ui started");
     git(ana, ["pull", "-q", "--no-rebase", "--no-edit"]);
     expect(arrivedAtLastPull(ana)).toBe("bea: checkout-ui");
@@ -553,10 +552,10 @@ describe("where things stand", () => {
   test("with every build in one space, a pull's news is said by who made it, and nothing when it was only the person's own", () => {
     const home = homeWithTeams();
     const ana = cloneOf(home.remote, "ana");
-    expect(run(UNIT, ["take", "refunds", "--home", HOME_RECORD], ana).status).toBe(0);
+    expect(run(UNIT, ["take", "refunds", ...planFrom(home)], ana).status).toBe(0);
     checkIn(ana, "refunds started");
     const bea = cloneOf(home.remote, "bea");
-    expect(run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD], bea).status).toBe(0);
+    expect(run(UNIT, ["take", "checkout-ui", ...planFrom(home)], bea).status).toBe(0);
     checkIn(bea, "checkout-ui started");
     git(ana, ["pull", "-q", "--no-rebase", "--no-edit"]);
     expect(arrivedAtLastPull(ana)).toBe("bea: checkout-ui");
@@ -582,13 +581,14 @@ describe("where things stand", () => {
     git(home.dir, ["add", "-A"]);
     git(home.dir, ["commit", "-q", "-m", "teams"]);
     git(home.dir, ["push", "-q", "origin", "main"]);
+    const plan = sharePlan(home);
     const bea = cloneOf(home.remote, "bea");
-    expect(run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD], bea).status).toBe(0);
+    expect(run(UNIT, ["take", "checkout-ui", ...planFrom(plan)], bea).status).toBe(0);
     checkIn(bea, "checkout-ui started");
     const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "ana-chat" };
     const ana = cloneOf(home.remote, "ana");
     for (const [name, host] of Object.entries(hosts)) cloneCode(host, ana, name, "ana");
-    expect(run(UNIT, ["take", "refunds", "--home", HOME_RECORD], ana, chat).status).toBe(0);
+    expect(run(UNIT, ["take", "refunds", ...planFrom(plan)], ana, chat).status).toBe(0);
     const intents = join(ana, "aidlc", "spaces", "default", "intents");
     const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-refunds"))!);
     codeGenerated(ana, record);
@@ -618,10 +618,11 @@ describe("where things stand", () => {
     git(home.dir, ["add", "-A"]);
     git(home.dir, ["commit", "-q", "-m", "teams"]);
     git(home.dir, ["push", "-q", "origin", "main"]);
+    const plan = sharePlan(home);
     const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "ana-chat" };
     const ana = cloneOf(home.remote, "ana");
     for (const [name, host] of Object.entries(hosts)) cloneCode(host, ana, name, "ana");
-    expect(run(UNIT, ["take", "refunds", "--home", HOME_RECORD], ana, chat).status).toBe(0);
+    expect(run(UNIT, ["take", "refunds", ...planFrom(plan)], ana, chat).status).toBe(0);
     const intents = join(ana, "aidlc", "spaces", "default", "intents");
     const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-refunds"))!);
     codeGenerated(ana, record);
@@ -633,7 +634,7 @@ describe("where things stand", () => {
     const yours = (): string | undefined => /^Yours: +(.*)$/m.exec(status())?.[1];
     // Her first build in hand, finished: it alone, where it stands.
     expect(yours(), status()).toBe("refunds (pushed, waiting for its merge)");
-    const second = run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD], ana, chat);
+    const second = run(UNIT, ["take", "checkout-ui", ...planFrom(plan)], ana, chat);
     expect(second.status, second.out).toBe(0);
     expect(status()).toContain("Yours:          refunds (pushed, waiting for its merge)\n");
     // A repo of it not in this clone: where its merge stands cannot be read here.
@@ -653,7 +654,7 @@ describe("where things stand", () => {
   // u6-request-id is merged.", and her look on her finished build, then status,
   // left the agent only her earlier answer, "pushed, but not merged yet".
   test("the build in hand, finished, is on status's Yours line where the lead's project has it: merged once the lead records it", () => {
-    const { home, alice, record } = refundsTaken();
+    const { home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     finishBuild(record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
@@ -665,7 +666,7 @@ describe("where things stand", () => {
     for (const repo of ["checkout-api", "billing"]) {
       expect(run(UNIT, ["merged", "refunds", "--repo", repo, "--person-words", `${repo} merged it`], home.dir).status).toBe(0);
     }
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
+    expect(recordAt(home, "refunds")?.json).toMatchObject({ done: true });
     // Status alone reads the lead's project for it.
     expect(yours(), status()).toBe("refunds (merged)");
     // Her look with words on the finished build, then status: never waiting.
@@ -680,12 +681,13 @@ describe("where things stand", () => {
     git(home.dir, ["add", "-A"]);
     git(home.dir, ["commit", "-q", "-m", "teams"]);
     git(home.dir, ["push", "-q", "origin", "main"]);
+    const plan = sharePlan(home);
     const ana = cloneOf(home.remote, "ana");
-    expect(run(UNIT, ["take", "refunds", "--home", HOME_RECORD], ana).status).toBe(0);
+    expect(run(UNIT, ["take", "refunds", ...planFrom(plan)], ana).status).toBe(0);
     checkIn(ana, "refunds started");
     const bea = cloneOf(home.remote, "bea");
-    expect(run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD], bea).status).toBe(0);
-    expect(run(UNIT, ["take", "reporting", "--home", HOME_RECORD], bea).status).toBe(0);
+    expect(run(UNIT, ["take", "checkout-ui", ...planFrom(plan)], bea).status).toBe(0);
+    expect(run(UNIT, ["take", "reporting", ...planFrom(plan)], bea).status).toBe(0);
     checkIn(bea, "checkout-ui and reporting started");
     git(ana, ["pull", "-q", "--no-rebase", "--no-edit"]);
     expect(run(UTILITY, ["status"], ana, ENV).out)

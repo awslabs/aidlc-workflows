@@ -21,7 +21,6 @@ import { fixtureIntentId8, REPO_ROOT } from "../harness/fixtures.ts";
 import { hostFor } from "../harness/scope-hosts.ts";
 import { AgentStandIn, type Directive, PersonScript, type StandInOptions } from "../harness/scope-run.ts";
 import {
-  claimPayload,
   cleanupTeamBuild,
   cloneCode,
   cloneOf,
@@ -30,18 +29,20 @@ import {
   ENV,
   git,
   GIT_ENV,
-  HOME_RECORD,
   homeState,
   makeHome,
   mergeOnHost,
   next,
   ORCH,
-  refundsTaken,
+  recordAt,
+  refundsTakenInClone,
   run,
   STATE,
   UNIT,
   takeIn,
   UTILITY,
+  sharePlan,
+  planFrom,
 } from "../harness/team-build.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -190,14 +191,14 @@ describe("a Unit the lead's project builds reads where its Unit Progress has it"
 describe("a teammate's take offer", () => {
   test("a fresh clone never names a Unit done on its claim as being built, and what waited on it is ready", () => {
     // Nobody took reporting, so it is open for a team to take once refunds is done.
-    const { hosts, home, alice, record } = refundsTaken();
+    const { hosts, home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     git(home.dir, ["fetch", "-q", "origin"]);
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
     mergeOnHost(hosts.billing, "refunds", "merge");
     next(home.dir);
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
+    expect(recordAt(home, "refunds")?.json).toMatchObject({ done: true });
     // The lead's state as last pushed, before this record of the merge.
     const bob = cloneOf(home.remote, "bob");
     const offer = next(bob);
@@ -209,7 +210,7 @@ describe("a teammate's take offer", () => {
 
 describe("a look at the board records nothing, and says so", () => {
   test("a merge team-board sees is not recorded yet, the next step records it, and the board then reads done", () => {
-    const { hosts, home, alice, record } = refundsTaken();
+    const { hosts, home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     git(home.dir, ["fetch", "-q", "origin"]);
@@ -220,7 +221,7 @@ describe("a look at the board records nothing, and says so", () => {
         "the next step here records it and opens reporting",
     );
     expect(readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_MERGED")).toEqual([]);
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).not.toMatchObject({ done: true });
+    expect(recordAt(home, "refunds")?.json).not.toMatchObject({ done: true });
     next(home.dir);
     expect(readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_MERGED")).toHaveLength(1);
     const after = teamBoard(home.dir);
@@ -237,12 +238,13 @@ describe("a look at the board records nothing, and says so", () => {
     git(home.dir, ["add", "-A"]);
     git(home.dir, ["commit", "-q", "-m", "teams chosen"]);
     git(home.dir, ["push", "-q", "origin", "main"]);
+    const plan = sharePlan(home);
     // The lead's chat looks at the claims while it builds checkout-ui; alice then takes refunds.
     const building = next(home.dir, chat);
     expect(building.unit, JSON.stringify(building).slice(0, 400)).toBe("checkout-ui");
     const alice = cloneOf(home.remote, "alice");
     for (const [name, host] of Object.entries(hosts)) cloneCode(host, alice, name, "alice");
-    expect(takeIn("payments", ["refunds", "--home", HOME_RECORD], alice).status).toBe(0);
+    expect(takeIn("payments", ["refunds", ...planFrom(plan)], alice).status).toBe(0);
     const intents = join(alice, "aidlc", "spaces", "payments", "intents");
     const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-refunds"))!);
     codeGenerated(alice, record);
@@ -252,13 +254,13 @@ describe("a look at the board records nothing, and says so", () => {
     appendAuditEntry("HUMAN_TURN", { "Person Reply": "carry on" }, home.dir);
     next(home.dir, chat);
     expect(readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_MERGED")).toHaveLength(1);
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
+    expect(recordAt(plan, "refunds")?.json).toMatchObject({ done: true });
   });
 });
 
 describe("going back to change the Unit plan while teams build Units", () => {
   test("names each Unit taken as it stands with whoever took it, never an open one, main's claim, land and publish words", () => {
-    const { home } = refundsTaken();
+    const { home } = refundsTakenInClone();
     git(home.dir, ["fetch", "-q", "origin"]);
     const step = next(home.dir, undefined, ["--stage", "units-generation"]);
     const notices = (step.change_notices ?? []) as string[];
@@ -278,11 +280,12 @@ describe("going back to change the Unit plan while teams build Units", () => {
     git(home.dir, ["add", "-A"]);
     git(home.dir, ["commit", "-q", "-m", "teams chosen"]);
     git(home.dir, ["push", "-q", "origin", "main"]);
+    const plan = sharePlan(home);
     // The lead's chat looks at the teams' claims once; alice takes refunds after that.
     const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "lead-chat" };
     next(home.dir, chat);
     const alice = cloneOf(home.remote, "alice");
-    const took = takeIn("payments", ["refunds", "--home", HOME_RECORD], alice);
+    const took = takeIn("payments", ["refunds", ...planFrom(plan)], alice);
     expect(took.status, took.out).toBe(0);
     const step = next(home.dir, chat, ["--stage", "units-generation"]);
     const line = ((step.change_notices ?? []) as string[]).find((notice) => notice.startsWith("Still with teams:"));
@@ -290,7 +293,7 @@ describe("going back to change the Unit plan while teams build Units", () => {
   });
 
   test("a Unit whose team pushed it reads pushed and not merged yet, never as being built", () => {
-    const { home, alice, record } = refundsTaken();
+    const { home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     git(home.dir, ["fetch", "-q", "origin"]);
@@ -307,7 +310,7 @@ describe("going back to change the Unit plan while teams build Units", () => {
 // lead says so.
 describe("the lead's project builds nothing it was not asked to", () => {
   function refundsMerged() {
-    const taken = refundsTaken();
+    const taken = refundsTakenInClone();
     codeGenerated(taken.alice, taken.record);
     expect(run(UNIT, ["push"], taken.alice).status).toBe(0);
     mergeOnHost(taken.hosts["checkout-api"], "refunds", "squash");
@@ -329,7 +332,7 @@ describe("the lead's project builds nothing it was not asked to", () => {
   // A live run: every look said the lead's project was on Functional Design
   // for the first Unit, while it built nothing.
   test("a look at where things stand names no stage as now while the lead's project waits on the Units", () => {
-    const { home, alice } = refundsTaken();
+    const { home, alice } = refundsTakenInClone();
     git(home.dir, ["fetch", "-q", "origin"]);
     expect(next(home.dir).kind).toBe("print");
     const status = run(UTILITY, ["status"], home.dir).out;
@@ -354,7 +357,7 @@ describe("the lead's project builds nothing it was not asked to", () => {
   // of the look, named Functional Design with the Architect on it and a next
   // stage, because no board had run on the state since it last changed.
   test("before any board on this state, a look at where things stand still says the lead's project waits on the Units", () => {
-    const { home } = refundsTaken();
+    const { home } = refundsTakenInClone();
     git(home.dir, ["fetch", "-q", "origin"]);
     const waits = (): void => {
       const status = run(UTILITY, ["status"], home.dir).out;
@@ -372,9 +375,9 @@ describe("the lead's project builds nothing it was not asked to", () => {
 
   // A live run: the board's bare space names read as teams the lead never named.
   test("a take's row names its space as a space, and a take in a default space has no column", () => {
-    const { home } = refundsTaken();
+    const { home } = refundsTakenInClone();
     const bea = cloneOf(home.remote, "bea");
-    expect(run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD], bea).status).toBe(0);
+    expect(run(UNIT, ["take", "checkout-ui", ...planFrom(home)], bea).status).toBe(0);
     git(home.dir, ["fetch", "-q", "origin"]);
     const board = String(next(home.dir).narration);
     expect(board).toContain("- refunds, payments space: building, taken by alice");

@@ -42,13 +42,22 @@ import {
   GIT_ENV,
   git,
   homeState,
+  type Home,
   hook,
   makeHome,
+  makePlanHome,
+  makePlanHomeWithRemote,
   mergeOnHost,
   next,
+  offerText,
   ORCH,
   personsChat,
+  type PlanHome,
+  planRefOf,
+  recordAt,
   refundsTaken,
+  refundsTakenInClone,
+  sharePlan,
   DEPENDENCIES,
   run,
   STATE,
@@ -57,6 +66,7 @@ import {
   UTILITY,
   takeIn,
   inSpace,
+  teamWorkspace as ownWorkspace,
 } from "../harness/team-build.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -65,14 +75,31 @@ afterEach(cleanupTeamBuild);
 const HOME = "fixture-8000000000000001";
 const field = (content: string, name: string) => new RegExp(`^- \\*\\*${name}\\*\\*: ?(.*)$`, "m").exec(content)?.[1]?.trim();
 
-// The home after the lead chose teams, every Unit open, pushed for the teams.
+// The home after the lead chose teams, every Unit open, pushed for the teams,
+// its plan shared in app. take() takes from that plan in the case that made it.
+let sharedPlan: PlanHome | null = null;
+afterEach(() => {
+  sharedPlan = null;
+});
 function homeWithTeams(dependencies?: string) {
-  const home = makeHome(dependencies === undefined ? {} : { dependencies });
-  expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
-  git(home.dir, ["add", "-A"]);
-  git(home.dir, ["commit", "-q", "-m", "teams"]);
-  git(home.dir, ["push", "-q", "origin", "main"]);
+  const home = makePlanHomeWithRemote({ repos: { app: codeHost("app") }, ...(dependencies === undefined ? {} : { dependencies }) });
+  sharedPlan = home;
   return home;
+}
+// refunds taken from the shared plan (refundsTaken); take() takes from the same plan.
+function refundsTakenHere(...args: Parameters<typeof refundsTaken>): ReturnType<typeof refundsTaken> {
+  const taken = refundsTaken(...args);
+  sharedPlan = taken.home;
+  return taken;
+}
+// The take command the Units offer prints for a Unit of a shared plan.
+const takeCommand = (home: PlanHome, unit: string): string =>
+  `take ${unit} --plan ${home.id8} --from ${shellArg(Object.values(home.hosts)[0])}`;
+// The lead shares the plan of a home whose teams this case chose; take() takes from it.
+function planShared(home: Home): PlanHome & Home {
+  const plan = sharePlan(home);
+  sharedPlan = plan;
+  return plan;
 }
 
 // A team's own workspace repo made from the home's: the home's record comes
@@ -90,7 +117,8 @@ function teamWorkspace(homeRemote: string, label: string, hostTakesNoPush = fals
 }
 
 function take(dir: string, unit: string, extra: string[] = []) {
-  return run(UNIT, ["take", unit, "--home", HOME, ...extra], dir);
+  const from = sharedPlan === null ? ["--home", HOME] : ["--plan", sharedPlan.id8, "--from", Object.values(sharedPlan.hosts)[0]];
+  return run(UNIT, ["take", unit, ...from, ...extra], dir);
 }
 
 // The take question's own choice to carry the person's build on where it is.
@@ -122,8 +150,8 @@ describe("a team member's clone of the home's workspace", () => {
     const ask = next(cloneOf(home.remote, "alice"));
     expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-take");
     expect(ask.response_route).toBe("command");
-    expect(ask.question).toBe(
-      "fixture is built by teams. Ready to take: refunds (open; likely checkout-api, billing), " +
+    expect(offerText(ask.question)).toBe(
+      "fixture is shared in app. Ready to take: refunds (open; likely checkout-api, billing), " +
         "checkout-ui (open; likely checkout-web). Waiting: reporting (on refunds). Taking a Unit starts it as your " +
         "team's own piece of work here, from what the lead approved.",
     );
@@ -134,7 +162,7 @@ describe("a team member's clone of the home's workspace", () => {
       "Carry on fixture here, as the lead",
     ]);
     expect(choices[0].detail).toBe("Open.");
-    expect(choices[0].command).toEndWith(`aidlc-unit.ts take refunds --home ${HOME}`);
+    expect(choices[0].command).toEndWith(`aidlc-unit.ts ${takeCommand(home, "refunds")}`);
     expect(choices[2].command).toEndWith(`next --pick ${HOME}`);
   });
 
@@ -145,6 +173,7 @@ describe("a team member's clone of the home's workspace", () => {
     asLeadsOwnCheckout(home.dir);
     commitAll(home.dir, "teams");
     git(home.dir, ["push", "-q", "origin", "main"]);
+    planShared(home);
     const labels = (dir: string) => ((next(dir).choices ?? []) as Array<{ label: string }>).map((choice) => choice.label);
     // A clone made under the lead's own git name is a clone all the same.
     expect(labels(cloneOf(home.remote, "lead"))).toEqual(["Start refunds", "Start checkout-ui"]);
@@ -181,6 +210,7 @@ describe("a team member's clone of the home's workspace", () => {
     asLeadsOwnCheckout(home.dir);
     commitAll(home.dir, "teams");
     git(home.dir, ["push", "-q", "origin", "main"]);
+    const plan = planShared(home);
     const alice = cloneOf(home.remote, "alice");
     expect(run(UTILITY, ["intent", "switch", HOME], alice).status).toBe(0);
     const step = next(alice, ENV);
@@ -191,7 +221,7 @@ describe("a team member's clone of the home's workspace", () => {
     expect(JSON.stringify(next(alice, ENV))).not.toContain("Who builds which Unit");
     // Their words there are read against the Units offer, never sent on as the lead's work.
     const words = next(alice, ENV, ["we are the payments team and want to take refunds, our Unit"]);
-    expect(String(words.message), JSON.stringify(words).slice(0, 500)).toContain(`take refunds --home ${HOME}`);
+    expect(String(words.message), JSON.stringify(words).slice(0, 500)).toContain(takeCommand(plan, "refunds"));
     expect(String(words.message)).not.toContain("--team");
     // A Unit not ready to take is said where it stands, never sent on as new work.
     expect(String(words.message)).toContain("tell them in one line where it stands");
@@ -208,6 +238,7 @@ describe("a team member's clone of the home's workspace", () => {
     asLeadsOwnCheckout(home.dir);
     commitAll(home.dir, "teams");
     git(home.dir, ["push", "-q", "origin", "main"]);
+    const plan = planShared(home);
     const ria = cloneOf(home.remote, "ria");
     const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "ria-claim-chat" };
     expect(run(UTILITY, ["intent", "switch", HOME], ria, chat).status).toBe(0);
@@ -221,7 +252,7 @@ describe("a team member's clone of the home's workspace", () => {
     // A team named with it makes and picks no space; the build follows the lead's plan's rhythm.
     expect(existsSync(join(ria, "aidlc", "spaces", "Payments"))).toBe(false);
     expect(existsSync(join(ria, ...teamFile!.split("/")))).toBe(false);
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({
+    expect(recordAt(plan, "refunds")?.json).toMatchObject({
       owner: "default", taken_by: "ria", gate_rhythm: "per-stage",
     });
     const state = readFileSync(join(buildDir(ria, "default", "refunds"), "aidlc-state.md"), "utf-8");
@@ -238,12 +269,13 @@ describe("a team member's clone of the home's workspace", () => {
     asLeadsOwnCheckout(home.dir);
     commitAll(home.dir, "teams");
     git(home.dir, ["push", "-q", "origin", "main"]);
+    const plan = planShared(home);
     const ria = cloneOf(home.remote, "ria");
     expect(run(UTILITY, ["intent", "switch", HOME], ria).status).toBe(0);
     const claimed = run(UTILITY, ["claim", "refunds", "--rhythm", "unit-end"], ria);
     expect(claimed.status, claimed.out).toBe(0);
     expect(claimed.json).toMatchObject({ taken: true, unit: "refunds" });
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ taken_by: "ria", gate_rhythm: "unit-end" });
+    expect(recordAt(plan, "refunds")?.json).toMatchObject({ taken_by: "ria", gate_rhythm: "unit-end" });
     const state = readFileSync(join(buildDir(ria, "default", "refunds"), "aidlc-state.md"), "utf-8");
     expect(field(state, "Construction Iteration")).toBe("unit-major");
     expect(field(state, "Construction Checkpoints")).toBe("enabled");
@@ -255,10 +287,11 @@ describe("a team member's clone of the home's workspace", () => {
     asLeadsOwnCheckout(home.dir);
     commitAll(home.dir, "teams");
     git(home.dir, ["push", "-q", "origin", "main"]);
+    const plan = planShared(home);
     const claimed = run(UTILITY, ["claim", "refunds"], home.dir);
     expect(claimed.status).not.toBe(0);
     expect(claimed.out).toContain("Nothing is claimed here: this work's teams each take their Unit in their own clone");
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toBeNull();
+    expect(recordAt(plan, "refunds")).toBeNull();
   });
 
   test("the lead on a second machine: their own word that they lead this work, recorded, puts the lead's questions there again", () => {
@@ -267,6 +300,7 @@ describe("a team member's clone of the home's workspace", () => {
     asLeadsOwnCheckout(home.dir);
     commitAll(home.dir, "teams");
     git(home.dir, ["push", "-q", "origin", "main"]);
+    planShared(home);
     const laptop = cloneOf(home.remote, "lead");
     expect(run(UTILITY, ["intent", "switch", HOME], laptop).status).toBe(0);
     const step = next(laptop, ENV);
@@ -287,6 +321,7 @@ describe("a team member's clone of the home's workspace", () => {
     asLeadsOwnCheckout(home.dir);
     commitAll(home.dir, "teams");
     git(home.dir, ["push", "-q", "origin", "main"]);
+    planShared(home);
     const laptop = cloneOf(home.remote, "lead");
     expect(run(UTILITY, ["intent", "switch", HOME], laptop).status).toBe(0);
     const session = "t-unit-take-lead-here-one";
@@ -310,13 +345,14 @@ describe("a team member's clone of the home's workspace", () => {
     asLeadsOwnCheckout(home.dir);
     commitAll(home.dir, "teams");
     git(home.dir, ["push", "-q", "origin", "main"]);
+    const plan = planShared(home);
     const alice = cloneOf(home.remote, "alice");
     const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "alice-chat" };
     expect(next(alice, chat, ["hi, what is ours to build?"]).ask_type).toBe("unit-take");
     const words = next(alice, chat, ["refunds is ours, we want to start it now"]);
     expect(words.kind, JSON.stringify(words).slice(0, 600)).toBe("print");
     expect(String(words.message)).not.toContain("--pick");
-    expect(String(words.message)).toContain(`take refunds --home ${HOME}`);
+    expect(String(words.message)).toContain(takeCommand(plan, "refunds"));
     expect(String(words.message)).not.toContain("--team");
     // The lead's work is switched to only on their own word that they lead it.
     expect(String(words.message)).toContain("If they say they lead this work and ask to carry it on here, run");
@@ -331,6 +367,7 @@ describe("a team member's clone of the home's workspace", () => {
     asLeadsOwnCheckout(home.dir);
     commitAll(home.dir, "teams");
     git(home.dir, ["push", "-q", "origin", "main"]);
+    const plan = planShared(home);
     const alice = cloneOf(home.remote, "alice");
     expect(takeFrom("payments", alice, "refunds").status).toBe(0);
     commitAll(alice, "payments: refunds taken");
@@ -341,7 +378,7 @@ describe("a team member's clone of the home's workspace", () => {
     const offer = next(bea, chat, ["hi, what is there to build?"]);
     expect(offer.ask_type, JSON.stringify(offer).slice(0, 600)).toBe("unit-take");
     expect(String(offer.question)).toContain("refunds (being built by alice in payments, on another computer)");
-    const command = `bun .claude/tools/aidlc-unit.ts take refunds --home ${HOME}`;
+    const command = `bun .claude/tools/aidlc-unit.ts ${takeCommand(plan, "refunds")}`;
     expect(String(offer.question_note)).toContain(
       `When their words ask to carry on a build the question lists as being built, run its command: refunds: \`${command}\`.`,
     );
@@ -353,7 +390,7 @@ describe("a team member's clone of the home's workspace", () => {
     // Only the build listed as being built gets one: reporting waits on refunds.
     expect(message).not.toContain("reporting: `");
     // The command carries it on, said once whose it is, and the next step is its build, asked nothing again.
-    const took = run(UNIT, ["take", "refunds", "--home", HOME], bea, chat);
+    const took = run(UNIT, ["take", "refunds", "--plan", plan.id8, "--from", Object.values(plan.hosts)[0]], bea, chat);
     expect(took.status, took.out).toBe(0);
     expect(took.json?.resumed, took.out).toBe(true);
     const after = next(bea, chat);
@@ -406,11 +443,12 @@ describe("a team member's clone of the home's workspace", () => {
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
     commitAll(home.dir, "teams");
     git(home.dir, ["push", "-q", "origin", "main"]);
+    const plan = planShared(home);
     const alice = cloneOf(home.remote, "alice");
     for (const [name, host] of Object.entries(hosts)) cloneCode(host, alice, name, "alice");
     // The chat's first look offers refunds; the take, the build and the push all run in that chat.
     expect(next(alice, chat).ask_type).toBe("unit-take");
-    expect(takeIn("payments", ["refunds", "--home", HOME], alice, chat).status).toBe(0);
+    expect(takeIn("payments", ["refunds", "--plan", plan.id8, "--from", Object.values(plan.hosts)[0]], alice, chat).status).toBe(0);
     const record = buildDir(alice, "payments", "refunds");
     codeGenerated(alice, record);
     finishBuild(record);
@@ -420,7 +458,7 @@ describe("a team member's clone of the home's workspace", () => {
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
     mergeOnHost(hosts.billing, "refunds", "merge");
     next(home.dir);
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
+    expect(recordAt(plan, "refunds")?.json).toMatchObject({ done: true });
     const offered = next(alice, chat);
     expect(offered.ask_type, JSON.stringify(offered).slice(0, 500)).toBe("unit-take");
     expect((offered.choices as Array<{ label: string }>).map((choice) => choice.label)).toContain("Start reporting");
@@ -437,10 +475,11 @@ describe("a team member's clone of the home's workspace", () => {
     asLeadsOwnCheckout(home.dir);
     commitAll(home.dir, "teams");
     git(home.dir, ["push", "-q", "origin", "main"]);
+    const plan = planShared(home);
     const ana = cloneOf(home.remote, "ana");
     for (const [name, host] of Object.entries(hosts)) cloneCode(host, ana, name, "ana");
     const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "ana-chat" };
-    const took = run(UNIT, ["take", "refunds", "--home", HOME], ana, chat);
+    const took = run(UNIT, ["take", "refunds", "--plan", plan.id8, "--from", Object.values(plan.hosts)[0]], ana, chat);
     expect(took.status, took.out).toBe(0);
     const record = buildDir(ana, "default", "refunds");
     codeGenerated(ana, record);
@@ -451,7 +490,7 @@ describe("a team member's clone of the home's workspace", () => {
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
     mergeOnHost(hosts.billing, "refunds", "merge");
     next(home.dir);
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
+    expect(recordAt(plan, "refunds")?.json).toMatchObject({ done: true });
     const later = next(ana, { ...ENV, AIDLC_SESSION_OVERRIDE: "ana-next-day" });
     expect(later.ask_type, JSON.stringify(later).slice(0, 600)).toBe("unit-take");
     expect((later.choices as Array<{ label: string }>).map((choice) => choice.label)).toContain("Start reporting");
@@ -466,14 +505,15 @@ describe("a team member's clone of the home's workspace", () => {
     asLeadsOwnCheckout(home.dir);
     commitAll(home.dir, "teams");
     git(home.dir, ["push", "-q", "origin", "main"]);
+    planShared(home);
     const alice = cloneOf(home.remote, "alice");
     const step = next(alice);
     expect(step.kind, JSON.stringify(step)).toBe("print");
     // Nothing of the home's work runs here, and a teammate is offered nothing of it.
     expect(step.offers, JSON.stringify(step)).toBeUndefined();
     expect(step.message).toBe("Say the line above, then end the turn.");
-    expect(step.narration).toBe(
-      "fixture is built by teams. The walking skeleton, orders, is built at the lead's project first. " +
+    expect(offerText(step.narration)).toBe(
+      "fixture is shared in app. The walking skeleton, orders, is built at the lead's project first. " +
         "Waiting: refunds (on orders), checkout-ui (on orders), reporting (on orders, refunds). " +
         "Nothing is ready to take yet.",
     );
@@ -481,7 +521,7 @@ describe("a team member's clone of the home's workspace", () => {
   });
 
   test("a clone a day old hears the claims as the home has them now: a Unit whose dependency merged since opens, with no fetch by hand", () => {
-    const { hosts, home, alice, record } = refundsTaken();
+    const { hosts, home, alice, record } = refundsTakenHere();
     // dana of data cloned before refunds was done, and looks while it waits.
     const dana = cloneOf(home.remote, "dana");
     inSpace(dana, "data");
@@ -489,8 +529,8 @@ describe("a team member's clone of the home's workspace", () => {
     expect(takeFrom("web", cloneOf(home.remote, "wen"), "checkout-ui").status).toBe(0);
     const waiting = next(dana);
     expect(waiting.kind, JSON.stringify(waiting)).toBe("print");
-    expect(waiting.narration).toBe(
-      "fixture is built by teams. Waiting: reporting (on refunds). Being built: refunds " +
+    expect(offerText(waiting.narration)).toBe(
+      "fixture is shared in checkout-api. Waiting: reporting (on refunds). Being built: refunds " +
         "(by alice in payments), checkout-ui (by wen in web). Nothing is ready to take yet.",
     );
     codeGenerated(alice, record);
@@ -499,7 +539,7 @@ describe("a team member's clone of the home's workspace", () => {
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
     mergeOnHost(hosts.billing, "refunds", "merge");
     next(home.dir);
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
+    expect(recordAt(home, "refunds")?.json).toMatchObject({ done: true });
     const ready = next(dana);
     expect(ready.ask_type, JSON.stringify(ready)).toBe("unit-take");
     expect((ready.choices as Array<{ label: string }>).map((choice) => choice.label)).toContain("Start reporting");
@@ -531,10 +571,10 @@ describe("taking a Unit starts its build in the team's space", () => {
     const home = homeWithTeams();
     const alice = cloneOf(home.remote, "alice");
     inSpace(alice, "payments");
-    const before = claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds");
+    const before = recordAt(home, "refunds")?.json;
     const took = take(alice, "refunds", ["--request-file", "aidlc/.aidlc-engine/request-text/missing.txt"]);
     expect(took.status).not.toBe(0);
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toEqual(before);
+    expect(recordAt(home, "refunds")?.json).toEqual(before);
     const intents = join(alice, "aidlc", "spaces", "payments", "intents");
     expect(existsSync(intents) && readdirSync(intents).some((name) => name.endsWith("-refunds"))).toBe(false);
   });
@@ -548,30 +588,23 @@ describe("taking a Unit starts its build in the team's space", () => {
     const took = takeFrom("payments", alice, "refunds");
     expect(took.status, took.out).toBe(0);
     const state = readFileSync(join(buildDir(alice, "payments", "refunds"), "aidlc-state.md"), "utf-8");
-    expect(field(state, "Home Location")).toBe(home.remote);
+    expect(field(state, "Home Location")).toBe(home.hosts.app);
     expect(field(state, "State Version")).toBe("9");
   });
 
   // Work a newer AI-DLC set up (a State Version this build cannot read) is
-  // never taken or offered here: the take says the one step that carries it
-  // on before it writes anything, and a look in a teammate's clone gives the
-  // update offer, in the words next's other doors say, in place of its Units.
-  test("team work a newer AI-DLC set up: the take says the step and writes nothing, and a look gives the update offer, never its Units", () => {
+  // never offered here: a look in a teammate's clone of the shared workspace
+  // gives the update offer, in the words next's other doors say, in place of
+  // its Units. A take reads the plan's own format (t-plan-read).
+  test("team work a newer AI-DLC set up: a look gives the update offer, never its Units", () => {
     const home = makeHome({ state: homeState().replace("- **State Version**: 8", "- **State Version**: 10") });
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
     expect(field(readFileSync(join(home.dir, "aidlc", "spaces", "default", "intents", HOME, "aidlc-state.md"), "utf-8"), "State Version")).toBe("10");
     git(home.dir, ["add", "-A"]);
     git(home.dir, ["commit", "-q", "-m", "teams"]);
     git(home.dir, ["push", "-q", "origin", "main"]);
+    planShared(home);
     const NEWER = "This plan was set up with a newer AI-DLC";
-    const alice = cloneOf(home.remote, "alice");
-    const took = takeFrom("payments", alice, "refunds");
-    expect(took.status, took.out).not.toBe(0);
-    expect(took.out).toContain(NEWER);
-    expect(took.out).toContain("To carry on");
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toBeNull();
-    const intents = join(alice, "aidlc", "spaces", "payments", "intents");
-    expect(existsSync(intents) && readdirSync(intents).some((name) => name.endsWith("-refunds"))).toBe(false);
     // A bare look, and a teammate's first words, in a clone with nothing selected.
     const bob = cloneOf(home.remote, "bob");
     for (const words of [[], ["we want to take refunds"]]) {
@@ -591,7 +624,7 @@ describe("taking a Unit starts its build in the team's space", () => {
     expect(String(took.json?.notice)).toStartWith(
       "refunds is yours. You build it in the payments space under your team's rules, from what the lead approved.",
     );
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({
+    expect(recordAt(home, "refunds")?.json).toMatchObject({
       status: "claimed",
       owner: "payments",
       taken_by: "alice",
@@ -599,8 +632,8 @@ describe("taking a Unit starts its build in the team's space", () => {
     const record = buildDir(alice, "payments", "refunds");
     const state = readFileSync(join(record, "aidlc-state.md"), "utf-8");
     expect(field(state, "Unit Build")).toBe("refunds");
-    expect(field(state, "Home Location")).toBe(home.remote);
-    expect(field(state, "Home Record")).toBe(`default/${HOME}`);
+    expect(field(state, "Home Location")).toBe(home.hosts.app);
+    expect(field(state, "Home Record")).toBeUndefined();
     expect(field(state, "Skeleton Stance")).toBe("off");
     // The home's Inception is done, not this build's plan; units-generation
     // stays [x], so the Unit's own paths are the per-Unit ones.
@@ -643,6 +676,7 @@ describe("taking a Unit starts its build in the team's space", () => {
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
     commitAll(home.dir, "teams");
     git(home.dir, ["push", "-q", "origin", "main"]);
+    planShared(home);
     const alice = cloneOf(home.remote, "alice");
     const took = takeFrom("payments", alice, "refunds");
     expect(took.status, took.out).toBe(0);
@@ -667,6 +701,7 @@ describe("taking a Unit starts its build in the team's space", () => {
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
     commitAll(home.dir, "teams");
     git(home.dir, ["push", "-q", "origin", "main"]);
+    planShared(home);
     const alice = cloneOf(home.remote, "alice");
     inSpace(alice, "payments");
     const ask = next(alice);
@@ -686,10 +721,10 @@ describe("taking a Unit starts its build in the team's space", () => {
     const took = takeFrom("payments", alice, "refunds", ["--lead-rules"]);
     expect(took.status, took.out).toBe(0);
     const record = buildDir(alice, "payments", "refunds");
-    expect(field(readFileSync(join(record, "aidlc-state.md"), "utf-8"), "Lead Project Rules")).toBe("aidlc/spaces/default/memory/project.md");
+    expect(field(readFileSync(join(record, "aidlc-state.md"), "utf-8"), "Lead Project Rules")).toBe("rules/project.md");
     const step = next(alice);
     expect(step.kind, JSON.stringify(step).slice(0, 400)).toBe("run-stage");
-    expect(step.rules_in_context as string[]).toContain("aidlc/spaces/default/memory/project.md");
+    expect(step.rules_in_context as string[]).toContain("the lead's rules/project.md");
     // The lead's file is read, never written, from the build.
     expect(readFileSync(join(alice, "aidlc", "spaces", "default", "memory", "project.md"), "utf-8")).toContain("Every handler ships with a contract test.");
   });
@@ -705,6 +740,7 @@ describe("taking a Unit starts its build in the team's space", () => {
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
     commitAll(home.dir, "teams");
     git(home.dir, ["push", "-q", "origin", "main"]);
+    planShared(home);
     const alice = cloneOf(home.remote, "alice");
     inSpace(alice, "payments");
     const ask = next(alice);
@@ -724,6 +760,7 @@ describe("taking a Unit starts its build in the team's space", () => {
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
     commitAll(home.dir, "teams");
     git(home.dir, ["push", "-q", "origin", "main"]);
+    planShared(home);
     const alice = cloneOf(home.remote, "alice");
     inSpace(alice, "payments");
     const ask = next(alice);
@@ -745,10 +782,10 @@ describe("taking a Unit starts its build in the team's space", () => {
       "refunds is yours. You build it in the payments space under your team's rules and the lead's practices, from what the lead approved.",
     );
     const record = buildDir(alice, "payments", "refunds");
-    expect(field(readFileSync(join(record, "aidlc-state.md"), "utf-8"), "Lead Project Rules")).toBe("aidlc/spaces/default/memory/team.md");
+    expect(field(readFileSync(join(record, "aidlc-state.md"), "utf-8"), "Lead Project Rules")).toBe("rules/team.md");
     const step = next(alice);
     expect(step.kind, JSON.stringify(step).slice(0, 400)).toBe("run-stage");
-    expect(step.rules_in_context as string[]).toContain("aidlc/spaces/default/memory/team.md");
+    expect(step.rules_in_context as string[]).toContain("the lead's rules/team.md");
     // The lead's file is read, never written, from the build.
     expect(readFileSync(practices, "utf-8")).toContain("Test first for the refund amount.");
   });
@@ -762,6 +799,7 @@ describe("taking a Unit starts its build in the team's space", () => {
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
     commitAll(home.dir, "teams");
     git(home.dir, ["push", "-q", "origin", "main"]);
+    planShared(home);
     const alice = cloneOf(home.remote, "alice");
     inSpace(alice, "payments");
     const ask = next(alice);
@@ -795,6 +833,7 @@ describe("taking a Unit starts its build in the team's space", () => {
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
     commitAll(home.dir, "teams");
     git(home.dir, ["push", "-q", "origin", "main"]);
+    planShared(home);
     const alice = cloneOf(home.remote, "alice");
     const posture = (dir: string) => JSON.parse(run(join(AIDLC_SRC, "tools", "aidlc-testing-posture.ts"), ["resolve"], dir).out) as { methodology: string; source: string };
     expect(takeFrom("payments", alice, "refunds", ["--lead-rules"]).status).toBe(0);
@@ -810,15 +849,18 @@ describe("taking a Unit starts its build in the team's space", () => {
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
     commitAll(home.dir, "teams");
     git(home.dir, ["push", "-q", "origin", "main"]);
+    planShared(home);
     const alice = cloneOf(home.remote, "alice");
     expect(takeFrom("payments", alice, "refunds", ["--lead-rules"]).status).toBe(0);
-    git(alice, ["rm", "-q", "aidlc/spaces/default/memory/team.md"]);
+    // The lead's practices go from the plan the lead shares next.
+    git(home.dir, ["rm", "-q", "aidlc/spaces/default/memory/team.md"]);
+    expect(run(UNIT, ["share", "--plan"], home.dir).status).toBe(0);
     const chat = { ...ENV, AIDLC_SESSION_OVERRIDE: "alice-chat" };
     const first = run(ORCH, ["next"], alice, chat);
     expect(first.status, first.out).toBe(0);
     const step = next(alice, chat);
     expect(step.kind, JSON.stringify(step).slice(0, 600)).toBe("run-stage");
-    expect(step.rules_in_context as string[]).not.toContain("aidlc/spaces/default/memory/team.md");
+    expect(step.rules_in_context as string[]).not.toContain("the lead's rules/team.md");
     expect(first.out).toContain("The lead's practices could not be read just now, so this step follows your team's own rules.");
     expect(run(ORCH, ["next"], alice, chat).out).not.toContain("could not be read just now");
   });
@@ -852,6 +894,7 @@ describe("taking a Unit starts its build in the team's space", () => {
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
     commitAll(home.dir, "teams");
     git(home.dir, ["push", "-q", "origin", "main"]);
+    planShared(home);
     const dee = cloneOf(home.remote, "dee");
     const ask = next(dee);
     expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-take");
@@ -906,6 +949,7 @@ describe("taking a Unit starts its build in the team's space", () => {
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
     commitAll(home.dir, "teams");
     git(home.dir, ["push", "-q", "origin", "main"]);
+    planShared(home);
     const wen = cloneOf(home.remote, "wen");
     const took = takeFrom("web", wen, "checkout-ui");
     expect(took.status, took.out).toBe(0);
@@ -929,6 +973,7 @@ describe("taking a Unit starts its build in the team's space", () => {
     git(home.dir, ["add", "-A"]);
     git(home.dir, ["commit", "-q", "-m", "teams"]);
     git(home.dir, ["push", "-q", "origin", "main"]);
+    planShared(home);
     const alice = cloneOf(home.remote, "alice");
     expect(takeFrom("payments", alice, "refunds").status).toBe(0);
     const statePath = join(buildDir(alice, "payments", "refunds"), "aidlc-state.md");
@@ -948,7 +993,7 @@ describe("taking a Unit starts its build in the team's space", () => {
   // for payments?" missed the lead's send-back of refunds that came after the
   // chat's first look, and only a later ask heard it.
   test("the lead's turn-down of another of the team's builds reaches the chat at the person's next message, after its first look", () => {
-    const { home, alice, record } = refundsTaken();
+    const { home, alice, record } = refundsTakenHere();
     codeGenerated(alice, record);
     finishBuild(record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
@@ -997,7 +1042,7 @@ describe("a Unit someone holds is not taken again", () => {
     expect(`${again.out}${same.out}`).not.toContain("team");
   });
 
-  test("a Unit taken while the home is changing the Unit plan is taken on the plan as it stands, said once", () => {
+  test("a Unit taken while the home is changing the Unit plan is taken on the plan as the lead last shared it, with nothing said of the lead's open stage", () => {
     const home = homeWithTeams();
     const statePath = join(home.dir, "aidlc", "spaces", "default", "intents", HOME, "aidlc-state.md");
     const back = readFileSync(statePath, "utf-8")
@@ -1009,9 +1054,8 @@ describe("a Unit someone holds is not taken again", () => {
     git(home.dir, ["push", "-q", "origin", "main"]);
     const took = takeFrom("payments", cloneOf(home.remote, "alice"), "refunds");
     expect(took.status, took.out).toBe(0);
-    expect(String(took.json?.notice)).toEndWith(
-      "The lead is changing the Unit plan (Units Generation is open again there), so refunds is taken on the plan as it stands there.",
-    );
+    expect(String(took.json?.notice)).not.toContain("The lead is changing the Unit plan");
+    expect(recordAt(home, "refunds")?.json).toMatchObject({ base_oid: home.plan });
   });
 
   test("a waiting Unit is not taken yet, and the line says when it opens", () => {
@@ -1030,6 +1074,7 @@ describe("a Unit someone holds is not taken again", () => {
     asLeadsOwnCheckout(home.dir);
     commitAll(home.dir, "teams");
     git(home.dir, ["push", "-q", "origin", "main"]);
+    planShared(home);
     const bea = cloneOf(home.remote, "bea");
     const took = take(bea, "refunds");
     expect(took.status, took.out).toBe(0);
@@ -1053,7 +1098,8 @@ describe("a Unit someone holds is not taken again", () => {
   // The GitHub re-run's case 6b: back on main while the record's pull request
   // was open, the teammate heard nothing after the lead recorded the merge.
   test("back on main with their record on a branch of its own, the person hears their merge once on each computer, and a teammate never", () => {
-    const { hosts, home, alice, record } = refundsTaken();
+    const { hosts, home, alice, record } = refundsTakenInClone();
+    sharedPlan = home;
     codeGenerated(alice, record);
     finishBuild(record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
@@ -1071,7 +1117,7 @@ describe("a Unit someone holds is not taken again", () => {
     mergeOnHost(hosts.billing, "refunds", "squash");
     git(home.dir, ["fetch", "-q", "origin"]);
     next(home.dir, chatOf("lead-after-merge"));
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
+    expect(recordAt(home, "refunds")?.json).toMatchObject({ done: true });
     const chat = chatOf("alice-on-main");
     expect(nextSaying(alice, chat).said).toContain("Your refunds is merged.");
     appendAuditEntry("HUMAN_TURN", { "Person Reply": "what next" }, alice);
@@ -1090,6 +1136,7 @@ describe("a Unit someone holds is not taken again", () => {
     asLeadsOwnCheckout(home.dir);
     commitAll(home.dir, "teams");
     git(home.dir, ["push", "-q", "origin", "main"]);
+    planShared(home);
     const ann = cloneOf(home.remote, "ann");
     expect(take(ann, "refunds").status).toBe(0);
     git(ann, ["switch", "-q", "-c", "records/refunds"]);
@@ -1113,6 +1160,7 @@ describe("a Unit someone holds is not taken again", () => {
     asLeadsOwnCheckout(home.dir);
     commitAll(home.dir, "teams");
     git(home.dir, ["push", "-q", "origin", "main"]);
+    planShared(home);
     const bea = cloneOf(home.remote, "bea");
     expect(take(bea, "refunds").status).toBe(0);
     git(bea, ["switch", "-q", "-c", "records/refunds"]);
@@ -1150,6 +1198,7 @@ describe("a Unit someone holds is not taken again", () => {
     asLeadsOwnCheckout(home.dir);
     commitAll(home.dir, "teams");
     git(home.dir, ["push", "-q", "origin", "main"]);
+    planShared(home);
     const bea = cloneOf(home.remote, "bea");
     expect(take(bea, "refunds").status).toBe(0);
     const pushNotes = (dir: string, branch: string) => {
@@ -1218,6 +1267,7 @@ describe("a Unit someone holds is not taken again", () => {
     asLeadsOwnCheckout(home.dir);
     commitAll(home.dir, "teams");
     git(home.dir, ["push", "-q", "origin", "main"]);
+    planShared(home);
     const bea = cloneOf(home.remote, "bea");
     expect(take(bea, "refunds").status).toBe(0);
     const desk = cloneOf(home.remote, "bea");
@@ -1251,6 +1301,7 @@ describe("a Unit someone holds is not taken again", () => {
     asLeadsOwnCheckout(home.dir);
     commitAll(home.dir, "teams");
     git(home.dir, ["push", "-q", "origin", "main"]);
+    planShared(home);
     const bea = cloneOf(home.remote, "bea");
     expect(take(bea, "refunds").status).toBe(0);
     git(bea, ["switch", "-q", "-c", "records/refunds"]);
@@ -1292,7 +1343,7 @@ describe("who takes what", () => {
       "Start checkout-ui",
       "Carry on fixture here, as the lead",
     ]);
-    expect(choices[1].command).toEndWith(`aidlc-unit.ts take checkout-ui --home ${HOME}`);
+    expect(choices[1].command).toEndWith(`aidlc-unit.ts ${takeCommand(home, "checkout-ui")}`);
     const took = take(carol, "checkout-ui");
     expect(took.status, took.out).toBe(0);
     expect(took.json?.space).toBe("default");
@@ -1312,10 +1363,10 @@ describe("who takes what", () => {
     expect(String(ask.question)).not.toContain("refunds (open");
     expect((ask.choices as Array<{ label: string }>).map((choice) => choice.label).filter((label) => label.includes("refunds"))).toEqual([]);
     // Asked again, it is the same word: one more Here row, the same line, the claim untouched.
-    const claim = claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds");
+    const claim = recordAt(home, "refunds")?.json;
     const again = run(UNIT, ["assign", "--here", "refunds"], home.dir);
     expect(again.json?.notice).toBe("refunds is built here now, no longer open for the teams.");
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toEqual(claim);
+    expect(recordAt(home, "refunds")?.json).toEqual(claim);
   });
 
   test("every Unit taken: the clone hears who builds each and where, and none of the home's work is offered", () => {
@@ -1328,8 +1379,8 @@ describe("who takes what", () => {
     inSpace(dana, "data");
     const step = next(dana);
     expect(step.kind, JSON.stringify(step)).toBe("print");
-    expect(step.narration).toBe(
-      "fixture is built by teams. Being built: refunds (by alice in payments), checkout-ui (by wen). Nothing is ready to take yet.",
+    expect(offerText(step.narration)).toBe(
+      "fixture is shared in app. Being built: refunds (by alice in payments), checkout-ui (by wen). Nothing is ready to take yet.",
     );
   });
 
@@ -1357,16 +1408,14 @@ describe("who takes what", () => {
     expect(refused.out).toContain("checkout-ui is being built at the lead's project, so it is not open to take. Run `");
   });
 
-  test("a take whose team.md names a branch the lead's project lacks says which file named it", () => {
+  test("a take whose team.md names a branch the lead's project lacks takes from the plan, never that branch", () => {
     const home = homeWithTeams();
     const alice = cloneOf(home.remote, "alice");
     const teamMd = join(alice, "aidlc", "spaces", "default", "memory", "team.md");
     writeFileSync(teamMd, readFileSync(teamMd, "utf-8").replace("## Way of Working\n", "## Way of Working\n\nIntegration branch: `develop`.\n"));
-    const refused = takeFrom("payments", alice, "refunds");
-    expect(refused.status).not.toBe(0);
-    expect(refused.out).toContain(
-      "The lead's project's branch develop, named in aidlc/spaces/default/memory/team.md under Way of Working, could not be fetched from origin",
-    );
+    const took = takeFrom("payments", alice, "refunds");
+    expect(took.status, took.out).toBe(0);
+    expect(took.out).not.toContain("develop");
   });
 
   test("a teammate who takes before cloning the code repos: the build records the home's repos", () => {
@@ -1375,6 +1424,7 @@ describe("who takes what", () => {
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
     commitAll(home.dir, "teams");
     git(home.dir, ["push", "-q", "origin", "main"]);
+    planShared(home);
     const alice = cloneOf(home.remote, "alice");
     const took = takeFrom("payments", alice, "refunds");
     expect(took.status, took.out).toBe(0);
@@ -1396,7 +1446,7 @@ describe("builds in one workspace", () => {
     const offer = next(laptop);
     const carry = (offer.choices as Array<{ label: string; detail?: string }>).find((choice) => choice.label === "Carry on refunds");
     expect(carry?.detail, JSON.stringify(offer)).toBe("Your build of it in the data space, from another computer.");
-    const resumed = run(UNIT, ["take", "refunds", "--home", HOME], laptop);
+    const resumed = run(UNIT, ["take", "refunds", "--plan", home.id8, "--from", home.hosts.app], laptop);
     expect(resumed.json?.notice, resumed.out).toBe("Carrying on refunds, your build in the data space.");
     // Another person is told whose build it is, never offered it.
     const bob = cloneOf(home.remote, "bob");
@@ -1404,7 +1454,7 @@ describe("builds in one workspace", () => {
     expect((theirs.choices as Array<{ label: string }>).map((choice) => choice.label)).not.toContain("Carry on refunds");
     expect(String(theirs.question ?? theirs.narration)).toContain("Being built: refunds (being built by alice in data, on another computer).");
     // Asked for in their own words, it is carried on, said once whose it is.
-    const asked = run(UNIT, ["take", "refunds", "--home", HOME], bob);
+    const asked = run(UNIT, ["take", "refunds", "--plan", home.id8, "--from", home.hosts.app], bob);
     expect(asked.json?.notice, asked.out).toBe("Carrying on refunds, alice's build in the data space.");
     expect(`${JSON.stringify(offer)}${resumed.out}${JSON.stringify(theirs)}${asked.out}`).not.toMatch(/the \w+ team|for the data|team's build/);
   });
@@ -1417,6 +1467,7 @@ describe("builds in one workspace", () => {
     asLeadsOwnCheckout(home.dir);
     commitAll(home.dir, "teams");
     git(home.dir, ["push", "-q", "origin", "main"]);
+    planShared(home);
     const alsoOpen = (dir: string): string | null => {
       const status = run(UTILITY, ["status"], dir);
       expect(status.status, status.out).toBe(0);
@@ -1447,6 +1498,7 @@ describe("builds in one workspace", () => {
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
     commitAll(home.dir, "teams");
     git(home.dir, ["push", "-q", "origin", "main"]);
+    planShared(home);
     const alice = cloneOf(home.remote, "alice");
     for (const [name, host] of Object.entries(hosts)) cloneCode(host, alice, name, "alice");
     expect(takeFrom("payments", alice, "refunds").status).toBe(0);
@@ -1497,7 +1549,7 @@ describe("builds in one workspace", () => {
     const ask = next(laptop, chat);
     const choices = ask.choices as Array<{ label: string; command: string }>;
     expect(choices.map((choice) => choice.label)).toContain("Carry on refunds");
-    const resumed = run(UNIT, ["take", "refunds", "--home", HOME], laptop, chat);
+    const resumed = run(UNIT, ["take", "refunds", "--plan", home.id8, "--from", home.hosts.app], laptop, chat);
     expect(resumed.status, resumed.out).toBe(0);
     expect(resumed.json).toMatchObject({ resumed: true });
     // The line is the person's: it comes with the build's next step in this chat.
@@ -1512,10 +1564,14 @@ describe("builds in one workspace", () => {
 describe("a team's own workspace, made from the home's", () => {
   test("the home's copied work is never offered to carry on; its Units are, reached by the home's address", () => {
     const home = homeWithTeams();
+    // The lead's checkout made the plan, as its record says.
+    asLeadsOwnCheckout(home.dir);
+    commitAll(home.dir, "the lead's checkout");
+    git(home.dir, ["push", "-q", "origin", "main"]);
     const web = teamWorkspace(home.remote, "web");
     const ask = next(web);
     expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-take");
-    expect(String(ask.question)).toStartWith(`fixture (the lead's project is at ${home.remote}) is built by teams.`);
+    expect(offerText(ask.question)).toStartWith("fixture is shared in app.");
     expect(String(ask.question)).toContain("checkout-ui (open; likely checkout-web)");
     const labels = (ask.choices as Array<{ label: string }>).map((choice) => choice.label);
     expect(labels).toEqual(["Start refunds", "Start checkout-ui"]);
@@ -1527,8 +1583,8 @@ describe("a team's own workspace, made from the home's", () => {
     expect(took.out).not.toContain("could not be reached");
     // No remote added: the home is reached by its address, into AI-DLC's own refs.
     expect(git(web, ["remote"])).toBe(remotes);
-    expect(git(web, ["for-each-ref", "--format=%(refname)", "refs/aidlc/home/"])).toContain("integration");
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "checkout-ui")).toMatchObject({ owner: "web", taken_by: "web" });
+    expect(git(web, ["for-each-ref", "--format=%(refname)", "refs/aidlc/home/"])).toContain(`/${home.id8}/`);
+    expect(recordAt(home, "checkout-ui")?.json).toMatchObject({ owner: "web", taken_by: "web" });
     expect(next(web).unit).toBe("checkout-ui");
   });
 
@@ -1544,7 +1600,7 @@ describe("a team's own workspace, made from the home's", () => {
     git(web, ["push", "-q", "origin", "main"]);
     const took = takeFrom("web", web, "checkout-ui");
     expect(took.status, took.out).toBe(0);
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "checkout-ui")).toMatchObject({ owner: "web", taken_by: "web" });
+    expect(recordAt(home, "checkout-ui")?.json).toMatchObject({ owner: "web", taken_by: "web" });
     expect(git(host, ["for-each-ref", "--format=%(refname)", "refs/aidlc/claims/", "refs/heads/claim/"])).toBe("");
   });
 
@@ -1559,7 +1615,11 @@ describe("a team's own workspace, made from the home's", () => {
     const statePath = join(web, "aidlc", "spaces", "default", "intents", HOME, "aidlc-state.md");
     writeFileSync(statePath, readFileSync(statePath, "utf-8")
       .replace(/^- \*\*Home Location\*\*: .*$/m, "- **Home Location**: --upload-pack=touch /tmp/aidlc-no"));
-    const took = takeFrom("payments", web, "refunds");
+    const looked = run(ORCH, ["next"], web);
+    expect(String(looked.json?.error), looked.out).toContain('starts with "-"');
+    // The same address typed for a take.
+    inSpace(web, "payments");
+    const took = run(UNIT, ["take", "refunds", "--plan", home.id8, "--from=--upload-pack=touch /tmp/aidlc-no"], web);
     expect(took.status).not.toBe(0);
     expect(String(took.json?.error)).toContain('starts with "-"');
     expect(existsSync("/tmp/aidlc-no")).toBe(false);
@@ -1575,7 +1635,7 @@ describe("a team's own workspace, made from the home's", () => {
     const session = "6c7a1d2f-2e3b-4d4c-8f5a-1b2c3d4e5f60";
     const chat: NodeJS.ProcessEnv = { ...ENV, CLAUDE_CODE_SESSION_ID: session, CLAUDE_PID: String(process.pid) };
     inSpace(pay, "payments");
-    const took = run(UNIT, ["take", "refunds", "--home", HOME], pay, chat);
+    const took = run(UNIT, ["take", "refunds", "--plan", home.id8, "--from", home.hosts.app], pay, chat);
     expect(took.status, took.out).toBe(0);
     expect(took.json?.notice).toBeUndefined();
     const line = "The lead's project takes no push from here (this host takes no push from here (pre-receive hook declined)), so the lead " +
@@ -1601,11 +1661,11 @@ describe("a team's own workspace, made from the home's", () => {
         "and the other teams cannot see that you took refunds until it does; AI-DLC records it there when a push next goes through.",
     );
     expect(existsSync(join(buildDir(pay, "payments", "refunds"), "aidlc-state.md"))).toBe(true);
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.taken_by).toBeUndefined();
+    expect(recordAt(home, "refunds")?.json?.taken_by).toBeUndefined();
     const openUnit = takeFrom("payments", pay, "reporting");
     expect(openUnit.status, openUnit.out).toBe(0);
     expect(String(openUnit.json?.notice)).toContain("so the lead and the other teams cannot see that you took reporting until it does");
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "reporting")).toBeNull();
+    expect(recordAt(home, "reporting")).toBeNull();
   });
 });
 
@@ -2634,9 +2694,10 @@ describe("a likely repo this workspace has no copy of", () => {
     git(home.dir, ["add", "-A"]);
     git(home.dir, ["commit", "-q", "-m", "teams"]);
     git(home.dir, ["push", "-q", "origin", "main"]);
+    const plan = planShared(home);
     const alice = cloneOf(home.remote, "alice");
     cloneCode(hosts["checkout-api"], alice, "checkout-api", "alice");
-    const took = takeIn("payments", ["refunds", "--home", HOME], alice);
+    const took = takeIn("payments", ["refunds", "--plan", plan.id8, "--from", Object.values(plan.hosts)[0]], alice);
     expect(took.status, took.out).toBe(0);
     expect(String(took.json?.notice)).not.toContain("Do you want me to clone");
     expect(took.json?.offer).toBeUndefined();
@@ -2664,12 +2725,13 @@ describe("a likely repo this workspace has no copy of", () => {
     git(home.dir, ["add", "-A"]);
     git(home.dir, ["commit", "-q", "-m", "teams"]);
     git(home.dir, ["push", "-q", "origin", "main"]);
+    const plan = planShared(home);
     const alice = cloneOf(home.remote, "alice");
     const mine = tempDir("alice-code");
     cloneCode(hosts["checkout-api"], mine, "api", "alice");
     // Their own path for checkout-api, with a slip: a trailing comma.
     writeFileSync(join(alice, "aidlc", "repos.local.json"), `{ "repos": [ { "name": "checkout-api", "path": ${JSON.stringify(join(mine, "api"))} }, ] }\n`);
-    const took = takeIn("payments", ["refunds", "--home", HOME], alice);
+    const took = takeIn("payments", ["refunds", "--plan", plan.id8, "--from", Object.values(plan.hosts)[0]], alice);
     expect(took.status, took.out).toBe(0);
     const notice = String(took.json?.notice);
     expect(notice).toContain("repos.local.json is not valid JSON");
@@ -2687,6 +2749,7 @@ describe("a likely repo this workspace has no copy of", () => {
     git(home.dir, ["add", "-A"]);
     git(home.dir, ["commit", "-q", "-m", "teams"]);
     git(home.dir, ["push", "-q", "origin", "main"]);
+    const plan = planShared(home);
     const alice = cloneOf(home.remote, "alice");
     // Her own copies live beside the workspace, as her repos.local.json says.
     for (const name of ["checkout-api", "billing"]) cloneCode(hosts[name as "billing"], join(alice, ".."), `${name}-mine`, "alice");
@@ -2694,7 +2757,7 @@ describe("a likely repo this workspace has no copy of", () => {
       { name: "checkout-api", path: "../checkout-api-mine" },
       { name: "billing", path: "../billing-mine" },
     ] })}\n`);
-    const onCodex = takeIn("payments", ["refunds", "--home", HOME], alice, { ...ENV, AIDLC_HARNESS_NAME: "codex" });
+    const onCodex = takeIn("payments", ["refunds", "--plan", plan.id8, "--from", Object.values(plan.hosts)[0]], alice, { ...ENV, AIDLC_HARNESS_NAME: "codex" });
     expect(onCodex.status, onCodex.out).toBe(0);
     expect(String(onCodex.json?.notice)).toContain(
       "Codex writes only inside this folder unless you start it with the others: to let it write in ../checkout-api-mine " +
@@ -2711,40 +2774,13 @@ describe("a likely repo this workspace has no copy of", () => {
       git(home.dir, ["add", "-A"]);
       git(home.dir, ["commit", "-q", "-m", "teams"]);
       git(home.dir, ["push", "-q", "origin", "main"]);
+      const plan = planShared(home);
       const alice = cloneOf(home.remote, "alice");
       for (const [name, host] of Object.entries(hosts)) cloneCode(host, alice, name, "alice");
-      return { took: takeIn("payments", ["refunds", "--home", HOME], alice, { ...ENV, AIDLC_HARNESS_NAME: "codex" }) };
+      return { took: takeIn("payments", ["refunds", "--plan", plan.id8, "--from", Object.values(plan.hosts)[0]], alice, { ...ENV, AIDLC_HARNESS_NAME: "codex" }) };
     })();
     expect(took.status, took.out).toBe(0);
     expect(String(took.json?.notice)).not.toContain("--add-dir");
-  });
-
-  test("the lead's project recorded under an https address while her clone's origin is the same repo over ssh: her first take, before any claim is there, is recorded through her origin, said once", () => {
-    const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
-    const home = makeHome({ repos: hosts });
-    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
-    // The lead's origin, as their own clone spells it (Bitbucket Server's https
-    // form), where a teammate on ssh has no sign-in.
-    const https = "https://git.example.invalid/scm/checkout/workspace.git";
-    const statePath = join(home.dir, "aidlc", "spaces", "default", "intents", HOME, "aidlc-state.md");
-    writeFileSync(statePath, readFileSync(statePath, "utf-8").replace(/^- \*\*Home Location\*\*: .*$/m, `- **Home Location**: ${https}`));
-    git(home.dir, ["add", "-A"]);
-    git(home.dir, ["commit", "-q", "-m", "teams"]);
-    git(home.dir, ["push", "-q", "origin", "main"]);
-    const alice = cloneOf(home.remote, "alice");
-    for (const [name, host] of Object.entries(hosts)) cloneCode(host, alice, name, "alice");
-    const took = takeIn("payments", ["refunds", "--home", HOME], alice);
-    expect(took.status, took.out).toBe(0);
-    expect(String(took.json?.notice)).toStartWith("refunds is yours.");
-    expect(String(took.json?.notice)).toContain(`The lead's project could not be reached at ${https} (`);
-    expect(String(took.json?.notice)).toContain(`), so refunds is recorded at ${home.remote}, where this clone's copy of the lead's plan comes from.`);
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ taken_by: "alice" });
-    // The claims are there now: her next take reaches them through her origin with nothing said.
-    const next2 = takeIn("payments", ["checkout-ui", "--home", HOME], alice);
-    expect(next2.status, next2.out).toBe(0);
-    expect(next2.out).not.toContain("could not be reached");
-    // Her clone's setup is as she made it: no address rewritten.
-    expect(spawnSync("git", ["config", "--get-regexp", "^url\\."], { cwd: alice, encoding: "utf-8" }).stdout).toBe("");
   });
 });
 
@@ -2754,12 +2790,7 @@ describe("a likely repo this workspace has no copy of", () => {
 // was told "Tell me what to build" and wrote AI-DLC's parts of .gitignore and
 // AGENTS.md there, which the lead's share then met: their git pull aborted.
 describe("a teammate's clone before the lead's project shared its plan", () => {
-  const LINE = "The lead's plan is not in origin/main yet, so there is no Unit here to take. Once it is, I'll offer to bring it in.";
-  const OFFER = "The lead's plan is in origin/main, and this clone does not have it yet. Want me to bring your main up to date " +
-    "with it, so I can offer you the Units?";
-  type Choice = { label: string; detail?: string; command?: string };
-  const RISK = "The lead's plan has not reached this clone yet, so there is no Unit here to take, and work you start " +
-    "here can stop git pull from bringing the plan in later.";
+  const RISK = "The lead's plan has not reached this clone yet";
 
   function leadNotSharedYet(repos: Record<string, string>) {
     const home = makeHome({ repos });
@@ -2789,11 +2820,11 @@ describe("a teammate's clone before the lead's project shared its plan", () => {
     return { home, bob, host, orch: join(bob, ".codex", "tools", "aidlc-orchestrate.ts") };
   }
 
-  test("the first chat writes no root file, a bare /aidlc says the plan is not in origin/main yet with no git command, and once the lead shares it the look offers to bring it in", () => {
-    const { home, bob, orch } = leadNotSharedYet({ "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") });
+  test("the first chat writes no root file, and once the lead shares the plan its Units are reached by the plan's repository's address", () => {
+    const repos = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
+    const { home, bob, orch } = leadNotSharedYet(repos);
     expect(git(bob, ["status", "--porcelain", "--", ".gitignore", "AGENTS.md"])).toBe("");
     const first = next(bob, ENV, [], orch);
-    expect(first.narration, JSON.stringify(first)).toBe(LINE);
     expect(JSON.stringify(first)).not.toContain("git pull");
     // The lead's own checkout, with its record, is never read as such a clone.
     expect(leadsPlanNotHere(bob)).toBe(true);
@@ -2803,32 +2834,23 @@ describe("a teammate's clone before the lead's project shared its plan", () => {
     expect(existsSync(join(bob, "aidlc", ".gitignore"))).toBe(true);
     expect(git(bob, ["status", "--porcelain", "--untracked-files=all"])).toBe("");
     expect(git(bob, ["add", "-A", "--dry-run"])).toBe("");
-    const shared = run(UNIT, ["share", "--plan"], home.dir);
-    expect(shared.status, shared.out).toBe(0);
-    // The look reads origin's main itself and offers once to bring the plan in.
-    const offer = next(bob, ENV, [], orch);
-    expect(String(offer.question), JSON.stringify(offer).slice(0, 600)).toBe(OFFER);
-    const choices = offer.choices as Choice[];
-    expect(choices.map((choice) => choice.label)).toEqual(["Bring main up to date", "Not now"]);
-    expect(choices[0].detail).toBe("Moves main forward to origin/main; nothing of yours changes.");
-    expect(choices[1].detail).toBe("Nothing changes; there is no Unit here to take until main has the plan.");
-    expect(String(choices[0].command)).toMatch(/ unit share --back$/);
-    const brought = run(UNIT, ["share", "--back"], bob);
-    expect(brought.status, brought.out).toBe(0);
-    expect(brought.json?.notice).toBe("Your main is up to date with origin/main now, with the lead's plan.");
-    expect(String(brought.json?.step)).toContain("then run next");
-    expect(leadsPlanNotHere(bob)).toBe(false);
-    // With the plan in, the teammate's own build record shows and commits as anywhere.
-    const took = takeFrom("payments", bob, "refunds");
+    const plan = planShared(home);
+    // The plan's repository's address said: its Units are offered, and the take reads the plan there.
+    const offer = next(bob, ENV, ["--lead-address", repos["checkout-api"]], orch);
+    expect(offer.ask_type, JSON.stringify(offer).slice(0, 600)).toBe("unit-take");
+    const took = takeIn("payments", ["refunds", "--plan", plan.id8, "--from", repos["checkout-api"]], bob);
     expect(took.status, took.out).toBe(0);
+    // The teammate's own build record shows and commits as anywhere.
     const state = join(buildDir(bob, "payments", "refunds"), "aidlc-state.md");
     expect(spawnSync("git", ["check-ignore", "-q", state], { cwd: bob }).status).toBe(1);
-    expect(git(bob, ["status", "--porcelain"])).toContain("aidlc/spaces/payments/");
+    expect(git(bob, ["status", "--porcelain", "--untracked-files=all"])).toContain("aidlc/spaces/payments/");
   });
 
+  // The lead's record reaches the shared workspace's main: the lead commits and pushes it there.
   function planPulled(home: { dir: string }, bob: string): void {
-    const shared = run(UNIT, ["share", "--plan"], home.dir);
-    expect(shared.status, shared.out).toBe(0);
+    git(home.dir, ["add", "aidlc"]);
+    git(home.dir, ["commit", "-q", "-m", "the lead's record"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
     const pulled = spawnSync("git", ["pull", "-q"], { cwd: bob, encoding: "utf-8", env: GIT_ENV });
     expect(pulled.status, pulled.stderr).toBe(0);
   }
@@ -2878,8 +2900,11 @@ describe("a teammate's clone before the lead's project shared its plan", () => {
     hostFor("codex", home.dir, GIT_ENV).sessionStart("startup");
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
     const early = where === "main, fetched" ? cloneOf(home.remote, "bob") : null;
-    const shared = run(UNIT, where === "its own branch" ? ["share", "--branch", "--plan"] : ["share", "--plan"], home.dir);
-    expect(shared.status, shared.out).toBe(0);
+    // The lead's record committed and pushed: on the plan's own branch for its pull request, or on main.
+    if (where === "its own branch") git(home.dir, ["switch", "-q", "-c", "aidlc-plan"]);
+    git(home.dir, ["add", "aidlc"]);
+    git(home.dir, ["commit", "-q", "-m", "the lead's record"]);
+    git(home.dir, ["push", "-q", "origin", "HEAD"]);
     expect(git(home.remote, ["for-each-ref", "--format=%(refname)", "refs/heads/claim/", "refs/aidlc/claims/"])).toBe("");
     if (early !== null) git(early, ["fetch", "-q", "origin"]);
     const bob = early ?? cloneOf(home.remote, "bob");
@@ -2893,7 +2918,8 @@ describe("a teammate's clone before the lead's project shared its plan", () => {
     expect(git(bob, ["for-each-ref", "--format=%(refname)", "refs/remotes/origin/"])).toMatch(/refs\/remotes\/origin\/aidlc-plan/);
     expect(leadsPlanNotHere(bob)).toBe(true);
     expect(git(bob, ["status", "--porcelain", "--", ".gitignore", "AGENTS.md"])).toBe("");
-    expect(next(bob, ENV, [], orch).narration).toBe(LINE);
+    next(bob, ENV, [], orch);
+    expect(git(bob, ["status", "--porcelain", "--", ".gitignore", "AGENTS.md"])).toBe("");
   });
 
   test("the plan in the lead's main, fetched here and not pulled: still not here", () => {
@@ -2911,34 +2937,11 @@ describe("a teammate's clone before the lead's project shared its plan", () => {
     expect(leadsPlanNotHere(bob)).toBe(false);
   });
 
-  test("a teammate's words there go on as their request with the risk said once, and a bare --resume hears the line", () => {
+  test("a teammate's words there go on as their request, with no line about a plan this clone has not pulled", () => {
     const { bob, orch } = leadNotSharedYet({ "checkout-api": codeHost("checkout-api") });
     const words = next(bob, ENV, ["build a refunds report for finance"], orch);
-    expect(words.narration, JSON.stringify(words)).not.toBe(LINE);
-    expect(words.change_notices, JSON.stringify(words)).toContain(RISK);
-    expect(String(words.message)).toContain("build a refunds report for finance");
-    expect(next(bob, ENV, ["--resume"], orch).narration).toBe(LINE);
-  });
-
-  test("Not now leaves where it stands with no question again in that chat, the command for their words later, and on another branch the yes puts them on main", () => {
-    const { home, bob, host, orch } = leadNotSharedYet({ "checkout-api": codeHost("checkout-api") });
-    expect(run(UNIT, ["share", "--plan"], home.dir).status).toBe(0);
-    expect(String(next(bob, ENV, [], orch).question)).toBe(OFFER);
-    const after = next(bob, ENV, [], orch);
-    expect(after.narration, JSON.stringify(after)).toBe("The lead's plan is in origin/main and not in this clone yet, so there is no Unit here to take.");
-    expect(String(after.board_note)).toMatch(/When the person asks to bring the lead's plan in, run `[^`]* unit share --back` and tell them in plain words what it reports\./);
-    // On a branch of their own, in their next chat: the yes brings main up to date and puts them on it.
-    git(bob, ["switch", "-q", "-c", "notes"]);
-    host.newSession();
-    host.sessionStart("startup");
-    const elsewhere = next(bob, ENV, [], orch);
-    const choices = elsewhere.choices as Choice[];
-    expect(choices[0].label, JSON.stringify(elsewhere).slice(0, 600)).toBe("Bring main up to date and switch to it");
-    expect(choices[0].detail).toBe("Moves main forward to origin/main and puts you on it; your own changes stay as they are.");
-    const brought = run(UNIT, ["share", "--back"], bob);
-    expect(brought.status, brought.out).toBe(0);
-    expect(git(bob, ["branch", "--show-current"])).toBe("main");
-    expect(leadsPlanNotHere(bob)).toBe(false);
+    expect(JSON.stringify(words)).not.toContain(RISK);
+    expect(String(words.message), JSON.stringify(words).slice(0, 600)).toContain("build a refunds report for finance");
   });
 });
 
@@ -2947,7 +2950,6 @@ describe("a teammate's clone before the lead's project shared its plan", () => {
 // lead, as theirs; "give it back" was refused in the build, and the agent freed
 // the Unit at the lead's project, so the lead's hold was gone.
 describe("the way back from a take, and the lead's release", () => {
-  const id8 = (home: { dir: string }) => fixtureIntentId8(home.dir);
 
   test("give back in the build: the Unit is open again, the build's record is kept, and the person stays in their space with the Units offered again", () => {
     const home = homeWithTeams();
@@ -2962,7 +2964,7 @@ describe("the way back from a take, and the lead's release", () => {
     expect(back.json?.notice).toBe(
       "refunds is given back: it is open again at the lead's project. Its build here is set aside, with everything in it kept.",
     );
-    expect(claimPayload(home.remote, id8(home), "refunds")).toMatchObject({ status: "released" });
+    expect(recordAt(home, "refunds")?.json).toMatchObject({ status: "released" });
     // Nothing of the build is deleted: its record is set aside.
     const state = readFileSync(join(record, "aidlc-state.md"), "utf-8");
     expect(field(state, "Status")).toBe("Archived");
@@ -2980,7 +2982,7 @@ describe("the way back from a take, and the lead's release", () => {
     // Anyone takes it now, from where they are.
     const theirs = takeFrom("web", cloneOf(home.remote, "dora"), "refunds");
     expect(theirs.status, theirs.out).toBe(0);
-    expect(claimPayload(home.remote, id8(home), "refunds")).toMatchObject({ status: "claimed", owner: "web", taken_by: "dora" });
+    expect(recordAt(home, "refunds")?.json).toMatchObject({ status: "claimed", owner: "web", taken_by: "dora" });
   });
 
   // Their words may be new work of their own: read against the Units offer
@@ -3069,7 +3071,7 @@ describe("a take builds where the person works, or in the space they ask for", (
     expect(took.status, took.out).toBe(0);
     expect(took.json?.space).toBe("default");
     expect(readdirSync(join(bea, "aidlc", "spaces")).filter((name) => !name.startsWith("."))).toEqual(["default"]);
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "checkout-ui")).toMatchObject({ owner: "default", taken_by: "bea" });
+    expect(recordAt(home, "checkout-ui")?.json).toMatchObject({ owner: "default", taken_by: "bea" });
   });
 
   test("a take that asks for a space by name builds there, the space made as space create makes it", () => {
@@ -3081,7 +3083,7 @@ describe("a take builds where the person works, or in the space they ask for", (
     expect(String(took.json?.notice ?? "")).toContain("You build it in the web space under your team's rules,");
     expect(existsSync(join(pat, "aidlc", "spaces", "web", "memory", "org.md"))).toBe(true);
     expect(readFileSync(join(pat, "aidlc", "active-space"), "utf-8").trim()).toBe("web");
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ owner: "web", taken_by: "pat" });
+    expect(recordAt(home, "refunds")?.json).toMatchObject({ owner: "web", taken_by: "pat" });
     // A space already here is used as it is.
     const second = take(pat, "checkout-ui", ["--space", "web"]);
     expect(second.status, second.out).toBe(0);
@@ -3094,7 +3096,7 @@ describe("a take builds where the person works, or in the space they ask for", (
     const took = take(pat, "refunds", ["--space", "switch"]);
     expect(took.status).not.toBe(0);
     expect(String(took.json?.error ?? took.out)).toContain('"switch" is a reserved name and cannot be a space name.');
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toBeNull();
+    expect(recordAt(home, "refunds")).toBeNull();
     expect(existsSync(join(pat, "aidlc", "spaces", "switch"))).toBe(false);
   });
 });
@@ -3125,15 +3127,18 @@ function addRule(dir: string, file: "team.md" | "project.md", heading: string, t
   writeFileSync(path, `${readFileSync(path, "utf-8")}\n## ${heading}\n\n${text}\n`);
 }
 
-// The lead's work built by teams, with the lead's own rules, pushed for the teams.
-function leadWithRules(rules: (dir: string) => void, hosts?: Record<string, string>) {
-  const home = makeHome(hosts === undefined ? {} : { repos: hosts });
+// The lead's work built by teams, with the lead's own rules, its plan shared in
+// its first code repository.
+function planWithRules(rules: (dir: string) => void, hosts?: Record<string, string>): PlanHome {
+  const home = makePlanHome({ share: false, ...(hosts === undefined ? {} : { repos: hosts }) });
   rules(home.dir);
-  expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
-  commitAll(home.dir, "teams");
-  git(home.dir, ["push", "-q", "origin", "main"]);
-  return home;
+  const shared = run(UNIT, ["share", "--plan"], home.dir);
+  expect(shared.status, shared.out).toBe(0);
+  return { ...home, plan: git(Object.values(home.hosts)[0], ["rev-parse", planRefOf(home.id8)]) };
 }
+
+// The plan's repository: the first of the work's.
+const planHost = (home: PlanHome): string => Object.values(home.hosts)[0];
 
 // `next`, with every rules part it sends on the way: the step, and all it said.
 function nextSaying(cwd: string, env: NodeJS.ProcessEnv = ENV, args: string[] = []): { step: Record<string, unknown>; said: string } {
@@ -3156,160 +3161,91 @@ function traced(file: string): string[] {
 
 const UNREAD = "could not be read just now, so this step follows your team's own rules.";
 
-describe("a team's own workspace that holds no copy of the lead's", () => {
-  test("the lead's address, said once: the Units and the lead's rules are offered, the take builds in default, the claim and the push reach the lead", () => {
-    const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
-    const home = leadWithRules((dir) =>
-      addRule(dir, "project.md", "Release Checks", "Every handler ships with a contract test."), hosts);
-    const pay = freshTeamWorkspace("pay");
-    cloneCode(hosts["checkout-api"], pay.dir, "checkout-api", "pay");
-    const ask = next(pay.dir, ENV, ["--lead-address", home.remote]);
+describe("a team's own workspace that reads the lead's plan where it is shared", () => {
+  test("the plan's repository's address, said once: the Units and the lead's rules are offered, the take builds in default, its record and the push reach the plan's repository", () => {
+    const home = planWithRules((dir) => addRule(dir, "project.md", "Release Checks", "Every handler ships with a contract test."));
+    const plan = planHost(home);
+    const pay = ownWorkspace(home.hosts, "pay", ["checkout-api"]);
+    const ask = next(pay, ENV, ["--lead-address", plan]);
     expect(ask.ask_type, JSON.stringify(ask).slice(0, 600)).toBe("unit-take");
-    expect(String(ask.question)).toStartWith(`fixture (the lead's project is at ${home.remote}) is built by teams.`);
+    expect(offerText(ask.question)).toStartWith("fixture is shared in checkout-api.");
     const choices = ask.choices as Array<{ label: string; command?: string; detail?: string }>;
     const start = choices.find((choice) => choice.label === "Start refunds");
     expect(start, choices.map((choice) => choice.label).join(" | ")).toBeDefined();
     // A Windows path is quoted for the shell.
-    expect(start!.command?.replaceAll("'", "")).toContain(`--from ${home.remote}`);
+    expect(start!.command?.replaceAll("'", "")).toContain(`take refunds --plan ${home.id8} --from ${plan}`);
     expect(start!.command).toEndWith("--lead-rules");
-    // The lead's rules, named from the lead's project, never this workspace's own files.
+    // The lead's rules, named from the plan, never this workspace's own files.
     expect(start!.detail).toContain("The lead's project rules (Release Checks) apply to its build too");
-    const took = run(UNIT, ["take", "refunds", "--from", home.remote, "--home", HOME, "--lead-rules"], pay.dir);
+    const took = run(UNIT, ["take", "refunds", "--plan", home.id8, "--from", plan, "--lead-rules"], pay);
     expect(took.status, took.out).toBe(0);
     expect(took.json).toMatchObject({ team: "default", space: "default" });
-    expect(String(took.json?.notice ?? "")).not.toContain("default");
     // No remote and no folder of the lead's: AI-DLC's own refs only.
-    expect(git(pay.dir, ["remote"])).toBe("origin");
-    expect(existsSync(join(pay.dir, "aidlc", "spaces", "default", "intents", HOME))).toBe(false);
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ owner: "default", taken_by: "pay" });
-    expect(git(pay.host, ["for-each-ref", "--format=%(refname)", "refs/aidlc/claims/", "refs/heads/claim/"])).toBe("");
-    const record = buildDir(pay.dir, "default", "refunds");
-    expect(field(readFileSync(join(record, "aidlc-state.md"), "utf-8"), "Lead Project Rules")).toBe("aidlc/spaces/default/memory/project.md");
-    // billing is not here and this workspace lists no repos: the lead's list gives its address.
-    const offer = next(pay.dir);
+    expect(git(pay, ["remote"])).toBe("");
+    expect(recordAt(home, "refunds")?.json).toMatchObject({ owner: "default", taken_by: "pay" });
+    const record = buildDir(pay, "default", "refunds");
+    expect(field(readFileSync(join(record, "aidlc-state.md"), "utf-8"), "Lead Project Rules")).toBe("rules/project.md");
+    // billing is not here and this workspace lists no repos: the plan's list gives its address.
+    const offer = next(pay);
     expect(offer.ask_type, JSON.stringify(offer).slice(0, 600)).toBe("unit-clone");
-    expect(String(offer.question)).toBe(`billing is not here yet; the lead's list has it at ${hosts.billing}. Do you want me to clone it here?`);
-    const clone = (offer.choices as Array<{ label: string; command?: string }>)[0];
-    expect(clone.label).toBe("Clone billing");
-    expect(clone.command?.replaceAll("'", "")).toEndWith(`intent add-repo billing --url ${hosts.billing}`);
-    const cloned = run(UTILITY, ["intent", "add-repo", "billing", "--url", hosts.billing], pay.dir);
-    expect(cloned.status, cloned.out).toBe(0);
-    git(join(pay.dir, "billing"), ["config", "user.name", "pay"]);
-    git(join(pay.dir, "billing"), ["config", "user.email", "pay@example.test"]);
-    let looked = nextSaying(pay.dir);
-    // This workspace lists no repos yet: writing its own list is offered once.
-    if (looked.step.ask_type === "repos-manifest") looked = nextSaying(pay.dir);
-    expect(looked.step.kind, JSON.stringify(looked.step).slice(0, 400)).toBe("run-stage");
-    expect(looked.step.rules_in_context as string[]).toContain("the lead's aidlc/spaces/default/memory/project.md");
-    expect(looked.said).toContain("Every handler ships with a contract test.");
-    // Later turns read the lead from the build: the push reaches the lead's claim.
-    codeGenerated(pay.dir, record);
-    const pushed = run(UNIT, ["push"], pay.dir);
-    expect(pushed.status, pushed.out).toBe(0);
-    expect((claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds") as { result?: unknown }).result).toBeDefined();
+    expect(String(offer.question)).toBe(`billing is not here yet; the lead's list has it at ${home.hosts.billing}. Do you want me to clone it here?`);
   });
 
-  test("the lead's rules are the lead's, read where they are: never the team's own default files, and a change the lead pushes reaches the next chat's step", () => {
-    const home = leadWithRules((dir) =>
-      addRule(dir, "team.md", "Refund Amount", "Test first for the refund amount."));
-    const pay = freshTeamWorkspace("pay");
-    addRule(pay.dir, "project.md", "Payments Checks", "Our own payments rule.");
-    commitAll(pay.dir, "our rules");
-    const took = run(UNIT, ["take", "refunds", "--from", home.remote, "--home", HOME, "--lead-rules"], pay.dir);
+  test("the lead's rules are the lead's, read from the plan: never the team's own default files, and the lead's next share reaches the next chat's step", () => {
+    const home = planWithRules((dir) => addRule(dir, "team.md", "Refund Amount", "Test first for the refund amount."), { app: codeHost("app") });
+    const plan = planHost(home);
+    const pay = ownWorkspace(home.hosts, "pay", []);
+    addRule(pay, "project.md", "Payments Checks", "Our own payments rule.");
+    commitAll(pay, "our rules");
+    const took = run(UNIT, ["take", "refunds", "--plan", home.id8, "--from", plan, "--lead-rules"], pay);
     expect(took.status, took.out).toBe(0);
     expect(String(took.json?.notice)).toContain("under your team's rules and the lead's practices, from what the lead approved.");
-    const record = buildDir(pay.dir, "default", "refunds");
+    const record = buildDir(pay, "default", "refunds");
     // The lead holds practices and no project rules; the team's own project.md is never named as the lead's.
-    expect(field(readFileSync(join(record, "aidlc-state.md"), "utf-8"), "Lead Project Rules")).toBe("aidlc/spaces/default/memory/team.md");
-    const first = nextSaying(pay.dir, { ...ENV, AIDLC_SESSION_OVERRIDE: "pay-chat-1" });
+    expect(field(readFileSync(join(record, "aidlc-state.md"), "utf-8"), "Lead Project Rules")).toBe("rules/team.md");
+    const first = nextSaying(pay, { ...ENV, AIDLC_SESSION_OVERRIDE: "pay-chat-1" });
     expect(first.step.kind, JSON.stringify(first.step).slice(0, 400)).toBe("run-stage");
     const rules = first.step.rules_in_context as string[];
-    expect(rules).toContain("the lead's aidlc/spaces/default/memory/team.md");
+    expect(rules).toContain("the lead's rules/team.md");
     expect(rules).toContain("aidlc/spaces/default/memory/project.md");
     expect(first.said).toContain("Test first for the refund amount.");
     expect(first.said).toContain("Our own payments rule.");
     expect(first.said).not.toContain(UNREAD);
-    // The lead changes the rule: the team's next chat follows it, with no word about it.
+    // The lead changes the rule and shares again: the team's next chat follows it, with no word about it.
     const leadTeam = join(home.dir, "aidlc", "spaces", "default", "memory", "team.md");
     writeFileSync(leadTeam, readFileSync(leadTeam, "utf-8").replace("Test first for the refund amount.", "Test first for every amount."));
-    commitAll(home.dir, "practices");
-    git(home.dir, ["push", "-q", "origin", "main"]);
-    const later = nextSaying(pay.dir, { ...ENV, AIDLC_SESSION_OVERRIDE: "pay-chat-2" });
+    expect(run(UNIT, ["share", "--plan"], home.dir).status).toBe(0);
+    const later = nextSaying(pay, { ...ENV, AIDLC_SESSION_OVERRIDE: "pay-chat-2" });
     expect(later.said).toContain("Test first for every amount.");
     expect(later.said).not.toContain("Test first for the refund amount.");
   });
 
-  test("taken with the lead's practices from the lead's address, the testing contract follows the lead's Testing Posture", () => {
-    const home = leadWithRules((dir) => {
-      const practices = join(dir, "aidlc", "spaces", "default", "memory", "team.md");
-      writeFileSync(practices, readFileSync(practices, "utf-8").replace("## Testing Posture\n", "## Testing Posture\nTDD: the refund amount's tests are written first and must fail.\n"));
-    });
-    const pay = freshTeamWorkspace("pay");
-    expect(run(UNIT, ["take", "refunds", "--from", home.remote, "--home", HOME, "--lead-rules"], pay.dir).status).toBe(0);
-    const posture = JSON.parse(run(join(AIDLC_SRC, "tools", "aidlc-testing-posture.ts"), ["resolve"], pay.dir).out) as { methodology: string; source: string };
-    expect(posture).toMatchObject({ methodology: "tdd", source: "team" });
-  });
-
   test("the lead's rules cannot be read: the step goes on under the team's own rules and says so once", () => {
-    const home = leadWithRules((dir) =>
-      addRule(dir, "team.md", "Refund Amount", "Test first for the refund amount."));
-    const pay = freshTeamWorkspace("pay");
-    expect(run(UNIT, ["take", "refunds", "--from", home.remote, "--home", HOME, "--lead-rules"], pay.dir).status).toBe(0);
-    // The lead's project is gone from where it was, and its copy here with it.
-    renameSync(home.remote, `${home.remote}-moved`);
-    git(pay.dir, ["update-ref", "-d", `refs/aidlc/home/${fixtureIntentId8(home.dir)}/integration`]);
+    const home = planWithRules((dir) => addRule(dir, "team.md", "Refund Amount", "Test first for the refund amount."), { app: codeHost("app") });
+    const plan = planHost(home);
+    const pay = ownWorkspace(home.hosts, "pay", []);
+    expect(run(UNIT, ["take", "refunds", "--plan", home.id8, "--from", plan, "--lead-rules"], pay).status).toBe(0);
+    // The plan's repository is gone from where it was, and its copy here with it.
+    renameSync(plan, `${plan}-moved`);
+    for (const ref of git(pay, ["for-each-ref", "--format=%(refname)", `refs/aidlc/home/${home.id8}/`]).split("\n").filter((name) => name.endsWith("/plan"))) {
+      git(pay, ["update-ref", "-d", ref]);
+    }
     const chat = { ...ENV, AIDLC_SESSION_OVERRIDE: "pay-chat" };
-    const first = nextSaying(pay.dir, chat);
+    const first = nextSaying(pay, chat);
     expect(first.step.kind, JSON.stringify(first.step).slice(0, 600)).toBe("run-stage");
-    expect(first.step.rules_in_context as string[]).not.toContain("the lead's aidlc/spaces/default/memory/team.md");
+    expect(first.step.rules_in_context as string[]).not.toContain("the lead's rules/team.md");
     expect(first.said).toContain(`The lead's practices ${UNREAD}`);
-    const again = nextSaying(pay.dir, chat);
+    const again = nextSaying(pay, chat);
     expect(again.said).not.toContain(UNREAD);
-  });
-
-  test("a second teammate's clone carries the build on when they ask: its first step reads the lead's rules, and the lead is read from the build", () => {
-    const home = leadWithRules((dir) =>
-      addRule(dir, "team.md", "Refund Amount", "Test first for the refund amount."));
-    const pay = freshTeamWorkspace("pay");
-    expect(run(UNIT, ["take", "refunds", "--from", home.remote, "--home", HOME, "--lead-rules"], pay.dir).status).toBe(0);
-    commitAll(pay.dir, "refunds taken");
-    git(pay.dir, ["push", "-q", "origin", "main"]);
-    const pay2 = cloneOf(pay.host, "pay2");
-    // A fresh clone: nothing of AI-DLC's own refs came with it.
-    expect(git(pay2, ["for-each-ref", "--format=%(refname)", "refs/aidlc/"])).toBe("");
-    // Its first look: the build is said with who took it, the lead read from the build, the address never asked for.
-    const chat = { ...ENV, AIDLC_SESSION_OVERRIDE: "pay2-chat" };
-    const offer = next(pay2, chat);
-    expect(String(offer.question ?? offer.narration), JSON.stringify(offer).slice(0, 400)).toContain("refunds (being built by pay, on another computer)");
-    expect((offer.choices as Array<{ label: string }> | undefined ?? []).map((choice) => choice.label)).not.toContain("Carry on refunds");
-    // A live run on Codex (the second teammate): the person asked to carry it
-    // on and no step named a way to; the step now names the command, never as a choice.
-    const carryOn = /When their words ask to carry on a build the question lists as being built, run its command: refunds: `([^`]+)`/
-      .exec(String(offer.question_note ?? offer.board_note ?? ""))?.[1];
-    // Quoted as every take command in the question is (a Windows path is).
-    expect(carryOn, JSON.stringify(offer).slice(0, 1600)).toBe(`bun .claude/tools/aidlc-unit.ts take refunds --from ${shellArg(home.remote)} --home ${HOME}`);
-    // Asked for in their words, it is carried on, said once whose it is.
-    const took = run(UNIT, ["take", "refunds", "--from", home.remote, "--home", HOME], pay2, chat);
-    expect(took.status, took.out).toBe(0);
-    expect(took.json).toMatchObject({ resumed: true, space: "default" });
-    expect(String(took.json?.notice ?? "")).not.toContain("default");
-    const first = nextSaying(pay2, chat);
-    expect(first.step.kind, JSON.stringify(first.step).slice(0, 600)).toBe("run-stage");
-    expect(first.step.stage).toBe("functional-design");
-    // Nothing is asked twice: the take question is not put again.
-    expect(first.step.ask_type).toBeUndefined();
-    expect(first.step.rules_in_context as string[]).toContain("the lead's aidlc/spaces/default/memory/team.md");
-    expect(first.said).toContain("Test first for the refund amount.");
-    expect(first.said).not.toContain(UNREAD);
   });
 
   test("after its first Unit is pushed, the build's next step offers the lead's next Unit with no address said again; a fresh clone of the team's workspace is offered it too", () => {
     const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "pay-chat" };
     const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
-    const home = leadWithRules(() => {}, hosts);
+    const home = planWithRules(() => {}, hosts);
     const pay = freshTeamWorkspace("pay");
     for (const [name, host] of Object.entries(hosts)) cloneCode(host, pay.dir, name, "pay");
-    expect(run(UNIT, ["take", "refunds", "--from", home.remote, "--home", HOME], pay.dir, chat).status).toBe(0);
+    expect(run(UNIT, ["take", "refunds", "--plan", home.id8, "--from", planHost(home)], pay.dir, chat).status).toBe(0);
     const record = buildDir(pay.dir, "default", "refunds");
     codeGenerated(pay.dir, record);
     finishBuild(record);
@@ -3318,12 +3254,12 @@ describe("a team's own workspace that holds no copy of the lead's", () => {
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
     mergeOnHost(hosts.billing, "refunds", "merge");
     next(home.dir);
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
+    expect(recordAt(home, "refunds")?.json).toMatchObject({ done: true });
     const offered = next(pay.dir, chat);
     expect(offered.ask_type, JSON.stringify(offered).slice(0, 600)).toBe("unit-take");
     const start = (offered.choices as Array<{ label: string; command?: string }>).find((choice) => choice.label.startsWith("Start reporting"));
     expect(start, JSON.stringify(offered.choices)).toBeDefined();
-    expect(start!.command?.replaceAll("'", "")).toContain(`--from ${home.remote}`);
+    expect(start!.command?.replaceAll("'", "")).toContain(`--from ${planHost(home)}`);
     commitAll(pay.dir, "refunds pushed");
     git(pay.dir, ["push", "-q", "origin", "main"]);
     const pay2 = cloneOf(pay.host, "pay2");
@@ -3332,120 +3268,114 @@ describe("a team's own workspace that holds no copy of the lead's", () => {
     expect((fresh.choices as Array<{ label: string }>).map((choice) => choice.label)).toContain("Start reporting");
   });
 
-  // The hook that briefs a stage's subagent resolves the same bundle the step carries.
-  test("a subagent's brief in the team's build carries the lead's rules, read from the lead's project", () => {
-    const home = leadWithRules((dir) =>
-      addRule(dir, "team.md", "Refund Amount", "Test first for the refund amount."));
+  test("a second teammate's clone carries the build on when they ask: its first step reads the lead's rules, and the plan is read from the build", () => {
+    const home = planWithRules((dir) => addRule(dir, "team.md", "Refund Amount", "Test first for the refund amount."), { app: codeHost("app") });
+    const plan = planHost(home);
     const pay = freshTeamWorkspace("pay");
-    expect(run(UNIT, ["take", "refunds", "--from", home.remote, "--home", HOME, "--lead-rules"], pay.dir).status).toBe(0);
+    expect(run(UNIT, ["take", "refunds", "--plan", home.id8, "--from", plan, "--lead-rules"], pay.dir).status).toBe(0);
+    commitAll(pay.dir, "refunds taken");
+    git(pay.dir, ["push", "-q", "origin", "main"]);
+    const pay2 = cloneOf(pay.host, "pay2");
+    // A fresh clone: nothing of AI-DLC's own refs came with it.
+    expect(git(pay2, ["for-each-ref", "--format=%(refname)", "refs/aidlc/"])).toBe("");
+    // Its first look: the build is said with who took it, the plan read from the build, the address never asked for.
+    const chat = { ...ENV, AIDLC_SESSION_OVERRIDE: "pay2-chat" };
+    const offer = next(pay2, chat);
+    expect(String(offer.question ?? offer.narration), JSON.stringify(offer).slice(0, 400)).toContain("refunds (being built by pay, on another computer)");
+    expect((offer.choices as Array<{ label: string }> | undefined ?? []).map((choice) => choice.label)).not.toContain("Carry on refunds");
+    const carryOn = /When their words ask to carry on a build the question lists as being built, run its command: refunds: `([^`]+)`/
+      .exec(String(offer.question_note ?? offer.board_note ?? ""))?.[1];
+    expect(carryOn, JSON.stringify(offer).slice(0, 1600)).toBe(`bun .claude/tools/aidlc-unit.ts take refunds --plan ${home.id8} --from ${shellArg(plan)}`);
+    const took = run(UNIT, ["take", "refunds", "--plan", home.id8, "--from", plan], pay2, chat);
+    expect(took.status, took.out).toBe(0);
+    expect(took.json).toMatchObject({ resumed: true, space: "default" });
+    const first = nextSaying(pay2, chat);
+    expect(first.step.kind, JSON.stringify(first.step).slice(0, 600)).toBe("run-stage");
+    expect(first.step.stage).toBe("functional-design");
+    expect(first.step.ask_type).toBeUndefined();
+    expect(first.step.rules_in_context as string[]).toContain("the lead's rules/team.md");
+    expect(first.said).toContain("Test first for the refund amount.");
+    expect(first.said).not.toContain(UNREAD);
+  });
+
+  // The hook that briefs a stage's subagent resolves the same bundle the step carries.
+  test("a subagent's brief in the team's build carries the lead's rules, read from the plan", () => {
+    const home = planWithRules((dir) => addRule(dir, "team.md", "Refund Amount", "Test first for the refund amount."));
+    const pay = ownWorkspace(home.hosts, "pay", ["checkout-api", "billing"]);
+    expect(run(UNIT, ["take", "refunds", "--plan", home.id8, "--from", planHost(home), "--lead-rules"], pay).status).toBe(0);
     const node = loadGraph().find((stage) => stage.slug === "functional-design")!;
-    const bundle = resolvedRuleBundle(node, pay.dir);
+    const bundle = resolvedRuleBundle(node, pay);
     expect(bundle.error).toBeNull();
-    const lead = bundle.content.find((entry) => entry.path === "the lead's aidlc/spaces/default/memory/team.md");
+    const lead = bundle.content.find((entry) => entry.path === "the lead's rules/team.md");
     expect(lead?.text, bundle.content.map((entry) => entry.path).join(", ")).toContain("Test first for the refund amount.");
   });
 
-  test("the lead's address with nothing shared yet says so, and takes nothing", () => {
-    const home = makeHome();
-    const pay = freshTeamWorkspace("pay");
-    const ask = next(pay.dir, ENV, ["--lead-address", home.remote]);
-    expect(JSON.stringify(ask)).toContain("has no work built by teams on its branch yet");
-    const intents = join(pay.dir, "aidlc", "spaces", "default", "intents");
+  test("the plan's repository with nothing shared yet says so, and takes nothing", () => {
+    const home = makePlanHome({ share: false });
+    const pay = ownWorkspace(home.hosts, "pay", ["billing"]);
+    const ask = next(pay, ENV, ["--lead-address", planHost(home)]);
+    expect(JSON.stringify(ask)).toContain(`${planHost(home)} has no plan shared in it yet.`);
+    const intents = join(pay, "aidlc", "spaces", "default", "intents");
     expect(existsSync(intents) ? readdirSync(intents).filter((name) => name !== "intents.json") : []).toEqual([]);
   });
 
-  test("in a clone whose origin is the lead's, the lead's address said anyway takes the local route, with no fetch by the address", () => {
-    const home = homeWithTeams();
-    const alice = cloneOf(home.remote, "alice");
-    const trace = join(tempDir("trace"), "git.trace");
-    const env = { ...ENV, GIT_TRACE: trace };
-    const ask = next(alice, env, ["--lead-address", home.remote]);
-    expect(ask.ask_type, JSON.stringify(ask).slice(0, 400)).toBe("unit-take");
-    expect((ask.choices as Array<{ command?: string }>).every((choice) => !(choice.command ?? "").includes("--from"))).toBe(true);
-    const took = takeIn("payments", ["refunds", "--from", home.remote, "--home", HOME], alice, env);
-    expect(took.status, took.out).toBe(0);
-    expect(took.json).toMatchObject({ space: "payments" });
-    const byAddress = traced(trace).filter((line) => /git (fetch|ls-remote)\b/.test(line) && line.includes(home.remote));
-    expect(byAddress, byAddress.join("\n")).toEqual([]);
-  });
-
-  test("a take by the lead's address fetches the lead's branch once", () => {
-    const home = homeWithTeams();
-    const pay = freshTeamWorkspace("pay");
-    const trace = join(tempDir("trace"), "git.trace");
-    const took = run(UNIT, ["take", "refunds", "--from", home.remote, "--home", HOME], pay.dir, { ...ENV, GIT_TRACE: trace });
-    expect(took.status, took.out).toBe(0);
-    const branchFetches = traced(trace).filter((line) => / git fetch /.test(line) && line.includes(home.remote) && !line.includes("refs/aidlc/claims/"));
-    expect(branchFetches, branchFetches.join("\n")).toHaveLength(1);
-  });
-
   // The address the person said can carry a sign-in: the build's record, which
-  // the team commits, keeps the address without it, as the lead's own record does.
+  // the team commits, keeps the address without it.
   test("an address that carries a sign-in is recorded without it", () => {
-    const home = homeWithTeams();
-    const pay = freshTeamWorkspace("pay");
-    const said = "https://pay:s3cret-token@lead.example/shop-ws.git";
-    git(pay.dir, ["config", `url.${home.remote}.insteadOf`, said]);
-    git(pay.dir, ["config", "--add", `url.${home.remote}.insteadOf`, "https://lead.example/shop-ws.git"]);
-    const took = run(UNIT, ["take", "refunds", "--from", said, "--home", HOME], pay.dir);
+    const home = makePlanHome();
+    const pay = ownWorkspace(home.hosts, "pay", ["billing"]);
+    const said = "https://pay:s3cret-token@lead.example/checkout-api.git";
+    git(pay, ["config", `url.${planHost(home)}.insteadOf`, said]);
+    git(pay, ["config", "--add", `url.${planHost(home)}.insteadOf`, "https://lead.example/checkout-api.git"]);
+    const took = run(UNIT, ["take", "refunds", "--plan", home.id8, "--from", said], pay);
     expect(took.status, took.out).toBe(0);
-    const record = buildDir(pay.dir, "default", "refunds");
-    expect(field(readFileSync(join(record, "aidlc-state.md"), "utf-8"), "Home Location")).toBe("https://lead.example/shop-ws.git");
-    const written = spawnSync("git", ["grep", "--no-index", "-l", "s3cret-token", "--", "aidlc"], { cwd: pay.dir, encoding: "utf-8" });
+    const record = buildDir(pay, "default", "refunds");
+    expect(field(readFileSync(join(record, "aidlc-state.md"), "utf-8"), "Home Location")).toBe("https://lead.example/checkout-api.git");
+    const written = spawnSync("git", ["grep", "--no-index", "-l", "s3cret-token", "--", "aidlc"], { cwd: pay, encoding: "utf-8" });
     expect(written.stdout.trim()).toBe("");
   });
 
-  test("a build carried on with the lead's address said again needs nothing of the lead's project", () => {
-    const home = homeWithTeams();
-    const pay = freshTeamWorkspace("pay");
-    expect(run(UNIT, ["take", "refunds", "--from", home.remote, "--home", HOME], pay.dir).status).toBe(0);
-    renameSync(home.remote, `${home.remote}-moved`);
-    const again = run(UNIT, ["take", "refunds", "--from", home.remote, "--home", HOME], pay.dir);
+  test("a build carried on with the plan's address said again needs nothing of the plan's repository", () => {
+    const home = makePlanHome();
+    const plan = planHost(home);
+    const pay = ownWorkspace(home.hosts, "pay", ["billing"]);
+    expect(run(UNIT, ["take", "refunds", "--plan", home.id8, "--from", plan], pay).status).toBe(0);
+    renameSync(plan, `${plan}-moved`);
+    const again = run(UNIT, ["take", "refunds", "--plan", home.id8, "--from", plan], pay);
     expect(again.status, again.out).toBe(0);
     expect(again.json).toMatchObject({ resumed: true, space: "default" });
   });
 
-  test("in a clone of the lead's workspace that is behind, the lead's address said is never answered that nothing is shared", () => {
-    const home = makeHome();
-    const alice = cloneOf(home.remote, "alice");
-    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
-    commitAll(home.dir, "teams");
-    git(home.dir, ["push", "-q", "origin", "main"]);
-    const ask = run(ORCH, ["next", "--lead-address", home.remote], alice);
-    expect(ask.status, ask.out).toBe(0);
-    expect(ask.out).not.toContain("has no work built by teams");
-  });
-
   // Codex keeps a repository's .git read-only unless its session grants write access.
-  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("a .git this session cannot write: the lead's address said gets the way on, never a dead end", () => {
-    const home = homeWithTeams();
-    const pay = freshTeamWorkspace("pay");
-    const dotGit = join(pay.dir, ".git");
-    chmodSync(dotGit, 0o555);
+  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("a .git this session cannot write: the plan's address said gets the way on, never a dead end", () => {
+    const home = makePlanHome();
+    const pay = ownWorkspace(home.hosts, "pay", ["billing"]);
+    // The whole .git, as the sandbox keeps it.
+    const dotGit = join(pay, ".git");
+    spawnSync("chmod", ["-R", "a-w", dotGit]);
     try {
-      const ask = run(ORCH, ["next", "--lead-address", home.remote], pay.dir);
+      const ask = run(ORCH, ["next", "--lead-address", planHost(home)], pay);
       expect(ask.out).toContain("Run the same command again with write access");
     } finally {
-      chmodSync(dotGit, 0o755);
+      spawnSync("chmod", ["-R", "u+w", dotGit]);
     }
   });
 
   test("an address starting with '-' is refused before any git call, at the take and at the offer", () => {
-    homeWithTeams();
-    const pay = freshTeamWorkspace("pay");
+    const home = makePlanHome();
+    const pay = ownWorkspace(home.hosts, "pay", ["billing"]);
     const marker = join(tempDir("dash"), "ran");
     const trace = join(tempDir("trace"), "git.trace");
     const env = { ...ENV, GIT_TRACE: trace };
-    const took = takeIn("payments", ["refunds", `--from=--upload-pack=touch ${marker}`, "--home", HOME], pay.dir, env);
+    const took = takeIn("payments", ["refunds", "--plan", home.id8, `--from=--upload-pack=touch ${marker}`], pay, env);
     expect(took.status).not.toBe(0);
     expect(String(took.json?.error)).toContain('starts with "-"');
-    const asked = run(ORCH, ["next", "--lead-address", `-utouch ${marker}`], pay.dir, env);
+    const asked = run(ORCH, ["next", "--lead-address", `-utouch ${marker}`], pay, env);
     expect(String(asked.json?.message)).toContain('starts with "-"');
     expect(existsSync(marker)).toBe(false);
     expect(traced(trace).filter((line) => line.includes(marker))).toEqual([]);
   });
 });
-
 
 // The lead's project takes no push from here: its pre-receive hook refuses every one.
 function refusePushes(remote: string): void {
@@ -3812,7 +3742,7 @@ describe("every Unit is open: whoever takes it builds it where they are, and no 
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
     commitAll(home.dir, "teams");
     git(home.dir, ["push", "-q", "origin", "main"]);
-    return home;
+    return planShared(home);
   }
   function workIn(dir: string, space: string): void {
     expect(run(UTILITY, ["space-create", space], dir).status).toBe(0);
@@ -3826,13 +3756,14 @@ describe("every Unit is open: whoever takes it builds it where they are, and no 
     run(UNIT, ["assign", "refunds=Payments"], home.dir);
     commitAll(home.dir, "teams");
     git(home.dir, ["push", "-q", "origin", "main"]);
+    const plan = planShared(home);
     const pat = cloneOf(home.remote, "pat");
     workIn(pat, "pay");
     const took = take(pat, "refunds");
     expect(took.status, took.out).toBe(0);
     expect(took.json?.space).toBe("pay");
     expect(String(took.json?.notice ?? "")).toContain("You build it in the pay space under your team's rules,");
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ owner: "pay", taken_by: "pat" });
+    expect(recordAt(plan, "refunds")?.json).toMatchObject({ owner: "pay", taken_by: "pat" });
   });
 
   test("two fresh clones take one Unit: the first builds it where it is, the other is told who has it", () => {
@@ -3855,12 +3786,12 @@ describe("every Unit is open: whoever takes it builds it where they are, and no 
     const ui = take(web, "checkout-ui");
     expect(ui.status, ui.out).toBe(0);
     expect(ui.json?.space).toBe("web");
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "checkout-ui")).toMatchObject({ owner: "web", taken_by: "wen" });
+    expect(recordAt(home, "checkout-ui")?.json).toMatchObject({ owner: "web", taken_by: "wen" });
     const dee = cloneOf(home.remote, "dee");
     const refunds = take(dee, "refunds");
     expect(refunds.status, refunds.out).toBe(0);
     expect(refunds.json?.space).toBe("default");
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ owner: "default", taken_by: "dee" });
+    expect(recordAt(home, "refunds")?.json).toMatchObject({ owner: "default", taken_by: "dee" });
   });
 
   test("a fresh clone is offered each open Unit once, with no team to name", () => {
@@ -3889,7 +3820,7 @@ describe("every Unit is open: whoever takes it builds it where they are, and no 
 // for them, offers no pull request, runs no workflow and no branch rule on them, and a team's clone lists none.
 describe("where the team's records live", () => {
   test("a take, its result and the lead's word on it are kept under refs/aidlc/claims, no claim branch anywhere, and the lead's copy follows each write", () => {
-    const { home, alice, record } = refundsTaken();
+    const { home, alice, record } = refundsTakenHere();
     const id8 = fixtureIntentId8(home.dir);
     codeGenerated(alice, record);
     finishBuild(record);
@@ -3899,8 +3830,8 @@ describe("where the team's records live", () => {
     expect(said.status, said.out).toBe(0);
     const ref = `refs/aidlc/claims/${id8}/refunds`;
     expect(git(home.remote, ["for-each-ref", "--format=%(refname)", "refs/aidlc/claims/", "refs/heads/claim/"])).toBe(ref);
-    expect(claimPayload(home.remote, id8, "refunds")).toMatchObject({ taken_by: "alice", claim_ref: ref });
-    expect(claimPayload(home.remote, id8, "refunds")?.said_merged).toBeDefined();
+    expect(recordAt(home, "refunds")?.json).toMatchObject({ taken_by: "alice", claim_ref: ref });
+    expect(recordAt(home, "refunds")?.json?.said_merged).toBeDefined();
     // The lead's own copy is the record as the lead's word left it, with no look between.
     expect(git(home.dir, ["rev-parse", `refs/aidlc/remotes/origin/claims/${id8}/refunds`])).toBe(git(home.remote, ["rev-parse", ref]));
     // A teammate's clone, and a plain clone of the lead's project, list no branch of AI-DLC's.
@@ -3908,7 +3839,7 @@ describe("where the team's records live", () => {
   });
 
   test("a teammate's own git fetch --prune keeps AI-DLC's copy of the records", () => {
-    const { home, alice } = refundsTaken();
+    const { home, alice } = refundsTakenHere();
     const copy = `refs/aidlc/remotes/origin/claims/${fixtureIntentId8(home.dir)}/refunds`;
     const before = git(alice, ["rev-parse", copy]);
     git(alice, ["fetch", "-q", "--prune", "origin"]);

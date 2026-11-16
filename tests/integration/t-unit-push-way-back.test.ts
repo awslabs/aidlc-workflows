@@ -28,6 +28,7 @@ import {
   inSpace,
   makeHome,
   run,
+  sharePlan,
   STATE,
   UNIT,
 } from "../harness/team-build.ts";
@@ -49,6 +50,7 @@ function builtToPush(tool: "claude" | HostName, manifestFromWorkspace: boolean, 
   git(home.dir, ["add", "-A"]);
   git(home.dir, ["commit", "-q", "-m", "teams chosen"]);
   git(home.dir, ["push", "-q", "origin", "main"]);
+  sharePlan(home);
   const dir = cloneOf(home.remote, "alice");
   cpSync(join(REPO_ROOT, "dist", tool), dir, { recursive: true, force: false, errorOnExist: false });
   cloneCode(hosts.billing, dir, "billing", "alice");

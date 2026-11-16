@@ -33,7 +33,6 @@ import {
 } from "../harness/fixtures.ts";
 import {
   bashLine,
-  claimPayload,
   cleanupTeamBuild,
   cloneCode,
   cloneOf,
@@ -52,7 +51,9 @@ import {
   next,
   personsChat,
   personsNext,
-  refundsTaken,
+  recordAt,
+  recordHost,
+  refundsTakenInClone,
   run,
   STATE,
   kindsEverySkillHandles,
@@ -67,6 +68,8 @@ import {
   expectDraftStep,
   ORCH,
   ticketKeyHook,
+  sharePlan,
+  planFrom,
 } from "../harness/team-build.ts";
 import { hostFor } from "../harness/scope-hosts.ts";
 import { AgentStandIn, type Directive, PersonScript } from "../harness/scope-run.ts";
@@ -149,11 +152,12 @@ describe("no step of the build-out comes back after its own command ran", () => 
     const share = next(home.dir);
     expect(share.ask_type, JSON.stringify(share)).toBe("team-handover");
     movesOn(home.dir, ENV, share, choice(share, "Share them with the teams"));
-    // A teammate takes refunds from the offer, from the space they work in; the offer is not put again.
+    // A teammate asks what they can take and takes refunds from the offer, from the space they work in; the
+    // offer is not put again.
     const alice = withTools(cloneOf(home.remote, "alice"));
     for (const [name, host] of Object.entries(hosts)) cloneCode(host, alice, name, "alice");
     inSpace(alice, "payments");
-    const take = next(alice, ENV);
+    const take = next(alice, ENV, ["--units"]);
     expect(take.ask_type, JSON.stringify(take)).toBe("unit-take");
     movesOn(alice, ENV, take, choice(take, "Start refunds"));
     const intents = join(alice, "aidlc", "spaces", "payments", "intents");
@@ -208,7 +212,7 @@ describe("no step of the build-out comes back after its own command ran", () => 
 
   test("the home answers a proposal once, approved or turned down, and is not asked it again", () => {
     for (const answer of ["approve", "reject"]) {
-      const taken = refundsTaken();
+      const taken = refundsTakenInClone();
       withTools(taken.home.dir);
       const copy = join(taken.record, "inception", "requirements-analysis", "requirements.md");
       writeFileSync(copy, "# Requirements\n\nFR1 refunds, partial amounts too.\n");
@@ -255,7 +259,7 @@ describe("a step that waits on the person, and every way on the round added, nev
   });
 
   test("the lead's sign-off and a team's proposal after not now: the board's offer answers each, once", () => {
-    const { home, alice, record } = refundsTaken();
+    const { home, alice, record } = refundsTakenInClone();
     withTools(home.dir);
     expect(run(UNIT, ["lead-sign-off", "on"], home.dir).status).toBe(0);
     codeGenerated(alice, record);
@@ -267,7 +271,7 @@ describe("a step that waits on the person, and every way on the round added, nev
     expect(board.kind, JSON.stringify(board)).toBe("print");
     movesOn(home.dir, ENV, board, offered(board, "Sign it off"));
     // A team's proposal, not answered at once: the board's offer answers it.
-    const taken = refundsTaken();
+    const taken = refundsTakenInClone();
     withTools(taken.home.dir);
     writeFileSync(join(taken.record, "inception", "requirements-analysis", "requirements.md"), "# Requirements\n\nFR1 refunds, faster.\n");
     expect(run(UNIT, ["propose", "--input", "requirements.md", "--person-words", "faster refunds"], taken.alice).status).toBe(0);
@@ -279,7 +283,7 @@ describe("a step that waits on the person, and every way on the round added, nev
   });
 
   test("a team that changed its copy: the offer to send it home, once", () => {
-    const { alice, record } = refundsTaken();
+    const { alice, record } = refundsTakenInClone();
     withTools(alice);
     writeFileSync(join(record, "inception", "requirements-analysis", "requirements.md"), "# Requirements\n\nFR1 refunds, faster.\n");
     const ask = next(alice);
@@ -288,7 +292,7 @@ describe("a step that waits on the person, and every way on the round added, nev
   });
 
   test("the push: a repo the plan did not list goes with it; a result a rule of the lead's host refuses is not offered again in that chat", () => {
-    const { home, alice, record } = refundsTaken();
+    const { home, alice, record } = refundsTakenInClone();
     withTools(alice);
     codeGenerated(alice, record);
     cloneCode(codeHost("ledger"), alice, "ledger", "alice");
@@ -315,7 +319,7 @@ describe("a step that waits on the person, and every way on the round added, nev
   });
 
   test("the team approves its build's last stage: the report says the workflow goes on, and the next step offers the push", () => {
-    const { alice } = refundsTaken();
+    const { alice } = refundsTakenInClone();
     cpSync(join(REPO_ROOT, "dist", "claude"), alice, { recursive: true, force: false, errorOnExist: false });
     const host = hostFor("claude", alice, GIT_ENV);
     const person = new PersonScript(host);
@@ -343,7 +347,7 @@ describe("a step that waits on the person, and every way on the round added, nev
   });
 
   test("after a turn-down, the redo's Code Generation approved through the real report: the push is offered, never the redo again", () => {
-    const { home, alice } = refundsTaken();
+    const { home, alice } = refundsTakenInClone();
     cpSync(join(REPO_ROOT, "dist", "claude"), alice, { recursive: true, force: false, errorOnExist: false });
     const host = hostFor("claude", alice, GIT_ENV);
     const person = new PersonScript(host);
@@ -376,7 +380,7 @@ describe("a step that waits on the person, and every way on the round added, nev
   });
 
   test("the push again with their own change in the way of the Unit's branch: refused in git's words, not offered again until it is out of the way, then it goes", () => {
-    const { hosts, alice, record } = refundsTaken();
+    const { hosts, alice, record } = refundsTakenInClone();
     withTools(alice);
     codeGenerated(alice, record);
     finishBuild(record);
@@ -406,7 +410,7 @@ describe("a step that waits on the person, and every way on the round added, nev
   });
 
   test("a commit message their hook refuses: the way on, followed with the person's message, goes, and no step puts the same push as if nothing happened", () => {
-    const { hosts, alice, record } = refundsTaken((clone) => {
+    const { hosts, alice, record } = refundsTakenInClone((clone) => {
       withTools(clone);
     });
     codeGenerated(alice, record);
@@ -453,7 +457,7 @@ describe("a step that waits on the person, and every way on the round added, nev
   });
 
   test("a merge under way on the Unit's branch: the push question offers to finish it, a push without that yes commits nothing over it, and the yes goes", () => {
-    const { alice, record } = refundsTaken();
+    const { alice, record } = refundsTakenInClone();
     withTools(alice);
     codeGenerated(alice, record);
     finishBuild(record);
@@ -493,6 +497,7 @@ describe("a step that waits on the person, and every way on the round added, nev
     git(home.dir, ["add", "-A"]);
     git(home.dir, ["commit", "-q", "-m", "teams"]);
     git(home.dir, ["push", "-q", "origin", "main"]);
+    sharePlan(home);
     const carol = withTools(cloneOf(home.remote, "carol"));
     // The agent's own command for the home's Unit: refused, with a way on that does not offer it again.
     const refused = runPrinted(carol, ENV, `bun .claude/tools/aidlc-unit.ts take checkout-ui --home ${HOME_RECORD}`);
@@ -522,6 +527,7 @@ describe("a step that waits on the person, and every way on the round added, nev
     git(home.dir, ["add", "-A"]);
     git(home.dir, ["commit", "-q", "-m", "teams"]);
     git(home.dir, ["push", "-q", "origin", "main"]);
+    sharePlan(home);
     const alice = withTools(cloneOf(home.remote, "alice"));
     const waiting = next(alice);
     expect(waiting.kind, JSON.stringify(waiting)).toBe("print");
@@ -533,7 +539,7 @@ describe("a step that waits on the person, and every way on the round added, nev
   });
 
   test("mid-stage at the home, the lead says a team's Unit was turned down: the step carries the command, the board reads fresh, and the team hears it", () => {
-    const { home, alice, record } = refundsTaken();
+    const { home, alice, record } = refundsTakenInClone();
     withTools(home.dir);
     // The lead asks to build checkout-ui here.
     const here = run(UNIT, ["assign", "--here", "checkout-ui", "--person-words", "build checkout-ui here"], home.dir);
@@ -552,7 +558,7 @@ describe("a step that waits on the person, and every way on the round added, nev
     expect(command, JSON.stringify(step).slice(0, 400)).toBeDefined();
     const down = runPrinted(home.dir, ENV, command!.replace("<unit>", "refunds").replace("<repo>", "billing"));
     expect(down.status, down.out).toBe(0);
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.turned_down).toBeDefined();
+    expect(recordAt(home, "refunds")?.json?.turned_down).toBeDefined();
     // The team, mid-build, hears it at its next step.
     const heard = next(alice, ENV);
     expect((heard.change_notices ?? []) as string[], JSON.stringify(heard)).toContain(
@@ -561,7 +567,7 @@ describe("a step that waits on the person, and every way on the round added, nev
   });
 
   test("team-board at a team home is the home's own board: the same text as its step's board for the same state", () => {
-    const { hosts, home, alice, record } = refundsTaken();
+    const { hosts, home, alice, record } = refundsTakenInClone();
     withTools(home.dir);
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
@@ -573,25 +579,25 @@ describe("a step that waits on the person, and every way on the round added, nev
     // A query: after a merge it shows it and writes nothing; the step then shows the same and records it.
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
     const claimRef = `refs/aidlc/claims/${fixtureIntentId8(home.dir)}/refunds`;
-    const claimBefore = git(home.remote, ["rev-parse", claimRef]);
+    const claimBefore = git(recordHost(home), ["rev-parse", claimRef]);
     const rowsBefore = readAuditShardEvents(home.dir).length;
     const merged = runPrinted(home.dir, ENV, "bun .claude/tools/aidlc-orchestrate.ts team-board");
     expect(merged.out).toContain("- refunds, payments space: built by alice, checkout-api merged, billing not merged yet (1 of 2 merged)");
-    expect(git(home.remote, ["rev-parse", claimRef])).toBe(claimBefore);
+    expect(git(recordHost(home), ["rev-parse", claimRef])).toBe(claimBefore);
     expect(readAuditShardEvents(home.dir)).toHaveLength(rowsBefore);
     const after = next(home.dir, ENV);
     expect(merged.out.trim()).toBe(String(after.narration));
-    expect(git(home.remote, ["rev-parse", claimRef])).not.toBe(claimBefore);
+    expect(git(recordHost(home), ["rev-parse", claimRef])).not.toBe(claimBefore);
   });
 
   test("a copy of the lead's own checkout with nothing to take: carrying the work on here is offered, recommended, and taking it moves on", () => {
-    const { home } = refundsTaken();
+    const { home } = refundsTakenInClone();
     // The plan's rows are in the lead's own checkout's shard, as after the lead's Inception.
     asLeadsOwnCheckout(home.dir);
     git(home.dir, ["add", "-A"]);
     git(home.dir, ["commit", "-q", "-m", "plan approved"]);
     git(home.dir, ["push", "-q", "origin", "main"]);
-    const took = takeIn("web", ["checkout-ui", "--home", HOME_RECORD], cloneOf(home.remote, "carol"));
+    const took = takeIn("web", ["checkout-ui", ...planFrom(home)], cloneOf(home.remote, "carol"));
     expect(took.status, took.out).toBe(0);
     // A clone made under the lead's own git name is a clone all the same: carrying the work on is not offered there.
     const clone = next(withTools(cloneOf(home.remote, "lead")), ENV);
@@ -634,9 +640,9 @@ describe("a step that waits on the person, and every way on the round added, nev
   });
 
   test("a clone where nothing is ready: words for new work start it, and the take opens once the home moves", () => {
-    const { hosts, home, alice, record } = refundsTaken();
+    const { hosts, home, alice, record } = refundsTakenInClone();
     // checkout-ui taken too: only reporting is left, and it waits on refunds.
-    const carol = takeIn("web", ["checkout-ui", "--home", HOME_RECORD], cloneOf(home.remote, "carol"));
+    const carol = takeIn("web", ["checkout-ui", ...planFrom(home)], cloneOf(home.remote, "carol"));
     expect(carol.status, carol.out).toBe(0);
     const dana = withTools(cloneOf(home.remote, "dana"));
     expect(run(UTILITY, ["space-create", "data"], dana).status).toBe(0);
@@ -667,13 +673,13 @@ const REPORTING_IN_BOTH = DEPENDENCIES.replace("repos: [billing]\n    depends_on
 
 function earlyThenMerged(how: "squash" | "merge" | "rebase", pushedFirst: boolean) {
   expect(REPORTING_IN_BOTH).not.toBe(DEPENDENCIES);
-  const taken = refundsTaken(undefined, REPORTING_IN_BOTH);
+  const taken = refundsTakenInClone(undefined, REPORTING_IN_BOTH);
   codeGenerated(taken.alice, taken.record);
   expect(run(UNIT, ["push"], taken.alice).status).toBe(0);
   git(taken.home.dir, ["fetch", "-q", "origin"]);
   const dana = withTools(cloneOf(taken.home.remote, "dana"));
   for (const [name, host] of Object.entries(taken.hosts)) cloneCode(host, dana, name, "dana");
-  const took = takeIn("data", ["reporting", "--home", HOME_RECORD, "--early"], dana);
+  const took = takeIn("data", ["reporting", ...planFrom(taken.home), "--early"], dana);
   expect(took.status, took.out).toBe(0);
   const intents = join(dana, "aidlc", "spaces", "data", "intents");
   const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-reporting"))!);
@@ -689,7 +695,7 @@ function earlyThenMerged(how: "squash" | "merge" | "rebase", pushedFirst: boolea
   }
   for (const host of Object.values(taken.hosts)) mergeOnHost(host, "refunds", how);
   next(taken.home.dir);
-  expect(claimPayload(taken.home.remote, fixtureIntentId8(taken.home.dir), "refunds")).toMatchObject({ done: true });
+  expect(recordAt(taken.home, "refunds")?.json).toMatchObject({ done: true });
   git(dana, ["fetch", "-q", "origin"]);
   return { ...taken, dana, record };
 }
@@ -878,6 +884,7 @@ describe("the take's own line reaches the person with the build's next step, onc
     git(home.dir, ["add", "-A"]);
     git(home.dir, ["commit", "-q", "-m", "teams"]);
     git(home.dir, ["push", "-q", "origin", "main"]);
+    sharePlan(home);
     const bob = withTools(cloneOf(home.remote, "bob"));
     for (const [name, host] of Object.entries(hosts)) cloneCode(host, bob, name, "bob");
     inSpace(bob, "payments");

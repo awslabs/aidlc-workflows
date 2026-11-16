@@ -17,6 +17,7 @@ import {
   ownRemoteAmong,
   readClaimAt,
   readUnitClaimRegistryCache,
+  saidPlans,
   type UnitClaimRegistryCache,
   unitsHeldHere,
 } from "./aidlc-unit-holders.ts";
@@ -5246,7 +5247,7 @@ export function workToPickUp(
   const recorded = listIntents(projectDir, space, selectedIntent).filter((intent) => !isArchivedIntent(intent));
   if (recorded.length === 0 || recorded.some((intent) => intent.active)) return null;
   const unfinished = recorded.map((intent) => ({ intent, state: recordStateText(projectDir, intent, space) }))
-    .filter(({ intent, state }) => !isFinishedWork(intent, state) && !unitTeams().isHomesCopiedWork(projectDir, state));
+    .filter(({ intent, state }) => !isFinishedWork(intent, state));
   return unfinished.some(({ intent }) => intent.dirName) ? unfinished : null;
 }
 
@@ -30370,9 +30371,11 @@ export function writeUnitClaimRegistryCache(
   projectDir: string,
   cache: UnitClaimRegistryCache,
 ): void {
+  // The addresses a person said a plan is in ride the same file (saidPlans).
+  const said = saidPlans(projectDir);
   writeFileAtomic(
     claimRegistryCachePath(projectDir),
-    `${JSON.stringify(cache, null, 2)}\n`,
+    `${JSON.stringify(said.length > 0 ? { ...cache, said_plans: said } : cache, null, 2)}\n`,
   );
 }
 
@@ -39814,7 +39817,7 @@ export const NEXT_FLAGS: ReadonlyMap<string, NextFlagShape> = new Map<string, Ne
   ["--unit", { value: "free" }],
   ["--plan-name", { value: "free" }],
   ["--save-as", { value: "free" }],
-  // The lead's project address a team takes a Unit from, as the agent read it from the person's words.
+  // The address of the code repository the lead's plan is shared in, as the agent read it from the person's words.
   ["--lead-address", { value: "free" }],
   ["--skip", { value: "free" }],
   ["--add", { value: "free" }],

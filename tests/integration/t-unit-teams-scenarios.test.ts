@@ -33,6 +33,7 @@ import {
   makeHome,
   mergeOnHost,
   next,
+  offerText,
   run,
   STATE,
   stateOf,
@@ -40,6 +41,10 @@ import {
   UNIT,
   takeIn,
   inSpace,
+  sharePlan,
+  planFrom,
+  recordAt,
+  type PlanHome,
 } from "../harness/team-build.ts";
 
 setDefaultTimeout(20 * 60_000);
@@ -95,11 +100,12 @@ function takeWith(unitTool: string, space: string, args: string[], dir: string) 
   return run(unitTool, args, dir);
 }
 
-// Teams chosen at the lead's project: every Unit is open.
-function teamsChosen(home: Home): void {
+// Teams chosen at the lead's project: every Unit is open, and the plan is shared.
+function teamsChosen(home: Home): PlanHome & Home {
   expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
   commitAll(home.dir, "teams chosen");
   git(home.dir, ["push", "-q", "origin", "main"]);
+  return sharePlan(home);
 }
 
 function boardAt(home: Home): string {
@@ -123,7 +129,7 @@ describe("scenario 1: one shared workspace repo, the repos side by side", () => 
     }, null, 2)}\n`);
     appendFileSync(join(home.dir, ".gitignore"), "repos.local.json\n");
     commitAll(home.dir, "repos side by side");
-    teamsChosen(home);
+    const plan = teamsChosen(home);
 
     // A payments developer on Cursor: the workspace and the two repos side by side.
     const cursor = tree("cursor");
@@ -133,7 +139,7 @@ describe("scenario 1: one shared workspace repo, the repos side by side", () => 
     const offer = cursor.next(alice);
     expect(offer.ask_type, JSON.stringify(offer)).toBe("unit-take");
     expect(String(offer.question)).toContain("refunds (open; likely checkout-api, billing)");
-    const took = takeWith(cursor.unit, "payments", ["take", "refunds", "--home", HOME_RECORD], alice);
+    const took = takeWith(cursor.unit, "payments", ["take", "refunds", ...planFrom(plan)], alice);
     expect(took.status, took.out).toBe(0);
     const record = buildRecord(alice, "payments", "refunds");
     built(record, "refunds", [
@@ -158,7 +164,7 @@ describe("scenario 1: one shared workspace repo, the repos side by side", () => 
     mergeOnHost(hosts.billing, "refunds", "squash");
     fetchRecords(home.dir);
     next(home.dir);
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
+    expect(recordAt(plan, "refunds")?.json).toMatchObject({ done: true });
     // reporting waited on refunds and is open now; the lead asks to build it
     // at their own project, where their repos.local.json puts billing: the
     // lead's chat builds it through every stage, and the board shows it done.
@@ -205,12 +211,12 @@ describe("scenario 2: one big code repo", () => {
     writeFileSync(join(home.dir, "aidlc", "repos.local.json"), `${JSON.stringify({ repos: [{ name: "platform", path: join(leads, "platform") }] }, null, 2)}\n`);
     appendFileSync(join(home.dir, ".gitignore"), "repos.local.json\n");
     commitAll(home.dir, "the workspace beside platform");
-    teamsChosen(home);
+    const plan = teamsChosen(home);
 
     const codex = tree("codex");
     const alice = cloneOf(home.remote, "alice");
     cloneCode(platform, join(alice, ".."), "platform", "alice");
-    const took = takeWith(codex.unit, "payments", ["take", "refunds", "--home", HOME_RECORD], alice);
+    const took = takeWith(codex.unit, "payments", ["take", "refunds", ...planFrom(plan)], alice);
     expect(took.status, took.out).toBe(0);
     built(buildRecord(alice, "payments", "refunds"), "refunds", [
       { repo: "platform", folder: join(alice, "..", "platform"), path: "services/checkout-api/src/refunds.ts" },
@@ -228,7 +234,7 @@ describe("scenario 2: one big code repo", () => {
     mergeOnHost(platform, "refunds", "squash");
     fetchRecords(home.dir);
     next(home.dir);
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
+    expect(recordAt(plan, "refunds")?.json).toMatchObject({ done: true });
   });
 
   test("the workspace inside it: teams on its remote take each Unit, push it on its own branch and merge it by pull request, and the lead's look sees the merge", () => {
@@ -248,7 +254,7 @@ describe("scenario 2: one big code repo", () => {
     expect(String(step.question)).toStartWith("The Units are open for any team to take.");
     expect(run(UNIT, ["share", "--plan"], home.dir).status).toBe(0);
     const alice = cloneOf(home.remote, "alice");
-    expect(takeWith(UNIT, "payments", ["take", "refunds", "--home", HOME_RECORD], alice).status).toBe(0);
+    expect(takeWith(UNIT, "payments", ["take", "refunds", "--plan", fixtureIntentId8(home.dir), "--from", home.remote], alice).status).toBe(0);
     built(buildRecord(alice, "payments", "refunds"), "refunds", [
       { folder: alice, path: "services/checkout-api/src/refunds.ts" },
       { folder: alice, path: "services/billing/lib/refund.ts" },
@@ -287,7 +293,7 @@ describe("scenario 3: each team keeps its own workspace repo", () => {
     cloneCode(hosts["checkout-web"], web.dir, "checkout-web", "wendy");
     const remotes = git(web.dir, ["remote"]);
     const offer = kiroIde.next(web.dir);
-    expect(String(offer.question)).toStartWith(`fixture (the lead's project is at ${home.remote}) is built by teams.`);
+    expect(offerText(offer.question)).toMatch(/^fixture is shared in [^ .]+\./);
     expect((offer.choices as Array<{ label: string }>).map((c) => c.label)).not.toContain("Carry on fixture");
     const took = takeWith(kiroIde.unit, "web", ["take", "checkout-ui", "--home", HOME_RECORD], web.dir);
     expect(took.status, took.out).toBe(0);
@@ -386,17 +392,17 @@ describe("scenario 5: solo work, then a second person joins", () => {
 function refundsOnKiro() {
   const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
   const home = makeHome({ repos: hosts });
-  teamsChosen(home);
+  const plan = teamsChosen(home);
   const kiro = tree("kiro");
   const alice = cloneOf(home.remote, "alice");
   for (const [name, host] of Object.entries(hosts)) cloneCode(host, alice, name, "alice");
-  expect(takeWith(kiro.unit, "payments", ["take", "refunds", "--home", HOME_RECORD], alice).status).toBe(0);
+  expect(takeWith(kiro.unit, "payments", ["take", "refunds", ...planFrom(plan)], alice).status).toBe(0);
   const record = buildRecord(alice, "payments", "refunds");
   const code = (body = "") => built(record, "refunds", [
     { repo: "checkout-api", folder: join(alice, "checkout-api"), path: "src/refunds.ts" },
     { repo: "billing", folder: join(alice, "billing"), path: `lib/refund${body}.ts` },
   ]);
-  return { hosts, home, kiro, alice, record, code };
+  return { hosts, home: plan, kiro, alice, record, code };
 }
 
 describe("scenario 6: when things go wrong", () => {
@@ -419,7 +425,7 @@ describe("scenario 6: when things go wrong", () => {
     mergeOnHost(hosts.billing, "refunds", "merge");
     fetchRecords(home.dir);
     next(home.dir);
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
+    expect(recordAt(home, "refunds")?.json).toMatchObject({ done: true });
     expect(git(hosts["checkout-api"], ["log", "--format=%s", "main"]).split("\n")).toContain("refunds (squashed)");
   });
 
@@ -448,7 +454,7 @@ describe("scenario 6: when things go wrong", () => {
     cpSync(join(REPO_ROOT, "dist", "claude"), dana, { recursive: true, force: false, errorOnExist: false });
     cloneCode(hosts.billing, dana, "billing", "dana");
     cloneCode(hosts["checkout-api"], dana, "checkout-api", "dana");
-    const early = takeIn("data", ["reporting", "--home", HOME_RECORD, "--early"], dana);
+    const early = takeIn("data", ["reporting", ...planFrom(home), "--early"], dana);
     expect(early.status, early.out).toBe(0);
     // reporting's plan lists billing only: checkout-api, which refunds also pushed, stays as it is.
     expect(String(early.json?.notice)).toContain("It starts early on the pushed branch of refunds in billing. It may still change before it merges.");

@@ -92,7 +92,8 @@ function pushAll(dir: string): void {
 
 describe("choosing teams records where the home is", () => {
   test("the workspace's own origin, read and never changed", () => {
-    const home = makeHome();
+    // Work on the workspace's own repository: its home is that repository.
+    const home = makeHome({ repos: {} });
     chooseTeams(home.dir);
     expect(field(stateOf(home.dir), "Home Location")).toBe(home.remote);
     const set = readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_OWNERSHIP_SET");
@@ -108,12 +109,18 @@ describe("choosing teams records where the home is", () => {
     chooseTeams(one.dir);
     expect(field(stateOf(one.dir), "Home Location")).toBe(one.remote);
     expect(field(stateOf(one.dir), "State Version")).toBe("9");
-    // Across repos with no remote, the home is recorded as local: 9 too.
+    // Across repos, the home is the plan's repository, the work's first: 9 too.
     const across = makeHome();
     git(across.dir, ["remote", "remove", "origin"]);
     chooseTeams(across.dir);
-    expect(field(stateOf(across.dir), "Home Location")).toBe("local");
+    expect(field(stateOf(across.dir), "Home Location")).toBe(git(join(across.dir, "app"), ["remote", "get-url", "origin"]));
     expect(field(stateOf(across.dir), "State Version")).toBe("9");
+    // Across repos none of which has an address, the home is recorded as local: 9 too.
+    const nowhere = makeHome({ repos: { app: "" } });
+    git(nowhere.dir, ["remote", "remove", "origin"]);
+    chooseTeams(nowhere.dir);
+    expect(field(stateOf(nowhere.dir), "Home Location")).toBe("local");
+    expect(field(stateOf(nowhere.dir), "State Version")).toBe("9");
     // A teammate's take of solo work switches it with the same setter.
     const took = makeHome({ repos: {} });
     const switched = run(STATE, ["set-unit-ownership", "team", "--teammate-took"], took.dir);

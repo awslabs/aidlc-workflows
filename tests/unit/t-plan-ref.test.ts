@@ -247,8 +247,8 @@ describe("nothing else moves", () => {
     const commit = spawnSync("git", ["commit-tree", tree, "-p", kept, "-m", "a copy"], { cwd: home.dir, env: later, encoding: "utf-8" }).stdout.trim();
     const elsewhere = `refs/aidlc/home/${home.id8}/aaaaaaaaaaaa/plan`;
     git(home.dir, ["update-ref", elsewhere, commit]);
-    expect(planAtCopy(home.dir, elsewhere)).toBeNull();
-    expect(planAtCopy(home.dir, kept)?.commit).toBe(String(home.plan));
+    expect(planAtCopy(home.dir, elsewhere, { found: true }).kind).toBe("unreadable");
+    expect(planAtCopy(home.dir, kept, { found: true })).toMatchObject({ kind: "read", oid: String(home.plan) });
     expect(planUnitsKept(home.dir)).toEqual(["refunds", "checkout-ui", "reporting"]);
   });
 
@@ -257,9 +257,9 @@ describe("nothing else moves", () => {
     const kept = git(home.dir, ["for-each-ref", "--format=%(refname)", "refs/aidlc"]);
     const alias = `refs/aidlc/home/${home.id8}/${repoCopyKey("checkout-api-alias:acme/checkout-api.git")}/plan`;
     git(home.dir, ["update-ref", alias, String(home.plan)]);
-    expect(planAtCopy(home.dir, alias, { named: true })?.plan.plan_repo).toEqual({ name: "checkout-api", address: home.hosts["checkout-api"] });
-    expect(planAtCopy(home.dir, alias)).toBeNull();
-    expect(planAtCopy(home.dir, kept)?.commit).toBe(String(home.plan));
+    expect(planAtCopy(home.dir, alias)).toMatchObject({ kind: "read", plan: { plan_repo: { name: "checkout-api", address: home.hosts["checkout-api"] } } });
+    expect(planAtCopy(home.dir, alias, { found: true }).kind).toBe("unreadable");
+    expect(planAtCopy(home.dir, kept)).toMatchObject({ kind: "read", oid: String(home.plan) });
   });
 
   test("the share run again with nothing new writes nothing", () => {
@@ -606,9 +606,8 @@ describe("what the lead reads", () => {
     const newer = writeOnTip(host, home.id8, (plan) => {
       (plan as Record<string, unknown>).format = 2;
     });
-    expect(String(run(UNIT, ["share", "--plan"], home.dir).json?.error)).toBe(
-      "The plan in checkout-api was set up with a newer AI-DLC, so nothing was written over it. Update AI-DLC here, then say when to share it.",
-    );
+    // A plan of a newer AI-DLC: the update step, and nothing written over it.
+    expect(String(run(UNIT, ["share", "--plan"], home.dir).json?.error)).toStartWith("This plan was set up with a newer AI-DLC");
     expect(git(host, ["rev-parse", ref])).toBe(newer);
   });
 

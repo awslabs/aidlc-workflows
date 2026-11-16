@@ -31,7 +31,7 @@ import {
   STAGE, staffing, step, tool,
 } from "../harness/question-record.ts";
 import {
-  cleanupTeamBuild, codeGenerated, ENV, git, next as teamNext, refundsTaken, run as teamRun, UNIT,
+  cleanupTeamBuild, codeGenerated, ENV, git, next as teamNext, refundsTakenInClone, run as teamRun, UNIT,
 } from "../harness/team-build.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -210,7 +210,7 @@ describe("an engine question", () => {
 // clone is not recorded: no work is selected there to keep the record in.)
 describe("an engine question of teams building their Units", () => {
   test("is recorded once, asked again under its id, and open in a turn only while it is the open step", () => {
-    const { home, alice, record } = refundsTaken();
+    const { home, alice, record } = refundsTakenInClone();
     expect(teamRun(UNIT, ["lead-sign-off", "on"], home.dir).status).toBe(0);
     codeGenerated(alice, record);
     expect(teamRun(UNIT, ["push"], alice).status).toBe(0);

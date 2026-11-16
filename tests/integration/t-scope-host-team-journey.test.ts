@@ -29,11 +29,10 @@ import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { fixtureIntentId8, REPO_ROOT } from "../harness/fixtures.ts";
+import { REPO_ROOT } from "../harness/fixtures.ts";
 import { type HostName, hostFor, OpencodeScopeHost } from "../harness/scope-hosts.ts";
 import { AgentStandIn, type Directive, PersonScript } from "../harness/scope-run.ts";
 import {
-  claimPayload,
   cleanupTeamBuild,
   cloneCode,
   cloneOf,
@@ -45,7 +44,10 @@ import {
   inSpace,
   makeHome,
   mergeOnHost,
+  type PlanHome,
+  recordAt,
   run,
+  sharePlan,
   STATE,
   tempDir,
   UNIT,
@@ -91,7 +93,7 @@ const UNIT_ASKS = new Set(["unit-take", "unit-push", "unit-amend", "unit-signoff
 // NFR and infrastructure stages, with the lead's tree, teams chosen and every
 // Unit open but those the lead asks to build `here`: committed and pushed, as
 // the lead shares it.
-function leadsProject(hosts: Record<string, string>, units: readonly Plan[], here: string[] = []): { home: Home; id8: string } {
+function leadsProject(hosts: Record<string, string>, units: readonly Plan[], here: string[] = []): { home: Home & PlanHome } {
   const dependencies = "# Unit dependencies\n\n```yaml\nunits:\n" +
     units.map((p) => `  - name: ${p.unit}\n    kind: service\n    repos: [${p.repos.map((r) => r.repo).join(", ")}]\n    depends_on: [${p.dependsOn ?? ""}]\n`).join("") +
     "```\n";
@@ -102,6 +104,7 @@ function leadsProject(hosts: Record<string, string>, units: readonly Plan[], her
   git(home.dir, ["add", "-A"]);
   git(home.dir, ["commit", "-q", "-m", "teams chosen"]);
   git(home.dir, ["push", "-q", "origin", "main"]);
+  const shared = sharePlan(home);
   // Once the plan is shared, the lead asks to build a Unit here.
   if (here.length > 0) {
     const built = run(UNIT, ["assign", "--here", here.join(","), "--person-words", `we build ${here.join(" and ")} here`], home.dir);
@@ -110,7 +113,7 @@ function leadsProject(hosts: Record<string, string>, units: readonly Plan[], her
     git(home.dir, ["commit", "-q", "-m", "built here"]);
     git(home.dir, ["push", "-q", "origin", "main"]);
   }
-  return { home, id8: fixtureIntentId8(home.dir) };
+  return { home: shared };
 }
 
 interface Team {
@@ -239,9 +242,9 @@ function homeStandIn(home: Home) {
 }
 
 // What came back from a team's push: the result its claim carries, by its person, with the Unit's two files.
-function expectResult(remote: string, id8: string, p: Plan, pushed: Record<string, unknown>): void {
+function expectResult(home: PlanHome, p: Plan, pushed: Record<string, unknown>): void {
   expect(pushed).toMatchObject({ pushed: true, unit: p.unit, repos: p.repos.map((r) => r.repo) });
-  const result = claimPayload(remote, id8, p.unit)?.result as { by: string; repos: Array<{ repo: string; paths: Record<string, string> }> };
+  const result = recordAt(home, p.unit)?.json.result as { by: string; repos: Array<{ repo: string; paths: Record<string, string> }> };
   expect(result.by).toBe(p.person);
   for (const repo of result.repos) expect(Object.keys(repo.paths).sort()).toEqual([`src/${p.unit}.ts`, `test/${p.unit}.test.ts`]);
 }
@@ -252,7 +255,7 @@ const unitsMerged = (dir: string): string[] =>
 describe("one piece of work, a team on every tool", () => {
   test("each team takes, builds and pushes its Unit by the routes the live runs took; the repos merge their own way; the home records every Unit done and runs Build and Test", () => {
     const hosts: Record<string, string> = { "checkout-api": codeHost("checkout-api"), "checkout-web": codeHost("checkout-web"), billing: codeHost("billing") };
-    const { home, id8 } = leadsProject(hosts, PLAN);
+    const { home } = leadsProject(hosts, PLAN);
     const teams = new Map<string, Team>();
     const pushedBy = new Map<string, Record<string, unknown>>();
 
@@ -310,7 +313,7 @@ describe("one piece of work, a team on every tool", () => {
       expect(took).toMatchObject({ taken: true, unit: p.unit, team: p.team, space: p.team });
       pushedBy.set(p.unit, pushed);
     }
-    for (const p of FIRST) expectResult(home.remote, id8, p, pushedBy.get(p.unit)!);
+    for (const p of FIRST) expectResult(home, p, pushedBy.get(p.unit)!);
     // The payments team's repos live outside its workspace, where its own
     // repos.local.json says; the branch is pushed from there.
     const payments = teams.get("refunds")!;
@@ -329,7 +332,7 @@ describe("one piece of work, a team on every tool", () => {
     for (const p of FIRST) for (const { repo, merge } of p.repos) mergeOnHost(hosts[repo], p.unit, merge);
     const seen = lead.agent.next();
     expect(unitsMerged(home.dir), JSON.stringify(seen)).toEqual(FIRST.map((p) => p.unit).sort());
-    for (const p of FIRST) expect(claimPayload(home.remote, id8, p.unit), p.unit).toMatchObject({ done: true });
+    for (const p of FIRST) expect(recordAt(home, p.unit)?.json, p.unit).toMatchObject({ done: true });
     expect(String(seen.narration)).toContain("- refunds, payments space: built by alice, done");
 
     // refunds is done, so reporting opens, and dana builds it on Cursor. The
@@ -341,7 +344,7 @@ describe("one piece of work, a team on every tool", () => {
     const dataOffer = data.agent.next();
     expect(String(dataOffer.question), JSON.stringify(dataOffer)).not.toContain("Being built");
     const dataBuilt = takeAndBuild(data, dataOffer);
-    expectResult(home.remote, id8, plan("reporting"), pick(data, dataBuilt.end, "Push"));
+    expectResult(home, plan("reporting"), pick(data, dataBuilt.end, "Push"));
     mergeOnHost(hosts.billing, "reporting", "rebase");
 
     // The lead asks where things stand before their next step: the merge the
@@ -360,7 +363,7 @@ describe("one piece of work, a team on every tool", () => {
     // lead's yes, and the work ends done.
     const asked = lead.agent.next();
     expect(unitsMerged(home.dir)).toEqual(PLAN.map((p) => p.unit).sort());
-    expect(claimPayload(home.remote, id8, "reporting")).toMatchObject({ done: true });
+    expect(recordAt(home, "reporting")?.json).toMatchObject({ done: true });
     expect(String(asked.question), JSON.stringify(asked).slice(0, 600)).toStartWith("Every Unit is merged, and ");
     const caught = lead.agent.host.bash((asked.choices as Array<{ command: string }>)[0].command);
     expect(caught.status, caught.stdout + caught.stderr).toBe(0);
@@ -383,7 +386,7 @@ describe("the lead's project builds a Unit of its own while a team's Unit merges
     const team: Plan = { unit: "refund-button", team: "storefront", tool: "copilot", person: "sam", repos: [{ repo: "checkout-web", merge: "merge" }] };
     const here: Plan = { unit: "weekly-report", team: "here", tool: "claude", person: "lead", repos: [{ repo: "billing", merge: "squash" }] };
     // The lead asks to build weekly-report here; refund-button is open for any team.
-    const { home, id8 } = leadsProject(hosts, [team, here], ["weekly-report"]);
+    const { home } = leadsProject(hosts, [team, here], ["weekly-report"]);
     // The lead's chat starts on the Unit built here, reading the claims once.
     const lead = homeStandIn(home);
     lead.person.say("/aidlc");
@@ -392,14 +395,14 @@ describe("the lead's project builds a Unit of its own while a team's Unit merges
     // Meanwhile the storefront team takes, builds and pushes its Unit, and its repo merges it by a merge commit.
     const sam = teamClone(home, hosts, team);
     const { pushed } = takeBuildPush(sam);
-    expectResult(home.remote, id8, team, pushed);
+    expectResult(home, team, pushed);
     mergeOnHost(hosts["checkout-web"], "refund-button", "merge");
     // x2783-s9 16: the lead carries on in the same chat; the step went on to the
     // Unit built here and recorded nothing, while the board said it would.
     const step = goOn(lead, lead.agent.personTypes("/aidlc carry on"));
     expect(step, JSON.stringify(step).slice(0, 400)).toMatchObject({ kind: "run-stage", stage: "functional-design" });
     expect(unitsMerged(home.dir)).toEqual(["refund-button"]);
-    expect(claimPayload(home.remote, id8, "refund-button")).toMatchObject({ done: true });
+    expect(recordAt(home, "refund-button")?.json).toMatchObject({ done: true });
   });
 });
 
@@ -408,16 +411,16 @@ describe("a team's pushed build, asked for the team's next Unit", () => {
     const hosts: Record<string, string> = { "checkout-api": codeHost("checkout-api") };
     const receipts = plan("receipts");
     const statements: Plan = { ...receipts, unit: "statements", dependsOn: "receipts" };
-    const { home, id8 } = leadsProject(hosts, [receipts, statements]);
+    const { home } = leadsProject(hosts, [receipts, statements]);
     const frank = teamClone(home, hosts, receipts);
     frank.person.say("/aidlc");
     const built = takeAndBuild(frank, frank.agent.next());
-    expectResult(home.remote, id8, receipts, pick(frank, built.end, "Push"));
+    expectResult(home, receipts, pick(frank, built.end, "Push"));
     mergeOnHost(hosts["checkout-api"], "receipts", "rebase");
     const lead = homeStandIn(home);
     lead.person.say("/aidlc");
     lead.agent.next();
-    expect(claimPayload(home.remote, id8, "receipts")).toMatchObject({ done: true });
+    expect(recordAt(home, "receipts")?.json).toMatchObject({ done: true });
     // x2783-s9 14: in the chat of his pushed build he asks for more, and met the finished work's doors and new work.
     const more = frank.agent.personTypes("/aidlc Anything else for the finance team?");
     expect(more.ask_type, JSON.stringify(more).slice(0, 800)).toBe("unit-take");
@@ -435,14 +438,14 @@ const TWO_TEAMS: Plan[] = [
 describe("a teammate on Copilot CLI and the open Units", () => {
   test("asking to take a Unit someone took is told who has it, a take given back is open again, and the lead's board names assign --here", () => {
     const hosts: Record<string, string> = { "checkout-api": codeHost("checkout-api"), "checkout-web": codeHost("checkout-web") };
-    const { home, id8 } = leadsProject(hosts, TWO_TEAMS);
+    const { home } = leadsProject(hosts, TWO_TEAMS);
     const alice = teamClone(home, hosts, TWO_TEAMS[0]);
     alice.person.say("/aidlc");
     const aliceOffer = alice.agent.next();
     expect(aliceOffer.ask_type, JSON.stringify(aliceOffer)).toBe("unit-take");
     expect(pick(alice, aliceOffer, startChoice(aliceOffer, "refunds").label)).toMatchObject({ taken: true, unit: "refunds", space: "payments" });
     const hers = { status: "claimed", owner: "payments", taken_by: "alice" };
-    expect(claimPayload(home.remote, id8, "refunds")).toMatchObject(hers);
+    expect(recordAt(home, "refunds")?.json).toMatchObject(hers);
     const sam = teamClone(home, hosts, TWO_TEAMS[1]);
     // x2783-s9 5: his words name the Unit alice took. The offer says who builds
     // it, and the agent's take of it all the same is told who has it.
@@ -457,18 +460,18 @@ describe("a teammate on Copilot CLI and the open Units", () => {
     const asked = sam.agent.host.bash(mine.command.replace(/ take \S+/, " take refunds"));
     expect(asked.status, asked.stdout + asked.stderr).not.toBe(0);
     expect(asked.stdout + asked.stderr).toContain("refunds is already taken: alice builds it in the payments space.");
-    expect(claimPayload(home.remote, id8, "refunds")).toMatchObject(hers);
+    expect(recordAt(home, "refunds")?.json).toMatchObject(hers);
     // x2783-s9 6: he takes checkout-ui, then asks to give it back: it is open
     // again for anyone, and he stays in his space.
     sam.person.pick(String(offer.question), [mine.label], mine.label);
     const took = sam.agent.host.bash(mine.command);
     expect(took.status, took.stdout + took.stderr).toBe(0);
-    expect(claimPayload(home.remote, id8, "checkout-ui")).toMatchObject({ status: "claimed", owner: "web", taken_by: "sam" });
+    expect(recordAt(home, "checkout-ui")?.json).toMatchObject({ status: "claimed", owner: "web", taken_by: "sam" });
     sam.person.say("give it back, it is not ours to build after all");
     const back = sam.agent.host.bash(`bun ${sam.agent.host.dir}/tools/aidlc-unit.ts release checkout-ui`);
     expect(back.status, back.stdout + back.stderr).toBe(0);
     expect(back.stdout).toContain("checkout-ui is given back: it is open again at the lead's project.");
-    const released = claimPayload(home.remote, id8, "checkout-ui");
+    const released = recordAt(home, "checkout-ui")?.json;
     expect(released).toMatchObject({ status: "released" });
     expect(released?.taken_by, JSON.stringify(released)).toBeUndefined();
     expect(readFileSync(join(sam.dir, "aidlc", "active-space"), "utf-8").trim()).toBe("web");

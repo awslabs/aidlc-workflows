@@ -41,7 +41,9 @@ import {
   hook,
   personsChat,
   personsNext,
-  refundsTaken,
+  recordAt,
+  recordHost,
+  refundsTakenInClone,
   run,
   tellsWhatToType,
   STATE,
@@ -56,6 +58,8 @@ import {
   TICKET_RULE_WORDS,
   ticketKeyHook,
   ticketKeyRule,
+  sharePlan,
+  planFrom,
 } from "../harness/team-build.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -163,7 +167,7 @@ describe("teams build Units across repos when the workspace is in git", () => {
 
 describe("the push", () => {
   test("commits only the Unit's files on its branch in each repo, pushes them, and sends the result home", () => {
-    const { hosts, home, alice, record } = refundsTaken();
+    const { hosts, home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     // Their own work in progress in checkout-api stays theirs.
     writeFileSync(join(alice, "checkout-api", "README.md"), "# checkout-api\n\nmy notes\n");
@@ -179,7 +183,7 @@ describe("the push", () => {
     expect(git(join(alice, "checkout-api"), ["branch", "--show-current"])).toBe("refunds");
     expect(git(join(alice, "checkout-api"), ["status", "--porcelain"])).toBe("M README.md");
     expect(git(join(alice, "checkout-api"), ["show", "-s", "--format=%an", "refunds"])).toBe("alice");
-    const claim = claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds") as {
+    const claim = recordAt(home, "refunds")?.json as {
       result: { by: string; repos: Array<{ repo: string; branch: string; paths: Record<string, string> }>; outputs: string[] };
     };
     expect(claim.result.by).toBe("alice");
@@ -194,7 +198,7 @@ describe("the push", () => {
   // A live run (Claude Code, Windows Server): the agent ran next at once after
   // the push and put the next question with none of the push's lines.
   test("from a chat, the push's lines ride the step that follows, said once", () => {
-    const { alice, record } = refundsTaken();
+    const { alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     finishBuild(record);
     const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "push-chat" };
@@ -209,7 +213,7 @@ describe("the push", () => {
   });
 
   test("a file that held their own uncommitted change when the Unit was taken: only the Unit's change goes, theirs stays theirs", () => {
-    const { hosts, alice, record } = refundsTaken((dir) => {
+    const { hosts, alice, record } = refundsTakenInClone((dir) => {
       writeFileSync(join(dir, "checkout-api", "README.md"), "# checkout-api\n\nmy secret note\n");
       writeFileSync(join(dir, "billing", "README.md"), "# billing (my note)\n");
     });
@@ -245,7 +249,7 @@ describe("the push", () => {
   });
 
   test("their commit hooks run on the Unit's commit before anything is pushed: a hook that stops it is said in its words, and nothing went", () => {
-    const { hosts, alice, record } = refundsTaken();
+    const { hosts, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     const hooks = join(alice, "billing", ".git", "hooks");
     writeFileSync(join(hooks, "pre-commit"), "#!/bin/sh\necho 'lint: lib/refund.ts needs a header' >&2\nexit 1\n");
@@ -268,7 +272,7 @@ describe("the push", () => {
   });
 
   test("the Unit's branch starts from the shared integration branch, so their own unpushed commits stay on their branch", () => {
-    const { hosts, alice, record } = refundsTaken();
+    const { hosts, alice, record } = refundsTakenInClone();
     const billing = join(alice, "billing");
     writeFileSync(join(billing, "NOTES.md"), "mine\n");
     git(billing, ["add", "NOTES.md"]);
@@ -281,7 +285,7 @@ describe("the push", () => {
   });
 
   test("a working tree that does not allow it: the branch starts where they are, and the line names their commits that come along", () => {
-    const { hosts, alice, record } = refundsTaken();
+    const { hosts, alice, record } = refundsTakenInClone();
     const billing = join(alice, "billing");
     writeFileSync(join(billing, "README.md"), "# billing\n\nlocal\n");
     git(billing, ["commit", "-q", "-am", "local readme"]);
@@ -298,7 +302,7 @@ describe("the push", () => {
   });
 
   test("their pre-push hook refuses the first push: the refusal names their commits that come along, before anything is published, and the retry says nothing again", () => {
-    const { hosts, alice, record } = refundsTaken();
+    const { hosts, alice, record } = refundsTakenInClone();
     const billing = join(alice, "billing");
     writeFileSync(join(billing, "README.md"), "# billing\n\nlocal\n");
     git(billing, ["commit", "-q", "-am", "wip: log billing calls"]);
@@ -323,7 +327,7 @@ describe("the push", () => {
   });
 
   test("their commit-msg hook refuses the Unit's commit and they commit its files on main themselves: the push carries that commit along, never branches past it", () => {
-    const { hosts, alice, record } = refundsTaken();
+    const { hosts, alice, record } = refundsTakenInClone();
     const billing = join(alice, "billing");
     // Their hook turns the first commit away.
     writeFileSync(join(billing, ".git", "refuse-once"), "");
@@ -353,7 +357,7 @@ describe("the push", () => {
   // into the Unit's branch and left the merge uncommitted; the person's "yes,
   // push it" was refused and they were asked again, twice.
   test("a merge under way on the Unit's own branch, nothing left to resolve: the push question offers to finish it, and the one yes finishes it and pushes", () => {
-    const { hosts, alice, record } = refundsTaken();
+    const { hosts, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     finishBuild(record);
     const billing = join(alice, "billing");
@@ -381,7 +385,7 @@ describe("the push", () => {
   // after Code Generation had staged the Unit's own new files; the push
   // question then said only "once it is finished or put aside".
   test("the Unit's own files staged with the merge still let the push finish it; a file of theirs that is neither keeps it theirs", () => {
-    const { hosts, alice, record } = refundsTaken();
+    const { hosts, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     finishBuild(record);
     const billing = join(alice, "billing");
@@ -411,7 +415,7 @@ describe("the push", () => {
   });
 
   test("a merge left under way in a repo: the push commits nothing over it, says so in plain words with the way on, and goes once it is finished", () => {
-    const { hosts, alice, record } = refundsTaken();
+    const { hosts, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     const billing = join(alice, "billing");
     // The integration branch moved on, and a merge of it into the Unit's branch is left resolved but not committed.
@@ -438,7 +442,7 @@ describe("the push", () => {
   });
 
   test("the agent built in worktrees of its own and recorded them as checkouts: the push reads each as its repo's and sends both home", () => {
-    const { hosts, home, alice, record } = refundsTaken();
+    const { hosts, home, alice, record } = refundsTakenInClone();
     // Worktrees the agent made for the Unit, recorded with intent add-checkout.
     const trees = join(alice, ".aidlc-worktrees", "refunds");
     for (const repo of ["checkout-api", "billing"]) {
@@ -475,14 +479,14 @@ describe("the push", () => {
     expect(git(hosts["checkout-api"], ["show", "refunds:src/refunds.ts"])).toBe("export const refunds = 1;");
     expect(git(hosts.billing, ["show", "refunds:lib/refund.ts"])).toBe("export const refund = 1;");
     // What the lead's checks read names the repos, where the lead's project finds the files; the team's own record is as written.
-    const tip = git(home.remote, ["rev-parse", `refs/aidlc/claims/${fixtureIntentId8(home.dir)}/refunds`]).trim();
-    const sent = JSON.parse(git(home.remote, ["show", `${tip}:.aidlc-unit-result/construction/refunds/code-generation/traceability.json`])) as typeof table;
+    const tip = git(recordHost(home), ["rev-parse", `refs/aidlc/claims/${fixtureIntentId8(home.dir)}/refunds`]).trim();
+    const sent = JSON.parse(git(recordHost(home), ["show", `${tip}:.aidlc-unit-result/construction/refunds/code-generation/traceability.json`])) as typeof table;
     expect(sent.coverage.map((entry) => entry.target)).toEqual(["checkout-api/src/refunds.ts", "billing/lib/refund.ts"]);
     expect(readFileSync(join(stage, "traceability.json"), "utf-8")).toContain(".aidlc-worktrees/refunds/checkout-api/src/refunds.ts");
   });
 
   test("the build wrote a file their .gitignore leaves out: the push leaves it out too, says so once, and pushes the rest", () => {
-    const { hosts, alice, record } = refundsTaken();
+    const { hosts, alice, record } = refundsTakenInClone();
     const billing = join(alice, "billing");
     writeFileSync(join(billing, ".gitignore"), "dist/\n");
     // The bundle registered as source for the review, as the build's own step did.
@@ -506,7 +510,7 @@ describe("the push", () => {
   });
 
   test("every file the build wrote in a repo is one its .gitignore leaves out: that repo is not switched or pushed, and the line says so", () => {
-    const { hosts, alice, record } = refundsTaken();
+    const { hosts, alice, record } = refundsTakenInClone();
     const billing = join(alice, "billing");
     writeFileSync(join(billing, ".gitignore"), "lib/\n");
     writeFileSync(join(billing, ".aidlc-source-paths.json"), `${JSON.stringify({ version: 1, paths: ["lib/refund.ts"] })}\n`);
@@ -528,7 +532,7 @@ describe("the push", () => {
   // A file the repo tracks in such a folder (a committed bundle) is theirs to
   // ship: the build's change to it goes.
   test("the build names whole folders and its tests leave caches in them: the push carries what it wrote, deletions and tracked bundles too, and never the caches", () => {
-    const { hosts, alice, record } = refundsTaken((alice) => {
+    const { hosts, alice, record } = refundsTakenInClone((alice) => {
       const billing = join(alice, "billing");
       mkdirSync(join(billing, "lib", "dist"), { recursive: true });
       writeFileSync(join(billing, "lib", "old.ts"), "export const old = 1;\n");
@@ -571,13 +575,14 @@ describe("the push", () => {
     git(home.dir, ["add", "-A"]);
     git(home.dir, ["commit", "-q", "-m", "teams"]);
     git(home.dir, ["push", "-q", "origin", "main"]);
+    const plan = sharePlan(home);
     const alice = cloneOf(home.remote, "alice");
     for (const name of ["checkout-api", "billing"]) cloneCode(hosts[name as "billing"], join(alice, ".."), `${name}-mine`, "alice");
     writeFileSync(join(alice, "aidlc", "repos.local.json"), `${JSON.stringify({ repos: [
       { name: "checkout-api", path: "../checkout-api-mine" },
       { name: "billing", path: "../billing-mine" },
     ] })}\n`);
-    expect(takeIn("payments", ["refunds", "--home", HOME_RECORD], alice).status).toBe(0);
+    expect(takeIn("payments", ["refunds", ...planFrom(plan)], alice).status).toBe(0);
     const intents = join(alice, "aidlc", "spaces", "payments", "intents");
     const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-refunds"))!);
     mkdirSync(join(alice, "..", "checkout-api-mine", "src"), { recursive: true });
@@ -599,14 +604,14 @@ describe("the push", () => {
     finishBuild(record);
     const pushed = run(UNIT, ["push"], alice);
     expect(pushed.status, pushed.out).toBe(0);
-    const tip = git(home.remote, ["rev-parse", `refs/aidlc/claims/${fixtureIntentId8(home.dir)}/refunds`]).trim();
-    const sent = JSON.parse(git(home.remote, ["show", `${tip}:.aidlc-unit-result/construction/refunds/code-generation/traceability.json`])) as typeof table;
+    const tip = git(recordHost(plan), ["rev-parse", `refs/aidlc/claims/${plan.id8}/refunds`]).trim();
+    const sent = JSON.parse(git(recordHost(plan), ["show", `${tip}:.aidlc-unit-result/construction/refunds/code-generation/traceability.json`])) as typeof table;
     expect(sent.coverage.map((entry) => entry.target)).toEqual(["checkout-api/src/refunds.ts", "billing/lib/refund.ts"]);
     expect(readFileSync(join(stage, "traceability.json"), "utf-8")).toContain("../checkout-api-mine/src/refunds.ts");
   });
 
   test("a team whose branch names must start with feature/: push --branch takes their name, and every later use keeps it", () => {
-    const { hosts, home, alice, record } = refundsTaken();
+    const { hosts, home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     // Their own rule, as their pre-push hook keeps it in each repo.
     for (const repo of ["checkout-api", "billing"]) {
@@ -628,7 +633,7 @@ describe("the push", () => {
     // The branch the refused push made under the Unit's name is the one renamed, as their own hands would.
     expect(spawnSync("git", ["rev-parse", "--verify", "--quiet", "refs/heads/refunds"], { cwd: join(alice, "billing") }).status).not.toBe(0);
     expect(git(join(alice, "billing"), ["branch", "--show-current"])).toBe("feature/refunds");
-    const claim = claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds") as { result: { repos: Array<{ branch: string }> } };
+    const claim = recordAt(home, "refunds")?.json as { result: { repos: Array<{ branch: string }> } };
     expect(claim.result.repos.map((repo) => repo.branch)).toEqual(["feature/refunds", "feature/refunds"]);
     // A later push, with the Unit's files changed again, keeps their name.
     writeFileSync(join(alice, "billing", "lib", "refund.ts"), "export const refund = 2;\n");
@@ -639,7 +644,7 @@ describe("the push", () => {
   });
 
   test("the push question names the branch the person gave", () => {
-    const { alice, record } = refundsTaken();
+    const { alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     finishBuild(record);
     const statePath = join(record, "aidlc-state.md");
@@ -650,7 +655,7 @@ describe("the push", () => {
   });
 
   test("push --help and rebase --help print their usage and change nothing", () => {
-    const { hosts, home, alice, record } = refundsTaken();
+    const { hosts, home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     const help = run(UNIT, ["push", "--help"], alice);
     expect(help.status, help.out).toBe(0);
@@ -660,14 +665,14 @@ describe("the push", () => {
       expect(spawnSync("git", ["rev-parse", "--verify", "--quiet", "refs/heads/refunds"], { cwd: hosts[repo as "billing"] }).status).not.toBe(0);
       expect(git(join(alice, repo), ["branch", "--show-current"])).toBe("main");
     }
-    expect((claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds") as { result?: unknown }).result).toBeUndefined();
+    expect((recordAt(home, "refunds")?.json as { result?: unknown }).result).toBeUndefined();
     const rebase = run(UNIT, ["rebase", "-h"], alice);
     expect(rebase.status, rebase.out).toBe(0);
     expect(rebase.out).toContain("unit rebase");
   });
 
   test("a repo whose git signs its commits gets a signed Unit commit", () => {
-    const { hosts, alice, record } = refundsTaken();
+    const { hosts, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     const signer = join(tempDir("gpg"), "gpg.sh");
     writeFileSync(signer, "#!/bin/sh\ncat > /dev/null\necho '[GNUPG:] SIG_CREATED D 1 8 00 0 0' >&2\n" +
@@ -682,7 +687,7 @@ describe("the push", () => {
   });
 
   test("a result a rule of the lead's host refuses: said once in its words, not offered again in that chat, and sent once it is let through", () => {
-    const { home, alice, record } = refundsTaken();
+    const { home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     finishBuild(record);
     const hook = join(home.remote, "hooks", "pre-receive");
@@ -714,7 +719,7 @@ describe("the push", () => {
   });
 
   test("a result the lead's project could not be reached for, while the code went: offered again at the next step, as ever", () => {
-    const { hosts, home, alice, record } = refundsTaken();
+    const { hosts, home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     finishBuild(record);
     // The lead's project goes away while the code is pushed, and comes back after.
@@ -737,7 +742,7 @@ describe("the push", () => {
   });
 
   test("a push when the lead's project holds no claim for the Unit: its code goes, and its result is offered again", () => {
-    const { hosts, home, alice, record } = refundsTaken();
+    const { hosts, home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     finishBuild(record);
     git(home.remote, ["update-ref", "-d", `refs/aidlc/claims/${fixtureIntentId8(home.dir)}/refunds`]);
@@ -758,7 +763,7 @@ describe("the push", () => {
   });
 
   test("a push after a turn-down keeps the lead's word that a repo merged only where that repo's head did not change", () => {
-    const { home, alice, record } = refundsTaken();
+    const { home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     git(home.dir, ["fetch", "-q", "origin"]);
@@ -769,13 +774,13 @@ describe("the push", () => {
     writeFileSync(join(alice, "checkout-api", "src", "refunds.ts"), "export const refunds = 2;\n");
     writeFileSync(join(alice, "billing", "lib", "refund.ts"), "export const refund = 2;\n");
     expect(run(UNIT, ["push"], alice).status).toBe(0);
-    const claim = claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds") as Record<string, unknown>;
+    const claim = recordAt(home, "refunds")?.json as Record<string, unknown>;
     expect(claim.said_merged).toBeUndefined();
     expect(claim.turned_down).toBeUndefined();
   });
 
   test("a Unit that changed a repo the lead's plan did not list: it is added once, said once, and goes home with the push", () => {
-    const { alice, record } = refundsTaken();
+    const { alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     const ledger = codeHost("ledger");
     cloneCode(ledger, alice, "ledger", "alice");
@@ -796,7 +801,7 @@ describe("the push", () => {
   });
 
   test("a push a repo's host refuses is said once, in its words, and nothing is retried", () => {
-    const { hosts, alice, record } = refundsTaken();
+    const { hosts, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     const hook = join(hosts.billing, "hooks", "pre-receive");
     writeFileSync(hook, "#!/bin/sh\necho 'branch protection: refunds needs a ticket' >&2\nexit 1\n");
@@ -814,7 +819,7 @@ describe("the push", () => {
   // open the review; the push line keeps them, each repo with its own, and what
   // follows an address starts on a new line, so nothing is read as part of it.
   test("the host's own link after a push comes with the push line, each repo with its own, and a later push reads as today", () => {
-    const { hosts, home, alice, record } = refundsTaken();
+    const { hosts, home, alice, record } = refundsTakenInClone();
     printsLikeGitHub(hosts["checkout-api"], "checkout-api", true);
     printsLikeGitHub(hosts.billing, "billing");
     printsLikeGitHub(home.remote, "workspace");
@@ -841,7 +846,7 @@ describe("the push", () => {
   });
 
   test("a branch named as its repo: the host's alert about the repo is not about the branch", () => {
-    const { hosts, alice, record } = refundsTaken();
+    const { hosts, alice, record } = refundsTakenInClone();
     printsLikeGitHub(hosts["checkout-api"], "checkout-api", true);
     codeGenerated(alice, record);
     const pushed = run(UNIT, ["push", "--branch", "checkout-api"], alice);
@@ -855,7 +860,7 @@ describe("the push", () => {
   });
 
   test("a host that prints nothing about the branch with a link: the push line reads as today", () => {
-    const { hosts, alice, record } = refundsTaken();
+    const { hosts, alice, record } = refundsTakenInClone();
     for (const host of [hosts["checkout-api"], hosts.billing]) {
       hostPrints(host, 'echo "Analyzing objects... (3/3) (5 ms)"\necho "Storing packfile... done (40 ms)"\necho "Storing index... done (30 ms)"\n');
     }
@@ -869,7 +874,7 @@ describe("the push", () => {
   });
 
   test("the push again after one repo's host refused it: the link for the repo it pushed now, and Open a PR for the other", () => {
-    const { hosts, alice, record } = refundsTaken();
+    const { hosts, alice, record } = refundsTakenInClone();
     printsLikeGitHub(hosts["checkout-api"], "checkout-api");
     printsLikeGitHub(hosts.billing, "billing");
     const refuse = join(hosts.billing, "hooks", "pre-receive");
@@ -889,7 +894,7 @@ describe("the push", () => {
 
   // GitLab says "merge request" in its own words; nothing decides which host it is.
   test("on GitLab the person reads the host's merge request words and no PR, from a chat and on a later push", () => {
-    const { hosts, alice, record } = refundsTaken();
+    const { hosts, alice, record } = refundsTakenInClone();
     printsLikeGitLab(hosts["checkout-api"], "checkout-api");
     codeGenerated(alice, record);
     writeFileSync(join(record, "construction", "refunds", "code-generation", "source-manifest.json"), `${JSON.stringify({
@@ -923,7 +928,7 @@ describe("the push", () => {
   // new chat "where were we?" got the words step, which never named the push,
   // and the person was asked to carry on to a next stage there is none of.
   test("words in a new chat while the push question is open: the step names the push, and going on puts it again", () => {
-    const { alice, record } = refundsTaken();
+    const { alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     finishBuild(record);
     expect(next(alice, { ...ENV, AIDLC_SESSION_OVERRIDE: "first" }).ask_type).toBe("unit-push");
@@ -938,7 +943,7 @@ describe("the push", () => {
   // branch from the newer main; the push switched back to the Unit's first
   // branch, committed the redo there without main's newer code, and pushed it.
   test("a redo built on its own branch from the newer main is pushed from that branch, never moved back onto the first build's", () => {
-    const { hosts, home, alice, record } = refundsTaken();
+    const { hosts, home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     finishBuild(record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
@@ -978,7 +983,7 @@ describe("the push", () => {
   });
 
   test("back on main after a push, with the Unit's files changed again: the next push carries them onto its branch, and nothing of theirs moves", () => {
-    const { hosts, alice, record } = refundsTaken();
+    const { hosts, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     // The way back the push's line offered, then Code Generation again on main.
@@ -1000,7 +1005,7 @@ describe("the push", () => {
   // Generation listed it as deleted, and the push said it was "not there" and
   // offered to write it again, though its deletion was already committed.
   test("a file the Unit deleted whose deletion its branch already has is pushed as deleted, never said to be missing", () => {
-    const { hosts, alice, record } = refundsTaken();
+    const { hosts, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     const api = join(alice, "checkout-api");
@@ -1024,7 +1029,7 @@ describe("the push", () => {
   });
 
   test("their own change in the way of the Unit's branch: the push says git's words and the way on, touches nothing, and the next step does not offer it again", () => {
-    const { hosts, alice, record } = refundsTaken();
+    const { hosts, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     finishBuild(record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
@@ -1067,7 +1072,7 @@ describe("the push", () => {
   });
 
   test("after a turn-down, once the redo's Code Generation is approved, the build's end offers the push again and never the redo", () => {
-    const { home, alice, record } = refundsTaken();
+    const { home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     finishBuild(record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
@@ -1087,7 +1092,7 @@ describe("the push", () => {
   });
 
   test("the build's end offers the push; not now pushes nothing, and the end says so once", () => {
-    const { alice, record } = refundsTaken();
+    const { alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     // Every planned stage of the build done and approved.
     const statePath = join(record, "aidlc-state.md");
@@ -1162,7 +1167,7 @@ function conventionalHook(repo: string): void {
 
 describe("the person's own commit message", () => {
   test("with no message given, the Unit's commit carries today's message, whole, in each repo", () => {
-    const { hosts, alice, record } = refundsTaken();
+    const { hosts, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     const pushed = run(UNIT, ["push"], alice);
     expect(pushed.status, pushed.out).toBe(0);
@@ -1170,7 +1175,7 @@ describe("the person's own commit message", () => {
   });
 
   test("their commit-msg hook that wants a ticket key refuses the Unit's commit in its own words, and nothing went", () => {
-    const { hosts, alice, record } = refundsTaken();
+    const { hosts, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     for (const repo of Object.keys(hosts)) ticketKeyHook(join(alice, repo));
     const refused = run(UNIT, ["push"], alice);
@@ -1180,7 +1185,7 @@ describe("the person's own commit message", () => {
   });
 
   test("their host's rule on commit messages refuses the push in its words, and the Unit's commit there went nowhere", () => {
-    const { hosts, alice, record } = refundsTaken();
+    const { hosts, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     ticketKeyRule(hosts.billing);
     const refused = run(UNIT, ["push"], alice);
@@ -1192,7 +1197,7 @@ describe("the person's own commit message", () => {
   });
 
   test("the push question shows the message it will carry: the agent drafts it once, over today's message, and the question shows the draft as git will take it", () => {
-    const { hosts, alice, record } = refundsTaken();
+    const { hosts, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     finishBuild(record);
     // The agent's own step, said to nobody: the file holds today's message until it drafts over it.
@@ -1216,7 +1221,7 @@ describe("the person's own commit message", () => {
   });
 
   test("their own message goes on the Unit's commit whole, from the file the agent wrote, in every repo it changed", () => {
-    const { hosts, alice, record } = refundsTaken();
+    const { hosts, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     for (const repo of Object.keys(hosts)) ticketKeyHook(join(alice, repo));
     const pushed = run(UNIT, withMessage(alice, record, OWN_MESSAGE), alice);
@@ -1227,7 +1232,7 @@ describe("the person's own commit message", () => {
   });
 
   test("a direct push with no message commits today's message, even with a draft there", () => {
-    const { hosts, alice, record } = refundsTaken();
+    const { hosts, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     finishBuild(record);
     expect(next(alice).ask_type).toBe("unit-push");
@@ -1239,7 +1244,7 @@ describe("the person's own commit message", () => {
   });
 
   test("a read-only look writes no file and shows today's message", () => {
-    const { alice, record } = refundsTaken();
+    const { alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     finishBuild(record);
     const probe = next(alice, { ...ENV, AIDLC_STOP_HOOK_PROBE: "1" }, [], ORCH, { stopAtDraft: true });
@@ -1250,7 +1255,7 @@ describe("the person's own commit message", () => {
   });
 
   test("a message file that is there but empty, or a link: today's message, no flag, and no draft step", () => {
-    const { alice, record } = refundsTaken();
+    const { alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     finishBuild(record);
     commitMessage(alice, record, " \n");
@@ -1270,7 +1275,7 @@ describe("the person's own commit message", () => {
   });
 
   test("their commit-msg hook refuses the Unit's commit: the line says the way on once, the next push question says the last push did not go through, and their message goes", () => {
-    const { hosts, alice, record } = refundsTaken();
+    const { hosts, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     finishBuild(record);
     for (const repo of Object.keys(hosts)) ticketKeyHook(join(alice, repo));
@@ -1297,7 +1302,7 @@ describe("the person's own commit message", () => {
   });
 
   test("their host's rule on commit messages: their message goes on the commit AI-DLC made and could not push, a second refusal says the way on again, and what went is never rewritten", () => {
-    const { hosts, alice, record } = refundsTaken();
+    const { hosts, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     ticketKeyRule(hosts.billing);
     const refused = run(UNIT, ["push"], alice);
@@ -1320,7 +1325,7 @@ describe("the person's own commit message", () => {
   });
 
   test("their own commits that come along: the host's refusal names no way on the retry cannot keep, and their message changes nothing of theirs", () => {
-    const { hosts, alice, record } = refundsTaken();
+    const { hosts, alice, record } = refundsTakenInClone();
     const billing = join(alice, "billing");
     writeFileSync(join(billing, "README.md"), "# billing\n\nlocal\n");
     git(billing, ["commit", "-q", "-am", "wip: log billing calls"]);
@@ -1342,7 +1347,7 @@ describe("the person's own commit message", () => {
   });
 
   test("a commit of their own is never amended: their message, given after they committed the Unit's files themselves, leaves it as it is and says so", () => {
-    const { hosts, alice, record } = refundsTaken();
+    const { hosts, alice, record } = refundsTakenInClone();
     const billing = join(alice, "billing");
     writeFileSync(join(billing, ".git", "refuse-once"), "");
     writeFileSync(join(billing, ".git", "hooks", "commit-msg"),
@@ -1363,7 +1368,7 @@ describe("the person's own commit message", () => {
   });
 
   test("a commit the person amended themselves after a refusal is theirs: never amended again", () => {
-    const { hosts, alice, record } = refundsTaken();
+    const { hosts, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     ticketKeyRule(hosts.billing);
     expect(run(UNIT, ["push"], alice).status).not.toBe(0);
@@ -1376,7 +1381,7 @@ describe("the person's own commit message", () => {
   });
 
   test("a host refusal of commits the person made by hand: the next push question says the last push did not go through", () => {
-    const { hosts, alice, record } = refundsTaken();
+    const { hosts, alice, record } = refundsTakenInClone();
     const billing = join(alice, "billing");
     codeGenerated(alice, record);
     finishBuild(record);
@@ -1391,7 +1396,7 @@ describe("the person's own commit message", () => {
   });
 
   test("in a single-branch clone, a commit that went is never amended, and with its remote out of reach nothing is", () => {
-    const { hosts, alice, record } = refundsTaken((clone) => {
+    const { hosts, alice, record } = refundsTakenInClone((clone) => {
       // As git clone --single-branch leaves it: a push writes no copy of the Unit's branch here.
       git(join(clone, "checkout-api"), ["config", "remote.origin.fetch", "+refs/heads/main:refs/remotes/origin/main"]);
     });
@@ -1416,7 +1421,7 @@ describe("the person's own commit message", () => {
   });
 
   test("a hook that resets inside AI-DLC's commit never makes a commit of theirs take the message", () => {
-    const { hosts, alice, record } = refundsTaken();
+    const { hosts, alice, record } = refundsTakenInClone();
     const billing = join(alice, "billing");
     writeFileSync(join(billing, "README.md"), "# billing\n\nlocal\n");
     git(billing, ["commit", "-q", "-am", "local readme"]);
@@ -1435,7 +1440,7 @@ describe("the person's own commit message", () => {
   });
 
   test("two repos with different message rules: an amend one of them refuses leaves that commit as it was, says so, and the push goes on", () => {
-    const { hosts, alice, record } = refundsTaken();
+    const { hosts, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     ticketKeyHook(join(alice, "checkout-api"));
     conventionalHook(join(alice, "billing"));
@@ -1451,7 +1456,7 @@ describe("the person's own commit message", () => {
   });
 
   test("a newer Unit change is always committed: in the commit AI-DLC could not push, and an amend carrying it that their hook refuses stops the push", () => {
-    const { hosts, alice, record } = refundsTaken();
+    const { hosts, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     finishBuild(record);
     ticketKeyRule(hosts.billing);
@@ -1473,7 +1478,7 @@ describe("the person's own commit message", () => {
   });
 
   test("a hook that reshapes the message: a plain retry neither amends again nor says the message is not on a commit", () => {
-    const { hosts, alice, record } = refundsTaken();
+    const { hosts, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     finishBuild(record);
     const billing = join(alice, "billing");
@@ -1494,7 +1499,7 @@ describe("the person's own commit message", () => {
   });
 
   test("a push again after one that went, with the same message: no line says the message is not on a commit", () => {
-    const { hosts, alice, record } = refundsTaken();
+    const { hosts, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     expect(run(UNIT, withMessage(alice, record, "PAY-12 add refunds\n"), alice).status).toBe(0);
     const again = run(UNIT, withMessage(alice, record, "PAY-12 add refunds\n"), alice);
@@ -1509,7 +1514,7 @@ describe("the person's own commit message", () => {
   });
 
   test("a push that failed at the remote after its commit: the next push question says it did not go through, and their message amends that commit", () => {
-    const { hosts, alice, record } = refundsTaken();
+    const { hosts, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     finishBuild(record);
     const billing = join(alice, "billing");
@@ -1524,7 +1529,7 @@ describe("the person's own commit message", () => {
   });
 
   test("the push question says the last push did not go through until a push goes", () => {
-    const { hosts, home, alice, record } = refundsTaken();
+    const { hosts, home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     finishBuild(record);
     ticketKeyRule(hosts.billing);
@@ -1546,7 +1551,7 @@ describe("the person's own commit message", () => {
   });
 
   test("after Not now, the line that offers the push again shows the message it will carry, and yes pushes with it", () => {
-    const { hosts, alice, record } = refundsTaken();
+    const { hosts, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     finishBuild(record);
     expectDraftStep(alice, next(alice, ENV, [], ORCH, { stopAtDraft: true }));
@@ -1567,7 +1572,7 @@ describe("the person's own commit message", () => {
   });
 
   test("the push question names the message file for the agent, and the send-again question does not", () => {
-    const { home, alice, record } = refundsTaken();
+    const { home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     finishBuild(record);
     const ask = next(alice);
@@ -1588,7 +1593,7 @@ describe("the person's own commit message", () => {
   });
 
   test("a message file outside its folder, or an empty one, is refused in the flag's own words, and nothing is committed", () => {
-    const { hosts, alice, record } = refundsTaken();
+    const { hosts, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     writeFileSync(join(alice, "message.txt"), "PAY-12 add refunds\n");
     const outside = run(UNIT, ["push", "--commit-message-file", "message.txt"], alice);
@@ -1610,6 +1615,7 @@ describe("at the home", () => {
     git(home.dir, ["add", "-A"]);
     git(home.dir, ["commit", "-q", "-m", "teams"]);
     git(home.dir, ["push", "-q", "origin", "main"]);
+    sharePlan(home);
     const trace = join(tempDir("trace"), "trace2.json");
     for (let step = 0; step < 3; step++) {
       const directive = next(home.dir, { ...ENV, GIT_TRACE2_EVENT: trace });
@@ -1625,7 +1631,7 @@ describe("at the home", () => {
   });
 
   test("a look at the board writes nothing back to the claim until the home sees a new merge", () => {
-    const { hosts, home, alice, record } = refundsTaken();
+    const { hosts, home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     git(home.dir, ["fetch", "-q", "origin"]);
@@ -1637,7 +1643,7 @@ describe("at the home", () => {
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
     const seen = next(home.dir);
     expect(git(home.remote, ["rev-parse", ref])).not.toBe(pushed);
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.verdicts).toEqual([
+    expect(recordAt(home, "refunds")?.json?.verdicts).toEqual([
       expect.objectContaining({ repo: "checkout-api", merged: true }),
       { repo: "billing", merged: false },
     ]);
@@ -1651,7 +1657,7 @@ describe("at the home", () => {
 
   // The GitHub run's case 2: a review fix by hand, then a squash, the branch deleted.
   test("a review fix committed by hand on the Unit's branch, a look, then a squash with the branch deleted: merged", () => {
-    const { hosts, home, alice, record } = refundsTaken();
+    const { hosts, home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     git(home.dir, ["fetch", "-q", "origin"]);
@@ -1664,14 +1670,14 @@ describe("at the home", () => {
     mergeOnHost(hosts.billing, "refunds", "squash");
     git(hosts["checkout-api"], ["branch", "-q", "-D", "refunds"]);
     const seen = next(home.dir);
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds"), JSON.stringify(seen)).toMatchObject({ done: true });
+    expect(recordAt(home, "refunds")?.json, JSON.stringify(seen)).toMatchObject({ done: true });
     expect((seen.change_notices ?? []) as string[]).toContain("I've told alice refunds is merged.");
   });
 
   // Case 2 with no look between the fix and the branch's deletion: the check
   // cannot see it, and the board asks the lead once.
   test("a fix, a squash and the branch's deletion all between two looks: the board names the commit once", () => {
-    const { hosts, home, alice, record } = refundsTaken();
+    const { hosts, home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     git(home.dir, ["fetch", "-q", "origin"]);
@@ -1683,7 +1689,7 @@ describe("at the home", () => {
     const line = `checkout-api has ${squash} "refunds (squashed)" changing every file of refunds; if that is refunds merged, say so.`;
     const chat = personsChat("t-unit-push-maybe-merged");
     const seen = personsNext(home.dir, chat, "t-unit-push-maybe-merged");
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.verdicts).toEqual([
+    expect(recordAt(home, "refunds")?.json?.verdicts).toEqual([
       { repo: "checkout-api", merged: false },
       expect.objectContaining({ repo: "billing", merged: true }),
     ]);
@@ -1702,7 +1708,7 @@ describe("at the home", () => {
       mergeCommit: "Merge branch 'refunds' into 'main'\n\nRefunds API\n\nSee merge request payments/checkout-api!41" },
   ]) {
     test(`a fix, a squash and the branch's deletion between two looks, on ${host.name}: merged, and the lead is not asked`, () => {
-      const { hosts, home, alice, record } = refundsTaken();
+      const { hosts, home, alice, record } = refundsTakenInClone();
       codeGenerated(alice, record);
       expect(run(UNIT, ["push"], alice).status).toBe(0);
       git(home.dir, ["fetch", "-q", "origin"]);
@@ -1714,7 +1720,7 @@ describe("at the home", () => {
       const refsBefore = git(api, ["for-each-ref", "--format=%(refname)"]);
       const chat = personsChat("t-unit-push-pr-head");
       const seen = personsNext(home.dir, chat, "t-unit-push-pr-head");
-      expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds"), JSON.stringify(seen)).toMatchObject({ done: true });
+      expect(recordAt(home, "refunds")?.json, JSON.stringify(seen)).toMatchObject({ done: true });
       expect((seen.change_notices ?? []) as string[]).toContain("I've told alice refunds is merged.");
       expect(JSON.stringify(seen), JSON.stringify(seen)).not.toContain("changing every file of refunds");
       // Read with the lead's own git: no remote added, none of the host's refs kept here, and the head kept as
@@ -1742,7 +1748,7 @@ describe("at the home", () => {
   // Where the host keeps no such head, or the one the squash names is not the
   // Unit's, the check still cannot see it: the board asks the lead, as before.
   test("a squash that names a pull request whose head the host does not have, or whose head is not the Unit's: the board names the commit", () => {
-    const { hosts, home, alice, record } = refundsTaken();
+    const { hosts, home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     git(home.dir, ["fetch", "-q", "origin"]);
@@ -1762,7 +1768,7 @@ describe("at the home", () => {
       const seen = personsNext(home.dir, personsChat(session!), session!);
       expect((seen.change_notices ?? []) as string[], `${session} ${JSON.stringify(seen)}`).toContain(line);
     }
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.verdicts).toEqual([
+    expect(recordAt(home, "refunds")?.json?.verdicts).toEqual([
       { repo: "checkout-api", merged: false },
       expect.objectContaining({ repo: "billing", merged: true }),
     ]);
@@ -1772,26 +1778,25 @@ describe("at the home", () => {
   // The team's side of case 2: its look sends the fix home, so a lead who
   // looks only after the branch is gone still sees the merge.
   test("a team's look at its pushed build sends a review fix by hand home, so a squash after the branch is gone reads merged", () => {
-    const { hosts, home, alice, record } = refundsTaken();
+    const { hosts, home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
-    const id8 = fixtureIntentId8(home.dir);
-    const pushed = (claimPayload(home.remote, id8, "refunds")?.result as SentResult | undefined)?.repos.find((repo) => repo.repo === "checkout-api")?.heads;
+    const pushed = (recordAt(home, "refunds")?.json?.result as SentResult | undefined)?.repos.find((repo) => repo.repo === "checkout-api")?.heads;
     expect(pushed).toHaveLength(1);
     const fix = commitOnHost(hosts["checkout-api"], "refunds", { "src/refunds.ts": "export const refunds = 1; // reviewed\n" }, "review fix");
     next(alice);
-    const sent = (claimPayload(home.remote, id8, "refunds")?.result as SentResult | undefined)?.repos.find((repo) => repo.repo === "checkout-api");
+    const sent = (recordAt(home, "refunds")?.json?.result as SentResult | undefined)?.repos.find((repo) => repo.repo === "checkout-api");
     expect(sent?.heads).toEqual([...pushed!, fix]);
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
     mergeOnHost(hosts.billing, "refunds", "squash");
     git(hosts["checkout-api"], ["branch", "-q", "-D", "refunds"]);
     git(home.dir, ["fetch", "-q", "origin"]);
     const seen = next(home.dir);
-    expect(claimPayload(home.remote, id8, "refunds"), JSON.stringify(seen)).toMatchObject({ done: true });
+    expect(recordAt(home, "refunds")?.json, JSON.stringify(seen)).toMatchObject({ done: true });
   });
 
   test("a push again after a fix the person pushed with plain git keeps every head the branch had", () => {
-    const { home, alice, record } = refundsTaken();
+    const { home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     const api = join(alice, "checkout-api");
@@ -1802,7 +1807,7 @@ describe("at the home", () => {
     writeFileSync(join(api, "src", "refunds.ts"), "export const refunds = 1; // by hand, then AI-DLC\n");
     const again = run(UNIT, ["push"], alice);
     expect(again.status, again.out).toBe(0);
-    const heads = (claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.result as SentResult | undefined)?.repos
+    const heads = (recordAt(home, "refunds")?.json?.result as SentResult | undefined)?.repos
       .find((repo) => repo.repo === "checkout-api")?.heads ?? [];
     expect(heads).toHaveLength(3);
     expect(heads[1]).toBe(byHand);
@@ -1811,7 +1816,7 @@ describe("at the home", () => {
 
   // The GitHub run's case 3: the host's own commit of a review suggestion, then a squash, the branch kept.
   test("the host's commit of a review suggestion on the Unit's branch, then a squash: merged at the next look", () => {
-    const { hosts, home, alice, record } = refundsTaken();
+    const { hosts, home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     git(home.dir, ["fetch", "-q", "origin"]);
@@ -1819,11 +1824,11 @@ describe("at the home", () => {
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
     mergeOnHost(hosts.billing, "refunds", "squash");
     const seen = next(home.dir);
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds"), JSON.stringify(seen)).toMatchObject({ done: true });
+    expect(recordAt(home, "refunds")?.json, JSON.stringify(seen)).toMatchObject({ done: true });
   });
 
   test("a Unit branch rewritten on the host is not read as the Unit: its squash leaves it not merged", () => {
-    const { hosts, home, alice, record } = refundsTaken();
+    const { hosts, home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     git(home.dir, ["fetch", "-q", "origin"]);
@@ -1840,7 +1845,7 @@ describe("at the home", () => {
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
     mergeOnHost(hosts.billing, "refunds", "squash");
     next(home.dir);
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.verdicts).toEqual([
+    expect(recordAt(home, "refunds")?.json?.verdicts).toEqual([
       { repo: "checkout-api", merged: false },
       expect.objectContaining({ repo: "billing", merged: true }),
     ]);
@@ -1849,7 +1854,7 @@ describe("at the home", () => {
   // The teams read the plan, never the lead's record, so taking a team's Unit
   // in at the lead's own work says nothing of checking aidlc/ in.
   test("the lead's step that takes a team's merged Unit in says no check-in line", () => {
-    const { hosts, home, alice, record } = refundsTaken();
+    const { hosts, home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     git(home.dir, ["fetch", "-q", "origin"]);
@@ -1865,7 +1870,7 @@ describe("at the home", () => {
   });
 
   test("a team's result brings home what Build and Test reads of the Unit, so its coverage check passes for team-built Units", () => {
-    const { hosts, home, alice, record } = refundsTaken();
+    const { hosts, home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     // What the team's Code Generation and NFR Requirements recorded for refunds.
     const table = { stage: "code-generation", upstream_ids: ["FR1"], coverage: [{ id: "FR1", status: "OK", target: "checkout-api/src/refunds.ts" }] };
@@ -1877,7 +1882,7 @@ describe("at the home", () => {
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
     mergeOnHost(hosts.billing, "refunds", "merge");
     next(home.dir);
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
+    expect(recordAt(home, "refunds")?.json).toMatchObject({ done: true });
     const homeUnit = join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD, "construction", "refunds");
     expect(JSON.parse(readFileSync(join(homeUnit, "code-generation", "traceability.json"), "utf-8"))).toEqual(table);
     expect(readFileSync(join(homeUnit, "nfr-requirements", "performance-requirements.md"), "utf-8")).toContain("NFR1.1");
@@ -1891,7 +1896,7 @@ describe("at the home", () => {
   });
 
   test("the board counts the merges, and the Unit is done once every repo merged; what waits on it opens", () => {
-    const { hosts, home, alice, record } = refundsTaken();
+    const { hosts, home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     git(home.dir, ["fetch", "-q", "origin"]);
@@ -1912,7 +1917,7 @@ describe("at the home", () => {
     const merged = readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_MERGED");
     expect(merged).toHaveLength(1);
     expect(merged[0].block).toContain("**Built By**: alice");
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
+    expect(recordAt(home, "refunds")?.json).toMatchObject({ done: true });
     expect(readFileSync(join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD, "construction", "refunds", "code-generation", "code-summary.md"), "utf-8"))
       .toBe("# Code summary\n\nRefunds.\n");
     expect(String(after.narration), JSON.stringify(after).slice(0, 600)).toContain("- refunds, payments space: built by alice, done");
@@ -1926,14 +1931,14 @@ describe("at the home", () => {
   });
 
   test("another machine or a fresh clone of the home reads a Unit done on its claim as done, and what waits on it opens", () => {
-    const { hosts, home, alice, record } = refundsTaken();
+    const { hosts, home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     git(home.dir, ["fetch", "-q", "origin"]);
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
     mergeOnHost(hosts.billing, "refunds", "merge");
     next(home.dir);
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
+    expect(recordAt(home, "refunds")?.json).toMatchObject({ done: true });
     // The lead's laptop: the home's work as last pushed, without this machine's record of the merge.
     const laptop = cloneOf(home.remote, "lead-laptop");
     const picked = run(join(AIDLC_SRC, "tools", "aidlc.ts"), ["engine", "intent", "switch", HOME_RECORD], laptop);
@@ -1951,7 +1956,7 @@ describe("at the home", () => {
   });
 
   test("what a team sent shows at the home's next step, with no fetch by the lead", () => {
-    const { home, alice, record } = refundsTaken();
+    const { home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     expect(String(next(home.dir).narration)).toContain(
@@ -1960,7 +1965,7 @@ describe("at the home", () => {
   });
 
   test("a home remote that cannot be reached: the board is the last fetch's, with one line that it may be behind", () => {
-    const { home, alice, record } = refundsTaken();
+    const { home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     fetchRecords(home.dir);
@@ -1980,6 +1985,7 @@ describe("at the home", () => {
     git(home.dir, ["add", "-A"]);
     git(home.dir, ["commit", "-q", "-m", "teams"]);
     git(home.dir, ["push", "-q", "origin", "main"]);
+    const plan = sharePlan(home);
     // payments keeps its own workspace repo, made from the home's: its pulls
     // never bring the home's claims.
     const seed = cloneOf(home.remote, "seed");
@@ -1989,7 +1995,7 @@ describe("at the home", () => {
     git(seed, ["push", "-q", "origin", "main"]);
     const alice = cloneOf(own, "alice");
     for (const [name, host] of Object.entries(hosts)) cloneCode(host, alice, name, "alice");
-    expect(takeIn("payments", ["refunds", "--home", HOME_RECORD], alice).status).toBe(0);
+    expect(takeIn("payments", ["refunds", ...planFrom(plan)], alice).status).toBe(0);
     const intents = join(alice, "aidlc", "spaces", "payments", "intents");
     codeGenerated(alice, join(intents, readdirSync(intents).find((name) => name.endsWith("-refunds"))!));
     expect(run(UNIT, ["push"], alice).status).toBe(0);
@@ -2005,7 +2011,7 @@ describe("at the home", () => {
   // not be reached" and never its send-back. The step now says what stopped
   // it and the way on; run with write access to .git, the news comes.
   test.skipIf(process.platform === "win32")("news the team's .git cannot take in here is said as that, with the way on, never as the home being down", () => {
-    const { home, alice, record } = refundsTaken();
+    const { home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     git(home.dir, ["fetch", "-q", "origin"]);
@@ -2055,7 +2061,7 @@ describe("at the home", () => {
   // tests themselves, and their next chat's "where were we?" heard that the
   // work is finished, with no push offered.
   test("a built Unit whose push is still to offer is never called finished: a new chat's words get the push", () => {
-    const { alice, record } = refundsTaken();
+    const { alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     const statePath = join(record, "aidlc-state.md");
     writeFileSync(statePath, readFileSync(statePath, "utf-8")
@@ -2067,7 +2073,7 @@ describe("at the home", () => {
   });
 
   test("code written outside the Unit's repo is said in plain words, with the way back to Code Generation, and nothing is pushed", () => {
-    const { hosts, alice, record } = refundsTaken();
+    const { hosts, alice, record } = refundsTakenInClone();
     // Code Generation put the file at the workspace root, not in checkout-api.
     mkdirSync(join(alice, "src"), { recursive: true });
     writeFileSync(join(alice, "src", "refunds.ts"), "export const refunds = 1;\n");
@@ -2089,7 +2095,7 @@ describe("at the home", () => {
   // A live run: Code Generation wrote the files in the repo, and its manifest
   // gave them by their path from the workspace ("checkout-api/src/...").
   test("files in the repo that the manifest gives by their path from the workspace are never called outside it", () => {
-    const { hosts, alice, record } = refundsTaken();
+    const { hosts, alice, record } = refundsTakenInClone();
     mkdirSync(join(alice, "checkout-api", "src"), { recursive: true });
     writeFileSync(join(alice, "checkout-api", "src", "refunds.ts"), "export const refunds = 1;\n");
     writeFileSync(join(alice, "checkout-api", "src", "refund-routes.ts"), "export const routes = 1;\n");
@@ -2123,9 +2129,10 @@ describe("at the home", () => {
     git(home.dir, ["add", "-A"]);
     git(home.dir, ["commit", "-q", "-m", "teams"]);
     git(home.dir, ["push", "-q", "origin", "main"]);
+    const plan = sharePlan(home);
     const alice = cloneOf(home.remote, "alice");
     git(alice, ["-c", "protocol.file.allow=always", "submodule", "update", "--init", "-q"]);
-    const took = takeIn("payments", ["refunds", "--home", HOME_RECORD], alice);
+    const took = takeIn("payments", ["refunds", ...planFrom(plan)], alice);
     expect(took.status, took.out).toBe(0);
     const intents = join(alice, "aidlc", "spaces", "payments", "intents");
     const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-refunds"))!);
@@ -2156,7 +2163,7 @@ describe("at the home", () => {
     expect(git(home.remote, ["ls-tree", "-r", "--name-only", "refunds"]).split("\n")).toContain("src/refunds.ts");
     expect(git(join(alice, "vendor"), ["status", "--porcelain"])).toBe("");
     expect(spawnSync("git", ["rev-parse", "--verify", "refs/heads/refunds"], { cwd: vendorHost }).status).not.toBe(0);
-    const claim = claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds") as {
+    const claim = recordAt(plan, "refunds")?.json as {
       result: { repos: Array<{ repo: string; branch: string }> };
     };
     expect(claim.result.repos.map((repo) => [repo.repo, repo.branch])).toEqual([[".", "refunds"]]);
@@ -2164,7 +2171,7 @@ describe("at the home", () => {
     mergeOnHost(home.remote, "refunds", "squash");
     git(home.dir, ["pull", "-q", "origin", "main"]);
     next(home.dir);
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
+    expect(recordAt(plan, "refunds")?.json).toMatchObject({ done: true });
   });
 
   // A live run: the same work in a teammate's fresh clone, where git leaves the
@@ -2180,8 +2187,9 @@ describe("at the home", () => {
     git(home.dir, ["add", "-A"]);
     git(home.dir, ["commit", "-q", "-m", "teams"]);
     git(home.dir, ["push", "-q", "origin", "main"]);
+    const plan = sharePlan(home);
     const alice = cloneOf(home.remote, "alice");
-    const took = takeIn("payments", ["refunds", "--home", HOME_RECORD], alice);
+    const took = takeIn("payments", ["refunds", ...planFrom(plan)], alice);
     expect(took.status, took.out).toBe(0);
     const intents = join(alice, "aidlc", "spaces", "payments", "intents");
     const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-refunds"))!);
@@ -2213,7 +2221,7 @@ describe("at the home", () => {
   });
 
   test("a home moved on past the Unit stages records no Unit: the result stays on its claim, said once, and is recorded back on the Unit stages", () => {
-    const { hosts, home, alice, record } = refundsTaken();
+    const { hosts, home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     // The lead moves the work on to Build and Test, skipping every Unit stage.
@@ -2234,19 +2242,19 @@ describe("at the home", () => {
         "until then.",
     ]);
     expect(readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_MERGED")).toEqual([]);
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.done).toBeUndefined();
+    expect(recordAt(home, "refunds")?.json?.done).toBeUndefined();
     // Back on the Unit stages, the walk checks the result and records it.
     const back = run(JUMP, ["execute", "--target", "functional-design", "--direction", "backward"], home.dir);
     expect(back.status, back.out).toBe(0);
     next(home.dir, chat);
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
+    expect(recordAt(home, "refunds")?.json).toMatchObject({ done: true });
     expect(readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_MERGED").map((row) => row.block).join("\n")).toContain("refunds");
   });
 
   // The lead's laptop: a fresh clone of the home holds no copy of the teams' records (a plain clone brings none),
   // and past the Unit stages the look that says a result back runs there all the same, at the stage's own step.
   test("a fresh clone of the home past the Unit stages says the result a team sent back", () => {
-    const { home, alice, record } = refundsTaken();
+    const { home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     const jumped = run(JUMP, ["execute", "--target", "build-and-test", "--direction", "forward"], home.dir);
@@ -2272,7 +2280,7 @@ describe("at the home", () => {
   });
 
   test("the board names the agent's commands for the lead's words: a repo turned it down, or merged it where the check cannot see", () => {
-    const { home, alice, record } = refundsTaken();
+    const { home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     const board = next(home.dir);
@@ -2282,7 +2290,7 @@ describe("at the home", () => {
   });
 
   test("the lead's word that a repo merged where the check cannot see: kept in their words, and the Unit is done", () => {
-    const { hosts, home, alice, record } = refundsTaken();
+    const { hosts, home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
@@ -2291,7 +2299,7 @@ describe("at the home", () => {
     expect(said.status, said.out).toBe(0);
     // Recorded when the lead says it, by the take-in the next step runs, with the check-in line.
     expect(said.json?.notice).toBe("refunds is recorded as merged here.");
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
+    expect(recordAt(home, "refunds")?.json).toMatchObject({ done: true });
     const merged = () => readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_MERGED");
     expect(merged()).toHaveLength(1);
     expect(merged()[0]?.block).toContain('billing (by your word: "billing merged it by hand last night")');
@@ -2306,7 +2314,7 @@ describe("at the home", () => {
   // a merge the board had seen, and only that; the agent ran merged, which put
   // their words on the claim and recorded nothing.
   test("the lead's word for a merge the check sees: recorded at once, saying so, with no next step", () => {
-    const { hosts, home, alice, record } = refundsTaken();
+    const { hosts, home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
@@ -2321,7 +2329,7 @@ describe("at the home", () => {
   });
 
   test("the lead's word for one repo while another has not merged: nothing recorded, and the line says which", () => {
-    const { home, alice, record } = refundsTaken();
+    const { home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     git(home.dir, ["fetch", "-q", "origin"]);
@@ -2329,28 +2337,28 @@ describe("at the home", () => {
     expect(said.status, said.out).toBe(0);
     expect(said.json?.notice).toBe("billing counts as merged for refunds, in your words. checkout-api has not merged it yet, so nothing is recorded here.");
     expect(readAuditShardEvents(home.dir).some((row) => row.event === "UNIT_MERGED")).toBe(false);
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.done).toBeUndefined();
+    expect(recordAt(home, "refunds")?.json?.done).toBeUndefined();
   });
 
   // A live run: the member said the merge request merged and the agent ran the
   // lead's merged at the team's build, which said the team had no result. The
   // lead's project checks the repos itself.
   test("the lead's merged, run at a team's build by git, says the lead's project checks it and writes nothing", () => {
-    const { home, alice, record } = refundsTaken();
+    const { home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
-    const before = claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds");
+    const before = recordAt(home, "refunds")?.json;
     const said = run(UNIT, ["merged", "refunds", "--repo", "billing", "--person-words", "billing is merged now"], alice);
     expect(said.status, said.out).not.toBe(0);
     expect(String(said.json?.error), said.out).toBe(
       "The lead's project checks at its own next step whether refunds merged; a merge it cannot see, the lead counts in " +
         "their own words there. Nothing needs sending from here.",
     );
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toEqual(before);
+    expect(recordAt(home, "refunds")?.json).toEqual(before);
   });
 
   test("the lead's word that a repo turned a Unit down or merged it counts only with a turn of theirs behind it", () => {
-    const { home, alice, record } = refundsTaken();
+    const { home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     const guarded: NodeJS.ProcessEnv = { ...ENV, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "" };
@@ -2366,7 +2374,7 @@ describe("at the home", () => {
   });
 
   test("a lead's word the hooks may have missed: no heartbeat names what happened to a reply, a fresh one ends the turn", () => {
-    const { home, alice, record } = refundsTaken();
+    const { home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     git(home.dir, ["fetch", "-q", "origin"]);
@@ -2385,7 +2393,7 @@ describe("at the home", () => {
   });
 
   test("the lead's own pre-push hook turns the board's send away: the line says the hook's words, and the next step sends it", () => {
-    const { hosts, home, alice, record } = refundsTaken();
+    const { hosts, home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     next(home.dir);
@@ -2400,11 +2408,11 @@ describe("at the home", () => {
     expect(line).toEndWith("The teams may not see it yet, and the next step sends it again.");
     writeFileSync(hook, "#!/bin/sh\nexit 0\n");
     next(home.dir);
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
+    expect(recordAt(home, "refunds")?.json).toMatchObject({ done: true });
   });
 
   test("a verdict the home's remote does not take stays here, said once, and goes at the next step", () => {
-    const { hosts, home, alice, record } = refundsTaken();
+    const { hosts, home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     next(home.dir);
@@ -2418,16 +2426,16 @@ describe("at the home", () => {
     expect(line).toStartWith("What the board shows here could not be sent to origin: claims are read-only today");
     expect(line).toEndWith("The teams may not see it yet, and the next step sends it again.");
     expect(readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_MERGED")).toHaveLength(1);
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.done).toBeUndefined();
+    expect(recordAt(home, "refunds")?.json?.done).toBeUndefined();
     writeFileSync(hook, "#!/bin/sh\nexit 0\n");
     next(home.dir);
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
+    expect(recordAt(home, "refunds")?.json).toMatchObject({ done: true });
     expect(readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_MERGED")).toHaveLength(1);
   });
 
   test("a team whose pushed build waits on the home hears a turn-down at its next step in the same chat, and the build never reads as finished", () => {
     // Every other Unit is open, so the team is offered one next.
-    const { home, alice, record } = refundsTaken();
+    const { home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     // The person's chat ran the build: its prompt hook has run in this record.
     const chat = personsChat("t-unit-push-waits");
@@ -2458,13 +2466,13 @@ describe("at the home", () => {
     // Pushed again, the turn-down is answered: the build is finished once more.
     writeFileSync(join(alice, "billing", "lib", "refund.ts"), "export const refund = 2;\n");
     expect(run(UNIT, ["push"], alice).status).toBe(0);
-    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.turned_down).toBeUndefined();
+    expect(recordAt(home, "refunds")?.json?.turned_down).toBeUndefined();
     expect(personsNext(alice, chat, "t-unit-push-waits").kind).toBe("done");
   });
 
   test("after a turn-down the build asks whether to go back to Code Generation, and the person's yes takes it there", () => {
     // Every other Unit is open, so the team is offered one next.
-    const { home, alice, record } = refundsTaken();
+    const { home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     // The first build's code plan, as its Code Generation wrote it (a live run
     // on Kiro CLI: after the turn-down this plan was put up for approval again).
@@ -2521,7 +2529,7 @@ describe("at the home", () => {
   // branch on origin still holding the build that was turned down, and the
   // agent handed the person git's own ways, a force push among them.
   test("a redo built on the newer main whose branch on origin holds the turned-down build: the way on is a new branch the home follows", () => {
-    const { home, hosts, alice, record } = refundsTaken();
+    const { home, hosts, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     finishBuild(record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
@@ -2547,7 +2555,7 @@ describe("at the home", () => {
   });
 
   test("a turn-down at the home reaches the team once, in the home's words", () => {
-    const { home, alice, record } = refundsTaken();
+    const { home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     git(home.dir, ["fetch", "-q", "origin"]);
@@ -2567,7 +2575,7 @@ describe("a team's done Unit that the lead's Build and Test sends back", () => {
   // lead's Build and Test sent refunds back, "can you check again?" heard that
   // the work is finished, and the question that came named no repo.
   test("a finished, pushed build sent back reaches the team on their own words too, and its question names the lead's Build and Test", () => {
-    const { home, hosts, alice, record } = refundsTaken();
+    const { home, hosts, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     finishBuild(record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
@@ -2604,7 +2612,7 @@ describe("a team's done Unit that the lead's Build and Test sends back", () => {
   });
 
   test("goes back to its team in the failure's words, is not done here meanwhile, and is recorded again once it merges again", () => {
-    const { home, hosts, alice, record } = refundsTaken();
+    const { home, hosts, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     finishBuild(record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
@@ -2612,8 +2620,7 @@ describe("a team's done Unit that the lead's Build and Test sends back", () => {
     mergeOnHost(hosts.billing, "refunds", "squash");
     git(home.dir, ["fetch", "-q", "origin"]);
     next(home.dir);
-    const id8 = fixtureIntentId8(home.dir);
-    expect(claimPayload(home.remote, id8, "refunds")).toMatchObject({ done: true });
+    expect(recordAt(home, "refunds")?.json).toMatchObject({ done: true });
     const merges = () => readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_MERGED" && row.block.includes("**Unit**: refunds")).length;
     expect(merges()).toBe(1);
     // The retry for refunds sends it back to alice's build; nothing of it is reopened here.
@@ -2624,7 +2631,7 @@ describe("a team's done Unit that the lead's Build and Test sends back", () => {
     const sent = run(UNIT, ["send-back", "refunds", "--person-words", words], home.dir);
     expect(sent.status, sent.out).toBe(0);
     expect(sent.json?.notice).toBe("Sent refunds back to alice with your words. It waits for them here; nothing of it is rebuilt here.");
-    const claim = claimPayload(home.remote, id8, "refunds") as Record<string, unknown>;
+    const claim = recordAt(home, "refunds")?.json as Record<string, unknown>;
     expect(claim.done).toBeUndefined();
     expect(claim.result).toBeUndefined();
     // Nothing of it is built here: the board says it was sent back, never a turn-down in no repo.
@@ -2651,7 +2658,7 @@ describe("a team's done Unit that the lead's Build and Test sends back", () => {
     mergeOnHost(hosts.billing, "refunds", "squash");
     fetchRecords(home.dir);
     next(home.dir);
-    expect(claimPayload(home.remote, id8, "refunds")).toMatchObject({ done: true });
+    expect(recordAt(home, "refunds")?.json).toMatchObject({ done: true });
     expect(merges()).toBe(2);
   });
 
@@ -2736,11 +2743,11 @@ describe("a team's done Unit that the lead's Build and Test sends back", () => {
   // passed only on the person's "please try again".
   test("their yes in another build's chat takes the sent-back build to Code Generation: its printed jump runs", () => {
     const session = "t-unit-push-yes-elsewhere";
-    const { alice, chat } = sentBackWhileOnFinishedBuild(session);
+    const { alice, chat, home } = sentBackWhileOnFinishedBuild(session);
     expect(hook(alice, chat, { hook_event_name: "UserPromptSubmit", session_id: session, prompt: "anything new for us?" }).status).toBe(0);
     next(alice, chat);
     expect(hook(alice, chat, { hook_event_name: "UserPromptSubmit", session_id: session, prompt: "yes, go back to it and fix it" }).status).toBe(0);
-    const back = run(UNIT, ["take", "refunds", "--home", HOME_RECORD], alice, chat);
+    const back = run(UNIT, ["take", "refunds", ...planFrom(home)], alice, chat);
     expect(back.json?.resumed, back.out).toBe(true);
     const jump = redoJump(alice, chat);
     const guard = jumpGuard(alice, chat, session, jump);
@@ -2755,27 +2762,27 @@ describe("a team's done Unit that the lead's Build and Test sends back", () => {
   test("the jump still waits for the person: a word spent where it was said never stands for it", () => {
     const session = "t-unit-push-jump-spent";
     // The chat's latest word is "build checkout-ui", spent by checkout-ui's approval.
-    const { alice, chat } = sentBackWhileOnFinishedBuild(session, false);
-    expect(run(UNIT, ["take", "refunds", "--home", HOME_RECORD], alice, chat).json?.resumed).toBe(true);
+    const { alice, chat, home } = sentBackWhileOnFinishedBuild(session, false);
+    expect(run(UNIT, ["take", "refunds", ...planFrom(home)], alice, chat).json?.resumed).toBe(true);
     expect(jumpGuard(alice, chat, session, redoJump(alice, chat)).status).toBe(2);
   });
 
   test("the jump still waits for the person: another chat's word, kept beside the finished build, is that chat's", () => {
     const session = "t-unit-push-jump-other-chat";
-    const { alice, chat } = sentBackWhileOnFinishedBuild(session, false);
+    const { alice, chat, home } = sentBackWhileOnFinishedBuild(session, false);
     // Said in a second chat while the finished build is selected: kept beside it, no turn written.
     const elsewhere = "t-unit-push-jump-other-chat-2";
     expect(hook(alice, personsChat(elsewhere), { hook_event_name: "UserPromptSubmit", session_id: elsewhere, prompt: "yes, go back to it" })
       .status).toBe(0);
-    expect(run(UNIT, ["take", "refunds", "--home", HOME_RECORD], alice, chat).json?.resumed).toBe(true);
+    expect(run(UNIT, ["take", "refunds", ...planFrom(home)], alice, chat).json?.resumed).toBe(true);
     expect(jumpGuard(alice, chat, session, redoJump(alice, chat)).status).toBe(2);
   });
 
   test("the work set to run on by itself after their yes spends it; their word on the build since stands, as before", () => {
     const session = "t-unit-push-jump-autonomous";
-    const { alice, record, chat } = sentBackWhileOnFinishedBuild(session);
+    const { alice, record, chat, home } = sentBackWhileOnFinishedBuild(session);
     expect(hook(alice, chat, { hook_event_name: "UserPromptSubmit", session_id: session, prompt: "yes, go back to it and fix it" }).status).toBe(0);
-    expect(run(UNIT, ["take", "refunds", "--home", HOME_RECORD], alice, chat).json?.resumed).toBe(true);
+    expect(run(UNIT, ["take", "refunds", ...planFrom(home)], alice, chat).json?.resumed).toBe(true);
     const jump = redoJump(alice, chat);
     appendAuditEntry("AUTONOMY_MODE_SET", { Mode: "autonomous" }, alice, basename(record), "payments");
     expect(jumpGuard(alice, chat, session, jump).status).toBe(2);
@@ -2816,7 +2823,7 @@ function codeGenerationOutputs(record: string, unit: string): void {
 // Payments' clone builds refunds and then checkout-ui; each is pushed and
 // merged, and the lead's project is at its Build and Test.
 function twoMergedAtBuildAndTest() {
-  const { home, hosts, alice, record } = refundsTaken(undefined, TWO_BUILDS_PLAN);
+  const { home, hosts, alice, record } = refundsTakenInClone(undefined, TWO_BUILDS_PLAN);
   codeGenerated(alice, record);
   codeGenerationOutputs(record, "refunds");
   finishBuild(record);
@@ -2826,7 +2833,7 @@ function twoMergedAtBuildAndTest() {
   mergeOnHost(hosts.billing, "refunds", "squash");
   fetchRecords(home.dir);
   next(home.dir);
-  expect(takeIn("payments", ["checkout-ui", "--home", HOME_RECORD], alice).status).toBe(0);
+  expect(takeIn("payments", ["checkout-ui", ...planFrom(home)], alice).status).toBe(0);
   const intents = join(alice, "aidlc", "spaces", "payments", "intents");
   const ui = join(intents, readdirSync(intents).find((name) => name.endsWith("-checkout-ui"))!);
   writeFileSync(join(alice, "checkout-api", "src", "ui.ts"), "export const ui = 1;\n");
@@ -2859,7 +2866,7 @@ function twoMergedAtBuildAndTest() {
 // lead's Build and Test sends refunds back. The chat looked once before, at
 // the person's /aidlc (`typedLook`) or on the agent's own.
 function sentBackWhileOnFinishedBuild(session: string, typedLook = true) {
-  const { home, hosts, alice, record } = refundsTaken(undefined, TWO_BUILDS_PLAN);
+  const { home, hosts, alice, record } = refundsTakenInClone(undefined, TWO_BUILDS_PLAN);
   const chat = personsChat(session);
   expect(hook(alice, chat, { hook_event_name: "UserPromptSubmit", session_id: session, prompt: "build refunds" }).status).toBe(0);
   codeGenerated(alice, record);
@@ -2870,7 +2877,7 @@ function sentBackWhileOnFinishedBuild(session: string, typedLook = true) {
   mergeOnHost(hosts.billing, "refunds", "squash");
   git(home.dir, ["fetch", "-q", "origin"]);
   next(home.dir);
-  expect(takeIn("payments", ["checkout-ui", "--home", HOME_RECORD], alice, chat).status).toBe(0);
+  expect(takeIn("payments", ["checkout-ui", ...planFrom(home)], alice, chat).status).toBe(0);
   const intents = join(alice, "aidlc", "spaces", "payments", "intents");
   const ui = join(intents, readdirSync(intents).find((name) => name.endsWith("-checkout-ui"))!);
   expect(hook(alice, chat, { hook_event_name: "UserPromptSubmit", session_id: session, prompt: "build checkout-ui" }).status).toBe(0);
@@ -2933,12 +2940,12 @@ function jumpGuard(alice: string, chat: NodeJS.ProcessEnv, session: string, jump
 // heard nothing; the lead's words reached only the build they were about.
 describe("a team hears the lead's turn-down from any chat on its work", () => {
   test("on another of its builds, the turn-down of its Unit is said once, with how to go back to that build", () => {
-    const { home, alice, record } = refundsTaken();
+    const { home, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     finishBuild(record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     // Its chat moves to its other Unit.
-    expect(takeIn("payments", ["checkout-ui", "--home", HOME_RECORD], alice).status).toBe(0);
+    expect(takeIn("payments", ["checkout-ui", ...planFrom(home)], alice).status).toBe(0);
     git(home.dir, ["fetch", "-q", "origin"]);
     expect(run(UNIT, ["turned-down", "refunds", "--repo", "billing", "--person-words", "needs the ledger entry"], home.dir).status).toBe(0);
     git(alice, ["fetch", "-q", "origin"]);
@@ -3015,8 +3022,13 @@ describe("a Unit on the workspace's own repository", () => {
     git(home.dir, ["add", "-A"]);
     git(home.dir, ["commit", "-q", "-m", "teams"]);
     git(home.dir, ["push", "-q", "origin", "main"]);
+    // The plan shared in the workspace's own repository, the work's one repository.
+    const shared = run(UNIT, ["share", "--plan"], home.dir);
+    expect(shared.status, shared.out).toBe(0);
     return home;
   }
+  // A take's --plan and --from for this work, whose plan is in the workspace's own repository.
+  const fromHome = (home: ReturnType<typeof makeHome>): string[] => ["--plan", fixtureIntentId8(home.dir), "--from", home.remote];
 
   function leadCommits(home: ReturnType<typeof makeHome>, branch: string, file: string): string {
     if (git(home.dir, ["branch", "--show-current"]) !== branch) git(home.dir, ["switch", "-q", branch]);
@@ -3029,7 +3041,7 @@ describe("a Unit on the workspace's own repository", () => {
 
   // The team's take of a Unit and its Code Generation, in the workspace itself; the build's record folder.
   function builtHere(dir: string, unit: string, file: string): string {
-    const took = takeIn("payments", [unit, "--home", HOME_RECORD], dir);
+    const took = takeIn("payments", [unit, "--plan", fixtureIntentId8(dir, undefined, "default"), "--from", git(dir, ["remote", "get-url", "origin"])], dir);
     expect(took.status, took.out).toBe(0);
     const intents = join(dir, "aidlc", "spaces", "payments", "intents");
     const record = join(intents, readdirSync(intents).find((name) => name.endsWith(`-${unit}`))!);
@@ -3114,6 +3126,8 @@ describe("a Unit on the workspace's own repository", () => {
     git(home.dir, ["push", "-q", "origin", "main"]);
     git(home.dir, ["switch", "-q", "-c", "develop"]);
     git(home.dir, ["push", "-q", "-u", "origin", "develop"]);
+    // The lead shares the plan again, with the branch it now names.
+    expect(run(UNIT, ["share", "--plan"], home.dir).status).toBe(0);
     const developsTip = leadCommits(home, "develop", "DEVELOP-ONLY.md");
     const alice = cloneOf(home.remote, "alice");
     builtHere(alice, "refunds", "refunds.ts");
@@ -3171,7 +3185,7 @@ describe("a Unit on the workspace's own repository", () => {
       const leads = join(dana, "aidlc", "spaces", "default", "memory", "team.md");
       writeFileSync(leads, `${readFileSync(leads, "utf-8")}\nmy note\n`);
     }
-    const took = takeIn("data", ["reporting", "--home", HOME_RECORD, "--early"], dana);
+    const took = takeIn("data", ["reporting", ...fromHome(home), "--early"], dana);
     expect(took.status, took.out).toBe(0);
     return { dana, home, notice: String(took.json?.notice) };
   }
@@ -3380,9 +3394,10 @@ describe("a Unit on the workspace's own repository", () => {
     const home = oneRepoTeams(FOLDERS);
     const alice = cloneOf(home.remote, "alice");
     builtHere(alice, "refunds", "refunds.ts");
-    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
     const bob = cloneOf(home.remote, "bob");
-    const took = takeIn("reports", ["reporting", "--home", HOME_RECORD, "--early"], bob);
+    const took = takeIn("reports", ["reporting", ...fromHome(home), "--early"], bob);
     expect(took.status, took.out).toBe(0);
     const claim = claimPayload(home.remote, fixtureIntentId8(home.dir), "reporting") as {
       early_on?: Array<{ unit: string; repos: Array<{ repo: string; branch: string }> }>;

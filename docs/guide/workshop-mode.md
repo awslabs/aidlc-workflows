@@ -692,8 +692,8 @@ alone), or as being built at the lead's project. AI-DLC reads the lead's project
 lead's project has them now, once per chat and at each look while nothing is ready, so
 nobody has to fetch.
 
-Picking one runs `aidlc unit take <unit> --home <record>`. Its claim at the
-lead's project is the take: the first take wins, and anyone after it is told who
+Picking one runs `aidlc unit take <unit> --plan <work id> --from <address>`, the
+address of the code repository the plan is shared in. Its claim there is the take: the first take wins, and anyone after it is told who
 has it ("refunds is already taken: bea builds it in the pay space."). Then it
 starts the Unit's build: a new piece of work in the space you are in, named after the Unit, running the Unit's planned Construction stages
 from a copy of what the lead approved. The copy is what the lead's Ideation

@@ -188,6 +188,7 @@ export const NEXT_VALUELESS_FLAGS: ReadonlySet<string> = new Set([
   "--change",
   "--every-unit",
   "--unit-plan",
+  "--units",
   // Retired, still taken so the token never becomes task text.
   "--init",
   "--force",
@@ -317,10 +318,10 @@ export const UNIT_GRAMMAR: Readonly<Record<string, UnitGrammar>> = {
   status: { name: false, options: [], usage: "unit status" },
   take: {
     name: true,
-    options: ["home", "space", "home-space", "from", "request-file", "person-words"],
+    options: ["plan", "home", "space", "home-space", "from", "request-file", "person-words"],
     switches: ["early", "lead-rules"],
-    usage: "unit take <unit> --home <record> [--space <name>] [--home-space <space>] [--from <lead's project address>] [--early] [--lead-rules] " +
-      "[--request-file <file> | --person-words <text>]",
+    usage: "unit take <unit> (--plan <work id> --from <plan repository address> | --home <record> [--home-space <space>]) [--space <name>] " +
+      "[--early] [--lead-rules] [--request-file <file> | --person-words <text>]",
   },
   "turned-down": {
     name: true,

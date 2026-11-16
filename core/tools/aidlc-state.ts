@@ -333,7 +333,7 @@ import {
   shownAgainFields,
 } from "./aidlc-questions.ts";
 import { codeGenerationPlanWaitsStep, promotableTestingPosture } from "./aidlc-testing-posture.ts";
-import { recordIntegrationBranch } from "./aidlc-unit.ts";
+import { planHomeAddress, recordIntegrationBranch } from "./aidlc-unit.ts";
 import {
   approvedOverUnfinishedReview,
   approvedUnitChanges,
@@ -1813,7 +1813,7 @@ function handleSetUnitOwnership(given: string[]): void {
     // The home of team-built work, recorded once as teams are chosen: every copy
     // of the workspace then knows where its claims are.
     const home = value === "team" && current !== "team" && homeLocation(content) === null
-      ? buildOutHomeLocation(pd, teammateTook)
+      ? buildOutHomeLocation(pd, teammateTook, (dirName, space) => planHomeAddress(pd, dirName, space))
       : null;
     if (home !== null) content = recordHomeLocation(content, home);
     if (value === "solo") content = removeUnitProgressSection(content);

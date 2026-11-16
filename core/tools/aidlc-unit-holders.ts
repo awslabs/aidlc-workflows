@@ -9,7 +9,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { projectInRepo } from "./aidlc-git.ts";
-import { activeSpace } from "./aidlc-locks.ts";
+import { activeSpace, writeFileAtomic } from "./aidlc-locks.ts";
 import { workspaceEngineFile } from "./aidlc-runtime-paths.ts";
 import {
   activeIntentUuid,
@@ -78,6 +78,24 @@ export function claimRecordRef(id8: string, unit: string): string {
 // The plan a lead shares with the teams, in one code repository.
 export function planRecordRef(id8: string): string {
   return `refs/aidlc/plans/${id8}`;
+}
+
+// This workspace's copies of what a look read by an address: one folder per
+// repository read (`key`, repoCopyKey in aidlc-unit-teams.ts), so a fetch with
+// prune into one never touches another's. `tail` is "plan", or "claims/<unit>"
+// ("claims/" for the folder). Never pushed, never in a code clone.
+export function homeCopyName(id8: string, key: string, tail: string): string {
+  return `refs/aidlc/home/${id8}/${key}/${tail}`;
+}
+
+export type HomeCopy = { id8: string; key: string; kind: "plan" } | { id8: string; key: string; kind: "record"; unit: string };
+
+// The one reading of a copy's name; the key is exactly twelve lower-case hex,
+// so no other ref under refs/aidlc/home/ reads as one.
+export function homeCopyOf(ref: string): HomeCopy | null {
+  const at = /^refs\/aidlc\/home\/([^/]+)\/([0-9a-f]{12})\/(?:(plan)|claims\/([^/]+))$/.exec(ref);
+  if (at === null) return null;
+  return at[3] !== undefined ? { id8: at[1], key: at[2], kind: "plan" } : { id8: at[1], key: at[2], kind: "record", unit: at[4] };
 }
 
 // A work's claims on a remote (every work's without `id8`), as a refspec's
@@ -240,6 +258,39 @@ export function readClaimAt(
 
 export function claimRegistryCachePath(projectDir: string): string {
   return workspaceEngineFile(projectDir, CLAIM_REGISTRY_CACHE_FILE);
+}
+
+// The addresses a person said a plan is shared in, kept on this computer in
+// the last-seen list until a build's Home Location holds one: no sign-in in
+// them. The list's writer (writeUnitClaimRegistryCache) keeps them.
+export interface SaidPlan {
+  address: string;
+  at: string;
+}
+
+export function saidPlans(projectDir: string): SaidPlan[] {
+  try {
+    const parsed = JSON.parse(readFileSync(claimRegistryCachePath(projectDir), "utf-8")) as { said_plans?: unknown };
+    return Array.isArray(parsed.said_plans)
+      ? parsed.said_plans.filter((entry): entry is SaidPlan =>
+        typeof (entry as SaidPlan)?.address === "string" && typeof (entry as SaidPlan)?.at === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+// The list with `said` in place of what it held; a file with no work's claims
+// yet is written as an empty one, which no work's read takes as its own.
+export function writeSaidPlans(projectDir: string, said: readonly SaidPlan[]): void {
+  let held: Record<string, unknown> = { version: 1, space: "", intent_uuid: "", claims: {} };
+  try {
+    held = JSON.parse(readFileSync(claimRegistryCachePath(projectDir), "utf-8")) as Record<string, unknown>;
+  } catch {
+    // None yet.
+  }
+  const { said_plans: _, ...rest } = held;
+  writeFileAtomic(claimRegistryCachePath(projectDir), `${JSON.stringify(said.length > 0 ? { ...rest, said_plans: said } : rest, null, 2)}\n`);
 }
 
 export function readUnitClaimRegistryCache(
