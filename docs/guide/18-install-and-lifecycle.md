@@ -1194,7 +1194,10 @@ Refresh preserves:
   takes the release's version. When the release no longer ships such a file,
   the file Kiro upgraded from is the one AI-DLC wrote there and its stamp still
   matches, the refresh removes it like any file the release no longer ships,
-  keeps Kiro's backups of it, and says so in one line
+  keeps Kiro's backups of it, and says so in one line. `aidlc doctor` names,
+  in its `Kiro agent files` row, each such file Kiro upgraded from a version
+  whose allow and deny entries differ from this release's file, and each one
+  changed since Kiro upgraded it
 
 Under `aidlc/`, install and refresh copy only those seeds. The clone identity,
 sessions, engine health, and other per-machine state are never copied from the
