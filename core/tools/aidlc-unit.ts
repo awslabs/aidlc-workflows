@@ -243,7 +243,7 @@ import {
 } from "./aidlc-unit-teams.js";
 import { gitOperationUnderWay, rebaseUnderWay, recordChanged, recordCommitBlock, recordPaths, submoduleLeavesProjectRepo } from "./aidlc-git.ts";
 import { ownFilesToCommit } from "./aidlc-brought-files.ts";
-import { commitOwnCommand, displayRepoPath, UPDATE_COMMIT_MESSAGE, UPDATE_MESSAGE_KEY, reposManifestPath, localUnreadableLine, readWorkspaceRepos, repoCloneable, repoCloneOfferLine, repoNotThereLine, withoutCredentials, workspaceManifestAt } from "./aidlc-workspace-manifest.js";
+import { commitOwnCommand, displayRepoPath, leftFilesNamed, UPDATE_COMMIT_MESSAGE, UPDATE_MESSAGE_KEY, reposManifestPath, localUnreadableLine, readWorkspaceRepos, repoCloneable, repoCloneOfferLine, repoNotThereLine, withoutCredentials, workspaceManifestAt } from "./aidlc-workspace-manifest.js";
 import { maskUserinfo, workspaceCloneUrl } from "./aidlc-workspace-sync.ts";
 import { loadGraph } from "./aidlc-graph.ts";
 import {
@@ -6469,13 +6469,15 @@ function commitRecord(args: string[], projectDir?: string): void {
   const offered = existsSync(join(pd, ...unitWordsFile("record-message", UPDATE_MESSAGE_KEY).split("/")));
   const own = update ? ownFilesToCommit(pd, unitBuild, offered ? () => false : null) : null;
   const block = recordCommitBlock(pd, unitBuild, own?.commit);
+  const what = own ? "AI-DLC's own files" : "AI-DLC's record";
+  const left = own && own.left.length > 0 ? ` I left ${leftFilesNamed(own.left)} for you to look over and commit.` : "";
   if (block?.why === "nothing") {
-    console.log(JSON.stringify(own ? { committed: false, left: own.left } : { committed: false, notice: "AI-DLC's record in aidlc/ has nothing new to commit." }));
+    console.log(JSON.stringify({ committed: false, notice: own ? `AI-DLC's own files here have nothing new to commit.${left}` : "AI-DLC's record in aidlc/ has nothing new to commit." }));
     return;
   }
   if (block !== null) {
-    fail(block.why === "under-way" ? underWayLine("This checkout", block.underWay, "nothing was committed", "commit AI-DLC's record")
-      : block.why === "detached" ? "This checkout is not on a branch, so nothing was committed. Switch to a branch, then I can commit AI-DLC's record."
+    fail(block.why === "under-way" ? underWayLine("This checkout", block.underWay, "nothing was committed", `commit ${what}`)
+      : block.why === "detached" ? `This checkout is not on a branch, so nothing was committed. Switch to a branch, then I can commit ${what}.`
       : block.why === "unit-build" ? "This checkout builds a Unit, so I don't commit aidlc/ from here: it holds the lead's record too."
       : "This folder is not in a git repository, so nothing was committed.");
   }
@@ -6490,10 +6492,10 @@ function commitRecord(args: string[], projectDir?: string): void {
   given?.spend();
   const branch = git(pd, ["symbolic-ref", "--quiet", "--short", "HEAD"]).stdout.trim();
   const commit = git(pd, ["rev-parse", "--short", "HEAD"]).stdout.trim();
-  console.log(JSON.stringify(own ? { committed: true, branch, commit, files, left: own.left } : {
+  console.log(JSON.stringify({
     committed: true,
     commit,
-    notice: `AI-DLC's record in aidlc/ is committed on ${branch} as ${commit} (${files} file${files === 1 ? "" : "s"}); nothing is pushed.`,
+    notice: `${own ? "AI-DLC's own files are" : "AI-DLC's record in aidlc/ is"} committed on ${branch} as ${commit} (${files} file${files === 1 ? "" : "s"}); nothing is pushed.${left}`,
   }));
 }
 

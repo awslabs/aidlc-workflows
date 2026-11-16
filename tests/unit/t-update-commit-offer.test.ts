@@ -275,9 +275,17 @@ describe("unit commit-record --update", () => {
     writeFileSync(join(dir, ...draft.split("/")), "chore: take AI-DLC's update\n");
     const yes = run(UNIT, ["commit-record", "--update", "--commit-message-file", draft], dir);
     expect(yes.status, yes.out).toBe(0);
-    expect(yes.json).toMatchObject({ committed: true, branch: "main", left: [] });
+    const commit = git(dir, ["rev-parse", "--short", "HEAD"]);
+    expect(yes.json).toEqual({
+      committed: true,
+      commit,
+      notice: `AI-DLC's own files are committed on main as ${commit} (${expected.length} files); nothing is pushed.`,
+    });
     expect(git(dir, ["log", "-1", "--format=%s"])).toBe("chore: take AI-DLC's update");
     expect(shown(dir)).toEqual(expected);
+    const again = run(UNIT, ["commit-record", "--update"], dir);
+    expect(again.status, again.out).toBe(0);
+    expect(again.json).toEqual({ committed: false, notice: "AI-DLC's own files here have nothing new to commit." });
     expect(git(dir, ["status", "--porcelain"])).toBe("A  notes.txt");
     expect(existsSync(join(dir, ...draft.split("/")))).toBe(false);
     expect(git(remote, ["rev-parse", "main"])).toBe(pushed);
@@ -288,7 +296,7 @@ describe("unit commit-record --update", () => {
     refresh(dir, "claude");
     const yes = run(UNIT, ["commit-record", "--update"], dir);
     expect(yes.status, yes.out).toBe(0);
-    expect(yes.json).toMatchObject({ committed: true, left: [".claude/settings.json"] });
+    expect(String(yes.json?.notice)).toEndWith("; nothing is pushed. I left .claude/settings.json for you to look over and commit.");
     expect(git(dir, ["log", "-1", "--format=%s"])).toBe(`Update AI-DLC to ${AIDLC_VERSION}`);
     expect(shown(dir)).not.toContain(".claude/settings.json");
     expect(git(dir, ["status", "--porcelain"])).toBe("M .claude/settings.json");
@@ -325,7 +333,7 @@ describe("unit commit-record --update", () => {
     writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
     const yes = run(UNIT, ["commit-record", "--update"], dir);
     expect(yes.status, yes.out.slice(0, 2000)).toBe(0);
-    expect(Number(yes.json?.files)).toBeGreaterThan(12_000);
+    expect(Number(/\((\d+) files\)/.exec(String(yes.json?.notice))?.[1])).toBeGreaterThan(12_000);
     expect(git(dir, ["status", "--porcelain", "--", ".claude"])).toBe("M .claude/settings.json");
   });
 
@@ -334,10 +342,15 @@ describe("unit commit-record --update", () => {
     refresh(dir, "claude");
     const head = git(dir, ["rev-parse", "HEAD"]);
     git(dir, ["checkout", "-q", "--detach"]);
-    expect(run(UNIT, ["commit-record", "--update"], dir).status).not.toBe(0);
+    const detached = run(UNIT, ["commit-record", "--update"], dir);
+    expect(detached.status).not.toBe(0);
+    expect(detached.out).toContain("This checkout is not on a branch, so nothing was committed. Switch to a branch, then I can commit AI-DLC's own files.");
     git(dir, ["checkout", "-q", "main"]);
     writeFileSync(join(dir, ".git", "MERGE_HEAD"), `${head}\n`);
-    expect(run(UNIT, ["commit-record", "--update"], dir).status).not.toBe(0);
+    const merging = run(UNIT, ["commit-record", "--update"], dir);
+    expect(merging.status).not.toBe(0);
+    expect(merging.out).toContain("This checkout is in the middle of a merge, so nothing was committed.");
+    expect(merging.out).toContain("then I can commit AI-DLC's own files.");
     unlinkSync(join(dir, ".git", "MERGE_HEAD"));
     writeFileSync(join(dir, ".git", "hooks", "pre-commit"), "#!/bin/sh\necho no commits today >&2\nexit 1\n", { mode: 0o755 });
     const refused = run(UNIT, ["commit-record", "--update"], dir);

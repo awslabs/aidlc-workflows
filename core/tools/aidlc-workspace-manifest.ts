@@ -107,6 +107,12 @@ function joinWithAnd(parts: readonly string[]): string {
   return parts.length <= 1 ? (parts[0] ?? "") : `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}`;
 }
 
+// AI-DLC's files the update's own commit leaves, by path, ten at most before "and N more".
+export function leftFilesNamed(paths: readonly string[]): string {
+  const NAMED = 10;
+  return paths.length <= NAMED ? joinWithAnd(paths) : joinWithAnd([...paths.slice(0, NAMED), `${paths.length - NAMED} more`]);
+}
+
 // The catch-up's one line after an update: the files of the project git tracks
 // that the refresh changed (paths relative to the project, "/"-separated), by
 // folder with each folder's count, a root file by its name, and the list's move
