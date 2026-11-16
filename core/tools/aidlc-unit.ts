@@ -14115,8 +14115,8 @@ export function buildCloneOffer(pd: string, stateContent: string): { question: s
   const build = unitBuildOf(stateContent);
   if (build === null) return null;
   // The lead's list: the plan's, as this workspace's copy has it; the lead's own repos.json where its work is here.
-  const copy = copyOf(build.homeLocation, planRecordRef(idSuffix(build.homeWork)));
-  const kept = isGitAddress(build.homeLocation) ? planAtCopy(pd, copy, { commit: planCommitOf(pd, copy) }) : null;
+  const copy = isGitAddress(build.homeLocation) ? copyOf(build.homeLocation, planRecordRef(idSuffix(build.homeWork))) : null;
+  const kept = copy === null ? null : planAtCopy(pd, copy, { commit: planCommitOf(pd, copy) });
   const addresses = kept?.kind === "read"
     ? new Map(kept.plan.repos.flatMap((repo) => (repo.address === null ? [] : [[repo.name, repo.address] as [string, string]])))
     : leadRepoAddresses(pd, auditBlockField(readAuditShardEvents(pd).findLast((row) => row.event === "UNIT_TAKEN_IN")?.block ?? "", "Home Commit"));
