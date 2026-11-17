@@ -1349,8 +1349,10 @@ export type MergeVerdict =
 // after it); or one first-parent commit, or a run of consecutive ones (a
 // rebase merge that replays the Unit's commits one by one), is the same change
 // by patch-id. Anything else is not merged yet.
-// ponytail: the walk reads the latest 500 first-parent commits after the base,
-// and a run is at most MERGE_RUN_MAX commits long.
+// The walk reads the latest 500 first-parent commits after the base, and a run is
+// at most MERGE_RUN_MAX commits long, so the check is one bounded walk on a busy
+// integration branch: a squash or rebase merge further back than that is not found
+// and reads as not merged yet.
 const MERGE_RUN_MAX = 50;
 export function unitMergeVerdict(dir: string, integration: string, result: RepoResult): MergeVerdict {
   const head = result.heads.at(-1);

@@ -9821,7 +9821,9 @@ function planBackLine(repo: string, back: { count: number; name: string }): stri
 // The newest plan of this work (`id`) that reads under a tip that does not:
 // what was pushed on top of the plan keeps it in its history, so the lead's
 // decisions on its Units are carried over it. Null when the history holds none.
-// ponytail: the 50 newest commits only; a longer history of non-plans carries nothing.
+// It reads the 50 newest commits below the tip, one read each, so the look stays
+// small: a plan further down, under a longer run of commits that are no plan, is
+// not found, and nothing is carried over from it.
 function planBelow(projectDir: string, tip: string, id: string): { commit: string; plan: PlanJson } | null {
   for (const commit of localGit(projectDir, ["rev-list", "--max-count=50", `${tip}^@`]).stdout.split("\n").filter(Boolean)) {
     const shown = localGit(projectDir, ["show", `${commit}:plan.json`]);
