@@ -676,7 +676,8 @@ reads **Yes, for this project, and offered to any team that takes a Unit**.
   work picked there, the lead's own questions (a sign-off, a team's proposed
   change) are not put in such a clone. The lead in a fresh clone
   on another machine says so in their own words, and AI-DLC records it there
-  (`unit lead-here`); from then on that checkout gets the lead's questions.
+  (`unit lead-here`); from then on that checkout gets the lead's questions, until they say they do not lead it
+  there (`unit lead-here --off`).
 - **A team's own workspace made from the lead's** (its `origin` is the team's
   repository): the lead's work that git copied in stays the lead's, read only,
   and is never offered to carry on. Its Units are, and taking one reaches the

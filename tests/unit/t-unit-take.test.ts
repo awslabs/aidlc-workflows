@@ -564,13 +564,13 @@ describe("the lead who says so in a clone that did not make the plan", () => {
     asLeadsOwnCheckout(home.dir);
     commitAll(home.dir, "teams");
     git(home.dir, ["push", "-q", "origin", "main"]);
-    planShared(home);
+    const plan = planShared(home);
     const laptop = cloneOf(home.remote, "lead");
     if (moved) {
       const went = run(UNIT, ["share", "--plan", "--repo", "web"], home.dir);
       expect(went.status, went.out).toBe(0);
     }
-    return { home, laptop };
+    return { home, laptop, plan };
   }
   // The person's message through the human-turn hook, then `next` with it, as the agent runs it. The message
   // store keeps whole seconds, so each message goes in a second of its own, as a person's typing does.
@@ -632,6 +632,30 @@ describe("the lead who says so in a clone that did not make the plan", () => {
     expect(text).toContain(`If they say ${LEAD}, run \``);
     expect(text).not.toContain("intent switch");
     liftAsHanded(laptop, chat, text);
+  });
+
+  test("their word that they do not lead this work here takes it back: this clone's newest row decides, after the lead's walk went on there", () => {
+    const { laptop, plan } = leadsSecondClone(false);
+    const tip = () => git(plan.hosts.app, ["rev-parse", planRefOf(plan.id8)]);
+    const chat = "t-unit-take-not-the-lead-after-all";
+    says(laptop, chat, "where do things stand?");
+    liftAsHanded(laptop, chat, String(says(laptop, chat, I_LEAD).json?.message));
+    const before = tip();
+    // The lead's walk carried on in this clone: a gate of the work's own in its own part of the record.
+    asLeadsOwnCheckout(laptop);
+    const notLead = "No, I'm not the lead after all, I lead the payments team.";
+    const text = String(says(laptop, chat, notLead).json?.message);
+    const message = /lead-here --off --message (\S+)`/.exec(text)?.[1];
+    expect(message, text).toBeDefined();
+    const off = run(UNIT, ["lead-here", "--off", "--message", message!], laptop, personsChat(chat));
+    expect(off.status, off.out).toBe(0);
+    expect(off.json?.notice).toBe("This checkout no longer carries the work on as yours, the lead's, from here.");
+    const row = readAuditShardEvents(laptop, HOME).findLast((entry) => entry.event === "LEAD_HERE_SET");
+    expect(auditBlockField(row?.block ?? "", "Lead Here")).toBe("off");
+    expect(auditBlockField(row?.block ?? "", "Person Words")).toBe(notLead);
+    // A teammate's view again, and nothing written on the plan.
+    expect(JSON.stringify(next(laptop, personsChat(chat)))).toContain("Taking a Unit starts it as your team's own piece of work here");
+    expect(tip()).toBe(before);
   });
 
   test("a team's own workspace never hears the sentence", () => {

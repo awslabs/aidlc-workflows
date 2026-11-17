@@ -262,7 +262,8 @@ export const UNIT_GRAMMAR: Readonly<Record<string, UnitGrammar>> = {
   "lead-here": {
     name: false,
     options: ["message", "request-file", "person-words"],
-    usage: "unit lead-here [--message <id>] (--request-file <file> | --person-words <text>)",
+    switches: ["off"],
+    usage: "unit lead-here [--off] [--message <id>] (--request-file <file> | --person-words <text>)",
   },
   "lead-sign-off": {
     name: false,

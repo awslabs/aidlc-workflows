@@ -601,7 +601,7 @@ import {
   enterHookWorkflow,
   type TerminalCommand,
 } from "./aidlc-lib.ts";
-import { canonicalPathKey, chatTookStep, hostNamesThisChat, planMadeElsewhere } from "./aidlc-record-core.ts";
+import { canonicalPathKey, chatTookStep, hostNamesThisChat, leadHereByWord, planMadeElsewhere } from "./aidlc-record-core.ts";
 import { maskUserinfo } from "./aidlc-workspace-sync.ts";
 import { unrecordedFinishSince } from "./aidlc-subagent-inflight.ts";
 import { readRequestFileResult, REQUEST_FILE_USAGE, reviewRecoverySpentMessage, reviewVerdictStep } from "./aidlc-log.ts";
@@ -5242,6 +5242,11 @@ function leadHereRun(works: string[], selected: boolean, message: string | null)
 function leadHereSentence(works: string[], selected: boolean, message: string | null): string {
   return works.length === 0 ? "" : `If they say ${LEAD_HERE_WORDS}, ${leadHereRun(works, selected, message)}.`;
 }
+// Its way back, in a clone the person's own word made the lead's.
+function leadHereOffSentence(message: string | null): string {
+  return `If they say they do not lead this work here, run \`${aidlcToolInvocation("unit")} lead-here --off` +
+    `${message === null ? "" : ` --message ${message}`}\`, and follow what it returns.`;
+}
 
 // The lead's work in the space this clone did not make the plan of: what pickableHere leaves out.
 function leadsWorkMadeElsewhere(pd: string, here: NonNullable<ReturnType<typeof unselectedRecords>>): string[] {
@@ -5254,9 +5259,15 @@ function leadsWorkMadeElsewhere(pd: string, here: NonNullable<ReturnType<typeof 
 // with nothing selected, never sent on as the lead's work; with no offer, the
 // reply `otherwise` gives, with the lead's sentence. `otherwise` elsewhere.
 function leadsWorkElsewhereWords(pd: string, stateContent: string, requestId: string, otherwise: () => PrintDirective): PrintDirective {
-  if (homeLocation(stateContent) === null || unitBuildOf(stateContent) !== null || !planMadeElsewhere(pd)) return otherwise();
+  if (homeLocation(stateContent) === null || unitBuildOf(stateContent) !== null) return otherwise();
+  const message = readingMessage(pd)?.id ?? null;
+  if (!planMadeElsewhere(pd)) {
+    if (leadHereByWord(pd) !== true) return otherwise();
+    const step = otherwise();
+    return { ...step, message: `${step.message} ${leadHereOffSentence(message)}` };
+  }
   const work = [engineSelection(pd).intent ?? ""].filter(Boolean);
-  const lead = leadHereSentence(work, true, readingMessage(pd)?.id ?? null);
+  const lead = leadHereSentence(work, true, message);
   const offer = unitTakeAsk(pd);
   if (offer !== null) return unitsWordsReplyDirective(requestId, offer, work, lead);
   const step = otherwise();

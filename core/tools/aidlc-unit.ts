@@ -277,7 +277,7 @@ import {
   resolveTestingPosture,
 } from "./aidlc-testing-posture.ts";
 import { beforePerUnitBlock, memoryDirFor } from "./aidlc-graph.ts";
-import { planMadeElsewhere, spacesRoot, stateFilePath } from "./aidlc-record-core.ts";
+import { LEAD_HERE_FIELD, planMadeElsewhere, spacesRoot, stateFilePath } from "./aidlc-record-core.ts";
 import { withWorkPinned } from "./aidlc-locks.ts";
 import { approvalDecidesOpenFindings, approvalOpenFindings } from "./aidlc-review-brief.ts";
 import {
@@ -15856,11 +15856,18 @@ function leadHere(args: string[], projectDir?: string): void {
   if (!isTeamUnitOwnership(state) || homeLocation(state) === null || unitBuildOf(state) !== null) {
     fail("lead-here is for the lead's work built by teams, selected in this checkout.");
   }
-  const lead = leadsWord(pd, parseArgs(args).flags, "Carrying this work on here as its lead");
-  appendAuditEntry("LEAD_HERE_SET", { ...(lead.said !== null ? { "Person Words": lead.said } : {}), ...lead.fields }, pd);
-  // The lead's view follows in the same turn.
+  // `--off`: their word that they do not lead it here takes the earlier one back; this clone's newest row decides.
+  const parsed = parseArgs(args);
+  const off = parsed.bareFlags.has("off");
+  const lead = leadsWord(pd, parsed.flags, off ? "Not leading this work here" : "Carrying this work on here as its lead");
+  appendAuditEntry("LEAD_HERE_SET", {
+    ...(off ? { [LEAD_HERE_FIELD]: "off" } : {}), ...(lead.said !== null ? { "Person Words": lead.said } : {}), ...lead.fields,
+  }, pd);
+  // The view that follows comes in the same turn.
   console.log(JSON.stringify({
-    lead_here: true, notice: "This checkout carries the work on as yours, the lead's, from here.",
+    lead_here: !off,
+    notice: off ? "This checkout no longer carries the work on as yours, the lead's, from here."
+      : "This checkout carries the work on as yours, the lead's, from here.",
     step: `Tell the person in plain words what it reports, then run \`${aidlcToolInvocation("orchestrate")} next\` and follow what it returns.`,
   }));
 }

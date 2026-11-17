@@ -56,7 +56,7 @@ diagnostic and lifecycle routes.
 | `/aidlc unit amend <unit> --input <file> --answer <approve\|reject>` | At the lead's project, answer a team's proposed change, in your own words |
 | `/aidlc unit lead-sign-off on\|off` | At the lead's project, make each team's result wait for your sign-off, or not (off by default) |
 | `/aidlc unit plan-change keep\|take-out --tip <commit>` | At the lead's project, answer the question about a change on the shared plan that this computer did not write: keep it, or put the plan back as you last had it at your next write to it |
-| `/aidlc unit lead-here` | In a checkout that did not make the plan (the lead on another machine), record the lead's own word that they lead the work there, so the lead's questions are put there |
+| `/aidlc unit lead-here [--off]` | In a checkout that did not make the plan (the lead on another machine), record the lead's own word that they lead the work there, so the lead's questions are put there; `--off` takes that word back |
 | `/aidlc unit sign-off <unit>` | At the lead's project, sign a team's result off, in your own words |
 | `/aidlc unit turned-down <unit> --repo <repo>` | At the lead's project, send one repo of a team's Unit back to the team, with your words |
 | `/aidlc unit merged <unit> --repo <repo> [--pull-request <n>]` | At the lead's project, count one repo of a team's Unit as merged where the board does not see it, in your words; with `--pull-request <n>`, name that pull request as the Unit's build there |
@@ -988,7 +988,9 @@ In a checkout that did not make the work's plan (a fresh clone on another machin
 an answer to a team's change) are not put: the step shows the board and the Units to take, as a
 teammate's clone does. When you say you lead this work, whether or not you ask to carry it on there, the agent runs `unit
 lead-here` with your words and shows the lead's view in the same turn; it records `LEAD_HERE_SET` in that checkout's own audit,
-and from then on the lead's questions are put there.
+and from then on the lead's questions are put there. When you say you do not lead this work there, the agent runs
+`unit lead-here --off` with your words: it records the same row with `Lead Here: off`, and from then on that checkout
+gets a teammate's view again, whatever the lead's work did there in between. Nothing is written on the plan either way.
 
 ### `/aidlc unit lead-sign-off` and `/aidlc unit sign-off <unit>` - The lead's sign-off
 

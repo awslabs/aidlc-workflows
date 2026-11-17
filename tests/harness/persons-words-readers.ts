@@ -1157,7 +1157,7 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${ORCH}#unitPlanChangeAsk`]: { use: "decides", why: "the Unit-change question's separate-work answer hands the request on in a request file its command names, when the request carried words" },
   [`${ORCH}#newWorkRoutingAskDirective`]: { use: "decides", why: "as above (the routing question)", from: [`${ORCH}#intentPickPromptIfRecordsExist`, `${ORCH}#routeNext`] },
   [`${ORCH}#printDirective`]: { use: "keeps", why: "prints a step, which may carry their request", from: [`${ORCH}#jumpStepPrint`, `${ORCH}#routeNext`, `${ORCH}#unitsWordsReplyDirective`] },
-  [`${ORCH}#leadsWorkElsewhereWords`]: { use: "keeps", why: "the lead's work selected in a clone that did not make its plan: the reply for their words, passed through whole with the lead-here sentence after it" },
+  [`${ORCH}#leadsWorkElsewhereWords`]: { use: "keeps", why: "the lead's work selected in a clone that did not make its plan, or led there by the person's own word: the reply for their words, passed through whole with the lead-here sentence, or its way back, after it" },
   [`${ORCH}#unitsWordsReplyDirective`]: { use: "keeps", why: "a teammate's clone: the Units offer's own lines and commands, put to the agent beside the request id their words are kept under" },
   [`${ORCH}#jumpStepPrint`]: { use: "keeps", why: "as above, for a step that names one jump", from: [`${ORCH}#emitTypedResumeChoice`] },
   [`${ORCH}#projectTypeIsWholeRequest`]: { use: "keeps", why: "the presence shape: the line is only the project type" },

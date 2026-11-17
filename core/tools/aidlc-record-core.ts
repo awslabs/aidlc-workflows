@@ -1968,6 +1968,17 @@ export function auditShardName(projectDir: string): string {
   return name;
 }
 
+// The field of a lead-here row that takes the person's word back (`unit lead-here --off`); a row without it reads as on.
+export const LEAD_HERE_FIELD = "Lead Here";
+
+// This clone's own newest lead-here row: true where the person said they lead
+// the work here, false where they took it back; null where it has none.
+export function leadHereByWord(projectDir: string, rows: readonly AuditShardEvent[] = readAuditShardEvents(projectDir)): boolean | null {
+  const ownShard = knownAuditShardName(projectDir);
+  const last = ownShard === null ? undefined : rows.findLast((row) => row.event === "LEAD_HERE_SET" && basename(row.shard) === ownShard);
+  return last === undefined ? null : auditBlockField(last.block, LEAD_HERE_FIELD) !== "off";
+}
+
 // The work's plan was made in another checkout: every stage or gate row of the
 // work's own (one that names no Unit, as Inception's do) is in another clone's
 // shard, or this clone has written none. A team's clone stays one after it
@@ -1976,9 +1987,11 @@ export function auditShardName(projectDir: string): string {
 // clone the board or the Units it can take, never the walk the lead keeps.
 export function planMadeElsewhere(projectDir: string, rows: readonly AuditShardEvent[] = readAuditShardEvents(projectDir)): boolean {
   const ownShard = knownAuditShardName(projectDir);
-  // The person's own word in this checkout that they lead this work (`unit
-  // lead-here`, the lead on another machine): its plan is theirs here.
-  if (ownShard !== null && rows.some((row) => row.event === "LEAD_HERE_SET" && basename(row.shard) === ownShard)) return false;
+  // The person's own word in this checkout, its newest, decides whatever else
+  // its part of the record holds: they lead this work here (`unit lead-here`,
+  // the lead on another machine), or they took that back (`--off`).
+  const word = leadHereByWord(projectDir, rows);
+  if (word !== null) return !word;
   const plan = rows.filter((row) =>
     (row.event.startsWith("STAGE_") || row.event.startsWith("GATE_")) && /^\*\*Unit\*\*:/m.test(row.block) === false
   );
