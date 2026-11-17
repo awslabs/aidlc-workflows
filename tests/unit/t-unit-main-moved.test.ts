@@ -8,7 +8,7 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { auditBlockField, engineAskMark, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { auditBlockField, clearEngineAskMark, engineAskMark, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 // Read by name at each call, so a case red before these exist fails on its own.
 import * as unitTool from "../../dist/claude/.claude/tools/aidlc-unit.ts";
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
@@ -253,6 +253,67 @@ describe("the offer after the push, and its yes", () => {
     expect(String(done.json?.notice)).toBe("Merged origin/main into refunds in billing and pushed refunds.");
     expect(mergeWaits(billing)).toBe(false);
     expect(git(hosts.billing, ["show", "refunds:README.md"])).toContain("Keeps two ledgers and refunds.");
+  });
+
+  // Her word push after the clash line: the merge that line said AI-DLC would
+  // finish is finished with her git and git's own merge message, and pushed.
+  // Only that merge: one begun by hand, one still to resolve, and any other
+  // operation under way stay hers, with the line that says so.
+  const UNDER_WAY = "billing is in the middle of a merge, so nothing was committed or pushed. Finish it (git commit) or take it " +
+    "back out (git merge --abort), then I can push refunds.";
+  test("a clash she resolves, then the word push: the merge the offer began is finished with git's own message, and pushed", () => {
+    const { alice, hosts, billing } = movedAndPushed(true);
+    next(alice);
+    expect(String(run(UNIT, ["push", "--merge-main"], alice).json?.error)).toBe(CLASH);
+    writeFileSync(join(billing, "README.md"), README.replace("Keeps a ledger.", "Keeps two ledgers and refunds."));
+    git(billing, ["add", "README.md"]);
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(String(pushed.json?.notice)).toBe("Merged origin/main into refunds in billing and pushed refunds.");
+    expect(mergeWaits(billing)).toBe(false);
+    expect(git(billing, ["log", "-1", "--format=%s"])).toMatch(/^Merge /);
+    expect(git(hosts.billing, ["show", "refunds:README.md"])).toContain("Keeps two ledgers and refunds.");
+  });
+
+  test("the offer's merge with a clash still to resolve: the word push says it is under way, and nothing is finished", () => {
+    const { alice, billing } = movedAndPushed(true);
+    next(alice);
+    expect(String(run(UNIT, ["push", "--merge-main"], alice).json?.error)).toBe(CLASH);
+    const head = git(billing, ["rev-parse", "HEAD"]);
+    const plain = run(UNIT, ["push"], alice);
+    expect(plain.status).not.toBe(0);
+    expect(String(plain.json?.error)).toBe(UNDER_WAY);
+    expect(git(billing, ["rev-parse", "HEAD"])).toBe(head);
+    expect(mergeWaits(billing)).toBe(true);
+  });
+
+  test("a merge of main she began by hand, with no offer behind it: the word push says it is under way, and nothing is finished", () => {
+    const { alice, billing } = movedAndPushed(true);
+    clearEngineAskMark(alice, unitTool.mainMovedMark("refunds", pushedHead(alice)));
+    git(billing, ["fetch", "-q", "origin", "main"]);
+    expect(spawnSync("git", ["merge", "origin/main"], { cwd: billing }).status).not.toBe(0);
+    writeFileSync(join(billing, "README.md"), README.replace("Keeps a ledger.", "Keeps two ledgers and refunds."));
+    git(billing, ["add", "README.md"]);
+    const head = git(billing, ["rev-parse", "HEAD"]);
+    const plain = run(UNIT, ["push"], alice);
+    expect(plain.status).not.toBe(0);
+    expect(String(plain.json?.error)).toBe(UNDER_WAY);
+    expect(git(billing, ["rev-parse", "HEAD"])).toBe(head);
+    expect(mergeWaits(billing)).toBe(true);
+  });
+
+  test("another operation of hers under way while the offer stands (a cherry-pick): the word push says it, and nothing is finished", () => {
+    const { alice, billing } = movedAndPushed(true);
+    git(billing, ["checkout", "-q", "-b", "side", "origin/main"]);
+    writeFileSync(join(billing, "README.md"), README.replace("Keeps a ledger.", "Keeps a ledger on the side."));
+    git(billing, ["commit", "-q", "-am", "side"]);
+    git(billing, ["checkout", "-q", "refunds"]);
+    expect(spawnSync("git", ["cherry-pick", "side"], { cwd: billing }).status).not.toBe(0);
+    const head = git(billing, ["rev-parse", "HEAD"]);
+    const plain = run(UNIT, ["push"], alice);
+    expect(plain.status).not.toBe(0);
+    expect(String(plain.json?.error)).toStartWith("billing is in the middle of a cherry-pick, so nothing was committed or pushed.");
+    expect(git(billing, ["rev-parse", "HEAD"])).toBe(head);
   });
 
   test("a clash she resolves and commits herself: the same command pushes it", () => {

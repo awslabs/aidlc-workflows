@@ -160,6 +160,19 @@ describe("the lead names a pull request as a Unit's build", () => {
     expect(merges(home.dir, "checkout-ui")).toBe(1);
   });
 
+  test("already merged when the lead names it, with the lead's sign-off on: said with where git saw it, and that it waits for the sign-off", () => {
+    const home = makePlanHome();
+    expect(run(UNIT, ["lead-sign-off", "on"], home.dir).status).toBe(0);
+    const web = home.hosts["checkout-web"];
+    partnerPullRequest(web, 7, UI);
+    const squash = mergePullRequest(web, "refs/pull/7/head", "squash", "Checkout UI (#7)");
+    const named = name(home.dir, "checkout-ui", "checkout-web", "7");
+    expect(named.status, named.out).toBe(0);
+    expect(String(named.json?.notice)).toBe("Written on the plan: pull request 7 in checkout-web is the build of checkout-ui, and git shows it merged in " +
+      `checkout-web at ${squash.slice(0, 7)} "Checkout UI (#7)". checkout-ui waits for your sign-off.`);
+    expect(planWordAt(home, "checkout-ui")?.done).toBeUndefined();
+  });
+
   test("a pull request whose content main does not have is not merged", () => {
     const home = makePlanHome();
     const web = home.hosts["checkout-web"];

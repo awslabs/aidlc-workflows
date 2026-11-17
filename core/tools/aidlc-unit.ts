@@ -12852,6 +12852,17 @@ function pushUnit(args: string[], projectDir?: string,
     mergeMainIn(pd, args, unit, unitBranchOf(state, unit), !mergeMain);
     return;
   }
+  // The merge the bring-main-in offer began on their yes (its mark kept), left
+  // at a clash and resolved since: the clash line said AI-DLC finishes it and
+  // pushes, so push is that yes again, with git's own merge message. A merge
+  // begun by hand, one still to resolve, and any other operation under way meet
+  // the under-way line below.
+  const unitBranch = unitBranchOf(state, unit);
+  const offered = mainMovedRepos(pd, unit, unitBranch).filter((entry) => mainMergeWaiting(entry.dir, unitBranch, entry.into));
+  if (offered.length > 0 && offered.every((entry) => conflictFiles(entry.dir).length === 0)) {
+    mergeMainIn(pd, [], unit, unitBranch, false);
+    return;
+  }
   // The branch the person named (their team's own rule), kept for every
   // later push; else the one named before, else the Unit's name.
   if (bareFlags.has("branch")) fail(`push --branch needs the branch name the person gave. usage: ${unitUsage("push")}`);
@@ -13167,8 +13178,10 @@ function pushUnit(args: string[], projectDir?: string,
   const hostSaid: Array<{ name: string; words: string }> = [];
   // The repos a replace went in, with the commit their branch was at before.
   const replacedFrom = new Map<string, string>();
-  const newBranchWay = (fresh: string): string =>
-    `Ask the person whether to push it as a new branch, ${fresh}; on their yes, run \`${aidlcToolInvocation("unit")} push --branch ${fresh}${messageFlag}\`.`;
+  // `own`: a replace not made, whose new branch is a pull request apart from the one the branch has.
+  const newBranchWay = (fresh: string, own = false): string =>
+    `Ask the person whether to push it as a new branch, ${fresh}${own ? " (it needs a pull request of its own)" : ""}; on their yes, run ` +
+    `\`${aidlcToolInvocation("unit")} push --branch ${fresh}${messageFlag}\`.`;
   // The branch each repository merges into is never replaced: the way on is a new branch.
   const intoNames = (repo: string, dir: string, remote: string): string[] =>
     [...[integrationOf(repo, dir, remote), unitBranchInto(dir, remote)]
@@ -13198,7 +13211,7 @@ function pushUnit(args: string[], projectDir?: string,
         continue;
       }
       fail(`${unit} was not pushed: its branch ${branch} on ${remote} in ${name} is not where this build's last push left it, so it ` +
-        `was not replaced, and nothing was pushed. ${newBranchWay(`${branch}-2`)}${whereNow()}`);
+        `was not replaced, and nothing was pushed. ${newBranchWay(`${branch}-2`, true)}${whereNow()}`);
     }
   }
   for (const { repo, dir, name, remote, paths } of planned) {
@@ -13209,7 +13222,7 @@ function pushUnit(args: string[], projectDir?: string,
     const pushed = git(dir, ["push", "-u", ...(lease === undefined ? [] : [`--force-with-lease=refs/heads/${branch}:${lease}`]), remote, branch]);
     if (!pushed.ok && replace) {
       saveMark();
-      fail(`The push of ${unit} in ${name} was refused: ${pushRefusal(pushed.stderr)}. Nothing was retried. ${newBranchWay(`${branch}-2`)}${whereNow()}`);
+      fail(`The push of ${unit} in ${name} was refused: ${pushRefusal(pushed.stderr)}. Nothing was retried. ${newBranchWay(`${branch}-2`, true)}${whereNow()}`);
     }
     if (!pushed.ok) {
       // Its branch on the remote holds commits this build is not on top of (a
@@ -13757,6 +13770,12 @@ function ownTurnFor(pd: string, args: string[], what: string, type: string): { a
 // resolve, and the same command then finishes it; a merge they committed
 // themselves is pushed. Nothing of the Unit's is committed, sent to its record
 // or written in its audit. `undo` takes a merge of it waiting there back out.
+// A merge of `into` under way on the Unit's branch: the one `--merge-main` left for them.
+function mainMergeWaiting(dir: string, branch: string, into: string): boolean {
+  return gitOperationUnderWay(dir)?.what === "a merge" && git(dir, ["branch", "--show-current"]).stdout.trim() === branch &&
+    git(dir, ["merge-base", "--is-ancestor", "MERGE_HEAD", into]).ok;
+}
+
 function mergeMainIn(pd: string, args: string[], unit: string, branch: string, undo: boolean): void {
   const given = undo ? null : givenCommitMessage(pd, args, "push");
   let repos = mainMovedRepos(pd, unit, branch, !undo);
@@ -13771,9 +13790,7 @@ function mergeMainIn(pd: string, args: string[], unit: string, branch: string, u
   const moved: Array<{ name: string; from: string }> = [];
   const lines: string[] = [];
   const has = (dir: string, older: string, newer: string): boolean => git(dir, ["merge-base", "--is-ancestor", older, newer]).ok;
-  // A merge of `into` under way on the Unit's branch: the one this command left for them.
-  const merging = (dir: string, into: string): boolean => gitOperationUnderWay(dir)?.what === "a merge" &&
-    git(dir, ["branch", "--show-current"]).stdout.trim() === branch && has(dir, "MERGE_HEAD", into);
+  const merging = (dir: string, into: string): boolean => mainMergeWaiting(dir, branch, into);
   if (repos.length === 0) {
     console.log(JSON.stringify({ pushed: false, unit, notice: undo
       ? `No merge of the branch ${unit} merges into is waiting, so nothing was undone.`
@@ -16144,7 +16161,8 @@ function saidPullRequest(pd: string, unit: string, repo: string, number: number,
     ? `Written on the plan: pull request ${number} in ${repo} is the build of ${unit}, and git shows it merged in ${repo} at ` +
       `${read.commit.slice(0, 7)} "${read.subject}".` +
       (done ? ` ${unit} is recorded as merged here.`
-        : waiting.length > 0 ? ` P${prs(waiting).slice(1)} ${waiting.length === 1 ? "is" : "are"} not merged yet, so nothing is recorded here.` : "")
+        : waiting.length > 0 ? ` P${prs(waiting).slice(1)} ${waiting.length === 1 ? "is" : "are"} not merged yet, so nothing is recorded here.`
+        : signOffOn ? ` ${unit} waits for your sign-off.` : "")
     : read.kind === "not-cloned"
       ? `${written} ${repo} is not cloned in this workspace, so I cannot read that pull request yet` +
         (address ? `. Say if you want me to clone ${repo} here; the next step then reads it.` : "; once it is cloned here, the next step reads it.")

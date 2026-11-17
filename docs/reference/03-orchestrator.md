@@ -1003,8 +1003,10 @@ the branch it merges into, as just fetched, changed the Unit's own files
 is `ask_type: unit-main-moved` once for that push, and its choice runs `unit push
 --merge-main` (`mergeMainIn`): the branch fetched with the person's git, every
 repository checked before any is merged, `git merge --no-edit` with their git, a
-clash left under way for them (`--merge-main` again finishes it, `--undo-merge`
-takes it back out on their word), then a plain push; nothing of the Unit's is
+clash left under way for them (`--merge-main` again finishes it, and so does a
+plain `unit push` once nothing is left to resolve, with git's own merge message,
+while that push's mark is kept; `--undo-merge` takes it back out on their word),
+then a plain push; nothing of the Unit's is
 committed, sent to its record or written in its audit. When a take's record
 write was refused for want of access (never a host rule on the record's refs
 alone) and the person's clone of that record's repository has one remote not at

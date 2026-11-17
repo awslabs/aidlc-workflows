@@ -83,7 +83,7 @@ const SETTERS = `run \`${SETTER} solo --message <id>\` when this session builds 
 const WHO_BUILDS_NOTE = "When the person has said who builds the Units before AI-DLC asks it, record it from their " +
   `message, and where it is not clear which, leave it for AI-DLC's own question: ${SETTERS}`;
 const WHO_BUILDS_CHANGE_NOTE = "When the person says who builds the Units, record it from their message, and where it is " +
-  `not clear which, leave it as it is: ${SETTERS}`;
+  `not clear which, leave the record as it is: ${SETTERS}`;
 const saysHandout = (d: Directive) =>
   (d.change_notices ?? []).some((line) => line === HANDOUT_LINE || line === SKELETON_HANDOUT_LINE);
 

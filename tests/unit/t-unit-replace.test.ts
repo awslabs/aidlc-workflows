@@ -316,7 +316,7 @@ describe("the replace of a pushed Unit branch", () => {
     expect(refused.status).not.toBe(0);
     expect(String(refused.json?.error)).toStartWith("refunds was not pushed: its branch refunds on origin in billing is not where this " +
       "build's last push left it, so it was not replaced, and nothing was pushed. Ask the person whether to push it as a new branch, " +
-      "refunds-2; on their yes, run `");
+      "refunds-2 (it needs a pull request of its own); on their yes, run `");
     expect(tipOn(hosts.billing)).toBe(billing);
     expect(tipOn(hosts["checkout-api"])).toBe(api);
   });
@@ -328,7 +328,8 @@ describe("the replace of a pushed Unit branch", () => {
     expect(refused.status).not.toBe(0);
     const said = String(refused.json?.error);
     expect(said).toStartWith("The push of refunds in billing was refused: ");
-    expect(said).toContain("Nothing was retried. Ask the person whether to push it as a new branch, refunds-2; on their yes, run `");
+    expect(said).toContain("Nothing was retried. Ask the person whether to push it as a new branch, refunds-2 (it needs a pull request " +
+      "of its own); on their yes, run `");
     expect(said).not.toContain("--replace");
   });
 

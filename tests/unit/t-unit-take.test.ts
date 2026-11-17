@@ -1731,7 +1731,7 @@ describe("builds in one workspace", () => {
   test("no repository of the build cloned here: the sentence ends at the other layout, with nothing above to use", () => {
     const { wave } = buildAtItsWave(() => {});
     expect(String(wave.brief_note)).toContain(
-      "Here, the repositories billing and checkout-api are not cloned here. A path for a repository in this work's documents may be from another layout.",
+      "The repositories billing and checkout-api are not cloned here. A path for a repository in this work's documents may be from another layout.",
     );
     expect(String(wave.brief_note)).not.toContain("use the ones above");
   });

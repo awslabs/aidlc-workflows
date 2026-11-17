@@ -1263,10 +1263,11 @@ function reposHereSentence(projectDir: string): string | null {
     return `${i === 0 ? "the repository " : ""}${repo} is ${at}`;
   });
   const missing = repos.filter((repo) => !here.includes(repo));
-  const lead = here.length > 0 ? "" : missing.length === 1 ? "the repository " : "the repositories ";
+  const lead = here.length > 0 ? "" : missing.length === 1 ? "The repository " : "The repositories ";
   const notHere = missing.length === 0 ? [] : [`${lead}${joinRepoNames(missing)} ` +
     `${missing.length === 1 ? "is" : "are"} not cloned here`];
-  return `Here, ${[...(where.length === 0 ? [] : [joinRepoNames(where)]), ...notHere].join("; ")}. A path for a repository ` +
+  const said = [...(where.length === 0 ? [] : [joinRepoNames(where)]), ...notHere].join("; ");
+  return `${where.length === 0 ? said : `Here, ${said}`}. A path for a repository ` +
     `in this work's documents may be from another layout${where.length === 0 ? "" : ": use the ones above"}.`;
 }
 
@@ -6102,7 +6103,7 @@ function whoBuildsNote(projectDir: string, phase: string): string | null {
       "it is not clear which, leave it for AI-DLC's own question"
     : phase === "inception" || (phase === "construction" && !picked && constructionStaffingPassedOver(projectDir))
       ? "When the person says who builds the Units, record it from their message, and where it is not clear which, " +
-        "leave it as it is"
+        "leave the record as it is"
       : null;
   if (when === null) return null;
   const setter = `${aidlcToolInvocation("state")} set-unit-ownership`;

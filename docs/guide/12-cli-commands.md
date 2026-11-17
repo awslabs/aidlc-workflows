@@ -896,7 +896,8 @@ offers once to bring main in. On yes, `--merge-main` fetches main, merges it int
 the Unit's branch with your own git (your hooks, signing and identity; git's own
 merge message, or yours when you give one) and pushes the branch again; nothing
 is rewritten or forced. A clash is left for you to resolve, and `--merge-main`
-then finishes and pushes it; `--undo-merge` takes the waiting merge back out. A
+then finishes and pushes it, as a plain push does once it is resolved (with git's
+own merge message); `--undo-merge` takes the waiting merge back out. A
 change of yours in a file main changes, or a file of yours where main adds one,
 stops it before anything is merged, with the way on. On the workspace's own
 repository, a file of AI-DLC's record (a rules file, `repos.json`) that has a
