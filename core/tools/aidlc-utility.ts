@@ -2589,6 +2589,16 @@ To get started:
   // git cannot tell about, says nothing here.
   const checkedIn = checkInApplies(projectDir, content) ? checkInStatus(checkInState(projectDir, content)) : null;
   const checkedInLine = checkedIn === null ? "" : `${checkedIn}\n`;
+  // What git status shows in the lead's clones of the work's repos once Build
+  // and Test has run, read only here and at that gate, each row only when it
+  // has something to say: its label is chosen here. It reads the active work's
+  // record, so another work's status says nothing of it.
+  const active = resolveWorkflowSelection(projectDir, { bind: false });
+  const notInMain = acrossRepos && active.intent === selection.intent && active.space === selection.space
+    ? (await import("./aidlc-unit.ts")).changesNotInMain(projectDir, content)
+    : null;
+  const notInMainLines = ([["Not committed:", notInMain?.files], ["Not pushed:", notInMain?.commits]] as const)
+    .map(([label, said]) => (said ? `${label.padEnd(15)} ${said}\n` : "")).join("");
   // Work an older AI-DLC recorded, brought up to this one in place: said here
   // on purpose, never in chat.
   const upgrade = stateUpgradeRecord(projectDir, selection.intent ?? undefined, selection.space);
@@ -2610,7 +2620,7 @@ Completion:     ${completed}/${total} stages${takesBuildUnits ? " here" : ""} ($
 
 Phase Progress:
 ${phaseProgress}
-${validityOutput ? `${validityOutput}\n` : ""}${lastLine}${nextLine}${alsoOpen}${arrivedLine}${yoursLine}${checkedInLine}${upgradedLine}`;
+${validityOutput ? `${validityOutput}\n` : ""}${lastLine}${nextLine}${alsoOpen}${arrivedLine}${yoursLine}${checkedInLine}${notInMainLines}${upgradedLine}`;
   process.stdout.write(board === null ? output : `${output}\n${board}\n`);
 }
 

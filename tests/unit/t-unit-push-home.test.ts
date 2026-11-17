@@ -1417,6 +1417,112 @@ describe("a team's done Unit that the lead's Build and Test sends back", () => {
   });
 });
 
+// A live run (the lead's Build and Test on Claude Code, across two repos a
+// team had merged into): the fix the lead asked for at the Build Failure
+// changed files in both of the lead's clones, the rerun passed and the lead
+// approved, and nothing AI-DLC said named them; only the agent's own summary
+// said in passing that they still needed committing.
+describe("the lead's Build and Test with changes in the work's repos", () => {
+  const changed = "The changes here in checkout-api and billing are not committed or pushed, so main there does not have them: " +
+    "in checkout-api, the 2 changed files here (changed: src/refunds.ts; new: test/refunds.test.ts); in billing, the 1 changed " +
+    "file here (changed: lib/refund.ts).";
+  const ahead = "In checkout-api, 1 commit here is not pushed, so main there does not have it. In billing, 1 commit here is " +
+    "not pushed, so main there does not have it.";
+  const notices = (step: Record<string, unknown>): string[] => (step.change_notices ?? []) as string[];
+  const saysNone = (step: Record<string, unknown>): boolean =>
+    !notices(step).some((line) => line.includes("not committed or pushed") || line.includes("not pushed, so"));
+  const chat = (id: string): NodeJS.ProcessEnv => ({ ...ENV, AIDLC_SESSION_OVERRIDE: id });
+  const status = (dir: string): string => run(UTILITY, ["status"], dir).out;
+
+  // Build and Test's outputs written and its gate opened, as the stage ends.
+  function gateOpened(dir: string, env: NodeJS.ProcessEnv = ENV): Record<string, unknown> {
+    const stage = join(dir, "aidlc", "spaces", "default", "intents", HOME_RECORD, "construction", "build-and-test");
+    mkdirSync(stage, { recursive: true });
+    for (const file of ["build-instructions.md", "build-and-test-summary.md", "test-results.md", "cross-unit-traceability.md"]) {
+      writeFileSync(join(stage, file), `# ${file}\n\nRun on the lead's checkout.\n`);
+    }
+    // The stage's checks run first on these stand-in documents; the report again opens the gate, as their step says.
+    for (let report = 0; report < 2; report++) {
+      const opened = run(ORCH, ["report", "--stage", "build-and-test", "--result", "awaiting-approval"], dir, env);
+      expect(opened.status, opened.out).toBe(0);
+      if (opened.json?.next_stage !== undefined) return opened.json;
+    }
+    throw new Error("Build and Test's gate never opened");
+  }
+
+  // Changes git shows in the lead's clones: tracked files in both repos, a new
+  // file the repaired Unit's manifest claims, and a by-product nobody claims.
+  function changedInBoth(dir: string): void {
+    writeFileSync(join(dir, "checkout-api", "src", "refunds.ts"), "export const refunds = 3;\n");
+    writeFileSync(join(dir, "billing", "lib", "refund.ts"), "export const refund = 3;\n");
+    mkdirSync(join(dir, "checkout-api", "test"), { recursive: true });
+    writeFileSync(join(dir, "checkout-api", "test", "refunds.test.ts"), "test.todo('refunds');\n");
+    mkdirSync(join(dir, "billing", "coverage"), { recursive: true });
+    writeFileSync(join(dir, "billing", "coverage", "lcov.info"), "TN:\n");
+    const manifest = join(dir, "aidlc", "spaces", "default", "intents", HOME_RECORD, "construction", "refunds", "code-generation");
+    mkdirSync(manifest, { recursive: true });
+    writeFileSync(join(manifest, "source-manifest.json"), `${JSON.stringify({
+      stage: "code-generation", unit: "refunds", version: 1,
+      writes: [{ repo: "checkout-api", path: "src/refunds.ts" }, { repo: "checkout-api", path: "test/refunds.test.ts" },
+        { repo: "billing", path: "lib/refund.ts" }],
+    }, null, 2)}\n`);
+  }
+
+  test("its gate and status name each repo's changes from git until they are pushed; the gate once a chat; its approval runs as before", () => {
+    const { home } = twoMergedAtBuildAndTest();
+    changedInBoth(home.dir);
+    const lead = chat("t-unit-push-home-lead");
+    expect(notices(gateOpened(home.dir, lead))).toContain(changed);
+    // Said once in the chat while it is the same; another chat hears it, and status says it every time.
+    expect(saysNone(next(home.dir, lead)), JSON.stringify(notices(next(home.dir, lead)))).toBe(true);
+    expect(notices(next(home.dir, chat("t-unit-push-home-other")))).toContain(changed);
+    expect(status(home.dir)).toContain(`Not committed:  ${changed}\n`);
+    expect(status(home.dir)).toContain(`Not committed:  ${changed}\n`);
+    // Committed in both and not pushed: what git status shows of it is said.
+    for (const repo of ["checkout-api", "billing"]) {
+      git(join(home.dir, repo), ["add", "-A", "--", ":!coverage"]);
+      git(join(home.dir, repo), ["commit", "-q", "-m", "after Build and Test"]);
+    }
+    expect(notices(next(home.dir, lead))).toEqual(expect.arrayContaining([ahead]));
+    expect(saysNone(next(home.dir, lead))).toBe(true);
+    expect(status(home.dir)).toContain(`Not pushed:     ${ahead}\n`);
+    expect(status(home.dir)).not.toContain("Not committed:");
+    // A file changed again since: both are said, the list being new.
+    writeFileSync(join(home.dir, "billing", "lib", "refund.ts"), "export const refund = 4;\n");
+    expect(notices(next(home.dir, lead))).toContain("The changes here in billing are not committed or pushed, so main there does not " +
+      "have them: the 1 changed file here (changed: lib/refund.ts). " + ahead);
+    // Committed and pushed: nothing is said.
+    git(join(home.dir, "billing"), ["commit", "-q", "-am", "and again"]);
+    for (const repo of ["checkout-api", "billing"]) git(join(home.dir, repo), ["push", "-q", "origin", "HEAD:main"]);
+    expect(saysNone(next(home.dir, chat("t-unit-push-home-third")))).toBe(true);
+    expect(status(home.dir)).not.toMatch(/Not committed:|Not pushed:/);
+    // Said, it never holds the approval.
+    writeFileSync(join(home.dir, "billing", "lib", "refund.ts"), "export const refund = 5;\n");
+    const approved = run(ORCH, ["report", "--stage", "build-and-test", "--result", "approved", "--user-input", "Approve"], home.dir, lead);
+    expect(approved.json?.kind, approved.out).toBe("done");
+  });
+
+  test("repos whose Units merge into different branches: each branch is named", () => {
+    const { home } = twoMergedAtBuildAndTest();
+    changedInBoth(home.dir);
+    // billing's host keeps its work on develop.
+    const billing = join(home.dir, "billing");
+    git(billing, ["update-ref", "refs/remotes/origin/develop", "refs/remotes/origin/main"]);
+    git(billing, ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/develop"]);
+    expect(notices(gateOpened(home.dir))).toContain(changed.replace("so main there does not have them",
+      "so main in checkout-api and develop in billing do not have them"));
+  });
+
+  test("only by-products or AI-DLC's own record changed: nothing is said", () => {
+    const { home } = twoMergedAtBuildAndTest();
+    mkdirSync(join(home.dir, "billing", "coverage"), { recursive: true });
+    writeFileSync(join(home.dir, "billing", "coverage", "lcov.info"), "TN:\n");
+    const opened = gateOpened(home.dir);
+    expect(saysNone(opened), JSON.stringify(opened)).toBe(true);
+    expect(status(home.dir)).not.toMatch(/Not committed:|Not pushed:/);
+  });
+});
+
 // refunds and checkout-ui both in checkout-api for payments: one clone builds both.
 const TWO_BUILDS_PLAN = `# Unit dependencies
 

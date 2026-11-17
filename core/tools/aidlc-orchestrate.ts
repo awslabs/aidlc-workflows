@@ -673,6 +673,7 @@ import {
   planByPullRequestDetail,
   planShareWords,
   catchUpOffer,
+  changesNotInMain,
   planWait,
   planWaitLine,
   unitsAskedHereForShare,
@@ -17233,6 +17234,7 @@ function applyGateOnlyShape(
     // Counted as the gate is reported: a Unit's own only at a team Unit gate.
     addRevisionCycle(directive, projectDir, directive.stage, directive.unit_gate ? unit : null);
     addApproveAcceptsLine(directive, projectDir, gateNode, directive.unit_gate ? unit : null);
+    addNotInMainLine(projectDir, gateNode);
   }
   directive.protocol_modules = (directive.protocol_modules ?? []).filter(
     (module) =>
@@ -23668,6 +23670,22 @@ function addReviewCheckOffer(
   else reply.narration = reply.narration ? `${reply.narration}\n${found.offer}` : found.offer;
 }
 
+// Build and Test's gate says what git status shows in the lead's clones of the
+// work's repos (changesNotInMain) as a notice, once in a chat while it reads
+// the same: its narration went unsaid at that gate, and status keeps it. A
+// line, never a check: what cannot be read says nothing.
+function addNotInMainLine(projectDir: string, node: GraphStage): void {
+  if (node.slug !== "build-and-test") return;
+  let said: ReturnType<typeof changesNotInMain>;
+  try {
+    const state = loadStateFileIfPresent(projectDir);
+    said = state === null ? null : changesNotInMain(projectDir, state);
+  } catch {
+    return;
+  }
+  if (said !== null) sayWithStepOnce(projectDir, [said.files, said.commits].filter(Boolean).join(" "));
+}
+
 // What Approve accepts at a reviewed gate with open findings, and the other
 // ways to decide one, said as the gate's last line for the person: inside the
 // Review brief it was lost whenever the agent retold the brief in its own
@@ -26269,6 +26287,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         addContextParkOffer(gateReply, pd);
         addRevisionCycle(gateReply, pd, slug, unit);
         addApproveAcceptsLine(gateReply, pd, node, unit);
+        addNotInMainLine(pd, node);
       }
     }
     emit(gateReply);

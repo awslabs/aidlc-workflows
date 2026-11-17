@@ -161,6 +161,7 @@ import {
   DEFAULT_SPACE,
   isGitRepoDir,
   repoDir,
+  repoIsWorkspace,
   resolveWorkflowSelection,
   selectIntentForSession,
   sessionsDir,
@@ -6840,6 +6841,59 @@ function catchUp(projectDir?: string): void {
     notice: lines.join(" "),
     step: "Tell the person in plain words what it reports, then run next.",
   }));
+}
+
+// Build and Test runs on the lead's clones of the work's repos, so what git
+// status shows there (a fix asked for at its Build Failure, say) is in no
+// repository's main: the files not committed, and the commits its branch has
+// ahead of its upstream. Said with its gate and in status while git shows
+// them, never what made them; a branch with no upstream shows no count, so its
+// commits say nothing. A new file counts only where a Unit's source manifest
+// here claims it, as a Unit's publish takes one (workToCommit), so a test
+// run's by-products are not named. The workspace's own repo is left to its
+// share, and AI-DLC's record to its Checked in line.
+export function changesNotInMain(projectDir: string, stateContent: string): { files: string | null; commits: string | null } | null {
+  if (!isTeamUnitOwnership(stateContent) || homeLocation(stateContent) === null || unitBuildOf(stateContent) !== null) return null;
+  const started = parseCheckboxes(stateContent).find((row) => row.slug === "build-and-test");
+  if (started === undefined || started.state === "pending") return null;
+  const pd = resolveProjectDir(projectDir);
+  const claims = [...unitDependencies(pd).keys()].flatMap((unit) => unitSourceClaims(pd, unit));
+  const files: Array<{ repo: string; into: string; words: string }> = [];
+  const commits: string[] = [];
+  for (const repo of intentRepos(pd)) {
+    const dir = repoDir(pd, repo);
+    if (repoIsWorkspace(pd, repo) || !isGitRepoDir(dir)) continue;
+    let into: string;
+    try {
+      const remote = repositoryRemote(dir);
+      if (remote === null) continue;
+      into = repoIntegration(dir, remote).slice(remote.length + 1);
+    } catch {
+      continue;
+    }
+    const work = workToCommit(dir);
+    const kept = work.paths.filter((path) => !path.startsWith("aidlc/") &&
+      (!work.untracked.includes(path) || claims.some((claim) => sourceClaimCovers(sourcePathKey(repo, path), claim))));
+    // Said as the workspace's words: given the list, they read nothing in the clone.
+    const words = workToCommitWords(pd, undefined, { ...work, paths: kept, untracked: work.untracked.filter((path) => kept.includes(path)) });
+    if (words !== null) files.push({ repo, into, words });
+    const counted = git(dir, ["rev-list", "--count", "@{upstream}..HEAD"]);
+    const count = counted.ok ? Number.parseInt(counted.stdout.trim(), 10) || 0 : 0;
+    if (count > 0) {
+      commits.push(`In ${repo}, ${count} commit${count === 1 ? " here is" : "s here are"} not pushed, so ${into} there does not have ` +
+        `${count === 1 ? "it" : "them"}.`);
+    }
+  }
+  if (files.length === 0 && commits.length === 0) return null;
+  const filesLine = (): string => {
+    const branches = files.every((entry) => entry.into === files[0].into)
+      ? `${files[0].into} there does`
+      : `${joinNames(files.map((entry) => `${entry.into} in ${entry.repo}`))} do`;
+    const named = files.length === 1 ? files[0].words : files.map((entry) => `in ${entry.repo}, ${entry.words}`).join("; ");
+    return `The changes here in ${joinNames(files.map((entry) => entry.repo))} are not committed or pushed, so ${branches} not ` +
+      `have them: ${named}.`;
+  };
+  return { files: files.length === 0 ? null : filesLine(), commits: commits.length === 0 ? null : commits.join(" ") };
 }
 
 // The code Units built at the lead's project wrote in this repository (their
