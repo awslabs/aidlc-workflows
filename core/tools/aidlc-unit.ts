@@ -7513,10 +7513,17 @@ function shareMain(args: string[], projectDir?: string): void {
     // Committed on a branch of their own, which reaches main their own way: done.
     if (own === null) {
       given?.spend();
+      // Where the plan is its own ref, this committed AI-DLC's record and shared no plan.
+      const place = sharesPlanRef(pd) && refused.off !== undefined ? planPlaceForShare(pd) : null;
+      const yes = `${aidlcInvocation()} unit share --plan`;
       console.log(JSON.stringify({
         shared: false,
-        notice: `${refused.reason} ${planWayOn(branch)}`,
-        step: "Tell the person in plain words what it reports, then end your turn.",
+        notice: place === null || !("repo" in place)
+          ? `${refused.reason} ${planWayOn(branch)}`
+          : `This checkout is on ${refused.off!.current}, not ${branch}, so AI-DLC's record of this work is committed here and nothing ` +
+            `is pushed. The plan was not shared by this: I can share it in ${place.repo} when you say so, or you can run \`${yes}\`.`,
+        step: "Tell the person in plain words what it reports, then end your turn." +
+          (place === null || !("repo" in place) ? "" : ` When they say yes, run \`${yes}\` and tell them in plain words what it reports.`),
       }));
       return;
     }

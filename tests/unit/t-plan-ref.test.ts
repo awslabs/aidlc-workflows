@@ -271,7 +271,7 @@ describe("nothing else moves", () => {
     const shared = run(UNIT, ["share"], home.dir);
     expect(shared.status, shared.out).toBe(0);
     expect(shared.json?.shared).toBe(false);
-    expect(String(shared.json?.notice)).toStartWith("This checkout is on my-work, not main.");
+    expect(String(shared.json?.notice)).toStartWith("This checkout is on my-work, not main, so AI-DLC's record of this work is committed here and nothing is pushed.");
     expect(git(home.remote, ["rev-parse", "refs/heads/main"])).toBe(main);
     expect(git(home.remote, ["for-each-ref", "refs/heads/my-work"])).toBe("");
     const status = git(home.dir, ["status", "--porcelain", "--", "app.txt", "draft.txt"]);
@@ -1562,6 +1562,19 @@ describe("at the lead's own work whose plan is its own ref, the lines that named
   test("silent where the plan agrees with the answer here", () => {
     const home = makePlanHome();
     expect(said(next(home.dir, chat("lead-chat")))).toEqual([]);
+  });
+
+  test("a share without --plan on a branch of the lead's own says the plan was not shared by it, with the offer, and hands the agent the command for the yes", () => {
+    const home = makePlanHomeWithRemote();
+    git(home.dir, ["checkout", "-q", "-b", "my-work"]);
+    writeFileSync(join(home.dir, "draft.txt"), "mine\n");
+    const shared = run(UNIT, ["share"], home.dir);
+    expect(shared.status, shared.out).toBe(0);
+    const notice = String(shared.json?.notice);
+    expect(notice).toStartWith("This checkout is on my-work, not main, so AI-DLC's record of this work is committed here and nothing is pushed. " +
+      "The plan was not shared by this: I can share it in checkout-api when you say so, or you can run `");
+    expect(notice).toEndWith(" unit share --plan`.");
+    expect(String(shared.json?.step)).toMatch(/When they say yes, run `[^`]* unit share --plan`/);
   });
 });
 
