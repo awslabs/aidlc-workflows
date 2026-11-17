@@ -783,10 +783,12 @@ import {
   documentInputLooksSecret,
   GREENFIELD_RE_SKIP_LABEL,
   greenfieldWorkspaceGainedCode,
+  NO_WORK_LINE,
   plansReopeningFinishedWork,
   projectTypeRecordedAsPersons,
   scanSummary,
   skipsBeforeReopen,
+  workHereRows,
 } from "./aidlc-utility.ts";
 import { checkboxIsUnitProjection, ledgerStageActivity } from "./aidlc-doctor-bundle.ts";
 import {
@@ -5198,11 +5200,21 @@ function unselectedWordsReplyDirective(
   // Finished work here too: the words may ask to go back to one of its stages,
   // read here because the question of which work comes before any plan step.
   finished?: FinishedWorkHere,
+  // The lead's work here made elsewhere: never in the pick list, named in its own clause with its sentence.
+  lead?: { works: string[]; sentence: string },
 ): PrintDirective {
   const orchestrate = aidlcToolInvocation("orchestrate");
   const backToFinished = finished === undefined ? "" : ` ${finishedWorkReading(finished, "")}`;
+  const leads = lead === undefined ? "" : `This clone has the lead's work (${lead.works.join(", ")}), built by teams; the work itself is ` +
+    `not picked here. ${lead.sentence} `;
+  if (lead !== undefined && work.length === 0) {
+    return printDirective(`${leads}Read the person's words. If they only ask what is here, run \`${orchestrate} next\` with nothing after ` +
+      `it. Otherwise (new work of their own, or you cannot tell), run \`${orchestrate} next --request ${requestId}\` and follow what it ` +
+      "returns: the engine kept their words. When their words describe new work, add `--propose <plan>` to that command, the plan " +
+      `below that fits the work, so the question can name it. Plans: ${planChoicesLine(pd)}`);
+  }
   const step = printDirective(
-    `Work is in progress here (${work.join(", ")}), and none is selected in this chat. Read the person's words. If ` +
+    `${leads}Work is in progress here (${work.join(", ")}), and none is selected in this chat. Read the person's words. If ` +
       "they only ask for the work to go on (such as \"carry on\" or \"proceed\"), run " +
       `\`${orchestrate} next\` with nothing after it: it asks them which piece to pick up. If their words name exactly ` +
       "one of the pieces and ask for it to go on, or ask something of one piece only (answer what it asks, redo or " +
@@ -5216,19 +5228,45 @@ function unselectedWordsReplyDirective(
   return finished === undefined ? step : saysWaitingLines(step);
 }
 
+// The person who says they lead the lead's work in a checkout that did not
+// make its plan: one sentence for the agent wherever such a reply is put, with
+// the exact commands (`unit lead-here` takes their words from the message the
+// reply read, else their latest in this chat) and the work selected first where
+// it is not. `works`: the lead's work here made elsewhere; "" for none.
+const LEAD_HERE_WORDS = "they lead this work, whether or not they ask to carry it on here (leading a team or a Unit of it is not that)";
+function leadHereRun(works: string[], selected: boolean, message: string | null): string {
+  const pick = selected ? "" : `\`${aidlcDispatcherInvocation("intent")} switch ${works.length === 1 ? works[0] : "<name>"}\`` +
+    `${works.length === 1 ? "" : ` with the one they lead (${works.join(", ")})`}, then `;
+  return `run ${pick}\`${aidlcToolInvocation("unit")} lead-here${message === null ? "" : ` --message ${message}`}\`, and follow what it returns`;
+}
+function leadHereSentence(works: string[], selected: boolean, message: string | null): string {
+  return works.length === 0 ? "" : `If they say ${LEAD_HERE_WORDS}, ${leadHereRun(works, selected, message)}.`;
+}
+
+// The lead's work in the space this clone did not make the plan of: what pickableHere leaves out.
+function leadsWorkMadeElsewhere(pd: string, here: NonNullable<ReturnType<typeof unselectedRecords>>): string[] {
+  const pickable = new Set(pickableHere(pd, here).map(({ selector }) => selector));
+  return here.selectable.filter(({ selector }) => !pickable.has(selector)).map(({ selector }) => selector);
+}
+
 // Their words with the lead's work selected in a checkout that did not make
 // its plan (planMadeElsewhere): read against the Units offer, as in a clone
-// with nothing selected, never sent on as the lead's work. Null elsewhere.
-function leadsWorkElsewhereWords(pd: string, stateContent: string, requestId: string): PrintDirective | null {
-  if (homeLocation(stateContent) === null || unitBuildOf(stateContent) !== null || !planMadeElsewhere(pd)) return null;
+// with nothing selected, never sent on as the lead's work; with no offer, the
+// reply `otherwise` gives, with the lead's sentence. `otherwise` elsewhere.
+function leadsWorkElsewhereWords(pd: string, stateContent: string, requestId: string, otherwise: () => PrintDirective): PrintDirective {
+  if (homeLocation(stateContent) === null || unitBuildOf(stateContent) !== null || !planMadeElsewhere(pd)) return otherwise();
+  const work = [engineSelection(pd).intent ?? ""].filter(Boolean);
+  const lead = leadHereSentence(work, true, readingMessage(pd)?.id ?? null);
   const offer = unitTakeAsk(pd);
-  return offer === null ? null : unitsWordsReplyDirective(requestId, offer, [engineSelection(pd).intent ?? ""].filter(Boolean));
+  if (offer !== null) return unitsWordsReplyDirective(requestId, offer, work, lead);
+  const step = otherwise();
+  return lead === "" ? step : { ...step, message: `${step.message} ${lead}` };
 }
 
 // The person's words in a teammate's clone of the lead's work built by teams,
 // after the Units offer: read against its choices, with their commands; the
 // lead's work itself is picked only on the lead's own word that they lead it.
-function unitsWordsReplyDirective(requestId: string, offer: AskDirective | PrintDirective, work: string[]): PrintDirective {
+function unitsWordsReplyDirective(requestId: string, offer: AskDirective | PrintDirective, work: string[], lead: string): PrintDirective {
   const orchestrate = aidlcToolInvocation("orchestrate");
   const said = offer.kind === "ask" ? String(offer.question ?? "") : String(offer.narration ?? "");
   const choices = offer.kind !== "ask" ? "" : (offer.choices ?? [])
@@ -5241,9 +5279,7 @@ function unitsWordsReplyDirective(requestId: string, offer: AskDirective | Print
       `${carryOnNote((offer as { carry_on?: CarryOnCommand[] }).carry_on).trimStart()} `.trimStart() +
       "If they ask for a Unit the offer does not list as one to start (waiting or done), tell them in one line " +
       "where it stands, from what the offer says, and run nothing. " +
-      `If they only ask what is here, run \`${orchestrate} next\` with nothing after it. If they say they lead this work and ask ` +
-      `to carry it on here, run \`${aidlcDispatcherInvocation("intent")} switch <name>\` with its name, then \`${aidlcToolInvocation("unit")} ` +
-      `lead-here ${unitWordsArg("lead-here")}\` with their words. Otherwise (new work of ` +
+      `If they only ask what is here, run \`${orchestrate} next\` with nothing after it. ${lead === "" ? "" : `${lead} `}Otherwise (new work of ` +
       `their own, or you cannot tell), run \`${orchestrate} next --request ${requestId}\` and follow what it returns: the ` +
       "engine kept their words.",
   );
@@ -15938,9 +15974,15 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     // the lead's own checkout "Carry on ... here, as the lead" stays among the
     // choices.
     const take = here !== null && here.selectable.length > 0 && !takeOfferedOnWords(pd) ? unitTakeAsk(pd) ?? soloElsewhereAsk(pd) : null;
+    // The lead's work here made elsewhere, and the message these words came in.
+    const leadWorks = here === null ? [] : leadsWorkMadeElsewhere(pd, here);
+    const message = readingMessage(pd)?.id ?? null;
     if (take !== null) {
       noteTakeOfferedOnWords(pd);
-      emit(take);
+      // First words that already say they lead this work are read for that before the offer is put.
+      emit(leadWorks.length === 0 ? take : Object.assign({}, take, {
+        board_note: `If the words they already gave say ${LEAD_HERE_WORDS}, do not put this question: ${leadHereRun(leadWorks, false, message)}.`,
+      }));
       return;
     }
     // In a space with nothing of its own to pick up (a team's space before its
@@ -15951,7 +15993,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       const look = unitTakeAsk(pd);
       if (look?.kind === "ask") {
         const words = saveReadingQuestion(pd, flags.intent, "", "routing", { space: engineSelection(pd).space, targets: [] });
-        emit(unitsWordsReplyDirective(words.id, look, []));
+        emit(unitsWordsReplyDirective(words.id, look, [], ""));
         return;
       }
     }
@@ -15965,8 +16007,9 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
         ...(pickable.length > 0 ? { pick: true as const } : {}),
       });
       emit(offer !== null
-        ? unitsWordsReplyDirective(words.id, offer, here.selectable.map(({ selector }) => selector))
-        : unselectedWordsReplyDirective(words.id, pd, pickable.map(({ selector }) => selector), finishedUnselectedWork(pd)));
+        ? unitsWordsReplyDirective(words.id, offer, here.selectable.map(({ selector }) => selector), leadHereSentence(leadWorks, false, message))
+        : unselectedWordsReplyDirective(words.id, pd, pickable.map(({ selector }) => selector), finishedUnselectedWork(pd),
+          leadWorks.length === 0 ? undefined : { works: leadWorks, sentence: leadHereSentence(leadWorks, false, message) }));
       return;
     }
   }
@@ -16283,8 +16326,8 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       const pushField = getField(stateContent, UNIT_PUSH_FIELD)?.trim();
       const pushDue = build !== null && buildWaitsForPush(stateContent) && /^- \[x\] code-generation\s/m.test(stateContent) &&
         pushField !== "pushed" && !(pushField === "unsent" && resendHeld(pd, stateContent, build.unit, buildRecordRepo(pd, build)) !== null) ? build.unit : undefined;
-      emit(leadsWorkElsewhereWords(pd, stateContent, words.id) ??
-        reentryReplyDirective(words.id, pd, undo, workNamesHere(pd, selection), activeWorkLabel(stateContent), pushDue));
+      emit(leadsWorkElsewhereWords(pd, stateContent, words.id, () =>
+        reentryReplyDirective(words.id, pd, undo, workNamesHere(pd, selection), activeWorkLabel(stateContent), pushDue)));
       return;
     }
   }
@@ -16319,7 +16362,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     );
     emit(unitScope
       ? reentryReplyDirective(words.id, pd, "", workNamesHere(pd, selection), activeWorkLabel(stateContent))
-      : leadsWorkElsewhereWords(pd, stateContent, words.id) ?? teamWordsReplyDirective(words.id, pd));
+      : leadsWorkElsewhereWords(pd, stateContent, words.id, () => teamWordsReplyDirective(words.id, pd)));
     return;
   }
   // A Unit's build its lead turned down or sent back waits for the team's way
@@ -19707,9 +19750,8 @@ function emitTeamUnitMajorRunStage(
   if (teamHome && !isReadOnlyEngineProbe() && planMadeElsewhere(projectDir)) {
     const take = unitTakeAsk(projectDir);
     emit(lineEndingTurn(teamHomeBoardText(projectDir, stateContent), take?.kind === "ask" ? [{ question: take.question, choices: take.choices ?? [] }] : [],
-      `This checkout did not make this work's plan, so the lead's own questions are not put here. If the person says they lead ` +
-        `this work and ask to carry it on here, run \`${aidlcToolInvocation("unit")} lead-here ${unitWordsArg("lead-here")}\` ` +
-        `with their words, then \`${aidlcToolInvocation("orchestrate")} next\`.`));
+      `This checkout did not make this work's plan, so the lead's own questions are not put here. If the person says ` +
+        `${LEAD_HERE_WORDS}, ${leadHereRun([], true, null)}.`));
     return;
   }
   const { overview, results, heldElsewhere, keepsWalk } = teamHomeClaims(projectDir, teamHome);
@@ -26552,11 +26594,15 @@ function handleTeamBoard(
       )
       : intents.filter((intent) => intent.active);
     if (matches.length !== 1 || !matches[0].dirName || !matches[0].uuid) {
-      throw new Error(
-        selectedIntent
-          ? `Cannot resolve exactly one intent "${selectedIntent}" in space "${selectedSpace}".`
-          : `Space "${selectedSpace}" has no uniquely resolved active intent; pass --intent <intent>.`,
-      );
+      // In plain words, by what the board found, the name as given, then the work this project has as status lists it.
+      const rows = workHereRows(pd, defaultSelection.space);
+      const space = JSON.stringify(selectedSpace);
+      const why = selectedIntent ? `No work with the record ${selectedIntent} is in a space named ${space}.`
+        : !listSpaces(pd).some((entry) => entry.name === selectedSpace) ? `This project has no space named ${space}.`
+        : matches.length === 0 ? `The space ${space} has no work in progress.`
+        : matches.length > 1 ? `The space ${space} has more than one piece of work in progress.`
+        : `The board could not pick one piece of work for ${space}.`;
+      throw new Error(`${why} Work in this project: ${rows.length === 0 ? NO_WORK_LINE : rows.join("; ")}`);
     }
     const intent = matches[0];
     const intentDir = intent.dirName!;

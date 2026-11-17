@@ -2063,25 +2063,34 @@ function codeScannedClause(projectDir: string, intent: string | undefined, space
   }
 }
 
+// Status's line for a project with no work at all (the team board says it too).
+export const NO_WORK_LINE = "No active AI-DLC workflow found.";
+
+// Each piece of work in the space that is not archived, by name and where it
+// stands, as status lists it (the team board names them too).
+export function workHereRows(projectDir: string, space: string): string[] {
+  const shown = listIntents(projectDir, space, null).filter((intent) => intent.dirName !== null && !isArchivedIntent(intent));
+  const finished = new Set(finishedWork(projectDir, space, null).map((intent) => intent.dirName));
+  const states = new Map((workToPickUp(projectDir, space, null) ?? []).map(({ intent, state }) => [intent.dirName, state]));
+  return shown.map((intent) => {
+    const record = isSafeIntentRecordName(intent.dirName) ? intent.dirName : JSON.stringify(intent.dirName);
+    const label = intentDisplayLabel(intent);
+    const where = finished.has(intent.dirName) ? "finished" : workStanding(states.get(intent.dirName) ?? "") || "in progress";
+    return `${label === record ? record : `${label} (record ${record})`}: ${where}`;
+  });
+}
+
 // The work here while none is selected in this conversation (a teammate's
 // clone, a chat that has not joined it): each piece by name and where it
 // stands, then the two ways on. Null when no record is here.
 function workHereStatus(projectDir: string, space: string): string | null {
   const present = listIntents(projectDir, space, null).filter((intent) => intent.dirName !== null);
-  const shown = present.filter((intent) => !isArchivedIntent(intent));
-  if (shown.length === 0) return null;
-  const finished = new Set(finishedWork(projectDir, space, null).map((intent) => intent.dirName));
-  const states = new Map((workToPickUp(projectDir, space, null) ?? []).map(({ intent, state }) => [intent.dirName, state]));
-  const lines = shown.map((intent) => {
-    const record = isSafeIntentRecordName(intent.dirName) ? intent.dirName : JSON.stringify(intent.dirName);
-    const label = intentDisplayLabel(intent);
-    const where = finished.has(intent.dirName) ? "finished" : workStanding(states.get(intent.dirName) ?? "") || "in progress";
-    return `  ${label === record ? record : `${label} (record ${record})`}: ${where}\n`;
-  });
-  const archived = present.length - shown.length;
+  const rows = workHereRows(projectDir, space);
+  if (rows.length === 0) return null;
+  const archived = present.length - rows.length;
   const entry = entrySkillInvocation();
   return `No work is selected in this conversation. Work in this project${space === DEFAULT_SPACE ? "" : ` (space "${space}")`}:\n` +
-    lines.join("") +
+    rows.map((row) => `  ${row}\n`).join("") +
     (archived > 0 ? `  (${archived} archived; ${entry} intent list --all shows ${archived === 1 ? "it" : "them"})\n` : "") +
     `\nTo carry on with one, or go back to one of its stages: ${entry} intent <record>\n` +
     `To start new work: ${entry} "build the auth service"\n`;
@@ -2127,7 +2136,7 @@ async function handleStatus(projectDir: string, flags: Record<string, string>): 
   if (!existsSync(sp)) {
     process.stdout.write(
       (selection.intent === null ? workHereStatus(projectDir, selection.space) : null) ??
-      `No active AI-DLC workflow found.
+      `${NO_WORK_LINE}
 
 To get started:
   ${entrySkillInvocation()} "build the auth service"   Describe what to build (creates the workflow record automatically)

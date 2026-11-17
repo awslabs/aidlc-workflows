@@ -986,8 +986,9 @@ changes kept git from making it.
 
 In a checkout that did not make the work's plan (a fresh clone on another machine), the lead's own questions (a sign-off,
 an answer to a team's change) are not put: the step shows the board and the Units to take, as a
-teammate's clone does. When you say you lead this work and want to carry it on there, the agent runs `unit lead-here` with
-your words; it records `LEAD_HERE_SET` in that checkout's own audit, and from then on the lead's questions are put there.
+teammate's clone does. When you say you lead this work, whether or not you ask to carry it on there, the agent runs `unit
+lead-here` with your words and shows the lead's view in the same turn; it records `LEAD_HERE_SET` in that checkout's own audit,
+and from then on the lead's questions are put there.
 
 ### `/aidlc unit lead-sign-off` and `/aidlc unit sign-off <unit>` - The lead's sign-off
 

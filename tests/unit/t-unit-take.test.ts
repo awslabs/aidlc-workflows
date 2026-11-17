@@ -356,8 +356,9 @@ describe("a team member's clone of the home's workspace", () => {
     expect(String(words.message)).not.toContain("--pick");
     expect(String(words.message)).toContain(takeCommand(plan, "refunds"));
     expect(String(words.message)).not.toContain("--team");
-    // The lead's work is switched to only on their own word that they lead it.
-    expect(String(words.message)).toContain("If they say they lead this work and ask to carry it on here, run");
+    // The lead's work is switched to only on their own word that they lead it, which a team's lead's is not.
+    expect(String(words.message)).toContain("If they say they lead this work, whether or not they ask to carry it on here (leading a team or a " +
+      "Unit of it is not that), run");
   });
 
   // A live run on Codex (the second teammate): "I'm carrying it on" after the
@@ -551,6 +552,110 @@ describe("a team member's clone of the home's workspace", () => {
     expect(ready.ask_type, JSON.stringify(ready)).toBe("unit-take");
     expect((ready.choices as Array<{ label: string }>).map((choice) => choice.label)).toContain("Start reporting");
     expect(ready.change_notices ?? []).toEqual([]);
+  });
+});
+
+describe("the lead who says so in a clone that did not make the plan", () => {
+  // The lead's own checkout made the plan and shared it in app; `moved`: then
+  // moved it to web, after this second clone of theirs was made.
+  function leadsSecondClone(moved: boolean) {
+    const home = makeHome({ repos: { app: codeHost("app"), web: codeHost("web") } });
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    asLeadsOwnCheckout(home.dir);
+    commitAll(home.dir, "teams");
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    planShared(home);
+    const laptop = cloneOf(home.remote, "lead");
+    if (moved) {
+      const went = run(UNIT, ["share", "--plan", "--repo", "web"], home.dir);
+      expect(went.status, went.out).toBe(0);
+    }
+    return { home, laptop };
+  }
+  // The person's message through the human-turn hook, then `next` with it, as the agent runs it. The message
+  // store keeps whole seconds, so each message goes in a second of its own, as a person's typing does.
+  const says = (dir: string, chat: string, words: string) => {
+    Bun.sleepSync(1000 - (Date.now() % 1000) + 20);
+    expect(hook(dir, personsChat(chat), { hook_event_name: "UserPromptSubmit", session_id: chat, prompt: words }).status).toBe(0);
+    const step = run(ORCH, ["next", ...words.split(" ")], dir, personsChat(chat));
+    expect(step.status, step.out).toBe(0);
+    return step;
+  };
+  const LEAD = "they lead this work, whether or not they ask to carry it on here (leading a team or a Unit of it is not that)";
+  const I_LEAD = "Not me, I'm the lead, I won't take a Unit here.";
+  // The commands the reply hands, run as given: the switch where it names one, then lead-here.
+  const liftAsHanded = (dir: string, chat: string, text: string) => {
+    const pick = /intent switch (\S+)`/.exec(text)?.[1];
+    if (pick !== undefined) expect(run(UTILITY, ["intent", "switch", pick], dir, personsChat(chat)).status).toBe(0);
+    const message = /lead-here --message (\S+)`/.exec(text)?.[1];
+    expect(message, text).toBeDefined();
+    const lifted = run(UNIT, ["lead-here", "--message", message!], dir, personsChat(chat));
+    expect(lifted.status, lifted.out).toBe(0);
+    expect(String(lifted.json?.step)).toEndWith(" next` and follow what it returns.");
+    expect(auditBlockField(readAuditShardEvents(dir, HOME).findLast((row) => row.event === "LEAD_HERE_SET")?.block ?? "", "Person Words"))
+      .toBe(I_LEAD);
+    return lifted;
+  };
+
+  test("their words that they lead this work, without asking to carry it on here, hand the exact commands; the lift keeps their words and the lead's view follows", () => {
+    const { laptop } = leadsSecondClone(false);
+    const chat = "t-unit-take-i-lead";
+    const first = says(laptop, chat, "where do things stand?");
+    expect(first.json?.ask_type).toBe("unit-take");
+    // First words that already say so are read for it before the offer is put.
+    expect(String(first.json?.board_note)).toStartWith(`If the words they already gave say ${LEAD}, do not put this question: run \``);
+    expect(String(first.json?.board_note)).toContain(` intent switch ${HOME}\`, then \``);
+    const text = String(says(laptop, chat, I_LEAD).json?.message);
+    expect(text).toContain(`If they say ${LEAD}, run \``);
+    expect(text).toContain(` intent switch ${HOME}\`, then \``);
+    expect(text).not.toContain("--request-file");
+    liftAsHanded(laptop, chat, text);
+    expect(JSON.stringify(next(laptop, personsChat(chat)))).not.toContain("Taking a Unit starts it as your team's own piece of work here");
+  });
+
+  test("the plan moved after this clone was made: the second words in one chat name the lead's work in its own clause, never an empty list", () => {
+    const { laptop } = leadsSecondClone(true);
+    const chat = "t-unit-take-i-lead-moved";
+    says(laptop, chat, "where do things stand?");
+    const text = String(says(laptop, chat, I_LEAD).json?.message);
+    expect(text).toStartWith(`This clone has the lead's work (${HOME}), built by teams; the work itself is not picked here. If they say ${LEAD}, run \``);
+    expect(text).not.toContain("()");
+    liftAsHanded(laptop, chat, text);
+  });
+
+  test("the work selected and the plan moved: the selected work's words carry the sentence, with nothing to switch", () => {
+    const { laptop } = leadsSecondClone(true);
+    const chat = "t-unit-take-i-lead-selected";
+    expect(run(UTILITY, ["intent", "switch", HOME], laptop, personsChat(chat)).status).toBe(0);
+    says(laptop, chat, "where do things stand?");
+    const text = String(says(laptop, chat, I_LEAD).json?.message);
+    expect(text).toContain(`If they say ${LEAD}, run \``);
+    expect(text).not.toContain("intent switch");
+    liftAsHanded(laptop, chat, text);
+  });
+
+  test("a team's own workspace never hears the sentence", () => {
+    const { alice } = refundsTakenHere();
+    expect(says(alice, "t-unit-take-not-the-lead", "what is ready for us now?").out).not.toContain("lead-here");
+  });
+
+  test("the board asked for a space or a record it cannot find says so in plain words, with the work this project has", () => {
+    const { laptop } = leadsSecondClone(false);
+    const board = (...args: string[]) => {
+      const shown = run(ORCH, ["team-board", ...args], laptop);
+      expect(shown.status, "a lookup that found nothing still fails").not.toBe(0);
+      return String(shown.json?.error ?? shown.out);
+    };
+    const work = `Work in this project: fixture (record ${HOME}): `;
+    expect(board("--space", "web")).toStartWith(`This project has no space named "web". ${work}`);
+    expect(board("--space", "web", "--intent", HOME)).toStartWith(`No work with the record ${HOME} is in a space named "web". ${work}`);
+    expect(run(UTILITY, ["space", "create", "payments"], laptop).status).toBe(0);
+    expect(board("--space", "payments")).toStartWith(`The space "payments" has no work in progress. ${work}`);
+    // A project with no work at all: status's own line, never an empty list.
+    const bare = tempDir("no-work");
+    git(bare, ["init", "-q"]);
+    const none = run(ORCH, ["team-board", "--space", "web"], bare);
+    expect(String(none.json?.error ?? none.out)).toBe("This project has no space named \"web\". Work in this project: No active AI-DLC workflow found.");
   });
 });
 

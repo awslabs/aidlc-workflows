@@ -15858,7 +15858,11 @@ function leadHere(args: string[], projectDir?: string): void {
   }
   const lead = leadsWord(pd, parseArgs(args).flags, "Carrying this work on here as its lead");
   appendAuditEntry("LEAD_HERE_SET", { ...(lead.said !== null ? { "Person Words": lead.said } : {}), ...lead.fields }, pd);
-  console.log(JSON.stringify({ lead_here: true, notice: "This checkout carries the work on as yours, the lead's, from here." }));
+  // The lead's view follows in the same turn.
+  console.log(JSON.stringify({
+    lead_here: true, notice: "This checkout carries the work on as yours, the lead's, from here.",
+    step: `Tell the person in plain words what it reports, then run \`${aidlcToolInvocation("orchestrate")} next\` and follow what it returns.`,
+  }));
 }
 
 function leadSignOffSetting(args: string[], projectDir?: string): void {
