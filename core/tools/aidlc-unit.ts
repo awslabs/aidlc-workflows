@@ -7237,6 +7237,7 @@ function writeSharedPlan(pd: string, message?: string, named?: string, carry?: t
   const skeletonHere = teamSkeletonOn(readStateFile(pd));
   // The plan commit names what it carries and from where, as its line does.
   let carried: string | null = null;
+  let carriedOne = false;
   const what = (tip: PlanJson | null): string => {
     added = tip === null ? [] : unitsNotIn(pd, tip.units.map((unit) => unit.name));
     released = tip !== null && tip.skeleton !== null && !skeletonHere ? tip.skeleton : null;
@@ -7260,6 +7261,7 @@ function writeSharedPlan(pd: string, message?: string, named?: string, carry?: t
         if (mine === null || missing.length === 0) return built;
         carried = missing.slice(0, 3).map((word) => word.what).join(", ") + (missing.length > 3 ? ` and ${missing.length - 3} more` : "") +
           ` carried over from ${mine.plan_repo.name}`;
+        carriedOne = missing.length === 1;
         return withWordsOf(pd, mine, built);
       },
     }),
@@ -7295,7 +7297,7 @@ function writeSharedPlan(pd: string, message?: string, named?: string, carry?: t
         ? `The plan is shared in ${repo}${place.branch === undefined ? "" : ` on the branch ${place.branch.ref.slice("refs/heads/".length)}. ` +
           `${PLAN_BRANCH_IS(repo)} ${BRANCH_PATTERN.slice(0, -1)}`}. AI-DLC sends no notice of it: the teams hear it from you. A team whose workspace has no ` +
           `${repo} needs this address: ${address}`
-        : carried !== null ? `The plan in ${repo} has them now, as you gave them.`
+        : carried !== null ? `The plan in ${repo} has ${carriedOne ? "it" : "them"} now, as you gave ${carriedOne ? "it" : "them"}.`
         : added.length > 0 || released !== null
           ? [...(added.length > 0 ? [`The plan in ${repo} has ${namesInProse(added)} now.`] : []),
             ...(released !== null ? [`The plan in ${repo} has your answer now${stillWaitedOn(released) ? "." : `: no Unit in it waits on ${released}.`}`] : [])].join(" ")
@@ -7363,39 +7365,56 @@ function messageWayIn(pd: string, notice: string, named?: string): SharedPlan {
 // The lead's words on its Units in `mine` (this computer's copy) that the plan
 // `there` lacks, each as its own command writes it again, for the take it was
 // given for (wordForTake): a word of an older take than the plan there has is
-// no one's now. The same decision there, in any words, is not missing; where
-// the plan there says otherwise, its own sentence (`otherwise`), and nothing of
-// that Unit is written: the lead's next word settles it.
+// no one's now. The same decision there is not missing (a turn-down or a
+// send-back in other words is offered, its words being what the builder fixes).
+// Where the plan there says the opposite, its own sentence (`otherwise`), and
+// nothing of that Unit is written: the lead's next word settles it. Where it
+// has another turn-down, an offer to write this computer's in its place
+// (`offers`), the plan as it is the default.
 function wordsNotOn(mine: PlanJson, there: PlanJson): {
   missing: Array<{ said: string; what: string; unit: string; put: (word: UnitWord) => UnitWord; text?: Amendment & { blob: string } }>;
   otherwise: string[];
+  offers: Array<{ unit: string; put: (word: UnitWord) => UnitWord }>;
 } {
   const missing: ReturnType<typeof wordsNotOn>["missing"] = [];
   const otherwise: string[] = [];
+  const offers: ReturnType<typeof wordsNotOn>["offers"] = [];
   for (const unit of mine.units) {
     const was = unitWordIn(mine, unit.name);
     const held = unitWordIn(there, unit.name);
     if (was.generation === undefined || (held.generation !== undefined && held.generation > was.generation)) continue;
     const now: UnitWord = held.generation === was.generation ? held : {};
     const name = unit.name;
-    const [from, told] = [missing.length, otherwise.length];
+    const from = missing.length;
+    let opposite = false;
+    const stands = (sentence: string): void => {
+      otherwise.push(sentence);
+      opposite = true;
+    };
     const fromTest = (entry?: UnitWord["turned_down"]): boolean => entry?.from === "build-and-test";
-    const downSaid = (entry: NonNullable<UnitWord["turned_down"]>, yours: boolean): string => fromTest(entry)
-      ? `${yours ? "your send-back of " : ""}${name}${yours ? "" : " sent back"} from Build and Test`
-      : `${yours ? "your turn-down of " : ""}${name}${yours ? "" : " turned down"} in ${entry.repo}`;
+    const downThere = (entry: NonNullable<UnitWord["turned_down"]>): string =>
+      fromTest(entry) ? `${name} sent back from Build and Test` : `${name} turned down in ${entry.repo}`;
+    const downMine = (entry: NonNullable<UnitWord["turned_down"]>, of: string): string =>
+      fromTest(entry) ? `your send-back of ${of} from Build and Test` : `your turn-down of ${of} in ${entry.repo}`;
     const { signoff, turned_down: down, open_again: open } = was;
     if (signoff !== undefined && now.signoff === undefined) {
-      if (now.turned_down !== undefined) otherwise.push(`The plan there has ${downSaid(now.turned_down, false)}, where this computer has your sign-off: say which stands.`);
+      if (now.turned_down !== undefined) stands(`The plan there has ${downThere(now.turned_down)}, and this computer has your sign-off of it: say which stands.`);
       else missing.push({ said: `your sign-off of ${name}`, what: `sign-off of ${name}`, unit: name, put: (word) => ({ ...word, signoff }) });
     }
     if (down !== undefined && (fromTest(down) || down.repo !== "")) {
-      const same = now.turned_down !== undefined && fromTest(now.turned_down) === fromTest(down) && (fromTest(down) || now.turned_down.repo === down.repo);
-      const yours = downSaid(down, true);
-      if (now.signoff !== undefined) otherwise.push(`The plan there has ${name} signed off, where this computer has ${yours}: say which stands.`);
-      else if (now.turned_down !== undefined && !same) {
-        otherwise.push(`The plan there has ${downSaid(now.turned_down, false)}, where this computer has ${yours}: say which stands.`);
-      } else if (now.turned_down === undefined) {
-        missing.push({ said: yours, what: yours.replace(/^your /, ""), unit: name, put: (word) => ({ ...word, turned_down: down }) });
+      const held = now.turned_down;
+      const put = (word: UnitWord): UnitWord => ({ ...word, turned_down: down });
+      if (held === undefined && now.signoff !== undefined) {
+        stands(`The plan there has ${name} signed off, and this computer has ${downMine(down, "it")}: say which stands.`);
+      } else if (held === undefined) {
+        missing.push({ said: downMine(down, name), what: downMine(down, name).replace(/^your /, ""), unit: name, put });
+      } else if (fromTest(held) !== fromTest(down) || (!fromTest(down) && held.repo !== down.repo)) {
+        otherwise.push(`The plan there has ${downThere(held)}. I have ${downMine(down, "it")} as you gave it: say if you want it written there in its place.`);
+        offers.push({ unit: name, put });
+      } else if (held.words !== down.words) {
+        otherwise.push(`The plan there has ${downThere(held)} in other words. I have your ${fromTest(down) ? "send-back" : "turn-down"} of it as you gave it: ` +
+          "say if you want it written there in its place.");
+        offers.push({ unit: name, put });
       }
     }
     for (const entry of was.said_merged ?? []) {
@@ -7412,7 +7431,7 @@ function wordsNotOn(mine: PlanJson, there: PlanJson): {
         missing.push({ said: `your ${how(entry.answer)} of ${change}`, what: `${how(entry.answer)} of ${change}`, unit: name,
           put: (word) => ({ ...word, answers: [...(word.answers ?? []), entry] }) });
       } else if (kept.answer !== entry.answer) {
-        otherwise.push(`The plan there has ${change} ${kept.answer === "approved" ? "approved" : "turned down"}, where this computer has your ` +
+        stands(`The plan there has ${change} ${kept.answer === "approved" ? "approved" : "turned down"}, and this computer has your ` +
           `${how(entry.answer)} of it: say which stands.`);
       }
     }
@@ -7425,15 +7444,15 @@ function wordsNotOn(mine: PlanJson, there: PlanJson): {
         missing.push({ said: `the ${input} as you approved ${them} for ${name}`, what: `approved ${input} for ${name}`, unit: name, text: entry,
           put: (word) => ({ ...word, amendments: [...(word.amendments ?? []), entry] }) });
       } else if (kept.blob !== entry.blob) {
-        otherwise.push(`The plan there has another text of the ${input} for ${name}, where this computer has the one you approved: say which stands.`);
+        stands(`The plan there has an approved text of the ${input} for ${name} that differs from the one you approved on this computer: say which stands.`);
       }
     }
     if (open !== undefined && now.open_again === undefined) {
       missing.push({ said: `your opening of ${name} again`, what: `opening of ${name} again`, unit: name, put: (word) => ({ ...word, open_again: open }) });
     }
-    if (otherwise.length > told) missing.splice(from);
+    if (opposite) missing.splice(from);
   }
-  return { missing, otherwise };
+  return { missing, otherwise, offers };
 }
 
 // The plan with the lead's words from `mine` it lacks put on, as given: their
@@ -7650,7 +7669,10 @@ function movePlan(pd: string, start: PlanPlace, to: PlanPlace, message: string |
       const mine = planWrittenHereNotOn(pd, oid, from.id8);
       const { missing, otherwise } = mine === null ? { missing: [], otherwise: [] } : wordsNotOn(mine, now);
       const said = [...followedLines, line ?? ""].join(" ").trim();
-      if (missing.length === 0) return { repo: to.repo, address, commit: oid, said: [said, ...otherwise].join(" ") };
+      if (missing.length === 0) {
+        const named = otherwise.map((sentence, at) => (at === 0 ? sentence.replace(/^The plan there /, `The plan in ${to.repo} `) : sentence));
+        return { repo: to.repo, address, commit: oid, said: [said, ...named].join(" ") };
+      }
       const named = missing.slice(0, 10).map((word) => word.said).join(", ") + (missing.length > 10 ? `, and ${missing.length - 10} more` : "");
       const one = missing.length === 1;
       return {

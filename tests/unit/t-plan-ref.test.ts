@@ -1232,8 +1232,9 @@ describe("a repository that moved hosts: the plan taken over where it is now", (
       const moved = moveTo(home.dir, "billing");
       expect(moved.status, moved.out).toBe(0);
       // Where the plan there says otherwise, its own sentence, and the Unit is left for the lead's next word.
-      const otherwise = "The plan there has refunds turned down in billing, where this computer has your sign-off: say which stands. The plan " +
-        "there has reporting signed off, where this computer has your turn-down of reporting in billing: say which stands.";
+      // With no list, the first sentence names the place.
+      const otherwise = `The plan ${later ? "in billing" : "there"} has refunds turned down in billing, and this computer has your sign-off of it: ` +
+        "say which stands. The plan there has reporting signed off, and this computer has your turn-down of it in billing: say which stands.";
       expect(String(moved.json?.notice)).toBe(`The plan of ${registryOf(home.dir)[0].slug} moved to billing (${billing}); this computer writes it there ` +
         `now. ${later ? "" : "This is not on the plan in billing: your count of checkout-ui as merged in checkout-web. I have it as you gave it: say " +
           "if you want it written there. "}${otherwise}`);
@@ -1251,7 +1252,7 @@ describe("a repository that moved hosts: the plan taken over where it is now", (
         expect(run(UNIT, ["plan-change", "keep", "--tip", /--tip (\S+)/.exec(keep)![1]], home.dir).status).toBe(0);
         carried = run(UNIT, ["share", "--plan", "--carry-words"], home.dir, personsChat(chat));
       }
-      if (!later) expect(carried.json?.notice, carried.out).toBe("The plan in billing has them now, as you gave them.");
+      if (!later) expect(carried.json?.notice, carried.out).toBe("The plan in billing has it now, as you gave it.");
       const word = (name: string) => planAt(billing, ref).units.find((unit) => unit.name === name)?.word as Record<string, unknown>;
       // Nothing the plan there holds is written over: byte for byte as it was.
       expect(before("refunds")).toBe(refundsThere);
@@ -1281,7 +1282,7 @@ describe("a repository that moved hosts: the plan taken over where it is now", (
     plan.version += 1;
     plan.plan_repo = { name: "billing", address: billing };
     const input = plan.inputs[0].path;
-    // Words of its own there: the other answer to the same proposal, a send-back in other words, a word of an older take.
+    // Words of its own there: the other answer to the same proposal, the send-back in other words, a word of an older take.
     plan.units.find((unit) => unit.name === "refunds")!.word = {
       generation: 1, answers: [{ input, at: "2026-11-17T01:20:00Z", answer: "turned down", words: "no" }],
     };
@@ -1313,7 +1314,7 @@ describe("a repository that moved hosts: the plan taken over where it is now", (
         answers: [{ input, at: "2026-11-17T01:23:00Z", answer: "approved", words: "fine" }],
         amendments: [{ input, at: "2026-11-17T01:23:00Z", words: "fine", blob }],
       };
-      // The same send-back there in other words: not missing.
+      // The same send-back there in other words: offered, the plan as it is the default.
       old.units.find((unit) => unit.name === "reporting")!.word = {
         generation: 1, turned_down: { repo: "", from: "build-and-test", heads: {}, words: "the totals fail the build", at: "2026-11-17T01:22:00Z" },
         said_merged: [{ repo: "billing", words: "merged by hand", at: "2026-11-17T01:24:00Z" }],
@@ -1328,7 +1329,8 @@ describe("a repository that moved hosts: the plan taken over where it is now", (
     expect(String(moved.json?.notice)).toEndWith(`These are not on the plan in billing: your turn-down of checkout-ui in checkout-web, your approval ` +
       `of checkout-ui's change to the ${name}, the ${name} as you approved ${them} for checkout-ui, your opening of checkout-ui again, your count ` +
       `of reporting as merged in billing. I have them as you gave them: say if you want them written there. The plan there has refunds's change ` +
-      `to the ${name} turned down, where this computer has your approval of it: say which stands.`);
+      `to the ${name} turned down, and this computer has your approval of it: say which stands. The plan there has reporting sent back from Build ` +
+      "and Test in other words. I have your send-back of it as you gave it: say if you want it written there in its place.");
     const chat = "t-plan-ref-words-yes-kinds";
     expect(hook(home.dir, personsChat(chat), { hook_event_name: "UserPromptSubmit", session_id: chat, prompt: "yes" }).status).toBe(0);
     let carried = run(UNIT, ["share", "--plan", "--carry-words"], home.dir, personsChat(chat));
@@ -1340,7 +1342,7 @@ describe("a repository that moved hosts: the plan taken over where it is now", (
     expect(carried.json?.notice, carried.out).toBe("The plan in billing has them now, as you gave them.");
     const after = planAt(billing, ref);
     const word = (unit: string) => after.units.find((entry) => entry.name === unit)?.word as Record<string, unknown>;
-    // What the plan there held is left byte for byte: the Unit with the other answer whole, the same send-back in other words.
+    // What the plan there held is left byte for byte: the Unit with the other answer whole, the send-back the yes to the list does not take.
     expect(JSON.stringify(word("refunds"))).toBe(refundsThere);
     expect(JSON.stringify({ ...word("reporting"), said_merged: undefined })).toBe(reportingThere);
     expect(word("checkout-ui")).toEqual({
@@ -1356,6 +1358,12 @@ describe("a repository that moved hosts: the plan taken over where it is now", (
     expect(git(billing, ["log", "-1", "--format=%s", ref])).toEndWith(`: turn-down of checkout-ui in checkout-web, approval of checkout-ui's ` +
       `change to the ${name}, approved ${name} for checkout-ui and 2 more carried over from checkout-api`);
     expect(JSON.stringify(after.units.map((unit) => unit.word))).not.toContain('"words":"yes"');
+    // Answered that what the plan has stands: a later look and a later share say neither the sentence nor the offer again.
+    const stands = "t-plan-ref-words-plan-stands";
+    expect(hook(home.dir, personsChat(stands), { hook_event_name: "UserPromptSubmit", session_id: stands, prompt: "what the plan has stands" }).status).toBe(0);
+    const later = `${JSON.stringify(next(home.dir))} ${String(share(home.dir).json?.notice)}`;
+    expect(later).not.toContain("say which stands");
+    expect(later).not.toContain("in its place");
   });
 
   test("a team's result the lead signed off at the old place, then the move and the yes: the lead's look reads that take signed off and counts it done", () => {
@@ -1393,7 +1401,7 @@ describe("a repository that moved hosts: the plan taken over where it is now", (
     const chat = "t-plan-ref-words-yes-take";
     expect(hook(home.dir, personsChat(chat), { hook_event_name: "UserPromptSubmit", session_id: chat, prompt: "yes" }).status).toBe(0);
     const carried = run(UNIT, ["share", "--plan", "--carry-words"], home.dir, personsChat(chat));
-    expect(carried.json?.notice, carried.out).toBe("The plan in billing has them now, as you gave them.");
+    expect(carried.json?.notice, carried.out).toBe("The plan in billing has it now, as you gave it.");
     // The lead's look counts the merged result done only on a sign-off of that take.
     next(home.dir);
     expect(planAt(billing, ref).units.find((unit) => unit.name === "refunds")?.word).toMatchObject({ done: true, signoff: { words: "looks right" } });
