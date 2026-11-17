@@ -10,6 +10,10 @@
 //
 //   - a ready plan is asked for by the engine (summary, plan path, three
 //     choices), and nothing the agent writes can answer it;
+//   - in work with several repositories, one line under the summary names the
+//     repositories the plan names files in, and leaves the fingerprint, the
+//     approval and a file asked before it (with an answer written there) as
+//     they are; nothing in one-repository work;
 //   - the hook keeps the person's reply, from any chat on this work; the agent
 //     reads it and records their choice (an exact pick like "1" the hook records
 //     itself, and the agent cannot overrule it);
@@ -3580,6 +3584,119 @@ describe("the question's summary", () => {
       .toEqual(["Builds: x"]);
     expect(planSummaryLines("# P\n\n- [ ] a\n- [x] b\n", "run it"))
       .toEqual(["2 plan steps", "Tests: see unit-test-instructions.md"]);
+  });
+});
+
+// In work with several repositories the question says which of them the plan
+// names files in, in one line the tool writes from the plan's own paths: a
+// summary line is cut at 200 characters, and a repository named after the cut
+// would not be on screen. In work with one repository nothing is added.
+describe("in work with several repositories the question names the plan's repositories", () => {
+  const CUT_TOUCHES = "api/src/routes/orders.ts, api/src/routes/payments.ts, api/src/services/orders-service.ts, " +
+    "api/src/services/payments-service.ts, api/src/models/order.ts, api/src/models/payment.ts, " +
+    "api/src/db/migrations.ts, web/src/pages/Checkout.tsx";
+
+  function reposProject(repos: string[]): string {
+    const proj = project();
+    const registry = join(intentsDirOf(proj), "intents.json");
+    const rows = JSON.parse(readFileSync(registry, "utf-8"));
+    rows[0].repos = repos;
+    writeFileSync(registry, `${JSON.stringify(rows, null, 2)}\n`);
+    for (const repo of repos) {
+      mkdirSync(join(proj, repo, "src"), { recursive: true });
+      writeFileSync(join(proj, repo, "src", "base.ts"), "export const base = true;\n");
+    }
+    return proj;
+  }
+
+  function askedWith(proj: string, touches: string): Emitted {
+    writePlan(proj, "", null, touches);
+    const directive = next(proj);
+    expect(directive.ask_type, JSON.stringify(directive)).toBe("plan-approval");
+    return directive;
+  }
+
+  function fingerprint(proj: string): string | undefined {
+    return /^\[Approval Fingerprint\]: (\S+)$/m.exec(questions(proj))?.[1];
+  }
+
+  test("two repositories: the line is under the cut summary, whole, in the question, its prose and its record", () => {
+    const proj = reposProject(["api", "web"]);
+    const asked = askedWith(proj, CUT_TOUCHES);
+    const cut = `Touches: ${CUT_TOUCHES}`.slice(0, 197) + "...";
+    expect(cut).not.toContain("web/");
+    expect(asked.plan_approval.targets?.[0].summary).toEqual([
+      "Builds: slugify for titles", cut, "Tests: 3 unit tests", "Names files in api and web.",
+    ]);
+    const prose = (asked as unknown as Record<string, unknown>).numbered_prose_question as string;
+    expect(prose).toContain(`- ${cut}\n- Tests: 3 unit tests\n- Names files in api and web.\n`);
+    expect(questions(proj)).toContain(`- ${cut}\n- Tests: 3 unit tests\n- Names files in api and web.\n\nFull plan: `);
+  });
+
+  test("each form of the line, and nothing where the plan names no file in a repository", () => {
+    const line = (repos: string[], touches: string) =>
+      askedWith(reposProject(repos), touches).plan_approval.targets?.[0].summary.slice(3);
+    expect(line(["api", "web", "worker"], "api/src/a.ts, web/src/b.tsx, worker/src/c.ts"))
+      .toEqual(["Names files in api, web and worker."]);
+    expect(line(["api", "web"], "api/src/a.ts, api/src/b.ts")).toEqual(["Names files in api."]);
+    expect(line(["api", "web"], "api\\src\\a.ts, web\\src\\b.tsx")).toEqual(["Names files in api and web."]);
+    expect(line(["api", "web"], "api/src/a.ts, deploy/compose.yaml, package.json")).toEqual(["Names files in api."]);
+    expect(line(["api", "web"], "deploy/compose.yaml, package.json")).toEqual([]);
+  });
+
+  test("one repository: the question and its record are as they always were", () => {
+    for (const repos of [["api"], []]) {
+      const proj = repos.length > 0 ? reposProject(repos) : project();
+      const asked = askedWith(proj, "api/src/a.ts, api/src/b.ts");
+      expect(asked.plan_approval.targets?.[0].summary).toEqual([
+        "Builds: slugify for titles", "Touches: api/src/a.ts, api/src/b.ts", "Tests: 3 unit tests",
+      ]);
+      expect(questions(proj)).toContain("- Tests: 3 unit tests\n\nFull plan: ");
+    }
+  });
+
+  // The approval is of the plan, by its fingerprint, never of the question's
+  // lines: the same plan asked with and without the line has one fingerprint,
+  // and approving it records that fingerprint and builds.
+  test("the plan's fingerprint and its approval do not depend on the line", () => {
+    const one = reposProject(["api"]);
+    askedWith(one, CUT_TOUCHES);
+    const two = reposProject(["api", "web"]);
+    askedWith(two, CUT_TOUCHES);
+    expect(questions(two)).toContain("- Names files in api and web.");
+    expect(fingerprint(two)).toBeDefined();
+    expect(fingerprint(two)).toBe(fingerprint(one));
+    replyAndRecord(two, "approve", "Approve Plan");
+    const recorded = readAuditShardEvents(two).filter((row) => row.event === "PLAN_APPROVAL_RECORDED");
+    expect(recorded).toHaveLength(1);
+    expect(auditBlockField(recorded[0].block, "Approval Fingerprint")).toBe(fingerprint(one));
+    expect(next(two).kind).toBe("run-stage");
+  });
+
+  // A questions file written without the line (by an earlier AI-DLC, for the
+  // same question) is not rewritten for the line alone: an answer the person
+  // wrote there stays whole, nothing asks them again, and it is read as theirs.
+  test("a question asked before the line keeps its file and the answer written in it", () => {
+    const proj = reposProject(["api", "web"]);
+    askedWith(proj, CUT_TOUCHES);
+    const path = join(stageDir(proj), "code-generation-questions.md");
+    const earlier = questions(proj).replace("- Names files in api and web.\n", "");
+    expect(earlier).not.toContain("Names files in");
+    writeFileSync(path, earlier);
+    expect(next(proj).plan_approval.targets?.[0].summary.at(-1)).toBe("Names files in api and web.");
+    expect(questions(proj)).toBe(earlier);
+    const written = earlier.replace(/^\[Answer\]:.*$/m, "[Answer]: Approve Plan, the payments part looks right");
+    writeFileSync(path, written);
+    expect(next(proj).ask_type).toBe("plan-approval");
+    expect(questions(proj)).toBe(written);
+    const events = (name: string) => readAuditShardEvents(proj).filter((row) => row.event === name);
+    expect(events("QUESTION_ASKED")).toHaveLength(1);
+    expect(events("QUESTION_SHOWN")).toHaveLength(0);
+    replyAndRecord(proj, "done, my answer is in the questions file", "Approve Plan");
+    expect(events("PLAN_APPROVAL_RECORDED")).toHaveLength(1);
+    expect(auditBlockField(events("PLAN_APPROVAL_RECORDED")[0].block, "Answer Line In File"))
+      .toBe("Approve Plan, the payments part looks right");
+    expect(next(proj).kind).toBe("run-stage");
   });
 });
 

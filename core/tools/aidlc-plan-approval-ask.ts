@@ -584,10 +584,9 @@ export function planSummaryLines(plan: string, instructions: string): string[] {
   return fallback;
 }
 
-// `changed` is the line naming source that already changed since Code
-// Generation started (changedBeforeApprovalLine), shown under the summary when
-// the question is asked or its record rewritten; null says nothing.
-function targetView(projectDir: string, unit: string | null, changed: string | null = null): PlanApprovalAskTargetView {
+// `under` is what the question says under the summary when it is asked or its
+// record rewritten (underSummary); without it, the plan's own lines alone.
+function targetView(projectDir: string, unit: string | null, under: readonly string[] = []): PlanApprovalAskTargetView {
   const dir = codeGenerationRecordDir(projectDir, unit);
   const rel = (name: string) => toPosix(relative(projectDir, join(dir, name)));
   const summary = planSummaryLines(readText(join(dir, PLAN_FILE)), readText(join(dir, INSTRUCTIONS_FILE)));
@@ -596,7 +595,7 @@ function targetView(projectDir: string, unit: string | null, changed: string | n
     plan_path: rel(PLAN_FILE),
     instructions_path: rel(INSTRUCTIONS_FILE),
     questions_path: rel(QUESTIONS_FILE),
-    summary: changed === null ? summary : [...summary, changed],
+    summary: [...summary, ...under],
   };
 }
 
@@ -717,6 +716,32 @@ function plansNamedPaths(projectDir: string, units: Array<string | null>): strin
     }
   }
   return [...named];
+}
+
+// The recorded repos the plans name a file or folder in, in work with more than
+// one: a path counts for a repo when it starts with the repo's name. Read from
+// the plans' own paths, as the guard reads them, so a summary line cut at 200
+// characters never hides one. None on any failure: the question goes out
+// without them.
+function namedRepos(projectDir: string, units: Array<string | null>): string[] {
+  try {
+    const repos = intentRepos(projectDir);
+    if (repos.length < 2) return [];
+    const named = plansNamedPaths(projectDir, units);
+    return repos.filter((repo) => named.some((path) => path.startsWith(`${repo}/`)));
+  } catch {
+    return [];
+  }
+}
+
+// What the question says under the summary: the repos the plans name, then the
+// source that already changed (changedBeforeApprovalLine).
+function underSummary(projectDir: string, units: Array<string | null>, changed: string | null): string[] {
+  const repos = namedRepos(projectDir, units);
+  const named = repos.length === 0
+    ? []
+    : [units.length > 1 ? `These plans name files in ${labels(repos)}.` : `Names files in ${labels(repos)}.`];
+  return changed === null ? named : [...named, changed];
 }
 
 // A recorded repo's files as a plan names them, `<repo>/<path>`: the word split
@@ -865,10 +890,11 @@ function singleBoxQuestion(toolInput: unknown): BoxQuestion | null {
 // lines, else its path only. Several Units always get each Unit's name and
 // path, never the summaries: the box does not scroll, and a short window (an
 // editor's terminal panel) would show the last plan alone, as if it were the
-// only one. The line naming source that already changed is in each, said once.
+// only one. The lines under the summary (the repos the plans name, the source
+// that already changed) are in each, said once.
 function boxAdditions(projectDir: string, record: PlanApprovalAskRecord): string[] {
   const views = record.targets.map((target) => targetView(projectDir, target.unit));
-  const changed = changedBeforeApprovalLine(projectDir);
+  const under = underSummary(projectDir, views.map((view) => view.unit), changedBeforeApprovalLine(projectDir));
   const several = views.length > 1;
   return (several ? [false] : [true, false]).map((summaries) => [
     ...views.flatMap((view, index) => [
@@ -876,14 +902,14 @@ function boxAdditions(projectDir: string, record: PlanApprovalAskRecord): string
       ...(several ? [view.unit ?? ""] : []),
       ...(!summaries
         ? [`Full plan: ${view.plan_path}`]
-        : planLines(changed === null ? view.summary : [...view.summary, changed], view.plan_path)),
+        : planLines([...view.summary, ...under], view.plan_path)),
     ]),
-    ...(changed !== null && !summaries ? ["", changed] : []),
+    ...(under.length > 0 && !summaries ? ["", ...under] : []),
   ].join("\n"));
 }
 
-// A line of the plan's own (a summary line, its path, the changed-source line).
-const PLAN_LINE_RE = /^(?:- |Full plan: |Already changed before you approved)/;
+// A line of the plan's own (a summary line, its path, the lines under its summary).
+const PLAN_LINE_RE = /^(?:- |Full plan: |Already changed before you approved|Names files in |These plans name files in )/;
 
 // The question with the additions under it, less the plan's lines its text
 // already shows: Step 3 asks the agent to show them, and an agent may put them
@@ -1388,7 +1414,7 @@ function planApprovalAskDirective(
     question: options.question,
     ...(units.length === 1 && units[0] !== null ? { unit: units[0] } : {}),
     plan_approval: {
-      targets: units.map((unit) => targetView(projectDir, unit, changed)),
+      targets: units.map((unit) => targetView(projectDir, unit, underSummary(projectDir, [unit], changed))),
       choices: [...(grouped ? GROUPED_PLAN_APPROVAL_CHOICES : PLAN_APPROVAL_CHOICES)],
       editing: options.editing,
       ...(options.note ? { note: options.note } : {}),
@@ -1809,7 +1835,7 @@ function approveTarget(
   const planAsFound = readText(planPath);
   let plan = planAsFound;
   const instructions = readText(join(dir, INSTRUCTIONS_FILE));
-  const view = targetView(projectDir, unit, changedBeforeApprovalLine(projectDir));
+  const view = targetView(projectDir, unit, underSummary(projectDir, [unit], changedBeforeApprovalLine(projectDir)));
   // Only the person's own editing turn makes a repair theirs. Anything else is
   // the engine's or the agent's own doing, and a question that calls it their
   // edit describes work they never did.
@@ -1970,7 +1996,7 @@ function requestChangesFor(
   const approval = evaluateCodeGenerationApproval(projectDir, { unit });
   const dir = codeGenerationRecordDir(projectDir, unit);
   const questionsPath = join(dir, QUESTIONS_FILE);
-  const view = targetView(projectDir, unit, changedBeforeApprovalLine(projectDir));
+  const view = targetView(projectDir, unit, underSummary(projectDir, [unit], changedBeforeApprovalLine(projectDir)));
   const asked = record.targets.find((target) => target.unit === unit);
   const existing = readText(questionsPath);
   const theirLine = answerLineAsFound(
