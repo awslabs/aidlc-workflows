@@ -438,7 +438,8 @@ describe("the lead's project builds nothing it was not asked to", () => {
       { ...ENV, GIT_AUTHOR_DATE: later, GIT_COMMITTER_DATE: later });
     expect(sent.status, sent.out).toBe(0);
     const [taken, proposed] = git(recordHostOf(home, "refunds"), ["log", "--reverse", "--format=%aI", `refs/aidlc/claims/${home.id8}/refunds`]).split("\n");
-    expect(proposed).toBe(later);
+    // git writes UTC as "+00:00" or "Z" by platform: the time is what is compared.
+    expect(Date.parse(proposed)).toBe(Date.parse(later));
     const at = /^\d{4}-(\d{2})-(\d{2})T/.exec(taken)!;
     const day = `${Number(at[2])} ${["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][Number(at[1]) - 1]}`;
     git(home.dir, ["fetch", "-q", "origin"]);
