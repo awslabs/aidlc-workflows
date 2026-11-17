@@ -463,8 +463,12 @@ output of `bun {{HARNESS_DIR}}/tools/aidlc-testing-posture.ts brief --unit <dire
 - Design artifacts for the CURRENT UNIT ONLY (not all units)
 - A 1-2 line summary of each inception-phase artifact with its file path (requirements summary, stories summary, domain design summary) — the subagent can Read specific files if it needs full content
 - Project workspace details (languages, frameworks, conventions from aidlc-state.md)
-- Instructions to execute each plan step sequentially and mark checkboxes as
-  completed, starting where the brief's progress section says when it has one.
+- Instructions to execute each plan step sequentially and tick its checkbox
+  in the plan file as soon as that step is done, one step at a time, never
+  several together at the end, starting where the brief's progress section
+  says when it has one. Each tick is what the person sees of the build while
+  it runs: on Claude Code, Codex and opencode the engine shows them a line for
+  it ("3 of 9 plan steps done ... Next: ...").
   Task markers are excluded from the approval fingerprint, so ticking
   a box never changes the content binding; other edits follow Step 3's
   after-approval rules

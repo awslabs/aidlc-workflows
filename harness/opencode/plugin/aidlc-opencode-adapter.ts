@@ -640,7 +640,9 @@ async function createV1Adapter({
   // relay is a TUI toast. It is transient, which is why the opencode conductor
   // skill still prints the message verbatim as well. A headless `opencode run`
   // has no TUI: the request may fail and that is fine.
-  async function showEngineErrorToast(stdout: string): Promise<void> {
+  // The write-audit-log hook's line (a Code Generation plan step ticked, the
+  // person's progress line) rides the same toast, as information.
+  async function showRelayToast(stdout: string, variant: EngineErrorToast["variant"] = "error"): Promise<void> {
     let message: string | null = null;
     try {
       const parsed = JSON.parse(stdout) as { systemMessage?: unknown };
@@ -653,7 +655,7 @@ async function createV1Adapter({
     if (message === null || typeof client.tui?.showToast !== "function") return;
     try {
       await client.tui.showToast({
-        body: { title: "AI-DLC", message, variant: "error" },
+        body: { title: "AI-DLC", message, variant },
       });
     } catch {
       /* no TUI attached (headless run) - the toast is best-effort */
@@ -1099,7 +1101,8 @@ async function createV1Adapter({
             session_id: await owningSessionOrNone(input.sessionID),
           };
           // audit THEN sensors, mirroring the Claude settings.json order.
-          await runCore("aidlc-write-audit-log.ts", payload, directory);
+          const audit = await runCore("aidlc-write-audit-log.ts", payload, directory);
+          await showRelayToast(audit.stdout, "info");
           await runCore("aidlc-run-sensors.ts", payload, directory);
         }
         return;
@@ -1113,7 +1116,7 @@ async function createV1Adapter({
           tool_response: output?.output ?? "",
         };
         const result = await runCore("aidlc-rebuild-stage-graph.ts", payload, directory);
-        await showEngineErrorToast(result.stdout);
+        await showRelayToast(result.stdout);
         handModelNote(result.stdout, output);
         return;
       }
