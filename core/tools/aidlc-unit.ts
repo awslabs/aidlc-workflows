@@ -14400,7 +14400,8 @@ function proposeChange(args: string[], projectDir?: string): void {
   if (noNotice !== "" && chat) markPersonLinesHeard(pd, chat, [NO_NOTICE]);
   console.log(JSON.stringify({
     proposed: true,
-    notice: `Your change to the ${name} is on ${build.unit}'s record in ${place.repo}.${noNotice} ${carryingOn}`,
+    notice: `Your change to the ${name} is on ${build.unit}'s record in ${place.repo}.${noNotice} ${carryingOn}` +
+      (sent.branch === undefined ? "" : ` ${recordOnBranchLine(place.repo, build.unit, sent.branch)}`),
   }));
 }
 

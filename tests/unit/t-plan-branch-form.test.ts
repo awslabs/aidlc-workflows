@@ -197,4 +197,17 @@ describe("a record written where its repository takes no ref of AI-DLC's", () =>
     expect(pushed.status, pushed.out).toBe(0);
     expect(has(host, branchOf(home.id8, "refunds"))).toBe(true);
   });
+
+  test("a change proposed where the record's repository no longer takes its ref puts the record on its branch, and says so", () => {
+    const { home, alice, record } = refundsTaken();
+    const host = recordHostOf(home, "refunds");
+    refuse(host, ["refs/aidlc/"]);
+    const requirements = "inception/requirements-analysis/requirements.md";
+    writeFileSync(join(record, ...requirements.split("/")), "# Requirements\n\nFR1 refunds, partial amounts too.\n");
+    const sent = run(UNIT, ["propose", "--input", "requirements.md", "--person-words", "refunds need partial amounts"], alice);
+    expect(sent.status, sent.out).toBe(0);
+    expect(String(sent.json?.notice)).toContain(`checkout-api did not take refunds's record out of its branch list (`);
+    expect(String(sent.json?.notice)).toContain(`so the record there is the branch aidlc/claims/${home.id8}/refunds. It is not for merging.`);
+    expect(has(host, branchOf(home.id8, "refunds"))).toBe(true);
+  });
 });
