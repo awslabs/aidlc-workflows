@@ -12692,6 +12692,18 @@ function treesLeftBehindLines(
     const harness = `--harness ${
       source.copyChannel ? harnessNameFor(tree.distribution, writtenTool) : invokedHarnessName(tree.distribution)
     }`;
+    // A plain config no longer takes down a tree a release newer than this
+    // computer's set up (newerSetUpStep): natively the line names the way up
+    // for the tree just written, as that step does; elsewhere the fact alone.
+    if (
+      !source.copyChannel && source.requiredVersion === undefined && tree.frameworkVersion !== undefined &&
+      VERSION_ID.test(tree.frameworkVersion) && compareVersions(AIDLC_VERSION, tree.frameworkVersion) < 0
+    ) {
+      if (newerWorkInstall(projectDir).kind !== "native") return `${name} ${on}.`;
+      const added = projectionProductName(join(projectDir, written.harnessDir), written.distribution);
+      return `${name} ${on}. To bring ${added} to ${tree.frameworkVersion} too: ` +
+        `\`aidlc update --version ${tree.frameworkVersion}\`, then ${command(`--harness ${invokedHarnessName(written.distribution)}`)}.`;
+    }
     const plain = installed.filter((candidate) => candidate.stamp.distribution === tree.distribution);
     // A copied tree no config run has recorded the files of reads every file
     // as unowned against another release, so it first records them at its
@@ -13127,13 +13139,31 @@ async function gatherConfigOutput(
   return { stdout: stdout.join(""), output: output.join(""), code };
 }
 
+// The release a newer AI-DLC set up the tree a run refreshes with (the named
+// harness's, or the only one), on a native or package manager's install with
+// no pin and no source named. A copied project runs its tree's own tool, whose
+// refresh fetches that release.
+function newerSetUpOf(
+  projectDir: string,
+  requested: string | undefined,
+  from: string | undefined,
+): { tree: ProjectHarness; version: string } | undefined {
+  if (aidlcInvocation() !== "aidlc" || from || pathPresent(join(projectDir, ".aidlc-version"))) return undefined;
+  const trees = discoverProjectHarnesses(projectDir);
+  const tree = requested ? trees.find((candidate) => candidate.distribution === requested) : trees.length === 1 ? trees[0] : undefined;
+  const version = tree?.frameworkVersion;
+  return tree && version !== undefined && VERSION_ID.test(version) && compareVersions(AIDLC_VERSION, version) < 0
+    ? { tree, version }
+    : undefined;
+}
+
 // This computer's AI-DLC is older than the one that set up the project's tree,
 // so nothing in the project changes. At a terminal on a native install the
 // person is asked once whether to update to that release, which then runs the
 // same command itself, since an older tool may not read the newer files; a
 // section may have asked its own questions already, so it is never handed on.
-// Everywhere else, and on no, one line names the update and the pin. A
-// package manager carries no preview, so its step is not named for one.
+// Everywhere else, and on no, one line names the update and the pin. AI-DLC
+// names no package manager step for a preview release.
 async function newerSetUpStep(
   projectDir: string,
   tree: ProjectHarness,
@@ -13147,15 +13177,18 @@ async function newerSetUpStep(
   const preview = versionChannel(version) === "preview";
   const command = (args: string): string =>
     `\`${configInvocationFor(projectDir)} config ${args}${projectTarget(projectDir)}\``;
-  const setUp = `project was set up with AI-DLC ${version}, and this computer is on ${AIDLC_VERSION}${
-    install.kind === "managed" ? ` from ${install.name}` : ""
-  }.`;
-  const up = install.kind === "managed" && preview
-    ? ""
-    : `${
-      carryOnStep(install, `\`aidlc update --version ${version}\``, command(`--harness ${invokedHarnessName(tree.distribution)} --yes`))
-    } `;
-  const down = `To take the project down to ${AIDLC_VERSION}${up ? " instead" : ""}: ` +
+  const unreachable = install.kind === "managed" && preview;
+  const manager = install.kind === "managed" ? install.name : "";
+  const setUp = `project was set up with AI-DLC ${version}${unreachable ? ", a preview release" : ""}, and this computer is on ${
+    AIDLC_VERSION
+  }${manager ? ` from ${manager}` : ""}${unreachable ? `, and AI-DLC has no ${manager} step to name for a preview release` : ""}.`;
+  // A section carries on with itself, so what the person asked for is done.
+  const own = section ? configRerunWith(input, projectDir, []) : undefined;
+  const refresh = own ? `\`${own}\`` : command(`--harness ${invokedHarnessName(tree.distribution)} --yes`);
+  const up = unreachable
+    ? "To carry on, this computer needs that preview release. "
+    : `${carryOnStep(install, `\`aidlc update --version ${version}\``, refresh)} `;
+  const down = `To take the project down to ${AIDLC_VERSION} instead: ` +
     `${command(`--pin ${quoteCommandArgument(AIDLC_VERSION)} --yes`)} (this pins the version for everyone on the project).`;
   let line = `Nothing changed: this ${setUp} ${up}${down}`;
   if (
@@ -13287,6 +13320,16 @@ export async function main(
     ], options)
   ) {
     return;
+  }
+  // The project section refreshes the release's files, and asks its own
+  // questions first: where the older release would write them, it stops first.
+  if (section?.value === "project" && !["--help", "--show", "--check"].some((flag) => argv.includes(flag))) {
+    const target = projectDirFrom(argv);
+    const newer = newerSetUpOf(target, valuesAfter(argv, "--harness")[0], internal.sourceRoot ?? valueAfter(argv, "--from"));
+    if (newer) {
+      await newerSetUpStep(target, newer.tree, newer.version, input, options, argv.includes("--dry-run"), true);
+      return;
+    }
   }
   let modelsContext: ModelsMutationContext | null = null;
   let pendingKiroSession: KiroSessionPlan | null = null;
@@ -13475,19 +13518,7 @@ export async function main(
       ].includes(token)
     );
   if (firstRunWizard && await runFirstRunWizard(projectDir)) return;
-  // The release a newer AI-DLC set up the tree this run refreshes with, on a
-  // native or package manager's install with no pin and no source named. A
-  // copied project runs its tree's own tool, whose refresh fetches that release.
-  const refreshed = requestedHarness
-    ? projectHarnesses.find((tree) => tree.distribution === requestedHarness)
-    : projectHarnesses.length === 1
-    ? projectHarnesses[0]
-    : undefined;
-  const newerSetUp = aidlcInvocation() === "aidlc" && !from && !pathPresent(join(projectDir, ".aidlc-version")) &&
-      refreshed?.frameworkVersion !== undefined && VERSION_ID.test(refreshed.frameworkVersion) &&
-      compareVersions(AIDLC_VERSION, refreshed.frameworkVersion) < 0
-    ? { tree: refreshed, version: refreshed.frameworkVersion }
-    : undefined;
+  const newerSetUp = newerSetUpOf(projectDir, requestedHarness, from);
   const existingWalk = !section &&
     !newerSetUp &&
     configInputIsTty() &&
