@@ -9959,7 +9959,8 @@ export function leadsPlanOnBranch(projectDir: string): boolean {
 export function pushPlan(projectDir: string, place: PlanPlace, commit: string, lease: string | null):
   { ok: true } | { ok: false; lost: boolean; byRule: boolean; words: string; timedOut: boolean } {
   const via = gitTargetFor(projectDir, place.address, "push");
-  const branch = lease === null ? null : planBranchAt(projectDir, place);
+  // A plan gone from there goes back in the form this computer last read it in.
+  const branch = planBranchAt(projectDir, place);
   const name = branch?.ref ?? place.ref;
   const pushed = git(projectDir, [
     "push", via.target, `--force-with-lease=${name}:${lease ?? ""}`, `${commit}:${name}`,

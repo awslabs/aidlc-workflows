@@ -327,6 +327,22 @@ function keepPlanBranches(host: string): void {
   chmodSync(hook, 0o755);
 }
 
+describe("a plan on its branch, gone from its repository", () => {
+  test("the lead's share again puts it back on its branch, and no ref is made beside it", () => {
+    const home = makePlanHome();
+    const host = home.hosts["checkout-api"];
+    planAsBranch(host, home.id8);
+    const branch = `refs/heads/aidlc/plans/${home.id8}-fixture`;
+    next(home.dir, { ...ENV, AIDLC_SESSION_OVERRIDE: "lead-1" });
+    git(host, ["update-ref", "-d", branch]);
+    const shared = run(UNIT, ["share", "--plan"], home.dir);
+    expect(shared.status, shared.out).toBe(0);
+    expect(has(host, branch)).toBe(true);
+    expect(has(host, planRefOf(home.id8))).toBe(false);
+    expect(git(host, ["show", `${branch}:plan.json`])).toContain('"label": "fixture"');
+  });
+});
+
 describe("the plan off its branch, on the lead's ask", () => {
   const OFF = ["share", "--plan", "--off-branch"];
   test("goes to the plan's ref as it is, its history with it, and the branch is gone from there", () => {
