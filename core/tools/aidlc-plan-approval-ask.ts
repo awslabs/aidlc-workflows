@@ -1571,11 +1571,12 @@ export function publishPlanApprovalAsk(
       if (without !== null && (onDisk === without || (same && onlyTheirAnswerDiffers(onDisk, without)))) return;
       // Their answer is the `[Answer]:` line and whatever they wrote under it:
       // the template ends with that line. It is carried whole, and only out of
-      // the file about this plan; the engine's own "Plan approval off" is not theirs.
+      // the file about this plan; the engine's record of a plan built without
+      // asking holds no answer of theirs.
       const at = onDisk.search(/^\[Answer\]:/m);
       const theirs = at < 0 ? "" : onDisk.slice(at).replace(/\r\n/g, "\n");
       const written = theirs.slice("[Answer]:".length).trim();
-      const carry = same && written !== "" && written !== PLAN_APPROVAL_OFF_ANSWER &&
+      const carry = same && written !== "" && !onDisk.includes(BUILT_WITHOUT_ASKING_INTRO[0]) &&
         recordedApprovalFingerprint(onDisk) === targets[index].fingerprint;
       const file = carry ? `${content.slice(0, content.lastIndexOf("[Answer]:"))}${theirs}` : content;
       // The same bytes are not written again: an editor holding the file open would ask about a change on disk.

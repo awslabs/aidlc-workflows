@@ -247,6 +247,31 @@ describe("an answer written in the Plan Approval questions file", () => {
     }
   });
 
+  // Any words they write are theirs, the words the engine uses for a plan built
+  // without asking included; only that record itself holds no answer of theirs.
+  test("keeps their own words Plan approval off, and never carries the record of a plan built without asking", () => {
+    const theirs = project();
+    askFor(theirs);
+    writeAnswer(theirs, "Plan approval off");
+    writeFileSync(join(theirs, "src", "base.ts"), "export const base = false;\n", "utf-8");
+    expect(next(theirs).kind).toBe("ask");
+    expect(answerLine(theirs)).toBe("[Answer]: Plan approval off");
+    const record = project();
+    askFor(record);
+    const path = questionsPath(record);
+    const asked = readFileSync(path, "utf-8");
+    writeFileSync(path, asked
+      .replace(/^AI-DLC writes this file when it asks you[^\n]*\n[^\n]*\n/m,
+        "AI-DLC built this plan without asking because plan approval is off for this\n" +
+          "piece of work. This file is the record and asks nothing; to look at a plan\nbefore it is built, ask in chat.\n")
+      .replace(/^\[Answer\]:$/m, "[Answer]: Plan approval off"), "utf-8");
+    expect(readFileSync(path, "utf-8")).toContain("AI-DLC built this plan without asking");
+    writeFileSync(join(record, "src", "base.ts"), "export const base = false;\n", "utf-8");
+    expect(next(record).kind).toBe("ask");
+    expect(readFileSync(path, "utf-8")).toContain("AI-DLC writes this file when it asks you");
+    expect(answerLine(record)).toBe("[Answer]:");
+  });
+
   // An answer is for the plan its file shows: a changed plan is a new question.
   test("is not carried onto a question about a changed plan", () => {
     const proj = project();
