@@ -1576,5 +1576,28 @@ describe("at the lead's own work whose plan is its own ref, the lines that named
     expect(notice).toEndWith(" unit share --plan`.");
     expect(String(shared.json?.step)).toMatch(/When they say yes, run `[^`]* unit share --plan`/);
   });
+
+  test("a share without --plan on main itself commits and pushes only AI-DLC's record, never the person's other changes, and says the plan was not shared by it, with the offer", () => {
+    const home = makePlanHomeWithRemote();
+    writeFileSync(join(home.dir, "app.txt"), "one\n");
+    git(home.dir, ["add", "app.txt"]);
+    git(home.dir, ["commit", "-q", "-m", "app"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    writeFileSync(join(home.dir, "app.txt"), "two\n");
+    writeFileSync(join(home.dir, "draft.txt"), "mine\n");
+    const shared = run(UNIT, ["share"], home.dir);
+    expect(shared.status, shared.out).toBe(0);
+    expect(shared.json?.shared).toBe(true);
+    expect(shared.json?.committed_files).toBeUndefined();
+    const notice = String(shared.json?.notice);
+    expect(notice).toContain("The plan was not shared by this: I can share it in checkout-api when you say so, or you can run `");
+    expect(notice).toEndWith(" unit share --plan`.");
+    expect(String(shared.json?.step)).toMatch(/When they say yes, run `[^`]* unit share --plan`/);
+    const status = git(home.dir, ["status", "--porcelain", "--", "app.txt", "draft.txt"]);
+    expect(status).toMatch(/^ ?M app\.txt$/m);
+    expect(status).toContain("?? draft.txt");
+    expect(git(home.remote, ["show", "refs/heads/main:app.txt"])).toBe("one");
+    expect(git(home.remote, ["ls-tree", "--name-only", "refs/heads/main", "--", "draft.txt"])).toBe("");
+  });
 });
 

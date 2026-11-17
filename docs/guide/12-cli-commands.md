@@ -1063,7 +1063,10 @@ ignored files and AI-DLC's own part of `.gitignore`, `AGENTS.md` and
 with a plain push, never forced, so the teams can take Units from the plan or
 see a Unit that landed. Once it has pushed, it names what it committed: how
 many files and, by name as changed, new or deleted, up to ten outside
-`aidlc/`, with how many more. After it, this checkout shows the board instead of
+`aidlc/`, with how many more. With `Home Location` recorded (the plan shared
+as a ref of its own), it commits only AI-DLC's record, with the code of a Unit
+built here, never your other changes, and names no files; with no Unit's code
+built here, it says the plan was not shared by it and offers to share it. After it, this checkout shows the board instead of
 building Units. A push the remote refuses keeps the commit and says why. When it
 takes no direct push to the branch (a host's rule), it says so in the host's
 words and exits 0 with `"shared": false`, and the next step offers once to put

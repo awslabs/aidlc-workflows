@@ -7401,6 +7401,18 @@ function unitsNotIn(pd: string, listed: readonly string[]): string[] {
   return [...unitDependencies(pd).keys()].filter((unit) => !listed.includes(unit));
 }
 
+// Where the plan is its own ref, a share without --plan committed AI-DLC's record and shared no plan: the line that
+// says so with the offer, and the agent's step for the yes.
+function planNotSharedByThis(pd: string): { line: string; onYes: string } | null {
+  const place = sharesPlanRef(pd) ? planPlaceForShare(pd) : null;
+  if (place === null || !("repo" in place)) return null;
+  const yes = `${aidlcInvocation()} unit share --plan`;
+  return {
+    line: `The plan was not shared by this: I can share it in ${place.repo} when you say so, or you can run \`${yes}\`.`,
+    onYes: ` When they say yes, run \`${yes}\` and tell them in plain words what it reports.`,
+  };
+}
+
 // `aidlc unit share`: commit the work here and push the integration branch to
 // the remote, so the teams can take Units (after Inception) or see a landed
 // one. A plain push, never forced. A share that did not happen (a commit git
@@ -7414,7 +7426,8 @@ function unitsNotIn(pd: string, listed: readonly string[]): string[] {
 // `--plan`: AI-DLC's record (the plan a team's clone takes its Unit from), for
 // a home whose teams take Units by pull request, with the code of Units built
 // here on the workspace's own repository; none of the person's other files
-// here is committed.
+// here is committed. A share without --plan at the lead's own team work commits
+// the same, then pushes the integration branch.
 function shareMain(args: string[], projectDir?: string): void {
   const pd = resolveProjectDir(projectDir);
   const parsed = parseArgs(args);
@@ -7491,7 +7504,7 @@ function shareMain(args: string[], projectDir?: string): void {
   let named: string | null = null;
   if (!(flags.has("branch") && earlier !== null && earlier.length > 0)) {
     try {
-      if (planOnly || refused !== null) {
+      if (planOnly || refused !== null || leadsOwnTeamWork(pd)) {
         committed = commitPlanHere(pd, message);
       } else {
         const done = commitWorkHere(pd, message);
@@ -7513,17 +7526,14 @@ function shareMain(args: string[], projectDir?: string): void {
     // Committed on a branch of their own, which reaches main their own way: done.
     if (own === null) {
       given?.spend();
-      // Where the plan is its own ref, this committed AI-DLC's record and shared no plan.
-      const place = sharesPlanRef(pd) && refused.off !== undefined ? planPlaceForShare(pd) : null;
-      const yes = `${aidlcInvocation()} unit share --plan`;
+      const notShared = refused.off === undefined ? null : planNotSharedByThis(pd);
       console.log(JSON.stringify({
         shared: false,
-        notice: place === null || !("repo" in place)
+        notice: notShared === null
           ? `${refused.reason} ${planWayOn(branch)}`
           : `This checkout is on ${refused.off!.current}, not ${branch}, so AI-DLC's record of this work is committed here and nothing ` +
-            `is pushed. The plan was not shared by this: I can share it in ${place.repo} when you say so, or you can run \`${yes}\`.`,
-        step: "Tell the person in plain words what it reports, then end your turn." +
-          (place === null || !("repo" in place) ? "" : ` When they say yes, run \`${yes}\` and tell them in plain words what it reports.`),
+            `is pushed. ${notShared.line}`,
+        step: `Tell the person in plain words what it reports, then end your turn.${notShared?.onYes ?? ""}`,
       }));
       return;
     }
@@ -7586,10 +7596,12 @@ function shareMain(args: string[], projectDir?: string): void {
   noteTeamShared(pd);
   given?.spend();
   const claims = claimsAskedHereWithShare(pd);
+  const notShared = planOnly ? null : planNotSharedByThis(pd);
   const notice = [
     ...(planFirst === null ? [] : [planFirst.said]),
     ...claims.lines,
     ...(needs === null ? [] : [needs]),
+    ...(notShared === null ? [] : [notShared.line]),
   ];
   console.log(JSON.stringify({
     shared: true,
@@ -7600,7 +7612,7 @@ function shareMain(args: string[], projectDir?: string): void {
     ...(planFirst === null ? {} : { plan: { repo: planFirst.repo, address: planFirst.address, commit: planFirst.commit } }),
     ...(notice.length > 0 ? { notice: notice.join(" ") } : {}),
     ...(named === null ? {} : { committed_files: named }),
-    step: "Tell the person in plain words what it reports, then end your turn.",
+    step: `Tell the person in plain words what it reports, then end your turn.${notShared?.onYes ?? ""}`,
   }));
 }
 
