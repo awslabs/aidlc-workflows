@@ -28,7 +28,6 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
-import { currentUnitLifecycleMode as libMode, unitLifecycleReceiptsInUse as libInUse } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   AIDLC_SRC, cleanupTestProject, createTestProject, resetAidlcEnv,
   runOrchestrateNext, seedAidlcMemory, seedBoltDag, seededRecordDir, seededStateFile,
@@ -4066,25 +4065,50 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     }
   }
 
-  test("an explicit stage route naming the Unit in flight at its finished step reopens it for that Unit", () => {
+  // A stage asked for by name with no change carries on at the step the Unit
+  // is on, as anywhere in the walk: only the person's change (`--change`, or
+  // their rejection of that Unit) reopens it.
+  test("a stage route naming the Unit in flight at its finished step, with no change asked, carries on there", () => {
+    for (const resumed of [false, true]) {
+      const label = resumed ? "resumed" : "in progress";
+      const p = betaCodeWrittenAndReviewed();
+      if (resumed) {
+        for (const verb of [["pause", "--reason", "waiting for the API key", "--next-action", "Record the completion."], ["resume"]]) {
+          const ran = tool(p, "state", ["unit", verb[0], "--stage", "code-generation", "--unit", "beta", ...verb.slice(1)]);
+          expect(ran.status, ran.out).toBe(0);
+        }
+      }
+      const step = printedStep(p, ["--stage", "code-generation", "--unit", "beta"]) as { kind: string; stage?: string; unit?: string };
+      expect(step, label).toMatchObject({ kind: "run-stage", stage: "code-generation", unit: "beta" });
+      expect(readAuditShardEvents(p).filter((row) => row.event === "GATE_REJECTED"), label).toEqual([]);
+      expect(next(p), label).toMatchObject({
+        kind: "run-stage", stage: "code-generation", unit: "beta", plan_approval: { status: "approved" },
+      });
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a re-entry jump to the Unit in flight at its finished step carries on there, and its change form reopens it", () => {
     const p = betaCodeWrittenAndReviewed();
-    expect(printedStep(p, []).kind).toBe("run-stage");
-    const step = printedStep(p, ["--stage", "code-generation", "--unit", "beta"]);
-    expect(step.kind, JSON.stringify(step)).toBe("print");
-    expect(step.message).not.toContain("unit complete");
-    expect(step.message).toContain(
-      "reopen --target code-generation --stages code-generation --units beta --scope classic",
+    const jump = resumedReport(p, ["--choice", "jump", "--target", "code-generation", "--unit", "beta"]);
+    expect(jump.kind, JSON.stringify(jump)).toBe("print");
+    expect(jump.message).toContain("Run `next --stage code-generation --unit beta`;");
+    expect(jump.message).toContain("`next --stage code-generation --unit beta --change`");
+    expect(printedStep(p, ["--stage", "code-generation", "--unit", "beta"]).kind).toBe("run-stage");
+    expect(readAuditShardEvents(p).filter((row) => row.event === "GATE_REJECTED")).toEqual([]);
+    const change = printedStep(p, ["--stage", "code-generation", "--unit", "beta", "--change"]);
+    expect(change.kind, JSON.stringify(change)).toBe("print");
+    expect(change.message).toContain(
+      "reopen --target code-generation --stages code-generation --units beta --scope classic --via change",
     );
-    expect(step.message).toContain('"Reopened Code Generation for unit beta. alpha keeps its finished work.');
-    expect(step.message).not.toContain("--via change");
-    runPrintedCommands(p, step.message!);
-    expect(unitCompletedReceipts(p, "code-generation").has("alpha")).toBe(true);
+    runPrintedCommands(p, change.message!);
     expect(approved(p, "alpha")).toBe(true);
     const rejected = readAuditShardEvents(p).filter((row) => row.event === "GATE_REJECTED");
     expect(rejected).toHaveLength(1);
     expect(auditBlockField(rejected[0].block, "Unit")).toBe("beta");
-    expect(auditBlockField(rejected[0].block, "Reopen")).toBe("jump");
-    expect(next(p)).toMatchObject({ kind: "ask", ask_type: "plan-approval", unit: "beta" });
+    expect(auditBlockField(rejected[0].block, "Reopen")).toBe("change");
+    expect(next(p)).toMatchObject({
+      kind: "run-stage", stage: "code-generation", unit: "beta", plan_approval: { status: "revise" },
+    });
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a Unit-scoped Request Changes reopens that Unit's finished step with the person's change", () => {

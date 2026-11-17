@@ -18245,8 +18245,10 @@ function unitMajorReopen(
       };
     }
     // The Unit in flight on the target itself: that is where the walk already is.
+    // Asked for by name with no change, it carries on there; only the person's
+    // change reopens it, once nothing but its completion is left.
     if (named === inFlight && liveStage === targetSlug &&
-      !unitStepOwedOnlyReceipt(projectDir, scope, stateContent, walk, targetSlug, named)) return "route";
+      (!flags.change || !unitStepOwedOnlyReceipt(projectDir, scope, stateContent, walk, targetSlug, named))) return "route";
     // A Unit set aside on the target is picked up where it stopped.
     const parked = open.get(named);
     if (named !== inFlight && parked?.stage === targetSlug && parked.checkpoint.setAsideFor !== null) {
