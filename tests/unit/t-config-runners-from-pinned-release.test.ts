@@ -55,16 +55,20 @@ function nativeInstall(): string {
 
 describe("config writes the runner skills with the release its files come from", () => {
   test("files from the running release are written in this process", () => {
-    expect(runnerGenerator(staged(AIDLC_VERSION).harness)).toBeNull();
+    expect(runnerGenerator(staged(AIDLC_VERSION).harness, true)).toBeNull();
   });
 
   test("files that record no release are written in this process", () => {
-    expect(runnerGenerator(staged(null).harness)).toBeNull();
+    expect(runnerGenerator(staged(null).harness, true)).toBeNull();
+  });
+
+  test("an unpinned project's older files are written in this process", () => {
+    expect(runnerGenerator(staged(PINNED).harness, false)).toBeNull();
   });
 
   test("a pinned release's own tool writes its runners when running from source", () => {
     const { root, harness, log } = staged(PINNED);
-    regenerateRunnersFor(root, harness);
+    regenerateRunnersFor(root, harness, true);
     expect(readFileSync(log, "utf-8")).toBe(`write @ ${root}\nscopes @ ${root}\n`);
   });
 
@@ -74,7 +78,7 @@ describe("config writes the runner skills with the release its files come from",
     const executable = join(install, "versions", PINNED, process.platform === "win32" ? "aidlc.exe" : "aidlc");
     mkdirSync(join(install, "versions", PINNED), { recursive: true });
     writeFileSync(executable, "");
-    expect(runnerGenerator(harness)).toEqual({
+    expect(runnerGenerator(harness, true)).toEqual({
       release: PINNED,
       commands: [[executable, "engine", "gen", "runners"], [executable, "engine", "gen", "runner-scopes"]],
     });
@@ -87,24 +91,24 @@ describe("config writes the runner skills with the release its files come from",
     mkdirSync(join(install, "versions", PINNED), { recursive: true });
     writeFileSync(executable, `#!/bin/sh\necho "$* @ $(pwd -P)" >> "$T_RUNNER_LOG"\n`);
     chmodSync(executable, 0o755);
-    regenerateRunnersFor(root, harness);
+    regenerateRunnersFor(root, harness, true);
     expect(readFileSync(log, "utf-8")).toBe(`engine gen runners @ ${root}\nengine gen runner-scopes @ ${root}\n`);
   });
 
   test("a pinned release missing from a native install stops with the step that installs it", () => {
     const { harness } = staged(PINNED);
     nativeInstall();
-    expect(() => runnerGenerator(harness)).toThrow(`aidlc versions install ${PINNED}`);
+    expect(() => runnerGenerator(harness, true)).toThrow(`aidlc versions install ${PINNED}`);
   });
 
   test("a source without the release's runner tool stops instead of writing another release's text", () => {
     const { harness } = staged(PINNED, false);
-    expect(() => runnerGenerator(harness)).toThrow(`the ${PINNED} source has no tools/aidlc-runner-gen.ts`);
+    expect(() => runnerGenerator(harness, true)).toThrow(`the ${PINNED} source has no tools/aidlc-runner-gen.ts`);
   });
 
   test("a failing generator names its release", () => {
     const { root, harness } = staged(PINNED);
     process.env.T_RUNNER_EXIT = "3";
-    expect(() => regenerateRunnersFor(root, harness)).toThrow(`${PINNED}'s runner generator failed`);
+    expect(() => regenerateRunnersFor(root, harness, true)).toThrow(`${PINNED}'s runner generator failed`);
   });
 });
