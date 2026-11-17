@@ -3334,13 +3334,14 @@ describe("a Unit on the workspace's own repository", () => {
   // changes a file of AI-DLC's record that has a change here too: `ours`
   // writes the change here, `theirs` main's, over the committed text.
   function recordInTheWay(file: string, theirs: (text: string) => string, ours: (text: string) => string, clash = false, crlf = false,
-    initial = "{\"a\": 1}\n") {
+    initial = "{\"a\": 1}\n", alongside: Record<string, string> = {}) {
     const lines = (first: string, last: string): string => `${first}\nb\nc\nd\n${last}\n`;
     const home = oneRepoTeams();
     mkdirSync(join(home.dir, "src"), { recursive: true });
     if (!clash) writeFileSync(join(home.dir, "src", "refunds.ts"), lines("a", "e"));
     mkdirSync(join(home.dir, dirname(file)), { recursive: true });
     if (!existsSync(join(home.dir, file))) writeFileSync(join(home.dir, file), initial);
+    for (const [path, text] of Object.entries(alongside)) writeFileSync(join(home.dir, path), text);
     git(home.dir, ["add", "-A"]);
     git(home.dir, ["commit", "-q", "--allow-empty", "-m", "lead: before the take"]);
     git(home.dir, ["push", "-q", "origin", "main"]);
@@ -3520,6 +3521,11 @@ describe("a Unit on the workspace's own repository", () => {
     const said = run(UNIT, ["push", "--merge-main", "--put-aside"], binary.alice);
     expect(String(said.json?.error)).toStartWith(`${picture}, a file of AI-DLC's record in the repo, has a change here that is not committed`);
     expect(readFileSync(join(binary.alice, picture), "utf-8")).toBe(binary.here);
+    // A team's .gitattributes may have git diff such a file as text: what git merges it as is what counts.
+    const marked = recordInTheWay(picture, () => "PNG\0two\n", () => "PNG\0three\n", false, false, "PNG\0one\n", { ".gitattributes": "*.bin diff\n" });
+    const tried = run(UNIT, ["push", "--merge-main", "--put-aside"], marked.alice);
+    expect(String(tried.json?.error)).toStartWith(`${picture}, a file of AI-DLC's record in the repo, has a change here that is not committed`);
+    expect(readFileSync(join(marked.alice, picture), "utf-8")).toBe(marked.here);
   });
 
   test("a Unit built here whose branch starts from the plan's branch is not offered a merge of main", () => {
