@@ -27,6 +27,7 @@ import {
   ENV,
   git,
   HOME_RECORD,
+  hook,
   inSpace,
   makeHome,
   makePlanHome,
@@ -920,6 +921,10 @@ describe("a build follows a plan the lead moved to another repository", () => {
   const notices = (step: Record<string, unknown>): string[] => ((step.change_notices ?? []) as string[]).filter((line) => line.startsWith("The plan of fixture"));
   const homeLocation = (pay: string): string | null => field(readFileSync(join(buildDir(pay, "refunds"), "aidlc-state.md"), "utf-8"), "Home Location");
   const chat = (name: string): NodeJS.ProcessEnv => ({ ...ENV, AIDLC_SESSION_OVERRIDE: name });
+  // The person writes in that chat: a line kept for the reply they read goes once a step carried it.
+  const writes = (dir: string, name: string): void => {
+    expect(hook(dir, chat(name), { hook_event_name: "UserPromptSubmit", session_id: name, prompt: "go on" }).status).toBe(0);
+  };
   function took(repos = ["billing"]): { home: PlanHome; pay: string } {
     const home = makePlanHome();
     const pay = teamWorkspace(home.hosts, "pay", repos);
@@ -933,6 +938,7 @@ describe("a build follows a plan the lead moved to another repository", () => {
     const step = next(pay, chat("pay-later"));
     expect(notices(step), JSON.stringify(step).slice(0, 900)).toEqual([`The plan of fixture moved to billing (${home.hosts.billing}); this build reads it there now.`]);
     expect(homeLocation(pay)).toBe(home.hosts.billing);
+    writes(pay, "pay-later");
     const after = [next(pay, chat("pay-later")), next(pay, chat("pay-later-2"))];
     expect(after.flatMap(notices), JSON.stringify(after[1]).slice(0, 900)).toEqual([]);
   });
@@ -948,6 +954,7 @@ describe("a build follows a plan the lead moved to another repository", () => {
     expect(said[0]).toEndWith("), so this build carries on from the copy here; no other Unit of it can be taken until it can be read. If you reach billing by another address, tell me which.");
     expect(JSON.stringify(step)).not.toContain("could not be read just now, so this step follows your team's own rules");
     expect(homeLocation(pay)).toBe(home.hosts["checkout-api"]);
+    writes(pay, "pay-later");
     expect(notices(next(pay, chat("pay-later")))).toEqual([]);
     const offer = next(pay, chat("pay-later"), ["--units"]);
     expect(JSON.stringify(offer)).not.toContain("Start checkout-ui");
@@ -1114,6 +1121,10 @@ describe("a build reads the plan at an address its builder says, after the repos
   const notices = (step: Record<string, unknown>): string[] => ((step.change_notices ?? []) as string[]).filter((line) => line.startsWith("The plan of fixture"));
   const homeLocation = (pay: string): string | null => field(readFileSync(join(buildDir(pay, "refunds"), "aidlc-state.md"), "utf-8"), "Home Location");
   const chat = (name: string): NodeJS.ProcessEnv => ({ ...ENV, AIDLC_SESSION_OVERRIDE: name });
+  // The person writes in that chat: a line kept for the reply they read goes once a step carried it.
+  const writes = (dir: string, name: string): void => {
+    expect(hook(dir, chat(name), { hook_event_name: "UserPromptSubmit", session_id: name, prompt: "go on" }).status).toBe(0);
+  };
   // A copy of a repository at another path, every ref and commit kept, as a host move's mirror makes it.
   const mirrorOf = (host: string, label: string): string => {
     const at = join(tempDir(label), "repo.git");
@@ -1144,7 +1155,8 @@ describe("a build reads the plan at an address its builder says, after the repos
       const said = next(pay, chat("pay-later"), ["--lead-address", mirror]);
       expect(notices(said), JSON.stringify(said).slice(0, 900)).toEqual([`The plan of fixture moved to checkout-api (${mirror}); this build reads it there now.`]);
       expect(homeLocation(pay)).toBe(mirror);
-      const after = [next(pay, chat("pay-later")), next(pay, chat("pay-later-2"))];
+      writes(pay, "pay-later");
+    const after = [next(pay, chat("pay-later")), next(pay, chat("pay-later-2"))];
       expect(after.flatMap(notices), JSON.stringify(after[1]).slice(0, 900)).toEqual([]);
       expect([said, ...after].flatMap(heard18b)).toEqual([]);
     });
@@ -1228,7 +1240,8 @@ describe("a build reads the plan at an address its builder says, after the repos
       // The one line of the plan, in place of the moved line.
       expect(notices(said), JSON.stringify(said).slice(0, 900)).toEqual(["The plan of fixture in checkout-api was shared again since you took refunds; what you took stays as it was."]);
       expect(homeLocation(pay)).toBe(mirror);
-      const after = [next(pay, chat("pay-later")), next(pay, chat("pay-later-2"))];
+      writes(pay, "pay-later");
+    const after = [next(pay, chat("pay-later")), next(pay, chat("pay-later-2"))];
       expect(after.flatMap(notices), JSON.stringify(after[1]).slice(0, 900)).toEqual([]);
     });
   }
@@ -1300,7 +1313,8 @@ describe("a build reads the plan at an address its builder says, after the repos
       expect(step.error, JSON.stringify(step).slice(0, 900)).toBeUndefined();
       expect(notices(step), JSON.stringify(step).slice(0, 900)).toEqual(["The plan of fixture says it moved, but checkout-api does not hold it, so this " +
         "build carries on from the copy here; no other Unit of it can be taken until the lead's project has put that right."]);
-      expect(notices(next(pay, chat("pay-later")))).toEqual([]);
+      writes(pay, "pay-later");
+    expect(notices(next(pay, chat("pay-later")))).toEqual([]);
       expect(homeLocation(pay)).toBe(followFirst ? mirror : old);
     });
   }

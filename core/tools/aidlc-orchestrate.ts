@@ -10066,6 +10066,8 @@ function planEndsOwed(pd: string): AskDirective | null {
 function sayBuildNotes(pd: string, state: string | null): void {
   for (const note of state ? buildClaimNotes(pd, state, engineSessionId) : []) {
     if (typeof note === "string") sayWithStepOnce(pd, note);
+    // Kept for the reply the person reads, where the chat can keep it; else with this step.
+    else if (note.reply === true && keptForReply(pd, [note.line]).length === 0) continue;
     else sayWithStepOnce(pd, note.line, note.once);
   }
 }

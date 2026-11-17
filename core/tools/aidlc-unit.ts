@@ -9511,7 +9511,7 @@ function buildsFollow(pd: string, id8: string, from: string, follow: Exclude<Pla
     // line, said at the move whatever was said before.
     if (parted) {
       for (const { build } of builds) {
-        saidWithNextStep(pd, planSharedOverWords(follow.plan, build.unit));
+        saidWithNextStep(pd, planSharedOverWords(follow.plan, build.unit), { forReply: true });
         noteEngineAskMark(pd, planSharedOverMark(build.unit));
       }
       return true;
@@ -9519,9 +9519,10 @@ function buildsFollow(pd: string, id8: string, from: string, follow: Exclude<Pla
   }
   const line = planMovedLine(follow, "build");
   const chat = resolveWorkflowSelection(pd).sessionId ?? null;
-  // Followed, it is said once by itself (the next look reads the new place); not followed, once a chat.
+  // Followed, it is said once by itself (the next look reads the new place); not followed, once a chat. Kept for
+  // the reply: a build meets it at a step that starts a stage, in the middle of a long turn.
   if (follow.kind === "followed" || chat === null || !personLineHeard(pd, chat, line)) {
-    saidWithNextStep(pd, line);
+    saidWithNextStep(pd, line, { forReply: true });
     if (chat !== null && follow.kind !== "followed") markPersonLinesHeard(pd, chat, [line]);
   }
   return true;
@@ -14249,11 +14250,12 @@ function takeNewerInput(
 // and the stages that used it read as current, on every Guard Policy).
 // The home's answer to a proposal is kept heard by that proposal (`once`), so a
 // second answer to the same input is heard in a chat that heard the first.
-export function buildClaimNotes(projectDir: string, stateContent: string, sessionId?: string): Array<string | { line: string; once: string }> {
+export function buildClaimNotes(projectDir: string, stateContent: string, sessionId?: string):
+  Array<string | { line: string; once?: string; reply?: true }> {
   const build = unitBuildOf(stateContent);
   if (build === null) return [];
   const space = buildHomeSpace(projectDir, build);
-  const lines: Array<string | { line: string; once: string }> = [];
+  const lines: Array<string | { line: string; once?: string; reply?: true }> = [];
   if (!isReadOnlyEngineProbe()) {
     let home: HomeWork | null = null;
     try {
@@ -14298,8 +14300,8 @@ export function buildClaimNotes(projectDir: string, stateContent: string, sessio
     const closed = isGitAddress(build.homeLocation) ? planClosedBy(projectDir, copyOf(build.homeLocation, planRecordRef(idSuffix(build.homeWork)))) : null;
     if (closed !== null && engineAskMark(projectDir, planClosedHeardMark(closed.at)) === null) {
       noteEngineAskMark(projectDir, planClosedHeardMark(closed.at));
-      lines.push(`The plan of ${closed.label} in ${closed.repo} was closed by ${closed.name}, ${closed.day}. Your build of ${build.unit} is ` +
-        "still here: carry it on, or tell me and I will hand it back.");
+      lines.push({ line: `The plan of ${closed.label} in ${closed.repo} was closed by ${closed.name}, ${closed.day}. Your build of ${build.unit} is ` +
+        "still here: carry it on, or tell me and I will hand it back.", reply: true });
     }
     if (refreshed?.refused && home !== null) {
       lines.push(newsNotTakenIn(joinNames([...new Set(recordPlacesOfWork(projectDir, home.id8, home).map((place) => place.repo))])));
