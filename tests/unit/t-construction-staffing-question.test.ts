@@ -73,14 +73,17 @@ const HANDOUT_LINE = "No team has taken a Unit yet, so this session builds them 
 const SKELETON_HANDOUT_LINE = "No team has taken a Unit yet, so this session builds them here, starting with the " +
   "alpha Unit, the walking skeleton the others build on. To hand the others to teams, share this work through " +
   "git once it is built and approved; each team then runs `/aidlc` in its own clone to take one.";
-// The note an Inception step carries for the agent while nobody has said who
-// builds the Units, word for word: an unclear answer waits for the question.
+// The note a step carries for the agent while the person can still say who
+// builds the Units, word for word: before the question an unclear answer waits
+// for it; after a pick in Inception, or the question passed over, it stays.
 const SETTER = "bun .claude/tools/aidlc-state.ts set-unit-ownership";
+const SETTERS = `run \`${SETTER} solo --message <id>\` when this session builds them, or \`${SETTER} team --message <id>\` ` +
+  "when several teams each own one, with the id of the message they said it in, and tell them in one plain line what " +
+  "it recorded, with the notice line it prints.";
 const WHO_BUILDS_NOTE = "When the person has said who builds the Units before AI-DLC asks it, record it from their " +
-  "message, and where it is not clear which, leave it for AI-DLC's own question: run " +
-  `\`${SETTER} solo --message <id>\` when this session builds them, or \`${SETTER} team --message <id>\` when ` +
-  "several teams each own one, with the id of the message they said it in, and tell them in one plain line what it " +
-  "recorded, with the notice line it prints.";
+  `message, and where it is not clear which, leave it for AI-DLC's own question: ${SETTERS}`;
+const WHO_BUILDS_CHANGE_NOTE = "When the person says who builds the Units, record it from their message, and where it is " +
+  `not clear which, leave it as it is: ${SETTERS}`;
 const saysHandout = (d: Directive) =>
   (d.change_notices ?? []).some((line) => line === HANDOUT_LINE || line === SKELETON_HANDOUT_LINE);
 
@@ -611,7 +614,8 @@ describe("who builds the Units is asked once as Inception ends", () => {
     expect(ran.rc, ran.out).toBe(0);
     expect(field(state(proj), "Unit Ownership")).toBe("team");
     expect(events(proj, "UNIT_OWNERSHIP_SET").length).toBe(1);
-    expect(JSON.stringify(next(proj, [], CHAT))).not.toContain("set-unit-ownership");
+    // A change of mind later in Inception still has the setter.
+    expect(next(proj, [], CHAT).board_note).toBe(WHO_BUILDS_CHANGE_NOTE);
     approveDeliveryPlanning(proj);
     const after = next(proj, [], CHAT);
     expect(isStaffingAsk(after), JSON.stringify(after)).toBe(false);
@@ -655,12 +659,58 @@ describe("who builds the Units is asked once as Inception ends", () => {
     expect(ran.out).toContain("Construction now builds one Unit at a time");
   });
 
-  test("an Inception step with one Unit, or with who builds already recorded, hands no setter", () => {
-    for (const proj of [project({ at: "delivery-planning" }, ["alpha"]), project({ at: "delivery-planning", ownership: "solo" })]) {
-      const step = next(proj, [], CHAT);
-      expect(step.kind, JSON.stringify(step)).toBe("run-stage");
-      expect(JSON.stringify(step)).not.toContain("set-unit-ownership");
-    }
+  test("an Inception step with one Unit hands no setter; with who builds recorded it hands the setter for a change of mind", () => {
+    const one = next(project({ at: "delivery-planning" }, ["alpha"]), [], CHAT);
+    expect(one.kind, JSON.stringify(one)).toBe("run-stage");
+    expect(JSON.stringify(one)).not.toContain("set-unit-ownership");
+    const proj = project({ at: "delivery-planning", ownership: "solo" });
+    const step = next(proj, [], CHAT);
+    expect(step.board_note, JSON.stringify(step)).toBe(WHO_BUILDS_CHANGE_NOTE);
+    const id = personSays(proj, "Actually several teams will build these.", String(CHAT.AIDLC_SESSION_OVERRIDE));
+    const ran = runState(proj, setterFor(step, "team", id), CHAT);
+    expect(ran.rc, ran.out).toBe(0);
+    expect(field(state(proj), "Unit Ownership")).toBe("team");
+  });
+
+  test("passed over: the Construction steps hand the setter until a Unit's work starts, and several teams said then is recorded", () => {
+    const proj = project();
+    expect(isStaffingAsk(next(proj, [], CHAT))).toBe(true);
+    personSays(proj, "what is a Unit again?", String(CHAT.AIDLC_SESSION_OVERRIDE));
+    const step = next(proj, [], CHAT);
+    expect(step.change_notices ?? [], JSON.stringify(step)).toContain(DEFAULT_LINE);
+    expect(step.board_note).toBe(WHO_BUILDS_CHANGE_NOTE);
+    expect(next(proj, [], CHAT).board_note).toBe(WHO_BUILDS_CHANGE_NOTE);
+    const id = personSays(proj, "Several teams, then.", String(CHAT.AIDLC_SESSION_OVERRIDE));
+    const ran = runState(proj, setterFor(step, "team", id), CHAT);
+    expect(ran.rc, ran.out).toBe(0);
+    expect(field(state(proj), "Unit Ownership")).toBe("team");
+    const after = next(proj, [], CHAT);
+    expect(isStaffingAsk(after)).toBe(false);
+    expect(after.change_notices ?? []).toContain(HANDOUT_LINE);
+    expect(JSON.stringify(after)).not.toContain("set-unit-ownership solo");
+    // Once a Unit's work starts the pick stays, and no step hands the setter.
+    const started = project();
+    expect(isStaffingAsk(next(started, [], CHAT))).toBe(true);
+    personSays(started, "what is a Unit again?", String(CHAT.AIDLC_SESSION_OVERRIDE));
+    expect(next(started, [], CHAT).board_note).toBe(WHO_BUILDS_CHANGE_NOTE);
+    appendAuditEntry("UNIT_STARTED", { Stage: "functional-design", Unit: "alpha", "Run floor": "unstarted#0" }, started);
+    expect(JSON.stringify(next(started, [], CHAT))).not.toContain("set-unit-ownership");
+  });
+
+  test("passed over on a stage-by-stage plan with parallel builds: the setter from the Construction step, guards on, takes the person's message for the switch", () => {
+    const proj = project({ iteration: "stage-major", execution: "swarm" });
+    expect(isStaffingAsk(next(proj, [], CHAT))).toBe(true);
+    personSays(proj, "what is a Unit again?", String(CHAT.AIDLC_SESSION_OVERRIDE));
+    const step = next(proj, [], CHAT);
+    expect(step.board_note, JSON.stringify(step)).toBe(WHO_BUILDS_CHANGE_NOTE);
+    const id = personSays(proj, "Several teams, one Unit each.", String(CHAT.AIDLC_SESSION_OVERRIDE));
+    const env = testGuardEnvironment({ ...CHAT }, "production");
+    delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    const ran = runState(proj, setterFor(step, "team", id), env);
+    expect(ran.rc, ran.out).toBe(0);
+    expect(field(state(proj), "Construction Iteration")).toBe("unit-major");
+    expect(field(state(proj), "Construction Execution")).toBe("serial");
+    expect(ran.out).toContain("Construction now builds the Units one after another");
   });
 
   test("Delivery Planning no longer carries the question in prose", () => {

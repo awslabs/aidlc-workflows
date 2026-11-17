@@ -2139,9 +2139,10 @@ function prepareEmission(directive: Directive): PreparedEmission {
     const noted = { ...directive, board_note: teamCommandsNote(engineProjectDir) } as Directive;
     if (Buffer.byteLength(JSON.stringify(noted), "utf-8") <= directiveMaxBytes()) directive = noted;
   }
-  if (directive.kind === "run-stage" && directive.phase === "inception" && !("board_note" in directive) && engineProjectDir) {
-    const note = whoBuildsNote(engineProjectDir);
-    const noted = note === null ? null : { ...directive, board_note: note } as Directive;
+  if (directive.kind === "run-stage" && engineProjectDir) {
+    const note = whoBuildsNote(engineProjectDir, directive.phase);
+    const before = "board_note" in directive && typeof directive.board_note === "string" ? directive.board_note : "";
+    const noted = note === null ? null : { ...directive, board_note: [before, note].filter(Boolean).join(" ") } as Directive;
     if (noted !== null && Buffer.byteLength(JSON.stringify(noted), "utf-8") <= directiveMaxBytes()) directive = noted;
   }
   const levelNote = engineProjectDir && directive.kind !== "load-steering" && directive.kind !== "error" && directive.kind !== "ask" &&
@@ -5996,7 +5997,6 @@ function constructionStaffingAsk(
   const evidence = routingEvidenceFor(projectDir, stateContent);
   const dag = unitsToStaff(projectDir, evidence);
   if (dag === null) return null;
-  if ((evidence?.allRows ?? readAuditShardEvents(projectDir)).some((row) => row.event === "UNIT_STARTED")) return null;
   const units = dag.units.length;
   // The skeleton's stance is settled first, on a step the agent passes
   // through without speaking: a line waits for the step after it.
@@ -6048,28 +6048,37 @@ function constructionStaffingAsk(
   };
 }
 
-// A plan whose builders are the person's to say: its DAG when it holds two or
-// more Units, or null. The question and the note before it both read this.
+// A plan whose builders are still the person's to say: its DAG while it holds
+// two or more Units and no Unit's work has started, or null. The question and
+// the notes for the person's own words read this.
 function unitsToStaff(projectDir: string, evidence: ConstructionEvidence | undefined) {
   const dag = resolveBoltBatches(projectDir, evidence);
-  return dag.state === "ok" && dag.units.length >= 2 ? dag : null;
+  if (dag.state !== "ok" || dag.units.length < 2) return null;
+  return (evidence?.allRows ?? readAuditShardEvents(projectDir)).some((row) => row.event === "UNIT_STARTED") ? null : dag;
 }
 
-// The person may say who builds the Units before constructionStaffingAsk puts it,
-// in their own words (Delivery Planning asks about order and parallel builds):
-// while no pick is recorded, an Inception step carries the setter for that
-// answer, so the agent records their answer and the question is not put
-// after it.
-function whoBuildsNote(projectDir: string): string | null {
+// The person may say who builds the Units in their own words, not only at
+// constructionStaffingAsk: before it, in Inception (Delivery Planning asks about
+// order and parallel builds), where an unclear answer waits for the question;
+// and, as a change of mind, in Inception after a pick or in Construction after
+// the question was passed over. Each such step carries the setter for that
+// answer, so the agent records it and the question is not put after it.
+function whoBuildsNote(projectDir: string, phase: string): string | null {
   const state = loadStateFileIfPresent(projectDir);
-  if (state === null || (getField(state, UNIT_OWNERSHIP_FIELD) ?? "").trim() !== "") return null;
-  if (unitsToStaff(projectDir, routingEvidenceFor(projectDir, state)) === null) return null;
+  if (state === null || unitsToStaff(projectDir, routingEvidenceFor(projectDir, state)) === null) return null;
+  const picked = (getField(state, UNIT_OWNERSHIP_FIELD) ?? "").trim() !== "";
+  const when = phase === "inception" && !picked
+    ? "When the person has said who builds the Units before AI-DLC asks it, record it from their message, and where " +
+      "it is not clear which, leave it for AI-DLC's own question"
+    : phase === "inception" || (phase === "construction" && !picked && constructionStaffingPassedOver(projectDir))
+      ? "When the person says who builds the Units, record it from their message, and where it is not clear which, " +
+        "leave it as it is"
+      : null;
+  if (when === null) return null;
   const setter = `${aidlcToolInvocation("state")} set-unit-ownership`;
-  return "When the person has said who builds the Units before AI-DLC asks it, record it from their message, and " +
-    "where it is not clear which, leave it for AI-DLC's own question: run " +
-    `\`${setter} solo --message <id>\` when this session builds them, or \`${setter} team --message <id>\` when ` +
-    "several teams each own one, with the id of the message they said it in, and tell them in one plain line what " +
-    "it recorded, with the notice line it prints.";
+  return `${when}: run \`${setter} solo --message <id>\` when this session builds them, or ` +
+    `\`${setter} team --message <id>\` when several teams each own one, with the id of the message they said it in, ` +
+    "and tell them in one plain line what it recorded, with the notice line it prints.";
 }
 
 // No team has taken a Unit in this checkout's view: no participant marker,
