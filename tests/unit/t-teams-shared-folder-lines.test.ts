@@ -321,7 +321,7 @@ describe("no line about the team's record at a stopping point", () => {
     expect(next(alice).ask_type).toBe("unit-push");
     const later = run(UNIT, ["push", "--later"], alice);
     expect(later.status, later.out).toBe(0);
-    expect(later.json?.notice).toBe("Nothing is pushed. I'll push refunds when you want it to go to the lead.");
+    expect(later.json?.notice).toBe("Nothing is pushed. I'll push refunds when you ask.");
     // The end, and every look after it, carry nothing more.
     for (let look = 0; look < 2; look++) {
       const end = next(alice);

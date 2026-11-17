@@ -11894,7 +11894,7 @@ function pushUnit(args: string[], projectDir?: string): void {
   const pd = resolveProjectDir(projectDir);
   const state = readStateFile(pd);
   const build = unitBuildOf(state);
-  if (build === null) fail("push sends a Unit's build back to the lead's project; this work is not one.");
+  if (build === null) fail("push is for a Unit's build; this work is not one.");
   const unit = build.unit;
   // The branch the person named (their team's own rule), kept for every
   // later push; else the one named before, else the Unit's name.
@@ -11910,7 +11910,7 @@ function pushUnit(args: string[], projectDir?: string): void {
   if (bareFlags.has("later") || flags.later !== undefined) {
     withAuditLock(pd, () => writeStateFile(pd, setOrInsertField(readStateFile(pd), "## Runtime State", UNIT_PUSH_FIELD, "later")));
     finishBuildRecord(pd);
-    console.log(JSON.stringify({ pushed: false, notice: `Nothing is pushed. I'll push ${unit} when you want it to go to the lead.` }));
+    console.log(JSON.stringify({ pushed: false, notice: `Nothing is pushed. I'll push ${unit} when you ask.` }));
     return;
   }
   // The commit message the person gave, from the file the agent wrote it to:
@@ -12016,7 +12016,7 @@ function pushUnit(args: string[], projectDir?: string): void {
     if (own !== null) {
       fail(`${name} has ${unit}'s build on branch ${own}, which holds commits ${branch} does not, so nothing was switched or ` +
         `pushed. Ask the person whether to push it on ${own}, the branch it was built on; on their yes, run ` +
-        `\`${aidlcToolInvocation("unit")} push --branch ${own}${messageFlag}\`, and the lead's project follows that branch.`);
+        `\`${aidlcToolInvocation("unit")} push --branch ${own}${messageFlag}\`.`);
     }
     const remote = pushRemoteOf(dir, branch, picked.get(repo));
     if (remote === null) fail(`${name} has no remote to push ${unit} to.`);
@@ -12208,7 +12208,7 @@ function pushUnit(args: string[], projectDir?: string): void {
       // Its branch on the remote holds commits this build is not on top of (a
       // redo built from the newer main after a turn-down): replacing that
       // branch takes a force push, which AI-DLC never makes, so the way on it
-      // gives is a new branch the lead's project follows from the result.
+      // gives is a new branch.
       const theirs = `refs/remotes/${remote}/${branch}`;
       git(dir, ["fetch", "-q", remote, `${branch}:${theirs}`]);
       const behind = git(dir, ["rev-parse", "--verify", "--quiet", theirs]).ok &&
@@ -12218,8 +12218,8 @@ function pushUnit(args: string[], projectDir?: string): void {
         const fresh = `${branch}-2`;
         fail(
           `${unit} was not pushed: its branch ${branch} on ${remote} in ${name} still holds the build pushed before, and ` +
-            `this build is not on top of it. Ask the person whether to push it as a new branch, ${fresh}, which the ` +
-            `lead's project then follows; on their yes, run \`${aidlcToolInvocation("unit")} push --branch ${fresh}${messageFlag}\`. ` +
+            `this build is not on top of it. Ask the person whether to push it as a new branch, ${fresh}; ` +
+            `on their yes, run \`${aidlcToolInvocation("unit")} push --branch ${fresh}${messageFlag}\`. ` +
             `Replacing ${branch} itself takes a force push of their own; AI-DLC never forces a push.${whereNow()}`,
         );
       }

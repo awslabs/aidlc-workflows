@@ -970,7 +970,7 @@ describe("the push", () => {
     // A push that names no branch never moves it back onto the first build's.
     const refused = run(UNIT, ["push"], alice);
     expect(refused.status, refused.out).not.toBe(0);
-    expect(String(refused.json?.error)).toContain("push --branch refunds-v2`");
+    expect(String(refused.json?.error)).toEndWith("push --branch refunds-v2`.");
     // A push given the message: the way on it names carries the message on.
     const withIt = run(UNIT, ["push", "--commit-message-file", commitMessageFile(record)], alice);
     expect(withIt.status, withIt.out).not.toBe(0);
@@ -1091,6 +1091,13 @@ describe("the push", () => {
     expect(String(end.done_note)).toContain(`aidlc-unit.ts push --commit-message-file ${commitMessageFile(record)}\` and say its notice line;`);
   });
 
+  test("a push at work that is no Unit's build says what push is for", () => {
+    const { home } = refundsTakenInClone();
+    const said = run(UNIT, ["push"], home.dir);
+    expect(said.status).not.toBe(0);
+    expect(String(said.json?.error)).toBe("push is for a Unit's build; this work is not one.");
+  });
+
   test("the build's end offers the push; not now pushes nothing, and the end says so once", () => {
     const { alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
@@ -1110,9 +1117,7 @@ describe("the push", () => {
     expect(choices[1].command).toEndWith("aidlc-unit.ts push --later");
     const later = run(UNIT, ["push", "--later"], alice);
     expect(later.status, later.out).toBe(0);
-    expect(later.json?.notice).toBe(
-      "Nothing is pushed. I'll push refunds when you want it to go to the lead.",
-    );
+    expect(later.json?.notice).toBe("Nothing is pushed. I'll push refunds when you ask.");
     expect(tellsWhatToType(ask.question, ask.choices, later.json?.notice)).toBe(false);
     const end = next(alice);
     expect(end.kind, JSON.stringify(end)).toBe("done");
@@ -2672,6 +2677,7 @@ describe("at the home", () => {
     expect(said, refused.out).toContain("its branch refunds on origin in billing still holds the build pushed before");
     expect(said).not.toContain("non-fast-forward");
     expect(said).toContain("aidlc-unit.ts push --branch refunds-2`");
+    expect(said).toContain("Ask the person whether to push it as a new branch, refunds-2; on their yes, run `");
     expect(said).toContain("AI-DLC never forces a push");
     const again = run(UNIT, ["push", "--branch", "refunds-2"], alice);
     expect(again.status, again.out).toBe(0);
