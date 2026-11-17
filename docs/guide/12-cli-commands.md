@@ -863,8 +863,8 @@ pre-commit and commit-msg hooks; in a file you had changed too, only the Unit's
 change), and once every repo is committed runs `git push -u <remote> <unit>`:
 no force, no `--no-verify`. The remote is the one git would push to
 (`branch.<unit>.pushRemote`, `remote.pushDefault`, the branch's remote, then
-`origin` or the one remote); with several and none set, `--remote
-<repo>=<name>[,...]` names it, and the push offer lists each. Your other
+`origin` or the one remote); `--remote <repo>=<name>[,...]` names it instead,
+and with several and none set the push offer lists each. Your other
 uncommitted work comes along uncommitted and is never committed; the line says
 where you are and the way back. What your host prints about your branch after
 the push, with a link in it, such as GitHub's link to create a pull request or
@@ -924,6 +924,14 @@ the empty commit back. Not now (`--to-fork --later`) pushes nothing and removes
 the draft. A later replace of that branch (after a rebase onto the plan's main,
 say) is leased on what the early push left there; that is known on this
 computer only, so from another computer of yours the push offers a new branch.
+You can ask for the early push in your own words too; `--to-fork --remote
+<repo>=<name>` names the remote that is your fork where your clone has several
+(never the one at the plan's address). Where that repository is not cloned here
+yet, the take's clone offer also offers to clone your fork by the address you
+give, with plain git, so the team's `repos.json` never takes a fork's address.
+When the Unit's own push is refused and the host names no rule of its own, the
+line offers to push to your fork instead: give its address (added to your clone
+as one remote on your word) or the name of a remote you have for it.
 
 The branch is named after the Unit unless you name it: when your team's
 branches follow a rule of their own (a pre-push hook, or the host, wants

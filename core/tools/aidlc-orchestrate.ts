@@ -10729,7 +10729,11 @@ function unitToForkAsk(projectDir: string, stateContent: string): AskDirective |
   if (engineAskMark(projectDir, toForkDueMark(unit)) === null || engineAskMark(projectDir, toForkMark(unit)) !== null) return null;
   const branch = unitBranchOf(stateContent, unit);
   const offer = forkOfferOf(projectDir, build, branch);
-  if (offer === null) return null;
+  if (offer === null) {
+    // One look once that repository is checked out here: with no fork in it, the offer is no longer due.
+    if (isGitRepoDir(repoDir(projectDir, buildRecordRepo(projectDir, build)))) clearEngineAskMark(projectDir, toForkDueMark(unit));
+    return null;
+  }
   const today = toForkMessage(unit);
   const message = offer.own ? null : commitMessageStep(projectDir, commitMessageFile(projectDir, "fork"), today,
     (file) => commitDraftStep("the empty commit's message", joinRepoNames([offer.name]), `the start of ${unit}, with nothing in it yet`, file, today));

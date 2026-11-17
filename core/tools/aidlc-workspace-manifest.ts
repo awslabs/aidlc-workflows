@@ -600,12 +600,18 @@ export function localUnreadableLine(projectDir: string, repoNames: string[]): st
     `${one ? "is" : "are"} looked for where repos.json puts ${one ? "it" : "them"} for now.`;
 }
 
+// Where repos.json puts a repo's clone, as its lines say it.
+export function repoClonePath(projectDir: string, name: string): string {
+  const repos = readWorkspaceRepos(projectDir);
+  return displayRepoPath(repos.pathSource.get(name) === undefined ? name : repos.entries.get(name)?.path ?? name);
+}
+
 // The offer, when repos.json can clone a repo that is not where it puts it.
 export function repoCloneOfferLine(projectDir: string, repoNames: string[]): string {
   const repos = readWorkspaceRepos(projectDir);
   const where = (name: string): string => {
     const source = repos.pathSource.get(name);
-    const at = displayRepoPath(source === undefined ? name : repos.entries.get(name)?.path ?? name);
+    const at = repoClonePath(projectDir, name);
     return source === undefined ? `${name} is not at ${at} in this workspace yet` : `${name} is not at ${at} yet, where ${source} puts it`;
   };
   return repoNames.length === 1

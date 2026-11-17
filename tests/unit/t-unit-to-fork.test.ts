@@ -9,12 +9,16 @@
 // the fork alone) with no upstream there, one empty commit only where the
 // branch has none of its own, pushed with -u to the fork so the Unit's own push
 // later goes there too, and the replace leased on that early push; a refused
-// push takes the empty commit back; only on the offer's mark; Not now removes
-// the draft. Real clones of bare remotes, through the shipped tools.
+// push takes the empty commit back; only on the offer's mark or the person's
+// own turn; Not now removes the draft. Where that repository is not cloned
+// here yet, the clone offer says first what a fork would do, and a fork the
+// person clones there gets the offer; the Unit's own push refused for access
+// names their fork as the way on (`unit push --remote <repo>=<name>`). Real
+// clones of bare remotes, through the shipped tools.
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { noteEngineAskMark, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import * as unitTool from "../../dist/claude/.claude/tools/aidlc-unit.ts";
@@ -80,6 +84,17 @@ function forked(layout: "github" | "fork-only" = "github", refused?: "access" | 
 const FORK_OFFER = (fork: string): string => `Your clone of checkout-api has a remote, origin, at ${fork}, which is not the address the plan ` +
   "has for checkout-api. Do you want me to push a branch for refunds there now, with one empty commit on it, for an early pull " +
   "request? Its message:\n\nrefunds: start";
+
+// The take's clone offer, as the agent meets it after the take.
+function cloneStep(alice: string): Record<string, unknown> | null {
+  for (let at = 0; at < 6; at++) {
+    const step = next(alice);
+    if (step.ask_type === "unit-clone") return step;
+    if (step.kind !== "ask") continue;
+    return null;
+  }
+  return null;
+}
 
 // The steps after the take, as the agent takes them, until the fork offer or none.
 function toForkStep(alice: string, env: NodeJS.ProcessEnv = ENV): Record<string, unknown> | null {
@@ -200,11 +215,24 @@ describe("the push of a Unit's branch early to the person's fork", () => {
       "No push of refunds to a fork was offered or asked for, so nothing was pushed.");
   });
 
-  test("asked or offered where the clone has no fork: that is what it says, and nothing is pushed", () => {
-    const { alice } = refundsTakenInClone();
+  test("asked or offered where no one fork can be told: what the clone has, the way on, and the remote the person names", () => {
+    const { alice, hosts } = refundsTakenInClone();
     offered(alice);
-    expect(String(run(UNIT, ["push", "--to-fork"], alice).json?.notice)).toBe(
-      "No fork of checkout-api was found in your clone of it (one remote not at the plan's address for it), so nothing was pushed.");
+    expect(String(run(UNIT, ["push", "--to-fork"], alice).json?.notice)).toStartWith("Your clone of checkout-api has no remote but the one at " +
+      "the plan's address, so nothing was pushed. Tell me your fork's address, and I'll push refunds there. On a remote's name, run `");
+    const api = join(alice, "checkout-api");
+    const fork = join(tempDir("fork"), "checkout-api.git");
+    git(join(fork, ".."), ["clone", "-q", "--bare", hosts["checkout-api"], fork]);
+    git(api, ["remote", "add", "alice", fork]);
+    git(api, ["remote", "add", "mirror", join(tempDir("mirror"), "x.git")]);
+    expect(String(run(UNIT, ["push", "--to-fork"], alice).json?.notice)).toStartWith("Your clone of checkout-api has two remotes that are " +
+      "not at the plan's address for it, alice and mirror, so nothing was pushed. Tell me which is your fork, and I'll push refunds there.");
+    const named = run(UNIT, ["push", "--to-fork", "--remote", "checkout-api=alice"], alice);
+    expect(named.status, named.out).toBe(0);
+    expect(String(named.json?.notice)).toStartWith("Pushed branch refunds to alice in checkout-api. It starts from origin/main");
+    expect(onFork(fork)).toBe(0);
+    // The remote at the plan's address is never taken for the fork.
+    expect(String(run(UNIT, ["push", "--to-fork", "--remote", "checkout-api=origin"], alice).json?.notice)).toStartWith("Your clone of checkout-api has two remotes");
   });
 
   test("git refuses the empty commit for a reason of its own (signing): git's words, never their hook's", () => {
@@ -272,6 +300,66 @@ describe("the push of a Unit's branch early to the person's fork", () => {
     expect(String(offer?.question)).not.toContain("alice:");
   });
 
+  test("a take refused for access with the repository not cloned here: the clone offer says what a fork would do first, and a fork cloned there gets the offer", () => {
+    let host = "";
+    const { alice } = refundsTakenInClone((alice) => {
+      host = git(join(alice, "checkout-api"), ["remote", "get-url", "origin"]);
+      renameSync(join(alice, "checkout-api"), join(alice, "..", "checkout-api-elsewhere"));
+      git(alice, ["config", `url.${join(tempDir("no-access"), "none.git")}.pushInsteadOf`, host]);
+    });
+    const clone = cloneStep(alice);
+    expect(String(clone?.question)).toStartWith("checkout-api takes no push from you. If you will push refunds through a fork of your own, " +
+      "tell me its address and I'll clone that into checkout-api, then offer to push a branch for refunds there for an early pull " +
+      "request. Or I can clone checkout-api from the plan's address, and your fork is added before the push. checkout-api is not at " +
+      "checkout-api in this workspace yet.");
+    const choices = clone?.choices as Array<{ label: string; detail?: string; command?: string }>;
+    expect(choices.map((choice) => choice.label)).toEqual(["Clone checkout-api", "Clone my fork", "Not now"]);
+    expect(choices[1]).toEqual({ label: "Clone my fork", detail: "Tell me its address, and I clone it into checkout-api with git." });
+    // Not now to the clone; then the person clones their own fork there.
+    const fork = join(tempDir("fork"), "checkout-api.git");
+    git(join(fork, ".."), ["clone", "-q", "--bare", host, fork]);
+    git(alice, ["clone", "-q", fork, "checkout-api"]);
+    const offer = toForkStep(alice);
+    expect(String(offer?.question)).toStartWith(`Your clone of checkout-api has a remote, origin, at ${fork}, which is not the address`);
+    expect((offer?.choices as Array<{ detail: string }>)[0].detail).toStartWith("Makes branch refunds from main in the plan's checkout-api with that one empty commit");
+  });
+
+  test("the clone offer says nothing of a fork after a take that was written", () => {
+    const { alice } = refundsTakenInClone((alice) => {
+      renameSync(join(alice, "checkout-api"), join(alice, "..", "checkout-api-elsewhere"));
+    });
+    const clone = cloneStep(alice);
+    expect(String(clone?.question)).toStartWith("checkout-api is not at checkout-api in this workspace yet.");
+  });
+
+  test("the Unit's own push refused for access names the fork as the way on, and that way pushes there; a host rule does not", () => {
+    const { alice, hosts, record } = refundsTakenInClone();
+    const api = join(alice, "checkout-api");
+    codeGenerated(alice, record);
+    git(api, ["config", `url.${join(tempDir("no-access"), "none.git")}.pushInsteadOf`, hosts["checkout-api"]]);
+    const refused = run(UNIT, ["push"], alice);
+    expect(refused.status).not.toBe(0);
+    const said = String(refused.json?.error);
+    expect(said).toContain("If checkout-api takes no push from you, tell me your fork's address, or the name of a remote you already " +
+      "have for it, and I'll push refunds there. On a remote's name, run `");
+    expect(said).toContain("push --remote checkout-api=<that name>` with it; on an address, add it to their clone of checkout-api as one remote");
+    const fork = join(tempDir("fork"), "checkout-api.git");
+    git(join(fork, ".."), ["clone", "-q", "--bare", hosts["checkout-api"], fork]);
+    git(api, ["remote", "add", "mine", fork]);
+    const pushed = run(UNIT, ["push", "--remote", "checkout-api=mine"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(git(fork, ["show", "refunds:src/refunds.ts"])).toBe("export const refunds = 1;");
+    // A host rule on the branch: its own words, and no fork named.
+    const ruled = refundsTakenInClone();
+    codeGenerated(ruled.alice, ruled.record);
+    const hook = join(ruled.hosts["checkout-api"], "hooks", "pre-receive");
+    writeFileSync(hook, "#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/heads/*) echo 'branches are made by the bot' >&2; exit 1;; esac; done\n");
+    chmodSync(hook, 0o755);
+    const byRule = run(UNIT, ["push"], ruled.alice);
+    expect(byRule.status).not.toBe(0);
+    expect(String(byRule.json?.error)).not.toContain("add your fork");
+  });
+
   test("no offer: a host rule on the record's refs, AI-DLC's own clone with no fork, an unattended run, or a fork added after the take", () => {
     expect(toForkStep(forked("github", "rule").alice)).toBeNull();
     const own = refundsTakenInClone((alice) => {
@@ -279,10 +367,11 @@ describe("the push of a Unit's branch early to the person's fork", () => {
     });
     expect(toForkStep(own.alice)).toBeNull();
     expect(toForkStep(forked("github", "access").alice, { ...ENV, AIDLC_UNATTENDED: "1" })).toBeNull();
-    // The fork added once the build is under way: never offered mid-build.
+    // The fork added once the step after the take looked: never offered mid-build.
     const later = refundsTakenInClone((alice) => {
       git(alice, ["config", `url.${join(tempDir("no-access"), "none.git")}.pushInsteadOf`, git(join(alice, "checkout-api"), ["remote", "get-url", "origin"])]);
     });
+    expect(toForkStep(later.alice)).toBeNull();
     const api = join(later.alice, "checkout-api");
     git(api, ["remote", "rename", "origin", "upstream"]);
     git(api, ["remote", "add", "origin", join(tempDir("late-fork"), "checkout-api.git")]);

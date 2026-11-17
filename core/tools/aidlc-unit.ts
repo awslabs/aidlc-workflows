@@ -259,7 +259,7 @@ import {
 } from "./aidlc-unit-teams.js";
 import { gitOperationUnderWay, rebaseUnderWay, recordChanged, recordCommitBlock, recordPaths, submoduleLeavesProjectRepo } from "./aidlc-git.ts";
 import { ownFilesToCommit } from "./aidlc-brought-files.ts";
-import { commitOwnCommand, displayRepoPath, leftFilesNamed, UPDATE_COMMIT_MESSAGE, UPDATE_MESSAGE_KEY, reposManifestPath, localUnreadableLine, readWorkspaceRepos, repoCloneable, repoCloneOfferLine, repoNotThereLine, withoutCredentials, workspaceManifestAt } from "./aidlc-workspace-manifest.js";
+import { commitOwnCommand, displayRepoPath, leftFilesNamed, UPDATE_COMMIT_MESSAGE, UPDATE_MESSAGE_KEY, reposManifestPath, localUnreadableLine, readWorkspaceRepos, repoCloneable, repoCloneOfferLine, repoClonePath, repoNotThereLine, withoutCredentials, workspaceManifestAt } from "./aidlc-workspace-manifest.js";
 import { maskUserinfo, workspaceCloneUrl } from "./aidlc-workspace-sync.ts";
 import { gitAddressKey } from "./aidlc-workspace-repos.ts";
 import { loadGraph } from "./aidlc-graph.ts";
@@ -11636,14 +11636,11 @@ function takeUnit(args: string[], projectDir?: string, rhythm?: UnitClaimPayload
   const closed = fromPlan ? planClosedBy(pd, copyOf(home.location, planRecordRef(home.id8))) : null;
   if (closed !== null) withWorkPinned({ space: build.space, intent: build.dirName }, () => noteEngineAskMark(pd, planClosedHeardMark(closed.at)));
   // A take its record's repository refused for want of access (a host rule
-  // on the record's ref alone is not that), where the person's clone of that
-  // repository has a fork: the next step offers once to push the Unit's
-  // branch there early (the fork offer).
+  // on the record's ref alone is not that): the clone offer says what a fork
+  // would do, and the first step with that repository checked out here offers
+  // once to push the Unit's branch to the fork there (the fork offer).
   if (notRecorded !== null && !("byRule" in pushed)) {
-    withWorkPinned({ space: build.space, intent: build.dirName }, () => {
-      const made = unitBuildOf(readStateFile(pd));
-      if (made !== null && forkPlaceOf(pd, made) !== null) noteEngineAskMark(pd, toForkDueMark(unit));
-    });
+    withWorkPinned({ space: build.space, intent: build.dirName }, () => noteEngineAskMark(pd, toForkDueMark(unit)));
   }
   const taken = `${closed === null ? "" : `The plan of ${closed.label} in ${closed.repo} was closed by ${closed.name}, ${closed.day}, so its Units are no longer offered. `}` +
     `${src.moved === undefined ? "" : `${src.moved} `}${unit} is yours. You build it${spaceWords(build.space)} under your team's rules${leadsToo}, from what the lead approved.` +
@@ -12533,17 +12530,17 @@ function buildsHome(projectDir: string, build: UnitBuild): HomeWork {
   return lead;
 }
 
-// The remote a push of the Unit's branch goes to, in git's own order: the
-// branch's pushRemote, remote.pushDefault, the branch's remote, then origin or
-// the one remote. Several remotes and none of these set: the person's pick, or
-// the remotes to put to them.
+// The remote a push of the Unit's branch goes to: the one the person named
+// (`--remote`), else git's own order: the branch's pushRemote,
+// remote.pushDefault, the branch's remote, then origin or the one remote.
+// Several remotes and none of these set: the remotes to put to them.
 function pushRemoteOf(dir: string, branch: string, picked?: string): string | { remotes: string[] } | null {
+  const remotes = git(dir, ["remote"]).stdout.split(/\r?\n/).map((name) => name.trim()).filter(Boolean);
+  if (picked !== undefined && remotes.includes(picked)) return picked;
   for (const key of [`branch.${branch}.pushRemote`, "remote.pushDefault", `branch.${branch}.remote`]) {
     const set = git(dir, ["config", "--get", key]).stdout.trim();
     if (set) return set;
   }
-  const remotes = git(dir, ["remote"]).stdout.split(/\r?\n/).map((name) => name.trim()).filter(Boolean);
-  if (picked !== undefined && remotes.includes(picked)) return picked;
   if (remotes.includes("origin")) return "origin";
   if (remotes.length <= 1) return remotes[0] ?? null;
   return { remotes };
@@ -13145,8 +13142,13 @@ function pushUnit(args: string[], projectDir?: string): void {
       const tip = git(dir, ["rev-parse", "HEAD"]).stdout.trim();
       const alone = git(dir, ["rev-list", "--count", "HEAD", "--not", "--remotes"]).stdout.trim() === "1";
       const wayOn = mark[repo]?.commit === tip && alone ? ` ${messageWayOn()}` : "";
+      // A refusal that is not a host rule, from the plan's own address for this repository: their fork is the way on.
+      const planned = refusedByHostRule(pushed.stderr) ? undefined : planEntryOf(pd, build, repo)?.address ?? undefined;
+      const forkWay = planned === undefined || !sameGitAddress(git(dir, ["remote", "get-url", remote]).stdout.trim(), planned) ? ""
+        : ` If ${name} takes no push from you, tell me your fork's address, or the name of a remote you already have for it, and ` +
+          `I'll push ${unit} there. ${forkRemoteWay(pd, repo, `push --remote ${repo}=<that name>${messageFlag}`)}`;
       fail(`The push of ${unit} in ${name} was refused: ${pushRefusal(pushed.stderr)}. Nothing was retried.${whereNow()}` +
-        keptLines(name).map((line) => ` ${line}`).join("") + wayOn);
+        keptLines(name).map((line) => ` ${line}`).join("") + wayOn + forkWay);
     }
     const head = git(dir, ["rev-parse", "HEAD"]).stdout.trim();
     if (startedHere.has(repo) && mainChangedUnder(dir, head, integrationOf(repo, dir, remote), paths).length > 0) {
@@ -13398,9 +13400,20 @@ export function mainMovedRepos(pd: string, unit: string, branch: string, marked 
 // remote whose address is not the one the plan has for that repository. Null
 // with none, or with several (which one is theirs is not git's to say).
 export function forkRemoteOf(dir: string, planAddress: string): string | null {
-  const others = git(dir, ["remote"]).stdout.split(/\r?\n/).map((name) => name.trim()).filter(Boolean)
-    .filter((name) => !sameGitAddress(git(dir, ["remote", "get-url", name]).stdout.trim(), planAddress));
+  const others = remotesNotAt(dir, planAddress);
   return others.length === 1 ? others[0] : null;
+}
+
+function remotesNotAt(dir: string, planAddress: string): string[] {
+  return git(dir, ["remote"]).stdout.split(/\r?\n/).map((name) => name.trim()).filter(Boolean)
+    .filter((name) => !sameGitAddress(git(dir, ["remote", "get-url", name]).stdout.trim(), planAddress));
+}
+
+// For the agent, after a line asking for the person's fork: on an address,
+// that one remote added to their clone on their word, then the push to it.
+function forkRemoteWay(pd: string, repo: string, push: string): string {
+  return `On a remote's name, run \`${aidlcToolInvocation("unit")} ${push}\` with it; on an address, add it to their clone of ${repo} as ` +
+    `one remote on their word (\`git -C ${shellArg(repoClonePath(pd, repo))} remote add <a name> <that address>\`), say its name back, then run that.`;
 }
 
 // What the plan's repository calls its own main where the plan names none: as
@@ -13439,8 +13452,9 @@ function planMainOf(dir: string, repo: string, planAddress: string, named: strin
 }
 
 // The engine mark the fork offer keeps once it is put for a Unit's build:
-// the yes acts on it alone. The take keeps the other, that the offer is due,
-// so a remote added later never brings the offer mid-build.
+// the yes acts on it (or the person's own turn). The take keeps the other,
+// that the offer is due, until the offer's one look with the repository
+// checked out, so a remote added after that never brings it mid-build.
 export const toForkMark = (unit: string): string => `unit-to-fork-${unit}`;
 export const toForkDueMark = (unit: string): string => `unit-to-fork-due-${unit}`;
 // The early push's own mark, named with the head it pushed (lastPushedHeads).
@@ -13449,19 +13463,27 @@ const toForkPushedMark = (unit: string, head: string): string => `unit-to-fork-p
 // Where a Unit's build would push its branch early: the person's clone of the
 // repository its record goes to, the plan's address and branch for it, and
 // the clone's fork. Null where there is no such fork. Local reads only.
-export function forkPlaceOf(pd: string, build: UnitBuild):
+export function forkPlaceOf(pd: string, build: UnitBuild, named?: string):
   { name: string; dir: string; address: string; branch: string | null; fork: string; forkAddress: string } | null {
   const home = buildsHome(pd, build);
   const place = recordPlaceOf(pd, home, build.unit);
-  const copy = isGitAddress(build.homeLocation) ? copyOf(build.homeLocation, planRecordRef(idSuffix(build.homeWork))) : null;
-  const kept = copy === null ? null : planAtCopy(pd, copy, { commit: planCommitOf(pd, copy) });
-  const planned = kept?.kind === "read" ? kept.plan.repos.find((repo) => repo.name === place.repo) : undefined;
+  const planned = planEntryOf(pd, build, place.repo);
   const dir = repoDir(pd, place.repo);
   if (!planned?.address || !isGitRepoDir(dir)) return null;
-  const fork = forkRemoteOf(dir, planned.address);
+  // The remote the person named is the fork, whatever else is there, never the one at the plan's address.
+  const fork = named !== undefined ? (remotesNotAt(dir, planned.address).includes(named) ? named : null) : forkRemoteOf(dir, planned.address);
   if (fork === null) return null;
   return { name: place.repo, dir, address: planned.address, branch: planned.branch || null, fork,
     forkAddress: withoutCredentials(git(dir, ["remote", "get-url", fork]).stdout.trim()) };
+}
+
+// The plan's entry for one of its repositories, as this workspace's copy of
+// the build's plan has it; undefined where the build is not from a plan or the
+// copy names no such repository.
+function planEntryOf(pd: string, build: UnitBuild, repo: string): PlanJson["repos"][number] | undefined {
+  const copy = isGitAddress(build.homeLocation) ? copyOf(build.homeLocation, planRecordRef(idSuffix(build.homeWork))) : null;
+  const kept = copy === null ? null : planAtCopy(pd, copy, { commit: planCommitOf(pd, copy) });
+  return kept?.kind === "read" ? kept.plan.repos.find((entry) => entry.name === repo) : undefined;
 }
 
 // What the fork offer says, read with no fetch: that place, the plan's main by
@@ -13506,10 +13528,22 @@ function pushToFork(pd: string, args: string[], build: UnitBuild, branch: string
     console.log(JSON.stringify({ pushed: false, unit, notice: `No push of ${unit} to a fork was offered or asked for, so nothing was pushed.` }));
     return;
   }
-  const forkPlace = forkPlaceOf(pd, build);
+  const repo = buildRecordRepo(pd, build);
+  const named = (flags.remote ?? "").split(",").map((pair) => pair.split("=").map((part) => part.trim()))
+    .find((pair) => pair.length === 2 && pair[0] === repo && pair[1] !== "")?.[1];
+  const forkPlace = forkPlaceOf(pd, build, named);
   if (forkPlace === null) {
-    const repo = recordPlaceOf(pd, buildsHome(pd, build), unit).repo;
-    console.log(JSON.stringify({ pushed: false, unit, notice: `No fork of ${repo} was found in your clone of it (one remote not at the plan's address for it), so nothing was pushed.` }));
+    const address = planEntryOf(pd, build, repo)?.address;
+    const dir = repoDir(pd, repo);
+    const others = address && isGitRepoDir(dir) ? remotesNotAt(dir, address) : null;
+    const way = forkRemoteWay(pd, repo, `push --to-fork --remote ${repo}=<that name>`);
+    console.log(JSON.stringify({ pushed: false, unit, notice: others === null ? `${repo} is not cloned here, so nothing was pushed.`
+      : others.length === 0
+        ? `Your clone of ${repo} has no remote but the one at the plan's address, so nothing was pushed. Tell me your fork's address, ` +
+          `and I'll push ${unit} there. ${way}`
+        : `Your clone of ${repo} has ${["two", "three", "four", "five", "six"][others.length - 2] ?? others.length} remotes that are not at ` +
+          `the plan's address for it, ${joinNames(others)}, so nothing was pushed. Tell me which is your fork, and I'll push ${unit} there. ` +
+          `On their word, run \`${aidlcToolInvocation("unit")} push --to-fork --remote ${repo}=<that name>\`.` }));
     return;
   }
   turn?.answered(`Push a branch for ${unit} to ${forkPlace.fork} in ${forkPlace.name}`, `Push it to ${forkPlace.fork}`);
@@ -15864,7 +15898,8 @@ function codexWritableLine(pd: string, repos: string[]): string {
 // checkout of and repos.json gives an address for: put by the build's own next
 // step, once, so it reaches the person whatever the agent did with the take's
 // output. Null when there is none to clone.
-export function buildCloneOffer(pd: string, stateContent: string): { question: string; choices: Array<{ label: string; command?: string }> } | null {
+export function buildCloneOffer(pd: string, stateContent: string):
+  { question: string; choices: Array<{ label: string; detail?: string; command?: string }> } | null {
   const build = unitBuildOf(stateContent);
   if (build === null) return null;
   // The lead's list: the plan's, as this workspace's copy has it; the lead's own repos.json where its work is here.
@@ -15874,7 +15909,23 @@ export function buildCloneOffer(pd: string, stateContent: string): { question: s
     ? new Map(kept.plan.repos.flatMap((repo) => (repo.address === null ? [] : [[repo.name, repo.address] as [string, string]])))
     : leadRepoAddresses(pd, auditBlockField(readAuditShardEvents(pd).findLast((row) => row.event === "UNIT_TAKEN_IN")?.block ?? "", "Home Commit"));
   const notThere = likelyReposNotHere(pd, unitLikelyRepos(pd).get(build.unit) ?? [], intentRepos(pd), addresses);
-  return notThere.offer.offer === undefined ? null : { question: notThere.question.trim(), choices: notThere.offer.offer.choices };
+  if (notThere.offer.offer === undefined) return null;
+  // After a take that repository refused for want of access: a clone of the
+  // person's fork, by the address they give, cloned with plain git so the
+  // team's repos.json never takes a fork's address.
+  const record = engineAskMark(pd, toForkDueMark(build.unit)) === null ? null : buildRecordRepo(pd, build);
+  const choices = notThere.offer.offer.choices;
+  const at = choices.findIndex((choice) => record !== null && choice.label === `Clone ${record}`);
+  if (record === null || at < 0) return { question: notThere.question.trim(), choices };
+  const path = repoClonePath(pd, record);
+  return {
+    question: `${record} takes no push from you. If you will push ${build.unit} through a fork of your own, tell me its address and I'll ` +
+      `clone that into ${path}, then offer to push a branch for ${build.unit} there for an early pull request. Or I can clone ${record} ` +
+      `from the plan's address, and your fork is added before the push. ${notThere.question.trim()}`,
+    choices: [...choices.slice(0, at + 1),
+      { label: "Clone my fork", detail: `Tell me its address, and I clone it into ${path} with git.` },
+      ...choices.slice(at + 1)],
+  };
 }
 
 // The likely repos of a taken Unit that this workspace has no checkout of: a
