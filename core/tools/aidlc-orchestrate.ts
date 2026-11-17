@@ -16278,7 +16278,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
         if (heldBack !== null) {
           sayWithStepOnce(
             pd,
-            `The teams still see every Unit waiting on ${heldBack}, because your answer about ` +
+            `The teams still see every Unit waiting on ${heldBack.unit}, because your answer about ` +
               `building a thin slice first hasn't been shared yet. I can share the plan when you say so, or you can run ` +
               `\`${aidlcInvocation()} unit share\`.`,
           );
@@ -19510,6 +19510,12 @@ function emitTeamUnitMajorRunStage(
   if (teamHome && !isReadOnlyEngineProbe()) {
     const read = leadPlanChange(projectDir);
     for (const line of [...(read.first === null ? [] : [read.first]), ...takePlanNotes()]) sayWithStepOnce(projectDir, line);
+    // The answer here is no thin slice first and the plan still holds every Unit behind the first: said once, while true.
+    const heldBack = skeletonHeldBackOnShare(projectDir);
+    if (heldBack !== null && heldBack.repo !== null) {
+      sayWithStepOnce(projectDir, `The plan in ${heldBack.repo} still has your earlier answer about building a thin slice first, so every ` +
+        `other Unit in it waits on ${heldBack.unit}. I can share it again when you say so, or you can run \`${aidlcInvocation()} unit share --plan\`.`);
+    }
     if (read.change !== null) {
       const askName = planMark("asked", read.change.tip);
       const mark = engineAskMark(projectDir, askName);

@@ -6160,18 +6160,26 @@ export function teamStanceToRead(projectDir: string, stateContent: string | null
 // The first Unit, when the plan as this checkout last shared or fetched it
 // holds every Unit behind it as a walking skeleton while this checkout's own
 // record opens them (its recorded answer is no thin slice first). Null when the
-// two agree or the shared plan cannot be read.
-export function skeletonHeldBackOnShare(projectDir: string): string | null {
+// two agree or the shared plan cannot be read. `repo`: the plan's repository,
+// where the plan is its own ref (read from the plan there, as this computer
+// last read it, never from main); null where the plan is main's.
+export function skeletonHeldBackOnShare(projectDir: string): { unit: string; repo: string | null } | null {
   try {
     const pd = resolveProjectDir(projectDir);
     const state = readStateFile(pd);
     if (!isTeamUnitOwnership(state) || getField(state, "Skeleton Stance") === null || teamSkeletonOn(state)) return null;
+    if (sharesPlanRef(pd)) {
+      const plan = keptPlan(pd, activeIdentity(pd).intentId8)?.plan ?? null;
+      if (plan === null || plan.skeleton === null) return null;
+      const held = [...buildOutOpening(plan).blockers.values()].some((blockers) => blockers.includes("walking-skeleton"));
+      return held ? { unit: plan.skeleton, repo: plan.plan_repo.name } : null;
+    }
     const target = shareTarget(pd);
     if (target === null) return null;
     const ref = git(pd, ["rev-parse", "--verify", "--quiet", `refs/remotes/${target.remote}/${target.branch}`]);
     if (!ref.ok) return null;
     const shared = openingStatus(pd, ref.stdout.trim());
-    return [...shared.blockers.values()].some((blockers) => blockers.includes("walking-skeleton")) ? shared.skeleton : null;
+    return [...shared.blockers.values()].some((blockers) => blockers.includes("walking-skeleton")) ? { unit: shared.skeleton, repo: null } : null;
   } catch {
     return null;
   }
@@ -6979,8 +6987,12 @@ function writeSharedPlan(pd: string, message?: string, named?: string): SharedPl
     if (planAtCopy(pd, at.copy).kind === "newer") fail(newerPlanStep(pd));
   }
   let added: string[] = [];
+  // The walking skeleton the plan held that the answer here takes out.
+  let released: string | null = null;
+  const skeletonHere = teamSkeletonOn(readStateFile(pd));
   const what = (tip: PlanJson | null): string => {
     added = tip === null ? [] : unitsNotIn(pd, tip.units.map((unit) => unit.name));
+    released = tip !== null && tip.skeleton !== null && !skeletonHere ? tip.skeleton : null;
     return tip === null ? "shared" : added.length > 0 ? `${added.join(", ")} added` : "shared again";
   };
   // The share is the lead's own yes, so a tip that is not a plan is written
@@ -7022,7 +7034,10 @@ function writeSharedPlan(pd: string, message?: string, named?: string): SharedPl
       : written.created
         ? `The plan is shared in ${repo}. AI-DLC sends no notice of it: the teams hear it from you. A team whose workspace has no ` +
           `${repo} needs this address: ${address}`
-        : added.length > 0 ? `The plan in ${repo} has ${namesInProse(added)} now.` : `The plan is shared in ${repo}.`;
+        : added.length > 0 || released !== null
+          ? [...(added.length > 0 ? [`The plan in ${repo} has ${namesInProse(added)} now.`] : []),
+            ...(released !== null ? [`The plan in ${repo} has your answer now: no Unit in it waits on ${released}.`] : [])].join(" ")
+          : `The plan is shared in ${repo}.`;
     const told = written.back === undefined ? said : `${said} ${planBackLine(repo, written.back)}`;
     return { repo, address, commit: written.commit, said: [...followedLine, told].join(" ") };
   }

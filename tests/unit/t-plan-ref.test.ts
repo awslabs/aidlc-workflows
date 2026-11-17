@@ -26,10 +26,12 @@ import {
   ENV,
   git,
   HOME_RECORD,
+  homeState,
   makeHome,
   makePlanHome,
   makePlanHomeWithRemote,
   next,
+  type PlanHome,
   planRefOf,
   refundsTaken,
   run,
@@ -1528,3 +1530,38 @@ describe("what the lead reads", () => {
     expect(checkInLine(home.dir)).toBeNull();
   });
 });
+
+describe("at the lead's own work whose plan is its own ref, the lines that named main's share", () => {
+  const chat = (name: string): NodeJS.ProcessEnv => ({ ...ENV, AIDLC_SESSION_OVERRIDE: name });
+  const said = (step: Record<string, unknown>): string[] =>
+    ((step.change_notices ?? []) as string[]).filter((line) => line.includes("thin slice first"));
+  // The plan shared with a thin slice first, then the lead's answer here turned to none: the plan still holds every
+  // other Unit behind the first.
+  function heldBack(): { home: PlanHome; skeleton: string } {
+    const home = makePlanHome({ state: homeState().replace("- **Skeleton Stance**: off", "- **Skeleton Stance**: on") });
+    const skeleton = String(planAt(home.hosts["checkout-api"], planRefOf(home.id8)).skeleton ?? "");
+    expect(skeleton).not.toBe("");
+    const state = seededStateFile(home.dir);
+    writeFileSync(state, readFileSync(state, "utf-8").replace("- **Skeleton Stance**: on", "- **Skeleton Stance**: off"));
+    return { home, skeleton };
+  }
+
+  test("the lead's next says once that the plan still has the earlier answer, read from the plan, and the share after the yes says the answer is on it", () => {
+    const { home, skeleton } = heldBack();
+    const step = next(home.dir, chat("lead-chat"));
+    const line = said(step);
+    expect(line.length, JSON.stringify(step).slice(0, 900)).toBe(1);
+    expect(line[0]).toStartWith(`The plan in checkout-api still has your earlier answer about building a thin slice first, so every other Unit in it waits on ${skeleton}. I can share it again when you say so, or you can run \``);
+    expect(line[0]).toEndWith(" unit share --plan`.");
+    expect(said(next(home.dir, chat("lead-chat")))).toEqual([]);
+    expect(share(home.dir).json?.notice).toBe(`The plan in checkout-api has your answer now: no Unit in it waits on ${skeleton}.`);
+    expect(planAt(home.hosts["checkout-api"], planRefOf(home.id8)).skeleton).toBeNull();
+    expect(said(next(home.dir, chat("lead-chat-2")))).toEqual([]);
+  });
+
+  test("silent where the plan agrees with the answer here", () => {
+    const home = makePlanHome();
+    expect(said(next(home.dir, chat("lead-chat")))).toEqual([]);
+  });
+});
+
