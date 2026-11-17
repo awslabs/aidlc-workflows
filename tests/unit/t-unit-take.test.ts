@@ -649,7 +649,7 @@ describe("the lead who says so in a clone that did not make the plan", () => {
     expect(message, text).toBeDefined();
     const off = run(UNIT, ["lead-here", "--off", "--message", message!], laptop, personsChat(chat));
     expect(off.status, off.out).toBe(0);
-    expect(off.json?.notice).toBe("This checkout no longer carries the work on as yours, the lead's, from here.");
+    expect(off.json?.notice).toBe("This checkout no longer carries the work on as the lead's.");
     const row = readAuditShardEvents(laptop, HOME).findLast((entry) => entry.event === "LEAD_HERE_SET");
     expect(auditBlockField(row?.block ?? "", "Lead Here")).toBe("off");
     expect(auditBlockField(row?.block ?? "", "Person Words")).toBe(notLead);
@@ -675,11 +675,11 @@ describe("the lead who says so in a clone that did not make the plan", () => {
     expect(board("--space", "web", "--intent", HOME)).toStartWith(`No work with the record ${HOME} is in a space named "web". ${work}`);
     expect(run(UTILITY, ["space", "create", "payments"], laptop).status).toBe(0);
     expect(board("--space", "payments")).toStartWith(`The space "payments" has no work in progress. ${work}`);
-    // A project with no work at all: status's own line, never an empty list.
+    // A project with no work at all: status's own line alone, never a label over an empty list.
     const bare = tempDir("no-work");
     git(bare, ["init", "-q"]);
     const none = run(ORCH, ["team-board", "--space", "web"], bare);
-    expect(String(none.json?.error ?? none.out)).toBe("This project has no space named \"web\". Work in this project: No active AI-DLC workflow found.");
+    expect(String(none.json?.error ?? none.out)).toBe("This project has no space named \"web\". No active AI-DLC workflow found.");
   });
 });
 

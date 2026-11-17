@@ -26613,7 +26613,7 @@ function handleTeamBoard(
         : matches.length === 0 ? `The space ${space} has no work in progress.`
         : matches.length > 1 ? `The space ${space} has more than one piece of work in progress.`
         : `The board could not pick one piece of work for ${space}.`;
-      throw new Error(`${why} Work in this project: ${rows.length === 0 ? NO_WORK_LINE : rows.join("; ")}`);
+      throw new Error(`${why} ${rows.length === 0 ? NO_WORK_LINE : `Work in this project: ${rows.join("; ")}`}`);
     }
     const intent = matches[0];
     const intentDir = intent.dirName!;

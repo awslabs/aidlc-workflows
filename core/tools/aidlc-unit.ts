@@ -15866,7 +15866,7 @@ function leadHere(args: string[], projectDir?: string): void {
   // The view that follows comes in the same turn.
   console.log(JSON.stringify({
     lead_here: !off,
-    notice: off ? "This checkout no longer carries the work on as yours, the lead's, from here."
+    notice: off ? "This checkout no longer carries the work on as the lead's."
       : "This checkout carries the work on as yours, the lead's, from here.",
     step: `Tell the person in plain words what it reports, then run \`${aidlcToolInvocation("orchestrate")} next\` and follow what it returns.`,
   }));
