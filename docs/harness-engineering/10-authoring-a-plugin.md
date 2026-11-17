@@ -54,6 +54,7 @@ test-pro/
   scopes/test-pro-validation.md                       # NEW plugin scope
   agents/test-pro-metrics-agent.md                    # NEW support persona
   knowledge/test-pro-metrics-agent/methodology.md     # plugin methodology knowledge
+  types/aidlc-plugin-metrics-contract.ts               # copy of the metrics contract (not shipped)
   tests/plugin.test.ts                                # plugin content and compose tests
 ```
 

@@ -50,7 +50,7 @@ describe("parsePluginMetricsOutput", () => {
 
 function runScript(hookInput: string, harness: string): Record<string, string> {
   const run = spawnSync(process.execPath, [join(TEST_PRO, "tools", "test-pro-metrics.ts")], {
-    input: JSON.stringify({ plugin: "test-pro", event: "STAGE_STARTED", fields: {}, harness, harnessDir: harness, projectDir: "/p", hookInput }),
+    input: JSON.stringify({ contractVersion: 1, plugin: "test-pro", event: "STAGE_STARTED", fields: {}, harness, harnessDir: harness, projectDir: "/p", hookInput }),
     encoding: "utf-8",
   });
   expect(run.status, run.stderr).toBe(0);
@@ -127,6 +127,12 @@ describe("the contract as other repositories consume it", () => {
   test("the contract file has no imports, so a repository can copy it alone", () => {
     const text = readFileSync(join(REPO_ROOT, "core", "tools", "aidlc-plugin-metrics-contract.ts"), "utf-8");
     expect(text).not.toMatch(/^\s*import\s/m);
+  });
+
+  test("test-pro's types/ copy is the shipped contract file", () => {
+    expect(readFileSync(join(TEST_PRO, "types", "aidlc-plugin-metrics-contract.ts"), "utf-8")).toBe(
+      readFileSync(join(REPO_ROOT, "core", "tools", "aidlc-plugin-metrics-contract.ts"), "utf-8"),
+    );
   });
 
   test("create --with-metrics scaffolds a plugin that validates clean", () => {

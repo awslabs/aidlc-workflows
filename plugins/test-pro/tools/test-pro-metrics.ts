@@ -3,7 +3,7 @@
 // AI-DLC runs tools/<plugin>-metrics.ts once per metric event, only while the
 // plugin is on, its manifest sets "advertiseMetrics": true, and
 // AIDLC_METRICS_ENDPOINT is set. It writes ONE JSON object to this script's
-// stdin (PluginMetricsInput in aidlc-plugin-metrics.ts):
+// stdin (PluginMetricsInput, typed below from the copy in types/):
 //
 //   { plugin, event, fields, harness, harnessDir, projectDir, hookInput }
 //
@@ -31,11 +31,10 @@
 import { createHash } from "node:crypto";
 import { basename } from "node:path";
 
-interface Input {
-  harness?: string;
-  hookInput?: string;
-  fields?: Record<string, string>;
-}
+// Type-only: Bun erases this import, so nothing is resolved when AI-DLC runs the
+// script inside an install (types/ is not shipped; tools/ is). `aidlc plugin
+// create --with-metrics` puts the same copy in a new plugin.
+import type { PluginMetricsInput, PluginMetricsOutput } from "../types/aidlc-plugin-metrics-contract.ts";
 
 function text(...candidates: unknown[]): string | undefined {
   for (const value of candidates) if (typeof value === "string" && value !== "") return value;
@@ -43,19 +42,21 @@ function text(...candidates: unknown[]): string | undefined {
 }
 
 const raw = await Bun.stdin.text();
-const tags: Record<string, string> = {};
+const tags: PluginMetricsOutput["additionalTags"] = {};
 
 try {
-  const input = JSON.parse(raw) as Input;
+  const input = JSON.parse(raw) as PluginMetricsInput;
+  // A shape this script was not written for: send no tags rather than guess.
+  if (input.contractVersion !== 1) throw new Error("unknown contractVersion");
 
   // 1. Harness-neutral facts from AI-DLC itself.
-  tags.harness_kind = (input.harness ?? "").replace(/^\./, "") || "unknown";
+  tags.harness_kind = input.harness.replace(/^\./, "") || "unknown";
 
   // 2. The raw hook input, when this event came from a hook. Parse defensively:
   //    it may be empty, not JSON, or in a shape this script does not know.
   let hook: Record<string, unknown> = {};
   try {
-    const parsed: unknown = JSON.parse(input.hookInput ?? "");
+    const parsed: unknown = JSON.parse(input.hookInput);
     if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
       hook = parsed as Record<string, unknown>;
     }
@@ -78,4 +79,5 @@ try {
   // Unparseable input: print no tags rather than fail.
 }
 
-process.stdout.write(`${JSON.stringify({ additionalTags: tags })}\n`);
+const output: PluginMetricsOutput = { additionalTags: tags };
+console.log(JSON.stringify(output));

@@ -117,6 +117,8 @@ plugins/test-pro/
   sensors/aidlc-<id>.md              # 2 advisory sensor manifests
   tools/aidlc-sensor-*.ts            # the 2 sensor scripts (self-contained)
   tools/test-pro-doctor.ts            # read-only composed-install checks
+  tools/test-pro-metrics.ts          # metrics tags (advertiseMetrics), typed from types/
+  types/aidlc-plugin-metrics-contract.ts  # copy of AI-DLC's metrics contract, not shipped
   tests/plugin.test.ts               # the plugin's own content validation
   README.md
 ```

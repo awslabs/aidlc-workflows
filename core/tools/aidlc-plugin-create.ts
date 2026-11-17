@@ -94,7 +94,7 @@ const output: PluginMetricsOutput = {
     harness_kind: input.harness.replace(/^\\./, "") || "unknown",
   },
 };
-process.stdout.write(\`\${JSON.stringify(output)}\\n\`);
+console.log(JSON.stringify(output));
 `;
 }
 
