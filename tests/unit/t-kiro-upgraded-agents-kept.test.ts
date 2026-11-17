@@ -39,7 +39,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { kiroUpgradeStamp, kiroUpgradeUntouched, sha256Bytes } from "../../core/tools/aidlc-distribution.ts";
 import { frameworkFilesDoctorCheck, kiroUpgradedAgentsDoctorCheck } from "../../core/tools/aidlc-config-diagnostics.ts";
-import { typedHarnessName } from "../../core/tools/aidlc-runtime-paths.ts";
+import { aidlcInvocation, quoteCommandArgument, typedHarnessName } from "../../core/tools/aidlc-runtime-paths.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -490,6 +490,20 @@ describe("doctor names the agent files Kiro upgraded that this release's allows 
         `differ from this release's, so that agent may ask where this release's would go ahead, or the other way round (${DEVELOPER})`,
     );
     expect(row?.fix).toMatch(/^if these are the agent files you want, you can leave them as they are; `[^`]*config --harness kiro-v2[^`]* --force` takes this release's versions/);
+    // Doctor ran from another folder, so the command names the project it diagnosed;
+    // from the project's own folder it does not.
+    expect(row?.fix).toContain(` --project-dir ${quoteCommandArgument(project)} --force\``);
+    // Through the bun dispatcher it runs that project's own tool, not the current folder's.
+    if (aidlcInvocation() !== "aidlc") {
+      expect(row?.fix).toContain(`\`bun ${quoteCommandArgument(join(project, ".kiro", "tools", "aidlc.ts"))} config `);
+    }
+    const cwd = process.cwd();
+    try {
+      process.chdir(project);
+      expect(kiroUpgradedAgentsDoctorCheck(project, ".kiro", RELEASE)?.fix).not.toContain("--project-dir");
+    } finally {
+      process.chdir(cwd);
+    }
 
     // Edited after the upgrade as well: the file is named in both parts.
     const file = join(project, DEVELOPER);

@@ -73,6 +73,7 @@ import {
   inHostShell,
   kiroTreeLayout,
   packagedDistributionRoot,
+  quoteCommandArgument,
   typedHarnessName,
 } from "./aidlc-runtime-paths.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
@@ -88,6 +89,7 @@ import { installedExecutablePath } from "./aidlc-install-paths.ts";
 import { cmdScriptLaunch, isCmdScript, pathEntries, resolveExecutableOnPath } from "./aidlc-executable-path.ts";
 import { personaTwinRels } from "./aidlc-plugin.ts";
 import { readBoundedRegularFile } from "./aidlc-inline-context.ts";
+import { normalizeDriveLetter } from "./aidlc-lib.ts";
 import { KIRO_IDE_STEERING } from "./aidlc-includes.ts";
 import {
   HARNESS_PRODUCT_NAMES,
@@ -238,12 +240,26 @@ function invocationForHarness(harnessDir: string): string {
 // also carries `--download`, which fetches and verifies the copy runtime for the
 // project's release; the native runtime is the wrong source there, since
 // refreshing from it would swap the hooks and tools to the `aidlc` command.
+//
+// With `projectDir`, a command meant to be run from another folder names the
+// project (and, through the bun dispatcher, the project's own tool), the way
+// config's own follow-up commands do.
 export function workspaceShellRefreshCommand(
   harnessDir: string,
   distribution: string,
+  projectDir?: string,
 ): string {
-  const invoke = invocationForHarness(harnessDir);
-  return `${invoke} config --harness ${typedHarnessName(distribution)}${invoke === "aidlc" ? "" : " --download"}`;
+  const elsewhere = projectDir !== undefined &&
+      normalizeDriveLetter(resolve(projectDir)) !== normalizeDriveLetter(resolve(process.cwd()))
+    ? projectDir
+    : undefined;
+  const native = aidlcInvocation() === "aidlc";
+  const tool = elsewhere === undefined
+    ? `${harnessDir}/tools/aidlc.ts`
+    : quoteCommandArgument(join(elsewhere, harnessDir, "tools", "aidlc.ts"));
+  return `${native ? "aidlc" : `bun ${tool}`} config --harness ${typedHarnessName(distribution)}${
+    native ? "" : " --download"
+  }${elsewhere === undefined ? "" : ` --project-dir ${quoteCommandArgument(elsewhere)}`}`;
 }
 
 export type RuntimeBinaryProbe = {
@@ -4509,7 +4525,7 @@ export function kiroUpgradedAgentsDoctorCheck(
     severity: "warn",
     label: `Kiro agent files: ${parts.join("; ")}`,
     fix: "if these are the agent files you want, you can leave them as they are; " +
-      `\`${workspaceShellRefreshCommand(selected.harnessDir, selected.harness)} --force\` takes this release's ` +
+      `\`${workspaceShellRefreshCommand(selected.harnessDir, selected.harness, projectDir)} --force\` takes this release's ` +
       "versions, and Kiro upgrades them again at its next 3.0 start when its auto-upgrade is on; it also replaces " +
       "the other AI-DLC files you changed that config manages, so copy away what you want to keep first",
   };
