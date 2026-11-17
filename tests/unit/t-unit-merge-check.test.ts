@@ -12,10 +12,17 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { blobsAt, patchIdOf, type RepoResult, unitMergeVerdict } from "../../dist/claude/.claude/tools/aidlc-unit-teams.ts";
+import { blobsAt, pathRuns, patchIdOf, type RepoResult, unitMergeVerdict } from "../../dist/claude/.claude/tools/aidlc-unit-teams.ts";
 import { cleanupTeamBuild, git, tempDir } from "../harness/team-build.ts";
 
 afterEach(cleanupTeamBuild);
+
+// Each path's blob at a commit, as blobsAt lists them; a case here never meets a git that cannot list.
+function listed(dir: string, commit: string, paths: readonly string[]): Map<string, string> {
+  const at = blobsAt(dir, commit, paths);
+  if (!(at instanceof Map)) throw new Error(`git could not list: ${at.said}`);
+  return at;
+}
 
 function repo(): string {
   const dir = tempDir("merge-check");
@@ -51,7 +58,7 @@ function unitBranch(dir: string): RepoResult {
 
 function result(dir: string, base: string, heads: string[]): RepoResult {
   const changed = ["a.txt", "b.txt", "c.txt"];
-  const at = blobsAt(dir, heads.at(-1)!, changed);
+  const at = listed(dir, heads.at(-1)!, changed);
   return {
     repo: ".",
     branch: "refunds",
@@ -113,7 +120,7 @@ describe("merged, whichever way the team merges", () => {
     commit(dir, "refunds one", { "long.txt": text({ 1: "LINE 2" }) });
     const head = commit(dir, "refunds two", { "long.txt": text({ 1: "LINE 2", 2: "LINE 3" }) });
     git(dir, ["switch", "-q", "main"]);
-    const at = blobsAt(dir, head, ["long.txt"]);
+    const at = listed(dir, head, ["long.txt"]);
     const unit: RepoResult = {
       repo: ".",
       branch: "refunds",
@@ -167,5 +174,36 @@ describe("not merged yet", () => {
     expect(unitMergeVerdict(dir, "main", both)).toEqual({ merged: false });
     git(dir, ["cherry-pick", fix]);
     expect(unitMergeVerdict(dir, "main", both)).toMatchObject({ merged: true });
+  });
+});
+
+// More files than one command line holds (Windows caps a whole one at 32,767
+// characters; the paths here pass Linux's and macOS's caps too): listed in runs.
+describe("a Unit with more files than one command line holds", () => {
+  const many = Array.from({ length: 25_000 }, (_, at) => `src/${"nested/".repeat(10)}file-${String(at).padStart(5, "0")}.ts`);
+
+  test("its paths go to git in runs a command line holds, every path once and in order", () => {
+    const runs = pathRuns(many);
+    expect(runs.length).toBeGreaterThan(1);
+    expect(runs.every((run) => run.reduce((size, path) => size + path.length + 3, 0) <= 16_000 + 100)).toBe(true);
+    expect(runs.flat()).toEqual(many);
+  });
+
+  test("every file it names is listed, and one git cannot list reads as could not list", () => {
+    const dir = repo();
+    const head = git(dir, ["rev-parse", "main"]);
+    const at = listed(dir, head, ["a.txt", ...many]);
+    expect(at.get("a.txt")).toBe(git(dir, ["rev-parse", "main:a.txt"]));
+    expect(at.size).toBe(1);
+    expect(blobsAt(dir, "0".repeat(40), ["a.txt"])).toEqual({ said: expect.stringContaining("fatal: ") });
+  });
+
+  test("a squash of it reads merged, every file it deleted gone and the rest at its blob", () => {
+    const dir = repo();
+    const unit = unitBranch(dir);
+    const wide: RepoResult = { ...unit, paths: { ...unit.paths, ...Object.fromEntries(many.map((path) => [path, null])) } };
+    git(dir, ["merge", "-q", "--squash", "refunds"]);
+    git(dir, ["commit", "-q", "-m", "refunds (squashed)"]);
+    expect(unitMergeVerdict(dir, "main", wide)).toMatchObject({ merged: true, how: "same content" });
   });
 });

@@ -150,6 +150,30 @@ describe("the push", () => {
     expect(rows).toHaveLength(1);
   });
 
+  // A git on PATH that cannot list a commit's files, as a commit unreadable
+  // here would leave it (a shell script, so not on Windows).
+  test.skipIf(process.platform === "win32")("git cannot list the files of the commit it pushed: no result is sent, the push's own end follows, and a push again sends it", () => {
+    const { home, alice, record } = refundsTakenInClone();
+    codeGenerated(alice, record);
+    const bin = tempDir("unlisting-git");
+    const real = spawnSync("sh", ["-c", "command -v git"], { encoding: "utf-8" }).stdout.trim();
+    writeFileSync(join(bin, "git"), "#!/bin/sh\nif [ \"$1\" = ls-tree ] && [ \"$2\" = -r ] && [ \"$3\" = --full-tree ]; then " +
+      `echo "fatal: not a tree object" >&2; exit 128; fi\nexec "${real}" "$@"\n`);
+    chmodSync(join(bin, "git"), 0o755);
+    const pushed = run(UNIT, ["push"], alice, { ...ENV, PATH: `${bin}:${process.env.PATH ?? ""}` });
+    expect(pushed.status, pushed.out).toBe(0);
+    const unlisted = (repo: string): string => `Pushed branch refunds in ${repo}, but git could not list the files of that commit ` +
+      '(git says "fatal: not a tree object"), so refunds\'s result is not sent. Say when to send it again.';
+    expect(pushed.json?.notice).toBe(`${unlisted("checkout-api")} ${unlisted("billing")} Open a PR in each your usual way. ` +
+      "You're on refunds now in checkout-api and billing. Switch back to main any time.");
+    expect((recordAt(home, "refunds")?.json as { result?: unknown } | undefined)?.result).toBeUndefined();
+    expect(JSON.stringify(next(alice))).not.toContain("Its last push did not go through.");
+    const again = run(UNIT, ["push"], alice);
+    expect(again.status, again.out).toBe(0);
+    const claim = recordAt(home, "refunds")?.json as { result: { repos: Array<{ paths: Record<string, string | null> }> } };
+    expect(Object.values(claim.result.repos[0].paths).every((blob) => blob !== null)).toBe(true);
+  });
+
   // A live run (Claude Code, Windows Server): the agent ran next at once after
   // the push and put the next question with none of the push's lines.
   test("from a chat, the push's lines ride the step that follows, said once", () => {

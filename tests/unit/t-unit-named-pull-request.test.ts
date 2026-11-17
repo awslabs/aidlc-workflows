@@ -8,7 +8,7 @@
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { AIDLC_SRC } from "../harness/fixtures.ts";
@@ -18,6 +18,7 @@ import {
   codeGenerated,
   DEPENDENCIES,
   git,
+  HOME_RECORD,
   makePlanHome,
   makePlanHomeWithRemote,
   mergeOnHost,
@@ -396,6 +397,167 @@ describe("the lead takes back a merge counted through a wrong number or by their
       "checkout-ui is open for a team to take.");
     expect((planWordAt(home, "checkout-ui") as Record<string, unknown>).said_merged).toBeUndefined();
     expect(takenBack(home.dir, "checkout-ui")).toBe(1);
+  });
+
+  test("open-again on a take not pushed that the lead counted merged by word: the word comes off, and the merge is taken back", () => {
+    const home = makePlanHomeWithRemote();
+    const bob = cloneOf(home.remote, "bob");
+    expect(run(UNIT, ["take", "checkout-ui", ...planFrom(home)], bob).status).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    expect(run(UNIT, ["merged", "checkout-ui", "--repo", "checkout-web", "--person-words", "it merged by hand"], home.dir).status).toBe(0);
+    expect(planWordAt(home, "checkout-ui")).toMatchObject({ done: true });
+    const opened = run(UNIT, ["release", "checkout-ui"], home.dir);
+    expect(opened.status, opened.out).toBe(0);
+    expect(String(opened.json?.notice)).toBe("Taken off the plan: checkout-ui is no longer counted merged in checkout-web by your word. " +
+      "checkout-ui is open for a team to take.");
+    const word = planWordAt(home, "checkout-ui") as Record<string, unknown>;
+    expect(word.said_merged).toBeUndefined();
+    expect(word.done).toBeUndefined();
+    expect(takenBack(home.dir, "checkout-ui")).toBe(1);
+  });
+
+  test("a pushed Unit counted merged by the lead's word, then a pull request named in that repository: the word's merge is taken back", () => {
+    const { hosts, home, alice, record } = refundsTakenInClone();
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    next(home.dir);
+    expect(run(UNIT, ["merged", "refunds", "--repo", "billing", "--person-words", "billing merged it by hand"], home.dir).status).toBe(0);
+    expect(planWordAt(home, "refunds")).toMatchObject({ done: true });
+    const named = name(home.dir, "refunds", "billing", "9", "pull request 9 in billing is refunds");
+    expect(named.status, named.out).toBe(0);
+    expect(String(named.json?.notice)).toBe("Written on the plan: pull request 9 in billing is the build of refunds, in place of your word that " +
+      "billing merged it, and refunds is no longer counted merged. refunds counts as merged once git shows pull request 9 merged in billing.");
+    const word = planWordAt(home, "refunds") as Record<string, unknown>;
+    expect(word.done).toBeUndefined();
+    expect(word.said_merged).toBeUndefined();
+    expect(takenBack(home.dir, "refunds")).toBe(1);
+  });
+
+  test("a Unit done through a named pull request that Build and Test sent back is not counted merged again by that pull request", () => {
+    const home = makePlanHomeWithRemote();
+    const bob = cloneOf(home.remote, "bob");
+    expect(run(UNIT, ["take", "checkout-ui", ...planFrom(home)], bob).status).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    partnerPullRequest(home.hosts["checkout-web"], 7, UI);
+    mergePullRequest(home.hosts["checkout-web"], "refs/pull/7/head", "squash", "Checkout UI (#7)");
+    expect(name(home.dir, "checkout-ui", "checkout-web", "7").status).toBe(0);
+    expect(merges(home.dir, "checkout-ui")).toBe(1);
+    const sent = run(UNIT, ["send-back", "checkout-ui", "--person-words", "the totals are wrong"], home.dir);
+    expect(sent.status, sent.out).toBe(0);
+    next(home.dir);
+    expect(planWordAt(home, "checkout-ui")?.done).toBeUndefined();
+    expect(merges(home.dir, "checkout-ui")).toBe(1);
+  });
+
+  test("sent back from Build and Test, then a new pull request named: the send-back comes off, and it counts once that one merges", () => {
+    const home = makePlanHomeWithRemote();
+    const bob = cloneOf(home.remote, "bob");
+    expect(run(UNIT, ["take", "checkout-ui", ...planFrom(home)], bob).status).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    const web = home.hosts["checkout-web"];
+    partnerPullRequest(web, 7, UI);
+    mergePullRequest(web, "refs/pull/7/head", "squash", "Checkout UI (#7)");
+    expect(name(home.dir, "checkout-ui", "checkout-web", "7").status).toBe(0);
+    expect(run(UNIT, ["send-back", "checkout-ui", "--person-words", "the totals are wrong"], home.dir).status).toBe(0);
+    partnerPullRequest(web, 8, { "src/checkout-ui.ts": "export const checkoutUi = 2;\n" });
+    expect(name(home.dir, "checkout-ui", "checkout-web", "8", "pull request 8 is the fix").status).toBe(0);
+    expect((planWordAt(home, "checkout-ui") as Record<string, unknown>).turned_down).toBeUndefined();
+    mergePullRequest(web, "refs/pull/8/head", "squash", "Checkout UI fix (#8)");
+    next(home.dir);
+    expect(planWordAt(home, "checkout-ui")).toMatchObject({ done: true });
+    expect(merges(home.dir, "checkout-ui")).toBe(2);
+  });
+
+  test("a pushed Unit merged, then sent back from Build and Test, then a pull request named: the old merge is not counted again, the new one counts once it merges", () => {
+    const { hosts, home, alice, record } = refundsTakenInClone();
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    mergeOnHost(hosts.billing, "refunds", "squash");
+    next(home.dir);
+    expect(planWordAt(home, "refunds")).toMatchObject({ done: true });
+    expect(merges(home.dir, "refunds")).toBe(1);
+    expect(run(UNIT, ["send-back", "refunds", "--person-words", "the refund total is off by one"], home.dir).status).toBe(0);
+    // Named a second after the send-back, as a person's next message comes.
+    Bun.sleepSync(1100);
+    partnerPullRequest(hosts["checkout-api"], 41, { "src/refunds.ts": "export const refunds = 2;\n" });
+    expect(name(home.dir, "refunds", "checkout-api", "41", "pull request 41 is the fix").status).toBe(0);
+    expect((planWordAt(home, "refunds") as Record<string, unknown>).turned_down).toBeDefined();
+    next(home.dir);
+    expect(planWordAt(home, "refunds")?.done).toBeUndefined();
+    expect(merges(home.dir, "refunds")).toBe(1);
+    // The pull request named after the send-back is read at each look, and counts once it
+    // merges: that new build ends the send-back, so the record and the view both say merged.
+    mergePullRequest(hosts["checkout-api"], "refs/pull/41/head", "squash", "Refunds fix (#41)");
+    next(home.dir);
+    expect(planWordAt(home, "refunds")).toMatchObject({ done: true });
+    expect((planWordAt(home, "refunds") as Record<string, unknown>).turned_down).toBeUndefined();
+    expect(merges(home.dir, "refunds")).toBe(2);
+    next(home.dir);
+    expect(merges(home.dir, "refunds")).toBe(2);
+  });
+
+  test("a pushed Unit sent back, then a pull request named after it that git already shows merged: counted at the naming, and the send-back ends", () => {
+    const { hosts, home, alice, record } = refundsTakenInClone();
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    mergeOnHost(hosts.billing, "refunds", "squash");
+    next(home.dir);
+    expect(run(UNIT, ["send-back", "refunds", "--person-words", "the refund total is off by one"], home.dir).status).toBe(0);
+    partnerPullRequest(hosts["checkout-api"], 42, { "src/refunds.ts": "export const refunds = 3;\n" });
+    mergePullRequest(hosts["checkout-api"], "refs/pull/42/head", "squash", "Refunds fix (#42)");
+    const named = name(home.dir, "refunds", "checkout-api", "42", "pull request 42 is the fix");
+    expect(named.status, named.out).toBe(0);
+    expect(String(named.json?.notice)).toContain("refunds is recorded as merged here.");
+    expect((planWordAt(home, "refunds") as Record<string, unknown>).turned_down).toBeUndefined();
+    expect(merges(home.dir, "refunds")).toBe(2);
+    next(home.dir);
+    expect(merges(home.dir, "refunds")).toBe(2);
+  });
+
+  test("a repository named as the plan cannot hold it, or a Unit the plan does not have: refused, and nothing is written", () => {
+    const home = makePlanHome();
+    const plan = Object.values(home.hosts)[0];
+    const before = git(plan, ["rev-parse", planRefOf(home.id8)]);
+    for (const repo of ["acme/checkout-web", "checkout-web,billing", "https://example.test/acme/checkout-web.git"]) {
+      const named = name(home.dir, "checkout-ui", repo, "7");
+      expect(named.status, repo).not.toBe(0);
+      expect(String(named.json?.error), repo).toStartWith(`Invalid --repo "${repo}": its name `);
+    }
+    const unknown = name(home.dir, "checkout-uix", "checkout-web", "7");
+    expect(unknown.status).not.toBe(0);
+    expect(String(unknown.json?.error)).toBe("checkout-uix is not one of this work's Units (refunds, checkout-ui, reporting).");
+    expect(git(plan, ["rev-parse", planRefOf(home.id8)])).toBe(before);
+    // A name the plan can hold that is not on the Unit's likely list is written as before.
+    expect(name(home.dir, "checkout-ui", "billing", "7").status).toBe(0);
+  });
+
+  test("a Unit added here since the plan was shared: the share again is offered, and nothing is written", () => {
+    const home = makePlanHome();
+    const deps = join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD, "inception", "units-generation", "unit-of-work-dependency.md");
+    writeFileSync(deps, readFileSync(deps, "utf-8").replace("```\n", "  - name: ledger-sync\n    kind: service\n    repos: [billing]\n    depends_on: []\n```\n"));
+    const plan = Object.values(home.hosts)[0];
+    const before = git(plan, ["rev-parse", planRefOf(home.id8)]);
+    const named = name(home.dir, "ledger-sync", "billing", "7");
+    expect(named.status).not.toBe(0);
+    expect(String(named.json?.error)).toBe("The plan in checkout-api does not have ledger-sync yet: you added it after you shared the plan. " +
+      "Do you want me to share it again?");
+    expect(git(plan, ["rev-parse", planRefOf(home.id8)])).toBe(before);
+  });
+
+  test("a Unit with no likely repositories on the plan: a repository named as the plan cannot hold it gets the same refusal", () => {
+    const home = makePlanHome({ dependencies: DEPENDENCIES.replace("    repos: [checkout-web]\n", "") });
+    const plan = Object.values(home.hosts)[0];
+    const before = git(plan, ["rev-parse", planRefOf(home.id8)]);
+    const named = name(home.dir, "checkout-ui", "acme/checkout-web", "7");
+    expect(named.status).not.toBe(0);
+    expect(String(named.json?.error)).toBe('Invalid --repo "acme/checkout-web": its name is not one folder\'s name (no "/" or "\\", not "." or "..").');
+    expect(git(plan, ["rev-parse", planRefOf(home.id8)])).toBe(before);
   });
 
   test("past the Unit stages, the take-back says Build and Test already started", () => {

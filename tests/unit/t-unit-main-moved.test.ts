@@ -6,7 +6,7 @@
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { auditBlockField, clearEngineAskMark, engineAskMark, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 // Read by name at each call, so a case red before these exist fails on its own.
@@ -366,6 +366,39 @@ describe("the offer after the push, and its yes", () => {
     expect(git(hosts.billing, ["show", "refunds:README.md"])).toContain("Keeps two ledgers and refunds.");
   });
 
+  test("a clash she resolved, then her hook refuses git's merge message at the word push: the message she gives the push finishes it", () => {
+    const { alice, hosts, billing, record } = movedAndPushed(true);
+    next(alice);
+    expect(String(run(UNIT, ["push", "--merge-main"], alice).json?.error)).toBe(CLASH);
+    writeFileSync(join(billing, "README.md"), README.replace("Keeps a ledger.", "Keeps two ledgers and refunds."));
+    git(billing, ["add", "README.md"]);
+    ticketKeyHook(billing);
+    const refused = run(UNIT, ["push"], alice);
+    expect(refused.status).not.toBe(0);
+    expect(String(refused.json?.error)).toBe(`Your hook in billing did not take the merge of origin/main into refunds (${TICKET_HOOK_WORDS}), so ` +
+      "the merge is still waiting there as you resolved it, and nothing was pushed. If it is the merge's message, tell me the one " +
+      "to use, and I will finish it with that.");
+    const file = commitMessage(alice, record, "PAY-12 bring main in\n");
+    const done = run(UNIT, ["push", "--commit-message-file", file], alice);
+    expect(done.status, done.out).toBe(0);
+    expect(String(done.json?.notice)).toBe("Merged origin/main into refunds in billing and pushed refunds.");
+    expect(git(hosts.billing, ["log", "-1", "--format=%s", "refunds"])).toBe("PAY-12 bring main in");
+    expect(existsSync(join(alice, ...file.split("/")))).toBe(false);
+  });
+
+  test("a clash she resolved, then the push question's finish with the Unit's own commit message: the merge keeps git's message, and hers waits for the Unit's commit", () => {
+    const { alice, billing, record } = movedAndPushed(true);
+    next(alice);
+    expect(String(run(UNIT, ["push", "--merge-main"], alice).json?.error)).toBe(CLASH);
+    writeFileSync(join(billing, "README.md"), README.replace("Keeps a ledger.", "Keeps two ledgers and refunds."));
+    git(billing, ["add", "README.md"]);
+    const file = commitMessage(alice, record, "PAY-12 refunds\n");
+    const done = run(UNIT, ["push", "--finish-merge", "--commit-message-file", file], alice);
+    expect(done.status, done.out).toBe(0);
+    expect(git(billing, ["log", "-1", "--format=%s", "refunds"])).toMatch(/^Merge /);
+    expect(existsSync(join(alice, ...file.split("/")))).toBe(true);
+  });
+
   test("git refuses the merge commit for a reason of its own (signing): its words, the merge undone, never their hook's", () => {
     const { alice, billing } = movedAndPushed();
     next(alice);
@@ -550,6 +583,26 @@ describe("the offer after the push, and its yes", () => {
     onHostMain(hosts.billing, "README.md", README.replace("# billing", "# Billing, again"), "erin");
     expect(String(run(UNIT, ["push", "--merge-main"], alice, chat).json?.notice)).toBe(
       "No merge of the branch refunds merges into was offered or asked for, so nothing was merged or pushed.");
+  });
+
+  test("asked in their own words, the merge stops at a clash; resolved, the word push finishes it and pushes, with no offer put over it", () => {
+    const { alice, hosts, record } = takenThenMainMoves({ "docs/ops.md": "On call.\n" });
+    codeWrote(alice, record, { "README.md": README.replace("Keeps a ledger.", "Keeps a ledger and refunds.") });
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    onHostMain(hosts.billing, "README.md", README.replace("Keeps a ledger.", "Keeps two ledgers."), "dave");
+    const chat = personsChat("t-unit-main-moved-words-clash");
+    const words = "please bring main into my refunds branch";
+    expect(hook(alice, chat, { hook_event_name: "UserPromptSubmit", session_id: "t-unit-main-moved-words-clash", prompt: words }).status).toBe(0);
+    expect(String(run(UNIT, ["push", "--merge-main"], alice, chat).json?.error)).toBe(CLASH);
+    const billing = join(alice, "billing");
+    writeFileSync(join(billing, "README.md"), README.replace("Keeps a ledger.", "Keeps two ledgers and refunds."));
+    git(billing, ["add", "README.md"]);
+    expect(next(alice).ask_type ?? null).not.toBe("unit-main-moved");
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(String(pushed.json?.notice)).toBe("Merged origin/main into refunds in billing and pushed refunds.");
+    expect(mergeWaits(billing)).toBe(false);
+    expect(git(hosts.billing, ["show", "refunds:README.md"])).toContain("Keeps two ledgers and refunds.");
   });
 
   test("an agent with no turn of the person's behind the switch merges nothing", () => {

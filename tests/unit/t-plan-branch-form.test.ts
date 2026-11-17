@@ -504,6 +504,34 @@ describe("the plan on a branch people can open, on the lead's own words (--visib
     expect(has(host, planRefOf(home.id8))).toBe(false);
   });
 
+  test("on a plan shared as the ref with a Unit added since: the plan goes to its branch, and the Unit is shared on it", () => {
+    const home = makePlanHome();
+    const host = home.hosts["checkout-api"];
+    addUnit(home.dir);
+    const moved = run(UNIT, VISIBLE, home.dir);
+    expect(moved.status, moved.out).toBe(0);
+    expect(String(moved.json?.notice)).toBe(`The plan in checkout-api is on the branch ${name(home.id8)} now, with its history. ${IS} ${PATTERN} ` +
+      "The plan in checkout-api has ledger-sync now.");
+    expect(git(host, ["rev-parse", `refs/heads/${name(home.id8)}^`])).toBe(home.plan!);
+    expect(JSON.parse(git(host, ["show", `refs/heads/${name(home.id8)}:plan.json`])).units.map((unit: { name: string }) => unit.name)).toContain("ledger-sync");
+    expect(has(host, planRefOf(home.id8))).toBe(false);
+  });
+
+  test("the repository the lead named at a first share is kept in the branch steps a host's refusal hands on", () => {
+    const ref = makePlanHome({ share: false });
+    refuse(ref.hosts.billing, ["refs/aidlc/"]);
+    const offered = run(UNIT, ["share", "--plan", "--repo", "billing"], ref.dir);
+    expect(String(offered.json?.step), offered.out).toContain("unit share --plan --visible --repo billing`");
+    const yes = run(UNIT, [...VISIBLE, "--repo", "billing"], ref.dir);
+    expect(yes.status, yes.out).toBe(0);
+    expect(has(ref.hosts.billing, `refs/heads/${name(ref.id8)}`)).toBe(true);
+    expect(has(ref.hosts["checkout-api"], `refs/heads/${name(ref.id8)}`)).toBe(false);
+    const branch = makePlanHome({ share: false });
+    refuse(branch.hosts.billing, ["refs/heads/aidlc/"]);
+    const refused = run(UNIT, [...VISIBLE, "--repo", "billing"], branch.dir);
+    expect(String(refused.json?.step), refused.out).toContain("unit share --plan --visible --repo billing --commit-message-file ");
+  });
+
   test("a host that takes no ref of AI-DLC's: the share offers the branch, and its yes puts the plan there", () => {
     const home = makePlanHome({ share: false });
     const host = home.hosts["checkout-api"];

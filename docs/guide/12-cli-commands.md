@@ -897,7 +897,7 @@ the Unit's branch with your own git (your hooks, signing and identity; git's own
 merge message, or yours when you give one) and pushes the branch again; nothing
 is rewritten or forced. A clash is left for you to resolve, and `--merge-main`
 then finishes and pushes it, as a plain push does once it is resolved (with git's
-own merge message); `--undo-merge` takes the waiting merge back out. A
+own merge message, or yours when you give one); `--undo-merge` takes the waiting merge back out. A
 change of yours in a file main changes, or a file of yours where main adds one,
 stops it before anything is merged, with the way on. On the workspace's own
 repository, a file of AI-DLC's record (a rules file, `repos.json`) that has a
@@ -1211,9 +1211,14 @@ over. Once the plan is shared, `--repo` naming another repository moves it
 there: one commit on the plan's own history, with only where it lives and its
 version changed, then a note on the old repository's ref saying where it went,
 which a team reading the plan there follows; the plan's earlier versions stay
-readable in both repositories. When the old repository does not
-take the note, the plan stays where it was and the copy just written is taken
-back. Your other computers follow the note at their next look or share; one that holds words of yours the plan there
+readable in both repositories. When the old repository does not take the note,
+the plan stays in the new one. AI-DLC says that the old one holds no note of
+where the plan went, so that you give each team the new address. In three cases
+the copy just written is taken back instead and the plan stays where it was: the
+old repository could not be reached for the note, its plan kept changing
+meanwhile, or the old plan was written with a commit message of your own (a rule
+on messages is likely there). In that last case, give the commit message for the
+note and ask for the move again. Your other computers follow the note at their next look or share; one that holds words of yours the plan there
 lacks lists them, and `--carry-words` writes them on the plan as you gave them. Where the plan there has the
 opposite decision on a Unit, or another turn-down of it, the line asks which stands, or offers this computer's in
 its place; `--stands <unit>=here` writes this computer's word there and `--stands <unit>=plan` keeps the plan's,

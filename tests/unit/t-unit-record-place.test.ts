@@ -349,6 +349,30 @@ describe("the builder's later writes go on the record's tip", () => {
     expect(JSON.stringify(after.json)).not.toContain("outside");
     expect(JSON.stringify(after.json)).not.toContain("--force");
   });
+
+  test("a record whose earlier result names no base for a repository: the push reads the Unit's files from where its branch left main", () => {
+    const { home, alice, record } = refundsTaken();
+    const host = recordHostOf(home, "refunds");
+    const seeded = tempClone(host);
+    git(seeded, ["fetch", "-q", "origin", `${refundsRef(home.id8)}:refs/tmp/record`]);
+    const json = JSON.parse(git(seeded, ["show", "refs/tmp/record:unit.json"])) as Record<string, unknown>;
+    const planted = { ...json, result: { by: "x", outputs: [], repos: [{ repo: "billing", branch: "refunds", base: "", heads: [], paths: {} }] } };
+    const blob = gitRaw(seeded, ["hash-object", "-w", "--stdin"], `${JSON.stringify(planted, null, 2)}\n`).trim();
+    const tree = gitRaw(seeded, ["mktree"], `100644 blob ${blob}\tunit.json\n`).trim();
+    const commit = git(seeded, ["-c", "user.name=someone", "-c", "user.email=someone@example.test", "commit-tree", tree, "-p", "refs/tmp/record", "-m", "aidlc unit refunds: taken"]);
+    git(seeded, ["push", "-q", "origin", `${commit}:${refundsRef(home.id8)}`]);
+    codeGenerated(alice, record);
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(String(pushed.json?.notice ?? "")).not.toContain("could not list");
+    const after = recordAt(home, "refunds")!;
+    expect(after.parents).toEqual([commit]);
+    const billing = (after.json.result as { repos: Array<{ repo: string; base: string; paths: Record<string, string | null> }> }).repos
+      .find((repo) => repo.repo === "billing");
+    expect(billing?.base).not.toBe("");
+    expect(Object.keys(billing?.paths ?? {})).toEqual(["lib/refund.ts"]);
+    expect(billing?.paths["lib/refund.ts"]).toMatch(/^[0-9a-f]{40}$/);
+  });
 });
 
 describe("a Unit the lead's project builds has a record like any builder's", () => {

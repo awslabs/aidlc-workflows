@@ -581,15 +581,39 @@ describe("the lead who says so in a clone that did not make the plan", () => {
     expect(step.status, step.out).toBe(0);
     return step;
   };
+  // Two messages of theirs in one second, as the hook records them, the second
+  // last: the store keeps whole seconds and orders two of one second by their
+  // random ids, so both get the second's time and their ids are put so the last
+  // sorts first by id (`lastSortsFirst`) or last; the rows keep the order they came in.
+  const twoInOneSecond = (dir: string, chat: string, first: string, last: string, lastSortsFirst: boolean): void => {
+    for (const prompt of [first, last]) {
+      expect(hook(dir, personsChat(chat), { hook_event_name: "UserPromptSubmit", session_id: chat, prompt }).status).toBe(0);
+    }
+    const turns = readAuditShardEvents(dir, HOME).filter((row) => row.event === "HUMAN_TURN" && auditBlockField(row.block, "Session") === chat);
+    const [a, b] = turns.slice(-2).map((row) => auditBlockField(row.block, "Message Id") ?? "");
+    const messages = join(dir, "aidlc", ".aidlc-engine", "sessions", "messages");
+    const record = (id: string): string => join(messages, `${id}.json`);
+    const read = (id: string): Record<string, unknown> => JSON.parse(readFileSync(record(id), "utf-8"));
+    const [earlier, later] = [read(a), read(b)];
+    if ((b < a) === lastSortsFirst) {
+      writeFileSync(record(a), JSON.stringify({ ...earlier, at: later.at }));
+      return;
+    }
+    // Each record names its own id, so the two swap whole, and the rows with them.
+    writeFileSync(record(a), JSON.stringify({ ...later, id: a }));
+    writeFileSync(record(b), JSON.stringify({ ...earlier, id: b, at: later.at }));
+    const shard = turns.at(-1)!.shard;
+    writeFileSync(shard, readFileSync(shard, "utf-8").replaceAll(a, "SWAP").replaceAll(b, a).replaceAll("SWAP", b));
+  };
   const LEAD = "they lead this work, whether or not they ask to carry it on here (leading a team or a Unit of it is not that)";
   const I_LEAD = "Not me, I'm the lead, I won't take a Unit here.";
   // The commands the reply hands, run as given: the switch where it names one, then lead-here.
   const liftAsHanded = (dir: string, chat: string, text: string) => {
     const pick = /intent switch (\S+)`/.exec(text)?.[1];
     if (pick !== undefined) expect(run(UTILITY, ["intent", "switch", pick], dir, personsChat(chat)).status).toBe(0);
-    const message = /lead-here --message (\S+)`/.exec(text)?.[1];
-    expect(message, text).toBeDefined();
-    const lifted = run(UNIT, ["lead-here", "--message", message!], dir, personsChat(chat));
+    const handed = /lead-here((?: --message \S+)?)`/.exec(text);
+    expect(handed, text).not.toBeNull();
+    const lifted = run(UNIT, ["lead-here", ...handed![1].trim().split(" ").filter(Boolean)], dir, personsChat(chat));
     expect(lifted.status, lifted.out).toBe(0);
     expect(String(lifted.json?.step)).toEndWith(" next` and follow what it returns.");
     expect(auditBlockField(readAuditShardEvents(dir, HOME).findLast((row) => row.event === "LEAD_HERE_SET")?.block ?? "", "Person Words"))
@@ -653,9 +677,9 @@ describe("the lead who says so in a clone that did not make the plan", () => {
     asLeadsOwnCheckout(laptop);
     const notLead = "No, I'm not the lead after all, I lead the payments team.";
     const text = String(says(laptop, chat, notLead).json?.message);
-    const message = /lead-here --off --message (\S+)`/.exec(text)?.[1];
-    expect(message, text).toBeDefined();
-    const off = run(UNIT, ["lead-here", "--off", "--message", message!], laptop, personsChat(chat));
+    const handed = /lead-here --off((?: --message \S+)?)`/.exec(text);
+    expect(handed, text).not.toBeNull();
+    const off = run(UNIT, ["lead-here", "--off", ...handed![1].trim().split(" ").filter(Boolean)], laptop, personsChat(chat));
     expect(off.status, off.out).toBe(0);
     expect(off.json?.notice).toBe("This checkout no longer carries the work on as the lead's; anything it wrote to the plan stays.");
     const row = readAuditShardEvents(laptop, HOME).findLast((entry) => entry.event === "LEAD_HERE_SET");
@@ -664,6 +688,59 @@ describe("the lead who says so in a clone that did not make the plan", () => {
     // A teammate's view again, and nothing written on the plan.
     expect(JSON.stringify(next(laptop, personsChat(chat)))).toContain("Taking a Unit starts it as your team's own piece of work here");
     expect(tip()).toBe(before);
+  });
+
+  // On Codex the sentence came with the reply to their first question, and
+  // they said they lead in their next message.
+  test("the lead's sentence acted on one message later: the row keeps the words of the message they said it in", () => {
+    const { laptop } = leadsSecondClone(false);
+    const chat = "t-unit-take-i-lead-next-message";
+    expect(run(UTILITY, ["intent", "switch", HOME], laptop).status).toBe(0);
+    const text = String(says(laptop, chat, "where do things stand?").json?.message);
+    expect(text).toContain(`If they say ${LEAD}, run \``);
+    Bun.sleepSync(1000 - (Date.now() % 1000) + 20);
+    expect(hook(laptop, personsChat(chat), { hook_event_name: "UserPromptSubmit", session_id: chat, prompt: I_LEAD }).status).toBe(0);
+    liftAsHanded(laptop, chat, text);
+  });
+
+  test("the reply that they lead, given to the Units offer on screen, is the message the row keeps", () => {
+    const { laptop } = leadsSecondClone(false);
+    const chat = "t-unit-take-i-lead-to-the-offer";
+    expect(run(UTILITY, ["intent", "switch", HOME], laptop).status).toBe(0);
+    expect(String(says(laptop, chat, "what is ready for us?").json?.message)).toContain(`If they say ${LEAD}, run \``);
+    liftAsHanded(laptop, chat, String(says(laptop, chat, I_LEAD).json?.message));
+  });
+
+  // They said later that they do not lead it here, and the step in front of
+  // the agent had no way back for it.
+  test("the lead's view in a clone their word made the lead's carries the way back for the agent", () => {
+    const { laptop } = leadsSecondClone(false);
+    const chat = "t-unit-take-way-back-on-the-view";
+    says(laptop, chat, "where do things stand?");
+    liftAsHanded(laptop, chat, String(says(laptop, chat, I_LEAD).json?.message));
+    const view = next(laptop);
+    expect(JSON.stringify(view), JSON.stringify(view).slice(0, 600)).toContain("If they say they do not lead this work here, run `");
+    expect(JSON.stringify(view)).toContain(" lead-here --off`, and follow what it returns.");
+    expect(String(view.narration ?? "")).not.toContain("lead-here");
+  });
+
+  test("several messages of theirs in one second: lead-here and its way back keep the words of the last, whichever way their ids sort", () => {
+    const { laptop } = leadsSecondClone(false);
+    const chat = "t-unit-take-one-second";
+    expect(run(UTILITY, ["intent", "switch", HOME], laptop).status).toBe(0);
+    const rowWords = (): string | null =>
+      auditBlockField(readAuditShardEvents(laptop, HOME).findLast((row) => row.event === "LEAD_HERE_SET")?.block ?? "", "Person Words");
+    const said: Array<[string[], string, boolean]> = [
+      [[], "I lead this work, I will carry it on here", true], [[], "I am the lead of this work", false],
+      [["--off"], "No, I do not lead it here after all", true], [["--off"], "I am not the lead here", false],
+    ];
+    for (const [flags, words, lastSortsFirst] of said) {
+      Bun.sleepSync(1100);
+      twoInOneSecond(laptop, chat, "where do things stand?", words, lastSortsFirst);
+      const lifted = run(UNIT, ["lead-here", ...flags], laptop, personsChat(chat));
+      expect(lifted.status, lifted.out).toBe(0);
+      expect(rowWords(), `${flags.join(" ")} ${words}`).toBe(words);
+    }
   });
 
   test("a team's own workspace never hears the sentence", () => {

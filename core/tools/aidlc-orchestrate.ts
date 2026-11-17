@@ -220,7 +220,6 @@ import {
   authorizedVerificationCommand,
   validConstructionPolicyChange,
   swarmNeedsStageMajor,
-  auditFilePath,
   REDO_REUSE_SOURCE,
   boltSlugForUnit,
   composeGateOpen,
@@ -665,6 +664,7 @@ import {
   planShareMarkName,
   planUnshared,
   skeletonCodeName,
+  sliceCodeWaits,
   planBranchOffered,
   planShareWork,
   leadsOwnTeamWork,
@@ -722,6 +722,9 @@ import {
   takeDayOf,
   GitWriteRefused,
   earlyBaseMerged,
+  chatLatestMessage,
+  latestOwnRow,
+  mainMovedAsked,
   mainMovedRepos,
   forkOfferOf,
   toForkDueMark,
@@ -886,7 +889,6 @@ import {
   type AuditEntryInput,
   maskSecretShapes,
   saySecretMaskedOnce,
-  SESSION_EVENT_TYPES,
 } from "./aidlc-audit.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
 import { unitMemoryPath, unitStageMemoryPath } from "./aidlc-stage-diary.ts";
@@ -5271,24 +5273,23 @@ function unselectedWordsReplyDirective(
 
 // The person who says they lead the lead's work in a checkout that did not
 // make its plan: one sentence for the agent wherever such a reply is put, with
-// the exact commands (`unit lead-here` takes their words from the message the
-// reply read, else their latest in this chat) and the work selected first where
-// it is not. `works`: the lead's work here made elsewhere; "" for none.
+// the exact commands and the work selected first where it is not. No message
+// id: `unit lead-here` takes their latest message at the call, so a sentence
+// acted on a message later keeps the words they said it in.
+// `works`: the lead's work here made elsewhere; "" for none.
 const LEAD_HERE_WORDS = "they lead this work, whether or not they ask to carry it on here (leading a team or a Unit of it is not that)";
 // `instead`: said on a question the step would put otherwise, run in its place.
-function leadHereRun(works: string[], selected: boolean, message: string | null, instead = false): string {
+function leadHereRun(works: string[], selected: boolean, instead = false): string {
   const pick = selected ? "" : `\`${aidlcDispatcherInvocation("intent")} switch ${works.length === 1 ? works[0] : "<name>"}\`` +
     `${works.length === 1 ? "" : ` with the one they lead (${works.join(", ")})`}, then `;
-  return `run ${pick}\`${aidlcToolInvocation("unit")} lead-here${message === null ? "" : ` --message ${message}`}\`` +
-    `${instead ? " in place of this question" : ""}, and follow what it returns`;
+  return `run ${pick}\`${aidlcToolInvocation("unit")} lead-here\`${instead ? " in place of this question" : ""}, and follow what it returns`;
 }
-function leadHereSentence(works: string[], selected: boolean, message: string | null): string {
-  return works.length === 0 ? "" : `If they say ${LEAD_HERE_WORDS}, ${leadHereRun(works, selected, message)}.`;
+function leadHereSentence(works: string[], selected: boolean): string {
+  return works.length === 0 ? "" : `If they say ${LEAD_HERE_WORDS}, ${leadHereRun(works, selected)}.`;
 }
 // Its way back, in a clone the person's own word made the lead's.
-function leadHereOffSentence(message: string | null): string {
-  return `If they say they do not lead this work here, run \`${aidlcToolInvocation("unit")} lead-here --off` +
-    `${message === null ? "" : ` --message ${message}`}\`, and follow what it returns.`;
+function leadHereOffSentence(): string {
+  return `If they say they do not lead this work here, run \`${aidlcToolInvocation("unit")} lead-here --off\`, and follow what it returns.`;
 }
 
 // The lead's work in the space this clone did not make the plan of: what pickableHere leaves out.
@@ -5303,14 +5304,13 @@ function leadsWorkMadeElsewhere(pd: string, here: NonNullable<ReturnType<typeof 
 // reply `otherwise` gives, with the lead's sentence. `otherwise` elsewhere.
 function leadsWorkElsewhereWords(pd: string, stateContent: string, requestId: string, otherwise: () => PrintDirective): PrintDirective {
   if (homeLocation(stateContent) === null || unitBuildOf(stateContent) !== null) return otherwise();
-  const message = readingMessage(pd)?.id ?? null;
   if (!planMadeElsewhere(pd)) {
     if (leadHereByWord(pd) !== true) return otherwise();
     const step = otherwise();
-    return { ...step, message: `${step.message} ${leadHereOffSentence(message)}` };
+    return { ...step, message: `${step.message} ${leadHereOffSentence()}` };
   }
   const work = [engineSelection(pd).intent ?? ""].filter(Boolean);
-  const lead = leadHereSentence(work, true, message);
+  const lead = leadHereSentence(work, true);
   const offer = unitTakeAsk(pd);
   if (offer !== null) return unitsWordsReplyDirective(requestId, offer, work, lead);
   const step = otherwise();
@@ -5772,7 +5772,9 @@ function teamCommandsNote(projectDir?: string): string {
     `When they ask for their sign-off on every team's result, run \`${unitTool} lead-sign-off on\` (\`off\` to stop); ` +
     `when they ask to free a Unit, run \`${unitTool} release <unit>\`; when they ask to build a Unit ` +
     `left open here, run \`${unitTool} assign --here <unit> ${unitWordsArg("assign")}\`. ` +
-    `${UNIT_WORDS_NOTE} Say the notice line each prints.${moved}`;
+    `${UNIT_WORDS_NOTE} Say the notice line each prints.${moved}` +
+    // A checkout the person's own word made the lead's: its way back is in front of the agent at every step.
+    (projectDir !== undefined && leadHereByWord(projectDir) === true ? ` ${leadHereOffSentence()}` : "");
 }
 
 // The offers a step has not put to the person in this chat yet; each is put
@@ -6311,16 +6313,21 @@ function buildOutShareOffer(projectDir: string): AskDirective | PrintDirective |
     const code = skeletonCodeName(projectDir);
     const place = code === null ? null : planPlaceForShare(projectDir);
     if (code !== null && place !== null && "ref" in place) {
+      // The slice's code already committed here: the share commits AI-DLC's record alone.
+      const files = planShareWork(projectDir);
+      const waits = files !== null || sliceCodeWaits(projectDir);
       return teamHandoverAsk(projectDir, {
         handovers: ["share"],
         marks: [hereMark],
         question: `${refused.reason} Do you want me to share the plan with the teams? I'd put it in ${place.repo}: ${planContents(projectDir)}; ` +
-          `everyone who can read ${place.repo} can read it. I'd also commit ${code.name}, ${planShareWork(projectDir)}, and AI-DLC's record here ` +
-          `on ${here}, using this commit message; I would not push ${here}. The other Units wait on ${code.units} until ` +
-          `${code.is === "is" ? "it is" : "they are"} in ${refused.off.branch}.\n\n${message.text}`,
+          `everyone who can read ${place.repo} can read it. I'd also commit ${files === null ? "" : `${code.name}, ${files}, and `}AI-DLC's record here ` +
+          `on ${here}, using this commit message; I would not push ${here}.` +
+          (waits ? ` The other Units wait on ${code.units} until ${code.is === "is" ? "it is" : "they are"} in ${refused.off.branch}.` : "") +
+          `\n\n${message.text}`,
         choices: [{
-          label: `Share the plan, commit ${code.units} here`,
-          detail: `One push to ${place.repo} with your own git; ${code.name} and AI-DLC's record are committed on ${here}, which is not pushed.`,
+          label: `Share the plan, commit ${files === null ? "AI-DLC's record" : code.units} here`,
+          detail: `One push to ${place.repo} with your own git; ${files === null ? "AI-DLC's record is" : `${code.name} and AI-DLC's record are`} ` +
+            `committed on ${here}, which is not pushed.`,
           command: `${aidlcInvocation()} unit share --plan${message.flag}`,
         }],
         notNow: { label: "Not now", detail: PLAN_NOT_NOW },
@@ -6396,11 +6403,13 @@ function skeletonShareOffer(
   }
   const message = shareMessageStep(projectDir, shareKey, planShareWords(projectDir));
   if ("draft" in message) return message.draft;
+  // The slice's code already committed here: the commit is AI-DLC's record alone, and the push still carries the code.
+  const files = planShareWork(projectDir);
   const ask = teamHandoverAsk(projectDir, {
     handovers: ["share"],
     marks: [mark],
     question: `Do you want me to share the plan with the teams? I'd put it in ${place.repo}: ${planContents(projectDir)}; ` +
-      `everyone who can read ${place.repo} can read it. I'd also commit ${code.name}, ${planShareWork(projectDir)}, and AI-DLC's ` +
+      `everyone who can read ${place.repo} can read it. I'd also commit ${files === null ? "" : `${code.name}, ${files}, and `}AI-DLC's ` +
       "record, using this commit message, and " +
       // After a push to main it has the code, so only the pull request's form says what waits.
       (way === "direct push" ? `push ${target.branch} to ${target.remote}.`
@@ -10712,10 +10721,6 @@ function unitMoveOntoAsk(projectDir: string, stateContent: string): AskDirective
   return null;
 }
 
-// The offer's own mark, once for the push whose heads it names.
-const mainMovedAsked = (unit: string, moved: ReadonlyArray<{ head: string }>): string =>
-  `unit-main-moved-asked-${unit}-${moved.map((repo) => repo.head.slice(0, 12)).join("-")}`;
-
 // A Unit pushed from where the person was while the branch it merges into
 // changed its own files (the push kept mainMovedMark for that head): the offer
 // to bring that branch in, once for the push. Silent while a push is due, a
@@ -14062,17 +14067,6 @@ function readingMessage(pd: string): ReturnType<typeof latestMessage> {
   return latest !== null && latest.source === "prompt" ? latest : null;
 }
 
-// The latest row of this clone's own shard (each clone appends to its own;
-// shards are read in filename order, so a teammate's can come after it), past
-// the host's session rows: Copilot CLI runs its session-start hook beside the
-// prompt hook in no fixed order, so the chat's start can land just after the
-// person's turn, and it is no act on what they said.
-function latestOwnRow(pd: string): AuditShardEvent | undefined {
-  const own = basename(auditFilePath(pd));
-  return readAuditShardEvents(pd)
-    .filter((row) => basename(row.shard) === own && !SESSION_EVENT_TYPES.has(row.event))
-    .at(-1);
-}
 
 // The person's turn that carries this message is the latest row: nothing has
 // run since they spoke.
@@ -14082,24 +14076,6 @@ function turnIsLatestRow(pd: string, messageId: string): boolean {
     return last !== undefined && last.event === "HUMAN_TURN" && auditBlockField(last.block, "Message Id") === messageId;
   } catch {
     return false;
-  }
-}
-
-// This chat's latest message. The store keeps whole seconds, and two messages
-// of one second sort by their random ids (latestMessage), so when the chat's
-// latest row is the person's turn and names a message of that same second, that
-// message is the latest: the shard keeps the order they came in.
-function chatLatestMessage(pd: string, session: string): ReturnType<typeof latestMessage> {
-  const latest = latestMessage(pd, session);
-  if (latest === null) return null;
-  try {
-    const last = latestOwnRow(pd);
-    const id = last?.event === "HUMAN_TURN" ? auditBlockField(last.block, "Message Id") : null;
-    if (id === null || id === latest.id) return latest;
-    const turn = readMessage(pd, id);
-    return turn !== null && turn.session === session && turn.at === latest.at ? turn : latest;
-  } catch {
-    return latest;
   }
 }
 
@@ -16120,14 +16096,13 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     // the lead's own checkout "Carry on ... here, as the lead" stays among the
     // choices.
     const take = here !== null && here.selectable.length > 0 && !takeOfferedOnWords(pd) ? unitTakeAsk(pd) ?? soloElsewhereAsk(pd) : null;
-    // The lead's work here made elsewhere, and the message these words came in.
+    // The lead's work here made elsewhere.
     const leadWorks = here === null ? [] : leadsWorkMadeElsewhere(pd, here);
-    const message = readingMessage(pd)?.id ?? null;
     if (take !== null) {
       noteTakeOfferedOnWords(pd);
       // First words that already say they lead this work are read for that before the offer is put.
       emit(leadWorks.length === 0 ? take : Object.assign({}, take, {
-        board_note: `If the words they already gave say ${LEAD_HERE_WORDS}, ${leadHereRun(leadWorks, false, message, true)}.`,
+        board_note: `If the words they already gave say ${LEAD_HERE_WORDS}, ${leadHereRun(leadWorks, false, true)}.`,
       }));
       return;
     }
@@ -16153,9 +16128,9 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
         ...(pickable.length > 0 ? { pick: true as const } : {}),
       });
       emit(offer !== null
-        ? unitsWordsReplyDirective(words.id, offer, here.selectable.map(({ selector }) => selector), leadHereSentence(leadWorks, false, message))
+        ? unitsWordsReplyDirective(words.id, offer, here.selectable.map(({ selector }) => selector), leadHereSentence(leadWorks, false))
         : unselectedWordsReplyDirective(words.id, pd, pickable.map(({ selector }) => selector), finishedUnselectedWork(pd),
-          leadWorks.length === 0 ? undefined : { works: leadWorks, sentence: leadHereSentence(leadWorks, false, message) }));
+          leadWorks.length === 0 ? undefined : { works: leadWorks, sentence: leadHereSentence(leadWorks, false) }));
       return;
     }
   }
@@ -19898,7 +19873,7 @@ function emitTeamUnitMajorRunStage(
     const take = unitTakeAsk(projectDir);
     emit(lineEndingTurn(teamHomeBoardText(projectDir, stateContent), take?.kind === "ask" ? [{ question: take.question, choices: take.choices ?? [] }] : [],
       `This checkout did not make this work's plan, so the lead's own questions are not put here. If the person says ` +
-        `${LEAD_HERE_WORDS}, ${leadHereRun([], true, null)}.`));
+        `${LEAD_HERE_WORDS}, ${leadHereRun([], true)}.`));
     return;
   }
   const { overview, results, heldElsewhere, keepsWalk } = teamHomeClaims(projectDir, teamHome);

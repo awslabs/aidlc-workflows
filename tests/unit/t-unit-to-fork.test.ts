@@ -125,6 +125,17 @@ describe("the push of a Unit's branch early to the person's fork", () => {
     expect(onFork(hosts["checkout-api"])).not.toBe(0);
   });
 
+  test("a change the person has staged in the clone stays staged: the empty commit holds none of it, and none of it is pushed", () => {
+    const { alice, api, fork } = forked();
+    offered(alice);
+    writeFileSync(join(api, "MINE.md"), "my own work\n");
+    git(api, ["add", "MINE.md"]);
+    const yes = run(UNIT, ["push", "--to-fork"], alice);
+    expect(yes.status, yes.out).toBe(0);
+    expect(git(fork, ["diff", "--name-only", "refunds~1", "refunds"])).toBe("");
+    expect(git(api, ["diff", "--cached", "--name-only"])).toBe("MINE.md");
+  });
+
   test("the Unit's own push later goes to the fork on top of it, and a branch of the person's own does not take its place", () => {
     const { alice, api, fork, record } = forked();
     offered(alice);

@@ -1314,19 +1314,40 @@ export interface UnitResult {
   kept_edits?: string[];
 }
 
-function gitIn(dir: string, args: string[], input?: string): { ok: boolean; out: string } {
+function gitIn(dir: string, args: string[], input?: string): { ok: boolean; out: string; err: string } {
   const result = spawnSync("git", args, { cwd: dir, encoding: "utf-8", input, maxBuffer: 64 * 1024 * 1024 });
-  return { ok: result.status === 0, out: result.stdout ?? "" };
+  return { ok: result.status === 0, out: result.stdout ?? "", err: result.stderr || result.error?.message || "" };
+}
+
+// A Unit's paths in runs of at most 16,000 characters, under the 32,767
+// Windows allows a whole command line, so a git call over them starts for a
+// Unit of any size; nearly every Unit is one run, so the merge walk stays one
+// call a commit.
+export function pathRuns(paths: readonly string[]): string[][] {
+  const runs: string[][] = [];
+  for (let at = 0; at < paths.length;) {
+    const run: string[] = [];
+    for (let size = 0; at < paths.length && (run.length === 0 || size + paths[at].length < 16_000); at++) {
+      run.push(paths[at]);
+      size += paths[at].length + 3;
+    }
+    runs.push(run);
+  }
+  return runs;
 }
 
 // Each path's blob at a commit; a path the commit does not have is left out.
-export function blobsAt(dir: string, commit: string, paths: readonly string[]): Map<string, string> {
+// Where git could not list them, its first line (`said`), never an empty list
+// read as every path gone.
+export function blobsAt(dir: string, commit: string, paths: readonly string[]): Map<string, string> | { said: string } {
   const blobs = new Map<string, string>();
-  if (paths.length === 0) return blobs;
-  const listed = gitIn(dir, ["ls-tree", "-r", "--full-tree", commit, "--", ...paths]);
-  for (const line of listed.out.split("\n").filter(Boolean)) {
-    const tab = line.indexOf("\t");
-    blobs.set(line.slice(tab + 1), line.slice(0, tab).split(" ")[2]);
+  for (const run of pathRuns(paths)) {
+    const listed = gitIn(dir, ["ls-tree", "-r", "--full-tree", commit, "--", ...run]);
+    if (!listed.ok) return { said: listed.err.trim().split(/\r?\n/)[0] ?? "" };
+    for (const line of listed.out.split("\n").filter(Boolean)) {
+      const tab = line.indexOf("\t");
+      blobs.set(line.slice(tab + 1), line.slice(0, tab).split(" ")[2]);
+    }
   }
   return blobs;
 }
@@ -1365,8 +1386,9 @@ export function unitMergeVerdict(dir: string, integration: string, result: RepoR
   const commits = gitIn(dir, ["rev-list", "--first-parent", "--reverse", "--max-count=500", range])
     .out.split("\n").filter(Boolean);
   for (const commit of commits) {
+    // A commit git could not list is no merge.
     const at = blobsAt(dir, commit, paths);
-    if (paths.every((path) => (result.paths[path] === null ? !at.has(path) : at.get(path) === result.paths[path]))) {
+    if (at instanceof Map && paths.every((path) => (result.paths[path] === null ? !at.has(path) : at.get(path) === result.paths[path]))) {
       return { merged: true, commit, how: "same content" };
     }
   }
@@ -1451,6 +1473,8 @@ export function resultAtTip(dir: string, integration: string, result: RepoResult
   const from = gitIn(dir, ["merge-base", tip, integration]).out.trim() || result.base;
   const changed = names(from);
   const blobs = blobsAt(dir, tip, changed);
+  // A tip git could not list is read as no later tip.
+  if (!(blobs instanceof Map)) return null;
   const id = patchIdOf(dir, from, tip, changed);
   return {
     repo: result.repo,

@@ -16,7 +16,8 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { cpSync, readdirSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
-import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { clearEngineAskMark, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { teamHandoverMarkName } from "../../dist/claude/.claude/tools/aidlc-unit.ts";
 import { fixtureIntentId8, REPO_ROOT } from "../harness/fixtures.ts";
 import { hostFor } from "../harness/scope-hosts.ts";
 import { AgentStandIn, type Directive, PersonScript, type StandInOptions } from "../harness/scope-run.ts";
@@ -153,6 +154,21 @@ describe("with a thin slice first on the workspace's own repository, the share c
     expect(typeof plan.skeleton).toBe("string");
     expect(plan.units.find((unit: { name: string }) => unit.name === plan.skeleton)?.word).toEqual({});
   });
+
+  test("with the slice's code already committed, the share question names only AI-DLC's record to commit", () => {
+    const home = makeHome({ repos: {}, dependencies: UNITS, state: homeState().replace("- **Skeleton Stance**: off", "- **Skeleton Stance**: on") });
+    const teams = run(STATE, ["set-unit-ownership", "team"], home.dir);
+    expect(teams.status, teams.out).toBe(0);
+    const end = leadsChat(home.dir, { until: isShare, codeRepo: () => undefined });
+    expect(isShare(end), JSON.stringify(end).slice(0, 600)).toBe(true);
+    git(home.dir, ["add", "src", "test"]);
+    git(home.dir, ["commit", "-q", "-m", "checkout-ui"]);
+    clearEngineAskMark(home.dir, teamHandoverMarkName("share", "plan"));
+    const again = next(home.dir);
+    expect(String(again.question), JSON.stringify(again).slice(0, 600)).toContain("can read it. I'd also commit AI-DLC's record, using this " +
+      "commit message, and push that on its own branch for a pull request. The other Units wait on checkout-ui until it is in main.\n\n");
+    expect(String(again.question)).not.toContain("null");
+  });
 });
 
 // On a branch of the lead's own, the plan still goes to its repository; the
@@ -192,6 +208,52 @@ describe("with a thin slice first, on a branch of the lead's own, the share says
     expect(git(home.remote, ["rev-parse", "main"])).toBe(main);
     expect(git(home.remote, ["for-each-ref", "refs/heads/my-work"])).toBe("");
     expect(git(home.remote, ["for-each-ref", "--format=%(refname)", "refs/aidlc/plans"])).toBe(`refs/aidlc/plans/${fixtureIntentId8(home.dir)}`);
+  });
+
+  // The slice's code committed on the lead's branch already: the commit is AI-DLC's record alone, and the
+  // other Units still wait on the slice while main does not have its code.
+  function committedOnMyWork(): { home: ReturnType<typeof makeHome>; repo: string } {
+    const home = makeHome({ repos: {}, dependencies: UNITS, state: homeState().replace("- **Skeleton Stance**: off", "- **Skeleton Stance**: on") });
+    const teams = run(STATE, ["set-unit-ownership", "team"], home.dir);
+    expect(teams.status, teams.out).toBe(0);
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "teams chosen"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    git(home.dir, ["checkout", "-q", "-b", "my-work"]);
+    const end = leadsChat(home.dir, { until: isShare, codeRepo: () => undefined });
+    expect(isShare(end), JSON.stringify(end).slice(0, 600)).toBe(true);
+    git(home.dir, ["add", "src", "test"]);
+    git(home.dir, ["commit", "-q", "-m", "checkout-ui"]);
+    clearEngineAskMark(home.dir, teamHandoverMarkName("plan-here", "my-work"));
+    return { home, repo: basename(home.remote) };
+  }
+  const RECORD_ONLY = "I'd also commit AI-DLC's record here on my-work, using this commit message; I would not push my-work.";
+  const COMMITTED = " AI-DLC's record is committed on my-work and not pushed: push my-work and get it merged your usual way.";
+  const WAITS = " The other Units wait on checkout-ui until it is in main.";
+
+  test("with the slice's code already committed on that branch, the question and the result name only AI-DLC's record, and the Units still wait", () => {
+    const { home, repo } = committedOnMyWork();
+    const again = next(home.dir);
+    expect(String(again.question), JSON.stringify(again).slice(0, 600)).toContain(`everyone who can read ${repo} can read it. ${RECORD_ONLY}${WAITS}\n\n`);
+    expect(String(again.question)).not.toContain("null");
+    const choices = (again.choices ?? []) as Array<{ label: string; detail?: string }>;
+    expect(choices[0].label).toBe("Share the plan, commit AI-DLC's record here");
+    expect(choices[0].detail).toBe(`One push to ${repo} with your own git; AI-DLC's record is committed on my-work, which is not pushed.`);
+    const shared = run(UNIT, ["share", "--plan"], home.dir);
+    expect(shared.status, shared.out).toBe(0);
+    expect(String(shared.json?.notice)).toEndWith(`${COMMITTED}${WAITS}`);
+    expect(String(shared.json?.notice)).not.toContain("checkout-ui's code");
+  });
+
+  test("with the slice's code already in main, the question and the result name only AI-DLC's record, and nothing waits", () => {
+    const { home, repo } = committedOnMyWork();
+    git(home.dir, ["push", "-q", "origin", "HEAD:main"]);
+    const again = next(home.dir);
+    expect(String(again.question), JSON.stringify(again).slice(0, 600)).toContain(`everyone who can read ${repo} can read it. ${RECORD_ONLY}\n\n`);
+    const shared = run(UNIT, ["share", "--plan"], home.dir);
+    expect(shared.status, shared.out).toBe(0);
+    expect(String(shared.json?.notice)).toEndWith(COMMITTED);
+    expect(String(shared.json?.notice)).not.toContain("wait on");
   });
 });
 

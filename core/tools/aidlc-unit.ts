@@ -21,7 +21,7 @@ import {
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { appendAuditEntry, appendAuditEntryUnlocked, startClaimLocalRecord, takeHandedOverAuditRows } from "./aidlc-audit.ts";
+import { appendAuditEntry, appendAuditEntryUnlocked, SESSION_EVENT_TYPES, startClaimLocalRecord, takeHandedOverAuditRows } from "./aidlc-audit.ts";
 import { QUESTION_TYPE_FIELD } from "./aidlc-questions.ts";
 import { completedUnits, scopeStampLanded, unitProgressTable, unitRowMerged } from "./aidlc-unit-landing.ts";
 import { gitUserName, personGitNameField } from "./aidlc-git-name.ts";
@@ -178,6 +178,7 @@ import {
   workspaceSourceListing,
   type WorkspaceSourceListing,
   isValidRepoName,
+  repoNameRefusal,
   validGitRefName,
 } from "./aidlc-lib.js";
 import { classifyStateVersion, newerPlanStep, newerRecordStep, newerStateRelease, newerStateStep, recordHomeLocation, TEAM_STATE_VERSION } from "./aidlc-state-upgrade.ts";
@@ -189,6 +190,7 @@ import {
   CONTRACT_SUMMARY_INPUT,
   contractPartiesChanged,
   blobsAt,
+  pathRuns,
   builtFromAnotherMachine,
   findUnitBuild,
   HOME_LOCATION_FIELD,
@@ -5703,10 +5705,12 @@ function openAgainNamed(pd: string, unit: string, live: UnitClaimView | null): v
     },
     words: (other, tip) => {
       if (other !== unit) return null;
-      const { done, said_merged, pull_requests, verdicts: _verdicts, signoff: _signoff, ...rest } = taken === null ? tip : wordForTake(tip, taken);
-      named = pull_requests ?? [];
-      byWord = (said_merged ?? []).map((said) => said.repo);
-      wasDone = done === true;
+      // What comes off is the word as the gate read it, whatever take it was written for.
+      named = tip.pull_requests ?? [];
+      byWord = (tip.said_merged ?? []).map((said) => said.repo);
+      wasDone = tip.done === true;
+      const { done: _done, said_merged: _said, pull_requests: _named, verdicts: _verdicts, signoff: _signoff, ...rest } =
+        taken === null ? tip : wordForTake(tip, taken);
       return taken === null ? rest : { ...rest, open_again: { at: isoTimestamp() } };
     },
   });
@@ -6564,6 +6568,11 @@ export function skeletonCodeName(projectDir: string): { name: string; is: string
   return { name: namesInProse(units.map((unit) => `${unit}'s code`)), is: units.length === 1 ? "is" : "are", units: namesInProse(units) };
 }
 
+// The other Units can still wait on the slice built here: its code is not all in main yet.
+export function sliceCodeWaits(projectDir: string): boolean {
+  return builtHereCode(projectDir).units.some((unit) => !skeletonCodeInMain(projectDir, unit));
+}
+
 // `unit share --branch`: the commits the integration branch has and the
 // remote's lacks, all the share's own (made just now, or noted when the host
 // refused them), go on the plan's branch: made at HEAD and pushed with its
@@ -7276,14 +7285,19 @@ function writeSharedPlan(pd: string, message?: string, named?: string, carry?: C
   }
   // The lead's own words for a branch people can open (--visible): looked at
   // first, copy or not; a plan shared as the ref goes to its branch with its
-  // history, and a first share is written as the branch.
+  // history, and a first share is written as the branch. The share then goes
+  // on to write what this computer has that the plan lacks, on the branch.
+  let moved: string[] = [];
   if (visible) {
     const look = lookAtPlan(pd, place);
     if (look.unreached !== undefined) {
       fail(`${place.repo} could not be reached, so the plan is not shared${look.unreached === null ? "." : `: git says "${look.unreached}".`} Say when to try again.`);
     }
-    if (look.tip !== null && planBranchAt(pd, place) === null) return planToBranch(pd, place, look.tip);
-    if (look.tip === null) Object.assign(place, { branch: visiblePlanBranch(place) });
+    if (look.tip !== null && planBranchAt(pd, place) === null) {
+      const branch = planToBranch(pd, place, look.tip);
+      moved = "said" in branch ? [branch.said] : [];
+    }
+    if (look.tip === null || moved.length > 0) Object.assign(place, { branch: visiblePlanBranch(place) });
   }
   let added: string[] = [];
   // The walking skeleton the plan held that the answer here takes out.
@@ -7342,7 +7356,7 @@ function writeSharedPlan(pd: string, message?: string, named?: string, carry?: C
   const went = (written.kind === "written" || written.kind === "unchanged") && written.followed !== undefined ? written.followed : null;
   const repo = went?.place.repo ?? place.repo;
   const address = maskUserinfo(went?.place.address ?? place.address);
-  const followedLine = went === null ? [] : [went.line];
+  const followedLine = [...moved, ...(went === null ? [] : [went.line])];
   // The work's Home Location is the plan's repository, where the lead put it.
   if (written.kind === "written" || written.kind === "unchanged") planHomeHere(pd, went?.place.address ?? place.address);
   if (carryRun.now !== null && (written.kind === "unchanged" || written.kind === "written")) {
@@ -7361,7 +7375,8 @@ function writeSharedPlan(pd: string, message?: string, named?: string, carry?: C
     }
   }
   if (written.kind === "unchanged") {
-    return { repo, address, commit: written.commit, said: [...followedLine, `The plan in ${repo} already has everything here.`].join(" ") };
+    const has = moved.length > 0 ? [] : [`The plan in ${repo} already has everything here.`];
+    return { repo, address, commit: written.commit, said: [...followedLine, ...has].join(" ") };
   }
   if (written.kind === "written") {
     // A Unit of the plan as written that still lists `unit` in what it waits on.
@@ -7400,7 +7415,9 @@ function writeSharedPlan(pd: string, message?: string, named?: string, carry?: C
     throw new LeadWordUnwritten(question, [aidlcToolInvocation("unit"), ...invokedArgs.map(shellArg)].join(" "), ask);
   }
   // A rule of the host's (a message rule among them): the person's own
-  // message has a way in, though the share asked for none.
+  // message has a way in, though the share asked for none. Each way on keeps
+  // the repository the lead named, as messageWayIn does.
+  const repoFlag = named === undefined ? "" : ` --repo ${shellArg(named)}`;
   // The person's own message is asked for once: with theirs refused too, the
   // way on is another repository, never the same question.
   if (written.byRule && message === undefined && place.branch !== undefined) {
@@ -7409,7 +7426,7 @@ function writeSharedPlan(pd: string, message?: string, named?: string, carry?: C
       notice: `${repo} did not take the plan's branch: ${written.words}. If it is the commit message, tell me the one to use; or name another ` +
         "repository the teams can read and I will share it there.",
       step: "Tell the person in plain words what it reports, then end your turn. When they give the commit message, write it to " +
-        `${file} with your file tool, exactly as they gave it, then run \`${aidlcInvocation()} unit share --plan --visible --commit-message-file ${file}\` ` +
+        `${file} with your file tool, exactly as they gave it, then run \`${aidlcInvocation()} unit share --plan --visible${repoFlag} --commit-message-file ${file}\` ` +
         "and tell them in plain words what it reports. When they name another repository the teams can read, run " +
         `\`${aidlcInvocation()} unit share --plan --repo <its name>\` and tell them in plain words what it reports.`,
     } };
@@ -7420,7 +7437,7 @@ function writeSharedPlan(pd: string, message?: string, named?: string, carry?: C
     const way = messageWayIn(pd, `${repo} did not take the plan: ${written.words}. If it is the commit message, tell me the one to use, and I will share it with that.` +
       (branch === null ? "" : ` If not, I can put the plan on a branch there instead, ${branch}. ${PLAN_BRANCH_IS(repo)} Say which.`), named);
     if (branch !== null && "notShared" in way) {
-      way.notShared.step += ` When they want it on the branch, run \`${aidlcInvocation()} unit share --plan --visible\` and tell them in plain words what it reports.`;
+      way.notShared.step += ` When they want it on the branch, run \`${aidlcInvocation()} unit share --plan --visible${repoFlag}\` and tell them in plain words what it reports.`;
     }
     return way;
   }
@@ -8071,8 +8088,11 @@ function shareMain(args: string[], projectDir?: string): void {
   // A walking skeleton's code built here goes to main with the lead's record,
   // after the plan's own ref, so the teams' plan never waits on main.
   const planFirst = planOnly && leadsOwnTeamWork(pd) ? writeSharedPlan(pd, undefined, repoNamed, carry, flags.has("visible") ? true : undefined) : null;
-  // Named before the commit takes them out of what is built here.
+  // Named before the commit takes them out of what is built here: whether
+  // this share commits the slice's code, and whether Units still wait on it.
   const codeHere = planFirst === null ? null : skeletonCodeName(pd);
+  const codeCommits = codeHere !== null && planShareWork(pd) !== null;
+  const codeWaits = codeHere !== null && (codeCommits || sliceCodeWaits(pd));
   if (planFirst !== null && "notShared" in planFirst) {
     console.log(JSON.stringify({ shared: false, ...planFirst.notShared }));
     return;
@@ -8117,9 +8137,10 @@ function shareMain(args: string[], projectDir?: string): void {
       given?.spend();
       // The plan went to its own repository first: its line, then what is committed on their branch.
       const sharedFirst = planFirst !== null && "said" in planFirst && codeHere !== null && refused.off !== undefined
-        ? `${planFirst.said} ${codeHere.name} and AI-DLC's record are committed on ${refused.off.current} and not ` +
-          `pushed: push ${refused.off.current} and get it merged your usual way. The other Units wait on ${codeHere.units} until ` +
-          `${codeHere.is === "is" ? "it is" : "they are"} in ${branch}.`
+        ? [planFirst.said,
+          ...(codeCommits || committed > 0 ? [`${codeCommits ? `${codeHere.name} and AI-DLC's record are` : "AI-DLC's record is"} committed on ` +
+            `${refused.off.current} and not pushed: push ${refused.off.current} and get it merged your usual way.`] : []),
+          ...(codeWaits ? [`The other Units wait on ${codeHere.units} until ${codeHere.is === "is" ? "it is" : "they are"} in ${branch}.`] : [])].join(" ")
         : null;
       const notShared = sharedFirst !== null || refused.off === undefined ? null : planNotSharedByThis(pd);
       console.log(JSON.stringify({
@@ -12706,6 +12727,9 @@ export function mainChangedUnder(dir: string, head: string, into: string, paths:
 // branch it merges into changed the Unit's own files, keeps this for the head
 // it pushed: the step after it offers to bring that branch in, once.
 export const mainMovedMark = (unit: string, head: string): string => `unit-main-moved-${unit}-${head.slice(0, 12)}`;
+// The offer's own mark, once for the push whose heads it names.
+export const mainMovedAsked = (unit: string, moved: ReadonlyArray<{ head: string }>): string =>
+  `unit-main-moved-asked-${unit}-${moved.map((repo) => repo.head.slice(0, 12)).join("-")}`;
 // The offer to bring in what the host's branch has on top of the last push
 // (the push's refusal), named with that push's head as mainMovedMark is.
 export const hostAheadMark = (unit: string, head: string): string => `unit-host-ahead-${unit}-${head.slice(0, 12)}`;
@@ -12854,13 +12878,15 @@ function pushUnit(args: string[], projectDir?: string,
   }
   // The merge the bring-main-in offer began on their yes (its mark kept), left
   // at a clash and resolved since: the clash line said AI-DLC finishes it and
-  // pushes, so push is that yes again, with git's own merge message. A merge
-  // begun by hand, one still to resolve, and any other operation under way meet
-  // the under-way line below.
+  // pushes, so push is that yes again, with git's own merge message, or the
+  // one given to this push when their hook wanted one for the merge (never the
+  // Unit's own commit message, which the push question's finish hands with
+  // --finish-merge). A merge begun by hand, one still to resolve, and any other
+  // operation under way meet the under-way line below.
   const unitBranch = unitBranchOf(state, unit);
   const offered = mainMovedRepos(pd, unit, unitBranch).filter((entry) => mainMergeWaiting(entry.dir, unitBranch, entry.into));
   if (offered.length > 0 && offered.every((entry) => conflictFiles(entry.dir).length === 0)) {
-    mergeMainIn(pd, [], unit, unitBranch, false);
+    mergeMainIn(pd, bareFlags.has("finish-merge") || flags["finish-merge"] !== undefined ? [] : args, unit, unitBranch, false);
     return;
   }
   // The branch the person named (their team's own rule), kept for every
@@ -13178,6 +13204,8 @@ function pushUnit(args: string[], projectDir?: string,
   const hostSaid: Array<{ name: string; words: string }> = [];
   // The repos a replace went in, with the commit their branch was at before.
   const replacedFrom = new Map<string, string>();
+  // The repos whose pushed commit git could not list, with their line.
+  const unlisted = new Map<string, string>();
   // `own`: a replace not made, whose new branch is a pull request apart from the one the branch has.
   const newBranchWay = (fresh: string, own = false): string =>
     `Ask the person whether to push it as a new branch, ${fresh}${own ? " (it needs a pull request of its own)" : ""}; on their yes, run ` +
@@ -13307,10 +13335,22 @@ function pushUnit(args: string[], projectDir?: string,
     // A replace took the build pushed before off the branch: its base is read again.
     const replaced = lease !== undefined && !git(dir, ["merge-base", "--is-ancestor", lease, head]).ok;
     if (replaced) replacedFrom.set(name, git(dir, ["rev-parse", "--short", lease]).stdout.trim());
-    const base = (replaced ? undefined : earlier.get(repo)?.base) ??
+    // An earlier base this clone has no commit of (none named, or one a record
+    // written by hand names) is no base: read from where the branch leaves main, as at a first push.
+    const earlierBase = replaced ? undefined : earlier.get(repo)?.base;
+    const base = (earlierBase && git(dir, ["rev-parse", "--verify", "--quiet", `${earlierBase}^{commit}`]).ok ? earlierBase : undefined) ??
       (git(dir, ["merge-base", "HEAD", integrationOf(repo, dir, remote)]).stdout.trim() || head);
-    const changed = git(dir, ["diff", "--name-only", "--no-renames", base, head, "--", ...paths]).stdout.split(/\r?\n/).filter(Boolean);
-    const blobs = blobsAt(dir, head, changed);
+    // The Unit's files that changed, in runs a command line holds (pathRuns).
+    const diffs = (paths.length === 0 ? [[]] : pathRuns(paths)).map((run) => git(dir, ["diff", "--name-only", "--no-renames", base, head, "--", ...run]));
+    const changed = diffs.flatMap((diff) => diff.stdout.split(/\r?\n/).filter(Boolean));
+    const unread = diffs.find((diff) => !diff.ok);
+    const listed = unread === undefined ? blobsAt(dir, head, changed) : { said: (unread.stderr || unread.stdout).trim().split(/\r?\n/)[0] ?? "" };
+    // Never a result with every file read as deleted: this push sends none, and a push again sends it.
+    if (!(listed instanceof Map)) {
+      unlisted.set(name, `Pushed branch ${branch} in ${name}, but git could not list the files of that commit (git says "${listed.said}"), ` +
+        `so ${unit}'s result is not sent. Say when to send it again.`);
+    }
+    const blobs = listed instanceof Map ? listed : new Map<string, string>();
     const last = earlier.get(repo)?.heads.at(-1);
     const descends = (older: string, newer: string): boolean => git(dir, ["merge-base", "--is-ancestor", older, newer]).ok;
     const between = prior && last && prior !== last && prior !== head && descends(last, prior) && descends(prior, head) ? [prior] : [];
@@ -13332,7 +13372,7 @@ function pushUnit(args: string[], projectDir?: string,
   }
   const nameOf = (repo: RepoResult): string => (repo.repo === "." ? "the repo" : repo.repo);
   const names = results.map(nameOf);
-  const plain = names.filter((name) => !replacedFrom.has(name));
+  const plain = names.filter((name) => !replacedFrom.has(name) && !unlisted.has(name));
   // A host's own words stand in for ours (GitLab's say "merge request"):
   // "Open a PR" is said only for the repos whose host said nothing about it,
   // and never for a replaced branch, whose pull request is the same one.
@@ -13342,6 +13382,7 @@ function pushUnit(args: string[], projectDir?: string,
       ...broughtIn,
       plain.length === 0 ? "" : `Pushed branch ${branch} in ${joinNames(plain)}.`,
       ...[...replacedFrom].map(([name, was]) => `Pushed branch ${branch} in ${name} in place of the build pushed there before (it was at ${was}).`),
+      ...unlisted.values(),
       ...hostSaid.filter((said) => said.words !== "").map((said) => hostSaysLine(names.length === 1 ? null : said.name, said.words)),
       quiet.length === 0 ? "" : `Open a PR in ${quiet.length < names.length ? joinNames(quiet) : names.length === 1 ? "it" : "each"} your usual way.`,
       whereNow(true).trimStart(),
@@ -13371,6 +13412,11 @@ function pushUnit(args: string[], projectDir?: string,
   lines.push(...keptLines());
   // The code went: the last push went through.
   rmSync(join(buildRecord, ENGINE_DIR, PUSH_REFUSED_MARK), { force: true });
+  // A result git could not list is not sent: the push's own lines, and the push again sends it.
+  if (unlisted.size > 0) {
+    console.log(JSON.stringify({ pushed: true, unit, repos: results.map((repo) => repo.repo), notice: joinSaid(lines) }));
+    return;
+  }
   // The result goes home on the claim, with the Unit outputs the home's later
   // stages read.
   const outputs = unitOutputsHomeReads(unit, getField(state, "Scope") ?? "")
@@ -13716,10 +13762,11 @@ function pushToFork(pd: string, args: string[], build: UnitBuild, branch: string
   if (!made.switched) fail(`Branch ${branch} could not be made in ${name}: git says "${gitSaid(made.said)}". Nothing was pushed. Say when to try again.`);
   const moved = from === branch ? [] : [{ name, from: from || "the commit you were on" }];
   const before = git(dir, ["rev-parse", "HEAD"]).stdout.trim();
-  // One empty commit, only where the branch has nothing of its own beyond the plan's main.
+  // One empty commit, only where the branch has nothing of its own beyond the
+  // plan's main; --only keeps what the person staged out of it, still staged.
   const empty = git(dir, ["rev-list", "--count", `${main.start}..HEAD`]).stdout.trim() === "0";
   if (empty) {
-    const committed = git(dir, ["commit", "-q", "--allow-empty", "-F", "-"], undefined, given?.text ?? toForkMessage(unit));
+    const committed = git(dir, ["commit", "-q", "--allow-empty", "--only", "-F", "-"], undefined, given?.text ?? toForkMessage(unit));
     if (!committed.ok) {
       const said = committed.stderr || committed.stdout;
       fail((hookRefused(dir, said)
@@ -13782,10 +13829,12 @@ function mergeMainIn(pd: string, args: string[], unit: string, branch: string, u
   // No offer behind the yes: the person's own words lift the offer's mark,
   // the turn the hook recorded read as the lead's verbs read theirs and used
   // once, its row naming it; an agent with no such turn merges nothing.
+  let askedNow = false;
   if (repos.length === 0 && !undo) {
     const turn = ownTurnFor(pd, args, "Bringing main in", "unit-main-moved");
     repos = turn === null ? [] : mainMovedRepos(pd, unit, branch, false);
     if (repos.length > 0) turn!.answered(`Bring ${joinNames([...new Set(repos.map((entry) => entry.into))])} into ${unit}`);
+    askedNow = repos.length > 0;
   }
   const moved: Array<{ name: string; from: string }> = [];
   const lines: string[] = [];
@@ -13935,6 +13984,12 @@ function mergeMainIn(pd: string, args: string[], unit: string, branch: string, u
       const clashed = (): void => {
         const clash = conflictFiles(dir);
         if (clash.length === 0) return;
+        // Asked in their own words: the merge waits as the offer's does, with
+        // its marks, so the word push finishes it and the offer is not put over it.
+        if (askedNow) {
+          for (const each of repos) noteEngineAskMark(pd, mainMovedMark(unit, each.head));
+          noteEngineAskMark(pd, mainMovedAsked(unit, mainMovedRepos(pd, unit, branch).filter((each) => !each.hostAhead)));
+        }
         stop(`${into} and ${unit} both change ${joinNames(clash)} in ${name} in ways git cannot put together, so the merge is waiting ` +
           `for you there: resolve ${clash.length === 1 ? clash[0] : "them"}, and I can finish it and push ${unit}; or say if you want ` +
           "me to undo it. Nothing was pushed.");
@@ -14278,7 +14333,12 @@ function checkTeamResultsQuietly(
     const word = entry.word as UnitWord;
     const claim = claims.get(entry.name);
     const taken = claim?.status === "claimed" ? claim : undefined;
-    if ((word.pull_requests ?? []).length === 0 || taken?.payload.result !== undefined || notRead(entry.name)) continue;
+    // Sent back from Build and Test (the view holds the send-back while it
+    // stands): the pull requests named before it are not counted again; one
+    // named after it is read as any naming is.
+    const down = taken?.payload.turned_down;
+    if ((word.pull_requests ?? []).length === 0 || taken?.payload.result !== undefined ||
+      (down?.from === "build-and-test" && (word.pull_requests ?? []).every((pr) => pr.at <= down.at)) || notRead(entry.name)) continue;
     if (word.done === true) {
       // Done on the plan, written by another computer of the lead's: recorded here too.
       if (!readOnly) recordNamedDone(pd, entry.name, (word.verdicts ?? []).filter((verdict) => verdict.merged), taken?.generation ?? 0);
@@ -14331,7 +14391,8 @@ function checkTeamResultsQuietly(
             return { ...wordForTake(word, merge.view), verdicts: wordVerdicts(merge.view, merge.verdicts), ...(merge.done ? { done: true as const } : {}) };
           }
           const byNaming = namedSeen.get(unit);
-          if (byNaming !== undefined) return { ...word, verdicts: byNaming.verdicts, ...(byNaming.done ? { done: true as const } : {}) };
+          // Merged through a pull request named after a send-back: the new build counted ends it.
+          if (byNaming !== undefined) return { ...(byNaming.done ? sendBackEnded(word) : word), verdicts: byNaming.verdicts, ...(byNaming.done ? { done: true as const } : {}) };
           return ownDone.has(unit) && word.done !== true ? { ...word, done: true } : null;
         },
       });
@@ -15775,6 +15836,46 @@ function leadsRecordNow(pd: string, unit: string): UnitClaimView | null {
   return place === null ? null : typedRecordRead(pd, place, { uuid: identity.intentUuid, space: identity.space }, unit);
 }
 
+// The latest row of this clone's own shard (each clone appends to its own;
+// shards are read in filename order, so a teammate's can come after it), past
+// the host's session rows: Copilot CLI runs its session-start hook beside the
+// prompt hook in no fixed order, so the chat's start can land just after the
+// person's turn, and it is no act on what they said.
+export function latestOwnRow(pd: string): AuditShardEvent | undefined {
+  const own = basename(auditFilePath(pd));
+  return readAuditShardEvents(pd)
+    .filter((row) => basename(row.shard) === own && !SESSION_EVENT_TYPES.has(row.event))
+    .at(-1);
+}
+
+// This chat's latest message. The store keeps whole seconds, and two messages
+// of one second sort by their random ids (latestMessage), so when the chat's
+// latest row is the person's turn and names a message of that same second, that
+// message is the latest: the shard keeps the order they came in.
+export function chatLatestMessage(pd: string, session: string): import("./aidlc-message-store.ts").StoredMessage | null {
+  const { latestMessage, readMessage } = require("./aidlc-message-store.ts") as typeof import("./aidlc-message-store.ts");
+  const latest = latestMessage(pd, session);
+  if (latest === null) return null;
+  try {
+    const last = latestOwnRow(pd);
+    const id = last?.event === "HUMAN_TURN" ? auditBlockField(last.block, "Message Id") : null;
+    if (id === null || id === latest.id) return latest;
+    const turn = readMessage(pd, id);
+    return turn !== null && turn.session === session && turn.at === latest.at ? turn : latest;
+  } catch {
+    return latest;
+  }
+}
+
+// The word with Build and Test's send-back taken off: a new build of the Unit
+// ends it (a new naming of a take not pushed, a pull request named after it
+// counted merged), as a new push does.
+function sendBackEnded(word: UnitWord): UnitWord {
+  if (word.turned_down?.from !== "build-and-test") return word;
+  const { turned_down: _down, ...rest } = word;
+  return rest;
+}
+
 // The word on the plan for this take of a Unit: a word about an earlier take
 // starts again.
 function wordForTake(word: UnitWord, view: UnitClaimView): UnitWord {
@@ -16095,6 +16196,22 @@ function saidMerged(args: string[], projectDir?: string): void {
 // result keeps its merge check, which then reads that number's head too.
 function saidPullRequest(pd: string, unit: string, repo: string, number: number, words: string, fields: Record<string, string>): void {
   const message = fields["Message Id"];
+  // Refused before anything is written: a name the plan cannot hold makes the whole plan unreadable.
+  const plan = keptPlan(pd, activeIdentity(pd).intentId8)?.plan ?? null;
+  if (plan !== null && !plan.units.some((entry) => entry.name === unit)) {
+    // A Unit of this work added since the plan was shared: the share again puts it there.
+    const here = ((): string[] => {
+      try {
+        return localOpeningStatus(pd).units;
+      } catch {
+        return [];
+      }
+    })();
+    fail(here.includes(unit)
+      ? `The plan in ${plan.plan_repo.name} does not have ${unit} yet: you added it after you shared the plan. Do you want me to share it again?`
+      : `${unit} is not one of this work's Units (${plan.units.map((entry) => entry.name).join(", ")}).`);
+  }
+  if (repo !== "." && !isValidRepoName(repo)) fail(repoNameRefusal("Invalid --repo", repo));
   const entry: NamedPullRequest = { repo, number, words, at: isoTimestamp() };
   const what = `pull request ${number} in ${repo} named as the build of ${unit}`;
   const written = `Written on the plan: pull request ${number} in ${repo} is the build of ${unit}.`;
@@ -16106,11 +16223,32 @@ function saidPullRequest(pd: string, unit: string, repo: string, number: number,
     else delete next.said_merged;
     return next;
   };
+  // What this naming takes the place of, where the Unit was counted merged:
+  // the merge no longer stands (and its sign-off with it), and this one counts once git shows it.
+  let wasDone = false;
+  let before: { number?: number; byWord: boolean } = { byWord: false };
+  const replaces = (word: UnitWord): boolean => {
+    wasDone = word.done === true;
+    const was = word.pull_requests?.find((pr) => pr.repo === repo)?.number;
+    before = { number: was === number ? undefined : was, byWord: (word.said_merged ?? []).some((said) => said.repo === repo) };
+    return wasDone && (before.number !== undefined || before.byWord);
+  };
+  const instead = (): string => before.number !== undefined ? `, in place of pull request ${before.number}`
+    : before.byWord ? `, in place of your word that ${repo} merged it` : "";
+  const notCounted = (): string => `Written on the plan: pull request ${number} in ${repo} is the build of ${unit}${instead()}, and ${unit} is ` +
+    `no longer counted merged. ${unit} counts as merged once git shows pull request ${number} merged in ${repo}.`;
   const live = leadsRecordNow(pd, unit);
   if (live?.status === "claimed" && live.payload.result) {
-    const sent = writeUnitWord(pd, live, what, (word) => ({ ...named(word), verdicts: (word.verdicts ?? []).filter((verdict) => verdict.repo !== repo) }));
+    let back = false;
+    const sent = writeUnitWord(pd, live, what, (word) => {
+      back = replaces(word);
+      const { done, signoff, ...next } = named(word);
+      return { ...next, ...(back ? {} : { ...(done ? { done } : {}), ...(signoff ? { signoff } : {}) }),
+        verdicts: (word.verdicts ?? []).filter((verdict) => verdict.repo !== repo) };
+    });
     failUnlessWritten(pd, sent, `${unit}'s pull request in ${repo}`, message);
-    console.log(JSON.stringify({ unit, notice: withPlanNotes(`${written} ${counts}`) }));
+    const after = back ? mergeTakenBack(pd, unit, live.generation, fields) : "";
+    console.log(JSON.stringify({ unit, notice: withPlanNotes(back ? `${notCounted()}${after}` : `${written} ${counts}`) }));
     return;
   }
   const read = namedPullRequestVerdict(pd, repo, number);
@@ -16118,45 +16256,39 @@ function saidPullRequest(pd: string, unit: string, repo: string, number: number,
   let waiting: NamedPullRequest[] = [];
   let done = false;
   let verdicts: NonNullable<UnitWord["verdicts"]> = [];
-  // What this naming takes the place of, where the Unit was counted merged.
-  let wasDone = false;
-  let before: { number?: number; byWord: boolean } = { byWord: false };
   const sent = leadsPlanWrite(pd, {
     what,
     words: (other, tip) => {
       if (other !== unit) return null;
       // A take not pushed yet: the word is for that take, as every word of the lead's on it is.
       const word = live?.status === "claimed" ? wordForTake(tip, live) : tip;
-      const { done: had, verdicts: _before, signoff, ...next } = named(word);
-      wasDone = had === true;
-      const was = word.pull_requests?.find((pr) => pr.repo === repo)?.number;
-      before = { number: was === number ? undefined : was, byWord: (word.said_merged ?? []).some((said) => said.repo === repo) };
+      const back = replaces(word);
+      const { done: _had, verdicts: _before, signoff, ...naming } = named(word);
       verdicts = [...(word.verdicts ?? []).filter((verdict) => verdict.repo !== repo),
         ...(read.kind === "merged" ? [{ repo, merged: true, commit: read.commit, how: read.how }] : [])];
-      waiting = (next.pull_requests ?? []).filter((pr) => !verdicts.some((verdict) => verdict.repo === pr.repo && verdict.merged));
+      waiting = (naming.pull_requests ?? []).filter((pr) => !verdicts.some((verdict) => verdict.repo === pr.repo && verdict.merged));
       // A sign-off was given for the build it counted; a merge taken back takes it with it, as open-again does.
-      const kept = wasDone && (before.number !== undefined || before.byWord || waiting.length > 0) ? undefined : signoff;
+      const kept = back || (wasDone && waiting.length > 0) ? undefined : signoff;
       done = waiting.length === 0 && (!signOffOn || kept !== undefined);
+      // A send-back ends at a new naming of a take with no pushed result (it
+      // names no heads), and for a pushed one once this naming counts it merged;
+      // until then a pushed result keeps it, so its old merge is never counted again.
+      const next = Object.keys(naming.turned_down?.heads ?? {}).length === 0 || done ? sendBackEnded(naming) : naming;
       return { ...next, ...(kept === undefined ? {} : { signoff: kept }), ...(verdicts.length > 0 ? { verdicts } : {}), ...(done ? { done: true as const } : {}) };
     },
   });
   failUnlessWritten(pd, sent, `${unit}'s pull request in ${repo}`, message);
   const generation = live?.status === "claimed" ? live.generation : 0;
-  // The right number in place of a counted merge: that merge no longer stands, and this one counts once git shows it.
   const takenBack = wasDone && (!done || before.number !== undefined || before.byWord);
   const after = takenBack ? mergeTakenBack(pd, unit, generation, fields) : "";
   if (done) recordNamedDone(pd, unit, verdicts.filter((verdict) => verdict.merged), generation);
-  const plan = keptPlan(pd, activeIdentity(pd).intentId8)?.plan ?? null;
   const address = repoCloneable(pd, repo) || (plan?.repos.find((entry) => entry.name === repo)?.address ?? null) !== null;
   const prs = (list: NamedPullRequest[]): string => joinNames(list.map((pr) => `pull request ${pr.number} in ${pr.repo}`));
-  const instead = before.number !== undefined ? `, in place of pull request ${before.number}`
-    : before.byWord ? `, in place of your word that ${repo} merged it` : "";
   const notice = takenBack
     ? (read.kind === "merged"
-      ? `Written on the plan: pull request ${number} in ${repo} is the build of ${unit}${instead}, and git shows pull request ${number} merged ` +
+      ? `Written on the plan: pull request ${number} in ${repo} is the build of ${unit}${instead()}, and git shows pull request ${number} merged ` +
         `in ${repo} at ${read.commit.slice(0, 7)} "${read.subject}".${done ? ` ${unit} is recorded as merged here.` : ""}`
-      : `Written on the plan: pull request ${number} in ${repo} is the build of ${unit}${instead}, and ${unit} is no longer counted merged. ` +
-        `${unit} counts as merged once git shows pull request ${number} merged in ${repo}.`) + after
+      : notCounted()) + after
     : read.kind === "merged"
     ? `Written on the plan: pull request ${number} in ${repo} is the build of ${unit}, and git shows it merged in ${repo} at ` +
       `${read.commit.slice(0, 7)} "${read.subject}".` +
@@ -16523,7 +16655,21 @@ function leadHere(args: string[], projectDir?: string): void {
   // `--off`: their word that they do not lead it here takes the earlier one back; this clone's newest row decides.
   const parsed = parseArgs(args);
   const off = parsed.bareFlags.has("off");
-  const lead = leadsWord(pd, parsed.flags, off ? "Not leading this work here" : "Carrying this work on here as its lead", undefined,
+  // The steps name no message: their latest in this chat at the call is the
+  // one they said it in, also when they said it a message after the step, as
+  // the reading step reads it (chatLatestMessage).
+  let flags = parsed.flags;
+  if (flags.message === undefined) {
+    let chat: string | null = null;
+    try {
+      chat = resolveInvokingSessionId(pd);
+    } catch {
+      // No chat to name: the lead's word window reads it.
+    }
+    const latest = chat === null ? null : chatLatestMessage(pd, chat);
+    if (latest !== null && latest.words !== null) flags = { ...flags, message: latest.id };
+  }
+  const lead = leadsWord(pd, flags, off ? "Not leading this work here" : "Carrying this work on here as its lead", undefined,
     off ? "Not leading this work here is the person's own word, so nothing changed. Run it with `--message <id>` when they say it." : undefined);
   appendAuditEntry("LEAD_HERE_SET", {
     ...(off ? { [LEAD_HERE_FIELD]: "off" } : {}), ...(lead.said !== null ? { "Person Words": lead.said } : {}), ...lead.fields,

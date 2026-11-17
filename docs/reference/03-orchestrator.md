@@ -867,7 +867,7 @@ address said holds no work built by teams, the step says so; with nothing to
 offer otherwise, it goes on as a plain `next`.
 
 A Unit's build is solo work with one Unit: its state records `Unit Build`,
-`Home Location`, `Home Work`, `Home Record` and `Home Attempt`;
+`Home Location`, `Home Work`, `Home Label` and `Home Attempt`;
 `resolveBoltDag` returns that Unit alone; the home's Inception stages are
 `[x]` with `SKIP`, so per-Unit paths stay per-Unit; `Construction Iteration` is
 `stage-major` for the per-stage team rhythm and `unit-major` with checkpoints
@@ -1004,8 +1004,8 @@ is `ask_type: unit-main-moved` once for that push, and its choice runs `unit pus
 --merge-main` (`mergeMainIn`): the branch fetched with the person's git, every
 repository checked before any is merged, `git merge --no-edit` with their git, a
 clash left under way for them (`--merge-main` again finishes it, and so does a
-plain `unit push` once nothing is left to resolve, with git's own merge message,
-while that push's mark is kept; `--undo-merge` takes it back out on their word),
+plain `unit push` once nothing is left to resolve, with git's own merge message
+or the one given to that push, while that push's mark is kept; `--undo-merge` takes it back out on their word),
 then a plain push; nothing of the Unit's is
 committed, sent to its record or written in its audit. When a take's record
 write was refused for want of access (never a host rule on the record's refs
