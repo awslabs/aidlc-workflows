@@ -109,7 +109,7 @@ describe("the lead names a pull request as a Unit's build", () => {
     }]);
     expect(word.said_merged).toBeUndefined();
     expect(word.done).toBeUndefined();
-    expect(git(plan, ["log", "-1", "--format=%s", planRefOf(home.id8)])).toEndWith(": pull request 7 in checkout-web named the build of checkout-ui");
+    expect(git(plan, ["log", "-1", "--format=%s", planRefOf(home.id8)])).toEndWith(": pull request 7 in checkout-web named as the build of checkout-ui");
     expect(git(plan, ["rev-parse", `${planRefOf(home.id8)}^`])).toBe(before);
     expect(git(clone, ["for-each-ref", "--format=%(refname)"])).toBe(refsBefore);
     expect(merges(home.dir, "checkout-ui")).toBe(0);

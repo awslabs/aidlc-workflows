@@ -14311,7 +14311,7 @@ function saidMerged(args: string[], projectDir?: string): void {
 function saidPullRequest(pd: string, unit: string, repo: string, number: number, words: string, fields: Record<string, string>): void {
   const message = fields["Message Id"];
   const entry: NamedPullRequest = { repo, number, words, at: isoTimestamp() };
-  const what = `pull request ${number} in ${repo} named the build of ${unit}`;
+  const what = `pull request ${number} in ${repo} named as the build of ${unit}`;
   const written = `Written on the plan: pull request ${number} in ${repo} is the build of ${unit}.`;
   const counts = `${unit} counts as merged once git shows that pull request merged in ${repo}.`;
   const named = (word: UnitWord): UnitWord => {
