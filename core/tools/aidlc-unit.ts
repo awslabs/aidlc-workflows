@@ -10354,7 +10354,8 @@ export function planClosedBy(pd: string, copy: string): { label: string; repo: s
   return by === null ? null : { label: read.plan.work.label, repo: read.plan.plan_repo.name, at: read.plan.closed.at, name: by.name, day: by.day };
 }
 
-// The once-mark of a build's line about its plan's close, one per close.
+// The once-mark of a close, one per close: in a build's folder, its line about
+// the close was said; in the lead's, the question to take its branch down was put.
 export function planClosedHeardMark(at: string): string {
   return `plan-closed-${at.replace(/[^0-9A-Za-z]/g, "")}.json`;
 }
@@ -10454,9 +10455,10 @@ export function archiveEndLines(projectDir: string, work: { space: string; dirNa
   });
 }
 
-// The question, once per close, after the close of a plan that is still on its
-// branch: whether to take the branch down; its yes is the off-branch step for
-// the plan commit asked about. Null where nothing is to ask.
+// The question, once per close on each computer of the lead's, after the close
+// of a plan that is still on its branch: whether to take the branch down; its
+// yes is the off-branch step for the plan commit asked about. Null where
+// nothing is to ask.
 export function planTakeDownAsk(projectDir: string, work: { space: string; dirName: string; uuid: string }):
   { question: string; choices: Array<{ label: string; detail: string; command: string }> } | null {
   const pd = resolveProjectDir(projectDir);
@@ -10464,10 +10466,11 @@ export function planTakeDownAsk(projectDir: string, work: { space: string; dirNa
     const led = ledSharedPlan(pd, work);
     const place = led === null ? null : planPlaceForShare(pd);
     if (led === null || led.kept.plan.closed === undefined || place === null || !("ref" in place)) return null;
+    // Once per close on each computer, by the close's own mark, whatever else was asked about its commits.
     const branch = planBranchAt(pd, place);
-    const close = closedFlip(pd, led.kept.commit);
-    if (branch === null || close === null || engineAskMark(pd, planMark("asked", close)) !== null) return null;
-    noteEngineAskMark(pd, planMark("asked", close));
+    const heard = planClosedHeardMark(led.kept.plan.closed.at);
+    if (branch === null || engineAskMark(pd, heard) !== null) return null;
+    noteEngineAskMark(pd, heard);
     const repo = place.repo;
     return {
       question: `The plan of ${led.kept.plan.work.label} is closed and still on the branch ${branch.ref.slice("refs/heads/".length)} in ${repo}. ` +
