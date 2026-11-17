@@ -38,6 +38,7 @@ requires_stage:
 sensors:
   - required-sections
   - upstream-coverage
+  - traceability
 scopes:
   - enterprise
   - feature
@@ -82,11 +83,17 @@ Validate design decisions against user stories and requirements for consistency.
 
 Create mid-to-high fidelity mockups (per user story/screen), interaction specification document (use `{{HARNESS_DIR}}/knowledge/aidlc-design-agent/component-spec-template.md` as the format for component-level specifications), design system mapping, responsive behavior specification, and accessibility compliance checklist.
 
-In `interaction-spec.md`, give every experience decision its own story-keyed ID, `UX{x}.{y}.{n}` for a story `US{x}.{y}` in `stories.md` (the way `AC{x}.{y}.{n}` is keyed), on one line with the decision, the component it uses, the states it covers, and its source: the person's answer (`[Q<n>]`), a company document, a memory rule, or `[assumption]`. Code Generation traces these IDs to code. A company document's source is its name as the documents card shows it, such as `[brand-guide.pdf]`. A component seen in the existing code shows use, not that it is the company standard; record a conflict between sources as a question, never a silent choice.
+In `interaction-spec.md`, give every experience decision its own story-keyed ID, `UX{x}.{y}.{n}` for a story `US{x}.{y}` in `stories.md` (the way `AC{x}.{y}.{n}` is keyed), or `UX0.0.{n}` for an app-wide decision that belongs to no single story (the breakpoints, the accessibility level), which every UI Unit then owes, on one line with the decision, the component it uses, the states it covers, and its source: the person's answer (`[Q<n>]`), a company document, a memory rule, or `[assumption]`. Code Generation traces these IDs to code. A company document's source is its name as the documents card shows it, such as `[brand-guide.pdf]`. A component seen in the existing code shows use, not that it is the company standard; record a conflict between sources as a question, never a silent choice.
 
 In `design-system-mapping.md`, use the template's Design System Mapping table: each component and token row gives where it is observed (a file in the existing code, or `none`) apart from the standard it follows (a company document, a memory rule, the person's answer, or `[assumption]`).
 
-Also write `<record>/inception/refined-mockups/mockups-preview.html` with your file-writing tool: one self-contained HTML file, with inline CSS and SVG, no scripts and nothing loaded from elsewhere, labelled with the `UX` IDs it shows. For user-facing UI it shows each decided screen in each state its decisions cover, drawn with the components and tokens of `design-system-mapping.md`; for an API it shows example requests and responses in each state its decisions cover, success and each error shape. The person judges the experience by looking at it; it is approved with the other outputs, and Build and Test's final gate compares the build with it.
+Also write `<record>/inception/refined-mockups/mockups-preview.html` with your file-writing tool: one self-contained HTML file, with inline CSS and SVG, no scripts and nothing loaded from elsewhere, labelled with the `UX` IDs it shows. Its `<head>` opens with exactly this line (after an optional `<meta charset="utf-8">`), so the browser enforces that; the review request and the gate refuse a preview without it:
+
+```html
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:">
+```
+
+For user-facing UI it shows each decided screen in each state its decisions cover, drawn with the components and tokens of `design-system-mapping.md`; for an API it shows example requests and responses in each state its decisions cover, success and each error shape. The person judges the experience by looking at it; it is approved with the other outputs, and Build and Test's final gate compares the build with it.
 
 For non-UI: create API developer experience specification.
 
@@ -107,7 +114,7 @@ Standard approval gate (Approve / Request Changes).
 
 This stage's outputs are markdown artefacts under `<record>/inception/refined-mockups/`, plus the HTML preview.
 
-Imports: `required-sections`, `upstream-coverage`.
+Imports: `required-sections`, `upstream-coverage`, `traceability` (fired on `interaction-spec.md`: every `UX` ID names a story `stories.md` has, or is app-wide).
 
 Upstream targets: `wireframes`, `user-flow`, `stories`, `requirements`, `team-practices`, `component-inventory`.
 

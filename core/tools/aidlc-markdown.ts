@@ -977,9 +977,19 @@ function classifyMarkdownLines(raw: string[]): MarkdownBlocks & { repairs: Map<n
 // Project parser-owned ranges without changing the historical line/marker API.
 // In particular, same-line code remains verbatim and retained digest input is
 // still raw source; these strings only select headings and control fields.
+// `omitDefinitions` drops link reference definitions, which render nowhere;
+// `keepHtmlBlockText` keeps the text of an HTML block that renders (CommonMark
+// types 6 and 7), without its comments, for a reader of what the page shows.
+export interface VisibleMarkdownOptions {
+	preserveIndentedCode?: boolean;
+	preserveCommentBoundaries?: boolean;
+	omitDefinitions?: boolean;
+	keepHtmlBlockText?: boolean;
+}
+
 export function visibleMarkdownLines(
 	content: string,
-	options: { preserveIndentedCode?: boolean; preserveCommentBoundaries?: boolean } = {},
+	options: VisibleMarkdownOptions = {},
 ): string[] {
 	return projectVisibleMarkdownLines(content, markdownBlocks(content), options);
 }
@@ -987,14 +997,15 @@ export function visibleMarkdownLines(
 export function projectVisibleMarkdownLines(
 	content: string,
 	blocks: MarkdownBlocks,
-	options: { preserveIndentedCode?: boolean; preserveCommentBoundaries?: boolean },
+	options: VisibleMarkdownOptions,
 ): string[] {
 	const raw = content.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n").split("\n");
 	return raw.map((source, index) => {
 		const block = blocks.lines[index];
 		const line = source.replaceAll(INVISIBLE_COMMENT_MARKER, RAW_INVISIBLE_COMMENT_MARKER_ESCAPE);
 		if (block.kind === "codeFenced" || (block.kind === "codeIndented" && !options.preserveIndentedCode)) return "";
-		if (block.kind === "htmlFlow" && block.htmlKind !== 2) {
+		if (options.omitDefinitions && block.kind === "definition") return "";
+		if (block.kind === "htmlFlow" && block.htmlKind !== 2 && !(options.keepHtmlBlockText && block.htmlKind! > 5)) {
 			if (block.htmlKind! <= 5) return "";
 			return options.preserveCommentBoundaries ? INVISIBLE_LINE_MARKER + line : "";
 		}

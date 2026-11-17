@@ -251,13 +251,13 @@ where it is read:
 |---|---|---|
 | Rules you want followed everywhere, such as "UI only from @company/ui; primary colour is navy" | a rule in `memory/team.md` | every agent, Code Generation's worker included |
 | A design-system guide and its tokens, as Markdown | `knowledge/aidlc-shared/` (every agent) or `knowledge/aidlc-design-agent/` (the design agent) | agents told to read them |
-| Brand PDFs, design-tool exports, screenshots | `/aidlc knowledge onboard <path>` | Refined Mockups, which cites each document it uses |
+| Brand PDFs, design-tool exports, screenshots | `/aidlc knowledge onboard <path>` | every Inception stage, through its documents card; Refined Mockups cites each one it uses |
 | The UI the code already has (brownfield) | nothing to do: Reverse Engineering records it | Refined Mockups, as what the code uses, not what you approved |
 
-Refined Mockups asks you only what these sources leave open, such as which
-layout fits what you meant, and writes `mockups-preview.html` so you can see
-each screen in its states before you approve. A screenshot or image export is
-read only when the agent can view images; otherwise it is listed as not read.
+Refined Mockups shows what your documents already answer as one question for
+you to confirm, asks you only what the sources leave open, such as which layout
+fits what you meant, and writes `mockups-preview.html` so you can see each
+screen in its states before you approve.
 
 ### Where the directories come from
 

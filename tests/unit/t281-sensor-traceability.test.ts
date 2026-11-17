@@ -814,13 +814,43 @@ describe("t281 per-Unit scope, reverse derivation, and code targets", () => {
     expect(out.result.pass, "an ID mentioned again is the same decision, not a duplicate").toBe(true);
   });
 
-  test("code-generation reports a decision naming a story stories.md lacks", () => {
+  // A decision naming a story stories.md lacks is said at Refined Mockups'
+  // own gate, before the person approves, not in every Unit's table after.
+  test("refined-mockups' own check reports a decision naming a story stories.md lacks", () => {
+    const proj = project();
+    seedExperience(proj);
+    const spec = write(proj, "inception/refined-mockups/interaction-spec.md",
+      "# Interaction Spec\n\n- UX1.1.1 Sign in on one page [Q2]\n- UX1.9.1 A story nobody wrote [assumption]\n");
+    let out = run(proj, "refined-mockups", spec);
+    expect(out.result.pass).toBe(false);
+    expect(out.result.invalid_targets).toEqual([
+      "interaction-spec.md's UX1.9.1 names story US1.9, which stories.md does not have (an app-wide decision is UX0.0.<n>); fix it at Refined Mockups",
+    ]);
+
+    write(proj, "inception/refined-mockups/interaction-spec.md",
+      "# Interaction Spec\n\n- UX1.1.1 Sign in on one page [Q2]\n- UX0.0.1 Breakpoints at 600 and 1024 pixels [Q5]\n");
+    out = run(proj, "refined-mockups", spec);
+    expect(out.result.pass, "an app-wide decision belongs to no story").toBe(true);
+    expect(out.result.findings_count).toBe(0);
+  });
+
+  test("code-generation does not repeat a decision naming a story stories.md lacks", () => {
     const proj = project();
     seedExperience(proj);
     write(proj, "inception/refined-mockups/interaction-spec.md", "# Interaction Spec\n\n- UX1.1.1 Sign in on one page [Q2]\n- UX1.9.1 A story nobody wrote [assumption]\n");
     const out = run(proj, "code-generation", experienceTable(proj, "u1-auth", ["AC1.1.1", "AC1.1.2", "UX1.1.1"]));
-    expect(out.result.pass).toBe(false);
-    expect(out.result.reason).toContain("interaction-spec.md's UX1.9.1 names story US1.9, which stories.md does not have");
+    expect(out.result.pass, out.stdout).toBe(true);
+    expect(out.stdout).not.toContain("UX1.9.1");
+  });
+
+  test("code-generation owes an app-wide decision in every Unit that owes its stories' decisions", () => {
+    const proj = project();
+    seedExperience(proj);
+    write(proj, "inception/refined-mockups/interaction-spec.md", "# Interaction Spec\n\n- UX1.1.1 Sign in on one page [Q2]\n- UX0.0.1 Breakpoints at 600 and 1024 pixels [Q5]\n");
+    let out = run(proj, "code-generation", experienceTable(proj, "u1-auth", ["AC1.1.1", "AC1.1.2", "UX1.1.1"]));
+    expect(out.result.missing_from_upstream_ids).toEqual(["UX0.0.1"]);
+    out = run(proj, "code-generation", experienceTable(proj, "u1-auth", ["AC1.1.1", "AC1.1.2", "UX1.1.1", "UX0.0.1"]));
+    expect(out.result.pass, out.stdout).toBe(true);
   });
 
   test("functional-design owes a Unit that writes frontend-components.md the decisions of its stories, cited there", () => {

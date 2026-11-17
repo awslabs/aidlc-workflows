@@ -1565,10 +1565,11 @@ with the aidlc-devsecops-agent providing security testing expertise.
     stage or phase state; the reported gate outcome owns the transition.
 
 12. **Completion** -- Present completion message and approval gate. When
-    Refined Mockups ran, it names the `UX` decisions and measurable
-    accessibility checks no test exercised and the built screens or API
-    responses to compare with `mockups-preview.html`;
-    whether the build matches the approved experience, brand and feel included,
+    Refined Mockups ran, it names in one line the `UX` decisions and measurable
+    accessibility checks no test exercised, only when there are any, and, when
+    `mockups-preview.html` exists, the built screens or API responses to
+    compare with it; whether the build matches the approved experience, brand
+    and feel included,
     is the person's judgement at this gate.
 
 ### Outputs

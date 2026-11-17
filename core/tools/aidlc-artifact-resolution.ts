@@ -293,6 +293,26 @@ export function resolveArtifactInstances(
 }
 
 /**
+ * The one Content-Security-Policy the Refined Mockups preview carries. The
+ * preview is written partly from document text and opened in a browser; with
+ * this line first in its head, the browser runs no script and loads nothing
+ * from elsewhere, whatever the rest of the file holds.
+ */
+export const PREVIEW_CONTENT_POLICY =
+  `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:">`;
+const PREVIEW_POLICY_REASON =
+  `the preview's <head> must open with ${PREVIEW_CONTENT_POLICY} (after an optional <meta charset>)`;
+
+// The policy line, exactly, before anything else in the head: a browser
+// applies a meta policy only to what follows it.
+function opensWithPreviewPolicy(html: string): boolean {
+  const at = html.indexOf(PREVIEW_CONTENT_POLICY);
+  if (at < 0) return false;
+  return /^\uFEFF?\s*(<!doctype html>\s*)?<html(\s[^<>]*)?>\s*<head>\s*(<meta charset="[^"<>]*">\s*)?$/i
+    .test(html.slice(0, at));
+}
+
+/**
  * Inspect every concrete instance of every required `produces[]` artifact.
  * Resolution stays graph-owned; file authority uses the shared no-follow,
  * single-link regular-file reader and rejects redirected parent components.
@@ -323,10 +343,13 @@ export function inspectRequiredArtifactInstances(
       try {
         const relativePath = relative(projectDir, instance.absolutePath);
         assertNoSymlinkInChainOrThrow(anchor, relativePath);
-        readRegularFileNoFollowOrThrow(
+        const bytes = readRegularFileNoFollowOrThrow(
           instance.absolutePath,
           `required artifact "${instance.relativePath}"`,
         );
+        if (artifact === "mockups-preview" && !opensWithPreviewPolicy(bytes.toString("utf-8"))) {
+          failures.push({ artifact, path: instance.relativePath, reason: PREVIEW_POLICY_REASON });
+        }
       } catch (error) {
         failures.push({
           artifact,

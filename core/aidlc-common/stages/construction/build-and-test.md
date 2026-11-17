@@ -346,13 +346,14 @@ line, naming what and where it ran, for example: "The transfer journey was
 checked in Happy DOM, not a real browser." The person decides at the gate with
 that in front of them.
 
-When Refined Mockups ran, say in one line which `UX` decisions no test
-exercised, in one line which measurable checks of `accessibility-checklist.md`
-(keyboard, contrast, screen reader) no test exercised, and in one line which
-built screens or API responses to compare with
-`<record>/inception/refined-mockups/mockups-preview.html`. Whether the build
-matches the experience they approved, brand and feel included, is the person's
-judgement at this gate; the tests cannot settle it.
+When Refined Mockups ran, say in one line the `UX` decisions and the
+measurable checks of `accessibility-checklist.md` (keyboard, contrast, screen
+reader) no test exercised, only when there are any. When
+`<record>/inception/refined-mockups/mockups-preview.html` exists, say in one
+line which built screens or API responses to compare with it; a Refined
+Mockups approved before the preview existed has none, so name no file. Whether
+the build matches the experience they approved, brand and feel included, is the
+person's judgement at this gate; the tests cannot settle it.
 
 ```
 **Review:** `<record>/construction/build-and-test/`

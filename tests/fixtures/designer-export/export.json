@@ -1155,7 +1155,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-traceability",
-          "matches": "**/traceability.json"
+          "matches": "**/{traceability.json,interaction-spec.md}"
         }
       ]
     },
@@ -1211,7 +1211,8 @@
       ],
       "sensors": [
         "required-sections",
-        "upstream-coverage"
+        "upstream-coverage",
+        "traceability"
       ],
       "scopes": [
         "enterprise",
@@ -1261,6 +1262,14 @@
           "default_severity": "advisory",
           "category": "document-shape",
           "matches": "**/{aidlc-docs,intents,codekb}/**"
+        },
+        {
+          "id": "traceability",
+          "path": ".claude/sensors/aidlc-traceability.md",
+          "fire_on": "gate",
+          "default_severity": "advisory",
+          "category": "document-traceability",
+          "matches": "**/{traceability.json,interaction-spec.md}"
         }
       ]
     },
@@ -1370,7 +1379,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-traceability",
-          "matches": "**/traceability.json"
+          "matches": "**/{traceability.json,interaction-spec.md}"
         }
       ]
     },
@@ -1473,7 +1482,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-traceability",
-          "matches": "**/traceability.json"
+          "matches": "**/{traceability.json,interaction-spec.md}"
         }
       ]
     },
@@ -1857,7 +1866,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-traceability",
-          "matches": "**/traceability.json"
+          "matches": "**/{traceability.json,interaction-spec.md}"
         }
       ]
     },
@@ -2007,7 +2016,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-traceability",
-          "matches": "**/traceability.json"
+          "matches": "**/{traceability.json,interaction-spec.md}"
         }
       ]
     },
@@ -2170,7 +2179,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-traceability",
-          "matches": "**/traceability.json"
+          "matches": "**/{traceability.json,interaction-spec.md}"
         }
       ]
     },
@@ -2339,7 +2348,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-traceability",
-          "matches": "**/traceability.json"
+          "matches": "**/{traceability.json,interaction-spec.md}"
         }
       ]
     },
@@ -2482,7 +2491,7 @@
           "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-traceability",
-          "matches": "**/traceability.json"
+          "matches": "**/{traceability.json,interaction-spec.md}"
         }
       ]
     },

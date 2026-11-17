@@ -13,8 +13,8 @@ import {
   recordDir,
   resolveBoltDag,
   resolveProjectDir,
-  markdownBlocks,
   usesStageLevelPerUnitArtifacts,
+  visibleMarkdownLines,
 } from "./aidlc-lib.ts";
 import { aidlcDispatcherInvocation, sensorFireUsage } from "./aidlc-runtime-paths.ts";
 
@@ -290,29 +290,27 @@ function criteriaOfStories(storiesContent: string, stories: Set<string>): Set<st
 
 // An experience decision `UX{g}.{s}.{n}` belongs to the story `US{g}.{s}`, the
 // way an acceptance criterion does; `null` stories means the run owes them all.
+// An app-wide decision (`UX0.0.{n}`, such as the breakpoints or the
+// accessibility level) belongs to no story, so every such Unit owes it.
 function decisionsOfStories(specContent: string, stories: Set<string> | null): Set<string> {
   const decisions = new Set<string>();
   for (const ux of experienceDecisions(specContent)) {
-    if (stories === null || stories.has(storyOfDecision(ux))) decisions.add(ux);
+    if (stories === null || isAppWide(ux) || stories.has(storyOfDecision(ux))) decisions.add(ux);
   }
   return decisions;
+}
+
+const APP_WIDE_STORY = "US0.0";
+
+function isAppWide(ux: string): boolean {
+  return storyOfDecision(ux) === APP_WIDE_STORY;
 }
 
 // Every UX ID a reader of interaction-spec.md sees, as AC IDs are read from
 // stories.md. The shared parser says what renders: code, comments, link
 // reference definitions, and script-like HTML do not; an HTML block's text does.
 function experienceDecisions(specContent: string): Set<string> {
-  const { lines } = markdownBlocks(specContent);
-  const source = specContent.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n").split("\n");
-  const shown = source.map((raw, index) => {
-    const line = lines[index];
-    if (line.kind === "codeFenced" || line.kind === "codeIndented" || line.kind === "definition") return "";
-    if (line.kind === "htmlFlow" && (line.htmlKind ?? 7) <= 5) return "";
-    let text = raw;
-    const comments = line.invisible.filter((span) => span.kind === "htmlComment").sort((a, b) => b.start - a.start);
-    for (const span of comments) text = text.slice(0, span.start) + text.slice(span.end);
-    return text;
-  });
+  const shown = visibleMarkdownLines(specContent, { omitDefinitions: true, keepHtmlBlockText: true });
   return extractIds(shown.join("\n"), [ID_PATTERNS.UX]);
 }
 
@@ -327,14 +325,38 @@ function storyOfDecision(ux: string): string {
   return `US${group}.${story}`;
 }
 
-// A decision whose story stories.md lacks belongs to no Unit; it is fixed at
-// Refined Mockups, so every table that reads the spec reports it.
+// A decision whose story stories.md lacks belongs to no Unit. Refined Mockups'
+// own check says it before the person approves; after that only Build and
+// Test's cross-Unit check says it again, once, not every Unit's table.
 function experienceProblems(specContent: string, storiesContent: string | null): string[] {
   if (storiesContent === null) return [];
   const stories = extractIds(storiesContent, [ID_PATTERNS.US]);
   return [...experienceDecisions(specContent)]
-    .filter((id) => !stories.has(storyOfDecision(id)))
-    .map((id) => `interaction-spec.md's ${id} names story ${storyOfDecision(id)}, which stories.md does not have`);
+    .filter((id) => !isAppWide(id) && !stories.has(storyOfDecision(id)))
+    .map((id) => `interaction-spec.md's ${id} names story ${storyOfDecision(id)}, which stories.md does not have ` +
+      `(an app-wide decision is UX0.0.<n>); fix it at Refined Mockups`);
+}
+
+// Refined Mockups' own check, fired on interaction-spec.md before its gate:
+// every story-keyed decision names a story stories.md has.
+function interactionSpecResult(specPath: string, projectDir: string): Result {
+  const read = readText(specPath);
+  if (read.content === null) return failedResult(read.reason ?? `cannot read ${specPath}`);
+  const docsDir = recordDir(projectDir);
+  const storiesFile = docsDir ? join(docsDir, "inception", "user-stories", "stories.md") : null;
+  const storiesContent = storiesFile && existsSync(storiesFile) ? readText(storiesFile).content : null;
+  const problems = experienceProblems(read.content, storiesContent);
+  return {
+    pass: problems.length === 0,
+    gaps: [],
+    orphans: [],
+    missing_from_table: [],
+    missing_from_upstream_ids: [],
+    invalid_entries: [],
+    invalid_targets: problems,
+    findings_count: problems.length,
+    ...(problems.length > 0 ? { reason: problems.join("; ") } : {}),
+  };
 }
 
 function addExperienceDecisions(result: UpstreamResolution, docsDir: string, stories: Set<string> | null): void {
@@ -343,9 +365,6 @@ function addExperienceDecisions(result: UpstreamResolution, docsDir: string, sto
   const read = readText(interactionSpec);
   if (read.content === null) return;
   for (const id of decisionsOfStories(read.content, stories)) result.ids.add(id);
-  const storiesFile = join(docsDir, "inception", "user-stories", "stories.md");
-  const storiesContent = existsSync(storiesFile) ? readText(storiesFile).content : null;
-  result.reasons.push(...experienceProblems(read.content, storiesContent));
 }
 
 function idsFromFile(path: string, patterns: RegExp[], label: string): { ids: Set<string>; reason?: string } {
@@ -1237,6 +1256,10 @@ export function main(argv: string[]): void {
   if (!flags.outputPath) fail("--output-path is required");
   const outputPath = normalizePath(flags.outputPath);
   if (!existsSync(outputPath)) fail(`--output-path not found: ${flags.outputPath}`);
+  if (basename(outputPath) === "interaction-spec.md") {
+    emit(interactionSpecResult(outputPath, resolveProjectDir()));
+    return;
+  }
 
   let body: string;
   try {
