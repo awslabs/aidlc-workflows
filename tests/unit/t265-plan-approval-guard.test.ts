@@ -545,6 +545,8 @@ function scratchProject(): string {
     "aidlc-log.ts",
     // aidlc-log.ts writes and removes the Kiro reviewer copy through this.
     "aidlc-kiro-review-copy.ts",
+    // aidlc-log.ts names a missing required output through this.
+    "aidlc-artifact-resolution.ts",
     "aidlc-message-store.ts",
     // aidlc-message-store.ts reads what an archive replaced through this.
     "aidlc-doctor-bundle.ts",

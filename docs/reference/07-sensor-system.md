@@ -259,7 +259,7 @@ at compile time.
 | `aidlc-claim-sources.md` | `**/{aidlc-docs,intents}/**` |
 | `aidlc-required-sections.md` | `**/{aidlc-docs,intents,codekb}/**` |
 | `aidlc-upstream-coverage.md` | `**/{aidlc-docs,intents,codekb}/**` |
-| `aidlc-traceability.md` | `**/traceability.json` |
+| `aidlc-traceability.md` | `**/{traceability.json,interaction-spec.md}` |
 | `aidlc-linter.md` | `**/*.{ts,js}` |
 | `aidlc-type-check.md` | `**/*.{ts,tsx}` |
 
