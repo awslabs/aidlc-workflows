@@ -1561,9 +1561,9 @@ export function publishPlanApprovalAsk(
       // template, so it stays: the engine never erases what they wrote. A new
       // question, or a file changed in any other way, is written as usual.
       if (same && onlyTheirAnswerDiffers(onDisk, content)) return;
-      // Nor is it rewritten for the repos line alone, in a file an earlier
-      // AI-DLC wrote without it (a teammate's clone included): it is kept where
-      // that file would be, and the line comes with a rewrite for another reason.
+      // Nor is it rewritten for the repos line alone: a file an earlier AI-DLC
+      // wrote without it (a teammate's clone included) is kept wherever the file
+      // without the line would be, and the line comes with a rewrite for another reason.
       const named = underSummary(projectDir, [view.unit], null);
       const without = named.length === 0 ? null : fileWith(view.summary.filter((line) => !named.includes(line)));
       if (without !== null && (onDisk === without || (same && onlyTheirAnswerDiffers(onDisk, without)))) return;
