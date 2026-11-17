@@ -12967,6 +12967,8 @@ function pushUnit(args: string[], projectDir?: string): void {
   // commit made with their git (hooks, signing, identity), before anything is
   // pushed: a hook that stops one pushes nothing.
   const moved: Array<{ name: string; from: string }> = [];
+  // What the Unit's branch on a remote had on top of this one, brought in first.
+  const broughtIn: string[] = [];
   // The source walk as the Code Generation review binds it, read once when a
   // write names a folder.
   let sourceListing: WorkspaceSourceListing | null | undefined;
@@ -12975,9 +12977,10 @@ function pushUnit(args: string[], projectDir?: string): void {
   const along: string[] = [];
   // The code repositories whose Unit branch this run made from where they were.
   const startedHere = new Set<string>();
+  // A push that stops after a level step still says what it brought in; the pushed line says it first.
   const whereNow = (done = false): string =>
     whereNowLine(branch, moved, done && ownChanges(pd, planned) ? "; your other changes are still yours, uncommitted" : "") +
-      along.map((line) => ` ${line}`).join("");
+      [...along, ...(done ? [] : broughtIn)].map((line) => ` ${line}`).join("");
   // Each commit this push makes, by repo, as it is made; saved at a refusal
   // too, so the next push question says the last push did not go through.
   const buildRecord = activeRecordDir(pd);
@@ -13035,6 +13038,23 @@ function pushUnit(args: string[], projectDir?: string): void {
           `${exists ? ` Your own changes there stay as they are; once they are committed or put aside, I can push ${unit}.` : ""}${whereNow()}`);
       }
       moved.push({ name, from: from || "the commit you were on" });
+    }
+    // The Unit's branch on its remote ahead of this one (a host's merge of
+    // main on its pull request, a suggestion committed there): brought in first
+    // by the engine's own level step, so the push is a fast-forward and nothing
+    // is replaced. A fetch that fails, or a level step git refuses, leaves the
+    // branch as it was and the push goes on as before.
+    const onRemote = `refs/remotes/${remote}/${branch}`;
+    if (git(dir, ["rev-parse", "--verify", "--quiet", onRemote]).ok && CHECKOUT_STEPS.fetch.run(dir, remote, branch).ok &&
+      git(dir, ["rev-parse", onRemote]).stdout.trim() !== git(dir, ["rev-parse", "HEAD"]).stdout.trim() &&
+      git(dir, ["merge-base", "--is-ancestor", "HEAD", onRemote]).ok) {
+      // Counted along the branch itself, as its pull request shows them: a merge of main is one.
+      const ahead = Number(git(dir, ["rev-list", "--count", "--first-parent", `HEAD..${onRemote}`]).stdout.trim());
+      const subject = git(dir, ["log", "-1", "--format=%s", onRemote]).stdout.trim();
+      if (CHECKOUT_STEPS.level.run(dir, remote, branch).ok) {
+        broughtIn.push(`${branch} on ${remote} in ${name} had ${ahead === 1 ? `a commit on top of yours ("${subject}")` : `${ahead} commits on top of yours`}, ` +
+          `so I brought ${ahead === 1 ? "it" : "them"} into your ${branch} here first.`);
+      }
     }
     try {
       const listedAs = targets.get(repo)?.listedAs;
@@ -13128,6 +13148,27 @@ function pushUnit(args: string[], projectDir?: string): void {
       if (behind) {
         const fresh = `${branch}-2`;
         const unitTool = aidlcToolInvocation("unit");
+        // The build pushed before with commits on top that the level step could
+        // not bring in, because they change a file this build changes too: the
+        // file named, and the replace offered only where its lease would take them.
+        const last = lastPushedHeads(pd, unit, branch).get(repo);
+        const tipThere = git(dir, ["rev-parse", theirs]).stdout.trim();
+        const onTop = last === undefined || last === tipThere || !git(dir, ["merge-base", "--is-ancestor", last, theirs]).ok ? 0
+          : Number(git(dir, ["rev-list", "--count", "--first-parent", `${last}..${theirs}`]).stdout.trim());
+        const touched = onTop === 0 ? [] : git(dir, ["diff", "--name-only", "--no-renames", last!, theirs, "--", ...paths]).stdout.split(/\r?\n/).filter(Boolean);
+        if (touched.length > 0) {
+          const commits = onTop === 1 ? `a commit on top of what was pushed there before ("${git(dir, ["log", "-1", "--format=%s", theirs]).stdout.trim()}")`
+            : `${onTop} commits on top of what was pushed there before`;
+          const said = `${unit} was not pushed: on ${remote} in ${name} its branch has ${commits}, and ${onTop === 1 ? "that commit changes" : "they change"} ` +
+            `${joinNames(touched)}, which this build changes too.`;
+          fail(onlyOnLastPush(dir, last!, tipThere, integrationOf(repo, dir, remote), repo === ".")
+            ? `${said} Ask the person whether to replace ${branch} there with this build (the build pushed before and ` +
+              `${onTop === 1 ? "that commit leave" : "those commits leave"} that branch; a pull request open from it stays the same one), or to push it ` +
+              `as a new branch, ${fresh} (it needs a pull request of its own); run \`${unitTool} push --replace${messageFlag}\` for the replace, or ` +
+              `\`${unitTool} push --branch ${fresh}${messageFlag}\` for the new branch.${whereNow()}`
+            : `${said} ${onTop === 1 ? "That commit stays" : "Those commits stay"} on ${branch} there and ${onTop === 1 ? "is" : "are"} not in the new ` +
+              `branch. ${newBranchWay(fresh)}${whereNow()}`);
+        }
         fail(
           `${unit} was not pushed: its branch ${branch} on ${remote} in ${name} still holds the build pushed before, and ` +
             `this build is not on top of it. Ask the person whether to replace ${branch} there with this build (the build ` +
@@ -13189,6 +13230,7 @@ function pushUnit(args: string[], projectDir?: string): void {
   const quiet = hostSaid.filter((said) => said.words === "" && !replacedFrom.has(said.name)).map((said) => said.name);
   const lines = [
     joinSaid([
+      ...broughtIn,
       plain.length === 0 ? "" : `Pushed branch ${branch} in ${joinNames(plain)}.`,
       ...[...replacedFrom].map(([name, was]) => `Pushed branch ${branch} in ${name} in place of the build pushed there before (it was at ${was}).`),
       ...hostSaid.filter((said) => said.words !== "").map((said) => hostSaysLine(names.length === 1 ? null : said.name, said.words)),

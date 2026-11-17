@@ -410,21 +410,20 @@ describe("the offer after the push, and its yes", () => {
   });
 
   // The Unit redone from the newer main after its merge of main went: its next push asks for the replace.
-  function redoneOnMain(alice: string, billing: string): void {
+  function redoneOnMain(alice: string, billing: string): string {
     git(billing, ["fetch", "-q", "origin"]);
     git(billing, ["switch", "-q", "main"]);
     git(billing, ["branch", "-q", "-D", "refunds"]);
     git(billing, ["switch", "-q", "-c", "refunds", "origin/main"]);
     writeFileSync(join(billing, "README.md"), `${readFileSync(join(billing, "README.md"), "utf-8")}Refunds, again.\n`);
-    const refused = run(UNIT, ["push"], alice);
-    expect(String(refused.json?.error)).toContain("Ask the person whether to replace refunds there with this build");
+    return String(run(UNIT, ["push"], alice).json?.error);
   }
 
   test("a clean merge of main the yes pushed: a later replace leases on it as on its own push", () => {
     const { alice, hosts, billing } = movedAndPushed();
     next(alice);
     expect(run(UNIT, ["push", "--merge-main"], alice).status).toBe(0);
-    redoneOnMain(alice, billing);
+    expect(redoneOnMain(alice, billing)).toContain("Ask the person whether to replace refunds there with this build");
     const replaced = run(UNIT, ["push", "--replace"], alice);
     expect(replaced.status, replaced.out).toBe(0);
     expect(git(hosts.billing, ["show", "refunds:README.md"])).toContain("Refunds, again.");
@@ -438,7 +437,10 @@ describe("the offer after the push, and its yes", () => {
     git(billing, ["add", "README.md"]);
     expect(run(UNIT, ["push", "--merge-main"], alice).status).toBe(0);
     const resolved = git(hosts.billing, ["rev-parse", "refunds"]);
-    redoneOnMain(alice, billing);
+    // The resolved merge is a change of its own: only the new branch is offered, and it is said to stay behind.
+    const offered = redoneOnMain(alice, billing);
+    expect(offered).toContain("That commit stays on refunds there and is not in the new branch. Ask the person whether to push it as a new branch, refunds-2");
+    expect(offered).not.toContain("--replace");
     const refused = run(UNIT, ["push", "--replace"], alice);
     expect(refused.status).not.toBe(0);
     expect(String(refused.json?.error)).toContain("is not where this build's last push left it, so it was not replaced, and nothing was pushed.");

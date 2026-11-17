@@ -910,6 +910,13 @@ workspace's own repository, with AI-DLC's record commit on top; or a clean merge
 of main the offer above made), so a commit anyone else put there, in any
 repository, replaces nothing anywhere. The branch a repository merges into is
 never replaced. The push line names the commit the branch was at before.
+When the branch on the remote is ahead of yours instead (your host's Update
+branch merged main into its pull request, or a suggestion was committed there),
+the push first brings those commits into your branch with your own git (a
+fast-forward, never a stash, a merge commit or a force) and then pushes on top
+of them, so nothing is replaced. Where they change a file the Unit changes too,
+it stops before anything is pushed, names the file, and offers the replace only
+where it would take them (a clean merge of main); otherwise a new branch.
 
 When the repository a Unit's record goes to takes no push from you, and your
 clone of it has one remote that is not at the plan's address (your fork), the
