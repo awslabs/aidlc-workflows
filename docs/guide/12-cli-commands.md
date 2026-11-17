@@ -999,7 +999,12 @@ build (a partner team that can only push to its fork, say). The number goes on t
 and the Unit counts as merged once git shows that pull request's last head merged in the
 repo (`refs/pull/<n>/head` on GitHub, `refs/merge-requests/<n>/head` on GitLab); AI-DLC
 reads no other pull request. The board then reads "its build is pull request 7 in
-reports". Naming another number for the same repo replaces it.
+reports". Naming another number for the same repo replaces it; where the Unit was already
+counted merged through the earlier one (or by your word), that merge is taken back and the
+Unit counts once the new one merges. `/aidlc unit release <unit>` takes the naming off and
+opens the Unit for a team to take again; a merge counted through it, or by your word alone,
+is taken back the same way. Each take-back is one change on the plan and one
+`UNIT_MERGE_TAKEN_BACK` row in the audit; a Unit taken meanwhile stays taken.
 
 ### `/aidlc unit adopt <unit>` — Adopt a teammate's live claim
 

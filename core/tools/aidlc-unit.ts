@@ -5579,6 +5579,12 @@ function moveClaimTurnRows(projectDir: string, shardPath: string, localPath: str
 // The lead's word that a taken Unit is open again, on the plan.
 function openAgain(pd: string, unit: string): void {
   const live = leadsRecordNow(pd, unit);
+  const word = unitWordOnPlan(pd, unit);
+  // A pull request named as its build, or a merge counted by the lead's word, with no pushed result: taken off.
+  if ((live?.status !== "claimed" || !live.payload.result) && ((word.pull_requests ?? []).length > 0 || (word.done === true && (word.said_merged ?? []).length > 0))) {
+    openAgainNamed(pd, unit, live);
+    return;
+  }
   if (live?.status !== "claimed") {
     console.log(JSON.stringify({ released: false, unit, notice: `${unit} is not taken, so it is open already.` }));
     return;
@@ -5591,6 +5597,44 @@ function openAgain(pd: string, unit: string): void {
   console.log(JSON.stringify({
     released: true, unit, generation: live.generation, claim_ref: live.ref, claim_oid: live.oid, notice: withPlanNotes(`Written on the plan: ${unit} is open again.`),
   }));
+}
+
+// The lead's word on a Unit as the plan this computer keeps has it.
+function unitWordOnPlan(pd: string, unit: string): UnitWord {
+  const plan = keptPlan(pd, activeIdentity(pd).intentId8)?.plan ?? null;
+  return plan === null ? {} : unitWordIn(plan, unit);
+}
+
+// Open-again on a Unit whose build is a pull request the lead named, or that
+// the lead counted merged by word, with no pushed result: the naming, the word
+// and done come off the plan in one write, and a merge counted that way is
+// taken back (mergeTakenBack). A take not pushed yet is opened again as any
+// take is. Never a refusal.
+function openAgainNamed(pd: string, unit: string, live: UnitClaimView | null): void {
+  let named: NamedPullRequest[] = [];
+  let byWord: string[] = [];
+  let wasDone = false;
+  const taken = live?.status === "claimed" ? live : null;
+  const sent = leadsPlanWrite(pd, {
+    what: `merge of ${unit} taken back`,
+    words: (other, tip) => {
+      if (other !== unit) return null;
+      const { done, said_merged, pull_requests, verdicts: _verdicts, signoff: _signoff, ...rest } = taken === null ? tip : wordForTake(tip, taken);
+      named = pull_requests ?? [];
+      byWord = (said_merged ?? []).map((said) => said.repo);
+      wasDone = done === true;
+      return taken === null ? rest : { ...rest, open_again: { at: isoTimestamp() } };
+    },
+  });
+  failUnlessWritten(pd, sent, `${unit}'s reopening`);
+  const after = wasDone ? mergeTakenBack(pd, unit, taken?.generation ?? 0, {}) : "";
+  const its = named.length === 0 ? null : joinNames(named.map((pr) => `pull request ${pr.number} in ${pr.repo}`));
+  const notice = wasDone
+    ? (its !== null
+      ? `Taken off the plan: ${its} ${named.length === 1 ? "is" : "are"} no longer named as ${unit}'s build, and ${unit} is no longer counted merged by ${named.length === 1 ? "it" : "them"}.`
+      : `Taken off the plan: ${unit} is no longer counted merged in ${joinNames(byWord)} by your word.`) + ` ${unit} is open for a team to take.${after}`
+    : `Taken off the plan: ${its} ${named.length === 1 ? "is" : "are"} no longer named as ${unit}'s build. ${unit} is open for a team to take.`;
+  console.log(JSON.stringify({ released: taken !== null, unit, notice: withPlanNotes(notice) }));
 }
 
 function releaseUnit(args: string[], projectDir?: string): void {
@@ -12729,6 +12773,29 @@ function namedPullRequestVerdict(pd: string, repo: string, number: number): Name
   return atHead === null ? { kind: "open" } : merged(unitMergeVerdict(dir, integration, atHead));
 }
 
+// A merge counted by the lead's word or by a pull request they named, taken
+// back: the earlier merge no longer stands (UNIT_MERGE_TAKEN_BACK, which
+// unitMergesStanding reads), one row with the lead's words where they gave
+// some. Nothing else moves. What is said after the step's own line: each Unit
+// that waited on this one and was taken since the merge was counted (its take
+// commit is later than the merge's row), which stays taken; and, past the
+// Unit stages, that Build and Test already started.
+function mergeTakenBack(pd: string, unit: string, generation: number, fields: Record<string, string>): string {
+  const since = unitMergesStanding(readAuditShardEvents(pd), unit).at(-1)?.timestamp ?? "";
+  appendAuditEntry("UNIT_MERGE_TAKEN_BACK", { Unit: unit, "Attempt Generation": String(generation), ...fields }, pd);
+  const claims = cachedClaims(pd);
+  const meanwhile = since === "" ? [] : (keptPlan(pd, activeIdentity(pd).intentId8)?.plan.units ?? [])
+    .filter((entry) => entry.waits_on.includes(unit))
+    .flatMap((entry) => {
+      const claim = claims.get(entry.name);
+      if (claim?.status !== "claimed") return [];
+      const at = localGit(pd, ["show", "-s", "--format=%aI", takeCommit(pd, claim.oid, claim.payload, true), "--"]).stdout.trim();
+      return at !== "" && Date.parse(at) > Date.parse(since) ? [entry.name] : [];
+    });
+  return meanwhile.map((name) => ` ${name}, which waited on ${unit}, was taken meanwhile and stays taken.`).join("") +
+    (pastUnitStages(readStateFile(pd)) !== null ? ` Build and Test already started with ${unit} counted merged. Say if you want to go back to it.` : "");
+}
+
 // A Unit done through the lead's naming or word, with no pushed result: its
 // UNIT_MERGED row, once, with the take's generation where it was taken and not
 // pushed (so the lead's walk counts it merged), else 0.
@@ -14194,7 +14261,7 @@ function saidMerged(args: string[], projectDir?: string): void {
   const lead = leadsWord(pd, flags, "That it merged");
   const words = lead.said ?? given;
   if (number !== null) {
-    saidPullRequest(pd, unit, flags.repo, number, words, lead.fields["Message Id"]);
+    saidPullRequest(pd, unit, flags.repo, number, words, lead.fields);
     return;
   }
   const live = leadsRecordNow(pd, unit);
@@ -14236,7 +14303,8 @@ function saidMerged(args: string[], projectDir?: string): void {
 // there; AI-DLC reads no other pull request. With no pushed result it is read
 // now and at each later look (namedPullRequestVerdict); a Unit with a pushed
 // result keeps its merge check, which then reads that number's head too.
-function saidPullRequest(pd: string, unit: string, repo: string, number: number, words: string, message?: string): void {
+function saidPullRequest(pd: string, unit: string, repo: string, number: number, words: string, fields: Record<string, string>): void {
+  const message = fields["Message Id"];
   const entry: NamedPullRequest = { repo, number, words, at: isoTimestamp() };
   const what = `pull request ${number} in ${repo} named the build of ${unit}`;
   const written = `Written on the plan: pull request ${number} in ${repo} is the build of ${unit}.`;
@@ -14260,26 +14328,43 @@ function saidPullRequest(pd: string, unit: string, repo: string, number: number,
   let waiting: NamedPullRequest[] = [];
   let done = false;
   let verdicts: NonNullable<UnitWord["verdicts"]> = [];
+  // What this naming takes the place of, where the Unit was counted merged.
+  let wasDone = false;
+  let before: { number?: number; byWord: boolean } = { byWord: false };
   const sent = leadsPlanWrite(pd, {
     what,
     words: (other, tip) => {
       if (other !== unit) return null;
       // A take not pushed yet: the word is for that take, as every word of the lead's on it is.
       const word = live?.status === "claimed" ? wordForTake(tip, live) : tip;
-      const next = named(word);
+      const { done: had, verdicts: _before, ...next } = named(word);
+      wasDone = had === true;
+      before = { number: word.pull_requests?.find((pr) => pr.repo === repo)?.number, byWord: (word.said_merged ?? []).some((said) => said.repo === repo) };
       verdicts = [...(word.verdicts ?? []).filter((verdict) => verdict.repo !== repo),
         ...(read.kind === "merged" ? [{ repo, merged: true, commit: read.commit, how: read.how }] : [])];
       waiting = (next.pull_requests ?? []).filter((pr) => !verdicts.some((verdict) => verdict.repo === pr.repo && verdict.merged));
-      done = word.done === true || (waiting.length === 0 && (!signOffOn || word.signoff !== undefined));
+      done = waiting.length === 0 && (!signOffOn || word.signoff !== undefined);
       return { ...next, ...(verdicts.length > 0 ? { verdicts } : {}), ...(done ? { done: true as const } : {}) };
     },
   });
   failUnlessWritten(pd, sent, `${unit}'s pull request in ${repo}`, message);
-  if (done) recordNamedDone(pd, unit, verdicts.filter((verdict) => verdict.merged), live?.status === "claimed" ? live.generation : 0);
+  const generation = live?.status === "claimed" ? live.generation : 0;
+  // The right number in place of a counted merge: that merge no longer stands, and this one counts once git shows it.
+  const takenBack = wasDone && (!done || before.number !== undefined || before.byWord);
+  const after = takenBack ? mergeTakenBack(pd, unit, generation, fields) : "";
+  if (done) recordNamedDone(pd, unit, verdicts.filter((verdict) => verdict.merged), generation);
   const plan = keptPlan(pd, activeIdentity(pd).intentId8)?.plan ?? null;
   const address = repoCloneable(pd, repo) || (plan?.repos.find((entry) => entry.name === repo)?.address ?? null) !== null;
   const prs = (list: NamedPullRequest[]): string => joinNames(list.map((pr) => `pull request ${pr.number} in ${pr.repo}`));
-  const notice = read.kind === "merged"
+  const instead = before.number !== undefined && before.number !== number ? `, in place of pull request ${before.number}`
+    : before.byWord ? `, in place of your word that ${repo} merged it` : "";
+  const notice = takenBack
+    ? (read.kind === "merged"
+      ? `Written on the plan: pull request ${number} in ${repo} is the build of ${unit}${instead}, and git shows pull request ${number} merged ` +
+        `in ${repo} at ${read.commit.slice(0, 7)} "${read.subject}".${done ? ` ${unit} is recorded as merged here.` : ""}`
+      : `Written on the plan: pull request ${number} in ${repo} is the build of ${unit}${instead}, and ${unit} is no longer counted merged. ` +
+        `${unit} counts as merged once git shows pull request ${number} merged in ${repo}.`) + after
+    : read.kind === "merged"
     ? `Written on the plan: pull request ${number} in ${repo} is the build of ${unit}, and git shows it merged in ${repo} at ` +
       `${read.commit.slice(0, 7)} "${read.subject}".` +
       (done ? ` ${unit} is recorded as merged here.`

@@ -602,11 +602,12 @@ function assignedHere(row: AuditShardEvent, unit: string): boolean {
 }
 
 // A Unit's UNIT_MERGED rows that still stand: none recorded before the lead's
-// Build and Test last sent it back (UNIT_SENT_BACK) or the lead took it back
-// to build here (assign --here), in audit order.
+// Build and Test last sent it back (UNIT_SENT_BACK), the lead took it back to
+// build here (assign --here), or the lead took back a merge counted by their
+// word or a pull request they named (UNIT_MERGE_TAKEN_BACK), in audit order.
 export function unitMergesStanding(rows: readonly AuditShardEvent[], unit: string): AuditShardEvent[] {
   const mine = inAuditOrder(rows).filter((row) => auditBlockField(row.block, "Unit") === unit || assignedHere(row, unit));
-  const back = mine.findLastIndex((row) => row.event === "UNIT_SENT_BACK" || row.event === "UNITS_ASSIGNED");
+  const back = mine.findLastIndex((row) => row.event === "UNIT_SENT_BACK" || row.event === "UNIT_MERGE_TAKEN_BACK" || row.event === "UNITS_ASSIGNED");
   return mine.slice(back + 1).filter((row) => row.event === "UNIT_MERGED");
 }
 
@@ -620,7 +621,7 @@ export function unitsTakenBackHere(rows: readonly AuditShardEvent[]): Map<string
   for (const row of inAuditOrder(rows)) {
     const unit = auditBlockField(row.block, "Unit");
     if (row.event === "UNIT_MERGED" && unit && auditBlockField(row.block, "Built By") !== null) merged.add(unit);
-    else if (row.event === "UNIT_SENT_BACK" && unit) merged.delete(unit);
+    else if ((row.event === "UNIT_SENT_BACK" || row.event === "UNIT_MERGE_TAKEN_BACK") && unit) merged.delete(unit);
     else if (row.event === "UNITS_ASSIGNED") {
       for (const name of (auditBlockField(row.block, "Here") ?? "").split(",").map((entry) => entry.trim())) {
         if (merged.delete(name)) taken.set(name, []);

@@ -297,6 +297,7 @@ const VALID_EVENT_TYPES = new Set([
   "CONSTRUCTION_POLICY_SET",
   "UNIT_MERGED",
   "UNIT_SENT_BACK",
+  "UNIT_MERGE_TAKEN_BACK",
   // Worktree lifecycle:
   //   WORKTREE_* emitted by aidlc-worktree.ts
   //   STATE_*    emitted by aidlc-state.ts state-fork/state-merge
@@ -474,6 +475,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   CONSTRUCTION_POLICY_SET: "Construction Policy Set",
   UNIT_MERGED: "Unit Merged",
   UNIT_SENT_BACK: "Unit Sent Back",
+  UNIT_MERGE_TAKEN_BACK: "Unit Merge Taken Back",
   WORKTREE_CREATED: "Worktree Created",
   WORKTREE_MERGED: "Worktree Merged",
   WORKTREE_DISCARDED: "Worktree Discarded",
@@ -661,6 +663,7 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "UNIT_SKIPPED",
   "UNIT_MERGED",
   "UNIT_SENT_BACK",
+  "UNIT_MERGE_TAKEN_BACK",
   // DocumentKB provenance: the knowledge tool emits these through the library
   // inside its catalog transaction. A CLI-forged DOCUMENT_INDEXED whose
   // Digest+Source match a real row would make the tool's idempotent
