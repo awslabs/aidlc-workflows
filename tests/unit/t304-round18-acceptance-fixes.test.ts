@@ -1919,11 +1919,11 @@ describe("config in a project a newer AI-DLC set up", () => {
 
   const down = `To take the project down to ${AIDLC_VERSION} instead: \`aidlc config --pin ${AIDLC_VERSION} --yes\` ` +
     "(this pins the version for everyone on the project).";
-  const step = (version: string) =>
-    `To carry on: \`aidlc update --version ${version}\`, then \`aidlc config --harness claude --yes\` in this project. ${down}`;
-  const nothing = `Nothing changed: this project was set up with AI-DLC ${NEWER}, and this computer is on ${AIDLC_VERSION}. ${
-    step(NEWER)
-  }`;
+  // The way on names the person's own command, so what they asked for is what runs after the update.
+  const step = (version: string, args: readonly string[] = []) =>
+    `To carry on: \`aidlc update --version ${version}\`, then \`${["aidlc", "config", ...args].join(" ")}\` in this project. ${down}`;
+  const nothing = (args: readonly string[] = []) =>
+    `Nothing changed: this project was set up with AI-DLC ${NEWER}, and this computer is on ${AIDLC_VERSION}. ${step(NEWER, args)}`;
 
   test("with no terminal, a plain config, --yes and a refreshing section change nothing and name both ways on", () => {
     const { project, env } = setUpWith(NEWER);
@@ -1940,9 +1940,17 @@ describe("config in a project a newer AI-DLC set up", () => {
     ) {
       const result = runCopied(project, ["config", ...args], { env });
       expect(result.status, `${args.join(" ")}\n${result.stdout}${result.stderr}`).toBe(5);
-      expect(result.stdout.trim()).toBe(nothing);
+      expect(result.stdout.trim()).toBe(nothing(args));
       expect(tree(project)).toEqual(before);
     }
+    // A mirror named for the download is asked for again, never printed.
+    const mirrored = runCopied(project, ["config", "--download", "--release-base-url", "http://127.0.0.1:9/mirror", "--yes"], { env });
+    expect(mirrored.status, mirrored.stdout + mirrored.stderr).toBe(5);
+    expect(mirrored.stdout).toContain(
+      `To carry on: \`aidlc update --version ${NEWER}\` with the same --release-base-url, then ` +
+        "`aidlc config --download --yes` with the same --release-base-url in this project.",
+    );
+    expect(mirrored.stdout).not.toContain("127.0.0.1:9/mirror");
     // A section that refreshes is told to run itself again after the update.
     const section = runCopied(project, ["config", "project", "--mcp", "defaults", "--yes"], { env });
     expect(section.status, section.stdout + section.stderr).toBe(5);
@@ -1958,11 +1966,11 @@ describe("config in a project a newer AI-DLC set up", () => {
     // Run from outside the project, both commands name it.
     const outside = runCopied(project, ["config", "--yes", "--project-dir", project], { env, cwd: temp("aidlc-t304-elsewhere-") });
     expect(outside.status, outside.stdout + outside.stderr).toBe(5);
-    expect(outside.stdout).toContain(`\`aidlc config --harness claude --yes --project-dir ${quoteForShell(project)}\``);
+    expect(outside.stdout).toContain(`then \`aidlc config --project-dir ${quoteForShell(project)} --yes\` in this project`);
     expect(outside.stdout).toContain(`\`aidlc config --pin ${AIDLC_VERSION} --yes --project-dir ${quoteForShell(project)}\``);
     const json = JSON.parse(runCopied(project, ["config", "--yes", "--json"], { env }).stdout);
     expect({ ok: json.ok, code: json.code, status: json.status, message: json.message })
-      .toEqual({ ok: true, code: 5, status: "action-needed", message: nothing });
+      .toEqual({ ok: true, code: 5, status: "action-needed", message: nothing(["--yes", "--json"]) });
     expect(tree(project)).toEqual(before);
   }, 180_000);
 
@@ -1992,7 +2000,7 @@ describe("config in a project a newer AI-DLC set up", () => {
       input: "\n",
     });
     expect(unattended.status, unattended.stdout + unattended.stderr).toBe(5);
-    expect(unattended.stdout.trim()).toBe(nothing);
+    expect(unattended.stdout.trim()).toBe(nothing());
     // Closed input leaves the question unanswered: nothing changes.
     const closed = runCopied(project, ["config"], { env: { ...env, AIDLC_TEST_CONFIG_TTY: "1" } });
     expect(closed.status, closed.stdout + closed.stderr).toBe(5);
@@ -2025,14 +2033,16 @@ describe("config in a project a newer AI-DLC set up", () => {
       writeReleaseFixture({ root, version: NEWER, distributions: ["claude"], binaryFrom: binary });
       const server = serveReleaseFixture(root);
       try {
-        const result = await runCopiedAsync(project, ["config", "--harness", "claude"], {
-          env: { ...env, AIDLC_TEST_CONFIG_TTY: "1", AIDLC_RELEASE_BASE_URL: server.baseUrl, AIDLC_GH_BIN: FAKE_GH },
+        // The mirror named for the download is the one the update takes.
+        const mirror = ["--download", "--release-base-url", server.baseUrl];
+        const result = await runCopiedAsync(project, ["config", "--harness", "claude", ...mirror], {
+          env: { ...env, AIDLC_TEST_CONFIG_TTY: "1", AIDLC_RELEASE_BASE_URL: "http://127.0.0.1:9/unreachable", AIDLC_GH_BIN: FAKE_GH },
           input: "\n",
         });
         expect(result.status, result.stdout + result.stderr).toBe(0);
         expect(result.stdout).toContain(`Update AI-DLC on this computer to ${NEWER} now and carry on? [Y/n]:`);
         expect(readFileSync(join(env.AIDLC_INSTALL_ROOT as string, "active-version"), "utf-8").trim()).toBe(NEWER);
-        expect(readFileSync(asked, "utf-8").trim()).toBe("config --harness claude");
+        expect(readFileSync(asked, "utf-8").trim()).toBe(`config --harness claude ${mirror.join(" ")}`);
         expect(tree(project)).toEqual(before);
       } finally {
         server.stop();
@@ -2120,7 +2130,7 @@ describe("config in a project a newer AI-DLC set up", () => {
     expect(result.status, result.stdout + result.stderr).toBe(5);
     expect(result.stdout.trim()).toBe(
       `Nothing changed: this project was set up with AI-DLC ${NEWER}, and this computer is on ${AIDLC_VERSION} from ` +
-        `Homebrew. To carry on: brew upgrade aidlc, then \`aidlc config --harness claude --yes\` in this project. ${down}`,
+        `Homebrew. To carry on: brew upgrade aidlc, then \`aidlc config --yes\` in this project. ${down}`,
     );
     // For a preview, AI-DLC names no package manager step: what this computer needs, then the pin.
     const fromPreview = setUpWith(PREVIEW).project;
