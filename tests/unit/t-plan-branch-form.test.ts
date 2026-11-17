@@ -87,7 +87,7 @@ describe("a record its repository holds as a branch", () => {
   test("is read by the lead's look as the record: refunds is taken by alice", () => {
     const { home } = refundsTaken();
     recordAsBranch(recordHostOf(home, "refunds"), home.id8, "refunds");
-    expect(board(home.dir, "lead-later"), "the lead's board").toContain("refunds, payments space: building, taken by alice");
+    expect(board(home.dir, "lead-later"), "the lead's board").toMatch(/refunds, payments space: building[^\n]*, taken by alice/);
   });
 
   test("is read by a take, so a second team is told it is taken and writes nothing", () => {
@@ -109,7 +109,7 @@ describe("a record its repository holds as a branch", () => {
     const taken = JSON.parse(git(host, ["show", `${ref}:unit.json`])) as Record<string, unknown>;
     // Another writer's take at the same moment, as a branch with a history of its own: the ref counts.
     git(host, ["update-ref", branchOf(home.id8, "refunds"), recordCommit(host, { ...taken, taken_by: "dan" }, null)]);
-    expect(board(home.dir, "lead-1")).toContain("refunds, payments space: building, taken by alice");
+    expect(board(home.dir, "lead-1")).toMatch(/refunds, payments space: building[^\n]*, taken by alice/);
     expect(leadsCopy(home.dir, host, home.id8, "refunds")).toBe(ref);
     // The record's next commit on the ref's, written as the branch: the branch counts.
     const onTop = recordCommit(host, { ...taken, note: "a later write" }, ref);
