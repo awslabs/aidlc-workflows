@@ -826,7 +826,14 @@ the address of the code repository it is shared in, said once: `next
 ref fetched into `refs/aidlc/home/<id8>/<key>/plan` (`lookForPlans`); `next
 --units` looks at each repository of the workspace the same way, and offers a
 plan it found by itself only when it was read from the repository its
-plan.json names (`planAtCopy`). Each choice runs `unit take <unit> --plan
+plan.json names (`planAtCopy`). A plan whose every Unit is done, or whose
+plan.json says `closed`, offers none of its Units (a build of the person's own
+is still carried on) and is passed by with nothing said, beside an offer and at
+a look nobody asked for. When the plans read offer nothing, `next --units` and
+`next --lead-address` answer with one line saying what each is ("Nothing to
+take: the plan of <label> in <repo> is closed; every Unit of <label> is done."),
+never the ask for the plan's address (`unitsAskedStep`, `nothingToTakeLine`).
+Each choice runs `unit take <unit> --plan
 <id8> --from <address>`, which reads the plan at that commit
 (`planTakeSource`), then starts the build in the active space; a build of it
 already here is carried on. An address that starts with `-` is refused before

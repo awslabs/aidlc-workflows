@@ -354,6 +354,8 @@ export interface PlanJson {
   stages: Record<string, string>;
   unit_stages: string[];
   inputs: Array<{ path: string; fingerprint: string; approved?: string }>;
+  // The lead's work is finished or archived: no team is offered its Units.
+  closed?: { at: string };
   [key: string]: unknown;
 }
 
@@ -482,7 +484,8 @@ function planShaped(plan: Record<string, unknown>): boolean {
     isObject(plan.stages) && Object.keys(plan.stages).every(isStage) && Object.values(plan.stages).every(isStage) &&
     Array.isArray(plan.unit_stages) && plan.unit_stages.every(isStage) &&
     Array.isArray(plan.inputs) && plan.inputs.every((input) => isObject(input) && isRecordPath(input.path) && isLine(input.fingerprint) &&
-      (input.approved === undefined || isLine(input.approved)));
+      (input.approved === undefined || isLine(input.approved))) &&
+    (plan.closed === undefined || (isObject(plan.closed) && isLine(plan.closed.at)));
 }
 
 // One folder per repository read under refs/aidlc/home/<id8>/: the same for

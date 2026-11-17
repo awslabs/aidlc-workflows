@@ -9727,6 +9727,8 @@ function leadAddressStep(projectDir: string, address: string): Directive | null 
     const gone = looked.goneAtAddress ?? [];
     if (unreadable.length > 0) return lineEndingTurn([...new Set(unreadable)].map(planUnreadableLine).join(" "));
     if (looked.readAtAddress === 0 && gone.length > 0) return lineEndingTurn(gone.map(planGoneLine).join(" "));
+    const nothing = nothingToTakeLine(looked.passed.filter((entry) => sameGitAddress(entry.address, address)));
+    if (nothing !== null) return lineEndingTurn(nothing);
     return looked.readAtAddress === 0 ? lineEndingTurn(`${maskUserinfo(address)} has no plan shared in it yet.`) : null;
   }
   return takeOfferOf(looked);
@@ -9735,8 +9737,9 @@ function leadAddressStep(projectDir: string, address: string): Directive | null 
 // The person asked what they can take with no address (--units): the Units of
 // every plan this workspace's repositories and its said addresses hold, as the
 // one take offer says them. With none found, the ask for the address of the
-// repository the plan is shared in; null when a plan here is gone from where it
-// was shared (said once with the step), and the step goes on as a plain next.
+// repository the plan is shared in; where the plans read offer nothing, what
+// each is (closed, or every Unit done); null when a plan here is gone from where
+// it was shared (said once with the step), and the step goes on as a plain next.
 function unitsAskedStep(projectDir: string): Directive | null {
   let looked: ReturnType<typeof unitTakeLook>;
   try {
@@ -9746,7 +9749,10 @@ function unitsAskedStep(projectDir: string): Directive | null {
     return errorDirective(e instanceof Error ? e.message : String(e));
   }
   if (looked.choices.length === 0 && looked.sentences.length === 0) {
-    return looked.gone.length > 0 ? null : lineEndingTurn(noPlanFoundAsk(looked.read ?? [], looked.unread ?? []));
+    if (looked.gone.length > 0) return null;
+    const nothing = nothingToTakeLine(looked.passed);
+    if (nothing !== null) return lineEndingTurn(nothing);
+    return looked.passed.length > 0 ? null : lineEndingTurn(noPlanFoundAsk(looked.read ?? [], looked.unread ?? []));
   }
   return takeOfferOf(looked);
 }
@@ -9763,6 +9769,17 @@ function noPlanFoundAsk(read: string[], unread: Array<{ name: string; said: stri
   return read.length === 1
     ? `I found no plan in this workspace's repository. ${ask}`
     : `I found no plan in this workspace's repositories (${read.join(", ")}). ${ask}`;
+}
+
+// A plan a look read that offers nothing here, as the person's own ask is answered.
+type PassedPlan = { label: string; repo: string; address: string; closed: boolean; finished: boolean };
+
+// The answer to the person's ask when the plans read offer nothing: what each
+// one is, closed or every Unit of it done. Null when none of them is either.
+function nothingToTakeLine(passed: readonly PassedPlan[]): string | null {
+  const facts = passed.flatMap((entry) => (entry.closed ? [`the plan of ${entry.label} in ${entry.repo} is closed`]
+    : entry.finished ? [`every Unit of ${entry.label} is done`] : []));
+  return facts.length === 0 ? null : `Nothing to take: ${facts.join("; ")}.`;
 }
 
 // The one take offer a look's Units make, or the line that nothing is ready.
@@ -10115,6 +10132,8 @@ function unitTakeLook(
   asked?: { address?: string },
 ): {
   sentences: string[]; choices: AskChoice[]; carryOn: CarryOnCommand[]; homeHere: IntentInfo[]; stale: boolean; readAtAddress: number | null;
+  // The plans read that offer nothing here: each closed, or with every Unit of it done.
+  passed: PassedPlan[];
   unreadAtAddress?: string | null;
 } & LookedBeyond {
   const active = engineSelection(projectDir).space;
@@ -10127,6 +10146,7 @@ function unitTakeLook(
   const homeHere: IntentInfo[] = [];
   // A home whose claims this look did not fetch (fetched earlier in the chat).
   let stale = false;
+  const passed: PassedPlan[] = [];
   const looked = plansLooked(projectDir, now, asked);
   // A build's plan that does not read, or whose repository did not answer: said once, and the rest offered.
   for (const repo of new Set(looked.unreadable)) sayWithStepOnce(projectDir, planUnreadableLine(repo));
@@ -10162,6 +10182,9 @@ function unitTakeLook(
       continue;
     }
     if (onDisk && space === active) homeHere.push(intent);
+    // A closed plan offers none of its Units and is passed by with nothing said; a build of the person's own stays theirs.
+    const closed = plan.closed !== undefined;
+    const choicesBefore = choices.length;
     const take = `${unitTool} take %s ${planTakeWords(snapshot.place.id8, snapshot.place.address)}`;
     const likely = new Map(plan.units.map((unit) => [unit.name, [...unit.repos]]));
     // One start per Unit: its build goes in the space the person is in.
@@ -10224,6 +10247,7 @@ function unitTakeLook(
           continue;
         }
         if (!mine) {
+          if (closed) continue;
           building.push(`${unit} (${sentBack ?? `being built by ${who}${where}, ${worked.here ? "on this computer" : "on another computer"}`})`);
           carryOn.push({ unit, command: take.replace("%s", shellArg(unit)) });
           continue;
@@ -10242,6 +10266,7 @@ function unitTakeLook(
         } else building.push(`${unit} (by ${builderOf(claim)}${spaceWords(claim.owner, true)})`);
         continue;
       }
+      if (closed) continue;
       const pulls = ((plan.units.find((entry) => entry.name === unit)?.word ?? {}) as { pull_requests?: Array<{ repo: string; number: number }> })
         .pull_requests ?? [];
       if (pulls.length > 0) {
@@ -10281,7 +10306,11 @@ function unitTakeLook(
     }
     const label = intentDisplayLabel(intent);
     const change = planLastChange(projectDir, snapshot.oid);
-    if (ready.length > 0 || waiting.length > 0 || building.length > 0) {
+    if (closed || (ready.length === 0 && waiting.length === 0 && building.length === 0)) {
+      if (choices.length === choicesBefore) {
+        passed.push({ label, repo: plan.plan_repo.name, address: snapshot.place.address, closed, finished: plan.units.every((unit) => done.has(unit.name)) });
+      }
+    } else {
       sentences.push(
         `${label} is shared in ${plan.plan_repo.name}${change === null ? "" : ` (the plan's last commit: ${change.name}, ${change.day})`}.` +
           (skeleton !== null ? ` The walking skeleton, ${skeleton}, is built at the lead's project first.` : "") +
@@ -10296,7 +10325,7 @@ function unitTakeLook(
     }
   }
   return {
-    sentences, choices, carryOn, homeHere, stale, readAtAddress: looked.readAtAddress,
+    sentences, choices, carryOn, homeHere, stale, passed, readAtAddress: looked.readAtAddress,
     ...(looked.unreadAtAddress !== undefined ? { unreadAtAddress: looked.unreadAtAddress } : {}),
     read: looked.read, unread: looked.unread, goneAtAddress: looked.goneAtAddress, unreadableAtAddress: looked.unreadableAtAddress,
     unreadable: looked.unreadable, unreached: looked.unreached, recordsUnreached: looked.recordsUnreached, gone: looked.gone,
