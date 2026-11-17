@@ -1846,14 +1846,19 @@ export function otherWorkNote(
 
 // A dispatched topology: the lines every agent brief carries, ready to paste,
 // so the agent copies a block instead of reading two fields into prose.
-// `carried` are the step's notes about files to leave as they are.
-export function briefNote(ceremony: Record<string, unknown>, modules: readonly string[], carried: readonly string[] = []): string {
+// `carried` are the step's notes about files to leave as they are; `reposHere`,
+// where a team's build has each repository, comes right after the modules
+// sentence, before the builder's own sentences, which a reviewer's brief may
+// leave out.
+export function briefNote(
+  ceremony: Record<string, unknown>, modules: readonly string[], carried: readonly string[] = [], reposHere: string | null = null,
+): string {
   const switches = CEREMONY_KEYS
     .filter((key) => typeof ceremony[key] === "string")
     .map((key) => `${CEREMONY_FIELDS[key]}: ${String(ceremony[key])}.`);
   return "Every agent brief for this stage carries these lines word for word: " +
     `${switches.join(" ")} Protocol modules: ${modules.length > 0 ? modules.join(", ") : "none"}.` +
-    carried.map((note) => ` ${note}`).join("");
+    [reposHere, ...carried].filter((note) => note !== null).map((note) => ` ${note}`).join("");
 }
 
 // Both states are said: off left as an absence read as the ask on Kiro CLI,
@@ -2021,6 +2026,7 @@ export function withAgentNotes<T extends object>(
   logInvocation = invocation.replace(/aidlc-orchestrate\.ts$/, "aidlc-log.ts").replace(/ orchestrate$/, " log"),
   boltInvocation = invocation.replace(/aidlc-orchestrate\.ts$/, "aidlc-bolt.ts").replace(/ orchestrate$/, " bolt"),
   changeNoticesFollowUps: readonly string[] = [],
+  reposHere: string | null = null,
 ): T {
   const d = directive as Record<string, unknown>;
   if (d.kind === "load-steering") return directive;
@@ -2100,7 +2106,7 @@ export function withAgentNotes<T extends object>(
     const dispatched = d.mode === "subagent" || d.mode === "pipeline" || d.mode === "mob" || "wave" in d;
     if (dispatched && isPlainObject(d.ceremony)) {
       const carried = [d.other_work_note, d.brought_files_note].filter((note): note is string => typeof note === "string");
-      notes.brief_note = briefNote(d.ceremony, modules, carried);
+      notes.brief_note = briefNote(d.ceremony, modules, carried, reposHere);
     }
   }
   if (

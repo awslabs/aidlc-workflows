@@ -20,7 +20,7 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { auditBlockField, readAuditShardEvents, readIntentRegistry } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -1656,6 +1656,65 @@ describe("builds in one workspace", () => {
     expect(step.stage, JSON.stringify(step)).toBe("code-generation");
     expect(String(step.brought_files_note)).toContain(
       "This Unit's code goes in billing and checkout-api: write each of its files inside the folder of the repo it belongs to, and name its repo in the source manifest.",
+    );
+  });
+
+  // The lead's approved documents carry the lead's own layout (`../api` beside
+  // the lead's folder), while a team's clone of a repository may sit inside its
+  // workspace, or not be there at all: each step that hands work to an agent
+  // says where each of the build's repositories is here, so a reviewer reads
+  // there instead of searching outside the workspace.
+  function buildAtItsWave(local?: (alice: string, hosts: Record<string, string>) => void): { alice: string; wave: Record<string, unknown> } {
+    const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
+    const home = makeHome({ repos: hosts });
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    commitAll(home.dir, "teams");
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    planShared(home);
+    const alice = cloneOf(home.remote, "alice");
+    if (local === undefined) cloneCode(hosts["checkout-api"], alice, "checkout-api", "alice");
+    else local(alice, hosts);
+    expect(takeFrom("payments", alice, "refunds").status).toBe(0);
+    let asked = next(alice);
+    // A repository the build records and this workspace has no clone of is
+    // offered once; the person's Not now runs nothing, and the step goes on.
+    if (asked.ask_type === "unit-clone") asked = next(alice);
+    expect(asked.questions_only, JSON.stringify(asked)).toBe(true);
+    const questions = join(buildDir(alice, "payments", "refunds"), "construction", "refunds", "functional-design", "functional-design-questions.md");
+    mkdirSync(dirname(questions), { recursive: true });
+    writeFileSync(questions, "# Functional Design Questions\n\nNo questions: the requirements settle this Unit.\n");
+    const wave = next(alice);
+    expect(wave.wave, JSON.stringify(wave)).toBeDefined();
+    return { alice, wave };
+  }
+  const REPOS_LAYOUT = "A path for a repository in this work's documents may be from another layout: use the ones above.";
+
+  test("the build's wave says where each of its repositories is here: one cloned inside it, one not here", () => {
+    const { wave } = buildAtItsWave();
+    expect(String(wave.brief_note)).toMatch(
+      new RegExp(`Protocol modules: [^.]*\\. Here, the repository checkout-api is the folder checkout-api in this workspace; billing is not cloned here\\. ${REPOS_LAYOUT.replace(/[.:]/g, "\\$&")}`),
+    );
+  });
+
+  test("both repositories cloned inside the workspace: each by its folder there", () => {
+    const { wave } = buildAtItsWave((alice, hosts) => {
+      for (const [name, host] of Object.entries(hosts)) cloneCode(host, alice, name, "alice");
+    });
+    expect(String(wave.brief_note)).toContain(
+      `Here, the repository billing is the folder billing in this workspace and checkout-api is the folder checkout-api in it. ${REPOS_LAYOUT}`,
+    );
+  });
+
+  test("a repository repos.local.json puts outside the workspace is named by its full path", () => {
+    let outside = "";
+    const { wave } = buildAtItsWave((alice, hosts) => {
+      outside = cloneCode(hosts.billing, join(alice, ".."), "billing-mine", "alice");
+      cloneCode(hosts["checkout-api"], alice, "checkout-api", "alice");
+      writeFileSync(join(alice, "aidlc", "repos.local.json"), `${JSON.stringify({ repos: [{ name: "billing", path: "../billing-mine" }] })}\n`);
+    });
+    expect(String(wave.brief_note)).toContain(
+      `Here, the repository billing is the folder ${outside.replaceAll("\\", "/")}, outside this workspace and checkout-api is the folder ` +
+        `checkout-api in this workspace. ${REPOS_LAYOUT}`,
     );
   });
 

@@ -1231,6 +1231,43 @@ function switchOffNoticesOnce(projectDir: string): string[] {
   return activeSwitchOffNotices.map((notice) => notice.line);
 }
 
+// The agent notes a step goes out with. Each call builds brief_note again,
+// so every one passes where a team's build has its repositories.
+function withStepNotes(directive: Directive): Directive {
+  const here = directive.kind === "run-stage" && engineProjectDir ? reposHereSentence(engineProjectDir) : null;
+  return withAgentNotes(
+    directive, aidlcToolInvocation("orchestrate"), aidlcToolInvocation("log"), undefined, switchBackOnFollowUps(directive), here,
+  );
+}
+
+// Where each repository of a team's build is on this computer, for the agent
+// and every brief it writes: the work's documents carry the layout of the
+// computer that wrote them (`../api` beside the lead's folder). No bound like
+// reposNote's: a Unit's build records the Unit's few repositories.
+function reposHereSentence(projectDir: string): string | null {
+  const state = loadStateFileIfPresent(projectDir);
+  const repos = state !== null && unitBuildOf(state) !== null ? intentRepos(projectDir) : [];
+  if (repos.length === 0) return null;
+  const here = repos.filter((repo) => isGitRepoDir(repoDir(projectDir, repo)));
+  let saidIn = false;
+  const where = here.map((repo, i) => {
+    const dir = repoDir(projectDir, repo);
+    const inside = toPosix(relative(projectDir, dir));
+    const outside = inside === ".." || inside.startsWith("../") || isAbsolute(inside);
+    const at = inside === "" ? "this workspace itself"
+      : outside ? `the folder ${toPosix(dir)}, outside this workspace`
+      : `the folder ${inside} in ${saidIn ? "it" : "this workspace"}`;
+    if (inside !== "" && !outside) saidIn = true;
+    return `${i === 0 ? "the repository " : ""}${repo} is ${at}`;
+  });
+  const missing = repos.filter((repo) => !here.includes(repo));
+  const lead = here.length > 0 ? "" : missing.length === 1 ? "the repository " : "the repositories ";
+  const notHere = missing.length === 0 ? [] : [`${lead}${joinRepoNames(missing)} ` +
+    `${missing.length === 1 ? "is" : "are"} not cloned here`];
+  return `Here, ${[...(where.length === 0 ? [] : [joinRepoNames(where)]), ...notHere].join("; ")}. A path for a repository ` +
+    "in this work's documents may be from another layout: use the ones above.";
+}
+
 // The agent's own instruction for a yes to each switch line this directive
 // carries, for its change notices note. The match is exact on the engine's own
 // strings, so a directive that does not carry a line gets no instruction for it.
@@ -2007,10 +2044,7 @@ function sayPendingPersonLines(
   const spoken = asItComes.length > 0
     ? { ...carried, narration: [carried.narration, ...asItComes].filter(Boolean).join(" ") } as Directive
     : carried;
-  const noted = withAgentNotes(
-    spoken, aidlcToolInvocation("orchestrate"), aidlcToolInvocation("log"), undefined,
-    switchBackOnFollowUps(spoken),
-  );
+  const noted = withStepNotes(spoken);
   if (Buffer.byteLength(JSON.stringify(noted), "utf-8") > directiveMaxBytes()) return { directive: transported };
   return { directive: noted, said: pending.said };
 }
@@ -2296,10 +2330,7 @@ function prepareEmission(directive: Directive): PreparedEmission {
   directive = withParkedReply(directive);
   // The agent notes count toward the size transport measures, so a step that
   // only fits without them is delivered in parts like any other.
-  directive = withAgentNotes(
-    directive, aidlcToolInvocation("orchestrate"), aidlcToolInvocation("log"), undefined,
-    switchBackOnFollowUps(directive),
-  );
+  directive = withStepNotes(directive);
   // A route check asks one question: which Unit would the engine route now? It
   // never loads rules, so it skips transport entirely - which also keeps it from
   // minting the machine-local steering key on a checkout that has none.
@@ -2331,10 +2362,7 @@ function prepareEmission(directive: Directive): PreparedEmission {
   transported = withPhaseRulesAddedLine(transported);
   transported = withRecordConflictLine(transported);
   // Again for what was added after transport (a rebind notice).
-  transported = withAgentNotes(
-    transported, aidlcToolInvocation("orchestrate"), aidlcToolInvocation("log"), undefined,
-    switchBackOnFollowUps(transported),
-  );
+  transported = withStepNotes(transported);
   const personLines = sayPendingPersonLines(requested, transported);
   transported = personLines.directive;
   const personLinesSaid = personLines.said;
