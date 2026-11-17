@@ -10746,8 +10746,10 @@ function unitToForkAsk(projectDir: string, stateContent: string): AskDirective |
     choices: [
       {
         label: `Push it to ${offer.fork}`,
-        detail: `Makes branch ${branch} from ${offer.from}${message === null ? "," : " with that one empty commit,"} with your own git, and ` +
-          `pushes it to ${offer.fork}. Opening the pull request stays with you. You're on ${branch} after it.`,
+        detail: `${offer.own ? `Pushes branch ${branch} as it is to ${offer.fork}, with your own git.`
+          : offer.exists ? `Puts that one empty commit on branch ${branch}, with your own git, and pushes it to ${offer.fork}.`
+          : `Makes branch ${branch} from ${offer.from} with that one empty commit, with your own git, and pushes it to ${offer.fork}.`} ` +
+          `Opening the pull request stays with you. You're on ${branch} after it.`,
         command: `${unitTool} push --to-fork${message?.flag ?? ""}`,
       },
       { label: "Not now", detail: "Nothing is pushed and no commit is made; say when you want it pushed.", command: `${unitTool} push --to-fork --later` },

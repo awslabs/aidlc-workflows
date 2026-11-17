@@ -13488,9 +13488,9 @@ export const toForkMessage = (unit: string): string => `${unit}: start`;
 // the branch made from the plan's main with their git and no upstream, one
 // empty commit on it where it has none of its own, then pushed with `-u` to
 // the fork, so the Unit's own push later goes there too. Only on the offer's
-// mark; an agent alone pushes nothing. The record, the plan and the result
-// are not touched; a refused push takes the empty commit back. Not now
-// (`--later`) removes the message's draft.
+// mark or the person's own turn (ownTurnFor); an agent alone pushes nothing.
+// The record, the plan and the result are not touched; a refused push takes
+// the empty commit back. Not now (`--later`) removes the message's draft.
 function pushToFork(pd: string, args: string[], build: UnitBuild, branch: string): void {
   const unit = build.unit;
   const { bareFlags, flags } = parseArgs(args);
@@ -13501,11 +13501,18 @@ function pushToFork(pd: string, args: string[], build: UnitBuild, branch: string
     console.log(JSON.stringify({ pushed: false, unit, notice: "Nothing is pushed and no commit is made; say when you want it pushed." }));
     return;
   }
-  const forkPlace = engineAskMark(pd, toForkMark(unit)) === null ? null : forkPlaceOf(pd, build);
-  if (forkPlace === null) {
+  const turn = engineAskMark(pd, toForkMark(unit)) !== null ? null : ownTurnFor(pd, args, "Pushing to your fork", "unit-to-fork");
+  if (turn === null && engineAskMark(pd, toForkMark(unit)) === null) {
     console.log(JSON.stringify({ pushed: false, unit, notice: `No push of ${unit} to a fork was offered or asked for, so nothing was pushed.` }));
     return;
   }
+  const forkPlace = forkPlaceOf(pd, build);
+  if (forkPlace === null) {
+    const repo = recordPlaceOf(pd, buildsHome(pd, build), unit).repo;
+    console.log(JSON.stringify({ pushed: false, unit, notice: `No fork of ${repo} was found in your clone of it (one remote not at the plan's address for it), so nothing was pushed.` }));
+    return;
+  }
+  turn?.answered(`Push a branch for ${unit} to ${forkPlace.fork} in ${forkPlace.name}`, `Push it to ${forkPlace.fork}`);
   const { name, dir, fork } = forkPlace;
   const given = givenCommitMessage(pd, args, "push");
   const main = planMainOf(dir, name, forkPlace.address, forkPlace.branch);
@@ -13544,6 +13551,20 @@ function pushToFork(pd: string, args: string[], build: UnitBuild, branch: string
   ]) }));
 }
 
+// The person's own words behind a yes no offer of type `type` was put for:
+// the turn the hook recorded, read as the lead's verbs read theirs, used once
+// (the QUESTION_ANSWERED row `answered` writes names its Message Id). Null for
+// an agent with no such turn.
+function ownTurnFor(pd: string, args: string[], what: string, type: string): { answered(question: string, answer: string): void } | null {
+  const asked = leadSpoke(pd) ? leadsWord(pd, parseArgs(args).flags, what) : null;
+  const id = asked?.fields["Message Id"];
+  if (asked === null || id === undefined || readAuditShardEvents(pd).some((row) => row.event === "QUESTION_ANSWERED" &&
+    auditBlockField(row.block, QUESTION_TYPE_FIELD) === type && auditBlockField(row.block, "Message Id") === id)) return null;
+  return {
+    answered: (question, answer) => appendAuditEntry("QUESTION_ANSWERED", { Question: question, Answer: answer, [QUESTION_TYPE_FIELD]: type, ...asked.fields }, pd),
+  };
+}
+
 // `unit push --merge-main`: the person's yes to bringing the branch the Unit
 // merges into into its pushed branch, in each code repository whose push kept
 // mainMovedMark: fetched, merged and pushed with their own git, every
@@ -13558,17 +13579,9 @@ function mergeMainIn(pd: string, args: string[], unit: string, branch: string, u
   // the turn the hook recorded read as the lead's verbs read theirs and used
   // once, its row naming it; an agent with no such turn merges nothing.
   if (repos.length === 0 && !undo) {
-    const asked = leadSpoke(pd) ? leadsWord(pd, parseArgs(args).flags, "Bringing main in") : null;
-    const id = asked?.fields["Message Id"];
-    const used = id !== undefined && readAuditShardEvents(pd).some((row) => row.event === "QUESTION_ANSWERED" &&
-      auditBlockField(row.block, QUESTION_TYPE_FIELD) === "unit-main-moved" && auditBlockField(row.block, "Message Id") === id);
-    repos = id === undefined || used ? [] : mainMovedRepos(pd, unit, branch, false);
-    if (repos.length > 0) {
-      appendAuditEntry("QUESTION_ANSWERED", {
-        Question: `Bring ${joinNames([...new Set(repos.map((entry) => entry.into))])} into ${unit}`, Answer: "Bring it in",
-        [QUESTION_TYPE_FIELD]: "unit-main-moved", ...asked!.fields,
-      }, pd);
-    }
+    const turn = ownTurnFor(pd, args, "Bringing main in", "unit-main-moved");
+    repos = turn === null ? [] : mainMovedRepos(pd, unit, branch, false);
+    if (repos.length > 0) turn!.answered(`Bring ${joinNames([...new Set(repos.map((entry) => entry.into))])} into ${unit}`, "Bring it in");
   }
   const moved: Array<{ name: string; from: string }> = [];
   const lines: string[] = [];

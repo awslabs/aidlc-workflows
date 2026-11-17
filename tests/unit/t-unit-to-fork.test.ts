@@ -16,7 +16,7 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { noteEngineAskMark } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { noteEngineAskMark, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import * as unitTool from "../../dist/claude/.claude/tools/aidlc-unit.ts";
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import {
@@ -26,7 +26,9 @@ import {
   commitMessage,
   ENV,
   git,
+  hook,
   next,
+  personsChat,
   refundsTakenInClone,
   run,
   tempDir,
@@ -177,7 +179,32 @@ describe("the push of a Unit's branch early to the person's fork", () => {
     const { alice, fork } = forked();
     const said = run(UNIT, ["push", "--to-fork"], alice);
     expect(String(said.json?.notice)).toBe("No push of refunds to a fork was offered or asked for, so nothing was pushed.");
+    const alone = run(UNIT, ["push", "--to-fork"], alice, personsChat("t-unit-to-fork-no-turn"));
+    expect(String(alone.json?.notice)).toBe("No push of refunds to a fork was offered or asked for, so nothing was pushed.");
     expect(onFork(fork)).not.toBe(0);
+  });
+
+  test("the person asks in their own words with no offer behind it: pushed, recorded with their words, and that turn is used once", () => {
+    const { alice, fork, planMain } = forked();
+    const chat = personsChat("t-unit-to-fork-words");
+    const words = "push my refunds branch to my fork now so I can open a draft PR";
+    expect(hook(alice, chat, { hook_event_name: "UserPromptSubmit", session_id: "t-unit-to-fork-words", prompt: words }).status).toBe(0);
+    const yes = run(UNIT, ["push", "--to-fork"], alice, chat);
+    expect(yes.status, yes.out).toBe(0);
+    expect(String(yes.json?.notice)).toStartWith("Pushed branch refunds to origin in checkout-api. It starts from upstream/main");
+    expect(git(fork, ["rev-parse", "refunds~1"])).toBe(planMain);
+    const rows = readAuditShardEvents(alice).filter((row) => row.event === "QUESTION_ANSWERED" && row.block.includes("unit-to-fork"));
+    expect(rows.length).toBe(1);
+    expect(rows[0].block).toContain(words);
+    expect(String(run(UNIT, ["push", "--to-fork"], alice, chat).json?.notice)).toBe(
+      "No push of refunds to a fork was offered or asked for, so nothing was pushed.");
+  });
+
+  test("asked or offered where the clone has no fork: that is what it says, and nothing is pushed", () => {
+    const { alice } = refundsTakenInClone();
+    offered(alice);
+    expect(String(run(UNIT, ["push", "--to-fork"], alice).json?.notice)).toBe(
+      "No fork of checkout-api was found in your clone of it (one remote not at the plan's address for it), so nothing was pushed.");
   });
 
   test("git refuses the empty commit for a reason of its own (signing): git's words, never their hook's", () => {
@@ -209,6 +236,21 @@ describe("the push of a Unit's branch early to the person's fork", () => {
     expect(git(fork, ["rev-parse", "refunds~1"])).toBe(planMain);
     expect(git(fork, ["log", "-1", "--format=%s", "refunds"])).toBe("refunds: start");
     expect(existsSync(join(alice, ...String(offer?.commit_message_file).split("/")))).toBe(false);
+  });
+
+  test("where the Unit's branch is there with a commit of its own, the offer says it pushes that branch as it is", () => {
+    const { alice, api } = forked("github", "access");
+    git(api, ["fetch", "-q", "upstream"]);
+    git(api, ["switch", "-q", "-c", "refunds", "upstream/main"]);
+    writeFileSync(join(api, "SKETCH.md"), "a start\n");
+    git(api, ["add", "SKETCH.md"]);
+    git(api, ["commit", "-q", "-m", "a sketch"]);
+    const offer = toForkStep(alice);
+    expect(String(offer?.question)).toContain("Do you want me to push refunds's branch there now for an early pull request?");
+    const choices = offer?.choices as Array<{ detail: string; command?: string }>;
+    expect(choices[0].detail).toBe("Pushes branch refunds as it is to origin, with your own git. Opening the pull request stays with you. " +
+      "You're on refunds after it.");
+    expect(String(choices[0].command)).toEndWith("push --to-fork");
   });
 
   test("Not now pushes nothing and removes the draft", () => {
