@@ -1635,7 +1635,9 @@ function withPersonLines(transported: Directive, lines: readonly string[]): Dire
 // Where the question box carries them (gateNoticesInBox), a gate step's own
 // lines that fit (gateLinesThatFit) are kept for the chat for the box to show.
 // After sayPendingPersonLines: before, it would read them back onto this step;
-// after, its said() leaves an entry written after its read as it is.
+// after, its said() leaves an entry written after its read as it is. A step
+// issued again unchanged (retainedIssuedDirective) hands nothing over, so the
+// lines its first issue kept are not kept twice.
 function keepGateLinesForTheBox(
   requested: Directive,
   carried: { directive: Directive; said?: () => void },
@@ -1646,10 +1648,12 @@ function keepGateLinesForTheBox(
   const sessionId = engineSessionId;
   if (
     !own || !projectDir || !sessionId || step.kind === "load-steering" || isReadOnlyEngineProbe() ||
-    retainedIssuedDirective || !gateNoticesInBox(projectDir)
+    !gateNoticesInBox(projectDir)
   ) return carried;
   const lines = gateLinesThatFit((step.change_notices ?? []).filter((line) => own.includes(line)));
-  if (lines.length === 0 || !addPendingPersonLines(projectDir, sessionId, lines)) return carried;
+  const kept = carried.said ? [] : pendingPersonLines(projectDir, sessionId, { ordinaryOnly: true }).lines;
+  const fresh = lines.filter((line) => !kept.includes(line));
+  if (lines.length === 0 || (fresh.length > 0 && !addPendingPersonLines(projectDir, sessionId, fresh))) return carried;
   const directive = { ...step, change_notices: (step.change_notices ?? []).filter((line) => !lines.includes(line)) };
   if (directive.change_notices.length === 0) {
     delete (directive as Directive).change_notices;

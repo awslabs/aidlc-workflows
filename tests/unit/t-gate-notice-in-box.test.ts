@@ -186,10 +186,9 @@ describe("t-gate-notice-in-box: the gate's own lines are said in Claude Code's q
     const lines = await gateLines();
     const proj = await atGate();
     await report(proj, "awaiting-approval", CLI);
-    const first = (await next(proj, [], { env: CLI })).directive as Step;
-    saidOnce(proj, first, lines);
-    const second = (await next(proj, [], { env: CLI })).directive as Step;
-    expect(heard(second)).not.toContain("no git");
+    // The gate shown again, the third time the same step unchanged (issued again as it was).
+    for (let shown = 0; shown < 3; shown++) saidOnce(proj, (await next(proj, [], { env: CLI })).directive as Step, lines);
+    expect(existsSync(join(proj, SAID))).toBe(false);
   });
 
   test("past the room kept for the agent's question: the lines that fit go in the box, the rest stay on the step, none after the answer", async () => {
