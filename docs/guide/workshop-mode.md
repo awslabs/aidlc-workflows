@@ -863,12 +863,14 @@ remote cannot be reached, one line says the board may be behind):
 ```text
 Units of checkout-revamp:
 - refunds, payments space: built by bea, checkout-api merged, billing not merged yet (1 of 2 merged)
-- checkout-ui, web space: building, taken by sam
+- checkout-ui, web space: building since 14 Nov, taken by sam
 - reporting, open: waiting for a team to take it
 ```
 
 Each take's row names the space its build is in (a take in a default space has
-no space named), and a pushed or done one says who built it.
+no space named), and a pushed or done one says who built it. A take not pushed
+yet says the day it was taken, from its record's own commit, so a take that has
+gone quiet is plain to see.
 
 A Unit the lead's project builds itself reads where its Unit Progress has it:
 done once it is through its gate, the stage it is at, waiting for your

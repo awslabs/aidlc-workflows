@@ -115,7 +115,7 @@ describe("starting early", () => {
     expect(git(join(dana, "billing"), ["branch", "--show-current"])).toBe("reporting");
     expect(git(join(dana, "billing"), ["rev-parse", "HEAD"])).toBe(git(hosts.billing, ["rev-parse", "refunds"]));
     // The home's board shows it started early.
-    expect(String(next(home.dir).narration)).toContain("- reporting, data space: building early on refunds, taken by dana");
+    expect(String(next(home.dir).narration)).toMatch(/- reporting, data space: building early on refunds since \d{1,2} [A-Z][a-z]{2}, taken by dana/);
   });
 
   // An early start's branch starts at another team's pushed branch: tracking

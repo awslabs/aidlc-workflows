@@ -711,6 +711,7 @@ import {
   resultTakeHold,
   resultWaitsLine,
   sendLeadsApprovedChanges,
+  takeDayOf,
   GitWriteRefused,
   earlyBaseMerged,
   teamMergeSeen,
@@ -19459,7 +19460,12 @@ function unitBoardRows(
       return { unit, team, status: `${builtBy}${mergedStatus(verdicts)}${waiting}${unrecorded}` };
     }
     const early = (payload.early_on ?? []).map((dep) => dep.unit);
-    return { unit, team, status: `building${early.length > 0 ? ` early on ${early.join(", ")}` : ""}, taken by ${builderOf(claim!)}` };
+    const day = takeDayOf(projectDir, claim!);
+    return {
+      unit,
+      team,
+      status: `building${early.length > 0 ? ` early on ${early.join(", ")}` : ""}${day === null ? "" : ` since ${day}`}, taken by ${builderOf(claim!)}`,
+    };
   });
   return { rows };
 }

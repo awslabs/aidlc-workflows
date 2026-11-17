@@ -419,7 +419,7 @@ describe("the Units the lead's project builds, and no others", () => {
     expect(took.status, took.out).toBe(0);
     expect(run(UTILITY, ["intent", "switch", HOME_RECORD], home.dir).status).toBe(0);
     const board = next(home.dir);
-    expect(String(board.narration), JSON.stringify(board).slice(0, 600)).toContain("- refunds: building, taken by lead");
+    expect(String(board.narration), JSON.stringify(board).slice(0, 600)).toMatch(/- refunds: building since \d{1,2} [A-Z][a-z]{2}, taken by lead/);
   });
 
   test("the lead's walk starts a Unit a teammate gave back: its record becomes the lead's project's take", () => {

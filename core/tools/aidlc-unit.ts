@@ -10895,16 +10895,29 @@ function takeIsBy(projectDir: string, oid: string, payload: UnitClaimPayload, me
   if (payload.taken_by === undefined) return false;
   if (me !== null && payload.taken_by === me) return true;
   if (myEmail === "") return false;
+  // The author's: the commit that made the take, by its author's email.
+  return localGit(projectDir, ["log", "-1", "--format=%ae", takeCommit(projectDir, oid, payload)]).stdout.trim() === myEmail;
+}
+
+// The commit that made a take: the oldest of the claim's own history with this
+// taker, and with `sameGeneration` this take's generation too, so the same
+// person's take again after the lead opened it starts anew.
+function takeCommit(projectDir: string, oid: string, payload: UnitClaimPayload, sameGeneration = false): string {
   let at = oid;
   let taking = payload;
   for (let steps = 0; taking.predecessor_oid !== null && steps < 200; steps++) {
     const before = payloadAt(projectDir, taking.predecessor_oid);
-    if (before === null || before.taken_by !== taking.taken_by) break;
+    if (before === null || before.taken_by !== taking.taken_by || (sameGeneration && before.generation !== taking.generation)) break;
     at = taking.predecessor_oid;
     taking = before;
   }
-  // The author's: the commit that made the take, by its author's email.
-  return localGit(projectDir, ["log", "-1", "--format=%ae", at]).stdout.trim() === myEmail;
+  return at;
+}
+
+// The day a take was made ("14 Nov"), its commit's author date, so the board
+// shows a take gone quiet; null where that commit cannot be read here.
+export function takeDayOf(projectDir: string, claim: UnitClaimView): string | null {
+  return planLastChange(projectDir, takeCommit(projectDir, claim.oid, claim.payload, true))?.day ?? null;
 }
 
 // The lead's own takes at the lead's work (Home Location, not a Unit's

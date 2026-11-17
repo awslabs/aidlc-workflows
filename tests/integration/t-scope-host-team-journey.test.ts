@@ -487,7 +487,7 @@ describe("a teammate on Copilot CLI and the open Units", () => {
     lead.person.say("/aidlc");
     const board = lead.agent.next();
     expect(board.kind, JSON.stringify(board).slice(0, 400)).toBe("print");
-    expect(String(board.narration)).toContain("- refunds, payments space: building, taken by alice");
+    expect(String(board.narration)).toMatch(/- refunds, payments space: building since \d{1,2} [A-Z][a-z]{2}, taken by alice/);
     expect(String(board.narration)).toContain("- checkout-ui, open: waiting for a team to take it");
     expect(String(board.board_note)).toMatch(/`[^`]*\bassign --here <unit>[^`]*`/);
     // x2783-s9 4: how often the teams approve is put on the board until the

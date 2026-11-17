@@ -13,7 +13,7 @@
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { cpSync, readdirSync } from "node:fs";
+import { cpSync, readdirSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -35,6 +35,7 @@ import {
   next,
   ORCH,
   planWordAt,
+  recordHostOf,
   refundsTakenInClone,
   run,
   STATE,
@@ -385,7 +386,7 @@ describe("the lead's project builds nothing it was not asked to", () => {
     expect(status).not.toContain("Current Step:");
     expect(status).not.toContain("Next Stage:");
     expect(status).not.toMatch(/CONSTRUCTION .*Unit \d+ of \d+/);
-    expect(status).toContain("- refunds, payments space: building, taken by alice");
+    expect(status).toMatch(/- refunds, payments space: building since \d{1,2} [A-Z][a-z]{2}, taken by alice/);
     // The Units' own stages run in each taker's build, never in this record: out of the count here.
     expect(status).toMatch(/^Completion: {5}\d+\/\d+ stages here \(\d+%\); each Unit's own stages are on the board below$/m);
     // A taker's own build counts its stages as always.
@@ -423,8 +424,40 @@ describe("the lead's project builds nothing it was not asked to", () => {
     expect(run(UNIT, ["take", "checkout-ui", ...planFrom(home)], bea).status).toBe(0);
     git(home.dir, ["fetch", "-q", "origin"]);
     const board = String(next(home.dir).narration);
-    expect(board).toContain("- refunds, payments space: building, taken by alice");
-    expect(board).toContain("- checkout-ui: building, taken by bea");
+    expect(board).toMatch(/- refunds, payments space: building since \d{1,2} [A-Z][a-z]{2}, taken by alice/);
+    expect(board).toMatch(/- checkout-ui: building since \d{1,2} [A-Z][a-z]{2}, taken by bea/);
+  });
+
+  // A take gone quiet is plain to see: a take's row says the day it was taken,
+  // the author date of the take's own commit on its record.
+  test("a take not pushed yet: its row says the day it was taken, and a proposal after it does not move the day", () => {
+    const { home, alice, record } = refundsTakenInClone();
+    writeFileSync(join(record, "inception", "requirements-analysis", "requirements.md"), "# Requirements\n\nFR1 refunds, partial amounts too.\n");
+    const later = "2030-01-05T10:00:00+00:00";
+    const sent = run(UNIT, ["propose", "--input", "requirements.md", "--person-words", "refunds need partial amounts"], alice,
+      { ...ENV, GIT_AUTHOR_DATE: later, GIT_COMMITTER_DATE: later });
+    expect(sent.status, sent.out).toBe(0);
+    const [taken, proposed] = git(recordHostOf(home, "refunds"), ["log", "--reverse", "--format=%aI", `refs/aidlc/claims/${home.id8}/refunds`]).split("\n");
+    expect(proposed).toBe(later);
+    const at = /^\d{4}-(\d{2})-(\d{2})T/.exec(taken)!;
+    const day = `${Number(at[2])} ${["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][Number(at[1]) - 1]}`;
+    git(home.dir, ["fetch", "-q", "origin"]);
+    // The lead's board (the step itself asks about the proposal first).
+    const board = teamBoard(home.dir);
+    expect(board, board).toContain(`- refunds, payments space: building since ${day}, taken by alice`);
+    expect(board).not.toContain("5 Jan");
+  });
+
+  // Main's own team flow (one repository, claim branches) keeps its own board as it was.
+  test("main's own team flow: its board for a claimed Unit is as it was, with no day", () => {
+    const home = makeHome({ repos: {}, state: homeState(["- **Unit Ownership**: team"]) });
+    const bob = cloneOf(home.remote, "bob");
+    const claimed = run(UNIT, ["claim", "refunds", "--team", "payments"], bob);
+    expect(claimed.status, claimed.out).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    const board = teamBoard(home.dir);
+    expect(board).toContain("**Claimed:** refunds (payments). **Claimable:** checkout-ui. **Waiting:** reporting waits on refunds.");
+    expect(board).not.toContain(" since ");
   });
 
   test("the lead's plain words to record a team's merge reach the step that records it, and nothing is started", () => {
