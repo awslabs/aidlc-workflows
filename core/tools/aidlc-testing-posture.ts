@@ -20,6 +20,8 @@ import {
   activeIntentUuid,
   delegatedWorktreeIntent,
   decideFence,
+  ENGINE_ERROR_RELAY_HARNESSES,
+  engineDir,
   fenceCheckName,
   aidlcOwnedSourceKey,
   isLinkTargetListingKey,
@@ -189,7 +191,14 @@ import { swarmSourceChanged, swarmSourceUnchangedInStage, withoutGitIgnored } fr
 import { CHECK_GLOSS } from "./aidlc-guard-fences.ts";
 import { withoutLearnedDate } from "./aidlc-learned-date.ts";
 import { noReplySince, personTurnStands, proveMessage, requestMessageStep } from "./aidlc-message-store.ts";
-import { aidlcToolInvocation, entrySkillInvocation, quoteCommandArgument, swarmUnitTestCommand, syncFolderClause } from "./aidlc-runtime-paths.ts";
+import {
+  aidlcToolInvocation,
+  entrySkillInvocation,
+  quoteCommandArgument,
+  runtimeHarnessName,
+  swarmUnitTestCommand,
+  syncFolderClause,
+} from "./aidlc-runtime-paths.ts";
 import {
   APPROVAL_GATE_CHOICES, exactOptionPick, isNonAnswer, isOneOfChoices, pickerOffersChoices, protectedQuestionPick,
 } from "./aidlc-reply-reader.ts";
@@ -2616,10 +2625,71 @@ export function codeGenerationStartNarration(projectDir: string, unit: string | 
       ? `the ${steps.length} tasks in ${headings.length} plan steps`
       : `${steps.length} plan ${steps.length === 1 ? "step" : "steps"}`;
     return `Generating ${unit === null ? "code" : `${unit}'s code`} for ${count}. ` +
-      "This may take several minutes depending on project complexity. I'll show a summary when complete.";
+      "This may take several minutes depending on project complexity. " +
+      (ENGINE_ERROR_RELAY_HARNESSES.has(runtimeHarnessName(projectDir))
+        ? "A line shows as each step is done, and I'll show a summary when complete."
+        : "I'll show a summary when complete.");
   } catch {
     return null;
   }
+}
+
+const CODE_GENERATION_PLAN_RE = /^construction\/(?:([^/]+)\/)?code-generation\/code-generation-plan\.md$/;
+
+/** A plan step's text as one short plain line: no emphasis markers or control characters. */
+function progressStepText(text: string): string {
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what this strips
+  const plain = text.replace(/\*\*|__/g, "").replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
+  return plain.length > 90 ? `${plain.slice(0, 87).trimEnd()}...` : plain;
+}
+
+/**
+ * The line the person sees while a build runs, when a write to a Code
+ * Generation plan ticks a step the last line had not counted; null otherwise.
+ * The developer ticks each step's box as it finishes it, so the ticks are the
+ * build's own record of where it stands. The count last said is kept per plan
+ * in the engine folder: an edit that ticks nothing new says nothing, and a plan
+ * whose boxes were reset counts again from there. `recordPath` is the plan's
+ * path relative to the record root, forward slashes.
+ */
+export function codeGenerationProgressLine(projectDir: string, recordPath: string, planPath: string): string | null {
+  const match = CODE_GENERATION_PLAN_RE.exec(recordPath);
+  if (!match) return null;
+  const unit = match[1] ?? null;
+  let steps: PlanStep[];
+  try {
+    steps = planSteps(readFileSync(planPath, "utf-8"));
+  } catch {
+    return null;
+  }
+  if (steps.length === 0) return null;
+  const done = steps.filter((step) => step.ticked).length;
+  const counter = join(engineDir(projectDir), "code-generation-progress", `${unit ?? "stage"}.txt`);
+  let said = 0;
+  try {
+    said = Number.parseInt(readFileSync(counter, "utf-8"), 10) || 0;
+  } catch {
+    // Nothing said yet for this plan.
+  }
+  if (done !== said) {
+    try {
+      mkdirSync(dirname(counter), { recursive: true });
+      writeFileSync(counter, `${done}\n`, "utf-8");
+    } catch {
+      // shortcut: an unwritable engine folder repeats the line on the next tick; a lock is not worth it for a progress line.
+    }
+  }
+  if (done <= said) return null;
+  const grouped = stepHeadings(steps) !== null;
+  const items = grouped ? "tasks" : "plan steps";
+  const who = `Code generation${unit === null ? "" : ` for ${unit}`}`;
+  const total = steps.length;
+  if (done === total) return `${who}: all ${total} ${items} done.`;
+  const last = steps.reduce((found, step, index) => (step.ticked ? index : found), -1);
+  const next = steps.findIndex((step) => !step.ticked);
+  const where = grouped ? ` (${steps[next].heading})` : "";
+  return `${who}: ${done} of ${total} ${items} done, latest "${progressStepText(steps[last].text)}". ` +
+    `Next: "${progressStepText(steps[next].text)}"${where}.`;
 }
 
 function isPlanApprovalLabel(value: string): boolean {

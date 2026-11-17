@@ -1,7 +1,10 @@
 // PostToolUse hook: Emit ARTIFACT_CREATED / ARTIFACT_UPDATED when files under
 // the active intent record or active space codekb tree are written or edited.
 // Distinguishes CREATE vs UPDATE using the tool and, for Write,
-// a post-write comparison of modification and creation timestamps.
+// a post-write comparison of modification and creation timestamps. A write
+// that ticks a new step in a Code Generation plan also prints the person's
+// progress line (codeGenerationProgressLine) as a `systemMessage`, on the
+// harnesses whose PostToolUse output reaches the person.
 //
 // Receives JSON on stdin from Claude Code. No-op if no audit.md exists (no
 // active workflow in this cwd) to preserve the "only log when
@@ -17,6 +20,7 @@ import {
   type ClaudeCodeHookInput,
   codekbDir,
   docsRoot,
+  ENGINE_ERROR_RELAY_HARNESSES,
   errorMessage,
   hookDebug,
   hooksHealthDir,
@@ -31,6 +35,7 @@ import {
   SUMMARY_AUTHORIZATION_FIELD,
   withAuditLock,
 } from "../tools/aidlc-lib.ts";
+import { runtimeHarnessName } from "../tools/aidlc-runtime-paths.ts";
 
 export async function run(input: string): Promise<number> {
   const projectDir = resolveProjectDirFromHook(import.meta.url);
@@ -209,6 +214,23 @@ if (underRecord && fileNorm.length > recordRoot.length) {
     stages = loadStageGraphAll();
   } catch (e) {
     hookDebug(projectDir, "write-audit-log", "stage graph unreadable", { error: errorMessage(e) });
+  }
+}
+
+// A tick in a Code Generation plan is the build's progress: say it to the
+// person where this hook's output reaches them. Loaded only for a plan write,
+// so every other write keeps the hook's fast path.
+if (
+  underRecord &&
+  fileNorm.endsWith("/code-generation-plan.md") &&
+  ENGINE_ERROR_RELAY_HARNESSES.has(runtimeHarnessName(projectDir))
+) {
+  try {
+    const { codeGenerationProgressLine } = await import("../tools/aidlc-testing-posture.ts");
+    const line = codeGenerationProgressLine(projectDir, fileNorm.slice(recordRoot.length + 1), file);
+    if (line !== null) process.stdout.write(`${JSON.stringify({ systemMessage: line })}\n`);
+  } catch (e) {
+    hookDebug(projectDir, "write-audit-log", "progress line failed", { error: errorMessage(e) });
   }
 }
 

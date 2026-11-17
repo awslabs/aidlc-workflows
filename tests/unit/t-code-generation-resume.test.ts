@@ -1083,7 +1083,7 @@ describe("the start line and the pick-up line count the plan the same way", () =
     const { build } = approvedBuild(proj);
     expect(build.narration).toBe(
       `Generating ${UNIT}'s code for 9 plan steps. This may take several minutes depending on project complexity. ` +
-        "I'll show a summary when complete.",
+        "A line shows as each step is done, and I'll show a summary when complete.",
     );
     dispatch(proj, brief(proj));
     tick(proj, UNIT, 1, 2);
@@ -1112,7 +1112,7 @@ describe("the start line and the pick-up line count the plan the same way", () =
     approve(proj);
     expect(next(proj).narration).toBe(
       `Generating ${UNIT}'s code for the 5 tasks in 2 plan steps. This may take several minutes depending on ` +
-        "project complexity. I'll show a summary when complete.",
+        "project complexity. A line shows as each step is done, and I'll show a summary when complete.",
     );
     const steps = planSteps(groupedPlan(proj));
     expect(steps.map((step) => step.heading)).toEqual(["Step 1", "Step 1", "Step 2", "Step 2", "Step 2"]);
@@ -1123,7 +1123,7 @@ describe("the start line and the pick-up line count the plan the same way", () =
     const { build } = approvedBuild(proj, null);
     expect(build.narration).toBe(
       "Generating code for 9 plan steps. This may take several minutes depending on project complexity. " +
-        "I'll show a summary when complete.",
+        "A line shows as each step is done, and I'll show a summary when complete.",
     );
   });
 });
