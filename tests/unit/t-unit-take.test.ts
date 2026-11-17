@@ -1664,7 +1664,10 @@ describe("builds in one workspace", () => {
   // workspace, or not be there at all: each step that hands work to an agent
   // says where each of the build's repositories is here, so a reviewer reads
   // there instead of searching outside the workspace.
-  function buildAtItsWave(local?: (alice: string, hosts: Record<string, string>) => void): { alice: string; wave: Record<string, unknown> } {
+  function buildAtItsWave(
+    local?: (alice: string, hosts: Record<string, string>) => void,
+    afterTake?: (alice: string) => void,
+  ): { alice: string; wave: Record<string, unknown> } {
     const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
     const home = makeHome({ repos: hosts });
     expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
@@ -1675,6 +1678,7 @@ describe("builds in one workspace", () => {
     if (local === undefined) cloneCode(hosts["checkout-api"], alice, "checkout-api", "alice");
     else local(alice, hosts);
     expect(takeFrom("payments", alice, "refunds").status).toBe(0);
+    afterTake?.(alice);
     let asked = next(alice);
     // A repository the build records and this workspace has no clone of is
     // offered once; the person's Not now runs nothing, and the step goes on.
@@ -1703,6 +1707,33 @@ describe("builds in one workspace", () => {
     expect(String(wave.brief_note)).toContain(
       `Here, the repository billing is the folder billing in this workspace and checkout-api is the folder checkout-api in it. ${REPOS_LAYOUT}`,
     );
+  });
+
+  // The build's own record of its repositories, with the workspace's own
+  // repository (named by a dot) beside them.
+  function recordsWorkspaceToo(alice: string, only = false): void {
+    const entry = join(buildDir(alice, "payments", "refunds"), "aidlc-intent.json");
+    const row = JSON.parse(readFileSync(entry, "utf-8")) as { repos?: string[] };
+    expect(row.repos, JSON.stringify(row)).toBeDefined();
+    row.repos = only ? ["."] : [".", ...row.repos!];
+    writeFileSync(entry, `${JSON.stringify(row, null, 2)}\n`);
+  }
+
+  test("the workspace's own repository, named by a dot, is left out: the agent is in that folder already", () => {
+    const { wave } = buildAtItsWave(undefined, (alice) => recordsWorkspaceToo(alice));
+    expect(String(wave.brief_note)).toContain(
+      `Here, the repository checkout-api is the folder checkout-api in this workspace; billing is not cloned here. ${REPOS_LAYOUT}`,
+    );
+    const only = buildAtItsWave(undefined, (alice) => recordsWorkspaceToo(alice, true));
+    expect(String(only.wave.brief_note)).not.toContain("Here, ");
+  });
+
+  test("no repository of the build cloned here: the sentence ends at the other layout, with nothing above to use", () => {
+    const { wave } = buildAtItsWave(() => {});
+    expect(String(wave.brief_note)).toContain(
+      "Here, the repositories billing and checkout-api are not cloned here. A path for a repository in this work's documents may be from another layout.",
+    );
+    expect(String(wave.brief_note)).not.toContain("use the ones above");
   });
 
   test("a repository repos.local.json puts outside the workspace is named by its full path", () => {

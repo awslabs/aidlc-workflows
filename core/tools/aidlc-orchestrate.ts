@@ -1243,10 +1243,11 @@ function withStepNotes(directive: Directive): Directive {
 // Where each repository of a team's build is on this computer, for the agent
 // and every brief it writes: the work's documents carry the layout of the
 // computer that wrote them (`../api` beside the lead's folder). No bound like
-// reposNote's: a Unit's build records the Unit's few repositories.
+// reposNote's: a Unit's build records the Unit's few repositories. The
+// workspace's own repository, recorded as ".", is the folder the agent is in.
 function reposHereSentence(projectDir: string): string | null {
   const state = loadStateFileIfPresent(projectDir);
-  const repos = state !== null && unitBuildOf(state) !== null ? intentRepos(projectDir) : [];
+  const repos = state !== null && unitBuildOf(state) !== null ? intentRepos(projectDir).filter((repo) => repo !== ".") : [];
   if (repos.length === 0) return null;
   const here = repos.filter((repo) => isGitRepoDir(repoDir(projectDir, repo)));
   let saidIn = false;
@@ -1265,7 +1266,7 @@ function reposHereSentence(projectDir: string): string | null {
   const notHere = missing.length === 0 ? [] : [`${lead}${joinRepoNames(missing)} ` +
     `${missing.length === 1 ? "is" : "are"} not cloned here`];
   return `Here, ${[...(where.length === 0 ? [] : [joinRepoNames(where)]), ...notHere].join("; ")}. A path for a repository ` +
-    "in this work's documents may be from another layout: use the ones above.";
+    `in this work's documents may be from another layout${where.length === 0 ? "" : ": use the ones above"}.`;
 }
 
 // The agent's own instruction for a yes to each switch line this directive
