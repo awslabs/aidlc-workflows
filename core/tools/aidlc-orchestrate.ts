@@ -730,8 +730,12 @@ import {
   isPlanApprovalBeat,
   codeGenerationBuildFinishes,
   codeGenerationFinishedBuild,
+  gateLinesThatFit,
   gateNoticesInBox,
   keepRoutedPlanApprovalReply,
+  NO_GIT_LINE,
+  noGitLineSaid,
+  writeNoGitLineSaid,
   legacyPlanApprovalOffNotice,
   noteOpenEngineQuestion,
   openPlanApprovalQuestion,
@@ -893,15 +897,11 @@ function broughtFilesGateLine(
 // meeting it. Silent when the project folder, a repo of the work or a git
 // checkout in the workspace is in git (those files have their undo). `git init`
 // alone puts nothing back, so the line names the commit.
-export const NO_GIT_LINE =
-  "This project has no git, so AI-DLC can't undo the changes it makes to your files; " +
-  "to get an undo, run `git init` and commit them.";
-const NO_GIT_SAID_FILE = "no-git-said";
 let noGitLineHanded: string | null = null;
 
 function addNoGitLine(reply: { kind: string; change_notices?: string[] }, projectDir: string): void {
   try {
-    if (existsSync(join(sessionsDir(projectDir), NO_GIT_SAID_FILE))) return;
+    if (noGitLineSaid(projectDir)) return;
     const repos = [...intentRepos(projectDir), ...discoverSiblingRepos(projectDir)];
     if (isGitRepo(projectDir) || repos.some((name) => isGitRepo(repoDir(projectDir, name)))) return;
   } catch {
@@ -912,24 +912,19 @@ function addNoGitLine(reply: { kind: string; change_notices?: string[] }, projec
   if (!isReadOnlyEngineProbe() && process.env.AIDLC_UNATTENDED !== "1") noGitLineHanded = projectDir;
 }
 
-// Kept as said once the step that carries it is written (writePrepared). A
+// Kept as said once the step that carries it is written (writePrepared): the
+// step that added it, or a later one carrying it from the chat's kept lines. A
 // rules part carries it too, but it is said with the step after the parts,
 // which still carries it (the record waits), so it is recorded there.
 function recordNoGitLineSaid(written: { kind?: unknown; change_notices?: unknown }): void {
-  const projectDir = noGitLineHanded;
+  const projectDir = noGitLineHanded ??
+    (isReadOnlyEngineProbe() || process.env.AIDLC_UNATTENDED === "1" ? null : engineProjectDir ?? null);
   noGitLineHanded = null;
   const notices = written.change_notices;
   if (projectDir === null || written.kind === "load-steering" || !Array.isArray(notices) || !notices.includes(NO_GIT_LINE)) {
     return;
   }
-  try {
-    const dir = sessionsDir(projectDir);
-    assertNoSymlinkInChainOrThrow(projectDir, relative(projectDir, dir));
-    mkdirSync(dir, { recursive: true });
-    writeFileAtomic(join(dir, NO_GIT_SAID_FILE), `${isoTimestamp()}\n`);
-  } catch {
-    // Unrecorded: the next gate says it once more.
-  }
+  writeNoGitLineSaid(projectDir);
 }
 
 // " (3 questions, 2 answered)" for a questions file: its `[Answer]:` lines
@@ -1638,9 +1633,9 @@ function withPersonLines(transported: Directive, lines: readonly string[]): Dire
 }
 
 // Where the question box carries them (gateNoticesInBox), a gate step's own
-// lines are kept for the chat for the box to show. After sayPendingPersonLines:
-// before, it would read them back onto this step; after, its said() leaves an
-// entry written after its read as it is.
+// lines that fit (gateLinesThatFit) are kept for the chat for the box to show.
+// After sayPendingPersonLines: before, it would read them back onto this step;
+// after, its said() leaves an entry written after its read as it is.
 function keepGateLinesForTheBox(
   requested: Directive,
   carried: { directive: Directive; said?: () => void },
@@ -1653,20 +1648,14 @@ function keepGateLinesForTheBox(
     !own || !projectDir || !sessionId || step.kind === "load-steering" || isReadOnlyEngineProbe() ||
     retainedIssuedDirective || !gateNoticesInBox(projectDir)
   ) return carried;
-  const lines = (step.change_notices ?? []).filter((line) => own.includes(line));
+  const lines = gateLinesThatFit((step.change_notices ?? []).filter((line) => own.includes(line)));
   if (lines.length === 0 || !addPendingPersonLines(projectDir, sessionId, lines)) return carried;
   const directive = { ...step, change_notices: (step.change_notices ?? []).filter((line) => !lines.includes(line)) };
   if (directive.change_notices.length === 0) {
     delete (directive as Directive).change_notices;
     delete directive.change_notices_note;
   }
-  return {
-    directive,
-    said: () => {
-      carried.said?.();
-      recordNoGitLineSaid({ kind: step.kind, change_notices: lines });
-    },
-  };
+  return { directive, said: carried.said };
 }
 
 // A chat picking the work back up (`next --resume`) hears where it picks up and

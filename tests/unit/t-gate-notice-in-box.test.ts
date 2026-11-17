@@ -11,10 +11,10 @@
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { STAGE } from "../harness/aidlc-answers-corpus.ts";
-import { DISPATCHER, env, exec, next, ORCHESTRATE, reviewedStage, SESSION } from "../harness/aidlc-input-corpus.ts";
+import { DISPATCHER, env, exec, next, ORCHESTRATE, reviewedStage, say, SESSION } from "../harness/aidlc-input-corpus.ts";
 import { cleanupTestProject, createOrchestrationTestProject, seededRecordDir } from "../harness/fixtures.ts";
 import { addPendingPersonLines, auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
@@ -46,13 +46,15 @@ function gateBox(question = QUESTION): Box {
 // A project with no git at its Requirements Analysis gate, its review READY with one finding left open (so the gate
 // also says what Approve accepts), as a run leaves it before the gate's report.
 const FINDING = "| Minor | requirements.md > FR-1 | The wording is loose. | Tighten it. |";
-async function atGate(): Promise<string> {
+async function atGate(findings: string[] = [FINDING]): Promise<string> {
   const proj = createOrchestrationTestProject();
   projects.push(proj);
   rmSync(join(proj, SAID), { force: true });
-  await reviewedStage(proj, [FINDING]);
+  await reviewedStage(proj, findings);
   return proj;
 }
+// Enough open findings that what Approve accepts is one line longer than the box holds beside the agent's question.
+const MANY = Array.from({ length: 40 }, (_, i) => `| Minor | requirements.md > FR-${i + 1} | Finding number ${i + 1} reads loosely here. | Tighten it. |`);
 
 async function report(proj: string, result: string, extra: Record<string, string> = {}, args: string[] = []): Promise<Step> {
   const res = await exec([process.execPath, ORCHESTRATE, "report", "--stage", STAGE, "--result", result, ...args, "--project-dir", proj], {
@@ -143,9 +145,11 @@ describe("t-gate-notice-in-box: the gate's own lines are said in Claude Code's q
     const lines = await gateLines();
     const proj = await atGate();
     await report(proj, "awaiting-approval", CLI);
-    expect(existsSync(join(proj, SAID))).toBe(true);
+    // Kept is not said: the record waits for the box's answer.
+    expect(existsSync(join(proj, SAID))).toBe(false);
     const shown = beforeBox(proj, gateBox())!;
     answered(proj, shown, "Request Changes");
+    expect(existsSync(join(proj, SAID))).toBe(true);
     expect(beforeBox(proj, gateBox())).toBeNull();
     const again = await next(proj, [], { env: CLI });
     expect((again.directive as Step | null)?.gate_only, again.out).toBe(true);
@@ -165,7 +169,8 @@ describe("t-gate-notice-in-box: the gate's own lines are said in Claude Code's q
     expect(beforeBox(proj, gateBox())).toBeNull();
   });
 
-  test("past Claude Code's 2,000 characters the box goes out as written, and the next step carries them with the note", async () => {
+  // The rare side of the room (no recorded interactive gate question came near it): the lines wait for the next step.
+  test("an agent question past the room: the box goes out as written, and the next step or its box says each line once", async () => {
     const lines = await gateLines();
     const proj = await atGate();
     await report(proj, "awaiting-approval", CLI);
@@ -174,19 +179,72 @@ describe("t-gate-notice-in-box: the gate's own lines are said in Claude Code's q
     const again = await next(proj, [], { env: CLI });
     const step = again.directive as Step;
     expect(step.gate_only, again.out).toBe(true);
-    expect(step.change_notices ?? []).toContain(NO_GIT);
     saidOnce(proj, step, lines);
   });
 
-  test("no box (a gate asked in prose): the next step carries them with the note, once", async () => {
+  test("no box (a gate asked in prose): the next step or its box says each line once", async () => {
     const lines = await gateLines();
     const proj = await atGate();
     await report(proj, "awaiting-approval", CLI);
     const first = (await next(proj, [], { env: CLI })).directive as Step;
-    expect(first.change_notices ?? []).toContain(NO_GIT);
     saidOnce(proj, first, lines);
     const second = (await next(proj, [], { env: CLI })).directive as Step;
     expect(heard(second)).not.toContain("no git");
+  });
+
+  test("past the room kept for the agent's question: the lines that fit go in the box, the rest stay on the step, none after the answer", async () => {
+    const proj = await atGate(MANY);
+    const sdk = (await report(await atGate(MANY), "awaiting-approval", { CLAUDE_CODE_ENTRYPOINT: "sdk-cli" })).change_notices ?? [];
+    const approve = sdk.find((line) => line.startsWith("Approve accepts"))!;
+    expect(sdk).toEqual([NO_GIT, approve]);
+    expect(approve.length + NO_GIT.length).toBeGreaterThan(1500);
+    const step = await report(proj, "awaiting-approval", CLI);
+    expect(step.change_notices).toEqual([approve]);
+    expect(step.change_notices_note).toStartWith(NOTE);
+    const shown = beforeBox(proj, gateBox())!;
+    expect(shown.question).toBe([QUESTION, NO_GIT].join("\n\n"));
+    answered(proj, shown, "Approve");
+    await say(proj, "Approve", "claude", { env: CLI });
+    const approved = await report(proj, "approved", CLI, ["--user-input", "Approve"]);
+    const after = (await next(proj, [], { env: CLI })).directive as Step;
+    for (const later of [approved, after]) {
+      expect(heard(later)).not.toContain("no git");
+      expect(heard(later)).not.toContain("Approve accepts");
+    }
+  });
+
+  test("the no-git line counts as said only once a box's answer or a written step carried it", async () => {
+    // Kept and never shown (no box, the reply after the lines aged out): the gate shown again says it.
+    const aged = await atGate();
+    await report(aged, "awaiting-approval", CLI);
+    ageKeptLines(aged);
+    expect(existsSync(join(aged, SAID))).toBe(false);
+    await next(aged, [], { env: CLI });
+    expect(beforeBox(aged, gateBox())?.question).toContain(NO_GIT);
+    // Kept, then carried by a later step (the agent asked in its own text, and the person approved in words).
+    const carried = await atGate();
+    await report(carried, "awaiting-approval", CLI);
+    await say(carried, "Approve", "claude", { env: CLI });
+    await report(carried, "approved", CLI, ["--user-input", "Approve"]);
+    const step = (await next(carried, [], { env: CLI })).directive as Step;
+    expect(step.change_notices ?? []).toContain(NO_GIT);
+    expect(existsSync(join(carried, SAID))).toBe(true);
+    // The box's answer could not record it: shown once more at the gate shown again, never lost.
+    if (process.platform !== "win32") {
+      const failed = await atGate();
+      await report(failed, "awaiting-approval", CLI);
+      const shown = beforeBox(failed, gateBox())!;
+      const sessions = join(failed, "aidlc", ".aidlc-sessions");
+      chmodSync(sessions, 0o555);
+      try {
+        answered(failed, shown, "Request Changes");
+      } finally {
+        chmodSync(sessions, 0o755);
+      }
+      expect(existsSync(join(failed, SAID))).toBe(false);
+      await next(failed, [], { env: CLI });
+      expect(beforeBox(failed, gateBox())?.question.split(NO_GIT)).toHaveLength(2);
+    }
   });
 
   for (const [name, extra] of [
@@ -237,7 +295,8 @@ describe("t-gate-notice-in-box: the gate's own lines are said in Claude Code's q
       answered(proj, shown, "Approve");
       const rows = readAuditShardEvents(proj);
       const replied = rows.filter((row) => row.event === "QUESTION_REPLIED");
-      expect(replied.map((row) => auditBlockField(row.block, "Question"))).toEqual([[QUESTION, ...lines].join("\n\n")]);
+      // The audit keeps a field on one line, its line breaks written as \n.
+      expect(replied.map((row) => auditBlockField(row.block, "Question"))).toEqual([[QUESTION, ...lines].join("\\n\\n")]);
       expect(rows.some((row) => row.event === "HUMAN_TURN" && auditBlockField(row.block, "Source") === "picker")).toBe(true);
       const approved = await report(proj, "approved", CLI, ["--user-input", "Approve"]);
       expect(approved.kind, JSON.stringify(approved)).not.toBe("error");

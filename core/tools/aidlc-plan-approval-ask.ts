@@ -18,13 +18,14 @@
 // (generation start, the worker brief, the swarm, team merge, worktree
 // delegation) reads this one unchanged. What changed is who writes them.
 
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import { personGitNameField } from "./aidlc-git-name.ts";
 import {
   activeIntentUuid,
+  assertNoSymlinkInChainOrThrow,
   auditBlockField,
   auditMark,
   type AuditMark,
@@ -61,6 +62,7 @@ import {
   rejectionIsFreshAttempt,
   removePlanApprovalRuntimeRecord,
   runStateContent,
+  sessionsDir,
   renderChangedPaths,
   sourceChangedOutsideAidlc,
   stalePlanApprovalReceiptsForTarget,
@@ -1039,6 +1041,40 @@ export function gateNoticesInBox(projectDir: string): boolean {
     process.env.AIDLC_UNATTENDED !== "1";
 }
 
+// Room kept for the agent's own question when the gate step is written, before
+// the question exists (126 recorded interactive gate questions ran 30 to 77
+// characters). Of the gate's lines, in order, each whole one that fits beside
+// it goes to the box; the rest stay on the step, said before the question.
+const GATE_QUESTION_ROOM = 500;
+export function gateLinesThatFit(lines: readonly string[]): string[] {
+  let left = BOX_QUESTION_MAX_CHARS - GATE_QUESTION_ROOM;
+  return lines.filter((line) => {
+    if (line.length + 2 > left) return false;
+    left -= line.length + 2;
+    return true;
+  });
+}
+
+// Said once per project (addNoGitLine in aidlc-orchestrate.ts), counted when a
+// written step or the box's answer carried it; kept for a box is not said.
+export const NO_GIT_LINE =
+  "This project has no git, so AI-DLC can't undo the changes it makes to your files; " +
+  "to get an undo, run `git init` and commit them.";
+const NO_GIT_SAID_FILE = "no-git-said";
+export function noGitLineSaid(projectDir: string): boolean {
+  return existsSync(join(sessionsDir(projectDir), NO_GIT_SAID_FILE));
+}
+export function writeNoGitLineSaid(projectDir: string): void {
+  try {
+    const dir = sessionsDir(projectDir);
+    assertNoSymlinkInChainOrThrow(projectDir, relative(projectDir, dir));
+    mkdirSync(dir, { recursive: true });
+    writeFileAtomic(join(dir, NO_GIT_SAID_FILE), `${isoTimestamp()}\n`);
+  } catch {
+    // Unrecorded: the next gate says it once more.
+  }
+}
+
 // The box and the chat's kept lines, when it is one single-choice question while
 // a stage awaits approval, and none of the engine's own questions whose text a
 // reader matches (the code plan question, an engine ask, a logged decision).
@@ -1084,7 +1120,9 @@ export function gateNoticeBoxShown(projectDir: string, payload: string): void {
     if (parsed === null || parsed.hook_event_name !== "PostToolUse" || parsed.tool_name !== "AskUserQuestion") return;
     const found = gateNoticeLines(projectDir, parsed.tool_input, parsed.session_id);
     const tail = found === null ? "" : ["", ...found.lines].join("\n\n");
-    if (found !== null && found.box.question.endsWith(tail) && found.box.question.length > tail.length) found.said();
+    if (found === null || !found.box.question.endsWith(tail) || found.box.question.length <= tail.length) return;
+    if (found.lines.includes(NO_GIT_LINE)) writeNoGitLineSaid(projectDir);
+    found.said();
   } catch {
     // The lines stay for the next step.
   }
