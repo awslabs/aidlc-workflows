@@ -5616,7 +5616,12 @@ function openAgainNamed(pd: string, unit: string, live: UnitClaimView | null): v
   let wasDone = false;
   const taken = live?.status === "claimed" ? live : null;
   const sent = leadsPlanWrite(pd, {
-    what: `merge of ${unit} taken back`,
+    // The commit says what came off: a merge, or only the naming.
+    what: (tip) => {
+      const word = tip === null ? {} : unitWordIn(tip, unit);
+      return word.done === true || (word.pull_requests ?? []).length === 0 ? `merge of ${unit} taken back`
+        : `${joinNames((word.pull_requests ?? []).map((pr) => `pull request ${pr.number} in ${pr.repo}`))} no longer named as the build of ${unit}`;
+    },
     words: (other, tip) => {
       if (other !== unit) return null;
       const { done, said_merged, pull_requests, verdicts: _verdicts, signoff: _signoff, ...rest } = taken === null ? tip : wordForTake(tip, taken);
@@ -14337,14 +14342,17 @@ function saidPullRequest(pd: string, unit: string, repo: string, number: number,
       if (other !== unit) return null;
       // A take not pushed yet: the word is for that take, as every word of the lead's on it is.
       const word = live?.status === "claimed" ? wordForTake(tip, live) : tip;
-      const { done: had, verdicts: _before, ...next } = named(word);
+      const { done: had, verdicts: _before, signoff, ...next } = named(word);
       wasDone = had === true;
-      before = { number: word.pull_requests?.find((pr) => pr.repo === repo)?.number, byWord: (word.said_merged ?? []).some((said) => said.repo === repo) };
+      const was = word.pull_requests?.find((pr) => pr.repo === repo)?.number;
+      before = { number: was === number ? undefined : was, byWord: (word.said_merged ?? []).some((said) => said.repo === repo) };
       verdicts = [...(word.verdicts ?? []).filter((verdict) => verdict.repo !== repo),
         ...(read.kind === "merged" ? [{ repo, merged: true, commit: read.commit, how: read.how }] : [])];
       waiting = (next.pull_requests ?? []).filter((pr) => !verdicts.some((verdict) => verdict.repo === pr.repo && verdict.merged));
-      done = waiting.length === 0 && (!signOffOn || word.signoff !== undefined);
-      return { ...next, ...(verdicts.length > 0 ? { verdicts } : {}), ...(done ? { done: true as const } : {}) };
+      // A sign-off was given for the build it counted; a merge taken back takes it with it, as open-again does.
+      const kept = wasDone && (before.number !== undefined || before.byWord || waiting.length > 0) ? undefined : signoff;
+      done = waiting.length === 0 && (!signOffOn || kept !== undefined);
+      return { ...next, ...(kept === undefined ? {} : { signoff: kept }), ...(verdicts.length > 0 ? { verdicts } : {}), ...(done ? { done: true as const } : {}) };
     },
   });
   failUnlessWritten(pd, sent, `${unit}'s pull request in ${repo}`, message);
@@ -14356,7 +14364,7 @@ function saidPullRequest(pd: string, unit: string, repo: string, number: number,
   const plan = keptPlan(pd, activeIdentity(pd).intentId8)?.plan ?? null;
   const address = repoCloneable(pd, repo) || (plan?.repos.find((entry) => entry.name === repo)?.address ?? null) !== null;
   const prs = (list: NamedPullRequest[]): string => joinNames(list.map((pr) => `pull request ${pr.number} in ${pr.repo}`));
-  const instead = before.number !== undefined && before.number !== number ? `, in place of pull request ${before.number}`
+  const instead = before.number !== undefined ? `, in place of pull request ${before.number}`
     : before.byWord ? `, in place of your word that ${repo} merged it` : "";
   const notice = takenBack
     ? (read.kind === "merged"

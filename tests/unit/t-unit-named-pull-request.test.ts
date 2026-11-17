@@ -426,4 +426,46 @@ describe("the lead takes back a merge counted through a wrong number or by their
     expect(String(right.json?.notice)).toEndWith(" reporting, which waited on checkout-ui, was taken meanwhile and stays taken.");
     expect(board(home.dir)).toMatch(/- reporting(, [a-z-]+ space)?: building since \d{1,2} [A-Z][a-z]{2}, taken by bob/);
   });
+
+  test("open-again that only takes a naming off says so in the plan's commit, not that a merge was taken back", () => {
+    const home = makePlanHome();
+    partnerPullRequest(home.hosts["checkout-web"], 7, UI);
+    expect(name(home.dir, "checkout-ui", "checkout-web", "7").status).toBe(0);
+    expect(run(UNIT, ["release", "checkout-ui"], home.dir).status).toBe(0);
+    const plan = Object.values(home.hosts)[0];
+    expect(git(plan, ["log", "-1", "--format=%s", planRefOf(home.id8)])).toEndWith(": pull request 7 in checkout-web no longer named as the build of checkout-ui");
+  });
+
+  test("with the lead's sign-off on, the right number in place of a counted merge needs a sign-off of its own", () => {
+    const home = makePlanHome();
+    expect(run(UNIT, ["lead-sign-off", "on"], home.dir).status).toBe(0);
+    const web = home.hosts["checkout-web"];
+    partnerPullRequest(web, 7, UI);
+    partnerPullRequest(web, 8, { "src/other.ts": "export const other = 1;\n" });
+    mergePullRequest(web, "refs/pull/8/head", "squash", "Other (#8)");
+    expect(name(home.dir, "checkout-ui", "checkout-web", "8", "pull request 8 is checkout-ui").status).toBe(0);
+    expect(run(UNIT, ["sign-off", "checkout-ui", "--person-words", "sign it off"], home.dir).status).toBe(0);
+    expect(planWordAt(home, "checkout-ui")).toMatchObject({ done: true });
+    expect(name(home.dir, "checkout-ui", "checkout-web", "7", "no, it is pull request 7").status).toBe(0);
+    expect((planWordAt(home, "checkout-ui") as Record<string, unknown>).signoff).toBeUndefined();
+    mergePullRequest(web, "refs/pull/7/head", "squash", "Checkout UI (#7)");
+    const seen = next(home.dir);
+    expect(planWordAt(home, "checkout-ui")?.done).toBeUndefined();
+    expect(JSON.stringify(seen)).toContain("checkout-ui's build is pull request 7 in checkout-web: checkout-web merged. Sign it off?");
+  });
+
+  test("the same number given again for a Unit counted merged through it takes nothing back", () => {
+    const home = makePlanHome();
+    const web = home.hosts["checkout-web"];
+    partnerPullRequest(web, 7, UI);
+    mergePullRequest(web, "refs/pull/7/head", "squash", "Checkout UI (#7)");
+    expect(name(home.dir, "checkout-ui", "checkout-web", "7").status).toBe(0);
+    const again = name(home.dir, "checkout-ui", "checkout-web", "7", "pull request 7 again");
+    expect(again.status, again.out).toBe(0);
+    expect(String(again.json?.notice)).not.toContain("no longer counted merged");
+    expect(String(again.json?.notice)).toEndWith("checkout-ui is recorded as merged here.");
+    expect(takenBack(home.dir, "checkout-ui")).toBe(0);
+    expect(merges(home.dir, "checkout-ui")).toBe(1);
+    expect(planWordAt(home, "checkout-ui")).toMatchObject({ done: true });
+  });
 });
