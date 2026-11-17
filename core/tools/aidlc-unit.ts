@@ -9184,6 +9184,12 @@ export function planUnitsKept(projectDir: string): string[] | null {
   return keptPlan(projectDir, activeIdentity(projectDir).intentId8)?.plan.units.map((unit) => unit.name) ?? null;
 }
 
+// Every Unit on the plan this computer keeps is done, by the lead's word on it.
+export function planUnitsAllDone(projectDir: string): boolean {
+  const units = keptPlan(projectDir, activeIdentity(projectDir).intentId8)?.plan.units ?? [];
+  return units.length > 0 && units.every((unit) => (unit.word as UnitWord).done === true);
+}
+
 // Where a share writes: the repository the lead named (by its name in the
 // work or repos.json, else an address), else where this computer's copy says
 // the plan is, else the place rule's. `refused` when the name cannot be one.

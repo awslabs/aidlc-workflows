@@ -1247,6 +1247,40 @@ describe("after the share nothing is built at the lead's project until the lead 
     expect(JSON.stringify(after.offers ?? [])).not.toContain("Each team will approve its Unit");
   });
 
+  // A computer of the lead's that has not recorded the merges yet still shows
+  // the board; with every Unit done on the plan no approval is left to pick a
+  // rhythm for, so the board does not ask it.
+  test("the board on the lead's other computer offers the approval rhythm while a Unit is open, and not once every Unit is done", () => {
+    const home = makeHome();
+    chooseTeams(home.dir);
+    share(home.dir);
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "teams chosen, plan shared"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const byWord = (unit: string, repo: string): void => {
+      const said = run(UNIT, ["merged", unit, "--repo", repo, "--person-words", "merged by hand"], home.dir);
+      expect(said.status, said.out).toBe(0);
+    };
+    byWord("refunds", "checkout-api");
+    byWord("refunds", "billing");
+    byWord("checkout-ui", "checkout-web");
+    // The lead's view in a clone of theirs, which has not recorded these merges yet.
+    const leadsView = (label: string): Record<string, unknown> => {
+      const laptop = cloneOf(home.remote, label);
+      expect(run(UTILITY, ["intent", "switch", HOME_RECORD], laptop).status).toBe(0);
+      expect(run(UNIT, ["lead-here", "--person-words", "I lead this work, carry it on here"], laptop).status).toBe(0);
+      return next(laptop);
+    };
+    const offered = (step: Record<string, unknown>): boolean =>
+      ((step.offers ?? []) as Offer[]).some((offer) => offer.question === RHYTHM_OFFER);
+    const open = leadsView("laptop");
+    expect(offered(open), JSON.stringify(open).slice(0, 800)).toBe(true);
+    byWord("reporting", "billing");
+    const done = leadsView("laptop-2");
+    expect(String(done.narration ?? ""), JSON.stringify(done).slice(0, 800)).toContain("- reporting");
+    expect(offered(done), JSON.stringify(done.offers ?? [])).toBe(false);
+  });
+
   test("the board's note names the lead's word to build a Unit here, and no way to name a team or leave one open", () => {
     const home = makeHome();
     chooseTeams(home.dir);

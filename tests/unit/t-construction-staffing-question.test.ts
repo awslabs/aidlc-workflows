@@ -78,8 +78,8 @@ const SKELETON_HANDOUT_LINE = "No team has taken a Unit yet, so this session bui
 // for it; after a pick in Inception, or the question passed over, it stays.
 const SETTER = "bun .claude/tools/aidlc-state.ts set-unit-ownership";
 const SETTERS = `run \`${SETTER} solo --message <id>\` when this session builds them, or \`${SETTER} team --message <id>\` ` +
-  "when several teams each own one, with the id of the message they said it in, and tell them in one plain line what " +
-  "it recorded, with the notice line it prints.";
+  "when several teams each own one, with the id of the message they said it in, and tell them in one plain line of its " +
+  "own what it recorded, with the notice line it prints, if any.";
 const WHO_BUILDS_NOTE = "When the person has said who builds the Units before AI-DLC asks it, record it from their " +
   `message, and where it is not clear which, leave it for AI-DLC's own question: ${SETTERS}`;
 const WHO_BUILDS_CHANGE_NOTE = "When the person says who builds the Units, record it from their message, and where it is " +

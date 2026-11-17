@@ -651,6 +651,7 @@ import {
   claimIsMine,
   buildClaimHere,
   planPlaceForShare,
+  planUnitsAllDone,
   planUnitsKept,
   leadPlanChange,
   planChangeQuestion,
@@ -6111,7 +6112,7 @@ function whoBuildsNote(projectDir: string, phase: string): string | null {
   const setter = `${aidlcToolInvocation("state")} set-unit-ownership`;
   return `${when}: run \`${setter} solo --message <id>\` when this session builds them, or ` +
     `\`${setter} team --message <id>\` when several teams each own one, with the id of the message they said it in, ` +
-    "and tell them in one plain line what it recorded, with the notice line it prints.";
+    "and tell them in one plain line of its own what it recorded, with the notice line it prints, if any.";
 }
 
 // No team has taken a Unit in this checkout's view: no participant marker,
@@ -20188,9 +20189,10 @@ function emitTeamUnitMajorRunStage(
     ]);
     // The rhythm is the lead's to choose, asked until they answer: each choice
     // runs the setter, so their answer is on the record and not asked again.
+    // With every Unit done there is no Unit left to approve, so it is not asked.
     const setRhythm = `${aidlcToolInvocation("state")} set-unit-gate-rhythm`;
     const rhythm = teamHome && !keepsWalk && !unitGateRhythmChosen(stateContent) &&
-        unitGateRhythmCanBe(projectDir, stateContent, "unit-end")
+        unitGateRhythmCanBe(projectDir, stateContent, "unit-end") && !planUnitsAllDone(projectDir)
       ? [{
         question: TEAM_RHYTHM_OFFER,
         choices: [
