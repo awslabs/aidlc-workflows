@@ -1077,6 +1077,13 @@ with an offer to start follow-up work; the done Unit is never reopened. A
 change turned down reaches the team that proposed it once, with the owner's
 words.
 
+When the lead's work is finished (its last stage approved) or archived, its
+plan says closed: a look passes it by, and a teammate who asks what they can
+take hears "Nothing to take: the plan of <work> in <repository> is closed."
+A team with a Unit under way hears once who closed it and when, and its build
+stays: carry it on, or hand it back. An unarchive, or a step back at the lead's
+project, opens the plan again.
+
 ---
 
 ## A second person on solo work, and the lead's sign-off

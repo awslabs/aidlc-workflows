@@ -278,6 +278,7 @@ import {
 } from "./aidlc-testing-posture.ts";
 import { beforePerUnitBlock, memoryDirFor } from "./aidlc-graph.ts";
 import { planMadeElsewhere, spacesRoot, stateFilePath } from "./aidlc-record-core.ts";
+import { withWorkPinned } from "./aidlc-locks.ts";
 import { approvalDecidesOpenFindings, approvalOpenFindings } from "./aidlc-review-brief.ts";
 import {
   aidlcEngineCommand,
@@ -9088,7 +9089,9 @@ export function planLastChange(projectDir: string, commit: string): { what: stri
 // What this computer has of the plan's history, kept with the question's own
 // marks in the work's engine folder: a plan commit it wrote, or one the lead
 // kept or carried on from (`here`); a change the lead said to take out at the
-// next write (`out`); the question put about a tip (`asked`).
+// next write (`out`); the question put about a tip (`asked`). A `here` this
+// computer did not write (kept, or carried on from) has `asked` beside it, so
+// a plan commit marked `here` alone is one this computer wrote.
 export function planMark(kind: "here" | "out" | "asked", commit: string): string {
   return `plan-${kind}-${commit}.json`;
 }
@@ -9154,6 +9157,7 @@ export type PlanChange = { tip: string; work: string; repo: string; changes: Arr
 function planChangeAt(pd: string, tip: string, plan: PlanJson): { change: PlanChange | null; first: string | null } {
   const found = planChangesNotHere(pd, tip);
   if (found === null) {
+    noteEngineAskMark(pd, planMark("asked", tip));
     noteEngineAskMark(pd, planMark("here", tip));
     const last = planLastChange(pd, tip);
     return {
@@ -9239,7 +9243,13 @@ function planChangeAnswer(args: string[], projectDir?: string): void {
   const tip = flags.tip ?? "";
   if ((answer !== "keep" && answer !== "take-out") || !/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(tip)) fail(`usage: ${unitUsage("plan-change")}`);
   const pd = resolveProjectDir(projectDir);
-  noteEngineAskMark(pd, planMark(answer === "keep" ? "here" : "out", tip));
+  const mark = (): void => {
+    if (answer === "keep" && engineAskMark(pd, planMark("here", tip)) === null) noteEngineAskMark(pd, planMark("asked", tip));
+    noteEngineAskMark(pd, planMark(answer === "keep" ? "here" : "out", tip));
+  };
+  const work = planTipWork(pd, tip);
+  if (work === null) mark();
+  else withWorkPinned({ space: work.space, intent: work.dirName }, mark);
   console.log(JSON.stringify({ answered: answer, tip }));
 }
 
@@ -9843,6 +9853,8 @@ export function leadsPlanWrite(projectDir: string, change: {
   unasked?: true;
   words?: (unit: string, word: UnitWord) => UnitWord | null;
   take?: { inputs?: Record<string, string>; settings?: readonly string[]; rules?: true };
+  // The plan's end: closed (a close already on the tip kept as it is), or open again.
+  closed?: boolean;
 }): LeadWrite {
   const pd = resolveProjectDir(projectDir);
   const write = (): LeadWrite => {
@@ -9895,6 +9907,8 @@ export function leadsPlanWrite(projectDir: string, change: {
           plan.settings = settings;
         }
         if (change.take?.rules) for (const file of ["rules/team.md", "rules/project.md"]) files[file] = built.files[file] ?? null;
+        if (change.closed === true) plan.closed = tip.plan.closed ?? { at: isoTimestamp() };
+        if (change.closed === false) delete plan.closed;
         return { plan, files };
       },
     });
@@ -9903,6 +9917,141 @@ export function leadsPlanWrite(projectDir: string, change: {
     return had === null ? { kind: "unshared" } : { kind: "unshared", gone: had.plan };
   };
   return change.unasked ? quietly(write) : write();
+}
+
+// The commit on `tip`'s line that made the plan closed or open as `tip` has
+// it, or null where none did (a plan never closed). A plan commit only. Only
+// the 50 newest commits are read, as planBelow reads them: each is one git
+// process at a step, and a close older than that reads as none.
+function closedFlip(pd: string, tip: string): string | null {
+  const closedAt = (commit: string): boolean | null => {
+    const plan = planJsonOf(localGit(pd, ["show", `${commit}:plan.json`, "--"]).stdout).plan;
+    return plan === null ? null : plan.closed !== undefined;
+  };
+  const line = localGit(pd, ["rev-list", "--first-parent", "--max-count=50", tip]).stdout.split(/\r?\n/).map((entry) => entry.trim()).filter(Boolean);
+  const now = closedAt(tip);
+  for (const [at, commit] of line.entries()) {
+    const before = line[at + 1] === undefined ? false : closedAt(line[at + 1]);
+    if (before !== now) return commit;
+  }
+  return null;
+}
+
+// Who closed the plan at `copy`, as its commit says, with its label and
+// repository: null when the plan there is not closed.
+export function planClosedBy(pd: string, copy: string): { label: string; repo: string; at: string; name: string; day: string } | null {
+  const read = planAtCopy(pd, copy);
+  if (read.kind !== "read" || read.plan.closed === undefined) return null;
+  const flip = closedFlip(pd, read.oid);
+  const by = flip === null ? null : planLastChange(pd, flip);
+  return by === null ? null : { label: read.plan.work.label, repo: read.plan.plan_repo.name, at: read.plan.closed.at, name: by.name, day: by.day };
+}
+
+// The once-mark of a build's line about its plan's close, one per close.
+export function planClosedHeardMark(at: string): string {
+  return `plan-closed-${at.replace(/[^0-9A-Za-z]/g, "")}.json`;
+}
+
+// The plan's end for one lead work on disk, by name, whatever work the chat
+// is on: the plan says closed while the work's Status is Completed or
+// Archived, and open otherwise. Written quietly where this computer's copy
+// says otherwise; at a step nobody asked for, only where the last close or
+// open-again on the plan is this computer's own or there is none, so another
+// computer's is never undone by a state this one has not caught up with. For
+// team work led from this checkout whose plan is shared, only. `line`: what was
+// written; `change`: a change this computer did not write waits for the
+// lead's answer; `unsent`: the write did not go (git's words).
+export type PlanEnd = { line: string } | { change: PlanChange } | { unsent: string | null };
+
+export function planEndNow(projectDir: string, work: { space: string; dirName: string; uuid: string }, asked = false): PlanEnd | null {
+  const pd = resolveProjectDir(projectDir);
+  return withWorkPinned({ space: work.space, intent: work.dirName }, (): PlanEnd | null => {
+    const led = ledSharedPlan(pd, work);
+    if (led === null) return null;
+    const status = getField(led.state, "Status")?.trim();
+    const closed = status === "Completed" || status === "Archived";
+    if ((led.kept.plan.closed !== undefined) === closed) return null;
+    // Quietly, only over a close or open-again this computer wrote (or a plan never closed).
+    const flip = closedFlip(pd, led.kept.commit);
+    const own = flip !== null && engineAskMark(pd, planMark("here", flip)) !== null && engineAskMark(pd, planMark("asked", flip)) === null;
+    if (!asked && (flip === null ? led.kept.plan.closed !== undefined : !own)) return null;
+    let written: LeadWrite;
+    try {
+      written = leadsPlanWrite(pd, { what: closed ? "closed" : "open again", unasked: true, closed });
+    } catch (error) {
+      // Never in the way of the step it runs at: unsent, in its own words, and tried at the next.
+      return { unsent: errorMessage(error) };
+    }
+    if (written.kind === "written") return { line: withPlanNotes(`Written on the plan: ${led.kept.plan.work.label} is ${closed ? "closed" : "open again"}.`) };
+    if (written.kind === "stopped") return { change: written.detail as PlanChange };
+    return written.kind === "unchanged" || written.kind === "unshared" ? null : { unsent: leadWriteWords(written) ?? null };
+  });
+}
+
+// Team work led from this checkout whose plan is shared, read in that work's
+// own scope: its state and the plan this computer keeps of it. Null for
+// anything else: main's own team flow, solo work, a Unit's build, a
+// teammate's clone of the lead's workspace, and a delegated worktree, which
+// reads its own record whatever the scope.
+function ledSharedPlan(pd: string, work: { dirName: string; uuid: string }): { state: string; kept: NonNullable<ReturnType<typeof keptPlan>> } | null {
+  if (resolveWorkflowSelection(pd).intent !== work.dirName) return null;
+  const state = stateHere(pd);
+  if (state === null || !isTeamUnitOwnership(state) || unitBuildOf(state) !== null || !isGitAddress(homeLocation(state) ?? "") ||
+    planMadeElsewhere(pd)) return null;
+  const kept = keptPlan(pd, idSuffix(work.uuid));
+  return kept === null ? null : { state, kept };
+}
+
+// The archive of such work is never refused for the Units teams have under way.
+export function archivesWithSharedPlan(projectDir: string, work: { space: string; dirName: string; uuid: string }): boolean {
+  const pd = resolveProjectDir(projectDir);
+  return withWorkPinned({ space: work.space, intent: work.dirName }, () => ledSharedPlan(pd, work) !== null);
+}
+
+// The archive's lines for that work, after its own: what the end write wrote,
+// then, where this computer last read a team's Unit of it as under way, each
+// Unit and who has it, and whether the plan says closed yet. Nothing is asked.
+export function archiveEndLines(projectDir: string, work: { space: string; dirName: string; uuid: string }, dependencyBody: string): string[] {
+  const pd = resolveProjectDir(projectDir);
+  const end = planEndNow(pd, work, true);
+  return withWorkPinned({ space: work.space, intent: work.dirName }, () => {
+    const lines = end !== null && "line" in end ? [end.line] : [];
+    const state = stateHere(pd) ?? "";
+    const identity = { space: work.space, intentUuid: work.uuid, intentId8: idSuffix(work.uuid) };
+    let underWay: UnitClaimView[] = [];
+    let unread: string | null = null;
+    try {
+      const overview = localUnitClaimOverviewForIntent(pd, { space: work.space, intentUuid: work.uuid, stateContent: state, dependencyBody });
+      underWay = overview.claimed.flatMap((entry) => overview.claims.get(entry.unit) ?? []);
+    } catch (cause) {
+      // What this computer read of them before, where it has it.
+      try {
+        underWay = [...cachedClaimsForIdentity(pd, identity, true).values()].filter((claim) => claim.status === "claimed" && claim.payload.done !== true);
+      } catch {
+        // None read before either.
+      }
+      if (underWay.length === 0) unread = errorMessage(cause).trim().replace(/[.!?]+$/, "");
+    }
+    // The lead's own: a Unit its walk builds here, or one this person took and builds in this workspace.
+    const own = leadsOwnClaims(pd, state, new Map(underWay.map((claim) => [claim.unit, claim])));
+    for (const claim of underWay) if (claimIsMine(pd, claim) && findUnitBuild(pd, work.uuid, claim.unit) !== null) own.add(claim.unit);
+    if (unread === null && underWay.every((claim) => own.has(claim.unit))) return lines;
+    const why = end !== null && "change" in end ? " (it has a change this computer did not write, which the next step asks you about)"
+      : end !== null && "unsent" in end && end.unsent !== null ? ` (${end.unsent.trim().replace(/[.!?]+$/, "")})` : "";
+    const after = keptPlan(pd, identity.intentId8)?.plan.closed !== undefined ? "AI-DLC sends no notice of the close."
+      : `The plan does not say closed yet${why}: the next step in this workspace tries again.`;
+    if (unread !== null) return [...lines, `Who has this work's Units could not be read here (${unread}), so one may be under way. ${after}`];
+    const named = underWay.map((claim) => (own.has(claim.unit) ? `${claim.unit}, your own build here` : `${claim.unit}, taken by ${builderOf(claim)}${spaceWords(claim.owner)}`));
+    const shown = named.length > 10 ? [...named.slice(0, 10), `and ${named.length - 10} more`] : named;
+    return [...lines, `As this computer last read them, these Units were under way: ${shown.join("; ")}. ${after}`];
+  });
+}
+
+// The lead's answer about a change on a plan is kept for the work the plan is
+// of, wherever the chat is: by the work id in the tip's plan.json.
+function planTipWork(pd: string, tip: string): { space: string; dirName: string } | null {
+  const plan = planJsonOf(localGit(pd, ["show", `${tip}:plan.json`, "--"]).stdout).plan;
+  return plan === null ? null : leadWorkHere(pd, plan.work.id);
 }
 
 // A text as the plan keeps it (the plan byte rule: CRLF as LF), and the blob it is kept as.
@@ -10845,7 +10994,11 @@ function takeUnit(args: string[], projectDir?: string, rhythm?: UnitClaimPayload
   }
   // The likely repos this workspace has no checkout of, said with the way to one.
   const notThere = likelyReposNotHere(pd, likely, home.repos, src.addresses);
-  const taken = `${src.moved === undefined ? "" : `${src.moved} `}${unit} is yours. You build it${spaceWords(build.space)} under your team's rules${leadsToo}, from what the lead approved.` +
+  // A take of a closed plan's Unit goes ahead as asked, and says the close first; the build does not hear it again.
+  const closed = fromPlan ? planClosedBy(pd, copyOf(home.location, planRecordRef(home.id8))) : null;
+  if (closed !== null) withWorkPinned({ space: build.space, intent: build.dirName }, () => noteEngineAskMark(pd, planClosedHeardMark(closed.at)));
+  const taken = `${closed === null ? "" : `The plan of ${closed.label} in ${closed.repo} was closed by ${closed.name}, ${closed.day}, so its Units are no longer offered. `}` +
+    `${src.moved === undefined ? "" : `${src.moved} `}${unit} is yours. You build it${spaceWords(build.space)} under your team's rules${leadsToo}, from what the lead approved.` +
     // The way back (release, run in this build), said once with the take.
     " If it is not your team's to build, tell me and I will hand it back." +
     earlyLines.map((line) => ` ${line}`).join("") +
@@ -13484,6 +13637,13 @@ export function buildClaimNotes(projectDir: string, stateContent: string, sessio
     }
     const over = planSharedOverLine(projectDir, stateContent);
     if (over !== null) lines.push(over);
+    // The plan closed while this build is under way: said once for that close.
+    const closed = isGitAddress(build.homeLocation) ? planClosedBy(projectDir, copyOf(build.homeLocation, planRecordRef(idSuffix(build.homeWork)))) : null;
+    if (closed !== null && engineAskMark(projectDir, planClosedHeardMark(closed.at)) === null) {
+      noteEngineAskMark(projectDir, planClosedHeardMark(closed.at));
+      lines.push(`The plan of ${closed.label} in ${closed.repo} was closed by ${closed.name}, ${closed.day}. Your build of ${build.unit} is ` +
+        "still here: carry it on, or tell me and I will hand it back.");
+    }
     if (refreshed?.refused && home !== null) {
       lines.push(newsNotTakenIn(joinNames([...new Set(recordPlacesOfWork(projectDir, home.id8, home).map((place) => place.repo))])));
     }

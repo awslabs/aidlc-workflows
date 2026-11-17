@@ -16,7 +16,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, 
 import { dlopen, FFIType, type Pointer } from "bun:ffi";
 import { ensureWorkspaceEngineFolder, runtimeHarnessDir, runtimeHarnessName, SPACE_NAME_REGEX, workspaceEngineFile, workspaceEnginePath } from "./aidlc-runtime-paths.ts";
 import { validateUnitName } from "./aidlc-review-records.ts";
-import { activeSpace, assertNoSymlinkInChainOrThrow, ENGINE_DIR, engineDirFor, intentsDir, isPlainObject, listIntentDirs, mainCheckoutOfWorktree, readAppendOnlyFileNoFollowOrThrow, readRegularFileNoFollowOrThrow, refuseEngineObserverWrite, spaceRecordRoot, workspaceRoot, writeFileAtomic } from "./aidlc-locks.ts";
+import { activeSpace, assertNoSymlinkInChainOrThrow, ENGINE_DIR, engineDirFor, intentsDir, isPlainObject, listIntentDirs, mainCheckoutOfWorktree, pinnedWork, readAppendOnlyFileNoFollowOrThrow, readRegularFileNoFollowOrThrow, refuseEngineObserverWrite, spaceRecordRoot, withWorkPinned, workspaceRoot, writeFileAtomic } from "./aidlc-locks.ts";
 import { escapeRegex } from "./aidlc-markdown.ts";
 import { gitCommonDirOf } from "./aidlc-git.ts";
 import { jsoncDocumentValue, withoutBom } from "./aidlc-distribution.ts";
@@ -80,6 +80,8 @@ export function activeIntent(
 ): string | null {
   const sp = space ?? activeSpace(projectDir);
   if (explicit) return explicit;
+  const pinned = pinnedWork();
+  if (pinned !== null && pinned.space === sp) return pinned.intent;
   // Cursor: a real record the pointer names.
   const cursor = readActiveIntentCursor(projectDir, sp);
   if (cursor !== null) return cursor;
@@ -1327,6 +1329,12 @@ export function resolveWorkflowSelection(
     }
     return { space: delegated.space, intent: delegated.intent, sessionId: null, binding: null };
   }
+  // A scope (withWorkPinned) reads as an explicit selector, and never binds the chat.
+  const pinned = pinnedWork();
+  if (pinned !== null) {
+    const inScope = options.intent === undefined && (options.space === undefined || options.space === pinned.space);
+    options = { ...options, ...(inScope ? { space: pinned.space, intent: pinned.intent } : {}), bind: false };
+  }
   const named = validSessionId(options.sessionId);
   const rawSession = named ?? resolveInvokingSessionId(projectDir);
   // Only this process's own identity settles a chat at first contact; a named
@@ -1512,6 +1520,8 @@ export function delegatedWorktreeIntent(projectDir: string): {
 } | null {
   const metaPath = join(projectDir, ".aidlc", "worktree-meta.json");
   if (!existsSync(metaPath)) return null;
+  // The worktree and its parent's record are read with no scope (withWorkPinned), so a delegated worktree stays one inside a scope.
+  if (pinnedWork() !== null) return withWorkPinned(null, () => delegatedWorktreeIntent(projectDir));
   if (activeIntentUuid(projectDir) !== null) return null;
   assertNoSymlinkInChainOrThrow(projectDir, ".aidlc/worktree-meta.json");
   const meta = JSON.parse(readRegularFileNoFollowOrThrow(metaPath, "worktree intent provenance").toString("utf-8"));

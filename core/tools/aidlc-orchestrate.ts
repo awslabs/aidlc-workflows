@@ -655,6 +655,7 @@ import {
   planUnitsKept,
   leadPlanChange,
   planChangeQuestion,
+  planEndNow,
   planMark,
   takePlanNotes,
   planNoRemoteLine,
@@ -891,7 +892,7 @@ import {
 } from "./aidlc-state-upgrade.ts";
 import { renderEngineInvocation, sameGuardOperation } from "./aidlc-guard-operation.ts";
 import { claimedCheckoutMovesElsewhere, claimedCheckoutReopens, completedUnits, UNIT_PROGRESS_NOTE } from "./aidlc-unit-landing.ts";
-import { isHookPreDispatch, withAuditLock } from "./aidlc-locks.ts";
+import { isHookPreDispatch, withAuditLock, withWorkPinned } from "./aidlc-locks.ts";
 import {
   askedQuestionFields,
   engineAskQuestionId,
@@ -9981,6 +9982,29 @@ function homesOnDisk(projectDir: string): Array<{ intent: IntentInfo; space: str
   return homes;
 }
 
+// The plan's end each lead work here is owed (planEndNow), at a step of any
+// chat: what was written, said once with the step; a change on that plan this
+// computer did not write, asked about once per tip, before the step, in the
+// question's own words, which name the work.
+function planEndsOwed(pd: string): AskDirective | null {
+  if (isReadOnlyEngineProbe()) return null;
+  for (const { intent, space } of homesOnDisk(pd)) {
+    const end = planEndNow(pd, { space, dirName: intent.dirName!, uuid: intent.uuid });
+    if (end !== null && "line" in end) sayWithStepOnce(pd, end.line);
+    if (end === null || !("change" in end)) continue;
+    const asked = withWorkPinned({ space, intent: intent.dirName! }, () => {
+      const name = planMark("asked", end.change.tip);
+      if (engineAskMark(pd, name) !== null) return false;
+      noteEngineAskMark(pd, name);
+      return true;
+    });
+    if (!asked) continue;
+    const ask = planChangeQuestion(end.change);
+    return { kind: "ask", ask_type: "lead-plan-change", response_route: "command", question: ask.question, choices: ask.choices };
+  }
+  return null;
+}
+
 // What the home said about this checkout's Unit build, each note said once with the step.
 function sayBuildNotes(pd: string, state: string | null): void {
   for (const note of state ? buildClaimNotes(pd, state, engineSessionId) : []) {
@@ -14959,6 +14983,12 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       emit(errorDirective(stale));
       return;
     }
+  }
+  // The plan's end owed for the lead's work here, whichever work this chat is on.
+  const endAsk = planEndsOwed(pd);
+  if (endAsk !== null) {
+    emit(endAsk);
+    return;
   }
   // What the home said about a Unit's build reaches its team once, on any step.
   sayBuildNotes(pd, stateContent);

@@ -186,6 +186,9 @@ import {
 import {
   type cachedUnitClaimOverview,
   localUnitClaimOverviewForIntent,
+  archiveEndLines,
+  archivesWithSharedPlan,
+  planEndNow,
   main as unitMain,
 } from "./aidlc-unit.ts";
 import {
@@ -9666,6 +9669,9 @@ function refuseUnlessArchivable(
     die(`Intent "${dirName}" is already archived.`);
   }
   if (!isTeamUnitOwnership(state)) return;
+  // Team work led here whose plan is shared archives with Units under way: its
+  // plan says closed, and the archive's own lines name them (archiveEndLines).
+  if (archivesWithSharedPlan(projectDir, { space, dirName, uuid: row.uuid })) return;
   const dependencyPath = unitDependencyPath(projectDir, dirName, space);
   if (!existsSync(dependencyPath)) return;
   let claimed: string[];
@@ -9789,13 +9795,25 @@ function handleIntentLifecycle(
       return { stage: currentStage, completed: restoreCompleted, boltRefs: [] };
     }, dirName, space);
   });
+  // The plan's end of team work led here whose plan is shared, said after the line.
+  const work = { space, dirName, uuid: match.uuid };
+  const endLines = (): string => {
+    if (verb === "unarchive") {
+      const end = planEndNow(projectDir, work, true);
+      return end !== null && "line" in end ? `${end.line}\n` : "";
+    }
+    const dependencyPath = unitDependencyPath(projectDir, dirName, space);
+    const lines = archiveEndLines(projectDir, work, existsSync(dependencyPath) ? readFileSync(dependencyPath, "utf-8") : "");
+    return lines.map((line) => `${line}\n`).join("");
+  };
   if (verb === "unarchive") {
     const back = completed
       ? `it is complete again and back in the default ${entrySkillInvocation()} intent list.`
       : `it is in-flight again at "${stage}". Switch to it with ${entrySkillInvocation()} intent ${dirName}.`;
     process.stdout.write(
       `Unarchived intent → ${dirName} (space: ${space}); ${back}\n` +
-        (reasonGiven ? "The --reason was not recorded: only intent archive records a reason.\n" : ""),
+        (reasonGiven ? "The --reason was not recorded: only intent archive records a reason.\n" : "") +
+        endLines(),
     );
     return;
   }
@@ -9820,7 +9838,8 @@ function handleIntentLifecycle(
         : "") +
       (boltRefs.length > 0
         ? `Its Bolt worktree(s) stay on disk as they are (${boltRefs.join(", ")}); ${entrySkillInvocation()} intent unarchive ${dirName} brings that work back.\n`
-        : ""),
+        : "") +
+      endLines(),
   );
 }
 

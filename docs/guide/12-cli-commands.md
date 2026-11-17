@@ -405,8 +405,14 @@ new work when none is left) instead of resuming retired stages.
 A completed intent archives too, which is how you hide finished work from the
 default listing. An intent with Bolt worktrees archives as well: the output
 names the worktrees, and they stay on disk untouched until you bring the intent
-back. Archiving is refused only for a team-owned intent with claimed Units,
-because those Units are still being worked in other checkouts.
+back. Archiving is refused only for a team-owned intent on the workspace's own
+repository with claimed Units, because those Units are still being worked in
+other checkouts. Team work led here whose plan is shared archives with Units
+under way: its plan says closed (`Written on the plan: <work> is closed.`), the
+output names each Unit under way and who has it as this computer last read
+them, and no notice is sent. `unarchive` opens the plan again (`Written on the
+plan: <work> is open again.`). A write the plan's repository does not take goes
+at your next step in that workspace, whichever work you are on.
 
 `/aidlc intent unarchive <name>` reverses it: the row and `Status` return to
 what they were (`in-flight` and `Running` at the stage it stopped on, or
