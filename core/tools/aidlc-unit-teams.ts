@@ -332,7 +332,11 @@ export function isGitAddress(target: string): boolean {
 // AI-DLC's own in one code repository. plan.json is the index: what a team's
 // take and look read of the lead's record, so nobody reads the lead's
 // workspace. A reader of an older release meets a format above its own and
-// reads nothing of it.
+// reads nothing of it, and writes nothing over it. Under one format a new key
+// goes at the plan's top level or in a Unit's word, which every writer carries
+// on; a key anywhere else is dropped by a share again, which builds those parts
+// itself, and a new shape for a key, or a key in the note a moved plan leaves,
+// takes the next format.
 export const PLAN_FORMAT = 1;
 
 export interface PlanJson {
