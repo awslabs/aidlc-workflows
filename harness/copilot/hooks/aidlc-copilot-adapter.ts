@@ -92,6 +92,7 @@
 //                  post-tool | validate-state | subagent-start |
 //                  log-subagent | continue-workflow
 
+import { readHookInput } from "../tools/aidlc-hook-input.ts";
 import { createHash, randomUUID } from "node:crypto";
 import {
   existsSync,
@@ -2830,5 +2831,5 @@ export async function run(
 }
 
 if (import.meta.main) {
-  process.exit(await run(process.argv[2] ?? "", await Bun.stdin.text(), process.argv.slice(3)));
+  process.exit(await run(process.argv[2] ?? "", await readHookInput(), process.argv.slice(3)));
 }

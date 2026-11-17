@@ -110,6 +110,7 @@
 // after-command (after-shell) cards did. Kiro passes no PostToolUse output to the
 // agent, so only the moment moves, and always to before the next call.
 
+import { setHookInput } from "../tools/aidlc-hook-input.ts";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
@@ -4332,5 +4333,6 @@ if (import.meta.main) {
       }
     }
   }
+  setHookInput(input);
   process.exit(await run(target, input, process.argv.slice(3)));
 }

@@ -24,6 +24,16 @@ test coverage** rather than the baseline unit/integration tests core ships. It:
 It reuses the framework's `aidlc-quality-agent` as the test lead and ships
 `test-pro-metrics-agent` as a support persona.
 
+## Metrics example
+
+test-pro sets `"advertiseMetrics": true` in its manifest, so every AI-DLC metric
+line carries `plugin.test-pro.version:<version>`, and ships
+[`tools/test-pro-metrics.ts`](tools/test-pro-metrics.ts), a commented,
+vendor-agnostic script that adds tags (a hashed session, the hook event, the repo
+folder name, and a Claude-only extra) from the raw hook input of Claude Code or
+Kiro. Copy it to start your own; the contract is in
+[Authoring a Plugin](../../docs/harness-engineering/10-authoring-a-plugin.md#advertise-metrics).
+
 ## 2. How to use it
 
 test-pro is emitted by the packager as a real host plugin per harness. Install it

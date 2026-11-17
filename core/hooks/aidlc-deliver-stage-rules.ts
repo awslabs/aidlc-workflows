@@ -18,6 +18,7 @@
 // On Claude it also runs at PostToolUse, only to confirm a background launch
 // the PreToolUse input did not announce (see isBackgroundDispatch).
 
+import { readHookInput } from "../tools/aidlc-hook-input.ts";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
@@ -491,4 +492,4 @@ function deliver(parsed: HookInput, projectDir: string): number {
   return 0;
 }
 
-if (import.meta.main) process.exit(await run(await Bun.stdin.text()));
+if (import.meta.main) process.exit(await run(await readHookInput()));

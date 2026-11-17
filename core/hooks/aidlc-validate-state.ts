@@ -3,6 +3,7 @@
 // (and not in SessionStart source=compact) ensures a single, timestamped record
 // of compaction — fired at the real compaction moment, with full state-file
 // context available.
+import { readHookInput } from "../tools/aidlc-hook-input.ts";
 import { existsSync, readFileSync } from "node:fs";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import {
@@ -93,5 +94,5 @@ return 0;
 }
 
 if (import.meta.main) {
-  process.exit(await run(await Bun.stdin.text()));
+  process.exit(await run(await readHookInput()));
 }

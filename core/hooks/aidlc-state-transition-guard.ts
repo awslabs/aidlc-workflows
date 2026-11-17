@@ -7,6 +7,7 @@
 // it, so this hook does not read the command for it. Read-only state queries
 // and specialized recovery/configuration verbs remain available.
 
+import { readHookInput } from "../tools/aidlc-hook-input.ts";
 import {
   hookStandsOutside,
   enterHookWorkflow,
@@ -1216,5 +1217,5 @@ export async function run(input: string): Promise<number> {
 
 if (import.meta.main) {
   if (process.stdin.isTTY) process.exit(0);
-  process.exit(await run(await Bun.stdin.text()));
+  process.exit(await run(await readHookInput()));
 }

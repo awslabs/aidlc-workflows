@@ -22,9 +22,11 @@ import { fileURLToPath } from "node:url";
 import {
   getField,
   harnessDir,
+  pluginsEnabled,
   resolveWorkflowSelection,
   stateFilePath,
 } from "./aidlc-lib.ts";
+import { pluginMetricTags, sanitizeTag } from "./aidlc-plugin-metrics.ts";
 import { compiledExecutable } from "./aidlc-runtime-paths.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 
@@ -68,13 +70,6 @@ function readScope(projectDir: string): string | null {
   }
 }
 
-// Strip StatsD-reserved characters and other problematic chars from tag values.
-// Strips |,#: (StatsD delimiters), + (SemVer build-metadata separator), / (a
-// commonly normalised tag character), and whitespace.
-function sanitizeTag(v: string): string {
-  return v.replace(/[|,#:+/\s]/g, "_");
-}
-
 export interface MetricContext {
   env: string;
   space: string;
@@ -84,6 +79,10 @@ export interface MetricContext {
   user: string;
   host: string;
   harness: string;
+  // Already-formatted `key:value` tags from plugins that advertise metrics
+  // (`plugin.<name>.version`, `plugin.<name>.<key>`). Namespaced, so they never
+  // collide with a core tag.
+  pluginTags?: string[];
 }
 
 function resolveContext(
@@ -139,6 +138,7 @@ export function buildTagString(ctx: MetricContext): string {
   if (ctx.scope) tags.push(`scope:${sanitizeTag(ctx.scope)}`);
   if (ctx.stage) tags.push(`stage:${sanitizeTag(ctx.stage)}`);
   if (ctx.phase) tags.push(`phase:${sanitizeTag(ctx.phase)}`);
+  if (ctx.pluginTags) tags.push(...ctx.pluginTags);
   return tags.join(",");
 }
 
@@ -451,6 +451,13 @@ export function emitMetricForAuditEvent(
   try {
     const prefix = metricPrefix();
     const ctx = resolveContext(fields, projectDir);
+    ctx.pluginTags = pluginMetricTags({
+      eventType,
+      fields,
+      projectDir,
+      harnessDir: ctx.harness,
+      enabled: pluginsEnabled(),
+    });
     // The per-event counter line, plus any token/cost magnitude lines
     // when this event carries the usage rollup fields (STAGE/WORKFLOW_COMPLETED).
     // All lines share the event's tags and are POSTed together - a single

@@ -9,6 +9,7 @@
 //      the latest STAGE_STARTED slug from the audit tail instead. Payload-free.
 // In both cases the slug is reconciled into the state file via set-status.
 // Receives JSON on stdin from the adapter / Claude Code.
+import { readHookInput } from "../tools/aidlc-hook-input.ts";
 import { existsSync } from "node:fs";
 import {
   auditBlockField,
@@ -192,5 +193,5 @@ return 0;
 }
 
 if (import.meta.main) {
-  process.exit(await run(await Bun.stdin.text()));
+  process.exit(await run(await readHookInput()));
 }

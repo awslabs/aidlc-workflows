@@ -28,6 +28,7 @@
 // its own parse and state read (the ledger writers in aidlc-usage.ts guard
 // theirs), and returns 0 on every path.
 
+import { readHookInput } from "../tools/aidlc-hook-input.ts";
 import { existsSync, readFileSync } from "node:fs";
 
 // The Current Stage slug from the state file - a minimal substring match,
@@ -163,6 +164,6 @@ export async function run(input: string): Promise<number> {
 }
 
 if (import.meta.main) {
-  const input = process.stdin.isTTY ? "" : await Bun.stdin.text();
+  const input = process.stdin.isTTY ? "" : await readHookInput();
   process.exitCode = await run(input);
 }
