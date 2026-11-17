@@ -1,9 +1,11 @@
 #!/usr/bin/env bun
-import { existsSync, readFileSync, realpathSync, writeSync } from "node:fs";
+import { settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
+import { existsSync, readdirSync, readFileSync, realpathSync, writeSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   CONFIG_SECTIONS,
+  CORE_COMMAND_WORDS,
   dispatcherWorkspaceUtilityArgv,
   type HookGroupMember,
   hookGroupMembers,
@@ -13,8 +15,11 @@ import {
   nextFlagTakesFollowing,
   parseDispatcherPluginCommand,
   parseDispatcherWorkspaceCommand,
+  PLUGIN_COMMAND_NAME_RE,
   type RouteNamespaceName,
   TRUSTED_ROUTE_NAMESPACE,
+  UNIT_GRAMMAR,
+  UNIT_VERBS,
 } from "./aidlc-command.ts";
 import {
   cmd,
@@ -29,13 +34,21 @@ import { AIDLC_VERSION } from "./aidlc-version.ts";
 import {
   aidlcInvocation,
   discoverProjectHarnesses,
+  enclosingProjectDir,
   isCompiledExecutable,
   kiroTreeLayout,
   packagedDistributionRoot,
-  discoverableRuntimeHarnessDir,
+  discoverableRuntimeHarness,
+  keepRuntimeHarnessPin,
+  pinRuntimeHarness,
+  resolveHarnessPath,
   runtimeHarnessDir,
+  hookSessionProjectDir,
+  moduleProjectDir,
   runtimeProjectDir,
+  runtimeProjectDirFrom,
   runtimeHarnessName,
+  typedHarnessHosts,
 } from "./aidlc-runtime-paths.ts";
 
 type Classification = "passthrough" | "translation" | "stub" | "routing-only" | "help";
@@ -208,14 +221,14 @@ const HUMAN_TOP_ROUTE_IDS = new Set([
 
 export const ENGINE_NAMESPACE_HELP: NamespaceHelpOptions = {
   namespace: "engine",
-  usage: "aidlc engine <noun> <verb> [args]",
+  usage: "engine <noun> <verb> [args]",
   header: "Engine machinery - generated harness surfaces only; not for human scripts:",
   excludedRouteIds: HUMAN_TOP_ROUTE_IDS,
 };
 
 export const SYSTEM_NAMESPACE_HELP: NamespaceHelpOptions = {
   namespace: "system",
-  usage: "aidlc system <noun> <verb> [args]",
+  usage: "system <noun> <verb> [args]",
   header: "Operations on this user's aidlc installation; never system-wide (root only with --allow-root):",
 };
 
@@ -248,34 +261,12 @@ export const ROUTES: readonly Route[] = [
     group: "unit",
     kind: "noun-passthrough",
     classification: "passthrough",
-    verbs: [
-      "adopt",
-      "claim",
-      "gate",
-      "land",
-      "merge-status",
-      "participate",
-      "pin",
-      "publish",
-      "release",
-      "status",
-    ],
+    verbs: [...UNIT_VERBS.keys()],
     tool: TOOLS.unit,
     ...PUBLIC_ENGINE,
     namespace: "public",
     mutationScope: "project",
-    all: [
-      "unit adopt <unit>",
-      "unit claim <unit>",
-      "unit gate <unit> --decision <approve|reject> --user-input <text>",
-      "unit land <unit> [--step git|state|audit|all] [--target <branch>] [--accept-released-attempt --user-input <text>]",
-      "unit merge-status <unit>",
-      "unit participate",
-      "unit pin <unit>",
-      "unit publish <unit>",
-      "unit release <unit>",
-      "unit status",
-    ],
+    all: Object.values(UNIT_GRAMMAR).map((grammar) => grammar.usage),
   },
   {
     id: "top-compose",
@@ -416,7 +407,7 @@ export const ROUTES: readonly Route[] = [
     human: [{ command: "config [args]", summary: "configure, pin, or refresh this project" }],
     all: [
       "config [--harness <name>] [--from <path>|--download [--release-base-url <url>] [--ca-bundle <path>]] [--mcp <defaults|none>] [--pin <version>|--unpin] [--dry-run] [--yes] [--json] [--quiet] [--force] [--plan-token <token>] [--project-dir <path>]",
-      "config models [--show [--json]|--check|--reset|--preset <name>|--from <preset|profile> --save-as <name>] [--local|--project|--global]",
+      "config models [--show [--json]|--check|--keep|--reset|--preset <name>|--from <preset|profile> --save-as <name>] [--local|--project|--global]",
       "config models [--deciding-effort <e>] [--reviewing-effort <e>] [--writing-up-effort <e>] [--agent <name> [--effort <e>] [--model <raw-id>]] [--session-model <id>] [--local|--project|--global] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
       "config runtime [--show [--json]|--check|--record-paths|--reset] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
       "config providers [--show [--json]|--check|--reset|--provider <current|amazon-bedrock|other>] [--region <region>] [--profile <profile>] [--opencode-default <yes|no>] [--acknowledge] [--mark-done <id>] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
@@ -464,7 +455,7 @@ export const ROUTES: readonly Route[] = [
     networkPolicy: "forbidden",
     mutationScope: "machine",
     outputModes: ["human", "quiet", "json"],
-    all: ["rollback [<version>|--version <version>|--list] [--allow-harness-loss] [--yes]"],
+    all: ["rollback [<version>|--version <version>|--list] [--allow-harness-loss] [--yes] [--json|--quiet]"],
   },
   {
     id: "top-use",
@@ -554,7 +545,7 @@ export const ROUTES: readonly Route[] = [
     outputModes: ["human", "quiet", "json"],
     human: [{ command: "versions install", summary: "install a retained release" }],
     all: [
-      "install <version> [--from <dir>] [--release-base-url <url>] [--ca-bundle <path>]",
+      "install <version> [--from <dir>] [--release-base-url <url>] [--ca-bundle <path>] [--offline] [--dry-run] [--yes] [--json|--quiet]",
     ],
   },
   {
@@ -572,7 +563,7 @@ export const ROUTES: readonly Route[] = [
     networkPolicy: "forbidden",
     mutationScope: "machine",
     outputModes: ["human", "quiet", "json"],
-    all: ["prune [--yes]"],
+    all: ["prune [--yes] [--json|--quiet]"],
   },
   {
     id: "state-passthrough",
@@ -597,6 +588,8 @@ export const ROUTES: readonly Route[] = [
       "gate-start",
       // The review request runs it (aidlc-log.ts, completionChecksHold).
       "completion-checks",
+      // A Unit's checkpoint verify and ask run it (aidlc-construction-checkpoints.ts, unitGateChecks).
+      "checkpoint-checks",
       "approve",
       "reject",
       "revise",
@@ -607,6 +600,7 @@ export const ROUTES: readonly Route[] = [
       "lookup",
       "practices-event",
       "practices-promote",
+      "practices-branch",
       "set-unit-ownership",
       "set-unit-gate-rhythm",
       // The engine calls these itself once Delivery Planning records
@@ -660,7 +654,7 @@ export const ROUTES: readonly Route[] = [
       },
       {
         label: "practices",
-        forms: ["practices-event", "practices-promote"],
+        forms: ["practices-event", "practices-promote", "practices-branch"],
       },
       {
         label: "fork/merge",
@@ -687,7 +681,7 @@ export const ROUTES: readonly Route[] = [
     group: "audit",
     kind: "noun-passthrough",
     classification: "passthrough",
-    verbs: ["append", "append-batch", "append-raw", "history"],
+    verbs: ["append", "append-batch", "append-raw", "history", "turns"],
     tool: TOOLS.audit,
     ...HIDDEN_ENGINE,
   },
@@ -776,7 +770,7 @@ export const ROUTES: readonly Route[] = [
     group: "swarm",
     kind: "noun-passthrough",
     classification: "passthrough",
-    verbs: ["prepare", "check", "finalize"],
+    verbs: ["prepare", "check", "finalize", "allow-change", "take-over"],
     tool: TOOLS.swarm,
     ...HIDDEN_ENGINE,
   },
@@ -814,7 +808,7 @@ export const ROUTES: readonly Route[] = [
     group: "log",
     kind: "noun-passthrough",
     classification: "passthrough",
-    verbs: ["decision", "answer", "answers", "review", "link"],
+    verbs: ["decision", "answer", "answers", "review", "link", "install"],
     tool: TOOLS.log,
     verbHelp: true,
     ...HIDDEN_ENGINE,
@@ -995,17 +989,19 @@ export const ROUTES: readonly Route[] = [
   },
   {
     // The plugin AUTHORING surface (v2): `aidlc plugin validate` / `aidlc plugin
-    // build` run against a plugin checkout, which is usually NOT an installed
-    // project, so this route is public, unpinned, and carries no project
-    // requirement. The installed-plugin lifecycle (select/sync/list) stays on
-    // the engine `plugin` noun above.
+    // build` / `aidlc plugin test` run against a plugin checkout, which is
+    // usually NOT an installed project, so this route is public, unpinned, and
+    // carries no project requirement. The installed-plugin lifecycle
+    // (select/sync/list) stays on the engine `plugin` noun above. The `test`
+    // usage form is that verb's one list of options: its help and the flags
+    // its handler accepts are both read from it.
     id: "plugin-author",
     group: "plugin",
     kind: "noun-map",
     classification: "translation",
-    verbs: ["validate", "build"],
+    verbs: ["validate", "build", "test"],
     tool: TOOLS.utility,
-    targets: { validate: "plugin-validate", build: "plugin-build" },
+    targets: { validate: "plugin-validate", build: "plugin-build", test: "plugin-test" },
     namespace: "public",
     visibility: "hidden",
     projectRequirement: "none",
@@ -1013,7 +1009,11 @@ export const ROUTES: readonly Route[] = [
     networkPolicy: "forbidden",
     mutationScope: "none",
     outputModes: ["human", "json"],
-    all: ["validate [path] [--with <base-root>]", "build <harness> [outDir] [--plugin-root <path>]"],
+    all: [
+      "validate [path] [--with <base-root>]",
+      "build <harness> [outDir] [--plugin-root <path>]",
+      "test [path] --install <project-root> [--harness <name>] [--with <base-root>] [--json]",
+    ],
   },
   {
     // The DocumentKB noun. Unlike `plugin`, the verb IS the subcommand -- these
@@ -1035,7 +1035,9 @@ export const ROUTES: readonly Route[] = [
     // this literal, because reading the route is exactly what missed it.
     kind: "noun-passthrough",
     classification: "passthrough",
-    verbs: ["onboard", "sync", "list", "show", "associate", "dissociate", "rebind", "summarize", "help"],
+    // `read-pdf` is the built-in PDF reader's child-process entry in a compiled binary (aidlc-knowledge.ts
+    // extractDocument); it is routed but never listed in help.
+    verbs: ["onboard", "sync", "list", "show", "associate", "dissociate", "rebind", "summarize", "help", "read-pdf"],
     tool: TOOLS.knowledge,
     ...PUBLIC_ENGINE,
     // ONE line in the human help, which is capped at 20 lines: it is a summary
@@ -1045,7 +1047,7 @@ export const ROUTES: readonly Route[] = [
       { command: "knowledge <verb>", summary: "index and read customer documents" },
     ],
     all: [
-      "onboard [path]", "sync", "list", "show <id>",
+      "onboard [path ...]", "sync", "list", "show <id>",
       "associate <id> --intent [slug]", "dissociate <id> --intent [slug]",
       "rebind <id> --to <path>",
       "summarize <id> --text-file <path> --source-revision <sha256>",
@@ -1219,17 +1221,18 @@ export const ROUTES: readonly Route[] = [
 
 export type Action =
   | { type: "delegate"; tool: string; args: string[] }
-  | { type: "hook"; name: string; path: string; projectDir?: string }
+  | { type: "hook"; name: string; path: string; projectDir?: string; hostResolved?: boolean }
   | {
     type: "hook-group";
     name: string;
     members: ReadonlyArray<HookGroupMember & { path: string }>;
     projectDir?: string;
+    hostResolved?: boolean;
   }
   | { type: "statusline"; path: string; projectDir?: string }
   | { type: "adapter"; harness: AdapterHarness; target: string; extraArgs: string[]; path: string; projectDir?: string }
   | { type: "sensor-script-file"; id: string; args: string[]; projectDir?: string }
-  | { type: "version"; json: boolean }
+  | { type: "version"; json: boolean; projectDir?: string }
   | { type: "stub"; message: string; code: number }
   | { type: "help"; scope: "human" | "engine" | "system" | "all" | "config" }
   | { type: "noun-help"; message: string }
@@ -1376,6 +1379,56 @@ export function listRoutes(): readonly Route[] {
   return ROUTES;
 }
 
+// `--no-color` is a launcher global every route honours, so no usage form in
+// `all` spells it.
+const ROUTE_ALWAYS_OPTIONS: readonly string[] = ["--no-color"];
+
+export type RouteOption = {
+  flag: string;
+  /** The value placeholder `all` spells after the flag, without its angle brackets. */
+  metavar?: string;
+};
+
+// One owner for "which options does this verb accept": the usage forms in
+// `all`, plus the launcher globals the route's own metadata says it honours.
+// `renderCommandHelp` and the shell-completion generator both read this, so
+// command help and completions cannot drift apart or from the parser.
+export function routeOptions(route: Route, verb: string): RouteOption[] {
+  const metavars = new Map<string, string>();
+  const flags = new Set<string>(ROUTE_ALWAYS_OPTIONS);
+  if (route.outputModes.includes("json")) flags.add("--json");
+  if (route.outputModes.includes("quiet")) flags.add("--quiet");
+  if (route.networkPolicy !== "forbidden") flags.add("--offline");
+  for (const line of usageFormsFor(route, verb)) {
+    for (const match of line.matchAll(/(--[a-z][a-z-]*)(?:\s+<([^>]+)>)?/g)) {
+      const flag = match[1];
+      flags.add(flag);
+      if (match[2] && !metavars.has(flag)) metavars.set(flag, match[2]);
+    }
+  }
+  return [...flags].sort().map((flag) => {
+    const metavar = metavars.get(flag);
+    return metavar ? { flag, metavar } : { flag };
+  });
+}
+
+function usageFormsFor(route: Route, verb: string): readonly string[] {
+  return (route.all ?? []).filter((form) => form.split(/\s+/, 1)[0] === verb);
+}
+
+// The required placeholders a verb takes before its options, read from the
+// same usage form, so `use <version>` documents its argument.
+export function routePositionals(route: Route, verb: string): string[] {
+  const form = usageFormsFor(route, verb)[0];
+  if (!form) return [];
+  const positionals: string[] = [];
+  for (const token of form.split(/\s+/).slice(1)) {
+    if (!token.startsWith("<")) break;
+    positionals.push(token);
+  }
+  return positionals;
+}
+
 // The tool scripts behind a route that can change the machine (a release,
 // machine-wide settings, the installation). Copy channels pre-approve
 // AI-DLC's other tool scripts, never these, so running one directly shows the
@@ -1395,9 +1448,9 @@ export function copyChannelToolScripts(): string[] {
 }
 
 // The dispatcher's public commands, outside its engine namespace, that every
-// install pre-approves, each spelled exactly as AI-DLC runs it: the doctor,
-// status and version utilities in both spellings agents use (doctor with or
-// without `--verbose`), config's read-only forms (`--show`, with or without
+// install pre-approves, each spelled exactly as AI-DLC runs it: the doctor and
+// version utilities in both spellings agents use (doctor with or without
+// `--verbose`), status as `--status`, config's read-only forms (`--show`, with or without
 // `--json`, top level or per section, and `--help`), and
 // turning one recorded check back on
 // (`config flags --clear-bypass <switch> --yes`, the form the skills name),
@@ -1416,7 +1469,6 @@ export function copyChannelDispatcherCommands(): string[] {
     "--doctor",
     "--doctor --verbose",
     "--version",
-    "status",
     "--status",
     "config --help",
     // An unknown option there, answered with the config usage line and no
@@ -1453,6 +1505,7 @@ export function renderHumanHelp(): string {
     row("version", "Print binary and runtime versions"),
     row("uninstall", "Remove aidlc from this machine"),
     "",
+    ...pluginCommandsHelp(out),
     heading("EXAMPLES", out),
     `  ${cmd(`${invoke} config`, out)}                     guided setup in the current project`,
     `  ${cmd(`${invoke} config models --show`, out)}       see which model each agent uses, and why`,
@@ -1464,6 +1517,146 @@ export function renderHumanHelp(): string {
     dim(`  Agents: workflows run through '${invoke} engine' - see '${invoke} engine --help'.`, out),
     "",
   ].join("\n");
+}
+
+// The commands this project's plugins add, under each plugin, when it has any.
+// The plugins' stamps are looked for first, so a project without them, or no
+// project, gets the same help as before without loading the engine library.
+function pluginCommandsHelp(out: NodeJS.WriteStream): string[] {
+  try {
+    const dataDir = resolveHarnessPath(["tools", "data"]);
+    if (!readdirSync(dataDir).some((file) => /^plugin-compose-[a-z][a-z0-9-]*\.json$/.test(file))) return [];
+  } catch {
+    return [];
+  }
+  const { pluginsEnabled, validScopes } = require("./aidlc-lib.ts") as typeof import("./aidlc-lib.ts");
+  const { projectPluginCommands } = require("./aidlc-plugin-commands.ts") as typeof import("./aidlc-plugin-commands.ts");
+  const rows = [...projectPluginCommands({ pluginsEnabled, validScopes }).commands.values()];
+  if (rows.length === 0) return [];
+  const width = Math.max(12, ...rows.map((row) => row.name.length + 2));
+  const plugins = [...new Set(rows.map((row) => row.plugin))].sort();
+  return [
+    heading("PLUGIN COMMANDS", out),
+    ...plugins.flatMap((plugin) => [
+      `  ${plugin}`,
+      ...rows.filter((row) => row.plugin === plugin)
+        .sort((left, right) => left.name.localeCompare(right.name))
+        .map((row) => `    ${cmd(row.name, out)}${" ".repeat(width - row.name.length)}${row.description}`),
+    ]),
+    "",
+  ];
+}
+
+// One-line meanings for every option the public commands accept, in the
+// wording docs/guide/18-install-and-lifecycle.md uses, so command help and the
+// guide say the same thing. A flag reachable from a public route without an
+// entry here fails t230: the test is what stops a new flag shipping
+// undocumented. These lines name no command, because the invocation differs
+// per channel (`aidlc` natively, `bun <harness dir>/tools/aidlc.ts` on a copy)
+// and a module constant cannot know which; a line that must name one belongs
+// in renderCommandHelp, where `invoke` is resolved.
+const FLAG_SUMMARIES: Readonly<Record<string, string>> = {
+  "--allow-root": "Act as root where root is the only user (container, CI job, agent sandbox)",
+  "--ca-bundle": "Trust this CA bundle when reaching the release host",
+  "--channel": "Take this run's release from this channel; config --channel sets the one this machine follows",
+  "--check": "Refresh release metadata without installing; exits 5 when a newer release is available, 0 when current",
+  "--check-updates": "Refresh release metadata on a run that is otherwise cache-only (--json, --quiet, or no terminal)",
+  "--dry-run": "Work out the whole plan and print it without changing any bytes",
+  "--export": "Also write a redacted diagnostic bundle",
+  "--from": "Use release files already on this machine instead of downloading",
+  "--json": "Emit one result object",
+  "--no-color": "Disable color output",
+  "--offline": "Do no network work; say so rather than fetching",
+  "--output": "Write the --export bundle here instead of its default place in the project",
+  "--purge": "Also remove machine config, the update cache, pin registrations, the release channel, and the default harness",
+  "--quiet": "Emit one summary or remediation line",
+  "--release-api-url": "Read release metadata from this API instead of GitHub's",
+  "--release-base-url": "Use this mirror for releases instead of GitHub",
+  "--verbose": "Expand every check instead of collapsing the healthy ones",
+  "--version": "Install this exact release instead of the newest one",
+  "--yes": "Answer the questions a terminal would ask",
+};
+
+// A flag whose meaning really differs by command. `--yes` is the clearest
+// case: uninstall needs it to remove anything without a terminal, while update
+// and use ask only about replacing an `aidlc` in the bin directory that AI-DLC
+// did not write. `--dry-run` is the other: on update the release is fetched
+// and unpacked before the plan is printed, which matters on a metered link,
+// and on config nothing is fetched at all.
+const COMMAND_FLAG_SUMMARIES: Readonly<
+  Partial<Record<PublicCommand, Readonly<Record<string, string>>>>
+> = {
+  update: {
+    "--dry-run": "Get and check the release, then print the plan without installing anything",
+    "--yes": "Answer yes to replacing an aidlc in the bin directory that AI-DLC did not write (Windows); nothing else asks",
+  },
+  use: {
+    "--yes": "Answer yes to replacing an aidlc in the bin directory that AI-DLC did not write (Windows); nothing else asks",
+  },
+  uninstall: {
+    "--yes": "Required when there is no terminal; at a terminal uninstall says what it removes, then proceeds without asking",
+  },
+};
+
+function flagSummary(command: PublicCommand, flag: string): string {
+  return COMMAND_FLAG_SUMMARIES[command]?.[flag] ?? FLAG_SUMMARIES[flag] ?? "";
+}
+
+// Options that only say where a release comes from, and options that only
+// shape what a command prints, read better under their own headings than mixed
+// into one list. "Release source" rather than "download" because doctor takes
+// the same flags to read release information and never downloads a release.
+const RELEASE_SOURCE_FLAGS: ReadonlySet<string> = new Set([
+  "--ca-bundle",
+  "--from",
+  "--offline",
+  "--release-api-url",
+  "--release-base-url",
+]);
+const OUTPUT_FLAGS: ReadonlySet<string> = new Set([
+  "--json",
+  "--no-color",
+  "--quiet",
+]);
+
+function optionForm(option: RouteOption): string {
+  return option.metavar ? `${option.flag} <${option.metavar}>` : option.flag;
+}
+
+// Every group is rendered from one column width so the summaries line up
+// across headings, and a group with no options is left out entirely.
+function renderOptionGroups(
+  summary: (flag: string) => string,
+  options: readonly RouteOption[],
+  out: typeof process.stdout,
+): string[] {
+  if (options.length === 0) return [];
+  const width = Math.max(
+    ...options.map((option) => optionForm(option).length),
+  ) + 2;
+  const groups: readonly { label: string; members: RouteOption[] }[] = [
+    {
+      label: "OPTIONS",
+      members: options.filter((option) =>
+        !RELEASE_SOURCE_FLAGS.has(option.flag) && !OUTPUT_FLAGS.has(option.flag)
+      ),
+    },
+    {
+      label: "RELEASE SOURCE",
+      members: options.filter((option) => RELEASE_SOURCE_FLAGS.has(option.flag)),
+    },
+    { label: "OUTPUT", members: options.filter((option) => OUTPUT_FLAGS.has(option.flag)) },
+  ];
+  const lines: string[] = [];
+  for (const group of groups) {
+    if (group.members.length === 0) continue;
+    lines.push("", heading(group.label, out));
+    for (const option of group.members) {
+      const form = optionForm(option);
+      lines.push(`  ${form}${" ".repeat(Math.max(2, width - form.length))}${summary(option.flag)}`);
+    }
+  }
+  return lines;
 }
 
 const COMMAND_HELP_USAGE: Record<PublicCommand, string> = {
@@ -1508,6 +1701,14 @@ export function renderCommandHelp(command: PublicCommand): string {
   if (command === "config") {
     const sectionRow = (name: string, summary: string): string =>
       `  ${cmd(name, out)}${" ".repeat(12 - name.length)}${summary}`;
+    // Both Kiro trees' host is Kiro; these are the words the setup picker
+    // shows for them (t230 pins every row to the picker's words).
+    const harnessWords: Readonly<Record<string, string>> = {
+      kiro: "Kiro CLI (V2)",
+      "kiro-ide": "Kiro (Kiro IDE and Kiro CLI on its v3 engine)",
+    };
+    const harnesses = typedHarnessHosts();
+    const nameWidth = Math.max(...harnesses.map(({ name }) => name.length)) + 2;
     return [
       "Set up, refresh, or change AI-DLC project configuration",
       "",
@@ -1529,12 +1730,16 @@ export function renderCommandHelp(command: PublicCommand): string {
       `  ${cmd(`${invoke} config list`, out)}                List them all`,
       "",
       heading("COMMON FLAGS", out),
+      "  --harness <name>  The tool to set up, refresh or add in this project (names under HARNESSES); kiro and kiro-v2 switch a Kiro project in place",
       "  --pin <version>   Pin this project to an installed release",
       "  --download        Fetch and verify the release this project needs, if it is missing",
-      "  --channel [name]  Show or set the machine release channel (stable, preview)",
+      `  --channel [name]  Show or set the release channel this machine follows (stable, preview); ${invoke} update --channel switches for one run only`,
       "  --show            Show one section, or every section with no section named, without changing it",
       "  --dry-run         Print the transaction plan without writing",
       "  --yes             Confirm explicit choices; it never chooses values",
+      "",
+      heading("HARNESSES", out),
+      ...harnesses.map(({ id, name, host }) => `  ${name.padEnd(nameWidth)}${harnessWords[id] ?? host}`),
       "",
       heading("EXAMPLES", out),
       `  ${cmd(`${invoke} config`, out)}`,
@@ -1549,9 +1754,9 @@ export function renderCommandHelp(command: PublicCommand): string {
   }
   const descriptions: Record<Exclude<PublicCommand, "config">, string> = {
     doctor: "Check this machine and project and show a fix for every problem",
-    version: "Print binary and selected runtime versions",
+    version: "Print binary and selected runtime versions, and the release a pinned project runs on",
     update: "Install and switch to a newer aidlc release",
-    use: "Switch to an exact installed aidlc release",
+    use: "Switch this machine to an exact aidlc release",
     uninstall: "Remove aidlc from this machine",
   };
   const examples: Partial<Record<Exclude<PublicCommand, "config">, string[]>> = {
@@ -1564,11 +1769,26 @@ export function renderCommandHelp(command: PublicCommand): string {
     use: [`  ${invoke} use 2.6.2`],
     uninstall: [`  ${invoke} uninstall`, `  ${invoke} uninstall --purge`, `  ${invoke} uninstall --allow-root`],
   };
+  const argumentSummaries: Readonly<Record<string, string>> = {
+    "<version>": "The exact release to switch to, for example 2.10.0; downloaded first if this machine does not have it",
+  };
+  const positionals = routePositionals(route, command);
+  const options = routeOptions(route, command);
   return [
     descriptions[command],
     "",
     heading("USAGE", out),
     `  ${cmd(`${invoke} ${COMMAND_HELP_USAGE[command].replace(/^aidlc\s+/, "")}`, out)}`,
+    ...(positionals.length
+      ? [
+          "",
+          heading("ARGUMENTS", out),
+          ...positionals.map((placeholder) =>
+            `  ${placeholder}${" ".repeat(2)}${argumentSummaries[placeholder] ?? ""}`
+          ),
+        ]
+      : []),
+    ...renderOptionGroups((flag) => flagSummary(command, flag), options, out),
     ...(examples[command]?.length
       ? [
           "",
@@ -1580,6 +1800,42 @@ export function renderCommandHelp(command: PublicCommand): string {
       : []),
     "",
     dim(`Run '${invoke} --help' for the public command list.`, out),
+    "",
+  ].join("\n");
+}
+
+// `aidlc plugin test`: the route's usage form for the verb is its one list of
+// options. Its help renders from that form here, and its handler in
+// aidlc-utility.ts takes exactly the options routeOptions reads from it.
+const PLUGIN_TEST_FLAG_SUMMARIES: Readonly<Record<string, string>> = {
+  "--harness": "The harness to test, when the project has more than one",
+  "--install": "A project set up with AI-DLC; the test composes into a copy of it and never changes it",
+  "--with": "Your checkout of the base plugin this one builds on, composed into the copy first",
+};
+
+export function pluginAuthorCommand(verb: "validate" | "build" | "test"): { usage: string; options: RouteOption[] } {
+  const route = ROUTES.find((candidate) => candidate.id === "plugin-author");
+  const form = route ? usageFormsFor(route, verb)[0] : undefined;
+  if (!route || !form) throw new Error(`dispatcher route registry is missing plugin ${verb}`);
+  return { usage: `${aidlcInvocation()} plugin ${form}`, options: routeOptions(route, verb) };
+}
+
+export function renderPluginTestHelp(): string {
+  const { usage, options } = pluginAuthorCommand("test");
+  const out = process.stdout;
+  return [
+    "Check that a plugin composes cleanly into a copy of a project, which is never changed",
+    "",
+    heading("USAGE", out),
+    `  ${cmd(usage, out)}`,
+    "",
+    heading("ARGUMENTS", out),
+    "  [path]  The plugin's folder, the one holding .aidlc-plugin/plugin.json; the current folder when left out",
+    ...renderOptionGroups(
+      (flag) => PLUGIN_TEST_FLAG_SUMMARIES[flag] ?? FLAG_SUMMARIES[flag] ?? "",
+      options,
+      out,
+    ),
     "",
   ].join("\n");
 }
@@ -1622,7 +1878,7 @@ export function renderNamespaceHelp(
   options: NamespaceHelpOptions,
   summaryOverrides: ReadonlyMap<string, string> = new Map(),
 ): string {
-  const lines: string[] = [options.usage, "", options.header];
+  const lines: string[] = [`${aidlcInvocation()} ${options.usage}`, "", options.header];
   const grouped = new Map<string, string[]>();
   const summaries = new Map<string, string>();
   const sections = new Map<string, readonly HelpSection[]>();
@@ -1674,7 +1930,7 @@ function renderConfigHelp(): string {
   const route = ROUTES.find((candidate) => candidate.id === "config");
   if (!route) throw new Error("dispatcher route registry is missing engine noun config");
   return [
-    "aidlc engine config <verb> [args] [--intent <id>] [--space <name>]",
+    `${aidlcInvocation()} engine config <verb> [args] [--intent <id>] [--space <name>]`,
     "",
     "Settings for the selected piece of work:",
     ...routeForms(route).map((form) => `  ${form}`),
@@ -1687,8 +1943,8 @@ export function renderAllHelp(): string {
     renderHumanHelp().trimEnd(),
     "",
     "Hidden namespaces:",
-    "  engine  Generated harness surfaces only; not for human scripts. Run: aidlc engine --help",
-    "  system  This user's installation; unsupported interface. Run: aidlc system --help",
+    `  engine  Generated harness surfaces only; not for human scripts. Run: ${aidlcInvocation()} engine --help`,
+    `  system  This user's installation; unsupported interface. Run: ${aidlcInvocation()} system --help`,
     "",
   ].join("\n");
 }
@@ -1697,7 +1953,7 @@ function topLevelError(command: string): Action {
   return {
     type: "error",
     code: 2,
-    message: `aidlc: unknown command or noun '${command}'; try 'aidlc --help'\n`,
+    message: `aidlc: unknown command or noun '${command}'; try '${aidlcInvocation()} --help'\n`,
   };
 }
 
@@ -1732,7 +1988,7 @@ function publicCommandError(command: string): Action {
   return {
     type: "error",
     code: 2,
-    message: `aidlc: unknown command or noun '${command}'; try 'aidlc --help'\n`,
+    message: `aidlc: unknown command or noun '${command}'; try '${aidlcInvocation()} --help'\n`,
     humanMessage:
       `${errorLabel("error:", process.stderr)} unknown command '${command}'\n${
         tip ? `\n  ${tipLabel("tip:", process.stderr)} did you mean '${nearest?.candidate}'?\n` : ""
@@ -1747,7 +2003,7 @@ function nounError(noun: string, verb: string | undefined, namespace: "engine" |
   return {
     type: "error",
     code: 2,
-    message: `aidlc: ${detail} for ${namespace} noun '${noun}'; try 'aidlc ${namespace} --help'\n`,
+    message: `aidlc: ${detail} for ${namespace} noun '${noun}'; try '${aidlcInvocation()} ${namespace} --help'\n`,
   };
 }
 
@@ -1808,10 +2064,17 @@ function handleConfig(route: Route, argv: string[]): Action {
   return nounError("config", key ? `set ${key}` : "set");
 }
 
+// `plugin help`: the plugin noun's commands, as the route lists them.
+function pluginHelp(): string {
+  const rows = ROUTES.find((route) => route.custom === "plugin")?.human ?? [];
+  const width = Math.max(...rows.map((row) => row.command.length));
+  return rows.map((row) => `  ${row.command.padEnd(width)}  ${row.summary}\n`).join("");
+}
+
 function handlePlugin(argv: string[]): Action {
   const command = parseDispatcherPluginCommand(argv);
   if (command.kind === "help") {
-    return { type: "help", scope: "engine" };
+    return { type: "noun-help", message: pluginHelp() };
   }
   if (command.kind === "error") {
     return { type: "error", code: 1, message: `${command.message}\n` };
@@ -2089,7 +2352,7 @@ function resolveSystem(argv: string[]): Action {
 }
 
 // Public noun routes (the v2 team/authoring surface): `aidlc unit <verb>` and
-// `aidlc plugin <validate|build>` resolve at the top level without the engine
+// `aidlc plugin <validate|build|test>` resolve at the top level without the engine
 // prefix. A head token whose verb does not match falls through to the public
 // unknown-command error rather than a noun error, so `aidlc plugin list`
 // remains "unknown command 'plugin'" (that engine surface is `aidlc engine
@@ -2360,8 +2623,11 @@ function resolveActionFrom(
   // Read before anything of ours is put back on the line below.
   const routeArgs = action.type === "delegate" ? [...action.args] : undefined;
   const words = theirWordsOn(argv, route, routeArgs, !(clean[0]?.startsWith("-") ?? false));
-  if (action.type === "version" && globalFlags.includes("--json")) {
-    action.json = true;
+  if (action.type === "version") {
+    if (globalFlags.includes("--json")) action.json = true;
+    // version runs on this machine's release, but it reads the pin from the
+    // folder pin dispatch would read, so it names the release that runs there.
+    action.projectDir = dispatcherProjectDirFrom(argv, limit);
   }
   if (projectDir) {
     const absoluteProjectDir = isAbsolute(projectDir)
@@ -2381,6 +2647,12 @@ function resolveActionFrom(
     } else if (action.type === "hook") {
       action.projectDir = absoluteProjectDir;
       action.path = resolveHookPath(`aidlc-${action.name}.ts`, undefined, absoluteProjectDir);
+    } else if (action.type === "hook-group") {
+      action.projectDir = absoluteProjectDir;
+      action.members = action.members.map((member) => ({
+        ...member,
+        path: resolveHookPath(`aidlc-${member.hook}.ts`, undefined, absoluteProjectDir),
+      }));
     } else if (action.type === "statusline") {
       action.projectDir = absoluteProjectDir;
       action.path = resolveHookPath("aidlc-statusline.ts", undefined, absoluteProjectDir);
@@ -2391,13 +2663,20 @@ function resolveActionFrom(
     } else if (action.type === "sensor-script-file") {
       action.projectDir = absoluteProjectDir;
     }
-  } else if (compiled && (action.type === "hook" || action.type === "sensor-script-file")) {
+  } else if (
+    compiled &&
+    (action.type === "hook" || action.type === "hook-group" || action.type === "sensor-script-file")
+  ) {
     // The compiled engine loads these modules from the runtime payload beside
     // the executable, so a module's own path names the install, never the
     // project. Pin the host's project: its project environment, else the
     // directory it launched the command in. The statusline and the adapters
     // resolve a project from their host first and hand it to what they run.
     action.projectDir = dispatcherProjectDirFrom(argv, limit);
+    if (action.type === "hook" || action.type === "hook-group") {
+      action.hostResolved =
+        !projectDirFlag(argv.slice(0, limit)).value && !process.env.AIDLC_PROJECT_DIR;
+    }
   }
   if (action.type === "delegate") {
     const delimiter = action.args.indexOf("--");
@@ -2720,10 +2999,10 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
   // resolve the matching packaged runtime even when the hook cwd carries no
   // harness metadata (.aidlc is shared by copilot and opencode; the
   // metadata-free fallback names opencode).
-  const previousHarness = process.env.AIDLC_HARNESS_DIR;
+  const restorePin = keepRuntimeHarnessPin();
   const previousHarnessName = process.env.AIDLC_HARNESS_NAME;
   const previousExecutable = process.env.AIDLC_COMPILED_EXECUTABLE;
-  process.env.AIDLC_HARNESS_DIR = ADAPTER_HARNESS_LEAF[action.harness];
+  pinRuntimeHarness(ADAPTER_HARNESS_LEAF[action.harness]);
   process.env.AIDLC_HARNESS_NAME = action.harness;
   if (isCompiledExecutable()) {
     process.env.AIDLC_COMPILED_EXECUTABLE = process.execPath;
@@ -2797,8 +3076,7 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
     hookTrace("adapter-run-end", { code });
     return code;
   } finally {
-    if (previousHarness === undefined) delete process.env.AIDLC_HARNESS_DIR;
-    else process.env.AIDLC_HARNESS_DIR = previousHarness;
+    restorePin();
     if (previousHarnessName === undefined) delete process.env.AIDLC_HARNESS_NAME;
     else process.env.AIDLC_HARNESS_NAME = previousHarnessName;
     if (previousExecutable === undefined) delete process.env.AIDLC_COMPILED_EXECUTABLE;
@@ -2839,11 +3117,13 @@ async function runGroupMembers(
     // A payload this process cannot read goes to every member, which judges it.
   }
   let code = 0;
+  let printed = false;
   const refusals: string[] = [];
   const failures: string[] = [];
   for (const member of action.members) {
     if (toolName !== null && !new RegExp(member.matcher).test(toolName)) continue;
     const said = await runGroupMember(member, input);
+    printed ||= said.printed;
     if (said.code === 2) {
       code = 2;
       if (said.reason && !refusals.includes(said.reason)) refusals.push(said.reason);
@@ -2858,7 +3138,58 @@ async function runGroupMembers(
   // it builds the deny decision from it), so a direct descriptor write would
   // reach the person's terminal but leave that decision without its reason.
   if (said.length > 0) process.stderr.write(said.join(""));
+  // Every check passed and none printed (an answer beside a notice is not JSON to the host).
+  if (code === 0 && !printed && toolName === "Bash") {
+    const allow = await claudeOwnCommandAllow(input);
+    if (allow) process.stdout.write(allow);
+  }
+  if (code === 0 && !printed && toolName === "AskUserQuestion") {
+    const box = await claudePlanQuestionBox(input);
+    if (box) process.stdout.write(box);
+  }
   return code;
+}
+
+// Claude Code's box for the code plan question shows each plan's lines under
+// the agent's question (planQuestionBoxInput in aidlc-plan-approval-ask.ts).
+// Any other box, and any failure, prints nothing, so the box opens as the agent
+// wrote it and is never refused.
+async function claudePlanQuestionBox(input: string): Promise<string> {
+  try {
+    const payload = JSON.parse(input) as { hook_event_name?: unknown; session_id?: unknown; tool_input?: unknown };
+    if (payload.hook_event_name !== "PreToolUse" || runtimeHarnessName() !== "claude") return "";
+    const { resolveProjectDirFromHook } = await import("./aidlc-lib.ts");
+    const { planQuestionBoxInput } = await import("./aidlc-plan-approval-ask.ts");
+    const updatedInput = planQuestionBoxInput(resolveProjectDirFromHook(import.meta.url), payload.tool_input, payload.session_id);
+    if (updatedInput === null) return "";
+    return `${JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", updatedInput } })}\n`;
+  } catch {
+    return "";
+  }
+}
+
+// Claude Code runs AI-DLC's own command without a prompt however a helper spells this project's
+// path (aidlc-claude-own-command.ts); its deny and ask rules still apply over this answer.
+// No reason text, so the person reads nothing new.
+async function claudeOwnCommandAllow(input: string): Promise<string> {
+  let payload: { hook_event_name?: unknown; tool_input?: { command?: unknown } };
+  try {
+    payload = JSON.parse(input);
+  } catch {
+    return "";
+  }
+  const command = payload.tool_input?.command;
+  if (payload.hook_event_name !== "PreToolUse" || typeof command !== "string") return "";
+  try {
+    if (runtimeHarnessName() !== "claude") return "";
+    const { resolveProjectDirFromHook } = await import("./aidlc-lib.ts");
+    const { claudeAllowsOwnCommand } = await import("./aidlc-claude-own-command.ts");
+    if (!claudeAllowsOwnCommand(command, resolveProjectDirFromHook(import.meta.url))) return "";
+  } catch {
+    // Nothing to name or read: the host decides, as it did before.
+    return "";
+  }
+  return `${JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" } })}\n`;
 }
 
 // One member, with what it said collected so the group can carry each refusal
@@ -2867,22 +3198,29 @@ async function runGroupMembers(
 async function runGroupMember(
   member: HookGroupMember & { path: string },
   input: string,
-): Promise<{ code: number; reason: string }> {
+): Promise<{ code: number; reason: string; printed: boolean }> {
   if (!existsSync(member.path)) {
     return {
       code: 1,
       reason: `aidlc engine hook ${member.hook}: not available in this install\n`,
+      printed: false,
     };
   }
   hookTrace("hook-group-member-begin", { hook: member.hook });
   const collected: string[] = [];
+  let printed = false;
   const stderrWrite = process.stderr.write;
+  const stdoutWrite = process.stdout.write;
   process.stderr.write = ((chunk: unknown) => {
     collected.push(
       typeof chunk === "string" ? chunk : Buffer.from(chunk as Uint8Array).toString("utf-8"),
     );
     return true;
   }) as typeof process.stderr.write;
+  process.stdout.write = ((chunk: unknown, ...rest: unknown[]) => {
+    printed = true;
+    return (stdoutWrite as (...args: unknown[]) => boolean).call(process.stdout, chunk, ...rest);
+  }) as typeof process.stdout.write;
   let code: number;
   try {
     // Named phases, because this process loads the hook's code where a hook of
@@ -2905,9 +3243,10 @@ async function runGroupMember(
     code = 1;
   } finally {
     process.stderr.write = stderrWrite;
+    process.stdout.write = stdoutWrite;
   }
   hookTrace("hook-group-member-end", { hook: member.hook, code });
-  return { code, reason: collected.join("") };
+  return { code, reason: collected.join(""), printed };
 }
 
 async function runSensorScriptFile(
@@ -2943,44 +3282,45 @@ async function runSensorScriptFile(
 }
 
 /**
- * `knowledge onboard <path>` for a document the person named outside the
+ * `knowledge onboard <path> ...` for documents the person named outside the
  * space's `documents/` folder: the copy happens here, at the command layer, and
- * the verb then indexes the copy. Before this, the knowledge tool refused and
+ * the verb then indexes the copies. Before this, the knowledge tool refused and
  * told the person to make the folder and copy the file themselves, which is
  * work the engine can do for them. The copy lives in aidlc-utility.ts, which
  * already owns it for `document-input --onboard`; the knowledge module is left
  * alone, so its own writes stay confined to `documentkb/`.
  *
  * Only a path inside the project is copied. A path outside it, a symlink that
- * leaves it, and a path already under `documents/` all reach the verb
- * unchanged: the first two are refused there as before, and the last is
- * indexed where it lies. The returned args carry the copy's path and what to
- * say about it. A document over the per-document cap, or a folder over a batch
- * cap, is refused here instead: the refusal is said and nothing is copied, so
- * the verb's own after-the-fact refusal no longer leaves copies behind.
+ * leaves it, a path that does not exist and a path already under `documents/`
+ * all reach the verb unchanged: the verb refuses the first three, or names
+ * them when several were named, and indexes the last where it lies. A document
+ * over the per-document cap, or a folder over a batch cap, is refused here
+ * instead, before anything is copied. With several paths, one that cannot be
+ * copied is left out with why and the rest go in; together over a batch cap,
+ * nothing is copied. `--copied` tells the verb what was copied and left out.
  */
-// The knowledge verbs' flags that take a value, so the path is found as the
-// one token that is neither a flag nor a flag's value.
+// The knowledge verbs' flags that take a value, so the paths are found as the
+// tokens that are neither a flag nor a flag's value.
 const KNOWLEDGE_VALUE_FLAGS = new Set([
-  "--space", "--to", "--text-file", "--source-revision", "--project-dir",
-  "--copied-from", "--copied-ignored", "--copied-left-out",
+  "--space", "--to", "--text-file", "--source-revision", "--project-dir", "--copied",
 ]);
 
-function knowledgePositionalAt(args: readonly string[]): number {
+function knowledgePositionals(args: readonly string[]): number[] {
+  const found: number[] = [];
   for (let index = 1; index < args.length; index++) {
     const token = args[index];
     if (token.startsWith("--")) continue;
     if (KNOWLEDGE_VALUE_FLAGS.has(args[index - 1])) continue;
     // `--intent` takes an optional value: a token after it is that value.
     if (args[index - 1] === "--intent") continue;
-    return index;
+    found.push(index);
   }
-  return -1;
+  return found;
 }
 
 async function withNamedDocumentCopied(args: string[]): Promise<string[] | { refusal: string }> {
   if (args[0] !== "onboard") return args;
-  const at = knowledgePositionalAt(args);
+  const positions = knowledgePositionals(args);
   try {
     const kb = await import("./aidlc-knowledge.ts");
     const utility = await import("./aidlc-utility.ts");
@@ -2990,28 +3330,67 @@ async function withNamedDocumentCopied(args: string[]): Promise<string[] | { ref
     // The folder the verb reads from is the person's to fill, and an empty one
     // is not a refusal: a sweep of it simply finds nothing to add.
     utility.ensureKnowledgeDocumentsFolder(projectDir, kb, space);
-    if (at === -1) return args;
-    const given = args[at];
-    const absolute = isAbsolute(given) ? given : resolve(projectDir, given);
-    if (!existsSync(absolute)) return args;
-    const real = realpathSync(absolute);
-    const inside = (root: string): boolean =>
-      real === root || real.startsWith(root.endsWith(sep) ? root : `${root}${sep}`);
-    if (!inside(realpathSync(projectDir))) return args;
+    const projectReal = realpathSync(projectDir);
     const documents = kb.documentsDir(projectDir, space);
-    if (existsSync(documents) && inside(realpathSync(documents))) return args;
-    const copied = utility.copyNamedDocumentIntoKnowledge(projectDir, kb, space, absolute);
-    // Over a cap: the person hears why in their own terms, and nothing was
-    // copied, so a retry adds no second folder.
-    if ("refusal" in copied) return copied;
+    const documentsReal = existsSync(documents) ? realpathSync(documents) : undefined;
+    const inside = (root: string, real: string): boolean =>
+      real === root || real.startsWith(root.endsWith(sep) ? root : `${root}${sep}`);
+    const named = positions.map((at, place) => {
+      const given = args[at];
+      const absolute = isAbsolute(given) ? given : resolve(projectDir, given);
+      if (!existsSync(absolute)) return { at, place, given, absolute, route: "verb" as const };
+      const real = realpathSync(absolute);
+      if (!inside(projectReal, real)) return { at, place, given, absolute, route: "verb" as const };
+      if (documentsReal !== undefined && inside(documentsReal, real)) {
+        return { at, place, given, absolute, route: "in-place" as const };
+      }
+      return { at, place, given, absolute, route: "copy" as const };
+    });
+    const toCopy = named.filter((entry) => entry.route === "copy");
+    if (toCopy.length === 0) return args;
+    if (positions.length === 1) {
+      const [one] = toCopy;
+      const copied = utility.copyNamedDocumentIntoKnowledge(projectDir, kb, space, one.absolute);
+      // Over a cap: the person hears why in their own terms, and nothing was
+      // copied, so a retry adds no second folder.
+      if ("refusal" in copied) return copied;
+      const next = [...args];
+      next[one.at] = copied.target;
+      const copies = [{ from: one.given, to: copied.target, ignored: copied.gitIgnored, leftOut: copied.leftOut,
+        ...(copied.original === undefined ? {} : { original: copied.original }),
+        ...(copied.updated === true ? { updated: true } : {}),
+        ...(copied.besideChanged === undefined ? {} : { besideChanged: copied.besideChanged }) }];
+      return [...next, "--copied", JSON.stringify({ copies })];
+    }
+    const planned = utility.copyNamedDocumentsIntoKnowledge(
+      projectDir, kb, space,
+      toCopy.map((entry) => entry.absolute),
+      named.filter((entry) => entry.route === "in-place").map((entry) => entry.absolute),
+      positions.length,
+    );
+    if ("refusal" in planned) return planned;
     const next = [...args];
-    next[at] = copied.target;
-    return [
-      ...next,
-      "--copied-from", given,
-      "--copied-ignored", copied.gitIgnored,
-      ...(copied.leftOut > 0 ? ["--copied-left-out", String(copied.leftOut)] : []),
-    ];
+    const copies: Array<{
+      from: string; to: string; ignored: string; leftOut: number; original?: string; updated?: boolean;
+      besideChanged?: string;
+    }> = [];
+    const notAdded: Array<{ at: number; path: string; reason: string }> = [];
+    toCopy.forEach((entry, index) => {
+      const outcome = planned.outcomes[index];
+      if ("reason" in outcome) {
+        notAdded.push({ at: entry.place, path: entry.given, reason: outcome.reason });
+        return;
+      }
+      next[entry.at] = outcome.target;
+      if (copies.some((copy) => copy.to === outcome.target)) return;
+      copies.push({
+        from: entry.given, to: outcome.target, ignored: outcome.gitIgnored, leftOut: outcome.leftOut,
+        ...(outcome.original === undefined ? {} : { original: outcome.original }),
+        ...(outcome.updated === true ? { updated: true } : {}),
+        ...(outcome.besideChanged === undefined ? {} : { besideChanged: outcome.besideChanged }),
+      });
+    });
+    return [...next, "--copied", JSON.stringify({ copies, notAdded })];
   } catch {
     // Nothing copied and nothing said: the verb runs on what it was given and
     // reports its own refusal.
@@ -3066,6 +3445,9 @@ async function execute(action: Action): Promise<number> {
     return 0;
   }
   if (action.type === "version") {
+    // Loaded here, not at the top: every hook starts through this file.
+    const { pinnedVersionNote, projectPinnedVersion } = await import("./aidlc-channel.ts");
+    const pinned = action.projectDir ? projectPinnedVersion(action.projectDir) : null;
     text(
       1,
       action.json
@@ -3073,16 +3455,35 @@ async function execute(action: Action): Promise<number> {
             schemaVersion: 1,
             binaryVersion: AIDLC_VERSION,
             runtimeVersion: AIDLC_VERSION,
+            ...(pinned ? { pinnedVersion: pinned } : {}),
           })}\n`
         : `aidlc ${AIDLC_VERSION} (runtime ${AIDLC_VERSION})\n`,
     );
+    // The stdout line stays exactly as it is: an update checks a release it
+    // activates by comparing that line, in whatever folder the update runs. The
+    // pin goes to stderr only at a terminal, where a person reads it: Windows
+    // PowerShell 5.1 stops a script that stops on errors at a stderr line it
+    // redirects, so a script, a pipe or a capture gets nothing new.
+    if (pinned && !action.json && process.stderr.isTTY) text(2, `aidlc: ${pinnedVersionNote(pinned, AIDLC_VERSION)}\n`);
     return 0;
   }
   if (action.type === "hook") {
-    return await withProjectDir(action.projectDir, () => runHook(action));
+    // A host may run a worktree session's hook from the main checkout it names
+    // as the project; the payload says where the session really works.
+    const projectDir = action.hostResolved && action.projectDir
+      ? hookSessionProjectDir(action.projectDir, await readStdin())
+      : action.projectDir;
+    // A turn Claude Code started itself is settled before the hook reads a turn;
+    // the human-turn hook settles in its own process, which loads the engine anyway.
+    if (action.name !== "record-human-turn") settleClaudeTurnsFirst(projectDir ?? runtimeProjectDir());
+    return await withProjectDir(projectDir, () => runHook({ ...action, projectDir }));
   }
   if (action.type === "hook-group") {
-    return await withProjectDir(action.projectDir, () => runHookGroup(action));
+    const projectDir = action.hostResolved && action.projectDir
+      ? hookSessionProjectDir(action.projectDir, await readStdin())
+      : action.projectDir;
+    settleClaudeTurnsFirst(projectDir ?? runtimeProjectDir());
+    return await withProjectDir(projectDir, () => runHookGroup({ ...action, projectDir }));
   }
   if (action.type === "statusline") {
     return await withProjectDir(action.projectDir, () => runStatusline(action));
@@ -3344,6 +3745,13 @@ function dispatcherProjectDirFrom(
     : process.cwd();
 }
 
+// Whether the dispatcher's project directory comes from the host (its
+// CLAUDE_PROJECT_DIR or KIRO_PROJECT_DIR, or the working directory), not from
+// the person's --project-dir or the engine's own AIDLC_PROJECT_DIR.
+function dispatcherHostResolved(argv: readonly string[]): boolean {
+  return !projectDirFlag(argv.slice(0, ourFlagLimit([...argv]))).value && !process.env.AIDLC_PROJECT_DIR;
+}
+
 // The dispatcher owns the --project-dir grammar before the `--` delimiter:
 // only the two-token form is accepted, because delegates that also parse
 // `--project-dir=<path>` would otherwise mutate a directory the dispatcher's
@@ -3377,9 +3785,16 @@ function projectDirFlag(argv: readonly string[]): {
 async function dispatchPinnedVersion(
   argv: string[],
   input: string | null,
+  hookRoute: boolean,
 ): Promise<number | null> {
   if (routePinPolicy(argv) !== "pinned") return null;
-  const projectDir = dispatcherProjectDirFrom(argv);
+  // A host may run a worktree session's hook from the main checkout it names
+  // as the project; a native hook then acts on the checkout its payload names
+  // (execute), so that checkout's pin is the one that runs it.
+  const hostDir = dispatcherProjectDirFrom(argv);
+  const projectDir = hookRoute && input !== null && isCompiledExecutable() && dispatcherHostResolved(argv)
+    ? hookSessionProjectDir(hostDir, input)
+    : hostDir;
   const pinPath = join(projectDir, ".aidlc-version");
   if (!existsSync(pinPath)) return null;
   const { resolvePinnedDispatch } = await import("./aidlc-lifecycle.ts");
@@ -3494,7 +3909,12 @@ type SimplePublicGrammar = {
   bare: ReadonlySet<string>;
 };
 
-const SIMPLE_PUBLIC_GRAMMARS: Readonly<
+// Exported alongside PUBLIC_LIFECYCLE_GRAMMARS so t230 reads BOTH parsers when
+// it proves help names every accepted flag. Public flag parsing is split in
+// two: the lifecycle commands have their own grammar in aidlc-lifecycle.ts,
+// and doctor and version are here. A check over one table would leave the
+// other free to drift.
+export const SIMPLE_PUBLIC_GRAMMARS: Readonly<
   Partial<Record<PublicCommand, SimplePublicGrammar>>
 > = {
   doctor: {
@@ -3564,10 +3984,41 @@ function validateSimplePublicGrammar(
   return null;
 }
 
+// A verb the lifecycle tool runs: the words that tool gets (the route's prefix,
+// the verb and what follows it up to a `--`, then this launcher's own flags,
+// which resolveActionFrom hands on at the end; --project-dir, which every
+// lifecycle grammar takes, is left out) and the verb's usage, its form from the
+// route, the line `aidlc system --help` prints for it.
+function lifecycleVerb(argv: readonly string[]): { args: string[]; usage: string } | null {
+  const route = routePolicyFor(argv);
+  if (route?.tool !== TOOLS.lifecycle) return null;
+  const clean = withoutProjectDirFlag(argv);
+  const delimiter = clean.indexOf("--");
+  const words = delimiter < 0 ? clean : clean.slice(0, delimiter);
+  const end = argv.indexOf("--");
+  const launcherFlags = (end < 0 ? argv : argv.slice(0, end)).filter((token) => LAUNCHER_GLOBAL_FLAGS.has(token));
+  const path = route.namespace === "public"
+    ? []
+    : route.group === "top" ? ["system"] : ["system", route.group];
+  const verb = words[path.length];
+  const form = route.all?.find((item) => item === verb || item.startsWith(`${verb} `));
+  if (!form) return null;
+  return {
+    args: [...(route.prefix ?? []), ...words.slice(path.length), ...launcherFlags],
+    usage: [aidlcInvocation(), ...path, form].join(" "),
+  };
+}
+
 async function publicCommandGrammarError(
   route: Route | null,
   argv: readonly string[],
 ): Promise<string | null> {
+  if (route?.namespace === "system") {
+    const lifecycle = lifecycleVerb(argv);
+    if (!lifecycle) return null;
+    const { validatePublicLifecycleArgs } = await import("./aidlc-lifecycle.ts");
+    return validatePublicLifecycleArgs(lifecycle.args);
+  }
   if (
     route?.namespace !== "public" ||
     route.group !== "top"
@@ -3635,7 +4086,37 @@ function renderPublicGrammarFailure(
     text(2, `For the full list, run '${invoke} config --help'.\n`);
     return 2;
   }
-  return renderDispatcherFailure(argv, 2, message);
+  const code = renderDispatcherFailure(argv, 2, message);
+  const usage = lifecycleVerb(argv)?.usage;
+  if (usage && requestedOutputMode(argv) === "human") {
+    text(2, `${heading("usage:", process.stderr)} ${usage}\n`);
+  }
+  return code;
+}
+
+// A command that needs a project, run from a folder inside the person's
+// workspace that is not a project itself (a code repo cloned beside `aidlc/`,
+// a plain subfolder), acts on that workspace, as from its root, so AI-DLC's
+// records never land in the person's repo. Pinned once, before anything reads
+// the project, so the checks, the pin, the harness and the tool all agree; the
+// working folder is not changed. Left as they are: a project the person or
+// the host names, hooks, the statusline and adapters (the host runs them for
+// its own project), a dispatcher whose own path names its project (the copy
+// channel), and a workspace that holds AI-DLC's own machine folders.
+async function pinEnclosingProject(route: Route, argv: readonly string[]): Promise<void> {
+  if (route.projectRequirement !== "required") return;
+  if (route.routeOnly === "hook" || route.routeOnly === "statusline" || route.routeOnly === "adapter") return;
+  if (projectDirFlag(argv.slice(0, ourFlagLimit([...argv]))).value) return;
+  if (
+    process.env.AIDLC_PROJECT_DIR || process.env.CLAUDE_PROJECT_DIR || process.env.KIRO_PROJECT_DIR ||
+    process.env.AIDLC_RUNTIME_PROJECT_DIR
+  ) return;
+  if (moduleProjectDir() !== null) return;
+  const enclosing = enclosingProjectDir(process.cwd());
+  if (enclosing === null) return;
+  const { projectPathOverlapsMachineRoots } = await import("./aidlc-install-paths.ts");
+  if (projectPathOverlapsMachineRoots(enclosing)) return;
+  process.env.AIDLC_PROJECT_DIR = enclosing;
 }
 
 function projectPolicyError(route: Route, argv: readonly string[]): string | null {
@@ -3650,15 +4131,20 @@ function projectPolicyError(route: Route, argv: readonly string[]): string | nul
     "aidlc",
   ].some((entry) => existsSync(join(projectDir, entry))) ||
     discoverProjectHarnesses(projectDir).length > 0;
-  // Config there would set up a new project, so the line names the steps that
-  // reach the person's project. Our options are read only before the person's
-  // own words, so the flag goes right after the tool.
-  return recognized
-    ? null
-    : `${route.id} requires an installed project harness or recognized project directory; ` +
-      `run it from the project folder, or add --project-dir <path> right after ${
-        aidlcInvocation() === "aidlc" ? "aidlc" : "aidlc.ts"
-      }`;
+  if (recognized) return null;
+  // Config there sets that folder up as a new project: the step when it is the
+  // person's project before setup, the wrong one when they meant another. So
+  // the line names config for that exact folder, then the steps that reach
+  // another one, and whether it is their project stays their call. Claude Code
+  // cuts a tool call's hook line at about 200 characters, so the step comes
+  // before the folder, whose path can be long. The copy channel has no aidlc
+  // command, and its hooks run only where its own tool is. Our options are
+  // read only before the person's own words, so the flag goes right after the
+  // tool.
+  const native = aidlcInvocation() === "aidlc";
+  return `${route.id} requires an installed project harness or recognized project directory; ` +
+    (native ? `run aidlc config in ${projectDir} if that folder is your project; otherwise ` : "") +
+    `run it from the project folder, or add --project-dir <path> right after ${native ? "aidlc" : "aidlc.ts"}`;
 }
 
 // A project inside a machine root is never acceptable. The reverse (a machine
@@ -3783,6 +4269,88 @@ async function withRoutePolicy(route: Route, argv: readonly string[], run: () =>
   }
 }
 
+// `aidlc <name>` for a command a plugin names (pluginCommandTable): the first
+// word after our own launcher flags, never one of AI-DLC's own words, so core's
+// routes are untouched. Every token after the name is the script's.
+function pluginCommandHead(argv: readonly string[]): { at: number } | null {
+  for (let index = 0; index < argv.length; index++) {
+    const token = argv[index];
+    if (token === "--project-dir") {
+      index++;
+      continue;
+    }
+    if (LAUNCHER_GLOBAL_FLAGS.has(token) || token === "--no-color") continue;
+    return PLUGIN_COMMAND_NAME_RE.test(token) && !CORE_COMMAND_WORDS.has(token) ? { at: index } : null;
+  }
+  return null;
+}
+
+/**
+ * Runs a plugin's command with AI-DLC's own runtime and returns its exit code;
+ * says in one line that its plugin is off; or null when the word names no
+ * plugin command here, which leaves the unknown-command error as it was.
+ */
+async function runPluginCommand(
+  argv: readonly string[],
+  head: { at: number } | null,
+): Promise<number | null> {
+  if (head === null) return null;
+  const projectDir = runtimeProjectDir();
+  // Loaded only here, so the dispatcher's own start keeps its import graph.
+  const lib = await import("./aidlc-lib.ts");
+  const { projectPluginCommands } = await import("./aidlc-plugin-commands.ts");
+  const { pluginScriptLaunch } = await import("./aidlc-plugin-script.ts");
+  const name = argv[head.at];
+  const table = projectPluginCommands({ pluginsEnabled: lib.pluginsEnabled, validScopes: lib.validScopes });
+  const row = table.commands.get(name);
+  const invoke = aidlcInvocation();
+  if (row === undefined) {
+    const plugin = table.off.get(name);
+    if (plugin === undefined) return null;
+    const selected = [...(lib.pluginsSelected() ?? [])];
+    const base = lib.pausedPlugins().get(plugin);
+    text(
+      2,
+      base === undefined
+        ? `aidlc: '${name}' is a command of the ${plugin} plugin, which is off in this project; ` +
+          `turn it on with ${invoke} config project --plugins ${[...selected, plugin].join(",")}\n`
+        : `aidlc: '${name}' is a command of the ${plugin} plugin, which is paused until ${base} is on again; ` +
+          `turn ${base} on with ${invoke} config project --plugins ${[...selected, base].join(",")}\n`,
+    );
+    return 1;
+  }
+  // The script's own engine calls name their project the person's way.
+  const { AIDLC_RUNTIME_PROJECT_DIR: _pinned, ...env } = process.env;
+  const launch = pluginScriptLaunch({
+    projectDir,
+    harnessDir: runtimeHarnessDir(projectDir),
+    plugin: row.plugin,
+    file: row.script.slice("tools/".length),
+    env,
+  });
+  if (!launch.ok) {
+    text(
+      2,
+      `aidlc: ${row.plugin}'s command '${name}' cannot run: ${launch.script} ` +
+        `${launch.reason === "missing" ? "is missing" : `is not inside ${launch.toolsDir}`}\n`,
+    );
+    return 1;
+  }
+  try {
+    const run = Bun.spawnSync([launch.command, ...launch.args, ...argv.slice(head.at + 1)], {
+      cwd: process.cwd(),
+      env: launch.env,
+      stdin: "inherit",
+      stdout: "inherit",
+      stderr: "inherit",
+    });
+    return run.exitCode ?? 1;
+  } catch (error) {
+    text(2, `aidlc: ${row.plugin}'s command '${name}' could not start: ${errorMessage(error)}\n`);
+    return 1;
+  }
+}
+
 export async function main(rawArgv: string[]): Promise<void> {
   if (
     rawArgv[0] === "--internal-aidlc-record-human-turn" &&
@@ -3817,7 +4385,12 @@ export async function main(rawArgv: string[]): Promise<void> {
   }
   configureColor(argv);
   const projectDirOption = projectDirFlag(argv.slice(0, ourFlagLimit(argv)));
-  if (projectDirOption.error) {
+  // A word that may be a plugin command: the words after it are its script's,
+  // so a mistake of ours found only there is said only if it names none.
+  const pluginHead = pluginCommandHead(argv);
+  const scriptsProjectDirError = projectDirOption.error !== undefined && pluginHead !== null &&
+    projectDirFlag(argv.slice(0, pluginHead.at)).error === undefined;
+  if (projectDirOption.error && !scriptsProjectDirError) {
     process.exitCode = renderDispatcherFailure(argv, 2, projectDirOption.error);
     return;
   }
@@ -3831,7 +4404,16 @@ export async function main(rawArgv: string[]): Promise<void> {
     text(1, renderCommandHelp(commandHelp));
     return;
   }
+  // `aidlc system rollback --help` and the other lifecycle verbs under
+  // `system`: the lifecycle tool takes --help as one more word, so the verb's
+  // usage is printed here and nothing runs.
+  const lifecycleHelp = lifecycleVerb(argv);
+  if (lifecycleHelp?.args.some((token) => token === "--help" || token === "-h")) {
+    text(1, `usage: ${lifecycleHelp.usage}\n`);
+    return;
+  }
   const route = routePolicyFor(argv);
+  if (route) await pinEnclosingProject(route, argv);
   if (route) {
     const error = basicPolicyError(route, argv);
     if (error) {
@@ -3854,19 +4436,27 @@ export async function main(rawArgv: string[]): Promise<void> {
       return;
     }
   }
+  // Only the words before a plugin command name the project, so a
+  // --project-dir of the script's own never picks it, here or in the harness
+  // discovery just below.
+  if (!route && pluginHead !== null) {
+    process.env.AIDLC_RUNTIME_PROJECT_DIR = runtimeProjectDirFrom(argv.slice(0, pluginHead.at));
+  }
   if (isCompiledExecutable()) {
     // Compiled, no explicit harness: discover the project install from its
     // shipped stamp/harness metadata. Module-relative derivation cannot work
     // from $bunfs, and embedded data may be Claude-flavoured. Every delegate
     // and sibling tool reads these envs, so pin both identifiers once here,
     // before lazy delegate imports, so same-directory harnesses retain
-    // identity. Falls back to .claude when no install is present. A working
-    // directory that cannot be read pins neither: commands that need no
-    // harness (such as version and the installer's own check) still run, and
-    // a command that needs one reports the error when it resolves its harness.
+    // identity. With several installed, the one whose tool runs this command,
+    // else the first one as a guess. Falls back to .claude when no install is
+    // present. A working directory that cannot be read pins neither: commands
+    // that need no harness (such as version and the installer's own check)
+    // still run, and a command that needs one reports the error when it
+    // resolves its harness.
     if (!process.env.AIDLC_HARNESS_DIR) {
-      const harnessDir = discoverableRuntimeHarnessDir();
-      if (harnessDir) process.env.AIDLC_HARNESS_DIR = harnessDir;
+      const discovered = discoverableRuntimeHarness();
+      if (discovered) pinRuntimeHarness(discovered.harnessDir, discovered.guessed);
     }
     if (process.env.AIDLC_HARNESS_DIR && !process.env.AIDLC_HARNESS_NAME) {
       process.env.AIDLC_HARNESS_NAME = runtimeHarnessName();
@@ -3937,6 +4527,13 @@ export async function main(rawArgv: string[]): Promise<void> {
         const { replacePreviousWindowsShimHelper } = await import("./aidlc-lifecycle.ts");
         replacePreviousWindowsShimHelper();
       }
+      // An activation run by a release from before bin\aidlc.exe left none, or
+      // left the Git Bash launcher beside it; this release catches up once.
+      const { binRoot } = await import("./aidlc-install-paths.ts");
+      if (!existsSync(join(binRoot(), "aidlc.exe")) || existsSync(join(binRoot(), "aidlc"))) {
+        const { catchUpWindowsExeCommand } = await import("./aidlc-lifecycle.ts");
+        catchUpWindowsExeCommand();
+      }
     } catch {
       // A binary run from outside an install has no helper to replace.
     }
@@ -3957,7 +4554,7 @@ export async function main(rawArgv: string[]): Promise<void> {
   ) {
     process.env.AIDLC_TEST_CONFIG_INPUT = await readStdin();
   }
-  const pinnedCode = await dispatchPinnedVersion(argv, bufferedStdin);
+  const pinnedCode = await dispatchPinnedVersion(argv, bufferedStdin, route?.routeOnly === "hook");
   if (pinnedCode !== null) {
     process.exitCode = pinnedCode;
     return;
@@ -3971,6 +4568,16 @@ export async function main(rawArgv: string[]): Promise<void> {
     const error = projectPolicyError(route, argv);
     if (error) {
       process.exitCode = renderDispatcherFailure(argv, 1, error);
+      return;
+    }
+  } else {
+    const pluginCode = await runPluginCommand(argv, pluginHead);
+    if (pluginCode !== null) {
+      process.exitCode = pluginCode;
+      return;
+    }
+    if (scriptsProjectDirError && projectDirOption.error) {
+      process.exitCode = renderDispatcherFailure(argv, 2, projectDirOption.error);
       return;
     }
   }
@@ -3989,9 +4596,25 @@ export async function main(rawArgv: string[]): Promise<void> {
 }
 
 if (import.meta.main) {
-  // Kiro IDE's Command Prompt terminal: the tool runs itself as a child behind
-  // a pointer line (commandPromptReplyTee), or notes at exit a reply Kiro
-  // dropped, and rejoins the quote pair cmd.exe left on the words. Loaded only
+  // The bin copy on Windows, the one binary with aidlc.cmd beside it, hands the
+  // command to the active release instead of running it. Loaded only there, so
+  // the dispatcher's front gate and the lean projections keep their import graph.
+  if (process.platform === "win32" && existsSync(join(dirname(process.execPath), "aidlc.cmd"))) {
+    import("./aidlc-native-launcher.ts")
+      .then((m) => m.startNativeLauncher(), () => false)
+      .then((launched) => {
+        if (!launched) startDispatcher();
+      });
+  } else {
+    startDispatcher();
+  }
+}
+
+function startDispatcher(): void {
+  // Kiro IDE's terminal in Command Prompt, or where Kiro's shell integration
+  // did not load: the tool runs itself as a child behind a pointer line
+  // (commandPromptReplyTee); in Command Prompt it also notes at exit a reply
+  // Kiro dropped and rejoins the quote pair cmd.exe left on the words. Loaded only
   // in Kiro's terminal, so the dispatcher's front gate and the lean projections
   // keep their import graph.
   if (process.env.TERM_PROGRAM === "kiro" && (process.platform === "win32" || process.env.AIDLC_TEST_KIRO_IDE_SETTINGS)) {
@@ -4007,11 +4630,27 @@ if (import.meta.main) {
   }
 }
 
+// Copilot CLI's `.aidlc/bin/aidlc-engine` runs only the words AI-DLC's Copilot
+// hooks vouched for (aidlc-launcher-voucher.ts); anything else is refused with
+// the plain command, which Copilot then asks about. Loaded only from the launcher.
+async function launcherGate(args: string[]): Promise<boolean> {
+  const launcher = process.env.AIDLC_ENGINE_LAUNCHER;
+  if (launcher === undefined) return true;
+  delete process.env.AIDLC_ENGINE_LAUNCHER;
+  const voucher = await import("./aidlc-launcher-voucher.ts");
+  if (voucher.spendLauncherVoucher(launcher, args)) return true;
+  const { aidlcInvocation, quoteCommandArgument } = await import("./aidlc-runtime-paths.ts");
+  const words = args.map((word) => quoteCommandArgument(word, "posix"));
+  process.stderr.write(`${voucher.LAUNCHER_PATH} runs only the commands AI-DLC's Copilot hooks pass to it, so this did not run. Run \`${[aidlcInvocation(), ...words].join(" ")}\` instead.\n`);
+  process.exitCode = 1;
+  return false;
+}
+
 function run(args: string[]): void {
   // Keep pending stdin and async dispatch alive, while leaving this module
   // synchronous to import (completions imports its route table during dispatch).
   const keepAlive = setInterval(() => {}, 1_000);
-  void main(args).catch((error) => {
+  void launcherGate(args).then((go) => go ? main(args) : undefined).catch((error) => {
     // Recorded before the message is rendered, so a failing stderr write
     // still leaves the reason in the trace. Only hook routes are traced.
     if (tracedHookRoute(canonicalizeLegacyCopilotHookArgv(process.argv.slice(2))) !== undefined) {

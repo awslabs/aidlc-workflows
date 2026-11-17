@@ -34,7 +34,7 @@ afterEach(() => {
 const CHAT = "01995000-7a11-7000-8000-0000000d0001";
 const REVIEWER = "aidlc-architecture-reviewer-agent";
 const README = "# React Todo App\n\nA simple todo application.\n";
-const LEAVE = "Leave them as they are unless this work's plan changes one of them.";
+const LEAVE = "Leave them as they are: change one only when the person asks for it or the work cannot be built without it.";
 const SINGLE = ["--stage", "code-generation", "--single", "--scope", "poc"];
 const ENV = { AIDLC_SESSION_OVERRIDE: CHAT, AIDLC_SESSION_OVERRIDE_SOURCE: "payload", AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" };
 

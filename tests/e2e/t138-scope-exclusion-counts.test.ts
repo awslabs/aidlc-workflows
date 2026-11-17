@@ -49,7 +49,6 @@
 
 import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, fileCleanupReserveMs } from "../harness/test-budget.ts";
 import { beforeEach, describe, expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { assertAuditEvent, assertResultOk } from "../harness/assert.ts";
@@ -57,6 +56,7 @@ import {
   cleanupTestProject,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
+import { T138_SEED, seedLiveWork } from "../harness/live-work-seed.ts";
 import {
   driveAidlc,
   readAuditText,
@@ -79,7 +79,7 @@ function remainingWorkMs(): number {
 }
 
 
-const SCOPE = "security-patch";
+const SCOPE = T138_SEED.scope;
 
 // Path to the SHIPPED scope grid in the distributable (the source of truth the
 // orchestrator itself reads). We read the SAME file at test time so the SKIP set
@@ -95,37 +95,6 @@ const SCOPE_GRID = join(
   "data",
   "scope-grid.json",
 );
-
-/** Seed the scoped workflow through the project-local utility the slash command
- *  delegates to, so the live SDK run measures the workflow, not the conductor's
- *  handling of a placeholder description. On 2026-09-13, driving
- *  `/aidlc --init --scope security-patch` through the model produced a print
- *  command carrying `--arguments=--init`; the conductor twice asked for the patch
- *  target instead of running it, failing the run before the workflow began.
- *  The scope-routing invariant does not depend on the review class. Disabling
- *  the reviewer removes the largest variable cost (two adversarial iterations at
- *  nfr-requirements in three of four runs on 2026-09-12) so the journey fits its
- *  budget. */
-function seedScopedState(proj: string): void {
-  const utility = join(proj, ".claude", "tools", "aidlc-utility.ts");
-  const res = spawnSync(
-    process.execPath,
-    [
-      utility,
-      "intent-create",
-      "--scope",
-      SCOPE,
-      "--review",
-      "none",
-      "--project-dir",
-      proj,
-    ],
-    { timeout: remainingWorkMs(), cwd: proj, encoding: "utf8" },
-  );
-  const output = `${res.stdout}\n${res.stderr}`;
-  expect(res.status, output).toBe(0);
-  expect(output).toContain("State initialized");
-}
 
 function deriveStageSets(scope: string): { skip: string[]; execute: string[] } {
   const grid = JSON.parse(readFileSync(SCOPE_GRID, "utf8")) as Record<
@@ -172,10 +141,11 @@ describe("t138 scope-exclusion counts (metamorphic invariant, sdk)", () => {
 
       const proj = setupIntegrationProject({ noAidlcDocs: true });
       try {
-        // Seed the fresh scoped workflow directly: the live SDK run should
-        // measure the journey, not the conductor's handling of a placeholder
-        // description. The invariant remains the full-workflow audit check below.
-        seedScopedState(proj);
+        // The work is created up front, with the words the drive types: on
+        // 2026-09-13 a model-driven `/aidlc --init --scope security-patch` asked
+        // twice for the patch target and failed the run before the workflow
+        // began. The invariant remains the full-workflow audit check below.
+        seedLiveWork(proj, T138_SEED, remainingWorkMs());
         expect(readFileSync(stateFilePathFor(proj), "utf8")).toContain(
           `- **Scope**: ${SCOPE}`,
         );
@@ -183,14 +153,7 @@ describe("t138 scope-exclusion counts (metamorphic invariant, sdk)", () => {
         // The questions and gates are answered by the driver's menus, as a
         // person answers them: answers chosen up front would be the agent's.
         const r = await driveAidlc(
-          `/aidlc ${SCOPE} This is a synthetic security-patch fixture. Scaffold a tiny ` +
-            "dependency-free Bun CLI that prints an HTML greeting for its argument, then fix " +
-            "unsafe interpolation by exporting and using escapeHtmlText. Its exact contract is " +
-            "to encode & as &amp;, < as &lt;, > as &gt;, double quote as &quot;, and single " +
-            "quote as &#39;, while preserving ordinary and Unicode text. Add table-driven " +
-            "regression tests that call the real exported function and a CLI test proving " +
-            "the greeting uses it; those tests must fail against the unescaped implementation. " +
-            "Use Bun built-in APIs, and continue through workflow completion.",
+          `/aidlc ${T138_SEED.scope} ${T138_SEED.request}`,
           {
             projectDir: proj,
             timeoutMs: remainingWorkMs(),

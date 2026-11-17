@@ -346,6 +346,82 @@ function readSafe(path: string): string | null {
 // corrupted, and nothing outside the project is read or written.
 export function addRootBlocks(projectDir: string): string[] {
   const written: string[] = [];
+  const { blocks, entries } = aidlcRootParts(projectDir);
+  for (const [path, part] of blocks) {
+    if (part.configured) continue;
+    const target = join(projectDir, path);
+    let current = "";
+    try {
+      assertProjectionPathHasNoSymlinks(projectDir, path);
+      const stat = lstatSync(target, { throwIfNoEntry: false });
+      if (stat && !stat.isFile()) continue;
+      if (stat) {
+        const bytes = readFileSync(target);
+        current = bytes.toString("utf-8");
+        if (!Buffer.from(current, "utf-8").equals(bytes)) continue;
+      }
+    } catch {
+      continue;
+    }
+    // A file the Cursor installer manages already holds AI-DLC's part, under
+    // that installer's own markers; it stays the installer's to update.
+    if (/^(?:# |<!-- )BEGIN AIDLC [A-Z]+/m.test(current)) continue;
+    const merged = mergeBlock(path, current, part.shipped, part.marker, part.legacy);
+    if (merged.error || merged.value === undefined || merged.value === current) continue;
+    if (merged.currentHash && !merged.currentBlockShipped) continue;
+    try {
+      assertProjectionPathHasNoSymlinks(projectDir, path);
+      writeFileAtomic(target, merged.value);
+      written.push(path);
+    } catch {
+      // Leave the file as it was; the next session or config tries again.
+    }
+  }
+  for (const [key, part] of entries) {
+    if (part.configured) continue;
+    // The team's file (the opencode.jsonc a team keeps, for opencode.json).
+    const path = rootIntegrationTarget(projectDir, key);
+    const target = join(projectDir, path);
+    let current = "";
+    try {
+      assertProjectionPathHasNoSymlinks(projectDir, path);
+      const stat = lstatSync(target, { throwIfNoEntry: false });
+      if (stat && (!stat.isFile() || stat.size > MAX_ENTRY_FILE_BYTES)) continue;
+      if (stat) {
+        const bytes = readFileSync(target);
+        current = bytes.toString("utf-8");
+        if (!Buffer.from(current, "utf-8").equals(bytes)) continue;
+      }
+    } catch {
+      continue;
+    }
+    // With no record, only entries that name AI-DLC's own folders are read
+    // as AI-DLC's; the team's keys and values stay theirs.
+    const merged = mergeJsonEntries(current, part.text, { kind: "none" });
+    if ("conflict" in merged || merged.text === current) continue;
+    try {
+      assertProjectionPathHasNoSymlinks(projectDir, path);
+      writeFileAtomic(target, merged.text);
+      written.push(path);
+    } catch {
+      // Leave the file as it was; the next session or config tries again.
+    }
+  }
+  return written;
+}
+
+// AI-DLC's part of each root file it shares with the team, as this project's
+// harnesses ship it in root-blocks: a managed block (the shipped text, its
+// marker, the whole-file hashes of earlier releases) or a JSON file's entries,
+// keyed by the root file, and whether config ran for it (then config keeps
+// it). addRootBlocks writes them; publish and land read them to tell AI-DLC's
+// own write from the person's change.
+export interface AidlcRootParts {
+  blocks: Map<string, { shipped: string; marker: string; legacy: string[]; configured: boolean }>;
+  entries: Map<string, { text: string; configured: boolean }>;
+}
+
+export function aidlcRootParts(projectDir: string): AidlcRootParts {
   const parts = new Map<string, {
     integration: RootIntegration;
     contributors: Array<{ distribution: string; text: string }>;
@@ -358,7 +434,7 @@ export function addRootBlocks(projectDir: string): string[] {
   try {
     harnesses = discoverProjectHarnesses(projectDir);
   } catch {
-    return written;
+    return { blocks: new Map(), entries: new Map() };
   }
   for (const harness of harnesses) {
     const data = join(harness.root, "tools", "data");
@@ -411,70 +487,18 @@ export function addRootBlocks(projectDir: string): string[] {
       parts.set(integration.path, part);
     }
   }
+  const blocks: AidlcRootParts["blocks"] = new Map();
   for (const [path, part] of parts) {
-    if (part.configured) continue;
-    const shipped = part.integration.shared === "union"
-      ? unionBlocks(part.contributors)
-      : [...part.contributors].sort((left, right) => left.distribution.localeCompare(right.distribution))[0].text;
-    const target = join(projectDir, path);
-    let current = "";
-    try {
-      assertProjectionPathHasNoSymlinks(projectDir, path);
-      const stat = lstatSync(target, { throwIfNoEntry: false });
-      if (stat && !stat.isFile()) continue;
-      if (stat) {
-        const bytes = readFileSync(target);
-        current = bytes.toString("utf-8");
-        if (!Buffer.from(current, "utf-8").equals(bytes)) continue;
-      }
-    } catch {
-      continue;
-    }
-    // A file the Cursor installer manages already holds AI-DLC's part, under
-    // that installer's own markers; it stays the installer's to update.
-    if (/^(?:# |<!-- )BEGIN AIDLC [A-Z]+/m.test(current)) continue;
-    const merged = mergeBlock(path, current, shipped, part.integration.marker || basename(path), [...part.legacy]);
-    if (merged.error || merged.value === undefined || merged.value === current) continue;
-    if (merged.currentHash && !merged.currentBlockShipped) continue;
-    try {
-      assertProjectionPathHasNoSymlinks(projectDir, path);
-      writeFileAtomic(target, merged.value);
-      written.push(path);
-    } catch {
-      // Leave the file as it was; the next session or config tries again.
-    }
+    blocks.set(path, {
+      shipped: part.integration.shared === "union"
+        ? unionBlocks(part.contributors)
+        : [...part.contributors].sort((left, right) => left.distribution.localeCompare(right.distribution))[0].text,
+      marker: part.integration.marker || basename(path),
+      legacy: [...part.legacy],
+      configured: part.configured,
+    });
   }
-  for (const [key, part] of entryParts) {
-    if (part.configured) continue;
-    // The team's file (the opencode.jsonc a team keeps, for opencode.json).
-    const path = rootIntegrationTarget(projectDir, key);
-    const target = join(projectDir, path);
-    let current = "";
-    try {
-      assertProjectionPathHasNoSymlinks(projectDir, path);
-      const stat = lstatSync(target, { throwIfNoEntry: false });
-      if (stat && (!stat.isFile() || stat.size > MAX_ENTRY_FILE_BYTES)) continue;
-      if (stat) {
-        const bytes = readFileSync(target);
-        current = bytes.toString("utf-8");
-        if (!Buffer.from(current, "utf-8").equals(bytes)) continue;
-      }
-    } catch {
-      continue;
-    }
-    // With no record, only entries that name AI-DLC's own folders are read
-    // as AI-DLC's; the team's keys and values stay theirs.
-    const merged = mergeJsonEntries(current, part.text, { kind: "none" });
-    if ("conflict" in merged || merged.text === current) continue;
-    try {
-      assertProjectionPathHasNoSymlinks(projectDir, path);
-      writeFileAtomic(target, merged.text);
-      written.push(path);
-    } catch {
-      // Leave the file as it was; the next session or config tries again.
-    }
-  }
-  return written;
+  return { blocks, entries: entryParts };
 }
 
 // A team settings file this large is not one AI-DLC adds its part to at session start.

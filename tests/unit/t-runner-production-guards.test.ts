@@ -24,7 +24,7 @@ import {
   runnerFileTimeoutSeconds,
   testGuardEnvironment,
 } from "../harness/runner-profile.ts";
-import { MODEL_API_REASON, modelApiLine, personTurnLine } from "../lib/file-retry.ts";
+import { FILE_ATTEMPT_ENV, MODEL_API_REASON, modelApiLine, personTurnLine } from "../lib/file-retry.ts";
 import { assertRunnerFixtureImports } from "../lib/runner-fixture-imports.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -901,6 +901,7 @@ const name = process.env.AIDLC_TEST_NAME!;
 const observer = process.env.AIDLC_RETRY_OBSERVER!;
 appendFileSync(join(observer, "runs"), name + "\\n");
 appendFileSync(join(observer, name + ".tmp"), process.env.TMPDIR + "\\n");
+appendFileSync(join(observer, name + ".attempt"), process.env.${FILE_ATTEMPT_ENV} + "\\n");
 `;
 const RETRY_CASES = {
   flakyOnce: `${RETRY_PRELUDE}
@@ -999,6 +1000,11 @@ describe("merge-queue retry of ordinary tiers through the public runner", () => 
     expect(runs()).toEqual(["t-flaky", "t-flaky", "t-flaky-unit", "t-flaky-unit", "t-steady"]);
     const temps = readFileSync(join(observer, "t-flaky.test.ts.tmp"), "utf8").trim().split("\n");
     expect(new Set(temps).size).toBe(2);
+    // Each attempt knows which it is (tests/harness/team-unit-merge.ts traces only the retry on Windows).
+    for (const name of ["t-flaky", "t-flaky-unit"]) {
+      expect(readFileSync(join(observer, `${name}.test.ts.attempt`), "utf8").trim().split("\n")).toEqual(["1", "2"]);
+    }
+    expect(readFileSync(join(observer, "t-steady.test.ts.attempt"), "utf8").trim()).toBe("1");
     for (const name of ["t-flaky", "t-flaky-unit"]) {
       const log = `${name}.attempt-1.log`;
       // The row keeps PASS for the parsers; the line under it says it took a retry.
@@ -1099,6 +1105,8 @@ describe("merge-queue retry of ordinary tiers through the public runner", () => 
     const result = fixture.run(["--integration", "--no-llm"], { AIDLC_RETRY_OBSERVER: observer });
     expect(result.status).toBe(1);
     expect(runs()).toEqual(["t-flaky"]);
+    // No retry can come, so the file is told no attempt (the team-unit harness then keeps its git trace).
+    expect(readFileSync(join(observer, "t-flaky.test.ts.attempt"), "utf8").trim()).toBe("undefined");
     expect(existsSync(join(result.stamp, "retries.json"))).toBe(false);
     expect(result.summary).not.toContain("Passed on retry");
   });

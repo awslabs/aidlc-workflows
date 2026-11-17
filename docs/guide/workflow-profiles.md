@@ -31,7 +31,7 @@ and gate counts; named alone, it first asks what the work is for.
 | **Proof of concept** | Testing feasibility with the smallest useful implementation path | 5 / 30 | Minimal | Minimal | `/aidlc poc` |
 | **Bugfix** | A known defect that needs a focused fix and regression test | 6 / 30 | Minimal | Minimal | `/aidlc bugfix` |
 | **Refactor** | Improving existing code without changing product behavior | 7 / 30 | Minimal | Minimal | `/aidlc refactor` |
-| **Infrastructure** | Environments, IaC, deployment foundations, or cost work | 10 / 30 | Standard | Standard | `/aidlc infra` |
+| **Infrastructure** | Environments, IaC, deployment foundations, or cost work | 12 / 30 | Standard | Standard | `/aidlc infra` |
 | **Security patch** | A CVE or focused vulnerability response | 7 / 30 | Minimal | Minimal | `/aidlc security-patch` |
 | **Workshop** | A facilitated training or group delivery session | 23 / 30 | Standard | Minimal | `/aidlc workshop` |
 
@@ -164,9 +164,11 @@ Feature instead if the work changes user-visible behavior.
 **Choose Infrastructure when:** the outcome is an environment, IaC change,
 deployment foundation, platform capability, or cost optimization.
 
-Infrastructure uses 10 stages at Standard depth. It removes user-facing product
+Infrastructure uses 12 stages at Standard depth. It removes user-facing product
 ceremony and concentrates on requirements, NFRs, infrastructure design, CI/CD,
-deployment, and observability.
+deployment, and observability. Code Generation writes the IaC under Plan
+Approval, and Build and Test runs its checks (for example `terraform validate`
+or `cdk synth`) before Environment Provisioning applies it.
 
 ## `security-patch`
 

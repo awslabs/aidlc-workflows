@@ -31,7 +31,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { delimiter, dirname, join } from "node:path";
+import { basename, delimiter, dirname, join } from "node:path";
 import { appendAuditEntry } from "../../core/tools/aidlc-audit.ts";
 import {
   boltName,
@@ -45,6 +45,7 @@ import {
   splitKiroCommandArgs,
   stateDigest,
   writeActiveDirectiveMarker,
+  writeSessionBinding,
 } from "../../core/tools/aidlc-lib.ts";
 import { codeGenerationRecordDir } from "../../core/tools/aidlc-testing-posture.ts";
 import {
@@ -297,6 +298,10 @@ class Fixture {
       ["add", "-A"],
       ["-c", "commit.gpgsign=false", "commit", "-qm", "fixture baseline"],
     ]) succeeded(run(["git", ...args], this.project, this.env));
+    // The work's own chat, bound as a chat that took its steps there is: one
+    // that only followed the cursor is held from its first step
+    // (t-second-chat-held-from-its-first-step).
+    writeSessionBinding(this.project, "01995000-0995-7000-8000-000000000777", DEFAULT_SPACE, basename(seededRecordDir(this.project)), "cursor");
   }
 
   state(): string {
@@ -312,7 +317,9 @@ class Fixture {
   exact(command: string): Run {
     const argv = splitKiroCommandArgs(command);
     expect(argv.length).toBeGreaterThan(0);
-    expect(argv[0]).toBe(this.projection === "native" ? "aidlc" : "bun");
+    // From the project folder the Copilot CLI runs AI-DLC's own launcher
+    // (t-copilot-engine-launcher.test.ts), the engine under its own name.
+    expect([this.projection === "native" ? "aidlc" : "bun", ".aidlc/bin/aidlc-engine"]).toContain(argv[0]);
     const result = run(argv, this.cwd, this.env, undefined, command);
     if (this.projection === "native") expect(existsSync(denialLog), result.stderr).toBe(false);
     return result;
@@ -343,8 +350,9 @@ class Fixture {
       : name === "record-human-turn"
         ? [BUN, join(this.tools, "aidlc.ts"), "engine", "hook", name]
         : [BUN, join(this.project, this.harness.dir, "hooks", `aidlc-${name}.ts`)];
+    // Copilot names the folder its shell runs the call in.
     const input = {
-      cwd: this.project, session_id: "01995000-0995-7000-8000-000000000777", ...payload,
+      cwd: this.cwd, session_id: "01995000-0995-7000-8000-000000000777", ...payload,
     };
     const output = run(argv, this.cwd, this.env, input);
     if (this.projection === "native") expect(existsSync(denialLog), output.stderr).toBe(false);
@@ -362,8 +370,9 @@ class Fixture {
     const argv = this.projection === "native"
       ? ["aidlc", "engine", "adapter", "copilot", target, "--project-dir", this.project]
       : [BUN, join(this.project, this.harness.dir, "hooks", "aidlc-copilot-adapter.ts"), target];
+    // Copilot names the folder its shell runs the call in.
     const input = {
-      cwd: this.project, session_id: "01995000-0995-7000-8000-000000000777", ...payload,
+      cwd: this.cwd, session_id: "01995000-0995-7000-8000-000000000777", ...payload,
     };
     const output = run(argv, this.cwd, this.env, input);
     if (this.projection === "native") expect(existsSync(denialLog), output.stderr).toBe(false);

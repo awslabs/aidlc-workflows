@@ -19,6 +19,8 @@ import {
   KIRO_TERMINAL_ISSUE_ID,
   kiroTerminalApplies,
   kiroTerminalFix,
+  kiroTerminalIntegrationFix,
+  kiroTerminalIntegrationGap,
   kiroTerminalIssueMessage,
   readKiroIdeTerminal,
   readKiroTerminalAnswer,
@@ -36,7 +38,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir, platform as hostPlatform } from "node:os";
-import { delimiter, dirname, join, relative, resolve } from "node:path";
+import { delimiter, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
   assertProjectionPathHasNoSymlinks,
   holdsRecordedWrite,
@@ -66,7 +68,9 @@ import { DEVIN_MIN_VERSION_STRING } from "./aidlc-devin-version.ts";
 import {
   aidlcInvocation,
   discoverProjectHarnesses,
+  inHostShell,
   kiroTreeLayout,
+  typedHarnessName,
 } from "./aidlc-runtime-paths.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 import { compareVersions, VERSION_ID } from "./aidlc-channel.ts";
@@ -81,9 +85,11 @@ import { installedExecutablePath } from "./aidlc-install-paths.ts";
 import { cmdScriptLaunch, isCmdScript, pathEntries, resolveExecutableOnPath } from "./aidlc-executable-path.ts";
 import { personaTwinRels } from "./aidlc-plugin.ts";
 import { readBoundedRegularFile } from "./aidlc-inline-context.ts";
+import { KIRO_IDE_STEERING } from "./aidlc-includes.ts";
 import {
   HARNESS_HONESTY,
   HARNESS_PRODUCT_NAMES,
+  isModelHarness,
   sessionSetsAgentModels,
   type ModelHarness,
 } from "./aidlc-model-policy.ts";
@@ -185,6 +191,15 @@ export type TrustRecord = {
   reviewed?: boolean;
 };
 
+// The person kept the models as they are (Enter at the models question, or
+// `config models --keep`), so setup stops asking while no policy is recorded.
+// A setup answer like the providers one, never policy: agents read
+// aidlc.settings.json only.
+export type ModelsAnswerRecord = {
+  schemaVersion: 1;
+  kept: true;
+};
+
 export type CompletionShell = "bash" | "zsh" | "fish" | "powershell" | "none";
 
 export type ProjectChoicesRecord = {
@@ -198,6 +213,7 @@ export type ConfigDiagnosticRecords = {
   providers: ProvidersRecord | null;
   trust: TrustRecord | null;
   project: ProjectChoicesRecord | null;
+  modelsAnswer?: ModelsAnswerRecord | null;
 };
 
 export type ConfigDiagnosticOverrides = {
@@ -205,6 +221,7 @@ export type ConfigDiagnosticOverrides = {
   providers?: ProvidersRecord | null;
   trust?: TrustRecord | null;
   project?: ProjectChoicesRecord | null;
+  modelsAnswer?: ModelsAnswerRecord | null;
   plugins?: string[] | null;
 };
 
@@ -229,7 +246,7 @@ export function workspaceShellRefreshCommand(
   distribution: string,
 ): string {
   const invoke = invocationForHarness(harnessDir);
-  return `${invoke} config --harness ${distribution}${invoke === "aidlc" ? "" : " --download"}`;
+  return `${invoke} config --harness ${typedHarnessName(distribution)}${invoke === "aidlc" ? "" : " --download"}`;
 }
 
 export type RuntimeBinaryProbe = {
@@ -515,6 +532,15 @@ export function normalizeTrustRecord(value: unknown): TrustRecord | null {
   };
 }
 
+// harness.json refuses a `models` key as a legacy policy, hence the name.
+export function normalizeModelsAnswerRecord(value: unknown): ModelsAnswerRecord | null {
+  if (value === undefined || value === null) return null;
+  if (!isRecord(value) || value.schemaVersion !== 1 || value.kept !== true || Object.keys(value).length !== 2) {
+    throw new Error("modelsAnswer record must be {\"schemaVersion\": 1, \"kept\": true}");
+  }
+  return { schemaVersion: 1, kept: true };
+}
+
 export function normalizeProjectChoicesRecord(
   value: unknown,
 ): ProjectChoicesRecord | null {
@@ -581,6 +607,7 @@ export function readConfigDiagnosticRecords(harnessRoot: string): ConfigDiagnost
       : null,
     trust: normalizeTrustRecord(value.trust),
     project: normalizeProjectChoicesRecord(value.project),
+    modelsAnswer: normalizeModelsAnswerRecord(value.modelsAnswer),
   };
 }
 
@@ -924,10 +951,13 @@ const HARNESS_CLI: Record<
     minimumVersion: "2.24.1",
     install: "Kiro CLI is optional here: to run AI-DLC from a terminal, install or upgrade Kiro CLI to 2.24.1 or later; Kiro IDE-only installs may omit it.",
   },
+  // The adapter's object entry points ({ id, setup, server }) load from 1.18.29;
+  // OpenCode 2 reports 2.x.
   opencode: {
     command: "opencode",
     required: true,
-    install: "Install opencode and ensure `opencode --version` works.",
+    minimumVersion: "1.18.29",
+    install: "Install or upgrade opencode to 1.18.29 or later; OpenCode 2 works too.",
   },
   devin: {
     command: "devin",
@@ -947,6 +977,14 @@ function isVsCodeCopilotStandInFolder(directory: string): boolean {
   const parts = directory.split(/[\\/]+/).filter(Boolean);
   return parts.at(-1)?.toLowerCase() === "copilotcli" &&
     parts.at(-2)?.toLowerCase() === "github.copilot-chat";
+}
+
+// A CLI's --version reply often says more than its version ("codex-cli
+// 0.167.1", "2.1.322 (Claude Code)", Copilot's update hint on a second line).
+// A line for the person shows the version alone; the probe keeps the reply.
+// Copilot ends its version with a period, which a prerelease tag never does.
+export function cliVersionShown(reply: string): string {
+  return /\d+\.\d+\.\d+(?:[-+][^\s)]*[^\s).])?/.exec(reply)?.[0] ?? reply;
 }
 
 function versionTuple(value: string): [number, number, number] | null {
@@ -1044,6 +1082,53 @@ export function probeHarnessCli(
   };
 }
 
+// A harness whose editor has no CLI to probe names that editor
+// (descriptor.editorTerminalApp), and the editor's integrated terminal is the
+// signal that setup is for it: TERM_PROGRAM is exactly the editor's name, or
+// the git askpass helper VS Code-based editors set (VSCODE_GIT_ASKPASS_NODE)
+// is the editor's executable. A miss only loses the default choice.
+export function launchedFromEditorTerminal(
+  app: string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const name = app.toLowerCase();
+  if ((env.TERM_PROGRAM ?? "").toLowerCase() === name) return true;
+  const helper = (env.VSCODE_GIT_ASKPASS_NODE ?? "").split(/[\\/]/).pop()?.toLowerCase() ?? "";
+  return helper === name || helper === `${name}.exe`;
+}
+
+// probeHarnessCli's answer read from absolute PATH entries only: a relative
+// entry resolves in whatever folder the command runs in, so it is never run.
+function supportedHarnessCliOnPath(harness: string, env: NodeJS.ProcessEnv): boolean {
+  if (!isModelHarness(harness)) return false;
+  const platform = hostPlatform();
+  const absolute = pathEntries(env.PATH ?? "", platform).filter((directory) => isAbsolute(directory));
+  return probeHarnessCli(harness, {
+    env,
+    platform,
+    interactivePath: absolute.join(platform === "win32" ? ";" : delimiter),
+  }).status === "found";
+}
+
+// A tree an editor and a CLI both run (Kiro IDE and Kiro CLI) words its
+// what-next lines for the editor and keeps a copy for the CLI. The copy leads
+// where a supported CLI (its version floor included) is on an absolute PATH
+// entry and the command runs outside the editor: in no shell `hostEnv` names,
+// and not in the terminal of the editor `hostEnv`'s TERM_PROGRAM entry names
+// (launchedFromEditorTerminal, which reads the git askpass helper too).
+// Someone with both, in a plain terminal, is told the CLI first and the editor
+// after. The environment is read first, so inside the editor the CLI is never
+// run.
+export function harnessCliLeads(
+  harness: string,
+  hostEnv: readonly string[],
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const editors = hostEnv.flatMap((entry) => entry.startsWith("TERM_PROGRAM=") ? [entry.slice("TERM_PROGRAM=".length)] : []);
+  if (inHostShell(hostEnv, env) || editors.some((app) => launchedFromEditorTerminal(app, env))) return false;
+  return supportedHarnessCliOnPath(harness, env);
+}
+
 export function probeRuntime(
   projectDir: string,
   harnessDir: string,
@@ -1094,7 +1179,7 @@ export function runtimeIssues(diagnostics: RuntimeDiagnostics): DiagnosticIssue[
   ) {
     issues.push({
       id: "runtime-harness-cli-missing",
-      message: `${diagnostics.cli.command} is required for ${diagnostics.cli.harness} but is not on PATH`,
+      message: `${diagnostics.cli.command} is required for ${typedHarnessName(diagnostics.cli.harness)} but is not on PATH`,
       remediation: diagnostics.cli.remediation ?? "Install the selected harness CLI.",
     });
   } else if (
@@ -1104,7 +1189,9 @@ export function runtimeIssues(diagnostics: RuntimeDiagnostics): DiagnosticIssue[
     issues.push({
       id: "runtime-harness-cli-old",
       message:
-        `${diagnostics.cli.command} ${diagnostics.cli.version || "unknown"} is below ${diagnostics.cli.minimumVersion}`,
+        `${diagnostics.cli.command} ${
+          diagnostics.cli.version ? cliVersionShown(diagnostics.cli.version) : "unknown"
+        } is below ${diagnostics.cli.minimumVersion}`,
       remediation: diagnostics.cli.remediation ?? "Upgrade the selected harness CLI.",
     });
   }
@@ -2174,14 +2261,14 @@ export function flagIssues(
         issues.push({
           id: "flag-claude-default-scope-drift",
           message: `${path} does not carry the recorded default scope ${record.defaultScope}`,
-          remediation: "Run aidlc config flags again to reapply the recorded default scope.",
+          remediation: `Run ${invocationForHarness(harnessDir)} config flags again to reapply the recorded default scope.`,
         });
       }
     } catch (error) {
       issues.push({
         id: "flag-claude-settings-unreadable",
         message: error instanceof Error ? error.message : String(error),
-        remediation: "Restore .claude/settings.json, then rerun aidlc config flags.",
+        remediation: `Restore .claude/settings.json, then rerun ${invocationForHarness(harnessDir)} config flags.`,
       });
     }
   }
@@ -2340,10 +2427,10 @@ export function projectMcpNote(
   if (!record?.mcp) return null;
   const surface = projectMcpSurface(projectDir, harnessDir, harness);
   if (surface.kind === "always" && record.mcp === "none") {
-    return `${harness} ships ${surface.path} as a framework file; MCP none is an instruct-only preference and does not remove that file.`;
+    return `${typedHarnessName(harness)} ships ${surface.path} as a framework file; MCP none is an instruct-only preference and does not remove that file.`;
   }
   if (surface.kind === "none") {
-    return `${harness} has no shipped MCP surface; the recorded ${record.mcp} answer is informational.`;
+    return `${typedHarnessName(harness)} has no shipped MCP surface; the recorded ${record.mcp} answer is informational.`;
   }
   return null;
 }
@@ -2362,7 +2449,7 @@ export function projectChoiceIssues(
       issues.push({
         id: "project-plugin-unknown",
         message: `Recorded plugin ${plugin} is not installed`,
-        remediation: "Install the plugin or rerun aidlc config project with the installed plugin set.",
+        remediation: `Install the plugin or rerun ${invocationForHarness(harnessDir)} config project with the installed plugin set.`,
       });
     }
   }
@@ -2382,7 +2469,7 @@ export function projectChoiceIssues(
       issues.push({
         id: "project-mcp-unreadable",
         message: `${path} is malformed`,
-        remediation: "Repair .mcp.json, then rerun aidlc config project.",
+        remediation: `Repair .mcp.json, then rerun ${invocationForHarness(harnessDir)} config project.`,
       });
       return issues;
     }
@@ -2394,7 +2481,7 @@ export function projectChoiceIssues(
     issues.push({
       id: "project-mcp-defaults-drift",
       message: "Recorded MCP consent is defaults, but one or more shipped MCP entries are absent",
-      remediation: "Run aidlc config project --mcp defaults to reapply consented entries.",
+      remediation: `Run ${invocationForHarness(harnessDir)} config project --mcp defaults to reapply consented entries.`,
     });
   }
   if (
@@ -2405,7 +2492,7 @@ export function projectChoiceIssues(
     issues.push({
       id: "project-mcp-none-drift",
       message: "Recorded MCP consent is none, but shipped MCP entries remain",
-      remediation: "Run aidlc config project --mcp none to remove framework-owned MCP entries.",
+      remediation: `Run ${invocationForHarness(harnessDir)} config project --mcp none to remove framework-owned MCP entries.`,
     });
   }
   return issues;
@@ -2422,7 +2509,7 @@ export function providerSurfaceIssues(
     issues.push({
       id,
       message,
-      remediation: `Run aidlc config providers again to reapply the recorded answer to ${file}.`,
+      remediation: `Run ${invocationForHarness(harnessDir)} config providers again to reapply the recorded answer to ${file}.`,
     });
   };
   const warning = (id: string, message: string, remediation: string): void => {
@@ -2555,7 +2642,7 @@ export function providerSurfaceIssues(
     issues.push({
       id: "provider-surface-unreadable",
       message: error instanceof Error ? error.message : String(error),
-      remediation: "Restore the selected harness configuration files, then rerun aidlc config providers.",
+      remediation: `Restore the selected harness configuration files, then rerun ${invocationForHarness(harnessDir)} config providers.`,
     });
   }
   return issues;
@@ -2902,8 +2989,8 @@ export function workspaceSiblingIssues(
     remediation: `Run ${
       harnessDir
         ? workspaceShellRefreshCommand(harnessDir, harness)
-        : `aidlc config --harness ${harness}`
-    } to restore the complete ${harness} projection, including sibling directories.`,
+        : `aidlc config --harness ${typedHarnessName(harness)}`
+    } to restore the complete ${typedHarnessName(harness)} projection, including sibling directories.`,
   }));
 }
 
@@ -3275,18 +3362,19 @@ type InstructionState = {
   path: string;
   kind: "managed-block" | "whole-file" | "json-entries";
   state: "intact" | "missing" | "conflict";
+  // Codex's override holds a well-formed AI-DLC block that is not the current
+  // one: older after an update, or edited; doctor cannot tell which.
+  notCurrent?: true;
 };
 
-// AGENTS.md in a copy config never ran in: AI-DLC's part is the marked block
-// the engine adds at session start, by the same rule config uses. A file that
-// rule cannot take (unmarked AI-DLC text the team changed, broken markers) is
-// a conflict, so the person hears what to fix instead of nothing.
+// Root guidance in a copy config never ran in: AI-DLC's part is the marked
+// block the engine adds at session start, by the same rule config uses.
 function copiedAgentsState(
   projectDir: string,
   harnessDir: string,
   integration: RootIntegration,
+  path: string,
 ): InstructionState {
-  const path = "AGENTS.md";
   let shipped: string;
   let current: string;
   try {
@@ -3296,16 +3384,25 @@ function copiedAgentsState(
   } catch {
     return { path, kind: "whole-file", state: "intact" };
   }
-  // The Cursor installer keeps AI-DLC's part under its own markers.
-  if (/^<!-- BEGIN AIDLC [A-Z]+ -->/m.test(current)) return { path, kind: "managed-block", state: "intact" };
+  // The Cursor installer keeps AGENTS.md's part under its own markers.
+  if (path === "AGENTS.md" && /^<!-- BEGIN AIDLC [A-Z]+ -->/m.test(current)) {
+    return { path, kind: "managed-block", state: "intact" };
+  }
   const merged = mergeBlock(
     path,
     current,
     shipped,
     integration.marker ?? "agents",
-    integration.legacySignatures?.wholeFileHashes ?? [],
+    path === "AGENTS.md" ? integration.legacySignatures?.wholeFileHashes ?? [] : [],
   );
   if (merged.error) return { path, kind: "managed-block", state: "conflict" };
+  // Config and session start do not refresh Codex's override.
+  if (
+    path === "AGENTS.override.md" && merged.currentHash !== undefined &&
+    merged.currentHash !== merged.nextHash
+  ) {
+    return { path, kind: "managed-block", state: "conflict", notCurrent: true };
+  }
   return {
     path,
     kind: "managed-block",
@@ -3318,6 +3415,15 @@ function instructionStates(
   harnessDir: string,
   harness: ModelHarness,
 ): InstructionState[] {
+  const override = "AGENTS.override.md";
+  const instructionFileStat = (path: string) =>
+    (path === override ? statSync : lstatSync)(join(projectDir, path), { throwIfNoEntry: false });
+  const agentsPath = harness === "codex" && instructionFileStat(override)?.isFile()
+    ? override
+    : "AGENTS.md";
+  // Config still owns AGENTS.md; only its conflicts matter when Codex reads the override.
+  const relevantState = (item: InstructionState): boolean =>
+    agentsPath === "AGENTS.md" || item.path !== "AGENTS.md" || item.state === "conflict";
   let onboardingPath = harness === "claude" ? `${harnessDir}/CLAUDE.md` : undefined;
   let agentsBlock: RootIntegration | undefined;
   try {
@@ -3356,21 +3462,26 @@ function instructionStates(
   );
   if (!existsSync(baselinePath)) {
     const instructionPaths = harness === "claude" ? [] : ["AGENTS.md"];
+    if (agentsPath !== "AGENTS.md") instructionPaths.push(agentsPath);
     if (onboardingPath && !instructionPaths.includes(onboardingPath)) {
       instructionPaths.push(onboardingPath);
     }
-    return instructionPaths.map((path) => {
+    return instructionPaths.map<InstructionState>((path) => {
       if (path === onboardingPath && onboardingConflict) {
         return { path, kind: "whole-file", state: "conflict" };
       }
-      const target = join(projectDir, path);
-      if (!existsSync(target) || !lstatSync(target).isFile()) {
-        return { path, kind: "whole-file", state: "missing" };
+      const file = instructionFileStat(path);
+      if (!file?.isFile()) {
+        return {
+          path,
+          kind: "whole-file",
+          state: path === "AGENTS.md" && agentsPath !== path && file ? "conflict" : "missing",
+        };
       }
-      return path === "AGENTS.md" && agentsBlock
-        ? copiedAgentsState(projectDir, harnessDir, agentsBlock)
+      return (path === "AGENTS.md" || path === override) && agentsBlock
+        ? copiedAgentsState(projectDir, harnessDir, agentsBlock, path)
         : { path, kind: "whole-file", state: "intact" };
-    });
+    }).filter(relevantState);
   }
   const baseline = JSON.parse(
     readFileSync(baselinePath, "utf-8"),
@@ -3387,6 +3498,14 @@ function instructionStates(
       (path === "opencode.json" && (contribution.policy === "whole-file" || contribution.policy === "json-entries"))
     ) {
       tracked.push({ path, contribution });
+      if (path === "AGENTS.md" && agentsPath !== path) {
+        tracked.push({
+          path: agentsPath,
+          contribution: contribution.policy === "managed-block"
+            ? { ...contribution, marker: contribution.marker || path }
+            : contribution,
+        });
+      }
     }
   }
   const onboardingHash = onboardingPath ? baseline.files?.[onboardingPath] : undefined;
@@ -3411,11 +3530,12 @@ function instructionStates(
       return { path, kind: "whole-file", state: "conflict" };
     }
     const target = join(projectDir, path);
-    if (!existsSync(target) || !lstatSync(target).isFile()) {
+    const file = instructionFileStat(path);
+    if (!file?.isFile()) {
       return {
         path,
         kind: contribution.policy,
-        state: existsSync(target) ? "conflict" : "missing",
+        state: (harness === "codex" ? file !== undefined : existsSync(target)) ? "conflict" : "missing",
       };
     }
     const content = readFileSync(target);
@@ -3469,12 +3589,14 @@ function instructionStates(
       return { path, kind: contribution.policy, state: "conflict" };
     }
     const block = text.slice(beginAt, endAt + markers.end.length);
+    if (holdsRecordedWrite(block, contribution.hash) || ownTitleOnly(block, contribution.hash)) {
+      return { path, kind: contribution.policy, state: "intact" };
+    }
     return {
       path,
       kind: contribution.policy,
-      state: holdsRecordedWrite(block, contribution.hash) || ownTitleOnly(block, contribution.hash)
-        ? "intact"
-        : "conflict",
+      state: "conflict",
+      ...(path === "AGENTS.override.md" ? { notCurrent: true as const } : {}),
     };
   });
   if (onboardingPath && !onboardingHash) {
@@ -3484,7 +3606,7 @@ function instructionStates(
       state: onboardingConflict ? "conflict" : "missing",
     });
   }
-  return states;
+  return states.filter(relevantState);
 }
 
 export function instructionFileDoctorCheck(
@@ -3514,35 +3636,80 @@ export function instructionFileDoctorCheck(
       fix: error instanceof Error ? error.message : String(error),
     };
   }
-  const conflicts = states.filter((item) => item.state === "conflict");
-  if (conflicts.length > 0) {
+  const override = "AGENTS.override.md";
+  const overrideItem = states.find((item) => item.path === override);
+  // The override is the person's file, which AI-DLC never writes: doctor says
+  // what Codex reads there and offers AI-DLC's block.
+  const overrideWords = !overrideItem
+    ? undefined
+    : overrideItem.state === "intact"
+    ? `Codex reads ${override} instead of AGENTS.md`
+    : `Codex reads ${override}, ${
+      overrideItem.state === "missing"
+        ? "which has no AI-DLC block"
+        : overrideItem.notCurrent
+        ? "whose AI-DLC block is not the current one"
+        : "whose AI-DLC:agents markers are unmatched or duplicated"
+    }; AI-DLC keeps its block in AGENTS.md`;
+  // A clone of a team that keeps AGENTS.md personal has none to copy from
+  // until config writes it.
+  const writeFirst = existsSync(join(projectDir, "AGENTS.md"))
+    ? ""
+    : `run \`${invoke} config\` to write AI-DLC's block to AGENTS.md, then `;
+  const overrideFix = !overrideItem || overrideItem.state === "intact"
+    ? undefined
+    : overrideItem.state === "missing"
+    ? `if you want Codex to read it too, ${writeFirst}copy ${
+      writeFirst ? "it" : "the AI-DLC:agents block from AGENTS.md"
+    } into ${override}, keeping your own text`
+    : `if you want Codex to read the current one, ${writeFirst}replace the AI-DLC block and any unmatched or ` +
+      `duplicate AI-DLC:agents markers in ${override} with ${
+        writeFirst ? "it" : "the block from AGENTS.md"
+      }, keeping your own text`;
+  const fixFor = (items: InstructionState[]): string => {
+    const fixes: string[] = [];
+    const rootConflict = overrideItem && items.some((item) => item.path === "AGENTS.md" && item.state === "conflict");
+    if (rootConflict) {
+      fixes.push(`to keep your version, move AGENTS.md somewhere else, then run \`${invoke} config\` to recreate it`);
+    }
+    const conflicts = items.filter((item) => item.state === "conflict" && (!rootConflict || item.path !== "AGENTS.md"));
+    if (conflicts.length > 0) {
+      fixes.push(keepOrTakeShipped(conflicts.map((item) => item.path), invoke));
+    } else if (!rootConflict) {
+      fixes.push(`run \`${invoke} config\``);
+    }
+    return fixes.join("; ");
+  };
+  const others = states.filter((item) => item !== overrideItem);
+  const conflicts = others.filter((item) => item.state === "conflict");
+  const missing = others.filter((item) => item.state === "missing");
+  const missingWords = `block or file missing (${missing.map((item) => item.path).join(", ")})`;
+  const issues = conflicts.length > 0
+    ? {
+      label: `hand-modified - conflict (${conflicts.map((item) => item.path).join(", ")})` +
+        (overrideItem && missing.length > 0 ? `; ${missingWords}` : ""),
+      fix: fixFor(overrideItem ? [...conflicts, ...missing] : conflicts),
+    }
+    : missing.length > 0
+    ? { label: missingWords, fix: fixFor(missing) }
+    : undefined;
+  if (issues || overrideFix) {
     return {
       pass: false,
       severity: "warn",
-      label:
-        `Instruction file: hand-modified - conflict (${conflicts.map((item) => item.path).join(", ")})`,
-      fix: keepOrTakeShipped(conflicts.map((item) => item.path), invoke),
-    };
-  }
-  const missing = states.filter((item) => item.state === "missing");
-  if (missing.length > 0) {
-    return {
-      pass: false,
-      severity: "warn",
-      label:
-        `Instruction file: block or file missing (${missing.map((item) => item.path).join(", ")})`,
-      fix: `run \`${invoke} config\``,
+      label: `Instruction file: ${[issues?.label, overrideWords].filter(Boolean).join("; ")}`,
+      fix: [issues?.fix, overrideFix].filter(Boolean).join("; "),
     };
   }
   const managed = states.some((item) => item.kind === "managed-block" || item.kind === "json-entries");
   const whole = states.some((item) => item.kind === "whole-file");
   return {
     pass: true,
-    label: managed && whole
+    label: (managed && whole
       ? "Instruction file: block present, user content preserved; framework-owned file intact"
       : managed
       ? "Instruction file: block present, user content preserved"
-      : "Instruction file: framework-owned file intact",
+      : "Instruction file: framework-owned file intact") + (overrideWords ? `; ${overrideWords}` : ""),
   };
 }
 
@@ -3626,11 +3793,13 @@ export function runtimeDoctorChecks(
       ? { severity: "warn" as const }
       : {}),
     label: cli.status === "found"
-      ? `Harness CLI: ${cli.command} ${cli.version || ""} at ${cli.path}`.trim()
+      ? `Harness CLI: ${cli.command} ${cli.version ? cliVersionShown(cli.version) : ""} at ${cli.path}`.trim()
       : cli.status === "not-applicable"
-      ? `Harness CLI: none required for ${cli.harness}`
+      ? `Harness CLI: none required for ${typedHarnessName(cli.harness)}`
       : cli.status === "too-old"
-      ? `Harness CLI: ${cli.required ? "" : "optional "}${cli.command} ${cli.version || "unknown"} is below ${cli.minimumVersion}`
+      ? `Harness CLI: ${cli.required ? "" : "optional "}${cli.command} ${
+        cli.version ? cliVersionShown(cli.version) : "unknown"
+      } is below ${cli.minimumVersion}`
       : cli.required
       ? `Harness CLI: ${cli.command} is missing`
       : `Harness CLI: optional ${cli.command} is not installed`,
@@ -3705,6 +3874,19 @@ export function kiroIdeTerminalDoctorCheck(
   const selected = selectedHarness(projectDir, harnessDirHint);
   if (selected?.harness !== "kiro-ide") return null;
   if (!kiroTerminalApplies(env, platform)) return null;
+  // Seen only when doctor runs in Kiro's terminal; doctor typed in a chat runs
+  // in Kiro's own environment and gets the profile rows below.
+  const gap = kiroTerminalIntegrationGap(env, platform);
+  if (gap !== null) {
+    return {
+      pass: false,
+      severity: "warn",
+      label:
+        "Kiro terminal: this terminal runs without Kiro's shell integration, so every command shows exit code -1 and " +
+        "output after its first second is cut off (AI-DLC keeps its own replies in a file)",
+      fix: kiroTerminalIntegrationFix(gap),
+    };
+  }
   const state = readKiroIdeTerminal(env, platform);
   if (!state.readable) {
     return {
@@ -3786,7 +3968,7 @@ export function vscodeWorkspaceRequestCapDoctorCheck(
       pass: false,
       severity: "warn",
       label: `${label} ${where} has no settings, so a window opened from it uses your user setting or VS Code's default of 50`,
-      fix: `run aidlc system workspace-sync, which adds "settings": { "${VSCODE_REQUEST_CAP_KEY}": 200 } to ${where}, or add it yourself; ${REQUEST_CAP_PAUSES}`,
+      fix: `run ${invocationForHarness(selected.harnessDir)} system workspace-sync, which adds "settings": { "${VSCODE_REQUEST_CAP_KEY}": 200 } to ${where}, or add it yourself; ${REQUEST_CAP_PAUSES}`,
     };
   }
   if (settings === null || typeof settings !== "object" || Array.isArray(settings)) {
@@ -4067,6 +4249,45 @@ export function workspaceSiblingDoctorCheck(
       };
 }
 
+// The folders outside the harness dir where a harness keeps the skills and
+// agents the engine generates and a plugin composes: Codex's `.agents/`, and
+// Copilot's `.github/` (its skills and agent files both live there).
+export const SHARED_SURFACE_DIRS = [".agents", ".github"] as const;
+
+// The skills folders a refresh looks in for the /aidlc skill, the harness's
+// own first.
+export function aidlcSkillsDirs(harnessDir: string): string[] {
+  return [`${harnessDir}/skills`, ...SHARED_SURFACE_DIRS.map((dir) => `${dir}/skills`)];
+}
+
+// Written by the engine from project state, so never recorded as shipped: a
+// refresh writes the staged copy over whatever is there, and never reports it
+// as a local change. Kiro IDE's steering file carries the project's memory text
+// (aidlc-includes.ts kiroIdeSteering).
+export function unbaselinedGenerated(harnessDir: string): string[] {
+  return [
+    ...["harness.json", "stage-graph.json", "scope-grid.json"].map((name) => `${harnessDir}/tools/data/${name}`),
+    ...(harnessDir === ".kiro" ? [KIRO_IDE_STEERING] : []),
+  ];
+}
+
+// The /aidlc skill: in the first skills folder that holds it. Config asks of
+// the staged tree; doctor asks of this install's record, so another harness's
+// skill folder in the project does not move its pick.
+export function aidlcSkillRel(harnessDir: string, present: (rel: string) => boolean): string {
+  const dirs = aidlcSkillsDirs(harnessDir);
+  return `${dirs.find((dir) => present(`${dir}/aidlc/SKILL.md`)) ?? dirs[0]}/aidlc/SKILL.md`;
+}
+
+// The scope and stage tables beside that skill, when they are there. They are
+// recorded as shipped, and a refresh renders them again from the compiled
+// graph, a plugin's rows included, so it stops on them only when they are not
+// a regular file.
+export function refreshedTablesRel(harnessDir: string, present: (rel: string) => boolean): string | undefined {
+  const rel = aidlcSkillRel(harnessDir, present).replace(/SKILL\.md$/, "tables.md");
+  return present(rel) ? rel : undefined;
+}
+
 // The AI-DLC files a refresh refuses to replace: each one config recorded that
 // now differs from what it wrote (line endings aside, #2057). The onboarding
 // file is the instruction row's; files config merges or writes again itself
@@ -4089,11 +4310,9 @@ function changedFrameworkFiles(
   } catch {
     // The instruction row reports an unreadable descriptor.
   }
-  const generated = [
-    ...["harness.json", "stage-graph.json", "scope-grid.json"].map((name) => `${harnessDir}/tools/data/${name}`),
-    // The engine writes Kiro IDE's steering copy of the project's memory itself.
-    `${harnessDir}/steering/aidlc-active-memory.md`,
-  ];
+  const generated = unbaselinedGenerated(harnessDir);
+  // Config renders the tables again over a file, and stops on anything else.
+  const tables = refreshedTablesRel(harnessDir, (rel) => typeof baseline.files?.[rel] === "string");
   // Config takes a plugin's additions to stage files and personas, and the
   // personas' per-harness copies, out before it compares. A persona carries
   // only fragments, so one a plugin composed holds that plugin's marker.
@@ -4137,6 +4356,7 @@ function changedFrameworkFiles(
     } catch {
       continue;
     }
+    if (regular && rel === tables) continue;
     if (regular) {
       const content = readFileSync(path);
       if (

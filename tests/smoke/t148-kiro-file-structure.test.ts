@@ -15,6 +15,7 @@ import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, wri
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { readConductorSurface } from "../harness/conductor-skill.ts";
 import {
   HARNESS_MATRIX,
   manifestGrantsIdeAgentTools,
@@ -22,6 +23,7 @@ import {
 import { delegatedLifecycleCommand } from "../../core/hooks/aidlc-state-transition-guard.ts";
 import { CONFIG_SECTIONS } from "../../core/tools/aidlc-command.ts";
 import { copyChannelDispatcherCommands, ROUTES } from "../../core/tools/aidlc.ts";
+import { RISKY_SHELL_FORMS } from "../../harness/kiro-ide/delegate-shell-deny.ts";
 import kiroManifest from "../../harness/kiro/manifest.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -715,7 +717,14 @@ describe("t148 dist/kiro file structure", () => {
     const markdown = readFileSync(join(KI, "agents", "aidlc-aidlc.md"), "utf-8");
     const body = markdown.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n+/, "").trim();
     expect(typeof cliConductor.prompt).toBe("string");
-    expect(body).toBe(cliConductor.prompt as string);
+    // The one difference: the Kiro row's skill goes on in workflow.md, which
+    // the Kiro CLI (V2) row does not ship.
+    expect(body).toBe(
+      (cliConductor.prompt as string).replace(
+        "and the two files beside it (question-rendering.md and composer.md)",
+        "and the three files beside it (workflow.md, question-rendering.md and composer.md)",
+      ),
+    );
     // Kiro's / menu turns a bare /aidlc + Enter into a specialist's name; the
     // conductor reads that whole message as /aidlc.
     expect(body).toContain(
@@ -741,8 +750,9 @@ describe("t148 dist/kiro file structure", () => {
       expect(subagentRule).toContain(`        - "${agent.replace(/\.md$/, "")}"`);
     }
     expect(fm).not.toContain("toolsSettings");
-    expect(fm).toContain(`        - "aidlc/.aidlc-compose-pending"`);
-    // The request file a request after `next` goes through on Windows (next --request-file).
+    // The engine keeps the in-flight compose question itself: no file to allow.
+    expect(fm).not.toContain(".aidlc-compose-pending");
+    // The request file words that would ask go to `next` through (next --request-file).
     expect(fm).toContain(`        - "aidlc/.aidlc-request-text/**"`);
   });
 
@@ -842,7 +852,7 @@ describe("t148 dist/kiro file structure", () => {
     for (const { tree, invoke } of KIRO_IDE_CHANNELS) {
       // The conductor, and every brief it dispatches, keep those forms out of
       // its own text, so the ask stays rare.
-      const skill = readFileSync(join(REPO_ROOT, tree, "kiro-ide", ".kiro", "skills", "aidlc", "SKILL.md"), "utf-8");
+      const skill = readConductorSurface(join(REPO_ROOT, tree, "kiro-ide", ".kiro", "skills", "aidlc", "SKILL.md"));
       expect(skill).toContain("use plain words on one line in single quotes, with no `$`, backtick, `>`, `<`, `&`, `@(`, or `@{`");
       expect(skill).toContain("Every agent brief you dispatch carries these two sentences as written.");
       const fm = frontmatter(join(REPO_ROOT, tree, "kiro-ide", ".kiro", "agents", "aidlc-aidlc.md"));
@@ -940,6 +950,51 @@ describe("t148 dist/kiro file structure", () => {
         expect(entries.filter((entry) => entry.startsWith("aidlc ") && !entry.startsWith("aidlc engine ")), `${tree} conductor`)
           .toEqual(copyChannelDispatcherCommands().map((command) => `aidlc ${command}`));
       }
+    }
+  });
+
+  test("the Kiro IDE conductor sends words that would ask to next in a file on every shell", () => {
+    const FILE = "aidlc/.aidlc-request-text/request.txt";
+    for (const { tree, invoke } of KIRO_IDE_CHANNELS) {
+      const dir = join(REPO_ROOT, tree, "kiro-ide", ".kiro");
+      // A request with a backtick or a `<` on the line hits the conductor's own
+      // ask for those forms; the same request through the file runs as allowed.
+      const fm = frontmatter(join(dir, "agents", "aidlc-aidlc.md"));
+      const inline = `${invoke} engine orchestrate next -- 'Add a \`tag\` command; list --tag <label> shows those notes'`;
+      expect(kiroShellEffect(fm, inline), `${tree} conductor: ${inline}`).toBe("ask");
+      // Every form the rule names asks on the line (RISKY_SHELL_FORMS).
+      for (const form of RISKY_SHELL_FORMS.map((f) => (f === "\\n" ? "\n" : f))) {
+        const command = `${invoke} engine orchestrate next -- 'add a${form}b page'`;
+        expect(kiroShellEffect(fm, command), `${tree} conductor: ${JSON.stringify(command)}`).toBe("ask");
+      }
+      for (const command of [
+        `${invoke} engine orchestrate next --request-file ${FILE}`,
+        `${invoke} engine orchestrate next compose --unit-plan --request-file ${FILE}`,
+        `${invoke} engine orchestrate next --project-type brownfield --request-file ${FILE}`,
+        `${invoke} engine orchestrate next --scope feature --request 1a2b3c4d --request-file ${FILE}`,
+      ]) {
+        expect(kiroShellEffect(fm, command), `${tree} conductor: ${command}`).toBe("allow");
+      }
+      const skill = readConductorSurface(join(dir, "skills", "aidlc", "SKILL.md"));
+      const rule = skill.indexOf("\n**Words that would ask go to `next` in a file.** Kiro asks the person to approve an AI-DLC command holding `$`, a backtick, `>`, `<`, `&`, `@(`, `@{` or a line break");
+      expect(rule, `${tree} SKILL`).toBeGreaterThan(-1);
+      expect(rule, `${tree} SKILL`).toBeLessThan(skill.indexOf("\n**Free text through `execute_pwsh`.**"));
+      expect(skill, `${tree} SKILL`).toContain(`keep them off the command line, on every shell: write them exactly as they are (the person's exactly as they typed them) with your file tool to \`${FILE}\`, then run the same \`next\` with \`--request-file ${FILE}\``);
+    }
+  });
+
+  // Kiro asks about a git command the person has not allowed; AI-DLC's own
+  // lookup, which the SKILL names for a Unit's source-manifest.json, asks nothing.
+  test("the Kiro IDE conductor checks a Unit's changed files with AI-DLC, a command it runs without asking", () => {
+    for (const { tree, invoke } of KIRO_IDE_CHANNELS) {
+      const dir = join(REPO_ROOT, tree, "kiro-ide", ".kiro");
+      const fm = frontmatter(join(dir, "agents", "aidlc-aidlc.md"));
+      const command = `${invoke} engine state lookup source-changes u1-tagging`;
+      expect(kiroShellEffect(fm, command), `${tree} conductor: ${command}`).toBe("allow");
+      const skill = readFileSync(join(dir, "skills", "aidlc", "SKILL.md"), "utf-8");
+      expect(skill, `${tree} SKILL`).toContain(
+        `To check that account, run \`${invoke} engine state lookup source-changes <directive.unit>\` rather than \`git status\` or \`git diff\``,
+      );
     }
   });
 
@@ -1133,7 +1188,7 @@ describe("t148 dist/kiro file structure", () => {
     // Default.
     const readme = readFileSync(join(REPO_ROOT, "README.md"), "utf-8");
     expect(readme.split("\n").find((line) => line.startsWith("| Kiro: Kiro IDE >= 1.1.70 / Kiro CLI >= 2.24.1 (v3) |"))).toContain(
-      "| Open the project in Kiro IDE and choose **aidlc** in the chat panel's agent picker, or run `kiro-cli` |",
+      "| Open the project in Kiro IDE and choose **aidlc** in the chat panel's agent picker, or run `kiro-cli --v3` (when Kiro asks whether you trust the folder and you know what is in it, choose **Trust, continue**) |",
     );
     expect(readme).toContain("In Kiro IDE, first choose **aidlc**\nin the chat panel's agent picker.");
     const read = (...parts: string[]) => readFileSync(join(REPO_ROOT, "docs", "guide", ...parts), "utf-8");
@@ -1144,9 +1199,12 @@ describe("t148 dist/kiro file structure", () => {
       .find((line) => line.startsWith("| Kiro IDE |"));
     expect(lifecycleRow).toBe(`| Kiro IDE | ${next[0].toUpperCase()}${next.slice(1)} |`);
     const gettingStarted = read("01-getting-started.md");
-    expect(gettingStarted).toContain("| Kiro (Kiro IDE, Kiro CLI on v3) | `kiro-ide` | Open the project, then choose **aidlc** in the chat panel's agent picker, or run `kiro-cli` in the project | `/aidlc` |");
-    expect(gettingStarted).toContain("| Kiro (Kiro IDE, Kiro CLI on v3) | Open the configured project, then choose **aidlc** in the chat panel's agent picker, or start `kiro-cli` in the project |");
-    const doctorSteps = read("harnesses", "kiro-ide.md").split(/\n\s*\n/).filter((paragraph) => /\brun\s+`\/aidlc --doctor`/.test(paragraph));
+    expect(gettingStarted).toContain("| Kiro (Kiro IDE, Kiro CLI on v3) | `kiro` | Open the project, then choose **aidlc** in the chat panel's agent picker, or run `kiro-cli --v3` in the project (when Kiro asks whether you trust the folder and you know what is in it, choose **Trust, continue**) | `/aidlc` |");
+    expect(gettingStarted).toContain("| Kiro (Kiro IDE, Kiro CLI on v3) | Open the configured project, then choose **aidlc** in the chat panel's agent picker, or start `kiro-cli --v3` in the project (when Kiro asks whether you trust the folder and you know what is in it, choose **Trust, continue**) |");
+    // The guide's Kiro CLI (V2) section is another distribution, with no agent picker.
+    const [kiroPart, v2Part] = read("harnesses", "kiro.md").split("\n## Kiro CLI (V2)\n");
+    expect(v2Part).toBeDefined();
+    const doctorSteps = kiroPart.split(/\n\s*\n/).filter((paragraph) => /\brun\s+`\/aidlc --doctor`/.test(paragraph));
     expect(doctorSteps.length).toBeGreaterThanOrEqual(2);
     for (const paragraph of doctorSteps) expect(paragraph).toContain("agent picker");
     const conductor = readFileSync(join(KI, "agents", "aidlc-aidlc.md"), "utf-8");
@@ -1168,7 +1226,7 @@ describe("t148 dist/kiro file structure", () => {
       const ide = run(KIRO_IDE);
       expect(ide).toContain("ok    agents/aidlc.json or agents/aidlc-aidlc.md present (conductor wiring)");
       expect(ide).not.toContain("settings/cli.json present");
-      const pin = 'settings/cli.json pins "chat.agentEngine": "v3" and "chat.defaultAgent": "aidlc"';
+      const pin = 'settings/cli.json sets "chat.agentEngine": "v3" and "chat.defaultAgent": "aidlc"';
       expect(ide).toContain(`ok    ${pin}`);
       // A missing, malformed, or changed pin leaves Kiro CLI on an engine that
       // runs no project hooks, so each must fail rather than report clean.

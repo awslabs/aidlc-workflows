@@ -31,10 +31,12 @@ import { spawnSync } from "node:child_process";
 import { cpSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import createAdapter, {
+import adapterPlugin, {
   type EngineErrorToast,
   type PluginInput,
 } from "../../harness/opencode/plugin/aidlc-opencode-adapter.ts";
+
+const createAdapter = adapterPlugin.server;
 import {
   ENGINE_ERROR_RELAY_HARNESSES,
   ENGINE_ERROR_RELAY_LABEL,

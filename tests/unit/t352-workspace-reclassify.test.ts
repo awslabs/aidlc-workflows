@@ -62,6 +62,7 @@ import {
   MESSAGE_FILL,
   MESSAGE_SLOT,
   nextInScopeStage,
+  pendingPersonLines,
   readAuditShardEvents,
   releaseAuditLock,
   reverseEngineeringOwedBehindCursor,
@@ -118,6 +119,11 @@ function reply(r: RunResult): string {
   expect(directive.kind).toBe("done");
   expect(directive.workflow_continues).toBe(true);
   return String(directive.narration);
+}
+
+// What reclassify keeps for the chat's next step to say.
+function keptForChat(proj: string, chat: string): string {
+  return pendingPersonLines(proj, chat).lines.join(" ");
 }
 
 function run(tool: string, proj: string, args: string[], env?: NodeJS.ProcessEnv): RunResult {
@@ -467,6 +473,8 @@ describe("t352 next: the flag rides to creation and the preview is honest", () =
     expect(auditBlockField(row!.block, "Message Id")).toBe(id);
     expect(auditBlockField(row!.block, "Person Reply")).toBe(words);
     expect(auditBlockField(row!.block, "Person Words")).toBeNull();
+    // Said in a turn of theirs since the work started: it was their word.
+    expect(keptForChat(proj, chat)).toStartWith("Project type is now existing code, as you said.");
     // Words inline and in a file at once get the setters' one answer, and the file stays.
     const file = ".aidlc-engine/answer-text/project-type-words.txt";
     mkdirSync(join(recordDir(proj), ".aidlc-engine", "answer-text"), { recursive: true });
@@ -716,6 +724,23 @@ describe("t352 said in the message that started the work", () => {
     expect(auditBlockField(row!.block, "Message Id")).toBe(id);
     expect(auditBlockField(row!.block, "Person Reply")).toBe(REQUEST);
     expect(auditBlockField(row!.block, "Person Words")).toBeNull();
+  });
+
+  // A live Claude Code run in a folder with two Terraform roots: the agent read
+  // them and named the request, and heard "as you said" and "The scan found no
+  // code in this folder yet". With only the agent's reading of the request
+  // behind it, the line says the type and what the scan found, not whose word.
+  test("named from the request alone, the line says what the scan found, never 'as you said'", () => {
+    const proj = noWorkYet();
+    const id = typed(proj, `/aidlc ${REQUEST}`);
+    startWork(proj);
+    for (const root of ["queue", "worker"]) {
+      mkdirSync(join(proj, "infra", root), { recursive: true });
+      writeFileSync(join(proj, "infra", root, "main.tf"), 'resource "aws_sqs_queue" "q" {\n  name = "orders"\n}\n');
+    }
+    recordedAsTheirs(proj, reclassify(proj, ["--message", id]));
+    expect(keptForChat(proj, CHAT)).toStartWith("Project type is now existing code (Terraform in infra/queue, infra/worker). ");
+    expect(keptForChat(proj, CHAT)).not.toContain("found no code");
   });
 
   test("a request composed, then Approve: the request's message goes through", () => {
@@ -1416,12 +1441,12 @@ describe("t352 the lines the person must hear ride the next step the agent speak
     const first = nextIn(proj);
     expect(first.kind).toBe("run-stage");
     const said = heard(first);
-    expect(said).toStartWith("Setting up a poc workflow for this");
+    expect(said).toStartWith("Setting up the poc workflow for this");
     expect(said).toContain("The folder has no code yet, so I'm starting this as a new project without Reverse Engineering.");
     // The stage's own line follows.
     expect(said.split("If the work is on existing code, tell me.")[1]?.trim().length ?? 0).toBeGreaterThan(0);
     // Said once: the same step asked for again does not repeat it.
-    expect(heard(nextIn(proj))).not.toContain("Setting up a poc workflow");
+    expect(heard(nextIn(proj))).not.toContain("Setting up the poc workflow");
   });
 
   test("the first stage says the bugfix plan's size, not its settings", () => {
@@ -1435,7 +1460,7 @@ describe("t352 the lines the person must hear ride the next step the agent speak
     ], { encoding: "utf-8", env: chat, timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
     expect(created.status, `${created.stdout}${created.stderr}`).toBe(0);
     const said = heard(nextIn(proj));
-    expect(said).toMatch(/^Setting up a bugfix workflow for this: \d+ stages, \d+ approval gates\./);
+    expect(said).toMatch(/^Setting up the bugfix workflow for this: \d+ stages, \d+ approval gates\./);
     expect(said).not.toContain("lead agent only");
   });
 
@@ -1450,7 +1475,7 @@ describe("t352 the lines the person must hear ride the next step the agent speak
     ], { encoding: "utf-8", env: chat, timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
     expect(created.status, `${created.stdout}${created.stderr}`).toBe(0);
     const said = heard(nextIn(proj));
-    expect(said).toStartWith("Setting up a poc workflow for this");
+    expect(said).toStartWith("Setting up the poc workflow for this");
     expect(said).toContain(
       "I read everything from the first <document> to the last </document> as your pasted document, and only the text outside it as your instructions.",
     );
@@ -1513,12 +1538,15 @@ describe("t352 the lines the person must hear ride the next step the agent speak
     expect(String(nextIn(proj).message)).toContain("execute --target reverse-engineering --direction redo");
     const step = nextIn(proj, ["--skip", "reverse-engineering"]);
     expect(String(step.message)).toContain("recompose --skip reverse-engineering");
+    // The skip's step ends the turn, so the reply to their words says the line.
+    expect(heard(step)).toStartWith("Project type is now existing code, as you said");
+    expect(heard(step)).not.toContain("approve the code's documentation");
     const skip = run(UTIL, proj, ["recompose", "--skip", "reverse-engineering", "--reason", "the person asked to skip it"], chat);
     expect(skip.status, said(skip)).toBe(0);
     const go = nextIn(proj);
     expect(go.kind).toBe("run-stage");
     expect(go.stage).toBe("practices-discovery");
-    expect(heard(go)).toStartWith("Project type is now existing code, as you said");
+    expect(heard(go)).not.toContain("Project type is now");
     expect(heard(go)).not.toContain("approve the code's documentation");
   });
 
@@ -1582,7 +1610,7 @@ describe("t352 the lines the person must hear ride the next step the agent speak
     ], { encoding: "utf-8", env: chat, timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
     expect(created.status, `${created.stdout}${created.stderr}`).toBe(0);
     const said = heard(nextIn(proj));
-    expect(said).toStartWith("Setting up a poc workflow for this");
+    expect(said).toStartWith("Setting up the poc workflow for this");
     expect(said).not.toContain(split);
   });
 

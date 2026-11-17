@@ -210,6 +210,8 @@ function routingQuestionOverThePlan(
   words = CHANGE,
   harness: Harness = "claude",
 ): Emitted {
+  // Codex names its chat on every command, so the question is asked in the chat that replies to it.
+  if (harness === "codex") writeSessionPidEntry(proj, process.pid, SESSION);
   if (planQuestionOpen) expect(next(proj).ask_type).toBe("plan-approval");
   say(proj, `${harness === "codex" ? "$" : "/"}aidlc ${words}`, harness);
   const print = next(proj, [words]);

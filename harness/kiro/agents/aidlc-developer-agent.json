@@ -29,7 +29,9 @@
         "aidlc/spaces/**",
         "./[!.]*",
         "[!.]*/**",
-        ".aidlc/worktrees/*/aidlc/spaces/**"
+        ".aidlc/worktrees/*/aidlc/spaces/**",
+        ".aidlc/worktrees/*/[!.]*",
+        ".aidlc/worktrees/*/[!.]*/**"
       ]
     }
   },

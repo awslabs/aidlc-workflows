@@ -1,15 +1,38 @@
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { lockFolderHeldGiveUpMs, lockFolderHeldLine } from "./aidlc-lock-line.ts";
 import { reviewManifestForms } from "./aidlc-review-manifest.ts";
+import { withoutLearnedDate } from "./aidlc-learned-date.ts";
+import { claimedCheckoutReopens } from "./aidlc-unit-landing.ts";
+import {
+  cachedClaimFanoutActive,
+  claimBlobAt,
+  claimPrefixOf,
+  claimRegistryCachePath,
+  claimRegistryGit,
+  readClaimAt,
+  readUnitClaimRegistryCache,
+  type UnitClaimRegistryCache,
+  unitsHeldHere,
+} from "./aidlc-unit-holders.ts";
+export {
+  CLAIM_REGISTRY_CACHE_FILE,
+  cachedClaimFanoutActive,
+  claimRegistryCachePath,
+  readUnitClaimRegistryCache,
+  type CachedUnitClaim,
+  type UnitClaimRegistryCache,
+  unitsHeldHere,
+  unitsWalkedWithoutClaim,
+} from "./aidlc-unit-holders.ts";
+import { KIRO_SESSION_DIR_RE, kiroChatRecordPaths } from "./aidlc-kiro-chat-record.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { accessSync, chmodSync, closeSync, constants as fsConstants, cpSync, type Dirent, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, opendirSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync, writeSync } from "node:fs";
-import { homedir, hostname, tmpdir } from "node:os";
+import { chmodSync, closeSync, constants as fsConstants, cpSync, type Dirent, existsSync, fstatSync, lstatSync, mkdirSync, openSync, opendirSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync, writeSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve as resolvePath, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { TextDecoder } from "node:util";
 import { inflateSync } from "node:zlib";
-import { dlopen, FFIType, type Pointer } from "bun:ffi";
 import {
   aidlcDispatcherInvocation,
   aidlcInvocation,
@@ -18,6 +41,8 @@ import {
   type DirectiveLimit,
   directiveLimitFor,
   discoverProjectHarnesses,
+  harnessIsAGuess,
+  inHostShell,
   isCompiledExecutable,
   type KiroLayout,
   kiroTreeLayout,
@@ -28,9 +53,15 @@ import {
   SPACE_NAME_REGEX,
   repoNameProblem,
   repoNameRefusal,
+  typedHarnessName,
 } from "./aidlc-runtime-paths.ts";
 export { entrySkillInvocation, repoNameProblem, repoNameRefusal, SPACE_NAME_REGEX } from "./aidlc-runtime-paths.ts";
-import { NEXT_VALUELESS_FLAGS, nextFlagTakesFollowing } from "./aidlc-command.ts";
+import { humanTurnMintAllowed, personGitNameField } from "./aidlc-git-name.ts";
+export { humanTurnMintAllowed } from "./aidlc-git-name.ts";
+import { gitCommonDirOf, hasRealGitEntry, submoduleLeavesProjectRepo } from "./aidlc-git.ts";
+export { hasRealGitEntry } from "./aidlc-git.ts";
+import { NEXT_VALUELESS_FLAGS, nextFlagTakesFollowing, unitCommandArgv } from "./aidlc-command.ts";
+import { pluginCommandOnLine, projectPluginCommands } from "./aidlc-plugin-commands.ts";
 import {
   type EngineInvocation,
   GUARD_REMEDY_WORDING,
@@ -42,6 +73,7 @@ import {
   type GuardRemedyWording,
   type GuardRemedyWordingContext,
   isGuardRecoveryOperation,
+  constructionPolicyRecovery,
   renderEngineInvocation,
   renderGuardOperation,
 } from "./aidlc-guard-operation.ts";
@@ -53,6 +85,7 @@ import {
   isSwitchableGuardFence,
   guardFenceConfigKey,
   guardFenceFromConfigKey,
+  delegatedAgentOf,
 } from "./aidlc-guard-fences.ts";
 export {
   GUARD_FENCES,
@@ -66,6 +99,7 @@ export {
   CHECK_GLOSS,
   GUARD_POLICY_GLOSS,
   SCOPE_GLOSS,
+  delegatedAgentOf,
 } from "./aidlc-guard-fences.ts";
 import {
   artifactFilename,
@@ -85,6 +119,7 @@ import {
   type ProtectedChoice,
   protectedChoiceDigests,
   stripRecommendedDecorator,
+  typedWordGap,
 } from "./aidlc-reply-reader.ts";
 export {
   formatReceivedReply,
@@ -107,6 +142,223 @@ export {
   type ProjectFlagsRecord,
   type RecordableProjectBypass,
 } from "./aidlc-settings.ts";
+import {
+  ACTIVE_DIRECTIVE_MARKER,
+  ACTIVE_INTENT_POINTER,
+  activeIntent,
+  activeIntentUuid,
+  applicableTeamUnitScopeStamp,
+  attemptEventDefinitelyBefore,
+  AUDIT_SHARD_FILE_RE,
+  auditBlockField,
+  gateStagesFromBlock,
+  gateStagesReopened,
+  auditFilePath,
+  type AuditMark,
+  auditShardBlocks,
+  auditShardTurnBlocks,
+  type AuditShardEvent,
+  auditShardName,
+  auditShards,
+  type AuditShardText,
+  boltName,
+  boltSlugForUnit,
+  canonicalPathKey,
+  chatAwaitsFirstStep,
+  type CheckboxState,
+  claudeNamedChat,
+  clearSessionProcessTable,
+  cloneIdentity,
+  cloneIdPath,
+  CONFLICT_START,
+  conflictSide,
+  copiedAuditBlocks,
+  delegatedWorktreeIntent,
+  displaySlugFromDirName,
+  gcSessionPidEntries,
+  getField,
+  helperSessionPath,
+  helperSessionRoot,
+  idSuffix,
+  type IntentInfo,
+  type IntentRegistryEntry,
+  intentsRegistryPath,
+  intentUuidForSelection,
+  isArchivedIntent,
+  isoTimestamp,
+  isPersonAskedSkipReason,
+  isTeamUnitOwnership,
+  knownAuditShardName,
+  legacyBoltName,
+  legacyWorktreePath,
+  listIntents,
+  maximalAttemptEvents,
+  OUT_OF_DATE_MAX_CHANGED,
+  OUT_OF_DATE_TEXT,
+  parseAuditShardEvents,
+  parseCheckboxes,
+  type ProcessIdentity,
+  processIdentityReader,
+  processIsAlive,
+  readActiveIntentCursor,
+  readAuditShardEvents,
+  readAuditShardTexts,
+  readIntentRegistry,
+  readSessionBinding,
+  readStateFile,
+  readStateWrites,
+  recordDirMatches,
+  registryList,
+  replyTurnsAfter,
+  relativeRecordDir,
+  relativeRecordDirForSelection,
+  resolveAuditProjectPath,
+  resolveAuditWorktreePath,
+  resolveChat,
+  resolveInvokingSessionId,
+  resolveRecordDir,
+  resolveSessionIdFromAncestry,
+  resolveWorkflowSelection,
+  SESSION_ANCESTRY_MAX_DEPTH,
+  sessionAncestryBudgetMs,
+  sessionAncestryCache,
+  type SessionBindingSource,
+  type SessionPidEntry,
+  sessionPidEntryPath,
+  sessionPidMapDir,
+  sessionProcessPlatform,
+  sessionRecordPath,
+  sessionsDir,
+  setCheckbox,
+  setField,
+  sortAttemptEvents,
+  spacesRoot,
+  stateDigest,
+  stateFilePath,
+  type StateWrite,
+  stateWritesPath,
+  TRUSTED_BINDING_SOURCES,
+  unitScopePath,
+  type UnitScopeStamp,
+  validateBoltSlug,
+  validSessionId,
+  windowsParentEdge,
+  windowsSessionProcessIdentity,
+  withdrawnTurnPositions,
+  type WorkflowParticipation,
+  workflowParticipation,
+  type WorkflowSelection,
+  type WorkflowSelectionOptions,
+  worktreePath,
+  worktreesDir,
+  writeSessionBinding,
+  writeStateFile,
+  COMPOSE_ASK_TYPE,
+} from "./aidlc-record-core.ts";
+export {
+  ACTIVE_INTENT_POINTER,
+  activeIntent,
+  activeIntentUuid,
+  ARCHIVED_INTENT_STATUS,
+  attemptEventDefinitelyBefore,
+  auditBlockField,
+  GATE_SKIPPED_STAGES_FIELD,
+  gateStagesFromBlock,
+  gateStagesReopened,
+  auditFilePath,
+  type AuditMark,
+  auditShardBlocks,
+  type AuditShardEvent,
+  auditShardHostSegment,
+  auditShardName,
+  auditShards,
+  type AuditShardText,
+  BOLT_INTENT_ID8_REGEX,
+  BOLT_SLUG_MAX_LENGTH,
+  BOLT_SLUG_REGEX,
+  boltName,
+  boltSlugForUnit,
+  CHECKBOX_MAP,
+  type CheckboxLine,
+  type CheckboxState,
+  classifyFirstContact,
+  clearSessionProcessTable,
+  CLONE_ID_FILE,
+  cloneIdFileContent,
+  cloneIdPath,
+  copiedAuditBlocks,
+  delegatedWorktreeIntent,
+  displaySlugFromDirName,
+  getField,
+  helperSessionRoot,
+  idSuffix,
+  type IntentInfo,
+  type IntentRegistryEntry,
+  intentsRegistryPath,
+  intentUuidForSelection,
+  isArchivedIntent,
+  isBindableIntentRecordName,
+  isoTimestamp,
+  isPersonAskedSkipReason,
+  isTeamUnitOwnership,
+  knownAuditShardName,
+  legacyBoltName,
+  legacyWorktreePath,
+  listIntents,
+  maximalAttemptEvents,
+  parseAuditShardEvents,
+  parseCheckboxes,
+  PERSON_ASKED_SKIP_REASON,
+  type ProcessIdentity,
+  projectStateForDigest,
+  readActiveIntentCursor,
+  readAuditShardEvents,
+  readIntentRegistry,
+  readSessionBinding,
+  readStateFile,
+  readUnitScopeStamp,
+  recordDirMatches,
+  relativeRecordDir,
+  relativeRecordDirForSelection,
+  resolveAuditProjectPath,
+  resolveAuditWorktreePath,
+  resolveChat,
+  type ResolvedChat,
+  resolveInvokingSessionId,
+  resolveSessionIdFromAncestry,
+  resolveWorkflowSelection,
+  SESSION_BINDING_SOURCES,
+  sessionAncestryBudgetMs,
+  type SessionBinding,
+  type SessionBindingSource,
+  sessionPidMapDir,
+  sessionRecordPath,
+  SessionResolutionConflictError,
+  SESSIONS_DIR,
+  sessionsDir,
+  setCheckbox,
+  setField,
+  sortAttemptEvents,
+  spacesRoot,
+  stateDigest,
+  stateFilePath,
+  UNIT_OWNERSHIP_FIELD,
+  UNIT_SCOPE_FILE,
+  unitScopePath,
+  type UnitScopeStamp,
+  validateBoltSlug,
+  validSessionId,
+  windowsSessionProcessIdentity,
+  type WorkflowParticipation,
+  workflowParticipation,
+  type WorkflowSelection,
+  type WorkflowSelectionOptions,
+  worktreePath,
+  worktreesDir,
+  writeSessionBinding,
+  writeStateFile,
+  COMPOSE_ASK_TYPE,
+} from "./aidlc-record-core.ts";
 import {
   isReviewRecordRelativePath,
   REVIEW_RECORDS_DIR,
@@ -152,6 +404,14 @@ export {
   validateUnitName,
   validReviewFindingStatus,
 } from "./aidlc-review-records.ts";
+import { parseBoltDag, parseInlineDepsList } from "./aidlc-unit-dag.ts";
+export {
+  type BoltDagParse,
+  parseBoltDag,
+  type UnitDependencyEdge,
+  UNIT_KINDS,
+  type UnitKind,
+} from "./aidlc-unit-dag.ts";
 import {
   acquireActiveDirectiveLock,
   acquireAuditLock,
@@ -160,10 +420,13 @@ import {
   activeDirectiveLockBudgetMs,
   activeSpace,
   assertNoSymlinkInChainOrThrow,
+  boundedGitMetadataText,
   DEFAULT_SPACE,
   ENGINE_DIR,
   engineDirFor,
   errorMessage,
+  gitCommonDirectory,
+  gitMetadataDirectory,
   intentsDir,
   isPlainObject,
   isReadOnlyEngineProbe,
@@ -177,6 +440,7 @@ import {
   refuseEngineObserverWrite,
   releaseAuditLock,
   releaseCanonicalOwnerStampedLock,
+  singleGitMetadataLine,
   spaceRecordRoot,
   withAuditLock,
   workspaceRoot,
@@ -205,7 +469,9 @@ export {
   FILE_CHANGED_DURING_READ,
   fileIdentity,
   type FileIdentity,
+  HARDLINK_REMEDY,
   holdsAuditLock,
+  installWithoutReplacing,
   intentsDir,
   isPidAlive,
   isPlainObject,
@@ -224,6 +490,7 @@ export {
   releaseAuditLock,
   removeTreeSync,
   renameIntoPlace,
+  replaceWithStaged,
   ROUTE_CHECK_ENV,
   runWithOwnerStampedLock,
   sameFileIdentity,
@@ -234,6 +501,32 @@ export {
   writeBufferAtomic,
   writeFileAtomic,
 } from "./aidlc-locks.ts";
+import {
+  type AuthorityCover,
+  freshSubagentEntries,
+  inspectSubagentInflight,
+  readSubagentInflightLedger,
+  subagentInflightMarkerPath,
+  subagentSessionIdentity,
+  unrecordedFinishSince,
+} from "./aidlc-subagent-inflight.ts";
+export {
+  type AuthorityCover,
+  annotateSubagentInflight,
+  discardSubagentInflight,
+  findSubagentInflight,
+  hasSubagentInflight,
+  type SubagentInflightEntry,
+  backgroundAgentOutSince,
+  completeSubagentInflight,
+  inspectSubagentInflight,
+  markSubagentInflight,
+  matchSubagentInflight,
+  SUBAGENT_INFLIGHT_TTL_MS,
+  type SubagentInflightMatch,
+  type SubagentInflightSummary,
+  subagentInflightMarkerPath,
+} from "./aidlc-subagent-inflight.ts";
 import {
   appendUnderHeading,
   escapeRegex,
@@ -247,6 +540,7 @@ import {
 } from "./aidlc-markdown.ts";
 export {
   appendUnderHeading,
+  ensureHeading,
   escapeRegex,
   extractMarkdownSection,
   markdownBlocks,
@@ -264,7 +558,7 @@ export {
 // runtime require() below avoids the circular import (aidlc-graph.ts
 // imports loadScopeMapping/loadStageGraph from this file). Type-only
 // imports are erased at runtime so they don't create the cycle.
-import { jsoncDocumentValue, readRootIntegrations, withoutBom } from "./aidlc-distribution.ts";
+import { claudeSettingsHookTargets, readRootIntegrations, withoutBom } from "./aidlc-distribution.ts";
 import type { subgraphForScope as SubgraphForScope } from "./aidlc-graph.ts";
 import type * as SwarmCheckpoints from "./aidlc-swarm-checkpoints.ts";
 import type { ConstructionEvidence } from "./aidlc-construction-checkpoints.ts";
@@ -396,17 +690,6 @@ export interface ScopeDefinition {
   /** Scope-owned ceremony defaults; omitted settings stay on. */
   ceremony?: Partial<CeremonyPolicy>;
 }
-
-export type CheckboxState = "pending" | "in-progress" | "awaiting-approval" | "revising" | "completed" | "skipped";
-
-export const CHECKBOX_MAP: Record<CheckboxState, string> = {
-  pending: "[ ]",
-  "in-progress": "[-]",
-  "awaiting-approval": "[?]",
-  revising: "[R]",
-  completed: "[x]",
-  skipped: "[S]",
-};
 
 export const CHECKBOX_REVERSE: Record<string, CheckboxState> = {
   "[ ]": "pending",
@@ -546,7 +829,7 @@ export interface DocumentExtractorSpec {
 }
 
 // A host-specific line from harness.json, kept only when well formed.
-function hostLine<K extends "missedReplyInHost" | "agentStepInHost">(
+export function hostLine<K extends "missedReplyInHost" | "agentStepInHost" | "inHost" | "notRunYetCliFirst">(
   key: K,
   value: unknown,
 ): Partial<Record<K, { env: string[]; text: string }>> {
@@ -558,24 +841,11 @@ function hostLine<K extends "missedReplyInHost" | "agentStepInHost">(
 }
 
 function registrationLines(value: unknown): Pick<HookActivation, "registration"> {
-  const lines = value as { file?: unknown; missing?: unknown; invalid?: unknown } | null | undefined;
+  const lines = value as { file?: unknown; missing?: unknown; invalid?: unknown; unwired?: unknown } | null | undefined;
   return typeof lines?.file === "string" && lines.file !== "" && typeof lines.missing === "string" &&
-      typeof lines.invalid === "string"
-    ? { registration: { file: lines.file, missing: lines.missing, invalid: lines.invalid } }
+      typeof lines.invalid === "string" && typeof lines.unwired === "string"
+    ? { registration: { file: lines.file, missing: lines.missing, invalid: lines.invalid, unwired: lines.unwired } }
     : {};
-}
-
-// Whether the agent's shell is in the host a harness's `{ env }` names: `NAME`
-// matches when set, `NAME=value` when it holds that value (TERM_PROGRAM=kiro).
-// A `NAME=value` variable holding another value rules the host out: Kiro CLI in
-// VS Code's terminal has TERM_PROGRAM=vscode beside VS Code's own VSCODE_PID.
-function inHostShell(env: readonly string[] | undefined): boolean {
-  const entries = (env ?? []).map((entry) => {
-    const [name, value] = entry.split("=", 2);
-    return { value: value?.toLowerCase(), actual: process.env[name]?.trim().toLowerCase() };
-  });
-  if (entries.some(({ value, actual }) => value !== undefined && actual && actual !== value)) return false;
-  return entries.some(({ value, actual }) => value === undefined ? Boolean(actual) : actual === value);
 }
 
 /** A harness's advice for a host that runs no project hooks until the person acts (trust, reload, engine). */
@@ -585,11 +855,12 @@ export interface HookActivation {
   missedReplyInHost?: { env: string[]; text: string };
   missesReplies?: true;
   notRunYet?: string;
+  notRunYetCliFirst?: { env: string[]; text: string };
   notRunInWorkflow?: string;
   agentStep?: string;
   agentStepInHost?: { env: string[]; text: string };
   agentStepEdits?: string;
-  registration?: { file: string; missing: string; invalid: string };
+  registration?: { file: string; missing: string; invalid: string; unwired: string };
   startedInsideProject?: string;
 }
 
@@ -678,7 +949,7 @@ function readShippedHarnessData(): ShippedHarnessData {
         if (typeof argv === "string") {
           throw new Error(
             `${p}: harness.json field "documentExtractors" entry "${mime}" argv must be an ARRAY ` +
-              `of strings, not a shell string — it is spawned without a shell, so a string ` +
+              `of strings, not a shell string - it is spawned without a shell, so a string ` +
               `cannot be split safely.`,
           );
         }
@@ -777,6 +1048,7 @@ function readShippedHarnessData(): ShippedHarnessData {
           ...(hostLine("missedReplyInHost", activation.missedReplyInHost)),
           ...(activation.missesReplies === true ? { missesReplies: true as const } : {}),
           ...(typeof activation.notRunYet === "string" ? { notRunYet: activation.notRunYet } : {}),
+          ...(typeof activation.notRunYet === "string" ? hostLine("notRunYetCliFirst", activation.notRunYetCliFirst) : {}),
           ...(typeof activation.notRunInWorkflow === "string"
             ? { notRunInWorkflow: activation.notRunInWorkflow }
             : {}),
@@ -855,8 +1127,8 @@ function shippedRulesSubdir(): string | null {
  *
  * STRICT: a malformed block throws here rather than being silently ignored,
  * because the value becomes a process invocation and a half-parsed extractor is
- * worse than none. Absent is the normal case — the tool then probes `pdftotext`
- * on PATH and degrades to `extractor_unavailable`.
+ * worse than none. Absent is the normal case: the tool then probes `pdftotext`
+ * on PATH and, where it is missing, reads a PDF with AI-DLC's own reader.
  */
 export function documentExtractors(): ReadonlyMap<string, DocumentExtractorSpec> | null {
   return readShippedHarnessData().documentExtractors;
@@ -1150,7 +1422,6 @@ export function resolveProjectDirFromHook(importMetaUrl: string): string {
 export function normalizeDriveLetter(p: string): string {
   return /^[a-z]:(?:[\\/]|$)/.test(p) ? p[0].toUpperCase() + p.slice(1) : p;
 }
-export const ACTIVE_INTENT_POINTER = "active-intent";
 
 // --- Terminal-command classification (the deterministic-dispatch seam) ---
 //
@@ -1311,7 +1582,10 @@ export function isReadOnlyNextArgv(argv: readonly string[]): boolean {
   // stays one when the refusal becomes a reading step: either way the turn
   // carries no workflow work (Full Suite 36549553601).
   if (isRefusedModifierNextArgv(args)) return true;
-  if (readNextLine(args).kind !== "exact") return false;
+  const reading = readNextLine(args);
+  if (reading.kind !== "exact") return false;
+  // A plugin command runs as itself, no workflow work.
+  if (reading.command !== undefined) return true;
   if (args.length === 1 && (args[0] === "help" || args[0] === "-h")) return true;
   const verb = leadingOrchestratorVerb(args);
   if (verb === "team-board") return true;
@@ -1532,7 +1806,7 @@ function missingWorkspaceName(
     noun,
     code: "missing-name",
     verb,
-    message: `Usage: aidlc ${usage}`,
+    message: `Usage: ${entrySkillInvocation()} ${usage}`,
   };
 }
 
@@ -1548,7 +1822,7 @@ function unexpectedWorkspaceArguments(
     noun,
     code: "unexpected-arguments",
     verb,
-    message: `Usage: aidlc ${usage}`,
+    message: `Usage: ${entrySkillInvocation()} ${usage}`,
   };
 }
 
@@ -1756,7 +2030,7 @@ export function splitKiroCommandArgs(raw: string): string[] {
 // whitespace lies between one token's end and the next one's start.
 interface CommandArgSpan { text: string; start: number; end: number }
 
-function commandArgSpans(raw: string): CommandArgSpan[] {
+export function commandArgSpans(raw: string): CommandArgSpan[] {
   const tokens: CommandArgSpan[] = [];
   let current = "";
   let quote: "'" | '"' | null = null;
@@ -1855,9 +2129,8 @@ function commandArgSpans(raw: string): CommandArgSpan[] {
 // its hooks a quoted phrase with the quotes removed and the spaces kept, so
 // "Hello,  World!" arrives as two tokens. `words` is some of the line's tokens
 // in order, separated by whitespace. When one stretch of the line's tokens,
-// side by side, spells them, each separator takes the spaces and tabs typed
-// there; any other gap (a line break, a no-break or other Unicode space) stays
-// one plain space, as the split hands it on. Read by text alone a flag's value
+// side by side, spells them, each separator takes the gap typed there as
+// typedWordGap keeps it; any other gap stays the join's. Read by text alone a flag's value
 // can spell a word too (`--scope bugfix  bugfix bugfix is broken`), so words no
 // stretch spells, or two stretches spell with different spacing, keep the
 // join's spaces. A token lines up only whole, at a whitespace boundary, and
@@ -1897,7 +2170,7 @@ function spacedFrom(words: string, raw: string, tokens: CommandArgSpan[], first:
     while (at < words.length && /\s/.test(words[at])) at++;
     if (at === words.length) return spaced + words.slice(to);
     const typed = k + 1 < tokens.length ? raw.slice(tokens[k].end, tokens[k + 1].start) : "";
-    spaced += /^[ \t]+$/.test(typed) ? typed : words.slice(to, at);
+    spaced += typedWordGap(typed) ?? words.slice(to, at);
   }
   return null;
 }
@@ -1925,7 +2198,7 @@ export type PluginCommand =
 export function parsePluginCommand(args: readonly string[]): PluginCommand {
   if (args[0] !== "plugin") return { kind: "not-plugin" };
   const verb = args[1];
-  if (verb === "help" || verb === "-h" || verb === "--help") {
+  if (verb === undefined || verb === "help" || verb === "-h" || verb === "--help") {
     return { kind: "help" };
   }
   const target = verb === "select"
@@ -1942,10 +2215,9 @@ export function parsePluginCommand(args: readonly string[]): PluginCommand {
   if (target !== undefined) {
     return { kind: "run", argv: [target, ...args.slice(2)] };
   }
-  const detail = verb ? `unknown verb '${verb}'` : "missing verb";
   return {
     kind: "error",
-    message: `aidlc: ${detail} for noun 'plugin'; try 'aidlc help --all'`,
+    message: `\`${entrySkillInvocation()} plugin ${verb}\` is not a plugin command; the plugin commands are select, list, sync, validate and build`,
   };
 }
 
@@ -2033,13 +2305,16 @@ export function parseKnowledgeCommand(args: readonly string[]): KnowledgeCommand
   if (verb === "help" || verb === "-h" || verb === "--help") {
     return { kind: "help" };
   }
-  if (verb !== undefined && KNOWLEDGE_VERBS.includes(verb)) {
+  if (verb === undefined) {
+    return { kind: "error", message: "aidlc: missing verb for noun 'knowledge'; try 'aidlc help --all'" };
+  }
+  if (KNOWLEDGE_VERBS.includes(verb)) {
     return { kind: "run", argv: [verb, ...args.slice(2)] };
   }
-  const detail = verb ? `unknown verb '${verb}'` : "missing verb";
   return {
     kind: "error",
-    message: `aidlc: ${detail} for noun 'knowledge'; try 'aidlc help --all'`,
+    message: `\`${entrySkillInvocation()} knowledge ${verb}\` is not a knowledge command; the knowledge commands are ` +
+      `${KNOWLEDGE_VERBS.slice(0, -1).join(", ")} and ${KNOWLEDGE_VERBS.at(-1)}`,
   };
 }
 
@@ -2125,8 +2400,10 @@ export function classifyTerminalCommand(argv: string[], projectDir?: string, ses
   // A line the engine would hand to the agent is never acted on here: a seam
   // that runs before any agent reads the line must stand back from it, which is
   // what readNextLine answers for both of us. Only an exact line is this
-  // engine's own command.
-  if (readNextLine(args).kind !== "exact") return null;
+  // engine's own command. A plugin command stays on the engine and conductor
+  // path, as park does: no seam runs a plugin's code off-band.
+  const reading = readNextLine(args);
+  if (reading.kind !== "exact" || reading.command !== undefined) return null;
   // A SOLE bare `help` / `-h` token is a help REQUEST (terminal, read-only);
   // mirrors parseNextFlags in the engine. Without this the token reads as
   // freeform intent text and the funnel offers to create an intent named
@@ -2275,9 +2552,28 @@ export const KIRO_CLI_HOST_TEMPLATES: readonly HostTurnTemplate[] = [
 // the turn a subagent's hand-back (or another session's message) starts, its
 // `<agent-message>` block alone. 2.1.310 writes a turn's transcript row only
 // after this hook returns, so for these the block is all there is to read.
+// The Claude desktop app (2.1.31x, captured live): another session's message
+// reaches the hook as its `<cross-session-message>` element alone, while the
+// transcript row frames that element in a sentence before and a note after, so
+// `claudeTranscriptOrigin` never finds the row by the prompt's text.
 export const CLAUDE_HOST_TEMPLATES: readonly HostTurnTemplate[] = [
   { name: "claude task notification", pattern: /^<task-notification>\r?\n[\s\S]*\r?\n<\/task-notification>$/ },
   { name: "claude agent message", pattern: /^<agent-message from="[^"\r\n]*">\r?\n[\s\S]*\r?\n<\/agent-message>$/ },
+  {
+    name: "claude session message",
+    pattern: /^<cross-session-message(?: [^\r\n]*)?>\r?\n[\s\S]*\r?\n<\/cross-session-message>$/,
+  },
+  // The Claude desktop app's other turns (2.1.31x, captured live): its events
+  // are one element each, its note after a quit is one sentence, and a session
+  // started from another one opens with that session's brief.
+  { name: "claude side sessions event", pattern: /^<side-sessions-event>[\s\S]*<\/side-sessions-event>$/ },
+  { name: "claude ci monitor event", pattern: /^<ci-monitor-event>[\s\S]*<\/ci-monitor-event>$/ },
+  { name: "claude app resume", pattern: /^The app was quit while you were working\. Please continue from where you left off\.$/ },
+  // The app puts its own `<system-reminder>` blocks ahead of the brief.
+  {
+    name: "claude session brief",
+    pattern: /^\s*(?:<system-reminder>(?:(?!<\/system-reminder>)[\s\S])*<\/system-reminder>\s*)*(?:Background|Task) \(from the session that started this one\):\r?\n/,
+  },
 ];
 
 // The whole prompt is one of the host's fixed sentences. Null otherwise.
@@ -2302,7 +2598,7 @@ export function suppliedTurnOrigin(value: unknown): TurnOrigin | null {
 
 // The last `maxBytes` of a file as text, from its first whole line. Chat
 // records grow for a whole session; the entry for this turn is at the end.
-function tailText(path: string, maxBytes: number): string | null {
+export function tailText(path: string, maxBytes: number): string | null {
   let fd: number | null = null;
   try {
     fd = openSync(path, "r");
@@ -2370,12 +2666,15 @@ function entryText(content: unknown): string {
 
 // The newest `type: "user"` entry of a JSONL chat record whose text is exactly
 // this prompt and that `matches`; `entryOf` finds the entry in a line (Kiro
-// wraps each one). Null when there is none, or the record cannot be read.
+// wraps each one), `rowText` the prompt a row's text stands for (a host that
+// wraps a command in its own envelope). Null when there is none, or the record
+// cannot be read.
 function newestUserEntry(
   path: string,
   prompt: string,
   matches: (entry: Record<string, unknown>) => boolean,
   entryOf: (line: Record<string, unknown>) => unknown = (line) => line,
+  rowText: (text: string) => string = (text) => text,
 ): Record<string, unknown> | null {
   const text = tailText(path, 1 << 20);
   if (text === null) return null;
@@ -2399,24 +2698,9 @@ function newestUserEntry(
     const content = message !== null && typeof message === "object"
       ? (message as Record<string, unknown>).content
       : record.content;
-    if (entryText(content).trim() === want) return record;
+    if (rowText(entryText(content).trim()).trim() === want) return record;
   }
   return null;
-}
-
-// Kiro's own chat record (Kiro IDE and Kiro CLI v3 alike):
-// ~/.kiro/sessions/<workspace id>/<session id>/messages.jsonl, found by the
-// session id alone, so the workspace hash (which follows how the folder path is
-// spelled on Windows) is never computed.
-const KIRO_SESSION_DIR_RE = /^[A-Za-z0-9_.:-]{1,128}$/;
-function kiroChatRecordPaths(sessionId: string | undefined): string[] {
-  if (!sessionId || !KIRO_SESSION_DIR_RE.test(sessionId)) return [];
-  const root = join(homedir(), ".kiro", "sessions");
-  try {
-    return readdirSync(root).map((workspace) => join(root, workspace, sessionId, "messages.jsonl")).filter(existsSync);
-  } catch {
-    return [];
-  }
 }
 
 // Each row is `{id, timestamp, payload}`, the entry in `payload`. A typed
@@ -2584,7 +2868,7 @@ function kiroCliSteersRecordedPath(projectDir: string, sessionId: string): strin
   return segment ? join(sessionsDir(projectDir), `.kiro-cli-steers-${segment}.json`) : "";
 }
 
-function kiroCliSteersRecorded(projectDir: string, sessionId: string): string[] {
+export function kiroCliSteersRecorded(projectDir: string, sessionId: string): string[] {
   try {
     const ids: unknown = JSON.parse(readFileSync(kiroCliSteersRecordedPath(projectDir, sessionId), "utf-8"));
     return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : [];
@@ -2632,15 +2916,27 @@ export function kiroTurnOrigin(options: {
 // row for this `prompt_id` with exactly this text. Claude Code names the turn's
 // origin on it (measured 2.1.280: `turnOrigin: "task_notification"`,
 // `promptSource: "system"`, `origin.kind: "task-notification"` for a
-// background task's notice; `human`/`typed` for a typed turn, `sdk` for one
-// sent through the SDK). A message the person sends while a turn runs has no
+// background task's notice; `human`/`typed` for a typed turn; measured 2.1.278
+// and 2.1.318: `turnOrigin: "scheduled"` for a scheduled wake-up). A row with
+// neither mark decides nothing: the desktop app sends the person's messages and
+// its own notes alike as `sdk`, so its words decide (claudeHostTemplateOrigin
+// in the human-turn hook). A message the person sends while a turn runs has no
 // row of its own (it rides the running turn's prompt id), so no row means
-// nothing is known.
-const CLAUDE_HOST_TURN_ORIGINS = new Set(["task_notification"]);
+// nothing is known. A slash command's row holds Claude Code's envelope of it
+// (`<command-message>`, `<command-name>`, `<command-args>`, captured live on
+// both builds): its command name and arguments are the prompt the hook got.
+const CLAUDE_HOST_TURN_ORIGINS = new Set(["task_notification", "scheduled"]);
 export function claudeTranscriptOrigin(transcriptPath: unknown, promptId: unknown, prompt: string): TurnOrigin | null {
   if (typeof transcriptPath !== "string" || !transcriptPath.endsWith(".jsonl") || !prompt.trim()) return null;
   const id = typeof promptId === "string" && promptId.trim() ? promptId.trim() : null;
-  const entry = newestUserEntry(transcriptPath, prompt, (row) => id === null || row.promptId === id);
+  const commandPrompt = (text: string): string => {
+    const envelope = /^<command-message>[^<]*<\/command-message>\s*<command-name>([^<]*)<\/command-name>(?:\s*<command-args>([\s\S]*)<\/command-args>)?\s*$/
+      .exec(text);
+    if (envelope === null) return text;
+    const args = (envelope[2] ?? "").trim();
+    return args ? `${envelope[1].trim()} ${args}` : envelope[1].trim();
+  };
+  const entry = newestUserEntry(transcriptPath, prompt, (row) => id === null || row.promptId === id, undefined, commandPrompt);
   if (entry === null) return null;
   const origin = entry.origin !== null && typeof entry.origin === "object"
     ? (entry.origin as Record<string, unknown>).kind
@@ -2653,7 +2949,8 @@ export function claudeTranscriptOrigin(transcriptPath: unknown, promptId: unknow
   ) {
     return { kind: "host", reason: turnOrigin ?? (typeof origin === "string" ? origin : "system"), source: "record" };
   }
-  return { kind: "person", source: "record" };
+  if (origin === "human" || turnOrigin === "human" || entry.promptSource === "typed") return { kind: "person", source: "record" };
+  return null;
 }
 
 // Who wrote a message Claude Code fed into a running turn. The transcript keeps
@@ -2973,7 +3270,7 @@ function unescapeUnquotedShellTextForEngagement(text: string): string {
   return result;
 }
 
-function sameDirectory(left: string, right: string): boolean {
+export function sameDirectory(left: string, right: string): boolean {
   const canonical = (directory: string): string => {
     let path = resolvePath(directory);
     try {
@@ -3745,15 +4042,6 @@ export function classifyRuntimeCompileCommand(
   return "pass";
 }
 
-function canonicalPathKey(path: string): string {
-  const resolved = resolvePath(path);
-  try {
-    return realpathSync(resolved);
-  } catch {
-    return resolved;
-  }
-}
-
 // `aidlc/spaces/<space>/knowledge` — SPACE DOMAIN knowledge (durable, free-form,
 // team-authored, empty at bootstrap). A space-level sibling of memory/codekb/
 // intents (vision §"Spaces": "its own memory, codekb, knowledge, and intent
@@ -3836,100 +4124,12 @@ export function validSpaceFlag(raw: string): string | null {
   return SPACE_NAME_REGEX.test(raw) ? raw : null;
 }
 
-// The record the per-user `active-intent` cursor names, when it names a real
-// record — never the lone-record fallback. The cursor is gitignored and written
-// only by intent create and switch on this machine, so unlike a lone committed
-// record it is local evidence of a choice.
-export function readActiveIntentCursor(projectDir: string, space?: string): string | null {
-  const dir = intentsDir(projectDir, space ?? activeSpace(projectDir));
-  try {
-    const raw = readFileSync(join(dir, ACTIVE_INTENT_POINTER), "utf-8").trim();
-    if (raw.length > 0 && existsSync(join(dir, raw, "aidlc-state.md"))) return raw;
-  } catch {
-    // no cursor
-  }
-  return null;
-}
-
-// The active intent's RECORD directory NAME (`<slug>-<id8>`) for a space, or
-// null when no record resolves (→ the path helpers resolve the bare space record
-// root). Precedence: explicit > active-intent cursor (if it names a real record)
-// > lone intent. Returns null rather than throwing on ambiguity so the path
-// helpers stay total; the verb/handler layer (P4) owns the error/prompt for the
-// >1-intent-no-cursor case.
-export function activeIntent(
-  projectDir: string,
-  space?: string,
-  explicit?: string,
-): string | null {
-  const sp = space ?? activeSpace(projectDir);
-  if (explicit) return explicit;
-  // Cursor: a real record the pointer names.
-  const cursor = readActiveIntentCursor(projectDir, sp);
-  if (cursor !== null) return cursor;
-  // Archived records never resolve implicitly: a space whose only record was
-  // archived reads as "no active intent" (creation is correct), not as that
-  // retired record silently coming back. An explicit cursor naming an archived
-  // record still resolves above, so the engine can explain it instead of
-  // guessing. The registry is read ONCE and matched in memory: this is the
-  // hot path of intent resolution, and an unregistered (orphan) record has no
-  // status, so it stays live work.
-  const registry = readIntentRegistry(projectDir, sp);
-  const records = listIntentDirs(projectDir, sp).filter((dirName) => {
-    const row = registry.find((entry) => recordDirMatches(entry, dirName));
-    return row === undefined || !isArchivedIntent(row);
-  });
-  if (records.length === 1) return records[0];
-  // 0 records → null (bare space root); >1 with no cursor → null (the handler
-  // layer prompts; a path helper cannot guess which intent the caller meant).
-  return null;
-}
-
-// The absolute RECORD directory for an intent:
-// `aidlc/spaces/<space>/intents/<slug>-<id8>/`. Returns null when no intent
-// resolves, signalling the bare-space-root resolution in the path helpers.
-function resolveRecordDir(
-  projectDir: string,
-  intent?: string,
-  space?: string,
-  bind?: boolean,
-): { dir: string | null; space: string } {
-  const selection = resolveWorkflowSelection(projectDir, { space, intent, ...(bind === undefined ? {} : { bind }) });
-  return {
-    dir:
-      selection.intent === null
-        ? null
-        : join(intentsDir(projectDir, selection.space), selection.intent),
-    space: selection.space,
-  };
-}
-
 export function recordDir(
   projectDir: string,
   intent?: string,
   space?: string,
 ): string | null {
   return resolveRecordDir(projectDir, intent, space).dir;
-}
-
-// Relative record-dir prefix for the engine's agent-consumed artifact/diary
-// paths: `aidlc/spaces/<space>/intents/<slug>-<id8>` with forward slashes
-// regardless of host OS (portable across worktrees). Returns null → the engine
-// resolvers resolve the bare space-relative record prefix
-// (relativeSpaceRecordPrefix). The space + intent come from the active cursors
-// unless passed explicitly; the engine threads the active intent's record-dir
-// name in (it knows projectDir but the resolvers themselves take no projectDir —
-// see aidlc-orchestrate.ts).
-export function relativeRecordDir(
-  projectDir: string,
-  intent?: string,
-  space?: string,
-): string | null {
-  const selection = resolveWorkflowSelection(projectDir, { space, intent });
-  const sp = selection.space;
-  const slug = selection.intent;
-  if (slug === null) return null;
-  return `aidlc/spaces/${sp}/intents/${slug}`;
 }
 
 // `aidlc/spaces/<space>/codekb/<repo>/` — the durable per-repo code
@@ -3957,49 +4157,25 @@ export function relativeCodekbDir(projectDir: string, repo: string, space?: stri
 // `git worktree add` names its directory after a branch, so in a linked worktree
 // basename(projectDir) is a branch name rather than a repository name. The shared
 // git dir lives inside the MAIN checkout, so its parent's basename is the
-// repository name.
-//
-// TWO things make this safe, and both are load-bearing:
-//
-//  1. `--git-dir` and `--git-common-dir` are measured with `cwd: projectDir`, so a
-//     relative answer is relative to PROJECTDIR — never to `--show-toplevel`. The
-//     two coincide only when the project root IS the toplevel; resolving against
-//     the toplevel otherwise climbs too high, and if a git dir happens to sit
-//     there (a repository vendored in another, or a home directory that is itself
-//     a repository) it would silently return a DIFFERENT repository's name.
-//  2. A linked worktree is the only topology where those two paths differ
-//     (`--git-dir` is `<common>/worktrees/<name>`). Equal for a main checkout, for
-//     a subdirectory of one, and for a repository nested inside another — all of
-//     which return null here and keep today's answer byte-for-byte. That is what
-//     makes this change worktree-only rather than a re-definition of identity for
-//     every project root below its repository root.
+// repository name. Both git dirs are resolved against projectDir, where git
+// measured them (gitCommonDirOf), and a linked worktree is the only topology
+// where they differ (`--git-dir` is `<common>/worktrees/<name>`): a main
+// checkout, a subdirectory of one and a repository nested inside another all
+// return null and keep basename(projectDir).
 //
 // Deliberately NOT the `origin` remote: that would also cover a clone whose
 // directory name differs from the repository, but remote names are mutable (a
 // rename or a re-point would move a workspace's store) and it would change
 // resolution for every checkout whose remote and directory names differ. A
 // location is stable; widening identity to the remote is a separate decision.
-function gitRevParseSingle(projectDir: string, flag: string): string | null {
-  const r = spawnSync("git", ["rev-parse", flag], {
-    cwd: projectDir,
-    encoding: "utf-8",
-  });
-  if (r.status !== 0) return null;
-  const out = r.stdout?.trim();
-  return out ? out : null;
-}
-
 function mainCheckoutRepoName(projectDir: string): string | null {
-  const gitDirRaw = gitRevParseSingle(projectDir, "--git-dir");
-  if (gitDirRaw === null) return null; // not a git repository
-  const commonRaw = gitRevParseSingle(projectDir, "--git-common-dir");
-  if (commonRaw === null) return null;
+  const dirs = gitCommonDirOf(projectDir);
+  if (!dirs.ok) return null; // not a git repository
   let gitDirAbs: string;
   let commonAbs: string;
   try {
-    // Resolved against projectDir — the directory both were measured in.
-    gitDirAbs = realpathSync(resolvePath(projectDir, gitDirRaw));
-    commonAbs = realpathSync(resolvePath(projectDir, commonRaw));
+    gitDirAbs = realpathSync(dirs.own);
+    commonAbs = realpathSync(dirs.common);
   } catch {
     return null;
   }
@@ -4617,32 +4793,23 @@ function sourceKeysChangedOutsideAidlc(
 }
 
 // The paths outside AI-DLC's own files that moved since a kept listing (a
-// landing's or a review's `Source Listing`). Null when no listing was kept or
-// it does not read back exactly: the caller then compares fingerprints.
-export function sourceChangedOutsideAidlcSince(
-  projectDir: string,
-  stageSlug: string,
-  listing: string | undefined,
-  current: WorkspaceSourceState,
-  intent?: string,
-  space?: string,
-): string[] | null {
-  const keys = sourceKeysChangedOutsideAidlcSince(projectDir, stageSlug, listing, current, intent, space);
-  return keys === null ? null : renderSourcePathKeys(keys);
-}
-
-// The same, as `<repo>\0<path>` keys, for a line that names each path's repo.
+// review's `Source Listing`, kept at the row `from`), as `<repo>\0<path>` keys;
+// a repo that joined the work since counts from what it held when it joined
+// (withRepoBaselineAdditions). Null when no listing was kept or it does not
+// read back exactly: the caller then compares fingerprints.
 export function sourceKeysChangedOutsideAidlcSince(
   projectDir: string,
   stageSlug: string,
   listing: string | undefined,
   current: WorkspaceSourceState,
-  intent?: string,
-  space?: string,
+  rows: readonly AuditShardEvent[],
+  from: AuditShardEvent | null,
 ): Set<string> | null {
-  const recorded = listing === undefined ? null : readBaselineSourceSnapshot(projectDir, stageSlug, listing, intent, space);
+  const recorded = listing === undefined ? null : readBaselineSourceSnapshot(projectDir, stageSlug, listing);
   if (recorded === null) return null;
-  return sourceKeysChangedOutsideAidlc(projectDir, recordedSourceListingForCompare(projectDir, recorded, current, intent, space), current.listing);
+  const joined = withRepoBaselineAdditions(projectDir, stageSlug, { state: "ready", listing: recorded }, rows, from);
+  const start = joined.state === "ready" ? joined.listing : recorded;
+  return sourceKeysChangedOutsideAidlc(projectDir, recordedSourceListingForCompare(projectDir, start, current), current.listing);
 }
 
 // A kept listing as the walk would list it now, to compare with `current`.
@@ -4662,19 +4829,6 @@ export function recordedSourceListingForCompare(
   );
   for (const key of excluded) before.delete(key);
   return before;
-}
-
-// Whether the main checkout moved from a kept listing only in AI-DLC's own
-// files. False when no listing was kept or it does not read back exactly.
-export function onlyAidlcFilesChangedSince(
-  projectDir: string,
-  stageSlug: string,
-  listing: string | undefined,
-  current: WorkspaceSourceState,
-  intent?: string,
-  space?: string,
-): boolean {
-  return sourceChangedOutsideAidlcSince(projectDir, stageSlug, listing, current, intent, space)?.length === 0;
 }
 
 function generatedRunnerSkill(skillDir: string): boolean {
@@ -4806,13 +4960,6 @@ export function uuidv7(): string {
   return `${body.slice(0, 8)}-${body.slice(8, 12)}-${body.slice(12, 16)}-${body.slice(16, 20)}-${body.slice(20, 32)}`;
 }
 
-// The id8 disambiguator: trailing 8 hex chars of the uuid (digits only, dashes
-// stripped). Used in the `<slug>-<id8>` dir name.
-export function idSuffix(uuid: string, length = 8): string {
-  const hex = uuid.replace(/-/g, "");
-  return hex.slice(-length);
-}
-
 // Deterministic free-text → SLUG_RE-valid kebab: lowercase; non-alphanumerics →
 // hyphens; collapse + trim hyphens; cap length; ensure a leading letter. Pure +
 // idempotent (slugify(slugify(x)) === slugify(x)). Falls back to "intent" when
@@ -4831,26 +4978,6 @@ export function slugify(text: string, maxLength = 48): string {
 }
 
 // --- Intent record dir name: <YYMMDD>-<short-label> ---------------------------
-//
-// SPIKE (date-prefix). The record dir name leads with a compact UTC date so the
-// records sort CHRONOLOGICALLY in any file browser / `ls` (the time token is a
-// PREFIX, where lexicographic sort = creation order — a suffix would sort by the
-// label). The label is a SHORT human slug (cap 24, vs the old 48) — the
-// orchestrator is expected to pass a 2-3 word essence ("simple calc"), not the
-// full request sentence. Uniqueness within the space is the caller's collision
-// loop (a -N counter), NOT this name: the canonical, collision-proof id stays the
-// UUIDv7 in the registry row, and the row now stores this dirName verbatim (so the
-// readers never reconstruct it from slug+uuid).
-
-// The human-readable LABEL for a record dir name, for display/orphan rows when
-// no registry row supplies a slug. SPIKE (date-prefix): strip a leading `YYMMDD-`
-// date prefix; else strip a legacy trailing `-<hex>` id8. Falls back to the whole
-// name if neither shape matches.
-export function displaySlugFromDirName(dirName: string): string {
-  const dated = /^\d{6}-(.+)$/.exec(dirName);
-  if (dated) return dated[1];
-  return dirName.replace(/-[0-9a-f]+$/, "");
-}
 
 // Compact UTC date stamp YYMMDD. UTC (not local) so the stamp is reproducible
 // regardless of the clone's timezone — matches isoTimestamp's UTC basis.
@@ -4891,7 +5018,7 @@ export function resolveUniqueIntentDir(intentsRoot: string, base: string): strin
   }
   throw new Error(
     `Could not find a free intent record dir for "${base}" after ${MAX_DIR_COLLISIONS} attempts in ${intentsRoot}. ` +
-      `This many same-day intents with the same label indicates a bug or a runaway caller — pass a distinct --label.`,
+      `This many same-day intents with the same label indicates a bug or a runaway caller - pass a distinct --label.`,
   );
 }
 
@@ -4972,61 +5099,10 @@ export function anyIntentRecordExists(projectDir: string): boolean {
   return false;
 }
 
-// Append an intent to the space's intents.json registry (creating it if absent).
-// MUST be called under the WORKSPACE lock bucket (invariant 2) — the registry is
-// shared workspace-level truth. Each row: {uuid, slug, scope, repos, status}.
-export interface IntentRegistryEntry {
-  uuid: string;
-  slug: string;
-  // The on-disk record dir name. SPIKE (date-prefix): stored verbatim at creation so
-  // readers join a row to its dir DIRECTLY, never reconstructing it from slug+uuid
-  // (the date-prefixed name `<YYMMDD>-<label>` is not derivable from {slug,uuid}).
-  // Optional for back-compat: pre-spike rows (and hand-written fixtures) omit it,
-  // and recordDirMatches() falls back to the legacy `<slug>-<id8>` hex match.
-  dirName?: string;
-  scope?: string;
-  repos?: string[];
-  // The person named this repo set (`--repos` at creation, or `intent
-  // set-repos`); absent for a set found on disk. Read by intentReposNamed.
-  repos_named?: true;
-  status: string;
-  // The engine question whose answer started this intent, so a repeated
-  // answer finds the work it already started instead of creating it twice.
-  request?: string;
-}
-
-// Does record dir `dirName` belong to registry row `entry`? The single shared
-// join rule for every row→dir matcher (listIntents/updateIntentStatus/intentRepos).
-// SPIKE (date-prefix): prefer the stored `entry.dirName` (exact match); fall back
-// to the legacy `<slug>-<id8>` shape (slug prefix + trailing hex that is a prefix
-// of the uuid's id-suffix) so pre-spike rows and fixtures still resolve.
-export function recordDirMatches(entry: IntentRegistryEntry, dirName: string): boolean {
-  if (entry.dirName) return entry.dirName === dirName;
-  if (!dirName.startsWith(`${entry.slug}-`)) return false;
-  const suffix = dirName.slice(entry.slug.length + 1);
-  return /^[0-9a-f]+$/.test(suffix) && idSuffix(entry.uuid, suffix.length) === suffix;
-}
-
-// The intent status lifecycle is a registry-row field. Creation writes
-// `in-flight`; workflow completion flips it to `complete`; `intent archive`
-// flips an in-flight or complete row to `archived` and `intent unarchive`
-// restores the one it had. `archived` is the only status a human moves a row
-// INTO and back OUT of, so it gets a named constant and predicate; the other
-// two stay the literals the creation and completion paths already write.
-export const ARCHIVED_INTENT_STATUS = "archived";
-
-export function isArchivedIntent(entry: { status: string }): boolean {
-  return entry.status.trim().toLowerCase() === ARCHIVED_INTENT_STATUS;
-}
-
 const COMPLETE_INTENT_STATUS = "complete";
 
 export function isCompletedIntent(entry: { status: string }): boolean {
   return entry.status.trim().toLowerCase() === COMPLETE_INTENT_STATUS;
-}
-
-export function intentsRegistryPath(projectDir: string, space?: string): string {
-  return join(intentsDir(projectDir, space), "intents.json");
 }
 
 export function appendIntentToRegistry(
@@ -5091,71 +5167,6 @@ function keepUnreadableRegistry(path: string, bytes: Buffer): string {
   }
 }
 
-// Git's conflict markers. No line of JSON starts with one, so in intents.json
-// they split the text into its two sides exactly.
-const CONFLICT_START = /^<{7}/m;
-
-// One side of a file git left conflicted: the lines outside every conflict plus
-// that side's own lines (a diff3 or zdiff3 base section belongs to neither).
-function conflictSide(text: string, side: "ours" | "theirs"): string {
-  const kept: string[] = [];
-  let zone: "both" | "ours" | "base" | "theirs" = "both";
-  for (const line of text.split(/\r?\n/)) {
-    if (line.startsWith("<<<<<<<")) zone = "ours";
-    else if (zone !== "both" && line.startsWith("|||||||")) zone = "base";
-    else if (zone !== "both" && line.startsWith("=======")) zone = "theirs";
-    else if (zone !== "both" && line.startsWith(">>>>>>>")) zone = "both";
-    else if (zone === "both" || zone === side) kept.push(line);
-  }
-  return kept.join("\n");
-}
-
-// The list as the person's editor may leave it: a trailing comma, a comment or
-// a BOM does not hide its rows. Anything else after the list makes it unreadable,
-// never read as its first part.
-function registryList(text: string): IntentRegistryEntry[] | null {
-  const parsed = jsoncDocumentValue(withoutBom(text));
-  return Array.isArray(parsed) ? (parsed as IntentRegistryEntry[]) : null;
-}
-
-// The `aidlc/spaces` root — the parent of every space dir. Sole helper so the
-// "what spaces exist?" scan and the intent-record scan agree on one location.
-export function spacesRoot(projectDir: string): string {
-  return join(workspaceRoot(projectDir), "spaces");
-}
-
-// Read a space's intents.json registry as a typed list. Returns [] when the
-// file is absent or nothing can read it. A file git left conflicted (two clones
-// started work in one space) reads as every row of both sides, once per uuid. The
-// canonical "what intents exist" record for humans/ordering/status — the cheap
-// on-disk listIntentDirs() scan is the path-resolver's record-presence signal,
-// but the registry carries the uuid/status/scope/repos a human or the --json
-// consumer needs.
-export function readIntentRegistry(projectDir: string, space?: string): IntentRegistryEntry[] {
-  let text: string;
-  try {
-    text = readFileSync(intentsRegistryPath(projectDir, space), "utf-8");
-  } catch {
-    return [];
-  }
-  const whole = registryList(text);
-  if (whole !== null) return whole;
-  if (!CONFLICT_START.test(text)) return [];
-  // ponytail: a row both sides changed keeps the first side's copy (every row
-  // is still kept); a side that is not JSON (a hand edit) adds nothing.
-  const rows: IntentRegistryEntry[] = [];
-  const seen = new Set<string>();
-  for (const side of ["ours", "theirs"] as const) {
-    for (const entry of registryList(conflictSide(text, side)) ?? []) {
-      const key = typeof entry?.uuid === "string" ? entry.uuid : JSON.stringify(entry);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      rows.push(entry);
-    }
-  }
-  return rows;
-}
-
 // --- The deterministic query layer: "what exists" (one source, two modes) ----
 //
 // listSpaces()/listIntents() are the single shared readers the verb handlers,
@@ -5184,16 +5195,6 @@ export function listSpaces(projectDir: string, activeOverride?: string): SpaceIn
     // no spaces dir → just the always-present default
   }
   return [...names].sort().map((name) => ({ name, active: name === active }));
-}
-
-export interface IntentInfo {
-  uuid: string;
-  slug: string;
-  status: string;
-  scope?: string;
-  repos?: string[];
-  dirName: string | null; // the on-disk <slug>-<id8> record dir, or null if registry-only
-  active: boolean;
 }
 
 // Enumerate a space's intents from the registry, joined with the on-disk record
@@ -5264,49 +5265,6 @@ function recordStateText(projectDir: string, intent: IntentInfo, space: string):
     // Registry-only or incomplete record: leave unannotated.
     return "";
   }
-}
-
-export function listIntents(
-  projectDir: string,
-  space?: string,
-  activeIntentOverride?: string | null,
-): IntentInfo[] {
-  const sp = space ?? activeSpace(projectDir);
-  const registry = readIntentRegistry(projectDir, sp);
-  const dirs = listIntentDirs(projectDir, sp);
-  // activeIntent() returns the record DIR NAME of the active intent (or null).
-  const activeDir =
-    activeIntentOverride === undefined
-      ? activeIntent(projectDir, sp)
-      : activeIntentOverride;
-  const claimedDirs = new Set<string>();
-  const infos: IntentInfo[] = registry.map((entry) => {
-    // Match the row to its record dir via the shared join rule (stored dirName,
-    // else the legacy `<slug>-<id8>` shape).
-    const dirName = dirs.find((d) => recordDirMatches(entry, d)) ?? null;
-    if (dirName) claimedDirs.add(dirName);
-    return {
-      uuid: entry.uuid,
-      slug: entry.slug,
-      status: entry.status,
-      scope: entry.scope,
-      repos: entry.repos,
-      dirName,
-      active: dirName !== null && dirName === activeDir,
-    };
-  });
-  // On-disk records with no registry row (orphans) — surface them too.
-  for (const d of dirs) {
-    if (claimedDirs.has(d)) continue;
-    infos.push({
-      uuid: "",
-      slug: displaySlugFromDirName(d),
-      status: "unknown",
-      dirName: d,
-      active: d === activeDir,
-    });
-  }
-  return infos;
 }
 
 // The records a bare name after `intent` or `space` can select, newest last:
@@ -5428,26 +5386,16 @@ export function workflowDisplayName(space: string, intent: { dirName?: unknown; 
 
 // Materialize the active-space cursor without overwriting a concurrent explicit
 // switch. A clone does not carry this gitignored file, so SessionStart and any
-// active-intent write recreate the resolved pointer on first use. Publish a
-// fully-written staged file with link(), whose no-replace install is atomic: if
-// a space switch wins the race, its value stays untouched.
+// active-intent write recreate the resolved pointer on first use. The exclusive
+// create never replaces a cursor a space switch already wrote.
 export function ensureActiveSpaceCursor(projectDir: string): void {
   const space = activeSpace(projectDir);
   const root = workspaceRoot(projectDir);
-  const cursor = join(root, ACTIVE_SPACE_POINTER);
-  const staged = join(root, `.aidlc-active-space-${process.pid}-${randomUUID()}.tmp`);
   try {
     mkdirSync(root, { recursive: true });
-    writeFileSync(staged, `${space}\n`, { encoding: "utf-8", flag: "wx" });
-    linkSync(staged, cursor);
+    writeFileSync(join(root, ACTIVE_SPACE_POINTER), `${space}\n`, { encoding: "utf-8", flag: "wx" });
   } catch {
     /* existing cursor won, or per-user state is unwritable */
-  } finally {
-    try {
-      unlinkSync(staged);
-    } catch {
-      /* staging file was never created or is already gone */
-    }
   }
 }
 
@@ -5468,43 +5416,58 @@ export function setActiveIntentCursor(projectDir: string, dirName: string, space
 // Remove a space's active-intent cursor so no record resolves implicitly until
 // the human picks one (`intent <name>`) or creates new work. Best-effort and
 // idempotent, like the writer: an absent cursor is already the desired state.
+// A git worktree with no cursor of its own reads its main checkout's, so when
+// that one still names the record, the worktree gets an empty cursor of its own,
+// which names none; the main checkout's cursor is that checkout's and stays.
 export function clearActiveIntentCursor(
   projectDir: string,
   space?: string,
   expectedIntent?: string,
 ): void {
   const path = join(intentsDir(projectDir, space), ACTIVE_INTENT_POINTER);
-  if (expectedIntent !== undefined) {
-    const staged = `${path}.clear-${process.pid}-${randomUUID()}`;
-    try {
-      renameSync(path, staged);
-    } catch {
+  try {
+    if (expectedIntent !== undefined) {
+      const staged = `${path}.clear-${process.pid}-${randomUUID()}`;
+      try {
+        renameSync(path, staged);
+      } catch {
+        return;
+      }
+      try {
+        const captured = readFileSync(staged, "utf-8").trim();
+        if (captured !== expectedIntent && !existsSync(path)) {
+          try {
+            renameSync(staged, path);
+            return;
+          } catch {
+            // A concurrent switch won the destination. Keep its newer cursor.
+          }
+        }
+      } catch {
+        // An unreadable captured cursor is stale runtime state.
+      }
+      try {
+        unlinkSync(staged);
+      } catch {
+        /* already moved or removed */
+      }
       return;
     }
     try {
-      const captured = readFileSync(staged, "utf-8").trim();
-      if (captured !== expectedIntent && !existsSync(path)) {
-        try {
-          renameSync(staged, path);
-          return;
-        } catch {
-          // A concurrent switch won the destination. Keep its newer cursor.
-        }
+      unlinkSync(path);
+    } catch {
+      /* absent cursor, or per-user state is unwritable: nothing to clear */
+    }
+  } finally {
+    // Whichever way the clear went: a cursor a switch wrote meanwhile is kept.
+    const still = readActiveIntentCursor(projectDir, space);
+    if (still !== null && (expectedIntent === undefined || still === expectedIntent)) {
+      try {
+        writeFileSync(path, "", { flag: "wx" });
+      } catch {
+        /* per-user cursor; best-effort */
       }
-    } catch {
-      // An unreadable captured cursor is stale runtime state.
     }
-    try {
-      unlinkSync(staged);
-    } catch {
-      /* already moved or removed */
-    }
-    return;
-  }
-  try {
-    unlinkSync(path);
-  } catch {
-    /* absent cursor, or per-user state is unwritable — nothing to clear */
   }
 }
 
@@ -5512,63 +5475,16 @@ export function clearActiveIntentCursor(
 export function setActiveSpaceCursor(projectDir: string, name: string): void {
   try {
     mkdirSync(workspaceRoot(projectDir), { recursive: true });
-    writeFileSync(join(workspaceRoot(projectDir), ACTIVE_SPACE_POINTER), `${name}\n`, "utf-8");
+    // Renamed into place, never written in place: a first cursor's exclusive
+    // create (ensureActiveSpaceCursor) that lands at the same moment cannot
+    // tear it or write over it.
+    writeFileAtomic(join(workspaceRoot(projectDir), ACTIVE_SPACE_POINTER), `${name}\n`);
   } catch {
     /* per-user cursor; best-effort */
   }
 }
 
 // --- Per-conversation session→intent record (resume rebind, P8) --------------
-//
-// A conversation (one Claude Code `session_id`) works ONE intent at a time, but
-// the active-intent CURSOR is per-user, durable, and shared across sessions — so
-// resuming an A-chat after the cursor moved to B would otherwise silently inject
-// B's context (the central multi-space hazard, vision §3). The fix is a tiny
-// per-user, machine-local map: at session START stamp the working intent's UUID
-// keyed by session_id; on RESUME, compare the stamped UUID to the live cursor
-// and OFFER a rebind on mismatch. The map lives at `aidlc/.aidlc-sessions/`
-// (gitignored — see dot-gitignore `aidlc/.aidlc-sessions/`): it is per-user
-// runtime state, never shared truth. The intent record itself is the durable,
-// harness-neutral artifact; the session merely enriches the cursor on resume.
-export const SESSIONS_DIR = ".aidlc-sessions";
-
-// The gitignored runtime scratch dir `aidlc/.aidlc-sessions/`. Exported because
-// aidlc-usage.ts writes the usage ledger and the persisted-transcript-path
-// pointers here, and the statusline/state consumers read the ledger back.
-export function sessionsDir(projectDir: string): string {
-  return join(workspaceRoot(projectDir), SESSIONS_DIR);
-}
-
-// The per-session record file: `aidlc/.aidlc-sessions/<session-id>`. Session
-// ids must already match the canonical safe shape; normalization-changing
-// values are rejected so distinct raw identities cannot alias one record.
-function safeSessionId(sessionId: string): string {
-  const safe = sessionId
-    .replace(/[^A-Za-z0-9._-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 180);
-  if (!safe || safe === "." || safe === "..") return "";
-  return safe;
-}
-
-export function validSessionId(sessionId: string | undefined): string | null {
-  const raw = sessionId ?? "";
-  return raw && safeSessionId(raw) === raw ? raw : null;
-}
-
-export class SessionResolutionConflictError extends Error {
-  constructor(
-    readonly overrideSessionId: string,
-    readonly ancestrySessionId: string,
-  ) {
-    super(
-      `Session override "${overrideSessionId}" conflicts with the owning conversation ` +
-        `"${ancestrySessionId}". Work from the owning conversation, or rebind this ` +
-        "session with the intent/space switch verbs.",
-    );
-    this.name = "SessionResolutionConflictError";
-  }
-}
 
 const PLAN_APPROVAL_RUNTIME_DIR = "plan-approval";
 
@@ -5718,11 +5634,21 @@ export interface PlanApprovalRuntimeReceipt
   /** Plan approval was off, so the engine built this plan without asking; `source` says what turned it off. */
   skipped?: { source: string };
   /**
-   * The fingerprint of the plan and instructions the build started on, kept
-   * only when that is not the approved content: a lowered fence built a plan
-   * edited after its approval. An interrupted build picks up only on it.
+   * The fingerprint of the plan and instructions the last build under this
+   * approval started on, at the attempt it started in, kept only when that is
+   * not the approved content: a lowered fence built a plan edited after its
+   * approval, or revised for the person's change request. An interrupted build
+   * in the approval's own attempt picks up only on it, and their next change
+   * request is judged against it.
    */
   startedFingerprint?: string;
+  /**
+   * The attempt (its run floor) this approval was carried into and built in:
+   * the person's change request closed the attempt it was given in, and the
+   * first build start in the next attempt records it, so that attempt clears
+   * the old ticks once.
+   */
+  carriedInto?: string;
 }
 
 export interface PlanApprovalWorktreeDelegation {
@@ -6142,7 +6068,7 @@ export function requireProtectedResponse(
   const question = readProtectedQuestion(projectDir, session);
   const response = readProtectedResponse(projectDir, session);
   const recovery = expected.kind === "verification-command" ? verificationCommandRecovery()
-    : expected.kind === "construction-policy" ? CONSTRUCTION_POLICY_RECOVERY
+    : expected.kind === "construction-policy" ? constructionPolicyRecovery()
     : `Re-ask with ${aidlcToolInvocation("bolt")} checkpoint --action ask --unit "<unit>" --kind <unit|skeleton> or ` +
       `${aidlcToolInvocation("bolt")} swarm-checkpoint --action ask --batch <number> --units "<units>", then wait for Approve or Request Changes.`;
   // The person replied to this exact question (the hook's record); the choice
@@ -7001,77 +6927,12 @@ export function clearKiroIdeLegacyPlanApprovalHost(
   }
 }
 
-// The per-session record file: `aidlc/.aidlc-sessions/<session-id>`. The
-// session id is normalised to the slug shape so a host-supplied id can never
-// escape the sessions dir (path traversal / separators); an empty id yields "".
-export function sessionRecordPath(projectDir: string, sessionId: string): string {
-  const valid = validSessionId(sessionId);
-  if (!valid) return "";
-  return join(sessionsDir(projectDir), valid);
-}
-
-// How a binding's intent was chosen. Recorded so that a binding minted from the
-// lone-record fallback is not later read as the conversation having joined.
-export const SESSION_BINDING_SOURCES = [
-  "create", // intent create bound its creating session
-  "observed-create", // PostToolUse saw a creation response (trusted only with the cursor)
-  "migration", // flat-layout migration moved this session's workflow
-  "switch", // `intent <slug>` named the record
-  "archive", // the bound record was archived (intent null)
-  "space-switch-cursor", // `space <name>`; the target space's cursor named the record
-  "space-switch-lone", // `space <name>`; only the lone-record rule named it
-  "space-switch-none", // `space <name>`; no record resolved
-  "worktree", // a validated delegated or local worktree names the record (re-checked each time)
-  "unit-claim", // a Unit claimed on this machine names the record (re-checked each time)
-  "cursor", // SessionStart followed this machine's cursor
-  "stamp", // on resume, the session's own UUID stamp named the record
-  "unjoined", // the selection came only from the lone-record rule
-  "none", // nothing resolved
-] as const;
-export type SessionBindingSource = (typeof SESSION_BINDING_SOURCES)[number];
-
-// Sources that record a choice. Worktree and Unit-claim joins rest on evidence
-// that can go away, so the classifier re-checks that evidence instead. A stamp
-// counts because only a joined session is stamped: writers that bind without a
-// choice clear it.
-const TRUSTED_BINDING_SOURCES: ReadonlySet<SessionBindingSource> = new Set([
-  "create", "migration", "switch", "space-switch-cursor", "cursor", "stamp",
-]);
-
 export function isTrustedBindingSource(source: SessionBindingSource | undefined): boolean {
   return source !== undefined && TRUSTED_BINDING_SOURCES.has(source);
 }
 
-export interface SessionBinding {
-  space: string;
-  intent: string | null;
-  boundAt: string;
-  // Absent on bindings written before sources were recorded.
-  source?: SessionBindingSource;
-}
-
-function sessionBindingPath(projectDir: string, sessionId: string): string {
-  const recordPath = sessionRecordPath(projectDir, sessionId);
-  return recordPath ? `${recordPath}.binding.json` : "";
-}
-
 function safeIntentRecordName(value: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value) && value !== "." && value !== "..";
-}
-
-// A record directory a session can select and keep: one path segment on this
-// platform, without control characters, and without surrounding spaces the
-// cursor file would trim away. The picker, the intent switch and the binding
-// all use this one rule; text a model reads uses isSafeIntentRecordName.
-export function isBindableIntentRecordName(value: unknown): value is string {
-  if (typeof value !== "string" || value.length === 0 || value !== value.trim()) return false;
-  if (value === "." || value === ".." || value.includes("/")) return false;
-  if (process.platform === "win32" && value.includes("\\")) return false;
-  // No control character: C0, DEL, or C1.
-  return [...value].every((ch) => {
-    const code = ch.codePointAt(0) ?? 0;
-    return code >= 0x20 && code !== 0x7f && (code < 0x80 || code > 0x9f);
-  });
 }
 
 export function isSafeIntentRecordName(value: unknown): value is string {
@@ -7086,85 +6947,6 @@ export function intentDisplayLabel(entry: { slug?: unknown; dirName?: unknown })
   return isSafeIntentRecordName(entry.dirName) ? entry.dirName : "(unnamed intent)";
 }
 
-// Read a session's pinned workflow selection. Malformed, unsafe, or stale
-// records degrade to no binding so cursor behavior remains the fallback.
-export function readSessionBinding(projectDir: string, sessionId: string): SessionBinding | null {
-  const path = sessionBindingPath(projectDir, sessionId);
-  if (!path) return null;
-  try {
-    const parsed: unknown = JSON.parse(readFileSync(path, "utf-8"));
-    if (parsed === null || typeof parsed !== "object") return null;
-    const candidate = parsed as Partial<SessionBinding>;
-    if (
-      typeof candidate.space !== "string" ||
-      !SPACE_NAME_REGEX.test(candidate.space) ||
-      (candidate.intent !== null &&
-        (typeof candidate.intent !== "string" || !isBindableIntentRecordName(candidate.intent))) ||
-      typeof candidate.boundAt !== "string" ||
-      candidate.boundAt.length === 0
-    ) {
-      return null;
-    }
-    if (
-      candidate.intent !== null &&
-      !existsSync(join(intentsDir(projectDir, candidate.space), candidate.intent, "aidlc-state.md"))
-    ) {
-      return null;
-    }
-    const binding: SessionBinding = {
-      space: candidate.space,
-      intent: candidate.intent,
-      boundAt: candidate.boundAt,
-    };
-    // An unrecognised source reads as absent, like a binding written before sources.
-    if ((SESSION_BINDING_SOURCES as readonly unknown[]).includes(candidate.source)) {
-      binding.source = candidate.source;
-    }
-    return binding;
-  } catch {
-    return null;
-  }
-}
-
-// Pin a session to one space and optional intent record. This is machine-local
-// runtime state, so any write failure silently falls back to shared cursors.
-export function writeSessionBinding(
-  projectDir: string,
-  sessionId: string,
-  space: string,
-  intent: string | null,
-  source?: SessionBindingSource,
-): void {
-  const path = sessionBindingPath(projectDir, sessionId);
-  if (
-    !path ||
-    !SPACE_NAME_REGEX.test(space) ||
-    (intent !== null && !isBindableIntentRecordName(intent))
-  ) {
-    return;
-  }
-  try {
-    mkdirSync(sessionsDir(projectDir), { recursive: true });
-    const binding: SessionBinding = {
-      space, intent, boundAt: isoTimestamp(), ...(source ? { source } : {}),
-    };
-    writeFileSync(path, `${JSON.stringify(binding)}\n`, "utf-8");
-  } catch {
-    /* per-user runtime state; best-effort */
-  }
-}
-
-// A Codex helper agent's thread, mapped to the chat that spawned it. Codex gives
-// a spawned agent's shell its own CODEX_THREAD_ID and marks that agent's hook
-// payloads with agent_id = that thread id under the root session_id, so the
-// adapter notes the pair the first time it sees it and the resolver reads the
-// root session for the helper's commands. Machine-local runtime state beside the
-// session bindings; a write failure leaves the helper resolving as before.
-function helperSessionPath(projectDir: string, threadId: string): string {
-  const recordPath = sessionRecordPath(projectDir, threadId);
-  return recordPath ? `${recordPath}.helper-of` : "";
-}
-
 export function noteHelperSession(projectDir: string, rootSessionId: string, agentId: string): void {
   const root = validSessionId(rootSessionId);
   const agent = validSessionId(agentId);
@@ -7177,16 +6959,6 @@ export function noteHelperSession(projectDir: string, rootSessionId: string, age
     writeFileSync(path, `${root}\n`, "utf-8");
   } catch {
     /* per-user runtime state; best-effort */
-  }
-}
-
-export function helperSessionRoot(projectDir: string, threadId: string): string | null {
-  const path = helperSessionPath(projectDir, threadId);
-  if (!path) return null;
-  try {
-    return validSessionId(readFileSync(path, "utf-8").trim());
-  } catch {
-    return null;
   }
 }
 
@@ -7323,6 +7095,13 @@ export function takeSessionSelectionNotice(projectDir: string, sessionId: string
 // ends the wait, and nothing surfaces in another chat. The same file keeps,
 // per work, the lines this chat has already heard that the engine would
 // otherwise repeat (a finished stage that is out of date).
+//
+// A line kept for the reply (forReply) comes from a checkpoint the agent
+// approved itself under Continue automatically, where the next step it speaks
+// from is still the middle of a long turn. It rides every step the agent speaks
+// from, so the step it stops on carries it whenever the turn ends, and goes
+// only once the person has written after a step carried it (the prompt hook's
+// carry); it has no age limit.
 const PENDING_PERSON_LINES_MAX_AGE_MS = 15 * 60 * 1000;
 const PERSON_LINES_SAID_MAX = 20;
 
@@ -7331,6 +7110,10 @@ interface PendingPersonLine {
   at: number;
   // The person's turn the line belongs to.
   turn: string;
+  // Kept for the reply the person reads: said until the person writes again.
+  reply?: true;
+  // A step carried this reply line in the turn it belongs to.
+  handed?: true;
 }
 
 interface PendingPersonLines {
@@ -7361,15 +7144,15 @@ function personTurnAndWork(projectDir: string): { turn: string; work: string } {
   }
 }
 
-function readPendingPersonLines(path: string, turn: string, work: string): PendingPersonLines {
+function readPendingPersonLines(path: string, turn: string, work: string, text?: string): PendingPersonLines {
   try {
-    const saved = JSON.parse(readFileSync(path, "utf-8")) as { work?: unknown; lines?: unknown; said?: unknown };
+    const saved = JSON.parse(text ?? readFileSync(path, "utf-8")) as { work?: unknown; lines?: unknown; said?: unknown };
     const now = Date.now();
     const lines = (Array.isArray(saved.lines) ? saved.lines : []).filter((entry): entry is PendingPersonLine => {
       if (!entry || typeof entry !== "object") return false;
       const { line, at, turn: lineTurn } = entry as Partial<PendingPersonLine>;
       if (typeof line !== "string" || typeof at !== "number") return false;
-      return lineTurn === turn && now - at <= PENDING_PERSON_LINES_MAX_AGE_MS;
+      return lineTurn === turn && ((entry as PendingPersonLine).reply === true || now - at <= PENDING_PERSON_LINES_MAX_AGE_MS);
     });
     const said = saved.work === work && Array.isArray(saved.said)
       ? saved.said.filter((line): line is string => typeof line === "string")
@@ -7395,6 +7178,7 @@ export function addPendingPersonLines(
   projectDir: string,
   sessionId: string,
   lines: readonly string[],
+  options: { forReply?: boolean } = {},
 ): boolean {
   const path = pendingPersonLinesPath(projectDir, sessionId);
   const added = lines.filter((line) => line.trim().length > 0);
@@ -7403,7 +7187,7 @@ export function addPendingPersonLines(
   try {
     const saved = readPendingPersonLines(path, turn, work);
     const at = Date.now();
-    for (const line of added) saved.lines.push({ line, at, turn });
+    for (const line of added) saved.lines.push({ line, at, turn, ...(options.forReply ? { reply: true as const } : {}) });
     writePendingPersonLines(projectDir, path, work, saved);
     return true;
   } catch {
@@ -7411,19 +7195,88 @@ export function addPendingPersonLines(
   }
 }
 
-// The lines waiting for the next step the agent speaks from. `said()` clears
-// them once the step carries them; until then they stay waiting.
-export function pendingPersonLines(projectDir: string, sessionId: string): { lines: string[]; said(): void } {
+// The lines waiting for the next step the agent speaks from; with `replyOnly`
+// (a question the agent logs before asking it) only those kept for the reply.
+// `said()` clears the ordinary lines handed out once the step carries them and
+// marks the reply lines carried, which keep riding the steps until the person
+// writes; until then every line stays waiting. What was written to the record
+// after the read (a line a command queued while its output was relayed, a
+// carry, a heard mark) stays as written.
+export function pendingPersonLines(
+  projectDir: string,
+  sessionId: string,
+  options: { replyOnly?: boolean } = {},
+): { lines: string[]; reply: boolean; said(): void } {
   const path = pendingPersonLinesPath(projectDir, sessionId);
-  const none = { lines: [], said: () => {} };
+  const none = { lines: [], reply: false, said: () => {} };
   if (!path || !existsSync(path)) return none;
   const { turn, work } = personTurnAndWork(projectDir);
-  const saved = readPendingPersonLines(path, turn, work);
+  const record = (): string => {
+    try {
+      return readFileSync(path, "utf-8");
+    } catch {
+      return "";
+    }
+  };
+  const read = record();
+  const saved = readPendingPersonLines(path, turn, work, read);
+  const handed = saved.lines.filter((entry) => entry.reply === true || options.replyOnly !== true);
   return {
-    lines: saved.lines.map((entry) => entry.line),
+    lines: handed.map((entry) => entry.line),
+    // Whether a line kept for the reply is among them.
+    reply: handed.some((entry) => entry.reply === true),
     said: () => {
+      // A record that could not be read is left as it is.
+      if (read === "") return;
       try {
-        writePendingPersonLines(projectDir, path, work, { lines: [], said: saved.said });
+        const waiting = saved.lines
+          .filter((entry) => entry.reply === true || !handed.includes(entry))
+          .map((entry) => (entry.reply === true && handed.includes(entry) ? { ...entry, handed: true as const } : entry));
+        const now = record();
+        if (now === read) {
+          writePendingPersonLines(projectDir, path, work, { lines: waiting, said: saved.said });
+          return;
+        }
+        // Each entry as read becomes what `waiting` made of it (gone when it was
+        // handed, or out of this turn or past its age); an entry the read never
+        // saw, or one changed since, stays as it is now.
+        const raw = (text: string): { work?: unknown; lines?: unknown; said?: unknown } => {
+          try {
+            const parsed = JSON.parse(text) as unknown;
+            return parsed !== null && typeof parsed === "object" ? parsed : {};
+          } catch {
+            return {};
+          }
+        };
+        const entries = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
+        const becomes = new Map<string, Array<PendingPersonLine | null>>();
+        for (const entry of saved.lines) {
+          const key = JSON.stringify(entry);
+          const next = !handed.includes(entry) ? entry : entry.reply === true ? { ...entry, handed: true as const } : null;
+          becomes.set(key, [...(becomes.get(key) ?? []), next]);
+        }
+        const seen = new Map<string, number>();
+        for (const entry of entries(raw(read).lines)) {
+          const key = JSON.stringify(entry);
+          seen.set(key, (seen.get(key) ?? 0) + 1);
+        }
+        const current = raw(now);
+        const lines: PendingPersonLine[] = [];
+        for (const entry of entries(current.lines)) {
+          const key = JSON.stringify(entry);
+          const left = seen.get(key) ?? 0;
+          if (left === 0) {
+            lines.push(entry as PendingPersonLine);
+            continue;
+          }
+          seen.set(key, left - 1);
+          const next = becomes.get(key)?.shift();
+          if (next) lines.push(next);
+        }
+        writePendingPersonLines(projectDir, path, typeof current.work === "string" ? current.work : work, {
+          lines,
+          said: entries(current.said).filter((line): line is string => typeof line === "string"),
+        });
       } catch {
         /* the next step says them again rather than never */
       }
@@ -7438,9 +7291,16 @@ export function pendingPersonLines(projectDir: string, sessionId: string): { lin
  * agent asked of its own accord, which is how a switch line went unsaid on Kiro
  * CLI). Either way the line is still about what they just asked for, so it
  * follows them and the next step the agent speaks from says it. Each line keeps
- * the time it was first queued, so the age cap still ends the wait.
+ * the time it was first queued, so the age cap still ends an ordinary line's
+ * wait; a line kept for the reply has none.
  */
-export function carryPendingPersonLines(projectDir: string, sessionId: string | null): void {
+export function carryPendingPersonLines(
+  projectDir: string,
+  sessionId: string | null,
+  // The person wrote (the prompt hook): a reply line a step carried in the turn
+  // that just ended was said there, so it goes; one no step carried follows them.
+  options: { afterPrompt?: boolean } = {},
+): void {
   if (!sessionId) return;
   const path = pendingPersonLinesPath(projectDir, sessionId);
   if (!path || !existsSync(path)) return;
@@ -7451,15 +7311,22 @@ export function carryPendingPersonLines(projectDir: string, sessionId: string | 
       entry !== null && typeof entry === "object" &&
       typeof (entry as PendingPersonLine).line === "string" &&
       typeof (entry as PendingPersonLine).at === "number" &&
-      now - (entry as PendingPersonLine).at <= PENDING_PERSON_LINES_MAX_AGE_MS);
-    if (waiting.length === 0) return;
+      ((entry as PendingPersonLine).reply === true || now - (entry as PendingPersonLine).at <= PENDING_PERSON_LINES_MAX_AGE_MS) &&
+      !(options.afterPrompt === true && (entry as PendingPersonLine).handed === true));
+    const dropped = options.afterPrompt === true &&
+      (Array.isArray(raw.lines) ? raw.lines : []).some((entry) => (entry as PendingPersonLine)?.handed === true);
+    if (waiting.length === 0 && !dropped) return;
     const { turn, work } = personTurnAndWork(projectDir);
     // What this chat already heard belongs to the work it heard it on.
     const said = raw.work === work && Array.isArray(raw.said)
       ? raw.said.filter((line): line is string => typeof line === "string")
       : [];
     writePendingPersonLines(projectDir, path, work, {
-      lines: waiting.map((entry) => ({ line: entry.line, at: entry.at, turn })),
+      lines: waiting.map((entry) => ({
+        line: entry.line, at: entry.at, turn,
+        ...(entry.reply === true ? { reply: true as const } : {}),
+        ...(entry.handed === true ? { handed: true as const } : {}),
+      })),
       said,
     });
   } catch {
@@ -7504,12 +7371,6 @@ export function personLineHeardThisTurn(projectDir: string, sessionId: string, l
 export function markPersonLineHeardThisTurn(projectDir: string, sessionId: string, line: string): void {
   markPersonLinesHeard(projectDir, sessionId, [turnKeyedPersonLine(projectDir, line)]);
 }
-
-// The reason the engine's skip step hands the agent for a stage the person
-// asked to skip where it stands (orchestrate's planChangeDirective). report
-// and the state tool read it back: that skip is the person's, so a stage that
-// must run, or one waiting at its own question, is skipped as they asked.
-export const PERSON_ASKED_SKIP_REASON = "the person asked to skip it";
 
 // What the person asked to leave out of a build (#1342): the `Deferred` items
 // in these traceability.json files, at most ten by id and then a count, or
@@ -7611,281 +7472,8 @@ export function staleStageLine(name: string): string {
     `Do you want me to redo ${name} with the change?`;
 }
 
-interface SessionPidEntry {
-  // A null session stops ancestry fallback while SessionStart refreshes a PID.
-  sessionId: string | null;
-  startTime: string | null;
-}
-
-export interface ProcessIdentity {
-  ppid: number;
-  startTime: string | null;
-}
-
-// The most one walk may spend finding its chat, on every OS. A walk ends as
-// soon as it has its answer (a few ms when idle), so this bounds only one that
-// cannot finish, such as a `ps -A` that never answers. It is checked between
-// steps, so on a busy machine a shorter one never saved the time a slow step
-// took; it only lost the chat.
-export function sessionAncestryBudgetMs(): number {
-  return 2000;
-}
-const SESSION_ANCESTRY_MAX_DEPTH = 64;
-const SESSION_ANCESTRY_CACHE_MS = 1000;
-const sessionAncestryCache = new Map<
-  string,
-  { sessionId: string | null; expiresAt: number }
->();
-
-function sessionProcessPlatform(): NodeJS.Platform {
-  const testPlatform = process.env.AIDLC_TEST_SESSION_PLATFORM;
-  if (
-    testPlatform === "linux" ||
-    testPlatform === "darwin" ||
-    testPlatform === "win32"
-  ) {
-    return testPlatform;
-  }
-  return process.platform;
-}
-
-export function sessionPidMapDir(projectDir: string): string {
-  return join(sessionsDir(projectDir), "pids");
-}
-
-function sessionPidEntryPath(projectDir: string, pid: number): string {
-  if (!Number.isSafeInteger(pid) || pid <= 1) return "";
-  return join(sessionPidMapDir(projectDir), String(pid));
-}
-
-function linuxProcessIdentity(pid: number): ProcessIdentity | null {
-  try {
-    const raw = readFileSync(`/proc/${pid}/stat`, "utf-8");
-    const close = raw.lastIndexOf(")");
-    if (close < 0) return null;
-    const fields = raw.slice(close + 1).trim().split(/\s+/);
-    const ppid = Number.parseInt(fields[1] ?? "", 10);
-    const startTime = fields[19] ?? "";
-    if (!Number.isSafeInteger(ppid) || ppid < 0 || startTime.length === 0) return null;
-    return { ppid, startTime };
-  } catch {
-    return null;
-  }
-}
-
-// macOS has no /proc, so one `ps` call reads the whole process table (pid,
-// parent, lstart) and a walk reads every hop from it, instead of one `ps` per
-// hop inside the same budget. The start time is the lstart string a per-pid
-// lookup prints, so the entries SessionStart recorded before still match.
-type ProcessTable = ReadonlyMap<number, ProcessIdentity>;
-
-function macProcessTable(deadlineMs: number): ProcessTable | null {
-  if (process.env.AIDLC_TEST_PS_DENIED === "1") return null;
-  const timeout = Math.max(1, deadlineMs - Date.now());
-  if (timeout <= 1) return null;
-  try {
-    const result = spawnSync("ps", ["-A", "-o", "pid=,ppid=,lstart="], {
-      encoding: "utf-8",
-      timeout,
-    });
-    if (result.status !== 0) return null;
-    const table = new Map<number, ProcessIdentity>();
-    for (const line of (result.stdout ?? "").split("\n")) {
-      const match = /^\s*(\d+)\s+(\d+)\s+(.+?)\s*$/.exec(line);
-      if (!match) continue;
-      const pid = Number.parseInt(match[1], 10);
-      const ppid = Number.parseInt(match[2], 10);
-      if (Number.isSafeInteger(pid) && Number.isSafeInteger(ppid)) table.set(pid, { ppid, startTime: match[3] });
-    }
-    return table;
-  } catch {
-    return null;
-  }
-}
-
-// The table this process read last, reused for the ancestry cache window: one
-// engine command walks the chain many times (hundreds on the late-question
-// scope run), and the chain of a running process does not change while it
-// runs. Liveness is still checked per hop and the PID entries are read fresh
-// each walk; a SessionStart write clears it, so the next walk reads anew.
-let sessionProcessTableCache: { table: ProcessTable; readAt: number } | null = null;
-
-export function clearSessionProcessTable(): void {
-  sessionProcessTableCache = null;
-}
-
-function cachedMacProcessTable(deadlineMs: number): ProcessTable | null {
-  const now = Date.now();
-  const cached = sessionProcessTableCache;
-  if (cached && now >= cached.readAt && now - cached.readAt < SESSION_ANCESTRY_CACHE_MS) return cached.table;
-  const table = macProcessTable(deadlineMs);
-  sessionProcessTableCache = table === null ? null : { table, readAt: Date.now() };
-  return table;
-}
-
-function loadWindowsSessionProcessApi() {
-  const kernel = dlopen("kernel32.dll", {
-    // Win32 BOOL is a 32-bit int, including on x64 and arm64.
-    OpenProcess: { args: [FFIType.u32, FFIType.i32, FFIType.u32], returns: FFIType.ptr },
-    GetProcessTimes: {
-      args: [FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr],
-      returns: FFIType.i32,
-    },
-    WaitForSingleObject: { args: [FFIType.ptr, FFIType.u32], returns: FFIType.u32 },
-    CloseHandle: { args: [FFIType.ptr], returns: FFIType.i32 },
-  });
-  try {
-    const ntdll = dlopen("ntdll.dll", {
-      NtQueryInformationProcess: {
-        args: [FFIType.ptr, FFIType.i32, FFIType.ptr, FFIType.u32, FFIType.ptr],
-        returns: FFIType.i32,
-      },
-    });
-    return { kernel, ntdll };
-  } catch (error) {
-    kernel.close();
-    throw error;
-  }
-}
-
-let windowsSessionProcessApi: ReturnType<typeof loadWindowsSessionProcessApi> | null | undefined;
-
-// Read one process generation through one stable handle. These API bindings are
-// independent of the lock subsystem's process probes.
-export function windowsSessionProcessIdentity(
-  pid: number,
-  deadlineMs = Date.now() + sessionAncestryBudgetMs(),
-): ProcessIdentity | null {
-  // A test platform override must never load Windows DLLs on another host.
-  if (
-    process.platform !== "win32" ||
-    (process.arch !== "x64" && process.arch !== "arm64") ||
-    !Number.isSafeInteger(pid) || pid <= 1 || pid > 0xffffffff ||
-    Date.now() >= deadlineMs
-  ) return null;
-  if (windowsSessionProcessApi === undefined) {
-    try {
-      windowsSessionProcessApi = loadWindowsSessionProcessApi();
-    } catch {
-      windowsSessionProcessApi = null;
-    }
-  }
-  const api = windowsSessionProcessApi;
-  if (!api || Date.now() >= deadlineMs) return null;
-
-  let handle: Pointer | null = null;
-  let identity: ProcessIdentity | null = null;
-  try {
-    // PROCESS_QUERY_INFORMATION | SYNCHRONIZE; never request mutation rights.
-    handle = api.kernel.symbols.OpenProcess(0x0400 | 0x00100000, 0, pid);
-    if (!handle) return null;
-    // WAIT_TIMEOUT means the process object is still running. An exit code of
-    // STILL_ACTIVE alone is insufficient: 259 can also be a process's exit code.
-    if (api.kernel.symbols.WaitForSingleObject(handle, 0) !== 0x102) return null;
-
-    // Native Windows x64/arm64 use little-endian LLP64. The documented
-    // PROCESS_BASIC_INFORMATION is 48 bytes, aligned to 8: NTSTATUS at 0,
-    // PEB* at 8, ULONG_PTR at 16, KPRIORITY at 24, PID at 32, parent PID at 40.
-    // https://learn.microsoft.com/windows/win32/api/winternl/nf-winternl-ntqueryinformationprocess
-    const basic = new BigUint64Array(6);
-    const returned = new Uint32Array(1);
-    const status = api.ntdll.symbols.NtQueryInformationProcess(
-      handle, 0, basic, basic.byteLength, returned,
-    );
-    if (
-      status !== 0 || returned[0] !== basic.byteLength ||
-      basic[4] !== BigInt(pid) || basic[5] > 0xffffffffn ||
-      basic[5] === BigInt(pid) || Date.now() >= deadlineMs
-    ) return null;
-
-    // Each FILETIME consists of two DWORDs (8 bytes); keep all 64 bits.
-    const creation = new BigUint64Array(1);
-    const exit = new BigUint64Array(1);
-    const kernel = new BigUint64Array(1);
-    const user = new BigUint64Array(1);
-    if (!api.kernel.symbols.GetProcessTimes(handle, creation, exit, kernel, user)) return null;
-    if (creation[0] === 0n || api.kernel.symbols.WaitForSingleObject(handle, 0) !== 0x102) return null;
-    identity = {
-      ppid: Number(basic[5]),
-      startTime: `win32:${creation[0].toString(16).padStart(16, "0")}`,
-    };
-  } catch {
-    identity = null;
-  } finally {
-    if (handle) {
-      try {
-        if (!api.kernel.symbols.CloseHandle(handle)) identity = null;
-      } catch {
-        identity = null;
-      }
-    }
-  }
-  return Date.now() < deadlineMs ? identity : null;
-}
-
-function windowsParentEdge(
-  parent: ProcessIdentity | null,
-  child: ProcessIdentity | null,
-): "verified" | "rejected" | "unknown" {
-  const generation = /^win32:[0-9a-f]{16}$/;
-  if (
-    typeof parent?.startTime !== "string" || !generation.test(parent.startTime) ||
-    typeof child?.startTime !== "string" || !generation.test(child.startTime)
-  ) return "unknown";
-  // Fixed-width hex preserves FILETIME order without rounding to JS numbers.
-  // Equal timestamps do not establish order, so that edge also fails closed.
-  return parent.startTime < child.startTime ? "verified" : "rejected";
-}
-
 function processIdentity(pid: number, deadlineMs: number): ProcessIdentity | null {
   return processIdentityReader(deadlineMs)(pid);
-}
-
-// One walk's process lookups. On macOS the first lookup reads the process
-// table and every later one in the same walk reads from it; Linux and Windows
-// read each pid directly, as cheaply as before.
-function processIdentityReader(deadlineMs: number): (pid: number) => ProcessIdentity | null {
-  const platform = sessionProcessPlatform();
-  let table: ProcessTable | null | undefined;
-  return (pid) => {
-    if (!Number.isSafeInteger(pid) || pid <= 1 || Date.now() >= deadlineMs) return null;
-    if (platform === "linux") return linuxProcessIdentity(pid);
-    if (platform === "win32") return windowsSessionProcessIdentity(pid, deadlineMs);
-    if (platform !== "darwin") return null;
-    if (table === undefined) table = cachedMacProcessTable(deadlineMs);
-    return table?.get(pid) ?? null;
-  };
-}
-
-function processIsAlive(pid: number): boolean {
-  if (!Number.isSafeInteger(pid) || pid <= 1) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (e) {
-    return (e as NodeJS.ErrnoException).code === "EPERM";
-  }
-}
-
-function readSessionPidEntry(projectDir: string, pid: number): SessionPidEntry | null {
-  const path = sessionPidEntryPath(projectDir, pid);
-  if (!path) return null;
-  try {
-    const parsed: unknown = JSON.parse(readFileSync(path, "utf-8"));
-    if (parsed === null || typeof parsed !== "object") return null;
-    const candidate = parsed as Partial<SessionPidEntry>;
-    if (
-      (candidate.sessionId !== null &&
-        (typeof candidate.sessionId !== "string" ||
-          validSessionId(candidate.sessionId) === null)) ||
-      (candidate.startTime !== null && typeof candidate.startTime !== "string")
-    ) {
-      return null;
-    }
-    return candidate as SessionPidEntry;
-  } catch {
-    return null;
-  }
 }
 
 function writeSessionPidRecord(
@@ -7939,43 +7527,6 @@ export function writeSessionPidEntry(
     sessionId,
     startTime: resolvedIdentity?.startTime ?? null,
   });
-}
-
-function gcSessionPidEntries(
-  projectDir: string,
-  deadlineMs: number,
-  skip: ReadonlySet<number> = new Set(),
-  readIdentity: (pid: number) => ProcessIdentity | null = processIdentityReader(deadlineMs),
-): void {
-  let names: string[];
-  try {
-    names = readdirSync(sessionPidMapDir(projectDir));
-  } catch {
-    return;
-  }
-  for (const name of names) {
-    if (!/^\d+$/.test(name)) continue;
-    if (Date.now() >= deadlineMs) break;
-    const pid = Number.parseInt(name, 10);
-    if (skip.has(pid)) continue;
-    const entry = readSessionPidEntry(projectDir, pid);
-    let stale: boolean;
-    if (!entry || !processIsAlive(pid)) {
-      stale = true;
-    } else if (entry.startTime !== null) {
-      const identity = readIdentity(pid);
-      if (identity === null) continue;
-      stale = identity.startTime !== entry.startTime;
-    } else {
-      stale = false;
-    }
-    if (!stale) continue;
-    try {
-      unlinkSync(join(sessionPidMapDir(projectDir), name));
-    } catch {
-      /* raced with another hook or cleanup */
-    }
-  }
 }
 
 // Map the harness process and each ancestor to the current session. The hook
@@ -8032,23 +7583,6 @@ export function writeSessionPidAncestry(
   gcSessionPidEntries(projectDir, deadline, seen, readIdentity);
 }
 
-// Resolve the nearest mapped ancestor of the calling process. Every failure is
-// a silent miss so tools retain cursor behavior when process metadata is absent.
-export function resolveSessionIdFromAncestry(projectDir: string): string | null {
-  const cached = sessionAncestryCache.get(projectDir);
-  if (cached && cached.expiresAt > Date.now()) return cached.sessionId;
-  const resolved = resolveSessionIdFromAncestryUncached(projectDir);
-  if (resolved === null) {
-    sessionAncestryCache.set(projectDir, {
-      sessionId: null,
-      expiresAt: Date.now() + SESSION_ANCESTRY_CACHE_MS,
-    });
-  } else {
-    sessionAncestryCache.delete(projectDir);
-  }
-  return resolved;
-}
-
 // Build a hook-spawned child's environment from authoritative payload identity.
 // A valid payload always carries the private source marker, so the selection
 // chokepoint lets payload identity win without weakening bare env refusal. It
@@ -8071,198 +7605,6 @@ export function hookChildEnv(
   env.AIDLC_SESSION_OVERRIDE = payloadSession;
   env.AIDLC_SESSION_OVERRIDE_SOURCE = "payload";
   return env;
-}
-
-function resolveSessionIdFromAncestryUncached(projectDir: string): string | null {
-  if (!existsSync(sessionPidMapDir(projectDir))) return null;
-  const deadline = Date.now() + sessionAncestryBudgetMs();
-  const windows = sessionProcessPlatform() === "win32";
-  let childIdentity = windows ? windowsSessionProcessIdentity(process.pid, deadline) : null;
-  if (windows && (!childIdentity || childIdentity.ppid !== process.ppid)) return null;
-  const readIdentity = processIdentityReader(deadline);
-  const seen = new Set<number>();
-  let pid = process.ppid;
-  for (let depth = 0; depth < SESSION_ANCESTRY_MAX_DEPTH; depth++) {
-    if (pid <= 1 || seen.has(pid) || Date.now() >= deadline) return null;
-    seen.add(pid);
-    const identity = readIdentity(pid);
-    if (!identity || !processIsAlive(pid)) return null;
-    // A parent PID can outlive its original owner. Do not join this walk to a
-    // replacement process born after (or indistinguishably close to) its child.
-    if (windows && windowsParentEdge(identity, childIdentity) !== "verified") return null;
-    const entry = readSessionPidEntry(projectDir, pid);
-    if (
-      entry &&
-      (entry.startTime === null || entry.startTime === identity.startTime)
-    ) {
-      return windows && entry.startTime === null ? null : entry.sessionId;
-    }
-    childIdentity = identity;
-    pid = identity.ppid;
-  }
-  return null;
-}
-
-export interface WorkflowSelection {
-  space: string;
-  intent: string | null;
-  sessionId: string | null;
-  binding: SessionBinding | null;
-}
-
-export interface WorkflowSelectionOptions {
-  space?: string;
-  intent?: string;
-  sessionId?: string;
-  bind?: boolean;
-}
-
-// THE ONE DOOR. Every id a host hands the engine (a hook payload's session_id,
-// the shell's own chat variable, a helper's thread id) passes here before any
-// chat or work record is read: the raw id maps to its root chat through the
-// helper-of fact the adapter wrote (the one fact the engine cannot know), that
-// chat's binding is read, and a chat with no binding is bound at first contact
-// by the rule a new chat follows at SessionStart: silently, to the work the
-// shared cursor names if this machine has joined it, else to no record. From
-// then on the chat stays on that work; the cursor moving later (another window
-// switched) does not move it. A process with no id at all (the person's own
-// terminal) never comes here and keeps following the cursor.
-export interface ResolvedChat {
-  chatId: string;
-  binding: SessionBinding | null;
-}
-
-// First contact settles a chat's work only when this process IS that chat: its
-// identity came from its own environment or process ancestry. A caller that
-// NAMES a session is asking about a chat, not acting as one: a hook reading its
-// payload, a command carrying --session, an engine child a hook handed its
-// identity to. Those resolve read-only, so a host-injected prompt (a Kiro IDE
-// workflow step's brief, a background notification) never gets work of its own
-// and never leaves a non-person actor sitting on the person's record.
-export function resolveChat(
-  projectDir: string,
-  rawId: string | null | undefined,
-  options: { bind?: boolean } = {},
-): ResolvedChat | null {
-  const id = validSessionId(rawId ?? undefined);
-  if (!id) return null;
-  const chatId = helperSessionRoot(projectDir, id) ?? id;
-  const existing = readSessionBinding(projectDir, chatId);
-  const bind = options.bind ?? false;
-  if (existing) return { chatId, binding: rejoinedByThisMachine(projectDir, chatId, existing, bind) ?? existing };
-  // Read-only: the chat keeps whatever the shared selection names, as before.
-  if (!bind) return { chatId, binding: null };
-  // A worker's own worktree already names the work it was prepared for, and
-  // that record governs every resolution there, so first contact binds nothing:
-  // the worktree is the identity, not this chat.
-  let delegated: ReturnType<typeof delegatedWorktreeIntent> = null;
-  try {
-    delegated = delegatedWorktreeIntent(projectDir);
-  } catch {
-    delegated = null;
-  }
-  if (delegated) {
-    return {
-      chatId,
-      binding: { space: delegated.space, intent: delegated.intent, boundAt: isoTimestamp(), source: "worktree" },
-    };
-  }
-  const space = activeSpace(projectDir);
-  const resolved: WorkflowSelection = { space, intent: activeIntent(projectDir, space), sessionId: chatId, binding: null };
-  const contact = classifyFirstContact(projectDir, resolved);
-  writeSessionBinding(projectDir, chatId, contact.selection.space, contact.selection.intent, contact.source);
-  // A record the binding cannot carry, or a write that failed, still answers
-  // what the chat is on for this process.
-  const binding = readSessionBinding(projectDir, chatId) ??
-    { space: contact.selection.space, intent: contact.selection.intent, boundAt: isoTimestamp(), source: contact.source };
-  return { chatId, binding };
-}
-
-// A binding to no record whose source is "unjoined" is provisional: when the chat
-// first met the workspace, the only record here was found by the lone-record
-// rule and this machine had not chosen it (a teammate's record in a fresh
-// clone). A choice made here since (the per-user cursor, written only by
-// create and switch on this machine) is the very evidence a new chat joins by,
-// so the binding is read again against it at every entry and the chat joins
-// exactly as first contact would have, silently. With no choice made it stays
-// out, as before. The binding is rewritten only when the caller may bind; a
-// hook (read-only) sees the same answer and the chat's own next command writes it.
-function rejoinedByThisMachine(
-  projectDir: string,
-  chatId: string,
-  existing: SessionBinding,
-  bind: boolean,
-): SessionBinding | null {
-  if (existing.intent !== null || existing.source !== "unjoined") return null;
-  if (readActiveIntentCursor(projectDir, existing.space) === null) return null;
-  const resolved: WorkflowSelection = {
-    space: existing.space, intent: activeIntent(projectDir, existing.space), sessionId: chatId, binding: null,
-  };
-  const contact = classifyFirstContact(projectDir, resolved);
-  if (!contact.joined) return null;
-  if (bind) writeSessionBinding(projectDir, chatId, contact.selection.space, contact.selection.intent, contact.source);
-  // What the chat is on for this process is the join just found, whether or not
-  // the write landed; the binding is read in resolveChat alone.
-  return { space: contact.selection.space, intent: contact.selection.intent, boundAt: isoTimestamp(), source: contact.source };
-}
-
-// The rule a new chat follows when it first meets a workflow: resolving a record
-// is not joining it. Joined (participation by the cursor, this checkout's
-// worktree record or a Unit claim) keeps the record and names the evidence as
-// the binding's source; not joined binds to no record ("unjoined" when a record
-// was found, "none" when there was nothing). SessionStart adds its own stamp and
-// pre-existing-binding branches on top; resolveChat uses the rule as it is.
-export function classifyFirstContact(
-  projectDir: string,
-  resolved: WorkflowSelection,
-): { joined: boolean; selection: WorkflowSelection; source: SessionBindingSource } {
-  const joined = workflowParticipation(projectDir, resolved) === "participant";
-  const selection = joined ? resolved : { ...resolved, intent: null, binding: null };
-  if (!joined) return { joined, selection, source: resolved.intent === null ? "none" : "unjoined" };
-  if (readActiveIntentCursor(projectDir, selection.space) === selection.intent) return { joined, selection, source: "cursor" };
-  const unitScope = readUnitScopeStamp(projectDir);
-  const source: SessionBindingSource =
-    unitScope?.space === selection.space && unitScope.intent_uuid === intentUuidForSelection(projectDir, selection)
-      ? "unit-claim"
-      : "worktree";
-  return { joined, selection, source };
-}
-
-// The session of the conversation that invoked this process, when the caller
-// named none: the hook-injected override first, then the process ancestry.
-// Throws SessionResolutionConflictError when the two disagree and the override
-// did not come from a validated hook payload.
-// The chat the host names in the agent's own shell. Each host that names one
-// does it its own way, and the engine needs no override written into the
-// command: Codex gives every command CODEX_THREAD_ID, Claude Code gives
-// CLAUDE_CODE_SESSION_ID beside the pid of the process running that chat, and
-// Kiro CLI gives KIRO_SESSION_ID (measured: its shell carries no pid).
-//
-// A variable is only as good as the chat it names. A shell the person started
-// from inside a chat keeps the variable after that chat is gone, so Claude
-// Code's id counts only while the process it names is alive; a dead or absent
-// pid leaves the id unread and the process ancestry decides, as before. Kiro
-// CLI has no pid in the shell to check, so its id stands on its own, as Codex's
-// does. Every other harness names no chat in the shell.
-function hostNamedChat(projectDir: string): string | null {
-  switch (runtimeHarnessDir(projectDir)) {
-    case ".codex":
-      return validSessionId(process.env.CODEX_THREAD_ID);
-    case ".claude":
-      return claudeNamedChat()?.session ?? null;
-    case ".kiro":
-      return validSessionId(process.env.KIRO_SESSION_ID);
-    default:
-      return null;
-  }
-}
-
-function claudeNamedChat(): { pid: number; session: string } | null {
-  const pid = Number.parseInt(process.env.CLAUDE_PID ?? "", 10);
-  const session = Number.isSafeInteger(pid) && processIsAlive(pid)
-    ? validSessionId(process.env.CLAUDE_CODE_SESSION_ID)
-    : null;
-  return session === null ? null : { pid, session };
 }
 
 // The folder the host started the chat in, from its own record of the running
@@ -8339,163 +7681,6 @@ function chatStartedInsideProject(projectDir: string): boolean {
   const root = comparablePath(projectDir);
   const folder = comparablePath(start);
   return folder !== root && pathIsWithinRoot(root, folder);
-}
-
-export function resolveInvokingSessionId(projectDir: string): string | null {
-  const overrideSession = validSessionId(process.env.AIDLC_SESSION_OVERRIDE);
-  // A spawned helper agent's shell carries the helper's own thread id; that
-  // thread resolves to the chat that spawned it (noteHelperSession).
-  const hostThread = overrideSession === null ? hostNamedChat(projectDir) : null;
-  const hostSession = hostThread === null ? null : helperSessionRoot(projectDir, hostThread) ?? hostThread;
-  const envSession = overrideSession ?? hostSession;
-  // This refusal is a footgun guard against stale exported overrides, not a
-  // security boundary. The SOURCE marker is an internal hookChildEnv contract.
-  // Deliberately setting both variables is an intentional same-user act
-  // equivalent to a sanctioned session switch; no privilege boundary exists
-  // between callers that could authenticate it.
-  // The host's own word for the chat this shell runs in is not a stale export:
-  // process ancestry is the engine's reconstruction of the same fact, and a
-  // second chat starting is enough to make the two differ.
-  const payloadOverride =
-    hostSession !== null ||
-    (overrideSession !== null && process.env.AIDLC_SESSION_OVERRIDE_SOURCE === "payload");
-  // Then the named chat is the answer and nothing below reads the walk's, so
-  // the process chain is not walked (a hook's own process included).
-  if (payloadOverride) return envSession;
-  const ancestrySession = resolveSessionIdFromAncestry(projectDir);
-  if (
-    envSession &&
-    ancestrySession &&
-    envSession !== ancestrySession &&
-    !payloadOverride
-  ) {
-    throw new SessionResolutionConflictError(envSession, ancestrySession);
-  }
-  return envSession ?? ancestrySession;
-}
-
-// Resolve one stable workflow target for an operation. Explicit selectors win,
-// then the session binding, then the legacy cursor and lone-intent rules.
-export function resolveWorkflowSelection(
-  projectDir: string,
-  options: WorkflowSelectionOptions = {},
-): WorkflowSelection {
-  // An explicit selector becomes one path segment, so it must not be a path: a
-  // "../" in --space or --intent could otherwise reach a record outside the
-  // project. Every command that takes them resolves them here. Any name that
-  // stays one segment still resolves, as before (an empty intent is the legacy
-  // flat record). A backslash separates only on Windows; elsewhere it is a
-  // filename character a teammate's migrated record may carry.
-  const isPath = (value: string): boolean =>
-    value === "." || value === ".." || /[/\0]/.test(value) || (process.platform === "win32" && value.includes("\\"));
-  if (options.space !== undefined && isPath(options.space)) {
-    throw new Error(`"${options.space}" is not a space name: it is a path.`);
-  }
-  if (options.intent !== undefined && isPath(options.intent)) {
-    throw new Error(`"${options.intent}" is not an intent name: it is a path.`);
-  }
-  const delegated = delegatedWorktreeIntent(projectDir);
-  if (delegated) {
-    if ((options.space !== undefined && options.space !== delegated.space) ||
-      (options.intent !== undefined && options.intent !== delegated.intent)) {
-      throw new Error("Workflow selection does not match the delegated worktree intent");
-    }
-    return { space: delegated.space, intent: delegated.intent, sessionId: null, binding: null };
-  }
-  const named = validSessionId(options.sessionId);
-  const rawSession = named ?? resolveInvokingSessionId(projectDir);
-  // Only this process's own identity settles a chat at first contact; a named
-  // session, or identity a hook handed us, is read-only.
-  const chat = rawSession
-    ? resolveChat(projectDir, rawSession, {
-        bind: options.bind !== false && named === null &&
-          process.env.AIDLC_SESSION_OVERRIDE_SOURCE !== "payload",
-      })
-    : null;
-  const sessionId = chat?.chatId ?? null;
-  const binding = chat?.binding ?? null;
-  const space = options.space ?? binding?.space ?? activeSpace(projectDir);
-  let intent: string | null;
-  if (options.intent !== undefined) {
-    intent = options.intent;
-  } else if (binding && binding.space === space) {
-    intent = binding.intent;
-  } else {
-    intent = activeIntent(projectDir, space);
-  }
-  return { space, intent, sessionId, binding };
-}
-
-export type WorkflowParticipation = "participant" | "outsider" | "indeterminate";
-
-// The record this checkout's own worktree metadata names, when that metadata was
-// written for this repository on this machine. `aidlc worktree create` stamps the
-// hash of the creating repository's git common dir; a copy of the file carried
-// into another clone or machine does not match it.
-function localWorktreeRecord(projectDir: string): string | null {
-  const metaPath = join(projectDir, ".aidlc", "worktree-meta.json");
-  if (!existsSync(metaPath)) return null;
-  try {
-    assertNoSymlinkInChainOrThrow(projectDir, ".aidlc/worktree-meta.json");
-    const meta = JSON.parse(
-      readRegularFileNoFollowOrThrow(metaPath, "worktree metadata").toString("utf-8"),
-    ) as { version?: unknown; intentRecord?: unknown; gitCommonDirHash?: unknown };
-    if (meta.version !== 1 || typeof meta.intentRecord !== "string" ||
-      typeof meta.gitCommonDirHash !== "string") return null;
-    const commonRaw = gitRevParseSingle(projectDir, "--git-common-dir");
-    if (commonRaw === null) return null;
-    const common = realpathSync(resolvePath(projectDir, commonRaw)).replace(/\\/g, "/");
-    const key = process.platform === "win32" ? common.toLowerCase() : common;
-    return createHash("sha256").update(key).digest("hex") === meta.gitCommonDirHash
-      ? meta.intentRecord
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-// Whether this conversation's hooks may write into, or enforce, the record a
-// selection names. Resolution (which record the path helpers name) keeps the
-// lone-record fallback, because worktrees inherit no cursor; participation asks
-// for local evidence that this conversation chose the record. A lone committed
-// record is not such evidence: in a fresh clone it is a teammate's.
-export function workflowParticipation(
-  projectDir: string,
-  selection: WorkflowSelection,
-): WorkflowParticipation {
-  if (selection.intent === null) return "outsider";
-  let delegated: ReturnType<typeof delegatedWorktreeIntent>;
-  try {
-    delegated = delegatedWorktreeIntent(projectDir);
-  } catch {
-    return "indeterminate";
-  }
-  if (delegated) {
-    return delegated.space === selection.space && delegated.intent === selection.intent
-      ? "participant"
-      : "indeterminate";
-  }
-  const cursorNamesIt = readActiveIntentCursor(projectDir, selection.space) === selection.intent;
-  const binding = selection.binding;
-  if (binding && binding.space === selection.space && binding.intent === selection.intent) {
-    if (binding.source !== undefined && TRUSTED_BINDING_SOURCES.has(binding.source)) {
-      return "participant";
-    }
-  }
-  if (localWorktreeRecord(projectDir) === relativeRecordDirForSelection(selection)) {
-    return "participant";
-  }
-  // A Unit claimed on this machine names its space and intent.
-  const unitScope = readUnitScopeStamp(projectDir);
-  if (unitScope && unitScope.space === selection.space &&
-    unitScope.intent_uuid === intentUuidForSelection(projectDir, selection)) {
-    return "participant";
-  }
-  // The per-user cursor naming the record: covers bindings written before
-  // sources were recorded, creations observed after the fact, and sessions that
-  // reach hooks without a SessionStart binding.
-  if (cursorNamesIt) return "participant";
-  return "outsider";
 }
 
 // The workflow a hook acts on. The payload id passes through resolveChat, so a
@@ -8592,15 +7777,16 @@ export function hookStandsOutside(workflow: ReturnType<typeof enterHookWorkflow>
 }
 
 // Whether a gate may stand aside for this conversation: only when the selection
-// resolved and the conversation is known not to have joined it. Finished work
-// is not that case: the conversation did join it, so a gate keeps the path it
-// takes for a participant. A selection that failed to resolve, or a
+// resolved and the conversation is known not to have joined it, or followed the
+// cursor onto it and has taken no AI-DLC step there yet (chatAwaitsFirstStep).
+// Finished work is not that case: the conversation did join it, so a gate keeps
+// the path it takes for a participant. A selection that failed to resolve, or a
 // participation that cannot be decided (malformed or stale delegated worktree
 // metadata), does not lower a gate: the gate takes its ordinary path, which
 // fails closed on the same error.
 export function hookOutsideGate(workflow: ReturnType<typeof enterHookWorkflow>): boolean {
   if (workflow.selection === null || workflow.participation === "indeterminate") return false;
-  return conversationHasNotJoined(workflow);
+  return conversationHasNotJoined(workflow) || chatAwaitsFirstStep(workflow.projectDir, workflow.selection);
 }
 
 export function stateFilePathForSelection(
@@ -8612,28 +7798,6 @@ export function stateFilePathForSelection(
       ? intentsDir(projectDir, selection.space)
       : join(intentsDir(projectDir, selection.space), selection.intent);
   return join(root, "aidlc-state.md");
-}
-
-export function relativeRecordDirForSelection(selection: WorkflowSelection): string | null {
-  if (selection.intent === null) return null;
-  return `aidlc/spaces/${selection.space}/intents/${selection.intent}`;
-}
-
-// Sibling-only swarm worktrees have no local registry; their delegated parent
-// creation authority supplies the UUID only for the same selected intent.
-export function intentUuidForSelection(
-  projectDir: string,
-  selection: WorkflowSelection,
-): string | null {
-  if (selection.intent === null) return null;
-  const uuid = listIntents(projectDir, selection.space).find(
-    (entry) => entry.dirName === selection.intent,
-  )?.uuid;
-  if (uuid) return uuid;
-  const delegated = delegatedWorktreeIntent(projectDir);
-  return delegated?.space === selection.space && delegated.intent === selection.intent
-    ? delegated.intentUuid
-    : null;
 }
 
 // Read the intent UUID this conversation last stamped, or null. Best-effort.
@@ -8893,74 +8057,6 @@ export function writeCurrentSessionId(projectDir: string, sessionId: string): vo
   } catch {
     /* per-user runtime state; best-effort */
   }
-}
-
-// The UUID of the active intent in a space (the cursor's / lone intent's
-// registry row), or null when no new-layout intent resolves (flat-legacy) or
-// the active record has no registry row (an orphan — no stable uuid to stamp).
-export function activeIntentUuid(projectDir: string, space?: string): string | null {
-  const sp = space ?? activeSpace(projectDir);
-  const activeDir = activeIntent(projectDir, sp);
-  if (activeDir === null) return null;
-  const match = listIntents(projectDir, sp).find((i) => i.dirName === activeDir);
-  return match?.uuid ? match.uuid : null;
-}
-
-/**
- * A swarm worker without a registry row of its own inherits identity from its
- * attested parent record: a multi-repo sibling, or a single-repository child
- * whose checkout carries no row for the intent (the records were not committed
- * when it was made, or an earlier intent's registry is what the base commit has).
- */
-export function delegatedWorktreeIntent(projectDir: string): {
-  parent: string; space: string; intent: string; intentRecord: string; intentUuid: string;
-} | null {
-  const metaPath = join(projectDir, ".aidlc", "worktree-meta.json");
-  if (!existsSync(metaPath)) return null;
-  if (activeIntentUuid(projectDir) !== null) return null;
-  assertNoSymlinkInChainOrThrow(projectDir, ".aidlc/worktree-meta.json");
-  const meta = JSON.parse(readRegularFileNoFollowOrThrow(metaPath, "worktree intent provenance").toString("utf-8"));
-  // Workspace-shell worktrees and non-swarm work retain their existing resolution.
-  if (meta?.swarmUnit === undefined) return null;
-  const record = typeof meta?.intentRecord === "string"
-    ? /^aidlc\/spaces\/([a-z][a-z0-9-]*)\/intents\/([^/]+)$/.exec(meta.intentRecord) : null;
-  if (meta?.version !== 1 || !record || record[2] === "." || record[2] === ".." ||
-    (meta.repoSelector !== null && (typeof meta.repoSelector !== "string" || !meta.repoSelector)) ||
-    typeof meta.swarmUnit !== "string" || meta.boltSlug !== boltSlugForUnit(meta.swarmUnit)) {
-    throw new Error("Invalid delegated worktree intent provenance");
-  }
-  const child = canonicalPathKey(projectDir);
-  const parent = dirname(dirname(dirname(child)));
-  const expectedDir = typeof meta.intentId8 === "string"
-    ? worktreePath(parent, meta.intentId8, meta.boltSlug)
-    : legacyWorktreePath(parent, meta.boltSlug);
-  if ((meta.intentId8 !== undefined &&
-    (typeof meta.intentId8 !== "string" || !BOLT_INTENT_ID8_REGEX.test(meta.intentId8))) ||
-    canonicalPathKey(expectedDir) !== child ||
-    relativeRecordDir(parent) !== meta.intentRecord) {
-    throw new Error("Delegated worktree does not match the active parent intent record");
-  }
-  assertNoSymlinkInChainOrThrow(parent, relative(parent, projectDir));
-  const [, space, intent] = record;
-  const intentUuid = listIntents(parent, space).find((entry) => entry.dirName === intent)?.uuid;
-  if (meta.intentId8 !== undefined &&
-    (!intentUuid || meta.intentId8 !== idSuffix(intentUuid))) {
-    throw new Error("Delegated worktree does not match the active parent intent record");
-  }
-  const unreadable: string[] = [];
-  const creations = maximalAttemptEvents(readAuditShardEvents(parent, intent, space, unreadable).filter(
-    (row) => row.event === "WORKTREE_CREATED" && auditBlockField(row.block, "Bolt slug") === meta.boltSlug,
-  ));
-  const creation = creations.length === 1 ? creations[0] : null;
-  const path = creation && auditBlockField(creation.block, "Worktree path");
-  if (!intentUuid || unreadable.length || !creation || !path ||
-    canonicalPathKey(resolveAuditWorktreePath(parent, path)) !== child ||
-    auditBlockField(creation.block, "Intent record") !== meta.intentRecord ||
-    auditBlockField(creation.block, "Repo") !== (meta.repoSelector ?? "-") ||
-    auditBlockField(creation.block, "Swarm Unit") !== meta.swarmUnit) {
-    throw new Error("Delegated worktree intent has no matching immutable creation authority");
-  }
-  return { parent, space, intent, intentRecord: meta.intentRecord, intentUuid };
 }
 
 // Resolve an intent UUID to its record across EVERY space (a conversation may
@@ -9389,31 +8485,6 @@ export function migrateFlatLayout(projectDir: string): FlatMigrationResult | nul
 }
 
 // --- Per-intent record resolution (P9 end state — no flat fallback) -----------
-//
-// Each absolute path helper resolves the per-intent record dir when an intent
-// exists (explicit arg, active cursor, or a lone intent), else the bare SPACE
-// record root (spaceRecordRoot). There is NO flat `aidlc-docs/` fallback any more
-// — the transitional bridge was retired in P9 once the fixtures migrated. The
-// only place the legacy flat root is still touched is the one-time migration
-// SOURCE (flatStateSource/flatMigrationSource above).
-
-export function stateFilePath(projectDir: string, intent?: string, space?: string): string {
-  const resolved = resolveRecordDir(projectDir, intent, space);
-  if (resolved.dir === null) {
-    return join(
-      spaceRecordRoot(projectDir, resolved.space),
-      "aidlc-state.md",
-    );
-  }
-  return join(resolved.dir, "aidlc-state.md");
-}
-
-// The engine's final validated run-stage is the active execution cursor. Most
-// stages match aidlc-state.md's Current Stage, but unit-major Construction can
-// interleave later stages while the durable cursor stays on the first block
-// stage. Persist that transient fact per intent so path-only PostToolUse hooks
-// can attribute diagnostics to the directive the conductor is actually running.
-const ACTIVE_DIRECTIVE_MARKER = "active-directive.json";
 
 export type ActiveDirectiveKind =
   | "load-steering" | "run-stage" | "ask" | "print" | "error"
@@ -10156,120 +9227,6 @@ function contentSha256(value: string): string {
 }
 
 // --- The state digest the active directive binds to ---------------------------
-//
-// A directive is bound to the workflow state it was issued for, so that a state
-// transition invalidates it. Binding to the WHOLE FILE overshoots: aidlc-state.md
-// also carries a cache layer the template itself calls "never routing or
-// completion evidence" (Last Updated, the active Unit's lifecycle mirror, the
-// derived Unit Progress grid, detected workspace facts). Hashing those made the
-// directive unreadable after writes no human would call a change - a status
-// sync, a Unit pause, a metadata refresh - and an unreadable directive means no
-// resolvable authority, which is how a recorded Plan Approval became
-// unreachable.
-//
-// So the digest is taken over a PROJECTION: every routing and completion field
-// stays byte-exact (Stage Progress checkboxes, Current/Next Stage, Status,
-// Lifecycle and Phase Progress, Scope, Depth, Test Strategy, Revision Count,
-// Unit Ownership, Unit Gate Rhythm, Construction Iteration, Skeleton Stance,
-// Parked, Project Type, State Version, Total Stages, In Progress), and the cache
-// layer and empty separator lines are dropped. Changing a routing field still
-// invalidates the directive.
-//
-// Blacklist rather than allowlist, deliberately: a new routing field must be
-// covered by default, and only a field someone consciously classifies as cache
-// may leave the digest. The contributor question in
-// docs/reference/11-contributing.md asks for that classification by name.
-const STATE_DIGEST_IGNORED_FIELDS = new Set([
-  // Timestamps and the active persona.
-  "Last Updated",
-  "Active Agent",
-  "Practices Affirmed Timestamp",
-  "Start Date",
-  // The active Unit's lifecycle mirror. The receipts in the ledger are the
-  // authority for a Unit's lifecycle; these fields are a convenience copy.
-  "Active Unit",
-  "Unit Stage",
-  "Unit State",
-  "Unit Pause Reason",
-  "Unit Next Action",
-  // Derived counts and breadcrumbs.
-  "Completed",
-  "Worktree Path",
-  "Bolt Refs",
-  // Descriptive project prose and provenance, never routing.
-  "Project",
-  "Project Description Source",
-  // Detected workspace facts (the `## Workspace State` section).
-  "Project Root",
-  "Languages",
-  "Frameworks",
-  "Build System",
-  // The resume-point breadcrumb (the `## Session Resume Point` section).
-  "Last Completed Stage",
-  "Next Action",
-  "Pending Artifacts",
-]);
-
-// The one section whose BODY is engine-derived rather than authored: the Unit
-// Progress grid is rewritten on every routed `next` from the Unit DAG, artifact
-// coverage, and gate events, and the template says in as many words that hand edits
-// there are not the evidence the engine routes on. The claim path does parse those
-// rows (`completedUnits` in aidlc-unit.ts), so this is a deliberate trade: a hand
-// edit there survives the digest until the next routed `next` rewrites the grid from
-// the DAG, and the claim gate re-reads live state rather than the digest. Only its
-// table rows are
-// dropped, so anything unexpected inside the section still binds.
-const STATE_DIGEST_DERIVED_TABLE_SECTION = "## Unit Progress";
-
-// Drop the cache layer from aidlc-state.md. Deliberately line-based and
-// field-named rather than section-wide: dropping a whole section would also drop
-// anything appended after it (the template's last section is a cache section), so
-// an unrecognised nonempty line anywhere in the file still binds the directive.
-export function projectStateForDigest(stateContent: string): string {
-  const kept: string[] = [];
-  let inDerivedTable = false;
-  // Split on every terminator JavaScript itself treats as one. `getField` reads the
-  // state with the `m` flag, so a bare CR, U+2028 or U+2029 starts a new line for the
-  // ENGINE too; splitting on LF alone would fold a routing field onto an ignored
-  // field's physical line and drop both, leaving a live routing change invisible to
-  // the digest.
-  for (const line of stateContent.split(/\r\n|[\n\r\u2028\u2029]/)) {
-    // setOrInsertField adds Markdown separators through appendUnderHeading.
-    // Removing or projecting out its field leaves those empty lines behind.
-    // They carry no state authority; retain every other line byte-exact, including
-    // whitespace-only lines, rather than trimming potentially meaningful content.
-    if (line === "") continue;
-    if (line.startsWith("## ")) {
-      inDerivedTable = line.trim() === STATE_DIGEST_DERIVED_TABLE_SECTION;
-      kept.push(line);
-      continue;
-    }
-    if (inDerivedTable && /^[ \t]*\|/.test(line)) continue;
-    const field = /^- \*\*([^*]+)\*\*:/.exec(line);
-    if (field && STATE_DIGEST_IGNORED_FIELDS.has(field[1].trim())) continue;
-    // The retired and current names are the same policy field. A name-only
-    // migration must not invalidate an issued directive or its bound runtime
-    // authority; value, source, duplicate, and conflict changes still bind.
-    if (field?.[1].trim() === "Change Control") {
-      kept.push(line.replace(
-        /^- \*\*Change Control\*\*:/,
-        "- **Guard Policy**:",
-      ));
-      continue;
-    }
-    kept.push(line);
-  }
-  return kept.join("\n");
-}
-
-// The digest every active-directive comparison uses. Exported because the engine
-// (which stamps it into the marker and the continuation token) and the Stop hook
-// (whose no-progress signature must agree with it) both need the same value.
-export function stateDigest(stateContent: string): string {
-  return createHash("sha256")
-    .update(projectStateForDigest(stateContent), "utf-8")
-    .digest("hex");
-}
 
 // The project identity is the folder's native real path with the drive letter
 // folded (see normalizeDriveLetter), because Bun's realpathSync keeps the
@@ -10472,9 +9429,6 @@ function parseActiveDirectiveMarker(value: unknown): ActiveDirectiveMarker | nul
 const OUT_OF_DATE_BY: readonly ActiveDirectiveOutOfDateBy[] = [
   "compaction", "status-sync", "copilot-next", "copilot-result", "copilot-turn-end", "copilot-human-turn",
 ];
-// A state-line label or a command's words: what doctor and a refusal may print.
-const OUT_OF_DATE_TEXT = /^[A-Za-z0-9][A-Za-z0-9 ._/()-]{0,79}$/;
-const OUT_OF_DATE_MAX_CHANGED = 8;
 const OUT_OF_DATE_MAX_WRITERS = 4;
 
 function parseActiveDirectiveOutOfDate(value: unknown): ActiveDirectiveOutOfDate | null {
@@ -10540,7 +9494,7 @@ function readActiveDirectiveMarkerSnapshot(path: string): {
   }
 }
 
-function transactActiveDirective<T>(
+export function transactActiveDirective<T>(
   projectDir: string,
   update: (
     marker: ActiveDirectiveMarker | null,
@@ -11342,15 +10296,18 @@ export function codeGenerationIsTheStep(issuedStage: string, currentStage: strin
     normalizeStageName(currentStage) === "code-generation";
 }
 
-// The Code Generation step the engine issued last for this work, even when a
-// state write since then made it out of date: the write retired the step, not
-// the work it named. Only a Code Generation step of the current intent; null
-// for any other.
-export function readIssuedDirectiveMarker(projectDir: string): ActiveDirectiveMarker | null {
+// The step the engine issued last for this work, even when a state write since
+// then made it out of date: the write retired the step, not the work it named.
+// Only a step of the current intent, at `stage` (Code Generation unless named;
+// null takes a step at any stage); null for any other.
+export function readIssuedDirectiveMarker(
+  projectDir: string,
+  stage: string | null = "code-generation",
+): ActiveDirectiveMarker | null {
   try {
     const target = resolveActiveDirectiveTarget(projectDir);
     const marker = readActiveDirectiveMarkerRaw(target.markerPath);
-    return marker?.stage === "code-generation" && (marker.intent_uuid ?? null) === target.intentUuid
+    return marker && (stage === null || marker.stage === stage) && (marker.intent_uuid ?? null) === target.intentUuid
       ? marker : null;
   } catch {
     return null;
@@ -11361,13 +10318,7 @@ export function readIssuedDirectiveMarker(projectDir: string): ActiveDirectiveMa
 // (`--single`) run of `stage`, even when a state write since then made it out
 // of date.
 export function issuedStepIsIsolatedRun(projectDir: string, stage: string): boolean {
-  try {
-    const target = resolveActiveDirectiveTarget(projectDir);
-    const marker = readActiveDirectiveMarkerRaw(target.markerPath);
-    return marker?.stage === stage && marker.single === true && (marker.intent_uuid ?? null) === target.intentUuid;
-  } catch {
-    return false;
-  }
+  return readIssuedDirectiveMarker(projectDir, stage)?.single === true;
 }
 
 // Read the shared/sessionless resume wait under the active-directive lock. The
@@ -11425,7 +10376,7 @@ export function normalizeGuardRecoveryText(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
 
-function guardRecoveryTextSha256(text: string): string | null {
+export function guardRecoveryTextSha256(text: string): string | null {
   const normalized = normalizeGuardRecoveryText(text);
   return normalized.length === 0 ? null : contentSha256(normalized);
 }
@@ -12937,173 +11888,6 @@ export function updateCopilotStopCount(
   });
 }
 
-// Per-clone audit SHARD path: `…/intents/<slug>-<id8>/audit/<host>-<clone>.md`.
-// The audit trail is committed (vision §5.1) but each clone writes its OWN
-// shard so git never merge-conflicts concurrent appends (merge=union was proven
-// to corrupt the multi-line blocks). Readers glob `audit/*.md` and merge-sort by
-// timestamp — see auditShards()/readAllAuditShards(). With no intent resolved the
-// shard lands under the bare space record root (no flat audit.md any more).
-export function auditFilePath(projectDir: string, intent?: string, space?: string): string {
-  const resolved = resolveRecordDir(projectDir, intent, space);
-  if (resolved.dir === null) {
-    return join(
-      spaceRecordRoot(projectDir, resolved.space),
-      "audit",
-      auditShardName(projectDir),
-    );
-  }
-  return join(resolved.dir, "audit", auditShardName(projectDir));
-}
-
-// The clone-id token file: `aidlc/.aidlc-clone-id`. Workspace-level,
-// machine-local, GITIGNORED (see the `aidlc/.aidlc-*` rule) so it never travels
-// in a commit — that is what makes the token DISTINCT across clones (a fresh
-// checkout has no token file and mints its own). The shard name below embeds
-// this token, so every process IN one clone resolves the SAME shard while two
-// different clones get DIFFERENT shards (no git merge-conflict on concurrent
-// appends — the whole point of per-clone sharding).
-export const CLONE_ID_FILE = ".aidlc-clone-id";
-
-export function cloneIdPath(projectDir: string): string {
-  return join(workspaceRoot(projectDir), CLONE_ID_FILE);
-}
-
-// The host segment of a NEWLY minted shard name: hostname() is a human-readable
-// hint only. It can carry dots/uppercase, so normalise it to the slug shape that
-// never escapes the audit dir.
-export function auditShardHostSegment(): string {
-  return hostname()
-    .toLowerCase()
-    .replace(/[^a-z0-9-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 48) || "host";
-}
-
-// The clone-id file: line 1 the token, line 2 the host segment recorded when
-// the token was minted. Every writer of the file uses this one format.
-export function cloneIdFileContent(token: string, host: string): string {
-  return `${token}\n${host}\n`;
-}
-
-const CLONE_TOKEN_RE = /^[a-z0-9]{1,32}$/;
-const CLONE_HOST_RE = /^[a-z0-9][a-z0-9-]{0,47}$/;
-
-interface CloneIdentity {
-  token: string;
-  host: string;
-}
-
-// The host an earlier version already named this clone's shards with, read from
-// the shard files (`<host>-<token>.md` in any intent's or space's audit dir), so
-// a token-only clone file upgraded after the machine's name changed continues
-// that shard instead of starting another. A shard under this machine's current
-// name wins; otherwise the most recently written one; null when there is none.
-function existingShardHost(projectDir: string, token: string): string | null {
-  const suffix = `-${token}.md`;
-  const current = auditShardHostSegment();
-  const list = (dir: string): string[] => {
-    try {
-      return readdirSync(dir);
-    } catch {
-      return [];
-    }
-  };
-  let newest: { host: string; mtime: number } | null = null;
-  const root = spacesRoot(projectDir);
-  for (const space of list(root)) {
-    const intents = join(root, space, "intents");
-    const auditDirs = [join(intents, "audit"), ...list(intents).map((entry) => join(intents, entry, "audit"))];
-    for (const audit of auditDirs) {
-      for (const file of list(audit)) {
-        if (!file.endsWith(suffix)) continue;
-        const host = file.slice(0, -suffix.length);
-        if (!CLONE_HOST_RE.test(host)) continue;
-        if (host === current) return current;
-        let mtime: number;
-        try {
-          mtime = lstatSync(join(audit, file)).mtimeMs;
-        } catch {
-          continue;
-        }
-        if (newest === null || mtime > newest.mtime || (mtime === newest.mtime && host < newest.host)) {
-          newest = { host, mtime };
-        }
-      }
-    }
-  }
-  return newest?.host ?? null;
-}
-
-function parseCloneIdFile(raw: string): { token: string | null; host: string | null } {
-  const [token = "", host = ""] = raw.split(/\r?\n/).map((line) => line.trim());
-  return {
-    token: CLONE_TOKEN_RE.test(token) ? token : null,
-    host: CLONE_HOST_RE.test(host) ? host : null,
-  };
-}
-
-// The stable per-CLONE identity (not per-process). Read from the gitignored
-// `aidlc/.aidlc-clone-id` file when present; minted (12 hex chars from a v4
-// uuid, no Math.random) and persisted on first use otherwise. Stable WITHIN a
-// clone across processes (the fork subprocess and the merge subprocess both
-// read the same file, so the same shard), DISTINCT across clones (each clone
-// mints its own; the file is gitignored so it doesn't travel in a commit).
-//
-// The host segment is part of the identity, recorded once. Computing it from
-// hostname() in every process split one clone's audit into a new shard each
-// time the machine's name changed (a laptop on another network, a VPN) or the
-// folder was copied to another machine, and same-second rows across those
-// shards read as unordered, so finished work stopped counting. A file from
-// before this format (token only) is upgraded in place, keeping the host its
-// existing shard already carries (see existingShardHost) or else the current
-// one, by atomic replace so a concurrent reader never sees a partial file and
-// mints a new token.
-//
-// A read/mint race between two first-run processes converges on whichever
-// write lands last; both re-read that file, so the clone settles on ONE
-// identity (a transient extra shard on the very first concurrent mint is
-// harmless: readers glob `audit/*.md`). Memoized per process. Best-effort: an
-// unwritable workspace (or a read-only engine probe, for the upgrade) keeps the
-// identity in memory for this process.
-const CLONE_IDENTITIES = new Map<string, CloneIdentity>();
-function cloneIdentity(projectDir: string): CloneIdentity {
-  const key = canonicalPathKey(projectDir);
-  const cached = CLONE_IDENTITIES.get(key);
-  if (cached) return cached;
-  const path = cloneIdPath(projectDir);
-  let recorded: { token: string | null; host: string | null } = { token: null, host: null };
-  try {
-    recorded = parseCloneIdFile(readFileSync(path, "utf-8"));
-  } catch {
-    // no file yet: mint below
-  }
-  if (recorded.token && recorded.host) {
-    const identity = { token: recorded.token, host: recorded.host };
-    CLONE_IDENTITIES.set(key, identity);
-    return identity;
-  }
-  let identity: CloneIdentity = {
-    token: recorded.token ?? randomUUID().replace(/-/g, "").slice(0, 12),
-    host: (recorded.token && existingShardHost(projectDir, recorded.token)) || auditShardHostSegment(),
-  };
-  try {
-    mkdirSync(workspaceRoot(projectDir), { recursive: true });
-    const content = cloneIdFileContent(identity.token, identity.host);
-    if (recorded.token) writeFileAtomic(path, content);
-    else writeFileSync(path, content, "utf-8");
-    // Re-read so a concurrent write that landed last wins for ALL processes in
-    // this clone (converge on one on-disk identity).
-    const settled = parseCloneIdFile(readFileSync(path, "utf-8"));
-    if (settled.token) {
-      identity = { token: settled.token, host: settled.host ?? identity.host };
-    }
-  } catch {
-    // unwritable workspace: in-memory identity for this process
-  }
-  CLONE_IDENTITIES.set(key, identity);
-  return identity;
-}
-
 export function ensureCloneId(projectDir: string): string {
   return cloneIdentity(projectDir).token;
 }
@@ -13170,10 +11954,48 @@ export const BLOCKING_SENSOR_BOUNDARY_EVENTS: ReadonlySet<string> = new Set([
 // label a reply recorded for several questions names), or its number on the
 // decision's own Options. The override's authorization and the review attempt
 // floor both read this one pairing.
+//
+// In solo work built Unit by Unit with checkpoints (the walk aidlc-state.ts
+// unitCheckpointChecksApply names; the state is given), the refusal itself
+// puts the question to the person, so their reply may come before the agent
+// records it: a reply after the refusal's own fire (the stage's latest
+// blocking result the gate refuses on before the question, with no boundary
+// between) backs the pick too, when nothing spent that reply and nothing else
+// was asked or answered between it and the question. Read from the order of
+// the rows, never the words.
 export function blockingSensorPicks(
   rows: ReadonlyArray<AuditShardEvent>,
   slug: string,
+  // Filled with each pick's Unit, when given: its answer's, or the question's it answers.
+  units?: Map<AuditShardEvent, string | null>,
+  // Filled with the question each pick answers, when given.
+  questions?: Map<AuditShardEvent, AuditShardEvent>,
+  stateContent: string | null = null,
 ): Map<AuditShardEvent, (typeof BLOCKING_SENSOR_OVERRIDE_OPTIONS)[number]> {
+  const walk = stateContent !== null && constructionCheckpointsApply(stateContent) &&
+    getField(stateContent, "Construction Iteration") === "unit-major";
+  const blocking = new Set(walk
+    ? (findStageBySlug(slug)?.sensors_applicable ?? []).flatMap((sensor) =>
+      sensor.fire_on === "gate" && sensor.default_severity === "blocking" ? [sensor.id] : []
+    )
+    : []);
+  // The fire whose refusal put the check's question, for a pick of `unit` (any Unit's when none is named):
+  // every result a blocking check refuses on (the gate's account of a check that gave no verified pass).
+  const refuses = (row: AuditShardEvent): boolean =>
+    row.event === "SENSOR_FAILED" || row.event === "SENSOR_COULD_NOT_RUN" || row.event === "SENSOR_BUDGET_OVERRIDE" ||
+    (row.event === "SENSOR_PASSED" && auditBlockField(row.block, "Note") !== null);
+  const refusalFire = (decision: AuditShardEvent, unit: string | null): AuditShardEvent | undefined => {
+    const before = rows.filter((row) => row.shard === decision.shard && row.pos < decision.pos);
+    const fire = before.filter((row) =>
+      refuses(row) &&
+      auditBlockField(row.block, "Stage slug") === slug && blocking.has(auditBlockField(row.block, "Sensor ID") ?? "") &&
+      (unit === null || auditBlockField(row.block, "Unit") === unit)
+    ).reduce<AuditShardEvent | undefined>((latest, row) => (latest === undefined || row.pos > latest.pos ? row : latest), undefined);
+    if (fire === undefined) return undefined;
+    return before.some((row) =>
+      BLOCKING_SENSOR_BOUNDARY_EVENTS.has(row.event) && auditBlockField(row.block, "Stage") === slug && row.pos > fire.pos
+    ) ? undefined : fire;
+  };
   const picks = new Map<AuditShardEvent, (typeof BLOCKING_SENSOR_OVERRIDE_OPTIONS)[number]>();
   // Each clone's shard keeps its own append order, so a teammate's question in
   // another shard never takes the place of the one this answer closes.
@@ -13220,13 +12042,27 @@ export function blockingSensorPicks(
     ) continue;
     const offered = optionsList(auditBlockField(decision.block, "Options"));
     if (!BLOCKING_SENSOR_OVERRIDE_OPTIONS.every((option) => offered.includes(option))) continue;
+    const fire = walk
+      ? refusalFire(decision, auditBlockField(row.block, "Unit") ?? auditBlockField(decision.block, "Unit"))
+      : undefined;
+    // A row that spent the reply (MESSAGE_SPENDING_EVENTS), or another question or answer, between the
+    // reply and the question took the reply for itself.
+    const answeredElse = (turn: AuditShardEvent): boolean => rows.some((other) =>
+      (other.event === "DECISION_RECORDED" || other.event === "QUESTION_ANSWERED" || MESSAGE_SPENDING_EVENTS.has(other.event)) &&
+      other.shard === turn.shard && other.pos > turn.pos && other.pos < decision.pos
+    );
     if (!rows.some((turn) =>
-      turn.event === "HUMAN_TURN" && turn.shard === row.shard && turn.pos > decision.pos && turn.pos < row.pos
+      turn.event === "HUMAN_TURN" && turn.shard === row.shard && turn.pos < row.pos &&
+      (turn.pos > decision.pos || (fire !== undefined && turn.pos > fire.pos && !answeredElse(turn)))
     )) continue;
     const numbered = /^(\d+)[.)]?$/.exec(details);
     const named = numbered ? offered[Number(numbered[1]) - 1] : checkLabel(details);
     const choice = BLOCKING_SENSOR_OVERRIDE_OPTIONS.find((option) => option === named);
-    if (choice !== undefined) picks.set(row, choice);
+    if (choice !== undefined) {
+      picks.set(row, choice);
+      units?.set(row, auditBlockField(row.block, "Unit") ?? auditBlockField(decision.block, "Unit"));
+      questions?.set(row, decision);
+    }
   }
   return picks;
 }
@@ -13302,6 +12138,8 @@ type SensorFixStage = Parameters<typeof producesArtifactUnit>[0] & Pick<StageEnt
 export function blockingSensorFixes(
   rows: ReadonlyArray<AuditShardEvent>,
   stage: SensorFixStage,
+  // The workflow's state, which says where a pick reads as blockingSensorPicks says.
+  stateContent: string | null = null,
 ): Map<AuditShardEvent, ReadonlySet<string> | null> {
   const blocking = new Set((stage.sensors_applicable ?? []).flatMap((sensor) =>
     sensor.fire_on === "gate" && sensor.default_severity === "blocking" ? [sensor.id] : []
@@ -13310,7 +12148,8 @@ export function blockingSensorFixes(
     const units = new Set<string>();
     const before = rows.filter((row) => attemptEventDefinitelyBefore(row, pick));
     for (const result of latestSensorResults(before, stage.slug).values()) {
-      if (result.kind !== "failed" || !blocking.has(result.id)) continue;
+      // A Unit's checkpoint fires name the Unit; the stage gate's name none.
+      if (result.kind !== "failed" || !blocking.has(result.id) || result.unit !== null) continue;
       // The gate fires on every declared output, so the matcher over all of
       // them names the owner; only a codekb stage reads the recorded
       // repositories, and none is per Unit.
@@ -13321,9 +12160,10 @@ export function blockingSensorFixes(
     return units.size > 0 ? units : null;
   };
   const fixes = new Map<AuditShardEvent, ReadonlySet<string> | null>();
-  for (const [row, choice] of blockingSensorPicks(rows, stage.slug)) {
+  const pickUnits = new Map<AuditShardEvent, string | null>();
+  for (const [row, choice] of blockingSensorPicks(rows, stage.slug, pickUnits, undefined, stateContent)) {
     if (choice !== BLOCKING_SENSOR_OVERRIDE_OPTIONS[0]) continue;
-    const unit = auditBlockField(row.block, "Unit");
+    const unit = pickUnits.get(row) ?? null;
     fixes.set(row, unit ? new Set([unit]) : failedUnits(row));
   }
   return fixes;
@@ -13351,20 +12191,81 @@ function auditEventIsAfter(later: AuditShardEvent, earlier: AuditShardEvent): bo
 // back, and nothing was asked or answered on the stage since. The state tool
 // accepts an override report on this test, and `next` names that report while
 // it holds, so the two never disagree about a pick.
-export function hasBlockingSensorOverrideAuthorization(projectDir: string, slug: string): boolean {
+//
+// In solo work built Unit by Unit with checkpoints, a pick made at a Unit's
+// checkpoint names that Unit (its answer, or the check's question it answers):
+// it stands for that Unit's checkpoint only (`unit`), until a verification
+// carries it, or the Unit is approved, sent back or started again, and never
+// for the stage's own gate over every Unit. Everywhere else a pick reads as it
+// always has.
+export function hasBlockingSensorOverrideAuthorization(
+  projectDir: string,
+  slug: string,
+  unit: string | null = null,
+): boolean {
   const rows = readAuditShardEvents(projectDir);
+  let stateContent: string | null = null;
+  try {
+    stateContent = readStateFile(projectDir);
+  } catch {
+    stateContent = null;
+  }
+  // Solo work built Unit by Unit with checkpoints is where a pick can be made at a Unit's checkpoint.
+  const unitPicks = unit !== null || (stateContent !== null && constructionCheckpointsApply(stateContent) &&
+    getField(stateContent, "Construction Iteration") === "unit-major");
+  const unitOf = (row: AuditShardEvent): string | null => auditBlockField(row.block, "Unit");
   const stageRows = rows.filter((row) => {
     const workflow = auditBlockField(row.block, "Workflow");
     return auditBlockField(row.block, "Stage") === slug &&
       !workflow?.startsWith("single-stage:");
   });
-  const boundaries = stageRows.filter((row) => BLOCKING_SENSOR_BOUNDARY_EVENTS.has(row.event));
-  const interactions = stageRows.filter((row) =>
-    row.event === "DECISION_RECORDED" ||
-    row.event === "QUESTION_ANSWERED"
+  // A verification that verified with an Override spent the pick it used,
+  // whichever Unit it named; one whose project check failed leaves the pick
+  // standing for the same findings (the state tool holds it to them). A
+  // Unit's approval and its Request Changes (the checkpoint's GATE_ rows carry
+  // the Unit), and its stage started again, end a pick made at its checkpoint.
+  const spent = (row: AuditShardEvent): boolean =>
+    row.event === "CHECKPOINT_VERIFICATION_RECORDED" && auditBlockField(row.block, "Blocking Sensor Override") === "true" &&
+    auditBlockField(row.block, "Verified") === "true";
+  const boundaries = [
+    ...stageRows.filter((row) => BLOCKING_SENSOR_BOUNDARY_EVENTS.has(row.event)),
+    ...(unitPicks ? rows.filter(spent) : []),
+    ...(unit !== null
+      ? rows.filter((row) => unitOf(row) === unit && (
+        row.event === "GATE_APPROVED" || row.event === "GATE_REJECTED" ||
+        (row.event === "UNIT_STARTED" && auditBlockField(row.block, "Stage") === slug)
+      ))
+      : []),
+  ];
+  // At a Unit's checkpoint, and at the stage gate the engine settles itself
+  // after them, the agent re-logging the check's question, or an answer to it
+  // that is no Fix pick of the person's (the Override recorded again, with
+  // --unit or without, or with no new reply), is no new decision: it does not
+  // spend the pick, so the person's Override is never refused into asking
+  // again. A Fix pick, or any answer to another question, still does.
+  const pickUnits = new Map<AuditShardEvent, string | null>();
+  const picks = blockingSensorPicks(rows, slug, pickUnits, undefined, stateContent);
+  const asksCheck = (row: AuditShardEvent | undefined): boolean =>
+    row !== undefined && row.event === "DECISION_RECORDED" &&
+    auditBlockField(row.block, "Decision") === BLOCKING_SENSOR_OVERRIDE_DECISION;
+  // An answer to the check's own question (the stage's latest question in its shard).
+  const answersCheck = (row: AuditShardEvent): boolean => asksCheck(stageRows.filter((other) =>
+    other.event === "DECISION_RECORDED" && other.shard === row.shard && other.pos < row.pos
+  ).at(-1));
+  const relogged = (row: AuditShardEvent): boolean => unitPicks && (
+    asksCheck(row) ||
+    (row.event === "QUESTION_ANSWERED" && answersCheck(row) && picks.get(row) !== BLOCKING_SENSOR_OVERRIDE_OPTIONS[0])
   );
-  for (const [answer, choice] of blockingSensorPicks(rows, slug)) {
+  const interactions = stageRows.filter((row) =>
+    (row.event === "DECISION_RECORDED" || row.event === "QUESTION_ANSWERED") &&
+    (unit === null || unitOf(row) === null || unitOf(row) === unit) && !relogged(row)
+  );
+  for (const [answer, choice] of picks) {
     if (choice !== BLOCKING_SENSOR_OVERRIDE_CHOICE) continue;
+    // At a Unit's checkpoint a pick that names no Unit is the Unit's too (the
+    // agent left --unit off); at the stage gate it must name none.
+    const pickUnit = pickUnits.get(answer) ?? null;
+    if (unitPicks && pickUnit !== unit && !(unit !== null && pickUnit === null)) continue;
     if (!boundaries.every((boundary) => auditEventIsAfter(answer, boundary))) {
       continue;
     }
@@ -13487,31 +12388,24 @@ export function isRequestTurn(row: { event: string; block: string }): boolean {
   return row.event === "HUMAN_TURN" && auditBlockField(row.block, "Reply") !== QUESTION_TURN_REPLY;
 }
 
-// Where the audit trail stood when a question was shown: the shard and its
-// size then, so the turns after it are the replies it can have.
-export interface AuditMark {
-  shard: string;
-  offset: number;
-}
-
 export function auditMark(projectDir: string): AuditMark {
   const shardPath = auditFilePath(projectDir);
   return {
     shard: projectRelativePath(projectDir, shardPath),
     offset: existsSync(shardPath) ? statSync(shardPath).size : 0,
+    at: isoTimestamp(),
   };
 }
 
 // The person replied after the mark: a human turn that is more than a command
-// to AIDLC (isReplyTurn) is on record after it. A decision on an open question
-// needs this; presence for what a command asks for does not. A trail that
-// cannot be read, or a mark from another shard, proves no reply.
-export function personRepliedAfter(projectDir: string, mark: AuditMark): boolean {
+// to AIDLC (isReplyTurn) is on record after it, in this checkout's record of
+// the work (replyTurnsAfter). A decision on an open question needs this;
+// presence for what a command asks for does not. A trail that cannot be read
+// proves no reply. `shownAt`: as replyTurnsAfter takes it.
+export function personRepliedAfter(projectDir: string, mark: AuditMark, shownAt?: string): boolean {
   try {
-    const shardPath = auditFilePath(projectDir);
-    if (projectRelativePath(projectDir, shardPath) !== mark.shard) return false;
-    const after = readAppendOnlyFileNoFollowOrThrow(shardPath, "audit shard").subarray(mark.offset).toString("utf-8");
-    return auditShardBlocks(after).some((block) => isReplyTurn({ event: auditBlockField(block, "Event") ?? "", block }));
+    const reply = (block: string) => isReplyTurn({ event: auditBlockField(block, "Event") ?? "", block });
+    return replyTurnsAfter(projectDir, mark, reply, shownAt).length > 0;
   } catch {
     return false;
   }
@@ -13537,14 +12431,11 @@ export function rowsAfterMark(projectDir: string, mark: AuditMark): ((row: Audit
 
 // Their replies after the mark, as personRepliedAfter counts them, oldest
 // first: the message each turn names (null when it names none) and its time.
-// Empty when there is none, or the mark is another shard's.
+// Empty when there is none.
 export function repliesAfter(projectDir: string, mark: AuditMark): Array<{ messageId: string | null; at: string }> {
   try {
-    const shardPath = auditFilePath(projectDir);
-    if (projectRelativePath(projectDir, shardPath) !== mark.shard) return [];
-    const after = readAppendOnlyFileNoFollowOrThrow(shardPath, "audit shard").subarray(mark.offset).toString("utf-8");
-    return auditShardBlocks(after)
-      .filter((block) => isReplyTurn({ event: auditBlockField(block, "Event") ?? "", block }))
+    const reply = (block: string) => isReplyTurn({ event: auditBlockField(block, "Event") ?? "", block });
+    return replyTurnsAfter(projectDir, mark, reply)
       .map((block) => ({ messageId: auditBlockField(block, "Message Id"), at: auditBlockField(block, "Timestamp") ?? "" }));
   } catch {
     return [];
@@ -13656,7 +12547,7 @@ function projectTypeTurnOnRecord(projectDir: string): boolean {
   if (personTurnStands(projectDir, "plain", { replies: true })) return true;
   try {
     const after = readAppendOnlyFileNoFollowOrThrow(auditFilePath(projectDir), "audit shard").subarray(asked.offset).toString("utf-8");
-    return auditShardBlocks(after).some((block) => isRequestTurn({ event: auditBlockField(block, "Event") ?? "", block }));
+    return auditShardTurnBlocks(after).some((block) => isRequestTurn({ event: auditBlockField(block, "Event") ?? "", block }));
   } catch {
     return false;
   }
@@ -13701,7 +12592,7 @@ function engineAskPassedOver(projectDir: string, name: string): boolean {
     const shardPath = auditFilePath(projectDir);
     if (projectRelativePath(projectDir, shardPath) !== asked.shard) return false;
     const after = readAppendOnlyFileNoFollowOrThrow(shardPath, "audit shard").subarray(asked.offset).toString("utf-8");
-    return auditShardBlocks(after).some((block) => isRequestTurn({ event: auditBlockField(block, "Event") ?? "", block }));
+    return auditShardTurnBlocks(after).some((block) => isRequestTurn({ event: auditBlockField(block, "Event") ?? "", block }));
   } catch {
     return false;
   }
@@ -13744,8 +12635,9 @@ export function humanTurnState(
   for (let t = 0; t < texts.length; t++) {
     const s = texts[t].shardIndex;
     const blocks = auditShardBlocks(texts[t].content);
+    const withdrawn = withdrawnTurnPositions(blocks);
     for (let i = 0; i < blocks.length; i++) {
-      if (copied[t].has(i)) continue;
+      if (copied[t].has(i) || withdrawn.has(i)) continue;
       const ev = auditBlockField(blocks[i], "Event");
       if (!ev) continue;
       // A host's own turn (HOST_TURN) is neither a person's turn nor a decision:
@@ -13996,8 +12888,8 @@ export function constructionSkeletonOn(stateContent: string): boolean {
 
 // Team Units wait on the walking skeleton, the first DAG Unit built on main,
 // when the scope runs one and the work has not recorded `Skeleton Stance: off`.
-// Unrecorded keeps the scope's answer: the stance is recorded only at the first
-// Construction stage, after claims could already open.
+// Unrecorded keeps the scope's answer only while the team has given none of its
+// own: one it gave is read first (teamSkeletonAnswerUnread, aidlc-orchestrate.ts).
 export function teamSkeletonOn(stateContent: string): boolean {
   return getField(stateContent, "Skeleton Stance") !== "off" &&
     loadScopeMetadata()[getField(stateContent, "Scope") ?? ""]?.skeleton === true;
@@ -14404,12 +13296,6 @@ export function constructionPolicyChangeAllowed(projectDir: string, field: strin
   }
 }
 
-export const CONSTRUCTION_POLICY_RECOVERY =
-  "When the person asks for this Construction change, run aidlc-state.ts set-construction-checkpoints, " +
-  "set-construction-execution, or set-construction-iteration with the value they asked for and --message <id>, " +
-  "the id of the message they asked in, then say its notice line to them. Do not ask them to confirm it, and " +
-  "never change it on your own.";
-
 // --- Consolidated-summary confirmation evidence ---
 //
 // The summary checkpoint is a human judgement that authorizes artifact
@@ -14573,6 +13459,12 @@ function summaryBoundarySpelling(line: string): boolean {
 }
 
 export function summaryConfirmationContentHash(content: string): string {
+  // The one shape a later round of questions takes in a file whose summary was
+  // already confirmed (a revision, or a reopened step): the refusals name it, so
+  // a round is never written as a section of its own or a second summary.
+  const laterRound =
+    ' A later round of questions (a revision, or a reopened step) goes in "## Q<n>" sections after the summary, numbered on from the last question; ' +
+    `then rewrite the bullets of the one "${SUMMARY_CONFIRMATION_CHECKPOINT}" section to cover every answer, blank its "[Answer]:" line, and confirm it again.`;
   const normalized = content.replace(/\r\n?/g, "\n");
   const lines = normalized.split("\n");
 	const blocks = markdownBlocks(normalized);
@@ -14606,7 +13498,8 @@ export function summaryConfirmationContentHash(content: string): string {
     if (title === SUMMARY_CONFIRMATION_CHECKPOINT && atxH2) {
       if (sawSummary) {
         throw new Error(
-          `duplicate H2 section "${SUMMARY_CONFIRMATION_CHECKPOINT}"`,
+          `duplicate H2 section "${SUMMARY_CONFIRMATION_CHECKPOINT}".` +
+            laterRound,
         );
       }
       sawSummary = true;
@@ -14666,7 +13559,7 @@ export function summaryConfirmationContentHash(content: string): string {
           : `H${heading.level}`;
       throw new Error(
         `unsupported ${headingKind} heading "${title}" ` +
-          boundary,
+          boundary + "." + laterRound,
       );
     }
   }
@@ -15617,7 +14510,7 @@ export function isSummaryConfirmationChoice(text: string | undefined): boolean {
 /** A decision whose offered options are the summary's two choices. */
 /**
  * The choices a question's Options field (or the `--options` it was logged
- * with) lists, in order and trimmed. A list that starts with `|` separates
+ * with, its `--option` choices joined in) lists, in order and trimmed. A list that starts with `|` separates
  * its choices with `|`, so a choice may hold a comma ("|Refuse it, with a
  * message|Save it as Untitled"); any other list is split on commas, as every
  * list was written before, and a `|` inside it is part of its choice ("Use
@@ -16064,25 +14957,28 @@ export function checkSummaryConfirmationEvidence(
     }
 
     const hashScope = auditBlockField(receipt.block, "Hash Scope");
+    const confirm = summaryConfirmationCommands({
+      stage: stage.slug,
+      unit: workflow === undefined ? question.unit : null,
+      questionsFile: questionRelative,
+      single: workflow !== undefined,
+    });
+    const report = (...args: string[]) => renderEngineInvocation({ route: "orchestrate", args: ["report", ...args] });
     const recovery = workflow === undefined
       ? (
         "First repair the questions file: reset the existing consolidated-summary " +
         "`[Answer]:` tag to blank and remove or repair every invalid or duplicate " +
         "post-summary section named by the validation error. Only then re-present the " +
         "consolidated summary and record a fresh confirmation with " +
-        `\`aidlc-log.ts decision --checkpoint summary-confirmation --stage "${stage.slug}" ` +
-        `${question.unit ? `--unit "${question.unit}" ` : ""}` +
-        "--questions-file \"<path>\" --decision \"Does this all look correct?\"`; " +
+        `\`${confirm.decision}\`; ` +
         "end the turn, wait for the human's response, update the recorded answer, then run " +
-        `\`aidlc-log.ts answer --checkpoint summary-confirmation --stage "${stage.slug}" ` +
-        `${question.unit ? `--unit "${question.unit}" ` : ""}` +
-        "--questions-file \"<path>\" --details \"Looks correct\"`. Re-save each generated " +
+        `\`${confirm.answer}\`. Re-save each generated ` +
         "artifact, rerun the section-12a reviewer when this stage declares one, then retry " +
         "the stage completion command. If a completion gate is already open or a terminal " +
         "section-12a receipt freezes artifact writes, instead present Request Changes and " +
         "end the turn. After a fresh human turn choosing it, run " +
-        `\`aidlc-orchestrate.ts report --stage "${stage.slug}" --result rejected ` +
-        "--user-input \"Request Changes\" --reason '<requested changes>'`; then revise and re-confirm the summary, " +
+        `\`${report("--stage", stage.slug, "--result", "rejected", "--user-input", "Request Changes", "--reason", "<requested changes>")}\`; ` +
+        "then revise and re-confirm the summary, " +
         "re-save the artifacts, rerun the reviewer, and report `--result revised`."
       )
       : (
@@ -16090,14 +14986,11 @@ export function checkSummaryConfirmationEvidence(
         "`[Answer]:` tag to blank and remove or repair every invalid or duplicate " +
         "post-summary section named by the validation error. Only then re-present the " +
         "consolidated summary in the isolated run and record a fresh confirmation with " +
-        `\`aidlc-log.ts decision --checkpoint summary-confirmation --stage "${stage.slug}" ` +
-        "--questions-file \"<path>\" --single --decision \"Does this all look correct?\"`; " +
+        `\`${confirm.decision}\`; ` +
         "end the turn, wait for the human's response, update the recorded answer, then run " +
-        `\`aidlc-log.ts answer --checkpoint summary-confirmation --stage "${stage.slug}" ` +
-        "--questions-file \"<path>\" --single --details \"Looks correct\"`. Regenerate or " +
+        `\`${confirm.answer}\`. Regenerate or ` +
         "re-save each generated artifact, rerun the section-12a reviewer when this stage " +
-        "declares one, then run `aidlc-orchestrate.ts report --single " +
-        `--stage "${stage.slug}" --result completed\`.`
+        `declares one, then run \`${report("--single", "--stage", stage.slug, "--result", "completed")}\`.`
       );
     if (
       hashScope !== null &&
@@ -16328,23 +15221,6 @@ export function checkSummaryConfirmationEvidence(
     ...(acceptedChanges.length > 0 ? { acceptedChanges } : {}),
     ...(changeControlRead ? { changeControlRead: true as const } : {}),
   };
-}
-
-// Read the FIRST `**Field**: value` line from one audit block (tolerates an
-// optional leading `- ` so it serves both audit blocks and the state file).
-// IMPORTANT: a duplicated field still returns only its first value. Do not
-// build authenticate-then-re-read flows on this helper: a verifier and consumer
-// can otherwise disagree about which occurrence, and therefore which bytes,
-// they mean. Callers that require uniqueness must reject duplicates separately.
-// Mirrors the per-tool private auditField readers; shared here for
-// humanActedSinceGate.
-export function auditBlockField(block: string, fieldName: string): string | null {
-  const prefix = `**${fieldName}**:`;
-  for (const raw of block.split("\n")) {
-    const line = raw.startsWith("- ") ? raw.slice(2) : raw;
-    if (line.startsWith(prefix)) return line.slice(prefix.length).trim();
-  }
-  return null;
 }
 
 // The rows every `aidlc doctor` run writes about itself (collectDoctorReport is
@@ -16642,114 +15518,12 @@ export function openPendingDecision(
   return open;
 }
 
-// This clone's audit shard filename: `<host>-<clone-id>.md`, both parts from the
-// clone identity (see cloneIdentity). The clone-id token (not the PID) is the
-// cross-clone disambiguator: stable across every process in a clone (so the
-// fork process and the merge process resolve ONE shard) and distinct across
-// clones (so concurrent clones never collide or git-conflict). The host is the
-// one recorded at mint time, so it is the same in every process and on every
-// machine the folder is copied to.
-const AUDIT_SHARD_NAMES = new Map<string, string>();
-function scopedAuditShardName(projectDir: string): string | null {
-  const scoped = applicableTeamUnitScopeStamp(projectDir);
-  return scoped?.audit_shard && /^[A-Za-z0-9._-]+\.md$/.test(scoped.audit_shard)
-    ? scoped.audit_shard
-    : null;
-}
-
-export function auditShardName(projectDir: string): string {
-  const key = canonicalPathKey(projectDir);
-  const scoped = scopedAuditShardName(projectDir);
-  if (scoped) return scoped;
-  const cached = AUDIT_SHARD_NAMES.get(key);
-  if (cached) return cached;
-  const identity = cloneIdentity(projectDir);
-  const name = `${identity.host}-${identity.token}.md`;
-  AUDIT_SHARD_NAMES.set(key, name);
-  return name;
-}
-
-// This clone's shard name when it is already known, without minting a token or
-// upgrading the clone-id file: readers use it to prefer their own shard, or to
-// tell their own rows from other clones', and must not write. Null means this
-// clone has written no shard yet.
-export function knownAuditShardName(projectDir: string): string | null {
-  const scoped = scopedAuditShardName(projectDir);
-  if (scoped) return scoped;
-  const cached = AUDIT_SHARD_NAMES.get(canonicalPathKey(projectDir));
-  if (cached) return cached;
-  try {
-    const recorded = parseCloneIdFile(readFileSync(cloneIdPath(projectDir), "utf-8"));
-    if (recorded.token) {
-      const host = recorded.host ?? existingShardHost(projectDir, recorded.token) ?? auditShardHostSegment();
-      return `${host}-${recorded.token}.md`;
-    }
-  } catch {
-    // no clone identity yet
-  }
-  return null;
-}
-
 // `…/intents/<slug>-<id8>/audit/` — the shard directory, or null when no intent
 // resolves (the bare space root has no audit dir, so an enumerator gets []).
 export function auditShardDir(projectDir: string, intent?: string, space?: string): string | null {
   const dir = recordDir(projectDir, intent, space);
   if (dir === null) return null;
   return join(dir, "audit");
-}
-
-// Every audit shard selected by the caller (sorted). Normal intent readers stay
-// intent-only, whether the intent is explicit or resolved from the active cursor.
-// The deliberate `undefined intent + explicit space` form adds the space-level
-// shard before the resolved intent shards; DocumentKB recovery and doctor/export
-// use that form because space-level provenance is part of their read model.
-// PRE-CREATION PARITY: when NO intent resolves at all, the space shard IS the
-// ledger — the append side's auditFilePath falls back to it, so the read side
-// must too, or a project with no intents yet reads an empty ledger where its
-// own appends just landed (that broke 10 fixture suites when this narrowing
-// first shipped without the fallback; base v2 always read the space shard in
-// that state).
-// Readers merge-sort parsed events by **Timestamp**.
-export function auditShards(
-  projectDir: string,
-  intent?: string,
-  space?: string,
-  unreadableLocations?: string[],
-  bind?: boolean,
-): string[] {
-  const dirs: string[] = [];
-  if (intent === undefined && space !== undefined) {
-    dirs.push(join(spaceRecordRoot(projectDir, space), "audit"));
-  }
-  const resolved = resolveRecordDir(projectDir, intent, space, bind);
-  const intentDir =
-    resolved.dir === null ? null : join(resolved.dir, "audit");
-  if (intentDir !== null && !dirs.includes(intentDir)) dirs.push(intentDir);
-  if (intentDir === null && dirs.length === 0) {
-    dirs.push(join(spaceRecordRoot(projectDir, resolved.space), "audit"));
-  }
-  const paths: string[] = [];
-  for (const shardDir of dirs) {
-    try {
-      assertNoSymlinkInChainOrThrow(projectDir, relative(projectDir, shardDir));
-    } catch {
-      unreadableLocations?.push(shardDir);
-      continue;
-    }
-    let entries: string[];
-    try {
-      entries = readdirSync(shardDir);
-    } catch {
-      if (existsSync(shardDir)) unreadableLocations?.push(shardDir);
-      continue;
-    }
-    for (const file of entries.sort()) {
-      if (file.endsWith(".md")) paths.push(join(shardDir, file));
-    }
-  }
-  // Explicit-space aggregation keeps the resolved intent last for the few
-  // diagnostic paths that inspect the raw audit tail.
-  return paths;
 }
 
 // Concatenate every audit shard's content for an intent into one buffer the
@@ -16776,155 +15550,11 @@ export function readAllAuditShards(projectDir: string, intent?: string, space?: 
     .join("\n");
 }
 
-export interface AuditShardText {
-  shard: string;
-  content: string;
-}
-
-// Read the selected shards, keeping each one's index in `shards`. A vanished or
-// refused shard is left out (and listed in `unreadable` when given).
-function readAuditShardTexts(
-  projectDir: string,
-  shards: readonly string[],
-  unreadable?: string[],
-): Array<AuditShardText & { shardIndex: number }> {
-  const texts: Array<AuditShardText & { shardIndex: number }> = [];
-  for (let shardIndex = 0; shardIndex < shards.length; shardIndex++) {
-    try {
-      const content = readAppendOnlyFileNoFollowOrThrow(shards[shardIndex], "audit shard").toString("utf-8");
-      assertNoSymlinkInChainOrThrow(realpathSync(projectDir), relative(projectDir, shards[shardIndex]));
-      texts.push({ shard: shards[shardIndex], content, shardIndex });
-    } catch {
-      unreadable?.push(shards[shardIndex]);
-    }
-  }
-  return texts;
-}
-
-// The block sequence every shard parser walks; positions index into it.
-function auditShardBlocks(content: string): string[] {
-  return content.replace(/\r\n/g, "\n").split(/\n---\n/);
-}
-
-// A shard file that a sync tool or a person copied (a "<shard> 2.md" conflict
-// copy, a hand copy) repeats rows another shard already holds. Each copied row
-// would tie with itself across two files, read as causally unordered, and stop
-// every receipt stamped before the copy from counting. A copy starts with its
-// source's first block (the file header and first row), so only files that
-// start alike are compared, and a row two independent clones happen to write
-// alike is never taken for a copy. Within such a group, a timestamped block
-// found in two or more files is read ONCE, from the best of them: this clone's
-// own shard, then a file with a shard name (`<host>-<token>.md`, so a conflict
-// copy never lends its name or commit to a receipt), then the file with more
-// timestamped blocks, then filename order.
-// Repeats inside one file are not copies and stay. Returns, per shard, the
-// block positions to skip. `ownShard` is only asked when a copy exists.
-const AUDIT_SHARD_FILE_RE = /^[a-z0-9][a-z0-9-]*-[a-z0-9]{1,32}\.md$/;
-
 // The machine a shard's file name records (the token never holds a hyphen), or
 // null for a file not named like a shard.
 export function auditShardHost(shard: string): string | null {
   const name = basename(shard);
   return AUDIT_SHARD_FILE_RE.test(name) ? name.slice(0, name.lastIndexOf("-")) : null;
-}
-
-export function copiedAuditBlocks(
-  shards: readonly AuditShardText[],
-  ownShard: () => string | null,
-): ReadonlySet<number>[] {
-  const skip = shards.map(() => new Set<number>());
-  if (shards.length < 2) return skip;
-  const groups = new Map<string, number[]>();
-  shards.forEach(({ content }, index) => {
-    const end = content.search(/\r?\n---\r?\n/);
-    const head = (end < 0 ? content : content.slice(0, end)).replace(/\r\n/g, "\n");
-    if (auditBlockField(head, "Timestamp") === null) return;
-    const members = groups.get(head);
-    if (members) members.push(index);
-    else groups.set(head, [index]);
-  });
-  let own: string | null | undefined;
-  for (const members of groups.values()) {
-    if (members.length < 2) continue;
-    if (own === undefined) own = ownShard();
-    const blocks = members.map((index) =>
-      auditShardBlocks(shards[index].content).map((block) =>
-        auditBlockField(block, "Timestamp") === null ? null : block
-      )
-    );
-    const holders = new Map<string, Set<number>>();
-    blocks.forEach((memberBlocks, member) => {
-      for (const block of memberBlocks) {
-        if (block === null) continue;
-        const found = holders.get(block);
-        if (found) found.add(member);
-        else holders.set(block, new Set([member]));
-      }
-    });
-    const counts = blocks.map((memberBlocks) => memberBlocks.filter((block) => block !== null).length);
-    const isOwn = (member: number) => own !== null && basename(shards[members[member]].shard) === own;
-    const isShardName = (member: number) => AUDIT_SHARD_FILE_RE.test(basename(shards[members[member]].shard));
-    const order = members
-      .map((_, member) => member)
-      .sort((a, b) => {
-        if (isOwn(a) !== isOwn(b)) return isOwn(a) ? -1 : 1;
-        if (isShardName(a) !== isShardName(b)) return isShardName(a) ? -1 : 1;
-        if (counts[a] !== counts[b]) return counts[b] - counts[a];
-        return a - b;
-      });
-    const rank = new Map(order.map((member, position) => [member, position]));
-    blocks.forEach((memberBlocks, member) => {
-      memberBlocks.forEach((block, pos) => {
-        const found = block === null ? undefined : holders.get(block);
-        if (!found || found.size < 2) return;
-        for (const holder of found) {
-          if (rank.get(holder)! < rank.get(member)!) {
-            skip[members[member]].add(pos);
-            return;
-          }
-        }
-      });
-    });
-  }
-  return skip;
-}
-
-export interface AuditShardEvent {
-  block: string;
-  event: string;
-  pos: number;
-  shard: string;
-  shardIndex: number;
-  timestamp: string;
-}
-
-// Preserve shard identity while parsing audit rows. A concatenated audit buffer
-// can preserve append order only within one shard; equal second-precision
-// timestamps across shards are causally unordered and must not be resolved by
-// filename position when authority or attempt freshness depends on the result.
-// Split ONE shard's bytes into events, preserving append position. Factored out
-// of readAuditShardEvents so a reader whose shard bytes do not come from the
-// working tree shares this parser rather than reimplementing the block grammar:
-// aidlc-attest.ts reads shards out of a git tree (`git cat-file`) to resolve a
-// commit against the record as that commit carried it. Two copies of the
-// `\n---\n` split and the Event/Timestamp filter would be free to drift, and a
-// drifted audit parser silently changes which receipt counts as newest.
-export function parseAuditShardEvents(
-  content: string,
-  shard: string,
-  shardIndex: number,
-  copied: ReadonlySet<number> = new Set(),
-): AuditShardEvent[] {
-  const rows: AuditShardEvent[] = [];
-  const blocks = auditShardBlocks(content);
-  for (let pos = 0; pos < blocks.length; pos++) {
-    if (copied.has(pos)) continue;
-    const event = auditBlockField(blocks[pos], "Event");
-    const timestamp = auditBlockField(blocks[pos], "Timestamp");
-    if (!event || !timestamp) continue;
-    rows.push({ block: blocks[pos], event, pos, shard, shardIndex, timestamp });
-  }
-  return rows;
 }
 
 export interface AuditShardNote extends AuditShardEvent {
@@ -16958,28 +15588,6 @@ export function parseAuditShardNotes(
     rows.push({ block, event: "NOTE", pos, shard, shardIndex, timestamp, heading, text });
   }
   return rows;
-}
-
-export function readAuditShardEvents(
-  projectDir: string,
-  intent?: string,
-  space?: string,
-  unreadableShards?: string[],
-  bind?: boolean,
-): AuditShardEvent[] {
-  const shards = auditShards(
-    projectDir,
-    intent,
-    space,
-    unreadableShards,
-    bind,
-  );
-  // A vanished or refused shard is skipped; growth during read is tolerated.
-  const texts = readAuditShardTexts(projectDir, shards, unreadableShards);
-  const copied = copiedAuditBlocks(texts, () => knownAuditShardName(projectDir));
-  return texts.flatMap(({ shard, content, shardIndex }, index) =>
-    parseAuditShardEvents(content, shard, shardIndex, copied[index])
-  );
 }
 
 // The declaration that travels WITH audit text in every read command's output,
@@ -17055,23 +15663,8 @@ export function latestLedgerSession(projectDir: string): string | null {
   );
   return latestSession === null ? null : auditBlockField(latestSession.block, "Session");
 }
-
-/**
- * `_` cannot occur in a Bolt slug, so intent-scoped and legacy names are disjoint.
- * Legacy names are read-only compatibility identities, resolved only by provenance;
- * newly created Bolts always use the selected intent's registry identity.
- */
-export const BOLT_INTENT_ID8_REGEX = /^[0-9a-f]{8}$/;
 export const BOLT_NAME_REGEX = /^bolt-([0-9a-f]{8})_([a-z][a-z0-9-]*)$/;
 export const LEGACY_BOLT_NAME_REGEX = /^bolt-([a-z][a-z0-9-]*)$/;
-
-export function boltName(intentId8: string, slug: string): string {
-  return `bolt-${intentId8}_${slug}`;
-}
-
-export function legacyBoltName(slug: string): string {
-  return `bolt-${slug}`;
-}
 
 export function parseBoltName(
   name: string,
@@ -17080,18 +15673,6 @@ export function parseBoltName(
   if (current) return { intentId8: current[1], slug: current[2] };
   const legacy = LEGACY_BOLT_NAME_REGEX.exec(name);
   return legacy ? { intentId8: null, slug: legacy[1] } : null;
-}
-
-export function worktreesDir(projectDir: string): string {
-  return join(projectDir, ".aidlc", "worktrees");
-}
-
-export function worktreePath(projectDir: string, intentId8: string, slug: string): string {
-  return join(worktreesDir(projectDir), boltName(intentId8, slug));
-}
-
-export function legacyWorktreePath(projectDir: string, slug: string): string {
-  return join(worktreesDir(projectDir), legacyBoltName(slug));
 }
 
 export function intentId8ForSelection(
@@ -17325,32 +15906,6 @@ export function parseParkedStampInstant(stamp: string): number | null {
   return instant.getTime();
 }
 
-export function resolveAuditProjectPath(
-  projectDir: string,
-  recordedPath: string,
-): string {
-  if (recordedPath === "<project-dir>") return resolvePath(projectDir);
-  if (
-    recordedPath.startsWith("<project-dir>/") ||
-    recordedPath.startsWith("<project-dir>\\")
-  ) {
-    return resolvePath(
-      projectDir,
-      recordedPath.slice("<project-dir>".length + 1),
-    );
-  }
-  return isAbsolute(recordedPath)
-    ? recordedPath
-    : resolvePath(projectDir, recordedPath);
-}
-
-export function resolveAuditWorktreePath(
-  projectDir: string,
-  recordedPath: string,
-): string {
-  return resolveAuditProjectPath(projectDir, recordedPath);
-}
-
 // Whether a row is the write hook's record of a write to `abs` (an
 // ARTIFACT_CREATED or ARTIFACT_UPDATED row naming it). #863: a write from
 // before a workspace move still matches by its full space/intent/phase/stage
@@ -17513,6 +16068,7 @@ export interface FreshReviewReceipts {
   /** A terminal stage-level receipt existed in the current attempt but was
    *  invalidated by a later declared-artifact write or fingerprint mismatch. */
   stageStale: boolean;
+  stageWrittenPaths: string[];
   /** Last fresh verdict per unit. A later write to that unit's declared
    *  artifacts deletes the entry; an ambiguous matching path fails closed by
    *  clearing every unit entry. */
@@ -17594,6 +16150,10 @@ export interface FreshReviewReceipts {
    *  records that no reviewer had finished (reviewCompletionWithoutReviewer).
    *  Read only beside stageVerdict / unitVerdicts, for the one line the gate says. */
   noReviewerVerdicts?: Set<string>;
+  /** The audit block of each scope's fresh terminal receipt ("" for the stage,
+   *  else the Unit), for a field another owner wrote on it. Read only beside
+   *  stageVerdict / unitVerdicts. */
+  verdictBlocks?: Map<string, string>;
   /**
    * Units with a merge-confirmed Bolt attempt. A name-only attempt is
    * confirmed by its BOLT_COMPLETED row; a slug-backed (worktree) attempt is
@@ -17941,7 +16501,7 @@ function sameArtifactIdentity(
   );
 }
 
-function pathContainedBy(root: string, candidate: string): boolean {
+export function pathContainedBy(root: string, candidate: string): boolean {
   const rel = relative(root, candidate);
   return rel === "" || (
     rel !== ".." &&
@@ -19693,28 +18253,9 @@ export function noReviewerFinishedSinceReview(
       }
       const since = rows.filter((row) =>
         row.event === "SUBAGENT_COMPLETED" && !attemptEventDefinitelyBefore(row, request.row));
-      for (const row of since) {
-        const agent = auditBlockField(row.block, "Agent Type");
-        if (agent === null || agent === "" || agent === "unknown") return false;
-        if (agent === request.reviewer && recordedReviewFileDigest(row.block, request.reviewFile) !== null) return false;
-      }
-      const health = hooksHealthReadDir(dir, selection.intent, selection.space);
-      const heartbeat = join(health, "log-subagent.last");
-      if (existsSync(heartbeat)) {
-        const beat = Date.parse(readFileSync(heartbeat, "utf-8").trim());
-        if (!Number.isFinite(beat)) return false;
-        // The hook beats, then appends its row in the same run: a beat since the
-        // request with no completion row at or after it is a run that left none.
-        if (beat >= requested && !since.some((row) => Date.parse(row.timestamp) >= beat)) return false;
-      }
-      const drops = join(health, "log-subagent.drops");
-      if (existsSync(drops)) {
-        for (const line of readFileSync(drops, "utf-8").split("\n")) {
-          if (line.trim() === "") continue;
-          const at = Date.parse(line.split("\t", 1)[0]);
-          if (!Number.isFinite(at) || at >= requested) return false;
-        }
-      }
+      if (since.some((row) => auditBlockField(row.block, "Agent Type") === request.reviewer &&
+        recordedReviewFileDigest(row.block, request.reviewFile) !== null)) return false;
+      if (unrecordedFinishSince(hooksHealthReadDir(dir, selection.intent, selection.space), rows, request.row)) return false;
     }
     return true;
   } catch {
@@ -20344,17 +18885,6 @@ function auditEventIsCrossShardTied<
   );
 }
 
-export function sortAttemptEvents<T extends AuditShardEvent>(
-  rows: ReadonlyArray<T>,
-): T[] {
-  return [...rows].sort((a, b) => {
-    if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
-    if (a.shard === b.shard) return a.pos - b.pos;
-    if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
-    return a.pos - b.pos;
-  });
-}
-
 export function attemptEventIsCrossShardTied<T extends AuditShardEvent>(
   events: ReadonlyArray<T>,
   index: number,
@@ -20368,38 +18898,6 @@ export function attemptEventIsCrossShardTied<T extends AuditShardEvent>(
       candidate.timestamp === event.timestamp &&
       candidate.shard !== event.shard,
   );
-}
-
-export function attemptEventDefinitelyBefore(
-  earlier: AuditShardEvent,
-  later: AuditShardEvent,
-): boolean {
-  if (earlier.shard === later.shard) return earlier.pos < later.pos;
-  return earlier.timestamp < later.timestamp;
-}
-
-export function maximalAttemptEvents<T extends AuditShardEvent>(
-  events: ReadonlyArray<T>,
-): T[] {
-  const maximal = events.filter(
-    (candidate, index) =>
-      !events.some(
-        (other, otherIndex) =>
-          otherIndex !== index &&
-          attemptEventDefinitelyBefore(candidate, other),
-      ),
-  );
-  if (maximal.length > 0 || events.length === 0) return maximal;
-  // "Definitely before" mixes two orders (append position inside a shard, timestamp
-  // across shards) and is therefore not transitive: three rows can form a cycle in
-  // which every row has something after it, and the filter above empties. An empty
-  // frontier is the most dangerous answer available, because every "after the
-  // frontier" test is an `every` call and passes vacuously, so no floor at all reads
-  // as "everything is in this attempt". Fall back to the timestamp-maximal rows,
-  // which is always non-empty and is the coarser of the two orders.
-  let latest = events[0].timestamp;
-  for (const event of events) if (event.timestamp > latest) latest = event.timestamp;
-  return events.filter((event) => event.timestamp === latest);
 }
 
 export interface AttemptFrontierView {
@@ -20533,7 +19031,7 @@ export function reviewAttemptWindow(
   keep?: AuditShardEvent,
 ): AttemptView {
   const allEvents = auditRows ?? readAuditShardEvents(projectDir);
-  const sensorFixes = blockingSensorFixes(allEvents, stage);
+  const sensorFixes = blockingSensorFixes(allEvents, stage, stateContent);
   const events = sortAttemptEvents(
     allEvents.filter((row) => REVIEW_RECEIPT_EVENTS.has(row.event) || sensorFixes.has(row)),
   );
@@ -20968,14 +19466,7 @@ export function reviewAttemptAccounting(
     }
     if (kept.has(entry)) continue;
     if (entry.event === "GATE_REJECTED" || sensorFixes.has(entry)) {
-      const gateStages = (
-        auditBlockField(entry.block, "Gate Stages") ??
-          auditBlockField(entry.block, "Stage") ??
-          ""
-      )
-        .split(",")
-        .map((value) => value.trim());
-      if (!gateStages.includes(stage.slug)) continue;
+      if (!gateStagesReopened(entry.block).includes(stage.slug)) continue;
       const rejectedUnits = rejectionUnits(entry, sensorFixes);
       // A rejection that names no Unit is a stage-wide Request Changes: outside
       // team or checkpoint ownership it starts a new attempt for every Unit.
@@ -21538,6 +20029,13 @@ function candidateAttemptEventMatches(
   );
 }
 
+// What a reviewed stage's review comes to for pin: "ready" when its last
+// verified review is READY on the candidate's documents, "approved" when it is
+// NOT-READY on them and the person's approval of the stage (the GATE_APPROVED
+// the stage gate writes) comes after it and decided its open findings, null
+// otherwise; with the latest approval of the stage since that review, whose
+// recorded findings pin's evidence names. A change to the documents, a
+// rejection or a revision after either undoes it.
 export function candidateReviewCoverageProjection(
   rows: ReadonlyArray<AuditShardEvent>,
   options: {
@@ -21548,8 +20046,16 @@ export function candidateReviewCoverageProjection(
     artifactPrefix: string;
     expectedFingerprint: string;
     completionRecord?: (block: string) => ReviewRecord | null;
+    // Whether the person's approval decided the stage's open findings; an
+    // approval that asked for one to be fixed accepted no concern.
+    approvalAccepts?: (block: string) => boolean;
   },
-): boolean {
+): { coverage: "ready" | "approved"; approval: string | null } | null {
+  // A team Unit keeps its stage diary in this folder, and the learnings step
+  // writes it after the review: it is not reviewed work.
+  const reviewedWork = (file: string): boolean =>
+    file.includes(options.artifactPrefix) &&
+    !file.endsWith(`${options.artifactPrefix}memory.md`);
   const events = sortAttemptEvents(rows);
   const relevantByTimestamp = new Map<string, Set<string>>();
   for (const event of events) {
@@ -21557,9 +20063,10 @@ export function candidateReviewCoverageProjection(
     const relevant =
       event.event === "ARTIFACT_CREATED" ||
       event.event === "ARTIFACT_UPDATED"
-        ? file.includes(options.artifactPrefix)
+        ? reviewedWork(file)
         : (event.event === "REVIEW_REQUESTED" ||
             event.event === "REVIEW_COMPLETED" ||
+            event.event === "GATE_APPROVED" ||
             event.event === "GATE_REJECTED" ||
             event.event === "STAGE_REVISING") &&
           candidateAttemptEventMatches(
@@ -21574,18 +20081,26 @@ export function candidateReviewCoverageProjection(
     relevantByTimestamp.set(event.timestamp, shards);
   }
   if ([...relevantByTimestamp.values()].some((shards) => shards.size > 1)) {
-    return false;
+    return null;
   }
 
   const pending = new Map<string, ReviewRequestBinding>();
-  let ready = false;
+  let coverage: "ready" | "approved" | null = null;
+  // A NOT-READY verdict on the candidate's documents: the stage gate takes the
+  // person's approval over it, and their approval after it is what covers it.
+  let concernOpen = false;
+  let approval: string | null = null;
   for (const event of events) {
     if (
       event.event === "ARTIFACT_CREATED" ||
       event.event === "ARTIFACT_UPDATED"
     ) {
       const file = auditBlockField(event.block, "File") ?? "";
-      if (file.includes(options.artifactPrefix)) ready = false;
+      if (reviewedWork(file)) {
+        coverage = null;
+        concernOpen = false;
+        approval = null;
+      }
       continue;
     }
     if (
@@ -21603,7 +20118,19 @@ export function candidateReviewCoverageProjection(
       event.event === "STAGE_REVISING"
     ) {
       pending.clear();
-      ready = false;
+      coverage = null;
+      concernOpen = false;
+      approval = null;
+      continue;
+    }
+    if (event.event === "GATE_APPROVED") {
+      if (concernOpen && (options.approvalAccepts?.(event.block) ?? true)) {
+        coverage = "approved";
+        concernOpen = false;
+      }
+      // An approval that left the concern open (a fix asked for) covers
+      // nothing, so it is not the stage's approval either.
+      if (coverage !== null) approval = event.block;
       continue;
     }
     if (
@@ -21631,12 +20158,15 @@ export function candidateReviewCoverageProjection(
       )
     ) continue;
     pending.delete(iteration);
-    ready =
-      auditBlockField(event.block, "Verdict") === "READY" &&
+    const verdict = auditBlockField(event.block, "Verdict");
+    const current =
       currentFingerprintForm(auditBlockField(event.block, "Artifact Fingerprint")) ===
         options.expectedFingerprint;
+    coverage = verdict === "READY" && current ? "ready" : null;
+    concernOpen = verdict === "NOT-READY" && current;
+    approval = null;
   }
-  return ready;
+  return coverage === null ? null : { coverage, approval };
 }
 
 // A person's Request Changes that changed nothing of the stage: the stage is
@@ -21707,6 +20237,7 @@ export function freshReviewReceipts(
   const empty: FreshReviewReceipts = {
     stageVerdict: null,
     stageStale: false,
+    stageWrittenPaths: [],
     unitVerdicts: new Map(),
     newestSourceFingerprint: null,
     newestSourceUnit: null,
@@ -21734,6 +20265,7 @@ export function freshReviewReceipts(
     editedVerdicts: new Set(),
     dictatedVerdicts: new Set(),
     noReviewerVerdicts: new Set(),
+    verdictBlocks: new Map(),
     mergedBoltUnits: new Set(),
     openBoltUnits: new Set(),
     acceptedChanges: [],
@@ -21845,6 +20377,7 @@ export function freshReviewReceipts(
   const editedVerdicts = new Set<string>();
   const dictatedVerdicts = new Set<string>();
   const noReviewerVerdicts = new Set<string>();
+  const verdictBlocks = new Map<string, string>();
   const unitStale = new Set<string>();
   const unitStaleProgress = new Map<string, StaleReviewProgress>();
   const unitIterations = new Map<string, number>();
@@ -21879,11 +20412,13 @@ export function freshReviewReceipts(
   // The listing that receipt kept (`Source Listing`), absent on receipts an
   // earlier release wrote and when the source moved during the review.
   let newestSourceListing: string | undefined;
+  let newestSourceRow: AuditShardEvent | null = null;
   let newestSourceUnit: string | null = null;
   let newestSourceProgress: StaleReviewProgress | null = null;
   let sourceRecoverySpent = false;
   let stageStale = false;
   let stageStaleProgress: StaleReviewProgress | null = null;
+  const stageWrittenPaths: string[] = [];
   let stageIteration: number | null = null;
   let stageReceiptRecovery = false;
   let stagePending: PendingReviewProgress | null = null;
@@ -22058,6 +20593,9 @@ export function freshReviewReceipts(
             recoverySpent: stageReceiptRecovery,
           };
         }
+        if (stageStale) {
+          stageWrittenPaths.push(toPosix(relative(projectDir, resolveAuditProjectPath(projectDir, file))));
+        }
         stageVerdict = null;
         stageIteration = null;
         stageReceiptRecovery = false;
@@ -22209,6 +20747,7 @@ export function freshReviewReceipts(
       if (sourceFingerprint && !eventIsCrossShardTied(i)) {
         newestSourceFingerprint = sourceFingerprint;
         newestSourceListing = auditBlockField(e.block, "Source Listing") ?? undefined;
+        newestSourceRow = e;
         newestSourceUnit = unit ?? null;
         newestSourceProgress = {
           nextIteration: iteration + 1,
@@ -22243,6 +20782,8 @@ export function freshReviewReceipts(
       }
       continue;
     }
+    // A newer stage review covered every write before it, matching or not.
+    if (!unit) stageWrittenPaths.length = 0;
     if (!fingerprintMatches) {
       if (fingerprintUsable && recordedFingerprint !== null && currentFingerprint !== null && isRelaxed()) {
         // Reviewed content differs from the receipt. Under relaxed the verdict
@@ -22289,6 +20830,7 @@ export function freshReviewReceipts(
     else dictatedVerdicts.delete(unit ?? "");
     if (reviewCompletionWithoutReviewer(e.block)) noReviewerVerdicts.add(unit ?? "");
     else noReviewerVerdicts.delete(unit ?? "");
+    verdictBlocks.set(unit ?? "", e.block);
     if (unit) {
       unitVerdicts.set(unit, terminalVerdict);
       unitStale.delete(unit);
@@ -22384,7 +20926,7 @@ export function freshReviewReceipts(
   // back here (an earlier release, a move during the review, another machine):
   // fingerprints decide. Read for the active record, like the walk above.
   const movedKeys = fingerprintMoved && currentSourceState !== null
-    ? sourceKeysChangedOutsideAidlcSince(projectDir, stage.slug, newestSourceListing, currentSourceState)
+    ? sourceKeysChangedOutsideAidlcSince(projectDir, stage.slug, newestSourceListing, currentSourceState, allEvents, newestSourceRow)
     : null;
   const movedOutsideAidlc = movedKeys === null ? null : renderSourcePathKeys(movedKeys);
   const sourceMismatch = fingerprintMoved && (movedOutsideAidlc === null || movedOutsideAidlc.length > 0);
@@ -22745,6 +21287,7 @@ export function freshReviewReceipts(
   return {
     stageVerdict,
     stageStale,
+    stageWrittenPaths: [...new Set(stageWrittenPaths)],
     unitVerdicts,
     newestSourceFingerprint,
     newestSourceUnit,
@@ -22786,6 +21329,7 @@ export function freshReviewReceipts(
     editedVerdicts,
     dictatedVerdicts,
     noReviewerVerdicts,
+    verdictBlocks,
     mergedBoltUnits,
     openBoltUnits,
     acceptedChanges: [
@@ -22855,19 +21399,6 @@ export function isValidRepoName(name: string): boolean {
 // The on-disk dir for a sibling repo: an immediate child of the workspace root.
 export function repoDir(projectDir: string, repoName: string): string {
   return join(projectDir, repoName);
-}
-
-// A folder a person made a Git checkout of: a real .git entry (a folder, or a
-// worktree's or submodule's file), by lstat, so no link is followed. A commit
-// can never carry a .git entry, so a committed folder merely shaped like a repo
-// never passes and git never runs on its config.
-export function hasRealGitEntry(dir: string): boolean {
-  try {
-    const entry = lstatSync(join(dir, ".git"));
-    return entry.isDirectory() || entry.isFile();
-  } catch {
-    return false;
-  }
 }
 
 // The checkouts a piece of work keeps its code in where the source walk does
@@ -24234,6 +22765,7 @@ export function shapeSourceSnapshotIndex(
   repoDir: string,
   indexFile: string,
   carriesWorkspaceShell: boolean,
+  recordBase: string | null = null,
 ): SourceSnapshotIndexShape | null {
   const hasWorktreeContext = existsSync(
     join(repoDir, ".aidlc", "worktree-meta.json"),
@@ -24292,6 +22824,22 @@ export function shapeSourceSnapshotIndex(
         "--",
         ...[...AIDLC_ROOT_SETTINGS_FILES].map((name) => `:(top,literal)${name}`),
       ],
+      { env, encoding: "utf-8" },
+    );
+    if (restored.status !== 0) return null;
+  }
+  // AI-DLC's records and worktree metadata ride no Source Commit either. Given
+  // the commit a Bolt shares with the branch it lands on, they keep its bytes,
+  // so a Bolt commit that carried them (a worker's `git add -A`) does not land
+  // them there; finalize brings the Unit's records back on its own. Without it
+  // they keep HEAD's.
+  const recordPaths = effectiveCarriesWorkspaceShell
+    ? AIDLC_SHELL_PATHS.map((path) => `${path}/`)
+    : (worktreeContext?.exactPaths ?? []).map((path) => `:(top)${path}`);
+  if (recordBase !== null && recordPaths.length > 0) {
+    const restored = spawnSync(
+      "git",
+      ["-C", repoDir, "reset", "-q", recordBase, "--", ...recordPaths],
       { env, encoding: "utf-8" },
     );
     if (restored.status !== 0) return null;
@@ -24974,114 +23522,6 @@ interface FilesystemSourceIdentity {
 
 type SourceSymlinkTargetMode = "follow" | "tree-only";
 
-function boundedGitMetadataText(path: string, maxBytes: number): string | null {
-  let fd: number | undefined;
-  try {
-    const pathStat = lstatSync(path);
-    if (!pathStat.isFile() || pathStat.size > maxBytes) return null;
-    fd = openSync(path, "r");
-    const before = fstatSync(fd);
-    if (!before.isFile() || before.size > maxBytes) return null;
-    const bytes = Buffer.alloc(before.size);
-    let offset = 0;
-    while (offset < bytes.length) {
-      const count = readSync(
-        fd,
-        bytes,
-        offset,
-        bytes.length - offset,
-        offset,
-      );
-      if (count === 0) return null;
-      offset += count;
-    }
-    const after = fstatSync(fd);
-    if (
-      before.size !== after.size ||
-      before.mtimeMs !== after.mtimeMs ||
-      before.ctimeMs !== after.ctimeMs
-    ) {
-      return null;
-    }
-    return bytes.toString("utf-8");
-  } catch {
-    return null;
-  } finally {
-    if (fd !== undefined) {
-      try {
-        closeSync(fd);
-      } catch {
-        // The metadata read already fails closed on any earlier error.
-      }
-    }
-  }
-}
-
-function singleGitMetadataLine(raw: string): string | null {
-  const line = raw.replace(/\r?\n$/, "");
-  if (line.length === 0 || line.includes("\n") || line.includes("\r")) {
-    return null;
-  }
-  return line;
-}
-
-function gitMetadataDirectory(worktreeDir: string): string | null {
-  const marker = join(worktreeDir, ".git");
-  try {
-    const markerStat = lstatSync(marker);
-    if (markerStat.isDirectory()) return realpathSync(marker);
-    if (!markerStat.isFile()) return null;
-  } catch {
-    return null;
-  }
-  const pointerRaw = boundedGitMetadataText(marker, 8192);
-  const pointerLine =
-    pointerRaw === null ? null : singleGitMetadataLine(pointerRaw);
-  if (pointerLine === null || !pointerLine.startsWith("gitdir: ")) {
-    return null;
-  }
-  const pointer = pointerLine.slice("gitdir: ".length);
-  if (pointer.length === 0 || pointer.includes("\0")) return null;
-  const target = isAbsolute(pointer)
-    ? pointer
-    : resolvePath(worktreeDir, pointer);
-  try {
-    if (!lstatSync(target).isDirectory()) return null;
-    return realpathSync(target);
-  } catch {
-    return null;
-  }
-}
-
-function gitCommonDirectory(gitDir: string): string | null {
-  const marker = join(gitDir, "commondir");
-  try {
-    if (!lstatSync(marker).isFile()) return null;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return gitDir;
-    return null;
-  }
-  const pointerRaw = boundedGitMetadataText(marker, 8192);
-  const pointerLine =
-    pointerRaw === null ? null : singleGitMetadataLine(pointerRaw);
-  if (
-    pointerLine === null ||
-    pointerLine.length === 0 ||
-    pointerLine.includes("\0")
-  ) {
-    return null;
-  }
-  const target = isAbsolute(pointerLine)
-    ? pointerLine
-    : resolvePath(gitDir, pointerLine);
-  try {
-    if (!lstatSync(target).isDirectory()) return null;
-    return realpathSync(target);
-  } catch {
-    return null;
-  }
-}
-
 type GitObjectType = "commit" | "other";
 
 function gitObjectDirectories(
@@ -25624,7 +24064,7 @@ function gitHeadOid(worktreeDir: string): string | null {
 // The file names the source walk counts as code by name alone: a symlinked
 // external tree keeps only these, and the snapshot always takes them.
 const SOURCE_FILE_EXTENSION =
-  /\.(?:astro|c|cc|cmake|cpp|cs|css|dart|erl|ex|exs|go|gql|graphql|h|hcl|hpp|hrl|html|java|js|jsx|json|kt|kts|lua|m|mm|php|proto|ps1|psd1|psm1|py|r|rb|rs|scala|sh|sol|sql|svelte|swift|tf|tfvars|toml|ts|tsx|vue|xml|ya?ml|zig)$/i;
+  /\.(?:astro|bat|c|cc|cjs|cmake|cmd|cpp|cs|cshtml|css|cts|dart|erl|ex|exs|fs|go|gql|gradle|graphql|groovy|h|hcl|hpp|hrl|html|java|js|jsx|json|kt|kts|less|lua|m|mjs|mm|mts|php|proto|ps1|psd1|psm1|py|r|razor|rb|rs|scala|scss|sh|sol|sql|svelte|swift|tf|tfvars|toml|ts|tsx|vb|vue|xml|ya?ml|zig)$/i;
 const SOURCE_FILE_BASENAME =
   /^(?:BUILD|CMakeLists\.txt|Dockerfile(?:\..+)?|Gemfile|Justfile|Makefile|Procfile|Tiltfile|WORKSPACE)$/i;
 export function isSourceFileName(name: string): boolean {
@@ -27000,8 +25440,10 @@ export type ReadUnitSourceManifestResult =
     }
   // `unrecordedRepo` names the one repo a write claimed that the piece of work
   // does not record: the way on is to record that repo, not to rewrite the
-  // manifest.
-  | { ok: false; reason: string; unrecordedRepo?: string };
+  // manifest. `projectSubmodule` names the project's own submodule the work
+  // records as its only repo while every write is the project's own: the way
+  // on is the person's (remove-repo, or the code goes in it), not a rewrite.
+  | { ok: false; reason: string; unrecordedRepo?: string; projectSubmodule?: string };
 
 function sourceListingFieldEncode(value: string): string {
   return value
@@ -28303,6 +26745,8 @@ function validateUnitSourceManifestBytes(
   const prefixes: string[] = [];
   const seen = new Set<string>();
   const writes: UnitSourceManifestWrite[] = [];
+  const notInRepo: string[] = [];
+  let projectOwnWrites = 0;
   const pathModeIndexes: GitPathModeIndexCache = new Map();
   // Cache only this manifest read: later review, verdict, and finalize checks
   // must observe fresh HEAD and ignore rules, even for the same manifest.
@@ -28425,12 +26869,89 @@ function validateUnitSourceManifestBytes(
     if (symlinkReason !== null) {
       return { ok: false, reason: `writes[${index}].path: ${symlinkReason}` };
     }
+    // A recorded repo's write names its path from that repo's root. A path the
+    // repo does not have is a deletion only when the repo had it: at HEAD, in a
+    // commit before it, or, for a file, in a folder still on disk (an untracked
+    // file, which the source walk saw and git never did). Any other binds no
+    // file to the review, most often a path given from the workspace
+    // ("billing/package.json" in billing); every such write is named at once.
+    if (canonicalRepo !== undefined && isGitRepoDir(claim.dir)) {
+      const onDisk = (path: string, folder = false): boolean => {
+        try {
+          const entry = lstatSync(join(claim.dir, path));
+          return !folder || entry.isDirectory();
+        } catch {
+          return false;
+        }
+      };
+      const literal = claim.path.replace(/\/+$/, "");
+      if (!onDisk(literal)) {
+        const head = gitSourceClaimHeadAndTree(claim.dir, sourceClaimValidation);
+        const atHead = (path: string): boolean => head.treeModes?.has(path.replace(/\/+$/, "")) === true;
+        const from = relative(projectDir, claim.dir).split(sep).join("/");
+        const rootPath = from !== "" && claim.path.startsWith(`${from}/`) ? claim.path.slice(from.length + 1) : "";
+        // In a billing/billing/ layout the folder is there, so a path whose
+        // root form the repo has is still one given from the workspace.
+        const rootPathInRepo = rootPath !== "" && (onDisk(rootPath.replace(/\/+$/, "")) || atHead(rootPath));
+        let had = atHead(literal) ||
+          (!normalized.prefix && !rootPathInRepo && onDisk(literal.includes("/") ? dirname(literal) : ".", true));
+        if (!had && head.head !== null) {
+          const touched = spawnSync("git", ["-C", claim.dir, "--literal-pathspecs", "rev-list", "-1", head.head, "--", literal], {
+            encoding: "utf-8",
+          });
+          // Git that cannot answer refuses nothing.
+          had = touched.status !== 0 || touched.stdout.trim() !== "";
+        }
+        if (!had) {
+          notInRepo.push(
+            `writes[${index}].path ${JSON.stringify(write.path)} is not in repo ${JSON.stringify(canonicalRepo)} or its git history` +
+              (rootPath === "" ? "" : ` (from that repo's root: ${JSON.stringify(rootPath)})`),
+          );
+          // The project's own repo has the path (a deletion when only its git
+          // history does); one into the repo's folder from the workspace is not.
+          if (declaredRepo === undefined && rootPath === "" && literal !== from) {
+            let own = true;
+            try {
+              lstatSync(join(projectDir, literal));
+            } catch {
+              const project = gitSourceClaimHeadAndTree(projectDir, sourceClaimValidation);
+              own = project.treeModes?.has(literal) === true || (project.head !== null && (spawnSync(
+                "git", ["-C", projectDir, "--literal-pathspecs", "rev-list", "-1", project.head, "--", literal], { encoding: "utf-8" },
+              ).stdout ?? "").trim() !== "");
+            }
+            if (own) projectOwnWrites++;
+          }
+        }
+      }
+    }
     const key = sourcePathKey(canonicalRepo ?? "", claim.listingPath);
     if (seen.has(key)) return { ok: false, reason: `writes[${index}] duplicates a normalized source claim` };
     seen.add(key);
     if (normalized.prefix) prefixes.push(key);
     else claims.add(key);
     writes.push({ ...(declaredRepo === undefined ? {} : { repo: declaredRepo }), path: normalized.path });
+  }
+  if (notInRepo.length > 0) {
+    // Work that records the project's own submodule as its only repo (as work
+    // did before such a submodule stopped being recorded), every write a file
+    // of the project's own: no path from the submodule's root names them.
+    const only = recordedRepos.length === 1 ? recordedRepos[0] : undefined;
+    if (only !== undefined && projectOwnWrites === value.writes.length && submoduleLeavesProjectRepo(projectDir, only)) {
+      return {
+        ok: false,
+        projectSubmodule: only,
+        reason: `${notInRepo.join("; ")}. This work records ${only}, a submodule of the project, as its only repo, and ` +
+          `${notInRepo.length === 1 ? "that path is" : "those paths are"} in the project's own repo. Ask the person once ` +
+          `whether to take ${only} off this work's repos, so the project's own repo is the work's repo (${only}'s folder ` +
+          `stays as it is): on their yes, run \`${aidlcDispatcherInvocation(`intent remove-repo ${quoteCommandArgument(only)}`)}\`, ` +
+          `and the manifest reads as written; on their no, the Unit's code goes in ${only}, each write giving its path ` +
+          `from ${only}'s root`,
+      };
+    }
+    return {
+      ok: false,
+      reason: `${notInRepo.join("; ")}. Give each write's path from its repo's root, or leave out a path this Unit did not change`,
+    };
   }
 
   prefixes.sort();
@@ -28479,7 +27000,7 @@ export function readCommittedUnitSourceManifest(
         ok: false,
         reason: "immutable reviewed Source Commit is unavailable or has unsafe paths; " +
           "restore the reviewed commit, or rename unsafe paths with `git mv` and commit them, " +
-          `then rerun \`aidlc-swarm check ${unit}\` before native convergence`,
+          `then rerun \`${aidlcDispatcherInvocation(`swarm check ${unit}`)}\` before native convergence`,
       };
     }
     // A private index/HEAD gives ignore, path-mode and symlink validation the
@@ -29121,7 +27642,24 @@ function withRepoBaselineAdditions(
 ): SourceBaselineResult {
   if (baseline.state !== "ready" || from === null) return baseline;
   const repos = new Set(intentRepos(projectDir, intent, space));
-  const inWork = (repo: string): boolean => repo === "" || repos.size === 0 || repos.has(repo);
+  // Work whose last repo came off (a submodule of the project, intent
+  // remove-repo) walks the project folder, which reads that repo's files at the
+  // folder's own paths: they stay in the baseline there, as they were. `read`
+  // keeps the top-level folders the baseline's walk read (those repos, each
+  // checkout).
+  let read: Set<string> | null = null;
+  if (repos.size === 0) {
+    read = new Set();
+    const listing: WorkspaceSourceListing = new Map();
+    for (const [key, entry] of baseline.listing) {
+      const parsed = splitSourcePathKey(key);
+      const path = parsed === null ? null : parsed.repo === "" ? parsed.path : `${parsed.repo}/${parsed.path}`;
+      listing.set(path === null ? key : `\0${path}`, entry);
+      if (path?.includes("/")) read.add(path.slice(0, path.indexOf("/")));
+    }
+    baseline = { state: "ready", listing };
+  }
+  const inWork = (repo: string): boolean => repo === "" || repos.has(repo);
   const kept: WorkspaceSourceListing = new Map(
     [...baseline.listing].filter(([key]) => inWork(splitSourcePathKey(key)?.repo ?? "")),
   );
@@ -29134,6 +27672,34 @@ function withRepoBaselineAdditions(
   const joined = new Map<string, WorkspaceSourceListing>();
   const written = new Map<string, string>();
   for (const row of additions) {
+    // The remove that left the work on the project folder: what the walk
+    // before it never read joins as it was then (a folder that was neither a
+    // repo it took off nor a checkout, and a removed submodule's own entry),
+    // less a path a Unit claims, whose write there is the Unit's own.
+    const left = read !== null && auditBlockField(row.block, "Repos") === ""
+      ? new Set((auditBlockField(row.block, "Removed") ?? "").split(",").map((name) => name.trim()))
+      : null;
+    const claimed: SourceClaimModel[] = [];
+    if (left !== null) {
+      const record = recordDir(projectDir);
+      let units: string[] = [];
+      try {
+        units = record === null ? [] : readdirSync(join(record, "construction"));
+      } catch {
+        // Nothing built yet.
+      }
+      for (const unit of units) {
+        const manifest = readUnitSourceManifest(projectDir, "code-generation", unit);
+        if (manifest.ok) claimed.push(manifest);
+      }
+    }
+    const unread = (key: string, path: string): boolean => {
+      if (left === null || read === null || claimed.some((claim) => sourceClaimCovers(key, claim))) return false;
+      const slash = path.indexOf("/");
+      if (slash === -1) return left.has(path);
+      const top = path.slice(0, slash);
+      return !left.has(top) && !read.has(top);
+    };
     const added = readStageBaseline(projectDir, stageSlug, auditBlockField(row.block, REPO_BASELINE_ADDITION_FIELD) ?? "", intent, space);
     if (added.state !== "ready") return added;
     const cloned = auditBlockField(row.block, "Cloned From") !== null;
@@ -29142,6 +27708,7 @@ function withRepoBaselineAdditions(
       const parsed = splitSourcePathKey(key);
       const repo = parsed?.repo ?? "";
       if (repo === "") {
+        if (parsed !== null && !kept.has(key) && unread(key, parsed.path)) kept.set(key, entry);
         if (cloned && parsed !== null && CLONE_WRITES_AT_ROOT.has(parsed.path)) written.set(key, entry);
         continue;
       }
@@ -29156,6 +27723,7 @@ function withRepoBaselineAdditions(
   for (const [key, entry] of written) listing.set(key, entry);
   return { state: "ready", listing };
 }
+export { withRepoBaselineAdditions };
 
 // What a clone's install writes at the workspace root: repos.json and
 // workspace-sync's two generated files.
@@ -29672,31 +28240,43 @@ export function projectSettingsRepair(distribution: string): string {
   const source = invoke === "aidlc"
     ? ""
     : ` --from <the runtime/${distribution} root you copied from>`;
-  return `run \`${invoke} config --harness ${distribution}${source}\` to put back AI-DLC's hooks (your own hooks are kept)`;
+  return `run \`${invoke} config --harness ${typedHarnessName(distribution)}${source}\` to put back AI-DLC's hooks (your own hooks are kept)`;
 }
 
-// Missing, or there and not valid JSON (read as doctor reads it); null for a
-// valid file and for one that cannot be opened for another reason, which the
-// lines would not describe. Never throws: both callers run it outside a try.
-function registrationFault(path: string): "missing" | "invalid" | null {
-  let text: string;
+/**
+ * The harness's line for its hook registration file when that file is
+ * missing, not valid JSON, or valid and running none of AI-DLC's hooks (read
+ * through doctor's walk), with doctor's repair in it and `<entry>` left for
+ * the caller; null for a file that runs them, whatever else switches them off,
+ * for one that cannot be opened for another reason, which the lines would not
+ * describe, and for a harness that declares none (only Claude Code does). No
+ * setting brings those hooks back, so this line comes first. Never throws.
+ */
+export function registrationFault(projectDir?: string): string | null {
+  const registration = hookActivation()?.registration;
+  if (!registration) return null;
+  const project = resolveProjectDir(projectDir);
+  let fault: "missing" | "invalid" | "unwired" | null = null;
   try {
-    text = readFileSync(path, "utf-8");
+    const parsed = JSON.parse(withoutBom(readFileSync(join(project, registration.file), "utf-8")));
+    // AI-DLC's status line is not a hook and writes no heartbeat.
+    if (claudeSettingsHookTargets(project, parsed).every((target) => target === "statusline")) fault = "unwired";
   } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : null;
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") fault = "missing";
+    else if (error instanceof SyntaxError) fault = "invalid";
   }
-  try {
-    JSON.parse(withoutBom(text));
-    return null;
-  } catch {
-    return "invalid";
-  }
+  return fault === null
+    ? null
+    : registration[fault].replaceAll("<repair>", projectSettingsRepair(runtimeHarnessName(project, harnessDir())));
 }
 
 /** The doctor's recovery sentence for hooks that stopped firing, per harness. */
 export function hookExecutionRecoveryText(projectDir?: string): string {
   const startedInside = startedInsideProjectStep(projectDir);
   if (startedInside !== null) return startedInside;
+  const faultLine = registrationFault(projectDir);
+  if (faultLine !== null) return fillHookActivationText(faultLine, projectDir);
   const declared = hookActivation()?.recovery;
   if (declared) return fillHookActivationText(declared, projectDir);
   return HOOK_EXECUTION_RECOVERY_OTHER;
@@ -29756,19 +28336,18 @@ const HOOKS_OFF_AGENT_RULES =
  */
 export function hooksOffAgentStep(projectDir?: string, next?: string, keep?: () => string | null): string | null {
   const activation = hookActivation();
-  if (!activation?.agentStep) return null;
+  // A tree the engine only guessed is the person's tool would name another tool's step.
+  if (!activation?.agentStep || harnessIsAGuess()) return null;
   const project = resolveProjectDir(projectDir);
   // Started in a folder inside the project, no file or setting brings the
   // hooks back: the one step is to start the tool in the project folder.
   const startedInside = startedInsideProjectLine(project);
-  const registration = activation.registration;
-  const fault = startedInside === null && registration ? registrationFault(join(project, registration.file)) : null;
+  const faultLine = startedInside === null ? registrationFault(project) : null;
   let step: string;
   if (startedInside !== null) {
     step = `Show the person this line and end your turn: "${startedInside}"`;
-  } else if (registration && fault) {
-    const line = registration[fault].replaceAll("<repair>", projectSettingsRepair(runtimeHarnessName(project, harnessDir())));
-    step = `Show the person this line and end your turn: "${line}"`;
+  } else if (faultLine !== null) {
+    step = `Show the person this line and end your turn: "${faultLine}"`;
   } else {
     // Through a link the agent would change a file outside the project.
     const edits = activation.agentStepEdits;
@@ -29805,7 +28384,7 @@ export function commandAtPersonsTerminal(env: NodeJS.ProcessEnv = process.env): 
 
 // Both ends of this command are a terminal. On its own this says nothing about
 // who typed it: an IDE runs its agent's commands in a terminal too.
-function atATerminal(env: NodeJS.ProcessEnv): boolean {
+export function atATerminal(env: NodeJS.ProcessEnv = process.env): boolean {
   return (process.stdin.isTTY === true && process.stdout.isTTY === true) || env.AIDLC_TEST_CONFIG_TTY === "1";
 }
 
@@ -30753,10 +29332,14 @@ export function gateWordsSinceUnitReview(
     .filter((message) => message.offset > floor && message.offset <= ceiling && !isNonAnswer(message.text));
   if (taken.length === 0) return null;
   const bytes = (at: number): number => Buffer.byteLength(content.slice(0, at), "utf-8");
-  return taken.map((message) => {
+  // Words kept for a turn a HOST_TURN took back (withdrawnTurnPositions) were never theirs.
+  const blocks = auditShardBlocks(content);
+  const takenBack = new Set([...withdrawnTurnPositions(blocks)].map((pos) => auditBlockField(blocks[pos], "Message Id")));
+  const replies = taken.map((message) => {
     const id = turns.findLast((span) => message.offset > bytes(span.start) && message.offset <= bytes(span.end))?.id;
     return { ...(id === undefined ? {} : { messageId: id }), words: message.text };
-  });
+  }).filter((reply) => reply.messageId === undefined || !takenBack.has(reply.messageId));
+  return replies.length === 0 ? null : replies;
 }
 
 // Whether the person replied to the stage's approval question as it was last
@@ -30777,7 +29360,7 @@ export function personRepliedSincePresentation(
   }
   const from = gatePresentationStart(content, gate, { answeredBy: true });
   if (from === null) return null;
-  return auditShardBlocks(content.slice(from))
+  return auditShardTurnBlocks(content.slice(from))
     .some((block) => isReplyTurn({ event: auditBlockField(block, "Event") ?? "", block }));
 }
 
@@ -30821,7 +29404,7 @@ function turnSinceGateShown(
   }
   const from = gatePresentationStart(content, gate, { firstShowing: true });
   if (from === null) return null;
-  return auditShardBlocks(content.slice(from))
+  return auditShardTurnBlocks(content.slice(from))
     .some((block) => which({ event: auditBlockField(block, "Event") ?? "", block }));
 }
 
@@ -31257,7 +29840,7 @@ export function keptRepliesSinceStageStart(
       answers = [];
     } else if (
       MESSAGE_SPENDING_EVENTS.has(row.event) || GATE_WORDS_SPENT_BY.has(row.event) ||
-      (row.event === "UNIT_SKIPPED" && auditBlockField(row.block, "Reason") === PERSON_ASKED_SKIP_REASON)
+      (row.event === "UNIT_SKIPPED" && isPersonAskedSkipReason(auditBlockField(row.block, "Reason")))
     ) {
       from = index;
     } else if (row.event === "QUESTION_ANSWERED" && ours) {
@@ -31308,71 +29891,34 @@ export function reviewerDispatchPath(projectDir: string, intent?: string, space?
 // Freshness window for the reviewer dispatch record. The scope hook honours a
 // record only while its mtime is younger than this; an older record is an
 // orphan (a session that crashed between dispatch and verdict) and is ignored
-// plus best-effort cleaned up — the same staleness discipline as the compose
-// marker. 6h: the worst observed pre-fix review ran ~3h, so the window covers
-// the pathological case with margin while still bounding a crashed review.
+// plus best-effort cleaned up. 6h: the worst observed pre-fix review ran ~3h,
+// so the window covers the pathological case with margin while still bounding
+// a crashed review.
 export const REVIEWER_DISPATCH_TTL_MS = 6 * 60 * 60 * 1000;
 
-// `<projectDir>/aidlc/.aidlc-compose-pending`: the in-flight compose gate
-// marker the conductor writes before presenting the approve/edit/reject gate
-// and deletes on resolve. It lives at the WORKSPACE level (not a per-intent
-// record) so a single spelling is shared by the Stop-hook carve-out (which
-// honours it as a turn-stop signal) and the doctor probe (which flags an
-// orphaned one). Hoisted here so the path is spelled once.
-export function composeMarkerPath(projectDir: string): string {
-  return join(projectDir, "aidlc", ".aidlc-compose-pending");
-}
-
-export const UNIT_SCOPE_FILE = ".aidlc-unit-scope.json";
 export const UNIT_PARKED_FILE = ".aidlc-unit-parked";
 export const CLAIM_GENERATIONS_FILE = ".aidlc-claim-generations.json";
 export const UNIT_PARTICIPANT_FILE = ".aidlc-unit-participant";
-export const CLAIM_REGISTRY_CACHE_FILE = ".aidlc-claim-registry.json";
 export const UNIT_RELEASE_PENDING_FILE = ".aidlc-unit-releases";
 export const UNIT_MERGE_DIR = ".aidlc-unit-merges";
-
-export interface UnitScopeStamp {
-  version: 1;
-  space: string;
-  intent_uuid: string;
-  intent_id8: string;
-  unit: string;
-  owner: string;
-  generation: number;
-  nonce: string;
-  claim_ref: string;
-  claim_oid: string;
-  claimed_from_oid: string;
-  integration_ref: string;
-  gate_rhythm: "per-stage" | "unit-end";
-  audit_shard?: string;
-}
-
-export interface CachedUnitClaim {
-  status: "claimed" | "released";
-  owner: string;
-  generation: number;
-  nonce: string;
-  ref: string;
-  oid: string;
-  observed_at?: string;
-}
-
-export interface UnitClaimRegistryCache {
-  version: 1;
-  space: string;
-  intent_uuid: string;
-  claims: Record<string, CachedUnitClaim>;
-  warning?: string;
-}
 
 export interface UnitMergeEvidence {
   stages_expected: string[];
   stages_completed: string[];
+  /** The stages the Unit skipped in its attempt, each with its recorded reason. */
+  stages_skipped?: Array<{ stage: string; reason: string }>;
   gates_expected: string[];
   gates_approved: string[];
   reviewers_expected: string[];
   reviewers_ready: string[];
+  // Reviewed stages the person approved with a finding open, or after a
+  // NOT-READY review, each with the findings that approval recorded on its
+  // documents; written only when there is one, so evidence pinned before it
+  // compares the same.
+  reviewers_approved_over_concerns?: Array<{
+    stage: string;
+    findings: Array<{ id: string; severity?: string; status: string }>;
+  }>;
   plan_fingerprint: string | null;
   artifact_paths: string[];
   audit_shards: string[];
@@ -31430,10 +29976,6 @@ export interface UnitMergeTransaction {
   };
 }
 
-export function unitScopePath(projectDir: string): string {
-  return join(workspaceRoot(projectDir), UNIT_SCOPE_FILE);
-}
-
 export function unitParkedPath(projectDir: string): string {
   return join(workspaceRoot(projectDir), UNIT_PARKED_FILE);
 }
@@ -31444,10 +29986,6 @@ export function claimGenerationsPath(projectDir: string): string {
 
 export function unitParticipantPath(projectDir: string): string {
   return join(workspaceRoot(projectDir), UNIT_PARTICIPANT_FILE);
-}
-
-export function claimRegistryCachePath(projectDir: string): string {
-  return join(workspaceRoot(projectDir), CLAIM_REGISTRY_CACHE_FILE);
 }
 
 function identityScopedUnitPath(
@@ -31723,60 +30261,6 @@ export function clearClaimGeneration(projectDir: string, unit: string): void {
   );
 }
 
-export function readUnitClaimRegistryCache(
-  projectDir: string,
-): UnitClaimRegistryCache | null {
-  try {
-    const parsed = JSON.parse(
-      readFileSync(claimRegistryCachePath(projectDir), "utf-8"),
-    ) as Partial<UnitClaimRegistryCache>;
-    if (
-      parsed.version !== 1 ||
-      typeof parsed.space !== "string" ||
-      typeof parsed.intent_uuid !== "string" ||
-      parsed.claims === null ||
-      typeof parsed.claims !== "object" ||
-      Array.isArray(parsed.claims)
-    ) {
-      return null;
-    }
-    const claims: Record<string, CachedUnitClaim> = {};
-    for (const [unit, value] of Object.entries(parsed.claims)) {
-      if (value === null || typeof value !== "object" || Array.isArray(value)) {
-        return null;
-      }
-      const claim = value as Partial<CachedUnitClaim>;
-      if (
-        (claim.status !== "claimed" && claim.status !== "released") ||
-        typeof claim.owner !== "string" ||
-        !Number.isInteger(claim.generation) ||
-        (claim.generation ?? 0) < 1 ||
-        typeof claim.nonce !== "string" ||
-        typeof claim.ref !== "string" ||
-        typeof claim.oid !== "string" ||
-        (
-          claim.observed_at !== undefined &&
-          typeof claim.observed_at !== "string"
-        )
-      ) {
-        return null;
-      }
-      claims[unit] = claim as CachedUnitClaim;
-    }
-    return {
-      version: 1,
-      space: parsed.space,
-      intent_uuid: parsed.intent_uuid,
-      claims,
-      ...(typeof parsed.warning === "string" && parsed.warning
-        ? { warning: parsed.warning }
-        : {}),
-    };
-  } catch {
-    return null;
-  }
-}
-
 export function writeUnitClaimRegistryCache(
   projectDir: string,
   cache: UnitClaimRegistryCache,
@@ -31796,25 +30280,6 @@ interface ClaimRegistryPayload {
 }
 
 const LIVE_CLAIM_PAYLOADS = new Map<string, ClaimRegistryPayload | null>();
-
-function claimRegistryGit(
-  projectDir: string,
-  args: string[],
-  options: { localOnly?: boolean } = {},
-): { ok: boolean; stdout: string; stderr: string } {
-  const result = spawnSync("git", args, {
-    cwd: projectDir,
-    encoding: "utf-8",
-    env: options.localOnly
-      ? { ...process.env, GIT_NO_LAZY_FETCH: "1" }
-      : process.env,
-  });
-  return {
-    ok: result.status === 0,
-    stdout: result.stdout ?? "",
-    stderr: result.stderr ?? "",
-  };
-}
 
 function claimRegistryRemote(projectDir: string): string | null {
   const remoteResult = claimRegistryGit(projectDir, ["remote"]);
@@ -31864,22 +30329,14 @@ function claimPayloadAtTip(
 ): ClaimRegistryPayload {
   const remote = claimRegistryRemote(projectDir);
   const localOnly = { localOnly: true };
+  const prefix = claimPrefixOf(projectDir);
   const hasCommit = (): boolean =>
     claimRegistryGit(
       projectDir,
       ["cat-file", "-e", `${tip.oid}^{commit}`],
       localOnly,
     ).ok;
-  const payloadBlob = (): string | null => {
-    const found = claimRegistryGit(
-      projectDir,
-      ["rev-parse", `${tip.oid}:.aidlc-unit-claim.json`],
-      localOnly,
-    );
-    return found.ok && /^[0-9a-f]{40}$/.test(found.stdout.trim())
-      ? found.stdout.trim()
-      : null;
-  };
+  const payloadBlob = (): string | null => claimBlobAt(projectDir, tip.oid, prefix)?.blob ?? null;
   const hasBlob = (blob: string | null): boolean =>
     blob !== null &&
     claimRegistryGit(projectDir, ["cat-file", "-e", blob], localOnly).ok;
@@ -31915,16 +30372,12 @@ function claimPayloadAtTip(
         "the partial clone is missing the claim payload blob.",
     );
   }
-  const shown = claimRegistryGit(
-    projectDir,
-    ["show", `${tip.oid}:.aidlc-unit-claim.json`, "--"],
-    localOnly,
-  );
-  if (!shown.ok) {
+  const shown = readClaimAt(projectDir, tip.oid, prefix);
+  if (!shown) {
     throw new Error(`Unit claim registry payload is unreadable at ${tip.ref}.`);
   }
   try {
-    const payload = JSON.parse(shown.stdout) as Record<string, unknown>;
+    const payload = JSON.parse(shown.text) as Record<string, unknown>;
     if (
       (payload.status !== "claimed" && payload.status !== "released") ||
       payload.intent_uuid !== intentUuid ||
@@ -32020,40 +30473,6 @@ export function hasAnyUnitClaimRefs(projectDir: string): boolean {
     Object.keys(cache.claims).length > 0;
 }
 
-export function readUnitScopeStamp(projectDir: string): UnitScopeStamp | null {
-  try {
-    const parsed: unknown = JSON.parse(
-      readFileSync(unitScopePath(projectDir), "utf-8"),
-    );
-    if (parsed === null || typeof parsed !== "object") return null;
-    const stamp = parsed as Partial<UnitScopeStamp>;
-    if (
-      stamp.version !== 1 ||
-      typeof stamp.space !== "string" ||
-      typeof stamp.intent_uuid !== "string" ||
-      typeof stamp.intent_id8 !== "string" ||
-      typeof stamp.unit !== "string" ||
-      typeof stamp.owner !== "string" ||
-      !Number.isInteger(stamp.generation) ||
-      (stamp.generation ?? 0) < 1 ||
-      typeof stamp.nonce !== "string" ||
-      typeof stamp.claim_ref !== "string" ||
-      typeof stamp.claim_oid !== "string" ||
-      typeof stamp.claimed_from_oid !== "string" ||
-      typeof stamp.integration_ref !== "string" ||
-      (stamp.gate_rhythm !== "per-stage" && stamp.gate_rhythm !== "unit-end") ||
-      (stamp.audit_shard !== undefined &&
-        (typeof stamp.audit_shard !== "string" ||
-          !/^[A-Za-z0-9._-]+\.md$/.test(stamp.audit_shard)))
-    ) {
-      return null;
-    }
-    return stamp as UnitScopeStamp;
-  } catch {
-    return null;
-  }
-}
-
 export function writeUnitScopeStamp(
   projectDir: string,
   stamp: UnitScopeStamp,
@@ -32070,31 +30489,6 @@ export function clearUnitScopeStamp(projectDir: string): void {
   } catch {
     // Already absent.
   }
-}
-
-function applicableTeamUnitScopeStamp(
-  projectDir: string,
-  stateContent?: string,
-): UnitScopeStamp | null {
-  let state = stateContent;
-  try {
-    state ??= readStateFile(projectDir);
-  } catch {
-    return null;
-  }
-  if (!isTeamUnitOwnership(state)) return null;
-  const stamp = readUnitScopeStamp(projectDir);
-  if (!stamp) return null;
-  const space = activeSpace(projectDir);
-  const intentUuid = activeIntentUuid(projectDir, space);
-  if (
-    !intentUuid ||
-    stamp.space !== space ||
-    stamp.intent_uuid !== intentUuid
-  ) {
-    return null;
-  }
-  return stamp;
 }
 
 export function readApplicableTeamUnitScopeStamp(
@@ -32126,60 +30520,6 @@ export function worktreeClaimBoundaryMatches(
   return main;
 }
 
-function cachedClaimFanoutActive(projectDir: string): boolean {
-  const cache = readUnitClaimRegistryCache(projectDir);
-  const space = activeSpace(projectDir);
-  const intentUuid = activeIntentUuid(projectDir, space);
-  if (!intentUuid) return false;
-  if (
-    cache &&
-    cache.space === space &&
-    cache.intent_uuid === intentUuid &&
-    Object.values(cache.claims).some((claim) => claim.status === "claimed")
-  ) {
-    return true;
-  }
-  const id8 = idSuffix(intentUuid);
-  const refs = claimRegistryGit(projectDir, [
-    "for-each-ref",
-    "--format=%(objectname) %(refname)",
-    "refs/heads/claim/",
-    "refs/remotes/",
-  ], { localOnly: true });
-  if (!refs.ok) return false;
-  for (const line of refs.stdout.split(/\r?\n/).filter(Boolean)) {
-    const [oid, ref] = line.trim().split(/\s+/, 2);
-    if (
-      !oid ||
-      !ref ||
-      (
-        !ref.startsWith(`refs/heads/claim/${id8}/`) &&
-        !new RegExp(`^refs/remotes/[^/]+/claim/${escapeRegex(id8)}/`).test(ref)
-      )
-    ) {
-      continue;
-    }
-    const shown = claimRegistryGit(
-      projectDir,
-      ["show", `${oid}:.aidlc-unit-claim.json`, "--"],
-      { localOnly: true },
-    );
-    if (!shown.ok) continue;
-    try {
-      const payload = JSON.parse(shown.stdout) as Record<string, unknown>;
-      if (
-        payload.intent_uuid === intentUuid &&
-        payload.status === "claimed"
-      ) {
-        return true;
-      }
-    } catch {
-      // Malformed local claim refs are handled by notice composition.
-    }
-  }
-  return false;
-}
-
 export function validateLiveUnitScope(
   projectDir: string,
   requestedUnit?: string,
@@ -32190,8 +30530,14 @@ export function validateLiveUnitScope(
   const stamp = applicableTeamUnitScopeStamp(pd, state);
   if (!stamp) {
     if (cachedClaimFanoutActive(pd)) {
+      const held = unitsHeldHere(pd);
+      if (held && (requestedUnit === undefined || held.has(requestedUnit))) return null;
       throw new Error(
-        "Team Unit fan-out is active in an unscoped checkout; claim a Unit before lifecycle or report work.",
+        (held
+          ? `This checkout works ${[...held].map((unit) => `Unit "${unit}"`).join(", ")} without a claim, and no other ` +
+            "Unit's work runs here; another Unit is worked here once it is "
+          : "This checkout holds no Unit claim, so no Unit's work runs here; a Unit is worked here once it is ") +
+          `claimed with \`${entrySkillInvocation()} --claim <unit> --team <label>\`.`,
       );
     }
     return null;
@@ -32275,6 +30621,13 @@ export function requireLiveClaimForTeamUnit(
   }
   const stamp = applicableTeamUnitScopeStamp(pd, state);
   if (!stamp) {
+    // A Unit this checkout walks without a claim is its own, as the walking
+    // skeleton on main is (#3610): for the active work, however the caller
+    // names it (a fork and a merge name its space).
+    const space = activeSpace(pd);
+    const activeWork = (!selector.space || selector.space === space) &&
+      (!selector.intent || selector.intent === activeIntent(pd, space) || selector.intent === activeIntentUuid(pd, space));
+    if (activeWork && unitsHeldHere(pd)?.has(unit)) return null;
     throw new Error(
       `Unit Ownership: team requires a live claim for Unit "${unit}" before fork or lifecycle work.`,
     );
@@ -32372,7 +30725,23 @@ export function eventMatchesClaimAttempt(
       : eventGeneration === String(generation);
   }
   const eventUnit = auditBlockField(block, "Unit");
-  if (unit !== undefined && unit !== stamp.unit) return false;
+  // Another Unit's receipt, read in a scoped checkout: it is not this claim's
+  // attempt, so it is read as an unscoped checkout reads it. A scoped
+  // checkout that refused it would show every other Unit as unfinished.
+  const other = unit !== undefined && unit !== stamp.unit
+    ? unit
+    : unit === undefined && eventUnit !== null && eventUnit !== stamp.unit
+    ? eventUnit
+    : null;
+  if (other !== null) {
+    const eventGeneration = auditBlockField(block, "Attempt Generation");
+    if (eventGeneration === null) return true;
+    const generation =
+      readClaimGenerations(projectDir)[claimGenerationKey(projectDir, other)];
+    return generation === undefined
+      ? true
+      : eventGeneration === String(generation);
+  }
   if (eventUnit !== null && eventUnit !== stamp.unit) return false;
   return (
     auditBlockField(block, "Attempt Generation") === String(stamp.generation)
@@ -32402,487 +30771,17 @@ export function effectiveUnitGateRhythm(
     readUnitGateRhythm(stateContent);
 }
 
-// Freshness window for the compose marker. The Stop hook honours the carve-out
-// only while the marker's mtime is younger than this; an older marker is an
-// orphan (a session that crashed between write and gate-resolve) and is ignored
-// plus best-effort cleaned up, so it cannot silently disable forwarding-loop
-// enforcement forever. 24h is generous enough to cover a long human pause at an
-// open gate while still catching a stranded marker.
-export const COMPOSE_MARKER_TTL_MS = 24 * 60 * 60 * 1000;
-
-// Whether an in-flight compose proposal waits on the person's approve, edit or
-// reject: its marker is on disk and fresh. A stale orphan is no open question,
-// as the Stop hook reads it. A failed read throws; each caller decides.
-export function composeGateOpen(projectDir: string): boolean {
-  const marker = composeMarkerPath(projectDir);
-  return existsSync(marker) && Date.now() - statSync(marker).mtimeMs <= COMPOSE_MARKER_TTL_MS;
-}
-
-// `<projectDir>/aidlc/.aidlc-subagent-inflight`: the workspace-level background
-// dispatch ledger. Entries are session-scoped and reference-counted so
-// overlapping workers cannot clear or authorize each other. The file remains
-// workspace-level because dispatch and completion hooks can run outside an
-// intent record, while each entry carries the session identity needed by Stop.
-export function subagentInflightMarkerPath(projectDir: string): string {
-  return join(projectDir, "aidlc", ".aidlc-subagent-inflight");
-}
-
-// Freshness window for each background-subagent entry. The Stop hook honours
-// only matching fresh entries; older entries are orphaned dispatches and are
-// pruned under the workspace lock. 2h covers long-running agents while bounding
-// how long a crashed dispatch can relax forwarding-loop enforcement.
-export const SUBAGENT_INFLIGHT_TTL_MS = 2 * 60 * 60 * 1000;
-
-export interface SubagentInflightEntry {
-  sessionId: string | null;
-  startedAtMs: number;
-  // Optional host identity, attached post-dispatch by annotateSubagentInflight
-  // (Devin correlates the launch-ack's embedded agent_id back onto the entry).
-  // Absence is always valid; a present agentId must be a non-empty string or
-  // the ledger is malformed (same fail-closed contract as every other field).
-  agentId?: string;
-  agentType?: string;
-  /** The authority in force when this agent was dispatched, so it inherits it
-   *  instead of being judged on its own (a dispatch cannot mint a grant). */
-  authority?: AuthorityCover;
-}
-
-interface SubagentInflightLedger {
-  version: 1;
-  entries: SubagentInflightEntry[];
-}
-
-interface SubagentInflightRead {
-  exists: boolean;
-  malformed: boolean;
-  entries: SubagentInflightEntry[];
-}
-
-export interface SubagentInflightSummary {
-  exists: boolean;
-  malformed: boolean;
-  freshCount: number;
-  staleCount: number;
-  oldestAgeMs: number | null;
-}
-
-export interface SubagentInflightMatch {
-  active: boolean;
-  staleRemoved: number;
-  malformed: boolean;
-  invalidSession: boolean;
-}
-
-function subagentSessionIdentity(
-  sessionId: unknown,
-): { valid: true; sessionId: string | null } | { valid: false } {
-  if (sessionId === undefined || sessionId === "") {
-    return { valid: true, sessionId: null };
-  }
-  if (typeof sessionId !== "string") return { valid: false };
-  const valid = validSessionId(sessionId);
-  return valid ? { valid: true, sessionId: valid } : { valid: false };
-}
-
-function readSubagentInflightLedger(projectDir: string): SubagentInflightRead {
-  const path = subagentInflightMarkerPath(projectDir);
-  if (!existsSync(path)) return { exists: false, malformed: false, entries: [] };
-  try {
-    const parsed: unknown = JSON.parse(readFileSync(path, "utf-8"));
-    if (parsed === null || typeof parsed !== "object") {
-      return { exists: true, malformed: true, entries: [] };
-    }
-    const candidate = parsed as Partial<SubagentInflightLedger>;
-    if (candidate.version !== 1 || !Array.isArray(candidate.entries)) {
-      return { exists: true, malformed: true, entries: [] };
-    }
-    const entries: SubagentInflightEntry[] = [];
-    for (const value of candidate.entries) {
-      if (value === null || typeof value !== "object") {
-        return { exists: true, malformed: true, entries: [] };
-      }
-      const entry = value as Partial<SubagentInflightEntry>;
-      const validIdentity =
-        entry.sessionId === null ||
-        (typeof entry.sessionId === "string" &&
-          validSessionId(entry.sessionId) === entry.sessionId);
-      const validAgentId =
-        entry.agentId === undefined ||
-        (typeof entry.agentId === "string" && entry.agentId.length > 0);
-      const validAgentType =
-        entry.agentType === undefined ||
-        (typeof entry.agentType === "string" && entry.agentType.length > 0);
-      const validAuthority =
-        entry.authority === undefined ||
-        entry.authority === "grant" ||
-        entry.authority === "instruction" ||
-        entry.authority === "none";
-      if (
-        !validIdentity ||
-        !validAgentId ||
-        !validAgentType ||
-        !validAuthority ||
-        typeof entry.startedAtMs !== "number" ||
-        !Number.isFinite(entry.startedAtMs) ||
-        entry.startedAtMs <= 0
-      ) {
-        return { exists: true, malformed: true, entries: [] };
-      }
-      entries.push({
-        sessionId: entry.sessionId ?? null,
-        startedAtMs: entry.startedAtMs,
-        ...(entry.agentId !== undefined ? { agentId: entry.agentId } : {}),
-        ...(entry.agentType !== undefined ? { agentType: entry.agentType } : {}),
-        ...(entry.authority ? { authority: entry.authority } : {}),
-      });
-    }
-    return { exists: true, malformed: false, entries };
-  } catch {
-    return existsSync(path)
-      ? { exists: true, malformed: true, entries: [] }
-      : { exists: false, malformed: false, entries: [] };
-  }
-}
-
-function writeSubagentInflightLedger(
-  projectDir: string,
-  entries: SubagentInflightEntry[],
-): void {
-  const path = subagentInflightMarkerPath(projectDir);
-  if (entries.length === 0) {
-    try {
-      unlinkSync(path);
-    } catch {
-      // Already absent or unreadable: callers retain fail-closed behavior.
-    }
-    return;
-  }
-  mkdirSync(dirname(path), { recursive: true });
-  const ledger: SubagentInflightLedger = { version: 1, entries };
-  writeFileAtomic(path, `${JSON.stringify(ledger)}\n`);
-}
-
-function freshSubagentEntries(
-  entries: SubagentInflightEntry[],
-  nowMs: number,
-): SubagentInflightEntry[] {
-  return entries.filter(
-    (entry) => nowMs - entry.startedAtMs <= SUBAGENT_INFLIGHT_TTL_MS,
-  );
-}
-
-export function markSubagentInflight(
-  projectDir: string,
-  sessionId?: unknown,
-  authority?: AuthorityCover,
-): boolean {
-  const identity = subagentSessionIdentity(sessionId);
-  if (!identity.valid) return false;
-  return withAuditLock(projectDir, () => {
-    const current = readSubagentInflightLedger(projectDir);
-    if (current.malformed) {
-      throw new Error(
-        "background-subagent in-flight ledger is malformed; remove aidlc/.aidlc-subagent-inflight",
-      );
-    }
-    const nowMs = Date.now();
-    const entries = freshSubagentEntries(current.entries, nowMs);
-    // The dispatch stamp: the authority in force at dispatch travels with the
-    // agent, so its actions are judged on what the human or the engine asked
-    // for, not on the agent's own (absent) authority.
-    entries.push({
-      sessionId: identity.sessionId,
-      startedAtMs: nowMs,
-      ...(authority ? { authority } : {}),
-    });
-    writeSubagentInflightLedger(projectDir, entries);
-    return true;
-  });
-}
-
-// Attach host identity to the newest un-annotated fresh entry of this
-// session (Devin correlates the launch-ack's embedded agent_id back onto the
-// entry its dispatch PreToolUse created). Returns false when the session has
-// no un-annotated fresh entry — annotation never creates entries, so a
-// launch ack that arrives without a dispatch-accepted entry is a no-op.
-export function annotateSubagentInflight(
-  projectDir: string,
-  sessionId: unknown,
-  meta: { agentId: string; agentType?: string },
-): boolean {
-  const identity = subagentSessionIdentity(sessionId);
-  if (!identity.valid) return false;
-  if (
-    meta === null ||
-    typeof meta !== "object" ||
-    typeof meta.agentId !== "string" ||
-    meta.agentId.length === 0
-  ) {
-    return false;
-  }
-  return withAuditLock(projectDir, () => {
-    const current = readSubagentInflightLedger(projectDir);
-    if (!current.exists) return false;
-    if (current.malformed) {
-      throw new Error(
-        "background-subagent in-flight ledger is malformed; remove aidlc/.aidlc-subagent-inflight",
-      );
-    }
-    const entries = freshSubagentEntries(current.entries, Date.now());
-    for (let i = entries.length - 1; i >= 0; i--) {
-      const entry = entries[i];
-      if (
-        entry.sessionId === identity.sessionId &&
-        entry.agentId === undefined
-      ) {
-        entry.agentId = meta.agentId;
-        if (typeof meta.agentType === "string" && meta.agentType.length > 0) {
-          entry.agentType = meta.agentType;
-        }
-        writeSubagentInflightLedger(projectDir, entries);
-        return true;
-      }
-    }
-    writeSubagentInflightLedger(projectDir, entries);
-    return false;
-  });
-}
-
-// Remove the newest un-annotated fresh entry of this session — the same
-// selection rule as annotateSubagentInflight. Devin's run_subagent
-// failed-to-start PostToolUse uses it: the host refused the launch, so the
-// dispatch-created entry must not keep relaxing Stop enforcement until TTL.
-// Annotated entries are never touched. Returns whether an entry was removed.
-export function discardSubagentInflight(
-  projectDir: string,
-  sessionId: unknown,
-): boolean {
-  const identity = subagentSessionIdentity(sessionId);
-  if (!identity.valid) return false;
-  return withAuditLock(projectDir, () => {
-    const current = readSubagentInflightLedger(projectDir);
-    if (!current.exists) return false;
-    if (current.malformed) {
-      throw new Error(
-        "background-subagent in-flight ledger is malformed; remove aidlc/.aidlc-subagent-inflight",
-      );
-    }
-    const entries = freshSubagentEntries(current.entries, Date.now());
-    for (let i = entries.length - 1; i >= 0; i--) {
-      if (
-        entries[i].sessionId === identity.sessionId &&
-        entries[i].agentId === undefined
-      ) {
-        entries.splice(i, 1);
-        writeSubagentInflightLedger(projectDir, entries);
-        return true;
-      }
-    }
-    writeSubagentInflightLedger(projectDir, entries);
-    return false;
-  });
-}
-
-// Exact-id lookup over the session's fresh entries (the Devin adapter's
-// read_subagent correlation). Returns the matching annotated entry — its
-// agentType is what the synthesized SubagentStop reports — or null. Stale
-// entries are pruned under the lock like matchSubagentInflight; a malformed
-// ledger throws so corruption can never masquerade as "no pending entry".
-export function findSubagentInflight(
-  projectDir: string,
-  sessionId: unknown,
-  agentId: unknown,
-): SubagentInflightEntry | null {
-  const identity = subagentSessionIdentity(sessionId);
-  if (!identity.valid) return null;
-  if (typeof agentId !== "string" || agentId.length === 0) return null;
-  return withAuditLock(projectDir, () => {
-    const current = readSubagentInflightLedger(projectDir);
-    if (!current.exists) return null;
-    if (current.malformed) {
-      throw new Error(
-        "background-subagent in-flight ledger is malformed; remove aidlc/.aidlc-subagent-inflight",
-      );
-    }
-    const entries = freshSubagentEntries(current.entries, Date.now());
-    if (entries.length !== current.entries.length) {
-      writeSubagentInflightLedger(projectDir, entries);
-    }
-    return (
-      entries.find(
-        (entry) =>
-          entry.sessionId === identity.sessionId &&
-          entry.agentId === agentId,
-      ) ?? null
-    );
-  });
-}
-
-export function hasSubagentInflight(
-  projectDir: string,
-  sessionId: unknown,
-  agentId: unknown,
-): boolean {
-  return findSubagentInflight(projectDir, sessionId, agentId) !== null;
-}
-
-export function completeSubagentInflight(
-  projectDir: string,
-  sessionId?: unknown,
-  agentId?: unknown,
-): boolean {
-  const identity = subagentSessionIdentity(sessionId);
-  if (!identity.valid) return false;
-  // A malformed agent id fails closed: a caller that cannot name its id
-  // removes nothing (an exact-id completion is only ever exact).
-  if (
-    agentId !== undefined &&
-    (typeof agentId !== "string" || agentId.length === 0)
-  ) {
-    return false;
-  }
-  return withAuditLock(projectDir, () => {
-    const current = readSubagentInflightLedger(projectDir);
-    if (!current.exists) return false;
-    if (current.malformed) {
-      throw new Error(
-        "background-subagent in-flight ledger is malformed; remove aidlc/.aidlc-subagent-inflight",
-      );
-    }
-    const entries = freshSubagentEntries(current.entries, Date.now());
-    const sessionEntries = entries.filter(
-      (entry) => entry.sessionId === identity.sessionId,
-    );
-    let removed = false;
-    if (agentId !== undefined) {
-      // Rule 1: an entry carrying this exact agent id is the one removed.
-      const index = entries.findIndex(
-        (entry) =>
-          entry.sessionId === identity.sessionId &&
-          entry.agentId === agentId,
-      );
-      if (index >= 0) {
-        entries.splice(index, 1);
-        removed = true;
-      } else if (
-        // Rule 2: an unmatched id removes NOTHING while the session carries
-        // at least one annotated entry — exact-id semantics are what stop a
-        // foreground completion or a repeated/foreign read from consuming a
-        // background entry.
-        !sessionEntries.some((entry) => entry.agentId !== undefined)
-      ) {
-        // Rule 3: no annotated entries at all — the session still uses the
-        // legacy first-entry splice (id-less entries can only ever be
-        // completed this way).
-        const legacy = entries.findIndex(
-          (entry) => entry.sessionId === identity.sessionId,
-        );
-        if (legacy >= 0) {
-          entries.splice(legacy, 1);
-          removed = true;
-        }
-      }
-    } else {
-      // Rule 3 / legacy path (Claude Code, Copilot — callers that never
-      // annotate): remove the session's first entry, unchanged.
-      const index = entries.findIndex(
-        (entry) => entry.sessionId === identity.sessionId,
-      );
-      if (index >= 0) {
-        entries.splice(index, 1);
-        removed = true;
-      }
-    }
-    writeSubagentInflightLedger(projectDir, entries);
-    return removed;
-  });
-}
-
-export function matchSubagentInflight(
-  projectDir: string,
-  sessionId?: unknown,
-): SubagentInflightMatch {
-  const identity = subagentSessionIdentity(sessionId);
-  if (!identity.valid) {
-    return {
-      active: false,
-      staleRemoved: 0,
-      malformed: false,
-      invalidSession: true,
-    };
-  }
-  return withAuditLock(projectDir, () => {
-    const current = readSubagentInflightLedger(projectDir);
-    if (!current.exists) {
-      return {
-        active: false,
-        staleRemoved: 0,
-        malformed: false,
-        invalidSession: false,
-      };
-    }
-    if (current.malformed) {
-      return {
-        active: false,
-        staleRemoved: 0,
-        malformed: true,
-        invalidSession: false,
-      };
-    }
-    const entries = freshSubagentEntries(current.entries, Date.now());
-    const staleRemoved = current.entries.length - entries.length;
-    if (staleRemoved > 0) writeSubagentInflightLedger(projectDir, entries);
-    return {
-      active: entries.some(
-        (entry) => entry.sessionId === identity.sessionId,
-      ),
-      staleRemoved,
-      malformed: false,
-      invalidSession: false,
-    };
-  });
-}
-
-/** Whether an agent sent in the background at or after `sinceMs` has not
- *  returned: a fresh in-flight entry started since. The completion hook that
- *  records an agent's finish removes its entry; a missing or malformed ledger
- *  shows none. */
-export function backgroundAgentOutSince(projectDir: string, sinceMs: number): boolean {
-  const current = readSubagentInflightLedger(projectDir);
-  if (!current.exists || current.malformed) return false;
-  return freshSubagentEntries(current.entries, Date.now()).some((entry) => entry.startedAtMs >= sinceMs);
-}
-
-export function inspectSubagentInflight(
-  projectDir: string,
-): SubagentInflightSummary {
-  const current = readSubagentInflightLedger(projectDir);
-  if (!current.exists || current.malformed) {
-    return {
-      exists: current.exists,
-      malformed: current.malformed,
-      freshCount: 0,
-      staleCount: 0,
-      oldestAgeMs: null,
-    };
-  }
-  const nowMs = Date.now();
-  let freshCount = 0;
-  let staleCount = 0;
-  let oldestAgeMs: number | null = null;
-  for (const entry of current.entries) {
-    const ageMs = Math.max(0, nowMs - entry.startedAtMs);
-    oldestAgeMs = Math.max(oldestAgeMs ?? 0, ageMs);
-    if (ageMs <= SUBAGENT_INFLIGHT_TTL_MS) freshCount++;
-    else staleCount++;
-  }
-  return {
-    exists: true,
-    malformed: false,
-    freshCount,
-    staleCount,
-    oldestAgeMs,
-  };
+// Whether the in-flight compose question waits on the person's approve, edit
+// or reject: it is the step on record for the selected work (or the work
+// named), on the state it was asked on. A `next` that names another step, or
+// the plan change their approval runs, closes it; a setting written meanwhile
+// keeps it, as it keeps every step. A failed state read throws (each caller
+// decides); a step that cannot be read is no open question.
+export function composeGateOpen(projectDir: string, intent?: string, space?: string): boolean {
+  const statePath = stateFilePath(projectDir, intent, space);
+  if (!existsSync(statePath)) return false;
+  const marker = readActiveDirectiveMarker(projectDir, readFileSync(statePath, "utf-8"), intent, space);
+  return marker?.kind === "ask" && marker.ask_type === COMPOSE_ASK_TYPE;
 }
 
 // `<baseDir>/.aidlc-engine/sensors` - the sensor detail-output / tsbuildinfo directory.
@@ -32982,21 +30881,16 @@ export function worktreeAuditFilePath(wtPath: string, recordPrefix?: string | nu
   // worktree shard across the two PIDs. A git worktree is a separate working dir
   // and would otherwise mint its own (ungitignored, untracked) clone-id, so the
   // token MUST come from the main checkout. Fall back to wtPath only when no
-  // projectDir is threaded (legacy callers without main context).
-  return join(worktreeRecordRoot(wtPath, recordPrefix), "audit", auditShardName(projectDir ?? wtPath));
+  // projectDir is threaded (legacy callers without main context). A claimed
+  // Unit's worktree writes its local record, as auditFilePath names it there.
+  const named = projectDir ?? wtPath;
+  const local = existsSync(unitScopePath(named)) && readApplicableTeamUnitScopeStamp(named)?.audit_shard !== undefined;
+  return join(worktreeRecordRoot(wtPath, recordPrefix), ...(local ? [ENGINE_DIR] : []), "audit", auditShardName(named));
 }
 
 export function worktreeRuntimeGraphPath(wtPath: string, recordPrefix?: string | null): string {
   return join(worktreeRecordRoot(wtPath, recordPrefix), "runtime-graph.json");
 }
-
-// Bolt slug shape: lowercase letter, then lowercase letters / digits / hyphens.
-// Centralised here (previously duplicated as SLUG_RE in aidlc-worktree.ts and
-// SLUG_REGEX in aidlc-audit.ts) so a future tightening lands once. Stage and
-// artifact slugs in stage-schema.ts are a separate domain and keep their own
-// regex.
-export const BOLT_SLUG_REGEX = /^[a-z][a-z0-9-]*$/;
-export const BOLT_SLUG_MAX_LENGTH = 64;
 
 export function errorStack(e: unknown): string | undefined {
   if (e instanceof Error) {
@@ -33099,43 +30993,6 @@ export function mustShift<T>(arr: T[], ctx: string): T {
   return v;
 }
 
-// Validate a Bolt slug against shape + length. Returns null on success or a
-// human-readable error string on failure. Pure — callers route through their
-// preferred error mechanism (jsonError, throw, etc.).
-export function validateBoltSlug(slug: string): string | null {
-  if (!slug) {
-    return "Bolt slug is empty";
-  }
-  if (slug.length > BOLT_SLUG_MAX_LENGTH) {
-    return `Bolt slug "${slug.slice(0, 32)}..." is ${slug.length} chars; max is ${BOLT_SLUG_MAX_LENGTH}`;
-  }
-  if (!BOLT_SLUG_REGEX.test(slug)) {
-    return `Invalid Bolt slug "${slug}" — must match ${BOLT_SLUG_REGEX} (lowercase letter, then lowercase letters/digits/hyphens)`;
-  }
-  return null;
-}
-
-// The autonomous swarm composes Bolt/worktree primitives whose slug contract is
-// deliberately narrower than the legacy Unit-name contract. Preserve modern
-// lowercase kebab names byte-for-byte; map any other safe legacy Unit name to a
-// deterministic, readable, collision-resistant internal slug. The original
-// Unit name remains the user/audit identity.
-export function boltSlugForUnit(name: string): string {
-  const unitNameError = validateUnitName(name);
-  if (unitNameError) throw new Error(unitNameError);
-  if (validateBoltSlug(name) === null) return name;
-
-  const digest = createHash("sha256").update(name).digest("hex").slice(0, 16);
-  let stem = name
-    .toLowerCase()
-    .replace(/[._]+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  if (!/^[a-z]/.test(stem)) stem = `unit-${stem}`;
-  stem = stem.slice(0, BOLT_SLUG_MAX_LENGTH - digest.length - 1).replace(/-+$/g, "");
-  return `${stem}-${digest}`;
-}
-
 export function isRegularFile(path: string): boolean {
   try {
     return statSync(path).isFile();
@@ -33211,14 +31068,6 @@ export function authoritativeProjectDescription(raw: string): {
 }
 
 // --- State file I/O ---
-
-export function readStateFile(projectDir: string, intent?: string, space?: string): string {
-  const path = stateFilePath(projectDir, intent, space);
-  if (!existsSync(path)) {
-    throw new Error(`State file not found: ${path}`);
-  }
-  return readFileSync(path, "utf-8");
-}
 
 // Git left its conflict in a record's aidlc-state.md: two clones advanced the
 // same work and one merged, rebased or popped a stash over the other's commit.
@@ -33348,145 +31197,7 @@ export function documentInputRequestFilePath(
   return join(engineDir(projectDir, intent, space), DOCUMENT_INPUT_REQUEST_FILE);
 }
 
-export function writeStateFile(projectDir: string, content: string, intent?: string, space?: string): void {
-  refuseEngineObserverWrite("writeStateFile");
-  const path = stateFilePath(projectDir, intent, space);
-  // A read-only aidlc-state.md is a deliberate write barrier the state tool
-  // must honour (a corrupt/locked workspace must fail loud, not silently
-  // advance — see the t47/t77 read-only-state failure-injection tests).
-  // writeFileAtomic uses tmp+rename, and POSIX rename overwrites a read-only
-  // TARGET (it only needs directory-write permission), so it would bypass that
-  // barrier. Preserve the bare-writeFileSync EACCES semantics by refusing up
-  // front when the target exists but is not writable.
-  // The state as it was, for the state-write record only: read bounded and only
-  // as a regular file; anything else skips the record, never the write.
-  let previous: string | null = null;
-  let recordable = true;
-  if (existsSync(path)) {
-    accessSync(path, fsConstants.W_OK);
-    try {
-      previous = readRegularFileNoFollowOrThrow(path, "state file", STATE_WRITES_MAX_STATE_BYTES).toString("utf-8");
-    } catch {
-      recordable = false;
-    }
-  }
-  // Ensure the record dir's parent chain exists before the atomic write — a
-  // per-intent record dir's parents (aidlc/spaces/<sp>/intents/<slug>-<id8>/)
-  // may not exist yet on first write; the flat fallback's aidlc-docs/ is created
-  // by the init scaffolder, but mkdir-recursive is idempotent so it's safe for
-  // both layouts.
-  else mkdirSync(dirname(path), { recursive: true });
-  // Atomic write (tmp + rename) so a crash mid-write can never leave a
-  // half-written state file a concurrent reader would see torn. Lost-update
-  // safety for the read-modify-write handlers (withAuditLock wrapping) is a
-  // separate, larger change tracked as a follow-up; this reroute is the
-  // torn-write half and benefits every caller unconditionally.
-  writeFileAtomic(path, content);
-  if (recordable) recordStateWrite(path, previous, content);
-}
-
 // --- State-write record -------------------------------------------------------
-//
-// The last few writes that moved the state digest while a step was issued,
-// beside the state in the engine dir (machine-local, gitignored): when, which
-// AI-DLC command, and which state lines moved. A step out of date because the state moved names those
-// writes, but only when the record accounts for every write between the step
-// and now. Best effort: it never fails or slows a state write's outcome.
-const STATE_WRITES_FILE = "state-writes.json";
-const STATE_WRITES_KEPT = 8;
-const STATE_WRITES_MAX_BYTES = 64 * 1024;
-const STATE_WRITES_MAX_STATE_BYTES = 1024 * 1024;
-
-interface StateWrite {
-  at: string; by: string; before: string; after: string; changed: string[];
-}
-
-// The record's path, or null when the engine dir beside the state is not a
-// real directory: a link there could redirect every read and write elsewhere.
-function stateWritesPath(statePath: string): string | null {
-  const engine = engineDirFor(dirname(statePath));
-  try {
-    return lstatSync(engine).isDirectory() ? join(engine, STATE_WRITES_FILE) : null;
-  } catch {
-    return null;
-  }
-}
-
-// The command's own words (the tool file and its lowercase verbs), never its
-// arguments: those can carry a person's text.
-function stateWriterWords(): string | null {
-  const words: string[] = [];
-  for (const [index, arg] of process.argv.slice(1).entries()) {
-    const word = index === 0 ? basename(arg) : arg;
-    if (!/^[a-z][a-z0-9._-]{0,39}$/.test(word)) break;
-    words.push(word);
-    if (words.length === 4) break;
-  }
-  return words.length > 0 ? words.join(" ").slice(0, 80).trim() : null;
-}
-
-function stateLineLabel(line: string): string {
-  const clean = (text: string) => text.replace(/[^A-Za-z0-9 ._/()-]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
-  const field = /^- \*\*([^*]+)\*\*:/.exec(line);
-  const checkbox = /^\s*- \[[^\]]*\] ([a-z][a-z0-9-]*)/.exec(line);
-  const label = field
-    ? clean(field[1])
-    : checkbox
-      ? clean(`${checkbox[1]} checkbox`)
-      : line.startsWith("## ")
-        ? clean(`section ${line.slice(3)}`)
-        : "";
-  return /^[A-Za-z0-9]/.test(label) ? label : "other line";
-}
-
-function changedStateLines(before: string, after: string): string[] {
-  const was = new Set(projectStateForDigest(before).split("\n"));
-  const now = new Set(projectStateForDigest(after).split("\n"));
-  const labels = new Set<string>();
-  for (const line of now) if (!was.has(line)) labels.add(stateLineLabel(line));
-  for (const line of was) if (!now.has(line)) labels.add(stateLineLabel(line));
-  return [...labels].slice(0, OUT_OF_DATE_MAX_CHANGED);
-}
-
-function readStateWrites(statePath: string): StateWrite[] {
-  try {
-    const path = stateWritesPath(statePath);
-    if (path === null || !existsSync(path)) return [];
-    // Bounded, regular files only: a link, FIFO or device here reads as no record.
-    const bytes = readRegularFileNoFollowOrThrow(path, "state-write record", STATE_WRITES_MAX_BYTES);
-    const parsed: unknown = JSON.parse(bytes.toString("utf-8"));
-    return Array.isArray(parsed)
-      ? parsed.filter((entry): entry is StateWrite =>
-        isPlainObject(entry) && typeof entry.at === "string" && typeof entry.by === "string" &&
-        OUT_OF_DATE_TEXT.test(entry.by) && /^[0-9a-f]{64}$/.test(String(entry.before)) &&
-        /^[0-9a-f]{64}$/.test(String(entry.after)) && Array.isArray(entry.changed) &&
-        entry.changed.every((line) => typeof line === "string" && OUT_OF_DATE_TEXT.test(line)))
-      : [];
-  } catch {
-    return [];
-  }
-}
-
-function recordStateWrite(statePath: string, previous: string | null, content: string): void {
-  try {
-    const before = stateDigest(previous ?? "");
-    const after = stateDigest(content);
-    const by = stateWriterWords();
-    // A write that moved only the cache layer leaves every issued step current.
-    if (before === after || by === null) return;
-    // Only beside an issued step: with no marker there is no step to go out of
-    // date, and the record never creates the first file in the engine dir.
-    const path = stateWritesPath(statePath);
-    if (path === null || !existsSync(join(dirname(path), ACTIVE_DIRECTIVE_MARKER))) return;
-    const writes = [
-      ...readStateWrites(statePath),
-      { at: isoTimestamp(), by, before, after, changed: changedStateLines(previous ?? "", content) },
-    ].slice(-STATE_WRITES_KEPT);
-    writeFileAtomic(path, `${JSON.stringify(writes, null, 2)}\n`);
-  } catch {
-    // A diagnostic record never fails the state write it describes.
-  }
-}
 
 // A step was just handed out: the writes before it are not this step's, so
 // none of them may be named for it later.
@@ -33523,21 +31234,6 @@ function stateWritesBetween(
   return { ...(changed.length > 0 ? { changed } : {}), writers };
 }
 
-// --- Field reading/writing ---
-
-export function getField(content: string, field: string): string | null {
-  // Match: - **Field Name**: value
-  // Use [ \t]* instead of \s* so a field with an empty value returns "" (not
-  // the next bullet line — \s matches \n in JS regex, which would let the
-  // pattern cross into the next line).
-  const regex = new RegExp(
-    `^- \\*\\*${escapeRegex(field)}\\*\\*:[ \\t]*(.*)$`,
-    "m"
-  );
-  const match = content.match(regex);
-  return match ? match[1].trim() : null;
-}
-
 // --- Autonomy mode ---
 //
 // The state-file field that distinguishes autonomous Construction (swarm/Bolt)
@@ -33546,17 +31242,12 @@ export function getField(content: string, field: string): string | null {
 // sites cannot drift. (This PR uses the helper only at the NEW gate sites;
 // refactoring the existing open-coded sites is a tracked follow-up.)
 export const AUTONOMY_MODE_FIELD = "Construction Autonomy Mode";
-export const UNIT_OWNERSHIP_FIELD = "Unit Ownership";
 export const UNIT_GATE_RHYTHM_FIELD = "Unit Gate Rhythm";
 
 export type UnitGateRhythm = "per-stage" | "unit-end";
 
 export function isAutonomousMode(stateContent: string | null): boolean {
   return !!stateContent && getField(stateContent, AUTONOMY_MODE_FIELD)?.trim() === "autonomous";
-}
-
-export function isTeamUnitOwnership(stateContent: string | null): boolean {
-  return !!stateContent && getField(stateContent, UNIT_OWNERSHIP_FIELD)?.trim() === "team";
 }
 
 export function readUnitGateRhythm(stateContent: string | null): UnitGateRhythm {
@@ -33632,13 +31323,6 @@ export function isAutonomousSwarmStage(
 // Persisted per-work settings cannot lower this guard.
 export function humanPresenceGuardDisabled(projectDir?: string): boolean {
   return resolveProjectFlag("AIDLC_SKIP_HUMAN_PRESENCE_GUARD", process.env, projectDir) === "1";
-}
-
-// An unattended driver is the only component that knows its prompt-submit
-// event did not originate from a person. Withhold the authority-bearing ledger
-// mint while retaining non-authority turn markers used by forwarding hooks.
-export function humanTurnMintAllowed(): boolean {
-  return process.env.AIDLC_UNATTENDED !== "1";
 }
 
 // The same hard signal `next`'s stop reads, for the current workflow: a stage
@@ -33733,18 +31417,21 @@ export function unattendedHumanPresenceHint(projectDir?: string, options: { miss
       "mode, then submit a new human response.";
   }
   if (personAtOwnTerminal(projectDir)) return ` ${OWN_TERMINAL_PRESENCE_STEP}`;
-  // Kiro's Agent Hooks panel can switch the reply hook off (#2203): a reply not
-  // recorded is then that switch, not a folder Kiro has yet to trust and not a
-  // record whose hooks never ran (the other hooks still beat), so this comes
-  // before the hooks-off step and the person is sent to the panel, never to the
-  // trust step. A caller refusing for a reply not given yet (the summary choice
-  // the person has not made) is not a lost reply: it hears nothing here either.
-  if (options.missedReply !== false && kiroReplyHookSwitchedOff(resolveProjectDir(projectDir), harnessDir())) {
+  // The reply hook's file can be switched off (#2203), by Kiro IDE's Agent Hooks
+  // panel or a committed file: a reply not recorded is then that switch, not a
+  // folder Kiro has yet to trust and not a record whose hooks never ran (the
+  // other hooks still beat), so this comes before the hooks-off step and the
+  // person is sent to the panel or, on Kiro CLI (no panel; hook files register
+  // when a session starts), the file and a new session, never to the trust
+  // step. A caller refusing for a reply not given yet (the summary choice the
+  // person has not made) is not a lost reply: it hears nothing here either.
+  if (options.missedReply !== false && !harnessIsAGuess() && kiroReplyHookSwitchedOff(resolveProjectDir(projectDir), harnessDir())) {
     return " If the person already replied, that reply was not recorded because AI-DLC's hook that records your " +
-      "replies is switched off in Kiro's Agent Hooks. Do not ask them to answer again. Tell them exactly this, with " +
+      "replies is switched off. Do not ask them to answer again. Tell them exactly this, with " +
       "nothing about why: \"Your answer was not recorded: AI-DLC's hook that records your replies " +
-      "(aidlc-record-human-turn) is switched off under Agent Hooks in Kiro. Turn it back on, then give your answer " +
-      `once more." ${NO_CHECK_OFF_OFFER}`;
+      `(${KIRO_REPLY_HOOK}) is switched off. In Kiro CLI, change \`"enabled": false\` to \`true\` in ` +
+      `\`${harnessDir()}/hooks/${KIRO_REPLY_HOOK}.json\`, then quit Kiro and start \`kiro-cli --v3\` again in this ` +
+      `folder; in Kiro IDE, turn it back on under Agent Hooks. Then give your answer once more." ${NO_CHECK_OFF_OFFER}`;
   }
   // Nothing on record tells a reply not sent yet from one the prompt hook
   // failed to record, so every such refusal also says what happened to a reply
@@ -33769,27 +31456,13 @@ export function unattendedHumanPresenceHint(projectDir?: string, options: { miss
   // could have missed (no heartbeat, or one the workflow left far behind) gets
   // the missed-reply line.
   if (promptHookRanRecently(projectDir)) return ` ${NOT_ANSWERED_YET_STEP}`;
-  const activation = hookActivation();
+  const activation = harnessIsAGuess() ? null : hookActivation();
   const host = activation?.missedReplyInHost;
   const missedReply = (inHostShell(host?.env) ? host?.text : activation?.missedReply) ??
     "If the person already replied, that reply was not recorded for this question. Tell them exactly this, " +
       "with nothing about why: \"Your answer didn't reach AI-DLC. Please give it once more. If it happens again, " +
       `type ${entrySkillInvocation()} --doctor."`;
   return ` ${missedReply} ${NO_CHECK_OFF_OFFER}`;
-}
-
-export function setField(content: string, field: string, value: string): string {
-  // [ \t]* instead of \s* so an empty value doesn't let the regex eat the
-  // following line. .* with the m flag does not cross lines on its own, but
-  // \s* preceding it would consume the trailing \n.
-  const regex = new RegExp(
-    `^(- \\*\\*${escapeRegex(field)}\\*\\*:)[ \\t]*.*$`,
-    "m"
-  );
-  if (regex.test(content)) {
-    return content.replace(regex, `$1 ${value}`);
-  }
-  return content;
 }
 
 // setFieldStrict: like setField but throws when the field is absent. Use this
@@ -33804,7 +31477,7 @@ export function setFieldStrict(content: string, field: string, value: string): s
   );
   if (!regex.test(content)) {
     throw new Error(
-      `Field not found in state file: "${field}". Cannot update — refusing to silently no-op.`
+      `Field not found in state file: "${field}". Cannot update - refusing to silently no-op.`
     );
   }
   return content.replace(regex, `$1 ${value}`);
@@ -33900,49 +31573,6 @@ export function removeSlug(currentValue: string, slug: string): string {
     throw new Error(`slug not present in refs list: "${slug}"`);
   }
   return emitRefsList(list.filter((s) => s !== slug));
-}
-
-// --- Checkbox operations ---
-
-export interface CheckboxLine {
-  slug: string;
-  state: CheckboxState;
-  suffix: string; // e.g., "EXECUTE" or "SKIP: reason"
-}
-
-export function parseCheckboxes(content: string): CheckboxLine[] {
-  const results: CheckboxLine[] = [];
-  const regex = /^- \[([ xSR?-])\] (\S+)\s*—\s*(.*)$/gm;
-  let match: RegExpExecArray | null = regex.exec(content);
-  while (match !== null) {
-    const marker = match[1];
-    let state: CheckboxState;
-    switch (marker) {
-      case " ":
-        state = "pending";
-        break;
-      case "-":
-        state = "in-progress";
-        break;
-      case "?":
-        state = "awaiting-approval";
-        break;
-      case "R":
-        state = "revising";
-        break;
-      case "x":
-        state = "completed";
-        break;
-      case "S":
-        state = "skipped";
-        break;
-      default:
-        state = "pending";
-    }
-    results.push({ slug: match[2], state, suffix: match[3].trim() });
-    match = regex.exec(content);
-  }
-  return results;
 }
 
 // --- Guard admission: typed refusals, typed remedies, the recovery ask --------
@@ -34754,7 +32384,7 @@ const GUARD_REMEDY_WORDING_BY_OP: Record<GuardRemedyOp, GuardRemedyWording> = GU
 // reviewer's name. The words match the review request's own step.
 export function reviewRequestAction(lead: string, request: string | undefined): string {
   if (request === undefined) return `${lead}.`;
-  return `${lead}: run \`${request}\`, then dispatch the reviewer named in it as a subagent and have it write ` +
+  return `${lead}: run \`${request}\`, then dispatch the reviewer named in it as a new subagent and have it write ` +
     "the `reviewFile` that command returns: that file is the reviewer's, so never write it yourself and never " +
     `stand in for it (\`${harnessDir()}/aidlc-common/protocols/stage-protocol-reviewer.md\` step 1 says what to ` +
     "pass it). When its verdict is back, record it with the `recordVerdict` command the request returns.";
@@ -34796,12 +32426,49 @@ export function evaluateGuardRefusal(
   // A revision is open for its own review: reviewing the change is the
   // conductor's step before it reports the revision done.
   const openForReview = openForWork || state === "revising";
+  // A review still waiting for its verdict: recording it, or retrying a request
+  // whose answer never came back, is the conductor's own step wherever the
+  // Unit is built, so a side-by-side Unit is offered them before a restart.
+  const pendingReviewRemedies = (): void => {
+    if (!input.attempt.pendingReview) return;
+    if (
+      input.attempt.pendingReview.verdictRecordable !== false &&
+      input.attempt.summaryCoverage === "current"
+    ) {
+      remedies.push({
+        op: "record-verdict",
+        // Spell the closing call out. Requesting a review and recording its
+        // verdict are the same command with --verdict added, which is not
+        // guessable from the request's own output, so "record the verdict"
+        // alone left operators looking for a command that does not exist.
+        action:
+          `Record the verdict for pending review iteration ` +
+          `${input.attempt.pendingReview.iteration} if the reviewer returned` +
+          (input.attempt.pendingReview.recordVerdict
+            ? `: \`${input.attempt.pendingReview.recordVerdict}\`.`
+            : " using the recordVerdict command returned by the review request."),
+        requiresHuman: false,
+        executableNow: true,
+      });
+    }
+    if (input.attempt.pendingReview.retryable) {
+      remedies.push({
+        op: "retry-pending",
+        action:
+          `Retry pending review iteration ${input.attempt.pendingReview.iteration} ` +
+          "with --retry-pending.",
+        requiresHuman: false,
+        executableNow: input.attempt.summaryCoverage === "current",
+      });
+    }
+  };
 
   if (input.autonomousBolt) {
     const slug = input.autonomousBolt.slug ?? input.autonomousBolt.unit;
     const batch = input.autonomousBolt.batch
       ? ` batch ${input.autonomousBolt.batch}`
       : " the current batch";
+    pendingReviewRemedies();
     remedies.push({
       op: "abort-bolt",
       action:
@@ -34838,7 +32505,7 @@ export function evaluateGuardRefusal(
     // receipt is missing: its artifacts are already on disk (the gate checks them
     // first). Recording it is the way forward; restarting the stage or asking for
     // changes cannot produce it (#1289).
-    if (input.code === "UNIT_COMPLETION_MISSING" && input.unit && openForWork) {
+    if (input.code === "UNIT_COMPLETION_MISSING" && input.unit && openForReview) {
       const operation = guardOperation({
         kind: "record-unit-completion",
         stage: input.stage,
@@ -34848,7 +32515,8 @@ export function evaluateGuardRefusal(
         op: "record-unit-completion",
         action:
           `Record Unit "${input.unit}"'s completion for "${input.stage}" from the artifacts ` +
-          `already on disk by running \`${operation.command}\`, then present its gate again.`,
+          `already on disk by running \`${operation.command}\`, then ` +
+          (state === "revising" ? "finish the revision." : "present its gate again."),
         ...operation,
         // `unit complete` records it only once the person picked it.
         requiresHuman: true,
@@ -34903,38 +32571,7 @@ export function evaluateGuardRefusal(
         executableNow: openForWork || state === "revising",
       });
     }
-    if (input.attempt.pendingReview) {
-      if (
-        input.attempt.pendingReview.verdictRecordable !== false &&
-        input.attempt.summaryCoverage === "current"
-      ) {
-        remedies.push({
-          op: "record-verdict",
-          // Spell the closing call out. Requesting a review and recording its
-          // verdict are the same command with --verdict added, which is not
-          // guessable from the request's own output, so "record the verdict"
-          // alone left operators looking for a command that does not exist.
-          action:
-            `Record the verdict for pending review iteration ` +
-            `${input.attempt.pendingReview.iteration} if the reviewer returned` +
-            (input.attempt.pendingReview.recordVerdict
-              ? `: \`${input.attempt.pendingReview.recordVerdict}\`.`
-              : " using the recordVerdict command returned by the review request."),
-          requiresHuman: false,
-          executableNow: true,
-        });
-      }
-      if (input.attempt.pendingReview.retryable) {
-        remedies.push({
-          op: "retry-pending",
-          action:
-            `Retry pending review iteration ${input.attempt.pendingReview.iteration} ` +
-            "with --retry-pending.",
-          requiresHuman: false,
-          executableNow: input.attempt.summaryCoverage === "current",
-        });
-      }
-    }
+    pendingReviewRemedies();
     if (input.attempt.repairReview) {
       remedies.push({
         op: "apply-repairs-then-request",
@@ -35121,7 +32758,19 @@ export function evaluateGuardRefusal(
         executableNow: openForWork || state === "revising",
       });
     }
+    // A checkout that claimed a Unit reopens only that Unit's own stages
+    // (claimedCheckoutReopens): a reset of any other is not offered there.
+    const claim = input.projectDir === undefined
+      ? null
+      : applicableTeamUnitScopeStamp(input.projectDir, input.stateContent);
+    const resetsHere = claim === null || claimedCheckoutReopens(
+      claim.unit,
+      unitMajorConstructionStageSlugs(getField(input.stateContent, "Scope")?.trim() ?? "", input.stateContent, true),
+      input.stage,
+      input.unit,
+    );
     remedies.push(...lifecycleResetRemedies(input, state)
+      .filter((remedy) => resetsHere || remedy.operation?.kind !== "restart-stage")
       .filter((remedy) => !remedies.some((offered) => offered.op === remedy.op)));
   }
 
@@ -35652,7 +33301,7 @@ export interface GuardRecoveryAskData {
   detail?: string;
 }
 
-function guardRefusalPath(
+export function guardRefusalPath(
   projectDir: string,
   stage: string,
   unit?: string,
@@ -35666,7 +33315,7 @@ function guardRefusalPath(
 // The latest boundary after which a repetition is a new situation: a session
 // start or resume, a workflow start, a jump, this stage's gate rejection, or a
 // fresh Bolt attempt for this Unit.
-function guardRefusalResetToken(
+export function guardRefusalResetToken(
   projectDir: string,
   stage: string,
   unit?: string,
@@ -35714,7 +33363,7 @@ function gateEventCovers(event: AuditShardEvent, stage: string, unit?: string): 
 
 // The latest approval of this stage (or this Unit's step), so a question left
 // before it can tell that the step it was about was approved since.
-function guardRefusalApprovalToken(
+export function guardRefusalApprovalToken(
   events: AuditShardEvent[],
   stage: string,
   unit?: string,
@@ -35725,7 +33374,7 @@ function guardRefusalApprovalToken(
   return latest === undefined ? "" : `${latest.timestamp}\0${latest.shard}\0${latest.pos}`;
 }
 
-function readGuardRefusalRecord(path: string): GuardRefusalRecord | null {
+export function readGuardRefusalRecord(path: string): GuardRefusalRecord | null {
   try {
     const value: unknown = JSON.parse(readFileSync(path, "utf-8"));
     if (!isPlainObject(value) || value.version !== 1) return null;
@@ -36169,20 +33818,6 @@ export function recoveryGuidance(
       "Only that unit does it again; the other units keep their finished work.";
   }
   return restartStageRemedy(stageSlug).action;
-}
-
-export function setCheckbox(
-  content: string,
-  slug: string,
-  newState: CheckboxState
-): string {
-  const marker = CHECKBOX_MAP[newState];
-  // Match any checkbox state for this slug
-  const regex = new RegExp(
-    `^(- )\\[[ xSR?-]\\]( ${escapeRegex(slug)} —)`,
-    "m"
-  );
-  return content.replace(regex, `$1${marker}$2`);
 }
 
 // The suffix-setter twin of setCheckbox: flips ONE stage line's plan suffix
@@ -37196,19 +34831,7 @@ export type UnitGateStatus =
   | "revising"
   | "approved";
 
-export function gateStagesFromBlock(block: string): string[] {
-  const explicit = auditBlockField(block, "Gate Stages");
-  if (explicit) {
-    return explicit
-      .split(",")
-      .map((value) => value.trim())
-      .filter((value) => value.length > 0);
-  }
-  const stage = auditBlockField(block, "Stage");
-  return stage ? [stage] : [];
-}
-
-function gateEventMatchesUnit(
+export function gateEventMatchesUnit(
   block: string,
   slug: string,
   unit: string | undefined,
@@ -37223,7 +34846,7 @@ function gateRejectionMatchesAttempt(
   slug: string,
   unit: string | undefined,
 ): boolean {
-  if (!gateStagesFromBlock(block).includes(slug)) return false;
+  if (!gateStagesReopened(block).includes(slug)) return false;
   const eventUnit = auditBlockField(block, "Unit");
   if (eventUnit === null) return true;
   return unit !== undefined && eventUnit === unit;
@@ -37479,7 +35102,7 @@ export function unitLifecycleRunFloorForProject(
     rows.some((row) =>
       row.event === "GATE_REJECTED" &&
       auditBlockField(row.block, "Unit") === name &&
-      gateStagesFromBlock(row.block).includes(slug));
+      gateStagesReopened(row.block).includes(slug));
   const floored = unit !== undefined && (unitScoped || ownReopen(unit)) ? unit : undefined;
   return latestMainWorkflowStageRunFloorFromRows(rows, slug, unitMajor, floored, true);
 }
@@ -37489,13 +35112,18 @@ export function unitLifecycleRunFloorForProject(
 // a stage before the Target keeps its attempt: a jump back to Code Generation
 // leaves each Unit's Functional Design as it was. A row whose Target, or a
 // stage, the graph does not know, or a graph that cannot be read, reaches
-// every stage.
+// every stage. A team-owned jump back before the per-Unit block records `Unit
+// Work: kept` (aidlc-jump.ts): it reaches no per-Unit stage, whose work is
+// each Unit's claim's.
 export function stageJumpReaches(block: string, slug: string): boolean {
   const name = auditBlockField(block, "Target");
   if (!name || name === slug) return true;
   try {
     const target = stageIndex(name);
     const at = stageIndex(slug);
+    if (auditBlockField(block, "Unit Work") === "kept" && at !== -1 && isPerUnitStage(loadStageGraph()[at])) {
+      return false;
+    }
     return target === -1 || at === -1 || at >= target;
   } catch {
     return true;
@@ -37541,6 +35169,15 @@ function latestMainWorkflowStageRunFloorFromRows(
   const jumpOrdinals = new Map(
     rowsInput.filter((row) => row.event === "STAGE_JUMPED").sort(byTime).map((row, index) => [row, index + 1]),
   );
+  // Main entering this stage after a jump that kept the Units' work
+  // (stageJumpReaches) starts no new attempt for a Unit: its receipts keep
+  // their floor. Main's own floor for the stage still moves.
+  const forUnits = unit !== undefined || unitReceipts;
+  const keptAt = forUnits
+    ? rowsInput.filter((row) => row.event === "STAGE_JUMPED" && auditBlockField(row.block, "Unit Work") === "kept" &&
+      !stageJumpReaches(row.block, slug)).map((row) => row.timestamp)
+    : [];
+  const reentry = (row: AuditShardEvent): boolean => keptAt.some((at) => at <= row.timestamp);
   const rows = rowsInput
     .filter((row) => {
       if (!relevant.has(row.event)) return false;
@@ -37549,7 +35186,7 @@ function latestMainWorkflowStageRunFloorFromRows(
       if (row.event === "GATE_REJECTED") {
         return gateRejectionMatchesAttempt(row.block, slug, unit);
       }
-      return stageStart(row) &&
+      return stageStart(row) && !reentry(row) &&
         (stageFloored === null || stageFloored.has(row)) &&
         (unitFloored === null || !unitFloored.has(row));
     });
@@ -37929,6 +35566,8 @@ export type SwarmSourceMergeChain =
       // The listing that landing kept (`Source Listing`), absent on rows an
       // earlier release wrote.
       listing?: string;
+      // The landing that kept it.
+      row: AuditShardEvent;
       units: Set<string>;
     };
 
@@ -37999,8 +35638,9 @@ export function currentSwarmSourceOpeningFingerprint(
   }
   const rejected = /^GATE_REJECTED:(.+)#([1-9][0-9]*)$/.exec(floor);
   if (rejected !== null) {
+    const rows = auditRows ?? readAuditShardEvents(projectDir, intent, space);
     const row = rejectionAtRunFloor(
-      auditRows ?? readAuditShardEvents(projectDir, intent, space),
+      rows,
       slug,
       undefined,
       floor,
@@ -38023,11 +35663,19 @@ export function currentSwarmSourceOpeningFingerprint(
         };
       }
       // The listing that landing kept, when it reads back exactly; rows an
-      // earlier release wrote have none and are compared by fingerprint.
+      // earlier release wrote have none and are compared by fingerprint. A
+      // repo that joined the work since that landing counts from the add.
       const recorded = auditBlockField(row.block, "Prior Accepted Source Listing");
-      const listing = recorded === null
+      const kept = recorded === null
         ? null
         : readBaselineSourceSnapshot(projectDir, slug, recorded, intent, space);
+      const landing = sortAttemptEvents(rows.filter((merge) =>
+        merge.event === "SWARM_SOURCE_MERGED" && auditBlockField(merge.block, "Stage") === slug &&
+        auditBlockField(merge.block, "Source Listing") === recorded && attemptEventDefinitelyBefore(merge, row))).at(-1);
+      const joined = kept === null
+        ? null
+        : withRepoBaselineAdditions(projectDir, slug, { state: "ready", listing: kept }, rows, landing ?? null, intent, space);
+      const listing = joined?.state === "ready" ? joined.listing : kept;
       return {
         state: "ready",
         fingerprint: prior,
@@ -38114,6 +35762,7 @@ export function currentSwarmSourceMergeChain(
   const lastMerge = new Map<string, AuditShardEvent>();
   let priorFingerprint: string | null = null;
   let priorListing: string | undefined;
+  let priorRow: AuditShardEvent | null = null;
   let openingPrevious: string | null = null;
   let openingRow: AuditShardEvent | null = null;
   // A link may start from a main checkout the person changed during the build
@@ -38250,15 +35899,20 @@ export function currentSwarmSourceMergeChain(
       else units.add(unit);
       priorFingerprint = fingerprint;
       priorListing = auditBlockField(row.block, "Source Listing") ?? undefined;
+      priorRow = row;
     }
     start = end;
   }
+  // The opening link was checked against the stage baseline as it stood then:
+  // a repo that joined the work after that landing (withRepoBaselineAdditions
+  // reads its INTENT_REPOS_CHANGED row) does not move it.
   const opening = currentSwarmSourceOpeningFingerprint(
     projectDir,
     slug,
     intent,
     space,
-    allRows,
+    allRows.filter((row) =>
+      row.event !== "INTENT_REPOS_CHANGED" || openingRow === null || !attemptEventDefinitelyBefore(openingRow, row)),
   );
   if (opening.state === "invalid") {
     return opening;
@@ -38272,33 +35926,170 @@ export function currentSwarmSourceMergeChain(
       reason: `opening SWARM_SOURCE_MERGED link does not match the current ${opening.source === "prior-accepted" ? "prior accepted aggregate" : "stage baseline"}`,
     };
   }
-  return priorFingerprint === null
+  return priorFingerprint === null || priorRow === null
     ? { state: "none" }
-    : { state: "ready", fingerprint: priorFingerprint, listing: priorListing, units };
+    : { state: "ready", fingerprint: priorFingerprint, listing: priorListing, row: priorRow, units };
 }
 
-// Whether the main checkout moved, since the build's last verified source (the
-// last landing's listing, else the stage's opening listing), only in AI-DLC's
-// own files: the comparison a landing makes. False when no listing reads back
-// or the evidence cannot be read; the caller then keeps its fingerprint compare.
-export function onlyAidlcFilesChangedInSwarmStage(
+// --- A change the person asked for in the main checkout ----------------------
+//
+// Under a strict Guard Policy the main checkout changes only by the Units'
+// landings while they are built in parallel, so each landing can check it. A
+// change the person asks for there is theirs: `swarm allow-change` proves the
+// message they asked in and records the files with their words
+// (MAIN_CHECKOUT_CHANGE_ALLOWED) for the current Code Generation attempt.
+// mainCheckoutChangeAllowed is the one read of that record, made only where
+// strict holds the change: the plan-approval guard lets the write in, and the
+// landing, the next batch's prepare and stage completion keep it. A strict the
+// team holds in memory keeps the main checkout as approved, read at use.
+
+const MAIN_CHECKOUT_CHANGE_STAGE = "code-generation";
+
+/** A file in the main checkout as the landing names it: project-relative, forward slashes; null outside the project. */
+export function mainCheckoutPathKey(projectDir: string, target: string): string | null {
+  const rel = relative(resolvePath(projectDir), resolvePath(projectDir, target));
+  if (rel === "" || isAbsolute(rel) || rel === ".." || rel.startsWith(`..${sep}`)) return null;
+  return rel.split(sep).join("/");
+}
+
+const foldedPathKey = (key: string): string => process.platform === "win32" ? key.toLowerCase() : key;
+
+/**
+ * The files the person asked to change in the main checkout during the current
+ * Code Generation attempt, each with the message they asked in, keyed as
+ * mainCheckoutPathKey names them (case-folded on Windows); null when a strict
+ * the team holds in memory keeps the main checkout as approved, or the record
+ * cannot be read. `notNamedBy` leaves out the files a Unit's plan names (null:
+ * the plan could not be read, so none counts): a Unit that builds the file
+ * starts from it committed and approved, as on every Guard Policy.
+ */
+export function mainCheckoutChangesAsked(
   projectDir: string,
-  slug: string,
-  current: WorkspaceSourceState,
-): boolean {
+  selection: { intent?: string; space?: string } = {},
+  notNamedBy?: readonly string[] | null,
+): Map<string, string> | null {
+  if (notNamedBy === null) return null;
   try {
-    const chain = currentSwarmSourceMergeChain(projectDir, slug);
-    if (chain.state === "ready") return onlyAidlcFilesChangedSince(projectDir, slug, chain.listing, current);
-    if (chain.state !== "none") return false;
-    const opening = currentSwarmSourceOpeningFingerprint(projectDir, slug);
-    return opening.state === "ready" && opening.listing !== undefined && sourceChangedOutsideAidlc(
-      projectDir,
-      recordedSourceListingUnderCurrentBoundary(opening.listing, current.listing),
-      current.listing,
-    ).length === 0;
+    if (resolveGuardPolicy(projectDir, undefined, { selection }).memoryStrict !== null) return null;
+    const rows = readAuditShardEvents(projectDir, selection.intent, selection.space);
+    const floor = latestMainWorkflowStageRunFloorForProject(
+      projectDir, MAIN_CHECKOUT_CHANGE_STAGE, false, undefined, rows, selection.intent, selection.space,
+    );
+    if (floor.startsWith("AMBIGUOUS:")) return null;
+    const asked = new Map<string, string>();
+    for (const row of rows) {
+      if (
+        row.event !== "MAIN_CHECKOUT_CHANGE_ALLOWED" ||
+        auditBlockField(row.block, "Stage") !== MAIN_CHECKOUT_CHANGE_STAGE ||
+        auditBlockField(row.block, "Run floor") !== floor
+      ) continue;
+      const message = auditBlockField(row.block, "Message Id");
+      let listed: unknown;
+      try {
+        listed = JSON.parse(auditBlockField(row.block, "Paths") ?? "");
+      } catch {
+        continue;
+      }
+      if (!message || !Array.isArray(listed)) continue;
+      for (const path of listed) {
+        if (typeof path === "string" && !plansNamePath(path, notNamedBy ?? [])) asked.set(foldedPathKey(path), message);
+      }
+    }
+    return asked;
   } catch {
-    return false;
+    return null;
   }
+}
+
+/**
+ * The messages the person asked in for every one of `paths` to change in the
+ * main checkout during the current Code Generation attempt; null when one of
+ * them was not asked for (mainCheckoutChangesAsked).
+ */
+export function mainCheckoutChangeAllowed(
+  projectDir: string,
+  paths: readonly string[] | null,
+  selection: { intent?: string; space?: string } = {},
+  notNamedBy?: readonly string[] | null,
+): string[] | null {
+  if (paths === null || paths.length === 0) return null;
+  const asked = mainCheckoutChangesAsked(projectDir, selection, notNamedBy);
+  if (asked === null) return null;
+  const messages = paths.map((path) => asked.get(foldedPathKey(path)));
+  return messages.every((message) => message !== undefined) ? [...new Set(messages as string[])] : null;
+}
+
+/** Whether a listing key (`<repo>\0<path>`) is a file the person asked to change (mainCheckoutChangesAsked). */
+export function mainCheckoutChangeAskedKey(asked: ReadonlyMap<string, string> | null): (pathKey: string) => boolean {
+  return (pathKey) => {
+    if (asked === null || asked.size === 0) return false;
+    const parsed = splitSourcePathKey(pathKey);
+    return parsed !== null && asked.has(foldedPathKey(parsed.repo ? `${parsed.repo}/${parsed.path}` : parsed.path));
+  };
+}
+
+/** The attempt a MAIN_CHECKOUT_CHANGE_ALLOWED row is written for. */
+export function mainCheckoutChangeRunFloor(projectDir: string, selection: { intent?: string; space?: string } = {}): string {
+  return latestMainWorkflowStageRunFloorForProject(
+    projectDir, MAIN_CHECKOUT_CHANGE_STAGE, false, undefined, undefined, selection.intent, selection.space,
+  );
+}
+
+/** What a strict the team holds in memory says of the main checkout while the Units are built; null when none holds it. */
+export function mainCheckoutHeldByTeam(projectDir: string, selection: { intent?: string; space?: string } = {}): string | null {
+  try {
+    const held = resolveGuardPolicy(projectDir, undefined, { selection }).memoryStrict;
+    return held === null
+      ? null
+      : `Your team set Guard Policy to strict in ${held.path} (section: ${held.heading.replace(/^## /, "")}), ` +
+        "so the main checkout stays as approved while the Units are built. Changing that line there changes it.";
+  } catch {
+    return null;
+  }
+}
+
+/** The command that records the person's request for `paths`; the agent adds the message they asked in. */
+export function allowMainCheckoutChangeCommand(paths: readonly string[]): string {
+  return `${aidlcToolInvocation("swarm")} allow-change ${paths.map((path) => quoteCommandArgument(path)).join(" ")}`;
+}
+
+/**
+ * Why the person's request cannot cover one of `paths`; null when it covers
+ * every one. AI-DLC's own files change only through AI-DLC's steps, and a file
+ * a Unit being built names in its plan goes through that Unit.
+ */
+export function mainCheckoutChangeRefusal(
+  projectDir: string,
+  paths: readonly string[],
+  units: readonly string[],
+  planNamedPaths: (unit: string) => readonly string[] | null,
+): string | null {
+  const owned = aidlcOwnedSourceKey(projectDir);
+  for (const path of paths) {
+    if (owned(sourcePathKey("", path))) {
+      return `${path} is one of AI-DLC's own files, which change only through AI-DLC's own steps.`;
+    }
+    const unit = units.find((candidate) => plansNamePath(path, planNamedPaths(candidate) ?? []));
+    if (unit !== undefined) {
+      return `${path} is a file the plan for Unit ${unit} names, so a change to it goes through that Unit: ` +
+        "Request Changes at its checkpoint, or make it once Code Generation is over.";
+    }
+  }
+  return null;
+}
+
+/**
+ * Whether the plans name a file (`rel`, project-relative with forward slashes):
+ * a named folder covers what is under it, and a bare file name covers that name
+ * anywhere.
+ */
+export function plansNamePath(rel: string, planPaths: readonly string[]): boolean {
+  const fold = (path: string): string => process.platform === "win32" ? path.toLowerCase() : path;
+  const file = fold(rel);
+  return planPaths.some((named) => {
+    const path = fold(named.replace(/\/+$/, ""));
+    return file === path || file.startsWith(`${path}/`) || (!path.includes("/") && file.split("/").at(-1) === path);
+  });
 }
 
 // The set of units the CURRENT attempt of an INLINE per-unit stage has
@@ -38333,7 +36124,7 @@ const UNIT_TERMINAL_EVENTS: ReadonlySet<string> = new Set([
   "UNIT_SKIPPED",
 ]);
 
-function currentUnitLifecycleRows(
+export function currentUnitLifecycleRows(
   projectDir: string,
   audit: string,
   slug: string,
@@ -38478,7 +36269,7 @@ export function unitScopedLifecycleFloors(stateContent: string): boolean {
     getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
 }
 
-function unitMajorLifecycleMode(projectDir: string): boolean {
+export function unitMajorLifecycleMode(projectDir: string): boolean {
   try {
     const state = readStateFile(projectDir);
     return (
@@ -38502,12 +36293,15 @@ export interface UnitCheckpoint {
 }
 
 // Every Unit whose latest current-attempt row for the stage is open (started,
-// resumed, or paused), most recently touched first.
-function openUnitCheckpoints(rows: readonly UnitLifecycleRow[]): UnitCheckpoint[] {
+// resumed, or paused), most recently touched first. Only the Units this checkout
+// holds (unitsHeldHere; null is every Unit): another checkout's open Unit,
+// pushed with main, is that checkout's, and never stops one held here (#3610).
+function openUnitCheckpoints(rows: readonly UnitLifecycleRow[], held: ReadonlySet<string> | null): UnitCheckpoint[] {
   const open: UnitCheckpoint[] = [];
   const seen = new Set<string>();
   for (let i = rows.length - 1; i >= 0; i--) {
     const { unit, event, block } = rows[i];
+    if (held !== null && !held.has(unit)) continue;
     if (seen.has(unit)) continue;
     seen.add(unit);
     if (UNIT_TERMINAL_EVENTS.has(event)) continue;
@@ -38606,7 +36400,7 @@ export function unitLifecycleSnapshot(
       receipts.delete(row.unit);
     }
   }
-  const open = openUnitCheckpoints(rows);
+  const open = openUnitCheckpoints(rows, unitsHeldHere(projectDir));
   const checkpoint = open[0] ?? null;
   const unitEvents = new Set([
     "UNIT_STARTED",
@@ -38755,10 +36549,11 @@ export function unitLifecycleReceiptsInUse(
 // with its recorded
 // Reason / Next Action (for the resume path and the paused-first routing), or
 // the in-flight unit (started/resumed, not yet completed), or null when no
-// unit is mid-lifecycle. At most one unit can be non-terminal on the inline
-// path (the engine emits one unit at a time); if a corrupted ledger carries
-// several, the LATEST row wins — deterministic, and `unit start` refuses to
-// open a second active unit anyway.
+// unit is mid-lifecycle. Only a Unit this checkout holds counts (unitsHeldHere).
+// At most one of those can be non-terminal on the inline path (the engine emits
+// one unit at a time); if a corrupted ledger carries several, the LATEST row
+// wins (deterministic), and `unit start` refuses to open a second active unit
+// anyway.
 export function activeUnitCheckpoint(
   projectDir: string,
   slug: string,
@@ -38777,7 +36572,7 @@ export function unitOpenCheckpoints(
   const audit = readAllAuditShards(projectDir);
   if (!audit) return [];
   const unitMajor = unitMajorLifecycleMode(projectDir);
-  return openUnitCheckpoints(currentUnitLifecycleRows(projectDir, audit, slug, unitMajor));
+  return openUnitCheckpoints(currentUnitLifecycleRows(projectDir, audit, slug, unitMajor), unitsHeldHere(projectDir));
 }
 
 // Latest STAGE_STARTED slug in an audit buffer, or null if none. findAllEvents
@@ -40281,7 +38076,7 @@ function objectListField(
     if (line === "" || /^[ \t]+$/.test(line)) continue;
     if (/^[ \t]+-[ \t]/.test(line)) {
       throw new Error(
-        `Blank line not allowed inside ${key}[] block — list items must be consecutive`
+        `Blank line not allowed inside ${key}[] block - list items must be consecutive`
       );
     }
     break;
@@ -40404,7 +38199,9 @@ export function scopeGridOnProject(def: { stages: Record<string, string> }, stat
 
 // The stage a scope change to `scope` starts on FINISHED work: the first stage
 // after the cursor that the scope runs and that is not already done or skipped
-// (with the greenfield reverse-engineering adjustment the plan grid applies).
+// (with the greenfield reverse-engineering adjustment the plan grid applies),
+// passing each stage in `skipped`: skips the person typed beside the switch,
+// which it takes off the plan before it starts a stage (skipsBeforeReopen).
 // Null for running work, and when nothing the scope runs follows the cursor.
 // Shared by the scope change, which starts that stage as it rewrites the plan,
 // and by `next`, which then carries on into it instead of ending the turn, so
@@ -40412,6 +38209,7 @@ export function scopeGridOnProject(def: { stages: Record<string, string> }, stat
 export function stageReopenedByScopeChange(
   stateContent: string,
   scope: string,
+  skipped: readonly string[] = [],
 ): StageEntry | null {
   if ((getField(stateContent, "Status") ?? "").trim() !== "Completed") return null;
   const cursor = (getField(stateContent, "Current Stage") ?? "").trim();
@@ -40428,7 +38226,7 @@ export function stageReopenedByScopeChange(
     const box = boxes.find((c) => c.slug === stage.slug)?.state;
     if (box === "completed" || box === "skipped") continue;
     if (stage.slug === "reverse-engineering" && greenfield) continue;
-    if (mapping.stages[stage.slug] === "EXECUTE") return stage;
+    if (mapping.stages[stage.slug] === "EXECUTE" && !skipped.includes(stage.slug)) return stage;
   }
   return null;
 }
@@ -40471,10 +38269,13 @@ export function plannedStages(
     goesBackTo ??= new Set(work ? stagesOwedBehindCursor(stateContent, work.projectDir, work.intent, work.space) : []);
     return goesBackTo.has(slug);
   };
-  const passedOver = (slug: string) =>
-    (stateOf(slug) ?? "pending") === "pending" && cursorPastStage(stateContent, slug) && !owed(slug);
+  // Under team ownership the Unit stages behind the cursor stay open for the
+  // Units still to land in them (a move past them keeps them, handleExecute).
+  const passedOver = (stage: StageEntry) =>
+    (stateOf(stage.slug) ?? "pending") === "pending" && cursorPastStage(stateContent, stage.slug) &&
+    !owed(stage.slug) && !(isPerUnitStage(stage) && isTeamUnitOwnership(stateContent));
   return loadStageGraph().filter((stage) =>
-    stage.phase !== "initialization" && runs(stage.slug) && !passedOver(stage.slug));
+    stage.phase !== "initialization" && runs(stage.slug) && !passedOver(stage));
 }
 
 // --- Plans composed for one piece of work ---
@@ -40709,10 +38510,11 @@ export function addReachesPassedOver(
   return stagesPassedOverJustNow(added, workRecordDir).includes(slug);
 }
 
-// The stages the person put back on the plan after the work had just passed
-// over them: the ones stagesPassedOverJustNow names whose add the record holds
-// since the current stage started (a RECOMPOSED row naming it, as recompose
-// writes for an add addReachesPassedOver lets through). `next` goes back to
+// The stages put back on the plan after the work had just passed over them:
+// the ones stagesPassedOverJustNow names whose add the record holds since the
+// current stage started (a RECOMPOSED row naming it, as recompose writes for an
+// add addReachesPassedOver lets through, or the STATE_UPGRADED row of an older
+// record brought up, naming a stage the newer graph added). `next` goes back to
 // the first, as the work would have gone on to it had the add come before the
 // approval, and the jump it names is the engine's own move. A stage on the plan
 // behind the cursor with no such add (a plan whose rows say so from the start,
@@ -40728,7 +38530,7 @@ export function addedStagesPassedOver(content: string, projectDir: string, inten
     .sort()
     .at(-1) ?? "";
   const addedSince = new Set(rows
-    .filter((row) => row.event === "RECOMPOSED" && row.timestamp >= entered)
+    .filter((row) => (row.event === "RECOMPOSED" || row.event === "STATE_UPGRADED") && row.timestamp >= entered)
     .flatMap((row) => (auditBlockField(row.block, "Stages added") ?? "").split(",").map((slug) => slug.trim())));
   return passed.filter((slug) => addedSince.has(slug));
 }
@@ -41100,12 +38902,6 @@ export function scopeCostSummary(scope: string): ScopeCostSummary | null {
     collaborators: def.ceremony?.collaborators ?? "on",
   });
   return summary;
-}
-
-// --- Timestamp ---
-
-export function isoTimestamp(): string {
-  return new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
 }
 
 // --- Hook status files ---
@@ -41493,12 +39289,13 @@ export function printUsageAndExit(usage: string): never {
 // Refusals may need to name something outside the current project dir, such as
 // another checkout's path, on stderr while keeping the committed audit portable.
 // `agentGuidance`: the message is the agent's next step, so callers hand it to
-// the agent instead of the person: the person's question is still open, or the
-// person already decided and the agent records what they chose.
+// the agent instead of the person: the person's question is still open, the
+// person already decided and the agent records what they chose, or a team's
+// blocking check stopped the gate and the agent asks them Fix or Override.
 export type EmitErrorMessage = string | {
   message: string;
   auditMessage: string;
-  agentGuidance?: "question-open" | "person-decided";
+  agentGuidance?: "question-open" | "person-decided" | "blocking-check";
 };
 
 export function emitError(
@@ -41654,6 +39451,8 @@ export interface AcceptedChange {
   current: string;
   /** The one plain-language line the human hears. */
   notice: string;
+  /** The messages the person asked for the change in, when they did (swarm allow-change). */
+  messageIds?: readonly string[];
 }
 
 export interface GuardPolicyMemoryDeclaration {
@@ -41996,12 +39795,16 @@ export function nextTokenKind(token: string, following: string | undefined): "fl
  * over as one quoted argument.
  */
 export type NextLineReading =
-  | { kind: "exact" }
+  // `unit`: the Unit tool's argv, when the line is the person's Unit command (unitCommandArgv).
+  // `command`: a plugin command leading the line, with its own arguments.
+  | { kind: "exact"; unit?: string[]; command?: { name: string; args: string[] } }
   | { kind: "words" }
   | { kind: "untaken-flag"; token: string; value?: string }
   | { kind: "value"; flag: string; value: string; valid: readonly string[] }
   | { kind: "plan-word"; scope: string }
-  | { kind: "noun"; noun: string };
+  | { kind: "noun"; noun: string }
+  // A plugin command's name opening a sentence of theirs.
+  | { kind: "command"; name: string; plugin: string };
 
 /**
  * One argument that is nothing but flags and their values is that command,
@@ -42139,6 +39942,8 @@ export function readNextLine(argv: readonly string[]): NextLineReading {
   if (knowledge.kind !== "not-knowledge") {
     return knowledge.kind === "error" && theirSentenceAfter ? { kind: "noun", noun: head[0] } : { kind: "exact" };
   }
+  const unit = unitCommandArgv(args, splitKiroCommandArgs, parseArgs);
+  if (unit !== null) return { kind: "exact", unit };
   const workspace = parseWorkspaceCommand(head);
   if (workspace.kind !== "not-workspace") {
     const theirs = workspace.kind === "switch" && !workspace.explicit && workspace.words !== undefined;
@@ -42150,6 +39955,13 @@ export function readNextLine(argv: readonly string[]): NextLineReading {
   if (head.includes("--config")) return { kind: "exact" };
   if (head[0] === "--statusline") return { kind: "exact" };
   if (head.length === 1 && (head[0] === "help" || head[0] === "-h")) return { kind: "exact" };
+  // A plugin command owns its argv, so nothing on it is read as next's own.
+  const command = pluginCommandOnLine(args, splitKiroCommandArgs, () => projectPluginCommands({ pluginsEnabled, validScopes }));
+  if (command !== null) {
+    return command.sentence
+      ? { kind: "command", name: command.name, plugin: command.plugin }
+      : { kind: "exact", command: { name: command.name, args: command.args } };
+  }
 
   const words: string[] = [];
   let took = false;
@@ -42483,9 +40295,10 @@ export function boxPicksAddANote(projectDir: string, messageId?: string): boolea
   try {
     const blocks = readAppendOnlyFileNoFollowOrThrow(auditFilePath(projectDir), "audit shard").toString("utf-8")
       .replace(/\r\n/g, "\n").split("\n---\n");
+    const withdrawn = withdrawnTurnPositions(blocks);
     const isTurn = (block: string) => auditBlockField(block, "Event") === "HUMAN_TURN";
     let turn = blocks.length - 1;
-    while (turn >= 0 && !(isTurn(blocks[turn]) &&
+    while (turn >= 0 && !(isTurn(blocks[turn]) && !withdrawn.has(turn) &&
       (messageId === undefined || auditBlockField(blocks[turn], "Message Id") === messageId))) turn--;
     if (turn < 0) return null;
     const replies: string[] = [];
@@ -42697,7 +40510,7 @@ export function memoryGuardPolicyDeclarations(
       if (!body.trim()) continue;
       const raw = structuredField(body, "Mode");
       if (raw === null) continue;
-      const value = parseGuardPolicy(raw);
+      const value = parseGuardPolicy(withoutLearnedDate(raw));
       const section = heading.replace(/^## /, "");
       if (value === null) {
         throw new Error(
@@ -43165,11 +40978,10 @@ export function formatFence(resolution: FenceResolution): string {
 //   - the marker's own kind and delivery: what the engine last put in force.
 //   - a dispatch stamp on the in-flight subagent ledger, so an agent inherits
 //     the authority that was in force when it was dispatched.
-//   - agent_type / subagent_type on the hook payload (a dispatched agent) and
+//   - the delegated agent a hook payload names (delegatedAgentOf) and
 //     AIDLC_UNATTENDED (nobody is watching).
 // ---------------------------------------------------------------------------
 
-export type AuthorityCover = "grant" | "instruction" | "none";
 export type AuthorityActor = "main" | "subagent" | "unattended";
 /** How a grant was proven, for the audit row and the printed line. */
 export type AuthorityGrantSource = "marker-sequence" | "turn-marker" | "dispatch-stamp";
@@ -43241,22 +41053,6 @@ function stampedDispatchAuthority(
   }
 }
 
-function authorityActorFrom(hookInput: ClaudeCodeHookInput | null | undefined): {
-  actor: AuthorityActor;
-  unattended: boolean;
-} {
-  const unattended = process.env.AIDLC_UNATTENDED === "1";
-  const agentType = (() => {
-    if (!hookInput) return "";
-    const direct = typeof hookInput.agent_type === "string" ? hookInput.agent_type.trim() : "";
-    if (direct.length > 0) return direct;
-    const nested = hookInput.tool_input?.subagent_type;
-    return typeof nested === "string" ? nested.trim() : "";
-  })();
-  if (agentType.length > 0) return { actor: "subagent", unattended };
-  return { actor: unattended ? "unattended" : "main", unattended };
-}
-
 /**
  * The authority covering the action a guard is about to judge. Pure reads: the
  * turn markers, the active-directive marker, and the in-flight dispatch ledger.
@@ -43271,7 +41067,8 @@ export function authorityFor(
     sessionId?: unknown;
   } = {},
 ): Authority {
-  const { actor, unattended } = authorityActorFrom(options.hookInput);
+  const unattended = process.env.AIDLC_UNATTENDED === "1";
+  const actor: AuthorityActor = delegatedAgentOf(options.hookInput) ? "subagent" : unattended ? "unattended" : "main";
   const state = options.stateContent ?? authorityStateText(projectDir);
   let marker: ActiveDirectiveMarker | null = null;
   try {
@@ -43673,11 +41470,18 @@ export function sayOnceNoteLine(
  * top-level additionalContext without a word; every other harness's adapter,
  * including an older one still installed in a project, reads the top-level key
  * and rewraps it for its own host. So the line carries both, with the same text.
+ * `firstStepNote` goes only to an adapter that asked the human-turn hook for
+ * it, to say its own way (opencode, Kiro CLI's V2 engine).
  */
-export function hookContextLine(event: "SessionStart" | "UserPromptSubmit" | "PostToolUse", context: string): string {
+export function hookContextLine(
+  event: "SessionStart" | "UserPromptSubmit" | "PostToolUse",
+  context: string,
+  firstStepNote?: string,
+): string {
   return `${JSON.stringify({
     additionalContext: context,
     hookSpecificOutput: { hookEventName: event, additionalContext: context },
+    ...(firstStepNote === undefined ? {} : { firstStepNote }),
   })}\n`;
 }
 
@@ -43737,8 +41541,8 @@ export type GuardRefusalEvent =
   | "STATE_TRANSITION_BLOCKED"
   | "STAGE_RULES_BLOCKED"
   | "REVIEW_FREEZE_BLOCKED"
-  | "REVIEWER_SCOPE_BLOCKED";
-
+  | "REVIEWER_SCOPE_BLOCKED"
+  | "SYSTEM_INSTALL_BLOCKED";
 
 export function recordGuardBlockedRow(
   projectDir: string,
@@ -43884,6 +41688,7 @@ export function acceptedChangeFields(change: AcceptedChange): Record<string, str
     Recorded: change.recorded,
     Current: change.current,
     Details: change.notice,
+    ...(change.messageIds && change.messageIds.length > 0 ? { "Message Id": change.messageIds.join(", ") } : {}),
   };
 }
 
@@ -43953,7 +41758,13 @@ export function recordAcceptedChanges(
         (row) => row.event === "CHANGE_ACCEPTED" && acceptedChangeMatchesRow(change, row.block),
       )) continue;
       try {
-        changeControlLedgerAppend(projectDir, "CHANGE_ACCEPTED", acceptedChangeFields(change), selection);
+        // A change the person's message stands behind is theirs; one the Guard
+        // Policy took with nobody asking is not, and names nobody.
+        const theirs = change.messageIds !== undefined && change.messageIds.length > 0;
+        changeControlLedgerAppend(projectDir, "CHANGE_ACCEPTED", {
+          ...acceptedChangeFields(change),
+          ...(theirs ? personGitNameField(projectDir) : {}),
+        }, selection);
       } catch (error) {
         throw new Error(
           `Cannot continue: the accepted change for "${change.stage}"` +
@@ -44079,306 +41890,6 @@ export function parseFieldArgs(args: string[]): Record<string, string> {
     }
   }
   return fields;
-}
-
-// --- Bolt/unit dependency DAG (units-generation 2.7 → runtime compile) ---
-
-// The unit-kind enum: what a Unit of Work IS, so the engine can prune the
-// per-unit construction design matrix to the artifacts that actually apply.
-// A spec unit owes no scalability doc, a packaging unit no business-logic
-// model. Authored once at the 2.7 gate on the units-generation edge block and
-// confirmed by the human; consumed by the stage-schema validator (which shares
-// this constant) and the engine's produces filter. Missing kind = full matrix
-// (conservative default, zero behaviour change for untagged units).
-export const UNIT_KINDS = ["service", "spec", "ui", "packaging", "library"] as const;
-export type UnitKind = (typeof UNIT_KINDS)[number];
-
-export interface UnitDependencyEdge {
-  name: string;
-  depends_on: string[];
-  // Optional per-unit kind (UNIT_KINDS). Absent = full design-artifact matrix.
-  kind?: UnitKind;
-}
-
-// Discriminated result so the two consumers — the required-sections sensor
-// (gate-time validation) and aidlc-runtime compile (DAG emission) — branch on
-// one single source of truth:
-//   - absent    : no fenced ```yaml units: block in the body
-//   - malformed : block present but structurally invalid (duplicate name,
-//                 dangling dependency, self-dependency, non-list value, no units)
-//   - cyclic    : structurally valid edges that contain a dependency cycle
-//   - ok        : units + batches (topological levels; each level sorted
-//                 lexicographically; units with satisfied, non-mutual deps
-//                 share a batch)
-export type BoltDagParse =
-  | { ok: true; units: UnitDependencyEdge[]; batches: string[][] }
-  | { ok: false; reason: "absent" | "malformed" | "cyclic"; detail: string };
-
-// Locate the first fenced ```yaml block whose body declares a top-level
-// `units:` key. Returns the inner block text, or null when no such fence
-// exists. Other fenced blocks (mermaid diagrams, prose examples) are skipped.
-function extractYamlUnitsBlock(body: string): string | null {
-  const lines = body.split(/\r?\n/);
-  for (let i = 0; i < lines.length; i++) {
-    if (/^```ya?ml\s*$/.test(lines[i].trim())) {
-      const inner: string[] = [];
-      let j = i + 1;
-      for (; j < lines.length; j++) {
-        if (/^```\s*$/.test(lines[j].trim())) break;
-        inner.push(lines[j]);
-      }
-      const block = inner.join("\n");
-      if (/^\s*units\s*:/m.test(block)) {
-        return block;
-      }
-      i = j; // not the units block — resume scanning past its close fence
-    }
-  }
-  return null;
-}
-
-function unquoteScalar(s: string): string {
-  const t = s.trim();
-  if (
-    (t.startsWith('"') && t.endsWith('"')) ||
-    (t.startsWith("'") && t.endsWith("'"))
-  ) {
-    return t.slice(1, -1);
-  }
-  return t;
-}
-
-function parseInlineDepsList(raw: string): string[] {
-  const t = raw.trim();
-  if (t === "" || t === "[]") return [];
-  if (t.startsWith("[")) {
-    let close = -1;
-    let quote: "\"" | "'" | null = null;
-    for (let i = 1; i < t.length; i++) {
-      const char = t[i];
-      if (quote !== null) {
-        if (quote === "\"" && char === "\\") {
-          i++;
-        } else if (char === quote) {
-          quote = null;
-        }
-      } else if (char === "\"" || char === "'") {
-        quote = char;
-      } else if (char === "]") {
-        close = i;
-        break;
-      }
-    }
-    if (quote !== null || close === -1) return [];
-    if (!/^[ \t]*(?:#[^\r\n]*)?$/.test(t.slice(close + 1))) return [];
-
-    const body = t.slice(1, close);
-    const items: string[] = [];
-    let start = 0;
-    quote = null;
-    for (let i = 0; i < body.length; i++) {
-      const char = body[i];
-      if (quote !== null) {
-        if (quote === "\"" && char === "\\") {
-          i++;
-        } else if (char === quote) {
-          quote = null;
-        }
-      } else if (char === "\"" || char === "'") {
-        quote = char;
-      } else if (char === ",") {
-        items.push(body.slice(start, i));
-        start = i + 1;
-      }
-    }
-    if (quote !== null) return [];
-    items.push(body.slice(start));
-    return items.map((item) => unquoteScalar(item)).filter((item) => item !== "");
-  }
-  // Bare scalar (rare) — treat as a one-item list.
-  return [unquoteScalar(t)];
-}
-
-// Hand-rolled zero-dep scanner for the `units:` block list. Mirrors the
-// scalarField / listField primitives above (the framework ships no YAML
-// dependency). Throws on a structurally unparseable block; the caller maps
-// the throw to a `malformed` result.
-function parseUnitsBlock(block: string): UnitDependencyEdge[] {
-  const lines = block.split(/\r?\n/);
-  let i = 0;
-  for (; i < lines.length; i++) {
-    if (/^\s*units\s*:/.test(lines[i])) {
-      const after = lines[i].replace(/^\s*units\s*:/, "").trim();
-      if (after !== "") {
-        throw new Error("units: must be a block list, not an inline value");
-      }
-      break;
-    }
-  }
-  if (i >= lines.length) throw new Error("missing units: key");
-  i++; // step past the `units:` line
-
-  const edges: UnitDependencyEdge[] = [];
-  let current: UnitDependencyEdge | null = null;
-  for (; i < lines.length; i++) {
-    const line = lines[i];
-    if (line.trim() === "") continue;
-
-    const nameMatch = line.match(/^\s*-\s+name\s*:\s*(.+?)\s*$/);
-    if (nameMatch) {
-      if (current) edges.push(current);
-      current = { name: unquoteScalar(nameMatch[1]), depends_on: [] };
-      continue;
-    }
-
-    const depMatch = line.match(/^\s*depends_on\s*:\s*(.*)$/);
-    if (depMatch) {
-      if (!current) throw new Error("depends_on: before any - name: entry");
-      current.depends_on = parseInlineDepsList(depMatch[1]);
-      continue;
-    }
-
-    // Optional per-unit kind. Mirrors the depends_on guard: a kind: line
-    // before any - name: is malformed. The value must be one of UNIT_KINDS;
-    // a typo fails loud here (mapped to reason "malformed" by parseBoltDag)
-    // rather than silently falling back to the full matrix. Last-write-wins
-    // on a duplicate kind: line, matching depends_on:'s posture.
-    const kindMatch = line.match(/^\s*kind\s*:\s*(.+?)\s*$/);
-    if (kindMatch) {
-      if (!current) throw new Error("kind: before any - name: entry");
-      const value = unquoteScalar(kindMatch[1]);
-      if (!(UNIT_KINDS as readonly string[]).includes(value)) {
-        throw new Error(
-          `unit "${current.name}" has invalid kind "${value}" ` +
-            `(expected ${UNIT_KINDS.join("|")})`
-        );
-      }
-      current.kind = value as UnitKind;
-      continue;
-    }
-
-    // Block-form dependency item (a bare `- dep` under `depends_on:`).
-    const itemMatch = line.match(/^\s*-\s+(.+?)\s*$/);
-    if (itemMatch && current) {
-      current.depends_on.push(unquoteScalar(itemMatch[1]));
-      continue;
-    }
-
-    throw new Error(`unrecognised line in units block: ${line.trim()}`);
-  }
-  if (current) edges.push(current);
-
-  for (const e of edges) {
-    const nameError = validateUnitName(e.name);
-    if (nameError) throw new Error(nameError);
-  }
-  return edges;
-}
-
-// Kahn's algorithm by level. Each level is a batch — the units whose
-// dependencies are all already placed (satisfied, non-mutual). Levels are
-// sorted lexicographically before emission so the output is deterministic
-// regardless of input order or Set iteration order. Returns null when a
-// cycle remains (no unit has all dependencies satisfied).
-function computeBatches(edges: UnitDependencyEdge[]): string[][] | null {
-  const deps = new Map<string, string[]>();
-  for (const e of edges) deps.set(e.name, e.depends_on);
-  const remaining = new Set(edges.map((e) => e.name));
-  const batches: string[][] = [];
-  while (remaining.size > 0) {
-    const level: string[] = [];
-    for (const name of remaining) {
-      const satisfied = deps.get(name)!.every((dep) => !remaining.has(dep));
-      if (satisfied) level.push(name);
-    }
-    if (level.length === 0) return null; // cycle
-    level.sort();
-    for (const name of level) remaining.delete(name);
-    batches.push(level);
-  }
-  return batches;
-}
-
-// Parse the required fenced ```yaml edge block out of a
-// unit-of-work-dependency.md body and compute the topological batch DAG.
-//
-// The block shape — authored once at the 2.7 gate (knowledge work by the
-// LLM, behind a human approval gate):
-//
-//   ```yaml
-//   units:
-//     - name: auth
-//       kind: service
-//       depends_on: []
-//     - name: api
-//       depends_on: [auth]
-//   ```
-//
-// The optional `kind:` line (UNIT_KINDS) drives the per-unit construction
-// design-artifact pruning; omitting it keeps a unit on the full matrix.
-//
-// Pure data — no model call, no NLP. A given body always parses to the same
-// result, so a hook-fired re-compile of runtime-graph.json stays
-// byte-identical (no model in the path; the determinism invariant holds).
-export function parseBoltDag(body: string): BoltDagParse {
-  const block = extractYamlUnitsBlock(body);
-  if (block === null) {
-    return {
-      ok: false,
-      reason: "absent",
-      detail: "no fenced ```yaml units: block found",
-    };
-  }
-
-  let edges: UnitDependencyEdge[];
-  try {
-    edges = parseUnitsBlock(block);
-  } catch (e) {
-    return { ok: false, reason: "malformed", detail: errorMessage(e) };
-  }
-
-  if (edges.length === 0) {
-    return { ok: false, reason: "malformed", detail: "units: block has no entries" };
-  }
-
-  const names = new Set<string>();
-  const foldedNames = new Map<string, string>();
-  for (const u of edges) {
-    if (names.has(u.name)) {
-      return { ok: false, reason: "malformed", detail: `duplicate unit name: ${u.name}` };
-    }
-    names.add(u.name);
-    const folded = u.name.toLowerCase();
-    const existing = foldedNames.get(folded);
-    if (existing !== undefined && existing !== u.name) {
-      return {
-        ok: false,
-        reason: "malformed",
-        detail: `case-folding unit name collision: "${existing}" and "${u.name}"`,
-      };
-    }
-    foldedNames.set(folded, u.name);
-  }
-  for (const u of edges) {
-    for (const dep of u.depends_on) {
-      if (dep === u.name) {
-        return { ok: false, reason: "malformed", detail: `unit "${u.name}" depends on itself` };
-      }
-      if (!names.has(dep)) {
-        return {
-          ok: false,
-          reason: "malformed",
-          detail: `unit "${u.name}" depends on unknown unit "${dep}"`,
-        };
-      }
-    }
-  }
-
-  const batches = computeBatches(edges);
-  if (batches === null) {
-    return { ok: false, reason: "cyclic", detail: "dependency cycle detected" };
-  }
-  return { ok: true, units: edges, batches };
 }
 
 // The step for a units block the engine cannot read: the exact defect and the
@@ -44535,10 +42046,11 @@ export function filterProducesByKind(
 // The persisted `aidlc-state.md` carries a `- **State Version**: N` line naming
 // the state-graph schema the workflow was created under. v8 renamed the Inception
 // `application-design` stage to `domain-design` and inserted `contract-design`,
-// so a pre-v8 state file's stage rows no longer match the compiled graph. An
-// incompatible state must be refused up front by BOTH runtime commands
-// (aidlc-orchestrate.ts `next`/`report`) and by `aidlc --doctor`, and both
-// callers must classify the state identically — otherwise the doctor and the
+// so a pre-v8 state file's stage rows no longer match the compiled graph. The
+// engine's state read brings a version a step covers up in place
+// (aidlc-state-upgrade.ts); a state no step covers must be refused up front by
+// BOTH runtime commands (aidlc-orchestrate.ts `next`/`report`) and by
+// `aidlc --doctor`, and both callers must classify the state identically — otherwise the doctor and the
 // runtime disagree on whether a state is "malformed" vs "future" vs "past".
 // classifyStateVersion() is the single source of truth for that classification,
 // so a new schema bump only touches CURRENT_STATE_VERSION in this file.
@@ -44571,9 +42083,8 @@ export function classifyStateVersion(stateContent: string): StateVersionClassifi
     "Incompatible workflow state: the State Version field is missing, empty, " +
     "or unparseable in aidlc-state.md, so this state cannot be matched to the " +
     `current v${CURRENT_STATE_VERSION} stage graph and cannot be advanced safely. ` +
-    "Archive your workspace ('mv aidlc aidlc.archive') and start a fresh " +
-    "workflow (describe what to build), or finish this workflow on the prior " +
-    `shell. Run \`${entrySkillInvocation()} --doctor\` for the full diagnosis.`;
+    "Put its `- **State Version**:` line back as it was (git has it if the file " +
+    `was committed), then try again. Run \`${entrySkillInvocation()} --doctor\` for the full diagnosis.`;
   // Anchor the tail with `[ \t]*$`: the schema token is a bare integer with
   // no trailing content on the line, so `State Version: 8 garbage` fails to
   // match and falls into the unparseable branch.
@@ -44602,9 +42113,7 @@ export function classifyStateVersion(stateContent: string): StateVersionClassifi
       `v${CURRENT_STATE_VERSION} stage graph. v8 renamed the Inception ` +
       "`application-design` stage to `domain-design` and inserted " +
       "`contract-design`, so this state's stage rows no longer match the graph " +
-      "and cannot be advanced safely. Archive your workspace " +
-      `('mv aidlc aidlc.v${v}-archive') and start a fresh workflow (describe what ` +
-      `to build), or finish this workflow on the prior shell. Run \`${entrySkillInvocation()} --doctor\` ` +
-      "for the full diagnosis.",
+      "and cannot be advanced safely. Finish this workflow on the prior shell. " +
+      `Run \`${entrySkillInvocation()} --doctor\` for the full diagnosis.`,
   };
 }

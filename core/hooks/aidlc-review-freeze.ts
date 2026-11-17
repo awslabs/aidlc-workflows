@@ -51,6 +51,7 @@
 // redirections and operands of common mutation commands; read-only shell calls
 // do not produce targets and remain untouched.
 
+import { readFileSync } from "node:fs";
 import {
   hookOutsideGate,
   enterHookWorkflow,
@@ -58,6 +59,7 @@ import {
   type FreshReviewReceipts,
   checkSummaryConfirmationEvidence,
   decideFence,
+  delegatedAgentOf,
   errorMessage,
   evaluateGuardRefusal,
   guardStandAsideSpeaks,
@@ -78,8 +80,8 @@ import {
   parseCheckboxes,
   reviewedArtifactUnit,
   readAllAuditShards,
-  readStateFile,
   recordHookDrop,
+  stateFilePath,
   recoveryGuidance,
   resolveReviewClass,
   resolveProjectFlag,
@@ -92,12 +94,15 @@ import {
 } from "../tools/aidlc-lib.ts";
 import { writeTargets } from "./review-freeze-command.ts";
 export {
+  heredocReading,
   leadingDirectoryChange,
   powerShellPathBoundWriter,
   shellCommandAltersExecutableResolution,
   shellCommandInvocationDetails,
   shellCommandInvocations,
+  shellPatchTargets,
   shellWriteTargets,
+  unseenPatch,
   type ShellInvocationDetails,
   type ShellInvocation,
   writeTargets,
@@ -225,14 +230,17 @@ export async function run(input: string): Promise<number> {
   // A conversation that has not joined the selected workflow is not held to its review freeze.
   const workflow = enterHookWorkflow(projectDir, payloadSession);
   try {
-    if (hookOutsideGate(workflow)) return 0;
+    const standAside = hookOutsideGate(workflow);
+    if (standAside && workflow.participation !== "participant") return 0;
     // The heartbeat says the host ran this hook, so it comes before the off
     // switch: the freeze switched off never looks like a host running no hooks.
+    // A chat on the work that has taken no AI-DLC step there yet beats too.
     try {
       writeHookStatusFile(hooksHealthDir(projectDir), `${HOOK_NAME}.last`, isoTimestamp());
     } catch {
       // Heartbeat failure is non-fatal - never let it affect the decision.
     }
+    if (standAside) return 0;
     if (resolveProjectFlag("AIDLC_DISABLE_REVIEW_FREEZE_HOOK") === "1") return 0;
     return await checkFreeze(input, projectDir);
   } finally {
@@ -270,7 +278,19 @@ async function checkFreeze(input: string, projectDir: string): Promise<number> {
   let blockedReceipts: FreshReviewReceipts | null = null;
   let blockedStage: StageEntry | null = null;
   try {
-    const content = readStateFile(projectDir);
+    // Commands that run before any intent (plugin select, knowledge onboard)
+    // write the space's audit ledger without a state file. With no state the
+    // freeze window cannot be read, so the write is allowed and the normal
+    // absence is not reported as a hook failure; any other error resolving or
+    // reading the state is.
+    const statePath = stateFilePath(projectDir);
+    let content: string;
+    try {
+      content = readFileSync(statePath, "utf-8");
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === "ENOENT") return 0;
+      throw e;
+    }
     stateContent = content;
     // Only NOT-completed reviewer-bearing stages can hold a receipt the gate
     // still depends on. Completed ([x]) and skipped stages are excluded: their
@@ -400,8 +420,7 @@ async function checkFreeze(input: string, projectDir: string): Promise<number> {
     // This refusal IS the fence holding, so the ask carries the switch that
     // lowers it for this piece of work beside the workflow's own remedies.
     fence: "review-freeze",
-    fenceSwitch: (parsed.agent_type?.trim() ?? "").length > 0 ||
-      (typeof parsed.tool_input?.subagent_type === "string" && parsed.tool_input.subagent_type.trim().length > 0) ||
+    fenceSwitch: delegatedAgentOf(parsed) !== "" ||
       memoryStrictHoldsGuardPolicy(projectDir, stateContent) ? "withhold" : "offer",
   });
   // The sentence above already says to quote a suggestion at the gate, so the

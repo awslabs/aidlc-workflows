@@ -533,7 +533,7 @@ async function openCodeUnderCmd(proj: string, session: string, command: string):
     session: { get: async () => ({ data: {} }), prompt: async () => {} },
     config: { get: async () => ({ data: { shell: "cmd.exe" } }) },
   };
-  const adapter = await createAdapter({ client: client as never, directory: proj } as never);
+  const adapter = await createAdapter.server({ client: client as never, directory: proj } as never);
   const before = (adapter as Record<string, (a: unknown, b: unknown) => Promise<void>>)["tool.execute.before"];
   try {
     await before({ tool: "bash", sessionID: session, callID: "cmd-hand-back" }, { args: { command } });

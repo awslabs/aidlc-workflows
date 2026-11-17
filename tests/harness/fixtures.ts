@@ -264,6 +264,28 @@ export function intentsDirOf(proj: string, space = DEFAULT_SPACE): string {
   return join(proj, "aidlc", "spaces", space, "intents");
 }
 
+/**
+ * Takes every repo addition's snapshot (the `Source Baseline Addition` an
+ * INTENT_REPOS_CHANGED row names) off this machine, as on a machine the add did
+ * not run on; the rows still name them. Returns how many files went.
+ */
+export function dropRepoBaselineAdditions(proj: string): number {
+  const named = new Set<string>();
+  for (const file of new Bun.Glob("**/audit/*.md").scanSync({ cwd: proj, dot: true })) {
+    for (const hit of readFileSync(join(proj, file), "utf-8").matchAll(/^\*\*Source Baseline Addition\*\*: sha256:([0-9a-f]{12})/gm)) {
+      named.add(hit[1]);
+    }
+  }
+  let dropped = 0;
+  for (const hash of named) {
+    for (const file of new Bun.Glob(`**/baseline-${hash}.tsv`).scanSync({ cwd: proj, dot: true })) {
+      rmSync(join(proj, file));
+      dropped++;
+    }
+  }
+  return dropped;
+}
+
 /** Which piece of work and stage a learnings selections file is bound to. */
 export interface LearningsSelectionsBinding {
   space: string;
@@ -338,7 +360,7 @@ export function seededAuditDir(proj: string, space = DEFAULT_SPACE): string {
 /**
  * The DETERMINISTIC audit shard path a spawned tool resolves in a fixture
  * project: `<record>/audit/<host-slug>-<FIXTURE_CLONE_ID>.md`. Mirrors
- * auditShardName() in aidlc-lib.ts (hostname slugified + the pinned clone token).
+ * auditShardName() in aidlc-record-core.ts (hostname slugified + the pinned clone token).
  * A test that pre-seeds an audit header or reads a single shard should target
  * THIS path so it agrees with the tool's own resolution.
  */
@@ -413,6 +435,10 @@ export function seedWorkspaceShell(proj: string, space = DEFAULT_SPACE): void {
   // Pin the per-clone audit-shard token so a spawned tool's shard is
   // deterministic (see FIXTURE_CLONE_ID / seededAuditShard).
   writeFileSync(join(proj, "aidlc", ".aidlc-clone-id"), `${FIXTURE_CLONE_ID}\n`, "utf-8");
+  // A fixture has no git, so its first gate would say the no-git line: this
+  // project has already heard it (t-no-git-said-once removes the record).
+  mkdirSync(join(proj, "aidlc", ".aidlc-sessions"), { recursive: true });
+  writeFileSync(join(proj, "aidlc", ".aidlc-sessions", "no-git-said"), "2026-01-01T00:00:00Z\n", "utf-8");
   // The cursors (per-user, gitignored on a real project) + the canonical registry.
   writeFileSync(join(proj, "aidlc", "active-space"), `${space}\n`, "utf-8");
   writeFileSync(join(intentsDir, "active-intent"), `${DEFAULT_RECORD_DIR}\n`, "utf-8");
@@ -546,6 +572,21 @@ export const WORKER_BRIEF_SECTIONS_FIXTURE =
  */
 export function cleanupTestProject(proj: string | undefined): void {
   if (proj && existsSync(proj)) removeTreeWithRetry(proj);
+}
+
+/** What a refusal says for a project in a synced folder (syncFolderClause), whatever the service. */
+export const SYNC_FOLDER_WORDS = "folder; sync can change files AI-DLC checks. Move it out of the synced folder or pause sync for it.";
+
+/**
+ * The environment that puts `project` in a synced folder for a child process:
+ * on Windows its OneDrive folder; elsewhere a Dropbox root named in the
+ * .dropbox/info.json of `home`, a scratch folder the caller cleans up.
+ */
+export function syncedFolderEnv(project: string, home: string): Record<string, string> {
+  if (process.platform === "win32") return { OneDrive: project };
+  mkdirSync(join(home, ".dropbox"), { recursive: true });
+  writeFileSync(join(home, ".dropbox", "info.json"), JSON.stringify({ personal: { path: project } }));
+  return { HOME: home };
 }
 
 /**

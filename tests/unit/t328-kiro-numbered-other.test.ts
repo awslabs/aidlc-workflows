@@ -12,6 +12,7 @@ import {
   numberedListMarkersAreVisible,
 } from "../harness/kiro-ide-driver.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+import { readConductorSurface } from "../harness/conductor-skill.ts";
 
 const ANNEXES = [
   "harness/kiro/skills/aidlc/question-rendering.md",
@@ -84,7 +85,7 @@ describe("t328 Kiro numbered Other rendering contract", () => {
     for (const rel of ANNEXES) {
       const mode = section(readAnnex(rel), "Canonical interaction-mode rendering");
       expect(mode, rel).toContain(
-        "4. **Other** — describe what you want instead",
+        "4. **Other** - describe what you want instead",
       );
       expect(mode.match(/^4\. \*\*Other\*\*/gm) ?? [], rel).toHaveLength(1);
       expect(mode, rel).toContain(
@@ -130,7 +131,7 @@ describe("t328 Kiro numbered Other rendering contract", () => {
       /An \*\*Other\*\* selection with no words of their own follows the Other-escape/,
     );
     for (const rel of KIRO_SKILLS) {
-      const body = readAnnex(rel);
+      const body = readConductorSurface(rel);
       expect(body, rel).toContain(
         "**Kiro numbered-question preflight (non-negotiable):**",
       );

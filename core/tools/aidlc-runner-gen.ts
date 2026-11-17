@@ -75,7 +75,7 @@ import { type GraphStage, loadGraph } from "./aidlc-graph.ts";
 import {
   aidlcDispatcherInvocation,
   aidlcToolInvocation,
-  entrySkillInvocation,
+  treeEntrySkillInvocation,
   runtimeHarnessDir as harnessDir,
   refuseLinkOnTheWay,
   resolveHarnessPath,
@@ -141,6 +141,7 @@ function nativeRunnerFrontmatter(): string {
 // runner understands it never advances the main workflow.
 export function renderStageRunner(node: GraphStage): string {
   const dir = runnerDirName(node);
+  const entrySkill = treeEntrySkillInvocation();
   const descriptionLead = node.plugin
     ? `Run the ${node.plugin} plugin \`${node.slug}\` stage (${node.phase} phase) in isolation, without`
     : `Run the AI-DLC \`${node.slug}\` stage (${node.phase} phase) in isolation, without`;
@@ -152,7 +153,7 @@ name: ${dir}
 generated-by: aidlc-runner-gen
 description: >
   ${descriptionLead}
-  advancing the main workflow. Packages \`/aidlc --stage ${node.slug} --single\`:
+  advancing the main workflow. Packages \`${entrySkill} --stage ${node.slug} --single\`:
   the engine emits one run-stage directive for ${node.slug} and its gate, the
   conductor runs it, then the single-stage run commits a synthetic-id pair and
   stops. The main workflow's Current Stage is never touched.
@@ -161,10 +162,10 @@ user-invocable: true
 ${nativeRunnerFrontmatter()}\
 ---
 
-# AI-DLC Stage Runner — ${node.slug}
+# AI-DLC Stage Runner - ${node.slug}
 
 ${bodyLead}
-\`/aidlc --stage ${node.slug} --single\`; the same stage is always reachable via
+\`${entrySkill} --stage ${node.slug} --single\`; the same stage is always reachable via
 that flag without this skill.
 
 ## Steps
@@ -206,7 +207,7 @@ that flag without this skill.
    \`\`\`
 
    This records a STAGE_STARTED / STAGE_COMPLETED pair under a synthetic workflow
-   id and stops. It NEVER writes the main workflow's \`Current Stage\` — a
+   id and stops. It NEVER writes the main workflow's \`Current Stage\` - a
    single-stage run is isolated by design (the tool refuses to advance the main
    workflow).
 `;
@@ -226,12 +227,12 @@ that flag without this skill.
 // ships in dist/ and the engine auto-creates the first intent - this runner
 // just makes that explicit.
 export function renderInitRunner(): string {
-  const entrySkill = entrySkillInvocation();
+  const entrySkill = treeEntrySkillInvocation();
   return `---
 name: ${INIT_RUNNER_DIR}
 generated-by: aidlc-runner-gen
 description: >
-  Start an AI-DLC workflow — run the whole Initialization phase (mint the
+  Start an AI-DLC workflow - run the whole Initialization phase (mint the
   intent, detect the workspace, build state) in one step, without typing a
   stage. The engine normally auto-creates the first intent; this is opt-in
   packaging over that move. Pass \`--scope <name>\` to seed the initial scope. A freeform description without a scope first gets the same plan offer as \`${entrySkill}\`, then continues as \`${entrySkill}\` does.
@@ -245,7 +246,7 @@ ${nativeRunnerFrontmatter()}\
 Start a fresh AI-DLC workflow. The workspace shell ships in \`dist/\` (no setup
 command), and the engine auto-creates the first intent when you describe what to
 build - this skill is opt-in packaging over that creation move. Initialization is a
-PHASE, not a single stage — it mints the intent, detects the workspace
+PHASE, not a single stage - it mints the intent, detects the workspace
 (greenfield/brownfield), and builds \`aidlc-state.md\` together, in one
 deterministic call. There is no per-init-stage runner because an init stage has
 no standalone meaning.
@@ -258,7 +259,7 @@ no standalone meaning.
 
 2. **The user named a scope** with \`--scope <name>\`: create the intent (run
    the initialization phase). Forward the recognized flags as-is, and pass any
-   freeform description text via \`--arguments "<text>"\` (\`intent-create\` reads
+   freeform description text via \`--arguments '<text>'\` (\`intent-create\` reads
    the description from the \`--arguments\` flag, NOT a positional: forwarding
    it bare would silently drop it). ALSO derive a short **\`--label\`**: a 2-3
    word kebab-case essence of what's being built (\`"I would like to build a
@@ -267,7 +268,7 @@ no standalone meaning.
    the full \`--arguments\` text is preserved separately in the audit + state:
 
    \`\`\`bash
-   ${aidlcDispatcherInvocation("intent create")} --scope <scope> --arguments "<description>" --label "<2-3 word essence>"
+   ${aidlcDispatcherInvocation("intent create")} --scope <scope> --arguments '<description>' --label '<2-3 word essence>'
    \`\`\`
 
    Print the tool's output and stop. This does not advance a stage; run
@@ -313,6 +314,7 @@ const COMPOSE_RUNNER_DIR = "aidlc-compose";
 // which compares two fresh builds for determinism; it does not inspect an
 // existing stale or hand-edited copy.
 export function renderComposeRunner(): string {
+  const entrySkill = treeEntrySkillInvocation();
   return `---
 name: ${COMPOSE_RUNNER_DIR}
 generated-by: aidlc-runner-gen
@@ -320,7 +322,7 @@ description: >
   Compose a tailored AI-DLC workflow plan - the adaptive composer reads your
   task (or a scan report), proposes the EXECUTE/SKIP stage grid that fits,
   and after your approval authors it as a scope and runs it. A typeable
-  shortcut for \`/aidlc compose\`; the same one door, forced to the full
+  shortcut for \`${entrySkill} compose\`; the same one door, forced to the full
   composer even when a stock scope would match.
 argument-hint: "[description | --report <path> | --new-scope]"
 user-invocable: true
@@ -330,9 +332,9 @@ ${nativeRunnerFrontmatter()}\
 # AI-DLC - compose a workflow plan
 
 Force the adaptive composer on a task. This is packaging over
-\`/aidlc compose ...\` - it does not add a second entry point; the engine
+\`${entrySkill} compose ...\` - it does not add a second entry point; the engine
 recognizes the compose request and names the composer dispatch, and the
-conductor runs the same forwarding loop as \`/aidlc\`.
+conductor runs the same forwarding loop as \`${entrySkill}\`.
 
 ## Steps
 
@@ -346,7 +348,7 @@ conductor runs the same forwarding loop as \`/aidlc\`.
 2. Act on the directive exactly as the \`aidlc\` skill's forwarding loop
    describes (the composer-dispatch print names the composer agent; render
    its proposal and hold the approve/edit/reject gate). From here the flow IS
-   the \`/aidlc\` flow - continue its loop until the directive says stop.
+   the \`${entrySkill}\` flow - continue its loop until the directive says stop.
 `;
 }
 
@@ -368,6 +370,7 @@ function handleWrite(): string[] {
   // Prune stale stage-runner dirs: old per-init runners and runners for stages
   // now absent from the filtered graph because their plugin is disabled.
   const legacyBareSlugs = pluginOwnedStageSlugsForLegacy();
+  const knownStages = new Set(loadStageGraphAll().map((s) => s.slug));
   for (const entry of readdirSync(skillsDir, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
     const dir = join(skillsDir, entry.name);
@@ -376,6 +379,7 @@ function handleWrite(): string[] {
       entry.name,
       stageRunnerSlugFromBody,
       legacyBareSlugs,
+      knownStages,
     );
     if (slug && !compiledSet.has(slug)) rmSync(dir, { recursive: true, force: true });
   }
@@ -395,20 +399,41 @@ function isLegacyGeneratedRunnerDirName(
   return dirName === `aidlc-${slug}` || (legacyBareSlugs.has(slug) && dirName === slug);
 }
 
+// The slug of a skill dir whose SKILL.md drives one runner's command
+// (parseSlug), with whether AI-DLC generated it: the generated-by marker, or a
+// markerless runner's generated name. AI-DLC's main skill names
+// `--stage reverse-engineering --single` in its prose and is not generated;
+// neither is a project's own skill. Prune and the drift check both read runners
+// through this.
+function runnerSkill(
+  skillMdPath: string,
+  dirName: string,
+  parseSlug: RunnerSlugParser,
+  legacyBareSlugs: ReadonlySet<string>,
+): { slug: string; generated: boolean } | null {
+  if (!existsSync(skillMdPath)) return null;
+  const body = readFileSync(skillMdPath, "utf-8");
+  const slug = parseSlug(body);
+  if (!slug) return null;
+  return { slug, generated: hasRunnerGenMarker(body) || isLegacyGeneratedRunnerDirName(dirName, slug, legacyBareSlugs) };
+}
+
+// A skill AI-DLC did not write that drives a stage or scope this install does
+// not have at all (`known`: every one installed, enabled or not), such as a
+// team's playbook for a retired stage, is named once so the person knows it was
+// left in place. A skill naming one the install has, as AI-DLC's main skill
+// names Reverse Engineering's single run, is not, whatever the plugin selection.
 function generatedRunnerSlugForPrune(
   skillMdPath: string,
   dirName: string,
   parseSlug: RunnerSlugParser,
   legacyBareSlugs: ReadonlySet<string>,
+  known: ReadonlySet<string>,
 ): string | null {
-  if (!existsSync(skillMdPath)) return null;
-  const body = readFileSync(skillMdPath, "utf-8");
-  const slug = parseSlug(body);
-  if (!slug) return null;
-  if (hasRunnerGenMarker(body) || isLegacyGeneratedRunnerDirName(dirName, slug, legacyBareSlugs)) {
-    return slug;
-  }
-  console.error(`unmanaged skill, not pruned: ${dirName}`);
+  const runner = runnerSkill(skillMdPath, dirName, parseSlug, legacyBareSlugs);
+  if (runner === null) return null;
+  if (runner.generated) return runner.slug;
+  if (!known.has(runner.slug)) console.error(`unmanaged skill, not pruned: ${dirName}`);
   return null;
 }
 
@@ -421,14 +446,11 @@ function pluginOwnedScopeSlugsForLegacy(): ReadonlySet<string> {
   return new Set(Object.entries(all).filter(([, front]) => front.plugin).map(([scope]) => scope));
 }
 
-// The on-disk runner SIGNATURE: a stage-runner's SKILL.md drives
-// `aidlc-orchestrate next --stage <slug> --single`. Identifying runners by this
-// body marker — NOT by compiled-set membership — is what lets the drift guard see
-// ORPHANS: a runner skill dir that drives `--single` but whose slug is
-// no longer a compiled stage. Non-runner skills (aidlc, aidlc-replay,
-// aidlc-session-cost, aidlc-outcomes-pack, and the scope-runners, which drive
-// `--scope` not `--stage`) carry no `--stage … --single` marker, so they are
-// never mistaken for stage-runners and never flagged.
+// The command a stage-runner's SKILL.md drives:
+// `aidlc-orchestrate next --stage <slug> --single`. Reading the slug from the
+// body, not from compiled-set membership, is what lets the drift guard see
+// ORPHANS: a generated runner whose slug is no longer a compiled stage. The
+// scope-runners drive `--scope`, not `--stage`.
 const SINGLE_RUNNER_MARKER = "--stage";
 function stageRunnerSlugFromBody(body: string): string | null {
   if (!body.includes(SINGLE_RUNNER_MARKER) || !body.includes("--single")) return null;
@@ -436,20 +458,8 @@ function stageRunnerSlugFromBody(body: string): string | null {
   return m?.[1] ?? null;
 }
 
-function isRunnerSkill(skillMdPath: string): boolean {
-  if (!existsSync(skillMdPath)) return false;
-  const body = readFileSync(skillMdPath, "utf-8");
-  return stageRunnerSlugFromBody(body) !== null;
-}
-
-function runnerSlugFromSkill(skillMdPath: string): string | null {
-  if (!isRunnerSkill(skillMdPath)) return null;
-  const body = readFileSync(skillMdPath, "utf-8");
-  return stageRunnerSlugFromBody(body);
-}
-
-// The on-disk stage-runner set: every skill dir whose SKILL.md is a stage-runner
-// (carries the `--single` signature). Returns the slugs — compiled or not — so
+// The on-disk stage-runner set: every skill dir that is a stage-runner AI-DLC
+// generated (runnerSkill). Returns the slugs, compiled or not, so
 // the caller can compute BOTH missing (compiled, no runner) AND orphan (runner,
 // not compiled) divergences. Slugs are parsed from the command body because
 // plugin-owned runner dirs intentionally do not have an `aidlc-` prefix.
@@ -461,11 +471,12 @@ function onDiskRunnerEntries(): Array<{ slug: string; dir: string }> {
   const skillsDir = defaultSkillsDir();
   if (!existsSync(skillsDir)) return [];
   const found: Array<{ slug: string; dir: string }> = [];
+  const legacyBareSlugs = pluginOwnedStageSlugsForLegacy();
   for (const entry of readdirSync(skillsDir, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
     const dir = join(skillsDir, entry.name);
-    const slug = runnerSlugFromSkill(join(dir, "SKILL.md"));
-    if (slug) found.push({ slug, dir });
+    const runner = runnerSkill(join(dir, "SKILL.md"), entry.name, stageRunnerSlugFromBody, legacyBareSlugs);
+    if (runner?.generated) found.push({ slug: runner.slug, dir });
   }
   return found;
 }
@@ -637,8 +648,7 @@ function scopeRunnerDirName(scope: string, front: Pick<ScopeFront, "plugin">): s
 export function renderRunner(scope: string, description: string): string {
   const front = discoverScopes()[scope];
   const dir = scopeRunnerDirName(scope, front ?? {});
-  const entrySkill = entrySkillInvocation();
-
+  const entrySkill = treeEntrySkillInvocation();
   // Normalise the scope's one-line description into a sentence (trailing period)
   // so it reads cleanly when stitched between the lead-in and the packaging note.
   const raw = (description || `Run the AI-DLC workflow with the ${scope} scope`).trim();
@@ -647,7 +657,7 @@ export function renderRunner(scope: string, description: string): string {
 name: ${dir}
 generated-by: aidlc-runner-gen
 description: >
-  Run the AI-DLC workflow with the ${scope} scope baked in — no scope
+  Run the AI-DLC workflow with the ${scope} scope baked in - no scope
   detection. ${desc} Packaging over \`${entrySkill} --scope ${scope}\`, which works
   without this skill.
 argument-hint: "[description | --status | --stage <slug|#> | --phase <name|#>]"
@@ -655,7 +665,7 @@ user-invocable: true
 ${nativeRunnerFrontmatter()}\
 ---
 
-# AI-DLC — ${scope} scope
+# AI-DLC - ${scope} scope
 
 Drive the AI-DLC engine with the **${scope}** scope fixed. This is the same
 deterministic forwarding loop the \`${entrySkill}\` orchestrator runs, with \`--scope
@@ -706,7 +716,7 @@ ahead of that run-stage. Adopt it for the whole run.
    Legacy Plan Approval recovery keeps its explicit bare-\`next\` choice.
    Never use \`report\` as a fallback for an engine ask answer; a selected guard
    remedy may still explicitly name a stage report.
-3. \`${aidlcToolInvocation("orchestrate")} report --stage <directive.stage> --result <outcome> [--user-input "<text>"]\` only after acting on a stage directive. A redo, jump, or start-fresh request on re-entry is the sole non-stage report round-trip and uses \`report --result resumed --choice <redo|jump|fresh>\`.
+3. \`${aidlcToolInvocation("orchestrate")} report --stage <directive.stage> --result <outcome> [--user-input '<text>']\` only after acting on a stage directive. A redo, jump, or start-fresh request on re-entry is the sole non-stage report round-trip and uses \`report --result resumed --choice <redo|jump|fresh>\`.
 4. Pass \`$ARGUMENTS\` only to the first \`next\` in step 1: every later pass runs
    bare \`${aidlcToolInvocation("orchestrate")} next\`, with no \`--scope\` and no
    \`$ARGUMENTS\` (repeating them would redo a jump or a setting the person
@@ -742,8 +752,8 @@ preserving any \`--request\` id rather than rebuilding the request.
   names a distinct feature/bug/unit unrelated to the active intent's subject
   (\`${aidlcDispatcherInvocation("intent list")} --json\` gives its \`slug\` and
   \`status\`).
-- **On genuine new-work, OFFER, never auto-create.** Surface an
-  \`AskUserQuestion\` showing the active intent and the proposed new one, **including
+- **On genuine new-work, OFFER, never auto-create.** Present a
+  structured question showing the active intent and the proposed new one, **including
   the scope you'd give the new intent**. Default that scope to this runner's baked
   \`${scope}\` (the new work is likely the same flavour that made the user reach for
   this command), but if the new work clearly fits a DIFFERENT scope, propose that
@@ -754,15 +764,14 @@ preserving any \`--request\` id rather than rebuilding the request.
   new-work text:
 
   \`\`\`bash
-  ${aidlcDispatcherInvocation("orchestrate next")} --new-intent --scope <the confirmed scope> "<the new-work description>"
+  ${aidlcDispatcherInvocation("orchestrate next")} --new-intent --scope <the confirmed scope> '<the new-work description>'
   \`\`\`
 
   The engine returns a \`print\` directive naming the \`intent-create\` command
-  (with the \`--label "<2-3 word kebab essence>"\` placeholder). Act on it exactly
+  (with the \`--label '<2-3 word kebab essence>'\` placeholder). Act on it exactly
   as the loop's \`print\` handling describes: create the intent, then re-run
-  \`next\` and carry on into the new work's first stage in this chat. Say the
-  narration's line about starting it in a clean chat once: it is an option for
-  the person, never a stop.
+  \`next\` and carry on into the new work's first stage in this chat. The line
+  about starting it in a clean chat is an option for the person, never a stop.
 - **On DECLINE**, proceed with the active intent, the normal loop above.
 `;
 }
@@ -837,7 +846,7 @@ function handleScopes(rest: string[]): void {
       );
       process.exit(1);
     }
-    console.log(`OK — ${batch.length} scope-runner(s) in sync: ${batch.join(", ")}`);
+    console.log(`OK - ${batch.length} scope-runner(s) in sync: ${batch.join(", ")}`);
     return;
   }
 
@@ -860,6 +869,7 @@ function scopeRunnerSlugFromBody(body: string): string | null {
 function pruneScopeRunners(skillsDir: string, keep: ReadonlySet<string>): void {
   if (!existsSync(skillsDir)) return;
   const legacyBareSlugs = pluginOwnedScopeSlugsForLegacy();
+  const knownScopes = new Set(Object.keys(loadScopeMetadataAll()));
   for (const entry of readdirSync(skillsDir, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
     const dir = join(skillsDir, entry.name);
@@ -868,6 +878,7 @@ function pruneScopeRunners(skillsDir: string, keep: ReadonlySet<string>): void {
       entry.name,
       scopeRunnerSlugFromBody,
       legacyBareSlugs,
+      knownScopes,
     );
     if (slug && !keep.has(slug)) rmSync(dir, { recursive: true, force: true });
   }

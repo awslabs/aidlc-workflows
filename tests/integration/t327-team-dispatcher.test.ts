@@ -11,6 +11,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -519,24 +520,34 @@ describe("t327 team construction dispatcher", () => {
       readOnly: true,
     });
     const rendered = renderTeamConstructionBoard(board, "dispatcher");
+    // The board is the person's, printed as written at every stop: where the
+    // Units stand in their words, never the dispatcher's own terms.
+    const BOARD_TERMS = /Dispatcher|dispatcher|Turn-terminal|Claim Registry|transaction|pinned OID|ref movement|state fold|audit finalization|claim refs|blockers|remote push time/;
+    for (const view of [rendered, renderTeamConstructionBoard(board, "snapshot")]) {
+      expect(view.replace(/`[^`]*`/g, "`x`")).not.toMatch(BOARD_TERMS);
+    }
+    expect(rendered).toStartWith("# Team Construction Board\n_Last activity is what this checkout has seen, not when a team pushed._");
+    expect(rendered).toContain("## Claims\n| unit | status | owner | attempt | last activity |");
+    expect(rendered).toContain("| unit | step | commit | what is next |");
+    expect(rendered).toContain("| unit | waits on |");
     const mergedRow = rendered
       .split(/\r?\n/)
       .find((line) => line.startsWith("| merged |"))!;
     expect(mergedRow).toContain("| merged | main | [ ] |");
     expect(mergedRow).toEndWith("| [ ] | [x] |");
     expect(rendered).toContain("| awaiting | claimed | awaiting-team | 1 |");
-    expect(rendered).toContain("pinned and ready for merge gate");
+    expect(rendered).toContain("ready for the merge decision");
     expect(rendered).toContain("- claimable");
     expect(rendered).toContain("| blocked | awaiting |");
-    expect(rendered).toContain("last observed ref movement 2026-08-19T12:00:00Z");
+    expect(rendered).toContain("no move seen since 2026-08-19T12:00:00Z");
     expect(rendered).toContain("`/aidlc --claim claimable`");
-    expect(rendered).toContain("`aidlc unit gate awaiting`");
+    expect(rendered).toContain("`bun .claude/tools/aidlc.ts unit gate awaiting`");
 
     const actual = run(ORCH, ["next"], project);
     expect(actual.status, actual.out).toBe(0);
     const directive = JSON.parse(actual.stdout);
     expect(directive.kind).toBe("notice");
-    expect(directive.message).toContain("# Team Construction Dispatcher");
+    expect(directive.message).toContain("# Team Construction Board");
     const beforeProbe = snapshotFiles(project);
     const probe = run(
       ORCH,
@@ -571,10 +582,10 @@ describe("t327 team construction dispatcher", () => {
     const pendingAudit = nextDirective(project);
     expect(pendingAudit.kind).toBe("notice");
     expect(pendingAudit.message as string).toContain(
-      "state folded; audit finalization pending",
+      "merged; the audit record is not finished yet",
     );
     expect(pendingAudit.message as string).toContain(
-      "`aidlc unit land awaiting`",
+      "`bun .claude/tools/aidlc.ts unit land awaiting`",
     );
   });
 
@@ -659,8 +670,44 @@ describe("t327 team construction dispatcher", () => {
     const recoveryBoard = nextDirective(race.project);
     expect(recoveryBoard.kind).toBe("notice");
     expect(recoveryBoard.message as string).toContain(
-      'aidlc unit land awaiting --accept-released-attempt --user-input "<human acknowledgment>"',
+      "bun .claude/tools/aidlc.ts unit land awaiting --accept-released-attempt --user-input '<human acknowledgment>'",
     );
+  });
+
+  test("an unscoped checkout with every Unit claimed says nothing runs there and names each claim", () => {
+    const fixture = boardFixture();
+    rmSync(join(fixture.project, "aidlc", ".aidlc-unit-merges"), {
+      recursive: true,
+      force: true,
+    });
+    writeFileSync(
+      unitDependencyPath(fixture.project),
+      dependencyBody().replace(
+        "  - name: claimable\n    depends_on: [merged]",
+        "  - name: claimable\n    depends_on: [awaiting]",
+      ),
+    );
+    writeFileSync(
+      join(fixture.project, "aidlc", ".aidlc-unit-participant"),
+      "participant\n",
+    );
+    const statePath = seededStateFile(fixture.project);
+    const stateBefore = readFileSync(statePath, "utf-8");
+
+    for (const nextArgs of [[], ["--resume"]]) {
+      const directive = nextDirective(fixture.project, {}, nextArgs);
+      expect(directive.kind).toBe("notice");
+      const board = directive.message as string;
+      expect(board).toContain("Nothing runs from this checkout");
+      expect(board).not.toContain("may resume the normal Construction walk");
+      expect(board).toContain(
+        "`awaiting` is claimed by awaiting-team (attempt 1): in a checkout not on this machine, or a separate clone.",
+      );
+      expect(board).toContain(
+        "`claimed` is claimed by claimed-team (attempt 2): in a checkout not on this machine, or a separate clone.",
+      );
+    }
+    expect(readFileSync(statePath, "utf-8")).toBe(stateBefore);
   });
 
   test("--status appends the same read-only board in unscoped and scoped checkouts", () => {
@@ -707,9 +754,17 @@ describe("t327 team construction dispatcher", () => {
     const scopedCheckoutBefore = snapshotFiles(scopedDir);
     const scoped = run(UTILITY, ["status"], scopedDir);
     expect(scoped.status, scoped.out).toBe(0);
-    expect(scoped.stdout).toBe(unscoped.stdout);
     expect(snapshotFiles(project)).toEqual(scopedBefore);
     expect(snapshotFiles(scopedDir)).toEqual(scopedCheckoutBefore);
+    // Both checkouts now see the claim's worktree, and say so the same way.
+    const unscopedWithWorktree = run(UTILITY, ["status"], project);
+    expect(scoped.stdout).toBe(unscopedWithWorktree.stdout);
+    expect(scoped.stdout).toContain(
+      `\`claimed\` is claimed by claimed-team (attempt 2): worktree \`${realpathSync(scopedDir)}\` on branch \`scoped-claimed\`.`,
+    );
+    expect(scoped.stdout.replace(/\n {2}- `claimed` is claimed by .*$/m, "")).toBe(
+      unscoped.stdout.replace(/\n {2}- `claimed` is claimed by .*$/m, ""),
+    );
 
     const routed = run(
       DISPATCHER,
@@ -735,7 +790,7 @@ describe("t327 team construction dispatcher", () => {
     const expected = `${renderTeamConstructionBoard(directBoard, "snapshot")}\n`;
     expect(expected).toContain("| secondary-alpha | secondary-team |");
     expect(expected).toContain("secondary-beta waits on secondary-alpha");
-    expect(expected).toContain("`aidlc unit gate secondary-alpha`");
+    expect(expected).toContain("`bun .claude/tools/aidlc.ts unit gate secondary-alpha`");
     expect(expected).not.toContain("awaiting-team");
 
     const bySpace = run(
@@ -1062,7 +1117,7 @@ describe("t327 team construction dispatcher", () => {
     const movedBoard = nextDirective(moved.project);
     expect(movedBoard.kind).toBe("notice");
     expect(movedBoard.message as string).toContain(
-      "observed ref movement since 2026-08-18T00:00:00Z",
+      "branch moved since 2026-08-18T00:00:00Z",
     );
     const refreshedCache = JSON.parse(
       readFileSync(movedCachePath, "utf-8"),

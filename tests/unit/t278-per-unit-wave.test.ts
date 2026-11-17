@@ -58,6 +58,7 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+import { readConductorSurface } from "../harness/conductor-skill.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 
 // The stage's checks run once before its review or gate, and again at the gate
@@ -636,7 +637,7 @@ function writeDependencyArtifact(
 }
 
 describe("t278 engine-emitted wave contract", () => {
-  test("mixed-kind entries are independently resolved and keep parent versus unit memory distinct", () => {
+  test("mixed-kind entries are independently resolved and the parent keeps the diary of the Unit it names", () => {
     const proj = project("infrastructure-design");
     const knowledgeDir = join(
       proj,
@@ -688,9 +689,8 @@ describe("t278 engine-emitted wave contract", () => {
     ]);
     expect(api.consumes_absent).toBeArray();
     expect(web.consumes_absent).toBeArray();
-    expect(directive.memory_path).toBe(
-      `${RP}/construction/infrastructure-design/memory.md`,
-    );
+    expect(directive.unit).toBe("api");
+    expect(directive.memory_path).toBe(api.unit_memory_path);
     expect(api.unit_memory_path).toBe(
       `${RP}/construction/api/infrastructure-design/memory.md`,
     );
@@ -1451,7 +1451,7 @@ describe("t278 engine-emitted wave contract", () => {
     expect(next(none).directive.gate).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("wave completion fans Unit memory into the parent diary before settlement", () => {
+  test("wave completion leaves a Unit's notes in its own diary and makes no stage diary", () => {
     const proj = project();
     seedBoltDag(proj, ["alpha"]);
     cover(proj, "alpha", "functional-design", REQUIRED_FD);
@@ -1473,19 +1473,10 @@ describe("t278 engine-emitted wave contract", () => {
     });
 
     completeWave(proj, "alpha");
-    const parentMemory = readFileSync(
-      join(
-        seededRecordDir(proj),
-        "construction",
-        "functional-design",
-        "memory.md",
-      ),
-      "utf-8",
-    );
-    expect(parentMemory).toContain(
+    expect(readFileSync(unitMemory, "utf-8")).toContain(
       "- 2026-08-12T00:00:00Z \u2014 preserve this note; verbatim context",
     );
-    expect(parentMemory.match(/aidlc-wave-memory:alpha:/g)?.length).toBe(1);
+    expect(existsSync(join(seededRecordDir(proj), "construction", "functional-design"))).toBe(false);
     expect(next(proj).directive.gate).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -1765,7 +1756,7 @@ describe("t278 wave protocol parity", () => {
         join(harness.authoredRoot, "skills", "aidlc", "SKILL.md"),
         join(harness.skillsRoot, "aidlc", "SKILL.md"),
       ]) {
-        const body = readFileSync(skill, "utf-8");
+        const body = readConductorSurface(skill);
         expect(body, skill).not.toContain("**Per-unit batch waves (optional).**");
         if (harness.name === "kiro" || harness.name === "kiro-ide") {
           expect(body, skill).toContain("Every `entry.unit_memory_path` is engine-created and output-only.");

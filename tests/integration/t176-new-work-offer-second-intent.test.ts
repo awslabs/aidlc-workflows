@@ -177,8 +177,8 @@ describe("t176 P4 new-work offer (orchestrator offers a 2nd intent, sdk live)", 
         // label is a CONDENSED essence, not a truncated copy of the new-work
         // sentence. This is the offer-to-create `--label` proof: the offer routes
         // through `next --new-intent`, which emits the SAME createPrintDirective
-        // the fresh-start path uses (carrying the `--label "<2-3 word kebab
-        // essence>"` placeholder), so the conductor supplies a real label here
+        // the fresh-start path uses (carrying the `--label '<2-3 word kebab
+        // essence>'` placeholder), so the conductor supplies a real label here
         // exactly as it does on the first creation. WITHOUT that routing the
         // conductor fell back to truncating --arguments (e.g. the NOAA sentence →
         // "build-a-standalone-pytho", a mid-word 24-char cut with leading filler).

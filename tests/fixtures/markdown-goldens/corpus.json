@@ -26695,7 +26695,7 @@
           ""
         ],
         "summaryHash": {
-          "error": "unsupported H2 heading \"Unreviewed Notes\" after \"Assumption Confirmation\"; only Q<n> or \"Requested Changes Feedback\" sections may follow"
+          "error": "unsupported H2 heading \"Unreviewed Notes\" after \"Assumption Confirmation\"; only Q<n> or \"Requested Changes Feedback\" sections may follow. A later round of questions (a revision, or a reopened step) goes in \"## Q<n>\" sections after the summary, numbered on from the last question; then rewrite the bullets of the one \"Consolidated Summary Confirmation\" section to cover every answer, blank its \"[Answer]:\" line, and confirm it again."
         },
         "answer": "Looks correct",
         "reviewFingerprint": "ce1738f94815535b7a9f6cdd5aa7b7082fcdccd8fcb6e081cf712abad5cc51b1"
@@ -26827,7 +26827,7 @@
           ""
         ],
         "summaryHash": {
-          "error": "unsupported H2 heading \"Unreviewed Notes\" after \"Assumption Confirmation\"; only Q<n> or \"Requested Changes Feedback\" sections may follow"
+          "error": "unsupported H2 heading \"Unreviewed Notes\" after \"Assumption Confirmation\"; only Q<n> or \"Requested Changes Feedback\" sections may follow. A later round of questions (a revision, or a reopened step) goes in \"## Q<n>\" sections after the summary, numbered on from the last question; then rewrite the bullets of the one \"Consolidated Summary Confirmation\" section to cover every answer, blank its \"[Answer]:\" line, and confirm it again."
         },
         "answer": "Looks correct",
         "reviewFingerprint": "eac1da4ac5599492adb07d45c6e0b97113b52676f85f508701332b9d61f303d1"
@@ -26959,7 +26959,7 @@
           ""
         ],
         "summaryHash": {
-          "error": "unsupported H2 heading \"Unreviewed Notes\" after \"Assumption Confirmation\"; only Q<n> or \"Requested Changes Feedback\" sections may follow"
+          "error": "unsupported H2 heading \"Unreviewed Notes\" after \"Assumption Confirmation\"; only Q<n> or \"Requested Changes Feedback\" sections may follow. A later round of questions (a revision, or a reopened step) goes in \"## Q<n>\" sections after the summary, numbered on from the last question; then rewrite the bullets of the one \"Consolidated Summary Confirmation\" section to cover every answer, blank its \"[Answer]:\" line, and confirm it again."
         },
         "answer": "Looks correct",
         "reviewFingerprint": "c4f3de5b7292688378202e2e710422d6aba776aa0edb6f18cfaf3e60b9cad7a4"
@@ -27091,7 +27091,7 @@
           ""
         ],
         "summaryHash": {
-          "error": "unsupported H2 heading \"Unreviewed Notes\" after \"Assumption Confirmation\"; only Q<n> or \"Requested Changes Feedback\" sections may follow"
+          "error": "unsupported H2 heading \"Unreviewed Notes\" after \"Assumption Confirmation\"; only Q<n> or \"Requested Changes Feedback\" sections may follow. A later round of questions (a revision, or a reopened step) goes in \"## Q<n>\" sections after the summary, numbered on from the last question; then rewrite the bullets of the one \"Consolidated Summary Confirmation\" section to cover every answer, blank its \"[Answer]:\" line, and confirm it again."
         },
         "answer": "Looks correct",
         "reviewFingerprint": "17847b9946085b95edc9dcac883eb5e06cbc57101dbc1aa8df1162c0454124b9"
@@ -27904,7 +27904,7 @@
           ""
         ],
         "summaryHash": {
-          "error": "unsupported HTML H2 heading \"<h2>\" after \"Assumption Confirmation\"; only Q<n> or \"Requested Changes Feedback\" sections may follow"
+          "error": "unsupported HTML H2 heading \"<h2>\" after \"Assumption Confirmation\"; only Q<n> or \"Requested Changes Feedback\" sections may follow. A later round of questions (a revision, or a reopened step) goes in \"## Q<n>\" sections after the summary, numbered on from the last question; then rewrite the bullets of the one \"Consolidated Summary Confirmation\" section to cover every answer, blank its \"[Answer]:\" line, and confirm it again."
         },
         "answer": "Looks correct",
         "reviewFingerprint": "91498965fa09df7d9d41fbe0dc064641af4c7e2dc8c5d16466022288b746a4f6"
@@ -28027,7 +28027,7 @@
           ""
         ],
         "summaryHash": {
-          "error": "unsupported HTML H2 heading \"<h2>\" after \"Assumption Confirmation\"; only Q<n> or \"Requested Changes Feedback\" sections may follow"
+          "error": "unsupported HTML H2 heading \"<h2>\" after \"Assumption Confirmation\"; only Q<n> or \"Requested Changes Feedback\" sections may follow. A later round of questions (a revision, or a reopened step) goes in \"## Q<n>\" sections after the summary, numbered on from the last question; then rewrite the bullets of the one \"Consolidated Summary Confirmation\" section to cover every answer, blank its \"[Answer]:\" line, and confirm it again."
         },
         "answer": "Looks correct",
         "reviewFingerprint": "755b6ab4412301571a8b1561a98a679170ca2526f07734ad55e196cc8ae71518"
@@ -28273,7 +28273,7 @@
           ""
         ],
         "summaryHash": {
-          "error": "unsupported HTML H2 heading \"<h2>\" after \"Assumption Confirmation\"; only Q<n> or \"Requested Changes Feedback\" sections may follow"
+          "error": "unsupported HTML H2 heading \"<h2>\" after \"Assumption Confirmation\"; only Q<n> or \"Requested Changes Feedback\" sections may follow. A later round of questions (a revision, or a reopened step) goes in \"## Q<n>\" sections after the summary, numbered on from the last question; then rewrite the bullets of the one \"Consolidated Summary Confirmation\" section to cover every answer, blank its \"[Answer]:\" line, and confirm it again."
         },
         "answer": "Looks correct",
         "reviewFingerprint": "8cfdadf4da008ff25b5128545500f785e5908d26ee54eed15771ec45a213f353"
@@ -30172,7 +30172,7 @@
           ""
         ],
         "summaryHash": {
-          "error": "unsupported HTML H2 heading \"<h2>\" after \"Assumption Confirmation\"; only Q<n> or \"Requested Changes Feedback\" sections may follow"
+          "error": "unsupported HTML H2 heading \"<h2>\" after \"Assumption Confirmation\"; only Q<n> or \"Requested Changes Feedback\" sections may follow. A later round of questions (a revision, or a reopened step) goes in \"## Q<n>\" sections after the summary, numbered on from the last question; then rewrite the bullets of the one \"Consolidated Summary Confirmation\" section to cover every answer, blank its \"[Answer]:\" line, and confirm it again."
         },
         "answer": "Looks correct",
         "reviewFingerprint": "ee792b29b96d82cad18b06ff3ca0c90fb2089bd7d0771361fcad4e9ee2bf6008"
@@ -30295,7 +30295,7 @@
           ""
         ],
         "summaryHash": {
-          "error": "unsupported HTML H2 heading \"<h2>\" after \"Assumption Confirmation\"; only Q<n> or \"Requested Changes Feedback\" sections may follow"
+          "error": "unsupported HTML H2 heading \"<h2>\" after \"Assumption Confirmation\"; only Q<n> or \"Requested Changes Feedback\" sections may follow. A later round of questions (a revision, or a reopened step) goes in \"## Q<n>\" sections after the summary, numbered on from the last question; then rewrite the bullets of the one \"Consolidated Summary Confirmation\" section to cover every answer, blank its \"[Answer]:\" line, and confirm it again."
         },
         "answer": "Looks correct",
         "reviewFingerprint": "051829ec2eec1bf85fa23e84963c158953fe5362af65e4e9548598372aa6df56"
@@ -30622,7 +30622,7 @@
           ""
         ],
         "summaryHash": {
-          "error": "unsupported H2 heading \"Unreviewed Notes\" after the consolidated summary; only Q<n>, \"Requested Changes Feedback\", or one \"Assumption Confirmation\" section may follow"
+          "error": "unsupported H2 heading \"Unreviewed Notes\" after the consolidated summary; only Q<n>, \"Requested Changes Feedback\", or one \"Assumption Confirmation\" section may follow. A later round of questions (a revision, or a reopened step) goes in \"## Q<n>\" sections after the summary, numbered on from the last question; then rewrite the bullets of the one \"Consolidated Summary Confirmation\" section to cover every answer, blank its \"[Answer]:\" line, and confirm it again."
         },
         "answer": "Looks correct",
         "reviewFingerprint": "960ca21bbe4fb18044c817c6135e6ba3861fc6ced80aab58b7ca5039fc4820f4"
@@ -31009,7 +31009,7 @@
           ""
         ],
         "summaryHash": {
-          "error": "unsupported Setext H2 heading \"Q3. Which fallback should be used?\" after \"Assumption Confirmation\"; only Q<n> or \"Requested Changes Feedback\" sections may follow"
+          "error": "unsupported Setext H2 heading \"Q3. Which fallback should be used?\" after \"Assumption Confirmation\"; only Q<n> or \"Requested Changes Feedback\" sections may follow. A later round of questions (a revision, or a reopened step) goes in \"## Q<n>\" sections after the summary, numbered on from the last question; then rewrite the bullets of the one \"Consolidated Summary Confirmation\" section to cover every answer, blank its \"[Answer]:\" line, and confirm it again."
         },
         "answer": "Looks correct",
         "reviewFingerprint": "a38a7712364867fc228e510823697bd9e5cbf63f047c77f8f1605c1441c5f002"
@@ -31141,7 +31141,7 @@
           ""
         ],
         "summaryHash": {
-          "error": "unsupported Setext H1 heading \"Q3. Which fallback should be used?\" after \"Assumption Confirmation\"; only Q<n> or \"Requested Changes Feedback\" sections may follow"
+          "error": "unsupported Setext H1 heading \"Q3. Which fallback should be used?\" after \"Assumption Confirmation\"; only Q<n> or \"Requested Changes Feedback\" sections may follow. A later round of questions (a revision, or a reopened step) goes in \"## Q<n>\" sections after the summary, numbered on from the last question; then rewrite the bullets of the one \"Consolidated Summary Confirmation\" section to cover every answer, blank its \"[Answer]:\" line, and confirm it again."
         },
         "answer": "Looks correct",
         "reviewFingerprint": "a386a519327bdc844fdd158cd5ce35925238594d263c4554948f88bb66bcf1c8"
@@ -31528,7 +31528,7 @@
           ""
         ],
         "summaryHash": {
-          "error": "unsupported H1 heading \"Q3. Which fallback should be used?\" after \"Assumption Confirmation\"; only Q<n> or \"Requested Changes Feedback\" sections may follow"
+          "error": "unsupported H1 heading \"Q3. Which fallback should be used?\" after \"Assumption Confirmation\"; only Q<n> or \"Requested Changes Feedback\" sections may follow. A later round of questions (a revision, or a reopened step) goes in \"## Q<n>\" sections after the summary, numbered on from the last question; then rewrite the bullets of the one \"Consolidated Summary Confirmation\" section to cover every answer, blank its \"[Answer]:\" line, and confirm it again."
         },
         "answer": "Looks correct",
         "reviewFingerprint": "925be3734ca3f7a562e01d41c2174de2f2801792bb918eb781981eebdb0f089b"
@@ -31657,7 +31657,7 @@
           ""
         ],
         "summaryHash": {
-          "error": "unsupported H2 heading \"Q3. Which fallback should be used?\" after \"Assumption Confirmation\"; only Q<n> or \"Requested Changes Feedback\" sections may follow"
+          "error": "unsupported H2 heading \"Q3. Which fallback should be used?\" after \"Assumption Confirmation\"; only Q<n> or \"Requested Changes Feedback\" sections may follow. A later round of questions (a revision, or a reopened step) goes in \"## Q<n>\" sections after the summary, numbered on from the last question; then rewrite the bullets of the one \"Consolidated Summary Confirmation\" section to cover every answer, blank its \"[Answer]:\" line, and confirm it again."
         },
         "answer": "Looks correct",
         "reviewFingerprint": "8c5ac0ae584e0516faf9f137d1ad5f30c47f0d639c180b2eccdc00b6ef5a6ec7"
@@ -31918,7 +31918,7 @@
           ""
         ],
         "summaryHash": {
-          "error": "unsupported H2 heading \"Q3. Which fallback should be used?\" after \"Assumption Confirmation\"; only Q<n> or \"Requested Changes Feedback\" sections may follow"
+          "error": "unsupported H2 heading \"Q3. Which fallback should be used?\" after \"Assumption Confirmation\"; only Q<n> or \"Requested Changes Feedback\" sections may follow. A later round of questions (a revision, or a reopened step) goes in \"## Q<n>\" sections after the summary, numbered on from the last question; then rewrite the bullets of the one \"Consolidated Summary Confirmation\" section to cover every answer, blank its \"[Answer]:\" line, and confirm it again."
         },
         "answer": "Looks correct",
         "reviewFingerprint": "5e4b4f2c21f8f6ebf32fb0176096a7a4f72051153a5327dd3d251d4b93fddfec"
@@ -32047,7 +32047,7 @@
           ""
         ],
         "summaryHash": {
-          "error": "unsupported H3 heading \"Q3. Which fallback should be used?\" after \"Assumption Confirmation\"; only Q<n> or \"Requested Changes Feedback\" sections may follow"
+          "error": "unsupported H3 heading \"Q3. Which fallback should be used?\" after \"Assumption Confirmation\"; only Q<n> or \"Requested Changes Feedback\" sections may follow. A later round of questions (a revision, or a reopened step) goes in \"## Q<n>\" sections after the summary, numbered on from the last question; then rewrite the bullets of the one \"Consolidated Summary Confirmation\" section to cover every answer, blank its \"[Answer]:\" line, and confirm it again."
         },
         "answer": "Looks correct",
         "reviewFingerprint": "4866e851bd2b5fb7d029d6a1e39269f52aa298e9cdeb03a954d8256c232ba03d"
@@ -32176,7 +32176,7 @@
           ""
         ],
         "summaryHash": {
-          "error": "unsupported H2 heading \"Q3. Which fallback should be used?\" after \"Assumption Confirmation\"; only Q<n> or \"Requested Changes Feedback\" sections may follow"
+          "error": "unsupported H2 heading \"Q3. Which fallback should be used?\" after \"Assumption Confirmation\"; only Q<n> or \"Requested Changes Feedback\" sections may follow. A later round of questions (a revision, or a reopened step) goes in \"## Q<n>\" sections after the summary, numbered on from the last question; then rewrite the bullets of the one \"Consolidated Summary Confirmation\" section to cover every answer, blank its \"[Answer]:\" line, and confirm it again."
         },
         "answer": "Looks correct",
         "reviewFingerprint": "f460668676a14e8f46bf2ce8a2eb192a75bd529d11489024c8bfdb621f188879"
@@ -32308,7 +32308,7 @@
           ""
         ],
         "summaryHash": {
-          "error": "unsupported H2 heading \"Q3. Which fallback should be used?\" after \"Assumption Confirmation\"; only Q<n> or \"Requested Changes Feedback\" sections may follow"
+          "error": "unsupported H2 heading \"Q3. Which fallback should be used?\" after \"Assumption Confirmation\"; only Q<n> or \"Requested Changes Feedback\" sections may follow. A later round of questions (a revision, or a reopened step) goes in \"## Q<n>\" sections after the summary, numbered on from the last question; then rewrite the bullets of the one \"Consolidated Summary Confirmation\" section to cover every answer, blank its \"[Answer]:\" line, and confirm it again."
         },
         "answer": "Looks correct",
         "reviewFingerprint": "6c7227a977c41f7d47ca230d03f4ed07db260be22cfde8be2d529f97396577fc"
@@ -32437,7 +32437,7 @@
           ""
         ],
         "summaryHash": {
-          "error": "unsupported H2 heading \"Requested Changes Feedback\" after \"Assumption Confirmation\"; only Q<n> or \"Requested Changes Feedback\" sections may follow"
+          "error": "unsupported H2 heading \"Requested Changes Feedback\" after \"Assumption Confirmation\"; only Q<n> or \"Requested Changes Feedback\" sections may follow. A later round of questions (a revision, or a reopened step) goes in \"## Q<n>\" sections after the summary, numbered on from the last question; then rewrite the bullets of the one \"Consolidated Summary Confirmation\" section to cover every answer, blank its \"[Answer]:\" line, and confirm it again."
         },
         "answer": "Looks correct",
         "reviewFingerprint": "6bd466554d4fc74c48cc0170c04d05fb297ac7ab22f971fe647756f8cb47f62c"
@@ -32695,7 +32695,7 @@
           ""
         ],
         "summaryHash": {
-          "error": "unsupported H2 heading \"Assumption Confirmation\" after \"Assumption Confirmation\"; only Q<n> or \"Requested Changes Feedback\" sections may follow"
+          "error": "unsupported H2 heading \"Assumption Confirmation\" after \"Assumption Confirmation\"; only Q<n> or \"Requested Changes Feedback\" sections may follow. A later round of questions (a revision, or a reopened step) goes in \"## Q<n>\" sections after the summary, numbered on from the last question; then rewrite the bullets of the one \"Consolidated Summary Confirmation\" section to cover every answer, blank its \"[Answer]:\" line, and confirm it again."
         },
         "answer": "Looks correct",
         "reviewFingerprint": "aad7b93ea2b6d3877eaec06aa03816fccd5edf4bee451a1673f5aeab3d14489b"
@@ -32929,7 +32929,7 @@
           ""
         ],
         "summaryHash": {
-          "error": "unsupported H2 heading \"Unreviewed Notes\" after \"Assumption Confirmation\"; only Q<n> or \"Requested Changes Feedback\" sections may follow"
+          "error": "unsupported H2 heading \"Unreviewed Notes\" after \"Assumption Confirmation\"; only Q<n> or \"Requested Changes Feedback\" sections may follow. A later round of questions (a revision, or a reopened step) goes in \"## Q<n>\" sections after the summary, numbered on from the last question; then rewrite the bullets of the one \"Consolidated Summary Confirmation\" section to cover every answer, blank its \"[Answer]:\" line, and confirm it again."
         },
         "answer": "Looks correct",
         "reviewFingerprint": "13af48dd11ab661d1a7568f740513d539320eb31a3423313fbe9d9fb14daf2f3"
@@ -38863,7 +38863,7 @@
           ""
         ],
         "summaryHash": {
-          "error": "unsupported Setext H2 heading \"Semantic heading\" after the consolidated summary; only Q<n>, \"Requested Changes Feedback\", or one \"Assumption Confirmation\" section may follow"
+          "error": "unsupported Setext H2 heading \"Semantic heading\" after the consolidated summary; only Q<n>, \"Requested Changes Feedback\", or one \"Assumption Confirmation\" section may follow. A later round of questions (a revision, or a reopened step) goes in \"## Q<n>\" sections after the summary, numbered on from the last question; then rewrite the bullets of the one \"Consolidated Summary Confirmation\" section to cover every answer, blank its \"[Answer]:\" line, and confirm it again."
         },
         "answer": null,
         "reviewFingerprint": "aeb38dc1105dbf03ed6677faa12c534be7eda9ea3c4a7253ba65b180e27971f4"

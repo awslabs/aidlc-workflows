@@ -79,6 +79,7 @@ import {
   seededRecordDir,
   seedStateFile,
 } from "../harness/fixtures.ts";
+import { readConductorSurface } from "../harness/conductor-skill.ts";
 
 const BUN = process.execPath;
 const DIST_CLAUDE = join(REPO_ROOT, "dist", "claude", ".claude");
@@ -510,6 +511,28 @@ describe("t264 (a) judgeFreeze decision table", () => {
     expect(bashTargets("cat /a/b.md")).toEqual([]);
   });
 
+  test("writeTargets: a shell apply_patch names each file its patch writes, as written", () => {
+    const hostPath = (value: string): string => resolve(value);
+    const patch = "*** Begin Patch\n*** Add File: /a/new.md\n+x $HOME\n*** Update File: /a/b.md\n@@\n-x\n+y\n*** Move to: /a/c.md\n*** Delete File: /a/d.md\n*** End Patch";
+    const all = ["/a/new.md", "/a/b.md", "/a/c.md", "/a/d.md"].map(hostPath).sort();
+    for (const command of [
+      `apply_patch <<'PATCH'\n${patch}\nPATCH`,
+      `applypatch <<"PATCH"\n${patch}\nPATCH\n`,
+      `apply_patch '${patch}'`,
+      `apply_patch '${patch.replaceAll("\n", "\r\n")}'`,
+    ]) {
+      expect(writeTargets("Bash", { command }).sort(), command).toEqual(all);
+    }
+    // Relative paths from the folder the shell is in; a path is a name, never a shell word.
+    expect(writeTargets("Bash", { command: "apply_patch <<'PATCH'\n*** Begin Patch\n*** Add File: routes/$id.tsx\n+x\n*** End Patch\nPATCH" }, "/p"))
+      .toEqual([hostPath("/p/routes/$id.tsx")]);
+    // The patch typed in afterwards is not in the command: nothing to name.
+    expect(writeTargets("Bash", { command: "apply_patch" })).toEqual([]);
+    // The rest of the line reads as before.
+    expect(writeTargets("Bash", { command: "printf x >> /a/e.md; apply_patch <<'PATCH'\n*** Begin Patch\n*** Add File: /a/f.md\n+x\n*** End Patch\nPATCH" }).sort())
+      .toEqual(["/a/e.md", "/a/f.md"].map(hostPath).sort());
+  });
+
   test("writeTargets: content cmdlets bind their path, never a value passed by name (#1639)", () => {
     const read = (shell: "posix" | "powershell") => (command: string): string[] =>
       writeTargets("Bash", { command }, "/p", shell)
@@ -703,6 +726,15 @@ describe("t264 (a) judgeFreeze decision table", () => {
       const followed = move(command, shell);
       expect(followed?.dir.toLowerCase(), command).toBe(resolve(dir).toLowerCase());
       expect(followed?.rest.trim(), command).toBe("aidlc doctor");
+    }
+    // Git Bash, Claude Code's shell on Windows, names a drive `/c`; PowerShell
+    // reads `/c` as a folder on the current drive.
+    if (process.platform === "win32") {
+      const gitBash = `/${dir[0].toLowerCase()}${dir.slice(2).replaceAll("\\", "/")}`;
+      for (const command of [`cd ${q(gitBash)} && aidlc doctor`, `cd ${gitBash}; aidlc doctor`]) {
+        expect(move(command)?.dir.toLowerCase(), command).toBe(resolve(dir).toLowerCase());
+      }
+      expect(move(`Set-Location ${q(gitBash)} ; aidlc doctor`, "powershell")).toBeNull();
     }
     // Folders the lexer would name but the shell would not enter: bash drops a
     // backslash-newline inside quotes, and does not split a word at U+00A0.
@@ -1024,6 +1056,30 @@ describe("t264 (b) shipped-hook lifecycle over a real ledger", () => {
     expect(runHook(p, writePayload(file)).code).toBe(2);
   });
 
+  test("a session started under a named agent is offered the check's switch; its subagent is not", () => {
+    // Claude Code 2.1.312: the session's agent in agent_type on its own calls,
+    // agent_id on a subagent's, CLAUDE_CODE_SESSION_ID = the payload's session_id.
+    const session = "c9911951-01b9-4524-b912-93aeefda2d8b";
+    const remedyOps = (caller: Record<string, unknown>): string[] => {
+      const p = projBeforeGate();
+      recordReview(p, "READY");
+      openGate(p);
+      const refused = runHook(
+        p,
+        { ...writePayload(raArtifact(p)), session_id: session, ...caller },
+        { CLAUDE_CODE_SESSION_ID: session },
+      );
+      expect(refused.code).toBe(2);
+      return refusalRecords(p).flatMap((record) =>
+        ((JSON.parse(record) as { refusal?: { remedies?: { op: string }[] } }).refusal?.remedies ?? [])
+          .map((remedy) => remedy.op)
+      );
+    };
+    expect(remedyOps({})).toContain("lower-fence");
+    expect(remedyOps({ agent_type: "claude" })).toContain("lower-fence");
+    expect(remedyOps({ agent_type: "general-purpose", agent_id: "a8a30d0b327881676" })).not.toContain("lower-fence");
+  });
+
   test("advisory NOT-READY is terminal and freezes until the human gate", () => {
     const p = projBeforeGate();
     recordReview(p, "NOT-READY");
@@ -1139,6 +1195,24 @@ describe("t264 (b) shipped-hook lifecycle over a real ledger", () => {
     }
   });
 
+  // Codex's shell apply_patch names the files its patch writes: a reviewed
+  // document is frozen against it as against printf.
+  test("a shell apply_patch of a reviewed document is frozen as a redirect is", () => {
+    const p = projBeforeGate();
+    const file = raArtifact(p);
+    recordReview(p, "READY");
+    openGate(p);
+    const rel = relative(p, file).replace(/\\/g, "/");
+    const patch = `*** Begin Patch\n*** Update File: ${rel}\n@@\n-a\n+b\n*** End Patch`;
+    for (const command of [`apply_patch <<'PATCH'\n${patch}\nPATCH`, `apply_patch '${patch}'`, `applypatch <<"PATCH"\n${patch}\nPATCH`]) {
+      const blocked = runHook(p, { hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command }, cwd: p });
+      expect(blocked.code, command).toBe(2);
+      expect(blocked.stderr, command).toContain(file);
+    }
+    const other = `*** Begin Patch\n*** Add File: notes/other.md\n+x\n*** End Patch`;
+    expect(runHook(p, { hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: `apply_patch <<'PATCH'\n${other}\nPATCH` }, cwd: p }).code).toBe(0);
+  });
+
   test("fail-open: empty ledger, malformed stdin, and the off-switch all allow", () => {
     const empty = createTestProject();
     tempDirs.push(empty);
@@ -1157,6 +1231,32 @@ describe("t264 (b) shipped-hook lifecycle over a real ledger", () => {
     expect(
       runHook(p, writePayload(raArtifact(p)), { AIDLC_DISABLE_REVIEW_FREEZE_HOOK: "1" }).code,
     ).toBe(0);
+  });
+
+  test("no state file: writes after a command that runs before any intent allow and log no hook failure", () => {
+    // knowledge onboard (like plugin select) writes the space's audit ledger
+    // before any intent exists, so the ledger gate passes and there is no state.
+    const p = createTestProject();
+    tempDirs.push(p);
+    writeFileSync(join(p, "api.md"), "# Team API rules\n\nUse REST.\n");
+    const onboard = spawnSync(BUN, [join(DIST_CLAUDE, "tools", "aidlc.ts"), "engine", "knowledge", "onboard", "api.md"], {
+      cwd: p,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      env: { ...process.env, CLAUDE_PROJECT_DIR: p },
+      encoding: "utf-8",
+    });
+    expect(onboard.status ?? -1, `${onboard.stdout}${onboard.stderr}`).toBe(0);
+    expect(readAllAuditShards(p)).not.toBe("");
+    const records = () => readdirSync(join(p, "aidlc"), { recursive: true }).map(String);
+    expect(records().filter((path) => basename(path) === "aidlc-state.md")).toEqual([]);
+
+    for (const payload of [
+      { ...writePayload(join(p, "notes.md")), cwd: p },
+      { hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "rm api.md" }, cwd: p },
+    ]) {
+      expect(runHook(p, payload)).toEqual({ code: 0, stderr: "" });
+    }
+    expect(records().filter((path) => basename(path) === "review-freeze.drops")).toEqual([]);
   });
 
   test("a completed stage's artifacts are not frozen (state checkbox filter)", () => {
@@ -1279,8 +1379,9 @@ describe("t264 (c) harness registration", () => {
     );
     expect(adapter).toContain('case "review-freeze"');
     // Delete File / Move to are sibling mutations of the receipt exactly like
-    // an Update - the fan-out must include them.
-    expect(adapter.split('case "review-freeze"')[1]).toContain("Delete File|Move to");
+    // an Update - the fan-out must include them (patchedTargets).
+    expect(adapter.split('case "review-freeze"')[1].split("case ")[0]).toContain("patchedTargets(command)");
+    expect(adapter).toMatch(/function patchedTargets[\s\S]*?"Delete" \|\| target\.kind === "Move"/);
   });
 
   test("Copilot's shared tool guard invokes review-freeze", () => {
@@ -1754,7 +1855,7 @@ describe("t264 (d) the refusal names next; next asks the recovery question", () 
     const missing: string[] = [];
     for (const harness of ["claude", "kiro", "kiro-ide", "codex", "cursor", "opencode", "copilot"]) {
       const rel = join("harness", harness, "skills", "aidlc", "SKILL.md");
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const body = readConductorSurface(rel);
       if (!body.includes(HOOK_REFUSAL_NEXT_RULE)) missing.push(rel);
     }
     expect(missing).toEqual([]);

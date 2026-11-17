@@ -830,8 +830,8 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     const d = directive(r);
     expect(d.kind).toBe("print");
     expect(d.message).not.toContain("intent create --scope bugfix");
-    expect(d.message).toContain("--scope bugfix -- 'Fix duplicate todo persistence'");
-    expect(d.message).toContain("'bugfix Fix duplicate todo persistence'");
+    expect(d.message).toContain('--scope bugfix --request-file aidlc/.aidlc-request-text/line-after-plan.txt` (the task: "Fix duplicate todo persistence")');
+    expect(d.message).toContain('which keeps every word of theirs ("bugfix Fix duplicate todo persistence")');
     expect(String(d.message)).not.toMatch(/--request [0-9a-f]{8}/);
     expect(existsSync(join(p, "aidlc", ".aidlc-sessions", "questions"))).toBe(false);
     expect(d.kind).not.toBe("ask");

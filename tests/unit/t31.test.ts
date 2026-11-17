@@ -54,7 +54,7 @@ afterAll(() => {
 // Every emit-success case runs against a workspace with a RESOLVABLE active
 // intent — createTestProject seeds the per-intent record dir + active-intent
 // cursor, but the cursor only resolves once an aidlc-state.md exists in that
-// record (activeIntent gates on the state file, aidlc-lib.ts). So we seed one.
+// record (activeIntent gates on the state file, aidlc-record-core.ts). So we seed one.
 // aidlc-log refuses to emit when no active workflow resolves (the null-intent
 // guard — see the "no active workflow" describe block below), which is exactly
 // the path aidlc-log is exercised on: orchestrator-called mid-stage, after a

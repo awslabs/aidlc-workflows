@@ -116,6 +116,7 @@ describe("t-own-document-changed-line: an edit to a finished stage's own documen
 });
 
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
+const OTHER_CHAT = "01995000-7a11-7000-8000-00000000d0c3";
 const APPROVING = "/aidlc yes, but add FR-2 for the empty title";
 const rows = (proj: string, event: string) => readAuditShardEvents(proj).filter((row) => row.event === event);
 const amendments = (proj: string) => rows(proj, "STAGE_OUTPUT_AMENDED");
@@ -261,5 +262,74 @@ describe("t-own-document-changed-line: under strict, a change asked for in the a
     expect(issue?.edited, JSON.stringify(issue)).toBe(true);
     expect(staleStageNote("Requirements Analysis", issue!, state)).toBe(LINE);
     expect(status(proj)).toContain(LINE);
+  });
+});
+
+// Under strict, the person edited a finished stage's document and carried on; every later step said the line again
+// (#3377's "Every step says ..."). The chat hears it once, on the first step that carries it; another chat on the
+// work hears it once too, and --status keeps naming the stage until it is redone.
+describe("t-own-document-changed-line: under strict, the line is said once in a chat", () => {
+  async function editedAfterTurn(): Promise<{ proj: string; requirements: string }> {
+    const gate = await gateUnderStrict();
+    await personSays(gate.proj, APPROVING);
+    await reportApproved(gate.proj);
+    await personSays(gate.proj, "looks good, carry on");
+    agentEdits(gate.proj, gate.requirements, "- FR-2: an empty title is refused.\n");
+    return gate;
+  }
+
+  test("the next steps in the same chat leave it off, after the person speaks too", async () => {
+    const { proj } = await editedAfterTurn();
+    const first = await step(proj);
+    expect(validity(first)?.warning, JSON.stringify(first?.stage_validity)).toBe(LINE);
+    expect(typeof first?.stage_validity_note).toBe("string");
+    const second = await step(proj);
+    expect(validity(second), JSON.stringify(second?.stage_validity)).toBeUndefined();
+    expect(second?.stage_validity_note).toBeUndefined();
+    await personSays(proj, "what's next?");
+    expect(validity(await step(proj))).toBeUndefined();
+    expect(status(proj)).toContain(LINE);
+  });
+
+  test("another chat on the work hears it once", async () => {
+    const { proj } = await editedAfterTurn();
+    expect(validity(await step(proj))?.warning).toBe(LINE);
+    const other = await next(proj, [], { session: OTHER_CHAT });
+    expect(validity(other.directive)?.warning, other.out).toBe(LINE);
+    const again = await next(proj, [], { session: OTHER_CHAT });
+    expect(validity(again.directive), again.out).toBeUndefined();
+  });
+
+  test("a read-only probe is heard by nobody, so the next step still says it", async () => {
+    const { proj } = await editedAfterTurn();
+    const probe = await step(proj, { AIDLC_STOP_HOOK_PROBE: "1" });
+    expect(validity(probe)?.warning, JSON.stringify(probe?.stage_validity)).toBe(LINE);
+    expect(validity(await step(proj))?.warning).toBe(LINE);
+    expect(validity(await step(proj))).toBeUndefined();
+  });
+
+  // Kiro CLI's prompt hook runs an exact `/aidlc --resume` ahead of the agent and hands the step over only when it fits
+  // the hook's reply; a Code Generation step does not, so the agent runs the same `next` itself.
+  test("on Kiro CLI, a step the prompt hook runs ahead and does not hand over leaves the line for the agent's own next", async () => {
+    const { proj, requirements } = await gateUnderStrict();
+    await personSays(proj, APPROVING);
+    await reportApproved(proj);
+    await personSays(proj, "looks good, carry on");
+    expect(validity(await step(proj))).toBeUndefined();
+    agentEdits(proj, requirements, "- FR-2: an empty title is refused.\n");
+    const hook = await say(proj, "/aidlc --resume", "kiro");
+    expect(hook.status, hook.stdout + hook.stderr).toBe(0);
+    expect(hook.stdout).not.toContain("--- DIRECTIVE ---");
+    const agentNext = async () => {
+      const own = await exec(
+        [process.execPath, join(proj, ".kiro", "tools", "aidlc-orchestrate.ts"), "next", "--resume", "--project-dir", proj],
+        { cwd: proj, env: { ...env(proj), CLAUDE_PROJECT_DIR: undefined } },
+      );
+      return { out: own.stdout.slice(0, 400), directive: JSON.parse(own.stdout.trim()) as Record<string, unknown> };
+    };
+    const first = await agentNext();
+    expect(validity(first.directive)?.warning, first.out).toBe(LINE);
+    const again = await agentNext();
+    expect(validity(again.directive), again.out).toBeUndefined();
   });
 });

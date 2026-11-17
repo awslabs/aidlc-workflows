@@ -85,10 +85,11 @@ describe("every chat enters by one door", () => {
     withShell(dir, ".claude", () => {
       expect(lib.readSessionBinding(dir, UNSEEN)).toBeNull();
       expect(lib.resolveWorkflowSelection(dir).intent).toBe(CURSOR_RECORD);
-      // First contact settled it, silently, the way SessionStart settles a new chat.
+      // First contact settled it, silently, the way SessionStart settles a new chat:
+      // on the work, its fences waiting for its first step there.
       const bound = lib.readSessionBinding(dir, UNSEEN);
       expect(bound?.intent).toBe(CURSOR_RECORD);
-      expect(bound?.source).toBe("cursor");
+      expect(bound?.source).toBe("cursor-followed");
       // Another chat switches the shared cursor; this chat stays on its work.
       lib.setActiveIntentCursor(dir, OTHER_RECORD);
       expect(lib.resolveWorkflowSelection(dir).intent).toBe(CURSOR_RECORD);
@@ -160,7 +161,9 @@ describe("the pin: nothing else reads a binding or the cursor with a raw id", ()
   // library's own exclusion and the reader list below compare the same shape on
   // Windows as on POSIX.
   const rel = (path: string): string => path.slice(REPO_ROOT.length + 1).split(sep).join("/");
-  const files = [...sources(SRC), ...sources(HARNESS)].filter((path) => rel(path) !== "core/tools/aidlc-lib.ts");
+  // The library is aidlc-lib.ts and the audit and state core it re-exports.
+  const LIBRARY = ["core/tools/aidlc-lib.ts", "core/tools/aidlc-record-core.ts"];
+  const files = [...sources(SRC), ...sources(HARNESS)].filter((path) => !LIBRARY.includes(rel(path)));
 
   test("outside the library only the named pure readers read a binding, and nobody reads helper-of", () => {
     const bindingReaders = files.filter((path) => /\breadSessionBinding\(/.test(readFileSync(path, "utf-8"))).map(rel).sort();
@@ -180,7 +183,7 @@ describe("the pin: nothing else reads a binding or the cursor with a raw id", ()
   });
 
   test("the library reads a binding only in resolveChat and its own named pure readers", () => {
-    const lib = readFileSync(join(REPO_ROOT, "core", "tools", "aidlc-lib.ts"), "utf-8").split("\n");
+    const lib = LIBRARY.flatMap((file) => readFileSync(join(REPO_ROOT, file), "utf-8").split("\n"));
     const callers: string[] = [];
     let current = "";
     for (const line of lib) {

@@ -80,7 +80,7 @@ That `report` call owns every lifecycle transition and advancement; never perfor
 
 Completion emoji: :recycle:
 Review path: `<record>/operation/feedback-optimization/`
-Approval gate: Approve (workflow complete) / Request Changes / Start New Ideation Cycle.
+Approval gate: Approve (workflow complete) / Request Changes.
 
 This is the final stage. Upon approval, the full AI-DLC workflow is complete. The feedback loop document feeds insights back into the next Ideation cycle if the user chooses to continue iterating.
 

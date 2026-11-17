@@ -36,7 +36,7 @@ import { shellArg } from "../../core/tools/aidlc-lib.ts";
 
 const INVOCATION = "bun .claude/tools/aidlc-orchestrate.ts";
 const LOG = "bun .claude/tools/aidlc-log.ts";
-const OTHER = "**Other** \u2014 describe what you want instead";
+const OTHER = "**Other** - describe what you want instead";
 const HINT = "Reply with a number (or just tell me).";
 
 type Json = Record<string, unknown>;
@@ -53,7 +53,8 @@ function namesAField(text: string): string[] {
   const plain = prose(text);
   return knownDirectiveFieldNames()
     .filter((name) => name.includes("_"))
-    .filter((name) => new RegExp(`(^|[^\\w./-])${name}(?![\\w./-])`).test(plain));
+    // A dot after the name is still the name ("stage_validity.warning", or a sentence that ends on it).
+    .filter((name) => new RegExp(`(^|[^\\w./-])${name}(?![\\w/-])`).test(plain));
 }
 
 // --- Fixtures: the steps the engine builds, as plain objects -------------------
@@ -245,6 +246,14 @@ function routingAsk(records: boolean): Json {
 }
 
 const REPO_FACTS: Json = { repositories: 12, lines: 1200, minutes_per_repository: { low: 4, high: 7 } };
+const STAGE_VALIDITY: Json = {
+  state: "drifted",
+  directly_stale: ["requirements-analysis"],
+  needs_revalidation: [],
+  untracked: [],
+  earliest_affected_stage: "requirements-analysis",
+  warning: "Requirements changed after you approved it. Redo it?",
+};
 
 const ASK_TYPES = [
   "scope-confirm", "compose-offer", "intent-pick", "unit-paused", "project-type", "plan-approval", "guard-recovery",
@@ -256,7 +265,7 @@ const ASK_TYPES = [
 describe("the engine renders every question it asks", () => {
   test("the numbered form is the prompt, the options, Other, and the reply hint, in the routing question's shape", () => {
     expect(numberedProseQuestion("Which?", [{ label: "A", detail: "the first" }, { label: "B" }])).toBe(
-      "Which?\n\n1. **A** \u2014 the first\n2. **B**\n3. " + OTHER + "\n\n" + HINT,
+      "Which?\n\n1. **A** - the first\n2. **B**\n3. " + OTHER + "\n\n" + HINT,
     );
   });
 
@@ -320,7 +329,7 @@ describe("the engine renders every question it asks", () => {
       ["The bugfix plan", `${INVOCATION} next --scope bugfix --request a1b2c3d4`],
       ["The classic plan", `${INVOCATION} next --scope classic --request a1b2c3d4`],
     ]);
-    expect(str(notes(ask("compose-offer")).numbered_prose_question)).toContain("2. **The bugfix plan** \u2014 7 stages");
+    expect(str(notes(ask("compose-offer")).numbered_prose_question)).toContain("2. **The bugfix plan** - 7 stages");
   });
 
   test("the plan question shows each plan's summary and path above the choices", () => {
@@ -333,7 +342,7 @@ describe("the engine renders every question it asks", () => {
   test("a guard question offers its ways on; a terminal one has no options; the agent's own work is no question", () => {
     const shown = notes(ask("guard-recovery"));
     expect((shown.choices as Array<{ label: string }>).map((c) => c.label)).toEqual(["Ask for changes", "Review it again"]);
-    expect(str(shown.numbered_prose_question)).toContain("1. **Ask for changes** \u2014 Say what should change");
+    expect(str(shown.numbered_prose_question)).toContain("1. **Ask for changes** - Say what should change");
     const terminal = notes(ask("guard-recovery", { remedies: [], state_signature: "sig" }));
     expect(terminal.choices).toEqual([]);
     expect(terminal.numbered_prose_question).toBe("The question for the person.");
@@ -526,7 +535,14 @@ describe("a stage step carries its instructions, not the fields to branch on", (
       // What reading many repositories takes, with the question and on the step.
       notes(ask("project-type", { ask_type: "repo-scope", repo_facts: REPO_FACTS })),
       notes(runStage({ stage: "reverse-engineering", repo_facts: REPO_FACTS })),
+      // The lines for the person and the finished-stage warning, alone and together.
+      notes(runStage({ change_notices: ["A line for the person."] })),
+      notes(runStage({ stage_validity: STAGE_VALIDITY })),
+      notes(ask("intent-pick", { change_notices: ["A line for the person."], stage_validity: STAGE_VALIDITY })),
     ];
+    const both = steps.at(-1) as Json;
+    expect(typeof both.change_notices_note).toBe("string");
+    expect(typeof both.stage_validity_note).toBe("string");
     const leaks: string[] = [];
     for (const step of steps) {
       for (const [field, value] of Object.entries(step)) {

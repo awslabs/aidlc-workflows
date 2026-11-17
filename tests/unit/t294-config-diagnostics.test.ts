@@ -12,6 +12,8 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -27,6 +29,7 @@ import { EARLIER_KIRO_IDE_DROPS } from "../harness/earlier-kiro-plugin-drops.ts"
 import { doctorCommandLines, vscodeVisibleOutput } from "../harness/vscode-output-trim.ts";
 import {
   applyConfigDiagnosticRecords,
+  cliVersionShown,
   codexTrustIssues,
   copilotCliTrust,
   copilotConfigPath,
@@ -64,8 +67,10 @@ import {
 } from "../../core/tools/aidlc-config-diagnostics.ts";
 import { DEVIN_MIN_VERSION_STRING } from "../../core/tools/aidlc-devin-version.ts";
 import { cmdScriptLaunch } from "../../core/tools/aidlc-executable-path.ts";
+import { addRootBlocks } from "../../core/tools/aidlc-includes.ts";
 import { collectDoctorReport, firingHooksLastFired, kiroDisabledHookChecks } from "../../core/tools/aidlc-utility.ts";
 import * as runtimePaths from "../../core/tools/aidlc-runtime-paths.ts";
+import { typedHarnessName } from "../../core/tools/aidlc-runtime-paths.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -139,7 +144,7 @@ function install(harness: string, source = join(DIST_RELEASE, harness)): string 
     "--from",
     source,
     "--harness",
-    harness,
+    typedHarnessName(harness),
     "--mcp",
     "defaults",
     "--yes",
@@ -800,7 +805,8 @@ describe("t294 runtime diagnostics", () => {
       command: "kiro-cli",
       status: "found",
     }));
-    // The kiro row's own floor is the 2.6 its guide asks for.
+    // The kiro row's own floor is the 2.6 its guide asks for; `--v2` (2.21.4)
+    // is a start flag, not a floor.
     expect(probeHarnessCli("kiro", {
       which: () => "/opt/kiro/bin/kiro-cli",
       run: () => ({ status: 0, stdout: "kiro-cli 2.5.9\n" }),
@@ -809,6 +815,36 @@ describe("t294 runtime diagnostics", () => {
       status: "too-old",
       minimumVersion: "2.6.0",
     }));
+    expect(probeHarnessCli("kiro", {
+      which: () => "/opt/kiro/bin/kiro-cli",
+      run: () => ({ status: 0, stdout: "kiro-cli 2.6.0\n" }),
+    })).toEqual(expect.objectContaining({ command: "kiro-cli", status: "found" }));
+  });
+
+  // The adapter's object entry points ({ id, setup, server }) need opencode
+  // 1.18.29; an older opencode 1 no longer loads it, so doctor says so instead
+  // of staying green while no turn of the person's is recorded.
+  test("opencode below 1.18.29 is named with the upgrade; 1.18.29 and OpenCode 2 pass", () => {
+    const opencodeAt = (stdout: string) => ({
+      interactivePath: "/usr/local/bin",
+      which: () => "/usr/local/bin/opencode",
+      run: () => ({ status: 0, stdout }),
+    });
+    expect(probeHarnessCli("opencode", opencodeAt("1.18.20\n"))).toEqual(expect.objectContaining({
+      command: "opencode",
+      required: true,
+      status: "too-old",
+      version: "1.18.20",
+      minimumVersion: "1.18.29",
+      remediation: "Install or upgrade opencode to 1.18.29 or later; OpenCode 2 works too.",
+    }));
+    // opencode 1 prints the bare number; OpenCode 2.2.1 prints "opencode v2.2.1".
+    for (const version of ["1.18.29", "opencode v2.2.1"]) {
+      expect(probeHarnessCli("opencode", opencodeAt(`${version}\n`)), version).toEqual(expect.objectContaining({
+        status: "found",
+        version,
+      }));
+    }
   });
 
   // A `copilot` whose --version reply has no version number, like the line
@@ -1067,7 +1103,7 @@ describe("t294 runtime diagnostics", () => {
     // A file written before this release: workspace-sync adds the key.
     const older = check(workspace());
     expect(older).toEqual(expect.objectContaining({ pass: false, severity: "warn" }));
-    expect(older?.fix).toContain("run aidlc system workspace-sync");
+    expect(older?.fix).toContain("run bun .aidlc/tools/aidlc.ts system workspace-sync");
     // A settings object without the key is the team's choice.
     expect(check(workspace({ "editor.tabSize": 2 }))?.pass).toBe(true);
     // A settings member that is not an object is broken, never the team's choice.
@@ -1147,7 +1183,7 @@ describe("t294 runtime diagnostics", () => {
     })).toEqual(expect.objectContaining({
       pass: false,
       severity: "warn",
-      label: "Harness CLI: optional kiro-cli kiro-cli 2.24.0 is below 2.24.1",
+      label: "Harness CLI: optional kiro-cli 2.24.0 is below 2.24.1",
     }));
 
     // Required CLIs are unchanged: missing or too old is a warning.
@@ -1156,7 +1192,7 @@ describe("t294 runtime diagnostics", () => {
     expect(cliRow(codex, ".codex", printsVersion("codex-cli 0.144.0\n"))).toEqual(expect.objectContaining({
       pass: false,
       severity: "warn",
-      label: "Harness CLI: codex codex-cli 0.144.0 is below 0.145.0",
+      label: "Harness CLI: codex 0.144.0 is below 0.145.0",
     }));
     expect(cliRow(codex, ".codex", { which: () => null })).toEqual(expect.objectContaining({
       pass: false,
@@ -1198,6 +1234,74 @@ describe("t294 runtime diagnostics", () => {
     if (status === "too-old") {
       expect(result.remediation).toContain(DEVIN_MIN_VERSION_STRING);
     }
+  });
+  // Most CLIs answer --version with more than the version: "codex-cli
+  // 0.167.1", "kiro-cli 3.2.0", "2.1.322 (Claude Code)", and Copilot adds an
+  // update hint on a second line. Every line that shows it shows the version
+  // alone, on every harness the release ships.
+  test("a Harness CLI row and setup's runtime issue show the CLI's version alone, on every harness", () => {
+    const harnesses = readdirSync(join(REPO_ROOT, "harness"), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && existsSync(join(REPO_ROOT, "harness", entry.name, "manifest.ts")))
+      .map((entry) => entry.name)
+      .sort();
+    expect(harnesses.length).toBeGreaterThanOrEqual(7);
+    for (const harness of harnesses) {
+      const spec = probeHarnessCli(harness as Parameters<typeof probeHarnessCli>[0], { which: () => null });
+      if (!spec.command) continue;
+      const command = spec.command;
+      const project = temp(`aidlc-t294-cli-version-${harness}-`);
+      cpSync(join(DIST, harness), project, { recursive: true });
+      const harnessDir = readdirSync(project).find((name) => existsSync(join(project, name, "tools", "data", "harness.json")));
+      if (!harnessDir) throw new Error(`no harness folder in dist/${harness}`);
+      const replying = (stdout: string) => ({
+        interactivePath: "/opt/tools",
+        which: (name: string) => `/opt/tools/${name}`,
+        run: (path: string) => path === `/opt/tools/${command}`
+          ? { status: 0, stdout }
+          : { status: 0, stdout: "/usr/bin:/bin\n" },
+      });
+      const cliRow = (stdout: string) => {
+        const row = runtimeDoctorChecks(project, harnessDir, { runtime: replying(stdout) })
+          .find((check) => check.label.startsWith("Harness CLI:"));
+        if (!row) throw new Error(`${harness}: no Harness CLI row`);
+        return row.label;
+      };
+      expect(cliRow(`${command}-cli 9999.9.9\r\nRun '${command} update' to check for updates.\r\n`), harness)
+        .toBe(`Harness CLI: ${command} 9999.9.9 at /opt/tools/${command}`);
+      if (!spec.minimumVersion) continue;
+      expect(cliRow(`${command}-cli 0.0.1\n`), harness)
+        .toBe(`Harness CLI: ${spec.required ? "" : "optional "}${command} 0.0.1 is below ${spec.minimumVersion}`);
+      if (!spec.required) continue;
+      const issue = runtimeIssues(probeRuntime(project, harnessDir, spec.harness, replying(`${command}-cli 0.0.1\n`)))
+        .find((entry) => entry.id === "runtime-harness-cli-old");
+      expect(issue?.message, harness).toBe(`${command} 0.0.1 is below ${spec.minimumVersion}`);
+    }
+  });
+
+  test("the replies the real CLIs give read as their version alone", () => {
+    const claude = temp("aidlc-t294-cli-version-claude-");
+    cpSync(join(DIST, "claude"), claude, { recursive: true });
+    const copilot = temp("aidlc-t294-cli-version-copilot-");
+    cpSync(join(DIST, "copilot"), copilot, { recursive: true });
+    const row = (project: string, harnessDir: string, command: string, stdout: string) =>
+      runtimeDoctorChecks(project, harnessDir, {
+        runtime: {
+          interactivePath: "/opt/tools",
+          which: (name: string) => `/opt/tools/${name}`,
+          run: (path: string) => path === `/opt/tools/${command}` ? { status: 0, stdout } : { status: 0, stdout: "/usr/bin:/bin\n" },
+        },
+      }).find((check) => check.label.startsWith("Harness CLI:"))?.label;
+    expect(row(claude, ".claude", "claude", "2.1.322 (Claude Code)\n"))
+      .toBe("Harness CLI: claude 2.1.322 at /opt/tools/claude");
+    expect(row(copilot, ".aidlc", "copilot", "GitHub Copilot CLI 1.0.109.\nRun 'copilot update' to check for updates.\n"))
+      .toBe("Harness CLI: copilot 1.0.109 at /opt/tools/copilot");
+    expect(row(copilot, ".aidlc", "copilot", "GitHub Copilot CLI 1.0.60.\n"))
+      .toBe("Harness CLI: optional copilot 1.0.60 is below 1.0.74");
+    // A prerelease at the end of Copilot's sentence keeps its tag, not the period.
+    expect(row(copilot, ".aidlc", "copilot", "GitHub Copilot CLI 1.0.110-0.\n"))
+      .toBe("Harness CLI: copilot 1.0.110-0 at /opt/tools/copilot");
+    expect(cliVersionShown("2026.11.11-043ef28")).toBe("2026.11.11-043ef28");
+    expect(cliVersionShown("aidlc 1.2.3-beta.1 (build)")).toBe("1.2.3-beta.1");
   });
 });
 
@@ -1842,6 +1946,53 @@ describe("t294 trust diagnostics", () => {
     '{"enabled":true,"name":"aidlc-left-over","when":{"type":"promptSubmit"},' +
     '"then":{"type":"runCommand","command":"bun .kiro/hooks/aidlc-human-turn.ts"}}';
 
+  // Claude Code's row, as the installed aidlc command reads it. A bare Bash allow
+  // an early release shipped and a refresh keeps as the person's takes nothing
+  // from AI-DLC's own entry: the row passes and says once what it lets through.
+  test("claude: native trust passes beside a bare Bash allow entry and says it lets every command through", async () => {
+    const project = temp("aidlc-t294-trust-claude-bare-bash-");
+    cpSync(join(DIST_RELEASE, "claude"), project, { recursive: true });
+    const machine = temp("aidlc-t294-trust-claude-machine-");
+    const overrides = {
+      AIDLC_HARNESS_DIR: ".claude",
+      AIDLC_HARNESS_NAME: "claude",
+      AIDLC_RUNTIME_HARNESS_ROOT: join(project, ".claude"),
+      AIDLC_RUNTIME_ROOT: DIST_RELEASE,
+      AIDLC_INSTALL_ROOT: machine,
+      AIDLC_BIN_DIR: join(machine, "bin"),
+      AIDLC_OFFLINE: "1",
+      ...hookPathEnv(),
+    };
+    const previous = new Map(Object.keys(overrides).map((key) => [key, process.env[key]]));
+    const compiled = spyOn(runtimePaths, "isCompiledExecutable").mockReturnValue(true);
+    const trustRow = async () => {
+      const report = await collectDoctorReport(project);
+      const rows = report.checks.filter((check) => check.label.startsWith("Native command trust"));
+      expect(rows).toHaveLength(1);
+      return rows[0];
+    };
+    try {
+      Object.assign(process.env, overrides);
+      const clean = await trustRow();
+      expect(clean.pass, clean.label).toBe(true);
+      expect(clean.label).not.toContain("every Bash command");
+      const settingsPath = join(project, ".claude", "settings.json");
+      const settings = JSON.parse(readFileSync(settingsPath, "utf-8")) as { permissions: { allow: string[] } };
+      settings.permissions.allow.push("Bash");
+      writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+      const broad = await trustRow();
+      expect(broad.pass, broad.label).toBe(true);
+      expect(broad.label.match(/every Bash command/g)?.length).toBe(1);
+      expect((JSON.parse(readFileSync(settingsPath, "utf-8")) as typeof settings).permissions.allow).toContain("Bash");
+    } finally {
+      compiled.mockRestore();
+      for (const [key, value] of previous) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
   for (const harness of ["kiro-ide", "kiro"] as const) {
     test(`${harness}: Kiro native trust passes with a dropped plugin's compose hook, and still counts a leftover Bun entry`, async () => {
       const project = temp(`aidlc-t294-trust-kiro-plugin-${harness}-`);
@@ -1859,6 +2010,51 @@ describe("t294 trust diagnostics", () => {
       expect(leftover.label).toBe(KIRO_TRUST_INCOMPLETE);
     });
 
+    test(`${harness}: Kiro native trust counts a compose hook beside a plugin folder no build names`, async () => {
+      const project = temp(`aidlc-t294-trust-kiro-plugin-folder-${harness}-`);
+      cpSync(join(DIST_RELEASE, harness), project, { recursive: true });
+      cpSync(join(DIST, "plugins", "test-pro", "kiro-ide"), project, { recursive: true });
+      const plugins = join(project, ".kiro", "aidlc-plugins");
+      const registration = join(project, ".kiro", "hooks", "aidlc-test-pro-compose.json");
+      const written = readFileSync(registration, "utf-8");
+      // The plugin's folder renamed, and its registration rewritten as a build
+      // would write it for that folder.
+      let folder = "aidlc-test-pro";
+      const moveTo = (name: string): void => {
+        renameSync(join(plugins, folder), join(plugins, name));
+        folder = name;
+        const text = written.replaceAll("aidlc-plugins/aidlc-test-pro", `aidlc-plugins/${name}`);
+        expect(text).not.toBe(written);
+        writeFileSync(registration, text);
+      };
+      // A build of a plugin someone else makes names the folder after the plugin alone.
+      moveTo("test-pro");
+      const ownName = await kiroNativeTrust(project, harness);
+      expect(ownName.pass, ownName.label).toBe(true);
+      moveTo("test-pro-copy");
+      const renamed = await kiroNativeTrust(project, harness);
+      expect(renamed.label).toBe(KIRO_TRUST_INCOMPLETE);
+    });
+
+    // Windows runners may lack the permissions this fixture needs.
+    test.skipIf(process.platform === "win32")(`${harness}: Kiro native trust recognises a dropped plugin's registration only when it is a plain file`, async () => {
+      const project = temp(`aidlc-t294-trust-kiro-plugin-entry-${harness}-`);
+      cpSync(join(DIST_RELEASE, harness), project, { recursive: true });
+      cpSync(join(DIST, "plugins", "test-pro", "kiro-ide"), project, { recursive: true });
+      const registration = join(project, ".kiro", "hooks", "aidlc-test-pro-compose.json");
+      const written = readFileSync(registration, "utf-8");
+      const outside = join(temp(`aidlc-t294-trust-kiro-plugin-entry-target-${harness}-`), "aidlc-test-pro-compose.json");
+      writeFileSync(outside, written);
+      rmSync(registration);
+      symlinkSync(outside, registration);
+      const linked = await kiroNativeTrust(project, harness);
+      expect(linked.label).toBe(KIRO_TRUST_INCOMPLETE);
+      rmSync(registration);
+      writeFileSync(registration, written);
+      const regular = await kiroNativeTrust(project, harness);
+      expect(regular.pass, regular.label).toBe(true);
+    });
+
     for (const earlier of EARLIER_KIRO_IDE_DROPS) {
       test(`${harness}: Kiro native trust passes with a plugin dropped from ${earlier.build}, a refresh keeps it so, and an edited registration or a leftover Bun entry still fails it`, async () => {
         const project = install(harness);
@@ -1868,7 +2064,7 @@ describe("t294 trust diagnostics", () => {
         const dropped = await kiroNativeTrust(project, harness);
         expect(dropped.pass, dropped.label).toBe(true);
         const refreshed = run([
-          "config", "--project-dir", project, "--from", join(DIST_RELEASE, harness), "--harness", harness,
+          "config", "--project-dir", project, "--from", join(DIST_RELEASE, harness), "--harness", typedHarnessName(harness),
           "--mcp", "defaults", "--yes",
         ], project);
         expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
@@ -2614,7 +2810,7 @@ describe("t294 trust diagnostics", () => {
     );
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("Kiro hooks switched off in Agent Hooks: guards and the reply recorder fail, the rest warn", () => {
+  test("Kiro hooks switched off in their files: guards and the reply recorder fail, the rest warn", () => {
     const ide = temp("aidlc-t294-kiro-ide-hooks-off-");
     cpSync(join(DIST, "kiro-ide"), ide, { recursive: true });
     const hooks = join(ide, ".kiro", "hooks");
@@ -2638,19 +2834,19 @@ describe("t294 trust diagnostics", () => {
     expect(kiroDisabledHookChecks(ide, ".kiro")).toEqual([
       {
         pass: false,
-        label: "AI-DLC hook aidlc-guard-tool-call is switched off in Kiro's Agent Hooks: the approved plan, reviewed work and AI-DLC's records are not protected",
-        fix: 'turn aidlc-guard-tool-call back on under Kiro\'s Agent Hooks, or set "enabled": true in .kiro/hooks/aidlc-guard-tool-call.json',
+        label: "AI-DLC hook aidlc-guard-tool-call is switched off: the approved plan, reviewed work and AI-DLC's records are not protected",
+        fix: 'in Kiro CLI, change "enabled": false to true in .kiro/hooks/aidlc-guard-tool-call.json, then quit Kiro and start `kiro-cli --v3` again in this folder; in Kiro IDE, turn aidlc-guard-tool-call back on under Agent Hooks',
       },
       {
         pass: false,
-        label: "AI-DLC hook aidlc-record-human-turn is switched off in Kiro's Agent Hooks: your replies are not recorded, so approval gates cannot tell your answer from the assistant's, and /aidlc commands typed in chat are not run directly",
-        fix: 'turn aidlc-record-human-turn back on under Kiro\'s Agent Hooks, or set "enabled": true in .kiro/hooks/aidlc-record-human-turn.json',
+        label: "AI-DLC hook aidlc-record-human-turn is switched off: your replies are not recorded, so approval gates cannot tell your answer from the assistant's, and /aidlc commands typed in chat are not run directly",
+        fix: 'in Kiro CLI, change "enabled": false to true in .kiro/hooks/aidlc-record-human-turn.json, then quit Kiro and start `kiro-cli --v3` again in this folder; in Kiro IDE, turn aidlc-record-human-turn back on under Agent Hooks',
       },
       {
         pass: true,
         severity: "warn",
-        label: "AI-DLC hooks switched off in Kiro's Agent Hooks: aidlc-log-subagent (a specialist agent's finished part is not recorded); aidlc-session-start (your first prompt starts the session instead)",
-        fix: 'turn them back on under Kiro\'s Agent Hooks, or set "enabled": true in their .kiro/hooks/ files',
+        label: "AI-DLC hooks switched off: aidlc-log-subagent (a specialist agent's finished part is not recorded); aidlc-session-start (your first prompt starts the session instead)",
+        fix: 'in Kiro CLI, change "enabled": false to true in their .kiro/hooks/ files, then quit Kiro and start `kiro-cli --v3` again in this folder; in Kiro IDE, turn them back on under Agent Hooks',
       },
     ]);
 
@@ -2675,7 +2871,7 @@ describe("t294 trust diagnostics", () => {
     expect(kiroDisabledHookChecks(cli, ".kiro")).toEqual([]);
   });
 
-  test("doctor fails a Kiro IDE guard hook switched off in Agent Hooks", () => {
+  test("doctor fails a Kiro guard hook switched off in its file", () => {
     const project = install("kiro-ide");
     const guard = join(project, ".kiro", "hooks", "aidlc-guard-tool-call.json");
     writeFileSync(guard, JSON.stringify({ ...JSON.parse(readFileSync(guard, "utf-8")), enabled: false }));
@@ -2693,7 +2889,7 @@ describe("t294 trust diagnostics", () => {
     if (result.error) throw result.error;
     expect(JSON.parse(result.stdout).data.checks).toContainEqual(expect.objectContaining({
       pass: false,
-      label: "AI-DLC hook aidlc-guard-tool-call is switched off in Kiro's Agent Hooks: the approved plan, reviewed work and AI-DLC's records are not protected",
+      label: "AI-DLC hook aidlc-guard-tool-call is switched off: the approved plan, reviewed work and AI-DLC's records are not protected",
     }));
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
@@ -2776,9 +2972,11 @@ describe("t294 post-apply outstanding actions", () => {
     )) as { hookActivation: { recovery: string } }).hookActivation.recovery;
     const step = "in Codex, type /hooks, press t to trust all, then press Esc";
     expect(recovery.startsWith(`I${step.slice(1)}.`), recovery).toBe(true);
+    // The list names the config section, never the action's internal id.
     expect(applied.stdout).toContain(
-      `trust/codex-hook-trust-missing: Codex has not trusted this project's hooks yet - ${step}`,
+      `\n  trust: Codex has not trusted this project's hooks yet - ${step}`,
     );
+    expect(applied.stdout).not.toContain("codex-hook-trust-missing");
     expect(applied.stdout).not.toContain("config trust");
 
     const quiet = run([
@@ -2878,7 +3076,9 @@ describe("t294 post-apply outstanding actions", () => {
       "--yes",
     ], project, env);
     expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
-    expect(refreshed.stdout).toContain("bedrock-model-access");
+    // The action by its section and words; its id is shown by the check the step names.
+    expect(refreshed.stdout).toContain("\n  providers: Verify Amazon Bedrock model access in the recorded region");
+    expect(refreshed.stdout).not.toContain("bedrock-model-access");
     expect(refreshed.stdout).toContain(
       "bun .claude/tools/aidlc.ts config providers --check",
     );
@@ -2901,6 +3101,306 @@ describe("t294 post-apply outstanding actions", () => {
 });
 
 describe("t294 instruction-file doctor row", () => {
+  for (const setup of ["configured", "copy"] as const) {
+    function codexProject(): string {
+      if (setup === "configured") return install("codex");
+      const project = temp("aidlc-t294-copy-override-");
+      cpSync(join(DIST, "codex", ".codex"), join(project, ".codex"), { recursive: true });
+      cpSync(join(DIST, "codex", "aidlc"), join(project, "aidlc"), { recursive: true });
+      const part = readFileSync(join(project, ".codex", "tools", "data", "root-blocks", "agents"), "utf-8").trim();
+      writeFileSync(join(project, "AGENTS.md"), `# Shop\n\n<!-- BEGIN AI-DLC:agents -->\n${part}\n<!-- END AI-DLC:agents -->\n`);
+      return project;
+    }
+
+    test(`${setup}: Codex override without the block cannot pass on AGENTS.md's block`, () => {
+      const project = codexProject();
+      expect(instructionFileDoctorCheck(project, ".codex").pass).toBe(true);
+      const overridePath = join(project, "AGENTS.override.md");
+      writeFileSync(overridePath, "# Team instructions\n\nKeep these instructions.\n");
+      const paths = ["AGENTS.md", "AGENTS.override.md", ".codex/config.toml", ".codex/onboarding.md"];
+      if (setup === "configured") paths.push(".codex/tools/data/aidlc-manifest.json");
+      const before = paths.map((path) => readFileSync(join(project, path)));
+
+      const result = instructionFileDoctorCheck(project, ".codex");
+      expect(result.pass).toBe(false);
+      expect(result.severity).toBe("warn");
+      expect(result.label).toContain("AGENTS.override.md");
+      expect(result.fix).toContain("AGENTS.md");
+      expect(result.fix).toContain("AGENTS.override.md");
+      expect(result.fix).toContain("copy");
+      expect(result.fix).not.toContain("--force");
+      expect(paths.map((path) => readFileSync(join(project, path)))).toEqual(before);
+    });
+
+    test(`${setup}: Codex override holds the block even without AGENTS.md`, () => {
+      const project = codexProject();
+      const agentsPath = join(project, "AGENTS.md");
+      const block = readFileSync(agentsPath, "utf-8");
+      const overridePath = join(project, "AGENTS.override.md");
+      const content = `# Team instructions\n\n${block}\nKeep this team's closing note.\n`;
+      writeFileSync(overridePath, content);
+      rmSync(agentsPath);
+
+      const result = instructionFileDoctorCheck(project, ".codex");
+      expect(result.pass).toBe(true);
+      expect(result.label).toContain("AGENTS.override.md");
+      expect(existsSync(agentsPath)).toBe(false);
+      expect(readFileSync(overridePath, "utf-8")).toBe(content);
+    });
+
+    test(`${setup}: Codex override validates its block rather than the hidden block`, () => {
+      const project = codexProject();
+      const block = readFileSync(join(project, "AGENTS.md"), "utf-8");
+      const overridePath = join(project, "AGENTS.override.md");
+      for (const content of [
+        block.replace("<!-- END AI-DLC:agents -->", "changed guidance\n<!-- END AI-DLC:agents -->"),
+        block.replace("<!-- END AI-DLC:agents -->", ""),
+        `${block}\n${block}`,
+      ]) {
+        writeFileSync(overridePath, content);
+        const result = instructionFileDoctorCheck(project, ".codex");
+        expect(result.pass).toBe(false);
+        expect(result.label).toContain("AGENTS.override.md");
+        expect(result.fix).toContain("replace");
+        expect(result.fix).toContain("markers");
+        expect(result.fix).not.toContain("--force");
+        expect(readFileSync(overridePath, "utf-8")).toBe(content);
+      }
+      const repaired = `# Keep this team's instructions\n\n${block}\nKeep the closing note too.\n`;
+      writeFileSync(overridePath, repaired);
+      expect(instructionFileDoctorCheck(project, ".codex").pass).toBe(true);
+      expect(readFileSync(overridePath, "utf-8")).toBe(repaired);
+    });
+
+    // What a copy holds once an update changed AI-DLC's block, or after an
+    // edit inside it: doctor cannot tell the two apart, so it says neither.
+    test(`${setup}: an earlier or edited block in the Codex override is not called hand-modified`, () => {
+      const project = codexProject();
+      const block = readFileSync(join(project, "AGENTS.md"), "utf-8");
+      writeFileSync(
+        join(project, "AGENTS.override.md"),
+        block.replace("<!-- END AI-DLC:agents -->", "Earlier guidance.\n<!-- END AI-DLC:agents -->"),
+      );
+      const result = instructionFileDoctorCheck(project, ".codex");
+      expect(result.pass).toBe(false);
+      expect(result.label).toContain("Codex reads AGENTS.override.md, whose AI-DLC block is not the current one");
+      expect(result.label).not.toContain("hand-modified");
+      expect(result.fix).toContain("with the block from AGENTS.md");
+    });
+
+    // The override is the person's file: doctor says what Codex reads there and
+    // offers AI-DLC's block, never orders it or calls the file a conflict.
+    test(`${setup}: doctor states what Codex reads in AGENTS.override.md and offers the copy`, () => {
+      const project = codexProject();
+      const block = readFileSync(join(project, "AGENTS.md"), "utf-8");
+      const end = "<!-- END AI-DLC:agents -->";
+      const overridePath = join(project, "AGENTS.override.md");
+      const unchanged = instructionFileDoctorCheck(project, ".codex");
+      expect(unchanged.pass).toBe(true);
+      expect(unchanged.label).not.toContain("AGENTS.override.md");
+      const copy = "if you want Codex to read it too, copy the AI-DLC:agents block from AGENTS.md " +
+        "into AGENTS.override.md, keeping your own text";
+      const replace = "if you want Codex to read the current one, replace the AI-DLC block and any unmatched " +
+        "or duplicate AI-DLC:agents markers in AGENTS.override.md with the block from AGENTS.md, keeping your own text";
+      for (const [content, fact, fix] of [
+        ["# Team instructions\n", "which has no AI-DLC block", copy],
+        ["", "which has no AI-DLC block", copy],
+        [block.replace(end, `Earlier guidance.\n${end}`), "whose AI-DLC block is not the current one", replace],
+        [block.replace(end, ""), "whose AI-DLC:agents markers are unmatched or duplicated", replace],
+        [`${block}\n${block}`, "whose AI-DLC:agents markers are unmatched or duplicated", replace],
+      ]) {
+        writeFileSync(overridePath, content);
+        expect(instructionFileDoctorCheck(project, ".codex")).toEqual({
+          pass: false,
+          severity: "warn",
+          label: `Instruction file: Codex reads AGENTS.override.md, ${fact}; AI-DLC keeps its block in AGENTS.md`,
+          fix,
+        });
+        expect(readFileSync(overridePath, "utf-8")).toBe(content);
+      }
+      writeFileSync(overridePath, `# Team instructions\n\n${block}`);
+      expect(instructionFileDoctorCheck(project, ".codex")).toEqual({
+        pass: true,
+        label: `${unchanged.label}; Codex reads AGENTS.override.md instead of AGENTS.md`,
+      });
+    });
+
+    // A team that commits its override and keeps AGENTS.md personal: a clone
+    // has no AGENTS.md to copy from until config writes it.
+    test(`${setup}: with no AGENTS.md, the offer says config writes it first`, () => {
+      const project = codexProject();
+      const block = readFileSync(join(project, "AGENTS.md"), "utf-8");
+      rmSync(join(project, "AGENTS.md"));
+      const overridePath = join(project, "AGENTS.override.md");
+      for (const [content, fix] of [
+        ["# Team instructions\n", /^if you want Codex to read it too, run `[^`]* config` to write AI-DLC's block to AGENTS\.md, then copy it into AGENTS\.override\.md, keeping your own text$/],
+        [
+          block.replace("<!-- END AI-DLC:agents -->", "Earlier guidance.\n<!-- END AI-DLC:agents -->"),
+          /^if you want Codex to read the current one, run `[^`]* config` to write AI-DLC's block to AGENTS\.md, then replace /,
+        ],
+      ] as const) {
+        writeFileSync(overridePath, content);
+        const result = instructionFileDoctorCheck(project, ".codex");
+        expect(result.severity).toBe("warn");
+        expect(result.fix).toMatch(fix);
+        expect(readFileSync(overridePath, "utf-8")).toBe(content);
+      }
+    });
+
+    // Windows file symlinks require privileges a contributor may not have.
+    test.skipIf(process.platform === "win32")(`${setup}: doctor follows a symlinked override and only reads it`, () => {
+      const project = codexProject();
+      const target = join(project, "team-instructions.md");
+      writeFileSync(target, "# Team instructions\n");
+      const link = join(project, "AGENTS.override.md");
+      symlinkSync(target, link);
+      const result = instructionFileDoctorCheck(project, ".codex");
+      expect(result.label).toBe(
+        "Instruction file: Codex reads AGENTS.override.md, which has no AI-DLC block; AI-DLC keeps its block in AGENTS.md",
+      );
+      expect(result.fix).toStartWith("if you want Codex to read it too, copy");
+      expect(readlinkSync(link)).toBe(target);
+      expect(readFileSync(target, "utf-8")).toBe("# Team instructions\n");
+    });
+
+    test(`${setup}: empty Codex override still hides AGENTS.md`, () => {
+      const project = codexProject();
+      for (const content of ["", " \t\r\n"]) {
+        writeFileSync(join(project, "AGENTS.override.md"), content);
+        const result = instructionFileDoctorCheck(project, ".codex");
+        expect(result.pass).toBe(false);
+        expect(result.label).toContain("Codex reads AGENTS.override.md, which has no AI-DLC block");
+        expect(result.fix).toContain("copy");
+      }
+    });
+
+    test(`${setup}: a directory is not a Codex override file`, () => {
+      const project = codexProject();
+      const before = instructionFileDoctorCheck(project, ".codex");
+      mkdirSync(join(project, "AGENTS.override.md"));
+      expect(instructionFileDoctorCheck(project, ".codex")).toEqual(before);
+    });
+
+    // Windows file symlinks require privileges a contributor may not have.
+    test.skipIf(process.platform === "win32")(`${setup}: Codex override follows a file symlink`, () => {
+      const project = codexProject();
+      const before = instructionFileDoctorCheck(project, ".codex");
+      const target = join(project, "team-instructions.md");
+      cpSync(join(project, "AGENTS.md"), target);
+      symlinkSync(target, join(project, "AGENTS.override.md"));
+      expect(instructionFileDoctorCheck(project, ".codex").pass).toBe(true);
+      expect(instructionFileDoctorCheck(project, ".codex").label).toContain("AGENTS.override.md");
+      writeFileSync(target, "");
+      expect(instructionFileDoctorCheck(project, ".codex").pass).toBe(false);
+      rmSync(target);
+      expect(instructionFileDoctorCheck(project, ".codex")).toEqual(before);
+    });
+
+    test(`${setup}: Codex override does not hide an AGENTS.md refresh conflict`, () => {
+      const project = codexProject();
+      const agentsPath = join(project, "AGENTS.md");
+      const block = readFileSync(agentsPath, "utf-8");
+      const overridePath = join(project, "AGENTS.override.md");
+      writeFileSync(overridePath, block);
+      const broken = block.replace("<!-- END AI-DLC:agents -->", "");
+      writeFileSync(agentsPath, broken);
+      const conflict = instructionFileDoctorCheck(project, ".codex");
+      expect(conflict.pass).toBe(false);
+      expect(conflict.label).toContain("conflict (AGENTS.md)");
+      expect(conflict.label).toContain("Codex reads AGENTS.override.md");
+      expect(conflict.fix).toContain("move AGENTS.md");
+      expect(conflict.fix).not.toContain("--force");
+      expect(readFileSync(agentsPath, "utf-8")).toBe(broken);
+
+      writeFileSync(overridePath, "# Team instructions\n");
+      const both = instructionFileDoctorCheck(project, ".codex");
+      expect(both.pass).toBe(false);
+      expect(both.label).toContain("AGENTS.md");
+      expect(both.label).toContain("Codex reads AGENTS.override.md, which has no AI-DLC block");
+      expect(both.fix).toContain("copy");
+      expect(both.fix).toContain("AGENTS.override.md");
+      writeFileSync(agentsPath, "# Personal instructions\n");
+      writeFileSync(overridePath, block);
+      expect(instructionFileDoctorCheck(project, ".codex").pass).toBe(true);
+    });
+
+    if (setup === "copy") {
+      test("copy: Codex override cannot rely on automatic legacy adoption", () => {
+        const project = codexProject();
+        const descriptorPath = join(project, ".codex/tools/data/aidlc-projection.json");
+        const descriptor = JSON.parse(readFileSync(descriptorPath, "utf-8"));
+        const legacy = "# Earlier shipped AI-DLC guidance\n";
+        const integration = descriptor.rootIntegrations.find((item: { path: string }) => item.path === "AGENTS.md");
+        integration.legacySignatures.wholeFileHashes.push(sha256Bytes(legacy));
+        writeFileSync(descriptorPath, JSON.stringify(descriptor));
+        const overridePath = join(project, "AGENTS.override.md");
+        writeFileSync(overridePath, legacy);
+        const result = instructionFileDoctorCheck(project, ".codex");
+        expect(result.pass).toBe(false);
+        expect(result.label).toContain("AGENTS.override.md");
+        expect(readFileSync(overridePath, "utf-8")).toBe(legacy);
+        rmSync(overridePath);
+        writeFileSync(join(project, "AGENTS.md"), legacy);
+        expect(instructionFileDoctorCheck(project, ".codex").pass).toBe(true);
+      });
+    }
+  }
+
+  // AGENTS.override.md stays the person's: config and session start keep
+  // AI-DLC's block in AGENTS.md and never write the override.
+  test("config leaves Codex's AGENTS.override.md as it is", () => {
+    const project = install("codex");
+    const overridePath = join(project, "AGENTS.override.md");
+    const block = readFileSync(join(project, "AGENTS.md"), "utf-8");
+    for (const content of [
+      "# Team instructions\n",
+      block.replace("<!-- END AI-DLC:agents -->", "Earlier guidance.\n<!-- END AI-DLC:agents -->"),
+    ]) {
+      writeFileSync(overridePath, content);
+      const result = run([
+        "config",
+        "--project-dir",
+        project,
+        "--from",
+        join(DIST_RELEASE, "codex"),
+        "--harness",
+        "codex",
+        "--mcp",
+        "defaults",
+        "--yes",
+      ], project);
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(readFileSync(overridePath, "utf-8")).toBe(content);
+      const record = JSON.parse(readFileSync(join(project, ".codex", "tools", "data", "aidlc-manifest.json"), "utf-8"));
+      expect(Object.keys(record.rootContributions)).not.toContain("AGENTS.override.md");
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("session start leaves Codex's AGENTS.override.md as it is", () => {
+    const project = temp("aidlc-t294-copy-override-start-");
+    cpSync(join(DIST, "codex", ".codex"), join(project, ".codex"), { recursive: true });
+    cpSync(join(DIST, "codex", "aidlc"), join(project, "aidlc"), { recursive: true });
+    writeFileSync(join(project, "AGENTS.md"), "# Shop\n");
+    const overridePath = join(project, "AGENTS.override.md");
+    writeFileSync(overridePath, "# Team instructions\n");
+    const written = addRootBlocks(project);
+    expect(written).toContain("AGENTS.md");
+    expect(written).not.toContain("AGENTS.override.md");
+    expect(readFileSync(join(project, "AGENTS.md"), "utf-8")).toContain("<!-- BEGIN AI-DLC:agents -->");
+    expect(readFileSync(overridePath, "utf-8")).toBe("# Team instructions\n");
+  });
+
+  test("non-Codex instruction checks ignore AGENTS.override.md", () => {
+    for (const harness of ["claude", "kiro", "kiro-ide", "cursor", "opencode", "copilot"]) {
+      const project = install(harness);
+      const harnessDir = runtimePaths.discoverProjectHarnesses(project)[0].harnessDir;
+      const before = instructionFileDoctorCheck(project, harnessDir);
+      expect(before.pass, harness).toBe(true);
+      writeFileSync(join(project, "AGENTS.override.md"), "# Unrelated Codex instructions\n");
+      expect(instructionFileDoctorCheck(project, harnessDir), harness).toEqual(before);
+    }
+  });
+
   test("copied Codex instructions require both root guidance and onboarding without config", () => {
     const project = temp("aidlc-t294-copy-instructions-");
     cpSync(join(DIST, "codex", "AGENTS.md"), join(project, "AGENTS.md"));
@@ -5059,6 +5559,34 @@ process.exit(0);
     expect(after.hooks).toEqual(release.hooks);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // A hand edit or a merge left the person's settings.json unparseable. Config
+  // names the file and the step, and leaves the file as it is, whether or not
+  // a provider is recorded (each takes its own read of the file).
+  for (const providers of [false, true]) {
+    test(`a settings.json that is not valid JSON is named, with the step, and left as it is${providers ? " (provider recorded)" : ""}`, () => {
+      const project = install("claude");
+      if (providers) {
+        const dataPath = join(project, ".claude", "tools", "data", "harness.json");
+        const data = JSON.parse(readFileSync(dataPath, "utf-8")) as Record<string, unknown>;
+        data.providers = { schemaVersion: 1, provider: "current" };
+        writeFileSync(dataPath, `${JSON.stringify(data, null, 2)}\n`);
+      }
+      const settingsPath = join(project, ".claude", "settings.json");
+      const broken = '{ "hooks": { broken\n';
+      writeFileSync(settingsPath, broken);
+      const refresh = run([
+        "config", "--project-dir", project,
+        "--from", join(DIST_RELEASE, "claude"), "--harness", "claude", "--yes",
+      ], project, runtimeEnv());
+      const output = refresh.stdout + refresh.stderr;
+      expect(refresh.status, output).toBe(4);
+      expect(output).toContain("error: .claude/settings.json is not valid JSON (");
+      expect(output).toMatch(/fix: correct \.claude\/settings\.json, then run `[^`]*config [^`]*--harness claude[^`]*` again/);
+      expect(output).not.toContain("pass --from the release files");
+      expect(readFileSync(settingsPath, "utf-8")).toBe(broken);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
+
   test("a release change to AI-DLC's hook entries is not reported as a local edit", () => {
     const env = runtimeEnv();
     const claude = install("claude");
@@ -5464,7 +5992,7 @@ process.exit(0);
           "--from",
           join(DIST_RELEASE, harness),
           "--harness",
-          harness,
+          typedHarnessName(harness),
           "--yes",
         ], project, env);
         // A Claude hook edit is a conflict; the team's opencode.json entries are theirs to keep.
@@ -5512,7 +6040,7 @@ process.exit(0);
           "--from",
           join(DIST_RELEASE, harness),
           "--harness",
-          harness,
+          typedHarnessName(harness),
           "--yes",
         ], project, env);
         expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
@@ -6286,7 +6814,7 @@ process.exit(0);
         "--from",
         join(DIST_RELEASE, harness),
         "--harness",
-        harness,
+        typedHarnessName(harness),
         "--yes",
       ];
       const preview = run([...args, "--dry-run", "--json"], project, env);
@@ -6584,7 +7112,7 @@ process.exit(0);
       "Unmet: provider-claude-project-override - Claude settings still carry the legacy AI-DLC Bedrock defaults",
     );
     expect(show.stdout).toContain(
-      "fix: Run aidlc config providers again to reapply the recorded answer",
+      "fix: Run bun .claude/tools/aidlc.ts config providers again to reapply the recorded answer",
     );
     expect(show.stdout).toContain("Region: not managed by AI-DLC");
     expect(show.stdout).toContain("Profile: not managed by AI-DLC");
@@ -6603,7 +7131,7 @@ process.exit(0);
       [
         "kiro",
         ["--provider", "amazon-bedrock", "--region", "us-west-2"],
-        "kiro provides its own model access; there is no provider answer to record. Use --reset to clear a legacy record.",
+        "kiro-v2 provides its own model access; there is no provider answer to record. Use --reset to clear a legacy record.",
       ],
     ] as const) {
       const project = install(harness);
@@ -6669,7 +7197,7 @@ process.exit(0);
     const check = run([...args, "--check"], project, env);
     expect(check.status, check.stdout + check.stderr).toBe(0);
     expect(check.stdout).toContain(
-      "providers needs no answer for kiro-ide; its model access is harness-managed",
+      "providers needs no answer for kiro; its model access is harness-managed",
     );
     expect(postApplyOutstandingActions(project, ".kiro", "kiro-ide", {
       skipSections: ["runtime", "trust"],
@@ -6737,7 +7265,7 @@ process.exit(0);
       "--from",
       join(DIST_RELEASE, "kiro"),
       "--harness",
-      "kiro",
+      "kiro-v2",
       "--yes",
     ], kiro, noCredentials);
     expect(refresh.status, refresh.stdout + refresh.stderr).toBe(0);
@@ -6768,7 +7296,7 @@ process.exit(0);
       "--from",
       join(DIST_RELEASE, "kiro"),
       "--harness",
-      "kiro",
+      "kiro-v2",
       "--yes",
     ], kiro, noCredentials);
     expect(kept.status, kept.stdout + kept.stderr).toBe(0);
@@ -6807,7 +7335,7 @@ process.exit(0);
     next.mcpServers["aws-pricing"].args = ["awslabs.aws-pricing-mcp-server@9.9.9"];
     delete next.mcpServers["aws-iac"];
     writeFileSync(releaseMcpPath, `${JSON.stringify(next, null, 2)}\n`);
-    const args = ["config", "--project-dir", kiro, "--from", release, "--harness", "kiro", "--yes"];
+    const args = ["config", "--project-dir", kiro, "--from", release, "--harness", "kiro-v2", "--yes"];
 
     const refresh = run(args, kiro);
     expect(refresh.status, refresh.stdout + refresh.stderr).toBe(0);
@@ -6848,7 +7376,7 @@ process.exit(0);
     const mcpPath = join(project, ".kiro", "settings", "mcp.json");
     writeFileSync(mcpPath, `${JSON.stringify({ mcpServers: { "team-docs": { command: "team-docs-server" } } }, null, 2)}\n`);
     const result = run(
-      ["config", "--project-dir", project, "--from", join(DIST_RELEASE, "kiro"), "--harness", "kiro", "--yes"],
+      ["config", "--project-dir", project, "--from", join(DIST_RELEASE, "kiro"), "--harness", "kiro-v2", "--yes"],
       project,
     );
     expect(result.status, result.stdout + result.stderr).toBe(0);
@@ -6873,7 +7401,7 @@ process.exit(0);
     const env = { KIRO_HOME: kiroHome };
     const project = temp("aidlc-t294-kiro-grants-");
     mkdirSync(join(project, ".git"));
-    const args = ["config", "--project-dir", project, "--from", join(DIST_RELEASE, "kiro"), "--harness", "kiro", "--yes"];
+    const args = ["config", "--project-dir", project, "--from", join(DIST_RELEASE, "kiro"), "--harness", "kiro-v2", "--yes"];
     const shippedAgent = JSON.parse(readFileSync(join(DIST_RELEASE, "kiro", ".kiro", "agents", "aidlc.json"), "utf-8")) as Agent;
     const shippedServers = Object.keys((JSON.parse(
       readFileSync(join(DIST_RELEASE, "kiro", ".kiro", "settings", "mcp.json"), "utf-8"),
@@ -7012,7 +7540,7 @@ process.exit(0);
       "--check",
     ], kiro, env);
     expect(kiroCheck.status, kiroCheck.stdout + kiroCheck.stderr).toBe(0);
-    expect(kiroCheck.stdout).toContain("needs no answer for kiro");
+    expect(kiroCheck.stdout).toContain("needs no answer for kiro-v2;");
     expect(kiroCheck.stdout).toContain("harness-managed");
     expect(providerDoctorCheck(kiro, ".kiro")).toEqual(expect.objectContaining({
       pass: true,
@@ -7039,10 +7567,10 @@ process.exit(0);
       ], project, env);
       expect(check.status, check.stdout + check.stderr).toBe(0);
       expect(check.stdout).toContain(
-        `providers needs no answer for ${harness}; model access comes with your ${product} session; ` +
+        `providers needs no answer for ${typedHarnessName(harness)}; model access comes with your ${product} session; ` +
           `to use your own Amazon Bedrock access${where} instead, run '`,
       );
-      expect(check.stdout).toContain(` config providers --harness ${harness}'`);
+      expect(check.stdout).toContain(` config providers --harness ${typedHarnessName(harness)}'`);
       expect(check.stdout).not.toContain("shipped fallback");
       // Run from elsewhere, the command still names the project.
       const elsewhere = temp(`aidlc-t294-elsewhere-${harness}-`);
@@ -7054,7 +7582,7 @@ process.exit(0);
         "--check",
       ], elsewhere, env);
       expect(away.status, away.stdout + away.stderr).toBe(0);
-      expect(away.stdout).toContain(`config providers --harness ${harness} --project-dir `);
+      expect(away.stdout).toContain(`config providers --harness ${typedHarnessName(harness)} --project-dir `);
       expect(providerDoctorCheck(project, harnessDir)).toEqual(expect.objectContaining({
         pass: true,
         label: `Providers: model access comes with your ${product} session; no answer needed`,
@@ -7311,7 +7839,7 @@ process.exit(0);
     expect(runtimeHuman.stdout).not.toContain(runtimeFiles[5]);
     expect(runtimeHuman.stdout).toContain(
       `... and ${runtimeFiles.length - 5} more ` +
-        "(aidlc config runtime --show --json lists all)",
+        "(bun .claude/tools/aidlc.ts config runtime --show --json lists all)",
     );
 
     const dataPath = join(project, ".claude", "tools", "data", "harness.json");
@@ -7429,7 +7957,7 @@ process.exit(0);
     expect(human.stdout).not.toContain(files[5]);
     expect(human.stdout).toContain(
       `... and ${files.length - 5} more ` +
-        "(aidlc config trust --show --json lists all)",
+        "(bun .kiro/tools/aidlc.ts config trust --show --json lists all)",
     );
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 

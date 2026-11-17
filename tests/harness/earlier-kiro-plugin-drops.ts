@@ -71,4 +71,22 @@ export const EARLIER_KIRO_IDE_DROPS: ReadonlyArray<{ build: string; drop(project
       ];
     },
   },
+  {
+    // The registration that runs aidlc first and the launcher where it is
+    // missing, with no timeout. Every build from 2.11.1-preview.20261019.1
+    // wrote the same until the registration carried a timeout.
+    build: "2.11.1",
+    drop(project) {
+      cpSync(join(REPO_ROOT, "dist", "plugins", "test-pro", "kiro-ide", ".kiro"), join(project, ".kiro"), {
+        recursive: true,
+      });
+      return [
+        writeRegistration(
+          project,
+          "aidlc engine plugin sync --harness-dir .kiro --plugin-root ./.kiro/aidlc-plugins/aidlc-test-pro || bun ./.kiro/aidlc-plugins/aidlc-test-pro/hooks/aidlc-plugin-compose.ts .kiro kiro-ide",
+        ),
+        join(project, ".kiro", "aidlc-plugins", "aidlc-test-pro", ".aidlc-plugin", "plugin.json"),
+      ];
+    },
+  },
 ];

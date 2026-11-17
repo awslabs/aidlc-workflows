@@ -137,7 +137,7 @@ function Get-ReleaseFile {
   }
   if ($CaBundle) {
     Stop-Install -Code 1 -Status 'failed' `
-      -Message 'curl.exe is required when --CaBundle is used'
+      -Message 'curl.exe is required when -CaBundle is used'
   }
   try {
     Invoke-WebRequest -UseBasicParsing -Uri $Url -OutFile $Output
@@ -458,7 +458,7 @@ if ($env:AIDLC_OFFLINE -eq '1') {
 }
 if ($Offline -and -not $From) {
   Stop-Install -Code 3 -Status 'unavailable' `
-    -Message '--Offline requires --From <release-directory>'
+    -Message '-Offline requires -From <release-directory>'
 }
 if ($From) {
   $Offline = $true
@@ -489,7 +489,7 @@ if (-not $From) {
 }
 if ($CaBundle -and -not [IO.Path]::IsPathRooted($CaBundle)) {
   Stop-Install -Code 2 -Status 'usage' `
-    -Message '--CaBundle must be an absolute path'
+    -Message '-CaBundle must be an absolute path'
 }
 
 $installRoot = if ($env:AIDLC_INSTALL_ROOT) {
@@ -502,14 +502,16 @@ $binDir = if ($env:AIDLC_BIN_DIR) {
 } else {
   Join-Path $installRoot 'bin'
 }
+# The install writes aidlc.exe beside aidlc.cmd, which PATHEXT finds first; a
+# release from before it writes only aidlc.cmd. Either is this install's own.
 $command = Join-Path $binDir 'aidlc.cmd'
+$exeCommand = Join-Path $binDir 'aidlc.exe'
+function Test-InstalledCommand($Resolved) {
+  return $Resolved -and @($command, $exeCommand) -contains [IO.Path]::GetFullPath($Resolved.Source)
+}
 $existingAidlc = Get-Command aidlc -CommandType Application -ErrorAction SilentlyContinue |
   Select-Object -First 1
-if (-not $env:AIDLC_BIN_DIR -and $existingAidlc -and
-  -not [IO.Path]::GetFullPath($existingAidlc.Source).Equals(
-    [IO.Path]::GetFullPath($command),
-    [StringComparison]::OrdinalIgnoreCase
-  )) {
+if (-not $env:AIDLC_BIN_DIR -and $existingAidlc -and -not (Test-InstalledCommand $existingAidlc)) {
   Stop-Install -Code 4 -Status 'failed' `
     -Message "existing aidlc at $($existingAidlc.Source) is outside the native install destination" `
     -Remediation 'use its package manager, or set AIDLC_BIN_DIR to an explicit empty directory'
@@ -685,8 +687,22 @@ try {
   # -Yes also answers yes to replacing a bin\aidlc that AI-DLC did not write
   # (the file is kept as a backup); at a terminal the binary asks instead.
   if ($Yes) { $arguments += '--yes' }
-  $applyOutput = (& $binary @arguments --json | Out-String).Trim()
-  $applyCode = $LASTEXITCODE
+  # The binary writes UTF-8 and Windows PowerShell 5.1 reads it in the console
+  # code page, which garbles a non-ASCII letter in an install path. The
+  # console's own encoding comes back as it was.
+  $consoleEncoding = $null
+  try {
+    $consoleEncoding = [Console]::OutputEncoding
+    [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+  } catch {
+    $consoleEncoding = $null
+  }
+  try {
+    $applyOutput = (& $binary @arguments --json | Out-String).Trim()
+    $applyCode = $LASTEXITCODE
+  } finally {
+    if ($null -ne $consoleEncoding) { [Console]::OutputEncoding = $consoleEncoding }
+  }
   try {
     $applyResult = $applyOutput | ConvertFrom-Json
   } catch {
@@ -698,6 +714,7 @@ try {
       -Message $applyResult.message -Remediation $applyResult.remediation
   }
 
+  if (Test-Path -LiteralPath $exeCommand -PathType Leaf) { $command = $exeCommand }
   $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
   $installAccount = $identity.Name
   $accountSid = $identity.User.Value
@@ -730,19 +747,11 @@ try {
     try {
       $resolvedAidlc = Get-Command aidlc -CommandType Application -ErrorAction SilentlyContinue |
         Select-Object -First 1
-      if (-not $resolvedAidlc -or
-        -not [IO.Path]::GetFullPath($resolvedAidlc.Source).Equals(
-          [IO.Path]::GetFullPath($command),
-          [StringComparison]::OrdinalIgnoreCase
-        )) {
+      if (-not (Test-InstalledCommand $resolvedAidlc)) {
         $env:Path = "$binDir;$env:Path"
         $resolvedAidlc = Get-Command aidlc -CommandType Application -ErrorAction SilentlyContinue |
           Select-Object -First 1
-        if (-not $resolvedAidlc -or
-          -not [IO.Path]::GetFullPath($resolvedAidlc.Source).Equals(
-            [IO.Path]::GetFullPath($command),
-            [StringComparison]::OrdinalIgnoreCase
-          )) {
+        if (-not (Test-InstalledCommand $resolvedAidlc)) {
           throw 'installed aidlc is not resolvable after applying the PATH update'
         }
       }

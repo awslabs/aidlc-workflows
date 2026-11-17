@@ -26,7 +26,7 @@
 //   - each entry: "\n## <heading>\n**Timestamp**: <ts>\n**Event**: <type>\n"
 //     then one "**<key>**: <value>\n" per field, then "\n---\n"
 //   - heading is EVENT_HEADINGS[eventType] || eventType
-//   - timestamp is isoTimestamp(): YYYY-MM-DDTHH:MM:SSZ (aidlc-lib.ts)
+//   - timestamp is isoTimestamp(): YYYY-MM-DDTHH:MM:SSZ (aidlc-record-core.ts)
 //
 // Test-design note (house style): assert the OBSERVABLE behavioural contract
 // (return values, thrown errors, and the literal bytes written to the audit

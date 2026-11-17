@@ -56,13 +56,12 @@
 
 import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, fileCleanupReserveMs } from "../harness/test-budget.ts";
 import { beforeEach, describe, expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
-import { join } from "node:path";
 import { assertAuditEvent, assertResultOk } from "../harness/assert.ts";
 import {
   cleanupTestProject,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
+import { T126_SEED, seedLiveWork } from "../harness/live-work-seed.ts";
 import { driveAidlc, readAuditText } from "../harness/sdk-drive.ts";
 
 // AIDLC_TEST_TIMEOUT bounds the entire case, including setup and cleanup.
@@ -81,20 +80,6 @@ function remainingWorkMs(): number {
   })!;
 }
 
-
-/** Seed the workflow through the same project-local utility the slash command
- * delegates to. This keeps the live SDK run focused on the co-fire golden path
- * instead of spending turns recovering from an intentionally absent state file. */
-function seedPocState(proj: string): void {
-  const utility = join(proj, ".claude", "tools", "aidlc-utility.ts");
-  const res = spawnSync(
-    process.execPath,
-    [utility, "intent-create", "--scope", "poc", "--project-dir", proj],
-    { timeout: remainingWorkMs(), cwd: proj, encoding: "utf8" },
-  );
-  expect(res.status).toBe(0);
-  expect(`${res.stdout}\n${res.stderr}`).toContain("State initialized");
-}
 
 /**
  * The co-emission pairs, derived from the t48 pairing tests
@@ -150,7 +135,9 @@ describe("t126 emitter-pairing co-fire (metamorphic invariant, sdk)", () => {
     async () => {
       const proj = setupIntegrationProject({ noAidlcDocs: true });
       try {
-        seedPocState(proj);
+        // The work is created up front, with the words the drive types, so the
+        // live run spends its turns on the co-fire golden path.
+        seedLiveWork(proj, T126_SEED, remainingWorkMs());
 
         // The questions are answered by the driver's menus, as a person answers
         // them: an answer chosen up front would be the agent's, not the person's.
@@ -158,8 +145,7 @@ describe("t126 emitter-pairing co-fire (metamorphic invariant, sdk)", () => {
         // answer: the drive's person-turn check fails any gate resolution with
         // no reply from the person after its gate opened (sdk-drive.ts).
         const r = await driveAidlc(
-          "/aidlc poc Build a local CLI that converts CSV input to formatted JSON output. " +
-            "Use the simplest sensible stack, and approve each gate.",
+          `/aidlc ${T126_SEED.scope} ${T126_SEED.request}`,
           { projectDir: proj, timeoutMs: remainingWorkMs() },
         );
 

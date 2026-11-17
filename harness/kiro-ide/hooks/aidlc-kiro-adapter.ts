@@ -134,6 +134,9 @@ import {
   kiroIdeLegacyPlanApprovalSessionId,
   markKiroIdeLegacyPlanApprovalHost,
   clearPlanApprovalLegacyWindow,
+  type KiroCliSteer,
+  kiroCliSteersRecorded,
+  noteKiroCliSteerRecorded,
   recordHookDrop,
   recordPreWorkflowHeartbeat,
   resolveProjectFlag,
@@ -164,6 +167,10 @@ import {
   ORCHESTRATOR_LAUNCHER_OPTIONS,
   readOrchestratorLauncherOptions,
   REQUEST_TEXT_DIR,
+  tailText,
+  pendingPersonLines,
+  resolveWorkflowSelection,
+  validSessionId,
 } from "../tools/aidlc-lib.ts";
 import {
   approvalFingerprint,
@@ -173,14 +180,17 @@ import {
   evaluateCodeGenerationApproval,
   legacyPlanApprovalGuardState,
   parseTestingContract,
-  renderTestingContract,
+  planWithTestingContract,
+  questionsFilePlanApprovalAnswer,
   resolveCodeGenerationAuthority,
   resolveTestingPosture,
+  withPlanApprovalTags,
 } from "../tools/aidlc-testing-posture.ts";
 import { normalizeRetiredGuardPolicyField } from "../tools/aidlc-guard-switch.ts";
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { aidlcEngineCommand, aidlcInvocation } from "../tools/aidlc-runtime-paths.ts";
 import { aidlcEntryWords } from "../tools/aidlc-reply-reader.ts";
+import { kiroChatRecordPaths, kiroDefaultAgentName } from "../tools/aidlc-kiro-chat-record.ts";
 import { terminalDispatcherArgv } from "../tools/aidlc.ts";
 import { forgetRulesDelivered, kiroIdeTurnOpen, noteKiroIdeTurn } from "../tools/aidlc-rules-held.ts";
 import {
@@ -199,7 +209,7 @@ import {
   kiroNamedDelegate,
   mutationCapableTool,
 } from "./aidlc-kiro-tool-names.ts";
-import { isPowerShellDoubleQuote, isPowerShellSingleQuote } from "./review-freeze-command.ts";
+import { isPowerShellDoubleQuote, isPowerShellSingleQuote, posixBackslashEscapes } from "./review-freeze-command.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 // The NORMALIZED hook context, whichever channel delivered it: 1.x snake_case
@@ -346,16 +356,6 @@ function orchestrateStageOutput(result: string, stage: string): string {
   const rest = lines.slice(start + 1);
   const end = rest.findIndex((line) => /^## \S/.test(line));
   return (end < 0 ? rest : rest.slice(0, end)).join("\n").trim();
-}
-
-function upsertTestingContract(plan: string, rendered: string): string {
-  const section = /(^|\n)## Testing Contract[^\n]*\n[\s\S]*?(?=\n## |\s*$)/m;
-  if (section.test(plan)) {
-    return plan.replace(section, (_match, prefix: string) =>
-      `${prefix}${rendered.trimEnd()}\n`
-    );
-  }
-  return `${plan.trimEnd()}\n\n${rendered}`;
 }
 
 function legacyToolCommand(
@@ -554,14 +554,6 @@ function legacyRecoveryBlockReason(
     : `Legacy Plan Approval recovery failed closed: ${recovery.detail}`;
 }
 
-function latestPlanApprovalAnswer(questions: string): string | null {
-  const answers = Array.from(
-    questions.matchAll(/^\[Answer\]:[ \t]*(.*?)\s*$/gm),
-    (match) => match[1].trim(),
-  );
-  return answers.length === 0 ? null : answers[answers.length - 1];
-}
-
 // The record files the shared plan-approval guard admits in every Plan
 // Approval state, by the identity it uses: the Code Generation stage's
 // learnings diary, the composer's proposal, a file in one of the engine text
@@ -623,13 +615,13 @@ function processLegacyPlanApprovalWrite(
   if (normalizedPath === planPath) {
     const contract = resolveTestingPosture(projectDir);
     const plan = readFileSync(planPath, "utf-8");
-    if (parseTestingContract(plan)?.contract_sha256 !== contract.contract_sha256) {
-      writeFileSync(
-        planPath,
-        upsertTestingContract(plan, renderTestingContract(contract)),
-        "utf-8",
-      );
-    }
+    // The engine's own writer replaces the whole section. A plan it cannot
+    // write the block into is left as it is; the blank Plan Approval write
+    // that follows tries again before it stops on the contract.
+    const written = parseTestingContract(plan)?.contract_sha256 !== contract.contract_sha256
+      ? planWithTestingContract(plan, contract)
+      : null;
+    if (written !== null) writeFileSync(planPath, written, "utf-8");
     clearPlanApprovalLegacyWindow(projectDir, sessionId);
     return null;
   }
@@ -647,13 +639,38 @@ function processLegacyPlanApprovalWrite(
     return null;
   }
 
-  let questions = readFileSync(questionsPath, "utf-8");
-  const answer = latestPlanApprovalAnswer(questions);
+  // Read and written in the latest Plan Approval section, on the lines the
+  // engine's decision and answer tools read.
+  const questions = readFileSync(questionsPath, "utf-8");
+  const answer = questionsFilePlanApprovalAnswer(questions);
+  // An agent writes this file only for the plan question, so one the engine
+  // cannot read it from is said, with the way to write it.
+  if (answer === null) {
+    throw new LegacyPlanApprovalMediationError(
+      "code-generation-questions.md has no Plan Approval [Answer]: line AI-DLC can read: put the plan question in a " +
+        "`## Plan Approval` section (the last one, if there are several), with `[Answer]:` at the start of its own line in " +
+        "that section, then save the file again.",
+    );
+  }
   const targetArgs =
     state.target.unit === null
       ? ["--stage-level"]
       : ["--unit", state.target.unit];
   if (answer === "") {
+    // What the engine does before its own plan question: the contract block is
+    // engine output, written into the plan when it is missing, broken or out of
+    // date (codeGenerationPlanReadiness). Loaded here only, and typed by its one
+    // function, so the plan question's module graph stays out of other hooks.
+    // A preparation that fails leaves the plan as it is: the check below then
+    // stops on the contract.
+    try {
+      const ask = require("../tools/aidlc-plan-approval-ask.ts") as {
+        codeGenerationPlanReadiness(projectDir: string, unit: string | null, contract: "write"): unknown;
+      };
+      ask.codeGenerationPlanReadiness(projectDir, state.target.unit, "write");
+    } catch {
+      // The check below.
+    }
     const plan = readFileSync(planPath, "utf-8");
     const instructions = readFileSync(instructionsPath, "utf-8");
     const contract = resolveTestingPosture(projectDir);
@@ -668,15 +685,6 @@ function processLegacyPlanApprovalWrite(
       contract.contract_sha256,
       authority,
     );
-    const withFingerprint = /^\[Approval Fingerprint\]:.*$/m.test(questions)
-      ? questions.replace(
-          /^\[Approval Fingerprint\]:.*$/m,
-          `[Approval Fingerprint]: ${fingerprint}`,
-        )
-      : questions.replace(
-          /^(\[Answer\]:)/m,
-          `[Approval Fingerprint]: ${fingerprint}\n$1`,
-        );
     // Core refuses a decision whose Plan Approval section lacks the planned
     // source. The legacy channel cannot run the fingerprint command itself, so
     // the adapter records the live workspace source here, falling back to the
@@ -689,16 +697,17 @@ function processLegacyPlanApprovalWrite(
       writeWorkspaceSourceSnapshot(projectDir, "code-generation", plannedState);
     }
     const plannedSource = plannedState?.fingerprint ?? UNBINDABLE_FINGERPRINT;
-    const withPlannedSource = /^\[Planned Source\]:.*$/m.test(withFingerprint)
-      ? withFingerprint.replace(
-          /^\[Planned Source\]:.*$/m,
-          `[Planned Source]: ${plannedSource}`,
-        )
-      : withFingerprint.replace(
-          /^(\[Answer\]:)/m,
-          `[Planned Source]: ${plannedSource}\n$1`,
-        );
-    writeFileSync(questionsPath, withPlannedSource, "utf-8");
+    let tagged: string;
+    try {
+      tagged = withPlanApprovalTags(questions, fingerprint, plannedSource);
+    } catch (error) {
+      throw new LegacyPlanApprovalMediationError(
+        `legacy Plan Approval mediation could not record the approval tags: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+    writeFileSync(questionsPath, tagged, "utf-8");
     const decision = runLegacyPlanTool(projectDir, "aidlc-log.ts", [
       "decision",
       "--stage",
@@ -727,17 +736,10 @@ function processLegacyPlanApprovalWrite(
     clearPlanApprovalLegacyWindow(projectDir, sessionId);
     return null;
   }
-  if (
-    answer === "Approve Plan" ||
-    answer === "Request Changes"
-  ) {
-    questions = questions.replace(
-      /^\[Answer\]:[ \t]*.*$/m,
-      `[Answer]: ${answer}`,
-    );
-    writeFileSync(questionsPath, questions, "utf-8");
-  }
-  if (answer !== "Approve Plan" && answer !== "Request Changes") return null;
+  // Exactly one of the two choices: the line can hold the person's own words,
+  // which are never read for what they mean.
+  const choice = answer === "Approve Plan" || answer === "Request Changes" ? answer : null;
+  if (choice === null) return null;
   const recorded = runLegacyPlanTool(projectDir, "aidlc-log.ts", [
     "answer",
     "--stage",
@@ -749,7 +751,7 @@ function processLegacyPlanApprovalWrite(
     "--questions-file",
     questionsPath,
     "--details",
-    answer,
+    choice,
     ...targetArgs,
   ]);
   if (recorded.code !== 0) {
@@ -1226,20 +1228,28 @@ function cmdMetacharacterHazard(command: string): CmdHazard | null {
 // them back (#2167). Measured live on Kiro IDE 1.2.37, the command result holds
 // the whole reply in Command Prompt and in PowerShell, so the file only leaves
 // copies behind and pays for each step twice. Read with both quote kinds as
-// quotes on every shell, so a > inside a value never counts; a stderr redirect,
+// quotes on every shell (and, in a command posixReading reads as POSIX, the
+// backslash escape and comments: topLevelParts, stdoutRedirectTargets,
+// posixCommandText), so a > inside a value does not count; a stderr redirect,
 // a discarded stream and a reader pipe pass.
 const FILE_WRITER = /^(?:out-file|set-content|add-content|tee-object|tee)(?:\.exe)?$/i;
 const DISCARD = /^(?:\$null|nul|\/dev\/null)$/i;
 
 // With `redirectAmpersand`, an & right after > (`2>&1`, `>&2`) is the redirect's
 // and not a statement break. Only the bookkeeping read below asks for it; the
-// file-redirect refusal keeps its answers exactly as they were.
-function topLevelParts(text: string, separators: RegExp, redirectAmpersand = false): string[] {
+// file-redirect refusal splits there. With `posix` (posixReading), a backslash
+// escapes the next character the way the shell reads it, so `'\''` or `\"`
+// does not end a quoted value (the text comes from posixReading).
+function topLevelParts(text: string, separators: RegExp, posix: boolean, redirectAmpersand = false): string[] {
   const parts: string[] = [];
-  let quote: string | null = null;
+  let quote: "'" | '"' | null = null;
   let start = 0;
   for (let at = 0; at < text.length; at++) {
     const c = text[at];
+    if (posix && posixBackslashEscapes(text, at, quote)) {
+      at++;
+      continue;
+    }
     if (quote !== null) {
       if (c === quote) quote = null;
       continue;
@@ -1260,6 +1270,93 @@ function topLevelParts(text: string, separators: RegExp, redirectAmpersand = fal
   return parts;
 }
 
+// The command as a POSIX shell reads its lines: each backslash before a line
+// break outside single quotes joins the two lines, and each comment is cut,
+// from a # outside quotes at the start of the command, or after an unescaped
+// line break, a blank, ; & | < or >, to the end of its line, whose quotes,
+// backslashes, > and | the shell never reads. Kiro runs these commands in
+// bash -c, zsh -c, or its terminal's zsh with INTERACTIVE_COMMENTS set by its
+// shell integration, and each reads such a # as a comment. posixReading
+// decides whether the checks read this text.
+function posixCommandText(command: string): string {
+  let kept = "";
+  let start = 0;
+  let quote: "'" | '"' | null = null;
+  let wordStart = true;
+  for (let at = 0; at < command.length; at++) {
+    const c = command[at];
+    if (posixBackslashEscapes(command, at, quote)) {
+      if (command[at + 1] === "\n") {
+        kept += command.slice(start, at);
+        start = at + 2;
+      } else {
+        wordStart = false;
+      }
+      at++;
+      continue;
+    }
+    if (quote !== null) {
+      if (c === quote) quote = null;
+      wordStart = false;
+      continue;
+    }
+    if (c === "'" || c === '"') {
+      quote = c;
+      wordStart = false;
+      continue;
+    }
+    if (c === "#" && wordStart) {
+      kept += command.slice(start, at);
+      const end = command.indexOf("\n", at);
+      if (end < 0) return kept;
+      start = end;
+      at = end - 1;
+      continue;
+    }
+    wordStart = " \t\n;&|<>".includes(c);
+  }
+  return kept + command.slice(start);
+}
+
+// The text the two checks read on a POSIX shell tool, or null when they read
+// the command as it is. Kiro names its shell tool execute_pwsh on Windows,
+// where a command runs in PowerShell or Command Prompt and a backslash is a
+// plain character; any other shell tool name seen on Windows is read the same
+// way, as its shell is not known. Otherwise the text is posixCommandText's,
+// unless what is left still opens a substitution, an expansion, a group, a
+// here-document or a $'...' value (an unescaped backtick, $(, ${ or $[ outside
+// single quotes; ( ) { } [ ], << or $' outside quotes): there a quote can open
+// a context of its own and a # can be text, which this reading does not
+// follow. A # that sits in such a context leaves its opener in the text.
+function posixReading(tool: string, command: string): string | null {
+  if (isKiroPowerShellTool(tool) || process.platform === "win32") return null;
+  const text = posixCommandText(command);
+  let quote: "'" | '"' | null = null;
+  for (let at = 0; at < text.length; at++) {
+    const c = text[at];
+    const next = text[at + 1] ?? "";
+    if (posixBackslashEscapes(text, at, quote)) {
+      at++;
+      continue;
+    }
+    if (quote === "'") {
+      if (c === "'") quote = null;
+      continue;
+    }
+    if (c === "`" || (c === "$" && next !== "" && "({[".includes(next))) return null;
+    if (quote === '"') {
+      if (c === '"') quote = null;
+      continue;
+    }
+    if (c === "'" || c === '"') {
+      quote = c;
+      continue;
+    }
+    if ("(){}[]".includes(c) || (c === "<" && next === "<") || (c === "$" && next === "'")) return null;
+  }
+  return text;
+}
+
 // The engine's own commands, whose replies are the steps: `aidlc engine ...`
 // (bare, .cmd or .exe, by path or not), the dispatcher file run by bun with
 // engine as its first argument, and an engine tool file run by bun directly. A
@@ -1277,11 +1374,15 @@ function isEngineCommand(segment: string): boolean {
 
 // Every target the segment's stdout is redirected to (`>`, `>>`, `1>`, `*>`),
 // unquoted; a > inside a quoted value is not one.
-function stdoutRedirectTargets(segment: string): string[] {
+function stdoutRedirectTargets(segment: string, posix: boolean): string[] {
   const targets: string[] = [];
-  let quote: string | null = null;
+  let quote: "'" | '"' | null = null;
   for (let at = 0; at < segment.length; at++) {
     const c = segment[at];
+    if (posix && posixBackslashEscapes(segment, at, quote)) {
+      at++;
+      continue;
+    }
     if (quote !== null) {
       if (c === quote) quote = null;
       continue;
@@ -1303,15 +1404,15 @@ function stdoutRedirectTargets(segment: string): string[] {
   return targets;
 }
 
-function stdoutToFile(segment: string): boolean {
-  return stdoutRedirectTargets(segment).some((target) => !DISCARD.test(target));
+function stdoutToFile(segment: string, posix: boolean): boolean {
+  return stdoutRedirectTargets(segment, posix).some((target) => !DISCARD.test(target));
 }
 
-function engineReplyToFile(command: string): boolean {
-  for (const statement of topLevelParts(command, /^(?:&&|\|\||;|\r?\n|&(?!>))/)) {
-    const pipeline = topLevelParts(statement, /^\|/);
+function engineReplyToFile(command: string, posix: boolean): boolean {
+  for (const statement of topLevelParts(command, /^(?:&&|\|\||;|\r?\n|&(?!>))/, posix)) {
+    const pipeline = topLevelParts(statement, /^\|/, posix);
     if (!isEngineCommand(pipeline[0] ?? "")) continue;
-    if (stdoutToFile(pipeline[0])) return true;
+    if (stdoutToFile(pipeline[0], posix)) return true;
     if (pipeline.slice(1).some((part) => FILE_WRITER.test(part.trim().split(/\s+/)[0] ?? ""))) return true;
   }
   return false;
@@ -1337,17 +1438,17 @@ function isStepCommand(segment: string): boolean {
 // | inside a quoted value never counts, a step inside quotes is not read, and a
 // redirect to a file never gets here (engineReplyToFile stops that command
 // before it runs). The reported commands put `2>&1` before the pipe, so this
-// read keeps the & of a redirect inside its statement; the refusal's read is
-// left as it is.
-function stepReplyLeftResult(command: string): boolean {
-  for (const statement of topLevelParts(command, /^(?:&&|\|\||;|\r?\n|&(?!>))/, true)) {
-    const pipeline = topLevelParts(statement, /^\|/);
+// read keeps the & of a redirect inside its statement; the refusal's read
+// splits there.
+function stepReplyLeftResult(command: string, posix: boolean): boolean {
+  for (const statement of topLevelParts(command, /^(?:&&|\|\||;|\r?\n|&(?!>))/, posix, true)) {
+    const pipeline = topLevelParts(statement, /^\|/, posix);
     const capture = /^\s*(\$?[A-Za-z_][A-Za-z0-9_]*\s*=\s*)?(\$\(|\(|`)?/.exec(pipeline[0] ?? "");
     const segment = (pipeline[0] ?? "").slice(capture?.[0].length ?? 0);
     if (!isStepCommand(segment)) continue;
     const assigned = capture?.[1] !== undefined;
     const substituted = capture?.[2] !== undefined && capture[2] !== "(";
-    const targets = stdoutRedirectTargets(segment);
+    const targets = stdoutRedirectTargets(segment, posix);
     const discarded = targets.length > 0 && targets.every((target) => DISCARD.test(target));
     if (assigned || substituted || pipeline.length > 1 || discarded) return true;
   }
@@ -1490,6 +1591,70 @@ function payloadToolName(input: string): string | null {
     return typeof name === "string" ? name : null;
   } catch {
     return null;
+  }
+}
+
+// What the person typed while the agent worked ("Type to steer"). Kiro CLI v3
+// runs no prompt hook for it (measured on 3.0.0) and writes it to the chat's
+// record as it is typed: a `steer-<id>` row with `source: "steer"`, the words as
+// its content and no mark of Kiro's own. Once Kiro hands it to the agent, a
+// `steering-injection` row names its id in `steeringConsumedIds` and holds
+// Kiro's envelope around the words; only a message handed on counts, so a call
+// the agent chose before it read the message is not let through on it. A
+// workflow's notices share `source: "steer"` under ids and a `notification` mark
+// of their own, and the `steering_boundary_` row at the turn's end is empty.
+// `handedOnOnly: false` takes a message not yet handed on too (a prompt hook
+// that got it before Kiro handed it on). Only this turn's messages count (after its latest `turn_start` row); the read
+// widens until that row is in view, up to 64 MB of the record, and parses only
+// the lines that can be one of these rows. None when it cannot be read.
+const KIRO_STEER_ID = /^steer-[A-Za-z0-9-]{1,64}$/;
+const KIRO_STEER_READ_MAX_BYTES = 64 << 20;
+function steersTypedThisTurn(sessionId: string, handedOnOnly = true): KiroCliSteer[] {
+  const [path] = kiroChatRecordPaths(sessionId);
+  if (path === undefined) return [];
+  const field = (value: unknown, key: string): unknown =>
+    value !== null && typeof value === "object" ? (value as Record<string, unknown>)[key] : undefined;
+  for (let bytes = 1 << 20; ; bytes *= 4) {
+    const lines = tailText(path, bytes)?.split("\n");
+    if (lines === undefined) return [];
+    const steers: KiroCliSteer[] = [];
+    const handedOn = new Set<string>();
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (!lines[i].includes("turn_start") && !lines[i].includes("steer")) continue;
+      let row: unknown;
+      try {
+        row = JSON.parse(lines[i]);
+      } catch {
+        continue;
+      }
+      const payload = field(row, "payload");
+      if (field(payload, "type") === "turn_start") return steers.reverse();
+      if (field(payload, "type") !== "user") continue;
+      const marks = field(field(payload, "_meta"), "kiro");
+      const consumed = field(marks, "steeringConsumedIds");
+      if (field(marks, "syntheticUserMessageReason") === "steering-injection" && Array.isArray(consumed)) {
+        for (const id of consumed) if (typeof id === "string") handedOn.add(id);
+        continue;
+      }
+      const id = field(row, "id");
+      const words = field(payload, "content");
+      if (
+        typeof id !== "string" || !KIRO_STEER_ID.test(id) || (handedOnOnly && !handedOn.has(id)) ||
+        field(payload, "source") !== "steer" || typeof words !== "string" || !words.trim() ||
+        ["notification", "syntheticUserMessageReason", "steeringClearedIds"].some((mark) => field(marks, mark) !== undefined)
+      ) {
+        continue;
+      }
+      if (!steers.some((steer) => steer.id === id)) steers.push({ id, words });
+    }
+    // The record may have grown since the last pass; its size now says whether it was read whole.
+    let size: number;
+    try {
+      size = statSync(path).size;
+    } catch {
+      return [];
+    }
+    if (bytes >= size || bytes >= KIRO_STEER_READ_MAX_BYTES) return [];
   }
 }
 
@@ -1713,7 +1878,7 @@ if (INPUT_TARGETS.has(target)) {
     if (raw.trim().length > 0) channel = "legacy";
   }
   if (raw.trim().length > 0) {
-    if (target === "verb-intercept" && /^\s*\/aidlc(?![\w-])/.test(raw)) {
+    if (target === "verb-intercept" && aidlcEntryWords(raw) !== null) {
       ide = { channel, prompt: raw, userPrompt: raw };
     } else {
       try {
@@ -1865,13 +2030,10 @@ interface TerminalLatch extends TerminalResult {
   ts: number;
 }
 
+// Only a message that starts with the entry is a command; one that quotes an
+// engine command in its text is the person's words for the agent.
 function promptTerminalInvocation(prompt: string): TerminalInvocation {
-  const expanded = prompt.match(/aidlc-orchestrate\.ts next ([^`\n]*)`/);
-  const rawInvocation = expanded
-    ? expanded[1]
-    : prompt.match(/^\s*\/aidlc(?![\w-])([\s\S]*)$/)?.[1];
-  if (rawInvocation === undefined) return { raw: "", args: [] };
-  const raw = rawInvocation.trim();
+  const raw = aidlcEntryWords(prompt) ?? "";
   return { raw, args: splitKiroCommandArgs(raw) };
 }
 
@@ -1953,21 +2115,20 @@ function runTerminalCommand(command: TerminalCommand): TerminalResult | null {
     };
   }
 
-  const toolFile = command.source === "knowledge-verb"
-    ? "aidlc-knowledge.ts"
-    : "aidlc-utility.ts";
+  // A `knowledge` verb goes through the dispatcher, as the compiled path does:
+  // `onboard`'s copy of a document named outside documents/, and making that
+  // folder, run there (withNamedDocumentCopied in aidlc.ts), and
+  // aidlc-knowledge.ts run alone refuses the path instead.
+  const sourceArgs = command.source === "knowledge-verb"
+    ? [join(".kiro", "tools", "aidlc.ts"), ...terminalDispatcherArgv(command)]
+    : [join(".kiro", "tools", "aidlc-utility.ts"), command.subcommand, ...forwarded];
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
 
   try {
     const result = Bun.spawnSync(
       executable
         ? [executable, ...terminalDispatcherArgv(command)]
-        : [
-            process.execPath,
-            join(".kiro", "tools", toolFile),
-            command.subcommand,
-            ...forwarded,
-          ],
+        : [process.execPath, ...sourceArgs],
       {
         cwd: projectDir,
         stdout: "pipe",
@@ -2114,6 +2275,30 @@ function notePromptCapability(sessionId: string): void {
   process.stdout.write(
     "Guard settings cannot be lowered, and summary confirmation and plan approval cannot be turned off, for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. To use a lower guard setting, update Kiro IDE or start a new piece of work from a scope whose default already uses that setting. " +
       `${summaryConfirmationWayOut()} ${planApprovalWayOut()} You can still select strict or turn a fence on. An existing Change Control: relaxed|off line is renamed to Guard Policy without changing its value.\n`,
+  );
+}
+
+// Kiro IDE opens every new chat on its Default agent, where Kiro asks the
+// person to approve AI-DLC's commands: an /aidlc request there hears once per
+// chat the step that stops those cards. Nothing on any other agent, and nothing
+// when the person chose Always allow for AI-DLC's commands or has Approve for
+// me on (kiroDefaultAgentName); a later request asks again, so the once is
+// spent only when it is said. The same hook runs in Kiro CLI on its v3 engine,
+// where the agent is changed with /agent.
+function noteDefaultAgent(sessionId: string): void {
+  const noted = join(terminalSessionDir(sessionId), "default-agent-noted");
+  if (aidlcEntryWords(ide.prompt ?? "") === null || existsSync(noted)) return;
+  const name = kiroDefaultAgentName(ide.sessionId?.trim(), `${aidlcInvocation()} engine orchestrate next`);
+  if (name === "") return;
+  try {
+    writeFileSync(noted, "", { flag: "wx" });
+  } catch {
+    return;
+  }
+  process.stdout.write(
+    `Tell the person this once, in their language, then go on with their request: "This chat is on Kiro's ${name} ` +
+      `agent, where Kiro asks you to approve AI-DLC's commands. To stop those approval cards for AI-DLC's own commands, ` +
+      `pick aidlc in Kiro IDE's agent menu under the chat box (it says ${name} now), or in Kiro CLI type /agent and pick aidlc."\n`,
   );
 }
 
@@ -2323,6 +2508,32 @@ function terminalContext(result: TerminalResult): string {
   return terminalCommandRelay(`/aidlc ${result.typed}`, result.output, result.exitCode);
 }
 
+// The lines AI-DLC keeps for this chat, with the order a step gives them
+// (personLinesForRelay, which owns which typed command carries them), read for
+// the chat the command runs for: hookChildEnv's session, pinned for this hook.
+// Null when none waits, or when that cannot be read: the command and its
+// output go ahead either way.
+async function linesWaitingForChat(command: TerminalCommand): Promise<{ lead: string; said: () => void } | null> {
+  if (validSessionId(ide.sessionId?.trim()) === null) return null;
+  const child = hookChildEnv(projectDir, ide.sessionId?.trim());
+  const keys = ["AIDLC_SESSION_OVERRIDE", "AIDLC_SESSION_OVERRIDE_SOURCE"] as const;
+  const previous = keys.map((key) => [key, process.env[key]] as const);
+  for (const key of keys) process.env[key] = child[key];
+  try {
+    const session = resolveWorkflowSelection(projectDir).sessionId;
+    if (!session || pendingPersonLines(projectDir, session).lines.length === 0) return null;
+    const { personLinesForRelay } = await import("../tools/aidlc-orchestrate.ts");
+    return personLinesForRelay(projectDir, session, command);
+  } catch {
+    return null;
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+}
+
 function terminalRefusal(result: TerminalResult): string {
   return (
     "The requested command has already run inside the hook, and this shell call is refused " +
@@ -2420,7 +2631,8 @@ async function catchUpPendingCalls(card: "call" | "message" | "turn-end"): Promi
       // A step reply the agent piped or captured away (stepReplyLeftResult) did
       // not put its rules in front of it: forget what this chat's last step
       // named, so its next step carries the text again (#2167).
-      if (stepReplyLeftResult(call.command)) forgetRulesDelivered(projectDir, call.session);
+      const callText = posixReading(call.tool, call.command);
+      if (stepReplyLeftResult(callText ?? call.command, callText !== null)) forgetRulesDelivered(projectDir, call.session);
       const now = recordDirs(projectDir);
       const made = Object.entries(now).flatMap(([space, dirs]) =>
         dirs.filter((dir) => !(call.records[space] ?? []).includes(dir)).map((dir) => ({ space, dir })));
@@ -2454,6 +2666,40 @@ async function catchUpPendingCalls(card: "call" | "message" | "turn-end"): Promi
   }
 }
 
+// Each message typed while the agent worked this turn (steersTypedThisTurn) goes
+// through the core human-turn hook as the person's, once by Kiro's id: no prompt
+// hook ran for it. What that hook prints stays here, out of this card's output.
+// Like a typed prompt, it moves the chat's turn on, so a terminal command's hold
+// on the turn does not refuse what the person asked for after it.
+function recordMessagesTypedWhileWorking(): void {
+  const session = ide.sessionId?.trim() ?? "";
+  if (!session) return;
+  let moved = false;
+  try {
+    const recorded = kiroCliSteersRecorded(projectDir, session);
+    for (const steer of steersTypedThisTurn(session)) {
+      if (recorded.includes(steer.id)) continue;
+      const turn = runCore("aidlc-record-human-turn.ts", {
+        hook_event_name: "UserPromptSubmit",
+        session_id: session,
+        prompt: steer.words,
+        origin: { kind: "person", source: "record" },
+        relays_terminal_output: true,
+        context_may_reach_person: true,
+      });
+      if (turn.code !== 0) {
+        recordHookDrop(projectDir, "kiro-adapter", `typed while working: the human-turn hook exited ${turn.code} - turn not recorded`);
+        break;
+      }
+      noteKiroCliSteerRecorded(projectDir, session, steer.id);
+      moved = true;
+    }
+  } catch (error) {
+    recordHookDrop(projectDir, "kiro-adapter", `typed while working: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (moved) bumpTurn(session);
+}
+
 if (target === CATCH_UP) {
   let event = "";
   try {
@@ -2462,6 +2708,10 @@ if (target === CATCH_UP) {
     // An unreadable payload is a tool call's card: the guard's checks judge it.
   }
   await catchUpPendingCalls(event === "UserPromptSubmit" ? "message" : "call");
+  // Before a call that changes something, and before the guards behind it read
+  // whether the person replied, each message they typed while the agent worked
+  // is recorded as their turn, in their words.
+  if (event !== "UserPromptSubmit") recordMessagesTypedWhileWorking();
   return 0;
 }
 
@@ -2498,14 +2748,27 @@ if (target === "verb-intercept") {
   const invocation = promptTerminalInvocation(ide.prompt ?? "");
   const command = classifyTerminalCommand(invocation.args, projectDir, ide.sessionId?.trim() || undefined);
   if (command === null) {
+    noteDefaultAgent(sessionId);
     const step = await firstStepLine(ide.prompt ?? "", projectDir, ide.sessionId?.trim() || sessionId);
     if (step !== "") process.stdout.write(`${step}\n`);
     return 0;
   }
+  // Read before the command runs, as the engine's print for it is built
+  // before the agent runs it: a command can queue a line it also prints
+  // (`plugin sync`).
+  const waiting = await linesWaitingForChat(command);
   const result = runTerminalCommand(command);
-  if (result === null) return 0;
+  if (result === null) {
+    // The agent runs the command itself, and the lines still reach the person.
+    if (waiting !== null) {
+      process.stdout.write(`${waiting.lead}\n\n`);
+      waiting.said();
+    }
+    return 0;
+  }
   writeTerminalLatch(sessionId, turn, invocation, result);
-  process.stdout.write(terminalContext(result));
+  process.stdout.write(`${waiting === null ? "" : `${waiting.lead}\n\n`}${terminalContext(result)}`);
+  waiting?.said();
   return 0;
 }
 
@@ -2566,7 +2829,8 @@ if (target === "terminal-command-guard") {
   }
   // The agent's own transport, on any shell: the reply comes back whole in the
   // command's result (see engineReplyToFile), so it runs the command on its own.
-  if (engineReplyToFile(rawCommand)) {
+  const replyText = posixReading(tool, rawCommand);
+  if (engineReplyToFile(replyText ?? rawCommand, replyText !== null)) {
     process.stderr.write(
       "AIDLC stopped this command before it ran: it sends AI-DLC's reply to a file. Run the same AI-DLC command " +
         "again on its own, with nothing after it that writes to a file, and read the reply from the command's " +
@@ -2836,7 +3100,7 @@ function buildForward(): Forward {
     recordHookDrop(
       projectDir,
       "kiro-adapter",
-      `${target}: malformed hook context fields (${ide.malformedFields?.join(", ")}) — event not forwarded`,
+      `${target}: malformed hook context fields (${ide.malformedFields?.join(", ")}) - event not forwarded`,
     );
     if (
       target === "plan-approval-guard" &&
@@ -3518,7 +3782,7 @@ function buildForward(): Forward {
         recordHookDrop(
           projectDir,
           "kiro-adapter",
-          "audit-and-sensors: empty hook context (no stdin payload, no USER_PROMPT) — write not audited",
+          "audit-and-sensors: empty hook context (no stdin payload, no USER_PROMPT) - write not audited",
         );
         return null;
       }
@@ -3664,7 +3928,7 @@ function buildForward(): Forward {
         recordHookDrop(
           projectDir,
           "kiro-adapter",
-          "log-subagent: empty hook context (no stdin payload, no USER_PROMPT) — SUBAGENT_COMPLETED not recorded",
+          "log-subagent: empty hook context (no stdin payload, no USER_PROMPT) - SUBAGENT_COMPLETED not recorded",
         );
         return null;
       }
@@ -3684,7 +3948,7 @@ function buildForward(): Forward {
         recordHookDrop(
           projectDir,
           "kiro-adapter",
-          "log-subagent: empty tool payload — SUBAGENT_COMPLETED not recorded",
+          "log-subagent: empty tool payload - SUBAGENT_COMPLETED not recorded",
         );
         return null;
       }
@@ -3706,7 +3970,7 @@ function buildForward(): Forward {
         recordHookDrop(
           projectDir,
           "kiro-adapter",
-          "log-subagent: orchestrate_subagent payload names no stage — SUBAGENT_COMPLETED not recorded",
+          "log-subagent: orchestrate_subagent payload names no stage - SUBAGENT_COMPLETED not recorded",
         );
         return null;
       }
@@ -3724,7 +3988,7 @@ function buildForward(): Forward {
         recordHookDrop(
           projectDir,
           "kiro-adapter",
-          `log-subagent: Kiro has no agent named ${t.agent} — SUBAGENT_COMPLETED not recorded`,
+          `log-subagent: Kiro has no agent named ${t.agent} - SUBAGENT_COMPLETED not recorded`,
         );
       }
       if (ran.length === 0) return null;
@@ -3854,7 +4118,12 @@ function runCore(
 }
 
 // The turn's end is judged on what its last write or command did.
-if (target === "continue-workflow") await catchUpPendingCalls("turn-end");
+if (target === "continue-workflow") {
+  await catchUpPendingCalls("turn-end");
+  // A message typed after the agent's last call that changed something, before
+  // the Stop hook below judges the turn.
+  recordMessagesTypedWhileWorking();
+}
 const fwd = buildForward();
 if (fwd === null) {
   hookDebug(projectDir, "kiro-adapter", "forward: null (no-op)", { target });
@@ -3959,6 +4228,22 @@ const sessionStartResult = promptSessionStart
   : null;
 if (sessionStartResult?.code === 0) markSessionStarted(promptSessionStart);
 const result = runCore(fwd.hook, fwd.input);
+// A message typed while the agent worked that did reach this prompt hook is the
+// chat's turn now: its row is noted, so the call after it records it no second time.
+if (target === "record-human-turn" && result.code === 0 && (fwd.input.origin as { kind?: unknown }).kind !== "host") {
+  const session = ide.sessionId?.trim() ?? "";
+  const words = (ide.userPrompt ?? "").trim();
+  try {
+    const recorded = session ? kiroCliSteersRecorded(projectDir, session) : [];
+    const steer = session && words
+      ? steersTypedThisTurn(session, false).findLast((typed) => typed.words.trim() === words && !recorded.includes(typed.id))
+      : undefined;
+    if (steer !== undefined) noteKiroCliSteerRecorded(projectDir, session, steer.id);
+  } catch (error) {
+    // The call after it then records it again.
+    recordHookDrop(projectDir, "kiro-adapter", `typed while working: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
 if (target === "session-start" && result.code === 0) {
   markSessionStarted(String(fwd.input.session_id ?? ""));
 }

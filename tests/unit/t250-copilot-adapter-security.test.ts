@@ -65,8 +65,10 @@ const ADAPTER_SRC = join(
   "aidlc-copilot-adapter.ts",
 );
 const RUNTIME_PATHS_SRC = join(REPO_ROOT, "core", "tools", "aidlc-runtime-paths.ts");
+const LAUNCHER_VOUCHER_SRC = join(REPO_ROOT, "core", "tools", "aidlc-launcher-voucher.ts");
+const REVIEW_FREEZE_COMMAND_SRC = join(REPO_ROOT, "core", "hooks", "review-freeze-command.ts");
 // The adapter reads AI-DLC's own command routes from the real dispatcher table.
-const DISPATCHER_SRCS = ["aidlc.ts", "aidlc-command.ts", "aidlc-color.ts", "aidlc-version.ts"]
+const DISPATCHER_SRCS = ["aidlc.ts", "aidlc-command.ts", "aidlc-color.ts", "aidlc-version.ts", "aidlc-claude-turn-pending.ts"]
   .map((file) => join(REPO_ROOT, "core", "tools", file));
 
 // Core hooks the #657 adapter subprocess-dispatches (from its switch).
@@ -199,10 +201,12 @@ function scratch(): Scratch {
   mkdirSync(toolsDir, { recursive: true });
   mkdirSync(captureDir, { recursive: true });
   copyFileSync(ADAPTER_SRC, join(hooksDir, "aidlc-copilot-adapter.ts"));
+  copyFileSync(REVIEW_FREEZE_COMMAND_SRC, join(hooksDir, "review-freeze-command.ts"));
   writeFileSync(join(toolsDir, "aidlc-audit.ts"), AUDIT_TOOL_STUB, "utf-8");
   writeFileSync(join(toolsDir, "aidlc-question-store.ts"), QUESTION_STORE_STUB, "utf-8");
   writeFileSync(join(toolsDir, "aidlc-lib.ts"), LIB_TOOL_STUB, "utf-8");
   copyFileSync(RUNTIME_PATHS_SRC, join(toolsDir, "aidlc-runtime-paths.ts"));
+  writeFileSync(join(toolsDir, "aidlc-launcher-voucher.ts"), `export * from ${JSON.stringify(LAUNCHER_VOUCHER_SRC)};\n`, "utf-8");
   for (const source of DISPATCHER_SRCS) copyFileSync(source, join(toolsDir, basename(source)));
   for (const hook of CORE_HOOKS) {
     writeFileSync(join(hooksDir, hook), stubHookBody(hook), "utf-8");
@@ -711,12 +715,16 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
         expect(targets, hook).toEqual(expected);
       }
 
+      // The tree after the patch: old.ts moved away and deleted.ts gone.
+      mkdirSync(join(s.projectRoot, "src"), { recursive: true });
+      for (const name of ["added.ts", "moved.ts"]) writeFileSync(join(s.projectRoot, "src", name), "export {};\n", "utf-8");
       const after = runAdapter(s, "post-tool", {
         ...payload,
         hook_event_name: "PostToolUse",
       });
       expect(after.code).toBe(0);
-      for (const hook of ["aidlc-write-audit-log.ts", "aidlc-run-sensors.ts"]) {
+      const left = expected.filter(([path]) => path.endsWith("added.ts") || path.endsWith("moved.ts"));
+      for (const [hook, want] of [["aidlc-write-audit-log.ts", expected], ["aidlc-run-sensors.ts", left]] as const) {
         const targets = capturedInputs(s.captureDir, hook)
           .map((entry) => [
             (entry.tool_input as { file_path?: string } | undefined)?.file_path ?? "",
@@ -724,7 +732,7 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
           ])
           .filter(([path]) => path)
           .sort();
-        expect(targets, hook).toEqual(expected);
+        expect(targets, hook).toEqual(want);
       }
     } finally {
       s.cleanup();
@@ -766,6 +774,8 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
           .sort(),
       ).toEqual(expected);
 
+      mkdirSync(join(s.projectRoot, "src"), { recursive: true });
+      for (const path of expected) writeFileSync(path, "export {};\n", "utf-8");
       expect(
         runAdapter(s, "post-tool", {
           ...payload,
@@ -2327,6 +2337,12 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
           // as a later run recorded them, with / and + in the words
           'bun .aidlc/tools/aidlc.ts engine log decision --stage requirements-analysis --decision "Q1,Q2,Q3,Q4" --options "Q1: Inclusive end / exclusive+day-after / inclusive-for-total-only / parameterized / Other; Q2: date-only / may-carry-time / mixed-normalize / Other; Q3: filter.ts only / review-others / broader-rework / Other; Q4: regression-test / test+manual / no-new-test / Other"',
           'bun .aidlc/tools/aidlc.ts engine log answer --stage requirements-analysis --details "Q1: A (inclusive end); Q2: A (date-only, plain inclusive comparison); Q3: A (filter.ts only, AssetApi untouched); Q4: A (add targeted regression test, keep existing tests green)"',
+          // a question whose choice holds a comma, one --option a choice, as the
+          // protocol shows it: no | for cmd to read, and `A:` is text, not a drive
+          "bun .aidlc/tools/aidlc.ts engine log decision --stage requirements-analysis --decision 'Q3: how should formatPrice(0) read?' --option 'Show zero, with tax' --option 'A: hide it' --option 'Other'",
+          // one whose question or a choice holds a $ or a backtick: both in files
+          // the agent wrote, so nothing on the line is left to ask about
+          "bun .aidlc/tools/aidlc.ts engine log decision --stage requirements-analysis --decision-file .aidlc-engine/answer-text/question.txt --options-file .aidlc-engine/answer-text/options.txt",
         ]) expect(decision(command, shell), `${shell}: ${command}`).toBe("allow");
         // Lettered options, which Windows would read as a path on drive A:.
         expect(decision('aidlc engine log decision --stage requirements-analysis --decision "Q3?" --options "A: yes only fix the end,B: also change start,Other"', shell), String(shell)).toBe("allow");
@@ -2348,6 +2364,9 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
           "aidlc engine log answer --stage requirements-analysis --details (calc)",
           "aidlc engine log answer --stage requirements-analysis --details a;calc",
           'aidlc engine log answer --stage requirements-analysis --details "a $(calc) b"',
+          // a $ in either quotes (test 30), and a backtick, still keep the prompt
+          "bun .aidlc/tools/aidlc.ts engine log decision --stage requirements-analysis --decision 'Q3?' --option 'Show $0.00, with tax' --option 'Hide it'",
+          "aidlc engine log answer --stage requirements-analysis --details 'a `calc` b'",
           'aidlc engine log answer --stage requirements-analysis --details "100% (of it)"',
           'aidlc engine log answer --stage requirements-analysis --details "a ^& b"',
         ]) expect(decision(command, shell), `${shell}: ${command}`).not.toBe("allow");

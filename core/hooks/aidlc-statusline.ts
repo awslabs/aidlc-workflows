@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { createRequire } from "node:module";
 import { knownActiveSpace } from "../tools/aidlc-runtime-paths.ts";
+import { validateUnitName } from "../tools/aidlc-unit-dag.ts";
 import { unitProgress } from "../tools/aidlc-unit-walk-view.ts";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -453,13 +454,17 @@ function agentDisplayMap(projectDir: string): Record<string, string> {
 
 // The step the person is on. Working one Unit at a time, Current Stage stays
 // on the block's first stage while the person is at a later step of a Unit:
-// that step is the Unit Stage field, or else the one the engine last put to
-// them, from its active-directive file when nothing has written the state
-// since (the lib's digest check is too heavy for this hot path).
+// that step is the Unit Stage field with the Active Unit `unit start` wrote
+// beside it, or else the one the engine last put to them, from its
+// active-directive file when nothing has written the state since (the lib's
+// digest check is too heavy for this hot path). The files are writable, so
+// only a real Unit name reaches the line.
 function shownStep(stateFile: string, state: string, stage: string): { stage: string; unit: string } {
   const slug = /^[a-z0-9][a-z0-9-]*$/;
+  const unitName = (value: unknown): string =>
+    typeof value === "string" && validateUnitName(value) === null ? value : "";
   const unitStage = extractField(state, "Unit Stage");
-  if (slug.test(unitStage)) return { stage: unitStage, unit: "" };
+  if (slug.test(unitStage)) return { stage: unitStage, unit: unitName(extractField(state, "Active Unit")) };
   try {
     const path = join(dirname(stateFile), ".aidlc-engine", "active-directive.json");
     if (statSync(path).mtimeMs < statSync(stateFile).mtimeMs) return { stage, unit: "" };
@@ -467,11 +472,7 @@ function shownStep(stateFile: string, state: string, stage: string): { stage: st
     if (typeof marker.stage !== "string" || !slug.test(marker.stage) || marker.delivery === "superseded") {
       return { stage, unit: "" };
     }
-    // The file is writable, so only a real Unit name reaches the line.
-    const unit = typeof marker.unit === "string" && marker.unit.length <= 64 && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(marker.unit)
-      ? marker.unit
-      : "";
-    return { stage: marker.stage, unit };
+    return { stage: marker.stage, unit: unitName(marker.unit) };
   } catch {
     return { stage, unit: "" };
   }
@@ -750,8 +751,12 @@ async function main(stdinText: string): Promise<void> {
   }
 
   let output = `[AIDLC] ${prefix}${phase}`;
-  const units = phase === "CONSTRUCTION"
-    ? unitProgress(dirname(stateFile), extractField(state, "Construction Iteration"))
+  // Units are counted only while the engine's step on record is for one: with
+  // none (between steps in a teammate's clone, or past the Units' stages) the
+  // light done-count could miss a skeleton's approval or a walk without
+  // checkpoints, so the stage count stands.
+  const units = phase === "CONSTRUCTION" && shown.unit !== ""
+    ? unitProgress(dirname(stateFile), extractField(state, "Construction Iteration"), shown.unit)
     : null;
   if (units) {
     output += ` Unit ${units.current} of ${units.total}`;

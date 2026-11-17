@@ -149,4 +149,21 @@ describe("summary confirmation digest reads decorated contract headings", () => 
         .toThrow(`unsupported H2 heading "${heading}"`);
     }
   });
+
+  test("a later round written as its own section or a second summary is refused with the shape it takes", () => {
+    const shape = 'goes in "## Q<n>" sections after the summary';
+    const ownSection = `${QUESTIONS}\n## Revision 1: the settings file\n\n## Q4. Which file holds the settings?\n\n[Answer]: .env\n`;
+    expect(() => summaryConfirmationContentHash(ownSection)).toThrow('unsupported H2 heading "Revision 1: the settings file"');
+    expect(() => summaryConfirmationContentHash(ownSection)).toThrow(shape);
+    const secondSummary = `${QUESTIONS}\n## Q4. Which file holds the settings?\n\n[Answer]: .env\n\n## Consolidated Summary Confirmation\n\n[Answer]:\n`;
+    expect(() => summaryConfirmationContentHash(secondSummary)).toThrow(shape);
+
+    // The shape it names digests: the round's question after the summary, the one summary rewritten and blanked.
+    const laterRound = `${QUESTIONS.replace(
+      "Staff and customers sign in; data stays in the EU region.\n\n[Answer]: Looks correct",
+      "Staff and customers sign in; data stays in the EU region; settings live in .env.\n\n[Answer]:",
+    )}\n## Q4. Which file holds the settings?\n\n[Answer]: .env\n`;
+    expect(() => summaryConfirmationContentHash(laterRound)).not.toThrow();
+    expect(summaryConfirmationContentHash(laterRound)).not.toBe(summaryConfirmationContentHash(QUESTIONS));
+  });
 });

@@ -48,6 +48,7 @@ import { dirname, join, relative, resolve } from "node:path";
 import { isoTimestamp, isStopHookProbe, sessionsDir, toPosix, validSessionId, writeFileAtomic } from "./aidlc-lib.ts";
 import { rootIntegrationTarget } from "./aidlc-distribution.ts";
 import { runtimeHarnessDir, runtimeHarnessName } from "./aidlc-runtime-paths.ts";
+import { CHAT_NAMING_HOSTS } from "./aidlc-record-core.ts";
 import { ACTIVE_MEMORY_DIR, activeMemoryCopyDrift, KIRO_IDE_STEERING, kiroIdeSteering } from "./aidlc-includes.ts";
 
 type LoadRecord = {
@@ -331,7 +332,7 @@ function hostRunsThisChat(harness: string, sessionId: string): boolean {
     isStopHookProbe() && env.AIDLC_SESSION_OVERRIDE_SOURCE === "payload" &&
     env.AIDLC_SESSION_OVERRIDE === sessionId
   ) {
-    return ["claude", "kiro", "opencode", "codex"].includes(harness);
+    return CHAT_NAMING_HOSTS.has(harness);
   }
   switch (harness) {
     case "claude":

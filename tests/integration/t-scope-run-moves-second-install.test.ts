@@ -48,7 +48,7 @@ describe("a second tool installed while a Unit is open", () => {
               const res = spawnSync(process.execPath, [
                 join(REPO_ROOT, "core", "tools", "aidlc-init.ts"),
                 "config", "--project-dir", proj, "--from", join(REPO_ROOT, "dist-release", "kiro"),
-                "--harness", "kiro", "--mcp", "none",
+                "--harness", "kiro-v2", "--mcp", "none",
               ], { cwd: proj, env: host.env, encoding: "utf-8" });
               expect(res.status, res.stdout + res.stderr).toBe(0);
             }

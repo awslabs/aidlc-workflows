@@ -9,6 +9,12 @@
 // finished review records on its first dispatch with the request's round: no
 // retry, no second reviewer run, and the brief the gate prints never says the
 // review did not finish. The person approves and the run reaches done.
+//
+// The agent is not left to count either. It revises in the same turn and has
+// the reviewer look again before it reports revised, with no `next`, so the
+// rejection's reply is the step it has: it names the re-review request at the
+// pass the review log expects (1, where the agent's own count says 2), and
+// that request is taken the first time, with no refusal logged.
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -46,27 +52,33 @@ function reviewText(reviewer: string, iteration: number): string {
     "| Severity | Location | Finding | Required action |\n|---|---|---|---|\n\n### Summary\n\nReady.\n";
 }
 
+/** A classic scope run stopped at the Requirements Analysis gate, before the person answers it. */
+function atRequirementsGate() {
+  const { proj, host } = createScopeProject("empty");
+  projects.push(proj);
+  const person = new PersonScript(host);
+  let atGate = false;
+  const agent = new AgentStandIn(host, person, {
+    atGate: (stage) => {
+      if (stage === RA && !atGate) {
+        atGate = true;
+        throw new AtGate();
+      }
+    },
+  });
+  const first = agent.begin("build the classic work", ["--scope", "classic", "--skip", SKIPPED.join(",")]);
+  try {
+    agent.drive(first);
+  } catch (error) {
+    if (!(error instanceof AtGate)) throw error;
+  }
+  expect(atGate).toBe(true);
+  return { proj, host, person, agent };
+}
+
 describe("a review after Request Changes", () => {
   test("after Request Changes, a review whose Iteration line carries the reviewer's own round records on its first dispatch, and the gate never says the review did not finish", () => {
-    const { proj, host } = createScopeProject("empty");
-    projects.push(proj);
-    const person = new PersonScript(host);
-    let atGate = false;
-    const agent = new AgentStandIn(host, person, {
-      atGate: (stage) => {
-        if (stage === RA && !atGate) {
-          atGate = true;
-          throw new AtGate();
-        }
-      },
-    });
-    const first = agent.begin("build the classic work", ["--scope", "classic", "--skip", SKIPPED.join(",")]);
-    try {
-      agent.drive(first);
-    } catch (error) {
-      if (!(error instanceof AtGate)) throw error;
-    }
-    expect(atGate).toBe(true);
+    const { proj, host, person, agent } = atRequirementsGate();
     const directive = agent.directives.findLast((d) => d.stage === RA && typeof d.reviewer === "string") as Directive;
     const reviewer = String(directive.reviewer);
     const requirements = (directive.produces as string[]).find((path) => path.endsWith("requirements.md")) as string;
@@ -113,6 +125,47 @@ describe("a review after Request Changes", () => {
     expect(brief.stdout).not.toContain("Request changes and rerun the reviewer");
 
     // The person approves the revised requirements, and the run goes on to done.
+    const final = agent.drive(agent.next());
+    expect(final.kind).toBe("done");
+    expect(host.refusals).toEqual([]);
+    expect(agent.refusalsMet).toEqual([]);
+  }, SCOPE_RUN_TIMEOUT_MS);
+
+  test("after Request Changes, the rejection's reply names the re-review request at the pass the review log expects, and that request is taken the first time", () => {
+    const { proj, host, person, agent } = atRequirementsGate();
+    const directive = agent.directives.findLast((d) => d.stage === RA && typeof d.reviewer === "string") as Directive;
+    const requirements = (directive.produces as string[]).find((path) => path.endsWith("requirements.md")) as string;
+    // Pass 1 was this stage's review before the gate, so an agent counting on
+    // would ask for pass 2 next.
+    const before = auditEvents(proj).filter((row) => row.event === "REVIEW_REQUESTED" && field(row.block, "Stage") === RA);
+    expect(before.map((row) => field(row.block, "Iteration"))).toEqual(["1"]);
+
+    // The person asks for a change; the agent revises in the same turn and
+    // has the reviewer look again before it reports revised, with no `next`.
+    person.say("Request Changes: add a response-time requirement");
+    const rejected = agent.report(RA, "--result", "rejected", "--user-input", "Request Changes");
+    const reply = String(rejected.message);
+    const command = /`(bun [^`]*aidlc-log\.ts review [^`]*)`/.exec(reply)?.[1];
+    expect(command, reply).toBeDefined();
+    expect(command).toContain(`--stage ${RA}`);
+    expect(command).toContain("--iteration 1");
+    host.write(requirements, `${readFileSync(join(proj, requirements), "utf-8")}\n- NFR9: every request answers within 200 ms\n`);
+    const request = host.bash(command!);
+    expect(request.status, request.stdout + request.stderr).toBe(0);
+    const reviewer = String(directive.reviewer);
+    host.task(reviewer, "Re-review requirements-analysis after the revision", () =>
+      host.write(String((JSON.parse(request.stdout) as Directive).reviewFile), reviewText(reviewer, 1)));
+    const verdict = host.engine("log", "review", "--stage", RA, "--reviewer", reviewer, "--iteration", "1", "--verdict", "READY");
+    expect(verdict.status, verdict.stdout + verdict.stderr).toBe(0);
+
+    const rows = auditEvents(proj);
+    const since = rows.slice(rows.findIndex((row) => row.event === "GATE_REJECTED" && field(row.block, "Stage") === RA) + 1);
+    expect(since.length).toBeLessThan(rows.length);
+    expect(since.filter((row) => row.event === "ERROR_LOGGED")).toEqual([]);
+    const again = since.filter((row) => row.event === "REVIEW_REQUESTED" && field(row.block, "Stage") === RA);
+    expect(again.map((row) => field(row.block, "Iteration"))).toEqual(["1"]);
+
+    agent.report(RA, "--result", "revised");
     const final = agent.drive(agent.next());
     expect(final.kind).toBe("done");
     expect(host.refusals).toEqual([]);

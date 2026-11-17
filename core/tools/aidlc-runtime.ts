@@ -24,10 +24,13 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
+import { unitStageDiaryTexts, withoutWaveCopies } from "./aidlc-stage-diary.ts";
 import {
+  docsRoot,
   errorMessage,
   findAllEvents,
   getField,
+  isPerUnitStage,
   loadStageGraph,
   memoryFilePath,
   parseBoltDag,
@@ -257,11 +260,11 @@ function buildWorkflowHeader(
 
 // Build a phase-by-slug lookup from stage-graph.json. Reuses the
 // in-memory cache; no per-compile re-parse.
-function buildPhaseMap(): Map<string, { phase: string; agent: string }> {
+function buildPhaseMap(): Map<string, { phase: string; agent: string; perUnit: boolean }> {
   const stages = loadStageGraph();
-  const map = new Map<string, { phase: string; agent: string }>();
+  const map = new Map<string, { phase: string; agent: string; perUnit: boolean }>();
   for (const s of stages) {
-    map.set(s.slug, { phase: s.phase, agent: s.lead_agent });
+    map.set(s.slug, { phase: s.phase, agent: s.lead_agent, perUnit: isPerUnitStage(s) });
   }
   return map;
 }
@@ -269,25 +272,33 @@ function buildPhaseMap(): Map<string, { phase: string; agent: string }> {
 // Read memory.md for a stage and return entries + breakdown. Returns
 // null/null when the file does not exist (backfill rule for stages
 // that completed before memory.md tracking shipped); zero counts when
-// the file exists but has no entries.
+// the file exists but has no entries. A per-Unit stage's notes are in each
+// Unit's own diary, and in the stage diary of work started before they moved
+// there: all of them count.
 function readMemory(
   projectDir: string,
   phase: string,
-  stageSlug: string
+  stageSlug: string,
+  perUnit: boolean
 ): { memory_entries: number | null; memory_breakdown: MemoryBreakdown | null } {
   const path = memoryFilePath(projectDir, phase, stageSlug);
-  if (!existsSync(path)) {
+  const texts = perUnit ? unitStageDiaryTexts(docsRoot(projectDir), stageSlug, null) : [];
+  if (existsSync(path)) {
+    const raw = readFileSync(path, "utf-8");
+    texts.push(perUnit ? withoutWaveCopies(raw) : raw);
+  }
+  if (texts.length === 0) {
     return { memory_entries: null, memory_breakdown: null };
   }
-  const raw = readFileSync(path, "utf-8");
-  const parsed = parseMemoryHeadings(raw);
+  const parsed = texts.map(parseMemoryHeadings);
+  const sum = (key: keyof MemoryBreakdown | "total") => parsed.reduce((n, p) => n + p[key], 0);
   return {
-    memory_entries: parsed.total,
+    memory_entries: sum("total"),
     memory_breakdown: {
-      interpretations: parsed.interpretations,
-      deviations: parsed.deviations,
-      tradeoffs: parsed.tradeoffs,
-      open_questions: parsed.open_questions,
+      interpretations: sum("interpretations"),
+      deviations: sum("deviations"),
+      tradeoffs: sum("tradeoffs"),
+      open_questions: sum("open_questions"),
     },
   };
 }
@@ -365,7 +376,7 @@ function compile(opts: CompileOptions): { skipped?: string; written?: string } {
     const phaseInfo = phaseMap.get(slug);
     if (!phaseInfo) continue; // unknown slug — skip rather than fail
 
-    const memory = readMemory(projectDir, phaseInfo.phase, slug);
+    const memory = readMemory(projectDir, phaseInfo.phase, slug, phaseInfo.perUnit);
     const outcome: RuntimeStage["outcome"] =
       entry.completed_at !== null ? "approved" : "pending";
 
@@ -443,7 +454,7 @@ function compile(opts: CompileOptions): { skipped?: string; written?: string } {
   const allBoltFailedEvents = findAllEvents(audit, "BOLT_FAILED");
 
   // Helper: read a field's value from an audit row block. Mirrors
-  // getField's discipline in aidlc-lib.ts (single-line match,
+  // getField's discipline in aidlc-record-core.ts (single-line match,
   // [ \t]* not \s*) without the dynamic-regexp pattern — callers pass
   // hard-coded field names but the helper is line-scanned to keep ReDoS
   // surface zero. Block format: lines of `**FieldName**: value`.
@@ -1407,7 +1418,7 @@ const handleSummary: SubcommandHandler = (rest, projectDir) => {
   const summary = summarize(projectDir);
   if (!summary) {
     process.stderr.write(
-      "aidlc-runtime summary: no runtime-graph.json found — run a workflow first\n"
+      "aidlc-runtime summary: no runtime-graph.json found - run a workflow first\n"
     );
     process.exit(1);
   }
@@ -1452,7 +1463,7 @@ export function main(argv: string[]): void {
     const { projectDirArg, rest: argsAfterStrip } = stripProjectDir(argv);
 
     const [cmd, ...subargs] = argsAfterStrip;
-    if (cmd === "--help" || cmd === "-h") {
+    if (cmd === "--help" || cmd === "-h" || subargs.includes("--help") || subargs.includes("-h")) {
       printHelp();
       return;
     }

@@ -28,7 +28,7 @@
 //   heartbeat - writes isoTimestamp() to sensor-fire.last every fire.
 //   empty sensors_applicable -> exit 0 (no spawn).
 //   per-entry dispatch - `if (!entry.matches) continue` then
-//          new Bun.Glob(entry.matches).match(filePath); spawn argv is
+//          sensorMatchesPath(entry.matches, filePath); spawn argv is
 //          ["fire", entry.id, "--stage", currentStage, "--output-path", filePath].
 //   timeout (SIGTERM/ETIMEDOUT) -> recordHookDrop "...subprocess killed
 //          by SIGTERM (timeout)"; non-zero exit -> recordHookDrop "...dispatcher

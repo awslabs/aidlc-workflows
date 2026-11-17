@@ -631,6 +631,21 @@ describe("t288 each state's REQUIRED companions are enforced, per the design tab
       ])).ok, String(bad)).toBe(false);
     }
   });
+
+  test("pages_kept names the page cap only on a truncated extraction", () => {
+    // `show` and the onboard note say "first N pages" from it, so a stray
+    // value on a complete extraction would announce a cut that never happened.
+    expect(validateDocumentIndex(index([
+      row({ extraction: { ...DESIGN_CONFORMANT_EXTRACTION.extracted, truncated: true, pages_kept: 50 } }),
+    ])).ok).toBe(true);
+    for (const [bad, truncated] of [[50, false], [0, true], [1.5, true], ["50", true]] as const) {
+      const r = validateDocumentIndex(index([
+        row({ extraction: { ...DESIGN_CONFORMANT_EXTRACTION.extracted, truncated, pages_kept: bad } }),
+      ]));
+      expect(r.ok, `${String(bad)} / truncated ${truncated}`).toBe(false);
+      if (!r.ok) expect(errorMatching(r.errors, /pages_kept/)).not.toBe("");
+    }
+  });
 });
 
 describe("t288 duplicate ids are rejected on READ", () => {
@@ -812,4 +827,30 @@ describe("t288 the reporting contract", () => {
     validateDocumentIndex(input);
     expect(JSON.stringify(input)).toBe(before);
   });
+});
+
+// `copied_from` says which project file a copy under documents/ was made from
+// and the bytes copied, so naming that original again updates the copy. It is a
+// committed path like source.path, so it gets the same containment check.
+describe("t288 copied_from: the original's project path and the bytes copied", () => {
+  test("a well-formed copied_from is accepted, in the index and in metadata.json", () => {
+    const copiedFrom = { path: "orig/contract-summary.md", sha256: DIGEST };
+    expect(validateDocumentIndex(index([row({ copied_from: copiedFrom })])).ok).toBe(true);
+    expect(validateDocumentMetadata(metadata({ copied_from: copiedFrom })).ok).toBe(true);
+    expect(validateDocumentMetadata(metadata({ copied_from: { path: "../a.md", sha256: DIGEST } })).ok).toBe(false);
+  });
+
+  for (const [what, value] of [
+    ["an absolute path", { path: "/home/someone/orig/a.md", sha256: DIGEST }],
+    ["a parent segment", { path: "orig/../../a.md", sha256: DIGEST }],
+    ["a bad digest", { path: "orig/a.md", sha256: "abc" }],
+    ["no path", { sha256: DIGEST }],
+    ["not an object", "orig/a.md"],
+  ] as const) {
+    test(`copied_from with ${what} is refused`, () => {
+      const r = validateDocumentIndex(index([row({ copied_from: value })]));
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(errorMatching(r.errors, /copied_from/)).toBeTruthy();
+    });
+  }
 });

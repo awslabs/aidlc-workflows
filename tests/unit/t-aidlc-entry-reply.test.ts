@@ -43,6 +43,13 @@ function parserFlags(): string[] {
 const words = (text: string) => nextArgsAreOnlyWords(splitKiroCommandArgs(text));
 
 describe("words typed after /aidlc are a reply unless the dispatcher reads a command in them", () => {
+  // #2401: a quoted request that opens with a flag-shaped word is still the
+  // person's words, so Kiro IDE's prompt hook gives the first engine step for it.
+  test("a quoted request opening with a flag-shaped word is words, so Kiro IDE bootstraps it", () => {
+    expect(words('"--name the work after the bank"')).toBe(true);
+    expect(words('"--description should be added to the CLI"')).toBe(true);
+  });
+
   test("every flag the parser knows keeps the message a command, with or without a value, unless a utility flag sits among the person's words", () => {
     const flags = [...parserFlags(), ...READ_ONLY_FLAGS, ...Object.values(CEREMONY_FLAGS)];
     expect(flags.length).toBeGreaterThan(20);

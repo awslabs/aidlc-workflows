@@ -53,3 +53,27 @@ export const GUARD_POLICY_GLOSS: Record<"strict" | "relaxed" | "off", string> = 
 };
 export const SCOPE_GLOSS = "the set of stages this work runs";
 export const CHECKPOINT_GLOSS = "a stop after each Unit for you to check and approve it";
+
+/** The hook payload fields that say who made a tool call. */
+interface HookCaller {
+  agent_type?: unknown;
+  agent_id?: unknown;
+  session_id?: unknown;
+  tool_input?: Record<string, unknown>;
+}
+
+/**
+ * The delegated agent a hook payload names, or "" for the main session: who a
+ * guard's authority reads as acting. An adapter names only a delegate. Claude
+ * Code also names the agent a session was started under (`--agent`, a background
+ * session), and its own call is the one with no agent_id and the session_id its
+ * hooks get as CLAUDE_CODE_SESSION_ID: hostRunsThisChat's test in
+ * aidlc-rules-held.ts, without its CLAUDECODE fallback, which a host started
+ * from a Claude Code shell inherits too.
+ */
+export function delegatedAgentOf(hookInput: HookCaller | null | undefined): string {
+  const text = (value: unknown): string => (typeof value === "string" ? value.trim() : "");
+  const host = text(process.env.CLAUDE_CODE_SESSION_ID);
+  const sessionsOwn = host !== "" && host === text(hookInput?.session_id) && text(hookInput?.agent_id) === "";
+  return (sessionsOwn ? "" : text(hookInput?.agent_type)) || text(hookInput?.tool_input?.subagent_type);
+}

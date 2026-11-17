@@ -10,9 +10,10 @@
 // passes after finalize (release-merge must not stale its directive marker), and a
 // second finalize reports the merged-back Unit converged instead of looping on
 // "already merged". Nothing is asked twice; a changed plan still asks as today.
-// A plan approved again that cannot reach the kept build always names setting the
-// work aside, and landing the work as it is only where that runs: the same merge
-// again for work that already converged, or work its own check lets go on.
+// A plan approved again that cannot reach a kept build holding work of its own
+// names setting that work aside, and landing it as it is only where that runs:
+// the same merge again for work that already converged, or work its own check
+// lets go on. Any other refusal on the way names its own step.
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -48,6 +49,15 @@ function land(pd: string, unit: string) {
 function rows(pd: string, event: string, unit?: string) {
   return readAuditShardEvents(pd).filter((row) => row.event === event &&
     (unit === undefined || auditBlockField(row.block, "Unit name") === unit || auditBlockField(row.block, "Bolt slug") === boltSlugForUnit(unit)));
+}
+
+// The line for a build whose own work the plan approved again cannot reach:
+// the reason in the person's words, never the engine's refusal inside it.
+function expectTheBuildsOwnWorkLine(error: string, holds: string): void {
+  expect(error).toContain(`could not be handed to its existing build, ${holds}. The build and its work are kept.`);
+  expect(error.replaceAll("(abort and discard it)", "")).not.toContain("(");
+  expect(error).not.toContain("Plan Approval");
+  expect(error).not.toContain("lines up with the main code");
 }
 
 function converge(pd: string, units: string[], extraWrites: string[] = []): void {
@@ -248,6 +258,7 @@ describe("a re-approved plan that cannot reach the kept worktree", () => {
     expect(row.error).toContain("The build and its work are kept");
     expect(row.error).toContain("set this Unit's current work aside (abort and discard it) and run prepare again");
     expect(row.error).toContain("land it as it is");
+    expectTheBuildsOwnWorkLine(row.error!, "which holds work of its own that is not committed");
     expect(again.out).not.toContain("Re-present and approve the plan");
     expect(existsSync(wt(pd, "beta"))).toBe(true);
     expect(readFileSync(join(wt(pd, "beta"), "src", "beta.ts"), "utf-8")).toBe(before);
@@ -274,6 +285,9 @@ describe("a re-approved plan that cannot reach the kept worktree", () => {
     expect(row.error).toContain("The build and its work are kept");
     expect(row.error).toContain("set this Unit's current work aside (abort and discard it) and run prepare again.");
     expect(row.error).not.toContain("land it as it is");
+    // The plan was just approved again: the line asks for no approval, and the
+    // reason is the worker's own edits, not the main code.
+    expectTheBuildsOwnWorkLine(row.error!, "which holds work of its own that is not committed");
     const checked = swarm(pd, ["check", "beta"]);
     expect(checked.code).toBe(1);
     expect(checked.out).toContain("this build still holds the earlier plan");
@@ -293,6 +307,28 @@ describe("a re-approved plan that cannot reach the kept worktree", () => {
     expect(readFileSync(join(codeGenerationRecordDir(wt(pd, "beta"), "beta"), "code-generation-plan.md"), "utf-8")).toContain("# revised plan for beta");
     const rechecked = swarm(pd, ["check", "beta"]);
     expect(rechecked.code, `${rechecked.out}\n${rechecked.err}`).toBe(0);
+  });
+
+  test("a refusal that is not about the build's own work keeps its own step: the plan was approved again on main code that is not committed", () => {
+    const pd = fixture(["alpha"]);
+    converge(pd, ["alpha"]);
+    hook(pd, ["exit 1"]);
+    expect((JSON.parse(land(pd, "alpha").out) as { status: string }).status).toBe("commit-refused");
+    // The worker committed its own work, so the build is clean; the person's
+    // change in the main checkout went into the approval uncommitted.
+    rmSync(join(pd, ".git", "hooks", "pre-commit"));
+    git(wt(pd), ["add", "-A"]);
+    git(wt(pd), ["commit", "-q", "-m", "the worker's commit"]);
+    writeFileSync(join(pd, "src", "extra.ts"), "export const extra = 1;\n");
+    approvePlan(pd, "alpha", "revised");
+    const again = prepare(pd);
+    expect(again.code).toBe(2);
+    const row = (JSON.parse(again.out) as Prepared).units.find((entry) => entry.unit === "alpha")!;
+    expect(row).toMatchObject({ ok: false, retained: true, worktree_path: wt(pd) });
+    expect(row.error).toStartWith("Unit alpha: the plan approved again could not be handed to its existing build. The build and its work are kept. ");
+    expect(row.error).toContain("Commit the already-approved parent source, then retry");
+    expect(row.error).not.toContain("abort and discard it");
+    expect(row.error).not.toContain("land it as it is");
   });
 
   test("Guard Policy off and the plan edited after its approval: the build's own check lets its work go on, so the line keeps that way and the work lands", () => {

@@ -140,7 +140,7 @@ function wtRecordRoot(proj: string, slug: string): string {
   return join(worktreePath(proj, fixtureIntentId8(proj), slug), relative(proj, seededRecordDir(proj)));
 }
 
-/** Replicate aidlc-lib's auditShardName for a worktree: <host>-<clone-id>.md,
+/** Replicate aidlc-record-core's auditShardName for a worktree: <host>-<clone-id>.md,
  *  where the clone-id is read from <wt>/aidlc/.aidlc-clone-id. We write a fixed
  *  token there first so the doctor (a separate process) resolves the SAME shard
  *  name — its worktreeAuditFilePath(...) → auditShardName(wtPath) reads the same

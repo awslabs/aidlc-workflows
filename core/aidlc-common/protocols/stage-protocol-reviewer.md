@@ -118,6 +118,12 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    says). The request remains unmatched while the reviewer runs, so the
    approval gate and completion stay blocked.
 
+   Every dispatch starts a new reviewer subagent, re-dispatches included.
+   Never continue a reviewer from an earlier dispatch (of this stage, another
+   stage, or another Unit) by sending it a message: it still holds its earlier
+   reviews, which undoes the independent judgment below and grows its context
+   with every stage.
+
    Pass:
    - The stage definition file path (`directive.stage_file`)
    - The Q&A file path (e.g., `<record>/<phase>/<stage>/<stage>-questions.md`)
@@ -279,7 +285,7 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    that one human decision covers every Unit and approval records dispositions
    for every Unit's open findings. At a Unit's own approval (its Construction
    checkpoint, or its team Unit gate), add `--unit "<unit>"`: that approval covers
-   only that Unit, and the brief shows only its review. Unit-filtered `context` output remains mandatory for
+   only that Unit, and the brief shows only that Unit's reviews. Unit-filtered `context` output remains mandatory for
    each reviewer dispatch. Select `first` after the initial review, `revision`
    after a requested revision, and `stale` after artifact/source invalidation or
    a backward jump. Print stdout verbatim. It deterministically renders the
@@ -288,7 +294,7 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    the raw verdict token. On the
    terminal incomplete-attempt fallback the brief names the review that did not
    finish; when what the reviewer returned says why it stopped (for example that
-   it had no tool to write files), add `--fallback-finding "<why, in one plain sentence>"`.
+   it had no tool to write files), add `--fallback-finding '<why, in one plain sentence>'`.
 
    This tool output is the opening of the reviewer-backed gate presentation;
    the `**Review:**` artifact-path line and structured approval question follow
@@ -306,12 +312,12 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
      `Fix requested` and stays open for the next review.
    - **Request Changes** leaves open findings unresolved. When the human
      explicitly rejects a finding as inapplicable, append
-     `--reject-finding "<review-artifact>#R-NN=<exact human reason>"` to the
+     `--reject-finding '<review-artifact>#R-NN=<exact human reason>'` to the
      rejection command (the rejected report, or a checkpoint's
      `--action reject`) for each rejected finding. When the human
      disagrees that a reviewer-fixed finding is fixed (for example
      `R-03 isn't fixed: <why>`), append
-     `--reopen-finding "<review-artifact>#R-03=<why>"`. The review artifact
+     `--reopen-finding '<review-artifact>#R-03=<why>'`. The review artifact
      may be its file name (`components#R-01`), or left out when one current
      finding carries the id; when two findings share it, the refusal names
      both. Never

@@ -175,7 +175,9 @@ before starting a second intent alongside the first:
 
 Saying only that the work should go on (`/aidlc carry on`, "proceed", "keep
 going", in your own words) asks nothing: AI-DLC reads your words and carries on
-with the active work. With work in the project but none selected yet, it asks
+with the active work. Asking where the work stands (`/aidlc how far along are
+we?`, in your own words) asks nothing either: AI-DLC answers your question from
+the status. With work in the project but none selected yet, it asks
 which piece to pick up; name the piece with your words (`/aidlc continue auth`)
 and it picks that piece up and carries on with it at once.
 
@@ -252,11 +254,29 @@ intent record. A session bound by an earlier version keeps working its intent wh
 cursor names the same record; otherwise it is offered a rebind to that intent. A
 session an earlier version stamped but never bound follows its stamp when it
 resumes, so a chat left open across an upgrade continues its own intent.
-A plain `git worktree` created without AI-DLC's worktree command has no local
-evidence either, so it also selects its intent with `/aidlc intent <slug>`. A Unit
+A plain `git worktree` created without AI-DLC's worktree command (or one a host
+makes for each chat) starts without cursors of its own, so it reads the ones its
+main checkout holds on this machine: it opens the space the main checkout is on,
+and the intent too when the worktree has that intent's record, so a chat there is
+on that work as the next paragraph says. Switching intent in the worktree gives it
+an intent cursor of its own, and the main checkout's no longer moves it; archiving
+the intent it is on stops that intent resolving there, as in a main checkout. When
+the main checkout has no cursor either, it selects its intent with
+`/aidlc intent <slug>`. A Unit
 claimed on this machine counts for that Unit's intent; the Unit participant marker
 is checkout-wide and names no intent, so it does not count as joining a
 particular record.
+
+A chat you open while your cursor names a piece of work is on that work: `/aidlc`
+in it carries the work on from where it stands, with nothing asked. On Claude Code,
+Codex CLI, Kiro CLI (V2) and opencode, that work's checks (Plan Approval during Code
+Generation, the review freeze) hold the chat from its first AI-DLC step there
+(`/aidlc`, an answer, a review you ask for, a setting you change), so a chat you opened in the same
+folder for something else runs your requests as in a folder with no workflow. On
+Cursor, GitHub Copilot and Kiro (Kiro IDE, or Kiro CLI started with `kiro-cli --v3`), a command cannot tell AI-DLC
+which chat it runs in, so there the checks hold the chat from the start. A worktree
+AI-DLC made for the work, or a Unit claimed on this machine, holds the chat from
+the start on every host.
 
 Session identity follows one order:
 
@@ -473,7 +493,10 @@ my-project/           ← run `aidlc config` here
 The code repos are the folders next to `aidlc/` that have their own `.git`.
 AI-DLC finds them itself ([Multiple repos in one intent](#multiple-repos-in-one-intent)).
 The record of the work lives once, in `aidlc/`, not once per repo, so a change
-that touches both repos has one set of requirements and one audit trail.
+that touches both repos has one set of requirements and one audit trail. A
+command run from inside one of those repos, or from any folder of the workspace
+that is not set up itself, works on the workspace's `aidlc/` too, so nothing of
+AI-DLC's is written into the repo.
 
 The folder holding them does not have to be a git repo, and AI-DLC does not
 make it one. Because it holds no `.git` or project file, `aidlc config` can ask you
@@ -521,16 +544,23 @@ of the workspace root that has its own `.git`) and records the set in the intent
 `intents.json` row. During Construction, each git operation is then anchored to
 the right repo automatically.
 
+A git submodule is not one of them when the project holding it has code of its
+own beside it (a shared library added with `git submodule add`, say): that
+project is a one-repo project, the workspace folder is the work's repo, and the
+submodule is left alone. A project made only of submodules records them.
+Work started before this recorded the submodule; when its code is written in the
+project itself, Code Generation asks you once whether to take the submodule off the
+work's repos (its folder stays as it is).
+
 Each repo is recorded by its folder's name as you gave it: a space, an accent,
 an apostrophe or another letter works (`my lib`, `C# lib`, a name with an accent). A few
 characters break something AI-DLC relies on, so a folder whose name has one is
 left out of the work, and the first step says which folder and why: `<` `>`
 `:` `"` `|` `?` `*` (Windows cannot hold them in a folder name), `&` `^` `%`
-(AI-DLC's commands on Windows), `(` `)` `[` `]` `{` `}` `;` `$` and a backtick
-(AI-DLC's commands on Cursor), a comma (it separates repo names), an apostrophe
-together with `!` (no one quoting reads both alike in PowerShell and Git Bash on
-Windows), a name that is `-` or starts with `--`, ends with `@checkout`, or starts
-or ends with a space.
+(AI-DLC's commands on Windows), a comma (it separates repo names), an apostrophe
+together with `!`, `$` or a backtick (no one quoting reads both alike in
+PowerShell and Git Bash on Windows), a name that is `-` or starts with `--`, ends
+with `@checkout`, or starts or ends with a space.
 
 ```
 my-project/
@@ -573,8 +603,11 @@ multi-root workspace.
 
 [`/aidlc intent add-repo <name>`](12-cli-commands.md#aidlc-intent-add-repo-name-add-a-sibling-repo-to-work-already-under-way)
 writes this file too. A repo that work needs but nobody cloned here is cloned
-from its entry; a repo with no entry is cloned from `org` (or the address you
-give) and gets one, with the file's comments and layout kept. With no `repos.json` yet, a hosted
+from its entry; a repo with no entry is cloned from the address you give and
+gets one, with the file's comments and layout kept, and without an address you
+are asked for one. A repo that `repos.json` lists by name alone is cloned from
+github.com under the list's org, so a team on GitHub can add a line with the
+repo's name and then add it by name. With no `repos.json` yet, a hosted
 `--url` (a host, an owner and a name) creates one whose `org` is that owner, so
 commit it to share the list with your team. An address written here never keeps
 its credentials.
@@ -645,6 +678,7 @@ repo. Two kinds of file are deliberately **gitignored** instead:
 | `aidlc/active-space`, `…/intents/active-intent` | Cursors — "where am I right now." Committing them would turn per-user navigation into shared repository state and have teammates fight over intent creates and cursor switches. |
 | `.../intents/<id>/runtime-graph.json`, `.aidlc-*`, `aidlc/.aidlc-sessions/`, `aidlc/.aidlc-active-space-*.tmp` | Derived, machine-local runtime state, including per-session bindings and PID ancestry entries. |
 | `aidlc/.aidlc-request-text/` | A request the agent wrote to a file for the engine to read. Removed once the command goes ahead; one left there when it did not is your words, not shared work. |
+| `.aidlc/worktree-meta.json`, `.aidlc/base-source-listing.tsv` | The metadata AI-DLC writes inside a Unit's own checkout while it is built side by side. It is this machine's, so a worker's `git add -A` leaves it out; a Unit's landing never carries it to your branch either. |
 | `…/knowledge/documentkb/.journal/` | One directory per in-flight document transaction. Transient and per-clone; a committed journal would be a merge conflict on every concurrent `sync`. |
 | `…/knowledge/.sources.local.json` | Where *this machine* finds documents that live outside the repo. The path is machine-specific by definition, so committing it would break every teammate's checkout. No command creates such a link today (`onboard` copies a file into `documents/`), so you will not normally see this file. |
 

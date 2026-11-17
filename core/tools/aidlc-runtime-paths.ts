@@ -1,4 +1,16 @@
-import { type Dirent, existsSync, lstatSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import {
+  type Dirent,
+  closeSync,
+  existsSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+  readSync,
+  readdirSync,
+  realpathSync,
+  statSync,
+} from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -283,6 +295,19 @@ export function aidlcEngineCommand(
     : [process.execPath, sourceToolPath ?? resolveHarnessPath(["tools", `aidlc-${route}.ts`]), ...args];
 }
 
+// Whether the agent's shell is in the host a harness's `{ env }` names: `NAME`
+// matches when set, `NAME=value` when it holds that value (TERM_PROGRAM=kiro).
+// A `NAME=value` variable holding another value rules the host out: Kiro CLI in
+// VS Code's terminal has TERM_PROGRAM=vscode beside VS Code's own VSCODE_PID.
+export function inHostShell(env: readonly string[] | undefined, actualEnv: NodeJS.ProcessEnv = process.env): boolean {
+  const entries = (env ?? []).map((entry) => {
+    const [name, value] = entry.split("=", 2);
+    return { value: value?.toLowerCase(), actual: actualEnv[name]?.trim().toLowerCase() };
+  });
+  if (entries.some(({ value, actual }) => value !== undefined && actual && actual !== value)) return false;
+  return entries.some(({ value, actual }) => value === undefined ? Boolean(actual) : actual === value);
+}
+
 // Control characters (line breaks, terminal escapes) in something we print.
 export function hasControlCharacters(value: string): boolean {
   // biome-ignore lint/suspicious/noControlCharactersInRegex: detecting them is the point
@@ -308,10 +333,6 @@ export function repoNameProblem(name: string): string | null {
   // cmd.exe reads these again, however the command quotes them.
   const cmd = /[&^%]/.exec(name);
   if (cmd) return `has "${cmd[0]}", which breaks AI-DLC's commands on Windows`;
-  // Cursor's adapter stops a delegated agent's own AI-DLC command holding
-  // these, quoted or not (runsAdmittedAidlcCommand).
-  const cursor = /[()[\]{};$`]/.exec(name);
-  if (cursor) return `has "${cursor[0]}", which stops AI-DLC's commands on Cursor`;
   if (name.includes(",")) return 'has ",", which AI-DLC puts between repo names';
   if (name === "-") return 'is "-", which AI-DLC\'s records use for no repo';
   if (name.startsWith("--")) return 'starts with "--", which AI-DLC\'s commands read as an option';
@@ -320,7 +341,7 @@ export function repoNameProblem(name: string): string | null {
   // quotes read an apostrophe alike in both (quoteCommandArgument); these end
   // or act inside them.
   const apostrophe = /['\u2018-\u201b]/.exec(name);
-  const alongside = /[!\u201c-\u201e]/.exec(name);
+  const alongside = /[!$`\u201c-\u201e]/.exec(name);
   if (apostrophe && alongside) {
     return `has "${apostrophe[0]}" with "${alongside[0]}", which AI-DLC cannot quote one way for both PowerShell and Git Bash on Windows`;
   }
@@ -358,8 +379,13 @@ export function quoteCommandArgument(
   // PowerShell reads a bare word that starts with "@" as splatting a variable.
   if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value) && !(shell !== "posix" && value.startsWith("@"))) return value;
   // The two shells quote an apostrophe differently, so it is double-quoted
-  // when both read that alike.
-  if (shell === "windows" && POWERSHELL_SINGLE_QUOTE.test(value) && readsAlikeInDoubleQuotes(value)) return `"${value}"`;
+  // when both read that alike. Inside double quotes Git Bash reads a backslash
+  // as itself, as PowerShell does, unless another backslash or the closing
+  // quote follows it, so a Windows path's own backslashes pass.
+  if (
+    shell === "windows" && POWERSHELL_SINGLE_QUOTE.test(value) && !/\\(?:\\|$)/.test(value) &&
+    readsAlikeInDoubleQuotes(value.replaceAll("\\", ""))
+  ) return `"${value}"`;
   return shell !== "posix"
     ? `'${value.replaceAll(new RegExp(POWERSHELL_SINGLE_QUOTE.source, "g"), "$&$&")}'`
     : `'${value.replaceAll("'", "'\"'\"'")}'`;
@@ -378,8 +404,16 @@ export function projectedDispatcher(): string | null {
   return PROJECTED_INVOKE.startsWith("{{") ? null : join(MODULE_TOOLS_DIR, "aidlc.ts");
 }
 
-export function entrySkillInvocation(): string {
+// The entry as the tree this engine runs on spells it, for what is written into
+// that tree (its runners).
+export function treeEntrySkillInvocation(): string {
   return runtimeHarnessDir() === ".codex" ? "$aidlc" : "/aidlc";
+}
+
+// The entry the person types: their tool's, or, where the engine could only
+// guess which tool runs it (harnessIsAGuess), the one every tool but Codex takes.
+export function entrySkillInvocation(): string {
+  return harnessIsAGuess() ? "/aidlc" : treeEntrySkillInvocation();
 }
 
 export function aidlcDispatcherInvocation(route: string): string {
@@ -402,6 +436,14 @@ export function sensorFireUsage(id = "<id>"): string {
   return aidlcDispatcherInvocation(`sensor fire ${id} --stage <slug> --output-path <path>`);
 }
 
+// A check script's result, written whole before the process exits 0: under Bun
+// an exit straight after a large write to a pipe drops what is not yet written.
+// writeSync is no way round: once stdout is non-blocking it writes part and
+// returns; ending without an exit makes an early-closing reader an EPIPE exit 1.
+export function writeSensorResult(result: unknown): void {
+  process.stdout.write(`${JSON.stringify(result)}\n`, () => process.exit(0));
+}
+
 export function aidlcToolInvocation(
   route: string,
   sourceTool?: string,
@@ -417,12 +459,11 @@ export function aidlcToolInvocation(
   return `bun ${path}`;
 }
 
-function explicitRuntimeProjectDir(): string | null {
+function explicitRuntimeProjectDir(argv: readonly string[] = process.argv.slice(1)): string | null {
   const internal = process.env.AIDLC_RUNTIME_PROJECT_DIR;
   if (internal) {
     return isAbsolute(internal) ? internal : resolve(process.cwd(), internal);
   }
-  const argv = process.argv.slice(1);
   const index = argv.indexOf("--project-dir");
   if (index >= 0 && argv[index + 1] && !argv[index + 1].startsWith("--")) {
     return isAbsolute(argv[index + 1])
@@ -436,8 +477,165 @@ function explicitRuntimeProjectDir(): string | null {
     : null;
 }
 
+// A host that opens a session in a git worktree of the project may still name
+// the main checkout as the project and run that session's hooks from it
+// (Claude Code's desktop app sets CLAUDE_PROJECT_DIR that way), so the
+// worktree's session would land in the main checkout's record. The native
+// `engine hook` route reads the session's own directory from the hook payload
+// and acts on that worktree instead; the copy channel's hooks keep the host's
+// directory.
+
+// The directory a hook's session works in: the first `cwd` its transcript
+// records, which is where the session started, else the payload's own `cwd`.
+// The first one wins because a host keeps a `cd` the agent ran (Claude Code
+// does), so the payload's `cwd` can name a Unit's worktree the conductor only
+// visited.
+export function hookSessionDirectory(payload: string): string | null {
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(payload) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object") return null;
+  const transcript = parsed.transcript_path;
+  if (typeof transcript === "string" && transcript) {
+    try {
+      // The first rows are enough: every row carries the cwd of its time.
+      const fd = openSync(transcript, "r");
+      const head = Buffer.alloc(262_144);
+      let length = 0;
+      try {
+        length = readSync(fd, head, 0, head.length, 0);
+      } finally {
+        closeSync(fd);
+      }
+      for (const line of head.toString("utf-8", 0, length).split("\n").slice(0, 200)) {
+        if (!line.includes('"cwd"')) continue;
+        try {
+          const row = JSON.parse(line) as { cwd?: unknown };
+          if (typeof row.cwd === "string" && row.cwd) return row.cwd;
+        } catch {
+          // A partial last line; keep looking.
+        }
+      }
+    } catch {
+      // No transcript yet, or unreadable: the payload's cwd is all there is.
+    }
+  }
+  return typeof parsed.cwd === "string" && parsed.cwd ? parsed.cwd : null;
+}
+
+const hostWorktrees = new Map<string, string | null>();
+
+// The checkout holding `from` when it is another git worktree of the project
+// the host named and holds the AI-DLC workspace shell itself, else null. A
+// worktree AI-DLC made (a swarm Unit's, under the project's
+// `.aidlc/worktrees/`, holding `.aidlc/worktree-meta.json`) belongs to the
+// project and is never taken for the session's own. Paths are compared before
+// git runs, so a hook whose session works in the host's directory spawns
+// nothing; the answer is kept for the process.
+export function hostWorktreeProjectDir(hostDir: string, from: string): string | null {
+  const key = `${hostDir}\n${from}`;
+  if (hostWorktrees.has(key)) return hostWorktrees.get(key) ?? null;
+  const found = findHostWorktree(hostDir, from);
+  hostWorktrees.set(key, found);
+  return found;
+}
+
+function findHostWorktree(hostDir: string, from: string): string | null {
+  if (resolve(from) === resolve(hostDir) || within(join(hostDir, ".aidlc", "worktrees"), from)) return null;
+  if (!existsSync(from)) return null;
+  const git = (dir: string, args: string[]): string[] | null => {
+    const result = spawnSync("git", ["rev-parse", ...args], {
+      cwd: dir,
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const lines = (result.stdout ?? "").trim().split(/\r?\n/);
+    return result.status === 0 && lines.length === args.length && lines.every(Boolean) ? lines : null;
+  };
+  const here = git(from, ["--show-toplevel", "--git-common-dir"]);
+  if (!here) return null;
+  const [top, common] = here;
+  if (samePath(top, hostDir)) return null;
+  if (existsSync(join(top, ".aidlc", "worktree-meta.json"))) return null;
+  if (!existsSync(join(top, "aidlc"))) return null;
+  if (discoverProjectHarnesses(top).length === 0) return null;
+  // A worktree of the project the host named, not some other checkout that
+  // happens to hold a workspace: both share one git common directory.
+  const hostCommon = git(hostDir, ["--git-common-dir"]);
+  return hostCommon !== null && samePath(resolve(hostDir, hostCommon[0]), resolve(from, common)) ? top : null;
+}
+
+// The project a hook acts on, given the directory the host resolved and the
+// hook's payload: the session's own worktree when hostWorktreeProjectDir
+// finds one, else the host's directory.
+export function hookSessionProjectDir(hostDir: string, payload: string): string {
+  const dir = hookSessionDirectory(payload);
+  return (dir === null ? null : hostWorktreeProjectDir(hostDir, dir)) ?? hostDir;
+}
+
+// A folder that is an AI-DLC project of its own: it holds AI-DLC's records
+// (`aidlc/spaces/`), an AI-DLC install, or is a Unit's worktree AI-DLC made,
+// which reads its worker's identity from its own folder. A session folder a
+// run left behind (`aidlc/.aidlc-sessions/`) is none of these.
+export function isAidlcProjectFolder(dir: string): boolean {
+  return existsSync(join(dir, "aidlc", "spaces")) ||
+    existsSync(join(dir, ".aidlc", "worktree-meta.json")) ||
+    discoverProjectHarnesses(dir).length > 0;
+}
+
+// The project these modules' own path names (`<project>/<harness>/tools/`: the
+// copy channel, a Bun-run tree), or null for the compiled engine, whose modules
+// live in the runtime payload, and for a source checkout.
+export function moduleProjectDir(): string | null {
+  if (isCompiledExecutable()) return null;
+  return basename(MODULE_TOOLS_DIR) === "tools" && /^\.[a-z0-9][a-z0-9._-]*$/i.test(basename(MODULE_HARNESS_ROOT))
+    ? dirname(MODULE_HARNESS_ROOT)
+    : null;
+}
+
+// The AI-DLC project a folder sits in when it is not one itself (a code repo
+// cloned into the workspace, a plain subfolder): the nearest folder above it
+// that is one. Null for a project, for a folder in no project, and when a
+// folder on the way up cannot be read.
+export function enclosingProjectDir(dir: string): string | null {
+  let current = resolve(dir);
+  try {
+    if (isAidlcProjectFolder(current)) return null;
+    for (let parent = dirname(current); parent !== current; current = parent, parent = dirname(parent)) {
+      if (isAidlcProjectFolder(parent)) return parent;
+    }
+  } catch {
+    // An unreadable folder: the command keeps the folder it was run in.
+  }
+  return null;
+}
+
+function within(parent: string, path: string): boolean {
+  const rel = relative(resolve(parent), resolve(path));
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+function samePath(left: string, right: string): boolean {
+  const real = (path: string): string => {
+    try {
+      return realpathSync(path);
+    } catch {
+      return resolve(path);
+    }
+  };
+  return real(left) === real(right);
+}
+
 export function runtimeProjectDir(): string {
   return explicitRuntimeProjectDir() ?? process.cwd();
+}
+
+/** The project a command names with only `args`, the words before its own (a plugin command's words are its script's). */
+export function runtimeProjectDirFrom(args: readonly string[]): string {
+  return explicitRuntimeProjectDir(args) ?? process.cwd();
 }
 
 export function runtimeHarnessDir(projectDir = runtimeProjectDir()): string {
@@ -505,28 +703,100 @@ export function kiroTreeLayout(harnessRoot: string): KiroLayout | null {
   return null;
 }
 
-/**
- * The harness dir for this process, or null when the working directory cannot
- * be read (a command started from a directory the user cannot list or enter).
- * Null means "not discoverable here", never a default harness: a command that
- * needs one still resolves it later and reports the error then. Other
- * discovery errors are rethrown.
- *
- * Codex sets CODEX_SESSION_ID in every shell command its model runs, so in a
- * project that also holds another tool's install, a command Codex runs reads
- * the Codex install instead of the first one found.
- */
-export function discoverableRuntimeHarnessDir(projectDir = runtimeProjectDir()): string | null {
-  try {
-    if (!process.env.AIDLC_HARNESS_DIR?.trim() && process.env.CODEX_SESSION_ID?.trim()) {
-      const codex = discoverProjectHarnesses(projectDir).find((item) => item.distribution === "codex");
-      if (codex) return codex.harnessDir;
+// The marks a harness's host puts on every command its agent runs (harness.json
+// `hostShell`): the running release's own copy of the tree first, as for the
+// directive limit, so a project configured before the field existed has them,
+// then the project's file.
+function hostShellMarks(harness: ProjectHarness): string[] | undefined {
+  const file = join(harness.root, "tools", "data", "harness.json");
+  const project = (): Record<string, unknown> | null => {
+    try {
+      return JSON.parse(readFileSync(file, "utf-8")) as Record<string, unknown>;
+    } catch {
+      return null;
     }
-    return runtimeHarnessDir(projectDir);
+  };
+  for (const data of [releasedHarnessData(file), project()]) {
+    const env = (data?.hostShell as { env?: unknown } | null | undefined)?.env;
+    if (Array.isArray(env) && env.length > 0 && env.every((name) => typeof name === "string" && name !== "")) {
+      return env as string[];
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The installed harness whose host runs this command: the one installed, or of
+ * several the one whose host's mark (hostShellMarks) the command carries. Null
+ * when none of several is marked, or more than one is (a tool started from
+ * another's shell carries both): nothing then tells which tool the person is in.
+ */
+export function callingHarness(
+  installed: readonly ProjectHarness[],
+  env: NodeJS.ProcessEnv = process.env,
+): ProjectHarness | null {
+  if (installed.length <= 1) return installed[0] ?? null;
+  const marked = installed.filter((harness) => inHostShell(hostShellMarks(harness), env));
+  return marked.length === 1 ? marked[0] : null;
+}
+
+/**
+ * The harness this process runs on, and whether that is a guess, or null when
+ * the working directory cannot be read (a command started from a directory the
+ * user cannot list or enter). Null means "not discoverable here", never a
+ * default harness: a command that needs one still resolves it later and
+ * reports the error then. Other discovery errors are rethrown.
+ *
+ * A named harness is that one. Otherwise it is the tool whose chat runs the
+ * command (callingHarness), so in a project with several tools set up each runs
+ * on its own setup; when that cannot be told, the first one installed, as a
+ * guess (harnessIsAGuess).
+ */
+export function discoverableRuntimeHarness(
+  projectDir = runtimeProjectDir(),
+  env: NodeJS.ProcessEnv = process.env,
+): { harnessDir: string; guessed: boolean } | null {
+  try {
+    const named = env.AIDLC_HARNESS_DIR?.trim();
+    if (named) return { harnessDir: named, guessed: false };
+    const installed = discoverProjectHarnesses(projectDir);
+    const caller = callingHarness(installed, env);
+    if (caller) return { harnessDir: caller.harnessDir, guessed: false };
+    return { harnessDir: runtimeHarnessDir(projectDir), guessed: installed.length > 1 };
   } catch (error) {
     if (["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "")) return null;
     throw error;
   }
+}
+
+// The harness the dispatcher pinned with no tool's mark to go by, among several
+// installed. Read only while it is still the pin, so a later pin of another
+// harness is never a guess; pinRuntimeHarness and keepRuntimeHarnessPin write it.
+const GUESSED_HARNESS_DIR = "AIDLC_HARNESS_DIR_GUESSED";
+
+/** Pin the harness this process and the tools it loads run on; `guessed` marks the first of several installed that no tool's mark named. */
+export function pinRuntimeHarness(harnessDir: string, guessed = false): void {
+  process.env.AIDLC_HARNESS_DIR = harnessDir;
+  if (guessed) process.env[GUESSED_HARNESS_DIR] = harnessDir;
+  else delete process.env[GUESSED_HARNESS_DIR];
+}
+
+/** The pin as it is now, guess and all, put back by the function returned (after a run pinned to another harness). */
+export function keepRuntimeHarnessPin(): () => void {
+  const dir = process.env.AIDLC_HARNESS_DIR;
+  const guessed = process.env[GUESSED_HARNESS_DIR];
+  return () => {
+    if (dir === undefined) delete process.env.AIDLC_HARNESS_DIR;
+    else process.env.AIDLC_HARNESS_DIR = dir;
+    if (guessed === undefined) delete process.env[GUESSED_HARNESS_DIR];
+    else process.env[GUESSED_HARNESS_DIR] = guessed;
+  };
+}
+
+/** Whether the harness this process runs on is a guess at the person's tool: its lines for one tool may be another's. */
+export function harnessIsAGuess(env: NodeJS.ProcessEnv = process.env): boolean {
+  const guessed = env[GUESSED_HARNESS_DIR]?.trim();
+  return Boolean(guessed) && guessed === env.AIDLC_HARNESS_DIR?.trim();
 }
 
 export function runtimeHarnessName(
@@ -556,13 +826,79 @@ export function runtimeHarnessName(
   return "claude";
 }
 
+// The name a person types after --harness, where it differs from the harness
+// id. Installed projects keep the ids they record (`kiro` = Kiro CLI on its V2
+// engine, `kiro-ide` = Kiro for Kiro IDE and Kiro CLI v3), so their stamps,
+// hook commands and model keys mean what they meant; only what is typed and
+// printed changes. `kiro-ide` is still read as the id it is. The `kiro:` line
+// is how another release's files tell that it reads these names
+// (runtimePathsReadTypedNames).
+const TYPED_HARNESS_NAMES: Readonly<Record<string, string>> = Object.freeze({
+  kiro: "kiro-v2",
+  "kiro-ide": "kiro",
+});
+const TYPED_NAMES_MARK = 'kiro: "kiro-v2"';
+
+/**
+ * Whether the release whose runtime-paths file this is reads the typed names;
+ * a release from before them reads ids, so a missing file means ids.
+ */
+export function runtimePathsReadTypedNames(file: string): boolean {
+  try {
+    return readFileSync(file, "utf-8").includes(TYPED_NAMES_MARK);
+  } catch {
+    return false;
+  }
+}
+
+/** Whether the `aidlc.ts` tool at this path reads the typed names, as its files are now. */
+export function toolReadsTypedNames(tool: string): boolean {
+  return runtimePathsReadTypedNames(join(dirname(tool), "aidlc-runtime-paths.ts"));
+}
+
+/** The name to print after --harness for a harness id, for the `aidlc.ts` tool that will read it. */
+export function harnessNameFor(id: string, tool: string | undefined): string {
+  if (tool && !toolReadsTypedNames(tool)) return id;
+  return Object.hasOwn(TYPED_HARNESS_NAMES, id) ? TYPED_HARNESS_NAMES[id] : id;
+}
+
+/** The name to print after --harness for a harness id. */
+export function typedHarnessName(id: string): string {
+  return harnessNameFor(id, undefined);
+}
+
+/** The harness id a typed --harness name means. */
+export function harnessIdFromTyped(name: string): string {
+  return Object.entries(TYPED_HARNESS_NAMES).find(([, typed]) => typed === name)?.[0] ?? name;
+}
+
+/** Every harness this release ships, in id order: its id, the name --harness takes, and its host's name. */
+export function typedHarnessHosts(): { id: string; name: string; host: string }[] {
+  return Object.keys(HOST_LABELS).sort().map((id) => ({ id, name: typedHarnessName(id), host: HOST_LABELS[id] }));
+}
+
+/** A command line's --harness values, typed names read as harness ids. */
+export function harnessArgsAsIds(args: readonly string[]): string[] {
+  return args.map((arg, index) => (index > 0 && args[index - 1] === "--harness" ? harnessIdFromTyped(arg) : arg));
+}
+
+/** The same line with each --harness id written by `name`, to print. */
+export function harnessArgsWith(args: readonly string[], name: (id: string) => string): string[] {
+  return args.map((arg, index) => (index > 0 && args[index - 1] === "--harness" ? name(arg) : arg));
+}
+
+/** The same line with its --harness ids written as the names a person types, to print. */
+export function harnessArgsAsTyped(args: readonly string[]): string[] {
+  return harnessArgsWith(args, typedHarnessName);
+}
+
 /**
  * Pin the harness a command names (`--harness-dir`) for this process and the
- * tools it loads: a compiled aidlc has already pinned the first one installed
- * here, which in a project with Claude Code beside it is .claude.
+ * tools it loads: a compiled aidlc has already pinned the one whose tool runs
+ * the command, or the first one installed.
  */
 export function pinNamedHarness(projectDir: string, harnessDir: string): void {
-  process.env.AIDLC_HARNESS_DIR = harnessDir;
+  pinRuntimeHarness(harnessDir);
   delete process.env.AIDLC_HARNESS_NAME;
   process.env.AIDLC_HARNESS_NAME = runtimeHarnessName(projectDir, harnessDir);
 }
@@ -861,4 +1197,103 @@ export function knownActiveSpace(workspaceRootDir: string, cursorText: string | 
   } catch {
     return "default";
   }
+}
+
+// The sync services whose macOS File Provider folder is
+// ~/Library/CloudStorage/<name>-<account> (or <name> alone).
+const CLOUD_STORAGE_SERVICES = new Map([
+  ["GoogleDrive", "Google Drive"],
+  ["OneDrive", "OneDrive"],
+  ["Dropbox", "Dropbox"],
+  ["Box", "Box"],
+]);
+
+// A blank or relative value is unset: a relative one would resolve against the
+// working folder, which is the project at every refusal. A root that does not
+// resolve is dropped, never compared as written.
+function realDirectory(path: string | undefined): string | null {
+  if (!path || !isAbsolute(path)) return null;
+  try {
+    return realpathSync.native(path);
+  } catch {
+    return null;
+  }
+}
+
+function pathWithin(root: string, path: string): boolean {
+  const rel = relative(root, path);
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
+
+function dropboxRoots(platform: NodeJS.Platform, env: NodeJS.ProcessEnv, home: string): string[] {
+  const files = platform === "win32"
+    ? [env.APPDATA, env.LOCALAPPDATA].map((dir) => (dir && isAbsolute(dir) ? join(dir, "Dropbox", "info.json") : ""))
+    : [isAbsolute(home) ? join(home, ".dropbox", "info.json") : ""];
+  const roots: string[] = [];
+  for (const file of files) {
+    if (!file) continue;
+    try {
+      const info = JSON.parse(readFileSync(file, "utf-8")) as unknown;
+      if (info === null || typeof info !== "object") continue;
+      for (const account of Object.values(info)) {
+        const path = (account as { path?: unknown } | null)?.path;
+        if (typeof path === "string") roots.push(path);
+      }
+    } catch {
+      // No Dropbox here, or a file it is still writing: nothing to name.
+    }
+  }
+  return roots;
+}
+
+/**
+ * The sync service whose folder holds the project, or null. Named only on a
+ * positive match: the project's real path is a known sync root or under one
+ * (macOS CloudStorage and iCloud, Windows OneDrive, a Dropbox root from
+ * Dropbox's own info.json). A miss is silence.
+ */
+export function syncServiceHolding(
+  projectDir: string,
+  options: { platform?: NodeJS.Platform; env?: NodeJS.ProcessEnv; home?: string } = {},
+): string | null {
+  const platform = options.platform ?? process.platform;
+  const env = options.env ?? process.env;
+  const home = options.home ?? homedir();
+  const project = realDirectory(projectDir);
+  if (project === null) return null;
+  if (platform === "darwin" && isAbsolute(home)) {
+    const cloud = realDirectory(join(home, "Library", "CloudStorage"));
+    if (cloud !== null && pathWithin(cloud, project)) {
+      const folder = relative(cloud, project).split(sep)[0] ?? "";
+      const service = CLOUD_STORAGE_SERVICES.get(folder.split("-")[0] ?? "");
+      if (service) return service;
+    }
+    const icloud = realDirectory(join(home, "Library", "Mobile Documents"));
+    if (icloud !== null && pathWithin(icloud, project)) return "iCloud Drive";
+  }
+  if (platform === "win32") {
+    for (const name of ["OneDrive", "OneDriveCommercial", "OneDriveConsumer"]) {
+      const root = realDirectory(env[name]);
+      if (root !== null && pathWithin(root, project)) return "OneDrive";
+    }
+  }
+  for (const path of dropboxRoots(platform, env, home)) {
+    const root = realDirectory(path);
+    if (root !== null && pathWithin(root, project)) return "Dropbox";
+  }
+  return null;
+}
+
+// The words doctor's row and the refusals share: the row's label and fix, and
+// the same two as sentences on a refusal of a change nobody may have made.
+export function syncFolderLabel(service: string): string {
+  return `This project is in ${service === "iCloud Drive" ? "an" : "a"} ${service} folder; sync can change files AI-DLC checks`;
+}
+export const SYNC_FOLDER_STEP = "move it out of the synced folder or pause sync for it";
+
+/** The two sentences and a trailing space for a project in a synced folder, else "". */
+export function syncFolderClause(projectDir: string): string {
+  const service = syncServiceHolding(projectDir);
+  if (service === null) return "";
+  return `${syncFolderLabel(service)}. ${SYNC_FOLDER_STEP[0]!.toUpperCase()}${SYNC_FOLDER_STEP.slice(1)}. `;
 }

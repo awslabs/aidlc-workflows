@@ -34,8 +34,9 @@
 // conductor never parks for context on its own.
 
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { readConductorSurface } from "../harness/conductor-skill.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -52,7 +53,7 @@ function skillPath(harness: string): string {
 function readSkill(harness: string): string {
   const path = skillPath(harness);
   if (!existsSync(path)) throw new Error(`missing orchestrator skill: ${path}`);
-  return readFileSync(path, "utf-8");
+  return readConductorSurface(path);
 }
 
 describe("t330 (smoke) parking for context needs a measured figure, not a feeling", () => {
@@ -85,6 +86,8 @@ describe("t330 (smoke) parking for context needs a measured figure, not a feelin
           expect(/only when the harness has actually surfaced a usage figure/i.test(t)).toBe(false);
           expect(/never park for context on your own/i.test(t)).toBe(true);
           expect(/offers the person once to pause and carry on in a new chat/i.test(t)).toBe(true);
+          // And where a new chat would start about as full, it says that instead (#3642).
+          expect(/says once that a new chat on the same model will not help much/i.test(t)).toBe(true);
         });
       } else {
         test("binds context-parking to a surfaced numeric threshold", () => {

@@ -11,6 +11,9 @@ import {
   projectedDispatcher,
   quoteCommandArgument,
   runtimeHarnessDir,
+  harnessArgsWith,
+  toolReadsTypedNames,
+  typedHarnessName,
 } from "./aidlc-runtime-paths.ts";
 import {
   fileIdentity,
@@ -63,7 +66,7 @@ export function setConfigTargetHarnessDir(harnessDir: string | null): void {
 export function configInvocationFor(projectDir = process.cwd()): string {
   const invocation = aidlcInvocation();
   if (invocation === "aidlc") return invocation;
-  const ran = process.env.AIDLC_CONFIG_HANDOFF || projectedDispatcher();
+  const ran = handingTool() ?? projectedDispatcher();
   // A tool's relative invocation names the harness directory it lives in,
   // whatever the environment says the harness is.
   const harnessDir = ran === null
@@ -77,11 +80,43 @@ export function configInvocationFor(projectDir = process.cwd()): string {
   return sameFile(ran, toolIn(process.cwd())) ? own : `bun ${quoteCommandArgument(ran)}`;
 }
 
+// The copied tool that handed this config run over, if one did.
+export function handingTool(): string | undefined {
+  return process.env.AIDLC_CONFIG_HANDOFF || undefined;
+}
+
+// A command configInvocationFor starts runs the tool that ran, which in a run
+// another tool handed over is the handing tool, so it names a harness the way
+// that tool reads it when the line is built: a tool from before the typed names
+// reads ids, and once this run has rewritten it, this release's names. What
+// the person reads is in this release's names. Read once per line.
+export function invokedToolNamer(): (id: string) => string {
+  const tool = aidlcInvocation() === "aidlc" ? undefined : handingTool();
+  return tool && !toolReadsTypedNames(tool) ? (id) => id : typedHarnessName;
+}
+
+export function invokedHarnessName(id: string): string {
+  return invokedToolNamer()(id);
+}
+
+export function invokedHarnessArgs(args: readonly string[]): string[] {
+  return harnessArgsWith(args, invokedToolNamer());
+}
+
+// The same for a line built before this run writes and run after it: the
+// handing tool is then this release when it is the tool of the tree this run
+// writes, and unchanged otherwise.
+export function afterRunNamer(projectDir: string, harnessDir: string): (id: string) => string {
+  const tool = aidlcInvocation() === "aidlc" ? undefined : handingTool();
+  if (tool === undefined || sameFile(tool, join(projectDir, harnessDir, "tools", "aidlc.ts"))) return typedHarnessName;
+  return invokedToolNamer();
+}
+
 // A printed config command about one harness of the project names that
 // harness when the project has more than one, since config would otherwise
 // ask which.
 export function namedHarness(projectDir: string, harness: string | undefined): string {
-  return harness && discoverProjectHarnesses(projectDir).length > 1 ? ` --harness ${harness}` : "";
+  return harness && discoverProjectHarnesses(projectDir).length > 1 ? ` --harness ${invokedHarnessName(harness)}` : "";
 }
 
 // A `config models` command about one harness of the project, run as shown

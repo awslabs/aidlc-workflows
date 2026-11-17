@@ -15,9 +15,9 @@ the substrate operates on.
 
 ## 1. The problem
 
-AI-DLC has rules, sensors, and a learning loop that captures
-observations during workflow runs and writes them somewhere they fire
-automatically next time. The underlying model has real complexity:
+AI-DLC has rules, sensors, and a learning loop that keeps the corrections
+and notes the person chooses to keep during a workflow run and writes them
+somewhere they fire automatically next time. The underlying model has real complexity:
 per-stage imports of multiple kinds, universal-default rules attached
 by filename, sensor manifests, a hook chain. Customers shouldn't have
 to learn all of it to use the framework, and the framework shouldn't
@@ -96,7 +96,7 @@ dir of per-clone shards under `<record>/audit/`.)
 | FIB (forwarding information base) loaded into ASIC | `stage-graph.json` with per-stage `rules_in_context` + `sensors_applicable` resolved at compile time |
 | OpenFlow / NETCONF (interface) | `stage-graph.json` — the explicit interface between compile and orchestrator |
 | Telemetry (NetFlow, sFlow) | Audit log, sensor firings, memory.md entries → the intent's `runtime-graph.json` |
-| Reactive flow install (PACKET_IN) | Learning loop: data plane reports an observation → user confirms → file write into rules/sensors plus a frontmatter edit on the originating stage when a new sensor binding is captured |
+| Reactive flow install (PACKET_IN) | Learning loop: the person keeps a correction at its question, or asks outright to keep a note → file write into rules/sensors plus a frontmatter edit on the originating stage when a new sensor binding is captured |
 | Proactive route install (BGP advertisement) | Framework PR: ships new stages/rules/sensors before any workflow runs |
 | Topology change -> recompute routes | Package, install, or reconfigure (`graph compile`, a saved scope, a plugin selection or compose) -> compile reads current source files |
 | Pre-installed FIB stable across packet flight | Learning-loop writes during a workflow don't change the in-flight compiled selection; rule text in the selected files is re-read at each stage delivery, while new files and sensor bindings wait for the next compile (see §4) |
@@ -128,7 +128,7 @@ view throughout every workflow.
 | **Rules** (prose, prescriptive) | Mutable; framework PR or learning-loop writes | `aidlc/spaces/<space>/memory/<scope>.md` (filename-derived; org/team/project attach to every stage; compiled paths name `default`, delivery reads the active space) | `stage-graph.json` per-node `rules_in_context` | Orchestrator (resolved view); Claude Code auto-load reads source for in-context prose |
 | **Sensors** (manifests, verification checks) | Mutable; framework PR or learning-loop writes (manifest authored once; stages import by id) | `.claude/sensors/aidlc-<id>.md` | `stage-graph.json` per-node `sensors_applicable` | Dispatcher reads resolved list at stage entry; PostToolUse fires from it |
 | Workflow execution telemetry | Per-workflow, accumulating | `audit/` shards · `memory.md` · Bolt forks | `<record>/runtime-graph.json` | Doctor, gate ritual, future cross-workflow observer |
-| Per-stage observation log | Per-stage-run | `<record>/<phase>/<stage>/memory.md` | (no compile — read directly) | Gate ritual at this stage's gate |
+| Per-stage observation log | Per-stage-run | `<record>/<phase>/<stage>/memory.md` (a per-Unit stage: `<record>/construction/<unit>/<stage>/memory.md`) | (no compile — read directly) | Gate ritual at this stage's gate |
 
 Two compiled artefacts with different homes. `stage-graph.json`, in the
 harness's `tools/data/`, serves every workflow in the project and carries
@@ -204,7 +204,7 @@ update cadences:
   the audit log) on every transition-class audit event. Aggregates execution
   telemetry: which stages ran, which
   Bolts forked, which sensors fired, which memory.md files exist. Read
-  by the gate ritual (to surface candidates), doctor (for execution
+  by the gate ritual (for a stage's diary path), doctor (for execution
   health), and future cross-workflow observers. See
   [Runtime Graph](13-runtime-graph.md) for the schema, compile
   lifecycle, and recovery model.

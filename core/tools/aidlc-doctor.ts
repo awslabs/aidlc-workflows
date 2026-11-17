@@ -27,15 +27,19 @@ import {
   type UpdateState,
 } from "./aidlc-update.ts";
 import { collectPluginStatus } from "./aidlc-plugin.ts";
-import { isKiroPreset, kiroSessionDoctorFindings } from "./aidlc-kiro-session.ts";
+import { isKiroPreset, kiroAgentModelDoctorFindings, kiroSessionDoctorFindings } from "./aidlc-kiro-session.ts";
 import {
   describeWindowsUninstallFailure,
+  planPathKey,
   scanWindowsUninstallJournals,
   windowsUninstallContinuationState,
+  type WindowsUninstallJournal,
 } from "./aidlc-windows-uninstall.ts";
+import { transactionState } from "./aidlc-transaction.ts";
 import {
   aidlcInvocation,
   discoverProjectHarnesses,
+  typedHarnessName,
 } from "./aidlc-runtime-paths.ts";
 import { installRoot, windowsGitBashLauncherState } from "./aidlc-install-paths.ts";
 import { deepFolder } from "./aidlc-folder-depth.ts";
@@ -53,6 +57,7 @@ import {
 import {
   HARNESS_PRODUCT_NAMES,
   isModelHarness,
+  kiroIdeAgentFileModels,
   modelPolicyDoctorIssues,
   modelPolicyIsEmpty,
   presetsChangeNothing,
@@ -101,11 +106,33 @@ function windowsRecoveryCheck(): DoctorCheck | null {
     }`,
     // By full path: a failed PATH or final step can leave aidlc off PATH.
     fix: failed.length > 0
-      ? `resolve the reported problem, then run \`& '${failed[0].journal.commandPath.replaceAll("'", "''")}' uninstall${failed[0].journal.purge ? " --purge" : ""}\` to retry (or reinstall if that command is gone); a cleanup that stopped before removing files is planned again from what is on disk`
+      ? windowsUninstallRetryFix(failed[0].journal)
       : recovery.invalid.length > 0
-        ? "keep the listed journal, cleanup script, and fence for inspection; see Troubleshooting"
+        ? "the last uninstall stopped and its record is gone or unreadable: run `aidlc uninstall` or the installer; either one clears the listed files"
         : "finish active AI-DLC commands, then run `aidlc version` to resume cleanup",
   };
+}
+
+// The retry goes through bin\aidlc.exe while the uninstall plan lists it and
+// aidlc.cmd beside it, both unchanged: the plan took each only as the copy
+// AI-DLC wrote for this install, and the copy starts the active release only
+// beside that aidlc.cmd (startNativeLauncher). aidlc.cmd starts aidlc-shim.ps1,
+// which a Group Policy execution policy (AllSigned, Restricted) refuses.
+// Otherwise the recorded command is printed.
+export function windowsUninstallRetryFix(
+  journal: Pick<WindowsUninstallJournal, "commandPath" | "purge" | "files">,
+): string {
+  const unchanged = (path: string): boolean => {
+    const planned = journal.files?.find((file) => planPathKey(file.path) === planPathKey(path));
+    try {
+      return planned !== undefined && transactionState(path) === planned.expected;
+    } catch {
+      return false;
+    }
+  };
+  const exe = join(dirname(journal.commandPath), "aidlc.exe");
+  const command = unchanged(exe) && unchanged(journal.commandPath) ? exe : journal.commandPath;
+  return `resolve the reported problem, then run \`& '${command.replaceAll("'", "''")}' uninstall${journal.purge ? " --purge" : ""}\` to retry (or reinstall if that command no longer runs); a cleanup that stopped before removing files is planned again from what is on disk`;
 }
 
 // An earlier release's launcher helper forwards @args, so Windows PowerShell
@@ -134,7 +161,8 @@ async function windowsLauncherHelperCheck(): Promise<DoctorCheck | null> {
 }
 
 // Git Bash, where Claude Code runs its hooks on Windows, finds a bare `aidlc`
-// only through the extensionless launcher beside aidlc.cmd. Without it every
+// through aidlc.exe in bin or the extensionless launcher beside aidlc.cmd,
+// never aidlc.cmd itself. Without either every
 // hook that calls `aidlc` fails there, while PowerShell and CMD still find the
 // command, so the rest of doctor would read healthy.
 function windowsGitBashLauncherCheck(): DoctorCheck | null {
@@ -179,11 +207,13 @@ export async function doctorUpdateState(
   ) {
     // An automatic refresh is opportunistic UI work. Its short fallback keeps
     // doctor responsive; a requested --check-updates is required network work.
-    update = await refreshUpdateState(explicit ? DEFAULT_SUBPROCESS_TIMEOUT_MS : 750, {
+    const refreshed = await refreshUpdateState(explicit ? DEFAULT_SUBPROCESS_TIMEOUT_MS : 750, {
       offline: flags.offline === "true" ? true : undefined,
       baseUrl: flags["release-base-url"],
       caBundle: flags["ca-bundle"],
     });
+    const keepNeverChecked = !explicit && update.state === "absent" && refreshed.state === "unavailable";
+    if (!keepNeverChecked) update = refreshed;
   }
   return update;
 }
@@ -284,7 +314,7 @@ export function modelsPolicyCheck(projectDir: string, verbose: boolean): DoctorC
   const issues: string[] = [];
   for (const harness of harnesses) {
     if (!isModelHarness(harness.distribution)) {
-      issues.push(`unsupported harness policy surface: ${harness.distribution}`);
+      issues.push(`unsupported harness policy surface: ${typedHarnessName(harness.distribution)}`);
       continue;
     }
     try {
@@ -294,11 +324,11 @@ export function modelsPolicyCheck(projectDir: string, verbose: boolean): DoctorC
           harness.distribution,
           modelPolicyForHarness(resolved.models, harness.distribution),
         )
-          .map((issue) => `${harness.distribution}: ${issue}`),
+          .map((issue) => `${typedHarnessName(harness.distribution)}: ${issue}`),
       );
     } catch (error) {
       issues.push(
-        `${harness.distribution}: ${
+        `${typedHarnessName(harness.distribution)}: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );
@@ -371,9 +401,43 @@ export async function kiroSessionDoctorChecks(projectDir: string): Promise<Docto
   );
 }
 
+// On Kiro's row an agent's own model runs only when the account offers it.
+export function kiroAgentModelDoctorChecks(projectDir: string): DoctorCheck[] {
+  const harnesses = discoverProjectHarnesses(projectDir);
+  const kiro = harnesses.find((harness) => harness.distribution === "kiro-ide");
+  if (!kiro) return [];
+  let models: ReturnType<typeof kiroIdeAgentFileModels>;
+  try {
+    models = kiroIdeAgentFileModels(kiro.root);
+  } catch {
+    return [];
+  }
+  const harness = harnesses.length > 1 ? ` --harness ${typedHarnessName("kiro-ide")}` : "";
+  return kiroAgentModelDoctorFindings(models, `${aidlcInvocation()} config models${harness}`).map((finding) =>
+    finding.pass
+      ? { pass: true, label: finding.label }
+      : { pass: false, severity: "warn", label: finding.label, ...(finding.fix ? { fix: finding.fix } : {}) }
+  );
+}
+
+// The workflow findings, as warn rows after every check, so the human report,
+// --json and --quiet render and count one list. The export reads the findings
+// from the analysis itself (writeExport), so it is handed the report as
+// collected.
+function withWorkflowFindings(report: DoctorReport, analysis: DoctorAnalysis): DoctorReport {
+  const rows: DoctorCheck[] = analysis.findings
+    .filter((finding) => finding.severity !== "info")
+    .map((finding) => ({
+      pass: false,
+      severity: "warn",
+      label: `[${finding.id}] ${finding.summary}`,
+      fix: finding.remedy,
+    }));
+  return { ...report, checks: [...report.checks, ...rows], warnings: report.warnings + rows.length };
+}
+
 function humanReport(
   report: DoctorReport,
-  analysis: DoctorAnalysis,
   projectDir: string,
   verbose: boolean,
 ): string {
@@ -414,24 +478,13 @@ function humanReport(
     }
     return row;
   };
-  const findings = analysis.findings.filter((finding) => finding.severity !== "info");
-  const findingRows = findings.map((finding) =>
-    `  ${warnVerdict("warn ", out)} [${finding.id}] ${finding.summary}\n` +
-    `        ${fixLabel("fix:", out)} ${finding.remedy ?? fallbackFix}\n`
-  );
-  const renderSection = (
-    checks: readonly DoctorCheck[],
-    extraAttentionRows: readonly string[] = [],
-  ): string => {
-    if (verbose) {
-      return `${checks.map(renderCheck).join("")}${extraAttentionRows.join("")}`;
-    }
+  const renderSection = (checks: readonly DoctorCheck[]): string => {
+    if (verbose) return checks.map(renderCheck).join("");
     const passing = checks.filter((check) => status(check) === "ok");
     const attention = checks.filter((check) => status(check) !== "ok");
     let rows = attention.map(renderCheck).join("");
-    rows += extraAttentionRows.join("");
     if (passing.length > 0) {
-      const allClean = attention.length === 0 && extraAttentionRows.length === 0;
+      const allClean = attention.length === 0;
       rows += `  ${okVerdict("ok   ", out)} ${allClean ? "all " : ""}${passing.length} checks passed\n`;
     }
     return rows;
@@ -444,7 +497,7 @@ function humanReport(
       ? ` (${harness.harnessDir}, ${productName(harness.distribution)})`
       : ""
   }`, out)}\n`;
-  output += renderSection(project, findingRows);
+  output += renderSection(project);
   if (report.parked_attempts.length > 0) {
     output += `\n${heading("Parked attempts", out)}\n`;
     for (const attempt of report.parked_attempts) {
@@ -464,16 +517,15 @@ function humanReport(
   }
   output += `\n${heading("Framework integrity", out)}\n`;
   output += renderSection(framework);
-  const visibleWarnings = report.warnings + findings.length;
   const problems = `${report.failed} problem${report.failed === 1 ? "" : "s"}`;
-  const warnings = `${visibleWarnings} warning${visibleWarnings === 1 ? "" : "s"}`;
+  const warnings = `${report.warnings} warning${report.warnings === 1 ? "" : "s"}`;
   output += `\n${
     report.failed > 0 ? failVerdict(problems, out) : problems
-  }, ${visibleWarnings > 0 ? warnVerdict(warnings, out) : warnings}.\n`;
-  if (visibleWarnings > 0) {
+  }, ${report.warnings > 0 ? warnVerdict(warnings, out) : warnings}.\n`;
+  if (report.warnings > 0) {
     output += "Warnings are advisory - if everything works, ignore them.\n";
   }
-  if (report.failed === 0 && visibleWarnings === 0) {
+  if (report.failed === 0 && report.warnings === 0) {
     output += `${success("Your install is ready.", out)}\n`;
   }
   if (!verbose) {
@@ -622,6 +674,7 @@ export async function main(argv: string[]): Promise<void> {
   checks.push(...settingsDoctorChecks(projectDir));
   checks.push(modelsPolicyCheck(projectDir, flags.verbose === "true"));
   checks.push(...await kiroSessionDoctorChecks(projectDir));
+  checks.push(...kiroAgentModelDoctorChecks(projectDir));
   const kiroWorkflows = kiroIdeWorkflowsDoctorCheck(projectDir, harnessDir());
   if (kiroWorkflows) checks.push(kiroWorkflows);
   const kiroCliWorkflows = kiroCliWorkflowsDoctorCheck(projectDir, harnessDir());
@@ -650,26 +703,27 @@ export async function main(argv: string[]): Promise<void> {
     ? 1
     : 0;
 
+  const shown = withWorkflowFindings(report, analysis);
   if (flags.json === "true") {
     process.stdout.write(`${JSON.stringify({
       schemaVersion: 1,
       ok: code === 0,
       code,
-      status: report.failed > 0
+      status: shown.failed > 0
         ? "failed"
-        : report.warnings > 0
+        : shown.warnings > 0
         ? "warning"
         : "ok",
-      message: `${report.passed} passed, ${report.warnings} warnings, ${report.failed} failed`,
-      data: report,
+      message: `${shown.passed} passed, ${shown.warnings} warnings, ${shown.failed} failed`,
+      data: shown,
     })}\n`);
   } else if (flags.quiet === "true") {
     process.stdout.write(
-      `${report.passed} passed, ${report.warnings} warnings, ${report.failed} failed\n`,
+      `${shown.passed} passed, ${shown.warnings} warnings, ${shown.failed} failed\n`,
     );
   } else {
     process.stdout.write(
-      humanReport(report, analysis, projectDir, flags.verbose === "true"),
+      humanReport(shown, projectDir, flags.verbose === "true"),
     );
   }
   if (exportParent) writeExport(exportParent, report, analysis);

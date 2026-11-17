@@ -6,6 +6,7 @@ import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -19,6 +20,8 @@ import {
   activeIntentUuid,
   artifactFilename,
   eventMatchesClaimAttempt,
+  getField,
+  hooksHealthDir,
   readAllAuditShards,
   unitReleasePendingPath,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -27,6 +30,7 @@ import {
   AIDLC_SRC,
   cleanupTestProject,
   createTestProject,
+  runOrchestrateNext,
   seedAidlcMemory,
   seededRecordDir,
   seededStateFile,
@@ -461,7 +465,9 @@ describe("t325 atomic team Unit claims", () => {
     const claimlessDirective = nextDirective(claimless.seed, {
       AIDLC_STOP_HOOK_PROBE: "1",
     });
-    expect(claimlessDirective).toMatchObject({ kind: "run-stage", unit: "skeleton" });
+    // The lead's claim-less walk with a remote: before its first Unit, the
+    // offer to share the plan with the teams; the probe writes nothing.
+    expect(claimlessDirective).toMatchObject({ kind: "ask", ask_type: "team-handover", handovers: ["share"] });
     expect(localRuntimeSnapshot(claimless.seed)).toEqual(claimlessRuntime);
     expect(readAllAuditShards(claimless.seed)).toBe(claimlessAudit);
 
@@ -1465,11 +1471,33 @@ describe("t325 atomic team Unit claims", () => {
       "Details=claimed worktree delta",
     ], wt);
     expect(workerEvent.status, workerEvent.out).toBe(0);
+    // The Unit's receipt for an artifact the worker wrote in the claimed
+    // worktree, as the write hook records it there.
+    const artifact = join(seededRecordDir(wt), "construction", "alpha", "functional-design", "business-logic-model.md");
+    mkdirSync(dirname(artifact), { recursive: true });
+    writeFileSync(artifact, "# Business Logic Model\n\nclaimed worktree receipt\n");
+    const hooked = spawnSync(process.execPath, [join(AIDLC_SRC, "hooks", "aidlc-write-audit-log.ts")], {
+      cwd: wt,
+      input: JSON.stringify({ hook_event_name: "PostToolUse", tool_name: "Write", tool_input: { file_path: artifact } }),
+      env: { ...process.env, CLAUDE_PROJECT_DIR: wt },
+      encoding: "utf-8",
+    });
+    expect(hooked.status, `${hooked.stdout}${hooked.stderr}`).toBe(0);
     const mergedAudit = run(AUDIT, ["audit-merge", "--slug", "alpha"], checkout);
     expect(mergedAudit.status, mergedAudit.out).toBe(0);
     const mergedLedger = readAllAuditShards(checkout);
     expect(mergedLedger).toContain("claimed worktree delta");
     expect(mergedLedger.match(/Details\*\*: claim fixture/g) ?? []).toHaveLength(1);
+    // The worktree's rows come back once: the checkout's tracked shard has one
+    // copy of the receipt, and the worktree's own tracked shard none, so the
+    // Bolt's landing meets no second copy.
+    const receipt = /\*\*Event\*\*: ARTIFACT_CREATED/g;
+    const wtLocal = JSON.parse(retriedFork.stdout).worktree_audit as string;
+    expect(basename(dirname(dirname(wtLocal)))).toBe(".aidlc-engine");
+    const claimShard = JSON.parse(claim.stdout).audit_shard as string;
+    expect(readFileSync(join(seededRecordDir(checkout), "audit", claimShard), "utf-8").match(receipt) ?? []).toHaveLength(1);
+    const wtTracked = join(dirname(dirname(dirname(wtLocal))), "audit", basename(wtLocal));
+    expect(existsSync(wtTracked) ? readFileSync(wtTracked, "utf-8") : "").not.toMatch(receipt);
 
     const facilitator = clone(remote, "fork-facilitator");
     const released = run(UNIT, ["release", "alpha"], facilitator);
@@ -1540,7 +1568,9 @@ describe("t325 atomic team Unit claims", () => {
   test("direct audit fork and merge use the same claimed shard authority", () => {
     const { remote } = makeSeed();
     const checkout = clone(remote, "audit-direct");
-    expect(run(UNIT, ["claim", "alpha", "--team", "audit-direct"], checkout).status).toBe(0);
+    const claimed = run(UNIT, ["claim", "alpha", "--team", "audit-direct"], checkout);
+    expect(claimed.status, claimed.out).toBe(0);
+    const shard = JSON.parse(claimed.stdout).audit_shard as string;
     expect(
       run(AUDIT, [
         "append",
@@ -1564,9 +1594,69 @@ describe("t325 atomic team Unit claims", () => {
         "Details=direct audit delta",
       ], wt).status,
     ).toBe(0);
+    // The Unit's receipt for an artifact the worker wrote in the worktree, as
+    // the write hook records it there.
+    const artifact = join(seededRecordDir(wt), "construction", "alpha", "functional-design", "business-logic-model.md");
+    mkdirSync(dirname(artifact), { recursive: true });
+    writeFileSync(artifact, "# Business Logic Model\n\ndirect audit receipt\n");
+    const hooked = spawnSync(process.execPath, [join(AIDLC_SRC, "hooks", "aidlc-write-audit-log.ts")], {
+      cwd: wt,
+      input: JSON.stringify({ hook_event_name: "PostToolUse", tool_name: "Write", tool_input: { file_path: artifact } }),
+      env: { ...process.env, CLAUDE_PROJECT_DIR: wt },
+      encoding: "utf-8",
+    });
+    expect(hooked.status, `${hooked.stdout}${hooked.stderr}`).toBe(0);
     const merge = run(AUDIT, ["audit-merge", "--slug", "alpha"], checkout);
     expect(merge.status, merge.out).toBe(0);
     expect(readAllAuditShards(checkout)).toContain("direct audit delta");
+    // The worktree's rows come back once: the checkout's local record has them
+    // all, and its tracked shard one copy of the Unit's receipt.
+    const tracked = (dir: string) => {
+      try {
+        return readFileSync(join(seededRecordDir(dir), "audit", shard), "utf-8");
+      } catch {
+        return "";
+      }
+    };
+    const receipt = /\*\*Event\*\*: ARTIFACT_CREATED/g;
+    expect(readAllAuditShards(checkout).match(receipt) ?? []).toHaveLength(1);
+    expect(tracked(checkout).match(receipt) ?? []).toHaveLength(1);
+    expect(tracked(checkout)).not.toContain("direct audit delta");
+    expect(readFileSync(join(seededRecordDir(checkout), ".aidlc-engine", "audit", shard), "utf-8"))
+      .toContain("direct audit delta");
+  });
+
+  test("a Bolt forked before the claim's local record existed merges back after the upgrade", () => {
+    const { remote } = makeSeed();
+    const checkout = clone(remote, "audit-legacy");
+    const claimed = run(UNIT, ["claim", "alpha", "--team", "audit-legacy"], checkout);
+    expect(claimed.status, claimed.out).toBe(0);
+    const shard = JSON.parse(claimed.stdout).audit_shard as string;
+    expect(
+      run(AUDIT, ["append", "HEALTH_CHECKED", "--field", "Details=legacy fixture"], checkout).status,
+    ).toBe(0);
+    expect(run(WORKTREE, ["create", "--slug", "alpha", "--base", "main"], checkout).status).toBe(0);
+    expect(run(STATE, ["fork", "--slug", "alpha"], checkout).status).toBe(0);
+    const fork = run(AUDIT, ["audit-fork", "--slug", "alpha"], checkout);
+    expect(fork.status, fork.out).toBe(0);
+    const wt = worktreePath(checkout, fixtureIntentId8(checkout), "alpha");
+    // Both records as an earlier AI-DLC kept them: in the tracked shards.
+    const wtLocal = JSON.parse(fork.stdout).worktree_audit as string;
+    expect(basename(dirname(dirname(wtLocal)))).toBe(".aidlc-engine");
+    for (const local of [join(seededRecordDir(checkout), ".aidlc-engine", "audit", shard), wtLocal]) {
+      const tracked = join(dirname(dirname(dirname(local))), "audit", basename(local));
+      mkdirSync(dirname(tracked), { recursive: true });
+      writeFileSync(tracked, readFileSync(local));
+      rmSync(local);
+    }
+    expect(
+      run(AUDIT, ["append", "HEALTH_CHECKED", "--field", "Details=legacy delta"], wt).status,
+    ).toBe(0);
+    const merge = run(AUDIT, ["audit-merge", "--slug", "alpha"], checkout);
+    expect(merge.status, merge.out).toBe(0);
+    const ledger = readAllAuditShards(checkout);
+    expect(ledger).toContain("legacy delta");
+    expect(ledger.match(/Details\*\*: legacy fixture/g) ?? []).toHaveLength(1);
   });
 
   // #2116: the integration branch the team wrote down under Way of Working is
@@ -1688,6 +1778,161 @@ describe("t325 atomic team Unit claims", () => {
     git(seed, ["config", "gpg.format", "ssh"]);
     git(seed, ["config", "user.signingkey", "no-such-signing-key"]);
     expect(run(UNIT, ["release", "gamma"], seed).status).not.toBe(0);
+  });
+});
+
+// `--claim <unit>` typed as the first message in a teammate's new clone, where
+// nothing is selected yet (#3808): the one piece of work here with a Unit by
+// that name is claimed and left selected; none or several are said in one line.
+describe("t325 a claim typed with no work selected", () => {
+  const DISPATCHER = join(AIDLC_SRC, "tools", "aidlc.ts");
+  const MATE = "01995000-7a11-7000-8000-00000000b2b2";
+
+  // A team project as a real one is committed: each person's selection stays
+  // out of git, so a teammate's new clone has none. `others` adds pieces of
+  // work beside the seed's, each by slug, with the seed's Units renamed.
+  function teamProject(others: Array<{ slug: string; uuid: string; rename?: [string, string] }> = []) {
+    const made = makeSeed();
+    const intents = join(made.seed, "aidlc", "spaces", "default", "intents");
+    const registry = JSON.parse(readFileSync(join(intents, "intents.json"), "utf-8")) as unknown[];
+    for (const { slug, uuid, rename = ["gamma", "gamma"] } of others) {
+      const dirName = `${slug}-${uuid.replace(/-/g, "").slice(-16)}`;
+      const units = join(intents, dirName, "inception", "units-generation");
+      mkdirSync(units, { recursive: true });
+      writeFileSync(join(intents, dirName, "aidlc-state.md"), stateBody().replaceAll(`| ${rename[0]} |`, `| ${rename[1]} |`));
+      writeFileSync(join(units, "unit-of-work-dependency.md"), dependencyBody().replace(new RegExp(`\\b${rename[0]}\\b`, "g"), rename[1]));
+      registry.push({ uuid, slug, dirName, status: "in-flight" });
+    }
+    writeFileSync(join(intents, "intents.json"), `${JSON.stringify(registry, null, 2)}\n`);
+    const selection = ["aidlc/active-space", "aidlc/spaces/default/intents/active-intent"];
+    git(made.seed, ["rm", "--cached", "-q", ...selection]);
+    appendFileSync(join(made.seed, ".gitignore"), `${selection.join("\n")}\n`);
+    git(made.seed, ["add", "-A"]);
+    git(made.seed, ["commit", "-qm", "the team's work"]);
+    git(made.seed, ["push", "-q", "origin", "main"]);
+    return made;
+  }
+
+  // The command the agent runs for `/aidlc --claim ...`, in a chat of its own
+  // (or none, as from a terminal or a tool whose commands name no chat).
+  function typed(dir: string, args: string[], chat: string | null = MATE) {
+    const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1", AIDLC_UNATTENDED: "0", AIDLC_PROJECT_DIR: dir };
+    for (const key of ["AIDLC_SESSION_OVERRIDE", "AIDLC_SESSION_OVERRIDE_SOURCE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PID", "CODEX_THREAD_ID", "KIRO_SESSION_ID"]) {
+      delete env[key];
+    }
+    if (chat) env.AIDLC_SESSION_OVERRIDE = chat;
+    const result = spawnSync(process.execPath, [DISPATCHER, ...args], { cwd: dir, encoding: "utf-8", env });
+    return { status: result.status ?? -1, stdout: result.stdout ?? "", out: `${result.stdout ?? ""}${result.stderr ?? ""}` };
+  }
+
+  const claimKeys = (stdout: string): string[] => {
+    expect(stdout.trim().split("\n")).toHaveLength(1);
+    return Object.keys(JSON.parse(stdout)).sort();
+  };
+  const NOTHING_SELECTED = "No work is selected in this conversation.";
+  const statusOf = (dir: string, chat: string | null = MATE) => typed(dir, ["--status"], chat).out;
+
+  test("with work selected, a claim and a refusal say what they say today", () => {
+    const { remote } = makeSeed();
+    const selected = clone(remote, "selected");
+    const claimed = typed(selected, ["--claim", "alpha"]);
+    expect(claimed.status, claimed.out).toBe(0);
+    expect(JSON.parse(claimed.stdout)).toMatchObject({ claimed: true, unit: "alpha" });
+    expect(claimKeys(claimed.stdout)).toEqual([
+      "audit_shard", "claim_oid", "claim_ref", "claimed", "claimed_from_oid", "gate_rhythm", "generation",
+      "integration_ref", "intent_id8", "intent_uuid", "nonce", "owner", "space", "unit", "version",
+    ]);
+    const unknown = typed(clone(remote, "selected-zeta"), ["--claim", "zeta"]);
+    expect(unknown.status).toBe(1);
+    expect(JSON.parse(unknown.out).error).toBe('Unit "zeta" is not in the authoritative Unit DAG.');
+  });
+
+  test("first message in a new clone: the one piece of work with that Unit is claimed and stays selected", () => {
+    const { remote } = teamProject();
+    const mate = clone(remote, "first-claim");
+    expect(statusOf(mate)).toContain(NOTHING_SELECTED);
+    const claimed = typed(mate, ["--claim", "alpha"]);
+    expect(claimed.status, claimed.out).toBe(0);
+    expect(JSON.parse(claimed.stdout)).toMatchObject({ claimed: true, unit: "alpha", intent_id8: "00000001" });
+    expect(claimKeys(claimed.stdout)).toEqual([
+      "audit_shard", "claim_oid", "claim_ref", "claimed", "claimed_from_oid", "gate_rhythm", "generation",
+      "integration_ref", "intent_id8", "intent_uuid", "nonce", "owner", "space", "unit", "version",
+    ]);
+    expect(statusOf(mate)).not.toContain(NOTHING_SELECTED);
+  });
+
+  test("the form AI-DLC names, with --team and --rhythm, takes the same way", () => {
+    const { remote } = teamProject();
+    const mate = clone(remote, "first-claim-team");
+    const claimed = typed(mate, ["--claim", "gamma", "--team", "payments", "--rhythm", "unit-end"]);
+    expect(claimed.status, claimed.out).toBe(0);
+    expect(JSON.parse(claimed.stdout)).toMatchObject({ claimed: true, unit: "gamma", owner: "payments", gate_rhythm: "unit-end" });
+  });
+
+  test("two pieces of work, the Unit in one: it is claimed there, in a chat and from a terminal", () => {
+    const { remote } = teamProject([{ slug: "payments", uuid: "00000000-0000-7000-8000-0000000000b2", rename: ["gamma", "delta"] }]);
+    for (const chat of [MATE, null]) {
+      const mate = clone(remote, chat ? "two-works-chat" : "two-works-terminal");
+      expect(statusOf(mate, chat)).toContain(NOTHING_SELECTED);
+      const claimed = typed(mate, ["--claim", "delta"], chat);
+      expect(claimed.status, claimed.out).toBe(0);
+      expect(JSON.parse(claimed.stdout)).toMatchObject({ claimed: true, unit: "delta", intent_id8: "000000b2" });
+      expect(statusOf(mate, chat)).not.toContain(NOTHING_SELECTED);
+      git(remote, ["rev-parse", "--verify", "refs/heads/claim/000000b2/delta"]);
+      git(remote, ["update-ref", "-d", "refs/heads/claim/000000b2/delta"]);
+    }
+  });
+
+  // A setting typed before any work is picked is kept "for the work you pick up
+  // or start next" (t-kept-setting-follows-the-pick); the claim's pick is that
+  // work, and its line is said on the next step, not inside the claim's own.
+  test("a setting kept for the work picked next goes to the work the claim picks", () => {
+    const { remote } = teamProject();
+    const mate = clone(remote, "kept-setting");
+    const chat = { ...process.env, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0", AIDLC_UNATTENDED: "0", AIDLC_SESSION_OVERRIDE: MATE };
+    mkdirSync(hooksHealthDir(mate), { recursive: true });
+    writeFileSync(join(hooksHealthDir(mate), "record-human-turn.last"), new Date().toISOString());
+    const said = spawnSync(process.execPath, [DISPATCHER, "engine", "hook", "record-human-turn"], {
+      cwd: mate, encoding: "utf-8", env: { ...chat, CLAUDE_PROJECT_DIR: mate, AIDLC_PROJECT_DIR: mate },
+      input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: MATE, prompt: "/aidlc --guard.review-freeze off" }),
+    });
+    expect(said.status, said.stderr).toBe(0);
+    const setter = runOrchestrateNext(ORCH, mate, ["--guard.review-freeze", "off"], { cwd: mate, env: chat }).directive;
+    const named = /Run `bun \.claude\/tools\/(aidlc[a-z-]*\.ts) ([^`]+)`/.exec(String(setter?.message));
+    expect(named, JSON.stringify(setter).slice(0, 300)).not.toBeNull();
+    const kept = spawnSync(process.execPath, [join(AIDLC_SRC, "tools", named![1]), ...named![2].split(" ")], {
+      cwd: mate, encoding: "utf-8", env: { ...chat, CLAUDE_PROJECT_DIR: mate, AIDLC_PROJECT_DIR: mate },
+    });
+    expect(`${kept.stdout}${kept.stderr}`).toContain("for the work you pick up or start next");
+    const claimed = typed(mate, ["--claim", "alpha"]);
+    expect(claimed.status, claimed.out).toBe(0);
+    expect(claimKeys(claimed.stdout)).toContain("claimed");
+    expect(getField(readFileSync(seededStateFile(mate), "utf-8"), "Guards Off") ?? "").toContain("review-freeze");
+    const after = runOrchestrateNext(ORCH, mate, [], { cwd: mate, env: chat });
+    expect(after.out).toContain("The review freeze check is off for this piece of work");
+  });
+
+  test("no piece of work with that Unit: one line, nothing selected", () => {
+    const { remote } = teamProject();
+    const mate = clone(remote, "no-such-unit");
+    const refused = typed(mate, ["--claim", "zeta"]);
+    expect(refused.status).toBe(1);
+    expect(JSON.parse(refused.out).error).toBe("zeta is not a Unit of any piece of work here.");
+    expect(statusOf(mate)).toContain(NOTHING_SELECTED);
+  });
+
+  test("more than one piece of work with that Unit: named as intent takes them, nothing selected", () => {
+    const { remote } = teamProject([
+      { slug: "payments", uuid: "00000000-0000-7000-8000-0000000000b2" },
+      { slug: "fixture", uuid: "00000000-0000-7000-8000-0000000000b3", rename: ["alpha", "epsilon"] },
+    ]);
+    const mate = clone(remote, "several");
+    const refused = typed(mate, ["--claim", "alpha"]);
+    expect(refused.status).toBe(1);
+    expect(JSON.parse(refused.out).error).toBe(
+      "alpha is a Unit of more than one piece of work here (fixture-8000000000000001, payments); say which one.",
+    );
+    expect(statusOf(mate)).toContain(NOTHING_SELECTED);
   });
 });
 

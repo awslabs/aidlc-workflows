@@ -51,6 +51,8 @@
 // contents of a container you have not verified is guarding the wrong thing.
 
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS, LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
+import { readPdfMain } from "./aidlc-pdf.ts";
+import { compiledExecutable } from "./aidlc-runtime-paths.ts";
 import { createHash } from "node:crypto";
 import { type SpawnSyncReturns, spawnSync } from "node:child_process";
 import {
@@ -62,6 +64,7 @@ import {
   statSync,
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   agentFileText,
   assertNoSymlinkInChainOrThrow,
@@ -70,11 +73,13 @@ import {
   auditShardName,
   documentExtractors,
   emitError,
+  engineDir,
   ensureDirSync,
   entrySkillInvocation,
   errorMessage,
   type FileIdentity,
   fileIdentity,
+  HARDLINK_REMEDY,
   intentsDir,
   isPidAlive,
   knowledgeDir,
@@ -93,9 +98,11 @@ import {
   validSpaceFlag,
   withAuditLock,
   writeBufferAtomic,
+  writeEngineFileNoFollow,
   writeFileAtomic,
 } from "./aidlc-lib.ts";
 import { appendAuditEntryAtPathUnlocked } from "./aidlc-audit.ts";
+import { officeText, ooxmlKind, OoxmlError } from "./aidlc-ooxml.ts";
 import {
   DOCUMENTKB_SCHEMA_VERSION,
   type DocumentIndex,
@@ -110,6 +117,7 @@ import {
   summaryIsCurrent,
   validateDocumentIndex,
   validateDocumentMetadata,
+  validDocumentPath,
 } from "./aidlc-documentkb-schema.ts";
 
 // --- Paths -------------------------------------------------------------------
@@ -311,79 +319,21 @@ const BINARY_MAGICS_FIXED_OFFSET: readonly (readonly number[])[] = [
 export const WORD_DOCX_MIME =
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
-const OOXML_WORD_ENTRY = "word/document.xml";
-const OOXML_CONTENT_TYPES_ENTRY = "[Content_Types].xml";
-const ZIP_LOCAL_HEADER_SIG = 0x04034b50;
+/** The MIME `detectMimeType` reports for a modern (OOXML) Excel workbook. */
+export const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
 /**
- * Whether `buf` is a ZIP container whose LOCAL FILE HEADERS -- not its raw
- * bytes -- declare both `[Content_Types].xml` and `word/document.xml` as
- * entries. A .docx is an ordinary ZIP (PK\x03\x04), indistinguishable from a
- * .xlsx or a .jar by magic alone, so the entry NAME is the only reliable
- * signal.
- *
- * ATTACK CLOSED HERE, not theoretical: an earlier version of this function
- * did `buf.includes(nameBytes)` -- a raw substring scan over the WHOLE
- * buffer. That treats file NAMES and file CONTENTS identically: a plain-text
- * file containing the two literal strings as ordinary prose (not as zip
- * entry names at all) was classified as Word. Measured:
- * `zipwrite("payload.txt", "word/document.xml [Content_Types].xml")` --
- * one entry, an unrelated name, content that merely mentions the markers --
- * passed the old check. This version walks the ACTUAL local file header
- * chain and only inspects the declared filename field of each entry, so a
- * marker string appearing in an entry's DATA is never confused with an
- * entry's NAME.
- *
- * Bounded and defensive: caps the entries walked, verifies every offset
- * before reading it, and returns false (never throws) on anything malformed,
- * truncated, or using a streamed local header (data-descriptor bit set,
- * declared size 0) that cannot be skipped without decompressing -- a real
- * docx, produced by an ordinary zip writer, never needs that case.
+ * Whether `buf` is a zip whose central directory names both
+ * `[Content_Types].xml` and `word/document.xml`. A .docx is an ordinary zip,
+ * indistinguishable from a .xlsx or a .jar by magic alone, so the part NAMES
+ * are the signal, read from the archive's directory and never from its data
+ * (a text file that merely mentions the names, or a part whose contents
+ * forge a header, is not Word). The walk is aidlc-ooxml.ts `listZip`, the one
+ * the reader uses, so detection and reading agree; anything malformed is
+ * "not Word", never an error.
  */
 export function hasWordOoxmlSignature(buf: Buffer): boolean {
-  const MAX_ENTRIES = 4096;
-  let offset = 0;
-  let sawContentTypes = false;
-  let sawWordDocument = false;
-  for (let i = 0; i < MAX_ENTRIES; i++) {
-    if (offset + 30 > buf.length) break;
-    if (buf.readUInt32LE(offset) !== ZIP_LOCAL_HEADER_SIG) break;
-    const flags = buf.readUInt16LE(offset + 6);
-    const compressedSize = buf.readUInt32LE(offset + 18);
-    const nameLen = buf.readUInt16LE(offset + 26);
-    const extraLen = buf.readUInt16LE(offset + 28);
-    const nameStart = offset + 30;
-    const nameEnd = nameStart + nameLen;
-    if (nameEnd > buf.length) break;
-    const name = buf.toString("utf-8", nameStart, nameEnd);
-    if (name === OOXML_CONTENT_TYPES_ENTRY) sawContentTypes = true;
-    if (name === OOXML_WORD_ENTRY) sawWordDocument = true;
-    if (sawContentTypes && sawWordDocument) return true;
-    // Bit 3 (streamed / data-descriptor) means compressedSize here is 0 and
-    // the real size trails the entry's DATA -- unrecoverable without
-    // decompressing, which this sniffer deliberately never does.
-    if ((flags & 0x0008) !== 0) break;
-    // Both size fields are attacker-controlled, and the walk's next offset is
-    // computed from `compressedSize` alone -- so a SELF-CONTRADICTORY pair
-    // (compressed 0, uncompressed non-zero) steps past only the header and
-    // lands inside the entry's own payload. A second review round measured
-    // exactly that: `innocent.txt` declaring compressedSize 0 / uncompressed
-    // 96, carrying two forged local headers named `[Content_Types].xml` and
-    // `word/document.xml`, which the walk then read as real entry names --
-    // reintroducing the NAME-versus-CONTENT confusion this function exists to
-    // prevent, one level down. A stored (uncompressed) entry has
-    // compressedSize === uncompressedSize, and a deflated one is non-zero for
-    // non-empty data, so "compressed 0 while uncompressed is not" is never a
-    // real zip writer's output. Refuse it, and require the offset to advance
-    // strictly, so a lying size can only ever end the walk early -- fail
-    // closed to "not Word" -- never redirect it into bytes the author chose.
-    const uncompressedSize = buf.readUInt32LE(offset + 22);
-    if (compressedSize === 0 && uncompressedSize !== 0) break;
-    const next = nameEnd + extraLen + compressedSize;
-    if (next <= offset) break;
-    offset = next;
-  }
-  return false;
+  return ooxmlKind(buf) === "word";
 }
 
 // PDF's `%PDF-` header is WINDOW-searched, because ISO 32000 permits a header
@@ -459,10 +409,12 @@ const SHA256_HEX_REGEX = /^[0-9a-f]{64}$/;
 
 // --- Extraction --------------------------------------------------------------
 //
-// AI-DLC ships NO PDF parser and downloads none at runtime. It probes an
-// EXTERNAL EXECUTABLE -- `pdftotext` on PATH by default -- exactly as the
-// sensors probe their tools: `--version` with an operational backstop, then degrade.
-// probe-then-degrade is the reusable part of that precedent, not the transport.
+// A PDF is read by an EXTERNAL EXECUTABLE -- `pdftotext` on PATH by default --
+// probed exactly as the sensors probe their tools: `--version` with an
+// operational backstop. Where the default is missing, AI-DLC's own reader
+// (aidlc-pdf.ts, Bun built-ins only) reads it instead, as a child process under
+// the same timeout and output bounds; a harness-configured extractor that is
+// missing stays missing, since the team chose it. Nothing is downloaded at runtime.
 //
 // `bunx unpdf` was proposed and withdrawn: `unpdf` is a LIBRARY with no
 // executable `bin`, while `bunx` runs package executables. The precedent that
@@ -477,7 +429,7 @@ export const EXTRACT_INPUT_BYTE_CAP = 32 * 1024 * 1024;
 export const EXTRACT_TIMEOUT_MS = LONG_SUBPROCESS_TIMEOUT_MS;
 /** Startup/probe backstop, allowing cold executable startup under contention. */
 export const EXTRACT_PROBE_TIMEOUT_MS = DEFAULT_SUBPROCESS_TIMEOUT_MS;
-/** Pages converted per document. */
+/** Pages kept per document by the default PDF extractor. */
 export const EXTRACT_PAGE_CAP = 50;
 /** Characters kept in `content.md`. Reuses the donor's CONTENT_CHAR_CAP, which
  *  already drove its `truncated` flag -- same constant, same flag, so this is a
@@ -504,10 +456,65 @@ export const SUMMARY_MAX_CHARS = 4_000;
  *  full SUMMARY_MAX_CHARS summary in any valid UTF-8 text. */
 export const SUMMARY_TEXT_FILE_BYTE_CAP = SUMMARY_MAX_CHARS * 4;
 
-/** The default extractor when a harness configures none. */
+/** The default extractor when a harness configures none. Its page-51 check
+ *  (`pdfGoesPastPageCap`) shares its flags, so the two runs read alike. */
+const DEFAULT_PDF_FLAGS: readonly string[] = ["-q"];
 const DEFAULT_PDF_ARGV: readonly string[] = [
-  "pdftotext", "-q", "-l", String(EXTRACT_PAGE_CAP), "$IN", "-",
+  "pdftotext", ...DEFAULT_PDF_FLAGS, "-l", String(EXTRACT_PAGE_CAP), "$IN", "-",
 ];
+
+/**
+ * Whether a PDF the default extractor just read goes on past the page cap.
+ * `-l 50` stops at page 50 without saying whether there was more. pdftotext
+ * ends every page with a form feed, so output with 1 to 49 of them is a short
+ * document and needs no second look. Otherwise (50 pages, or page breaks
+ * turned off, as Xpdf's `textPageBreaks no` does) ask for page 51 alone:
+ * Poppler refuses a range past the last page (exit 99), Xpdf may instead print
+ * nothing and exit 0, and a page 51 prints at least its form feed. Two cases
+ * stay as `-l 50` left them, with no signal: that run failing, and a blank
+ * page 51 under Xpdf with page breaks off, which prints nothing either;
+ * telling those apart needs a page count from another program.
+ */
+function pdfGoesPastPageCap(absPath: string, out: string): boolean {
+  const pageBreaks = out.split("\f").length - 1;
+  if (pageBreaks > 0 && pageBreaks < EXTRACT_PAGE_CAP) return false;
+  const next = String(EXTRACT_PAGE_CAP + 1);
+  const r = spawnSync(
+    DEFAULT_PDF_ARGV[0],
+    [...DEFAULT_PDF_FLAGS, "-f", next, "-l", next, absPath, "-"],
+    // One byte of stdout answers; more ends the run with ENOBUFS, also a page
+    // 51. stderr is dropped: the buffer bound would count a refusal's message.
+    {
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: EXTRACT_PROBE_TIMEOUT_MS,
+      maxBuffer: 1,
+    },
+  );
+  if ((r.error as NodeJS.ErrnoException | undefined)?.code === "ENOBUFS") return true;
+  return r.error === undefined && r.status === 0 && (r.stdout ?? "").length > 0;
+}
+
+const BUILTIN_PDF = Object.freeze({ name: "builtin-pdf", version: "1" });
+
+/** AI-DLC's own PDF reader as a child of this engine: its `engine knowledge read-pdf` in a compiled binary, the
+ *  reader's own file under Bun. The PDF goes on stdin, so the child opens no path. */
+function builtinPdfCommand(): readonly string[] {
+  const exe = compiledExecutable();
+  return exe !== null
+    ? [exe, "engine", "knowledge", "read-pdf", "--page-cap", String(EXTRACT_PAGE_CAP)]
+    : [process.execPath, fileURLToPath(new URL("./aidlc-pdf.ts", import.meta.url)), "--page-cap", String(EXTRACT_PAGE_CAP)];
+}
+
+/** The page count the built-in reader reports as the last line of its stderr (0 when it says none). */
+function builtinPageCount(stderr: string): number {
+  try {
+    const pages = (JSON.parse(stderr.trim().split("\n").at(-1) ?? "") as { pages?: unknown }).pages;
+    return typeof pages === "number" ? pages : 0;
+  } catch {
+    return 0;
+  }
+}
 
 export interface ExtractorProbe {
   name: string;
@@ -566,8 +573,10 @@ export interface ExtractionOutcome {
 }
 
 /** The argv for a MIME type: a harness-configured one, else the default when the
- *  type is one this release knows. Null means no extractor is CONFIGURED, which
- *  is `unsupported_type` rather than `extractor_unavailable`. */
+ *  type is one this release knows. Null means no extractor program, which is
+ *  `unsupported_type` rather than `extractor_unavailable` -- except for Word and
+ *  Excel, which `extractDocument` reads itself (builtin-ooxml) unless the
+ *  harness configured an extractor for that MIME, as text needs none. */
 export function extractorArgvFor(mime: string): readonly string[] | null {
   const configured = documentExtractors();
   const spec = configured?.get(mime);
@@ -582,6 +591,54 @@ export function extractorArgvFor(mime: string): readonly string[] | null {
 
 function configuredTimeoutFor(mime: string): number {
   return documentExtractors()?.get(mime)?.timeoutMs ?? EXTRACT_TIMEOUT_MS;
+}
+
+const BUILTIN_OOXML = Object.freeze({ name: "builtin-ooxml", version: "1" });
+const OFFICE_NAME = /\.(docx|xlsx)$/i;
+
+function builtinOfficeKind(mime: string): "word" | "excel" | null {
+  return mime === WORD_DOCX_MIME ? "word" : mime === XLSX_MIME ? "excel" : null;
+}
+
+/** Whether the built-in reader takes this row's document on a retry: its kind, or an Office name recorded as octet-stream before Excel was recognised. */
+function builtinReadsRow(row: DocumentRow): boolean {
+  const mime = detectMimeFromRow(row);
+  const office = builtinOfficeKind(mime) !== null || (mime === "application/octet-stream" && OFFICE_NAME.test(row.source.path));
+  return office && documentExtractors()?.get(mime) === undefined;
+}
+
+function extractOffice(absPath: string, kind: "word" | "excel", sourceRevision: string): ExtractionOutcome {
+  const buf = readRegularFileNoFollowOrThrow(absPath, "document");
+  let full: string;
+  try {
+    full = officeText(buf, kind);
+  } catch (e) {
+    return {
+      record: {
+        state: "extraction_failed",
+        extractor: { ...BUILTIN_OOXML },
+        reason: e instanceof OoxmlError
+          ? `AI-DLC could not read it as ${kind === "word" ? "a Word" : "an Excel"} file: ${e.message}`
+          : `AI-DLC could not read it as ${kind === "word" ? "a Word" : "an Excel"} file`,
+        detectedType: kind === "word" ? WORD_DOCX_MIME : XLSX_MIME,
+        source_revision: sourceRevision,
+      },
+    };
+  }
+  if (full.trim().length === 0) {
+    return { record: { state: "no_extractable_text", extractor: { ...BUILTIN_OOXML }, source_revision: sourceRevision } };
+  }
+  const truncated = full.length > EXTRACT_OUTPUT_CHAR_CAP;
+  return {
+    record: {
+      state: "extracted",
+      extractor: { ...BUILTIN_OOXML },
+      chars: Math.min(full.length, EXTRACT_OUTPUT_CHAR_CAP),
+      truncated,
+      source_revision: sourceRevision,
+    },
+    text: truncated ? full.slice(0, EXTRACT_OUTPUT_CHAR_CAP) : full,
+  };
 }
 
 /**
@@ -619,6 +676,25 @@ export function extractDocument(
     };
   }
 
+  // Word and Excel are read in-process unless the harness configured its own
+  // extractor for the MIME (the team's choice wins).
+  if (builtinOfficeKind(mime) !== null && documentExtractors()?.get(mime) === undefined) {
+    return extractOffice(absPath, builtinOfficeKind(mime)!, sourceRevision);
+  }
+  // A .docx or .xlsx name on bytes that are not an Office zip (a password-
+  // protected workbook is an OLE file, or the name is wrong): recorded once as
+  // not readable, which a later sync does not retry until the reader changes.
+  if (mime === "application/octet-stream" && OFFICE_NAME.test(absPath)) {
+    return {
+      record: {
+        state: "extraction_failed",
+        extractor: { ...BUILTIN_OOXML },
+        reason: "it is not a Word or Excel file AI-DLC can open (it may be password-protected or in an older format)",
+        detectedType: mime,
+        source_revision: sourceRevision,
+      },
+    };
+  }
   const argv = extractorArgvFor(mime);
   if (argv === null) {
     // Nothing is even configured for this type. Indexed and citable, not
@@ -641,7 +717,9 @@ export function extractDocument(
   }
 
   const probe = probeExtractor(argv[0]);
-  if (!probe.available) {
+  // pdftotext first where it is installed; where the default is missing, AI-DLC's own reader.
+  const builtin = !probe.available && argv === DEFAULT_PDF_ARGV;
+  if (!probe.available && !builtin) {
     // Name only: nothing ran, so there is no version to report, and inventing
     // one would be a fabricated fact about a program that never executed.
     // `detectedType` IS recorded (the caller's `mime`, the same value
@@ -651,15 +729,16 @@ export function extractDocument(
       record: { state: "extractor_unavailable", extractor: { name: argv[0] }, detectedType: mime },
     };
   }
-  const version = probe.version ?? "unknown";
+  const extractor = builtin ? { ...BUILTIN_PDF } : { name: argv[0], version: probe.version ?? "unknown" };
 
   // `$IN` is the ONLY substitution. No general templating, so a document path
   // cannot become a flag or a second command.
-  const args = argv.slice(1).map((a) => (a === "$IN" ? absPath : a));
-  const r = spawnSync(argv[0], args, {
+  const command = builtin ? builtinPdfCommand() : argv.map((a) => (a === "$IN" ? absPath : a));
+  const r = spawnSync(command[0], command.slice(1), {
     encoding: "utf-8",
     timeout: configuredTimeoutFor(mime),
     maxBuffer: EXTRACT_OUTPUT_CHAR_CAP * 4,
+    ...(builtin ? { input: readRegularFileNoFollowOrThrow(absPath, "document") } : {}),
   });
 
   if (r.error !== undefined) {
@@ -668,7 +747,7 @@ export function extractDocument(
     return {
       record: {
         state: "extraction_failed",
-        extractor: { name: argv[0], version },
+        extractor,
         detectedType: mime,
         reason: timedOut
           ? `extraction exceeded the ${configuredTimeoutFor(mime)}ms timeout`
@@ -684,9 +763,11 @@ export function extractDocument(
     return {
       record: {
         state: "extraction_failed",
-        extractor: { name: argv[0], version },
+        extractor,
         detectedType: mime,
-        reason: `extractor exited ${r.status}${detail ? `: ${detail}` : ""}`,
+        reason: builtin
+          ? `AI-DLC could not read it as a PDF: ${detail || "it is damaged"}`
+          : `extractor exited ${r.status}${detail ? `: ${detail}` : ""}`,
       },
     };
   }
@@ -699,21 +780,27 @@ export function extractDocument(
     return {
       record: {
         state: "no_extractable_text",
-        extractor: { name: argv[0], version },
+        extractor,
         source_revision: sourceRevision,
       },
     };
   }
-  const truncated = out.length > EXTRACT_OUTPUT_CHAR_CAP;
+  const charCut = out.length > EXTRACT_OUTPUT_CHAR_CAP;
+  // The page cap is the default argv's own; a configured extractor sets its own bounds.
+  const pageCut = !charCut && argv === DEFAULT_PDF_ARGV &&
+    (builtin ? builtinPageCount(r.stderr ?? "") > EXTRACT_PAGE_CAP : pdfGoesPastPageCap(absPath, out));
   return {
     record: {
       state: "extracted",
-      extractor: { name: argv[0], version },
+      extractor,
       chars: Math.min(out.length, EXTRACT_OUTPUT_CHAR_CAP),
-      truncated,
+      truncated: charCut || pageCut,
+      // Only when the page cap is what ended the text: a character cut inside
+      // the first 50 pages kept fewer pages than that.
+      ...(pageCut ? { pages_kept: EXTRACT_PAGE_CAP } : {}),
       source_revision: sourceRevision,
     },
-    text: truncated ? out.slice(0, EXTRACT_OUTPUT_CHAR_CAP) : out,
+    text: charCut ? out.slice(0, EXTRACT_OUTPUT_CHAR_CAP) : out,
   };
 }
 
@@ -724,14 +811,12 @@ export function detectMimeType(absPath: string, buf: Buffer): string {
   if (!looksBinary(buf)) {
     return absPath.toLowerCase().endsWith(".md") ? "text/markdown" : "text/plain";
   }
-  // Checked AFTER the PDF/text branches (a docx is binary, so it would
-  // otherwise fall to octet-stream) and BEFORE the octet-stream default: this
-  // is the only route by which a Word file can ever be classified as
-  // something a configured extractor can be selected for. No default argv is
-  // wired for this MIME (see extractorArgvFor) -- a project with no configured
-  // Word extractor still gets `unsupported_type`, never an error, exactly as
-  // an unrecognised binary always has.
-  if (hasWordOoxmlSignature(buf)) return WORD_DOCX_MIME;
+  // After the PDF and text branches (a docx or xlsx is binary) and before the
+  // octet-stream default: the only route by which a Word or Excel file reaches
+  // the built-in reader, or a configured extractor for its MIME.
+  const office = ooxmlKind(buf);
+  if (office === "word") return WORD_DOCX_MIME;
+  if (office === "excel") return XLSX_MIME;
   return "application/octet-stream";
 }
 
@@ -1168,7 +1253,7 @@ export function resolveSpaceFlag(raw: string | undefined, projectDir: string): s
   if (valid === null) {
     throw new Error(
       raw_
-        ? `The active-space cursor ("${candidate}") is not a valid space name — must be ` +
+        ? `The active-space cursor ("${candidate}") is not a valid space name - must be ` +
           `a lowercase slug (letters, digits, hyphens; leading letter). Pass --space ` +
           `<name> explicitly, or repair aidlc/active-space, then re-run.`
         : `Invalid --space "${raw}": must be a lowercase slug (letters, digits, hyphens; ` +
@@ -1344,7 +1429,7 @@ function statOnlyRefusal(real: string, rel: string): string | null {
   if (!st.isFile()) {
     return (
       `${rel} is ${describeFileKind(st)}, not a regular file. Only regular files are ` +
-      `indexed — a FIFO, socket, or device file can block forever or never reach EOF.`
+      `indexed - a FIFO, socket, or device file can block forever or never reach EOF.`
     );
   }
   // Reuses the STAT ABOVE -- no second syscall -- and runs BEFORE the read
@@ -1370,10 +1455,7 @@ function statOnlyRefusal(real: string, rel: string): string | null {
   // every sync quietly passed over it — the exact list/sync disagreement the
   // present_but_refused state exists to prevent.
   if (st.nlink !== 1) {
-    return (
-      `${rel} is multiply linked (a hardlink) and is not trusted. Replace it with an ` +
-      `independent copy — cp <file> <file>.copy && mv <file>.copy <file> — and re-run.`
-    );
+    return `${rel} is multiply linked (a hardlink) and is not trusted. ${HARDLINK_REMEDY}`;
   }
   try {
     // fs.constants.R_OK, as a literal: this file's restricted fs allowlist
@@ -1396,12 +1478,83 @@ function readCandidate(documentsReal: string, absPath: string): Buffer {
   return readDocumentBytes(real, rel);
 }
 
+/** A path named among several that was left out, as the person typed it, and why. */
+export interface OnboardNotAdded {
+  path: string;
+  reason: string;
+}
+
 export interface OnboardResult {
   space: string;
   indexed: OnboardOutcome[];
   /** Present only on a refusal, so a caller can distinguish "nothing to do" from
    *  "the batch was rejected". */
   refused?: { path: string; reason: string };
+  /** Present only when several paths were named and some could not be taken. */
+  not_added?: OnboardNotAdded[];
+}
+
+/**
+ * Why one path named among several cannot be taken, or the files it adds.
+ * The checks are the ones the single-path form refuses on, said as a reason
+ * instead, so one bad path never costs the person the others.
+ */
+function namedOnboardFiles(
+  projectDir: string,
+  space: string,
+  documentsReal: string,
+  projectReal: string,
+  given: string,
+): { files: string[] } | { reason: string } {
+  const abs = isAbsolute(given) ? given : resolve(projectDir, given);
+  if (!existsSync(abs)) return { reason: "no such file or folder" };
+  const real = realpathSync(abs);
+  const under = (root: string): boolean => real.startsWith(root.endsWith(sep) ? root : root + sep);
+  if (real !== projectReal && !under(projectReal)) return { reason: "outside your project" };
+  if (!under(documentsReal)) {
+    const documents = portableSourcePath(projectDir, space, documentsReal);
+    return { reason: `outside ${documents}; copy it under ${documents}/ first` };
+  }
+  if (statSync(real).isDirectory()) {
+    const files = walkDocuments(real);
+    return files.length === 0 ? { reason: "it holds no documents" } : { files };
+  }
+  const refusal = statOnlyRefusal(real, "it");
+  return refusal === null ? { files: [real] } : { reason: refusal };
+}
+
+/**
+ * What a batch would index, judged by stat alone: a file with no live row, or
+ * whose size or mtime moved since its row was indexed. The batch caps count
+ * this, and the dispatcher counts the same before it copies anything, so a cap
+ * refusal never comes after the copies.
+ */
+export function onboardBatchWork(
+  projectDir: string,
+  space: string,
+  candidates: readonly string[],
+  index: DocumentIndex = readIndex(projectDir, space),
+): { abs: string; bytes: number; indexed: boolean }[] {
+  const liveBySource = new Map(
+    index.documents.filter((row) => !isTombstoned(row)).map((row) => [row.source.path, row]),
+  );
+  const work: { abs: string; bytes: number; indexed: boolean }[] = [];
+  for (const abs of candidates) {
+    try {
+      const stat = statSync(abs);
+      const sourcePath = portableSourcePath(projectDir, space, abs);
+      const existing = liveBySource.get(sourcePath);
+      const indexedAt = existing === undefined ? Number.NaN : Date.parse(existing.indexed_at);
+      if (
+        existing === undefined ||
+        stat.size !== existing.bytes ||
+        (!Number.isNaN(indexedAt) && stat.mtimeMs > indexedAt)
+      ) {
+        work.push({ abs, bytes: stat.size, indexed: existing !== undefined });
+      }
+    } catch { /* vanished mid-walk; readCandidate will skip or refuse it */ }
+  }
+  return work;
 }
 
 /**
@@ -1433,7 +1586,55 @@ function assertPublishable(candidate: DocumentIndex): void {
 }
 
 /**
- * Index one path, or every not-yet-indexed file under `documents/` when pathless.
+ * The copy the command layer made of `original` (that file's project-relative
+ * POSIX path) that it may write the file's new bytes over: a live row records
+ * that original, and its copy, read through the same boundary as any candidate,
+ * still holds the bytes copied (nobody edited it, by hand or by a sync after an
+ * edit) or already holds `newSha256` (a run that wrote them stopped before the
+ * index took them). Null when no copy, or more than one, qualifies: the caller
+ * then copies beside it, as it always has.
+ */
+export function copiedDocumentFor(
+  projectDir: string,
+  space: string,
+  original: string,
+  newSha256: string,
+): { copyPath: string; holdsNew: boolean } | { changedCopy: string } | null {
+  assertKnowledgeRootTrusted(projectDir, space);
+  const documentsAbs = documentsDir(projectDir, space);
+  if (!existsSync(documentsAbs)) return null;
+  const documentsReal = realpathSync(documentsAbs);
+  const fits: { copyPath: string; holdsNew: boolean }[] = [];
+  const changed: string[] = [];
+  for (const row of readIndex(projectDir, space).documents) {
+    const from = row.copied_from;
+    if (from === undefined || from.path !== original || isTombstoned(row)) continue;
+    if (row.source.kind !== "managed" || !row.source.path.startsWith("documents/")) continue;
+    const copyPath = join(documentsReal, ...row.source.path.slice("documents/".length).split("/"));
+    let digest: string;
+    try {
+      digest = sha256Hex(readCandidate(documentsReal, copyPath));
+    } catch {
+      continue;
+    }
+    if (digest === from.sha256 || digest === newSha256) fits.push({ copyPath, holdsNew: digest === newSha256 });
+    else changed.push(row.source.path.slice("documents/".length));
+  }
+  if (fits.length === 1) return fits[0];
+  // The one copy made from this original no longer holds what was copied: the
+  // caller copies beside it, and says so, so nobody takes the earlier copy for
+  // a stale duplicate and deletes a change made to it.
+  if (fits.length === 0 && changed.length === 1) return { changedCopy: changed[0] };
+  return null;
+}
+
+/**
+ * Index one path, several, or every not-yet-indexed file under `documents/`
+ * when pathless.
+ *
+ * Several paths (an array) are checked one by one first: a path that cannot be
+ * taken is reported in `not_added` with why, and the rest go in as one batch.
+ * One path (a string) keeps the single-path refusals.
  *
  * A pathless run IS a batch, and a batch is ALL-OR-NOTHING. Two distinct
  * collisions reach the same bad end, and closing only the first leaves a real
@@ -1448,9 +1649,10 @@ function assertPublishable(candidate: DocumentIndex): void {
 export function onboard(
   projectDir: string,
   space: string,
-  pathArg: string | undefined,
+  pathArg: string | readonly string[] | undefined,
   now: string,
   intentUuid?: string,
+  copiedFrom?: ReadonlyMap<string, string>,
 ): OnboardResult {
   assertKnowledgeRootTrusted(projectDir, space);
   const documentsAbs = documentsDir(projectDir, space);
@@ -1463,17 +1665,36 @@ export function onboard(
   const documentsReal = realpathSync(documentsAbs);
 
   let candidates: string[];
+  const notAdded: OnboardNotAdded[] = [];
   if (pathArg === undefined) {
     candidates = walkDocuments(documentsReal);
+  } else if (typeof pathArg !== "string") {
+    // Several: in the order named, each file once however often it was named.
+    candidates = [];
+    const taken = new Set<string>();
+    const projectReal = realpathSync(projectDir);
+    for (const given of pathArg) {
+      const named = namedOnboardFiles(projectDir, space, documentsReal, projectReal, given);
+      if ("reason" in named) {
+        notAdded.push({ path: given, reason: named.reason });
+        continue;
+      }
+      for (const file of named.files) {
+        if (taken.has(file)) continue;
+        taken.add(file);
+        candidates.push(file);
+      }
+    }
+    if (candidates.length === 0) return { space, indexed: [], ...(notAdded.length === 0 ? {} : { not_added: notAdded }) };
   } else {
     const abs = isAbsolute(pathArg) ? pathArg : resolve(projectDir, pathArg);
     if (!existsSync(abs)) throw new Error(`No such path: ${pathArg}`);
     const real = realpathSync(abs);
     const documentsWithSep = documentsReal.endsWith(sep) ? documentsReal : documentsReal + sep;
     if (!real.startsWith(documentsWithSep)) {
-      // Copying an external path in is the design's default behaviour, but it
-      // belongs with the story that owns source kinds; refusing clearly beats
-      // guessing.
+      // The dispatcher copies a file named inside the project into documents/
+      // before this runs (withNamedDocumentCopied in aidlc.ts), so what reaches
+      // here is a path outside the project, or this tool run on its own.
       throw new Error(
         `${pathArg} is outside ${portableSourcePath(projectDir, space, documentsAbs)}. ` +
           `Copy it under documents/ first, then re-run.`,
@@ -1482,10 +1703,20 @@ export function onboard(
     candidates = statSync(real).isDirectory() ? walkDocuments(real) : [real];
   }
 
+  const result = onboardCandidates(projectDir, space, documentsReal, candidates, now, intentUuid, copiedFrom);
+  return notAdded.length === 0 ? result : { ...result, not_added: notAdded };
+}
+
+function onboardCandidates(
+  projectDir: string,
+  space: string,
+  documentsReal: string,
+  candidates: readonly string[],
+  now: string,
+  intentUuid?: string,
+  copiedFrom?: ReadonlyMap<string, string>,
+): OnboardResult {
   const index = readIndex(projectDir, space);
-  const liveBySource = new Map(
-    index.documents.filter((row) => !isTombstoned(row)).map((row) => [row.source.path, row]),
-  );
 
   // The BATCH caps -- distinct from EXTRACT_INPUT_BYTE_CAP's per-document
   // bound -- apply to the WORK this sweep can see without opening any content.
@@ -1495,28 +1726,17 @@ export function onboard(
   // one item over the cap; avoiding content reads before this resource gate is
   // the more important invariant.
   if (candidates.length > 1) {
-    const work: { abs: string; bytes: number }[] = [];
-    for (const abs of candidates) {
-      try {
-        const stat = statSync(abs);
-        const sourcePath = portableSourcePath(projectDir, space, abs);
-        const existing = liveBySource.get(sourcePath);
-        const indexedAt = existing === undefined ? Number.NaN : Date.parse(existing.indexed_at);
-        if (
-          existing === undefined ||
-          stat.size !== existing.bytes ||
-          (!Number.isNaN(indexedAt) && stat.mtimeMs > indexedAt)
-        ) {
-          work.push({ abs, bytes: stat.size });
-        }
-      } catch { /* vanished mid-walk; readCandidate below will skip or refuse it */ }
-    }
+    const work = onboardBatchWork(projectDir, space, candidates, index);
+    // Sync reads content, so it can pass where this stat-only count saw
+    // indexed documents touched; brand-new ones hit its own cap too.
+    const orSync = work.some((item) => item.indexed)
+      ? `, or run \`${entrySkillInvocation()} knowledge sync\` instead of a pathless onboard`
+      : "";
     if (work.length > EXTRACT_BATCH_DOC_CAP) {
       throw new Error(
         `This run would index ${work.length} new or changed documents, over the ` +
           `${EXTRACT_BATCH_DOC_CAP}-document batch cap; nothing was indexed. Onboard a ` +
-          `subdirectory or a single file at a time, or run \`${entrySkillInvocation()} knowledge sync\` ` +
-          `instead of a pathless onboard.`,
+          `subdirectory or a single file at a time${orSync}.`,
       );
     }
     const batchBytes = work.reduce((total, item) => total + item.bytes, 0);
@@ -1524,8 +1744,7 @@ export function onboard(
       throw new Error(
         `This run would read ${batchBytes} bytes across ${work.length} new or changed documents, over ` +
           `the ${EXTRACT_BATCH_BYTE_CAP}-byte batch cap; nothing was indexed. Onboard a ` +
-          `subdirectory or a single file at a time, or run \`${entrySkillInvocation()} knowledge sync\` instead ` +
-          `of a pathless onboard.`,
+          `subdirectory or a single file at a time${orSync}.`,
       );
     }
   }
@@ -1598,6 +1817,9 @@ export function onboard(
       }
       const contentNeedsRepair = existing.extraction.state === "extracted" &&
         verifiedContentBytes(projectDir, space, existing) === null;
+      // The command layer handed this copy in for its original (its new bytes
+      // were written over it): the edited branch below records them.
+      const original = copiedFrom?.get(abs);
       if (existing.sha256 === digest && !contentNeedsRepair) {
         // Already indexed, unchanged. Reported, never swallowed.
         outcomes.push({
@@ -1619,6 +1841,8 @@ export function onboard(
           indexed_at: now,
           extraction: outcome.record,
         };
+        // The command layer wrote this original's new bytes over its copy.
+        if (original !== undefined) row.copied_from = { path: original, sha256: digest };
         setRowContentFields(row, outcome.text);
         editedIds.add(row.id);
         staged.push({ row, buf, abs, text: outcome.text, baseRow: structuredClone(existing) });
@@ -1626,6 +1850,8 @@ export function onboard(
       continue;
     }
     const { row, text } = buildRow(projectDir, space, abs, buf, now);
+    const original = copiedFrom?.get(abs);
+    if (original !== undefined) row.copied_from = { path: original, sha256: row.sha256 };
     // Present means intent-scoped; OMITTED means space-wide. Never an empty list,
     // which the schema rejects as ambiguous between the two.
     if (intentUuid !== undefined) row.related_intent_ids = [intentUuid];
@@ -1637,7 +1863,7 @@ export function onboard(
         indexed: [],
         refused: {
           path: sourcePath,
-          reason: `duplicate document id ${row.id} generated within one batch — the batch ` +
+          reason: `duplicate document id ${row.id} generated within one batch - the batch ` +
             `was refused whole, and index.json was not modified`,
         },
       };
@@ -1651,7 +1877,7 @@ export function onboard(
         indexed: [],
         refused: {
           path: sourcePath,
-          reason: `document id ${row.id} already exists in index.json — the batch was ` +
+          reason: `document id ${row.id} already exists in index.json - the batch was ` +
             `refused whole, and index.json was not modified`,
         },
       };
@@ -1796,6 +2022,7 @@ export function onboard(
           existing.bytes = row.bytes;
           existing.indexed_at = row.indexed_at;
           existing.extraction = row.extraction;
+          if (row.copied_from !== undefined) existing.copied_from = row.copied_from;
           setRowContentFields(existing, text);
           edited.push(existing);
           editedStageIds.set(existing.id, stagedRowId);
@@ -2181,9 +2408,8 @@ export const UNTRUSTED_TAGS_NOTICE =
  * from here on, and, when their original is git-ignored, that this copy is not.
  * Null when nothing was copied. Plain words: no record paths, no flags.
  *
- * It does NOT say to add the document again after editing the original: a
- * second add copies the original beside the first (`vision-2.md`, or a new
- * folder), which would leave two live rows for one document.
+ * A changed original named again updates this copy in place (the row's
+ * copied_from), and `onboardNote` says so instead.
  */
 export function onboardCopyNote(
   projectDir: string,
@@ -2202,14 +2428,145 @@ export function onboardCopyNote(
     ? ` ${leftOut} ${leftOut === 1 ? "file" : "files"} inside it ${leftOut === 1 ? "is" : "are"} kept out of ` +
       `git, so ${leftOut === 1 ? "it was" : "they were"} not copied; name one directly to add it.`
     : "";
-  const ignored = gitIgnored === "yes" || gitIgnored === "unknown"
-    ? ` Your ${name} is ${gitIgnored === "yes" ? "" : "likely "}kept out of git, but this copy is not, ` +
-      "so it will be committed unless you keep it out there too."
-    : "";
+  const ignored = keptOutOfGitNote([{ from: copiedFrom, ignored: gitIgnored }]);
   return `Copied ${name} into AI-DLC's documents as ${where} and added ${what}.` +
     skipped +
     ` The knowledge base reads that copy from now on, not ${theirs}.` +
     ignored;
+}
+
+/**
+ * The one risk a copy line carries: a copy of something git ignores will be
+ * committed. Each such original is named, never summed; "this copy" when the
+ * line is about one copy. The one writer of this sentence for every copy line.
+ */
+function keptOutOfGitNote(copies: ReadonlyArray<{ from: string; ignored: string | undefined }>): string {
+  let note = "";
+  for (const [state, likely] of [["yes", ""], ["unknown", "likely "]] as const) {
+    const names = copies.filter((copy) => copy.ignored === state).map((copy) => basename(copy.from));
+    if (names.length === 0) continue;
+    const one = names.length === 1;
+    const copyIs = copies.length === 1 ? "this copy is" : one ? "its copy is" : "their copies are";
+    note += ` Your ${inWords(names)} ${one ? "is" : "are"} ${likely}kept out of git, but ${copyIs} not, so ` +
+      `${one ? "it" : "they"} will be committed unless you keep ${one ? "it" : "them"} out there too.`;
+  }
+  return note;
+}
+
+/** One document the dispatcher copied in for an onboard: the path the person
+ *  named, where the copy is, whether git ignores the original, and how many
+ *  files inside a named folder it left out because git ignores them. */
+export interface OnboardCopy {
+  from: string;
+  to: string;
+  ignored: "yes" | "no" | "unknown";
+  leftOut: number;
+  /** A copied file's project-relative path, recorded as the row's copied_from. */
+  original?: string;
+  /** Its new bytes were written over the copy made from it before. */
+  updated?: boolean;
+  /** The earlier copy made from it (documents-relative) had changed, so this one went in beside it. */
+  besideChanged?: string;
+}
+
+function inWords(items: readonly string[]): string {
+  return items.length <= 1 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+}
+
+/** The paths left out, each with why, as one list. */
+function describeNotAdded(notAdded: readonly OnboardNotAdded[]): string {
+  return inWords(notAdded.map((entry) => `${entry.path} (${entry.reason.replace(/\.$/, "")})`));
+}
+
+const SEVERAL_NAMES_SHOWN = 5;
+
+/**
+ * The line for an onboard of several paths: the paths left out first, each
+ * with why (so a person who reads one line still sees them), then what was
+ * copied. One copy says what `onboardCopyNote` says. Null when there is
+ * nothing to say.
+ */
+function onboardNote(
+  projectDir: string,
+  space: string,
+  allCopies: readonly OnboardCopy[],
+  indexed: readonly OnboardOutcome[],
+  notAdded: readonly OnboardNotAdded[],
+): string | null {
+  const parts: string[] = [];
+  if (notAdded.length > 0) {
+    parts.push(
+      `Not added: ${describeNotAdded(notAdded)}. Name only ${notAdded.length === 1 ? "that one" : "those"} ` +
+        `again once ${notAdded.length === 1 ? "it is" : "they are"} fixed.`,
+    );
+  }
+  const under = (copy: OnboardCopy): number => {
+    const rel = portableSourcePath(projectDir, space, copy.to);
+    return indexed.filter((outcome) => outcome.path === rel || outcome.path.startsWith(`${rel}/`)).length;
+  };
+  // An update is said only where the knowledge base took it (the copy's row
+  // came back `edited`); otherwise the copy reads as any other copy does.
+  const updated = allCopies.filter((copy) => {
+    if (copy.updated !== true) return false;
+    const rel = portableSourcePath(projectDir, space, copy.to);
+    return indexed.some((outcome) => outcome.path === rel && outcome.status === "edited");
+  });
+  const copies = allCopies.filter((copy) => !updated.includes(copy));
+  if (copies.length === 1) {
+    const [copy] = copies;
+    const one = onboardCopyNote(projectDir, copy.from, copy.to, copy.ignored, under(copy), copy.leftOut);
+    if (one !== null) parts.push(one);
+  } else if (copies.length > 1) {
+    const documentsAbs = documentsDir(projectDir, space);
+    const labels = copies.map((copy) => {
+      const name = basename(copy.from);
+      const as = toPosix(relative(realpathOrSelf(documentsAbs), realpathOrSelf(copy.to)));
+      return as === name ? name : `${name} as ${as}`;
+    });
+    // A name the copy did not keep is always said: it is where their document is now.
+    const shown = labels.filter((label, at) => at < SEVERAL_NAMES_SHOWN || label.includes(" as "));
+    const more = labels.length - shown.length;
+    const total = copies.reduce((sum, copy) => sum + under(copy), 0);
+    const where = toPosix(relative(projectDir, documentsAbs));
+    let line = `Copied ${total} ${total === 1 ? "document" : "documents"} into AI-DLC's documents in ${where} ` +
+      `and added them: ${more > 0 ? `${shown.join(", ")} and ${more} more` : inWords(shown)}.`;
+    const withLeftOut = copies.filter((copy) => copy.leftOut > 0);
+    const leftOut = withLeftOut.reduce((sum, copy) => sum + copy.leftOut, 0);
+    if (leftOut > 0) {
+      const inside = withLeftOut.length === 1 ? basename(withLeftOut[0].from) : "the folders you named";
+      line += ` ${leftOut} ${leftOut === 1 ? "file" : "files"} inside ${inside} ${leftOut === 1 ? "is" : "are"} ` +
+        `kept out of git, so ${leftOut === 1 ? "it was" : "they were"} not copied; name one directly to add it.`;
+    }
+    line += " The knowledge base reads those copies from now on, not your own.";
+    parts.push(line + keptOutOfGitNote(copies));
+  }
+  for (const copy of copies) {
+    if (copy.besideChanged === undefined) continue;
+    parts.push(
+      `The earlier copy, ${copy.besideChanged}, has changed since it was copied, so it was left as it is; the ` +
+        "knowledge base now holds both.",
+    );
+  }
+  if (updated.length > 0) parts.push(updatedCopiesNote(projectDir, space, updated));
+  return parts.length === 0 ? null : parts.join(" ");
+}
+
+/** What to say when a changed original's new bytes were written over its copy. */
+function updatedCopiesNote(projectDir: string, space: string, updated: readonly OnboardCopy[]): string {
+  const ignored = keptOutOfGitNote(updated);
+  if (updated.length === 1) {
+    const [copy] = updated;
+    return `Updated ${toPosix(relative(projectDir, copy.to))} to your new ${basename(copy.from)}. It stays the ` +
+      "same document in the knowledge base." + ignored;
+  }
+  const documentsAbs = documentsDir(projectDir, space);
+  const names = updated.map((copy) => {
+    const name = basename(copy.from);
+    const as = toPosix(relative(realpathOrSelf(documentsAbs), realpathOrSelf(copy.to)));
+    return as === name ? name : `${as} (your ${name})`;
+  });
+  return `Updated ${inWords(names)} in ${toPosix(relative(projectDir, documentsAbs))} to your new versions. ` +
+    "Each stays the same document in the knowledge base." + ignored;
 }
 
 function emitJson(payload: Record<string, unknown>): void {
@@ -2491,12 +2848,14 @@ export function renderShow(d: ShownDocument): string {
   // A truncated extraction must announce itself: an agent answering from the
   // first 50 pages of a 300-page policy with no signal it read a fraction is
   // exactly the silent-partial-knowledge failure this feature exists to
-  // prevent. The flag was always recorded; this line makes it visible where
-  // the content is served.
+  // prevent. This line makes the recorded flag visible where the content is
+  // served, naming the cap that ended the text.
   if (d.extraction.truncated === true) {
-    const extent = d.extraction.chars !== undefined ? ` at ${d.extraction.chars} characters` : "";
+    const extent = d.extraction.pages_kept !== undefined
+      ? ` after page ${d.extraction.pages_kept}`
+      : d.extraction.chars !== undefined ? ` at ${d.extraction.chars} characters` : "";
     out.push(
-      `truncated  yes${extent} — the content below is a PARTIAL extraction, not the whole document`,
+      `truncated  yes${extent} - the content below is a PARTIAL extraction, not the whole document`,
     );
   }
   if (d.summary_text !== undefined) {
@@ -2506,6 +2865,268 @@ export function renderShow(d: ShownDocument): string {
     out.push("", d.content_notice ?? UNTRUSTED_CONTENT_NOTICE, "", "--- content ---", d.content);
   }
   return out.join("\n") + "\n";
+}
+
+// --- The documents card ------------------------------------------------------
+//
+// What an Inception stage's reading list carries from the index: each document
+// with current text (this work's first, then the space's), its summary or the
+// opening of its text, and where its full text is, so the agent checks a
+// question against the team's documents before asking it. Text is read through
+// the same verified readers `show` uses, so a stale or torn derivative is left
+// out here exactly as it is there.
+
+const CARD_DOCUMENTS_MAX = 12;
+const CARD_OPENING_CHARS = 1500;
+
+// A fence longer than any backtick run in the text, so a document cannot close it.
+function fenced(text: string): string {
+  const longest = Math.max(0, ...[...text.matchAll(/`+/g)].map((m) => m[0].length));
+  const fence = "`".repeat(Math.max(3, longest + 1));
+  return `${fence}text\n${text}\n${fence}`;
+}
+
+/** The card's Markdown, or null when no document this work may read has current text. */
+export function documentsCard(projectDir: string, space: string, intentUuid: string | null): string | null {
+  // A redirected knowledge root is refused here as every reader refuses it; the engine goes on without the card.
+  const rows = readIndex(projectDir, space).documents;
+  const mine = (row: DocumentRow): boolean => intentUuid !== null && (row.related_intent_ids ?? []).includes(intentUuid);
+  const listed = rows
+    .filter((row) => !isTombstoned(row) && (row.related_intent_ids === undefined || mine(row)))
+    .sort((a, b) => Number(mine(b)) - Number(mine(a)));
+  const knowledge = toPosix(relative(projectDir, knowledgeDir(projectDir, space)));
+  const entries: string[] = [];
+  let more = 0;
+  for (const row of listed) {
+    const content = verifiedContentBytes(projectDir, space, row);
+    if (content === null || row.content === undefined) continue;
+    if (entries.length >= CARD_DOCUMENTS_MAX) {
+      more++;
+      continue;
+    }
+    const chars = Array.from(content.toString("utf-8"));
+    const summary = verifiedSummaryBytes(projectDir, space, row)?.toString("utf-8");
+    const shown = summary ?? chars.slice(0, CARD_OPENING_CHARS).join("");
+    const lead = summary !== undefined
+      ? "Its summary:"
+      : chars.length > CARD_OPENING_CHARS ? `Its first ${CARD_OPENING_CHARS} characters:` : "Its text:";
+    entries.push([
+      `## ${JSON.stringify(row.source.path.replace(/^documents\//, ""))} (${mine(row) ? "this work's document" : "a document for the whole space"})`,
+      "",
+      `Full text: ${knowledge}/${row.content} (${chars.length} characters` +
+        `${row.extraction.truncated === true ? ", cut where the knowledge base stopped reading" : ""}).`,
+      lead,
+      "",
+      fenced(shown),
+    ].join("\n"));
+  }
+  if (entries.length === 0) return null;
+  return [
+    "# The team's documents",
+    "",
+    UNTRUSTED_PATH_NOTICE,
+    "",
+    UNTRUSTED_CONTENT_NOTICE,
+    "",
+    "These are the documents in this space's knowledge base that have text to read. Check each question you plan to " +
+      "ask against them before you ask it, and open a document's full text when a question bears on it.",
+    "",
+    ...entries.flatMap((entry) => [entry, ""]),
+    ...(more > 0 ? [`${more} more ${more === 1 ? "document is" : "documents are"} in the knowledge base.`, ""] : []),
+  ].join("\n");
+}
+
+// --- Documents the knowledge base cannot read yet ----------------------------
+//
+// A file in documents/ that was never added, or was added with no text, is not
+// on the stages' documents card: only `list` and `show` named it, and work went
+// on to approvals without what it holds. The engine's
+// next step names these files once per work and doctor names them whenever it
+// is asked, both from `unreadDocuments`. A line, never a stop: the person
+// decides whether to carry on.
+
+export type UnreadReason =
+  | "new"
+  | "changed"
+  | "no-reader"
+  | "office"
+  | "pdf"
+  | "no-extractor"
+  | "failed"
+  | "no-text";
+
+export interface UnreadDocument {
+  /** The row's own key: the path under the space's knowledge/ folder. */
+  path: string;
+  reason: UnreadReason;
+}
+
+function unreadReason(row: DocumentRow): UnreadReason | null {
+  switch (effectiveExtractionState(row)) {
+    case "extracted":
+      return null;
+    case "invalidated":
+      return "changed";
+    case "unsupported_type":
+      // A Word or Excel file added before AI-DLC read them is read on the next sync.
+      return builtinReadsRow(row) ? "office" : "no-reader";
+    case "extractor_unavailable":
+      // A PDF added when the computer had no PDF reader: AI-DLC reads it itself on the next sync (the rule
+      // shouldRetryExtraction uses). A team's own extractor that is missing stays a program to install.
+      return extractorArgvFor(detectMimeFromRow(row)) === DEFAULT_PDF_ARGV ? "pdf" : "no-extractor";
+    case "extraction_failed":
+      return "failed";
+    case "no_extractable_text":
+      return "no-text";
+  }
+}
+
+// The line asks for a text copy beside the original, so a readable file in
+// the same folder named after it ("mapping.md", "mapping.csv",
+// "mapping-Codes.csv" beside "mapping.xlsx") stands for it.
+function readThroughCopy(original: string, readable: readonly string[]): boolean {
+  const cut = original.lastIndexOf("/") + 1;
+  const name = original.slice(cut);
+  const dot = name.lastIndexOf(".");
+  const stem = original.slice(0, cut) + (dot > 0 ? name.slice(0, dot) : name);
+  return readable.some((path) =>
+    path !== original && path.startsWith(stem) && /^[.\-_ ][^/]*$/.test(path.slice(stem.length))
+  );
+}
+
+/**
+ * The files under documents/ the stages cannot read yet (not in the index, or
+ * in it with no text), each with why. A redirected knowledge root is refused as
+ * every reader refuses it; the engine and doctor then say nothing.
+ */
+export function unreadDocuments(projectDir: string, space: string): UnreadDocument[] {
+  assertKnowledgeRootTrusted(projectDir, space);
+  const folder = documentsDir(projectDir, space);
+  if (!existsSync(folder)) return [];
+  const rows = new Map<string, DocumentRow>();
+  for (const row of readIndex(projectDir, space).documents) {
+    if (row.source.kind === "managed" && !isTombstoned(row)) rows.set(row.source.path, row);
+  }
+  const found = walkDocuments(folder).map((abs) => {
+    const path = portableSourcePath(projectDir, space, abs);
+    const row = rows.get(path);
+    return { path, reason: row === undefined ? "new" as const : unreadReason(row) };
+  });
+  const readable = found.filter((file) => file.reason === null).map((file) => file.path);
+  return found.filter((file): file is UnreadDocument =>
+    file.reason !== null &&
+    (file.reason === "new" || file.reason === "changed" || !readThroughCopy(file.path, readable))
+  );
+}
+
+const UNREAD_ORDER: readonly UnreadReason[] = [
+  "new", "changed", "no-reader", "office", "pdf", "no-extractor", "failed", "no-text",
+];
+// One sentence per kind, the files its subject, so the line reads the same
+// when it is passed on. `them` is "it" for one file, "each" for several.
+const UNREAD_SENTENCES: Readonly<Record<UnreadReason, (names: string, one: boolean) => string>> = {
+  new: (names, one) => `${names} ${one ? "is" : "are"} not in the knowledge base yet.`,
+  changed: (names, one) => `${names} changed since ${one ? "it was" : "they were"} added.`,
+  "no-reader": (names, one) =>
+    `The knowledge base has no reader for ${names}: save ${one ? "it" : "each"} as .md, .txt or .csv beside ${one ? "it" : "the original"}.`,
+  office: (names, one) => `${names} ${one ? "was" : "were"} added before AI-DLC could read Word and Excel files.`,
+  pdf: (names, one) => `${names} ${one ? "was" : "were"} added before AI-DLC could read a PDF without pdftotext.`,
+  "no-extractor": (names, one) =>
+    `The program set up to read ${names} is not installed on this computer: install it, or save ${one ? "the file" : "each"} as .md beside ${one ? "it" : "the original"}.`,
+  failed: (names, one) => `${names} could not be read: save ${one ? "it" : "each"} again, or as .md beside ${one ? "it" : "the original"}.`,
+  "no-text": (names, one) =>
+    `${names} ${one ? "has" : "have"} no text to read, as with a scanned page: save a text version as .md beside ${one ? "it" : "each"}.`,
+};
+const UNREAD_NAMED_MAX = 10;
+
+/** What to do for each kind, then the files (quoted: the names are the person's), in a fixed order. */
+function unreadGroups(files: readonly UnreadDocument[]): string {
+  return UNREAD_ORDER.flatMap((reason) => {
+    const paths = files.filter((file) => file.reason === reason).map((file) => file.path.replace(/^documents\//, ""));
+    if (paths.length === 0) return [];
+    const named = paths.slice(0, UNREAD_NAMED_MAX).map((path) => JSON.stringify(path));
+    const more = paths.length - named.length;
+    const list = more > 0
+      ? `${named.join(", ")} and ${more} more`
+      : named.length > 1 ? `${named.slice(0, -1).join(", ")} and ${named[named.length - 1]}` : named[0];
+    return [UNREAD_SENTENCES[reason](list, paths.length === 1)];
+  }).join(" ");
+}
+
+function documentsFolder(projectDir: string, space: string): string {
+  return `${toPosix(relative(projectDir, documentsDir(projectDir, space)))}/`;
+}
+
+/** Doctor's row: every file the knowledge base cannot read yet, in the step's words. */
+export function unreadDocumentsLabel(projectDir: string, space: string, files: readonly UnreadDocument[]): string {
+  return `Documents AI-DLC's knowledge base cannot read yet in ${documentsFolder(projectDir, space)}: ${unreadGroups(files)}`;
+}
+
+function unreadDocumentsLine(projectDir: string, space: string, files: readonly UnreadDocument[]): string {
+  const count = files.length === 1 ? "1 file" : `${files.length} files`;
+  return `AI-DLC's knowledge base cannot read ${count} in ${documentsFolder(projectDir, space)} yet, so this work ` +
+    `goes on without ${files.length === 1 ? "it" : "them"}. ${unreadGroups(files)} ` +
+    `Run \`${entrySkillInvocation()} knowledge sync\` ${files.every((file) => file.reason === "new" || file.reason === "changed" || file.reason === "office" || file.reason === "pdf")
+      ? `to add ${files.length === 1 ? "it" : "them"}`
+      : "after that"}.`;
+}
+
+// Each file is named once per work: the said mark keeps every entry the work's
+// steps named, in the work's own engine folder (git-ignored, so each clone
+// hears it once). A torn or missing mark only has the line said once more.
+const UNREAD_SAID_FILE = "unread-documents-said.json";
+const UNREAD_SAID_MAX_BYTES = 1024 * 1024;
+
+export interface UnreadDocumentsNotice {
+  line: string;
+  said: string[];
+  intent: string;
+  space: string;
+}
+
+function readUnreadSaid(projectDir: string, intent: string, space: string): Set<string> {
+  try {
+    const raw = readRegularFileNoFollowOrThrow(
+      join(engineDir(projectDir, intent, space), UNREAD_SAID_FILE), "said documents", UNREAD_SAID_MAX_BYTES,
+    ).toString("utf-8");
+    const parsed: unknown = JSON.parse(raw);
+    return new Set(Array.isArray(parsed) ? parsed.filter((entry): entry is string => typeof entry === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+/**
+ * The line the engine's next step carries: the files the active work has not
+ * named yet. Null before the work exists (the work's first step says it), and
+ * when every file is readable or already named.
+ */
+export function unreadDocumentsNotice(
+  projectDir: string,
+  selected?: { intent: string | null; space: string },
+): UnreadDocumentsNotice | null {
+  const work = selected ?? resolveWorkflowSelection(projectDir);
+  if (work.intent === null) return null;
+  const files = unreadDocuments(projectDir, work.space);
+  const said = readUnreadSaid(projectDir, work.intent, work.space);
+  const entry = (file: UnreadDocument): string => `${file.reason}\t${file.path}`;
+  const fresh = files.filter((file) => !said.has(entry(file)));
+  if (fresh.length === 0) return null;
+  return {
+    line: unreadDocumentsLine(projectDir, work.space, fresh),
+    said: [...new Set([...said, ...files.map(entry)])],
+    intent: work.intent,
+    space: work.space,
+  };
+}
+
+/** Keep that the work's step named them. */
+export function markUnreadDocumentsSaid(projectDir: string, notice: UnreadDocumentsNotice): void {
+  try {
+    writeEngineFileNoFollow(projectDir, UNREAD_SAID_FILE, `${JSON.stringify(notice.said)}\n`, notice.intent, notice.space);
+  } catch {
+    // Advisory: without the mark the line is said once more.
+  }
 }
 
 // --- sync --------------------------------------------------------------------
@@ -3012,6 +3633,9 @@ export function syncDocuments(
           break;
         case "moved":
           row.source = { ...row.source, path: plan.nextPath! } as DocumentRow["source"];
+          // A copy moved under documents/ is no longer the copy its original
+          // updates: naming the original again copies it in afresh.
+          delete row.copied_from;
           changes.push({ id: row.id, path: plan.nextPath!, change: "moved" });
           audits.push(() => emitDocumentUpdated(projectDir, space, row, "moved"));
           break;
@@ -3180,10 +3804,16 @@ export function syncDocuments(
 export function shouldRetryExtraction(row: DocumentRow): boolean {
   const rec = row.extraction;
   if (rec.state === "invalidated") return true;
+  if (rec.state === "unsupported_type" && builtinReadsRow(row)) return true;
   if (rec.state === "extractor_unavailable" || rec.state === "unsupported_type") {
     const argv = extractorArgvFor(detectMimeFromRow(row));
     if (argv === null) return false; // still nothing configured for this type
-    return probeExtractor(argv[0]).available;
+    // The default PDF argv always has a reader now: pdftotext, or AI-DLC's own.
+    return argv === DEFAULT_PDF_ARGV || probeExtractor(argv[0]).available;
+  }
+  // A PDF AI-DLC read itself is read again by pdftotext once the person installs it.
+  if (rec.state !== "extraction_failed" && rec.extractor?.name === BUILTIN_PDF.name) {
+    return extractorArgvFor(detectMimeFromRow(row)) === DEFAULT_PDF_ARGV && probeExtractor(DEFAULT_PDF_ARGV[0]).available;
   }
   if (rec.state === "extraction_failed" && rec.extractor !== undefined) {
     const argv = extractorArgvFor(detectMimeFromRow(row));
@@ -3602,7 +4232,7 @@ export function resolveIntentFlag(
 }
 
 /**
- * The invariant this closes: `listIntents()` (aidlc-lib.ts) reports an ORPHAN
+ * The invariant this closes: `listIntents()` (aidlc-record-core.ts) reports an ORPHAN
  * record dir -- one with an `aidlc-state.md` but no row in `intents.json` -- as
  * `uuid: ""`, `status: "unknown"`, never as `undefined` or a thrown error. Every
  * resolution path above matches by `dirName`/`slug` and returns `match.uuid`
@@ -4108,6 +4738,7 @@ export function rebindDocument(
     }
     const from = row.source.path;
     row.source = { kind: "managed", path: nextPath };
+    delete row.copied_from;
     row.sha256 = digest;
     row.bytes = buf.length;
     // The identity SURVIVES: same id, same intents. That is the point -- the
@@ -4179,7 +4810,7 @@ function parseFlags(
       allowInactive = true;
     } else if (
       a === "--to" || a === "--text-file" || a === "--source-revision" || a === "--tags" ||
-      a === "--copied-from" || a === "--copied-ignored" || a === "--copied-left-out"
+      a === "--copied"
     ) {
       if (!allowedValueFlags.has(a)) throw new Error(`Unknown flag: ${a}`);
       if (values[a] !== undefined) throw new Error(`${a} may be specified only once`);
@@ -4198,6 +4829,52 @@ function parseFlags(
   return { space, json, intent, allowInactive, positional, values };
 }
 
+/** What the dispatcher did for this onboard: the copies it made, and the
+ *  paths it left out, each by its place among the paths named. Only the
+ *  dispatcher writes the value; one that does not parse says nothing. */
+function dispatcherCopies(raw: string | undefined): {
+  copies: OnboardCopy[];
+  notAdded: Array<OnboardNotAdded & { at: number }>;
+} {
+  const none = { copies: [], notAdded: [] };
+  if (raw === undefined) return none;
+  try {
+    const parsed = JSON.parse(raw) as { copies?: unknown; notAdded?: unknown };
+    const copies = parsed.copies ?? [];
+    const notAdded = parsed.notAdded ?? [];
+    if (!Array.isArray(copies) || !Array.isArray(notAdded)) return none;
+    const count = (value: unknown): boolean => Number.isInteger(value) && (value as number) >= 0;
+    const isCopy = (entry: Record<string, unknown>): boolean =>
+      typeof entry.from === "string" && typeof entry.to === "string" &&
+      (entry.ignored === "yes" || entry.ignored === "no" || entry.ignored === "unknown") && count(entry.leftOut) &&
+      (entry.original === undefined || validDocumentPath(entry.original)) &&
+      (entry.updated === undefined || typeof entry.updated === "boolean") &&
+      (entry.besideChanged === undefined || typeof entry.besideChanged === "string");
+    const isLeftOut = (entry: Record<string, unknown>): boolean =>
+      count(entry.at) && typeof entry.path === "string" && typeof entry.reason === "string";
+    if (!copies.every((entry) => typeof entry === "object" && entry !== null && isCopy(entry))) return none;
+    if (!notAdded.every((entry) => typeof entry === "object" && entry !== null && isLeftOut(entry))) return none;
+    return { copies, notAdded } as ReturnType<typeof dispatcherCopies>;
+  } catch {
+    return none;
+  }
+}
+
+/** Every path left out, by the dispatcher or the verb, in the order named. */
+function notAddedInOrder(
+  kept: ReadonlyArray<{ token: string; at: number }>,
+  byVerb: readonly OnboardNotAdded[],
+  byDispatcher: ReadonlyArray<OnboardNotAdded & { at: number }>,
+): OnboardNotAdded[] {
+  const placed = [...byDispatcher];
+  let next = 0;
+  for (const { token, at } of kept) {
+    if (next < byVerb.length && byVerb[next].path === token) placed.push({ ...byVerb[next++], at });
+  }
+  for (; next < byVerb.length; next++) placed.push({ ...byVerb[next], at: Number.MAX_SAFE_INTEGER });
+  return placed.sort((a, b) => a.at - b.at).map(({ path, reason }) => ({ path, reason }));
+}
+
 let projectDir: string | undefined;
 
 export function main(argv: string[]): void {
@@ -4211,35 +4888,49 @@ export function main(argv: string[]): void {
   try {
     switch (subcommand) {
       case "onboard": {
-        // `--copied-from`, `--copied-ignored` and `--copied-left-out` are set
-        // by the dispatcher when it copied a document the person named from
-        // elsewhere in the project (withNamedDocumentCopied in aidlc.ts). They
-        // say what happened; the indexing below is the same either way.
+        // `--copied` is set by the dispatcher when it copied in a document the
+        // person named from elsewhere in the project, or left one of several
+        // out (withNamedDocumentCopied in aidlc.ts). It says what happened; the
+        // indexing below is the same either way.
         const { space: spaceFlag, intent, allowInactive, positional, values } =
-          parseFlags(args.slice(1), ["--copied-from", "--copied-ignored", "--copied-left-out"]);
+          parseFlags(args.slice(1), ["--copied"]);
         const pd = resolveProjectDir(projectDir);
         const space = resolveSpaceFlag(spaceFlag, pd);
         assertKnowledgeRootTrusted(pd, space);
         // Resolved BEFORE the transaction: it reads intents.json and can fail, and
         // holding a lock across a failure path serialises the workspace for nothing.
         const resolved = resolveIntentFlag(pd, space, intent, allowInactive);
-        const result = onboard(
-          pd, space, positional[0], new Date().toISOString(), resolved?.uuid,
-        );
-        if (result.refused) {
-          error(`Refused ${result.refused.path}: ${result.refused.reason}`);
+        const handed = dispatcherCopies(values["--copied"]);
+        const skipped = new Set(handed.notAdded.map((entry) => entry.at));
+        const kept = positional.flatMap((token, at) => (skipped.has(at) ? [] : [{ token, at }]));
+        const several = positional.length > 1;
+        // Each file the dispatcher copied, by where its copy is, to the original it came from.
+        const copiedFrom = new Map<string, string>();
+        for (const copy of handed.copies) {
+          if (copy.original === undefined || !existsSync(copy.to)) continue;
+          copiedFrom.set(realpathSync(copy.to), copy.original);
         }
-        const note = onboardCopyNote(
-          pd,
-          values["--copied-from"],
-          positional[0],
-          values["--copied-ignored"],
-          result.indexed.length,
-          Number(values["--copied-left-out"] ?? 0),
+        const result = onboard(
+          pd, space, several ? kept.map((entry) => entry.token) : positional[0], new Date().toISOString(),
+          resolved?.uuid, copiedFrom,
         );
+        const notAdded = notAddedInOrder(kept, result.not_added ?? [], handed.notAdded);
+        if (result.refused) {
+          const reason = result.refused.reason;
+          error(
+            `Refused ${result.refused.path}: ${reason}` +
+              (several ? `${/[.!?]$/.test(reason) ? "" : "."} None of the ${positional.length} paths you named was added.` : ""),
+          );
+        }
+        if (several && result.indexed.length === 0 && notAdded.length > 0) {
+          error(`Nothing was added: ${describeNotAdded(notAdded)}.`);
+        }
+        const note = onboardNote(pd, space, handed.copies, result.indexed, notAdded);
+        const { not_added: _verbNotAdded, ...outcome } = result;
         emitJson({
           ...(note === null ? {} : { onboard_note: note }),
-          ...(result as unknown as Record<string, unknown>),
+          ...(outcome as unknown as Record<string, unknown>),
+          ...(notAdded.length === 0 ? {} : { not_added: notAdded }),
         });
         break;
       }
@@ -4376,14 +5067,18 @@ export function main(argv: string[]): void {
         }
         break;
       }
+      case "read-pdf":
+        // The built-in PDF reader as the child extractDocument runs in a compiled binary; not a command for people.
+        process.exitCode = readPdfMain(args.slice(1));
+        break;
       case "help":
       case undefined:
         process.stdout.write(
           "Usage: aidlc-knowledge <onboard|sync|list|show|associate|dissociate|rebind|summarize> " +
             "[args] [--space <name>] [--json]\n" +
             "\n" +
-            "  onboard [path]  Index one document, or every new file under\n" +
-            "                  knowledge/documents/ when no path is given.\n" +
+            "  onboard [path ...]  Index one or more documents, or every new file\n" +
+            "                  under knowledge/documents/ when no path is given.\n" +
             "                  Add --intent [slug] to scope it, and\n" +
             "                  --allow-inactive to target a finished intent.\n" +
             "  list            The catalog: every row, with its state visible.\n" +

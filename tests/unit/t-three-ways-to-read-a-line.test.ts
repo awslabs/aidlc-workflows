@@ -201,8 +201,9 @@ describe("a plan word at the start of their sentence", () => {
     const { d, out } = next(proj, ["feature", "flags"]);
     expect(d.kind, out).toBe("print");
     expect(d.narration, out).toBeUndefined();
-    expect(String(d.message), out).toContain("--scope feature -- flags");
-    expect(String(d.message), out).toContain("-- 'feature flags'");
+    expect(String(d.message), out).toContain("--scope feature --request-file aidlc/.aidlc-request-text/line-after-plan");
+    expect(String(d.message), out).toContain('(the task: "flags")');
+    expect(String(d.message), out).toContain('which keeps every word of theirs ("feature flags")');
     // The step names the guide's own form, so a plan's name and then the task
     // carries on with that plan and only a line that reads both ways is asked.
     expect(String(d.message), out).toContain("/aidlc feature <the task>");
@@ -322,41 +323,48 @@ describe("a flag the engine takes with a value it does not", () => {
 
 // ---------------------------------------------------------------------------
 // A reading step names commands for someone to run, so nothing of the
-// person's own text is ever bare shell syntax in one
+// person's own text is ever in one: their words travel in a file it names
 // ---------------------------------------------------------------------------
 
-describe("their own words in a command the step names are one quoted argument", () => {
+// The file a step's command names for their words, read as the command reads it.
+function requestFileText(proj: string, message: string, name: string): string {
+  // `<name>-<chat id>.txt`: a file per chat.
+  const file = new RegExp(`--request-file (aidlc/\\.aidlc-request-text/${name}-[0-9a-f]{8}-[^ \`]+\\.txt)`).exec(message)?.[1];
+  expect(file, message).toBeDefined();
+  return readFileSync(join(proj, ...file!.split("/")), "utf-8");
+}
+
+describe("their own words never reach a command the step names: a file holds them", () => {
   const shellish = [
     "classic car rental; rm -rf /tmp/aidlc-should-not-run",
     "classic rental `whoami` site",
     "classic rental $(id) site",
     "bugfix fix the \"login\" crash && echo no",
   ];
-  test.each(shellish)("%j is quoted in every command the step names", (line) => {
+  test.each(shellish)("%j is in the file every command the step names reads, never on its line", (line) => {
     const proj = emptyProject();
     const argv = splitKiroCommandArgs(line);
     const said = argv.join(" ");
     const { d, out } = next(proj, argv);
     expect(d.kind, out).toBe("print");
     const message = String(d.message);
-    // Their text reaches the commands the step names as ONE single-quoted
-    // argument, so no separator, substitution or redirection of theirs is
-    // syntax when the agent runs it.
-    expect(message, out).toContain(`-- '${said}'`);
-    for (const after of message.split(" -- ").slice(1)) {
-      expect(after.startsWith("'") || after.startsWith("`"), message).toBe(true);
-    }
-    expect(message).toContain(said);
+    // Their text reaches the commands the step names only through a file, so
+    // no separator, substitution or redirection of theirs is syntax when the
+    // agent runs it, in any shell; the step shows it once as a quoted string.
+    expect(message, out).not.toContain(" -- ");
+    expect(requestFileText(proj, message, "line")).toBe(said);
+    expect(message).toContain(`which keeps every word of theirs (${JSON.stringify(said)})`);
     expect(activeIntent(proj)).toBe("");
     cleanupTestProject(created.pop());
   });
 
-  test("a reply while the plan question is open quotes their words too", () => {
+  test("a reply while the plan question is open goes in a file too", () => {
     const proj = emptyProject();
     expect(next(proj, ["build a small notes app for my team"]).d.ask_type).toBe("compose-offer");
     const { d, out } = next(proj, splitKiroCommandArgs("yes; rm -rf /tmp/aidlc-should-not-run"));
     expect(d.kind, out).toBe("print");
-    expect(String(d.message)).toContain("-- 'yes; rm -rf /tmp/aidlc-should-not-run'");
+    expect(String(d.message)).not.toContain(" -- ");
+    expect(requestFileText(proj, String(d.message), "other")).toBe("yes; rm -rf /tmp/aidlc-should-not-run");
   });
 });
 

@@ -31,6 +31,7 @@ import {
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
+import { readConductorSurface } from "../harness/conductor-skill.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -276,7 +277,7 @@ describe("t2655 the person's words reach the step without a shell", () => {
       join(REPO_ROOT, "core", "aidlc-common", "protocols", "stage-protocol-learnings.md"),
       ...["claude", "codex", "copilot", "cursor", "kiro", "kiro-ide", "opencode"]
         .map((h) => join(REPO_ROOT, "harness", h, "skills", "aidlc", "SKILL.md")),
-    ].map((path) => [path, readFileSync(path, "utf-8")] as const);
+    ].map((path) => [path, readConductorSurface(path)] as const);
     for (const [path, text] of texts) {
       expect(text, path).not.toContain('--correction "');
       expect(text, path).not.toContain('--decision "<the question');

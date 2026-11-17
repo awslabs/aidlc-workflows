@@ -1,7 +1,9 @@
 #!/usr/bin/env bun
 // Offline compose-tier test for an authored AIDLC plugin.
 
+import { discoverInstalledPluginNames } from "./aidlc-config-diagnostics.ts";
 import { LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
+import { discoverProjectHarnesses, harnessIdFromTyped, isCompiledExecutable, typedHarnessName } from "./aidlc-runtime-paths.ts";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import {
@@ -42,6 +44,7 @@ import {
   validatePluginRoot,
   walkPluginFiles,
 } from "./aidlc-plugin-validate.ts";
+import { mergePluginRulesFromRoot } from "./aidlc-plugin.ts";
 
 const USAGE =
   "Usage: bun <tools-dir>/aidlc-plugin-test.ts <plugin-root> --install <project-root> [--harness <name>] [--with <base-root>] [--json]";
@@ -129,6 +132,15 @@ const CANDIDATE_PATH_ENV_KEYS = [
 function candidateProcessEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };
   for (const key of CANDIDATE_PATH_ENV_KEYS) delete env[key];
+  // In the compiled binary (`aidlc plugin test`) process.execPath is aidlc,
+  // which reads a script path as an unknown command. BUN_BE_BUN makes it run
+  // the hook and the candidate's tools as Bun would. Without
+  // AIDLC_COMPILED_EXECUTABLE compose spawns those tools by path too; its
+  // native spelling (`aidlc engine ...`) would reach Bun as a file name.
+  if (isCompiledExecutable()) {
+    env.BUN_BE_BUN = "1";
+    delete env.AIDLC_COMPILED_EXECUTABLE;
+  }
   return env;
 }
 
@@ -350,10 +362,11 @@ function detectHarness(
   requested?: string,
 ): { name: string; target: PluginTarget } {
   if (requested) {
-    const target = targets[requested];
+    const id = harnessIdFromTyped(requested);
+    const target = Object.hasOwn(targets, id) ? targets[id] : undefined;
     if (!target) {
       throw new PluginTestUsageError(
-        `unknown harness "${requested}" (available: ${Object.keys(targets).sort().join(", ")})`,
+        `unknown harness "${requested}" (available: ${Object.keys(targets).map(typedHarnessName).sort().join(", ")})`,
       );
     }
     if (!existsSync(join(installRoot, target.harnessLeaf))) {
@@ -361,7 +374,7 @@ function detectHarness(
         `--harness ${requested} expects ${target.harnessLeaf}/ under ${installRoot}`,
       );
     }
-    return { name: requested, target };
+    return { name: id, target };
   }
   const candidates = Object.entries(targets).filter(([, target]) =>
     existsSync(join(installRoot, target.harnessLeaf)),
@@ -371,12 +384,20 @@ function detectHarness(
       `no known AIDLC harness tree found under ${installRoot}`,
     );
   }
-  if (candidates.length > 1) {
-    throw new PluginTestUsageError(
-      `install is ambiguous (${candidates.map(([name, target]) => `${name}:${target.harnessLeaf}`).join(", ")}); pass --harness <name>`,
-    );
-  }
-  return { name: candidates[0][0], target: candidates[0][1] };
+  if (candidates.length === 1) return { name: candidates[0][0], target: candidates[0][1] };
+  // Kiro CLI and Kiro IDE share .kiro, Copilot and opencode share .aidlc: the
+  // install's own record says which one this project has, as doctor reads it.
+  // An install from before installs were stamped records no frameworkVersion
+  // and is named from its folder alone, which cannot tell the two apart, so a
+  // project holding one is asked to name the harness.
+  const discovered = discoverProjectHarnesses(installRoot);
+  const recorded = discovered.every((harness) => harness.frameworkVersion !== undefined)
+    ? candidates.filter(([name]) => discovered.some((harness) => harness.distribution === name))
+    : [];
+  if (recorded.length === 1) return { name: recorded[0][0], target: recorded[0][1] };
+  throw new PluginTestUsageError(
+    `install is ambiguous (${(recorded.length > 1 ? recorded : candidates).map(([name, target]) => `${typedHarnessName(name)}:${target.harnessLeaf}`).join(", ")}); pass --harness <name>`,
+  );
 }
 
 function addTestError(
@@ -551,7 +572,7 @@ export function testPluginComposition(
   if (!validation.valid) {
     return {
       ...validation,
-      harness: options.harness ?? "",
+      harness: options.harness ? harnessIdFromTyped(options.harness) : "",
       composedFiles: [],
       changedFiles: [],
       drops: [],
@@ -592,6 +613,17 @@ export function testPluginComposition(
         "Pass an install root containing the selected harness tree.",
       );
     } else {
+      // The candidate is a copy, so the select line a compose drop names works
+      // in the project only for a plugin installed there; compose says so.
+      const installedThere = new Set(discoverInstalledPluginNames(installRoot, target.harnessLeaf));
+      // The plugin's rules go in as sync puts them, right after each compose.
+      const composeEnv = (name: string): NodeJS.ProcessEnv => ({
+        AIDLC_PLUGIN_RULES_BY_SYNC: "1",
+        ...(installedThere.has(name) ? {} : { AIDLC_PLUGIN_TEST_NOT_INSTALLED: "1" }),
+      });
+      const mergeRules = (root: string): void => {
+        mergePluginRulesFromRoot(candidateRoot, target.harnessLeaf, root);
+      };
       const templateHooksDir =
         options.templateHooksDir ?? bundledPluginHookTemplatesDir();
       const { pluginRoot: builtRoot } = buildPluginProjection({
@@ -613,7 +645,9 @@ export function testPluginComposition(
           harnessLeaf: target.harnessLeaf,
           projectDir: candidateRoot,
           pluginBuilt: baseBuilt,
+          env: composeEnv(pluginName(baseRoot)),
         });
+        if (base.status === 0) mergeRules(baseBuilt);
         if (base.status !== 0) {
           addTestError(
             validation,
@@ -639,7 +673,9 @@ export function testPluginComposition(
         harnessLeaf: target.harnessLeaf,
         projectDir: candidateRoot,
         pluginBuilt: builtRoot,
+        env: composeEnv(logicalPluginName),
       });
+      if (first.status === 0) mergeRules(builtRoot);
       if (first.status !== 0) {
         addTestError(
           validation,
@@ -707,7 +743,9 @@ export function testPluginComposition(
         harnessLeaf: target.harnessLeaf,
         projectDir: candidateRoot,
         pluginBuilt: builtRoot,
+        env: composeEnv(logicalPluginName),
       });
+      if (second.status === 0) mergeRules(builtRoot);
       const secondDrops = readPluginDropEntries(
         candidateRoot,
         logicalPluginName,
@@ -806,14 +844,14 @@ function formatPluginTest(
         "Plugin validation: INVALID",
         "Plugin test: FAILED",
       ) +
-      `Install: ${installRoot}\nHarness: ${result.harness}\n`
+      `Install: ${installRoot}\nHarness: ${typedHarnessName(result.harness)}\n`
     );
   }
   return [
     "Plugin test: CLEAN",
     `Plugin root: ${pluginRoot}`,
     `Install: ${installRoot}`,
-    `Harness: ${result.harness}`,
+    `Harness: ${typedHarnessName(result.harness)}`,
     `Composed files (${result.composedFiles.length}): ${result.composedFiles.join(", ") || "none"}`,
     `Changed files (${result.changedFiles.length}): ${result.changedFiles.join(", ") || "none"}`,
     `Drops: ${result.drops.length}`,
@@ -873,7 +911,10 @@ function parseArgs(argv: string[]): ParsedArgs {
   }
   if (!pluginRoot || !installRoot) {
     throw new PluginTestUsageError(
-      "<plugin-root> and --install <project-root> are required",
+      [
+        ...(pluginRoot ? [] : ["<plugin-root>"]),
+        ...(installRoot ? [] : ["--install <project-root>"]),
+      ].join(" and ") + (pluginRoot || installRoot ? " is required" : " are required"),
     );
   }
   return {
@@ -885,7 +926,9 @@ function parseArgs(argv: string[]): ParsedArgs {
   };
 }
 
-export function main(argv: string[]): number {
+// The `aidlc plugin test` verb passes its own usage line, so a usage error
+// names the command the person ran.
+export function main(argv: string[], usage = USAGE): number {
   if (argv.includes("--help") || argv.includes("-h")) {
     process.stdout.write(
       `${USAGE}\n\n--dist <version> is reserved until RFC #722 milestone 2.\n`,
@@ -897,7 +940,7 @@ export function main(argv: string[]): number {
     args = parseArgs(argv);
   } catch (error) {
     process.stderr.write(
-      `${USAGE}\n${error instanceof Error ? error.message : String(error)}\n`,
+      `${usage}\n${error instanceof Error ? error.message : String(error)}\n`,
     );
     return 2;
   }
@@ -921,7 +964,7 @@ export function main(argv: string[]): number {
     return result.valid ? 0 : 1;
   } catch (error) {
     if (error instanceof PluginTestUsageError) {
-      process.stderr.write(`${USAGE}\n${error.message}\n`);
+      process.stderr.write(`${usage}\n${error.message}\n`);
       return 2;
     }
     process.stderr.write(

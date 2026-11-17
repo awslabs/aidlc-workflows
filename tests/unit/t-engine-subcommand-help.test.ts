@@ -65,7 +65,7 @@ describe("log", () => {
     expect(decision).toContain("the learnings one included, takes none");
     expect(decision).not.toContain("guard-recovery");
     const answer = run(p, "aidlc-log.ts", ["answer", "--help"]).stdout;
-    expect(answer).toContain("Required: --stage, and --details or --details-file.");
+    expect(answer).toContain("Required: --stage, and --details, --details-file or --request-file.");
     expect(answer).toContain("guard-recovery");
     expect(answer).toContain("--details-file");
   });
@@ -270,7 +270,7 @@ describe("engine <noun> --help", () => {
   // "unknown verb '--help'" with exit 2. It names `<verb> --help` only for a
   // noun whose tool answers it, so it never prints a command that fails.
   for (const [noun, verbs, verbHelp] of [
-    ["log", ["decision", "answer", "answers", "review", "link"], true],
+    ["log", ["decision", "answer", "answers", "review", "link", "install"], true],
     ["bolt", ["start", "complete"], true],
     ["worktree", ["create", "restore"], true],
     ["sensor", ["list", "describe", "fire"], true],

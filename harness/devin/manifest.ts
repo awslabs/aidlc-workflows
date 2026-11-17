@@ -75,6 +75,10 @@ const manifest: HarnessManifest = {
         "Devin CLI cannot read this project's .devin/hooks.v1.json because it is not valid JSON, so it runs " +
         "none of AI-DLC's hooks here. Correct the file, then fully restart Devin CLI in this folder, " +
         "and type <entry>.",
+      unwired:
+        ".devin/hooks.v1.json in this project does not register AI-DLC's hooks, so Devin CLI runs none of them " +
+        "here. In a terminal in this folder, <repair>, then fully restart Devin CLI in this folder, " +
+        "and type <entry>.",
     },
   },
   harnessDir: ".devin",
@@ -181,6 +185,8 @@ const manifest: HarnessManifest = {
           "sha256:6de1298dfa4c2b6916f66d372b844faf23481c8f258eedd595c1423dab8e106d",
           // The variant shipped with the Devin harness (current projection).
           "sha256:5eea099e95b5cb984486a7270e1f54deb8a0cc76ca0f2bd08ece6169469b8204",
+          "sha256:6d3bf5865f1836575715ea93d0042b9d08bcab918cc9a17a142848fe44e88bc7",
+          "sha256:04d7ca868197529d9839b62c902870157743c93a6c7fd134bcebcccc8a1d263f",
         ],
       },
     },

@@ -33,7 +33,7 @@ import {
   resolveProjectDirFromHook,
   stateFilePath,
 } from "../tools/aidlc-lib.ts";
-import { setStatus } from "../tools/aidlc-utility.ts";
+import { setStatus, statusSyncLeavesCursor } from "../tools/aidlc-utility.ts";
 
 // Whether Current Stage `stage` is where a Unit reopen moved the work back to,
 // with no main-workflow STAGE_STARTED definitely after it. `aidlc-jump.ts
@@ -138,9 +138,23 @@ if (source === "ide-audit-sync") {
   // (d) Current Stage is where a Unit reopen moved the work back to, after
   //     that start: the reopen writes no STAGE_STARTED of its own, so the last
   //     start names the stage the work left. Syncing would put Current Stage
-  //     back on it while the Units redo their step.
+  //     back on it while the Units redo their step. (e) does not cover it: the
+  //     reopen is a shell command whose own state write retires the step that
+  //     named it, and this runs right after it, before `next` issues the
+  //     reopened step.
   if (unitReopenMovedTo(readAuditShardEvents(projectDir), current)) {
     hookDebug(projectDir, "sync-workflow-state", "skip: a Unit reopen after the last start", {
+      auditSlug,
+      current,
+    });
+    return noop();
+  }
+  // (e) The step the engine issued is still current, so Current Stage is where
+  //     the engine put it for that step. The rule is statusSyncLeavesCursor's;
+  //     asking it here leaves the state file untouched, so the front gate can
+  //     skip the next command's call.
+  if (statusSyncLeavesCursor(stateContent, readActiveDirectiveMarker(projectDir, stateContent), auditSlug)) {
+    hookDebug(projectDir, "sync-workflow-state", "skip: the issued step holds the cursor", {
       auditSlug,
       current,
     });
@@ -156,7 +170,8 @@ if (source === "ide-audit-sync") {
   const slugMatch = activeForm.match(/\[([a-z][a-z0-9-]*)\]$/);
   if (!slugMatch) return 0;
   // The step in hand belongs to an isolated `--single` run: its plan step names
-  // that run, not the workflow's place.
+  // that run, not the workflow's place. It writes nothing of the workflow's even
+  // on Current Stage's own stage, where statusSyncLeavesCursor holds nothing.
   if (readActiveDirectiveMarker(projectDir, readStateFile(projectDir))?.single === true) return 0;
   slug = slugMatch[1];
 }

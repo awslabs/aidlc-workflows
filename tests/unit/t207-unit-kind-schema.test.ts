@@ -1,4 +1,4 @@
-// covers: function:parseBoltDag, function:parseStageFrontmatter, function:emitStageFrontmatter, function:validateStageFrontmatter, subcommand:aidlc-runtime:compile, subcommand:aidlc-sensor-required-sections
+// covers: function:parseBoltDag, function:parseStageFrontmatter, function:emitStageFrontmatter, function:validateStageFrontmatter, subcommand:aidlc-runtime:compile, subcommand:aidlc-sensor-required-sections, function:applicableUnitKinds, function:addPluginProducesKinds, function:removeOrphanProducesKinds
 //
 // t207 - unit-kind schema/parse/compile/sensor axis. The units-generation edge
 // block gains an optional `kind:` key per unit (UNIT_KINDS enum) and the four
@@ -7,8 +7,10 @@
 // bad value), the runtime compile carries it onto bolt_dag.units[], the
 // gate-time edge-block sensor tolerates a valid kind and rejects an invalid one,
 // and the stage-frontmatter parse/emit round-trips produces_kinds while the
-// schema validator rejects malformed maps. The engine PRUNING axis (directive
-// produces + coverage + the all-vacuous approve branch) is t208.
+// schema validator rejects malformed maps. An output a plugin adds to such a
+// stage takes the kinds the stage applies to, and its entry goes with it. The
+// engine PRUNING axis (directive produces + coverage + the all-vacuous approve
+// branch) is t208.
 //
 // Mechanism = cli for the compile + sensor cases (both are process-boundary
 // seams: compile writes runtime-graph.json to disk, the sensor writes Result
@@ -33,7 +35,11 @@ import {
   parseBoltDag,
   parseStageFrontmatter,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { validateStageFrontmatter } from "../../dist/claude/.claude/tools/aidlc-stage-schema.ts";
+import { applicableUnitKinds, validateStageFrontmatter } from "../../dist/claude/.claude/tools/aidlc-stage-schema.ts";
+import {
+  addPluginProducesKinds,
+  removeOrphanProducesKinds,
+} from "../../dist/claude/.claude/tools/aidlc-plugin-produces-kinds.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -317,5 +323,73 @@ describe("t207 unit-kind schema/parse/compile/sensor", () => {
   test("validator: absent produces_kinds still validates", () => {
     const r = validate({});
     expect(r.valid).toBe(true);
+  });
+
+  // ---- an output a plugin adds (in-process) ---------------------------------
+  // Every required output mapped, as on functional-design: the stage applies to
+  // service, ui and spec Units only.
+  const MAP_LINES = "produces_kinds:\n  alpha-doc: [service, ui]\n  beta-doc: [spec]\n";
+  const WITH_PLUGIN_OUTPUT = STAGE_WITH_MAP.replace("  - beta-doc\n", "  - beta-doc\n  - plug-doc\n");
+
+  test("applicableUnitKinds: mapped outputs give their kinds, an unmapped one gives every kind", () => {
+    const map = { "alpha-doc": ["service", "ui"], "beta-doc": ["spec"] };
+    expect([...applicableUnitKinds(["alpha-doc", "beta-doc"], map)]).toEqual(["service", "ui", "spec"]);
+    expect(applicableUnitKinds(["alpha-doc", "gamma-doc"], map).size).toBe(5);
+  });
+
+  test("addPluginProducesKinds: an added output takes the kinds the stage applies to, and the entry goes with it", () => {
+    const added = addPluginProducesKinds(WITH_PLUGIN_OUTPUT, ["plug-doc"]);
+    expect(added).toBe(WITH_PLUGIN_OUTPUT.replace(MAP_LINES, `${MAP_LINES}  plug-doc: [service, spec, ui]\n`));
+    expect(addPluginProducesKinds(added, ["plug-doc"])).toBe(added);
+    expect(removeOrphanProducesKinds(added.replace("  - plug-doc\n", ""), ["plug-doc"])).toBe(STAGE_WITH_MAP);
+    // An entry stays while the stage still declares the artifact.
+    expect(removeOrphanProducesKinds(added, ["plug-doc"])).toBe(added);
+  });
+
+  test("addPluginProducesKinds: no entry where the output would not widen the stage, or is not only the plugin's", () => {
+    const cases: Array<[string, string]> = [
+      ["a required output with no entry applies to every kind", WITH_PLUGIN_OUTPUT.replace("  beta-doc: [spec]\n", "")],
+      ["the mapped outputs cover every kind",
+        WITH_PLUGIN_OUTPUT.replace("  beta-doc: [spec]\n", "  beta-doc: [spec, packaging, library]\n")],
+      ["the stage maps the output itself", WITH_PLUGIN_OUTPUT.replace(MAP_LINES, `${MAP_LINES}  plug-doc: [ui]\n`)],
+      ["the stage also lists the output as optional",
+        WITH_PLUGIN_OUTPUT.replace("consumes: []", "optional_produces:\n  - plug-doc\nconsumes: []")],
+      ["the stage does not list the output", STAGE_WITH_MAP],
+      ["the stage is not per Unit", WITH_PLUGIN_OUTPUT.replace("for_each: unit-of-work\n", "")],
+      ["the stage has no map", WITH_PLUGIN_OUTPUT.replace(MAP_LINES, "")],
+    ];
+    for (const [name, stage] of cases) {
+      expect(addPluginProducesKinds(stage, ["plug-doc"]), name).toBe(stage);
+    }
+  });
+
+  test("addPluginProducesKinds: two plugins on one stage get the same entry, and taking one out leaves the other's", () => {
+    const withOther = (content: string) => content.replace("  - plug-doc\n", "  - plug-doc\n  - other-doc\n");
+    // Composed one after the other, the second sees the first's output and entry.
+    const both = addPluginProducesKinds(withOther(addPluginProducesKinds(WITH_PLUGIN_OUTPUT, ["plug-doc"])), ["other-doc"]);
+    expect(addPluginProducesKinds(withOther(WITH_PLUGIN_OUTPUT), ["plug-doc", "other-doc"]), "replayed together").toBe(both);
+    const onlyOther = both.replace("  - plug-doc\n", "");
+    expect(removeOrphanProducesKinds(onlyOther, ["plug-doc"]))
+      .toBe(addPluginProducesKinds(STAGE_WITH_MAP.replace("  - beta-doc\n", "  - beta-doc\n  - other-doc\n"), ["other-doc"]));
+    // A stage's optional output another plugin made required does not widen
+    // what the stage applies to.
+    const optionalMadeRequired = WITH_PLUGIN_OUTPUT
+      .replace("  - plug-doc\n", "  - plug-doc\n  - opt-doc\n")
+      .replace("consumes: []", "optional_produces:\n  - opt-doc\nconsumes: []");
+    expect(parseStageFrontmatter(addPluginProducesKinds(optionalMadeRequired, ["plug-doc"])).produces_kinds)
+      .toMatchObject({ "plug-doc": ["service", "spec", "ui"] });
+  });
+
+  test("addPluginProducesKinds and removeOrphanProducesKinds edit only the frontmatter block the parser reads", () => {
+    // A blank line after the header is the same block to the parser.
+    const spaced = addPluginProducesKinds(WITH_PLUGIN_OUTPUT.replace("produces_kinds:\n", "produces_kinds:\n\n"), ["plug-doc"]);
+    expect(parseStageFrontmatter(spaced).produces_kinds).toEqual({
+      "alpha-doc": ["service", "ui"],
+      "beta-doc": ["spec"],
+      "plug-doc": ["service", "spec", "ui"],
+    });
+    // A produces_kinds example in the body is prose.
+    const documented = `${STAGE_WITH_MAP.replace(MAP_LINES, "")}\n\nproduces_kinds:\n  plug-doc: [ui]\n`;
+    expect(removeOrphanProducesKinds(documented, ["plug-doc"])).toBe(documented);
   });
 });

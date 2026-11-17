@@ -659,6 +659,10 @@ describe("t242 pure status comparator", () => {
       version: "version-differs",
     });
     expect(rows.find((row) => row.key === "version")?.message).toContain("upgrade");
+    const missing = rows.find((row) => row.key === "missing")?.message ?? "";
+    expect(missing).toContain("composed it from its folder");
+    expect(missing).toContain("keeps working");
+    expect(missing).toContain("everything it added to this project");
     // Config composes no plugin; each state a sync clears names the sync.
     const lines = renderPluginStatuses(rows).split("\n");
     for (const key of ["legacy", "new", "source", "version"]) {
@@ -771,6 +775,9 @@ describe("t242 recorded additions", () => {
         "sensors:\n  - \"coverage-threshold\"\n  - coverage-threshold\n", "sensors:\n  - \"coverage-threshold\"\n"],
       ["a single-quoted line beside the plugin's stays", { produces: ["x-doc"] },
         "produces:\n  - 'x-doc'\n  - x-doc\n", "produces:\n  - 'x-doc'\n"],
+      ["an output's produces_kinds entry goes with it", { produces: ["x-doc"] },
+        "produces:\n  - a-doc\n  - x-doc\nproduces_kinds:\n  a-doc: [ui]\n  x-doc: [ui]\n",
+        "produces:\n  - a-doc\nproduces_kinds:\n  a-doc: [ui]\n"],
       ["a value written twice keeps one", { requires_stage: ["nfr-design"] },
         "requires_stage:\n  - nfr-design\n  - nfr-design\n", "requires_stage:\n  - nfr-design\n"],
       ["a recorded value with its quotes takes out that line", { produces: ["\"x-doc\""] },
@@ -834,6 +841,62 @@ describe("t242 transactional sync and ownership-safe prune", () => {
     expect(collectPluginStatus(project, ".claude").statuses).toEqual([
       expect.objectContaining({ key: "test-pro", state: "current" }),
     ]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a sync that meets another AI-DLC command's lock waits for it, then syncs", async () => {
+    const project = installedProject();
+    withClaudeFixture(TEST_PRO);
+    // A live holder: this process, under 2.11.2's file lock.
+    const lock = join(project, ".aidlc-transaction.lock");
+    writeFileSync(lock, `${JSON.stringify({ pid: process.pid, staging: ".aidlc-txn-held" })}\n`);
+    const letGo = setTimeout(() => rmSync(lock, { force: true }), 300);
+    try {
+      const result = await syncPlugins(project, [], ".claude");
+      expect(result.synced).toEqual(["test-pro"]);
+      expect(result.operations).toBeGreaterThan(0);
+    } finally {
+      clearTimeout(letGo);
+    }
+    expect(collectPluginStatus(project, ".claude").statuses).toEqual([
+      expect.objectContaining({ key: "test-pro", state: "current" }),
+    ]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // A lock another computer left is refused with the folder to delete; a
+  // plugin select or sync says that step too, not only the refusal.
+  test("a plugin select and sync that meet another computer's lock name the folder to delete", async () => {
+    const project = installedProject();
+    withClaudeFixture(TEST_PRO);
+    const lock = join(project, ".aidlc-transaction.lock");
+    mkdirSync(lock);
+    writeFileSync(join(lock, "owner.json"), JSON.stringify({
+      schemaVersion: 1, pid: process.pid, host: "another-host", machine: "another-machine",
+      token: "another-token", staging: ".aidlc-txn-another",
+    }));
+    const step = `delete the folder ${lock} first`;
+    // A JSON line's text as the person reads it (Windows paths are escaped in it).
+    const said = (r: { stdout: string; stderr: string }) => `${r.stdout}${r.stderr}`.split("\n").map((line) => {
+      try {
+        const parsed = JSON.parse(line) as { error?: unknown; message?: unknown };
+        return String(parsed.error ?? parsed.message ?? line);
+      } catch {
+        return line;
+      }
+    }).join("\n");
+    const selected = spawnSync(process.execPath, [join(project, ".claude", "tools", "aidlc-utility.ts"), "select-plugins", "aidlc"], {
+      cwd: project,
+      encoding: "utf-8",
+      env: { ...process.env, CLAUDE_PROJECT_DIR: project, AIDLC_HARNESS_DIR: ".claude" },
+    });
+    expect(selected.status).not.toBe(0);
+    expect(said(selected)).toContain(step);
+    const synced = spawnSync(process.execPath, [join(project, ".claude", "tools", "aidlc-plugin.ts"), "sync", "--project-dir", project], {
+      cwd: project,
+      encoding: "utf-8",
+      env: { ...process.env, CLAUDE_PROJECT_DIR: project, AIDLC_HARNESS_DIR: ".claude" },
+    });
+    expect(synced.status).not.toBe(0);
+    expect(said(synced)).toContain(step);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("public JSON and doctor expose the shared exact comparator state", () => {

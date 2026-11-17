@@ -31,6 +31,11 @@ the filename, so the file you pick *is* the scope you author at:
 | this one project | `project.md` | project |
 | every stage in one phase | `phases/<phase>.md` | phase |
 
+A plugin can bring house rules too. They land as one section of their own at
+the end of the file the plugin names (or the one chosen at install) and of the
+phase file they are for, and the team's own rules stay in the sections above
+it. See [Authoring a Plugin](10-authoring-a-plugin.md).
+
 The four phase files are `phases/ideation.md`, `phases/inception.md`,
 `phases/construction.md`, and `phases/operation.md` (initialization is
 bootstrap-only and ships no rule file). A fifth layer — per-stage rules

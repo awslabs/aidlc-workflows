@@ -168,7 +168,7 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$TEST_REF"
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: '1.4.2'
+          bun-version: '1.4.4'
       # macOS runners set the merge queue's pace, so a queued merge commit runs
       # on macOS only the unit files that name macOS and the ones the change
       # touches (its diff against the first parent, the queue entry ahead).

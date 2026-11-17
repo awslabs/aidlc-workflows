@@ -97,9 +97,11 @@ function newestInput(record: string, hook: FrontGatedTarget, now: number): numbe
   const state = entry(join(record, "aidlc-state.md"));
   if (state !== null && state.kind !== "file") throw new Unsure();
   let newestShard: number | null = null;
-  const auditDir = join(record, "audit");
-  const audit = entry(auditDir);
-  if (audit !== null) {
+  // The tracked shards, and a claimed team Unit's local record, which holds
+  // that checkout's own rows (auditFilePath in aidlc-lib.ts).
+  for (const auditDir of [join(record, "audit"), join(record, ".aidlc-engine", "audit")]) {
+    const audit = entry(auditDir);
+    if (audit === null) continue;
     if (audit.kind !== "dir") throw new Unsure();
     for (const name of list(auditDir)) {
       if (!name.endsWith(".md")) continue;

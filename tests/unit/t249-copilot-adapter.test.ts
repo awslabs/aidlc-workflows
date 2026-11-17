@@ -43,7 +43,7 @@
 // would bypass the exact stdin/stdout/exit-code surface being contracted.
 // (Same idiom as codex's t149.)
 
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
@@ -58,10 +58,11 @@ import {
   realpathSync,
   rmSync,
   symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { hostname, tmpdir, userInfo } from "node:os";
-import { dirname, join, relative } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   acquireAuditLock,
@@ -236,6 +237,11 @@ function overlayAuthoredCopilotSources(dir: string): void {
 }
 
 const RECEIPT_PATTERN = /^[A-Za-z0-9_-]{8}$/;
+// The receipt construction: the first 8 base64url characters of
+// HMAC-SHA256(key, JSON(payload)).
+function receiptFor(payload: unknown, key: Buffer): string {
+  return createHmac("sha256", key).update(JSON.stringify(payload), "utf-8").digest("base64url").slice(0, 8);
+}
 // The refusal a superseded tracked `continue` prints, in the person's terms.
 const SUPERSEDED_CONTINUE = "This `continue` was overtaken before it could answer.";
 
@@ -267,9 +273,14 @@ function scratchProject(withState: boolean): string {
   return dir;
 }
 
-function orchestrationProject(): string {
+// Without its launcher (an install from before it, or a clone that lost it) a
+// project's commands reach the Copilot CLI in their own spelling, as in a
+// Windows terminal: the cases that read that spelling ask for one. The
+// launcher's path is t-copilot-engine-launcher.test.ts.
+function orchestrationProject(launcher = true): string {
   const dir = scratchProject(true);
   cpSync(join(REPO_ROOT, "dist", "copilot", "aidlc"), join(dir, "aidlc"), { recursive: true });
+  if (!launcher) unlinkSync(join(dir, ".aidlc", "bin", "aidlc-engine"));
   return dir;
 }
 
@@ -783,6 +794,22 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       ).toBe("deny");
     }
   });
+  test("0b: an apply_patch Copilot CLI names Edit waits for the approved plan like any write", () => {
+    const dir = scratchProject(true);
+    seedUnapprovedCodeGeneration(dir);
+    const result = runAdapter(dir, "guard-tool-call", withCwd({
+      ...FIXTURES.preToolUse_write,
+      tool_name: "Edit",
+      tool_input: "*** Begin Patch\n*** Add File: src/blocked.ts\n+export {};\n*** End Patch\n",
+    }, dir));
+    expect(result.code).toBe(0);
+    expect(
+      (JSON.parse(result.stdout || "{}") as {
+        hookSpecificOutput?: { permissionDecision?: string };
+      }).hookSpecificOutput?.permissionDecision,
+    ).toBe("deny");
+  });
+
   test("1: stop with active workflow blocks in both CLI and VS Code output shapes", () => {
     const dir = scratchProject(true);
     const r = runAdapter(dir, "continue-workflow", withCwd(FIXTURES.stop, dir));
@@ -1282,6 +1309,118 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(audit).toContain("added.ts");
   });
 
+  // The Copilot runtime's apply_patch is a freeform tool: its input is the
+  // patch text itself, not an object (the GitHub Copilot app on Windows).
+  test("17b: apply_patch given the patch as plain text is audited", () => {
+    const dir = scratchProject(true);
+    const added = join(seededRecordDir(dir), "inception", "plain.md");
+    mkdirSync(dirname(added), { recursive: true });
+    writeFileSync(added, "# Plain\n", "utf-8");
+
+    const result = runAdapter(dir, "post-tool", {
+      hook_event_name: "PostToolUse",
+      cwd: dir,
+      tool_name: "apply_patch",
+      tool_input: `*** Begin Patch\n*** Add File: ${relative(dir, added)}\n+# Plain\n*** End Patch\n`,
+    });
+
+    expect(result.code).toBe(0);
+    const audit = readAudit(dir);
+    expect(audit).toContain("ARTIFACT_CREATED");
+    expect(audit).toContain("plain.md");
+  });
+
+  // The CLI's own hook payload carries the arguments as toolArgs, a JSON string.
+  test("17c: an apply_patch whose arguments come as toolArgs is audited", () => {
+    const dir = scratchProject(true);
+    const files = ["as-text.md", "as-json.md"].map((name) => join(seededRecordDir(dir), "inception", name));
+    mkdirSync(dirname(files[0]), { recursive: true });
+    for (const file of files) writeFileSync(file, "# Doc\n", "utf-8");
+    const patch = (file: string) => `*** Begin Patch\n*** Add File: ${relative(dir, file)}\n+# Doc\n*** End Patch\n`;
+
+    for (const toolArgs of [patch(files[0]), JSON.stringify({ input: patch(files[1]) })]) {
+      const result = runAdapter(dir, "post-tool", {
+        hook_event_name: "PostToolUse",
+        cwd: dir,
+        toolName: "apply_patch",
+        toolArgs,
+      });
+      expect(result.code).toBe(0);
+    }
+    const audit = readAudit(dir);
+    expect(audit).toContain("as-text.md");
+    expect(audit).toContain("as-json.md");
+  });
+
+  test("17d: an apply_patch Copilot CLI names Edit records each file it adds, updates, deletes or moves", () => {
+    for (const eol of ["\n", "\r\n"]) {
+      const dir = scratchProject(true);
+      const doc = (name: string) => join(seededRecordDir(dir), "inception", name);
+      mkdirSync(dirname(doc("added.md")), { recursive: true });
+      // The tree after the patch: deleted.md and moved-from.md are gone.
+      for (const name of ["added.md", "updated.md", "moved-to.md"]) writeFileSync(doc(name), `# ${name}\n`, "utf-8");
+      const rel = (name: string) => relative(dir, doc(name));
+      const patch = [
+        "*** Begin Patch",
+        `*** Add File: ${rel("added.md")}`, "+# added.md",
+        `*** Update File: ${rel("updated.md")}`, "@@", "-# old", "+# updated.md",
+        `*** Delete File: ${rel("deleted.md")}`,
+        `*** Update File: ${rel("moved-from.md")}`, `*** Move to: ${rel("moved-to.md")}`,
+        "*** End Patch", "",
+      ].join(eol);
+      const artifactRows = () => readAuditShardEvents(dir)
+        .filter((entry) => entry.event.startsWith("ARTIFACT_"))
+        .map((entry) => `${entry.event} ${basename(auditBlockField(entry.block, "File") ?? "")}`)
+        .sort();
+
+      const result = runAdapter(dir, "post-tool", {
+        hook_event_name: "PostToolUse",
+        cwd: dir,
+        tool_name: "Edit",
+        tool_input: patch,
+        tool_result: { result_type: "success", text_result_for_llm: "Added 2 file(s)" },
+      });
+      expect(result.code).toBe(0);
+      expect(artifactRows()).toEqual([
+        "ARTIFACT_CREATED added.md",
+        "ARTIFACT_CREATED moved-to.md",
+        "ARTIFACT_UPDATED deleted.md",
+        "ARTIFACT_UPDATED moved-from.md",
+        "ARTIFACT_UPDATED updated.md",
+      ]);
+
+      // An ordinary edit whose new text shows a patch is one edit of its own file.
+      runAdapter(dir, "post-tool", {
+        hook_event_name: "PostToolUse",
+        cwd: dir,
+        tool_name: "Edit",
+        tool_input: { path: doc("updated.md"), old_str: "# updated.md", new_str: patch },
+      });
+      expect(artifactRows().filter((row) => row === "ARTIFACT_UPDATED updated.md")).toHaveLength(2);
+      expect(artifactRows()).toHaveLength(6);
+    }
+  });
+
+  // At build-and-test the stage graph type-checks every .ts write.
+  test("17e: an apply_patch that deletes or moves a file runs no sensor on the file that is gone", () => {
+    const dir = scratchProject(true);
+    const statePath = seededStateFile(dir);
+    const state = readFileSync(statePath, "utf-8").replace(/^- \*\*Current Stage\*\*:.*$/m, "- **Current Stage**: build-and-test");
+    writeFileSync(statePath, state);
+    writeActiveDirectiveMarker(dir, { kind: "run-stage", stage: "build-and-test", state_sha256: stateDigest(state) });
+    mkdirSync(join(dir, "notes"), { recursive: true });
+    writeFileSync(join(dir, "notes", "moved.md"), "# moved\n", "utf-8");
+
+    const result = runAdapter(dir, "post-tool", {
+      hook_event_name: "PostToolUse",
+      cwd: dir,
+      tool_name: "Edit",
+      tool_input: "*** Begin Patch\n*** Delete File: src/gone.ts\n*** Update File: src/old.ts\n*** Move to: notes/moved.md\n*** End Patch\n",
+    });
+    expect(result.code).toBe(0);
+    expect(dropLines(dir)).toEqual([]);
+  });
+
   test("18: VS Code agent_type/agent_id populate and clear reviewer identity", () => {
     const dir = scratchProject(true);
     const hostSessionId = "11111111-2222-4333-8444-555555555555";
@@ -1379,6 +1518,20 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
         hookSpecificOutput?: { permissionDecision?: string };
       }).hookSpecificOutput?.permissionDecision,
     ).toBe("deny");
+
+    // The same patch as plain text gets the same guard.
+    const plain = runAdapter(dir, "guard-tool-call", {
+      hook_event_name: "PreToolUse",
+      session_id: hostSessionId,
+      cwd: dir,
+      tool_name: "apply_patch",
+      tool_input: `*** Begin Patch\n*** Update File: ${sibling}\n@@\n*** End Patch\n`,
+    });
+    expect(
+      (JSON.parse(plain.stdout || "{}") as {
+        hookSpecificOutput?: { permissionDecision?: string };
+      }).hookSpecificOutput?.permissionDecision,
+    ).toBe("deny");
   });
 
   test("18b: file_search query maps to scoped Glob.pattern enforcement", () => {
@@ -1427,6 +1580,53 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
           hookSpecificOutput?: { permissionDecision?: string };
         }).hookSpecificOutput?.permissionDecision,
         query,
+      ).toBe("deny");
+    }
+  });
+
+  // The Copilot runtime's own grep tool takes `paths`, one folder or several.
+  test("18c: the grep tool's paths are each held to the reviewer's unit", () => {
+    const dir = scratchProject(true);
+    const hostSessionId = "11111111-2222-4333-8444-555555555558";
+    const record = seededRecordDir(dir);
+    mkdirSync(record, { recursive: true });
+    mkdirSync(dirname(join(record, ".aidlc-engine/reviewer-dispatch.json")), { recursive: true });
+    writeFileSync(
+      join(record, ".aidlc-engine/reviewer-dispatch.json"),
+      JSON.stringify({
+        reviewer: "aidlc-architecture-reviewer-agent",
+        stage: "functional-design",
+        unit: "U01",
+        exempt: [],
+      }),
+      "utf-8",
+    );
+    runAdapter(dir, "subagent-start", {
+      hook_event_name: "SubagentStart",
+      cwd: dir,
+      session_id: hostSessionId,
+      agent_type: "aidlc-architecture-reviewer-agent",
+      agent_id: "vscode-agent-grep",
+    });
+
+    const grep = (paths: string | string[]) =>
+      runAdapter(dir, "guard-tool-call", {
+        hook_event_name: "PreToolUse",
+        session_id: hostSessionId,
+        cwd: dir,
+        tool_name: "grep",
+        tool_input: { pattern: "TODO", paths },
+      });
+    const own = join(record, "construction", "U01");
+    const sibling = join(record, "construction", "U02");
+    expect(grep(own).stdout.trim()).toBe("");
+    expect(grep([own]).stdout.trim()).toBe("");
+    for (const paths of [sibling, [sibling], [own, sibling]]) {
+      expect(
+        (JSON.parse(grep(paths).stdout || "{}") as {
+          hookSpecificOutput?: { permissionDecision?: string };
+        }).hookSpecificOutput?.permissionDecision,
+        JSON.stringify(paths),
       ).toBe("deny");
     }
   });
@@ -1951,6 +2151,29 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(marker(repeated).stop_count).toBe(2);
   });
 
+  // The CLI hands its shell tool to these hooks as Bash; a host that names it
+  // powershell or pwsh (the GitHub Copilot app on Windows) gets the same path:
+  // the command is claimed, runs, and settles.
+  test("21b: a shell call named powershell or pwsh is claimed and settled as Bash", () => {
+    for (const tool of ["powershell", "pwsh"]) {
+      const dir = orchestrationProject();
+      const session = `shell-${tool}`;
+      const attempt = `${session}-next`;
+      const spec = commandSpec(dir, "direct", ["next"]);
+      const pre = runAdapter(dir, "guard-tool-call", { ...commandPayload(dir, session, spec.text, attempt), tool_name: tool });
+      const rewritten = rewrittenCommand(pre);
+      expect(rewritten, tool).toContain(`--aidlc-attempt-id ${attempt}`);
+      const executed = runShell(dir, rewritten);
+      expect(executed.status, executed.stderr).toBe(0);
+      const post = runAdapter(dir, "post-tool", {
+        ...commandPayload(dir, session, rewritten, attempt, true, executed.stdout),
+        tool_name: tool,
+      });
+      expect(post.code).toBe(0);
+      expect(marker(dir).active_attempt, tool).toMatchObject({ id: attempt, status: "settled" });
+    }
+  });
+
   test("21a: terminal notice output is captured, retained, and allows Copilot Stop", () => {
     const dir = orchestrationProject();
     const session = "notice-owner";
@@ -2155,7 +2378,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       },
     ];
     for (const { name, spoil, reason } of cases) {
-      const dir = orchestrationProject();
+      const dir = orchestrationProject(false);
       inflateRules(dir);
       const owner = `stand-aside-${name}-owner`;
       const first = runLifecycle(dir, owner, "direct", ["next"], `stand-aside-${name}-next`);
@@ -2216,7 +2439,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
   });
 
   test("21p: a busy audit lock never holds a command the check stands aside for", () => {
-    const dir = orchestrationProject();
+    const dir = orchestrationProject(false);
     inflateRules(dir);
     const owner = "busy-audit-owner";
     const first = runLifecycle(dir, owner, "direct", ["next"], "busy-audit-next");
@@ -2239,7 +2462,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
 
   test("21d: stale tracked fresh-next execution cannot replace a newer owner's cursor in either order", () => {
     for (const order of ["stale-before-owner", "stale-after-owner"] as const) {
-      const dir = orchestrationProject();
+      const dir = orchestrationProject(false);
       inflateRules(dir);
       const spec = commandSpec(dir, "direct", ["next"]);
       const attemptA = `${order}-attempt-a`;
@@ -2629,6 +2852,55 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       dir, session, commandSpec(dir, "direct", ["continue", token1, token1]).text, "doubled-continue",
     ));
     expect(doubled.stdout).toContain('"permissionDecision":"deny"');
+  });
+
+  // About 1 receipt in 64 starts with `-`, and an agent marks such a word with
+  // `--` (#3206). The key is chosen so part 1's receipt is one of them.
+  test("21j2: a receipt behind `--` continues to the next part, as one that starts with `-` does alone", () => {
+    const dir = orchestrationProject();
+    inflateRules(dir);
+    const session = "dash-receipt-owner";
+    const first = runLifecycle(dir, session, "direct", ["next"], "dash-next");
+    expect(first.directive).toMatchObject({ kind: "load-steering", part: 1 });
+    const payload = marker(dir).steering_payload;
+    let key = Buffer.alloc(32);
+    for (let seed = 0; !receiptFor(payload, key).startsWith("-"); seed++) {
+      key = createHash("sha256").update(`t249-dash-receipt-${seed}`).digest();
+    }
+    // Off part 1 first: a marker still on part 1 is handed back as it was
+    // issued, under the key it was minted with.
+    const off = runLifecycle(dir, session, "direct", ["continue", String(first.directive.receipt)], "dash-off-part-1");
+    expect(off.directive).toMatchObject({ kind: "load-steering", part: 2 });
+    writeFileSync(join(seededRecordDir(dir), ".aidlc-engine", "steering-token-key"), `${key.toString("base64url")}\n`, {
+      mode: 0o600,
+    });
+    const dashReceipt = receiptFor(payload, key);
+    for (const [form, args] of [
+      ["direct", ["continue", "--", dashReceipt]],
+      ["source", ["continue", "--", dashReceipt]],
+      ["direct", ["continue", dashReceipt]],
+    ] as const) {
+      const spelling = `${form} ${args.join(" ")}`;
+      const issued = runLifecycle(dir, session, "direct", ["next"], `dash-issue-${form}-${args.length}`);
+      expect(issued.directive, spelling).toMatchObject({ kind: "load-steering", part: 1, receipt: dashReceipt });
+      const attempt = `dash-continue-${form}-${args.length}`;
+      const answer = runLifecycle(dir, session, form, [...args], attempt);
+      expect(answer.directive, spelling).toMatchObject({ kind: "load-steering", part: 2 });
+      expect(marker(dir), spelling).toMatchObject({
+        kind: "load-steering",
+        part: 2,
+        delivery: "delivered",
+        active_attempt: { id: attempt, command_kind: "continue", status: "settled" },
+      });
+    }
+    // Two words behind the mark, or an option behind it, are still not a
+    // continuation the adapter claims.
+    for (const args of [["continue", "--", dashReceipt, dashReceipt], ["continue", "--", dashReceipt, "--project-dir", dir]]) {
+      const refused = runAdapter(dir, "guard-tool-call", commandPayload(
+        dir, session, commandSpec(dir, "direct", args).text, `dash-refused-${args.length}`,
+      ));
+      expect(refused.stdout, args.join(" ")).toContain("`continue` takes only the receipt");
+    }
   });
 
   test("21k: a continue superseded by a newer command, another chat, or a compaction is refused and changes nothing", () => {
@@ -3303,7 +3575,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
   // the person's words it would be two of their words and the attempt is lost.
   test("23c-attempt: the attempt id goes in front of the person's words, marked or not, and the attempt is claimed", () => {
     for (const words of [["--", "fix", "the", "bug"], ["fix", "the", "bug"]]) {
-      const dir = orchestrationProject();
+      const dir = orchestrationProject(false);
       const session = `words-attempt-${words.length}`;
       const attempt = `words-attempt-${words.length}`;
       const spec = commandSpec(dir, "direct", ["next", ...words]);
@@ -3323,7 +3595,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
   // The person's words behind `--` may name the engine's own option; the claim
   // reads it as theirs, as the engine does, and still gives the command its id.
   test("23c-option-word: an attempt option among the words behind -- is theirs, not one the agent already set", () => {
-    const dir = orchestrationProject();
+    const dir = orchestrationProject(false);
     const spec = commandSpec(dir, "direct", ["next", "--", "add", "an", "--aidlc-attempt-id", "option"]);
     const pre = runAdapter(dir, "guard-tool-call", commandPayload(dir, "words-option", spec.text, "words-option"));
     expect(rewrittenCommand(pre), pre.stdout).toBe(
@@ -3334,7 +3606,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
   // A folder named in front of the verb is the launcher's, and the attempt id
   // still goes right after the verb.
   test("23c-lead: with the folder named in front of next, the attempt id goes right after next", () => {
-    const dir = orchestrationProject();
+    const dir = orchestrationProject(false);
     const text = `bun .aidlc/tools/aidlc-orchestrate.ts --project-dir ${JSON.stringify(dir)} next fix the bug`;
     const pre = runAdapter(dir, "guard-tool-call", commandPayload(dir, "lead-folder", text, "lead-folder"));
     expect(rewrittenCommand(pre), pre.stdout).toBe(
@@ -3525,7 +3797,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
   });
 
   test("24c: read-only next forms are not claimed as coordination and stay conversational at Stop", () => {
-    const dir = orchestrationProject();
+    const dir = orchestrationProject(false);
     const session = "read-only-next-owner";
     driveToRunStage(dir, session);
     for (const args of [
@@ -4822,7 +5094,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
   });
 
   test("36: in VS Code AI-DLC's own commands run without an Allow prompt; the CLI keeps its own rules", () => {
-    const dir = orchestrationProject();
+    const dir = orchestrationProject(false);
     const session = "allow-owner";
     const forms: CommandForm[] = COMPILED_BINARY ? ["direct", "source", "compiled"] : ["direct", "source"];
     const vscodeCall = (command: string, attempt: string) => ({
@@ -4964,6 +5236,19 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
   // agree: in VS Code a direct stage-status command runs click-free exactly
   // when the state tool refuses it, and keeps the prompt exactly when it would
   // run, whatever the Guard Policy or the person's own switch.
+  // On the Copilot CLI outside a Windows terminal a claimed command goes out on
+  // AI-DLC's launcher (t-copilot-engine-launcher.test.ts) with its attempt id,
+  // runs through the launcher's voucher, and settles as the plain one does.
+  test("36c: a claimed next goes out on the launcher with its attempt id, runs, and settles", () => {
+    const dir = orchestrationProject();
+    const { pre, directive } = runLifecycle(dir, "launcher-claim", "direct", ["next"], "launcher-next");
+    expect(rewrittenCommand(pre)).toBe(process.platform === "win32"
+      ? 'bun .aidlc/tools/aidlc-orchestrate.ts "next" --aidlc-attempt-id launcher-next'
+      : '.aidlc/bin/aidlc-engine orchestrate "next" --aidlc-attempt-id launcher-next');
+    expect(directive.kind).toBeDefined();
+    expect(marker(dir)).toMatchObject({ delivery: "delivered", active_attempt: { id: "launcher-next", status: "settled" } });
+  });
+
   test("36b: a direct state command keeps the Allow prompt exactly when the state tool would run it", () => {
     // [policy, how the state file says it, whether the state tool refuses]
     const policies: Array<[string, (state: string) => string, boolean]> = [
@@ -5027,7 +5312,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       ["intent", "other", "Now working on `other`.", [DEFAULT_SPACE, other]],
       ["space", "other-space", "Now working in space `other-space`.", ["other-space", third]],
     ] as const) {
-      const dir = orchestrationProject();
+      const dir = orchestrationProject(false);
       const session = `select-${verb}`;
       // A second intent beside the active one, and a second space whose cursor
       // names its own intent.
@@ -5087,7 +5372,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       ["intent", "hand-made-work", "Now working on `hand-made-work`.", DEFAULT_SPACE, "hand-made-work", true],
       ["space", "other-space", "Now working in space `other-space`.", "other-space", "migrated-work", true],
     ] as const) {
-      const dir = orchestrationProject();
+      const dir = orchestrationProject(false);
       const session = `select-unregistered-${verb}${repaired ? "-repaired" : ""}`;
       cpSync(join(dir, "aidlc", "spaces", DEFAULT_SPACE, "memory"), join(dir, "aidlc", "spaces", "other-space", "memory"), { recursive: true });
       mkdirSync(intentsDirOf(dir, "other-space"), { recursive: true });
@@ -5136,7 +5421,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const other = { uuid: "00000000-0000-7000-8000-000000000002", slug: "other", status: "in-flight" };
     const recordOf = (entry: typeof other) => `${entry.slug}-${entry.uuid.replace(/-/g, "").slice(-16)}`;
     for (const shape of ["switch-then-work", "away-and-back", "back-to-issued-work"] as const) {
-      const dir = orchestrationProject();
+      const dir = orchestrationProject(false);
       const session = `held-${shape}`;
       const registry = join(intentsDirOf(dir, DEFAULT_SPACE), "intents.json");
       writeFileSync(registry, `${JSON.stringify([...JSON.parse(readFileSync(registry, "utf-8")), other], null, 2)}\n`);
@@ -5187,7 +5472,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const state = readFileSync(join(REPO_ROOT, "tests", "fixtures", "state-brownfield-feature.md"), "utf-8");
     const other = { uuid: "00000000-0000-7000-8000-000000000002", slug: "other", status: "in-flight" };
     const recordOf = (entry: typeof other) => `${entry.slug}-${entry.uuid.replace(/-/g, "").slice(-16)}`;
-    const dir = orchestrationProject();
+    const dir = orchestrationProject(false);
     inflateRules(dir);
     const session = "held-continue";
     const registry = join(intentsDirOf(dir, DEFAULT_SPACE), "intents.json");

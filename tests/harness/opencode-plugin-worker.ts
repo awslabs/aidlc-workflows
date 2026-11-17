@@ -59,7 +59,9 @@ type Request =
 parentPort?.on("message", async (request: Request) => {
   try {
     if (request.op === "start") {
-      const factory = (await import(request.plugin)).default as (input: unknown) => Promise<Hooks>;
+      // A plugin is either the V1 factory or { server } (the adapter's OpenCode 1 + 2 shape).
+      const loaded = (await import(request.plugin)).default as ((input: unknown) => Promise<Hooks>) | { server: (input: unknown) => Promise<Hooks> };
+      const factory = typeof loaded === "function" ? loaded : loaded.server;
       plugin = await factory({ client, directory: request.directory });
       answer({ ok: true });
     } else if (request.op === "parent") {

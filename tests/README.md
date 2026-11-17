@@ -48,7 +48,7 @@ harness-specific CLIs or apps plus their credentials.
 | Dependency | Needed for | Notes |
 |------------|-----------|-------|
 | **`bun`** | every level | The runner, all hooks, and all CLI tools are TypeScript run via bun. No jq/sed/awk/Git-Bash dependency. |
-| **Bun >=1.3.14 + `@xterm/headless`** | native TUI journeys on Linux/Windows/macOS | `tui-drive.ts` uses Bun's native PTY. `AIDLC_TUI_BACKEND` selects `bun` or `tmux`. |
+| **Bun >=1.4.4 + `@xterm/headless`** | native TUI journeys on Linux/Windows/macOS | `tui-drive.ts` uses Bun's native PTY. `AIDLC_TUI_BACKEND` selects `bun` or `tmux`. |
 | **`tmux`** | explicit alternative on Linux/macOS | Requires Bun to run the driver. Native Linux/Windows/macOS TUI sessions do not require tmux. |
 | **`claude` CLI + AWS/Bedrock creds** | live `integration` + `e2e` files | The SDK/tui drivers spend real Bedrock tokens. The runner's preflight (`tests/integration/t19.test.ts`) gates the live tiers; unavailable substrate skips the preflight and Claude-dependent files without failing a default run. `AIDLC_CLAUDE_SDK_LIVE=1`, `AIDLC_TUI_LIVE=1`, or `--require-coverage` requires complete, non-skipped passing preflight evidence; actual failures, timeouts, and cleanup errors always fail the run. |
 | **`AIDLC_TUI_LIVE=1`** | the token-spending live TUI journeys | A bare `--e2e` SKIPs them; `--all --debug` sets it by default. Set `AIDLC_TUI_LIVE=0` to force the SKIP path. |
@@ -212,7 +212,7 @@ PR CI uses 17 runners, including its required-result job.
 Full Suite full verification runs smoke, sixteen unit shards per OS, integration, and isolated
 E2E on Linux/macOS/Windows. Integration and E2E have independent jobs per OS
 with fresh Bun runner processes. Each call checks out its supplied commit,
-installs frozen dependencies with Bun 1.4.2, packages the projections, and runs
+installs frozen dependencies with Bun 1.4.4, packages the projections, and runs
 the Bash wrapper with `--debug -P 8 --no-llm`. Smoke stays serial inside each
 checkout, and so does unit except a macOS shard, which starts up to the cap in
 `tests/unit-shard-weights.json` at once; the independent unit jobs and eight

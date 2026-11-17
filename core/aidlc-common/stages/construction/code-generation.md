@@ -52,6 +52,7 @@ scopes:
   - bugfix
   - refactor
   - security-patch
+  - infra
   - classic
   - workshop
   - express
@@ -89,10 +90,10 @@ Read all design artifacts for the current unit:
 - Story map from `<record>/inception/units-generation/unit-of-work-story-map.md` (if exists)
 - Requirements from `<record>/inception/requirements-analysis/requirements.md` (if exists)
 
-Incremental scopes (bugfix, poc, refactor, security-patch) and the zero-Unit
-`express` scope skip Units Generation by design. When those inputs are absent,
-scope the work from Requirements Analysis and the workspace; on brownfield, also
-use the reverse-engineered code knowledge base at
+Incremental scopes (bugfix, poc, refactor, security-patch, infra) and the
+zero-Unit `express` scope skip Units Generation by design. When those inputs
+are absent, scope the work from Requirements Analysis and the workspace; on
+brownfield, also use the reverse-engineered code knowledge base at
 `aidlc/spaces/<active-space>/codekb/<repo>/`. Never invent the content of a
 missing artifact.
 
@@ -130,6 +131,39 @@ Plan should cover (as applicable to the unit):
 - [ ] Documentation (inline and API docs)
 - [ ] Deployment artifacts (Dockerfiles, IaC)
 
+**Data-model elements are named, never implied.** A step that creates or
+changes an object, entity, table, field or column names each one, with the
+requirement, acceptance criterion, business rule or design element that asks
+for it; a technical column that element needs (a key, an index, its created
+or updated time) shares its reason. "Schema changes" or "data model" as a step
+with no names is not a plan step. An element that nothing upstream asks for is
+the developer's own call, and the person decides it: put it under a
+`## Assumptions` section of the plan, one line each, not a checkbox (the
+checkbox is on the step that adds it), naming that step and why the work needs
+it, never only in a step. The person reads the Summary's `Adds:` line when
+the engine asks for approval, so that line is where they learn of such an
+element before anything is written; on a platform where a schema change is
+shared and hard to undo, it is their one chance to say no. When nothing
+upstream covers an element the work cannot do without, say so there rather
+than inventing a requirement for it. A plan that adds no such element has no
+`## Assumptions` section and no `Adds:` line.
+
+When the deliverable is infrastructure-as-code (always in the `infra` scope),
+this stage writes the IaC, under the same Plan Approval as application code:
+Infrastructure Design only describes it, and Environment Provisioning
+provisions from what this stage wrote. The plan's implementation steps are the
+IaC changes themselves (CDK constructs, Terraform modules or roots,
+CloudFormation templates, IAM policies, dashboards, and alarms), derived from
+Infrastructure Design's `infrastructure-specification.md` and
+`monitoring-design.md`; with no user stories, map each step to the requirement
+or NFR it implements. Its tests are the IaC's own executable checks, such as CDK
+assertion tests, `terraform test`, or policy-as-code rules, run by the
+unit-scoped command in `unit-test-instructions.md`. Static checks
+(`terraform fmt -check` and `terraform validate`, `cdk synth`, `cfn-lint`) are
+build steps that Build and Test runs. When the IaC language has no line-coverage
+tool, say so in the plan rather than reporting a figure. Never apply or deploy
+from this stage.
+
 **Test files are MANDATORY in the plan.** Consult the active test strategy (stage-protocol.md §8 "Test Strategy") to determine test scope and volume:
 - **Minimal strategy**: Requirement-driven tests (1 per requirement, happy-path unit floor per component); unit tests are the default, but a `bugfix` / `security-patch` targeted regression uses the narrowest level that reproduces the defect
 - **Standard strategy**: Unit test files per component (5-8 tests each) + integration test stubs for key boundaries
@@ -154,7 +188,7 @@ If the plan presented to the user omits test file steps, add them before present
 bun {{HARNESS_DIR}}/tools/aidlc-testing-posture.ts render
 ```
 
-Paste the command's complete `## Testing Contract` JSON block into `code-generation-plan.md` unchanged, using your file-editing tool: a shell command that rewrites the file (for example PowerShell `Set-Content`) can re-encode its characters, and the block's `contract_sha256` then no longer matches. When the contract is refused, re-run `render` and replace the whole section; never edit the block or its hash by hand. The resolver reads all `## Testing Posture` sections additively and selects the narrowest explicit methodology/order statement; coverage, tooling, integration, or scope notes remain applicable but cannot erase a broader methodology. A contradictory narrower methodology is an error, not an override: halt and ask for the memory rule to be revised.
+The resolver reads all `## Testing Posture` sections additively and selects the narrowest explicit methodology/order statement; coverage, tooling, integration, or scope notes remain applicable but cannot erase a broader methodology. A contradictory narrower methodology is an error, not an override: halt and ask for the memory rule to be revised.
 
 Use the contract's `plan_profile.steps` as the required ordering baseline, adapting names and omitting genuinely inapplicable layers without changing the methodology:
 - **TDD**: for every applicable testable layer — data-model/database behavior, repository/data access, business logic, API/endpoint, and frontend behavior — plan Red (failing tests), Green (minimal implementation), then Refactor while green.
@@ -196,8 +230,24 @@ Built side by side, this Unit has its own copy of the project with none of
 the other Units of its batch in it: plan code and tests that pass with this
 Unit's code, the Units it depends on, and the project as it stands.
 
-Start the plan with a short `## Summary` section of three lines. The engine
-shows them to the person when it asks for approval:
+A coverage floor set for the whole project (the Testing Contract's line
+floor, a team rule, or a threshold in the project's coverage configuration
+that applies to all measured source) is measured by Build and Test on the
+full test suite of the assembled project. A Unit-scoped run does not judge
+it: on one Unit's tests a runner's coverage threshold can fail on source that
+other Units' tests cover, with every selected test passing. Never change that
+threshold to make a Unit's run pass (setting it up when this work bootstraps
+the runner is part of the floor); under Expected coverage targets, name the
+floor and say Build and Test checks it on the full suite. When this file's
+command exits non-zero only on that floor's threshold with every selected
+test passing, record that with this Unit's test results; it is not a failed
+test. Put any run that floor's threshold can fail in a command of its own,
+with no step after it that the threshold exit would stop: Build and Test does
+not exempt a command whose exit stopped a later step. A coverage target set
+for this Unit or one of its paths still gets its own Unit-scoped check.
+
+Start the plan with a short `## Summary` section of three lines, one line each.
+The engine shows them to the person when it asks for approval:
 
 ```
 ## Summary
@@ -205,6 +255,13 @@ shows them to the person when it asks for approval:
 - Builds: <what this plan builds, in a few words>
 - Touches: <the main files or folders it creates or changes>
 - Tests: <how many tests, and of what kind>
+```
+
+When the plan adds an element nothing upstream asks for, the Summary gets one
+more line, the count first:
+
+```
+- Adds: <how many data-model elements no requirement asks for, then their names>; see Assumptions
 ```
 
 ### Step 3: Plan Approval
@@ -258,9 +315,8 @@ When both files from Step 2 are written, run `next`:
     or from the gate they rejected); when it is absent, ask "What should
     change?" and end the turn first. Put the requested change in the plan as
     its own step, then run `next`.
-  - `repair`: fix exactly what `plan_approval.note` names (for example re-render
-    a Testing Contract block an edit broke), then run `next`; the engine asks the
-    person once to build the edited plan. A Testing Contract left out of date by
+  - `repair`: fix exactly what `plan_approval.note` names, then run `next`; the
+    engine asks the person once to build the edited plan. A Testing Contract left out of date by
     a scope or setting change the person asked for is not a repair: the engine
     renders that block again when they approve, their approval stands, and it
     says so in one line for you to pass on.
@@ -394,6 +450,10 @@ plan's steps yourself.
 
 Delegate to Task tool with subagent_type="aidlc-developer-agent".
 
+Each Unit's build starts a new developer subagent. Never continue the developer
+of an earlier Unit by sending it a message: it still holds that earlier build in
+its context. The delegation prompt below carries everything it needs.
+
 The aidlc-developer-agent persona and its knowledge are loaded automatically by the named agent. Do NOT manually inject the persona in the prompt.
 
 Include in the delegation prompt:
@@ -439,13 +499,23 @@ Include in the delegation prompt:
 - The instruction that the current Testing Contract in the tool-produced brief is
   authoritative for Part 2. The subagent must not independently re-resolve or
   reinterpret memory. TDD records each Red command's failing output before
-  Green; BDD and ATDD follow their scenario/acceptance-first cross-layer
-  profiles; custom/mixed follows the exact ordering in that contract.
+  Green; BDD follows its scenario-first cross-layer profile; ATDD follows its
+  acceptance-first cross-layer profile and records the Acceptance Red run's
+  failing output before the feature implementation; custom/mixed follows the
+  exact ordering in that contract.
 - The instruction that measurable quality targets from NFR Requirements, NFR
   Design, and the Testing Contract coverage floor are inputs, not suggestions.
   The subagent must NEVER relax, lower, or disable a defined target, including
   threshold settings in test or build configuration, to make a step pass; it
   must surface the gap instead.
+- The instruction that a data-model element (an object, entity, table, field
+  or column) that nothing upstream or in the approved plan asks for is built
+  only once the plan names it; a key, index or created or updated time that a
+  requested element needs is part of that element. One the build turns out to
+  need goes into the plan first, as a step of its own, with its line under
+  `## Assumptions` and the Summary's `Adds:` line, and only then into the code:
+  that edit is a change to the approved plan, and Step 3's after-approval rules
+  decide what the person sees.
 
 The subagent generates all code, test files, and configuration artifacts in the workspace.
 

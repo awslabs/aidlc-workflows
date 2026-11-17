@@ -1,7 +1,7 @@
 // Learning-gate tool -- the tool-as-actor half of stage-protocol section 13's
 // Learnings Ritual. Two subcommands:
 //
-//   surface --slug <stage-slug> [--correction <their change> | --correction-file <file>]... [--project-dir <path>]
+//   surface --slug <stage-slug> [--unit <unit>] [--correction <their change> | --correction-file <file>]... [--project-dir <path>]
 //       Read-only. Prints, for each correction the agent read in the
 //       person's words (KNOWLEDGE), the one question the person answers
 //       (JUDGEMENT): "You asked me to <it>. Keep that for next time?" with
@@ -106,9 +106,13 @@ import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, statSync }
 import { dirname, join, relative, resolve } from "node:path";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import { memoryDirFor } from "./aidlc-graph.ts";
+import { unitStageDiaryTexts, withoutWaveCopies } from "./aidlc-stage-diary.ts";
 import {
   activeIntent,
   appendUnderHeading,
+  CHANGE_CONTROL_HEADING,
+  ensureHeading,
+  GUARD_POLICY_HEADING,
   LEARNINGS_SELECTIONS_DIR,
   normalizeDriveLetter,
   agentFileText,
@@ -132,7 +136,11 @@ import {
   listField,
   parseMemoryEntries,
   readAllAuditShards,
+  readApplicableTeamUnitScopeStamp,
   readStateFile,
+  isPerUnitStage,
+  isTeamUnitOwnership,
+  docsRoot,
   relativeMemoryPath,
   relativeRecordDir,
   resolveProjectDir,
@@ -142,12 +150,15 @@ import {
   constructionCheckpointsApply,
   approvesTogetherStages,
   spacesRoot,
+  structuredField,
   validSpaceFlag,
   withAuditLock,
   writeFileAtomic,
   harnessDir,
 } from "./aidlc-lib.ts";
 import { constructionCheckpointKind, resolveConstructionCheckpoint } from "./aidlc-construction-checkpoints.ts";
+import { LEARNED_DATE_SOURCE, learnedDate } from "./aidlc-learned-date.ts";
+import { TESTING_HEADING } from "./aidlc-testing-posture.ts";
 import { SLUG_RE } from "./aidlc-stage-schema.ts";
 
 // --- Exit-code convention (plan §2) ---
@@ -402,7 +413,7 @@ function resolveMemoryPath(
   if (!stage) {
     fail(
       `stage "${slug}" is not in the stage graph and runtime-graph.json records no ` +
-        `memory_path for it — cannot resolve the stage diary`,
+        `memory_path for it - cannot resolve the stage diary`,
       1
     );
   }
@@ -411,6 +422,18 @@ function resolveMemoryPath(
     slug,
     relativeRecordDir(projectDir, intent, space)
   );
+}
+
+// The Unit a per-Unit stage's learnings step is about: the claimed checkout's,
+// else the one `--unit` names, else the Unit whose checkpoint is open, else
+// under team ownership the Unit the state says is active. Null at the stage's
+// one gate after every Unit, where every Unit's notes count.
+function surfaceUnit(projectDir: string, stateContent: string, atCheckpoint: string[], namedUnit?: string): string | null {
+  const claimed = readApplicableTeamUnitScopeStamp(projectDir, stateContent)?.unit;
+  if (claimed) return claimed;
+  if (namedUnit?.trim()) return namedUnit.trim();
+  if (atCheckpoint.length === 1) return atCheckpoint[0];
+  return isTeamUnitOwnership(stateContent) ? getField(stateContent, "Active Unit")?.trim() || null : null;
 }
 
 // A Construction checkpoint the person approves covers every stage its Unit
@@ -478,7 +501,7 @@ function handleSurface(args: string[], projectDir: string): void {
   const flags = parseFlags(args);
   const slug = flags.slug;
   if (!slug) {
-    fail("Usage: aidlc-learnings.ts surface --slug <stage-slug> [--correction <their change> | --correction-file <file>]... [--project-dir <path>]", 1);
+    fail("Usage: aidlc-learnings.ts surface --slug <stage-slug> [--unit <unit>] [--correction <their change> | --correction-file <file>]... [--project-dir <path>]", 1);
   }
 
   // Resolve space/intent FIRST, before touching any per-intent path. A
@@ -519,12 +542,25 @@ function handleSurface(args: string[], projectDir: string): void {
   // memory.md may be absent (the per-stage lifecycle owns deterministic
   // creation; a stage that ran without it counts no entries).
   const raw = existsSync(memAbs) ? readFileSync(memAbs, "utf-8") : "";
-  // Every Unit's turn at a stage writes the one stage diary. At a Unit's
-  // checkpoint, count that Unit's entries and the ones that name no Unit.
-  const unit = atCheckpoint.length === 1 ? atCheckpoint[0] : null;
-  const entries = parseMemoryEntries(raw).filter((e) => unit === null || e.unit === undefined || e.unit === unit);
+  // A per-Unit stage's notes are in each Unit's own diary, and work started
+  // before they moved there kept them in the one stage diary, tagged by Unit.
+  // For one Unit: its own diary, and its notes and the untagged ones in the
+  // stage diary. With no one Unit: every diary, whole.
+  const stage = findStageBySlug(slug);
+  const perUnit = stage !== null && stage !== undefined && isPerUnitStage(stage);
+  const unit = perUnit
+    ? surfaceUnit(projectDir, stateContent, atCheckpoint, flags.unit)
+    : atCheckpoint.length === 1 ? atCheckpoint[0] : null;
+  const own = perUnit
+    ? unitStageDiaryTexts(docsRoot(projectDir, pinnedIntent, space), slug, unit).flatMap(parseMemoryEntries)
+    : [];
+  const entries = [
+    ...own,
+    ...parseMemoryEntries(perUnit ? withoutWaveCopies(raw) : raw)
+      .filter((e) => unit === null || e.unit === undefined || e.unit === unit),
+  ];
 
-  // memory_path always ends `<prefix>/<phase>/<stageSlug>/memory.md` (see
+  // A stage-level memory_path always ends `<prefix>/<phase>/<stageSlug>/memory.md` (see
   // relativeMemoryPath), so the phase is the third-from-last segment regardless
   // of prefix shape: the per-intent record dir, the bare space prefix, or the
   // legacy flat `aidlc-docs` root all share that tail. Indexing from the front
@@ -801,6 +837,16 @@ function priorLegacyAuditRow(auditContent: string, slug: string, candidateId: st
 // heading, so the tool creates the heading first when needed).
 const DEFAULT_PRACTICE_HEADING = "## Corrections";
 
+// The `Field: value` lines the engine reads as settings, by section: Testing
+// Posture's Methodology and Ordering, and Guard Policy's Mode under its current
+// or retired heading. A learning written as one of those fields there keeps its
+// date out of the value.
+export const SETTING_FIELDS: ReadonlyMap<string, readonly string[]> = new Map([
+  [TESTING_HEADING, ["Methodology", "Ordering"]],
+  [GUARD_POLICY_HEADING, ["Mode"]],
+  [CHANGE_CONTROL_HEADING, ["Mode"]],
+]);
+
 // Header template for the method file's FIRST creation. The relocated
 // org/team/project.md always ship with all eight practice headings, so this
 // only fires for a fresh/fixture workspace that ships no method file yet —
@@ -817,18 +863,6 @@ function practiceHeading(routed: string | undefined): string {
   const t = (routed ?? "").trim();
   if (t === "") return DEFAULT_PRACTICE_HEADING;
   return t.startsWith("## ") ? t : `## ${t.replace(/^#+\s*/, "")}`;
-}
-
-// Ensure-exists a `## ` heading in a method file. appendUnderHeading throws
-// when the heading is absent (DETERMINISM safety net, aidlc-lib.ts), so the
-// orchestrator may name a heading the shipped file doesn't carry — append it
-// (with a leading blank line when the file already has content) so the
-// subsequent appendUnderHeading lands cleanly.
-function ensureHeading(content: string, heading: string): string {
-  const headingRe = new RegExp(`^${escapeRegex(heading)}[ \\t]*$`, "m");
-  if (headingRe.test(content)) return content;
-  const sep = content === "" ? "" : content.endsWith("\n") ? "\n" : "\n\n";
-  return `${content}${sep}${heading}\n`;
 }
 
 // cid marker — stable, content-addressed idempotency key per written line.
@@ -870,10 +904,10 @@ function legacyMarkerCandidateIdScoped(intentSlug: string, slug: string, candida
 // content hash), so a DIFFERENT learning that happens to land on the same
 // positional candidate_id post-upgrade would otherwise be silently dropped
 // as a false "retry" of the original. Matches the exact line shape persist
-// itself writes: `- <text> (learned <date>) <marker>`.
+// wrote with those markers: `- <text> (learned <date>) <marker>`.
 function legacyLineMatchesText(content: string, marker: string, text: string): boolean {
   const re = new RegExp(
-    `^- ${escapeRegex(text)} \\(learned \\d{4}-\\d{2}-\\d{2}\\) ${escapeRegex(marker)}\\s*$`,
+    `^- ${escapeRegex(text)} ${LEARNED_DATE_SOURCE} ${escapeRegex(marker)}\\s*$`,
     "m"
   );
   return re.test(content);
@@ -1047,7 +1081,8 @@ function handlePersist(args: string[], projectDir: string): void {
         // routed heading first when the method file doesn't carry it.
         if (!hasLine) {
           content = ensureHeading(content, heading);
-          const line = `- ${sel.text} (learned ${today}) ${marker}\n`;
+          const fieldLine = (SETTING_FIELDS.get(heading) ?? []).some((field) => structuredField(sel.text, field) !== null);
+          const line = `- ${sel.text} ${learnedDate(today, fieldLine)} ${marker}\n`;
           content = appendUnderHeading(content, heading, line);
           fileContent.set(path, content);
         }
@@ -1143,18 +1178,9 @@ function handlePersist(args: string[], projectDir: string): void {
       };
     }, pinnedIntent, pinnedSpace);
   } catch (e) {
-    // Lock-acquire failure (or any in-lock throw) — name the lock path +
-    // manual remedy so a hard-killed predecessor's orphaned lock is
-    // recoverable by hand (plan §0.19b).
-    const msg = errorMessage(e);
-    if (/Failed to acquire audit lock/.test(msg)) {
-      fail(
-        `${msg}. The audit lock dir may be orphaned by a hard-killed run; ` +
-          `remove it manually (look under the system temp dir for the aidlc audit lock) and retry.`,
-        1
-      );
-    }
-    fail(`persist failed: ${msg}`, 1);
+    // A dead holder's lock is reclaimed on acquire, so a lock that held out
+    // belongs to a live command; nothing here says to remove it.
+    fail(`persist failed: ${errorMessage(e)}`, 1);
   }
 
   const notes: string[] = [];
@@ -1325,7 +1351,7 @@ function stripProjectDir(args: string[]): { projectDirArg: string | undefined; r
 function printHelp(): void {
   process.stdout.write(
     [
-      "aidlc-learnings.ts — §13 learning-gate tool (tool-as-actor).",
+      "aidlc-learnings.ts - §13 learning-gate tool (tool-as-actor).",
       "",
       "Subcommands:",
       "  surface --slug <stage-slug> [--correction <their change> | --correction-file <file>]... [--project-dir <path>]",

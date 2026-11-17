@@ -224,7 +224,7 @@ describe("t29 aidlc-sync-workflow-state hook (migrated from t29-hook-sync-status
     );
     expect(existsSync(heartbeatPath(p))).toBe(true);
     // The heartbeat is a non-empty ISO-8601 UTC timestamp (isoTimestamp(),
-    // aidlc-lib.ts).
+    // aidlc-record-core.ts).
     const hb = readFileSync(heartbeatPath(p), "utf-8");
     expect(hb).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);

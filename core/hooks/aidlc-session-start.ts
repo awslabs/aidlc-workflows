@@ -43,6 +43,7 @@ import {
   trackedKiroIdeSteeringAsk,
 } from "../tools/aidlc-includes.ts";
 import { kiroCliWorkflowsAsk, kiroIdeWorkflowsAsk } from "../tools/aidlc-kiro-ide-workflows.ts";
+import { sweepReviewCopies } from "../tools/aidlc-kiro-review-copy.ts";
 import { kiroIdeTerminalAsk, kiroIdeTerminalStandingLine, recordKiroTerminalShell } from "../tools/aidlc-kiro-ide-terminal.ts";
 import {
   isBindableIntentRecordName,
@@ -89,6 +90,7 @@ import {
   SELECTION_NOTICE_FOLLOW,
   writeSessionSelectionNotice,
   clearSessionRebindOffer,
+  completeSubagentInflight,
 } from "../tools/aidlc-lib.ts";
 import { writeCurrentTranscriptPath } from "../tools/aidlc-usage.ts";
 import { recordRulesLoad } from "../tools/aidlc-rules-held.ts";
@@ -111,6 +113,20 @@ function switchOffContext(projectDir: string): string {
         backOnInstructions(projectDir).map((line) => `${line}\n`).join("");
   } catch {
     return "";
+  }
+}
+
+// A resumed chat runs in a new process, so no background helper its earlier
+// process sent is still at work, and a quit sends no SubagentStop to clear the
+// helper's in-flight entry. Left there, the entry would hold the Stop hook's
+// background wait open for helpers nobody runs (each later completion clears
+// the oldest entry). So the chat's entries are completed here; a compaction
+// keeps them, since its helpers run on. Never blocks startup.
+function completeHelpersOfEarlierProcess(projectDir: string, sessionId: string): void {
+  try {
+    for (let i = 0; i < 256 && completeSubagentInflight(projectDir, sessionId); i++);
+  } catch {
+    // A malformed record stays for doctor to name; the Stop hook fails closed on it.
   }
 }
 
@@ -190,6 +206,8 @@ if (sessionId) {
     // Presence bypass bookkeeping must never break session startup.
   }
   writeSessionPidAncestry(projectDir, sessionId);
+  // Cursor's per-prompt rebind probe is no resume.
+  if (source === "resume" && !rebindCheckOnly) completeHelpersOfEarlierProcess(projectDir, sessionId);
 }
 
 // Resolve one session-local workflow target before any state read. An existing
@@ -263,6 +281,11 @@ if (sessionId) {
 // the no-workflow early exit. A copy that config never ran in first gets
 // AI-DLC's part of .gitignore and AGENTS.md, after the team's own content.
 ensureActiveSpaceCursor(projectDir);
+// On Kiro (kiro-ide), a reviewer copy whose review in this chat's work is over
+// without its verdict (the Unit or the stage approved over it) leaves the
+// agent list when the next chat starts. A chat joined to no work reads no
+// record.
+if (selection.intent !== null) sweepReviewCopies(projectDir, { intent: selection.intent, space: selection.space });
 // A file written here may be one the host already read for this chat. Kiro
 // CLI and opencode read the copy again with every request, so a copy written
 // here reaches their next request as it is, and the Kiro IDE tree never reads

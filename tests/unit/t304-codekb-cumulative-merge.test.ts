@@ -17,6 +17,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   symlinkSync,
@@ -26,8 +27,10 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import {
   cleanupTestProject,
+  createOrchestrationTestProject,
   createTestProject,
   DEFAULT_SPACE,
+  removeWorkspaceRecord,
   REPO_ROOT,
   resetAidlcEnv,
   seededStateFile,
@@ -37,6 +40,8 @@ import {
 } from "../harness/fixtures.ts";
 import {
   codekbScopeFingerprint,
+  readIntentRegistry,
+  writeIntentRegistry,
   writeSessionBinding,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { removePublishedCandidate } from "../../dist/claude/.claude/tools/aidlc-utility.ts";
@@ -158,6 +163,21 @@ function runUtility(
   );
 }
 
+// The refusal's own words, as the agent reads them: the error line's text,
+// so a backslash in a path reads as typed.
+function refusalWords(result: { stdout: string; stderr: string }): string {
+  const out = `${result.stdout}${result.stderr}`;
+  for (const line of out.split("\n")) {
+    try {
+      const parsed = JSON.parse(line) as { error?: unknown };
+      if (typeof parsed.error === "string") return parsed.error;
+    } catch {
+      // not the error line
+    }
+  }
+  return out;
+}
+
 function snapshot(project: string, paths: string[]): {
   store_generation: string;
   source_fingerprint: string;
@@ -255,7 +275,7 @@ describe("t304 cumulative CodeKB stage contract", () => {
       "`{{INVOKE}} engine workspace codekb-scope-diff --repo <repo> --mint --paths <analyzed.paths, comma-separated>`",
     );
     expect(facts).toContain("`shallow.paths` is a record for people; no tool hashes or compares it.");
-    expect(facts).toContain("write the intent's `slug` from `intents.json`");
+    expect(facts).toContain("write the `intent` that `{{INVOKE}} engine workspace codekb --repo <repo> --json` prints.");
     expect(facts).toContain("It does not read the Run Record.");
     expect(facts).toContain("A list with nothing in it is written `paths: []`.");
     expect(facts).toContain("AI-DLC ships no Mermaid validator, so there is none to look for");
@@ -322,6 +342,108 @@ describe("t304 source and store generation interleavings", () => {
       "src/paymnts is not in the repository: run it again with --paths naming paths that exist.",
     );
     expect(snapshot(project, ["src/payments"]).paths).toEqual(["src/payments"]);
+  });
+
+  // A workspace beside its code repos (#3595): the paths are outside the
+  // project folder, and the refusal says so, never a socket or pipe, and names
+  // no layout to bring that code in (a checkout nested in a Git project is
+  // fingerprinted at its commit only); naming a folder inside goes through.
+  test("paths outside the project say so, git or not, and naming a folder inside goes through", () => {
+    for (const git of [true, false]) {
+      const parent = realpathSync(mkdtempSync(join(tmpdir(), "aidlc-t304-outside-")));
+      externalDirs.push(parent);
+      const project = toPortablePath(join(parent, "workspace"));
+      mkdirSync(project);
+      seedWorkspaceShell(project);
+      if (git) expect(spawnSync("git", ["init", "-q", project]).status).toBe(0);
+      for (const repo of ["checkout-api", "billing"]) {
+        mkdirSync(join(parent, repo, "src"), { recursive: true });
+        writeFileSync(join(parent, repo, "src", "index.ts"), `export const repo = "${repo}";\n`);
+      }
+      const sibling = toPortablePath(join(parent, "billing"));
+      const outside = [
+        ["../checkout-api", "../billing"],
+        [sibling],
+        ["../nothere"],
+        // Where a path points is the platform's own reading: these two are
+        // outside on Windows only.
+        ...(process.platform === "win32" ? [["..\\billing"], [sibling.replaceAll("/", "\\")]] : []),
+      ];
+      for (const paths of outside) {
+        const refused = runUtility(project, ["codekb-snapshot", "--paths", paths.join(",")]);
+        const said = refusalWords(refused);
+        expect(refused.status, said).not.toBe(0);
+        expect(said).toContain(
+          `${paths.join(", ")} ${paths.length === 1 ? "is" : "are"} outside the project folder: ` +
+            "run it again with --paths naming folders inside it.",
+        );
+        expect(said).not.toContain("To scan code kept outside the project");
+        expect(said).not.toContain("socket or named pipe");
+        expect(said).not.toContain("not in the repository");
+      }
+      mkdirSync(join(project, "checkout-api", "src"), { recursive: true });
+      writeFileSync(join(project, "checkout-api", "src", "index.ts"), "export const repo = 1;\n");
+      expect(snapshot(project, ["checkout-api"]).paths).toEqual(["checkout-api"]);
+    }
+  });
+
+  // A work with recorded repos: a path into another repo names the --repo that
+  // reads it, carried from that repo's folder, and that goes through; a path
+  // inside the repo being scanned keeps its own line and never names that repo.
+  test("a path into another repo of the work names its --repo, and that goes through", () => {
+    const project = createOrchestrationTestProject();
+    tempDirs.push(project);
+    removeWorkspaceRecord(project);
+    for (const repo of ["api", "billing"]) {
+      mkdirSync(join(project, repo, "src"), { recursive: true });
+      writeFileSync(join(project, repo, "src", "index.ts"), `export const repo = "${repo}";\n`);
+      expect(spawnSync("git", ["init", "-q", join(project, repo)]).status).toBe(0);
+    }
+    const made = runUtility(project, ["intent-create", "--scope", "bugfix", "--arguments", "fix the greeting"]);
+    expect(made.status, `${made.stdout}${made.stderr}`).toBe(0);
+    expect(readIntentRegistry(project)[0]?.repos).toEqual(["api", "billing"]);
+    const refusal = (paths: string): string => {
+      const refused = runUtility(project, ["codekb-snapshot", "--repo", "api", "--paths", paths]);
+      const said = refusalWords(refused);
+      expect(refused.status, said).not.toBe(0);
+      expect(said).not.toContain("socket or named pipe");
+      return said;
+    };
+    expect(refusal("../billing")).toContain(
+      "../billing is in the billing repository: run it again with --repo billing --paths ./.",
+    );
+    expect(refusal("../billing/src")).toContain(
+      "../billing/src is in the billing repository: run it again with --repo billing --paths src.",
+    );
+    for (const paths of ["./", "src"]) {
+      const step = runUtility(project, ["codekb-snapshot", "--repo", "billing", "--paths", paths, "--json"]);
+      expect(step.status, `${step.stdout}${step.stderr}`).toBe(0);
+    }
+    const elsewhere = refusal("../../elsewhere");
+    expect(elsewhere).toContain(
+      "../../elsewhere is outside the api repository's folder: run it again with --paths naming folders inside it.",
+    );
+    expect(elsewhere).not.toContain("add-repo");
+    const missing = refusal("src/nothere");
+    expect(missing).toContain("src/nothere is not in the repository");
+    expect(missing).not.toContain("in the api repository");
+    // A recorded repo not cloned here resolves to the project folder, which
+    // holds every path inside the project, so it is never named.
+    const rows = readIntentRegistry(project);
+    writeIntentRegistry(project, rows.map((row) => ({ ...row, repos: ["api", "billing", "shipping"] })));
+    const other = refusal("../other");
+    expect(other).toContain("../other is outside the api repository's folder");
+    expect(other).not.toContain("shipping");
+    // Scanning that repo reads the project folder, and a checkout of it kept
+    // beside the project is outside: no add-repo step, which would find the
+    // name recorded and clone nothing.
+    const beside = runUtility(project, ["codekb-snapshot", "--repo", "shipping", "--paths", "../shipping"]);
+    expect(beside.status).not.toBe(0);
+    const besideSaid = refusalWords(beside);
+    expect(besideSaid).toContain(
+      "../shipping is outside the project folder: run it again with --paths naming folders inside it.",
+    );
+    expect(besideSaid).not.toContain("add-repo");
   });
 
   test("publish accepts a candidate whose paths differ from the snapshot only by a trailing slash (#2578)", () => {

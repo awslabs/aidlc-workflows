@@ -70,7 +70,7 @@ jobs:
         id: bun
         timeout-minutes: 15
         with:
-          bun-version: '1.4.2'
+          bun-version: '1.4.4'
 
       - name: Install dependencies
         id: install
@@ -269,7 +269,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: '1.4.2'
+          bun-version: '1.4.4'
       - run: bun install --frozen-lockfile
       - run: bun scripts/package.ts
       # Explicit filters require executed cases in every selected file; select
@@ -340,7 +340,7 @@ jobs:
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: '1.4.2'
+          bun-version: '1.4.4'
       - run: bun install --frozen-lockfile
       - run: bun scripts/package.ts
       - name: Prepare POSIX isolated user
@@ -388,7 +388,7 @@ jobs:
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: '1.4.2'
+          bun-version: '1.4.4'
       - run: bun install --frozen-lockfile
       - name: Stage a release candidate from this commit
         run: |
@@ -466,7 +466,7 @@ jobs:
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: '1.4.2'
+          bun-version: '1.4.4'
       - run: bun install --frozen-lockfile
       - run: bun scripts/package.ts
       # docs/reference/06-hooks-and-tools.md promises hook execution needs no
@@ -524,11 +524,11 @@ jobs:
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: '1.4.2'
+          bun-version: '1.4.4'
       # Hosted Windows images offer WSL 1 only: WSL 2 needs the nested
-      # virtualization windows-2025 runners do not expose. Bun 1.4.2 and a
-      # compiled aidlc binary both run under WSL 1 (checked on Windows Server
-      # 2025 with Ubuntu-24.04), which is what the README's WSL path relies on.
+      # virtualization windows-2025 runners do not expose. This lane checks
+      # Bun and the compiled aidlc binary under WSL 1, which is what the
+      # README's WSL path relies on.
       - uses: Vampire/setup-wsl@d1da7f2c0322a5ee4f24975344f67fc0f5baf364 # v7.0.0
         with:
           distribution: Ubuntu-24.04
@@ -541,12 +541,12 @@ jobs:
         run: |
           set -euo pipefail
           archive="$(mktemp -d)/bun-linux-x64.zip"
-          curl -fsSL -o "$archive" https://github.com/oven-sh/bun/releases/download/bun-v1.4.2/bun-linux-x64.zip
-          echo "36368faef7527875d5ffa52e53cd48021741f2a83eb6208a8dd64068d422a913  $archive" | sha256sum -c -
+          curl -fsSL -o "$archive" https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-linux-x64.zip
+          echo "bf8ccbfb2b0b80159e0f9a6d15c55317add8077534dbc6130a3edb52fccb395c  $archive" | sha256sum -c -
           mkdir -p "$HOME/.bun/bin"
           unzip -q -j -o "$archive" bun-linux-x64/bun -d "$HOME/.bun/bin"
           chmod +x "$HOME/.bun/bin/bun"
-          test "$("$HOME/.bun/bin/bun" --version)" = 1.4.2
+          test "$("$HOME/.bun/bin/bun" --version)" = 1.4.4
       # The wsl-bash wrapper starts in wsl.exe's translation of the step
       # directory (the checkout) and forwards no Windows environment, so the
       # script derives everything from $PWD. The clone keeps node_modules,

@@ -150,10 +150,11 @@ describe("t305 construction protocol module — Build-and-Test failure loop-back
     // The copy channel expands the authored `{{INVOKE}}` seam to
     // `bun <harnessDir>/tools/aidlc.ts`; fold both projections back before the
     // byte comparison so real prose drift still fails. Each tree ships only its
-    // own tool's binding subsection, so it is compared with that cut.
+    // own tool's binding subsection, so it is compared with that cut. Only the
+    // folder is folded: `.aidlc` is also the start of `aidlc/.aidlc-request-text/`.
     const normalize = (body: string, harnessDir: string) =>
       body
-        .replaceAll(harnessDir, "{{HARNESS_DIR}}")
+        .replaceAll(`${harnessDir}/`, "{{HARNESS_DIR}}/")
         .replaceAll("bun {{HARNESS_DIR}}/tools/aidlc.ts", "{{INVOKE}}");
     const authoredFor = (harness: string) =>
       keepOwnHarnessBindings(AUTHORED_CONSTRUCTION_PROTOCOL, harness, "stage-protocol-construction.md");
@@ -361,7 +362,7 @@ describe("t305 construction protocol module — Build-and-Test failure loop-back
     // The audit call is spelled out in full (positional slug +
     // --artifacts), never abbreviated to a form that errors if run literally.
     expect(tail).toContain(
-      'aidlc-state.ts reuse-artifact <slug>\n--decision <keep|modify> --artifacts "<comma-separated list of existing\nartifacts found>"',
+      'bun .claude/tools/aidlc.ts engine state reuse-artifact <slug>\n--decision <keep|modify> --artifacts "<comma-separated list of existing\nartifacts found>"',
     );
   });
 
@@ -384,7 +385,7 @@ describe("t305 construction protocol module — Build-and-Test failure loop-back
     expect(gated).toContain("**Keep** for all other units");
     expect(gated).toContain("**Modify** for build-and-test itself");
     expect(gated).toContain(
-      "aidlc-state.ts reuse-artifact <slug> --decision <keep|modify>",
+      "bun .claude/tools/aidlc.ts engine state reuse-artifact <slug> --decision <keep|modify>",
     );
     expect(gated).toContain(
       '--artifacts "<comma-separated list of existing artifacts found>"',

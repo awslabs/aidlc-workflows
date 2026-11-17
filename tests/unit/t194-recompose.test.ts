@@ -344,6 +344,22 @@ describe("t194 recompose - rejections", () => {
     expect(anchorAdd.out).toContain("feature");
   });
 
+  test("the last stage on the plan, started: skipping it names the skip that takes it where it stands", () => {
+    const proj = createdProject("poc");
+    const last = [...readState(proj).matchAll(/^- \[.\] (\S+) \u2014 EXECUTE$/gm)].at(-1)![1];
+    const jumped = run(proj, "aidlc-jump.ts", ["execute", "--target", last, "--direction", "forward", "--scope", "poc"]);
+    expect(jumped.status, jumped.out).toBe(0);
+    const before = readState(proj);
+    expect(before).toContain(`- [-] ${last} \u2014 EXECUTE`);
+    const refused = run(proj, "aidlc-utility.ts", ["recompose", "--skip", last]);
+    expect(refused.status).not.toBe(0);
+    expect(refused.out).toContain(`It is the last stage on the plan; to skip it where it stands, type \`/aidlc --skip ${last}\`.`);
+    expect(readState(proj)).toBe(before);
+    // The skip it names is the one that takes the stage where it stands.
+    const step = run(proj, "aidlc-orchestrate.ts", ["next", "--skip", last]);
+    expect(step.out).toContain(`report --stage ${last} --result skipped`);
+  });
+
   test("--reason lands on the RECOMPOSED row", () => {
     const proj = createdProject("bugfix");
     const r = run(proj, "aidlc-utility.ts", ["recompose", "--add", "user-stories", "--reason", "jump to user-stories"]);
@@ -399,9 +415,16 @@ describe("t194 recompose - rejections", () => {
     });
     expect(res.status, res.stderr).toBe(0);
   }
-  const refusedNamingTheSetter = (r: { status: number; out: string }): void => {
+  const refusedNamingTheSetter = (r: { status: number; out: string }, unattended = false): void => {
     expect(r.status).not.toBe(0);
     expect(r.out).toContain("Construction Autonomy Mode is autonomous");
+    // What it found is no request on record, which can be a person who is
+    // there; only an unattended run has nobody here.
+    if (unattended) expect(r.out).toContain("with nobody here to approve it");
+    else {
+      expect(r.out).toContain("without a request from the person for this change on record");
+      expect(r.out).not.toContain("nobody here");
+    }
     // The step it names is one that runs: the setter's real command, and no
     // wait that never ends (the mode stays autonomous to the end of the run).
     expect(r.out).toMatch(/`[^`]*aidlc[^`]*bolt[^`]* set-autonomy --mode gated`/);
@@ -440,7 +463,7 @@ describe("t194 recompose - rejections", () => {
   test("autonomous Construction: an unattended driver is nobody's request, even with a turn on record", () => {
     const { proj, before } = autonomousProject();
     says(proj, "/aidlc --skip market-research");
-    refusedNamingTheSetter(run(proj, "aidlc-utility.ts", ["recompose", "--skip", "market-research"], { ...attended, AIDLC_UNATTENDED: "1" }));
+    refusedNamingTheSetter(run(proj, "aidlc-utility.ts", ["recompose", "--skip", "market-research"], { ...attended, AIDLC_UNATTENDED: "1" }), true);
     expect(readState(proj)).toBe(before);
   });
 
@@ -469,7 +492,7 @@ describe("t194 recompose - rejections", () => {
     writeFileSync(sp, terminal, "utf-8");
     const r = run(proj, "aidlc-utility.ts", ["recompose", "--skip", "market-research"]);
     expect(r.status).not.toBe(0);
-    expect(r.out).toContain("not Running");
+    expect(r.out).toContain("this work is finished, so nothing on its plan is left to skip");
     expect(readState(proj)).toBe(terminal);
   });
 

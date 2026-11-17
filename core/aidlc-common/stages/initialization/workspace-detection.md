@@ -69,7 +69,7 @@ Classify based on the scanner's evidence:
 Signals are evaluated at the root first; if none fires, the nested-project fallback re-evaluates the same signals in candidate container directories up to three levels below the root (see Step 2).
 
 **Brownfield** — ANY of these indicators present:
-- Source code files exist (`.js`, `.ts`, `.jsx`, `.tsx`, `.py`, `.java`, `.go`, `.rs`, `.rb`, `.cs`, `.cpp`, `.c`, `.kt`, `.swift`, `.php`)
+- Source code files exist (`.js`, `.ts`, `.jsx`, `.tsx`, `.py`, `.java`, `.go`, `.rs`, `.rb`, `.cs`, `.cpp`, `.c`, `.kt`, `.swift`, `.php`), infrastructure code included (`.tf`, `.hcl`, `.bicep`; Terraform's `.terraform.lock.hcl` is not counted)
 - Application framework configuration detected (next.config, vite.config, angular.json, etc.)
 - Package manifest with application dependencies (package.json with non-dev deps, requirements.txt, Cargo.toml, go.mod, pom.xml, etc.)
 - Application source directories exist (src/, app/, lib/, pages/, components/)

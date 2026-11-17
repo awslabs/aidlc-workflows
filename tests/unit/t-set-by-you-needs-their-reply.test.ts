@@ -395,7 +395,7 @@ describe("a setting the agent sends through next names their message", () => {
     expect(message).toContain(MESSAGE_FILL);
     expect(message).toContain(`${asked}, sent `);
     const command = /`[^`]*? engine intent create ([^`]+)`/.exec(message)![1]
-      .replace('--label "<2-3 word kebab essence>"', "--label login-crash")
+      .replace("--label '<2-3 word kebab essence>'", "--label login-crash")
       .replace(SLOT, `--message ${asked}`)
       .split(" ");
     const made = utility(proj, ["intent-create", ...command]);
@@ -408,7 +408,7 @@ describe("a setting the agent sends through next names their message", () => {
     expect(message).toContain("--plan-approval off` to start the workflow");
     expect(message).not.toContain("--message");
     const command = /`[^`]*? engine intent create ([^`]+)`/.exec(message)![1]
-      .replace('--label "<2-3 word kebab essence>"', "--label login-crash")
+      .replace("--label '<2-3 word kebab essence>'", "--label login-crash")
       .split(" ");
     const made = utility(proj, ["intent-create", ...command]);
     expect(made.status, made.out).toBe(0);

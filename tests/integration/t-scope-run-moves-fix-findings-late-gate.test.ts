@@ -5,6 +5,7 @@
 // checkpoints, its defaults), where the team made a gate check blocking on Code
 // Generation (the Harness Engineer Guide's no-tbd example). The check fails on
 // one Unit's code summary at the late Code Generation gate that `next` settles
+// (the team adds it after every Unit's checkpoint, which would otherwise run it)
 // itself, and the person picks Fix findings, logged as the step and the sensors
 // module say (no --unit). The agent fixes that file. Only that Unit is reviewed
 // again, at its first pass, and only its checkpoint comes back to the person;
@@ -70,11 +71,19 @@ describe("a Fix findings pick at the late Code Generation gate in solo work buil
   test("only the Unit the check named is reviewed again and asked again, and the run reaches done", () => {
     const { proj, host } = createScopeProject("empty");
     projects.push(proj);
-    installBlockingCheck(proj);
-    expect(host.engine("graph", "compile").status).toBe(0);
     const person = new PersonScript(host);
     const isBlocking = (d: Directive) => /Blocking gate sensor/.test(JSON.stringify(d));
-    const agent = new AgentStandIn(host, person, { units: ["core", "extra", "third"], until: isBlocking });
+    // The team adds the check once every Unit is approved, so no checkpoint ran it
+    // and the late gate is the one place it runs (a Unit's own checkpoint runs a
+    // check that is there when it is verified).
+    const agent = new AgentStandIn(host, person, {
+      units: ["core", "extra", "third"], until: isBlocking,
+      afterCheckpoint: (unit) => {
+        if (unit !== "third") return;
+        installBlockingCheck(proj);
+        expect(host.engine("graph", "compile").status).toBe(0);
+      },
+    });
     const stopped = agent.drive(agent.begin("build the classic work", [
       "--scope", "classic", "--skip", SKIPPED.join(","), "--plan-approval", "on",
     ]));

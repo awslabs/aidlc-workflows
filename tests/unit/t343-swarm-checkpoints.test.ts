@@ -37,6 +37,7 @@ import {
   gitTreeLeafEntries,
   intentRepos,
   latestMainWorkflowStageRunFloorForProject,
+  pendingPersonLines,
   readAuditShardEvents,
   readProtectedQuestion,
   readProtectedResponse,
@@ -479,6 +480,21 @@ describe("t343 completed swarm batch checkpoints", () => {
     const [row] = gates(pd);
     expect(auditBlockField(row.block, "Review Finding Dispositions")).toBe(recorded);
     expect(auditBlockField(row.block, autonomous ? "Autonomous" : "User Input")).toBe(autonomous ? "true" : "Approve");
+  });
+
+  // The batch's question is on the record with its own id (the question
+  // record): its row carries it, and so does what the ask prints.
+  test("the batch's question has its id on its row and in what the ask prints", () => {
+    const pd = fixture();
+    converge(pd);
+    const asked = tool(pd, "bolt", ["swarm-checkpoint", "--action", "ask", "--batch", "1", "--units", BATCH.join(","), "--session", "t343-checkpoint"]);
+    expect(asked.code, asked.out).toBe(0);
+    const row = readAuditShardEvents(pd).filter((event) => event.event === "DECISION_RECORDED" &&
+      auditBlockField(event.block, "Checkpoint") === "Swarm Batch Approval").at(-1)!;
+    expect(auditBlockField(row.block, "Question Id")).toMatch(/^[0-9a-f]{8}$/);
+    expect(auditBlockField(row.block, "Question Type")).toBe("swarm-batch");
+    expect(auditBlockField(row.block, "Question Chat")).toBe("t343-checkpoint");
+    expect(JSON.parse(asked.stdout.trim().split(/\r?\n/).at(-1)!).question_id).toBe(auditBlockField(row.block, "Question Id"));
   });
 
   // The person names a finding as they decide the batch, and the conductor
@@ -1194,6 +1210,27 @@ if (invalid.ok) throw new Error("invalid manifest unexpectedly accepted");
     expect(approveSwarmCheckpoint(pd, 1, BATCH, "Approve", "t343-checkpoint").approved).toBe(true);
     // Recorded once: the approval adds no second row for the same change.
     expect(readAuditShardEvents(pd).filter((row) => row.event === "CHANGE_ACCEPTED")).toHaveLength(1);
+  });
+
+  // Under Continue automatically the agent approves the batch itself and goes
+  // on, so the batch's lines wait for the reply the person reads.
+  test("under Continue automatically, the agent's own approval keeps the batch's line for the reply", () => {
+    const line = "Files from the alpha Unit changed after its batch was checked: src/alpha.ts. Kept them.";
+    for (const chat of ["t343-chat", ""]) {
+      const pd = fixture(true);
+      setPolicy(pd, "off (set by you)");
+      converge(pd);
+      writeFileSync(join(pd, "src", "alpha.ts"), "export const alpha = 2;\n");
+      const approved = approveSwarmCheckpoint(pd, 1, BATCH, undefined, chat) as { approved: boolean; notices?: string[] };
+      expect(approved.approved).toBe(true);
+      if (chat === "") {
+        // No chat to keep it for: the approval says it, as before.
+        expect(approved.notices).toEqual([line]);
+        continue;
+      }
+      expect(approved.notices ?? []).toEqual([]);
+      expect(pendingPersonLines(pd, chat).lines).toEqual([line]);
+    }
   });
 
   test("later unrelated source and native batches do not reopen an approved batch", () => {

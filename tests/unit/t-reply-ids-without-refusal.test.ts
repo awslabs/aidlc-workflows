@@ -130,7 +130,16 @@ describe("t-reply-ids-without-refusal: the hook's line names the kept message", 
       const here = await run(["config", "flags", "--bypass", "AIDLC_DISABLE_REVIEWER_SCOPE_HOOK", "--local", "--yes",
         "--message", await ask("turn the reviewer read scope check off for this project")]);
       expect(here.status, here.stdout + here.stderr).toBe(0);
-      expect(here.stdout).toContain("Recorded AIDLC_DISABLE_REVIEWER_SCOPE_HOOK");
+      // The production guard profile sets the switch's variable to 0, which
+      // outranks the file, so the line says the recording landed and does not
+      // turn the check off here.
+      expect(env(proj).AIDLC_DISABLE_REVIEWER_SCOPE_HOOK).toBe("0");
+      expect(JSON.parse(readFileSync(join(proj, "aidlc.settings.local.json"), "utf-8")).flags.bypasses)
+        .toContain("AIDLC_DISABLE_REVIEWER_SCOPE_HOOK");
+      expect(here.stdout).toContain(
+        "is recorded off for this project, but AIDLC_DISABLE_REVIEWER_SCOPE_HOOK is set to something other than 1",
+      );
+      expect(here.stdout).toContain("so the recording does not turn the check off");
       const policy = await run(["engine", "config", "set", "guard-policy", "relaxed", "--message",
         await ask("stop asking me to re-approve when files change")]);
       expect(policy.status, policy.stdout + policy.stderr).toBe(0);
@@ -138,7 +147,9 @@ describe("t-reply-ids-without-refusal: the hook's line names the kept message", 
     });
   }
 
-  test("under autonomous Construction a typed message gets the line too; on finished work there is none", async () => {
+  // On finished work the message is this chat's turn (standingPersonTurn), so
+  // a chat that took part hears its id too (#3608).
+  test("under autonomous Construction a typed message gets the line too, and so does one on finished work", async () => {
     const proj = project();
     await buildState(proj, "work-open");
     const state = seededStateFile(proj);
@@ -151,7 +162,10 @@ describe("t-reply-ids-without-refusal: the hook's line names the kept message", 
     await buildState(other, "finished");
     const outside = await say(other, "turn the review freeze check off", "claude");
     expect(outside.status, outside.stderr).toBe(0);
-    expect(outside.stdout).not.toContain("on record as");
+    // No turn is written there; the id is the kept message's, which the record's turns never name.
+    const kept = /on record as ([0-9a-f]{8}):/.exec(outside.stdout)?.[1];
+    expect(kept, outside.stdout).toBeDefined();
+    expect(turns(other).some((row) => auditBlockField(row.block, "Message Id") === kept)).toBe(false);
   });
 });
 

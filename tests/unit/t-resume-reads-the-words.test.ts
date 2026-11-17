@@ -124,7 +124,8 @@ describe("words after --resume over selected work get the reading plain words ge
     const resumed = await next(proj, ["--resume", ...line]);
     const plain = await next(proj, line);
     expect(sameStep(resumed.directive), resumed.out).toBe(sameStep(plain.directive));
-    expect(String(resumed.directive?.message), resumed.out).toContain("next --scope bugfix -- 'add rate limiting'");
+    expect(String(resumed.directive?.message), resumed.out).toContain("next --scope bugfix --request-file aidlc/.aidlc-request-text/line-after-plan");
+    expect(String(resumed.directive?.message), resumed.out).toContain('(the task: "add rate limiting")');
     expect(resumed.out).not.toContain("--resume");
   });
 

@@ -7,6 +7,8 @@
   "nfr-requirements",
   "nfr-design",
   "infrastructure-design",
+  "code-generation",
+  "build-and-test",
   "ci-pipeline",
   "deployment-pipeline",
   "environment-provisioning",

@@ -9,15 +9,17 @@
 // as the lead's. Those listings are AI-DLC's ignored copy, so a team clone that
 // did not start the work has none, and a stage run on its own keeps none: each
 // takes its own on this machine when its Code Generation first runs here
-// (broughtListing). Silent when no listing is here or one cannot be read. A file
-// AI-DLC's install or a refresh wrote, as its install record says it wrote it,
-// is AI-DLC's and not the build's change (an `aidlc update` and `aidlc config`
-// while the work was open rewrite them).
+// (broughtListing). Unit by Unit, a Unit's approval compares from the files as
+// that Unit's Code Generation found them (unitListingName), so its way back
+// keeps what an earlier Unit's approval kept. Silent when no listing is here or
+// one cannot be read. A file AI-DLC's install or a refresh wrote, as its install
+// record says it wrote it, is AI-DLC's and not the build's change (an `aidlc
+// update` and `aidlc config` while the work was open rewrite them).
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lstatSync, readdirSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { holdsRecordedWrite, managedBlockMarkers } from "./aidlc-distribution.ts";
+import { holdsRecordedWrite, markedPart, onlyMarkedPartChanged } from "./aidlc-distribution.ts";
 import { isReadOnlyEngineProbe, readRegularFileNoFollowOrThrow } from "./aidlc-locks.ts";
 import { discoverProjectHarnesses } from "./aidlc-runtime-paths.ts";
 import {
@@ -169,22 +171,6 @@ function installRecord(projectDir: string): InstallRecord {
   return record;
 }
 
-// A shared file's marked part and the person's part around it, line endings
-// and the blank lines beside the markers aside; `block` is null for a file
-// with no marked part, and the whole is null when its markers are broken.
-function markedPart(path: string, text: string, marker: string): { block: string | null; person: string } | null {
-  const { begin, end } = managedBlockMarkers(path, marker);
-  const begins = text.split(begin).length - 1;
-  const ends = text.split(end).length - 1;
-  const plain = (part: string): string => part.replace(/\r\n/g, "\n").trim();
-  if (begins === 0 && ends === 0) return { block: null, person: plain(text) };
-  const at = text.indexOf(begin);
-  const to = text.indexOf(end);
-  if (begins !== 1 || ends !== 1 || to < at) return null;
-  const person = [plain(text.slice(0, at)), plain(text.slice(to + end.length))].filter(Boolean).join("\n");
-  return { block: text.slice(at, to + end.length), person };
-}
-
 // The file's bytes now, or null when it cannot be read.
 function bytesNow(projectDir: string, path: string): Buffer | null {
   try {
@@ -214,7 +200,7 @@ function writtenByInstall(projectDir: string, record: InstallRecord, file: Broug
     const now = markedPart(file.path, text, marker);
     if (now?.block == null || !holdsRecordedWrite(now.block, hash)) continue;
     const copy = committedCopy(projectDir, file);
-    if (copy !== null && markedPart(file.path, copy.blob.toString("utf-8"), marker)?.person === now.person) return true;
+    if (copy !== null && onlyMarkedPartChanged(file.path, text, copy.blob.toString("utf-8"), marker)) return true;
   }
   return false;
 }
@@ -270,6 +256,15 @@ function takenName(rows: readonly AuditShardEvent[], single: boolean): string | 
 // What the work's Units built before this machine picked the work up (each
 // Unit's source-manifest.json, kept with the record) is the work's own.
 function withoutUnitClaims(projectDir: string, listing: WorkspaceSourceListing): WorkspaceSourceListing {
+  const claims = unitSourceManifests(projectDir).map(({ manifest }) => manifest);
+  if (claims.length === 0) return listing;
+  return new Map([...listing].filter(([key]) => !claims.some((claim) => sourceClaimCovers(key, claim))));
+}
+
+type UnitSourceManifest = Extract<ReturnType<typeof readUnitSourceManifest>, { ok: true }>;
+
+/** Each Unit's Code Generation `source-manifest.json` kept with the record, the ones that read. */
+export function unitSourceManifests(projectDir: string): { unit: string; manifest: UnitSourceManifest }[] {
   const record = recordDir(projectDir);
   let units: string[] = [];
   try {
@@ -277,12 +272,10 @@ function withoutUnitClaims(projectDir: string, listing: WorkspaceSourceListing):
   } catch {
     // Nothing built yet.
   }
-  const claims = units.flatMap((unit) => {
+  return units.flatMap((unit) => {
     const read = readUnitSourceManifest(projectDir, STAGE, unit);
-    return read.ok ? [read] : [];
+    return read.ok ? [{ unit, manifest: read }] : [];
   });
-  if (claims.length === 0) return listing;
-  return new Map([...listing].filter(([key]) => !claims.some((claim) => sourceClaimCovers(key, claim))));
 }
 
 // The listing the person's files are read from, by the note and the gate's
@@ -299,6 +292,21 @@ function broughtListing(projectDir: string, rows: readonly AuditShardEvent[], si
   }
   const name = takenName(rows, single);
   if (name === null) return null;
+  const listing = takenListing(projectDir, name, take, () => {
+    const now = workspaceSourceState(projectDir);
+    return now === null ? null : single ? now.listing : withoutUnitClaims(projectDir, now.listing);
+  });
+  return listing === null ? null : { listing, taken: true };
+}
+
+// A listing this machine took, read when it is here; otherwise, with `take`
+// and outside a read-only probe, taken now from `now`.
+function takenListing(
+  projectDir: string,
+  name: string,
+  take: boolean,
+  now: () => WorkspaceSourceListing | null,
+): WorkspaceSourceListing | null {
   const path = join(engineDir(projectDir), TAKEN_DIR, name);
   let here = true;
   try {
@@ -306,16 +314,50 @@ function broughtListing(projectDir: string, rows: readonly AuditShardEvent[], si
   } catch {
     here = false;
   }
-  if (here) {
-    const listing = parseSourceListing(readRegularFileNoFollowOrThrow(path, "the files listed when this run started").toString("utf-8"));
-    return listing === null ? null : { listing, taken: true };
-  }
+  if (here) return parseSourceListing(readRegularFileNoFollowOrThrow(path, "the files listed when this run started").toString("utf-8"));
   if (!take || isReadOnlyEngineProbe()) return null;
-  const now = workspaceSourceState(projectDir);
-  if (now === null) return null;
-  const listing = single ? now.listing : withoutUnitClaims(projectDir, now.listing);
-  writeEngineFileNoFollow(projectDir, `${TAKEN_DIR}/${name}`, serializeSourceListing(listing));
-  return { listing, taken: true };
+  const listing = now();
+  if (listing !== null) writeEngineFileNoFollow(projectDir, `${TAKEN_DIR}/${name}`, serializeSourceListing(listing));
+  return listing;
+}
+
+// Where this build attempt started: the stage's own listing, or, on a machine
+// that took its own (broughtListing) and does not hold the stage's, that one.
+function attemptStart(projectDir: string, rows: readonly AuditShardEvent[], brought: Brought | null): WorkspaceSourceListing | null {
+  const stage = currentStageSourceBaseline(projectDir, STAGE, false, undefined, undefined, rows);
+  return stage.state === "ready" ? stage.listing : stage.state === "missing" && brought?.taken ? brought.listing : null;
+}
+
+// The files as a Unit's Code Generation found them in this attempt, taken here
+// when its first step is handed out (broughtFileNames): its Request Changes
+// keeps them, a new attempt takes them again.
+function unitListingName(start: WorkspaceSourceListing, unit: string): string {
+  const attempt = sourceListingSha256(serializeSourceListing(start));
+  return `unit-${createHash("sha256").update(`${attempt}\n${unit}`).digest("hex").slice(0, 12)}.tsv`;
+}
+
+// That listing, when this machine took it.
+function unitStartListing(projectDir: string, start: WorkspaceSourceListing, unit: string): WorkspaceSourceListing | null {
+  return takenListing(projectDir, unitListingName(start, unit), false, () => null);
+}
+
+/**
+ * The files as this build found them, for the paths it changed since
+ * (`lookup source-changes`): a Unit's own listing when this machine took it,
+ * so an earlier Unit's files are not this one's (`since: "unit"`), otherwise
+ * the attempt's start (`since: "stage"`). Null when neither is here.
+ */
+export function buildStartListing(
+  projectDir: string,
+  unit: string | null,
+): { listing: WorkspaceSourceListing; since: "unit" | "stage" } | null {
+  const rows = readAuditShardEvents(projectDir);
+  const brought = broughtListing(projectDir, rows, false, false);
+  const start = attemptStart(projectDir, rows, brought);
+  if (start === null) return null;
+  // With no listing of the work's start, no Unit's own was taken either (broughtFileNames).
+  const own = unit === null || brought === null ? null : unitStartListing(projectDir, start, unit);
+  return own === null ? { listing: start, since: "stage" } : { listing: own, since: "unit" };
 }
 
 /**
@@ -323,20 +365,21 @@ function broughtListing(projectDir: string, rows: readonly AuditShardEvent[], si
  * brownfield project the code the work changes on purpose is not one of them:
  * a changed file counts there only when the source walk does not read it as
  * code by its name (a README, LICENSE, docs, .env). `attempt` names the build
- * attempt (its starting listing), so a redo says it again.
+ * attempt (its starting listing), so a redo says it again. At a Unit's approval
+ * (`unit`) the start is the files as that Unit found them, when this machine
+ * took them, so an earlier Unit's change is not this one's to undo.
  */
 export function broughtFilesChanged(
   projectDir: string,
   stateContent: string,
+  unit: string | null = null,
 ): { files: BroughtFile[]; attempt: string } | null {
   const rows = readAuditShardEvents(projectDir);
   const brought = broughtListing(projectDir, rows, false, false);
   if (brought === null) return null;
-  const stage = currentStageSourceBaseline(projectDir, STAGE, false, undefined, undefined, rows);
-  // An attempt begun on the machine the work started on starts, here, where
-  // this machine took its listing.
-  const before = stage.state === "ready" ? stage.listing : stage.state === "missing" && brought.taken ? brought.listing : null;
-  if (before === null) return null;
+  const start = attemptStart(projectDir, rows, brought);
+  if (start === null) return null;
+  const before = (unit === null ? null : unitStartListing(projectDir, start, unit)) ?? start;
   const current = workspaceSourceState(projectDir);
   if (current === null) return null;
   const greenfield = declaredProjectType(getField(stateContent, "Project Type") ?? undefined) === "Greenfield";
@@ -368,14 +411,31 @@ export function broughtFilesChanged(
  * compares, less the code itself on existing code and the files AI-DLC's
  * install wrote whole and still holds as written, in the order the gate's line
  * names them. `single` is a stage run on its own. Called on a step whose body
- * runs here, so it may take this machine's listing (broughtListing). Null when
- * no listing is here or none is left.
+ * runs here, so it may take this machine's listing (broughtListing), and for a
+ * Unit's step (`unit`) the files as that Unit found them (unitListingName).
+ * Null when no listing is here or none is left.
  */
-export function broughtFileNames(projectDir: string, stateContent: string | null, single = false): string[] | null {
+export function broughtFileNames(
+  projectDir: string,
+  stateContent: string | null,
+  single = false,
+  unit: string | null = null,
+): string[] | null {
   try {
     if (stateContent === null && !single) return null;
-    const brought = broughtListing(projectDir, readAuditShardEvents(projectDir), single, true);
+    const rows = readAuditShardEvents(projectDir);
+    const brought = broughtListing(projectDir, rows, single, true);
     if (brought === null) return null;
+    if (unit !== null && !single) {
+      try {
+        const start = attemptStart(projectDir, rows, brought);
+        if (start !== null) {
+          takenListing(projectDir, unitListingName(start, unit), true, () => workspaceSourceState(projectDir)?.listing ?? null);
+        }
+      } catch {
+        // Not taken: that Unit's approval compares from the attempt's start.
+      }
+    }
     const code = brought.taken || declaredProjectType(getField(stateContent ?? "", "Project Type") ?? undefined) !== "Greenfield";
     let install: InstallRecord | undefined;
     const files: BroughtFile[] = [];
@@ -396,14 +456,18 @@ export function broughtFileNames(projectDir: string, stateContent: string | null
   }
 }
 
-/** The sentence for the plan writer and the builder, naming the first of `names` and counting the rest. */
+/**
+ * The sentence for the plan writer and the builder, naming the first of `names` and counting the rest. Its reasons to
+ * change one are the Code Generation stage rule's own (Critical Rules); the work's plan is not one of them, since with
+ * Plan Approval off the plan is the agent's.
+ */
 export function broughtFilesNote(names: readonly string[]): string {
   const named = names.slice(0, NAMED_MAX).map((name) => `\`${name}\``).join(", ");
   const more = names.length > NAMED_MAX
     ? `, and ${names.length - NAMED_MAX} more that were here before this work started.`
     : ".";
   return `These files were in this project before this work started and are the person's: ${named}${more} ` +
-    "Leave them as they are unless this work's plan changes one of them.";
+    "Leave them as they are: change one only when the person asks for it or the work cannot be built without it.";
 }
 
 // The order the line names files in: deleted, then top-level, then by path.
@@ -454,6 +518,11 @@ export function quoted(path: string): string | null {
   return `"${path}"`;
 }
 
+// The file's path quoted, or null when it or its repo's folder cannot be.
+function quotedIn(file: ChangedFile): string | null {
+  return file.repo && quoted(file.repo) === null ? null : quoted(file.path);
+}
+
 /** The line, the files in the order it names them (deleted, then top-level, then by path). */
 export function broughtFilesLine(ordered: readonly ChangedFile[]): string {
   const named = ordered.slice(0, NAMED_MAX);
@@ -471,15 +540,15 @@ export function broughtFilesLine(ordered: readonly ChangedFile[]): string {
   const groups = new Map<string, string[]>();
   const fromGit: ChangedFile[] = [];
   for (const file of ordered) {
-    const path = file.ref === null ? null : quoted(file.path);
+    const path = file.ref === null ? null : quotedIn(file);
     if (file.ref === null || path === null) continue;
     fromGit.push(file);
-    const command = `git${file.repo ? ` -C ${file.repo}` : ""} checkout ${file.ref} --`;
+    const command = `git${file.repo ? ` -C ${quoted(file.repo)}` : ""} checkout ${file.ref} --`;
     groups.set(command, [...(groups.get(command) ?? []), path]);
   }
   const commands = andList([...groups].map(([command, paths]) => `\`${command} ${paths.join(" ")}\``));
   const noCopy = named.filter((file) => file.ref === null);
-  const noCommand = named.filter((file) => file.ref !== null && quoted(file.path) === null);
+  const noCommand = named.filter((file) => file.ref !== null && quotedIn(file) === null);
   // Past the named ones, only HEAD is read, so nothing is said of the rest
   // that git may hold further back.
   if (fromGit.length === 0 && noCommand.length === 0) {
@@ -510,17 +579,19 @@ export function broughtFilesLine(ordered: readonly ChangedFile[]): string {
  * files, so git is asked for each file's way back only when the line will be
  * said). With Unit
  * checkpoints, each Unit's checkpoint approves the build and the stage gate the
- * engine settles after them does not say it.
+ * engine settles after them does not say it. `unit` names the Unit whose
+ * approval it is (a team Unit's gate, a Unit's checkpoint).
  */
 export function unheardBroughtFilesLine(
   projectDir: string,
   stateContent: string | null,
   session: string | null | undefined,
   atCheckpoint = false,
+  unit: string | null = null,
 ): { line: string; key: string } | null {
   try {
     if (stateContent === null || constructionCheckpointsApply(stateContent) !== atCheckpoint) return null;
-    const changed = broughtFilesChanged(projectDir, stateContent);
+    const changed = broughtFilesChanged(projectDir, stateContent, unit);
     if (changed === null) return null;
     const names = changed.files.map((file) => `${file.deleted ? "-" : "~"}${file.repo}/${file.path}`).sort();
     const key = `${changed.attempt}\u0000${names.join("\u0000")}`;

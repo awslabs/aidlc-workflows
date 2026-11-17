@@ -15,7 +15,7 @@ where the workflow stands by reading five sources, in this order:
 1. **Artefact tree** (`<record>/<phase>/<stage>/*.md`) — the decisions
    themselves, in finished form. Read first: it is the durable record of what
    was actually agreed.
-2. **`memory.md` per stage, only when the `learnings` module is listed** (`<record>/<phase>/<stage>/memory.md`) — what
+2. **`memory.md` per stage, only when the `learnings` module is listed** (`<record>/<phase>/<stage>/memory.md`, a per-Unit stage's in each Unit's `<record>/construction/<unit>/<stage>/`) — what
    got noticed during the decision-making (interpretations, deviations,
    trade-offs, open questions).
 3. **Audit log**: run `{{INVOKE}} engine audit history` for when each event
@@ -37,11 +37,7 @@ work. Recovery reconstructs decisions, in-stage context, the timeline, and the
 current position; it cannot recover the previous session's conversation buffer,
 so re-orient from these sources rather than trying to recreate the prior chat.
 
-The procedures below operate on these sources. For the full rationale — why
-recovery is an emergent property of the data plane rather than a bolted-on
-feature, and how the `withAuditLock` consistency constraint keeps the five
-sources in agreement — see `docs/reference/02-plane-architecture.md` § 5
-("Recovery as an emergent property").
+The procedures below operate on these sources.
 
 ### Session resume
 If `aidlc-state.md` exists, read it to determine:
@@ -168,7 +164,7 @@ under "Session resume" above.)
 
 If a resumed active or revising CONDITIONAL stage proves inapplicable, route
 the outcome through `aidlc-orchestrate.ts report --stage <slug> --result
-skipped --reason "<reason>"`. Never call `aidlc-state.ts skip` directly and
+skipped --reason '<reason>'`. Never call `aidlc-state.ts skip` directly and
 never mark the checkbox by hand.
 
 ### Context compaction
@@ -213,7 +209,7 @@ When errors or issues are detected during workflow execution, classify them by s
 **Escalation guidelines:**
 - **Critical / High**: Stop and ask the user immediately. Do not attempt to proceed or guess.
 - **Medium**: Attempt resolution (e.g., re-read artifacts, infer from context). If unresolved, ask the user.
-- **Low**: Handle silently and record a note with `{{INVOKE}} engine audit append-raw "Error: <brief>" "<body>"` (the audit trail rules in section 4). No user interruption needed.
+- **Low**: Handle silently and record a note with `{{INVOKE}} engine audit append-raw 'Error: <brief>' '<body>'` (the audit trail rules in section 4). No user interruption needed.
 
 ### Contradictory inputs recovery
 If user inputs from different stages contradict each other (detected during execution):
@@ -221,7 +217,7 @@ If user inputs from different stages contradict each other (detected during exec
 2. Do NOT attempt to resolve the contradiction by choosing one interpretation
 3. Ask the user which input takes priority
 4. Update the overridden artifact to reflect the user's resolution
-5. Record the resolution with `{{INVOKE}} engine audit append-raw "Recovery: <brief>" "<body>"`, quoting the user's ruling verbatim in the body
+5. Record the resolution with `{{INVOKE}} engine audit append-raw 'Recovery: <brief>' '<body>'`, quoting the user's ruling verbatim in the body
 
 ---
 
@@ -271,10 +267,10 @@ Generation.
 4. Report every rerun lifecycle outcome through `aidlc-orchestrate.ts`; never edit `aidlc-state.md` directly
 
 ### Scope changes (new requirements):
-1. Record the request with `{{INVOKE}} engine audit append-raw "Change Request: <brief>" "<body>"`, carrying the user's exact words in the body
+1. Record the request with `{{INVOKE}} engine audit append-raw 'Change Request: <brief>' '<body>'`, carrying the user's exact words in the body
 2. Return to requirements-analysis or delivery-planning as appropriate
 3. Re-plan execution from that point forward
-4. If the stage set changes, run `aidlc-utility.ts recompose` (or a scope change through `aidlc-orchestrate.ts next`); never edit scope configuration in `aidlc-state.md`
+4. If the stage set changes, run `{{INVOKE}} engine recompose` (or a scope change through `{{INVOKE}} engine orchestrate next`); never edit scope configuration in `aidlc-state.md`
 
 ### Archive before change
 Before any major change that would overwrite existing artifacts:
@@ -288,6 +284,8 @@ If the user wants to add, remove, or split implementation units mid-workflow:
 - **Adding a unit**: Add it to the workflow plan, create its story design, slot it into the build order. Do NOT re-run completed units.
 - **Removing a unit**: Recompose the unit plan through the owning stage, archive its artifacts if any exist, and check dependencies. Do not hand-edit a unit or stage checkbox in `aidlc-state.md`.
 - **Splitting a unit**: Archive the original unit's artifacts, create two new unit entries in the plan, distribute the original stories between them, run story design for each new unit.
+
+**Team-owned units** (`Unit Ownership: team`): the plan changes on main by going back to Units Generation, and the engine's lines say what each landed or claimed unit keeps.
 
 ### Architectural change handling
 If the user requests a change that affects the application architecture (e.g., switching databases, changing deployment model, adding a major integration):

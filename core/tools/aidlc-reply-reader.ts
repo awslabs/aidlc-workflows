@@ -33,6 +33,16 @@ export function stripRecommendedDecorator(text: string): string {
   return text.replace(RECOMMENDED_DECORATOR_RE, "").trim();
 }
 
+// The choices a question's labels mark as the agent's recommendation, with the
+// mark cut, in order: what the record keeps as `Recommended` so a report can
+// say whether the person followed it. A label that is only the mark names no
+// choice.
+export function recommendedChoices(labels: readonly string[]): string[] {
+  return labels.filter((label) => RECOMMENDED_DECORATOR_RE.test(label))
+    .map((label) => stripRecommendedDecorator(label))
+    .filter((choice) => choice !== "");
+}
+
 const RECEIVED_REPLY_DISPLAY_LIMIT = 120;
 export function formatReceivedReply(text: string | undefined | null): string {
   const normalized = (text ?? "").trim().replace(/\s+/g, " ") || "(empty)";
@@ -159,5 +169,16 @@ export function aidlcEntryWords(prompt: string): string | null {
   const text = prompt.trim();
   const entry = /^[/$]aidlc(?:\s+|$)/i.exec(text);
   return entry === null ? null : text.slice(entry[0].length).trim();
+}
+
+// A gap typed between two of the person's words as their request keeps it: the
+// spaces, tabs and line breaks typed, a Windows or older Mac line ending as one
+// line break, and beside a line break any other space (a no-break space
+// indenting a pasted list) as a plain one. Null for a gap with no line break
+// that holds any other space, which stays one plain space, as the split hands
+// it on.
+export function typedWordGap(gap: string): string | null {
+  if (!/^[ \t]+$/.test(gap) && !(/^\s+$/.test(gap) && /[\r\n]/.test(gap))) return null;
+  return gap.replace(/\r\n?/g, "\n").replace(/[^\S\n\t ]/g, " ");
 }
 export const SUMMARY_CONFIRMATION_CHOICES = ["Looks correct", "Request changes"] as const;

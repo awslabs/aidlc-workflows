@@ -139,8 +139,8 @@ describe("t198 cold-start compose surfaces -> composer dispatch", () => {
     expect(String(d.message)).toContain("pass `--guard-policy <value>` for `strict` or `relaxed`, never for `off`");
     expect(String(d.message)).toContain("flips a matched plan's value below its stock default");
     expect(String(d.message)).toContain("a flip above the default keeps the plan matched");
-    // The stages a custom plan's own skips leave unmade reach the offer in one
-    // line, once; the tables stay on request.
+    // Every stage a custom plan skips reaches the offer in one line, once; the
+    // tables stay on request.
     expect(String(d.message).split("when the summary carries skipped_inputs").length).toBe(2);
     expect(String(d.message)).toContain("one plain line saying so, once, for all of them together");
     expect(String(d.message)).toContain("Apart from the skipped_inputs line, keep the composer's stage-decision table");
@@ -278,7 +278,7 @@ describe("t198 mid-flow compose -> in-flight dispatch, not an advance", () => {
       expect(next.status, `${next.stdout}\n${next.stderr}`).toBe(0);
       const directive = directiveOf(next.stdout);
       expect(directive.kind).toBe("print");
-      const command = /on approve run `([^`]+)`/.exec(String(directive.message))?.[1];
+      const command = /on approve run `([^`]+)`/i.exec(String(directive.message))?.[1];
       expect(command).toBeDefined();
       // Fill only the approved proposal placeholders; execute the launcher
       // and route supplied to the conductor, so an invalid route cannot pass.

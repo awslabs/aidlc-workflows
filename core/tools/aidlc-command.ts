@@ -91,7 +91,10 @@ export function cursorTrustedShell(): string {
 // expression over the tool name, so a tool reaches exactly the checks it
 // reached before: reads and searches go to the three that read, while only a
 // write, a shell command or a dispatch reaches the plan-approval guard. The
-// group is a registration, not a check: it decides nothing itself.
+// group is a registration, not a check: it decides nothing itself. On Claude
+// Code the row also carries the question box (AskUserQuestion), which no member
+// matches, so the code plan question's box can show the plan's lines
+// (runGroupMembers in aidlc.ts).
 //
 // The doctor reads this table too (aidlc-utility.ts), to check that every
 // member's hook file ships and to treat drift on the row as flow-altering, so
@@ -148,6 +151,26 @@ export const PINNED_TOP_LEVEL_ROUTES = [
 
 export const PINNED_SYSTEM_GROUPS = ["workspace-sync"] as const;
 
+/**
+ * The words AI-DLC's own commands answer to as the first word of `aidlc <word>`
+ * or `/aidlc <word>`: the dispatcher's public verbs and nouns, its namespaces,
+ * and the chat's own leading words (aidlc-lib.ts WORKSPACE_VERBS,
+ * ORCHESTRATOR_VERBS, the knowledge, plugin and unit nouns). A plugin command
+ * with one of these names is skipped, so core's command always keeps it. A
+ * literal list, as aidlc-lib.ts imports this module; t-plugin-named-commands
+ * pins it against ROUTES and those sets.
+ */
+export const CORE_COMMAND_WORDS: ReadonlySet<string> = new Set([
+  "next", "continue", "report", "park", "unpark", "team-board", "compose",
+  "doctor", "version", "help", "config", "update", "use", "uninstall", "status",
+  "unit", "attest", "plugin", "knowledge", "engine", "system",
+  "space", "space-create", "intent",
+]);
+
+/** A plugin command's name, and its script: one .ts file directly in tools/. */
+export const PLUGIN_COMMAND_NAME_RE = /^[a-z][a-z0-9-]{0,39}$/;
+export const PLUGIN_COMMAND_SCRIPT_RE = /^tools\/[A-Za-z0-9][A-Za-z0-9._-]*\.ts$/;
+
 // The sections `aidlc config <section>` takes (aidlc-init.ts reads them).
 export const CONFIG_SECTIONS = ["models", "runtime", "providers", "trust", "flags", "project"] as const;
 
@@ -164,6 +187,7 @@ export const NEXT_VALUELESS_FLAGS: ReadonlySet<string> = new Set([
   "--continue",
   "--change",
   "--every-unit",
+  "--unit-plan",
   // Retired, still taken so the token never becomes task text.
   "--init",
   "--force",
@@ -176,6 +200,88 @@ export const NEXT_VALUELESS_FLAGS: ReadonlySet<string> = new Set([
  */
 export function nextFlagTakesFollowing(flag: string, following: string | undefined): boolean {
   return following !== undefined && !following.startsWith("-") && !NEXT_VALUELESS_FLAGS.has(flag);
+}
+
+export type UnitGrammar = {
+  /** The verb takes the Unit's name, its one word that is not an option. */
+  name: boolean;
+  /** The options the verb reads that take a value, as aidlc-lib.ts parseArgs keys them. */
+  options: readonly string[];
+  /** The options it reads that take none, so the word after one is never its value. */
+  switches?: readonly string[];
+  /** Its usage after the invocation, the line `--help` prints. */
+  usage: string;
+};
+
+/**
+ * The `unit` noun's verbs as the Unit tool runs them (aidlc-unit.ts main): whether
+ * each takes the Unit's name, the options it reads and its usage. The Unit tool
+ * checks a command's words against it before the verb runs, the dispatcher's
+ * `unit` route takes its usage forms from it, and UNIT_VERBS is read from it.
+ */
+export const UNIT_GRAMMAR: Readonly<Record<string, UnitGrammar>> = {
+  adopt: { name: true, options: [], usage: "unit adopt <unit>" },
+  claim: {
+    name: true,
+    options: ["team", "request-file", "rhythm"],
+    usage: "unit claim <unit> [--team <label> | --request-file <file>] [--rhythm per-stage|unit-end]",
+  },
+  gate: {
+    name: true,
+    options: ["decision", "user-input", "request-file"],
+    usage: "unit gate <unit> --decision <approve|reject> (--user-input <text> | --request-file <file>)",
+  },
+  land: {
+    name: true,
+    options: ["step", "target", "strategy", "user-input"],
+    switches: ["accept-released-attempt"],
+    usage: "unit land <unit> [--step git|state|audit|all] [--target <branch>] [--strategy merge] " +
+      "[--accept-released-attempt --user-input <acknowledgment>]",
+  },
+  "merge-status": { name: true, options: [], usage: "unit merge-status <unit>" },
+  participate: { name: false, options: [], usage: "unit participate" },
+  pin: { name: true, options: [], usage: "unit pin <unit>" },
+  publish: {
+    name: true,
+    options: ["include"],
+    switches: ["commit"],
+    usage: "unit publish <unit> [--commit [--include <path>]...]",
+  },
+  release: { name: true, options: ["expect-nonce"], usage: "unit release <unit> [--expect-nonce <claim-nonce>]" },
+  share: { name: false, options: [], usage: "unit share" },
+  status: { name: false, options: [], usage: "unit status" },
+};
+
+/**
+ * The `unit` noun's verbs, each with whether it takes the Unit's name. The
+ * dispatcher's `unit` route and the `next` line both read this list.
+ */
+export const UNIT_VERBS: ReadonlyMap<string, boolean> = new Map(
+  Object.entries(UNIT_GRAMMAR).map(([verb, grammar]) => [verb, grammar.name]),
+);
+
+/**
+ * The Unit tool's argv when a `next` line is the person's Unit command, else
+ * null. It is one by its shape alone: `unit`, one of UNIT_VERBS, and at most
+ * the one Unit name that verb takes, as the Unit tool itself reads the rest
+ * (`parse`: aidlc-lib.ts parseArgs, which aidlc-unit.ts uses). A word more,
+ * the words behind the `--` mark included, is the person's, so the whole line
+ * stays theirs (`unit tests for the parser`, `unit pin alpha -- why first`).
+ * Kiro IDE's PowerShell hands the whole line over as one argument, which
+ * `split` (aidlc-lib.ts splitKiroCommandArgs) reads as a shell would, quotes
+ * included. readNextLine is the one caller and hands both readers in, since
+ * this module does not load aidlc-lib.ts.
+ */
+export function unitCommandArgv(
+  args: readonly string[],
+  split: (line: string) => string[],
+  parse: (args: string[]) => { positional: string[] },
+): string[] | null {
+  const tokens = args.length === 1 ? split(args[0]) : [...args];
+  if (tokens[0] !== "unit") return null;
+  const takesName = UNIT_VERBS.get(tokens[1] ?? "");
+  if (takesName === undefined) return null;
+  return parse(tokens.slice(2)).positional.length <= (takesName ? 1 : 0) ? tokens.slice(1) : null;
 }
 
 const LAUNCHER_FLAG_VALUES = new Set(["--project-dir"]);
@@ -270,7 +376,7 @@ function missingDispatcherWorkspaceName(
   return {
     kind: "error",
     noun,
-    message: `Usage: aidlc ${usage}`,
+    message: `Usage: ${aidlcInvocation()} engine ${usage}`,
   };
 }
 
@@ -424,7 +530,7 @@ export function parseDispatcherPluginCommand(
 ): DispatcherPluginCommand {
   if (args[0] !== "plugin") return { kind: "not-plugin" };
   const verb = args[1];
-  if (verb === "help" || verb === "-h" || verb === "--help") {
+  if (verb === undefined || verb === "help" || verb === "-h" || verb === "--help") {
     return { kind: "help" };
   }
   const target = verb === "select"
@@ -441,10 +547,9 @@ export function parseDispatcherPluginCommand(
   if (target !== undefined) {
     return { kind: "run", argv: [target, ...args.slice(2)] };
   }
-  const detail = verb ? `unknown verb '${verb}'` : "missing verb";
   return {
     kind: "error",
-    message: `aidlc: ${detail} for noun 'plugin'; try 'aidlc help --all'`,
+    message: `\`${aidlcInvocation()} engine plugin ${verb}\` is not a plugin command; the plugin commands are select, list, sync, validate and build`,
   };
 }
 

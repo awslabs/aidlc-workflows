@@ -77,6 +77,20 @@ export function parsePreviewTagSource(
   return match ? { repository: match[1], digest: match[2] } : null;
 }
 
+// The record crosses from the validate job to the release job as a job output,
+// and the runner drops an output in which it finds anything shaped like a
+// secret (Preview Release 40777302486 lost its plan to a `password=[masked]`
+// example in the notes). The notes body, free text, travels as base64 with
+// no padding, which no secret pattern reads into.
+const unpaddedBase64 = (text: string): string =>
+  Buffer.from(text, "utf-8").toString("base64").replace(/=+$/, "");
+
+export function previewPlanJson(plan: PreviewPlan): string {
+  const { body, ...notes } = plan.notes;
+  const bodyBase64 = unpaddedBase64(body);
+  return `${JSON.stringify({ ...plan, notes: { ...notes, bodyBase64 } }, null, 2)}\n`;
+}
+
 export function readPreviewPlan(path: string): PreviewPlan {
   let value: unknown;
   try {
@@ -91,7 +105,9 @@ export function readPreviewPlan(path: string): PreviewPlan {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`${path}: ${PREVIEW_CHANNEL} plan must be an object`);
   }
-  const plan = value as Partial<PreviewPlan>;
+  const plan = value as Omit<Partial<PreviewPlan>, "notes"> & { notes?: { name?: unknown; bodyBase64?: unknown } };
+  const encoded = plan.notes && typeof plan.notes === "object" ? plan.notes.bodyBase64 : undefined;
+  const body = typeof encoded === "string" ? Buffer.from(encoded, "base64").toString("utf-8") : "";
   if (
     plan.schemaVersion !== 1 ||
     typeof plan.version !== "string" ||
@@ -106,11 +122,11 @@ export function readPreviewPlan(path: string): PreviewPlan {
     !plan.notes ||
     typeof plan.notes !== "object" ||
     plan.notes.name !== previewReleaseName(plan.version) ||
-    typeof plan.notes.body !== "string" ||
-    plan.notes.body.trim().length === 0
+    body.trim().length === 0 ||
+    unpaddedBase64(body) !== encoded
   ) {
     throw new Error(`${path}: ${PREVIEW_CHANNEL} plan is missing or has invalid fields`);
   }
   requireVersion(plan.version);
-  return plan as PreviewPlan;
+  return { ...plan, notes: { name: plan.notes.name, body } } as PreviewPlan;
 }

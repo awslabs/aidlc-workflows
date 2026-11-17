@@ -1,5 +1,5 @@
 // covers: hook:aidlc-continue-workflow
-// covers: tool:aidlc, function:renderCommandHelp, tool:aidlc-sensor, tool:aidlc-swarm, hook:aidlc-validate-state, hook:aidlc-review-freeze, hook:aidlc-statusline
+// covers: tool:aidlc, function:renderCommandHelp, function:typedHarnessHosts, tool:aidlc-sensor, tool:aidlc-swarm, hook:aidlc-validate-state, hook:aidlc-review-freeze, hook:aidlc-statusline
 // covers: function:kiroLayoutOf, function:kiroTreeLayout, function:installedKiroLayout
 import {
   NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
@@ -42,21 +42,26 @@ import {
   resolveAction,
   resolveHookPath,
   normalizeTopLevelConfigVerbs,
+  routeOptions,
   routePolicyFor,
+  routePositionals,
+  SIMPLE_PUBLIC_GRAMMARS,
 } from "../../core/tools/aidlc.ts";
 import { validatePublicConfigArgs } from "../../core/tools/aidlc-init.ts";
+import { PUBLIC_LIFECYCLE_GRAMMARS } from "../../core/tools/aidlc-lifecycle.ts";
 import { launcherRouteUsesPin } from "../../core/tools/aidlc-command.ts";
 import {
   projectPinTargetPath,
   targetTriple,
 } from "../../core/tools/aidlc-install-paths.ts";
 import {
-  discoverableRuntimeHarnessDir,
+  discoverableRuntimeHarness,
   discoverProjectHarnesses,
   isCompiledModuleUrl,
   kiroLayoutOf,
   kiroTreeLayout,
   runtimeHarnessDir,
+  typedHarnessName,
 } from "../../core/tools/aidlc-runtime-paths.ts";
 import { installedKiroLayout } from "../../core/tools/aidlc-lib.ts";
 import { parseSensorManifest } from "../../core/tools/aidlc-sensor-schema.ts";
@@ -283,6 +288,11 @@ function expectSameRun(actual: RunResult, expected: RunResult, label: string): v
   expect(actual.exitCode, `${label} exit`).toBe(expected.exitCode);
   expect(actual.stdout.equals(expected.stdout), `${label} stdout\nactual:\n${actual.stdout}\nexpected:\n${expected.stdout}`).toBe(true);
   expect(actual.stderr.equals(expected.stderr), `${label} stderr\nactual:\n${actual.stderr}\nexpected:\n${expected.stderr}`).toBe(true);
+}
+
+function asCompiledInvocation(result: RunResult): RunResult {
+  const named = (bytes: Buffer) => Buffer.from(bytes.toString("utf-8").replaceAll("bun .claude/tools/aidlc.ts", "aidlc"));
+  return { ...result, stdout: named(result.stdout), stderr: named(result.stderr) };
 }
 
 function entriesUnder(root: string): string[] {
@@ -684,6 +694,13 @@ describe("t230 dispatcher route parity", () => {
       fixture: true,
     },
     {
+      name: "plugin test maps to plugin-test",
+      routerArgs: ["plugin", "test", "--help"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["plugin-test", "--help"],
+      fixture: true,
+    },
+    {
       name: "update maps to its machine lifecycle delegate",
       routerArgs: ["update"],
       tool: "aidlc-lifecycle.ts",
@@ -764,6 +781,20 @@ describe("t230 dispatcher route parity", () => {
       expectSameRun(routed, old, item.name);
     });
   }
+
+  test("an engine subcommand honours --help instead of running it (#3493)", () => {
+    const projectDir = makeProject();
+    const plugin = viaDispatcher(["engine", "plugin", "sync", "--help"], projectDir);
+    expect(plugin.exitCode, plugin.stdout.toString()).toBe(0);
+    expect(plugin.stdout.toString()).toContain("usage: aidlc engine plugin");
+    expect(plugin.stdout.toString()).toContain("--rules-level");
+    expect(plugin.stderr.toString()).toBe("");
+
+    const runtime = viaDispatcher(["engine", "runtime", "compile", "--help"], projectDir);
+    expect(runtime.exitCode, runtime.stdout.toString()).toBe(0);
+    expect(runtime.stdout.toString()).toContain("Usage: aidlc-runtime");
+    expect(runtime.stderr.toString()).toBe("");
+  });
 
   // The commands Reverse Engineering's repo question hands the agent, through
   // the entry it names: the list is recorded exactly, and --all keeps every repo.
@@ -1340,10 +1371,13 @@ describe("t230 dispatcher route parity", () => {
     expect(result.exitCode, result.stderr.toString()).toBe(0);
   });
 
-  // Config there would set up a new project in that folder, so the refusal
-  // names the two steps that reach the person's project. Our own options are
-  // read before the person's words, so the flag goes right after the tool, on
-  // the copy channel and natively (Bun under the name aidlc stands in).
+  // Config in that folder sets it up as a new project: the step when it is the
+  // person's project before setup, the wrong one when they meant another. So
+  // natively the refusal names config for that exact folder, then the two steps
+  // that reach another one; the copy channel has no aidlc command. Our own
+  // options are read before the person's words, so the flag goes right after
+  // the tool (Bun under the name aidlc stands in for the native command). The
+  // hook is the first-run path: its registrations run before any setup there.
   test("a project-required command from a folder that is not a project names the step that works", () => {
     const project = makeProject();
     const outside = mkdtempSync(join(tmpdir(), "aidlc-t230-outside-"));
@@ -1356,18 +1390,37 @@ describe("t230 dispatcher route parity", () => {
     } catch {
       cpSync(BUN, launcher);
     }
+    // The command under the name aidlc reads its data (the plans `next` lists
+    // for the words) from the runtime beside it, as an install lays it out.
+    cpSync(join(REPO_ROOT, "dist-release", "claude"), join(launcherDir, "runtime", "claude"), { recursive: true });
     const env = { AIDLC_DISPATCH_TOOLS_DIR: DIST_TOOLS_DIR };
+    const payload = JSON.stringify({
+      session_id: "t230-outside",
+      cwd: outside,
+      tool_name: "bash",
+      tool_input: { command: "echo hi" },
+    });
     for (const [tool, after] of [[BUN, "aidlc.ts"], [launcher, "aidlc"]]) {
-      for (const command of [["engine", "plugin", "list"], ["next", "add", "a", "login", "page"]]) {
+      const config = after === "aidlc"
+        ? `run aidlc config in ${outside} if that folder is your project; otherwise `
+        : "";
+      for (
+        const command of [
+          ["engine", "plugin", "list"],
+          ["next", "add", "a", "login", "page"],
+          ["engine", "hook", "guard-tool-call"],
+        ]
+      ) {
         const label = `${after} ${command.join(" ")}`;
-        const refused = run([tool, DISPATCHER, ...command], outside, env);
+        const stdin = command[1] === "hook" ? payload : undefined;
+        const refused = run([tool, DISPATCHER, ...command], outside, env, stdin);
         expect(refused.exitCode, label).toBe(1);
         expect(refused.stderr.toString(), label).toContain(
           "requires an installed project harness or recognized project directory; " +
-            `run it from the project folder, or add --project-dir <path> right after ${after}\n`,
+            `${config}run it from the project folder, or add --project-dir <path> right after ${after}\n`,
         );
-        expect(refused.stderr.toString(), label).not.toContain("aidlc config");
-        const named = run([tool, DISPATCHER, "--project-dir", project, ...command], outside, env);
+        if (!config) expect(refused.stderr.toString(), label).not.toContain("aidlc config");
+        const named = run([tool, DISPATCHER, "--project-dir", project, ...command], outside, env, stdin);
         expect(named.exitCode, `${label}: ${named.stderr}`).toBe(0);
       }
     }
@@ -2189,7 +2242,9 @@ describe("t230 dispatcher dev and compiled in-process modes", () => {
       const compiled = viaImportedCompiledMain(argv, projectDir, env);
       expect(compiled.stderr.toString()).not.toContain("has no in-process delegate");
       expect(compiled.stderr.toString()).not.toContain("does not export main");
-      expectSameRun(compiled, dev, title);
+      // Each mode names the command its person types (aidlcInvocation): the
+      // compiled engine `aidlc`, the projected Bun tree its own dispatcher.
+      expectSameRun(compiled, asCompiledInvocation(dev), title);
     });
   }
 
@@ -2236,6 +2291,10 @@ describe("t230 dispatcher dev and compiled in-process modes", () => {
           AIDLC_HARNESS_NAME: "",
           AIDLC_INSTALL_ROOT: machine,
           CODEX_SESSION_ID: "",
+          CODEX_THREAD_ID: "",
+          // The shell these tests run in may be a Claude Code chat's.
+          CLAUDECODE: "",
+          CLAUDE_CODE_SESSION_ID: "",
           ...env,
         },
       );
@@ -2255,41 +2314,36 @@ describe("t230 dispatcher dev and compiled in-process modes", () => {
   });
 
   test("a Codex session picks the project's Codex install only when there is one and no harness is named", () => {
-    const saved = { dir: process.env.AIDLC_HARNESS_DIR, session: process.env.CODEX_SESSION_ID };
-    const restore = (key: "AIDLC_HARNESS_DIR" | "CODEX_SESSION_ID", value: string | undefined) => {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    };
-    const writeHarness = (projectDir: string, distribution: string): void => {
+    // Codex's mark, as its manifest declares it (hostShell).
+    const writeHarness = (projectDir: string, distribution: string, hostShell?: string[]): void => {
       const dataDir = join(projectDir, `.${distribution}`, "tools", "data");
       mkdirSync(dataDir, { recursive: true });
       writeFileSync(
         join(dataDir, "harness.json"),
-        `${JSON.stringify({ schemaVersion: 1, distribution, harnessDir: `.${distribution}` })}\n`,
+        `${JSON.stringify({
+          schemaVersion: 1,
+          name: distribution,
+          distribution,
+          harnessDir: `.${distribution}`,
+          ...(hostShell ? { hostShell: { env: hostShell } } : {}),
+        })}\n`,
       );
     };
-    try {
-      delete process.env.AIDLC_HARNESS_DIR;
-      const both = mkdtempSync(join(tmpdir(), "aidlc-t230-codex-session-both-"));
-      const claudeOnly = mkdtempSync(join(tmpdir(), "aidlc-t230-codex-session-claude-"));
-      tempProjects.add(both);
-      tempProjects.add(claudeOnly);
-      writeHarness(both, "claude");
-      writeHarness(both, "codex");
-      writeHarness(claudeOnly, "claude");
-      delete process.env.CODEX_SESSION_ID;
-      expect(discoverableRuntimeHarnessDir(both)).toBe(".claude");
-      process.env.CODEX_SESSION_ID = "  ";
-      expect(discoverableRuntimeHarnessDir(both)).toBe(".claude");
-      process.env.CODEX_SESSION_ID = "019a0000-0000-7000-8000-000000000231";
-      expect(discoverableRuntimeHarnessDir(both)).toBe(".codex");
-      expect(discoverableRuntimeHarnessDir(claudeOnly)).toBe(".claude");
-      process.env.AIDLC_HARNESS_DIR = ".claude";
-      expect(discoverableRuntimeHarnessDir(both)).toBe(".claude");
-    } finally {
-      restore("AIDLC_HARNESS_DIR", saved.dir);
-      restore("CODEX_SESSION_ID", saved.session);
-    }
+    const both = mkdtempSync(join(tmpdir(), "aidlc-t230-codex-session-both-"));
+    const claudeOnly = mkdtempSync(join(tmpdir(), "aidlc-t230-codex-session-claude-"));
+    tempProjects.add(both);
+    tempProjects.add(claudeOnly);
+    writeHarness(both, "claude");
+    writeHarness(both, "codex", ["CODEX_SESSION_ID", "CODEX_THREAD_ID"]);
+    writeHarness(claudeOnly, "claude");
+    const pick = (projectDir: string, env: NodeJS.ProcessEnv) => discoverableRuntimeHarness(projectDir, env)?.harnessDir;
+    expect(pick(both, {})).toBe(".claude");
+    expect(pick(both, { CODEX_SESSION_ID: "  " })).toBe(".claude");
+    expect(pick(both, { CODEX_SESSION_ID: "019a0000-0000-7000-8000-000000000231" })).toBe(".codex");
+    expect(pick(both, { CODEX_THREAD_ID: "019a0000-0000-7000-8000-000000000232" })).toBe(".codex");
+    expect(pick(claudeOnly, { CODEX_SESSION_ID: "019a0000-0000-7000-8000-000000000231" })).toBe(".claude");
+    expect(pick(both, { AIDLC_HARNESS_DIR: ".claude", CODEX_SESSION_ID: "019a0000-0000-7000-8000-000000000231" }))
+      .toBe(".claude");
   });
 
   test("a Kiro tree's layout comes from its declaration, then its row name, then its conductor", () => {
@@ -2444,7 +2498,7 @@ describe("t230 dispatcher dev and compiled in-process modes", () => {
       // Discovery itself stays strict for callers that need the project.
       expect(() => discoverProjectHarnesses(cwd)).toThrow("EACCES");
       expect(() => runtimeHarnessDir(cwd)).toThrow("EACCES");
-      expect(discoverableRuntimeHarnessDir(cwd)).toBeNull();
+      expect(discoverableRuntimeHarness(cwd)).toBeNull();
     } finally {
       chmodSync(cwd, 0o755);
     }
@@ -2457,7 +2511,7 @@ describe("t230 dispatcher dev and compiled in-process modes", () => {
       join(dataDir, "harness.json"),
       `${JSON.stringify({ schemaVersion: 1, distribution: "kiro", harnessDir: ".kiro" })}\n`,
     );
-    expect(discoverableRuntimeHarnessDir(project)).toBe(".kiro");
+    expect(discoverableRuntimeHarness(project)?.harnessDir).toBe(".kiro");
   });
 
   test("compiled main pins the Kiro harness name before unselected routing", () => {
@@ -2993,7 +3047,7 @@ describe("t230 dispatcher route completeness", () => {
       ok: false,
       code: 2,
       status: "usage",
-      message: "unknown command or noun 'unknown-command'; try 'aidlc --help'",
+      message: "unknown command or noun 'unknown-command'; try 'bun .claude/tools/aidlc.ts --help'",
     });
   });
 
@@ -3154,6 +3208,124 @@ describe("t230 dispatcher help and errors", () => {
     }
     expect(entriesUnder(machineRoot)).toEqual([]);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("every option a public command accepts is listed with a summary", () => {
+    const optionRow = (
+      rendered: string,
+      form: string,
+    ): string | undefined =>
+      rendered.split("\n").find((line) =>
+        line.startsWith(`  ${form}`) &&
+        /^\s{2,}/.test(line.slice(form.length + 2))
+      );
+    for (const command of PUBLIC_COMMANDS) {
+      // `config` keeps hand-written help: its own flags span six sections and
+      // `aidlc config <section> --help` is the full per-section reference.
+      if (command === "config") continue;
+      const route = ROUTES.find((candidate) =>
+        candidate.namespace === "public" &&
+        candidate.group === "top" &&
+        candidate.verbs.includes(command)
+      );
+      expect(route, command).toBeDefined();
+      const rendered = renderCommandHelp(command);
+      const options = routeOptions(route as Route, command);
+      expect(options.length, `${command} options`).toBeGreaterThan(0);
+      for (const option of options) {
+        const form = option.metavar
+          ? `${option.flag} <${option.metavar}>`
+          : option.flag;
+        const row = optionRow(rendered, form);
+        expect(row, `${command} help is missing a row for ${form}`)
+          .toBeDefined();
+        expect(
+          (row as string).slice(form.length + 2).trim().length,
+          `${command} ${form} has no summary`,
+        ).toBeGreaterThan(0);
+      }
+      for (const placeholder of routePositionals(route as Route, command)) {
+        const row = optionRow(rendered, placeholder);
+        expect(row, `${command} help is missing an argument row for ${placeholder}`)
+          .toBeDefined();
+        expect(
+          (row as string).slice(placeholder.length + 2).trim().length,
+          `${command} ${placeholder} has no summary`,
+        ).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  // The verb's usage form is its one list of options: help prints a row for
+  // each, with what it does, and the handler takes exactly these (t327).
+  test("plugin test help has one row per option its usage form names, each with a meaning", () => {
+    const route = ROUTES.find((candidate) => candidate.id === "plugin-author") as Route;
+    const help = viaDispatcher(["plugin", "test", "--help"], REPO_ROOT);
+    expect(help.exitCode, help.stderr.toString()).toBe(0);
+    const rows = help.stdout.toString().split("\n").filter((line) => /^ {2}--/.test(line));
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.map((line) => line.trim().split(/\s{2,}/)[0]).sort()).toEqual(
+      routeOptions(route, "test").map((option) =>
+        option.metavar ? `${option.flag} <${option.metavar}>` : option.flag
+      ).sort(),
+    );
+    for (const row of rows) expect(row.trim().split(/\s{2,}/)[1]?.length ?? 0, row).toBeGreaterThan(0);
+  });
+
+  test("command help names every flag either public parser accepts", () => {
+    // `--project-dir` is dispatcher plumbing for tests and hooks. Routes do
+    // spell it (`top-config`, `workspace-sync`), but no public command's help
+    // names it, so it is excluded here deliberately rather than by oversight.
+    const plumbing = new Set(["--project-dir"]);
+    type PublicGrammar = { values: ReadonlySet<string>; bare: ReadonlySet<string> };
+    const grammars: Record<string, PublicGrammar> = {
+      ...PUBLIC_LIFECYCLE_GRAMMARS,
+      ...SIMPLE_PUBLIC_GRAMMARS,
+    };
+    // The `aidlc system` lifecycle verbs print their route's form for --help,
+    // so the form names every flag their grammar takes (--no-color as well
+    // as --project-dir is plumbing there).
+    const systemForms: Record<string, string> = {
+      rollback: "top-rollback",
+      "versions install": "versions-install",
+      "versions prune": "versions-prune",
+    };
+    // Both parsers, so neither can gain a flag help does not name.
+    expect(Object.keys(grammars).sort()).toEqual([
+      "doctor",
+      "rollback",
+      "uninstall",
+      "update",
+      "use",
+      "version",
+      "versions install",
+      "versions prune",
+    ]);
+    for (const [command, grammar] of Object.entries(grammars)) {
+      if (systemForms[command]) {
+        const form = ROUTES.find((route) => route.id === systemForms[command])?.all?.[0] ?? "";
+        for (const flag of [...grammar.values, ...grammar.bare]) {
+          if (plumbing.has(flag) || flag === "--no-color") continue;
+          expect(
+            new RegExp(`[\\s\\[|]${flag}[\\s\\]|]`).test(` ${form} `),
+            `system ${command} usage omits the accepted flag ${flag}`,
+          ).toBe(true);
+        }
+        continue;
+      }
+      const rendered = renderCommandHelp(
+        command as (typeof PUBLIC_COMMANDS)[number],
+      );
+      const rows = rendered.split("\n");
+      for (const flag of [...grammar.values, ...grammar.bare]) {
+        if (plumbing.has(flag)) continue;
+        const listed = rows.some((line) =>
+          new RegExp(`^ {2}${flag}(\\s|$)`).test(line)
+        );
+        expect(listed, `${command} help omits the accepted flag ${flag}`)
+          .toBe(true);
+      }
+    }
+  });
 
   test("top-level config help consumes every root value flag without doing work", () => {
     const sandbox = mkdtempSync(join(tmpdir(), "aidlc-t230-config-help-"));
@@ -3347,7 +3519,7 @@ describe("t230 dispatcher help and errors", () => {
       .toBe("--download and --from are mutually exclusive");
   });
 
-  test("config help names top-level flags and section help still passes through", () => {
+  test("config help names top-level flags and section help still passes through", async () => {
     const projectDir = makeProject();
     const config = viaDispatcher(["config", "--help"], projectDir);
     expect(config.exitCode).toBe(0);
@@ -3388,6 +3560,28 @@ describe("t230 dispatcher help and errors", () => {
     ]) {
       expect(text).toContain(flag);
     }
+    // --harness and every name it takes: one harness/<name>/manifest.ts is one
+    // distribution of the release (what `aidlc versions list` shows), named as
+    // --harness takes it, in the words the setup picker shows for that tool.
+    expect(text).toMatch(/^ {2}--harness <name> {2}\S/m);
+    const lines = text.split("\n");
+    const start = lines.indexOf("HARNESSES");
+    expect(start, "config help has a HARNESSES list").toBeGreaterThan(0);
+    const rows = lines.slice(start + 1, lines.indexOf("", start)).map((line) => line.trim().split(/\s{2,}/));
+    const ids = readdirSync(join(REPO_ROOT, "harness"))
+      .filter((name) => existsSync(join(REPO_ROOT, "harness", name, "manifest.ts")))
+      .sort();
+    const expected: string[][] = [];
+    for (const id of ids) {
+      const manifest = (await import(join(REPO_ROOT, "harness", id, "manifest.ts"))).default as {
+        productName: string;
+        choiceName?: string;
+        choiceNote?: string;
+      };
+      const words = manifest.choiceName ?? manifest.productName;
+      expected.push([typedHarnessName(id), manifest.choiceNote ? `${words} (${manifest.choiceNote})` : words]);
+    }
+    expect(rows).toEqual(expected);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("human help stays short and hides plumbing nouns", () => {
@@ -3437,7 +3631,7 @@ describe("t230 dispatcher help and errors", () => {
       type: "help",
       scope: "system",
     });
-    expect(text).toContain("aidlc system <noun> <verb> [args]");
+    expect(text).toContain("bun .claude/tools/aidlc.ts system <noun> <verb> [args]");
     expect(text).toContain(
       "Operations on this user's aidlc installation; never system-wide (root only with --allow-root):",
     );
@@ -3462,10 +3656,10 @@ describe("t230 dispatcher help and errors", () => {
     expect(expanded).toStartWith(defaultHelp.trimEnd());
     expect(expanded).toContain("Hidden namespaces:");
     expect(expanded).toContain(
-      "engine  Generated harness surfaces only; not for human scripts. Run: aidlc engine --help",
+      "engine  Generated harness surfaces only; not for human scripts. Run: bun .claude/tools/aidlc.ts engine --help",
     );
     expect(expanded).toContain(
-      "system  This user's installation; unsupported interface. Run: aidlc system --help",
+      "system  This user's installation; unsupported interface. Run: bun .claude/tools/aidlc.ts system --help",
     );
     expect(defaultHelp).not.toContain("Hidden namespaces:");
     expect(defaultHelp).not.toContain("aidlc engine --help");
@@ -3518,7 +3712,7 @@ describe("t230 dispatcher help and errors", () => {
     expect(res.exitCode).toBe(2);
     expect(res.stdout.toString("utf-8")).toBe("");
     expect(res.stderr.toString("utf-8")).toBe(
-      "aidlc: unknown verb 'bogus' for engine noun 'state'; try 'aidlc engine --help'\n",
+      "aidlc: unknown verb 'bogus' for engine noun 'state'; try 'bun .claude/tools/aidlc.ts engine --help'\n",
     );
   });
 
@@ -3526,19 +3720,20 @@ describe("t230 dispatcher help and errors", () => {
     const res = viaDispatcher(["system", "versions"], REPO_ROOT);
     expect(res.exitCode).toBe(2);
     expect(res.stderr.toString("utf-8")).toBe(
-      "aidlc: missing verb for system noun 'versions'; try 'aidlc system --help'\n",
+      "aidlc: missing verb for system noun 'versions'; try 'bun .claude/tools/aidlc.ts system --help'\n",
     );
   });
 
   test("plugin help and invalid plugin verbs use the shared noun grammar", () => {
     const help = viaDispatcher(["engine", "plugin", "help"], REPO_ROOT);
     expect(help.exitCode).toBe(0);
-    expect(help.stdout.toString("utf-8")).toContain("plugin: select [names]");
+    expect(help.stdout.toString("utf-8")).toMatch(/^ {2}plugin select \[names\] +set enabled plugins$/m);
+    expect(help.stdout.toString("utf-8")).not.toContain("Engine machinery");
 
     const invalid = viaDispatcher(["engine", "plugin", "remove"], REPO_ROOT);
     expect(invalid.exitCode).toBe(1);
     expect(invalid.stderr.toString("utf-8")).toBe(
-      "aidlc: unknown verb 'remove' for noun 'plugin'; try 'aidlc help --all'\n",
+      "`bun .claude/tools/aidlc.ts engine plugin remove` is not a plugin command; the plugin commands are select, list, sync, validate and build\n",
     );
   });
 

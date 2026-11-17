@@ -139,8 +139,11 @@ import {
   validSessionId,
 } from "../tools/aidlc-lib.ts";
 import { appendCoordinationStoodAside, appendSubagentPromptUnmatched } from "../tools/aidlc-audit.ts";
+import { patchTargets } from "./review-freeze-command.ts";
 import { keptRestartRun } from "../tools/aidlc-question-store.ts";
 import { ROUTES, routePolicyFor, withoutProjectDirFlag } from "../tools/aidlc.ts";
+import { aidlcInvocation, quoteCommandArgument } from "../tools/aidlc-runtime-paths.ts";
+import { LAUNCHER_PATH, launcherBody, launcherVoucherUnspent, recordLauncherVoucher } from "../tools/aidlc-launcher-voucher.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 const ATTEMPT_FLAG = "--aidlc-attempt-id";
@@ -156,8 +159,9 @@ interface CopilotHookInput {
   reason?: string;
   tool_name?: string;
   toolName?: string;
-  tool_input?: Record<string, unknown>;
-  toolInput?: Record<string, unknown>;
+  tool_input?: unknown;
+  toolInput?: unknown;
+  toolArgs?: unknown;
   tool_result?: unknown; toolResult?: unknown; tool_response?: unknown; toolResponse?: unknown;
   tool_use_id?: string; toolUseId?: string; tool_call_id?: string; toolCallId?: string;
   agent_name?: string;
@@ -236,6 +240,26 @@ function skillArguments(body: string, prompt: string): string | null {
   return pieces.join(args) === region ? args : null;
 }
 
+// The tool's input as an object. The CLI's native camelCase hook payload carries
+// the arguments as toolArgs, a JSON string (the PascalCase hooks AI-DLC
+// registers get tool_input). The Copilot runtime's apply_patch is a freeform tool
+// whose input is the patch text itself (the runtime's own reader takes a string
+// first, then {input} or {patch}), so text that is no JSON object travels as
+// `input`, where applyPatchTargets reads it.
+function toolInputOf(value: unknown): Record<string, unknown> | undefined {
+  const asObject = (v: unknown): Record<string, unknown> | undefined =>
+    v !== null && typeof v === "object" && !Array.isArray(v) ? v as Record<string, unknown> : undefined;
+  if (typeof value !== "string") return asObject(value);
+  if (value.length === 0) return undefined;
+  try {
+    const parsed = asObject(JSON.parse(value));
+    if (parsed) return parsed;
+  } catch {
+    // Not JSON: the patch text itself.
+  }
+  return { input: value };
+}
+
 export async function run(
   target: string,
   input: string,
@@ -278,12 +302,24 @@ export async function run(
     copilot.agent_type ?? copilot.agent_name ?? copilot.agentName ?? "";
   const explicitSubagentId = copilot.agent_id ?? copilot.agentId ?? "";
   const subagentId = explicitSubagentId || sessionId;
-  const nativeToolInput = copilot.tool_input ?? copilot.toolInput;
+  // A command in the launcher's spelling is read as the dispatcher's, so every
+  // check before and after the call sees the one form it knows. Copilot starts each call in a new shell
+  // at the project folder, so only the bare relative spelling is the launcher.
+  const ENGINE_PREFIX = `${aidlcInvocation()} engine`;
+  const typedInput = toolInputOf(copilot.tool_input ?? copilot.toolInput ?? copilot.toolArgs);
+  const typedCommand = typeof typedInput?.command === "string" ? typedInput.command : "";
+  const typedLauncher = typedCommand === LAUNCHER_PATH || typedCommand.startsWith(`${LAUNCHER_PATH} `);
+  const nativeToolInput = typedLauncher && typedInput
+    ? { ...typedInput, command: `${ENGINE_PREFIX}${typedCommand.slice(LAUNCHER_PATH.length)}` }
+    : typedInput;
 
   // Canonicalize the tool name across the two surfaces. The CLI sends
   // Claude-style names (Bash/Write/Edit/Read — live-captured); VS Code agent
   // mode uses its own snake_case execution ids (extracted from the shipped
   // extension's equivalence sets — parser-verified, pending a live IDE run).
+  // The Copilot runtime's own names (powershell, grep, view, glob, apply_patch)
+  // are the ones its agent sees, and what a host that does not rename them,
+  // such as the GitHub Copilot app, may send; pwsh is PowerShell 7's name.
   // Unknown names pass through unmapped and fall out of the self-filters,
   // exactly like any foreign tool.
   const TOOL_ALIAS: Record<string, string> = {
@@ -292,6 +328,8 @@ export async function run(
     runTerminalCommand: "Bash",
     bash: "Bash",
     local_shell: "Bash",
+    powershell: "Bash",
+    pwsh: "Bash",
     // writes/creates
     create_file: "Write",
     createFile: "Write",
@@ -323,6 +361,7 @@ export async function run(
     file_search: "Glob",
     fileSearch: "Glob",
     glob: "Glob",
+    grep: "Grep",
     grep_search: "Grep",
     grepSearch: "Grep",
     semantic_search: "Grep",
@@ -345,7 +384,11 @@ export async function run(
   ]);
   const rawToolName = copilot.tool_name ?? copilot.toolName ?? "";
   const toolName = TOOL_ALIAS[rawToolName] ?? rawToolName;
-  const isApplyPatch = rawToolName === "apply_patch" || rawToolName === "applyPatch";
+  // Copilot CLI hands its apply_patch to the PascalCase hooks as Edit, with the
+  // patch text itself as tool_input (live-captured on 1.0.109), so the envelope
+  // says it is a patch as well as the name.
+  const isApplyPatch = rawToolName === "apply_patch" || rawToolName === "applyPatch" ||
+    (typeof nativeToolInput?.input === "string" && /^\*\*\* Begin Patch$/m.test(nativeToolInput.input));
 
   // Re-serialize the payload with the canonical tool_name so verbatim pipes
   // (Bash → guards, rebuild-stage-graph) carry the name the core hooks match on.
@@ -605,8 +648,9 @@ export async function run(
     }
   }
   // The person's words in a recorded answer or decision are text, never a
-  // path: on Windows `--options "A: yes,B: no"` would read as drive A:.
-  const FREE_TEXT_FLAGS = new Set(["--options", "--details", "--decision", "--reason"]);
+  // path: on Windows `--options "A: yes,B: no"` would read as drive A:, and so
+  // would one choice of a question given as `--option 'A: yes, fix the end'`.
+  const FREE_TEXT_FLAGS = new Set(["--options", "--option", "--details", "--decision", "--reason"]);
   // So are the words a setter is handed as the reply that asked for it
   // (`--person-words '/aidlc turn the review freeze off'`), on the commands
   // that take them and can run without a click (`scope change` always keeps
@@ -993,6 +1037,70 @@ export async function run(
     return verbRoute && ownProjectRoute([...verbRoute, ...args.slice(1)], file, false) ? { status: "terminal" } : { status: "unrelated" };
   }
 
+  // The shipped launcher, unchanged, executable and no symlink, or no rewrite:
+  // a clone that lost the mode, an edited file or an install from before it
+  // asks as before.
+  function launcherReady(): boolean {
+    try {
+      // The launcher's path is relative and its voucher is the project's, so
+      // the call's shell must start in the project folder itself.
+      if (realpathSync(copilot.cwd ?? process.cwd()) !== realpathSync(projectDir)) return false;
+      const file = join(projectDir, ...LAUNCHER_PATH.split("/"));
+      const st = lstatSync(file);
+      return st.isFile() && (st.mode & 0o111) !== 0 && readFileSync(file, "utf-8") === launcherBody(aidlcInvocation());
+    } catch { return false; }
+  }
+  // The same command with the launcher in place of the channel's own engine
+  // prefix, or null. On the copy channel a tool script is named by its route.
+  function toLauncher(command: string): string | null {
+    if (command.startsWith(`${ENGINE_PREFIX} `)) return `${LAUNCHER_PATH} ${command.slice(ENGINE_PREFIX.length + 1)}`;
+    if (!ENGINE_PREFIX.startsWith("bun ")) return null;
+    const m = /^bun \.aidlc\/tools\/(aidlc-[a-z0-9-]+\.ts) /.exec(command);
+    if (!m) return null;
+    const rest = command.slice(m[0].length);
+    if (m[1] === "aidlc-orchestrate.ts") return `${LAUNCHER_PATH} orchestrate ${rest}`;
+    const route = toolScriptRoute(m[1]);
+    if (route) return route[0] === "engine" ? `${LAUNCHER_PATH} ${route[1]} ${rest}` : null;
+    const verb = /^(\S+)(?: |$)/.exec(rest);
+    const verbRoute = verb ? toolScriptVerbRoute(m[1], verb[1]) : null;
+    return verbRoute ? `${LAUNCHER_PATH} ${verbRoute[1]} ${verbRoute[2]}${rest.slice(verb![1].length)}` : null;
+  }
+  // The command when it goes out on the launcher, its voucher recorded for the
+  // dispatcher's launcher gate; null leaves the plain spelling, which Copilot
+  // asks. While an earlier voucher is unspent its launcher call did not run,
+  // so a command the agent typed plain goes out plain: Copilot's answer then
+  // names what the agent typed, and a typed launcher call stays the launcher.
+  function launchedWithVoucher(command: string | null): string | null {
+    if (command === null || (!typedLauncher && launcherVoucherUnspent(projectDir))) return null;
+    const words = shellWords(command.replace(/ +2>&1 *$/, ""));
+    if (!words || words[0] !== LAUNCHER_PATH) return null;
+    try { recordLauncherVoucher(projectDir, ["engine", ...words.slice(1)]); }
+    catch { return null; }
+    return command;
+  }
+  // A command that runs a file under `.aidlc/bin/` in any segment: after a
+  // `cd`, in a chain or a substitution, through `sh`, `./` or a full path.
+  function runsUnderBin(command: string): boolean {
+    return command.split(/;|&&|\|\||\||&|\n|\$\(|`|\(|\)/).some((segment) => {
+      const words = segment.trim().split(/\s+/).filter((word) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(word));
+      while (words.length > 0 && ["exec", "command", "env", "nohup", "time", "sh", "bash", "then", "do", "else", "!"].includes(words[0])) words.shift();
+      return /(?:^|[\\/])\.aidlc[\\/]bin[\\/]/.test((words[0] ?? "").replace(/^["']+|["']+$/g, ""));
+    });
+  }
+  // The refusal for a `.aidlc/bin/` call that is not the launcher alone: the
+  // plain command to run, never the file guessed and run.
+  function binCallReason(command: string): string {
+    const words = shellWords(command.replace(/ +2>&1 *$/, ""));
+    if (!words) return `AI-DLC's commands run alone, one at a time, so this did not run. Run each as \`${ENGINE_PREFIX} ...\`, a command of its own.`;
+    const name = /^\.aidlc[\\/]bin[\\/](aidlc-[a-z0-9-]+)$/.exec(words[0] ?? "")?.[1];
+    if (name && name !== "aidlc-engine" && ENGINE_PREFIX.startsWith("bun ") &&
+        existsSync(join(projectDir, ".aidlc", "tools", `${name}.ts`))) {
+      const rest = words.slice(1).map((word) => quoteCommandArgument(word, "posix"));
+      return `\`.aidlc/bin/${name}\` does not exist, so this did not run. Run \`${["bun", `.aidlc/tools/${name}.ts`, ...rest].join(" ")}\` instead.`;
+    }
+    return `Only \`${LAUNCHER_PATH}\`, typed first and from the project folder, runs from \`.aidlc/bin/\`, so this did not run. Run \`${ENGINE_PREFIX} ...\` instead.`;
+  }
+
   // Each refusal says what was not accepted and the form to run instead; the
   // agent's own words are repeated only when they are plain text.
   const PROJECT_DIR_EMPTY = "`--project-dir` needs this project's folder after it, so this did not run. Name the folder, or run the command without `--project-dir`.";
@@ -1217,6 +1325,11 @@ export async function run(
         : { status: "unrelated", ...uncopied };
     }
     const subArgs = normalized.slice(1);
+    // A receipt can start with `-`, so the agent may mark it with `--`, as the
+    // engine reads it (handleContinue). The claim still hashes the line as
+    // typed, the line the engine hashes.
+    const marked = commandKind === "continue" && subArgs[0] === "--";
+    const receiptArgs = marked ? subArgs.slice(1) : subArgs;
     // Read-only next returns a terminal print before workflow inspection and
     // touches no engine marker on other harnesses. Claiming it here advanced
     // engine_sequence, so Stop demanded a fresh bare next after a query (#1258).
@@ -1227,7 +1340,7 @@ export async function run(
     }
     // A bare `continue` (the receipt lost) is claimed too: the engine answers it
     // as `next`, as it does on every harness, instead of a shell-shape refusal.
-    if (commandKind === "continue" && subArgs.length > 1) {
+    if (commandKind === "continue" && receiptArgs.length > 1) {
       return { status: "unsupported", reason: `\`continue\` takes only the receipt from the last step, so this did not run. Run \`${form("next")}\` to get the current step again.` };
     }
     // --person-asked (the person asked to stop) is the one park option.
@@ -1262,16 +1375,18 @@ export async function run(
         !argumentsStayInProject(runs),
       // On a `next` line right after the verb, ahead of the person's words,
       // where the engine reads it; behind them it would be one of their words.
-      // The other verbs carry no words of theirs, so it goes at the end.
+      // On a `continue` marked with `--` it goes there too: behind the mark
+      // the engine would not take it. The other lines carry no words of
+      // theirs, so it goes at the end.
       rewrite: (selectedAttemptId) =>
-        respelled(commandKind === "next" ? parsed.ends[verbWord] : parsed.body.length, selectedAttemptId),
+        respelled(commandKind === "next" || marked ? parsed.ends[verbWord] : parsed.body.length, selectedAttemptId),
       ...uncopied,
       claim: {
         sessionId,
         ...(attemptId ? { attemptId } : {}),
         commandKind: commandKind as CopilotCommandClaim["commandKind"],
         commandSha256: digest,
-        ...(commandKind === "continue" && subArgs.length === 1 ? { continueToken: subArgs[0] } : {}),
+        ...(commandKind === "continue" && receiptArgs.length === 1 ? { continueToken: receiptArgs[0] } : {}),
         ...(commandKind === "next" && nextTakes("--resume") ? { resumeRequest: true } : {}),
         ...(commandKind === "next" && (nextTakes("--stage") || nextTakes("--phase")) ? { jumpRequest: true } : {}),
         ...(commandKind === "next" && nextTakes("--new-intent") ? { startFreshRequest: true } : {}),
@@ -1394,17 +1509,9 @@ export async function run(
   ): Array<{ path: string; toolName: "Write" | "Edit" }> {
     const patch = [toolInput.input, toolInput.patchText, toolInput.patch, toolInput.command]
       .find((value): value is string => typeof value === "string" && value.length > 0) ?? "";
-    const targets: Array<{ path: string; toolName: "Write" | "Edit" }> = [];
-    for (const match of patch.matchAll(/^\*\*\* (Add|Update|Delete) File: (.+)$/gm)) {
-      targets.push({
-        path: match[2].trim(),
-        toolName: match[1] === "Add" ? "Write" : "Edit",
-      });
-    }
-    for (const match of patch.matchAll(/^\*\*\* Move to: (.+)$/gm)) {
-      targets.push({ path: match[1].trim(), toolName: "Write" });
-    }
-    return targets.filter((target) => target.path.length > 0);
+    return patchTargets(patch)
+      .filter((target) => target.path.length > 0)
+      .map(({ kind, path }) => ({ path, toolName: kind === "Add" || kind === "Move" ? "Write" : "Edit" }));
   }
 
   function filePathsOf(toolInput: Record<string, unknown> | undefined): string[] {
@@ -1424,7 +1531,9 @@ export async function run(
     add(toolInput.path);
     add(toolInput.file_path);
     add(toolInput.filePath);
-    for (const key of ["files", "filePaths", "replacements"] as const) {
+    // The Copilot runtime's grep takes `paths`: one folder, or a list of them.
+    add(toolInput.paths);
+    for (const key of ["files", "filePaths", "paths", "replacements"] as const) {
       const values = toolInput[key];
       if (Array.isArray(values)) {
         for (const value of values) add(value);
@@ -1466,6 +1575,7 @@ export async function run(
       filePath: _camelFilePath,
       files: _files,
       filePaths: _filePaths,
+      paths: _paths,
       replacements: _replacements,
       ...rest
     } = toolInput;
@@ -2243,6 +2353,31 @@ export async function run(
       // Shell calls run the state-transition guard first, then reviewer-scope.
       // Either block converts to the deny JSON (difference #4).
       if (toolName === "Bash") {
+        // Layer 3: a call under `.aidlc/bin/` is the launcher alone, from the
+        // project folder, the shipped file, outside a Windows terminal, naming
+        // a route; anything else is refused before any dialog with the plain
+        // command, so the person is never asked about a call that cannot run.
+        const typedAlone = typedLauncher && shellWords(typedCommand.replace(/ +2>&1 *$/, "")) !== null;
+        if (runsUnderBin(typedCommand) && !typedAlone) {
+          process.stdout.write(denyJson(binCallReason(typedCommand)));
+          return 0;
+        }
+        if (typedLauncher) {
+          const plain = String(nativeToolInput?.command ?? "");
+          const words = shellWords(plain.replace(/ +2>&1 *$/, "")) ?? [];
+          const argv = ["engine", ...words.slice(ENGINE_PREFIX.split(" ").length)];
+          const reason = windowsTerminal
+            ? `\`${LAUNCHER_PATH}\` does not run in this terminal, so this did not run. Run \`${plain}\` instead.`
+            : !launcherReady()
+              ? `\`${LAUNCHER_PATH}\` is not the file AI-DLC installed, so this did not run. Run \`${plain}\` instead.`
+              : routePolicyFor(withoutProjectDirFlag(argv)) === null && argv.length > 1 && !argv[1].startsWith("-")
+                ? `\`${plain}\` is not an AI-DLC command, so this did not run. Run \`${ENGINE_PREFIX} --help\` for the list.`
+                : null;
+          if (reason) {
+            process.stdout.write(denyJson(reason));
+            return 0;
+          }
+        }
         const command = orchestrationCommand();
         if (command.status === "foreign") {
           process.stdout.write(denyJson("This AI-DLC command targets a different physical project. Run it from that project's own Copilot session."));
@@ -2290,15 +2425,20 @@ export async function run(
         // aside for it, and no call without a host session is vouched for.
         const typed = typeof nativeToolInput?.command === "string" ? nativeToolInput.command : "";
         const bare = typed.slice(projectCdLead(typed).length);
-        const allow = VSCODE_SHELL_TOOLS.has(rawToolName) && sessionId !== "" &&
+        const vouched = sessionId !== "" &&
             [guard, scope, freeze, planApproval].every((r) => r.code === 0) &&
             plainInEveryShell(bare) &&
-            !(shellWords(bare)?.[0] === "aidlc" && projectSuppliesLauncher())
-          ? ALLOW_DECISION
-          : null;
+            !(shellWords(bare)?.[0] === "aidlc" && projectSuppliesLauncher());
+        const allow = VSCODE_SHELL_TOOLS.has(rawToolName) && vouched ? ALLOW_DECISION : null;
+        // On the CLI, outside a Windows terminal, the same vouched commands go
+        // out in the launcher's spelling, which the skill's rule allows.
+        const cliLauncher = !VSCODE_SHELL_TOOLS.has(rawToolName) && !windowsTerminal && vouched && launcherReady();
         // A command passed on unclaimed still runs without a copied attempt id.
-        const passOn = (decision: typeof allow, uncopied: string | undefined): number => {
-          const modifiedArgs = uncopied === undefined ? null : { ...(nativeToolInput ?? {}), command: uncopied };
+        const passOn = (decision: typeof allow, uncopied: string | undefined, route = false): number => {
+          const base = uncopied ?? (typeof nativeToolInput?.command === "string" ? nativeToolInput.command : undefined);
+          const launched = route && cliLauncher && base !== undefined ? launchedWithVoucher(toLauncher(base)) : null;
+          const finalCommand = launched ?? (uncopied !== undefined || typedLauncher ? base : undefined);
+          const modifiedArgs = finalCommand === undefined ? null : { ...(nativeToolInput ?? {}), command: finalCommand };
           if (decision || modifiedArgs) {
             process.stdout.write(`${JSON.stringify({ ...(modifiedArgs ? { modifiedArgs } : {}), hookSpecificOutput: {
               hookEventName: "PreToolUse",
@@ -2308,7 +2448,7 @@ export async function run(
           }
           return 0;
         };
-        if (command.status === "terminal") return passOn(allow, command.uncopied);
+        if (command.status === "terminal") return passOn(allow, command.uncopied, true);
         if (command.status === "unrelated") return passOn(null, command.uncopied);
         if (command.status === "recognized") {
           if (!sessionId) return passOn(null, command.uncopied);
@@ -2328,7 +2468,7 @@ export async function run(
               command: command.claim.commandKind,
               reason,
             });
-            return passOn(command.keepsPrompt ? null : allow, command.uncopied);
+            return passOn(command.keepsPrompt ? null : allow, command.uncopied, !command.keepsPrompt);
           };
           let claimed: ReturnType<typeof claimCopilotCommand>;
           try { claimed = claimCopilotCommand(projectDir, currentState(), command.claim); }
@@ -2359,7 +2499,9 @@ export async function run(
             process.stdout.write(denyJson(reason));
             return 0;
           }
-          const modifiedArgs = { ...(nativeToolInput ?? {}), command: command.rewrite(claimed.attemptId) };
+          const respelled = command.rewrite(claimed.attemptId);
+          const launchedClaim = !command.keepsPrompt && cliLauncher ? launchedWithVoucher(toLauncher(respelled)) : null;
+          const modifiedArgs = { ...(nativeToolInput ?? {}), command: launchedClaim ?? respelled };
           process.stdout.write(`${JSON.stringify({ modifiedArgs, hookSpecificOutput: {
             hookEventName: "PreToolUse",
             ...(command.keepsPrompt ? {} : allow ?? {}),
@@ -2379,18 +2521,18 @@ export async function run(
             : [];
         // Path-shaped tools re-key `path` → `file_path`; the search tools
         // (LS/Glob/Grep) keep their native fields, which the core matcher
-        // reads directly (path/pattern/glob).
+        // reads directly (path/pattern/glob), one check per search root.
         const toolCalls: Array<{
           toolName: string;
           toolInput: Record<string, unknown>;
         }> =
           toolName === "LS" || toolName === "Glob" || toolName === "Grep"
-            ? [{
+            ? (filePaths.length > 0 ? filePaths : [undefined]).map((searchRoot) => ({
                 toolName,
                 toolInput: (() => {
                   const searchInput: Record<string, unknown> = {
                     ...withoutPathFields(ti),
-                    ...(filePaths[0] ? { path: filePaths[0] } : {}),
+                    ...(searchRoot ? { path: searchRoot } : {}),
                   };
                   if (
                     toolName === "Glob" &&
@@ -2402,7 +2544,7 @@ export async function run(
                   }
                   return searchInput;
                 })(),
-              }]
+              }))
             : toolName === "Write" || toolName === "Edit"
               ? mutationTargets.map((target) => ({
                   toolName: target.toolName,
@@ -2477,7 +2619,8 @@ export async function run(
             tool_input: { file_path: target.filePath },
           });
           runCore("aidlc-write-audit-log.ts", fwd);
-          runCore("aidlc-run-sensors.ts", fwd);
+          // A target that is gone (a patch deleted or moved it) leaves a sensor nothing to read.
+          if (existsSync(target.filePath)) runCore("aidlc-run-sensors.ts", fwd);
         }
         return 0;
       }
@@ -2668,7 +2811,7 @@ export async function run(
         // it names no session, so there is no end to attribute.
         if (prior.session_id && prior.session_id !== "unknown" && prior.session_id !== sessionId) {
           const reason =
-            `inferred — the shared Copilot hook manifest omits unsupported ` +
+            `inferred - the shared Copilot hook manifest omits unsupported ` +
             `SessionEnd; reconciled at next ` +
             `SessionStart. Prior session ${prior.session_id} last seen ${prior.ts ?? "unknown"}.`;
           runCore("aidlc-session-end.ts", JSON.stringify({ reason, session_id: prior.session_id }));

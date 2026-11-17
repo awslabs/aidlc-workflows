@@ -615,7 +615,7 @@ const ACTIVE_SPACE_VALUE = "default\n";
 // rules-subdir and any host-native generated-runner frontmatter from this
 // open-set descriptor. Pretty-printed + trailing newline keeps output
 // diff-friendly and stable under --check.
-function writeHarnessData(treeRoot: string, m: HarnessManifest): void {
+function writeHarnessData(treeRoot: string, m: HarnessManifest, invoke: string): void {
   // A FRESH object, deliberately: the runtime READER tolerates unknown keys, but
   // this writer alone decides what ships. Anything hand-added to a local
   // harness.json is erased on the next build, so a new configuration field has
@@ -636,7 +636,15 @@ function writeHarnessData(treeRoot: string, m: HarnessManifest): void {
   // byte-identical for every harness that does not -- which is all of them today.
   if (m.documentExtractors) data.documentExtractors = m.documentExtractors;
   // Likewise conditional: only a host whose hooks wait on the person (trust, engine) declares it.
-  if (m.hookActivation) data.hookActivation = m.hookActivation;
+  // Its lines can name the install's own command, so `{{INVOKE}}` is filled per tree.
+  if (m.hookActivation) {
+    data.hookActivation = JSON.parse(
+      JSON.stringify(m.hookActivation),
+      (_key, value) => typeof value === "string" ? substituteInvocationTokens(value, m.harnessDir, invoke) : value,
+    );
+  }
+  // And only a host whose own step to a clean chat is known.
+  if (m.newChatStep) data.newChatStep = m.newChatStep;
   // Only the Kiro rows declare a layout; the runtime reads it in place of the row name.
   if (m.kiroLayout) data.kiroLayout = m.kiroLayout;
   // And only a host that cuts a shell result below the engine's cap.
@@ -645,6 +653,8 @@ function writeHarnessData(treeRoot: string, m: HarnessManifest): void {
   if (m.statusLine) data.statusLine = m.statusLine;
   // And only a host whose stop event records an agent's finish before its result.
   if (m.agentFinishRecorded) data.agentFinishRecorded = m.agentFinishRecorded;
+  // And only a host whose own mark on its agent's commands is known.
+  if (m.hostShell) data.hostShell = m.hostShell;
   const dst = join(treeRoot, HARNESS_DATA);
   mkdirSync(dirname(dst), { recursive: true });
   writeFileSync(dst, `${JSON.stringify(data, null, 2)}\n`);
@@ -760,6 +770,7 @@ function writeProjectionData(outRoot: string, treeRoot: string, m: HarnessManife
     configNextStep: m.configNextStep,
     ...(m.firstRunSteps ? { firstRunSteps: m.firstRunSteps } : {}),
     ...(m.editorTerminalApp ? { editorTerminalApp: m.editorTerminalApp } : {}),
+    ...(m.cliFirst ? { cliFirst: m.cliFirst } : {}),
     harnessDir: m.harnessDir,
     ...(m.onboarding?.harnessDst
       ? { onboarding: `${m.harnessDir}/${m.onboarding.harnessDst}` }
@@ -1066,7 +1077,7 @@ function buildTree(
   //     purely from the manifest, so unseeded; written into the same tools/data/
   //     the compile step just created, hence walked + byte-diffed by --check
   //     like any other generated file.
-  writeHarnessData(treeRoot, m);
+  writeHarnessData(treeRoot, m, invoke);
   writePluginAgentData(treeRoot, m);
   writeAgentTiersData(treeRoot);
   writeSettingsSchemaData(treeRoot);
@@ -1455,16 +1466,21 @@ function rewriteCursorNativePermissions(outRoot: string, m: HarnessManifest): vo
   writeFileSync(cliPath, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-// The native Permissions line. A harness whose native allow list carries the
-// exact read-only and turn-back-on commands names them; the others keep the
-// engine prefix alone.
-function nativePermissionsLine(exactReads: boolean): string {
-  return exactReads
-    ? `- **Permissions**: the \`aidlc\` agent pre-approves only the native \`${TRUSTED_COMMAND_PREFIX}\` command prefix, the read-only \`aidlc doctor\`, \`status\`, \`version\` and \`config <section> --show\` (with or without \`--json\`) and \`--help\` forms, turning a check back on (\`aidlc config flags --clear-bypass <switch> --yes\`), and its listed read-only tools; everything else prompts, including any other \`config\` change.`
-    : `- **Permissions**: the \`aidlc\` agent pre-approves only the native \`${TRUSTED_COMMAND_PREFIX}\` command prefix and its listed read-only tools; everything else prompts.`;
+// The native Permissions line for the `aidlc` agent, which only Kiro's trees
+// ship; their native allow list carries the exact read-only and turn-back-on
+// commands, so the line names them.
+function nativePermissionsLine(): string {
+  return `- **Permissions**: the \`aidlc\` agent pre-approves only the native \`${TRUSTED_COMMAND_PREFIX}\` command prefix, the read-only \`aidlc doctor\`, \`status\`, \`version\` and \`config <section> --show\` (with or without \`--json\`) and \`--help\` forms, turning a check back on (\`aidlc config flags --clear-bypass <switch> --yes\`), and its listed read-only tools; everything else prompts, including any other \`config\` change.`;
 }
 
-function rewriteNativeOnboarding(value: string, exactReads = false): string {
+// Codex's native Permissions line: its own bullet names copy-channel scripts a
+// native tree cannot carry, so the native one keeps the rest of it.
+const CODEX_NATIVE_PERMISSIONS_LINE =
+  `- **Permissions**: \`.codex/rules/default.rules\` (Starlark prefix rules) pre-allows AI-DLC's workflow commands as it runs them, so Codex runs them without asking, outside its sandbox: \`${TRUSTED_COMMAND_PREFIX} ...\` and \`git worktree\`/\`commit\`/\`add\`. Everything else runs inside the \`workspace-write\` sandbox, so a command that writes \`.git\` or \`.codex/\` (a \`config\` change, for one) needs your approval to run outside it.`;
+
+// `permissions` replaces the authored Permissions bullet; without it the tree
+// keeps its own bullet, its commands already rewritten to their native form.
+function rewriteNativeOnboarding(value: string, permissions?: string): string {
   return value
     .replace(
       /^- \*\*bun\*\*:.*$/gm,
@@ -1474,7 +1490,7 @@ function rewriteNativeOnboarding(value: string, exactReads = false): string {
       /^- \*\*Hook permissions\*\*:.*$/gm,
       "- **Hook permissions**: Framework hooks run through the self-contained `aidlc` binary. No separate script runtime or executable bits are required.",
     )
-    .replace(/^- \*\*Permissions\*\*:.*$/gm, nativePermissionsLine(exactReads))
+    .replace(/^- \*\*Permissions\*\*:.*$/gm, (line) => permissions ?? line)
     .replace(
       "Framework shell grants cover the `aidlc.ts engine` prefix, the dispatcher's listed read-only commands, and each approved `.devin/tools/` script, in both `bun` and `bun run` spellings.",
       `Framework shell grants cover the installed \`${trustedCommand()}\` command prefix and its listed read-only commands.`,
@@ -1661,7 +1677,12 @@ function rewriteNativeInvocations(
       `"${trustedCommand(".*")}"`,
     );
     value = substituteInvocationTokens(value, m.harnessDir, "aidlc");
-    value = rewriteNativeOnboarding(value, m.tierFlavor === "claude" || m.tierFlavor === "cursor" || m.tierFlavor === "kiro");
+    value = rewriteNativeOnboarding(
+      value,
+      m.tierFlavor === "kiro"
+        ? nativePermissionsLine()
+        : m.tierFlavor === "codex" ? CODEX_NATIVE_PERMISSIONS_LINE : undefined,
+    );
     writeFileSync(file, value);
   }
   rewriteKiroNativeAllowlists(outRoot, m);
@@ -1700,6 +1721,7 @@ function rewriteNativeInvocations(
   const descriptor = JSON.parse(readFileSync(descriptorPath, "utf-8")) as {
     managedDirectories: string[];
     legacyManagedFileHashes?: Record<string, string[]>;
+    retiredCopyFileHashes?: Record<string, string[]>;
   };
   const legacyManagedFileHashes: Record<string, string[]> = {};
   for (const directory of descriptor.managedDirectories) {
@@ -1714,6 +1736,29 @@ function rewriteNativeInvocations(
       if (releaseHash !== copyHash) legacyManagedFileHashes[rel] = [copyHash];
     }
   }
+  // What the copy-era releases put at each path (scripts/copy-era-files.ts):
+  // they wrote no install record, so their unchanged files are told from the
+  // person's by these bytes.
+  // Read as data, not imported: a type for half a megabyte of JSON would weigh on the typecheck.
+  const copyEra = JSON.parse(readFileSync(join(REPO_ROOT, "scripts", "copy-era-files.json"), "utf-8")) as Record<string, Record<string, string[]>>;
+  const retiredCopyFileHashes: Record<string, string[]> = {};
+  for (const [rel, hashes] of Object.entries(copyEra[m.name] ?? {})) {
+    if (!descriptor.managedDirectories.some((directory) => rel.startsWith(`${directory}/`))) continue;
+    // The workspace's seeds are the team's once written (config preserves them,
+    // aidlc-init.ts workspaceSeed) and a copy runtime leaves them out
+    // (copyChannelOmits), so no signature is owed for them.
+    if (rel.startsWith("aidlc/")) continue;
+    const release = join(outRoot, rel);
+    if (!existsSync(release) || !lstatSync(release).isFile()) {
+      retiredCopyFileHashes[rel] = [...hashes].sort();
+      continue;
+    }
+    const releaseHash = sha256Bytes(readFileSync(release));
+    const known = new Set(legacyManagedFileHashes[rel] ?? []);
+    for (const hash of hashes) if (hash !== releaseHash) known.add(hash);
+    if (known.size > 0) legacyManagedFileHashes[rel] = [...known].sort();
+  }
+  descriptor.retiredCopyFileHashes = retiredCopyFileHashes;
   const descriptorRel = `${m.harnessDir}/${PROJECTION_DATA}`.split(sep).join("/");
   const copyDescriptor = join(copyRoot, descriptorRel);
   if (existsSync(copyDescriptor)) {

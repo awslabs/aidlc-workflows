@@ -11,29 +11,30 @@ import {
   closeSync,
   cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   openSync,
   readFileSync,
   readdirSync,
+  readlinkSync,
   realpathSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, delimiter, dirname, join } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join, relative } from "node:path";
 import { spawnSync } from "node:child_process";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { readTerminalLine } from "../../core/tools/aidlc-command.ts";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
 import { TransactionFilesystemError } from "../../core/tools/aidlc-transaction.ts";
 import { projectionFiles } from "../../core/tools/aidlc-distribution.ts";
-import {
-  firstRunFailureLines,
-  firstRunPathRemediation,
-  launchedFromEditorTerminal,
-} from "../../core/tools/aidlc-init.ts";
+import { firstRunFailureLines, firstRunPathRemediation } from "../../core/tools/aidlc-init.ts";
+import { harnessCliLeads, launchedFromEditorTerminal } from "../../core/tools/aidlc-config-diagnostics.ts";
+import { typedHarnessName } from "../../core/tools/aidlc-runtime-paths.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const BUN = process.execPath;
@@ -88,6 +89,54 @@ function treeSnapshot(root: string): Record<string, string> {
   return snapshot;
 }
 
+// Every entry below root as lstat sees it: a link by its target, never
+// followed, so a link the person keeps reads as theirs before and after.
+function linkTree(root: string): Record<string, string> {
+  const entries: Record<string, string> = {};
+  const visit = (directory: string, prefix: string): void => {
+    for (const entry of readdirSync(directory).sort()) {
+      const path = join(directory, entry);
+      const rel = prefix ? `${prefix}/${entry}` : entry;
+      const stat = lstatSync(path);
+      if (stat.isSymbolicLink()) {
+        entries[rel] = `link:${readlinkSync(path)}`;
+      } else if (stat.isDirectory()) {
+        entries[`${rel}/`] = "";
+        visit(path, rel);
+      } else {
+        entries[rel] = readFileSync(path).toString("base64");
+      }
+    }
+  };
+  visit(root, "");
+  return entries;
+}
+
+// A folder link: a junction on Windows, where it needs no privilege.
+function folderLink(target: string, path: string): void {
+  symlinkSync(target, path, process.platform === "win32" ? "junction" : "dir");
+}
+
+// A checkout of the person's own where Claude Code keeps its worktrees, with
+// the links a worktree of a repo with a tracked AGENTS.md -> CLAUDE.md, or of
+// one with node_modules, holds. `clone` gives it a .git folder of its own
+// instead of a worktree's .git file.
+function claudeWorktree(project: string, name: string, clone = false): string {
+  const tree = join(project, ".claude", "worktrees", name);
+  mkdirSync(join(tree, "docs"), { recursive: true });
+  if (clone) {
+    mkdirSync(join(tree, ".git"));
+    writeFileSync(join(tree, ".git", "HEAD"), "ref: refs/heads/main\n");
+  } else {
+    writeFileSync(join(tree, ".git"), `gitdir: ${join(project, ".git", "worktrees", name)}\n`);
+  }
+  writeFileSync(join(tree, "CLAUDE.md"), "# Project notes\n");
+  writeFileSync(join(tree, "docs", "guide.md"), "guide\n");
+  if (process.platform !== "win32") symlinkSync("CLAUDE.md", join(tree, "AGENTS.md"));
+  folderLink(join(tree, "docs"), join(tree, "shared"));
+  return tree;
+}
+
 function detection(
   bin: string,
   harnesses: Record<string, { found: boolean; version?: string }> = {
@@ -134,11 +183,14 @@ function detection(
   });
 }
 
-// The editor-terminal markers launchedFromEditorTerminal reads. The runner's
-// own terminal must not decide which harness a case selects.
+// The editor-terminal markers launchedFromEditorTerminal reads, and the Kiro
+// IDE shell marks the Kiro tree's cliFirst lines read. The runner's own
+// terminal must not decide which harness a case selects, or which lines lead.
 const EDITOR_TERMINAL_ENV = [
   "TERM_PROGRAM",
   "VSCODE_GIT_ASKPASS_NODE",
+  "VSCODE_IPC_HOOK",
+  "VSCODE_PID",
 ] as const;
 
 function hostEnv(): NodeJS.ProcessEnv {
@@ -250,13 +302,6 @@ function filesystemPreload(
       symlinkSync: observeMutation("symlinkSync", 1),
       unlinkSync: observeMutation("unlinkSync"),
       rmdirSync: observeMutation("rmdirSync"),
-      linkSync(source, destination) {
-        if (inProject(source) || inProject(destination)) {
-          record("link", { source: pathOf(source), destination: pathOf(destination), code: "EMLINK" });
-          throw Object.assign(new Error("simulated project hard-link failure"), { code: "EMLINK" });
-        }
-        return actual.linkSync(source, destination);
-      },
       openSync(path, flags, ...rest) {
         if (inProject(path)) {
           const append = typeof flags === "string"
@@ -527,9 +572,6 @@ function expectDirectoryTransaction(
 ): void {
   const lock = join(project, ".aidlc-transaction.lock");
   expect(events).toContainEqual(expect.objectContaining({
-    event: "link", pid, destination: lock, code: "EMLINK",
-  }));
-  expect(events).toContainEqual(expect.objectContaining({
     event: "directory-lock",
     pid,
     path: lock,
@@ -537,9 +579,18 @@ function expectDirectoryTransaction(
       schemaVersion: 1,
       pid,
       host: expect.any(String),
+      machine: expect.any(String),
       token: expect.any(String),
     }),
   }));
+}
+
+// The wizard's storage check makes its probe folders in the project; a
+// transaction makes none.
+function storageChecksBy(events: FilesystemTrace[], pid: number): FilesystemTrace[] {
+  return events.filter((event) =>
+    event.event === "mkdtemp" && event.pid === pid && basename(event.path!).startsWith(".aidlc-lock-probe-")
+  );
 }
 
 function expectFilesystemRemediation(message: string, remediation: string, fault: FilesystemFailure): void {
@@ -1146,6 +1197,52 @@ describe("t299 first-run setup wizard", () => {
     expect(result.stdout).toContain("Nothing written.");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("an MCP answer stays when step 1 is reopened and the harness kept", () => {
+    const result = runWizard(
+      `${["2", "", "", "", "", "2", "", "1", "", ""].join("\n")}\n`,
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain("MCP [1]:");
+    const last = result.stdout.slice(result.stdout.lastIndexOf("Your choices"));
+    expect(last).toContain("1. Harness      Claude Code");
+    expect(last).toContain("5. MCP          off");
+    expect(result.stdout).toContain("Setup complete.");
+    expect(existsSync(join(result.project, ".mcp.json"))).toBe(false);
+    expect(JSON.parse(
+      readFileSync(join(result.project, ".claude", "tools", "data", "aidlc-manifest.json"), "utf-8"),
+    ).mcpMode).toBe("none");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("an MCP answer the person picked stays when the harness changes and changes back", () => {
+    const result = runWizard(
+      `${["2", "", "", "", "", "2", "", "1", "4", "1", "1", ""].join("\n")}\n`,
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    const summaries = result.stdout.split("Your choices").slice(1);
+    expect(summaries.find((summary) => summary.includes("1. Harness      Cursor")))
+      .toContain("5. MCP          off");
+    const last = summaries.at(-1) ?? "";
+    expect(last).toContain("1. Harness      Claude Code");
+    expect(last).toContain("5. MCP          off");
+    expect(result.stdout).toContain("Setup complete.");
+    expect(existsSync(join(result.project, ".mcp.json"))).toBe(false);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("the first pass offers each harness's MCP default, and a default follows a harness change", () => {
+    const result = runWizard(
+      `${["2", "4", "", "", "", "", "1", "1", "n"].join("\n")}\n`,
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain("MCP [2]:");
+    const summaries = result.stdout.split("Your choices").slice(1);
+    expect(summaries).toHaveLength(2);
+    expect(summaries[0]).toContain("1. Harness      Cursor");
+    expect(summaries[0]).toContain("5. MCP          off");
+    expect(summaries[1]).toContain("1. Harness      Claude Code");
+    expect(summaries[1]).toContain("5. MCP          on");
+    expect(result.stdout).toContain("Nothing written.");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("review accepts a step number, re-enters it, then applies", () => {
     const result = runWizard(
       `${[
@@ -1223,28 +1320,31 @@ describe("t299 first-run setup wizard", () => {
     expect(existsSync(join(unsupported.project, ".kiro", "agents", "aidlc.json"))).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  // A supported Kiro CLI is detected by both Kiro trees. Enter takes Kiro CLI
-  // (V2), the tree whose agents run on Kiro CLI's v2 engine; Kiro, the tree
-  // for Kiro IDE and Kiro CLI on v3, is one number away and says so beside its
-  // name. Injected detection runs on every platform.
-  test("a Kiro CLI both Kiro trees detect defaults to Kiro CLI (V2), with Kiro beside it", () => {
+  // A supported Kiro CLI is detected by both Kiro trees. Enter takes Kiro, the
+  // tree for Kiro IDE and Kiro CLI on its v3 engine; Kiro CLI (V2), the tree
+  // whose agents run on Kiro CLI's v2 engine, is one number away. Injected
+  // detection runs on every platform.
+  test("a Kiro CLI both Kiro trees detect defaults to Kiro, with Kiro CLI (V2) beside it", () => {
+    const saved = kiroSeam({ "chat.defaultModel": "claude-opus-5" });
     const result = runWizard("\n\n", {
       harnesses: {
         claude: { found: false },
         kiro: { found: true, version: "kiro-cli 2.28.0" },
         "kiro-ide": { found: true, version: "kiro-cli 2.28.0" },
       },
+      env: saved.env,
     });
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toContain("Choose the harness for this project first.");
-    expect(result.stdout).toContain("    6. Kiro CLI (V2)   (detected, default)\n");
+    expect(result.stdout).toContain("    6. Kiro CLI (V2)   (detected)\n");
     expect(result.stdout).toContain(
-      `    7. Kiro${" ".repeat(12)}(detected)  Kiro IDE and Kiro CLI on its v3 engine\n`,
+      `    7. Kiro${" ".repeat(12)}(detected, default)  Kiro IDE and Kiro CLI on its v3 engine\n`,
     );
-    expect(result.stdout).toContain("Using Kiro CLI (V2).");
+    expect(result.stdout).toContain("  Harness [7]:");
+    expect(result.stdout).toContain("Using Kiro.");
     const kiroDir = join(result.project, ".kiro");
-    expect(existsSync(join(kiroDir, "agents", "aidlc.json"))).toBe(true);
-    expect(existsSync(join(kiroDir, "agents", "aidlc-aidlc.md"))).toBe(false);
+    expect(existsSync(join(kiroDir, "agents", "aidlc-aidlc.md"))).toBe(true);
+    expect(existsSync(join(kiroDir, "agents", "aidlc.json"))).toBe(false);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("Kiro chosen with both Kiro trees detected keeps Kiro auto, and writes no effort for a saved model", () => {
@@ -1273,7 +1373,7 @@ describe("t299 first-run setup wizard", () => {
     expect(kiroWrites(saved.writes)).toEqual([]);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("an earlier detected harness stays the default over both Kiro trees, and 6 takes Kiro", () => {
+  test("an earlier detected harness stays the default over both Kiro trees, a later one does not, and 6 takes Kiro CLI (V2)", () => {
     const bothKiro = {
       kiro: { found: true, version: "kiro-cli 2.28.0" },
       "kiro-ide": { found: true, version: "kiro-cli 2.28.0" },
@@ -1290,16 +1390,61 @@ describe("t299 first-run setup wizard", () => {
     expect(withClaude.stdout).toContain("Using Claude Code.");
     expect(existsSync(join(withClaude.project, ".kiro"))).toBe(false);
 
-    const kiro = runWizard("7\n\n", { harnesses: { claude: { found: false }, ...bothKiro } });
+    // opencode comes after both Kiro trees in the list, so Kiro stays the default.
+    const withOpencode = runWizard("\n3\n", {
+      harnesses: { claude: { found: false }, opencode: { found: true, version: "opencode 1.17.0" }, ...bothKiro },
+    });
+    expect(withOpencode.status, withOpencode.stdout + withOpencode.stderr).toBe(0);
+    expect(withOpencode.stdout).toContain("    6. Kiro CLI (V2)   (detected)\n");
+    expect(withOpencode.stdout).toContain(
+      `    7. Kiro${" ".repeat(12)}(detected, default)  Kiro IDE and Kiro CLI on its v3 engine\n`,
+    );
+    expect(withOpencode.stdout).toContain("    8. opencode        (detected)\n");
+    expect(withOpencode.stdout).toContain("Using Kiro.");
+
+    // Kiro is the default, so its v3 pin is on the line in .kiro/settings/cli.json.
+    const kiro = runWizard("\n\n", {
+      harnesses: { claude: { found: false }, ...bothKiro },
+      env: kiroSeam({ "chat.defaultModel": "claude-opus-5" }).env,
+    });
     expect(kiro.status, kiro.stdout + kiro.stderr).toBe(0);
-    expect(kiro.stdout).toContain("    6. Kiro CLI (V2)   (detected, default)\n");
     expect(kiro.stdout).toContain("Using Kiro.");
     const cli = JSON.parse(readFileSync(join(kiro.project, ".kiro", "settings", "cli.json"), "utf-8"));
     expect(cli["chat.agentEngine"]).toBe("v3");
+
+    // Someone who wants Kiro CLI (V2) types its number.
+    const v2 = runWizard("6\n\n", { harnesses: { claude: { found: false }, ...bothKiro } });
+    expect(v2.status, v2.stdout + v2.stderr).toBe(0);
+    expect(v2.stdout).toContain(
+      `    7. Kiro${" ".repeat(12)}(detected, default)  Kiro IDE and Kiro CLI on its v3 engine\n`,
+    );
+    expect(v2.stdout).toContain("Using Kiro CLI (V2).");
+    expect(existsSync(join(v2.project, ".kiro", "agents", "aidlc.json"))).toBe(true);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // A project already on Kiro CLI (V2) is refreshed as it is: setup's harness
+  // question is for a project with no harness yet.
+  test("a Kiro CLI (V2) project's refresh at a terminal keeps Kiro CLI (V2) when both Kiro trees are detected", () => {
+    const bothKiro = {
+      claude: { found: false },
+      kiro: { found: true, version: "kiro-cli 2.28.0" },
+      "kiro-ide": { found: true, version: "kiro-cli 2.28.0" },
+    };
+    const setup = runWizard("", { harnesses: bothKiro, configArgs: ["--harness", "kiro-v2", "--yes"] });
+    expect(setup.status, setup.stdout + setup.stderr).toBe(0);
+    const stamp = () =>
+      JSON.parse(readFileSync(join(setup.project, ".kiro", "tools", "data", "aidlc-stamp.json"), "utf-8")).distribution;
+    expect(stamp()).toBe("kiro");
+    const refresh = runWizard("n\n", { harnesses: bothKiro, project: setup.project });
+    expect(refresh.status, refresh.stdout + refresh.stderr).toBe(0);
+    expect(refresh.stdout).not.toContain("Choose the harness for this project first.");
+    expect(refresh.stdout).toContain("Found kiro-v2 in .kiro/");
+    expect(stamp()).toBe("kiro");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("customize names the two Kiro trees as the list does, in its detected line and its choices", () => {
-    const result = runWizard("\n2\n\n\n\n\n\nn\n", {
+    // Kiro asks no provider and no record layer: four Enters, then n at Apply.
+    const result = runWizard("\n2\n\n\n\n\nn\n", {
       harnesses: {
         claude: { found: false },
         kiro: { found: true, version: "kiro-cli 2.28.0" },
@@ -1307,8 +1452,8 @@ describe("t299 first-run setup wizard", () => {
       },
     });
     expect(result.status, result.stdout + result.stderr).toBe(0);
-    expect(result.stdout).toContain("Detected on this machine: Kiro CLI (V2), Kiro.");
-    expect(result.stdout).toContain("    1. Harness      Kiro CLI (V2)\n");
+    expect(result.stdout).toContain("Detected on this machine: Kiro, Kiro CLI (V2).");
+    expect(result.stdout).toContain("    1. Harness      Kiro\n");
     expect(result.stdout).toContain("Nothing written.");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -1357,11 +1502,79 @@ describe("t299 first-run setup wizard", () => {
       "    3. Choose the aidlc agent in the chat panel's agent picker.",
       '    4. /aidlc "what you want built"  describe your first intent',
       "",
-      "    Using Kiro CLI instead? Start `kiro-cli` in this folder, then step 4.",
+      "    Using Kiro CLI instead? Start `kiro-cli --v3` in this folder. If Kiro asks",
+      "    whether you trust this workspace and you know what is in this folder,",
+      '    choose "Trust, continue". Then step 4.',
       "",
     ].join("\n"));
     expect(existsSync(join(result.project, ".kiro"))).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // With no Kiro IDE around, the person has only Kiro CLI to start (#3596):
+  // its step leads, and Kiro IDE's comes after it for someone who has both.
+  const kiroCliOnly = {
+    claude: { found: false },
+    kiro: { found: true, version: "kiro-cli 3.1.0" },
+    "kiro-ide": { found: true, version: "kiro-cli 3.1.0" },
+  };
+  const kiroCliSteps = [
+    "  Setup complete. Start your first workflow:",
+    "",
+    "    1. Start `kiro-cli --v3` in this folder. If Kiro asks whether you trust",
+    "       this workspace and you know what is in this folder, choose",
+    '       "Trust, continue".',
+    '    2. /aidlc "what you want built"  describe your first intent',
+    "",
+    "    Using Kiro IDE instead? Open this folder in Kiro IDE. If the Restricted",
+    "    Mode banner shows at the top of the window and you know what is in this",
+    '    folder, select Manage on it, then Trust. Run "Developer: Reload Window"',
+    "    from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), choose",
+    "    the aidlc agent in the chat panel's agent picker, then step 2.",
+    "",
+  ].join("\n");
+
+  // The ending checks kiro-cli itself, a shell-script stand-in here.
+  test.skipIf(process.platform === "win32")("Kiro chosen where only Kiro CLI is found ends with Kiro CLI's start step, then Kiro IDE's", () => {
+    const saved = kiroSeam({ "chat.defaultModel": "claude-opus-5" });
+    const result = runWizard("7\n\n", { harnesses: kiroCliOnly, env: saved.env });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain("Using Kiro.");
+    expect(result.stdout).toContain(kiroCliSteps);
+    expect(result.stdout).not.toContain("1. Open this folder in Kiro IDE.");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("Kiro IDE's terminal keeps Kiro IDE's steps first when Kiro CLI is found too", () => {
+    const saved = kiroSeam({ "chat.defaultModel": "claude-opus-5" });
+    const result = runWizard("\n\n", { harnesses: kiroCliOnly, env: { TERM_PROGRAM: "kiro", ...saved.env } });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain("Using Kiro.");
+    expect(result.stdout).toContain("    1. Open this folder in Kiro IDE. If the Restricted Mode banner shows at the");
+    expect(result.stdout).toContain("    Using Kiro CLI instead? Start `kiro-cli --v3` in this folder. If Kiro asks");
+    expect(result.stdout).not.toContain("Using Kiro IDE instead?");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // `config --harness kiro` checks kiro-cli itself, without the wizard's
+  // injected detection; the stand-in kiro-cli is a shell script.
+  test.skipIf(process.platform === "win32")(
+    "config --harness kiro names Kiro CLI's start first where kiro-cli is found outside Kiro IDE",
+    () => {
+      const saved = kiroSeam({ "chat.defaultModel": "claude-opus-5" });
+      const configArgs = ["--from", join(RUNTIME, "kiro-ide"), "--harness", "kiro", "--mcp", "none", "--yes"];
+      const plain = runWizard("", { harnesses: kiroCliOnly, env: saved.env, configArgs });
+      expect(plain.status, plain.stdout + plain.stderr).toBe(0);
+      expect(plain.stdout).toContain(
+          "; next: start `kiro-cli --v3` in the project; if Kiro asks whether you trust this workspace",
+      );
+      expect(plain.stdout).toContain("(in Kiro IDE, open this project instead;");
+      const inIde = runWizard("", { harnesses: kiroCliOnly, env: { TERM_PROGRAM: "kiro", ...saved.env }, configArgs });
+      expect(inIde.status, inIde.stdout + inIde.stderr).toBe(0);
+      expect(inIde.stdout).toContain("; next: open this project in Kiro IDE;");
+      const noCli = runWizard("", { harnesses: { claude: { found: false } }, env: saved.env, configArgs });
+      expect(noCli.status, noCli.stdout + noCli.stderr).toBe(0);
+      expect(noCli.stdout).toContain("; next: open this project in Kiro IDE;");
+    },
+    NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  );
 
   test("Kiro IDE's terminal makes Kiro IDE the picker default when another CLI is found", () => {
     const result = runWizard("\n\n", {
@@ -1524,7 +1737,7 @@ describe("t299 first-run setup wizard", () => {
     runWizard("", {
       ...kiroIdeTerminal({ ...setupMachine, ...env, AIDLC_TEST_CONFIG_INPUT: `${answers.join("\n")}\n` }),
       aidlc: false,
-      configArgs: ["--from", join(RUNTIME, harness), "--harness", harness, "--mcp", "none"],
+      configArgs: ["--from", join(RUNTIME, harness), "--harness", typedHarnessName(harness), "--mcp", "none"],
       ...(project ? { project } : {}),
     });
   const setupScreens = (env: NodeJS.ProcessEnv = {}) => {
@@ -1674,12 +1887,12 @@ describe("t299 first-run setup wizard", () => {
       "",
     ].join("\n"));
     expect(check.stdout).toContain(
-      "\n  Found kiro-ide in .kiro/; using the existing copied projection.\n",
+      "\n  Found kiro in .kiro/; using the existing copied projection.\n",
     );
     // Kiro IDE cannot pin an agent's model or effort, so the Models row names
     // the session instead of asking for a policy, and the walk never offers it.
     expect(check.stdout).toContain([
-      "    [ok]     Harnesses   kiro-ide recorded",
+      "    [ok]     Harnesses   kiro recorded",
       "    [ok]     Models      every agent uses your Kiro session's model and effort unless a model or effort is set for that agent",
       "    [needs]  Runtime     aidlc is absent from the non-interactive hook PATH",
     ].join("\n"));
@@ -1697,7 +1910,7 @@ describe("t299 first-run setup wizard", () => {
       "\n  The workspace shell is incomplete, so no section is walked until it is rebuilt; run the workspace command first.\n",
     );
     expect(shell.stdout).toContain(
-      "    workspace    bun .kiro/tools/aidlc.ts config --harness kiro-ide --download\n",
+      "    workspace    bun .kiro/tools/aidlc.ts config --harness kiro --download\n",
     );
     // The completion line stays one line, as scripts and tests read it.
     for (const [screen, harness] of [["harness-kiro-ide", "kiro-ide"], ["harness-kiro", "kiro"]] as const) {
@@ -1774,8 +1987,7 @@ describe("t299 first-run setup wizard", () => {
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // First-run setup stops in plain words: before any question when the
-  // project's storage lacks an operation transactions need (a hard-link
-  // rejection alone now falls back to a directory lock), and after apply when a
+  // project's storage lacks an operation transactions need, and after apply when a
   // step fails, here on an AI-DLC file the user wrote over. The stop and its fix
   // wrap the same way; a fix that is a command stays whole.
   const firstRunStops = (env: NodeJS.ProcessEnv = {}) => ({
@@ -1863,6 +2075,22 @@ describe("t299 first-run setup wizard", () => {
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
+  // Where setup says it wrote its files: the folders it manages, as the setup
+  // ending names them. Every file the install record counts sits in one of them
+  // (aidlc/ holds the project's own data, which the record does not count), so a
+  // folder a harness gains later fails here until the line names it.
+  const WRITTEN_FOLDERS: Record<string, string[]> = {
+    claude: [".claude", "aidlc"],
+    codex: [".agents", ".codex", "aidlc"],
+    copilot: [".aidlc", ".github", "aidlc"],
+    cursor: [".cursor", "aidlc"],
+    kiro: [".kiro", "aidlc"],
+    opencode: [".aidlc", ".opencode", "aidlc"],
+  };
+  const HARNESS_FOLDER: Record<string, string> = {
+    claude: ".claude", codex: ".codex", copilot: ".aidlc", cursor: ".cursor", kiro: ".kiro", opencode: ".aidlc",
+  };
+
   // Kiro IDE's first-run steps live in its own manifest; every other harness
   // keeps the open-then-/aidlc pair.
   for (
@@ -1871,7 +2099,7 @@ describe("t299 first-run setup wizard", () => {
       ["codex", "codex                         open Codex CLI in this repo"],
       ["copilot", "copilot                        open Copilot CLI in this repo"],
       ["cursor", "cursor                         open Cursor in this repo"],
-      ["kiro", "kiro-cli chat                  open Kiro CLI in this repo"],
+      ["kiro", "kiro-cli --v2                  open Kiro CLI in this repo (Kiro CLI 2.21.4 or later; for an older one, see the AI-DLC Kiro CLI guide)"],
       ["opencode", "opencode                       open opencode in this repo"],
     ] as const
   ) {
@@ -1892,6 +2120,19 @@ describe("t299 first-run setup wizard", () => {
       for (const kiroIdeWord of ["Reload Window", "Restricted Mode", "agent picker", "Kiro IDE"]) {
         expect(result.stdout).not.toContain(kiroIdeWord);
       }
+      const record = JSON.parse(readFileSync(
+        join(result.project, HARNESS_FOLDER[harness], "tools", "data", "aidlc-manifest.json"),
+        "utf-8",
+      )) as { files: Record<string, string> };
+      const counted = Object.keys(record.files);
+      for (const folder of new Set(counted.map((path) => path.split("/")[0]))) {
+        expect(WRITTEN_FOLDERS[harness], folder).toContain(folder);
+      }
+      const folders = WRITTEN_FOLDERS[harness].map((folder) => `${folder}/`);
+      expect(result.stdout).toContain(
+        `  Writing project files ... done  (${folders.slice(0, -1).join(", ")} and ${folders.at(-1)}, ` +
+          `${counted.length} files)\n`,
+      );
       // Agents on Cursor and Copilot keep the session's model and effort, so
       // the recommended defaults record no preset there.
       const settings = join(result.project, "aidlc.settings.json");
@@ -1972,7 +2213,7 @@ describe("t299 first-run setup wizard", () => {
     expect(treeSnapshot(result.project)).toEqual(before);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("recommended first-run and installed workflow writes succeed with project hardlinks refused in every config child", () => {
+  test("recommended first-run and installed workflow writes succeed on the directory lock in every config child", () => {
     const { preload, trace } = filesystemPreload();
     const result = runWizard("\n", { preload });
     const output = result.stdout + result.stderr;
@@ -1984,11 +2225,7 @@ describe("t299 first-run setup wizard", () => {
     expectConfiguredProject(result.project, "defaults", "current");
 
     const events = filesystemTrace(trace);
-    const probeLinks = events.filter((event) => event.event === "link" && event.pid === result.pid);
-    expect(probeLinks.length).toBeGreaterThan(0);
-    for (const link of probeLinks) {
-      expect(basename(dirname(link.destination!))).toMatch(/^\.aidlc-lock-probe-/);
-    }
+    expect(storageChecksBy(events, result.pid)).toHaveLength(1);
     const children = events.filter((event) =>
       event.event === "spawn" && event.pid === result.pid && event.args?.includes("config")
     );
@@ -2005,11 +2242,12 @@ describe("t299 first-run setup wizard", () => {
         event: "preload", pid: child.childPid,
       }));
       expectDirectoryTransaction(events, result.project, child.childPid!);
+      expect(storageChecksBy(events, child.childPid!)).toEqual([]);
     }
     expectInstalledWorkflowWrites(result, trace);
   }, 120_000);
 
-  test("noninteractive JSON apply and refresh keep settings, models, providers, and baseline valid without hardlinks", () => {
+  test("noninteractive JSON apply and refresh keep settings, models, providers, and baseline valid", () => {
     const { preload, trace } = filesystemPreload();
     const result = runWizard("", {
       preload,
@@ -2111,17 +2349,35 @@ describe("t299 first-run setup wizard", () => {
         expect(events).toContainEqual(expect.objectContaining({
           event: "refused", code: fault.code,
         }));
-        const links = events.filter((event) => event.event === "link");
-        expect(links).toHaveLength(1);
-        expect(basename(dirname(links[0].source!))).toMatch(/^\.aidlc-lock-probe-/);
-        expect(dirname(links[0].source!)).toBe(dirname(links[0].destination!));
-        expect(links[0].destination).not.toBe(join(result.project, ".aidlc-transaction.lock"));
+        expect(storageChecksBy(events, result.pid)).toHaveLength(1);
         expect(events.some((event) => event.event === "spawn")).toBe(false);
         expect(treeSnapshot(result.project)).toEqual(before);
       }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
     }
 
-    for (const mode of ["json", "quiet", "human"] as const) {
+    // Scripted config runs no storage check of its own (the wizard's is the
+    // one, as on 2.11.2): storage that cannot rename files stops it at the
+    // first rename with the same storage line, and storage that lacks only
+    // what config never does sets the project up.
+    for (const mode of fault.operation === "file-rename" ? [] : ["json", "human"] as const) {
+      test(`noninteractive ${mode} config sets up a project on storage that refuses ${fault.operation}, which config does not use`, () => {
+        const { preload } = filesystemPreload(fault);
+        const result = runWizard("", {
+          preload,
+          configArgs: [
+            "--from", join(RUNTIME, "claude"), "--harness", "claude", "--mcp", "none", "--yes",
+            ...(mode === "json" ? ["--json"] : []),
+          ],
+          env: { AIDLC_TEST_CONFIG_TTY: undefined },
+        });
+        expect(result.status, result.stdout + result.stderr).toBe(0);
+        const said = mode === "json" ? String(JSON.parse(result.stdout).message) : result.stdout;
+        expect(said).toContain(`configured ${result.project} for Claude Code`);
+        expect(existsSync(join(result.project, ".claude", "CLAUDE.md"))).toBe(true);
+      }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+    }
+
+    for (const mode of fault.operation === "file-rename" ? ["json", "quiet", "human"] as const : []) {
       test(`noninteractive ${mode} config preserves ${fault.operation} remediation without persistent writes`, () => {
         const { preload, trace } = filesystemPreload(fault);
         let before: Record<string, string> = {};
@@ -2167,14 +2423,18 @@ describe("t299 first-run setup wizard", () => {
           event: "refused", code: fault.code,
         }));
         expectDirectoryTransaction(events, result.project, result.pid);
-        expect(treeSnapshot(result.project)).toEqual(before);
+        // The plan's first folder is made before its first rename fails, and
+        // stays empty.
+        const { ".claude/": madeFolder, ...after } = treeSnapshot(result.project);
+        expect(madeFolder).toBe("");
+        expect(after).toEqual(before);
       }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
     }
   }
 
   for (const fault of [undefined, ...REQUIRED_FILESYSTEM_FAILURES]) {
     for (const mode of ["human", "json"] as const) {
-      test(`${mode} dry-run does not probe or write with ${fault?.operation ?? "hardlinks"} refused`, () => {
+      test(`${mode} dry-run does not probe or write${fault ? ` with ${fault.operation} refused` : ""}`, () => {
         const { preload, trace } = filesystemPreload(fault);
         let before: Record<string, string> = {};
         const result = runWizard("", {
@@ -2312,6 +2572,115 @@ describe("t299 first-run setup wizard", () => {
     temporary.push(recovery as string);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // #3212: the rollback snapshot took .claude whole and refused the first link
+  // in a Claude Code worktree under it, so setup stopped after the menu.
+  // The menu's recommended preset is a record-only config step, which read the
+  // project's own copy and refused the worktree's link as well.
+  test("setup beside Claude Code worktrees that hold links completes and leaves them as they were", () => {
+    const trees: string[] = [];
+    let before: Record<string, string>[] = [];
+    let inodes: number[] = [];
+    const result = runWizard("\n", {
+      prepare: (project) => {
+        trees.push(claudeWorktree(project, "example"), claudeWorktree(project, "clone", true));
+        // A clone the release writes into stays AI-DLC's to read.
+        mkdirSync(join(project, ".claude", "skills", ".git"), { recursive: true });
+        writeFileSync(join(project, ".claude", "skills", ".git", "HEAD"), "ref: refs/heads/main\n");
+        before = trees.map(linkTree);
+        inodes = trees.map((tree) => lstatSync(tree).ino);
+      },
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain("Writing project files ... done");
+    expect(result.stdout).toContain("Recording model preset ... done");
+    expect(result.stdout).not.toContain("is a link");
+    const manifestPath = join(result.project, ".claude", "tools", "data", "aidlc-manifest.json");
+    const recorded = (): string[] =>
+      Object.keys(JSON.parse(readFileSync(manifestPath, "utf-8")).files).sort();
+    const setUp = recorded();
+    expect(setUp.filter((rel) => rel.startsWith(".claude/worktrees/"))).toEqual([]);
+    expect(setUp).toContain(".claude/skills/aidlc/SKILL.md");
+
+    // A later model change reads the same copy.
+    const later = runCli(result, INIT, [
+      "config", "models", "--project", "--preset", "thorough", "--yes", "--json",
+    ]);
+    expect(later.status, later.stdout + later.stderr).toBe(0);
+    expect(recorded()).toEqual(setUp);
+    expect(existsSync(join(result.project, ".claude", "skills", "aidlc", "SKILL.md"))).toBe(true);
+    expect(trees.map(linkTree)).toEqual(before);
+    // A junction's lstat inode is not stable on Windows.
+    if (process.platform !== "win32") {
+      expect(trees.map((tree) => lstatSync(tree).ino)).toEqual(inodes);
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("late first-run failure beside a worktree restores what setup changed and leaves the worktree as it was", () => {
+    let tree = "";
+    let before: Record<string, string> = {};
+    let inode = 0;
+    const result = runWizard("\n", {
+      env: { AIDLC_TEST_FIRST_RUN_FAIL_AFTER_CHILD: "3" },
+      prepare: (project) => {
+        tree = claudeWorktree(project, "example");
+        const harness = join(project, ".claude");
+        mkdirSync(join(harness, "user"), { recursive: true });
+        writeFileSync(join(harness, "user", "keep.txt"), "keep\n");
+        writeFileSync(join(harness, "settings.local.json"), "{\"env\":{\"MINE\":\"1\"}}\n");
+        // Setup merges its entries into this one.
+        writeFileSync(join(harness, "settings.json"), "{\"permissions\":{\"allow\":[\"Bash(ls)\"]}}\n");
+        before = linkTree(harness);
+        inode = lstatSync(tree).ino;
+      },
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(result.stdout).toContain(
+      "  Setup stopped: injected first-run failure after child 3.\n  No setup changes were kept.",
+    );
+    expect(linkTree(join(result.project, ".claude"))).toEqual(before);
+    if (process.platform !== "win32") expect(lstatSync(tree).ino).toBe(inode);
+    expect(existsSync(join(result.project, "aidlc"))).toBe(false);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a link the person keeps in .claude stays as it is through a late first-run failure", () => {
+    const outside = temp("aidlc-t299-linked-");
+    writeFileSync(join(outside, "notes.md"), "shared\n");
+    let before: Record<string, string> = {};
+    const result = runWizard("\n", {
+      env: { AIDLC_TEST_FIRST_RUN_FAIL_AFTER_CHILD: "3" },
+      prepare: (project) => {
+        mkdirSync(join(project, ".claude"));
+        folderLink(outside, join(project, ".claude", "shared"));
+        before = linkTree(join(project, ".claude"));
+      },
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(result.stdout).toContain("No setup changes were kept.");
+    expect(linkTree(join(result.project, ".claude"))).toEqual(before);
+    expect(linkTree(outside)).toEqual({ "notes.md": Buffer.from("shared\n").toString("base64") });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // A clone at a path the release writes into is setup's to restore, even
+  // beside a worktree the snapshot goes around.
+  test("late first-run failure restores a clone the release writes into", () => {
+    let before: Record<string, string> = {};
+    const result = runWizard("\n", {
+      env: { AIDLC_TEST_FIRST_RUN_FAIL_AFTER_CHILD: "3" },
+      prepare: (project) => {
+        claudeWorktree(project, "example");
+        const skills = join(project, ".claude", "skills");
+        mkdirSync(join(skills, ".git"), { recursive: true });
+        writeFileSync(join(skills, ".git", "HEAD"), "ref: refs/heads/main\n");
+        mkdirSync(join(skills, "my-skill"));
+        writeFileSync(join(skills, "my-skill", "SKILL.md"), "# mine\n");
+        before = linkTree(skills);
+      },
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(result.stdout).toContain("No setup changes were kept.");
+    expect(linkTree(join(result.project, ".claude", "skills"))).toEqual(before);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   // Bun's global prompt() returns null for an empty line, which the wizard read
   // as "cancelled". Every bracketed default in the wizard depends on Enter
   // yielding "" and only a closed stdin yielding null.
@@ -2400,6 +2769,10 @@ describe("t299 first-run guidance helpers", () => {
       const kiroIde = harness === "kiro-ide";
       expect(Object.hasOwn(projection, "firstRunSteps"), harness).toBe(kiroIde);
       expect(Object.hasOwn(projection, "editorTerminalApp"), harness).toBe(kiroIde);
+      // Only Kiro's tree runs in an editor and a CLI, so only it words the
+      // first-run lines and doctor's no-heartbeat line for each.
+      expect(Object.hasOwn(projection, "cliFirst"), harness).toBe(kiroIde);
+      expect(Object.hasOwn(shipped.hookActivation ?? {}, "notRunYetCliFirst"), harness).toBe(kiroIde);
       const copilot = harness === "copilot";
       expect(Object.hasOwn(shipped, "hookActivation"), harness).toBe(harness !== "cursor");
       // The agent's own step needs a hook on its shell command that beats in
@@ -2419,6 +2792,60 @@ describe("t299 first-run guidance helpers", () => {
         .toBe(harness === "claude" || harness === "codex");
     }
   });
+
+  // Kiro's CLI-first lines (#3596) lead only outside Kiro IDE (neither its
+  // shell marks nor its terminal), for a supported kiro-cli on an absolute
+  // PATH entry. The stand-in kiro-cli, which the check runs for its version
+  // and which leaves a mark when it runs, is a .cmd on Windows (the issue's
+  // platform) and a shell script elsewhere.
+  test(
+    "Kiro CLI's words lead only outside Kiro IDE, for a supported kiro-cli on an absolute PATH entry",
+    () => {
+      const kiroIdeMarks = ["TERM_PROGRAM=kiro", "VSCODE_IPC_HOOK", "VSCODE_PID"];
+      const windows = process.platform === "win32";
+      const cli = (version: string) => {
+        const bin = temp("aidlc-t299-kiro-cli-");
+        const ran = join(bin, "ran");
+        writeFileSync(
+          join(bin, windows ? "kiro-cli.cmd" : "kiro-cli"),
+          windows
+            ? `@echo off\r\ntype nul > "${ran}"\r\necho ${version}\r\n`
+            : `#!/bin/sh\n: > "${ran}"\nprintf '%s\\n' ${JSON.stringify(version)}\n`,
+          { mode: 0o755 },
+        );
+        return bin;
+      };
+      const leads = (env: NodeJS.ProcessEnv) => harnessCliLeads("kiro-ide", kiroIdeMarks, env);
+      const current = cli("kiro-cli 3.1.0");
+      expect(leads({ PATH: current })).toBe(true);
+      expect(existsSync(join(current, "ran"))).toBe(true);
+      // Kiro CLI in VS Code's terminal: VS Code's own TERM_PROGRAM rules Kiro IDE out.
+      expect(leads({ PATH: current, TERM_PROGRAM: "vscode", VSCODE_PID: "1" })).toBe(true);
+      const inIde = cli("kiro-cli 3.1.0");
+      for (const env of [
+        { PATH: inIde, TERM_PROGRAM: "kiro" },
+        { PATH: inIde, VSCODE_PID: "1" },
+        // A shell started in Kiro IDE's terminal that keeps its askpass helper.
+        { PATH: inIde, TERM_PROGRAM: "tmux", VSCODE_GIT_ASKPASS_NODE: "/opt/Kiro/kiro" },
+      ]) {
+        expect(leads(env), JSON.stringify(env)).toBe(false);
+      }
+      // Inside Kiro IDE the CLI is never run.
+      expect(existsSync(join(inIde, "ran"))).toBe(false);
+      // Below the Kiro row's 2.24.1 floor `kiro-cli --v3` is not there to start.
+      expect(leads({ PATH: cli("kiro-cli 2.10.0") })).toBe(false);
+      expect(leads({ PATH: temp("aidlc-t299-no-kiro-cli-") })).toBe(false);
+      // A temp folder on another drive than the checkout has no relative path.
+      const relativeOnly = cli("kiro-cli 3.1.0");
+      const relativePath = relative(process.cwd(), relativeOnly);
+      if (!isAbsolute(relativePath)) {
+        expect(leads({ PATH: relativePath })).toBe(false);
+        expect(existsSync(join(relativeOnly, "ran"))).toBe(false);
+      }
+      // A harness with no CLI of this kind never leads with one.
+      expect(harnessCliLeads("cursor", kiroIdeMarks, { PATH: current })).toBe(false);
+    },
+  );
 
   test("an editor's terminal is recognized from its editor markers, not KIRO_* variables", () => {
     // Kiro IDE's terminal sets TERM_PROGRAM=kiro; its askpass helper is Kiro.exe.

@@ -35,7 +35,7 @@ The engine owns lifecycle bookkeeping. Open, reject, revise, approve, complete,
 or skip a stage only through `aidlc-orchestrate.ts report`; never call lifecycle
 verbs on `aidlc-state.ts` directly or hand-edit stage checkboxes. A conditional
 stage that does not apply reports
-`--stage <slug> --result skipped --reason "<reason>"`.
+`--stage <slug> --result skipped --reason '<reason>'`.
 
 ## Asking good questions
 
@@ -61,7 +61,7 @@ Write and edit files yourself with your file tools, never through the shell (no 
 ## Keeping the diary (memory.md)
 
 Only when `directive.protocol_modules` lists `learnings` and `directive.single !== true`, keep an observation diary at the `memory_path` the `run-stage`
-directive carries (`<record>/<phase>/<stage>/memory.md`). Otherwise keep no diary and run no learnings ritual. When enabled:
+directive carries (`<record>/<phase>/<stage>/memory.md`, or at a per-Unit stage the Unit's own `<record>/construction/<unit>/<stage>/memory.md`). Otherwise keep no diary and run no learnings ritual. When enabled:
 
 1. The engine creates `memory.md` from
    `{{HARNESS_DIR}}/knowledge/aidlc-shared/memory-template.md` when it emits the
@@ -92,7 +92,10 @@ evidence; it does not approve the edited content. Under `strict`, those edits
 reopen Plan Approval. Follow the stage's Step 3 for the engine path. Changes to
 Testing Posture, scope, test strategy, or project type use the same rule within
 the same intent, target, and attempt: refresh the current contract and
-instructions as needed and continue while the policy allows it. When plan
+instructions as needed and continue while the policy allows it. Under
+`strict`, a Testing Posture change made after the build's review (a practice
+kept at the learnings step) does not reopen approval for that build; it applies
+from the next plan. When plan
 approval is off for the piece of work, the engine routes straight to the build
 and there is no approval stop to add. Initial approval (while plan approval is
 on), explicit Request Changes, new attempts, and other gates retain their

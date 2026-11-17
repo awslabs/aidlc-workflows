@@ -16,6 +16,11 @@ content, not the walk source.
 All stages follow `stage-protocol.md` for approval gates, question format,
 completion messages, and state tracking.
 
+Support agents take part when collaborators are on (the `collaborators`
+setting, shipped on only for `enterprise`; `/aidlc --collaborators on` turns it
+on for one piece of work). With collaborators off, the engine hands each stage
+an empty `support_agents` list and the lead runs alone.
+
 > **Path convention.** Each workflow's artifacts live under its **intent record
 > dir** — `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/` (where `<space>` is
 > `default` unless a non-default space is in play, and `<YYMMDD>-<label>` is the
@@ -77,7 +82,9 @@ question asked. Only **Approve** authorizes the receipt; an unrelated reply,
 Never write `--details "Approve"` unless the human chose it; only then run
 `state set-construction-verification-command --command-file verification-command.txt` to write the matching Runtime
 State field. A human may defer when no runnable
-check exists yet; the first checkpoint then asks. The current approval receipt,
+check exists yet; the first checkpoint then asks (on Kiro IDE and Kiro CLI v3, a
+side-by-side batch asks once its plans are approved, before its initial `prepare`).
+The current approval receipt,
 not the field alone, authorizes execution. Changing it requires a new receipt
 and typed setter, never generic `state set` or an automatic choice.
 
@@ -200,15 +207,19 @@ routes only the stamped Unit and carries the claim generation on lifecycle,
 review, gate, and fork evidence. Unscoped main emits a terminal fan-out notice
 while claims are live. `aidlc-unit.ts release <unit>` writes a tombstone instead
 of deleting the ref, invalidating stale attempts while preserving history. A
-participant clone opts into the guided claim picker once with
-`aidlc-unit.ts participate`; facilitator main deliberately omits that marker.
+team's clone of the work (every stage or gate row of the plan's own, the ones that
+name no Unit, in another clone's shard, `planMadeElsewhere`) is offered the Units open to take without the participant
+marker, which still opts a clone into the picker by hand
+(`aidlc-unit.ts participate`); facilitator main omits it.
 Scoped routing and receipt writes are offline-first: the claim-time stamp is
 authoritative. Registry liveness is rechecked only at claim-sensitive
 boundaries such as fork/release; an unavailable remote warns and proceeds from
 the stamp, while an online stale or released attempt is refused.
 
-Completed teams commit and run `aidlc unit publish <unit>`. Unscoped main then
-pins the exact claim-ref OID, validates its artifacts/receipts/gates/reviews and
+A completed team is asked once whether to commit and publish
+(`aidlc unit publish <unit> --commit`). An unscoped checkout reads the teams'
+claim refs from the remote on each `next` and offers a published Unit for
+review, then pins the exact claim-ref OID, validates its artifacts/receipts/gates/reviews and
 Plan Approval without materializing a worktree, records one human merge gate,
 and lands the candidate through `aidlc unit land`. Git content lands before the
 Unit row is folded; main-owned state/runtime markers are retained, the team's
@@ -240,8 +251,8 @@ paired-review state, and whether its wave completion receipt is still required.
 Builders receive the parent stage file, inline context roster, warnings, and
 exact accumulated steering content. A blocked builder withholds an applicable
 required path, not an optional or kind-exempt path. After build and review,
-`unit complete --wave` verifies the live entry, fans Unit diary entries into the
-parent diary idempotently, and emits `UNIT_COMPLETED`. The engine holds the
+`unit complete --wave` verifies the live entry and emits `UNIT_COMPLETED`; each
+Unit's notes stay in its own diary. The engine holds the
 current batch until every applicable Unit has all of that evidence, then permits
 a dependent batch or the single stage gate. Waves never apply under
 `Construction Iteration: unit-major`; harnesses without a parallel dispatch
@@ -397,9 +408,9 @@ feasibility input.
      concurrency edge cases)
 
 3. **Collect and Analyze Answers** -- Collect answers following
-   stage-protocol.md question flow (offer interaction mode choice, collect
+   stage-protocol.md question flow (collect
    answers, write back to file). Perform MANDATORY ambiguity analysis:
-   - Identify vague answers ("mix of", "not sure", "depends", "probably")
+   - Identify vague answers ("mix of", "not sure", "depends")
    - Check for contradictions between answers
    - Flag missing details needed for artifact generation
    - If ANY ambiguity found: create follow-up questions and resolve before
@@ -431,7 +442,7 @@ feasibility input.
 | rules.md        | Decision rules, validation logic, constraints, policies, conditional behavior |
 | entities.md       | Entities, relationships, data structures, attributes, lifecycle states   |
 | frontend-components.md   | (CONDITIONAL) Component hierarchy, props/state, interaction flows, form validation, API integration |
-| traceability.json        | Every acceptance criterion of each story mapped to the Unit (without stories.md, the Unit's FR rows in the story map; without a story map, every FR; a requirement with sub-requirements through its `FR{n}.{m}` IDs), each `OK` to `BRx.y` rules in rules.md, `N/A` or `Deferred` with its reason, or `GAP` |
+| traceability.json        | Every acceptance criterion of each story mapped to the Unit (without stories.md, the Unit's FR rows in the story map; without a story map, every FR; a requirement with sub-requirements through its `FR{n}.{m}` IDs), each `OK` to `BRx.y` rules in rules.md (a Unit whose kind writes no `rules.md`, such as `ui`, names its `functional-spec.md` or `frontend-components.md` instead), `N/A` or `Deferred` with its reason, or `GAP` |
 
 Which files a Unit gets follows its kind: a `ui` Unit gets no entities.md or
 rules.md, only a `ui` Unit gets frontend-components.md, and a `packaging`
@@ -619,7 +630,7 @@ infrastructure and platform input.
 
 3. **Collect and Analyze Answers** -- Collect answers following
    stage-protocol.md question flow. Perform MANDATORY ambiguity analysis:
-   - Identify vague answers ("mix of", "not sure", "depends", "probably")
+   - Identify vague answers ("mix of", "not sure", "depends")
    - Check for contradictions between answers
    - Flag missing details needed for artifact generation
    - If ANY ambiguity found: create follow-up questions and resolve before
@@ -837,25 +848,7 @@ present only when multiple units share resources.
 ### Purpose
 
 Generate all application code, tests, and configuration for a single unit of
-work. It runs for every Unit in every scope that includes it; infra runs no
-Code Generation and no Build and Test, as its compiled plan shows:
-
-```text
-$ aidlc engine graph scope infra
-workspace-scaffold
-workspace-detection
-state-init
-practices-discovery
-requirements-analysis
-nfr-requirements
-nfr-design
-infrastructure-design
-ci-pipeline
-deployment-pipeline
-environment-provisioning
-deployment-execution
-observability-setup
-```
+work. It runs for every Unit in every scope that includes it.
 
 Code is written to the workspace root, never to
 `<record>/`.
@@ -926,8 +919,11 @@ This stage has a **two-part structure**: planning followed by generation.
    with checkboxes for each implementation step. Include story-to-code-step
    traceability -- map each plan step back to the user story it implements.
 
-   Run `aidlc-testing-posture.ts render` and paste its complete
-   `## Testing Contract` JSON block into the plan. The resolver reads
+   Run `aidlc-testing-posture.ts render` to read the Testing Contract the plan
+   follows; `next` writes its `## Testing Contract` JSON block into the plan
+   itself (a block that is missing, broken or out of date is replaced; the rest
+   of the plan is kept, and after the person's own edit so are the words they
+   wrote in that section, after the block). The resolver reads
    org/team/project Testing Posture sections additively: a project coverage or
    integration note remains applicable but does not erase a team methodology;
    a contradictory narrower methodology is rejected.
@@ -940,7 +936,8 @@ This stage has a **two-part structure**: planning followed by generation.
      slice, followed by cross-layer implementation, green scenarios, and
      refactoring. It is not converted to layer-local TDD.
    - **ATDD** -- executable acceptance tests before the complete cross-layer
-     feature implementation, followed by acceptance-green and refactoring.
+     feature implementation, run with their failing output recorded,
+     followed by acceptance-green and refactoring.
    - **Custom/mixed** -- the exact affirmed ordering is preserved, including
      combinations such as scenario-first BDD with lower-level unit tests after
      implementation.
@@ -966,6 +963,19 @@ This stage has a **two-part structure**: planning followed by generation.
    Number each plan step sequentially (Step 1, Step 2, etc.) for clear
    execution ordering and traceability.
 
+   Data-model elements are named, never implied: a step that creates or
+   changes an object, entity, table, field or column names each one with the
+   requirement, acceptance criterion, business rule or design element that
+   asks for it. An element nothing upstream asks for also gets one plain line
+   (not a checkbox) under the plan's `## Assumptions`, naming the step that
+   adds it and why the work needs it, and the Summary's `Adds:` line counts
+   and names it, so the person decides it at Plan Approval rather than
+   finding it after deployment. A plan that adds no such element has neither.
+   The developer agent builds no such element the approved plan does not
+   name; one the build turns out to need goes into the plan first, as a step
+   of its own, which the after-approval rules then treat as any other plan
+   change.
+
    Resolve one code-generation record directory from the directive:
    `<record>/construction/<directive.unit>/code-generation/` when
    `directive.unit` is present, otherwise the zero-Unit stage directory
@@ -982,14 +992,25 @@ This stage has a **two-part structure**: planning followed by generation.
    mocking/stubbing guidance, and test data management. Every run command MUST
    be scoped to this unit using exact test file paths or an exact unit filter.
    A bare project-wide command such as `npm test` is not acceptable because
-   Build and Test executes every unit's commands.
+   Build and Test executes every unit's commands. A coverage floor set for the
+   whole project is measured by Build and Test on the full suite, not by these
+   commands (on one Unit's tests a runner's threshold can fail on source other
+   Units' tests cover); the file names the floor, and the floor's threshold in
+   the project's coverage configuration is never changed to make a Unit's run
+   pass. A command that the floor's threshold can fail keeps no step after it
+   that the threshold exit would stop, because Build and Test does not exempt
+   a command whose exit stopped a later step. A coverage target set for the
+   Unit or one of its paths gets its own Unit-scoped check.
 
-   The plan opens with a short `## Summary` (Builds, Touches, Tests lines) that
-   the engine shows the person when it asks for approval.
+
+   The plan opens with a short `## Summary` (Builds, Touches and Tests lines,
+   and an Adds line when the plan adds an element no requirement asks for)
+   that the engine shows the person when it asks for approval.
 
 3. **Plan Approval** -- the engine asks. When both files are written, the
    conductor runs `next`. A ready plan (non-empty plan and instructions, a
-   valid and current Testing Contract, a readable workspace source) makes
+   valid and current Testing Contract, which `next` writes first, a readable
+   workspace source) makes
    `next` return a `plan-approval` ask instead of the build: the question, each
    target's summary and plan path, and **Approve Plan**, **Request Changes**,
    and **I'll edit the files**. The engine writes `code-generation-questions.md`
@@ -1016,8 +1037,8 @@ This stage has a **two-part structure**: planning followed by generation.
    it); an approval still needs a reply after the question shows, and the
    revised plan's question needs its own. The
    next `next` returns the run-stage with `plan_approval.status: "approved"`
-   (build), `revise` (with the person's words), `repair` (a Testing Contract an
-   edit broke), or `plan` (finish the files). In edit mode the person changes the
+   (build), `revise` (with the person's words), `repair` (what their answer
+   could not record), or `plan` (finish the files). In edit mode the person changes the
    files or writes their answer in the questions file and says done, and the
    conductor reads what they wrote and records their choice; the guard refuses
    the conductor's writes to those files meanwhile. A plan that is not
@@ -1176,7 +1197,15 @@ This stage has a **two-part structure**: planning followed by generation.
    files. Paths are POSIX-relative and use no globs or `..`; a trailing `/`
    claims a generated directory tree. In a main-workspace multi-repo run every
    entry names its recorded `repo`; inside the worktree hosting the Bolt, paths are relative
-   to that selected repo and omit `repo`.
+   to that selected repo and omit `repo`. An entry read in a recorded repo gives its path
+   from that repo's root: one the repo does not have counts as deleted only when the repo
+   had it (at HEAD, in a commit before it, or, for a file, in a folder still on disk), and
+   any other (`{"repo": "billing", "path": "billing/package.json"}`) is refused before the
+   review, every such entry named in one reason. When the work records a git submodule of
+   the project as its only repo (work started before such a submodule stopped being
+   recorded) and every entry is a file of the project's own, the reason asks the person
+   once whether to take the submodule off the work's repos (`intent remove-repo`), after
+   which the manifest reads as written, or to put the code in the submodule.
 
    The stage file gives this shape:
 
@@ -1223,7 +1252,7 @@ This stage has a **two-part structure**: planning followed by generation.
 
 | Artifact                  | Description                                                         |
 |---------------------------|---------------------------------------------------------------------|
-| code-generation-plan.md   | Detailed plan with checkboxes, story traceability, step sequencing  |
+| code-generation-plan.md   | Detailed plan with checkboxes, story traceability, step sequencing, and an Assumptions section when it adds a data-model element no requirement asks for |
 | code-generation-questions.md | Persisted Plan Approval question and explicit human answer       |
 | unit-test-instructions.md | Per-unit setup, scoped run commands, coverage, mocks, and test data |
 | code-summary.md           | Files created/modified, decisions, test coverage, plan deviations   |
@@ -1346,7 +1375,7 @@ with the aidlc-devsecops-agent providing security testing expertise.
    `<record>/construction/build-and-test/build-and-test-summary.md`:
    - Overall build status and prerequisites
    - Test type inventory (which test types were generated)
-   - Coverage expectations per unit
+   - Coverage expectations for the project and each Unit
    - A Target Verification Matrix with Target ID, Source, Expected, Actual,
      Evidence, Owning Stage, and Verdict
    - Applicable targets begin `Pending`; `N/A` is valid only when the
@@ -1368,6 +1397,26 @@ with the aidlc-devsecops-agent providing security testing expertise.
        commands, and run each distinct command once. Commands should be
        unit-scoped; if a file contains a project-wide command, run it once,
        never once per unit. Report per-unit pass/fail without double counting.
+       When a coverage floor is set for the whole project, the project's
+       full-suite coverage command runs once with its own coverage
+       configuration (in a multi-repo intent, once in each repository the
+       floor applies to, with the repository named in the row's Evidence),
+       and that run is the evidence for a project-wide floor row in the
+       Target Verification Matrix; one repository's run is never the
+       evidence for another repository's floor. A unit-scoped command, from a
+       new or an already-approved file, whose output shows all its selected
+       tests passed and the project-wide floor's threshold (one for all
+       measured source, even when the runner checks it file by file) as the
+       only cause of its non-zero exit counts as passed, with its exit and the
+       reason recorded in test-results.md. That applies only when that exit
+       stopped no later step of the command: when a step after it did not run
+       because of it (one chained, such as `… && <lint>`, one in a script or
+       lifecycle hook the command calls, or a later task or phase of a build
+       tool; tell from the scripts, hooks and task or phase definitions the
+       command runs and from its output), the command is not exempt and its
+       non-zero exit is a failed command. Any other non-zero exit (including a
+       threshold set for one path or Unit) is a failure. A
+       target set for one Unit needs its own Unit-scoped evidence.
     c. **Integration tests** (if applicable): Run integration test commands.
        Capture results.
     d. **Other applicable checks**: Run every applicable command from
@@ -1628,7 +1677,7 @@ Strictly 2-option: Approve / Request Changes.
 
 - **Phase boundary verification**: This is the last stage of the Construction
   phase. It performs the Construction-to-Operation phase boundary verification
-  check (per stage-protocol-governance.md section 13), validating that architecture traces
+  check, validating that architecture traces
   to code and code traces to tests. Results are written to
   `<record>/verification/phase-check-construction.md`.
 - **Conditional execution**: This stage is skipped if the project already has
@@ -1662,7 +1711,7 @@ through a phased construction flow:
   (pipeline-deploy-led)
 
 **Key characteristics:**
-- Stages 3.1-3.4 are CONDITIONAL; 3.5-3.6 run in every scope that includes them (infra has neither); 3.7 is CONDITIONAL
+- Stages 3.1-3.4 are CONDITIONAL; 3.5-3.6 run in every scope that includes them; 3.7 is CONDITIONAL
 - Which conditional stages are reached comes from the plan (the scope, plus any skip or add the person makes), not from Delivery Planning; each still applies its own condition
 - New source-producing solo Unit workflows default to unit-major, serial
   execution and verified Unit checkpoints. Preserve explicit iteration choices

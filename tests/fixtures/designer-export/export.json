@@ -1165,7 +1165,7 @@
       "name": "Refined Mockups",
       "phase": "inception",
       "execution": "CONDITIONAL",
-      "condition": "Execute when user-facing UI exists and rough mockups were produced in Ideation; for APIs, refine interaction diagrams",
+      "condition": "Execute when user-facing UI exists; for APIs, refine interaction diagrams",
       "lead_agent": "aidlc-design-agent",
       "support_agents": [
         "aidlc-product-agent"
@@ -2392,6 +2392,7 @@
         "bugfix",
         "refactor",
         "security-patch",
+        "infra",
         "classic",
         "workshop",
         "express"
@@ -2492,6 +2493,7 @@
         "bugfix",
         "refactor",
         "security-patch",
+        "infra",
         "classic",
         "workshop",
         "express"
@@ -3576,8 +3578,8 @@
         "nfr-requirements": "EXECUTE",
         "nfr-design": "EXECUTE",
         "infrastructure-design": "EXECUTE",
-        "code-generation": "SKIP",
-        "build-and-test": "SKIP",
+        "code-generation": "EXECUTE",
+        "build-and-test": "EXECUTE",
         "ci-pipeline": "EXECUTE",
         "deployment-pipeline": "EXECUTE",
         "environment-provisioning": "EXECUTE",

@@ -80,6 +80,7 @@ Result prose is identical on both channels (`toolResult` on 0.12,
 
 When UserPromptSubmit carries a typed fence or Guard Policy switch, the adapter forwards it to the core human-turn hook, which records the message under the payload session and applies nothing; the agent runs the setter `next` names, and shell setters are not run inside the adapter.
 When the person's line is `/aidlc` alone, or `/aidlc` followed by words only (no flag or verb the engine takes) while this chat's workflow has no record yet, the `verb-intercept` member prints one context line naming the first step, `engine orchestrate next`, so Kiro's Default agent, which loads the aidlc skill on its own judgement only, starts AI-DLC instead of answering the line itself; the engine's `next` reads the recorded line (takePersonsOwnLine). A plan's name typed alone (`/aidlc bugfix`) gets the same line naming `engine orchestrate next <plan>`, the step the aidlc agent's skill takes for it, because a bare `next` does not read a plan named alone; that step asks what the work is for. A utility the member runs itself (`/aidlc --status`), a line with flags, a `/aidlc-<runner>` entry, plain words, and words typed while the chat's workflow is on record (a bare `next` would then be the work's continuation and read no recorded line, a plain reply to the stage's open question aside; the aidlc agent's skill passes the words itself) get no such line.
+On an `/aidlc` line that is no utility the member runs itself, in a chat whose own record (`~/.kiro/sessions/<workspace>/<session>/session.json`, the payload's session) says `agentMode` `vibe` or `default-v2` (Kiro's Default and Default v2 agents, where Kiro asks the person to approve AI-DLC's commands), the `verb-intercept` member also prints once per chat (a `default-agent-noted` marker in the chat's terminal folder) a line for the agent to tell the person: the chat is on Kiro's Default agent, and picking aidlc in Kiro IDE's agent menu (in Kiro CLI on its v3 engine, `/agent`) stops those approval cards for AI-DLC's own commands. It says nothing on any other agent or without a readable record, and nothing when Kiro does not ask the person about AI-DLC's commands: the person chose Always allow for them, a plain `{capability: shell, effect: allow, match: [...]}` rule whose pattern covers `<invoke> engine orchestrate next` in Kiro's `permissions.yaml` or `permissions.json` under `~/.kiro/workspace-roots/<workspace>/` (This workspace) or `~/.kiro/settings/` (All workspaces); or Approve for me is on, which Kiro IDE 1.4.154 records as `approveForMe: true` in the chat's record and Kiro CLI 3.2.0, whose chat record has no `approveForMe`, as `approve-for-me` under `policies:` in the workspace's `permissions.yaml` or `permissions.json` (read only when the chat's record has no `approveForMe` true or false: a record with `approveForMe: false` is not silenced by that policy, only by an Always allow). A request it says nothing on leaves the marker unwritten, so a later request in the chat checks again. Those files are only read, never written.
 A prompt Kiro made is not the person's turn: a message Kiro's own chat record (`~/.kiro/sessions/<workspace>/<session>/messages.jsonl`, the payload's session) marks with `_meta.kiro.syntheticUserMessageReason`, or a Workflows brief, which Kiro leaves unmarked, by its opening sentence whole and anchored, is forwarded with `origin: {kind: "host"}`: the core hook records `HOST_TURN` and nothing of the person's, and the adapter starts no session, remembers no chat and opens no turn for it; once the chat's turn has closed, it ends a terminal command's same-turn hold (see below). A message the record tags `_meta.kiro.userMessageTag` is the person's whatever its words, and so is anything unknown, including a payload `session_id` other than the chat's `KIRO_SESSION_ID` on its own (that variable named the chat even for a step's prompt, so it may not name the tab a message came from).
 On empty-prompt builds such as IDE 1.0.242, the per-turn `prompt-empty` marker makes the adapter refuse lowering shell commands (exit 2 with stderr), including environment-prefixed invocations and summary confirmation `off`, and `verb-intercept` emits a once-per-session capability note explaining that active work cannot be lowered on that build and directing the person to update to a prompt-capable IDE or start new work from a lower-default scope; for summary confirmation and for plan approval both also name the person's project-wide terminal command `<invoke> config flags --bypass AIDLC_DISABLE_SUMMARY_CONFIRMATION --local --yes` or `--bypass AIDLC_DISABLE_PLAN_APPROVAL_GUARD` (`--clear-bypass` undoes it), which also works while the work runs. Raising to `strict` or turning a fence or summary confirmation `on` remains available.
 Before forwarding an empty prompt, the adapter renames a sole retired
@@ -174,6 +175,20 @@ renaming its file, so two chats' cards never do it twice. A project whose hook
 files still register `aidlc-write-audit-log` or `aidlc-after-shell` keeps those
 cards doing the work, and the guard notes nothing for them.
 
+Kiro CLI v3 runs no `UserPromptSubmit` hook for a message the person types while
+the agent works (measured on 3.0.0). Kiro writes it to the chat's record
+(`~/.kiro/sessions/<workspace id>/<session id>/messages.jsonl`) as it is typed,
+as a `steer-<id>` row with `source: "steer"`, and names its id in the
+`steeringConsumedIds` of a `steering-injection` row once it hands it to the
+agent. In the guard card, after its own work, `catch-up` records each such
+message of this turn (after its latest `turn_start` row) that Kiro has handed on
+as the person's turn through the core human-turn hook, in their words, once by
+Kiro's id, and moves the chat's turn on as a typed prompt does; the Stop card
+does the same before the Stop hook judges the turn. Kiro's envelope, a
+workflow's notices (a `notification` mark) and the turn-end `steering_boundary_`
+row are not read as theirs. A message that a prompt hook did receive is noted
+there, so it is not recorded again.
+
 ## Consequences for each hook
 
 - **write-audit-log / run-sensors** — recoverable: scrape the file path from
@@ -202,7 +217,13 @@ cards doing the work, and the guard notes nothing for them.
   alone when a Unit reopen moved the work back to it after that
   `STAGE_STARTED`, or in the same second in another clone's audit file (the
   reopen's rows carry `Moved From`): the move writes no start of its own, so
-  the last start names the stage the work left. Both
+  the last start names the stage the work left. It is also a no-op while the
+  step the engine issued is still current (`statusSyncLeavesCursor`, the
+  same rule as the task path's): `Current Stage` is where the engine put it
+  for that step. A checkout that claimed a Unit rests the cursor on the Unit's
+  stage, and a Unit step writes `UNIT_STARTED`, no `STAGE_STARTED`, so the
+  last start names another stage, and moving to it would retire the issued
+  step after every command. Both
   audit-tail hooks match `execute_bash`, Windows `execute_pwsh`, and the
   `shell` alias — the IDE surfaces no task event the sync could parse.
 - **front gate for the two audit-tail hooks**: they run once for every shell

@@ -72,7 +72,7 @@ returns `already-discarded` only if this checkout has no same-slug Bolt director
 under another identity; otherwise it exits non-zero:
 
 ```text
-no Bolt <slug> belongs to intent <record>; this checkout holds <name> (intent <id8>|legacy) at <path> — select that intent to discard it
+no Bolt <slug> belongs to intent <record>; this checkout holds <name> (intent <id8>|legacy) at <path> - select that intent to discard it
 ```
 
 Creation without an intent registry UUID fails closed:

@@ -31,6 +31,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AIDLC_SRC, learningsSelectionsPath, toPortablePath, writeLearningsSelections } from "../harness/fixtures.ts";
 import { loadRules, memoryDirFor } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
+import { memoryGuardPolicyDeclarations } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { resolveTestingPosture } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -217,5 +219,38 @@ describe("t158 memory writer/reader round-trip (P6 closed the P5 seam)", () => {
     // "unscoped" sentinel (#735).
     const teamMd = readFileSync(join(memoryDirFor(root), "team.md"), "utf-8");
     expect(teamMd).toMatch(/cid:unscoped:user-stories:[0-9a-f]{8}/);
+  });
+  // A learning worded as a field the engine reads (`Methodology: tdd`,
+  // `Mode: strict`) is read as that value: its date stays out of the value,
+  // where the Testing Posture and Guard Policy readers refused it as invalid.
+  // A field the engine does not read from that section (`Ordering:` under
+  // Corrections, `Mode:` under Testing Posture) keeps the visible date.
+  test("round-trip: a learned field line is read as its value", () => {
+    savedRulesDir = process.env.AIDLC_RULES_DIR;
+    const root = toPortablePath(mkdtempSync(join(tmpdir(), "aidlc-t158c-")));
+    tempDirs.push(root);
+    seedProject(root);
+    writeLearningsSelections(root, {
+      ...BINDING,
+      selections: [
+        { candidate_id: "c1", type: "learning", scope: "project", heading: "Testing Posture", text: "Methodology: tdd", source: "orchestrator" },
+        { candidate_id: "c2", type: "learning", scope: "project", heading: "Guard Policy", text: "Mode: strict", source: "orchestrator" },
+        { candidate_id: "c3", type: "learning", scope: "project", heading: "Corrections", text: "Keep handlers thin", source: "orchestrator" },
+        { candidate_id: "c4", type: "learning", scope: "project", heading: "Corrections", text: "Ordering: list imports alphabetically", source: "orchestrator" },
+        { candidate_id: "c5", type: "learning", scope: "project", heading: "Testing Posture", text: "Mode: pairing on the parser", source: "orchestrator" },
+      ],
+    });
+
+    expect(runPersist(root).status).toBe(0);
+
+    const projectMd = readFileSync(join(memoryDirFor(root), "project.md"), "utf-8");
+    expect(projectMd).toMatch(/^- Methodology: tdd <!-- learned \d{4}-\d{2}-\d{2} --> <!-- cid:/m);
+    expect(projectMd).toMatch(/^- Mode: strict <!-- learned \d{4}-\d{2}-\d{2} --> <!-- cid:/m);
+    expect(projectMd).toMatch(/^- Keep handlers thin \(learned \d{4}-\d{2}-\d{2}\) <!-- cid:/m);
+    expect(projectMd).toMatch(/^- Ordering: list imports alphabetically \(learned \d{4}-\d{2}-\d{2}\) <!-- cid:/m);
+    expect(projectMd).toMatch(/^- Mode: pairing on the parser \(learned \d{4}-\d{2}-\d{2}\) <!-- cid:/m);
+    const posture = resolveTestingPosture(root);
+    expect([posture.methodology, posture.source]).toEqual(["tdd", "project"]);
+    expect(memoryGuardPolicyDeclarations(root).map((d) => [d.layer, d.value])).toEqual([["project", "strict"]]);
   });
 });

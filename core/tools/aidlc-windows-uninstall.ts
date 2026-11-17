@@ -16,6 +16,7 @@ import {
   commandPath,
   installRoot,
   machineTransactionRoot,
+  WINDOWS_EXE_COMMAND_ASIDE,
   windowsUninstallFencePath,
 } from "./aidlc-install-paths.ts";
 import {
@@ -23,7 +24,7 @@ import {
   transactionState,
   writeOperation,
 } from "./aidlc-transaction.ts";
-import { assertSafeUninstallRoot } from "./aidlc-uninstall-plan.ts";
+import { assertSafeUninstallRoot, INSTALL_ROOT_ANSWERS } from "./aidlc-uninstall-plan.ts";
 import type { UninstallPlan } from "./aidlc-uninstall-plan.ts";
 
 export type WindowsUninstallPlan = UninstallPlan;
@@ -248,7 +249,7 @@ function deletionScopeBinding(journal: WindowsUninstallJournal): string {
   }), "utf-8").toString("base64");
 }
 
-function planPathKey(path: string): string {
+export function planPathKey(path: string): string {
   const full = resolve(path);
   return process.platform === "win32" ? full.toLowerCase() : full;
 }
@@ -266,9 +267,14 @@ function assertDeletionPlan(
   ) throw new Error("Windows uninstall requires an explicit file plan");
   const rootKey = planPathKey(root);
   // A bin directory may sit outside the root; the only files there are
-  // aidlc.cmd and the Git Bash launcher beside it.
-  const commandKeys = [planPathKey(command), planPathKey(join(dirname(command), "aidlc"))];
-  const besideCommand = (path: string): boolean => commandKeys.includes(planPathKey(path));
+  // aidlc.cmd, the Git Bash launcher and aidlc.exe beside it, and the replaced
+  // aidlc.exe copies renamed aside.
+  const commandKeys = ["aidlc", "aidlc.exe"].map((name) => planPathKey(join(dirname(command), name)));
+  commandKeys.push(planPathKey(command));
+  const besideCommand = (path: string): boolean =>
+    commandKeys.includes(planPathKey(path)) ||
+    (planPathKey(dirname(path)) === planPathKey(dirname(command)) &&
+      WINDOWS_EXE_COMMAND_ASIDE.test(basename(path)));
   const withinRoot = (path: string): boolean =>
     planPathKey(path).startsWith(`${rootKey}${sep}`);
   const absolutePath = (path: unknown): path is string =>
@@ -285,9 +291,7 @@ function assertDeletionPlan(
     }
   }
   const files = new Set<string>();
-  const settings = new Set([
-    "aidlc.settings.json", "update-check.json", "pins.json", "default-harness", "channel", "kiro-ide-workflows", "kiro-cli-workflows", "kiro-ide-settings-error-told", "kiro-ide-terminal",
-  ].map((name) => planPathKey(join(root, name))));
+  const settings = new Set(INSTALL_ROOT_ANSWERS.map((name) => planPathKey(join(root, name))));
   for (const file of plan.files) {
     if (
       !file || typeof file !== "object" || Array.isArray(file) ||
@@ -396,13 +400,18 @@ function Test-UninstallPreserved([string]$Path) {
   }
   return $false
 }
+function Test-UninstallBesideCommand([string]$Path) {
+  if ($Path -eq $diskCommand -or $Path -eq $diskGitBashLauncher -or $Path -eq $diskExeLauncher) { return $true }
+  return [IO.Path]::GetDirectoryName($Path) -eq [IO.Path]::GetDirectoryName($diskCommand) -and
+    [IO.Path]::GetFileName($Path) -match '${WINDOWS_EXE_COMMAND_ASIDE.source}'
+}
 function Assert-UninstallTargetBoundary([string]$Path, [bool]$Directory) {
   if ($Path -eq (Convert-UninstallPath ([IO.Path]::GetPathRoot($Path))) -or
       $Path -eq (Convert-UninstallPath ([Environment]::GetFolderPath('UserProfile'))) -or
       $Path -match '(?:^|[\\/])\.git(?:[\\/]|$)' -or
       ($Path -eq $diskRoot -and -not $Directory) -or
       ($Path -ne $diskRoot -and -not (Test-UninstallWithin $Path $diskRoot) -and
-        ($Directory -or ($Path -ne $diskCommand -and $Path -ne $diskGitBashLauncher)))) {
+        ($Directory -or -not (Test-UninstallBesideCommand $Path)))) {
     throw "outside Windows uninstall target boundary: $Path"
   }
 }
@@ -739,6 +748,7 @@ export function windowsUninstallCleanupScript(journal: WindowsUninstallJournal):
     // The Git Bash launcher beside aidlc.cmd: the one other file a bin
     // directory outside the root holds.
     "$diskGitBashLauncher = Convert-UninstallPath ([IO.Path]::Combine([IO.Path]::GetDirectoryName($command), 'aidlc'))",
+    "$diskExeLauncher = Convert-UninstallPath ([IO.Path]::Combine([IO.Path]::GetDirectoryName($command), 'aidlc.exe'))",
     "$diskFence = Convert-UninstallPath $fence",
     "$diskJournal = Convert-UninstallPath $JournalPath",
     "$diskCleanup = Convert-UninstallPath $cleanup",
@@ -763,7 +773,7 @@ export function windowsUninstallCleanupScript(journal: WindowsUninstallJournal):
   $resuming = [string]$journal.progress -in @('removing', 'finalizing')
   $keep = @($deletionScope.preserved | ForEach-Object { Convert-UninstallPath ([string]$_) })
   foreach ($path in $keep) {
-    if ($path -ne $diskCommand -and $path -ne $diskGitBashLauncher -and -not (Test-UninstallWithin $path $diskRoot)) {
+    if (-not (Test-UninstallBesideCommand $path) -and -not (Test-UninstallWithin $path $diskRoot)) {
       throw 'invalid Windows uninstall preserved path'
     }
   }
@@ -788,10 +798,11 @@ export function windowsUninstallCleanupScript(journal: WindowsUninstallJournal):
     }
     $null = Assert-UninstallKind $path $false
   }
-  # aidlc.cmd runs aidlc-shim.ps1, which reads active-version and
-  # active-executable to start the active version's aidlc.exe. That chain is removed
-  # last, so every earlier failure leaves a command that can retry cleanup.
-  $entrypoint = @($diskCommand, (Convert-UninstallPath ([IO.Path]::Combine($root, 'aidlc-shim.ps1'))),
+  # aidlc.cmd runs aidlc-shim.ps1, and aidlc.exe in bin runs itself, each reading
+  # active-version and active-executable to start the active version's aidlc.exe.
+  # That chain is removed last, so every earlier failure leaves a command that can
+  # retry cleanup.
+  $entrypoint = @($diskCommand, $diskExeLauncher, (Convert-UninstallPath ([IO.Path]::Combine($root, 'aidlc-shim.ps1'))),
     (Convert-UninstallPath ([IO.Path]::Combine($root, 'active-version'))), (Convert-UninstallPath $pointer))
   $activeVersionFile = Convert-UninstallPath ([IO.Path]::Combine($root, 'active-version'))
   if ($null -ne (Assert-UninstallKind $activeVersionFile $false)) {
@@ -1187,20 +1198,22 @@ export type WindowsUninstallRecovery = {
   retriedFailures: WindowsUninstallFailure[];
 };
 
+function removeWindowsUninstallFence(fencePath: string): void {
+  const root = machineTransactionRoot();
+  executePlan({
+    schemaVersion: 1,
+    root,
+    operations: [{
+      kind: "remove",
+      path: relative(root, fencePath),
+      expected: transactionState(fencePath),
+    }],
+  }, { allowPendingWindowsUninstall: true });
+}
+
 function settleFinishedJournal(path: string): void {
   const fencePath = windowsUninstallFencePath();
-  if (existsSync(fencePath) && fenceReferencesJournal(fencePath, path)) {
-    const root = machineTransactionRoot();
-    executePlan({
-      schemaVersion: 1,
-      root,
-      operations: [{
-        kind: "remove",
-        path: relative(root, fencePath),
-        expected: transactionState(fencePath),
-      }],
-    }, { allowPendingWindowsUninstall: true });
-  }
+  if (existsSync(fencePath) && fenceReferencesJournal(fencePath, path)) removeWindowsUninstallFence(fencePath);
   // A completion interrupted after the fence went can leave the emptied root.
   try {
     const journal = JSON.parse(readFileSync(path, "utf-8")) as { installRoot?: unknown; retired?: unknown };
@@ -1247,10 +1260,14 @@ export function recoverWindowsUninstallContinuations(
     resumed: 0, running: 0, failed: [], replanned: 0, retriedFailures: [],
   };
   const scan = scanWindowsUninstallJournals();
-  if (scan.invalid.length > 0) {
-    throw new Error(
-      `invalid Windows uninstall journal(s): ${scan.invalid.join(", ")}`,
-    );
+  // A leftover nothing can run (its journal gone, unreadable or changed) is
+  // never launched and stops no command; the fence still holds machine
+  // changes. Uninstall and a reinstall, which the person asked for, clear it.
+  if (options.retryFailed === true) {
+    for (const path of scan.invalid) {
+      if (path === windowsUninstallFencePath()) removeWindowsUninstallFence(path);
+      else for (const file of [path, path.replace(/\.json$/, ".ps1")]) rmSync(file, { force: true });
+    }
   }
   const now = Date.now();
   const classified = scan.pending.map((item) => ({

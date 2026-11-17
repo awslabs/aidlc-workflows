@@ -13,6 +13,7 @@ import {
   type KiroEffort,
   type Tier,
 } from "./aidlc-tiers.ts";
+import { typedHarnessName } from "./aidlc-runtime-paths.ts";
 
 export const MODEL_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 export type ModelEffort = (typeof MODEL_EFFORTS)[number];
@@ -173,7 +174,7 @@ export const HARNESS_HONESTY = Object.freeze({
     effort: false,
     groupEffort: false,
     message:
-      "Devin CLI runs every AI-DLC agent on your session's model and effort unless a model is set for that agent. Devin carries effort in the model ID (for example claude-sonnet-5-medium), so an effort set here without a model is kept for other tools and changes nothing in Devin CLI; set a model for an agent in aidlc config models, with an ID from `devin models list`.",
+      "Devin CLI runs every AI-DLC agent on your session's model and effort unless a model is set for that agent. Devin carries effort in the model ID (for example claude-sonnet-5-medium), so an effort set here without a model is kept for other tools and changes nothing in Devin CLI; set a model for an agent with the config models command, with an ID from `devin models list`.",
   }),
 });
 
@@ -832,6 +833,19 @@ export function markdownSurfaceValues(
   };
 }
 
+// The `model:` each shipped kiro-ide agent file carries, which is what Kiro
+// reads when it dispatches that agent.
+export function kiroIdeAgentFileModels(harnessRoot: string): Array<{ agent: string; model: string }> {
+  const models: Array<{ agent: string; model: string }> = [];
+  for (const agent of Object.keys(readAgentTiers(harnessRoot)).sort()) {
+    const path = join(harnessRoot, "agents", `${modelAgentStem(agent)}.md`);
+    if (!existsSync(path)) continue;
+    const model = markdownSurfaceValues(readFileSync(path, "utf-8"), "effortLevel").model;
+    if (model) models.push({ agent, model });
+  }
+  return models;
+}
+
 // The kiro-ide agents whose staged file carries a `model:` or `effortLevel:`
 // value the project's own file does not, with the staged values. A model or
 // effort recorded for one agent while Kiro took none (an effort is shared by
@@ -942,7 +956,7 @@ export function modelPolicySurfaceDrift(
       : expected;
     if (includeUnexpressed) {
       for (const field of reportedUnexpressed(expected, sessionSet)) {
-        issues.push(`${name}: ${field} policy is not expressible on ${harness}`);
+        issues.push(`${name}: ${field} policy is not expressible on ${typedHarnessName(harness)}`);
       }
     }
     let path = "";
@@ -1012,7 +1026,7 @@ export function modelPolicyDoctorIssues(
   for (const [name, tier] of Object.entries(tiers)) {
     const effective = resolveModelPolicy(policy, name, tier, harness, cap);
     for (const field of reportedUnexpressed(effective, sessionSet)) {
-      issues.push(`${name}: ${field} policy is not expressible on ${harness}`);
+      issues.push(`${name}: ${field} policy is not expressible on ${typedHarnessName(harness)}`);
     }
   }
   return [...new Set(issues)].sort();
@@ -1047,7 +1061,7 @@ export function harnessHonestyNotes(
   for (const item of effective) {
     if (item.clampedEffort) {
       notes.push(
-        `${harness} clamps ${item.clampedEffort.from} effort down to ${item.clampedEffort.to}.`,
+        `${typedHarnessName(harness)} clamps ${item.clampedEffort.from} effort down to ${item.clampedEffort.to}.`,
       );
     }
   }

@@ -2,7 +2,8 @@
 // per-intent and workspace audit locks with their owner stamps and reaper, the
 // directive lock, and the doctor probe for leaked locks. With them ride the
 // helpers they use: the workspace record roots (activeSpace, intentsDir and the
-// space and engine folders), the read-only engine probes and the observer-write
+// space and engine folders), the main checkout of a git worktree with git's
+// metadata readers behind it, the read-only engine probes and the observer-write
 // refusal, errorMessage and isPlainObject. aidlc-lib.ts re-exports the names it
 // exported before, so its callers are unchanged, and it loads this module at
 // start: nothing here may import aidlc-lib.ts.
@@ -11,7 +12,7 @@ import { lockFolderHeldGiveUpMs } from "./aidlc-lock-line.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, constants as fsConstants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, relative, resolve as resolvePath, sep, win32 } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep, win32 } from "node:path";
 import { dlopen, FFIType, type Pointer } from "bun:ffi";
 import { knownActiveSpace } from "./aidlc-runtime-paths.ts";
 
@@ -60,10 +61,145 @@ export function activeSpace(projectDir: string): string {
   try {
     return knownActiveSpace(workspaceRoot(projectDir), readFileSync(ptr, "utf-8"));
   } catch {
-    // no cursor → default
+    // no cursor → the main checkout's, for a git worktree; else default
+  }
+  const main = mainCheckoutOfWorktree(projectDir);
+  if (main !== null) {
+    try {
+      return knownActiveSpace(
+        workspaceRoot(projectDir),
+        readFileSync(join(workspaceRoot(main), ACTIVE_SPACE_POINTER), "utf-8"),
+      );
+    } catch {
+      // the main checkout has no cursor either
+    }
   }
   return DEFAULT_SPACE;
 }
+
+// The main checkout of a linked git worktree (`git worktree add`, a host's
+// per-session worktree), or null for a main checkout, a separate clone, a
+// worktree of a bare repository, or no git. A worktree starts without the
+// git-ignored per-user cursors, and until its own first switch it reads the
+// ones its main checkout holds on this machine, so it finds the project's space
+// and intent as the main checkout does. Git's own metadata files only: no git
+// process on this hot path.
+export function mainCheckoutOfWorktree(projectDir: string): string | null {
+  const gitDir = gitMetadataDirectory(projectDir);
+  if (gitDir === null) return null;
+  const common = gitCommonDirectory(gitDir);
+  if (common === null || common === gitDir || basename(common) !== ".git") return null;
+  return dirname(common);
+}
+
+export function boundedGitMetadataText(path: string, maxBytes: number): string | null {
+  let fd: number | undefined;
+  try {
+    const pathStat = lstatSync(path);
+    if (!pathStat.isFile() || pathStat.size > maxBytes) return null;
+    fd = openSync(path, "r");
+    const before = fstatSync(fd);
+    if (!before.isFile() || before.size > maxBytes) return null;
+    const bytes = Buffer.alloc(before.size);
+    let offset = 0;
+    while (offset < bytes.length) {
+      const count = readSync(
+        fd,
+        bytes,
+        offset,
+        bytes.length - offset,
+        offset,
+      );
+      if (count === 0) return null;
+      offset += count;
+    }
+    const after = fstatSync(fd);
+    if (
+      before.size !== after.size ||
+      before.mtimeMs !== after.mtimeMs ||
+      before.ctimeMs !== after.ctimeMs
+    ) {
+      return null;
+    }
+    return bytes.toString("utf-8");
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+        // The metadata read already fails closed on any earlier error.
+      }
+    }
+  }
+}
+
+export function singleGitMetadataLine(raw: string): string | null {
+  const line = raw.replace(/\r?\n$/, "");
+  if (line.length === 0 || line.includes("\n") || line.includes("\r")) {
+    return null;
+  }
+  return line;
+}
+
+export function gitMetadataDirectory(worktreeDir: string): string | null {
+  const marker = join(worktreeDir, ".git");
+  try {
+    const markerStat = lstatSync(marker);
+    if (markerStat.isDirectory()) return realpathSync(marker);
+    if (!markerStat.isFile()) return null;
+  } catch {
+    return null;
+  }
+  const pointerRaw = boundedGitMetadataText(marker, 8192);
+  const pointerLine =
+    pointerRaw === null ? null : singleGitMetadataLine(pointerRaw);
+  if (pointerLine === null || !pointerLine.startsWith("gitdir: ")) {
+    return null;
+  }
+  const pointer = pointerLine.slice("gitdir: ".length);
+  if (pointer.length === 0 || pointer.includes("\0")) return null;
+  const target = isAbsolute(pointer)
+    ? pointer
+    : resolvePath(worktreeDir, pointer);
+  try {
+    if (!lstatSync(target).isDirectory()) return null;
+    return realpathSync(target);
+  } catch {
+    return null;
+  }
+}
+
+export function gitCommonDirectory(gitDir: string): string | null {
+  const marker = join(gitDir, "commondir");
+  try {
+    if (!lstatSync(marker).isFile()) return null;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return gitDir;
+    return null;
+  }
+  const pointerRaw = boundedGitMetadataText(marker, 8192);
+  const pointerLine =
+    pointerRaw === null ? null : singleGitMetadataLine(pointerRaw);
+  if (
+    pointerLine === null ||
+    pointerLine.length === 0 ||
+    pointerLine.includes("\0")
+  ) {
+    return null;
+  }
+  const target = isAbsolute(pointerLine)
+    ? pointerLine
+    : resolvePath(gitDir, pointerLine);
+  try {
+    if (!lstatSync(target).isDirectory()) return null;
+    return realpathSync(target);
+  } catch {
+    return null;
+  }
+}
+
 
 // `aidlc/spaces/<space>/intents` — the intent registry + record root.
 export function intentsDir(projectDir: string, space?: string): string {
@@ -112,8 +248,9 @@ export const ACTIVE_DIRECTIVE_LOCK = "active-directive.lock";
 // enumeration a future author has to remember. It THROWS rather than no-ops
 // because a silent no-op hides exactly the bug the barrier exists to expose, and
 // both producers already fail safe on a non-zero engine exit: the Stop hook
-// allows the stop and records a drop, and the route check surfaces the error
-// from `unit start` instead of corrupting authority.
+// allows the stop and records a drop, and the route check (readEngineUnitDirective)
+// surfaces the error from `unit start`, or lets the start-receipt guard stand
+// aside, instead of corrupting authority.
 export class EngineModeViolationError extends Error {
   constructor(readonly primitive: string) {
     super(
@@ -141,10 +278,17 @@ export function engineDirFor(recordRoot: string): string {
 // above).
 export const STOP_HOOK_PROBE_ENV = "AIDLC_STOP_HOOK_PROBE";
 
-// The env marker that identifies the route check `aidlc-state.ts unit start`
-// runs to learn which Unit the engine would route. Like the Stop-hook probe it
-// consults the engine and reads only the directive off stdout.
+// The env marker that identifies the route check (readEngineUnitDirective in
+// aidlc-log.ts) that `unit start` and the start-receipt guard run to learn which
+// Unit the engine would route. Like the Stop-hook probe it consults the engine
+// and reads only the directive off stdout.
 export const ROUTE_CHECK_ENV = "AIDLC_ROUTE_CHECK";
+
+// The env marker on the `next` a prompt hook runs ahead of the agent (Kiro
+// CLI's verb-intercept). Not an observer: its step is real, but the hook hands
+// it to the chat only when it fits the hook's reply, so a line on it is not
+// yet heard.
+export const HOOK_PRE_DISPATCH_ENV = "AIDLC_HOOK_PRE_DISPATCH";
 
 // --- Engine observer mode -----------------------------------------------------
 //
@@ -171,6 +315,10 @@ export function isRouteCheckProbe(): boolean {
 
 export function isReadOnlyEngineProbe(): boolean {
   return isStopHookProbe() || isRouteCheckProbe();
+}
+
+export function isHookPreDispatch(): boolean {
+  return process.env[HOOK_PRE_DISPATCH_ENV] === "1";
 }
 
 // --- Error helpers (catch-block discipline) ---
@@ -1775,6 +1923,31 @@ export function writeBufferAtomic(path: string, data: Buffer | Uint8Array): void
   }
 }
 
+// Puts a fully written file at a name only if nothing is there, from any temp
+// folder or computer. link() did this in one step and exFAT has none: the
+// exclusive create is the no-replace step every measured storage has, and the
+// rename over that empty claim brings the whole bytes. A name taken meanwhile
+// throws EEXIST, as link() did. A writer outside AI-DLC that replaces the claim
+// in the moment before the rename is replaced in turn (git's window for its
+// own config).
+export function installWithoutReplacing(from: string, to: string): void {
+  closeSync(openSync(to, "wx"));
+  try {
+    replaceAtomically(from, to);
+  } catch (error) {
+    try { if (lstatSync(to).size === 0) unlinkSync(to); } catch { /* claim already gone */ }
+    throw error;
+  }
+}
+
+// Puts a fully written file over the one at a name, with the same Windows
+// retry as the atomic writers (a reader holding the target open refuses the
+// rename there for a moment). For a caller that has already decided the file
+// at `to` may be replaced: the copy of a changed original nobody edited.
+export function replaceWithStaged(from: string, to: string): void {
+  replaceAtomically(from, to);
+}
+
 // ensureDirSync / renameIntoPlace / removeTreeSync — the three raw
 // mkdir/rename/rm primitives, re-exported so a caller that has NO reason to
 // import node:fs's mutating names directly still can. This module already
@@ -1894,6 +2067,11 @@ export function sameFileIdentity(
   return left.dev === right.dev && left.ino === right.ino;
 }
 
+/** The way past the read boundary's hardlink refusal, shared with the
+ *  knowledge tool's stat mirror. Said in words: a chained shell command does
+ *  not parse in Windows PowerShell 5.1, and cmd has no cp or mv. */
+export const HARDLINK_REMEDY = "Copy the file, delete the original, give the copy the original's name, then re-run.";
+
 // THE read boundary for any path that came from OUTSIDE the workspace — a CLI
 // flag, a value-transport file, a committed ledger row. Returns the contents of a
 // REGULAR file or throws; it never blocks indefinitely and never follows a link.
@@ -1989,7 +2167,7 @@ export function readRegularFileNoFollowOrThrow(
                 : "not a regular file";
       throw new Error(
         `${what} is not a regular file (${kind}): ${path}. ` +
-          `Only regular files are read — a FIFO, socket, or device file can block ` +
+          `Only regular files are read - a FIFO, socket, or device file can block ` +
           `forever or never reach EOF, so it is refused before any read.`,
       );
     }
@@ -2002,8 +2180,7 @@ export function readRegularFileNoFollowOrThrow(
       throw new Error(
         `${what} is multiply linked (a hardlink) and is not trusted: ${path}. ` +
           `A hardlink can alias content from elsewhere on the filesystem into this ` +
-          `directory. Replace it with an independent copy — ` +
-          `cp <file> <file>.copy && mv <file>.copy <file> — and re-run.`,
+          `directory. ${HARDLINK_REMEDY}`,
       );
     }
     if (maxBytes !== undefined && st.size > maxBytes) {

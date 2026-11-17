@@ -12,14 +12,14 @@ const fills: OnboardingFills = {
 
 This project uses AI-DLC (AI-Driven Development Life Cycle) for structured development, running on the **opencode harness**. The workspace shell ships in \`.aidlc/\` (no setup command); describe what you want to build and it sets up the workflow for you. Run \`/aidlc\` followed by a scope or project description to begin. Run \`/aidlc --doctor\` to validate your setup, \`/aidlc --version\` to print the framework version, \`/aidlc --stage <slug>\` to jump to a specific stage, \`/aidlc --phase <name>\` to jump to a phase, \`/aidlc --depth <level>\` to override depth, \`/aidlc --test-strategy <level>\` to override test volume, \`/aidlc --review <class>\` to cap stage reviews (adversarial, advisory, none). Run \`/aidlc compose "<task>"\` to get a plan tailored to that task (works up front, from a scan report via \`--report <path>\`, and mid-workflow to re-shape the pending stages - every proposal stops at an approve/edit/reject gate).`,
 
-    prereq_bullets: `- **opencode ≥ 1.17**: the plugin hook surface this install relies on (\`tool.execute.before\`, \`tool.execute.after\`, \`chat.message\`, \`session.idle\` on the event bus, \`experimental.session.compacting\`) and project-local \`.aidlc/skills/\` + \`.opencode/agents/\` discovery are current-line features. Check with \`opencode --version\`.
+    prereq_bullets: `- **opencode 1.18.29 or newer, or OpenCode 2**: the adapter plugin carries one entry point for each line (opencode 1 calls \`server()\`, OpenCode 2 calls \`setup()\`), and project-local \`.aidlc/skills/\` + \`.opencode/agents/\` discovery works on both. On OpenCode 2 the todo-driven statusline sync does not run (there is no todo tool); use \`/aidlc --status\`. Check with \`opencode --version\`.
 - **bun**: Required for the CLI tools and hook scripts (tracking progress, writing the decision log, deciding what runs next). Install via \`curl -fsSL https://bun.sh/install | bash\`. \`bun\` must be on your PATH for the shells opencode spawns; the AIDLC adapter plugin also probes \`~/.bun/bin/bun\` directly.
 - **Model/provider**: the shipped \`opencode.json\` and agent definitions pin no model. Your global opencode configuration (\`~/.config/opencode/opencode.json\`) supplies the provider and default model; balanced reviewers retain only their medium reasoning variant.
 - **Permissions**: the shipped project \`opencode.json\` lets AI-DLC's own direct framework tool invocations run without a prompt; the adapter rejects chaining, redirection, expansion, and command substitution. Edits under \`.aidlc/tools/\` and \`.aidlc/hooks/\` prompt, and so do \`rm -r...\` and \`git push\`, once each. Every other command follows your own opencode settings (opencode's default is allow; to be asked, set \`"permission": {"bash": "ask"}\` in this project's \`opencode.json\`, or \`"bash": {"*": "ask"}\` in your global config: opencode replaces a global short form with any project map). In \`opencode run\` non-interactive sessions, pass \`--auto\` only if you accept auto-approval of the remaining prompts; prefer interactive sessions for gated workflows.`,
 
     prereq_bullets_tail: "",
 
-    agents_note: `On opencode each expert role is a native subagent (\`mode: subagent\` in each \`.opencode/agents/aidlc-<role>-agent.md\`); the \`/aidlc\` session takes on those roles itself for most stages and hands work off via the \`task\` tool for the two delegated stages (2.1, 3.5).`,
+    agents_note: `On opencode each expert role is a native subagent (\`mode: subagent\` in each \`.opencode/agents/aidlc-<role>-agent.md\`); the \`/aidlc\` session takes on those roles itself for most stages and hands work off via the \`task\` tool.`,
 
     structure_extra: "",
 
@@ -37,7 +37,7 @@ This is the same AI-DLC core that ships to every harness: the same ordered steps
 - **MCP servers**: none ship (configure your own under \`mcp:\` in \`opencode.json\` if needed).
 - A workflow's \`aidlc/\` workspace tree is harness-neutral: a project can move between harness installs (supported but untested — keep the trees in sync via the framework's packaging if you do this).
 
-The opencode-specific guide (install, what differs, verification) is \`docs/guide/harnesses/opencode.md\`.
+The opencode-specific guide (install, what differs, verification) is https://awslabs.github.io/aidlc-workflows/guide/harnesses/opencode/.
 `,
 
     sections_after_resumption: "",

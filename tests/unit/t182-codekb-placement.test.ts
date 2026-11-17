@@ -85,7 +85,7 @@ function freshProject(): string {
 
 // A fresh project whose ACTIVE-intent cursor actually resolves: createTestProject
 // seeds the registry row + cursor but NO aidlc-state.md, and activeIntent only
-// honours the cursor when the record dir holds a state file (aidlc-lib.ts
+// honours the cursor when the record dir holds a state file (aidlc-record-core.ts
 // activeIntent). Seeding one makes intentRepos read the recorded row, so the
 // codekbRepoName cases below exercise the real registry path, not the null-cursor
 // fallback. The fixture's repos field stays absent until rewriteIntentRepos sets it.
@@ -127,7 +127,7 @@ describe("t182 codekb lib helpers — space-level per-repo placement", () => {
 
   // codekbRepoName resolves the recorded repo set via intentRepos, which keys off
   // the ACTIVE intent — and activeIntent only honours the cursor when the record
-  // dir holds an aidlc-state.md (aidlc-lib.ts activeIntent). So these cases seed a
+  // dir holds an aidlc-state.md (aidlc-record-core.ts activeIntent). So these cases seed a
   // state file first (seedRecordedIntent) so the cursor resolves to the row whose
   // repos we then rewrite; without it intentRepos returns [] for the wrong reason.
 

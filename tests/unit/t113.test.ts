@@ -486,6 +486,17 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
     expect(errs(d)).toBe("VALID");
   });
 
+  test("invoke-swarm verification_command_authorized is an optional boolean", () => {
+    for (const value of [true, false]) {
+      const d = invokeSwarm();
+      d.verification_command_authorized = value;
+      expect(errs(d)).toBe("VALID");
+    }
+    const d = invokeSwarm();
+    d.verification_command_authorized = "false";
+    expect(errs(d)).toContain("invoke-swarm: verification_command_authorized must be boolean, got string");
+  });
+
   test("invoke-swarm rejects a non-positive reviewer iteration cap", () => {
     const d = invokeSwarm();
     d.reviewer_max_iterations = 0;
@@ -693,6 +704,13 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
     expect(validateDirective(print()).valid).toBe(true);
   });
 
+  test("print accepts only literal true for the turn-end marker", () => {
+    expect(errs({ ...print(), ends_turn: true })).toBe("VALID");
+    for (const value of [false, "yes", 1]) {
+      expect(errs({ ...print(), ends_turn: value })).toContain("print: ends_turn must be true when present");
+    }
+  });
+
   test("error well-formed -> VALID", () => {
     expect(validateDirective(error()).valid).toBe(true);
   });
@@ -712,6 +730,14 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
 
   test("parked well-formed -> VALID", () => {
     expect(validateDirective(parked()).valid).toBe(true);
+  });
+
+  // The claimed checkout's done notice names its Unit; the board notice none.
+  test("notice with or without its Unit -> VALID; a Unit that is not a string -> error", () => {
+    const notice = { kind: "notice", message: 'Unit "alpha" is complete and approved in this checkout.' };
+    expect(errs(notice)).toBe("VALID");
+    expect(errs({ ...notice, unit: "alpha" })).toBe("VALID");
+    expect(errs({ ...notice, unit: 7 })).toContain("notice: unit must be string, got number");
   });
 
   // ============================================================

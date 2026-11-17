@@ -357,7 +357,7 @@ describe("t114 scope precedence + validation", () => {
 
   // New work never routes through the finished intent's scope, so a retired
   // one changes nothing for it: `/aidlc-init "<description>"` (next
-  // --new-intent "<description>"), free text, and a typed scope with a
+  // --new-intent '<description>'), free text, and a typed scope with a
   // description get the answer they get over a known scope, and the plan
   // offers' answers start the work (free text's compose answer is a new-work
   // answer with no --new-intent).
@@ -775,14 +775,14 @@ describe("t114 plugin terminal routing", () => {
     expect(out).not.toContain('"kind":"ask"');
   });
 
-  test("missing and unknown plugin verbs are deterministic errors", () => {
+  test("a plugin verb missing goes to plugin help, an unknown one is a deterministic error", () => {
     proj = createOrchestrationTestProject();
     const missing = runNext(proj, ["plugin"]).out;
     const unknown = runNext(proj, ["plugin", "remove"]).out;
-    expect(missing).toContain('"kind":"error"');
-    expect(missing).toContain("missing verb for noun 'plugin'");
+    expect(missing).toContain('"kind":"print"');
+    expect(missing).toContain("engine plugin help");
     expect(unknown).toContain('"kind":"error"');
-    expect(unknown).toContain("unknown verb 'remove' for noun 'plugin'");
+    expect(unknown).toContain("`/aidlc plugin remove` is not a plugin command; the plugin commands are select, list, sync, validate and build");
     expect(`${missing}${unknown}`).not.toContain('"kind":"ask"');
   });
 });
@@ -790,15 +790,16 @@ describe("t114 plugin terminal routing", () => {
 describe("t114 knowledge (DocumentKB) terminal routing", () => {
   // The engine parser and the classifier are separate code paths whose comments
   // require byte-for-byte agreement. These cases assert the ENGINE half: a
-  // knowledge verb must emit a terminal print directive naming
-  // aidlc-knowledge.ts, never a workflow directive and never an intent-create ask.
-  test("every verb routes to aidlc-knowledge.ts and never enters the workflow funnel", () => {
+  // knowledge verb must emit a terminal print directive naming the dispatcher's
+  // `engine knowledge` route (where onboard's copy runs), never a workflow
+  // directive and never an intent-create ask.
+  test("every verb routes to engine knowledge and never enters the workflow funnel", () => {
     for (const verb of ["onboard", "sync", "list", "show", "associate", "dissociate", "rebind"]) {
       proj = createOrchestrationTestProject();
       seedStateFile(proj, MID_IDEATION);
       const out = runNext(proj, ["knowledge", verb]).out;
       expect(out, verb).toContain('"kind":"print"');
-      expect(out, verb).toContain(`aidlc-knowledge.ts ${verb}`);
+      expect(out, verb).toContain(`engine knowledge ${verb}`);
       expect(out, verb).not.toContain('"kind":"run-stage"');
       expect(out, verb).not.toContain('"kind":"ask"');
     }
@@ -810,17 +811,17 @@ describe("t114 knowledge (DocumentKB) terminal routing", () => {
     proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_IDEATION);
     const out = runNext(proj, ["knowledge", "list", "--json"]).out;
-    expect(out).toContain("aidlc-knowledge.ts list --json");
+    expect(out).toContain("engine knowledge list --json");
     expect(out).not.toContain('"kind":"run-stage"');
   });
 
   test("arguments survive the round trip, including a path with a space", () => {
     proj = createOrchestrationTestProject();
     expect(runNext(proj, ["knowledge", "onboard", "docs/policy.pdf"]).out)
-      .toContain("aidlc-knowledge.ts onboard docs/policy.pdf");
+      .toContain("engine knowledge onboard docs/policy.pdf");
     // shellArg quoting must keep a spaced path as ONE argument.
     const spaced = runNext(proj, ["knowledge", "onboard", "my docs/policy.pdf"]).out;
-    expect(spaced).toContain("aidlc-knowledge.ts onboard");
+    expect(spaced).toContain("engine knowledge onboard");
     expect(spaced).toMatch(/'my docs\/policy\.pdf'|"my docs\/policy\.pdf"/);
   });
 
@@ -828,7 +829,7 @@ describe("t114 knowledge (DocumentKB) terminal routing", () => {
     proj = createOrchestrationTestProject();
     const out = runNext(proj, ["knowledge", "help"]).out;
     expect(out).toContain('"kind":"print"');
-    expect(out).toContain("aidlc-knowledge.ts help");
+    expect(out).toContain("engine knowledge help");
     expect(out).not.toContain('"kind":"ask"');
   });
 
@@ -839,7 +840,9 @@ describe("t114 knowledge (DocumentKB) terminal routing", () => {
     expect(missing).toContain('"kind":"error"');
     expect(missing).toContain("missing verb for noun 'knowledge'");
     expect(unknown).toContain('"kind":"error"');
-    expect(unknown).toContain("unknown verb 'remove' for noun 'knowledge'");
+    expect(unknown).toContain(
+      "`/aidlc knowledge remove` is not a knowledge command; the knowledge commands are onboard, sync, list, show, associate, dissociate, rebind and summarize",
+    );
     // Not an ask: `knowledge remove` must not offer to create an intent.
     expect(`${missing}${unknown}`).not.toContain('"kind":"ask"');
   });
@@ -1288,10 +1291,10 @@ describe("t114 mid-flow freeform prose -> routing ask (Branch 9c)", () => {
     expect(directive.question).toContain('(1) a separate new piece of work - start new "bugfix" work for it');
     expect(directive.question).toContain('(2) part of that work - change it to "bugfix"');
     expect(directive.numbered_prose_question).toContain(
-      '1. **Separate new piece of work** — Start new "bugfix" work for it; the current work stays as it is',
+      '1. **Separate new piece of work** - Start new "bugfix" work for it; the current work stays as it is',
     );
     expect(directive.numbered_prose_question).toContain(
-      '2. **Part of the active work** — Change the current workflow to "bugfix" and continue it',
+      '2. **Part of the active work** - Change the current workflow to "bugfix" and continue it',
     );
   });
 
@@ -1766,7 +1769,7 @@ describe("t114 Branch 9c: replies that are not new work", () => {
       const ask = routingAsk();
       const d = directive([reply]);
       expect(d.message).toContain(ROUTING_STEP);
-      expect(routingStepCommand(d.message, "Reshape the active work")).toStartWith(`${ask.compose_command!} -- `);
+      expect(routingStepCommand(d.message, "Reshape the active work")).toStartWith(`${ask.compose_command!} --request-file aidlc/.aidlc-request-text/reshape`);
     });
   }
 
@@ -1785,7 +1788,7 @@ describe("t114 Branch 9c: replies that are not new work", () => {
     const d = directive([OTHER_ANSWER]);
     expect(d.message).toContain(ROUTING_STEP);
     const reshape = routingStepCommand(d.message, "Reshape the active work");
-    expect(reshape).toStartWith(`${ask.compose_command!} -- `);
+    expect(reshape).toStartWith(`${ask.compose_command!} --request-file aidlc/.aidlc-request-text/reshape`);
     const dispatch = runWords(reshape);
     expect(dispatch.kind, JSON.stringify(dispatch).slice(0, 300)).toBe("print");
     expect(dispatch.message).toContain("RUNNING workflow");
@@ -1808,7 +1811,8 @@ describe("t114 Branch 9c: replies that are not new work", () => {
   });
 
   // A Kiro agent runs the printed command through the dispatcher's route, which
-  // pins the project folder ahead of the `--` mark on a line with their words.
+  // pins the project folder right after `next`, ahead of the request file that
+  // holds their words.
   test("the reshape answer run through the dispatcher reaches the composer, not a step about its folder", () => {
     proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_IDEATION);
@@ -1816,7 +1820,7 @@ describe("t114 Branch 9c: replies that are not new work", () => {
     const words = shellWords(routingStepCommand(directive([OTHER_ANSWER]).message, "Reshape the active work"));
     const env: NodeJS.ProcessEnv = { ...process.env };
     for (const key of ["AIDLC_PROJECT_DIR", "CLAUDE_PROJECT_DIR", "KIRO_PROJECT_DIR"]) delete env[key];
-    const r = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "orchestrate", ...words.slice(words.indexOf("next"))], {
+    const r = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "orchestrate", ...words.slice(words.indexOf("next")), "--project-dir", proj], {
       cwd: proj,
       encoding: "utf-8",
       env,
@@ -1836,7 +1840,11 @@ describe("t114 Branch 9c: replies that are not new work", () => {
     const d = directive([OTHER_ANSWER]);
     expect(d.message).toContain(ROUTING_STEP);
     expect(d.message).not.toContain("which keeps every word of theirs");
-    expect(d.message).toContain(` next -- '${OTHER_ANSWER}'`);
+    // Their words go to `next` in a file the step names, never on its line.
+    const file = / next --request-file (aidlc\/\.aidlc-request-text\/other[^ `]*\.txt)`/.exec(String(d.message))?.[1];
+    expect(file, String(d.message)).toBeDefined();
+    expect(readFileSync(join(proj, ...file!.split("/")), "utf-8")).toBe(OTHER_ANSWER);
+    expect(d.message).toContain(`(their words: ${JSON.stringify(OTHER_ANSWER)})`);
   });
 
   for (const reply of ["1", "2", "Separate new piece of work"]) {
@@ -1884,8 +1892,11 @@ describe("t114 Branch 9c: replies that are not new work", () => {
         const label = route === "new_intent_command" ? "Separate new piece of work"
           : route === "continue_command" ? "Part of the active work" : "Reshape the active work";
         const command = routingStepCommand(d.message, label);
-        if (route === "compose_command") expect(command).toBe(`${ask[route]!} -- ${reply}`);
-        else expect(command).toBe(ask[route]!);
+        if (route === "compose_command") {
+          // Their reply goes to the composer in a file the command names.
+          expect(command).toBe(`${ask[route]!} --request-file aidlc/.aidlc-request-text/reshape.txt`);
+          expect(readFileSync(join(proj, "aidlc", ".aidlc-request-text", "reshape.txt"), "utf-8")).toBe(reply);
+        } else expect(command).toBe(ask[route]!);
         expect(runCommand(command).ask_type).not.toBe("new-work-routing");
       });
     }
@@ -1934,8 +1945,8 @@ describe("t114 Branch 9c: replies that are not new work", () => {
       const d = directive([reply]);
       expect(d.kind).toBe("print");
       expect(d.message).toContain(ROUTING_STEP);
-      // Words about something else keep every word through `next -- <their words>`.
-      expect(d.message).toContain(" next -- ");
+      // Words about something else keep every word through `next --request-file <their words>`.
+      expect(d.message).toContain(" next --request-file aidlc/.aidlc-request-text/other");
     });
   }
 });

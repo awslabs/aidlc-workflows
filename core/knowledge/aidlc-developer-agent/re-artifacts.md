@@ -144,7 +144,7 @@ How the tools read this block (everything you need to fill it):
   next run's coverage compare reads `analyzed.paths` and `components`. A list
   with nothing in it is written `paths: []`.
 - `intent:` is shown back by the tools and checked by none; write the
-  intent's `slug` from `intents.json`.
+  `intent` that `{{INVOKE}} engine workspace codekb --repo <repo> --json` prints.
 - Publishing checks that the staging directory holds exactly the nine files,
   that this block parses under the rules below, that the snapshot paths cover
   `analyzed.paths`, and that `fingerprint:` equals a fresh mint over
@@ -168,6 +168,6 @@ Rules:
 - With a STALE or UNVERIFIED store, record only this run in `analyzed.paths` and `analyzed.components`, preserve the prior prose, and demote the store's prior analyzed paths into `shallow.paths`.
 - With an UNKNOWN_SCOPE legacy store, merge the prior prose best-effort but record only this run in the new scope block.
 - Mint `fingerprint` over the final `analyzed.paths` in the merged or replaced block.
-- Build all 9 candidate artifacts under the temporary `<record>/.aidlc-engine/codekb-stage-<repo>/` directory. Never write a cumulative merge directly into the shared CodeKB.
+- Build all 9 candidate artifacts under the temporary `<record>/.aidlc-engine/codekb-stage-<repo>/` directory, the `stage` that the same command prints; run it again once they are written, and its `staged` must list exactly the nine names. Never write a cumulative merge directly into the shared CodeKB.
 - The pre-scan `codekb-snapshot` paths bound verified coverage. If the scan discovers a deep path outside that set, take a new snapshot and repeat the scan over the expanded set.
 - Publish only through `codekb-publish` with the snapshot's store generation and source fingerprint. A store-generation conflict requires re-reading and re-merging the winner's store; a source conflict requires a fresh scan.

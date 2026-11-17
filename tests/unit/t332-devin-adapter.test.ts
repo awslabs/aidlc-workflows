@@ -3635,6 +3635,7 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
     const dir = scratchProject(true);
     try {
       seedReviewerDispatch(dir);
+      mkdirSync(dirname(subagentInflightMarkerPath(dir)), { recursive: true });
       writeFileSync(
         subagentInflightMarkerPath(dir),
         JSON.stringify({
@@ -3653,6 +3654,7 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
         "refused a reviewer dispatch while background subagents are pending",
       );
       // A pending entry for a different session does not block S's dispatch.
+      mkdirSync(dirname(subagentInflightMarkerPath(dir)), { recursive: true });
       writeFileSync(
         subagentInflightMarkerPath(dir),
         JSON.stringify({
@@ -3779,6 +3781,7 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
       }
       // Dispatch-time refusals are enforcement too — disabled with the flag.
       expect(dispatch(dir, S, { is_background: true }, env).code).toBe(0);
+      mkdirSync(dirname(subagentInflightMarkerPath(dir)), { recursive: true });
       writeFileSync(
         subagentInflightMarkerPath(dir),
         JSON.stringify({

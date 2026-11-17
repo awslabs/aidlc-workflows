@@ -10,12 +10,14 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { conductorSkillFileNames } from "../harness/conductor-skill.ts";
 
 const REPO = join(import.meta.dir, "..", "..");
 const DIST = join(REPO, "dist");
 const ROLE_WORDS = ["workflow orchestrator", "# AI-DLC Orchestrator"];
 
-// Every shipped orchestrator skill and command file: dist/<harness>/<dot dir>/skills/aidlc/SKILL.md,
+// Every shipped orchestrator skill file and command file: dist/<harness>/<dot dir>/skills/aidlc/SKILL.md
+// (and the files a skill goes on in),
 // plus opencode's command file, which carries the same description.
 function shippedSkillFiles(): string[] {
   const files: string[] = [];
@@ -24,9 +26,14 @@ function shippedSkillFiles(): string[] {
     const tree = join(DIST, harness.name);
     for (const dot of readdirSync(tree, { withFileTypes: true })) {
       if (!dot.isDirectory() || !dot.name.startsWith(".")) continue;
-      for (const rel of ["skills/aidlc/SKILL.md", "command/aidlc.md"]) {
+      const [skill, ...continuations] = conductorSkillFileNames(harness.name);
+      for (const rel of [`skills/aidlc/${skill}`, "command/aidlc.md"]) {
         const file = join(tree, dot.name, rel);
         if (existsSync(file)) files.push(file);
+      }
+      // The files the skill goes on in ship with it; a missing one fails its read.
+      if (existsSync(join(tree, dot.name, "skills", "aidlc", skill))) {
+        for (const file of continuations) files.push(join(tree, dot.name, "skills", "aidlc", file));
       }
     }
   }

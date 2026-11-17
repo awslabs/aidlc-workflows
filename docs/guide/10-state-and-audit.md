@@ -135,17 +135,17 @@ stateDiagram-v2
     InProgress --> Skipped : Cut mid-flight
     Revising --> Skipped : Abandon after rejection
     Awaiting --> Skipped : Forward jump
-    Completed --> NotStarted : Redo (artifacts deleted)
+    Completed --> NotStarted : Redo
 ```
 
-<!-- Text fallback: [ ] Not Started transitions to [-] In Progress when a stage begins. [-] In Progress transitions to [?] Awaiting Approval when stage work is done and the gate opens. [?] Awaiting Approval transitions to [x] Completed when you approve, or to [R] Revising when you request changes. [R] Revising transitions back to [?] Awaiting Approval when revision is complete. [ ] Not Started, [-] In Progress, [?] Awaiting Approval, and [R] Revising can each transition to [S] Skipped via a skip, a jump, or abandonment. [x] Completed transitions back to [ ] Not Started on redo (artifacts deleted). -->
+<!-- Text fallback: [ ] Not Started transitions to [-] In Progress when a stage begins. [-] In Progress transitions to [?] Awaiting Approval when stage work is done and the gate opens. [?] Awaiting Approval transitions to [x] Completed when you approve, or to [R] Revising when you request changes. [R] Revising transitions back to [?] Awaiting Approval when revision is complete. [ ] Not Started, [-] In Progress, [?] Awaiting Approval, and [R] Revising can each transition to [S] Skipped via a skip, a jump, or abandonment. [x] Completed transitions back to [ ] Not Started on redo. -->
 
 ### Normal, revision, skip, redo, and jump flows
 
 - **Normal flow**: `[ ]` -> `[-]` -> `[?]` -> `[x]` (stage begins, work completes, gate opens, you approve)
 - **Revision flow**: `[?]` -> `[R]` -> `[?]` -> `[x]` (you reject, stage is revised, gate re-opens, you approve)
 - **Scope skip flow**: none: a stage not in the plan stays `[ ]`, marked `SKIP` when the work is created
-- **Redo flow**: `[x]` or `[-]` -> `[ ]` -> `[-]` (you request redo, artifacts are deleted, stage re-executes)
+- **Redo flow**: `[x]` or `[-]` -> `[ ]` -> `[-]` (you request redo, stage re-executes)
 - **Jump flow**: `[-]` at stage A, you request jump to stage B, intervening stages are marked `[S]`
 
 ---
@@ -158,27 +158,28 @@ means. The write guard is a guardrail, not a security boundary. See
 [Audit Trail Rules](../reference/04-stage-protocol.md#audit-trail-rules) for
 the owning commands and the read-only query contract.
 
-### 126-event taxonomy
+### 134-event taxonomy
 
-Events are organized into 26 categories:
+Events are organized into 27 categories:
 
 | Category | Count | Events |
 |----------|------:|--------|
-| **Workflow Lifecycle** | 8 | `WORKFLOW_STARTED`, `WORKFLOW_COMPLETED`, `WORKFLOW_PARKED`, `WORKFLOW_UNPARKED`, `WORKFLOW_ARCHIVED`, `WORKFLOW_UNARCHIVED`, `INTENT_REPOS_CHANGED`, `INTENT_CHECKOUTS_CHANGED` |
+| **Workflow Lifecycle** | 9 | `WORKFLOW_STARTED`, `WORKFLOW_COMPLETED`, `WORKFLOW_PARKED`, `WORKFLOW_UNPARKED`, `WORKFLOW_ARCHIVED`, `WORKFLOW_UNARCHIVED`, `STATE_UPGRADED` (work an older AI-DLC recorded, brought up to this one when the engine first read it), `INTENT_REPOS_CHANGED`, `INTENT_CHECKOUTS_CHANGED` |
 | **Phase Lifecycle** | 4 | `PHASE_STARTED`, `PHASE_COMPLETED`, `PHASE_VERIFIED`, `PHASE_SKIPPED` |
 | **Stage Lifecycle** | 9 | `STAGE_STARTED`, `STAGE_AWAITING_APPROVAL`, `STAGE_REVISING`, `STAGE_COMPLETED`, `STAGE_SKIPPED`, `STAGE_JUMPED`, `STAGE_DEFINITION_CHANGED`, `STAGE_OUTPUT_AMENDED` (a stage's own document changed after you approved it and before your next message), `SOURCE_WORK_NOT_FOUND` (Code Generation found no new code where it looked, and what it did: told the agent, put the question to you, or stood aside under Guard Policy off) |
-| **Session** | 6 | `SESSION_STARTED`, `SESSION_RESUMED`, `SESSION_COMPACTED`, `SESSION_ENDED`, `HUMAN_TURN` (hook-emitted), `HOST_TURN` (hook-emitted, advisory: a prompt the host made for the agent, never a person's turn) |
+| **Session** | 6 | `SESSION_STARTED`, `SESSION_RESUMED`, `SESSION_COMPACTED`, `SESSION_ENDED`, `HUMAN_TURN` (hook-emitted), `HOST_TURN` (a prompt the host made for the agent, never a person's turn; on Claude Code one that names a Message Id takes back a turn first recorded as the person's, such as a scheduled wake-up) |
 | **Initialization** | 3 | `WORKSPACE_SCAFFOLDED`, `WORKSPACE_SCANNED`, `WORKSPACE_INITIALISED` |
 | **Navigation** | 9 | `SCOPE_CHANGED`, `SCOPE_DETECTED`, `DEPTH_CHANGED`, `TEST_STRATEGY_CHANGED`, `REVIEW_CLASS_CHANGED`, `RECOMPOSED`, `WORKSPACE_RECLASSIFIED`, `SCOPE_SAVED`, `PLUGIN_SELECTION_CHANGED` |
 | **Guard Policy** | 5 | `GUARD_POLICY_SET`, `CHANGE_CONTROL_SET` (retired name, still read), `CHANGE_ACCEPTED`, `GUARD_RESTORED`, `GUARD_STOOD_ASIDE` |
 | **Ceremony** | 1 | `CEREMONY_SET`, emitted by `aidlc-utility.ts config-change` (also via the shared `scope-change` applier). Fields: `Key` (`sensors`, `learnings`, `summary_confirmation`, `plan_approval`, `collaborators`), `Old`, `New`, `Source` (`you` for an explicit set, `scope <name>` for an inherited default). `Old` is the previously saved value (raw text if invalid; scope default if absent), not the environment-effective value. One row per real stored field/source change; no-op commands emit none. |
-| **Interaction** | 17 | `DECISION_RECORDED`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `QUESTION_REPLIED`, `QUESTION_UNANSWERED`, `REQUEST_ROUTED`, `SUMMARY_CONFIRMATION_RECORDED`, `VERIFICATION_COMMAND_RECORDED`, `CONSTRUCTION_POLICY_RECORDED`, `CHECKPOINT_VERIFICATION_RECORDED`, `PLAN_APPROVAL_RECORDED`, `PLAN_APPROVAL_SKIPPED`, `PLAN_APPROVAL_OVERRIDDEN`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `PIPELINE_LINK_COMPLETED` |
+| **Interaction** | 19 | `DECISION_RECORDED`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `QUESTION_REPLIED`, `QUESTION_UNANSWERED`, `QUESTION_ASKED`, `QUESTION_SHOWN`, `REQUEST_ROUTED`, `SUMMARY_CONFIRMATION_RECORDED`, `VERIFICATION_COMMAND_RECORDED`, `CONSTRUCTION_POLICY_RECORDED`, `CHECKPOINT_VERIFICATION_RECORDED`, `PLAN_APPROVAL_RECORDED`, `PLAN_APPROVAL_SKIPPED`, `PLAN_APPROVAL_OVERRIDDEN`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `PIPELINE_LINK_COMPLETED` |
 | **Unit Configuration and Lifecycle** | 9 | `UNIT_OWNERSHIP_SET`, `UNIT_GATE_RHYTHM_SET`, `CONSTRUCTION_POLICY_SET`, `UNIT_STARTED`, `UNIT_PAUSED`, `UNIT_RESUMED`, `UNIT_COMPLETED`, `UNIT_SKIPPED`, `UNIT_MERGED` |
 | **Artifact** | 3 | `ARTIFACT_CREATED`, `ARTIFACT_UPDATED` (write-audit-log hook), `ARTIFACT_REUSED` |
 | **Subagent** | 4 | `SUBAGENT_DISPATCHED` (deliver-stage-rules hook, or log-subagent for Cursor and Kiro IDE), `SUBAGENT_COMPLETED` (log-subagent hook), `SUBAGENT_PROMPT_UNMATCHED` (Copilot adapter, advisory), `REVIEW_VERDICT_DICTATED` (no longer written; earlier releases' plan-approval-guard hook. The reviewer's own `**Verdict Dictated:**` line now rides `REVIEW_COMPLETED`) |
 | **Reviewer Enforcement** | 2 | `REVIEWER_SCOPE_BLOCKED` (reviewer-scope hook), `REVIEW_FREEZE_BLOCKED` (review-freeze hook) |
 | **Plan Approval** | 2 | `PLAN_APPROVAL_BLOCKED`, `GUARD_DISABLED` (plan-approval-guard hook, or a fence you switched off for this piece of work) |
 | **Guard Refusals** | 2 | `STATE_TRANSITION_BLOCKED` (state-transition guard refused a delegated agent's lifecycle or routing command), `STAGE_RULES_BLOCKED` (stage rules refused for size, or a required rule file could not be read); each carries `Guard`, `Reason`, and the `Target`/`Session` it refused, one row per refusal |
+| **System Install** | 3 | `SYSTEM_INSTALL_BLOCKED` (a system package install, such as `sudo apt-get install`, that you had not asked for and your approved plan does not name, held until you say so), `SYSTEM_INSTALL_ALLOWED` (one let through on your message, with your words), `SYSTEM_INSTALL_REQUESTED` (the message of yours that asked for it, named by the agent when your approval in the same message had used it) |
 | **Documents** | 3 | `DOCUMENT_INDEXED`, `DOCUMENT_UPDATED`, `DOCUMENT_REMOVED` — space-level shard even when intent-scoped |
 | **Utility** | 1 | `HEALTH_CHECKED` |
 | **Error/Recovery** | 3 | `ERROR_LOGGED`, `RECOVERY_COMPLETED`, `COORDINATION_STOOD_ASIDE` |
@@ -188,7 +189,7 @@ Events are organized into 26 categories:
 | **Merge Dispatch** | 3 | `MERGE_DISPATCH_INVOKED`, `MERGE_DISPATCH_RETURNED`, `MERGE_DISPATCH_FALLBACK` |
 | **Sensors** | 6 | `SENSOR_FIRED`, `SENSOR_PASSED`, `SENSOR_FAILED`, `SENSOR_COULD_NOT_RUN`, `SENSOR_BUDGET_OVERRIDE`, `GUARDRAIL_LOADED` |
 | **Learning Loop** | 3 | `MEMORY_EMPTY`, `RULE_LEARNED`, `SENSOR_PROPOSED` |
-| **Swarm** | 7 | `SWARM_STARTED`, `SWARM_UNIT_CONVERGED`, `SWARM_SOURCE_MERGED`, `SWARM_UNIT_FAILED`, `SWARM_BATON_RETURNED`, `SWARM_COMPLETED`, `SWARM_DEGRADED` |
+| **Swarm** | 9 | `SWARM_STARTED`, `SWARM_UNIT_CONVERGED`, `SWARM_SOURCE_MERGED`, `SWARM_UNIT_FAILED`, `SWARM_BATON_RETURNED`, `SWARM_COMPLETED`, `SWARM_DEGRADED`, `MAIN_CHECKOUT_CHANGE_ALLOWED`, `SWARM_TAKEN_OVER` |
 | **Commit Provenance** | 1 | `SOURCE_COMMITTED` (`aidlc attest anchor`, or the opt-in session-start sweep — enrichment only; `resolve` never reads it) |
 
 ### What gets logged and when
@@ -229,11 +230,25 @@ entries with no known order across writers. Free-form notes appear as `NOTE`
 entries with their heading and body text. `--event NOTE` selects notes;
 `--stage` excludes them.
 
+A `Human Turn` entry records that you acted, never your words. To read what you
+sent in each turn, run `aidlc engine audit turns`: it joins each turn to the
+message record this machine keeps for a day, and says when a turn's words are
+not here.
+
 Run `aidlc engine log answers --stage <slug>` (add `--unit <unit>` for a Unit)
 for paired earlier questions and answers. One reply pairs with every question
 logged for the menu it answered. Open questions and the rare ambiguous answer
 (no question before it, or writers tied at one second) are reported apart.
 Neither command changes files or takes a lock.
+
+When the agent marks one of a question's choices "(Recommended)", the record
+keeps that choice as `Recommended`: on the question's `Decision Recorded`
+entry when the logged choices carry the mark, and on the `Question Replied`
+entry when you answer in Claude Code's or Codex's question box, beside the
+box's `Options` and your `Reply`, so you can see whether you went with it.
+`log answers` lists a logged question's `Recommended` as `recommended` beside
+its `options` and your answer. Entries written before this have no
+`Recommended`, and read as they always did.
 
 ### Keys and passwords you type
 
@@ -254,6 +269,21 @@ the chat: the chat itself still received it, so change the key where it was
 issued if it is real. Masking goes by shape only, so a secret written another
 way (`my password is hunter2`) is kept as typed, and the doctor bundle masks
 the same shapes and more.
+
+### Who decided
+
+When you approve a stage, ask for changes, skip or jump to a stage, switch a
+check off or on, or let a changed input through, the audit row also records
+your git name, for example `**Git Name**: Jane Doe`. It is the name
+`git config user.name` gives for this project (the repo's own setting, then
+your global one), the same name the Unit board shows, so in a team clone each
+person's rows carry their own name. AI-DLC only reads it: it never sets it,
+asks for it, or records your email, and with no name in git it records
+nothing. It says who was at the keyboard as git reports it, not a signature or
+proof of identity. `/aidlc --status` names who approved the last completed
+stage, for example `Last Completed: Requirements Analysis (approved by Jane
+Doe)`. Which rows carry it is listed under "Git Name" in
+`knowledge/aidlc-shared/audit-format.md` in your harness folder.
 
 ### Audit event flow
 

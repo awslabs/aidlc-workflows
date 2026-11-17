@@ -76,3 +76,9 @@ Load this module when the engine lists `summary` in `directive.protocol_modules`
   Follow-up questions change the confirmed semantic content, so present the
   consolidated summary again and record a new confirmation receipt before
   re-saving artifacts or requesting review.
+  A later round of questions in a file whose summary was already confirmed (a
+  revision, or a step reopened after its approval) takes the same shape: its
+  questions are new `## Q<n>` sections after the summary, numbered on from the
+  last one, never a section of their own or a second summary. Rewrite the
+  bullets of the one Consolidated Summary Confirmation section to cover every
+  answer, old and new, blank its `[Answer]:` line, and confirm it again as above.

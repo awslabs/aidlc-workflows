@@ -592,7 +592,7 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
       expect(output).toContain("Devin host availability:");
       expect(output).toContain("Devin Desktop installation:");
       expect(output).toContain(
-        `Harness CLI: devin devin ${DEVIN_MIN_VERSION_STRING} (t331-shim) at `,
+        `Harness CLI: devin ${DEVIN_MIN_VERSION_STRING} at `,
       );
       // The Claude settings.json fallback must NOT appear.
       expect(output).not.toContain("settings.json present");

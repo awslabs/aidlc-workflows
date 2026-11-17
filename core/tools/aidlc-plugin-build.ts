@@ -23,6 +23,7 @@ import {
   pluginValidationJson,
   validatePluginRoot,
 } from "./aidlc-plugin-validate.ts";
+import { harnessIdFromTyped, typedHarnessName } from "./aidlc-runtime-paths.ts";
 
 const USAGE =
   "Usage: bun <tools-dir>/aidlc-plugin-build.ts <plugin-root> <harness> [outDir] [--json]";
@@ -76,7 +77,7 @@ function formatBuildResult(
   const lines = [
     "Plugin build: COMPLETE",
     `Plugin root: ${resolve(pluginRoot)}`,
-    `Harness: ${harness}`,
+    `Harness: ${typedHarnessName(harness)}`,
     `Output: ${resolve(outDir)}`,
   ];
   for (const finding of result.warnings) {
@@ -110,9 +111,11 @@ function writeResult(
   (result.valid ? process.stdout : process.stderr).write(output);
 }
 
-export function main(argv: string[]): number {
+// The `aidlc plugin build` verb passes its own usage line, so a usage error
+// names the command the person ran.
+export function main(argv: string[], usage = USAGE): number {
   if (argv.includes("--help") || argv.includes("-h")) {
-    process.stdout.write(`${USAGE}\n`);
+    process.stdout.write(`${usage}\n`);
     return 0;
   }
   const jsonArgs = argv.filter((arg) => arg === "--json");
@@ -122,11 +125,14 @@ export function main(argv: string[]): number {
     jsonArgs.length > 1 ||
     argv.some((arg) => arg.startsWith("-") && arg !== "--json")
   ) {
-    process.stderr.write(`${USAGE}\n`);
+    process.stderr.write(`${usage}\n`);
     return 2;
   }
 
-  const [pluginRootArg, harness, outArg] = positional;
+  const [pluginRootArg, typedHarness, outArg] = positional;
+  // The harness is typed as config takes it; the target table, the output
+  // folder and the result keep its id.
+  const harness = harnessIdFromTyped(typedHarness);
   const pluginRoot = resolve(pluginRootArg);
   const outDir = outArg
     ? resolve(outArg)
@@ -169,10 +175,10 @@ export function main(argv: string[]): number {
     return 1;
   }
   const targets = readPluginTargets(targetsPath);
-  const target = targets[harness];
+  const target = Object.hasOwn(targets, harness) ? targets[harness] : undefined;
   if (!target) {
     process.stderr.write(
-      `${USAGE}\nUnknown harness "${harness}" (available: ${Object.keys(targets).sort().join(", ")})\n`,
+      `${usage}\nUnknown harness "${typedHarness}" (available: ${Object.keys(targets).map(typedHarnessName).sort().join(", ")})\n`,
     );
     return 2;
   }

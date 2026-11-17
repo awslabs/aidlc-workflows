@@ -39,6 +39,7 @@ import {
   projectSettingsPath,
   resolveAidlcSettings,
 } from "../../core/tools/aidlc-settings.ts";
+import { typedHarnessName } from "../../core/tools/aidlc-runtime-paths.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -105,7 +106,7 @@ function install(harness: string): string {
     "--from",
     join(DIST_RELEASE, harness),
     "--harness",
-    harness,
+    typedHarnessName(harness),
     "--mcp",
     "none",
     "--yes",
@@ -547,6 +548,19 @@ describe("t293 config models CLI", () => {
     expect(noConfirm.status).toBe(2);
     expect(noConfirm.stdout).toContain("requires --yes");
 
+    // The reviewing sentence speaks of the medium baseline, so it stands under a
+    // medium row only, never under the effort a person raised it to.
+    const MEDIUM_BASELINE = "Review-only agents use the measured medium baseline";
+    const shippedShow = run([
+      "config",
+      "models",
+      "--project-dir",
+      project,
+      "--show",
+    ], project, runtimeEnv());
+    expect(shippedShow.status, shippedShow.stdout + shippedShow.stderr).toBe(0);
+    expect(shippedShow.stdout).toContain(`Reviewing (2 agents): sonnet / medium\n    ${MEDIUM_BASELINE}`);
+
     const applied = run([
       "config",
       "models",
@@ -578,6 +592,7 @@ describe("t293 config models CLI", () => {
       "All 14 agents inherit your session model and effort, except:",
     );
     expect(shown.stdout).toContain("Reviewing (2 agents): sonnet / xhigh");
+    expect(shown.stdout).not.toContain(MEDIUM_BASELINE);
     expect(shown.stdout).toContain(
       "Recorded override: group-dial; model shipped default, effort project.",
     );
@@ -857,8 +872,9 @@ describe("t293 config models CLI", () => {
     expect(missing).not.toContain("configured model policy");
     expect(missing).toContain("Reviewing effort: xhigh -> max in aidlc.settings.json. To undo: ");
     expect(missing).toContain(
-      "Outstanding actions:\n  runtime/runtime-aidlc-missing: aidlc is absent from the non-interactive hook PATH - run `bun .claude/tools/aidlc.ts config runtime`",
+      "Outstanding actions:\n  runtime: aidlc is absent from the non-interactive hook PATH - run `bun .claude/tools/aidlc.ts config runtime`",
     );
+    expect(missing).not.toContain("runtime-aidlc-missing");
     // JSON and --quiet keep their one message.
     const json = JSON.parse(change("high", hookPath(["aidlc", "bun"]), ["--json"])) as { message: string };
     expect(json.message).toStartWith("configured model policy for ");
@@ -1643,7 +1659,7 @@ describe("t293 doctor model policy advisory", () => {
     };
     const shared = check({ schemaVersion: 1, preset: "balanced", groups: { reviewing: { effort: "max" } } });
     expect(shared.status, shared.stdout).toBe(0);
-    expect(shared.stdout).toContain("model policy is reflected on kiro-ide");
+    expect(shared.stdout).toContain("model policy is reflected on kiro");
     // One agent's own model and effort are Kiro's: a file without them is drift.
     const named = check({
       schemaVersion: 1,

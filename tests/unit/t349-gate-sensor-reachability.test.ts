@@ -4,7 +4,7 @@
 //
 // A gate-fired sensor only ever runs against the stage's declared deliverables,
 // and only on a deliverable whose path its manifest `matches` glob accepts
-// (aidlc-state.ts gateSensorMatchesOutput, then the dispatcher's own filter).
+// (sensorMatchesPath, the one reader the gate and the dispatcher both call).
 // Whether a binding can EVER fire is therefore decidable from the compiled
 // graph alone: resolve each declared artifact through the engine's placement
 // resolver and require the glob to accept at least one of them. #771 was a
@@ -21,6 +21,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { resolveArtifactInstances } from "../../core/tools/aidlc-artifact-resolution.ts";
+import { sensorMatchesPath } from "../../core/tools/aidlc-sensor-record.ts";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -74,10 +75,9 @@ describe("t349 gate sensor reachability", () => {
 
   test("every gate binding's matches glob accepts at least one declared deliverable", () => {
     const unreachable = bindings
-      .filter(({ stage, sensor }) => {
-        const glob = new Bun.Glob(sensor.matches as string);
-        return !deliverablePaths(stage).some((path) => glob.match(path));
-      })
+      .filter(({ stage, sensor }) =>
+        !deliverablePaths(stage).some((path) => sensorMatchesPath(sensor.matches as string, path)),
+      )
       .map(({ stage, sensor }) => `${stage.slug} -> ${sensor.id} (${sensor.matches})`);
     expect(unreachable).toEqual([]);
   });

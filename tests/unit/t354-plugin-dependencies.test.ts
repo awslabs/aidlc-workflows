@@ -310,7 +310,7 @@ describe("t354 a plugin that cannot build on its base is held, and the rest comp
       mid: { root: plugin({ name: "mid" }) },
     });
     const ran = sync(target);
-    const line = "alpha is not composed: it needs zeta ^0.1.0, and zeta 0.2.0 is installed. Install a zeta version in that range, or a version of alpha made for zeta 0.2.0.";
+    const line = "alpha is not composed: it needs zeta ^0.1.0, and zeta 0.2.0 is installed. Install a version of zeta in that range, or a version of alpha made for zeta 0.2.0.";
     expect(ran.status, ran.stdout + ran.stderr).toBe(0);
     expect(ran.stdout).toContain(line);
     expect(statusOf(target, "zeta")?.state).toBe("current");
@@ -403,7 +403,7 @@ describe("t354 a plugin that cannot build on its base is held, and the rest comp
     const ran = sync(target);
     expect(ran.status, ran.stdout + ran.stderr).toBe(0);
     expect(ran.stdout).toContain(
-      "alpha stays as composed before, but it needs zeta ^0.1.0, and zeta 0.2.0 is installed. Install a zeta version in that range, or a version of alpha made for zeta 0.2.0.",
+      "alpha stays as composed before, but it needs zeta ^0.1.0, and zeta 0.2.0 is installed. Install a version of zeta in that range, or a version of alpha made for zeta 0.2.0.",
     );
     expect(stamp(target, "alpha")?.version).toBe("0.1.0");
     expect(stamp(target, "zeta")?.version).toBe("0.2.0");
@@ -1086,13 +1086,13 @@ describe("t354 turning a paused plugin's base back on says how the plugin comes 
 
   test("with .claude beside .kiro, config run from Claude Code's tool for Kiro CLI names Kiro CLI's folder", () => {
     const run = composedPair("kiro", ".kiro", true);
-    const kiro = run(["config", "--from", join(REPO_ROOT, "dist", "kiro"), "--harness", "kiro", "--force", "--yes"]);
+    const kiro = run(["config", "--from", join(REPO_ROOT, "dist", "kiro"), "--harness", "kiro-v2", "--force", "--yes"]);
     expect(kiro.status, kiro.stdout + kiro.stderr).toBe(0);
     const claude = run(["config", "--from", join(REPO_ROOT, "dist", "claude"), "--harness", "claude", "--force", "--yes"], ".claude");
     expect(claude.status, claude.stdout + claude.stderr).toBe(0);
-    const paused = run(["config", "project", "--plugins", "aidlc,alpha", "--harness", "kiro", "--yes"], ".claude");
+    const paused = run(["config", "project", "--plugins", "aidlc,alpha", "--harness", "kiro-v2", "--yes"], ".claude");
     expect(paused.status, paused.stdout + paused.stderr).toBe(0);
-    const back = run(["config", "project", "--plugins", "aidlc,alpha,zeta", "--harness", "kiro", "--yes"], ".claude");
+    const back = run(["config", "project", "--plugins", "aidlc,alpha,zeta", "--harness", "kiro-v2", "--yes"], ".claude");
     expect(back.status, back.stdout + back.stderr).toBe(0);
     expect(back.stdout).toContain(
       "comes back when you run `bun .claude/tools/aidlc.ts engine plugin sync --harness-dir .kiro --plugin-root <alpha's folder>`.",

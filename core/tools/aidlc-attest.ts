@@ -349,7 +349,7 @@ function shallowBoundaryError(sha: string): Error {
   return new Error(
     `${sha} is a shallow-clone boundary: its parent commit is absent, so its ` +
       `delta cannot be computed (a root-tree diff would classify every file in ` +
-      `the tree). Deepen the clone first — git fetch --deepen 1, or check out ` +
+      `the tree). Deepen the clone first - git fetch --deepen 1, or check out ` +
       `with fetch-depth: 0.`,
   );
 }
@@ -1016,7 +1016,7 @@ function buildOwnershipIndex(
               problem =
                 `reviewed-source evidence not found at ` +
                 `${view.label(space, info.dirName, candidates[0].rel)}; the record may predate ` +
-                `committed evidence, or the evidence may not be committed at the record source — ` +
+                `committed evidence, or the evidence may not be committed at the record source - ` +
                 `re-review the unit to write it into the record`;
             }
           }
@@ -1729,7 +1729,7 @@ resolve <commit> (or --commit <rev>) resolves that commit's first-parent delta
                           relied-upon receipt shard and the evidence file its
                           fingerprint selects) arrived in a signed commit
          This bounds how much the report can be trusted, not how much of the
-         change is attested — pair it with --fail-on for coverage.
+         change is attested - pair it with --fail-on for coverage.
 anchor   Append SOURCE_COMMITTED enrichment events for commits that landed
          reviewed claims (deduplicated; --reconcile walks first-parent
          history, bounded by --max-commits, default 100). resolve never reads

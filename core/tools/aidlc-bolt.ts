@@ -37,6 +37,7 @@
 // the sibling primitives already own (Bolt Refs, Worktree Path) — this is
 // the t48 emitter-pairing rule.
 
+import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
 import { LONG_SUBPROCESS_TIMEOUT_MS, EXTENDED_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -85,6 +86,7 @@ import {
   printUsageAndExit,
   resolveInvokingSessionId,
 } from "./aidlc-lib.js";
+import { chatTookStepHere } from "./aidlc-record-core.ts";
 import { aidlcDispatcherInvocation, compiledExecutable, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import { type EngineInvocation, renderEngineInvocation } from "./aidlc-guard-operation.ts";
 import {
@@ -707,7 +709,7 @@ function handleComplete(args: string[]): void {
         "complete-merge",
         flags.slug,
         "merge-held",
-        `Merge held by HOLD-MERGE invariant; resolve the failed-sibling halt-and-ask sequence and run \`aidlc-bolt release-merge --slug ${flags.slug}\` before retrying.`
+        `Merge held by HOLD-MERGE invariant; resolve the failed-sibling halt-and-ask sequence and run \`${aidlcDispatcherInvocation("bolt release-merge")} --slug ${flags.slug}\` before retrying.`
       );
     }
   }
@@ -1067,7 +1069,7 @@ function setMergeHeld(pd: string, slug: string, held: boolean, intent?: string, 
   const forked = forkedState(pd, slug, intent, space);
   if (!forked) {
     error(
-      `No per-Bolt forked state file for slug "${slug}" — was \`aidlc-bolt start --worktree --slug ${slug}\` run?`
+      `No per-Bolt forked state file for slug "${slug}" - was \`${aidlcDispatcherInvocation("bolt start")} --worktree --slug ${slug}\` run?`
     );
   }
   const content = readFileSync(forked.statePath, "utf-8");
@@ -1106,10 +1108,11 @@ function setMergeHeld(pd: string, slug: string, held: boolean, intent?: string, 
 //                                  --reason <enum> --defaults <text>
 //
 // Wires the three MERGE_DISPATCH_* events by emitting via `emitAudit` per
-// event variant. The conductor's Unit merge-back (per
-// stage-protocol-construction.md) brackets each aidlc-pipeline-deploy-agent
-// dispatch: pre-call INVOKED, post-call RETURNED on successful parse,
-// FALLBACK on timeout/malformed-YAML.
+// event variant. The conductor brackets each aidlc-pipeline-deploy-agent
+// merge-strategy dispatch: pre-call INVOKED, post-call RETURNED on successful
+// parse, FALLBACK on timeout/malformed-YAML. A pinned Unit's merge gate reads
+// none of them: its strategy and target are the pin's (aidlc-unit.ts
+// pinnedMergeGate).
 //
 // Emit-only contract: no state mutation, no spawn. Pure audit emission so
 // doctor can reconcile orphan INVOKED rows (slug + timestamp window).
@@ -1267,7 +1270,7 @@ function handleSetAutonomy(args: string[]): void {
           "Refusing to switch Construction to autonomous: it waives every later gate, so it is granted only by the " +
             "person's answer to the ladder prompt, named with --message <id>. " +
             requestMessageStep(pd, "Run it with --message <id> after they choose it.") +
-            " Do not log the ladder choice via aidlc-log answer; the choice is recorded by set-autonomy itself." +
+            ` Do not log the ladder choice via ${aidlcDispatcherInvocation("log answer")}; the choice is recorded by set-autonomy itself.` +
             unattendedHumanPresenceHint(pd),
         );
       }
@@ -1399,8 +1402,13 @@ async function handleCheckpoint(args: string[]): Promise<void> {
   // The person said to approve the Unit as it is over a review that did not
   // finish; verify reads it, and the engine checks their words are on record.
   const overUnfinishedReview = args.includes("--over-unfinished-review");
-  const flagArgs = args.filter((arg) => arg !== "--over-unfinished-review");
+  // The person's Override at a blocking check on the Unit, retried as the refusal names it.
+  const overrideBlockingSensors = args.includes("--override-blocking-sensors");
+  const flagArgs = args.filter((arg) => arg !== "--over-unfinished-review" && arg !== "--override-blocking-sensors");
   const flags = parseFlags(flagArgs);
+  if (overrideBlockingSensors && flags.action !== "verify") {
+    error("checkpoint --override-blocking-sensors goes with --action verify.");
+  }
   if (overUnfinishedReview && flags.action !== "verify") {
     error("checkpoint --over-unfinished-review goes with --action verify.");
   }
@@ -1418,6 +1426,8 @@ async function handleCheckpoint(args: string[]): Promise<void> {
     error(`checkpoint --kind must be ${CHECKPOINT_KINDS.join(" or ")}`);
   }
   const pd = resolveProjectDir(projectDir);
+  // A checkpoint decision is the chat's step on the work; its status is a read.
+  if ((flags.action ?? "status") !== "status") chatTookStepHere(pd);
   let result: ReturnType<typeof resolveConstructionCheckpoint>;
   switch (flags.action ?? "status") {
     case "status":
@@ -1430,6 +1440,7 @@ async function handleCheckpoint(args: string[]): Promise<void> {
       result = await verifyConstructionCheckpoint(
         pd, flags.unit, checkpointKind, {
           overUnfinishedReview, message: flags.message,
+          overrideBlockingSensors, userInput: flags["user-input"],
           timeoutMs: flags["timeout-ms"] === undefined ? undefined : Number(flags["timeout-ms"]),
         },
       );
@@ -1528,7 +1539,7 @@ function boltUsage(subcommand: string | undefined): string {
       "  Sets the Construction autonomy mode. Required: --mode.",
     ],
     checkpoint: [
-      `${invoke("checkpoint")} --unit <name> [--action ${CHECKPOINT_ACTIONS.join("|")}]`,
+      `${invoke("checkpoint")} --unit <name> [--action ${CHECKPOINT_ACTIONS.join("|")}] [--override-blocking-sensors --user-input <choice>]`,
       "  The Unit's Construction checkpoint. Required: --unit. --action defaults to status.",
       `  --kind: ${CHECKPOINT_KINDS.join(", ")} (default unit). --over-unfinished-review and --timeout-ms <milliseconds> go with --action verify.`,
       "  Options: --session <id>, --user-input <the person's words>, --reason <text> (reject),",
@@ -1560,6 +1571,8 @@ function boltUsage(subcommand: string | undefined): string {
 let projectDir: string | undefined;
 
 export async function main(argv: string[]): Promise<void> {
+  // A turn Claude Code started itself is settled before this command reads a turn.
+  settleClaudeTurnsFirst(resolveProjectDir(projectDirFlag(argv)));
   const rawArgs = argv;
 
   const filteredArgs: string[] = [];

@@ -1,6 +1,6 @@
 {
   "name": "aidlc-product-lead-agent",
-  "description": "AI-DLC Product Lead Reviewer \u2014 delegation target for reviewing requirements, user stories, and mockups.",
+  "description": "AI-DLC Product Lead Reviewer - delegation target for reviewing requirements, user stories, and mockups.",
   "prompt": "file://aidlc-product-lead-agent.md",
   "includeMcpJson": true,
   "tools": [

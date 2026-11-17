@@ -352,7 +352,7 @@ describe("t47 F1 — read-only audit shard during acknowledge-compaction (audit-
 
       // The audit is the per-clone shard <record>/audit/<host>-<clone>.md; the
       // spawned subprocess resolves the SAME shard (the name embeds the stable
-      // per-clone token, not the PID - auditShardName in aidlc-lib.ts), so chmod-ing
+      // per-clone token, not the PID - auditShardName in aidlc-record-core.ts), so chmod-ing
       // that one shard read-only denies its append.
       const shard = auditShardPath(p);
       expect(shard).not.toBe("");

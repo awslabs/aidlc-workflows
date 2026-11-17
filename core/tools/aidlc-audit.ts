@@ -1,6 +1,8 @@
 import { spawnSync } from "node:child_process";
+import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
+import { aidlcDispatcherInvocation } from "./aidlc-runtime-paths.ts";
 import {
   closeSync,
   constants as fsConstants,
@@ -15,13 +17,14 @@ import {
   statSync,
   writeSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   acquireAuditLock,
   addPendingPersonLines,
   assertNoSymlinkInChainOrThrow,
   auditFilePath,
   auditBlockField,
+  auditShardBlocks,
   auditShardHostSegment,
   readActiveAuditShardEvents,
   UNTRUSTED_AUDIT_NOTICE,
@@ -31,6 +34,7 @@ import {
   claimAttemptFields,
   cloneIdFileContent,
   cloneIdPath,
+  ENGINE_DIR,
   entrySkillInvocation,
   errorMessage,
   GIT_PLATFORM_ARGS,
@@ -41,6 +45,8 @@ import {
   mergeReviewRecordsFromDelta,
   parseFieldArgs,
   holdsAuditLock,
+  readAppendOnlyFileNoFollowOrThrow,
+  readApplicableTeamUnitScopeStamp,
   pendingPersonLines,
   personLineHeardThisTurn,
   redactProjectDirPrefix,
@@ -96,6 +102,9 @@ const VALID_EVENT_TYPES = new Set([
   "WORKFLOW_UNPARKED",
   "WORKFLOW_ARCHIVED",
   "WORKFLOW_UNARCHIVED",
+  // A record an earlier State Version wrote, brought up in place by the
+  // engine's state read (aidlc-state-upgrade.ts).
+  "STATE_UPGRADED",
   "INTENT_REPOS_CHANGED",
   "INTENT_CHECKOUTS_CHANGED",
   // Session events (hook-owned)
@@ -107,9 +116,11 @@ const VALID_EVENT_TYPES = new Set([
   // approval/interview gate requires a HUMAN_TURN appended AFTER the last gate
   // resolution (in ledger order) before it commits.
   "HUMAN_TURN",
-  // Hook-owned, advisory, never a human turn: a prompt the host made for the
-  // agent (a workflow notice, a background task's notice, a brief) reached
-  // the prompt-submit seam and was not counted as the person's turn.
+  // Hook-owned, never a human turn: a prompt the host made for the agent (a
+  // workflow notice, a background task's notice, a brief) reached the
+  // prompt-submit seam and was not counted as the person's turn. One that names
+  // a Message Id takes back the HUMAN_TURN of that message (a Claude Code
+  // wake-up, settled once its own row was on record: settleClaudeTurns).
   "HOST_TURN",
   // Initialization events (fire IN ADDITION TO STAGE_COMPLETED)
   "WORKSPACE_SCAFFOLDED",
@@ -127,6 +138,11 @@ const VALID_EVENT_TYPES = new Set([
   // Engine-owned: the person sent their words to separate new work or a
   // reshape, so they answer no question the work in progress has open.
   "REQUEST_ROUTED",
+  // Engine-owned: an engine question with no row of its own when asked (the
+  // code plan question, the questions `next` asks), and an open question shown
+  // in a chat it was not shown in before, each with its Question Id.
+  "QUESTION_ASKED",
+  "QUESTION_SHOWN",
   "SUMMARY_CONFIRMATION_RECORDED",
   "VERIFICATION_COMMAND_RECORDED",
   "CONSTRUCTION_POLICY_RECORDED",
@@ -195,6 +211,13 @@ const VALID_EVENT_TYPES = new Set([
   "PLAN_APPROVAL_BLOCKED",
   "STATE_TRANSITION_BLOCKED",
   "STAGE_RULES_BLOCKED",
+  // A system package install nobody asked for (hook-emitted): held until the
+  // person says so (BLOCKED), and run with their turn standing behind it
+  // (ALLOWED, naming their message). REQUESTED: the agent named the message
+  // that asked for the packages (`log install`).
+  "SYSTEM_INSTALL_BLOCKED",
+  "SYSTEM_INSTALL_ALLOWED",
+  "SYSTEM_INSTALL_REQUESTED",
   // A guard's deterministic off-switch was set while a workflow existed, so a
   // tool call passed without enforcement. One row per streak: the hook appends
   // only when the newest row in its shard is not already this event.
@@ -306,6 +329,14 @@ const VALID_EVENT_TYPES = new Set([
   "SWARM_BATON_RETURNED",
   "SWARM_COMPLETED",
   "SWARM_DEGRADED",
+  // The person asked for files in the main checkout to change while the Units
+  // are built in parallel: `aidlc-swarm.ts allow-change` records them with the
+  // message they asked in, and the guard and the landings read it.
+  "MAIN_CHECKOUT_CHANGE_ALLOWED",
+  // The person asked a second chat to build a side-by-side batch another chat
+  // started: `aidlc-swarm.ts take-over` records it with the message they asked
+  // in, and `next` hands the batch to that chat from then on.
+  "SWARM_TAKEN_OVER",
   // Commit provenance -- emitted only by `aidlc-attest.ts anchor`: a workspace
   // commit observed to land reviewed unit claims. Enrichment ONLY: attest
   // resolve derives attribution purely from committed receipts + evidence and
@@ -341,6 +372,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   WORKFLOW_UNPARKED: "Workflow Unparked",
   WORKFLOW_ARCHIVED: "Workflow Archived",
   WORKFLOW_UNARCHIVED: "Workflow Unarchived",
+  STATE_UPGRADED: "State Upgraded",
   INTENT_REPOS_CHANGED: "Intent Repos Changed",
   INTENT_CHECKOUTS_CHANGED: "Intent Checkouts Changed",
   SESSION_STARTED: "Session Start",
@@ -358,6 +390,8 @@ const EVENT_HEADINGS: Record<string, string> = {
   QUESTION_ANSWERED: "Question Answered",
   QUESTION_UNANSWERED: "Question Unanswered",
   QUESTION_REPLIED: "Question Replied",
+  QUESTION_ASKED: "Question Asked",
+  QUESTION_SHOWN: "Question Shown",
   REQUEST_ROUTED: "Request Routed",
   SUMMARY_CONFIRMATION_RECORDED: "Summary Confirmation Recorded",
   VERIFICATION_COMMAND_RECORDED: "Verification Command Recorded",
@@ -386,6 +420,9 @@ const EVENT_HEADINGS: Record<string, string> = {
   PLAN_APPROVAL_BLOCKED: "Plan Approval Blocked",
   STATE_TRANSITION_BLOCKED: "State Transition Blocked",
   STAGE_RULES_BLOCKED: "Stage Rules Blocked",
+  SYSTEM_INSTALL_BLOCKED: "System Install Blocked",
+  SYSTEM_INSTALL_ALLOWED: "System Install Allowed",
+  SYSTEM_INSTALL_REQUESTED: "System Install Requested",
   GUARD_DISABLED: "Guard Disabled",
   DOCUMENT_INDEXED: "Document Indexed",
   DOCUMENT_UPDATED: "Document Updated",
@@ -443,6 +480,8 @@ const EVENT_HEADINGS: Record<string, string> = {
   SWARM_STARTED: "Swarm Started",
   SWARM_UNIT_CONVERGED: "Swarm Unit Converged",
   SWARM_SOURCE_MERGED: "Swarm Source Merged",
+  MAIN_CHECKOUT_CHANGE_ALLOWED: "Main Checkout Change Allowed",
+  SWARM_TAKEN_OVER: "Swarm Taken Over",
   SWARM_UNIT_FAILED: "Swarm Unit Failed",
   SWARM_BATON_RETURNED: "Swarm Baton Returned",
   SWARM_COMPLETED: "Swarm Completed",
@@ -463,8 +502,9 @@ function jsonError(message: string): never {
 
 const CLI_RESERVED_EVENT_TYPES = new Set([
   "HUMAN_TURN",
-  // Hook-owned like HUMAN_TURN: only the hook that saw the host's prompt may
-  // say a turn was the host's.
+  // Hook-owned like HUMAN_TURN: only the hook that saw the host's prompt, or
+  // settleClaudeTurns reading Claude Code's own row for a turn the hook could
+  // not yet tell apart (aidlc-claude-turn-origin.ts), may say a turn was the host's.
   "HOST_TURN",
   // Hook-owned like HUMAN_TURN: it spends a person's turn, so only the hook
   // that saw the empty question box may write it.
@@ -535,13 +575,17 @@ export interface AuditEntryInput {
 // (verifyReviewerPrecondition), swarm attempt/convergence (the finalize and
 // artifact-guard boundaries), and the autonomy grant. Each has exactly one owning emitter that
 // reaches appendAuditEntry through the library import (hooks, aidlc-state,
-// aidlc-log, aidlc-swarm, aidlc-bolt). The public CLI refuses them so a
+// aidlc-log, aidlc-swarm, aidlc-bolt), except HOST_TURN, which the human-turn
+// hook and settleClaudeTurns (aidlc-claude-turn-origin.ts) write from the one
+// decider of who started a Claude Code turn (claudeTranscriptOrigin). The public CLI refuses them so a
 // conductor cannot mint authority it does not have; everything else stays
 // CLI-appendable as the diagnostic escape hatch. Test fixtures that simulate
 // the owning emitters set AIDLC_ALLOW_DIRECT_AUDIT_EVENTS=1 (the same escape
 // idiom as AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS in aidlc-state.ts).
 export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "STAGE_COMPLETED",
+  // Its Stages added sends `next` back to a stage the work just passed over.
+  "STATE_UPGRADED",
   "STAGE_DEFINITION_CHANGED",
   "STAGE_OUTPUT_AMENDED",
   // The check's own record of a first refusal opens the gate on the next
@@ -552,6 +596,10 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "QUESTION_UNANSWERED",
   "QUESTION_REPLIED",
   "REQUEST_ROUTED",
+  // The engine's record of the questions it asked; what binds an answer to
+  // its question will read them.
+  "QUESTION_ASKED",
+  "QUESTION_SHOWN",
   "GATE_APPROVED",
   "GATE_REJECTED",
   "QUESTION_ANSWERED",
@@ -565,6 +613,10 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "SWARM_STARTED",
   "SWARM_UNIT_CONVERGED",
   "SWARM_SOURCE_MERGED",
+  // The person's request a strict landing keeps; a forged one would keep a change nobody asked for.
+  "MAIN_CHECKOUT_CHANGE_ALLOWED",
+  // The person's request that moves a batch to the chat they asked in.
+  "SWARM_TAKEN_OVER",
   "AUTONOMY_MODE_SET",
   "UNIT_OWNERSHIP_SET",
   "UNIT_GATE_RHYTHM_SET",
@@ -622,6 +674,10 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   // A stand-aside row is a guard's own account of what it let through; a forged
   // one would make an unauthorized action look covered.
   "GUARD_STOOD_ASIDE",
+  // The person's go-ahead for a system install, and the message named as asking
+  // for one; a forged one would make an install nobody asked for look like theirs.
+  "SYSTEM_INSTALL_ALLOWED",
+  "SYSTEM_INSTALL_REQUESTED",
   // Ceremony provenance belongs to the setting verb, not a public audit append.
   "CEREMONY_SET",
 ]);
@@ -661,6 +717,8 @@ const MERGE_PROTECTED_EVENT_TYPES = new Set([
   "PLAN_APPROVAL_SKIPPED",
   // The source-work check's own record opens the main checkout's gate.
   "SOURCE_WORK_NOT_FOUND",
+  "MAIN_CHECKOUT_CHANGE_ALLOWED",
+  "SWARM_TAKEN_OVER",
   "AUTONOMY_MODE_SET",
   "UNIT_OWNERSHIP_SET",
   "UNIT_GATE_RHYTHM_SET",
@@ -872,15 +930,17 @@ export const SECRET_MASKED_LINE =
   "but this chat still received it, so if it is real, change it where it was issued.";
 
 // Queue SECRET_MASKED_LINE for the chat (`session`, else the chat running
-// this command), unless it is already waiting or this turn heard it. No chat
-// named, no line; never throws, since a line the person may miss never blocks
-// a write or their turn.
-export function saySecretMaskedOnce(projectDir: string, session?: string): void {
+// this command), unless it is already waiting or this turn heard it. The
+// prompt hook queues it for each message of theirs that holds a key
+// (`message`): on finished work their turn never moves. No chat named, no
+// line; never throws, since a line the person may miss never blocks a write or
+// their turn.
+export function saySecretMaskedOnce(projectDir: string, session?: string, message = false): void {
   if (isReadOnlyEngineProbe()) return;
   try {
     const chat = validSessionId(session) ?? resolveInvokingSessionId(projectDir);
     if (chat === null) return;
-    if (personLineHeardThisTurn(projectDir, chat, SECRET_MASKED_LINE) ||
+    if ((!message && personLineHeardThisTurn(projectDir, chat, SECRET_MASKED_LINE)) ||
       pendingPersonLines(projectDir, chat).lines.includes(SECRET_MASKED_LINE)) return;
     if (addPendingPersonLines(projectDir, chat, [SECRET_MASKED_LINE])) {
       markPersonLineHeardThisTurn(projectDir, chat, SECRET_MASKED_LINE);
@@ -937,6 +997,26 @@ function tapAuditMetric(
     metrics.emitMetricForAuditEvent(eventType, fields, projectDir);
   } catch {
     // Metrics module missing or emit failed - never propagate.
+  }
+}
+
+// Each row a record gains goes to the open-question ledger the human-turn hook
+// stamps turns from (noteQuestionRow, aidlc-questions.ts), under the lock the
+// append holds. Lazy, like the metrics tap: a fixture without the module, or a
+// ledger that cannot be written, never blocks the row.
+function tapQuestionLedger(
+  eventType: string,
+  fields: Record<string, string>,
+  projectDir: string,
+  shardPath: string,
+): void {
+  try {
+    const questions = require("./aidlc-questions.ts") as {
+      noteQuestionRow: (projectDir: string, auditPath: string, event: string, fields: Record<string, string>) => void;
+    };
+    questions.noteQuestionRow(projectDir, shardPath, eventType, fields);
+  } catch {
+    // Bookkeeping for the hook's stamp only.
   }
 }
 
@@ -1036,13 +1116,15 @@ export function appendAuditEntryUnlocked(
   const entry = { eventType, fields };
   validateAuditEntry(entry);
   const ts = isoTimestamp();
+  const shardPath = auditFilePath(projectDir, intent, space);
   appendAuditBlockAtPath(
     projectDir,
-    auditFilePath(projectDir, intent, space),
+    shardPath,
     renderAuditBlock(entry, ts, projectDir),
   );
 
   tapAuditMetric(eventType, fields, projectDir);
+  tapQuestionLedger(eventType, fields, projectDir, shardPath);
 
   return { appended: true, event: eventType, timestamp: ts };
 }
@@ -1081,7 +1163,190 @@ interface AuditAppendExpectation extends AuditFileIdentity {
   prefixHash: string;
 }
 
+const AUDIT_SHARD_HEADER = "# AI-DLC Audit Log\n";
+
+function unheaded(block: string): string {
+  return block.replace(/^# AI-DLC Audit Log\r?\n/, "");
+}
+
+interface ClaimAuditRules {
+  takes(block: string): boolean;
+  baseHolds(path: string): boolean;
+}
+
+// A checkout that claimed a team Unit writes its whole log to a local record,
+// `<record>/.aidlc-engine/audit/<claim shard>` (auditFilePath), and the claim's
+// tracked shard of the same name, the one publish ships and pin reads, takes a
+// copy of each row pin accepts. The claim's rules (claimAuditRules, aidlc-unit.ts)
+// say which those are. A Bolt worktree of the Unit (aidlc-worktree create leaves
+// its .aidlc/worktree-meta.json) has no rules: it keeps only its local record,
+// since audit-merge copies the delta's rows pin takes into the main checkout's
+// tracked shard, and a second copy in the worktree's own would meet that one
+// when the Bolt lands.
+function claimOfLocalRecord(
+  projectDir: string,
+  shardPath: string,
+): { tracked: string; rules: ClaimAuditRules | null } | null {
+  const tracked = trackedTwin(shardPath);
+  if (tracked === null) return null;
+  if (insideBoltWorktree(projectDir)) return { tracked, rules: null };
+  const stamp = readApplicableTeamUnitScopeStamp(projectDir);
+  if (!stamp) return null;
+  // Loaded only here: a checkout with no claim never pays for the Unit tool.
+  const { claimAuditRules } = require("./aidlc-unit.ts") as {
+    claimAuditRules(
+      projectDir: string,
+      claim: { unit: string; generation: number; claimed_from_oid: string },
+    ): ClaimAuditRules;
+  };
+  return { tracked, rules: claimAuditRules(projectDir, stamp) };
+}
+
+// The tracked shard beside a local record, or null when the path is not one.
+function trackedTwin(shardPath: string): string | null {
+  const dir = dirname(shardPath);
+  if (basename(dir) !== "audit" || basename(dirname(dir)) !== ENGINE_DIR) return null;
+  return join(dirname(dirname(dir)), "audit", basename(shardPath));
+}
+
+function insideBoltWorktree(projectDir: string): boolean {
+  const metaPath = join(projectDir, ".aidlc", "worktree-meta.json");
+  if (!existsSync(metaPath)) return false;
+  try {
+    const meta = JSON.parse(
+      readRegularFileNoFollowOrThrow(metaPath, "worktree metadata").toString("utf-8"),
+    ) as { version?: unknown; intentRecord?: unknown };
+    return meta.version === 1 && typeof meta.intentRecord === "string";
+  } catch {
+    return false;
+  }
+}
+
+function readShardText(projectDir: string, path: string): string | null {
+  try {
+    assertNoSymlinkInChainOrThrow(realpathSync(projectDir), relative(projectDir, path));
+    return readAppendOnlyFileNoFollowOrThrow(path, "audit shard").toString("utf-8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+// Brings a local record and the tracked shard beside it into step. A local
+// record that does not exist yet starts as the tracked shard stands: rows
+// written before the claim (a fresh clone's own shard is the one its claim
+// binds), before the local record existed (a claim, or a Bolt worktree's fork,
+// an earlier AI-DLC made), or carried in by git. One that exists takes the
+// tracked shard's rows it lacks. Then the tracked shard keeps its header and the
+// rows the claim's pin takes, so a claim taken again (the next generation)
+// leaves the last one's receipts behind; never rewritten when the claim's base
+// commit holds it, or in a Bolt worktree, and its bytes kept when nothing drops.
+// The caller holds the audit lock.
+function startLocalRecordUnlocked(
+  projectDir: string,
+  localPath: string,
+  claim: { tracked: string; rules: ClaimAuditRules | null },
+): void {
+  const text = readShardText(projectDir, claim.tracked);
+  if (text === null) return;
+  const own = readShardText(projectDir, localPath);
+  if (own === null) {
+    writeAuditBlockAtPath(projectDir, localPath, unheaded(text));
+  } else {
+    const held = new Set(auditShardBlocks(own).map(unheaded));
+    const missing = auditShardBlocks(text)
+      .filter((block) => auditBlockField(block, "Timestamp") !== null && !held.has(unheaded(block)));
+    if (missing.length > 0) {
+      writeAuditBlockAtPath(projectDir, localPath, missing.map((block) => `${unheaded(block)}\n---\n`).join(""));
+    }
+  }
+  const rules = claim.rules;
+  if (rules === null || rules.baseHolds(relative(projectDir, claim.tracked).replaceAll("\\", "/"))) return;
+  const blocks = auditShardBlocks(text);
+  const keep = blocks.map((block) => block.trim().length === 0 || rules.takes(block));
+  if (keep.every(Boolean)) return;
+  const kept = blocks.filter((_, pos) => keep[pos]).join("\n---\n");
+  const trimmed = !keep[0] && unheaded(blocks[0]) !== blocks[0] ? AUDIT_SHARD_HEADER + kept : kept;
+  if (trimmed === text.replace(/\r\n/g, "\n")) return;
+  writeBufferAtomic(claim.tracked, Buffer.from(trimmed, "utf-8"));
+}
+
+// The claim brings its checkout's local record and tracked shard into step
+// (finalizeClaimCheckout), so the rows written before it, and a last
+// generation's receipts, leave the tracked shard at once. Best-effort: the
+// first write starts a local record that is not there yet.
+export function startClaimLocalRecord(projectDir: string): void {
+  try {
+    if (!acquireAuditLock(projectDir)) return;
+    try {
+      const localPath = auditFilePath(projectDir);
+      const claim = claimOfLocalRecord(projectDir, localPath);
+      if (claim) startLocalRecordUnlocked(projectDir, localPath, claim);
+    } finally {
+      releaseAuditLock(projectDir);
+    }
+  } catch {
+    // The first write starts it.
+  }
+}
+
+// Audit fork and merge read a Bolt worktree's record by its path before
+// anything writes there: one forked before the local record existed is still
+// in the tracked shard beside it. The caller holds the audit lock.
+function startWorktreeLocalRecord(projectDir: string, wtAuditPath: string): void {
+  const tracked = trackedTwin(wtAuditPath);
+  if (tracked !== null && !existsSync(wtAuditPath)) {
+    startLocalRecordUnlocked(projectDir, wtAuditPath, { tracked, rules: null });
+  }
+}
+
+// Adopt: the local record a teammate's publication hands over joins this
+// checkout's own (its bytes, kept), as the rows it lacks, in their order; a
+// checkout with none takes the handed-over record whole. Nothing is copied to
+// the tracked shard: the claim commit already carries those rows there.
+export function takeHandedOverAuditRows(projectDir: string, localPath: string, handedOver: string): void {
+  if (!acquireAuditLock(projectDir)) throw new Error("Failed to acquire audit lock after retries");
+  try {
+    let own = "";
+    try {
+      assertNoSymlinkInChainOrThrow(realpathSync(projectDir), relative(projectDir, localPath));
+      own = readAppendOnlyFileNoFollowOrThrow(localPath, "audit shard").toString("utf-8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    const held = new Set(auditShardBlocks(own).map(unheaded));
+    const missing = auditShardBlocks(handedOver)
+      .filter((block) => auditBlockField(block, "Timestamp") !== null && !held.has(unheaded(block)));
+    if (missing.length === 0) return;
+    writeAuditBlockAtPath(
+      projectDir,
+      localPath,
+      own === "" ? unheaded(handedOver) : missing.map((block) => `${unheaded(block)}\n---\n`).join(""),
+    );
+  } finally {
+    releaseAuditLock(projectDir);
+  }
+}
+
 function appendAuditBlockAtPath(
+  projectDir: string,
+  shardPath: string,
+  block: string,
+  expectedIdentity?: AuditAppendExpectation,
+): void {
+  refuseEngineObserverWrite("appendAuditBlockAtPath");
+  const claim = claimOfLocalRecord(projectDir, shardPath);
+  if (claim && !existsSync(shardPath)) startLocalRecordUnlocked(projectDir, shardPath, claim);
+  writeAuditBlockAtPath(projectDir, shardPath, block, expectedIdentity);
+  const rules = claim?.rules;
+  if (!claim || !rules) return;
+  const evidence = auditShardBlocks(block).filter((part) => rules.takes(part));
+  if (evidence.length > 0) {
+    writeAuditBlockAtPath(projectDir, claim.tracked, evidence.map((part) => `${part}\n---\n`).join(""));
+  }
+}
+
+function writeAuditBlockAtPath(
   projectDir: string,
   shardPath: string,
   block: string,
@@ -1237,6 +1502,7 @@ export function appendAuditEntryAtPathUnlocked(
     renderAuditBlock(entry, ts, projectDir),
   );
   tapAuditMetric(eventType, fields, projectDir);
+  tapQuestionLedger(eventType, fields, projectDir, shardPath);
   return { appended: true, event: eventType, timestamp: ts };
 }
 
@@ -1263,9 +1529,11 @@ export function appendAuditEntries(
         renderAuditBlock(entry, timestamps[index], projectDir)
       )
       .join("");
-    appendAuditBlockAtPath(projectDir, auditFilePath(projectDir, intent, space), payload);
+    const shardPath = auditFilePath(projectDir, intent, space);
+    appendAuditBlockAtPath(projectDir, shardPath, payload);
     for (const entry of entries) {
       tapAuditMetric(entry.eventType, entry.fields, projectDir);
+      tapQuestionLedger(entry.eventType, entry.fields, projectDir, shardPath);
     }
     return {
       appended: true,
@@ -1383,7 +1651,7 @@ function handleAppendRaw(
     }
     if (VALID_EVENT_TYPES.has(value)) {
       jsonError(
-        `append-raw refuses a body carrying **Event**: ${value} — that line would register as a ` +
+        `append-raw refuses a body carrying **Event**: ${value} - that line would register as a ` +
           "canonical audit event to every reader. Emit taxonomy events through their owning tool " +
           "(or `append` for diagnostic types); append-raw is for free-form notes only."
       );
@@ -1461,7 +1729,7 @@ function parseSlugFlag(args: string[], subcommand: string): string {
     }
   }
   if (!slug) {
-    jsonError(`Usage: aidlc-audit ${subcommand} --slug <slug> [--project-dir <path>]`);
+    jsonError(`Usage: ${aidlcDispatcherInvocation("audit")} ${subcommand} --slug <slug> [--project-dir <path>]`);
   }
   const err = validateBoltSlug(slug);
   if (err) {
@@ -1689,6 +1957,8 @@ function handleAuditFork(args: string[], projectDir: string): void {
   const recordPrefix = relativeRecordDir(projectDir, intent, space);
 
   const mainAuditPath = auditFilePath(projectDir, intent, space);
+  // A claim an earlier AI-DLC took kept this record in the tracked shard.
+  startClaimLocalRecord(projectDir);
 
   // Pre-emit guards (fail clean before any audit side-effect).
   if (!existsSync(mainAuditPath)) {
@@ -1696,7 +1966,7 @@ function handleAuditFork(args: string[], projectDir: string): void {
   }
   if (!existsSync(wtPath)) {
     jsonError(
-      `worktree directory not found at ${wtPath}; run aidlc-worktree create first`
+      `worktree directory not found at ${wtPath}; run ${aidlcDispatcherInvocation("worktree create")} first`
     );
   }
 
@@ -1780,6 +2050,7 @@ function handleAuditFork(args: string[], projectDir: string): void {
       recordPrefix,
       scopeStamp ? wtPath : projectDir,
     );
+    startWorktreeLocalRecord(projectDir, wtAuditPath);
 
     const before = readAuditSnapshot(projectDir, mainAuditPath);
     if (existsSync(wtAuditPath)) {
@@ -1976,6 +2247,15 @@ function handleAuditMerge(args: string[], projectDir: string): void {
     recordPrefix,
     scopeStamp ? wtPath : projectDir,
   );
+  // A Bolt an earlier AI-DLC forked kept both records in the tracked shards.
+  startClaimLocalRecord(projectDir);
+  if (acquireAuditLock(projectDir, undefined, undefined, intent, space)) {
+    try {
+      startWorktreeLocalRecord(projectDir, wtAuditPath);
+    } finally {
+      releaseAuditLock(projectDir, intent, space);
+    }
+  }
 
   if (!existsSync(wtAuditPath)) {
     jsonError(`worktree audit not found at ${wtAuditPath}; nothing to merge`);
@@ -2209,14 +2489,7 @@ function handleHistory(args: string[], projectDir: string): void {
       if ("heading" in row) {
         return { ...entry, heading: row.heading, text: row.text };
       }
-      const fields: Record<string, string> = Object.create(null);
-      for (const match of row.block.matchAll(/^(?:- )?\*\*([^*\n]+)\*\*:/gm)) {
-        const name = match[1];
-        if (name !== "Timestamp" && name !== "Event") {
-          fields[name] = auditBlockField(row.block, name)!;
-        }
-      }
-      return { ...entry, fields };
+      return { ...entry, fields: rowFields(row.block) };
     }).filter(
       (entry) => (stage === undefined || ("fields" in entry && entry.fields.Stage === stage)) &&
         (events.size === 0 || events.has(entry.event)),
@@ -2230,9 +2503,75 @@ function handleHistory(args: string[], projectDir: string): void {
   }
 }
 
+function rowFields(block: string): Record<string, string> {
+  const fields: Record<string, string> = Object.create(null);
+  for (const match of block.matchAll(/^(?:- )?\*\*([^*\n]+)\*\*:/gm)) {
+    const name = match[1];
+    if (name !== "Timestamp" && name !== "Event") {
+      fields[name] = auditBlockField(block, name)!;
+    }
+  }
+  return fields;
+}
+
+// --- Subcommand: turns ---
+
+// The person's turns with what they sent. The committed audit keeps no words
+// (#1505): they live in this machine's message record, which the row names by
+// its Message Id, so they read only here. A record expires after a day and
+// never leaves the clone that wrote it, so an older turn, or one from another
+// clone, says its words are not here. A record from another chat is never
+// joined to a row. Read-only, and deliberately not a delegate's verb.
+function handleTurns(args: string[], projectDir: string): void {
+  const { readMessage } = require("./aidlc-message-store.ts") as typeof import("./aidlc-message-store.ts");
+  let limit: number | undefined;
+  for (let i = 0; i < args.length; i += 2) {
+    if (args[i] !== "--limit") jsonError(`Unknown turns argument: ${args[i]}`);
+    const value = args[i + 1];
+    if (!value || !/^[1-9][0-9]*$/.test(value) || !Number.isSafeInteger(Number(value))) {
+      jsonError("--limit must be a positive integer.");
+    }
+    limit = Number(value);
+  }
+  try {
+    const rows = sortAttemptEvents(readActiveAuditShardEvents(projectDir));
+    const turns = rows.flatMap((row) => {
+      if ("heading" in row || row.event !== "HUMAN_TURN") return [];
+      const fields = rowFields(row.block);
+      const id = fields["Message Id"];
+      const record = id ? readMessage(projectDir, id) : null;
+      const sameChat = record !== null && (record.session ?? undefined) === (fields.Session || undefined);
+      return [{
+        timestamp: row.timestamp,
+        fields,
+        ...(sameChat
+          ? {
+            message: {
+              at: record.at,
+              source: record.source,
+              text: record.text,
+              words: record.words,
+              picker: record.picker,
+              ...(record.cut ? { cut: true } : {}),
+            },
+          }
+          : { message: null, message_unavailable: id ? "not on this machine, or expired" : "no message record" }),
+      }];
+    });
+    jsonSuccess({
+      data_notice: UNTRUSTED_AUDIT_NOTICE,
+      turns: limit === undefined ? turns : turns.slice(-limit),
+    });
+  } catch (e) {
+    jsonError(errorMessage(e));
+  }
+}
+
 // --- CLI entry point ---
 
 export function main(argv: string[]): void {
+  // A turn Claude Code started itself is settled before this command reads a turn.
+  settleClaudeTurnsFirst(resolveProjectDir(projectDirFlag(argv)));
   const rawArgs = argv;
 
   // Extract --project-dir before general parsing
@@ -2251,7 +2590,7 @@ export function main(argv: string[]): void {
   const subcommand = filteredArgs[0];
 
   if (!subcommand) {
-    jsonError("Usage: aidlc-audit <append|append-batch|append-raw|history|audit-fork|audit-merge> [args...]");
+    jsonError(`Usage: ${aidlcDispatcherInvocation("audit")} <append|append-batch|append-raw|history|turns|audit-fork|audit-merge> [args...]`);
   }
 
   switch (subcommand) {
@@ -2259,10 +2598,14 @@ export function main(argv: string[]): void {
       handleHistory(filteredArgs.slice(1), projectDir);
       break;
 
+    case "turns":
+      handleTurns(filteredArgs.slice(1), projectDir);
+      break;
+
     case "append": {
       const eventType = filteredArgs[1];
       if (!eventType) {
-        jsonError("Usage: aidlc-audit append <event-type> [--field key=value ...]");
+        jsonError(`Usage: ${aidlcDispatcherInvocation("audit")} append <event-type> [--field key=value ...]`);
       }
       refuseReservedCliEvent(eventType);
       const fields = parseFieldArgs(rawArgs);
@@ -2273,7 +2616,7 @@ export function main(argv: string[]): void {
     case "append-batch": {
       const entries = filteredArgs[1];
       if (!entries) {
-        jsonError("Usage: aidlc-audit append-batch <entries-json>");
+        jsonError(`Usage: ${aidlcDispatcherInvocation("audit")} append-batch <entries-json>`);
       }
       refuseReservedCliBatch(entries);
       handleAppendBatch(entries, projectDir);
@@ -2285,7 +2628,7 @@ export function main(argv: string[]): void {
       const body = filteredArgs[2];
       if (!heading || !body) {
         jsonError(
-          "Usage: aidlc-audit append-raw <heading> <body>"
+          `Usage: ${aidlcDispatcherInvocation("audit")} append-raw <heading> <body>`
         );
       }
       handleAppendRaw(heading, body, projectDir);
@@ -2301,7 +2644,7 @@ export function main(argv: string[]): void {
       break;
 
     default:
-      jsonError(`Unknown subcommand: ${subcommand}. Expected: append, append-batch, append-raw, history, audit-fork, audit-merge`);
+      jsonError(`Unknown subcommand: ${subcommand}. Expected: append, append-batch, append-raw, history, turns, audit-fork, audit-merge`);
   }
 }
 
