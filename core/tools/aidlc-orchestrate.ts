@@ -722,6 +722,10 @@ import {
   GitWriteRefused,
   earlyBaseMerged,
   mainMovedRepos,
+  forkOfferOf,
+  toForkDueMark,
+  toForkMark,
+  toForkMessage,
   teamMergeSeen,
   moveRefusedMark,
   shareBlocker,
@@ -10713,6 +10717,45 @@ function unitMainMovedAsk(projectDir: string, stateContent: string): AskDirectiv
   };
 }
 
+// A take its record's repository refused for want of access, where the
+// person's clone of that repository has a fork (the take kept toForkDueMark):
+// the offer to push the Unit's branch there early, once, its empty commit's
+// message drafted first. Putting it is what lets `unit push --to-fork` act.
+// Never in an unattended run.
+function unitToForkAsk(projectDir: string, stateContent: string): AskDirective | PrintDirective | null {
+  const build = unitBuildOf(stateContent);
+  if (process.env.AIDLC_UNATTENDED === "1" || build === null) return null;
+  const unit = build.unit;
+  if (engineAskMark(projectDir, toForkDueMark(unit)) === null || engineAskMark(projectDir, toForkMark(unit)) !== null) return null;
+  const branch = unitBranchOf(stateContent, unit);
+  const offer = forkOfferOf(projectDir, build, branch);
+  if (offer === null) return null;
+  const today = toForkMessage(unit);
+  const message = offer.own ? null : commitMessageStep(projectDir, commitMessageFile(projectDir, "fork"), today,
+    (file) => commitDraftStep("the empty commit's message", joinRepoNames([offer.name]), `the start of ${unit}, with nothing in it yet`, file, today));
+  if (message !== null && "draft" in message) return message.draft;
+  noteEngineAskMark(projectDir, toForkMark(unit));
+  const unitTool = aidlcToolInvocation("unit");
+  return {
+    kind: "ask",
+    ask_type: "unit-to-fork",
+    response_route: "command",
+    question: `Your clone of ${offer.name} has a remote, ${offer.fork}, at ${offer.forkAddress}, which is not the address ` +
+      `the plan has for ${offer.name}. Do you want me to push ${offer.exists ? `${unit}'s branch` : `a branch for ${unit}`} there now` +
+      `${message === null ? "" : ", with one empty commit on it,"} for an early pull request?${message === null ? "" : ` Its message:\n\n${message.text}`}`,
+    choices: [
+      {
+        label: `Push it to ${offer.fork}`,
+        detail: `Makes branch ${branch} from ${offer.from}${message === null ? "," : " with that one empty commit,"} with your own git, and ` +
+          `pushes it to ${offer.fork}. Opening the pull request stays with you. You're on ${branch} after it.`,
+        command: `${unitTool} push --to-fork${message?.flag ?? ""}`,
+      },
+      { label: "Not now", detail: "Nothing is pushed and no commit is made; say when you want it pushed.", command: `${unitTool} push --to-fork --later` },
+    ],
+    ...(message?.file === undefined ? {} : { commit_message_file: message.file }),
+  };
+}
+
 // After that offer, while its push stands or a merge of that branch waits on
 // the Unit's branch: the commands for the agent when the person asks in words.
 function mainMovedNote(projectDir: string): string | null {
@@ -15110,6 +15153,12 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   const clone = stateContent !== null && !isReadOnlyEngineProbe() ? unitCloneAsk(pd, stateContent) : null;
   if (clone) {
     emit(clone);
+    return;
+  }
+  // A take refused for access, with a fork in the person's clone: the early push there is offered once.
+  const toFork = stateContent !== null && !isReadOnlyEngineProbe() ? unitToForkAsk(pd, stateContent) : null;
+  if (toFork) {
+    emit(toFork);
     return;
   }
   // A Unit it started early on, merged at the home: moving onto what merged is offered once.

@@ -10952,14 +10952,15 @@ export function unitDefaultMessage(stateContent: string): string {
 
 // The file a commit's message is drafted in, in the request-text folder the
 // agent writes the person's words to. A Unit's push has one per build (its
-// record), so a file left by another build is never this one's; the share's
-// and the record's commits have one per offer (`key`, the offer's own once),
-// so a draft is only ever shown for the change it was written for.
-export type CommitMessageKind = "push" | "share" | "record";
+// record), and so has its early push to a fork, so a file left by another
+// build is never this one's; the share's and the record's commits have one per
+// offer (`key`, the offer's own once), so a draft is only ever shown for the
+// change it was written for.
+export type CommitMessageKind = "push" | "fork" | "share" | "record";
 export function commitMessageFile(projectDir: string, kind: CommitMessageKind = "push", key?: string): string | null {
-  if (kind !== "push") return key === undefined ? null : unitWordsFile(`${kind}-message`, key);
+  if (kind !== "push" && kind !== "fork") return key === undefined ? null : unitWordsFile(`${kind}-message`, key);
   const record = recordDir(projectDir);
-  return record === null ? null : unitWordsFile("push-message", basename(record));
+  return record === null ? null : unitWordsFile(`${kind}-message`, basename(record));
 }
 
 // A message as git commits it (`git stripspace`, its own whitespace cleanup):
@@ -11634,6 +11635,16 @@ function takeUnit(args: string[], projectDir?: string, rhythm?: UnitClaimPayload
   // A take of a closed plan's Unit goes ahead as asked, and says the close first; the build does not hear it again.
   const closed = fromPlan ? planClosedBy(pd, copyOf(home.location, planRecordRef(home.id8))) : null;
   if (closed !== null) withWorkPinned({ space: build.space, intent: build.dirName }, () => noteEngineAskMark(pd, planClosedHeardMark(closed.at)));
+  // A take its record's repository refused for want of access (a host rule
+  // on the record's ref alone is not that), where the person's clone of that
+  // repository has a fork: the next step offers once to push the Unit's
+  // branch there early (the fork offer).
+  if (notRecorded !== null && !("byRule" in pushed)) {
+    withWorkPinned({ space: build.space, intent: build.dirName }, () => {
+      const made = unitBuildOf(readStateFile(pd));
+      if (made !== null && forkPlaceOf(pd, made) !== null) noteEngineAskMark(pd, toForkDueMark(unit));
+    });
+  }
   const taken = `${closed === null ? "" : `The plan of ${closed.label} in ${closed.repo} was closed by ${closed.name}, ${closed.day}, so its Units are no longer offered. `}` +
     `${src.moved === undefined ? "" : `${src.moved} `}${unit} is yours. You build it${spaceWords(build.space)} under your team's rules${leadsToo}, from what the lead approved.` +
     // The way back (release, run in this build), said once with the take.
@@ -13319,11 +13330,20 @@ function hookRefused(dir: string, said: string): boolean {
 
 // What the build's last push of `unit` on `branch` left in each repository, by
 // its own UNIT_PUSHED row, written once every repository's push went: the head
-// it pushed, per repository. Empty with no such row.
+// it pushed, per repository. With no such row, the early push to the person's
+// fork, which writes none (it sends no result): the head its mark is named
+// with, where the clone's copy of the fork's branch still holds it. The mark
+// is on this computer only. Empty with neither.
 export function lastPushedHeads(pd: string, unit: string, branch: string): Map<string, string> {
   const row = sortAttemptEvents(readAuditShardEvents(pd)).findLast((entry) => entry.event === "UNIT_PUSHED" &&
     auditBlockField(entry.block, "Unit") === unit && auditBlockField(entry.block, "Branch") === branch);
-  const pairs = (row === undefined ? "" : auditBlockField(row.block, "Repos") ?? "").split(",").map((pair) => pair.trim()).filter(Boolean);
+  if (row === undefined) {
+    const build = unitBuildOf(readStateFile(pd));
+    const fork = build === null || engineAskMark(pd, toForkMark(unit)) === null ? null : forkPlaceOf(pd, build);
+    const head = fork === null ? "" : git(fork.dir, ["rev-parse", "--verify", "--quiet", `refs/remotes/${fork.fork}/${branch}^{commit}`]).stdout.trim();
+    return fork !== null && head !== "" && engineAskMark(pd, toForkPushedMark(unit, head)) !== null ? new Map([[fork.name, head]]) : new Map();
+  }
+  const pairs = (auditBlockField(row.block, "Repos") ?? "").split(",").map((pair) => pair.trim()).filter(Boolean);
   return new Map(pairs.map((pair) => [pair.slice(0, pair.lastIndexOf("@")), pair.slice(pair.lastIndexOf("@") + 1)]));
 }
 
@@ -13393,22 +13413,75 @@ export function remoteMainOf(dir: string, address: string, remote?: string): str
   return /^ref: refs\/heads\/(\S+)\s+HEAD/m.exec(said)?.[1] ?? "main";
 }
 
-// The plan's main for a Unit's repository, fetched with the person's git:
-// through the clone's remote at the plan's address, or, in a clone of the fork
-// alone, by that address, with nothing added to the clone's settings. The
-// commit to start from and its name for their lines, else git's words.
-function planMainOf(dir: string, repo: string, planAddress: string, named: string | null): { start: string; named: string } | { said: string } {
+// The plan's main for a Unit's repository as the person's clone reaches it:
+// the clone's remote at the plan's address (none in a clone of the fork
+// alone), the branch, and its name for their lines.
+export function planMainIn(dir: string, repo: string, planAddress: string, named: string | null): { remote?: string; branch: string; named: string } {
   const remote = git(dir, ["remote"]).stdout.split(/\r?\n/).map((name) => name.trim()).filter(Boolean)
     .find((name) => sameGitAddress(git(dir, ["remote", "get-url", name]).stdout.trim(), planAddress));
   const branch = named || remoteMainOf(dir, planAddress, remote);
-  const fetched = git(dir, ["fetch", "-q", "--no-tags", remote ?? planAddress, branch]);
-  if (!fetched.ok) return { said: fetched.stderr || fetched.stdout };
-  const start = git(dir, ["rev-parse", "--verify", "--quiet", remote === undefined ? "FETCH_HEAD^{commit}" : `refs/remotes/${remote}/${branch}^{commit}`]).stdout.trim();
-  return { start, named: remote === undefined ? `the plan's ${repo} ${branch}` : `${remote}/${branch}` };
+  return { remote, branch, named: remote === undefined ? `${branch} in the plan's ${repo}` : `${remote}/${branch}` };
 }
 
-// The engine mark the fork offer keeps once it is put for a Unit's build.
+// That main fetched with the person's git, by its remote or, in a clone of the
+// fork alone, by the plan's address, with nothing added to the clone's
+// settings: the commit to start from and its name, else the line saying git's words.
+function planMainOf(dir: string, repo: string, planAddress: string, named: string | null): { start: string; named: string } | { said: string } {
+  const main = planMainIn(dir, repo, planAddress, named);
+  const fetched = git(dir, ["fetch", "-q", "--no-tags", main.remote ?? planAddress, main.branch]);
+  if (!fetched.ok) {
+    return { said: `${main.remote === undefined ? `${main.branch} could not be fetched from the plan's ${repo}` : `${main.named} could not be fetched in ${repo}`}: ` +
+      `git says "${gitSaid(fetched.stderr || fetched.stdout)}". Nothing was pushed. Say when to try again.` };
+  }
+  const start = git(dir, ["rev-parse", "--verify", "--quiet",
+    main.remote === undefined ? "FETCH_HEAD^{commit}" : `refs/remotes/${main.remote}/${main.branch}^{commit}`]).stdout.trim();
+  return { start, named: main.named };
+}
+
+// The engine mark the fork offer keeps once it is put for a Unit's build:
+// the yes acts on it alone. The take keeps the other, that the offer is due,
+// so a remote added later never brings the offer mid-build.
 export const toForkMark = (unit: string): string => `unit-to-fork-${unit}`;
+export const toForkDueMark = (unit: string): string => `unit-to-fork-due-${unit}`;
+// The early push's own mark, named with the head it pushed (lastPushedHeads).
+const toForkPushedMark = (unit: string, head: string): string => `unit-to-fork-pushed-${unit}-${head.slice(0, 12)}`;
+
+// Where a Unit's build would push its branch early: the person's clone of the
+// repository its record goes to, the plan's address and branch for it, and
+// the clone's fork. Null where there is no such fork. Local reads only.
+export function forkPlaceOf(pd: string, build: UnitBuild):
+  { name: string; dir: string; address: string; branch: string | null; fork: string; forkAddress: string } | null {
+  const home = buildsHome(pd, build);
+  const place = recordPlaceOf(pd, home, build.unit);
+  const copy = isGitAddress(build.homeLocation) ? copyOf(build.homeLocation, planRecordRef(idSuffix(build.homeWork))) : null;
+  const kept = copy === null ? null : planAtCopy(pd, copy, { commit: planCommitOf(pd, copy) });
+  const planned = kept?.kind === "read" ? kept.plan.repos.find((repo) => repo.name === place.repo) : undefined;
+  const dir = repoDir(pd, place.repo);
+  if (!planned?.address || !isGitRepoDir(dir)) return null;
+  const fork = forkRemoteOf(dir, planned.address);
+  if (fork === null) return null;
+  return { name: place.repo, dir, address: planned.address, branch: planned.branch || null, fork,
+    forkAddress: withoutCredentials(git(dir, ["remote", "get-url", fork]).stdout.trim()) };
+}
+
+// What the fork offer says, read with no fetch: that place, the plan's main by
+// name, whether the Unit's branch is there yet, and whether it has a commit of
+// its own already (then the yes makes no empty commit). In a clone of the fork
+// alone the plan's main is not read before the yes, so a branch there counts
+// as its own.
+export function forkOfferOf(pd: string, build: UnitBuild, branch: string):
+  (NonNullable<ReturnType<typeof forkPlaceOf>> & { from: string; exists: boolean; own: boolean }) | null {
+  const place = forkPlaceOf(pd, build);
+  if (place === null) return null;
+  const main = planMainIn(place.dir, place.name, place.address, place.branch);
+  const exists = git(place.dir, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).ok;
+  const own = exists && (main.remote === undefined ||
+    git(place.dir, ["rev-list", "--count", `refs/heads/${branch}`, "--not", `refs/remotes/${main.remote}/${main.branch}`]).stdout.trim() !== "0");
+  return { ...place, from: main.named, exists, own };
+}
+
+// The empty commit's message where the person gives none.
+export const toForkMessage = (unit: string): string => `${unit}: start`;
 
 // `unit push --to-fork`: the person's yes to pushing the Unit's branch early to
 // their fork, in their clone of the repository that refused the take's record:
@@ -13416,44 +13489,41 @@ export const toForkMark = (unit: string): string => `unit-to-fork-${unit}`;
 // empty commit on it where it has none of its own, then pushed with `-u` to
 // the fork, so the Unit's own push later goes there too. Only on the offer's
 // mark; an agent alone pushes nothing. The record, the plan and the result
-// are not touched; a refused push takes the empty commit back.
+// are not touched; a refused push takes the empty commit back. Not now
+// (`--later`) removes the message's draft.
 function pushToFork(pd: string, args: string[], build: UnitBuild, branch: string): void {
   const unit = build.unit;
-  if (engineAskMark(pd, toForkMark(unit)) === null) {
+  const { bareFlags, flags } = parseArgs(args);
+  if (bareFlags.has("later") || flags.later !== undefined) {
+    const file = commitMessageFile(pd, "fork");
+    const draft = file === null || !existsSync(join(pd, ...file.split("/"))) ? null : readRequestFile(pd, file);
+    if (draft !== null && typeof draft !== "string") draft.spend();
+    console.log(JSON.stringify({ pushed: false, unit, notice: "Nothing is pushed and no commit is made; say when you want it pushed." }));
+    return;
+  }
+  const forkPlace = engineAskMark(pd, toForkMark(unit)) === null ? null : forkPlaceOf(pd, build);
+  if (forkPlace === null) {
     console.log(JSON.stringify({ pushed: false, unit, notice: `No push of ${unit} to a fork was offered or asked for, so nothing was pushed.` }));
     return;
   }
-  const home = buildsHome(pd, build);
-  const place = recordPlaceOf(pd, home, unit);
-  const copy = isGitAddress(build.homeLocation) ? copyOf(build.homeLocation, planRecordRef(idSuffix(build.homeWork))) : null;
-  const kept = copy === null ? null : planAtCopy(pd, copy, { commit: planCommitOf(pd, copy) });
-  const planned = kept?.kind === "read" ? kept.plan.repos.find((repo) => repo.name === place.repo) : undefined;
-  const dir = repoDir(pd, place.repo);
-  const fork = planned?.address && isGitRepoDir(dir) ? forkRemoteOf(dir, planned.address) : null;
-  if (planned?.address == null || fork === null) {
-    console.log(JSON.stringify({ pushed: false, unit, notice: `No push of ${unit} to a fork was offered or asked for, so nothing was pushed.` }));
-    return;
-  }
-  const name = place.repo;
+  const { name, dir, fork } = forkPlace;
   const given = givenCommitMessage(pd, args, "push");
-  const main = planMainOf(dir, name, planned.address, planned.branch ?? null);
-  if ("said" in main) {
-    fail(`The plan's main for ${name} could not be fetched: git says "${gitSaid(main.said)}". Nothing was pushed. Say when to try again.`);
-  }
+  const main = planMainOf(dir, name, forkPlace.address, forkPlace.branch);
+  if ("said" in main) fail(main.said);
   const from = git(dir, ["branch", "--show-current"]).stdout.trim();
   const made = startUnitBranch(dir, branch, fork, [], main.start, { fetch: () => {}, leavesNothing: () => true, fromHere: false, track: false });
-  if (!made.switched) fail(`Branch ${branch} could not be made in ${name}, so nothing was pushed. Git says: "${gitSaid(made.said)}".`);
+  if (!made.switched) fail(`Branch ${branch} could not be made in ${name}: git says "${gitSaid(made.said)}". Nothing was pushed. Say when to try again.`);
   const moved = from === branch ? [] : [{ name, from: from || "the commit you were on" }];
   const before = git(dir, ["rev-parse", "HEAD"]).stdout.trim();
   // One empty commit, only where the branch has nothing of its own beyond the plan's main.
   const empty = git(dir, ["rev-list", "--count", `${main.start}..HEAD`]).stdout.trim() === "0";
   if (empty) {
-    const committed = git(dir, ["commit", "-q", "--allow-empty", "-F", "-"], undefined, given?.text ?? `${unit}: start`);
+    const committed = git(dir, ["commit", "-q", "--allow-empty", "-F", "-"], undefined, given?.text ?? toForkMessage(unit));
     if (!committed.ok) {
       const said = committed.stderr || committed.stdout;
       fail((hookRefused(dir, said)
-        ? `Your hook in ${name} did not take the empty commit's message (${gitSaid(said)}), so nothing was pushed. If it is the ` +
-          "message, tell me the one to use, and I will commit with that."
+        ? `Your hook in ${name} did not take the empty commit (${gitSaid(said)}), so nothing was pushed. If it is its ` +
+          "message, tell me the one to use, and I will commit with that and push."
         : `The empty commit could not be made in ${name}: git says "${gitSaid(said)}". Nothing was pushed. Say when to try again.`) +
         whereNowLine(branch, moved));
     }
@@ -13465,10 +13535,11 @@ function pushToFork(pd: string, args: string[], build: UnitBuild, branch: string
       `${empty ? " The empty commit is taken back, and nothing was pushed." : " Nothing was pushed."} Say when to try again.${whereNowLine(branch, moved)}`);
   }
   given?.spend();
+  noteEngineAskMark(pd, toForkPushedMark(unit, git(dir, ["rev-parse", "HEAD"]).stdout.trim()));
   const words = hostLinkWords(pushed.stderr, branch);
   console.log(JSON.stringify({ pushed: true, unit, notice: joinSaid([
-    `Pushed branch ${branch} to ${fork} in ${name}${empty ? ", with one empty commit," : ""} from ${main.named}.`,
-    words === "" ? "Open a PR in it your usual way." : hostSaysLine(null, words),
+    `Pushed branch ${branch} to ${fork} in ${name}. It starts from ${main.named}${empty ? " and has one empty commit on it" : ""}.`,
+    words === "" ? "Open a PR from it your usual way." : hostSaysLine(null, words),
     whereNowLine(branch, moved).trimStart(),
   ]) }));
 }

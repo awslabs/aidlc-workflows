@@ -814,7 +814,12 @@ again (`unit push --merge-main`); a clash is left for you to resolve. Where
 the branch on the remote still holds the build pushed before (a redo from the
 newer main after a turn-down), the push asks whether to replace it, keeping its
 pull request (`unit push --replace`, only over what this computer last pushed
-there, never over a commit someone else added), or to push a new branch. A
+there, never over a commit someone else added), or to push a new branch. Where
+your take could not be written because that repository takes no push from you,
+and your clone of it has your fork as its one other remote, the step after the
+take offers once to push a branch for the Unit to your fork early, with one
+empty commit on it, for a pull request you open yourself (`unit push
+--to-fork`); a replace of that branch later is known on this computer only. A
 later push from the branch you went back to takes the Unit's files Code
 Generation changed there onto its branch as they are; when changes of your own
 are in the way, it stops with git's words, nothing moves, and the push is

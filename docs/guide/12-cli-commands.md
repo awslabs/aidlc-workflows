@@ -49,7 +49,7 @@ diagnostic and lifecycle routes.
 | `/aidlc --release <unit>` | Release a live Unit claim from unscoped main by publishing a tombstone |
 | `/aidlc unit assign --here <unit>` | At the lead's project, build a Unit here: its claim is taken for the lead's project, like any take |
 | `/aidlc unit take <unit> --plan <work id> --from <address>` | Take a Unit of the lead's plan, shared in the code repository at that address, as your team's own piece of work, or carry its build on |
-| `/aidlc unit push [--later] [--remote <repo>=<name>] [--branch <name>] [--commit-message-file <file>] [--finish-merge] [--merge-main] [--undo-merge] [--replace]` | In a Unit's build, commit and push exactly its files on its branch in each repo, and send the result back to the lead's project |
+| `/aidlc unit push [--later] [--remote <repo>=<name>] [--branch <name>] [--commit-message-file <file>] [--finish-merge] [--merge-main] [--undo-merge] [--replace] [--to-fork]` | In a Unit's build, commit and push exactly its files on its branch in each repo, and send the result back to the lead's project |
 | `/aidlc unit send-back <unit>` | At the lead's project, send a team's Unit back from Build and Test in the failure's words |
 | `/aidlc unit propose --input <file>` | In a Unit's build, send the lead a change to an input the Unit was approved with |
 | `/aidlc unit rebase` | In a Unit's build started early, move it onto the branch the Unit it waited on merged into |
@@ -839,6 +839,7 @@ the build; you can also run it yourself, for example after a review fix:
 /aidlc unit push --merge-main
 /aidlc unit push --undo-merge
 /aidlc unit push --replace
+/aidlc unit push --to-fork
 ```
 
 The commit message: with `--commit-message-file`, the Unit's commit takes the
@@ -909,6 +910,20 @@ workspace's own repository, with AI-DLC's record commit on top; or a clean merge
 of main the offer above made), so a commit anyone else put there, in any
 repository, replaces nothing anywhere. The branch a repository merges into is
 never replaced. The push line names the commit the branch was at before.
+
+When the repository a Unit's record goes to takes no push from you, and your
+clone of it has one remote that is not at the plan's address (your fork), the
+step after the take offers once to push a branch for the Unit there early, for
+a pull request of your own, with one empty commit on it (its message drafted
+for you; yours replaces it). On yes, `--to-fork` fetches the plan's main with
+your own git, makes the Unit's branch from it without tracking the plan's
+remote, makes the empty commit only where the branch has nothing of its own,
+and pushes it to the fork with its upstream there, so the Unit's own push later
+goes there too. Opening the pull request stays with you. A refused push takes
+the empty commit back. Not now (`--to-fork --later`) pushes nothing and removes
+the draft. A later replace of that branch (after a rebase onto the plan's main,
+say) is leased on what the early push left there; that is known on this
+computer only, so from another computer of yours the push offers a new branch.
 
 The branch is named after the Unit unless you name it: when your team's
 branches follow a rule of their own (a pre-push hook, or the host, wants

@@ -1004,7 +1004,19 @@ is `ask_type: unit-main-moved` once for that push, and its choice runs `unit pus
 repository checked before any is merged, `git merge --no-edit` with their git, a
 clash left under way for them (`--merge-main` again finishes it, `--undo-merge`
 takes it back out on their word), then a plain push; nothing of the Unit's is
-committed, sent to its record or written in its audit. At the home, a claim with a proposal nobody answered makes the
+committed, sent to its record or written in its audit. When a take's record
+write was refused for want of access (never a host rule on the record's refs
+alone) and the person's clone of that record's repository has one remote not at
+the plan's address (`forkPlaceOf`), the take keeps an engine mark that the fork
+offer is due; the next step drafts the empty commit's message (its own file,
+`unit-fork-message-<record>.txt`) and is then `ask_type: unit-to-fork` once,
+never in an unattended run, the fork's address printed with no user name or
+token. Putting it is what lets `unit push --to-fork` act (`pushToFork`): the
+plan's main fetched with the person's git, the Unit's branch made from it with
+`--no-track`, one empty commit only where the branch has none of its own, and
+`git push -u` to the fork; no audit row is written, and an engine mark named
+with the head it pushed lets a later `--replace` lease on it (`lastPushedHeads`)
+while no `UNIT_PUSHED` row exists. At the home, a claim with a proposal nobody answered makes the
 step `ask_type: unit-amend` (noted with an engine ask mark; after the person
 spoke without answering, the step carries one line instead and the board's
 `offers` carry the answer), with `amend_command` for the person's words and the

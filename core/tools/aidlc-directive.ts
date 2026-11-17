@@ -886,6 +886,16 @@ export interface UnitMainMovedAskDirective extends AskDirectiveBase {
   choices: AskChoice[];
 }
 
+// A take its record's repository refused for want of access, with a fork in
+// the person's clone of it: push the Unit's branch there early, or not now.
+export interface UnitToForkAskDirective extends AskDirectiveBase {
+  ask_type: "unit-to-fork";
+  response_route: "command";
+  choices: AskChoice[];
+  /** The empty commit's message file: the message the question shows, which the push choice's command carries. */
+  commit_message_file?: string;
+}
+
 // A Unit's likely repos not checked out here: clone them where repos.json puts
 // them, or not now.
 export interface UnitCloneAskDirective extends AskDirectiveBase {
@@ -1020,6 +1030,7 @@ export type AskDirective =
   | UnitProposeAskDirective
   | UnitMoveOntoAskDirective
   | UnitMainMovedAskDirective
+  | UnitToForkAskDirective
   | UnitCloneAskDirective
   | UnitAmendAskDirective
   | UnitSignoffAskDirective
@@ -1872,7 +1883,7 @@ export function ceremonyNote(state: "on" | "off", questionsOnly = false): string
 // the numbers: a reply of "2" is read against this order, and the agent
 // renders nothing of its own. One builder, so every question has one shape.
 // Engine questions answered by running the picked choice's command.
-const COMMAND_CHOICE_ASKS = new Set(["construction-staffing", "repo-scope", "units-repos", "unit-plan-change", "repos-manifest", "unit-take", "unit-push", "unit-amend", "unit-signoff", "unit-turned-down", "unit-propose", "unit-move-onto", "unit-main-moved", "unit-clone", "lead-plan-change"]);
+const COMMAND_CHOICE_ASKS = new Set(["construction-staffing", "repo-scope", "units-repos", "unit-plan-change", "repos-manifest", "unit-take", "unit-push", "unit-amend", "unit-signoff", "unit-turned-down", "unit-propose", "unit-move-onto", "unit-main-moved", "unit-to-fork", "unit-clone", "lead-plan-change"]);
 
 export interface AskChoice {
   label: string;
@@ -2451,7 +2462,7 @@ export function validateDirective(obj: unknown): ValidationResult {
           : null;
         if (commandField !== null) checkString(o, commandField, kind, errors);
         // The asks whose question ends in a commit AI-DLC makes for the person.
-        const committing = o.ask_type === "unit-push" || o.ask_type === "repos-manifest";
+        const committing = o.ask_type === "unit-push" || o.ask_type === "repos-manifest" || o.ask_type === "unit-to-fork";
         if (committing && o.commit_message_file !== undefined) checkString(o, "commit_message_file", kind, errors);
         rejectUnexpected(String(o.ask_type), {
           ...(commandField !== null ? { [commandField]: true } : {}),
