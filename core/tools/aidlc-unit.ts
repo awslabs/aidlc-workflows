@@ -305,6 +305,7 @@ import {
   claimPrefixOf,
   CLAIM_RECORD_BRANCHES,
   claimRecordRef,
+  PLAN_BRANCHES,
   claimsOnRemote,
   isClaimTreeFile,
   leadsPlanNotHere,
@@ -8991,7 +8992,7 @@ function cloneSpelling(projectDir: string, address: string, use: "fetch" | "push
 // rules and the commit it took from. A look that does not finish puts back
 // every copy it took. A record is read in both forms, its ref and its branch
 // (where a repository takes only branches), each into a copy of its own; the
-// copy every reader reads holds the one that counts (recordFormsCounted).
+// copy every reader reads holds the one that counts (formsCounted).
 export type LookResult =
   | { ok: true; refs: Record<string, { now: string | null; was: string | null }> }
   // git's own words, sign-in masked, and its first line for a line that says
@@ -9003,8 +9004,12 @@ export type LookResult =
 function lookRefspecs(address: string, ref: string): string[] {
   const key = repoCopyKey(address);
   const plan = /^refs\/aidlc\/plans\/([^/*]+)$/.exec(ref);
-  if (plan !== null) return [`+${ref}*:refs/aidlc/home/${plan[1]}*/${key}/plan`];
-  if (/^refs\/aidlc\/plans\/$/.test(ref)) return [`+refs/aidlc/plans/*:refs/aidlc/home/*/${key}/plan`];
+  // The plan's branch is <id8>-<label>: the star after the dash, so a branch of
+  // another work whose id starts the same never lands here.
+  if (plan !== null) return [`+${ref}*:refs/aidlc/home/${plan[1]}*/${key}/plan`, `+${PLAN_BRANCHES}${plan[1]}-*:refs/aidlc/home/${plan[1]}-*/${key}/on-branch/plan`];
+  if (/^refs\/aidlc\/plans\/$/.test(ref)) {
+    return [`+refs/aidlc/plans/*:refs/aidlc/home/*/${key}/plan`, `+${PLAN_BRANCHES}*:refs/aidlc/home/*/${key}/on-branch/plan`];
+  }
   const record = /^refs\/aidlc\/claims\/([^/]+)\/([^/]*)$/.exec(ref);
   const onBranch = record === null ? [] :
     [`+${CLAIM_RECORD_BRANCHES}${record[1]}/${record[2]}*:${homeCopyOnBranchName(record[1], key, `claims/${record[2]}`)}*`];
@@ -9035,18 +9040,24 @@ function copiesPutBack(pd: string, key: string, was: LookCopies): void {
   }
 }
 
-// A record the repository holds as a branch counts where it has no ref, or
-// where the branch moved on from the ref's commit; otherwise the ref counts
-// (two writers at one moment). The look's own fetch just took away the copy of
-// a ref the repository does not have, so the copy every reader reads is the
-// ref's exactly when the repository has the ref.
+// A record or a plan the repository holds as a branch counts where it has no
+// ref, or where the branch moved on from the ref's commit; otherwise the ref
+// counts (two writers at one moment). The look's own fetch just took away the
+// copy of a ref the repository does not have, so the copy every reader reads
+// is the ref's exactly when the repository has the ref. Two branches of one
+// plan (another label) leave the branch form unread: no guess between them.
 // `copies` is the listing after the fetch, kept as what readers now read.
-function recordFormsCounted(pd: string, address: string, refs: readonly string[], copies: LookCopies): void {
-  const looked = refs.filter((ref) => ref.startsWith("refs/aidlc/claims/"));
+function formsCounted(pd: string, address: string, refs: readonly string[], copies: LookCopies): void {
+  const looked = refs.filter((ref) => ref.startsWith("refs/aidlc/claims/") || ref.startsWith("refs/aidlc/plans/"));
+  const plans = new Map<string, number>();
+  for (const name of copies.onBranch.keys()) {
+    const copy = homeCopyOnBranchOf(name);
+    if (copy?.kind === "plan") plans.set(copy.id8, (plans.get(copy.id8) ?? 0) + 1);
+  }
   for (const [name, oid] of copies.onBranch) {
     const copy = homeCopyOnBranchOf(name);
-    if (copy?.kind !== "record") continue;
-    const record = claimRecordRef(copy.id8, copy.unit);
+    if (copy === null || (copy.kind === "plan" && plans.get(copy.id8) !== 1)) continue;
+    const record = copy.kind === "plan" ? planRecordRef(copy.id8) : claimRecordRef(copy.id8, copy.unit);
     if (!looked.some((ref) => record.startsWith(ref))) continue;
     const reads = copyOf(address, record);
     const ref = copies.reads.get(reads);
@@ -9089,7 +9100,7 @@ export function lookAt(projectDir: string, address: string, refs: readonly strin
     return { ok: false, said, firstLine: maskUserinfo(stderr.trim().split(/\r?\n/)[0]?.trim() ?? "") || said };
   }
   const has = copiesAt(projectDir, key);
-  recordFormsCounted(projectDir, address, refs, has);
+  formsCounted(projectDir, address, refs, has);
   const after = has.reads;
   const found: Record<string, { now: string | null; was: string | null }> = {};
   const copyName = (ref: string): string => (/^refs\/aidlc\/plans\/[^/]+$/.test(ref) || /^refs\/aidlc\/claims\/[^/]+\/[^/]+$/.test(ref) ? copyOf(address, ref) : "");
@@ -9108,10 +9119,15 @@ export function lookAt(projectDir: string, address: string, refs: readonly strin
       found[remote] = { now: after.get(name) ?? null, was: before.get(name) ?? null };
     }
   }
-  // A plan the remote no longer has keeps its copy here.
+  // A plan the remote no longer has keeps its copy here, and the copy of the
+  // branch it was read from, so a share again knows the form it had.
   for (const [ref, seen] of Object.entries(found)) {
     if (seen.now === null && seen.was !== null && /^refs\/aidlc\/plans\//.test(ref)) {
       localGit(projectDir, ["update-ref", copyOf(address, ref), seen.was]);
+      const id8 = ref.slice("refs/aidlc/plans/".length);
+      for (const [name, oid] of had.onBranch) {
+        if (homeCopyOnBranchOf(name)?.id8 === id8 && !has.onBranch.has(name)) localGit(projectDir, ["update-ref", name, oid]);
+      }
     }
   }
   return { ok: true, refs: found };

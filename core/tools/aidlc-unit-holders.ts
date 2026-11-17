@@ -79,6 +79,11 @@ export function claimRecordRef(id8: string, unit: string): string {
 // but a branch: the same commits as the ref would hold.
 export const CLAIM_RECORD_BRANCHES = "refs/heads/aidlc/claims/";
 
+// The plan as a branch people can open, or where its repository takes no ref
+// of AI-DLC's: named by the work's id and its label, the same commits as the
+// plan's ref would hold.
+export const PLAN_BRANCHES = "refs/heads/aidlc/plans/";
+
 // The plan a lead shares with the teams, in one code repository.
 export function planRecordRef(id8: string): string {
   return `refs/aidlc/plans/${id8}`;
@@ -96,13 +101,19 @@ export type HomeCopy = { id8: string; key: string; kind: "plan" } | { id8: strin
 
 // The copy of what a look read from a branch, beside the one every reader
 // reads (homeCopyName), so the next look's prune of one form never takes the
-// other's and the look can tell which form the repository holds.
+// other's and the look can tell which form the repository holds. A record's
+// is in its work's folder; the plan's in a folder named as its branch is
+// (<id8>-<label>), since a fetch by a pattern can fill no other name, and
+// never at <id8>/<key>/on-branch/plan, which every look's prune would take.
 export function homeCopyOnBranchName(id8: string, key: string, tail: string): string {
   return `refs/aidlc/home/${id8}/${key}/on-branch/${tail}`;
 }
 
-// The one reading of an on-branch copy's name.
-export function homeCopyOnBranchOf(ref: string): HomeCopy | null {
+// The one reading of an on-branch copy's name; a plan's carries the label of
+// the branch it was read from.
+export function homeCopyOnBranchOf(ref: string): (HomeCopy & { label?: string }) | null {
+  const plan = /^refs\/aidlc\/home\/([0-9a-f]{8})-([^/]+)\/([0-9a-f]{12})\/on-branch\/plan$/.exec(ref);
+  if (plan !== null) return { id8: plan[1], key: plan[3], kind: "plan", label: plan[2] };
   const at = /^refs\/aidlc\/home\/([^/]+)\/([0-9a-f]{12})\/on-branch\/claims\/([^/]+)$/.exec(ref);
   return at === null ? null : { id8: at[1], key: at[2], kind: "record", unit: at[3] };
 }

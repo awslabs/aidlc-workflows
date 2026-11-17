@@ -19,8 +19,10 @@ import {
   ENV,
   git,
   inSpace,
+  makePlanHome,
   makePlanHomeWithRemote,
   next,
+  planRefOf,
   recordHostOf,
   refundsTaken,
   run,
@@ -209,5 +211,89 @@ describe("a record written where its repository takes no ref of AI-DLC's", () =>
     expect(String(sent.json?.notice)).toContain(`checkout-api did not take refunds's record out of its branch list (`);
     expect(String(sent.json?.notice)).toContain(`so the record there is the branch aidlc/claims/${home.id8}/refunds. It is not for merging.`);
     expect(has(host, branchOf(home.id8, "refunds"))).toBe(true);
+  });
+});
+
+// The plan at `host` moved from its ref to its branch, aidlc/plans/<id8>-<label>.
+function planAsBranch(host: string, id8: string, label = "fixture"): string {
+  const tip = git(host, ["rev-parse", planRefOf(id8)]);
+  git(host, ["update-ref", `refs/heads/aidlc/plans/${id8}-${label}`, tip]);
+  git(host, ["update-ref", "-d", planRefOf(id8)]);
+  return tip;
+}
+
+// plan.json at `tip` as `edit` leaves it, one commit on `parent` (none: a root) at `host`.
+function planCommit(host: string, tip: string, edit: (plan: { units: Array<{ name: string; word: Record<string, unknown> }> }) => void, parent: string | null): string {
+  const out = (args: string[], input?: string): string => spawnSync("git", args, { cwd: host, encoding: "utf-8", env: SOMEONE, input }).stdout.trim();
+  const plan = JSON.parse(git(host, ["show", `${tip}:plan.json`]));
+  edit(plan);
+  const blob = out(["hash-object", "-w", "--stdin"], `${JSON.stringify(plan, null, 2)}\n`);
+  const entries = out(["ls-tree", tip]).split("\n").map((line) => (line.endsWith("\tplan.json") ? `100644 blob ${blob}\tplan.json` : line));
+  return out(["commit-tree", out(["mktree"], `${entries.join("\n")}\n`), ...(parent === null ? [] : ["-p", parent]), "-m", "aidlc plan fixture 9: by hand"]);
+}
+
+const starts = (step: Record<string, unknown>): string[] =>
+  ((step.choices ?? []) as Array<{ label: string }>).map((choice) => choice.label).filter((label) => label.startsWith("Start "));
+
+describe("a plan its repository holds as a branch", () => {
+  test("is found by a teammate's look and its Units are offered, and a take reads it there", () => {
+    const home = makePlanHome();
+    const host = home.hosts["checkout-api"];
+    planAsBranch(host, home.id8);
+    const sam = teamWorkspace(home.hosts, "sam", ["checkout-api"]);
+    const step = next(sam, ENV, ["--units"]);
+    expect(starts(step), JSON.stringify(step).slice(0, 600)).toContain("Start checkout-ui");
+    const took = run(UNIT, ["take", "checkout-ui", "--plan", home.id8, "--from", host], sam);
+    expect(took.status, took.out).toBe(0);
+    expect(took.out).toContain("checkout-ui is yours.");
+  });
+
+  test("a branch that moved on from the ref's commit counts; one with a history of its own beside the ref does not", () => {
+    const home = makePlanHome();
+    const host = home.hosts["checkout-api"];
+    const ref = git(host, ["rev-parse", planRefOf(home.id8)]);
+    const done = (plan: { units: Array<{ name: string; word: Record<string, unknown> }> }): void => {
+      for (const unit of plan.units) if (unit.name === "checkout-ui") unit.word = { done: true };
+    };
+    const branch = `refs/heads/aidlc/plans/${home.id8}-fixture`;
+    git(host, ["update-ref", branch, planCommit(host, ref, done, null)]);
+    const sam = teamWorkspace(home.hosts, "sam", ["checkout-api"]);
+    expect(starts(next(sam, ENV, ["--units"]))).toContain("Start checkout-ui");
+    git(host, ["update-ref", branch, planCommit(host, ref, done, ref)]);
+    expect(starts(next(sam, { ...ENV, AIDLC_SESSION_OVERRIDE: "sam-later" }, ["--units"]))).not.toContain("Start checkout-ui");
+  });
+
+  test("gone from its repository in both forms: a build says so and keeps the copies it read", () => {
+    const home = makePlanHome();
+    const host = home.hosts["checkout-api"];
+    planAsBranch(host, home.id8);
+    const pay = teamWorkspace(home.hosts, "pay", ["billing"]);
+    expect(run(UNIT, ["take", "refunds", "--plan", home.id8, "--from", host], pay).status).toBe(0);
+    const copy = `refs/aidlc/home/${home.id8}-fixture/${repoCopyKey(host)}/on-branch/plan`;
+    expect(git(pay, ["rev-parse", copy])).toBe(home.plan!);
+    git(host, ["update-ref", "-d", `refs/heads/aidlc/plans/${home.id8}-fixture`]);
+    const step = next(pay, { ...ENV, AIDLC_SESSION_OVERRIDE: "pay-later" }, ["--units"]);
+    expect((step.change_notices ?? []) as string[], JSON.stringify(step).slice(0, 800)).toContain(
+      "The plan of fixture is no longer in checkout-api. This build carries on from the copy here; no other Unit of it can be taken while it is gone.",
+    );
+    expect(git(pay, ["rev-parse", copy])).toBe(home.plan!);
+    expect(git(pay, ["rev-parse", `refs/aidlc/home/${home.id8}/${repoCopyKey(host)}/plan`])).toBe(home.plan!);
+  });
+
+  test("two branches of one plan, under two labels, and no ref: neither is read as the plan", () => {
+    const home = makePlanHome();
+    const host = home.hosts["checkout-api"];
+    const tip = planAsBranch(host, home.id8);
+    git(host, ["update-ref", `refs/heads/aidlc/plans/${home.id8}-another`, tip]);
+    const sam = teamWorkspace(home.hosts, "sam", ["checkout-api"]);
+    expect(starts(next(sam, ENV, ["--units"]))).toEqual([]);
+  });
+
+  test("the copy of a plan read from a branch is never kept under the work's own folder", () => {
+    const home = makePlanHome();
+    planAsBranch(home.hosts["checkout-api"], home.id8);
+    const sam = teamWorkspace(home.hosts, "sam", ["checkout-api"]);
+    next(sam, ENV, ["--units"]);
+    expect(git(sam, ["for-each-ref", "--format=%(refname)", `refs/aidlc/home/${home.id8}/`]).split("\n").filter((ref) => ref.includes("/on-branch/plan"))).toEqual([]);
   });
 });
