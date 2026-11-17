@@ -305,6 +305,33 @@ describe("the offer after the push, and its yes", () => {
     expect(git(hosts.billing, ["show", "refunds:README.md"])).toContain("Keeps two ledgers and refunds.");
   });
 
+  test("git refuses the merge commit for a reason of its own (signing): its words, the merge undone, never their hook's", () => {
+    const { alice, billing } = movedAndPushed();
+    next(alice);
+    git(billing, ["config", "commit.gpgsign", "true"]);
+    git(billing, ["config", "gpg.program", join(tempDir("no-gpg"), "gpg")]);
+    const refused = String(run(UNIT, ["push", "--merge-main"], alice).json?.error);
+    expect(refused).toStartWith('origin/main could not be merged into refunds in billing: git says "');
+    expect(refused).toContain("Nothing was merged or pushed. Say when to try again.");
+    expect(mergeWaits(billing)).toBe(false);
+  });
+
+  test("git refuses the finish of a merge she resolved for a reason of its own: its words, and the merge still waits as she resolved it", () => {
+    const { alice, billing } = movedAndPushed(true);
+    next(alice);
+    run(UNIT, ["push", "--merge-main"], alice);
+    const resolved = README.replace("Keeps a ledger.", "Keeps two ledgers and refunds.");
+    writeFileSync(join(billing, "README.md"), resolved);
+    git(billing, ["add", "README.md"]);
+    git(billing, ["config", "commit.gpgsign", "true"]);
+    git(billing, ["config", "gpg.program", join(tempDir("no-gpg"), "gpg")]);
+    const refused = String(run(UNIT, ["push", "--merge-main"], alice).json?.error);
+    expect(refused).toStartWith('The merge of origin/main into refunds in billing could not be finished: git says "');
+    expect(refused).toContain("It is still waiting there as you resolved it, and nothing was pushed. Say when to try again.");
+    expect(mergeWaits(billing)).toBe(true);
+    expect(readFileSync(join(billing, "README.md"), "utf-8")).toBe(resolved);
+  });
+
   test("the undo where git cannot take the waiting merge back out says git's words, and the merge still waits", () => {
     const { alice, billing } = movedAndPushed(true);
     next(alice);

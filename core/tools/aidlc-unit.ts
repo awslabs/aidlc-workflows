@@ -12655,6 +12655,16 @@ function pushUnit(args: string[], projectDir?: string): void {
   console.log(JSON.stringify({ pushed: true, unit, repos: results.map((repo) => repo.repo), ...(forNextStep ? {} : { notice: told }) }));
 }
 
+// Whether a commit git refused was refused by the person's own hook: a hook
+// that runs at a commit is there, and git printed no failure of its own (a
+// signing failure or no name and email set end in git's "fatal:"). Read from
+// what is on disk and git's own prefix, never from the hook's words.
+function hookRefused(dir: string, said: string): boolean {
+  const hooks = resolve(dir, git(dir, ["rev-parse", "--git-path", "hooks"]).stdout.trim());
+  return ["pre-commit", "prepare-commit-msg", "commit-msg", "pre-merge-commit"].some((name) => existsSync(join(hooks, name))) &&
+    !/^fatal: /m.test(said);
+}
+
 // What the build's last push of `unit` on `branch` left in each repository, by
 // its own UNIT_PUSHED row, written once every repository's push went: the head
 // it pushed, per repository. Empty with no such row.
@@ -12837,16 +12847,22 @@ function mergeMainIn(pd: string, args: string[], unit: string, branch: string, u
       if (!made.ok) {
         const said = gitSaid(made.stderr || made.stdout);
         clashed();
+        const byHook = hookRefused(dir, made.stderr || made.stdout);
         // Their own resolution is in a merge they finish: it waits as they left it, never undone.
         if (entry.step === "finish") {
-          stop(`Your hook in ${name} did not take the merge of ${into} into ${unit} (${said}), so the merge is still waiting there as ` +
-            "you resolved it, and nothing was pushed. If it is the merge's message, tell me the one to use, and I will finish it with that.");
+          stop(byHook
+            ? `Your hook in ${name} did not take the merge of ${into} into ${unit} (${said}), so the merge is still waiting there as ` +
+              "you resolved it, and nothing was pushed. If it is the merge's message, tell me the one to use, and I will finish it with that."
+            : `The merge of ${into} into ${unit} in ${name} could not be finished: git says "${said}". It is still waiting there as you ` +
+              "resolved it, and nothing was pushed. Say when to try again.");
         }
         // A merge this step just began holds nothing of theirs: it is undone.
         if (gitOperationUnderWay(dir)?.what === "a merge") {
           git(dir, ["merge", "--abort"]);
-          stop(`Your hook in ${name} did not take the merge of ${into} into ${unit} (${said}), so I undid it, and nothing was pushed. ` +
-            "If it is the merge's message, tell me the one to use, and I will merge with that.");
+          if (byHook) {
+            stop(`Your hook in ${name} did not take the merge of ${into} into ${unit} (${said}), so I undid it, and nothing was pushed. ` +
+              "If it is the merge's message, tell me the one to use, and I will merge with that.");
+          }
         }
         stop(`${into} could not be merged into ${unit} in ${name}: git says "${said}". Nothing was merged or pushed. Say when to try again.`);
       }
