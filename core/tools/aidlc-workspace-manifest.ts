@@ -60,8 +60,8 @@ export function reposManifestPath(root: string): string {
 // root. The two lines below are the only words about the move.
 const REPOS_IN_AIDLC_SINCE = { major: 2, minor: 12 };
 export const REPOS_MOVED_LINE =
-  `AI-DLC moved repos.json into aidlc/. Commit it so your team gets it; teammates need AI-DLC ` +
-  `${REPOS_IN_AIDLC_SINCE.major}.${REPOS_IN_AIDLC_SINCE.minor} or newer.`;
+  `AI-DLC moved repos.json into aidlc/ and did not commit the move. Teammates need AI-DLC ` +
+  `${REPOS_IN_AIDLC_SINCE.major}.${REPOS_IN_AIDLC_SINCE.minor} or newer to find it there.`;
 
 // The update's own commit (unit commit-record --update): the message it takes
 // when none was drafted, and the key of the file its message is drafted in.
@@ -126,7 +126,9 @@ export function leftFilesNamed(paths: readonly string[]): string {
 // nothing git tracks changed. `asking` with the move alone: the question that
 // offers the move with AI-DLC's record (`unit commit-record`). `update`: the
 // question that offers the update's own commit (`unit commit-record --update`)
-// on that branch, the move with it, naming the files it leaves.
+// on that branch, the move with it, naming the files it leaves. `later`, where
+// no question is put: the commit can run once their own git is ready, so the
+// line says AI-DLC makes it when they say.
 export function catchUpChangedLine(
   version: string,
   paths: readonly string[],
@@ -134,7 +136,9 @@ export function catchUpChangedLine(
   asking = false,
   withMessage = false,
   update?: { branch: string; left: readonly string[] },
+  later = false,
 ): string | null {
+  const whenSaid = (one: boolean): string => (later ? ` Say when you want me to commit ${one ? "it" : "them"}.` : "");
   const since = `${REPOS_IN_AIDLC_SINCE.major}.${REPOS_IN_AIDLC_SINCE.minor}`;
   // With the commit message the hook drafts for the move, which the agent shows after the question.
   const offer = `Want me to commit the move, with AI-DLC's record in aidlc/${withMessage ? ", using this commit message" : ""}?`;
@@ -145,7 +149,7 @@ export function catchUpChangedLine(
       return `AI-DLC moved repos.json into aidlc/. Want me to commit the move on ${update.branch}, as one commit of its own? ` +
         `Nothing is pushed. Teammates need AI-DLC ${since} or newer to find it there.${withMessage ? " I'd use this commit message:" : ""}`;
     }
-    return asking ? `AI-DLC moved repos.json into aidlc/. ${offer} Teammates need AI-DLC ${since} or newer to find it there.` : REPOS_MOVED_LINE;
+    return asking ? `AI-DLC moved repos.json into aidlc/. ${offer} Teammates need AI-DLC ${since} or newer to find it there.` : `${REPOS_MOVED_LINE}${whenSaid(true)}`;
   }
   const folders = new Map<string, number>();
   const roots: string[] = [];
@@ -170,10 +174,10 @@ export function catchUpChangedLine(
       `${moved ? ` Teammates need AI-DLC ${since} or newer to find repos.json there.` : ""}${withMessage ? " I'd use this commit message:" : ""}`;
   }
   if (moved) {
-    return `${head}, and repos.json moved into aidlc/. Commit them so your team gets them; teammates need AI-DLC ` +
-      `${REPOS_IN_AIDLC_SINCE.major}.${REPOS_IN_AIDLC_SINCE.minor} or newer to find repos.json there.`;
+    return `${head}, and repos.json moved into aidlc/. AI-DLC committed none of it. Teammates need AI-DLC ${since} or newer ` +
+      `to find repos.json there.${whenSaid(false)}`;
   }
-  return `${head}. ${paths.length === 1 ? "Commit it so your team gets it." : "Commit them so your team gets them."}`;
+  return `${head}. AI-DLC did not commit ${paths.length === 1 ? "it" : "them"}.${whenSaid(paths.length === 1)}`;
 }
 
 // Said when the person sets a project to an earlier release (a pin, `aidlc

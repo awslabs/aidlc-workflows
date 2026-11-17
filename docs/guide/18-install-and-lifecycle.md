@@ -1535,8 +1535,11 @@ leaves out, as it cannot be sure they hold only AI-DLC's changes: they are yours
 to look over and commit. A settings file the refresh merged that held your own
 uncommitted changes is one of them, and the rest is still offered. A no is not
 asked again for that release. Unattended, on no branch, or while a rebase, merge,
-cherry-pick or revert of yours is under way, it says the same line ending "Commit
-them so your team gets them." instead. opencode starts a chat without this
+cherry-pick or revert of yours is under way, it says the same line ending
+"AI-DLC did not commit them." instead; on no branch or with an operation under
+way it adds "Say when you want me to commit them.", and a yes once you are on a
+branch and the operation is over makes that commit, leaving out every settings
+file the refresh merged. opencode starts a chat without this
 context, so there the question comes with AI-DLC's next step in that chat, once a
 commit can run, and leaves out every settings file the refresh merged that git
 shows changed; the line comes with the next step too. Nothing is said when

@@ -103,18 +103,18 @@ describe("where the repo list is read", () => {
     expect(catchUpChangedLine("9.9.9", [], false)).toBeNull();
     expect(catchUpChangedLine("9.9.9", [], true)).toBe(REPOS_MOVED_LINE);
     expect(catchUpChangedLine("9.9.9", [".claude/tools/data/aidlc-stamp.json"], false)).toBe(
-      "AI-DLC updated its own files in this project to 9.9.9: 1 file under .claude changed. Commit it so your team gets it.",
+      "AI-DLC updated its own files in this project to 9.9.9: 1 file under .claude changed. AI-DLC did not commit it.",
     );
     expect(catchUpChangedLine("9.9.9", [".kiro/a.md", ".claude/a.md", "AGENTS.md", ".claude/b.md"], false)).toBe(
       "AI-DLC updated its own files in this project to 9.9.9: 2 files under .claude, 1 under .kiro and its part of AGENTS.md changed. " +
-        "Commit them so your team gets them.",
+        "AI-DLC did not commit them.",
     );
     expect(catchUpChangedLine("9.9.9", ["AGENTS.md"], false)).toBe(
-      "AI-DLC updated its own files in this project to 9.9.9: its part of AGENTS.md changed. Commit it so your team gets it.",
+      "AI-DLC updated its own files in this project to 9.9.9: its part of AGENTS.md changed. AI-DLC did not commit it.",
     );
     expect(catchUpChangedLine("9.9.9", [".claude/a.md", ".claude/b.md"], true)).toBe(
       "AI-DLC updated its own files in this project to 9.9.9: 2 files under .claude changed, and repos.json moved into aidlc/. " +
-        "Commit them so your team gets them; teammates need AI-DLC 2.12 or newer to find repos.json there.",
+        "AI-DLC committed none of it. Teammates need AI-DLC 2.12 or newer to find repos.json there.",
     );
   });
 
@@ -175,7 +175,7 @@ describe("the one move into aidlc/", () => {
     expect(git(dir, ["status", "--porcelain"])).toContain("R  repos.json -> aidlc/repos.json");
     expect(reposManifestMovedIntoAidlc(dir)).toBe(true);
     expect(REPOS_MOVED_LINE).toBe(
-      "AI-DLC moved repos.json into aidlc/. Commit it so your team gets it; teammates need AI-DLC 2.12 or newer.",
+      "AI-DLC moved repos.json into aidlc/ and did not commit the move. Teammates need AI-DLC 2.12 or newer to find it there.",
     );
     // A second run finds nothing to move.
     expect(moveReposManifestIntoAidlc(dir)).toEqual({ moved: false, tracked: false });

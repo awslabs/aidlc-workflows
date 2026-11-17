@@ -34,7 +34,7 @@ import {
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const SKIP_REASON = gitBashSkipReason();
-const MOVED = "AI-DLC moved repos.json into aidlc/. Commit it so your team gets it; teammates need AI-DLC 2.12 or newer.";
+const MOVED = "AI-DLC moved repos.json into aidlc/ and did not commit the move. Teammates need AI-DLC 2.12 or newer to find it there.";
 const SESSION = "00000000-0000-4000-8000-00000000ca7c";
 
 let root = "";
@@ -124,13 +124,15 @@ function project(
   return dir;
 }
 
-// The catch-up's line for what changed under .claude, as git now shows it.
-function catchUpSaid(dir: string, moved: boolean): string {
+// The catch-up's line for what changed under .claude, as git now shows it, with the offer for later where the
+// commit can run once their own git is ready.
+function catchUpSaid(dir: string, moved: boolean, later = false): string {
   const n = git(dir, ["status", "--porcelain", "-uall", "--", ".claude"]).split("\n").filter(Boolean).length;
   const head = `AI-DLC updated its own files in this project to ${AIDLC_VERSION}: ${n} file${n === 1 ? "" : "s"} under .claude changed`;
-  return moved
-    ? `${head}, and repos.json moved into aidlc/. Commit them so your team gets them; teammates need AI-DLC 2.12 or newer to find repos.json there.`
-    : `${head}. ${n === 1 ? "Commit it so your team gets it." : "Commit them so your team gets them."}`;
+  const line = moved
+    ? `${head}, and repos.json moved into aidlc/. AI-DLC committed none of it. Teammates need AI-DLC 2.12 or newer to find repos.json there.`
+    : `${head}. ${n === 1 ? "AI-DLC did not commit it." : "AI-DLC did not commit them."}`;
+  return later ? `${line} Say when you want me to commit ${n === 1 && !moved ? "it" : "them"}.` : line;
 }
 
 // The catch-up's question: the update's own commit of the files the refresh changed, on the branch, the list's move
@@ -269,15 +271,18 @@ describe.skipIf(SKIP_REASON !== null)("each project catches up the next time it 
     try {
       const quiet = sessionStart(unattended, "catch-up, unattended");
       expect(quiet.stdout).toContain("TELL ONCE");
-      expect(quiet.stdout).toContain("Commit them so your team gets them");
+      expect(quiet.stdout).toContain(catchUpSaid(unattended, true));
       expect(quiet.stdout).not.toContain("Want me to commit");
+      expect(quiet.stdout).not.toContain("Say when you want me to commit");
     } finally {
       env = saved;
     }
     const detached = project(earlierTree, { tracked: false });
     git(detached, ["checkout", "-q", "--detach"]);
     const away = sessionStart(detached, "catch-up, no branch");
-    expect(away.stdout).toContain(catchUpSaid(detached, false));
+    // Once HEAD is on a branch again the commit can run: the line says so, and the agent has the command for it.
+    expect(away.stdout).toContain(catchUpSaid(detached, false, true));
+    expect(away.stdout).toMatch(/When they ask for that commit, run `[^`]* unit commit-record --update` and tell them in plain words what it reports\./);
     expect(away.stdout).not.toContain("Want me to commit");
     const held = project(earlierTree, { tracked: false });
     const settings = join(held, ".claude", "settings.json");

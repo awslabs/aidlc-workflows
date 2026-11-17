@@ -563,6 +563,26 @@ describe("the question after an update", () => {
     );
   });
 
+  // Where no question is put: what AI-DLC did, and where the commit can run later (no branch, a git operation of
+  // theirs under way, once it is over), that it can make it when they say.
+  test("the line where no question is put, with the offer for later where the commit can run then", () => {
+    expect(catchUpChangedLine("2.12.1", [".claude/a.md"], false)).toBe(`${head} 1 file under .claude changed. AI-DLC did not commit it.`);
+    expect(catchUpChangedLine("2.12.1", [".claude/a.md", ".claude/b.md"], false, false, false, undefined, true)).toBe(
+      `${head} 2 files under .claude changed. AI-DLC did not commit them. Say when you want me to commit them.`,
+    );
+    expect(catchUpChangedLine("2.12.1", [".claude/a.md"], true, false, false, undefined, true)).toBe(
+      `${head} 1 file under .claude changed, and repos.json moved into aidlc/. AI-DLC committed none of it. ` +
+        "Teammates need AI-DLC 2.12 or newer to find repos.json there. Say when you want me to commit them.",
+    );
+    expect(catchUpChangedLine("2.12.1", [], true)).toBe(
+      "AI-DLC moved repos.json into aidlc/ and did not commit the move. Teammates need AI-DLC 2.12 or newer to find it there.",
+    );
+    expect(catchUpChangedLine("2.12.1", [], true, false, false, undefined, true)).toBe(
+      "AI-DLC moved repos.json into aidlc/ and did not commit the move. Teammates need AI-DLC 2.12 or newer to find it there. " +
+        "Say when you want me to commit it.",
+    );
+  });
+
   test("the move alone where the record's commit does not run", () => {
     expect(catchUpChangedLine("2.12.1", [], true, true, true, { branch: "refunds", left: [] })).toBe(
       "AI-DLC moved repos.json into aidlc/. Want me to commit the move on refunds, as one commit of its own? Nothing is pushed. " +
