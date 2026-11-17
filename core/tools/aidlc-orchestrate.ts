@@ -656,6 +656,7 @@ import {
   leadPlanChange,
   planChangeQuestion,
   planEndNow,
+  planTakeDownAsk,
   planMark,
   takePlanNotes,
   planNoRemoteLine,
@@ -9991,8 +9992,12 @@ function homesOnDisk(projectDir: string): Array<{ intent: IntentInfo; space: str
 function planEndsOwed(pd: string): AskDirective | null {
   if (isReadOnlyEngineProbe()) return null;
   for (const { intent, space } of homesOnDisk(pd)) {
-    const end = planEndNow(pd, { space, dirName: intent.dirName!, uuid: intent.uuid });
+    const work = { space, dirName: intent.dirName!, uuid: intent.uuid };
+    const end = planEndNow(pd, work);
     if (end !== null && "line" in end) sayWithStepOnce(pd, end.line);
+    // A closed plan still on its branch: asked once whether to take the branch down.
+    const down = end === null || !("change" in end) ? planTakeDownAsk(pd, work) : null;
+    if (down !== null) return { kind: "ask", ask_type: "lead-plan-change", response_route: "command", question: down.question, choices: down.choices };
     if (end === null || !("change" in end)) continue;
     const asked = withWorkPinned({ space, intent: intent.dirName! }, () => {
       const name = planMark("asked", end.change.tip);

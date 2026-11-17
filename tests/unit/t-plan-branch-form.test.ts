@@ -29,6 +29,7 @@ import {
   run,
   teamWorkspace,
   UNIT,
+  UTILITY,
 } from "../harness/team-build.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -422,5 +423,54 @@ describe("the work's label as one part of a branch name", () => {
     expect(planBranchLabel("checkout revamp v2.")).toBe("checkout-revamp-v2");
     expect(planBranchLabel("..lock")).toBe("lock");
     expect(planBranchLabel("/")).toBe("plan");
+  });
+});
+
+describe("a closed plan still on its branch", () => {
+  const archive = (dir: string) => run(UTILITY, ["intent", "archive", HOME_RECORD], dir);
+  const choice = (step: Record<string, unknown>, label: string): string =>
+    ((step.choices ?? []) as Array<{ label: string; command: string }>).find((entry) => entry.label === label)!.command;
+  const asks = "Do you want me to take the branch down? The plan stays in checkout-api out of the branch list, with its history.";
+
+  test("the lead is asked once whether to take the branch down; the yes puts the plan in its ref and takes the branch down", () => {
+    const home = makePlanHome();
+    const host = home.hosts["checkout-api"];
+    planAsBranch(host, home.id8);
+    next(home.dir, { ...ENV, AIDLC_SESSION_OVERRIDE: "lead-1" });
+    const archived = archive(home.dir);
+    expect(archived.status, archived.out).toBe(0);
+    expect(archived.out).toContain("Written on the plan: fixture is closed.");
+    const branch = `refs/heads/aidlc/plans/${home.id8}-fixture`;
+    const closed = git(host, ["rev-parse", branch]);
+    const ask = next(home.dir, { ...ENV, AIDLC_SESSION_OVERRIDE: "lead-2" });
+    expect(String(ask.question), JSON.stringify(ask).slice(0, 600)).toBe(
+      `The plan of fixture is closed and still on the branch aidlc/plans/${home.id8}-fixture in checkout-api. ${asks}`);
+    expect(JSON.stringify(next(home.dir, { ...ENV, AIDLC_SESSION_OVERRIDE: "lead-3" }))).not.toContain(asks);
+    expect(choice(ask, "Take the branch down")).toEndWith(` share --plan --off-branch --tip ${closed}`);
+    const down = run(UNIT, ["share", "--plan", "--off-branch", "--tip", closed], home.dir);
+    expect(down.status, down.out).toBe(0);
+    expect(String(down.json?.notice)).toContain("is out of the branch list now, with its history");
+    expect(git(host, ["rev-parse", planRefOf(home.id8)])).toBe(closed);
+    expect(has(host, branch)).toBe(false);
+  });
+
+  test("a plan that changed since the question: its branch is not taken down, and nothing is written", () => {
+    const home = makePlanHome();
+    const host = home.hosts["checkout-api"];
+    planAsBranch(host, home.id8);
+    next(home.dir, { ...ENV, AIDLC_SESSION_OVERRIDE: "lead-1" });
+    expect(archive(home.dir).status).toBe(0);
+    const branch = `refs/heads/aidlc/plans/${home.id8}-fixture`;
+    const asked = git(host, ["rev-parse", branch]);
+    expect(String(next(home.dir, { ...ENV, AIDLC_SESSION_OVERRIDE: "lead-2" }).question)).toContain(asks);
+    git(host, ["update-ref", branch, planCommit(host, asked, (plan) => {
+      plan.units[0].word = { note: "later" };
+    }, asked)]);
+    const down = run(UNIT, ["share", "--plan", "--off-branch", "--tip", asked], home.dir);
+    expect(down.status).not.toBe(0);
+    expect(String(down.json?.error)).toBe("The plan in checkout-api has changed since you were asked, so its branch is not taken down. " +
+      "Say if you still want it off the branch.");
+    expect(has(host, branch)).toBe(true);
+    expect(has(host, planRefOf(home.id8))).toBe(false);
   });
 });

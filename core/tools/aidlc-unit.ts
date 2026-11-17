@@ -6933,11 +6933,20 @@ export function planBranchLabel(label: string): string {
   return label.replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "plan";
 }
 
-// `unit share --plan --off-branch`: the lead's plan, on its branch in its
-// repository, goes to the plan's ref there as it is, its history with it (no
-// commit is written), then the branch is deleted with a lease on that tip: one
-// atomic push where the host takes it, else the two in turn.
-function planOffBranch(pd: string): void {
+// `unit share --plan --off-branch [--tip <plan commit>]`: the lead's plan, on
+// its branch in its repository, goes to the plan's ref there as it is, its
+// history with it (no commit is written), then the branch is deleted with a
+// lease on that tip: one atomic push where the host takes it, else the two in
+// turn. `--tip`: the plan commit the lead's yes was about (the question after
+// the close), which names the work wherever the chat is.
+function planOffBranch(pd: string, tipAsked?: string): void {
+  if (tipAsked !== undefined && !/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(tipAsked)) fail(`usage: ${unitUsage("share")}`);
+  const work = tipAsked === undefined ? null : planTipWork(pd, tipAsked);
+  if (work === null) planOffBranchNow(pd, tipAsked);
+  else withWorkPinned({ space: work.space, intent: work.dirName }, () => planOffBranchNow(pd, tipAsked));
+}
+
+function planOffBranchNow(pd: string, tipAsked?: string): void {
   const place = planPlaceForShare(pd);
   if ("refused" in place) fail(`usage: ${unitUsage("share")}`);
   const notOn = `The plan in ${place.repo} is not on a branch, so there is nothing to take down.`;
@@ -6950,6 +6959,9 @@ function planOffBranch(pd: string): void {
   const branch = look.tip === null ? null : planBranchAt(pd, place);
   if (look.tip === null || branch === null) fail(notOn);
   const tip = look.tip;
+  if (tipAsked !== undefined && tip !== tipAsked) {
+    fail(`The plan in ${place.repo} has changed since you were asked, so its branch is not taken down. Say if you still want it off the branch.`);
+  }
   // A change this computer did not write: the lead's question first, then the same step again.
   const read = planAtCopy(pd, place.copy, { commit: tip });
   const change = read.kind === "read" ? planChangeAt(pd, tip, read.plan).change : null;
@@ -7804,7 +7816,7 @@ function shareMain(args: string[], projectDir?: string): void {
     return;
   }
   if (flags.has("off-branch")) {
-    planOffBranch(pd);
+    planOffBranch(pd, parsed.flags.tip);
     return;
   }
   const refused = shareRefusal(pd, flags.has("plan"));
@@ -10439,6 +10451,33 @@ export function archiveEndLines(projectDir: string, work: { space: string; dirNa
     const named = underWay.map((claim) => (own.has(claim.unit) ? `${claim.unit}, your own build here` : `${claim.unit}, taken by ${builderOf(claim)}${spaceWords(claim.owner)}`));
     const shown = named.length > 10 ? [...named.slice(0, 10), `and ${named.length - 10} more`] : named;
     return [...lines, `As this computer last read them, these Units were under way: ${shown.join("; ")}. ${after}`];
+  });
+}
+
+// The question, once per close, after the close of a plan that is still on its
+// branch: whether to take the branch down; its yes is the off-branch step for
+// the plan commit asked about. Null where nothing is to ask.
+export function planTakeDownAsk(projectDir: string, work: { space: string; dirName: string; uuid: string }):
+  { question: string; choices: Array<{ label: string; detail: string; command: string }> } | null {
+  const pd = resolveProjectDir(projectDir);
+  return withWorkPinned({ space: work.space, intent: work.dirName }, () => {
+    const led = ledSharedPlan(pd, work);
+    const place = led === null ? null : planPlaceForShare(pd);
+    if (led === null || led.kept.plan.closed === undefined || place === null || !("ref" in place)) return null;
+    const branch = planBranchAt(pd, place);
+    const close = closedFlip(pd, led.kept.commit);
+    if (branch === null || close === null || engineAskMark(pd, planMark("asked", close)) !== null) return null;
+    noteEngineAskMark(pd, planMark("asked", close));
+    const repo = place.repo;
+    return {
+      question: `The plan of ${led.kept.plan.work.label} is closed and still on the branch ${branch.ref.slice("refs/heads/".length)} in ${repo}. ` +
+        `Do you want me to take the branch down? The plan stays in ${repo} out of the branch list, with its history.`,
+      choices: [
+        { label: "Take the branch down", detail: `The branch goes from ${repo}'s branch list; the closed plan stays there, out of the branch list.`,
+          command: `${aidlcToolInvocation("unit")} share --plan --off-branch --tip ${led.kept.commit}` },
+        { label: "Not now", detail: "The branch stays as it is; say when you want it down.", command: `${aidlcToolInvocation("orchestrate")} next` },
+      ],
+    };
   });
 }
 

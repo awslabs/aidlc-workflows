@@ -307,9 +307,9 @@ export const UNIT_GRAMMAR: Readonly<Record<string, UnitGrammar>> = {
   },
   share: {
     name: false,
-    options: ["commit-message-file", "repo"],
+    options: ["commit-message-file", "repo", "tip"],
     switches: ["plan", "branch", "back", "carry-words", "off-branch"],
-    usage: "unit share [--plan [--repo <name or address>] [--carry-words] [--off-branch]] [--branch | --back] [--commit-message-file <file>]",
+    usage: "unit share [--plan [--repo <name or address>] [--carry-words] [--off-branch [--tip <plan commit>]]] [--branch | --back] [--commit-message-file <file>]",
   },
   "sign-off": {
     name: true,
