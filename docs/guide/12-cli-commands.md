@@ -49,7 +49,7 @@ diagnostic and lifecycle routes.
 | `/aidlc --release <unit>` | Release a live Unit claim from unscoped main by publishing a tombstone |
 | `/aidlc unit assign --here <unit>` | At the lead's project, build a Unit here: its claim is taken for the lead's project, like any take |
 | `/aidlc unit take <unit> --plan <work id> --from <address>` | Take a Unit of the lead's plan, shared in the code repository at that address, as your team's own piece of work, or carry its build on |
-| `/aidlc unit push [--later] [--remote <repo>=<name>] [--branch <name>] [--commit-message-file <file>] [--finish-merge] [--merge-main] [--undo-merge] [--replace] [--to-fork]` | In a Unit's build, commit and push exactly its files on its branch in each repo, and send the result back to the lead's project |
+| `/aidlc unit push [--later] [--remote <repo>=<name>] [--branch <name>] [--commit-message-file <file>] [--finish-merge] [--merge-main [--put-aside]] [--undo-merge] [--replace] [--to-fork]` | In a Unit's build, commit and push exactly its files on its branch in each repo, and send the result back to the lead's project |
 | `/aidlc unit send-back <unit>` | At the lead's project, send a team's Unit back from Build and Test in the failure's words |
 | `/aidlc unit propose --input <file>` | In a Unit's build, send the lead a change to an input the Unit was approved with |
 | `/aidlc unit rebase` | In a Unit's build started early, move it onto the branch the Unit it waited on merged into |
@@ -837,6 +837,7 @@ the build; you can also run it yourself, for example after a review fix:
 /aidlc unit push --commit-message-file aidlc/.aidlc-engine/request-text/unit-push-message-<record>.txt
 /aidlc unit push --finish-merge
 /aidlc unit push --merge-main
+/aidlc unit push --merge-main --put-aside
 /aidlc unit push --undo-merge
 /aidlc unit push --replace
 /aidlc unit push --to-fork
@@ -897,7 +898,16 @@ merge message, or yours when you give one) and pushes the branch again; nothing
 is rewritten or forced. A clash is left for you to resolve, and `--merge-main`
 then finishes and pushes it; `--undo-merge` takes the waiting merge back out. A
 change of yours in a file main changes, or a file of yours where main adds one,
-stops it before anything is merged, with the way on.
+stops it before anything is merged, with the way on. On the workspace's own
+repository, a file of AI-DLC's record (a rules file, `repos.json`) that has a
+change here not committed and that main changes too stops it the same way, with
+an offer: on yes, `--merge-main --put-aside` keeps that change in git, puts the
+file back to its committed copy, brings main in, and puts the change back on top
+of main's at every end of the step (merged, a clash waiting, a merge undone, a
+push refused), still uncommitted; the finish of a clash never takes it into the
+merge commit. Where it does not go back cleanly, a Markdown file holds both with
+git's marks; any other file stays as main has it, the change kept in git under
+the id the line names.
 
 When the Unit's branch on the remote still holds the build pushed before and
 this build is not on top of it (a redo from the newer main after a turn-down,

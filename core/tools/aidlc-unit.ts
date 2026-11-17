@@ -13687,9 +13687,17 @@ function mergeMainIn(pd: string, args: string[], unit: string, branch: string, u
   const whereNow = (): string => whereNowLine(branch, moved);
   // Merged here and not pushed yet, for a line that stops after it.
   const mergedHere: string[] = [];
+  // On the person's yes (`--put-aside`), the changes to files of AI-DLC's
+  // record on the workspace's own repository that main changes too: kept in
+  // git, the files put back to their committed copy for the merge, and put
+  // back on top of whatever the merge left at every end of this command.
+  const putAside = parseArgs(args).bareFlags.has("put-aside");
+  const aside: Array<{ dir: string; path: string; into: string; kept: string; base: string }> = [];
+  const putBack = (): string => aside.splice(0).map(putBackChange).filter(Boolean).map((line) => ` ${line}`).join("");
   const stop = (line: string): never =>
-    fail(line + (mergedHere.length > 0 ? ` In ${joinNames(mergedHere)}, it is merged into ${unit}, not pushed yet.` : "") + whereNow());
+    fail(line + (mergedHere.length > 0 ? ` In ${joinNames(mergedHere)}, it is merged into ${unit}, not pushed yet.` : "") + whereNow() + putBack());
   const plan: Array<(typeof repos)[number] & { step: "merge" | "finish" | "push" | "level" }> = [];
+  const toPutAside: Array<{ dir: string; path: string; into: string }> = [];
   for (const entry of repos) {
     const { dir, name, into } = entry;
     const start = startRemoteOf(dir, entry.remote);
@@ -13717,13 +13725,15 @@ function mergeMainIn(pd: string, args: string[], unit: string, branch: string, u
       stop(`${unit}'s ${ownUnit} in ${name} has a change that is not committed, so nothing was merged or pushed. Once it is pushed with ` +
         `${unit}, or put aside, I can bring ${into} in.`);
     }
-    const inTheWay = ownChanged.find((path) => mergeChanges.has(path));
-    const recordFile = entry.repo !== "." ? undefined : ownChanged.find((path) => mergeChanges.has(path) &&
+    const recordFiles = entry.repo !== "." ? [] : ownChanged.filter((path) => mergeChanges.has(path) &&
       recordPaths(dir).some((own) => path === own || (own.endsWith("/") && path.startsWith(own))));
-    if (recordFile !== undefined) {
-      stop(`${recordFile}, a file of AI-DLC's record in ${name}, has a change here that is not committed, and ${into} changes it too, ` +
-        `so nothing was merged or pushed. Once it is committed on main or put aside, I can bring ${into} in.`);
+    if (recordFiles.length > 0 && !putAside) {
+      stop(`${recordFiles[0]}, a file of AI-DLC's record in ${name}, has a change here that is not committed, and ${into} changes it too, ` +
+        `so nothing was merged or pushed. Say if you want me to put that change aside, bring ${into} in and put it back. On their yes, ` +
+        `run \`${CHECKOUT_STEPS.merge.via()} --put-aside\`.`);
     }
+    const inTheWay = ownChanged.find((path) => mergeChanges.has(path) && !recordFiles.includes(path));
+    toPutAside.push(...recordFiles.map((path) => ({ dir, path, into })));
     if (inTheWay !== undefined) {
       stop(`Your change to ${inTheWay} in ${name} is in a file ${into} changes, so nothing was merged or pushed. Once it is committed ` +
         `or put aside, I can bring ${into} in.`);
@@ -13735,6 +13745,15 @@ function mergeMainIn(pd: string, args: string[], unit: string, branch: string, u
         `or put aside, I can bring ${into} in.`);
     }
     plan.push({ ...entry, step: "merge" });
+  }
+  // Every repository checked: only now is anything put aside.
+  for (const { dir, path, into } of toPutAside) {
+    const kept = git(dir, ["hash-object", "-w", "--", path]).stdout.trim();
+    const base = git(dir, ["rev-parse", `HEAD:${path}`]).stdout.trim();
+    if (kept === "" || base === "" || !git(dir, ["checkout", "-q", "HEAD", "--", path]).ok) {
+      stop(`${path} could not be put aside in the repo, so nothing was merged or pushed. Say when to try again.`);
+    }
+    aside.push({ dir, path, into, kept, base });
   }
   for (const entry of plan) {
     const { dir, name, into } = entry;
@@ -13807,7 +13826,49 @@ function mergeMainIn(pd: string, args: string[], unit: string, branch: string, u
     lines.push(entry.step === "push" ? `Pushed ${unit} in ${name}, with ${into} merged into it.` : `Merged ${into} into ${unit} in ${name} and pushed ${unit}.`);
   }
   given?.spend();
-  console.log(JSON.stringify({ pushed: plan.some((entry) => entry.step !== "level"), unit, notice: joinSaid([...lines, whereNow().trim()]) }));
+  console.log(JSON.stringify({ pushed: plan.some((entry) => entry.step !== "level"), unit, notice: joinSaid([...lines, whereNow().trim(), putBack().trim()]) }));
+}
+
+// A change to a file of AI-DLC's record put aside for a merge, put back on top
+// of what the merge left there by a three-way merge of the file (`git
+// merge-file`, base its committed copy before): the line that says how it
+// went. Where the two meet, a Markdown file holds both with git's marks; any
+// other file (repos.json, a state file) stays as the merge left it, readable,
+// and the change stays in git under its id. Where the merge left the file as it was
+// committed (undone, or never begun), the change is back as it was, unsaid.
+function putBackChange(entry: { dir: string; path: string; into: string; kept: string; base: string }): string {
+  const { dir, path, into, kept, base } = entry;
+  const scratch = mkdtempSync(join(tmpdir(), "aidlc-aside-"));
+  try {
+    const at = join(dir, ...path.split("/"));
+    const blobs = [base, kept].map((oid) => spawnSync("git", ["cat-file", "blob", oid], { cwd: dir }).stdout as Buffer);
+    const now = existsSync(at) ? readFileSync(at) : Buffer.alloc(0);
+    if (now.equals(blobs[0])) {
+      writeFileSync(at, blobs[1]);
+      return "";
+    }
+    const files = [now, ...blobs]
+      .map((content, i) => {
+        const file = join(scratch, `merge-${i}`);
+        writeFileSync(file, content);
+        return file;
+      });
+    const merged = spawnSync("git", ["merge-file", "-p", "-L", into, "-L", "before", "-L", "this change", ...files], { cwd: dir });
+    if (merged.status === 0) {
+      writeFileSync(at, merged.stdout);
+      return `The change to ${path} is back, on top of ${into}'s, still not committed.`;
+    }
+    if (merged.status !== null && merged.status > 0 && path.endsWith(".md") && !path.endsWith("aidlc-state.md")) {
+      writeFileSync(at, merged.stdout);
+      return `The change to ${path} did not go back cleanly on top of ${into}'s, so both are in the file now, marked where they meet, ` +
+        "still not committed. Say if you want me to put the two together and show you.";
+    }
+    const short = git(dir, ["rev-parse", "--short", kept]).stdout.trim();
+    return `The change to ${path} did not go back cleanly on top of ${into}'s, so the file stays as ${into} has it, and the change is kept in ` +
+      `git as ${short} (git show ${short} shows it). Say if you want me to put the two together and show you.`;
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
 }
 
 // The build's record finishes once its push reached home or the person put it

@@ -13,7 +13,7 @@ import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { hooksHealthReadDir, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { shellSingleQuote } from "../../dist/claude/.claude/tools/aidlc-runtime-paths.ts";
@@ -3312,7 +3312,7 @@ describe("a Unit on the workspace's own repository", () => {
     expect(readFileSync(join(record, "aidlc-state.md"), "utf-8")).toBe(state);
   });
 
-  test("a file of AI-DLC's record that main changes, with a change here not committed: said as what it is, nothing merged", () => {
+  test("a file of AI-DLC's record that main changes, with a change here not committed: said as what it is, with the step, nothing merged", () => {
     const team = join("aidlc", "spaces", "default", "memory", "team.md");
     const { home, alice } = mainMovedHere();
     writeFileSync(join(home.dir, team), `${readFileSync(join(home.dir, team), "utf-8")}\nA lead's rule.\n`);
@@ -3322,8 +3322,114 @@ describe("a Unit on the workspace's own repository", () => {
     writeFileSync(join(alice, team), `${readFileSync(join(alice, team), "utf-8")}\nA learning kept here.\n`);
     const said = run(UNIT, ["push", "--merge-main"], alice);
     expect(String(said.json?.error)).toStartWith("aidlc/spaces/default/memory/team.md, a file of AI-DLC's record in the repo, has a change " +
-      "here that is not committed, and origin/main changes it too, so nothing was merged or pushed.");
+      "here that is not committed, and origin/main changes it too, so nothing was merged or pushed. Say if you want me to put that " +
+      "change aside, bring origin/main in and put it back. On their yes, run `");
+    expect(String(said.json?.error)).toContain("unit push --merge-main --put-aside`.");
+    // Without the person's yes to it, the same command again puts nothing aside.
+    expect(String(run(UNIT, ["push", "--merge-main"], alice).json?.error)).toStartWith("aidlc/spaces/default/memory/team.md, a file of AI-DLC's");
     expect(readFileSync(join(alice, team), "utf-8")).toContain("A learning kept here.");
+  });
+
+  // Main moved under a Unit built here, merging cleanly with it, and main
+  // changes a file of AI-DLC's record that has a change here too: `ours`
+  // writes the change here, `theirs` main's, over the committed text.
+  function recordInTheWay(file: string, theirs: (text: string) => string, ours: (text: string) => string, clash = false) {
+    const lines = (first: string, last: string): string => `${first}\nb\nc\nd\n${last}\n`;
+    const home = oneRepoTeams();
+    mkdirSync(join(home.dir, "src"), { recursive: true });
+    if (!clash) writeFileSync(join(home.dir, "src", "refunds.ts"), lines("a", "e"));
+    mkdirSync(join(home.dir, dirname(file)), { recursive: true });
+    if (!existsSync(join(home.dir, file))) writeFileSync(join(home.dir, file), "{\"a\": 1}\n");
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "--allow-empty", "-m", "lead: before the take"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const alice = cloneOf(home.remote, "alice");
+    const record = builtHere(alice, "refunds", "refunds.ts");
+    if (clash) leadCommits(home, "main", "src/refunds.ts");
+    else {
+      writeFileSync(join(alice, "src", "refunds.ts"), lines("A", "e"));
+      writeFileSync(join(home.dir, "src", "refunds.ts"), lines("a", "E"));
+      git(home.dir, ["commit", "-q", "-am", "lead: refunds moves on"]);
+      git(home.dir, ["push", "-q", "origin", "main"]);
+    }
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    writeFileSync(join(home.dir, file), theirs(readFileSync(join(home.dir, file), "utf-8")));
+    git(home.dir, ["commit", "-q", "-am", "lead: the record moves on"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    expect(next(alice).ask_type).toBe("unit-main-moved");
+    const here = ours(readFileSync(join(alice, file), "utf-8"));
+    writeFileSync(join(alice, file), here);
+    return { home, alice, record, here };
+  }
+  const TEAM = "aidlc/spaces/default/memory/team.md";
+  const leadsRule = (text: string): string => `${text}\nA lead's rule.\n`;
+  const learning = (text: string): string => `A learning kept here.\n${text}`;
+
+  test("on the yes the change is put aside, origin/main brought in and pushed, and the change is back on top, not committed", () => {
+    const { home, alice } = recordInTheWay(TEAM, leadsRule, learning);
+    const yes = run(UNIT, ["push", "--merge-main", "--put-aside"], alice);
+    expect(yes.status, yes.out).toBe(0);
+    expect(String(yes.json?.notice)).toContain("Merged origin/main into refunds in the repo and pushed refunds.");
+    expect(String(yes.json?.notice)).toContain("The change to aidlc/spaces/default/memory/team.md is back, on top of origin/main's, still not committed.");
+    const now = readFileSync(join(alice, TEAM), "utf-8");
+    expect(now).toContain("A learning kept here.");
+    expect(now).toContain("A lead's rule.");
+    expect(git(home.remote, ["show", `refunds:${TEAM}`])).not.toContain("A learning kept here.");
+  });
+
+  test("a clash in another file: the change is back all the same, and the finish never takes it into the merge commit", () => {
+    const { alice } = recordInTheWay(TEAM, leadsRule, learning, true);
+    const yes = run(UNIT, ["push", "--merge-main", "--put-aside"], alice);
+    expect(String(yes.json?.error)).toStartWith("origin/main and refunds both change src/refunds.ts in the repo in ways git cannot put together");
+    expect(String(yes.json?.error)).toContain("The change to aidlc/spaces/default/memory/team.md is back, on top of origin/main's, still not committed.");
+    expect(readFileSync(join(alice, TEAM), "utf-8")).toContain("A learning kept here.");
+    writeFileSync(join(alice, "src", "refunds.ts"), "export const built = \"both\";\n");
+    git(alice, ["add", "src/refunds.ts"]);
+    const finished = run(UNIT, ["push", "--merge-main"], alice);
+    expect(finished.status, finished.out).toBe(0);
+    expect(git(alice, ["show", `HEAD:${TEAM}`])).not.toContain("A learning kept here.");
+    expect(git(alice, ["show", `HEAD:${TEAM}`])).toContain("A lead's rule.");
+    expect(readFileSync(join(alice, TEAM), "utf-8")).toContain("A learning kept here.");
+  });
+
+  test("a merge their hook refuses is undone, and the change is back exactly as it was, unsaid", () => {
+    const { alice, here } = recordInTheWay(TEAM, leadsRule, learning);
+    const hooks = join(alice, ".git", "hooks");
+    writeFileSync(join(hooks, "pre-merge-commit"), "#!/bin/sh\necho 'no merges on Fridays' >&2\nexit 1\n");
+    chmodSync(join(hooks, "pre-merge-commit"), 0o755);
+    const refused = run(UNIT, ["push", "--merge-main", "--put-aside"], alice);
+    expect(String(refused.json?.error)).toStartWith("Your hook in the repo did not take the merge of origin/main into refunds");
+    expect(String(refused.json?.error)).not.toContain("The change to");
+    expect(readFileSync(join(alice, TEAM), "utf-8")).toBe(here);
+  });
+
+  test("a push refused after the merge: the change is back on top all the same", () => {
+    const { home, alice } = recordInTheWay(TEAM, leadsRule, learning);
+    const hook = join(home.remote, "hooks", "pre-receive");
+    writeFileSync(hook, "#!/bin/sh\necho 'pushes are paused' >&2\nexit 1\n");
+    chmodSync(hook, 0o755);
+    const refused = run(UNIT, ["push", "--merge-main", "--put-aside"], alice);
+    expect(String(refused.json?.error)).toStartWith("Merged origin/main into refunds in the repo, and the push was refused");
+    expect(String(refused.json?.error)).toContain("The change to aidlc/spaces/default/memory/team.md is back, on top of origin/main's, still not committed.");
+  });
+
+  test("where the two meet: a rules file holds both, marked; any other file stays readable, the change kept in git", () => {
+    const meets = recordInTheWay(TEAM, leadsRule, (text) => `${text}\nA learning kept here.\n`);
+    const yes = run(UNIT, ["push", "--merge-main", "--put-aside"], meets.alice);
+    expect(yes.status, yes.out).toBe(0);
+    expect(String(yes.json?.notice)).toContain("The change to aidlc/spaces/default/memory/team.md did not go back cleanly on top of origin/main's, " +
+      "so both are in the file now, marked where they meet, still not committed. Say if you want me to put the two together and show you.");
+    expect(readFileSync(join(meets.alice, TEAM), "utf-8")).toContain("<<<<<<< origin/main");
+    const json = "aidlc/team-notes.json";
+    const listed = recordInTheWay(json, () => "{\"a\": 2}\n", () => "{\"a\": 3}\n");
+    const again = run(UNIT, ["push", "--merge-main", "--put-aside"], listed.alice);
+    expect(again.status, again.out).toBe(0);
+    const said = String(again.json?.notice);
+    const kept = /kept in git as ([0-9a-f]+) /.exec(said)?.[1] ?? "";
+    expect(said).toContain(`The change to ${json} did not go back cleanly on top of origin/main's, so the file stays as origin/main has it, and the change ` +
+      `is kept in git as ${kept} (git show ${kept} shows it). Say if you want me to put the two together and show you.`);
+    expect(readFileSync(join(listed.alice, json), "utf-8")).toBe("{\"a\": 2}\n");
+    expect(git(listed.alice, ["show", kept])).toBe("{\"a\": 3}");
   });
 
   test("a Unit built here whose branch starts from the plan's branch is not offered a merge of main", () => {
