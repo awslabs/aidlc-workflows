@@ -90,11 +90,12 @@ import {
 import {
   activeVersion,
   binRoot,
+  installedExecutablePath,
   machineTransactionRoot,
   projectDirFrom,
   runtimeRoot,
 } from "./aidlc-install-paths.ts";
-import { defaultHarnessPath } from "./aidlc-machine-config.ts";
+import { defaultHarnessPath, readMachineChannel } from "./aidlc-machine-config.ts";
 import {
   configureChannel,
   configureProjectPin,
@@ -102,9 +103,11 @@ import {
   LifecycleCommandError,
   pinnedReleaseInstalled,
   holdPinnedRelease,
+  main as lifecycleMain,
   registerProjectPin,
   resolvePinnedDispatch,
 } from "./aidlc-lifecycle.ts";
+import { carryOnStep, newerWorkInstall } from "./aidlc-state-upgrade.ts";
 import {
   acquireCopyRuntime,
   copyRuntimeUrl,
@@ -114,7 +117,7 @@ import {
   ReleaseVerificationError,
 } from "./aidlc-release.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
-import { compareVersions, RELEASE_CHANNELS, VERSION_ID } from "./aidlc-channel.ts";
+import { compareVersions, RELEASE_CHANNELS, VERSION_ID, versionChannel } from "./aidlc-channel.ts";
 import {
   type TransactionOperation,
   type TransactionOptions,
@@ -12689,6 +12692,20 @@ function treesLeftBehindLines(
     const harness = `--harness ${
       source.copyChannel ? harnessNameFor(tree.distribution, writtenTool) : invokedHarnessName(tree.distribution)
     }`;
+    // A plain config never takes down a tree a release newer than this
+    // computer's set up (newerSetUpStep): where that tree is also ahead of
+    // the release just written, natively the line names the way up for the
+    // tree just written, as that step does; elsewhere the fact alone.
+    if (
+      !source.copyChannel && source.requiredVersion === undefined && tree.frameworkVersion !== undefined &&
+      VERSION_ID.test(tree.frameworkVersion) && compareVersions(AIDLC_VERSION, tree.frameworkVersion) < 0 &&
+      compareVersions(written.version, tree.frameworkVersion) < 0
+    ) {
+      if (newerWorkInstall(projectDir).kind !== "native") return `${name} ${on}.`;
+      const added = projectionProductName(join(projectDir, written.harnessDir), written.distribution);
+      return `${name} ${on}. To bring ${added} to ${tree.frameworkVersion} too: ` +
+        `\`aidlc update --version ${tree.frameworkVersion}\`, then ${command(`--harness ${invokedHarnessName(written.distribution)}`)}.`;
+    }
     const plain = installed.filter((candidate) => candidate.stamp.distribution === tree.distribution);
     // A copied tree no config run has recorded the files of reads every file
     // as unowned against another release, so it first records them at its
@@ -13124,6 +13141,116 @@ async function gatherConfigOutput(
   return { stdout: stdout.join(""), output: output.join(""), code };
 }
 
+// The release a newer AI-DLC set up the tree a run refreshes with (the named
+// harness's, the one a named harness switches in place, or the only one), on a
+// native or package manager's install with no pin and no source named. A copied
+// project runs its tree's own tool, whose refresh fetches that release.
+function newerSetUpOf(
+  projectDir: string,
+  requested: string | undefined,
+  from: string | undefined,
+): { tree: ProjectHarness; version: string } | undefined {
+  if (aidlcInvocation() !== "aidlc" || from || pathPresent(join(projectDir, ".aidlc-version"))) return undefined;
+  const trees = discoverProjectHarnesses(projectDir);
+  const tree = requested
+    ? trees.find((candidate) => candidate.distribution === requested) ??
+      trees.find((candidate) => candidate.harnessDir === KIRO_SWITCH_DIR && switchesInPlace(candidate.distribution, requested))
+    : trees.length === 1
+    ? trees[0]
+    : undefined;
+  const version = tree?.frameworkVersion;
+  return tree && version !== undefined && VERSION_ID.test(version) && compareVersions(AIDLC_VERSION, version) < 0
+    ? { tree, version }
+    : undefined;
+}
+
+// This computer's AI-DLC is older than the one that set up the project's tree,
+// so nothing in the project changes. At a terminal on a native install the
+// person is asked once whether to update to that release, which then runs the
+// same command itself, since an older tool may not read the newer files. A
+// section is not asked: it stops before its own questions and names itself.
+// Everywhere else, and on no, one line names the update and the pin. AI-DLC
+// names no package manager step for a preview release.
+async function newerSetUpStep(
+  projectDir: string,
+  tree: ProjectHarness,
+  version: string,
+  input: string[],
+  options: ReturnType<typeof globalOptions>,
+  dryRun: boolean,
+  section: boolean,
+): Promise<void> {
+  const install = newerWorkInstall(projectDir);
+  const preview = versionChannel(version) === "preview";
+  const command = (args: string): string =>
+    `\`${configInvocationFor(projectDir)} config ${args}${projectTarget(projectDir)}\``;
+  const unreachable = install.kind === "managed" && preview;
+  const manager = install.kind === "managed" ? install.name : "";
+  const setUp = `project was set up with AI-DLC ${version}${unreachable ? ", a preview release" : ""}, and this computer is on ${
+    AIDLC_VERSION
+  }${manager ? ` from ${manager}` : ""}${unreachable ? `, and AI-DLC has no ${manager} step to name for a preview release` : ""}.`;
+  // The person's own command carries on, so what they asked for is what
+  // runs after the update, each command as it works when typed: a mirror
+  // they named is asked for once, never printed; a CA bundle is named in
+  // both; a plan token, made for this release's plan, is left out.
+  const named = stripVerb([...input]);
+  const ca = valueAfter(named, "--ca-bundle");
+  const mirror = named.includes("--release-base-url");
+  const both = mirror && install.kind !== "managed";
+  const own = configRerunWith(input, projectDir, [], ["--plan-token"]);
+  const refresh = own
+    ? `\`${own}\`${mirror && !both ? sameMirror(input) : ""}`
+    : command(`--harness ${invokedHarnessName(tree.distribution)} --yes`);
+  const update = `\`aidlc update --version ${version}${ca === undefined ? "" : ` --ca-bundle ${quoteCommandArgument(ca)}`}\``;
+  const up = unreachable
+    ? "To carry on, this computer needs that preview release. "
+    : `${carryOnStep(install, update, refresh, both ? ", with the same --release-base-url on both" : "")} `;
+  const down = `To take the project down to ${AIDLC_VERSION} instead: ` +
+    `${command(`--pin ${quoteCommandArgument(AIDLC_VERSION)} --yes`)} (this pins the version for everyone on the project).`;
+  let line = `Nothing changed: this ${setUp} ${up}${down}`;
+  if (
+    install.kind === "native" && !section && !dryRun && !options.yes && options.mode === "human" &&
+    configInputIsTty() && process.env.AIDLC_UNATTENDED !== "1"
+  ) {
+    // The yes changes this computer for every unpinned project on it, so a
+    // preview is named as one to a computer that follows stable releases.
+    let followsPreview = false;
+    try {
+      followsPreview = readMachineChannel() === "preview";
+    } catch {
+      // An unreadable channel setting is doctor's to report.
+    }
+    const release = preview && !followsPreview ? `the preview release ${version}` : version;
+    const answer = configPrompt(`This ${setUp} Update AI-DLC on this computer to ${release} now and carry on? [Y/n]:`);
+    if (answer !== null && /^(?:|y|yes)$/i.test(answer.trim())) {
+      // The release source named for the download is the one the update takes.
+      await lifecycleMain([
+        "update",
+        "--version",
+        version,
+        ...DOWNLOAD_VALUE_FLAGS.flatMap((flag) => {
+          const value = valueAfter(named, flag);
+          return value === undefined ? [] : [flag, value];
+        }),
+      ]);
+      if ((process.exitCode ?? EXIT.ok) !== EXIT.ok) {
+        process.stdout.write(`Nothing in this project changed. ${down}\n`);
+        return;
+      }
+      const handed = spawnSync(installedExecutablePath(version), ["config", ...harnessArgsAsTyped(stripVerb(input))], {
+        cwd: process.cwd(),
+        stdio: "inherit",
+      });
+      if (handed.error) throw handed.error;
+      process.exitCode = handed.status ?? EXIT.failure;
+      return;
+    }
+    // Closed input left the cursor on the question's line.
+    line = `${answer === null ? "\n" : ""}Nothing changed. ${up}${down}`;
+  }
+  emitResult({ ...success(line, { projectDir, changed: false }), code: EXIT.actionNeeded, status: "action-needed" }, options);
+}
+
 export async function main(
   input: string[],
   internal: ConfigMainInternal = {},
@@ -13219,6 +13346,16 @@ export async function main(
     ], options)
   ) {
     return;
+  }
+  // The project section refreshes the release's files, and asks its own
+  // questions first: where the older release would write them, it stops first.
+  if (section?.value === "project" && !["--help", "--show", "--check"].some((flag) => argv.includes(flag))) {
+    const target = projectDirFrom(argv);
+    const newer = newerSetUpOf(target, valuesAfter(argv, "--harness")[0], internal.sourceRoot ?? valueAfter(argv, "--from"));
+    if (newer) {
+      await newerSetUpStep(target, newer.tree, newer.version, input, options, argv.includes("--dry-run"), true);
+      return;
+    }
   }
   let modelsContext: ModelsMutationContext | null = null;
   let pendingKiroSession: KiroSessionPlan | null = null;
@@ -13407,7 +13544,15 @@ export async function main(
       ].includes(token)
     );
   if (firstRunWizard && await runFirstRunWizard(projectDir)) return;
+  const newerSetUp = newerSetUpOf(projectDir, requestedHarness, from);
+  // A switch in place writes the older release over that tree: it stops
+  // before the switch is asked about or planned.
+  if (newerSetUp && !section && newerSetUp.tree.distribution !== requestedHarness && requestedHarness !== undefined) {
+    await newerSetUpStep(projectDir, newerSetUp.tree, newerSetUp.version, input, options, argv.includes("--dry-run"), false);
+    return;
+  }
   const existingWalk = !section &&
+    !newerSetUp &&
     configInputIsTty() &&
     options.mode === "human" &&
     projectHarnesses.length > 0 &&
@@ -13812,6 +13957,16 @@ export async function main(
       });
       if (handed.error) throw handed.error;
       process.exitCode = handed.status ?? EXIT.failure;
+      return;
+    }
+    // A refresh from an older release than the one that set the tree up takes
+    // nothing down; a section that writes only records reads the tree's own
+    // files and goes on. Going down is a pin, by name.
+    if (
+      newerSetUp && VERSION_ID.test(selected.stamp.frameworkVersion) &&
+      compareVersions(selected.stamp.frameworkVersion, newerSetUp.version) < 0
+    ) {
+      await newerSetUpStep(projectDir, newerSetUp.tree, newerSetUp.version, input, options, dryRun, Boolean(section));
       return;
     }
     if (selected.note) sourceNotes.push(selected.note);

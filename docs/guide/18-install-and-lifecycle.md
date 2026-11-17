@@ -372,7 +372,10 @@ When the files passed to `--from` hold that harness, the command reuses them.
 Otherwise a copied project's line says to get that release's copy runtime file
 first, because `--download` on a copied harness that is already installed
 fetches the release it already has, and a native project's line names the
-`aidlc config --pin` that installs that release.
+`aidlc config --pin` that installs that release. A harness set up with a
+release newer than this computer's is not taken down by a plain refresh, so on
+a native install its line names the update and the refresh that bring the
+harness just written up to it.
 A git worktree of a checkout that is registered on the machine is the same
 project: its pinned commands run the release its own `.aidlc-version` names,
 when the machine holds it, and register it, so a worktree a host makes per
@@ -486,7 +489,7 @@ interactive wizard.
 | `--from <dir-or-tgz>` | Use local release files instead of an installed runtime: `aidlc-copy-runtime-X.Y.Z.tar.gz` (checked against a `.sha256` beside it), its extracted `runtime/` folder, or one projection directory or archive |
 | `--download` | Fetch and verify the release the project needs when this machine lacks it, then finish the command; applying a dry run's plan token needs it again |
 | `--mcp defaults\|none` | Add or omit Claude's optional shipped MCP entries |
-| `--dry-run` | Calculate the complete plan without creating the target directory or changing bytes |
+| `--dry-run` | Calculate the complete plan without creating the target directory or changing bytes; in a project set up with a release newer than this computer's, it plans nothing and names the update and the pin instead |
 | `--plan-token <token>` | Apply only the exact plan approved from a JSON dry run |
 | `--show` | Show settings without changing anything: with no section, every section in turn (`aidlc config --show`; `--json` prints one object keyed by section, each value what that section's `--show --json` prints); with a section, that section alone |
 | `--force` | Replace locally modified framework-owned files and managed blocks where that policy permits |
@@ -1137,6 +1140,11 @@ is done too, and says so:
   Updated. Your open work (default/add-login) carries on.
 ```
 
+One refresh is not done: in a project set up with a release newer than this
+computer's, a refresh that would bring in this computer's older release files
+changes nothing and names the step instead: the update to that release, or the
+pin, which takes the project down to this computer's release.
+
 When the new release does a stage you already finished differently and nothing
 of yours changed, your work stands and nothing asks you to redo it. If the stage
 now needs a document it did not need before, your next step says so once, for
@@ -1510,9 +1518,9 @@ back, see [Go Back to an Earlier Version](#go-back-to-an-earlier-version).
 To put this machine back on an earlier release, run `aidlc use <version>`, for
 example `aidlc use 2.10.0`. It downloads that release if the machine does not
 have it, then says `Now using aidlc 2.10.0 (was 2.11.0; retained locally, no
-project changes).` Every project without a pin now runs on 2.10.0; run
-`aidlc config` in a project to bring its files to 2.10.0 as well.
-`aidlc use 2.11.0` goes forward again.
+project changes).` Every project without a pin now runs on 2.10.0; to put a
+project's files back too, pin it, as below. `aidlc use 2.11.0` goes forward
+again.
 
 To put one project back for everyone on it, pin it, then refresh it:
 
