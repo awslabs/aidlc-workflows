@@ -3698,6 +3698,20 @@ describe("in work with several repositories the question names the plan's reposi
       .toBe("Approve Plan, the payments part looks right");
     expect(next(proj).kind).toBe("run-stage");
   });
+
+  // A teammate's clone keeps no record of the question: the file the earlier
+  // AI-DLC wrote and committed stays as it was there too.
+  test("in a clone with no record of the question, the file asked before the line stays as it was", () => {
+    const proj = reposProject(["api", "web"]);
+    askedWith(proj, CUT_TOUCHES);
+    const path = join(stageDir(proj), "code-generation-questions.md");
+    const earlier = questions(proj).replace("- Names files in api and web.\n", "");
+    writeFileSync(path, earlier);
+    const records = dirname(planApprovalRuntimeFile(proj, "probe"));
+    for (const name of readdirSync(records).filter((entry) => entry.startsWith("ask-"))) rmSync(join(records, name));
+    expect(next(proj).plan_approval.targets?.[0].summary.at(-1)).toBe("Names files in api and web.");
+    expect(questions(proj)).toBe(earlier);
+  });
 });
 
 // While a plan waits, what the person asks for runs the first time: every

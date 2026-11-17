@@ -1562,10 +1562,11 @@ export function publishPlanApprovalAsk(
       // question, or a file changed in any other way, is written as usual.
       if (same && onlyTheirAnswerDiffers(onDisk, content)) return;
       // Nor is it rewritten for the repos line alone, in a file an earlier
-      // AI-DLC wrote without it: the line comes with a rewrite for another reason.
-      const named = same ? underSummary(projectDir, [view.unit], null) : [];
+      // AI-DLC wrote without it (a teammate's clone included): it is kept where
+      // that file would be, and the line comes with a rewrite for another reason.
+      const named = underSummary(projectDir, [view.unit], null);
       const without = named.length === 0 ? null : fileWith(view.summary.filter((line) => !named.includes(line)));
-      if (without !== null && (onDisk === without || onlyTheirAnswerDiffers(onDisk, without))) return;
+      if (without !== null && (onDisk === without || (same && onlyTheirAnswerDiffers(onDisk, without)))) return;
       writeFileAtomic(path, content);
     });
   });

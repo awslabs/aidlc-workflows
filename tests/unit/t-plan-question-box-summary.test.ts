@@ -371,16 +371,19 @@ describe("in work with several repositories the box names the plan's repositorie
 
   const CUT = `- ${`Touches: ${TOUCHES}`.slice(0, 197)}...`;
 
-  test("two repositories: the line under the cut summary, then the path", () => {
+  test("two repositories: the line under the cut summary, then the path; the answer reads the agent's question", () => {
     const { proj, question } = reposAsked(["api", "web"]);
     expect(CUT).not.toContain("web/");
-    expect(filled(proj, [planBox(question)])?.[0].question).toBe([
+    const shown = filled(proj, [planBox(question)])?.[0];
+    expect(shown?.question).toBe([
       question, "", "- Builds: checkout", CUT, "- Tests: 6 unit tests", "- Names files in api and web.", "",
       `Full plan: ${planPath(proj)}`,
     ].join("\n"));
     // A question that already shows every other line still gets this one.
     const own = [question, "- Builds: checkout", CUT, "- Tests: 6 unit tests", `Full plan: ${planPath(proj)}`].join("\n");
     expect(filled(proj, [planBox(own)])?.[0].question).toBe(`${own}\n\n- Names files in api and web.`);
+    answered(proj, shown!, "Request Changes");
+    expect(field(rows(proj, "QUESTION_REPLIED")[0], "Question")).toBe(question);
   });
 
   test("past 2,000 characters the line is under the path, whole, and past that nothing is added", () => {
@@ -612,10 +615,13 @@ describe("a question about several Units", () => {
 
   test("in work with several repositories, one line for all the plans, said once after the paths", () => {
     const { pd, question, choices, paths } = groupedProject(false, ["api", "web"]);
-    expect(filled(pd, [groupBox(question, choices)])?.[0].question).toBe([
+    const shown = filled(pd, [groupBox(question, choices)])?.[0];
+    expect(shown?.question).toBe([
       question, "", "alpha", `Full plan: ${paths[0]}`, "", "beta", `Full plan: ${paths[1]}`, "",
       "These plans name files in api and web.",
     ].join("\n"));
+    answered(pd, shown!, "Request Changes");
+    expect(field(rows(pd, "QUESTION_REPLIED")[0], "Question")).toBe(question);
   });
 
   test("the source that already changed is said once, last", () => {
