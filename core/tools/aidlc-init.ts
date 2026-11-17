@@ -12692,12 +12692,14 @@ function treesLeftBehindLines(
     const harness = `--harness ${
       source.copyChannel ? harnessNameFor(tree.distribution, writtenTool) : invokedHarnessName(tree.distribution)
     }`;
-    // A plain config no longer takes down a tree a release newer than this
-    // computer's set up (newerSetUpStep): natively the line names the way up
-    // for the tree just written, as that step does; elsewhere the fact alone.
+    // A plain config never takes down a tree a release newer than this
+    // computer's set up (newerSetUpStep): where that tree is also ahead of
+    // the release just written, natively the line names the way up for the
+    // tree just written, as that step does; elsewhere the fact alone.
     if (
       !source.copyChannel && source.requiredVersion === undefined && tree.frameworkVersion !== undefined &&
-      VERSION_ID.test(tree.frameworkVersion) && compareVersions(AIDLC_VERSION, tree.frameworkVersion) < 0
+      VERSION_ID.test(tree.frameworkVersion) && compareVersions(AIDLC_VERSION, tree.frameworkVersion) < 0 &&
+      compareVersions(written.version, tree.frameworkVersion) < 0
     ) {
       if (newerWorkInstall(projectDir).kind !== "native") return `${name} ${on}.`;
       const added = projectionProductName(join(projectDir, written.harnessDir), written.distribution);
@@ -13160,8 +13162,8 @@ function newerSetUpOf(
 // This computer's AI-DLC is older than the one that set up the project's tree,
 // so nothing in the project changes. At a terminal on a native install the
 // person is asked once whether to update to that release, which then runs the
-// same command itself, since an older tool may not read the newer files; a
-// section may have asked its own questions already, so it is never handed on.
+// same command itself, since an older tool may not read the newer files. A
+// section is not asked: it stops before its own questions and names itself.
 // Everywhere else, and on no, one line names the update and the pin. AI-DLC
 // names no package manager step for a preview release.
 async function newerSetUpStep(

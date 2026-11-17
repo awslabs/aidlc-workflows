@@ -372,7 +372,10 @@ When the files passed to `--from` hold that harness, the command reuses them.
 Otherwise a copied project's line says to get that release's copy runtime file
 first, because `--download` on a copied harness that is already installed
 fetches the release it already has, and a native project's line names the
-`aidlc config --pin` that installs that release.
+`aidlc config --pin` that installs that release. A harness set up with a
+release newer than this computer's is not taken down by a plain refresh, so on
+a native install its line names the update and the refresh that bring the
+harness just written up to it.
 A git worktree of a checkout that is registered on the machine is the same
 project: its pinned commands run the release its own `.aidlc-version` names,
 when the machine holds it, and register it, so a worktree a host makes per

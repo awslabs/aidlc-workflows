@@ -4260,7 +4260,8 @@ describe("t243 project initialization", () => {
 
   // #1406: a run that leaves another harness on another release names it, with
   // the one command that brings it to the release just written, and that
-  // command runs as printed.
+  // command runs as printed (natively, a tree a newer release set up is the
+  // exception: a plain refresh never takes it down).
   test("a refresh names each harness left on another release with the command that brings it there", () => {
     const project = temp("aidlc-t243-trees-behind-");
     mkdirSync(join(project, ".git"));

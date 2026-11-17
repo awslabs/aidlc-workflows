@@ -1951,6 +1951,10 @@ describe("config in a project a newer AI-DLC set up", () => {
         `To carry on: \`aidlc update --version ${NEWER}\`, then \`aidlc config project --mcp defaults --yes\` in this project. ${down}`,
     );
     expect(tree(project)).toEqual(before);
+    // A mistyped section flag is the section's own usage error, before anything else.
+    const typo = runCopied(project, ["config", "project", "--mpc", "defaults", "--yes"], { env });
+    expect(typo.status, typo.stdout + typo.stderr).toBe(2);
+    expect(typo.stdout).not.toContain("Nothing changed");
     // Run from outside the project, both commands name it.
     const outside = runCopied(project, ["config", "--yes", "--project-dir", project], { env, cwd: temp("aidlc-t304-elsewhere-") });
     expect(outside.status, outside.stdout + outside.stderr).toBe(5);
@@ -2118,7 +2122,7 @@ describe("config in a project a newer AI-DLC set up", () => {
       `Nothing changed: this project was set up with AI-DLC ${NEWER}, and this computer is on ${AIDLC_VERSION} from ` +
         `Homebrew. To carry on: brew upgrade aidlc, then \`aidlc config --harness claude --yes\` in this project. ${down}`,
     );
-    // A package manager carries no preview: only the pin is named.
+    // For a preview, AI-DLC names no package manager step: what this computer needs, then the pin.
     const fromPreview = setUpWith(PREVIEW).project;
     const preview = runCopied(fromPreview, ["config", "--yes"], {
       env: { ...env, AIDLC_COMPILED_EXECUTABLE: "/opt/homebrew/bin/aidlc" },
@@ -2163,6 +2167,15 @@ describe("config in a project a newer AI-DLC set up", () => {
         `\`aidlc update --version ${NEWER}\`, then \`aidlc config --harness codex\`.\n`,
     );
     expect(frameworkVersionOf(project)).toBe(NEWER);
+    // Files named for the harness added, newer still than that tree: the tree is behind them, so no way up to it.
+    const newest = temp("aidlc-t304-newest-codex-");
+    cpSync(join(DIST_RELEASE, "codex"), newest, { recursive: true });
+    const codexStamp = join(newest, ".codex", "tools", "data", "aidlc-stamp.json");
+    writeFileSync(codexStamp, `${JSON.stringify({ ...JSON.parse(readFileSync(codexStamp, "utf-8")), frameworkVersion: "9.9.10" }, null, 2)}\n`);
+    const ahead = runCopied(project, ["config", "--harness", "codex", "--from", newest, "--force", "--yes"], { env });
+    expect(ahead.status, ahead.stdout + ahead.stderr).toBe(0);
+    expect(ahead.stdout).toContain(`Claude Code (.claude) is still on ${NEWER}.`);
+    expect(ahead.stdout).not.toContain(" too: ");
   }, 120_000);
 
   test("a copied project's own tool is not stopped by it", () => {
