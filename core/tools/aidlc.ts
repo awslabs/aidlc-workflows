@@ -49,6 +49,7 @@ import {
   runtimeProjectDirFrom,
   runtimeHarnessName,
   typedHarnessHosts,
+  entrySkillInvocation,
 } from "./aidlc-runtime-paths.ts";
 
 type Classification = "passthrough" | "translation" | "stub" | "routing-only" | "help";
@@ -116,6 +117,12 @@ export type Route = {
    * hidden only on purpose and with its reason written next to it.
    */
   unlistedVerbs?: Readonly<Record<string, string>>;
+  /**
+   * The tool answers a lone `--help` / `-h` itself. Every other route has the
+   * dispatcher answer `<command> --help|-h|help` from the route table and never
+   * starts the tool (lonelyHelpAction), so a help request cannot run the command.
+   */
+  ownHelp?: true;
 };
 
 export type NamespaceHelpOptions = {
@@ -1190,6 +1197,8 @@ export const ROUTES: readonly Route[] = [
     networkPolicy: "forbidden",
     mutationScope: "project",
     outputModes: ["human", "quiet", "json"],
+    // Every sensor worker prints its usage for --help and -h.
+    ownHelp: true,
   };
   }),
   {
@@ -2003,12 +2012,12 @@ export async function renderAllHelp(): Promise<string> {
     "",
     ...section(
       "TEAM WORK AND AUTHORING",
-      `Public commands the short help leaves out: '${invoke} <noun> --help' for one noun.`,
+      `Public commands the short help leaves out: '${invoke} <command> --help' for one.`,
       routeGroupLines(unlisted),
     ),
     ...section(
       "ENGINE",
-      `Your coding agent's harness runs these as '${invoke} engine <noun> <verb>'; running one yourself changes the workflow's records. '${invoke} engine <noun> --help' for one noun.`,
+      `Your coding agent's harness runs these as '${invoke} engine <noun> <verb>'; many of them change the workflow's records, so run one yourself only to look or to recover. '${invoke} engine <noun> --help' for one.`,
       routeGroupLines(
         ROUTES.filter((route) => route.namespace === "engine"),
         sensorHelpSummaries(),
@@ -2092,10 +2101,76 @@ function nounHelp(noun: string, routes: readonly Route[], namespace: RouteNamesp
   const listed = routes.every((route) => route.all !== undefined)
     ? `\n${routes.flatMap(routeForms).map((form) => `  ${invoke} ${stripHelpGroupPrefix(noun, form)}`).join("\n")}\n`
     : `verbs: ${routes.flatMap((route) => route.verbs).join(", ")}\n`;
+  if (routes.every((route) => route.kind === "routing-only")) {
+    return {
+      type: "noun-help",
+      message: `usage: ${routes.flatMap(routeForms).map((form) => `${invoke} ${stripHelpGroupPrefix(noun, form)}`).join("\n       ")}\n`,
+    };
+  }
   return {
     type: "noun-help",
     message: `usage: ${invoke} <verb> [flags]\n${listed}` +
       (verbHelp ? `For a verb's flags, run '${invoke} <verb> --help'.\n` : ""),
+  };
+}
+
+const HELP_WORDS: ReadonlySet<string> = new Set(["--help", "-h"]);
+
+// `<command> --help` (or `-h`) with nothing after it, in any
+// namespace: the dispatcher answers from the route table rather than starting
+// the tool, because most tools do not read a help flag and would do their work
+// instead (`aidlc park --help` parked a live workflow). A route whose tool
+// answers help itself says so with `ownHelp`, and gets `--help`; the six
+// human commands keep their own help (renderCommandHelp); and a noun that has
+// its own `help` verb, or its own custom help, keeps it. The bare word `help`
+// is not read here (#2504): after a noun it can be a name, as in
+// `engine intent help`. Anything followed by more words is the command's own
+// argv and is never read here.
+function lonelyHelpAction(argv: readonly string[], namespace: RouteNamespace): Action | undefined {
+  if (argv.length !== 2 || !HELP_WORDS.has(argv[1])) return undefined;
+  const head = argv[0];
+  const nounRoutes = ROUTES.filter((route) =>
+    route.namespace === namespace && route.group !== "top" && route.group === head
+  );
+  const topRoutes = nounRoutes.length > 0 ? [] : ROUTES.filter((route) =>
+    route.namespace === namespace && route.group === "top" && route.verbs.includes(head)
+  );
+  const routes = nounRoutes.length > 0 ? nounRoutes : topRoutes;
+  if (routes.length === 0) return undefined;
+  if (routes.some((route) =>
+    HUMAN_TOP_ROUTE_IDS.has(route.id) ||
+    route.verbs.includes("help") ||
+    route.custom === "config" ||
+    route.custom === "plugin"
+  )) {
+    return undefined;
+  }
+  const owner = routes.find((route) => route.ownHelp === true);
+  if (owner?.tool) {
+    return { type: "delegate", tool: owner.tool, args: ["--help"] };
+  }
+  if (nounRoutes.length > 0) return nounHelp(head, nounRoutes, namespace);
+  return topCommandHelp(head, topRoutes, namespace);
+}
+
+// A top-level verb's help (`aidlc next --help`): its usage forms and the
+// route's summary for it, plus who normally runs it.
+function topCommandHelp(verb: string, routes: readonly Route[], namespace: RouteNamespace): Action {
+  const invoke = namespace === "public" ? aidlcInvocation() : `${aidlcInvocation()} ${namespace}`;
+  const forms = routes.flatMap(routeForms).filter((form) => form === verb || form.startsWith(`${verb} `));
+  const summaries = routes.flatMap((route) => route.human ?? [])
+    .filter((line) => line.command === verb || line.command.startsWith(`${verb} `))
+    .map((line) => line.summary);
+  const who = namespace === "engine"
+    ? "Your coding agent's harness runs this command.\n"
+    : routes.some((route) => route.tool === TOOLS.orchestrate)
+    ? `Your coding agent runs this command for you during a workflow; use ${entrySkillInvocation()} in the chat instead.\n`
+    : "";
+  return {
+    type: "noun-help",
+    message: `usage: ${forms.map((form) => `${invoke} ${form}`).join("\n       ")}\n` +
+      (summaries.length > 0 ? `\n${summaries.map((line) => `  ${line}`).join("\n")}\n` : "") +
+      (who ? `\n${who}` : ""),
   };
 }
 
@@ -2366,6 +2441,8 @@ function resolveEngine(argv: string[]): Action {
   if (argv.length === 0 || argv[0] === "--help" || argv[0] === "-h" || argv[0] === "help") {
     return { type: "help", scope: "engine" };
   }
+  const help = lonelyHelpAction(argv, "engine");
+  if (help) return help;
 
   const alias = resolveAlias(argv, true);
   if (alias) return alias;
@@ -2415,6 +2492,8 @@ function resolveSystem(argv: string[]): Action {
   if (argv.length === 0 || argv[0] === "--help" || argv[0] === "-h" || argv[0] === "help") {
     return { type: "help", scope: "system" };
   }
+  const help = lonelyHelpAction(argv, "system");
+  if (help) return help;
 
   const noun = resolveNoun(argv, "system");
   if (noun) return noun;
@@ -2476,6 +2555,9 @@ function resolveActionWithoutGlobalFlags(argv: string[]): Action {
 
   const alias = resolveAlias(argv);
   if (alias) return alias;
+
+  const help = lonelyHelpAction(argv, "public");
+  if (help) return help;
 
   // The settings of the piece of work, typed at a terminal without `engine`
   // (`config set guard.review-freeze off`, `config get depth`, `config list`):
@@ -4494,6 +4576,16 @@ export async function main(rawArgv: string[]): Promise<void> {
   if (lifecycleHelp?.args.some((token) => token === "--help" || token === "-h")) {
     text(1, `usage: ${lifecycleHelp.usage}\n`);
     return;
+  }
+  // `<noun> --help` and the other help the route table answers: printed here,
+  // like the command help above, so a help request needs no project and never
+  // reaches a tool, a pin or a hook's stdin read.
+  if (argv.some((token) => HELP_WORDS.has(token))) {
+    const helpAction = resolveAction(argv);
+    if (helpAction.type === "noun-help") {
+      text(1, helpAction.message);
+      return;
+    }
   }
   const route = routePolicyFor(argv);
   if (route) await pinEnclosingProject(route, argv);

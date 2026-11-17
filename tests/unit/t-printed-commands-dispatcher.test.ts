@@ -56,15 +56,16 @@ describe("the dispatcher's own lines name the install's command", () => {
     }
   });
 
-  test("an unknown verb or command points at help the install can run", () => {
+  test("an unknown verb or command points at help the install can run", async () => {
     const verb = resolveAction(["engine", "state", "frob"]);
     expect(verb.type).toBe("error");
     expect(verb.type === "error" ? verb.message : "").toContain(`try '${INVOKE} engine --help'`);
     const top = resolveAction(["frobnicate"]);
     expect(top.type === "error" ? top.message : "").toContain(`try '${INVOKE} --help'`);
-    const all = renderAllHelp();
-    expect(all).toContain(`Run: ${INVOKE} engine --help`);
-    expect(all).toContain(`Run: ${INVOKE} system --help`);
+    const all = await renderAllHelp();
+    expect(all).toContain(`runs these as '${INVOKE} engine <noun> <verb>'`);
+    expect(all).toContain(`'${INVOKE} engine <noun> --help' for one.`);
+    expect(all).toContain(`as '${INVOKE} system <noun> <verb>'`);
     expect(renderNamespaceHelp(ENGINE_NAMESPACE_HELP)).toStartWith(`${INVOKE} engine <noun> <verb> [args]`);
     expect(renderNamespaceHelp(SYSTEM_NAMESPACE_HELP)).toStartWith(`${INVOKE} system <noun> <verb> [args]`);
     const config = dispatch(["engine", "config", "--help"]);
