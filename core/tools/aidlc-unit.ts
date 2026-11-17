@@ -12490,8 +12490,12 @@ function mergeMainIn(pd: string, args: string[], unit: string, branch: string, u
   }
   if (undo) {
     for (const { dir, name, into } of repos) {
-      if (merging(dir, into) && git(dir, ["merge", "--abort"]).ok) lines.push(`I undid the merge of ${into} into ${unit} in ${name}; ${unit} is as it was there, and nothing was pushed.`);
-      else if (has(dir, into, `refs/heads/${branch}`)) lines.push(`The merge of ${into} is already committed on ${unit} in ${name}, so I left it.`);
+      const aborted = merging(dir, into) ? git(dir, ["merge", "--abort"]) : null;
+      if (aborted?.ok) lines.push(`I undid the merge of ${into} into ${unit} in ${name}; ${unit} is as it was there, and nothing was pushed.`);
+      else if (aborted !== null) {
+        lines.push(`The merge of ${into} into ${unit} in ${name} could not be undone: git says "${gitSaid(aborted.stderr || aborted.stdout)}". ` +
+          "It is still waiting there.");
+      } else if (has(dir, into, `refs/heads/${branch}`)) lines.push(`The merge of ${into} is already committed on ${unit} in ${name}, so I left it.`);
       else lines.push(`No merge of ${into} is waiting in ${name}, so nothing was undone.`);
     }
     console.log(JSON.stringify({ undone: lines.some((line) => line.startsWith("I undid")), unit, notice: joinSaid(lines) }));
@@ -12550,21 +12554,31 @@ function mergeMainIn(pd: string, args: string[], unit: string, branch: string, u
     }
     const message = given === null ? [] : ["-m", given.text];
     if (entry.step === "finish" || entry.step === "merge") {
-      const made = entry.step === "finish"
-        ? (conflictFiles(dir).length > 0 ? null : git(dir, ["commit", "-q", "--no-edit", ...message]))
-        : CHECKOUT_STEPS.merge.run(dir, into, message);
-      const clash = conflictFiles(dir);
-      if (made === null || (!made.ok && clash.length > 0)) {
+      const clashed = (): void => {
+        const clash = conflictFiles(dir);
+        if (clash.length === 0) return;
         stop(`${into} and ${unit} both change ${joinNames(clash)} in ${name} in ways git cannot put together, so the merge is waiting ` +
           `for you there: resolve ${clash.length === 1 ? clash[0] : "them"}, and I can finish it and push ${unit}; or say if you want ` +
           "me to undo it. Nothing was pushed.");
+      };
+      if (entry.step === "finish") clashed();
+      const made = entry.step === "finish" ? git(dir, ["commit", "-q", "--no-edit", ...message]) : CHECKOUT_STEPS.merge.run(dir, into, message);
+      if (!made.ok) {
+        const said = gitSaid(made.stderr || made.stdout);
+        clashed();
+        // Their own resolution is in a merge they finish: it waits as they left it, never undone.
+        if (entry.step === "finish") {
+          stop(`Your hook in ${name} did not take the merge of ${into} into ${unit} (${said}), so the merge is still waiting there as ` +
+            "you resolved it, and nothing was pushed. If it is the merge's message, tell me the one to use, and I will finish it with that.");
+        }
+        // A merge this step just began holds nothing of theirs: it is undone.
+        if (gitOperationUnderWay(dir)?.what === "a merge") {
+          git(dir, ["merge", "--abort"]);
+          stop(`Your hook in ${name} did not take the merge of ${into} into ${unit} (${said}), so I undid it, and nothing was pushed. ` +
+            "If it is the merge's message, tell me the one to use, and I will merge with that.");
+        }
+        stop(`${into} could not be merged into ${unit} in ${name}: git says "${said}". Nothing was merged or pushed.`);
       }
-      if (!made.ok && gitOperationUnderWay(dir)?.what === "a merge") {
-        git(dir, ["merge", "--abort"]);
-        stop(`Your hook in ${name} did not take the merge of ${into} into ${unit} (${gitSaid(made.stderr || made.stdout)}), so I undid it, ` +
-          "and nothing was pushed. If it is the merge's message, tell me the one to use, and I will merge with that.");
-      }
-      if (!made.ok) stop(`${into} could not be merged into ${unit} in ${name}: git says "${gitSaid(made.stderr || made.stdout)}". Nothing was merged or pushed.`);
       mergedHere.push(name);
     } else if (entry.step === "push" && given !== null && git(dir, ["rev-list", "--count", "HEAD", "--not", "--remotes"]).stdout.trim() === "1" &&
       git(dir, ["rev-parse", "--verify", "--quiet", "HEAD^2"]).ok) {

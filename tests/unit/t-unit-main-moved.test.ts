@@ -6,7 +6,7 @@
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { engineAskMark, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 // Read by name at each call, so a case red before these exist fails on its own.
@@ -280,6 +280,41 @@ describe("the offer after the push, and its yes", () => {
     writeFileSync(join(billing, "README.md"), README.replace("Keeps a ledger.", "Keeps two ledgers and refunds."));
     git(billing, ["commit", "-q", "-am", "merge main"]);
     expect(String(run(UNIT, ["push", "--undo-merge"], alice).json?.notice)).toBe("The merge of origin/main is already committed on refunds in billing, so I left it.");
+  });
+
+  test("a clash she resolved, then her hook refuses git's merge message at the finish: the merge waits as she resolved it, and her message finishes it", () => {
+    const { alice, hosts, billing, record } = movedAndPushed(true);
+    next(alice);
+    run(UNIT, ["push", "--merge-main"], alice);
+    const resolved = README.replace("Keeps a ledger.", "Keeps two ledgers and refunds.");
+    writeFileSync(join(billing, "README.md"), resolved);
+    git(billing, ["add", "README.md"]);
+    ticketKeyHook(billing);
+    const refused = run(UNIT, ["push", "--merge-main"], alice);
+    expect(refused.status).not.toBe(0);
+    expect(String(refused.json?.error)).toBe(`Your hook in billing did not take the merge of origin/main into refunds (${TICKET_HOOK_WORDS}), so ` +
+      "the merge is still waiting there as you resolved it, and nothing was pushed. If it is the merge's message, tell me the one " +
+      "to use, and I will finish it with that.");
+    expect(mergeWaits(billing)).toBe(true);
+    expect(readFileSync(join(billing, "README.md"), "utf-8")).toBe(resolved);
+    const done = run(UNIT, ["push", "--merge-main", "--commit-message-file", commitMessage(alice, record, "PAY-12 bring main in\n")], alice);
+    expect(done.status, done.out).toBe(0);
+    expect(git(hosts.billing, ["log", "-1", "--format=%s", "refunds"])).toBe("PAY-12 bring main in");
+    expect(git(hosts.billing, ["show", "refunds:README.md"])).toContain("Keeps two ledgers and refunds.");
+  });
+
+  test("the undo where git cannot take the waiting merge back out says git's words, and the merge still waits", () => {
+    const { alice, billing } = movedAndPushed(true);
+    next(alice);
+    run(UNIT, ["push", "--merge-main"], alice);
+    // Another git of hers holds the index.
+    const lock = join(billing, ".git", "index.lock");
+    writeFileSync(lock, "");
+    const said = String(run(UNIT, ["push", "--undo-merge"], alice).json?.notice);
+    rmSync(lock);
+    expect(said).toStartWith('The merge of origin/main into refunds in billing could not be undone: git says "');
+    expect(said).toEndWith("It is still waiting there.");
+    expect(mergeWaits(billing)).toBe(true);
   });
 
   test("her change in a file main changes stops it before anything merges; a change in another file rides along", () => {
