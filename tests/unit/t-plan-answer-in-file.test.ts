@@ -250,12 +250,17 @@ describe("an answer written in the Plan Approval questions file", () => {
   // Any words they write are theirs, the words the engine uses for a plan built
   // without asking included; only that record itself holds no answer of theirs.
   test("keeps their own words Plan approval off, and never carries the record of a plan built without asking", () => {
-    const theirs = project();
-    askFor(theirs);
-    writeAnswer(theirs, "Plan approval off");
-    writeFileSync(join(theirs, "src", "base.ts"), "export const base = false;\n", "utf-8");
-    expect(next(theirs).kind).toBe("ask");
-    expect(answerLine(theirs)).toBe("[Answer]: Plan approval off");
+    const quoted = "Approve Plan, not AI-DLC built this plan without asking because plan approval is off for this";
+    for (const words of ["Plan approval off", quoted]) {
+      const theirs = project();
+      askFor(theirs);
+      writeAnswer(theirs, words);
+      const before = readFileSync(questionsPath(theirs), "utf-8");
+      writeFileSync(join(theirs, "src", "base.ts"), "export const base = false;\n", "utf-8");
+      expect(next(theirs).kind).toBe("ask");
+      expect(readFileSync(questionsPath(theirs), "utf-8")).not.toBe(before);
+      expect(answerLine(theirs)).toBe(`[Answer]: ${words}`);
+    }
     const record = project();
     askFor(record);
     const path = questionsPath(record);
@@ -266,6 +271,7 @@ describe("an answer written in the Plan Approval questions file", () => {
           "piece of work. This file is the record and asks nothing; to look at a plan\nbefore it is built, ask in chat.\n")
       .replace(/^\[Answer\]:$/m, "[Answer]: Plan approval off"), "utf-8");
     expect(readFileSync(path, "utf-8")).toContain("AI-DLC built this plan without asking");
+    expect(answerLine(record)).toBe("[Answer]: Plan approval off");
     writeFileSync(join(record, "src", "base.ts"), "export const base = false;\n", "utf-8");
     expect(next(record).kind).toBe("ask");
     expect(readFileSync(path, "utf-8")).toContain("AI-DLC writes this file when it asks you");

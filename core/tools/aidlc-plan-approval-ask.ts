@@ -1576,7 +1576,7 @@ export function publishPlanApprovalAsk(
       const at = onDisk.search(/^\[Answer\]:/m);
       const theirs = at < 0 ? "" : onDisk.slice(at).replace(/\r\n/g, "\n");
       const written = theirs.slice("[Answer]:".length).trim();
-      const carry = same && written !== "" && !onDisk.includes(BUILT_WITHOUT_ASKING_INTRO[0]) &&
+      const carry = same && written !== "" && !onDisk.slice(0, at).includes(BUILT_WITHOUT_ASKING_INTRO[0]) &&
         recordedApprovalFingerprint(onDisk) === targets[index].fingerprint;
       const file = carry ? `${content.slice(0, content.lastIndexOf("[Answer]:"))}${theirs}` : content;
       // The same bytes are not written again: an editor holding the file open would ask about a change on disk.
