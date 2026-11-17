@@ -228,6 +228,16 @@ describe("t-gate-notice-in-box: the gate's own lines are said in Claude Code's q
     const step = (await next(carried, [], { env: CLI })).directive as Step;
     expect(step.change_notices ?? []).toContain(NO_GIT);
     expect(existsSync(join(carried, SAID))).toBe(true);
+    // Shown in the box and answered after the kept lines aged out (a gate's usual pace): what the box showed counts.
+    const late = await atGate();
+    await report(late, "awaiting-approval", CLI);
+    const lateBox = beforeBox(late, gateBox())!;
+    expect(lateBox.question).toContain(NO_GIT);
+    ageKeptLines(late);
+    answered(late, lateBox, "Request Changes");
+    expect(existsSync(join(late, SAID))).toBe(true);
+    expect(heard((await next(late, [], { env: CLI })).directive as Step)).not.toContain("no git");
+    expect(beforeBox(late, gateBox())?.question ?? "").not.toContain(NO_GIT);
     // The box's answer could not record it: shown once more at the gate shown again, never lost.
     if (process.platform !== "win32") {
       const failed = await atGate();

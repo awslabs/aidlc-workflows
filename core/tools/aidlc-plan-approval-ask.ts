@@ -1118,10 +1118,12 @@ export function gateNoticeBoxShown(projectDir: string, payload: string): void {
   try {
     const parsed = JSON.parse(payload) as Record<string, unknown> | null;
     if (parsed === null || parsed.hook_event_name !== "PostToolUse" || parsed.tool_name !== "AskUserQuestion") return;
+    // What the box showed was said, whether or not its lines are still kept (they age out).
+    const shown = gateNoticesInBox(projectDir) ? singleBoxQuestion(parsed.tool_input) : null;
+    if (shown?.question.split("\n\n").slice(1).includes(NO_GIT_LINE)) writeNoGitLineSaid(projectDir);
     const found = gateNoticeLines(projectDir, parsed.tool_input, parsed.session_id);
     const tail = found === null ? "" : ["", ...found.lines].join("\n\n");
     if (found === null || !found.box.question.endsWith(tail) || found.box.question.length <= tail.length) return;
-    if (found.lines.includes(NO_GIT_LINE)) writeNoGitLineSaid(projectDir);
     found.said();
   } catch {
     // The lines stay for the next step.
