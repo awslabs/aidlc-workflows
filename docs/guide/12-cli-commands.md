@@ -905,9 +905,12 @@ an offer: on yes, `--merge-main --put-aside` keeps that change in git, puts the
 file back to its committed copy, brings main in, and puts the change back on top
 of main's at every end of the step (merged, a clash waiting, a merge undone, a
 push refused), still uncommitted; the finish of a clash never takes it into the
-merge commit. Where it does not go back cleanly, a Markdown file holds both with
-git's marks; any other file stays as main has it, the change kept in git under
-the id the line names.
+merge commit. Where it does not go back cleanly, a text file holds both with
+git's marks. `repos.json` is put together where both sides only add different
+repositories; where one repository is listed differently, the line names it and
+asks which to keep; otherwise it stays as main has it, the change kept in git
+for now (not for good: git may drop it after a while) under the id the line
+names.
 
 When the Unit's branch on the remote still holds the build pushed before and
 this build is not on top of it (a redo from the newer main after a turn-down,

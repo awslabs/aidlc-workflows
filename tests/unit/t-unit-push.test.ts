@@ -3333,13 +3333,14 @@ describe("a Unit on the workspace's own repository", () => {
   // Main moved under a Unit built here, merging cleanly with it, and main
   // changes a file of AI-DLC's record that has a change here too: `ours`
   // writes the change here, `theirs` main's, over the committed text.
-  function recordInTheWay(file: string, theirs: (text: string) => string, ours: (text: string) => string, clash = false, crlf = false) {
+  function recordInTheWay(file: string, theirs: (text: string) => string, ours: (text: string) => string, clash = false, crlf = false,
+    initial = "{\"a\": 1}\n") {
     const lines = (first: string, last: string): string => `${first}\nb\nc\nd\n${last}\n`;
     const home = oneRepoTeams();
     mkdirSync(join(home.dir, "src"), { recursive: true });
     if (!clash) writeFileSync(join(home.dir, "src", "refunds.ts"), lines("a", "e"));
     mkdirSync(join(home.dir, dirname(file)), { recursive: true });
-    if (!existsSync(join(home.dir, file))) writeFileSync(join(home.dir, file), "{\"a\": 1}\n");
+    if (!existsSync(join(home.dir, file))) writeFileSync(join(home.dir, file), initial);
     git(home.dir, ["add", "-A"]);
     git(home.dir, ["commit", "-q", "--allow-empty", "-m", "lead: before the take"]);
     git(home.dir, ["push", "-q", "origin", "main"]);
@@ -3438,23 +3439,67 @@ describe("a Unit on the workspace's own repository", () => {
     expect(readFileSync(join(undone.alice, TEAM), "utf-8")).toBe(undone.here);
   });
 
-  test("where the two meet: a rules file holds both, marked; any other file stays readable, the change kept in git", () => {
+  test("where the two meet: a text file of the record holds both, marked, Markdown or not", () => {
     const meets = recordInTheWay(TEAM, leadsRule, (text) => `${text}\nA learning kept here.\n`);
     const yes = run(UNIT, ["push", "--merge-main", "--put-aside"], meets.alice);
     expect(yes.status, yes.out).toBe(0);
     expect(String(yes.json?.notice)).toContain("The change to aidlc/spaces/default/memory/team.md did not go back cleanly on top of origin/main's, " +
       "so both are in the file now, marked where they meet, still not committed. Say if you want me to put the two together and show you.");
     expect(readFileSync(join(meets.alice, TEAM), "utf-8")).toContain("<<<<<<< origin/main");
+    // Any other text file of the record takes the same way: both kept on disk, never only in git.
     const json = "aidlc/team-notes.json";
-    const listed = recordInTheWay(json, () => "{\"a\": 2}\n", () => "{\"a\": 3}\n");
-    const again = run(UNIT, ["push", "--merge-main", "--put-aside"], listed.alice);
+    const notes = recordInTheWay(json, () => "{\"a\": 2}\n", () => "{\"a\": 3}\n");
+    const again = run(UNIT, ["push", "--merge-main", "--put-aside"], notes.alice);
     expect(again.status, again.out).toBe(0);
-    const said = String(again.json?.notice);
-    const kept = /kept in git as ([0-9a-f]+) /.exec(said)?.[1] ?? "";
-    expect(said).toContain(`The change to ${json} did not go back cleanly on top of origin/main's, so the file stays as origin/main has it, and the change ` +
-      `is kept in git as ${kept} (git show ${kept} shows it). Say if you want me to put the two together and show you.`);
-    expect(readFileSync(join(listed.alice, json), "utf-8")).toBe("{\"a\": 2}\n");
-    expect(git(listed.alice, ["show", kept])).toBe("{\"a\": 3}");
+    expect(String(again.json?.notice)).toContain(`The change to ${json} did not go back cleanly on top of origin/main's, so both are in the ` +
+      "file now, marked where they meet, still not committed.");
+    expect(readFileSync(join(notes.alice, json), "utf-8")).toContain("{\"a\": 3}");
+  });
+
+  // repos.json in AI-DLC's record: the team's list, with one repository and a comment.
+  const LIST = "aidlc/repos.json";
+  const LISTED = "// The team's repositories.\n{\n  \"repos\": [\n    { \"name\": \"ledger\", \"url\": \"https://example.test/team/ledger.git\" }\n  ]\n}\n";
+  const adds = (entry: string) => (text: string): string =>
+    text.replace('"url": "https://example.test/team/ledger.git" }', `"url": "https://example.test/team/ledger.git" },\n    ${entry}`);
+
+  test("repos.json where both add a different repository: put together by the tool, both listed, its comment kept", () => {
+    const { alice } = recordInTheWay(LIST, adds('{ "name": "audit", "url": "https://example.test/team/audit.git" }'),
+      adds('{ "name": "notes", "url": "https://example.test/team/notes.git" }'), false, false, LISTED);
+    const yes = run(UNIT, ["push", "--merge-main", "--put-aside"], alice);
+    expect(yes.status, yes.out).toBe(0);
+    expect(String(yes.json?.notice)).toContain(`The change to ${LIST} is back, on top of origin/main's, still not committed.`);
+    const now = readFileSync(join(alice, LIST), "utf-8");
+    expect(now).toStartWith("// The team's repositories.");
+    expect(now).toContain("https://example.test/team/audit.git");
+    expect(now).toContain("https://example.test/team/notes.git");
+    expect(now).not.toContain("<<<<<<<");
+  });
+
+  test("repos.json where the two list one repository differently: that difference said and asked, the list readable", () => {
+    const { alice } = recordInTheWay(LIST, adds('{ "name": "notes", "url": "https://example.test/team/notes.git" }'),
+      adds('{ "name": "notes", "path": "../notes" }'), false, false, LISTED);
+    const yes = run(UNIT, ["push", "--merge-main", "--put-aside"], alice);
+    expect(yes.status, yes.out).toBe(0);
+    const said = String(yes.json?.notice);
+    const kept = /kept for now, not for good, as ([0-9a-f]+)\./.exec(said)?.[1] ?? "";
+    expect(said).toContain(`The change to ${LIST} did not go back cleanly on top of origin/main's: origin/main lists notes at ` +
+      "https://example.test/team/notes.git, and the change lists it at ../notes. The file stays as origin/main has it; say which notes to " +
+      `keep, and I'll put the two together. I have the change kept for now, not for good, as ${kept}.`);
+    expect(readFileSync(join(alice, LIST), "utf-8")).not.toContain("../notes");
+    expect(git(alice, ["show", kept])).toContain("../notes");
+  });
+
+  test("repos.json where both changed the same repository: the list readable, the change kept for now, said with its offer first", () => {
+    const { alice } = recordInTheWay(LIST, (text) => text.replace("ledger.git", "ledger-moved.git"),
+      (text) => text.replace("ledger.git", "ledger-mine.git"), false, false, LISTED);
+    const yes = run(UNIT, ["push", "--merge-main", "--put-aside"], alice);
+    expect(yes.status, yes.out).toBe(0);
+    const said = String(yes.json?.notice);
+    const kept = /kept for now, not for good, as ([0-9a-f]+)\./.exec(said)?.[1] ?? "";
+    expect(said).toContain(`The change to ${LIST} did not go back cleanly on top of origin/main's, so the file stays as origin/main has it. ` +
+      `Say if you want me to put the two together and show you. I have the change kept for now, not for good, as ${kept}.`);
+    expect(readFileSync(join(alice, LIST), "utf-8")).toContain("ledger-moved.git");
+    expect(git(alice, ["show", kept])).toContain("ledger-mine.git");
   });
 
   test("a Unit built here whose branch starts from the plan's branch is not offered a merge of main", () => {

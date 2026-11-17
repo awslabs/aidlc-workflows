@@ -259,7 +259,7 @@ import {
 } from "./aidlc-unit-teams.js";
 import { gitOperationUnderWay, rebaseUnderWay, recordChanged, recordCommitBlock, recordPaths, submoduleLeavesProjectRepo } from "./aidlc-git.ts";
 import { ownFilesToCommit } from "./aidlc-brought-files.ts";
-import { commitOwnCommand, displayRepoPath, leftFilesNamed, UPDATE_COMMIT_MESSAGE, UPDATE_MESSAGE_KEY, reposManifestPath, localUnreadableLine, readWorkspaceRepos, repoCloneable, repoCloneOfferLine, repoClonePath, repoNotThereLine, withoutCredentials, workspaceManifestAt } from "./aidlc-workspace-manifest.js";
+import { commitOwnCommand, displayRepoPath, leftFilesNamed, type WorkspaceRepoEntry, UPDATE_COMMIT_MESSAGE, UPDATE_MESSAGE_KEY, reposManifestPath, localUnreadableLine, readWorkspaceRepos, parseWorkspaceManifest, repoCloneable, repoCloneOfferLine, repoClonePath, repoNotThereLine, REPOS_MANIFEST_PLACES, workspaceManifestWith, withoutCredentials, workspaceManifestAt } from "./aidlc-workspace-manifest.js";
 import { maskUserinfo, workspaceCloneUrl } from "./aidlc-workspace-sync.ts";
 import { gitAddressKey } from "./aidlc-workspace-repos.ts";
 import { loadGraph } from "./aidlc-graph.ts";
@@ -13890,14 +13890,41 @@ function mergeMainIn(pd: string, args: string[], unit: string, branch: string, u
   console.log(JSON.stringify({ pushed: plan.some((entry) => entry.step !== "level"), unit, notice: joinSaid([...lines, whereNow().trim(), putBack().trim()]) }));
 }
 
+// repos.json's change put together with main's by the list's own reader and
+// writer: the text with each repository the change adds that main's copy
+// lacks, where the change only adds; the one repository the two list
+// differently, where that is all; null otherwise.
+function listTogether(base: string, theirs: string, ours: string):
+  string | { name: string; theirs: WorkspaceRepoEntry; ours: WorkspaceRepoEntry } | null {
+  let lists: WorkspaceRepoEntry[][];
+  try {
+    lists = [base, theirs, ours].map((raw) => parseWorkspaceManifest(raw).repos);
+  } catch {
+    return null;
+  }
+  const [was, main, change] = lists;
+  const same = (a: WorkspaceRepoEntry | undefined, b: WorkspaceRepoEntry | undefined): boolean => JSON.stringify(a) === JSON.stringify(b);
+  const named = (list: WorkspaceRepoEntry[], name: string): WorkspaceRepoEntry | undefined => list.find((entry) => entry.name === name);
+  if (was.some((entry) => !same(entry, named(change, entry.name)))) return null;
+  const added = change.filter((entry) => named(was, entry.name) === undefined);
+  const differs = added.filter((entry) => named(main, entry.name) !== undefined && !same(entry, named(main, entry.name)));
+  if (differs.length === 1) return { name: differs[0].name, theirs: named(main, differs[0].name)!, ours: differs[0] };
+  if (differs.length > 1) return null;
+  let text: string | null = theirs;
+  for (const entry of added.filter((each) => named(main, each.name) === undefined)) text = text === null ? null : workspaceManifestWith(text, entry);
+  return text;
+}
+
 // A change to a file of AI-DLC's record put aside for a merge, put back on top
 // of what the merge left there by a three-way merge of the file (`git
 // merge-file`, base its committed copy before): the line that says how it
-// went. Where the two meet, a Markdown file holds both with git's marks; any
-// other file (repos.json, a state file) stays as the merge left it, readable,
-// and the change stays in git under its id. Where the merge left the file as
-// it was committed (undone, or never begun), the change is back as it was,
-// unsaid.
+// went. Where the two meet, a text file holds both with git's marks, so no
+// words of the team's sit only in an object git may drop; repos.json, which
+// AI-DLC reads at every step, is put together by its own reader and writer
+// where the change only adds repositories, and otherwise stays readable as the
+// merge left it, the change kept in git under its id for now. Where the merge
+// left the file as it was committed (undone, or never begun), the change is
+// back as it was, unsaid.
 function putBackChange(entry: { dir: string; path: string; into: string; kept: string; base: string }): string {
   const { dir, path, into, kept, base } = entry;
   const scratch = mkdtempSync(join(tmpdir(), "aidlc-aside-"));
@@ -13930,14 +13957,31 @@ function putBackChange(entry: { dir: string; path: string; into: string; kept: s
       writeBack(mergedOid());
       return `The change to ${path} is back, on top of ${into}'s, still not committed.`;
     }
-    if (merged.status !== null && merged.status > 0 && path.endsWith(".md") && !path.endsWith("aidlc-state.md")) {
+    const short = git(dir, ["rev-parse", "--short", kept]).stdout.trim();
+    const keptForNow = `I have the change kept for now, not for good, as ${short}.`;
+    if ((REPOS_MANIFEST_PLACES as readonly string[]).includes(path)) {
+      const together = listTogether(blob(base).toString("utf-8"), now === "" ? "" : blob(now).toString("utf-8"), blob(kept).toString("utf-8"));
+      if (typeof together === "string") {
+        writeFileSync(join(scratch, "merged"), together);
+        writeBack(git(dir, ["hash-object", "-w", "--no-filters", "--", join(scratch, "merged")]).stdout.trim());
+        return `The change to ${path} is back, on top of ${into}'s, still not committed.`;
+      }
+      if (together !== null) {
+        const where = (entry: WorkspaceRepoEntry): string => `${entry.url ?? entry.path ?? "no address"}${entry.branch ? ` (branch ${entry.branch})` : ""}`;
+        return `The change to ${path} did not go back cleanly on top of ${into}'s: ${into} lists ${together.name} at ${where(together.theirs)}, ` +
+          `and the change lists it at ${where(together.ours)}. The file stays as ${into} has it; say which ${together.name} to keep, and ` +
+          `I'll put the two together. ${keptForNow}`;
+      }
+      return `The change to ${path} did not go back cleanly on top of ${into}'s, so the file stays as ${into} has it. Say if you want me ` +
+        `to put the two together and show you. ${keptForNow}`;
+    }
+    if (merged.status !== null && merged.status > 0 && !path.endsWith("aidlc-state.md")) {
       writeBack(mergedOid());
       return `The change to ${path} did not go back cleanly on top of ${into}'s, so both are in the file now, marked where they meet, ` +
         "still not committed. Say if you want me to put the two together and show you.";
     }
-    const short = git(dir, ["rev-parse", "--short", kept]).stdout.trim();
-    return `The change to ${path} did not go back cleanly on top of ${into}'s, so the file stays as ${into} has it, and the change is kept in ` +
-      `git as ${short} (git show ${short} shows it). Say if you want me to put the two together and show you.`;
+    return `The change to ${path} did not go back cleanly on top of ${into}'s, so the file stays as ${into} has it. Say if you want me ` +
+      `to put the two together and show you. ${keptForNow}`;
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
