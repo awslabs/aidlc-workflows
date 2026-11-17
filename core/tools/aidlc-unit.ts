@@ -1560,13 +1560,7 @@ function writeUnitRecord(
     localGit(projectDir, ["update-ref", reads, commit]);
     if (asBranch) localGit(projectDir, ["update-ref", onBranch, commit]);
   };
-  // git's own words for the name in the way, wherever the host put them: in the refusal's parenthesis, or on
-  // a line of its own before it.
-  const inTheWay = (stderr: string): string | null => {
-    const line = stderr.split(/\r?\n/).find((entry) => /exists; cannot create/.test(entry));
-    if (line === undefined) return null;
-    return /\(([^()]*exists; cannot create[^()]*)\)/.exec(line)?.[1] ?? line.replace(/^\s*remote:\s*(?:error:\s*)?/, "").trim();
-  };
+  const inTheWay = nameInTheWay;
   const held = localGit(projectDir, ["rev-parse", "--verify", "--quiet", onBranch]).stdout.trim();
   if (held !== "" && held === localGit(projectDir, ["rev-parse", "--verify", "--quiet", reads]).stdout.trim()) {
     const pushed = push(branchName, expected);
@@ -1614,6 +1608,14 @@ function recordOnBranchLine(repo: string, unit: string, branch: { name: string; 
 }
 
 // A branch another branch's name is in the way of: no race lost, and said so.
+// git's own words for a name in the way of a branch, wherever the host put
+// them: in the refusal's parenthesis, or on a line of its own before it.
+function nameInTheWay(stderr: string): string | null {
+  const line = stderr.split(/\r?\n/).find((entry) => /exists; cannot create/.test(entry));
+  if (line === undefined) return null;
+  return /\(([^()]*exists; cannot create[^()]*)\)/.exec(line)?.[1] ?? line.replace(/^\s*remote:\s*(?:error:\s*)?/, "").trim();
+}
+
 function recordInTheWayLine(repo: string, unit: string, words: string): string {
   return `${repo} has a branch in the way of ${unit}'s record (git says "${words.trim()}"). Your take of ${unit} is not written there, ` +
     "and someone else could still take it.";
@@ -7216,6 +7218,17 @@ function writeSharedPlan(pd: string, message?: string, named?: string, carry?: t
     }
     if (planAtCopy(pd, at.copy).kind === "newer") fail(newerPlanStep(pd));
   }
+  // The lead's own words for a branch people can open (--visible): looked at
+  // first, copy or not; a plan shared as the ref goes to its branch with its
+  // history, and a first share is written as the branch.
+  if (invokedArgs.includes("--visible")) {
+    const look = lookAtPlan(pd, place);
+    if (look.unreached !== undefined) {
+      fail(`${place.repo} could not be reached, so the plan is not shared${look.unreached === null ? "." : `: git says "${look.unreached}".`} Say when to try again.`);
+    }
+    if (look.tip !== null && planBranchAt(pd, place) === null) return planToBranch(pd, place, look.tip);
+    if (look.tip === null) Object.assign(place, { branch: visiblePlanBranch(place) });
+  }
   let added: string[] = [];
   // The walking skeleton the plan held that the answer here takes out.
   let released: string | null = null;
@@ -7277,7 +7290,8 @@ function writeSharedPlan(pd: string, message?: string, named?: string, carry?: t
           ? "with what was decided on each Unit as the plan last had it."
           : "from your own record here. What you had decided on its Units was not there to carry, so it is not on the plan now.")
       : written.created
-        ? `The plan is shared in ${repo}. AI-DLC sends no notice of it: the teams hear it from you. A team whose workspace has no ` +
+        ? `The plan is shared in ${repo}${place.branch === undefined ? "" : ` on the branch ${place.branch.ref.slice("refs/heads/".length)}. ` +
+          `${PLAN_BRANCH_IS(repo)} ${BRANCH_PATTERN.slice(0, -1)}`}. AI-DLC sends no notice of it: the teams hear it from you. A team whose workspace has no ` +
           `${repo} needs this address: ${address}`
         : carried !== null ? `The plan in ${repo} has them now, as you gave them.`
         : added.length > 0 || released !== null
@@ -7303,9 +7317,29 @@ function writeSharedPlan(pd: string, message?: string, named?: string, carry?: t
   // message has a way in, though the share asked for none.
   // The person's own message is asked for once: with theirs refused too, the
   // way on is another repository, never the same question.
+  if (written.byRule && message === undefined && place.branch !== undefined) {
+    const file = commitMessageFile(pd, "share", "plan");
+    return { notShared: {
+      notice: `${repo} did not take the plan's branch: ${written.words}. If it is the commit message, tell me the one to use. The plan is not shared ` +
+        "there yet; I can share it there out of the branch list instead: say if you want that.",
+      step: "Tell the person in plain words what it reports, then end your turn. When they give the commit message, write it to " +
+        `${file} with your file tool, exactly as they gave it, then run \`${aidlcInvocation()} unit share --plan --visible --commit-message-file ${file}\`; ` +
+        `when they want it out of the branch list instead, run \`${aidlcInvocation()} unit share --plan\`. Tell them in plain words what it reports.`,
+    } };
+  }
   if (written.byRule && message === undefined) {
-    return messageWayIn(pd, `${repo} did not take the plan: ${written.words}. If it is the commit message, tell me the one to use, and I will share it with that.`,
-      named);
+    // The plan's ref refused by a rule where the plan is no branch yet: the branch is offered too.
+    const branch = planBranchAt(pd, place) === null ? visiblePlanBranch(place).ref.slice("refs/heads/".length) : null;
+    const way = messageWayIn(pd, `${repo} did not take the plan: ${written.words}. If it is the commit message, tell me the one to use, and I will share it with that.` +
+      (branch === null ? "" : ` If not, I can put the plan on a branch there instead, ${branch}. ${PLAN_BRANCH_IS(repo)} Say which.`), named);
+    if (branch !== null && "notShared" in way) {
+      way.notShared.step += ` When they want it on the branch, run \`${aidlcInvocation()} unit share --plan --visible\` and tell them in plain words what it reports.`;
+    }
+    return way;
+  }
+  if (written.kind === "refused" && written.inTheWay !== undefined) {
+    fail(`${repo} has a branch in the way of the plan's branch (git says "${written.inTheWay}"). The plan is not shared there; name another ` +
+      "repository the teams can read and I will share it there.");
   }
   fail(`${repo} did not take the plan: ${written.words}. ${retry}`);
 }
@@ -8854,6 +8888,8 @@ export interface PlanPlace {
   work: string;
   ref: string;
   copy: string;
+  // The plan written as its branch where it is not there yet (--visible): the branch and its copy here.
+  branch?: { ref: string; copy: string };
 }
 
 // A repository of the work as the plan names it: its address as the lead's own
@@ -9954,14 +9990,14 @@ function planBranchAt(pd: string, place: PlanPlace): { ref: string; copy: string
   return found.length === 1 ? found[0] : null;
 }
 
-// The lead's own plan is on its branch, as this computer last read it.
-export function leadsPlanOnBranch(projectDir: string): boolean {
+// The branch the lead's own plan is on, as this computer last read it, or null.
+export function leadsPlanBranch(projectDir: string): string | null {
   try {
     const pd = resolveProjectDir(projectDir);
     const place = planPlaceForShare(pd);
-    return "ref" in place && planBranchAt(pd, place) !== null;
+    return ("ref" in place ? planBranchAt(pd, place)?.ref.slice("refs/heads/".length) : null) ?? null;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -9969,10 +10005,10 @@ export function leadsPlanOnBranch(projectDir: string): boolean {
 // null: none there), to the form the plan is in. `lost` is git's own race
 // classes, `byRule` a rule of the remote's; `words` are git's and the host's own.
 export function pushPlan(projectDir: string, place: PlanPlace, commit: string, lease: string | null):
-  { ok: true } | { ok: false; lost: boolean; byRule: boolean; words: string; timedOut: boolean } {
+  { ok: true } | { ok: false; lost: boolean; byRule: boolean; words: string; timedOut: boolean; inTheWay?: string } {
   const via = gitTargetFor(projectDir, place.address, "push");
   // A plan gone from there goes back in the form this computer last read it in.
-  const branch = planBranchAt(projectDir, place);
+  const branch = place.branch ?? planBranchAt(projectDir, place);
   const name = branch?.ref ?? place.ref;
   const pushed = git(projectDir, [
     "push", via.target, `--force-with-lease=${name}:${lease ?? ""}`, `${commit}:${name}`,
@@ -9988,7 +10024,48 @@ export function pushPlan(projectDir: string, place: PlanPlace, commit: string, l
     byRule: refusedByHostRule(pushed.stderr),
     words: maskUserinfo(pushRefusal(pushed.stderr)),
     timedOut: /ETIMEDOUT/.test(pushed.stderr),
+    ...(nameInTheWay(pushed.stderr) === null ? {} : { inTheWay: maskUserinfo(nameInTheWay(pushed.stderr)!) }),
   };
+}
+
+// The plan's branch at `place`, as a first write there makes it: aidlc/plans/<work id>-<label>, and its copy here.
+function visiblePlanBranch(place: PlanPlace): { ref: string; copy: string } {
+  const named = `${place.id8}-${planBranchLabel(place.work)}`;
+  return { ref: `${PLAN_BRANCHES}${named}`, copy: homeCopyOnBranchName(named, repoCopyKey(place.address), "plan") };
+}
+
+// What a branch of the plan is to its readers there, said with the branch.
+const PLAN_BRANCH_IS = (repo: string): string => `People can open it there, and everyone who fetches ${repo} gets it; it is not for merging.`;
+const BRANCH_PATTERN = "A job that runs on every branch there (a check, a clean-up) can leave it alone by the pattern aidlc/**.";
+
+// --visible on a plan shared as the ref: the plan's tip goes to its branch, its
+// history with it (no commit is written), then the ref is deleted with a lease
+// on that tip: one atomic push where the host takes it, else the two in turn.
+function planToBranch(pd: string, place: PlanPlace, tip: string): SharedPlan {
+  const branch = visiblePlanBranch(place);
+  const name = branch.ref.slice("refs/heads/".length);
+  const via = gitTargetFor(pd, place.address, "push");
+  const env = { ...via.env, GIT_TERMINAL_PROMPT: "0" };
+  const toBranch = [`--force-with-lease=${branch.ref}:`, `${tip}:${branch.ref}`];
+  const dropRef = [`--force-with-lease=${place.ref}:${tip}`, `:${place.ref}`];
+  const stays = `The plan stays where it was in ${place.repo}.`;
+  if (!git(pd, ["push", "--atomic", via.target, ...toBranch, ...dropRef], env).ok) {
+    const made = git(pd, ["push", via.target, ...toBranch], env);
+    if (!made.ok) {
+      const words = maskUserinfo(pushRefusal(made.stderr));
+      const inTheWay = nameInTheWay(made.stderr);
+      if (inTheWay !== null) fail(`${place.repo} has a branch in the way of the plan's branch (git says "${maskUserinfo(inTheWay)}"). ${stays}`);
+      if (refusedByHostRule(made.stderr)) fail(`${place.repo} did not take the plan's branch: ${words}. If it is the commit message, tell me the one to use. ${stays}`);
+      // git ends a push with one fatal exit whether the host was not reached or refused it: the read after it tells.
+      if (lookAtPlan(pd, place).unreached === undefined) fail(`${place.repo} did not take the plan's branch: ${words}. ${stays}`);
+      fail(`${place.repo} could not be reached, so ${stays.charAt(0).toLowerCase()}${stays.slice(1, -1)}: git says "${words}". Say when to try again.`);
+    }
+    // The ref left behind holds the same commit, so the look reads the plan from its branch.
+    git(pd, ["push", via.target, ...dropRef], env);
+  }
+  localGit(pd, ["update-ref", branch.copy, tip]);
+  return { repo: place.repo, address: maskUserinfo(place.address), commit: tip,
+    said: `The plan in ${place.repo} is on the branch ${name} now, with its history. ${PLAN_BRANCH_IS(place.repo)} ${BRANCH_PATTERN}` };
 }
 
 export type PlanFollowed = { place: PlanPlace; line: string };
@@ -10003,7 +10080,7 @@ export type PlanWrite =
   | { kind: "written"; commit: string; version: number; created: boolean; regained?: true; over?: { carried: boolean; onNote?: true }; back?: { count: number; name: string }; followed?: PlanFollowed; underNote?: true }
   | { kind: "unchanged"; commit: string; followed?: PlanFollowed }
   | { kind: "unreached"; words: string | null }
-  | { kind: "refused"; words: string; byRule: boolean }
+  | { kind: "refused"; words: string; byRule: boolean; inTheWay?: string }
   | { kind: "stale"; words: string }
   | { kind: "unreadable"; format: number }
   | { kind: "stopped"; detail: unknown; followed?: PlanFollowed }
@@ -10168,10 +10245,11 @@ export function writePlan(
       // git ends a push with one fatal exit whether the host was not reached or
       // answered with no push access or no sign-in: the read after it tells.
       if (!pushed.lost) {
-        return look.unreached !== undefined ? { kind: "unreached", words: pushed.words } : { kind: "refused", words: pushed.words, byRule: pushed.byRule };
+        return look.unreached !== undefined ? { kind: "unreached", words: pushed.words }
+          : { kind: "refused", words: pushed.words, byRule: pushed.byRule, ...(pushed.inTheWay === undefined ? {} : { inTheWay: pushed.inTheWay }) };
       }
       if (look.unreached !== undefined) return { kind: "unreached", words: look.unreached };
-      if (look.tip === tip) return { kind: "refused", words: pushed.words, byRule: false };
+      if (look.tip === tip) return { kind: "refused", words: pushed.words, byRule: false, ...(pushed.inTheWay === undefined ? {} : { inTheWay: pushed.inTheWay }) };
       if (writes === 3) return { kind: "stale", words: pushed.words };
       tip = look.tip;
     }

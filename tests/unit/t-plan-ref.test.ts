@@ -1176,7 +1176,7 @@ describe("a repository that moved hosts: the plan taken over where it is now", (
     // A refusal that may be on the message asks for the person's own first; with it, the same refusal is the end of
     // that way, and the way on is another repository, never the same question again.
     const asked = run(UNIT, ["share", "--plan"], home.dir);
-    expect(String(asked.json?.notice), asked.out).toEndWith("If it is the commit message, tell me the one to use, and I will share it with that.");
+    expect(String(asked.json?.notice), asked.out).toContain("If it is the commit message, tell me the one to use, and I will share it with that. If not, I can put the plan on a branch there instead,");
     const file = /write it to (\S+) with your file tool/.exec(String(asked.json?.step))?.[1] ?? "";
     mkdirSync(dirname(join(home.dir, ...file.split("/"))), { recursive: true });
     writeFileSync(join(home.dir, ...file.split("/")), "ABC-1 share the plan\n");
@@ -1632,7 +1632,7 @@ describe("what the lead reads", () => {
     expect(refused.status, refused.out).toBe(0);
     expect(refused.json?.shared).toBe(false);
     expect(String(refused.json?.notice)).toContain(`checkout-api did not take the plan: ${TICKET_RULE_WORDS}`);
-    expect(String(refused.json?.notice)).toEndWith("If it is the commit message, tell me the one to use, and I will share it with that.");
+    expect(String(refused.json?.notice)).toContain("If it is the commit message, tell me the one to use, and I will share it with that. If not, I can put the plan on a branch there instead,");
     const file = /write it to (\S+) with your file tool/.exec(String(refused.json?.step))?.[1] ?? "";
     expect(String(refused.json?.step)).toContain(` unit share --plan --commit-message-file ${file}`);
     mkdirSync(dirname(join(home.dir, ...file.split("/"))), { recursive: true });

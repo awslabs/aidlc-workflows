@@ -474,3 +474,86 @@ describe("a closed plan still on its branch", () => {
     expect(has(host, planRefOf(home.id8))).toBe(false);
   });
 });
+
+describe("the plan on a branch people can open, on the lead's own words (--visible)", () => {
+  const VISIBLE = ["share", "--plan", "--visible"];
+  const name = (id8: string): string => `aidlc/plans/${id8}-fixture`;
+  const IS = "People can open it there, and everyone who fetches checkout-api gets it; it is not for merging.";
+  const PATTERN = "A job that runs on every branch there (a check, a clean-up) can leave it alone by the pattern aidlc/**.";
+
+  test("a first share is the plan's branch, never a ref, said so; a teammate's look offers its Units", () => {
+    const home = makePlanHome({ share: false });
+    const host = home.hosts["checkout-api"];
+    const shared = run(UNIT, VISIBLE, home.dir);
+    expect(shared.status, shared.out).toBe(0);
+    expect(String(shared.json?.notice)).toStartWith(`The plan is shared in checkout-api on the branch ${name(home.id8)}. ${IS} ${PATTERN} ` +
+      "AI-DLC sends no notice of it: the teams hear it from you. A team whose workspace has no checkout-api needs this address: ");
+    expect(has(host, `refs/heads/${name(home.id8)}`)).toBe(true);
+    expect(has(host, planRefOf(home.id8))).toBe(false);
+    const sam = teamWorkspace(home.hosts, "sam", ["checkout-api"]);
+    expect(starts(next(sam, ENV, ["--units"]))).toContain("Start checkout-ui");
+  });
+
+  test("on a plan shared as the ref: the same commit goes to its branch with its history, and the ref is gone", () => {
+    const home = makePlanHome();
+    const host = home.hosts["checkout-api"];
+    const moved = run(UNIT, VISIBLE, home.dir);
+    expect(moved.status, moved.out).toBe(0);
+    expect(String(moved.json?.notice)).toBe(`The plan in checkout-api is on the branch ${name(home.id8)} now, with its history. ${IS} ${PATTERN}`);
+    expect(git(host, ["rev-parse", `refs/heads/${name(home.id8)}`])).toBe(home.plan!);
+    expect(has(host, planRefOf(home.id8))).toBe(false);
+  });
+
+  test("a host that takes no ref of AI-DLC's: the share offers the branch, and its yes puts the plan there", () => {
+    const home = makePlanHome({ share: false });
+    const host = home.hosts["checkout-api"];
+    refuse(host, ["refs/aidlc/"]);
+    const shared = run(UNIT, ["share", "--plan"], home.dir);
+    expect(String(shared.json?.notice), shared.out).toMatch(new RegExp("^checkout-api did not take the plan: .*\\. If it is the commit message, tell me the one to use, " +
+      `and I will share it with that\\. If not, I can put the plan on a branch there instead, ${name(home.id8)}\\. People can open it there, and everyone who ` +
+      "fetches checkout-api gets it; it is not for merging\\. Say which\\.$"));
+    expect(String(shared.json?.step)).toContain("unit share --plan --visible`");
+    const yes = run(UNIT, VISIBLE, home.dir);
+    expect(yes.status, yes.out).toBe(0);
+    expect(has(host, `refs/heads/${name(home.id8)}`)).toBe(true);
+  });
+
+  test("a branch rule: refused at a first share with the way on, and on a shared plan it stays where it was", () => {
+    const first = makePlanHome({ share: false });
+    refuse(first.hosts["checkout-api"], ["refs/heads/aidlc/"]);
+    const refused = run(UNIT, VISIBLE, first.dir);
+    expect(String(refused.json?.notice), refused.out).toMatch(/^checkout-api did not take the plan's branch: .*\. If it is the commit message, tell me the one to use\. The plan is not shared there yet; I can share it there out of the branch list instead: say if you want that\.$/);
+    expect(String(refused.json?.step)).toContain("unit share --plan --visible --commit-message-file ");
+    const shared = makePlanHome();
+    refuse(shared.hosts["checkout-api"], ["refs/heads/aidlc/"]);
+    const stays = run(UNIT, VISIBLE, shared.dir);
+    expect(stays.status).not.toBe(0);
+    expect(String(stays.json?.error)).toMatch(/^checkout-api did not take the plan's branch: .*\. If it is the commit message, tell me the one to use\. The plan stays where it was in checkout-api\.$/);
+    expect(git(shared.hosts["checkout-api"], ["rev-parse", planRefOf(shared.id8)])).toBe(shared.plan!);
+  });
+
+  test("a branch in the way of the plan's branch: said in git's words, at a first share and on a shared plan", () => {
+    const first = makePlanHome({ share: false });
+    const host = first.hosts["checkout-api"];
+    git(host, ["update-ref", "refs/heads/aidlc", git(host, ["rev-parse", "refs/heads/main"])]);
+    const refused = run(UNIT, VISIBLE, first.dir);
+    expect(refused.status).not.toBe(0);
+    expect(String(refused.json?.error)).toMatch(/^checkout-api has a branch in the way of the plan's branch \(git says ".*exists; cannot create.*"\)\. The plan is not shared there; name another repository the teams can read and I will share it there\.$/);
+    const shared = makePlanHome();
+    const at = shared.hosts["checkout-api"];
+    git(at, ["update-ref", "refs/heads/aidlc", git(at, ["rev-parse", "refs/heads/main"])]);
+    const stays = run(UNIT, VISIBLE, shared.dir);
+    expect(String(stays.json?.error)).toMatch(/^checkout-api has a branch in the way of the plan's branch \(git says ".*exists; cannot create.*"\)\. The plan stays where it was in checkout-api\.$/);
+    expect(git(at, ["rev-parse", planRefOf(shared.id8)])).toBe(shared.plan!);
+  });
+
+  test("the share question for a Unit added later, on a plan on its branch, says where it goes", () => {
+    const home = makePlanHome();
+    planAsBranch(home.hosts["checkout-api"], home.id8);
+    next(home.dir, { ...ENV, AIDLC_SESSION_OVERRIDE: "lead-1" });
+    addUnit(home.dir);
+    const ask = next(home.dir, { ...ENV, AIDLC_SESSION_OVERRIDE: "lead-2" });
+    expect(String(ask.question), JSON.stringify(ask).slice(0, 600)).toBe("The plan in checkout-api does not have ledger-sync yet: you added it after you " +
+      `shared the plan. Do you want me to share it again? It goes on the plan's branch there, ${name(home.id8)}; nothing is added to your files.`);
+  });
+});

@@ -668,7 +668,7 @@ import {
   planBranchOffered,
   planShareWork,
   leadsOwnTeamWork,
-  leadsPlanOnBranch,
+  leadsPlanBranch,
   sharesPlanRef,
   planByPullRequestDetail,
   planShareWords,
@@ -5670,7 +5670,7 @@ function teamCommandsNote(projectDir?: string): string {
   const moved = projectDir !== undefined && leadsOwnTeamWork(projectDir)
     ? " When the person says the plan is in another repository now, that is the move to it on this computer: run " +
       `\`${aidlcInvocation()} unit share --plan --repo <that repository>\`.` +
-      (leadsPlanOnBranch(projectDir) ? ` When they ask to take the plan off its branch, run \`${aidlcInvocation()} unit share --plan --off-branch\`.` : "")
+      (leadsPlanBranch(projectDir) !== null ? ` When they ask to take the plan off its branch, run \`${aidlcInvocation()} unit share --plan --off-branch\`.` : "")
     : "";
   return "When the person says a repo turned a Unit down, run " +
     `\`${unitTool} turned-down <unit> --repo <repo> ${unitWordsArg("turned-down")}\`; when they say a repo merged it ` +
@@ -6306,6 +6306,7 @@ function skeletonShareOffer(
 // the added Units only as this question's yes.
 const PLAN_REPO_NOTE = (added: string[] | null = null): string =>
   "When the person names another repository for the plan, add `--repo <its name or address>` to the share's command. " +
+  "When they want the plan on a branch people can open, add `--visible` to it. " +
   (added === null ? "" : `When the person wants the plan moved and ${namesInProse(added)} not shared yet, run the question's Not now first, then the move. `) +
   teamCommandsNote();
 
@@ -6348,13 +6349,15 @@ function planRefShareOffer(projectDir: string): AskDirective | PrintDirective | 
     return lineEndingTurn(planNoRemoteLine("repo" in place ? place.repo : place.named, added !== null));
   }
   const builtHere = added === null ? unitsAskedHereForShare(projectDir) : [];
+  const onBranch = added === null ? null : leadsPlanBranch(projectDir);
   const question = added === null
     ? `Do you want me to share the plan with the teams? I'd put it in ${place.repo}: ${planContents(projectDir)}. ` +
       "Nothing is added to a branch or to your files. " +
       `Everyone who can read ${place.repo} can read it.` +
       (builtHere.length > 0 ? ` I'd also record that ${namesInProse(builtHere)} ${builtHere.length === 1 ? "is" : "are"} built here.` : "")
     : `The plan in ${place.repo} does not have ${namesInProse(added)} yet: you added ${added.length === 1 ? "it" : "them"} after ` +
-      "you shared the plan. Do you want me to share it again? Nothing is added to a branch or to your files.";
+      "you shared the plan. Do you want me to share it again? " + (onBranch === null ? "Nothing is added to a branch or to your files."
+        : `It goes on the plan's branch there, ${onBranch}; nothing is added to your files.`);
   const ask = teamHandoverAsk(projectDir, {
     handovers: ["share"],
     marks: [mark],
