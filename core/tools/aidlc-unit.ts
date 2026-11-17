@@ -6926,6 +6926,67 @@ function switchRefusedLine(branch: string, remote: string, here: string, said: s
   return `Your ${branch} is level with ${remote} now, and you stay on ${here}: git says ${gitWords(said)}`;
 }
 
+// The label as one part of a branch name: each run of what a ref name or a
+// look's copy name cannot hold (a slash, a dot, a space, any other mark) is
+// one dash, none at either end; nothing left is "plan".
+export function planBranchLabel(label: string): string {
+  return label.replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "plan";
+}
+
+// `unit share --plan --off-branch`: the lead's plan, on its branch in its
+// repository, goes to the plan's ref there as it is, its history with it (no
+// commit is written), then the branch is deleted with a lease on that tip: one
+// atomic push where the host takes it, else the two in turn.
+function planOffBranch(pd: string): void {
+  const place = planPlaceForShare(pd);
+  if ("refused" in place) fail(`usage: ${unitUsage("share")}`);
+  const notOn = `The plan in ${place.repo} is not on a branch, so there is nothing to take down.`;
+  if (!("ref" in place)) fail(notOn);
+  const unreached = (words: string | null, timedOut = false): never =>
+    fail(`${place.repo} could not be reached, so the plan is still on its branch there: ` +
+      (timedOut ? "it did not answer in time. Say when to try again." : `git says "${words ?? ""}". Say when to try again.`));
+  const look = lookAtPlan(pd, place);
+  if (look.unreached !== undefined) unreached(look.unreached);
+  const branch = look.tip === null ? null : planBranchAt(pd, place);
+  if (look.tip === null || branch === null) fail(notOn);
+  const tip = look.tip;
+  // A change this computer did not write: the lead's question first, then the same step again.
+  const read = planAtCopy(pd, place.copy, { commit: tip });
+  const change = read.kind === "read" ? planChangeAt(pd, tip, read.plan).change : null;
+  if (change !== null) {
+    const ask = planChangeQuestion(change);
+    throw new LeadWordUnwritten(`Before I take the plan off its branch: ${ask.question}`,
+      `${aidlcToolInvocation("unit")} share --plan --off-branch`, ask);
+  }
+  const via = gitTargetFor(pd, place.address, "push");
+  const env = { ...via.env, GIT_TERMINAL_PROMPT: "0" };
+  const deleteBranch = [`--force-with-lease=${branch.ref}:${tip}`, `:${branch.ref}`];
+  const done = (): void => {
+    localGit(pd, ["update-ref", "-d", branch.copy]);
+    console.log(JSON.stringify({ off_branch: true, notice: `The plan in ${place.repo} is out of the branch list now, with its history; ` +
+      `the branch ${branch.ref.slice("refs/heads/".length)} is gone from there.` }));
+  };
+  if (git(pd, ["push", "--atomic", via.target, `${tip}:${place.ref}`, ...deleteBranch], env).ok) {
+    done();
+    return;
+  }
+  const toRef = git(pd, ["push", via.target, `${tip}:${place.ref}`], env);
+  if (!toRef.ok) {
+    if (/ETIMEDOUT/.test(toRef.stderr)) unreached(null, true);
+    const again = lookAtPlan(pd, place);
+    if (again.unreached !== undefined) unreached(maskUserinfo(pushRefusal(toRef.stderr)));
+    fail(`${place.repo} did not take the plan out of the branch list: ${maskUserinfo(pushRefusal(toRef.stderr))}. The plan stays on its branch there.`);
+  }
+  const gone = git(pd, ["push", via.target, ...deleteBranch], env);
+  if (gone.ok) {
+    done();
+    return;
+  }
+  console.log(JSON.stringify({ off_branch: false, notice: `The plan in ${place.repo} is kept out of the branch list now, with its history, but ` +
+    `the branch ${branch.ref.slice("refs/heads/".length)} could not be taken down (${maskUserinfo(pushRefusal(gone.stderr))}), so it still ` +
+    "shows there. Say when to try again." }));
+}
+
 // `unit share --back`: from the plan's branch onto the integration branch once
 // the plan is in it: tried first in a copy of the index, then the branch
 // brought level with the remote's (fast-forward only) and switched to. Never a
@@ -7740,6 +7801,10 @@ function shareMain(args: string[], projectDir?: string): void {
   const repoNamed = parsed.flags.repo;
   if (flags.has("back")) {
     planBranchBack(pd);
+    return;
+  }
+  if (flags.has("off-branch")) {
+    planOffBranch(pd);
     return;
   }
   const refused = shareRefusal(pd, flags.has("plan"));
@@ -9875,6 +9940,17 @@ function planBranchAt(pd: string, place: PlanPlace): { ref: string; copy: string
       ? [{ ref: `${PLAN_BRANCHES}${place.id8}-${copy.label}`, copy: ref }] : [];
   });
   return found.length === 1 ? found[0] : null;
+}
+
+// The lead's own plan is on its branch, as this computer last read it.
+export function leadsPlanOnBranch(projectDir: string): boolean {
+  try {
+    const pd = resolveProjectDir(projectDir);
+    const place = planPlaceForShare(pd);
+    return "ref" in place && planBranchAt(pd, place) !== null;
+  } catch {
+    return false;
+  }
 }
 
 // The push of the plan's commit with a lease on exactly `lease` (the tip read;

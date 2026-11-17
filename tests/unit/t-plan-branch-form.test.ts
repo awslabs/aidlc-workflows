@@ -318,3 +318,93 @@ describe("a plan on its branch, written by the lead", () => {
     expect(has(host, planRefOf(home.id8))).toBe(false);
   });
 });
+
+// A host that refuses to delete any branch under aidlc/plans/, as a branch rule of its own.
+function keepPlanBranches(host: string): void {
+  const hook = join(host, "hooks", "pre-receive");
+  writeFileSync(hook, "#!/bin/sh\nzero=0000000000000000000000000000000000000000\nwhile read old new ref; do case \"$ref\" in refs/heads/aidlc/plans/*) " +
+    "[ \"$new\" = \"$zero\" ] && { echo 'plan branches stay' >&2; exit 1; };; esac; done\nexit 0\n");
+  chmodSync(hook, 0o755);
+}
+
+describe("the plan off its branch, on the lead's ask", () => {
+  const OFF = ["share", "--plan", "--off-branch"];
+  test("goes to the plan's ref as it is, its history with it, and the branch is gone from there", () => {
+    const home = makePlanHome();
+    const host = home.hosts["checkout-api"];
+    const tip = planAsBranch(host, home.id8);
+    const off = run(UNIT, OFF, home.dir);
+    expect(off.status, off.out).toBe(0);
+    expect(String(off.json?.notice)).toBe(`The plan in checkout-api is out of the branch list now, with its history; the branch aidlc/plans/${home.id8}-fixture is gone from there.`);
+    expect(git(host, ["rev-parse", planRefOf(home.id8)])).toBe(tip);
+    expect(has(host, `refs/heads/aidlc/plans/${home.id8}-fixture`)).toBe(false);
+  });
+
+  test("the lead's steps tell the agent the command while the plan is on its branch, and only then", () => {
+    const home = makePlanHome();
+    const note = (chat: string): string => String(next(home.dir, { ...ENV, AIDLC_SESSION_OVERRIDE: chat }).board_note ?? "");
+    expect(note("lead-1")).not.toContain("--off-branch");
+    planAsBranch(home.hosts["checkout-api"], home.id8);
+    note("lead-2");
+    expect(note("lead-3")).toContain("When they ask to take the plan off its branch, run `");
+  });
+
+  test("on a plan that is not on a branch: nothing to take down, nothing written", () => {
+    const home = makePlanHome();
+    const off = run(UNIT, OFF, home.dir);
+    expect(off.status).not.toBe(0);
+    expect(String(off.json?.error)).toBe("The plan in checkout-api is not on a branch, so there is nothing to take down.");
+    expect(git(home.hosts["checkout-api"], ["rev-parse", planRefOf(home.id8)])).toBe(home.plan!);
+  });
+
+  test("a branch the host keeps: the plan is kept out of the branch list, and the line says the branch still shows", () => {
+    const home = makePlanHome();
+    const host = home.hosts["checkout-api"];
+    const tip = planAsBranch(host, home.id8);
+    keepPlanBranches(host);
+    const off = run(UNIT, OFF, home.dir);
+    expect(off.status, off.out).toBe(0);
+    expect(String(off.json?.notice)).toStartWith(`The plan in checkout-api is kept out of the branch list now, with its history, but the branch aidlc/plans/${home.id8}-fixture could not be taken down (`);
+    expect(String(off.json?.notice)).toEndWith("), so it still shows there. Say when to try again.");
+    expect(git(host, ["rev-parse", planRefOf(home.id8)])).toBe(tip);
+    expect(has(host, `refs/heads/aidlc/plans/${home.id8}-fixture`)).toBe(true);
+  });
+
+  test("a host that takes no ref of AI-DLC's: the plan stays on its branch, with no way on by a commit message", () => {
+    const home = makePlanHome();
+    const host = home.hosts["checkout-api"];
+    planAsBranch(host, home.id8);
+    refuse(host, ["refs/aidlc/"]);
+    const off = run(UNIT, OFF, home.dir);
+    expect(off.status).not.toBe(0);
+    expect(String(off.json?.error)).toMatch(/^checkout-api did not take the plan out of the branch list: .*this host takes no push of refs\/aidlc\/.*\. The plan stays on its branch there\.$/);
+    expect(has(host, planRefOf(home.id8))).toBe(false);
+    expect(has(host, `refs/heads/aidlc/plans/${home.id8}-fixture`)).toBe(true);
+  });
+
+  test("a change this computer did not write on the branch: the lead's question first, led by what was asked", () => {
+    const home = makePlanHome();
+    const host = home.hosts["checkout-api"];
+    const tip = planAsBranch(host, home.id8);
+    const branch = `refs/heads/aidlc/plans/${home.id8}-fixture`;
+    git(host, ["update-ref", branch, planCommit(host, tip, (plan) => {
+      plan.units[0].word = { note: "theirs" };
+    }, tip)]);
+    const off = run(UNIT, OFF, home.dir);
+    expect(off.status).not.toBe(0);
+    expect(String(off.json?.error)).toStartWith("Before I take the plan off its branch: The plan of fixture in checkout-api has a change this computer did not write, by dan, ");
+    expect(off.json?.ask_type).toBe("lead-plan-change");
+    expect(has(host, planRefOf(home.id8))).toBe(false);
+  });
+});
+
+describe("the work's label as one part of a branch name", () => {
+  test("a slash, a dot at its end, a space or any other mark becomes one dash, none at either end", async () => {
+    const { planBranchLabel } = await import("../../dist/claude/.claude/tools/aidlc-unit.ts");
+    expect(planBranchLabel("checkout-revamp")).toBe("checkout-revamp");
+    expect(planBranchLabel("checkout/revamp")).toBe("checkout-revamp");
+    expect(planBranchLabel("checkout revamp v2.")).toBe("checkout-revamp-v2");
+    expect(planBranchLabel("..lock")).toBe("lock");
+    expect(planBranchLabel("/")).toBe("plan");
+  });
+});

@@ -667,6 +667,7 @@ import {
   planBranchOffered,
   planShareWork,
   leadsOwnTeamWork,
+  leadsPlanOnBranch,
   sharesPlanRef,
   planByPullRequestDetail,
   planShareWords,
@@ -5667,7 +5668,8 @@ function teamCommandsNote(projectDir?: string): string {
   const unitTool = aidlcToolInvocation("unit");
   const moved = projectDir !== undefined && leadsOwnTeamWork(projectDir)
     ? " When the person says the plan is in another repository now, that is the move to it on this computer: run " +
-      `\`${aidlcInvocation()} unit share --plan --repo <that repository>\`.`
+      `\`${aidlcInvocation()} unit share --plan --repo <that repository>\`.` +
+      (leadsPlanOnBranch(projectDir) ? ` When they ask to take the plan off its branch, run \`${aidlcInvocation()} unit share --plan --off-branch\`.` : "")
     : "";
   return "When the person says a repo turned a Unit down, run " +
     `\`${unitTool} turned-down <unit> --repo <repo> ${unitWordsArg("turned-down")}\`; when they say a repo merged it ` +
