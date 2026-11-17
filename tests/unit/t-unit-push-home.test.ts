@@ -1502,6 +1502,22 @@ describe("the lead's Build and Test with changes in the work's repos", () => {
     expect(approved.json?.kind, approved.out).toBe("done");
   });
 
+  // Where main takes no direct push, the usual move is a branch of its own and a
+  // commit on it, with no upstream until it is pushed.
+  test("a commit on a new branch here that no remote has is said until that branch is pushed", () => {
+    const { home } = twoMergedAtBuildAndTest();
+    const api = join(home.dir, "checkout-api");
+    git(api, ["switch", "-q", "-c", "fix-refunds"]);
+    writeFileSync(join(api, "src", "refunds.ts"), "export const refunds = 3;\n");
+    git(api, ["commit", "-q", "-am", "the fix"]);
+    const unpushed = "In checkout-api, 1 commit here is not pushed, so main there does not have it.";
+    expect(notices(gateOpened(home.dir))).toContain(unpushed);
+    expect(status(home.dir)).toContain(`Not pushed:     ${unpushed}\n`);
+    git(api, ["push", "-q", "-u", "origin", "fix-refunds"]);
+    expect(saysNone(next(home.dir, chat("t-unit-push-home-pushed-branch")))).toBe(true);
+    expect(status(home.dir)).not.toMatch(/Not committed:|Not pushed:/);
+  });
+
   test("repos whose Units merge into different branches: each branch is named", () => {
     const { home } = twoMergedAtBuildAndTest();
     changedInBoth(home.dir);

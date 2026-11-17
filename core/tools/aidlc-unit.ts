@@ -6845,10 +6845,10 @@ function catchUp(projectDir?: string): void {
 
 // Build and Test runs on the lead's clones of the work's repos, so what git
 // status shows there (a fix asked for at its Build Failure, say) is in no
-// repository's main: the files not committed, and the commits its branch has
-// ahead of its upstream. Said with its gate and in status while git shows
-// them, never what made them; a branch with no upstream shows no count, so its
-// commits say nothing. A new file counts only where a Unit's source manifest
+// repository's main: the files not committed, and the commits no remote branch
+// has, a new branch's with no upstream too (the usual move where main takes no
+// direct push). Said with its gate and in status while git shows them, never
+// what made them. A new file counts only where a Unit's source manifest
 // here claims it, as a Unit's publish takes one (workToCommit), so a test
 // run's by-products are not named. The workspace's own repo is left to its
 // share, and AI-DLC's record to its Checked in line.
@@ -6877,7 +6877,7 @@ export function changesNotInMain(projectDir: string, stateContent: string): { fi
     // Said as the workspace's words: given the list, they read nothing in the clone.
     const words = workToCommitWords(pd, undefined, { ...work, paths: kept, untracked: work.untracked.filter((path) => kept.includes(path)) });
     if (words !== null) files.push({ repo, into, words });
-    const counted = git(dir, ["rev-list", "--count", "@{upstream}..HEAD"]);
+    const counted = git(dir, ["rev-list", "--count", "HEAD", "--not", "--remotes"]);
     const count = counted.ok ? Number.parseInt(counted.stdout.trim(), 10) || 0 : 0;
     if (count > 0) {
       commits.push(`In ${repo}, ${count} commit${count === 1 ? " here is" : "s here are"} not pushed, so ${into} there does not have ` +
