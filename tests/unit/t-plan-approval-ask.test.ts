@@ -3616,8 +3616,8 @@ describe("in work with several repositories the question names the plan's reposi
     return directive;
   }
 
-  function fingerprint(proj: string): string | undefined {
-    return /^\[Approval Fingerprint\]: (\S+)$/m.exec(questions(proj))?.[1];
+  function fingerprint(proj: string): string | null {
+    return /^\[Approval Fingerprint\]: (\S+)$/m.exec(questions(proj))?.[1] ?? null;
   }
 
   test("two repositories: the line is under the cut summary, whole, in the question, its prose and its record", () => {
@@ -3664,7 +3664,7 @@ describe("in work with several repositories the question names the plan's reposi
     const two = reposProject(["api", "web"]);
     askedWith(two, CUT_TOUCHES);
     expect(questions(two)).toContain("- Names files in api and web.");
-    expect(fingerprint(two)).toBeDefined();
+    expect(fingerprint(two)).not.toBeNull();
     expect(fingerprint(two)).toBe(fingerprint(one));
     replyAndRecord(two, "approve", "Approve Plan");
     const recorded = readAuditShardEvents(two).filter((row) => row.event === "PLAN_APPROVAL_RECORDED");
