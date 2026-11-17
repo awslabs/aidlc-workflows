@@ -756,7 +756,7 @@ describe("the lead moves the shared plan to another repository", () => {
     const asked = moveTo(home.dir, "billing");
     expect(asked.status, asked.out).toBe(0);
     expect(asked.json?.shared).toBe(false);
-    expect(String(asked.json?.notice)).toStartWith("checkout-api did not take the note that the plan moved: ");
+    expect(String(asked.json?.notice)).toStartWith("checkout-api did not take the note that the plan moved, so the plan stays in checkout-api: ");
     expect(String(asked.json?.notice)).toEndWith("If it is the commit message, tell me the one to use, and I will move the plan with that.");
     expect(String(asked.json?.step)).toContain(" unit share --plan --repo billing --commit-message-file ");
     expect(git(home.hosts.billing, ["for-each-ref", "refs/aidlc"])).toBe("");
@@ -1162,6 +1162,27 @@ describe("a repository that moved hosts: the plan taken over where it is now", (
     expect(moved.status, moved.out).not.toBe(0);
     expect(moved.json?.error).toBe("billing already holds something else where the plan would go, so nothing was moved: the plan stays in checkout-api.");
     expect(homeOf(home.dir)).toBe(api);
+  });
+
+  test("the plan's repository archived: a later share is refused with the move offered, and the move keeps the plan at the new place", () => {
+    const home = makePlanHome();
+    const api = home.hosts["checkout-api"];
+    refuse(api);
+    ADDED(home.dir);
+    // A refusal that may be on the message asks for the person's own first; with it, the same refusal is the end of
+    // that way, and the way on is another repository, never the same question again.
+    const asked = run(UNIT, ["share", "--plan"], home.dir);
+    expect(String(asked.json?.notice), asked.out).toEndWith("If it is the commit message, tell me the one to use, and I will share it with that.");
+    const file = /write it to (\S+) with your file tool/.exec(String(asked.json?.step))?.[1] ?? "";
+    mkdirSync(dirname(join(home.dir, ...file.split("/"))), { recursive: true });
+    writeFileSync(join(home.dir, ...file.split("/")), "ABC-1 share the plan\n");
+    const refused = run(UNIT, ["share", "--plan", "--commit-message-file", file], home.dir);
+    expect(String(refused.json?.error), refused.out).toMatch(/^checkout-api did not take the plan: .+\. Say when to try again, or name another repository the teams can read\.$/);
+    const moved = moveTo(home.dir, "billing");
+    expect(moved.status, moved.out).toBe(0);
+    expect(String(moved.json?.notice)).toContain("so nothing was written there and checkout-api does not say where the plan went. Give each team billing's address");
+    expect(String(moved.json?.notice)).not.toContain("the plan stays in checkout-api");
+    expect(homeOf(home.dir)).toBe(home.hosts.billing);
   });
 
   test("the plan's repositories as the lead's workspace spells them now, not as the copy has them", () => {

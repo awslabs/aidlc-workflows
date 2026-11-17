@@ -6963,7 +6963,9 @@ function writeSharedPlan(pd: string, message?: string, named?: string): SharedPl
   // Once the plan is shared, the way on is where it is.
   const later = planUnitsKept(pd) !== null;
   if (!("ref" in place)) fail(planNoRemoteLine(place.repo, later));
-  const retry = later ? "Say when to try again." : "Say when to try again, or name another repository the teams can read.";
+  // Once the plan is shared, naming another repository is the move, so the
+  // way on is the same at every share.
+  const retry = "Say when to try again, or name another repository the teams can read.";
   // Another repository named once the plan is shared: the plan moves there.
   const kept = named === undefined ? null : keptPlan(pd, place.id8);
   if (kept !== null && repoCopyKey(kept.plan.plan_repo.address) !== repoCopyKey(place.address)) {
@@ -7057,7 +7059,9 @@ function writeSharedPlan(pd: string, message?: string, named?: string): SharedPl
   }
   // A rule of the host's (a message rule among them): the person's own
   // message has a way in, though the share asked for none.
-  if (written.byRule) {
+  // The person's own message is asked for once: with theirs refused too, the
+  // way on is another repository, never the same question.
+  if (written.byRule && message === undefined) {
     return messageWayIn(pd, `${repo} did not take the plan: ${written.words}. If it is the commit message, tell me the one to use, and I will share it with that.`,
       named);
   }
@@ -7317,11 +7321,12 @@ function movePlan(pd: string, start: PlanPlace, to: PlanPlace, message: string |
       const keep = !noted.lost && !noted.timedOut && after.unreached === undefined && after.tip === (old.kind === "none" ? null : old.commit);
       // Where the old place took the plan under the person's own message, a
       // rule on the message is likely: their message is the way in first.
-      if (keep && message === undefined && old.kind === "plan" && !/^aidlc plan /.test(localGit(pd, ["log", "-1", "--format=%s", old.commit]).stdout.trim())) {
-        if (!already) takeBackPlan(pd, to, moved, lease);
+      if (keep && !already && message === undefined && old.kind === "plan" &&
+        !/^aidlc plan /.test(localGit(pd, ["log", "-1", "--format=%s", old.commit]).stdout.trim())) {
+        takeBackPlan(pd, to, moved, lease);
         const named = planRepos(pd).some((entry) => entry.name === to.repo) ? to.repo : to.address;
-        return messageWayIn(pd, `${from.repo} did not take the note that the plan moved: ${noted.words}. If it is the commit message, tell me the one ` +
-          "to use, and I will move the plan with that.", named);
+        return messageWayIn(pd, `${from.repo} did not take the note that the plan moved, so the plan stays in ${from.repo}: ${noted.words}. ` +
+          "If it is the commit message, tell me the one to use, and I will move the plan with that.", named);
       }
       if (keep && already && there.kind === "plan") return followThere(there.plan, moved);
       if (keep) {
@@ -13860,7 +13865,10 @@ function planWriteRefusedLine(pd: string, written: LeadWrite, what: string, kept
     return `${repo} could not be reached, so ${what} is not written: ` +
       `${written.words === null ? "it did not answer in time" : `git says "${words(written.words)}"`}. ${way}`;
   }
-  if (written.kind === "refused") return `${repo} did not take the change to the plan (${words(written.words)}), so ${what} is not written. ${way}`;
+  if (written.kind === "refused") {
+    return `${repo} did not take the change to the plan (${words(written.words)}), so ${what} is not written. Say when to try again, or name another ` +
+      `repository the teams can read and I will move the plan there${kept ? "; I have your words" : ""}.`;
+  }
   return `The plan in ${repo} kept changing while I wrote on it, so ${what} is not written. ${way}`;
 }
 

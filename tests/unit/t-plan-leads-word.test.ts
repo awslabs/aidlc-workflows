@@ -109,7 +109,8 @@ describe("the lead's word goes on the plan", () => {
     expect(down.status).not.toBe(0);
     expect(String(down.json?.error)).toStartWith("checkout-api did not take the change to the plan (");
     expect(String(down.json?.error)).toContain("plans are read only here");
-    expect(String(down.json?.error)).toEndWith("so refunds's turn-down in billing is not written. Say when to try again.");
+    expect(String(down.json?.error)).toEndWith("so refunds's turn-down in billing is not written. Say when to try again, or name another repository the " +
+      "teams can read and I will move the plan there.");
     expect(git(hosts["checkout-api"], ["rev-parse", planRefOf(home.id8)])).toBe(tip);
   });
 
@@ -123,7 +124,8 @@ describe("the lead's word goes on the plan", () => {
     expect(said.status, said.out).toBe(0);
     const down = run(UNIT, ["turned-down", "refunds", "--repo", "billing", "--person-words", "the totals are wrong"], home.dir, personsChat(chat));
     expect(down.status).not.toBe(0);
-    expect(String(down.json?.error)).toEndWith("Say when to try again; I have your words.");
+    expect(String(down.json?.error)).toEndWith("Say when to try again, or name another repository the teams can read and I will move the plan there; " +
+      "I have your words.");
     const again = String(down.json?.again);
     expect(again).toContain("turned-down refunds --repo billing");
     expect(again).toMatch(/--message '?[\w-]+'?$/);
@@ -139,7 +141,8 @@ describe("the lead's word goes on the plan", () => {
     expect(set.status, set.out).toBe(0);
     expect(String(set.json?.notice)).toStartWith("checkout-api did not take the change to the plan (");
     expect(String(set.json?.notice)).toEndWith(
-      "so the sign-off setting is not written. Say when to try again. The sign-off setting is changed here only; the plan gets it with my next write to it.",
+      "so the sign-off setting is not written. Say when to try again, or name another repository the teams can read and I will move the plan " +
+      "there. The sign-off setting is changed here only; the plan gets it with my next write to it.",
     );
     writeFileSync(hook, "#!/bin/sh\nexit 0\n");
     expect(run(UNIT, ["turned-down", "refunds", "--repo", "billing", "--person-words", "the totals are wrong"], home.dir).status).toBe(0);
@@ -701,7 +704,8 @@ describe("a plan to share again before the lead's word goes on it", () => {
     chmodSync(hook, 0o755);
     const still = run(UNIT, ["sign-off", "refunds", "--person-words", "looks right"], home.dir);
     expect(still.status).not.toBe(0);
-    expect(String(still.json?.error)).toEndWith("so refunds's sign-off is not written. Say when to try again.");
+    expect(String(still.json?.error)).toEndWith("so refunds's sign-off is not written. Say when to try again, or name another repository the teams " +
+      "can read and I will move the plan there.");
   });
 
   test("a merge the lead's look sees while the plan is gone from its repository: said once in the chat, with the share as the way on", () => {
@@ -732,7 +736,7 @@ describe("a practice kept at the lead's project", () => {
     expect(kept.status, kept.out).toBe(0);
     expect(kept.json?.rule_learned).toBe(1);
     expect(kept.json?.notes).toEqual([
-      expect.stringMatching(/^checkout-api did not take the change to the plan \(.*plans are read only here.*\), so the practice you chose is not written\. Say when to try again\.$/s),
+      expect.stringMatching(/^checkout-api did not take the change to the plan \(.*plans are read only here.*\), so the practice you chose is not written\. Say when to try again, or name another repository the teams can read and I will move the plan there\.$/s),
     ]);
     expect(String(kept.json?.again)).toContain("unit share --plan");
   });
