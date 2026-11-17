@@ -649,7 +649,7 @@ describe("the lead who says so in a clone that did not make the plan", () => {
     expect(message, text).toBeDefined();
     const off = run(UNIT, ["lead-here", "--off", "--message", message!], laptop, personsChat(chat));
     expect(off.status, off.out).toBe(0);
-    expect(off.json?.notice).toBe("This checkout no longer carries the work on as the lead's.");
+    expect(off.json?.notice).toBe("This checkout no longer carries the work on as the lead's; anything it wrote to the plan stays.");
     const row = readAuditShardEvents(laptop, HOME).findLast((entry) => entry.event === "LEAD_HERE_SET");
     expect(auditBlockField(row?.block ?? "", "Lead Here")).toBe("off");
     expect(auditBlockField(row?.block ?? "", "Person Words")).toBe(notLead);

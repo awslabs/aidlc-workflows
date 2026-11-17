@@ -990,7 +990,8 @@ teammate's clone does. When you say you lead this work, whether or not you ask t
 lead-here` with your words and shows the lead's view in the same turn; it records `LEAD_HERE_SET` in that checkout's own audit,
 and from then on the lead's questions are put there. When you say you do not lead this work there, the agent runs
 `unit lead-here --off` with your words: it records the same row with `Lead Here: off`, and from then on that checkout
-gets a teammate's view again, whatever the lead's work did there in between. Nothing is written on the plan either way.
+gets a teammate's view again, whatever the lead's work did there in between. Nothing is written on the plan either way:
+anything the checkout wrote to the plan while it was the lead's stays, for the lead's own look to ask about.
 
 ### `/aidlc unit lead-sign-off` and `/aidlc unit sign-off <unit>` - The lead's sign-off
 
