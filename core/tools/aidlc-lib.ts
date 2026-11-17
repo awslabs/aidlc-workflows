@@ -7191,7 +7191,8 @@ export function addPendingPersonLines(
 }
 
 // The lines waiting for the next step the agent speaks from; with `replyOnly`
-// (a question the agent logs before asking it) only those kept for the reply.
+// (a question the agent logs before asking it) only those kept for the reply,
+// with `ordinaryOnly` (the question box at a gate) only the others.
 // `said()` clears the ordinary lines handed out once the step carries them and
 // marks the reply lines carried, which keep riding the steps until the person
 // writes; until then every line stays waiting. What was written to the record
@@ -7200,7 +7201,7 @@ export function addPendingPersonLines(
 export function pendingPersonLines(
   projectDir: string,
   sessionId: string,
-  options: { replyOnly?: boolean } = {},
+  options: { replyOnly?: boolean; ordinaryOnly?: boolean } = {},
 ): { lines: string[]; reply: boolean; said(): void } {
   const path = pendingPersonLinesPath(projectDir, sessionId);
   const none = { lines: [], reply: false, said: () => {} };
@@ -7215,7 +7216,8 @@ export function pendingPersonLines(
   };
   const read = record();
   const saved = readPendingPersonLines(path, turn, work, read);
-  const handed = saved.lines.filter((entry) => entry.reply === true || options.replyOnly !== true);
+  const handed = saved.lines.filter((entry) =>
+    options.ordinaryOnly === true ? entry.reply !== true : entry.reply === true || options.replyOnly !== true);
   return {
     lines: handed.map((entry) => entry.line),
     // Whether a line kept for the reply is among them.

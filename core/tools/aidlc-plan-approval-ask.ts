@@ -44,6 +44,8 @@ import {
   personsGateReply,
   latestMainWorkflowStageRunFloorForProject,
   memoryStrictHoldsGuardPolicy,
+  parseCheckboxes,
+  pendingPersonLines,
   GUARD_RECOVERY_ASK_TYPE,
   PLAN_APPROVAL_ASK_TYPE,
   planApprovalRuntimeFile,
@@ -52,6 +54,7 @@ import {
   readBaselineSourceSnapshot,
   readPlanApprovalReceipt,
   readPlanApprovalRuntimeRecord,
+  readProtectedQuestion,
   readWorkspaceSourceSnapshot,
   recordedSourceListingUnderCurrentBoundary,
   rejectionAtRunFloor,
@@ -117,6 +120,7 @@ import {
 import { QUESTION_ASKED_EVENTS, readMessage } from "./aidlc-message-store.ts";
 import {
   askedQuestionFields,
+  boxQuestionId,
   newQuestionId,
   openSlotQuestionId,
   QUESTION_TEXT_FIELD,
@@ -126,7 +130,7 @@ import {
   shownAgainFields,
 } from "./aidlc-questions.ts";
 import { exactOptionPick, isNonAnswer, pickerOffersChoices } from "./aidlc-reply-reader.ts";
-import { aidlcDispatcherInvocation, aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
+import { aidlcDispatcherInvocation, aidlcToolInvocation, runtimeHarnessName } from "./aidlc-runtime-paths.ts";
 import { type PlanApprovalSetting, resolvePlanApprovalSetting } from "./aidlc-guard-switch.ts";
 import type {
   CodeGenerationPlanApprovalState,
@@ -1020,6 +1024,69 @@ export function planQuestionBoxAsAsked(projectDir: string, payload: string): str
     });
   } catch {
     return payload;
+  }
+}
+
+// --- A stage gate's own lines in the question box (Claude Code) ---------------
+//
+// The agent retold a gate's lines for the person beside the box. Where the box
+// can carry them, the gate step keeps them for the chat (prepareEmission), the
+// box shows them under the agent's question and its answer takes them off the
+// list. Only the interactive CLI draws the box at a gate (no recorded SDK run
+// did); elsewhere, and unattended, the step carries them as before.
+export function gateNoticesInBox(projectDir: string): boolean {
+  return runtimeHarnessName(projectDir) === "claude" && process.env.CLAUDE_CODE_ENTRYPOINT === "cli" &&
+    process.env.AIDLC_UNATTENDED !== "1";
+}
+
+// The box and the chat's kept lines, when it is one single-choice question while
+// a stage awaits approval, and none of the engine's own questions whose text a
+// reader matches (the code plan question, an engine ask, a logged decision).
+function gateNoticeLines(
+  projectDir: string,
+  toolInput: unknown,
+  session: unknown,
+): { box: BoxQuestion; lines: string[]; said: () => void } | null {
+  if (typeof session !== "string" || session === "" || !gateNoticesInBox(projectDir)) return null;
+  const box = singleBoxQuestion(toolInput);
+  if (box === null) return null;
+  return forPayloadChat(projectDir, session, () => {
+    const state = runStateContent(projectDir);
+    if (state === null || !parseCheckboxes(state).some((line) => line.state === "awaiting-approval")) return null;
+    if (
+      currentPlanApprovalAsk(projectDir) !== null || readProtectedQuestion(projectDir, session) !== null ||
+      boxQuestionId(projectDir, session, box.question) !== null
+    ) return null;
+    const kept = pendingPersonLines(projectDir, session, { ordinaryOnly: true });
+    return kept.lines.length === 0 ? null : { box, lines: kept.lines, said: kept.said };
+  });
+}
+
+// The box with the kept lines under the agent's question when they all fit;
+// null otherwise, so it goes out as written and the lines wait. Writes nothing.
+export function gateNoticeBoxInput(projectDir: string, toolInput: unknown, session: unknown): Record<string, unknown> | null {
+  try {
+    const found = gateNoticeLines(projectDir, toolInput, session);
+    if (found === null) return null;
+    const question = [found.box.question, ...found.lines].join("\n\n");
+    if (question.length > BOX_QUESTION_MAX_CHARS) return null;
+    return { ...(toolInput as Record<string, unknown>), questions: [{ ...found.box.entry, question }] };
+  } catch {
+    return null;
+  }
+}
+
+// The answer to a box gateNoticeBoxInput filled (its question ends with the
+// kept lines): they are said, so they come off the chat's list.
+export function gateNoticeBoxShown(projectDir: string, payload: string): void {
+  try {
+    const parsed = JSON.parse(payload) as Record<string, unknown> | null;
+    if (parsed === null || parsed.hook_event_name !== "PostToolUse" || parsed.tool_name !== "AskUserQuestion") return;
+    const found = gateNoticeLines(projectDir, parsed.tool_input, parsed.session_id);
+    const tail = found === null ? "" : ["", ...found.lines].join("\n\n");
+    if (found !== null && found.box.question.endsWith(tail) && found.box.question.length > tail.length) found.said();
+  } catch {
+    // The lines stay for the next step.
   }
 }
 

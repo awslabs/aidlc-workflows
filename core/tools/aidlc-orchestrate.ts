@@ -730,6 +730,7 @@ import {
   isPlanApprovalBeat,
   codeGenerationBuildFinishes,
   codeGenerationFinishedBuild,
+  gateNoticesInBox,
   keepRoutedPlanApprovalReply,
   legacyPlanApprovalOffNotice,
   noteOpenEngineQuestion,
@@ -1605,6 +1606,14 @@ const CLEAN_CHAT_LEAD = "To start this in a clean chat instead, ";
 // a stage's gate, before the gate is shown, and a reading it may answer from
 // (saysWaitingLines).
 const leadsToSpeech = new WeakSet<Directive>();
+// The lines a gate step built for the person, for a question box to show
+// (keepGateLinesForTheBox); never a review check offer, a question of its own.
+const gateBoxLines = new WeakMap<Directive, string[]>();
+const reviewCheckOffers = new Set<string>();
+function markGateBoxLines(gate: Directive): void {
+  const lines = (gate.change_notices ?? []).filter((line) => !reviewCheckOffers.has(line));
+  if (lines.length > 0) gateBoxLines.set(gate, lines);
+}
 
 // A step the agent speaks from: one that ends its turn, or one with its own
 // line or a line for the person. A rules part never is; its run-stage is.
@@ -1626,6 +1635,38 @@ function speaksToPerson(directive: Directive): boolean {
 function withPersonLines(transported: Directive, lines: readonly string[]): Directive | null {
   const carried = withChangeNotices(transported, [...new Set([...lines, ...(transported.change_notices ?? [])])]);
   return Buffer.byteLength(JSON.stringify(carried), "utf-8") <= directiveMaxBytes() ? carried : null;
+}
+
+// Where the question box carries them (gateNoticesInBox), a gate step's own
+// lines are kept for the chat for the box to show. After sayPendingPersonLines:
+// before, it would read them back onto this step; after, its said() leaves an
+// entry written after its read as it is.
+function keepGateLinesForTheBox(
+  requested: Directive,
+  carried: { directive: Directive; said?: () => void },
+): { directive: Directive; said?: () => void } {
+  const own = gateBoxLines.get(requested);
+  const step = carried.directive;
+  const projectDir = engineProjectDir;
+  const sessionId = engineSessionId;
+  if (
+    !own || !projectDir || !sessionId || step.kind === "load-steering" || isReadOnlyEngineProbe() ||
+    retainedIssuedDirective || !gateNoticesInBox(projectDir)
+  ) return carried;
+  const lines = (step.change_notices ?? []).filter((line) => own.includes(line));
+  if (lines.length === 0 || !addPendingPersonLines(projectDir, sessionId, lines)) return carried;
+  const directive = { ...step, change_notices: (step.change_notices ?? []).filter((line) => !lines.includes(line)) };
+  if (directive.change_notices.length === 0) {
+    delete (directive as Directive).change_notices;
+    delete directive.change_notices_note;
+  }
+  return {
+    directive,
+    said: () => {
+      carried.said?.();
+      recordNoGitLineSaid({ kind: step.kind, change_notices: lines });
+    },
+  };
 }
 
 // A chat picking the work back up (`next --resume`) hears where it picks up and
@@ -2104,7 +2145,7 @@ function prepareEmission(directive: Directive): PreparedEmission {
     transported, aidlcToolInvocation("orchestrate"), aidlcToolInvocation("log"), undefined,
     switchBackOnFollowUps(transported),
   );
-  const personLines = sayPendingPersonLines(requested, transported);
+  const personLines = keepGateLinesForTheBox(requested, sayPendingPersonLines(requested, transported));
   transported = personLines.directive;
   const personLinesSaid = personLines.said;
   // The bytes the host's tool panel shows first are the person's words.
@@ -14643,6 +14684,7 @@ function applyGateOnlyShape(
     // Counted as the gate is reported: a Unit's own only at a team Unit gate.
     addRevisionCycle(directive, projectDir, directive.stage, directive.unit_gate ? unit : null);
     addApproveAcceptsLine(directive, projectDir, gateNode, directive.unit_gate ? unit : null);
+    if (!directive.unit_gate) markGateBoxLines(directive);
   }
   directive.protocol_modules = (directive.protocol_modules ?? []).filter(
     (module) =>
@@ -20405,7 +20447,10 @@ function addReviewCheckOffer(
   const found = reviewCheckOffer(projectDir, node, unit);
   if (found === null) return;
   const at = reply.change_notices?.lastIndexOf(found.change) ?? -1;
-  if (at >= 0) reply.change_notices![at] = `${found.change} ${found.offer}`;
+  if (at >= 0) {
+    reply.change_notices![at] = `${found.change} ${found.offer}`;
+    reviewCheckOffers.add(reply.change_notices![at]);
+  }
   else reply.narration = reply.narration ? `${reply.narration}\n${found.offer}` : found.offer;
 }
 
@@ -22986,6 +23031,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         addContextParkOffer(gateReply, pd);
         addRevisionCycle(gateReply, pd, slug, unit);
         addApproveAcceptsLine(gateReply, pd, node, unit);
+        if (!agentApproves) markGateBoxLines(gateReply);
       }
     }
     emit(gateReply);
