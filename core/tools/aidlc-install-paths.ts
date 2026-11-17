@@ -500,6 +500,21 @@ export function createRuntimeIntegrity(
   };
 }
 
+// The runtime's files and modes as createRuntimeIntegrity lists them, with no
+// file read: the inventory a check that leaves out the hashing still compares.
+function runtimeInventory(version: string, root: string): InstalledRuntimeIntegrity {
+  requireVersion(version);
+  return {
+    schemaVersion: 1,
+    version,
+    files: walkFiles(root).map((file) => ({
+      path: file.replaceAll("\\", "/"),
+      mode: statSync(join(root, file)).mode & 0o777,
+      sha256: "",
+    })),
+  };
+}
+
 export function installedVersionFingerprint(version: string): string | null {
   try {
     const root = versionRoot(version);
@@ -513,10 +528,15 @@ export function installedVersionFingerprint(version: string): string | null {
   }
 }
 
+// With `hashes` set to false it leaves out only the sha256 of the binary and of
+// each runtime file: every other check runs. Only the pinned dispatch passes it, for a
+// release its session already checked in full (aidlc-lifecycle.ts).
 export function inspectInstalledVersion(
   version: string,
   requiredDistribution?: string | null,
+  options: { hashes?: boolean } = {},
 ): { complete: boolean; distributions: string[]; reason?: string } {
+  const hashes = options.hashes !== false;
   requireVersion(version);
   const executable = installedExecutablePath(version);
   const manifestPath = join(versionRoot(version), "version.json");
@@ -550,7 +570,7 @@ export function inspectInstalledVersion(
   );
   if (
     !binary ||
-    createHash("sha256").update(readFileSync(executable)).digest("hex") !== binary.sha256
+    (hashes && createHash("sha256").update(readFileSync(executable)).digest("hex") !== binary.sha256)
   ) {
     return { complete: false, distributions: [], reason: "executable does not match version.json" };
   }
@@ -619,7 +639,7 @@ export function inspectInstalledVersion(
     }
     let actual: InstalledRuntimeIntegrity;
     try {
-      actual = createRuntimeIntegrity(version, runtime);
+      actual = hashes ? createRuntimeIntegrity(version, runtime) : runtimeInventory(version, runtime);
     } catch (error) {
       return {
         complete: false,
@@ -657,7 +677,7 @@ export function inspectInstalledVersion(
           reason: "runtime file inventory does not match the installed baseline",
         };
       }
-      if (expected.mode !== current.mode || expected.sha256 !== current.sha256) {
+      if (expected.mode !== current.mode || (hashes && expected.sha256 !== current.sha256)) {
         return {
           complete: false,
           distributions: [],

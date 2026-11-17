@@ -585,7 +585,10 @@ shared default. A pinned dispatch waits 30 seconds to reserve its release,
 because hooks make one on every tool call; other machine reservations, such as
 install and pin, keep the five-minute default. The dispatch checks the
 release's integrity once, under the machine lock as the reservation lands (or
-just before it runs unreserved). A launched release that includes this change
+just before it runs unreserved), and in full once per session: a later call of
+the same chat in the same session process runs every check but the hashing
+(`aidlc/.aidlc-sessions/pids/<pid>.release-check`, see the architecture
+reference). A launched release that includes this change
 does not check itself again; an older pinned release still does. The
 environment controls are:
 
@@ -2111,7 +2114,7 @@ usable when recomputation matches; only a mismatch requires the existing
 re-save / re-review recovery, with parser-semantics changes as a possible cause.
 No receipt format change or evidence rewrite is involved.
 
-**Shell writes.** The write-audit-log hook that feeds the engine's invalidation scan is a Write/Edit PostToolUse hook, so a file mutation delivered as a shell command would otherwise be invisible and leave a stale terminal receipt covering changed bytes. The freeze therefore extracts output-redirection targets and operands of common mutation commands before Bash executes. Read-only shell calls produce no targets and pass. The parser lives in `hooks/review-freeze-command.ts`; the Cursor adapter reuses its command and target result within one PreToolUse invocation, and launches the full freeze hook only when a target exists or classification could not complete.
+**Shell writes.** The write-audit-log hook that feeds the engine's invalidation scan is a Write/Edit PostToolUse hook, so a file mutation delivered as a shell command would otherwise be invisible and leave a stale terminal receipt covering changed bytes. The freeze therefore extracts output-redirection targets and operands of common mutation commands before Bash executes. Read-only shell calls produce no targets and pass. The parser lives in `hooks/review-freeze-command.ts`; the Cursor adapter reuses its command and target result within one PreToolUse invocation, and runs the full freeze hook only when a target exists or classification could not complete.
 
 **Identity: none.** Unlike reviewer-scope there is no agent gate - the freeze protects reviewed outputs regardless of who writes them (conductor applying suggestions, a re-dispatched lead, a stray subagent).
 

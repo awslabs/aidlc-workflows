@@ -13,7 +13,7 @@
 // Solo work and team Units no team has taken still move on with the Unit
 // stages skipped, and a land onto a record an earlier release wrote that way
 // merges nothing and says why. Going back to Functional Design after the move
-// is not refused.
+// reopens only the Units this checkout builds (t-lead-redo-finished-unit).
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterAll, afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -23,6 +23,7 @@ import { join } from "node:path";
 import { AIDLC_SRC, createTestProject, seedAidlcMemory, seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
 import {
   artifactFilename,
+  auditBlockField,
   loadStageGraphAll,
   readAuditShardEvents,
   readUnitMergeTransaction,
@@ -63,7 +64,7 @@ const LATER = [
   "ci-pipeline", "deployment-pipeline", "environment-provisioning", "deployment-execution",
   "observability-setup", "incident-response", "performance-validation", "feedback-optimization",
 ];
-const MOVED = "Moved to Build and Test. You can go back to Functional Design any time.";
+const MOVED = "Moved to Build and Test.";
 const BOARD_BROKEN = "could not compose its local board";
 
 // --- The lead's main: Units alpha, beta and gamma; Functional Design the one
@@ -205,6 +206,7 @@ const rowOf = (checkout: string, unit: string) =>
 const eventsSince = (checkout: string, from: number) => readAuditShardEvents(checkout).slice(from).map((row) => row.event);
 const status = (checkout: string) => runMergeTool(UTIL, ["status"], checkout);
 const message = (d: Record<string, unknown>) => String(d.message ?? d.question ?? d.error ?? "");
+const lastJump = (checkout: string) => readAuditShardEvents(checkout).filter((row) => row.event === "STAGE_JUMPED").at(-1)!;
 
 function moveOn(lead: string): { directive: Record<string, unknown>; said: string[]; events: string[] } {
   const from = readAuditShardEvents(lead).length;
@@ -292,7 +294,7 @@ describe("a lead's main whose team holds a Unit moves on to Build and Test", () 
     const teamC = clone(remote, "team-c");
     const board = nextDirective(teamC);
     expect(board.kind).toBe("notice");
-    expect(message(board)).toContain("# Team Construction Dispatcher");
+    expect(message(board)).toContain("# Team Construction Board");
     expect(message(board)).not.toContain(BOARD_BROKEN);
     const mains = nextDirective(lead);
     expect([mains.kind, mains.stage]).toEqual(["run-stage", BT]);
@@ -326,7 +328,7 @@ describe("a lead's main whose team holds a Unit moves on to Build and Test", () 
     expect(stateOf(lead)).toContain("- **Status**: Completed");
     const end = nextDirective(lead);
     expect(end.kind).toBe("notice");
-    expect(message(end)).toContain("# Team Construction Dispatcher");
+    expect(message(end)).toContain("# Team Construction Board");
     expect(String(end.narration ?? "")).not.toContain("Your work is finished");
     commitAndPush(lead, "the work's end");
     git(teamG, ["fetch", "origin"]);
@@ -338,13 +340,16 @@ describe("a lead's main whose team holds a Unit moves on to Build and Test", () 
     expect(rowOf(lead, "gamma")).toMatch(/\| \[x\] \|$/);
   });
 
-  test("going back to Functional Design after the move is not refused and brings the board back", () => {
+  test("going back to Functional Design after the move, with nothing built here, changes nothing and says why", () => {
     const { lead } = gammaClaimed();
     moveOn(lead);
-    const back = nextSaying(lead, ["next", "--stage", FD]);
-    expect(back.directive.kind).toBe("notice");
-    expect(message(back.directive)).toContain("# Team Construction Dispatcher");
-    expect(stateOf(lead)).toContain("- **Current Stage**: functional-design");
+    const back = runMergeTool(ORCH, ["next", "--stage", FD], lead);
+    expect(JSON.parse(back.stdout)).toEqual({
+      kind: "print",
+      message: "Run nothing. Tell the person in one line: \"Functional Design is not redone for every unit once a team " +
+        "has taken a unit: alpha is finished, gamma is built by team-g and beta is not taken yet.\"",
+    });
+    expect(stateOf(lead)).toContain("- **Current Stage**: build-and-test");
   });
 });
 
@@ -384,7 +389,7 @@ describe("moving on where no team holds a Unit of the lead's", () => {
     }
     const end = nextDirective(lead);
     expect(end.kind, JSON.stringify(end)).toBe("notice");
-    expect(message(end)).toContain("# Team Construction Dispatcher");
+    expect(message(end)).toContain("# Team Construction Board");
     expect(String(end.narration ?? "")).not.toContain("Your work is finished");
   });
 
@@ -395,6 +400,7 @@ describe("moving on where no team holds a Unit of the lead's", () => {
     nextDirective(lead);
     const moved = moveOn(lead);
     expect(moved.events).toEqual(["STAGE_SKIPPED", "STAGE_JUMPED", "STAGE_STARTED"]);
+    expect(auditBlockField(lastJump(lead).block, "Unit Work")).toBeNull();
     expect(stateOf(lead)).toContain("- [S] functional-design");
     expect([moved.directive.kind, moved.directive.stage]).toEqual(["run-stage", BT]);
     expect(moved.said).toEqual([
@@ -469,5 +475,26 @@ describe("land after main moved on past the Unit stages", () => {
     expect(git(seed, ["rev-parse", "HEAD"])).toBe(head);
     expect(existsSync(join(seed, ".git", "MERGE_HEAD"))).toBe(false);
     expect(readUnitMergeTransaction(seed, "alpha")?.status).toBe("approved");
+  });
+});
+
+// --- After the move the teams keep their Units: the switches that would take
+// them from the teams are refused as they were before it. ---
+
+describe("after main moved on while a team holds a Unit, the teams keep their Units", () => {
+  test("the move records the Unit work as kept, and building the Units alone or changing the gate rhythm is refused as before it", () => {
+    const { lead } = gammaClaimed();
+    const switches = [["set-unit-ownership", "solo"], ["set-unit-gate-rhythm", "unit-end"]];
+    const before = switches.map((args) => runMergeTool(STATE, args, lead));
+    for (const refused of before) expect(refused.status, refused.out).not.toBe(0);
+    moveOn(lead);
+    const moved = stateOf(lead);
+    switches.forEach((args, i) => {
+      const after = runMergeTool(STATE, args, lead);
+      expect(after.status, after.out).not.toBe(0);
+      expect(after.out).toBe(before[i].out);
+    });
+    expect(stateOf(lead)).toBe(moved);
+    expect(auditBlockField(lastJump(lead).block, "Unit Work")).toBe("kept");
   });
 });
