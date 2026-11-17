@@ -383,11 +383,12 @@ describe("in work with several repositories the box names the plan's repositorie
     expect(filled(proj, [planBox(own)])?.[0].question).toBe(`${own}\n\n- Names files in api and web.`);
   });
 
-  test("past 2,000 characters the line is under the path, whole", () => {
+  test("past 2,000 characters the line is under the path, whole, and past that nothing is added", () => {
     const { proj } = reposAsked(["api", "web"]);
-    const long = `${"Please read the whole plan before you answer. ".repeat(40)}Approve the code plan?`;
+    const long = `${"Please read the whole plan before you answer. ".repeat(38)}Approve the code plan?`;
     expect(filled(proj, [planBox(long)])?.[0].question)
       .toBe(`${long}\n\nFull plan: ${planPath(proj)}\n\nNames files in api and web.`);
+    quiet(proj, boxPayload([planBox(`${"x".repeat(1900)} Approve?`)]));
   });
 
   test("one repository: the box is as it always was", () => {

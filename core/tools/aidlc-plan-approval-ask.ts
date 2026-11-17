@@ -1545,14 +1545,15 @@ export function publishPlanApprovalAsk(
     recordPlanQuestion(projectDir, directive, record, session ?? null);
     directive.plan_approval.targets.forEach((view, index) => {
       const path = join(projectDir, view.questions_path);
-      const content = questionsFileContent(
+      const fileWith = (summary: string[]) => questionsFileContent(
         directive.question,
-        view,
+        { ...view, summary },
         directive.plan_approval.choices,
         targets[index].fingerprint,
         source?.fingerprint ?? "unbindable",
         "",
       );
+      const content = fileWith(view.summary);
       const onDisk = readText(path);
       if (onDisk === content) return;
       // The file invites the person to answer on its `[Answer]:` line. While
@@ -1560,6 +1561,11 @@ export function publishPlanApprovalAsk(
       // template, so it stays: the engine never erases what they wrote. A new
       // question, or a file changed in any other way, is written as usual.
       if (same && onlyTheirAnswerDiffers(onDisk, content)) return;
+      // Nor is it rewritten for the repos line alone, in a file an earlier
+      // AI-DLC wrote without it: the line comes with a rewrite for another reason.
+      const named = same ? underSummary(projectDir, [view.unit], null) : [];
+      const without = named.length === 0 ? null : fileWith(view.summary.filter((line) => !named.includes(line)));
+      if (without !== null && (onDisk === without || onlyTheirAnswerDiffers(onDisk, without))) return;
       writeFileAtomic(path, content);
     });
   });
