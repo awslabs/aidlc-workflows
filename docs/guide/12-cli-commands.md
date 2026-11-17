@@ -59,7 +59,7 @@ diagnostic and lifecycle routes.
 | `/aidlc unit lead-here` | In a checkout that did not make the plan (the lead on another machine), record the lead's own word that they lead the work there, so the lead's questions are put there |
 | `/aidlc unit sign-off <unit>` | At the lead's project, sign a team's result off, in your own words |
 | `/aidlc unit turned-down <unit> --repo <repo>` | At the lead's project, send one repo of a team's Unit back to the team, with your words |
-| `/aidlc unit merged <unit> --repo <repo>` | At the lead's project, count one repo of a team's Unit as merged where the board does not see it, in your words |
+| `/aidlc unit merged <unit> --repo <repo> [--pull-request <n>]` | At the lead's project, count one repo of a team's Unit as merged where the board does not see it, in your words; with `--pull-request <n>`, name that pull request as the Unit's build there |
 | `/aidlc unit adopt <unit>` | Adopt the checked-out live claim branch in a fresh clone |
 | `/aidlc unit participate` | Mark this clone for the guided Unit-claim picker |
 | `/aidlc unit catch-up` | At the lead's project, before Build and Test, bring each repo here that lacks a merged Unit up to date with its remote, a fast-forward only |
@@ -993,6 +993,13 @@ check or by your word, it is recorded at once:
 "<unit> is recorded as merged here." A repo still not merged records
 nothing, and the line says which.
 In a team's own build it names the way on instead: the lead's project checks the merge itself.
+
+With `--pull-request <n>`, your words name pull request `<n>` in that repo as the Unit's
+build (a partner team that can only push to its fork, say). The number goes on the plan,
+and the Unit counts as merged once git shows that pull request's last head merged in the
+repo (`refs/pull/<n>/head` on GitHub, `refs/merge-requests/<n>/head` on GitLab); AI-DLC
+reads no other pull request. The board then reads "its build is pull request 7 in
+reports". Naming another number for the same repo replaces it.
 
 ### `/aidlc unit adopt <unit>` — Adopt a teammate's live claim
 

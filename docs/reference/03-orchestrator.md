@@ -938,7 +938,11 @@ none is left to the home, the step is the board (`renderUnitBoard`). A
 word that a repo merged where the check cannot see it (`unit merged <unit> --repo
 <repo> --request-file <file>`) goes on the claim as `said_merged`, and that repo's
 verdict reads merged "by your word" from then on (a push after a turn-down
-keeps it only for a repo whose head did not change). Every step at a team home
+keeps it only for a repo whose head did not change). With `--pull-request <n>` the
+lead names that pull request as the Unit's build there (`pull_requests` on the Unit's
+word on the plan); the lead's look reads its last head by number only
+(`namedPullRequestVerdict`), into FETCH_HEAD, and counts the Unit done once every named
+one is merged. Every step at a team home
 (the board, and a stage the home builds itself) carries `board_note`
 (`teamCommandsNote`, one builder), the commands for those two, sign-off, amend,
 `lead-sign-off on|off` and `release`, so the lead's word is

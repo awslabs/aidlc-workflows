@@ -450,6 +450,8 @@ function isWord(word: unknown): boolean {
     each(word.answers, (entry) => isLine(entry.input) && isString(entry.at) &&
       (entry.answer === "approved" || entry.answer === "turned down") && may(entry.words, isString)) &&
     each(word.amendments, (entry) => isLine(entry.input) && isLine(entry.at) && isString(entry.words) && isString(entry.blob)) &&
+    each(word.pull_requests, (entry) => isWordRepo(entry.repo) && Number.isInteger(entry.number) && (entry.number as number) > 0 &&
+      isString(entry.words) && isLine(entry.at)) &&
     may(word.open_again, (open) => isObject(open) && isLine(open.at));
 }
 
@@ -1605,6 +1607,13 @@ export interface UnitBoardRow {
   /** Where it is built: a take's space ("payments space"), "here", "" for a take in a default space (no column), null when open. */
   team: string | null;
   status: string;
+}
+
+// The pull requests the lead named as a Unit's build, in the board's and the
+// take offer's words: "its build is pull request 7 in reports".
+export function namedBuildWords(named: ReadonlyArray<{ repo: string; number: number }>): string {
+  const parts = named.map((entry) => `pull request ${entry.number} in ${entry.repo === "." ? "the repo" : entry.repo}`);
+  return `its build is ${parts.length <= 1 ? parts.join("") : `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}`}`;
 }
 
 export function renderUnitBoard(label: string, rows: readonly UnitBoardRow[]): string {

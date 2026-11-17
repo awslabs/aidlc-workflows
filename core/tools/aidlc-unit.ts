@@ -443,6 +443,8 @@ export interface UnitClaimPayload {
   signoff?: { words: string; at: string };
   // The lead's word that a repo merged the Unit where the check cannot see it.
   said_merged?: Array<{ repo: string; words: string; at: string }>;
+  // The pull requests the lead named as the Unit's build (in a view only, never a record's).
+  pull_requests?: NamedPullRequest[];
   // The lead opened this take again, on the plan (in a view only, never a record's).
   open_again?: { at: string };
 }
@@ -1364,6 +1366,16 @@ export interface UnitWord {
   answers?: Array<{ input: string; at: string; answer: "approved" | "turned down"; words?: string }>;
   amendments?: Array<Amendment & { blob: string }>;
   open_again?: { at: string };
+  // A pull request the lead named as the Unit's build in one repository, one
+  // per repository; it counts as merged once git shows its last head merged.
+  pull_requests?: NamedPullRequest[];
+}
+
+export interface NamedPullRequest {
+  repo: string;
+  number: number;
+  words: string;
+  at: string;
 }
 
 export function unitWordIn(plan: PlanJson, unit: string): UnitWord {
@@ -1388,6 +1400,7 @@ export function viewWithWord(view: UnitClaimView, word: UnitWord): UnitClaimView
   if (verdicts.length > 0) payload.verdicts = verdicts;
   const said = (word.said_merged ?? []).filter(holds);
   if (said.length > 0) payload.said_merged = said;
+  if ((word.pull_requests ?? []).length > 0) payload.pull_requests = word.pull_requests;
   if (word.done) payload.done = true;
   if (word.signoff) payload.signoff = word.signoff;
   if ((word.amendments ?? []).length > 0) payload.amendments = word.amendments;
@@ -12391,9 +12404,11 @@ export function checkTeamResults(
   maybe?: MaybeMerged[],
   // Record repositories the look could not read: their Units are not checked.
   unread: ReadonlySet<string> = new Set(),
+  // A pull request the lead named whose head the host does not keep, in a line each.
+  noHead?: string[],
 ): Map<string, { team: string; verdicts: NonNullable<UnitClaimPayload["verdicts"]>; done: boolean }> {
   const pd = resolveProjectDir(projectDir);
-  return quietly(() => checkTeamResultsQuietly(pd, unreached, unsent, told, readOnly, tookIn, maybe, unread));
+  return quietly(() => checkTeamResultsQuietly(pd, unreached, unsent, told, readOnly, tookIn, maybe, unread, noHead));
 }
 
 function checkTeamResultsQuietly(
@@ -12405,6 +12420,7 @@ function checkTeamResultsQuietly(
   tookIn?: string[],
   maybe?: MaybeMerged[],
   unread: ReadonlySet<string> = new Set(),
+  noHead?: string[],
 ): Map<string, { team: string; verdicts: NonNullable<UnitClaimPayload["verdicts"]>; done: boolean }> {
   const found = new Map<string, { team: string; verdicts: NonNullable<UnitClaimPayload["verdicts"]>; done: boolean }>();
   const identity = activeIdentity(pd);
@@ -12437,6 +12453,41 @@ function checkTeamResultsQuietly(
     }
     found.set(unit, { team: claim.owner, verdicts, done });
   }
+  // A Unit the lead named a pull request as the build of, with no pushed
+  // result: each named head read now, except one already written merged (a
+  // host may drop a merged pull request's head). Done when every named one is
+  // merged and, with the lead's sign-off on, signed off.
+  const namedSeen = new Map<string, { verdicts: NonNullable<UnitWord["verdicts"]>; done: boolean; repos: string[] }>();
+  for (const entry of plan?.units ?? []) {
+    const word = entry.word as UnitWord;
+    const claim = claims.get(entry.name);
+    const taken = claim?.status === "claimed" ? claim : undefined;
+    if ((word.pull_requests ?? []).length === 0 || taken?.payload.result !== undefined || notRead(entry.name)) continue;
+    if (word.done === true) {
+      // Done on the plan, written by another computer of the lead's: recorded here too.
+      if (!readOnly) recordNamedDone(pd, entry.name, (word.verdicts ?? []).filter((verdict) => verdict.merged), taken?.generation ?? 0);
+      found.set(entry.name, { team: "", verdicts: word.verdicts ?? [], done: true });
+      continue;
+    }
+    const verdicts = (word.pull_requests ?? []).map((pr): NonNullable<UnitWord["verdicts"]>[number] => {
+      const had = word.verdicts?.find((verdict) => verdict.repo === pr.repo && verdict.merged);
+      if (had !== undefined) return had;
+      const read = namedPullRequestVerdict(pd, pr.repo, pr.number);
+      if (read.kind === "unreached") unreached?.push(pr.repo);
+      if (read.kind === "none") {
+        noHead?.push(`${pr.repo} has no pull request ${pr.number} that git can read, so ${entry.name} is not counted merged by it. ` +
+          `If the number is wrong, give me the right one; if ${entry.name} is merged some other way, say so.`);
+      }
+      return read.kind === "merged" ? { repo: pr.repo, merged: true, commit: read.commit, how: read.how } : { repo: pr.repo, merged: false };
+    });
+    const done = verdicts.every((verdict) => verdict.merged) && (!leadSignOffOn(state) || word.signoff !== undefined);
+    const newly = verdicts.filter((verdict) => verdict.merged && !(word.verdicts ?? []).some((before) => before.repo === verdict.repo && before.merged))
+      .map((verdict) => verdict.repo);
+    if (!readOnly && (newly.length > 0 || done)) {
+      namedSeen.set(entry.name, { verdicts, done, repos: done ? verdicts.map((verdict) => verdict.repo) : newly });
+    }
+    found.set(entry.name, { team: "", verdicts, done });
+  }
   const ownDone = readOnly ? new Set<string>() : leadsOwnDone(pd, state, claims);
   // The plan's own repository not read this look: nothing is written to it now.
   const planUnread = plan !== null && unread.has(plan.plan_repo.name);
@@ -12450,8 +12501,8 @@ function checkTeamResultsQuietly(
     }
   })();
   const held = `${identity.intentId8}\u0000the merge write waits for the next chat`;
-  if ((seen.size > 0 || ownDone.size > 0) && !planUnread && !(chat !== null && personLineHeard(pd, chat, held))) {
-    const named = [...seen.keys(), ...ownDone];
+  if ((seen.size > 0 || ownDone.size > 0 || namedSeen.size > 0) && !planUnread && !(chat !== null && personLineHeard(pd, chat, held))) {
+    const named = [...seen.keys(), ...namedSeen.keys(), ...ownDone];
     const to = plan?.plan_repo.name ?? "the plan's repository";
     let sent: LeadWrite;
     try {
@@ -12463,6 +12514,8 @@ function checkTeamResultsQuietly(
           if (merge !== undefined) {
             return { ...wordForTake(word, merge.view), verdicts: wordVerdicts(merge.view, merge.verdicts), ...(merge.done ? { done: true as const } : {}) };
           }
+          const byNaming = namedSeen.get(unit);
+          if (byNaming !== undefined) return { ...word, verdicts: byNaming.verdicts, ...(byNaming.done ? { done: true as const } : {}) };
           return ownDone.has(unit) && word.done !== true ? { ...word, done: true } : null;
         },
       });
@@ -12472,7 +12525,13 @@ function checkTeamResultsQuietly(
       sent = { kind: "refused", words: errorMessage(error), byRule: false };
     }
     // Unwritten, the merge is seen again at the next step, which writes it then.
-    if (sent.kind === "written" || sent.kind === "unchanged") told?.push(...[...seen.values()].map((merge) => merge.told));
+    if (sent.kind === "written" || sent.kind === "unchanged") {
+      told?.push(...[...seen.values()].map((merge) => merge.told));
+      for (const [unit, merge] of namedSeen) {
+        told?.push({ unit, repos: merge.repos, done: merge.done, to: "" });
+        if (merge.done) recordNamedDone(pd, unit, merge.verdicts, claims.get(unit)?.status === "claimed" ? claims.get(unit)!.generation : 0);
+      }
+    }
     else if (sent.kind === "unshared" && sent.gone !== undefined) {
       unsent?.push({ shareAgain: true, line: planGoneOffer(sent.gone) });
       if (chat !== null) markPersonLinesHeard(pd, chat, [held]);
@@ -12568,7 +12627,8 @@ function resultVerdicts(
       const tip = keptUnitTip(dir, repoRemote, repo);
       const atTip = tip === null ? null : resultAtTip(dir, integration, repo, tip);
       if (atTip !== null) verdict = unitMergeVerdict(dir, integration, atTip);
-      if (!verdict.merged && reached) verdict = mergedAtPullRequestHead(dir, repoRemote, integration, repo) ?? verdict;
+      const named = payload.pull_requests?.find((entry) => entry.repo === repo.repo)?.number;
+      if (!verdict.merged && reached) verdict = mergedAtPullRequestHead(dir, repoRemote, integration, repo, named) ?? verdict;
     }
     const candidate = verdict.merged || look?.maybe === undefined ? null : mergeCandidate(dir, integration, repo);
     if (candidate !== null) look?.maybe?.push({ unit: look.unit, repo: repo.repo, ...candidate });
@@ -12606,19 +12666,81 @@ function keptUnitTip(dir: string, remote: string, repo: RepoResult): string | nu
 // Merged only when it holds the result's last head (resultAtTip) and the
 // integration branch has its content (unitMergeVerdict). Null otherwise, and
 // the board asks the lead as before.
-function mergedAtPullRequestHead(dir: string, remote: string, integration: string, repo: RepoResult): MergeVerdict | null {
-  const candidate = mergeCandidate(dir, integration, repo);
-  const refs = candidate === null ? [] : pullRequestHeadRefs(git(dir, ["log", "-1", "--format=%B", candidate.commit]).stdout);
+// With `named`, the number the lead named for this repository is read in
+// place of the one a squash names.
+function mergedAtPullRequestHead(dir: string, remote: string, integration: string, repo: RepoResult, named?: number): MergeVerdict | null {
+  const candidate = named === undefined ? mergeCandidate(dir, integration, repo) : null;
+  const refs = named !== undefined ? numberedHeadRefs(named)
+    : candidate === null ? [] : pullRequestHeadRefs(git(dir, ["log", "-1", "--format=%B", candidate.commit]).stdout);
   if (refs.length === 0) return null;
-  const head = quietly(() => {
-    const listed = git(dir, ["ls-remote", remote, ...refs]);
-    const [oid = "", ref = ""] = listed.ok ? listed.stdout.split(/\r?\n/)[0].split("\t") : [];
-    if (!/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(oid)) return null;
-    return git(dir, ["cat-file", "-e", `${oid}^{commit}`]).ok || git(dir, ["fetch", "-q", "--no-tags", remote, ref]).ok ? oid : null;
-  });
+  const found = pullRequestHead(dir, remote, refs);
+  const head = found === "none" || found === "unreached" ? null : found;
   const atHead = head === null ? null : resultAtTip(dir, integration, repo, head);
   const verdict = atHead === null ? null : unitMergeVerdict(dir, integration, atHead);
   return verdict?.merged ? verdict : null;
+}
+
+// Both hosts' refs for a pull request's last head by its number.
+function numberedHeadRefs(number: number): string[] {
+  return [`refs/pull/${number}/head`, `refs/merge-requests/${number}/head`];
+}
+
+// A pull request's last head as the host keeps it at one of `refs`, listed
+// quietly in one read of the repo's own remote and fetched into FETCH_HEAD only
+// when its commit is not here; nothing is kept. "none": the host keeps no such
+// head; "unreached": the remote did not answer.
+function pullRequestHead(dir: string, remote: string, refs: readonly string[]): string | "none" | "unreached" {
+  return quietly(() => {
+    const listed = git(dir, ["ls-remote", remote, ...refs]);
+    if (!listed.ok) return "unreached";
+    const [oid = "", ref = ""] = listed.stdout.split(/\r?\n/)[0].split("\t");
+    if (!/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(oid)) return "none";
+    return git(dir, ["cat-file", "-e", `${oid}^{commit}`]).ok || git(dir, ["fetch", "-q", "--no-tags", remote, ref]).ok ? oid : "unreached";
+  });
+}
+
+type NamedVerdict =
+  | { kind: "merged"; commit: string; how: "ancestry" | "same content" | "same change"; subject: string }
+  | { kind: "open" | "not-cloned" | "none" | "unreached" };
+
+// The lead's merge rule for a pull request the lead named as a Unit's build,
+// read by its number only: its last head merged into the repository's
+// integration branch by ancestry (a merge commit), or by content or patch-id
+// from where the head leaves that branch (a squash, a rebase), as resultAtTip
+// reads a later tip. "." is the workspace's own repository.
+function namedPullRequestVerdict(pd: string, repo: string, number: number): NamedVerdict {
+  const dir = repo === "." ? pd : repoDir(pd, repo);
+  if (!isGitRepoDir(dir)) return { kind: "not-cloned" };
+  const remote = repositoryRemote(dir);
+  if (remote === null) return { kind: "none" };
+  const own = repo === "." ? homeIntegrationBranch(pd) : null;
+  const integration = own !== null ? `${remote}/${own}` : repoIntegration(dir, remote);
+  if (!quietFetch(dir, ["-q", remote, integration.slice(remote.length + 1)]).ok) return { kind: "unreached" };
+  const head = pullRequestHead(dir, remote, numberedHeadRefs(number));
+  if (head === "none" || head === "unreached") return { kind: head };
+  const merged = (verdict: MergeVerdict): NamedVerdict => verdict.merged
+    ? { kind: "merged", commit: verdict.commit, how: verdict.how, subject: git(dir, ["log", "-1", "--format=%s", verdict.commit]).stdout.trim() }
+    : { kind: "open" };
+  const byAncestry = unitMergeVerdict(dir, integration, { repo, branch: "", base: "", heads: [head], paths: {} });
+  if (byAncestry.merged) return merged(byAncestry);
+  // Where the head leaves the integration branch stands for the earlier head resultAtTip reads from.
+  const base = git(dir, ["merge-base", head, integration]).stdout.trim();
+  const atHead = base === "" ? null : resultAtTip(dir, integration, { repo, branch: "", base, heads: [base], paths: {} }, head);
+  return atHead === null ? { kind: "open" } : merged(unitMergeVerdict(dir, integration, atHead));
+}
+
+// A Unit done through the lead's naming or word, with no pushed result: its
+// UNIT_MERGED row, once, with the take's generation where it was taken and not
+// pushed (so the lead's walk counts it merged), else 0.
+function recordNamedDone(pd: string, unit: string, verdicts: ReadonlyArray<{ repo: string; commit?: string; how?: string }>, generation: number): void {
+  withAuditLock(pd, () => {
+    if (unitMergesStanding(readAuditShardEvents(pd), unit).length > 0) return;
+    appendAuditEntryUnlocked("UNIT_MERGED", {
+      Unit: unit, Owner: "", "Built By": "",
+      "Merged In": verdicts.map((verdict) => `${verdict.repo}${verdict.commit ? `@${verdict.commit}` : ""} (${verdict.how ?? "by your word"})`).join(", "),
+      "Attempt Generation": String(generation),
+    }, pd);
+  });
 }
 
 // A team's own look at a build of this checkout that is pushed and waiting:
@@ -14054,7 +14176,7 @@ function turnedDown(args: string[], projectDir?: string): void {
 // change made again by hand, a branch merged elsewhere): their words go on the
 // plan with the verdicts and done they make, in one write.
 function saidMerged(args: string[], projectDir?: string): void {
-  const { positional, flags } = parseArgs(args);
+  const { positional, flags, bareFlags, blankFlags } = parseArgs(args);
   const unit = positional[0];
   if (!unit || !flags.repo) fail(`usage: ${unitUsage("merged")}`);
   const pd = resolveProjectDir(projectDir);
@@ -14063,9 +14185,18 @@ function saidMerged(args: string[], projectDir?: string): void {
   if (unitBuildOf(readStateFile(pd)) !== null) {
     fail("Only the lead can count a merge git cannot see: it is their word on the plan. Nothing was written here.");
   }
+  // A pull request named as the Unit's build: a whole number, or nothing is
+  // written or counted (never the word that it merged).
+  const asked = flags["pull-request"] !== undefined || bareFlags.has("pull-request") || blankFlags.has("pull-request");
+  const number = !asked ? null : /^[1-9]\d*$/.test(String(flags["pull-request"] ?? "")) ? Number(flags["pull-request"]) : 0;
+  if (number === 0) fail(`usage: ${unitUsage("merged")}`);
   const given = personWordsOf(pd, flags);
   const lead = leadsWord(pd, flags, "That it merged");
   const words = lead.said ?? given;
+  if (number !== null) {
+    saidPullRequest(pd, unit, flags.repo, number, words, lead.fields["Message Id"]);
+    return;
+  }
   const live = leadsRecordNow(pd, unit);
   if (live?.status !== "claimed" || !live.payload.result) {
     saidMergedWithNoRecord(pd, unit, flags.repo, words, lead.fields["Message Id"]);
@@ -14097,6 +14228,115 @@ function saidMerged(args: string[], projectDir?: string): void {
       ? `${said} ${joinNames(notMerged)} ${notMerged.length === 1 ? "has" : "have"} not merged it yet, so nothing is recorded here.`
       : said;
   console.log(JSON.stringify({ unit, notice: withPlanNotes(notice) }));
+}
+
+// The lead names a pull request as a Unit's build in one repository: the
+// number goes on the plan (the Unit's word, one per repository), and the
+// Unit counts as merged once git shows that pull request's last head merged
+// there; AI-DLC reads no other pull request. With no pushed result it is read
+// now and at each later look (namedPullRequestVerdict); a Unit with a pushed
+// result keeps its merge check, which then reads that number's head too.
+function saidPullRequest(pd: string, unit: string, repo: string, number: number, words: string, message?: string): void {
+  const entry: NamedPullRequest = { repo, number, words, at: isoTimestamp() };
+  const what = `pull request ${number} in ${repo} named the build of ${unit}`;
+  const written = `Written on the plan: pull request ${number} in ${repo} is the build of ${unit}.`;
+  const counts = `${unit} counts as merged once git shows that pull request merged in ${repo}.`;
+  const named = (word: UnitWord): UnitWord => {
+    const next: UnitWord = { ...word, pull_requests: [...(word.pull_requests ?? []).filter((other) => other.repo !== repo), entry] };
+    const said = (word.said_merged ?? []).filter((other) => other.repo !== repo);
+    if (said.length > 0) next.said_merged = said;
+    else delete next.said_merged;
+    return next;
+  };
+  const live = leadsRecordNow(pd, unit);
+  if (live?.status === "claimed" && live.payload.result) {
+    const sent = writeUnitWord(pd, live, what, (word) => ({ ...named(word), verdicts: (word.verdicts ?? []).filter((verdict) => verdict.repo !== repo) }));
+    failUnlessWritten(pd, sent, `${unit}'s pull request in ${repo}`, message);
+    console.log(JSON.stringify({ unit, notice: withPlanNotes(`${written} ${counts}`) }));
+    return;
+  }
+  const read = namedPullRequestVerdict(pd, repo, number);
+  const signOffOn = leadSignOffOn(readStateFile(pd));
+  let waiting: NamedPullRequest[] = [];
+  let done = false;
+  let verdicts: NonNullable<UnitWord["verdicts"]> = [];
+  const sent = leadsPlanWrite(pd, {
+    what,
+    words: (other, tip) => {
+      if (other !== unit) return null;
+      // A take not pushed yet: the word is for that take, as every word of the lead's on it is.
+      const word = live?.status === "claimed" ? wordForTake(tip, live) : tip;
+      const next = named(word);
+      verdicts = [...(word.verdicts ?? []).filter((verdict) => verdict.repo !== repo),
+        ...(read.kind === "merged" ? [{ repo, merged: true, commit: read.commit, how: read.how }] : [])];
+      waiting = (next.pull_requests ?? []).filter((pr) => !verdicts.some((verdict) => verdict.repo === pr.repo && verdict.merged));
+      done = word.done === true || (waiting.length === 0 && (!signOffOn || word.signoff !== undefined));
+      return { ...next, ...(verdicts.length > 0 ? { verdicts } : {}), ...(done ? { done: true as const } : {}) };
+    },
+  });
+  failUnlessWritten(pd, sent, `${unit}'s pull request in ${repo}`, message);
+  if (done) recordNamedDone(pd, unit, verdicts.filter((verdict) => verdict.merged), live?.status === "claimed" ? live.generation : 0);
+  const plan = keptPlan(pd, activeIdentity(pd).intentId8)?.plan ?? null;
+  const address = repoCloneable(pd, repo) || (plan?.repos.find((entry) => entry.name === repo)?.address ?? null) !== null;
+  const prs = (list: NamedPullRequest[]): string => joinNames(list.map((pr) => `pull request ${pr.number} in ${pr.repo}`));
+  const notice = read.kind === "merged"
+    ? `Written on the plan: pull request ${number} in ${repo} is the build of ${unit}, and git shows it merged in ${repo} at ` +
+      `${read.commit.slice(0, 7)} "${read.subject}".` +
+      (done ? ` ${unit} is recorded as merged here.`
+        : waiting.length > 0 ? ` P${prs(waiting).slice(1)} ${waiting.length === 1 ? "is" : "are"} not merged yet, so nothing is recorded here.` : "")
+    : read.kind === "not-cloned"
+      ? `${written} ${repo} is not cloned in this workspace, so I cannot read that pull request yet` +
+        (address ? `. Say if you want me to clone ${repo} here; the next step then reads it.` : "; once it is cloned here, the next step reads it.")
+    : read.kind === "none"
+      ? `${written} But ${repo} has no pull request ${number} that git can read, so ${unit} is not counted merged by it. ` +
+        `If the number is wrong, give me the right one; if ${unit} is merged some other way, say so.`
+    : `${written} ${counts}`;
+  console.log(JSON.stringify({ unit, notice: withPlanNotes(notice) }));
+}
+
+// The pull requests the lead named as each Unit's build, as the plan this
+// computer keeps has them; empty where the plan is not here.
+export function namedPullRequests(projectDir: string): Map<string, NamedPullRequest[]> {
+  const named = new Map<string, NamedPullRequest[]>();
+  try {
+    for (const entry of keptPlan(projectDir, activeIdentity(projectDir).intentId8)?.plan.units ?? []) {
+      const list = (entry.word as UnitWord).pull_requests ?? [];
+      if (list.length > 0) named.set(entry.name, list);
+    }
+  } catch {
+    // No work selected here: nothing named.
+  }
+  return named;
+}
+
+// The Units done through a pull request the lead named, with no pushed result
+// of a team's: their own outputs (a code summary, test instructions) are in
+// no record here.
+export function namedOnlyDone(projectDir: string): Array<{ unit: string; pulls: NamedPullRequest[] }> {
+  try {
+    const claims = cachedClaims(projectDir);
+    return (keptPlan(projectDir, activeIdentity(projectDir).intentId8)?.plan.units ?? []).flatMap((entry) => {
+      const word = entry.word as UnitWord;
+      const claim = claims.get(entry.name);
+      const pushed = claim?.status === "claimed" && claim.payload.result !== undefined;
+      return word.done === true && (word.pull_requests ?? []).length > 0 && !pushed ? [{ unit: entry.name, pulls: word.pull_requests! }] : [];
+    });
+  } catch {
+    return [];
+  }
+}
+
+// The offer to clone a repository the lead named a pull request in that this
+// workspace has no checkout of: a build's own clone offer (likelyReposNotHere),
+// with the address this workspace's list or the plan gives. Null with none.
+export function namedCloneOffer(projectDir: string): { question: string; choices: Array<{ label: string; command?: string }> } | null {
+  const pd = resolveProjectDir(projectDir);
+  const repos = [...new Set([...namedPullRequests(pd).values()].flat().map((pr) => pr.repo))].filter((repo) => repo !== ".");
+  if (repos.length === 0) return null;
+  const plan = keptPlan(pd, activeIdentity(pd).intentId8)?.plan ?? null;
+  const addresses = new Map((plan?.repos ?? []).flatMap((repo) => (repo.address === null ? [] : [[repo.name, repo.address] as [string, string]])));
+  const notThere = likelyReposNotHere(pd, repos, repos, addresses);
+  return notThere.offer.offer === undefined ? null : { question: notThere.question.trim(), choices: notThere.offer.offer.choices };
 }
 
 // A Unit whose record holds no result (its take or its push never reached its
@@ -14441,6 +14681,10 @@ function signOff(args: string[], projectDir?: string): void {
   const pd = resolveProjectDir(projectDir);
   const given = personWordsOf(pd, flags);
   const live = leadsRecordNow(pd, unit);
+  if ((live?.status !== "claimed" || !live.payload.result) && (namedPullRequests(pd).get(unit) ?? []).length > 0) {
+    signOffNamed(pd, unit, flags, given);
+    return;
+  }
   if (live?.status !== "claimed" || !live.payload.result) fail(`${unit} has no result from its team to sign off.`);
   const lead = leadsWord(pd, flags, "The sign-off", "unit-signoff");
   const words = lead.said ?? given;
@@ -14450,6 +14694,36 @@ function signOff(args: string[], projectDir?: string): void {
     Question: `Sign off ${unit} from ${builderOf(live)}`, Answer: "Sign it off", [QUESTION_TYPE_FIELD]: "unit-signoff", ...lead.fields,
   }, pd);
   const merged = (live.payload.verdicts ?? []).length > 0 && live.payload.verdicts!.every((verdict) => verdict.merged);
+  console.log(JSON.stringify({
+    unit,
+    notice: withPlanNotes(merged
+      ? `Signed off ${unit}; every repo it changed has merged, so it is done.`
+      : `Signed off ${unit}; it counts as done once every repo it changed has merged.`),
+  }));
+}
+
+// The lead's sign-off of a Unit whose build is a pull request they named: on
+// its word on the plan, done there at once when every named one is merged.
+function signOffNamed(pd: string, unit: string, flags: Record<string, string>, given: string): void {
+  const lead = leadsWord(pd, flags, "The sign-off", "unit-signoff");
+  const words = lead.said ?? given;
+  let merged = false;
+  let verdicts: NonNullable<UnitWord["verdicts"]> = [];
+  const sent = leadsPlanWrite(pd, {
+    what: `${unit} signed off`,
+    words: (other, word) => {
+      if (other !== unit) return null;
+      verdicts = (word.verdicts ?? []).filter((verdict) => verdict.merged);
+      merged = (word.pull_requests ?? []).every((pr) => verdicts.some((verdict) => verdict.repo === pr.repo));
+      return { ...word, signoff: { words, at: isoTimestamp() }, ...(merged ? { done: true as const } : {}) };
+    },
+  });
+  failUnlessWritten(pd, sent, `${unit}'s sign-off`, lead.fields["Message Id"]);
+  appendAuditEntry("QUESTION_ANSWERED", {
+    Question: `Sign off ${unit}`, Answer: "Sign it off", [QUESTION_TYPE_FIELD]: "unit-signoff", ...lead.fields,
+  }, pd);
+  const live = leadsRecordNow(pd, unit);
+  if (merged) recordNamedDone(pd, unit, verdicts, live?.status === "claimed" ? live.generation : 0);
   console.log(JSON.stringify({
     unit,
     notice: withPlanNotes(merged

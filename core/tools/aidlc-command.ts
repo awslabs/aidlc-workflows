@@ -273,8 +273,8 @@ export const UNIT_GRAMMAR: Readonly<Record<string, UnitGrammar>> = {
   "merge-status": { name: true, options: [], usage: "unit merge-status <unit>" },
   merged: {
     name: true,
-    options: ["repo", "message", "request-file", "person-words"],
-    usage: "unit merged <unit> --repo <repo> [--message <id>] (--request-file <file> | --person-words <text>)",
+    options: ["repo", "pull-request", "message", "request-file", "person-words"],
+    usage: "unit merged <unit> --repo <repo> [--pull-request <n>] [--message <id>] (--request-file <file> | --person-words <text>)",
   },
   participate: { name: false, options: [], usage: "unit participate" },
   pin: { name: true, options: [], usage: "unit pin <unit>" },

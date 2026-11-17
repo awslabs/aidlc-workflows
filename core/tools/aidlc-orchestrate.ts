@@ -469,6 +469,7 @@ import {
   intentsRegistryPath,
   MANY_REPOS,
   codekbSourceSize,
+  isGitRepoDir,
   repoDir,
   repoScopeAsked,
   REPOSITORY_ANALYSIS_MINUTES,
@@ -711,6 +712,9 @@ import {
   resultTakeHold,
   resultWaitsLine,
   sendLeadsApprovedChanges,
+  namedCloneOffer,
+  namedOnlyDone,
+  namedPullRequests,
   takeDayOf,
   GitWriteRefused,
   earlyBaseMerged,
@@ -829,7 +833,9 @@ import {
   unitWriteTargets,
   mergedStatus,
   mergeCandidateLine,
+  namedBuildWords,
   renderUnitBoard,
+  unitOutputsHomeReads,
   type UnitBoardRow,
   UNIT_PUSH_FIELD,
   buildWaitsForPush,
@@ -5662,7 +5668,8 @@ function teamCommandsNote(projectDir?: string): string {
     : "";
   return "When the person says a repo turned a Unit down, run " +
     `\`${unitTool} turned-down <unit> --repo <repo> ${unitWordsArg("turned-down")}\`; when they say a repo merged it ` +
-    `where the board does not see it, run \`${unitTool} merged <unit> --repo <repo> ${unitWordsArg("merged")}\`. ` +
+    `where the board does not see it, run \`${unitTool} merged <unit> --repo <repo> ${unitWordsArg("merged")}\`; when they say a ` +
+    `pull request is a Unit's build, run \`${unitTool} merged <unit> --repo <repo> --pull-request <n> ${unitWordsArg("merged")}\`. ` +
     `When they sign a team's result off, run \`${unitTool} sign-off <unit> ${unitWordsArg("sign-off")}\`; when they ` +
     `answer a team's proposed change, run \`${unitTool} amend <unit> --input <file> --answer <approve|reject> ` +
     `${unitWordsArg("amend")}\`. ` +
@@ -10231,6 +10238,12 @@ function unitTakeLook(
         if (onBranch !== null) {
           choices.push({ label: `Carry on ${unit}`, detail: `Your build of it, on branch ${onBranch}; I switch you there.`, command: take.replace("%s", shellArg(unit)) });
         } else building.push(`${unit} (by ${builderOf(claim)}${spaceWords(claim.owner, true)})`);
+        continue;
+      }
+      const pulls = ((plan.units.find((entry) => entry.name === unit)?.word ?? {}) as { pull_requests?: Array<{ repo: string; number: number }> })
+        .pull_requests ?? [];
+      if (pulls.length > 0) {
+        building.push(`${unit} (${namedBuildWords(pulls)})`);
         continue;
       }
       const blockers = [...new Set((opening.blockers.get(unit) ?? [])
@@ -19266,6 +19279,8 @@ function teamHomeClaims(
     if (claim.status === "claimed" && claim.payload.done !== true && claim.payload.turned_down) heldElsewhere.add(unit);
   }
   for (const unit of left.units) heldElsewhere.add(unit);
+  // A Unit the lead named a pull request as the build of is built elsewhere, even where the lead's walk keeps every open Unit.
+  for (const unit of namedPullRequests(projectDir).keys()) heldElsewhere.add(unit);
   // The lead's own approved change to an input the teams build with goes on
   // the plan, said once (a look writes nothing else): a team whose Unit is done
   // hears it too, so a done team Unit is reason enough to look.
@@ -19287,14 +19302,16 @@ function teamHomeClaims(
   const told: ToldMerge[] = [];
   const tookIn: string[] = [];
   const maybe: MaybeMerged[] = [];
+  const noHead: string[] = [];
   if (heldElsewhere.size > 0 && !isReadOnlyEngineProbe()) {
     try {
-      results = checkTeamResults(projectDir, unreached, unsent, told, query, tookIn, maybe, unread);
+      results = checkTeamResults(projectDir, unreached, unsent, told, query, tookIn, maybe, unread, noHead);
     } catch (e) {
       sayWithStepOnce(projectDir, `The teams' results could not be checked just now: ${errorMessage(e)}`);
     }
   }
   for (const candidate of maybe) sayWithStepOnce(projectDir, mergeCandidateLine(candidate.unit, candidate.repo, candidate));
+  for (const line of noHead) sayWithStepOnce(projectDir, line);
   // A merge the lead's look saw is the one thing it writes on the plan unasked: said once, in plain words.
   for (const merge of told) {
     sayWithStepOnce(projectDir, merge.done
@@ -19427,8 +19444,25 @@ function unitBoardRows(
     if (claim?.status === "claimed" && claim.payload.turned_down) return false;
     return standing.get(unit)?.done ?? mergedHere.has(unit);
   };
+  const named = namedPullRequests(projectDir);
+  // A Unit whose build is a pull request the lead named: where its merge stands, or that its repository is not here to read.
+  const namedStatus = (unit: string): string | null => {
+    const pulls = named.get(unit) ?? [];
+    if (pulls.length === 0) return null;
+    const its = namedBuildWords(pulls);
+    if (results.get(unit)?.done === true) return `${its}, done`;
+    const notHere = pulls.map((pr) => pr.repo).filter((repo) => !isGitRepoDir(repo === "." ? projectDir : repoDir(projectDir, repo)));
+    if (notHere.length > 0) return `${its}, not read here: ${joinRepoNames(notHere)} ${notHere.length === 1 ? "is" : "are"} not cloned in this workspace`;
+    const verdicts = pulls.map((pr) => ({ repo: pr.repo, merged: results.get(unit)?.verdicts.some((verdict) => verdict.repo === pr.repo && verdict.merged) === true }));
+    return `${its}, ${verdicts.length === 1 ? (verdicts[0].merged ? "merged" : "not merged yet") : mergedStatus(verdicts)}`;
+  };
   const rows = unitsInPlanOrder(projectDir, planUnits).map((unit): UnitBoardRow => {
     const claim = overview?.claims.get(unit);
+    const byNaming = claim?.status === "claimed" && claim.payload.result ? null : namedStatus(unit);
+    if (byNaming !== null && claim?.status !== "claimed") return { unit, team: "", status: byNaming };
+    if (byNaming !== null && results.get(unit)?.done === true) {
+      return { unit, team: own.has(unit) || claim!.owner === DEFAULT_SPACE ? "" : `${claim!.owner} space`, status: byNaming };
+    }
     // The space a take is built in, said as a space; a default space is not
     // named, so its row has no column. A pushed or done one says who built it.
     const team = claim?.status === "claimed" && !own.has(unit) ? (claim.owner === DEFAULT_SPACE ? "" : `${claim.owner} space`) : null;
@@ -19464,7 +19498,8 @@ function unitBoardRows(
     return {
       unit,
       team,
-      status: `building${early.length > 0 ? ` early on ${early.join(", ")}` : ""}${day === null ? "" : ` since ${day}`}, taken by ${builderOf(claim!)}`,
+      status: `building${early.length > 0 ? ` early on ${early.join(", ")}` : ""}${day === null ? "" : ` since ${day}`}, taken by ${builderOf(claim!)}` +
+        (byNaming === null ? "" : `; ${byNaming}`),
     };
   });
   return { rows };
@@ -19862,15 +19897,35 @@ function emitTeamUnitMajorRunStage(
         ],
       }]
       : [];
+    // A Unit whose build is a named pull request, merged and waiting for the lead's sign-off; and the clone of a
+    // repository the lead named one in that is not here, as a build is offered its own.
+    const namedOffers: StepOffer[] = [];
+    if (leadSignOffOn(stateContent)) {
+      for (const [unit, pulls] of namedPullRequests(projectDir)) {
+        const seen = results.get(unit);
+        if (seen === undefined || seen.done || seen.verdicts.length === 0 || !seen.verdicts.every((verdict) => verdict.merged)) continue;
+        namedOffers.push({
+          question: `${namedBuildWords(pulls).replace(/^its/, `${unit}'s`)}: ${mergedStatus(seen.verdicts)}. Sign it off?`,
+          choices: [
+            { label: "Sign it off", command: `${unitTool} sign-off ${shellArg(unit)} ${unitWordsArg("sign-off", unit)}` },
+            { label: "Not now" },
+          ],
+        });
+      }
+    }
+    const clone = namedCloneOffer(projectDir);
+    if (clone !== null) namedOffers.push(clone);
     // Each offer is put once in a chat; its command stays in the board's note.
-    const allOffers = offersOnce(projectDir, [...answers, ...rhythm]);
+    const allOffers = offersOnce(projectDir, [...answers, ...namedOffers, ...rhythm]);
     // Nothing is built here while they wait: the guard reads the wait, on the state as this step leaves it.
     if (teamHome && !isReadOnlyEngineProbe()) {
+      const named = namedPullRequests(projectDir);
       noteLeadWaitsOnTeams(projectDir, readStateFile(projectDir), rows
         .filter((row) => heldElsewhere.has(row.unit) && !mergedHere.has(row.unit))
         .map(({ unit }) => {
           const claim = overview?.claims.get(unit);
-          return { unit, team: claim?.status === "claimed" ? claim.owner : null };
+          // A Unit whose build is a named pull request waits on its build, in no team's space.
+          return { unit, team: claim?.status === "claimed" ? claim.owner : named.has(unit) ? "default" : null };
         }));
     }
     emit(lineEndingTurn(
@@ -20100,6 +20155,7 @@ function teamUnitMajorWalkBeat(
   }
   if (!scopeStamp && homeLocation(stateContent) !== null) {
     for (const unit of leftForTakesAtHome(projectDir, claimsHere).units) heldElsewhere.add(unit);
+    for (const unit of namedPullRequests(projectDir).keys()) heldElsewhere.add(unit);
   }
   // A team checkout that is no home walks only the Units it holds (unitsHeldHere).
   const held = scopeStamp || homeLocation(stateContent) !== null ? null : teamWalkHeldUnits(projectDir);
@@ -21683,6 +21739,13 @@ function emitForSlug(
 function catchUpStep(projectDir: string, stateContent: string, node: GraphStage): AskDirective | null {
   if (node.phase !== "construction" || !isTeamUnitOwnership(stateContent) || homeLocation(stateContent) === null ||
     unitBuildOf(stateContent) !== null || isReadOnlyEngineProbe()) return null;
+  // A Unit built only by a pull request the lead named left no outputs of its own here: said once, never a gate.
+  const scope = getField(stateContent, "Scope") ?? "";
+  for (const { unit, pulls } of namedOnlyDone(projectDir)) {
+    if (unitOutputsHomeReads(unit, scope).length === 0) continue;
+    sayWithStepOnce(projectDir, `${namedBuildWords(pulls).replace(/^its/, `${unit}'s`)}, so its code summary and test instructions are not here: ` +
+      `${node.name} runs without them.`);
+  }
   const offer = catchUpOffer(projectDir, node.name);
   if (offer === null) return null;
   const mark = offer.ask === null ? null : teamHandoverMarkName("catch-up", offer.ask.mark);
