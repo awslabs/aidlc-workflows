@@ -3333,7 +3333,7 @@ describe("a Unit on the workspace's own repository", () => {
   // Main moved under a Unit built here, merging cleanly with it, and main
   // changes a file of AI-DLC's record that has a change here too: `ours`
   // writes the change here, `theirs` main's, over the committed text.
-  function recordInTheWay(file: string, theirs: (text: string) => string, ours: (text: string) => string, clash = false) {
+  function recordInTheWay(file: string, theirs: (text: string) => string, ours: (text: string) => string, clash = false, crlf = false) {
     const lines = (first: string, last: string): string => `${first}\nb\nc\nd\n${last}\n`;
     const home = oneRepoTeams();
     mkdirSync(join(home.dir, "src"), { recursive: true });
@@ -3344,6 +3344,13 @@ describe("a Unit on the workspace's own repository", () => {
     git(home.dir, ["commit", "-q", "--allow-empty", "-m", "lead: before the take"]);
     git(home.dir, ["push", "-q", "origin", "main"]);
     const alice = cloneOf(home.remote, "alice");
+    // Git for Windows as installed: files checked out with CRLF, stored with LF.
+    if (crlf) {
+      git(alice, ["config", "core.autocrlf", "true"]);
+      rmSync(join(alice, file));
+      git(alice, ["checkout", "--", file]);
+      expect(readFileSync(join(alice, file), "utf-8")).toContain("\r\n");
+    }
     const record = builtHere(alice, "refunds", "refunds.ts");
     if (clash) leadCommits(home, "main", "src/refunds.ts");
     else {
@@ -3411,6 +3418,24 @@ describe("a Unit on the workspace's own repository", () => {
     const refused = run(UNIT, ["push", "--merge-main", "--put-aside"], alice);
     expect(String(refused.json?.error)).toStartWith("Merged origin/main into refunds in the repo, and the push was refused");
     expect(String(refused.json?.error)).toContain("The change to aidlc/spaces/default/memory/team.md is back, on top of origin/main's, still not committed.");
+  });
+
+  test("a clone that checks files out with CRLF: the change is back on top, with its line endings, and back exactly as it was after an undo", () => {
+    const crlfLearning = (text: string): string => `A learning kept here.\r\n${text}`;
+    const { alice } = recordInTheWay(TEAM, leadsRule, crlfLearning, false, true);
+    const yes = run(UNIT, ["push", "--merge-main", "--put-aside"], alice);
+    expect(yes.status, yes.out).toBe(0);
+    expect(String(yes.json?.notice)).toContain("The change to aidlc/spaces/default/memory/team.md is back, on top of origin/main's, still not committed.");
+    const now = readFileSync(join(alice, TEAM), "utf-8");
+    expect(now).toContain("A learning kept here.\r\n");
+    expect(now).toContain("A lead's rule.\r\n");
+    const undone = recordInTheWay(TEAM, leadsRule, crlfLearning, false, true);
+    const hooks = join(undone.alice, ".git", "hooks");
+    writeFileSync(join(hooks, "pre-merge-commit"), "#!/bin/sh\nexit 1\n");
+    chmodSync(join(hooks, "pre-merge-commit"), 0o755);
+    const refused = run(UNIT, ["push", "--merge-main", "--put-aside"], undone.alice);
+    expect(String(refused.json?.error)).not.toContain("The change to");
+    expect(readFileSync(join(undone.alice, TEAM), "utf-8")).toBe(undone.here);
   });
 
   test("where the two meet: a rules file holds both, marked; any other file stays readable, the change kept in git", () => {

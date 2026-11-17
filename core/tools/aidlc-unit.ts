@@ -13895,32 +13895,43 @@ function mergeMainIn(pd: string, args: string[], unit: string, branch: string, u
 // merge-file`, base its committed copy before): the line that says how it
 // went. Where the two meet, a Markdown file holds both with git's marks; any
 // other file (repos.json, a state file) stays as the merge left it, readable,
-// and the change stays in git under its id. Where the merge left the file as it was
-// committed (undone, or never begun), the change is back as it was, unsaid.
+// and the change stays in git under its id. Where the merge left the file as
+// it was committed (undone, or never begun), the change is back as it was,
+// unsaid.
 function putBackChange(entry: { dir: string; path: string; into: string; kept: string; base: string }): string {
   const { dir, path, into, kept, base } = entry;
   const scratch = mkdtempSync(join(tmpdir(), "aidlc-aside-"));
   try {
     const at = join(dir, ...path.split("/"));
-    const blobs = [base, kept].map((oid) => spawnSync("git", ["cat-file", "blob", oid], { cwd: dir }).stdout as Buffer);
-    const now = existsSync(at) ? readFileSync(at) : Buffer.alloc(0);
-    if (now.equals(blobs[0])) {
-      writeFileSync(at, blobs[1]);
+    // Compared and merged as git stores them (the file through its clean
+    // filter, so a CRLF checkout reads as its LF blobs), and written back
+    // through git's own filters, so the file keeps its line endings.
+    const blob = (oid: string): Buffer => spawnSync("git", ["cat-file", "blob", oid], { cwd: dir }).stdout as Buffer;
+    const writeBack = (oid: string): void => {
+      writeFileSync(at, spawnSync("git", ["cat-file", "--filters", `--path=${path}`, oid], { cwd: dir }).stdout as Buffer);
+    };
+    const now = existsSync(at) ? git(dir, ["hash-object", "-w", "--", path]).stdout.trim() : "";
+    if (now === base) {
+      writeBack(kept);
       return "";
     }
-    const files = [now, ...blobs]
+    const files = [now === "" ? Buffer.alloc(0) : blob(now), blob(base), blob(kept)]
       .map((content, i) => {
         const file = join(scratch, `merge-${i}`);
         writeFileSync(file, content);
         return file;
       });
     const merged = spawnSync("git", ["merge-file", "-p", "-L", into, "-L", "before", "-L", "this change", ...files], { cwd: dir });
+    const mergedOid = (): string => {
+      writeFileSync(join(scratch, "merged"), merged.stdout as Buffer);
+      return git(dir, ["hash-object", "-w", "--no-filters", "--", join(scratch, "merged")]).stdout.trim();
+    };
     if (merged.status === 0) {
-      writeFileSync(at, merged.stdout);
+      writeBack(mergedOid());
       return `The change to ${path} is back, on top of ${into}'s, still not committed.`;
     }
     if (merged.status !== null && merged.status > 0 && path.endsWith(".md") && !path.endsWith("aidlc-state.md")) {
-      writeFileSync(at, merged.stdout);
+      writeBack(mergedOid());
       return `The change to ${path} did not go back cleanly on top of ${into}'s, so both are in the file now, marked where they meet, ` +
         "still not committed. Say if you want me to put the two together and show you.";
     }
