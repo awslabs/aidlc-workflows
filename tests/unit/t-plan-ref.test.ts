@@ -1220,9 +1220,9 @@ describe("a repository that moved hosts: the plan taken over where it is now", (
       const plan = JSON.parse(git(scratch, ["show", "refs/tip:plan.json"])) as Plan;
       plan.version += 1;
       plan.plan_repo = { name: "billing", address: billing };
-      plan.units.find((unit) => unit.name === "reporting")!.word = { generation: 1, signoff: { words: "fine by me", at: "2026-11-17T01:00:00Z" } };
+      plan.units.find((unit) => unit.name === "reporting")!.word = { generation: 1, signoff: { words: "fine by me", at: "2026-11-16T01:00:00Z" } };
       plan.units.find((unit) => unit.name === "refunds")!.word = {
-        generation: 1, turned_down: { repo: "billing", heads: { billing: "1".repeat(40) }, words: "not yet", at: "2026-11-17T01:01:00Z" },
+        generation: 1, turned_down: { repo: "billing", heads: { billing: "1".repeat(40) }, words: "not yet", at: "2026-11-16T01:01:00Z" },
       };
       // Taken again there: this computer's words on its earlier take are no one's now.
       if (later) plan.units.find((unit) => unit.name === "checkout-ui")!.word = { generation: 2 };
@@ -1234,9 +1234,9 @@ describe("a repository that moved hosts: the plan taken over where it is now", (
       const counted = { repo: "checkout-web", words: "merged by hand", at: "2026-11-17T01:13:00Z" };
       writeOnTip(api, home.id8, (old) => {
         old.version += 1;
-        old.units.find((unit) => unit.name === "refunds")!.word = { generation: 1, signoff: { words: "looks right", at: "2026-11-17T01:10:00Z" } };
+        old.units.find((unit) => unit.name === "refunds")!.word = { generation: 1, signoff: { words: "looks right", at: "2026-11-12T01:10:00Z" } };
         old.units.find((unit) => unit.name === "reporting")!.word = {
-          generation: 1, turned_down: { repo: "billing", heads: { billing: "0".repeat(40) }, words: "the totals are wrong", at: "2026-11-17T01:11:00Z" },
+          generation: 1, turned_down: { repo: "billing", heads: { billing: "0".repeat(40) }, words: "the totals are wrong", at: "2026-11-12T01:11:00Z" },
           said_merged: [counted],
         };
         old.units.find((unit) => unit.name === "checkout-ui")!.word = {
@@ -1247,9 +1247,9 @@ describe("a repository that moved hosts: the plan taken over where it is now", (
       refuse(api);
       const moved = moveTo(home.dir, "billing");
       expect(moved.status, moved.out).toBe(0);
-      // Where the plan there says otherwise, its own sentence, and the Unit is left; its other words are said on it.
-      const refundsAsked = "has refunds turned down in billing, and this computer has your sign-off of it: say which stands.";
-      const reportingAsked = "The plan there has reporting signed off, and this computer has your turn-down of it in billing: say which stands";
+      // Where the plan there says otherwise, its own sentence with each word's day as recorded, and the Unit is left; its other words are said on it.
+      const refundsAsked = "has refunds turned down in billing (16 Nov), and this computer has your sign-off of it from 12 Nov: say which stands.";
+      const reportingAsked = "The plan there has reporting signed off (16 Nov), and this computer has your turn-down of it in billing from 12 Nov: say which stands";
       const questions = `The plan ${later ? "in billing" : "there"} ${refundsAsked} ${reportingAsked}, and either way I will write your count of ` +
         "reporting as merged in checkout-web there as you gave it.";
       expect(String(moved.json?.notice)).toBe(`The plan of ${registryOf(home.dir)[0].slug} moved to billing (${billing}); this computer writes it there ` +
@@ -1266,7 +1266,7 @@ describe("a repository that moved hosts: the plan taken over where it is now", (
       // A plain ask before any answer: the list's word goes on, never the reply, and the same sentences are said again.
       const chat = `t-plan-ref-words-yes-${later}`;
       const asked = carryRun(home.dir, chat, "yes", ["--carry-words"]);
-      expect(asked.json?.notice).toBe(`${later ? "" : "The plan in billing has it now, as you gave it. "}${questions}`);
+      expect(asked.json?.notice).toBe(`${later ? "" : "The plan in billing has your count of checkout-ui as merged in checkout-web now, as you gave it. "}${questions}`);
       // Nothing the plan there holds is written over: byte for byte as it was.
       expect(JSON.stringify(word("refunds"))).toBe(refundsThere);
       expect(JSON.stringify(word("reporting"))).toBe(reportingThere);
@@ -1279,15 +1279,15 @@ describe("a repository that moved hosts: the plan taken over where it is now", (
       // The answers: this computer's sign-off of refunds stands, and the plan's sign-off of reporting; reporting's count goes on either way.
       const answered = carryRun(home.dir, chat, "my sign-off of refunds stands, and the sign-off of reporting there", ["--stands", "refunds=here,reporting=plan"]);
       expect(answered.json?.notice).toBe("The plan in billing has your sign-off of refunds and your count of reporting as merged in checkout-web now, as " +
-        "you gave them. The plan in billing keeps its own word on reporting.");
-      expect(word("refunds")).toEqual({ generation: 1, signoff: { words: "looks right", at: "2026-11-17T01:10:00Z" } });
+        "you gave them. The plan in billing still has reporting signed off.");
+      expect(word("refunds")).toEqual({ generation: 1, signoff: { words: "looks right", at: "2026-11-12T01:10:00Z" } });
       expect(word("reporting")).toEqual({ ...JSON.parse(reportingThere), said_merged: [counted] });
       expect(git(billing, ["log", "-1", "--format=%s", ref])).toEndWith(": sign-off of refunds, count of reporting as merged in checkout-web carried over " +
         "from checkout-api");
       // A later plain ask: refunds, where this computer's word now stands there, is not asked again; the plan's own word kept is not
       // remembered, so reporting's sentence is said again, answered the same way (the named limit).
-      expect(carryRun(home.dir, chat, "carry my words over", ["--carry-words"]).json?.notice).toBe("The plan in billing has reporting signed off, and " +
-        "this computer has your turn-down of it in billing: say which stands.");
+      expect(carryRun(home.dir, chat, "carry my words over", ["--carry-words"]).json?.notice).toBe("The plan in billing has reporting signed off (16 Nov), " +
+        "and this computer has your turn-down of it in billing from 12 Nov: say which stands.");
       expect(JSON.stringify(planAt(billing, ref).units.map((unit) => unit.word))).not.toMatch(/"words":"(yes|carry my words over|my sign-off of refunds stands, and the sign-off of reporting there)"/);
     });
   }
@@ -1309,11 +1309,11 @@ describe("a repository that moved hosts: the plan taken over where it is now", (
     const input = plan.inputs[0].path;
     // Words of its own there: refunds turned down and the other answer to the same proposal, the send-back in other words, a word of an older take.
     plan.units.find((unit) => unit.name === "refunds")!.word = {
-      generation: 1, turned_down: { repo: "billing", heads: { billing: "1".repeat(40) }, words: "not yet", at: "2026-11-17T01:01:00Z" },
+      generation: 1, turned_down: { repo: "billing", heads: { billing: "1".repeat(40) }, words: "not yet", at: "2026-11-16T01:01:00Z" },
       answers: [{ input, at: "2026-11-17T01:20:00Z", answer: "turned down", words: "no" }],
     };
     plan.units.find((unit) => unit.name === "reporting")!.word = {
-      generation: 1, turned_down: { repo: "", from: "build-and-test", heads: {}, words: "it does not build", at: "2026-11-17T01:02:00Z" },
+      generation: 1, turned_down: { repo: "", from: "build-and-test", heads: {}, words: "it does not build", at: "2026-11-16T01:02:00Z" },
     };
     plan.units.find((unit) => unit.name === "checkout-ui")!.word = { generation: 1, signoff: { words: "fine", at: "2026-11-17T01:03:00Z" } };
     git(scratch, ["read-tree", "refs/tip"]);
@@ -1331,7 +1331,7 @@ describe("a repository that moved hosts: the plan taken over where it is now", (
       old.version += 1;
       // Two questions on refunds, and a count of its own that goes with either answer.
       old.units.find((unit) => unit.name === "refunds")!.word = {
-        generation: 1, signoff: { words: "looks right", at: "2026-11-17T01:19:00Z" }, answers: [approved],
+        generation: 1, signoff: { words: "looks right", at: "2026-11-12T01:19:00Z" }, answers: [approved],
         amendments: [{ input, at: "2026-11-17T01:20:00Z", words: "yes, take it", blob }], said_merged: [counted],
       };
       // checkout-ui was taken again here (generation 2): its word starts a word of that take there.
@@ -1343,7 +1343,7 @@ describe("a repository that moved hosts: the plan taken over where it is now", (
       };
       // The same send-back there in other words: offered, the plan as it is the default.
       old.units.find((unit) => unit.name === "reporting")!.word = {
-        generation: 1, turned_down: { repo: "", from: "build-and-test", heads: {}, words: "the totals fail the build", at: "2026-11-17T01:22:00Z" },
+        generation: 1, turned_down: { repo: "", from: "build-and-test", heads: {}, words: "the totals fail the build", at: "2026-11-12T01:22:00Z" },
         said_merged: [{ repo: "billing", words: "merged by hand", at: "2026-11-17T01:24:00Z" }],
       };
     }, { [`inputs/${input}`]: text });
@@ -1353,19 +1353,24 @@ describe("a repository that moved hosts: the plan taken over where it is now", (
     const them = name.endsWith("s") ? "them" : "it";
     const moved = moveTo(home.dir, "billing");
     expect(moved.status, moved.out).toBe(0);
-    const questions = "The plan there has refunds turned down in billing, and this computer has your sign-off of it: say which stands. The plan " +
-      `there has refunds's change to the ${name} turned down, and this computer has your approval of it: say which stands, and either way I will ` +
-      "write your count of refunds as merged in checkout-api there as you gave it. The plan there has reporting sent back from Build and Test in " +
-      "other words. I have your send-back of it as you gave it: say if you want it written there in its place.";
+    // An answer's time is its proposal's, not the day of the lead's word: said without a day.
+    const refundsAsked = "The plan there has refunds turned down in billing (16 Nov), and this computer has your sign-off of it from 12 Nov: say which " +
+      `stands. The plan there has refunds's change to the ${name} turned down, and this computer has your approval of it: say which stands, and ` +
+      "either way I will write your count of refunds as merged in checkout-api there as you gave it.";
+    const questions = `${refundsAsked} The plan there has reporting sent back from Build and Test (16 Nov) too, worded differently. I have your ` +
+      "send-back of it from 12 Nov as you gave it: say if you want it written there in its place.";
     expect(String(moved.json?.notice)).toEndWith(`These are not on the plan in billing: your turn-down of checkout-ui in checkout-web, your approval ` +
       `of checkout-ui's change to the ${name}, the ${name} as you approved ${them} for checkout-ui, your opening of checkout-ui again, your count ` +
       `of reporting as merged in billing. I have them as you gave them: say if you want them written there. ${questions}`);
     expect(String(moved.json?.step)).toContain("`--stands reporting=here` if they want this computer's word on reporting written in place of the plan's");
-    // The list's yes: its words go on, and the questions are said again.
-    const carried = carryRun(home.dir, "t-plan-ref-words-yes-kinds", "yes", ["--carry-words"]);
-    expect(carried.json?.notice).toBe(`The plan in billing has them now, as you gave them. ${questions}`);
+    // The list's yes and the plan's send-back kept, in one command: each written word named, what the plan still has, and only the
+    // question left unanswered said again.
+    const carried = carryRun(home.dir, "t-plan-ref-words-yes-kinds", "yes, and keep the send-back there", ["--carry-words", "--stands", "reporting=plan"]);
+    expect(carried.json?.notice).toBe(`The plan in billing has your turn-down of checkout-ui in checkout-web, your approval of checkout-ui's change to ` +
+      `the ${name}, the ${name} as you approved ${them} for checkout-ui, your opening of checkout-ui again and your count of reporting as merged in ` +
+      `billing now, as you gave them. The plan in billing still has reporting sent back from Build and Test. ${refundsAsked}`);
     const word = (unit: string) => planAt(billing, ref).units.find((entry) => entry.name === unit)?.word as Record<string, unknown>;
-    // What the plan there held is left byte for byte: the Unit with questions whole, the send-back the yes to the list does not take.
+    // What the plan there held is left byte for byte: the Unit with questions whole, the send-back kept.
     expect(JSON.stringify(word("refunds"))).toBe(refundsThere);
     expect(JSON.stringify({ ...word("reporting"), said_merged: undefined })).toBe(reportingThere);
     expect(word("checkout-ui")).toEqual({
@@ -1380,14 +1385,15 @@ describe("a repository that moved hosts: the plan taken over where it is now", (
     expect(planAt(billing, ref).inputs.find((entry) => entry.path === input)?.fingerprint).toBe(textFingerprint(text));
     expect(git(billing, ["log", "-1", "--format=%s", ref])).toEndWith(`: turn-down of checkout-ui in checkout-web, approval of checkout-ui's ` +
       `change to the ${name}, approved ${name} for checkout-ui and 2 more carried over from checkout-api`);
-    // One answer on refunds decides both its questions; the line names each word written, so neither passes silently.
+    // One answer on refunds decides both its questions; the line names each word written, so neither passes silently. The send-back kept
+    // before is not remembered: asked again, it is written now.
     const stood = carryRun(home.dir, "t-plan-ref-words-stands-kinds", "mine stands on refunds, and write the send-back there",
       ["--stands", "refunds=here,reporting=here"]);
     expect(stood.json?.notice).toBe(`The plan in billing has your sign-off of refunds, your approval of refunds's change to the ${name}, the ${name} ` +
       `as you approved ${them} for refunds, your count of refunds as merged in checkout-api and your send-back of reporting from Build and Test ` +
       "now, as you gave them.");
     expect(word("refunds")).toEqual({
-      generation: 1, signoff: { words: "looks right", at: "2026-11-17T01:19:00Z" }, answers: [approved],
+      generation: 1, signoff: { words: "looks right", at: "2026-11-12T01:19:00Z" }, answers: [approved],
       amendments: [{ input, at: "2026-11-17T01:20:00Z", words: "yes, take it", blob }], said_merged: [counted],
     });
     expect((word("reporting").turned_down as { words: string }).words).toBe("the totals fail the build");
@@ -1441,7 +1447,7 @@ describe("a repository that moved hosts: the plan taken over where it is now", (
     const chat = "t-plan-ref-words-yes-take";
     expect(hook(home.dir, personsChat(chat), { hook_event_name: "UserPromptSubmit", session_id: chat, prompt: "yes" }).status).toBe(0);
     const carried = run(UNIT, ["share", "--plan", "--carry-words"], home.dir, personsChat(chat));
-    expect(carried.json?.notice, carried.out).toBe("The plan in billing has it now, as you gave it.");
+    expect(carried.json?.notice, carried.out).toBe("The plan in billing has your sign-off of refunds now, as you gave it.");
     // The lead's look counts the merged result done only on a sign-off of that take.
     next(home.dir);
     expect(planAt(billing, ref).units.find((unit) => unit.name === "refunds")?.word).toMatchObject({ done: true, signoff: { words: "looks right" } });

@@ -7238,7 +7238,7 @@ function writeSharedPlan(pd: string, message?: string, named?: string, carry?: C
   // The plan commit names what it carries and from where, as its line does;
   // the line after says what was written, what the plan keeps, and what is still open.
   let carried: string | null = null;
-  const carryRun: { now: { written: CarryWord[]; kept: string[]; list: CarryWord[]; open: CarryQuestion[] } | null } = { now: null };
+  const carryRun: { now: { written: CarryWord[]; kept: CarryQuestion[]; list: CarryWord[]; open: CarryQuestion[] } | null } = { now: null };
   const what = (tip: PlanJson | null): string => {
     added = tip === null ? [] : unitsNotIn(pd, tip.units.map((unit) => unit.name));
     released = tip !== null && tip.skeleton !== null && !skeletonHere ? tip.skeleton : null;
@@ -7269,7 +7269,7 @@ function writeSharedPlan(pd: string, message?: string, named?: string, carry?: C
           ...found.left.filter((word) => stands(word.unit) !== undefined),
         ].sort((a, b) => order.indexOf(a.unit) - order.indexOf(b.unit));
         carryRun.now = {
-          written, kept: [...new Set(found.questions.filter((question) => stands(question.unit) === "plan").map((question) => question.unit))],
+          written, kept: found.questions.filter((question) => stands(question.unit) === "plan"),
           list: carry.list ? [] : found.missing, open: found.questions.filter((question) => stands(question.unit) === undefined),
         };
         if (written.length === 0) return built;
@@ -7292,12 +7292,12 @@ function writeSharedPlan(pd: string, message?: string, named?: string, carry?: C
   if (written.kind === "written" || written.kind === "unchanged") planHomeHere(pd, went?.place.address ?? place.address);
   if (carryRun.now !== null && (written.kind === "unchanged" || written.kind === "written")) {
     const { written: put, kept, list, open } = carryRun.now;
-    const one = put.length === 1;
+    // Each word written by name, ten then how many more: the lead may not have the list in front of them.
+    const named = put.length > 10 ? `${put.slice(0, 10).map((word) => word.said).join(", ")} and ${put.length - 10} more`
+      : namesInProse(put.map((word) => word.said));
     const said = [
-      ...(put.length === 0 ? [] : carry !== undefined && carry.stands.size > 0
-        ? [`The plan in ${repo} has ${namesInProse(put.map((word) => word.said))} now, as you gave ${one ? "it" : "them"}.`]
-        : [`The plan in ${repo} has ${one ? "it" : "them"} now, as you gave ${one ? "it" : "them"}.`]),
-      ...(kept.length === 0 ? [] : [`The plan in ${repo} keeps its own word on ${namesInProse(kept)}.`]),
+      ...(put.length === 0 ? [] : [`The plan in ${repo} has ${named} now, as you gave ${put.length === 1 ? "it" : "them"}.`]),
+      ...(kept.length === 0 ? [] : [`The plan in ${repo} still has ${namesInProse(kept.map((question) => question.has))}.`]),
     ];
     const still = carryOpenLine(repo, list, open, said.length === 0);
     // A carry that says nothing leaves the share's own line, for a write made for another reason too.
@@ -7394,7 +7394,7 @@ function messageWayIn(pd: string, notice: string, named?: string): SharedPlan {
 type CarryWord = { said: string; what: string; unit: string; put: (word: UnitWord) => UnitWord; text?: Amendment & { blob: string } };
 // A Unit's question: a real opposite (`opposite`, say which stands) or an offer
 // to write this computer's turn-down in place of the plan's.
-type CarryQuestion = { unit: string; sentence: string; opposite: boolean };
+type CarryQuestion = { unit: string; sentence: string; opposite: boolean; has: string };
 // What the lead's carry asks for: the list's yes, and for a Unit with a
 // question, whose word stands (`--stands <unit>=here|plan`). Nothing of it is
 // remembered: each carry works it out afresh.
@@ -7426,21 +7426,25 @@ function wordsNotOn(mine: PlanJson, there: PlanJson): { missing: CarryWord[]; qu
       fromTest(entry) ? `${name} sent back from Build and Test` : `${name} turned down in ${entry.repo}`;
     const downMine = (entry: NonNullable<UnitWord["turned_down"]>, of: string): string =>
       fromTest(entry) ? `your send-back of ${of} from Build and Test` : `your turn-down of ${of} in ${entry.repo}`;
-    const opposite = (sentence: string, word: CarryWord): void => {
-      asked.push({ unit: name, sentence, opposite: true });
+    // `has`: what the plan there keeps where the plan's word stands. A word's day
+    // is said as recorded, where it has one, and decides nothing.
+    const opposite = (sentence: string, has: string, word: CarryWord): void => {
+      asked.push({ unit: name, sentence, opposite: true, has });
       found.inPlace.push(word);
     };
-    const offer = (sentence: string, word: CarryWord): void => {
-      asked.push({ unit: name, sentence, opposite: false });
+    const offer = (sentence: string, has: string, word: CarryWord): void => {
+      asked.push({ unit: name, sentence, opposite: false, has });
       found.inPlace.push(word);
     };
+    const thereOn = (at?: string): string => (at === undefined || dayOf(at) === null ? "" : ` (${dayOf(at)})`);
+    const mineOn = (at?: string): string => (at === undefined || dayOf(at) === null ? "" : ` from ${dayOf(at)}`);
     const { signoff, turned_down: down, open_again: open } = was;
     if (signoff !== undefined && now.signoff === undefined) {
       const signed: CarryWord = { said: `your sign-off of ${name}`, what: `sign-off of ${name}`, unit: name, put: (word) => ({ ...word, signoff }) };
       if (now.turned_down === undefined) items.push(signed);
       else {
-        opposite(`The plan there has ${downThere(now.turned_down)}, and this computer has your sign-off of it: say which stands.`,
-          { ...signed, put: (word) => ({ ...withoutField(word, "turned_down"), signoff }) });
+        opposite(`The plan there has ${downThere(now.turned_down)}${thereOn(now.turned_down.at)}, and this computer has your sign-off of it` +
+          `${mineOn(signoff.at)}: say which stands.`, downThere(now.turned_down), { ...signed, put: (word) => ({ ...withoutField(word, "turned_down"), signoff }) });
       }
     }
     if (down !== undefined && (fromTest(down) || down.repo !== "")) {
@@ -7448,15 +7452,16 @@ function wordsNotOn(mine: PlanJson, there: PlanJson): { missing: CarryWord[]; qu
       const mineDown: CarryWord = { said: downMine(down, name), what: downMine(down, name).replace(/^your /, ""), unit: name,
         put: (word) => ({ ...word, turned_down: down }) };
       if (kept === undefined && now.signoff !== undefined) {
-        opposite(`The plan there has ${name} signed off, and this computer has ${downMine(down, "it")}: say which stands.`,
-          { ...mineDown, put: (word) => ({ ...withoutField(word, "signoff"), turned_down: down }) });
+        opposite(`The plan there has ${name} signed off${thereOn(now.signoff.at)}, and this computer has ${downMine(down, "it")}${mineOn(down.at)}: ` +
+          "say which stands.", `${name} signed off`, { ...mineDown, put: (word) => ({ ...withoutField(word, "signoff"), turned_down: down }) });
       } else if (kept === undefined) {
         items.push(mineDown);
       } else if (fromTest(kept) !== fromTest(down) || (!fromTest(down) && kept.repo !== down.repo)) {
-        offer(`The plan there has ${downThere(kept)}. I have ${downMine(down, "it")} as you gave it: say if you want it written there in its place.`, mineDown);
+        offer(`The plan there has ${downThere(kept)}${thereOn(kept.at)}. I have ${downMine(down, "it")}${mineOn(down.at)} as you gave it: say if you ` +
+          "want it written there in its place.", downThere(kept), mineDown);
       } else if (kept.words !== down.words) {
-        offer(`The plan there has ${downThere(kept)} in other words. I have your ${fromTest(down) ? "send-back" : "turn-down"} of it as you gave it: ` +
-          "say if you want it written there in its place.", mineDown);
+        offer(`The plan there has ${downThere(kept)}${thereOn(kept.at)} too, worded differently. I have your ${fromTest(down) ? "send-back" : "turn-down"} ` +
+          `of it${mineOn(down.at)} as you gave it: say if you want it written there in its place.`, downThere(kept), mineDown);
       }
     }
     for (const entry of was.said_merged ?? []) {
@@ -7476,8 +7481,8 @@ function wordsNotOn(mine: PlanJson, there: PlanJson): { missing: CarryWord[]; qu
       if (kept === undefined) items.push(given);
       else if (kept.answer !== entry.answer) {
         answered.add(entry.input);
-        opposite(`The plan there has ${change} ${kept.answer === "approved" ? "approved" : "turned down"}, and this computer has your ` +
-          `${how(entry.answer)} of it: say which stands.`, given);
+        const theirs = `${change} ${kept.answer === "approved" ? "approved" : "turned down"}`;
+        opposite(`The plan there has ${theirs}, and this computer has your ${how(entry.answer)} of it: say which stands.`, theirs, given);
       }
     }
     // An approved text goes with its file, as the lead's approval wrote it.
@@ -7489,7 +7494,8 @@ function wordsNotOn(mine: PlanJson, there: PlanJson): { missing: CarryWord[]; qu
       if (kept === undefined && answered.has(entry.input)) found.inPlace.push(text);
       else if (kept === undefined) items.push(text);
       else if (kept.blob !== entry.blob) {
-        opposite(`The plan there has an approved text of the ${input} for ${name} that differs from the one you approved on this computer: say which stands.`, text);
+        opposite(`The plan there has an approved text of the ${input} for ${name} that differs from the one you approved on this computer: say which stands.`,
+          `its own approved text of the ${input} for ${name}`, text);
       }
     }
     if (open !== undefined && now.open_again === undefined) {
@@ -9581,10 +9587,16 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 export function planLastChange(projectDir: string, commit: string): { what: string; name: string; day: string } | null {
   const shown = localGit(projectDir, ["show", "-s", "--format=%an%x00%aI%x00%s", commit, "--"]);
   const [name, date, subject] = shown.ok ? shown.stdout.trim().split("\0") : [];
-  const at = /^\d{4}-(\d{2})-(\d{2})T/.exec(date ?? "");
-  if (name === undefined || subject === undefined || at === null) return null;
+  const day = dayOf(date ?? "");
+  if (name === undefined || subject === undefined || day === null) return null;
   const what = /^aidlc plan .* \d+: (.+)$/.exec(subject)?.[1] ?? subject;
-  return { what, name, day: `${Number(at[2])} ${MONTHS[Number(at[1]) - 1]}` };
+  return { what, name, day };
+}
+
+// A recorded time's day and month as written ("16 Nov"), never converted; null for no time.
+function dayOf(at: string): string | null {
+  const read = /^\d{4}-(\d{2})-(\d{2})T/.exec(at);
+  return read === null ? null : `${Number(read[2])} ${MONTHS[Number(read[1]) - 1]}`;
 }
 
 // What this computer has of the plan's history, kept with the question's own
