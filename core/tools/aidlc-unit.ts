@@ -9860,17 +9860,37 @@ export function planCommit(projectDir: string, parent: string | null, plan: Plan
     message ?? `aidlc plan ${plan.work.label} ${plan.version}: ${what}`);
 }
 
+// The plan's branch at `place` where the plan is on it, as the look counted
+// it (the copy every reader reads is the branch's): the branch a write goes to
+// and its copy here. Null where the plan is the ref.
+function planBranchAt(pd: string, place: PlanPlace): { ref: string; copy: string } | null {
+  const tip = localGit(pd, ["rev-parse", "--verify", "--quiet", place.copy]).stdout.trim();
+  if (tip === "") return null;
+  const key = repoCopyKey(place.address);
+  const listed = localGit(pd, ["for-each-ref", "--format=%(objectname) %(refname)", "refs/aidlc/home/"]);
+  const found = (listed.ok ? listed.stdout.split(/\r?\n/) : []).flatMap((line) => {
+    const [oid, ref] = line.trim().split(/\s+/, 2);
+    const copy = ref === undefined ? null : homeCopyOnBranchOf(ref);
+    return copy?.kind === "plan" && copy.id8 === place.id8 && copy.key === key && oid === tip
+      ? [{ ref: `${PLAN_BRANCHES}${place.id8}-${copy.label}`, copy: ref }] : [];
+  });
+  return found.length === 1 ? found[0] : null;
+}
+
 // The push of the plan's commit with a lease on exactly `lease` (the tip read;
-// null: none there). `lost` is git's own race classes, `byRule` a rule of the
-// remote's; `words` are git's and the host's own.
+// null: none there), to the form the plan is in. `lost` is git's own race
+// classes, `byRule` a rule of the remote's; `words` are git's and the host's own.
 export function pushPlan(projectDir: string, place: PlanPlace, commit: string, lease: string | null):
   { ok: true } | { ok: false; lost: boolean; byRule: boolean; words: string; timedOut: boolean } {
   const via = gitTargetFor(projectDir, place.address, "push");
+  const branch = lease === null ? null : planBranchAt(projectDir, place);
+  const name = branch?.ref ?? place.ref;
   const pushed = git(projectDir, [
-    "push", via.target, `--force-with-lease=${place.ref}:${lease ?? ""}`, `${commit}:${place.ref}`,
+    "push", via.target, `--force-with-lease=${name}:${lease ?? ""}`, `${commit}:${name}`,
   ], { ...via.env, GIT_TERMINAL_PROMPT: "0" });
   if (pushed.ok) {
     localGit(projectDir, ["update-ref", place.copy, commit]);
+    if (branch !== null) localGit(projectDir, ["update-ref", branch.copy, commit]);
     return { ok: true };
   }
   return {

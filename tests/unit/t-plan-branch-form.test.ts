@@ -9,7 +9,7 @@
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { repoCopyKey } from "../../dist/claude/.claude/tools/aidlc-unit-teams.ts";
 import {
@@ -18,6 +18,7 @@ import {
   codeHost,
   ENV,
   git,
+  HOME_RECORD,
   inSpace,
   makePlanHome,
   makePlanHomeWithRemote,
@@ -295,5 +296,25 @@ describe("a plan its repository holds as a branch", () => {
     const sam = teamWorkspace(home.hosts, "sam", ["checkout-api"]);
     next(sam, ENV, ["--units"]);
     expect(git(sam, ["for-each-ref", "--format=%(refname)", `refs/aidlc/home/${home.id8}/`]).split("\n").filter((ref) => ref.includes("/on-branch/plan"))).toEqual([]);
+  });
+});
+
+// A Unit added to the lead's Unit plan after the share.
+function addUnit(dir: string): void {
+  const path = join(dir, "aidlc", "spaces", "default", "intents", HOME_RECORD, "inception", "units-generation", "unit-of-work-dependency.md");
+  writeFileSync(path, readFileSync(path, "utf-8").replace("```\n", "  - name: ledger-sync\n    kind: service\n    repos: [billing]\n    depends_on: []\n```\n"));
+}
+
+describe("a plan on its branch, written by the lead", () => {
+  test("a later share goes on the plan's branch, on its tip, and no ref is made beside it", () => {
+    const home = makePlanHome();
+    const host = home.hosts["checkout-api"];
+    const tip = planAsBranch(host, home.id8);
+    addUnit(home.dir);
+    const shared = run(UNIT, ["share", "--plan"], home.dir);
+    expect(shared.status, shared.out).toBe(0);
+    expect(String(shared.json?.notice)).toContain("The plan in checkout-api has ledger-sync now.");
+    expect(git(host, ["rev-parse", `refs/heads/aidlc/plans/${home.id8}-fixture^`])).toBe(tip);
+    expect(has(host, planRefOf(home.id8))).toBe(false);
   });
 });
