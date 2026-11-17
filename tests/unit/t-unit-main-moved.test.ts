@@ -439,7 +439,8 @@ describe("the offer after the push, and its yes", () => {
     const resolved = git(hosts.billing, ["rev-parse", "refunds"]);
     // The resolved merge is a change of its own: only the new branch is offered, and it is said to stay behind.
     const offered = redoneOnMain(alice, billing);
-    expect(offered).toContain("That commit stays on refunds there and is not in the new branch. Ask the person whether to push it as a new branch, refunds-2");
+    expect(offered).toContain("Ask the person whether to push it as a new branch, refunds-2 (that commit stays on refunds there and is not in " +
+      "the new branch; it needs a pull request of its own); on their yes, run `");
     expect(offered).not.toContain("--replace");
     const refused = run(UNIT, ["push", "--replace"], alice);
     expect(refused.status).not.toBe(0);

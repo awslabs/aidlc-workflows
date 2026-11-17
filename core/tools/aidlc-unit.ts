@@ -12651,9 +12651,12 @@ export const mainMovedMark = (unit: string, head: string): string => `unit-main-
 export const hostAheadMark = (unit: string, head: string): string => `unit-host-ahead-${unit}-${head.slice(0, 12)}`;
 
 // A commit's subject or author, someone else's free text in a line the agent
-// acts on: on one line, cut, in quotes.
+// acts on: double quotes, backticks, line breaks and control characters taken
+// out, so it can neither close its own quote nor carry a command in code
+// marks; then on one line, cut, in quotes.
 function quotedCut(text: string, most = 72): string {
-  const line = text.replace(/\s+/g, " ").trim();
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what is taken out
+  const line = text.replace(/["`\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
   return `"${line.length > most ? `${line.slice(0, most - 3)}...` : line}"`;
 }
 
@@ -12772,7 +12775,8 @@ function sendBuildRecord(pd: string, remote: string, branch: string, unit: strin
   return notSent(pushRefusal(pushed.stderr));
 }
 
-function pushUnit(args: string[], projectDir?: string, carried?: { lines: string[]; moved: Array<{ name: string; from: string }> }): void {
+function pushUnit(args: string[], projectDir?: string,
+  carried?: { lines: string[]; moved: Array<{ name: string; from: string }>; commitOnly?: true }): void {
   const { bareFlags, flags } = parseArgs(args);
   const pd = resolveProjectDir(projectDir);
   const state = readStateFile(pd);
@@ -13097,6 +13101,8 @@ function pushUnit(args: string[], projectDir?: string, carried?: { lines: string
     }
     if (takeTree[repo] !== undefined) writeTakeTree(activeRecordDir(pd), takeTree);
   }
+  // The Unit's change committed, as a push commits it, for a step that brings a branch in before the push.
+  if (carried?.commitOnly) return;
   // What each repo's host said about the branch, for the line; never recorded.
   const hostSaid: Array<{ name: string; words: string }> = [];
   // The repos a replace went in, with the commit their branch was at before.
@@ -13174,15 +13180,17 @@ function pushUnit(args: string[], projectDir?: string, carried?: { lines: string
         const touched = onTop === 0 ? [] : [...new Set(git(dir, ["log", "-m", "--first-parent", "--format=", "--name-only", "--no-renames", ...beyond, "--", ...paths])
           .stdout.split(/\r?\n/).filter(Boolean))];
         const [short, subject, author] = git(dir, ["log", "-1", "--format=%h%x00%s%x00%an", theirs]).stdout.trim().split("\0");
-        const commits = onTop === 1 ? `a commit on top of what was pushed there before (${short} ${quotedCut(subject ?? "")}, by ${quotedCut(author ?? "", 40)})`
-          : `${onTop} commits on top of what was pushed there before (the last ${short} ${quotedCut(subject ?? "")}, by ${quotedCut(author ?? "", 40)})`;
+        const label = `${short}, by ${quotedCut(author ?? "", 40)}; its commit says ${quotedCut(subject ?? "")}`;
+        const commits = onTop === 1 ? `a commit on top of what was pushed there before (${label})`
+          : `${onTop} commits on top of what was pushed there before (the last ${label})`;
         const changes = touched.length === 0 ? "" : `, and ${onTop === 1 ? "that commit changes" : "they change"} ${joinNames(touched)}, which this build changes too`;
         if (onTop > 0 && git(dir, ["merge-base", "--is-ancestor", last!, "HEAD"]).ok) {
           noteEngineAskMark(pd, hostAheadMark(unit, last!));
           fail(`${unit} was not pushed: on ${remote} in ${name} its branch has ${commits}${changes}. Ask the person whether to bring ` +
-            `${onTop === 1 ? "that commit" : "those commits"} into ${branch} here and push it (I'd merge ${onTop === 1 ? "it" : "them"} with their own ` +
+            `${onTop === 1 ? "that commit" : "those commits"} into ${branch} here and push it (${onTop === 1 ? "it is" : "they are"} merged with their own ` +
             `git; nothing is replaced, and a pull request open from it stays the same one), or to push it as a new branch, ${fresh} ` +
-            `(${onTop === 1 ? "that commit stays" : "those commits stay"} on ${branch} there and ${onTop === 1 ? "is" : "are"} not in the new branch); ` +
+            `(${onTop === 1 ? "that commit stays" : "those commits stay"} on ${branch} there and ${onTop === 1 ? "is" : "are"} not in the new branch; ` +
+            "it needs a pull request of its own); " +
             `run \`${CHECKOUT_STEPS.merge.via()}\` to bring ${onTop === 1 ? "it" : "them"} in, or \`${unitTool} push --branch ${fresh}${messageFlag}\` ` +
             `for the new branch.${whereNow()}`);
         }
@@ -13193,8 +13201,9 @@ function pushUnit(args: string[], projectDir?: string, carried?: { lines: string
               `${onTop === 1 ? "that commit leave" : "those commits leave"} that branch; a pull request open from it stays the same one), or to push it ` +
               `as a new branch, ${fresh} (it needs a pull request of its own); run \`${unitTool} push --replace${messageFlag}\` for the replace, or ` +
               `\`${unitTool} push --branch ${fresh}${messageFlag}\` for the new branch.${whereNow()}`
-            : `${said} ${onTop === 1 ? "That commit stays" : "Those commits stay"} on ${branch} there and ${onTop === 1 ? "is" : "are"} not in the new ` +
-              `branch. ${newBranchWay(fresh)}${whereNow()}`);
+            : `${said} Ask the person whether to push it as a new branch, ${fresh} (${onTop === 1 ? "that commit stays" : "those commits stay"} on ` +
+              `${branch} there and ${onTop === 1 ? "is" : "are"} not in the new branch; it needs a pull request of its own); on their yes, run ` +
+              `\`${unitTool} push --branch ${fresh}${messageFlag}\`.${whereNow()}`);
         }
         fail(
           `${unit} was not pushed: its branch ${branch} on ${remote} in ${name} still holds the build pushed before, and ` +
@@ -13612,9 +13621,10 @@ function pushToFork(pd: string, args: string[], build: UnitBuild, branch: string
     const others = address && isGitRepoDir(dir) ? remotesNotAt(dir, address) : null;
     const way = forkRemoteWay(pd, repo, `push --to-fork --remote ${repo}=<that name>`);
     console.log(JSON.stringify({ pushed: false, unit, notice: others === null
-      ? `${repo} is not cloned here, so nothing was pushed. Say if you want me to clone it, or tell me your fork's address and I'll clone ` +
-        `that into ${repoClonePath(pd, repo)}. On clone, run \`${aidlcToolInvocation("utility")} intent add-repo ${shellArg(repo)}\`; on an ` +
-        `address, clone it there with git on their word; then run \`${aidlcToolInvocation("unit")} push --to-fork\` again.`
+      ? `${repo} is not cloned here, so nothing was pushed. Tell me your fork's address and I'll clone that into ${repoClonePath(pd, repo)} ` +
+        `and push ${unit} there; or say if you want ${repo} cloned from the plan's address. On an address, clone it there with git on ` +
+        `their word, then run \`${aidlcToolInvocation("unit")} push --to-fork\` again; on the plan's address, run ` +
+        `\`${aidlcToolInvocation("utility")} intent add-repo ${shellArg(repo)}\`.`
       : others.length === 0
         ? `Your clone of ${repo} has no remote but the one at the plan's address, so nothing was pushed. Tell me your fork's address, ` +
           `and I'll push ${unit} there. ${way}`
@@ -13743,6 +13753,7 @@ function mergeMainIn(pd: string, args: string[], unit: string, branch: string, u
     fail(line + (mergedHere.length > 0 ? ` In ${joinNames(mergedHere)}, it is merged into ${unit}, not pushed yet.` : "") + whereNow() + putBack());
   const plan: Array<(typeof repos)[number] & { step: "merge" | "finish" | "push" | "level" }> = [];
   const toPutAside: Array<{ dir: string; path: string; into: string }> = [];
+  let commitFirst = false;
   for (const entry of repos) {
     const { dir, name, into } = entry;
     const start = entry.hostAhead ? entry.remote : startRemoteOf(dir, entry.remote);
@@ -13766,30 +13777,35 @@ function mergeMainIn(pd: string, args: string[], unit: string, branch: string, u
     const ownChanged = git(dir, ["diff", "-z", "--name-only", "HEAD"]).stdout.split("\0").filter(Boolean)
       .filter((path) => !buildOwn.some((own) => path === own || path.startsWith(`${own}/`)));
     const ownUnit = ownChanged.find((path) => entry.paths.some((own) => path === own || (own.endsWith("/") && path.startsWith(own))));
-    if (ownUnit !== undefined) {
-      stop(`${unit}'s ${ownUnit} in ${name} has a change that is not committed, so nothing was merged or pushed. ` +
-        (entry.hostAhead ? `Say push, and I'll commit it with ${unit} first; then I can bring ${into} in.`
-          : `Once it is pushed with ${unit}, or put aside, I can bring ${into} in.`));
+    // Bringing the host's branch in is the push's own yes: the Unit's change
+    // here is committed first, as the push commits it, then the branch comes in.
+    if (ownUnit !== undefined && entry.hostAhead) commitFirst = true;
+    else if (ownUnit !== undefined) {
+      stop(`${unit}'s ${ownUnit} in ${name} has a change that is not committed, so nothing was merged or pushed. Once it is pushed with ` +
+        `${unit}, or put aside, I can bring ${into} in.`);
     }
     const recordFiles = entry.repo !== "." ? [] : ownChanged.filter((path) => mergeChanges.has(path) &&
       recordPaths(dir).some((own) => path === own || (own.endsWith("/") && path.startsWith(own))));
     // Each tried first, without touching anything, as the step would put it
-    // back: where git cannot merge it as text at all, or a state file's change
-    // would not go back, the step does not start.
+    // back: where git cannot merge it as text at all, or the change to a file
+    // a tool parses would not go back (git's marks would break it), the step
+    // does not start. repos.json has its own way back (listTogether).
     const stuck = recordFiles.find((path) => {
       const tried = putsBack(dir, path, into);
-      return tried === "cannot" || (tried === "clash" && path.endsWith("aidlc-state.md"));
+      return tried === "cannot" || (tried === "clash" && parsedByATool(path) && !(REPOS_MANIFEST_PLACES as readonly string[]).includes(path));
     });
     if (stuck !== undefined) {
       stop(`${stuck}, a file of AI-DLC's record in ${name}, has a change here that is not committed, and ${into} changes it in a way git ` +
-        `cannot put together with it, so nothing was merged or pushed. Once it is committed, I can bring ${into} in.`);
+        `cannot put together with it, so nothing was merged or pushed. The two have to be settled before I can bring ${into} in: say if ` +
+        "you want me to show you both.");
     }
     if (recordFiles.length > 0 && !putAside) {
       stop(`${recordFiles[0]}, a file of AI-DLC's record in ${name}, has a change here that is not committed, and ${into} changes it too, ` +
         `so nothing was merged or pushed. Say if you want me to put that change aside, bring ${into} in and put it back. On their yes, ` +
         `run \`${CHECKOUT_STEPS.merge.via()} --put-aside\`.`);
     }
-    const inTheWay = ownChanged.find((path) => mergeChanges.has(path) && !recordFiles.includes(path));
+    const inTheWay = ownChanged.find((path) => mergeChanges.has(path) && !recordFiles.includes(path) &&
+      !(entry.hostAhead && entry.paths.some((own) => path === own || (own.endsWith("/") && path.startsWith(own)))));
     toPutAside.push(...recordFiles.map((path) => ({ dir, path, into })));
     if (inTheWay !== undefined) {
       stop(`Your change to ${inTheWay} in ${name} is in a file ${into} changes, so nothing was merged or pushed. Once it is committed ` +
@@ -13803,12 +13819,18 @@ function mergeMainIn(pd: string, args: string[], unit: string, branch: string, u
     }
     plan.push({ ...entry, step: "merge" });
   }
+  if (commitFirst) pushUnit([], pd, { lines: [], moved: [], commitOnly: true });
   // Every repository checked: only now is anything put aside.
   for (const { dir, path, into } of toPutAside) {
-    const kept = git(dir, ["hash-object", "-w", "--", path]).stdout.trim();
-    const base = git(dir, ["rev-parse", `HEAD:${path}`]).stdout.trim();
-    if (kept === "" || base === "" || !git(dir, ["checkout", "-q", "HEAD", "--", path]).ok) {
-      stop(`${path} could not be put aside in the repo, so nothing was merged or pushed. Say when to try again.`);
+    const keeping = git(dir, ["hash-object", "-w", "--", path]);
+    const reading = git(dir, ["rev-parse", `HEAD:${path}`]);
+    const kept = keeping.stdout.trim();
+    const base = reading.stdout.trim();
+    const back = kept === "" || base === "" ? null : git(dir, ["checkout", "-q", "HEAD", "--", path]);
+    if (back === null || !back.ok) {
+      const said = [keeping, reading, ...(back === null ? [] : [back])].find((step) => !step.ok || step.stdout.trim() === "");
+      const first = (said?.stderr || said?.stdout || "").trim().split(/\r?\n/)[0] ?? "";
+      stop(`${path} could not be put aside in the repo: git says "${first}". Nothing was merged or pushed. Say when to try again.`);
     }
     aside.push({ dir, path, into, kept, base });
   }
@@ -13899,6 +13921,14 @@ function mergeMainIn(pd: string, args: string[], unit: string, branch: string, u
   }
   given?.spend();
   console.log(JSON.stringify({ pushed: plan.some((entry) => entry.step !== "level"), unit, notice: joinSaid([...lines, whereNow().trim(), putBack().trim()]) }));
+}
+
+// A file of AI-DLC's record that a tool parses, by what reads it: any JSON
+// file, a work's state file (the state tool's), a work's audit shards (the
+// audit reader's). Every other file of the record (rules, knowledge, stage
+// documents) is read by people and workers, so git's marks can stand in it.
+function parsedByATool(path: string): boolean {
+  return path.endsWith(".json") || /(^|\/)intents\/[^/]+\/(aidlc-state\.md$|audit\/)/.test(path);
 }
 
 // How a change here to a file of the record would go back on top of what
@@ -14018,17 +14048,18 @@ function putBackChange(entry: { dir: string; path: string; into: string; kept: s
         return `The change to ${path} is back, on top of ${into}'s, still not committed.`;
       }
       if (together !== null) {
-        const where = (entry: WorkspaceRepoEntry): string => `${entry.url ?? entry.path ?? "no address"}${entry.branch ? ` (branch ${entry.branch})` : ""}`;
+        const where = (entry: WorkspaceRepoEntry): string =>
+          `${entry.url === undefined ? (entry.path ?? "no address") : withoutCredentials(entry.url)}${entry.branch ? ` (branch ${entry.branch})` : ""}`;
         return `The change to ${path} did not go back cleanly on top of ${into}'s: ${into} lists ${together.name} at ${where(together.theirs)}, ` +
-          `and the change lists it at ${where(together.ours)}. The file stays as ${into} has it; say which ${together.name} to keep, and ` +
-          `I'll put the two together. ${keptForNow}`;
+          `and the change lists it at ${where(together.ours)}. The file stays as ${into} has it; say which of the two to keep for ` +
+          `${together.name}, and I'll put the rest together. ${keptForNow}`;
       }
       return `The change to ${path} did not go back cleanly on top of ${into}'s, so the file stays as ${into} has it. Say if you want me ` +
         `to put the two together and show you. ${keptForNow}`;
     }
     // git merge-file counts conflicts up to 127 and fails outright above that
     // (255): an outright failure writes nothing over the file.
-    if (merged.status !== null && merged.status > 0 && merged.status < 128 && !path.endsWith("aidlc-state.md")) {
+    if (merged.status !== null && merged.status > 0 && merged.status < 128 && !parsedByATool(path)) {
       writeBack(mergedOid());
       return `The change to ${path} did not go back cleanly on top of ${into}'s, so both are in the file now, marked where they meet, ` +
         "still not committed. Say if you want me to put the two together and show you.";
@@ -16195,7 +16226,7 @@ export function buildCloneOffer(pd: string, stateContent: string):
       `clone that into ${path}, then offer to push a branch for ${build.unit} there for an early pull request. Or I can clone ${record} ` +
       `from the plan's address, and your fork is added before the push. ${notThere.question.trim()}`,
     choices: [...choices.slice(0, at + 1),
-      { label: "Clone my fork", detail: `Tell me its address, and I clone it into ${path} with git.` },
+      { label: "Clone my fork", detail: `Clones your fork into ${path} with git, once you give its address.` },
       ...choices.slice(at + 1)],
   };
 }

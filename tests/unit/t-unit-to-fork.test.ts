@@ -221,8 +221,8 @@ describe("the push of a Unit's branch early to the person's fork", () => {
     });
     offered(alice);
     const said = String(run(UNIT, ["push", "--to-fork"], alice).json?.notice);
-    expect(said).toStartWith("checkout-api is not cloned here, so nothing was pushed. Say if you want me to clone it, or tell me your " +
-      "fork's address and I'll clone that into checkout-api.");
+    expect(said).toStartWith("checkout-api is not cloned here, so nothing was pushed. Tell me your fork's address and I'll clone that into " +
+      "checkout-api and push refunds there; or say if you want checkout-api cloned from the plan's address.");
   });
 
   test("asked or offered where no one fork can be told: what the clone has, the way on, and the remote the person names", () => {
@@ -324,7 +324,7 @@ describe("the push of a Unit's branch early to the person's fork", () => {
       "checkout-api in this workspace yet.");
     const choices = clone?.choices as Array<{ label: string; detail?: string; command?: string }>;
     expect(choices.map((choice) => choice.label)).toEqual(["Clone checkout-api", "Clone my fork", "Not now"]);
-    expect(choices[1]).toEqual({ label: "Clone my fork", detail: "Tell me its address, and I clone it into checkout-api with git." });
+    expect(choices[1]).toEqual({ label: "Clone my fork", detail: "Clones your fork into checkout-api with git, once you give its address." });
     // Not now to the clone; then the person clones their own fork there.
     const fork = join(tempDir("fork"), "checkout-api.git");
     git(join(fork, ".."), ["clone", "-q", "--bare", host, fork]);

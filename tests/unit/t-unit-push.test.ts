@@ -13,7 +13,7 @@ import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { hooksHealthReadDir, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { shellSingleQuote } from "../../dist/claude/.claude/tools/aidlc-runtime-paths.ts";
@@ -3422,6 +3422,15 @@ describe("a Unit on the workspace's own repository", () => {
     expect(String(refused.json?.error)).toContain("The change to aidlc/spaces/default/memory/team.md is back, on top of origin/main's, still not committed.");
   });
 
+  test("a change git will not put aside: git's own first line, and the file as it was", () => {
+    const { alice, here } = recordInTheWay(TEAM, leadsRule, learning);
+    writeFileSync(join(alice, ".git", "index.lock"), "");
+    const said = String(run(UNIT, ["push", "--merge-main", "--put-aside"], alice).json?.error);
+    expect(said).toStartWith(`${TEAM} could not be put aside in the repo: git says "fatal: Unable to create`);
+    expect(said).toContain("Nothing was merged or pushed. Say when to try again.");
+    expect(readFileSync(join(alice, TEAM), "utf-8")).toBe(here);
+  });
+
   test("a clone that checks files out with CRLF: the change is back on top, with its line endings, and back exactly as it was after an undo", () => {
     const crlfLearning = (text: string): string => `A learning kept here.\r\n${text}`;
     const { alice } = recordInTheWay(TEAM, leadsRule, crlfLearning, false, true);
@@ -3447,14 +3456,14 @@ describe("a Unit on the workspace's own repository", () => {
     expect(String(yes.json?.notice)).toContain("The change to aidlc/spaces/default/memory/team.md did not go back cleanly on top of origin/main's, " +
       "so both are in the file now, marked where they meet, still not committed. Say if you want me to put the two together and show you.");
     expect(readFileSync(join(meets.alice, TEAM), "utf-8")).toContain("<<<<<<< origin/main");
-    // Any other text file of the record takes the same way: both kept on disk, never only in git.
-    const json = "aidlc/team-notes.json";
-    const notes = recordInTheWay(json, () => "{\"a\": 2}\n", () => "{\"a\": 3}\n");
+    // Any other file of the record only people and workers read takes the same way: both kept on disk, never only in git.
+    const text = "aidlc/knowledge/notes.txt";
+    const notes = recordInTheWay(text, () => "two\n", () => "three\n", false, false, "one\n");
     const again = run(UNIT, ["push", "--merge-main", "--put-aside"], notes.alice);
     expect(again.status, again.out).toBe(0);
-    expect(String(again.json?.notice)).toContain(`The change to ${json} did not go back cleanly on top of origin/main's, so both are in the ` +
+    expect(String(again.json?.notice)).toContain(`The change to ${text} did not go back cleanly on top of origin/main's, so both are in the ` +
       "file now, marked where they meet, still not committed.");
-    expect(readFileSync(join(notes.alice, json), "utf-8")).toContain("{\"a\": 3}");
+    expect(readFileSync(join(notes.alice, text), "utf-8")).toContain("three");
   });
 
   // repos.json in AI-DLC's record: the team's list, with one repository and a comment.
@@ -3484,8 +3493,8 @@ describe("a Unit on the workspace's own repository", () => {
     const said = String(yes.json?.notice);
     const kept = /kept for now, not for good, as ([0-9a-f]+)\./.exec(said)?.[1] ?? "";
     expect(said).toContain(`The change to ${LIST} did not go back cleanly on top of origin/main's: origin/main lists notes at ` +
-      "https://example.test/team/notes.git, and the change lists it at ../notes. The file stays as origin/main has it; say which notes to " +
-      `keep, and I'll put the two together. I have the change kept for now, not for good, as ${kept}.`);
+      "https://example.test/team/notes.git, and the change lists it at ../notes. The file stays as origin/main has it; say which of the two " +
+      `to keep for notes, and I'll put the rest together. I have the change kept for now, not for good, as ${kept}.`);
     expect(readFileSync(join(alice, LIST), "utf-8")).not.toContain("../notes");
     expect(git(alice, ["show", kept])).toContain("../notes");
   });
@@ -3504,18 +3513,21 @@ describe("a Unit on the workspace's own repository", () => {
   });
 
   test("a state file, or a file git cannot merge as text, that would not go back: the step does not start, and the file is as it was", () => {
-    // The rule reads the file by its name; kept outside the intents folder so no work is looked for in it.
-    const state = "aidlc/spaces/default/archive/aidlc-state.md";
-    const staged = recordInTheWay(state, () => "# State\n- **Status**: lead's\n", () => "# State\n- **Status**: mine\n", false, false,
-      "# State\n- **Status**: open\n");
+    // A file a tool parses: a JSON file of the record here; the lead's own state file, read by the state tool.
+    const parsed = "aidlc/team-notes.json";
+    const staged = recordInTheWay(parsed, () => "{\"a\": 2}\n", () => "{\"a\": 3}\n");
     for (const args of [["--merge-main"], ["--merge-main", "--put-aside"]]) {
       const said = run(UNIT, ["push", ...args], staged.alice);
       expect(said.status).not.toBe(0);
-      expect(String(said.json?.error)).toStartWith(`${state}, a file of AI-DLC's record in the repo, has a change here that is not committed, ` +
-        "and origin/main changes it in a way git cannot put together with it, so nothing was merged or pushed. Once it is committed, I can " +
-        "bring origin/main in.");
-      expect(readFileSync(join(staged.alice, state), "utf-8")).toBe(staged.here);
+      expect(String(said.json?.error)).toStartWith(`${parsed}, a file of AI-DLC's record in the repo, has a change here that is not committed, ` +
+        "and origin/main changes it in a way git cannot put together with it, so nothing was merged or pushed. The two have to be settled " +
+        "before I can bring origin/main in: say if you want me to show you both.");
+      expect(readFileSync(join(staged.alice, parsed), "utf-8")).toBe(staged.here);
     }
+    const leadsState = (dir: string): string => relative(dir, seededStateFile(dir)).split("\\").join("/");
+    const state = recordInTheWay(leadsState(oneRepoTeams().dir), (text) => `${text}\n<!-- the lead's -->\n`, (text) => `${text}\n<!-- mine -->\n`);
+    expect(String(run(UNIT, ["push", "--merge-main", "--put-aside"], state.alice).json?.error)).toContain(
+      "a file of AI-DLC's record in the repo, has a change here that is not committed, and origin/main changes it in a way git cannot put together");
     const picture = "aidlc/knowledge/diagram.bin";
     const binary = recordInTheWay(picture, () => "PNG\0two\n", () => "PNG\0three\n", false, false, "PNG\0one\n");
     const said = run(UNIT, ["push", "--merge-main", "--put-aside"], binary.alice);
