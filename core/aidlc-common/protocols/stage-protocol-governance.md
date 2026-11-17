@@ -9,22 +9,7 @@ This is a supplement to `stage-protocol.md` — the main protocol still applies.
 
 ## 13. Phase Boundary Verification
 
-At each phase transition (Ideation→Inception (approval-handoff→reverse-engineering), Inception→Construction (delivery-planning→functional-design), Construction→Operation (ci-pipeline→deployment-pipeline)), run traceability verification.
-
-### When to verify
-- After the last stage of each phase is approved
-- Before the first stage of the next phase begins
-- On demand if the user requests verification via `/aidlc --status`
-
-### Verification process
-1. Read the verification methodology from `{{HARNESS_DIR}}/knowledge/aidlc-shared/verification.md`
-2. Run the phase-specific traceability checks
-3. Write results to `<record>/verification/[phase-boundary]-verification.md`
-4. If verification fails, present issues to the user before proceeding:
-   - Missing traceability links (e.g., requirement without a design)
-   - Orphaned artifacts (design without a requirement)
-   - Inconsistencies between phase outputs
-5. `PHASE_VERIFIED` is emitted by the engine when the phase boundary is crossed (the state tool pairs it with `PHASE_COMPLETED` on the final gate approval); do not append it yourself
+`PHASE_VERIFIED` is emitted by the engine when the phase boundary is crossed (the state tool pairs it with `PHASE_COMPLETED` on the final gate approval); do not append it yourself
 
 ### Phase boundary checks
 **Ideation → Inception**: Intent captured, scope defined, feasibility confirmed, initiative approved

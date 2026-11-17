@@ -73,7 +73,7 @@ import {
   validSessionId,
 } from "../tools/aidlc-lib.ts";
 import { scopeStampLanded } from "../tools/aidlc-unit-landing.ts";
-import { writeTargets } from "./review-freeze-command.ts";
+import { shellPatchTargets, writeTargets } from "./review-freeze-command.ts";
 
 const HOOK_NAME = "reviewer-scope";
 
@@ -980,9 +980,19 @@ async function checkScope(input: string, projectDir: string, outside: boolean, b
       };
       // A shell call that writes nothing (a read, a listing, a search) is the
       // checkout owner's own: only a command that writes is held to this Unit.
-      const writes = toolName !== "Bash" || writeTargets("Bash", toolInput, context.cwd).length > 0;
-      if (writes) {
-        scopedVerdict = evaluateReviewerScope(toolName, toolInput, { unit: unitScope.unit, exempt: [] }, context);
+      // A line whose every write is a patch's file is judged by those files,
+      // never by the patch's text, which may name another Unit's folder.
+      const written = toolName === "Bash" ? writeTargets("Bash", toolInput, context.cwd) : [];
+      const command = typeof toolInput?.command === "string" ? toolInput.command : "";
+      const patched = toolName === "Bash" ? shellPatchTargets(command, context.cwd) : [];
+      const scope = { unit: unitScope.unit, exempt: [] };
+      if (patched.length > 0 && written.every((target) => patched.includes(target))) {
+        for (const file of patched) {
+          scopedVerdict = evaluateReviewerScope("Write", { file_path: file }, scope, context);
+          if (scopedVerdict.block) break;
+        }
+      } else if (toolName !== "Bash" || written.length > 0) {
+        scopedVerdict = evaluateReviewerScope(toolName, toolInput, scope, context);
       }
     } catch (e) {
       recordHookDrop(projectDir, HOOK_NAME, errorMessage(e));

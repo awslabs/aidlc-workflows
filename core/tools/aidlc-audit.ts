@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
+import { aidlcDispatcherInvocation } from "./aidlc-runtime-paths.ts";
 import {
   closeSync,
   constants as fsConstants,
@@ -929,15 +930,17 @@ export const SECRET_MASKED_LINE =
   "but this chat still received it, so if it is real, change it where it was issued.";
 
 // Queue SECRET_MASKED_LINE for the chat (`session`, else the chat running
-// this command), unless it is already waiting or this turn heard it. No chat
-// named, no line; never throws, since a line the person may miss never blocks
-// a write or their turn.
-export function saySecretMaskedOnce(projectDir: string, session?: string): void {
+// this command), unless it is already waiting or this turn heard it. The
+// prompt hook queues it for each message of theirs that holds a key
+// (`message`): on finished work their turn never moves. No chat named, no
+// line; never throws, since a line the person may miss never blocks a write or
+// their turn.
+export function saySecretMaskedOnce(projectDir: string, session?: string, message = false): void {
   if (isReadOnlyEngineProbe()) return;
   try {
     const chat = validSessionId(session) ?? resolveInvokingSessionId(projectDir);
     if (chat === null) return;
-    if (personLineHeardThisTurn(projectDir, chat, SECRET_MASKED_LINE) ||
+    if ((!message && personLineHeardThisTurn(projectDir, chat, SECRET_MASKED_LINE)) ||
       pendingPersonLines(projectDir, chat).lines.includes(SECRET_MASKED_LINE)) return;
     if (addPendingPersonLines(projectDir, chat, [SECRET_MASKED_LINE])) {
       markPersonLineHeardThisTurn(projectDir, chat, SECRET_MASKED_LINE);
@@ -1726,7 +1729,7 @@ function parseSlugFlag(args: string[], subcommand: string): string {
     }
   }
   if (!slug) {
-    jsonError(`Usage: aidlc-audit ${subcommand} --slug <slug> [--project-dir <path>]`);
+    jsonError(`Usage: ${aidlcDispatcherInvocation("audit")} ${subcommand} --slug <slug> [--project-dir <path>]`);
   }
   const err = validateBoltSlug(slug);
   if (err) {
@@ -1963,7 +1966,7 @@ function handleAuditFork(args: string[], projectDir: string): void {
   }
   if (!existsSync(wtPath)) {
     jsonError(
-      `worktree directory not found at ${wtPath}; run aidlc-worktree create first`
+      `worktree directory not found at ${wtPath}; run ${aidlcDispatcherInvocation("worktree create")} first`
     );
   }
 
@@ -2587,7 +2590,7 @@ export function main(argv: string[]): void {
   const subcommand = filteredArgs[0];
 
   if (!subcommand) {
-    jsonError("Usage: aidlc-audit <append|append-batch|append-raw|history|turns|audit-fork|audit-merge> [args...]");
+    jsonError(`Usage: ${aidlcDispatcherInvocation("audit")} <append|append-batch|append-raw|history|turns|audit-fork|audit-merge> [args...]`);
   }
 
   switch (subcommand) {
@@ -2602,7 +2605,7 @@ export function main(argv: string[]): void {
     case "append": {
       const eventType = filteredArgs[1];
       if (!eventType) {
-        jsonError("Usage: aidlc-audit append <event-type> [--field key=value ...]");
+        jsonError(`Usage: ${aidlcDispatcherInvocation("audit")} append <event-type> [--field key=value ...]`);
       }
       refuseReservedCliEvent(eventType);
       const fields = parseFieldArgs(rawArgs);
@@ -2613,7 +2616,7 @@ export function main(argv: string[]): void {
     case "append-batch": {
       const entries = filteredArgs[1];
       if (!entries) {
-        jsonError("Usage: aidlc-audit append-batch <entries-json>");
+        jsonError(`Usage: ${aidlcDispatcherInvocation("audit")} append-batch <entries-json>`);
       }
       refuseReservedCliBatch(entries);
       handleAppendBatch(entries, projectDir);
@@ -2625,7 +2628,7 @@ export function main(argv: string[]): void {
       const body = filteredArgs[2];
       if (!heading || !body) {
         jsonError(
-          "Usage: aidlc-audit append-raw <heading> <body>"
+          `Usage: ${aidlcDispatcherInvocation("audit")} append-raw <heading> <body>`
         );
       }
       handleAppendRaw(heading, body, projectDir);

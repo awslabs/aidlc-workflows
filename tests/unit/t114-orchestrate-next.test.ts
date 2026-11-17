@@ -775,14 +775,14 @@ describe("t114 plugin terminal routing", () => {
     expect(out).not.toContain('"kind":"ask"');
   });
 
-  test("missing and unknown plugin verbs are deterministic errors", () => {
+  test("a plugin verb missing goes to plugin help, an unknown one is a deterministic error", () => {
     proj = createOrchestrationTestProject();
     const missing = runNext(proj, ["plugin"]).out;
     const unknown = runNext(proj, ["plugin", "remove"]).out;
-    expect(missing).toContain('"kind":"error"');
-    expect(missing).toContain("missing verb for noun 'plugin'");
+    expect(missing).toContain('"kind":"print"');
+    expect(missing).toContain("engine plugin help");
     expect(unknown).toContain('"kind":"error"');
-    expect(unknown).toContain("unknown verb 'remove' for noun 'plugin'");
+    expect(unknown).toContain("`/aidlc plugin remove` is not a plugin command; the plugin commands are select, list, sync, validate and build");
     expect(`${missing}${unknown}`).not.toContain('"kind":"ask"');
   });
 });
@@ -790,15 +790,16 @@ describe("t114 plugin terminal routing", () => {
 describe("t114 knowledge (DocumentKB) terminal routing", () => {
   // The engine parser and the classifier are separate code paths whose comments
   // require byte-for-byte agreement. These cases assert the ENGINE half: a
-  // knowledge verb must emit a terminal print directive naming
-  // aidlc-knowledge.ts, never a workflow directive and never an intent-create ask.
-  test("every verb routes to aidlc-knowledge.ts and never enters the workflow funnel", () => {
+  // knowledge verb must emit a terminal print directive naming the dispatcher's
+  // `engine knowledge` route (where onboard's copy runs), never a workflow
+  // directive and never an intent-create ask.
+  test("every verb routes to engine knowledge and never enters the workflow funnel", () => {
     for (const verb of ["onboard", "sync", "list", "show", "associate", "dissociate", "rebind"]) {
       proj = createOrchestrationTestProject();
       seedStateFile(proj, MID_IDEATION);
       const out = runNext(proj, ["knowledge", verb]).out;
       expect(out, verb).toContain('"kind":"print"');
-      expect(out, verb).toContain(`aidlc-knowledge.ts ${verb}`);
+      expect(out, verb).toContain(`engine knowledge ${verb}`);
       expect(out, verb).not.toContain('"kind":"run-stage"');
       expect(out, verb).not.toContain('"kind":"ask"');
     }
@@ -810,17 +811,17 @@ describe("t114 knowledge (DocumentKB) terminal routing", () => {
     proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_IDEATION);
     const out = runNext(proj, ["knowledge", "list", "--json"]).out;
-    expect(out).toContain("aidlc-knowledge.ts list --json");
+    expect(out).toContain("engine knowledge list --json");
     expect(out).not.toContain('"kind":"run-stage"');
   });
 
   test("arguments survive the round trip, including a path with a space", () => {
     proj = createOrchestrationTestProject();
     expect(runNext(proj, ["knowledge", "onboard", "docs/policy.pdf"]).out)
-      .toContain("aidlc-knowledge.ts onboard docs/policy.pdf");
+      .toContain("engine knowledge onboard docs/policy.pdf");
     // shellArg quoting must keep a spaced path as ONE argument.
     const spaced = runNext(proj, ["knowledge", "onboard", "my docs/policy.pdf"]).out;
-    expect(spaced).toContain("aidlc-knowledge.ts onboard");
+    expect(spaced).toContain("engine knowledge onboard");
     expect(spaced).toMatch(/'my docs\/policy\.pdf'|"my docs\/policy\.pdf"/);
   });
 
@@ -828,7 +829,7 @@ describe("t114 knowledge (DocumentKB) terminal routing", () => {
     proj = createOrchestrationTestProject();
     const out = runNext(proj, ["knowledge", "help"]).out;
     expect(out).toContain('"kind":"print"');
-    expect(out).toContain("aidlc-knowledge.ts help");
+    expect(out).toContain("engine knowledge help");
     expect(out).not.toContain('"kind":"ask"');
   });
 
@@ -839,7 +840,9 @@ describe("t114 knowledge (DocumentKB) terminal routing", () => {
     expect(missing).toContain('"kind":"error"');
     expect(missing).toContain("missing verb for noun 'knowledge'");
     expect(unknown).toContain('"kind":"error"');
-    expect(unknown).toContain("unknown verb 'remove' for noun 'knowledge'");
+    expect(unknown).toContain(
+      "`/aidlc knowledge remove` is not a knowledge command; the knowledge commands are onboard, sync, list, show, associate, dissociate, rebind and summarize",
+    );
     // Not an ask: `knowledge remove` must not offer to create an intent.
     expect(`${missing}${unknown}`).not.toContain('"kind":"ask"');
   });

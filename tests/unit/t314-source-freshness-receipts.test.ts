@@ -98,6 +98,7 @@ import {
   cleanupTestProject,
   cleanupWorktreeFixture,
   createTestProject,
+  dropRepoBaselineAdditions,
   intentsDirOf,
   resetAidlcEnv,
   seedBoltDag,
@@ -5786,7 +5787,7 @@ process.stdin.on("end", () => server.stop(true));
     const refusal = `${merge.stdout}${merge.stderr}`;
     expect(refusal).toContain("finalized with source freshness bypassed");
     expect(refusal).toContain("AIDLC_SKIP_SOURCE_FRESHNESS=1");
-    expect(refusal).toContain("aidlc-worktree discard --slug bypass");
+    expect(refusal).toContain("engine worktree discard --slug bypass");
     expect(refusal).not.toContain("re-run review and finalize with source freshness enabled");
     const after = spawnSync("git", ["-C", proj, "rev-parse", "HEAD"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" }).stdout.trim();
     expect(after).toBe(before);
@@ -6785,6 +6786,72 @@ describe("t314 a repo added during the work joins the stage-entry baseline", () 
     const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(r.out).not.toContain("payments/README.md");
     expect(r.rc, r.out).toBe(0);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  // Work with no Units reviews Code Generation once, for the whole stage. A
+  // repo that joins after that review joins as it was at the add: nothing in it
+  // changed after the review, so the review stands and nothing is named.
+  function reviewTheStageThenAddPayments(): void {
+    rmSync(join(seededRecordDir(proj), "inception", "units-generation", "unit-of-work-dependency.md"));
+    commitIn("app-a", "app.ts", "export const a = 2;\n");
+    recordReview(proj);
+    intent("add-repo", "payments");
+  }
+
+  test("under strict, a repo added after the stage's review does not hold the review stale", () => {
+    reviewTheStageThenAddPayments();
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(r.out).not.toContain("project source changed after");
+    expect(r.rc, r.out).toBe(0);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("under off, a repo added after the stage's review is not named as changed after it", () => {
+    const statePath = seededStateFile(proj);
+    writeFileSync(statePath, readFileSync(statePath, "utf-8").replace(
+      /^- \*\*Change Control\*\*: .*$/m, "- **Guard Policy**: off (set by you)"));
+    reviewTheStageThenAddPayments();
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(r.rc, r.out).toBe(0);
+    expect(r.out).not.toContain("changed after the Code Generation review");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("under strict, a file changed in the added repo after the add still holds the review, named alone, until the one recovery review", () => {
+    reviewTheStageThenAddPayments();
+    commitIn("payments", "README.md", "# payments, edited after the add\n");
+    const held = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(held.rc).not.toBe(0);
+    expect(held.out).toContain("What changed: payments/README.md;");
+    recordReview(proj);
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(r.rc, r.out).toBe(0);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("under off, a repo the review saw and the work no longer has is not named as changed after it", () => {
+    const registry = join(intentsDirOf(proj), "intents.json");
+    const rows = JSON.parse(readFileSync(registry, "utf-8"));
+    rows[0].repos = ["app-a", "payments"];
+    writeFileSync(registry, `${JSON.stringify(rows, null, 2)}\n`);
+    restartBaseline(proj);
+    const statePath = seededStateFile(proj);
+    writeFileSync(statePath, readFileSync(statePath, "utf-8").replace(
+      /^- \*\*Change Control\*\*: .*$/m, "- **Guard Policy**: off (set by you)"));
+    rmSync(join(seededRecordDir(proj), "inception", "units-generation", "unit-of-work-dependency.md"));
+    commitIn("app-a", "app.ts", "export const a = 2;\n");
+    recordReview(proj);
+    intent("set-repos", "app-a");
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(r.rc, r.out).toBe(0);
+    expect(r.out).not.toContain("changed after the Code Generation review");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  // Without the add's snapshot the repo cannot be read as it joined: the review
+  // compares as it did before the repo joined.
+  test("under strict, an added repo whose snapshot is not on this machine still holds the review, as before", () => {
+    reviewTheStageThenAddPayments();
+    expect(dropRepoBaselineAdditions(proj)).toBeGreaterThan(0);
+    const held = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(held.rc).not.toBe(0);
+    expect(held.out).toContain("What changed: payments/README.md, payments/src/api.ts;");
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });
 

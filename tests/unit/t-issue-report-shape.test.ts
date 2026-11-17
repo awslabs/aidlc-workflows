@@ -213,6 +213,22 @@ describe("other fields", () => {
     expect(s.doctorFinding({ id: "acme-plugin-check", severity: "WARNING" })).toEqual({ id: "<custom-doctor-finding-1>", severity: "warning" });
     expect(s.doctorFinding({ id: "gate-unresolved", severity: "ERROR" })).toEqual({ id: "gate-unresolved", severity: "error" });
   });
+  test("Kiro's approval modes keep their words, and the Kiro CLI notes about them pass the check", () => {
+    const v = loadVocab(install(), [".kiro"]);
+    const t = new Shaper(v, new Labels()).transcript({
+      tool: "kiro (v3: Kiro CLI + Kiro IDE)", sessions: 3, firstTs: null, lastTs: null, prompts: 0, toolCalls: 0, toolErrors: 0, denials: {}, aidlcHookBlocks: {},
+      otherHookBlocks: 0, unattributedHookBlocks: 0, stopFeedback: 0, approvalPrompts: 0, questionsAsked: 0, aidlcCommands: {},
+      repeats: [], timeline: [], subagents: {}, engine: "v3", toolVersions: {}, models: {}, efforts: {}, agents: {},
+      approvalModes: { "approve for me": 1, "autopilot on": 1, "contoso-mode": 1 }, handRunChecks: [], reportSessions: 0, mixedSessions: 0, reportModels: {},
+      notes: [
+        "Kiro CLI's session record does not say which approval policy the session ran with (ask for approval or approve for me), so the run's approval mode on Kiro CLI is not known.",
+        "When this report was made, Kiro CLI's permission files for this project listed the approve-for-me policy: a setting now, which the run may not have had.",
+      ],
+      events: [],
+    }) as { approvalModes: Record<string, number> };
+    expect(Object.keys(t.approvalModes).sort()).toEqual(["<custom-mode-1>", "approve for me", "autopilot on"]);
+    expect(safeHits(gateContext(v, { entries: [] }), { transcripts: [t] })).toEqual([]);
+  });
   test("a refusal the log does not name and Kiro's denied calls keep their own words", () => {
     const t = shaper().transcript({
       tool: "kiro (v3)", sessions: 1, firstTs: null, lastTs: null, prompts: 0, toolCalls: 2, toolErrors: 2,

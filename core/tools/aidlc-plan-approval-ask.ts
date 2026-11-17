@@ -37,6 +37,7 @@ import {
   fenceSwitchSentence,
   getField,
   isoTimestamp,
+  isReadOnlyEngineProbe,
   isReplyTurn,
   personAtOwnTerminal,
   personRepliedAfter,
@@ -72,6 +73,7 @@ import {
   visibleMarkdownLines,
   withActiveDirectiveLock,
   withAuditLock,
+  withRepoBaselineAdditions,
   workspaceSourceFailureSuffix,
   workspaceSourceState,
   writeFileAtomic,
@@ -98,6 +100,7 @@ import {
   keepApprovedPlanCopy,
   PlanApprovalUnbindableError,
   planAsSentBack,
+  planWithTestingContract,
   readPlanApprovalSettingWith,
   readTestingContract,
   replaceTestingContractSection,
@@ -473,11 +476,26 @@ function labels(units: Array<string | null>): string {
 //
 // The engine never asks a question it could not accept: an Approve on a plan
 // whose Testing Contract is missing, broken, or out of date would record
-// nothing. So those are repairs to finish first, each named in one sentence.
+// nothing. `next` writes that block itself; what it cannot write, and an empty
+// plan or instructions, are repairs to finish first, each named in one sentence.
 
-export type PlanReadiness = { ready: true } | { ready: false; note?: string };
+export type PlanReadiness = { ready: true; written?: true } | { ready: false; note?: string };
 
-export function codeGenerationPlanReadiness(projectDir: string, unit: string | null): PlanReadiness {
+// What the check does with a Testing Contract block the engine would write:
+// "write" writes it (the engine's own routing, `next` and `continue`), "count"
+// reads the plan as ready without writing it (a reader asking whether the
+// question is due), "as-is" reads the plan as it stands (the Stop hook's
+// read-only probe).
+export type ContractBlockUse = "write" | "count" | "as-is";
+
+// `theirEdit`: the person's own edit left the plan as it is (their repair
+// result), so their words in the section are kept after the block.
+export function codeGenerationPlanReadiness(
+  projectDir: string,
+  unit: string | null,
+  contract: ContractBlockUse = "as-is",
+  theirEdit = false,
+): PlanReadiness {
   const dir = codeGenerationRecordDir(projectDir, unit);
   const plan = readText(join(dir, PLAN_FILE));
   const instructions = readText(join(dir, INSTRUCTIONS_FILE));
@@ -488,6 +506,27 @@ export function codeGenerationPlanReadiness(projectDir: string, unit: string | n
     return { ready: false, note: `${INSTRUCTIONS_FILE} is missing or empty: write it beside the plan, then run next.` };
   }
   const read = readTestingContract(plan);
+  // The block is engine output, so the engine writes it into the plan when it
+  // is missing, broken or out of date: a block copied by hand can break, and an
+  // agent with only a shell may never copy it right. Only that section is
+  // written (planWithTestingContract); a plan it cannot be written into, a
+  // posture that cannot be resolved or a failed write keeps the repairs below.
+  if (contract !== "as-is") {
+    try {
+      const current = resolveTestingPosture(projectDir);
+      const written = usableTestingContract(current) &&
+          ("defect" in read || read.contract.contract_sha256 !== current.contract_sha256)
+        ? planWithTestingContract(plan, current, theirEdit)
+        : null;
+      if (written !== null) {
+        if (contract === "count") return { ready: true };
+        writeFileAtomic(join(dir, PLAN_FILE), written);
+        return { ready: true, written: true };
+      }
+    } catch {
+      // The repairs below.
+    }
+  }
   if ("defect" in read) {
     return { ready: false, note: testingContractDefectMessage(read.defect, "run next") };
   }
@@ -569,7 +608,9 @@ function targetView(projectDir: string, unit: string | null, changed: string | n
  * previous plan approval in this stage (the workspace snapshot kept at each
  * approval), so a later Unit's question does not repeat what the person saw
  * when they approved the earlier one, and a unit-major run's first question
- * does not reach back into earlier stages. The files the plans approved since
+ * does not reach back into earlier stages. A repo that joined the work since
+ * that start counts from what it held when it joined, as the stage's own
+ * baseline counts it (withRepoBaselineAdditions). The files the plans approved since
  * that start name are their own build, not something that ran ahead, and
  * AI-DLC's own files (an update the person took) are nobody's. Nothing
  * is said when the start is not on record or cannot be read, or nothing changed.
@@ -578,7 +619,8 @@ function changedBeforeApprovalLine(projectDir: string): string | null {
   try {
     const current = workspaceSourceState(projectDir);
     if (current === null) return null;
-    const rows = readAuditShardEvents(projectDir)
+    const events = readAuditShardEvents(projectDir);
+    const rows = events
       .filter((row) =>
         auditBlockField(row.block, "Stage") === STAGE &&
         (row.event === "STAGE_STARTED" || row.event === "PLAN_APPROVAL_RECORDED" || row.event === "PLAN_APPROVAL_SKIPPED"))
@@ -604,6 +646,8 @@ function changedBeforeApprovalLine(projectDir: string): string | null {
       start = recorded === null ? null : recordedSourceListingUnderCurrentBoundary(recorded, current.listing);
     }
     if (start === null) return null;
+    const joined = withRepoBaselineAdditions(projectDir, STAGE, { state: "ready", listing: start }, events, last);
+    if (joined.state !== "ready") return null;
     // The plans approved since this stage started: what they name is their build.
     const approved: Array<string | null> = [];
     for (let index = rows.length - 1; index >= 0 && rows[index].event !== "STAGE_STARTED"; index--) {
@@ -613,7 +657,7 @@ function changedBeforeApprovalLine(projectDir: string): string | null {
     const theirBuild = (path: string): boolean =>
       named.some((entry) =>
         path === entry || path.startsWith(`${entry}/`) || (!entry.includes("/") && path.split("/").at(-1) === entry));
-    const changed = sourceChangedOutsideAidlc(projectDir, start, current.listing).filter((path) => !theirBuild(path));
+    const changed = sourceChangedOutsideAidlc(projectDir, joined.listing, current.listing).filter((path) => !theirBuild(path));
     if (changed.length === 0) return null;
     return changed.length === 1
       ? `Already changed before you approved: ${renderChangedPaths(changed)}.`
@@ -1124,6 +1168,7 @@ function targetState(
   issued: CodeGenerationIssuance,
   planApprovalOff = false,
   use: CodeGenerationApprovalUse = "build",
+  contract: ContractBlockUse = "as-is",
 ): TargetState {
   const approval = evaluateCodeGenerationApproval(projectDir, { unit }, issued, use);
   const reviewRequested = codeGenerationPlanReviewRequested(projectDir, unit, intentId);
@@ -1131,7 +1176,8 @@ function targetState(
     return { unit, kind: "approved" };
   }
   const result = record?.results?.find((entry) => entry.unit === unit);
-  const readiness = codeGenerationPlanReadiness(projectDir, unit);
+  // A plan sent back waits for its change before its Testing Contract is
+  // written: a fresh block would make it read as revised.
   if (result?.choice === "request-changes" && result.fingerprint === approval.approvalFingerprint) {
     return {
       unit,
@@ -1139,14 +1185,24 @@ function targetState(
       ...(result.feedback ? { feedback: result.feedback } : {}),
     };
   }
+  const revision = rejectionRevision(projectDir, unit, intentId);
+  if (revision !== null) return { unit, kind: "revise", ...revision };
+  // A plan with an approval on record is no question coming: a reader counts it as it stands.
+  const readiness = codeGenerationPlanReadiness(
+    projectDir, unit, contract === "count" && approval.approved ? "as-is" : contract,
+    result?.choice === "repair" && result.edited === true,
+  );
+  // The plan's Testing Contract was written: the target is read again as it now
+  // stands, so a plan sent back reads as sent back, an approved one as approved.
+  if (readiness.ready && readiness.written) {
+    return targetState(projectDir, unit, intentId, record, issued, planApprovalOff, use);
+  }
   if (result?.choice === "repair" && !readiness.ready) {
     return { unit, kind: "repair", ...(result.note ? { note: result.note } : {}) };
   }
   if (!readiness.ready) {
     return { unit, kind: "plan", ...(readiness.note ? { note: readiness.note } : {}) };
   }
-  const revision = rejectionRevision(projectDir, unit, intentId);
-  if (revision !== null) return { unit, kind: "revise", ...revision };
   // Plan approval is off: build the plan as written, unless the person asked to
   // review it first. That request is for this plan only; later Units still build.
   if (planApprovalOff && !reviewRequested) return { unit, kind: "skip" };
@@ -1185,7 +1241,9 @@ export const planApprovalOverrideOffers = new WeakSet<Directive>();
 /**
  * The directive `next` emits in place of a code-generation run-stage or
  * invoke-swarm: the same directive marked plan or build, or the engine's Plan
- * Approval question. Read-only: nothing is written until `publishPlanApprovalAsk`.
+ * Approval question. Nothing is written until `publishPlanApprovalAsk`, but a
+ * plan's Testing Contract block (codeGenerationPlanReadiness), outside the Stop
+ * hook's read-only probe.
  * An isolated run's plan step and question carry that run's own `next`
  * (stepNextCommand) for the step to name, since a bare `next` routes the main
  * workflow; the workflow's carry none.
@@ -1244,7 +1302,8 @@ function routedPlanApproval(projectDir: string, directive: Directive): Directive
   // plan again: finishedReviewStep, codeGenerationBuildFinishes).
   const use: CodeGenerationApprovalUse =
     directive.kind === "run-stage" && directive.unit_record_step !== undefined ? "completion" : "build";
-  const states = units.map((unit) => targetState(projectDir, unit, intentId, record, directive, planApprovalOff, use));
+  const contract: ContractBlockUse = isReadOnlyEngineProbe() ? "as-is" : "write";
+  const states = units.map((unit) => targetState(projectDir, unit, intentId, record, directive, planApprovalOff, use, contract));
   if (states.every((state) => state.kind === "approved")) {
     // Under a lowered Guard Policy an approved plan that changed still builds;
     // the person hears what changed and is asked whether to go back to it, or,
@@ -1692,7 +1751,7 @@ function planQuestionDue(projectDir: string): boolean {
     const record = readPlanApprovalAsk(projectDir, intentId);
     const units = issued.kind === "invoke-swarm" ? issued.units : [issued.unit?.trim() || null];
     const off = planApprovalSettingFor(projectDir)?.value === "off";
-    return units.some((unit) => targetState(projectDir, unit, intentId, record, issued, off).kind === "ask");
+    return units.some((unit) => targetState(projectDir, unit, intentId, record, issued, off, "build", "count").kind === "ask");
   } catch {
     return false;
   }
@@ -1701,13 +1760,16 @@ function planQuestionDue(projectDir: string): boolean {
 /**
  * The engine's Plan Approval question while it is the open step: whether every
  * plan it asks about has an answer, the choice on record when every plan has
- * the same one, and whether the person is editing the files. It reads none of
- * the person's words: the conductor reads their reply and records the choice.
- * Null when it is not the open step.
+ * the same one, whether the person is editing the files, and its question id
+ * (null on a record from before ids). It reads none of the person's words: the
+ * conductor reads their reply and records the choice. Null when it is not the
+ * open step.
  */
 export function openPlanApprovalQuestion(
   projectDir: string,
-): { answered: boolean; editing: boolean; recorded: PlanApprovalAnswerChoice | null } | null {
+): {
+  answered: boolean; editing: boolean; recorded: PlanApprovalAnswerChoice | null; questionId: string | null;
+} | null {
   try {
     const open = currentPlanApprovalAsk(projectDir, "all");
     if (open === null) return null;
@@ -1719,6 +1781,7 @@ export function openPlanApprovalQuestion(
       answered,
       editing: record.mode === "editing",
       recorded: record.mode === "editing" ? "edit" : answered && only !== null && only !== "repair" ? only : null,
+      questionId: record.questionId ?? null,
     };
   } catch {
     return null;
@@ -1797,7 +1860,7 @@ function approveTarget(
   let contractHash = read.contract.contract_sha256;
   let rendered: string | null = null;
   if (contractHash !== posture.contract_sha256) {
-    const refreshed = usableTestingContract(posture) ? replaceTestingContractSection(plan, posture) : null;
+    const refreshed = usableTestingContract(posture) ? replaceTestingContractSection(plan, posture, theirEdit) : null;
     if (refreshed === null) {
       return repair(`the Testing Contract in ${view.plan_path} is out of date and needs to be rendered again.`);
     }
@@ -2288,8 +2351,9 @@ export function openEngineQuestion(projectDir: string): string | null {
 
 /**
  * The person sent the words of this message to separate new work, to a
- * reshape, or to park the work: the code plan question of this piece of work
- * keeps none of them as its reply.
+ * reshape, or to park the work, or sent them in a chat that was not shown the
+ * question as it stands: the code plan question of this piece of work keeps
+ * none of them as its reply.
  */
 export function withdrawPlanApprovalReplies(projectDir: string, which: { messageId: string }): void {
   const drop = (reply: PlanApprovalAskReply): boolean => reply.messageId === which.messageId;

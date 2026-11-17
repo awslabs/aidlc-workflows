@@ -25,6 +25,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { pluginBuildLockPath } from "../../dist/claude/.claude/tools/aidlc-plugin-emit.ts";
+import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -509,16 +510,71 @@ describe("t316 standalone plugin compose test", () => {
     expect(treeDigest(poisonRoot)).toBe(beforePoison);
   }, COMPOSE_CASE_TIMEOUT_MS);
 
-  test("shared .kiro leaf requires --harness disambiguation", () => {
-    const { pluginRoot, installRoot } = copyFixture(
-      "kiro-ambiguity",
-      KIRO_INSTALL,
+  // Kiro CLI and Kiro IDE both install into .kiro, Copilot and opencode both
+  // into .aidlc; the install's own record says which one a project has, as
+  // doctor and setup read it.
+  const SHARED_FOLDER_HARNESSES = HARNESS_MATRIX.filter((harness) =>
+    HARNESS_MATRIX.some((other) => other.name !== harness.name && other.manifest.harnessDir === harness.manifest.harnessDir)
+  );
+
+  test("every shared harness folder is covered by the case below", () => {
+    expect(SHARED_FOLDER_HARNESSES.map((harness) => harness.name).sort()).toEqual(
+      expect.arrayContaining(["copilot", "kiro", "kiro-ide", "opencode"]),
     );
+  });
+
+  for (const harness of SHARED_FOLDER_HARNESSES) {
+    test(`a project with only ${harness.name} in its shared folder needs no --harness`, () => {
+      const { pluginRoot, installRoot } = copyFixture(`shared-folder-${harness.name}`, harness.distRoot);
+      const before = treeDigest(installRoot);
+      const result = run([pluginRoot, "--install", installRoot, "--json"]);
+      expect(result.status, result.stderr).toBe(0);
+      const json = JSON.parse(result.stdout) as { valid: boolean; harness: string; drops: unknown[] };
+      expect(json.valid).toBe(true);
+      expect(json.harness).toBe(harness.name);
+      expect(json.drops).toEqual([]);
+      expect(treeDigest(installRoot)).toBe(before);
+    }, COMPOSE_CASE_TIMEOUT_MS);
+  }
+
+  test("a project with two harnesses installed still asks for --harness, naming the two", () => {
+    const { pluginRoot, installRoot } = copyFixture("two-harnesses", KIRO_INSTALL);
+    cpSync(join(REPO_ROOT, "dist", "copilot", ".aidlc"), join(installRoot, ".aidlc"), { recursive: true });
     const result = run([pluginRoot, "--install", installRoot]);
     expect(result.status).toBe(2);
-    expect(result.stderr).toContain("install is ambiguous");
+    expect(result.stderr).toContain("install is ambiguous (copilot:.aidlc, kiro-v2:.kiro)");
+    expect(result.stderr).not.toContain("opencode");
     expect(result.stderr).toContain("--harness <name>");
   });
+
+  test("a shared folder with no AI-DLC install record is not a harness", () => {
+    // AI-DLC's records gone: refused, both Kiro names listed.
+    const bare = copyFixture("kiro-no-record", KIRO_INSTALL);
+    for (const file of ["aidlc-stamp.json", "harness.json"]) {
+      rmSync(join(bare.installRoot, ".kiro", "tools", "data", file));
+    }
+    const refused = run([bare.pluginRoot, "--install", bare.installRoot]);
+    expect(refused.status).toBe(2);
+    expect(refused.stderr).toContain("install is ambiguous (kiro-v2:.kiro, kiro:.kiro)");
+    // An install from before installs recorded their harness (2.7.0) holds
+    // only its name in harness.json; its folder cannot tell Kiro CLI from
+    // Kiro IDE, so the project is still asked which one to test.
+    const early = copyFixture("kiro-ide-before-stamps", KIRO_IDE_INSTALL);
+    rmSync(join(early.installRoot, ".kiro", "tools", "data", "aidlc-stamp.json"));
+    writeFileSync(
+      join(early.installRoot, ".kiro", "tools", "data", "harness.json"),
+      `${JSON.stringify({ name: "kiro-ide", harnessDir: ".kiro", rulesSubdir: "steering" }, null, 2)}\n`,
+    );
+    const asked = run([early.pluginRoot, "--install", early.installRoot]);
+    expect(asked.status, asked.stdout).toBe(2);
+    expect(asked.stderr).toContain("install is ambiguous (kiro-v2:.kiro, kiro:.kiro)");
+    // Kiro's own .kiro folder beside AI-DLC for Claude Code: the test runs as Claude Code.
+    const beside = copyFixture("claude-beside-kiro-folder", CLAUDE_INSTALL);
+    mkdirSync(join(beside.installRoot, ".kiro", "steering"), { recursive: true });
+    const result = run([beside.pluginRoot, "--install", beside.installRoot, "--json"]);
+    expect(result.status, result.stderr).toBe(0);
+    expect((JSON.parse(result.stdout) as { harness: string }).harness).toBe("claude");
+  }, COMPOSE_CASE_TIMEOUT_MS);
 
   // alpha builds on zeta: its stage leads with zeta's agent and orders after
   // zeta's stage. --with composes the author's zeta checkout into the

@@ -111,6 +111,7 @@ import {
   activeIntent,
   appendUnderHeading,
   CHANGE_CONTROL_HEADING,
+  ensureHeading,
   GUARD_POLICY_HEADING,
   LEARNINGS_SELECTIONS_DIR,
   normalizeDriveLetter,
@@ -864,18 +865,6 @@ function practiceHeading(routed: string | undefined): string {
   return t.startsWith("## ") ? t : `## ${t.replace(/^#+\s*/, "")}`;
 }
 
-// Ensure-exists a `## ` heading in a method file. appendUnderHeading throws
-// when the heading is absent (DETERMINISM safety net, aidlc-lib.ts), so the
-// orchestrator may name a heading the shipped file doesn't carry — append it
-// (with a leading blank line when the file already has content) so the
-// subsequent appendUnderHeading lands cleanly.
-function ensureHeading(content: string, heading: string): string {
-  const headingRe = new RegExp(`^${escapeRegex(heading)}[ \\t]*$`, "m");
-  if (headingRe.test(content)) return content;
-  const sep = content === "" ? "" : content.endsWith("\n") ? "\n" : "\n\n";
-  return `${content}${sep}${heading}\n`;
-}
-
 // cid marker — stable, content-addressed idempotency key per written line.
 //
 // Keying on candidate_id (even scoped by intent) is not stable -- candidate
@@ -1189,18 +1178,9 @@ function handlePersist(args: string[], projectDir: string): void {
       };
     }, pinnedIntent, pinnedSpace);
   } catch (e) {
-    // Lock-acquire failure (or any in-lock throw) — name the lock path +
-    // manual remedy so a hard-killed predecessor's orphaned lock is
-    // recoverable by hand (plan §0.19b).
-    const msg = errorMessage(e);
-    if (/Failed to acquire audit lock/.test(msg)) {
-      fail(
-        `${msg}. The audit lock dir may be orphaned by a hard-killed run; ` +
-          `remove it manually (look under the system temp dir for the aidlc audit lock) and retry.`,
-        1
-      );
-    }
-    fail(`persist failed: ${msg}`, 1);
+    // A dead holder's lock is reclaimed on acquire, so a lock that held out
+    // belongs to a live command; nothing here says to remove it.
+    fail(`persist failed: ${errorMessage(e)}`, 1);
   }
 
   const notes: string[] = [];

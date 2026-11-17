@@ -29,6 +29,7 @@ import { EARLIER_KIRO_IDE_DROPS } from "../harness/earlier-kiro-plugin-drops.ts"
 import { doctorCommandLines, vscodeVisibleOutput } from "../harness/vscode-output-trim.ts";
 import {
   applyConfigDiagnosticRecords,
+  cliVersionShown,
   codexTrustIssues,
   copilotCliTrust,
   copilotConfigPath,
@@ -1100,7 +1101,7 @@ describe("t294 runtime diagnostics", () => {
     // A file written before this release: workspace-sync adds the key.
     const older = check(workspace());
     expect(older).toEqual(expect.objectContaining({ pass: false, severity: "warn" }));
-    expect(older?.fix).toContain("run aidlc system workspace-sync");
+    expect(older?.fix).toContain("run bun .aidlc/tools/aidlc.ts system workspace-sync");
     // A settings object without the key is the team's choice.
     expect(check(workspace({ "editor.tabSize": 2 }))?.pass).toBe(true);
     // A settings member that is not an object is broken, never the team's choice.
@@ -1180,7 +1181,7 @@ describe("t294 runtime diagnostics", () => {
     })).toEqual(expect.objectContaining({
       pass: false,
       severity: "warn",
-      label: "Harness CLI: optional kiro-cli kiro-cli 2.24.0 is below 2.24.1",
+      label: "Harness CLI: optional kiro-cli 2.24.0 is below 2.24.1",
     }));
 
     // Required CLIs are unchanged: missing or too old is a warning.
@@ -1189,13 +1190,82 @@ describe("t294 runtime diagnostics", () => {
     expect(cliRow(codex, ".codex", printsVersion("codex-cli 0.144.0\n"))).toEqual(expect.objectContaining({
       pass: false,
       severity: "warn",
-      label: "Harness CLI: codex codex-cli 0.144.0 is below 0.145.0",
+      label: "Harness CLI: codex 0.144.0 is below 0.145.0",
     }));
     expect(cliRow(codex, ".codex", { which: () => null })).toEqual(expect.objectContaining({
       pass: false,
       severity: "warn",
       label: "Harness CLI: codex is missing",
     }));
+  });
+
+  // Most CLIs answer --version with more than the version: "codex-cli
+  // 0.167.1", "kiro-cli 3.2.0", "2.1.322 (Claude Code)", and Copilot adds an
+  // update hint on a second line. Every line that shows it shows the version
+  // alone, on every harness the release ships.
+  test("a Harness CLI row and setup's runtime issue show the CLI's version alone, on every harness", () => {
+    const harnesses = readdirSync(join(REPO_ROOT, "harness"), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && existsSync(join(REPO_ROOT, "harness", entry.name, "manifest.ts")))
+      .map((entry) => entry.name)
+      .sort();
+    expect(harnesses.length).toBeGreaterThanOrEqual(7);
+    for (const harness of harnesses) {
+      const spec = probeHarnessCli(harness as Parameters<typeof probeHarnessCli>[0], { which: () => null });
+      if (!spec.command) continue;
+      const command = spec.command;
+      const project = temp(`aidlc-t294-cli-version-${harness}-`);
+      cpSync(join(DIST, harness), project, { recursive: true });
+      const harnessDir = readdirSync(project).find((name) => existsSync(join(project, name, "tools", "data", "harness.json")));
+      if (!harnessDir) throw new Error(`no harness folder in dist/${harness}`);
+      const replying = (stdout: string) => ({
+        interactivePath: "/opt/tools",
+        which: (name: string) => `/opt/tools/${name}`,
+        run: (path: string) => path === `/opt/tools/${command}`
+          ? { status: 0, stdout }
+          : { status: 0, stdout: "/usr/bin:/bin\n" },
+      });
+      const cliRow = (stdout: string) => {
+        const row = runtimeDoctorChecks(project, harnessDir, { runtime: replying(stdout) })
+          .find((check) => check.label.startsWith("Harness CLI:"));
+        if (!row) throw new Error(`${harness}: no Harness CLI row`);
+        return row.label;
+      };
+      expect(cliRow(`${command}-cli 9.9.9\r\nRun '${command} update' to check for updates.\r\n`), harness)
+        .toBe(`Harness CLI: ${command} 9.9.9 at /opt/tools/${command}`);
+      if (!spec.minimumVersion) continue;
+      expect(cliRow(`${command}-cli 0.0.1\n`), harness)
+        .toBe(`Harness CLI: ${spec.required ? "" : "optional "}${command} 0.0.1 is below ${spec.minimumVersion}`);
+      if (!spec.required) continue;
+      const issue = runtimeIssues(probeRuntime(project, harnessDir, spec.harness, replying(`${command}-cli 0.0.1\n`)))
+        .find((entry) => entry.id === "runtime-harness-cli-old");
+      expect(issue?.message, harness).toBe(`${command} 0.0.1 is below ${spec.minimumVersion}`);
+    }
+  });
+
+  test("the replies the real CLIs give read as their version alone", () => {
+    const claude = temp("aidlc-t294-cli-version-claude-");
+    cpSync(join(DIST, "claude"), claude, { recursive: true });
+    const copilot = temp("aidlc-t294-cli-version-copilot-");
+    cpSync(join(DIST, "copilot"), copilot, { recursive: true });
+    const row = (project: string, harnessDir: string, command: string, stdout: string) =>
+      runtimeDoctorChecks(project, harnessDir, {
+        runtime: {
+          interactivePath: "/opt/tools",
+          which: (name: string) => `/opt/tools/${name}`,
+          run: (path: string) => path === `/opt/tools/${command}` ? { status: 0, stdout } : { status: 0, stdout: "/usr/bin:/bin\n" },
+        },
+      }).find((check) => check.label.startsWith("Harness CLI:"))?.label;
+    expect(row(claude, ".claude", "claude", "2.1.322 (Claude Code)\n"))
+      .toBe("Harness CLI: claude 2.1.322 at /opt/tools/claude");
+    expect(row(copilot, ".aidlc", "copilot", "GitHub Copilot CLI 1.0.109.\nRun 'copilot update' to check for updates.\n"))
+      .toBe("Harness CLI: copilot 1.0.109 at /opt/tools/copilot");
+    expect(row(copilot, ".aidlc", "copilot", "GitHub Copilot CLI 1.0.60.\n"))
+      .toBe("Harness CLI: optional copilot 1.0.60 is below 1.0.74");
+    // A prerelease at the end of Copilot's sentence keeps its tag, not the period.
+    expect(row(copilot, ".aidlc", "copilot", "GitHub Copilot CLI 1.0.110-0.\n"))
+      .toBe("Harness CLI: copilot 1.0.110-0 at /opt/tools/copilot");
+    expect(cliVersionShown("2026.11.11-043ef28")).toBe("2026.11.11-043ef28");
+    expect(cliVersionShown("aidlc 1.2.3-beta.1 (build)")).toBe("1.2.3-beta.1");
   });
 });
 
@@ -2803,9 +2873,11 @@ describe("t294 post-apply outstanding actions", () => {
     )) as { hookActivation: { recovery: string } }).hookActivation.recovery;
     const step = "in Codex, type /hooks, press t to trust all, then press Esc";
     expect(recovery.startsWith(`I${step.slice(1)}.`), recovery).toBe(true);
+    // The list names the config section, never the action's internal id.
     expect(applied.stdout).toContain(
-      `trust/codex-hook-trust-missing: Codex has not trusted this project's hooks yet - ${step}`,
+      `\n  trust: Codex has not trusted this project's hooks yet - ${step}`,
     );
+    expect(applied.stdout).not.toContain("codex-hook-trust-missing");
     expect(applied.stdout).not.toContain("config trust");
 
     const quiet = run([
@@ -2905,7 +2977,9 @@ describe("t294 post-apply outstanding actions", () => {
       "--yes",
     ], project, env);
     expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
-    expect(refreshed.stdout).toContain("bedrock-model-access");
+    // The action by its section and words; its id is shown by the check the step names.
+    expect(refreshed.stdout).toContain("\n  providers: Verify Amazon Bedrock model access in the recorded region");
+    expect(refreshed.stdout).not.toContain("bedrock-model-access");
     expect(refreshed.stdout).toContain(
       "bun .claude/tools/aidlc.ts config providers --check",
     );
@@ -6939,7 +7013,7 @@ process.exit(0);
       "Unmet: provider-claude-project-override - Claude settings still carry the legacy AI-DLC Bedrock defaults",
     );
     expect(show.stdout).toContain(
-      "fix: Run aidlc config providers again to reapply the recorded answer",
+      "fix: Run bun .claude/tools/aidlc.ts config providers again to reapply the recorded answer",
     );
     expect(show.stdout).toContain("Region: not managed by AI-DLC");
     expect(show.stdout).toContain("Profile: not managed by AI-DLC");
@@ -7666,7 +7740,7 @@ process.exit(0);
     expect(runtimeHuman.stdout).not.toContain(runtimeFiles[5]);
     expect(runtimeHuman.stdout).toContain(
       `... and ${runtimeFiles.length - 5} more ` +
-        "(aidlc config runtime --show --json lists all)",
+        "(bun .claude/tools/aidlc.ts config runtime --show --json lists all)",
     );
 
     const dataPath = join(project, ".claude", "tools", "data", "harness.json");
@@ -7784,7 +7858,7 @@ process.exit(0);
     expect(human.stdout).not.toContain(files[5]);
     expect(human.stdout).toContain(
       `... and ${files.length - 5} more ` +
-        "(aidlc config trust --show --json lists all)",
+        "(bun .kiro/tools/aidlc.ts config trust --show --json lists all)",
     );
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 

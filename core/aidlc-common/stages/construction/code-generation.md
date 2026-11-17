@@ -188,7 +188,7 @@ If the plan presented to the user omits test file steps, add them before present
 bun {{HARNESS_DIR}}/tools/aidlc-testing-posture.ts render
 ```
 
-Paste the command's complete `## Testing Contract` JSON block into `code-generation-plan.md` unchanged, using your file-editing tool: a shell command that rewrites the file (for example PowerShell `Set-Content`) can re-encode its characters, and the block's `contract_sha256` then no longer matches. When the contract is refused, re-run `render` and replace the whole section; never edit the block or its hash by hand. The resolver reads all `## Testing Posture` sections additively and selects the narrowest explicit methodology/order statement; coverage, tooling, integration, or scope notes remain applicable but cannot erase a broader methodology. A contradictory narrower methodology is an error, not an override: halt and ask for the memory rule to be revised.
+The resolver reads all `## Testing Posture` sections additively and selects the narrowest explicit methodology/order statement; coverage, tooling, integration, or scope notes remain applicable but cannot erase a broader methodology. A contradictory narrower methodology is an error, not an override: halt and ask for the memory rule to be revised.
 
 Use the contract's `plan_profile.steps` as the required ordering baseline, adapting names and omitting genuinely inapplicable layers without changing the methodology:
 - **TDD**: for every applicable testable layer — data-model/database behavior, repository/data access, business logic, API/endpoint, and frontend behavior — plan Red (failing tests), Green (minimal implementation), then Refactor while green.
@@ -315,9 +315,8 @@ When both files from Step 2 are written, run `next`:
     or from the gate they rejected); when it is absent, ask "What should
     change?" and end the turn first. Put the requested change in the plan as
     its own step, then run `next`.
-  - `repair`: fix exactly what `plan_approval.note` names (for example re-render
-    a Testing Contract block an edit broke), then run `next`; the engine asks the
-    person once to build the edited plan. A Testing Contract left out of date by
+  - `repair`: fix exactly what `plan_approval.note` names, then run `next`; the
+    engine asks the person once to build the edited plan. A Testing Contract left out of date by
     a scope or setting change the person asked for is not a repair: the engine
     renders that block again when they approve, their approval stands, and it
     says so in one line for you to pass on.

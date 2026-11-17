@@ -3047,7 +3047,7 @@ describe("t230 dispatcher route completeness", () => {
       ok: false,
       code: 2,
       status: "usage",
-      message: "unknown command or noun 'unknown-command'; try 'aidlc --help'",
+      message: "unknown command or noun 'unknown-command'; try 'bun .claude/tools/aidlc.ts --help'",
     });
   });
 
@@ -3631,7 +3631,7 @@ describe("t230 dispatcher help and errors", () => {
       type: "help",
       scope: "system",
     });
-    expect(text).toContain("aidlc system <noun> <verb> [args]");
+    expect(text).toContain("bun .claude/tools/aidlc.ts system <noun> <verb> [args]");
     expect(text).toContain(
       "Operations on this user's aidlc installation; never system-wide (root only with --allow-root):",
     );
@@ -3731,18 +3731,17 @@ describe("t230 dispatcher help and errors", () => {
     const action = resolveAction(["engine", "plugin", "--help"]);
     expect(action.type).toBe("noun-help");
     if (action.type !== "noun-help") return;
-    expect(action.message).toContain("engine plugin <verb> [flags]");
-    expect(action.message).toContain("engine plugin select [names]\n");
-    expect(action.message).toContain("engine plugin build <harness> [outDir]\n");
+    expect(action.message).toMatch(/^ {2}plugin select \[names\] +set enabled plugins$/m);
     expect(action.message).not.toContain("audit:");
   });
+
 
   test("engine help and engine --help print the same thing", () => {
     for (const argv of [["engine", "help"], ["engine", "--help"], ["engine", "-h"]]) {
       expect(launcherRouteUsesPin(argv), argv.join(" ")).toBe(false);
       const res = viaDispatcher(argv, REPO_ROOT);
       expect(res.exitCode, `${argv.join(" ")}: ${res.stderr.toString("utf-8")}`).toBe(0);
-      expect(res.stdout.toString("utf-8")).toContain("aidlc engine <noun> <verb> [args]");
+      expect(res.stdout.toString("utf-8")).toContain("engine <noun> <verb> [args]\n\nEngine machinery");
     }
   });
 
@@ -3792,7 +3791,7 @@ describe("t230 dispatcher help and errors", () => {
     expect(res.exitCode).toBe(2);
     expect(res.stdout.toString("utf-8")).toBe("");
     expect(res.stderr.toString("utf-8")).toBe(
-      "aidlc: unknown verb 'bogus' for engine noun 'state'; try 'aidlc engine --help'\n",
+      "aidlc: unknown verb 'bogus' for engine noun 'state'; try 'bun .claude/tools/aidlc.ts engine --help'\n",
     );
   });
 
@@ -3800,19 +3799,20 @@ describe("t230 dispatcher help and errors", () => {
     const res = viaDispatcher(["system", "versions"], REPO_ROOT);
     expect(res.exitCode).toBe(2);
     expect(res.stderr.toString("utf-8")).toBe(
-      "aidlc: missing verb for system noun 'versions'; try 'aidlc system --help'\n",
+      "aidlc: missing verb for system noun 'versions'; try 'bun .claude/tools/aidlc.ts system --help'\n",
     );
   });
 
   test("plugin help and invalid plugin verbs use the shared noun grammar", () => {
     const help = viaDispatcher(["engine", "plugin", "help"], REPO_ROOT);
     expect(help.exitCode).toBe(0);
-    expect(help.stdout.toString("utf-8")).toContain("engine plugin select [names]\n");
+    expect(help.stdout.toString("utf-8")).toMatch(/^ {2}plugin select \[names\] +set enabled plugins$/m);
+    expect(help.stdout.toString("utf-8")).not.toContain("Engine machinery");
 
     const invalid = viaDispatcher(["engine", "plugin", "remove"], REPO_ROOT);
     expect(invalid.exitCode).toBe(1);
     expect(invalid.stderr.toString("utf-8")).toBe(
-      "aidlc: unknown verb 'remove' for noun 'plugin'; try 'aidlc help --all'\n",
+      "`bun .claude/tools/aidlc.ts engine plugin remove` is not a plugin command; the plugin commands are select, list, sync, validate and build\n",
     );
   });
 

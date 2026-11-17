@@ -10,11 +10,11 @@ adds:
   required_sections:
     - "Test Harness Design"
 fragments:
-  - anchor: end-of-steps
+  - anchor: after-step:5
     order: 100
 ---
 
-## fragment: end-of-steps
+## fragment: after-step:5
 
 ### Step (test-pro): Design the test harness
 

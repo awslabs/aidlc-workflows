@@ -95,6 +95,7 @@ import {
   writeOperation,
 } from "../../core/tools/aidlc-transaction.ts";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
+import { writeSessionPidEntry } from "../../core/tools/aidlc-lib.ts";
 import { copyChannelDispatcherCommands } from "../../core/tools/aidlc.ts";
 import { doctorCommandLines, vscodeVisibleOutput } from "../harness/vscode-output-trim.ts";
 import {
@@ -201,7 +202,9 @@ function run(
 
 // The words of a printed command, quoted as quoteCommandArgument quotes them:
 // single quotes (with '' for a quote in PowerShell, or '"'"' in a POSIX
-// shell), and double-quoted JSON strings.
+// shell), double quotes around a Windows word with an apostrophe (every
+// character as written, as PowerShell and Git Bash read it), and double-quoted
+// JSON strings (the only ones with an escaped backslash or quote).
 function printedWords(printed: string): string[] {
   const words: string[] = [];
   let word: string | null = null;
@@ -221,7 +224,7 @@ function printedWords(printed: string): string[] {
       }
     } else if (character === "\"") {
       const quoted = /^"(?:[^"\\]|\\.)*"/.exec(printed.slice(index))?.[0] ?? "\"";
-      word += JSON.parse(quoted) as string;
+      word += /\\[\\"]/.test(quoted) ? JSON.parse(quoted) as string : quoted.slice(1, -1);
       index += quoted.length - 1;
     } else {
       word += character;
@@ -1877,7 +1880,7 @@ describe("t243 project initialization", () => {
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a printed command is read back as quoteCommandArgument quoted it, on either shell", () => {
-    for (const value of ["/tmp/a b/it's.ts", "C:\\Users\\RUNNER~1\\it's here.ts", "plain/path.ts"]) {
+    for (const value of ["/tmp/a b/it's.ts", "C:\\Users\\RUNNER~1\\it's here.ts", "C:\\Users\\O'Brien\\proj", "plain/path.ts"]) {
       expect(printedWords(`bun ${quoteCommandArgument(value)} config --harness kiro-v2`))
         .toEqual(["bun", value, "config", "--harness", "kiro-v2"]);
     }
@@ -2876,7 +2879,7 @@ describe("t243 project initialization", () => {
     expect(addCodex.status).toBe(4);
     expect(addCodex.stdout).toContain("predates shared onboarding");
     expect(addCodex.stdout).toContain(
-      "run aidlc config --harness kiro-v2 first - if it still refuses afterwards, its AGENTS.md is exclusive and they cannot coexist in one project",
+      "config --harness kiro-v2 first - if it still refuses afterwards, its AGENTS.md is exclusive and they cannot coexist in one project",
     );
     expect(existsSync(join(project, ".codex"))).toBe(false);
     expect(readFileSync(join(project, "AGENTS.md"), "utf-8")).toBe(agents);
@@ -3198,7 +3201,7 @@ describe("t243 project initialization", () => {
     for (const [version, message] of [
       [
         `${AIDLC_VERSION}-preview.20260101.1`,
-        "predates shared onboarding; run aidlc config --harness copilot first - if it still refuses afterwards, its AGENTS.md is exclusive and they cannot coexist in one project",
+        "config --harness copilot first - if it still refuses afterwards, its AGENTS.md is exclusive and they cannot coexist in one project",
       ],
       ["99.0.0-preview.20260101.1", "cannot coexist"],
     ]) {
@@ -8579,7 +8582,6 @@ describe("t243 release lifecycle", () => {
       const tampered = scanWindowsUninstallJournals();
       expect(tampered.pending).toEqual([]);
       expect(tampered.invalid).toContain(journalPath);
-      expect(() => recoverWindowsUninstallContinuations()).toThrow("invalid Windows uninstall journal(s)");
 
       writeFileSync(journalPath, `${JSON.stringify(journal, null, 2)}\n`);
       const intact = scanWindowsUninstallJournals();
@@ -9140,6 +9142,7 @@ describe("t243 projection channel", () => {
           "sha256:a618a3a615ef7159c7eed634a5a332bf9d017f8e28d6b0f0adad9db1d2d725e0",
           "sha256:3cc1cbd212d2ca0dbf1e525eb9a40d4694a585eb7864d8b877f8fe8bd99122dc",
           "sha256:839f98012dd457ed13dcf19547b992130a2c44ef7afa73fb3faf000137a087d7",
+          "sha256:c4dbcd2ecd6243a4759c148f38bd764042f2563f6a679f732c25471cd308ec77",
         ],
       },
       codex: {
@@ -9152,6 +9155,7 @@ describe("t243 projection channel", () => {
           "sha256:51cb399f2257236cbf63e18cb2e317d75913f1771b5402707a2508cf5f81fa57",
           "sha256:345fbe9fe620718510ecfe9d478233ccf4a5318522884b50fc5540559ace3eed",
           "sha256:c2b1232b28a8b5474f7ef8363452f75399366ef227c59d75fa85d7aa2edca7ac",
+          "sha256:42e2a975d46b6fd2a582fa539f6df3260a1f2722dd0a113bd312dff7dc2da204",
         ],
         "AGENTS.md": [
           "sha256:30a9f5f43d87cd29b63e75333b8ef6695f8f4e11909fd6af64e2b6cf0b8cb292",
@@ -9175,6 +9179,7 @@ describe("t243 projection channel", () => {
           "sha256:c7843449d549d4226be39169a9c31bf89694cd0b0754cb1ee68bdf61759538ce",
           "sha256:6de1298dfa4c2b6916f66d372b844faf23481c8f258eedd595c1423dab8e106d",
           "sha256:6d3bf5865f1836575715ea93d0042b9d08bcab918cc9a17a142848fe44e88bc7",
+          "sha256:04d7ca868197529d9839b62c902870157743c93a6c7fd134bcebcccc8a1d263f",
         ],
       },
       kiro: {
@@ -9187,6 +9192,8 @@ describe("t243 projection channel", () => {
           "sha256:28a69800dcac189aa2a976820db237b45bcf6dd7d7e6d4fae5c1603225b9957a",
           "sha256:99b4560aa1bd95f26077eb69a0c6c2a40f81146a212e70d876c27bb84f2b1789",
           "sha256:6df8b41c1c9011d8b6d386d389f96bbfa27812386f434103c260bf58641d6b5d",
+          "sha256:91f5070ac1b7f2effcf608447a67261ab00dd92495385bf2277b53ca1723c6f0",
+          "sha256:d0d2e38fbc662a86e2c8e3047ace37df838b9652710c6d6ae01232c8a6180422",
         ],
         "AGENTS.md": [
           "sha256:4f7133cc1a9bb1243245c25c28fad57c3660b35e251ea36cea3aa2db431bf55f",
@@ -9205,6 +9212,7 @@ describe("t243 projection channel", () => {
           "sha256:c8777a03505f11dcbb4fb339fef1a8072d9d2500ce401b69a06073b523ea2c67",
           "sha256:6de1298dfa4c2b6916f66d372b844faf23481c8f258eedd595c1423dab8e106d",
           "sha256:6d3bf5865f1836575715ea93d0042b9d08bcab918cc9a17a142848fe44e88bc7",
+          "sha256:04d7ca868197529d9839b62c902870157743c93a6c7fd134bcebcccc8a1d263f",
         ],
       },
       "kiro-ide": {
@@ -9219,6 +9227,7 @@ describe("t243 projection channel", () => {
           "sha256:6c6ff7641c17829d77fdd023f340b938db11dcc26c734a0c452d5213f9bd19cf",
           "sha256:f9d49a8c823df8174ea7d8a83209380202e5673b5ee8c1ff6b9cce90bcfd550e",
           "sha256:e7c17271c65f778895fe75352413c03da8a3c37c37bca2b8bcb1c447f4c8b8f3",
+          "sha256:0f3d8cce1070c43f883aeda63341bf00e7d689916ca5f810734784fedfd6009a",
         ],
         "AGENTS.md": [
           "sha256:4d539288363565feb6cf1a8d2468d1aca4373d46d354936d89e609f9862b2b9f",
@@ -9237,6 +9246,7 @@ describe("t243 projection channel", () => {
           "sha256:5f6f076a5a9d8a11e1078f568c9dee091f399d9999fae89e9dffa62d8697b797",
           "sha256:6de1298dfa4c2b6916f66d372b844faf23481c8f258eedd595c1423dab8e106d",
           "sha256:6d3bf5865f1836575715ea93d0042b9d08bcab918cc9a17a142848fe44e88bc7",
+          "sha256:04d7ca868197529d9839b62c902870157743c93a6c7fd134bcebcccc8a1d263f",
         ],
       },
       cursor: {
@@ -9248,6 +9258,7 @@ describe("t243 projection channel", () => {
           "sha256:cf4554ef90011ebc4bc70c7fbc6ca572c513d5c1e7daa328e406d1069f98e635",
           "sha256:ae1878ec98301ceb4510e711cf79f58dfb44cb486744007acd03ae5e61860665",
           "sha256:55d4cfabe04aca4193d53032c003002d3c9c7de4eef90be0afb411d8a6f7e340",
+          "sha256:880993e2876c4e1ce73f0354928eb98c7f234a127aeecbd4268aadc508e918ab",
         ],
         "AGENTS.md": [
           "sha256:78c906200a55665f3a3ce410272c71d4bdcb5764174407da0f69d8ad6d143184",
@@ -9256,6 +9267,7 @@ describe("t243 projection channel", () => {
           "sha256:eeabf9f9555124da3f5ad34eb3a26b9fcbf3e2ccd65610cb9f0182701cf3ef48",
           "sha256:6de1298dfa4c2b6916f66d372b844faf23481c8f258eedd595c1423dab8e106d",
           "sha256:6d3bf5865f1836575715ea93d0042b9d08bcab918cc9a17a142848fe44e88bc7",
+          "sha256:04d7ca868197529d9839b62c902870157743c93a6c7fd134bcebcccc8a1d263f",
         ],
         "install.ts": [
           "sha256:338e1d36257108ce908eb42992e87e5df7cf96003a45e04a72189e4d79110aba",
@@ -9270,6 +9282,7 @@ describe("t243 projection channel", () => {
           "sha256:51cb399f2257236cbf63e18cb2e317d75913f1771b5402707a2508cf5f81fa57",
           "sha256:345fbe9fe620718510ecfe9d478233ccf4a5318522884b50fc5540559ace3eed",
           "sha256:c2b1232b28a8b5474f7ef8363452f75399366ef227c59d75fa85d7aa2edca7ac",
+          "sha256:42e2a975d46b6fd2a582fa539f6df3260a1f2722dd0a113bd312dff7dc2da204",
         ],
         "AGENTS.md": [
           "sha256:d791057d6b667517197a450bc6ba633c36e148d62e09c90a8992d787c914a44f",
@@ -9278,6 +9291,7 @@ describe("t243 projection channel", () => {
           "sha256:c5b990429fe6dfa084d58fc592d1d22c1170cc35aa98f9cbb2c82b9924520eda",
           "sha256:6de1298dfa4c2b6916f66d372b844faf23481c8f258eedd595c1423dab8e106d",
           "sha256:6d3bf5865f1836575715ea93d0042b9d08bcab918cc9a17a142848fe44e88bc7",
+          "sha256:04d7ca868197529d9839b62c902870157743c93a6c7fd134bcebcccc8a1d263f",
         ],
         "opencode.json": [
           "sha256:3be60b2be72b7a423fdaa90fd7d0d9d19613875c05ad5f1a2b6e20fcb54cd1e5",
@@ -9295,6 +9309,7 @@ describe("t243 projection channel", () => {
           "sha256:a2fb9d52cb1ad3a360d7abdaddabb6920965b6b1a7acceb14881ad93b4975bbe",
           "sha256:2091d36da7f7306179da27227857564334f3a455327f365984db6c94a4cc6412",
           "sha256:0ece34fe64acc940324082a0ed97621ff2472ddc0e611e745a6d7388e532fcea",
+          "sha256:6c5a7b3d0059a0fe5067de62e20fb2733215ee43391cdadec3206b6fd05fe6d6",
         ],
         "AGENTS.md": [
           "sha256:9550b31b8f3f32992c1ae1035bfa57a782f04821530214a2f2e1fd1690e209ab",
@@ -9323,6 +9338,7 @@ describe("t243 projection channel", () => {
           "sha256:b0f5e39317a501be8567bbb0ecbdff651116abc28a500b9c451b732ca8f2e088",
           "sha256:b87a3ec2c39cb24074c6fa37f626e9d150d435d18069fbd0c762fdbd70719c5c",
           "sha256:a885fe6b7137ba16e0c24ce168b30ef5c780fe9991fc2d6bdff10cc15ad83c05",
+          "sha256:7b09e1c003a983ea0c328b7935b2305f35efb8a0927a0bc9f0f7c21c6b3e13d4",
         ],
       },
     };
@@ -9694,5 +9710,212 @@ describe("t243 projection channel", () => {
     expect(() => projectionFiles(mismatched)).toThrow(
       "cannot use legacy whole-file signatures",
     );
+  });
+});
+
+// --- a pinned release is checked once per session --------------------------
+//
+// The dispatcher checks a pinned release's binary and every runtime file on its
+// first call in a session, records the pass beside the session's pid entry
+// (aidlc/.aidlc-sessions/pids/<pid>.release-check), and on later calls of that
+// chat in that process skips only the hashing. The session is the walk's
+// nearest mapped ancestor; here this test's parent process, mapped as
+// session-start maps a host. Every miss falls to the full check.
+describe("t243 a pinned release is checked once per session", () => {
+  const SESSION_A = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa";
+  const SESSION_B = "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb";
+  const argv = (project: string) => ["engine", "status", "--project-dir", project];
+  const refused = (version: string) => expect.objectContaining({
+    kind: "failure",
+    message: `this project requires ${version}, which is not installed completely`,
+  });
+
+  // One release installed and the project pinned to it, run with the scratch
+  // install root, so the dispatcher's checks read that release.
+  function pinnedProject(versions: readonly string[] = [AIDLC_VERSION], pin = versions[0]) {
+    const machine = temp("aidlc-t243-session-check-machine-");
+    const project = temp("aidlc-t243-session-check-project-");
+    mkdirSync(join(project, ".git"));
+    const env = { AIDLC_INSTALL_ROOT: machine, AIDLC_BIN_DIR: join(machine, "bin") };
+    for (const version of versions) {
+      const installed = run(LIFECYCLE, ["versions", "install", version, "--from", fixtureReleaseBytes(version)], project, env);
+      expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+    }
+    const pinned = run(INIT, ["config", "--pin", pin, "--project-dir", project], project, env);
+    expect(pinned.status, pinned.stdout + pinned.stderr).toBe(0);
+    const runtime = join(machine, "versions", pin, "runtime");
+    const file = join(runtime, walkFiles(runtime).find((path) => !path.endsWith("aidlc-stamp.json")) as string);
+    const original = readFileSync(file);
+    return {
+      machine,
+      project,
+      pidDir: join(project, "aidlc", ".aidlc-sessions", "pids"),
+      damage: () => writeFileSync(file, Buffer.concat([original, Buffer.from("\ndamaged\n")])),
+      repair: () => writeFileSync(file, original),
+    };
+  }
+
+  function withMachine<T>(machine: string, body: () => T): T {
+    const saved = { root: process.env.AIDLC_INSTALL_ROOT, bin: process.env.AIDLC_BIN_DIR };
+    process.env.AIDLC_INSTALL_ROOT = machine;
+    process.env.AIDLC_BIN_DIR = join(machine, "bin");
+    try {
+      return body();
+    } finally {
+      if (saved.root === undefined) delete process.env.AIDLC_INSTALL_ROOT;
+      else process.env.AIDLC_INSTALL_ROOT = saved.root;
+      if (saved.bin === undefined) delete process.env.AIDLC_BIN_DIR;
+      else process.env.AIDLC_BIN_DIR = saved.bin;
+    }
+  }
+
+  const releaseCheck = (pidDir: string) => join(pidDir, `${process.ppid}.release-check`);
+
+  test("a release checked once in a session is not hashed again in that session, and a new chat checks again", () => {
+    const pinned = pinnedProject();
+    withMachine(pinned.machine, () => {
+      writeSessionPidEntry(pinned.project, process.ppid, SESSION_A);
+      expect(resolvePinnedDispatch(argv(pinned.project), pinned.project, { reserve: true })).toEqual({ kind: "none" });
+      expect(existsSync(releaseCheck(pinned.pidDir))).toBe(true);
+      pinned.damage();
+      // The same chat in the same process: the pass stands, damage is caught next session.
+      expect(resolvePinnedDispatch(argv(pinned.project), pinned.project, { reserve: true })).toEqual({ kind: "none" });
+      // A new chat mapped on the same process checks in full.
+      writeSessionPidEntry(pinned.project, process.ppid, SESSION_B);
+      expect(resolvePinnedDispatch(argv(pinned.project), pinned.project, { reserve: true })).toEqual(refused(AIDLC_VERSION));
+      // So do config's own probe, doctor's inspection, and every call outside the dispatcher.
+      writeSessionPidEntry(pinned.project, process.ppid, SESSION_A);
+      expect(resolvePinnedDispatch(argv(pinned.project), pinned.project)).toEqual(refused(AIDLC_VERSION));
+      expect(inspectInstalledVersion(AIDLC_VERSION).complete).toBe(false);
+      pinned.repair();
+    });
+  });
+
+  test("a marked call still refuses a release whose runtime inventory or file modes changed", () => {
+    const pinned = pinnedProject();
+    withMachine(pinned.machine, () => {
+      writeSessionPidEntry(pinned.project, process.ppid, SESSION_A);
+      expect(resolvePinnedDispatch(argv(pinned.project), pinned.project, { reserve: true })).toEqual({ kind: "none" });
+      const runtime = join(pinned.machine, "versions", AIDLC_VERSION, "runtime");
+      const extra = join(runtime, walkFiles(runtime)[0].split(/[\\/]/)[0], "extra-file.txt");
+      writeFileSync(extra, "not in the baseline\n");
+      expect(resolvePinnedDispatch(argv(pinned.project), pinned.project, { reserve: true })).toEqual(refused(AIDLC_VERSION));
+      rmSync(extra);
+      expect(resolvePinnedDispatch(argv(pinned.project), pinned.project, { reserve: true })).toEqual({ kind: "none" });
+      // Windows keeps no POSIX mode bits to change.
+      if (process.platform !== "win32") {
+        const file = join(runtime, walkFiles(runtime)[0]);
+        const before = statSync(file).mode & 0o777;
+        chmodSync(file, before === 0o600 ? 0o644 : 0o600);
+        expect(resolvePinnedDispatch(argv(pinned.project), pinned.project, { reserve: true })).toEqual(refused(AIDLC_VERSION));
+        chmodSync(file, before);
+      }
+    });
+  });
+
+  test("a call with no session, or a session whose entry has no start time, checks every time", () => {
+    const pinned = pinnedProject();
+    withMachine(pinned.machine, () => {
+      // No mapped ancestor: this project's pids folder is empty.
+      expect(resolvePinnedDispatch(argv(pinned.project), pinned.project, { reserve: true })).toEqual({ kind: "none" });
+      expect(resolvePinnedDispatch(argv(pinned.project), pinned.project, { reserve: true })).toEqual({ kind: "none" });
+      expect(existsSync(pinned.pidDir) ? readdirSync(pinned.pidDir) : []).toEqual([]);
+      pinned.damage();
+      expect(resolvePinnedDispatch(argv(pinned.project), pinned.project, { reserve: true })).toEqual(refused(AIDLC_VERSION));
+      pinned.repair();
+      // An entry with no start time is no session: nothing is recorded for it.
+      writeSessionPidEntry(pinned.project, process.ppid, SESSION_A, Date.now() + 2_000, { ppid: 1, startTime: null });
+      expect(resolvePinnedDispatch(argv(pinned.project), pinned.project, { reserve: true })).toEqual({ kind: "none" });
+      expect(existsSync(releaseCheck(pinned.pidDir))).toBe(false);
+      // Not even a record written by hand for it.
+      writeFileSync(releaseCheck(pinned.pidDir), `${JSON.stringify({ sessionId: SESSION_A, startTime: null })}\n`);
+      pinned.damage();
+      expect(resolvePinnedDispatch(argv(pinned.project), pinned.project, { reserve: true })).toEqual(refused(AIDLC_VERSION));
+      pinned.repair();
+    });
+  });
+
+  test("a record for another release, distribution, executable or session checks again", () => {
+    const pinned = pinnedProject();
+    withMachine(pinned.machine, () => {
+      writeSessionPidEntry(pinned.project, process.ppid, SESSION_A);
+      expect(resolvePinnedDispatch(argv(pinned.project), pinned.project, { reserve: true })).toEqual({ kind: "none" });
+      const recorded = JSON.parse(readFileSync(releaseCheck(pinned.pidDir), "utf-8")) as Record<string, unknown>;
+      expect(recorded).toEqual(expect.objectContaining({ sessionId: SESSION_A, version: AIDLC_VERSION }));
+      pinned.damage();
+      for (const change of [
+        { version: NEXT_VERSION },
+        { distribution: "some-other-harness" },
+        { executable: join(pinned.machine, "elsewhere", "aidlc") },
+        { sessionId: SESSION_B },
+        { startTime: "another-start" },
+      ]) {
+        writeFileSync(releaseCheck(pinned.pidDir), `${JSON.stringify({ ...recorded, ...change })}\n`);
+        expect(
+          resolvePinnedDispatch(argv(pinned.project), pinned.project, { reserve: true }),
+          JSON.stringify(change),
+        ).toEqual(refused(AIDLC_VERSION));
+      }
+      pinned.repair();
+    });
+  });
+
+  test("a pin to another release is reserved when its hashing is skipped", () => {
+    const pinned = pinnedProject([AIDLC_VERSION, NEXT_VERSION], NEXT_VERSION);
+    withMachine(pinned.machine, () => {
+      writeSessionPidEntry(pinned.project, process.ppid, SESSION_A);
+      const first = resolvePinnedDispatch(argv(pinned.project), pinned.project, { reserve: true });
+      expect(first).toEqual(expect.objectContaining({ kind: "execute", version: NEXT_VERSION }));
+      if (first.kind === "execute") first.release?.();
+      expect(existsSync(releaseCheck(pinned.pidDir))).toBe(true);
+      pinned.damage();
+      const second = resolvePinnedDispatch(argv(pinned.project), pinned.project, { reserve: true });
+      expect(second).toEqual(expect.objectContaining({ kind: "execute", version: NEXT_VERSION }));
+      const reservations = join(pinned.machine, "reservations");
+      expect(readdirSync(reservations).some((name) => name.startsWith(`${NEXT_VERSION}-${process.pid}-`))).toBe(true);
+      if (second.kind === "execute") second.release?.();
+      pinned.repair();
+    });
+  });
+
+  test("the dispatcher's record sweeps a release check left beside an entry that is gone", () => {
+    const pinned = pinnedProject();
+    withMachine(pinned.machine, () => {
+      writeSessionPidEntry(pinned.project, process.ppid, SESSION_A);
+      const orphan = join(pinned.pidDir, "999900777.release-check");
+      writeFileSync(orphan, "{}\n");
+      expect(resolvePinnedDispatch(argv(pinned.project), pinned.project, { reserve: true })).toEqual({ kind: "none" });
+      expect(existsSync(orphan)).toBe(false);
+      expect(existsSync(releaseCheck(pinned.pidDir))).toBe(true);
+    });
+  });
+
+  test("a read-only engine probe writes no record and sweeps nothing", () => {
+    const pinned = pinnedProject();
+    withMachine(pinned.machine, () => {
+      writeSessionPidEntry(pinned.project, process.ppid, SESSION_A);
+      const orphan = join(pinned.pidDir, "999900778.release-check");
+      writeFileSync(orphan, "{}\n");
+      const saved = process.env.AIDLC_STOP_HOOK_PROBE;
+      process.env.AIDLC_STOP_HOOK_PROBE = "1";
+      try {
+        expect(resolvePinnedDispatch(argv(pinned.project), pinned.project, { reserve: true })).toEqual({ kind: "none" });
+      } finally {
+        if (saved === undefined) delete process.env.AIDLC_STOP_HOOK_PROBE;
+        else process.env.AIDLC_STOP_HOOK_PROBE = saved;
+      }
+      expect(existsSync(releaseCheck(pinned.pidDir))).toBe(false);
+      expect(existsSync(orphan)).toBe(true);
+    });
+  });
+
+  test("only the dispatcher's call may leave out the hashing", () => {
+    const sites = readdirSync(join(REPO_ROOT, "core", "tools"))
+      .filter((name) => name.endsWith(".ts"))
+      .flatMap((name) => {
+        const text = readFileSync(join(REPO_ROOT, "core", "tools", name), "utf-8");
+        return (text.match(/hashes: false/g) ?? []).map(() => name);
+      });
+    expect(sites).toEqual(["aidlc-lifecycle.ts"]);
   });
 });

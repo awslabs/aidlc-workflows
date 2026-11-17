@@ -34,6 +34,7 @@ import { AIDLC_VERSION } from "./aidlc-version.ts";
 import {
   aidlcInvocation,
   discoverProjectHarnesses,
+  enclosingProjectDir,
   isCompiledExecutable,
   kiroTreeLayout,
   packagedDistributionRoot,
@@ -43,6 +44,7 @@ import {
   resolveHarnessPath,
   runtimeHarnessDir,
   hookSessionProjectDir,
+  moduleProjectDir,
   runtimeProjectDir,
   runtimeProjectDirFrom,
   runtimeHarnessName,
@@ -225,14 +227,14 @@ const HUMAN_TOP_ROUTE_IDS = new Set([
 
 export const ENGINE_NAMESPACE_HELP: NamespaceHelpOptions = {
   namespace: "engine",
-  usage: "aidlc engine <noun> <verb> [args]",
+  usage: "engine <noun> <verb> [args]",
   header: "Engine machinery - generated harness surfaces only; not for human scripts:",
   excludedRouteIds: HUMAN_TOP_ROUTE_IDS,
 };
 
 export const SYSTEM_NAMESPACE_HELP: NamespaceHelpOptions = {
   namespace: "system",
-  usage: "aidlc system <noun> <verb> [args]",
+  usage: "system <noun> <verb> [args]",
   header: "Operations on this user's aidlc installation; never system-wide (root only with --allow-root):",
 };
 
@@ -1067,7 +1069,7 @@ export const ROUTES: readonly Route[] = [
       { command: "knowledge <verb>", summary: "index and read customer documents" },
     ],
     all: [
-      "onboard [path]", "sync", "list", "show <id>",
+      "onboard [path ...]", "sync", "list", "show <id>",
       "associate <id> --intent [slug]", "dissociate <id> --intent [slug]",
       "rebind <id> --to <path>",
       "summarize <id> --text-file <path> --source-revision <sha256>",
@@ -1470,9 +1472,9 @@ export function copyChannelToolScripts(): string[] {
 }
 
 // The dispatcher's public commands, outside its engine namespace, that every
-// install pre-approves, each spelled exactly as AI-DLC runs it: the doctor,
-// status and version utilities in both spellings agents use (doctor with or
-// without `--verbose`), config's read-only forms (`--show`, with or without
+// install pre-approves, each spelled exactly as AI-DLC runs it: the doctor and
+// version utilities in both spellings agents use (doctor with or without
+// `--verbose`), status as `--status`, config's read-only forms (`--show`, with or without
 // `--json`, top level or per section, and `--help`), and
 // turning one recorded check back on
 // (`config flags --clear-bypass <switch> --yes`, the form the skills name),
@@ -1491,7 +1493,6 @@ export function copyChannelDispatcherCommands(): string[] {
     "--doctor",
     "--doctor --verbose",
     "--version",
-    "status",
     "--status",
     "config --help",
     // An unknown option there, answered with the config usage line and no
@@ -1836,15 +1837,15 @@ const PLUGIN_TEST_FLAG_SUMMARIES: Readonly<Record<string, string>> = {
   "--with": "Your checkout of the base plugin this one builds on, composed into the copy first",
 };
 
-export function pluginTestCommand(): { usage: string; options: RouteOption[] } {
+export function pluginAuthorCommand(verb: "validate" | "build" | "test"): { usage: string; options: RouteOption[] } {
   const route = ROUTES.find((candidate) => candidate.id === "plugin-author");
-  const form = route ? usageFormsFor(route, "test")[0] : undefined;
-  if (!route || !form) throw new Error("dispatcher route registry is missing plugin test");
-  return { usage: `${aidlcInvocation()} plugin ${form}`, options: routeOptions(route, "test") };
+  const form = route ? usageFormsFor(route, verb)[0] : undefined;
+  if (!route || !form) throw new Error(`dispatcher route registry is missing plugin ${verb}`);
+  return { usage: `${aidlcInvocation()} plugin ${form}`, options: routeOptions(route, verb) };
 }
 
 export function renderPluginTestHelp(): string {
-  const { usage, options } = pluginTestCommand();
+  const { usage, options } = pluginAuthorCommand("test");
   const out = process.stdout;
   return [
     "Check that a plugin composes cleanly into a copy of a project, which is never changed",
@@ -1904,7 +1905,7 @@ export function renderNamespaceHelp(
   const routes = ROUTES.filter((route) =>
     route.namespace === options.namespace && !options.excludedRouteIds?.has(route.id)
   );
-  return `${[options.usage, "", options.header, ...routeGroupLines(routes, summaryOverrides)].join("\n")}\n`;
+  return `${[`${aidlcInvocation()} ${options.usage}`, "", options.header, ...routeGroupLines(routes, summaryOverrides)].join("\n")}\n`;
 }
 
 // One line per noun (or per top-level verb), in route-table order: the noun's
@@ -1972,7 +1973,7 @@ function renderConfigHelp(): string {
   const route = ROUTES.find((candidate) => candidate.id === "config");
   if (!route) throw new Error("dispatcher route registry is missing engine noun config");
   return [
-    "aidlc engine config <verb> [args] [--intent <id>] [--space <name>]",
+    `${aidlcInvocation()} engine config <verb> [args] [--intent <id>] [--space <name>]`,
     "",
     "Settings for the selected piece of work:",
     ...routeForms(route).map((form) => `  ${form}`),
@@ -2025,7 +2026,7 @@ function topLevelError(command: string): Action {
   return {
     type: "error",
     code: 2,
-    message: `aidlc: unknown command or noun '${command}'; try 'aidlc --help'\n`,
+    message: `aidlc: unknown command or noun '${command}'; try '${aidlcInvocation()} --help'\n`,
   };
 }
 
@@ -2060,7 +2061,7 @@ function publicCommandError(command: string): Action {
   return {
     type: "error",
     code: 2,
-    message: `aidlc: unknown command or noun '${command}'; try 'aidlc --help'\n`,
+    message: `aidlc: unknown command or noun '${command}'; try '${aidlcInvocation()} --help'\n`,
     humanMessage:
       `${errorLabel("error:", process.stderr)} unknown command '${command}'\n${
         tip ? `\n  ${tipLabel("tip:", process.stderr)} did you mean '${nearest?.candidate}'?\n` : ""
@@ -2075,7 +2076,7 @@ function nounError(noun: string, verb: string | undefined, namespace: "engine" |
   return {
     type: "error",
     code: 2,
-    message: `aidlc: ${detail} for ${namespace} noun '${noun}'; try 'aidlc ${namespace} --help'\n`,
+    message: `aidlc: ${detail} for ${namespace} noun '${noun}'; try '${aidlcInvocation()} ${namespace} --help'\n`,
   };
 }
 
@@ -2142,12 +2143,17 @@ function handleConfig(route: Route, argv: string[]): Action {
   return nounError("config", key ? `set ${key}` : "set");
 }
 
+// `plugin help`: the plugin noun's commands, as the route lists them.
+function pluginHelp(): string {
+  const rows = ROUTES.find((route) => route.custom === "plugin")?.human ?? [];
+  const width = Math.max(...rows.map((row) => row.command.length));
+  return rows.map((row) => `  ${row.command.padEnd(width)}  ${row.summary}\n`).join("");
+}
+
 function handlePlugin(argv: string[]): Action {
   const command = parseDispatcherPluginCommand(argv);
   if (command.kind === "help") {
-    return nounHelp("plugin", ROUTES.filter((route) =>
-      route.namespace === "engine" && route.group === "plugin"
-    ), "engine");
+    return { type: "noun-help", message: pluginHelp() };
   }
   if (command.kind === "error") {
     return { type: "error", code: 1, message: `${command.message}\n` };
@@ -3359,44 +3365,45 @@ async function runSensorScriptFile(
 }
 
 /**
- * `knowledge onboard <path>` for a document the person named outside the
+ * `knowledge onboard <path> ...` for documents the person named outside the
  * space's `documents/` folder: the copy happens here, at the command layer, and
- * the verb then indexes the copy. Before this, the knowledge tool refused and
+ * the verb then indexes the copies. Before this, the knowledge tool refused and
  * told the person to make the folder and copy the file themselves, which is
  * work the engine can do for them. The copy lives in aidlc-utility.ts, which
  * already owns it for `document-input --onboard`; the knowledge module is left
  * alone, so its own writes stay confined to `documentkb/`.
  *
  * Only a path inside the project is copied. A path outside it, a symlink that
- * leaves it, and a path already under `documents/` all reach the verb
- * unchanged: the first two are refused there as before, and the last is
- * indexed where it lies. The returned args carry the copy's path and what to
- * say about it. A document over the per-document cap, or a folder over a batch
- * cap, is refused here instead: the refusal is said and nothing is copied, so
- * the verb's own after-the-fact refusal no longer leaves copies behind.
+ * leaves it, a path that does not exist and a path already under `documents/`
+ * all reach the verb unchanged: the verb refuses the first three, or names
+ * them when several were named, and indexes the last where it lies. A document
+ * over the per-document cap, or a folder over a batch cap, is refused here
+ * instead, before anything is copied. With several paths, one that cannot be
+ * copied is left out with why and the rest go in; together over a batch cap,
+ * nothing is copied. `--copied` tells the verb what was copied and left out.
  */
-// The knowledge verbs' flags that take a value, so the path is found as the
-// one token that is neither a flag nor a flag's value.
+// The knowledge verbs' flags that take a value, so the paths are found as the
+// tokens that are neither a flag nor a flag's value.
 const KNOWLEDGE_VALUE_FLAGS = new Set([
-  "--space", "--to", "--text-file", "--source-revision", "--project-dir",
-  "--copied-from", "--copied-ignored", "--copied-left-out",
+  "--space", "--to", "--text-file", "--source-revision", "--project-dir", "--copied",
 ]);
 
-function knowledgePositionalAt(args: readonly string[]): number {
+function knowledgePositionals(args: readonly string[]): number[] {
+  const found: number[] = [];
   for (let index = 1; index < args.length; index++) {
     const token = args[index];
     if (token.startsWith("--")) continue;
     if (KNOWLEDGE_VALUE_FLAGS.has(args[index - 1])) continue;
     // `--intent` takes an optional value: a token after it is that value.
     if (args[index - 1] === "--intent") continue;
-    return index;
+    found.push(index);
   }
-  return -1;
+  return found;
 }
 
 async function withNamedDocumentCopied(args: string[]): Promise<string[] | { refusal: string }> {
   if (args[0] !== "onboard") return args;
-  const at = knowledgePositionalAt(args);
+  const positions = knowledgePositionals(args);
   try {
     const kb = await import("./aidlc-knowledge.ts");
     const utility = await import("./aidlc-utility.ts");
@@ -3406,28 +3413,67 @@ async function withNamedDocumentCopied(args: string[]): Promise<string[] | { ref
     // The folder the verb reads from is the person's to fill, and an empty one
     // is not a refusal: a sweep of it simply finds nothing to add.
     utility.ensureKnowledgeDocumentsFolder(projectDir, kb, space);
-    if (at === -1) return args;
-    const given = args[at];
-    const absolute = isAbsolute(given) ? given : resolve(projectDir, given);
-    if (!existsSync(absolute)) return args;
-    const real = realpathSync(absolute);
-    const inside = (root: string): boolean =>
-      real === root || real.startsWith(root.endsWith(sep) ? root : `${root}${sep}`);
-    if (!inside(realpathSync(projectDir))) return args;
+    const projectReal = realpathSync(projectDir);
     const documents = kb.documentsDir(projectDir, space);
-    if (existsSync(documents) && inside(realpathSync(documents))) return args;
-    const copied = utility.copyNamedDocumentIntoKnowledge(projectDir, kb, space, absolute);
-    // Over a cap: the person hears why in their own terms, and nothing was
-    // copied, so a retry adds no second folder.
-    if ("refusal" in copied) return copied;
+    const documentsReal = existsSync(documents) ? realpathSync(documents) : undefined;
+    const inside = (root: string, real: string): boolean =>
+      real === root || real.startsWith(root.endsWith(sep) ? root : `${root}${sep}`);
+    const named = positions.map((at, place) => {
+      const given = args[at];
+      const absolute = isAbsolute(given) ? given : resolve(projectDir, given);
+      if (!existsSync(absolute)) return { at, place, given, absolute, route: "verb" as const };
+      const real = realpathSync(absolute);
+      if (!inside(projectReal, real)) return { at, place, given, absolute, route: "verb" as const };
+      if (documentsReal !== undefined && inside(documentsReal, real)) {
+        return { at, place, given, absolute, route: "in-place" as const };
+      }
+      return { at, place, given, absolute, route: "copy" as const };
+    });
+    const toCopy = named.filter((entry) => entry.route === "copy");
+    if (toCopy.length === 0) return args;
+    if (positions.length === 1) {
+      const [one] = toCopy;
+      const copied = utility.copyNamedDocumentIntoKnowledge(projectDir, kb, space, one.absolute);
+      // Over a cap: the person hears why in their own terms, and nothing was
+      // copied, so a retry adds no second folder.
+      if ("refusal" in copied) return copied;
+      const next = [...args];
+      next[one.at] = copied.target;
+      const copies = [{ from: one.given, to: copied.target, ignored: copied.gitIgnored, leftOut: copied.leftOut,
+        ...(copied.original === undefined ? {} : { original: copied.original }),
+        ...(copied.updated === true ? { updated: true } : {}),
+        ...(copied.besideChanged === undefined ? {} : { besideChanged: copied.besideChanged }) }];
+      return [...next, "--copied", JSON.stringify({ copies })];
+    }
+    const planned = utility.copyNamedDocumentsIntoKnowledge(
+      projectDir, kb, space,
+      toCopy.map((entry) => entry.absolute),
+      named.filter((entry) => entry.route === "in-place").map((entry) => entry.absolute),
+      positions.length,
+    );
+    if ("refusal" in planned) return planned;
     const next = [...args];
-    next[at] = copied.target;
-    return [
-      ...next,
-      "--copied-from", given,
-      "--copied-ignored", copied.gitIgnored,
-      ...(copied.leftOut > 0 ? ["--copied-left-out", String(copied.leftOut)] : []),
-    ];
+    const copies: Array<{
+      from: string; to: string; ignored: string; leftOut: number; original?: string; updated?: boolean;
+      besideChanged?: string;
+    }> = [];
+    const notAdded: Array<{ at: number; path: string; reason: string }> = [];
+    toCopy.forEach((entry, index) => {
+      const outcome = planned.outcomes[index];
+      if ("reason" in outcome) {
+        notAdded.push({ at: entry.place, path: entry.given, reason: outcome.reason });
+        return;
+      }
+      next[entry.at] = outcome.target;
+      if (copies.some((copy) => copy.to === outcome.target)) return;
+      copies.push({
+        from: entry.given, to: outcome.target, ignored: outcome.gitIgnored, leftOut: outcome.leftOut,
+        ...(outcome.original === undefined ? {} : { original: outcome.original }),
+        ...(outcome.updated === true ? { updated: true } : {}),
+        ...(outcome.besideChanged === undefined ? {} : { besideChanged: outcome.besideChanged }),
+      });
+    });
+    return [...next, "--copied", JSON.stringify({ copies, notAdded })];
   } catch {
     // Nothing copied and nothing said: the verb runs on what it was given and
     // reports its own refusal.
@@ -4131,6 +4177,31 @@ function renderPublicGrammarFailure(
   return code;
 }
 
+// A command that needs a project, run from a folder inside the person's
+// workspace that is not a project itself (a code repo cloned beside `aidlc/`,
+// a plain subfolder), acts on that workspace, as from its root, so AI-DLC's
+// records never land in the person's repo. Pinned once, before anything reads
+// the project, so the checks, the pin, the harness and the tool all agree; the
+// working folder is not changed. Left as they are: a project the person or
+// the host names, hooks, the statusline and adapters (the host runs them for
+// its own project), a dispatcher whose own path names its project (the copy
+// channel), and a workspace that holds AI-DLC's own machine folders.
+async function pinEnclosingProject(route: Route, argv: readonly string[]): Promise<void> {
+  if (route.projectRequirement !== "required") return;
+  if (route.routeOnly === "hook" || route.routeOnly === "statusline" || route.routeOnly === "adapter") return;
+  if (projectDirFlag(argv.slice(0, ourFlagLimit([...argv]))).value) return;
+  if (
+    process.env.AIDLC_PROJECT_DIR || process.env.CLAUDE_PROJECT_DIR || process.env.KIRO_PROJECT_DIR ||
+    process.env.AIDLC_RUNTIME_PROJECT_DIR
+  ) return;
+  if (moduleProjectDir() !== null) return;
+  const enclosing = enclosingProjectDir(process.cwd());
+  if (enclosing === null) return;
+  const { projectPathOverlapsMachineRoots } = await import("./aidlc-install-paths.ts");
+  if (projectPathOverlapsMachineRoots(enclosing)) return;
+  process.env.AIDLC_PROJECT_DIR = enclosing;
+}
+
 function projectPolicyError(route: Route, argv: readonly string[]): string | null {
   if (route.projectRequirement !== "required") return null;
   const projectDir = dispatcherProjectDirFrom(argv);
@@ -4425,6 +4496,7 @@ export async function main(rawArgv: string[]): Promise<void> {
     return;
   }
   const route = routePolicyFor(argv);
+  if (route) await pinEnclosingProject(route, argv);
   if (route) {
     const error = basicPolicyError(route, argv);
     if (error) {

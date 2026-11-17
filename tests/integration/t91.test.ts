@@ -18,12 +18,14 @@
 //   3. Audit-existence guard before the heartbeat write.
 //   4. Heartbeat at aidlc-docs/.aidlc-engine/hooks-health/runtime-compile.last (only
 //      written once the command filter passes).
-//   5. Tail-read the LAST 3 audit blocks (split on /\n---\n/); if any carries
-//      `**Event**: (GATE_APPROVED|STAGE_STARTED|STAGE_AWAITING_APPROVAL|
-//      AUDIT_MERGED|WORKFLOW_COMPLETED)` -> dispatch
-//      `bun run <projectDir>/.claude/tools/aidlc-runtime.ts compile` (which
-//      writes aidlc-docs/runtime-graph.json). MEMORY_EMPTY is deliberately NOT
-//      in the regex (recursion guard at the event level).
+//   5. Tail-read the LAST 3 blocks of this clone's own audit shard (split on
+//      /\n---\n/); if any carries `**Event**: (GATE_APPROVED|STAGE_STARTED|
+//      STAGE_AWAITING_APPROVAL|AUDIT_MERGED|UNIT_MERGED|WORKFLOW_COMPLETED)`, or
+//      the record has no runtime-graph.json yet and any shard carries one, or
+//      another clone's shard newer than runtime-graph.json carries one ->
+//      dispatch `bun run <projectDir>/.claude/tools/aidlc-runtime.ts compile`
+//      (which writes the record's runtime-graph.json). MEMORY_EMPTY is
+//      deliberately NOT in the regex (recursion guard at the event level).
 //   (The old step 6, test-run propagation to the spawned compile, was removed
 //      per #369 when the test-run mechanism was removed.)
 //
@@ -82,14 +84,17 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  statSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import {
   cleanupTestProject,
   createTestProject,
   DEFAULT_RECORD_DIR,
   seededAuditDir,
+  seededAuditShard,
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
@@ -157,6 +162,10 @@ function makeProject(): string {
   copyFileSync(
     join(SRC_TOOLS, "aidlc-unit-dag.ts"),
     join(proj, ".claude", "tools", "aidlc-unit-dag.ts"),
+  );
+  copyFileSync(
+    join(SRC_TOOLS, "aidlc-subagent-inflight.ts"),
+    join(proj, ".claude", "tools", "aidlc-subagent-inflight.ts"),
   );
   copyFileSync(
     join(SRC_TOOLS, "aidlc-git.ts"),
@@ -272,22 +281,24 @@ function makeProject(): string {
     join(proj, ".claude", "hooks", "aidlc-rebuild-stage-graph.ts"),
   );
   // P9: write the minimal state into the default record so the active-intent
-  // cursor resolves → the hook reads the record's audit shards (readAllAuditShards)
-  // and writes runtime-graph.json under the record (runtimeGraphPath).
+  // cursor resolves → the hook reads this clone's shard of the record and
+  // writes runtime-graph.json under the record (runtimeGraphPath).
   mkdirSync(seededRecordDir(proj), { recursive: true });
   writeFileSync(seededStateFile(proj), "- **Scope**: feature", "utf-8");
   // Pre-create the record's audit/ DIR so the tests can write the AUDIT_*
-  // fixture directly into a shard (auditPath → <record>/audit/fixture.md).
+  // fixture directly into this clone's shard (auditPath).
   mkdirSync(seededAuditDir(proj), { recursive: true });
   return proj;
 }
 
 const hookPath = (proj: string): string =>
   join(proj, ".claude", "hooks", "aidlc-rebuild-stage-graph.ts");
-// The hook reads the audit via the per-clone shard GLOB; writing the AUDIT_*
-// fixtures into one shard under the record's audit/ DIR is what the hook merges.
-const auditPath = (proj: string): string =>
-  join(seededAuditDir(proj), "fixture.md");
+// The rows a command writes land in this clone's own shard (the pinned clone
+// id names it), which is the shard whose tail the hook reads.
+const auditPath = (proj: string): string => seededAuditShard(proj);
+// Another clone's shard, named to sort after this clone's.
+const teammatePath = (proj: string): string =>
+  join(seededAuditDir(proj), "zz-teammate-0000aaaa.md");
 const graphPath = (proj: string): string =>
   join(seededRecordDir(proj), "runtime-graph.json");
 const heartbeatPath = (proj: string): string =>
@@ -551,7 +562,7 @@ describe("t91 aidlc-rebuild-stage-graph hook (migrated from t91-runtime-compile-
     const payloadAuditDir = join(payloadIntent.recordDir, "audit");
     mkdirSync(payloadAuditDir, { recursive: true });
     writeFileSync(
-      join(payloadAuditDir, "fixture.md"),
+      join(payloadAuditDir, basename(seededAuditShard(p))),
       AUDIT_GATE_APPROVED,
       "utf-8",
     );
@@ -671,4 +682,74 @@ describe("t91 aidlc-rebuild-stage-graph hook (migrated from t91-runtime-compile-
 
   // Case 8 / test 13 (Test-Run propagation -> MEMORY_EMPTY row carries
   // Test-Run: true) was dropped per #369 when the test-run mechanism was removed.
+
+  // --- Team clones: another clone's shard beside this clone's -------------
+  const approve = payload("bun .claude/tools/aidlc-state.ts approve --stage intent-capture");
+  const status = payload("aidlc status");
+  // A file written an hour ago: a graph compiled before a pull, or a shard
+  // pulled before the last compile.
+  const anHourAgo = (path: string) => {
+    const then = new Date(Date.now() - 60 * 60 * 1000);
+    utimesSync(path, then, then);
+  };
+
+  // A graph is already there, so only this clone's own tail can recompile it.
+  test("13: another clone's shard sorting after this clone's does not hide this clone's approval", () => {
+    const p = makeProject();
+    writeFileSync(graphPath(p), "{\"kept\":true}\n", "utf-8");
+    writeFileSync(auditPath(p), AUDIT_GATE_APPROVED, "utf-8");
+    writeFileSync(teammatePath(p), AUDIT_NO_TRANSITION, "utf-8");
+    const r = runHook(p, approve);
+    expect(r.status, r.out).toBe(0);
+    expect(readFileSync(graphPath(p), "utf-8")).not.toBe("{\"kept\":true}\n");
+  });
+
+  test("14: a teammate's transition pulled after the last compile recompiles the graph once; the next status call does not", () => {
+    const p = makeProject();
+    writeFileSync(graphPath(p), "{\"kept\":true}\n", "utf-8");
+    anHourAgo(graphPath(p));
+    writeFileSync(auditPath(p), AUDIT_NO_TRANSITION, "utf-8");
+    anHourAgo(auditPath(p));
+    writeFileSync(teammatePath(p), AUDIT_GATE_APPROVED, "utf-8");
+    const first = runHook(p, status);
+    expect(first.status, first.out).toBe(0);
+    const compiled = readFileSync(graphPath(p), "utf-8");
+    expect(compiled).not.toBe("{\"kept\":true}\n");
+    // The compile's own write makes the graph the newer file: no second compile.
+    const compiledAt = statSync(graphPath(p)).mtimeMs;
+    const second = runHook(p, status);
+    expect(second.status, second.out).toBe(0);
+    expect(statSync(graphPath(p)).mtimeMs).toBe(compiledAt);
+    expect(readFileSync(graphPath(p), "utf-8")).toBe(compiled);
+  });
+
+  test("14b: another clone's shard unchanged since the last compile does not make a status command recompile", () => {
+    const p = makeProject();
+    writeFileSync(auditPath(p), AUDIT_NO_TRANSITION, "utf-8");
+    writeFileSync(teammatePath(p), AUDIT_GATE_APPROVED, "utf-8");
+    anHourAgo(teammatePath(p));
+    writeFileSync(graphPath(p), "{\"kept\":true}\n", "utf-8");
+    const r = runHook(p, status);
+    expect(r.status, r.out).toBe(0);
+    expect(readFileSync(graphPath(p), "utf-8")).toBe("{\"kept\":true}\n");
+  });
+
+  test("15: a clone with no graph yet builds it from the record's transitions on its first status call", () => {
+    const p = makeProject();
+    writeFileSync(teammatePath(p), AUDIT_GATE_APPROVED + AUDIT_NO_TRANSITION, "utf-8");
+    const r = runHook(p, status);
+    expect(r.status, r.out).toBe(0);
+    expect(existsSync(graphPath(p))).toBe(true);
+  });
+
+  test("16: a clone id with no shard of its own in the record reads as no transition", () => {
+    const p = makeProject();
+    writeFileSync(teammatePath(p), AUDIT_GATE_APPROVED, "utf-8");
+    anHourAgo(teammatePath(p));
+    writeFileSync(graphPath(p), "{\"kept\":true}\n", "utf-8");
+    const r = runHook(p, approve);
+    expect(r.status, r.out).toBe(0);
+    expect(existsSync(auditPath(p))).toBe(false);
+    expect(readFileSync(graphPath(p), "utf-8")).toBe("{\"kept\":true}\n");
+  });
 });

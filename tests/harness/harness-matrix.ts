@@ -2,6 +2,7 @@ import { existsSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { HarnessManifest } from "../../scripts/manifest-types.ts";
+import { CONDUCTOR_SKILL_FILES } from "./conductor-skill.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const HARNESS_ROOT = join(REPO_ROOT, "harness");
@@ -307,6 +308,13 @@ function validateManifest(
       manifest.harnessFiles.some((file) => file.dst === "rules/aidlc.mdc")
   ) {
     fail(name, "memoryInclude does not agree with manifest-owned include surfaces");
+  }
+  const skillFiles = (CONDUCTOR_SKILL_FILES as Record<string, readonly string[] | undefined>)[name];
+  if (skillFiles?.[0] !== "SKILL.md") fail(name, "CONDUCTOR_SKILL_FILES has no entry starting with SKILL.md");
+  for (const file of skillFiles.slice(1)) {
+    if (!manifest.harnessFiles.some((entry) => entry.dst === `skills/aidlc/${file}`)) {
+      fail(name, `CONDUCTOR_SKILL_FILES names ${file}, which the manifest does not ship`);
+    }
   }
   if (manifestGrantsIdeAgentTools(manifest) !== capabilities.ideAgentTools) {
     fail(name, "ideAgentTools does not agree with manifest agent tools grants");

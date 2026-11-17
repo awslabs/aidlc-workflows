@@ -2,8 +2,9 @@
 // aidlc-cursor-adapter.ts — the Cursor hook shim (AUTHORED shell file; the
 // aidlc-*.ts hook bodies beside it are PACKAGED core, byte-shared with the
 // Claude Code harness). Modeled on codex's aidlc-codex-adapter.ts: ONE shim
-// normalizes the Cursor payload to the ClaudeCodeHookInput shape and
-// subprocess-pipes into the named core hook.
+// normalizes the Cursor payload to the ClaudeCodeHookInput shape and hands it
+// to the named core hook: the guards run inside this process, the rest as a
+// subprocess.
 //
 // Cursor payloads (live corpus, cursor-agent 2026.07.23 on Linux; the IDE
 // shares the hooks.json surface) are near-isomorphic to Claude Code's with
@@ -63,10 +64,11 @@ import {
   enterHookWorkflow,
   promptMovesSelection,
   recordHookDrop,
+  runHookHere,
   takeSessionSelectionNotice,
 } from "../tools/aidlc-lib.ts";
-import { aidlcInvocation, knownActiveSpace } from "../tools/aidlc-runtime-paths.ts";
-import { TRUSTED_ROUTE_NAMESPACE } from "../tools/aidlc-command.ts";
+import { settleClaudeTurnsFirst } from "../tools/aidlc-claude-turn-pending.ts";
+import { aidlcDispatcherInvocation, aidlcInvocation, knownActiveSpace } from "../tools/aidlc-runtime-paths.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -135,12 +137,14 @@ export async function run(
     ? projectDirRaw
     : resolve(process.cwd(), projectDirRaw);
   const sessionId = cursor.session_id ?? cursor.conversation_id;
-  const projectEnv = {
-    ...process.env,
+  // What a core hook is given on top of this process's environment, as a child
+  // or (runGuard) while it runs here.
+  const projectPins = {
     AIDLC_PROJECT_DIR: projectDir,
     CLAUDE_PROJECT_DIR: projectDir,
     CURSOR_PROJECT_DIR: projectDir,
   };
+  const projectEnv = { ...process.env, ...projectPins };
 
   // --- Core-hook subprocess plumbing ------------------------------------------
 
@@ -230,7 +234,8 @@ export async function run(
   // are possible) rather than silently disabling reviewer enforcement. Each
   // attributed call refreshes the record mtimes so a long-running reviewer
   // never silently outlives the freshness window. The store lives in the
-  // project runtime tree, and delegated tools cannot access it. A second,
+  // project runtime tree, and a delegated tool cannot name it or write over it
+  // by a path its command names (touchesProtectedReviewerState). A second,
   // separately stored witness survives loss of the primary ledger so unknown
   // conversations still fail closed for every delegated role.
   const LEDGER_TTL_MS = 30 * 60 * 1000;
@@ -779,42 +784,6 @@ export async function run(
     return { words, ambiguous: quote !== null };
   }
 
-  // What the host's shell reads as its own in a command: everything outside
-  // quotes, and the "$" and backtick it still expands inside double quotes.
-  // Each shell's quoting is read its own way (shellWords keeps one quote state
-  // for both, and ends a double-quoted word at \" where a POSIX shell goes on):
-  // a POSIX shell escapes with a backslash; PowerShell escapes with a backtick,
-  // keeps a doubled quote inside the word and reads typographic quotes as
-  // quotes. Null when a quote is left open.
-  function shellActiveText(command: string, flavor: PathFlavor): string | null {
-    const singles = flavor === "win32" ? "'\u2018\u2019\u201a\u201b" : "'";
-    const doubles = flavor === "win32" ? '"\u201c\u201d\u201e' : '"';
-    const escapeChar = flavor === "win32" ? "`" : "\\";
-    let active = "";
-    let quote = "";
-    for (let i = 0; i < command.length; i++) {
-      const ch = command[i];
-      if (quote === "") {
-        if (singles.includes(ch)) quote = singles;
-        else if (doubles.includes(ch)) quote = doubles;
-        else {
-          active += ch;
-          if (ch === escapeChar) active += command[++i] ?? "";
-        }
-        continue;
-      }
-      if (quote.includes(ch)) {
-        const next = command[i + 1];
-        if (flavor === "win32" && next !== undefined && quote.includes(next)) i++;
-        else quote = "";
-      } else if (quote === doubles) {
-        if (ch === "$" || ch === "`") active += ch;
-        if (ch === escapeChar) i++;
-      }
-    }
-    return quote === "" ? active : null;
-  }
-
   interface ShellCommandPart {
     text: string;
     operatorAfter: "" | ";" | "\n" | "&&" | "||" | "|" | "&";
@@ -856,26 +825,16 @@ export async function run(
     return segments;
   }
 
-  function shellCommandSegments(command: string): string[] {
-    return shellCommandParts(command).map((part) => part.text);
-  }
-
   interface ReviewFreezeCommandModule {
-    shellCommandAltersExecutableResolution?: (command: string) => boolean;
     shellCommandInvocationDetails?: (
       command: string,
-    ) => Array<{
-      name: string;
-      args: string[];
-      ambiguous?: boolean;
-      executable?: string;
-      launchers?: string[];
-      dataDrivenMutation?: boolean;
-      executableResolutionChanged?: boolean;
-    }>;
-    shellCommandInvocations?: (
+    ) => Array<{ name: string; args: string[] }>;
+    shellWriteTargets?: (
       command: string,
-    ) => Array<{ name: string; args: string[]; ambiguous?: boolean }>;
+      cwd?: string,
+      rawWords?: string[],
+      shell?: "posix" | "powershell",
+    ) => string[];
     writeTargets?: (
       toolName: string,
       toolInput: Record<string, unknown> | undefined,
@@ -1468,1165 +1427,27 @@ export async function run(
     return values;
   }
 
-  function shellUsesDynamicExpansion(command: string): boolean {
-    let quote: "'" | '"' | null = null;
-    let escaped = false;
-    for (let i = 0; i < command.length; i++) {
-      const ch = command[i];
-      if (escaped) {
-        escaped = false;
-        continue;
-      }
-      if (ch === "\\" && quote !== "'") {
-        escaped = true;
-        continue;
-      }
-      if (quote === "'") {
-        if (ch === "'") quote = null;
-        continue;
-      }
-      if (quote === '"') {
-        if (ch === '"') {
-          quote = null;
-          continue;
-        }
-        if (ch === "`") return true;
-        if (ch === "$") {
-          const next = command[i + 1] ?? "";
-          if (/[\w@*#?$!{('"_-]/.test(next)) return true;
-        }
-        if (ch === "%" && /%[^%\r\n]+%/.test(command.slice(i))) return true;
-        if (ch === "!" && /![^!\r\n]+!/.test(command.slice(i))) return true;
-        continue;
-      }
-      if (ch === "'") {
-        quote = "'";
-        continue;
-      }
-      if (ch === '"') {
-        quote = '"';
-        continue;
-      }
-      if (ch === "`") return true;
-      if (ch === "^") return true;
-      if (ch === "%" && /%[^%\r\n]+%/.test(command.slice(i))) return true;
-      if (ch === "!" && /![^!\r\n]+!/.test(command.slice(i))) return true;
-      if (ch === "$") {
-        const next = command[i + 1] ?? "";
-        if (/[\w@*#?$!{('"_-]/.test(next)) return true;
-      }
-    }
-    return false;
-  }
-
-  function shellUsesDirectHostExpression(command: string): boolean {
-    let quote: "'" | '"' | null = null;
-    let escaped = false;
-    let outside = "";
-    for (const ch of command) {
-      if (escaped) {
-        escaped = false;
-        continue;
-      }
-      if (ch === "`") {
-        escaped = true;
-        continue;
-      }
-      if (quote !== null) {
-        if (ch === quote) quote = null;
-        continue;
-      }
-      if (ch === "'" || ch === '"') {
-        quote = ch;
-        continue;
-      }
-      outside += ch;
-    }
-    return (
-      /(?:^|[\s(])\+(?=[\s)]|$)/.test(outside) ||
-      /(?:^|[\s(])&(?=[\s(]|$)/.test(outside) ||
-      /(?:^|\s)-(?:join|replace|split)\b/i.test(outside) ||
-      /\(\s*[A-Za-z]+-[A-Za-z]+/i.test(outside)
-    );
-  }
-
-  function shellUsesConstructedHostInvocation(command: string): boolean {
-    return /(?:^|[;\s])&\s*\(/.test(command);
-  }
-
-  function gitUsesIndirectShellAlias(
-    args: readonly string[],
-    command: string,
-  ): boolean {
-    if (args.some((arg) => /^alias\.[^=]+=!/i.test(arg))) return true;
-    const configIndex = args.indexOf("config");
-    if (configIndex !== -1) {
-      const aliasIndex = args.findIndex(
-        (arg, index) => index > configIndex && /^alias\.[^.=\s]+$/i.test(arg),
-      );
-      if (
-        aliasIndex !== -1 &&
-        args.slice(aliasIndex + 1).some((arg) => !arg.startsWith("-"))
-      ) {
-        return true;
-      }
-    }
-    for (let i = 0; i < args.length; i++) {
-      const arg = args[i];
-      const configEnv =
-        arg === "--config-env" ? args[i + 1] ?? "" : arg.replace(/^--config-env=/, "");
-      if (
-        configEnv !== arg &&
-        /^(?:alias\.[^=]+|include(?:If\.[^=]+)?\.path)=/i.test(configEnv)
-      ) {
-        return true;
-      }
-      if (
-        arg === "-c" &&
-        /^(?:alias\.[^=]+|include(?:If\.[^=]+)?\.path)=/i.test(args[i + 1] ?? "")
-      ) {
-        return true;
-      }
-    }
-    if (/\bGIT_CONFIG_(?:GLOBAL|SYSTEM|PARAMETERS)=/i.test(command)) return true;
-    return /\bGIT_CONFIG_KEY_\d+=alias\./i.test(command);
-  }
-
-  function gitInvocation(
-    args: readonly string[],
-  ): { subcommand: string; subcommandIndex: number; prefix: string[] } {
-    const valueOptions = new Set([
-      "-C",
-      "-c",
-      "--config-env",
-      "--exec-path",
-      "--git-dir",
-      "--namespace",
-      "--super-prefix",
-      "--work-tree",
-    ]);
-    for (let i = 0; i < args.length; i++) {
-      const arg = args[i];
-      if (arg === "--") {
-        return {
-          subcommand: args[i + 1] ?? "",
-          subcommandIndex: i + 1,
-          prefix: [...args.slice(0, i + 1)],
-        };
-      }
-      if (valueOptions.has(arg)) {
-        i++;
-        continue;
-      }
-      if (arg.startsWith("-")) continue;
-      return { subcommand: arg, subcommandIndex: i, prefix: [...args.slice(0, i)] };
-    }
-    return { subcommand: "", subcommandIndex: -1, prefix: [...args] };
-  }
-
-  interface GitCommandContext {
-    cwd: string;
-    env: Record<string, string | undefined>;
-    ambiguous: boolean;
-  }
-
-  function shellExecutableName(value: string): string {
-    return win32.basename(posix.basename(value))
-      .replace(/\.(?:exe|com|cmd|bat)$/i, "")
-      .toLowerCase();
-  }
-
-  function isGitInspectionEnvironmentName(name: string): boolean {
-    const candidate = process.platform === "win32" ? name.toUpperCase() : name;
-    return /^(?:HOME|XDG_CONFIG_HOME|USERPROFILE|HOMEDRIVE|HOMEPATH|PAGER|GIT_(?:DIR|WORK_TREE|COMMON_DIR|INDEX_FILE|NAMESPACE|EXEC_PATH|PAGER)|GIT_CONFIG(?:_GLOBAL|_SYSTEM|_NOSYSTEM|_PARAMETERS|_COUNT|_KEY_\d+|_VALUE_\d+)?)$/.test(
-      candidate,
-    );
-  }
-
-  function deleteEnvironmentName(
-    env: Record<string, string | undefined>,
-    name: string,
-  ): void {
-    const candidate = process.platform === "win32" ? name.toUpperCase() : name;
-    for (const key of Object.keys(env)) {
-      const existing = process.platform === "win32" ? key.toUpperCase() : key;
-      if (existing === candidate) delete env[key];
-    }
-  }
-
-  function environmentValue(
-    env: Record<string, string | undefined>,
-    name: string,
-  ): string | undefined {
-    const candidate = process.platform === "win32" ? name.toUpperCase() : name;
-    for (const [key, value] of Object.entries(env)) {
-      const existing = process.platform === "win32" ? key.toUpperCase() : key;
-      if (existing === candidate) return value;
-    }
-    return undefined;
-  }
-
-  function gitCommandEnvironment(
-    command: string,
-    initialCwd = projectDir,
-  ): GitCommandContext {
-    const env: Record<string, string | undefined> = { ...projectEnv };
-    const commandEnv: Record<string, string | undefined> = { ...projectEnv };
-    let invocationCwd = initialCwd;
-    const flavor: PathFlavor = process.platform === "win32" ? "win32" : "posix";
-    for (const segment of shellCommandSegments(command)) {
-      const parsed = shellWords(segment);
-      if (parsed.ambiguous) continue;
-      let values = parsed.words
-        .map((word) => word.variants.find((variant) => variant.flavor === flavor)?.value)
-        .filter((value): value is string => value !== undefined);
-      let index = 0;
-      const collectAssignments = () => {
-        for (; index < values.length; index++) {
-          const match = values[index].match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
-          if (!match) break;
-          deleteEnvironmentName(commandEnv, match[1]);
-          commandEnv[match[1]] = match[2];
-          if (isGitInspectionEnvironmentName(match[1])) {
-            deleteEnvironmentName(env, match[1]);
-            env[match[1]] = match[2];
-          }
-        }
-      };
-      const consumeWrapperOptions = (
-        spec: {
-          shortValues?: readonly string[];
-          longValues?: readonly string[];
-          shortOptionalValues?: readonly string[];
-          longOptionalValues?: readonly string[];
-          shortFlags?: readonly string[];
-          longFlags?: readonly string[];
-          numericShortValue?: boolean;
-        },
-      ) => {
-        const shortValues = new Set(spec.shortValues ?? []);
-        const longValues = new Set(spec.longValues ?? []);
-        const shortOptionalValues = new Set(spec.shortOptionalValues ?? []);
-        const longOptionalValues = new Set(spec.longOptionalValues ?? []);
-        const shortFlags = new Set(spec.shortFlags ?? []);
-        const longFlags = new Set(spec.longFlags ?? []);
-        while (index < values.length) {
-          const option = values[index];
-          if (option === "--") {
-            index++;
-            return false;
-          }
-          if (option === "-" || !option.startsWith("-")) return false;
-          if (option.startsWith("--")) {
-            const equals = option.indexOf("=");
-            const name = equals === -1 ? option : option.slice(0, equals);
-            if (longValues.has(name)) {
-              if (equals !== -1) {
-                index++;
-              } else if (values[index + 1] !== undefined) {
-                index += 2;
-              } else {
-                return true;
-              }
-              continue;
-            }
-            if (longOptionalValues.has(name) || longFlags.has(name)) {
-              index++;
-              continue;
-            }
-            return true;
-          }
-          if (spec.numericShortValue && /^-\d+$/.test(option)) {
-            index++;
-            continue;
-          }
-          const name = option.slice(0, 2);
-          if (shortValues.has(name)) {
-            if (option.length > 2) {
-              index++;
-            } else if (values[index + 1] !== undefined) {
-              index += 2;
-            } else {
-              return true;
-            }
-            continue;
-          }
-          if (shortOptionalValues.has(name)) {
-            index++;
-            continue;
-          }
-          if (
-            option.length > 1 &&
-            [...option.slice(1)].every((flag) => shortFlags.has(`-${flag}`))
-          ) {
-            index++;
-            continue;
-          }
-          return true;
-        }
-        return false;
-      };
-      const simpleWrappers: Record<
-        string,
-        Parameters<typeof consumeWrapperOptions>[0]
-      > = {
-        exec: { shortValues: ["-a"], shortFlags: ["-c", "-l"] },
-        nohup: { longFlags: ["--help", "--version"] },
-        nice: {
-          shortValues: ["-n"],
-          longValues: ["--adjustment"],
-          longFlags: ["--help", "--version"],
-          numericShortValue: true,
-        },
-        ionice: {
-          shortValues: ["-c", "-n", "-p", "-P", "-u"],
-          longValues: ["--class", "--classdata", "--pid", "--pgid", "--uid"],
-          shortFlags: ["-t"],
-          longFlags: ["--ignore", "--help", "--version"],
-        },
-        stdbuf: {
-          shortValues: ["-i", "-o", "-e"],
-          longValues: ["--input", "--output", "--error"],
-          longFlags: ["--help", "--version"],
-        },
-        setsid: {
-          shortFlags: ["-c", "-f", "-w"],
-          longFlags: ["--ctty", "--fork", "--wait", "--help", "--version"],
-        },
-        sudo: {
-          shortValues: ["-C", "-D", "-g", "-h", "-p", "-r", "-t", "-T", "-u"],
-          longValues: [
-            "--chdir",
-            "--close-from",
-            "--group",
-            "--host",
-            "--prompt",
-            "--role",
-            "--type",
-            "--user",
-          ],
-          shortOptionalValues: ["-E"],
-          longOptionalValues: ["--preserve-env"],
-          shortFlags: ["-A", "-b", "-e", "-H", "-K", "-k", "-l", "-n", "-P", "-S", "-s", "-V", "-v"],
-          longFlags: [
-            "--askpass",
-            "--background",
-            "--edit",
-            "--help",
-            "--login",
-            "--non-interactive",
-            "--remove-timestamp",
-            "--reset-timestamp",
-            "--set-home",
-            "--shell",
-            "--stdin",
-            "--validate",
-            "--version",
-          ],
-        },
-        doas: {
-          shortValues: ["-C", "-u"],
-          shortFlags: ["-L", "-n", "-s"],
-        },
-        xargs: {
-          shortValues: ["-a", "-d", "-E", "-I", "-J", "-L", "-n", "-P", "-s"],
-          longValues: [
-            "--arg-file",
-            "--delimiter",
-            "--max-args",
-            "--max-procs",
-            "--max-chars",
-            "--process-slot-var",
-          ],
-          shortOptionalValues: ["-e", "-i", "-l"],
-          longOptionalValues: ["--eof", "--replace", "--max-lines"],
-          shortFlags: ["-0", "-o", "-p", "-r", "-t", "-x"],
-          longFlags: [
-            "--null",
-            "--open-tty",
-            "--interactive",
-            "--no-run-if-empty",
-            "--show-limits",
-            "--verbose",
-            "--exit",
-            "--help",
-            "--version",
-          ],
-        },
-        time: {
-          shortValues: ["-f", "-o"],
-          longValues: ["--format", "--output"],
-          shortFlags: ["-a", "-p", "-v"],
-          longFlags: ["--append", "--portability", "--verbose", "--help", "--version"],
-        },
-        unbuffer: { shortFlags: ["-p"] },
-      };
-      while (index < values.length) {
-        collectAssignments();
-        const wrapper = shellExecutableName(values[index] ?? "");
-        if (wrapper === "command") {
-          index++;
-          while (index < values.length && values[index].startsWith("-")) {
-            const option = values[index++];
-            if (option === "--") break;
-            if (option.includes("v") || option.includes("V")) {
-              return { cwd: invocationCwd, env, ambiguous: false };
-            }
-            if (![...option.slice(1)].every((flag) => flag === "p")) {
-              return { cwd: invocationCwd, env, ambiguous: true };
-            }
-          }
-          continue;
-        }
-        if (wrapper === "env") {
-          index++;
-          while (index < values.length) {
-            const option = values[index];
-            if (option === "--") {
-              index++;
-              break;
-            }
-            if (["-u", "--unset"].includes(option)) {
-              const name = values[index + 1] ?? "";
-              deleteEnvironmentName(commandEnv, name);
-              if (isGitInspectionEnvironmentName(name)) deleteEnvironmentName(env, name);
-              index += 2;
-              continue;
-            }
-            if (["-C", "--chdir"].includes(option)) {
-              const directory = values[index + 1];
-              if (!directory) return { cwd: invocationCwd, env, ambiguous: true };
-              invocationCwd = isAbsolute(directory)
-                ? directory
-                : resolve(invocationCwd, directory);
-              index += 2;
-              continue;
-            }
-            if (["-a", "--argv0"].includes(option)) {
-              if (!values[index + 1]) {
-                return { cwd: invocationCwd, env, ambiguous: true };
-              }
-              index += 2;
-              continue;
-            }
-            if (["-S", "--split-string"].includes(option)) {
-              const split = shellWords(values[index + 1] ?? "");
-              if (split.ambiguous) return { cwd: invocationCwd, env, ambiguous: true };
-              const splitValues = split.words
-                .map((word) => word.variants.find((variant) => variant.flavor === flavor)?.value)
-                .filter((value): value is string => value !== undefined);
-              values = [...values.slice(0, index), ...splitValues, ...values.slice(index + 2)];
-              continue;
-            }
-            if (option.startsWith("-S") && option.length > 2) {
-              const split = shellWords(option.slice(2));
-              if (split.ambiguous) return { cwd: invocationCwd, env, ambiguous: true };
-              const splitValues = split.words
-                .map((word) => word.variants.find((variant) => variant.flavor === flavor)?.value)
-                .filter((value): value is string => value !== undefined);
-              values = [...values.slice(0, index), ...splitValues, ...values.slice(index + 1)];
-              continue;
-            }
-            if (option.startsWith("--split-string=")) {
-              const split = shellWords(option.slice("--split-string=".length));
-              if (split.ambiguous) return { cwd: invocationCwd, env, ambiguous: true };
-              const splitValues = split.words
-                .map((word) => word.variants.find((variant) => variant.flavor === flavor)?.value)
-                .filter((value): value is string => value !== undefined);
-              values = [...values.slice(0, index), ...splitValues, ...values.slice(index + 1)];
-              continue;
-            }
-            if (option.startsWith("--unset=")) {
-              const name = option.slice("--unset=".length);
-              deleteEnvironmentName(commandEnv, name);
-              if (isGitInspectionEnvironmentName(name)) deleteEnvironmentName(env, name);
-              index++;
-              continue;
-            }
-            const attached = option.match(/^-(u|C|a)(.+)$/);
-            if (attached) {
-              if (attached[1] === "u") {
-                deleteEnvironmentName(commandEnv, attached[2]);
-                if (isGitInspectionEnvironmentName(attached[2])) {
-                  deleteEnvironmentName(env, attached[2]);
-                }
-              } else if (attached[1] === "C") {
-                invocationCwd = isAbsolute(attached[2])
-                  ? attached[2]
-                  : resolve(invocationCwd, attached[2]);
-              }
-              index++;
-              continue;
-            }
-            if (option === "-" || option === "-i" || option === "--ignore-environment") {
-              for (const name of Object.keys(commandEnv)) delete commandEnv[name];
-              for (const name of Object.keys(env)) {
-                if (isGitInspectionEnvironmentName(name)) delete env[name];
-              }
-              index++;
-              continue;
-            }
-            if (/^-[i0v]+$/.test(option)) {
-              if (option.includes("i")) {
-                for (const name of Object.keys(commandEnv)) delete commandEnv[name];
-                for (const name of Object.keys(env)) {
-                  if (isGitInspectionEnvironmentName(name)) delete env[name];
-                }
-              }
-              index++;
-              continue;
-            }
-            if (option.startsWith("--chdir=")) {
-              const directory = option.slice("--chdir=".length);
-              if (!directory) return { cwd: invocationCwd, env, ambiguous: true };
-              invocationCwd = isAbsolute(directory)
-                ? directory
-                : resolve(invocationCwd, directory);
-              index++;
-              continue;
-            }
-            if (option.startsWith("--argv0=")) {
-              if (option.length === "--argv0=".length) {
-                return { cwd: invocationCwd, env, ambiguous: true };
-              }
-              index++;
-              continue;
-            }
-            if (option === "-0" || option === "--null") {
-              index++;
-              continue;
-            }
-            if (
-              option === "-v" ||
-              option === "--debug" ||
-              option === "--list-signal-handling" ||
-              option === "--help" ||
-              option === "--version" ||
-              /^(?:--default-signal|--ignore-signal|--block-signal)(?:=.*)?$/.test(option)
-            ) {
-              index++;
-              continue;
-            }
-            if (!option.startsWith("-")) break;
-            return { cwd: invocationCwd, env, ambiguous: true };
-          }
-          continue;
-        }
-        const spec = simpleWrappers[wrapper];
-        if (spec) {
-          index++;
-          if (consumeWrapperOptions(spec)) {
-            return { cwd: invocationCwd, env, ambiguous: true };
-          }
-          continue;
-        }
-        if (wrapper === "timeout") {
-          index++;
-          if (
-            consumeWrapperOptions({
-              shortValues: ["-k", "-s"],
-              longValues: ["--kill-after", "--signal"],
-              longFlags: [
-                "--foreground",
-                "--preserve-status",
-                "--verbose",
-                "--help",
-                "--version",
-              ],
-            })
-          ) {
-            return { cwd: invocationCwd, env, ambiguous: true };
-          }
-          if (index < values.length) index++;
-          continue;
-        }
-        break;
-      }
-      if (shellExecutableName(values[index] ?? "") === "git") {
-        const gitArgs = values.slice(index + 1);
-        for (let i = 0; i < gitArgs.length; i++) {
-          const arg = gitArgs[i];
-          const configEnv =
-            arg === "--config-env"
-              ? gitArgs[++i] ?? ""
-              : arg.startsWith("--config-env=")
-                ? arg.slice("--config-env=".length)
-                : "";
-          const equals = configEnv.indexOf("=");
-          if (equals === -1) continue;
-          const variable = configEnv.slice(equals + 1);
-          if (!variable) continue;
-          deleteEnvironmentName(env, variable);
-          const value = environmentValue(commandEnv, variable);
-          if (value !== undefined) env[variable] = value;
-        }
-        return { cwd: invocationCwd, env, ambiguous: false };
-      }
-    }
-    return { cwd: invocationCwd, env, ambiguous: false };
-  }
-
-  interface GitAliasResolution {
-    disposition: "none" | "safe" | "unsafe";
-    command: string;
-  }
-
-  function gitPersistedAliasResolution(
-    args: readonly string[],
-    env: Record<string, string | undefined>,
-    cwd: string,
-  ): GitAliasResolution {
-    const invocation = gitInvocation(args);
-    let alias = invocation.subcommand;
-    if (!alias) return { disposition: "none", command: "" };
-    let resolvedAlias = false;
-    const visited = new Set<string>();
-    const readAlias = (name: string): string | null => {
-      const query = (command: string[]): string | null => {
-        const result = Bun.spawnSync(command, {
-          cwd,
-          env,
-          stdout: "pipe",
-          stderr: "ignore",
-        });
-        return result.exitCode === 0 ? result.stdout?.toString().trim() ?? "" : null;
-      };
-      const contextual = query([
-        "git",
-        ...invocation.prefix,
-        "config",
-        "--get",
-        `alias.${name}`,
-      ]);
-      if (contextual !== null) return contextual;
-      for (const file of [
-        env.GIT_CONFIG_GLOBAL,
-        env.HOME ? join(env.HOME, ".gitconfig") : undefined,
-        env.XDG_CONFIG_HOME ? join(env.XDG_CONFIG_HOME, "git", "config") : undefined,
-      ]) {
-        if (!file || !existsSync(file)) continue;
-        const expansion = query(["git", "config", "--file", file, "--get", `alias.${name}`]);
-        if (expansion !== null) return expansion;
-      }
-      return null;
-    };
-    for (let depth = 0; depth < 8; depth++) {
-      const folded = alias.toLowerCase();
-      if (visited.has(folded)) return { disposition: "unsafe", command: alias };
-      visited.add(folded);
-      const expansion = readAlias(alias);
-      if (expansion === null) {
-        return {
-          disposition: resolvedAlias ? "safe" : "none",
-          command: alias,
-        };
-      }
-      resolvedAlias = true;
-      if (!expansion || expansion.startsWith("!")) {
-        return { disposition: "unsafe", command: alias };
-      }
-      const parsed = shellWords(expansion);
-      if (parsed.ambiguous || parsed.words.length === 0) {
-        return { disposition: "unsafe", command: alias };
-      }
-      alias =
-        parsed.words[0].variants.find((variant) => variant.flavor === "posix")?.value ??
-        parsed.words[0].variants[0]?.value ??
-        "";
-      if (!alias) return { disposition: "unsafe", command: "" };
-    }
-    return { disposition: "unsafe", command: alias };
-  }
-
-  // The person's own git settings apply to a helper's `git status`, exactly as
-  // they do in their terminal: a pager they configured, or a file-system
-  // monitor they set up to make a large repository fast, is theirs to choose
-  // and AI-DLC reads a repository here, it does not decide how their git runs.
-  // What stays denied is a program the AGENT names in the command AI-DLC lets
-  // through: `-c core.fsmonitor=<program>` (and the `--config-env` form, whose
-  // value arrives through a variable) makes git run that program, which is the
-  // delegated agent reaching for an interpreter by another route.
-  function gitStatusUsesExternalCommand(args: readonly string[]): boolean {
-    const invocation = gitInvocation(args);
-    const prefix = invocation.prefix.filter((arg) => arg !== "--");
-    for (let index = 0; index < prefix.length; index++) {
-      const arg = prefix[index];
-      const inline = (flag: string): string | undefined =>
-        arg === flag ? prefix[index + 1] : arg.startsWith(`${flag}=`) ? arg.slice(flag.length + 1) : undefined;
-      const configured = inline("-c");
-      if (configured !== undefined) {
-        const equals = configured.indexOf("=");
-        const key = (equals === -1 ? configured : configured.slice(0, equals)).toLowerCase();
-        if (key !== "core.fsmonitor") continue;
-        // `-c core.fsmonitor` with no value reads as true, and true or false
-        // names no program.
-        const value = equals === -1 ? "true" : configured.slice(equals + 1).trim();
-        if (!/^(?:true|false)$/i.test(value)) return true;
-        continue;
-      }
-      const fromVariable = inline("--config-env");
-      if (fromVariable !== undefined && fromVariable.split("=")[0]?.toLowerCase() === "core.fsmonitor") {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  function gitCommandIsUnsafe(
-    command: string,
-    args: readonly string[],
-    env: Record<string, string | undefined>,
-    cwd: string,
-  ): boolean {
-    if (!command) return false;
-    const result = Bun.spawnSync(["git", "--list-cmds=builtins"], {
-      cwd,
-      env,
-      stdout: "pipe",
-      stderr: "ignore",
-    });
-    if (result.exitCode !== 0) return true;
-    const builtins = new Set(
-      (result.stdout?.toString() ?? "")
-        .split(/\s+/)
-        .map((name) => name.trim().toLowerCase())
-        .filter(Boolean),
-    );
-    const folded = command.toLowerCase();
-    if (!builtins.has(folded)) return true;
-    if (folded === "config") {
-      const invocation = gitInvocation(args);
-      const configArgs = args.slice(invocation.subcommandIndex + 1);
-      const boundary = configArgs.indexOf("--");
-      const optionArgs = boundary === -1 ? configArgs : configArgs.slice(0, boundary);
-      return !optionArgs.some(
-        (arg) =>
-          arg === "--get" ||
-          arg === "--get-all" ||
-          arg === "--get-regexp" ||
-          arg === "--get-urlmatch" ||
-          arg === "--list" ||
-          arg === "-l",
-      );
-    }
-    const invocation = gitInvocation(args);
-    const commandArgs = args.slice(invocation.subcommandIndex + 1);
-    const boundary = commandArgs.indexOf("--");
-    const optionArgs = boundary === -1 ? commandArgs : commandArgs.slice(0, boundary);
-    if (folded === "branch") {
-      return !optionArgs.includes("--list");
-    }
-    if (folded === "tag") {
-      return !(optionArgs.includes("--list") || optionArgs.includes("-l"));
-    }
-    if (folded === "diff") {
-      let cached = false;
-      let externalDiff: boolean | undefined;
-      let textconv: boolean | undefined;
-      let submoduleMode: string | undefined;
-      for (const arg of optionArgs) {
-        if (arg === "--cached" || arg === "--staged") cached = true;
-        else if (arg === "--no-index") cached = false;
-        else if (arg === "--ext-diff") externalDiff = true;
-        else if (arg === "--no-ext-diff") externalDiff = false;
-        else if (arg === "--textconv") textconv = true;
-        else if (arg === "--no-textconv") textconv = false;
-        else if (arg === "--ignore-submodules") submoduleMode = "all";
-        else if (arg.startsWith("--ignore-submodules=")) {
-          submoduleMode = arg.slice("--ignore-submodules=".length).toLowerCase();
-        }
-      }
-      return !(
-        cached &&
-        externalDiff === false &&
-        textconv === false &&
-        submoduleMode === "all"
-      );
-    }
-    const safeBuiltins = new Set([
-      "status",
-      "rev-parse",
-      "show-ref",
-      "for-each-ref",
-      "ls-files",
-      "ls-tree",
-      "check-ignore",
-      "check-attr",
-      "check-mailmap",
-      "merge-base",
-      "name-rev",
-      "count-objects",
-      "version",
-    ]);
-    if (!safeBuiltins.has(folded)) return true;
-    return folded === "status" && gitStatusUsesExternalCommand(args);
-  }
-
-  function gitInvocationUsesDynamicEvaluation(
-    args: readonly string[],
-    command: string,
-    env: Record<string, string | undefined>,
-    cwd: string,
-  ): boolean {
-    if (gitUsesIndirectShellAlias(args, command)) return true;
-    const resolution = gitPersistedAliasResolution(args, env, cwd);
-    if (resolution.disposition === "unsafe") return true;
-    return gitCommandIsUnsafe(resolution.command, args, env, cwd);
-  }
-
-  async function shellInvokesDynamicEvaluation(
-    command: string,
-    cwd = projectDir,
-  ): Promise<boolean> {
-    if (shellUsesDynamicExpansion(command)) return true;
-    if (shellUsesConstructedHostInvocation(command)) return true;
-    const interpreter =
-      /^(?:ba|da|fi|k|z)?sh$|^(?:bun|bunx|deno|node|nodejs|npm|npx|pnpm|yarn|corepack|tsx|ts-node|python(?:\d+(?:\.\d+)*)?|ruby|perl|php|lua|luajit|raku|julia|java|js|qjs|osascript|powershell|pwsh|cmd|cscript|wscript|mshta|awk|gawk|mawk|nawk)(?:\.(?:exe|com|cmd|bat))?$/i;
-    const directPowerShellHost =
-      /^(?:remove|clear|set|new|move|copy|rename)-item$|^(?:set|add|clear)-content$|^out-file$|^(?:ri|rm|rd|del|erase|rmdir|mi|mv|cp|cpi|ren|ni|sc|ac|clc)$/i;
-    const dynamicPowerShellHost =
-      /^(?:invoke-expression|iex|invoke-command|icm|invoke-item|ii|start-process|saps|start-job|sajb)$/i;
-    const inspectableDelegatedCommands = new Set([
-      ":",
-      "[",
-      "ac",
-      "add-content",
-      "basename",
-      "cat",
-      "cd",
-      "chdir",
-      "clear-content",
-      "clear-item",
-      "clc",
-      "cli",
-      "cmp",
-      "copy",
-      "copy-item",
-      "cp",
-      "cpi",
-      "cut",
-      "dd",
-      "del",
-      "dir",
-      "dirname",
-      "echo",
-      "erase",
-      "exist",
-      "false",
-      "file",
-      "find",
-      "get-childitem",
-      "get-content",
-      "get-item",
-      "git",
-      "grep",
-      "head",
-      "join-path",
-      "jq",
-      "ls",
-      "md",
-      "mi",
-      "mkdir",
-      "move",
-      "move-item",
-      "mv",
-      "new-item",
-      "ni",
-      "out-file",
-      "pop-location",
-      "popd",
-      "printf",
-      "push-location",
-      "pushd",
-      "pwd",
-      "rd",
-      "readlink",
-      "realpath",
-      "remove-item",
-      "ren",
-      "rename",
-      "rename-item",
-      "resolve-path",
-      "rg",
-      "ri",
-      "rmdir",
-      "rm",
-      "rni",
-      "rsync",
-      "sc",
-      "select-string",
-      "set-content",
-      "set-item",
-      "set-location",
-      "sha1sum",
-      "sha256sum",
-      "sha512sum",
-      "shred",
-      "sl",
-      "sort",
-      "split-path",
-      "stat",
-      "tail",
-      "tee",
-      "test",
-      "test-path",
-      "touch",
-      "tr",
-      "true",
-      "truncate",
-      "type",
-      "uniq",
-      "unlink",
-      "wc",
-      "where",
-      "which",
-    ]);
-    const uninspectableExecutableToken = (value: string): boolean => {
-      const normalized = value.replaceAll("\\", "/");
-      return (
-        normalized.includes("/") ||
-        /^[A-Za-z]:/.test(normalized) ||
-        /\.(?:bat|cmd|ps1|psd1|psm1|sh|bash|dash|fish|ksh|zsh|cjs|js|mjs|cts|mts|ts|py|rb|pl|php|lua|jar|vbs|wsf|hta)$/i.test(
-          normalized,
-        )
-      );
-    };
-    const isInterpreter = (name: string): boolean => {
-      const candidates = [name, posix.basename(name), win32.basename(name)];
-      if (candidates.some((candidate) => interpreter.test(candidate))) return true;
-      return /(?:powershell|pwsh|cmd|cscript|wscript|mshta|awk|gawk|mawk|nawk)(?:\.(?:exe|com|cmd|bat))?$/i.test(
-        name,
-      );
-    };
+  // The words a shell line writes, as the shared reader names them in either
+  // shell's reading: the target words as written (globs and variables kept),
+  // and for a directory destination its resolved child paths. `unnamed` when it
+  // writes what the reader cannot name: the reader then gives back the folder
+  // it reads from (a wrapper it cannot follow, xargs feeding a mutator, a
+  // piped cmdlet), and it does not follow `find -exec`; or the reader failed.
+  async function shellWriteWords(command: string, cwd: string): Promise<{ words: Set<string>; unnamed: boolean }> {
     try {
       const module = await loadReviewFreezeCommandModule();
-      if (
-        typeof module.shellCommandAltersExecutableResolution !== "function" ||
-        typeof module.shellCommandInvocationDetails !== "function"
-      ) {
-        return true;
+      if (typeof module.shellWriteTargets !== "function" || typeof module.shellCommandInvocationDetails !== "function") {
+        return { words: new Set(), unnamed: true };
       }
-      if (module.shellCommandAltersExecutableResolution(command)) return true;
-      const hostExpression = shellUsesDirectHostExpression(command);
-      const flavor: PathFlavor =
-        process.platform === "win32" ? "win32" : "posix";
-      let states: ShellCwdState[] = [
-        { cwd, stack: [], status: "unknown", logicalAmbiguous: false },
-      ];
-      let operatorBefore: ShellCommandPart["operatorAfter"] = "";
-      for (const part of shellCommandParts(command)) {
-        const segment = part.text;
-        const parsed = shellWords(segment);
-        if (parsed.ambiguous) return true;
-        const activeStates: ShellCwdState[] = [];
-        const carriedStates: ShellCwdState[] = [];
-        for (const state of states) {
-          const active = {
-            cwd: state.cwd,
-            stack: [...state.stack],
-            status: state.status,
-            logicalAmbiguous: state.logicalAmbiguous,
-          };
-          const carried = {
-            cwd: state.cwd,
-            stack: [...state.stack],
-            status: state.status,
-            logicalAmbiguous: state.logicalAmbiguous,
-          };
-          if (operatorBefore === "&&") {
-            if (state.status !== "failure") activeStates.push(active);
-            if (state.status !== "success") carriedStates.push(carried);
-          } else if (operatorBefore === "||") {
-            if (state.status !== "success") activeStates.push(active);
-            if (state.status !== "failure") carriedStates.push(carried);
-          } else {
-            activeStates.push(active);
-          }
-        }
-
-        const functionDefinition =
-          /^\s*(?:function\s+)?[A-Za-z_][A-Za-z0-9_]*\s*(?:\(\s*\))?\s*\{/.test(
-            segment,
-          );
-        const invocations = functionDefinition
-          ? []
-          : module.shellCommandInvocationDetails(segment);
-        for (const state of activeStates) {
-          const gitContext = gitCommandEnvironment(segment, state.cwd);
-          for (const invocation of invocations) {
-            const leaf = win32.basename(posix.basename(invocation.name));
-            if (
-              invocation.ambiguous ||
-              invocation.dataDrivenMutation ||
-              [invocation.executable, ...(invocation.launchers ?? [])].some(
-                (value) =>
-                  typeof value !== "string" ||
-                  value.length === 0 ||
-                  uninspectableExecutableToken(value),
-              ) ||
-              isInterpreter(invocation.name) ||
-              dynamicPowerShellHost.test(invocation.name) ||
-              (/^git(?:\.exe)?$/i.test(leaf) &&
-                (gitContext.ambiguous ||
-                  gitInvocationUsesDynamicEvaluation(
-                    invocation.args,
-                    segment,
-                    gitContext.env,
-                    gitContext.cwd,
-                  ))) ||
-              (hostExpression &&
-                directPowerShellHost.test(invocation.name)) ||
-              (invocation.name === "find" &&
-                invocation.args.some((arg) =>
-                  ["-exec", "-execdir", "-ok", "-okdir"].includes(arg)
-                )) ||
-              invocation.name === "eval" ||
-              invocation.name === "source" ||
-              invocation.name === "." ||
-              !inspectableDelegatedCommands.has(invocation.name)
-            ) {
-              return true;
-            }
-          }
-        }
-
-        const isolatedSubshell = /^\s*\(.*\)\s*$/.test(segment);
-        const nonPersistent =
-          isolatedSubshell || ["|", "&"].includes(part.operatorAfter);
-        const controlAmbiguous =
-          /[{}]/.test(segment) ||
-          /\b(?:if|elif|else|while|until|case|for|select|function|then|do)\b/i.test(
-            segment,
-          );
-        const nextStates: ShellCwdState[] = [...carriedStates];
-        for (const state of activeStates) {
-          const original = {
-            cwd: state.cwd,
-            stack: [...state.stack],
-            status: state.status,
-            logicalAmbiguous: state.logicalAmbiguous,
-          };
-          const changed = {
-            cwd: state.cwd,
-            stack: [...state.stack],
-            status: state.status,
-            logicalAmbiguous: state.logicalAmbiguous,
-          };
-          const update = updateShellCwd(parsed.words, flavor, changed);
-          if (update === "ambiguous") return true;
-          if (update === "none") {
-            nextStates.push({ ...original, status: "unknown" });
-            continue;
-          }
-          let viable = false;
-          try {
-            viable = statSync(changed.cwd).isDirectory();
-          } catch {
-            // A literal directory change to a missing path cannot succeed.
-          }
-          if (!viable) {
-            nextStates.push({ ...original, status: "failure" });
-          } else if (nonPersistent) {
-            nextStates.push({ ...original, status: "success" });
-          } else if (controlAmbiguous) {
-            nextStates.push(
-              { ...original, status: "unknown" },
-              { ...changed, status: "unknown" },
-            );
-          } else {
-            nextStates.push({ ...changed, status: "success" });
-          }
-        }
-        const deduped = new Map<string, ShellCwdState>();
-        for (const state of nextStates) {
-          const key = shellCwdStateKey(state, flavor);
-          const existing = deduped.get(key);
-          if (!existing) {
-            deduped.set(key, state);
-            continue;
-          }
-          const sameLogicalState =
-            existing.cwd === state.cwd &&
-            existing.stack.length === state.stack.length &&
-            existing.stack.every(
-              (path, index) => path === state.stack[index],
-            );
-          existing.logicalAmbiguous ||=
-            state.logicalAmbiguous || !sameLogicalState;
-          if (state.cwd.length < existing.cwd.length) {
-            existing.cwd = state.cwd;
-            existing.stack = [...state.stack];
-          }
-        }
-        if (deduped.size > MAX_SHELL_CWD_STATES) return true;
-        states = [...deduped.values()];
-        operatorBefore = part.operatorAfter;
-      }
-      return false;
+      const raw: string[] = [];
+      for (const shell of ["posix", "powershell"] as const) module.shellWriteTargets(command, cwd, raw, shell);
+      const from = resolve(cwd);
+      const runsCommands = module.shellCommandInvocationDetails(command).some(({ name, args }) =>
+        name === "find" && args.some((arg) => ["-exec", "-execdir", "-ok", "-okdir"].includes(arg))
+      );
+      return { words: new Set(raw.filter((word) => word !== from)), unnamed: runsCommands || raw.includes(from) };
     } catch {
-      return true;
-    }
-  }
-
-  // AI-DLC's own command, as its prose spells it (`aidlc engine ...`, or one of
-  // this project's tool scripts under bun), naming a command the core admits
-  // this delegate (delegateAdmittedVerbs), such as Reverse Engineering's scope
-  // fingerprint mint and check and its publish. It is fixed code that leaves
-  // the attribution records alone, so the interpreter and attribution-path
-  // denies stand aside for it; the core guards still run. One plain call only:
-  // nothing chained, redirected, expanded, globbed or set before it.
-  async function runsAdmittedAidlcCommand(command: string, agent: string): Promise<boolean> {
-    // A POSIX shell reads a line that ends in a backslash as going on (the
-    // stage writes its publish that way); PowerShell ends the command there.
-    const joined = process.platform === "win32" ? command : command.replace(/\\\r?\n/g, " ");
-    const flavor: PathFlavor = process.platform === "win32" ? "win32" : "posix";
-    // These stay refused inside quotes too: on a native Windows install
-    // aidlc.cmd's cmd.exe reads "&" and "%" again whatever the quotes, and a
-    // repo name holds none of them.
-    if (agent === AMBIGUOUS_REVIEWER || /[&|<>%*?\r\n]/.test(joined)) return false;
-    const active = shellActiveText(joined, flavor);
-    if (active === null || /[;(){}[\]`$]/.test(active)) return false;
-    // A call this cannot read keeps the denies.
-    try {
-      const parsed = shellWords(joined);
-      if (parsed.ambiguous) return false;
-      // The host's own shell reads the words: PowerShell keeps a backslash, a
-      // POSIX shell reads it as an escape.
-      const words = parsed.words.map(({ variants }) =>
-        variants.find((variant) => variant.flavor === flavor)?.value ?? ""
-      );
-      const program = (words[0] ?? "").replace(/\.(?:exe|com|cmd|bat)$/i, "").toLowerCase();
-      let script = "aidlc.ts";
-      let rest = words.slice(1);
-      if (program === "bun") {
-        script = (flavor === "win32" ? win32 : posix).basename(words[1] ?? "");
-        if (!/^aidlc(?:-[a-z0-9-]+)?\.ts$/.test(script)) return false;
-        const own = canonicalPathVariants(join(HOOKS_DIR, "..", "tools", script), projectDir, flavor);
-        const named = canonicalPathVariants(words[1], effectiveCwd(), flavor);
-        if (
-          own.ambiguous || named.ambiguous ||
-          !named.paths.some((path) => own.paths.some((ownPath) => ownPath.value === path.value))
-        ) {
-          return false;
-        }
-        rest = words.slice(2);
-      } else if (program !== "aidlc") {
-        return false;
-      }
-      if (script === "aidlc.ts" && rest[0] !== TRUSTED_ROUTE_NAMESPACE) return false;
-      // Loaded only here: the guard is its own member, and one that cannot load
-      // leaves this call refused as before instead of breaking every call.
-      const guard: typeof import("./aidlc-state-transition-guard.ts") = await import(
-        join(HOOKS_DIR, "aidlc-state-transition-guard.ts")
-      );
-      const admitted = guard.delegateAdmittedVerbs(agent);
-      if (script !== "aidlc.ts") return (admitted[script] ?? []).includes(rest[0] ?? "");
-      const dispatcher: typeof import("../tools/aidlc.ts") = await import(
-        join(HOOKS_DIR, "..", "tools", "aidlc.ts")
-      );
-      return dispatcher.admittedEngineRoute(admitted, rest.slice(1));
-    } catch {
-      return false;
+      return { words: new Set(), unnamed: true };
     }
   }
 
@@ -2647,6 +1468,18 @@ export async function run(
     const cwd = effectiveCwd();
     const command = toolInput.command;
     if (toolName === "Bash" && typeof command === "string") {
+      // Only a write can change the records, so a read, a search, a build or a
+      // test is not judged by its words: only the words the line writes are.
+      const written = await shellWriteWords(command, cwd);
+      if (written.words.size === 0 && !written.unnamed) {
+        // The guards case reuses this classification for the review freeze.
+        await reviewFreezeTargets();
+        return false;
+      }
+      const values = new Set(shellCommandParts(command).flatMap(({ text }) =>
+        shellWords(text).words.flatMap(({ variants }) => variants.map(({ value }) => value))
+      ));
+      const judgesEveryWord = written.unnamed || [...written.words].some((word) => !values.has(word));
       const states: Record<PathFlavor, ShellCwdState[]> = {
         posix: [{ cwd, stack: [], status: "unknown", logicalAmbiguous: false }],
         win32: [{ cwd, stack: [], status: "unknown", logicalAmbiguous: false }],
@@ -2691,6 +1524,7 @@ export async function run(
         }
         if (
           parsed.words.some(({ variants }) =>
+            (judgesEveryWord || variants.some(({ value }) => written.words.has(value))) &&
             variants.some(
               ({ value, activeGlobIndexes, flavor }) =>
                 activeStates[flavor].some(
@@ -2805,12 +1639,30 @@ export async function run(
     );
   }
 
+  // The guards run their core hook inside this process, as on Codex and
+  // Copilot: a child loads the whole engine again, so as children a shell
+  // call's four guards cost five engine loads. A guard that cannot be imported
+  // or exports no run() runs as a child. The engine's hook route settles the
+  // project's waiting Claude Code turns before a hook runs; a guard run here
+  // skips that route, so under the compiled engine the chain settles once,
+  // before its first guard.
+  let turnsSettled = false;
+  async function runGuard(
+    file: string,
+    input: string,
+  ): Promise<{ stdout: string; stderr: string; code: number; signal: string | null }> {
+    if (!turnsSettled && process.env.AIDLC_COMPILED_EXECUTABLE) settleClaudeTurnsFirst(projectDir);
+    turnsSettled = true;
+    const here = await runHookHere(join(HOOKS_DIR, file), input, projectPins);
+    return here === null ? runCoreWithStderr(file, input) : { ...here, signal: null };
+  }
+
   // Exit 2 is a guard's refusal. A guard that fails on its own (it throws, its
   // file is missing, it is killed) refuses nothing, as in the core hook group;
   // its error line goes where doctor reads hook drops, with a severity tag in
   // it neutralized so only the hook that writes a drop decides doctor's verdict.
-  function blockedByGuard(file: string, input: string): boolean {
-    const r = runCoreWithStderr(file, input);
+  async function blockedByGuard(file: string, input: string): Promise<boolean> {
+    const r = await runGuard(file, input);
     if (r.code === 0) return false;
     if (r.code !== 2) {
       const hook = file.replace(/^aidlc-|\.ts$/g, "");
@@ -2854,7 +1706,7 @@ export async function run(
             "AIDLC's own files under .cursor/ (its hooks, tools, skills, agents, " +
             "and aidlc rules); other Cursor configuration such as .cursor/mcp.json " +
             "is fine to change. Reading any of them and running " +
-            "`bun .cursor/tools/aidlc.ts status` are fine. If asked to do AIDLC " +
+            `\`${aidlcDispatcherInvocation("status")}\` are fine. If asked to do AIDLC ` +
             "work, tell the user to do it from the foreground chat. Do your task " +
             "and report back.",
         })}\n`);
@@ -2997,7 +1849,7 @@ export async function run(
           })}\n`);
           return 0;
         }
-        if (blockedByGuard("aidlc-plan-approval-guard.ts", claudeShaped("PreToolUse"))) {
+        if (await blockedByGuard("aidlc-plan-approval-guard.ts", claudeShaped("PreToolUse"))) {
           return 0;
         }
         const sub = cursor.tool_input?.subagent_type;
@@ -3019,29 +1871,7 @@ export async function run(
         return 0;
       }
       const agent = attributed();
-      const command = cursor.tool_input?.command;
-      const ownCommand =
-        agent !== "" && toolName === "Bash" && typeof command === "string" &&
-        await runsAdmittedAidlcCommand(command, agent);
-      if (
-        agent &&
-        !ownCommand &&
-        toolName === "Bash" &&
-        typeof command === "string" &&
-        await shellInvokesDynamicEvaluation(command, effectiveCwd()) &&
-        !delegateChecksStandAside()
-      ) {
-        process.stdout.write(`${JSON.stringify({
-          permission: "deny",
-          agent_message:
-            "AIDLC delegated agents cannot use general-purpose interpreters, shell parameter " +
-            "expansion, or dynamic command evaluation while delegated-agent attribution is active " +
-            "because those paths can invalidate protected attribution state. " +
-            "Use Cursor's native read/search tools and have the parent conversation run executable probes.",
-        })}\n`);
-        return 0;
-      }
-      if (agent && !ownCommand && await touchesProtectedReviewerState() && !delegateChecksStandAside()) {
+      if (agent && await touchesProtectedReviewerState() && !delegateChecksStandAside()) {
         process.stdout.write(`${JSON.stringify({
           permission: "deny",
           agent_message:
@@ -3071,7 +1901,7 @@ export async function run(
       // An attributed Bash call was already classified by the exact exported
       // review-freeze target parser while checking protected attribution
       // paths. Reuse that result: an empty target set is the hook's first allow
-      // condition, so spawning a second Bun process can add no decision value.
+      // condition, so running the freeze hook again can add no decision value.
       // Undefined/null are not classifications and always retain the guard.
       if (
         toolName !== "Bash" ||
@@ -3092,7 +1922,7 @@ export async function run(
         });
       }
       for (const guard of guards) {
-        if (blockedByGuard(guard.file, guard.input)) return 0;
+        if (await blockedByGuard(guard.file, guard.input)) return 0;
       }
       writeAllow();
       return 0;

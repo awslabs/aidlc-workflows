@@ -78,8 +78,11 @@ two folders are unrelated.
     `repeats` (the same call input three times or more), `subagents`, `handRunChecks` (an AI-DLC check the agent ran
     itself, with the `pass` it printed; such a run writes no audit row).
   - The run as it was: `engine` (Kiro), `toolVersions` (from the tool's own log), `models`, `efforts`, `agents`,
-    `approvalModes`. `reportSessions`, `mixedSessions`, `reportModels`: the sessions that made this report, kept out of
-    the run's counts and events.
+    `approvalModes` (Kiro IDE's is the chat's saved setting when the report is made: `autopilot on`, `autopilot off` or
+    `approve for me`; a Kiro CLI session's record does not say which policy it ran with, its `autopilot` being true
+    either way, so its sessions add none, and a note says whether its permission files list the approve-for-me policy
+    now, as the installed AI-DLC's own reader finds them, or that this is not known). `reportSessions`, `mixedSessions`,
+    `reportModels`: the sessions that made this report, kept out of the run's counts and events.
   - `notes`: what a reader could not tell from the records.
 - `otherStores`: chat stores on this machine that are not read (VS Code Copilot Chat, Cursor).
 - `doctor`: whether AI-DLC's doctor ran, `dir` (the harness folder it was run for: the one this skill ran from), its

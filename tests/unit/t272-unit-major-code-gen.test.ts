@@ -213,11 +213,14 @@ ${checkboxes}
 `;
 }
 
+// A code plan still being written (its test instructions empty) routes as its
+// plan step; with both files written the engine would write the plan's Testing
+// Contract and ask the person to approve it.
 function coverUnit(proj: string, unit: string, slug: string): void {
   const dir = join(seededRecordDir(proj), "construction", unit, slug);
   mkdirSync(dir, { recursive: true });
   for (const name of PRODUCES[slug]) {
-    writeFileSync(join(dir, artifactFilename(name)), `# ${name} for ${unit}\n`);
+    writeFileSync(join(dir, artifactFilename(name)), name === "unit-test-instructions" ? "" : `# ${name} for ${unit}\n`);
   }
 }
 

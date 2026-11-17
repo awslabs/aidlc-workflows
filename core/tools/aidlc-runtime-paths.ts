@@ -379,8 +379,13 @@ export function quoteCommandArgument(
   // PowerShell reads a bare word that starts with "@" as splatting a variable.
   if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value) && !(shell !== "posix" && value.startsWith("@"))) return value;
   // The two shells quote an apostrophe differently, so it is double-quoted
-  // when both read that alike.
-  if (shell === "windows" && POWERSHELL_SINGLE_QUOTE.test(value) && readsAlikeInDoubleQuotes(value)) return `"${value}"`;
+  // when both read that alike. Inside double quotes Git Bash reads a backslash
+  // as itself, as PowerShell does, unless another backslash or the closing
+  // quote follows it, so a Windows path's own backslashes pass.
+  if (
+    shell === "windows" && POWERSHELL_SINGLE_QUOTE.test(value) && !/\\(?:\\|$)/.test(value) &&
+    readsAlikeInDoubleQuotes(value.replaceAll("\\", ""))
+  ) return `"${value}"`;
   return shell !== "posix"
     ? `'${value.replaceAll(new RegExp(POWERSHELL_SINGLE_QUOTE.source, "g"), "$&$&")}'`
     : `'${value.replaceAll("'", "'\"'\"'")}'`;
@@ -429,6 +434,14 @@ export function swarmUnitTestCommand(unit: string): string {
 // inputs and records the result, which the script run bare does not.
 export function sensorFireUsage(id = "<id>"): string {
   return aidlcDispatcherInvocation(`sensor fire ${id} --stage <slug> --output-path <path>`);
+}
+
+// A check script's result, written whole before the process exits 0: under Bun
+// an exit straight after a large write to a pipe drops what is not yet written.
+// writeSync is no way round: once stdout is non-blocking it writes part and
+// returns; ending without an exit makes an early-closing reader an EPIPE exit 1.
+export function writeSensorResult(result: unknown): void {
+  process.stdout.write(`${JSON.stringify(result)}\n`, () => process.exit(0));
 }
 
 export function aidlcToolInvocation(
@@ -561,6 +574,43 @@ function findHostWorktree(hostDir: string, from: string): string | null {
 export function hookSessionProjectDir(hostDir: string, payload: string): string {
   const dir = hookSessionDirectory(payload);
   return (dir === null ? null : hostWorktreeProjectDir(hostDir, dir)) ?? hostDir;
+}
+
+// A folder that is an AI-DLC project of its own: it holds AI-DLC's records
+// (`aidlc/spaces/`), an AI-DLC install, or is a Unit's worktree AI-DLC made,
+// which reads its worker's identity from its own folder. A session folder a
+// run left behind (`aidlc/.aidlc-sessions/`) is none of these.
+export function isAidlcProjectFolder(dir: string): boolean {
+  return existsSync(join(dir, "aidlc", "spaces")) ||
+    existsSync(join(dir, ".aidlc", "worktree-meta.json")) ||
+    discoverProjectHarnesses(dir).length > 0;
+}
+
+// The project these modules' own path names (`<project>/<harness>/tools/`: the
+// copy channel, a Bun-run tree), or null for the compiled engine, whose modules
+// live in the runtime payload, and for a source checkout.
+export function moduleProjectDir(): string | null {
+  if (isCompiledExecutable()) return null;
+  return basename(MODULE_TOOLS_DIR) === "tools" && /^\.[a-z0-9][a-z0-9._-]*$/i.test(basename(MODULE_HARNESS_ROOT))
+    ? dirname(MODULE_HARNESS_ROOT)
+    : null;
+}
+
+// The AI-DLC project a folder sits in when it is not one itself (a code repo
+// cloned into the workspace, a plain subfolder): the nearest folder above it
+// that is one. Null for a project, for a folder in no project, and when a
+// folder on the way up cannot be read.
+export function enclosingProjectDir(dir: string): string | null {
+  let current = resolve(dir);
+  try {
+    if (isAidlcProjectFolder(current)) return null;
+    for (let parent = dirname(current); parent !== current; current = parent, parent = dirname(parent)) {
+      if (isAidlcProjectFolder(parent)) return parent;
+    }
+  } catch {
+    // An unreadable folder: the command keeps the folder it was run in.
+  }
+  return null;
 }
 
 function within(parent: string, path: string): boolean {

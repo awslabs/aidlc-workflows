@@ -79,7 +79,7 @@ rebuilds twice in temporary roots to check generator determinism.
 
 ---
 
-## Field reference — when to use
+## Field reference — when to use<a id="field-reference-when-to-use"></a>
 
 The authoritative spec has a complete field table with types and constraints.
 This section adds narrative on the fields that need judgment calls.

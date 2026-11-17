@@ -149,6 +149,75 @@ describe("t256 workspace-doctor - advisory manifest rows", () => {
     expect(readFileSync(join(ws, "aidlc", ".aidlc-request-text", "request.txt"), "utf-8")).toBe("my later words\n");
   });
 
+  // The Kiro CLI (V2) hook's forwarding latch holds the first call it named
+  // for a request of the person's. Before the .gitignore part listed it, the
+  // records row's `git add aidlc/` took it in; once tracked, each request
+  // changes it in git, so doctor leaves it out of the records and names the
+  // step that takes it out of git.
+  test("a committed forwarding latch is left out of W1 and named with the step that untracks it", () => {
+    const ws = freshGitWorkspace();
+    const g = (...args: string[]) => spawnSync("git", ["-C", ws, ...args], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
+    const latch = join(ws, "aidlc", ".aidlc-forwarding-latch");
+    mkdirSync(dirname(latch), { recursive: true });
+    writeFileSync(latch, '{"turn":3,"raw":"my first words","args":["my","first","words"]}\n', "utf-8");
+    // Untracked and not ignored: never a record to commit, the ignore line is the step.
+    let rows = workspaceManifestChecks(ws);
+    expect(rows[0].label).toContain("no uncommitted changes under aidlc/");
+    let row = rows.find((r) => r.label.startsWith("Forwarding latch:"));
+    expect(row?.label).toBe("Forwarding latch: aidlc/.aidlc-forwarding-latch holds the words of a request of yours (1 not ignored)");
+    expect(row?.fix).toBe("add the line `aidlc/.aidlc-forwarding-latch` to the project folder's .gitignore, and check no later rule of yours un-ignores it, then commit and push the .gitignore change");
+    g("add", "aidlc");
+    g("commit", "-q", "-m", "earlier commit");
+    // The refreshed part ignores it, and a later request changes the tracked file.
+    writeFileSync(join(ws, ".gitignore"), "aidlc/.aidlc-forwarding-latch\n", "utf-8");
+    writeFileSync(latch, '{"turn":7,"raw":"my later words","args":["my","later","words"]}\n', "utf-8");
+    writeFileSync(join(ws, "aidlc", "note.md"), "a record\n", "utf-8");
+    rows = workspaceManifestChecks(ws);
+    row = rows.find((r) => r.label.startsWith("Forwarding latch:"));
+    expect(row).toMatchObject({ pass: false, severity: "warn" });
+    expect(row?.label).toContain("(1 that git tracks)");
+    expect(row?.fix).toBe(
+      "in the project folder, take it out of git, keeping the file: `git rm --cached -f -- aidlc/.aidlc-forwarding-latch`, " +
+        "then commit and push the removal, with .gitignore if its change is not committed yet",
+    );
+    // The records row counts the record, not the latch, and gives no commit command.
+    expect(rows[0].label).toContain("1 uncommitted change(s) under aidlc/");
+    expect(rows[0].label).toContain("once the forwarding latch steps below are done");
+    expect(rows[0].label).not.toContain("git add aidlc/");
+    expect(rows[0].fix).toBe("do the forwarding latch steps below first; then this row names the commit");
+    // Doctor only names the step: the file is still tracked.
+    expect(g("ls-files", "--", "aidlc/.aidlc-forwarding-latch").stdout.trim()).toBe("aidlc/.aidlc-forwarding-latch");
+    // The person runs it and commits: no row, and the records row its command again.
+    expect(g("rm", "--cached", "-f", "-q", "--", "aidlc/.aidlc-forwarding-latch").status).toBe(0);
+    g("commit", "-q", "-m", "untrack the latch");
+    rows = workspaceManifestChecks(ws);
+    expect(rows.some((r) => r.label.startsWith("Forwarding latch:"))).toBe(false);
+    expect(rows[0].label).toContain("`git add aidlc/`, `git commit`, `git push`");
+  });
+
+  // When git cannot run, the records and request-folder rows say so, and the
+  // latch row, a file of one harness, adds nothing.
+  test("with git not found, no latch row is added to the rows that say the check was skipped", () => {
+    const ws = freshGitWorkspace();
+    const path = process.env.PATH;
+    process.env.PATH = join(ws, "no-git-here");
+    try {
+      const skippedRows = () => {
+        const rows = workspaceManifestChecks(ws);
+        expect(rows.find((r) => r.label.startsWith("Workspace records:"))?.label).toContain("check skipped");
+        expect(rows.find((r) => r.label.startsWith("Request folder:"))?.label).toContain("check skipped");
+        expect(rows.some((r) => r.label.startsWith("Forwarding latch:"))).toBe(false);
+      };
+      skippedRows();
+      mkdirSync(join(ws, "aidlc"), { recursive: true });
+      writeFileSync(join(ws, "aidlc", ".aidlc-forwarding-latch"), '{"turn":1,"raw":"my words","args":["my","words"]}\n', "utf-8");
+      skippedRows();
+    } finally {
+      if (path === undefined) delete process.env.PATH;
+      else process.env.PATH = path;
+    }
+  });
+
   test("a request folder an older .gitignore does not ignore is named with the ignore line first", () => {
     const ws = freshGitWorkspace();
     const g = (...args: string[]) => spawnSync("git", ["-C", ws, ...args], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
@@ -194,7 +263,7 @@ describe("t256 workspace-doctor - advisory manifest rows", () => {
     expect(request?.fix).toBe("commit and push the removal, with .gitignore if its change is not committed yet");
     // With only the removal left, the records row gives its command again.
     writeFileSync(join(ws, "aidlc", "note.md"), "a record\n", "utf-8");
-    expect(workspaceManifestChecks(ws)[0].label).toContain("`git add aidlc/ && git commit && git push`");
+    expect(workspaceManifestChecks(ws)[0].label).toContain("`git add aidlc/`, `git commit`, `git push`");
     rmSync(join(ws, "aidlc", "note.md"));
     g("commit", "-q", "-m", "untrack the request");
     expect(workspaceManifestChecks(ws).some((r) => r.label.startsWith("Request folder:"))).toBe(false);
@@ -571,7 +640,7 @@ describe("t256 workspace-doctor - doctor's own audit log entries", () => {
     appendFileSync(seededAuditShard(ws), STAGE_ROW, "utf-8");
     row = workspaceManifestChecks(ws)[0];
     expect(row.label).toContain("Workspace records: 2 uncommitted change(s) under aidlc/");
-    expect(row.label).toContain("`git add aidlc/ && git commit && git push`");
+    expect(row.label).toContain("`git add aidlc/`, `git commit`, `git push`");
   });
 
   test("a clone whose audit log doctor started, beside a teammate's, is not told to commit it", () => {
