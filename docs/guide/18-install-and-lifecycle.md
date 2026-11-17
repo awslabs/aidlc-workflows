@@ -1510,9 +1510,9 @@ back, see [Go Back to an Earlier Version](#go-back-to-an-earlier-version).
 To put this machine back on an earlier release, run `aidlc use <version>`, for
 example `aidlc use 2.10.0`. It downloads that release if the machine does not
 have it, then says `Now using aidlc 2.10.0 (was 2.11.0; retained locally, no
-project changes).` Every project without a pin now runs on 2.10.0; run
-`aidlc config` in a project to bring its files to 2.10.0 as well.
-`aidlc use 2.11.0` goes forward again.
+project changes).` Every project without a pin now runs on 2.10.0; to put a
+project's files back too, pin it, as below. `aidlc use 2.11.0` goes forward
+again.
 
 To put one project back for everyone on it, pin it, then refresh it:
 

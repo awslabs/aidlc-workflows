@@ -10,6 +10,7 @@ import { spawnSync } from "node:child_process";
 import {
   cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -1867,4 +1868,224 @@ describe("t304 transaction boundaries", () => {
       restore("AIDLC_ROUTE_PROJECT_DIR", prior.project);
     }
   });
+});
+
+// A project a newer AI-DLC set up, cloned by someone whose AI-DLC is this
+// checkout's release: config changes nothing in it, says so, and names the
+// update and the pin; at a terminal on a native install it offers the update.
+describe("config in a project a newer AI-DLC set up", () => {
+  const NEWER = OTHER_VERSION;
+  const PREVIEW = "9.9.9-preview.20261117.1";
+
+  function stampedSource(version: string): string {
+    const source = temp("aidlc-t304-newer-source-");
+    cpSync(join(DIST_RELEASE, "claude"), source, { recursive: true });
+    const path = join(source, ".claude", "tools", "data", "aidlc-stamp.json");
+    const stamp = JSON.parse(readFileSync(path, "utf-8"));
+    writeFileSync(path, `${JSON.stringify({ ...stamp, frameworkVersion: version }, null, 2)}\n`);
+    return source;
+  }
+
+  // Set up by config itself from the newer release's files, so the stamp and
+  // the install record agree, with one piece of work open.
+  function setUpWith(version: string): { project: string; env: NodeJS.ProcessEnv } {
+    const { project, machine } = configuredNativeProject();
+    const env = { ...machine, AIDLC_RUNTIME_ROOT: DIST_RELEASE };
+    const setUp = runCopied(project, ["config", "--from", stampedSource(version), "--force", "--yes"], { env });
+    if (setUp.status !== 0) throw new Error(setUp.stdout + setUp.stderr);
+    const intents = join(project, "aidlc", "spaces", "default", "intents");
+    mkdirSync(join(intents, "261117-gift-cards"), { recursive: true });
+    writeFileSync(join(intents, "intents.json"), JSON.stringify([{
+      uuid: "deadbeef-0000-4000-8000-000000000011",
+      slug: "gift-cards",
+      dirName: "261117-gift-cards",
+      scope: "feature",
+      status: "in-flight",
+    }]));
+    writeFileSync(join(intents, "261117-gift-cards", "aidlc-state.md"),
+      "# AI-DLC State Tracking\n\n## Current Status\n- **Status**: Running\n");
+    expect(frameworkVersionOf(project)).toBe(version);
+    return { project, env };
+  }
+
+  function tree(project: string): Record<string, string> {
+    const files: Record<string, string> = {};
+    for (const rel of readdirSync(project, { recursive: true }) as string[]) {
+      const path = join(project, rel);
+      if (existsSync(path) && !lstatSync(path).isDirectory()) files[rel] = digest(path);
+    }
+    return files;
+  }
+
+  const down = `To take the project down to ${AIDLC_VERSION} instead: \`aidlc config --pin ${AIDLC_VERSION} --yes\` ` +
+    "(this pins the version for everyone on the project).";
+  const step = (version: string) =>
+    `To carry on: \`aidlc update --version ${version}\`, then \`aidlc config --harness claude --yes\` in this project. ${down}`;
+  const nothing = `Nothing changed: this project was set up with AI-DLC ${NEWER}, and this computer is on ${AIDLC_VERSION}. ${
+    step(NEWER)
+  }`;
+
+  test("with no terminal, a plain config, --yes and a refreshing section change nothing and name both ways on", () => {
+    const { project, env } = setUpWith(NEWER);
+    const before = tree(project);
+    for (
+      const args of [
+        [],
+        ["--yes"],
+        ["--harness", "claude", "--yes"],
+        ["--force", "--yes"],
+        ["--dry-run"],
+        ["project", "--mcp", "defaults", "--yes"],
+      ]
+    ) {
+      const result = runCopied(project, ["config", ...args], { env });
+      expect(result.status, `${args.join(" ")}\n${result.stdout}${result.stderr}`).toBe(5);
+      expect(result.stdout.trim()).toBe(nothing);
+      expect(tree(project)).toEqual(before);
+    }
+    const json = JSON.parse(runCopied(project, ["config", "--yes", "--json"], { env }).stdout);
+    expect({ ok: json.ok, code: json.code, status: json.status, message: json.message })
+      .toEqual({ ok: true, code: 5, status: "action-needed", message: nothing });
+    expect(tree(project)).toEqual(before);
+  }, 180_000);
+
+  test("a section that rewrites none of the release's files runs as before, on the project's own release", () => {
+    const { project, env } = setUpWith(NEWER);
+    const result = runCopied(project, ["config", "models", "--preset", "balanced", "--project", "--yes"], { env });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).not.toContain("Nothing changed");
+    expect(frameworkVersionOf(project)).toBe(NEWER);
+  }, 120_000);
+
+  test("at a terminal it offers the update; no leaves the project as it is", () => {
+    const { project, env } = setUpWith(NEWER);
+    const before = tree(project);
+    const declined = runCopied(project, ["config"], { env: { ...env, AIDLC_TEST_CONFIG_TTY: "1" }, input: "n\n" });
+    expect(declined.status, declined.stdout + declined.stderr).toBe(5);
+    expect(declined.stdout).toContain(
+      `This project was set up with AI-DLC ${NEWER}, and this computer is on ${AIDLC_VERSION}. ` +
+        `Update AI-DLC on this computer to ${NEWER} now and carry on? [Y/n]:`,
+    );
+    expect(declined.stdout).toContain(`Nothing changed. ${step(NEWER)}`);
+    expect(declined.stdout).not.toContain("Setup check");
+    expect(tree(project)).toEqual(before);
+    // Nobody is there to answer an unattended run.
+    const unattended = runCopied(project, ["config"], {
+      env: { ...env, AIDLC_TEST_CONFIG_TTY: "1", AIDLC_UNATTENDED: "1" },
+      input: "\n",
+    });
+    expect(unattended.status, unattended.stdout + unattended.stderr).toBe(5);
+    expect(unattended.stdout.trim()).toBe(nothing);
+    expect(tree(project)).toEqual(before);
+  }, 120_000);
+
+  test.skipIf(process.platform === "win32")(
+    "at a terminal, yes updates this computer to the project's release and hands the command to it",
+    async () => {
+      const { project, env } = setUpWith(NEWER);
+      const before = tree(project);
+      // The newer release's aidlc records what it was asked to run.
+      const asked = join(temp("aidlc-t304-newer-asked-"), "args");
+      const binary = join(temp("aidlc-t304-newer-bin-"), "aidlc");
+      writeFileSync(binary, [
+        "#!/bin/sh",
+        `if [ "$1" = "version" ]; then printf 'aidlc %s (runtime %s)\\n' '${NEWER}' '${NEWER}'; exit 0; fi`,
+        `printf '%s\\n' "$*" > '${asked}'`,
+        "",
+      ].join("\n"), { mode: 0o755 });
+      const root = temp("aidlc-t304-newer-release-");
+      writeReleaseFixture({ root, version: NEWER, distributions: ["claude"], binaryFrom: binary });
+      const server = serveReleaseFixture(root);
+      try {
+        const result = await runCopiedAsync(project, ["config", "--harness", "claude"], {
+          env: { ...env, AIDLC_TEST_CONFIG_TTY: "1", AIDLC_RELEASE_BASE_URL: server.baseUrl, AIDLC_GH_BIN: FAKE_GH },
+          input: "\n",
+        });
+        expect(result.status, result.stdout + result.stderr).toBe(0);
+        expect(result.stdout).toContain(`Update AI-DLC on this computer to ${NEWER} now and carry on? [Y/n]:`);
+        expect(readFileSync(join(env.AIDLC_INSTALL_ROOT as string, "active-version"), "utf-8").trim()).toBe(NEWER);
+        expect(readFileSync(asked, "utf-8").trim()).toBe("config --harness claude");
+        expect(tree(project)).toEqual(before);
+      } finally {
+        server.stop();
+      }
+    },
+    180_000,
+  );
+
+  test("the pin it names takes the project down to this computer's release, as a pin always has", async () => {
+    const { project, env } = setUpWith(NEWER);
+    const result = runCopied(project, ["config", "--yes"], { env });
+    const pin = /To take the project down to \S+ instead: `aidlc (config --pin \S+ --yes)`/.exec(result.stdout)?.[1];
+    expect(pin, result.stdout).toBe(`config --pin ${AIDLC_VERSION} --yes`);
+    const release = temp("aidlc-t304-this-release-");
+    writeReleaseFixture({ root: release, version: AIDLC_VERSION, binary: "bytes", distributions: ["claude"] });
+    const pinned = runCopied(project, [...(pin as string).split(" "), "--from", release], {
+      env: { ...env, AIDLC_GH_BIN: FAKE_GH },
+    });
+    expect(pinned.status, pinned.stdout + pinned.stderr).toBe(0);
+    expect(pinned.stdout).toContain(`Pinned this project to aidlc ${AIDLC_VERSION}.`);
+    // The pin as a teammate commits it: the next config takes the files down to it.
+    const { project: teammate, env: teammateEnv } = setUpWith(NEWER);
+    writeFileSync(join(teammate, ".aidlc-version"), `${AIDLC_VERSION}\n`);
+    const refreshed = runCopied(teammate, ["config", "--yes"], { env: teammateEnv });
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    expect(refreshed.stdout).not.toContain("Nothing changed");
+    expect(frameworkVersionOf(teammate)).toBe(AIDLC_VERSION);
+  }, 180_000);
+
+  test("a project set up with an older release still refreshes to this one", () => {
+    const { project, env } = setUpWith("2.10.0");
+    const result = runCopied(project, ["config", "--yes"], { env });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).not.toContain("Nothing changed");
+    expect(frameworkVersionOf(project)).toBe(AIDLC_VERSION);
+  }, 120_000);
+
+  test.skipIf(process.platform === "win32")("a package manager's install names its own update", () => {
+    const { project, env } = setUpWith(NEWER);
+    const result = runCopied(project, ["config", "--yes"], {
+      env: { ...env, AIDLC_COMPILED_EXECUTABLE: "/opt/homebrew/bin/aidlc" },
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(5);
+    expect(result.stdout.trim()).toBe(
+      `Nothing changed: this project was set up with AI-DLC ${NEWER}, and this computer is on ${AIDLC_VERSION} from ` +
+        `Homebrew. To carry on: brew upgrade aidlc, then \`aidlc config --harness claude --yes\` in this project. ${down}`,
+    );
+    // A package manager carries no preview: only the pin is named.
+    const fromPreview = setUpWith(PREVIEW).project;
+    const preview = runCopied(fromPreview, ["config", "--yes"], {
+      env: { ...env, AIDLC_COMPILED_EXECUTABLE: "/opt/homebrew/bin/aidlc" },
+    });
+    expect(preview.status, preview.stdout + preview.stderr).toBe(5);
+    expect(preview.stdout.trim()).toBe(
+      `Nothing changed: this project was set up with AI-DLC ${PREVIEW}, and this computer is on ${AIDLC_VERSION} from ` +
+        `Homebrew. To take the project down to ${AIDLC_VERSION}: \`aidlc config --pin ${AIDLC_VERSION} --yes\` ` +
+        "(this pins the version for everyone on the project).",
+    );
+  }, 180_000);
+
+  test("at a terminal a preview is named as one, and a failed update names the pin", () => {
+    const { project, env } = setUpWith(PREVIEW);
+    const before = tree(project);
+    const result = runCopied(project, ["config"], {
+      env: { ...env, AIDLC_TEST_CONFIG_TTY: "1", AIDLC_RELEASE_BASE_URL: "http://127.0.0.1:9/unreachable" },
+      input: "y\n",
+    });
+    expect(result.status, result.stdout + result.stderr).not.toBe(0);
+    expect(result.stdout).toContain(
+      `This project was set up with AI-DLC ${PREVIEW}, and this computer is on ${AIDLC_VERSION}. ` +
+        `Update AI-DLC on this computer to the preview release ${PREVIEW} now and carry on? [Y/n]:`,
+    );
+    expect(result.stdout).toContain(`Nothing in this project changed. ${down}`);
+    expect(tree(project)).toEqual(before);
+  }, 120_000);
+
+  test("a copied project's own tool is not stopped by it", () => {
+    const project = fullCopyProject();
+    const path = join(project, ".claude", "tools", "data", "aidlc-stamp.json");
+    writeFileSync(path, `${JSON.stringify({ ...JSON.parse(readFileSync(path, "utf-8")), frameworkVersion: NEWER }, null, 2)}\n`);
+    const result = runCopied(project, ["config", "--yes"], { env: { AIDLC_RELEASE_BASE_URL: "http://127.0.0.1:9/unreachable" } });
+    expect(result.stdout).not.toContain("Nothing changed");
+  }, 120_000);
 });

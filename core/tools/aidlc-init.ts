@@ -90,11 +90,12 @@ import {
 import {
   activeVersion,
   binRoot,
+  installedExecutablePath,
   machineTransactionRoot,
   projectDirFrom,
   runtimeRoot,
 } from "./aidlc-install-paths.ts";
-import { defaultHarnessPath } from "./aidlc-machine-config.ts";
+import { defaultHarnessPath, readMachineChannel } from "./aidlc-machine-config.ts";
 import {
   configureChannel,
   configureProjectPin,
@@ -102,9 +103,11 @@ import {
   LifecycleCommandError,
   pinnedReleaseInstalled,
   holdPinnedRelease,
+  main as lifecycleMain,
   registerProjectPin,
   resolvePinnedDispatch,
 } from "./aidlc-lifecycle.ts";
+import { carryOnStep, newerWorkInstall } from "./aidlc-state-upgrade.ts";
 import {
   acquireCopyRuntime,
   copyRuntimeUrl,
@@ -114,7 +117,7 @@ import {
   ReleaseVerificationError,
 } from "./aidlc-release.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
-import { compareVersions, RELEASE_CHANNELS, VERSION_ID } from "./aidlc-channel.ts";
+import { compareVersions, RELEASE_CHANNELS, VERSION_ID, versionChannel } from "./aidlc-channel.ts";
 import {
   type TransactionOperation,
   type TransactionOptions,
@@ -13124,6 +13127,71 @@ async function gatherConfigOutput(
   return { stdout: stdout.join(""), output: output.join(""), code };
 }
 
+// This computer's AI-DLC is older than the one that set up the project's tree,
+// so nothing in the project changes. At a terminal on a native install the
+// person is asked once whether to update to that release, which then runs the
+// same command itself, since an older tool may not read the newer files; a
+// section may have asked its own questions already, so it is never handed on.
+// Everywhere else, and on no, one line names the update and the pin. A
+// package manager carries no preview, so its step is not named for one.
+async function newerSetUpStep(
+  projectDir: string,
+  tree: ProjectHarness,
+  version: string,
+  input: string[],
+  options: ReturnType<typeof globalOptions>,
+  dryRun: boolean,
+  section: boolean,
+): Promise<void> {
+  const install = newerWorkInstall(projectDir);
+  const preview = versionChannel(version) === "preview";
+  const command = (args: string): string =>
+    `\`${configInvocationFor(projectDir)} config ${args}${projectTarget(projectDir)}\``;
+  const setUp = `project was set up with AI-DLC ${version}, and this computer is on ${AIDLC_VERSION}${
+    install.kind === "managed" ? ` from ${install.name}` : ""
+  }.`;
+  const up = install.kind === "managed" && preview
+    ? ""
+    : `${
+      carryOnStep(install, `\`aidlc update --version ${version}\``, command(`--harness ${invokedHarnessName(tree.distribution)} --yes`))
+    } `;
+  const down = `To take the project down to ${AIDLC_VERSION}${up ? " instead" : ""}: ` +
+    `${command(`--pin ${quoteCommandArgument(AIDLC_VERSION)} --yes`)} (this pins the version for everyone on the project).`;
+  let line = `Nothing changed: this ${setUp} ${up}${down}`;
+  if (
+    install.kind === "native" && !section && !dryRun && !options.yes && options.mode === "human" &&
+    configInputIsTty() && process.env.AIDLC_UNATTENDED !== "1"
+  ) {
+    // The yes changes this computer for every unpinned project on it, so a
+    // preview is named as one to a computer that follows stable releases.
+    let followsPreview = false;
+    try {
+      followsPreview = readMachineChannel() === "preview";
+    } catch {
+      // An unreadable channel setting is doctor's to report.
+    }
+    const release = preview && !followsPreview ? `the preview release ${version}` : version;
+    const answer = configPrompt(`This ${setUp} Update AI-DLC on this computer to ${release} now and carry on? [Y/n]:`);
+    if (answer !== null && /^(?:|y|yes)$/i.test(answer.trim())) {
+      await lifecycleMain(["update", "--version", version]);
+      if ((process.exitCode ?? EXIT.ok) !== EXIT.ok) {
+        process.stdout.write(`Nothing in this project changed. ${down}\n`);
+        return;
+      }
+      const handed = spawnSync(installedExecutablePath(version), ["config", ...harnessArgsAsTyped(stripVerb(input))], {
+        cwd: process.cwd(),
+        stdio: "inherit",
+      });
+      if (handed.error) throw handed.error;
+      process.exitCode = handed.status ?? EXIT.failure;
+      return;
+    }
+    // Closed input left the cursor on the question's line.
+    line = `${answer === null ? "\n" : ""}Nothing changed. ${up}${down}`;
+  }
+  emitResult({ ...success(line, { projectDir, changed: false }), code: EXIT.actionNeeded, status: "action-needed" }, options);
+}
+
 export async function main(
   input: string[],
   internal: ConfigMainInternal = {},
@@ -13407,7 +13475,21 @@ export async function main(
       ].includes(token)
     );
   if (firstRunWizard && await runFirstRunWizard(projectDir)) return;
+  // The release a newer AI-DLC set up the tree this run refreshes with, on a
+  // native or package manager's install with no pin and no source named. A
+  // copied project runs its tree's own tool, whose refresh fetches that release.
+  const refreshed = requestedHarness
+    ? projectHarnesses.find((tree) => tree.distribution === requestedHarness)
+    : projectHarnesses.length === 1
+    ? projectHarnesses[0]
+    : undefined;
+  const newerSetUp = aidlcInvocation() === "aidlc" && !from && !pathPresent(join(projectDir, ".aidlc-version")) &&
+      refreshed?.frameworkVersion !== undefined && VERSION_ID.test(refreshed.frameworkVersion) &&
+      compareVersions(AIDLC_VERSION, refreshed.frameworkVersion) < 0
+    ? { tree: refreshed, version: refreshed.frameworkVersion }
+    : undefined;
   const existingWalk = !section &&
+    !newerSetUp &&
     configInputIsTty() &&
     options.mode === "human" &&
     projectHarnesses.length > 0 &&
@@ -13812,6 +13894,16 @@ export async function main(
       });
       if (handed.error) throw handed.error;
       process.exitCode = handed.status ?? EXIT.failure;
+      return;
+    }
+    // A refresh from an older release than the one that set the tree up takes
+    // nothing down; a section that writes only records reads the tree's own
+    // files and goes on. Going down is a pin, by name.
+    if (
+      newerSetUp && VERSION_ID.test(selected.stamp.frameworkVersion) &&
+      compareVersions(selected.stamp.frameworkVersion, newerSetUp.version) < 0
+    ) {
+      await newerSetUpStep(projectDir, newerSetUp.tree, newerSetUp.version, input, options, dryRun, Boolean(section));
       return;
     }
     if (selected.note) sourceNotes.push(selected.note);
