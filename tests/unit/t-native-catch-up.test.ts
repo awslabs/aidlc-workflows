@@ -177,7 +177,8 @@ beforeAll(async () => {
   expect(built.status, built.stdout + built.stderr).toBe(0);
   const release = join(root, "release");
   mkdirSync(release);
-  writeReleaseFixture({ root: release, repoRoot: REPO_ROOT, version: AIDLC_VERSION, binaryFrom: engine, distributions: ["claude"] });
+  // opencode beside claude: its session start, run as its adapter runs it.
+  writeReleaseFixture({ root: release, repoRoot: REPO_ROOT, version: AIDLC_VERSION, binaryFrom: engine, distributions: ["claude", "opencode"] });
   const machine = join(root, "machine");
   const bin = join(machine, "bin");
   env = testGuardEnvironment(process.env, "production");
@@ -316,6 +317,33 @@ describe.skipIf(SKIP_REASON !== null)("each project catches up the next time it 
     );
     expect(first.stdout).toContain("unit commit-record --update --commit-message-file");
     expect(first.stdout).toContain("about the move of repos.json into aidlc/");
+  });
+
+  // opencode carries no session-start context: where the offer is worked out its line is not left waiting for the
+  // next step, which puts the question itself; where it is not (unattended), today's line waits there.
+  test("on opencode, the offer worked out leaves no line waiting; unattended, the line waits for the next step", () => {
+    const waiting = (dir: string): string => {
+      const file = join(dir, "aidlc", ".aidlc-engine", "sessions", `${SESSION}.person-lines`);
+      return existsSync(file) ? readFileSync(file, "utf-8") : "";
+    };
+    const saved = env;
+    try {
+      env = { ...env, AIDLC_HARNESS_NAME: "opencode", AIDLC_HARNESS_DIR: ".aidlc" };
+      const offered = project(earlierTree, { tracked: false });
+      const first = sessionStart(offered, "catch-up, opencode");
+      expect(first.status, first.stdout + first.stderr).toBe(0);
+      expect(stampVersion(offered)).toBe(AIDLC_VERSION);
+      const file = `aidlc/.aidlc-engine/request-text/unit-record-message-update-${AIDLC_VERSION}.txt`;
+      expect(readFileSync(join(offered, ...file.split("/")), "utf-8")).toBe(`Update AI-DLC to ${AIDLC_VERSION}\n`);
+      expect(waiting(offered)).not.toContain("AI-DLC updated its own files");
+      env = { ...env, AIDLC_UNATTENDED: "1" };
+      const quiet = project(earlierTree, { tracked: false });
+      const unattended = sessionStart(quiet, "catch-up, opencode unattended");
+      expect(unattended.status, unattended.stdout + unattended.stderr).toBe(0);
+      expect(waiting(quiet)).toContain("AI-DLC updated its own files");
+    } finally {
+      env = saved;
+    }
   });
 
   test("a project in a folder of its repo: the line counts its own folders", () => {

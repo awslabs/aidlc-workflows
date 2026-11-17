@@ -1,4 +1,4 @@
-// covers: function:ownFilesToCommit, function:writtenByInstall, function:reposMoveToCommit, function:recordCommitBlock, subcommand:aidlc-unit:commit-record, file:core/tools/aidlc-brought-files.ts
+// covers: function:ownFilesToCommit, function:writtenByInstall, function:reposMoveToCommit, function:recordCommitBlock, function:updateCommitStep, subcommand:aidlc-unit:commit-record, file:core/tools/aidlc-brought-files.ts
 //
 // After an update, AI-DLC's own files that git shows changed are worked out
 // from the install record and git alone: the ones that still hold exactly what
@@ -22,7 +22,7 @@ import { ownFilesToCommit } from "../../dist/claude/.claude/tools/aidlc-brought-
 import { catchUpChangedLine } from "../../dist/claude/.claude/tools/aidlc-workspace-manifest.ts";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
 import { FIXTURES_DIR, REPO_ROOT, seededStateFile, seedWorkspaceShell } from "../harness/fixtures.ts";
-import { cleanupTeamBuild, git, run, tempDir, UNIT } from "../harness/team-build.ts";
+import { cleanupTeamBuild, ENV, git, ORCH, run, tempDir, UNIT } from "../harness/team-build.ts";
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -478,6 +478,69 @@ describe("unit commit-record --update", () => {
     expect(refused.status).not.toBe(0);
     expect(refused.out).toContain("no commits today");
     expect(git(dir, ["rev-parse", "HEAD"])).toBe(head);
+  });
+});
+
+// opencode carries no session-start context, so the engine's next step puts the same question, with the agent's
+// draft before it and the same yes, once; the other harnesses keep the session start's own.
+describe("on opencode, the engine's next step puts the update's question", () => {
+  const draft = `aidlc/.aidlc-engine/request-text/unit-record-message-update-${AIDLC_VERSION}.txt`;
+  const opencode = { ...ENV, AIDLC_HARNESS_NAME: "opencode" };
+
+  // A project the earlier release set up, with work under way in it, just refreshed by the session start, which
+  // wrote the update's draft as its sign that it worked the offer out.
+  function updatedWithWork(): string {
+    const { dir } = projectBehind("claude", (d) => {
+      seedWorkspaceShell(d);
+      writeFileSync(seededStateFile(d), readFileSync(join(FIXTURES_DIR, "state-construction.md"), "utf-8"));
+    });
+    refresh(dir, "claude");
+    mkdirSync(join(dir, "aidlc", ".aidlc-engine", "request-text"), { recursive: true });
+    writeFileSync(join(dir, ...draft.split("/")), `Update AI-DLC to ${AIDLC_VERSION}\n`);
+    return dir;
+  }
+
+  const step = (dir: string, env: NodeJS.ProcessEnv = opencode): Record<string, unknown> => {
+    const r = run(ORCH, ["next"], dir, env);
+    expect(r.json, r.out).not.toBeNull();
+    return r.json ?? {};
+  };
+
+  test("the step drafts the message, asks the passed question and gives the yes; it is not given again", () => {
+    const dir = updatedWithWork();
+    // The person's own words in a file AI-DLC wrote, after the refresh: left and named, never counted.
+    appendFileSync(join(dir, ".claude", "skills", "aidlc", "SKILL.md"), "\nOur own note.\n");
+    const own = ownFilesToCommit(dir, () => true);
+    expect(own.held).toContain(".claude/settings.json");
+    expect(own.left).toContain(".claude/skills/aidlc/SKILL.md");
+    const first = step(dir);
+    expect(first.kind, JSON.stringify(first)).toBe("print");
+    const message = String(first.message);
+    expect(message).toContain(String(catchUpChangedLine(AIDLC_VERSION, own.commit, false, true, true, { branch: "main", left: own.left })));
+    expect(message).toContain(`over the message in \`${draft}\``);
+    expect(message).toContain("with the message from that file after it");
+    expect(message).toContain("When they give their own commit message, write it to that file first");
+    expect(message).toMatch(new RegExp(`On yes, run \`[^\`]* unit commit-record --update --leave \\.claude/settings\\.json --commit-message-file ${draft.replaceAll(".", "\\.")}\``));
+    expect(message).toContain("On no, leave it. Do not ask again.");
+    const again = step(dir);
+    expect(JSON.stringify(again)).not.toContain("AI-DLC updated its own files");
+  });
+
+  test("not on another harness, not unattended, and not while a merge is under way, which it waits out", () => {
+    const dir = updatedWithWork();
+    expect(JSON.stringify(step(dir, ENV))).not.toContain("AI-DLC updated its own files");
+    expect(JSON.stringify(step(dir, { ...opencode, AIDLC_UNATTENDED: "1" }))).not.toContain("AI-DLC updated its own files");
+    const head = git(dir, ["rev-parse", "HEAD"]);
+    writeFileSync(join(dir, ".git", "MERGE_HEAD"), `${head}\n`);
+    expect(JSON.stringify(step(dir))).not.toContain("AI-DLC updated its own files");
+    unlinkSync(join(dir, ".git", "MERGE_HEAD"));
+    expect(String(step(dir).message)).toContain("AI-DLC updated its own files");
+  });
+
+  test("with no draft from the session start, nothing is put", () => {
+    const dir = updatedWithWork();
+    unlinkSync(join(dir, ...draft.split("/")));
+    expect(JSON.stringify(step(dir))).not.toContain("AI-DLC updated its own files");
   });
 });
 

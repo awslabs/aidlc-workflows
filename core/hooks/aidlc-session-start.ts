@@ -112,8 +112,7 @@ import { compareVersions } from "../tools/aidlc-channel.ts";
 import { recordCommitBlock } from "../tools/aidlc-git.ts";
 import { ownFilesToCommit } from "../tools/aidlc-brought-files.ts";
 import {
-  commitDraftSentence,
-  OWN_MESSAGE_SENTENCE,
+  catchUpAsk,
   RECORD_COMMIT_MESSAGE,
   unitBuildOf,
   unitWordsFile,
@@ -127,6 +126,7 @@ import {
   trackedReposManifestAtRoot,
   UPDATE_COMMIT_MESSAGE,
   UPDATE_MESSAGE_KEY,
+  updateCommitAbout,
 } from "../tools/aidlc-workspace-manifest.ts";
 import { backOnInstructions, switchesOffLines } from "../tools/aidlc-recorded-switches.ts";
 import { applyStatusLineDefault, statusLineHarness } from "../tools/aidlc-statusline-choice.ts";
@@ -253,8 +253,7 @@ function catchUpProjectFiles(
     const left = (drafted ? own : ownFilesToCommit(projectDir, null)).left.filter((path) => changed.includes(path));
     const branch = projectGit(projectDir, ["symbolic-ref", "--quiet", "--short", "HEAD"]).stdout.trim();
     const asked = catchUpChangedLine(AIDLC_VERSION, changed, moved, true, drafted, { branch, left });
-    const about = files ? `AI-DLC's own files updated to ${AIDLC_VERSION}${moved ? " and the move of repos.json into aidlc/" : ""}` : "the move of repos.json into aidlc/";
-    return { told, asked, messageFile: drafted ? file : null, update: about, leave: own.held };
+    return { told, asked, messageFile: drafted ? file : null, update: updateCommitAbout(files, moved), leave: own.held };
   }
   // The list's move alone is AI-DLC's own record: offered to be committed on the person's yes, when the commit could
   // run, with the message the agent drafts for it over the fallback this hook writes into the move's own file.
@@ -615,21 +614,12 @@ if (sessionId && !rebindCheckOnly) {
     };
     const caughtUp = source === "compact" ? null : catchUpProjectFiles(projectDir, unitBuild());
     if (caughtUp !== null) {
-      // opencode's adapter carries no session-start context: the next step does.
-      if (runtimeHarnessName(projectDir) === "opencode") addPendingPersonLines(projectDir, sessionId, [caughtUp.told]);
-      else if (caughtUp.asked !== null && caughtUp.messageFile !== null) {
-        const file = caughtUp.messageFile;
-        const draft = caughtUp.update !== null
-          ? commitDraftSentence("the commit message for AI-DLC's update", "the repo", caughtUp.update, file, UPDATE_COMMIT_MESSAGE)
-          : commitDraftSentence("the commit message for AI-DLC's record", "the repo", "the move of repos.json into aidlc/", file, RECORD_COMMIT_MESSAGE);
-        asks.push(`ASK ONCE: first, said to nobody: ${draft} ` +
-          `Then in your first reply, ask the person this in their language, with the message from that file after it: "${caughtUp.asked}" ` +
-          `${OWN_MESSAGE_SENTENCE.charAt(0).toUpperCase()}${OWN_MESSAGE_SENTENCE.slice(1)}. On yes, run ` +
-          `\`${aidlcInvocation()} unit commit-record${caughtUp.update !== null ? ` --update${caughtUp.leave.map((path) => ` --leave ${path}`).join("")}` : ""} --commit-message-file ${file}\` and tell them in plain words what it reports. ` +
-          "On no, leave it. Do not ask again.");
+      // opencode's adapter carries no session-start context: the next step does. The update's own question, once
+      // its draft is written, is the engine's to put there; any other line waits for that step as a line.
+      if (runtimeHarnessName(projectDir) === "opencode") {
+        if (caughtUp.update === null || caughtUp.messageFile === null) addPendingPersonLines(projectDir, sessionId, [caughtUp.told]);
       } else if (caughtUp.asked !== null) {
-        asks.push(`ASK ONCE: in your first reply, ask the person this in their language: "${caughtUp.asked}" On yes, run ` +
-          `\`${aidlcInvocation()} unit commit-record${caughtUp.update !== null ? ` --update${caughtUp.leave.map((path) => ` --leave ${path}`).join("")}` : ""}\` and tell them in plain words what it reports. On no, leave it. Do not ask again.`);
+        asks.push(`ASK ONCE: ${catchUpAsk({ ...caughtUp, asked: caughtUp.asked }, "your first reply")}`);
       } else asks.push(`TELL ONCE: in your first reply, tell the person this, in their language: "${caughtUp.told}"`);
     }
   } catch {

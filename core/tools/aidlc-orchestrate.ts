@@ -103,7 +103,7 @@ import {
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { pinnedVersionNote, VERSION_ID } from "./aidlc-channel.ts";
 import { CONFIG_SECTIONS } from "./aidlc-command.ts";
-import { gitOperationUnderWay, isGitRepo, isProjectSubmodule } from "./aidlc-git.ts";
+import { git as gitText, gitOperationUnderWay, isGitRepo, isProjectSubmodule, recordCommitBlock } from "./aidlc-git.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 import { fileURLToPath } from "node:url";
 import {
@@ -615,7 +615,7 @@ import {
   type ConstructionEvidence,
   unitReceiptsRequired,
 } from "./aidlc-construction-checkpoints.ts";
-import { broughtFileNames, broughtFilesNote, unheardBroughtFilesLine } from "./aidlc-brought-files.ts";
+import { broughtFileNames, broughtFilesNote, ownFilesToCommit, unheardBroughtFilesLine } from "./aidlc-brought-files.ts";
 import { newChatStep } from "./aidlc-new-chat.ts";
 import { gitUserName } from "./aidlc-git-name.ts";
 import { resolveSwarmCheckpoint, swarmBuildingChat } from "./aidlc-swarm-checkpoints.ts";
@@ -796,10 +796,19 @@ import {
   typedHarnessName,
   workspaceEngineFile,
 } from "./aidlc-runtime-paths.ts";
-import { localRepoOverrideLines, readWorkspaceRepos, reposManifestPath } from "./aidlc-workspace-manifest.ts";
+import {
+  catchUpChangedLine,
+  localRepoOverrideLines,
+  readWorkspaceRepos,
+  REPOS_FILE,
+  reposManifestPath,
+  UPDATE_MESSAGE_KEY,
+  updateCommitAbout,
+} from "./aidlc-workspace-manifest.ts";
 import { noteReposManifestOffered, reposManifestListsOnlyAddedWorkspace, reposManifestOffered } from "./aidlc-workspace-repos.ts";
 import {
   builtFromAnotherMachine,
+  catchUpAsk,
   checkInHandedOut,
   checkInLine,
   checkInNotice,
@@ -10444,6 +10453,38 @@ function reposCommitAsk(projectDir: string, stateContent: string, atBoundary: ()
   };
 }
 
+// The question after an update on opencode, whose adapter carries no
+// session-start context: the session start worked it out and wrote its draft,
+// the sign the yes reads too, so the next step puts it, in the session start's
+// own words, once in this work. It waits while no commit can run here, and is
+// worked out again from the install record and git, with nothing known of
+// before the refresh: every settings file config merges that git shows changed
+// is left and named, where the session start takes one that was clean then.
+// The mark is per work, as every engine question's, so a second work asks once
+// more; the draft stays after a no on another harness or a commit by hand, so
+// opencode then asks once, and a later `aidlc config` by hand in that release
+// reads as the update's. A git that does not answer reads as nothing to
+// commit: the mark is noted and nothing is said, as the session start left no
+// line waiting.
+function updateCommitStep(projectDir: string, stateContent: string): PrintDirective | null {
+  if (runtimeHarnessName(projectDir) !== "opencode" || process.env.AIDLC_UNATTENDED === "1" || isReadOnlyEngineProbe()) return null;
+  const file = commitMessageFile(projectDir, "record", UPDATE_MESSAGE_KEY);
+  const mark = teamHandoverMarkName("update-commit", AIDLC_VERSION);
+  if (file === null || !existsSync(join(projectDir, ...file.split("/"))) || engineAskMark(projectDir, mark) !== null) return null;
+  // Any list: only whether a commit can run here now, before the list's read.
+  if (recordCommitBlock(projectDir, false, [file]) !== null) return null;
+  const own = ownFilesToCommit(projectDir, () => true);
+  noteEngineAskMark(projectDir, mark);
+  if (recordCommitBlock(projectDir, unitBuildOf(stateContent) !== null, own.commit) !== null) return null;
+  const files = own.commit.filter((path) => path !== REPOS_FILE && path !== `aidlc/${REPOS_FILE}`);
+  const moved = files.length < own.commit.length;
+  const branch = gitText(projectDir, ["symbolic-ref", "--quiet", "--short", "HEAD"])?.trim() ?? "";
+  const asked = catchUpChangedLine(AIDLC_VERSION, files, moved, true, true, { branch, left: own.left });
+  if (asked === null) return null;
+  const said = catchUpAsk({ asked, messageFile: file, update: updateCommitAbout(files.length > 0, moved), leave: own.held }, "your reply");
+  return turnEndingPrint(`${said.charAt(0).toUpperCase()}${said.slice(1)}`);
+}
+
 // After that offer, while the main it was put for still stands ahead and
 // behind: the command for the agent when the person asks for it in words.
 function levelOfferNote(projectDir: string): string | null {
@@ -16632,7 +16673,8 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       reverseEngineeringScopeAsk(pd, stateContent, currentSlug) ?? unitsReposAsk(pd, stateContent) ??
       (entering && stateContent !== null
         ? reposManifestAsk(pd, stateContent, () => stepBeginsStage(pd, stateContent, scope, currentSlug)) ??
-          reposCommitAsk(pd, stateContent, () => stepBeginsStage(pd, stateContent, scope, currentSlug))
+          reposCommitAsk(pd, stateContent, () => stepBeginsStage(pd, stateContent, scope, currentSlug)) ??
+          updateCommitStep(pd, stateContent)
         : null);
     if (staffing) {
       emit(staffing);
@@ -16699,7 +16741,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   const staffing = teamStanceReadStep(pd, stateContent, next.slug, scope, projectType, recordPrefix, codekbCtx) ??
     constructionStaffingAsk(pd, stateContent, next.slug, scope) ??
     reverseEngineeringScopeAsk(pd, stateContent, next.slug) ?? unitsReposAsk(pd, stateContent) ??
-    reposManifestAsk(pd, stateContent) ?? reposCommitAsk(pd, stateContent);
+    reposManifestAsk(pd, stateContent) ?? reposCommitAsk(pd, stateContent) ?? updateCommitStep(pd, stateContent);
   if (staffing) {
     emit(staffing);
     return;

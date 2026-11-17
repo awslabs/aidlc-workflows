@@ -50,6 +50,7 @@ import {
   removeRecordFileNoFollow,
   repoDir,
   REQUEST_TEXT_DIR,
+  shellArg,
   sourceCheckoutListingRel,
   stateDigest,
   UNIT_GATE_RHYTHM_FIELD,
@@ -64,7 +65,8 @@ import { UNIT_PROGRESS_NOTE, unitProgressSectionRange } from "./aidlc-unit-landi
 import { isReadOnlyEngineProbe } from "./aidlc-locks.ts";
 import { gitAddressKey } from "./aidlc-workspace-repos.ts";
 import { homeCopyName, planRecordRef } from "./aidlc-unit-holders.ts";
-import { withoutCredentials } from "./aidlc-workspace-manifest.ts";
+import { UPDATE_COMMIT_MESSAGE, withoutCredentials } from "./aidlc-workspace-manifest.ts";
+import { aidlcInvocation } from "./aidlc-runtime-paths.ts";
 
 // Where the home of team-built work is: the address of the code repository its
 // plan is shared in (with any user and token left out), or "local" while there
@@ -1288,6 +1290,28 @@ export function writeCommitDraft(projectDir: string, file: string, today: string
   } catch {
     return false;
   }
+}
+
+// The question after an update as the agent is handed it, with its message
+// drafted first, said to nobody, when the draft's file was written, and the
+// yes: the session start says it in the first reply; on opencode, whose
+// adapter carries no session-start context, the engine's next step says it.
+// `update` names what the update's own commit is about (null: the move alone,
+// committed with AI-DLC's record); `leave`, the files its yes leaves.
+export function catchUpAsk(
+  offer: { asked: string; messageFile: string | null; update: string | null; leave: readonly string[] },
+  reply: string,
+): string {
+  const command = `${aidlcInvocation()} unit commit-record` +
+    (offer.update === null ? "" : ` --update${offer.leave.map((path) => ` --leave ${shellArg(path)}`).join("")}`);
+  const yes = "and tell them in plain words what it reports. On no, leave it. Do not ask again.";
+  if (offer.messageFile === null) return `in ${reply}, ask the person this in their language: "${offer.asked}" On yes, run \`${command}\` ${yes}`;
+  const draft = offer.update !== null
+    ? commitDraftSentence("the commit message for AI-DLC's update", "the repo", offer.update, offer.messageFile, UPDATE_COMMIT_MESSAGE)
+    : commitDraftSentence("the commit message for AI-DLC's record", "the repo", "the move of repos.json into aidlc/", offer.messageFile, RECORD_COMMIT_MESSAGE);
+  return `first, said to nobody: ${draft} Then in ${reply}, ask the person this in their language, with the message from that file ` +
+    `after it: "${offer.asked}" ${OWN_MESSAGE_SENTENCE.charAt(0).toUpperCase()}${OWN_MESSAGE_SENTENCE.slice(1)}. On yes, run ` +
+    `\`${command} --commit-message-file ${offer.messageFile}\` ${yes}`;
 }
 
 // The clause of the line solo work's switch to teams says, while the lead's

@@ -1536,8 +1536,11 @@ to look over and commit. A settings file the refresh merged that held your own
 uncommitted changes is one of them, and the rest is still offered. A no is not
 asked again for that release. Unattended, on no branch, or while a rebase, merge,
 cherry-pick or revert of yours is under way, it says the same line ending "Commit
-them so your team gets them." instead, and on opencode that line comes with the next step; nothing is
-said when nothing git tracks changed or the project is not in git. A pinned
+them so your team gets them." instead. opencode starts a chat without this
+context, so there the question comes with AI-DLC's next step in that chat, once a
+commit can run, and leaves out every settings file the refresh merged that git
+shows changed; the line comes with the next step too. Nothing is said when
+nothing git tracks changed or the project is not in git. A pinned
 project runs its pinned release and is left as it is. A refresh that cannot
 finish says nothing in the chat and is tried again when the next chat starts;
 `aidlc doctor` shows the project still on the earlier release, and

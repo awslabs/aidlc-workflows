@@ -68,6 +68,12 @@ export const REPOS_MOVED_LINE =
 export const UPDATE_COMMIT_MESSAGE = `Update AI-DLC to ${AIDLC_VERSION}`;
 export const UPDATE_MESSAGE_KEY = `update-${AIDLC_VERSION}`;
 
+// What the update's own commit is about, for the agent's draft of its message:
+// AI-DLC's files (`files`), the list's move with them, or the move alone.
+export function updateCommitAbout(files: boolean, moved: boolean): string {
+  return files ? `AI-DLC's own files updated to ${AIDLC_VERSION}${moved ? " and the move of repos.json into aidlc/" : ""}` : "the move of repos.json into aidlc/";
+}
+
 // The commit of AI-DLC's own files at the person's own terminal, where the
 // command itself is said: git's own, those paths only (CHECKOUT_STEPS in
 // aidlc-unit.ts names it; it lives here, below that file, so this one can say it).
