@@ -9089,9 +9089,7 @@ export function planLastChange(projectDir: string, commit: string): { what: stri
 // What this computer has of the plan's history, kept with the question's own
 // marks in the work's engine folder: a plan commit it wrote, or one the lead
 // kept or carried on from (`here`); a change the lead said to take out at the
-// next write (`out`); the question put about a tip (`asked`). A `here` this
-// computer did not write (kept, or carried on from) has `asked` beside it, so
-// a plan commit marked `here` alone is one this computer wrote.
+// next write (`out`); the question put about a tip (`asked`).
 export function planMark(kind: "here" | "out" | "asked", commit: string): string {
   return `plan-${kind}-${commit}.json`;
 }
@@ -9157,7 +9155,6 @@ export type PlanChange = { tip: string; work: string; repo: string; changes: Arr
 function planChangeAt(pd: string, tip: string, plan: PlanJson): { change: PlanChange | null; first: string | null } {
   const found = planChangesNotHere(pd, tip);
   if (found === null) {
-    noteEngineAskMark(pd, planMark("asked", tip));
     noteEngineAskMark(pd, planMark("here", tip));
     const last = planLastChange(pd, tip);
     return {
@@ -9243,10 +9240,7 @@ function planChangeAnswer(args: string[], projectDir?: string): void {
   const tip = flags.tip ?? "";
   if ((answer !== "keep" && answer !== "take-out") || !/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(tip)) fail(`usage: ${unitUsage("plan-change")}`);
   const pd = resolveProjectDir(projectDir);
-  const mark = (): void => {
-    if (answer === "keep" && engineAskMark(pd, planMark("here", tip)) === null) noteEngineAskMark(pd, planMark("asked", tip));
-    noteEngineAskMark(pd, planMark(answer === "keep" ? "here" : "out", tip));
-  };
+  const mark = (): void => noteEngineAskMark(pd, planMark(answer === "keep" ? "here" : "out", tip));
   const work = planTipWork(pd, tip);
   if (work === null) mark();
   else withWorkPinned({ space: work.space, intent: work.dirName }, mark);
@@ -9919,22 +9913,43 @@ export function leadsPlanWrite(projectDir: string, change: {
   return change.unasked ? quietly(write) : write();
 }
 
-// The commit on `tip`'s line that made the plan closed or open as `tip` has
-// it, or null where none did (a plan never closed). A plan commit only. Only
-// the 50 newest commits are read, as planBelow reads them: each is one git
-// process at a step, and a close older than that reads as none.
-function closedFlip(pd: string, tip: string): string | null {
+// The plan commits on `tip`'s line from the one that made the plan closed or
+// open as `tip` has it up to `tip`, oldest first, or null where none did (a
+// plan never closed). Plan commits only. Only the 50 newest commits are read,
+// as planBelow reads them: each is one git process at a step, and a close older
+// than that reads as none.
+function closedLine(pd: string, tip: string): string[] | null {
   const closedAt = (commit: string): boolean | null => {
     const plan = planJsonOf(localGit(pd, ["show", `${commit}:plan.json`, "--"]).stdout).plan;
     return plan === null ? null : plan.closed !== undefined;
   };
   const line = localGit(pd, ["rev-list", "--first-parent", "--max-count=50", tip]).stdout.split(/\r?\n/).map((entry) => entry.trim()).filter(Boolean);
   const now = closedAt(tip);
-  for (const [at, commit] of line.entries()) {
+  for (const at of line.keys()) {
     const before = line[at + 1] === undefined ? false : closedAt(line[at + 1]);
-    if (before !== now) return commit;
+    if (before !== now) return line.slice(0, at + 1).reverse();
   }
   return null;
+}
+
+// The commit that made the plan closed or open as `tip` has it (closedLine).
+function closedFlip(pd: string, tip: string): string | null {
+  return closedLine(pd, tip)?.[0] ?? null;
+}
+
+// The lead's own act on the work on this computer since it first wrote or kept
+// a plan commit of `line` (the close or open-again and those on top of it; a
+// commit under a kept tip has no mark of its own): a row of this computer's own
+// audit after that mark that finishes or archives the work (`closed`), or that
+// brings it back (an unarchive, a jump back to a stage, a scope change that
+// reopens it).
+const CLOSING_ACTS = ["WORKFLOW_COMPLETED", "WORKFLOW_ARCHIVED"];
+const OPENING_ACTS = ["WORKFLOW_UNARCHIVED", "STAGE_JUMPED", "SCOPE_CHANGED"];
+function actedSince(pd: string, line: readonly string[], closed: boolean): boolean {
+  const mark = line.map((commit) => engineAskMark(pd, planMark("here", commit))).find((found) => found !== null) ?? null;
+  const after = mark === null ? null : rowsAfterMark(pd, mark);
+  const acts = closed ? CLOSING_ACTS : OPENING_ACTS;
+  return after !== null && readAuditShardEvents(pd).some((row) => after(row) && acts.includes(row.event));
 }
 
 // Who closed the plan at `copy`, as its commit says, with its label and
@@ -9971,10 +9986,10 @@ export function planEndNow(projectDir: string, work: { space: string; dirName: s
     const status = getField(led.state, "Status")?.trim();
     const closed = status === "Completed" || status === "Archived";
     if ((led.kept.plan.closed !== undefined) === closed) return null;
-    // Quietly, only over a close or open-again this computer wrote (or a plan never closed).
-    const flip = closedFlip(pd, led.kept.commit);
-    const own = flip !== null && engineAskMark(pd, planMark("here", flip)) !== null && engineAskMark(pd, planMark("asked", flip)) === null;
-    if (!asked && (flip === null ? led.kept.plan.closed !== undefined : !own)) return null;
+    // Quietly, only for the lead's own act here since this computer wrote or kept the plan's last close or
+    // open-again (or on a plan never closed): a look alone never writes from a difference.
+    const line = closedLine(pd, led.kept.commit);
+    if (!asked && (line === null ? led.kept.plan.closed !== undefined : !actedSince(pd, line, closed))) return null;
     let written: LeadWrite;
     try {
       written = leadsPlanWrite(pd, { what: closed ? "closed" : "open again", unasked: true, closed });

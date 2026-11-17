@@ -25,6 +25,7 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { chmodSync, cpSync, existsSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { planJsonOf } from "../../dist/claude/.claude/tools/aidlc-unit-teams.ts";
 import {
   cleanupTeamBuild,
@@ -216,6 +217,17 @@ function statusOf(dir: string, status: "Completed" | "Running"): void {
   writeFileSync(path, readFileSync(path, "utf-8").replace(/^- \*\*Status\*\*: .*$/m, `- **Status**: ${status}`));
 }
 
+// The lead's own act on the work in `dir`, as the engine records it there: the
+// finish, or a step back by a scope change that reopens it.
+function finishes(dir: string): void {
+  statusOf(dir, "Completed");
+  appendAuditEntry("WORKFLOW_COMPLETED", { Stage: "build-and-test" }, dir, HOME_RECORD, "default");
+}
+function stepsBack(dir: string): void {
+  statusOf(dir, "Running");
+  appendAuditEntry("SCOPE_CHANGED", { Stage: "functional-design" }, dir, HOME_RECORD, "default");
+}
+
 // A host that takes no push of the plan, by a hook, until `takes` is run.
 function refusePlans(host: string): { takes: () => void } {
   const hook = join(host, "hooks", "pre-receive");
@@ -266,12 +278,12 @@ describe("the plan's end, written at the lead's own steps", () => {
   test("the finish closes the plan at the next step, said once; a step back opens it again at the step after", () => {
     const home = makePlanHome();
     const host = home.hosts["checkout-api"];
-    statusOf(home.dir, "Completed");
+    finishes(home.dir);
     const step = next(home.dir, later);
     expect(said(step), JSON.stringify(step).slice(0, 800)).toContain(CLOSED_LINE);
     expect(planAt(host, home.id8).closed).toBeDefined();
     expect(JSON.stringify(next(home.dir, later))).not.toContain(CLOSED_LINE);
-    statusOf(home.dir, "Running");
+    stepsBack(home.dir);
     expect(said(next(home.dir, later))).toContain(OPEN_AGAIN_LINE);
     expect(planAt(host, home.id8).closed).toBeUndefined();
   });
@@ -321,7 +333,7 @@ describe("the plan's end, written at the lead's own steps", () => {
     expect(planAt(host, home.id8)).toMatchObject({ settings: { note: "theirs" }, closed: expect.any(Object) });
   });
 
-  test("a close another computer of the lead's wrote is never taken off by one whose work still runs, asked about or kept", () => {
+  test("a close another computer of the lead's wrote is never taken off by one whose work still runs, asked about or kept, at any number of looks", () => {
     const home = makePlanHome();
     const host = home.hosts["checkout-api"];
     const other = `${home.dir}-other`;
@@ -334,8 +346,9 @@ describe("the plan's end, written at the lead's own steps", () => {
     expect(planAt(host, home.id8).closed).toBeDefined();
     const keep = ((ask.choices ?? []) as Array<{ label: string; command: string }>).find((choice) => choice.label === "Keep it")!;
     expect(run(UNIT, ["plan-change", "keep", "--tip", /--tip ([0-9a-f]+)/.exec(keep.command)![1]], other).status).toBe(0);
-    const after = next(other, { ...ENV, AIDLC_SESSION_OVERRIDE: "other-3" });
-    expect(JSON.stringify(after)).not.toContain(OPEN_AGAIN_LINE);
+    for (const chat of ["other-3", "other-4", "other-5"]) {
+      expect(JSON.stringify(next(other, { ...ENV, AIDLC_SESSION_OVERRIDE: chat }))).not.toContain(OPEN_AGAIN_LINE);
+    }
     expect(planAt(host, home.id8).closed).toBeDefined();
   });
 
@@ -353,6 +366,39 @@ describe("the plan's end, written at the lead's own steps", () => {
     expect(planAt(host, home.id8).closed).toBeDefined();
   });
 
+  test("a word the first computer wrote on top before the second kept it: the second computer's own act still writes", () => {
+    const keepAt = (step: Record<string, unknown>, dir: string): void => {
+      expect(step.ask_type, JSON.stringify(step).slice(0, 600)).toBe("lead-plan-change");
+      const choice = ((step.choices ?? []) as Array<{ label: string; command: string }>).find((entry) => entry.label.startsWith("Keep"))!;
+      expect(run(UNIT, ["plan-change", "keep", "--tip", /--tip ([0-9a-f]+)/.exec(choice.command)![1]], dir).status).toBe(0);
+    };
+    // A close with the lead's word on top of it, kept on the second computer, then a step back there.
+    const home = makePlanHome();
+    const host = home.hosts["checkout-api"];
+    const other = `${home.dir}-other`;
+    cpSync(home.dir, other, { recursive: true });
+    finishes(home.dir);
+    next(home.dir, later);
+    expect(run(UNIT, ["lead-sign-off", "on"], home.dir).status).toBe(0);
+    expect(planAt(host, home.id8)).toMatchObject({ closed: expect.any(Object) });
+    statusOf(other, "Completed");
+    keepAt(next(other, { ...ENV, AIDLC_SESSION_OVERRIDE: "other-1" }), other);
+    stepsBack(other);
+    expect(said(next(other, { ...ENV, AIDLC_SESSION_OVERRIDE: "other-2" }))).toContain(OPEN_AGAIN_LINE);
+    expect(planAt(host, home.id8).closed).toBeUndefined();
+    // An open-again with the lead's word on top of it, kept on the second computer, then the finish there.
+    const again = makePlanHome();
+    const second = `${again.dir}-other`;
+    cpSync(again.dir, second, { recursive: true });
+    expect(ARCHIVE(again.dir).status).toBe(0);
+    expect(UNARCHIVE(again.dir).status).toBe(0);
+    expect(run(UNIT, ["lead-sign-off", "on"], again.dir).status).toBe(0);
+    keepAt(next(second, { ...ENV, AIDLC_SESSION_OVERRIDE: "other-1" }), second);
+    finishes(second);
+    expect(said(next(second, { ...ENV, AIDLC_SESSION_OVERRIDE: "other-2" }))).toContain(CLOSED_LINE);
+    expect(planAt(again.hosts["checkout-api"], again.id8).closed).toBeDefined();
+  });
+
   test("an open-again another computer wrote is never closed again by a state that still says archived", () => {
     const home = makePlanHome();
     const host = home.hosts["checkout-api"];
@@ -365,6 +411,53 @@ describe("the plan's end, written at the lead's own steps", () => {
     const after = next(other, { ...ENV, AIDLC_SESSION_OVERRIDE: "other-2" });
     expect(JSON.stringify(after)).not.toContain(CLOSED_LINE);
     expect(planAt(host, home.id8).closed).toBeUndefined();
+  });
+
+  test("a second computer that kept the close opens the plan again at its own step back there, said once; the first, keeping that, writes nothing", () => {
+    const home = makePlanHome();
+    const host = home.hosts["checkout-api"];
+    const other = `${home.dir}-other`;
+    cpSync(home.dir, other, { recursive: true });
+    finishes(home.dir);
+    next(home.dir, later);
+    expect(planAt(host, home.id8).closed).toBeDefined();
+    // The finished state reaches the second computer (as a pull brings it), with no act of its own there.
+    statusOf(other, "Completed");
+    const ask = next(other, { ...ENV, AIDLC_SESSION_OVERRIDE: "other-1" });
+    expect(ask.ask_type, JSON.stringify(ask).slice(0, 600)).toBe("lead-plan-change");
+    const keep = (step: Record<string, unknown>, dir: string): void => {
+      const choice = ((step.choices ?? []) as Array<{ label: string; command: string }>).find((entry) => entry.label === "Keep it")!;
+      expect(run(UNIT, ["plan-change", "keep", "--tip", /--tip ([0-9a-f]+)/.exec(choice.command)![1]], dir).status).toBe(0);
+    };
+    keep(ask, other);
+    expect(planAt(host, home.id8).closed).toBeDefined();
+    stepsBack(other);
+    const back = next(other, { ...ENV, AIDLC_SESSION_OVERRIDE: "other-2" });
+    expect(said(back), JSON.stringify(back).slice(0, 600)).toContain(OPEN_AGAIN_LINE);
+    expect(planAt(host, home.id8).closed).toBeUndefined();
+    expect(JSON.stringify(next(other, { ...ENV, AIDLC_SESSION_OVERRIDE: "other-3" }))).not.toContain(OPEN_AGAIN_LINE);
+    // The first computer, its work still finished: asked about that change at its look, kept, and nothing written.
+    const first = next(home.dir, { ...ENV, AIDLC_SESSION_OVERRIDE: "lead-after" });
+    if (first.ask_type === "lead-plan-change") keep(first, home.dir);
+    next(home.dir, { ...ENV, AIDLC_SESSION_OVERRIDE: "lead-after-2" });
+    expect(planAt(host, home.id8).closed).toBeUndefined();
+  });
+
+  test("a second computer that kept an open-again closes the plan when the work finishes there", () => {
+    const home = makePlanHome();
+    const host = home.hosts["checkout-api"];
+    const other = `${home.dir}-other`;
+    cpSync(home.dir, other, { recursive: true });
+    expect(ARCHIVE(home.dir).status).toBe(0);
+    expect(UNARCHIVE(home.dir).status).toBe(0);
+    const ask = next(other, { ...ENV, AIDLC_SESSION_OVERRIDE: "other-1" });
+    expect(ask.ask_type, JSON.stringify(ask).slice(0, 600)).toBe("lead-plan-change");
+    const choice = ((ask.choices ?? []) as Array<{ label: string; command: string }>).find((entry) => entry.label.startsWith("Keep"))!;
+    expect(run(UNIT, ["plan-change", "keep", "--tip", /--tip ([0-9a-f]+)/.exec(choice.command)![1]], other).status).toBe(0);
+    finishes(other);
+    const done = next(other, { ...ENV, AIDLC_SESSION_OVERRIDE: "other-2" });
+    expect(said(done), JSON.stringify(done).slice(0, 600)).toContain(CLOSED_LINE);
+    expect(planAt(host, home.id8).closed).toBeDefined();
   });
 
   test("nothing of the chat changes under the end write, nor where the write throws inside it", () => {
