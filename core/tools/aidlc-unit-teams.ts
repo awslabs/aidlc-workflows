@@ -856,6 +856,7 @@ function unitStagesOfTeams(stateContent: string, scope: string): Set<string> | n
 // for it; a checkout that merge left ahead and behind hears the command that
 // brings it level, losing nothing (levelByContent).
 export function checkInStatus(state: CheckIn): string | null {
+  if (state === "ignored") return "Checked in:     no, git ignores aidlc/ here";
   if (typeof state === "string") return null;
   if ("pushedOn" in state) return `Checked in:     pushed on ${state.pushedOn}, not in ${state.into} yet`;
   const yes = `Checked in:     yes, aidlc/ is in ${state.into} on ${state.remote}`;

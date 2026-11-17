@@ -2573,7 +2573,8 @@ To get started:
   const yours = selection.intent === null ? null : ownOtherBuilds(projectDir, { space: selection.space, dirName: selection.intent }, content);
   const yoursLine = yours === null ? "" : `Yours:          ${yours}\n`;
   // Said only when it is so, in the branch the work merges into or pushed on a
-  // branch of its own: a record not checked in, or one git cannot tell about, says nothing here.
+  // branch of its own, or ignored by git here: a record not checked in, or one
+  // git cannot tell about, says nothing here.
   const checkedIn = checkInApplies(projectDir, content) ? checkInStatus(checkInState(projectDir, content)) : null;
   const checkedInLine = checkedIn === null ? "" : `${checkedIn}\n`;
   // Work an older AI-DLC recorded, brought up to this one in place: said here

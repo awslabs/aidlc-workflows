@@ -922,8 +922,9 @@ says it. Asked where things stand (`/aidlc --status`), a Unit's build says where
 its record is: after your own commit and push, `Checked in:     yes, aidlc/ is
 in main on origin`. That is read from your local git only: the rows each look
 adds to this clone's own audit file are left out of it (a decision of yours
-there still counts), and a branch never pushed, or an `aidlc/` git ignores here,
-says nothing. It is the branch the work merges into, as this clone last fetched
+there still counts); a branch never pushed says nothing, and an `aidlc/` git
+ignores here, with none of it committed, shows `Checked in:     no, git ignores
+aidlc/ here`. It is the branch the work merges into, as this clone last fetched
 it: a record pushed on a branch of its own, for a pull request, shows
 `Checked in:     pushed on <branch>, not in main yet` until the merge reaches
 this clone by your own fetch or pull.
