@@ -1397,6 +1397,10 @@ describe("a repository that moved hosts: the plan taken over where it is now", (
     const later = `${JSON.stringify(next(home.dir))} ${String(share(home.dir).json?.notice)}`;
     expect(later).not.toContain("say which stands");
     expect(later).not.toContain("in its place");
+    // A plain ask that finds nothing of the lead's left still says what the share itself wrote.
+    ADDED(home.dir);
+    expect(carryRun(home.dir, "t-plan-ref-words-added-kinds", "carry my words over", ["--carry-words"]).json?.notice)
+      .toBe("The plan in billing has ledger-sync now.");
     expect(carryRun(home.dir, "t-plan-ref-words-again-kinds", "carry my words over", ["--carry-words"]).json?.notice)
       .toBe("The plan in billing already has everything here.");
     expect(JSON.stringify(planAt(billing, ref).units.map((unit) => unit.word))).not.toMatch(/"words":"(yes|mine stands on refunds, and write the send-back there|carry my words over)"/);

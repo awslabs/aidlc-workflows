@@ -1160,8 +1160,8 @@ take the note, the plan stays where it was and the copy just written is taken
 back. Your other computers follow the note at their next look or share; one that holds words of yours the plan there
 lacks lists them, and `--carry-words` writes them on the plan as you gave them. Where the plan there has the
 opposite decision on a Unit, or another turn-down of it, the line asks which stands, or offers this computer's in
-its place; `--stands <unit>=here` writes this computer's word there, `--stands <unit>=plan` keeps the plan's, and
-either way that Unit's other words go with it. Nothing of the answer is remembered: `--carry-words` works it out
+its place; `--stands <unit>=here` writes this computer's word there and `--stands <unit>=plan` keeps the plan's,
+and where the line asked which stands, that Unit's other words go on with either answer. Nothing of the answer is remembered: `--carry-words` works it out
 again whenever you ask, and a second move by this computer into the same repository asks again. With a walking
 skeleton's code built in the workspace's own repository, the share also commits
 that code and AI-DLC's record and pushes them as above (`--branch` for a pull

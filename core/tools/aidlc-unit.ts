@@ -7300,9 +7300,10 @@ function writeSharedPlan(pd: string, message?: string, named?: string, carry?: C
       ...(kept.length === 0 ? [] : [`The plan in ${repo} keeps its own word on ${namesInProse(kept)}.`]),
     ];
     const still = carryOpenLine(repo, list, open, said.length === 0);
-    const line = [...followedLine, ...said, ...still.said];
-    return { repo, address, commit: written.commit, said: (line.length > followedLine.length ? line : [...line, `The plan in ${repo} already has everything here.`]).join(" "),
-      ...(still.step === null ? {} : { step: still.step }) };
+    // A carry that says nothing leaves the share's own line, for a write made for another reason too.
+    if (said.length > 0 || still.said.length > 0) {
+      return { repo, address, commit: written.commit, said: [...followedLine, ...said, ...still.said].join(" "), ...(still.step === null ? {} : { step: still.step }) };
+    }
   }
   if (written.kind === "unchanged") {
     return { repo, address, commit: written.commit, said: [...followedLine, `The plan in ${repo} already has everything here.`].join(" ") };
