@@ -3150,7 +3150,7 @@ describe("a Unit on the workspace's own repository", () => {
   // with its first line marked as the record, so a rule their code commit
   // meets the record meets too.
   const recordWent = (unit: string): string =>
-    `AI-DLC's record of ${unit} went with it, so your teammates see where it stands once ${unit} is merged.`;
+    `AI-DLC's record of ${unit} went with it, in a commit of its own.`;
   const committed = (host: string, rev: string): string[] =>
     git(host, ["diff-tree", "-r", "--no-commit-id", "--name-only", rev]).split("\n").filter(Boolean);
 

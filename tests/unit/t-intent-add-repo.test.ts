@@ -971,7 +971,7 @@ describe("work that records no repos", () => {
     const r = utility(["intent", "add-repo", "checkout-api", "--path", absolute]);
     expect(r.rc, r.out).toBe(0);
     expect(repos()).toEqual(["checkout-api"]);
-    expect(r.out).toContain("It is a path on this machine, so a teammate whose copy is elsewhere gives theirs in aidlc/repos.local.json.");
+    expect(r.out).toContain("It is a path on this machine; on a computer that has it elsewhere, its path there goes in aidlc/repos.local.json.");
   });
 
   test("set-repos: the first set before Construction; --all keeps the workspace folder and changes nothing", () => {

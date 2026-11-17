@@ -10173,7 +10173,7 @@ function plannedRepoPath(
   if (next === null) die(`${name} could not be added to repos.json, which has no repos list. Nothing was changed.`);
   // Its commit is offered at the next look (reposCommitOffer), never asked of the person here.
   const share = isAbsolute(shown) || /^[A-Za-z]:\//.test(shown)
-    ? ` It is a path on this machine, so a teammate whose copy is elsewhere gives theirs in ${REPOS_LOCAL_PLACE}.`
+    ? ` It is a path on this machine; on a computer that has it elsewhere, its path there goes in ${REPOS_LOCAL_PLACE}.`
     : "";
   const stripped = kept !== address ? " Its address there leaves out the credential." : "";
   const where = resolve(dir) === resolve(projectDir) ? "as the workspace folder itself" : `at ${shown}`;

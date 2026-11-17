@@ -5853,7 +5853,7 @@ function reposManifestAsk(projectDir: string, stateContent: string, atBoundary: 
     ask_type: "repos-manifest",
     response_route: "command",
     question: `${addedWorkspace ? `Add ${listed} to repos.json?` : `Write repos.json from ${listed}?`} It lists each one's folder and the address its origin points to, ` +
-      "so a teammate's clone knows where they go.",
+      "so AI-DLC can clone them into another copy of this workspace.",
     choices: [
       {
         label: addedWorkspace ? (names.length === 1 ? "Add it" : "Add them") : "Write it",
@@ -8086,7 +8086,7 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
       }
     } else if (a === "--lead-address") {
       if (value === undefined) {
-        flags.parseError = "--lead-address requires the lead's project address.";
+        flags.parseError = "--lead-address requires the address of the repository the plan is shared in.";
       } else {
         flags.leadAddress = value;
       }

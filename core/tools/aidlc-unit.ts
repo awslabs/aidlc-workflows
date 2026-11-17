@@ -6841,8 +6841,7 @@ export function reposCommitOffer(pd: string, unitBuild: boolean): { mark: string
   return {
     mark: teamHandoverMarkName("repos-commit", key),
     key,
-    question: `repos.json now lists ${joinNames(due.names)}, and your team gets it once it is committed. Want me to commit AI-DLC's ` +
-      "record in aidlc/, with the list, using this commit message?",
+    question: `repos.json now lists ${joinNames(due.names)}. Want me to commit AI-DLC's record in aidlc/, with the list, using this commit message?`,
   };
 }
 
@@ -8369,7 +8368,7 @@ function homePlanAt(projectDir: string, home: HomeWork, oid: string, branch: str
   const read = (rel: string): string => {
     const shown = git(projectDir, ["show", `${oid}:${home.recordPrefix}/${rel}`, "--"]);
     if (!shown.ok) {
-      fail(`The lead's work is not on its branch ${branch} yet, so there is nothing to take: the lead pushes it first.`);
+      fail(`The lead's work is not on its branch ${branch} yet, so there is nothing to take.`);
     }
     return shown.stdout;
   };
@@ -10660,7 +10659,7 @@ function takeUnit(args: string[], projectDir?: string, rhythm?: UnitClaimPayload
     carryOn(found, said.before, said.after);
     return;
   }
-  if (opening.completed.has(unit)) fail(`${unit} is already done at the lead's project.`);
+  if (opening.completed.has(unit)) fail(`${unit} is already done.`);
   // A Unit the home marked done on its claim counts as done, pushed state or not.
   // A dependency's record stops the take when it cannot be read only where the
   // person asked to start early on it; otherwise it is read as last seen here.
@@ -10684,10 +10683,12 @@ function takeUnit(args: string[], projectDir?: string, rhythm?: UnitClaimPayload
   const pushedDeps = blockers.every((dep) => depClaims.get(dep)?.payload.result !== undefined);
   const early = askedEarly && blockers.length > 0 && pushedDeps;
   if (blockers.length > 0 && !early) {
+    // The walking skeleton by its Unit's name, never the engine's token for it.
+    const named = [...new Set(blockers.map((dep) => (dep === "walking-skeleton" ? opening.skeleton : dep)))];
     fail(
-      `${unit} waits on ${blockers.join(", ")}, which ${blockers.length === 1 ? "is" : "are"} not done at the lead's project yet. ` +
-        `It opens once ${blockers.length === 1 ? "it is" : "they are"} done` +
-        (pushedDeps ? `, or starts early on ${blockers.length === 1 ? "its" : "their"} pushed branches if you ask.` : "."),
+      `${unit} waits on ${named.join(", ")}, which ${named.length === 1 ? "is" : "are"} not done yet. ` +
+        `It opens once ${named.length === 1 ? "it is" : "they are"} done` +
+        (pushedDeps ? `, or starts early on ${named.length === 1 ? "its" : "their"} pushed branches if you ask.` : "."),
     );
   }
   // The Unit's own repos, as its Unit plan lists them (its likely repos; one
@@ -11544,7 +11545,7 @@ export function readBuildClaims(projectDir: string, stateContent: string): void 
 export class GitWriteRefused extends Error {
   // `from`: the repository a look read, where it is known.
   constructor(gitLine: string, from?: string) {
-    super(`${from === undefined ? "The news from the lead's project" : `What was read from ${from}`} reached this workspace, but its .git cannot be written in this session ` +
+    super(`${from === undefined ? "What was read" : `What was read from ${from}`} reached this workspace, but its .git cannot be written in this session ` +
       `(git: ${gitLine}), so it was not taken in. Run the same command again with write access to it (on Codex, ` +
       "with escalated permissions, or with the repository's .git in writable_roots as the shipped config.toml shows); " +
       "nothing else changes.");
@@ -11807,7 +11808,7 @@ function sendBuildRecord(pd: string, remote: string, branch: string, unit: strin
   const head = git(pd, ["rev-parse", "HEAD"]).stdout.trim();
   if (head === before) return { line: null, went: false };
   const pushed = git(pd, ["push", remote, branch]);
-  if (pushed.ok) return { line: `AI-DLC's record of ${unit} went with it, so your teammates see where it stands once ${unit} is merged.`, went: true };
+  if (pushed.ok) return { line: `AI-DLC's record of ${unit} went with it, in a commit of its own.`, went: true };
   git(pd, ["update-ref", `refs/heads/${branch}`, before, head]);
   git(pd, ["reset", "-q", "--", ...paths]);
   return notSent(pushRefusal(pushed.stderr));

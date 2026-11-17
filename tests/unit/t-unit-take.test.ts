@@ -520,6 +520,11 @@ describe("a team member's clone of the home's workspace", () => {
         "Nothing is ready to take yet.",
     );
     expect(git(alice, ["status", "--porcelain"])).toBe("");
+    // Asked for one anyway: the skeleton by its Unit's name, never the engine's token for it.
+    const typed = takeFrom("payments", alice, "refunds");
+    expect(typed.status).not.toBe(0);
+    expect(typed.out).toContain("refunds waits on orders, which is not done yet. It opens once it is done.");
+    expect(typed.out).not.toContain("walking-skeleton");
   });
 
   test("a clone a day old hears the claims as the home has them now: a Unit whose dependency merged since opens, with no fetch by hand", () => {
@@ -1065,7 +1070,7 @@ describe("a Unit someone holds is not taken again", () => {
     const home = homeWithTeams();
     const waiting = take(cloneOf(home.remote, "carol"), "reporting");
     expect(waiting.status).not.toBe(0);
-    expect(waiting.out).toContain("reporting waits on refunds, which is not done at the lead's project yet. It opens once it is done.");
+    expect(waiting.out).toContain("reporting waits on refunds, which is not done yet. It opens once it is done.");
   });
 
   // The GitHub live test: a teammate checked her finished build in on a

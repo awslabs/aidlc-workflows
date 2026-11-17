@@ -345,6 +345,9 @@ describe("a team takes a Unit from the plan where it is shared", () => {
     const step = run(ORCH, ["next", "--lead-address", nowhere], pay);
     expect(String(step.json?.message ?? step.json?.error), step.out).toContain(`${nowhere} could not be read: `);
     expect(step.out).not.toContain("has no plan shared in it");
+    // Given no address at all: what the flag takes, in the words the person gives it.
+    const bare = run(ORCH, ["next", "--lead-address"], pay);
+    expect(bare.out).toContain("--lead-address requires the address of the repository the plan is shared in.");
   });
 
   test("the offer names the plan's repository, and who made the plan's last commit and when, as that commit says", async () => {

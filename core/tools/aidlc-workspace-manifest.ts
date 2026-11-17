@@ -84,9 +84,9 @@ export function commitOwnCommand(message: string, paths: readonly string[]): str
 // The move said at the person's own terminal (aidlc config), with the command
 // that shares it.
 export function reposMovedAtTerminalLine(): string {
-  return `AI-DLC moved repos.json into aidlc/. To share it with your team, run ` +
-    `\`${commitOwnCommand("AI-DLC moved repos.json into aidlc/", [REPOS_FILE, `aidlc/${REPOS_FILE}`])}\`; teammates need AI-DLC ` +
-    `${REPOS_IN_AIDLC_SINCE.major}.${REPOS_IN_AIDLC_SINCE.minor} or newer.`;
+  return `AI-DLC moved repos.json into aidlc/ and did not commit the move; ` +
+    `\`${commitOwnCommand("AI-DLC moved repos.json into aidlc/", [REPOS_FILE, `aidlc/${REPOS_FILE}`])}\` commits it. Teammates need AI-DLC ` +
+    `${REPOS_IN_AIDLC_SINCE.major}.${REPOS_IN_AIDLC_SINCE.minor} or newer to find it there.`;
 }
 
 /** A release from before this layout: it reads repos.json only at the root and

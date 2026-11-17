@@ -620,7 +620,7 @@ describe("the one offer to write repos.json", () => {
     expect(ask.response_route).toBe("command");
     expect(ask.question).toBe(
       "Write repos.json from the 2 repos found here (checkout-api, checkout-web)? It lists each one's folder and " +
-        "the address its origin points to, so a teammate's clone knows where they go.",
+        "the address its origin points to, so AI-DLC can clone them into another copy of this workspace.",
     );
     const choices = ask.choices as Array<{ label: string; command: string }>;
     expect(choices.map((choice) => choice.label)).toEqual(["Write it", "Not now"]);
@@ -685,7 +685,7 @@ describe("the one offer to write repos.json", () => {
     expect(ask.ask_type, JSON.stringify(ask)).toBe("repos-manifest");
     expect(ask.question).toBe(
       "Add the 2 repos found here (tracker-cli, tracker-core) to repos.json? It lists each one's folder and " +
-        "the address its origin points to, so a teammate's clone knows where they go.",
+        "the address its origin points to, so AI-DLC can clone them into another copy of this workspace.",
     );
     const written = sync(proj, ["--write-manifest"]);
     expect(written.status, written.out).toBe(0);
@@ -697,7 +697,7 @@ describe("the one offer to write repos.json", () => {
     const after = next(proj);
     expect(isWriteOffer(after), JSON.stringify(after)).toBe(false);
     expect(after.question).toBe(
-      "repos.json now lists habits, tracker-cli and tracker-core, and your team gets it once it is committed. Want me to " +
+      "repos.json now lists habits, tracker-cli and tracker-core. Want me to " +
         "commit AI-DLC's record in aidlc/, with the list, using this commit message?\n\nUpdate AI-DLC's record",
     );
   });
@@ -773,7 +773,7 @@ describe("the one offer to write repos.json", () => {
     expect(ask.question).toStartWith("Add the 2 repos found here (tracker-cli, tracker-core) to repos.json?");
     // Not now to it: the list the add wrote is offered for its commit, once, at the same boundary.
     const commit = next(proj);
-    expect(commit.question, JSON.stringify(commit).slice(0, 600)).toStartWith("repos.json now lists habits, and your team gets it");
+    expect(commit.question, JSON.stringify(commit).slice(0, 600)).toStartWith("repos.json now lists habits. Want me to commit");
     const step = next(proj);
     expect(step.ask_type ?? null, JSON.stringify(step).slice(0, 600)).not.toBe("repos-manifest");
     expect([step.kind, step.stage, step.unit]).toEqual(["run-stage", "functional-design", "u2-tracker-cli"]);

@@ -839,8 +839,7 @@ space's own files while the space is new to git, never the lead's record or
 another build's. Its message is "refunds: AI-DLC's record", or your own
 message with " (AI-DLC's record)" after its first line, so a ticket key or a
 sign-off your code commit carries is on it too. The line then says "AI-DLC's
-record of refunds went with it, so your teammates see where it stands once
-refunds is merged." AI-DLC never pushes the record again to an open pull
+record of refunds went with it, in a commit of its own." AI-DLC never pushes the record again to an open pull
 request; a later push of the Unit (a redo) carries it as it is then. When your
 hook or your host refuses the record, the code stays pushed, the branch stays
 where the code's push left it, the line says so once in their words, and the

@@ -465,7 +465,7 @@ describe("the Units the lead's project builds, and no others", () => {
     try {
       const took = run(UNIT, ["take", "reporting", "--plan", home.id8, "--from", home.hosts["checkout-api"]], reporting);
       expect(took.status).not.toBe(0);
-      expect(took.out).toContain("reporting waits on checkout-ui, which is not done at the lead's project yet.");
+      expect(took.out).toContain("reporting waits on checkout-ui, which is not done yet.");
     } finally {
       renameSync(`${web}-away`, web);
     }

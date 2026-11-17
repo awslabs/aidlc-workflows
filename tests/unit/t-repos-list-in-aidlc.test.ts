@@ -324,8 +324,8 @@ describe("config's refresh moves the list", () => {
     const dir = projectBehind();
     const first = config(dir, ["--harness", "claude", "--from", COPY]);
     expect(first.status, first.out).toBe(0);
-    expect(first.out).toContain("AI-DLC moved repos.json into aidlc/. To share it with your team, run `git commit -m " +
-      '"AI-DLC moved repos.json into aidlc/" repos.json aidlc/repos.json`; teammates need AI-DLC 2.12 or newer.');
+    expect(first.out).toContain("AI-DLC moved repos.json into aidlc/ and did not commit the move; `git commit -m " +
+      '"AI-DLC moved repos.json into aidlc/" repos.json aidlc/repos.json` commits it. Teammates need AI-DLC 2.12 or newer to find it there.');
     expect(first.out).not.toContain(REPOS_MOVED_LINE);
     expect(git(dir, ["status", "--porcelain"])).toContain("R  repos.json -> aidlc/repos.json");
     const status = git(dir, ["status", "--porcelain"]);
@@ -340,6 +340,22 @@ describe("config's refresh moves the list", () => {
     git(dir, ["commit", "-q", "-m", "AI-DLC moved repos.json into aidlc/", "repos.json", "aidlc/repos.json"]);
     expect(git(dir, ["show", "--name-status", "--format=", "HEAD"])).toMatch(/^R\d*\trepos\.json\taidlc\/repos\.json$/);
     expect(git(dir, ["diff", "--cached", "--name-only"])).toBe("notes.md");
+  });
+
+  // The command it names commits a move git made; a list git never tracked moves by a plain rename, which that
+  // command would not find, so nothing is said of it.
+  test("an untracked list moves with nothing said at the terminal", () => {
+    const dir = workspace();
+    const setup = config(dir, ["--harness", "claude", "--mcp", "none", "--yes", "--quiet", "--from", earlierTree()]);
+    expect(setup.status, setup.out).toBe(0);
+    writeFileSync(join(dir, "repos.json"), list("billing"));
+    git(dir, ["add", "-A", "--", ".", ":!repos.json"]);
+    git(dir, ["commit", "-q", "-m", "setup"]);
+    const first = config(dir, ["--harness", "claude", "--from", COPY]);
+    expect(first.status, first.out).toBe(0);
+    expect(existsSync(join(dir, "aidlc", "repos.json"))).toBe(true);
+    expect(first.out).not.toContain("did not commit the move");
+    expect(first.out).not.toContain("repos.json");
   });
 
   test("never in a dry run, nor while it puts an earlier release's files in", () => {

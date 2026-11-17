@@ -447,7 +447,7 @@ as `***`; `repos.json`, which your team commits, gets the address without its
 credentials. With no `repos.json`, a
 hosted `--url` (a host, an owner and a name) creates one that lists the repo,
 and the line says so; the next step offers once to commit it with AI-DLC's
-record (`unit commit-record`), so your team gets the list. A local path, or
+record (`unit commit-record`). A local path, or
 an address of another shape, adds the repo without creating the file. When the
 clone fails, nothing is recorded or changed, and the line gives git's reason
 and the `git clone` command to run by hand. A repo no `repos.json` lists, added
@@ -459,9 +459,9 @@ with `--path`. The folder must be a Git checkout before anything is written;
 then `repos.json` lists the repo with that path (a new file when there is none,
 your comments and layout kept otherwise, with the managed `.gitignore` block and
 `aidlc.code-workspace` refreshed), and the repo is recorded. A path written on
-Windows (`..\billing`) reads the same on every platform. The line says to
-commit `repos.json` to share it, or, for a path on this machine only, that a
-teammate whose copy is elsewhere gives theirs in `aidlc/repos.local.json`. A repo
+Windows (`..\billing`) reads the same on every platform. The line says what
+`repos.json` now lists, and, for a path on this machine only, that on a computer
+that has it elsewhere its path there goes in `aidlc/repos.local.json`. A repo
 `repos.json` already puts somewhere else is refused with where it is, and how to
 change it.
 

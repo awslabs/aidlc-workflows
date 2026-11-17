@@ -954,7 +954,7 @@ describe("the plan's share fits the team's own git: a protected main, a branch o
     const names = [...parsed.repos.map((repo) => repo.name), "notify"];
     writeFileSync(list, `${JSON.stringify({ repos: [...parsed.repos, { name: "notify", url: "https://git.example.invalid/notify.git" }] }, null, 2)}\n`);
     const listed = names.length === 2 ? `${names[0]} and ${names[1]}` : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
-    const question = `repos.json now lists ${listed}, and your team gets it once it is committed. Want me to commit AI-DLC's record in ` +
+    const question = `repos.json now lists ${listed}. Want me to commit AI-DLC's record in ` +
       "aidlc/, with the list, using this commit message?\n\nUpdate AI-DLC's record";
     const file = `${REQUEST_TEXT_DIR}/unit-record-message-${git(dir, ["hash-object", "repos.json"]).slice(0, 12)}.txt`;
     // At the stage boundary, after the questions about the work's own step, which the person answers first:
