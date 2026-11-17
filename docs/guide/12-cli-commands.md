@@ -910,7 +910,9 @@ git's marks. `repos.json` is put together where both sides only add different
 repositories; where one repository is listed differently, the line names it and
 asks which to keep; otherwise it stays as main has it, the change kept in git
 for now (not for good: git may drop it after a while) under the id the line
-names.
+names. A state file, or a file git cannot merge as text, is tried first without
+touching anything; where its change would not go back, the step does not start,
+and the line says so with the way on.
 
 When the Unit's branch on the remote still holds the build pushed before and
 this build is not on top of it (a redo from the newer main after a turn-down,

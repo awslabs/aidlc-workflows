@@ -13773,6 +13773,14 @@ function mergeMainIn(pd: string, args: string[], unit: string, branch: string, u
     }
     const recordFiles = entry.repo !== "." ? [] : ownChanged.filter((path) => mergeChanges.has(path) &&
       recordPaths(dir).some((own) => path === own || (own.endsWith("/") && path.startsWith(own))));
+    // A state file, or a file git cannot merge as text: tried first, without
+    // touching anything, as the step would put it back; where it would not go
+    // back, the step does not start.
+    const stuck = recordFiles.find((path) => (path.endsWith("aidlc-state.md") || textMergeRefused(dir, path)) && !putsBack(dir, path, into));
+    if (stuck !== undefined) {
+      stop(`${stuck}, a file of AI-DLC's record in ${name}, has a change here that is not committed, and ${into} changes it in a way git ` +
+        `cannot put together with it, so nothing was merged or pushed. Once it is committed, I can bring ${into} in.`);
+    }
     if (recordFiles.length > 0 && !putAside) {
       stop(`${recordFiles[0]}, a file of AI-DLC's record in ${name}, has a change here that is not committed, and ${into} changes it too, ` +
         `so nothing was merged or pushed. Say if you want me to put that change aside, bring ${into} in and put it back. On their yes, ` +
@@ -13888,6 +13896,45 @@ function mergeMainIn(pd: string, args: string[], unit: string, branch: string, u
   }
   given?.spend();
   console.log(JSON.stringify({ pushed: plan.some((entry) => entry.step !== "level"), unit, notice: joinSaid([...lines, whereNow().trim(), putBack().trim()]) }));
+}
+
+// Whether git reads a file as one it cannot merge as text (a binary file).
+function textMergeRefused(dir: string, path: string): boolean {
+  return /^-\t-\t/.test(git(dir, ["diff", "--numstat", "HEAD", "--", path]).stdout);
+}
+
+// Whether a change here to a file of the record would go back on top of what
+// bringing `into` in leaves there, tried in a scratch folder as git stores
+// the three: main's copy where the Unit's branch did not change the file since
+// the two met, else the branch's and main's put together first (a clash there
+// is the merge's own, said as it is). Nothing in the checkout is touched.
+function putsBack(dir: string, path: string, into: string): boolean {
+  const blob = (rev: string): Buffer | null => {
+    const read = spawnSync("git", ["cat-file", "blob", rev], { cwd: dir });
+    return read.status === 0 ? (read.stdout as Buffer) : null;
+  };
+  const scratch = mkdtempSync(join(tmpdir(), "aidlc-aside-try-"));
+  try {
+    const merge = (current: Buffer, base: Buffer, other: Buffer): Buffer | null => {
+      const files = [current, base, other].map((content, i) => {
+        const file = join(scratch, `try-${i}`);
+        writeFileSync(file, content);
+        return file;
+      });
+      const merged = spawnSync("git", ["merge-file", "-p", ...files], { cwd: dir });
+      return merged.status === 0 ? (merged.stdout as Buffer) : null;
+    };
+    const kept = blob(git(dir, ["hash-object", "-w", "--", path]).stdout.trim());
+    const ours = blob(`HEAD:${path}`);
+    const theirs = blob(`${into}:${path}`) ?? Buffer.alloc(0);
+    const met = git(dir, ["merge-base", "HEAD", into]).stdout.trim();
+    const was = met === "" ? null : blob(`${met}:${path}`);
+    if (kept === null || ours === null) return false;
+    const after = was !== null && !was.equals(ours) ? merge(ours, was, theirs) : theirs;
+    return after === null || merge(after, ours, kept) !== null;
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
 }
 
 // repos.json's change put together with main's by the list's own reader and

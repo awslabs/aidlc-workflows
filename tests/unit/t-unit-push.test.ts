@@ -3502,6 +3502,26 @@ describe("a Unit on the workspace's own repository", () => {
     expect(git(alice, ["show", kept])).toContain("ledger-mine.git");
   });
 
+  test("a state file, or a file git cannot merge as text, that would not go back: the step does not start, and the file is as it was", () => {
+    // The rule reads the file by its name; kept outside the intents folder so no work is looked for in it.
+    const state = "aidlc/spaces/default/archive/aidlc-state.md";
+    const staged = recordInTheWay(state, () => "# State\n- **Status**: lead's\n", () => "# State\n- **Status**: mine\n", false, false,
+      "# State\n- **Status**: open\n");
+    for (const args of [["--merge-main"], ["--merge-main", "--put-aside"]]) {
+      const said = run(UNIT, ["push", ...args], staged.alice);
+      expect(said.status).not.toBe(0);
+      expect(String(said.json?.error)).toStartWith(`${state}, a file of AI-DLC's record in the repo, has a change here that is not committed, ` +
+        "and origin/main changes it in a way git cannot put together with it, so nothing was merged or pushed. Once it is committed, I can " +
+        "bring origin/main in.");
+      expect(readFileSync(join(staged.alice, state), "utf-8")).toBe(staged.here);
+    }
+    const picture = "aidlc/knowledge/diagram.bin";
+    const binary = recordInTheWay(picture, () => "PNG\0two\n", () => "PNG\0three\n", false, false, "PNG\0one\n");
+    const said = run(UNIT, ["push", "--merge-main", "--put-aside"], binary.alice);
+    expect(String(said.json?.error)).toStartWith(`${picture}, a file of AI-DLC's record in the repo, has a change here that is not committed`);
+    expect(readFileSync(join(binary.alice, picture), "utf-8")).toBe(binary.here);
+  });
+
   test("a Unit built here whose branch starts from the plan's branch is not offered a merge of main", () => {
     const home = oneRepoTeams();
     const alice = cloneOf(home.remote, "alice");
