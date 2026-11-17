@@ -1003,6 +1003,17 @@ branches until it is done (Teams on the workspace's own repo, above): until
 then, keep rulesets, stale-branch cleaners and `on: push` workflows off
 `claim/**` for it.
 
+Where a repository takes no push of AI-DLC's refs (a rule of its host), a take,
+a push or a proposed change typed there puts the Unit's record on a branch
+instead, `aidlc/claims/<intent-id8>/<unit>`, said once with the host's words:
+it is not for merging, and a job that runs on every branch there can leave it
+alone by the pattern `aidlc/**`. The plan can be on a branch too, on the lead's
+own words (`unit share --plan --visible`, `aidlc/plans/<work id>-<label>`), or as
+the lead's yes when the host refuses its ref. Every look reads both forms; a
+branch in the way of one of these names is said in git's words. The lead takes
+the plan off its branch by asking for it, and is asked once after the plan is
+closed.
+
 **The plan and the records.** When the host takes no direct push to main, the
 lead's share says so once, with the host's words: "origin takes no direct push
 to main (<host words>), so the plan is not shared yet." The next step offers
