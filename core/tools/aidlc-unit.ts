@@ -9011,23 +9011,28 @@ function lookRefspecs(address: string, ref: string): string[] {
   return [`+${ref}*:${copyOf(address, ref)}*`, ...onBranch];
 }
 
-// The copies this repository's look keeps, by name, with their commits: those
-// every reader reads, or (`onBranch`) those of what it read from a branch.
-function copiesAt(pd: string, key: string, onBranch = false): Map<string, string> {
+// The copies this repository's look keeps, by name, with their commits, in one
+// listing (one git start, on every look): those every reader reads (`reads`),
+// and those of what it read from a branch (`onBranch`).
+type LookCopies = { reads: Map<string, string>; onBranch: Map<string, string> };
+function copiesAt(pd: string, key: string): LookCopies {
   const listed = localGit(pd, ["for-each-ref", "--format=%(objectname) %(refname)", "refs/aidlc/home/"]);
-  const copies = new Map<string, string>();
-  const reads = onBranch ? homeCopyOnBranchOf : homeCopyOf;
+  const copies: LookCopies = { reads: new Map(), onBranch: new Map() };
   for (const line of listed.ok ? listed.stdout.split(/\r?\n/) : []) {
     const [oid, ref] = line.trim().split(" ");
-    if (oid && ref && reads(ref)?.key === key) copies.set(ref, oid);
+    if (!oid || !ref) continue;
+    if (homeCopyOf(ref)?.key === key) copies.reads.set(ref, oid);
+    else if (homeCopyOnBranchOf(ref)?.key === key) copies.onBranch.set(ref, oid);
   }
   return copies;
 }
 
 // Each copy a look took away put back as it was.
-function copiesPutBack(pd: string, key: string, was: Map<string, string>, onBranch: boolean): void {
-  const now = copiesAt(pd, key, onBranch);
-  for (const [name, oid] of was) if (!now.has(name)) localGit(pd, ["update-ref", name, oid]);
+function copiesPutBack(pd: string, key: string, was: LookCopies): void {
+  const now = copiesAt(pd, key);
+  for (const [had, has] of [[was.reads, now.reads], [was.onBranch, now.onBranch]]) {
+    for (const [name, oid] of had) if (!has.has(name)) localGit(pd, ["update-ref", name, oid]);
+  }
 }
 
 // A record the repository holds as a branch counts where it has no ref, or
@@ -9035,17 +9040,21 @@ function copiesPutBack(pd: string, key: string, was: Map<string, string>, onBran
 // (two writers at one moment). The look's own fetch just took away the copy of
 // a ref the repository does not have, so the copy every reader reads is the
 // ref's exactly when the repository has the ref.
-function recordFormsCounted(pd: string, address: string, key: string, refs: readonly string[]): void {
+// `copies` is the listing after the fetch, kept as what readers now read.
+function recordFormsCounted(pd: string, address: string, refs: readonly string[], copies: LookCopies): void {
   const looked = refs.filter((ref) => ref.startsWith("refs/aidlc/claims/"));
-  for (const [name, oid] of copiesAt(pd, key, true)) {
+  for (const [name, oid] of copies.onBranch) {
     const copy = homeCopyOnBranchOf(name);
     if (copy?.kind !== "record") continue;
     const record = claimRecordRef(copy.id8, copy.unit);
     if (!looked.some((ref) => record.startsWith(ref))) continue;
     const reads = copyOf(address, record);
-    const ref = localGit(pd, ["rev-parse", "--verify", "--quiet", reads]).stdout.trim();
+    const ref = copies.reads.get(reads);
     if (ref === oid) continue;
-    if (ref === "" || localGit(pd, ["merge-base", "--is-ancestor", ref, oid]).ok) localGit(pd, ["update-ref", reads, oid]);
+    if (ref === undefined || localGit(pd, ["merge-base", "--is-ancestor", ref, oid]).ok) {
+      localGit(pd, ["update-ref", reads, oid]);
+      copies.reads.set(reads, oid);
+    }
   }
 }
 
@@ -9058,8 +9067,8 @@ function recordFormsCounted(pd: string, address: string, key: string, refs: read
 export function lookAt(projectDir: string, address: string, refs: readonly string[], options: { typed?: boolean } = {}): LookResult {
   const via = gitTargetFor(projectDir, address, "fetch");
   const key = repoCopyKey(address);
-  const before = copiesAt(projectDir, key);
-  const beforeOnBranch = copiesAt(projectDir, key, true);
+  const had = copiesAt(projectDir, key);
+  const before = had.reads;
   const args = ["fetch", "--no-tags", "--no-filter", "--no-write-fetch-head", "--prune", "-q", via.target, ...refs.flatMap((ref) => lookRefspecs(address, ref))];
   const fetch = (): GitBytesResult => gitBytes(projectDir, args, { ...via.env, GIT_TERMINAL_PROMPT: "0" });
   const fetched = options.typed ? fetch() : quietly(() => {
@@ -9071,8 +9080,7 @@ export function lookAt(projectDir: string, address: string, refs: readonly strin
     }
   });
   if (!fetched.ok) {
-    copiesPutBack(projectDir, key, before, false);
-    copiesPutBack(projectDir, key, beforeOnBranch, true);
+    copiesPutBack(projectDir, key, had);
     const stderr = fetched.stderr;
     const refused = localGitWriteRefused(stderr);
     if (refused !== null) return { ok: false, refused };
@@ -9080,8 +9088,9 @@ export function lookAt(projectDir: string, address: string, refs: readonly strin
     const said = maskUserinfo(gitWords(stderr));
     return { ok: false, said, firstLine: maskUserinfo(stderr.trim().split(/\r?\n/)[0]?.trim() ?? "") || said };
   }
-  recordFormsCounted(projectDir, address, key, refs);
-  const after = copiesAt(projectDir, key);
+  const has = copiesAt(projectDir, key);
+  recordFormsCounted(projectDir, address, refs, has);
+  const after = has.reads;
   const found: Record<string, { now: string | null; was: string | null }> = {};
   const copyName = (ref: string): string => (/^refs\/aidlc\/plans\/[^/]+$/.test(ref) || /^refs\/aidlc\/claims\/[^/]+\/[^/]+$/.test(ref) ? copyOf(address, ref) : "");
   for (const ref of refs) {
