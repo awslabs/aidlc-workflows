@@ -1531,21 +1531,91 @@ export interface RecordPlace {
 // take or write that lost (CLAIM_RACE_LOST) from a refusal, and a rule of the
 // host from any other (refusedByHostRule). On ok this workspace's copy of the
 // record follows, so a read before the next look sees it.
+// A record the repository holds as a branch is written there. One it holds
+// out of the branch list goes on its branch when a rule of the host refuses
+// it and `firstBranch` (a step the person ran, never a quiet one): the same
+// commit, the branch new, so the first take still wins; `branch` is said
+// with the host's words for the ref (`refused`). A branch whose name another
+// branch is in the way of is no race lost: `inTheWay`, with git's words.
+type RecordWrite =
+  | { ok: true; branch?: { name: string; refused: string } }
+  | { ok: false; lost: true }
+  | { ok: false; refused: string; byRule?: true; inTheWay?: true; branchTried?: true };
 function writeUnitRecord(
   projectDir: string,
   place: RecordPlace,
   ref: string,
   commit: string,
   expected: string | null,
-): { ok: true } | { ok: false; lost: true } | { ok: false; refused: string; byRule?: true } {
+  options: { firstBranch?: boolean } = {},
+): RecordWrite {
   const via = gitTargetFor(projectDir, place.address, "push");
-  const pushed = git(projectDir, ["push", via.target, `--force-with-lease=${ref}:${expected ?? ""}`, `${commit}:${ref}`], via.env);
+  const reads = copyOf(place.address, ref);
+  const onBranch = recordBranchCopy(place.address, ref);
+  const branchName = `${CLAIM_RECORD_BRANCHES}${ref.slice("refs/aidlc/claims/".length)}`;
+  const push = (target: string, lease: string | null) =>
+    git(projectDir, ["push", via.target, `--force-with-lease=${target}:${lease ?? ""}`, `${commit}:${target}`], via.env);
+  const written = (asBranch: boolean): void => {
+    localGit(projectDir, ["update-ref", reads, commit]);
+    if (asBranch) localGit(projectDir, ["update-ref", onBranch, commit]);
+  };
+  // git's own words for the name in the way, wherever the host put them: in the refusal's parenthesis, or on
+  // a line of its own before it.
+  const inTheWay = (stderr: string): string | null => {
+    const line = stderr.split(/\r?\n/).find((entry) => /exists; cannot create/.test(entry));
+    if (line === undefined) return null;
+    return /\(([^()]*exists; cannot create[^()]*)\)/.exec(line)?.[1] ?? line.replace(/^\s*remote:\s*(?:error:\s*)?/, "").trim();
+  };
+  const held = localGit(projectDir, ["rev-parse", "--verify", "--quiet", onBranch]).stdout.trim();
+  if (held !== "" && held === localGit(projectDir, ["rev-parse", "--verify", "--quiet", reads]).stdout.trim()) {
+    const pushed = push(branchName, expected);
+    if (pushed.ok) {
+      written(true);
+      return { ok: true };
+    }
+    const blocked = inTheWay(pushed.stderr);
+    if (blocked !== null) return { ok: false, refused: maskUserinfo(blocked), inTheWay: true };
+    if (CLAIM_RACE_LOST.test(pushed.stderr)) return { ok: false, lost: true };
+    return { ok: false, refused: maskUserinfo(pushRefusal(pushed.stderr)), ...(refusedByHostRule(pushed.stderr) ? { byRule: true as const } : {}) };
+  }
+  const pushed = push(ref, expected);
   if (pushed.ok) {
-    localGit(projectDir, ["update-ref", copyOf(place.address, ref), commit]);
+    written(false);
     return { ok: true };
   }
   if (CLAIM_RACE_LOST.test(pushed.stderr)) return { ok: false, lost: true };
-  return { ok: false, refused: maskUserinfo(pushRefusal(pushed.stderr)), ...(refusedByHostRule(pushed.stderr) ? { byRule: true as const } : {}) };
+  const refused = maskUserinfo(pushRefusal(pushed.stderr));
+  if (!refusedByHostRule(pushed.stderr)) return { ok: false, refused };
+  if (!options.firstBranch) return { ok: false, refused, byRule: true };
+  const branch = push(branchName, null);
+  if (branch.ok) {
+    written(true);
+    return { ok: true, branch: { name: branchName.slice("refs/heads/".length), refused } };
+  }
+  const blocked = inTheWay(branch.stderr);
+  if (blocked !== null) return { ok: false, refused: maskUserinfo(blocked), inTheWay: true };
+  if (CLAIM_RACE_LOST.test(branch.stderr)) return { ok: false, lost: true };
+  return { ok: false, refused, byRule: true, branchTried: true };
+}
+
+// This workspace's copy of what a look read of a record's branch.
+function recordBranchCopy(address: string, ref: string): string {
+  const at = /^refs\/aidlc\/claims\/([^/]+)\/(.+)$/.exec(ref);
+  if (at === null) throw new Error(`No branch copy is kept for ${ref}.`);
+  return homeCopyOnBranchName(at[1], repoCopyKey(address), `claims/${at[2]}`);
+}
+
+// A record that went on its branch, said once at the step that put it there.
+function recordOnBranchLine(repo: string, unit: string, branch: { name: string; refused: string }): string {
+  const words = branch.refused.trim().replace(/[.!?]+$/, "");
+  return `${repo} did not take ${unit}'s record out of its branch list (${words}), so the record there is the branch ${branch.name}. ` +
+    "It is not for merging. A job that runs on every branch there (a check, a clean-up) can leave it alone by the pattern aidlc/**.";
+}
+
+// A branch another branch's name is in the way of: no race lost, and said so.
+function recordInTheWayLine(repo: string, unit: string, words: string): string {
+  return `${repo} has a branch in the way of ${unit}'s record (git says "${words.trim()}"). Your take of ${unit} is not written there, ` +
+    "and someone else could still take it.";
 }
 
 // A record repository that could not be read: its name and git's own words
@@ -5850,13 +5920,14 @@ function giveBack(pd: string, build: UnitBuild): void {
   const taken = current;
   if (taken?.status === "claimed" && taken.payload.taken_by !== undefined && taken.generation === build.attempt &&
     taken.payload.result === undefined && standing === "recorded") {
-    const pushed = writeUnitRecord(pd, place, ref, createRecordCommit(pd, taken.oid, releasedClaim(taken), "given back"), taken.oid);
+    const pushed = writeUnitRecord(pd, place, ref, createRecordCommit(pd, taken.oid, releasedClaim(taken), "given back"), taken.oid, { firstBranch: true });
     if (!pushed.ok) {
       fail(`${unit} could not be given back: ${"refused" in pushed ? pushed.refused : `its record in ${place.repo} changed while I was writing it`}. ` +
         "Say when to try again.");
     } else {
       invalidateLiveClaimPayloadCache(pd, unit);
-      said = `${unit} is given back. Written on its record in ${place.repo}.`;
+      said = `${unit} is given back. Written on its record in ${place.repo}.` +
+        (pushed.branch === undefined ? "" : ` ${recordOnBranchLine(place.repo, unit, pushed.branch)}`);
     }
   } else {
     said = `Nothing changed for ${unit}: its record in ${place.repo} is as it was.`;
@@ -11138,18 +11209,20 @@ function takeUnit(args: string[], projectDir?: string, rhythm?: UnitClaimPayload
     gateRhythm: rhythm ?? src.rhythm, earlyOn,
   });
   const commit = createRecordCommit(pd, current?.oid ?? null, payload, earlyOn ? "taken early" : "taken", {}, { take: true });
-  const pushed = writeUnitRecord(pd, place, ref, commit, current?.oid ?? null);
+  const pushed = writeUnitRecord(pd, place, ref, commit, current?.oid ?? null, { firstBranch: true });
   // The record's repository took no push from here: the take goes on as the
   // person asked, and its record is written there when a push next goes
   // through (recordTakeHere). An early take too: its take row's Early On holds
   // where it started until then.
   let notRecorded: string | null = null;
+  let inTheWay = false;
   if (!pushed.ok) {
     const winner = typedRecordRead(pd, place, recordWork(home), unit, unit);
     if (winner?.status === "claimed") fail(takenLine(unit, winner));
     // Git gave no reason when the record moved under the take.
     if ("lost" in pushed) fail(`${unit} was not taken: its record in ${place.repo} changed while I was writing it. Say when to try again.`);
     notRecorded = pushed.refused.replace(/\.+$/, "");
+    inTheWay = pushed.inTheWay === true;
   }
   if (notRecorded === null) invalidateLiveClaimPayloadCache(pd, unit);
   // A build in the lead's own space, beside the lead's work (a clone of a
@@ -11208,7 +11281,9 @@ function takeUnit(args: string[], projectDir?: string, rhythm?: UnitClaimPayload
     (planChanging !== null
       ? ` The lead is changing the Unit plan (${planChanging} is open again there), so ${unit} is taken on the plan as it stands there.`
       : "");
-  const noPush = notRecorded === null ? null
+  const noPush = pushed.ok ? (pushed.branch === undefined ? null : recordOnBranchLine(place.repo, unit, pushed.branch))
+    : notRecorded === null ? null
+    : inTheWay ? recordInTheWayLine(place.repo, unit, notRecorded)
     : `${place.repo} takes no push from you (${notRecorded}), so your take of ${unit} is not written there, and someone else could still take it.`;
   // The take's own line waits for the build's next step, which also puts the
   // offer to clone its repos not checked out here (buildCloneOffer). The
@@ -11518,8 +11593,10 @@ function recordTakeHere(projectDir: string, build: UnitBuild, home: HomeWork, st
         earlyOn: standing.earlyOn,
       });
       const pushed = writeUnitRecord(projectDir, recordPlaceOf(projectDir, home, build.unit), ref,
-        createRecordCommit(projectDir, current?.oid ?? null, payload, standing.earlyOn ? "taken early" : "taken", {}, { take: true }), current?.oid ?? null);
+        createRecordCommit(projectDir, current?.oid ?? null, payload, standing.earlyOn ? "taken early" : "taken", {}, { take: true }), current?.oid ?? null,
+        { firstBranch: typed });
       if (!pushed.ok) return "lost" in pushed ? { ok: false } : { ok: false, refused: pushed.refused, ...(pushed.byRule ? { byRule: true as const } : {}) };
+      if (pushed.branch !== undefined) saidWithNextStep(projectDir, recordOnBranchLine(recordPlaceOf(projectDir, home, build.unit).repo, build.unit, pushed.branch));
       invalidateLiveClaimPayloadCache(projectDir, build.unit);
       if (generation !== build.attempt) {
         withAuditLock(projectDir, () => {
@@ -11578,9 +11655,9 @@ export function resultWaitsLine(unit: string, repo: string): string {
 
 // The push's line when a rule of the record's repository's host refused the
 // result (refusedByHostRule): the host's words, and what to ask its owner for.
-function resultRefusedByRuleLine(unit: string, repo: string, refused: string): string {
+function resultRefusedByRuleLine(unit: string, repo: string, refused: string, branchTried = false): string {
   return `${repo} did not take the result of ${unit}: ${refused}. A rule on its host refuses it: ask whoever owns ${repo} to let ` +
-    "your pushes to refs/aidlc/claims/ through, then ask me to send it again.";
+    `your pushes to refs/aidlc/claims/${branchTried ? " or to branches under aidlc/claims/" : ""} through, then ask me to send it again.`;
 }
 
 // The repository a build's record is in, by its name in the plan.
@@ -12784,11 +12861,12 @@ function pushUnit(args: string[], projectDir?: string): void {
     notTaken = { byRule: false };
     lines.push(`${place.repo} did not take ${unit}'s result: its record is not there now. Do you want me to send it again?`);
   } else {
-    const sent = writeUnitRecord(pd, place, ref, resultOn(base), base.oid);
+    const sent = writeUnitRecord(pd, place, ref, resultOn(base), base.oid, { firstBranch: true });
+    if (sent.ok && sent.branch !== undefined) lines.push(recordOnBranchLine(place.repo, unit, sent.branch));
     if (!sent.ok) {
       const refused = "refused" in sent ? sent : null;
       notTaken = { byRule: refused?.byRule === true };
-      lines.push(notTaken.byRule ? resultRefusedByRuleLine(unit, place.repo, refused!.refused)
+      lines.push(notTaken.byRule ? resultRefusedByRuleLine(unit, place.repo, refused!.refused, refused!.branchTried === true)
         : `${place.repo} did not take ${unit}'s result: ${refused?.refused ?? "its record there changed while it was being sent"}. Do you want me to send it again?`);
     }
     else invalidateLiveClaimPayloadCache(pd, unit);
@@ -14301,7 +14379,7 @@ function proposeChange(args: string[], projectDir?: string): void {
     proposals: [...(live.payload.proposals ?? []).filter((entry) => entry.input !== match.path), proposal],
   };
   const commit = createRecordCommit(pd, live.oid, payload, `proposed a change to ${match.path}`, { proposals: { [match.path]: text } });
-  const sent = writeUnitRecord(pd, place, ref, commit, live.oid);
+  const sent = writeUnitRecord(pd, place, ref, commit, live.oid, { firstBranch: true });
   const carryingOn = `I'm carrying on with ${flags.file !== undefined ? `the approved ${name}` : "your version here"} until the lead decides.`;
   if (!sent.ok) {
     fail(`${place.repo} did not take the change: ${"refused" in sent ? sent.refused : "its record changed while I was writing it"}. Say when to try again.`);

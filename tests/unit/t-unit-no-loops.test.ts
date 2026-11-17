@@ -304,7 +304,7 @@ describe("a step that waits on the person, and every way on the round added, nev
     finishBuild(record);
     // refunds's record is in checkout-api, whose host refuses records by a rule.
     const hostHook = join(hosts["checkout-api"], "hooks", "pre-receive");
-    writeFileSync(hostHook, "#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/aidlc/claims/*) exit 1;; esac; done\n");
+    writeFileSync(hostHook, "#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/aidlc/claims/*|refs/heads/aidlc/claims/*) exit 1;; esac; done\n");
     chmodSync(hostHook, 0o755);
     const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "alice-push" };
     const push = next(alice, chat);

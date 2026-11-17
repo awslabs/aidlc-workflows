@@ -138,7 +138,7 @@ describe("a take writes the Unit's record where its code goes", () => {
     const home = makePlanHome();
     const host = home.hosts["checkout-web"];
     writeFileSync(join(host, "hooks", "pre-receive"),
-      "#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/aidlc/*) echo \"no records here\" >&2; exit 1;; esac; done\nexit 0\n");
+      "#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/aidlc/*|refs/heads/aidlc/*) echo \"no records here\" >&2; exit 1;; esac; done\nexit 0\n");
     chmodSync(join(host, "hooks", "pre-receive"), 0o755);
     const web = teamWorkspace(home.hosts, "web", ["checkout-web"]);
     const took = run(UNIT, ["take", "checkout-ui", "--plan", home.id8, "--from", home.hosts["checkout-api"]], web);
@@ -501,7 +501,7 @@ describe("an early take whose record's repository takes no push from them", () =
     // reporting's record goes to checkout-api, which now takes no push of AI-DLC's records.
     const api = home.hosts["checkout-api"];
     writeFileSync(join(api, "hooks", "pre-receive"),
-      "#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/aidlc/*) echo \"no records here\" >&2; exit 1;; esac; done\nexit 0\n");
+      "#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/aidlc/*|refs/heads/aidlc/*) echo \"no records here\" >&2; exit 1;; esac; done\nexit 0\n");
     chmodSync(join(api, "hooks", "pre-receive"), 0o755);
     // dana's team keeps its workspace on a host of its own.
     const dana = teamWorkspace(home.hosts, "dana", ["checkout-api", "billing"]);

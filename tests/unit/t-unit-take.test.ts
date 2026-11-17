@@ -2459,7 +2459,7 @@ function doneOnPlanByHand(host: string, unit: string, generation: number): void 
 
 function refuseRecords(host: string): void {
   const hook = join(host, "hooks", "pre-receive");
-  writeFileSync(hook, "#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/aidlc/*) " +
+  writeFileSync(hook, "#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/aidlc/*|refs/heads/aidlc/*) " +
     "echo 'this host takes no push from here' >&2; exit 1;; esac; done\nexit 0\n");
   chmodSync(hook, 0o755);
 }

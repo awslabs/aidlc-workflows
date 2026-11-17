@@ -697,14 +697,15 @@ describe("the push", () => {
     finishBuild(record);
     // refunds's record is in checkout-api, whose host refuses records by a rule.
     const hook = join(hosts["checkout-api"], "hooks", "pre-receive");
-    writeFileSync(hook, "#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/aidlc/claims/*) echo 'claims are closed today' >&2; exit 1;; esac; done\n");
+    writeFileSync(hook, "#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/aidlc/claims/*|refs/heads/aidlc/claims/*) echo 'claims are closed today' >&2; exit 1;; esac; done\n");
     chmodSync(hook, 0o755);
     const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "alice-push" };
     const pushed = run(UNIT, ["push"], alice, chat);
     expect(pushed.status, pushed.out).toBe(0);
     expect(String(pushed.json?.notice)).toContain(
       "checkout-api did not take the result of refunds: claims are closed today (pre-receive hook declined). A rule on its host " +
-        "refuses it: ask whoever owns checkout-api to let your pushes to refs/aidlc/claims/ through, then ask me to send it again.",
+        "refuses it: ask whoever owns checkout-api to let your pushes to refs/aidlc/claims/ or to branches under aidlc/claims/ through, " +
+        "then ask me to send it again.",
     );
     expect(String(pushed.json?.notice)).not.toContain("Do you want me to send it again?");
     expect(readFileSync(join(record, "aidlc-state.md"), "utf-8")).toContain("- **Unit Push**: unsent");
@@ -1586,7 +1587,7 @@ describe("the person's own commit message", () => {
       "then run the command of the push choice they pick.");
     // The code went and the lead's project did not take the result: a message has nothing to go on.
     const claims = join(hosts["checkout-api"], "hooks", "pre-receive");
-    writeFileSync(claims, "#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/aidlc/claims/*) echo 'claims are closed today' >&2; exit 1;; esac; done\n");
+    writeFileSync(claims, "#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/aidlc/claims/*|refs/heads/aidlc/claims/*) echo 'claims are closed today' >&2; exit 1;; esac; done\n");
     chmodSync(claims, 0o755);
     expect(run(UNIT, ["push", "--commit-message-file", String(ask.commit_message_file)], alice).status).toBe(0);
     const again = next(alice);
