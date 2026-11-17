@@ -11,6 +11,7 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { AIDLC_SRC } from "../harness/fixtures.ts";
 import {
   cleanupTeamBuild,
   cloneOf,
@@ -32,6 +33,8 @@ import {
 } from "../harness/team-build.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+const JUMP = join(AIDLC_SRC, "tools", "aidlc-jump.ts");
 
 afterEach(cleanupTeamBuild);
 
@@ -189,6 +192,41 @@ describe("the lead names a pull request as a Unit's build", () => {
       "checkout-web is not cloned in this workspace, so I cannot read that pull request yet. " +
       "Say if you want me to clone checkout-web here; the next step then reads it.");
     expect(board(home.dir)).toContain("- checkout-ui: its build is pull request 7 in checkout-web, not read here: checkout-web is not cloned in this workspace");
+    // The board offers the clone a build is offered, from this workspace's own list.
+    const step = next(home.dir);
+    expect(JSON.stringify(step.offers ?? []), JSON.stringify(step).slice(0, 600)).toContain("intent add-repo checkout-web");
+  });
+
+  test("the lead's other computer reads the Unit done on the plan and records it there too", () => {
+    const home = makePlanHomeWithRemote();
+    const web = home.hosts["checkout-web"];
+    partnerPullRequest(web, 7, UI);
+    mergePullRequest(web, "refs/pull/7/head", "squash", "Checkout UI (#7)");
+    expect(name(home.dir, "checkout-ui", "checkout-web", "7").status).toBe(0);
+    const laptop = cloneOf(home.remote, "laptop");
+    expect(merges(laptop, "checkout-ui")).toBe(0);
+    // The lead carries the work on there, as the lead.
+    const offer = next(laptop);
+    const carry = ((offer.choices ?? []) as Array<{ label: string; command?: string }>).find((choice) => choice.label.includes("as the lead"));
+    const pick = /--pick (\S+)/.exec(carry?.command ?? "")?.[1];
+    expect(pick, JSON.stringify(offer).slice(0, 600)).toBeString();
+    const switched = run(join(AIDLC_SRC, "tools", "aidlc.ts"), ["engine", "intent", "switch", pick!], laptop);
+    expect(switched.status, switched.out).toBe(0);
+    next(laptop);
+    expect(merges(laptop, "checkout-ui")).toBe(1);
+  });
+
+  test("before Build and Test, a Unit built only by a named pull request is said once to have no code summary or test instructions here", () => {
+    const home = makePlanHome();
+    const web = home.hosts["checkout-web"];
+    partnerPullRequest(web, 7, UI);
+    mergePullRequest(web, "refs/pull/7/head", "squash", "Checkout UI (#7)");
+    expect(name(home.dir, "checkout-ui", "checkout-web", "7").status).toBe(0);
+    const jumped = run(JUMP, ["execute", "--target", "build-and-test", "--direction", "forward"], home.dir);
+    expect(jumped.status, jumped.out).toBe(0);
+    const step = next(home.dir);
+    expect(JSON.stringify(step), JSON.stringify(step).slice(0, 800))
+      .toContain("checkout-ui's build is pull request 7 in checkout-web, so its code summary and test instructions are not here: Build and Test runs without them.");
   });
 
   test("two named pull requests in two repositories: written as each merges, done once both are", () => {
@@ -345,6 +383,18 @@ describe("the lead takes back a merge counted through a wrong number or by their
       "checkout-ui is open for a team to take.");
     expect((planWordAt(home, "checkout-ui") as Record<string, unknown>).said_merged).toBeUndefined();
     expect(takenBack(home.dir, "checkout-ui")).toBe(1);
+  });
+
+  test("past the Unit stages, the take-back says Build and Test already started", () => {
+    const home = makePlanHome();
+    const web = home.hosts["checkout-web"];
+    partnerPullRequest(web, 7, UI);
+    mergePullRequest(web, "refs/pull/7/head", "squash", "Checkout UI (#7)");
+    expect(name(home.dir, "checkout-ui", "checkout-web", "7").status).toBe(0);
+    expect(run(JUMP, ["execute", "--target", "build-and-test", "--direction", "forward"], home.dir).status).toBe(0);
+    const opened = run(UNIT, ["release", "checkout-ui"], home.dir);
+    expect(opened.status, opened.out).toBe(0);
+    expect(String(opened.json?.notice)).toEndWith(" Build and Test already started with checkout-ui counted merged. Say if you want to go back to it.");
   });
 
   test("open-again on a naming not merged yet: taken off, no merge taken back", () => {
