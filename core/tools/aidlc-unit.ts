@@ -7513,9 +7513,14 @@ function pointerCommit(pd: string, parent: string | null, pointer: PlanPointer, 
 // and where nothing was, the ref goes.
 function takeBackPlan(pd: string, place: PlanPlace, commit: string, was: string | null): boolean {
   const via = gitTargetFor(pd, place.address, "push");
-  const back = git(pd, ["push", via.target, `--force-with-lease=${place.ref}:${commit}`, `${was ?? ""}:${place.ref}`],
+  const name = place.branch?.ref ?? place.ref;
+  const back = git(pd, ["push", via.target, `--force-with-lease=${name}:${commit}`, `${was ?? ""}:${name}`],
     { ...via.env, GIT_TERMINAL_PROMPT: "0" });
-  if (back.ok) localGit(pd, was === null ? ["update-ref", "-d", place.copy] : ["update-ref", place.copy, was]);
+  if (back.ok) {
+    for (const copy of [place.copy, ...(place.branch === undefined ? [] : [place.branch.copy])]) {
+      localGit(pd, was === null ? ["update-ref", "-d", copy] : ["update-ref", copy, was]);
+    }
+  }
   return back.ok;
 }
 
@@ -7602,6 +7607,8 @@ function movePlan(pd: string, start: PlanPlace, to: PlanPlace, message: string |
     }
     const there = moveTipAt(pd, to, lookNew.tip);
     if (there.kind === "newer") end(newerPlanStep(pd));
+    // The new place holds the plan in the form it had (its branch), or as the lead asked (--visible).
+    if (there.kind === "none" && (planBranchAt(pd, from) !== null || invokedArgs.includes("--visible"))) Object.assign(to, { branch: visiblePlanBranch(to) });
     const elsewhere = `${to.repo} already holds something else where the plan would go, so nothing was moved: the plan stays in ${from.repo}.`;
     // This work's plan there naming the old place: a copy of it (a mirror made
     // to move hosts), or the same repository under another name, which only

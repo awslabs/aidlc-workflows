@@ -557,3 +557,20 @@ describe("the plan on a branch people can open, on the lead's own words (--visib
       `shared the plan. Do you want me to share it again? It goes on the plan's branch there, ${name(home.id8)}; nothing is added to your files.`);
   });
 });
+
+describe("a plan on its branch, moved to another repository", () => {
+  test("the new place holds it as its branch, and the old place's note is on the branch there", () => {
+    const home = makePlanHome();
+    const api = home.hosts["checkout-api"];
+    planAsBranch(api, home.id8);
+    next(home.dir, { ...ENV, AIDLC_SESSION_OVERRIDE: "lead-1" });
+    const moved = run(UNIT, ["share", "--plan", "--repo", "billing"], home.dir);
+    expect(moved.status, moved.out).toBe(0);
+    const branch = `refs/heads/aidlc/plans/${home.id8}-fixture`;
+    expect(has(home.hosts.billing, branch)).toBe(true);
+    expect(has(home.hosts.billing, planRefOf(home.id8))).toBe(false);
+    expect(JSON.parse(git(home.hosts.billing, ["show", `${branch}:plan.json`])).plan_repo.name).toBe("billing");
+    expect(JSON.parse(git(api, ["show", `${branch}:plan.json`])).moved_to).toBeDefined();
+    expect(has(api, planRefOf(home.id8))).toBe(false);
+  });
+});
