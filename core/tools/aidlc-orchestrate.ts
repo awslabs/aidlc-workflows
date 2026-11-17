@@ -6177,6 +6177,28 @@ function buildOutShareOffer(projectDir: string): AskDirective | PrintDirective |
     if (planBranchesHere(projectDir).includes(here) || handoverOffered(projectDir, hereMark)) return null;
     const message = shareMessageStep(projectDir, `plan-here-${here}`, planShareWords(projectDir));
     if ("draft" in message) return message.draft;
+    // At the lead's own work with a thin slice's code built here, the plan
+    // goes to its own repository (one push) and the code and AI-DLC's record
+    // are committed on this branch, which AI-DLC does not push.
+    const code = skeletonCodeName(projectDir);
+    const place = code === null ? null : planPlaceForShare(projectDir);
+    if (code !== null && place !== null && "ref" in place) {
+      return teamHandoverAsk(projectDir, {
+        handovers: ["share"],
+        marks: [hereMark],
+        question: `${refused.reason} Do you want me to share the plan with the teams? I'd put it in ${place.repo}: ${planContents(projectDir)}; ` +
+          `everyone who can read ${place.repo} can read it. I'd also commit ${code.name}, ${planShareWork(projectDir)}, and AI-DLC's record here ` +
+          `on ${here}, using this commit message; I would not push ${here}. The other Units wait on ${code.units} until ` +
+          `${code.is === "is" ? "it is" : "they are"} in ${refused.off.branch}.\n\n${message.text}`,
+        choices: [{
+          label: `Share the plan, commit ${code.units} here`,
+          detail: `One push to ${place.repo} with your own git; ${code.name} and AI-DLC's record are committed on ${here}, which is not pushed.`,
+          command: `${aidlcInvocation()} unit share --plan${message.flag}`,
+        }],
+        notNow: { label: "Not now", detail: PLAN_NOT_NOW },
+        ...(message.file === undefined ? {} : { messageFile: message.file }),
+      });
+    }
     return teamHandoverAsk(projectDir, {
       handovers: ["share"],
       marks: [hereMark],

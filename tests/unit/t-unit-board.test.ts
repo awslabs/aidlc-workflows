@@ -154,6 +154,46 @@ describe("with a thin slice first on the workspace's own repository, the share c
   });
 });
 
+// On a branch of the lead's own, the plan still goes to its repository; the
+// slice's code and the record are committed on that branch, which AI-DLC does
+// not push.
+describe("with a thin slice first, on a branch of the lead's own, the share says both things it does", () => {
+  const isShare = (d: Directive): boolean =>
+    d.kind === "ask" && d.ask_type === "team-handover" && ((d.handovers ?? []) as string[]).includes("share");
+  const UNITS = "# Unit dependencies\n\n```yaml\nunits:\n" +
+    "  - name: refunds\n    kind: service\n    depends_on: []\n" +
+    "  - name: checkout-ui\n    kind: ui\n    depends_on: []\n" +
+    "  - name: reporting\n    kind: service\n    depends_on: [refunds]\n```\n";
+  test("the question and its choice name the plan's push and the commit here, and the result keeps the share's own line with the address", () => {
+    const home = makeHome({ repos: {}, dependencies: UNITS, state: homeState().replace("- **Skeleton Stance**: off", "- **Skeleton Stance**: on") });
+    const teams = run(STATE, ["set-unit-ownership", "team"], home.dir);
+    expect(teams.status, teams.out).toBe(0);
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "teams chosen"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    git(home.dir, ["checkout", "-q", "-b", "my-work"]);
+    const main = git(home.remote, ["rev-parse", "main"]);
+    const end = leadsChat(home.dir, { until: isShare, codeRepo: () => undefined });
+    expect(isShare(end), JSON.stringify(end).slice(0, 600)).toBe(true);
+    const repo = basename(home.remote);
+    expect(String(end.question)).toStartWith(`This checkout is on my-work, not main. Do you want me to share the plan with the teams? I'd put it in ${repo}: `);
+    expect(String(end.question)).toContain("and AI-DLC's record here on my-work, using this commit message; I would not push my-work. " +
+      "The other Units wait on checkout-ui until it is in main.\n\n");
+    const choices = (end.choices ?? []) as Array<{ label: string; detail?: string; command?: string }>;
+    expect(choices[0].label).toBe("Share the plan, commit checkout-ui here");
+    expect(choices[0].detail).toBe(`One push to ${repo} with your own git; checkout-ui's code and AI-DLC's record are committed on my-work, which is not pushed.`);
+    const shared = run(UNIT, ["share", "--plan"], home.dir);
+    expect(shared.status, shared.out).toBe(0);
+    const said = String(shared.json?.notice);
+    expect(said).toStartWith(`The plan is shared in ${repo}. AI-DLC sends no notice of it: the teams hear it from you. A team whose workspace has no ${repo} needs this address: `);
+    expect(said).toEndWith("checkout-ui's code and AI-DLC's record are committed on my-work and not pushed: push my-work and get it merged your " +
+      "usual way. The other Units wait on checkout-ui until it is in main.");
+    expect(git(home.remote, ["rev-parse", "main"])).toBe(main);
+    expect(git(home.remote, ["for-each-ref", "refs/heads/my-work"])).toBe("");
+    expect(git(home.remote, ["for-each-ref", "--format=%(refname)", "refs/aidlc/plans"])).toBe(`refs/aidlc/plans/${fixtureIntentId8(home.dir)}`);
+  });
+});
+
 describe("a Unit the lead's project builds reads where its Unit Progress has it", () => {
   test("built through their gates, refunds and reporting read done, and reporting never waits on refunds", () => {
     const { home } = leadKeepsTwo();

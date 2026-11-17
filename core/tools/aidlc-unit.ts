@@ -7486,6 +7486,8 @@ function shareMain(args: string[], projectDir?: string): void {
   // A walking skeleton's code built here goes to main with the lead's record,
   // after the plan's own ref, so the teams' plan never waits on main.
   const planFirst = planOnly && leadsOwnTeamWork(pd) ? writeSharedPlan(pd, undefined, repoNamed) : null;
+  // Named before the commit takes them out of what is built here.
+  const codeHere = planFirst === null ? null : skeletonCodeName(pd);
   if (planFirst !== null && "notShared" in planFirst) {
     console.log(JSON.stringify({ shared: false, ...planFirst.notShared }));
     return;
@@ -7528,13 +7530,19 @@ function shareMain(args: string[], projectDir?: string): void {
     // Committed on a branch of their own, which reaches main their own way: done.
     if (own === null) {
       given?.spend();
-      const notShared = refused.off === undefined ? null : planNotSharedByThis(pd);
+      // The plan went to its own repository first: its line, then what is committed on their branch.
+      const sharedFirst = planFirst !== null && "said" in planFirst && codeHere !== null && refused.off !== undefined
+        ? `${planFirst.said} ${codeHere.name} and AI-DLC's record are committed on ${refused.off.current} and not ` +
+          `pushed: push ${refused.off.current} and get it merged your usual way. The other Units wait on ${codeHere.units} until ` +
+          `${codeHere.is === "is" ? "it is" : "they are"} in ${branch}.`
+        : null;
+      const notShared = sharedFirst !== null || refused.off === undefined ? null : planNotSharedByThis(pd);
       console.log(JSON.stringify({
-        shared: false,
-        notice: notShared === null
+        shared: sharedFirst !== null,
+        notice: sharedFirst ?? (notShared === null
           ? `${refused.reason} ${planWayOn(branch)}`
           : `This checkout is on ${refused.off!.current}, not ${branch}, so AI-DLC's record of this work is committed here and nothing ` +
-            `is pushed. ${notShared.line}`,
+            `is pushed. ${notShared.line}`),
         step: `Tell the person in plain words what it reports, then end your turn.${notShared?.onYes ?? ""}`,
       }));
       return;

@@ -1145,6 +1145,25 @@ describe("a repository that moved hosts: the plan taken over where it is now", (
     expect(planAt(api, ref).plan_repo.name).toBe("checkout-api");
   });
 
+  test("its old place not reached, the new place holding something else: nothing is moved, and the line says what is there", () => {
+    const home = makePlanHome();
+    const ref = planRefOf(home.id8);
+    const api = home.hosts["checkout-api"];
+    const scratch = tempDir("something-else");
+    git(scratch, ["init", "-q"]);
+    git(scratch, ["config", "user.name", "someone"]);
+    git(scratch, ["config", "user.email", "someone@example.test"]);
+    writeFileSync(join(scratch, "README.md"), "not a plan\n");
+    git(scratch, ["add", "README.md"]);
+    git(scratch, ["commit", "-q", "-m", "not a plan"]);
+    git(scratch, ["push", "-q", home.hosts.billing, `HEAD:${ref}`]);
+    renameSync(api, `${api}-gone`);
+    const moved = moveTo(home.dir, "billing");
+    expect(moved.status, moved.out).not.toBe(0);
+    expect(moved.json?.error).toBe("billing already holds something else where the plan would go, so nothing was moved: the plan stays in checkout-api.");
+    expect(homeOf(home.dir)).toBe(api);
+  });
+
   test("the plan's repositories as the lead's workspace spells them now, not as the copy has them", () => {
     const home = makePlanHome();
     const ref = planRefOf(home.id8);
