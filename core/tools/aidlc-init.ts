@@ -178,7 +178,7 @@ import {
 } from "./aidlc-plugin.ts";
 import { droppedPluginRegistrations } from "./aidlc-plugin-emit.ts";
 import { addPluginProducesKinds } from "./aidlc-plugin-produces-kinds.ts";
-import { regenerateRunnerSurfaces } from "./aidlc-runner-gen.ts";
+import { regenerateRunnersFor } from "./aidlc-release-runners.ts";
 import { KIRO_IDE_STEERING, kiroIdeSteering, refreshActiveMemory } from "./aidlc-includes.ts";
 import {
   activeWorkflowPluginDependencies,
@@ -7505,7 +7505,7 @@ function prepareRefreshSource(
     writeFileSync(process.env.AIDLC_STAGE_GRAPH, compiled.json);
     writeFileSync(stagedGrid, compiled.gridJson);
     resetProjectionCaches();
-    regenerateRunnerSurfaces();
+    regenerateRunnersFor(root, stagedHarness);
     resetProjectionCaches();
 
     // The harness's skills folder: inside the harness dir, or one of the shared
