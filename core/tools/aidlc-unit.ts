@@ -13383,13 +13383,24 @@ export function forkRemoteOf(dir: string, planAddress: string): string | null {
   return others.length === 1 ? others[0] : null;
 }
 
+// What the plan's repository calls its own main where the plan names none: as
+// the clone's remote at the plan's address recorded it, else as the
+// repository itself says (`ls-remote --symref`, by that remote or address).
+export function remoteMainOf(dir: string, address: string, remote?: string): string {
+  const recorded = remote === undefined ? "" : git(dir, ["symbolic-ref", "--quiet", "--short", `refs/remotes/${remote}/HEAD`]).stdout.trim();
+  if (recorded !== "") return recorded.slice(remote!.length + 1);
+  const said = git(dir, ["ls-remote", "--symref", remote ?? address, "HEAD"]).stdout;
+  return /^ref: refs\/heads\/(\S+)\s+HEAD/m.exec(said)?.[1] ?? "main";
+}
+
 // The plan's main for a Unit's repository, fetched with the person's git:
 // through the clone's remote at the plan's address, or, in a clone of the fork
 // alone, by that address, with nothing added to the clone's settings. The
 // commit to start from and its name for their lines, else git's words.
-function planMainOf(dir: string, repo: string, planAddress: string, branch: string): { start: string; named: string } | { said: string } {
+function planMainOf(dir: string, repo: string, planAddress: string, named: string | null): { start: string; named: string } | { said: string } {
   const remote = git(dir, ["remote"]).stdout.split(/\r?\n/).map((name) => name.trim()).filter(Boolean)
     .find((name) => sameGitAddress(git(dir, ["remote", "get-url", name]).stdout.trim(), planAddress));
+  const branch = named || remoteMainOf(dir, planAddress, remote);
   const fetched = git(dir, ["fetch", "-q", "--no-tags", remote ?? planAddress, branch]);
   if (!fetched.ok) return { said: fetched.stderr || fetched.stdout };
   const start = git(dir, ["rev-parse", "--verify", "--quiet", remote === undefined ? "FETCH_HEAD^{commit}" : `refs/remotes/${remote}/${branch}^{commit}`]).stdout.trim();
@@ -13425,9 +13436,9 @@ function pushToFork(pd: string, args: string[], build: UnitBuild, branch: string
   }
   const name = place.repo;
   const given = givenCommitMessage(pd, args, "push");
-  const main = planMainOf(dir, name, planned.address, planned.branch ?? "main");
+  const main = planMainOf(dir, name, planned.address, planned.branch ?? null);
   if ("said" in main) {
-    fail(`The plan's ${planned.branch ?? "main"} for ${name} could not be fetched: git says "${gitSaid(main.said)}". Nothing was pushed. Say when to try again.`);
+    fail(`The plan's main for ${name} could not be fetched: git says "${gitSaid(main.said)}". Nothing was pushed. Say when to try again.`);
   }
   const from = git(dir, ["branch", "--show-current"]).stdout.trim();
   const made = startUnitBranch(dir, branch, fork, [], main.start, { fetch: () => {}, leavesNothing: () => true, fromHere: false, track: false });
@@ -13439,8 +13450,12 @@ function pushToFork(pd: string, args: string[], build: UnitBuild, branch: string
   if (empty) {
     const committed = git(dir, ["commit", "-q", "--allow-empty", "-F", "-"], undefined, given?.text ?? `${unit}: start`);
     if (!committed.ok) {
-      fail(`Your hook in ${name} did not take the empty commit's message (${gitSaid(committed.stderr || committed.stdout)}), so nothing ` +
-        `was pushed. If it is the message, tell me the one to use, and I will commit with that.${whereNowLine(branch, moved)}`);
+      const said = committed.stderr || committed.stdout;
+      fail((hookRefused(dir, said)
+        ? `Your hook in ${name} did not take the empty commit's message (${gitSaid(said)}), so nothing was pushed. If it is the ` +
+          "message, tell me the one to use, and I will commit with that."
+        : `The empty commit could not be made in ${name}: git says "${gitSaid(said)}". Nothing was pushed. Say when to try again.`) +
+        whereNowLine(branch, moved));
     }
   }
   const pushed = git(dir, ["push", "-u", fork, branch]);
@@ -14681,7 +14696,9 @@ export function unitBuildOwnBranch(dir: string, unitBranch: string): string | nu
   // empty commit, on a main that moved since) holds no build to keep apart.
   const own = git(dir, ["rev-list", `refs/heads/${unitBranch}`, "--not", "HEAD", `--exclude=*/${unitBranch}`, "--remotes"])
     .stdout.split(/\r?\n/).filter(Boolean);
-  return own.length > 0 && own.every((commit) => git(dir, ["diff-tree", "--quiet", "--no-commit-id", "-r", commit]).ok) ? null : current;
+  // A merge commit prints no diff here, so only commits of one parent count.
+  return own.length > 0 && own.every((commit) => git(dir, ["rev-list", "--no-walk", "--max-parents=1", commit]).stdout.trim() === commit &&
+    git(dir, ["diff-tree", "--quiet", "--no-commit-id", "-r", commit]).ok) ? null : current;
 }
 
 // `own`: the paths the Unit's Code Generation wrote in this repo (a file or a

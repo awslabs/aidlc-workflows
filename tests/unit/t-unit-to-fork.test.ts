@@ -129,6 +129,62 @@ describe("the push of a Unit's branch early to the person's fork", () => {
     expect(onFork(fork)).not.toBe(0);
   });
 
+  test("git refuses the empty commit for a reason of its own (signing): git's words, never their hook's", () => {
+    const { alice, api, fork } = forked();
+    offered(alice);
+    git(api, ["config", "commit.gpgsign", "true"]);
+    git(api, ["config", "gpg.program", join(tempDir("no-gpg"), "gpg")]);
+    const refused = run(UNIT, ["push", "--to-fork"], alice);
+    expect(refused.status).not.toBe(0);
+    expect(String(refused.json?.error)).toStartWith('The empty commit could not be made in checkout-api: git says "');
+    expect(String(refused.json?.error)).toContain("Nothing was pushed. Say when to try again.");
+    expect(onFork(fork)).not.toBe(0);
+  });
+
+  test("where the plan names no branch, the remote's own main, recorded or asked for by its address", () => {
+    const seed = join(tempDir("trunk-seed"), "repo");
+    git(join(seed, ".."), ["init", "-q", "-b", "trunk", seed]);
+    git(seed, ["config", "user.name", "t"]);
+    git(seed, ["config", "user.email", "t@example.test"]);
+    git(seed, ["commit", "-q", "--allow-empty", "-m", "start"]);
+    const host = join(tempDir("trunk-host"), "host.git");
+    git(join(host, ".."), ["clone", "-q", "--bare", seed, host]);
+    const clone = join(tempDir("trunk-clone"), "repo");
+    git(join(clone, ".."), ["clone", "-q", host, clone]);
+    expect(unitTool.remoteMainOf(clone, host, "origin")).toBe("trunk");
+    // A remote added by hand has no recorded HEAD: the repository says.
+    git(clone, ["remote", "add", "upstream", host]);
+    expect(unitTool.remoteMainOf(clone, host, "upstream")).toBe("trunk");
+    expect(unitTool.remoteMainOf(clone, host)).toBe("trunk");
+  });
+
+  test("unitBuildOwnBranch: a Unit branch holding a merge of its own is still a build, an empty commit alone is not", () => {
+    const dir = join(tempDir("own-branch"), "repo");
+    git(join(dir, ".."), ["init", "-q", "-b", "main", dir]);
+    git(dir, ["config", "user.name", "t"]);
+    git(dir, ["config", "user.email", "t@example.test"]);
+    git(dir, ["commit", "-q", "--allow-empty", "-m", "start"]);
+    git(dir, ["switch", "-q", "-c", "side"]);
+    writeFileSync(join(dir, "side.md"), "side\n");
+    git(dir, ["add", "-A"]);
+    git(dir, ["commit", "-q", "-m", "side"]);
+    git(dir, ["switch", "-q", "main"]);
+    git(dir, ["switch", "-q", "-c", "refunds"]);
+    git(dir, ["merge", "-q", "--no-ff", "--no-edit", "side"]);
+    // The side branch is on a remote, so the merge is the Unit branch's one commit of its own.
+    git(dir, ["update-ref", "refs/remotes/origin/side", "side"]);
+    git(dir, ["switch", "-q", "-c", "redo", "main"]);
+    writeFileSync(join(dir, "redo.md"), "redo\n");
+    git(dir, ["add", "-A"]);
+    git(dir, ["commit", "-q", "-m", "redo"]);
+    expect(unitTool.unitBuildOwnBranch(dir, "refunds")).toBe("redo");
+    git(dir, ["branch", "-q", "-f", "refunds", "main"]);
+    git(dir, ["switch", "-q", "refunds"]);
+    git(dir, ["commit", "-q", "--allow-empty", "-m", "empty"]);
+    git(dir, ["switch", "-q", "redo"]);
+    expect(unitTool.unitBuildOwnBranch(dir, "refunds")).toBeNull();
+  });
+
   test("forkRemoteOf: the one remote not at the plan's address, never one of several", () => {
     const { api, hosts } = forked();
     expect(unitTool.forkRemoteOf(api, hosts["checkout-api"])).toBe("origin");
