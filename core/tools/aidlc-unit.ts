@@ -6883,14 +6883,18 @@ function commitRecord(args: string[], projectDir?: string): void {
   } catch {
     // No work selected: nothing here is a Unit's build.
   }
-  const unitBuild = state !== null && unitBuildOf(state) !== null;
+  const build = state === null ? null : unitBuildOf(state);
+  // A Unit's build in the team's own workspace commits its own record there, as
+  // its push does; where the lead's work is in this workspace too, aidlc/ holds
+  // the lead's record, so it is not committed from here.
+  const buildOwn = build !== null && !update && leadWorkHere(pd, build.homeWork) === null ? buildRecordPaths(pd) : undefined;
   const offered = existsSync(join(pd, ...unitWordsFile("record-message", UPDATE_MESSAGE_KEY).split("/")));
   const found = update ? ownFilesToCommit(pd, offered ? () => false : null) : null;
   const own = found && {
     commit: found.commit.filter((path) => !leave.includes(path)),
     left: [...found.left, ...found.commit.filter((path) => leave.includes(path))].sort(),
   };
-  const block = recordCommitBlock(pd, unitBuild, own?.commit);
+  const block = recordCommitBlock(pd, build !== null, own?.commit ?? buildOwn);
   const what = own ? "AI-DLC's own files" : "AI-DLC's record";
   const left = own && own.left.length > 0 ? ` I left ${leftFilesNamed(own.left)} for you to look over and commit.` : "";
   if (block?.why === "nothing") {
@@ -6906,10 +6910,15 @@ function commitRecord(args: string[], projectDir?: string): void {
   const given = givenCommitMessage(pd, args, "commit-record");
   let files: number;
   try {
-    files = commitPlanHere(pd, given?.text ?? (own ? UPDATE_COMMIT_MESSAGE : RECORD_COMMIT_MESSAGE), false, own?.commit);
+    files = commitPlanHere(pd, given?.text ?? (own ? UPDATE_COMMIT_MESSAGE : RECORD_COMMIT_MESSAGE), false, own?.commit ?? buildOwn);
   } catch (error) {
     if (error instanceof CommitRefused) fail(`${error.message} ${messageWayOn(false)}`);
     throw error;
+  }
+  // The build's own record with nothing new in it: its paths are its folders, so git is the one to tell.
+  if (files === 0) {
+    console.log(JSON.stringify({ committed: false, notice: "AI-DLC's record in aidlc/ has nothing new to commit." }));
+    return;
   }
   given?.spend();
   const branch = git(pd, ["symbolic-ref", "--quiet", "--short", "HEAD"]).stdout.trim();

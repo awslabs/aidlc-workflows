@@ -1132,8 +1132,11 @@ Your own git hooks and signing run, and a hook that refuses the commit is said
 in git's words. It names the commit and how many files went in, or says there
 is nothing new to commit (exit 0). It commits nothing and exits 1 outside a git
 repository, while a rebase, merge, cherry-pick or revert of yours is under way
-(with how to finish it or put it aside), on no branch, and in a Unit's build,
-where `aidlc/` holds the lead's record too. `/aidlc` offers it once when an
+(with how to finish it or put it aside), on no branch, and in a Unit's build in
+a clone of a workspace that holds the lead's work too, where `aidlc/` holds the
+lead's record. In a Unit's build in your team's own workspace it commits that
+build's own record: its own folder, and its space's own folders while git has
+none of that space yet, never another work's folder. `/aidlc` offers it once when an
 update moved `repos.json` into `aidlc/` and when the repo list changed and is
 not committed yet.
 

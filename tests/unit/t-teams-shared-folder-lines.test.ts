@@ -12,7 +12,7 @@
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
@@ -39,6 +39,7 @@ import {
   ORCH,
   planWordAt,
   recordAt,
+  refundsTaken,
   refundsTakenInClone,
   run,
   STATE,
@@ -718,5 +719,40 @@ describe("config in a teammate's clone", () => {
     const open = `Your open work (default/${HOME_RECORD}) carries on.`;
     expect(config(cloneOf(home.remote, "ana"))).not.toContain(open);
     expect(config(home.dir)).toContain(open);
+  });
+});
+
+// The person asks AI-DLC to commit its record in a Unit's build: in the team's
+// own workspace it is the build's own record, as at any other work; in a clone
+// of a workspace that holds the lead's work too, aidlc/ holds the lead's record,
+// so it is not committed from there.
+describe("AI-DLC's record committed on the person's word in a Unit's build", () => {
+  test("in the team's own workspace the build's own record is committed, never another work's", () => {
+    const { alice, record } = refundsTaken();
+    const other = join(alice, "aidlc", "spaces", "payments", "intents", "zz-another-work");
+    mkdirSync(other, { recursive: true });
+    writeFileSync(join(other, "notes.md"), "Another work of the team's.\n");
+    const before = git(alice, ["rev-parse", "HEAD"]);
+    const committed = run(UNIT, ["commit-record"], alice);
+    expect(committed.status, committed.out).toBe(0);
+    const head = git(alice, ["rev-parse", "--short", "HEAD"]);
+    expect(String(committed.json?.notice)).toMatch(new RegExp(`^AI-DLC's record in aidlc/ is committed on main as ${head} \\(\\d+ files\\); nothing is pushed\\.$`));
+    expect(git(alice, ["log", "-1", "--format=%s"])).toBe("Update AI-DLC's record");
+    const shown = git(alice, ["diff", "--name-only", before, "HEAD"]).split("\n").filter(Boolean);
+    const own = record.slice(alice.length + 1).split("\\").join("/");
+    expect(shown.filter((path) => path.startsWith("aidlc/spaces/payments/intents/")).every((path) => path.startsWith(`${own}/`)), shown.join("\n")).toBe(true);
+    expect(shown.some((path) => path.startsWith(`${own}/`))).toBe(true);
+    expect(git(alice, ["status", "--porcelain", "--", other])).toContain("zz-another-work");
+    const again = run(UNIT, ["commit-record"], alice);
+    expect(again.json?.notice, again.out).toBe("AI-DLC's record in aidlc/ has nothing new to commit.");
+  });
+
+  test("in a clone of a workspace that holds the lead's work, it is not committed, in today's words", () => {
+    const { alice } = refundsTakenInClone();
+    const head = git(alice, ["rev-parse", "HEAD"]);
+    const refused = run(UNIT, ["commit-record"], alice);
+    expect(refused.status).not.toBe(0);
+    expect(refused.out).toContain("This checkout builds a Unit, so I don't commit aidlc/ from here: it holds the lead's record too.");
+    expect(git(alice, ["rev-parse", "HEAD"])).toBe(head);
   });
 });
