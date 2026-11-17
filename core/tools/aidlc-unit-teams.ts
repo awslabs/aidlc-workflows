@@ -1005,6 +1005,7 @@ export function onlyEngineStateWrites(projectDir: string, prefix: string, change
 export type CheckIn =
   | "not-checked-in"
   | "unknown"
+  | "ignored"
   | { pushedOn: string; into: string }
   | { into: string; remote: string; split: { ahead: number; behind: number } | null };
 
@@ -1098,7 +1099,8 @@ export function levelByContent(dir: string, remote: string, branch: string):
 // rebase merge, path by path. Pushed on a branch of its own while it is not in
 // it yet. Unknown when git cannot tell: no integration branch here, a branch
 // never pushed, pushed only as one named like the integration branch (a fork's
-// main), a detached HEAD, or git failing.
+// main), a detached HEAD, or git failing. Ignored where git ignores aidlc/ and
+// HEAD has none of it.
 export function checkInState(projectDir: string, stateContent?: string): CheckIn {
   const run = (args: string[]) => spawnSync("git", ["-C", projectDir, ...args], { encoding: "utf-8", timeout: 10_000 });
   let target: { remote: string; branch: string } | null;
@@ -1119,6 +1121,9 @@ export function checkInState(projectDir: string, stateContent?: string): CheckIn
     return "unknown";
   }
   if (target === null) return "unknown";
+  // An aidlc/ that git ignores, with none of it in HEAD, is in no commit at all,
+  // whatever the branch's log shows.
+  if (run(["check-ignore", "-q", "--", "aidlc/"]).status === 0 && run(["cat-file", "-e", "HEAD:./aidlc"]).status !== 0) return "ignored";
   // Narrowed once, for the closures below.
   const integration = target;
   const into = `refs/remotes/${target.remote}/${target.branch}`;

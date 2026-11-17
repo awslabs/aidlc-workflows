@@ -405,6 +405,22 @@ describe("the checked-in fact", () => {
     expect(statusOf(alice)).toContain(STATUS_YES);
   });
 
+  // An aidlc/ that git ignores is in no commit at all, whatever the branch's log
+  // shows: status never says it is checked in there.
+  test("where git ignores aidlc/ and none of it is committed, status never says it is checked in", () => {
+    const { alice } = refundsTakenInClone();
+    checkIn(alice, "refunds taken");
+    expect(statusOf(alice)).toContain(STATUS_YES);
+    git(alice, ["rm", "-r", "-q", "--cached", "aidlc"]);
+    const ignore = join(alice, ".gitignore");
+    writeFileSync(ignore, `${existsSync(ignore) ? readFileSync(ignore, "utf-8") : ""}aidlc/\n`);
+    git(alice, ["add", ".gitignore"]);
+    git(alice, ["commit", "-q", "-m", "aidlc/ stays in this clone"]);
+    git(alice, ["push", "-q", "origin", "HEAD:main"]);
+    expect(existsSync(join(alice, "aidlc"))).toBe(true);
+    expect(statusOf(alice)).not.toContain("Checked in:     yes");
+  });
+
   test("a change not checked in, or a decision of theirs only in this clone's audit, says nothing at a look or in status", () => {
     const { alice, record } = refundsTakenInClone();
     const chat = chatOf("4a5b9c0d-0e1f-4b2a-8d3e-9f0a1b2c3d40");
