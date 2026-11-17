@@ -10683,7 +10683,7 @@ function unitMainMovedAsk(projectDir: string, stateContent: string): AskDirectiv
   if (build === null || getField(stateContent, UNIT_PUSH_FIELD)?.trim() !== "pushed" || !takenFromPlan(projectDir, build)) return null;
   if (unitPushToOffer(projectDir, stateContent) || turnedDownBuildWaits(projectDir, stateContent) !== null || takeAside(projectDir, stateContent)) return null;
   const unit = build.unit;
-  const moved = mainMovedRepos(projectDir, unit, unitBranchOf(stateContent, unit));
+  const moved = mainMovedRepos(projectDir, unit, unitBranchOf(stateContent, unit)).filter((repo) => !repo.hostAhead);
   if (moved.length === 0) return null;
   if (engineAskMark(projectDir, mainMovedAsked(unit, moved)) !== null) return null;
   noteEngineAskMark(projectDir, mainMovedAsked(unit, moved));
@@ -10768,7 +10768,7 @@ function mainMovedNote(projectDir: string): string | null {
   const state = loadStateFileIfPresent(projectDir);
   const build = state === null ? null : unitBuildOf(state);
   if (state === null || build === null) return null;
-  const moved = mainMovedRepos(projectDir, build.unit, unitBranchOf(state, build.unit));
+  const moved = mainMovedRepos(projectDir, build.unit, unitBranchOf(state, build.unit)).filter((repo) => !repo.hostAhead);
   const due = moved.filter((repo) => repo.files.length > 0);
   if (due.length === 0 || engineAskMark(projectDir, mainMovedAsked(build.unit, moved)) === null) return null;
   return `When the person asks to bring ${due[0].into} into ${build.unit}, or says a merge of it is resolved, run ` +

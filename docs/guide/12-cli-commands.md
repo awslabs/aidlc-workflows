@@ -924,9 +924,14 @@ When the branch on the remote is ahead of yours instead (your host's Update
 branch merged main into its pull request, or a suggestion was committed there),
 the push first brings those commits into your branch with your own git (a
 fast-forward, never a stash, a merge commit or a force) and then pushes on top
-of them, so nothing is replaced. Where they change a file the Unit changes too,
-it stops before anything is pushed, names the file, and offers the replace only
-where it would take them (a clean merge of main); otherwise a new branch.
+of them, so nothing is replaced. Where they cannot come in that way (they
+change a file the Unit changes too, or a change of yours is in the way), it
+stops before anything is pushed, names the commit and the file, and offers to
+bring them in: `--merge-main` then merges your branch on the remote into yours
+with your own git (a clash is left for you to resolve, `--merge-main` again
+finishes it, `--undo-merge` takes it back out) and pushes as usual, so the pull
+request stays the same one. The other way is a new branch, without those
+commits. The replace stays for a build rewritten here (a redo, a rebase).
 
 When the repository a Unit's record goes to takes no push from you, and your
 clone of it has one remote that is not at the plan's address (your fork), the

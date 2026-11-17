@@ -12646,6 +12646,16 @@ export function mainChangedUnder(dir: string, head: string, into: string, paths:
 // branch it merges into changed the Unit's own files, keeps this for the head
 // it pushed: the step after it offers to bring that branch in, once.
 export const mainMovedMark = (unit: string, head: string): string => `unit-main-moved-${unit}-${head.slice(0, 12)}`;
+// The offer to bring in what the host's branch has on top of the last push
+// (the push's refusal), named with that push's head as mainMovedMark is.
+export const hostAheadMark = (unit: string, head: string): string => `unit-host-ahead-${unit}-${head.slice(0, 12)}`;
+
+// A commit's subject or author, someone else's free text in a line the agent
+// acts on: on one line, cut, in quotes.
+function quotedCut(text: string, most = 72): string {
+  const line = text.replace(/\s+/g, " ").trim();
+  return `"${line.length > most ? `${line.slice(0, most - 3)}...` : line}"`;
+}
 
 // Puts `dir` on the Unit's `branch` as the person's own hands would, before
 // anything is committed there: an existing branch switched to with their
@@ -12762,7 +12772,7 @@ function sendBuildRecord(pd: string, remote: string, branch: string, unit: strin
   return notSent(pushRefusal(pushed.stderr));
 }
 
-function pushUnit(args: string[], projectDir?: string): void {
+function pushUnit(args: string[], projectDir?: string, carried?: { lines: string[]; moved: Array<{ name: string; from: string }> }): void {
   const { bareFlags, flags } = parseArgs(args);
   const pd = resolveProjectDir(projectDir);
   const state = readStateFile(pd);
@@ -12966,9 +12976,9 @@ function pushUnit(args: string[], projectDir?: string): void {
   // Then in each, onto the Unit's branch as their own hands would and its
   // commit made with their git (hooks, signing, identity), before anything is
   // pushed: a hook that stops one pushes nothing.
-  const moved: Array<{ name: string; from: string }> = [];
+  const moved: Array<{ name: string; from: string }> = [...(carried?.moved ?? [])];
   // What the Unit's branch on a remote had on top of this one, brought in first.
-  const broughtIn: string[] = [];
+  const broughtIn: string[] = [...(carried?.lines ?? [])];
   // The source walk as the Code Generation review binds it, read once when a
   // write names a folder.
   let sourceListing: WorkspaceSourceListing | null | undefined;
@@ -13052,7 +13062,7 @@ function pushUnit(args: string[], projectDir?: string): void {
       const ahead = Number(git(dir, ["rev-list", "--count", "--first-parent", `HEAD..${onRemote}`]).stdout.trim());
       const subject = git(dir, ["log", "-1", "--format=%s", onRemote]).stdout.trim();
       if (CHECKOUT_STEPS.level.run(dir, remote, branch).ok) {
-        broughtIn.push(`${branch} on ${remote} in ${name} had ${ahead === 1 ? `a commit on top of yours ("${subject}")` : `${ahead} commits on top of yours`}, ` +
+        broughtIn.push(`${branch} on ${remote} in ${name} had ${ahead === 1 ? `a commit on top of yours (${quotedCut(subject)})` : `${ahead} commits on top of yours`}, ` +
           `so I brought ${ahead === 1 ? "it" : "them"} into your ${branch} here first.`);
       }
     }
@@ -13149,18 +13159,35 @@ function pushUnit(args: string[], projectDir?: string): void {
         const fresh = `${branch}-2`;
         const unitTool = aidlcToolInvocation("unit");
         // The build pushed before with commits on top that the level step could
-        // not bring in, because they change a file this build changes too: the
-        // file named, and the replace offered only where its lease would take them.
+        // not bring in: those the host's branch has beyond both this branch and
+        // that push (a record commit or a merge of main pushed from here writes
+        // no row), along its first parents, each read against its first parent.
+        // Where this build is still on top of that push, the offer is to bring
+        // them in (the host's branch, never replaced); where it was rewritten
+        // here (a redo, a rebase), the replace where its lease would take them,
+        // else the new branch.
         const last = lastPushedHeads(pd, unit, branch).get(repo);
         const tipThere = git(dir, ["rev-parse", theirs]).stdout.trim();
+        const beyond = last === undefined ? [] : [theirs, "--not", "HEAD", last];
         const onTop = last === undefined || last === tipThere || !git(dir, ["merge-base", "--is-ancestor", last, theirs]).ok ? 0
-          : Number(git(dir, ["rev-list", "--count", "--first-parent", `${last}..${theirs}`]).stdout.trim());
-        const touched = onTop === 0 ? [] : git(dir, ["diff", "--name-only", "--no-renames", last!, theirs, "--", ...paths]).stdout.split(/\r?\n/).filter(Boolean);
+          : Number(git(dir, ["rev-list", "--count", "--first-parent", ...beyond]).stdout.trim());
+        const touched = onTop === 0 ? [] : [...new Set(git(dir, ["log", "-m", "--first-parent", "--format=", "--name-only", "--no-renames", ...beyond, "--", ...paths])
+          .stdout.split(/\r?\n/).filter(Boolean))];
+        const [short, subject, author] = git(dir, ["log", "-1", "--format=%h%x00%s%x00%an", theirs]).stdout.trim().split("\0");
+        const commits = onTop === 1 ? `a commit on top of what was pushed there before (${short} ${quotedCut(subject ?? "")}, by ${quotedCut(author ?? "", 40)})`
+          : `${onTop} commits on top of what was pushed there before (the last ${short} ${quotedCut(subject ?? "")}, by ${quotedCut(author ?? "", 40)})`;
+        const changes = touched.length === 0 ? "" : `, and ${onTop === 1 ? "that commit changes" : "they change"} ${joinNames(touched)}, which this build changes too`;
+        if (onTop > 0 && git(dir, ["merge-base", "--is-ancestor", last!, "HEAD"]).ok) {
+          noteEngineAskMark(pd, hostAheadMark(unit, last!));
+          fail(`${unit} was not pushed: on ${remote} in ${name} its branch has ${commits}${changes}. Ask the person whether to bring ` +
+            `${onTop === 1 ? "that commit" : "those commits"} into ${branch} here and push it (I'd merge ${onTop === 1 ? "it" : "them"} with their own ` +
+            `git; nothing is replaced, and a pull request open from it stays the same one), or to push it as a new branch, ${fresh} ` +
+            `(${onTop === 1 ? "that commit stays" : "those commits stay"} on ${branch} there and ${onTop === 1 ? "is" : "are"} not in the new branch); ` +
+            `run \`${CHECKOUT_STEPS.merge.via()}\` to bring ${onTop === 1 ? "it" : "them"} in, or \`${unitTool} push --branch ${fresh}${messageFlag}\` ` +
+            `for the new branch.${whereNow()}`);
+        }
         if (touched.length > 0) {
-          const commits = onTop === 1 ? `a commit on top of what was pushed there before ("${git(dir, ["log", "-1", "--format=%s", theirs]).stdout.trim()}")`
-            : `${onTop} commits on top of what was pushed there before`;
-          const said = `${unit} was not pushed: on ${remote} in ${name} its branch has ${commits}, and ${onTop === 1 ? "that commit changes" : "they change"} ` +
-            `${joinNames(touched)}, which this build changes too.`;
+          const said = `${unit} was not pushed: on ${remote} in ${name} its branch has ${commits}${changes}.`;
           fail(onlyOnLastPush(dir, last!, tipThere, integrationOf(repo, dir, remote), repo === ".")
             ? `${said} Ask the person whether to replace ${branch} there with this build (the build pushed before and ` +
               `${onTop === 1 ? "that commit leave" : "those commits leave"} that branch; a pull request open from it stays the same one), or to push it ` +
@@ -13412,9 +13439,10 @@ function onlyOnLastPush(dir: string, lease: string, tip: string, into: string, o
 // The code repositories of that push whose head kept mainMovedMark, with the
 // branch each merges into and its remote, read here with no fetch, and the
 // Unit's own files there that it changed and the pushed branch lacks (none
-// once that branch has it).
+// once that branch has it). Before each, where the push's refusal offered it
+// (hostAheadMark), the Unit's own branch on the host as what is brought in.
 export function mainMovedRepos(pd: string, unit: string, branch: string, marked = true):
-  Array<{ repo: string; name: string; dir: string; remote: string; into: string; head: string; paths: string[]; files: string[] }> {
+  Array<{ repo: string; name: string; dir: string; remote: string; into: string; head: string; paths: string[]; files: string[]; hostAhead?: true }> {
   const manifest = readUnitSourceManifest(pd, "code-generation", unit);
   const targets = manifest.ok ? unitWriteTargets(pd, manifest.manifest.writes) : new Map<string, { dir: string; paths: string[] }>();
   // The workspace's own repository starts from the branch its take or its plan names, read as the push read it, unfetched.
@@ -13426,15 +13454,19 @@ export function mainMovedRepos(pd: string, unit: string, branch: string, marked 
   };
   return [...lastPushedHeads(pd, unit, branch)].flatMap(([repo, head]) => {
     const dir = targets.get(repo)?.dir ?? (repo === "." ? pd : repoDir(pd, repo));
-    if ((marked && engineAskMark(pd, mainMovedMark(unit, head)) === null) || !isGitRepoDir(dir)) return [];
+    if (!isGitRepoDir(dir)) return [];
     const remote = pushRemoteOf(dir, branch);
     if (typeof remote !== "string") return [];
-    const own = repo === "." ? ownInto() : null;
-    if (repo === "." && own === null) return [];
-    const into = own === null ? unitBranchInto(dir, remote) : own.replace(/^refs\/(?:remotes|heads)\//, "");
+    const name = repo === "." ? "the repo" : repo;
     const paths = targets.get(repo)?.paths ?? [];
+    const host = engineAskMark(pd, hostAheadMark(unit, head)) === null ? []
+      : [{ repo, name, dir, remote, into: `${remote}/${branch}`, head, paths, files: [] as string[], hostAhead: true as const }];
+    if (marked && engineAskMark(pd, mainMovedMark(unit, head)) === null) return host;
+    const own = repo === "." ? ownInto() : null;
+    if (repo === "." && own === null) return host;
+    const into = own === null ? unitBranchInto(dir, remote) : own.replace(/^refs\/(?:remotes|heads)\//, "");
     const pushedTip = git(dir, ["rev-parse", "--verify", "--quiet", `refs/remotes/${remote}/${branch}^{commit}`]).stdout.trim() || head;
-    return [{ repo, name: repo === "." ? "the repo" : repo, dir, remote, into, head, paths, files: mainChangedUnder(dir, pushedTip, into, paths) }];
+    return [...host, { repo, name, dir, remote, into, head, paths, files: mainChangedUnder(dir, pushedTip, into, paths) }];
   });
 }
 
@@ -13675,7 +13707,12 @@ function mergeMainIn(pd: string, args: string[], unit: string, branch: string, u
     return;
   }
   if (undo) {
-    for (const { dir, name, into } of repos) {
+    // One line per repository, about the merge waiting there; where one waits
+    // anywhere, only those, so the undo says what it undid.
+    const each = repos.filter((entry, at) => repos.findIndex((other) => other.dir === entry.dir) === at)
+      .map((entry) => repos.find((other) => other.dir === entry.dir && merging(other.dir, other.into)) ?? entry);
+    const waiting = each.some((entry) => merging(entry.dir, entry.into)) ? each.filter((entry) => merging(entry.dir, entry.into)) : each;
+    for (const { dir, name, into } of waiting) {
       const aborted = merging(dir, into) ? git(dir, ["merge", "--abort"]) : null;
       if (aborted?.ok) lines.push(`I undid the merge of ${into} into ${unit} in ${name}; ${unit} is as it was there, and nothing was pushed.`);
       else if (aborted !== null) {
@@ -13687,6 +13724,11 @@ function mergeMainIn(pd: string, args: string[], unit: string, branch: string, u
     console.log(JSON.stringify({ undone: lines.some((line) => line.startsWith("I undid")), unit, notice: joinSaid(lines) }));
     return;
   }
+  // The host's branch first where both are due (while it is ahead, a push of
+  // main's merge is refused anyway): main's entry there waits, offered again
+  // after the push where main still changes a file of the build.
+  const waitsForHost = repos.filter((entry) => !entry.hostAhead && repos.some((other) => other.hostAhead && other.dir === entry.dir));
+  repos = repos.filter((entry) => !waitsForHost.includes(entry));
   const whereNow = (): string => whereNowLine(branch, moved);
   // Merged here and not pushed yet, for a line that stops after it.
   const mergedHere: string[] = [];
@@ -13703,7 +13745,7 @@ function mergeMainIn(pd: string, args: string[], unit: string, branch: string, u
   const toPutAside: Array<{ dir: string; path: string; into: string }> = [];
   for (const entry of repos) {
     const { dir, name, into } = entry;
-    const start = startRemoteOf(dir, entry.remote);
+    const start = entry.hostAhead ? entry.remote : startRemoteOf(dir, entry.remote);
     const fetched = git(dir, ["fetch", "-q", start, into.slice(start.length + 1)]);
     if (!fetched.ok) stop(`${into} could not be fetched in ${name}: git says "${gitSaid(fetched.stderr)}". Nothing was merged or pushed. Say when to try again.`);
     if (merging(dir, into)) {
@@ -13725,8 +13767,9 @@ function mergeMainIn(pd: string, args: string[], unit: string, branch: string, u
       .filter((path) => !buildOwn.some((own) => path === own || path.startsWith(`${own}/`)));
     const ownUnit = ownChanged.find((path) => entry.paths.some((own) => path === own || (own.endsWith("/") && path.startsWith(own))));
     if (ownUnit !== undefined) {
-      stop(`${unit}'s ${ownUnit} in ${name} has a change that is not committed, so nothing was merged or pushed. Once it is pushed with ` +
-        `${unit}, or put aside, I can bring ${into} in.`);
+      stop(`${unit}'s ${ownUnit} in ${name} has a change that is not committed, so nothing was merged or pushed. ` +
+        (entry.hostAhead ? `Say push, and I'll commit it with ${unit} first; then I can bring ${into} in.`
+          : `Once it is pushed with ${unit}, or put aside, I can bring ${into} in.`));
     }
     const recordFiles = entry.repo !== "." ? [] : ownChanged.filter((path) => mergeChanges.has(path) &&
       recordPaths(dir).some((own) => path === own || (own.endsWith("/") && path.startsWith(own))));
@@ -13766,7 +13809,8 @@ function mergeMainIn(pd: string, args: string[], unit: string, branch: string, u
       if (!switched.ok) stop(`${unit} could not be checked out in ${name}, so nothing was merged or pushed. Git says: "${gitSaid(switched.stderr)}".`);
       moved.push({ name, from: from || "the commit you were on" });
     }
-    const message = given === null ? [] : ["-m", given.text];
+    // The host's branch is merged with git's own message: the Unit's commit took theirs at the push.
+    const message = given === null || entry.hostAhead ? [] : ["-m", given.text];
     if (entry.step === "finish" || entry.step === "merge") {
       const clashed = (): void => {
         const clash = conflictFiles(dir);
@@ -13810,7 +13854,8 @@ function mergeMainIn(pd: string, args: string[], unit: string, branch: string, u
       }
     }
   }
-  for (const entry of plan) {
+  const fromHost = plan.filter((entry) => entry.hostAhead);
+  for (const entry of plan.filter((each) => !each.hostAhead)) {
     const { dir, name, into } = entry;
     if (entry.step === "level") {
       lines.push(`${unit} already has ${into}'s changes to its files in ${name}; nothing was merged or pushed.`);
@@ -13827,6 +13872,19 @@ function mergeMainIn(pd: string, args: string[], unit: string, branch: string, u
     }
     // A merge already on the branch here (theirs, or one made here whose push was refused) is pushed as it is.
     lines.push(entry.step === "push" ? `Pushed ${unit} in ${name}, with ${into} merged into it.` : `Merged ${into} into ${unit} in ${name} and pushed ${unit}.`);
+  }
+  // Brought in from the host's branch: the push itself goes on from here, so
+  // its result is sent as after any push, with these lines said first.
+  if (fromHost.length > 0) {
+    const merged = fromHost.filter((entry) => entry.step === "merge" || entry.step === "finish")
+      .map((entry) => `Merged ${entry.into} into ${unit} in ${entry.name}.`);
+    const back = putBack().trim();
+    pushUnit([], pd, { lines: [...merged, ...lines, ...(back === "" ? [] : [back])], moved });
+    for (const entry of waitsForHost) {
+      const head = lastPushedHeads(pd, unit, branch).get(entry.repo);
+      if (head !== undefined && mainChangedUnder(entry.dir, head, entry.into, entry.paths).length > 0) noteEngineAskMark(pd, mainMovedMark(unit, head));
+    }
+    return;
   }
   given?.spend();
   console.log(JSON.stringify({ pushed: plan.some((entry) => entry.step !== "level"), unit, notice: joinSaid([...lines, whereNow().trim(), putBack().trim()]) }));

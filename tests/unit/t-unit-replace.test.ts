@@ -7,20 +7,25 @@
 // is never replaced. And before that: a Unit branch on its remote ahead of the
 // person's (the host's merge of main on its pull request, a suggestion
 // committed there) is brought in first by the level step and pushed as a
-// fast-forward; where those commits change a file the build changes, the
-// refusal names the file and offers only the ways that can go. Real clones of
-// bare remotes, through the shipped tools.
+// fast-forward; where they cannot be (they change a file the build changes, or
+// a change of the person's is in the way) and the build is still on top of
+// its last push, the refusal offers to bring them in (`push --merge-main`: a
+// merge with the person's git, a clash left waiting, then the push itself),
+// or a new branch; never the replace there. Real clones of bare remotes,
+// through the shipped tools.
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import {
   cleanupTeamBuild,
   cloneOf,
   codeGenerated,
   codeGeneratedAgain,
+  commitMessage,
   finishBuild,
   git,
   refundsTakenInClone,
@@ -59,6 +64,10 @@ function redone(repos: string[] = ["billing"]) {
 }
 
 const tipOn = (host: string): string => git(host, ["rev-parse", "refunds"]);
+
+const BRING = "Ask the person whether to bring that commit into refunds here and push it (I'd merge it with their own git; nothing " +
+  "is replaced, and a pull request open from it stays the same one), or to push it as a new branch, refunds-2 (that commit stays on " +
+  "refunds there and is not in the new branch); run `";
 
 // Pushed once; then someone on billing's host puts a commit on top of its
 // branch: the host's merge of a newer main ("Update branch"), or a suggestion
@@ -108,20 +117,7 @@ describe("a Unit branch on its remote ahead of the person's", () => {
     expect(git(hosts.billing, ["merge-base", "--is-ancestor", onTop, "refunds"])).toBe("");
   });
 
-  test("a suggestion that changes a file this build changes: the file named, only the new branch offered, and nothing of it replaced", () => {
-    const { alice, hosts, onTop } = pushedThenOnTop("suggestion", "lib/refund.ts");
-    codeGeneratedAgain(alice);
-    const refused = run(UNIT, ["push"], alice);
-    expect(refused.status).not.toBe(0);
-    const said = String(refused.json?.error);
-    expect(said).toStartWith("refunds was not pushed: on origin in billing its branch has a commit on top of what was pushed there before " +
-      "(\"Apply suggestion from review\"), and that commit changes lib/refund.ts, which this build changes too. That commit stays on " +
-      "refunds there and is not in the new branch. Ask the person whether to push it as a new branch, refunds-2; on their yes, run `");
-    expect(said).not.toContain("--replace");
-    expect(tipOn(hosts.billing)).toBe(onTop);
-  });
-
-  test("the host's merge of main that changes a file this build changes: the file named, and the replace says that commit leaves too", () => {
+  test("the host's merge of main that changes a file this build changes: the offer to bring it in, never the replace", () => {
     const lines = (first: string, last: string): string => `${first}\nb\nc\nd\n${last}\n`;
     const { alice, hosts, record } = refundsTakenInClone((alice) => {
       const billing = join(alice, "billing");
@@ -146,10 +142,104 @@ describe("a Unit branch on its remote ahead of the person's", () => {
     git(join(alice, "billing"), ["fetch", "-q", "origin", "main"]);
     writeFileSync(join(alice, "billing", "lib", "refund.ts"), lines("A2", "e"));
     const said = String(run(UNIT, ["push"], alice).json?.error);
-    expect(said).toStartWith("refunds was not pushed: on origin in billing its branch has a commit on top of what was pushed there before " +
-      "(\"Merge branch 'main' into refunds\"), and that commit changes lib/refund.ts, which this build changes too. Ask the person whether " +
-      "to replace refunds there with this build (the build pushed before and that commit leave that branch; a pull request open from it " +
-      "stays the same one), or to push it as a new branch, refunds-2");
+    expect(said).toContain("\"Merge branch 'main' into refunds\", by \"reviewer\"), and that commit changes lib/refund.ts, which this build " +
+      `changes too. ${BRING}`);
+    expect(said).not.toContain("--replace");
+    expect(run(UNIT, ["push", "--merge-main"], alice).status).toBe(0);
+  });
+
+  // Pushed once with lib/refund.ts's first line changed; then the reviewer
+  // commits on the host's branch: line 5 of it ("clean"), line 1 of it
+  // ("clash"), or another file the person has their own change to ("theirs");
+  // then the build changes line 1 again here.
+  function hostAhead(kind: "clean" | "clash" | "theirs") {
+    const lines = (first: string, last: string): string => `${first}\nb\nc\nd\n${last}\n`;
+    const taken = refundsTakenInClone((alice) => {
+      const billing = join(alice, "billing");
+      mkdirSync(join(billing, "lib"), { recursive: true });
+      writeFileSync(join(billing, "lib", "refund.ts"), lines("a", "e"));
+      writeFileSync(join(billing, "CHANGES.md"), "none yet\n");
+      git(billing, ["add", "-A"]);
+      git(billing, ["commit", "-q", "-m", "refund lines"]);
+      git(billing, ["push", "-q", "origin", "HEAD:main"]);
+    });
+    const { alice, hosts, record } = taken;
+    codeGenerated(alice, record);
+    writeFileSync(join(alice, "billing", "lib", "refund.ts"), lines("A", "e"));
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    const host = cloneOf(hosts.billing, "reviewer");
+    git(host, ["fetch", "-q", "origin", "refunds"]);
+    git(host, ["switch", "-q", "-c", "refunds", "origin/refunds"]);
+    if (kind === "theirs") writeFileSync(join(host, "CHANGES.md"), "a suggestion\n");
+    else writeFileSync(join(host, "lib", "refund.ts"), kind === "clean" ? lines("A", "E") : lines("X", "e"));
+    git(host, ["commit", "-q", "-am", "Apply suggestion from review"]);
+    git(host, ["push", "-q", "origin", "refunds"]);
+    writeFileSync(join(alice, "billing", "lib", "refund.ts"), lines("A2", "e"));
+    if (kind === "theirs") writeFileSync(join(alice, "billing", "CHANGES.md"), "mine\n");
+    return { ...taken, host, lines, suggestion: git(host, ["rev-parse", "HEAD"]), short: git(host, ["rev-parse", "--short", "HEAD"]) };
+  }
+
+  test("a suggestion on the host's branch in a file the build changes: the offer to bring it in, and its yes is one push on the same branch", () => {
+    const { alice, hosts, short, suggestion, lines } = hostAhead("clean");
+    const refused = run(UNIT, ["push"], alice);
+    expect(refused.status).not.toBe(0);
+    expect(String(refused.json?.error)).toStartWith(`refunds was not pushed: on origin in billing its branch has a commit on top of what was ` +
+      `pushed there before (${short} "Apply suggestion from review", by "reviewer"), and that commit changes lib/refund.ts, which this ` +
+      `build changes too. ${BRING}`);
+    expect(String(refused.json?.error)).toContain("unit push --merge-main` to bring it in");
+    const yes = run(UNIT, ["push", "--merge-main"], alice);
+    expect(yes.status, yes.out).toBe(0);
+    expect(String(yes.json?.notice)).toStartWith("Merged origin/refunds into refunds in billing. Pushed branch refunds in checkout-api and billing.");
+    expect(git(hosts.billing, ["merge-base", "--is-ancestor", suggestion, "refunds"])).toBe("");
+    expect(git(hosts.billing, ["show", "refunds:lib/refund.ts"])).toBe(lines("A2", "E").trim());
+    expect(readAuditShardEvents(alice).filter((row) => row.event === "UNIT_PUSHED").length).toBe(2);
+  });
+
+  test("a real clash: left waiting with the way back, taken back on their word, then resolved, finished and pushed", () => {
+    const { alice, hosts, suggestion } = hostAhead("clash");
+    expect(run(UNIT, ["push"], alice).status).not.toBe(0);
+    const clash = String(run(UNIT, ["push", "--merge-main"], alice).json?.error);
+    expect(clash).toStartWith("origin/refunds and refunds both change lib/refund.ts in billing in ways git cannot put together, so the merge " +
+      "is waiting for you there: resolve lib/refund.ts, and I can finish it and push refunds; or say if you want me to undo it. Nothing was pushed.");
+    expect(String(run(UNIT, ["push", "--undo-merge"], alice).json?.notice)).toBe(
+      "I undid the merge of origin/refunds into refunds in billing; refunds is as it was there, and nothing was pushed.");
+    expect(String(run(UNIT, ["push", "--merge-main"], alice).json?.error)).toStartWith("origin/refunds and refunds both change lib/refund.ts");
+    writeFileSync(join(alice, "billing", "lib", "refund.ts"), "both\nb\nc\nd\ne\n");
+    git(join(alice, "billing"), ["add", "lib/refund.ts"]);
+    const finished = run(UNIT, ["push", "--merge-main"], alice);
+    expect(finished.status, finished.out).toBe(0);
+    expect(git(hosts.billing, ["merge-base", "--is-ancestor", suggestion, "refunds"])).toBe("");
+    expect(git(hosts.billing, ["show", "refunds:lib/refund.ts"])).toBe("both\nb\nc\nd\ne");
+  });
+
+  test("the new branch: the suggestion stays on the old branch, as the line says", () => {
+    const { alice, hosts, suggestion } = hostAhead("clash");
+    expect(run(UNIT, ["push"], alice).status).not.toBe(0);
+    expect(run(UNIT, ["push", "--branch", "refunds-2"], alice).status).toBe(0);
+    expect(tipOn(hosts.billing)).toBe(suggestion);
+    expect(spawnSync("git", ["merge-base", "--is-ancestor", suggestion, "refunds-2"], { cwd: hosts.billing }).status).not.toBe(0);
+  });
+
+  test("a commit on top in no file of the build, held back by a change of theirs: the same offer, and the step names their file", () => {
+    const { alice } = hostAhead("theirs");
+    const refused = String(run(UNIT, ["push"], alice).json?.error);
+    expect(refused).toContain(`by "reviewer"). ${BRING}`);
+    expect(String(run(UNIT, ["push", "--merge-main"], alice).json?.error)).toStartWith(
+      "Your change to CHANGES.md in billing is in a file origin/refunds changes, so nothing was merged or pushed.");
+  });
+
+  test("a message given at the refused push stays on the Unit's commit, and the host's tip moved since the offer is brought in too", () => {
+    const { alice, hosts, host, record } = hostAhead("clean");
+    expect(run(UNIT, ["push", "--commit-message-file", commitMessage(alice, record, "PAY-7 refunds\n")], alice).status).not.toBe(0);
+    writeFileSync(join(host, "NOTES.md"), "one more\n");
+    git(host, ["add", "-A"]);
+    git(host, ["commit", "-q", "-m", "One more suggestion"]);
+    git(host, ["push", "-q", "origin", "refunds"]);
+    const yes = run(UNIT, ["push", "--merge-main"], alice);
+    expect(yes.status, yes.out).toBe(0);
+    expect(String(yes.json?.notice)).not.toContain("your message is not on it");
+    expect(git(hosts.billing, ["show", "refunds:NOTES.md"])).toBe("one more");
+    expect(git(hosts.billing, ["log", "--format=%s", "refunds"])).toContain("PAY-7 refunds");
   });
 
   test("a fetch that fails before the push adds no line, and the push goes on", () => {
