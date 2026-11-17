@@ -19,7 +19,8 @@ that ship the neutral-only block. Keep those imports when merging project instru
 ## Layout: the engine dir and the .github shell
 
 - **`.aidlc/`** — the AIDLC engine tree (tools, hooks + the Copilot adapter,
-  agents, knowledge, scopes, sensors, aidlc-common). Neither Copilot surface
+  agents, knowledge, scopes, sensors, aidlc-common, and `bin/aidlc-engine`,
+  the Copilot CLI's command launcher). Neither Copilot surface
   scans it; everything user-visible rides `.github/`.
 - **`.github/`** — only natively-consumed, `aidlc`-named emissions: the hook
   wiring (`hooks/aidlc.json`), the 14 persona custom agents
@@ -27,8 +28,8 @@ that ship the neutral-only block. Keep those imports when merging project instru
   orchestrator, per-stage runners, scope runners, session skills). Your
   repository's own `.github/` content (workflows, templates) is untouched:
   the install MERGES these files in, all collision-free by prefix.
-- **`.vscode/settings.json`**: one VS Code setting, `chat.agent.maxRequests`,
-  added only when your project does not set it (see
+- **`.vscode/settings.json`**: the VS Code settings `chat.agent.maxRequests`
+  and `chat.useHooks`, each added only when your project does not set it (see
   [VS Code request cap](#vs-code-request-cap)). The copy runtime leaves this
   file out.
 
@@ -44,7 +45,8 @@ that ship the neutral-only block. Keep those imports when merging project instru
   [Facilitator Guide](../facilitator-guide.md#github-copilot-on-windows)
   has a readiness check that proves the hooks run.
 - **bun** only when generating or running the source/development `dist/`
-  projection. Native installs and versioned release runtimes use `aidlc`.
+  projection or the versioned manual-copy runtime. Native installs use
+  `aidlc`.
 - **Folder trust**: each Copilot surface checks its own.
   - The Copilot CLI runs repo hooks only in a folder its `trustedFolders`
     list covers (the folder itself or a folder above it). The list is in
@@ -312,8 +314,44 @@ then use the ignored local `dist/copilot/` output.
   meant, so read what the agent reports back. This does not use VS Code's own
   auto-approve, so it also works where an organization policy turns that off;
   it does need chat hooks enabled, as the rest of AI-DLC does. On the Copilot
-  CLI the adapter gives no permission decision, so your own `--allow-tool` and
-  `--deny-tool` rules decide as before.
+  CLI the adapter gives no permission decision; how the same commands run
+  there without a prompt is two points below.
+- **In the Copilot CLI, AI-DLC's record of your work is written without a
+  prompt.** While the `/aidlc` skill is in use, Copilot creates and edits the
+  files under `aidlc/spaces/<space>/intents/` without asking "Do you want to
+  create ...?", because the skill allows that path (`allowed-tools` in
+  `.github/skills/aidlc/SKILL.md`). Copilot matches the path by its ending, so a
+  folder of yours whose path ends in `aidlc/spaces/<name>/intents/` counts too.
+  Your own `--deny-tool` still wins, and Copilot asks as before for writes to
+  any other file, the space's `memory/` files included.
+- **In the Copilot CLI on Linux and macOS, AI-DLC's routine commands run
+  without a prompt.** The commands VS Code runs without an Allow click (the
+  list above, under the same conditions) go out as
+  `.aidlc/bin/aidlc-engine <command>`, a launcher AI-DLC installs in the
+  project, which the `/aidlc` skill allows (`shell(.aidlc/bin/aidlc-engine)`
+  in its `allowed-tools`). The launcher runs only the commands AI-DLC's hooks
+  pass to it; anything else, typed by the agent or run with the hooks off,
+  stops with the plain command to run instead, which Copilot then asks about.
+  The commands that keep the prompt in VS Code keep it here, and so do the
+  agent's own commands. In a Windows terminal AI-DLC's commands are asked as
+  before.
+  - Copilot checks a shell rule against a command's first word, and these
+    commands now start with the launcher, so your own `--deny-tool=shell(bun)`
+    or `shell(aidlc)` no longer stops them. To stop them, deny the launcher too:
+    `--deny-tool='shell(.aidlc/bin/aidlc-engine)'`.
+  - Where an organisation manages Copilot's permissions, the launcher saves
+    no dialogs: once its
+    [enterprise managed settings](https://docs.github.com/en/copilot/reference/enterprise-administrators/enterprise-managed-settings)
+    hold any permission rule, Copilot asks before every command they do not
+    allow, AI-DLC's included. A managed deny of `Shell(bun *)` or
+    `Shell(aidlc *)` alone does not block AI-DLC's commands; Copilot asks
+    about them instead. To block them, an administrator denies
+    `Shell(.aidlc/bin/aidlc-engine)` and `Shell(.aidlc/bin/aidlc-engine *)` as
+    well as bun or aidlc, in `permissions.deny`.
+  - A `copilot -p` script that allows exactly `shell(bun)` or `shell(aidlc)`
+    adds `--allow-tool='shell(.aidlc/bin/aidlc-engine)'`. Without it Copilot
+    refuses the launcher: `-p` has no one to ask, and the skill's rule does not
+    apply there.
 - **Command tracking is exact and best-effort.** AI-DLC tracks simple direct
   orchestrator, source-dispatcher, and real compiled `next`, `continue`,
   `report`, and `park` commands. One trailing `2>&1` is supported. Inspection
@@ -446,8 +484,7 @@ copilot` (first install and every refresh) therefore adds
   settings file at all gets it again.
 
 The setting is window-scoped, so the project value wins over a user setting.
-AI-DLC's `.gitignore` block keeps `.vscode/*` out of git, so the value
-belongs to each checkout: config adds it where it runs. A copied project
+A copied project
 (the copy channel) has no config step that merges this file, and its
 runtime does not ship one, so add the key yourself. `/aidlc --doctor` warns
 when the project value is below 100, unset (your user setting, else VS

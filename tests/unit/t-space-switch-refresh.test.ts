@@ -21,6 +21,7 @@ import {
 } from "../../core/tools/aidlc-config-diagnostics.ts";
 import { walkFiles, withSpace } from "../../core/tools/aidlc-distribution.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { typedHarnessName } from "../../core/tools/aidlc-runtime-paths.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -67,7 +68,7 @@ function run(tool: string, args: string[], cwd: string, env: Record<string, stri
 }
 
 function config(project: string, from: string, harness: string, ...extra: string[]): { status: number; out: string } {
-  return run(INIT, ["config", "--project-dir", project, "--from", from, "--harness", harness, "--mcp", "none", ...extra], project);
+  return run(INIT, ["config", "--project-dir", project, "--from", from, "--harness", typedHarnessName(harness), "--mcp", "none", ...extra], project);
 }
 
 function conflicts(project: string, from: string, harness: string): string[] {

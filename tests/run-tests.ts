@@ -45,7 +45,7 @@ import {
   TestBudgetExhaustedError,
 } from "./harness/test-budget.ts";
 import { buildMeta, renderMeta } from "./lib/bun-junit-to-meta.ts";
-import { CASE_TIMEOUT_RETRY_MAX_MS, flakyLiveLine, ISOLATED_RETRY_MAX_MS, MODEL_API_REASON, modelApiFailed, modelApiLine, onlyModelApiFailures, onlyCaseTimeouts, ORDINARY_RETRY_MAX_MS, personTurnFailed, personTurnLine, preserveFirstAttempt, retryEligible, retryPassed } from "./lib/file-retry.ts";
+import { CASE_TIMEOUT_RETRY_MAX_MS, FILE_ATTEMPT_ENV, flakyLiveLine, ISOLATED_RETRY_MAX_MS, MODEL_API_REASON, modelApiFailed, modelApiLine, onlyModelApiFailures, onlyCaseTimeouts, ORDINARY_RETRY_MAX_MS, personTurnFailed, personTurnLine, preserveFirstAttempt, retryEligible, retryPassed } from "./lib/file-retry.ts";
 import {
   type OrderWeights,
   orderLongestFirst,
@@ -1048,7 +1048,7 @@ function writeTestLog(file: string, row: ResultRow, rc: number, body: string): v
 }
 
 async function runBunTestFile(
-  file: string, parallelMode = false, context?: IsolatedFileContext, force = false,
+  file: string, parallelMode = false, context?: IsolatedFileContext, force = false, attempt = 1,
 ): Promise<FileExecution | undefined> {
   if (captureFailure) throw captureFailure;
   const base = basename(file);
@@ -1106,6 +1106,10 @@ async function runBunTestFile(
     AIDLC_TEST_COMPILED_DIR: join(logDir, "compiled"),
     AIDLC_MANAGED_SETTINGS_PATH: join(args.isolatedFiles && context ? context.artifacts : logDir, ".aidlc-managed-settings-absent.json"),
   };
+  // Only a run that retries says the attempt; one that never retries clears
+  // what the run that started it said (a runner inside a test file).
+  if (args.fileRetries) env[FILE_ATTEMPT_ENV] = String(attempt);
+  else delete env[FILE_ATTEMPT_ENV];
   // Command-scope config outranks the isolated global file. Preserve its safety
   // entries above, then remove all command-scope injection before spawning tests.
   for (const key of Object.keys(env)) {
@@ -1384,7 +1388,7 @@ async function runFileWithRetry(file: string, parallelMode: boolean): Promise<Fi
   const log = kept.log;
   const timedOutCases = first.caseTimeoutsOnly ? ", each by its case timeout" : "";
   await say(`=== RETRY ${basename(file)} (first attempt failed ${first.cases.failed} case(s)${timedOutCases}${log ? `; its log is ${log}` : ""}) ===\n`);
-  let second = await runBunTestFile(file, parallelMode);
+  let second = await runBunTestFile(file, parallelMode, undefined, false, 2);
   if (!second) return first;
   const passedOnRetry = retryPassed(first, second);
   const secondAttempt = { status: second.status, failedCases: second.cases.failed, wallTimeMs: second.wallTimeMs };
@@ -1682,7 +1686,7 @@ async function runIsolatedE2e(): Promise<void> {
       // Stay inside finally so even a never-launched file releases its fixtures.
       isolatedAbort.signal.throwIfAborted();
       await checkWorkerSource("before");
-      outcome = await runBunTestFile(file, true, context);
+      outcome = await runBunTestFile(file, true, context, false, attempt);
       if (outcome?.cleanupError) {
         poolCleanupSafe = false;
         cleanupFailure = new Error(outcome.cleanupError);

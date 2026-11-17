@@ -33,7 +33,9 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
-import { readAuditShardEvents, rejectionIsFreshAttempt } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  readAuditShardEvents, rejectionIsFreshAttempt, stateDigest, writeActiveDirectiveMarker,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { renderTestingContract, resolveTestingPosture } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 
 setDefaultTimeout(120_000);
@@ -75,7 +77,7 @@ function project(policy: "strict" | "relaxed" | "off", guardsOn = false, planApp
 }
 
 /** A feature workflow whose Code Generation is per Unit. */
-function unitProject(policy: "strict" | "off", unit: string): string {
+function unitProject(policy: "strict" | "relaxed" | "off", unit: string): string {
   const proj = createOrchestrationTestProject();
   created.push(proj);
   writeFileSync(seededStateFile(proj), `# AI-DLC State Tracking
@@ -472,6 +474,35 @@ describe("one Unit's own change request and its reopen", () => {
     const handed = guardAdmitsBuild(proj, UNIT);
     expect(handed.code, handed.stderr).toBe(0);
   });
+
+  // Units built side by side start their builds under the swarm's directive.
+  // The second change request is judged against the plan the first revision
+  // built there too, so the person's second words still reach the agent.
+  for (const policy of ["off", "relaxed"] as const) {
+    test(`${policy}: a second change request for a Unit built side by side hands the agent their second words`, () => {
+      const proj = unitProject(policy, UNIT);
+      const sideBySide = () => writeActiveDirectiveMarker(proj, {
+        kind: "invoke-swarm", stage: "code-generation", units: [UNIT],
+        state_sha256: stateDigest(readFileSync(seededStateFile(proj), "utf-8")),
+      });
+      approved(proj, UNIT);
+      sideBySide();
+      expect(posture(proj, "begin", UNIT).status).toBe(0);
+      reply(proj, "use a lookup table in that unit please");
+      rejectedAtGate(proj, "use a lookup table in that unit please", UNIT);
+      expect(next(proj).plan_approval?.status).toBe("revise");
+      writePlan(proj, "- [ ] Step 2: use a lookup table\n", UNIT);
+      expect(next(proj).plan_approval?.status).toBe("approved");
+      sideBySide();
+      expect(posture(proj, "begin", UNIT).status, posture(proj, "verify", UNIT).out).toBe(0);
+      reply(proj, "and keep the old function as an alias");
+      rejectedAtGate(proj, "and keep the old function as an alias", UNIT);
+      const revise = next(proj);
+      expect(revise.plan_approval, JSON.stringify(revise)).toEqual({
+        status: "revise", feedback: "and keep the old function as an alias",
+      });
+    });
+  }
 
   // A jump back from Build and Test, or a Redo, reopens this Unit's Code
   // Generation. That is a fresh attempt, not a change to the built result, so

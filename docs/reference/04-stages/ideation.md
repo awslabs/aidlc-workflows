@@ -26,6 +26,7 @@ subagent for one advisory pass before the gate unless reviews are set to
 - Intent Capture, Scope Definition and Approval & Handoff are ALWAYS stages and
   the other four are CONDITIONAL. ALWAYS holds within a scope that includes the
   stage: mvp runs no Approval & Handoff, and poc runs only Intent Capture.
+- Support agents take part when collaborators are on (the `collaborators` setting, shipped on only for `enterprise`; `/aidlc --collaborators on` turns it on for one piece of work). With collaborators off, the engine hands each stage an empty `support_agents` list and the lead runs alone.
 
 **Scope-driven stage inclusion:**
 
@@ -113,7 +114,7 @@ the `project-description` utility, so it does not ask for the request again.
 ### Steps
 
 1. **Load Prior Context** -- Read the project description from `project-description` (and a named document through `document-input`). Check for existing artifacts. Load guardrails.
-2. **Generate Clarifying Questions** -- Create `<record>/ideation/intent-capture/intent-capture-questions.md` with a `## Sources` register for the initial description, workflow-selected scope, and any active-memory rules used. Ask about the business problem, customer, success metrics, initiative trigger, stakeholders, decision authority, communication needs, and what this first version leaves out (the workflow-selected scope is stated as chosen, never asked again). Uses `[Answer]:` tag format with A-E options (A-D on Claude Code) plus X (Other). Offers tri-mode question flow.
+2. **Generate Clarifying Questions** -- Create `<record>/ideation/intent-capture/intent-capture-questions.md` with a `## Sources` register for the initial description, workflow-selected scope, and any active-memory rules used. Ask about the business problem, customer, success metrics, initiative trigger, stakeholders, decision authority, communication needs, and what this first version leaves out (the workflow-selected scope is stated as chosen, never asked again). Uses `[Answer]:` tag format with A-E options (A-D on Claude Code, A-C on Codex) plus X (Other). Offers tri-mode question flow.
 3. **Collect and Analyze Answers** -- Confirm all tags filled. Run ambiguity/contradiction analysis.
 4. **Generate Grounded Artifacts** -- Produce the intent statement and stakeholder map. Every substantive paragraph, list item, and table data row carries an inline `[desc]`, `[scope]`, `[Q<n>]`, `[memory:<id>]`, or `[assumption]` tag. Both files include `## Assumptions & Open Questions`.
 5. **Resolve Assumptions** -- If either artifact retains an assumption, ask the user to accept it or convert it into follow-up questions. Acceptance preserves the assumption label; it does not promote the claim to fact.

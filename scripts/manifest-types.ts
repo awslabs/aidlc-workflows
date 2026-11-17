@@ -144,6 +144,15 @@ export type HarnessManifest = {
    */
   firstRunSteps?: string[];
   /**
+   * How the person starts a clean chat in this host, said once when new work
+   * starts beside other work in a chat ("To start this in a clean chat
+   * instead, <text>."). Only the person's own step, in the host's own words;
+   * `<entry>` is filled in. `inHost` gives one host this tree runs in its own
+   * step, told apart as `hookActivation.missedReplyInHost` is. Absent: the
+   * offer is not made.
+   */
+  newChatStep?: { text: string; inHost?: { env: string[]; text: string } };
+  /**
    * Lower-case name of this harness's own VS Code-based editor, for an editor
    * with no CLI to probe. When `aidlc config` runs in that editor's terminal
    * (TERM_PROGRAM is exactly this name, or the git askpass helper in
@@ -151,6 +160,17 @@ export type HarnessManifest = {
    * offers this harness first.
    */
   editorTerminalApp?: string;
+  /**
+   * For a tree two hosts run, one an editor and one a CLI: `configNextStep`
+   * and `firstRunSteps` worded for the CLI, used instead when a supported CLI
+   * of this harness (its probe's version floor) is on an absolute PATH entry
+   * and `aidlc config` runs neither in a shell `env` names (read like
+   * `hookActivation.missedReplyInHost`) nor in the terminal of the editor its
+   * `TERM_PROGRAM=<name>` entry names (that TERM_PROGRAM, or the git askpass
+   * helper, as for `editorTerminalApp`).
+   * `hookActivation.notRunYetCliFirst` is doctor's line chosen the same way.
+   */
+  cliFirst?: { env: string[]; configNextStep: string; firstRunSteps: string[] };
   /**
    * For a host that runs no project hooks until the person acts (for example
    * trusts the folder and reloads the window, or starts the engine that reads
@@ -190,6 +210,11 @@ export type HarnessManifest = {
      */
     notRunYet?: string;
     /**
+     * `notRunYet` worded for this harness's CLI, used instead on the terms
+     * `cliFirst` states, with this `env`. Set beside `cliFirst`.
+     */
+    notRunYetCliFirst?: { env: string[]; text: string };
+    /**
      * Sentence the engine adds to every directive's change_notices while this
      * workflow has started a stage but no hook heartbeat exists. Set only when
      * a hook on the agent's own shell command leaves a heartbeat in the record
@@ -226,12 +251,12 @@ export type HarnessManifest = {
     /**
      * The project JSON file this host reads AI-DLC's hook registrations from,
      * relative to the project, and the line the person is shown instead of
-     * `agentStep` while it is missing (`missing`) or is not valid JSON
-     * (`invalid`): no setting brings those hooks back. `<repair>` is doctor's
-     * command that puts the file back; `<entry>` and `<folder>` as in
-     * `agentStep`.
+     * `agentStep` while it is missing (`missing`), is not valid JSON
+     * (`invalid`) or registers none of AI-DLC's hooks (`unwired`): no setting
+     * brings those hooks back. `<repair>` is doctor's command that puts them
+     * back; `<entry>` and `<folder>` as in `agentStep`.
      */
-    registration?: { file: string; missing: string; invalid: string };
+    registration?: { file: string; missing: string; invalid: string; unwired: string };
     /**
      * The line the person is shown instead of `agentStep`, and doctor's fix
      * instead of `recovery` and `notRunYet`, when the host started this chat
@@ -390,6 +415,17 @@ export type HarnessManifest = {
    * person no reviewer finished a review one did.
    */
   agentFinishRecorded?: { env: string[] };
+  /**
+   * The variables this host sets in every command its agent runs, read like
+   * `hookActivation.missedReplyInHost`'s `env`. In a project with more than one
+   * harness installed, the native engine runs a command on the harness whose
+   * marks it carries, so each tool gets its own steps; with no harness's marks,
+   * or several, it runs on the first one installed and names no tool's step.
+   * Name only variables the host itself sets for its agent, never one a person's
+   * own terminal carries (an editor's TERM_PROGRAM), or a tool started there would
+   * read as this host. Emitted into <harnessDir>/tools/data/harness.json.
+   */
+  hostShell?: { env: string[] };
   /**
    * Skip the packager's standard runner-gen step (write + scopes into
    * <harnessDir>/skills/). Codex sets this: it ships NO skills inside

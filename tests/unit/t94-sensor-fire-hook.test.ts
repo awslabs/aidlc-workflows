@@ -43,7 +43,7 @@
 //            file) -> exit 0; stage slug not in graph -> exit 0.
 //   empty sensors_applicable (workspace-scaffold) -> exit 0.
 //   G1 glob filter - `if (!entry.matches) continue` then
-//            new Bun.Glob(entry.matches).match(filePath) -> a non-matching path
+//            sensorMatchesPath(entry.matches, filePath) -> a non-matching path
 //            and an entry with no `matches` field both skip the spawn.
 //   loadGraph() honours the AIDLC_STAGE_GRAPH env-var seam (aidlc-graph.ts)
 //   — the seam the synthetic-graph / missing-graph cases inject through.

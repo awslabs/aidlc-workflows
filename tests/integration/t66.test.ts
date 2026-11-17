@@ -829,10 +829,7 @@ describe("t66 validateScope (in-process)", () => {
       enterprise: [],
       feature: [],
       infra: [
-        "ci-pipeline->build-and-test-summary",
-        "ci-pipeline->build-test-results",
-        "ci-pipeline->code-summary",
-        "deployment-execution->build-test-results",
+        "code-generation->unit-of-work",
         "infrastructure-design->components",
         "infrastructure-design->functional-spec",
         "nfr-design->functional-spec",

@@ -307,14 +307,12 @@ means the developer and the architect run again.
 
 ### Step 3: Architect Synthesis
 
-**Run this step only when `aidlc-architect-agent` is in `directive.pipeline.links`.**
 When the developer works alone (collaborators off, so the links are just the
 developer lead), do NOT dispatch an architect. Instead, the developer lead
 must itself produce the complete 9-artifact
 candidate described in this step: dispatch the developer with a brief that
 covers both the Step 2 scan AND this step's synthesis spec (same write-behavior
-rules, same staging-directory contract below), then mint only the developer
-link and continue to Step 4. The rest of this step is the full-roster path.
+rules, same staging-directory contract below).
 
 Delegate to Task tool with aidlc-architect-agent:
 - subagent_type="aidlc-architect-agent"
@@ -324,6 +322,8 @@ Delegate to Task tool with aidlc-architect-agent:
   the architect writes the nine artifacts and the Scope of Analysis block from it
 - Include workspace state from aidlc-state.md
 - Pass the snapshot's `head_commit` for the Run Record
+- Pass `{{INVOKE}} engine workspace codekb --repo <repo> --json` for the staging
+  directory (`stage`), what is staged in it (`staged`) and the intent's slug (`intent`)
 - Tell the architect that when it checks the project's source it follows the
   developer's rule: it leaves AI-DLC's own install and every folder the "What
   to Skip" section of
@@ -370,7 +370,10 @@ The architect MUST write the candidate into
 `<record>/.aidlc-engine/codekb-stage-<repo>/`, not into the
 shared CodeKB. The staging directory contains exactly the nine filenames above
 and no other entries. It is temporary transaction input, not a durable stage
-artifact.
+artifact. `{{INVOKE}} engine workspace codekb --repo <repo> --json` prints that
+directory as `stage`, the files already in it as `staged`, and the active
+record and its intent's slug as `record` and `intent`. Once the candidate is
+written, run it again: `staged` must list exactly the nine names.
 
 For the block's `fingerprint:` line, run the mint command with the final
 `analyzed.paths` from the merged or replaced block (comma-separated) and paste
@@ -404,8 +407,10 @@ yourself.** Run the read-only tool
 (omit `--repo` only for an unrecorded project-root repo; pass it for every
 registered repo identity, including an exactly-one repo set).
 It prints ONE line: the exact final directory, e.g.
-`aidlc/spaces/<active-space>/codekb/<repo>/`. Read an existing store from this
-directory for a merge, but do not write the candidate there directly.
+`aidlc/spaces/<active-space>/codekb/<repo>/`; with `--json` it prints
+`{space, repo, dir, record, intent, stage, staged}`, every path relative to the
+project. Read an existing store from this directory for a merge, but do not
+write the candidate there directly.
 
 **Coverage backstop - run BEFORE writing (the compare needs the prior store
 unchanged).** When the Step 1 guard found an existing store (any verdict but
@@ -520,7 +525,7 @@ Use stage-protocol.md completion template:
   fingerprint covers, what would make it out of date): the person has nothing
   to do about it.
 - Review path: `aidlc/spaces/<active-space>/codekb/<repo>/` for each repo in the set
-- Structured approval question with options: Approve (continue to Requirements Analysis) / Request Changes. If any repo returned NARROWER, the Approve option's description must say which stores now have narrower verified coverage (e.g. "Accept the narrower verified coverage for <repos>; continue to Requirements Analysis").
+- Structured approval question with options: Approve / Request Changes. If any repo returned NARROWER, the Approve option's description must say which stores now have narrower verified coverage (e.g. "Accept the narrower verified coverage for <repos>").
 
 ## Sensors
 

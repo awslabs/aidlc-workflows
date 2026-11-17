@@ -6,7 +6,8 @@
 // the engine's composer dispatch print tells the agent to read it at that
 // moment. The plain-chat rules that sat beside it (reshape requests, named
 // stage changes, project type, collaborators, settings, saving a plan) apply
-// in any chat, so they stay in SKILL.md; the person's checks ride the onboarding
+// in any chat, so they stay in the skill (on the Kiro row, SKILL.md and the
+// workflow.md it goes on in); the person's checks ride the onboarding
 // file every harness loads in every chat.
 //
 // Mechanism: readFileSync over every harness source and dist tree, plus one
@@ -26,7 +27,8 @@ import {
   seedAidlcMemory,
   seedStateFile,
 } from "../harness/fixtures.ts";
-import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
+import { conductorSkillText } from "../harness/conductor-skill.ts";
+import { HARNESS_MATRIX, type ShippedHarnessName } from "../harness/harness-matrix.ts";
 
 // One phrase from each composer-only paragraph.
 const COMPOSER_ONLY = [
@@ -38,7 +40,7 @@ const COMPOSER_ONLY = [
   "The composer proposes; the human decides; the deterministic validator guards.",
 ];
 
-// Rules a person can trigger in any chat: they stay in SKILL.md.
+// Rules a person can trigger in any chat: they stay in the skill.
 const ANY_CHAT = [
   "**Reshape requests arrive in plain chat too, not just as the literal verb.**",
   "**Named stage changes are done at once.**",
@@ -54,13 +56,14 @@ const ANY_CHAT = [
 
 const TRIGGER = "read `composer.md` beside this file first";
 
-function skillDirs(): Array<{ label: string; dir: string }> {
-  const dirs: Array<{ label: string; dir: string }> = [];
+function skillDirs(): Array<{ label: string; name: ShippedHarnessName; dir: string }> {
+  const dirs: Array<{ label: string; name: ShippedHarnessName; dir: string }> = [];
   for (const harness of HARNESS_MATRIX) {
-    dirs.push({ label: `harness/${harness.name}`, dir: join(harness.authoredRoot, "skills", "aidlc") });
+    dirs.push({ label: `harness/${harness.name}`, name: harness.name, dir: join(harness.authoredRoot, "skills", "aidlc") });
     for (const channel of ["dist", "dist-release"]) {
       dirs.push({
         label: `${channel}/${harness.name}`,
+        name: harness.name,
         dir: join(REPO_ROOT, channel, harness.name, harness.capabilities.skillsRoot, "aidlc"),
       });
     }
@@ -71,8 +74,8 @@ function skillDirs(): Array<{ label: string; dir: string }> {
 describe("the composer block loads only when a plan is being composed", () => {
   test("no orchestrator SKILL.md carries the composer block", () => {
     const carrying: string[] = [];
-    for (const { label, dir } of skillDirs()) {
-      const skill = readFileSync(join(dir, "SKILL.md"), "utf-8");
+    for (const { label, name, dir } of skillDirs()) {
+      const skill = conductorSkillText(name, dir);
       for (const phrase of COMPOSER_ONLY) {
         if (skill.includes(phrase)) carrying.push(`${label}: ${phrase}`);
       }
@@ -101,11 +104,11 @@ describe("the composer block loads only when a plan is being composed", () => {
 
   test("every SKILL.md names composer.md and keeps the rules a person can trigger in any chat", () => {
     const gaps: string[] = [];
-    for (const { label, dir } of skillDirs()) {
-      const skill = readFileSync(join(dir, "SKILL.md"), "utf-8");
+    for (const { label, name, dir } of skillDirs()) {
+      const skill = conductorSkillText(name, dir);
       if (!skill.includes(TRIGGER)) gaps.push(`${label}: no composer.md trigger`);
       for (const phrase of ANY_CHAT) {
-        if (!skill.includes(phrase)) gaps.push(`${label}: SKILL.md lost ${phrase}`);
+        if (!skill.includes(phrase)) gaps.push(`${label}: the skill lost ${phrase}`);
       }
       // The setter clears the person's own local switch itself; an agent clear would also clear the team's file.
       if (skill.includes("config flags --clear-bypass")) gaps.push(`${label}: SKILL.md tells the agent to clear a switch itself`);

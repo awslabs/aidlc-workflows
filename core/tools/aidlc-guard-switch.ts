@@ -79,6 +79,7 @@ import { entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import { chatsSince, latestMessage, latestSpendingTimestamp, listMessages, type StoredMessage } from "./aidlc-message-store.ts";
 import { backOnLine, quoted, widerPlaceOffer } from "./aidlc-recorded-switches.ts";
 import { settingPurpose } from "./aidlc-settings.ts";
+import { personGitNameField } from "./aidlc-git-name.ts";
 
 function throwSettingsError(message: string): never {
   throw new Error(message);
@@ -988,6 +989,11 @@ export function applyIntentSettings(
     lines.push(offer ? `${line} ${offer}` : line);
     checkOffInTheirName ||= !atTheirTerminal;
   }
+  // A setting the person asked for (Source `you`) records who was at the
+  // keyboard; one a command, a scope or a memory file set names nobody.
+  const theirRows = audit.filter((entry) => entry.fields.Source === "you");
+  const gitName = theirRows.length > 0 ? personGitNameField(projectDir) : {};
+  for (const entry of theirRows) Object.assign(entry.fields, gitName);
   return { content, audit, lines, checkOffInTheirName };
 }
 
@@ -1167,6 +1173,9 @@ interface PlanApprovalCreationGrant {
 
 // A reply belongs to the question asked in this sitting, not to one left open for days.
 const OPEN_QUESTION_WINDOW_MS = 60 * 60 * 1000;
+// A setting for the next work binds to a request the person was shown: words
+// kept in case they describe work and answered from status bind nothing.
+const SHOWN = { shown: true } as const;
 
 /**
  * Which of a piece of work's own per-check settings a whole Guard Policy word
@@ -1199,7 +1208,7 @@ function grantCovers(
 ): boolean {
   if (request === null) return false;
   const answered = grant.request ??
-    firstFrontQuestionSince(projectDir, grant.recordedAt, OPEN_QUESTION_WINDOW_MS, { routing: grant.withDescription === true });
+    firstFrontQuestionSince(projectDir, grant.recordedAt, OPEN_QUESTION_WINDOW_MS, { ...SHOWN, routing: grant.withDescription === true });
   // Kept with no plan question about it, where work is here and none is
   // selected ("for the work you pick up or start next"): the work started
   // from a which-work question's new-work answer, asked in the same sitting,
@@ -1258,7 +1267,7 @@ export function recordPlanApprovalCreationGrant(
     version: 1,
     session: sessionId,
     ...(theirs ? {} : { notTheirs: ["plan-approval"] }),
-    request: withDescription ? null : latestFrontQuestionId(projectDir, OPEN_QUESTION_WINDOW_MS),
+    request: withDescription ? null : latestFrontQuestionId(projectDir, OPEN_QUESTION_WINDOW_MS, SHOWN),
     recordedAt: isoTimestamp(),
     ...(withDescription ? { withDescription: true as const } : {}),
   };
@@ -1333,7 +1342,7 @@ export function grantGuardPolicyAtCreation(
       session: sessionId,
       value,
       ...(theirs ? {} : { notTheirs: ["guard-policy"] }),
-      request: withDescription ? null : latestFrontQuestionId(projectDir, OPEN_QUESTION_WINDOW_MS),
+      request: withDescription ? null : latestFrontQuestionId(projectDir, OPEN_QUESTION_WINDOW_MS, SHOWN),
       recordedAt: isoTimestamp(),
       ...(withDescription ? { withDescription: true as const } : {}),
     };
@@ -1441,7 +1450,7 @@ export function recordCeremoniesAtCreation(
       session: sessionId,
       settings: merged,
       ...(commandsOwn.length > 0 ? { notTheirs: commandsOwn } : {}),
-      request: withDescription ? null : latestFrontQuestionId(projectDir, OPEN_QUESTION_WINDOW_MS),
+      request: withDescription ? null : latestFrontQuestionId(projectDir, OPEN_QUESTION_WINDOW_MS, SHOWN),
       recordedAt: isoTimestamp(),
       ...(withDescription ? { withDescription: true as const } : {}),
     };
@@ -1546,7 +1555,7 @@ export function grantFencesOffAtCreation(
       session: sessionId,
       fences: SWITCHABLE_GUARD_FENCES.filter((fence) => earlier.includes(fence) || fences.includes(fence)),
       ...(commandsOwn.length > 0 ? { notTheirs: commandsOwn } : {}),
-      request: withDescription ? null : latestFrontQuestionId(projectDir, OPEN_QUESTION_WINDOW_MS),
+      request: withDescription ? null : latestFrontQuestionId(projectDir, OPEN_QUESTION_WINDOW_MS, SHOWN),
       recordedAt: isoTimestamp(),
       ...(withDescription ? { withDescription: true as const } : {}),
     };
@@ -1694,7 +1703,7 @@ export function keepSettingsForNextWork(
   // proved by the caller.
   message?: StoredMessage,
 ): string[] {
-  const forNext = workToPick && latestFrontQuestionId(projectDir, OPEN_QUESTION_WINDOW_MS) === null
+  const forNext = workToPick && latestFrontQuestionId(projectDir, OPEN_QUESTION_WINDOW_MS, SHOWN) === null
     ? FOR_WORK_PICKED_OR_STARTED
     : FOR_WORK_STARTED;
   const value = (key: string): string | undefined => requested[key as ConfigKey]?.value.trim().toLowerCase();

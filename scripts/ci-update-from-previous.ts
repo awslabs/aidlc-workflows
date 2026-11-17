@@ -12,11 +12,12 @@
 // next: each project's existing hooks run, `aidlc config --yes` refreshes the
 // project, the hooks run again, and doctor passes. Hooks run through the shell
 // Claude Code uses (Git Bash on Windows, sh elsewhere); each must exit 0 and
-// show in the hook phase trace that the installed engine ran it. On Windows the
-// Git Bash launcher must exist once the first command after the update has
-// run. Last, in a new chat the person types `/aidlc --resume` and approves:
-// the same gate comes back, nothing they answered is asked again, the approval
-// is theirs, the next stage starts, and no file of theirs changed.
+// show in the hook phase trace that the installed engine ran it. On Windows Git
+// Bash must run a bare `aidlc version` and get the candidate once the first
+// command after the update has run. Last, in a new chat the person types
+// `/aidlc --resume` and approves: the same gate comes back, nothing they
+// answered is asked again, the approval is theirs, the next stage starts, and
+// no file of theirs changed.
 //
 // With `--channel copy` the person has no `aidlc` command: each project is a
 // copy of `runtime/<harness>/` from the previous release's
@@ -32,6 +33,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, 
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { runtimePathsReadTypedNames, typedHarnessName } from "../core/tools/aidlc-runtime-paths.ts";
 import { KIRO_HOOK_GROUPS } from "../harness/kiro-ide/hooks/aidlc-kiro-tool-names.ts";
 import kiro from "../harness/kiro/manifest.ts";
 import type { WorkResult } from "../tests/harness/work-open.ts";
@@ -247,6 +249,23 @@ function gitBash(): string {
   throw new Error("Git for Windows is not installed: Claude Code runs hooks through its Git Bash");
 }
 
+/**
+ * Why the shell Claude Code runs hooks in cannot run a bare `aidlc` from the
+ * updated install, or null when `aidlc version` there reports the target. On
+ * Windows Git Bash finds bin\aidlc.exe, or the extensionless launcher a release
+ * from before it left; which one is there is the lifecycle's to say
+ * (windowsGitBashLauncherState), so this runs the command, not a file check.
+ */
+export function bareAidlcProblem(shell: string, env: NodeJS.ProcessEnv, target: string, cwd: string, timeout: number): string | null {
+  const r = spawnSync(shell, ["-c", "aidlc version"], { cwd, env, encoding: "utf-8", timeout });
+  const output = `${r.stdout ?? ""}${r.stderr ?? ""}${r.error ? `\n${r.error.message}` : ""}`.trim();
+  if (r.status === 0 && output.includes(target)) return null;
+  const said = output.split("\n").slice(-3).join(" | ");
+  return r.status === 0
+    ? `a bare aidlc in Git Bash reports "${said}" after the update, not ${target}, so Claude Code's hooks run another release`
+    : `Git Bash cannot run a bare aidlc after the update and its first command (exited ${r.status}: ${said}), so Claude Code's hooks fail`;
+}
+
 async function main(argv: string[]): Promise<number> {
   const option = (flag: string) => { const at = argv.indexOf(flag); return at >= 0 ? argv[at + 1] : undefined; };
   const previous = option("--previous")?.replace(/^v/, "");
@@ -265,6 +284,34 @@ async function main(argv: string[]): Promise<number> {
   } finally {
     if (process.env.AIDLC_KEEP_TEMP !== "1") rmSync(root, { recursive: true, force: true, maxRetries: 3 });
   }
+}
+
+// What a release's own config reads after --harness: from the release that
+// named the two Kiro harnesses `kiro` (Kiro) and `kiro-v2` (Kiro CLI (V2)), the
+// names a person types; before it, the ids. Measured on the release's files
+// (the first runtime-paths tool found under `dir`), since its version is not
+// known here. The candidate is this tree, which reads the typed names.
+const readsTypedNames = new Map<string, boolean>();
+export function harnessArgFor(dir: string, harness: string): string {
+  if (!readsTypedNames.has(dir)) readsTypedNames.set(dir, releaseReadsTypedNames(dir));
+  return readsTypedNames.get(dir) ? typedHarnessName(harness) : harness;
+}
+
+function releaseReadsTypedNames(dir: string): boolean {
+  const find = (at: string): string | undefined => {
+    if (!existsSync(at)) return undefined;
+    for (const entry of readdirSync(at, { withFileTypes: true })) {
+      const path = join(at, entry.name);
+      if (entry.isFile() && entry.name === "aidlc-runtime-paths.ts") return path;
+      if (entry.isDirectory()) {
+        const found = find(path);
+        if (found) return found;
+      }
+    }
+    return undefined;
+  };
+  const tool = find(dir);
+  return tool !== undefined && runtimePathsReadTypedNames(tool);
 }
 
 async function check(previous: string, candidate: string, target: string, root: string, copy: boolean): Promise<number> {
@@ -369,9 +416,9 @@ async function check(previous: string, candidate: string, target: string, root: 
     if (harness === "copilot") writeFileSync(join(env.COPILOT_HOME!, "config.json"), `${JSON.stringify({ trustedFolders: [project] })}\n`);
     if (copy) {
       cpSync(join(previousRuntime, harness), project, { recursive: true });
-      tool(`the copy's setup for ${harness} on ${previous}`, harness, project, ["config", "--from", previousRuntime, "--harness", harness]);
+      tool(`the copy's setup for ${harness} on ${previous}`, harness, project, ["config", "--from", previousRuntime, "--harness", harnessArgFor(previousRuntime, harness)]);
     } else {
-      aidlc(`aidlc config --harness ${harness} on ${previous}`, ["config", "--project-dir", project, "--harness", harness, "--mcp", "none", "--quiet"]);
+      aidlc(`aidlc config --harness ${harness} on ${previous}`, ["config", "--project-dir", project, "--harness", harnessArgFor(machine, harness), "--mcp", "none", "--quiet"]);
     }
     return { harness, project };
   });
@@ -435,9 +482,8 @@ async function check(previous: string, candidate: string, target: string, root: 
     }
     const after = aidlc("version after the update", ["version"]);
     if (!after.output.includes(target)) fail(`after the update aidlc reports "${after.output}", not ${target}`);
-    if (WINDOWS && !existsSync(join(bin, "aidlc"))) {
-      fail(`${join(bin, "aidlc")} is missing after the update and its first command, so Git Bash cannot run a bare aidlc and Claude Code's hooks fail`);
-    }
+    const bare = WINDOWS ? bareAidlcProblem(shell, env, target, root, within(HOOK_TIMEOUT_MS)) : null;
+    if (bare) fail(bare);
   }
 
   // 5. What the person does next, per project.
@@ -490,11 +536,11 @@ async function check(previous: string, candidate: string, target: string, root: 
     const known = failures.length;
     const count = hooks(harness, project, `before the refresh`);
     if (copy) {
-      tool(`the copy's refresh for ${harness} from ${target}`, harness, project, ["config", "--from", candidateRuntime, "--harness", harness, "--yes"]);
+      tool(`the copy's refresh for ${harness} from ${target}`, harness, project, ["config", "--from", candidateRuntime, "--harness", harnessArgFor(previousRuntime, harness), "--yes"]);
       const now = tool(`the copy's version for ${harness}`, harness, project, ["version"]);
       if (now.ok && !now.output.includes(target)) fail(`after the refresh the ${harness} copy reports "${now.output}", not ${target}`);
     } else {
-      aidlc(`aidlc config --yes for ${harness}`, ["config", "--project-dir", project, "--harness", harness, "--mcp", "none", "--yes", "--quiet"]);
+      aidlc(`aidlc config --yes for ${harness}`, ["config", "--project-dir", project, "--harness", typedHarnessName(harness), "--mcp", "none", "--yes", "--quiet"]);
     }
     hooks(harness, project, "after the refresh");
     if (copy) tool(`the copy's doctor for ${harness}`, harness, project, ["doctor", "--quiet"]);

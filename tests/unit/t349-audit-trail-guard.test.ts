@@ -143,6 +143,35 @@ describe("t349 audit trail guard: file-write tools", () => {
     expect(kind("Glob", { pattern: `${AUDIT}/*.md` })).toBeNull();
   });
 
+  test("a script the model writes is judged on the trail it names, not on an audit folder beside a word it cannot place", () => {
+    const deploy = (line: string): string => [
+      "#!/usr/bin/env bash",
+      "set -euo pipefail",
+      'BUCKET="$ARTIFACT_BUCKET"',
+      line,
+      "",
+    ].join("\n");
+    const written = (line: string, cwd = CWD): string | null =>
+      kind("Write", { file_path: "infra/aws/deploy.sh", content: deploy(line) }, cwd);
+    for (const line of [
+      'cp ./reports/report.json "s3://$BUCKET/audit/"',
+      'echo done | tee "$OUT/audit/summary.txt"',
+      'cp ./reports/report.json "$OUT/" && echo ./audit/done',
+      'tar czf "$BACKUP" ./reports/audit/',
+    ]) {
+      expect(written(line), line).toBeNull();
+      expect(written(line, `${CWD}/${RECORD}`), line).toBeNull();
+    }
+    for (const line of [
+      `echo x >> ${AUDIT}/$(date +%s).md`,
+      `echo x >> "${AUDIT}/host-$(date +%s).md"`,
+      `echo x >> ${RECORD}/.aidlc-engine/audit/host-$(date +%s).md`,
+    ]) {
+      expect(written(line), line).toBe("audit");
+    }
+    expect(bash('echo x >> "$OUT/audit/host.md"')).toBe("audit");
+  });
+
   test("a refusal names the path that matched, for a guarded write and for content that reaches hooks", () => {
     const captured = (input: Record<string, unknown>): string => {
       const original = process.stderr.write;
@@ -171,6 +200,16 @@ describe("t349 audit trail guard: file-write tools", () => {
         content: "printf x > .claude/hooks/aidlc-write-audit-log.ts\n",
       },
     })).toContain("Matched: .claude/hooks/aidlc-write-audit-log.ts.");
+    const trail = captured({
+      tool_name: "Write",
+      tool_input: { file_path: "infra/aws/deploy.sh", content: `#!/bin/sh\necho x >> ${AUDIT}/$(date +%s).md\n` },
+    });
+    expect(trail).toContain(AUDIT_TRAIL_REFUSAL);
+    expect(trail).toContain("Matched: ");
+    expect(captured({ tool_name: "Bash", tool_input: { command: `echo x >> ${SHARD}` } }))
+      .toContain(`Matched: ${SHARD}.`);
+    expect(captured({ tool_name: "Bash", tool_input: { command: 'echo x >> "$R/audit/host.md"' } }))
+      .toContain("Matched: $R/audit/host.md.");
   });
 
   test("runtime records still classify as runtime, ahead of the audit class", () => {
@@ -186,6 +225,24 @@ describe("t349 audit trail guard: file-write tools", () => {
 });
 
 describe("t349 audit trail guard: shell commands", () => {
+  // Codex's shell apply_patch writes the files its patch names, so a patch
+  // naming a shard is refused as a redirect to it is; one naming the record's
+  // own files, or a source file, is not this guard's.
+  test("a shell apply_patch whose patch names a shard is refused; the record's own files are not", () => {
+    const patch = (path: string) => `*** Begin Patch\n*** Update File: ${path}\n@@\n+x\n*** End Patch`;
+    for (const command of [
+      `apply_patch <<'PATCH'\n${patch(SHARD)}\nPATCH`,
+      `applypatch <<"PATCH"\n${patch(LOCAL_RECORD)}\nPATCH\n`,
+      `apply_patch <<-'PATCH'\n${patch(SHARD).replace(/^/gm, "\t")}\n\tPATCH`,
+      `apply_patch '${patch(SHARD)}'`,
+    ]) {
+      expect(bash(command), command).toBe("audit");
+    }
+    for (const path of [`${RECORD}/construction/code-generation/code-generation-plan.md`, `${RECORD}/inception/requirements-analysis/requirements.md`, "src/app.ts"]) {
+      expect(bash(`apply_patch <<'PATCH'\n${patch(path)}\nPATCH`), path).toBeNull();
+    }
+  });
+
   test("shell appends, overwrites, copies, moves, removals, and directory creation aimed at a shard are refused", () => {
     for (const command of [
       `cat >> ${SHARD} <<'EOF'\n## Questions: Feasibility\n**Timestamp**: 2026-09-25T00:00:00Z\nEOF`,

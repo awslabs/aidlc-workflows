@@ -9,7 +9,7 @@
 // anything of theirs.
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
-import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { sha256Bytes } from "../../dist/claude/.claude/tools/aidlc-distribution.ts";
@@ -18,7 +18,9 @@ import { REPO_ROOT, seededStateFile } from "../harness/fixtures.ts";
 import {
   UNIT,
   approveMerge,
+  builtOnce,
   cleanupTempDirs,
+  cleanupWorlds,
   gateAndLand,
   git,
   makeSeed,
@@ -29,6 +31,7 @@ import {
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 afterEach(cleanupTempDirs);
+afterAll(cleanupWorlds);
 
 const PUBLISH_REFUSAL = "Unit publication requires a clean tracked worktree; commit the candidate first.";
 const TEAM_AGENTS = "# Team notes\n\nRun the tests before every push.\n";
@@ -40,16 +43,38 @@ const ROOT_FILES: Record<Runtime, string[]> = {
   opencode: [".gitignore", "AGENTS.md", "opencode.json"],
 };
 
+type Seed = { seed: string; remote: string };
+// The AGENTS.md the team committed, and whether the projection lists it as a
+// file an earlier release shipped whole (the session start then adopts it).
+type Agents = { text: string; recorded?: boolean };
+
+// Each seed below is built once per variant, and each case gets its own copy.
+const builtSeeds = new Map<string, () => Seed>();
+function once<W extends Seed>(key: string, build: () => W): W {
+  if (!builtSeeds.has(key)) builtSeeds.set(key, builtOnce(build));
+  return (builtSeeds.get(key) as () => W)();
+}
+
+function seedWithRuntime(runtime: Runtime = "copilot", teamFiles = true, agents: Agents = { text: TEAM_AGENTS }): Seed {
+  return once(`seed ${JSON.stringify([runtime, teamFiles, agents])}`, () => buildSeed(runtime, teamFiles, agents));
+}
+
+/** The seed with alpha claimed, worked and published by team-a, and the checkout it was worked in. */
+function alphaPublished(
+  runtime: Runtime = "copilot",
+  teamFiles = true,
+  agents: Agents = { text: TEAM_AGENTS },
+): Seed & { checkout: string } {
+  return once(`alpha ${JSON.stringify([runtime, teamFiles, agents])}`, () => {
+    const made = seedWithRuntime(runtime, teamFiles, agents);
+    return { ...made, checkout: prepareCandidate(made.remote, "alpha", "team-a").checkout };
+  });
+}
+
 // The team committed AI-DLC's copy runtime (its projection data and the parts
 // it ships for the root files) and its own AGENTS.md (and opencode.json), but
 // never AI-DLC's part of them: no config ran in any checkout.
-function seedWithRuntime(
-  runtime: Runtime = "copilot",
-  teamFiles = true,
-  // The AGENTS.md the team committed, and whether the projection lists it as a
-  // file an earlier release shipped whole (the session start then adopts it).
-  agents: { text: string; recorded?: boolean } = { text: TEAM_AGENTS },
-): { seed: string; remote: string } {
+function buildSeed(runtime: Runtime, teamFiles: boolean, agents: Agents): Seed {
   const { seed, remote } = makeSeed();
   const shipped = join(REPO_ROOT, "dist", runtime, ".aidlc", "tools", "data");
   const data = join(seed, ".aidlc", "tools", "data");
@@ -170,8 +195,7 @@ describe("publish and land are not stopped by AI-DLC's own part of the root file
     }],
   ] as const) {
     test(`beside AI-DLC's part, ${name} still stops publish with the same line`, () => {
-      const { remote } = seedWithRuntime(runtime);
-      const { checkout } = prepareCandidate(remote, "alpha", "team-a");
+      const { checkout } = alphaPublished(runtime);
       sessionStarts(checkout, runtime);
       change(checkout);
       const status = git(checkout, ["status", "--porcelain"]);
@@ -187,8 +211,7 @@ describe("publish and land are not stopped by AI-DLC's own part of the root file
 
   for (const [runtime, teamFiles] of [["copilot", true], ["copilot", false], ["opencode", true]] as const) {
     test(`landing from a checkout whose session wrote AI-DLC's part lands, and the part stays uncommitted (${runtime}, ${teamFiles ? "the team's" : "no"} AGENTS.md)`, () => {
-      const { seed, remote } = seedWithRuntime(runtime, teamFiles);
-      prepareCandidate(remote, "alpha", "team-a");
+      const { seed } = alphaPublished(runtime, teamFiles);
       sessionStarts(seed, runtime);
       const files = snapshot(seed, ROOT_FILES[runtime]);
       const head = git(seed, ["rev-parse", "HEAD"]);
@@ -276,8 +299,7 @@ describe("publish and land are not stopped by AI-DLC's own part of the root file
   });
 
   test("AI-DLC's part the person staged with git add still stops landing with the same line, and stays staged", () => {
-    const { seed, remote } = seedWithRuntime();
-    prepareCandidate(remote, "alpha", "team-a");
+    const { seed } = alphaPublished();
     sessionStarts(seed);
     git(seed, ["add", "--", "AGENTS.md"]);
     approveMerge(seed, "alpha");
@@ -292,8 +314,7 @@ describe("publish and land are not stopped by AI-DLC's own part of the root file
   });
 
   test("beside AI-DLC's part, a line of the person's own in .gitignore still stops landing with the same line", () => {
-    const { seed, remote } = seedWithRuntime();
-    prepareCandidate(remote, "alpha", "team-a");
+    const { seed } = alphaPublished();
     sessionStarts(seed);
     appendLine(seed, ".gitignore", "coverage/");
     approveMerge(seed, "alpha");
@@ -331,8 +352,7 @@ describe("publish and land are not stopped by AI-DLC's own part of the root file
     });
 
     test(`landing from a checkout whose session start adopted ${name} lands, and the file stays uncommitted`, () => {
-      const { seed, remote } = seedWithRuntime("copilot", true, agents);
-      prepareCandidate(remote, "alpha", "team-a");
+      const { seed } = alphaPublished("copilot", true, agents);
       sessionStarts(seed);
       const files = snapshot(seed, ROOT_FILES.copilot);
       const head = git(seed, ["rev-parse", "HEAD"]);
@@ -378,8 +398,7 @@ describe("publish and land are not stopped by AI-DLC's own part of the root file
   });
 
   test("beside an adopted AGENTS.md, a line of the person's own still stops publish with the same line", () => {
-    const { remote } = seedWithRuntime("copilot", true, { text: EARLIER_AGENTS, recorded: true });
-    const { checkout } = prepareCandidate(remote, "alpha", "team-a");
+    const { checkout } = alphaPublished("copilot", true, { text: EARLIER_AGENTS, recorded: true });
     sessionStarts(checkout);
     appendLine(checkout, "AGENTS.md", "Our own rule.");
     const head = git(checkout, ["rev-parse", "HEAD"]);

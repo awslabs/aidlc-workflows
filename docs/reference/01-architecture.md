@@ -261,7 +261,7 @@ surface per CLI; `bun scripts/package.ts` materializes ignored local
 ```
 core/                  # hand-authored, harness-neutral (tools, aidlc-common,
                        #   agents, rules, scopes, sensors, knowledge, hooks,
-                       #   3 session skills); prose uses the {{HARNESS_DIR}} token
+                       #   5 skills); prose uses the {{HARNESS_DIR}} token
 harness/<name>/        # per-CLI surface: manifest.ts + orchestrator skill +
                        #   harness files (+ emit.ts for codex)
 scripts/package.ts     # the build: copy core (token→.claude/.kiro/.codex) +
@@ -521,9 +521,15 @@ it to PowerShell on the same kinds of answer (`--kiro-terminal powershell`) and
 keeps it in the `kiro-ide-terminal` marker. In that terminal (TERM_PROGRAM=kiro
 and the shell the chat's hook recorded) each tool entry also runs the tool as a
 child behind an `AI-DLC reply:` pointer line and keeps the reply under
-`aidlc/.aidlc-sessions/replies/`, and rejoins the single-quote pair cmd.exe left
-on the arguments, since the engine writes its reply straight to fd 1 and Kiro
-reads the terminal one second after sending the command.
+`aidlc/.aidlc-sessions/replies/` (the agent goes on from that file when the
+result stops at the pointer or is cut off after it), and rejoins the
+single-quote pair cmd.exe left on the arguments, since the engine writes its
+reply straight to fd 1 and Kiro reads the terminal one second after sending the
+command. A Kiro terminal whose
+shell integration script did not run (its `VSCODE_NONCE` is still set) gets the
+same reply file when that terminal is both ends of the command (a hook, a pipe
+or a tool reading its child's output never is), and doctor run in that terminal
+warns; the chat's hooks run outside the terminal and cannot see it.
 
 Every successful non-dry-run config transaction then runs a cheap post-apply
 sweep against the installed bytes. The runtime leg resolves only the binary
@@ -938,7 +944,7 @@ having no active intent (`next` asks which intent to work on; `continue`, `repor
 and `park` refuse with a step for the agent: list the work, select the one the request is for, run the
 same command again). A chat that SessionStart (or its first command) put on the
 work the cursor named is `cursor-followed` on the hosts whose agent commands name
-their chat (Claude Code, Codex, Kiro CLI, opencode: `CHAT_NAMING_HOSTS`): it takes
+their chat (Claude Code, Codex, Kiro CLI (V2), opencode: `CHAT_NAMING_HOSTS`, by harness id): it takes
 part in that work as any chat there does, but the gates stand aside for it
 (`hookOutsideGate`, `chatAwaitsFirstStep`) until its first AI-DLC step there
 (`next`, `continue`, `report` or `park` other than a read-only probe, what it
@@ -946,7 +952,7 @@ records through `aidlc-log.ts` other than reading answers, a Unit checkpoint
 decision, or a setting it changes), which rewrites the source as
 `cursor` (`chatTookStep`); a worktree of this checkout or a Unit claimed here holds
 it from the start. Its developer dispatch meets the plan as any chat on the work
-does. On Cursor, Copilot and Kiro IDE (and Kiro CLI v3, which runs that tree) a
+does. On Cursor, Copilot and Kiro (Kiro IDE, and Kiro CLI on `kiro-cli --v3`, which runs that tree) a
 command finds its chat only through the process tree, so first contact there
 records `cursor` and the gates hold the chat from the start. When participation
 cannot be decided because a sibling-only
@@ -973,6 +979,15 @@ refresh therefore
 cannot restore the previous session when process inspection recovers; explicit
 payload identity, environment identity, and the shared-cursor fallback still
 apply. A later successful SessionStart replaces the null record.
+
+Beside an entry, `aidlc/.aidlc-sessions/pids/<pid>.release-check` records that a
+pinned project's release passed its whole-release check in that session
+process for that chat (the release, the project's harness and the resolved
+executable). The pinned dispatch writes it after a full check and, while the
+live entry names the same chat with the same known start time, later calls
+leave out only the hashing. An entry with no start time never counts. GC
+removes a `.release-check` with its stale entry, and the dispatch's own write
+sweeps any whose entry is gone.
 
 The Codex adapter additionally pins its validated payload identity into every
 POSIX Bash command and core-hook child, so sandboxed macOS does not depend on
@@ -1060,13 +1075,13 @@ readers read the rows they share once (`copiedAuditBlocks` in
 
 11. **Phase boundary verification** -- Traceability checks run at the end of Ideation, Inception and Construction (the Initialization->Ideation transition has none), written by the phase's last stage to `<record>/verification/`. This catches missing requirements-to-design links, orphaned artifacts, and inconsistencies before downstream stages build on incomplete foundations.
 
-12. **Hook-based audit logging** -- A PostToolUse hook on Write/Edit operations automatically logs artifact creation and modification to the intent's `audit/` shards. A PreCompact hook validates state file structure before context compaction. A SubagentStop hook logs subagent completions. The 131-event taxonomy (defined in `knowledge/aidlc-shared/audit-format.md`; see [State Machine](12-state-machine.md) for the emitter registry) enables post-hoc analysis -- key events include `STAGE_STARTED`, `STAGE_COMPLETED`, `DECISION_RECORDED`, `SCOPE_CHANGED`, and `RULE_LEARNED`.
+12. **Hook-based audit logging** -- A PostToolUse hook on Write/Edit operations automatically logs artifact creation and modification to the intent's `audit/` shards. A PreCompact hook validates state file structure before context compaction. A SubagentStop hook logs subagent completions. The 134-event taxonomy (defined in `knowledge/aidlc-shared/audit-format.md`; see [State Machine](12-state-machine.md) for the emitter registry) enables post-hoc analysis -- key events include `STAGE_STARTED`, `STAGE_COMPLETED`, `DECISION_RECORDED`, `SCOPE_CHANGED`, and `RULE_LEARNED`.
 
 13. **No nested delegation** -- The conductor (SKILL.md) performs every agent Task call. Agents never invoke each other or spawn subagents. This keeps the delegation graph flat and debuggable.
 
 14. **Session resume** -- Bare `/aidlc` in a new session carries on from the checkpoint; the person can ask to redo the current stage, jump to a specific stage, or start fresh (a new intent alongside). Gives users fine-grained control over workflow navigation without manual state file editing.
 
-15. **Stage/Phase jump commands** -- `--stage <slug|#>` and `--phase <name|#>` jump directly to a specific stage or phase. `--scope <scope>` sets or overrides the workflow scope. Forward jumps mark intermediate stages as `[S]` (skipped); under solo unit-major Construction a jump to the step the walk is on just continues it, once a Unit has finished work a jump to a later per-unit step moves only the Unit in flight on, and any other forward jump names what it skips or starts over; backward jumps reset downstream stages to `[ ]` and replay forward from the target. Composable with each other.
+15. **Stage/Phase jump commands** -- `--stage <slug|#>` and `--phase <name|#>` jump directly to a specific stage or phase. `--scope <scope>` sets or overrides the workflow scope. Forward jumps mark intermediate stages as `[S]` (skipped); under solo unit-major Construction, and on a team's main checkout that works every Unit itself, a jump to the step the walk is on just continues it, a jump to a later per-unit step moves only the Unit in flight on, and any other forward jump names what it skips or starts over; backward jumps reset downstream stages to `[ ]` and replay forward from the target. Composable with each other.
 
 ## Directory Structure: Tests
 

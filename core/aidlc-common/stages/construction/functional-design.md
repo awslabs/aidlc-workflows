@@ -116,8 +116,8 @@ Focus areas:
 
 ### Step 3: Collect and Analyze Answers
 
-Collect answers following stage-protocol.md §3 question flow (offer interaction mode choice, collect answers, write back to file). After collecting answers, perform MANDATORY ambiguity analysis:
-- Identify vague answers ("mix of", "not sure", "depends", "probably")
+Collect answers following stage-protocol.md §3 question flow (collect answers, write back to file). After collecting answers, perform MANDATORY ambiguity analysis:
+- Identify vague answers ("mix of", "not sure", "depends")
 - Check for contradictions between answers
 - Flag missing details needed for artifact generation
 
@@ -151,9 +151,11 @@ A requirement with sub-requirements is traced through its `FR{n}.{m}` IDs and
 needs no row of its own.
 
 Set each ID's `coverage` row: `OK` with a `target` naming one or more
-`BRx.y` IDs that exist in `rules.md`, or `frontend-components.md` for an ID a
-component realises (always for a `UX` decision, and for a `ui` Unit, which writes
-no `rules.md`), which must cite the ID; `N/A` with the reason as its `target`
+`BRx.y` IDs that exist in `rules.md` (a Unit whose kind writes no `rules.md`,
+such as a `ui` Unit, instead names on its own the file of this stage that
+covers the ID, `functional-spec.md` or `frontend-components.md`, which must
+exist; a `UX` decision always targets this Unit's `frontend-components.md`,
+which must cite its ID); `N/A` with the reason as its `target`
 (for example `delivered by u2-profile`); `Deferred` with the later stage that
 covers it as its `target`; or `GAP` while this design does not cover it. Use
 the optional `reverse` array to explain rules that intentionally have no
@@ -189,7 +191,9 @@ Present completion message and approval gate:
 # :clipboard: Functional Design Complete — {unit-name}
 ```
 
-Summary of artifacts produced, then:
+Summary of artifacts produced, then one line for each departure from the
+approved experience that `frontend-components.md` records, naming the `UX`
+decision and the reason, so the person can judge it at this gate. Then:
 
 ```
 **Review:** `<record>/construction/{unit-name}/functional-design/`

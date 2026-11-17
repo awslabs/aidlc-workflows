@@ -18,6 +18,13 @@
 // approved. A plan composed after the reply now creates nothing: `next` names
 // the plan the person saw and its approval, or, with none on record, has the
 // agent show the new plan once, and the person's next reply creates it.
+//
+// With no composer to ask on the Approve turn, the agent can also rebuild the
+// plan itself on a base it guesses (#3526): a creation for the request on
+// another base than the plan the person saw creates nothing the first time and
+// names that plan's approval, which creates it with the project type it was
+// worked out for; typed again, it is created as typed, for a person who turned
+// the plan down and picked another.
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -253,7 +260,7 @@ describe("a stage change typed at a composed plan's gate is never dropped unsaid
     expect(commandIn(created, "intent create")).not.toContain("--skip");
   });
 
-  test("a list that is the kept plan's, in any order, a plan the composer did not keep, or a list kept from the request creates at once", () => {
+  test("a list that is the kept plan's, in any order, or a list kept from the request creates at once", () => {
     const proj = installedProject();
     const request = tailor(proj);
     const grid = stockGrid("bugfix");
@@ -265,10 +272,7 @@ describe("a stage change typed at a composed plan's gate is never dropped unsaid
     const kept = echoed.plan_changes as { skip: string[]; add: string[] };
     const reordered = next(proj, ["--scope", base, ...lists({ skip: [...kept.skip].reverse(), add: [...kept.add].reverse() }), "--request", request]);
     expect(commandIn(reordered, "intent create")).toContain(`--skip ${kept.skip.join(",")}`);
-    // Another plan, after a Reject: what was typed stands.
-    const other = base === "feature" ? "classic" : "feature";
-    expect(commandIn(next(proj, ["--scope", other, "--skip", "code-generation", "--request", request]), "intent create"))
-      .toContain("--skip code-generation");
+    // Another plan picked after a Reject: "said once", below.
 
     // A skip the person typed with the request rides the plan's answers as its
     // settings, not as a list typed at the gate: the approval creates at once.
@@ -557,6 +561,139 @@ describe("Approve creates the plan the gate showed, even when the plan is compos
     expect(approval).toEndWith(`--request ${entry} -- <creationDescription>`);
     const created = nextAsPerson(proj, [...runNamedArgs(approval.replace(" -- <creationDescription>", "")), "--", "fix the split rounding"]);
     expect(commandIn(created, "intent create")).toContain(lists(shown.changes).join(" "));
+  });
+});
+
+// The live plan of the Codex journey (#3526): a custom plan on express, worked
+// out as existing code for "our existing service" in a folder the scan reads
+// as a new project.
+const EXPRESS_ADDS = [
+  "intent-capture", "feasibility", "scope-definition", "approval-handoff", "practices-discovery", "nfr-requirements",
+  "nfr-design", "infrastructure-design", "ci-pipeline", "incident-response", "performance-validation",
+] as const;
+
+function expressPlan(proj: string, adds: readonly string[] = EXPRESS_ADDS): Custom {
+  const grid = { ...stockGrid("express"), ...Object.fromEntries(adds.map((slug) => [slug, "EXECUTE"])) };
+  const settings = withEnvAndFreshCaches(POLICY_ENV, () => ({ ...scopeSettingsOf("express")!, sensors: "on" }));
+  const echoed = validate(proj, { stages: grid, scopeSettings: settings, guardPolicy: "off", depth: "minimal" }, [
+    "--custom", "--project-type", "brownfield",
+  ]);
+  expect(echoed.base_scope).toBe("express");
+  return {
+    base: echoed.base_scope as string,
+    changes: echoed.plan_changes as { skip: string[]; add: string[] },
+    ...(echoed.creation_depth ? { depth: echoed.creation_depth } : {}),
+    settings: echoed.creation_settings ?? {},
+  };
+}
+
+/** What the agent typed on the Approve turn of the live run: its own base and lists. */
+const REBUILT = ["--scope", "classic", "--skip", "domain-design,functional-design", "--add", "ci-pipeline,incident-response"];
+
+const projectTypeOf = (state: string) => /^- \*\*Project Type\*\*: (\w+)/m.exec(state)?.[1];
+
+describe("Approve creates the plan the gate showed, whatever base the agent types for it", () => {
+  test("the live shape: an Approve rebuilt on classic with the agent's own lists creates nothing and names the kept plan's approval, which creates it as existing code", () => {
+    const proj = installedProject();
+    const request = tailor(proj);
+    const shown = expressPlan(proj);
+    const approve = personSays(proj, "Approve", before(proj, request));
+
+    const step = nextAsPerson(proj, [...REBUILT, "--plan-name", "deploy-hardening", "--review", "adversarial", "--request", request]);
+    expect(step.kind, step.message).toBe("print");
+    expect(step.message).not.toContain("intent create");
+    expect(step.message).toContain("(classic with skip domain-design, functional-design; add ci-pipeline, incident-response)");
+    expect(step.message).toContain(`express with add ${shown.changes.add.join(", ")}`);
+    expect(step.message).toContain("dispatch the composer again");
+    expect(step.narration).toBeUndefined();
+    nothingCreated(proj);
+
+    const approval = commandIn(step, " next --scope express");
+    expect(approval).toContain(`${lists(shown.changes).join(" ")} --plan-name deploy-hardening --request ${request}`);
+    for (const [flag, value] of pairs(shapeFlags(shown))) expect(approval).toContain(`${flag} ${value}`);
+    expect(approval).not.toContain("--review adversarial");
+
+    const created = nextAsPerson(proj, runNamedArgs(approval));
+    const creation = commandIn(created, "intent create");
+    expect(creation).toContain("--scope express");
+    expect(creation).toContain(lists(shown.changes).join(" "));
+    expect(creation).toContain("--project-type brownfield");
+    create(proj, created, approve);
+    const state = stateOf(proj);
+    expect(projectTypeOf(state)).toBe("Brownfield");
+    expect(suffixOf(state, "incident-response")).toBe("EXECUTE");
+    expect(suffixOf(state, "intent-capture")).toBe("EXECUTE");
+  });
+
+  test("the kept plan's own creation, and a creation for another request, go through at once", () => {
+    const proj = installedProject();
+    const request = tailor(proj);
+    const shown = expressPlan(proj);
+    personSays(proj, "Approve", before(proj, request));
+    const own = commandIn(nextAsPerson(proj, ["--scope", "express", ...lists(shown.changes), "--request", request]), "intent create");
+    expect(own).toContain("--scope express");
+    expect(own).toContain("--project-type brownfield");
+
+    // Another request: a later compose dispatch keeps its own plan, and the
+    // earlier request's creation on another base is created as typed.
+    const elsewhere = installedProject();
+    const earlier = tailor(elsewhere);
+    expressPlan(elsewhere);
+    const later = next(elsewhere, ["compose", "fix the date parser so it reads two-digit years"]);
+    expect(later.message, later.message).toContain("Dispatch the composer agent");
+    expressPlan(elsewhere);
+    const other = commandIn(next(elsewhere, [...REBUILT, "--request", earlier]), "intent create");
+    expect(other).toContain("--scope classic --request");
+    expect(other).toContain("--skip domain-design,functional-design --add ci-pipeline,incident-response");
+  });
+
+  test("said once: a plan the person picked themselves after a Reject, with or without its own list, is created as typed the second time", () => {
+    for (const typed of [["--scope", "classic", "--skip", "code-generation"], ["--scope", "classic"]]) {
+      const proj = installedProject();
+      const request = tailor(proj);
+      expressPlan(proj);
+      personSays(proj, "Reject. Use the classic plan instead", before(proj, request));
+      const step = nextAsPerson(proj, [...typed, "--request", request]);
+      expect(step.kind, step.message).toBe("print");
+      expect(step.message).not.toContain("intent create");
+      expect(step.message).toContain("run the same command again: it creates this plan as typed");
+      nothingCreated(proj);
+      const creation = commandIn(nextAsPerson(proj, [...typed, "--request", request]), "intent create");
+      expect(creation).toContain("--scope classic");
+      expect(creation).not.toContain("--add");
+      expect(creation).not.toContain("--project-type");
+      if (typed.includes("--skip")) expect(creation).toContain("--skip code-generation");
+    }
+  });
+
+  test("a plan worked out again after the reply, and an agent that typed another base still: the step names the plan shown", () => {
+    const proj = installedProject();
+    const request = tailor(proj);
+    const shown = expressPlan(proj);
+    personSays(proj, "Approve", before(proj, request));
+    const again = expressPlan(proj, ["ci-pipeline", "incident-response"]);
+    expect(again.changes).not.toEqual(shown.changes);
+    const step = nextAsPerson(proj, [...REBUILT, "--request", request]);
+    expect(step.message).not.toContain("intent create");
+    const approval = commandIn(step, " next --scope express");
+    expect(approval).toContain(lists(shown.changes).join(" "));
+    expect(commandIn(nextAsPerson(proj, runNamedArgs(approval)), "intent create")).toContain(lists(shown.changes).join(" "));
+  });
+
+  test("a report-only composition on another base gets the step before its entry is spent", () => {
+    const proj = installedProject();
+    const dispatch = next(proj, ["compose", "--report", "scan.json"]);
+    const entry = /--request ([0-9a-f]{8})/.exec(dispatch.message)?.[1] as string;
+    const shown = expressPlan(proj);
+    personSays(proj, "Approve", before(proj, entry));
+    const step = nextAsPerson(proj, [...REBUILT, "--request", entry, "--", "fix the split rounding"]);
+    expect(step.message).not.toContain("intent create");
+    const approval = commandIn(step, " next --scope express");
+    expect(approval).toEndWith(`--request ${entry} -- <creationDescription>`);
+    const created = nextAsPerson(proj, [...runNamedArgs(approval.replace(" -- <creationDescription>", "")), "--", "fix the split rounding"]);
+    const creation = commandIn(created, "intent create");
+    expect(creation).toContain("--scope express");
+    expect(creation).toContain(lists(shown.changes).join(" "));
   });
 });
 

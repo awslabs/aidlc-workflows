@@ -17,11 +17,16 @@
 // (object, startChar `{`) and the linter sensor (array, startChar `[`).
 //
 // Mechanism: none - a pure in-process exercise of the two exported helpers, no
-// spawn, no tool subprocess. The `tool:` covers ids are documentation
+// spawn, no tool subprocess. One case reads the shipped scripts' source: the five
+// that exit after printing their result hand it to writeSensorResult, which lets
+// the write finish first (under Bun an exit straight after a large write to a
+// pipe drops its tail). The `tool:` covers ids are documentation
 // annotations (there is no enumerated "tool" unit class), matching t237's
 // convention.
 
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { stripStdoutNoise as stripDispatcher } from "../../core/tools/aidlc-sensor.ts";
 import { stripStdoutNoise as stripLinter } from "../../core/tools/aidlc-sensor-linter.ts";
 
@@ -77,4 +82,15 @@ describe("t251 linter stdout-noise stripping (eslint array, startChar '[')", () 
     const clean = `${JSON.stringify([{ errorCount: 1, messages: [] }])}\n`;
     expect(stripLinter(clean, "[")).toBe(clean);
   });
+});
+
+describe("t251 the shipped scripts finish writing their result before they exit", () => {
+  test.each(["type-check", "linter", "claim-sources", "required-sections", "upstream-coverage"])(
+    "aidlc-sensor-%s.ts writes its result only through writeSensorResult",
+    (id) => {
+      const source = readFileSync(join(import.meta.dir, "..", "..", "core", "tools", `aidlc-sensor-${id}.ts`), "utf-8");
+      expect(source).not.toMatch(/process\.stdout\.write\(\s*`\$\{JSON\.stringify\(/);
+      expect(source).toContain("writeSensorResult(");
+    },
+  );
 });

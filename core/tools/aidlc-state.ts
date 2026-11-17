@@ -1,5 +1,8 @@
+import { constructionPolicyRecovery } from "./aidlc-guard-operation.ts";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
+import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
 import { CHECKPOINT_GLOSS } from "./aidlc-guard-fences.ts";
+import { git, inProject, isGitRepo, projectInRepo } from "./aidlc-git.ts";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -26,6 +29,7 @@ import {
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import { putBackBeforePick, sayWritesDuringWork } from "./aidlc-before-pick.ts";
+import { buildStartListing, unitSourceManifests } from "./aidlc-brought-files.ts";
 import {
   approvalDispositionField,
   rejectedFindingDispositionField,
@@ -53,19 +57,24 @@ import {
   VERIFICATION_COMMAND_CHECKPOINT,
   verificationCommandRecovery,
   constructionPolicyReceipt,
-  CONSTRUCTION_POLICY_RECOVERY,
   swarmNeedsStageMajor,
   leftOutLine,
-  PERSON_ASKED_SKIP_REASON,
+  isPersonAskedSkipReason,
   auditShardName,
   appendSlug,
   appendUnderHeading,
   artifactFilename,
+  ensureHeading,
   BLOCKING_SENSOR_OVERRIDE_CHOICE,
+  blockingSensorPicks,
+  optionsList,
+  shellArg,
   BLOCKING_SENSOR_OVERRIDE_DECISION,
   BLOCKING_SENSOR_OVERRIDE_OPTIONS,
   blockingSensorOverrideReport,
   hasBlockingSensorOverrideAuthorization,
+  committedTextSha256,
+  writeRecordFileNoFollow,
   BoltIdentityError,
   type CheckboxState,
   checkSummaryConfirmationEvidence,
@@ -96,6 +105,7 @@ import {
   extractMarkdownSection,
   filterProducesByKind,
   findStageBySlug,
+  isPerUnitStage,
   findAllEvents,
   firstInScopeStageOfPhase,
   firstPlannedStageOfPhase,
@@ -103,6 +113,7 @@ import {
   freshReviewReceipts,
   unchangedChangeRequest,
   REVIEW_KEPT_FIELD,
+  GATE_SKIPPED_STAGES_FIELD,
   getField,
   guardRecoveryAnswerAdmits,
   readActiveDirectiveMarker,
@@ -176,7 +187,6 @@ import {
   PHASE_NUMBERS,
   PHASES,
   parseCheckboxes,
-  parseMemoryEntries,
   parseRefsList,
   parseStateStageSuffixes,
   pipelineLinkEvidence,
@@ -206,6 +216,7 @@ import {
   removeSlug,
   replaceSection,
   resolveBoltDag,
+  constructionCheckpointsApply,
   resolveBoltIdentity,
   requireLiveClaimForTeamUnit,
   reviewArtifactFingerprint,
@@ -253,11 +264,13 @@ import {
   worktreeStateFilePath,
   sameWorkspaceSource,
   recordedSourceListingUnderCurrentBoundary,
+  isLinkTargetListingKey,
+  sourceListingChangedKeys,
+  splitSourcePathKey,
   workspaceSourceState,
   withWorkspaceSourceStateCache,
   writeStateFile,
   writeUnitScopeStamp,
-  writeFileAtomic,
   answerModeStageStartedFields,
   keepActiveDirectiveOverSettingWrite,
   keepPlanApprovalAskOverStateWrite,
@@ -285,36 +298,45 @@ import {
   swarmWorkerWorktreeMeta,
   UNIT_NAME_PLACEHOLDER,
 } from "./aidlc-lib.js";
-import { chatTookStepHere } from "./aidlc-record-core.ts";
+import { chatTookStepHere, withdrawnTurnPositions } from "./aidlc-record-core.ts";
+import { personGitNameField } from "./aidlc-git-name.ts";
 import {
   mainCheckoutChangeStep, personTurnStands, proveMessage, readMessage, requestMessageStep, standingPersonTurn,
 } from "./aidlc-message-store.ts";
 import { swarmSourceChangedSince } from "./aidlc-swarm-source.ts";
-import { memoryDirFor, PATH_SET_SENSOR_IDS, STAGE_WIDE_SENSOR_IDS, templateEligibleArtifacts } from "./aidlc-graph.ts";
-import { generateFireId, recordUnfinishedFire, unfinishedFire } from "./aidlc-sensor-record.ts";
+import { memoryDirFor, PATH_SET_SENSOR_IDS, STAGE_WIDE_SENSOR_IDS, templateEligibleArtifacts, withStageProgressRow } from "./aidlc-graph.ts";
+import { generateFireId, recordUnfinishedFire, sensorMatchesPath, unfinishedFire } from "./aidlc-sensor-record.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
-import { aidlcDispatcherInvocation, aidlcToolInvocation, compiledExecutable, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
+import { aidlcDispatcherInvocation, aidlcToolInvocation, compiledExecutable, entrySkillInvocation, syncFolderClause } from "./aidlc-runtime-paths.ts";
+import { markdownBlocks, projectVisibleMarkdownLines } from "./aidlc-markdown.ts";
+import { type EngineUnitDirective, readEngineUnitDirective, routesUnitStep, routesWave } from "./aidlc-log.ts";
 import {
+  stageLabel,
   stageValidationAuditFields,
+  unitInputGaps,
   VALIDATION_WARNING_FIELD,
 } from "./aidlc-validity.ts";
 import {
   stageUsageAuditFields,
   workflowUsageAuditFields,
 } from "./aidlc-usage.ts";
-import { codeGenerationCompletionPlanWaits, deriveTeamUnitProgressModel } from "./aidlc-orchestrate.ts";
+import { codeGenerationCompletionPlanWaits, deriveTeamUnitProgressModel, SWITCH_CHECKS_OFF_CHOICE } from "./aidlc-orchestrate.ts";
 import {
   askedQuestionFields,
   commandChat,
-  latestAskedQuestion,
+  gateQuestion,
   QUESTION_ID_FIELD,
   questionShows,
   shownAgainFields,
 } from "./aidlc-questions.ts";
 import { codeGenerationPlanWaitsStep, promotableTestingPosture } from "./aidlc-testing-posture.ts";
+import { recordIntegrationBranch } from "./aidlc-unit.ts";
 import {
   approvedOverUnfinishedReview,
   approvedUnitChanges,
+  constructionCheckpointKind,
+  loadConstructionEvidence,
+  resolveConstructionCheckpoint,
   unfinishedReviewsNotice,
 } from "./aidlc-construction-checkpoints.ts";
 
@@ -743,7 +765,9 @@ function unrecordedRevisionSinceGateOpen(
     file: string | null;
     recovered: boolean;
   }[] = [];
+  const withdrawn = withdrawnTurnPositions(blocks);
   for (let i = 0; i < blocks.length; i++) {
+    if (withdrawn.has(i)) continue;
     const ev = auditField(blocks[i], "Event");
     if (!ev || !RELEVANT.has(ev)) continue;
     events.push({
@@ -919,6 +943,12 @@ function refuseForAgent(msg: string, options: { personDecided?: boolean } = {}):
   throw new DecisionNotMadeError(msg, options.personDecided === true);
 }
 
+// A team's blocking check refusing the stage gate the engine settles itself:
+// the step is the agent's (ask the person Fix or Override, as at a Unit's
+// checkpoint, whose refusal reaches the agent through the checkpoint's verify),
+// so the router hands it to the agent instead of showing it as an error.
+class BlockingCheckStepError extends StateCommandError {}
+
 function assertWorkflowNotArchived(content: string, operation: string): void {
   if (getField(content, "Status") !== "Archived") return;
   error(
@@ -932,6 +962,8 @@ function assertWorkflowNotArchived(content: string, operation: string): void {
 class UnitWaveRouteRefusalError extends StateCommandError {}
 
 export function main(argv: string[]): void {
+  // A turn Claude Code started itself is settled before this command reads a turn.
+  settleClaudeTurnsFirst(resolveProjectDir(projectDirFlag(argv)));
   const args = [...argv];
 
   // Extract --project-dir flag
@@ -989,10 +1021,10 @@ export function main(argv: string[]): void {
     } else {
       exitWithError(
         `Stage status cannot be changed with aidlc-state.ts ${subcommand} because that bypasses ` +
-          "the workflow's completion and approval checks. Use aidlc-orchestrate.ts report " +
+          `the workflow's completion and approval checks. Use ${aidlcToolInvocation("orchestrate")} report ` +
           "--stage <slug> --result " +
           "<awaiting-approval|approved|rejected|revised|completed|skipped>; use " +
-          "aidlc-orchestrate.ts park to pause, and next/jump to move through the workflow. " +
+          `${aidlcToolInvocation("orchestrate")} park to pause, and next/jump to move through the workflow. ` +
           // The way out is named here, so the human is not told to go and find it.
           fenceSwitchSentence(pd, "state-transition"),
       );
@@ -1098,6 +1130,9 @@ export function main(argv: string[]): void {
       case "completion-checks":
         handleCompletionChecks(args.slice(1));
         break;
+      case "checkpoint-checks":
+        handleCheckpointChecks(args.slice(1));
+        break;
       case "approve":
         handleApprove(args.slice(1));
         break;
@@ -1128,6 +1163,9 @@ export function main(argv: string[]): void {
       case "practices-promote":
         handlePracticesPromote(args.slice(1));
         break;
+      case "practices-branch":
+        handlePracticesBranch(args.slice(1));
+        break;
       case "fork":
         handleFork(args.slice(1));
         break;
@@ -1145,7 +1183,7 @@ export function main(argv: string[]): void {
         break;
       default:
         error(
-          `Unknown subcommand: ${subcommand}. Valid: get, set, set-skeleton-stance, set-construction-iteration, set-construction-checkpoints, set-construction-execution, set-construction-verification-command, set-unit-ownership, set-unit-gate-rhythm, refresh-unit-progress, sync-unit-scope-stage, fold-unit-merge, checkbox, count, advance, finalize, complete-workflow, gate-start, completion-checks, approve, reject, revise, skip, resume, acknowledge-compaction, reuse-artifact, lookup, practices-event, practices-promote, fork, merge, unit, park, unpark`
+          `Unknown subcommand: ${subcommand}. Valid: get, set, set-skeleton-stance, set-construction-iteration, set-construction-checkpoints, set-construction-execution, set-construction-verification-command, set-unit-ownership, set-unit-gate-rhythm, refresh-unit-progress, sync-unit-scope-stage, fold-unit-merge, checkbox, count, advance, finalize, complete-workflow, gate-start, completion-checks, checkpoint-checks, approve, reject, revise, skip, resume, acknowledge-compaction, reuse-artifact, lookup, practices-event, practices-promote, practices-branch, fork, merge, unit, park, unpark`
         );
     }
   } catch (e) {
@@ -1171,14 +1209,18 @@ export function main(argv: string[]): void {
         agentGuidance: e.personDecided ? "person-decided" : "question-open",
       });
     }
+    if (e instanceof BlockingCheckStepError) {
+      exitWithError({ message: e.message, auditMessage: e.message, agentGuidance: "blocking-check" });
+    }
     exitWithError(errorMessage(e));
   }
 }
 
 if (import.meta.main) {
-  // Kiro IDE's Command Prompt terminal: the tool runs itself as a child behind
-  // a pointer line (commandPromptReplyTee), or notes at exit a reply Kiro
-  // dropped, and rejoins the quote pair cmd.exe left on the words. Loaded only
+  // Kiro IDE's terminal in Command Prompt, or where Kiro's shell integration
+  // did not load: the tool runs itself as a child behind a pointer line
+  // (commandPromptReplyTee); in Command Prompt it also notes at exit a reply
+  // Kiro dropped and rejoins the quote pair cmd.exe left on the words. Loaded only
   // in Kiro's terminal, so the dispatcher's front gate and the lean projections
   // keep their import graph.
   if (process.env.TERM_PROGRAM === "kiro" && (process.platform === "win32" || process.env.AIDLC_TEST_KIRO_IDE_SETTINGS)) {
@@ -1250,7 +1292,7 @@ function handleSet(args: string[]): void {
         setter = 'set-construction-verification-command --command-file verification-command.txt';
         break;
     }
-    if (setter) error(`${field} cannot be changed with aidlc-state.ts set. Use aidlc-state.ts ${setter}.`);
+    if (setter) error(`${field} cannot be changed with aidlc-state.ts set. Use ${aidlcToolInvocation("state")} ${setter}.`);
   }
   const pd = resolveProjectDir(projectDir);
   // C2b lost-update safety: hold the audit lock across read→decide→write so
@@ -1475,7 +1517,7 @@ function requireHumanConstructionPolicyChange(
   // An unattended run never changes it on its own, whatever presence bypass is
   // in force: only a choice the person recorded earlier counts there.
   if (process.env.AIDLC_UNATTENDED === "1" && receipt === null) {
-    error(`An unattended run does not change ${field}: it changes when the person asks for it. ` + CONSTRUCTION_POLICY_RECOVERY);
+    error(`An unattended run does not change ${field}: it changes when the person asks for it. ` + constructionPolicyRecovery());
   }
   if (humanPresenceGuardDisabled()) return null;
   if (receipt !== null) {
@@ -1485,7 +1527,7 @@ function requireHumanConstructionPolicyChange(
   if (message === undefined) {
     error(
       requestMessageStep(pd, `No message of the person's that asks to change ${field} is named. Change it only ` +
-        "when they ask for it, never to clear a refusal or on your own.", "setting") + ` ${CONSTRUCTION_POLICY_RECOVERY}`,
+        "when they ask for it, never to clear a refusal or on your own.", "setting") + ` ${constructionPolicyRecovery()}`,
     );
   }
   const proof = proveMessage(pd, message, "setting", { request: true, lowers: field === "Construction Checkpoints" && value === "disabled" });
@@ -1645,11 +1687,13 @@ function hasCurrentTeamUnitActivity(
     if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
     return a.pos - b.pos;
   });
+  // A jump that kept each Unit's work with its team (aidlc-jump.ts records
+  // `Unit Work: kept`) starts no new attempt: the teams' claims carry on.
   let floor = -1;
   for (let i = 0; i < rows.length; i++) {
     if (
       rows[i].event === "WORKFLOW_STARTED" ||
-      rows[i].event === "STAGE_JUMPED"
+      (rows[i].event === "STAGE_JUMPED" && auditBlockField(rows[i].block, "Unit Work") !== "kept")
     ) {
       floor = i;
       if (
@@ -1715,7 +1759,8 @@ function handleSetUnitOwnership(given: string[]): void {
     const current = getField(content, "Unit Ownership")?.trim() || "solo";
     if (value !== current && hasCurrentTeamUnitActivity(pd, content)) {
       error(
-        `Unit ownership is frozen after team Unit activity in the current workflow attempt (current: ${current}).`,
+        "The teams are already building their Units, so they keep them for this work. " +
+          `Carry on with \`${entrySkillInvocation()}\`.`,
       );
     }
     if (value === "team") {
@@ -1809,7 +1854,7 @@ function handleSetUnitGateRhythm(args: string[]): void {
     if (!isTeamUnitOwnership(content)) {
       error(
         "Unit gate rhythm requires Unit Ownership: team. " +
-          "Run aidlc-state.ts set-unit-ownership team first.",
+          `Run ${aidlcToolInvocation("state")} set-unit-ownership team first.`,
       );
     }
     const current = readUnitGateRhythm(content);
@@ -2050,7 +2095,7 @@ function handleRefreshUnitProgress(
       ) {
         refuseUnitProgress(`Invalid Unit Progress stage: ${slug}`);
       }
-      content = setCheckbox(content, slug, state);
+      content = setCheckbox(withStageProgressRow(content, slug), slug, state);
       if (
         state === "completed" &&
         (
@@ -2081,7 +2126,7 @@ function handleRefreshUnitProgress(
         const nextAfter = nextInScopeStage(next.slug, workflowScope, content);
         const timestamp = isoTimestamp();
         phaseBoundary = finalStage.phase !== next.phase;
-        content = setCheckbox(content, next.slug, "in-progress");
+        content = setCheckbox(withStageProgressRow(content, next.slug), next.slug, "in-progress");
         content = setField(content, "Current Stage", next.slug);
         content = setField(content, "Lifecycle Phase", next.phase.toUpperCase());
         content = setField(content, "Next Stage", nextAfter?.slug ?? "none");
@@ -2414,7 +2459,7 @@ function handleSyncUnitScopeStage(args: string[]): void {
     content = setField(content, "In Progress", slug);
     content = setField(content, "Active Agent", stage.lead_agent);
     if (getSlugState(content, slug) !== "completed") {
-      content = setCheckbox(content, slug, "in-progress");
+      content = setCheckbox(withStageProgressRow(content, slug), slug, "in-progress");
     }
     content = setField(content, "Last Updated", isoTimestamp());
     writeStateFile(pd, content);
@@ -2589,7 +2634,10 @@ export function parkWorkflow(pd: string, opts: { attended?: boolean } = {}): Par
         "each Bolt), then park.",
     );
   }
-  const scopeStamp = validateLiveUnitScope(pd);
+  // A checkout that holds a Unit claim parks that Unit there; any other parks
+  // the work, a lead's whose teams hold the Units included. Not
+  // validateLiveUnitScope: it refuses Unit work, and a park is never Unit work.
+  const scopeStamp = readApplicableTeamUnitScopeStamp(pd, initialContent);
   if (scopeStamp) {
     writeFileSync(
       unitParkedPath(pd),
@@ -2691,13 +2739,14 @@ function handleUnpark(_args: string[]): void {
 // latest receipt for cheap status reads. The autonomous swarm keeps its own
 // SWARM_UNIT_* ledger (aidlc-swarm.ts) — this verb is the interactive twin.
 //
-// Single-active-unit invariant: `start` refuses while another unit of the
-// same stage is non-terminal (started/resumed/paused without a later
-// UNIT_COMPLETED), so resume/restart races cannot create two active units.
-// `resume` refuses unless the named unit is paused and no other unit of the
-// stage is in progress. A pause with `--set-aside-for <unit>` sets the unit
-// aside for that other unit (#1411: the person asked for its work meanwhile),
-// so it does not stop that unit from starting this stage.
+// Single-active-unit invariant: `start` refuses while another unit this
+// checkout holds (unitsHeldHere) is non-terminal on the same stage
+// (started/resumed/paused without a later UNIT_COMPLETED), so resume/restart
+// races cannot create two active units. `resume` refuses unless the named unit
+// is paused and no other unit of the stage is in progress. A pause with
+// `--set-aside-for <unit>` sets the unit aside for that other unit (#1411: the
+// person asked for its work meanwhile), so it does not stop that unit from
+// starting this stage.
 function handleUnit(args: string[]): void {
   const action = args[0];
   const VALID_UNIT_ACTIONS = new Set(["start", "pause", "resume", "complete"]);
@@ -2800,13 +2849,9 @@ function handleUnit(args: string[]): void {
     // The route check is read-only and shares this lock's ledger snapshot.
     const routed = action === "complete"
       ? {}
-      : readEngineUnitDirective(pd, slug, unit, action);
+      : readEngineUnitDirective(pd, slug, unit, action, stateSessionOverride, error);
     // A Unit's questions before the wave are the wave's own step.
-    if (
-      routed.kind === "run-stage" &&
-      routed.stage === slug &&
-      (routed.wave || routed.questions_only === true)
-    ) {
+    if (routesWave(routed, slug)) {
       if (!routed.wave) {
         throw new UnitWaveRouteRefusalError(
           `Refusing unit ${action} for "${unit}" of "${slug}": this step asks ` +
@@ -2819,7 +2864,7 @@ function handleUnit(args: string[]): void {
         `Refusing unit ${action} for "${unit}" of "${slug}": a wave is active for this stage ` +
           "(the orchestration engine currently routes it as a batch). " +
           "A wave has no single active unit - every entry settles through " +
-          `\`aidlc-state.ts unit complete --wave --stage ${slug} --unit <name>\`. A bare ` +
+          `\`${aidlcToolInvocation("state")} unit complete --wave --stage ${slug} --unit <name>\`. A bare ` +
           `\`${action}\` would append a serial receipt and ` +
           "drop the deterministic batch path for every remaining unit of the stage. " +
           "Use `unit complete --wave` instead.",
@@ -2843,7 +2888,7 @@ function handleUnit(args: string[]): void {
         error(
           `Refusing to start unit "${unit}" for "${slug}": unit "${blocking.unit}" is ${blocking.state}` +
             `${blocking.reason ? ` (reason: ${blocking.reason})` : ""}. ` +
-            `${blocking.state === "paused" ? `Resume it (aidlc-state.ts unit resume --stage ${slug} --unit ${blocking.unit}) or complete it first.` : "Complete it first."} ` +
+            `${blocking.state === "paused" ? `Resume it (${aidlcToolInvocation("state")} unit resume --stage ${slug} --unit ${blocking.unit}) or complete it first.` : "Complete it first."} ` +
             "One active unit at a time.",
         );
       }
@@ -2897,7 +2942,7 @@ function handleUnit(args: string[]): void {
         error(
           `Refusing to complete unit "${unit}" for "${slug}": it is paused` +
             `${checkpoint.reason ? ` (reason: ${checkpoint.reason})` : ""}. Resume it first ` +
-            `(aidlc-state.ts unit resume --stage ${slug} --unit ${unit}); a paused unit's work is not done.`,
+            `(${aidlcToolInvocation("state")} unit resume --stage ${slug} --unit ${unit}); a paused unit's work is not done.`,
         );
       }
     } else if (action === "resume") {
@@ -2984,10 +3029,6 @@ function handleUnit(args: string[]): void {
       }
     }
 
-    const memoryEntries =
-      action === "complete" && waveMode
-        ? fanInWaveUnitMemory(pd, slug, unit)
-        : 0;
     const waveFingerprint =
       action === "complete" && waveMode
         ? reviewArtifactFingerprint(pd, stage, unit, {
@@ -3021,7 +3062,6 @@ function handleUnit(args: string[]): void {
       ...(waveMode
         ? {
             Mode: "wave",
-            "Wave memory entries": String(memoryEntries),
             "Artifact Fingerprint": waveFingerprint ?? "",
           }
         : {}),
@@ -3072,7 +3112,7 @@ function handleUnit(args: string[]): void {
       stage: slug,
       unit,
       timestamp,
-      ...(waveMode ? { wave: true, memory_entries: memoryEntries } : {}),
+      ...(waveMode ? { wave: true } : {}),
     }));
   });
 }
@@ -3083,85 +3123,12 @@ function validateStateLineValue(label: string, value: string | undefined): void 
   }
 }
 
-interface EngineUnitDirective {
-  kind?: unknown;
-  stage?: unknown;
-  unit?: unknown;
-  wave?: unknown;
-  questions_only?: unknown;
-}
-
-function readEngineUnitDirective(
-  pd: string,
-  stage: string,
-  unit: string,
-  action: string,
-): EngineUnitDirective {
-  const executable = compiledExecutable();
-  let subargs = ["next", "--project-dir", pd];
-  let directive: unknown = null;
-  for (let attempts = 0; attempts < 1_000; attempts++) {
-    const command = executable
-      ? [executable, "engine", "orchestrate", ...subargs]
-      : [
-          process.execPath,
-          fileURLToPath(new URL("./aidlc-orchestrate.ts", import.meta.url)),
-          ...subargs,
-        ];
-    const result = spawnSync(command[0], command.slice(1), {
-      cwd: pd,
-      encoding: "utf-8",
-        env: hookChildEnv(pd, stateSessionOverride, {
-          AIDLC_PROJECT_DIR: pd,
-          [ROUTE_CHECK_ENV]: "1",
-        }),
-      timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
-    });
-    if (result.status !== 0) {
-      error(
-        `Refusing to ${action} unit "${unit}" for "${stage}": the orchestration engine could not resolve ` +
-          `the current routed unit (${(result.stderr ?? "").trim() || "no diagnostic"}).`,
-      );
-    }
-    try {
-      directive = JSON.parse((result.stdout ?? "").trim());
-    } catch {
-      error(
-        `Refusing to ${action} unit "${unit}" for "${stage}": the orchestration engine returned an ` +
-          "unparseable directive.",
-      );
-    }
-    const transport =
-      directive !== null && typeof directive === "object"
-        ? directive as { kind?: unknown; receipt?: unknown }
-        : {};
-    if (transport.kind !== "load-steering") break;
-    if (
-      typeof transport.receipt !== "string" ||
-      transport.receipt.length === 0
-    ) {
-      error(
-        `Refusing to ${action} unit "${unit}" for "${stage}": the engine's rules part ` +
-          "did not include its receipt.",
-      );
-    }
-    subargs = ["continue", transport.receipt, "--project-dir", pd];
-  }
-  return directive !== null && typeof directive === "object"
-    ? directive as EngineUnitDirective
-    : {};
-}
-
 function requireEngineRoutedUnit(
   routed: EngineUnitDirective,
   stage: string,
   unit: string,
 ): void {
-  if (
-    routed.kind !== "run-stage" ||
-    routed.stage !== stage ||
-    routed.unit !== unit
-  ) {
+  if (!routesUnitStep(routed, stage, unit)) {
     const expected =
       routed.kind === "run-stage" &&
       typeof routed.stage === "string" &&
@@ -3170,7 +3137,7 @@ function requireEngineRoutedUnit(
         : `a ${String(routed.kind ?? "non-run-stage")} directive`;
     error(
       `Refusing to start unit "${unit}" for "${stage}": the engine currently routes ${expected}. ` +
-        "Run the exact directive.stage/directive.unit pair returned by aidlc-orchestrate.ts next.",
+        `Run the exact directive.stage/directive.unit pair returned by ${aidlcToolInvocation("orchestrate")} next.`,
     );
   }
 }
@@ -3266,56 +3233,6 @@ function requireEngineRoutedWaveUnit(
   }
 }
 
-function fanInWaveUnitMemory(pd: string, stage: string, unit: string): number {
-  const headings = [
-    "Interpretations",
-    "Deviations",
-    "Tradeoffs",
-    "Open questions",
-  ] as const;
-  const rec = recordDir(pd);
-  if (rec === null) {
-    error(
-      `Refusing wave completion for unit "${unit}" of "${stage}": no active intent record directory exists.`,
-    );
-  }
-  const unitPath = join(rec, "construction", unit, stage, "memory.md");
-  const parentPath = join(rec, "construction", stage, "memory.md");
-  const unitContent = existsSync(unitPath) ? readFileSync(unitPath, "utf-8") : "";
-  const entries = parseMemoryEntries(unitContent);
-  if (entries.length === 0 && !existsSync(parentPath)) return 0;
-
-  let parentContent = existsSync(parentPath)
-    ? readFileSync(parentPath, "utf-8")
-    : `${headings.map((heading) => `## ${heading}\n`).join("\n")}\n`;
-  for (const heading of headings) {
-    if (!new RegExp(`^## ${heading}$`, "m").test(parentContent)) {
-      parentContent = `${parentContent.trimEnd()}\n\n## ${heading}\n`;
-    }
-  }
-
-  let added = 0;
-  for (const entry of entries) {
-    const digest = createHash("sha256")
-      .update(`${stage}\0${unit}\0${entry.heading}\0${entry.raw}`, "utf-8")
-      .digest("hex");
-    const marker = `<!-- aidlc-wave-memory:${unit}:${digest} -->`;
-    if (parentContent.includes(marker)) continue;
-    parentContent = appendUnderHeading(
-      parentContent,
-      `## ${entry.heading}`,
-      `\n${entry.raw}\n${marker}\n`,
-    );
-    added++;
-  }
-
-  mkdirSync(dirname(parentPath), { recursive: true });
-  if (!existsSync(parentPath) || added > 0) {
-    writeFileAtomic(parentPath, parentContent.endsWith("\n") ? parentContent : `${parentContent}\n`);
-  }
-  return added;
-}
-
 // The unit's missing REQUIRED artifacts (kind-filtered like the engine's
 // unitCovered): resolved under <record>/construction/<unit>/<slug>/<name>.md.
 // Returns [] when everything applicable exists. Kind filtering reads the
@@ -3372,7 +3289,7 @@ function handleCheckbox(args: string[]): void {
   let content = readStateFile(pd);
 
   for (const { slug, state } of changes) {
-    content = setCheckbox(content, slug, state);
+    content = setCheckbox(withStageProgressRow(content, slug), slug, state);
   }
 
   // Sync Completed counter to actual [x] count
@@ -3671,7 +3588,7 @@ function verifySettledSwarmSourceBinding(
   // (aidlc-swarm-source.ts).
   const changed = current === null || sameWorkspaceSource(chain.fingerprint, current.fingerprint)
     ? []
-    : swarmSourceChangedSince(pd, stage.slug, chain.listing, current);
+    : swarmSourceChangedSince(pd, stage.slug, chain, current);
   const moved = changed?.length !== 0;
   if (moved && current !== null && guardPolicyAcceptsChanges(pd)) {
     // Kept under relaxed or off: edits made after the last merge stay, once recorded.
@@ -3995,8 +3912,7 @@ function gateSensorMatchesOutput(
   >[number],
   outputPath: string,
 ): boolean {
-  return sensor.matches === undefined ||
-    new Bun.Glob(sensor.matches).match(outputPath.replace(/\\/g, "/"));
+  return sensor.matches === undefined || sensorMatchesPath(sensor.matches, outputPath);
 }
 
 // One fire of a gate sensor: the output it is fired on, and every output its
@@ -4270,11 +4186,99 @@ function verifyGateSensorArtifactsUnchanged(
   }
 }
 
+// Where a blocking check's refusal stands: a gate (the report retries it), or
+// one Unit's checkpoint (the pick names the Unit and the checkpoint's verify
+// retries it).
+type BlockingCheckAt =
+  | { kind: "gate"; reportResult: "awaiting-approval" | "revised" }
+  | { kind: "checkpoint"; unit: string; checkpointKind: string; overrodeAt?: string };
+
+// What the person already decided about these checks at other Units, for this
+// Unit's refusal: the line said before the question when they overrode the
+// same check at an earlier Unit (each Unit's latest verification decides), so
+// their second answer is quick; and, when they asked at an earlier Unit to
+// switch that check off, were asked once what they meant (the question offered
+// the work's switch beside the check's two choices) and picked the Override for
+// that Unit, the same pick for the same words here. Read from the record alone:
+// the question's offered choices, the pick, and the verification that carried
+// it (that one, not the Unit's latest, so an Override later undone keeps their
+// answer). Only when that verification overrode every check failing here: the
+// retry is this Unit's Override, which covers all of its findings, so a check
+// they never overrode, failing beside one they did, gets its own question. The
+// check's name in these lines is the agent's (<check>): its id is the team's
+// internal name. Null when there is nothing to say.
+function overrodeAtEarlierUnits(pd: string, slug: string, unit: string, kind: string, sensorIds: string[]): string | null {
+  const rows = sortAttemptEvents(readAuditShardEvents(pd));
+  const latest = new Map<string, string>();
+  for (const row of rows) {
+    if (row.event !== "CHECKPOINT_VERIFICATION_RECORDED" || auditBlockField(row.block, "Verified") !== "true") continue;
+    const at = auditBlockField(row.block, "Unit");
+    if (at === null || at === unit) continue;
+    latest.set(at, auditBlockField(row.block, "Blocking Checks") ?? "");
+  }
+  const overrode = (checks: string, id: string): boolean => checks.split(",").map((entry) => entry.trim())
+    .some((entry) => entry.startsWith(`${slug}:${id}@`) && entry.endsWith("=overridden"));
+  // The one ask answered with the Override at another Unit: the verification that carried it, per Unit.
+  const pickUnits = new Map<AuditShardEvent, string | null>();
+  const questions = new Map<AuditShardEvent, AuditShardEvent>();
+  const carried = new Map<string, string>();
+  let stateContent: string | null = null;
+  try {
+    stateContent = readStateFile(pd);
+  } catch {
+    stateContent = null;
+  }
+  // Read as the verification that carried the pick reads it (blockingSensorPicks, with the state).
+  for (const [pick, choice] of blockingSensorPicks(rows, slug, pickUnits, questions, stateContent)) {
+    const at = pickUnits.get(pick) ?? null;
+    if (choice !== BLOCKING_SENSOR_OVERRIDE_CHOICE || at === null || at === unit || carried.has(at)) continue;
+    if (!optionsList(auditBlockField(questions.get(pick)?.block ?? "", "Options")).includes(SWITCH_CHECKS_OFF_CHOICE)) continue;
+    const verification = rows.slice(rows.indexOf(pick) + 1).find((row) =>
+      row.event === "CHECKPOINT_VERIFICATION_RECORDED" && auditBlockField(row.block, "Unit") === at &&
+      auditBlockField(row.block, "Verified") === "true" && auditBlockField(row.block, "Blocking Sensor Override") === "true"
+    );
+    if (verification !== undefined) carried.set(at, auditBlockField(verification.block, "Blocking Checks") ?? "");
+  }
+  const plain = (names: string[]): string => {
+    const shown = names.map(unitPlainName);
+    const list = shown.length < 2 ? shown.join("") : `${shown.slice(0, -1).join(", ")} and ${shown[shown.length - 1]}`;
+    return `the ${list} Unit${shown.length > 1 ? "s" : ""}`;
+  };
+  const slot = (id: string): string => `(<check>: the ${checkName(id)}, named by what it checks, as you name it in the question.)`;
+  const said = sensorIds.flatMap((id) => {
+    const before = [...latest].filter(([, checks]) => overrode(checks, id)).map(([at]) => at);
+    return before.length === 0
+      ? []
+      : [`Say to the person, just before the question: "You overrode the <check> for ${plain(before)}." ${slot(id)}`];
+  });
+  const same = [...carried].find(([, checks]) => sensorIds.every((id) => overrode(checks, id)))?.[0];
+  if (same !== undefined) {
+    const these = sensorIds.length === 1 ? "this check" : "these checks";
+    said.push(
+      `At ${plain([same])} they were asked what switching ${these} off meant and picked the Override for that Unit, ` +
+        `so a request to switch ${these} off again is that same pick: run \`${aidlcToolInvocation("log")} answer ` +
+        // No --message: the answer takes their reply since the question itself, as at the first Unit (an id
+        // the agent had to look up put a search of the record in front of the person).
+        `--stage ${slug} --unit ${shellArg(unit)} --details "${BLOCKING_SENSOR_OVERRIDE_CHOICE}"\`, ` +
+        `then \`${blockingSensorOverrideVerify(unit, kind)}\`, and once that verify ` +
+        `succeeds say, one line for each check: "Same as for ${plain([same])}: I've overridden the <check> for this one too." ` +
+        sensorIds.map(slot).join(" "),
+    );
+  }
+  return said.length === 0 ? null : said.join(" ");
+}
+
+// The checkpoint verify that carries the person's override at a Unit's checkpoint.
+function blockingSensorOverrideVerify(unit: string, kind: string): string {
+  return `${aidlcToolInvocation("bolt")} checkpoint --action verify --unit ${shellArg(unit)} --kind ${kind} ` +
+    `--override-blocking-sensors --user-input "${BLOCKING_SENSOR_OVERRIDE_CHOICE}"`;
+}
+
 function enforceBlockingGateSensors(
   pd: string,
   stateContent: string,
   slug: string,
-  reportResult: "awaiting-approval" | "revised",
+  at: BlockingCheckAt,
   issues: BlockingSensorIssue[],
   overrideRequested: boolean,
   overrideInput?: string,
@@ -4287,41 +4291,65 @@ function enforceBlockingGateSensors(
   const reasons = issues.map(
     (issue) => `${issue.sensorId}@${issue.outputPath}: ${issue.reason}`,
   );
+  const unitFlag = at.kind === "checkpoint" ? ` --unit ${shellArg(at.unit)}` : "";
+  const retry = at.kind === "checkpoint"
+    ? blockingSensorOverrideVerify(at.unit, at.checkpointKind)
+    : blockingSensorOverrideReport(slug, at.reportResult);
+  const where = at.kind === "checkpoint" ? `"${slug}" for unit "${at.unit}"` : `"${slug}"`;
+  // At the stage gate the engine settles itself after every Unit's checkpoint,
+  // the refusal is the agent's step, as the checkpoint's is.
+  const stage = at.kind === "gate" ? findStageBySlug(slug) : undefined;
+  const late = stage !== undefined && engineSettlesLateGate(pd, stateContent, stage);
+  const refuse = late
+    ? (message: string): never => {
+      throw new BlockingCheckStepError(message);
+    }
+    : error;
+  // The person chose the Override and the agent's own next step is named
+  // (leave Continue automatically first, or the exact choice): it goes on in
+  // the same turn.
+  const refuseOwnStep = late ? (message: string): never => refuseForAgent(message, { personDecided: true }) : error;
   if (overrideRequested) {
     if (isAutonomousMode(stateContent)) {
-      error(
-        `Refusing blocking sensor override for "${slug}": Construction Autonomy Mode ` +
+      refuseOwnStep(
+        `Refusing blocking sensor override for ${where}: Construction Autonomy Mode ` +
           "is autonomous. Unattended runs must halt on blocking sensor findings or " +
           "unavailable evaluations. When the person chooses the override, run " +
           `\`${aidlcToolInvocation("bolt")} set-autonomy --mode gated\` (Construction then stops for ` +
-          "approval at each Bolt), then report with the override again.",
+          `approval at each Bolt), then ${at.kind === "checkpoint" ? `run \`${retry}\` again` : "report with the override again"}.`,
       );
     }
     if (overrideInput?.trim() !== BLOCKING_SENSOR_OVERRIDE_CHOICE) {
-      error(
-        `Refusing blocking sensor override for "${slug}": --user-input must be the ` +
+      refuseOwnStep(
+        `Refusing blocking sensor override for ${where}: --user-input must be the ` +
           `exact offered choice "${BLOCKING_SENSOR_OVERRIDE_CHOICE}".`,
       );
     }
-    if (!hasBlockingSensorOverrideAuthorization(pd, slug)) {
-      error(
-        `Refusing blocking sensor override for "${slug}": no fresh authorization receipt ` +
+    if (!hasBlockingSensorOverrideAuthorization(pd, slug, at.kind === "checkpoint" ? at.unit : null)) {
+      refuse(
+        `Refusing blocking sensor override for ${where}: no fresh authorization receipt ` +
           `proves that "${BLOCKING_SENSOR_OVERRIDE_CHOICE}" was offered and selected after ` +
-          "a HUMAN_TURN. Record the decision and exact answer through aidlc-log.ts, then retry.",
+          `a HUMAN_TURN. Record the decision and exact answer through ${aidlcToolInvocation("log")}, then retry.`,
       );
     }
     return;
   }
-  error(
-    `Blocking gate sensor evaluation did not pass for "${slug}". Sensors: ` +
+  refuse(
+    `Blocking gate sensor evaluation did not pass for ${where}. Sensors: ` +
       `${sensorIds.join(", ")}. Detail paths: ${detailPaths.join(", ") || "none"}. ` +
       `Reasons: ${reasons.join("; ")}. Fix the findings and retry, or first run ` +
-      `${aidlcToolInvocation("log")} decision --stage ${slug} ` +
+      `${aidlcToolInvocation("log")} decision --stage ${slug}${unitFlag} ` +
       `--decision "${BLOCKING_SENSOR_OVERRIDE_DECISION}" --options ` +
       `"${BLOCKING_SENSOR_OVERRIDE_OPTIONS.join(",")}", present those choices, and ` +
       `after the human selects "${BLOCKING_SENSOR_OVERRIDE_CHOICE}" record it with ` +
-      `${aidlcToolInvocation("log")} answer. Then retry: ` +
-      `${blockingSensorOverrideReport(slug, reportResult)}. Autonomous mode cannot override.`,
+      `${aidlcToolInvocation("log")} answer${at.kind === "checkpoint" ? ` --stage ${slug}${unitFlag}` : ""}. Then retry: ` +
+      `${retry}. Autonomous mode cannot override.` +
+      // Asked per Unit, the person's "switch the check off for this work" is the work's switch, not one Unit's Override.
+      (at.kind === "checkpoint"
+        ? ` If the person asked to switch the checks off for this piece of work, that is no pick: run ` +
+          `\`${aidlcToolInvocation("orchestrate")} next --sensors off\` instead and follow its step.` +
+          (at.overrodeAt === undefined ? "" : ` ${at.overrodeAt}`)
+        : ""),
   );
 }
 
@@ -4462,32 +4490,6 @@ function isNonDocPath(p: string): boolean {
   if (rel.length === 0) return false;
   const firstSeg = rel.split("/")[0];
   return !HARNESS_DOC_DIRS.has(firstSeg);
-}
-
-// Run git in the workspace, fail-safe: returns null on any spawn/exec problem so
-// callers fall back to the filesystem check rather than trapping. The person's
-// own git settings apply: this is their machine and their project, and git here
-// behaves as it does in their terminal. `outside` is a checkout outside the
-// project: --no-optional-locks keeps git from refreshing its index there, so
-// asking it writes nothing.
-function git(pd: string, args: string[], outside = false): string | null {
-  try {
-    const r = spawnSync("git", outside ? ["--no-optional-locks", ...args] : args, {
-      cwd: pd,
-      encoding: "utf-8",
-      timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
-    });
-    if (r.status !== 0 || typeof r.stdout !== "string") return null;
-    return r.stdout;
-  } catch {
-    return null;
-  }
-}
-
-// True when `pd` is inside a git work tree. (`--is-inside-work-tree` prints
-// "true"/"false"; a non-repo exits non-zero -> git() returns null -> false.)
-function isGitRepo(pd: string, outside = false): boolean {
-  return git(pd, ["rev-parse", "--is-inside-work-tree"], outside)?.trim() === "true";
 }
 
 // Git-aware "did this workspace get real source work?" signal (issue #366
@@ -4710,17 +4712,14 @@ function linkedWorktrees(dir: string, outside: boolean): string[] {
 function nestedCheckouts(root: string): string[] {
   const starts: string[] = [];
   const listed = git(root, ["status", "--porcelain", "-z", "--ignored", "--untracked-files=normal", "--", "."]);
-  const prefix = listed === null ? null : git(root, ["rev-parse", "--show-prefix"]);
-  if (listed !== null && prefix !== null) {
+  const at = listed === null ? null : projectInRepo(root);
+  if (listed !== null && at !== null) {
     // Porcelain paths are relative to the repository's top, which is above the
     // project when it is a folder of a larger repo.
-    const under = prefix.trim();
     for (const entry of listed.split("\0")) {
       if (!entry.startsWith("?? ") && !entry.startsWith("!! ")) continue;
-      const path = entry.slice(3);
-      if (path.endsWith("/") && path.startsWith(under) && path.length > under.length) {
-        starts.push(path.slice(under.length, -1));
-      }
+      const path = inProject(at.prefix, entry.slice(3));
+      if (path?.endsWith("/")) starts.push(path.slice(0, -1));
     }
   } else {
     try {
@@ -5266,6 +5265,119 @@ function noteVerdictNotFinished(
   }
 }
 
+// Of the changed source paths, sorted, the ones a Unit's manifest could claim
+// (`paths`): the stage's completion and `lookup source-changes` leave out the
+// same ones. `claimed` takes out the paths the caller's Unit claims already
+// cover. `ignored` holds the ones left out as ignored by git, which the lookup
+// reads for the checkouts it cannot see into.
+function unitClaimableSourceChanges(
+  pd: string,
+  stageSlug: string,
+  changed: Iterable<string>,
+  current: ReadonlyMap<string, string>,
+  claimed: (pathKey: string) => boolean = () => false,
+): { paths: string[]; ignored: Set<string> } {
+  // AI-DLC's own files (its .gitignore block, AGENTS.md, a second tool's
+  // install, the source registry) are no Unit's to claim, and neither is a
+  // path Git ignores that a source manifest refuses to claim (build output, a
+  // test run's record), nor one the registry's exclude list now leaves out of
+  // the walk (a cache excluded after the stage started: its baseline entries
+  // are nobody's change).
+  const aidlcOwned = aidlcOwnedSourceKey(pd);
+  // A file the agent changed before the person picked this work's plan, put
+  // back since (the undo the pick's line named), holds what it held before
+  // the agent's write: nobody's change.
+  const putBack = putBackBeforePick(pd);
+  let outsideClaims = [...changed].filter((pathKey) =>
+    !aidlcOwned(pathKey) && !claimed(pathKey) && !putBack(pathKey, current.get(pathKey))
+  );
+  // Nor is a file another open piece of work in this folder claims: a second
+  // chat building its own work here made it, so it is that work's change.
+  if (outsideClaims.length > 0) {
+    const otherWork = otherOpenWorkClaims(pd, stageSlug);
+    outsideClaims = outsideClaims.filter((pathKey) => !otherWork.some((work) => sourceClaimCovers(pathKey, work.claims)));
+  }
+  const ignored = unclaimableIgnoredSourceKeys(pd, outsideClaims);
+  const unclaimable = new Set(ignored);
+  for (const key of registryExcludedSourceKeys(pd, outsideClaims)) unclaimable.add(key);
+  const paths = outsideClaims
+    .filter((pathKey) => !unclaimable.has(pathKey))
+    .sort();
+  return { paths, ignored };
+}
+
+// `lookup source-changes [<unit>]`: the source paths that changed since a
+// Unit's Code Generation began, for the agent to check its account of the
+// build against when it writes the Unit's `source-manifest.json`, so it need
+// not run git for that (Kiro asks the person about a git command they have not
+// allowed). Read-only. It sees AI-DLC's source walk, not who wrote a change:
+// `listed_by` names the other Units whose manifest lists a path, and
+// `not_listed` the places it leaves out because it cannot list them as a
+// manifest claims them: a checkout recorded with `intent add-checkout` (one
+// recorded after the build began reads as all created), a folder a link leads
+// to outside the project, and a checkout of its own the project's git ignores.
+function sourceChangesSinceBuildStart(pd: string, unit: string | null): Record<string, unknown> {
+  const named = unit === null ? {} : { unit };
+  const unavailable = {
+    ...named,
+    available: false,
+    note: "AI-DLC cannot compare the files here with where this build began: take the paths from the build's own account.",
+  };
+  try {
+    const start = buildStartListing(pd, unit);
+    const current = workspaceSourceState(pd);
+    if (start === null || current === null) return unavailable;
+    const recorded = recordedSourceListingUnderCurrentBoundary(start.listing, current.listing);
+    const { paths, ignored } = unitClaimableSourceChanges(
+      pd,
+      "code-generation",
+      sourceListingChangedKeys(recorded, current.listing),
+      current.listing,
+    );
+    const listings = [recorded, current.listing];
+    const keysOf = (mode: string): string[] => listings.flatMap((listing) =>
+      [...listing].filter(([, entry]) => entry.startsWith(`${mode} `)).map(([key]) => key));
+    // isLinkTargetListingKey decides whether a key is a link's target; the
+    // link it goes through is the one its name starts with.
+    const links = keysOf("120000");
+    const linkOf = (key: string): string | null =>
+      !listings.some((listing) => isLinkTargetListingKey(listing, key)) ? null
+        : links.find((link) => key === `${link}@target` || key.startsWith(`${link}@target/`)) ?? null;
+    // Listing keys of the links and the git-ignored checkouts the list leaves out.
+    const leftOut = new Set<string>();
+    const keys = paths.filter((key) => {
+      const link = linkOf(key);
+      if (link === null) return true;
+      leftOut.add(link);
+      return false;
+    });
+    const nestedCheckouts = ignored.size === 0 ? [] : keysOf("160000");
+    for (const key of ignored) {
+      const place = linkOf(key) ?? nestedCheckouts.find((checkout) => key === checkout || key.startsWith(`${checkout}/`));
+      if (place !== undefined) leftOut.add(place);
+    }
+    const notListed = [...new Set([
+      ...readRecordedSourceCheckouts(pd).map((entry) => entry.path.replace(/[\\/]+$/, "")),
+      ...renderSourcePathKeys(leftOut),
+    ])].sort();
+    const others = unitSourceManifests(pd).filter((entry) => entry.unit !== unit);
+    const changed = keys.flatMap((key) => {
+      const parsed = splitSourcePathKey(key);
+      if (parsed === null) return [];
+      const listedBy = others.filter(({ manifest }) => sourceClaimCovers(key, manifest)).map((entry) => entry.unit);
+      return [{
+        ...(parsed.repo === "" ? {} : { repo: parsed.repo }),
+        path: parsed.path,
+        change: !current.listing.has(key) ? "deleted" : recorded.has(key) ? "modified" : "created",
+        ...(listedBy.length === 0 ? {} : { listed_by: listedBy }),
+      }];
+    });
+    return { ...named, since: start.since, changed, ...(notListed.length === 0 ? {} : { not_listed: notListed }) };
+  } catch {
+    return unavailable;
+  }
+}
+
 function verifyReviewerPrecondition(
   pd: string,
   content: string,
@@ -5355,7 +5467,7 @@ function verifyReviewerPrecondition(
     const message =
       `${reviewerPreconditionPrefix(stage.slug, action)} because the recorded review${scope} ` +
       "could not be verified and the review must be run again. Retry the pending " +
-      `request with \`aidlc-log.ts review --stage ${stage.slug}${unitFlag} --reviewer ` +
+      `request with \`${aidlcToolInvocation("log")} review --stage ${stage.slug}${unitFlag} --reviewer ` +
       `${reviewer} --iteration ${iteration} --retry-pending\`, then record the verdict ` +
       "with the same command plus `--verdict <READY|NOT-READY>`.";
     refuseStateGuard(pd, content, stage, {
@@ -5442,32 +5554,13 @@ function verifyReviewerPrecondition(
       if (!baseline.has(pathKey)) baselineChanged.add(pathKey);
     }
     const claimModels = [...receipts.freshUnitClaims.values()];
-    // AI-DLC's own files (its .gitignore block, AGENTS.md, a second tool's
-    // install, the source registry) are no Unit's to claim, and neither is a
-    // path Git ignores that a source manifest refuses to claim (build output, a
-    // test run's record), nor one the registry's exclude list now leaves out of
-    // the walk (a cache excluded after the stage started: its baseline entries
-    // are nobody's change).
-    const aidlcOwned = aidlcOwnedSourceKey(pd);
-    // A file the agent changed before the person picked this work's plan, put
-    // back since (the undo the pick's line named), holds what it held before
-    // the agent's write: nobody's change.
-    const putBack = putBackBeforePick(pd);
-    let outsideClaims = [...baselineChanged].filter((pathKey) =>
-      !aidlcOwned(pathKey) && !claimModels.some((claims) => sourceClaimCovers(pathKey, claims)) &&
-      !putBack(pathKey, receipts.currentSourceListing?.get(pathKey))
-    );
-    // Nor is a file another open piece of work in this folder claims: a second
-    // chat building its own work here made it, so it is that work's change.
-    if (outsideClaims.length > 0) {
-      const otherWork = otherOpenWorkClaims(pd, stage.slug);
-      outsideClaims = outsideClaims.filter((pathKey) => !otherWork.some((work) => sourceClaimCovers(pathKey, work.claims)));
-    }
-    const unclaimable = unclaimableIgnoredSourceKeys(pd, outsideClaims);
-    for (const key of registryExcludedSourceKeys(pd, outsideClaims)) unclaimable.add(key);
-    baselineUnclaimed = outsideClaims
-      .filter((pathKey) => !unclaimable.has(pathKey))
-      .sort();
+    baselineUnclaimed = unitClaimableSourceChanges(
+      pd,
+      stage.slug,
+      baselineChanged,
+      receipts.currentSourceListing,
+      (pathKey) => claimModels.some((claims) => sourceClaimCovers(pathKey, claims)),
+    ).paths;
   }
   const resolutionForReconciliation = perUnit ? resolveBoltDag(pd) : null;
   const applicableReconciliationUnits =
@@ -5635,7 +5728,7 @@ function verifyReviewerPrecondition(
         const retry =
           pending?.state === "retry-required" ? " --retry-pending" : "";
         return [
-          `\`aidlc-log.ts review --stage ${stage.slug} --unit ${unit} ` +
+          `\`${aidlcToolInvocation("log")} review --stage ${stage.slug} --unit ${unit} ` +
             `--reviewer ${reviewer} --iteration ${iteration}${retry}\``,
         ];
       });
@@ -5677,7 +5770,7 @@ function verifyReviewerPrecondition(
     if (recoveryAvailable.length > 0) {
       guidance.push(
         `For invalidated units with recovery available (${recoveryAvailable.join(", ")}), ` +
-          `run \`aidlc-log.ts review --stage ${stage.slug} --unit <unit> --reviewer ` +
+          `run \`${aidlcToolInvocation("log")} review --stage ${stage.slug} --unit <unit> --reviewer ` +
           `${reviewer} --iteration <next ordinal>\`, then record the verdict with ` +
           `the same command plus \`--verdict <READY|NOT-READY>\` and stop editing ` +
           `this stage's output documents, that unit's source-manifest.json, and `
@@ -5704,7 +5797,7 @@ function verifyReviewerPrecondition(
     if (neverReviewed.length > 0) {
       guidance.push(
         `For never-reviewed units (${neverReviewed.join(", ")}), run the normal ` +
-          `\`aidlc-log.ts review --stage ${stage.slug} --unit <unit> --reviewer ` +
+          `\`${aidlcToolInvocation("log")} review --stage ${stage.slug} --unit <unit> --reviewer ` +
           `${reviewer} --iteration <next ordinal>\` request and record its verdict.`,
       );
     }
@@ -5881,6 +5974,7 @@ function staleSourcePreconditionError(
     const message =
       `Refusing to complete "${slug}": the workspace source changed again after ` +
         `the one recovery review by ${reviewer} (source-fingerprint mismatch).${whatChanged} ` +
+        syncFolderClause(pd) +
         `${recoveryGuidance(pd, content, slug)} ` +
         (requestChangesResetIsExecutable(content, slug)
           ? "Only a human Request Changes decision resets the review attempt; do not " +
@@ -5896,8 +5990,8 @@ function staleSourcePreconditionError(
   }
   const message =
     `Cannot complete "${slug}" because the project source changed after ${reviewer} ` +
-      `reviewed it. Ask ${reviewer} to review the current source once more and record ` +
-      `the verdict, or revert the source change, then try again.${whatChanged}`;
+      `reviewed it.${whatChanged} ${syncFolderClause(pd)}Ask ${reviewer} to review the current ` +
+      `source once more and record the verdict, or revert the source change, then try again.`;
   // On a per-unit stage the review that covered the source is the newest
   // Unit's, so the one recovery review is that Unit's.
   const reviewUnit = receipts.newestSourceUnit ?? undefined;
@@ -5976,12 +6070,15 @@ function staleReviewPreconditionError(
   action: ReviewerPreconditionAction = "complete",
 ): never {
   const slug = stage.slug;
+  const written = receipts.stageWrittenPaths.length > 0
+    ? ` Files written after that review: ${renderChangedPaths(receipts.stageWrittenPaths)}.`
+    : "";
   const recoverySpent =
     receipts.stageStaleProgress?.recoverySpent === true;
   if (recoverySpent) {
     const message =
       `${reviewerPreconditionPrefix(slug, action)}: this stage's output document ` +
-        `changed again after the one recovery review by ${reviewer}. ` +
+        `changed again after the one recovery review by ${reviewer}.${written} ${syncFolderClause(pd)}` +
         recoveryGuidance(pd, content, slug) +
         (requestChangesResetIsExecutable(content, slug)
           ? " Only a human Request Changes decision resets the review attempt; do not " +
@@ -5997,8 +6094,8 @@ function staleReviewPreconditionError(
   }
   const message =
     `${reviewerPreconditionPrefix(slug, action)} because an output document changed after ` +
-      `${reviewer} reviewed it. Run ` +
-      `one recovery review pass with \`aidlc-log.ts review --stage ${slug} ` +
+      `${reviewer} reviewed it.${written} ${syncFolderClause(pd)}Run ` +
+      `one recovery review pass with \`${aidlcToolInvocation("log")} review --stage ${slug} ` +
       `--reviewer ${reviewer} --iteration <next ordinal>\`, then record the verdict ` +
       `with the same command plus \`--verdict <READY|NOT-READY>\`. After that ` +
       `review, stop editing this stage's output documents. If the recovery pass was already ` +
@@ -6040,7 +6137,7 @@ function reviewerPreconditionError(
     const message =
       `${reviewerPreconditionPrefix(slug, action)} because the review request is still ` +
       "waiting for a verifiable recorded result. Run " +
-      `\`aidlc-log.ts review --stage ${slug} --reviewer ${reviewer} --iteration ` +
+      `\`${aidlcToolInvocation("log")} review --stage ${slug} --reviewer ${reviewer} --iteration ` +
       `${pending.iteration} --retry-pending\`, then record the verdict with the same ` +
       "command plus `--verdict <READY|NOT-READY>`.";
     refuseStateGuard(pd, content, stage, {
@@ -6057,7 +6154,7 @@ function reviewerPreconditionError(
     const message =
       `Cannot present "${slug}" for approval because ${reviewer} has not reviewed the ` +
         `current output. Apply any fixes first, then request the review with ` +
-        `\`aidlc-log.ts review --stage ${slug} --reviewer ${reviewer} --iteration ` +
+        `\`${aidlcToolInvocation("log")} review --stage ${slug} --reviewer ${reviewer} --iteration ` +
         `${ordinal}\` and record its verdict with the same command plus ` +
         `\`--verdict <READY|NOT-READY>\`. After recording the verdict, do not edit ` +
         `this stage's output documents; include suggestions from a READY review in the ` +
@@ -6072,7 +6169,7 @@ function reviewerPreconditionError(
   }
   const message =
     `Cannot complete "${slug}" because ${reviewer} has not reviewed the current output. ` +
-      `Apply any fixes first, then request the review with \`aidlc-log.ts review --stage ` +
+      `Apply any fixes first, then request the review with \`${aidlcToolInvocation("log")} review --stage ` +
       `${slug} --reviewer ${reviewer} --iteration ${ordinal}\` and record its verdict ` +
       `with the same command plus \`--verdict <READY|NOT-READY>\`. After recording the ` +
       `verdict, do not edit this stage's output documents; include suggestions from a ` +
@@ -6266,7 +6363,7 @@ function handleAdvance(
   content = setCheckbox(content, completedSlug, "completed");
 
   // 2. Mark next-slug → [-]
-  content = setCheckbox(content, nextSlug, "in-progress");
+  content = setCheckbox(withStageProgressRow(content, nextSlug), nextSlug, "in-progress");
 
   // 3. Update fields
   const nextAfterNext = nextInScopeStage(nextSlug, scope, content);
@@ -6633,6 +6730,7 @@ interface TeamGateContext {
   unit: string;
   scope: UnitGateScope;
   stages: NonNullable<ReturnType<typeof findStageBySlug>>[];
+  skipped?: string[];
 }
 
 function teamGateContext(
@@ -6680,7 +6778,18 @@ function teamGateContext(
         `"${final?.slug ?? "unknown"}", not "${stage.slug}".`,
     );
   }
-  return { unit, scope: "unit-end", stages };
+  // The gate covers the stages this Unit ran: one skipped for it (UNIT_SKIPPED
+  // in the current attempt) owes no artifacts and no review, and Request
+  // Changes must not reopen it, as a construction checkpoint's gate leaves out
+  // a stage skipped for every Unit. The final stage, where the gate sits,
+  // stays in its stages and is named skipped (GATE_SKIPPED_STAGES_FIELD).
+  const skipped = stages.filter((entry) => unitSkippedUnits(pd, entry.slug, undefined, content).has(unit));
+  return {
+    unit,
+    scope: "unit-end",
+    stages: stages.filter((entry) => entry === final || !skipped.includes(entry)),
+    skipped: skipped.filter((entry) => entry === final).map((entry) => entry.slug),
+  };
 }
 
 function applicableUnitProduces(
@@ -6745,7 +6854,13 @@ function verifyTeamUnitGateEvidence(
   personCall?: PersonApproval,
 ): void {
   for (const stage of context.stages) {
-    if (applicableUnitProduces(pd, stage, context.unit).length === 0) continue;
+    // Only Code Generation, where the unit-end gate sits, can be skipped here:
+    // it stays in the gate's stages for pin's Gate Stages match, and a stage
+    // the Unit skipped owes no files, completion or review.
+    if (
+      applicableUnitProduces(pd, stage, context.unit).length === 0 ||
+      unitSkippedUnits(pd, stage.slug, undefined, content).has(context.unit)
+    ) continue;
     const missing = missingUnitArtifacts(pd, stage, context.unit);
     if (missing.length > 0) {
       const message =
@@ -7017,12 +7132,12 @@ function gateAskFields(
     fields["Brief Digest"] = "none";
   }
   try {
-    fields["Sensor State"] = sensorStateAtGate(pd, stage);
+    fields["Sensor State"] = sensorStateAtGate(pd, stage, unit ?? null);
   } catch {
     fields["Sensor State"] = "none";
   }
   try {
-    Object.assign(fields, openDecisionsFields(pd, stage));
+    Object.assign(fields, openDecisionsFields(pd, stage, unit ?? null));
   } catch {
     fields["Open Decisions"] = "0";
   }
@@ -7046,7 +7161,7 @@ function gateAskFields(
 // QUESTION_SHOWN row when this chat had not seen it. Record-only.
 function openGateQuestionId(pd: string, slug: string, unit: string | null): string | null {
   try {
-    const open = latestAskedQuestion(pd, { event: "STAGE_AWAITING_APPROVAL", type: "gate", stage: slug, unit });
+    const open = gateQuestion(pd, slug, unit);
     if (open === null) return null;
     const shown = shownAgainFields(pd, open.id, commandChat(pd));
     if (shown !== null) emitAudit(pd, "QUESTION_SHOWN", shown);
@@ -7115,7 +7230,8 @@ function latestCheckResults(pd: string, stage: GateStage, unit: string | null = 
 }
 
 // The declared outputs a gate speaks for: every unit's at a stage gate, and one
-// Unit's at that Unit's own gate, so a team's Unit is not told about a sibling's.
+// Unit's at that Unit's own gate, so a team's Unit is neither told about a
+// sibling's nor recorded, at its gate or its approval, as deciding on them.
 function declaredOutputsForGate(pd: string, stage: GateStage, unit: string | null): string[] {
   const paths = existingDeclaredArtifactPaths(pd, stage);
   if (unit === null || stage.for_each !== "unit-of-work") return paths;
@@ -7134,11 +7250,11 @@ function declaredOutputsForGate(pd: string, stage: GateStage, unit: string | nul
 
 // The gate-open row's field: `id@path=passed|failed(<n>) [detail: <path>]|could-not-run|not-run`
 // for the declared outputs, failures first, at most 20 entries spelled out.
-function sensorStateAtGate(pd: string, stage: GateStage): string {
+function sensorStateAtGate(pd: string, stage: GateStage, unit: string | null): string {
   // Spelled out here, not at module level: this file runs its command before
   // later module-level declarations are initialized.
   const SENSOR_STATE_MAX_ENTRIES = 20;
-  const { failed, rest } = latestCheckResults(pd, stage);
+  const { failed, rest } = latestCheckResults(pd, stage, unit);
   const entries = [
     ...failed.map((f) => `${f.id}@${f.rel}=failed(${f.findings})${f.detail ? ` [detail: ${f.detail}]` : ""}`),
     ...rest,
@@ -7357,16 +7473,49 @@ export function leftOutNotice(pd: string, stage: GateStage, unit: string | null 
   }
 }
 
+// Which Units a per-Unit stage that runs for every Unit (Code Generation) has
+// not finished, said by the stage that reads its work first (#3531): its
+// `requires_stage` names it, so a stage after it does not say it again.
+// Counted from the files the stage's Validation Basis records
+// (unitInputGaps). A design stage runs for a Unit only when its condition
+// holds, so a Unit without its documents is the plan, not a gap, and is not
+// said. Said with the gate, and with an approval that opened the gate in the
+// same step. A per-Unit gate, or nothing missing, says nothing. Said with
+// Sensors off too: it is the record, not a check.
+export function unitsWithoutInputsNotice(pd: string, stage: GateStage, unit: string | null = null): string | null {
+  if (unit !== null || isPerUnitStage(stage)) return null;
+  try {
+    const gaps = unitInputGaps(pd, stage, readStateFile(pd)).filter((gap) =>
+      gap.missing.length > 0 && (stage.requires_stage ?? []).includes(gap.producer) &&
+      findStageBySlug(gap.producer)?.execution === "ALWAYS");
+    if (gaps.length === 0) return null;
+    const and = (names: readonly string[]): string =>
+      names.length <= 1 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+    const units = (names: readonly string[]): string => `unit${names.length === 1 ? "" : "s"} ${and(names)}`;
+    const stageName = stageLabel(stage, stage.slug) ?? stage.slug;
+    // What the record backs: the stage has not finished for them, so some of
+    // their work may not be there (a Unit can have its source but not its
+    // summary).
+    return gaps.map(({ producer, missing }) => {
+      const from = stageLabel(findStageBySlug(producer), producer) ?? producer;
+      return `${from} has not finished for ${units(missing)}, so ${missing.length === 1 ? "its" : "their"} code ` +
+        `may be missing from ${stageName}.`;
+    }).join(" ");
+  } catch {
+    return null;
+  }
+}
+
 // A stage artifact may list the decisions only the person can make in a fenced
 // `aidlc-decisions` block (yaml: `decisions:` then `- id: <id>` items, with
 // `decision:`, `owner:` and `blocking:` beside each). The gate records the ids;
 // Approve records them as accepted open. A block the engine cannot read is
 // recorded as such and stops nothing: the block is optional.
-function openDecisionsFields(pd: string, stage: GateStage): Record<string, string> {
+function openDecisionsFields(pd: string, stage: GateStage, unit: string | null): Record<string, string> {
   const DECISIONS_FENCE = /```aidlc-decisions[^\n]*\n([\s\S]*?)```/g;
   const ids: string[] = [];
   const unreadable: string[] = [];
-  for (const path of existingDeclaredArtifactPaths(pd, stage)) {
+  for (const path of declaredOutputsForGate(pd, stage, unit)) {
     const text = readFileSync(path, "utf-8");
     for (const match of text.matchAll(DECISIONS_FENCE)) {
       const parsed = parseDecisionsBlock(match[1]);
@@ -7431,7 +7580,272 @@ function teamGateFields(
     Unit: context.unit,
     "Gate Scope": context.scope,
     "Gate Stages": context.stages.map((entry) => entry.slug).join(","),
+    ...(context.skipped?.length ? { [GATE_SKIPPED_STAGES_FIELD]: context.skipped.join(",") } : {}),
     ...claimAttemptFields(resolveProjectDir(projectDir), context.unit),
+  };
+}
+
+// checkpoint-checks --unit <unit> --kind <unit|skeleton> --stages <csv>
+// [--notices | [--person-answers] [--override-blocking-sensors --user-input <choice>] [--override-keys <csv>]]:
+// a Unit's checkpoint fires its stages' blocking gate checks on that Unit's own
+// outputs before the person is asked to approve it (the checkpoint module runs
+// it, since it cannot load this file), as a stage gate fires them before it
+// opens: the same fireGateSensors and the same enforceBlockingGateSensors
+// refusal, retried at the checkpoint's verify. A checkpoint no person answers
+// (Construction autonomy) fires nothing: the late stage gate checks that Unit,
+// where an unattended run halts, as it always has. An advisory check fires
+// again only where its latest result on the Unit's files did not pass, so what
+// the question says beside it is true now. With the checks off for the work
+// fireGateSensors fires nothing and nothing is recorded. A pick of the
+// person's that still stands is their answer: it is used, not asked again,
+// for the findings they were shown when they made it; on a second pass (the
+// verification command changed the files) it covers only the findings the
+// first pass overrode. Prints the verification row's fields:
+// the blocking checks that ran, how each ended and the files they read, by
+// hash (the late stage gate leaves those out while they are unchanged), and an
+// override's own fields as the gate records them; and the findings overridden.
+function handleCheckpointChecks(args: string[]): void {
+  const unit = getFlagValue(args, "--unit");
+  const kind = getFlagValue(args, "--kind") ?? "unit";
+  const stages = getFlagValue(args, "--stages");
+  if (!unit || !stages) {
+    error("Usage: aidlc-state.ts checkpoint-checks --unit <unit> --kind <unit|skeleton> --stages <csv> " +
+      "[--notices | [--person-answers] [--override-blocking-sensors --user-input <choice>] [--override-keys <csv>]]");
+  }
+  const pd = resolveProjectDir(projectDir);
+  const slugs = stages.split(",").map((part) => part.trim()).filter((part) => part !== "");
+  const rel = (path: string): string => relative(pd, resolvePath(pd, path)).split(sep).join("/");
+  // --notices: what the advisory checks still find on the Unit's outputs, read
+  // from their latest results with nothing fired, in the words a gate says
+  // them (failedCheckNotices); a blocking check is the refusal's, not a line.
+  // Where the checkpoint runs no checks, it says nothing of them either.
+  if (args.includes("--notices")) {
+    const notices = !unitCheckpointChecksApply(readStateFile(pd)) ? [] : slugs.flatMap((slug) => {
+      const stage = findStageBySlug(slug);
+      if (stage?.for_each !== "unit-of-work") return [];
+      const advisory = {
+        ...stage,
+        sensors_applicable: (stage.sensors_applicable ?? []).filter((sensor) => sensor.default_severity !== "blocking"),
+      };
+      // A checkpoint over several stages says which stage a line is about: their files share names.
+      return failedCheckNotices(pd, advisory, unit).map((line) => slugs.length > 1 ? `${stage.name ?? slug}: ${line}` : line);
+    });
+    console.log(JSON.stringify({ notices }));
+    return;
+  }
+  const fields: Record<string, string> = {};
+  if (!args.includes("--person-answers")) {
+    console.log(JSON.stringify({ fields, overridden: [] }));
+    return;
+  }
+  const stateContent = readStateFile(pd);
+  // Stage-major work (a skeleton checkpoint included) keeps its checks at the stage gate, which asks once.
+  if (!unitCheckpointChecksApply(stateContent)) {
+    console.log(JSON.stringify({ fields, overridden: [] }));
+    return;
+  }
+  const keysFlag = getFlagValue(args, "--override-keys");
+  const allowedKeys = keysFlag === undefined ? null : new Set(keysFlag.split(",").filter((key) => key !== ""));
+  // What the person was last shown for each stage of this Unit (the refusal
+  // before their pick): a pick of theirs covers those findings and no other.
+  const shownFile = ".aidlc-engine/checkpoint-blocking-refusals.json";
+  const root = recordDir(pd);
+  let shown: Record<string, string[]> = {};
+  try {
+    shown = root === null ? {} : JSON.parse(readFileSync(join(root, shownFile), "utf-8")) as Record<string, string[]>;
+  } catch {
+    shown = {};
+  }
+  const recordShown = (slug: string, keys: string[]): void => {
+    if (root === null) return;
+    try {
+      writeRecordFileNoFollow(root, shownFile, `${JSON.stringify({ ...shown, [`${unit}|${slug}`]: keys }, null, 2)}\n`);
+    } catch {
+      // Unrecorded, the next pick covers nothing it was not shown: the person is asked again.
+    }
+  };
+  const overrideInput = args.includes("--override-blocking-sensors")
+    ? getFlagValue(args, "--user-input")
+    : BLOCKING_SENSOR_OVERRIDE_CHOICE;
+  const ran: string[] = [];
+  const checked: Record<string, string> = {};
+  const overridden: BlockingSensorIssue[] = [];
+  const overriddenKeys: string[] = [];
+  for (const slug of slugs) {
+    const stage = findStageBySlug(slug);
+    if (stage?.for_each !== "unit-of-work") continue;
+    const paths = declaredOutputsForGate(pd, stage, unit);
+    if (paths.length === 0) continue;
+    // A result row spells its output from the project folder as given; compared canonically.
+    const latest = new Map<string, { kind: string }>();
+    for (const result of latestSensorResults(readAuditShardEvents(pd), slug).values()) {
+      try {
+        latest.set(`${result.id}@${rel(realpathSync(resolveAuditProjectPath(pd, result.output)))}`, result);
+      } catch {
+        // A file no longer there has nothing to say.
+      }
+    }
+    const gateChecks = (stage.sensors_applicable ?? []).filter((sensor) => sensor.fire_on === "gate");
+    const blocking = gateChecks.filter((sensor) =>
+      sensor.default_severity === "blocking" && paths.some((path) => gateSensorMatchesOutput(sensor, path))
+    );
+    const recheck = gateChecks.filter((sensor) =>
+      sensor.default_severity !== "blocking" &&
+      paths.some((path) => {
+        const result = latest.get(`${sensor.id}@${rel(path)}`);
+        return result !== undefined && result.kind !== "passed";
+      })
+    );
+    if (blocking.length === 0 && recheck.length === 0) continue;
+    const { issues, fingerprints } = fireGateSensors(pd, stage, stateContent, undefined, true, {
+      sensorIds: new Set([...blocking, ...recheck].map((sensor) => sensor.id)),
+      paths,
+      unit,
+    });
+    if (blocking.length === 0) continue;
+    const keyOf = (issue: BlockingSensorIssue): string => `${issue.sensorId}@${rel(issue.outputPath)}`;
+    const seen = new Set(shown[`${unit}|${slug}`] ?? []);
+    const standing = issues.length > 0 &&
+      issues.every((issue) => seen.has(keyOf(issue))) &&
+      (allowedKeys === null || issues.every((issue) => allowedKeys.has(keyOf(issue)))) &&
+      hasBlockingSensorOverrideAuthorization(pd, slug, unit);
+    if (issues.length > 0 && !standing) recordShown(slug, issues.map(keyOf));
+    // A stage the person has not answered for is asked about, never refused for a pick they made elsewhere.
+    const overrodeAt = issues.length > 0 && !standing
+      ? overrodeAtEarlierUnits(pd, slug, unit, kind, [...new Set(issues.map((issue) => issue.sensorId))])
+      : null;
+    enforceBlockingGateSensors(
+      pd, stateContent, slug,
+      { kind: "checkpoint", unit, checkpointKind: kind, ...(overrodeAt === null ? {} : { overrodeAt }) },
+      issues, standing, overrideInput,
+    );
+    const failed = new Set(issues.map((issue) => issue.sensorId));
+    for (const sensor of blocking) {
+      // A check fired when its files were held to their bytes (the checks off for the work fire nothing).
+      if (!paths.some((path) => gateSensorMatchesOutput(sensor, path) && fingerprints.has(path))) continue;
+      ran.push(`${slug}:${sensor.id}@${sensorEntryDigest(sensor)}=${failed.has(sensor.id) ? "overridden" : "passed"}`);
+    }
+    // Read as a commit reads it, so a file whose line endings a checkout changed is the same file.
+    for (const path of fingerprints.keys()) checked[rel(path)] = committedTextSha256(readFileSync(path));
+    overridden.push(...issues);
+    overriddenKeys.push(...issues.map(keyOf));
+  }
+  if (ran.length > 0) {
+    fields["Blocking Checks"] = ran.join(", ");
+    fields["Checked Outputs"] = JSON.stringify(checked);
+  }
+  addBlockingSensorOverrideFields(fields, overridden, overridden.length > 0);
+  console.log(JSON.stringify({ fields, overridden: overriddenKeys }));
+}
+
+// The stage gate the engine settles itself once every Unit of this walk is
+// approved at its checkpoint (the late gate): no person approves it, so a
+// team's blocking check refusing it is the agent's step to put to the person.
+export function engineSettlesLateGate(
+  pd: string,
+  stateContent: string,
+  stage: NonNullable<ReturnType<typeof findStageBySlug>>,
+): boolean {
+  return stage.for_each === "unit-of-work" && unitCheckpointChecksApply(stateContent) &&
+    !personAnswersGate(pd, stateContent, stage, null);
+}
+
+// Where a Unit's checkpoint runs its stages' blocking checks, and the late
+// stage gate leaves out what those checkpoints checked: solo work built Unit by
+// Unit with checkpoints. Anywhere else (stage-major work, its skeleton
+// checkpoint included; team-owned Units) the stage gate checks every file.
+function unitCheckpointChecksApply(stateContent: string): boolean {
+  return !isTeamUnitOwnership(stateContent) && constructionCheckpointsApply(stateContent) &&
+    getField(stateContent, "Construction Iteration") === "unit-major";
+}
+
+// What a blocking check's verdict at a checkpoint stood on besides the files:
+// the check as the stage graph binds it (its severity, matches and when it
+// fires); its script is not in it.
+function sensorEntryDigest(sensor: { id: string; fire_on?: string; default_severity?: string; matches?: string }): string {
+  return createHash("sha256")
+    .update(JSON.stringify([sensor.id, sensor.fire_on ?? null, sensor.default_severity ?? null, sensor.matches ?? null]))
+    .digest("hex")
+    .slice(0, 12);
+}
+
+// The files each blocking check of a stage reads at the late stage gate in
+// work built Unit by Unit with checkpoints: all of them, less each file a
+// Unit's current approval was verified on with that check, while the file is
+// as it was then (its hash on the verification row's Checked Outputs; under
+// Guard Policy off or relaxed an approval stands over a later edit, so the
+// file's own hash decides, not the approval). A Unit approved before its
+// checkpoint ran checks, a Unit that skipped its code, a check added since
+// or whose severity, match or timing changed, and a file edited since are
+// checked here, once (a change to a check's script alone is not seen: the
+// files it passed are not checked again); a check a Unit's checkpoint already
+// ran on a file is not run on it again. Null: not such a gate, every check
+// reads every file as it always has.
+function lateGateChecks(pd: string, stage: GateStage, stateContent: string, artifacts?: string): Map<string, string[]> | null {
+  if (stage.for_each !== "unit-of-work" || !unitCheckpointChecksApply(stateContent)) return null;
+  const blocking = (stage.sensors_applicable ?? []).filter((sensor) =>
+    sensor.fire_on === "gate" && sensor.default_severity === "blocking"
+  );
+  if (blocking.length === 0) return null;
+  let evidence: ReturnType<typeof loadConstructionEvidence>;
+  try {
+    evidence = loadConstructionEvidence(pd, stateContent);
+  } catch {
+    return null;
+  }
+  const dag = evidence.dag;
+  if (dag.state !== "ok" || dag.units.length === 0) return null;
+  const all = dag.batches.flat();
+  const paths = existingDeclaredArtifactPaths(pd, stage, artifacts);
+  const rows = readAuditShardEvents(pd).filter((row) => row.event === "CHECKPOINT_VERIFICATION_RECORDED");
+  const covered = new Set<string>();
+  for (const unit of dag.units) {
+    let checkpoint: ReturnType<typeof resolveConstructionCheckpoint>;
+    try {
+      checkpoint = resolveConstructionCheckpoint(pd, unit, constructionCheckpointKind(stateContent, unit, all), stateContent, evidence);
+    } catch {
+      continue;
+    }
+    const id = checkpoint.verification?.id;
+    if (!checkpoint.approved || !checkpoint.stages.includes(stage.slug) || id === undefined) continue;
+    const row = rows.find((candidate) =>
+      auditBlockField(candidate.block, "Unit") === unit && auditBlockField(candidate.block, "Verification Id") === id
+    );
+    if (row === undefined) continue;
+    const recorded = new Set((auditBlockField(row.block, "Blocking Checks") ?? "")
+      .split(",").map((entry) => entry.trim().replace(/=.*$/, "")).filter((entry) => entry !== ""));
+    let hashes: Record<string, string>;
+    try {
+      hashes = JSON.parse(auditBlockField(row.block, "Checked Outputs") ?? "{}") as Record<string, string>;
+    } catch {
+      continue;
+    }
+    for (const path of declaredOutputsForGate(pd, stage, unit)) {
+      const rel = relative(pd, path).split(sep).join("/");
+      let now: string;
+      try {
+        now = committedTextSha256(readFileSync(path));
+      } catch {
+        continue;
+      }
+      if (hashes[rel] === undefined || hashes[rel] !== now) continue;
+      for (const sensor of blocking) {
+        if (recorded.has(`${stage.slug}:${sensor.id}@${sensorEntryDigest(sensor)}`)) covered.add(`${sensor.id}\u0000${path}`);
+      }
+    }
+  }
+  return new Map(blocking.map((sensor) => [
+    sensor.id,
+    paths.filter((path) => !covered.has(`${sensor.id}\u0000${path}`)),
+  ]));
+}
+
+// One gate evaluation from the late gate's fires, one per check.
+function mergedGateEvaluation(parts: GateSensorEvaluation[]): GateSensorEvaluation {
+  return {
+    issues: parts.flatMap((part) => part.issues),
+    fingerprints: new Map(parts.flatMap((part) => [...part.fingerprints])),
+    failedFires: parts.flatMap((part) => part.failedFires),
   };
 }
 
@@ -7514,18 +7928,20 @@ function handleGateStart(args: string[]): void {
     ...(preflightTeamGate ? { unit: preflightTeamGate.unit } : {}),
     personCall: personCall(),
   });
-  const gateSensorEvaluation = fireGateSensors(
-    pd,
-    preflightStage,
-    preflightContent,
-    artifacts,
-    personAnswersGate(pd, preflightContent, preflightStage, preflightTeamGate),
-  );
+  const personAnswers = personAnswersGate(pd, preflightContent, preflightStage, preflightTeamGate);
+  // The gate the engine approves itself after every Unit's checkpoint: what a
+  // checkpoint already checked is not checked, or asked about, again.
+  const lateGate = personAnswers ? null : lateGateChecks(pd, preflightStage, preflightContent, artifacts);
+  const gateSensorEvaluation = lateGate === null
+    ? fireGateSensors(pd, preflightStage, preflightContent, artifacts, personAnswers)
+    : mergedGateEvaluation([...lateGate].map(([id, paths]) =>
+      fireGateSensors(pd, preflightStage, preflightContent, artifacts, false, { sensorIds: new Set([id]), paths, unit: null })
+    ));
   enforceBlockingGateSensors(
     pd,
     preflightContent,
     slug,
-    "awaiting-approval",
+    { kind: "gate", reportResult: "awaiting-approval" },
     gateSensorEvaluation.issues,
     overrideBlockingSensors,
     overrideInput,
@@ -7996,6 +8412,7 @@ function handleApprove(args: string[]): void {
             }
           : {}),
         ...(teamPersonCall.unfinishedReviews.length > 0 ? { Review: "not finished" } : {}),
+        ...personGitNameField(pd),
       });
     } catch (e) {
       error(`Audit emission failed: ${errorMessage(e)}`);
@@ -8095,7 +8512,7 @@ function handleApprove(args: string[]): void {
       pd,
       content,
       slug,
-      "revised",
+      { kind: "gate", reportResult: "revised" },
       backstopSensorEvaluation.issues,
       false,
     );
@@ -8176,6 +8593,7 @@ function handleApprove(args: string[]): void {
     } else if (!autonomousDecision) {
       Object.assign(gateFields, personsWordsFields(pd, slug, message), approvesTogetherFields(listedTogether));
     }
+    const theirs = together !== null || !autonomousDecision;
     if (reviewFindingDispositions) {
       gateFields[REVIEW_FINDING_DISPOSITIONS_FIELD] =
         reviewFindingDispositions;
@@ -8183,6 +8601,7 @@ function handleApprove(args: string[]): void {
     if ((personCall?.unfinishedReviews.length ?? 0) > 0) gateFields.Review = "not finished";
     Object.assign(gateFields, briefDigestField(pd, stage, undefined), decisionsAcceptedOpenField(pd, slug, undefined));
     if (stage.workspace_requires) Object.assign(gateFields, sourceWorkFields());
+    if (theirs) Object.assign(gateFields, personGitNameField(pd));
     emitAudit(pd, "GATE_APPROVED", gateFields);
 
     emitAudit(pd, "STAGE_COMPLETED", {
@@ -8524,6 +8943,7 @@ function handleReject(args: string[]): void {
                 reviewFindingDispositions,
             }
           : {}),
+        ...personGitNameField(pd),
       });
       emitAudit(pd, "STAGE_REVISING", {
         ...fields,
@@ -8570,6 +8990,7 @@ function handleReject(args: string[]): void {
       rejFields[REVIEW_FINDING_DISPOSITIONS_FIELD] =
         reviewFindingDispositions;
     }
+    if (!autonomousDecision) Object.assign(rejFields, personGitNameField(pd));
     emitAudit(pd, "GATE_REJECTED", rejFields);
     emitAudit(pd, "STAGE_REVISING", {
       Stage: slug,
@@ -8653,7 +9074,7 @@ function handleRevise(args: string[]): void {
     pd,
     preflightContent,
     slug,
-    "revised",
+    { kind: "gate", reportResult: "revised" },
     gateSensorEvaluation.issues,
     overrideBlockingSensors,
     overrideInput,
@@ -8842,13 +9263,14 @@ function handleSkip(args: string[]): void {
           checkpoints,
         ),
         ...claimAttemptFields(pd, unit),
+        ...(isPersonAskedSkipReason(reason) ? personGitNameField(pd) : {}),
       });
     } catch (e) {
       error(`Audit emission failed: ${errorMessage(e)}`);
     }
     // A Unit's step the person asked to skip spends what they typed for it:
     // their words were the skip. The agent's own skip leaves them kept.
-    if (reason === PERSON_ASKED_SKIP_REASON) clearGateWords(pd);
+    if (isPersonAskedSkipReason(reason)) clearGateWords(pd);
     // A team's Unit is skipped for itself only: the stage's own checkbox is
     // derived from every team's Units, so it is never marked or routed here.
     if (teamOwned) {
@@ -8900,6 +9322,7 @@ function handleSkip(args: string[]): void {
     try {
       const fields: Record<string, string> = { Stage: slug };
       if (reason) fields.Reason = reason;
+      if (isPersonAskedSkipReason(reason)) Object.assign(fields, personGitNameField(pd));
       emitAudit(pd, "STAGE_SKIPPED", fields);
     } catch (e) {
       error(`Audit emission failed: ${errorMessage(e)}`);
@@ -8918,7 +9341,7 @@ function handleSkip(args: string[]): void {
   // work is a new project) or the person asked to skip it, so the gate
   // closes as skipped, not approved.
   const personDecided = parseStateStageSuffixes(content).get(slug) === "SKIP" ||
-    reason === PERSON_ASKED_SKIP_REASON;
+    isPersonAskedSkipReason(reason);
   validateSlugInState(content, slug, [
     "in-progress",
     "revising",
@@ -8987,7 +9410,7 @@ function handleSkip(args: string[]): void {
     : false;
 
   if (nextStage) {
-    content = setCheckbox(content, nextStage.slug, "in-progress");
+    content = setCheckbox(withStageProgressRow(content, nextStage.slug), nextStage.slug, "in-progress");
     const nextAfterNext = nextInScopeStage(nextStage.slug, scope, content);
     content = setField(content, "Current Stage", nextStage.slug);
     content = setField(content, "Lifecycle Phase", nextStage.phase.toUpperCase());
@@ -9024,6 +9447,7 @@ function handleSkip(args: string[]): void {
         Stage: slug,
         Reason: reason,
         "Skip Kind": "conditional-runtime",
+        ...(isPersonAskedSkipReason(reason) ? personGitNameField(pd) : {}),
       });
     }
     if (nextStage) {
@@ -9084,7 +9508,7 @@ function handleSkip(args: string[]): void {
   }
   // The stage the person asked to skip spends what they typed for it, as a
   // Unit's step does.
-  if (reason === PERSON_ASKED_SKIP_REASON) clearGateWords(pd);
+  if (isPersonAskedSkipReason(reason)) clearGateWords(pd);
 
   writeStateFile(pd, content);
   if (!nextStage) {
@@ -9331,6 +9755,71 @@ function handlePracticesEvent(args: string[]): void {
   );
 }
 
+// The rules Approve at Practices Discovery adds to project.md: the list items
+// under the draft's `## Mandated` and `## Forbidden`, a wrapped line joined to
+// its item (prose, a "None.", a nested list, a quote, code and comments are no
+// rule), less the rules that heading of project.md already holds. The gate
+// names these and practices-promote writes them, so the person approves
+// exactly what is written. A terminal `(affirmed <date>)` stamp is provenance,
+// not rule identity: an existing rule keeps its original date.
+export function practicesRulesToAdd(
+  discoveredRules: string,
+  projectMd: string,
+): { mandated: string[]; forbidden: string[] } {
+  const ruleText = (text: string): string => text.replace(/(?: \(affirmed \d{4}-\d{2}-\d{2}\))+$/, "");
+  const draftRules = (section: string): string[] => {
+    const blocks = markdownBlocks(section);
+    const visible = projectVisibleMarkdownLines(section, blocks, { preserveIndentedCode: true });
+    const items = new Map<number, string[]>();
+    blocks.lines.forEach((line, index) => {
+      const item = line.containers[0];
+      if (line.kind !== "paragraph" || line.containers.length !== 1 || item?.kind !== "listItem") return;
+      const text = visible[index].slice(line.contentStart).trim();
+      if (text !== "") items.set(item.id, [...(items.get(item.id) ?? []), text]);
+    });
+    return [...items.values()].map((parts) => ruleText(parts.join(" "))).filter((rule) => rule !== "");
+  };
+  // project.md as its writers have left it: one rule a line, with or without a
+  // list marker.
+  const heldRules = (section: string): string[] =>
+    section
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0 && !l.startsWith("<!--") && !l.startsWith("#"))
+      .map((l) => ruleText(l.replace(/^(?:[-*+]|\d+[.)])\s+/, "")));
+  const toAdd = (heading: string): string[] => {
+    const held = new Set(heldRules(extractMarkdownSection(projectMd, heading)));
+    const rules: string[] = [];
+    for (const rule of draftRules(extractMarkdownSection(discoveredRules, heading))) {
+      if (held.has(rule)) continue;
+      held.add(rule);
+      rules.push(rule);
+    }
+    return rules;
+  };
+  return { mandated: toAdd("## Mandated"), forbidden: toAdd("## Forbidden") };
+}
+
+// practices-branch --file <project.md|team.md|org.md> (--branch <name> | --none):
+// what the agent read in that layer's Way of Working words, the branch the work
+// merges into or that they name none, recorded where team work reads it
+// (recordIntegrationBranch, aidlc-unit.ts). Rides no event: a branch is the
+// team's own words as one exact line, and git keeps the file.
+function handlePracticesBranch(args: string[]): void {
+  const none = args.includes("--none");
+  const flags = parseFlags(args.filter((arg) => arg !== "--none"));
+  if (!flags.file || none === (flags.branch !== undefined)) {
+    error("Usage: aidlc-state.ts practices-branch --file <project.md|team.md|org.md> (--branch <name> | --none)");
+  }
+  let recorded: ReturnType<typeof recordIntegrationBranch>;
+  try {
+    recorded = recordIntegrationBranch(resolveProjectDir(projectDir), flags.file, none ? null : flags.branch);
+  } catch (e) {
+    error(errorMessage(e));
+  }
+  console.log(JSON.stringify(recorded));
+}
+
 // practices-promote --team-practices <path> --discovered-rules <path>
 //                   [--affirming-user <name>] [--target-dir <path>]
 //
@@ -9345,6 +9834,9 @@ function handlePracticesEvent(args: string[]): void {
 //   memory/project.md ........ appendUnderHeading × 2 (Mandated,
 //                              Forbidden), each rule stamped
 //                              with `(affirmed YYYY-MM-DD)`
+//
+// A heading either file lacks is added at its end before the write
+// (ensureHeading): a space made by `space create` starts both as one line.
 //
 // Atomicity:
 //   1. Validate every declared support contribution (fail before any write).
@@ -9508,7 +10000,7 @@ function handlePracticesPromote(args: string[]): void {
       draftSection = promotable.section;
     }
     try {
-      newTeamMd = replaceSection(newTeamMd, heading, draftSection);
+      newTeamMd = replaceSection(ensureHeading(newTeamMd, heading), heading, draftSection);
       sectionsWritten.push(heading.slice(3));
     } catch (e) {
       fail(
@@ -9517,70 +10009,26 @@ function handlePracticesPromote(args: string[]): void {
       return;
     }
   }
-
-  // Step 4b: Build new project-guardrails.md by appending each rule under the
-  // matching heading with a date stamp. Rules are one-per-line in the draft;
-  // empty/blank lines and comment lines are skipped. The generated terminal
-  // date stamps are provenance, not rule identity; leave an existing rule and
-  // its original date untouched when the same text is affirmed again.
-  const parseRules = (sectionContent: string): string[] => {
-    return sectionContent
-      .split("\n")
-      .map((l) => l.trim())
-      .filter((l) => l.length > 0 && !l.startsWith("<!--") && !l.startsWith("#"));
-  };
-  const mandatedDraft = extractMarkdownSection(
-    discoveredRulesDraft,
-    "## Mandated"
-  );
-  const forbiddenDraft = extractMarkdownSection(
-    discoveredRulesDraft,
-    "## Forbidden"
-  );
-  const mandatedRules = parseRules(mandatedDraft);
-  const forbiddenRules = parseRules(forbiddenDraft);
-  const ruleText = (line: string): string =>
-    line.replace(/(?: \(affirmed \d{4}-\d{2}-\d{2}\))+$/, "");
-
-  let newGuardrailsMd = guardrailsMd;
-  const existingMandatedRules = new Set(
-    parseRules(extractMarkdownSection(guardrailsMd, "## Mandated")).map(ruleText),
-  );
-  const existingForbiddenRules = new Set(
-    parseRules(extractMarkdownSection(guardrailsMd, "## Forbidden")).map(ruleText),
-  );
-  for (const rule of mandatedRules) {
-    const text = ruleText(rule);
-    if (existingMandatedRules.has(text)) continue;
-    const stampedLine = `${text} (affirmed ${today})`;
-    try {
-      newGuardrailsMd = appendUnderHeading(
-        newGuardrailsMd,
-        "## Mandated",
-        `${stampedLine}\n`
-      );
-      existingMandatedRules.add(text);
-      rulesAppended.mandated++;
-    } catch (e) {
-      fail(`appendUnderHeading failed on Mandated: ${errorMessage(e)}`);
-      return;
-    }
+  // A section written here that ends the file ends it with one newline, so an
+  // added section leaves no blank line at the end of the file.
+  const lastHeading = [...newTeamMd.matchAll(/^## ([^\n]*)$/gm)].at(-1)?.[1];
+  if (lastHeading !== undefined && sectionsWritten.includes(lastHeading)) {
+    newTeamMd = newTeamMd.replace(/\n+$/, "\n");
   }
-  for (const rule of forbiddenRules) {
-    const text = ruleText(rule);
-    if (existingForbiddenRules.has(text)) continue;
-    const stampedLine = `${text} (affirmed ${today})`;
-    try {
-      newGuardrailsMd = appendUnderHeading(
-        newGuardrailsMd,
-        "## Forbidden",
-        `${stampedLine}\n`
-      );
-      existingForbiddenRules.add(text);
-      rulesAppended.forbidden++;
-    } catch (e) {
-      fail(`appendUnderHeading failed on Forbidden: ${errorMessage(e)}`);
-      return;
+
+  // Step 4b: Build new project-guardrails.md by appending, under the matching
+  // heading with a date stamp, exactly the rules the gate named.
+  const rulesToAdd = practicesRulesToAdd(discoveredRulesDraft, guardrailsMd);
+  let newGuardrailsMd = guardrailsMd;
+  for (const [heading, kind] of [["## Mandated", "mandated"], ["## Forbidden", "forbidden"]] as const) {
+    for (const rule of rulesToAdd[kind]) {
+      try {
+        newGuardrailsMd = appendUnderHeading(ensureHeading(newGuardrailsMd, heading), heading, `- ${rule} (affirmed ${today})\n`);
+        rulesAppended[kind]++;
+      } catch (e) {
+        fail(`appendUnderHeading failed on ${heading.slice(3)}: ${errorMessage(e)}`);
+        return;
+      }
     }
   }
 
@@ -9878,9 +10326,25 @@ function handleLookup(args: string[]): void {
       }
       break;
     }
+    case "source-changes": {
+      if (subArgs.length > 1) error("Usage: lookup source-changes [<unit>]");
+      const unit = subArgs[0] ?? null;
+      const pd = resolveProjectDir(projectDir);
+      if (unit !== null) {
+        const unitNameError = validateUnitName(unit);
+        if (unitNameError) error(unitNameError);
+        // A name that is no Unit of this work would be answered from the stage's start.
+        const dag = resolveBoltDag(pd);
+        if (dag.state === "ok" && !dag.units.includes(unit)) {
+          error(`No Unit named ${unit} in this work. Its Units: ${dag.units.join(", ")}.`);
+        }
+      }
+      console.log(JSON.stringify(sourceChangesSinceBuildStart(pd, unit)));
+      break;
+    }
     default:
       error(
-        `Unknown lookup subcommand: ${sub}. Valid: phase-of, next-stage, agent-for, number-of, stages-in-scope, first-in-phase, validate-stage, validate-phase`
+        `Unknown lookup subcommand: ${sub}. Valid: phase-of, next-stage, agent-for, number-of, stages-in-scope, first-in-phase, validate-stage, validate-phase, source-changes`
       );
   }
 }
@@ -10010,13 +10474,12 @@ function handleFork(args: string[]): void {
     const sha = sha256(mainContent);
 
     // Dedup BEFORE emit: if the slug is already in Bolt Refs, fail without
-    // emitting a phantom audit row. Recovery from a stale ref entry is the
-    // caller's responsibility (see SKILL.md Step 0.6 recovery seam — discard
-    // + re-fork is supported because the next fork sees the slug already
-    // present and exits without poisoning audit).
+    // emitting a phantom audit row. Neither merge nor worktree discard clears
+    // a stale entry (merge needs the slug's worktree), so the line names the
+    // hand edit only.
     const currentRefs = getField(mainContent, "Bolt Refs") ?? "";
     if (parseRefsList(currentRefs).includes(slug)) {
-      errorWithSlug(slug, `slug already in Bolt Refs (current: ${currentRefs.trim()}). If a prior fork failed mid-operation, run 'aidlc-worktree discard --slug ${slug}' and 'aidlc-state.ts merge --slug ${slug}' (which will exit "already merged" cleanly) or remove the stale entry from main state, then retry.`);
+      errorWithSlug(slug, `slug already in Bolt Refs (current: ${currentRefs.trim()}). If a prior fork failed mid-operation, remove the stale entry from main state, then retry.`);
     }
 
     // Append slug to main's Bolt Refs first (the side effect that "registers"

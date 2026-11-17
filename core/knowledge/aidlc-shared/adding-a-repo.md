@@ -25,12 +25,14 @@ work through one command, at any stage.
 ```
 
 - `<name>` is the repo's folder name beside the other repos.
-- A repo that is not cloned here yet is cloned first: from its `repos.json`
-  entry, else from the team's `repos.json` `org`. The tool uses the person's
+- A repo that is not cloned here yet is cloned first, from its `repos.json`
+  entry; one listed by name alone clones from the team's `repos.json` `org`. A
+  repo `repos.json` does not list clones only from an address the person
+  gives. The tool uses the person's
   own git setup, writes the `repos.json` entry, and refreshes the managed
   `.gitignore` block and `aidlc.code-workspace`.
-- Never pass `--url` yourself: a name taken from a search result must resolve
-  inside the team's org. An address comes from the person. When they give one,
+- Never pass `--url` yourself: a name taken from a search result clones only
+  when `repos.json` lists it. An address comes from the person. When they give one,
   pass it with `--url <address>`, and pass their words with
   `--person-words '<their words>'` instead of `--reason`.
 - Say the line the tool prints, once. It says what happened and the way back
@@ -63,8 +65,8 @@ Engineering shows as behind for the new repo until it is revisited.
   add the repo once it is there. A leftover `.aidlc-workspace-sync-txn-*`
   folder in the workspace is ignored by the managed `.gitignore` block and can
   be deleted.
-- **No address** (no `repos.json` org and no `--url`): ask the person for the
-  repo's clone address.
+- **No address** (no `repos.json` lists the repo and no `--url`): ask the
+  person for the repo's clone address.
 
 ## 5. A team's own how
 

@@ -316,17 +316,6 @@ function experienceDecisions(specContent: string): Set<string> {
   return extractIds(shown.join("\n"), [ID_PATTERNS.UX]);
 }
 
-// Whether Functional Design's produces_kinds gives a Unit of this kind the
-// artifact; without a readable stage graph, it does.
-function designWrites(kind: string | undefined, artifact: string): boolean {
-  try {
-    const stage = loadStageGraph().find((candidate) => candidate.slug === "functional-design");
-    return filterProducesByKind(stage?.produces_kinds, [artifact], kind ?? null).length > 0;
-  } catch {
-    return true;
-  }
-}
-
 // Functional Design designs a decision in frontend-components.md, so a Unit
 // owes it there exactly when it writes that file; otherwise it may mark it N/A.
 function designsExperience(context: UnitContext): boolean {
@@ -536,6 +525,17 @@ function resolveUnitContext(
       ...(kind ? { kind } : {}),
     },
   };
+}
+
+// Whether Functional Design's produces_kinds gives a Unit of this kind the
+// artifact; without a readable stage graph, it does.
+function designWrites(kind: string | undefined, artifact: string): boolean {
+  try {
+    const stage = loadStageGraph().find((candidate) => candidate.slug === "functional-design");
+    return filterProducesByKind(stage?.produces_kinds, [artifact], kind ?? null).length > 0;
+  } catch {
+    return true;
+  }
 }
 
 function addSource(result: UpstreamResolution, source: { ids: Set<string>; reason?: string }): Set<string> {
@@ -810,22 +810,38 @@ function verifyTargets(
   if (stage === "functional-design" && docsDir) {
     const unit = upstream.unitContext?.unitName ?? extractUnitName(outputPath);
     if (unit !== null) {
-      const brPath = join(constructionDir(docsDir, unit, "functional-design"), "rules.md");
+      const designDir = constructionDir(docsDir, unit, "functional-design");
+      const brPath = join(designDir, "rules.md");
+      const writesRules = designWrites(upstream.unitContext?.kind, "rules");
       // A ui Unit writes no rules.md; one it has anyway is still checked.
-      const rules = designWrites(upstream.unitContext?.kind, "rules") || existsSync(brPath)
+      const rules = writesRules || existsSync(brPath)
         ? idsFromFile(brPath, [ID_PATTERNS.BR], "rules.md")
         : { ids: new Set<string>() };
       if (rules.reason) reasons.push(rules.reason);
+      // Such a Unit has no BRx.y to name, so each row names the design file that covers it.
+      const designFiles = writesRules
+        ? []
+        : ["functional-spec", "frontend-components"]
+          .filter((artifact) => designWrites(upstream.unitContext?.kind, artifact))
+          .map((artifact) => `${artifact}.md`);
       const targeted = new Set<string>();
-      const components = join(constructionDir(docsDir, unit, "functional-design"), "frontend-components.md");
+      const components = join(designDir, "frontend-components.md");
       for (const entry of okEntries) {
-        // An experience decision is designed in a component, not a rule, and so
-        // may any ID a component realises: the target is frontend-components.md,
-        // which must cite the ID.
-        const target = normalizePath(entry.target?.trim() ?? "");
-        if (extractIds(entry.id, [ID_PATTERNS.UX]).size > 0 || /(^|\/)frontend-components\.md$/.test(target)) {
+        // An experience decision is designed in a component, not a rule: its
+        // target is this Unit's frontend-components.md, which must cite it.
+        if (extractIds(entry.id, [ID_PATTERNS.UX]).size > 0) {
           const problem = experienceTargetProblem(components, [projectDir, docsDir], entry.id, entry.target);
           if (problem) invalidTargets.push(`${entry.id}: ${problem}`);
+          continue;
+        }
+        // A rules.md kept from earlier work still takes rows that name its rules.
+        if (!writesRules && (rules.ids.size === 0 || extractIds(entry.target ?? "", [ID_PATTERNS.BR]).size === 0)) {
+          const file = designFiles.find((name) => name === normalizePath(entry.target?.trim() ?? ""));
+          if (!file) {
+            invalidTargets.push(`${entry.id}: target must be one of this Unit's Functional Design files, named on its own: ${designFiles.join(", ")}`);
+          } else if (!existsSync(join(designDir, file))) {
+            invalidTargets.push(`${entry.id}: target ${file} does not exist in this Unit's functional-design`);
+          }
           continue;
         }
         const targets = extractIds(entry.target ?? "", [ID_PATTERNS.BR]);

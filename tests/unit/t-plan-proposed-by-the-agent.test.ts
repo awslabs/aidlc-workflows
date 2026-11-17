@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:next, function:planProposalDirective, function:planChoicesLine, function:freshWorkOfferDirective, function:nextFlagShape
+// covers: subcommand:aidlc-orchestrate:next, function:planProposalDirective, function:planChoicesLine, function:freshWorkOfferDirective, function:nextFlagShape, function:openFrontQuestion
 //
 // The plan for a request the person typed in their own words is proposed by the
 // agent, not matched from a keyword list. `next "<request>"` on a workspace
@@ -416,6 +416,107 @@ describe("t-plan-proposed-by-the-agent: finished work and new work beside active
     const created = next(CLAUDE_TOOLS, proj, confirm.split(" ").slice(confirm.split(" ").indexOf("next") + 1));
     expect(created.kind, JSON.stringify(created).slice(0, 300)).toBe("print");
     expect(String(created.message)).toContain("intent create --scope feature --request");
+  });
+});
+
+// The proposal step's request is handed to the agent, never put to the person:
+// beside finished work the agent may answer the words from status and propose
+// no plan, and the chat's later words were then read as a reply to a plan
+// question nobody saw (a live Codex run). A plan question shown still waits.
+describe("t-plan-proposed-by-the-agent: a request no plan was shown for is no plan question", () => {
+  const WAITS = "has not answered the plan question";
+  const STATUS_WORDS = "anything new for payments?";
+
+  function finishedProject(): string {
+    const p = createOrchestrationTestProject();
+    seedStateFile(p, COMPLETED);
+    return p;
+  }
+
+  /** The proposal step for `args`, answered by the agent without proposing a plan: its request id. */
+  function unproposed(p: string, args: string[]): string {
+    const step = next(CLAUDE_TOOLS, p, args);
+    expect(String(step.message), JSON.stringify(step).slice(0, 300)).toContain(PROPOSAL);
+    return REQUEST.exec(String(step.message))![1];
+  }
+
+  /** The plan question the agent's plan builds for the request of the proposal step `args` reach. */
+  function shown(p: string, args: string[]): Directive {
+    const ask = next(CLAUDE_TOOLS, p, ["--propose", "feature", "--request", unproposed(p, args)]);
+    expect(ask.ask_type, JSON.stringify(ask).slice(0, 300)).toBe("scope-confirm");
+    return ask;
+  }
+
+  test("finished work, words answered from status: the next words get their own plan question, which then waits, and no step comes back", () => {
+    proj = finishedProject();
+    unproposed(proj, [STATUS_WORDS]);
+    const chain = follow(CLAUDE_TOOLS, proj, ["push it when you are done"], "feature");
+    expect(chain.last.ask_type, JSON.stringify(chain.last).slice(0, 300)).toBe("scope-confirm");
+    expect(String(chain.last.question)).toContain('"push it when you are done"');
+    expect(chain.calls).toBe(2);
+    // That plan question was shown, so a reply waits for it, by its own commands.
+    const id = REQUEST.exec(String(chain.last.confirm_command))![1];
+    const hop = String(next(CLAUDE_TOOLS, proj, ["yes"]).message);
+    expect(hop).toContain(`${WAITS} they were asked about "push it when you are done"`);
+    expect(hop).toContain(`--scope feature --request ${id}`);
+    // Its other route keeps their words as a request of their own and never comes back.
+    const file = /--request-file (\S+)`/.exec(hop)?.[1];
+    expect(file, hop.slice(0, 400)).toBeDefined();
+    const other = next(CLAUDE_TOOLS, proj, ["--request-file", file!]);
+    expect(String(other.message ?? other.question)).not.toContain(WAITS);
+  });
+
+  test("finished work: a plan shown for a later request is the one question waiting, the earlier unshown one aside", () => {
+    proj = finishedProject();
+    unproposed(proj, [STATUS_WORDS]);
+    const ask = shown(proj, ["--", "add CSV export"]);
+    const hop = String(next(CLAUDE_TOOLS, proj, ["go ahead"]).message);
+    expect(hop).toContain(`${WAITS} they were asked about "add CSV export"`);
+    expect(hop).toContain(`--scope feature --request ${REQUEST.exec(String(ask.confirm_command))![1]}`);
+  });
+
+  test("finished work: words that became a request with no plan shown leave the shown plan question waiting for its reply", () => {
+    proj = finishedProject();
+    const ask = shown(proj, ["add CSV export"]);
+    unproposed(proj, ["--", "what changed in the last release?"]);
+    const hop = String(next(CLAUDE_TOOLS, proj, ["yes"]).message);
+    expect(hop).toContain(`${WAITS} they were asked about "add CSV export"`);
+    expect(hop).toContain(`--scope feature --request ${REQUEST.exec(String(ask.confirm_command))![1]}`);
+  });
+
+  test("a fresh workspace: words after a proposal step with no plan proposed get the proposal step for them", () => {
+    proj = fresh();
+    unproposed(proj, ["build a todo app"]);
+    const step = String(next(CLAUDE_TOOLS, proj, ["make it a web one"]).message);
+    expect(step).not.toContain(WAITS);
+    expect(step).toContain('The person asked for new work: "make it a web one"');
+  });
+
+  test("an update: a request saved before it, with no plan shown, is no plan question either", () => {
+    proj = finishedProject();
+    const id = unproposed(proj, [STATUS_WORDS]);
+    // The copy as a release before the mark wrote it.
+    const file = join(proj, "aidlc", ".aidlc-sessions", "questions", `${id}.json`);
+    const { proposal: _mark, ...before } = JSON.parse(readFileSync(file, "utf-8"));
+    writeFileSync(file, `${JSON.stringify(before)}\n`);
+    const chain = follow(CLAUDE_TOOLS, proj, ["push it when you are done"], "feature");
+    expect(chain.last.ask_type, JSON.stringify(chain.last).slice(0, 300)).toBe("scope-confirm");
+    expect(String(chain.last.question)).toContain('"push it when you are done"');
+    expect(chain.calls).toBe(2);
+  });
+
+  test("a request typed straight to a tailored plan, and a tailored-plan offer shown, still wait for the reply", () => {
+    proj = fresh();
+    const composing = next(CLAUDE_TOOLS, proj, ["compose", "build a todo app"]);
+    expect(String(composing.message), JSON.stringify(composing).slice(0, 300)).toContain("composer");
+    expect(String(next(CLAUDE_TOOLS, proj, ["looks good"]).message)).toContain(`${WAITS} they were asked about "build a todo app"`);
+    cleanupTestProject(proj);
+    proj = fresh();
+    const offer = next(CLAUDE_TOOLS, proj, ["--propose", "compose", "--request", unproposed(proj, ["build a todo app"])]);
+    expect(offer.ask_type, JSON.stringify(offer).slice(0, 300)).toBe("compose-offer");
+    const hop = String(next(CLAUDE_TOOLS, proj, ["yes"]).message);
+    expect(hop).toContain(`${WAITS} they were asked about "build a todo app"`);
+    expect(hop).toContain(`compose --request ${REQUEST.exec(String(offer.compose_command))![1]}`);
   });
 });
 

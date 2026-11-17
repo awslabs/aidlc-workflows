@@ -50,6 +50,11 @@ const manifest: HarnessManifest = {
       "person to answer again. Show the person this line and end your turn: " +
       '"Quit opencode and start it again with just `opencode` in <folder>, then type <entry> to carry on."',
   },
+  // opencode marks the commands its agent runs with OPENCODE=1, the mark
+  // hostRunsThisChat (aidlc-rules-held.ts) reads for an opencode chat.
+  hostShell: { env: ["OPENCODE"] },
+  // A clean chat for new work started beside other work.
+  newChatStep: { text: "start a new session, then type <entry>" },
   harnessDir: ".aidlc",
   orchestratorSkillPath: ".aidlc/skills/aidlc/SKILL.md",
   tierFlavor: "opencode",
@@ -75,6 +80,9 @@ const manifest: HarnessManifest = {
           // The variant shipped before the block ignored aidlc/.aidlc-request-text/
           // (a request the engine has not read yet).
           "sha256:345fbe9fe620718510ecfe9d478233ccf4a5318522884b50fc5540559ace3eed",
+          // The variant shipped before the block ignored a Bolt worktree's metadata
+          // (.aidlc/worktree-meta.json, .aidlc/base-source-listing.tsv).
+          "sha256:c2b1232b28a8b5474f7ef8363452f75399366ef227c59d75fa85d7aa2edca7ac",
         ],
       },
     },
@@ -94,6 +102,8 @@ const manifest: HarnessManifest = {
           "sha256:c5b990429fe6dfa084d58fc592d1d22c1170cc35aa98f9cbb2c82b9924520eda",
           // The variant shipped before the onboarding waited for the person to invoke AI-DLC.
           "sha256:6de1298dfa4c2b6916f66d372b844faf23481c8f258eedd595c1423dab8e106d",
+          // The variant whose Documentation section named this repository's docs/ folder.
+          "sha256:6d3bf5865f1836575715ea93d0042b9d08bcab918cc9a17a142848fe44e88bc7",
         ],
       },
     },
@@ -133,6 +143,7 @@ const manifest: HarnessManifest = {
     { src: "skills/aidlc-session-cost", dst: "skills/aidlc-session-cost" },
     { src: "skills/aidlc-replay", dst: "skills/aidlc-replay" },
     { src: "skills/aidlc-outcomes-pack", dst: "skills/aidlc-outcomes-pack" },
+    { src: "skills/aidlc-issue-report", dst: "skills/aidlc-issue-report" },
     { src: "skills/aidlc-knowledge", dst: "skills/aidlc-knowledge" },
   ],
 

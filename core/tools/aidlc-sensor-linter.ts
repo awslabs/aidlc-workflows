@@ -49,7 +49,7 @@ import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
-import { compiledExecutable, projectPackage } from "./aidlc-runtime-paths.ts";
+import { compiledExecutable, projectPackage, writeSensorResult } from "./aidlc-runtime-paths.ts";
 
 interface ESLintMessage {
 	ruleId: string | null;
@@ -226,7 +226,7 @@ function invokeEslint(args: string[], cwd: string, filePath: string) {
 	// neither the pin nor a project without jiti provides, and natively under
 	// Bun. Only a copy install runs on Bun; a native one keeps Node.
 	const underBun = /\.[mc]?ts$/.test(governing ?? "") && !(local && jitiBeside(local));
-	const options = { encoding: "utf-8" as const, timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS, cwd };
+	const options = { encoding: "utf-8" as const, maxBuffer: 64 * 1024 * 1024, timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS, cwd };
 	// ESLint's published executable uses Node too. Naming its installed file
 	// avoids both PATH-shadowed eslint binaries and per-TMPDIR bunx installs.
 	if (local) return spawnSync(underBun && !compiledExecutable() ? process.execPath : "node", [local, ...args], options);
@@ -444,8 +444,7 @@ export function main(argv: string[]): void {
 		// findings_count emitted by the script (sensor-id-agnostic dispatcher).
 		findings_count: errorCount,
 	};
-	process.stdout.write(`${JSON.stringify(out)}\n`);
-	process.exit(0);
+	writeSensorResult(out);
 }
 
 if (import.meta.main) main(process.argv.slice(2));

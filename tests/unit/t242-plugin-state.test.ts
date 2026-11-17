@@ -601,6 +601,10 @@ describe("t242 pure status comparator", () => {
       version: "version-differs",
     });
     expect(rows.find((row) => row.key === "version")?.message).toContain("upgrade");
+    const missing = rows.find((row) => row.key === "missing")?.message ?? "";
+    expect(missing).toContain("composed it from its folder");
+    expect(missing).toContain("keeps working");
+    expect(missing).toContain("everything it added to this project");
     // Config composes no plugin; each state a sync clears names the sync.
     const lines = renderPluginStatuses(rows).split("\n");
     for (const key of ["legacy", "new", "source", "version"]) {
@@ -713,6 +717,9 @@ describe("t242 recorded additions", () => {
         "sensors:\n  - \"coverage-threshold\"\n  - coverage-threshold\n", "sensors:\n  - \"coverage-threshold\"\n"],
       ["a single-quoted line beside the plugin's stays", { produces: ["x-doc"] },
         "produces:\n  - 'x-doc'\n  - x-doc\n", "produces:\n  - 'x-doc'\n"],
+      ["an output's produces_kinds entry goes with it", { produces: ["x-doc"] },
+        "produces:\n  - a-doc\n  - x-doc\nproduces_kinds:\n  a-doc: [ui]\n  x-doc: [ui]\n",
+        "produces:\n  - a-doc\nproduces_kinds:\n  a-doc: [ui]\n"],
       ["a value written twice keeps one", { requires_stage: ["nfr-design"] },
         "requires_stage:\n  - nfr-design\n  - nfr-design\n", "requires_stage:\n  - nfr-design\n"],
       ["a recorded value with its quotes takes out that line", { produces: ["\"x-doc\""] },

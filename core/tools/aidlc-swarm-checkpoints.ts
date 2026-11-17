@@ -1,9 +1,10 @@
 /** Human review of a completed native swarm batch, independent of its driver. */
 import { createHash } from "node:crypto";
 import { appendAuditEntries, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
+import { personGitNameField } from "./aidlc-git-name.ts";
 import {
-  checkpointRecordForms, loadConstructionEvidence, type ApprovalFindingDispositions, type ConstructionEvidence,
-  type RejectedFindingDispositions,
+  autonomyGranted, checkpointRecordForms, loadConstructionEvidence, type ApprovalFindingDispositions,
+  type ConstructionEvidence, type RejectedFindingDispositions,
 } from "./aidlc-construction-checkpoints.ts";
 import { askedQuestionFields, QUESTION_ID_FIELD, questionShows } from "./aidlc-questions.ts";
 import { APPROVAL_GATE_CHOICES } from "./aidlc-reply-reader.ts";
@@ -31,10 +32,11 @@ import {
   protectedTargetDigest,
   mintProtectedQuestion,
   intentRepos,
-  isAutonomousMode,
+  addPendingPersonLines,
   isNonAnswer,
   latestMainWorkflowStageRunFloorForProject,
   maximalAttemptEvents,
+  ownShardRows,
   readAuditShardEvents,
   readCommittedUnitSourceManifest,
   readRegularFileNoFollowOrThrow,
@@ -152,8 +154,7 @@ function snapshot(pd: string, batch: number, requested: string[], stateContent?:
   const floor = latestMainWorkflowStageRunFloorForProject(pd, STAGE, false, undefined, rows);
   if (floor === "unstarted#0" || floor.startsWith("AMBIGUOUS:")) errors.push("Code Generation attempt is missing or ambiguous.");
   const grant = shared ? shared.grant : latest(rows.filter((row) => ["WORKFLOW_STARTED", "AUTONOMY_MODE_SET"].includes(row.event)));
-  const humanRequired = !(isAutonomousMode(state) && grant?.event === "AUTONOMY_MODE_SET" &&
-    auditBlockField(grant.block, "Mode") === "autonomous");
+  const humanRequired = !autonomyGranted(state, grant);
   const chain = currentSwarmSourceMergeChain(pd, STAGE, undefined, undefined, shared?.allRows);
   if (chain.state !== "ready") errors.push(`Native swarm source-merge chain is unavailable${chain.state === "invalid" ? `: ${chain.reason}` : "."}`);
   const listing = shared ? shared.listing : workspaceSourceListing(pd);
@@ -449,10 +450,16 @@ export function approveSwarmCheckpoint(
       ...(humanRequired ? { "User Input": "Approve" } : { Autonomous: "true" }),
       ...theirs,
       ...findingDispositions?.([STAGE], after.result.units, humanRequired ? "person" : "nobody"),
+      ...(humanRequired ? personGitNameField(pd) : {}),
     }, pd, selection.intent, selection.space);
     if (humanRequired) consumeProtectedQuestion(pd, session);
     const result = snapshot(pd, batch, units).result;
-    return notices.length > 0 ? { ...result, notices } : result;
+    // The agent's own approval under Continue automatically goes on, so its
+    // lines wait for the reply the person reads; a chat it cannot name hears
+    // them from this step as before.
+    const kept = !humanRequired && session !== "" && notices.length > 0 &&
+      addPendingPersonLines(pd, session, notices, { forReply: true });
+    return notices.length > 0 && !kept ? { ...result, notices } : result;
   });
 }
 
@@ -477,6 +484,7 @@ export function rejectSwarmCheckpoint(
     const after = recheck(pd, batch, units, current, selection.root, false);
     // One decision for the batch: each Unit's row carries it.
     const dispositions = rejectedFindings?.([STAGE], after.result.units);
+    const gitName = personGitNameField(pd);
     appendAuditEntries(after.result.units.map((unit) => ({
       eventType: "GATE_REJECTED",
       fields: {
@@ -485,9 +493,48 @@ export function rejectSwarmCheckpoint(
         "User Input": userInput, Reason: reason, Feedback: reason,
         ...protectedResponseFields(response),
         ...dispositions,
+        ...gitName,
       },
     })), pd, selection.intent, selection.space);
     consumeProtectedQuestion(pd, session);
     return snapshot(pd, batch, units).result;
   });
+}
+
+/** The person took a side-by-side batch over in the chat they asked in (`aidlc-swarm.ts take-over`). */
+const SWARM_TAKEN_OVER = "SWARM_TAKEN_OVER";
+
+/**
+ * The chat building a side-by-side batch in this Code Generation attempt: the
+ * one named on the latest of its SWARM_STARTED and SWARM_TAKEN_OVER rows on this
+ * clone's own shard, with that row, and `since`: whether a row comes after it,
+ * so a take-over stands only on what the person said since (a message that
+ * asked to build here before the build changed hands again asks nothing now).
+ * Null when the latest names none (a host that names no chat, a row from before
+ * chats were named) or there is none.
+ */
+export function swarmBuildingChat(
+  projectDir: string, batch: number, stage: string,
+): { chat: string; row: AuditShardEvent; since: (row: AuditShardEvent) => boolean } | null {
+  try {
+    const floor = latestMainWorkflowStageRunFloorForProject(projectDir, stage);
+    const rows = ownShardRows(projectDir).mine.filter((row) =>
+      (row.event === "SWARM_STARTED" || row.event === SWARM_TAKEN_OVER) &&
+      auditBlockField(row.block, "Batch number") === String(batch) &&
+      auditBlockField(row.block, "Stage") === stage &&
+      auditBlockField(row.block, "Run floor") === floor);
+    const latest = rows.at(-1);
+    const chat = latest === undefined ? null : auditBlockField(latest.block, "Session");
+    if (latest === undefined || !chat) return null;
+    // The person sent the landed batch back at its checkpoint: the build it
+    // reopens is whichever chat runs it, until a new prepare names one.
+    const since = (row: AuditShardEvent): boolean => row.shard === latest.shard && row.pos > latest.pos;
+    const reopened = ownShardRows(projectDir).mine.some((row) => since(row) && row.event === "GATE_REJECTED" &&
+      auditBlockField(row.block, "Checkpoint") === "swarm-batch" &&
+      auditBlockField(row.block, "Batch number") === String(batch) &&
+      auditBlockField(row.block, "Stage") === stage && auditBlockField(row.block, "Run floor") === floor);
+    return reopened ? null : { chat, row: latest, since };
+  } catch {
+    return null;
+  }
 }

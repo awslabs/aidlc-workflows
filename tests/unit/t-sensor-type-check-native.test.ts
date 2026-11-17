@@ -7,7 +7,7 @@
 // cannot start there and every fire read tool-unavailable, even in a project
 // with its own TypeScript. The native executable is never run as Bun to fetch
 // one (the linter's ESLint fallback made the same choice). Cases run on Linux,
-// macOS and Windows; the copy-channel argv pin needs a sh shim, so not on Windows.
+// macOS and Windows; the copy-channel pins need a sh shim, so not on Windows.
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -113,5 +113,18 @@ describe("t-sensor-type-check-native: a native install checks types without Bun"
     expect(calls).toHaveLength(2);
     expect(calls[0]).toBe("--package typescript@6 tsc --version");
     expect(calls[1]).toStartWith(`--package typescript@6 tsc --project ${join(proj, "tsconfig.json")} --noEmit --pretty false --incremental --tsBuildInfoFile `);
+  }, TIMEOUT_MS);
+
+  test.skipIf(process.platform === "win32")("a tsc killed after printing over 1 MiB still reads as a run that did not finish", () => {
+    const { proj, file } = project("none");
+    const bin = mkdtempSync(join(tmpdir(), "aidlc-t-type-check-bunx-"));
+    tempDirs.push(bin);
+    writeFileSync(join(bin, "bunx"), '#!/bin/sh\ncase "$*" in *--version*) echo 6.0.3; exit 0;; esac\nyes x | head -c 3000000\nkill -9 $$\n');
+    chmodSync(join(bin, "bunx"), 0o755);
+    const { AIDLC_COMPILED_EXECUTABLE: _native, ...rest } = process.env;
+    const env = { ...rest, AIDLC_PROJECT_DIR: proj, PATH: `${bin}${delimiter}${process.env.PATH}` };
+    const res = runSensor(file, proj, env);
+    expect(res.status, `${res.stdout}${res.stderr}`).toBe(1);
+    expect(res.stderr).toContain("tsc-execution-incomplete");
   }, TIMEOUT_MS);
 });

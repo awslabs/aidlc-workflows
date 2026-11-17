@@ -32,6 +32,7 @@ import {
 } from "node:path";
 import {
   assertPluginContentHasNoSymlinks,
+  assertPluginCommands,
   assertSupportedPluginContributionPaths,
   pluginMarketplaceIssue,
   scanPluginFiles,
@@ -41,9 +42,14 @@ import {
   TRUSTED_ROUTE_NAMESPACE,
   trustedCommand,
 } from "./aidlc-command.ts";
-import { sharedKnowledgeWithoutFormatDocs } from "./aidlc-inline-context.ts";
+import {
+  kiroKnowledgePreflightClause,
+  readBoundedRegularFile,
+  sharedKnowledgeWithoutFormatDocs,
+} from "./aidlc-inline-context.ts";
 import { committedTextBytes, runWithOwnerStampedLock } from "./aidlc-lib.ts";
 import { EXTENDED_SUBPROCESS_TIMEOUT_MS, LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
+import { typedHarnessName } from "./aidlc-runtime-paths.ts";
 
 export type PluginTargetKind = "store" | "kiro" | "kiro-ide" | "cursor";
 
@@ -104,6 +110,7 @@ const CONTENT_DIRS = [
   "scopes",
   "agents",
   "knowledge",
+  "memory",
 ] as const;
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
@@ -293,6 +300,7 @@ function injectDelegatedKnowledgePreflight(
     `\`aidlc/spaces/<active-space>/knowledge/aidlc-shared/\`, then ` +
     `\`aidlc/spaces/<active-space>/knowledge/${agentName}/\`. ` +
     `A native resource preload satisfies this requirement; otherwise read the files now. ` +
+    kiroKnowledgePreflightClause(harnessDir) +
     `The dispatch brief supplies rules and artifact paths separately.`;
   const frontmatter = content.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/);
   if (!frontmatter) return `${block}\n\n${content.trimStart()}`;
@@ -478,7 +486,8 @@ function copyHookTemplates(
 // person's shell, or PowerShell on Windows; Kiro: /bin/sh, or cmd.exe), so
 // their commands carry no sh -c. The native release runs this, the copy
 // channel the Bun launcher. It names its harness: a compiled aidlc otherwise
-// takes the first one installed in the project, .claude before the others.
+// takes the one whose tool's mark the command carries, else the first one
+// installed in the project, .claude before the others.
 function nativePluginSync(target: PluginTarget): string {
   return `aidlc ${TRUSTED_ROUTE_NAMESPACE} plugin sync --harness-dir ${target.harnessLeaf}`;
 }
@@ -538,10 +547,14 @@ export function kiroIdeComposeRegistration(
   return composeRegistration(target, pluginName, composeCommand(target, hostName));
 }
 
+// Kiro stops a hook with no timeout after 60 seconds, so the registration asks
+// for EXTENDED_SUBPROCESS_TIMEOUT_MS in seconds, as the Claude and Codex compose
+// hooks do. null renders a registration as builds wrote it before it carried one.
 function composeRegistration(
   target: PluginTarget,
   pluginName: string,
   command: string,
+  timeout: number | null = EXTENDED_SUBPROCESS_TIMEOUT_MS / 1000,
 ): { path: string; text: string } {
   return {
     path: `${target.harnessLeaf}/hooks/aidlc-${pluginName}-compose.json`,
@@ -554,6 +567,7 @@ function composeRegistration(
             trigger: "SessionStart",
             description: `Composes the ${pluginName} AIDLC plugin at session start.`,
             action: { type: "command", command },
+            ...(timeout === null ? {} : { timeout }),
           },
         ],
       },
@@ -563,19 +577,30 @@ function composeRegistration(
   };
 }
 
-// The session-start commands Kiro IDE builds have written into a plugin's
-// registration, so a drop from an earlier build still reads as the plugin's.
-// For a plugin in its own folder: this build's, then the launcher alone, which
-// 2.11.1-preview.20261018.1 wrote. With no folder (null): the launcher from the
-// workspace root, which 2.11.0 and the 2.11.1 previews before that one wrote,
-// as their projection was dropped whole into the workspace.
-function writtenComposeCommands(target: PluginTarget, hostName: string | null): string[] {
-  if (hostName === null) return [kiroIdeLauncher(target, "")];
+// The session-start registrations Kiro IDE builds have written for a plugin,
+// so a drop from an earlier build still reads as the plugin's. For a plugin in
+// its own folder: this build's; its command without a timeout, which builds
+// from 2.11.1-preview.20261019.1 wrote until the registration carried one;
+// then the launcher alone, which 2.11.1-preview.20261018.1 wrote. With no
+// folder (null): the launcher from the workspace root, which 2.11.0 and the
+// 2.11.1 previews before that one wrote, as their projection was dropped whole
+// into the workspace. No build wrote either launcher with a timeout.
+function writtenRegistrations(
+  target: PluginTarget,
+  pluginName: string,
+  hostName: string | null,
+): Array<{ path: string; text: string }> {
+  const untimed = (command: string) => composeRegistration(target, pluginName, command, null);
+  if (hostName === null) return [untimed(kiroIdeLauncher(target, ""))];
   return [
-    composeCommand(target, hostName),
-    kiroIdeLauncher(target, `${droppedPluginFolder(target.harnessLeaf, hostName)}/`),
+    kiroIdeComposeRegistration(target, pluginName, hostName),
+    untimed(composeCommand(target, hostName)),
+    untimed(kiroIdeLauncher(target, `${droppedPluginFolder(target.harnessLeaf, hostName)}/`)),
   ];
 }
+
+// Far above any registration a build writes.
+const REGISTRATION_MAX_BYTES = 64 * 1024;
 
 // The hook files in a project that are exactly the registrations the builds of
 // its dropped plugins wrote, so config can tell them from hook files a person
@@ -597,29 +622,35 @@ export function droppedPluginRegistrations(
   const owned: string[] = [];
   const ownIfWritten = (pluginName: unknown, hostName: string | null): void => {
     if (typeof pluginName !== "string" || !/^[a-z][a-z0-9-]*$/.test(pluginName)) return;
-    const written = writtenComposeCommands(target, hostName)
-      .map((command) => composeRegistration(target, pluginName, command));
-    let onDisk: Buffer;
-    try {
-      onDisk = committedTextBytes(readFileSync(join(projectDir, written[0].path)));
-    } catch {
-      // No registration: a Kiro CLI projection writes none.
-      return;
-    }
+    const written = writtenRegistrations(target, pluginName, hostName);
+    // Builds write this registration as a plain file; a Kiro CLI projection
+    // writes none.
+    const found = readBoundedRegularFile(join(projectDir, written[0].path), REGISTRATION_MAX_BYTES);
+    if (found === null) return;
+    const onDisk = committedTextBytes(Buffer.from(found, "utf-8"));
     if (written.some(({ text }) => onDisk.equals(Buffer.from(text, "utf-8")))) {
       owned.push(written[0].path);
     }
   };
   const folder = join(projectDir, harnessLeaf, DROPPED_PLUGINS_FOLDER);
   for (const hostName of existsSync(folder) ? readdirSync(folder).sort() : []) {
-    let pluginName: unknown;
+    let manifest: Record<string, unknown>;
     try {
-      pluginName = (JSON.parse(
+      const parsed: unknown = JSON.parse(
         readFileSync(join(folder, hostName, ".aidlc-plugin", "plugin.json"), "utf-8"),
-      ) as { name?: unknown }).name;
+      );
+      if (!isPlainRecord(parsed)) continue;
+      manifest = parsed;
     } catch {
       continue;
     }
+    const pluginName = manifest.name;
+    // A build names the folder after the plugin, so a folder it never names
+    // holds no drop of that plugin, whatever registration sits beside it.
+    if (
+      typeof pluginName !== "string" ||
+      ![false, true].some((firstParty) => pluginHostNames(pluginName, manifest, firstParty).plugin === hostName)
+    ) continue;
     ownIfWritten(pluginName, hostName);
   }
   const marker = readProjectionMarker(projectDir);
@@ -833,8 +864,8 @@ export function assertPluginBuildOutput(
   ) {
     throw new Error(
       `refusing to replace "${outDir}" - its ${PLUGIN_PROJECTION_MARKER} belongs to ` +
-        `plugin "${marker.plugin}" for harness "${marker.harness}", not plugin "${pluginName}" ` +
-        `for harness "${target.harnessName}".`,
+        `plugin "${marker.plugin}" for harness "${typedHarnessName(marker.harness)}", not plugin "${pluginName}" ` +
+        `for harness "${typedHarnessName(target.harnessName)}".`,
     );
   }
 }
@@ -853,6 +884,7 @@ export function buildPluginProjection(
   const manifest = readPluginManifest(pluginRoot);
   const pluginName = pluginNameFromManifest(pluginRoot, manifest);
   assertSupportedPluginContributionPaths(manifest);
+  assertPluginCommands(manifest);
   const firstParty = options.firstParty === true;
   const marketplaceIssue = firstParty ? null : pluginMarketplaceIssue(manifest.aidlc);
   if (marketplaceIssue) {

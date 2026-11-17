@@ -33,20 +33,22 @@
 //       creates a new child when native source landing removed the old one.
 //       Both paths require current Plan Approval or a protected continuation
 //       under a lowered plan-approval fence before dispatch.
-//   check <unit> [--check-cmd <cmd>] [--test-file <path>] [--show-output]
+//   check <unit> [--check-cmd <cmd>] [--test-file <path>] [--show-output] [--timeout-ms <ms>]
 //       Single-unit verdict: the authorized Construction Verification Command,
 //       with or without checkpoints (a supplied --check-cmd must match it)
 //       (--show-output: the command's own output on stderr as it runs, for a
 //       worker or reviewer running the Unit's tests; exit 0 = green,
 //       the AUTHORITATIVE signal — a worker's own success claim is never trusted)
 //       plus an anti-tamper compare of the protected file against its content at
-//       HEAD. Prints {unit, converged, tampered, reason}; exits 0 iff the unit is
+//       HEAD. The command is stopped after 30 minutes unless --timeout-ms sets
+//       another limit; a stopped run reports reason "error" and says so in
+//       detail. Prints {unit, converged, tampered, reason}; exits 0 iff the unit is
 //       GENUINELY converged (green AND no blocking tamper), non-zero otherwise.
 //       Emits no audit - it informs the conductor's retry decision (knowledge), it
 //       does not commit anything. Same input -> same verdict, however many times
 //       called.
 //   finalize --batch <n> --units <a,b,c> --claimed <a,b> [--check-cmd <cmd>]
-//            [--test-file <path>] [--reasons <unit>=<reason>,...]
+//            [--test-file <path>] [--reasons <unit>=<reason>,...] [--timeout-ms <ms>]
 //       The AUTHORITATIVE gate. The conductor's claimed-converged set is an
 //       explicit input and the only thing finalize trusts from it. For each
 //       claimed unit, RE-RUN the check (green + no blocking tamper) and, when the
@@ -60,6 +62,10 @@
 //       budget-exhausted / cap-exhausted — recorded faithfully (the conductor
 //       judges WHY a unit gave up; the tool only records it, never for a claimed
 //       unit, whose reason is always the tool's own re-verify verdict).
+//   take-over --batch <n> --message <id>
+//       The person asked this chat to build a side-by-side batch another chat
+//       started: proves the message, records SWARM_TAKEN_OVER with their words
+//       and this chat, and `next` hands this chat the batch from then on.
 //   allow-change <file>... --message <id>
 //       The person asked for files in the main checkout to change while the
 //       Units are built, which a strict Guard Policy holds for the landings:
@@ -86,6 +92,7 @@
 //   - aidlc-bolt fail              -> close a failed unit's Bolt lifecycle
 //     (BOLT_FAILED paired with the BOLT_STARTED that `start --worktree` emitted).
 
+import { projectDirFlag, settleClaudeTurnsFirst } from "./aidlc-claude-turn-pending.ts";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS, LONG_SUBPROCESS_TIMEOUT_MS, EXTENDED_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
@@ -94,6 +101,11 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, posix, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry } from "./aidlc-audit.ts";
+import { gitCommonDirOf } from "./aidlc-git.ts";
+import { commandChat } from "./aidlc-questions.ts";
+import { hostNamesThisChat } from "./aidlc-record-core.ts";
+import { swarmBuildingChat } from "./aidlc-swarm-checkpoints.ts";
+import { verificationTimeoutMs } from "./aidlc-construction-checkpoints.ts";
 import {
   assertNoSymlinkInChainOrThrow,
   activeIntentUuid,
@@ -180,10 +192,10 @@ import {
   committedTextSha256,
   currentFingerprintForm,
 } from "./aidlc-lib.ts";
-import { proveMessage } from "./aidlc-message-store.ts";
+import { messagesSince, proveMessage, requestMessageStep } from "./aidlc-message-store.ts";
 import { codeGenerationPlanNamedPaths } from "./aidlc-plan-approval-ask.ts";
 import { quoted } from "./aidlc-recorded-switches.ts";
-import { compiledExecutable } from "./aidlc-runtime-paths.ts";
+import { aidlcDispatcherInvocation, compiledExecutable } from "./aidlc-runtime-paths.ts";
 import {
   beginCodeGeneration,
   bindCodeGenerationWorktreeApproval,
@@ -318,20 +330,55 @@ function runTool(toolFile: string, args: string[], projectDir: string): ToolRun 
 // resolved from the parent intent.
 // With `showOutput` the command's own output goes to this tool's stderr as it
 // runs, so a worker sees its tests as if it had run them; stdout keeps the one
-// verdict line.
-function checkConverged(cwd: string, checkCmd: string, showOutput = false): boolean {
+// verdict line. Without it the output goes nowhere: the verdict reads only the
+// exit status, and held output over spawnSync's buffer limit would stop a
+// passing command and lose its status.
+// `timedOut` says the run hit `timeoutMs` and was stopped before it finished:
+// its output just ends, so without it a long suite read as a failing project.
+function checkConverged(
+  cwd: string,
+  checkCmd: string,
+  showOutput = false,
+  timeoutMs = EXTENDED_SUBPROCESS_TIMEOUT_MS,
+): { converged: boolean; timedOut: boolean } {
   const shell =
     process.platform !== "win32" && existsSync("/bin/bash")
       ? "/bin/bash"
       : true;
   const result = spawnSync(checkCmd, {
     cwd,
-    encoding: "utf-8",
-    timeout: EXTENDED_SUBPROCESS_TIMEOUT_MS,
+    timeout: timeoutMs,
     shell,
-    ...(showOutput ? { stdio: ["ignore", 2, 2] as const } : {}),
+    stdio: showOutput ? ["ignore", 2, 2] : "ignore",
   });
-  return result.status === 0;
+  return {
+    converged: result.status === 0,
+    timedOut: (result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT",
+  };
+}
+
+// The limit a check runs under: --timeout-ms when given, read and validated
+// exactly as `bolt checkpoint --action verify` reads its own, else the
+// 30-minute default.
+function swarmCheckTimeout(flags: Record<string, string>): number {
+  const raw = flags["timeout-ms"] as string | undefined;
+  try {
+    return verificationTimeoutMs(raw === undefined ? undefined : Number(raw));
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+  }
+}
+
+// How long a limit is, as the person reads it.
+function limitText(ms: number): string {
+  if (ms % 60_000 === 0) return `${ms / 60_000} minute${ms === 60_000 ? "" : "s"}`;
+  if (ms % 1_000 === 0) return `${ms / 1_000} second${ms === 1_000 ? "" : "s"}`;
+  return `${ms} ms`;
+}
+
+function stoppedCheckDetail(ms: number, rerun: "check" | "finalize"): string {
+  return `the check command was stopped after ${limitText(ms)}, before it finished, so this is no verdict on the Unit's code; ` +
+    `run ${rerun} again with --timeout-ms <milliseconds> to give it longer`;
 }
 
 // Every check runs the Construction Verification Command the person approved
@@ -378,6 +425,8 @@ interface Verdict {
   exists: boolean;
   converged: boolean;
   tampered: boolean;
+  /** The limit the check command was stopped at, before it finished. */
+  timedOutMs?: number;
   confineError?: string;
   /** Under relaxed or off a changed protected test file is said, not refused. */
   tamperNotice?: string;
@@ -399,6 +448,7 @@ function verdictFor(
   checkCmd: string,
   testFile?: string,
   showOutput = false,
+  timeoutMs = EXTENDED_SUBPROCESS_TIMEOUT_MS,
 ): Verdict {
   const wt = identity.dir;
   if (!existsSync(wt)) {
@@ -422,7 +472,7 @@ function verdictFor(
       };
     }
   }
-  const converged = checkConverged(wt, checkCmd, showOutput);
+  const { converged, timedOut } = checkConverged(wt, checkCmd, showOutput, timeoutMs);
   let tampered = false;
   let confineError: string | undefined;
   let tamperNotice: string | undefined;
@@ -442,7 +492,11 @@ function verdictFor(
       }
     }
   }
-  return { exists: true, converged, tampered, confineError, ...(tamperNotice ? { tamperNotice } : {}) };
+  return {
+    exists: true, converged, tampered, confineError,
+    ...(timedOut ? { timedOutMs: timeoutMs } : {}),
+    ...(tamperNotice ? { tamperNotice } : {}),
+  };
 }
 
 interface ReviewerRequirement {
@@ -1892,15 +1946,18 @@ function initializedSubmoduleSourceError(
 
 // Materialize the reviewed application bytes as an immutable commit without
 // moving the Bolt branch. The temporary index starts from HEAD, overlays the
-// worktree, then restores framework-owned paths from HEAD
-// (shapeSourceSnapshotIndex) so the later source merge carries application
-// source only. Recompute the fingerprint after the object is written to close a
+// worktree, then restores framework-owned paths (shapeSourceSnapshotIndex) so
+// the later source merge carries application source only: AI-DLC's records
+// from the commit the Bolt shares with `landingBranch`, which prepare
+// recorded, so records a Bolt commit carried stay behind; without it, from
+// HEAD. Recompute the fingerprint after the object is written to close a
 // concurrent-edit window; the validated value is the one carried to the
 // convergence row.
 function bindReviewedSource(
   identity: BoltIdentity,
   fingerprint: string,
   recoveryBudget: NewGitlinkRecoveryBudget,
+  landingBranch: string | null,
 ): { binding?: SourceBinding; error?: string } {
   const wt = identity.dir;
   const idx = join(tmpdir(), `aidlc-swarm-source-${process.pid}-${randomUUID().slice(0, 8)}`);
@@ -1938,7 +1995,11 @@ function bindReviewedSource(
       initialGitlinkPaths.add(record.slice(tab + 1).replace(/\\/g, "/"));
     }
     if (git(["add", "-A"]).status !== 0) return { error: "cannot stage the reviewed source snapshot" };
-    const shape = shapeSourceSnapshotIndex(wt, idx, true);
+    const shared = landingBranch === null ? null : git(["merge-base", "HEAD", `refs/heads/${landingBranch}`]);
+    const recordBase = shared?.status === 0 && /^[0-9a-f]{40,64}$/.test(shared.stdout.trim())
+      ? shared.stdout.trim()
+      : null;
+    const shape = shapeSourceSnapshotIndex(wt, idx, true, recordBase);
     if (shape === null) {
       return { error: "cannot apply the reviewed source boundary to the snapshot" };
     }
@@ -2072,6 +2133,11 @@ function bindReviewedSource(
 // downgrade. The per-unit pair, the per-failed-unit baton row, and the batch
 // tally all fire from `finalize`, the authoritative gate.
 
+function buildingChatField(pd: string): { Session?: string } {
+  const chat = hostNamesThisChat(pd) ? commandChat(pd) : null;
+  return chat ? { Session: chat } : {};
+}
+
 function emitSwarmStarted(
   pd: string,
   batch: string,
@@ -2093,6 +2159,9 @@ function emitSwarmStarted(
       Stage: attempt.stage,
       "Run floor": attempt.floor,
       ...(landingBranch ? { "Landing branch": landingBranch } : {}),
+      // The chat that started the batch, where the host names it: a second
+      // chat's `next` leaves the batch to it (swarmBuildingChat).
+      ...buildingChatField(pd),
       ...(Object.keys(resumed).length ? {
         "Resumed": "true",
         "Checkpoint": "swarm-batch",
@@ -2311,6 +2380,12 @@ function resumeGit(cwd: string, args: string[]): string {
   return result.stdout.trim();
 }
 
+function resumeCommonDir(cwd: string): string {
+  const dirs = gitCommonDirOf(cwd);
+  if (!dirs.ok) throw new Error(`Cannot validate preserved worktree: ${dirs.stderr}`);
+  return dirs.common;
+}
+
 function resumePathKey(path: string): string {
   const canonical = realpathSync(path).replaceAll("\\", "/");
   return process.platform === "win32" ? canonical.toLowerCase() : canonical;
@@ -2485,8 +2560,8 @@ function validateSwarmResume(
   const meta = JSON.parse(readRegularFileNoFollowOrThrow(metaPath, "preserved worktree metadata").toString("utf-8"));
   const recordedPath = creation && auditBlockField(creation.block, "Worktree path");
   const branch = identity.branch;
-  const rootCommon = resumePathKey(resolve(repoCwd, resumeGit(repoCwd, ["rev-parse", "--git-common-dir"])));
-  const childCommon = resumePathKey(resolve(worktree, resumeGit(worktree, ["rev-parse", "--git-common-dir"])));
+  const rootCommon = resumePathKey(resumeCommonDir(repoCwd));
+  const childCommon = resumePathKey(resumeCommonDir(worktree));
   const commonHash = createHash("sha256").update(rootCommon).digest("hex");
   if (!creation || !recordedPath ||
     resumePathKey(resolveAuditWorktreePath(pd, recordedPath)) !== resumePathKey(worktree) ||
@@ -3121,7 +3196,7 @@ function handlePrepare(rest: string[]): void {
         worktree_path: worktreeDir,
         error: `bolt start failed: ${started.stderr.trim() || started.stdout.trim()}; ${
           resume ? "retry prepare --resume-existing to recover this revision" :
-            `source was preserved; run aidlc-worktree discard --slug ${boltSlug} before retrying prepare`}`,
+            `source was preserved; run ${aidlcDispatcherInvocation("worktree discard")} --slug ${boltSlug} before retrying prepare`}`,
       });
       continue;
     }
@@ -3133,7 +3208,7 @@ function handlePrepare(rest: string[]): void {
         unit, ok: false, worktree_path: worktreeDir,
         error: `copying the intent's records into the worktree failed: ${error instanceof Error ? error.message : String(error)}; ${
           resume ? "retry prepare --resume-existing to recover this revision" :
-            `source was preserved; run aidlc-worktree discard --slug ${boltSlug} before retrying prepare`}`,
+            `source was preserved; run ${aidlcDispatcherInvocation("worktree discard")} --slug ${boltSlug} before retrying prepare`}`,
       });
       continue;
     }
@@ -3153,7 +3228,7 @@ function handlePrepare(rest: string[]): void {
           unit, ok: false, worktree_path: worktreeDir,
           error: `worktree Plan Approval transfer failed: ${error instanceof Error ? error.message : String(error)}; ${
             resume ? "retry prepare --resume-existing to recover this revision" :
-              `source was preserved; run aidlc-worktree discard --slug ${boltSlug} before retrying prepare`}`,
+              `source was preserved; run ${aidlcDispatcherInvocation("worktree discard")} --slug ${boltSlug} before retrying prepare`}`,
         });
         continue;
       }
@@ -3225,8 +3300,9 @@ function handleCheck(rest: string[]): void {
   const check = swarmCheckCommand(projectDir, flags["check-cmd"], "check");
   const showOutput = flags["show-output"] !== undefined;
   if (showOutput && flags["show-output"] !== "true") fail("--show-output is a boolean flag");
+  const timeoutMs = swarmCheckTimeout(flags);
 
-  const verdict = verdictFor(unit, projectDir, identity, check.command, flags["test-file"], showOutput);
+  const verdict = verdictFor(unit, projectDir, identity, check.command, flags["test-file"], showOutput, timeoutMs);
   if (!verdict.exists) {
     fail(`no worktree for unit "${unit}" - run \`prepare\` first`);
   }
@@ -3248,9 +3324,13 @@ function handleCheck(rest: string[]): void {
     unit,
     converged: verdict.converged,
     tampered: verdict.tampered,
-    reason: verdict.tampered ? "error" : null,
+    reason: verdict.tampered || verdict.timedOutMs !== undefined ? "error" : null,
   };
-  if (verdict.tampered) out.detail = "protected test file was modified";
+  const details = [
+    ...(verdict.timedOutMs !== undefined ? [stoppedCheckDetail(verdict.timedOutMs, "check")] : []),
+    ...(verdict.tampered ? ["protected test file was modified"] : []),
+  ];
+  if (details.length > 0) out.detail = details.join("; ");
   if (verdict.tamperNotice) out.change_notices = [verdict.tamperNotice];
   console.log(JSON.stringify(out));
   // Exit 0 ONLY for a genuine convergence — the seam the ultracode script and
@@ -3269,6 +3349,7 @@ function handleFinalize(rest: string[]): void {
   if (!batch || !/^[1-9][0-9]*$/.test(batch)) {
     fail("finalize requires --batch <positive integer>");
   }
+  const timeoutMs = swarmCheckTimeout(flags);
   withdrawProtectedQuestions(projectDir, "*");
   const check = swarmCheckCommand(projectDir, flags["check-cmd"], "finalize");
   const claimed = flags.claimed ? splitCsv(flags.claimed) : [];
@@ -3348,7 +3429,7 @@ function handleFinalize(rest: string[]): void {
       throw error;
     }
     if (claimedSet.has(unit)) {
-      const verdict = verdictFor(unit, projectDir, identity, check.command, testFile);
+      const verdict = verdictFor(unit, projectDir, identity, check.command, testFile, false, timeoutMs);
       const preparedAttempt = preparedSwarmAttempt(
         projectDir,
         batch,
@@ -3430,6 +3511,7 @@ function handleFinalize(rest: string[]): void {
                 identity,
                 receipt.sourceFingerprint,
                 recoveryBudget,
+                preparedLandingBranch(readAuditShardEvents(projectDir), batch, unit),
               )
             : {};
           if (captured.error || !captured.snapshot) {
@@ -3463,7 +3545,9 @@ function handleFinalize(rest: string[]): void {
           unit,
           status: "failed",
           reason: "error",
-          detail: "claimed converged but the check command did not pass on re-verify",
+          detail: verdict.timedOutMs !== undefined
+            ? `claimed converged, but on re-verify ${stoppedCheckDetail(verdict.timedOutMs, "finalize")}`
+            : "claimed converged but the check command did not pass on re-verify",
         });
       }
     } else {
@@ -3867,12 +3951,60 @@ function handleAllowChange(rest: string[]): void {
   }));
 }
 
+// The person asked this chat to build a side-by-side batch another chat of this
+// clone started ("build them here instead"): the agent names the message they
+// asked in, the tool proves it and records this chat with their words, and
+// `next` hands the batch to this chat from then on (swarmBuildingChat). It
+// reads no words. Prepare cannot say it: worktrees it finds in place start no
+// new batch row.
+function handleTakeOver(rest: string[]): void {
+  const { flags } = parseArgs(rest);
+  const projectDir = resolveProjectDir(flags["project-dir"]);
+  resolveSwarmSelection(projectDir, flags);
+  if (!flags.batch || !/^[1-9][0-9]*$/.test(flags.batch)) fail("take-over requires --batch <n>: the batch the person asked to build here");
+  const next = aidlcDispatcherInvocation("orchestrate next");
+  const chat = hostNamesThisChat(projectDir) ? commandChat(projectDir) : null;
+  if (chat === null) {
+    fail(`This chat cannot be told apart from the others here, so nothing holds the batch for another one: run \`${next}\` and follow what it returns.`);
+  }
+  const stage = "code-generation";
+  const building = swarmBuildingChat(projectDir, Number(flags.batch), stage);
+  if (building === null || building.chat === chat) {
+    fail(`Batch ${flags.batch} is not being built from another chat here: run \`${next}\` and follow what it returns.`);
+  }
+  // The agent has no other place to learn the id: the step names their messages
+  // since the other chat last took the build, the only ones that can ask for it.
+  if (!flags.message || flags.message === "true") {
+    fail(requestMessageStep(projectDir, "take-over requires --message <id>: the person's message that asked to build here.",
+      "any", `\`${aidlcDispatcherInvocation("swarm take-over")} --batch ${flags.batch}\``, "", building.since));
+  }
+  const proof = proveMessage(projectDir, flags.message, "request", { request: true });
+  if ("refusal" in proof) fail(proof.refusal);
+  if (!messagesSince(readAuditShardEvents(projectDir), building.since).has(flags.message)) {
+    fail(requestMessageStep(projectDir, `Message ${flags.message} came before the other chat ` +
+      `${building.row.event === "SWARM_TAKEN_OVER" ? "took this build over" : "started this build"}, so it does not ` +
+      "ask to build it here now. Run nothing for it here and end your turn.", "any", "the same command", "", building.since));
+  }
+  const words = personsWordsText(proof.message.words ?? proof.message.text);
+  appendAuditEntry("SWARM_TAKEN_OVER", {
+    "Batch number": flags.batch,
+    Stage: stage,
+    "Run floor": latestMainWorkflowStageRunFloorForProject(projectDir, stage),
+    Session: chat,
+    ...(words ? { "Person Reply": words } : {}),
+    "Message Id": proof.message.id,
+  }, projectDir);
+  console.log(JSON.stringify({ taken_over: Number(flags.batch), message: `Recorded. Run \`${next}\` now: it hands this chat the batch.` }));
+}
+
 function fail(msg: string): never {
   console.error(JSON.stringify({ error: msg }));
   process.exit(1);
 }
 
 export function main(argv: string[]): void {
+  // A turn Claude Code started itself is settled before this command reads a turn.
+  settleClaudeTurnsFirst(resolveProjectDir(projectDirFlag(argv)));
   // The subcommand is the first bare token that is NOT a flag NOR a flag's value.
   // Walk argv skipping `--flag value` / `--flag=value` pairs so
   // `--project-dir <path> check ...` and `check --project-dir <path> ...` both
@@ -3906,10 +4038,13 @@ export function main(argv: string[]): void {
     case "allow-change":
       handleAllowChange(rest);
       break;
+    case "take-over":
+      handleTakeOver(rest);
+      break;
     default:
       console.error(
         JSON.stringify({
-          error: `Unknown subcommand: ${subcommand ?? "(none)"}. Valid: prepare, check, finalize, allow-change`,
+          error: `Unknown subcommand: ${subcommand ?? "(none)"}. Valid: prepare, check, finalize, allow-change, take-over`,
         })
       );
       process.exit(1);

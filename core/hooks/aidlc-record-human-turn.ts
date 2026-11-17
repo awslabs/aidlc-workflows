@@ -76,6 +76,7 @@ import {
   getField,
   hookStandsOutside,
   isolatedRunWithoutWork,
+  selectedRecordIsFinished,
   hostEnvelopeTurnText,
   planApprovalChallengeRelativePath,
   COMMAND_TURN_REPLY,
@@ -105,17 +106,19 @@ import {
   writeProjectHookStatusFile,
 } from "../tools/aidlc-lib.ts";
 import { appendAuditEntryUnlocked, maskSecretShapes, saySecretMaskedOnce } from "../tools/aidlc-audit.ts";
-import { aidlcToolInvocation } from "../tools/aidlc-runtime-paths.ts";
+import { aidlcToolInvocation, runtimeHarnessName } from "../tools/aidlc-runtime-paths.ts";
 import { normalizeRetiredGuardPolicyField } from "../tools/aidlc-guard-switch.ts";
 import {
   type PlanApprovalPickerQuestion,
   recordPlanApprovalHumanResponse,
   recordProtectedHumanResponse,
 } from "../tools/aidlc-testing-posture.ts";
-import { notePlanApprovalAskReply, openEngineQuestion } from "../tools/aidlc-plan-approval-ask.ts";
+import { notePlanApprovalAskReply, openEngineQuestion, planQuestionBoxAsAsked } from "../tools/aidlc-plan-approval-ask.ts";
+import { claudeTurnKey, noteClaudeTurnPending } from "../tools/aidlc-claude-turn-origin.ts";
+import { settleClaudeTurnsFirst } from "../tools/aidlc-claude-turn-pending.ts";
 import { openPlanQuestion } from "../tools/aidlc-question-store.ts";
 import { boxQuestionId, QUESTION_ID_FIELD, turnQuestionFields } from "../tools/aidlc-questions.ts";
-import { aidlcEntryWords, isAidlcCommandPrompt } from "../tools/aidlc-reply-reader.ts";
+import { aidlcEntryWords, isAidlcCommandPrompt, recommendedChoices } from "../tools/aidlc-reply-reader.ts";
 import { MESSAGE_PICKER_MAX_CHARS, MESSAGE_TEXT_MAX_CHARS, type NewMessage, saveMessage } from "../tools/aidlc-message-store.ts";
 
 // The one parse of a typed line, for the message record (aidlc-message-store.ts)
@@ -378,6 +381,66 @@ function stoppedReviewNote(projectDir: string): string | null {
   return null;
 }
 
+// The questions a question box asked, as the tool's input lists them.
+function boxQuestions(toolInput: unknown): unknown[] {
+  return toolInput !== null && typeof toolInput === "object" &&
+      Array.isArray((toolInput as Record<string, unknown>).questions)
+    ? (toolInput as { questions: unknown[] }).questions
+    : [];
+}
+
+// The answers a question box carried back (the adapter's raw box, or the
+// tool's own result), keyed as the host keys them; null when it holds none the
+// hook can read.
+function boxAnswers(response: unknown): Record<string, unknown> | null {
+  let value = response;
+  if (typeof value === "string") {
+    try { value = JSON.parse(value); } catch { return null; }
+  }
+  const answers = value !== null && typeof value === "object" ? (value as Record<string, unknown>).answers : null;
+  return answers !== null && typeof answers === "object" && !Array.isArray(answers)
+    ? answers as Record<string, unknown>
+    : null;
+}
+
+// Where a question's answer is: Claude Code keys answers by the question text,
+// Codex by the question id. Null when the box carried none for it.
+function answerKey(question: Record<string, unknown>, answers: Record<string, unknown>): string | null {
+  if (typeof question.id === "string" && question.id in answers) return question.id;
+  return typeof question.question === "string" && question.question in answers ? question.question : null;
+}
+
+// A box that asked several questions, each read as a box asking it alone would
+// be: its words, its choices, whether it takes several picks, and the reply the
+// person gave it (null when they left it blank). The engine's plan question
+// keeps its own reply from here, never another question's
+// (notePlanApprovalAskReply). Undefined for a box of one question.
+function questionsAlone(
+  toolInput: unknown,
+  toolResponse: unknown,
+  pickerReply: unknown,
+): PlanApprovalPickerQuestion["questions"] {
+  const asked = boxQuestions(toolInput);
+  if (asked.length < 2) return undefined;
+  // The reply from where pickerReplies reads it (the adapter's raw box first),
+  // taken as a box of one takes it (its first pick, a Codex note left out); the
+  // picks from where carriesSeveralPicks reads them (the tool's own result).
+  const replies = boxAnswers(pickerReply ?? toolResponse) ?? {};
+  const picks = boxAnswers(toolResponse) ?? {};
+  return asked.map((entry) => {
+    const question = entry !== null && typeof entry === "object" ? entry as Record<string, unknown> : {};
+    const alone = { questions: [entry] };
+    const replyKey = answerKey(question, replies);
+    const pickKey = answerKey(question, picks);
+    return {
+      question: extractQuestionText(alone),
+      options: extractOptionLabels(alone),
+      severalPicks: carriesSeveralPicks(alone, { answers: pickKey === null ? {} : { [pickKey]: picks[pickKey] } }),
+      reply: (replyKey === null ? "" : extractResponseText(replies[replyKey])) || null,
+    };
+  });
+}
+
 // What a question box carried back, one entry per question it asked: the
 // question as shown and the reply as given, verbatim. Claude Code keys each
 // reply by its question; Codex keys it by the question's id, with a list of
@@ -402,11 +465,8 @@ function pickerReplies(
     const payload = JSON.parse(input) as {
       tool_input?: unknown; toolInput?: unknown; tool_response?: unknown; toolResponse?: unknown; picker_reply?: unknown;
     };
-    let response = payload.picker_reply ?? payload.tool_response ?? payload.toolResponse;
-    if (typeof response === "string") response = JSON.parse(response);
-    const answers = response !== null && typeof response === "object" ? (response as Record<string, unknown>).answers : null;
-    if (answers === null || typeof answers !== "object" || Array.isArray(answers)) return { entries: [], cut };
-    const picks = answers as Record<string, unknown>;
+    const picks = boxAnswers(payload.picker_reply ?? payload.tool_response ?? payload.toolResponse);
+    if (picks === null) return { entries: [], cut };
     const replyOf = (value: unknown): string | null => {
       const chosen = value !== null && typeof value === "object" && !Array.isArray(value)
         ? (value as Record<string, unknown>).answers
@@ -416,20 +476,12 @@ function pickerReplies(
         .join(", ");
       return reply === "" ? null : kept(reply);
     };
-    const toolInput = payload.tool_input ?? payload.toolInput;
-    const asked = toolInput !== null && typeof toolInput === "object" &&
-        Array.isArray((toolInput as Record<string, unknown>).questions)
-      ? (toolInput as { questions: unknown[] }).questions
-      : [];
     const entries: Array<{ question: string; reply: string | null }> = [];
     const used = new Set<string>();
-    for (const entry of asked) {
+    for (const entry of boxQuestions(payload.tool_input ?? payload.toolInput)) {
       const question = entry !== null && typeof entry === "object" ? entry as Record<string, unknown> : {};
       if (typeof question.question !== "string") continue;
-      // Claude Code keys answers by the question text, Codex by the question id.
-      const key = typeof question.id === "string" && question.id in picks
-        ? question.id
-        : question.question in picks ? question.question : null;
+      const key = answerKey(question, picks);
       if (key !== null) used.add(key);
       entries.push({ question: kept(question.question), reply: key === null ? null : replyOf(picks[key]) });
     }
@@ -529,10 +581,12 @@ async function run(input: string): Promise<number> {
   const forThePerson: Array<() => void> = [];
   // Besides the notes, respond hands back the help line and the event the host
   // fired: a host takes a hook's context only under its own event (a box
-  // answer's line named UserPromptSubmit is dropped on Claude Code).
-  const handover: { help: string | null; event: "UserPromptSubmit" | "PostToolUse" } = {
-    help: null, event: "UserPromptSubmit",
-  };
+  // answer's line named UserPromptSubmit is dropped on Claude Code). And, for an
+  // adapter that asked for it (wants_first_step_note), the first-step note in
+  // its own key, which it says its own way (opencode, Kiro CLI's V2 engine).
+  const handover: {
+    help: string | null; event: "UserPromptSubmit" | "PostToolUse"; firstStepNote: string | null;
+  } = { help: null, event: "UserPromptSubmit", firstStepNote: null };
   try {
     return await respond(input, notes, forThePerson, handover);
   } finally {
@@ -546,18 +600,27 @@ async function run(input: string): Promise<number> {
     if (handover.help !== null && [...notes, handover.help].join("\n").length <= PROMPT_CONTEXT_MAX_CHARS) {
       notes.push(handover.help);
     }
-    if (notes.length > 0) process.stdout.write(hookContextLine(handover.event, notes.join("\n")));
+    if (notes.length > 0 || handover.firstStepNote !== null) {
+      process.stdout.write(hookContextLine(handover.event, notes.join("\n"), handover.firstStepNote ?? undefined));
+    }
   }
 }
 
 async function respond(
-  input: string,
+  received: string,
   notes: string[],
   forThePerson: Array<() => void>,
-  handover: { help: string | null; event: "UserPromptSubmit" | "PostToolUse" },
+  handover: { help: string | null; event: "UserPromptSubmit" | "PostToolUse"; firstStepNote: string | null },
 ): Promise<number> {
 try {
   const projectDir = resolveProjectDirFromHook(import.meta.url);
+  // Claude Code's box for the code plan question showed the plan's lines under
+  // the agent's question (planQuestionBoxInput); everything below reads the box
+  // as the agent asked it.
+  const input = runtimeHarnessName() === "claude" ? planQuestionBoxAsAsked(projectDir, received) : received;
+  // A turn Claude Code started itself before this one is settled first, so
+  // nothing below reads it as the person's (aidlc-claude-turn-origin.ts).
+  settleClaudeTurnsFirst(projectDir);
   let sessionId = "";
   let promptSubmitted = false;
   let humanResponseText = "";
@@ -577,12 +640,18 @@ try {
   // `origin`; Claude Code's transcript is read here; anything unknown is a
   // person (kiroTurnOrigin, claudeTranscriptOrigin in aidlc-lib.ts).
   let turnOrigin: TurnOrigin = { kind: "person" };
+  // Claude Code's key for a turn recorded as the person's only because nothing
+  // said otherwise yet: settleClaudeTurns reads the turn's own row by it.
+  let claudeKey: { transcript: string; promptId: string } | null = null;
   // An adapter whose own prompt hook runs a command the person typed and hands
   // the agent its output (Kiro's) says so; the help is then left to it.
   let relaysTerminalOutput = false;
   // An adapter whose host may show the person this hook's context line says
   // so; the message-id line is then left to the steps of `next`.
   let contextMayReachPerson = false;
+  // An adapter that says the first-step note its own way asks for it in its
+  // own key (opencode, Kiro CLI's V2 engine); no other output changes.
+  let wantsFirstStepNote = false;
   try {
     const parsed = JSON.parse(input) as {
       hook_event_name?: unknown;
@@ -604,9 +673,11 @@ try {
       transcript_path?: unknown;
       relays_terminal_output?: unknown;
       context_may_reach_person?: unknown;
+      wants_first_step_note?: unknown;
     };
     relaysTerminalOutput = parsed.relays_terminal_output === true;
     contextMayReachPerson = parsed.context_may_reach_person === true;
+    wantsFirstStepNote = parsed.wants_first_step_note === true;
     if (typeof parsed.session_id === "string") sessionId = validSessionId(parsed.session_id.trim()) ?? "";
     questionText = extractQuestionText(parsed.tool_input ?? parsed.toolInput);
     // A host that wraps the person's turn in its own context (Kiro Crew) hands
@@ -658,6 +729,9 @@ try {
       const pickerResult = parsed.picker_reply ?? parsed.tool_response ?? parsed.toolResponse;
       pickerUnanswered = emptyPickerResult(pickerResult);
       picked = pickerUnanswered ? [] : pickedLabels(parsed.tool_response ?? parsed.toolResponse);
+      const several = questionsAlone(
+        parsed.tool_input ?? parsed.toolInput, parsed.tool_response ?? parsed.toolResponse, parsed.picker_reply,
+      );
       pickerQuestion = {
         question: questionText,
         options: extractOptionLabels(parsed.tool_input ?? parsed.toolInput),
@@ -665,6 +739,7 @@ try {
           parsed.tool_input ?? parsed.toolInput,
           parsed.tool_response ?? parsed.toolResponse,
         ),
+        ...(several !== undefined ? { questions: several } : {}),
       };
     }
     const supplied = suppliedTurnOrigin(parsed.origin);
@@ -672,12 +747,14 @@ try {
       turnOrigin = supplied;
     } else if (promptSubmitted && typedPrompt && typeof parsed.transcript_path === "string") {
       // Claude Code hands its transcript to the hook: its row for this prompt
-      // names who started the turn. With no row (2.1.310 writes it only after
-      // this hook returns), only the host's whole notice or message block
-      // counts as the host's.
-      turnOrigin = claudeTranscriptOrigin(parsed.transcript_path, parsed.prompt_id, typedPrompt) ??
-        hostTemplateOrigin(typedPrompt, CLAUDE_HOST_TEMPLATES) ??
-        { kind: "person" };
+      // names who started the turn. With no row (Claude Code writes it only
+      // after this hook returns), only the host's whole notice or message block
+      // counts as the host's here, and the turn is settled from its row at the
+      // next engine entry (aidlc-claude-turn-origin.ts).
+      const decided = claudeTranscriptOrigin(parsed.transcript_path, parsed.prompt_id, typedPrompt) ??
+        hostTemplateOrigin(typedPrompt, CLAUDE_HOST_TEMPLATES);
+      turnOrigin = decided ?? { kind: "person" };
+      if (decided === null) claudeKey = claudeTurnKey(parsed.transcript_path, parsed.prompt_id);
     }
   } catch { /* presence still records without identity on legacy payloads */ }
   // A new prompt starts a new turn: a one-shot stop left from an earlier turn
@@ -709,7 +786,7 @@ try {
     const theirText = [humanResponseText, ...picked].join("\n");
     if (!sessionId || !personHere || turnOrigin.kind === "host" || maskSecretShapes(theirText) === theirText) return;
     const session = sessionId;
-    forThePerson.push(() => saySecretMaskedOnce(projectDir, session));
+    forThePerson.push(() => saySecretMaskedOnce(projectDir, session, true));
   };
   // A help request the person typed is answered here, before any work exists
   // or this chat joins one, on every host that hands this hook's line to the
@@ -760,6 +837,8 @@ try {
         ? said.slice(0, MESSAGE_TEXT_MAX_CHARS)
         : said;
       const cut = full.length > MESSAGE_TEXT_MAX_CHARS || words !== said || picker?.cut === true;
+      // A typed prompt the record cuts is also kept whole beside it, so `next`
+      // takes the person's line as they typed it (wholeMessageText).
       return saveMessage(projectDir, {
         session: sessionId || null,
         at: isoTimestamp(),
@@ -769,10 +848,43 @@ try {
         picker: picker === null ? null : picker.entries,
         ...parsed,
         words,
-      }).id;
+      }, cut && promptSubmitted ? full : undefined).id;
     } catch {
       // The record is a convenience here; the turn and its row stand without it.
       return null;
+    }
+  };
+  // A typed `/aidlc` line kept whole beyond the record's cut: the agent hears
+  // that AI-DLC has it, so it runs `next` with nothing after it instead of
+  // typing it all again (firstStepNote). A Kiro adapter says its own first
+  // step (relays_terminal_output), so it gets no line of this unless it asks.
+  // A prompt no longer than the record keeps has no whole copy to read, so it
+  // loads no engine module here.
+  const sayFirstStep = async (messageId: string | null): Promise<void> => {
+    if (!messageId || !sessionId || !promptSubmitted || typedPrompt.length <= MESSAGE_TEXT_MAX_CHARS) return;
+    try {
+      const { firstStepNote } = await import("../tools/aidlc-orchestrate.ts");
+      const note = firstStepNote(projectDir, sessionId, typedPrompt, messageId);
+      if (note === "") return;
+      if (!relaysTerminalOutput) notes.push(note);
+      if (wantsFirstStepNote) handover.firstStepNote = note;
+    } catch {
+      // Without the note the agent passes the words, as it always has.
+    }
+  };
+  // A Claude Code prompt still to be settled from its own row
+  // (aidlc-claude-turn-origin.ts) keeps Claude Code's key beside its message
+  // wherever the message is kept: before any work exists the message is the
+  // plan question's proof of a reply. `onRecord`: its HUMAN_TURN is on the work.
+  const keepClaudeKey = (messageId: string | null, onRecord: boolean): void => {
+    const key = claudeKey;
+    const session = sessionId;
+    if (key === null || !messageId || !session) return;
+    try {
+      withAuditLock(projectDir, () =>
+        noteClaudeTurnPending(projectDir, session, { message: messageId, ...key, ...(onRecord ? { onRecord: true as const } : {}) }));
+    } catch {
+      // Unsettled, the turn stays the person's, as every turn was.
     }
   };
   // The agent learns the id of the message it can name with --message, never
@@ -780,11 +892,12 @@ try {
   // asks in chat to change with nothing waiting on them (without the id, every
   // such request met the setter's refusal first, and a setting asked in a box
   // answer was recorded on the message typed before it). On the work, every
-  // such message gets it; outside the work or before any exists, only a reply
-  // to this chat's plan question for new work, so a setting asked beside the
-  // plan pick is recorded as theirs and no other prompt in a project with no
-  // AI-DLC work open carries the line. Once a turn. The setter's proof of the
-  // message still decides.
+  // such message gets it, and so does one in a chat that took part in work now
+  // finished, where the message is their turn (standingPersonTurn); outside the
+  // work or before any exists, only a reply to this chat's plan question for
+  // new work, so a setting asked beside the plan pick is recorded as theirs and
+  // no other prompt in a project with no AI-DLC work open carries the line.
+  // Once a turn. The setter's proof of the message still decides.
   let idSaid = false;
   const sayMessageId = (messageId: string | null, notAReply: boolean, onTheWork: boolean): void => {
     if (idSaid || !(promptSubmitted || pickerQuestion !== undefined) || !messageId || notAReply || contextMayReachPerson) {
@@ -803,7 +916,21 @@ try {
     // A turn the host made (its notice or brief) is nobody's words here either:
     // kept, it would read as the person's prompt where their message is the
     // proof before any work exists (intent creation).
-    if (turnOrigin.kind !== "host") sayMessageId(keepMessage(), typedParse?.command === true, false);
+    if (turnOrigin.kind !== "host") {
+      const kept = keepMessage();
+      keepClaudeKey(kept, false);
+      await sayFirstStep(kept);
+      const tookPart = workflow.participation === "participant" && selectedRecordIsFinished(projectDir, workflow.selection);
+      sayMessageId(kept, typedParse?.command === true, tookPart);
+      // The person wrote after work they took part in finished: a line kept for
+      // their reply that its last steps carried was said there, so it goes, as
+      // on open work (that carry, below, never runs here).
+      if (tookPart && personHere && sessionId) {
+        const session = sessionId;
+        const afterPrompt = pickerQuestion === undefined;
+        forThePerson.push(() => carryPendingPersonLines(projectDir, session, { afterPrompt }));
+      }
+    }
     sayIfKeyShaped();
     return 0;
   }
@@ -861,7 +988,9 @@ try {
   // The message record (keepMessage above). A setting typed on the line is in
   // it as the engine's own parser read it; nothing is applied here.
   const messageId = keepMessage();
+  if (!inRecord) keepClaudeKey(messageId, false);
   sayIfKeyShaped();
+  await sayFirstStep(messageId);
   if (inRecord) {
     // With a record it lands in the record, before the mint branch and
     // apart from it, so a hook that ran but withheld its mint (AIDLC_UNATTENDED=1,
@@ -892,6 +1021,8 @@ try {
       })}\n`);
       return 0;
     }
+    // Whether the box they answered asked a question the agent logged first.
+    let boxLogged = false;
     if (personHere) {
       // A command to AIDLC (an `/aidlc` line with no words after its flags, or
       // with its words behind `--`) is an instruction to the framework, not an
@@ -931,6 +1062,7 @@ try {
             // moment, read from one small file. Nothing decides on them here.
             ...turnQuestionFields(projectDir, sessionId),
           }, projectDir);
+          keepClaudeKey(messageId, true);
           // Keep what the person typed in this chat (recordGateWords in
           // aidlc-lib.ts). A command to AIDLC instructs the framework; the one
           // answer a single-choice box carried back counts, since the host
@@ -978,12 +1110,15 @@ try {
               // The question it answered, by its id, when the box asked one
               // open here in the question's own words.
               const id = boxQuestionId(projectDir, sessionId, question);
+              if (id !== null) boxLogged = true;
+              const recommended = options === undefined ? [] : recommendedChoices(options);
               appendAuditEntryUnlocked("QUESTION_REPLIED", {
                 ...(sessionId ? { Session: sessionId } : {}),
                 Question: question,
                 ...(id !== null ? { [QUESTION_ID_FIELD]: id } : {}),
                 Reply: reply,
                 ...(options !== undefined ? { Options: JSON.stringify(options) } : {}),
+                ...(recommended.length > 0 ? { Recommended: JSON.stringify(recommended) } : {}),
               }, projectDir);
             }
           }
@@ -1010,10 +1145,14 @@ try {
     // This turn is now the one lines are keyed to. Anything the person has not
     // heard yet follows them into it: a line queued for the turn before is still
     // about what they asked for, and they may have answered a question the agent
-    // asked of its own accord in between.
+    // asked of its own accord in between. A line kept for their reply that a
+    // step carried in the turn they now answer was said there, so it goes;
+    // after a box the agent showed without logging it, no step stood just
+    // before the box, so the line rides on to the reply that ends the turn.
     if (sessionId) {
       const session = sessionId;
-      forThePerson.push(() => carryPendingPersonLines(projectDir, session));
+      const afterPrompt = pickerQuestion === undefined || boxLogged;
+      forThePerson.push(() => carryPendingPersonLines(projectDir, session, { afterPrompt }));
     }
   }
   // Before any work exists: the reply to this chat's plan question.

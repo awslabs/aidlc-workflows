@@ -144,6 +144,11 @@ Working, Walking Skeleton, Testing Posture, Deployment, and Code Style.
   sections as suggested answers.
 - **Re-run:** show the matching `memory/team.md` content as the default.
 
+The Way of Working answer settles the one branch the team's work merges into
+(Step 5); when nothing names one, it is the branch `memory/org.md` names. Ask
+which only when one answer names two branches and you cannot tell which the
+work merges into.
+
 The `memory/*.md` sections you draw the suggested answers from are written for
 this framework's own resolution rules, so they carry vocabulary the person
 answering has no reason to know. Two obligations follow, and they apply to the
@@ -186,9 +191,16 @@ four declared artifacts:
    before implementation with lower-level unit tests after implementation).
    Keep coverage, tooling, test-type, and scope notes as additional bullets;
    they do not replace the two structured fields.
+
+   `## Way of Working` MUST include `- **Integration branch**: <branch>`: the
+   one branch the person affirmed as the one work merges into, as git names it
+   and nothing else (for example `main`). On a re-run whose `memory/team.md`
+   says it only in a sentence, write the branch that sentence means. The tools
+   read this line, not the prose beside it.
 2. **discovered-rules.md** - `## Mandated` rules in `ALWAYS ...` form and
    `## Forbidden` rules in `NEVER ...` form, only for human-stated hard
-   constraints.
+   constraints. Each rule is one list item (`- ALWAYS ...`); a heading with no
+   rule holds no list item, only `None.`
 3. **evidence.md** - what each participant inspected or inferred, the
    interview decisions, and any unresolved uncertainty.
 4. **practices-discovery-timestamp.md** - one line:

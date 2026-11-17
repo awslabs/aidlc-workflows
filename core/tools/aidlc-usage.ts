@@ -73,7 +73,7 @@ export type PriceRow = {
 // tree carries the JSON, so an installed harness always reads that). Every
 // field is the published price, not a derived multiplier: cache writes are
 // 1.25x (5m) / 2x (1h) input on every row, but cache reads are 0.1x input on
-// most rows and 0.05x on opus-5-5, 0.025x on fable-5-1.
+// most rows, 0.05x on opus-5-5 and sonnet-5-5, 0.025x on fable-5-1.
 //
 // VERSION-DISCRETE keys (a row per model VERSION, NOT one per family): a point
 // release such as `opus-5-5` has its own row, never its major's (`opus-5`).
@@ -91,9 +91,10 @@ export const DEFAULT_RATES: Record<string, PriceRow> = {
   "opus-4-8": { input: 5.0, output: 25.0, cacheWrite5m: 6.25, cacheWrite1h: 10.0, cacheRead: 0.5 },
   "opus-4-7": { input: 5.0, output: 25.0, cacheWrite5m: 6.25, cacheWrite1h: 10.0, cacheRead: 0.5 },
   "opus-4-6": { input: 5.0, output: 25.0, cacheWrite5m: 6.25, cacheWrite1h: 10.0, cacheRead: 0.5 },
-  "sonnet-5-5": { input: 2.0, output: 10.0, cacheWrite5m: 2.5, cacheWrite1h: 4.0, cacheRead: 0.2 },
+  "sonnet-5-5": { input: 2.0, output: 10.0, cacheWrite5m: 2.5, cacheWrite1h: 4.0, cacheRead: 0.1 },
   "sonnet-5": { input: 2.0, output: 10.0, cacheWrite5m: 2.5, cacheWrite1h: 4.0, cacheRead: 0.2 },
   "sonnet-4-6": { input: 3.0, output: 15.0, cacheWrite5m: 3.75, cacheWrite1h: 6.0, cacheRead: 0.3 },
+  "haiku-5-5": { input: 0.1, output: 0.5, cacheWrite5m: 0.125, cacheWrite1h: 0.2, cacheRead: 0.01 },
   "haiku-4-5": { input: 1.0, output: 5.0, cacheWrite5m: 1.25, cacheWrite1h: 2.0, cacheRead: 0.1 },
   "fable-5-1": { input: 10.0, output: 50.0, cacheWrite5m: 12.5, cacheWrite1h: 20.0, cacheRead: 0.25 },
   "fable-5": { input: 10.0, output: 50.0, cacheWrite5m: 12.5, cacheWrite1h: 20.0, cacheRead: 1.0 },

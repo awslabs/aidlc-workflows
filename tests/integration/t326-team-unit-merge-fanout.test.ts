@@ -5,7 +5,7 @@
 // it shows the dispatcher board (or a participant's claim question) instead of
 // the next Unit's stage, so a claim runs only on the person's own
 // `/aidlc --claim`, and the guard's refusal names that step. The board's
-// header, its Claim Registry and its list of claimed Units name as claimed only
+// header, its Claims table and its list of claimed Units name as claimed only
 // Units still being worked, as its Claimable and Waiting lists read them; a
 // landed Unit's kept claim reads as landed, and only once main has merged it.
 
@@ -67,7 +67,7 @@ describe("t326 an unscoped checkout after a team Unit lands", () => {
     // and alpha, landed, is no longer listed as claimed.
     const lead = nextDirective(seed);
     expect(lead.kind).toBe("notice");
-    expect(lead.message as string).toContain("# Team Construction Dispatcher");
+    expect(lead.message as string).toContain("# Team Construction Board");
     expect(lead.message as string).toContain("**Claimed:** none. **Claimable:** beta. **Waiting:** none.");
     expect(lead.message as string).toContain("| alpha | landed | alpha-team | 1 |");
     expect(lead.message as string).not.toContain("| alpha | claimed |");
@@ -91,8 +91,10 @@ describe("t326 an unscoped checkout after a team Unit lands", () => {
     expect(unscopedStart.status).not.toBe(0);
     expect(unscopedStart.out).toContain("/aidlc --claim <unit> --team <label>");
 
-    // A fresh clone of the landed main routes the same way.
+    // A fresh clone of the landed main is offered the Unit it can take; Not
+    // now shows the same board.
     const fresh = clone(remote, "fresh");
+    expect(nextDirective(fresh)).toMatchObject({ kind: "ask", ask_type: "team-handover", handovers: ["join"] });
     const freshNext = nextDirective(fresh);
     expect(freshNext.kind).toBe("notice");
     expect(freshNext.message as string).toContain("`/aidlc --claim beta`");
@@ -118,7 +120,7 @@ describe("t326 an unscoped checkout after a team Unit lands", () => {
       fresh,
     );
     expect(claimStep.status, claimStep.out).toBe(0);
-    expect(JSON.parse(claimStep.stdout).message).toContain("--claim beta --team beta-team");
+    expect(JSON.parse(claimStep.stdout).message).toMatch(/--claim beta --request-file \S+`/);
     const claimed = runMergeTool(UNIT, ["claim", "beta", "--team", "beta-team"], fresh);
     expect(claimed.status, claimed.out).toBe(0);
     expect(JSON.parse(claimed.stdout)).toMatchObject({ claimed: true, unit: "beta", owner: "beta-team" });

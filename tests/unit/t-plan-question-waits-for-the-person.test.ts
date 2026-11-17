@@ -10,10 +10,12 @@
 // terminal lift the check, as at a stage gate. A message the host's prompt hook
 // never saw (Copilot CLI's PowerShell check timed out on a Windows runner) leaves
 // nothing on record while AI-DLC's other hooks run: the plan still waits then.
+// A Claude Code wake-up (a /loop tick) is no reply once its own row is on
+// record (#3541): the hook keeps it before any work exists like any message.
 
 import { afterEach, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { recordPreWorkflowHeartbeat } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -189,6 +191,29 @@ describe("t-plan-question-waits-for-the-person", () => {
     const env = chatEnv(proj, SESSION);
     const ask = planQuestion(proj, env);
     picked(proj, SESSION, 'Go ahead with the "bugfix" plan');
+    expect(startsWork(next(proj, answerArgs(ask.confirm_command), env))).toBe(true);
+  });
+
+  test("a Claude Code wake-up after the question is no reply once its own row is on record; the person's reply is", () => {
+    proj = fresh();
+    const env = chatEnv(proj, SESSION);
+    const ask = planQuestion(proj, env);
+    // Claude Code hands its prompt hook a wake-up's prompt with a typed one's
+    // keys, and writes the turn's own row (rows captured on 2.1.318) only after
+    // the hook returns, before the turn's first command.
+    const transcript = join(proj, "claude-chat.jsonl");
+    writeFileSync(transcript, "");
+    const claudeTurn = (promptId: string, prompt: string, marks: Record<string, unknown>): void => {
+      hook(proj, SESSION, { hook_event_name: "UserPromptSubmit", prompt, transcript_path: transcript, prompt_id: promptId });
+      appendFileSync(transcript, `${JSON.stringify({
+        type: "user", promptId, message: { role: "user", content: prompt }, timestamp: new Date().toISOString(), ...marks,
+      })}\n`);
+    };
+    claudeTurn("d5527d3d-1b0e-4c55-9f3e-2a7c1ed41d3f", "reply only with the word ok",
+      { turnOrigin: "scheduled", promptSource: "system", scheduledFireId: "1ed41d3f-5a2b-4d1c-8e9f-0b6a7c3d2e10" });
+    const d = next(proj, answerArgs(ask.confirm_command), env);
+    expect(waits(d), JSON.stringify(d).slice(0, 500)).toBe(true);
+    claudeTurn("a24d84e1-6f2d-4b8a-9c1e-3d5f7a9b0c2e", "1", { turnOrigin: "human", promptSource: "typed", origin: { kind: "human" } });
     expect(startsWork(next(proj, answerArgs(ask.confirm_command), env))).toBe(true);
   });
 

@@ -22,6 +22,7 @@ import {
   cpSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -53,6 +54,54 @@ describe("test-pro plugin own content validation", () => {
       walkMarkdownFiles(join(PLUGIN_ROOT, "contributions")).length,
     ).toBeGreaterThan(0);
   });
+});
+
+describe(`${PLUGIN_NAME} plugin — sensor tools honor the main(argv) contract`, () => {
+  const SENSOR_TOOLS = [
+    "aidlc-sensor-coverage-threshold.ts",
+    "aidlc-sensor-requirement-coverage.ts",
+  ];
+
+  for (const tool of SENSOR_TOOLS) {
+    const toolPath = join(PLUGIN_ROOT, "tools", tool);
+
+    test(`${tool} exports main(argv) and does not run on import under engine argv`, () => {
+      const probe = [
+        `const mod = await import(${JSON.stringify(toolPath)});`,
+        `if (typeof mod.main !== "function") { console.error("no-main"); process.exit(3); }`,
+        `console.log("imported");`,
+      ].join("\n");
+      const result = spawnSync(
+        process.execPath,
+        ["-e", probe, "engine", "--stage", "code-generation"],
+        {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+          encoding: "utf-8",
+        },
+      );
+      expect(result.status, `${result.stdout ?? ""}${result.stderr ?? ""}`).toBe(0);
+      expect(result.stdout).toContain("imported");
+      expect(result.stdout).not.toContain('"pass"');
+    });
+
+    test(`${tool} parses the argv it is handed, not process.argv`, () => {
+      const probe = [
+        `const mod = await import(${JSON.stringify(toolPath)});`,
+        `mod.main(["--stage", "code-generation", "--output-path", "/nonexistent/other.json"]);`,
+      ].join("\n");
+      const result = spawnSync(
+        process.execPath,
+        ["-e", probe, "engine", "--unknown-engine-flag"],
+        {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+          encoding: "utf-8",
+        },
+      );
+      expect(result.status, `${result.stdout ?? ""}${result.stderr ?? ""}`).toBe(0);
+      expect(result.stdout).toContain('"pass":true');
+      expect(result.stderr).not.toContain("--output-path is required");
+    });
+  }
 });
 
 describe(`${PLUGIN_NAME} plugin — composed doctor check`, () => {
@@ -103,5 +152,24 @@ describe(`${PLUGIN_NAME} plugin — composed doctor check`, () => {
     );
     expect(doctor.status, `${doctor.stdout ?? ""}${doctor.stderr ?? ""}`).toBe(0);
     expect(doctor.stdout).toContain("Plugin check (test-pro):");
+  });
+
+  // A contribution's step lands among the target stage's own work, before its
+  // Completion Handoff: after it, the agent hands the stage over for approval
+  // before writing what the contribution asks for.
+  test("every test-pro step lands before its target stage's Completion Handoff", () => {
+    const stagesDir = join(project, ".claude", "aidlc-common", "stages");
+    const composed = walkMarkdownFiles(stagesDir).filter((file) => readFileSync(file, "utf-8").includes("(test-pro):"));
+    expect(composed.length).toBeGreaterThan(0);
+    const late: string[] = [];
+    for (const file of composed) {
+      const text = readFileSync(file, "utf-8").replace(/\r\n/g, "\n");
+      const handoff = text.search(/^### Step \d+: Completion Handoff\b/m);
+      expect(handoff, file).toBeGreaterThan(-1);
+      for (const step of text.matchAll(/^### Step[^\n]*\(test-pro\):[^\n]*$/gm)) {
+        if ((step.index ?? 0) > handoff) late.push(`${file.slice(stagesDir.length + 1)}: ${step[0]}`);
+      }
+    }
+    expect(late).toEqual([]);
   });
 });

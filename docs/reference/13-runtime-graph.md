@@ -61,7 +61,7 @@ interface RuntimeStage {
   completed_at: string | null;    // ISO from STAGE_COMPLETED; null when pending OR when `instances` is present
   agent: string | null;           // lead_agent; null when `instances` is present
   memory_path: string;            // <record>/<phase>/<stage>/memory.md (parent stage path even on instance-bearing rows)
-  memory_entries: number | null;  // null = no memory.md file OR `instances` is present; else parseMemoryHeadings.total
+  memory_entries: number | null;  // null = no memory.md file OR `instances` is present; else parseMemoryHeadings.total (a per-Unit stage: every Unit's construction/<unit>/<stage>/memory.md plus this path's)
   memory_breakdown: {             // null when memory_entries is null
     interpretations: number;
     deviations: number;
@@ -179,11 +179,15 @@ neither affects the compile. It then filters cheaply:
 2. **Audit-existence guard** — exit if the intent's `audit/` shard doesn't exist yet.
 3. **Heartbeat** - write `<record>/.aidlc-engine/hooks-health/rebuild-stage-graph.last`
    for doctor's silent-hook detection.
-4. **Last-3-block tail-read**: merge every `audit/` shard of the active
-   intent into one buffer, split it on `\n---\n`, take the last 3 entries.
+4. **Last-3-block tail-read**: read this clone's own `audit/` shard of the active
+   intent, where every row a command writes lands, split it on `\n---\n`, take the
+   last 3 entries.
 5. **Event-class filter**: match
    `**Event**: (GATE_APPROVED|STAGE_STARTED|STAGE_AWAITING_APPROVAL|AUDIT_MERGED|UNIT_MERGED|WORKFLOW_COMPLETED)`
-   against any of the 3 blocks. Exit on no match.
+   against any of the 3 blocks; against every shard of the intent when the
+   record has no `runtime-graph.json` yet; and against another clone's shard
+   whose file is newer than `runtime-graph.json` (a teammate's transition that
+   came with a pull, compiled once). Exit on no match.
 6. **Dispatch** — `aidlc engine runtime compile ...`.
 
 `WORKFLOW_COMPLETED` is in the transition set so the final-stage
@@ -512,7 +516,7 @@ main's location. Its lifecycle is:
 - **The lifecycle that triggers compile** — the workflow / phase /
   stage transitions whose audit emits drive the compile hook. See
   [State Machine](12-state-machine.md).
-- **The audit log this graph is derived from** - the 131-event taxonomy
+- **The audit log this graph is derived from** - the 134-event taxonomy
   and the emitter registry. See [State Machine](12-state-machine.md)
   and the User Guide's [State and Audit
   Trail](../guide/10-state-and-audit.md).

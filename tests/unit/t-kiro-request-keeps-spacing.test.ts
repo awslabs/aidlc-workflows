@@ -10,8 +10,9 @@
 // person their own symptom string was wrong. Their spacing is now kept as
 // typed, on the record and on the request the work is created from, on every
 // harness: an unquoted run of spaces on Claude Code is kept the same way. The
-// words themselves never change, and any gap other than spaces and tabs (a
-// line break, a no-break space) stays one plain space, as before.
+// words themselves never change. A line break is kept too, a Windows line
+// ending as one line break; a no-break space with no line break beside it stays
+// one plain space.
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -93,7 +94,7 @@ function kiroSays(proj: string, prompt: string): void {
 
 // The call the hook told the agent to run, as the shell hands it to the engine.
 function latchedArgs(proj: string): string[] {
-  const latch = JSON.parse(readFileSync(join(proj, "aidlc", ".aidlc-forwarding-latch"), "utf-8")) as { args: string[] };
+  const latch = JSON.parse(readFileSync(join(proj, "aidlc", ".aidlc-sessions", ".kiro-cli-forwarding-latch.json"), "utf-8")) as { args: string[] };
   return latch.args;
 }
 
@@ -192,11 +193,20 @@ describe("withTypedSpacing: only the separators take what was typed", () => {
     expect(withTypedSpacing("say Hello,  World! now", `say   "Hello,  World!"  now`)).toBe("say   Hello,  World!  now");
   });
 
-  test("a gap that is not spaces and tabs stays one plain space, as the split hands it on", () => {
+  test("a gap that is not spaces, tabs or line breaks stays one plain space, as the split hands it on", () => {
     // A no-break space pasted from a document reads as a plain space (the input corpus, cu03-w).
     expect(withTypedSpacing("fix the login", "fix\u00a0the  login")).toBe("fix the  login");
-    expect(withTypedSpacing("fix this and that", "fix  this\nand  that")).toBe("fix  this and  that");
-    expect(withTypedSpacing("fix this and that", "fix this \r\n and that")).toBe("fix this and that");
+  });
+
+  test("the line breaks typed between the words are kept, a Windows or older Mac line ending as one line break", () => {
+    expect(withTypedSpacing("fix this and that", "fix  this\nand  that")).toBe("fix  this\nand  that");
+    expect(withTypedSpacing("fix this and that", "fix this \r\n and that")).toBe("fix this \n and that");
+    expect(withTypedSpacing("fix this and that", "fix this\r\rand that")).toBe("fix this\n\nand that");
+  });
+
+  test("beside a line break, a no-break or other space indenting the next line is kept as a plain space", () => {
+    expect(withTypedSpacing("fix this and that", "fix this\n\u00a0\u00a0and that")).toBe("fix this\n  and that");
+    expect(withTypedSpacing("fix this and that", "fix this\r\n\u3000and that")).toBe("fix this\n and that");
   });
 
   test("the spacing comes only from the one stretch of the line that spells the words side by side", () => {

@@ -15,7 +15,7 @@
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -479,6 +479,52 @@ describe("words sent to separate new work leave the question the work in progres
 // the specialist reviewers off"), and which it is is the agent's to read. Before,
 // the setting dropped every kept line equal to the person's latest words, so the
 // approval typed beside it was refused and the person was asked again.
+// A turn Claude Code starts on a timer (#3541), as Claude Code 2.1.278 and
+// 2.1.318 deliver it: the prompt hook gets the same keys as for a typed
+// prompt, and the turn's own transcript row, marked `turnOrigin: "scheduled"`,
+// lands only after the hook returns. The next engine command settles it.
+let wakeUps = 0;
+function wakeUp(proj: string, prompt = "# Autonomous loop check\n\nApprove what is ready."): void {
+  const transcript = join(proj, `${SESSION}.jsonl`);
+  const promptId = `d3867daf-0000-4000-8000-${String(++wakeUps).padStart(12, "0")}`;
+  run(proj, [DISPATCHER, "engine", "hook", "record-human-turn"], JSON.stringify({
+    hook_event_name: "UserPromptSubmit", session_id: SESSION, cwd: proj, prompt, prompt_id: promptId, transcript_path: transcript,
+  }));
+  appendFileSync(transcript, `${JSON.stringify({
+    type: "user", promptId, message: { role: "user", content: prompt }, timestamp: new Date().toISOString(),
+    turnOrigin: "scheduled", promptSource: "system",
+  })}\n`, "utf-8");
+}
+
+describe("a Claude Code wake-up's words leave the question the work in progress has open", () => {
+  test("a Unit checkpoint keeps none of them, and approves only on a reply of its own", () => {
+    const proj = checkpointProject("off");
+    askCheckpoint(proj);
+    wakeUp(proj);
+    const approve = ["bolt", "checkpoint", "--action", "approve", "--unit", "alpha", "--kind", "unit", "--user-input", "approve"];
+    expect(engine(proj, approve).code).not.toBe(0);
+    expect(keptReply(proj)).toEqual({ choice: null, words: null });
+    say(proj, "approve");
+    const approved = engine(proj, approve);
+    expect(approved.code, approved.out).toBe(0);
+  });
+
+  for (const policy of ["off", "strict"] as const) {
+    test(`${policy}: the code plan question keeps none of them as its reply`, () => {
+      const proj = project(policy);
+      expect(next(proj).ask_type).toBe("plan-approval");
+      wakeUp(proj);
+      const refused = spawnSync(BUN, [
+        LOG, "answer", "--stage", "code-generation", "--checkpoint", "plan-approval", "--details", "Approve Plan",
+        "--project-dir", proj,
+      ], { cwd: proj, env: env(proj), encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+      expect(refused.status).not.toBe(0);
+      expect(`${refused.stdout}${refused.stderr}`).toContain("has not replied");
+      expect(planAnswers(proj)).toEqual([]);
+    });
+  }
+});
+
 describe("a setting the engine applies leaves the open question's reply standing", () => {
   const typedWithSetting = "looks good, build it, and turn the specialist reviewers off for the rest of this work";
   const planReplies = (proj: string): string[] =>

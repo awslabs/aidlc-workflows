@@ -100,8 +100,12 @@ export async function retainDeferredCodexFixtures(
   }
 
   // Move the whole container just as failed fixtures are already preserved.
-  // This avoids reading/deleting protected Codex children. Cross-volume moves
-  // require copying, but must leave the protected source for host cleanup.
+  // This avoids reading/deleting protected Codex children. A move refused by a
+  // second volume, or by a file under the folder still held from outside the
+  // retired job (Codex's sandbox accounts), copies instead and leaves the
+  // protected source for host cleanup. The cases already passed or failed on
+  // their own: a copy that also fails leaves the fixtures in place, never
+  // failing the file.
   const destination = join(artifactDir, "retained-fixtures");
   verifyTemp();
   verifyArtifacts();
@@ -111,14 +115,21 @@ export async function retainDeferredCodexFixtures(
   try {
     await rename(temp, destination);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EXDEV") throw error;
-    await mkdir(destination);
-    // The root is exclusively reserved above. Bun rejects copying a directory
-    // onto that existing root with errorOnExist, so copy its fresh entries.
-    for (const name of readdirSync(temp)) {
-      await cp(join(temp, name), join(destination, name), {
-        recursive: true, dereference: false, verbatimSymlinks: true, errorOnExist: true, force: false,
-      });
+    const code = (error as NodeJS.ErrnoException).code ?? "";
+    if (!["EXDEV", "EPERM", "EBUSY", "EACCES"].includes(code)) throw error;
+    try {
+      await mkdir(destination);
+      // The root is exclusively reserved above. Bun rejects copying a directory
+      // onto that existing root with errorOnExist, so copy its fresh entries.
+      for (const name of readdirSync(temp)) {
+        await cp(join(temp, name), join(destination, name), {
+          recursive: true, dereference: false, verbatimSymlinks: true, errorOnExist: true, force: false,
+        });
+      }
+    } catch (copyError) {
+      console.error(`Codex fixtures left in place after verified job retirement: ${temp} (move ${code}, copy ${
+        (copyError as NodeJS.ErrnoException).code ?? String(copyError)}); any copy at ${destination} is incomplete; the host cleans up the original`);
+      return temp;
     }
     sourceKept = true;
   }

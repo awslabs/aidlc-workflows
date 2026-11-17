@@ -53,9 +53,7 @@ The conductor's Routing section defines the loading rules:
   event is detected mid-stage. This keeps error recovery and change handling
   out of context for normal forward-progress stages.
 - **`stage-protocol-governance.md`**: load at phase boundaries
-  (1.7->2.1, 2.9->3.1, 3.7->4.1) to run the Phase Boundary Verification
-  traceability check. This limits governance overhead to the points where it
-  is needed.
+  (1.7->2.1, 2.9->3.1, 3.7->4.1).
 - **`stage-protocol-learnings.md`**: load only when `protocol_modules` includes `learnings`. With `ceremony.learnings: off`, keep no diary and skip the entire ritual.
 - **`stage-protocol-reviewer.md`**: load when `protocol_modules` includes
   `reviewer`, or when the directive carries a reviewer. **`stage-protocol-reviewer-unit.md`**
@@ -160,7 +158,10 @@ AskUserQuestion({
 name of the next in-scope stage) on the reply that opened the gate (`report
 --result awaiting-approval` or `revised`, computed when the gate opens, so a
 plan change made during the stage is in it), else the run-stage directive's
-(computed at emit time), or `Complete workflow` when `next_stage` is null. The
+(computed at emit time), or `Complete workflow` when `next_stage` is null. In
+the checkout that claimed a team Unit, a Unit step's `next_stage` is that
+Unit's next step, and after its last one `landing Unit <unit>`: Build and Test
+runs once every Unit lands. The
 conductor never guesses the next stage.
 
 The conductor reads the person's reply, in any words, against what it showed
@@ -407,13 +408,13 @@ follow-up instead of reopening the whole question.
 ### Tri-Mode System
 
 **Step 1: Create the questions file** in the appropriate `<record>/`
-directory using `[Answer]:` tag format with options A-E (A-D on Claude Code:
+directory using `[Answer]:` tag format with options A-E (A-D on Claude Code, A-C on Codex:
 the letters come from the harness manifest's `questionOptions`). Every ordinary
 question must end with `X. Other (please specify)`. The dedicated Consolidated
 Summary Confirmation is the sole exception: its **Looks correct / Request
 changes** options are unlettered. All `[Answer]:` tags start blank.
 Multi-select questions add "(select all that apply)" to the question text;
-answer format: `[Answer]: A, B, E`.
+answer format: `[Answer]: A, C`.
 
 The agent groups a fresh file's questions by who would answer them: each
 heading names the trade whose decision it is after its number
@@ -559,12 +560,12 @@ proceed with partial answers. The file is the authoritative record.
 ### Answer Analysis
 
 After collecting answers, analyze ALL responses (mandatory):
-- **Vague answers**: "mix of", "not sure", "depends", "probably"
+- **Vague answers**: "mix of", "not sure", "depends"
 - **Contradictions** between answers
 - **Missing details** needed for next step
 
 If ANY ambiguity found, create follow-up questions and resolve before
-proceeding. **When in doubt, ask.**
+proceeding.
 
 ### Ambiguity Detection
 
@@ -573,7 +574,7 @@ proceeding. **When in doubt, ask.**
 | Condition | Action |
 |-----------|--------|
 | Blank or underscore-only `[Answer]:` | List unanswered, ask user to complete |
-| Answer not matching options (A-E or A-D, X) and not clear free-text | Ask user to clarify |
+| Answer not matching options (A-E, A-D or A-C, X) and not clear free-text | Ask user to clarify |
 | Ambiguous ("maybe B", "either A or C") | Ask user to commit to single choice |
 
 **Contradiction detection** -- cross-check full answer set for:
@@ -589,8 +590,8 @@ When detected: present contradictory answers side by side, explain conflict,
 ask targeted follow-up. Do NOT proceed until resolved.
 
 **Overconfidence prevention:**
-- Default to asking, not assuming. Never proceed with ambiguity.
-- Red flags requiring follow-up: single-word answers to open-ended questions;
+- Never proceed with ambiguity.
+- Red flags requiring follow-up:
   contradictory signals; question-dodging; relaxing, lowering, or disabling a
   previously defined quality target (for example, a test coverage threshold)
   instead of meeting it
@@ -795,9 +796,10 @@ dynamic per workflow position.
    instead of `rules_content`, the chat already holds the bundle and the
    directive does not repeat it: paste nothing for the rules and name
    `directive.stage_file` in the brief, because every harness that sends
-   `rules_held` gives them to its registered agents itself (on Claude Code,
-   Codex and opencode the rule-delivery hook appends the exact bundle of the
-   stage that path names; Kiro CLI preloads it through `resources`; on Kiro
+   `rules_held` gives them to its registered agents itself (on Codex and
+   opencode the rule-delivery hook appends the exact bundle of the stage that
+   path names; on Claude Code it gives the agent the current stage's bundle
+   as the agent starts; Kiro CLI preloads it through `resources`; on Kiro
    IDE, and Kiro CLI v3 running the same tree, the always-included
    active-memory steering carries its text). Every brief still carries
    `directive.ceremony`, `directive.protocol_modules`, and the diary discipline
@@ -1024,7 +1026,7 @@ and problem complexity.
 | poc | Minimal | Minimal | ~8 | Initialization + Ideation + core Inception |
 | bugfix | Minimal | Minimal | 9 | Targeted |
 | refactor | Minimal | Minimal | 10 | Targeted |
-| infra | Standard | Standard | ~13 | Infra-focused |
+| infra | Standard | Standard | ~15 | Infra-focused |
 | security-patch | Minimal | Minimal | ~10 | Security-focused |
 | classic | Standard | Standard | 18 | The implicit default: no Ideation, Inception and Construction through Build and Test, no CI Pipeline or Operation |
 | workshop | Standard | Minimal | 26 | Facilitated lifecycle with teaching test floor |
@@ -1267,7 +1269,14 @@ change. See
    workspace, when another open piece of work in this checkout claims files in
    its Units' source manifests, its `agent_note` gives the line the brief
    carries word for word: those files are that work's, not this work's to
-   review (the same set `other_work_note` names to the build). The directive's `review_artifact` field
+   review (the same set `other_work_note` names to the build). On Code
+   Generation, when the plan the person approved changed after that approval
+   and the plan re-approval check let it build without asking them again
+   (Guard Policy relaxed or off, unless that check is switched back on), the
+   `agent_note` gives one more line the brief carries word for word: what
+   changed, in the change line's words, and that their earlier approval stays
+   the record, naming the plan-approval record file while it is still that
+   approval's (`approvedPlanChangeReviewLine` in `aidlc-testing-posture.ts`). The directive's `review_artifact` field
    names the required Markdown output the review is about: the record is
    keyed to it, the gate names it, and finding selectors address it; output
    ordering and plugin additions cannot change it, and nothing writes to it
@@ -1330,14 +1339,18 @@ change. See
    <first|revision|stale>` renders the exact stage, ordinary-language outcome,
    review artifact(s), the engine-owned findings list, decision effects, and
    concrete upstream/downstream invalidation paths (`reviewer_max_iterations`
-   is 1, engine-enforced). At a stage's gate, one line after the findings names
+   is 1, engine-enforced). At a stage's gate, one line names
    the open findings Approve records as `Accepted risk`, each with the start of
    its text (and its Unit when they span Units), and says, in plain words, that
    the person can instead approve and ask for one to be fixed (`--fix-finding`)
    or reject one as not applying, with their reason (`--reject-finding` on a
    Request Changes, whose gate comes back with the review as it stands when
    nothing else changed); the Approve option then does not say it again. The ids come from the builder
-   `GATE_APPROVED` writes through. A Unit's Construction checkpoint, a
+   `GATE_APPROVED` writes through. The step that shows the gate (the
+   `awaiting-approval` or `revised` report's reply, or `next` showing it again)
+   carries that line in its `change_notices`, said just before the approval
+   question, so the brief does not print it; the brief kept for the gate holds
+   it after the brief. A Unit's Construction checkpoint, a
    per-stage team Unit gate, and a gate whose one approval also covers later
    stages with open findings of their own, show no such line. The final gate of a per-Unit stage renders every Unit
    covered by that single approval. A Unit's own approval (its Construction
@@ -1534,23 +1547,7 @@ outputs are sufficient and consistent for the next phase.
 *(`stage-protocol-governance.md` Section 13 — distinct from the Learnings
 Ritual, which is `stage-protocol-learnings.md` Section 13)*
 
-### Triggers
-
-- After last stage of each phase is approved
-- Before first stage of next phase begins
-- On demand, when the person asks for it (`/aidlc --status` only reports and
-  runs no check)
-
-### Process
-
-1. Read methodology from `.claude/knowledge/aidlc-shared/verification.md`
-2. Run phase-specific traceability checks
-3. Write results to `<record>/verification/phase-check-<phase>.md`, the name the
-   phase-ending stages and `verification.md` use (the governance protocol module
-   still calls it `[phase-boundary]-verification.md`)
-4. If failed: present issues (missing links, orphaned artifacts,
-   inconsistencies) before proceeding
-5. `PHASE_VERIFIED` is emitted by the engine at the phase boundary; do not append it
+`PHASE_VERIFIED` is emitted by the engine at the phase boundary; do not append it
 
 ### Per-Phase Checks
 

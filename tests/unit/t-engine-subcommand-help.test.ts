@@ -270,7 +270,7 @@ describe("engine <noun> --help", () => {
   // "unknown verb '--help'" with exit 2. It names `<verb> --help` only for a
   // noun whose tool answers it, so it never prints a command that fails.
   for (const [noun, verbs, verbHelp] of [
-    ["log", ["decision", "answer", "answers", "review", "link"], true],
+    ["log", ["decision", "answer", "answers", "review", "link", "install"], true],
     ["bolt", ["start", "complete"], true],
     ["worktree", ["create", "restore"], true],
     ["sensor", ["list", "describe", "fire"], true],

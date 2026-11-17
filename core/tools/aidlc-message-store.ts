@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { existsSync, lstatSync, readdirSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import {
   allowMainCheckoutChangeCommand,
@@ -23,9 +23,13 @@ import {
   rejectionIsFreshAttempt,
   removeRecordFileNoFollow,
   resolveInvokingSessionId,
+  resolveWorkflowSelection,
+  selectedRecordIsFinished,
   sessionsDir,
+  stateFilePathForSelection,
   writeRecordFileNoFollow,
 } from "./aidlc-lib.ts";
+import { stateShowsCompletion } from "./aidlc-doctor-bundle.ts";
 
 export { MESSAGE_SPENDING_EVENTS, type PersonsWords };
 
@@ -63,7 +67,10 @@ export interface StoredMessage {
   session: string | null;
   at: string;
   source: "prompt" | "picker" | "terminal";
-  /** As the host delivered it, cut at MESSAGE_TEXT_MAX_CHARS (`cut` says so). An empty text is a prompt whose words the host did not pass on. */
+  /**
+   * As the host delivered it, cut at MESSAGE_TEXT_MAX_CHARS (`cut` says so; a typed prompt's whole text is then kept
+   * beside the record, wholeMessageText). An empty text is a prompt whose words the host did not pass on.
+   */
   text: PersonsWords;
   /**
    * What a question box carried back: one entry per question it asked, in the order shown, `reply` null where the
@@ -89,6 +96,11 @@ export type NewMessage = Omit<StoredMessage, "id" | "text" | "picker" | "words">
 };
 
 export const MESSAGE_TEXT_MAX_CHARS = 8000;
+/**
+ * How much a request can carry: the whole text of a typed prompt the record cut, kept beside it, and a request file
+ * (readRequestFile reads this number), so the two never differ.
+ */
+export const REQUEST_MAX_BYTES = 128 * 1024;
 /** A question box's question or reply is kept to this many characters. */
 export const MESSAGE_PICKER_MAX_CHARS = 2000;
 export const MESSAGE_MAX_RECORDS = 200;
@@ -105,6 +117,18 @@ export function isMessageId(id: string): boolean {
 function messageRel(projectDir: string, id?: string): string {
   const dir = join(sessionsDir(projectDir), "messages");
   return relative(projectDir, id === undefined ? dir : join(dir, `${id}.json`));
+}
+
+// The whole text of a typed prompt its record cut, beside the record under the same id.
+function wholeRel(projectDir: string, id: string): string {
+  return relative(projectDir, join(sessionsDir(projectDir), "messages", `${id}.txt`));
+}
+
+// A record and its whole text, the text first, so a copy never stands without its record. A file this process may
+// not remove is left for the operating system's permissions to decide.
+function removeMessageRecord(projectDir: string, id: string): void {
+  removeRecordFileNoFollow(projectDir, wholeRel(projectDir, id));
+  removeRecordFileNoFollow(projectDir, messageRel(projectDir, id));
 }
 
 function isStringList(value: unknown): value is string[] {
@@ -173,6 +197,14 @@ export function readMessage(projectDir: string, id: string): StoredMessage | nul
   return readStoredMessage(projectDir, id);
 }
 
+/**
+ * Remove the record of a message that turned out not to be the person's: a
+ * turn Claude Code started itself (settleClaudeTurns), so no proof finds it.
+ */
+export function forgetMessage(projectDir: string, id: string): void {
+  if (MESSAGE_ID.test(id)) removeMessageRecord(projectDir, id);
+}
+
 function recordIds(projectDir: string): string[] {
   let names: string[];
   try {
@@ -209,8 +241,10 @@ export function listMessages(projectDir: string): StoredMessage[] {
 /**
  * Store one message and return it with a fresh id. Older records are pruned
  * after the write, so a store failure never costs the message just received.
+ * `whole` is a typed prompt's text as the host delivered it, kept beside a
+ * record that cut it, up to REQUEST_MAX_BYTES; the record is written first.
  */
-export function saveMessage(projectDir: string, message: NewMessage): StoredMessage {
+export function saveMessage(projectDir: string, message: NewMessage, whole?: string): StoredMessage {
   // Kept as it came; read back, the words are PersonsWords.
   const stored = { ...message, id: mintMessageId(projectDir) } as unknown as StoredMessage;
   const serialized = `${JSON.stringify(stored)}\n`;
@@ -218,8 +252,31 @@ export function saveMessage(projectDir: string, message: NewMessage): StoredMess
     throw new Error("message record over the size the reader accepts");
   }
   writeRecordFileNoFollow(projectDir, messageRel(projectDir, stored.id), serialized);
+  if (message.cut === true && message.source === "prompt" && whole !== undefined &&
+    Buffer.byteLength(whole, "utf-8") <= REQUEST_MAX_BYTES) {
+    try {
+      writeRecordFileNoFollow(projectDir, wholeRel(projectDir, stored.id), whole);
+    } catch {
+      // The record stands; a reader of it goes without the whole text.
+    }
+  }
   pruneExpiredMessages(projectDir);
   return stored;
+}
+
+/**
+ * The whole text of a typed prompt its record keeps cut, as the host delivered
+ * it; null when the record is whole or no copy was kept (over REQUEST_MAX_BYTES,
+ * a failed write, a record from before copies were kept).
+ */
+export function wholeMessageText(projectDir: string, message: StoredMessage): PersonsWords | null {
+  if (message.cut !== true || message.source !== "prompt" || !MESSAGE_ID.test(message.id)) return null;
+  try {
+    const target = recordFileTargetOrThrow(projectDir, wholeRel(projectDir, message.id));
+    return readRegularFileNoFollowOrThrow(target, "message", REQUEST_MAX_BYTES).toString("utf-8") as unknown as PersonsWords;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -310,7 +367,7 @@ export function pruneExpiredMessages(projectDir: string): void {
       if (!lstatSync(path).isFile()) continue;
       const at = Date.parse(readStoredMessage(projectDir, id)?.at ?? "");
       const when = Number.isNaN(at) ? lstatSync(path).mtimeMs : at;
-      if (when < cutoff && !stillUnspent(id)) removeRecordFileNoFollow(projectDir, messageRel(projectDir, id));
+      if (when < cutoff && !stillUnspent(id)) removeMessageRecord(projectDir, id);
       else kept.push({ id, at: when });
     } catch {
       // Not ours to remove, or already gone: keep going.
@@ -319,7 +376,7 @@ export function pruneExpiredMessages(projectDir: string): void {
   kept.sort((a, b) => a.at - b.at || a.id.localeCompare(b.id));
   for (const { id } of kept.slice(0, Math.max(0, kept.length - MESSAGE_MAX_RECORDS))) {
     try {
-      removeRecordFileNoFollow(projectDir, messageRel(projectDir, id));
+      removeMessageRecord(projectDir, id);
     } catch {
       // As above.
     }
@@ -414,8 +471,9 @@ function sincePlanQuestion(pd: string): ((row: AuditShardEvent) => boolean) | nu
   return shown === null ? null : rowsAfterMark(pd, shown);
 }
 
-// The ids of the messages whose turns come since the waiting plan question.
-function messagesSince(rows: readonly AuditShardEvent[], since: (row: AuditShardEvent) => boolean): Set<string> {
+// The ids of the messages whose turns come since a point on the record (the
+// waiting plan question, the row that last handed a side-by-side build to a chat).
+export function messagesSince(rows: readonly AuditShardEvent[], since: (row: AuditShardEvent) => boolean): Set<string> {
   return new Set(rows.flatMap((row) => {
     const id = row.event === "HUMAN_TURN" && since(row) ? auditBlockField(row.block, "Message Id") : null;
     return id === null ? [] : [id];
@@ -467,7 +525,10 @@ export function planApprovalOffWaitsStep(messageId?: string): string {
 // that already gave an approval or a decision; for turning plan approval off,
 // only what can stand for it (planApprovalOffStands). Any other request still
 // is offered such a message (going back to the plan their approval was for).
-export function requestMessages(pd: string, kind: RequestKind = "any"): Array<{ id: string; at: string }> {
+// With `after`, only a message whose turn comes after that point is offered.
+export function requestMessages(
+  pd: string, kind: RequestKind = "any", after?: (row: AuditShardEvent) => boolean,
+): Array<{ id: string; at: string }> {
   try {
     const rows = readAuditShardEvents(pd);
     const spentAt = latestSpendingTimestamp(rows);
@@ -478,8 +539,9 @@ export function requestMessages(pd: string, kind: RequestKind = "any"): Array<{ 
     const offered = (message: StoredMessage): boolean =>
       sent === null || sent.has(message.id) || spentAt === null || message.at >= spentAt;
     const planApprovalOff = kind === "plan-approval-off";
+    const sentAfter = after === undefined ? null : messagesSince(rows, after);
     return listMessages(pd)
-      .filter((message) => message.session === chat && offered(message) &&
+      .filter((message) => message.session === chat && offered(message) && (sentAfter === null || sentAfter.has(message.id)) &&
         "message" in messageProof(pd, message.id, kind === "any" ? "request" : "setting", { request: true, planApprovalOff }))
       .map((message) => ({ id: message.id, at: message.at }))
       .reverse();
@@ -490,12 +552,13 @@ export function requestMessages(pd: string, kind: RequestKind = "any"): Array<{ 
 
 // The step a refused request leads with: the agent names the message that asked
 // for it, when one of theirs can stand behind it, else `otherwise`. `command` is
-// the one to run with it when that is not the refused command, and `then` what
-// follows it.
+// the one to run with it when that is not the refused command, `then` what
+// follows it, and `after` the point only later messages can ask from.
 export function requestMessageStep(
   pd: string, otherwise: string, kind: RequestKind = "any", command = "the same command", then = "",
+  after?: (row: AuditShardEvent) => boolean,
 ): string {
-  const named = requestMessages(pd, kind);
+  const named = requestMessages(pd, kind, after);
   if (named.length === 0) return otherwise;
   return `If their message ${named.map((message) => `${message.id} (sent ${message.at})`).join(" or ")} asked for ` +
     `it, run ${command} with --message <id>${then ? `, then ${then}` : ""}. Otherwise: ${otherwise}`;
@@ -898,15 +961,20 @@ export function personTurnStands(
   return standingPersonTurn(pd, mode, options) !== null;
 }
 
+type TurnOptions = { replies?: boolean; requests?: boolean; intent?: string; space?: string; planApprovalOff?: boolean };
+
 /**
  * The turn personTurnStands reads, when it stands: its HUMAN_TURN row (whose
- * Message Id names the message behind what the command does), else null.
+ * Message Id names the message behind what the command does), else null. On
+ * finished work, where the human-turn hook keeps the person's messages beside
+ * the record and writes no turn on it, a message of theirs kept since the
+ * finish stands too (turnKeptSinceFinished), read as a turn.
  */
-export function standingPersonTurn(
-  pd: string,
-  mode: "request" | "plain",
-  options: { replies?: boolean; requests?: boolean; intent?: string; space?: string; planApprovalOff?: boolean } = {},
-): AuditShardEvent | null {
+export function standingPersonTurn(pd: string, mode: "request" | "plain", options: TurnOptions = {}): AuditShardEvent | null {
+  return turnOnTheRecord(pd, mode, options) ?? turnKeptSinceFinished(pd, options);
+}
+
+function turnOnTheRecord(pd: string, mode: "request" | "plain", options: TurnOptions): AuditShardEvent | null {
   try {
     const unreadable: string[] = [];
     const rows = readAuditShardEvents(pd, options.intent, options.space, unreadable);
@@ -944,6 +1012,74 @@ export function standingPersonTurn(
       kept ?? { id: id ?? "", at: of.timestamp, session: auditBlockField(of.block, "Session") },
       after,
     ) ? of : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * This chat's messages (with no chat named, any chat's in this project) kept
+ * beside finished work since its latest WORKFLOW_COMPLETED row, oldest first:
+ * the window turnKeptSinceFinished stands on, and a change asked there is read
+ * from. Work archived while it ran (before it finished, or during a redo) has
+ * its latest WORKFLOW_ARCHIVED row as its finish; the state's Archived From says
+ * which (stateShowsCompletion). An archive of finished work spends nothing, so a
+ * message between the completion and that archive still stands. Empty when the
+ * record is not finished, has neither row, or cannot be read.
+ */
+export function keptSinceFinished(pd: string, options: { intent?: string; space?: string } = {}): StoredMessage[] {
+  try {
+    const selection = resolveWorkflowSelection(pd, { intent: options.intent, space: options.space });
+    if (!selectedRecordIsFinished(pd, selection)) return [];
+    const showsCompletion = stateShowsCompletion(readFileSync(stateFilePathForSelection(pd, selection), "utf-8"));
+    const unreadable: string[] = [];
+    const rows = readAuditShardEvents(pd, options.intent, options.space, unreadable);
+    if (unreadable.length > 0) return [];
+    const latest = (event: string) => rows.filter((row) => row.event === event).map((row) => row.timestamp).sort().at(-1);
+    const finishedAt = (showsCompletion ? latest("WORKFLOW_COMPLETED") : undefined) ?? latest("WORKFLOW_ARCHIVED");
+    if (finishedAt === undefined) return [];
+    const onThisWork = sentOnThisWork(rows);
+    const chat = invokingChat(pd);
+    return listMessages(pd).filter((message) =>
+      !onThisWork(message) && message.at >= finishedAt && (chat === null || message.session === chat));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Presence on finished work: once the work is finished (selectedRecordIsFinished,
+ * the reading the human-turn hook stands outside by) the hook keeps the
+ * person's messages beside its record and writes no turn on it. So the turn is
+ * their latest message no turn on the work names (sentOnThisWork: a terminal
+ * message, which has no chat, counts as on the work and stands for nothing
+ * here), kept at or after the work's finish (keptSinceFinished), from this
+ * chat (with no chat named, any chat's message in this project). With
+ * `requests` every kept message counts, as every turn the hook writes today
+ * does (only an older record's question row is left out on the record); with
+ * `replies` none does, as before: whether a message is a reply is the hook's
+ * reading, which the record keeps and the message does not. Nothing on the work decides after
+ * the finish, so no decision spends it. It is handed back in a turn's shape
+ * (its Message Id, Session and time), which is all a caller reads. Both times
+ * are whole seconds; a tie with the finish is harmless, as the message that
+ * gave the finishing approval is named on the record. No finish row, or a
+ * shard that cannot be read: null. Ids, times and the engine's own rows, never
+ * words.
+ */
+function turnKeptSinceFinished(pd: string, options: TurnOptions): AuditShardEvent | null {
+  if (options.replies === true) return null;
+  try {
+    const kept = keptSinceFinished(pd, options).at(-1);
+    if (kept === undefined) return null;
+    const turn: AuditShardEvent = {
+      event: "HUMAN_TURN",
+      block: [`**Message Id**: ${kept.id}`, ...(kept.session === null ? [] : [`**Session**: ${kept.session}`])].join("\n"),
+      timestamp: kept.at,
+      shard: "",
+      shardIndex: -1,
+      pos: -1,
+    };
+    return options.planApprovalOff === true && !planApprovalOffStands(pd, turn) ? null : turn;
   } catch {
     return null;
   }

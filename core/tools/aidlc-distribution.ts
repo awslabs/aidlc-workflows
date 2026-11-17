@@ -61,10 +61,14 @@ export type ProjectionDescriptor = {
   configNextStep: string;
   firstRunSteps?: string[];
   editorTerminalApp?: string;
+  cliFirst?: { env: string[]; configNextStep: string; firstRunSteps: string[] };
   harnessDir: string;
   onboarding?: string;
   managedDirectories: string[];
   legacyManagedFileHashes?: Record<string, string[]>;
+  // Files a copy-era release shipped for copying that this release no longer
+  // ships, and the bytes each was shipped with (scripts/copy-era-files.ts).
+  retiredCopyFileHashes?: Record<string, string[]>;
   rootIntegrations: RootIntegration[];
 };
 
@@ -146,6 +150,41 @@ export function aidlcHookTarget(command: string, projectDir?: string): string | 
   const dispatcher = aidlcDispatcherTarget(command, false, projectDir);
   if (dispatcher !== null) return dispatcher;
   return legacyAidlcHookTarget(command);
+}
+
+/**
+ * The AI-DLC hook targets a parsed .claude/settings.json runs ("statusline" for
+ * AI-DLC's status line), with the status line the person keeps in their own
+ * settings.local.json. Doctor's hook contract and the hooks-off step both read
+ * the file through it.
+ */
+export function claudeSettingsHookTargets(projectDir: string, settings: unknown): string[] {
+  const commands: string[] = [];
+  const collectCommands = (value: unknown): void => {
+    if (Array.isArray(value)) return void value.forEach(collectCommands);
+    if (!value || typeof value !== "object") return;
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      if (key === "command" && typeof item === "string") commands.push(item);
+      else collectCommands(item);
+    }
+  };
+  collectCommands(settings);
+  // AI-DLC's status line lives in the person's own settings.local.json when
+  // they chose it, so the file it runs is checked from there too.
+  try {
+    const local = JSON.parse(withoutBom(readFileSync(join(projectDir, ".claude", "settings.local.json"), "utf-8")));
+    const statusLine = local && typeof local === "object" ? (local as { statusLine?: unknown }).statusLine : undefined;
+    const command = statusLine && typeof statusLine === "object" ? (statusLine as { command?: unknown }).command : undefined;
+    if (typeof command === "string") commands.push(command);
+  } catch {
+    // No personal file, or one Claude Code itself reports.
+  }
+  const targets = new Set<string>();
+  for (const command of commands) {
+    const target = aidlcDispatcherTarget(command, true, projectDir);
+    if (target !== null) targets.add(target);
+  }
+  return [...targets];
 }
 
 export function legacyAidlcHookTarget(command: string): string | null {
@@ -369,6 +408,17 @@ export function harnessChoiceTextIsPlain(text: { choiceName?: unknown; choiceNot
     (text.choiceNote === undefined || (typeof text.choiceNote === "string" && CHOICE_NOTE.test(text.choiceNote)));
 }
 
+function nonEmptyStrings(value: unknown): value is string[] {
+  return Array.isArray(value) && value.length > 0 && value.every((line) => typeof line === "string");
+}
+
+function cliFirstGuidanceIsValid(value: unknown): boolean {
+  const guidance = value as { env?: unknown; configNextStep?: unknown; firstRunSteps?: unknown } | null;
+  return nonEmptyStrings(guidance?.env) && guidance.env.every((name) => name !== "") &&
+    typeof guidance.configNextStep === "string" && guidance.configNextStep.trim().length > 0 &&
+    nonEmptyStrings(guidance.firstRunSteps);
+}
+
 export function validateProjectionDescriptor(
   root: string,
   stamp: ProjectionStamp,
@@ -392,13 +442,11 @@ export function validateProjectionDescriptor(
     throw new Error(`${root}: projection harness-list text is invalid`);
   }
   if (
-    (descriptor.firstRunSteps !== undefined &&
-      (!Array.isArray(descriptor.firstRunSteps) ||
-        descriptor.firstRunSteps.length === 0 ||
-        descriptor.firstRunSteps.some((line) => typeof line !== "string"))) ||
+    (descriptor.firstRunSteps !== undefined && !nonEmptyStrings(descriptor.firstRunSteps)) ||
     (descriptor.editorTerminalApp !== undefined &&
       (typeof descriptor.editorTerminalApp !== "string" ||
-        !/^[a-z0-9][a-z0-9 .-]*$/.test(descriptor.editorTerminalApp)))
+        !/^[a-z0-9][a-z0-9 .-]*$/.test(descriptor.editorTerminalApp))) ||
+    (descriptor.cliFirst !== undefined && !cliFirstGuidanceIsValid(descriptor.cliFirst))
   ) {
     throw new Error(`${root}: projection first-run guidance is invalid`);
   }
@@ -465,6 +513,19 @@ export function validateProjectionDescriptor(
         throw new Error(`${root}: legacy managed file is missing or invalid: ${safe}`);
       }
       validateHashes(hashes, `${root}: ${safe} legacy managed-file signatures`);
+    }
+  }
+  if (descriptor.retiredCopyFileHashes !== undefined) {
+    const retired = descriptor.retiredCopyFileHashes;
+    if (!retired || typeof retired !== "object" || Array.isArray(retired)) {
+      throw new Error(`${root}: retired copy-file signatures are invalid`);
+    }
+    for (const [file, hashes] of Object.entries(retired)) {
+      const safe = safeRelativePath(file, "retired copy file");
+      if (!descriptor.managedDirectories.some((directory) => safe.startsWith(`${directory}/`))) {
+        throw new Error(`${root}: retired copy file is outside managed directories: ${safe}`);
+      }
+      validateHashes(hashes, `${root}: ${safe} retired copy-file signatures`);
     }
   }
   for (const integration of descriptor.rootIntegrations) {
@@ -976,17 +1037,57 @@ export function kiroAllowChanged(backup: unknown, release: unknown): boolean {
     [...after.deny].some((entry) => !before.deny.has(entry));
 }
 
+// The fields Kiro's upgrade writes into an agent file.
+const KIRO_WROTE = new Set(["tools", "hooks", "permissions"]);
+
 // Kiro's upgrade keeps every field of the file it came from as it was but
 // `tools` and `hooks`, which it rewrites, and adds `permissions` (kiro-cli
-// 2.29.0). Whether `upgraded` still holds `backup`'s kept fields unchanged.
+// 2.29.0). Whether `upgraded` still holds `backup`'s kept fields unchanged. It
+// cannot see a change to the fields Kiro wrote, so it is read only for an
+// upgrade Kiro did not stamp (kiroUpgradeIntact).
 export function kiroUpgradeKeptFields(upgraded: unknown, backup: unknown): boolean {
-  const rewritten = new Set(["tools", "hooks", "permissions"]);
   const fields = (value: unknown): Record<string, unknown> =>
     typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
   const a = fields(upgraded);
   const b = fields(backup);
-  const keys = new Set([...Object.keys(a), ...Object.keys(b)].filter((key) => !rewritten.has(key)));
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)].filter((key) => !KIRO_WROTE.has(key)));
   return [...keys].every((key) => JSON.stringify(a[key]) === JSON.stringify(b[key]));
+}
+
+const kiroFieldsHash = (agent: Record<string, unknown>, keep: (key: string) => boolean): string =>
+  sha256Bytes(canonical(Object.fromEntries(Object.entries(agent).filter(([key]) => keep(key)))));
+
+// Kiro CLI 2.34.2 also stamps its upgrade with `kiroUpgrade`: hashes of
+// `canonical` JSON over the fields it wrote (`fingerprint`) and over the ones
+// it kept (`source`), revision 2. The stamp Kiro writes on `agent`.
+export function kiroUpgradeStamp(agent: Record<string, unknown>): { revision: 2; fingerprint: string; source: string } {
+  return {
+    revision: 2,
+    fingerprint: kiroFieldsHash(agent, (key) => KIRO_WROTE.has(key)),
+    source: kiroFieldsHash(agent, (key) => !KIRO_WROTE.has(key) && key !== "kiroUpgrade"),
+  };
+}
+
+// Kiro reads a fingerprint that no longer matches as the person's edit and
+// leaves that file alone; this reads either hash the same way. Whether
+// `upgraded` carries Kiro's stamp and is Kiro's upgrade of `backup` with
+// nothing changed since.
+export function kiroUpgradeUntouched(upgraded: unknown, backup: unknown): boolean {
+  if (!plainObject(upgraded) || !plainObject(backup)) return false;
+  const stamp = upgraded.kiroUpgrade;
+  if (!plainObject(stamp) || stamp.revision !== 2) return false;
+  const own = kiroUpgradeStamp(upgraded);
+  return stamp.fingerprint === own.fingerprint && stamp.source === own.source &&
+    stamp.source === kiroFieldsHash(backup, (key) => !KIRO_WROTE.has(key));
+}
+
+// Whether `upgraded` is Kiro's upgrade of `backup` with nothing changed since:
+// by Kiro's stamp when it carries one, and otherwise, only when
+// `unstampedByKeptFields`, by the fields Kiro keeps (an upgrade from a Kiro CLI
+// that did not stamp it: 2.27.1 did not, 2.34.2 does).
+export function kiroUpgradeIntact(upgraded: unknown, backup: unknown, unstampedByKeptFields: boolean): boolean {
+  if (plainObject(upgraded) && "kiroUpgrade" in upgraded) return kiroUpgradeUntouched(upgraded, backup);
+  return unstampedByKeptFields && kiroUpgradeKeptFields(upgraded, backup);
 }
 
 // Earlier releases' space switch pointed the tool's include files at that

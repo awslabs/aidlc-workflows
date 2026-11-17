@@ -13,6 +13,7 @@ import { expect } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
+import { codexRefusal } from "./codex-hook-answer.ts";
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "./test-budget.ts";
 import {
   AIDLC_SRC,
@@ -31,6 +32,7 @@ import { renderTestingContract, resolveTestingPosture } from "../../dist/claude/
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { readMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import {
+  getField,
   invalidateActiveDirectiveContext,
   readActiveDirectiveMarker,
   readAuditShardEvents,
@@ -258,8 +260,8 @@ function approve(proj: string): void {
   if (recorded.status !== 0) throw new Error(`Approve Plan was not recorded:\n${recorded.stdout}${recorded.stderr}`);
 }
 
-function askOpen(proj: string): Step {
-  writePlan(proj);
+function askOpen(proj: string, planExtra = ""): Step {
+  writePlan(proj, planExtra);
   const step = next(proj);
   if (step.kind !== "ask" || step.ask_type !== "plan-approval") {
     throw new Error(`expected the plan question, got ${JSON.stringify(step)}`);
@@ -271,22 +273,34 @@ function askOpen(proj: string): Step {
  * Code Generation built: the plan approved (asked, or built without asking
  * where plan approval is off) and the build's outputs written.
  */
-function builtCodeGeneration(policy: "strict" | "relaxed" | "off", planApproval: "on" | "off"): string {
+function builtCodeGeneration(
+  policy: "strict" | "relaxed" | "off",
+  planApproval: "on" | "off",
+  lastStage = false,
+  planExtra = "",
+): string {
   const proj = createCodeGenerationProject(policy, planApproval);
   // What a poc run has here: this stage in progress (the previous stage's
   // approval marks it [-], aidlc-state.ts) and Units Generation skipped
   // (core/scopes/aidlc-poc.md), so the stage's records are stage-level.
+  // `lastStage`: every stage after Code Generation skipped as well, as the
+  // person's `--skip` leaves them, so its approval finishes the work there.
   const stateFile = seededStateFile(proj);
-  writeFileSync(stateFile, readFileSync(stateFile, "utf-8")
+  let state = readFileSync(stateFile, "utf-8")
     .replace("- [ ] code-generation", "- [-] code-generation")
-    .replace(/^(- \[.\] units-generation) \u2014 EXECUTE$/m, "$1 \u2014 SKIP"), "utf-8");
+    .replace(/^(- \[.\] units-generation) \u2014 EXECUTE$/m, "$1 \u2014 SKIP");
+  if (lastStage) {
+    const at = state.indexOf("- [-] code-generation");
+    state = state.slice(0, at) + state.slice(at).replace(/^(- \[ \] [a-z-]+) \u2014 EXECUTE$/gm, "$1 \u2014 SKIP");
+  }
+  writeFileSync(stateFile, state, "utf-8");
   next(proj);
   if (planApproval === "on") {
-    askOpen(proj);
+    askOpen(proj, planExtra);
     approve(proj);
     next(proj);
   } else {
-    writePlan(proj);
+    writePlan(proj, planExtra);
     const step = next(proj);
     if (step.kind !== "run-stage" || step.plan_approval?.status !== "approved") {
       throw new Error(`expected the build without asking, got ${JSON.stringify(step)}`);
@@ -317,8 +331,10 @@ function askReview(proj: string): string {
 export function openCodeGenerationGate(
   policy: "strict" | "relaxed" | "off" = "relaxed",
   planApproval: "on" | "off" = "on",
+  lastStage = false,
+  planExtra = "",
 ): string {
-  const proj = builtCodeGeneration(policy, planApproval);
+  const proj = builtCodeGeneration(policy, planApproval, lastStage, planExtra);
   const reviewFile = askReview(proj);
   mkdirSync(dirname(join(proj, reviewFile)), { recursive: true });
   writeFileSync(join(proj, reviewFile), reviewText(REVIEWER), "utf-8");
@@ -327,6 +343,29 @@ export function openCodeGenerationGate(
   const opened = run(proj, [DISPATCHER, ...OPEN_GATE]);
   const gate = JSON.parse(opened.stdout || "{}") as { kind?: string };
   if (opened.status !== 0 || gate.kind !== "print") throw new Error(`the gate did not open:\n${opened.stdout}${opened.stderr}`);
+  return proj;
+}
+
+/**
+ * The work finished at Code Generation: every stage after it skipped, the gate
+ * opened as above, and the person's approval reported, so the work is
+ * Completed with Current Stage still on Code Generation. `planExtra`: steps the
+ * approved plan carries beyond its one.
+ */
+export function finishedAtCodeGeneration(
+  policy: "strict" | "relaxed" | "off" = "relaxed",
+  planApproval: "on" | "off" = "on",
+  planExtra = "",
+): string {
+  const proj = openCodeGenerationGate(policy, planApproval, true, planExtra);
+  reply(proj, "approve");
+  const approved = run(proj, [DISPATCHER, "engine", "orchestrate", "report", "--stage", "code-generation",
+    "--result", "approved", "--user-input", "Approve"]);
+  const done = JSON.parse(approved.stdout || "{}") as { kind?: string };
+  const status = getField(readFileSync(seededStateFile(proj), "utf-8"), "Status");
+  if (approved.status !== 0 || status !== "Completed") {
+    throw new Error(`the work did not finish at Code Generation (${status}, ${done.kind}):\n${approved.stdout}${approved.stderr}`);
+  }
   return proj;
 }
 
@@ -673,6 +712,12 @@ function stderrVerdict(result: RunResult): Verdict {
   return { code: result.status === 2 ? 2 : result.status === 0 ? 0 : result.status, said: result.status === 0 ? "" : result.stderr.trim() };
 }
 
+// The Codex adapter's guard-tool-call refuses on Windows with the deny JSON.
+function codexVerdict(result: RunResult): Verdict {
+  const refusal = codexRefusal({ code: result.status, stdout: result.stdout, stderr: result.stderr });
+  return refusal === null ? stderrVerdict(result) : { code: 2, said: refusal.trim() };
+}
+
 function claudeInput(call: ToolCall, dir: string): { tool_name: string; tool_input: Record<string, unknown> } {
   switch (call.tool) {
     case "Bash": return { tool_name: "Bash", tool_input: { command: respell(call.command, dir) } };
@@ -723,7 +768,7 @@ const codex: Shape = {
       CODEX_ENV,
     ));
   },
-  mcp: (proj, session) => stderrVerdict(spawnShape(
+  mcp: (proj, session) => codexVerdict(spawnShape(
     proj, [join(proj, ".codex", "hooks", "aidlc-codex-adapter.ts"), "guard-tool-call"],
     {
       hook_event_name: "PreToolUse", cwd: proj, session_id: session,

@@ -4,7 +4,7 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.tests.json && tsc --noEmit -p tsconfig.adapters.json",
+    "typecheck": "NODE_OPTIONS=--max-old-space-size=8192 tsc --noEmit -p tsconfig.json && NODE_OPTIONS=--max-old-space-size=8192 tsc --noEmit -p tsconfig.tests.json && NODE_OPTIONS=--max-old-space-size=8192 tsc --noEmit -p tsconfig.adapters.json",
     "lint": "biome check --error-on-warnings core harness scripts plugins tests",
     "check": "bun scripts/package.ts && bun scripts/package.ts --check && bun run typecheck && bun run lint"
   },

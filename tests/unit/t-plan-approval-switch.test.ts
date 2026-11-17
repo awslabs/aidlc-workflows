@@ -717,6 +717,47 @@ describe("asked before the piece of work exists", () => {
     expect(createdPlanApproval(proj)).toBe("off (set by you)");
   });
 
+  // Their words kept in case they describe work, answered from status: no
+  // plan was put to them, so the switch said next is for the work they start.
+  const statusAsked = (proj: string): void => {
+    said(proj, "where do things stand?");
+    const step = runOrchestrateNext(ORCHESTRATE, proj, ["where do things stand?"], { env: { ...process.env, ...CLEAR } });
+    expect(String((step.directive as { message?: unknown } | null)?.message), step.out).toContain("--propose <plan> --request");
+  };
+
+  test("a status line answered from status, then the switch said alone, then the work: plan approval is off for it", () => {
+    const proj = emptyProject();
+    statusAsked(proj);
+    expect(setterOff(proj, skipAsked(said(proj, SKIP))).status).toBe(0);
+    const asked = requestOf(proj, "build the export");
+    const made = utility(proj, ["intent-create", "--request", asked.id]);
+    expect(made.status, made.stderr).toBe(0);
+    expect(createdPlanApproval(proj)).toBe("off (set by you)");
+  });
+
+  test("the switch said alone, then a status line answered from status, then the work: plan approval is off for it", () => {
+    const proj = emptyProject();
+    expect(setterOff(proj, skipAsked(said(proj, SKIP))).status).toBe(0);
+    statusAsked(proj);
+    const asked = requestOf(proj, "build the export");
+    const made = utility(proj, ["intent-create", "--request", asked.id]);
+    expect(made.status, made.stderr).toBe(0);
+    expect(createdPlanApproval(proj)).toBe("off (set by you)");
+  });
+
+  test("a status line answered from status, then Guard Policy said alone, then the work: the policy holds for it", () => {
+    const proj = emptyProject();
+    statusAsked(proj);
+    const set = setterOff(proj, ["--guard-policy", "relaxed", "--message", said(proj, "use the relaxed guard policy for this work")]);
+    expect(set.status, set.stderr).toBe(0);
+    const asked = requestOf(proj, "build the export");
+    const made = utility(proj, ["intent-create", "--request", asked.id]);
+    expect(made.status, made.stderr).toBe(0);
+    const intents = join(proj, "aidlc", "spaces", "default", "intents");
+    const record = readFileSync(join(intents, "active-intent"), "utf-8").trim();
+    expect(getField(readFileSync(join(intents, record, "aidlc-state.md"), "utf-8"), "Guard Policy")).toBe("relaxed (set by you)");
+  });
+
   /** A report-only or task-less composition's dispatch, and the request id its approval names. */
   const composeOf = (proj: string, args: string[]): string => {
     const printed = runOrchestrateNext(ORCHESTRATE, proj, args, { env: { ...process.env, ...CLEAR } });
@@ -1335,6 +1376,47 @@ describe("the memory lock and the machine switch", () => {
     expect(build.kind).toBe("run-stage");
     expect(build.plan_approval.skipped).toBe(true);
   });
+
+  // A plan built without asking stands in every process that reads the
+  // switch, so the guard lets its build through and `next` stays the build.
+  for (const how of ["launched with the switch", "the switch recorded with config flags --bypass"] as const) {
+    test(`${how}: a plan built without asking stays built, at the guard and at every next`, () => {
+      const proj = project("on");
+      writePlan(proj);
+      const env: Record<string, string> = { ...process.env as Record<string, string>, ...CLEAR };
+      if (how === "launched with the switch") {
+        startSession(proj, MACHINE_OFF);
+        Object.assign(env, MACHINE_OFF);
+      } else {
+        startSession(proj);
+        writeFileSync(
+          join(proj, "aidlc.settings.json"),
+          `${JSON.stringify({ schemaVersion: 1, flags: { schemaVersion: 1, bypasses: ["AIDLC_DISABLE_PLAN_APPROVAL_GUARD"] } }, null, 2)}\n`,
+          "utf-8",
+        );
+        delete env.AIDLC_DISABLE_PLAN_APPROVAL_GUARD;
+      }
+      const drive = (): Emitted => {
+        const result = runOrchestrateNext(ORCHESTRATE, proj, [], { env });
+        expect(result.status, result.out).toBe(0);
+        return result.directive as unknown as Emitted;
+      };
+      expect(drive().plan_approval.skipped).toBe(true);
+      const write = spawnSync(BUN, [GUARD], {
+        cwd: proj,
+        input: JSON.stringify({
+          hook_event_name: "PreToolUse", session_id: SESSION, cwd: proj,
+          tool_name: "Write", tool_input: { file_path: join(proj, "src", "slugify.ts"), content: "x\n" },
+        }),
+        env: { ...env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj },
+        encoding: "utf-8",
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      expect(write.status, write.stderr).toBe(0);
+      expect(drive().plan_approval).toEqual({ status: "approved" });
+      expect(drive().plan_approval).toEqual({ status: "approved" });
+    });
+  }
 
   test("with no harness session in the project (CI, a plain CLI run), the variable counts", () => {
     const proj = project("on");

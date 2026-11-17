@@ -147,7 +147,9 @@ describe("t-reply-ids-without-refusal: the hook's line names the kept message", 
     });
   }
 
-  test("under autonomous Construction a typed message gets the line too; on finished work there is none", async () => {
+  // On finished work the message is this chat's turn (standingPersonTurn), so
+  // a chat that took part hears its id too (#3608).
+  test("under autonomous Construction a typed message gets the line too, and so does one on finished work", async () => {
     const proj = project();
     await buildState(proj, "work-open");
     const state = seededStateFile(proj);
@@ -160,7 +162,10 @@ describe("t-reply-ids-without-refusal: the hook's line names the kept message", 
     await buildState(other, "finished");
     const outside = await say(other, "turn the review freeze check off", "claude");
     expect(outside.status, outside.stderr).toBe(0);
-    expect(outside.stdout).not.toContain("on record as");
+    // No turn is written there; the id is the kept message's, which the record's turns never name.
+    const kept = /on record as ([0-9a-f]{8}):/.exec(outside.stdout)?.[1];
+    expect(kept, outside.stdout).toBeDefined();
+    expect(turns(other).some((row) => auditBlockField(row.block, "Message Id") === kept)).toBe(false);
   });
 });
 

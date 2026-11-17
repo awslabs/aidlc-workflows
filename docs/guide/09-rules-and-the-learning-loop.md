@@ -54,7 +54,7 @@ When learnings are on, the loop has three moments you see: you correct the agent
 
 ### The memory.md diary
 
-When the learnings ritual is on, the framework keeps a running observation log at `<record>/<phase>/<stage>/memory.md` while a stage runs — under the intent's record dir, `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`. The engine creates it from the shipped template when it emits the run-stage directive, and the orchestrator maintains it for you — never hand-edited. Entries land under four standard headings:
+When the learnings ritual is on, the framework keeps a running observation log at `<record>/<phase>/<stage>/memory.md` while a stage runs — under the intent's record dir, `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`. A stage that runs once per Unit keeps one per Unit, at `<record>/construction/<unit>/<stage>/memory.md` beside that Unit's documents, so `construction/` holds the Unit folders and the folders of the stages that run once (Build and Test, CI Pipeline). Work started before an update that moved them keeps its notes where they are, and they are still read. The engine creates it from the shipped template when it emits the run-stage directive, and the orchestrator maintains it for you — never hand-edited. Entries land under four standard headings:
 
 - **Interpretations** — choices the agent made where the stage prose was ambiguous
 - **Deviations** — places the agent intentionally departed from the stage prose, and why

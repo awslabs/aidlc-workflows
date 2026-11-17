@@ -39,6 +39,11 @@ const manifest: HarnessManifest = {
   name: "cursor",
   productName: "Cursor",
   configNextStep: "open this project in Cursor, then run `/aidlc --doctor`",
+  // Cursor sets CURSOR_AGENT in its agent's terminal (Cursor's terminal docs;
+  // not yet measured live).
+  hostShell: { env: ["CURSOR_AGENT"] },
+  // A clean chat for new work started beside other work.
+  newChatStep: { text: "open a new chat, then type <entry>" },
   harnessDir: ".cursor",
   orchestratorSkillPath: ".cursor/skills/aidlc/SKILL.md",
   tierFlavor: "cursor",
@@ -64,6 +69,9 @@ const manifest: HarnessManifest = {
           // The variant shipped before the block ignored aidlc/.aidlc-request-text/
           // (a request the engine has not read yet).
           "sha256:ae1878ec98301ceb4510e711cf79f58dfb44cb486744007acd03ae5e61860665",
+          // The variant shipped before the block ignored a Bolt worktree's metadata
+          // (.aidlc/worktree-meta.json, .aidlc/base-source-listing.tsv).
+          "sha256:55d4cfabe04aca4193d53032c003002d3c9c7de4eef90be0afb411d8a6f7e340",
         ],
       },
     },
@@ -83,6 +91,8 @@ const manifest: HarnessManifest = {
           "sha256:eeabf9f9555124da3f5ad34eb3a26b9fcbf3e2ccd65610cb9f0182701cf3ef48",
           // The variant shipped before the onboarding waited for the person to invoke AI-DLC.
           "sha256:6de1298dfa4c2b6916f66d372b844faf23481c8f258eedd595c1423dab8e106d",
+          // The variant whose Documentation section named this repository's docs/ folder.
+          "sha256:6d3bf5865f1836575715ea93d0042b9d08bcab918cc9a17a142848fe44e88bc7",
         ],
       },
     },
@@ -113,6 +123,7 @@ const manifest: HarnessManifest = {
     { src: "skills/aidlc-session-cost", dst: "skills/aidlc-session-cost" },
     { src: "skills/aidlc-replay", dst: "skills/aidlc-replay" },
     { src: "skills/aidlc-outcomes-pack", dst: "skills/aidlc-outcomes-pack" },
+    { src: "skills/aidlc-issue-report", dst: "skills/aidlc-issue-report" },
     { src: "skills/aidlc-knowledge", dst: "skills/aidlc-knowledge" },
   ],
 

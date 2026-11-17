@@ -27,8 +27,8 @@ import {
   prepareCandidate,
   approveMerge,
   gateAndLand,
-  nextDirective,
   unitProgressRow,
+  nextPastPushOffer,
 } from "../harness/team-unit-merge.ts";
 
 // The pinned merge cases are split across four files
@@ -66,7 +66,8 @@ describe("t326 pinned team Unit merge", () => {
     expect(
       readAllAuditShards(seed).match(/\*\*Event\*\*: UNIT_MERGED/g) ?? [],
     ).toHaveLength(2);
-    expect(nextDirective(seed)).toMatchObject({
+    // The last landing is not on the remote yet: the push is offered first.
+    expect(nextPastPushOffer(seed)).toMatchObject({
       kind: "run-stage",
       stage: "build-and-test",
     });
@@ -177,7 +178,7 @@ describe("t326 pinned team Unit merge", () => {
       seed,
     );
     expect(movedGate.status).not.toBe(0);
-    expect(movedGate.out).toContain("run aidlc-unit pin alpha again");
+    expect(movedGate.out).toContain("run bun .claude/tools/aidlc.ts unit pin alpha again");
     const repin = runMergeTool(UNIT, ["pin", "alpha"], seed);
     expect(repin.status, repin.out).toBe(0);
     expect(

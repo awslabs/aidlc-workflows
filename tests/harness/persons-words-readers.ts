@@ -951,6 +951,7 @@ const SWARM = "core/tools/aidlc-swarm.ts";
 const SWITCHES = "core/tools/aidlc-recorded-switches.ts";
 const GUARD_SWITCH = "core/tools/aidlc-guard-switch.ts";
 const LOCKS = "core/tools/aidlc-locks.ts";
+const TURN = "core/tools/aidlc-claude-turn-origin.ts";
 
 /**
  * The places that stay, by category, each with its reason. `use` is what the place may do with the words; a keeper
@@ -960,6 +961,9 @@ export const ALLOWED: Record<string, Allowed> = {
   // The writer: the human-turn hook keeps the message, its words and the box's reply on the record.
   [`${HOOK}#respond`]: { use: "decides", why: "the human-turn hook: keeps the message and its words; it decides only through the places below (the host identities, the box's payload, the parse), and the cut check compares their words with their own words cut" },
   [`${HOOK}#pickerReplies`]: { use: "decides", why: "a question box's payload, host structure: parses the box's JSON into its questions and replies for QUESTION_REPLIED" },
+  [`${HOOK}#questionsAlone`]: { use: "decides", why: "a question box's payload, host structure: each question of a box of several read as a box asking it alone would be, so the plan question keeps its own reply (#3621)", from: [`${HOOK}#respond`] },
+  [`${HOOK}#boxAnswers`]: { use: "decides", why: "a question box's payload, host structure: decodes the box's answers, keyed as the host keys them", from: [`${HOOK}#questionsAlone`, `${HOOK}#pickerReplies`] },
+  [`${HOOK}#answerKey`]: { use: "decides", why: "a question box's payload, host structure: which key holds a question's answer (its id, or its text)", from: [`${HOOK}#questionsAlone`, `${HOOK}#pickerReplies`] },
   [`${HOOK}#pickedLabels`]: { use: "decides", why: "a question box's payload, host structure: the labels the box reports picked, for the HUMAN_TURN row's Picked", from: [`${HOOK}#respond`] },
   [`${HOOK}#carriesSeveralPicks`]: { use: "decides", why: "a question box's payload, host structure: whether the box reports more than one pick", from: [`${HOOK}#respond`] },
   [`${LIB}#emptyPickerResult`]: { use: "decides", why: "a question box's payload, host structure: whether a dismissed box carried any answer", from: [`${HOOK}#respond`] },
@@ -970,12 +974,13 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${LIB}#forgetGateWords`]: { use: "keeps", why: "the gate-words record's own write: forgets a message by its offset" },
   [`${LIB}#gateWordsSinceUnitReview`]: { use: "keeps", why: "the gate-words record: hands a checkpoint the replies typed while its review ran, blank ones left out" },
   [`${STORE}#parseMessage`]: { use: "keeps", why: "the message store's own read: checks a record's shape" },
+  [`${STORE}#saveMessage`]: { use: "keeps", why: "the message store's own write: a typed prompt the record cut, kept whole beside it up to REQUEST_MAX_BYTES", from: ["core/hooks/aidlc-record-human-turn.ts#respond"] },
   [`${STORE}#isPickerList`]: { use: "keeps", why: "the message store's own read: checks the box entries' shape", from: [`${STORE}#parseMessage`] },
   [`${STORE}#latestMessage`]: { use: "keeps", why: "the presence shape: a message with words or none (words === null)" },
   [`${STORE}#messageIsReply`]: { use: "keeps", why: "the presence shape: a message with words or none (words === null)" },
   [`${STORE}#noReplySince`]: { use: "keeps", why: "the presence shape: a line of settings alone is no reply (words === null)" },
   [`${ORCH}#handOutSettingsLine`]: { use: "keeps", why: "the presence shape: a line of settings alone (words === null) is handed to its setter once" },
-  [UNWRAP]: { use: "keeps", why: "the brand's one way back to text, for the places below that read the message store or the gate-words record", from: [`${LIB}#gateWordsSinceUnitReview`, `${LIB}#personsGateReply`, `${LIB}#requireProtectedResponse`, `${LOG}#answerEnginePlanApproval`, `${ORCH}#takePersonsOwnLine`, `${STATE}#parkedWords`, `${STATE}#personsWordsFields`, `${GUARD_SWITCH}#saidInChat`, `${ORCH}#emit`, `${SWITCHES}#recordSwitchChange`, `${STATE}#requireHumanConstructionPolicyChange`, "core/tools/aidlc-utility.ts#handleReclassify", `${STATE}#handleReject`, `${LOG}#handleAnswer`, `${LIB}#keptRepliesSinceStageStart`, `${LIB}#latestReplyAfter`, `${UNIT_CP}#approveConstructionCheckpoint`, `${LIB}#personsWordsKept`, `${SWARM}#handleAllowChange`, "core/hooks/system-install.ts#recordAllowed"] },
+  [UNWRAP]: { use: "keeps", why: "the brand's one way back to text, for the places below that read the message store or the gate-words record", from: [`${TURN}#settleClaudeTurns`, `${LIB}#gateWordsSinceUnitReview`, `${LIB}#personsGateReply`, `${LIB}#requireProtectedResponse`, `${LOG}#answerEnginePlanApproval`, `${ORCH}#takePersonsOwnLine`, `${STATE}#parkedWords`, `${STATE}#personsWordsFields`, `${GUARD_SWITCH}#saidInChat`, `${ORCH}#emit`, `${SWITCHES}#recordSwitchChange`, `${STATE}#requireHumanConstructionPolicyChange`, "core/tools/aidlc-utility.ts#handleReclassify", `${STATE}#handleReject`, `${LOG}#handleAnswer`, `${LIB}#keptRepliesSinceStageStart`, `${LIB}#latestReplyAfter`, `${UNIT_CP}#approveConstructionCheckpoint`, `${LIB}#personsWordsKept`, `${SWARM}#handleAllowChange`, "core/hooks/system-install.ts#recordAllowed", "core/tools/aidlc-jump.ts#changeAsked", `${SWARM}#handleTakeOver`, `${LOG}#handleInstall`] },
   [`${LIB}#keptRepliesSinceStageStart`]: { use: "keeps", why: "the resume re-show: every reply since the stage started that nothing has used yet, a typed message's words and a box's replies, unpaired (R26: the agent pairs them)" },
   [`${LIB}#latestReplyAfter`]: { use: "keeps", why: "the audit writer: the plan override receipt's Person Reply, their latest reply since the offer, with its message" },
   [`${LIB}#protectedResponseFields`]: { use: "keeps", why: "the audit writer: a protected question's decision row, the response's words with every message they came in (Message Ids)" },
@@ -1003,6 +1008,7 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${LOG}#handleAnswers`]: { use: "keeps", why: "the audit writer: a batch of answers, blank details left out" },
   [`${LOG}#handleAnswer`]: { use: "keeps", why: "the audit writer: an answer's Person Reply, the message named or every unspent reply of this chat an earlier answer did not record" },
   "core/tools/aidlc-jump.ts#handleReopen": { use: "keeps", why: "the audit writer: a reopen for a change keeps their words as Feedback" },
+  "core/tools/aidlc-jump.ts#changeAsked": { use: "keeps", why: "a reopen's change on finished work: every message kept in this chat since the finish (keptSinceFinished), read as personsGateReply reads a gate's window, kept as Feedback" },
   "core/tools/aidlc-unit.ts#mergeGateReplyFields": { use: "keeps", why: "the audit writer: the pinned merge gate row's Person Reply and Message Id from S1's window, kept only when every reply in it came after the pin" },
   [`${STATE}#parkedWords`]: { use: "keeps", why: "the audit writer: the park row's Person Reply" },
   // The recorded answer's Details is the choice the agent recorded, never the file's [Answer]: line (S2a's R31).
@@ -1014,7 +1020,9 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${SWITCHES}#switchOffLine`]: { use: "keeps", why: "status: says a check is off with the words that switched it off" },
   [`${SWITCHES}#quoted`]: { use: "keeps", why: "status: quotes those words, cut", from: [`${GUARD_SWITCH}#askedSwitchLine`, `${SWITCHES}#switchOffLine`, `${SWARM}#handleAllowChange`] },
   [`${SWARM}#handleAllowChange`]: { use: "keeps", why: "the audit writer: a change the person asked for in the main checkout while the Units are built, their words as the row's Person Reply and quoted in the one line they hear" },
-  ["core/hooks/system-install.ts#recordAllowed"]: { use: "keeps", why: "the audit writer: a system package install that ran on the person's standing turn, their words as the row's Person Reply" },
+  [`${SWARM}#handleTakeOver`]: { use: "keeps", why: "the audit writer: the person asked this chat to build a side-by-side batch another chat started, their words as the row's Person Reply" },
+  ["core/hooks/system-install.ts#recordAllowed"]: { use: "keeps", why: "the audit writer: a system package install that ran on the person's standing turn or the message the agent named for it, their words as the row's Person Reply" },
+  [`${LOG}#handleInstall`]: { use: "keeps", why: "the audit writer: the person's message the agent named for a system package install, their words as the row's Person Reply" },
   [`${SWITCHES}#switchesOffLines`]: { use: "keeps", why: "status: the lines above" },
   [`${SWITCHES}#switchOffNotices`]: { use: "keeps", why: "status: the lines above" },
   [`${ASK}#correctReadRequestChanges`]: { use: "keeps", why: "the audit writer: the replies kept since a Request Changes are the correction's words" },
@@ -1032,12 +1040,15 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${ORCH}#planProposalDirective`]: { use: "decides", why: "keeps the request as a question and previews it; reuses the question the words came through without comparing them", from: [`${ORCH}#freshWorkRoute`, `${ORCH}#routeNext`] },
   [`${ORCH}#saveReadingQuestion`]: { use: "keeps", why: "keeps the words as a routing question with the message they came in", from: [`${ORCH}#newWorkRoutingAskDirective`, `${ORCH}#routeNext`] },
   [`${ORCH}#takePersonsOwnLine`]: { use: "keeps", why: "the /aidlc parse of the person's own line; already read is the message id" },
+  [`${ORCH}#cutLineGoesOn`]: { use: "keeps", why: "hands the parse of a cut line with no whole copy to the agent's one step", from: [`${ORCH}#takePersonsOwnLine`] },
+  [`${ORCH}#cutMessageStep`]: { use: "keeps", why: "the agent's one step for a cut line: the parse's plan, verb and reading in its command", from: [`${ORCH}#cutLineGoesOn`] },
+  [`${ORCH}#cutMessageArgs`]: { use: "keeps", why: "the plan, verb and settings of a cut line's parse as next's arguments", from: [`${ORCH}#cutMessageStep`] },
   [`${ORCH}#keptWordsStep`]: { use: "decides", why: "the pick step's command: the words a reading step kept from this message, handed on as kept (wordsForNextStep)" },
   [`${ORCH}#resumeWithWords`]: { use: "keeps", why: "a resume with words beside it: whether words are there, then the line read again without --resume" },
   [`${ORCH}#resumeAgain`]: { use: "decides", why: "the unpark step's re-run: the words typed with the resume, handed on as typed (wordsForNextStep)" },
-  [`${ORCH}#wordsForNextStep`]: { use: "decides", why: "a step's command: the words go to a request file of their own as given, or quoted onto the line when that file cannot be written", from: [`${ORCH}#keptWordsStep`, `${ORCH}#reshapeReplyArgument`, `${ORCH}#resumeAgain`, `${ORCH}#routeNext`, `${ORCH}#routingQuestionReplyDirective`] },
+  [`${ORCH}#wordsForNextStep`]: { use: "decides", why: "a step's command: the words go to a request file of their own as given, or quoted onto the line when that file cannot be written", from: [`${ORCH}#keptWordsStep`, `${ORCH}#reshapeReplyArgument`, `${ORCH}#resumeAgain`, `${ORCH}#routeNext`, `${ORCH}#routingQuestionReplyDirective`, `${ORCH}#unitPlanChangeAsk`] },
   [`${ORCH}#requestFileFor`]: { use: "keeps", why: "writes the request file a step's command names, with the words as given", from: [`${ORCH}#wordsForNextStep`] },
-  [`${LIB}#writeRecordFileNoFollow`]: { use: "keeps", why: "writes a step's request file with the words as given, and the isolated run's request", from: [`${ORCH}#requestFileFor`, `${LIB}#keepSingleRunRequest`] },
+  [`${LIB}#writeRecordFileNoFollow`]: { use: "keeps", why: "writes a step's request file with the words as given, the isolated run's request, and a cut message's whole copy", from: [`${ORCH}#requestFileFor`, `${LIB}#keepSingleRunRequest`, `${STORE}#saveMessage`] },
   [`${LOCKS}#writeBufferAtomic`]: { use: "keeps", why: "the atomic write under writeRecordFileNoFollow", from: [`${LIB}#writeRecordFileNoFollow`] },
   [`${ORCH}#emit`]: { use: "decides", why: "the words the person said belong to the work in progress are kept once as the code plan question's reply (keepRoutedPlanApprovalReply), and leave it by their message id" },
   [`${ORCH}#withParkedReply`]: { use: "keeps", why: "the resume re-show: the words they parked the work with" },
@@ -1046,19 +1057,24 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${ORCH}#ensureSingleStageStarted`]: { use: "decides", why: "a stage run on its own with no work: keeps the words typed with it as its request, and starts the run over when they are not the same bytes as the ones its start kept (their digest; identity, never meaning)", from: [`${ORCH}#emitSingleRunStage`] },
   [`${LIB}#singleRunRequestDigest`]: { use: "keeps", why: "the isolated run's request: the digest that binds the kept words to their start", from: [`${LIB}#keepSingleRunRequest`, `${ORCH}#ensureSingleStageStarted`] },
   [`${LIB}#keepSingleRunRequest`]: { use: "keeps", why: "the isolated run's request: the words typed with it, kept whole beside its start for project-description", from: [`${ORCH}#ensureSingleStageStarted`] },
-  [`${READER}#stripRecommendedDecorator`]: { use: "keeps", why: "a cut of the agent's \"(Recommended)\" mark, given words by the places that compare (each listed)", from: [`${LIB}#isSummaryConfirmationChoice`, `${LIB}#offeredChoiceLabel`, `${READER}#exactOptionPick`, `${READER}#isOneOfChoices`, `${POSTURE}#recordPlanApprovalHumanResponse`] },
+  [`${READER}#stripRecommendedDecorator`]: { use: "keeps", why: "a cut of the agent's \"(Recommended)\" mark, given words by the places that compare (each listed)", from: [`${LIB}#isSummaryConfirmationChoice`, `${LIB}#offeredChoiceLabel`, `${READER}#exactOptionPick`, `${READER}#isOneOfChoices`, `${READER}#recommendedChoices`, `${POSTURE}#recordPlanApprovalHumanResponse`] },
+  // A question box's labels, host structure: the box's own labels the agent gave it, never the person's reply.
+  [`${READER}#recommendedChoices`]: { use: "decides", why: "a question box's labels, host structure: which of the labels the box showed carry the agent's \"(Recommended)\" mark, kept as the reply row's Recommended", from: [`${HOOK}#respond`] },
+  [`${LOG}#questionView`]: { use: "decides", why: "log answers: lists a question row's Recommended, the labels the agent marked, beside its Options; nothing of the reply" },
+  [`${LIB}#optionsList`]: { use: "decides", why: "the one splitter of a choices list: splits a row's Recommended as it splits Options", from: [`${LOG}#questionView`] },
   [`${READER}#isOneOfChoices`]: { use: "decides", why: "a question box's pick, host structure: whether the box offered the protected question's own labels", from: [`${POSTURE}#pickerAsksProtectedQuestion`] },
   [`${POSTURE}#pickerAsksProtectedQuestion`]: { use: "decides", why: "a question box's pick, host structure (DESIGN 2.2 item 6: a box pick stays structure)", from: [`${POSTURE}#recordProtectedHumanResponse`] },
-  [`${LIB}#guardRecoveryTextSha256`]: { use: "keeps", why: "the digest of the guard-recovery reply its record keeps (consumeSharedDirectiveAsk writes it)", from: [`${LIB}#consumeSharedDirectiveAsk`] },
+  [`${LIB}#guardRecoveryTextSha256`]: { use: "keeps", why: "the digest of the guard-recovery reply its record keeps (consumeSharedDirectiveAsk writes it)", from: [`${LIB}#consumeSharedDirectiveAsk`, `${TURN}#withdrawGuardRecoveryReply`] },
   [`${LIB}#normalizeGuardRecoveryText`]: { use: "keeps", why: "the spacing cut before that digest", from: [`${LIB}#guardRecoveryTextSha256`] },
   [`${LIB}#contentSha256`]: { use: "keeps", why: "that digest", from: [`${LIB}#guardRecoveryTextSha256`] },
   // A question box's pick of an engine-handed list, host structure since S3 (#2926): a typed reply is the agent's to read.
-  [`${HOOK}#extractResponseText`]: { use: "decides", why: "a question box's payload, host structure: unwraps the box's JSON (a typed prompt is kept as typed since S3)", from: [`${HOOK}#respond`] },
+  [`${HOOK}#extractResponseText`]: { use: "decides", why: "a question box's payload, host structure: unwraps the box's JSON (a typed prompt is kept as typed since S3)", from: [`${HOOK}#respond`, `${HOOK}#questionsAlone`] },
   [`${LIB}#consumeSharedDirectiveAsk`]: { use: "decides", why: "guard recovery: the box's pick when the box offered the remedies, and the reply's digest the recovery record keeps (from emit: a routed request's message, kept again as the reply the routing question took from the recovery question)", from: [`${HOOK}#respond`, `${ORCH}#emit`] },
   [`${POSTURE}#recordProtectedHumanResponse`]: { use: "decides", why: "the protected question's response: the box's pick only, and the words kept with presence", from: [`${HOOK}#respond`] },
   [`${READER}#protectedQuestionPick`]: { use: "decides", why: "a question box's pick of the protected question's choices", from: [`${POSTURE}#recordProtectedHumanResponse`] },
   [`${ASK}#keepRoutedPlanApprovalReply`]: { use: "decides", why: "hands the routed words to the plan question once, in the order sent: reads their message's id and time, never the words", from: [`${ORCH}#emit`] },
   [`${ASK}#notePlanApprovalAskReply`]: { use: "decides", why: "Plan Approval: the box's pick only, and the replies after the ask kept for the record", from: [`${HOOK}#respond`, `${ASK}#keepRoutedPlanApprovalReply`] },
+  [`${ASK}#pickerReplyToThisQuestion`]: { use: "keeps", why: "Plan Approval: the box's reply to the plan question, picked by the box's structure (which question offers its choices), never by its words", from: [`${ASK}#notePlanApprovalAskReply`] },
   [`${READER}#exactOptionPick`]: { use: "decides", why: "a box's pick matched to the engine's list the box offered (DESIGN 2.2 item 6)", from: [`${LIB}#consumeSharedDirectiveAsk`, `${ASK}#notePlanApprovalAskReply`, `${READER}#protectedQuestionPick`, `${POSTURE}#recordPlanApprovalHumanResponse`] },
   [`${UNIT_CP}#askConstructionCheckpoint`]: { use: "keeps", why: "the audit writer: the replies typed while the review ran become the checkpoint's response" },
   [`${UNIT_CP}#rejectConstructionCheckpoint`]: { use: "keeps", why: "the audit writer: the checkpoint reject's Feedback and Reason" },
@@ -1087,6 +1103,7 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${POSTURE}#planApprovalQuestionEvidence`]: { use: "decides", why: "O4: the plan file's [Answer]: label, written by the agent itself, checked against its own --details (blank before the question); on the engine's plan question the recorder writes the line and never runs this" },
   [`${POSTURE}#planApprovalAnswerLabel`]: { use: "keeps", why: "cuts the recorder's option letter and quotes off that label", from: [`${POSTURE}#planApprovalQuestionEvidence`] },
   [`${POSTURE}#questionsFileHasPendingPlanApproval`]: { use: "decides", why: "the presence shape: whether the plan file's [Answer]: line is still blank (or underscores)" },
+  [`${POSTURE}#questionsFilePlanApprovalAnswer`]: { use: "keeps", why: "hands the latest Plan Approval section's [Answer]: line to the Kiro IDE adapter's argument-less mediation (processLegacyPlanApprovalWrite, on ALLOWED_UNREACHED)" },
   [`${ASK}#onlyTheirAnswerDiffers`]: { use: "keeps", why: "the presence shape: the person's answer in the plan file stays while the same question stands (the engine never erases what they wrote)" },
   [`${ASK}#requestPlanApprovalReviewNow`]: { use: "keeps", why: "the presence shape: a recorded answer on the plan file's line is cleared when the person asks to review the plan again" },
   [`${ASK}#answerLineAsFound`]: { use: "decides", why: "the engine's own line: the plan file's line is left out when it is exactly a mark the engine wrote there (the recorded answer's mark, either mark while the person edits, \"Plan approval off\"), so the engine's line is never kept as theirs; nothing else of theirs is read" },
@@ -1098,7 +1115,7 @@ export const ALLOWED: Record<string, Allowed> = {
   "core/tools/aidlc-runtime-paths.ts#readsAlikeInDoubleQuotes": { use: "decides", why: "whether every shell reads their words alike in double quotes, for quoteCommandArgument", from: ["core/tools/aidlc-runtime-paths.ts#quoteCommandArgument"] },
   [`${LIB}#parseLiteralShellInvocation`]: { use: "decides", why: "as above", from: [`${LIB}#isTerminalConfigurationDispatch`] },
   [`${LIB}#isTerminalConfigurationDispatch`]: { use: "decides", why: "reads the engine's own step message (which may quote their request) for a configuration command" },
-  [`${LIB}#addPendingPersonLines`]: { use: "keeps", why: "keeps a step's narration, or a setter's lines, for the person's next line", from: [`${ORCH}#sayPendingPersonLines`, `core/tools/aidlc-utility.ts#handleScopeChange`] },
+  [`${LIB}#addPendingPersonLines`]: { use: "keeps", why: "keeps a step's narration, or a setter's lines, for the person's next line", from: [`${ORCH}#sayPendingPersonLines`, `core/tools/aidlc-utility.ts#handleIntent`, `core/tools/aidlc-utility.ts#handleScopeChange`] },
   [`${LIB}#authoritativeProjectDescription`]: { use: "decides", why: "a shape read: splits a pasted <document> block, exact markers, from the directions around it", from: [`${ORCH}#authoritativeRequest`, `${ORCH}#documentSplitSentence`, `${ORCH}#namedDocumentNote`, `${ORCH}#pastedDocumentNote`] },
   "core/tools/aidlc-question-store.ts#parseQuestion": { use: "keeps", why: "the question store's own read: checks a record's shape" },
   "core/tools/aidlc-question-store.ts#saveQuestion": { use: "keeps", why: "the question store's writer: keeps the request as the question's text", from: [`${ORCH}#composeOfferAskDirective`, `${ORCH}#createPrintDirective`, `${ORCH}#planProposalDirective`, `${ORCH}#routeNext`, `${ORCH}#saveReadingQuestion`, `${ORCH}#scopeConfirmAskDirective`] },
@@ -1108,21 +1125,24 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${ORCH}#speaksToPerson`]: { use: "keeps", why: "as above" },
   [`${ORCH}#sayPendingPersonLines`]: { use: "keeps", why: "a step's narration, which may carry their request" },
   [`${ORCH}#prepareEmission`]: { use: "decides", why: "the step's text cut at a character boundary" },
-  [`${ORCH}#authoritativeRequest`]: { use: "decides", why: "the request a question shows back: its directions outside a pasted document", from: [`${ORCH}#composeDispatchDirective`, `${ORCH}#newWorkRoutingAskDirective`, `${ORCH}#requestPreview`] },
-  [`${ORCH}#requestPreview`]: { use: "decides", why: "the request a question shows back, cut to 240 characters", from: [`${ORCH}#freshWorkOfferDirective`, `${ORCH}#intentPickPromptIfRecordsExist`, `${ORCH}#planProposalDirective`, `${ORCH}#routeNext`] },
+  [`${ORCH}#authoritativeRequest`]: { use: "decides", why: "the request a question shows back: its directions outside a pasted document", from: [`${ORCH}#composeDispatchDirective`, `${ORCH}#requestPreview`] },
+  [`${ORCH}#requestPreview`]: { use: "decides", why: "the request a question shows back, cut to 240 characters", from: [`${ORCH}#freshWorkOfferDirective`, `${ORCH}#intentPickPromptIfRecordsExist`, `${ORCH}#newWorkRoutingAskDirective`, `${ORCH}#newestRequestReplaces`, `${ORCH}#planProposalDirective`, `${ORCH}#routeNext`] },
+  [`${ORCH}#newestRequestReplaces`]: { use: "decides", why: "the line that says the newer request is used shows it back, as a question does", from: [`${ORCH}#createPrintDirective`, `${ORCH}#planProposalDirective`, `${ORCH}#routeNext`] },
   [`${ORCH}#documentSplitSentence`]: { use: "decides", why: "the one line a question adds when the request carries a pasted document", from: [`${ORCH}#createPrintDirective`, `${ORCH}#freshWorkOfferDirective`, `${ORCH}#intentPickPromptIfRecordsExist`, `${ORCH}#planProposalDirective`, `${ORCH}#routeNext`] },
   [`${ORCH}#scopeConfirmAskDirective`]: { use: "keeps", why: "as above (the scope confirmation)", from: [`${ORCH}#freshWorkOfferDirective`] },
   [`${ORCH}#namedDocumentNote`]: { use: "decides", why: "as above, for the compose offer", from: [`${ORCH}#composeOfferAskDirective`] },
   [`${ORCH}#composeOfferAskDirective`]: { use: "decides", why: "as above (the compose offer)", from: [`${ORCH}#freshWorkOfferDirective`] },
   [`${ORCH}#routingQuestionReplyDirective`]: { use: "decides", why: "the routing question's reply step hands their words back in a request file its command names", from: [`${ORCH}#routeNext`] },
   [`${ORCH}#reshapeReplyArgument`]: { use: "decides", why: "a print between a reshape answer and the composer hands their reply on in a request file its command names, when the answer carried one" },
+  [`${ORCH}#unitPlanChangeAsk`]: { use: "decides", why: "the Unit-change question's separate-work answer hands the request on in a request file its command names, when the request carried words" },
   [`${ORCH}#newWorkRoutingAskDirective`]: { use: "decides", why: "as above (the routing question)", from: [`${ORCH}#intentPickPromptIfRecordsExist`, `${ORCH}#routeNext`] },
-  [`${ORCH}#printDirective`]: { use: "keeps", why: "prints a step, which may carry their request", from: [`${ORCH}#jumpStepPrint`, `${ORCH}#routeNext`, `${ORCH}#routingQuestionReplyDirective`] },
+  [`${ORCH}#printDirective`]: { use: "keeps", why: "prints a step, which may carry their request", from: [`${ORCH}#jumpStepPrint`, `${ORCH}#routeNext`] },
   [`${ORCH}#jumpStepPrint`]: { use: "keeps", why: "as above, for a step that names one jump", from: [`${ORCH}#emitTypedResumeChoice`] },
   [`${ORCH}#projectTypeIsWholeRequest`]: { use: "keeps", why: "the presence shape: the line is only the project type" },
   [`${ORCH}#parkedDirective`]: { use: "keeps", why: "a step's narration, which may carry their words", from: [`${ORCH}#parkAfterApproval`] },
   [`${ORCH}#parkAfterApproval`]: { use: "keeps", why: "as above" },
-  [`${ORCH}#nextArgsAreOnlyWords`]: { use: "keeps", why: "the presence shape: next carries only words" },
+  [`${ORCH}#nextArgsAreOnlyWords`]: { use: "decides", why: "the presence shape: next carries only words; handed the person's own /aidlc line (firstStepNote), it reads which keys the engine's parse of it holds, never what the words say", from: [`${ORCH}#firstStepNote`] },
+  [`${ORCH}#firstStepNote`]: { use: "decides", why: "the /aidlc parse: whether a line the human-turn hook just kept whole is words alone with no flag-shaped token next does not take, so the agent hears that next reads it from the copy; never what the words say", from: [`${HOOK}#respond`] },
   [`${ORCH}#planTypedAloneBesideWork`]: { use: "keeps", why: "the presence shape: a plan's name with no words after it" },
   [`${ORCH}#freshWorkOfferDirective`]: { use: "decides", why: "as above (the plan offer)" },
   [`${ORCH}#createPrintDirective`]: { use: "decides", why: "a question that shows their request back and keeps it in the question store" },
@@ -1143,7 +1163,11 @@ export const ALLOWED: Record<string, Allowed> = {
   // The host-text identities kept where the host gives no mark (Arden 2026-10-22, DESIGN section 3 item 4).
   [`${LIB}#hostEnvelopeTurnText`]: { use: "decides", why: "host-text identity: Kiro Crew's request header (P2)", from: [`${HOOK}#respond`] },
   [`${LIB}#hostTemplateOrigin`]: { use: "decides", why: "host-text identity: the Kiro CLI v2, Claude no-row and Kiro workflow brief templates (P1)", from: [`${HOOK}#respond`] },
-  [`${LIB}#claudeTranscriptOrigin`]: { use: "decides", why: "host-text identity: finds Claude Code's transcript row for this prompt (P1's marked path)", from: [`${HOOK}#respond`] },
+  [`${LIB}#claudeTranscriptOrigin`]: { use: "decides", why: "host-text identity: finds Claude Code's transcript row for this prompt (P1's marked path)", from: [`${HOOK}#respond`, `${TURN}#verdictOf`] },
+  [`${TURN}#verdictOf`]: { use: "decides", why: "host-text identity on the marked path: hands a pending turn's prompt to claudeTranscriptOrigin, the key to Claude Code's own row for it (#3541)", from: [`${TURN}#settleClaudeTurns`] },
+  [`${TURN}#settleClaudeTurns`]: { use: "decides", why: "a pending Claude Code turn's prompt, read from its message record, as the key to its own row (verdictOf) and, once the row says the host started it, to the guard-recovery reply kept for it (withdrawKeptReplies)" },
+  [`${TURN}#withdrawKeptReplies`]: { use: "decides", why: "a taken-back turn's withdrawals: hands its prompt to withdrawGuardRecoveryReply, the one kept reply found by its words (the others go by message id)", from: [`${TURN}#settleClaudeTurns`] },
+  [`${TURN}#withdrawGuardRecoveryReply`]: { use: "decides", why: "drops the guard-recovery reply whose digest is a taken-back turn's (the digest consumeSharedDirectiveAsk keeps), never reading what it says", from: [`${TURN}#withdrawKeptReplies`] },
   [`${LIB}#newestUserEntry`]: { use: "decides", why: "host-text identity: the transcript row whose text is this prompt", from: [`${LIB}#claudeTranscriptOrigin`] },
   // The legacy Kiro IDE nonce match, while that window exists (DESIGN 2.2a R11).
   [`${POSTURE}#recordPlanApprovalHumanResponse`]: { use: "decides", why: "the legacy Kiro IDE nonce match: the hash of their text against the hashed nonce labels, the only chat proof where no box exists", from: [`${HOOK}#respond`] },
@@ -1162,6 +1186,7 @@ export const ALLOWED_UNREACHED: Record<string, Allowed> = {
   "harness/copilot/hooks/aidlc-copilot-adapter.ts#run": { use: "decides", why: "host-text identity: Copilot's subagent briefs by the digest of a brief AI-DLC recorded (P4: briefingDigest, checkBriefing)" },
   "harness/kiro/hooks/aidlc-kiro-adapter.ts#run": { use: "decides", why: "host-text identity: the Crew header and the Kiro CLI templates on the verb-intercept path (P1, P2)" },
   "harness/kiro-ide/hooks/aidlc-kiro-adapter.ts#messageOrigin": { use: "decides", why: "host-text identity: the Kiro workflow brief template (P1)" },
+  "harness/kiro-ide/hooks/aidlc-kiro-adapter.ts#processLegacyPlanApprovalWrite": { use: "decides", why: "the presence shape and an exact match, for a write that carries no tool arguments: no Plan Approval [Answer]: line is refused with how to write one, an empty one records the plan question, exactly Approve Plan or Request Changes is recorded as that choice, anything else is left; read through the dist copy of questionsFilePlanApprovalAnswer, which the scan does not follow" },
   [`${LIB}#kiroTurnOrigin`]: { use: "decides", why: "host-text identity: the Kiro templates (P1)" },
   [`${LIB}#kiroChatRecordOrigin`]: { use: "decides", why: "host-text identity: the Kiro chat record's mark for this prompt (P1)" },
   // The `[Answer]:` line read inline from a questions file's text, the person's when they answer in the file.
@@ -1171,9 +1196,9 @@ export const ALLOWED_UNREACHED: Record<string, Allowed> = {
   "core/tools/aidlc-sensor-claim-sources.ts#answerIsFilled": { use: "decides", why: "the presence shape: an [Answer]: line holds more than blanks or underscores", from: ["core/tools/aidlc-sensor-claim-sources.ts#parseSourceUniverse"] },
 };
 
-/** The places that make a record's words PersonsWords: the two records' writers and their own reads of the file. */
+/** The places that make a record's words PersonsWords: the two records' writers and their own reads of the files. */
 export const BRAND_WRITERS: readonly string[] = [
-  `${STORE}#saveMessage`, `${STORE}#parseMessage`, `${LIB}#recordGateWords`, `${LIB}#readGateWords`,
+  `${STORE}#saveMessage`, `${STORE}#parseMessage`, `${STORE}#wholeMessageText`, `${LIB}#recordGateWords`, `${LIB}#readGateWords`,
 ];
 
 /** The agent-argument checks (O4): they read the agent's argv or the file it wrote, never the person's words. */

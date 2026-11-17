@@ -26,6 +26,53 @@ export function unitRowMerged(stateContent: string, unit: string): boolean {
   return own.length === 1 && own[0][mergedIndex] === "[x]";
 }
 
+// The Unit Progress table's header and its Unit rows, each as its cells.
+export function unitProgressTable(state: string): { header: string[]; rows: string[][] } | null {
+  const match = /^## Unit Progress\s*$/m.exec(state);
+  if (!match) return null;
+  const after = match.index + match[0].length;
+  const next = /^## /m.exec(state.slice(after));
+  const section = state.slice(after, next ? after + next.index : state.length);
+  const table = section
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith("|"))
+    .map((line) => line.split("|").slice(1, -1).map((cell) => cell.trim()));
+  const header = table.find((cells) => cells[0]?.toLowerCase() === "unit");
+  if (!header) return null;
+  const rows = table.filter((cells) =>
+    cells.length === header.length && cells.length >= 4 &&
+    !(cells[0].toLowerCase() === "unit" && cells[1].toLowerCase() === "owner") &&
+    !cells.every((cell) => /^-+$/.test(cell))
+  );
+  return { header, rows };
+}
+
+// The Units whose Unit Progress row is complete: every stage cell, and the
+// merged cell where land wrote one. One reading for the claim overview and the
+// lib's which-checkout-holds-a-Unit read.
+export function completedUnits(state: string): Set<string> {
+  const table = unitProgressTable(state);
+  if (!table) return new Set();
+  const { header } = table;
+  const mergedIndex = header.findIndex(
+    (cell) => cell.toLowerCase() === "merged",
+  );
+  const done = new Set<string>();
+  for (const cells of table.rows) {
+    const workCells = cells.slice(
+      2,
+      mergedIndex >= 0 ? mergedIndex : undefined,
+    );
+    if (
+      workCells.every((cell) => cell === "[x]") &&
+      (mergedIndex < 0 || unitRowMerged(state, cells[0]))
+    ) {
+      done.add(cells[0]);
+    }
+  }
+  return done;
+}
+
 // A landed Unit's claim is over: once this checkout holds the landing (a pull
 // of the main that merged it), it is no longer held to the Unit. Both facts
 // must say so: its own record has the Unit merged, and the claim commit main
@@ -57,8 +104,10 @@ export function scopeStampLanded(
 // unitMajorConstructionStageSlugs(Scope, state, true), the block its walk
 // takes the Unit through; both readers pass exactly that. Any other stage is
 // the whole project's, and another Unit's are its claimant's. The recovery
-// question's reopen (evaluateGuardRefusal) and `next --stage` (routeNext's
-// claimedCheckoutMove) both read this, so what is offered there is taken.
+// question's reopen (evaluateGuardRefusal), `next --stage` (routeNext's
+// claimedCheckoutMove) and the plan-approval hook's admission of the picked
+// reopen (isSelectedGuardRestartContinuation) all read this, so what is
+// offered there is taken.
 export function claimedCheckoutReopens(
   claimedUnit: string,
   unitStages: readonly string[],

@@ -37,6 +37,12 @@ setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 afterEach(cleanupTempDirs);
 
+// Pin and land run in the main checkout: the step names the owner's checkout.
+function outsideTreeStep(owner: string): string {
+  return `In the checkout where ${owner} claimed alpha (not this one), take these out of its branch ` +
+    "(git rm a file main does not have, or git checkout origin/main -- <path> for one it does), commit, and publish again.";
+}
+
 describe("t326 pinned team Unit merge", () => {
   test("merge recovery journals are isolated by space, intent, and Unit", () => {
     const { seed, remote } = makeSeed();
@@ -291,6 +297,7 @@ describe("t326 pinned team Unit merge", () => {
     );
     expect(refusedPin.out).toContain(trackedMixedCasePath!);
     expect(refusedPin.out).toContain("outside claimed Unit record tree");
+    expect(refusedPin.out).toContain(outsideTreeStep("foreign-path-team"));
 
     const landFixture = makeSeed(parallelDependencyBody());
     const landCandidate = prepareCandidate(
@@ -377,6 +384,7 @@ describe("t326 pinned team Unit merge", () => {
       "construction/beta/nfr-design/forged.md",
     );
     expect(refusedLand.out).toContain("violates claimed Unit ownership");
+    expect(refusedLand.out).toContain(outsideTreeStep("land-boundary-team"));
   });
 
   test("candidate-exact policy aborts a clean auto-merge overlap before commit", () => {
@@ -597,14 +605,14 @@ describe("t326 pinned team Unit merge", () => {
     const approvedRepin = runMergeTool(UNIT, ["pin", "alpha"], seed);
     expect(approvedRepin.status).not.toBe(0);
     expect(approvedRepin.out).toContain(
-      "recover it with aidlc unit land alpha",
+      "recover it with bun .claude/tools/aidlc.ts unit land alpha",
     );
     const landed = runMergeTool(UNIT, ["land", "alpha", "--step", "git"], seed);
     expect(landed.status, landed.out).toBe(0);
     const mergeOid = JSON.parse(landed.stdout).git_commit_oid;
     const repin = runMergeTool(UNIT, ["pin", "alpha"], seed);
     expect(repin.status).not.toBe(0);
-    expect(repin.out).toContain("recover it with aidlc unit land alpha");
+    expect(repin.out).toContain("recover it with bun .claude/tools/aidlc.ts unit land alpha");
     const lost = JSON.parse(readFileSync(journalPath, "utf-8"));
     lost.status = "approved";
     delete lost.git_commit_oid;

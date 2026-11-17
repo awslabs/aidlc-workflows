@@ -137,7 +137,7 @@ function Get-ReleaseFile {
   }
   if ($CaBundle) {
     Stop-Install -Code 1 -Status 'failed' `
-      -Message 'curl.exe is required when --CaBundle is used'
+      -Message 'curl.exe is required when -CaBundle is used'
   }
   try {
     Invoke-WebRequest -UseBasicParsing -Uri $Url -OutFile $Output
@@ -458,7 +458,7 @@ if ($env:AIDLC_OFFLINE -eq '1') {
 }
 if ($Offline -and -not $From) {
   Stop-Install -Code 3 -Status 'unavailable' `
-    -Message '--Offline requires --From <release-directory>'
+    -Message '-Offline requires -From <release-directory>'
 }
 if ($From) {
   $Offline = $true
@@ -489,7 +489,7 @@ if (-not $From) {
 }
 if ($CaBundle -and -not [IO.Path]::IsPathRooted($CaBundle)) {
   Stop-Install -Code 2 -Status 'usage' `
-    -Message '--CaBundle must be an absolute path'
+    -Message '-CaBundle must be an absolute path'
 }
 
 $installRoot = if ($env:AIDLC_INSTALL_ROOT) {
@@ -687,8 +687,22 @@ try {
   # -Yes also answers yes to replacing a bin\aidlc that AI-DLC did not write
   # (the file is kept as a backup); at a terminal the binary asks instead.
   if ($Yes) { $arguments += '--yes' }
-  $applyOutput = (& $binary @arguments --json | Out-String).Trim()
-  $applyCode = $LASTEXITCODE
+  # The binary writes UTF-8 and Windows PowerShell 5.1 reads it in the console
+  # code page, which garbles a non-ASCII letter in an install path. The
+  # console's own encoding comes back as it was.
+  $consoleEncoding = $null
+  try {
+    $consoleEncoding = [Console]::OutputEncoding
+    [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+  } catch {
+    $consoleEncoding = $null
+  }
+  try {
+    $applyOutput = (& $binary @arguments --json | Out-String).Trim()
+    $applyCode = $LASTEXITCODE
+  } finally {
+    if ($null -ne $consoleEncoding) { [Console]::OutputEncoding = $consoleEncoding }
+  }
   try {
     $applyResult = $applyOutput | ConvertFrom-Json
   } catch {

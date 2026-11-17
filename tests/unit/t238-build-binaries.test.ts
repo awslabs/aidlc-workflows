@@ -46,6 +46,7 @@ import { isCompiledExecutable } from "../../core/tools/aidlc-runtime-paths.ts";
 import { VERSION_ID_PATTERN } from "../../core/tools/aidlc-channel.ts";
 import { AIDLC_VERSION } from "../../dist/claude/.claude/tools/aidlc-version.ts";
 import {
+  cleanupTestProject,
   createTestProject,
   seedStateFile,
   seededStateFile,
@@ -206,7 +207,7 @@ describe("t238 build-binaries release builder", () => {
   }
   afterEach(() => {
     for (const path of tempDirs.splice(0)) {
-      rmSync(path, { recursive: true, force: true });
+      cleanupTestProject(path);
     }
   });
 
@@ -398,7 +399,7 @@ describe("t238 build-binaries release builder", () => {
       expect(`${pluginSync.stdout ?? ""}${pluginSync.stderr ?? ""}`).not.toContain("Cannot find module");
       expect(`${pluginSync.stdout ?? ""}${pluginSync.stderr ?? ""}`).not.toContain("/$bunfs/");
     } finally {
-      rmSync(pluginFixture, { recursive: true, force: true });
+      cleanupTestProject(pluginFixture);
     }
 
     // Reuse this build to exercise orchestrate's compiled sibling dispatch.
@@ -789,7 +790,7 @@ describe("t238 build-binaries release builder", () => {
         /uv_spawn ['"]aidlc['"]|aidlc: (?:command )?not found|ENOENT.*aidlc/,
       );
     } finally {
-      rmSync(runtimeChannels, { recursive: true, force: true });
+      cleanupTestProject(runtimeChannels);
     }
     writeFileSync(
       join(releaseDir, "aidlc-release.intoto.jsonl"),
@@ -1048,7 +1049,7 @@ describe("t238 build-binaries release builder", () => {
       expect((quietDoctor.stdout ?? "").trim().split("\n")).toHaveLength(1);
       expect(quietDoctor.stdout ?? "").toMatch(/^\d+ passed, \d+ warnings, 0 failed\n$/);
     } finally {
-      rmSync(installFixture, { recursive: true, force: true });
+      cleanupTestProject(installFixture);
     }
     // Publish only after every applicable native-layout check has passed.
     retainVerifiedNativeLayout(native.artifact);
@@ -1130,7 +1131,7 @@ describe("t238 build-binaries release builder", () => {
       expect(existsSync(join(copy, "plugins", ".agents", "plugins", "marketplace.json"))).toBe(true);
       expect(existsSync(join(copy, "plugins", "test-pro", "claude", ".claude-plugin", "marketplace.json"))).toBe(false);
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      cleanupTestProject(root);
     }
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
@@ -1190,7 +1191,7 @@ describe("t238 build-binaries release builder", () => {
       );
       expect(result.stderr).toContain("delegate-doctor-data gate failed");
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      cleanupTestProject(root);
     }
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });

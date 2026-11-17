@@ -91,14 +91,16 @@
 //      an unattended driver (AIDLC_UNATTENDED=1) has nobody to answer, so
 //      there it allows only a checkpoint question (the verification command,
 //      a plan approval, a summary confirmation, a Construction policy change).
-//   5. An IN-FLIGHT COMPOSE gate is positively signalled by the fresh
-//      workspace-level compose marker. Under autonomous Construction it allows
-//      the stop while a person is there; an unattended driver
+//   5. An IN-FLIGHT COMPOSE gate is positively signalled by the engine's open
+//      compose question (its published step). Under autonomous Construction
+//      it allows the stop while a person is there; an unattended driver
 //      (AIDLC_UNATTENDED=1) has nobody to answer the gate.
 //   6. An IN-FLIGHT BACKGROUND SUBAGENT is positively signalled by a fresh
 //      session-scoped ledger entry added after background dispatch acceptance
-//      and removed one-at-a-time on SubagentStop. Autonomous Construction
-//      remains guarded.
+//      and removed one-at-a-time on SubagentStop. Under autonomous Construction
+//      it allows the stop while a person is there (the helper's completion
+//      carries the work on); an unattended driver (AIDLC_UNATTENDED=1) keeps
+//      the loop alive.
 //   7. A CONVERSATIONAL turn ends with the human's last prompt answered and NO
 //      workflow-engine engagement (the conductor ran neither aidlc-orchestrate
 //      nor aidlc-state since that prompt). Issue #365's broader reading: a human
@@ -183,7 +185,7 @@
 
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "../tools/aidlc-runtime-budget.ts";
 import { createHash } from "node:crypto";
-import { closeSync, existsSync, fstatSync, openSync, readFileSync, readdirSync, readSync, statSync, unlinkSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, openSync, readFileSync, readdirSync, readSync } from "node:fs";
 import { join } from "node:path";
 import {
   hookStandsOutside,
@@ -192,10 +194,9 @@ import {
   clearSessionIntentHandoff,
   boundDirectiveMessage,
   claudeQueuedMessageOrigin,
-  composeMarkerPath,
+  composeGateOpen,
   consumeCopilotConversation,
   copilotStopEvidence,
-  COMPOSE_MARKER_TTL_MS,
   docsRoot,
   errorMessage,
   findIntentByUuid,
@@ -939,52 +940,21 @@ function isPendingDecisionStop(
 // a stage gate, but it has no [?]/[R] checkbox signal: the current stage stays [
 // ]/[-], so this hook's bare-`next` probe sees the pending run-stage and would
 // block the turn - shoving the conductor back into stage execution mid-compose
-// and abandoning the gate. POSITIVE-CONFIRMATION: the conductor writes the
-// marker file `aidlc/.aidlc-compose-pending` before presenting the gate (the
-// engine's compose dispatch print instructs it) and deletes it on
-// approve/reject, the same disk-signal discipline as tier-2's
-// <slug>-questions.md. Under autonomous Construction a person who is there
-// answers the gate too (they asked for the reshape); only an unattended driver
-// (AIDLC_UNATTENDED=1) has nobody to answer it, so there a stray marker must
-// not strand the run. Fail-closed: any read error falls through to the cap-bounded
-// block. Front/report composes are unaffected (cold start has no state file; the
-// hook allows before this).
-//
-// STALENESS BOUND. The conductor owns the write/delete, but a session that
-// crashes or is killed between "write the marker" and "gate resolves" leaves the
-// marker on disk forever - a permanently open carve-out that silently disables
-// the forwarding-loop enforcement for the whole workspace until someone
-// hand-deletes a hidden file they have never heard of. So the carve-out honours
-// the marker ONLY while it is FRESH: younger than COMPOSE_MARKER_TTL_MS by its
-// mtime. The window is generous (24h) so a human who steps away from an open
-// gate for a long pause is still covered; anything older is an orphan, not a
-// live gate. A stale marker is IGNORED (fall through to the cap-bounded block)
-// AND best-effort deleted here (the janitor), so the next turn starts clean.
-// The delete is wrapped so a failure to unlink never changes the stop decision.
-// The path spelling and the TTL are shared with the doctor probe via aidlc-lib.
+// and abandoning the gate. POSITIVE-CONFIRMATION: the engine published its
+// compose step as the open question (composeGateOpen, the one reader), which a
+// `next` naming another step or the approval's recompose closes. Under
+// autonomous Construction a person who is there answers the gate too (they
+// asked for the reshape); only an unattended driver (AIDLC_UNATTENDED=1) has
+// nobody to answer it, so there an open question must not strand the run.
+// Fail-closed: any read error falls through to the cap-bounded block.
+// Front/report composes are unaffected (cold start has no state file; the hook
+// allows before this).
 function isPendingComposeStop(projectDir: string, stateContent: string): boolean {
   try {
     if (!humanTurnMintAllowed() && getField(stateContent, "Construction Autonomy Mode")?.trim() === "autonomous") {
       return false; // nobody answers the gate - keep the loop alive
     }
-    const marker = composeMarkerPath(projectDir);
-    if (!existsSync(marker)) return false;
-    const ageMs = Date.now() - statSync(marker).mtimeMs;
-    if (ageMs <= COMPOSE_MARKER_TTL_MS) return true;
-    // Orphaned marker: do not honour it, and best-effort clean it up so it
-    // cannot disable the enforcement loop indefinitely.
-    try {
-      unlinkSync(marker);
-    } catch {
-      // Unlink failure is non-fatal - the staleness check above already refused
-      // to honour the marker, so the loop stays enforced regardless.
-    }
-    recordHookTrace(
-      projectDir,
-      HOOK_NAME,
-      "ignoring an orphaned compose marker (aidlc/.aidlc-compose-pending older than the freshness window); cleaned it up and falling through to the cap-bounded block",
-    );
-    return false;
+    return composeGateOpen(projectDir);
   } catch {
     return false;
   }
@@ -998,9 +968,10 @@ function isPendingComposeStop(projectDir: string, stateContent: string): boolean
 // background result arrives. POSITIVE-CONFIRMATION: the dispatch hook adds one
 // session-scoped ledger entry only for an accepted `run_in_background: true`
 // call, or for a launch its PostToolUse response confirms as "async_launched",
-// and SubagentStop removes one entry for that same session. AUTONOMY
-// GUARD: never fires under autonomous Construction, where the unattended loop
-// must remain enforced.
+// and SubagentStop removes one entry for that same session. Under autonomous
+// Construction a person who is there sees the helper's completion resume the
+// agent, as in a gated run; only an unattended driver (AIDLC_UNATTENDED=1)
+// keeps the loop alive past the wait.
 //
 // STALENESS BOUND. A crashed session or missing SubagentStop can strand an
 // entry. The shared ledger helper prunes stale entries under the workspace lock
@@ -1012,8 +983,8 @@ function isPendingSubagentStop(
   sessionId: unknown,
 ): boolean {
   try {
-    if (getField(stateContent, "Construction Autonomy Mode")?.trim() === "autonomous") {
-      return false; // autonomy guard - keep the loop alive
+    if (!humanTurnMintAllowed() && getField(stateContent, "Construction Autonomy Mode")?.trim() === "autonomous") {
+      return false; // nobody waits with the helper - keep the loop alive
     }
     const match = matchSubagentInflight(projectDir, sessionId);
     if (match.malformed) {
@@ -2123,16 +2094,17 @@ if (reachedTheStep && directive.offerAutonomy === true) {
 }
 
 // Pending-compose carve-out (tier 2b): an in-flight compose proposal is
-// awaiting the human's approve/edit/reject (the conductor's marker file is on
-// disk) and we are NOT in autonomous Construction - the conductor is parked on
-// the human exactly like a stage gate, so allow the turn to end instead of
-// nudging it back into stage execution mid-compose. Positive-confirmation only
-// (the marker), autonomy-guarded, fail-closed (see isPendingComposeStop).
+// awaiting the human's approve/edit/reject (the engine's open compose question)
+// and no unattended driver runs autonomous Construction - the conductor is
+// parked on the human exactly like a stage gate, so allow the turn to end
+// instead of nudging it back into stage execution mid-compose.
+// Positive-confirmation only, autonomy-guarded, fail-closed (see
+// isPendingComposeStop).
 if (isPendingComposeStop(projectDir, stateContent)) {
   recordHookTrace(
     projectDir,
     HOOK_NAME,
-    "an in-flight compose proposal is pending human approval (aidlc/.aidlc-compose-pending present); allowing the stop (pending-compose carve-out)",
+    "an in-flight compose proposal is waiting for the human's answer; allowing the stop (pending-compose carve-out)",
   );
   return allowStop();
 }
@@ -2140,7 +2112,7 @@ if (isPendingComposeStop(projectDir, stateContent)) {
 // Pending-background-subagent carve-out (tier 2c): a background Agent/Task is
 // still running, so the conductor is correctly parked until its result arrives.
 // Positive-confirmation only (a matching ledger entry), session-isolated,
-// autonomy-guarded, freshness-bounded, and fail-closed (see
+// guarded for an unattended driver, freshness-bounded, and fail-closed (see
 // isPendingSubagentStop).
 if (isPendingSubagentStop(projectDir, stateContent, rawSessionId)) {
   recordHookTrace(

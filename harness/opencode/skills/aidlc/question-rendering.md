@@ -137,9 +137,12 @@ Rules:
   numbered content earlier in the message or another question in the batch.
   Use unordered bullets for immediately preceding summaries. Visible `1` maps
   to the first source option label, `2` to the second, and so on.
-- **Always append an "Other" escape** as the final number — the spec's
-  options never include one (on Claude Code the UI provides it; here you
-  render it).
+- **Exactly one final "Other" escape**: when the source options do not already
+  contain an Other choice, append `Other` as the final visible number. When a
+  file-backed question already ends with `X. Other (please specify)`, remap
+  that existing source option to the final visible number and do not append a
+  second Other. The visible number maps back to the exact source label
+  `X. Other (please specify)`.
 - **multiSelect: true** → say "Reply with all numbers that apply (e.g. 1, 3)."
 - **Answer capture**: map the user's number back to the exact option `label`
   and record that label verbatim (protocol: never summarize User Input). A

@@ -15,9 +15,9 @@
 //           a subprocess intent-create so the deterministic tier stays
 //           fixture-driven, the same posture the front + reviewer twins take.
 //   beat 1: codex exec `/aidlc compose "drop market research and team formation
-//           ..."` - the conductor dispatches the composer, proposes SKIP flips,
-//           writes the pending marker `aidlc/.aidlc-compose-pending`, and ends
-//           the turn AT the approve/edit/reject gate (numbered prose:
+//           ..."` - the conductor dispatches the composer, proposes SKIP flips
+//           (the engine holds the compose question open itself; no file is
+//           written), and ends the turn AT the approve/edit/reject gate (numbered prose:
 //           request_user_input returns {} in exec mode). NOTHING is applied:
 //           no stage newly skipped, no marker changed but the current stage
 //           starting, no RECOMPOSED. JOURNEY TOLERANCE:
@@ -30,13 +30,13 @@
 //           RECOMPOSED carrying the person-asked reason); then there is no gate
 //           and no beat 2.
 //   beat 2: codex exec resume --last "Approve" - same session (asserted via the
-//           stderr session id), the conductor runs the recompose verb and
-//           deletes the marker.
+//           stderr session id), the conductor runs the recompose verb, which
+//           closes the question.
 //   disk:   market-research now carries the SKIP suffix and no stage the person
 //           did not name does, the cursor and every checkbox marker are
 //           unchanged (the current stage may start: the agent carrying on),
 //           Total Stages shrank, Stages to Skip names market-research,
-//           RECOMPOSED audited, the marker gone.
+//           RECOMPOSED audited, the question closed, no file ever written.
 //
 // JOURNEY-LEVEL tolerance (mirrors t196): the live composer exercises judgment
 // over WHICH of the two named stages to flip (a run keeping team-formation was
@@ -82,7 +82,7 @@ import {
 } from "../harness/fixtures.ts";
 import { expectPersonFirst } from "../harness/person-turns.ts";
 import { markersChanged, newlySkipped } from "../harness/outcomes.ts";
-import { PERSON_ASKED_SKIP_REASON } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { composeGateOpen, PERSON_ASKED_SKIP_REASON } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 function completedStartupProbe<T extends { error?: Error }>(result: T): T {
   if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") throw result.error;
@@ -229,8 +229,8 @@ function readState(proj: string): string {
   return readFileSync(join(seededRecordDir(proj), "aidlc-state.md"), "utf-8");
 }
 
-/** The pending-proposal marker (aidlc/.aidlc-compose-pending, project-root aidlc/). */
-function markerPath(proj: string): string {
+/** The file an earlier version had the agent write for the compose question: never written now. */
+function oldFilePath(proj: string): string {
   return join(proj, "aidlc", ".aidlc-compose-pending");
 }
 
@@ -273,7 +273,7 @@ describe("t-exec-codex-compose-inflight - in-flight recompose over exec + exec r
         if (!auditText(proj).includes(`**Reason**: ${PERSON_ASKED_SKIP_REASON}`)) {
           // The gate route: the turn must END at a human question (the proposal
           // gate, or - conductor-forwarding variance - the engine's cold-start
-          // compose offer) with the marker written but NOTHING applied. If the
+          // compose offer) with the question open but NOTHING applied. If the
           // engine asked the compose OFFER instead of the proposal gate, answer
           // "compose" in-session; the next turn must land on the gate.
           let gateOut = b1.stdout;
@@ -289,10 +289,11 @@ describe("t-exec-codex-compose-inflight - in-flight recompose over exec + exec r
           // The approve/edit/reject gate reached the final message.
           expect(/approve/i.test(gateOut), gateDiagnostic).toBe(true);
           expect(/reject/i.test(gateOut), gateDiagnostic).toBe(true);
-          // Marker written, nothing applied: a change before Approve on this
-          // route is AI-DLC acting for the person. The current stage may
-          // start, as after Approve.
-          expect(existsSync(markerPath(proj))).toBe(true);
+          // The engine's question open, no file written, nothing applied: a
+          // change before Approve on this route is AI-DLC acting for the
+          // person. The current stage may start, as after Approve.
+          expect(composeGateOpen(proj)).toBe(true);
+          expect(existsSync(oldFilePath(proj))).toBe(false);
           const atGate = readState(proj);
           expectPersonFirst(newlySkipped(before, atGate).length === 0 && markersChanged(before, atGate, cursorBefore).length === 0 &&
             !auditText(proj).includes("**Event**: RECOMPOSED"),
@@ -321,11 +322,13 @@ describe("t-exec-codex-compose-inflight - in-flight recompose over exec + exec r
         // And the rebuilt Stages to Skip names the flipped stage.
         expect(after).toMatch(/- \*\*Stages to Skip\*\*: .*market-research/);
 
-        // RECOMPOSED audited and the marker gone (the last turn returned only
-        // when it fully resolved, so this is the settled end state - the
-        // strongest proof the recompose verb ran, mirroring t196's audit assertion).
+        // RECOMPOSED audited, the question closed and no file ever written
+        // (the last turn returned only when it fully resolved, so this is the
+        // settled end state - the strongest proof the recompose verb ran,
+        // mirroring t196's audit assertion).
         expect(auditText(proj)).toContain("**Event**: RECOMPOSED");
-        expect(existsSync(markerPath(proj))).toBe(false);
+        expect(composeGateOpen(proj)).toBe(false);
+        expect(existsSync(oldFilePath(proj))).toBe(false);
       }, deadlineMs);
     },
     TEST_TIMEOUT_MS,

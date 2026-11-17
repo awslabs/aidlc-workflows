@@ -66,7 +66,7 @@ outputs: "infrastructure-specification.md (deployment + services + shared, tabul
 
 ## Constraints
 
-This is a design stage — artifacts describe what infrastructure is needed and why, not implementation-ready code. Complete IaC (CDK constructs, Terraform modules, CloudFormation), full Lambda handlers, and IAM policy documents belong in code-generation. Limit code to short illustrative snippets (pseudocode or interface-level, ≤15 lines) that clarify a design decision.
+This is a design stage — artifacts describe what infrastructure is needed and why, not implementation-ready code. Complete IaC (CDK constructs, Terraform modules, CloudFormation), full Lambda handlers, and IAM policy documents belong in code-generation, which runs after this stage in every scope that runs it (including `infra`) and writes them under Plan Approval. Limit code to short illustrative snippets (pseudocode or interface-level, ≤15 lines) that clarify a design decision.
 
 ## Steps
 
@@ -111,7 +111,7 @@ Focus areas:
 
 ### Step 3: Collect and Analyze Answers
 
-Collect answers following stage-protocol.md §3 question flow (offer interaction mode choice, collect answers, write back to file). After collecting answers, perform MANDATORY ambiguity analysis:
+Collect answers following stage-protocol.md §3 question flow (collect answers, write back to file). After collecting answers, perform MANDATORY ambiguity analysis:
 - Identify vague answers ("cloud-based", "auto-scale", "standard monitoring")
 - Check for contradictions between answers
 - Flag missing details needed for artifact generation

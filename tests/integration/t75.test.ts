@@ -171,13 +171,13 @@ const DISCOVERED_RULES_DRAFT = `# Discovered Rules
 
 ## Mandated
 
-ALWAYS use Result<T,E> for fallible operations
-ALWAYS write tests before implementation
+- ALWAYS use Result<T,E> for fallible operations
+- ALWAYS write tests before implementation
 
 ## Forbidden
 
-NEVER throw exceptions across service boundaries
-NEVER skip CI gates
+- NEVER throw exceptions across service boundaries
+- NEVER skip CI gates
 `;
 
 const PRACTICES_SUPPORTS = [
@@ -669,9 +669,9 @@ describe("t75 practices-promote — idempotency on both memory targets", () => {
     );
     writeFileSync(
       fx.discoveredRulesPath,
-      "# Discovered Rules\n\n## Mandated\n\nALWAYS keep review records\n" +
-        "ALWAYS run project checks\nALWAYS run project checks\n\n" +
-        "## Forbidden\n\nALWAYS run project checks\nNEVER skip CI gates\n",
+      "# Discovered Rules\n\n## Mandated\n\n- ALWAYS keep review records\n" +
+        "- ALWAYS run project checks\n- ALWAYS run project checks\n\n" +
+        "## Forbidden\n\n- ALWAYS run project checks\n- NEVER skip CI gates\n",
       "utf-8",
     );
 
@@ -707,10 +707,10 @@ describe("t75 practices-promote — idempotency on both memory targets", () => {
     writeFileSync(
       fx.discoveredRulesPath,
       "# Discovered Rules\n\n## Mandated\n\n" +
-        "ALWAYS keep review records (affirmed 2000-01-02) (affirmed 2000-01-03)\n\n" +
-        "## Forbidden\n\nNEVER skip CI gates\n" +
-        "NEVER bypass review (affirmed 2000-01-01) (affirmed 2000-01-02)\n" +
-        "NEVER bypass review\n",
+        "- ALWAYS keep review records (affirmed 2000-01-02) (affirmed 2000-01-03)\n\n" +
+        "## Forbidden\n\n- NEVER skip CI gates\n" +
+        "- NEVER bypass review (affirmed 2000-01-01) (affirmed 2000-01-02)\n" +
+        "- NEVER bypass review\n",
       "utf-8",
     );
 
@@ -740,9 +740,9 @@ describe("t75 practices-promote — idempotency on both memory targets", () => {
     );
     writeFileSync(
       fx.discoveredRulesPath,
-      "# Discovered Rules\n\n## Mandated\n\nALWAYS run project checks.\n" +
-        "ALWAYS run project checks (affirmed 2000-01-01) before deployment\n" +
-        "ALWAYS run project checks (affirmed yesterday)\n\n## Forbidden\n",
+      "# Discovered Rules\n\n## Mandated\n\n- ALWAYS run project checks.\n" +
+        "- ALWAYS run project checks (affirmed 2000-01-01) before deployment\n" +
+        "- ALWAYS run project checks (affirmed yesterday)\n\n## Forbidden\n",
       "utf-8",
     );
 

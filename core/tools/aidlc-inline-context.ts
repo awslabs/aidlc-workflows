@@ -183,6 +183,20 @@ export function sharedKnowledgeWithoutFormatDocs(harnessDir: string): string {
     `${docs.slice(0, -1).join(", ")} and ${docs[docs.length - 1]}: a step that needs one names it)`;
 }
 
+// How a Kiro helper finds and reads the files the preflight names, shared by the
+// packager and the plugin builder. The preflight names folders, and when a
+// helper lists them with a shell line, Kiro can ask the person to approve it.
+export function kiroKnowledgePreflightClause(harnessDir: string): string {
+  if (harnessDir !== ".kiro") return "";
+  return (
+    `To find them, list each of these folders with your file tool, one folder per call, and any folder inside one ` +
+    `the same way; a folder that is not there has nothing to load, and a shell line that lists, searches or reads them ` +
+    `can stop and ask the person to approve it. ` +
+    `Kiro shows only part of a long file: read each one with your file tool in parts of at most 200 lines ` +
+    `(offset and limit), from the first line to the last; a read that comes back cut short is not all of it. `
+  );
+}
+
 // Roster metadata read from a checkout (compiled graph, selection, ownership
 // records): only a regular file that is not a symlink and fits the cap. A FIFO,
 // device, symlink, or oversized file yields null instead of blocking or

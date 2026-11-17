@@ -118,13 +118,16 @@ ${stages.map((stage) => `- [${stage === current ? "-" : " "}] ${stage} — EXECU
   return p;
 }
 
+// A code plan still being written (its test instructions empty) routes as its
+// plan step; with both files written the engine would write the plan's Testing
+// Contract and ask the person to approve it.
 function cover(p: string, unit: string, selected = stages, receipts = true) {
   for (const slug of selected) {
     const stage = findStageBySlug(slug)!;
     const output = join(seededRecordDir(p), "construction", unit, slug);
     mkdirSync(output, { recursive: true });
     for (const name of stage.produces ?? []) {
-      writeFileSync(join(output, artifactFilename(name)), `# ${unit} ${name}\n`);
+      writeFileSync(join(output, artifactFilename(name)), name === "unit-test-instructions" ? "" : `# ${unit} ${name}\n`);
     }
     if (stage.workspace_requires) {
       writeFileSync(join(output, "source-manifest.json"), JSON.stringify({
@@ -412,6 +415,44 @@ describe("t342 Construction checkpoint routing", () => {
     cover(p, "beta");
     expect(next(p).construction_checkpoint?.unit).toBe("beta");
     expect(counted()).toBe(2);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // A Unit keeps its notes in its own folder; work started before that kept
+  // them in the one stage diary. A Unit's checkpoint counts its own diary and
+  // its notes in the stage diary, never another Unit's.
+  test("a Unit's checkpoint counts its own diary and its older notes in the stage diary", () => {
+    const p = fixture();
+    const surface = learningsSurface(p);
+    const dash = "—";
+    const write = (path: string, lines: string[]) => {
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, `${lines.join("\n")}\n`);
+    };
+    const construction = join(seededRecordDir(p), "construction");
+    write(join(construction, "functional-design", "memory.md"), [
+      "## Interpretations",
+      `- 2026-10-05T10:00:00Z [unit alpha] ${dash} alpha keeps its own store; it owns the data`,
+      `- 2026-10-05T10:05:00Z ${dash} every Unit logs in UTC; the team asked for it`,
+      `- 2026-10-05T11:00:00Z [unit beta] ${dash} beta reads the store through alpha; no second copy`,
+    ]);
+    const counted = () => {
+      const result = surface("functional-design");
+      expect(result.status, result.stderr).toBe(0);
+      return (JSON.parse(result.stdout) as { memory_entries_total: number }).memory_entries_total;
+    };
+    cover(p, "alpha");
+    write(join(construction, "alpha", "functional-design", "memory.md"), [
+      "## Tradeoffs", `- 2026-11-05T10:00:00Z ${dash} one list over a grid; fewer clicks`,
+    ]);
+    write(join(construction, "beta", "functional-design", "memory.md"), [
+      "## Tradeoffs", `- 2026-11-05T11:00:00Z ${dash} beta's own note; not alpha's`,
+    ]);
+    expect(next(p).construction_checkpoint?.unit).toBe("alpha");
+    expect(counted()).toBe(3);
+    approve(p, "alpha");
+    cover(p, "beta");
+    expect(next(p).construction_checkpoint?.unit).toBe("beta");
+    expect(counted()).toBe(3);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("the working skeleton's checkpoint offers the learnings of the stages its Unit walked", () => {
@@ -1522,9 +1563,9 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(ask.remedies.map((remedy) => remedy.op)).not.toContain("redo-unit-step");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  // An explicit jump goes through (#1411): the person drives. The jump names the
-  // steps units have not finished, so the agent can say what was skipped and how
-  // to reopen it; there is no confirmation question and no refusal.
+  // An explicit jump goes through (#1411): the person drives. The jump's own
+  // line names the steps units have not finished, and the way back (#3530);
+  // there is no confirmation question and no refusal.
   test("leaving Construction early goes through and names the steps it skips", () => {
     for (const args of [["--stage", "build-and-test"], ["--phase", "operation"]]) {
       const p = betaBuilding();
@@ -1532,16 +1573,19 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
       const jump = JSON.parse(tool(p, "orchestrate", ["next", ...args]).stdout);
       expect(jump.kind, JSON.stringify(jump)).toBe("print");
       expect(jump.message).toContain("--direction forward");
-      expect(jump.message).toContain(
-        'This skips the steps these units have not finished: unit "beta" (code-generation). Their files stay.',
-      );
-      expect(jump.message).toContain("tell the person in one line what was skipped");
-      // The way back starts at the earliest step it skips, not the first per-unit stage.
-      expect(jump.message).toContain("--stage code-generation` reopens it");
-      // One way back only: the jump's generic notice is not relayed as well.
-      expect(jump.message).not.toContain("carries `notice`");
+      // The jump's own line is the one way back; the agent has none of its own to say.
+      expect(jump.message).toContain("carries `notice`");
+      expect(jump.message).not.toContain("tell the person in one line what was skipped");
       expect(jump.message).not.toContain("nothing needs skipping");
       expect(readFileSync(seededStateFile(p), "utf-8")).toBe(before);
+      const command = /`[^`]*aidlc-jump\.ts (execute [^`]+)`/.exec(jump.message)?.[1];
+      const executed = tool(p, "jump", command!.split(" "));
+      expect(executed.status, executed.out).toBe(0);
+      const notice = String(JSON.parse(executed.stdout).notice);
+      expect(notice).toContain("Skipped for unit beta: Code Generation. Their files stay.");
+      // The way back starts at the earliest step it skips, not the first per-unit stage.
+      expect(notice).toEndWith("You can go back to Code Generation any time.");
+      expect(notice).not.toContain("alpha");
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -1590,6 +1634,31 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(getField(state, "Current Stage")).toBe(currentStage);
     expect(state).not.toContain("- **Unit Stage**:");
     expect(next(p)).toMatchObject({ stage: "code-generation", unit: "beta" });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // The first unit jumps on before any unit has finished a step. It
+  // still moves only that unit on: no step is marked skipped for every unit,
+  // so the next unit starts at its own first step.
+  test("a forward jump before any unit has finished a step moves only the first unit on", () => {
+    const p = fixture();
+    expect(next(p)).toMatchObject({ stage: "functional-design", unit: "alpha" });
+    const jump = JSON.parse(tool(p, "orchestrate", ["next", "--stage", "code-generation"]).stdout);
+    expect(jump.kind, JSON.stringify(jump)).toBe("print");
+    expect(jump.message).toContain(
+      "execute --target code-generation --direction forward --units alpha " +
+        "--stages functional-design,nfr-requirements,nfr-design,infrastructure-design --scope feature",
+    );
+    expect(jump.message).not.toContain('unit "beta" (');
+    const command = /`[^`]*aidlc-jump\.ts (execute [^`]+)`/.exec(jump.message)?.[1];
+    const executed = tool(p, "jump", command!.split(" "));
+    expect(executed.status, executed.out).toBe(0);
+    expect(jumped(p)).toBe(0);
+    const state = readFileSync(seededStateFile(p), "utf-8");
+    for (const slug of stages) expect(state, slug).not.toContain(`- [S] ${slug}`);
+    expect(next(p)).toMatchObject({ stage: "code-generation", unit: "alpha" });
+    cover(p, "alpha", ["code-generation"]);
+    approve(p, "alpha");
+    expect(next(p)).toMatchObject({ stage: "functional-design", unit: "beta" });
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // The jump's own print, and its commands run in order as the conductor does.
@@ -2178,6 +2247,26 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(readFileSync(seededStateFile(p), "utf-8")).toBe(before);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("a re-entry change that names no Unit is offered for the Unit in flight, and kept in their words", () => {
+    const p = betaBuilding();
+    expect(tool(p, "state", ["unit", "start", "--stage", "code-generation", "--unit", "beta"]).status).toBe(0);
+    const words = "I want to change NFR Design: keep the greeting in one place.";
+    const id = policyHuman(p, words);
+    // The agent reads a change: the jump print names the form for one, for beta.
+    expect(resumedReport(p, ["--choice", "jump", "--target", "nfr-design"]).message)
+      .toContain("`next --stage nfr-design --unit beta --change`");
+    const printed = JSON.parse(tool(p, "orchestrate", ["next", "--stage", "nfr-design", "--unit", "beta", "--change"]).stdout);
+    const reopen = /aidlc-jump\.ts (reopen [^`]*--via change)`/.exec(printed.message ?? "")?.[1];
+    expect(reopen, printed.message).toBeDefined();
+    const ran = tool(p, "jump", reopen!.split(" "), { ...process.env, AIDLC_SESSION_OVERRIDE: "t342-policy" });
+    expect(ran.status, ran.out).toBe(0);
+    const row = readAuditShardEvents(p).findLast((event) => event.event === "GATE_REJECTED")?.block ?? "";
+    expect(row).toContain("**Reopen**: change");
+    expect(row).toContain("**Unit**: beta");
+    expect(row).toContain(`**Feedback**: ${words}`);
+    expect(row).toContain(`**Message Id**: ${id}`);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("past the per-unit steps, a re-entry jump naming a Unit this work does not have asks the same way", () => {
     const p = gatesApprovedUntil("code-generation");
     for (const result of ["awaiting-approval", "approved"]) {
@@ -2197,12 +2286,20 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a forward jump that drops no Unit's work, and a stage-major forward jump, still jump", () => {
-    // A unit-major jump with a line to say about the steps it skips is named
-    // for the agent, line and all.
+    // Unit by unit, the jump's own line says what it skips for each Unit
+    // (#3530), so there is nothing to say or run around it: the `next` makes
+    // the jump itself and returns the step it lands on, with that line. A jump
+    // inside the per-unit steps moves only the unit in flight on, so
+    // this one leaves Construction.
     const fresh = fixture();
-    const clear = JSON.parse(tool(fresh, "orchestrate", ["next", "--stage", "code-generation"]).stdout);
-    expect(clear.kind, JSON.stringify(clear)).toBe("print");
-    expect(clear.message).toContain("--target code-generation --direction forward");
+    const clear = JSON.parse(tool(fresh, "orchestrate", ["next", "--stage", "build-and-test"]).stdout);
+    expect(clear.kind, JSON.stringify(clear)).not.toBe("print");
+    expect(clear.stage).toBe("build-and-test");
+    expect(clear.change_notices).toContain(
+      "Moved to Build and Test. Skipped for units alpha and beta: Functional Design, NFR Requirements, NFR Design, " +
+        "Infrastructure Design and Code Generation. Their files stay. You can go back to Functional Design any time.",
+    );
+    expect(jumped(fresh)).toBe(1);
     // Stage by stage there is nothing to say or run around it, so the `next`
     // makes the jump itself and returns the step it lands on.
     const stageMajor = fixture({ iteration: "stage-major" });
@@ -3035,7 +3132,14 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
   // completion the way a solo run does, with no output fingerprint.
   function buildReviewed(p: string, unit: string, edit?: () => void, asRun = false) {
     let codeReviewed: ReturnType<typeof reviewThroughLog> | null = null;
+    // A team Unit's records hang off its start: each teammate's own.
+    const team = readFileSync(seededStateFile(p), "utf-8").includes("- **Unit Ownership**: team");
     for (const slug of stages) {
+      if (team) {
+        appendAuditEntry("UNIT_STARTED", {
+          Stage: slug, Unit: unit, "Run floor": latestMainWorkflowStageRunFloorForProject(p, slug, true, unit),
+        }, p);
+      }
       cover(p, unit, [slug], false);
       if (slug === "code-generation") edit?.();
       const reviewed = reviewThroughLog(p, [

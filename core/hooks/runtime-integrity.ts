@@ -15,9 +15,12 @@ import {
   runtimeProjectDir,
 } from "../tools/aidlc-runtime-paths.ts";
 import {
+  heredocAt,
+  heredocPipeline,
   shellCommandInvocationDetails,
   shellDirectoryChanges,
   shellHomes,
+  shellPatchPaths,
   shellWriteTargets,
   writeTargets,
 } from "./review-freeze-command.ts";
@@ -805,56 +808,18 @@ function interpreterReadsCode(name: string, args: string[]): boolean {
   return true;
 }
 
-// Limit stdin consumers to this command and its downstream pipeline, excluding
-// earlier/later independent commands. Redirection filenames are not script argv.
-function heredocPipeline(header: string, herePosition: number): { raw: string; execution: string } {
-  let quote = "";
-  let start = 0;
-  let end = header.length;
-  const redirects: Array<[number, number]> = [];
-  for (let index = 0; index < header.length; index++) {
-    const ch = header[index];
-    if (ch === "\\" && quote !== "'") { index++; continue; }
-    if (quote) { if (ch === quote) quote = ""; continue; }
-    if (ch === "'" || ch === '"') { quote = ch; continue; }
-    const redirect = /^(?:\d*)?(?:>>?|<|&>)(?:&)?[ \t]*/.exec(header.slice(index));
-    if (redirect && (ch === "<" || ch === ">" || ch === "&" ||
-      index === 0 || /\s|[;|&]/.test(header[index - 1]))) {
-      const begin = index;
-      index += redirect[0].length;
-      let targetQuote = "";
-      while (index < header.length) {
-        const current = header[index];
-        if (current === "\\" && targetQuote !== "'") { index += 2; continue; }
-        if (targetQuote) {
-          if (current === targetQuote) targetQuote = "";
-        } else if (current === "'" || current === '"') targetQuote = current;
-        else if (/\s|[;|&<>]/.test(current)) break;
-        index++;
-      }
-      redirects.push([begin, index]);
-      index--;
-      continue;
-    }
-    if (!";|&\n".includes(ch)) continue;
-    const pair = header.slice(index, index + 2);
-    const width = ["&&", "||", "|&"].includes(pair) ? 2 : 1;
-    if (index < herePosition) start = index + width;
-    else if (ch !== "|" || pair === "||") { end = index; break; }
-    index += width - 1;
-  }
-  const execution = header.split("");
-  for (const [begin, after] of redirects) {
-    for (let index = begin; index < after; index++) execution[index] = " ";
-  }
-  return { raw: header.slice(start, end), execution: execution.slice(start, end).join("") };
-}
-
 function protectedHeredoc(body: string, header: string, herePosition: number, stdin: boolean, cwd: string, depth: number): boolean {
   const pipeline = heredocPipeline(header, herePosition);
   const kinds = new Set<"shell" | "python" | "javascript">();
   if (stdin) {
-    for (const call of shellCommandInvocationDetails(pipeline.execution)) {
+    const calls = shellCommandInvocationDetails(pipeline.execution);
+    // apply_patch with no operand writes the files its patch names, as printf
+    // to each would.
+    if (
+      calls.length === 1 && (calls[0].name === "apply_patch" || calls[0].name === "applypatch") && calls[0].args.length === 0 &&
+      shellPatchPaths(body, cwd).some((path) => protectedWriteTarget(path, cwd))
+    ) return true;
+    for (const call of calls) {
       const kind = interpreter(call.name);
       if (kind && interpreterReadsCode(call.name, call.args)) kinds.add(kind);
     }
@@ -920,34 +885,18 @@ function protectedShell(command: string, cwd: string, depth = 0, expansionsOnly 
       index = end;
       continue;
     }
-    if (!quote && !expansionsOnly && command.startsWith("<<", index) && command[index + 2] !== "<") {
-      const here = /^<<(-)?[ \t]*(?:'([^']+)'|"([^"]+)"|([A-Za-z_]\w*))/.exec(command.slice(index));
-      if (here) {
-        const delimiter = here[2] ?? here[3] ?? here[4];
-        const newline = command.indexOf("\n", index + here[0].length);
-        if (newline >= 0) {
-          let end = newline + 1;
-          const bodyStart = end;
-          while (end < command.length) {
-            const nextLine = command.indexOf("\n", end);
-            const lineEnd = nextLine < 0 ? command.length : nextLine;
-            const line = command.slice(end, lineEnd).replace(/\r$/, "");
-            if ((here[1] ? line.replace(/^\t+/, "") : line) === delimiter) break;
-            end = nextLine < 0 ? command.length : nextLine + 1;
-          }
-          const body = command.slice(bodyStart, end);
-          const descriptor = /(?:^|[ \t])(\d+)$/.exec(visible);
-          const prefix = descriptor ? visible.slice(0, -descriptor[1].length) : visible;
-          const header = prefix + command.slice(index + here[0].length, newline);
-          if (protectedHeredoc(body, header, prefix.length, !descriptor || descriptor[1] === "0", cwd, depth) ||
-            protectedShell(header, cwd, depth + 1) ||
-            here[4] !== undefined && protectedShell(body, cwd, depth + 1, true)) return true;
-          const after = command.indexOf("\n", end);
-          visible = `${header}\n`;
-          index = after < 0 ? command.length : after;
-          continue;
-        }
-      }
+    const heredoc = !quote && !expansionsOnly && ch === "<" ? heredocAt(command, index) : null;
+    if (heredoc) {
+      const descriptor = /(?:^|[ \t])(\d+)$/.exec(visible);
+      const prefix = descriptor ? visible.slice(0, -descriptor[1].length) : visible;
+      const header = prefix + command.slice(heredoc.operatorEnd, heredoc.newline);
+      if (protectedHeredoc(heredoc.body, header, prefix.length, !descriptor || descriptor[1] === "0", cwd, depth) ||
+        protectedShell(header, cwd, depth + 1) ||
+        !heredoc.quoted && protectedShell(heredoc.body, cwd, depth + 1, true)) return true;
+      const after = command.indexOf("\n", heredoc.bodyEnd);
+      visible = `${header}\n`;
+      index = after < 0 ? command.length : after;
+      continue;
     }
     // `${ cmd; }` and `${| cmd; }` (bash 5.3) run a command, as `$(...)` does,
     // so their braces stay separators.
@@ -1164,7 +1113,17 @@ function unresolvedAuditTrailWrite(visible: string, command: string, cwd: string
     AUDIT_DIRECTORY_TEXT.test(spelled) || (AIDLC_WORKSPACE.test(spelled) && AUDIT_WORD.test(spelled)) ||
     AIDLC_WORKSPACE.test(cwd);
   return words.some((word) => expandWord(word, values).some((expanded) => {
-    if (expanded === null) return AUDIT_SEGMENT.test(withoutOwnFolders(word, cwd)) || namesAudit;
+    if (expanded === null) {
+      if (authoredScriptText) {
+        const spelled = word.replace(/["']/g, "");
+        if (!protectedAuditTrailPath(spelled, cwd)) return false;
+        integrityTargetMatched ??= spelled;
+        return true;
+      }
+      if (!AUDIT_SEGMENT.test(withoutOwnFolders(word, cwd)) && !namesAudit) return false;
+      integrityTargetMatched ??= word;
+      return true;
+    }
     if (roots.some((root) => protectedAuditTrailPath(resolve(root, expanded), cwd))) return true;
     return computedRoot && !isAbsolute(expanded) && AUDIT_SEGMENT.test(expanded);
   }));
@@ -1215,6 +1174,17 @@ function withoutOwnFolders(text: string, cwd: string): string {
 // ended the walk was an audit-trail target.
 let auditTrailMatched = false;
 let integrityTargetMatched: string | null = null;
+let authoredScriptText = false;
+// One walk per script per tool call. Without a visited record, the script-runs-script
+// walk would be bounded only by MAX_EXECUTION_DEPTH, and a script many parents reach
+// would be re-walked once per path to it: exponential in depth, cycle or not. A verdict
+// is pure per tool call (cwd is fixed), so a clean walk is cached with the depth
+// it was walked at, and reused only at that depth or deeper: a deeper walk may
+// have stopped at MAX_EXECUTION_DEPTH before reaching a protected write. A script
+// still on the stack returns at once, ending cycles without the depth cap. Only
+// clean verdicts are cached (a protected verdict ends the walk); both reset per call.
+const cleanScriptWalks = new Map<string, number>();
+const scriptWalksInProgress = new Set<string>();
 
 function protectedWriteTarget(path: string, cwd: string): boolean {
   if (protectedRuntimePath(path, cwd) || protectedInstalledPath(path, cwd)) {
@@ -1223,6 +1193,7 @@ function protectedWriteTarget(path: string, cwd: string): boolean {
   }
   if (protectedAuditTrailPath(path, cwd)) {
     auditTrailMatched = true;
+    integrityTargetMatched ??= path;
     return true;
   }
   return false;
@@ -1365,6 +1336,12 @@ function protectedScriptFile(
 ): boolean {
   if (depth > MAX_EXECUTION_DEPTH) return false;
   const absolute = resolve(cwd, path);
+  // Skip a script already walked clean or still on the walk stack; see
+  // cleanScriptWalks. Keyed by interpreter too, since the same file read as
+  // shell and as JS are different walks.
+  const key = `${absolute}\0${language ?? "auto"}`;
+  const cleanAt = cleanScriptWalks.get(key);
+  if ((cleanAt !== undefined && cleanAt <= depth) || scriptWalksInProgress.has(key)) return false;
   try {
     const stat = statSync(absolute);
     if (!stat.isFile() || stat.size > MAX_SCRIPT_BYTES) return false;
@@ -1372,8 +1349,15 @@ function protectedScriptFile(
     const source = readFileSync(absolute, "utf-8");
     const shell = language ? language === "shell" : path.endsWith(".sh") || !SCRIPT_EXTENSION.test(path) &&
       !/^#![^\n]*\b(?:bun|node|python[\d.]*)\b/.test(source);
-    return shell ? protectedShell(source, cwd, depth + 1)
-      : protectedContent(source, cwd, depth + 1, language ? language === "python" : path.endsWith(".py"));
+    scriptWalksInProgress.add(key);
+    try {
+      const protectedScript = shell ? protectedShell(source, cwd, depth + 1)
+        : protectedContent(source, cwd, depth + 1, language ? language === "python" : path.endsWith(".py"));
+      if (!protectedScript) cleanScriptWalks.set(key, depth);
+      return protectedScript;
+    } finally {
+      scriptWalksInProgress.delete(key);
+    }
   } catch {
     // An unreadable or missing script is outside this lexical check's reach.
     return false;
@@ -1381,6 +1365,20 @@ function protectedScriptFile(
 }
 
 function protectedContentWrite(
+  toolName: string,
+  toolInput: Record<string, unknown> | undefined,
+  cwd: string,
+): boolean {
+  const enclosing = authoredScriptText;
+  authoredScriptText = true;
+  try {
+    return protectedContentWriteTargets(toolName, toolInput, cwd);
+  } finally {
+    authoredScriptText = enclosing;
+  }
+}
+
+function protectedContentWriteTargets(
   toolName: string,
   toolInput: Record<string, unknown> | undefined,
   cwd: string,
@@ -1438,6 +1436,8 @@ function runtimeIntegrityViolation(input: ClaudeCodeHookInput): RuntimeIntegrity
   const cwd = typeof input.cwd === "string" ? input.cwd : process.cwd();
   auditTrailMatched = false;
   integrityTargetMatched = null;
+  cleanScriptWalks.clear();
+  scriptWalksInProgress.clear();
   if (toolName === "Bash") {
     const raw = toolInput?.command;
     if (typeof raw !== "string") return null;
@@ -1474,7 +1474,7 @@ function runtimeIntegrityViolation(input: ClaudeCodeHookInput): RuntimeIntegrity
   }
   if (!protectedContentWrite(toolName, toolInput, cwd)) return null;
   integrityTargetMatched ??= targets[0] ?? null;
-  return "content";
+  return auditTrailMatched ? "audit" : "content";
 }
 
 export function violatesRuntimeIntegrity(input: ClaudeCodeHookInput): boolean {
@@ -1496,16 +1496,16 @@ function displayTarget(path: string, cwd: string | undefined): string {
 export function refuseRuntimeIntegrityViolation(input: ClaudeCodeHookInput): boolean {
   const violation = runtimeIntegrityViolation(input);
   if (violation === null) return false;
+  const matched = integrityTargetMatched === null
+    ? ""
+    : ` Matched: ${displayTarget(integrityTargetMatched, typeof input.cwd === "string" ? input.cwd : undefined)}.`;
   if (violation === "audit") {
-    process.stderr.write(`${AUDIT_TRAIL_REFUSAL}\n`);
+    process.stderr.write(`${AUDIT_TRAIL_REFUSAL}${matched}\n`);
     return true;
   }
   const clause = violation === "content"
     ? " (Scripts the agent writes or runs may not import these hooks either.)"
     : "";
-  const matched = integrityTargetMatched === null
-    ? ""
-    : ` Matched: ${displayTarget(integrityTargetMatched, typeof input.cwd === "string" ? input.cwd : undefined)}.`;
   process.stderr.write(`${RUNTIME_INTEGRITY_REFUSAL}${clause}${matched}\n`);
   return true;
 }

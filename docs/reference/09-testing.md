@@ -339,8 +339,9 @@ blocked hand-off) and opencode's plugin (loaded into one opencode process, a
 worker thread the host waits on; a refusal is the hook's thrown error).
 `tests/unit/t-scope-hosts.test.ts` pins those payloads against the ones recorded
 from each tool (`tests/fixtures/<tool>-hook-payloads`). Each tool's answer is
-read in its own form: Codex and Kiro refuse with exit 2, Copilot with a deny
-decision, Copilot runs the command its hook rewrote, and Kiro's person-turn hook
+read in its own form: Kiro refuses with exit 2, Codex with exit 2 or, on
+Windows, a deny decision (read by `tests/harness/codex-hook-answer.ts`), Copilot
+with a deny decision, Copilot runs the command its hook rewrote, and Kiro's person-turn hook
 may run the turn's first `next` itself, so the agent acts on that reply. Every
 tool call fires the hooks, so a refusal stops the run, and a hook command that
 fails is a problem. A host can also run on a project an installed release set
@@ -1478,7 +1479,10 @@ The runner writes these additional artifacts under its timestamped log directory
   isolated-file runs): Windows Codex fixture retention
   after the coordinator verifies native process retirement. These fixtures move
   to `retained-fixtures/` even on success; the host owns final deletion of the
-  protected sandbox files. A cross-volume copy keeps the original too.
+  protected sandbox files. When the move is refused (another volume, or a file
+  under the folder still held), the fixtures are copied and the original is kept
+  too; if the copy fails as well, they stay where they are, the run log says so
+  in one line, and the file keeps the result its cases gave.
 - `failed-fixtures/<label>-<pid>-<n>/`: a bounded snapshot of a failed live SDK
   fixture (t183, t193), taken by `tests/harness/failed-fixture.ts` because the
   fixture itself lives under the OS temporary directory that a hosted runner
@@ -1878,14 +1882,18 @@ The declared coverage is:
   involved. Its release journey (`tests/e2e/t-exec-copilot-release-journey.serial.test.ts`)
   is what a person does on day one: set up through the copy channel, doctor, the
   documented first step, the plan question, and Reverse Engineering approved, with a
-  message record for every line typed; a second case leaves the folder untrusted
+  message record for every line typed, each line typed at the prompt of Copilot's own
+  interactive terminal (`tests/harness/copilot-tui.ts` on the native terminal driver;
+  a `copilot -p` session tells the model not to stop for questions, which no person in
+  the terminal meets); a second case leaves the folder untrusted, runs `copilot -p`,
   and requires doctor to name the trust fix. Codex's golden journey
   (`tests/e2e/t-exec-codex-journey-golden-bugfix.serial.test.ts`, Linux and
   Windows) fixes the same greeter from the first line to Code Generation approved,
   with the plan question left for the day and approved in a new session; Copilot's
   (`tests/e2e/t-exec-copilot-journey-golden-bugfix.serial.test.ts`, Linux only:
   on Windows it runs past the 25 minutes a retry allows) does the same on the
-  copy-channel install of its release journey.
+  copy-channel install of its release journey, in Copilot's own terminal, with the
+  new session a fresh `copilot` in the same home.
   opencode's (`tests/e2e/t-run-opencode-journey-golden-change.serial.test.ts`,
   Linux and Windows) takes the
   same request to Reverse Engineering, where the person asks for one change in
@@ -1929,10 +1937,13 @@ every prompt yes. A prompt for AI-DLC's own command or record (one that names
 every other prompt is listed in its log (`tests/harness/stock-permissions.ts`).
 The other Claude SDK drives keep `bypassPermissions`. The Codex `--json`
 journeys run the shipped `workspace-write` sandbox, and a command naming
-`.codex/` or `aidlc/` that the sandbox refused fails the turn. Copilot CLI runs
-with `--allow-all-tools` (AI-DLC ships no Copilot CLI allow rules, so the
-person's own `--allow-tool` rules decide), the Claude terminal journeys skip
-permission prompts, and opencode already runs without `--auto`.
+`.codex/` or `aidlc/` that the sandbox refused fails the turn. Copilot CLI's
+terminal journeys answer each of its permission dialogs with the preselected
+"Yes" and count them by what drew them (AI-DLC's skill allows only its own
+record writes and its `.aidlc/bin/aidlc-engine` launcher); its `-p` case runs
+with `--allow-all-tools`, so the person's own `--allow-tool` rules decide. The
+Claude terminal journeys skip permission prompts, and opencode already runs
+without `--auto`.
 
 `--file-retries 1` retries only a short failed file after confirmed cleanup, in
 fresh state, while retaining both attempts under `e2e-artifacts/<file>/attempt-N`.
@@ -2070,8 +2081,9 @@ hosted lane.
 Before selecting a preview for stable promotion, a maintainer reviews its
 recorded Kiro CLI release-journey results for the selected source SHA, one for
 each Kiro tree: `kiro`, which setup lists as "Kiro CLI (V2)", and `kiro-ide`,
-which setup lists as "Kiro" and whose `.kiro/settings/cli.json` pins Kiro CLI
-to its v3 engine. Both run in Kiro CLI; neither drives Kiro IDE. If no result
+which setup lists as "Kiro" and which is built for Kiro CLI's v3 engine (the
+tree ids, not the names `aidlc config --harness` takes: those are `kiro-v2` and
+`kiro`); the journey starts each on its engine (`--v2`, `--v3`). Both run in Kiro CLI; neither drives Kiro IDE. If no result
 exists for that SHA, run the journey
 (`tests/e2e/t-tui-kiro-release-journey.serial.test.ts`, the same journey as the
 Copilot lane's, in the interactive `kiro-cli chat` terminal, once per tree) on
@@ -2349,7 +2361,12 @@ returned through the actual tool call. `--single` skips hook pre-dispatch
 entirely, leaving its first issuance to that tool call. Only a line the engine
 reads exactly is pre-dispatched at all (`readNextLine`): anything it would hand
 to the agent goes to the agent untouched, so this seam never acts on the
-person's words before anyone has read them.
+person's words before anyone has read them. When the human-turn hook gives
+its first-step note (a line too long for the message record, kept whole beside
+it, under the rules `firstStepNote` owns), the line is neither pre-dispatched
+nor forwarded: the adapter says the note, which has the agent run `next` with
+nothing after it to read the kept copy, and holds no call for the guard to
+match (`t-long-message-note.test.ts`).
 
 `t147-kiro-hook-adapter.test.ts` checks the 10 KiB boundary with multibyte
 content, native shell aliases, retained terminal guards, and a real multipart

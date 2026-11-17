@@ -5,6 +5,7 @@
   "author": { "name": "AWS AIDLC" },
   "dependencies": ["core"],
   "aidlc": {
+    "rulesLevel": "team",
     "contributes": {
       "stages": "stages/",
       "overlays": "contributions/",
@@ -12,7 +13,8 @@
       "scopes": "scopes/",
       "knowledge": "knowledge/",
       "sensors": "sensors/",
-      "tools": "tools/"
+      "tools": "tools/",
+      "memory": "memory/"
     }
   }
 }
