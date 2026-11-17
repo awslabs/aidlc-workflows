@@ -17,7 +17,9 @@ import {
   cloneOf,
   commitMessage,
   git,
+  hook,
   next,
+  personsChat,
   refundsTakenInClone,
   run,
   TICKET_HOOK_WORDS,
@@ -313,7 +315,7 @@ describe("the offer after the push, and its yes", () => {
     const said = String(run(UNIT, ["push", "--undo-merge"], alice).json?.notice);
     rmSync(lock);
     expect(said).toStartWith('The merge of origin/main into refunds in billing could not be undone: git says "');
-    expect(said).toEndWith("It is still waiting there.");
+    expect(said).toEndWith("It is still waiting there: resolve it and I can finish it, or say when to try the undo again.");
     expect(mergeWaits(billing)).toBe(true);
   });
 
@@ -432,6 +434,38 @@ describe("the offer after the push, and its yes", () => {
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     expect(next(alice).ask_type ?? null).not.toBe("unit-main-moved");
     expect(String(run(UNIT, ["push", "--merge-main"], alice).json?.notice)).toBe(
-      "refunds has nothing to bring in from the branch it merges into; nothing was merged or pushed.");
+      "No merge of the branch refunds merges into was offered or asked for, so nothing was merged or pushed.");
+  });
+
+  test("the person asks in their own words with no offer behind it: main is brought in, recorded with their words, and that turn is used once", () => {
+    const { alice, hosts, record } = takenThenMainMoves({ "docs/ops.md": "On call.\n" });
+    codeWrote(alice, record, { "README.md": README.replace("Keeps a ledger.", "Keeps a ledger and refunds.") });
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    onHostMain(hosts.billing, "README.md", README.replace("# billing", "# Billing service"), "dave");
+    const chat = personsChat("t-unit-main-moved-words");
+    const words = "please bring main into my refunds branch";
+    expect(hook(alice, chat, { hook_event_name: "UserPromptSubmit", session_id: "t-unit-main-moved-words", prompt: words }).status).toBe(0);
+    const yes = run(UNIT, ["push", "--merge-main"], alice, chat);
+    expect(yes.status, yes.out).toBe(0);
+    expect(String(yes.json?.notice)).toBe("Merged origin/main into refunds in billing and pushed refunds.");
+    expect(git(hosts.billing, ["show", "refunds:README.md"])).toContain("# Billing service");
+    const rows = readAuditShardEvents(alice).filter((row) => row.event === "QUESTION_ANSWERED" && row.block.includes("unit-main-moved"));
+    expect(rows.length).toBe(1);
+    expect(rows[0].block).toContain(words);
+    // The same turn does not lift it twice.
+    onHostMain(hosts.billing, "README.md", README.replace("# billing", "# Billing, again"), "erin");
+    expect(String(run(UNIT, ["push", "--merge-main"], alice, chat).json?.notice)).toBe(
+      "No merge of the branch refunds merges into was offered or asked for, so nothing was merged or pushed.");
+  });
+
+  test("an agent with no turn of the person's behind the switch merges nothing", () => {
+    const { alice, hosts, record } = takenThenMainMoves({ "docs/ops.md": "On call.\n" });
+    codeWrote(alice, record, { "README.md": README.replace("Keeps a ledger.", "Keeps a ledger and refunds.") });
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    onHostMain(hosts.billing, "README.md", README.replace("# billing", "# Billing service"), "dave");
+    const before = git(hosts.billing, ["rev-parse", "refunds"]);
+    const said = run(UNIT, ["push", "--merge-main"], alice, personsChat("t-unit-main-moved-no-turn"));
+    expect(String(said.json?.notice)).toBe("No merge of the branch refunds merges into was offered or asked for, so nothing was merged or pushed.");
+    expect(git(hosts.billing, ["rev-parse", "refunds"])).toBe(before);
   });
 });

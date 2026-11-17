@@ -12517,13 +12517,13 @@ function onlyOnLastPush(dir: string, lease: string, tip: string, into: string, o
 // branch each merges into and its remote, read here with no fetch, and the
 // Unit's own files there that it changed and the pushed branch lacks (none
 // once that branch has it).
-export function mainMovedRepos(pd: string, unit: string, branch: string):
+export function mainMovedRepos(pd: string, unit: string, branch: string, marked = true):
   Array<{ repo: string; dir: string; remote: string; into: string; head: string; paths: string[]; files: string[] }> {
   const manifest = readUnitSourceManifest(pd, "code-generation", unit);
   const targets = manifest.ok ? unitWriteTargets(pd, manifest.manifest.writes) : new Map<string, { dir: string; paths: string[] }>();
   return [...lastPushedHeads(pd, unit, branch)].flatMap(([repo, head]) => {
     const dir = targets.get(repo)?.dir ?? repoDir(pd, repo);
-    if (repo === "." || engineAskMark(pd, mainMovedMark(unit, head)) === null || !isGitRepoDir(dir)) return [];
+    if (repo === "." || (marked && engineAskMark(pd, mainMovedMark(unit, head)) === null) || !isGitRepoDir(dir)) return [];
     const remote = pushRemoteOf(dir, branch);
     if (typeof remote !== "string") return [];
     const into = unitBranchInto(dir, remote);
@@ -12542,7 +12542,23 @@ export function mainMovedRepos(pd: string, unit: string, branch: string):
 // or written in its audit. `undo` takes a merge of it waiting there back out.
 function mergeMainIn(pd: string, args: string[], unit: string, branch: string, undo: boolean): void {
   const given = undo ? null : givenCommitMessage(pd, args, "push");
-  const repos = mainMovedRepos(pd, unit, branch).map((entry) => ({ ...entry, name: entry.repo }));
+  let repos = mainMovedRepos(pd, unit, branch, !undo).map((entry) => ({ ...entry, name: entry.repo }));
+  // No offer behind the yes: the person's own words lift the offer's mark,
+  // the turn the hook recorded read as the lead's verbs read theirs and used
+  // once, its row naming it; an agent with no such turn merges nothing.
+  if (repos.length === 0 && !undo) {
+    const asked = leadSpoke(pd) ? leadsWord(pd, parseArgs(args).flags, "Bringing main in") : null;
+    const id = asked?.fields["Message Id"];
+    const used = id !== undefined && readAuditShardEvents(pd).some((row) => row.event === "QUESTION_ANSWERED" &&
+      auditBlockField(row.block, QUESTION_TYPE_FIELD) === "unit-main-moved" && auditBlockField(row.block, "Message Id") === id);
+    repos = id === undefined || used ? [] : mainMovedRepos(pd, unit, branch, false).map((entry) => ({ ...entry, name: entry.repo }));
+    if (repos.length > 0) {
+      appendAuditEntry("QUESTION_ANSWERED", {
+        Question: `Bring ${joinNames([...new Set(repos.map((entry) => entry.into))])} into ${unit}`, Answer: "Bring it in",
+        [QUESTION_TYPE_FIELD]: "unit-main-moved", ...asked!.fields,
+      }, pd);
+    }
+  }
   const moved: Array<{ name: string; from: string }> = [];
   const lines: string[] = [];
   const has = (dir: string, older: string, newer: string): boolean => git(dir, ["merge-base", "--is-ancestor", older, newer]).ok;
@@ -12552,7 +12568,7 @@ function mergeMainIn(pd: string, args: string[], unit: string, branch: string, u
   if (repos.length === 0) {
     console.log(JSON.stringify({ pushed: false, unit, notice: undo
       ? `No merge of the branch ${unit} merges into is waiting, so nothing was undone.`
-      : `${unit} has nothing to bring in from the branch it merges into; nothing was merged or pushed.` }));
+      : `No merge of the branch ${unit} merges into was offered or asked for, so nothing was merged or pushed.` }));
     return;
   }
   if (undo) {
@@ -12561,7 +12577,7 @@ function mergeMainIn(pd: string, args: string[], unit: string, branch: string, u
       if (aborted?.ok) lines.push(`I undid the merge of ${into} into ${unit} in ${name}; ${unit} is as it was there, and nothing was pushed.`);
       else if (aborted !== null) {
         lines.push(`The merge of ${into} into ${unit} in ${name} could not be undone: git says "${gitSaid(aborted.stderr || aborted.stdout)}". ` +
-          "It is still waiting there.");
+          "It is still waiting there: resolve it and I can finish it, or say when to try the undo again.");
       } else if (has(dir, into, `refs/heads/${branch}`)) lines.push(`The merge of ${into} is already committed on ${unit} in ${name}, so I left it.`);
       else lines.push(`No merge of ${into} is waiting in ${name}, so nothing was undone.`);
     }
@@ -12644,7 +12660,7 @@ function mergeMainIn(pd: string, args: string[], unit: string, branch: string, u
           stop(`Your hook in ${name} did not take the merge of ${into} into ${unit} (${said}), so I undid it, and nothing was pushed. ` +
             "If it is the merge's message, tell me the one to use, and I will merge with that.");
         }
-        stop(`${into} could not be merged into ${unit} in ${name}: git says "${said}". Nothing was merged or pushed.`);
+        stop(`${into} could not be merged into ${unit} in ${name}: git says "${said}". Nothing was merged or pushed. Say when to try again.`);
       }
       mergedHere.push(name);
     } else if (entry.step === "push" && given !== null && git(dir, ["rev-list", "--count", "HEAD", "--not", "--remotes"]).stdout.trim() === "1" &&
