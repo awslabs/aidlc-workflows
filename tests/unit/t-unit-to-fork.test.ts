@@ -20,7 +20,7 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { noteEngineAskMark, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { auditBlockField, noteEngineAskMark, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import * as unitTool from "../../dist/claude/.claude/tools/aidlc-unit.ts";
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import {
@@ -211,6 +211,9 @@ describe("the push of a Unit's branch early to the person's fork", () => {
     const rows = readAuditShardEvents(alice).filter((row) => row.event === "QUESTION_ANSWERED" && row.block.includes("unit-to-fork"));
     expect(rows.length).toBe(1);
     expect(rows[0].block).toContain(words);
+    // No question was put: the row says so, and its answer is their own words, never a choice's label.
+    expect(auditBlockField(rows[0].block, "Question")).toBe("(not put; the person asked) Push a branch for refunds to origin in checkout-api");
+    expect(auditBlockField(rows[0].block, "Answer")).toBe(words);
     expect(String(run(UNIT, ["push", "--to-fork"], alice, chat).json?.notice)).toBe(
       "No push of refunds to a fork was offered or asked for, so nothing was pushed.");
   });

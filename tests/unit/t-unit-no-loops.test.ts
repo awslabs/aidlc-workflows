@@ -843,7 +843,7 @@ describe("a Unit started early whose dependency merged: the move onto main is of
     expect(moved.status).not.toBe(0);
     const error = String((JSON.parse(moved.out) as { error?: string }).error);
     expect(error).toStartWith("billing is in the middle of a rebase, so reporting was not moved there. Finish it (git rebase --continue) " +
-      "or put it aside (git rebase --abort), then I can move reporting.");
+      "or take it back out (git rebase --abort), then I can move reporting.");
     expect(error).toEndWith(" In checkout-api it is on main now.");
     // Their rebase is as they left it.
     expect(theirs()).toBe(true);

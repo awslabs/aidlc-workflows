@@ -603,8 +603,9 @@ describe("the lead who says so in a clone that did not make the plan", () => {
     const first = says(laptop, chat, "where do things stand?");
     expect(first.json?.ask_type).toBe("unit-take");
     // First words that already say so are read for it before the offer is put.
-    expect(String(first.json?.board_note)).toStartWith(`If the words they already gave say ${LEAD}, do not put this question: run \``);
+    expect(String(first.json?.board_note)).toStartWith(`If the words they already gave say ${LEAD}, run \``);
     expect(String(first.json?.board_note)).toContain(` intent switch ${HOME}\`, then \``);
+    expect(String(first.json?.board_note)).toEndWith("` in place of this question, and follow what it returns.");
     const text = String(says(laptop, chat, I_LEAD).json?.message);
     expect(text).toContain(`If they say ${LEAD}, run \``);
     expect(text).toContain(` intent switch ${HOME}\`, then \``);

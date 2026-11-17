@@ -1282,7 +1282,7 @@ describe("a repository that moved hosts: the plan taken over where it is now", (
         "you gave them. The plan in billing still has reporting signed off.");
       expect(word("refunds")).toEqual({ generation: 1, signoff: { words: "looks right", at: "2026-11-12T01:10:00Z" } });
       expect(word("reporting")).toEqual({ ...JSON.parse(reportingThere), said_merged: [counted] });
-      expect(git(billing, ["log", "-1", "--format=%s", ref])).toEndWith(": sign-off of refunds, count of reporting as merged in checkout-web carried over " +
+      expect(git(billing, ["log", "-1", "--format=%s", ref])).toEndWith(": sign-off of refunds and count of reporting as merged in checkout-web carried over " +
         "from checkout-api");
       // A later plain ask: refunds, where this computer's word now stands there, is not asked again; the plan's own word kept is not
       // remembered, so reporting's sentence is said again, answered the same way (the named limit).

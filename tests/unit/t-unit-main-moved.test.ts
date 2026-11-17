@@ -8,7 +8,7 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { engineAskMark, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { auditBlockField, engineAskMark, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 // Read by name at each call, so a case red before these exist fails on its own.
 import * as unitTool from "../../dist/claude/.claude/tools/aidlc-unit.ts";
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
@@ -482,6 +482,9 @@ describe("the offer after the push, and its yes", () => {
     const rows = readAuditShardEvents(alice).filter((row) => row.event === "QUESTION_ANSWERED" && row.block.includes("unit-main-moved"));
     expect(rows.length).toBe(1);
     expect(rows[0].block).toContain(words);
+    // No question was put: the row says so, and its answer is their own words, never a choice's label.
+    expect(auditBlockField(rows[0].block, "Question")).toBe("(not put; the person asked) Bring origin/main into refunds");
+    expect(auditBlockField(rows[0].block, "Answer")).toBe(words);
     // The same turn does not lift it twice.
     onHostMain(hosts.billing, "README.md", README.replace("# billing", "# Billing, again"), "erin");
     expect(String(run(UNIT, ["push", "--merge-main"], alice, chat).json?.notice)).toBe(

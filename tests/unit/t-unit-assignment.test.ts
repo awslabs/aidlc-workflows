@@ -1037,8 +1037,8 @@ describe("the plan's share fits the team's own git: a protected main, a branch o
     writeFileSync(join(dir, ".git", "MERGE_HEAD"), `${head}\n`);
     const underWay = run(UNIT, ["commit-record"], dir);
     expect(underWay.status).not.toBe(0);
-    expect(underWay.out).toContain("This checkout is in the middle of a merge, so nothing was committed. Finish it (git commit) or put it " +
-      "aside (git merge --abort), then I can commit AI-DLC's record.");
+    expect(underWay.out).toContain("This checkout is in the middle of a merge, so nothing was committed. Finish it (git commit) or take it " +
+      "back out (git merge --abort), then I can commit AI-DLC's record.");
     unlinkSync(join(dir, ".git", "MERGE_HEAD"));
     // On no branch: nothing is committed, and the way on is said.
     git(dir, ["checkout", "-q", "--detach"]);

@@ -1271,7 +1271,7 @@ export function catchUpAsk(
   const draft = offer.update !== null
     ? commitDraftSentence("the commit message for AI-DLC's update", "the repo", offer.update, offer.messageFile, UPDATE_COMMIT_MESSAGE)
     : commitDraftSentence("the commit message for AI-DLC's record", "the repo", "the move of repos.json into aidlc/", offer.messageFile, RECORD_COMMIT_MESSAGE);
-  return `first, said to nobody: ${draft} Then in ${reply}, ask the person this in their language, with the message from that file ` +
+  return `first, without telling the person: ${draft.charAt(0).toLowerCase()}${draft.slice(1)} Then in ${reply}, ask the person this in their language, with the message from that file ` +
     `after it: "${offer.asked}" ${OWN_MESSAGE_SENTENCE.charAt(0).toUpperCase()}${OWN_MESSAGE_SENTENCE.slice(1)}. On yes, run ` +
     `\`${command} --commit-message-file ${offer.messageFile}\` ${yes}`;
 }

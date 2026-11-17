@@ -524,6 +524,8 @@ describe("the plan on a branch people can open, on the lead's own words (--visib
     const refused = run(UNIT, VISIBLE, first.dir);
     expect(String(refused.json?.notice), refused.out).toMatch(/^checkout-api did not take the plan's branch: .*\. If it is the commit message, tell me the one to use; or name another repository the teams can read and I will share it there\.$/);
     expect(String(refused.json?.step)).toContain("unit share --plan --visible --commit-message-file ");
+    expect(String(refused.json?.step)).toContain("When they name another repository the teams can read, run `");
+    expect(String(refused.json?.step)).toContain("unit share --plan --repo <its name>` and tell them in plain words what it reports.");
     expect(String(refused.json?.step)).not.toMatch(/unit share --plan`/);
     const shared = makePlanHome();
     refuse(shared.hosts["checkout-api"], ["refs/heads/aidlc/"]);

@@ -385,7 +385,7 @@ describe("the push", () => {
     const refused = run(UNIT, ["push"], alice);
     expect(refused.status).not.toBe(0);
     expect(String(refused.json?.error)).toStartWith(
-      "billing is in the middle of a merge, so nothing was committed or pushed. Finish it (git commit) or put it aside " +
+      "billing is in the middle of a merge, so nothing was committed or pushed. Finish it (git commit) or take it back out " +
         "(git merge --abort), then I can push refunds.",
     );
     expect(spawnSync("git", ["rev-parse", "--verify", "--quiet", "refs/heads/refunds"], { cwd: hosts.billing }).status).not.toBe(0);

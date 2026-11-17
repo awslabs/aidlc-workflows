@@ -5243,10 +5243,12 @@ function unselectedWordsReplyDirective(
 // reply read, else their latest in this chat) and the work selected first where
 // it is not. `works`: the lead's work here made elsewhere; "" for none.
 const LEAD_HERE_WORDS = "they lead this work, whether or not they ask to carry it on here (leading a team or a Unit of it is not that)";
-function leadHereRun(works: string[], selected: boolean, message: string | null): string {
+// `instead`: said on a question the step would put otherwise, run in its place.
+function leadHereRun(works: string[], selected: boolean, message: string | null, instead = false): string {
   const pick = selected ? "" : `\`${aidlcDispatcherInvocation("intent")} switch ${works.length === 1 ? works[0] : "<name>"}\`` +
     `${works.length === 1 ? "" : ` with the one they lead (${works.join(", ")})`}, then `;
-  return `run ${pick}\`${aidlcToolInvocation("unit")} lead-here${message === null ? "" : ` --message ${message}`}\`, and follow what it returns`;
+  return `run ${pick}\`${aidlcToolInvocation("unit")} lead-here${message === null ? "" : ` --message ${message}`}\`` +
+    `${instead ? " in place of this question" : ""}, and follow what it returns`;
 }
 function leadHereSentence(works: string[], selected: boolean, message: string | null): string {
   return works.length === 0 ? "" : `If they say ${LEAD_HERE_WORDS}, ${leadHereRun(works, selected, message)}.`;
@@ -16085,7 +16087,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       noteTakeOfferedOnWords(pd);
       // First words that already say they lead this work are read for that before the offer is put.
       emit(leadWorks.length === 0 ? take : Object.assign({}, take, {
-        board_note: `If the words they already gave say ${LEAD_HERE_WORDS}, do not put this question: ${leadHereRun(leadWorks, false, message)}.`,
+        board_note: `If the words they already gave say ${LEAD_HERE_WORDS}, ${leadHereRun(leadWorks, false, message, true)}.`,
       }));
       return;
     }

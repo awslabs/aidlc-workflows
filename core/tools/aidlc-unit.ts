@@ -7273,7 +7273,8 @@ function writeSharedPlan(pd: string, message?: string, named?: string, carry?: C
           list: carry.list ? [] : found.missing, open: found.questions.filter((question) => stands(question.unit) === undefined),
         };
         if (written.length === 0) return built;
-        carried = written.slice(0, 3).map((word) => word.what).join(", ") + (written.length > 3 ? ` and ${written.length - 3} more` : "") +
+        const what = written.map((word) => word.what);
+        carried = (what.length > 3 ? `${what.slice(0, 3).join(", ")} and ${what.length - 3} more` : joinNames(what)) +
           ` carried over from ${mine.plan_repo.name}`;
         return withWordsOf(pd, mine, built, written);
       },
@@ -7355,7 +7356,8 @@ function writeSharedPlan(pd: string, message?: string, named?: string, carry?: C
         "repository the teams can read and I will share it there.",
       step: "Tell the person in plain words what it reports, then end your turn. When they give the commit message, write it to " +
         `${file} with your file tool, exactly as they gave it, then run \`${aidlcInvocation()} unit share --plan --visible --commit-message-file ${file}\` ` +
-        "and tell them in plain words what it reports.",
+        "and tell them in plain words what it reports. When they name another repository the teams can read, run " +
+        `\`${aidlcInvocation()} unit share --plan --repo <its name>\` and tell them in plain words what it reports.`,
     } };
   }
   if (written.byRule && message === undefined) {
@@ -7438,6 +7440,8 @@ function wordsNotOn(mine: PlanJson, there: PlanJson): { missing: CarryWord[]; qu
     };
     const thereOn = (at?: string): string => (at === undefined || dayOf(at) === null ? "" : ` (${dayOf(at)})`);
     const mineOn = (at?: string): string => (at === undefined || dayOf(at) === null ? "" : ` from ${dayOf(at)}`);
+    // A send-back's own words end "from Build and Test": its day goes in brackets.
+    const mineDownOn = (entry: NonNullable<UnitWord["turned_down"]>): string => (fromTest(entry) ? thereOn(entry.at) : mineOn(entry.at));
     const { signoff, turned_down: down, open_again: open } = was;
     if (signoff !== undefined && now.signoff === undefined) {
       const signed: CarryWord = { said: `your sign-off of ${name}`, what: `sign-off of ${name}`, unit: name, put: (word) => ({ ...word, signoff }) };
@@ -7452,12 +7456,12 @@ function wordsNotOn(mine: PlanJson, there: PlanJson): { missing: CarryWord[]; qu
       const mineDown: CarryWord = { said: downMine(down, name), what: downMine(down, name).replace(/^your /, ""), unit: name,
         put: (word) => ({ ...word, turned_down: down }) };
       if (kept === undefined && now.signoff !== undefined) {
-        opposite(`The plan there has ${name} signed off${thereOn(now.signoff.at)}, and this computer has ${downMine(down, "it")}${mineOn(down.at)}: ` +
+        opposite(`The plan there has ${name} signed off${thereOn(now.signoff.at)}, and this computer has ${downMine(down, "it")}${mineDownOn(down)}: ` +
           "say which stands.", `${name} signed off`, { ...mineDown, put: (word) => ({ ...withoutField(word, "signoff"), turned_down: down }) });
       } else if (kept === undefined) {
         items.push(mineDown);
       } else if (fromTest(kept) !== fromTest(down) || (!fromTest(down) && kept.repo !== down.repo)) {
-        offer(`The plan there has ${downThere(kept)}${thereOn(kept.at)}. I have ${downMine(down, "it")}${mineOn(down.at)} as you gave it: say if you ` +
+        offer(`The plan there has ${downThere(kept)}${thereOn(kept.at)}. I have ${downMine(down, "it")}${mineDownOn(down)} as you gave it: say if you ` +
           "want it written there in its place.", downThere(kept), mineDown);
       } else if (kept.words !== down.words) {
         offer(`The plan there has ${downThere(kept)}${thereOn(kept.at)} too, worded differently. I have your ${fromTest(down) ? "send-back" : "turn-down"} ` +
@@ -7539,7 +7543,7 @@ function carryOpenLine(repo: string, list: CarryWord[], questions: CarryQuestion
   return { said, step: "Tell the person in plain words what it reports, then end your turn. When they answer, run " +
     `\`${aidlcInvocation()} unit share --plan\` once with what they said yes to: ${parts.join("; ")}` +
     (units.length > 1 ? "; answers for several Units go after one --stands, joined by commas" : "") +
-    ". Then tell them in plain words what it reports." };
+    ". Then tell them in plain words what it reports. Where they say yes to none of it, run nothing." };
 }
 
 // The plan with the lead's words from `mine` the carry chose put on, as given:
@@ -8216,8 +8220,9 @@ function leadSpoke(pd: string): boolean {
   return humanPresenceGuardDisabled() || personAskedSinceGate(pd);
 }
 
-function requireLeadsWord(pd: string, what: string): void {
-  if (!leadSpoke(pd)) fail(`${what} is the person's own word: ask them first, then run this with their words.${unattendedHumanPresenceHint(pd)}`);
+// `unasked`: the step's own line where no word of theirs is there yet.
+function requireLeadsWord(pd: string, what: string, unasked?: string): void {
+  if (!leadSpoke(pd)) fail(`${unasked ?? `${what} is the person's own word: ask them first, then run this with their words.`}${unattendedHumanPresenceHint(pd)}`);
 }
 
 // The lead's word that settles a team's Unit, as the engine's other decisions
@@ -8239,6 +8244,7 @@ function leadsWord(
   flags: Record<string, string | undefined>,
   what: string,
   ask?: string,
+  unasked?: string,
 ): { said: string | null; fields: Record<string, string> } {
   const { proveMessage, readMessage } = require("./aidlc-message-store.ts") as typeof import("./aidlc-message-store.ts");
   // The one message their word came in, by the first way that names it.
@@ -8248,7 +8254,7 @@ function leadsWord(
     if ("refusal" in proof) fail(proof.refusal);
     message = proof.message;
   } else {
-    requireLeadsWord(pd, what);
+    requireLeadsWord(pd, what, unasked);
     let chat: string | null = null;
     try {
       chat = resolveInvokingSessionId(pd);
@@ -10178,7 +10184,7 @@ function planToBranch(pd: string, place: PlanPlace, tip: string): SharedPlan {
       // No commit is written here, so no message is asked for. git ends a push with one fatal exit whether the
       // host was not reached or refused it: the read after it tells.
       if (refusedByHostRule(made.stderr) || lookAtPlan(pd, place).unreached === undefined) fail(`${place.repo} did not take the plan's branch: ${words}. ${stays}`);
-      fail(`${place.repo} could not be reached, so ${stays.charAt(0).toLowerCase()}${stays.slice(1, -1)}: git says "${words}". Say when to try again.`);
+      fail(`${place.repo} could not be reached, so the plan stays where it was there: git says "${words}". Say when to try again.`);
     }
     // The ref left behind holds the same commit, so the look reads the plan from its branch.
     git(pd, ["push", via.target, ...dropRef], env);
@@ -13633,7 +13639,7 @@ function pushToFork(pd: string, args: string[], build: UnitBuild, branch: string
           `On their word, run \`${aidlcToolInvocation("unit")} push --to-fork --remote ${repo}=<that name>\`.` }));
     return;
   }
-  turn?.answered(`Push a branch for ${unit} to ${forkPlace.fork} in ${forkPlace.name}`, `Push it to ${forkPlace.fork}`);
+  turn?.answered(`Push a branch for ${unit} to ${forkPlace.fork} in ${forkPlace.name}`);
   const { name, dir, fork } = forkPlace;
   const given = givenCommitMessage(pd, args, "push");
   const main = planMainOf(dir, name, forkPlace.address, forkPlace.branch);
@@ -13650,7 +13656,7 @@ function pushToFork(pd: string, args: string[], build: UnitBuild, branch: string
     if (!committed.ok) {
       const said = committed.stderr || committed.stdout;
       fail((hookRefused(dir, said)
-        ? `Your hook in ${name} did not take the empty commit (${gitSaid(said)}), so nothing was pushed. If it is its ` +
+        ? `Your hook in ${name} did not take the empty commit (${gitSaid(said)}), so nothing was pushed. If it is the commit's ` +
           "message, tell me the one to use, and I will commit with that and push."
         : `The empty commit could not be made in ${name}: git says "${gitSaid(said)}". Nothing was pushed. Say when to try again.`) +
         whereNowLine(branch, moved));
@@ -13674,15 +13680,19 @@ function pushToFork(pd: string, args: string[], build: UnitBuild, branch: string
 
 // The person's own words behind a yes no offer of type `type` was put for:
 // the turn the hook recorded, read as the lead's verbs read theirs, used once
-// (the QUESTION_ANSWERED row `answered` writes names its Message Id). Null for
-// an agent with no such turn.
-function ownTurnFor(pd: string, args: string[], what: string, type: string): { answered(question: string, answer: string): void } | null {
+// (the QUESTION_ANSWERED row `answered` writes names its Message Id). The row
+// says the question was not put and keeps their words as the answer, never a
+// choice's label they did not see. Null for an agent with no such turn.
+function ownTurnFor(pd: string, args: string[], what: string, type: string): { answered(question: string): void } | null {
   const asked = leadSpoke(pd) ? leadsWord(pd, parseArgs(args).flags, what) : null;
   const id = asked?.fields["Message Id"];
   if (asked === null || id === undefined || readAuditShardEvents(pd).some((row) => row.event === "QUESTION_ANSWERED" &&
     auditBlockField(row.block, QUESTION_TYPE_FIELD) === type && auditBlockField(row.block, "Message Id") === id)) return null;
   return {
-    answered: (question, answer) => appendAuditEntry("QUESTION_ANSWERED", { Question: question, Answer: answer, [QUESTION_TYPE_FIELD]: type, ...asked.fields }, pd),
+    answered: (question) => appendAuditEntry("QUESTION_ANSWERED", {
+      Question: `(not put; the person asked) ${question}`, Answer: asked.said ?? "(their own words, not kept here)",
+      [QUESTION_TYPE_FIELD]: type, ...asked.fields,
+    }, pd),
   };
 }
 
@@ -13702,7 +13712,7 @@ function mergeMainIn(pd: string, args: string[], unit: string, branch: string, u
   if (repos.length === 0 && !undo) {
     const turn = ownTurnFor(pd, args, "Bringing main in", "unit-main-moved");
     repos = turn === null ? [] : mainMovedRepos(pd, unit, branch, false);
-    if (repos.length > 0) turn!.answered(`Bring ${joinNames([...new Set(repos.map((entry) => entry.into))])} into ${unit}`, "Bring it in");
+    if (repos.length > 0) turn!.answered(`Bring ${joinNames([...new Set(repos.map((entry) => entry.into))])} into ${unit}`);
   }
   const moved: Array<{ name: string; from: string }> = [];
   const lines: string[] = [];
@@ -13742,6 +13752,12 @@ function mergeMainIn(pd: string, args: string[], unit: string, branch: string, u
   const whereNow = (): string => whereNowLine(branch, moved);
   // Merged here and not pushed yet, for a line that stops after it.
   const mergedHere: string[] = [];
+  const mergedInto = new Map<string, string>();
+  const mergedLines = (): string => {
+    const byInto = new Map<string, string[]>();
+    for (const name of mergedHere) byInto.set(mergedInto.get(name) ?? "", [...(byInto.get(mergedInto.get(name) ?? "") ?? []), name]);
+    return [...byInto].map(([into, names]) => ` In ${joinNames(names)}, ${into} is already merged into ${unit}, not pushed yet.`).join("");
+  };
   // On the person's yes (`--put-aside`), the changes to files of AI-DLC's
   // record on the workspace's own repository that main changes too: kept in
   // git, the files put back to their committed copy for the merge, and put
@@ -13750,7 +13766,7 @@ function mergeMainIn(pd: string, args: string[], unit: string, branch: string, u
   const aside: Array<{ dir: string; path: string; into: string; kept: string; base: string }> = [];
   const putBack = (): string => aside.splice(0).map(putBackChange).filter(Boolean).map((line) => ` ${line}`).join("");
   const stop = (line: string): never =>
-    fail(line + (mergedHere.length > 0 ? ` In ${joinNames(mergedHere)}, it is merged into ${unit}, not pushed yet.` : "") + whereNow() + putBack());
+    fail(line + mergedLines() + whereNow() + putBack());
   const plan: Array<(typeof repos)[number] & { step: "merge" | "finish" | "push" | "level" }> = [];
   const toPutAside: Array<{ dir: string; path: string; into: string }> = [];
   let commitFirst = false;
@@ -13839,7 +13855,7 @@ function mergeMainIn(pd: string, args: string[], unit: string, branch: string, u
     const from = git(dir, ["branch", "--show-current"]).stdout.trim();
     if (from !== branch) {
       const switched = CHECKOUT_STEPS.switch.run(dir, branch);
-      if (!switched.ok) stop(`${unit} could not be checked out in ${name}, so nothing was merged or pushed. Git says: "${gitSaid(switched.stderr)}".`);
+      if (!switched.ok) stop(`Branch ${branch} could not be checked out in ${name}: git says "${gitSaid(switched.stderr)}". Nothing was merged or pushed. Say when to try again.`);
       moved.push({ name, from: from || "the commit you were on" });
     }
     // The host's branch is merged with git's own message: the Unit's commit took theirs at the push.
@@ -13877,13 +13893,14 @@ function mergeMainIn(pd: string, args: string[], unit: string, branch: string, u
         stop(`${into} could not be merged into ${unit} in ${name}: git says "${said}". Nothing was merged or pushed. Say when to try again.`);
       }
       mergedHere.push(name);
+      mergedInto.set(name, into);
     } else if (entry.step === "push" && given !== null && git(dir, ["rev-list", "--count", "HEAD", "--not", "--remotes"]).stdout.trim() === "1" &&
       git(dir, ["rev-parse", "--verify", "--quiet", "HEAD^2"]).ok) {
       // The merge made here that its host refused, for its message.
       const amended = git(dir, ["commit", "-q", "--amend", ...message]);
       if (!amended.ok) {
-        stop(`Your hook in ${name} did not take the merge of ${into} into ${unit} (${gitSaid(amended.stderr || amended.stdout)}), so ` +
-          "nothing was pushed. If it is the merge's message, tell me the one to use, and I will merge with that.");
+        stop(`Your hook in ${name} did not take the merge of ${into} into ${unit} (${gitSaid(amended.stderr || amended.stdout)}), so the merge ` +
+          "stays here as it was, and nothing was pushed. If it is the merge's message, tell me the one to use, and I will merge with that and push again.");
       }
     }
   }
@@ -14029,7 +14046,7 @@ function putBackChange(entry: { dir: string; path: string; into: string; kept: s
         writeFileSync(file, content);
         return file;
       });
-    const merged = spawnSync("git", ["merge-file", "-p", "-L", into, "-L", "before", "-L", "this change", ...files], { cwd: dir });
+    const merged = spawnSync("git", ["merge-file", "-p", "-L", into, "-L", "before", "-L", "the change here", ...files], { cwd: dir });
     const mergedOid = (): string => {
       writeFileSync(join(scratch, "merged"), merged.stdout as Buffer);
       return git(dir, ["hash-object", "-w", "--no-filters", "--", join(scratch, "merged")]).stdout.trim();
@@ -15137,11 +15154,13 @@ export function unitMergeToFinish(dir: string, branch: string, own: readonly str
 }
 
 // The person's own git operation under way in a repo, never touched by
-// AI-DLC: what did not happen, git's own way to finish it and to put it aside,
-// and what AI-DLC can do once it is done. The push and the move say it alike.
+// AI-DLC: what did not happen, git's own way to finish it and to take it back
+// out (an abort keeps nothing of it for later), and what AI-DLC can do once it
+// is done. The record's commit, the push, bringing a branch in and the move
+// say it alike.
 function underWayLine(name: string, underWay: { what: string; finish: string; abort: string }, outcome: string, then: string): string {
-  return `${name} is in the middle of ${underWay.what}, so ${outcome}. Finish it (${underWay.finish}) ` +
-    `or put it aside (${underWay.abort}), then I can ${then}.`;
+  return `${name === "the repo" ? "The repo" : name} is in the middle of ${underWay.what}, so ${outcome}. Finish it (${underWay.finish}) ` +
+    `or take it back out (${underWay.abort}), then I can ${then}.`;
 }
 
 
@@ -16432,7 +16451,8 @@ function leadHere(args: string[], projectDir?: string): void {
   // `--off`: their word that they do not lead it here takes the earlier one back; this clone's newest row decides.
   const parsed = parseArgs(args);
   const off = parsed.bareFlags.has("off");
-  const lead = leadsWord(pd, parsed.flags, off ? "Not leading this work here" : "Carrying this work on here as its lead");
+  const lead = leadsWord(pd, parsed.flags, off ? "Not leading this work here" : "Carrying this work on here as its lead", undefined,
+    off ? "Not leading this work here is the person's own word, so nothing changed. Run it with `--message <id>` when they say it." : undefined);
   appendAuditEntry("LEAD_HERE_SET", {
     ...(off ? { [LEAD_HERE_FIELD]: "off" } : {}), ...(lead.said !== null ? { "Person Words": lead.said } : {}), ...lead.fields,
   }, pd);
