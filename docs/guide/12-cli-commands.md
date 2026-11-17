@@ -49,7 +49,7 @@ diagnostic and lifecycle routes.
 | `/aidlc --release <unit>` | Release a live Unit claim from unscoped main by publishing a tombstone |
 | `/aidlc unit assign --here <unit>` | At the lead's project, build a Unit here: its claim is taken for the lead's project, like any take |
 | `/aidlc unit take <unit> --plan <work id> --from <address>` | Take a Unit of the lead's plan, shared in the code repository at that address, as your team's own piece of work, or carry its build on |
-| `/aidlc unit push [--later] [--remote <repo>=<name>] [--branch <name>] [--commit-message-file <file>] [--finish-merge] [--merge-main] [--undo-merge]` | In a Unit's build, commit and push exactly its files on its branch in each repo, and send the result back to the lead's project |
+| `/aidlc unit push [--later] [--remote <repo>=<name>] [--branch <name>] [--commit-message-file <file>] [--finish-merge] [--merge-main] [--undo-merge] [--replace]` | In a Unit's build, commit and push exactly its files on its branch in each repo, and send the result back to the lead's project |
 | `/aidlc unit send-back <unit>` | At the lead's project, send a team's Unit back from Build and Test in the failure's words |
 | `/aidlc unit propose --input <file>` | In a Unit's build, send the lead a change to an input the Unit was approved with |
 | `/aidlc unit rebase` | In a Unit's build started early, move it onto the branch the Unit it waited on merged into |
@@ -832,6 +832,7 @@ the build; you can also run it yourself, for example after a review fix:
 /aidlc unit push --finish-merge
 /aidlc unit push --merge-main
 /aidlc unit push --undo-merge
+/aidlc unit push --replace
 ```
 
 The commit message: with `--commit-message-file`, the Unit's commit takes the
@@ -890,6 +891,18 @@ is rewritten or forced. A clash is left for you to resolve, and `--merge-main`
 then finishes and pushes it; `--undo-merge` takes the waiting merge back out. A
 change of yours in a file main changes, or a file of yours where main adds one,
 stops it before anything is merged, with the way on.
+
+When the Unit's branch on the remote still holds the build pushed before and
+this build is not on top of it (a redo from the newer main after a turn-down,
+a build moved onto what merged), the push asks whether to replace that branch
+or push a new one, `<branch>-2`. A pull request open from the branch stays the
+same one after a replace; the new branch needs a pull request of its own.
+`--replace` reads each repository's branch on its remote first and pushes with
+`--force-with-lease` on what this build's last push left there (on the
+workspace's own repository, with AI-DLC's record commit on top; or a clean merge
+of main the offer above made), so a commit anyone else put there, in any
+repository, replaces nothing anywhere. The branch a repository merges into is
+never replaced. The push line names the commit the branch was at before.
 
 The branch is named after the Unit unless you name it: when your team's
 branches follow a rule of their own (a pre-push hook, or the host, wants
@@ -954,8 +967,8 @@ in: it fetches that branch and moves only the build's own commits onto it, with
 your own git (a plain rebase where the repo merged the other Unit with its
 commits kept, a rebase from the head the build started on after a squash or a
 host's rebase; a build with no commits of its own yet moves and keeps your
-uncommitted work). Nothing is pushed; a build you had pushed then needs your
-own force push. The line says where you are now and the way back to your
+uncommitted work). Nothing is pushed; for a build you had pushed, its next push
+asks whether to replace the branch it went on or to push a new one (`--replace`). The line says where you are now and the way back to your
 branch. A conflict is undone at once: the line gives git's words and says the
 build is where it was in that repo (only when git cannot undo it does the line
 name `git rebase --abort`). A rebase, merge, cherry-pick or revert of yours

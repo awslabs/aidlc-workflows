@@ -734,12 +734,12 @@ describe("a Unit started early whose dependency merged: the move onto main is of
       expect(readFileSync(join(dana, "billing", "report.ts"), "utf-8")).toBe("export const report = 1;\n");
     });
 
-    test(`pushed already, ${how}: the question says the next push needs their force push; not now moves on, and the move moves only reporting's own commits`, () => {
+    test(`pushed already, ${how}: the question says the next push asks whether to replace its branch; not now moves on, and the move moves only reporting's own commits`, () => {
       const { dana } = earlyThenMerged(how, true);
       const ask = next(dana, ENV);
       expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-move-onto");
-      expect(ask.question).toBe(`${MOVE} reporting is pushed already, so after the move its branch differs from what was pushed, and ` +
-        `its next push needs a force push of your own; AI-DLC never forces a push.${WHY}`);
+      expect(ask.question).toBe(`${MOVE} reporting is pushed already, so after the move its next push asks you whether to replace ` +
+        `the branch it went on or to push a new one.${WHY}`);
       readsAsOffers(ask);
       const after = next(dana, ENV);
       expect(key(after), JSON.stringify(after)).not.toBe(key(ask));

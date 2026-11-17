@@ -11940,6 +11940,7 @@ function pushUnit(args: string[], projectDir?: string): void {
   const before = unitBranchOf(state, unit);
   const branch = flags.branch?.trim() || before;
   const finishMerge = bareFlags.has("finish-merge") || flags["finish-merge"] !== undefined;
+  const replace = bareFlags.has("replace") || flags.replace !== undefined;
   if (flags.branch !== undefined) {
     const checked = git(pd, ["check-ref-format", "--branch", branch]);
     if (!checked.ok) fail(`"${branch}" is not a branch name git takes, so nothing was pushed.${checked.stderr.trim() ? ` Git says: "${gitSaid(checked.stderr)}".` : ""}`);
@@ -12148,8 +12149,7 @@ function pushUnit(args: string[], projectDir?: string): void {
     const notOurs = pick(messageKept.notOurs);
     const unknown = pick(messageKept.unknown);
     return [
-      ...(went.length === 0 ? [] : [`${keeps(went)} ${unit}'s commit as it went before, so your message is not on it there: ` +
-        "changing it takes a force push of your own, and AI-DLC never forces a push."]),
+      ...(went.length === 0 ? [] : [`${keeps(went)} ${unit}'s commit as it went before, so your message is not on it there.`]),
       ...(notOurs.length === 0 ? [] : [`${keeps(notOurs)} ${notOurs.length === 1 ? "its" : "their"} last commit as it is, so your ` +
         `message is not on it there: it is not the commit AI-DLC made for ${unit} and could not push.`]),
       ...(unknown.length === 0 ? [] : [`${keeps(unknown)} ${unit}'s commit as it is for now, so your message is not on it there: ` +
@@ -12240,28 +12240,71 @@ function pushUnit(args: string[], projectDir?: string): void {
   }
   // What each repo's host said about the branch, for the line; never recorded.
   const hostSaid: Array<{ name: string; words: string }> = [];
+  // The repos a replace went in, with the commit their branch was at before.
+  const replacedFrom = new Map<string, string>();
+  const newBranchWay = (fresh: string): string =>
+    `Ask the person whether to push it as a new branch, ${fresh}; on their yes, run \`${aidlcToolInvocation("unit")} push --branch ${fresh}${messageFlag}\`.`;
+  // The branch each repository merges into is never replaced: the way on is a new branch.
+  const intoNames = (repo: string, dir: string, remote: string): string[] =>
+    [...[integrationOf(repo, dir, remote), unitBranchInto(dir, remote)]
+      .map((ref) => (ref.startsWith("refs/") ? ref.replace(/^refs\/(?:heads|remotes\/[^/]+)\//, "") : ref.replace(/^[^/]+\//, ""))),
+    ...(repo === "." ? [homeIntegrationBranch(pd) ?? ""] : [])].filter(Boolean);
+  const intoRefused = (name: string, dir: string, remote: string): never => {
+    const free = !git(dir, ["ls-remote", "--exit-code", remote, `refs/heads/${unit}`]).ok;
+    return fail(`${unit} was not pushed: it goes on ${branch} in ${name}, the branch ${name} merges into, and AI-DLC never replaces ` +
+      `that branch. ${newBranchWay(free ? unit : `${unit}-2`)}${whereNow()}`);
+  };
+  // With --replace, every repository's branch on its remote is read before any
+  // push and leased on what this build last pushed there, so a commit anyone
+  // else put there, in any repository, pushes nothing anywhere.
+  const leases = new Map<string, string>();
+  if (replace) {
+    const last = lastPushedHeads(pd, unit, branch);
+    for (const { repo, dir, name, remote } of planned) {
+      if (intoNames(repo, dir, remote).includes(branch)) intoRefused(name, dir, remote);
+      const listed = git(dir, ["ls-remote", remote, `refs/heads/${branch}`]);
+      if (!listed.ok) fail(`${branch} on ${remote} in ${name} could not be read: git says "${gitSaid(listed.stderr)}". Nothing was pushed. Say when to try again.${whereNow()}`);
+      const tip = listed.stdout.trim().split(/\s+/)[0] ?? "";
+      if (tip === "" || tip === git(dir, ["rev-parse", "HEAD"]).stdout.trim()) continue;
+      const lease = last.get(repo);
+      if (lease !== undefined && tip !== lease) git(dir, ["fetch", "-q", remote, `+refs/heads/${branch}:refs/remotes/${remote}/${branch}`]);
+      if (lease !== undefined && (tip === lease || onlyOnLastPush(dir, lease, tip, integrationOf(repo, dir, remote), repo === "."))) {
+        leases.set(repo, tip);
+        continue;
+      }
+      fail(`${unit} was not pushed: its branch ${branch} on ${remote} in ${name} is not where this build's last push left it, so it ` +
+        `was not replaced, and nothing was pushed. ${newBranchWay(`${branch}-2`)}${whereNow()}`);
+    }
+  }
   for (const { repo, dir, name, remote, paths } of planned) {
     // The branch's copy on its remote as last fetched: a commit there that
     // AI-DLC did not push and this build is on top of stays among its heads.
     const prior = git(dir, ["rev-parse", "--verify", "--quiet", `refs/remotes/${remote}/${branch}^{commit}`]).stdout.trim();
-    const pushed = git(dir, ["push", "-u", remote, branch]);
+    const lease = leases.get(repo);
+    const pushed = git(dir, ["push", "-u", ...(lease === undefined ? [] : [`--force-with-lease=refs/heads/${branch}:${lease}`]), remote, branch]);
+    if (!pushed.ok && replace) {
+      saveMark();
+      fail(`The push of ${unit} in ${name} was refused: ${pushRefusal(pushed.stderr)}. Nothing was retried. ${newBranchWay(`${branch}-2`)}${whereNow()}`);
+    }
     if (!pushed.ok) {
       // Its branch on the remote holds commits this build is not on top of (a
-      // redo built from the newer main after a turn-down): replacing that
-      // branch takes a force push, which AI-DLC never makes, so the way on it
-      // gives is a new branch.
+      // redo built from the newer main after a turn-down, a build moved onto
+      // what merged): the way on is the replace of that branch, or a new one.
       const theirs = `refs/remotes/${remote}/${branch}`;
       git(dir, ["fetch", "-q", remote, `${branch}:${theirs}`]);
       const behind = git(dir, ["rev-parse", "--verify", "--quiet", theirs]).ok &&
         !git(dir, ["merge-base", "--is-ancestor", theirs, "HEAD"]).ok;
       saveMark();
+      if (behind && intoNames(repo, dir, remote).includes(branch)) intoRefused(name, dir, remote);
       if (behind) {
         const fresh = `${branch}-2`;
+        const unitTool = aidlcToolInvocation("unit");
         fail(
           `${unit} was not pushed: its branch ${branch} on ${remote} in ${name} still holds the build pushed before, and ` +
-            `this build is not on top of it. Ask the person whether to push it as a new branch, ${fresh}; ` +
-            `on their yes, run \`${aidlcToolInvocation("unit")} push --branch ${fresh}${messageFlag}\`. ` +
-            `Replacing ${branch} itself takes a force push of their own; AI-DLC never forces a push.${whereNow()}`,
+            `this build is not on top of it. Ask the person whether to replace ${branch} there with this build (the build ` +
+            "pushed before leaves that branch; a pull request open from it stays the same one), or to push it as a new branch, " +
+            `${fresh} (it needs a pull request of its own); run \`${unitTool} push --replace${messageFlag}\` for the replace, or ` +
+            `\`${unitTool} push --branch ${fresh}${messageFlag}\` for the new branch.${whereNow()}`,
         );
       }
       // The way on is said only where a message the person gives could change
@@ -12277,7 +12320,10 @@ function pushUnit(args: string[], projectDir?: string): void {
     if (startedHere.has(repo) && mainChangedUnder(dir, head, integrationOf(repo, dir, remote), paths).length > 0) {
       noteEngineAskMark(pd, mainMovedMark(unit, head));
     }
-    const base = earlier.get(repo)?.base ??
+    // A replace took the build pushed before off the branch: its base is read again.
+    const replaced = lease !== undefined && !git(dir, ["merge-base", "--is-ancestor", lease, head]).ok;
+    if (replaced) replacedFrom.set(name, git(dir, ["rev-parse", "--short", lease]).stdout.trim());
+    const base = (replaced ? undefined : earlier.get(repo)?.base) ??
       (git(dir, ["merge-base", "HEAD", integrationOf(repo, dir, remote)]).stdout.trim() || head);
     const changed = git(dir, ["diff", "--name-only", "--no-renames", base, head, "--", ...paths]).stdout.split(/\r?\n/).filter(Boolean);
     const blobs = blobsAt(dir, head, changed);
@@ -12302,12 +12348,15 @@ function pushUnit(args: string[], projectDir?: string): void {
   }
   const nameOf = (repo: RepoResult): string => (repo.repo === "." ? "the repo" : repo.repo);
   const names = results.map(nameOf);
+  const plain = names.filter((name) => !replacedFrom.has(name));
   // A host's own words stand in for ours (GitLab's say "merge request"):
-  // "Open a PR" is said only for the repos whose host said nothing about it.
-  const quiet = hostSaid.filter((said) => said.words === "").map((said) => said.name);
+  // "Open a PR" is said only for the repos whose host said nothing about it,
+  // and never for a replaced branch, whose pull request is the same one.
+  const quiet = hostSaid.filter((said) => said.words === "" && !replacedFrom.has(said.name)).map((said) => said.name);
   const lines = [
     joinSaid([
-      `Pushed branch ${branch} in ${joinNames(names)}.`,
+      plain.length === 0 ? "" : `Pushed branch ${branch} in ${joinNames(plain)}.`,
+      ...[...replacedFrom].map(([name, was]) => `Pushed branch ${branch} in ${name} in place of the build pushed there before (it was at ${was}).`),
       ...hostSaid.filter((said) => said.words !== "").map((said) => hostSaysLine(names.length === 1 ? null : said.name, said.words)),
       quiet.length === 0 ? "" : `Open a PR in ${quiet.length < names.length ? joinNames(quiet) : names.length === 1 ? "it" : "each"} your usual way.`,
       whereNow(true).trimStart(),
@@ -12444,6 +12493,24 @@ export function lastPushedHeads(pd: string, unit: string, branch: string): Map<s
     auditBlockField(entry.block, "Unit") === unit && auditBlockField(entry.block, "Branch") === branch);
   const pairs = (row === undefined ? "" : auditBlockField(row.block, "Repos") ?? "").split(",").map((pair) => pair.trim()).filter(Boolean);
   return new Map(pairs.map((pair) => [pair.slice(0, pair.lastIndexOf("@")), pair.slice(pair.lastIndexOf("@") + 1)]));
+}
+
+// Whether `tip`, on a Unit's branch on its remote, is still what AI-DLC left
+// on its last push there (`lease`) plus only what AI-DLC added on top: on the
+// workspace's own repository the one record commit (one parent, the lease, and
+// every change under aidlc/), or a merge of the branch it merges into with
+// nothing of its own (first parent the lease, the second in `into`, no change
+// beyond its two sides). A merge whose clash someone resolved has a change of
+// its own, so it is never this.
+function onlyOnLastPush(dir: string, lease: string, tip: string, into: string, own: boolean): boolean {
+  const parents = git(dir, ["rev-list", "--parents", "-n", "1", tip]).stdout.trim().split(/\s+/).slice(1);
+  if (parents[0] !== lease) return false;
+  if (parents.length === 1) {
+    return own && git(dir, ["diff-tree", "--no-commit-id", "-r", "--name-only", "-z", tip]).stdout.split("\0").filter(Boolean)
+      .every((path) => path.startsWith("aidlc/"));
+  }
+  return parents.length === 2 && git(dir, ["merge-base", "--is-ancestor", parents[1], into]).ok &&
+    git(dir, ["diff-tree", "--cc", "--no-commit-id", "-r", tip]).stdout.trim() === "";
 }
 
 // The code repositories of that push whose head kept mainMovedMark, with the

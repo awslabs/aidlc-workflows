@@ -1144,8 +1144,7 @@ const UNREAD = "push --commit-message-file needs the commit message in a file di
 const BOTH = "refunds is built and you approved it. It changed checkout-api and billing.";
 const pushBoth = (message: string, refused = false): string =>
   `${BOTH}${refused ? ` ${LAST_PUSH}` : ""} Commit its changes on branch refunds in each and push them, with this commit message?\n\n${message}`;
-const wentBefore = (repo: string): string => `${repo} keeps refunds's commit as it went before, so your message is not on it there: ` +
-  "changing it takes a force push of your own, and AI-DLC never forces a push.";
+const wentBefore = (repo: string): string => `${repo} keeps refunds's commit as it went before, so your message is not on it there.`;
 const notOurs = (repo: string): string => `${repo} keeps its last commit as it is, so your message is not on it there: it is not ` +
   "the commit AI-DLC made for refunds and could not push.";
 const hookDidNotTake = (repo: string, words: string): string => `${repo} keeps refunds's commit as it was, so your message is not ` +
@@ -2658,7 +2657,7 @@ describe("at the home", () => {
   // from billing's newer main; the push was refused as non-fast-forward, its
   // branch on origin still holding the build that was turned down, and the
   // agent handed the person git's own ways, a force push among them.
-  test("a redo built on the newer main whose branch on origin holds the turned-down build: the way on is a new branch the home follows", () => {
+  test("a redo built on the newer main whose branch on origin holds the turned-down build: the way on is the replace of that branch or a new one", () => {
     const { home, hosts, alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     finishBuild(record);
@@ -2677,8 +2676,11 @@ describe("at the home", () => {
     expect(said, refused.out).toContain("its branch refunds on origin in billing still holds the build pushed before");
     expect(said).not.toContain("non-fast-forward");
     expect(said).toContain("aidlc-unit.ts push --branch refunds-2`");
-    expect(said).toContain("Ask the person whether to push it as a new branch, refunds-2; on their yes, run `");
-    expect(said).toContain("AI-DLC never forces a push");
+    expect(said).toContain("Ask the person whether to replace refunds there with this build (the build pushed before leaves that " +
+      "branch; a pull request open from it stays the same one), or to push it as a new branch, refunds-2 (it needs a pull request of " +
+      "its own); run `");
+    expect(said).toContain("aidlc-unit.ts push --replace` for the replace, or `");
+    expect(said).not.toContain("force");
     const again = run(UNIT, ["push", "--branch", "refunds-2"], alice);
     expect(again.status, again.out).toBe(0);
     expect(git(hosts.billing, ["show", "refunds-2:lib/refund.ts"])).toBe("export const refund = 2;");
@@ -3280,6 +3282,25 @@ describe("a Unit on the workspace's own repository", () => {
     `AI-DLC's record of ${unit} went with it, in a commit of its own.`;
   const committed = (host: string, rev: string): string[] =>
     git(host, ["diff-tree", "-r", "--no-commit-id", "--name-only", rev]).split("\n").filter(Boolean);
+
+  test("the replace of a Unit's branch here leases on its code and the one record commit AI-DLC put on it", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    builtHere(alice, "refunds", "refunds.ts");
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    const before = git(home.remote, ["rev-parse", "refunds"]);
+    // Their redo folds the branch's two commits into one of its own, then changes the Unit's file again.
+    git(alice, ["reset", "-q", "--soft", "HEAD~2"]);
+    git(alice, ["commit", "-q", "-m", "refunds again"]);
+    writeFileSync(join(alice, "src", "refunds.ts"), "export const built = \"refunds, again\";\n");
+    const refused = run(UNIT, ["push"], alice);
+    expect(refused.status).not.toBe(0);
+    expect(String(refused.json?.error)).toContain("Ask the person whether to replace refunds there with this build");
+    const replaced = run(UNIT, ["push", "--replace"], alice);
+    expect(replaced.status, replaced.out).toBe(0);
+    expect(git(home.remote, ["show", "refunds:src/refunds.ts"])).toBe('export const built = "refunds, again";');
+    expect(spawnSync("git", ["merge-base", "--is-ancestor", before, "refunds"], { cwd: home.remote }).status).not.toBe(0);
+  });
 
   test("AI-DLC's record of the build goes with the Unit's branch as a second commit after its code: the build's own folder and the new space's own files, nothing of the lead's record, nothing git ignores", () => {
     const home = oneRepoTeams();

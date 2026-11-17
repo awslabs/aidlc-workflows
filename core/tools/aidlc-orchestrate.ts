@@ -10481,7 +10481,7 @@ function levelOfferNote(projectDir: string): string | null {
 
 // A Unit this build started early on, now merged at the home: the offer to move
 // the build onto the integration branch, once per Unit, and once more when the
-// build was pushed since (its next push then needs their own force push).
+// build was pushed since (its next push then asks whether to replace its branch).
 function unitMoveOntoAsk(projectDir: string, stateContent: string): AskDirective | null {
   const build = unitBuildOf(stateContent);
   if (build === null) return null;
@@ -10501,8 +10501,8 @@ function unitMoveOntoAsk(projectDir: string, stateContent: string): AskDirective
       response_route: "command",
       question: `${dep.unit} is merged into ${into}. Do you want me to move ${unit} onto ${into} now?` +
         (pushed
-          ? ` ${unit} is pushed already, so after the move its branch differs from what was pushed, and its next push needs ` +
-            "a force push of your own; AI-DLC never forces a push."
+          ? ` ${unit} is pushed already, so after the move its next push asks you whether to replace the branch it went on ` +
+            "or to push a new one."
           : "") +
         ` I'd move it now, so ${unit} is built on what is merged instead of ${dep.unit}'s branch.`,
       choices: [

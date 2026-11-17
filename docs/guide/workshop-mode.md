@@ -809,7 +809,11 @@ GitHub's link to create a pull request or GitLab's to create or view a merge
 request, comes with the line, as the host printed it. Where the branch started
 from where you are and main had changed one of the Unit's own files, the next
 step offers once to bring main in: a merge with your own git, then the push
-again (`unit push --merge-main`); a clash is left for you to resolve. A
+again (`unit push --merge-main`); a clash is left for you to resolve. Where
+the branch on the remote still holds the build pushed before (a redo from the
+newer main after a turn-down), the push asks whether to replace it, keeping its
+pull request (`unit push --replace`, only over what this computer last pushed
+there, never over a commit someone else added), or to push a new branch. A
 later push from the branch you went back to takes the Unit's files Code
 Generation changed there onto its branch as they are; when changes of your own
 are in the way, it stops with git's words, nothing moves, and the push is
@@ -1041,8 +1045,8 @@ have no uncommitted work there; otherwise the branch is made and the line says
 to switch when you are ready), and the line says it may still change before it
 merges. Once that Unit is merged, AI-DLC asks once whether to move your build
 onto the branch it merged into (only your build's own commits move, with your
-own git; a build you already pushed then needs a force push of your own, which
-AI-DLC never does). The line says where you are afterwards and the way back to
+own git; for a build you already pushed, its next push asks you whether to replace
+the branch it went on or to push a new one). The line says where you are afterwards and the way back to
 your branch; a conflict stops with git's words and the way back, and a move your
 own changes kept git from making is offered again once they are out of the way. You
 hear once when that Unit is turned down, and nothing else changes.

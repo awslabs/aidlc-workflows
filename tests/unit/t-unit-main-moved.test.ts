@@ -380,6 +380,42 @@ describe("the offer after the push, and its yes", () => {
     expect(git(billing, ["rev-parse", "refunds^2"]).length).toBeGreaterThan(0);
   });
 
+  // The Unit redone from the newer main after its merge of main went: its next push asks for the replace.
+  function redoneOnMain(alice: string, billing: string): void {
+    git(billing, ["fetch", "-q", "origin"]);
+    git(billing, ["switch", "-q", "main"]);
+    git(billing, ["branch", "-q", "-D", "refunds"]);
+    git(billing, ["switch", "-q", "-c", "refunds", "origin/main"]);
+    writeFileSync(join(billing, "README.md"), `${readFileSync(join(billing, "README.md"), "utf-8")}Refunds, again.\n`);
+    const refused = run(UNIT, ["push"], alice);
+    expect(String(refused.json?.error)).toContain("Ask the person whether to replace refunds there with this build");
+  }
+
+  test("a clean merge of main the yes pushed: a later replace leases on it as on its own push", () => {
+    const { alice, hosts, billing } = movedAndPushed();
+    next(alice);
+    expect(run(UNIT, ["push", "--merge-main"], alice).status).toBe(0);
+    redoneOnMain(alice, billing);
+    const replaced = run(UNIT, ["push", "--replace"], alice);
+    expect(replaced.status, replaced.out).toBe(0);
+    expect(git(hosts.billing, ["show", "refunds:README.md"])).toContain("Refunds, again.");
+  });
+
+  test("a merge whose clash was resolved: a later replace is refused, so the resolution is never dropped", () => {
+    const { alice, hosts, billing } = movedAndPushed(true);
+    next(alice);
+    run(UNIT, ["push", "--merge-main"], alice);
+    writeFileSync(join(billing, "README.md"), README.replace("Keeps a ledger.", "Keeps two ledgers and refunds."));
+    git(billing, ["add", "README.md"]);
+    expect(run(UNIT, ["push", "--merge-main"], alice).status).toBe(0);
+    const resolved = git(hosts.billing, ["rev-parse", "refunds"]);
+    redoneOnMain(alice, billing);
+    const refused = run(UNIT, ["push", "--replace"], alice);
+    expect(refused.status).not.toBe(0);
+    expect(String(refused.json?.error)).toContain("is not where this build's last push left it, so it was not replaced, and nothing was pushed.");
+    expect(git(hosts.billing, ["rev-parse", "refunds"])).toBe(resolved);
+  });
+
   test("the fetch refused: nothing merged, and the way on", () => {
     const { alice, billing } = movedAndPushed();
     next(alice);
