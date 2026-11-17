@@ -1,5 +1,6 @@
 // covers: tool:aidlc-review-brief, subcommand:aidlc-orchestrate:report, audit:GATE_APPROVED,
-// function:renderReviewBrief, function:approvalDispositionField, function:teamUnitGateStages
+// function:renderReviewBrief, function:approvalDispositionField, function:teamUnitGateStages,
+// function:checkpointGateStages, subcommand:aidlc-bolt:checkpoint
 //
 // A team Unit claimed with the unit-end rhythm is approved once, at its last
 // stage, and that one Approve decides every stage of the Unit's walk. The gate's
@@ -10,6 +11,10 @@
 // did not show. A gate with no open findings reads as before, and a per-stage
 // team gate is unchanged. An earlier stage whose review did not finish (its
 // reviewer stopped twice) is named in the brief, and the line names that stage.
+//
+// The same holds for a Unit worked alone, whose Construction checkpoint is its
+// walk's one gate: the checkpoint's brief shows each earlier stage's open
+// findings, and its approval records exactly those, from one stage list.
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -37,6 +42,7 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { REVIEW_FINDING_DISPOSITIONS_FIELD } from "../../dist/claude/.claude/tools/aidlc-review-brief.ts";
 import { renderTestingContract, resolveTestingPosture } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 
@@ -53,6 +59,7 @@ const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const BRIEF = join(AIDLC_SRC, "tools", "aidlc-review-brief.ts");
+const BOLT = join(AIDLC_SRC, "tools", "aidlc-bolt.ts");
 
 const ENV: NodeJS.ProcessEnv = {
   ...process.env,
@@ -578,5 +585,189 @@ describe("t-team-unit-end-gate-findings: the end-of-Unit gate shows what its App
     expect(shown).toStartWith("**Stage:** Functional Design\n**Review outcome:** Concerns remain for your decision.\n");
     expect(shown).toContain("- **Approve** - continue with the open findings accepted.");
     expect(shown).not.toContain("Approve accepts the open review finding");
+  });
+});
+
+// The same walk worked alone: no team owns alpha, and its Construction
+// checkpoint is the walk's one gate (Skeleton Stance off, so it is an ordinary
+// Unit's checkpoint), verified with a check the person approved.
+const SOLO_SESSION = "01995000-7a11-7000-8000-00000000c337";
+
+// The person types `prompt`; the shipped human-turn hook keeps it.
+function personSays(proj: string, prompt: string): void {
+  const result = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    encoding: "utf-8",
+    cwd: proj,
+    env: { ...ENV, AIDLC_PROJECT_DIR: proj, CLAUDE_PROJECT_DIR: proj },
+    input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: SOLO_SESSION, prompt }),
+  });
+  expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+}
+
+function seedSoloProject(): string {
+  const proj = seedProject("unit-end");
+  writeFileSync(seededStateFile(proj), constructionState("unit-end")
+    .replace("- **Skeleton Stance**: on", "- **Skeleton Stance**: off")
+    .replace(
+      "- **Unit Ownership**: team\n- **Unit Gate Rhythm**: unit-end\n",
+      "- **Construction Checkpoints**: enabled\n- **Construction Execution**: serial\n- **Construction Autonomy Mode**: gated\n",
+    ));
+  appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature" }, proj);
+  const script = join(seededRecordDir(proj), "check.cjs");
+  writeFileSync(script, "process.exit(0);\n");
+  const quote = (value: string) => process.platform === "win32"
+    ? `"${value.replaceAll('"', '""')}"`
+    : `'${value.replaceAll("'", "'\\''")}'`;
+  const command = `${quote(BUN)} ${quote(script)}`;
+  const identity = ["--stage", "code-generation", "--checkpoint", "verification-command", "--command", command, "--session", SOLO_SESSION];
+  const asked = run(LOG, proj, [
+    "decision", ...identity, "--decision", "Use this command to verify each completed Unit?", "--options", "Approve,Request Changes",
+  ]);
+  expect(asked.rc, asked.out).toBe(0);
+  personSays(proj, "Approve");
+  const answered = run(LOG, proj, ["answer", ...identity, "--details", "Approve"]);
+  expect(answered.rc, answered.out).toBe(0);
+  const set = run(STATE, proj, ["set-construction-verification-command", command]);
+  expect(set.rc, set.out).toBe(0);
+  return proj;
+}
+
+function soloCheckpoint(proj: string, action: string, extra: string[] = []): { rc: number; json: Directive; out: string } {
+  const result = spawnSync(BUN, [
+    BOLT, "checkpoint", "--unit", "alpha", "--kind", "unit", "--action", action, "--session", SOLO_SESSION, ...extra,
+    "--project-dir", proj,
+  ], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    encoding: "utf-8",
+    env: { ...ENV, AIDLC_SESSION_OVERRIDE: SOLO_SESSION },
+  });
+  const out = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+  let json: Directive = {};
+  try {
+    json = JSON.parse((result.stdout ?? "").trim().split(/\r?\n/).at(-1) ?? "") as Directive;
+  } catch {
+    json = {};
+  }
+  return { rc: result.status ?? -1, json, out };
+}
+
+// Walks alpha's stages alone, each reviewed before its step is recorded done
+// (as walkToGate's reviews, a NOT-READY one twice), to its checkpoint; verifies
+// it, and returns the brief the checkpoint prints before its question, then
+// asks that question and records the person's reply.
+function soloCheckpointBrief(proj: string, reviews: Record<string, Finding[] | "stopped">): string {
+  for (const stage of BLOCK) {
+    const directive = runNext(proj);
+    expect(directive, JSON.stringify(directive)).toMatchObject({ stage, unit: "alpha" });
+    expect(run(STATE, proj, ["unit", "start", "--stage", stage, "--unit", "alpha"]).rc).toBe(0);
+    coverUnit(proj, stage);
+    const said = reviews[stage] ?? [];
+    if (directive.reviewer && said === "stopped") {
+      logStoppedReview(proj, stage, directive.reviewer);
+    } else if (directive.reviewer && said !== "stopped") {
+      logReview(proj, stage, directive.reviewer, said);
+      if (said.some((finding) => finding.severity !== "Minor")) logReview(proj, stage, directive.reviewer, said, 2);
+    }
+    const completed = run(STATE, proj, ["unit", "complete", "--stage", stage, "--unit", "alpha"]);
+    expect(completed.rc, completed.out).toBe(0);
+  }
+  const atCheckpoint = runNext(proj);
+  expect(atCheckpoint, JSON.stringify(atCheckpoint).slice(0, 800)).toMatchObject({ stage: "code-generation", unit: "alpha" });
+  expect(atCheckpoint.construction_checkpoint, JSON.stringify(atCheckpoint).slice(0, 800)).toBeDefined();
+  const verified = soloCheckpoint(proj, "verify");
+  expect(verified.rc, verified.out).toBe(0);
+  expect(verified.json.verified, verified.out).toBe(true);
+  const shown = brief(proj, "code-generation");
+  const asked = soloCheckpoint(proj, "ask");
+  expect(asked.rc, asked.out).toBe(0);
+  // A checkpoint's step says no line of what Approve accepts: its brief's option says it.
+  expect(JSON.stringify(asked.json)).not.toContain("Approve accepts");
+  personSays(proj, "Approve");
+  return shown;
+}
+
+describe("t-team-unit-end-gate-findings: a Unit worked alone shows at its checkpoint what its Approve decides", () => {
+  test("a NOT-READY NFR Design review is shown at the checkpoint, and Approve records only what it showed", () => {
+    const proj = seedSoloProject();
+    const shown = soloCheckpointBrief(proj, { "nfr-design": NFR_DESIGN_FINDINGS });
+    expect(shown).toContain("**Stages:** NFR Design, Code Generation");
+    expect(shown).toContain("**Review outcome:** Concerns remain for your decision.");
+    expect(shown).toContain("construction/alpha/nfr-design/");
+    expect(shown).toContain("> R-01 Finding: operability-design.md and testability-design.md do not exist");
+    expect(shown).toContain("> R-02 Finding: The traceability file uses ids the requirements do not define");
+    expect(shown).toContain("- **Approve** - continue with the open findings accepted.");
+    expect(shown).not.toContain("Approve accepts");
+    expect(shown).not.toContain("No blocking concerns were found.");
+    expect(shown).not.toContain("no findings are open");
+    // An earlier stage's own brief, while the checkpoint is open, reads as before.
+    expect(brief(proj, "nfr-design")).toStartWith("**Stage:** NFR Design\n");
+
+    const approved = soloCheckpoint(proj, "approve", ["--user-input", "Approve"]);
+    expect(approved.json.approved, approved.out).toBe(true);
+    const record = recorded(proj);
+    expect(record.map(folderOf)).toEqual(shownOpen(shown));
+    expect(record).toHaveLength(2);
+    for (const entry of record) {
+      expect(entry).toContain("/construction/alpha/nfr-design/");
+      expect(entry).toEndWith(" Accepted risk");
+    }
+  });
+
+  test("an earlier stage whose review did not finish is named at the checkpoint", () => {
+    const proj = seedSoloProject();
+    const shown = soloCheckpointBrief(proj, { "nfr-design": "stopped" });
+    expect(shown).toContain("**Stages:** NFR Design, Code Generation");
+    expect(shown).toContain("**Review outcome:** Concerns remain for your decision.");
+    expect(shown).toContain("> R-01 Finding: The review did not finish, so there is no review result to rely on.");
+    expect(shown).not.toContain("No blocking concerns were found.");
+    const approved = soloCheckpoint(proj, "approve", ["--user-input", "Approve"]);
+    expect(approved.json.approved, approved.out).toBe(true);
+    expect(JSON.stringify(approved.json)).toContain("Approved. The NFR Design review for alpha did not finish.");
+    expect(recorded(proj)).toEqual([]);
+  });
+
+  test("a Request Changes at the checkpoint that rejects an earlier stage's finding rejects the one shown", () => {
+    const proj = seedSoloProject();
+    const shown = soloCheckpointBrief(proj, { "nfr-design": [NFR_DESIGN_FINDINGS[0]] });
+    expect(shownOpen(shown)).toHaveLength(1);
+    const nfrDesign = recordedArtifact(proj, "nfr-design");
+    const rejected = soloCheckpoint(proj, "reject", [
+      "--user-input", "Request Changes", "--reason", "Rename the handler",
+      "--reject-finding", `${nfrDesign}#R-01=Those documents are not this Unit's`,
+    ]);
+    expect(rejected.rc, rejected.out).toBe(0);
+    const rows = readAuditShardEvents(proj).filter((row) =>
+      row.event === "GATE_REJECTED" && auditBlockField(row.block, "Unit") === "alpha"
+    );
+    expect(rows).toHaveLength(1);
+    expect(JSON.parse(auditBlockField(rows[0].block, REVIEW_FINDING_DISPOSITIONS_FIELD)!).dispositions).toEqual([
+      expect.objectContaining({ artifact: nfrDesign, id: "R-01", status: "Rejected: Those documents are not this Unit's" }),
+    ]);
+  });
+
+  test("with no open findings the checkpoint's brief reads as before and records none", () => {
+    const proj = seedSoloProject();
+    const shown = soloCheckpointBrief(proj, {});
+    const plan = `${relative(proj, stageDir(proj, "code-generation")).replaceAll("\\", "/")}/code-generation-plan.md`;
+    expect(shown).toBe(
+      [
+        "**Stage:** Code Generation",
+        "**Review outcome:** No blocking concerns were found.",
+        "",
+        `**Review artifact:** \`${plan}\``,
+        "",
+        "| ID | Severity | Where | Status |",
+        "|---|---|---|---|",
+        "| - | - | - | No findings |",
+        "",
+        "**Decision options:**",
+        "- **Approve** - continue; no findings are open.",
+        "- **Request Changes** - return to the listed artifacts so the required actions can be addressed.",
+        "",
+      ].join("\n"),
+    );
+    expect(soloCheckpoint(proj, "approve", ["--user-input", "Approve"]).json.approved).toBe(true);
+    expect(recorded(proj)).toEqual([]);
   });
 });
