@@ -63,7 +63,7 @@ diagnostic and lifecycle routes.
 | `/aidlc unit adopt <unit>` | Adopt the checked-out live claim branch in a fresh clone |
 | `/aidlc unit participate` | Mark this clone for the guided Unit-claim picker |
 | `/aidlc unit catch-up` | At the lead's project, before Build and Test, bring each repo here that lacks a merged Unit up to date with its remote, a fast-forward only |
-| `/aidlc unit share [--plan [--repo <name or address>] [--carry-words] [--visible \| --off-branch [--tip <plan commit>]]] [--branch \| --back] [--commit-message-file <file>]` | Commit the work here and push the integration branch so the teams can take Units, or see a landed one; `--plan` commits AI-DLC's record only, and at work whose teams each build a Unit in their own workspace puts the plan in one code repository instead (the work's first, or the one `--repo` names; once it is shared, `--repo` moves it there) and commits nothing here; `--visible` puts the plan there on a branch people can open, `--off-branch` takes it off that branch again; `--branch` pushes the share's commit on a branch of its own for a pull request; `--back` switches back to the integration branch once that commit is in it |
+| `/aidlc unit share [--plan [--repo <name or address>] [--carry-words] [--stands <unit>=here\|plan[,...]] [--visible \| --off-branch [--tip <plan commit>]]] [--branch \| --back] [--commit-message-file <file>]` | Commit the work here and push the integration branch so the teams can take Units, or see a landed one; `--plan` commits AI-DLC's record only, and at work whose teams each build a Unit in their own workspace puts the plan in one code repository instead (the work's first, or the one `--repo` names; once it is shared, `--repo` moves it there) and commits nothing here; `--visible` puts the plan there on a branch people can open, `--off-branch` takes it off that branch again; `--branch` pushes the share's commit on a branch of its own for a pull request; `--back` switches back to the integration branch once that commit is in it |
 | `/aidlc unit commit-record [--update [--leave <path>]...] [--commit-message-file <file>]` | Commit AI-DLC's record in `aidlc/` (and a `repos.json` still at the project root) on this branch, nothing else, and push nothing; with `--update`, AI-DLC's own files an update changed instead |
 | `/aidlc unit publish <unit> [--commit [--include <path>]...]` | CAS-publish the scoped checkout's clean committed candidate onto its claim ref; `--commit` commits the Unit's own work first, and `--include` puts in a new file or folder it left out |
 | `/aidlc unit pin <unit>` | Pin and validate one completed candidate OID from unscoped main |
@@ -1158,7 +1158,11 @@ which a team reading the plan there follows; the plan's earlier versions stay
 readable in both repositories. When the old repository does not
 take the note, the plan stays where it was and the copy just written is taken
 back. Your other computers follow the note at their next look or share; one that holds words of yours the plan there
-lacks lists them once, and `--carry-words` writes them on the plan as you gave them. With a walking
+lacks lists them, and `--carry-words` writes them on the plan as you gave them. Where the plan there has the
+opposite decision on a Unit, or another turn-down of it, the line asks which stands, or offers this computer's in
+its place; `--stands <unit>=here` writes this computer's word there, `--stands <unit>=plan` keeps the plan's, and
+either way that Unit's other words go with it. Nothing of the answer is remembered: `--carry-words` works it out
+again whenever you ask, and a second move by this computer into the same repository asks again. With a walking
 skeleton's code built in the workspace's own repository, the share also commits
 that code and AI-DLC's record and pushes them as above (`--branch` for a pull
 request). Its JSON output carries `plan: { repo, address, commit }`.

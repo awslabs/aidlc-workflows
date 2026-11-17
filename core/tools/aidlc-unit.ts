@@ -7152,7 +7152,7 @@ function commitRecord(args: string[], projectDir?: string): void {
 
 // `unit share --plan` for the lead's own work teams build: the plan's ref,
 // pushed to its repository; nothing is committed here and no branch is pushed.
-function sharePlanRef(pd: string, given: ReturnType<typeof givenCommitMessage>, needs: string | null, named?: string, carry?: true,
+function sharePlanRef(pd: string, given: ReturnType<typeof givenCommitMessage>, needs: string | null, named?: string, carry?: CarryAsk,
   visible?: true): void {
   const plan = writeSharedPlan(pd, given?.text, named, carry, visible);
   if ("notShared" in plan) {
@@ -7184,7 +7184,7 @@ type SharedPlan = { repo: string; address: string; commit: string; said: string;
 // `carry`: the lead's words this computer wrote where the plan was before it
 // moved, and the plan now lacks, written on it as they were given.
 // `visible`: the lead's own words for a branch people can open (--visible).
-function writeSharedPlan(pd: string, message?: string, named?: string, carry?: true, visible?: true): SharedPlan {
+function writeSharedPlan(pd: string, message?: string, named?: string, carry?: CarryAsk, visible?: true): SharedPlan {
   const place = planPlaceForShare(pd, named);
   if ("refused" in place) {
     fail(place.refused === "option"
@@ -7235,9 +7235,10 @@ function writeSharedPlan(pd: string, message?: string, named?: string, carry?: t
   // The walking skeleton the plan held that the answer here takes out.
   let released: string | null = null;
   const skeletonHere = teamSkeletonOn(readStateFile(pd));
-  // The plan commit names what it carries and from where, as its line does.
+  // The plan commit names what it carries and from where, as its line does;
+  // the line after says what was written, what the plan keeps, and what is still open.
   let carried: string | null = null;
-  let carriedOne = false;
+  const carryRun: { now: { written: CarryWord[]; kept: string[]; list: CarryWord[]; open: CarryQuestion[] } | null } = { now: null };
   const what = (tip: PlanJson | null): string => {
     added = tip === null ? [] : unitsNotIn(pd, tip.units.map((unit) => unit.name));
     released = tip !== null && tip.skeleton !== null && !skeletonHere ? tip.skeleton : null;
@@ -7257,12 +7258,24 @@ function writeSharedPlan(pd: string, message?: string, named?: string, carry?: t
     ...(carry === undefined ? {} : {
       edit: (built: { plan: PlanJson; files: Record<string, string | null> }, tip: PlanTip) => {
         const mine = planWrittenHereNotOn(pd, tip?.commit ?? null, place.id8);
-        const { missing } = mine === null ? { missing: [] } : wordsNotOn(mine, built.plan);
-        if (mine === null || missing.length === 0) return built;
-        carried = missing.slice(0, 3).map((word) => word.what).join(", ") + (missing.length > 3 ? ` and ${missing.length - 3} more` : "") +
+        carried = null;
+        carryRun.now = { written: [], kept: [], list: [], open: [] };
+        if (mine === null) return built;
+        const found = wordsNotOn(mine, built.plan);
+        const stands = (unit: string) => carry.stands.get(unit);
+        const order = mine.units.map((unit) => unit.name);
+        const written = [
+          ...(carry.list ? found.missing : []), ...found.inPlace.filter((word) => stands(word.unit) === "here"),
+          ...found.left.filter((word) => stands(word.unit) !== undefined),
+        ].sort((a, b) => order.indexOf(a.unit) - order.indexOf(b.unit));
+        carryRun.now = {
+          written, kept: [...new Set(found.questions.filter((question) => stands(question.unit) === "plan").map((question) => question.unit))],
+          list: carry.list ? [] : found.missing, open: found.questions.filter((question) => stands(question.unit) === undefined),
+        };
+        if (written.length === 0) return built;
+        carried = written.slice(0, 3).map((word) => word.what).join(", ") + (written.length > 3 ? ` and ${written.length - 3} more` : "") +
           ` carried over from ${mine.plan_repo.name}`;
-        carriedOne = missing.length === 1;
-        return withWordsOf(pd, mine, built);
+        return withWordsOf(pd, mine, built, written);
       },
     }),
   });
@@ -7277,6 +7290,20 @@ function writeSharedPlan(pd: string, message?: string, named?: string, carry?: t
   const followedLine = went === null ? [] : [went.line];
   // The work's Home Location is the plan's repository, where the lead put it.
   if (written.kind === "written" || written.kind === "unchanged") planHomeHere(pd, went?.place.address ?? place.address);
+  if (carryRun.now !== null && (written.kind === "unchanged" || written.kind === "written")) {
+    const { written: put, kept, list, open } = carryRun.now;
+    const one = put.length === 1;
+    const said = [
+      ...(put.length === 0 ? [] : carry !== undefined && carry.stands.size > 0
+        ? [`The plan in ${repo} has ${namesInProse(put.map((word) => word.said))} now, as you gave ${one ? "it" : "them"}.`]
+        : [`The plan in ${repo} has ${one ? "it" : "them"} now, as you gave ${one ? "it" : "them"}.`]),
+      ...(kept.length === 0 ? [] : [`The plan in ${repo} keeps its own word on ${namesInProse(kept)}.`]),
+    ];
+    const still = carryOpenLine(repo, list, open, said.length === 0);
+    const line = [...followedLine, ...said, ...still.said];
+    return { repo, address, commit: written.commit, said: (line.length > followedLine.length ? line : [...line, `The plan in ${repo} already has everything here.`]).join(" "),
+      ...(still.step === null ? {} : { step: still.step }) };
+  }
   if (written.kind === "unchanged") {
     return { repo, address, commit: written.commit, said: [...followedLine, `The plan in ${repo} already has everything here.`].join(" ") };
   }
@@ -7297,7 +7324,6 @@ function writeSharedPlan(pd: string, message?: string, named?: string, carry?: t
         ? `The plan is shared in ${repo}${place.branch === undefined ? "" : ` on the branch ${place.branch.ref.slice("refs/heads/".length)}. ` +
           `${PLAN_BRANCH_IS(repo)} ${BRANCH_PATTERN.slice(0, -1)}`}. AI-DLC sends no notice of it: the teams hear it from you. A team whose workspace has no ` +
           `${repo} needs this address: ${address}`
-        : carried !== null ? `The plan in ${repo} has ${carriedOne ? "it" : "them"} now, as you gave ${carriedOne ? "it" : "them"}.`
         : added.length > 0 || released !== null
           ? [...(added.length > 0 ? [`The plan in ${repo} has ${namesInProse(added)} now.`] : []),
             ...(released !== null ? [`The plan in ${repo} has your answer now${stillWaitedOn(released) ? "." : `: no Unit in it waits on ${released}.`}`] : [])].join(" ")
@@ -7362,107 +7388,160 @@ function messageWayIn(pd: string, notice: string, named?: string): SharedPlan {
   } };
 }
 
+// A word of the lead's this computer has that the plan there lacks, as its own
+// command writes it; an approved text with its file.
+type CarryWord = { said: string; what: string; unit: string; put: (word: UnitWord) => UnitWord; text?: Amendment & { blob: string } };
+// A Unit's question: a real opposite (`opposite`, say which stands) or an offer
+// to write this computer's turn-down in place of the plan's.
+type CarryQuestion = { unit: string; sentence: string; opposite: boolean };
+// What the lead's carry asks for: the list's yes, and for a Unit with a
+// question, whose word stands (`--stands <unit>=here|plan`). Nothing of it is
+// remembered: each carry works it out afresh.
+export type CarryAsk = { list: boolean; stands: Map<string, "here" | "plan"> };
+
+const withoutField = (word: UnitWord, key: keyof UnitWord): UnitWord =>
+  Object.fromEntries(Object.entries(word).filter(([name]) => name !== key)) as UnitWord;
+
 // The lead's words on its Units in `mine` (this computer's copy) that the plan
 // `there` lacks, each as its own command writes it again, for the take it was
 // given for (wordForTake): a word of an older take than the plan there has is
 // no one's now. The same decision there is not missing (a turn-down or a
 // send-back in other words is offered, its words being what the builder fixes).
-// Where the plan there says the opposite, its own sentence (`otherwise`), and
-// nothing of that Unit is written: the lead's next word settles it. Where it
-// has another turn-down, an offer to write this computer's in its place
-// (`offers`), the plan as it is the default.
-function wordsNotOn(mine: PlanJson, there: PlanJson): {
-  missing: Array<{ said: string; what: string; unit: string; put: (word: UnitWord) => UnitWord; text?: Amendment & { blob: string } }>;
-  otherwise: string[];
-  offers: Array<{ unit: string; put: (word: UnitWord) => UnitWord }>;
-} {
-  const missing: ReturnType<typeof wordsNotOn>["missing"] = [];
-  const otherwise: string[] = [];
-  const offers: ReturnType<typeof wordsNotOn>["offers"] = [];
+// `missing`: the list. A question's own word from this computer (`inPlace`) is
+// written only on `=here`. A Unit with a real opposite is left: its other words
+// (`left`) are said on its sentence and written on either answer.
+function wordsNotOn(mine: PlanJson, there: PlanJson): { missing: CarryWord[]; questions: CarryQuestion[]; inPlace: CarryWord[]; left: CarryWord[] } {
+  const found: ReturnType<typeof wordsNotOn> = { missing: [], questions: [], inPlace: [], left: [] };
   for (const unit of mine.units) {
     const was = unitWordIn(mine, unit.name);
     const held = unitWordIn(there, unit.name);
     if (was.generation === undefined || (held.generation !== undefined && held.generation > was.generation)) continue;
     const now: UnitWord = held.generation === was.generation ? held : {};
     const name = unit.name;
-    const from = missing.length;
-    let opposite = false;
-    const stands = (sentence: string): void => {
-      otherwise.push(sentence);
-      opposite = true;
-    };
+    const items: CarryWord[] = [];
+    const asked: CarryQuestion[] = [];
     const fromTest = (entry?: UnitWord["turned_down"]): boolean => entry?.from === "build-and-test";
     const downThere = (entry: NonNullable<UnitWord["turned_down"]>): string =>
       fromTest(entry) ? `${name} sent back from Build and Test` : `${name} turned down in ${entry.repo}`;
     const downMine = (entry: NonNullable<UnitWord["turned_down"]>, of: string): string =>
       fromTest(entry) ? `your send-back of ${of} from Build and Test` : `your turn-down of ${of} in ${entry.repo}`;
+    const opposite = (sentence: string, word: CarryWord): void => {
+      asked.push({ unit: name, sentence, opposite: true });
+      found.inPlace.push(word);
+    };
+    const offer = (sentence: string, word: CarryWord): void => {
+      asked.push({ unit: name, sentence, opposite: false });
+      found.inPlace.push(word);
+    };
     const { signoff, turned_down: down, open_again: open } = was;
     if (signoff !== undefined && now.signoff === undefined) {
-      if (now.turned_down !== undefined) stands(`The plan there has ${downThere(now.turned_down)}, and this computer has your sign-off of it: say which stands.`);
-      else missing.push({ said: `your sign-off of ${name}`, what: `sign-off of ${name}`, unit: name, put: (word) => ({ ...word, signoff }) });
+      const signed: CarryWord = { said: `your sign-off of ${name}`, what: `sign-off of ${name}`, unit: name, put: (word) => ({ ...word, signoff }) };
+      if (now.turned_down === undefined) items.push(signed);
+      else {
+        opposite(`The plan there has ${downThere(now.turned_down)}, and this computer has your sign-off of it: say which stands.`,
+          { ...signed, put: (word) => ({ ...withoutField(word, "turned_down"), signoff }) });
+      }
     }
     if (down !== undefined && (fromTest(down) || down.repo !== "")) {
-      const held = now.turned_down;
-      const put = (word: UnitWord): UnitWord => ({ ...word, turned_down: down });
-      if (held === undefined && now.signoff !== undefined) {
-        stands(`The plan there has ${name} signed off, and this computer has ${downMine(down, "it")}: say which stands.`);
-      } else if (held === undefined) {
-        missing.push({ said: downMine(down, name), what: downMine(down, name).replace(/^your /, ""), unit: name, put });
-      } else if (fromTest(held) !== fromTest(down) || (!fromTest(down) && held.repo !== down.repo)) {
-        otherwise.push(`The plan there has ${downThere(held)}. I have ${downMine(down, "it")} as you gave it: say if you want it written there in its place.`);
-        offers.push({ unit: name, put });
-      } else if (held.words !== down.words) {
-        otherwise.push(`The plan there has ${downThere(held)} in other words. I have your ${fromTest(down) ? "send-back" : "turn-down"} of it as you gave it: ` +
-          "say if you want it written there in its place.");
-        offers.push({ unit: name, put });
+      const kept = now.turned_down;
+      const mineDown: CarryWord = { said: downMine(down, name), what: downMine(down, name).replace(/^your /, ""), unit: name,
+        put: (word) => ({ ...word, turned_down: down }) };
+      if (kept === undefined && now.signoff !== undefined) {
+        opposite(`The plan there has ${name} signed off, and this computer has ${downMine(down, "it")}: say which stands.`,
+          { ...mineDown, put: (word) => ({ ...withoutField(word, "signoff"), turned_down: down }) });
+      } else if (kept === undefined) {
+        items.push(mineDown);
+      } else if (fromTest(kept) !== fromTest(down) || (!fromTest(down) && kept.repo !== down.repo)) {
+        offer(`The plan there has ${downThere(kept)}. I have ${downMine(down, "it")} as you gave it: say if you want it written there in its place.`, mineDown);
+      } else if (kept.words !== down.words) {
+        offer(`The plan there has ${downThere(kept)} in other words. I have your ${fromTest(down) ? "send-back" : "turn-down"} of it as you gave it: ` +
+          "say if you want it written there in its place.", mineDown);
       }
     }
     for (const entry of was.said_merged ?? []) {
       if ((now.said_merged ?? []).some((kept) => kept.repo === entry.repo)) continue;
-      missing.push({ said: `your count of ${name} as merged in ${entry.repo}`, what: `count of ${name} as merged in ${entry.repo}`, unit: name,
+      items.push({ said: `your count of ${name} as merged in ${entry.repo}`, what: `count of ${name} as merged in ${entry.repo}`, unit: name,
         put: (word) => ({ ...word, said_merged: [...(word.said_merged ?? []), entry] }) });
     }
-    // An approval or a turn-down of one proposal (its input and time).
+    // An approval or a turn-down of one proposal (its input and time); the
+    // approved text of an input whose answer is a question goes with it.
+    const answered = new Set<string>();
     for (const entry of was.answers ?? []) {
       const kept = (now.answers ?? []).find((answer) => answer.input === entry.input && answer.at === entry.at);
       const how = (answer: string): string => answer === "approved" ? "approval" : "turn-down";
       const change = `${name}'s change to the ${inputName(entry.input)}`;
-      if (kept === undefined) {
-        missing.push({ said: `your ${how(entry.answer)} of ${change}`, what: `${how(entry.answer)} of ${change}`, unit: name,
-          put: (word) => ({ ...word, answers: [...(word.answers ?? []), entry] }) });
-      } else if (kept.answer !== entry.answer) {
-        stands(`The plan there has ${change} ${kept.answer === "approved" ? "approved" : "turned down"}, and this computer has your ` +
-          `${how(entry.answer)} of it: say which stands.`);
+      const given: CarryWord = { said: `your ${how(entry.answer)} of ${change}`, what: `${how(entry.answer)} of ${change}`, unit: name,
+        put: (word) => ({ ...word, answers: [...(word.answers ?? []).filter((answer) => answer.input !== entry.input || answer.at !== entry.at), entry] }) };
+      if (kept === undefined) items.push(given);
+      else if (kept.answer !== entry.answer) {
+        answered.add(entry.input);
+        opposite(`The plan there has ${change} ${kept.answer === "approved" ? "approved" : "turned down"}, and this computer has your ` +
+          `${how(entry.answer)} of it: say which stands.`, given);
       }
     }
     // An approved text goes with its file, as the lead's approval wrote it.
     for (const entry of was.amendments ?? []) {
       const kept = (now.amendments ?? []).find((text) => text.input === entry.input);
       const input = inputName(entry.input);
-      const them = input.endsWith("s") ? "them" : "it";
-      if (kept === undefined) {
-        missing.push({ said: `the ${input} as you approved ${them} for ${name}`, what: `approved ${input} for ${name}`, unit: name, text: entry,
-          put: (word) => ({ ...word, amendments: [...(word.amendments ?? []), entry] }) });
-      } else if (kept.blob !== entry.blob) {
-        stands(`The plan there has an approved text of the ${input} for ${name} that differs from the one you approved on this computer: say which stands.`);
+      const text: CarryWord = { said: `the ${input} as you approved ${input.endsWith("s") ? "them" : "it"} for ${name}`, what: `approved ${input} for ${name}`,
+        unit: name, text: entry, put: (word) => ({ ...word, amendments: [...(word.amendments ?? []).filter((given) => given.input !== entry.input), entry] }) };
+      if (kept === undefined && answered.has(entry.input)) found.inPlace.push(text);
+      else if (kept === undefined) items.push(text);
+      else if (kept.blob !== entry.blob) {
+        opposite(`The plan there has an approved text of the ${input} for ${name} that differs from the one you approved on this computer: say which stands.`, text);
       }
     }
     if (open !== undefined && now.open_again === undefined) {
-      missing.push({ said: `your opening of ${name} again`, what: `opening of ${name} again`, unit: name, put: (word) => ({ ...word, open_again: open }) });
+      items.push({ said: `your opening of ${name} again`, what: `opening of ${name} again`, unit: name, put: (word) => ({ ...word, open_again: open }) });
     }
-    if (opposite) missing.splice(from);
+    const leftHere = asked.some((question) => question.opposite);
+    (leftHere ? found.left : found.missing).push(...items);
+    // A left Unit's other words, said once on its last which-stands sentence.
+    const last = asked.findLastIndex((question) => question.opposite);
+    if (leftHere && items.length > 0) {
+      asked[last] = { ...asked[last], sentence: asked[last].sentence.replace(/: say which stands\.$/, `: say which stands, and either way I will write ` +
+        `${namesInProse(items.map((word) => word.said))} there as you gave ${items.length === 1 ? "it" : "them"}.`) };
+    }
+    found.questions.push(...asked);
   }
-  return { missing, otherwise, offers };
+  return found;
 }
 
-// The plan with the lead's words from `mine` it lacks put on, as given: their
-// own words and times, nothing retyped; an approved text with its file.
-function withWordsOf(pd: string, mine: PlanJson, onto: { plan: PlanJson; files: Record<string, string | null> }):
+// What of the carry is still open, said afresh: the list of the lead's words
+// the plan lacks, then each Unit's question, the first naming the plan's place
+// where nothing is said before it; with the step that takes the answers.
+function carryOpenLine(repo: string, list: CarryWord[], questions: CarryQuestion[], first: boolean): { said: string[]; step: string | null } {
+  const said: string[] = [];
+  if (list.length > 0) {
+    const named = list.slice(0, 10).map((word) => word.said).join(", ") + (list.length > 10 ? `, and ${list.length - 10} more` : "");
+    const one = list.length === 1;
+    said.push(`${one ? "This is" : "These are"} not on the plan in ${repo}: ${named}. I have ${one ? "it" : "them"} as you gave ${one ? "it" : "them"}: ` +
+      `say if you want ${one ? "it" : "them"} written there.`);
+  }
+  said.push(...questions.map((question, at) =>
+    at === 0 && first && said.length === 0 ? question.sentence.replace(/^The plan there /, `The plan in ${repo} `) : question.sentence));
+  if (said.length === 0) return { said, step: null };
+  // The tool writes them as kept: the reply that says yes is never their words.
+  const units = [...new Map(questions.map((question) => [question.unit, question])).values()].map((question) => {
+    const opposite = questions.some((entry) => entry.unit === question.unit && entry.opposite);
+    return opposite
+      ? `\`--stands ${question.unit}=here\` if they say this computer's word on ${question.unit} stands, \`--stands ${question.unit}=plan\` if the plan's does`
+      : `\`--stands ${question.unit}=here\` if they want this computer's word on ${question.unit} written in place of the plan's`;
+  });
+  const parts = [...(list.length > 0 ? ["`--carry-words` if they say yes to the words it lists"] : []), ...units];
+  return { said, step: "Tell the person in plain words what it reports, then end your turn. When they answer, run " +
+    `\`${aidlcInvocation()} unit share --plan\` once with what they said yes to: ${parts.join("; ")}` +
+    (units.length > 1 ? "; answers for several Units go after one --stands, joined by commas" : "") +
+    ". Then tell them in plain words what it reports." };
+}
+
+// The plan with the lead's words from `mine` the carry chose put on, as given:
+// their own words and times, nothing retyped; an approved text with its file.
+function withWordsOf(pd: string, mine: PlanJson, onto: { plan: PlanJson; files: Record<string, string | null> }, chosen: CarryWord[]):
   { plan: PlanJson; files: Record<string, string | null> } {
-  const { missing } = wordsNotOn(mine, onto.plan);
-  if (missing.length === 0) return onto;
+  if (chosen.length === 0) return onto;
   const plan: PlanJson = { ...onto.plan, units: onto.plan.units.map((unit) => {
-    const put = missing.filter((word) => word.unit === unit.name);
+    const put = chosen.filter((word) => word.unit === unit.name);
     if (put.length === 0) return unit;
     // As its own command writes it: onto the word for the same take, else a word of that take's own.
     const take = unitWordIn(mine, unit.name).generation;
@@ -7471,7 +7550,7 @@ function withWordsOf(pd: string, mine: PlanJson, onto: { plan: PlanJson; files: 
     return { ...unit, word: put.reduce((word, entry) => entry.put(word), start) as Record<string, unknown> };
   }) };
   const files = { ...onto.files };
-  for (const { text } of missing) {
+  for (const { text } of chosen) {
     const said = text === undefined ? null : amendmentText(pd, text);
     if (text === undefined || said === null) continue;
     files[`inputs/${text.input}`] = planFileText(said);
@@ -7667,22 +7746,10 @@ function movePlan(pd: string, start: PlanPlace, to: PlanPlace, message: string |
       if (read.kind === "read") followBuildsTo(pd, read.plan, from.address);
       // The one reader the yes uses: this computer's newest plan the plan there does not hold.
       const mine = planWrittenHereNotOn(pd, oid, from.id8);
-      const { missing, otherwise } = mine === null ? { missing: [], otherwise: [] } : wordsNotOn(mine, now);
+      const found = mine === null ? null : wordsNotOn(mine, now);
       const said = [...followedLines, line ?? ""].join(" ").trim();
-      if (missing.length === 0) {
-        const named = otherwise.map((sentence, at) => (at === 0 ? sentence.replace(/^The plan there /, `The plan in ${to.repo} `) : sentence));
-        return { repo: to.repo, address, commit: oid, said: [said, ...named].join(" ") };
-      }
-      const named = missing.slice(0, 10).map((word) => word.said).join(", ") + (missing.length > 10 ? `, and ${missing.length - 10} more` : "");
-      const one = missing.length === 1;
-      return {
-        repo: to.repo, address, commit: oid,
-        said: [`${said} ${one ? "This is" : "These are"} not on the plan in ${to.repo}: ${named}. I have ${one ? "it" : "them"} as you gave ` +
-          `${one ? "it" : "them"}: say if you want ${one ? "it" : "them"} written there.`, ...otherwise].join(" "),
-        // The tool writes them as kept: the reply that says yes is never their words.
-        step: "Tell the person in plain words what it reports, then end your turn. When they say yes, run " +
-          `\`${aidlcInvocation()} unit share --plan --carry-words\` and tell them in plain words what it reports.`,
-      };
+      const open = found === null ? { said: [], step: null } : carryOpenLine(to.repo, found.missing, found.questions, true);
+      return { repo: to.repo, address, commit: oid, said: [said, ...open.said].join(" "), ...(open.step === null ? {} : { step: open.step }) };
     };
     // Written there by another computer and parted from the old tip (each
     // holds what the other does not): a write on the old tip would replace the
@@ -7876,6 +7943,14 @@ function shareMain(args: string[], projectDir?: string): void {
   const parsed = parseArgs(args);
   const flags = parsed.bareFlags;
   const repoNamed = parsed.flags.repo;
+  // Each Unit's answer to its question, `<unit>=here|plan`, comma-joined.
+  const stands = new Map<string, "here" | "plan">();
+  for (const answer of parsed.flags.stands === undefined ? [] : parsed.flags.stands.split(",")) {
+    const read = /^([^=\s]+)=(here|plan)$/.exec(answer.trim());
+    if (read === null) fail(`usage: ${unitUsage("share")}`);
+    stands.set(read[1], read[2] as "here" | "plan");
+  }
+  const carry: CarryAsk | undefined = parsed.bareFlags.has("carry-words") || stands.size > 0 ? { list: parsed.bareFlags.has("carry-words"), stands } : undefined;
   if (flags.has("back")) {
     planBranchBack(pd);
     return;
@@ -7925,13 +8000,12 @@ function shareMain(args: string[], projectDir?: string): void {
     return;
   }
   if (planOnly && sharesPlanRef(pd)) {
-    sharePlanRef(pd, given, needs, repoNamed, flags.has("carry-words") ? true : undefined, flags.has("visible") ? true : undefined);
+    sharePlanRef(pd, given, needs, repoNamed, carry, flags.has("visible") ? true : undefined);
     return;
   }
   // A walking skeleton's code built here goes to main with the lead's record,
   // after the plan's own ref, so the teams' plan never waits on main.
-  const planFirst = planOnly && leadsOwnTeamWork(pd) ? writeSharedPlan(pd, undefined, repoNamed, flags.has("carry-words") ? true : undefined,
-    flags.has("visible") ? true : undefined) : null;
+  const planFirst = planOnly && leadsOwnTeamWork(pd) ? writeSharedPlan(pd, undefined, repoNamed, carry, flags.has("visible") ? true : undefined) : null;
   // Named before the commit takes them out of what is built here.
   const codeHere = planFirst === null ? null : skeletonCodeName(pd);
   if (planFirst !== null && "notShared" in planFirst) {
