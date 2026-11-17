@@ -253,6 +253,6 @@ export function newerStateStep(projectDir: string, version: string, newWork = fa
 }
 
 /** The one step to a newer AI-DLC: `update` natively, a package manager's own update, then `refresh`. */
-export function carryOnStep(install: NewerWorkInstall, update: string, refresh: string): string {
-  return `To carry on: ${install.kind === "managed" ? install.remediation : update}, then ${refresh} in this project.`;
+export function carryOnStep(install: NewerWorkInstall, update: string, refresh: string, how = ""): string {
+  return `To carry on${how}: ${install.kind === "managed" ? install.remediation : update}, then ${refresh} in this project.`;
 }

@@ -13190,13 +13190,21 @@ async function newerSetUpStep(
     AIDLC_VERSION
   }${manager ? ` from ${manager}` : ""}${unreachable ? `, and AI-DLC has no ${manager} step to name for a preview release` : ""}.`;
   // The person's own command carries on, so what they asked for is what
-  // runs after the update; a mirror they named is asked for, never printed.
-  const mirror = sameMirror(input);
-  const own = configRerunWith(input, projectDir, []);
-  const refresh = own ? `\`${own}\`${mirror}` : command(`--harness ${invokedHarnessName(tree.distribution)} --yes`);
+  // runs after the update, each command as it works when typed: a mirror
+  // they named is asked for once, never printed; a CA bundle is named in
+  // both; a plan token, made for this release's plan, is left out.
+  const named = stripVerb([...input]);
+  const ca = valueAfter(named, "--ca-bundle");
+  const mirror = named.includes("--release-base-url");
+  const both = mirror && install.kind !== "managed";
+  const own = configRerunWith(input, projectDir, [], ["--plan-token"]);
+  const refresh = own
+    ? `\`${own}\`${mirror && !both ? sameMirror(input) : ""}`
+    : command(`--harness ${invokedHarnessName(tree.distribution)} --yes`);
+  const update = `\`aidlc update --version ${version}${ca === undefined ? "" : ` --ca-bundle ${quoteCommandArgument(ca)}`}\``;
   const up = unreachable
     ? "To carry on, this computer needs that preview release. "
-    : `${carryOnStep(install, `\`aidlc update --version ${version}\`${mirror}`, refresh)} `;
+    : `${carryOnStep(install, update, refresh, both ? ", with the same --release-base-url on both" : "")} `;
   const down = `To take the project down to ${AIDLC_VERSION} instead: ` +
     `${command(`--pin ${quoteCommandArgument(AIDLC_VERSION)} --yes`)} (this pins the version for everyone on the project).`;
   let line = `Nothing changed: this ${setUp} ${up}${down}`;
@@ -13216,7 +13224,6 @@ async function newerSetUpStep(
     const answer = configPrompt(`This ${setUp} Update AI-DLC on this computer to ${release} now and carry on? [Y/n]:`);
     if (answer !== null && /^(?:|y|yes)$/i.test(answer.trim())) {
       // The release source named for the download is the one the update takes.
-      const named = stripVerb([...input]);
       await lifecycleMain([
         "update",
         "--version",

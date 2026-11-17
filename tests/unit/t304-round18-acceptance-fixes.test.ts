@@ -1947,10 +1947,24 @@ describe("config in a project a newer AI-DLC set up", () => {
     const mirrored = runCopied(project, ["config", "--download", "--release-base-url", "http://127.0.0.1:9/mirror", "--yes"], { env });
     expect(mirrored.status, mirrored.stdout + mirrored.stderr).toBe(5);
     expect(mirrored.stdout).toContain(
-      `To carry on: \`aidlc update --version ${NEWER}\` with the same --release-base-url, then ` +
-        "`aidlc config --download --yes` with the same --release-base-url in this project.",
+      `To carry on, with the same --release-base-url on both: \`aidlc update --version ${NEWER}\`, then ` +
+        "`aidlc config --download --yes` in this project.",
     );
     expect(mirrored.stdout).not.toContain("127.0.0.1:9/mirror");
+    // A CA bundle named for the download is in both commands, so each works as typed.
+    const ca = join(temp("aidlc-t304-ca-"), "ca.pem");
+    writeFileSync(ca, "not a certificate\n");
+    const bundled = runCopied(project, ["config", "--download", "--ca-bundle", ca, "--yes"], { env });
+    expect(bundled.status, bundled.stdout + bundled.stderr).toBe(5);
+    expect(bundled.stdout).toContain(
+      `To carry on: \`aidlc update --version ${NEWER} --ca-bundle ${quoteForShell(ca)}\`, then ` +
+        `\`aidlc config --download --ca-bundle ${quoteForShell(ca)} --yes\` in this project.`,
+    );
+    // A plan token is for a plan this release made: the command after the update makes its own.
+    const token = runCopied(project, ["config", "--plan-token", "stale", "--yes"], { env });
+    expect(token.status, token.stdout + token.stderr).toBe(5);
+    expect(token.stdout.trim()).toBe(nothing(["--yes"]));
+    expect(tree(project)).toEqual(before);
     // A section that refreshes is told to run itself again after the update.
     const section = runCopied(project, ["config", "project", "--mcp", "defaults", "--yes"], { env });
     expect(section.status, section.stdout + section.stderr).toBe(5);

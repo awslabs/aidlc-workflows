@@ -1116,10 +1116,7 @@ the apply fails closed.
 ### Refresh Safety
 
 Any `aidlc config` you run while work is open is done, not refused, parked
-workflows included. In a project set up with a release newer than this
-computer's, a refresh that would bring in this computer's older release files
-changes nothing and names the step instead: the update to that release, or the
-pin that takes the project down by name. A settings change (`config models`, `flags`, `runtime`,
+workflows included. A settings change (`config models`, `flags`, `runtime`,
 `providers`, and `trust`) reads the project's own files and brings in no
 release. Each prints what changed and, where one command
 puts the earlier value back, that command. A model or flag change also names
@@ -1142,6 +1139,11 @@ is done too, and says so:
 ```
   Updated. Your open work (default/add-login) carries on.
 ```
+
+One refresh is not done: in a project set up with a release newer than this
+computer's, a refresh that would bring in this computer's older release files
+changes nothing and names the step instead: the update to that release, or the
+pin, which takes the project down to this computer's release.
 
 When the new release does a stage you already finished differently and nothing
 of yours changed, your work stands and nothing asks you to redo it. If the stage
