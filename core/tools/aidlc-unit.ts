@@ -12639,6 +12639,44 @@ export function mainChangedUnder(dir: string, head: string, into: string, paths:
 // it pushed: the step after it offers to bring that branch in, once.
 export const mainMovedMark = (unit: string, head: string): string => `unit-main-moved-${unit}-${head.slice(0, 12)}`;
 
+// Puts `dir` on the Unit's `branch` as the person's own hands would, before
+// anything is committed there: an existing branch switched to with their
+// changes riding along (switchOntoUnitBranch); else a new one from
+// `integration`, fetched first (`fetch`), when their working tree allows and
+// `leavesNothing`; else, where `fromHere` lets it, from where they are. A Unit
+// branch an earlier, refused run made from the integration branch holds
+// nothing of its own yet: it is made again, as on a first push, so their
+// commits since then are never branched past. `track: false` leaves the new
+// branch with no upstream (it is pushed elsewhere). Nothing changes when git
+// refuses; `said` is git's own words.
+function startUnitBranch(
+  dir: string,
+  branch: string,
+  remote: string,
+  paths: readonly string[],
+  integration: string,
+  options: { fetch: () => void; leavesNothing: () => boolean; fromHere: boolean; track?: false },
+): { switched: boolean; said: string; exists: boolean; fromHere: boolean } {
+  const leftover = git(dir, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).ok &&
+    !git(dir, ["rev-parse", "--verify", "--quiet", `refs/remotes/${remote}/${branch}`]).ok &&
+    git(dir, ["merge-base", "--is-ancestor", `refs/heads/${branch}`, integration]).ok;
+  const exists = !leftover && git(dir, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).ok;
+  if (exists) {
+    const { ok, said } = switchOntoUnitBranch(dir, branch, [...paths]);
+    return { switched: ok, said, exists, fromHere: false };
+  }
+  const make = leftover ? "-C" : "-c";
+  options.fetch();
+  // Their own commits holding the Unit's files start where they are.
+  const committedHere = paths.length > 0 && !git(dir, ["diff", "--quiet", integration, "HEAD", "--", ...paths]).ok;
+  const fromIntegration = options.leavesNothing() && !committedHere
+    ? git(dir, ["switch", "-q", ...(options.track === false ? ["--no-track"] : []), make, branch, integration]) : null;
+  if (fromIntegration?.ok) return { switched: true, said: "", exists, fromHere: false };
+  if (!options.fromHere) return { switched: false, said: fromIntegration?.stderr ?? "", exists, fromHere: false };
+  const tried = git(dir, ["switch", "-q", make, branch]);
+  return { switched: tried.ok, said: tried.stderr, exists, fromHere: tried.ok };
+}
+
 // The person's own commits a Unit's branch made from where they were carries:
 // those on no remote. Said in the line of the run that makes the branch,
 // whether its push then goes or is refused, so they hear of them before
@@ -12723,6 +12761,10 @@ function pushUnit(args: string[], projectDir?: string): void {
   const build = unitBuildOf(state);
   if (build === null) fail("push is for a Unit's build; this work is not one.");
   const unit = build.unit;
+  if (bareFlags.has("to-fork") || flags["to-fork"] !== undefined) {
+    pushToFork(pd, args, build, unitBranchOf(state, unit));
+    return;
+  }
   const mergeMain = bareFlags.has("merge-main") || flags["merge-main"] !== undefined;
   if (mergeMain || bareFlags.has("undo-merge") || flags["undo-merge"] !== undefined) {
     mergeMainIn(pd, args, unit, unitBranchOf(state, unit), !mergeMain);
@@ -12965,35 +13007,20 @@ function pushUnit(args: string[], projectDir?: string): void {
     if (from !== branch) {
       const start = startRemoteOf(dir, remote);
       const integration = integrationOf(repo, dir, remote);
-      // A Unit branch an earlier, refused run made from the integration branch
-      // holds nothing of its own yet: it is made again, as on a first push, so
-      // their commits since then are never branched past.
-      const leftover = git(dir, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).ok &&
-        !git(dir, ["rev-parse", "--verify", "--quiet", `refs/remotes/${remote}/${branch}`]).ok &&
-        git(dir, ["merge-base", "--is-ancestor", `refs/heads/${branch}`, integration]).ok;
-      const exists = !leftover && git(dir, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).ok;
-      const make = leftover ? "-C" : "-c";
-      let switched = false;
-      let said = "";
-      if (exists) ({ ok: switched, said } = switchOntoUnitBranch(dir, branch, paths));
-      else {
-        // From the shared integration branch, fetched, when their working tree
-        // allows; the workspace itself from the branch its take read the plan
-        // from when nothing of theirs is left behind (every change on their
-        // branch is in it already). A tree that does not allow it, and their
-        // own commits holding the Unit's files, start where they are.
-        if (repo !== ".") git(dir, ["fetch", "-q", start, integration.slice(start.length + 1)]);
-        const committedHere = paths.length > 0 && !git(dir, ["diff", "--quiet", integration, "HEAD", "--", ...paths]).ok;
-        const leavesNothing = repo !== "." || (dotStart !== null && headInByContent(dir, integration) === true);
-        if (leavesNothing && !committedHere) switched = git(dir, ["switch", "-q", make, branch, integration]).ok;
-        if (!switched) {
-          const tried = git(dir, ["switch", "-q", make, branch]);
-          switched = tried.ok;
-          said = tried.stderr;
-          if (switched && (repo !== "." || dotStart !== null)) startedHere.add(repo);
-          const comesAlong = switched ? comesAlongLine(dir, name, branch, start, git(dir, ["rev-parse", "HEAD"]).stdout.trim()) : null;
-          if (comesAlong !== null) along.push(comesAlong);
-        }
+      const { switched, said, exists, fromHere } = startUnitBranch(dir, branch, remote, paths, integration, {
+        fetch: () => {
+          if (repo !== ".") git(dir, ["fetch", "-q", start, integration.slice(start.length + 1)]);
+        },
+        // The workspace itself starts from the branch its take read the plan
+        // from only when nothing of theirs is left behind (every change on
+        // their branch is in it already).
+        leavesNothing: () => repo !== "." || (dotStart !== null && headInByContent(dir, integration) === true),
+        fromHere: true,
+      });
+      if (fromHere) {
+        if (repo !== "." || dotStart !== null) startedHere.add(repo);
+        const comesAlong = comesAlongLine(dir, name, branch, start, git(dir, ["rev-parse", "HEAD"]).stdout.trim());
+        if (comesAlong !== null) along.push(comesAlong);
       }
       if (!switched) {
         fail(`Branch ${branch} could not be checked out in ${name}, so nothing was pushed.${said.trim() ? ` Git says: "${gitSaid(said)}".` : ""}` +
@@ -13345,6 +13372,90 @@ export function mainMovedRepos(pd: string, unit: string, branch: string, marked 
     const pushedTip = git(dir, ["rev-parse", "--verify", "--quiet", `refs/remotes/${remote}/${branch}^{commit}`]).stdout.trim() || head;
     return [{ repo, name: repo === "." ? "the repo" : repo, dir, remote, into, head, paths, files: mainChangedUnder(dir, pushedTip, into, paths) }];
   });
+}
+
+// The fork a contributor's clone of a Unit's repository pushes to: its one
+// remote whose address is not the one the plan has for that repository. Null
+// with none, or with several (which one is theirs is not git's to say).
+export function forkRemoteOf(dir: string, planAddress: string): string | null {
+  const others = git(dir, ["remote"]).stdout.split(/\r?\n/).map((name) => name.trim()).filter(Boolean)
+    .filter((name) => !sameGitAddress(git(dir, ["remote", "get-url", name]).stdout.trim(), planAddress));
+  return others.length === 1 ? others[0] : null;
+}
+
+// The plan's main for a Unit's repository, fetched with the person's git:
+// through the clone's remote at the plan's address, or, in a clone of the fork
+// alone, by that address, with nothing added to the clone's settings. The
+// commit to start from and its name for their lines, else git's words.
+function planMainOf(dir: string, repo: string, planAddress: string, branch: string): { start: string; named: string } | { said: string } {
+  const remote = git(dir, ["remote"]).stdout.split(/\r?\n/).map((name) => name.trim()).filter(Boolean)
+    .find((name) => sameGitAddress(git(dir, ["remote", "get-url", name]).stdout.trim(), planAddress));
+  const fetched = git(dir, ["fetch", "-q", "--no-tags", remote ?? planAddress, branch]);
+  if (!fetched.ok) return { said: fetched.stderr || fetched.stdout };
+  const start = git(dir, ["rev-parse", "--verify", "--quiet", remote === undefined ? "FETCH_HEAD^{commit}" : `refs/remotes/${remote}/${branch}^{commit}`]).stdout.trim();
+  return { start, named: remote === undefined ? `the plan's ${repo} ${branch}` : `${remote}/${branch}` };
+}
+
+// The engine mark the fork offer keeps once it is put for a Unit's build.
+export const toForkMark = (unit: string): string => `unit-to-fork-${unit}`;
+
+// `unit push --to-fork`: the person's yes to pushing the Unit's branch early to
+// their fork, in their clone of the repository that refused the take's record:
+// the branch made from the plan's main with their git and no upstream, one
+// empty commit on it where it has none of its own, then pushed with `-u` to
+// the fork, so the Unit's own push later goes there too. Only on the offer's
+// mark; an agent alone pushes nothing. The record, the plan and the result
+// are not touched; a refused push takes the empty commit back.
+function pushToFork(pd: string, args: string[], build: UnitBuild, branch: string): void {
+  const unit = build.unit;
+  if (engineAskMark(pd, toForkMark(unit)) === null) {
+    console.log(JSON.stringify({ pushed: false, unit, notice: `No push of ${unit} to a fork was offered or asked for, so nothing was pushed.` }));
+    return;
+  }
+  const home = buildsHome(pd, build);
+  const place = recordPlaceOf(pd, home, unit);
+  const copy = isGitAddress(build.homeLocation) ? copyOf(build.homeLocation, planRecordRef(idSuffix(build.homeWork))) : null;
+  const kept = copy === null ? null : planAtCopy(pd, copy, { commit: planCommitOf(pd, copy) });
+  const planned = kept?.kind === "read" ? kept.plan.repos.find((repo) => repo.name === place.repo) : undefined;
+  const dir = repoDir(pd, place.repo);
+  const fork = planned?.address && isGitRepoDir(dir) ? forkRemoteOf(dir, planned.address) : null;
+  if (planned?.address == null || fork === null) {
+    console.log(JSON.stringify({ pushed: false, unit, notice: `No push of ${unit} to a fork was offered or asked for, so nothing was pushed.` }));
+    return;
+  }
+  const name = place.repo;
+  const given = givenCommitMessage(pd, args, "push");
+  const main = planMainOf(dir, name, planned.address, planned.branch ?? "main");
+  if ("said" in main) {
+    fail(`The plan's ${planned.branch ?? "main"} for ${name} could not be fetched: git says "${gitSaid(main.said)}". Nothing was pushed. Say when to try again.`);
+  }
+  const from = git(dir, ["branch", "--show-current"]).stdout.trim();
+  const made = startUnitBranch(dir, branch, fork, [], main.start, { fetch: () => {}, leavesNothing: () => true, fromHere: false, track: false });
+  if (!made.switched) fail(`Branch ${branch} could not be made in ${name}, so nothing was pushed. Git says: "${gitSaid(made.said)}".`);
+  const moved = from === branch ? [] : [{ name, from: from || "the commit you were on" }];
+  const before = git(dir, ["rev-parse", "HEAD"]).stdout.trim();
+  // One empty commit, only where the branch has nothing of its own beyond the plan's main.
+  const empty = git(dir, ["rev-list", "--count", `${main.start}..HEAD`]).stdout.trim() === "0";
+  if (empty) {
+    const committed = git(dir, ["commit", "-q", "--allow-empty", "-F", "-"], undefined, given?.text ?? `${unit}: start`);
+    if (!committed.ok) {
+      fail(`Your hook in ${name} did not take the empty commit's message (${gitSaid(committed.stderr || committed.stdout)}), so nothing ` +
+        `was pushed. If it is the message, tell me the one to use, and I will commit with that.${whereNowLine(branch, moved)}`);
+    }
+  }
+  const pushed = git(dir, ["push", "-u", fork, branch]);
+  if (!pushed.ok) {
+    if (empty) git(dir, ["update-ref", `refs/heads/${branch}`, before, git(dir, ["rev-parse", "HEAD"]).stdout.trim()]);
+    fail(`The push of ${unit} to ${fork} in ${name} was refused: ${pushRefusal(pushed.stderr)}.` +
+      `${empty ? " The empty commit is taken back, and nothing was pushed." : " Nothing was pushed."} Say when to try again.${whereNowLine(branch, moved)}`);
+  }
+  given?.spend();
+  const words = hostLinkWords(pushed.stderr, branch);
+  console.log(JSON.stringify({ pushed: true, unit, notice: joinSaid([
+    `Pushed branch ${branch} to ${fork} in ${name}${empty ? ", with one empty commit," : ""} from ${main.named}.`,
+    words === "" ? "Open a PR in it your usual way." : hostSaysLine(null, words),
+    whereNowLine(branch, moved).trimStart(),
+  ]) }));
 }
 
 // `unit push --merge-main`: the person's yes to bringing the branch the Unit
@@ -14565,7 +14676,12 @@ export function unitBuildOwnBranch(dir: string, unitBranch: string): string | nu
   const remote = repositoryRemote(dir);
   const integration = remote === null ? null : repoIntegration(dir, remote);
   if (integration !== null && current === integration.slice(remote!.length + 1)) return null;
-  return git(dir, ["merge-base", "--is-ancestor", "HEAD", `refs/heads/${unitBranch}`]).ok ? null : current;
+  if (git(dir, ["merge-base", "--is-ancestor", "HEAD", `refs/heads/${unitBranch}`]).ok) return null;
+  // A Unit branch whose own commits change nothing yet (the fork offer's
+  // empty commit, on a main that moved since) holds no build to keep apart.
+  const own = git(dir, ["rev-list", `refs/heads/${unitBranch}`, "--not", "HEAD", `--exclude=*/${unitBranch}`, "--remotes"])
+    .stdout.split(/\r?\n/).filter(Boolean);
+  return own.length > 0 && own.every((commit) => git(dir, ["diff-tree", "--quiet", "--no-commit-id", "-r", commit]).ok) ? null : current;
 }
 
 // `own`: the paths the Unit's Code Generation wrote in this repo (a file or a
