@@ -17,7 +17,7 @@ import { basename, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { hooksHealthReadDir, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { shellSingleQuote } from "../../dist/claude/.claude/tools/aidlc-runtime-paths.ts";
-import { pastUnitStages } from "../../dist/claude/.claude/tools/aidlc-unit.ts";
+import { pastUnitStages, teamMergeSeen } from "../../dist/claude/.claude/tools/aidlc-unit.ts";
 import { pullRequestHeadRefs } from "../../dist/claude/.claude/tools/aidlc-unit-teams.ts";
 import { AIDLC_SRC, fixtureIntentId8, seededStateFile } from "../harness/fixtures.ts";
 import {
@@ -30,6 +30,7 @@ import {
   codeGenerated,
   codeGeneratedAgain,
   codeHost,
+  DEPENDENCIES,
   ENV,
   git,
   HOME_RECORD,
@@ -1660,10 +1661,15 @@ describe("at the home", () => {
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     git(home.dir, ["fetch", "-q", "origin"]);
     const fix = commitOnHost(hosts["checkout-api"], "refunds", { "src/refunds.ts": "export const refunds = 1; // reviewed\n" }, "review fix");
+    // A ref an earlier release's look kept in the code clone stays where it was.
+    const api = join(home.dir, "checkout-api");
+    const old = `refs/aidlc/home/${fixtureIntentId8(home.dir)}/unit/refunds`;
+    const main = git(api, ["rev-parse", "HEAD"]);
+    git(api, ["update-ref", old, main]);
     next(home.dir);
-    // The lead's look keeps the branch's tip in a ref of AI-DLC's own, in that repo.
-    const kept = `refs/aidlc/home/${fixtureIntentId8(home.dir)}/unit/refunds`;
-    expect(git(join(home.dir, "checkout-api"), ["rev-parse", kept])).toBe(fix);
+    // The lead's look keeps nothing of AI-DLC's in the code clone: git's own copy of the branch holds the fix.
+    expect(git(api, ["for-each-ref", "--format=%(refname) %(objectname)", "refs/aidlc/"])).toBe(`${old} ${main}`);
+    expect(git(api, ["rev-parse", "refs/remotes/origin/refunds"])).toBe(fix);
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
     mergeOnHost(hosts.billing, "refunds", "squash");
     git(hosts["checkout-api"], ["branch", "-q", "-D", "refunds"]);
@@ -1721,15 +1727,130 @@ describe("at the home", () => {
       expect(planWordAt(home, "refunds"), JSON.stringify(seen)).toMatchObject({ done: true });
       expect((seen.change_notices ?? []) as string[]).toContain("refunds is merged in checkout-api and billing. Written on the plan.");
       expect(JSON.stringify(seen), JSON.stringify(seen)).not.toContain("changing every file of refunds");
-      // Read with the lead's own git: no remote added, none of the host's refs kept here, and the head kept as
-      // the Unit branch's tip in the ref the look keeps it in.
-      const kept = `refs/aidlc/home/${fixtureIntentId8(home.dir)}/unit/refunds`;
+      // Read with the lead's own git: no remote added, and no ref kept here, the host's or AI-DLC's.
       expect(git(api, ["remote"])).toBe("origin");
       expect(git(api, ["for-each-ref", "--format=%(refname)"]).split("\n").filter((ref) => !refsBefore.split("\n").includes(ref)))
-        .toEqual([kept]);
-      expect(git(api, ["rev-parse", kept])).toBe(fix);
+        .toEqual([]);
     });
   }
+
+  // The person's own prune (fetch.prune on, or git fetch --prune) takes git's
+  // copy of a deleted branch; the host's pull request head still proves it.
+  test("a fix, a look, then a squash with the branch deleted and the person's own prune, on GitHub: merged, nothing kept, not asked", () => {
+    const { hosts, home, alice, record } = refundsTakenInClone();
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    const fix = commitOnHost(hosts["checkout-api"], "refunds", { "src/refunds.ts": "export const refunds = 1; // reviewed\n" }, "review fix");
+    next(home.dir);
+    git(hosts["checkout-api"], ["update-ref", "refs/pull/41/head", fix]);
+    squashOnHost(hosts["checkout-api"], "refunds", "Refunds API (#41)");
+    mergeOnHost(hosts.billing, "refunds", "squash");
+    const api = join(home.dir, "checkout-api");
+    git(api, ["fetch", "-q", "--prune", "origin"]);
+    expect(git(api, ["for-each-ref", "refs/remotes/origin/refunds"])).toBe("");
+    const seen = personsNext(home.dir, personsChat("t-unit-push-pruned-pr-head"), "t-unit-push-pruned-pr-head");
+    expect(planWordAt(home, "refunds"), JSON.stringify(seen)).toMatchObject({ done: true });
+    expect((seen.change_notices ?? []) as string[]).toContain("refunds is merged in checkout-api and billing. Written on the plan.");
+    expect(JSON.stringify(seen)).not.toContain("changing every file of refunds");
+    expect(git(api, ["for-each-ref", "refs/aidlc/"])).toBe("");
+  });
+
+  // A merge the lead's look proved and wrote on the plan stays proved at its
+  // later looks, with nothing kept in the code clone: here the branch and git's
+  // copy of it are gone and the host keeps no pull request head.
+  test("a repo proved merged at one look stays merged at the next after the branch and git's copy of it are gone: not asked, nothing written", () => {
+    const { hosts, home, alice, record } = refundsTakenInClone();
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    commitOnHost(hosts["checkout-api"], "refunds", { "src/refunds.ts": "export const refunds = 1; // reviewed\n" }, "review fix");
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    next(home.dir);
+    const proved = [
+      expect.objectContaining({ repo: "checkout-api", merged: true }),
+      expect.objectContaining({ repo: "billing", merged: false }),
+    ];
+    expect(planWordAt(home, "refunds")?.verdicts).toEqual(proved);
+    const ref = planRefOf(home.id8);
+    const plan = Object.values(home.hosts)[0];
+    const written = git(plan, ["rev-parse", ref]);
+    git(hosts["checkout-api"], ["branch", "-q", "-D", "refunds"]);
+    const api = join(home.dir, "checkout-api");
+    git(api, ["fetch", "-q", "--prune", "origin"]);
+    const seen = personsNext(home.dir, personsChat("t-unit-push-proved-stays"), "t-unit-push-proved-stays");
+    expect(JSON.stringify(seen), JSON.stringify(seen)).not.toContain("changing every file of refunds");
+    expect(String(seen.narration)).toContain("checkout-api merged, billing not merged yet (1 of 2 merged)");
+    expect(planWordAt(home, "refunds")?.verdicts).toEqual(proved);
+    expect(git(plan, ["rev-parse", ref])).toBe(written);
+    expect(git(api, ["for-each-ref", "refs/aidlc/"])).toBe("");
+  });
+
+  // What nothing kept costs: where the host keeps no pull request head, a fix
+  // the lead's look saw, then the squash, the branch's deletion and the
+  // person's own prune all before the next look: the board names the commit
+  // once, and the lead's word counts it.
+  test("a fix seen at a look, then a squash, the branch deleted and the person's own prune before the next: the board names the commit, the lead's word counts it", () => {
+    const { hosts, home, alice, record } = refundsTakenInClone();
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    commitOnHost(hosts["checkout-api"], "refunds", { "src/refunds.ts": "export const refunds = 1; // reviewed\n" }, "review fix");
+    next(home.dir);
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    mergeOnHost(hosts.billing, "refunds", "squash");
+    git(hosts["checkout-api"], ["branch", "-q", "-D", "refunds"]);
+    git(join(home.dir, "checkout-api"), ["fetch", "-q", "--prune", "origin"]);
+    const squash = git(hosts["checkout-api"], ["rev-parse", "--short=7", "main"]);
+    const seen = personsNext(home.dir, personsChat("t-unit-push-pruned-plain"), "t-unit-push-pruned-plain");
+    expect((seen.change_notices ?? []) as string[], JSON.stringify(seen)).toContain(
+      `checkout-api has ${squash} "refunds (squashed)" changing every file of refunds; if that is refunds merged, say so.`,
+    );
+    expect(planWordAt(home, "refunds")).not.toMatchObject({ done: true });
+    const said = run(UNIT, ["merged", "refunds", "--repo", "checkout-api", "--person-words", "yes, that squash is refunds"], home.dir);
+    expect(said.status, said.out).toBe(0);
+    expect(planWordAt(home, "refunds")).toMatchObject({ done: true });
+  });
+
+  // A repo the plan holds merged is not read again, so a remote that does not
+  // answer now says nothing about it.
+  test("a repo the plan holds merged whose remote does not answer now: no line that it could not be reached, the board still says merged", () => {
+    // No other Unit's record in billing, so only the merge check would read it.
+    const { hosts, home, alice, record } = refundsTakenInClone(undefined,
+      DEPENDENCIES.replace("repos: [billing]\n    depends_on: [refunds]", "repos: [checkout-api]\n    depends_on: [refunds]"));
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    mergeOnHost(hosts.billing, "refunds", "merge");
+    next(home.dir);
+    expect(planWordAt(home, "refunds")?.verdicts).toEqual([
+      expect.objectContaining({ repo: "checkout-api", merged: false }),
+      expect.objectContaining({ repo: "billing", merged: true }),
+    ]);
+    renameSync(hosts.billing, `${hosts.billing}-gone`);
+    const step = next(home.dir);
+    expect(String(step.narration), JSON.stringify(step)).toContain("checkout-api not merged yet, billing merged (1 of 2 merged)");
+    expect(JSON.stringify(step.change_notices ?? []), JSON.stringify(step)).not.toContain("could not be reached just now");
+  });
+
+  // A team's own look reads with its own git only: a merge on the plan does
+  // not stand in for a repository it cannot reach.
+  test("a team's own look at a result the plan holds merged in a repo it cannot reach now: not read as merged", () => {
+    const { hosts, home, alice, record } = refundsTakenInClone();
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    mergeOnHost(hosts["checkout-api"], "refunds", "merge");
+    next(home.dir);
+    const verdicts = planWordAt(home, "refunds")?.verdicts;
+    expect(verdicts).toEqual([
+      expect.objectContaining({ repo: "checkout-api", merged: true }),
+      expect.objectContaining({ repo: "billing", merged: false }),
+    ]);
+    git(join(alice, "checkout-api"), ["remote", "set-url", "origin", `${hosts["checkout-api"]}-gone`]);
+    const payload = { ...claimPayload(recordHost(home), home.id8, "refunds"), verdicts };
+    expect(teamMergeSeen(alice, payload as unknown as Parameters<typeof teamMergeSeen>[1])).toBe(null);
+  });
 
   test("the pull request a merge names, in the hosts' own references: GitHub's squash (#41), GitLab's !41 or its address", () => {
     const both = ["refs/pull/41/head", "refs/merge-requests/41/head"];
@@ -1770,7 +1891,7 @@ describe("at the home", () => {
       expect.objectContaining({ repo: "checkout-api", merged: false }),
       expect.objectContaining({ repo: "billing", merged: true }),
     ]);
-    expect(git(join(home.dir, "checkout-api"), ["for-each-ref", `refs/aidlc/home/${fixtureIntentId8(home.dir)}/unit/refunds`])).toBe("");
+    expect(git(join(home.dir, "checkout-api"), ["for-each-ref", "refs/aidlc/"])).toBe("");
   });
 
   // The team's side of case 2: its look sends the fix home, so a lead who
