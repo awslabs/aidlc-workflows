@@ -10177,8 +10177,15 @@ function plansLooked(projectDir: string, now: boolean, asked?: { address?: strin
         continue;
       }
     }
-    // A plan that moved and is not read where it went: none of its Units is offered from the copy here.
-    if (planAtCopy(projectDir, place.copy).kind === "moved") continue;
+    // A plan that moved, at a look of the chat that fetched nothing: read where
+    // its note says it went, from the copy the chat's first look fetched there,
+    // as that look followed it. Not read there, none of its Units is offered.
+    const atCopy = planAtCopy(projectDir, place.copy);
+    if (atCopy.kind === "moved") {
+      const went = atCopy.pointer.moved_to.address;
+      if (planAtCopy(projectDir, copyOf(went, place.ref)).kind !== "read") continue;
+      place = { ...place, address: went, copy: copyOf(went, place.ref) };
+    }
     const read = planAt(projectDir, place);
     const unread = refreshed?.unreached ?? [];
     const atPlan = (entry: { address: string }): boolean => sameGitAddress(entry.address, place.address);

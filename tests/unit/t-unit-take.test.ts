@@ -613,25 +613,32 @@ describe("the lead who says so in a clone that did not make the plan", () => {
     expect(JSON.stringify(next(laptop, personsChat(chat)))).not.toContain("Taking a Unit starts it as your team's own piece of work here");
   });
 
-  test("the plan moved after this clone was made: the second words in one chat name the lead's work in its own clause, never an empty list", () => {
+  test("the plan moved after this clone was made: the second words in one chat are read against the Units offer where the plan is now", () => {
     const { laptop } = leadsSecondClone(true);
     const chat = "t-unit-take-i-lead-moved";
     says(laptop, chat, "where do things stand?");
     const text = String(says(laptop, chat, I_LEAD).json?.message);
-    expect(text).toStartWith(`This clone has the lead's work (${HOME}), built by teams; the work itself is not picked here. If they say ${LEAD}, run \``);
-    expect(text).not.toContain("()");
+    expect(text).toContain("The Units offer says: fixture is shared in web");
+    expect(text).toContain(`If they say ${LEAD}, run \``);
     liftAsHanded(laptop, chat, text);
   });
 
-  test("the work selected and the plan moved: the selected work's words carry the sentence, with nothing to switch", () => {
-    const { laptop } = leadsSecondClone(true);
-    const chat = "t-unit-take-i-lead-selected";
-    expect(run(UTILITY, ["intent", "switch", HOME], laptop, personsChat(chat)).status).toBe(0);
-    says(laptop, chat, "where do things stand?");
-    const text = String(says(laptop, chat, I_LEAD).json?.message);
-    expect(text).toContain(`If they say ${LEAD}, run \``);
-    expect(text).not.toContain("intent switch");
-    liftAsHanded(laptop, chat, text);
+  test("a teammate's clone made before the plan moved: their second words in one chat still get the Unit they ask for, from where the plan is now", () => {
+    const { home, plan } = leadsSecondClone(true);
+    const kai = cloneOf(home.remote, "kai");
+    const chat = "t-unit-take-teammate-moved";
+    expect(says(kai, chat, "what is ready for us?").json?.ask_type).toBe("unit-take");
+    const text = String(says(kai, chat, "we will take refunds").json?.message);
+    expect(text).toContain("The Units offer says: fixture is shared in web");
+    expect(text).toContain(`take refunds --plan ${plan.id8} --from ${shellSingleQuote(plan.hosts.web)}`);
+  });
+
+  test("with nothing to offer (the plan gone from its repository), their words name the lead's work in its own clause, never an empty list", () => {
+    const { laptop, plan } = leadsSecondClone(false);
+    git(plan.hosts.app, ["update-ref", "-d", planRefOf(plan.id8)]);
+    const text = String(says(laptop, "t-unit-take-i-lead-plan-gone", I_LEAD).json?.message);
+    expect(text).toStartWith(`This clone has the lead's work (${HOME}), built by teams; the work itself is not picked here. If they say ${LEAD}, run \``);
+    expect(text).not.toContain("()");
   });
 
   test("their word that they do not lead this work here takes it back: this clone's newest row decides, after the lead's walk went on there", () => {
