@@ -7021,6 +7021,8 @@ function writeSharedPlan(pd: string, message?: string, named?: string): SharedPl
     return { repo, address, commit: written.commit, said: [...followedLine, `The plan in ${repo} already has everything here.`].join(" ") };
   }
   if (written.kind === "written") {
+    // A Unit of the plan as written that still lists `unit` in what it waits on.
+    const stillWaitedOn = (unit: string): boolean => keptPlan(pd, place.id8)?.plan.units.some((entry) => entry.waits_on.includes(unit)) ?? false;
     const said = written.underNote
       ? `The plan was no longer in ${repo}, so I shared it again, with what was decided on each Unit as the plan had it when it moved.`
       : written.regained
@@ -7036,7 +7038,7 @@ function writeSharedPlan(pd: string, message?: string, named?: string): SharedPl
           `${repo} needs this address: ${address}`
         : added.length > 0 || released !== null
           ? [...(added.length > 0 ? [`The plan in ${repo} has ${namesInProse(added)} now.`] : []),
-            ...(released !== null ? [`The plan in ${repo} has your answer now: no Unit in it waits on ${released}.`] : [])].join(" ")
+            ...(released !== null ? [`The plan in ${repo} has your answer now${stillWaitedOn(released) ? "." : `: no Unit in it waits on ${released}.`}`] : [])].join(" ")
           : `The plan is shared in ${repo}.`;
     const told = written.back === undefined ? said : `${said} ${planBackLine(repo, written.back)}`;
     return { repo, address, commit: written.commit, said: [...followedLine, told].join(" ") };

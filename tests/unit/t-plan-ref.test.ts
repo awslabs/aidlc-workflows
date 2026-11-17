@@ -1537,8 +1537,8 @@ describe("at the lead's own work whose plan is its own ref, the lines that named
     ((step.change_notices ?? []) as string[]).filter((line) => line.includes("thin slice first"));
   // The plan shared with a thin slice first, then the lead's answer here turned to none: the plan still holds every
   // other Unit behind the first.
-  function heldBack(): { home: PlanHome; skeleton: string } {
-    const home = makePlanHome({ state: homeState().replace("- **Skeleton Stance**: off", "- **Skeleton Stance**: on") });
+  function heldBack(dependencies?: string): { home: PlanHome; skeleton: string } {
+    const home = makePlanHome({ state: homeState().replace("- **Skeleton Stance**: off", "- **Skeleton Stance**: on"), ...(dependencies === undefined ? {} : { dependencies }) });
     const skeleton = String(planAt(home.hosts["checkout-api"], planRefOf(home.id8)).skeleton ?? "");
     expect(skeleton).not.toBe("");
     const state = seededStateFile(home.dir);
@@ -1557,6 +1557,15 @@ describe("at the lead's own work whose plan is its own ref, the lines that named
     expect(share(home.dir).json?.notice).toBe(`The plan in checkout-api has your answer now: no Unit in it waits on ${skeleton}.`);
     expect(planAt(home.hosts["checkout-api"], planRefOf(home.id8)).skeleton).toBeNull();
     expect(said(next(home.dir, chat("lead-chat-2")))).toEqual([]);
+  });
+
+  test("after the yes, where another Unit of the plan still waits on that first Unit, the line says only that the answer is on the plan", () => {
+    // The usual shape: the thin slice is built from the Unit another depends on.
+    const { home, skeleton } = heldBack(DEPENDENCIES.replace("depends_on: [refunds]", "depends_on: [checkout-ui]"));
+    expect(skeleton).toBe("checkout-ui");
+    expect(said(next(home.dir, chat("lead-chat")))).toHaveLength(1);
+    expect(share(home.dir).json?.notice).toBe("The plan in checkout-api has your answer now.");
+    expect(planAt(home.hosts["checkout-api"], planRefOf(home.id8)).skeleton).toBeNull();
   });
 
   test("silent where the plan agrees with the answer here", () => {
