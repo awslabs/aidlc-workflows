@@ -518,17 +518,19 @@ describe("the plan on a branch people can open, on the lead's own words (--visib
     expect(has(host, `refs/heads/${name(home.id8)}`)).toBe(true);
   });
 
-  test("a branch rule: refused at a first share with the way on, and on a shared plan it stays where it was", () => {
+  test("a branch rule: refused at a first share with the message way and another repository, and on a shared plan it stays where it was", () => {
     const first = makePlanHome({ share: false });
     refuse(first.hosts["checkout-api"], ["refs/heads/aidlc/"]);
     const refused = run(UNIT, VISIBLE, first.dir);
-    expect(String(refused.json?.notice), refused.out).toMatch(/^checkout-api did not take the plan's branch: .*\. If it is the commit message, tell me the one to use\. The plan is not shared there yet; I can share it there out of the branch list instead: say if you want that\.$/);
+    expect(String(refused.json?.notice), refused.out).toMatch(/^checkout-api did not take the plan's branch: .*\. If it is the commit message, tell me the one to use; or name another repository the teams can read and I will share it there\.$/);
     expect(String(refused.json?.step)).toContain("unit share --plan --visible --commit-message-file ");
+    expect(String(refused.json?.step)).not.toMatch(/unit share --plan`/);
     const shared = makePlanHome();
     refuse(shared.hosts["checkout-api"], ["refs/heads/aidlc/"]);
     const stays = run(UNIT, VISIBLE, shared.dir);
     expect(stays.status).not.toBe(0);
-    expect(String(stays.json?.error)).toMatch(/^checkout-api did not take the plan's branch: .*\. If it is the commit message, tell me the one to use\. The plan stays where it was in checkout-api\.$/);
+    expect(String(stays.json?.error)).toMatch(/^checkout-api did not take the plan's branch: .*\. The plan stays where it was in checkout-api\.$/);
+    expect(String(stays.json?.error)).not.toContain("commit message");
     expect(git(shared.hosts["checkout-api"], ["rev-parse", planRefOf(shared.id8)])).toBe(shared.plan!);
   });
 

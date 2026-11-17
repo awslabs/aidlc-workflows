@@ -7322,11 +7322,11 @@ function writeSharedPlan(pd: string, message?: string, named?: string, carry?: t
   if (written.byRule && message === undefined && place.branch !== undefined) {
     const file = commitMessageFile(pd, "share", "plan");
     return { notShared: {
-      notice: `${repo} did not take the plan's branch: ${written.words}. If it is the commit message, tell me the one to use. The plan is not shared ` +
-        "there yet; I can share it there out of the branch list instead: say if you want that.",
+      notice: `${repo} did not take the plan's branch: ${written.words}. If it is the commit message, tell me the one to use; or name another ` +
+        "repository the teams can read and I will share it there.",
       step: "Tell the person in plain words what it reports, then end your turn. When they give the commit message, write it to " +
-        `${file} with your file tool, exactly as they gave it, then run \`${aidlcInvocation()} unit share --plan --visible --commit-message-file ${file}\`; ` +
-        `when they want it out of the branch list instead, run \`${aidlcInvocation()} unit share --plan\`. Tell them in plain words what it reports.`,
+        `${file} with your file tool, exactly as they gave it, then run \`${aidlcInvocation()} unit share --plan --visible --commit-message-file ${file}\` ` +
+        "and tell them in plain words what it reports.",
     } };
   }
   if (written.byRule && message === undefined) {
@@ -10065,9 +10065,9 @@ function planToBranch(pd: string, place: PlanPlace, tip: string): SharedPlan {
       const words = maskUserinfo(pushRefusal(made.stderr));
       const inTheWay = nameInTheWay(made.stderr);
       if (inTheWay !== null) fail(`${place.repo} has a branch in the way of the plan's branch (git says "${maskUserinfo(inTheWay)}"). ${stays}`);
-      if (refusedByHostRule(made.stderr)) fail(`${place.repo} did not take the plan's branch: ${words}. If it is the commit message, tell me the one to use. ${stays}`);
-      // git ends a push with one fatal exit whether the host was not reached or refused it: the read after it tells.
-      if (lookAtPlan(pd, place).unreached === undefined) fail(`${place.repo} did not take the plan's branch: ${words}. ${stays}`);
+      // No commit is written here, so no message is asked for. git ends a push with one fatal exit whether the
+      // host was not reached or refused it: the read after it tells.
+      if (refusedByHostRule(made.stderr) || lookAtPlan(pd, place).unreached === undefined) fail(`${place.repo} did not take the plan's branch: ${words}. ${stays}`);
       fail(`${place.repo} could not be reached, so ${stays.charAt(0).toLowerCase()}${stays.slice(1, -1)}: git says "${words}". Say when to try again.`);
     }
     // The ref left behind holds the same commit, so the look reads the plan from its branch.
