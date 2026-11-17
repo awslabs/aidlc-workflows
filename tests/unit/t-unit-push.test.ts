@@ -3283,6 +3283,57 @@ describe("a Unit on the workspace's own repository", () => {
   const committed = (host: string, rev: string): string[] =>
     git(host, ["diff-tree", "-r", "--no-commit-id", "--name-only", rev]).split("\n").filter(Boolean);
 
+  // Main moved under a Unit built here: the lead's own commit of the Unit's file.
+  function mainMovedHere() {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    const record = builtHere(alice, "refunds", "refunds.ts");
+    mkdirSync(join(home.dir, "src"), { recursive: true });
+    leadCommits(home, "main", "src/refunds.ts");
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    return { home, alice, record };
+  }
+
+  test("main moved under a Unit built here: the offer names the repo, a clash waits with the build's record untouched, and the undo puts it back", () => {
+    const { alice, record } = mainMovedHere();
+    const ask = next(alice);
+    expect(ask.ask_type, JSON.stringify(ask).slice(0, 500)).toBe("unit-main-moved");
+    expect(ask.question).toBe("origin/main in the repo has a change to src/refunds.ts that refunds's branch does not have, and refunds " +
+      "changes that file too, so its pull request may show a clash. Do you want me to bring origin/main into refunds now? I'd merge it " +
+      "with your own git and push refunds again.");
+    const state = readFileSync(join(record, "aidlc-state.md"), "utf-8");
+    const yes = run(UNIT, ["push", "--merge-main"], alice);
+    expect(String(yes.json?.error)).toStartWith("origin/main and refunds both change src/refunds.ts in the repo in ways git cannot put together");
+    expect(readFileSync(join(record, "aidlc-state.md"), "utf-8")).toBe(state);
+    const undone = run(UNIT, ["push", "--undo-merge"], alice);
+    expect(String(undone.json?.notice)).toBe("I undid the merge of origin/main into refunds in the repo; refunds is as it was there, and nothing was pushed.");
+    expect(readFileSync(join(record, "aidlc-state.md"), "utf-8")).toBe(state);
+  });
+
+  test("a file of AI-DLC's record that main changes, with a change here not committed: said as what it is, nothing merged", () => {
+    const team = join("aidlc", "spaces", "default", "memory", "team.md");
+    const { home, alice } = mainMovedHere();
+    writeFileSync(join(home.dir, team), `${readFileSync(join(home.dir, team), "utf-8")}\nA lead's rule.\n`);
+    git(home.dir, ["commit", "-q", "-am", "lead: a rule"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    next(alice);
+    writeFileSync(join(alice, team), `${readFileSync(join(alice, team), "utf-8")}\nA learning kept here.\n`);
+    const said = run(UNIT, ["push", "--merge-main"], alice);
+    expect(String(said.json?.error)).toStartWith("aidlc/spaces/default/memory/team.md, a file of AI-DLC's record in the repo, has a change " +
+      "here that is not committed, and origin/main changes it too, so nothing was merged or pushed.");
+    expect(readFileSync(join(alice, team), "utf-8")).toContain("A learning kept here.");
+  });
+
+  test("a Unit built here whose branch starts from the plan's branch is not offered a merge of main", () => {
+    const home = oneRepoTeams();
+    const alice = cloneOf(home.remote, "alice");
+    builtHere(alice, "refunds", "refunds.ts");
+    leadCommits(home, "main", "LEAD-NOTES.md");
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    expect(next(alice).ask_type ?? null).not.toBe("unit-main-moved");
+  });
+
   test("the replace of a Unit's branch here leases on its code and the one record commit AI-DLC put on it", () => {
     const home = oneRepoTeams();
     const alice = cloneOf(home.remote, "alice");

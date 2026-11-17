@@ -10542,10 +10542,10 @@ function unitMainMovedAsk(projectDir: string, stateContent: string): AskDirectiv
   const one = due.length === 1 ? due[0] : null;
   const many = one === null || one.files.length > 1;
   const question = one !== null
-    ? `${one.into} in ${one.repo} has a change to ${files(one.files)} that ${unit}'s branch does not have, and ${unit} changes ` +
+    ? `${one.into} in ${one.name} has a change to ${files(one.files)} that ${unit}'s branch does not have, and ${unit} changes ` +
       `${many ? "those files" : "that file"} too, so its pull request may show a clash. Do you want me to bring ${one.into} into ` +
       `${unit} now? I'd merge it with your own git and push ${unit} again.`
-    : `${due.map((repo, at) => `${repo.into} in ${repo.repo} ${at === 0 ? "has a change to" : "one to"} ${files(repo.files)}`).join(", and ")}, ` +
+    : `${due.map((repo, at) => `${repo.into} in ${repo.name} ${at === 0 ? "has a change to" : "one to"} ${files(repo.files)}`).join(", and ")}, ` +
       `that ${unit}'s branches do not have, and ${unit} changes those files too, so its pull requests may show a clash. Do you want ` +
       `me to bring them into ${unit} now? I'd merge each with your own git and push ${unit} again.`;
   const named = intos.length === 1 ? intos[0] : "them";

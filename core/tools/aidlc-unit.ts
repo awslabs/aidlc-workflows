@@ -11772,19 +11772,19 @@ function startRemoteOf(dir: string, remote: string): string {
 // fetched again when it is a remote's branch (a lead read by address keeps the
 // take's copy), so the branch, its base and the lead's merge check read one
 // branch, and a fork's clone starts from the lead's. Null when it is not here.
-function takeIntegrationRef(dir: string, claim: UnitClaimView | null): string | null {
+function takeIntegrationRef(dir: string, claim: UnitClaimView | null, fetch = true): string | null {
   const ref = claim?.payload.integration_ref ?? "";
   // A take from the plan read no branch of this repository (planBranchStart).
   if (!/^refs\/(?:remotes|heads)\//.test(ref)) return null;
   const tracking = /^refs\/remotes\/([^/]+)\/(.+)$/.exec(ref);
-  if (tracking !== null) git(dir, ["fetch", "-q", tracking[1], tracking[2]]);
+  if (tracking !== null && fetch) git(dir, ["fetch", "-q", tracking[1], tracking[2]]);
   return ref !== "" && git(dir, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]).ok ? ref : null;
 }
 
 // Where a Unit's branch on the workspace's own repository starts for a take
 // from the plan: the branch the plan names for this repository, fetched. Null
 // when the plan names none here or it cannot be read.
-function planBranchStart(pd: string, build: UnitBuild): string | null {
+function planBranchStart(pd: string, build: UnitBuild, fetch = true): string | null {
   const own = workspaceHomeLocation(pd);
   const remote = repositoryRemote(pd);
   if (!isGitAddress(build.homeLocation) || own === null || own === "local" || remote === null) return null;
@@ -11792,7 +11792,7 @@ function planBranchStart(pd: string, build: UnitBuild): string | null {
   const read = planAtCopy(pd, copy, { commit: planCommitOf(pd, copy) });
   const branch = read.kind === "read" ? read.plan.repos.find((repo) => repo.address !== null && sameGitAddress(repo.address, own))?.branch : null;
   if (!branch) return null;
-  git(pd, ["fetch", "-q", remote, branch]);
+  if (fetch) git(pd, ["fetch", "-q", remote, branch]);
   const ref = `refs/remotes/${remote}/${branch}`;
   return git(pd, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]).ok ? ref : null;
 }
@@ -12196,7 +12196,7 @@ function pushUnit(args: string[], projectDir?: string): void {
           const tried = git(dir, ["switch", "-q", make, branch]);
           switched = tried.ok;
           said = tried.stderr;
-          if (switched && repo !== ".") startedHere.add(repo);
+          if (switched && (repo !== "." || dotStart !== null)) startedHere.add(repo);
           const comesAlong = switched ? comesAlongLine(dir, name, branch, start, git(dir, ["rev-parse", "HEAD"]).stdout.trim()) : null;
           if (comesAlong !== null) along.push(comesAlong);
         }
@@ -12518,18 +12518,27 @@ function onlyOnLastPush(dir: string, lease: string, tip: string, into: string, o
 // Unit's own files there that it changed and the pushed branch lacks (none
 // once that branch has it).
 export function mainMovedRepos(pd: string, unit: string, branch: string, marked = true):
-  Array<{ repo: string; dir: string; remote: string; into: string; head: string; paths: string[]; files: string[] }> {
+  Array<{ repo: string; name: string; dir: string; remote: string; into: string; head: string; paths: string[]; files: string[] }> {
   const manifest = readUnitSourceManifest(pd, "code-generation", unit);
   const targets = manifest.ok ? unitWriteTargets(pd, manifest.manifest.writes) : new Map<string, { dir: string; paths: string[] }>();
+  // The workspace's own repository starts from the branch its take or its plan names, read as the push read it, unfetched.
+  const ownInto = (): string | null => {
+    const build = unitBuildOf(readStateFile(pd));
+    if (build === null) return null;
+    const home = buildsHome(pd, build);
+    return takeIntegrationRef(pd, recordCopied(pd, recordPlaceOf(pd, home, unit), recordWork(home), unit), false) ?? planBranchStart(pd, build, false);
+  };
   return [...lastPushedHeads(pd, unit, branch)].flatMap(([repo, head]) => {
-    const dir = targets.get(repo)?.dir ?? repoDir(pd, repo);
-    if (repo === "." || (marked && engineAskMark(pd, mainMovedMark(unit, head)) === null) || !isGitRepoDir(dir)) return [];
+    const dir = targets.get(repo)?.dir ?? (repo === "." ? pd : repoDir(pd, repo));
+    if ((marked && engineAskMark(pd, mainMovedMark(unit, head)) === null) || !isGitRepoDir(dir)) return [];
     const remote = pushRemoteOf(dir, branch);
     if (typeof remote !== "string") return [];
-    const into = unitBranchInto(dir, remote);
+    const own = repo === "." ? ownInto() : null;
+    if (repo === "." && own === null) return [];
+    const into = own === null ? unitBranchInto(dir, remote) : own.replace(/^refs\/(?:remotes|heads)\//, "");
     const paths = targets.get(repo)?.paths ?? [];
     const pushedTip = git(dir, ["rev-parse", "--verify", "--quiet", `refs/remotes/${remote}/${branch}^{commit}`]).stdout.trim() || head;
-    return [{ repo, dir, remote, into, head, paths, files: mainChangedUnder(dir, pushedTip, into, paths) }];
+    return [{ repo, name: repo === "." ? "the repo" : repo, dir, remote, into, head, paths, files: mainChangedUnder(dir, pushedTip, into, paths) }];
   });
 }
 
@@ -12542,7 +12551,7 @@ export function mainMovedRepos(pd: string, unit: string, branch: string, marked 
 // or written in its audit. `undo` takes a merge of it waiting there back out.
 function mergeMainIn(pd: string, args: string[], unit: string, branch: string, undo: boolean): void {
   const given = undo ? null : givenCommitMessage(pd, args, "push");
-  let repos = mainMovedRepos(pd, unit, branch, !undo).map((entry) => ({ ...entry, name: entry.repo }));
+  let repos = mainMovedRepos(pd, unit, branch, !undo);
   // No offer behind the yes: the person's own words lift the offer's mark,
   // the turn the hook recorded read as the lead's verbs read theirs and used
   // once, its row naming it; an agent with no such turn merges nothing.
@@ -12551,7 +12560,7 @@ function mergeMainIn(pd: string, args: string[], unit: string, branch: string, u
     const id = asked?.fields["Message Id"];
     const used = id !== undefined && readAuditShardEvents(pd).some((row) => row.event === "QUESTION_ANSWERED" &&
       auditBlockField(row.block, QUESTION_TYPE_FIELD) === "unit-main-moved" && auditBlockField(row.block, "Message Id") === id);
-    repos = id === undefined || used ? [] : mainMovedRepos(pd, unit, branch, false).map((entry) => ({ ...entry, name: entry.repo }));
+    repos = id === undefined || used ? [] : mainMovedRepos(pd, unit, branch, false);
     if (repos.length > 0) {
       appendAuditEntry("QUESTION_ANSWERED", {
         Question: `Bring ${joinNames([...new Set(repos.map((entry) => entry.into))])} into ${unit}`, Answer: "Bring it in",
@@ -12608,13 +12617,22 @@ function mergeMainIn(pd: string, args: string[], unit: string, branch: string, u
       continue;
     }
     const mergeChanges = new Set(git(dir, ["diff", "-z", "--name-only", `${tip}...${into}`]).stdout.split("\0").filter(Boolean));
-    const ownChanged = git(dir, ["diff", "-z", "--name-only", "HEAD"]).stdout.split("\0").filter(Boolean);
+    // On the workspace's own repository the build's own record changes at every step and rides on its own commit.
+    const buildOwn = entry.repo === "." ? buildRecordPaths(pd) : [];
+    const ownChanged = git(dir, ["diff", "-z", "--name-only", "HEAD"]).stdout.split("\0").filter(Boolean)
+      .filter((path) => !buildOwn.some((own) => path === own || path.startsWith(`${own}/`)));
     const ownUnit = ownChanged.find((path) => entry.paths.some((own) => path === own || (own.endsWith("/") && path.startsWith(own))));
     if (ownUnit !== undefined) {
       stop(`${unit}'s ${ownUnit} in ${name} has a change that is not committed, so nothing was merged or pushed. Once it is pushed with ` +
         `${unit}, or put aside, I can bring ${into} in.`);
     }
     const inTheWay = ownChanged.find((path) => mergeChanges.has(path));
+    const recordFile = entry.repo !== "." ? undefined : ownChanged.find((path) => mergeChanges.has(path) &&
+      recordPaths(dir).some((own) => path === own || (own.endsWith("/") && path.startsWith(own))));
+    if (recordFile !== undefined) {
+      stop(`${recordFile}, a file of AI-DLC's record in ${name}, has a change here that is not committed, and ${into} changes it too, ` +
+        `so nothing was merged or pushed. Once it is committed on main or put aside, I can bring ${into} in.`);
+    }
     if (inTheWay !== undefined) {
       stop(`Your change to ${inTheWay} in ${name} is in a file ${into} changes, so nothing was merged or pushed. Once it is committed ` +
         `or put aside, I can bring ${into} in.`);
