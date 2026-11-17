@@ -13142,9 +13142,9 @@ async function gatherConfigOutput(
 }
 
 // The release a newer AI-DLC set up the tree a run refreshes with (the named
-// harness's, or the only one), on a native or package manager's install with
-// no pin and no source named. A copied project runs its tree's own tool, whose
-// refresh fetches that release.
+// harness's, the one a named harness switches in place, or the only one), on a
+// native or package manager's install with no pin and no source named. A copied
+// project runs its tree's own tool, whose refresh fetches that release.
 function newerSetUpOf(
   projectDir: string,
   requested: string | undefined,
@@ -13152,7 +13152,12 @@ function newerSetUpOf(
 ): { tree: ProjectHarness; version: string } | undefined {
   if (aidlcInvocation() !== "aidlc" || from || pathPresent(join(projectDir, ".aidlc-version"))) return undefined;
   const trees = discoverProjectHarnesses(projectDir);
-  const tree = requested ? trees.find((candidate) => candidate.distribution === requested) : trees.length === 1 ? trees[0] : undefined;
+  const tree = requested
+    ? trees.find((candidate) => candidate.distribution === requested) ??
+      trees.find((candidate) => candidate.harnessDir === KIRO_SWITCH_DIR && switchesInPlace(candidate.distribution, requested))
+    : trees.length === 1
+    ? trees[0]
+    : undefined;
   const version = tree?.frameworkVersion;
   return tree && version !== undefined && VERSION_ID.test(version) && compareVersions(AIDLC_VERSION, version) < 0
     ? { tree, version }
@@ -13533,6 +13538,12 @@ export async function main(
     );
   if (firstRunWizard && await runFirstRunWizard(projectDir)) return;
   const newerSetUp = newerSetUpOf(projectDir, requestedHarness, from);
+  // A switch in place writes the older release over that tree: it stops
+  // before the switch is asked about or planned.
+  if (newerSetUp && !section && newerSetUp.tree.distribution !== requestedHarness && requestedHarness !== undefined) {
+    await newerSetUpStep(projectDir, newerSetUp.tree, newerSetUp.version, input, options, argv.includes("--dry-run"), false);
+    return;
+  }
   const existingWalk = !section &&
     !newerSetUp &&
     configInputIsTty() &&

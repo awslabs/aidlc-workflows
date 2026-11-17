@@ -2051,6 +2051,40 @@ describe("config in a project a newer AI-DLC set up", () => {
     180_000,
   );
 
+  // `--harness kiro` on a Kiro CLI (V2) tree switches .kiro to Kiro in place:
+  // the tree a newer release set up is read where the switch would write.
+  test("a switch in place from a tree a newer release set up changes nothing", () => {
+    const root = temp("aidlc-t304-newer-switch-machine-");
+    const env = { AIDLC_INSTALL_ROOT: join(root, "share", "aidlc"), AIDLC_BIN_DIR: join(root, "bin"), AIDLC_RUNTIME_ROOT: DIST_RELEASE };
+    const project = temp("aidlc-t304-newer-switch-");
+    mkdirSync(join(project, ".git"));
+    cpSync(join(DIST_RELEASE, "kiro"), project, { recursive: true });
+    const source = temp("aidlc-t304-newer-switch-source-");
+    cpSync(join(DIST_RELEASE, "kiro"), source, { recursive: true });
+    const stampPath = join(source, ".kiro", "tools", "data", "aidlc-stamp.json");
+    writeFileSync(stampPath, `${JSON.stringify({ ...JSON.parse(readFileSync(stampPath, "utf-8")), frameworkVersion: NEWER }, null, 2)}\n`);
+    const setUp = runCopied(project, ["config", "--from", source, "--force", "--yes"], { env, harnessDir: ".kiro" });
+    expect(setUp.status, setUp.stdout + setUp.stderr).toBe(0);
+    const before = tree(project);
+    const switched = runCopied(project, ["config", "--harness", "kiro", "--yes"], { env, harnessDir: ".kiro" });
+    expect(switched.status, switched.stdout + switched.stderr).toBe(5);
+    expect(switched.stdout.trim()).toBe(
+      `Nothing changed: this project was set up with AI-DLC ${NEWER}, and this computer is on ${AIDLC_VERSION}. ` +
+        `To carry on: \`aidlc update --version ${NEWER}\`, then \`aidlc config --harness kiro --yes\` in this project. ${down}`,
+    );
+    expect(tree(project)).toEqual(before);
+    // At a terminal the switch's own question is not asked first.
+    const asked = runCopied(project, ["config", "--harness", "kiro"], {
+      env: { ...env, AIDLC_TEST_CONFIG_TTY: "1" },
+      harnessDir: ".kiro",
+      input: "n\n",
+    });
+    expect(asked.status, asked.stdout + asked.stderr).toBe(5);
+    expect(asked.stdout).not.toContain("in place?");
+    expect(asked.stdout).toContain(`Update AI-DLC on this computer to ${NEWER} now and carry on? [Y/n]:`);
+    expect(tree(project)).toEqual(before);
+  }, 180_000);
+
   // Kiro CLI (V2) is the harness whose id (kiro) and typed name (kiro-v2) differ:
   // the newer release reads the name the person typed.
   test.skipIf(process.platform === "win32")("the hand-off on yes carries the harness name as the person typed it", async () => {

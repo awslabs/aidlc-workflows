@@ -489,7 +489,7 @@ interactive wizard.
 | `--from <dir-or-tgz>` | Use local release files instead of an installed runtime: `aidlc-copy-runtime-X.Y.Z.tar.gz` (checked against a `.sha256` beside it), its extracted `runtime/` folder, or one projection directory or archive |
 | `--download` | Fetch and verify the release the project needs when this machine lacks it, then finish the command; applying a dry run's plan token needs it again |
 | `--mcp defaults\|none` | Add or omit Claude's optional shipped MCP entries |
-| `--dry-run` | Calculate the complete plan without creating the target directory or changing bytes |
+| `--dry-run` | Calculate the complete plan without creating the target directory or changing bytes; in a project set up with a release newer than this computer's, it plans nothing and names the update and the pin instead |
 | `--plan-token <token>` | Apply only the exact plan approved from a JSON dry run |
 | `--show` | Show settings without changing anything: with no section, every section in turn (`aidlc config --show`; `--json` prints one object keyed by section, each value what that section's `--show --json` prints); with a section, that section alone |
 | `--force` | Replace locally modified framework-owned files and managed blocks where that policy permits |
@@ -1116,7 +1116,10 @@ the apply fails closed.
 ### Refresh Safety
 
 Any `aidlc config` you run while work is open is done, not refused, parked
-workflows included. A settings change (`config models`, `flags`, `runtime`,
+workflows included. In a project set up with a release newer than this
+computer's, a refresh that would bring in this computer's older release files
+changes nothing and names the step instead: the update to that release, or the
+pin that takes the project down by name. A settings change (`config models`, `flags`, `runtime`,
 `providers`, and `trust`) reads the project's own files and brings in no
 release. Each prints what changed and, where one command
 puts the earlier value back, that command. A model or flag change also names
