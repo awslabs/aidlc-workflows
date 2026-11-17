@@ -7152,8 +7152,9 @@ function commitRecord(args: string[], projectDir?: string): void {
 
 // `unit share --plan` for the lead's own work teams build: the plan's ref,
 // pushed to its repository; nothing is committed here and no branch is pushed.
-function sharePlanRef(pd: string, given: ReturnType<typeof givenCommitMessage>, needs: string | null, named?: string, carry?: true): void {
-  const plan = writeSharedPlan(pd, given?.text, named, carry);
+function sharePlanRef(pd: string, given: ReturnType<typeof givenCommitMessage>, needs: string | null, named?: string, carry?: true,
+  visible?: true): void {
+  const plan = writeSharedPlan(pd, given?.text, named, carry, visible);
   if ("notShared" in plan) {
     console.log(JSON.stringify({ shared: false, ...plan.notShared }));
     return;
@@ -7182,7 +7183,8 @@ export const PLAN_NOT_NOW = "Nothing is pushed; say when you want it shared.";
 type SharedPlan = { repo: string; address: string; commit: string; said: string; step?: string } | { notShared: { notice: string; step: string } };
 // `carry`: the lead's words this computer wrote where the plan was before it
 // moved, and the plan now lacks, written on it as they were given.
-function writeSharedPlan(pd: string, message?: string, named?: string, carry?: true): SharedPlan {
+// `visible`: the lead's own words for a branch people can open (--visible).
+function writeSharedPlan(pd: string, message?: string, named?: string, carry?: true, visible?: true): SharedPlan {
   const place = planPlaceForShare(pd, named);
   if ("refused" in place) {
     fail(place.refused === "option"
@@ -7200,7 +7202,7 @@ function writeSharedPlan(pd: string, message?: string, named?: string, carry?: t
   const kept = named === undefined ? null : keptPlan(pd, place.id8);
   if (kept !== null && repoCopyKey(kept.plan.plan_repo.address) !== repoCopyKey(place.address)) {
     return movePlan(pd, { ...place, repo: kept.plan.plan_repo.name, address: kept.plan.plan_repo.address,
-      copy: copyOf(kept.plan.plan_repo.address, place.ref) }, place, message);
+      copy: copyOf(kept.plan.plan_repo.address, place.ref) }, place, message, visible);
   }
   // Another repository named where Home Location holds what a newer AI-DLC
   // wrote (a plan or its note): this one never shares beside it, as the plain
@@ -7221,7 +7223,7 @@ function writeSharedPlan(pd: string, message?: string, named?: string, carry?: t
   // The lead's own words for a branch people can open (--visible): looked at
   // first, copy or not; a plan shared as the ref goes to its branch with its
   // history, and a first share is written as the branch.
-  if (invokedArgs.includes("--visible")) {
+  if (visible) {
     const look = lookAtPlan(pd, place);
     if (look.unreached !== undefined) {
       fail(`${place.repo} could not be reached, so the plan is not shared${look.unreached === null ? "." : `: git says "${look.unreached}".`} Say when to try again.`);
@@ -7544,7 +7546,7 @@ function shareQuestionOpen(pd: string, marker: ActiveDirectiveMarker | null, add
 // that same tip; a note the old place does not take leaves no second plan (the
 // one just written is taken back). Then the lead's Home Location is the new
 // place, and what the share question it answers asked for is shared there.
-function movePlan(pd: string, start: PlanPlace, to: PlanPlace, message: string | undefined): SharedPlan {
+function movePlan(pd: string, start: PlanPlace, to: PlanPlace, message: string | undefined, visible?: true): SharedPlan {
   const address = maskUserinfo(to.address);
   const step = readActiveDirectiveMarker(pd, readStateFile(pd));
   let from = start;
@@ -7608,7 +7610,7 @@ function movePlan(pd: string, start: PlanPlace, to: PlanPlace, message: string |
     const there = moveTipAt(pd, to, lookNew.tip);
     if (there.kind === "newer") end(newerPlanStep(pd));
     // The new place holds the plan in the form it had (its branch), or as the lead asked (--visible).
-    if (there.kind === "none" && (planBranchAt(pd, from) !== null || invokedArgs.includes("--visible"))) Object.assign(to, { branch: visiblePlanBranch(to) });
+    if (there.kind === "none" && (planBranchAt(pd, from) !== null || visible)) Object.assign(to, { branch: visiblePlanBranch(to) });
     const elsewhere = `${to.repo} already holds something else where the plan would go, so nothing was moved: the plan stays in ${from.repo}.`;
     // This work's plan there naming the old place: a copy of it (a mirror made
     // to move hosts), or the same repository under another name, which only
@@ -7901,12 +7903,13 @@ function shareMain(args: string[], projectDir?: string): void {
     return;
   }
   if (planOnly && sharesPlanRef(pd)) {
-    sharePlanRef(pd, given, needs, repoNamed, flags.has("carry-words") ? true : undefined);
+    sharePlanRef(pd, given, needs, repoNamed, flags.has("carry-words") ? true : undefined, flags.has("visible") ? true : undefined);
     return;
   }
   // A walking skeleton's code built here goes to main with the lead's record,
   // after the plan's own ref, so the teams' plan never waits on main.
-  const planFirst = planOnly && leadsOwnTeamWork(pd) ? writeSharedPlan(pd, undefined, repoNamed, flags.has("carry-words") ? true : undefined) : null;
+  const planFirst = planOnly && leadsOwnTeamWork(pd) ? writeSharedPlan(pd, undefined, repoNamed, flags.has("carry-words") ? true : undefined,
+    flags.has("visible") ? true : undefined) : null;
   // Named before the commit takes them out of what is built here.
   const codeHere = planFirst === null ? null : skeletonCodeName(pd);
   if (planFirst !== null && "notShared" in planFirst) {
