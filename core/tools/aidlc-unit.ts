@@ -172,6 +172,7 @@ import {
   slugify,
   sourceClaimCovers,
   sourcePathKey,
+  sortAttemptEvents,
   type SourceClaimModel,
   workspaceSourceListing,
   type WorkspaceSourceListing,
@@ -6644,6 +6645,13 @@ export const CHECKOUT_STEPS = {
     via: (): string => `${aidlcInvocation()} unit share --back`,
     undo: (was: string): string => `It was at ${was} before, if you ever want that back.`,
   },
+  // The branch a pushed Unit merges into, merged into its branch with their git on their yes (mergeMainIn); a clash is left
+  // under way for them, and the undo takes that merge back out on their word.
+  merge: {
+    run: (dir: string, into: string, message: readonly string[] = []): GitResult => git(dir, ["merge", "-q", "--no-edit", ...message, into]),
+    via: (): string => `${aidlcInvocation()} unit push --merge-main`,
+    undoVia: (): string => `${aidlcInvocation()} unit push --undo-merge`,
+  },
   // AI-DLC's own files only; at the person's own terminal, git's own command (aidlc config's line for the repo list's move).
   "commit-own": { run: commitRecord, terminal: commitOwnCommand, via: (): string => `${aidlcInvocation()} unit commit-record` },
 } as const;
@@ -11812,6 +11820,31 @@ function repoIntegration(dir: string, remote: string): string {
   return `${remote}/main`;
 }
 
+// The branch a Unit's branch in a code repository starts from and merges
+// into: its remote's main, read through the repository's own remote when the
+// push goes to a fork.
+function unitBranchInto(dir: string, remote: string): string {
+  return repoIntegration(dir, startRemoteOf(dir, remote));
+}
+
+// The Unit's own files (`paths`) that `into` changed since the Unit's branch
+// at `head` left it, where both sides now differ: what its pull request has
+// to bring together. Nothing when the branch has `into` already. Local reads
+// only: no fetch, so it never stands in for the person's own look at main.
+export function mainChangedUnder(dir: string, head: string, into: string, paths: readonly string[]): string[] {
+  if (paths.length === 0 || git(dir, ["merge-base", "--is-ancestor", into, head]).ok) return [];
+  const base = git(dir, ["merge-base", head, into]).stdout.trim();
+  if (base === "") return [];
+  const blob = (at: string, path: string): string => git(dir, ["rev-parse", "--verify", "--quiet", `${at}:${path}`]).stdout.trim();
+  return git(dir, ["diff", "-z", "--name-only", "--no-renames", base, into, "--", ...paths]).stdout.split("\0").filter(Boolean)
+    .filter((path) => blob(head, path) !== blob(base, path) && blob(head, path) !== blob(into, path));
+}
+
+// The push that made a Unit's branch from where the person was, while the
+// branch it merges into changed the Unit's own files, keeps this for the head
+// it pushed: the step after it offers to bring that branch in, once.
+export const mainMovedMark = (unit: string, head: string): string => `unit-main-moved-${unit}-${head.slice(0, 12)}`;
+
 // The person's own commits a Unit's branch made from where they were carries:
 // those on no remote. Said in the line of the run that makes the branch,
 // whether its push then goes or is refused, so they hear of them before
@@ -11896,6 +11929,11 @@ function pushUnit(args: string[], projectDir?: string): void {
   const build = unitBuildOf(state);
   if (build === null) fail("push is for a Unit's build; this work is not one.");
   const unit = build.unit;
+  const mergeMain = bareFlags.has("merge-main") || flags["merge-main"] !== undefined;
+  if (mergeMain || bareFlags.has("undo-merge") || flags["undo-merge"] !== undefined) {
+    mergeMainIn(pd, args, unit, unitBranchOf(state, unit), !mergeMain);
+    return;
+  }
   // The branch the person named (their team's own rule), kept for every
   // later push; else the one named before, else the Unit's name.
   if (bareFlags.has("branch")) fail(`push --branch needs the branch name the person gave. usage: ${unitUsage("push")}`);
@@ -11976,7 +12014,7 @@ function pushUnit(args: string[], projectDir?: string): void {
   const label = homeLabelOf(state, build);
   const dotStart = byRepo.has(".") ? takeIntegrationRef(pd, claim) ?? planBranchStart(pd, build) : null;
   const integrationOf = (repo: string, dir: string, remote: string): string =>
-    (repo === "." ? dotStart : null) ?? repoIntegration(dir, startRemoteOf(dir, remote));
+    (repo === "." ? dotStart : null) ?? unitBranchInto(dir, remote);
   // What this Unit sent before keeps each repo's base and heads across pushes:
   // its claim's result, so a push again after a merge still lists the files
   // the Unit changed.
@@ -12090,6 +12128,8 @@ function pushUnit(args: string[], projectDir?: string): void {
   // Their own commits on a branch this run made from where they were: said in
   // whatever line the run ends with.
   const along: string[] = [];
+  // The code repositories whose Unit branch this run made from where they were.
+  const startedHere = new Set<string>();
   const whereNow = (done = false): string =>
     whereNowLine(branch, moved, done && ownChanges(pd, planned) ? "; your other changes are still yours, uncommitted" : "") +
       along.map((line) => ` ${line}`).join("");
@@ -12156,6 +12196,7 @@ function pushUnit(args: string[], projectDir?: string): void {
           const tried = git(dir, ["switch", "-q", make, branch]);
           switched = tried.ok;
           said = tried.stderr;
+          if (switched && repo !== ".") startedHere.add(repo);
           const comesAlong = switched ? comesAlongLine(dir, name, branch, start, git(dir, ["rev-parse", "HEAD"]).stdout.trim()) : null;
           if (comesAlong !== null) along.push(comesAlong);
         }
@@ -12233,6 +12274,9 @@ function pushUnit(args: string[], projectDir?: string): void {
         keptLines(name).map((line) => ` ${line}`).join("") + wayOn);
     }
     const head = git(dir, ["rev-parse", "HEAD"]).stdout.trim();
+    if (startedHere.has(repo) && mainChangedUnder(dir, head, integrationOf(repo, dir, remote), paths).length > 0) {
+      noteEngineAskMark(pd, mainMovedMark(unit, head));
+    }
     const base = earlier.get(repo)?.base ??
       (git(dir, ["merge-base", "HEAD", integrationOf(repo, dir, remote)]).stdout.trim() || head);
     const changed = git(dir, ["diff", "--name-only", "--no-renames", base, head, "--", ...paths]).stdout.split(/\r?\n/).filter(Boolean);
@@ -12390,6 +12434,168 @@ function pushUnit(args: string[], projectDir?: string): void {
   const told = joinSaid(lines);
   const forNextStep = sentOn && saidWithNextStep(pd, told);
   console.log(JSON.stringify({ pushed: true, unit, repos: results.map((repo) => repo.repo), ...(forNextStep ? {} : { notice: told }) }));
+}
+
+// What the build's last push of `unit` on `branch` left in each repository, by
+// its own UNIT_PUSHED row, written once every repository's push went: the head
+// it pushed, per repository. Empty with no such row.
+export function lastPushedHeads(pd: string, unit: string, branch: string): Map<string, string> {
+  const row = sortAttemptEvents(readAuditShardEvents(pd)).findLast((entry) => entry.event === "UNIT_PUSHED" &&
+    auditBlockField(entry.block, "Unit") === unit && auditBlockField(entry.block, "Branch") === branch);
+  const pairs = (row === undefined ? "" : auditBlockField(row.block, "Repos") ?? "").split(",").map((pair) => pair.trim()).filter(Boolean);
+  return new Map(pairs.map((pair) => [pair.slice(0, pair.lastIndexOf("@")), pair.slice(pair.lastIndexOf("@") + 1)]));
+}
+
+// The code repositories of that push whose head kept mainMovedMark, with the
+// branch each merges into and its remote, read here with no fetch, and the
+// Unit's own files there that it changed and the pushed branch lacks (none
+// once that branch has it).
+export function mainMovedRepos(pd: string, unit: string, branch: string):
+  Array<{ repo: string; dir: string; remote: string; into: string; head: string; paths: string[]; files: string[] }> {
+  const manifest = readUnitSourceManifest(pd, "code-generation", unit);
+  const targets = manifest.ok ? unitWriteTargets(pd, manifest.manifest.writes) : new Map<string, { dir: string; paths: string[] }>();
+  return [...lastPushedHeads(pd, unit, branch)].flatMap(([repo, head]) => {
+    const dir = targets.get(repo)?.dir ?? repoDir(pd, repo);
+    if (repo === "." || engineAskMark(pd, mainMovedMark(unit, head)) === null || !isGitRepoDir(dir)) return [];
+    const remote = pushRemoteOf(dir, branch);
+    if (typeof remote !== "string") return [];
+    const into = unitBranchInto(dir, remote);
+    const paths = targets.get(repo)?.paths ?? [];
+    const pushedTip = git(dir, ["rev-parse", "--verify", "--quiet", `refs/remotes/${remote}/${branch}^{commit}`]).stdout.trim() || head;
+    return [{ repo, dir, remote, into, head, paths, files: mainChangedUnder(dir, pushedTip, into, paths) }];
+  });
+}
+
+// `unit push --merge-main`: the person's yes to bringing the branch the Unit
+// merges into into its pushed branch, in each code repository whose push kept
+// mainMovedMark: fetched, merged and pushed with their own git, every
+// repository checked before any is merged. A clash is left for them to
+// resolve, and the same command then finishes it; a merge they committed
+// themselves is pushed. Nothing of the Unit's is committed, sent to its record
+// or written in its audit. `undo` takes a merge of it waiting there back out.
+function mergeMainIn(pd: string, args: string[], unit: string, branch: string, undo: boolean): void {
+  const given = undo ? null : givenCommitMessage(pd, args, "push");
+  const repos = mainMovedRepos(pd, unit, branch).map((entry) => ({ ...entry, name: entry.repo }));
+  const moved: Array<{ name: string; from: string }> = [];
+  const lines: string[] = [];
+  const has = (dir: string, older: string, newer: string): boolean => git(dir, ["merge-base", "--is-ancestor", older, newer]).ok;
+  // A merge of `into` under way on the Unit's branch: the one this command left for them.
+  const merging = (dir: string, into: string): boolean => gitOperationUnderWay(dir)?.what === "a merge" &&
+    git(dir, ["branch", "--show-current"]).stdout.trim() === branch && has(dir, "MERGE_HEAD", into);
+  if (repos.length === 0) {
+    console.log(JSON.stringify({ pushed: false, unit, notice: undo
+      ? `No merge of the branch ${unit} merges into is waiting, so nothing was undone.`
+      : `${unit} has nothing to bring in from the branch it merges into; nothing was merged or pushed.` }));
+    return;
+  }
+  if (undo) {
+    for (const { dir, name, into } of repos) {
+      if (merging(dir, into) && git(dir, ["merge", "--abort"]).ok) lines.push(`I undid the merge of ${into} into ${unit} in ${name}; ${unit} is as it was there, and nothing was pushed.`);
+      else if (has(dir, into, `refs/heads/${branch}`)) lines.push(`The merge of ${into} is already committed on ${unit} in ${name}, so I left it.`);
+      else lines.push(`No merge of ${into} is waiting in ${name}, so nothing was undone.`);
+    }
+    console.log(JSON.stringify({ undone: lines.some((line) => line.startsWith("I undid")), unit, notice: joinSaid(lines) }));
+    return;
+  }
+  const whereNow = (): string => whereNowLine(branch, moved);
+  // Merged here and not pushed yet, for a line that stops after it.
+  const mergedHere: string[] = [];
+  const stop = (line: string): never =>
+    fail(line + (mergedHere.length > 0 ? ` In ${joinNames(mergedHere)}, it is merged into ${unit}, not pushed yet.` : "") + whereNow());
+  const plan: Array<(typeof repos)[number] & { step: "merge" | "finish" | "push" | "level" }> = [];
+  for (const entry of repos) {
+    const { dir, name, into } = entry;
+    const start = startRemoteOf(dir, entry.remote);
+    const fetched = git(dir, ["fetch", "-q", start, into.slice(start.length + 1)]);
+    if (!fetched.ok) stop(`${into} could not be fetched in ${name}: git says "${gitSaid(fetched.stderr)}". Nothing was merged or pushed. Say when to try again.`);
+    if (merging(dir, into)) {
+      plan.push({ ...entry, step: "finish" });
+      continue;
+    }
+    const theirs = gitOperationUnderWay(dir);
+    if (theirs !== null) stop(underWayLine(name, theirs, "nothing was merged or pushed", `bring ${into} in`));
+    const tip = git(dir, ["rev-parse", `refs/heads/${branch}`]).stdout.trim();
+    const pushedTip = git(dir, ["rev-parse", "--verify", "--quiet", `refs/remotes/${entry.remote}/${branch}`]).stdout.trim();
+    if (has(dir, into, tip)) {
+      plan.push({ ...entry, step: pushedTip !== "" && has(dir, tip, pushedTip) ? "level" : "push" });
+      continue;
+    }
+    const mergeChanges = new Set(git(dir, ["diff", "-z", "--name-only", `${tip}...${into}`]).stdout.split("\0").filter(Boolean));
+    const ownChanged = git(dir, ["diff", "-z", "--name-only", "HEAD"]).stdout.split("\0").filter(Boolean);
+    const ownUnit = ownChanged.find((path) => entry.paths.some((own) => path === own || (own.endsWith("/") && path.startsWith(own))));
+    if (ownUnit !== undefined) {
+      stop(`${unit}'s ${ownUnit} in ${name} has a change that is not committed, so nothing was merged or pushed. Once it is pushed with ` +
+        `${unit}, or put aside, I can bring ${into} in.`);
+    }
+    const inTheWay = ownChanged.find((path) => mergeChanges.has(path));
+    if (inTheWay !== undefined) {
+      stop(`Your change to ${inTheWay} in ${name} is in a file ${into} changes, so nothing was merged or pushed. Once it is committed ` +
+        `or put aside, I can bring ${into} in.`);
+    }
+    const added = git(dir, ["diff", "-z", "--name-only", "--diff-filter=A", `${tip}...${into}`]).stdout.split("\0").filter(Boolean);
+    const replaced = added.find((path) => existsSync(join(dir, ...path.split("/"))) && !git(dir, ["ls-files", "--error-unmatch", "--", path]).ok);
+    if (replaced !== undefined) {
+      stop(`${into} adds ${replaced} in ${name}, where you have a file of your own, so nothing was merged or pushed. Once it is moved ` +
+        `or put aside, I can bring ${into} in.`);
+    }
+    plan.push({ ...entry, step: "merge" });
+  }
+  for (const entry of plan) {
+    const { dir, name, into } = entry;
+    const from = git(dir, ["branch", "--show-current"]).stdout.trim();
+    if (from !== branch) {
+      const switched = CHECKOUT_STEPS.switch.run(dir, branch);
+      if (!switched.ok) stop(`${unit} could not be checked out in ${name}, so nothing was merged or pushed. Git says: "${gitSaid(switched.stderr)}".`);
+      moved.push({ name, from: from || "the commit you were on" });
+    }
+    const message = given === null ? [] : ["-m", given.text];
+    if (entry.step === "finish" || entry.step === "merge") {
+      const made = entry.step === "finish"
+        ? (conflictFiles(dir).length > 0 ? null : git(dir, ["commit", "-q", "--no-edit", ...message]))
+        : CHECKOUT_STEPS.merge.run(dir, into, message);
+      const clash = conflictFiles(dir);
+      if (made === null || (!made.ok && clash.length > 0)) {
+        stop(`${into} and ${unit} both change ${joinNames(clash)} in ${name} in ways git cannot put together, so the merge is waiting ` +
+          `for you there: resolve ${clash.length === 1 ? clash[0] : "them"}, and I can finish it and push ${unit}; or say if you want ` +
+          "me to undo it. Nothing was pushed.");
+      }
+      if (!made.ok && gitOperationUnderWay(dir)?.what === "a merge") {
+        git(dir, ["merge", "--abort"]);
+        stop(`Your hook in ${name} did not take the merge of ${into} into ${unit} (${gitSaid(made.stderr || made.stdout)}), so I undid it, ` +
+          "and nothing was pushed. If it is the merge's message, tell me the one to use, and I will merge with that.");
+      }
+      if (!made.ok) stop(`${into} could not be merged into ${unit} in ${name}: git says "${gitSaid(made.stderr || made.stdout)}". Nothing was merged or pushed.`);
+      mergedHere.push(name);
+    } else if (entry.step === "push" && given !== null && git(dir, ["rev-list", "--count", "HEAD", "--not", "--remotes"]).stdout.trim() === "1" &&
+      git(dir, ["rev-parse", "--verify", "--quiet", "HEAD^2"]).ok) {
+      // The merge made here that its host refused, for its message.
+      const amended = git(dir, ["commit", "-q", "--amend", ...message]);
+      if (!amended.ok) {
+        stop(`Your hook in ${name} did not take the merge of ${into} into ${unit} (${gitSaid(amended.stderr || amended.stdout)}), so ` +
+          "nothing was pushed. If it is the merge's message, tell me the one to use, and I will merge with that.");
+      }
+    }
+  }
+  for (const entry of plan) {
+    const { dir, name, into } = entry;
+    if (entry.step === "level") {
+      lines.push(`${unit} already has ${into}'s changes to its files in ${name}; nothing was merged or pushed.`);
+      continue;
+    }
+    const before = git(dir, ["rev-parse", "--short", `refs/remotes/${entry.remote}/${branch}`]).stdout.trim();
+    const pushed = git(dir, ["push", "-q", entry.remote, branch]);
+    if (mergedHere.includes(name)) mergedHere.splice(mergedHere.indexOf(name), 1);
+    if (!pushed.ok) {
+      const alone = git(dir, ["rev-list", "--count", "HEAD", "--not", "--remotes"]).stdout.trim() === "1";
+      stop(`Merged ${into} into ${unit} in ${name}, and the push was refused: ${pushRefusal(pushed.stderr)}. The merge stays here; ` +
+        `${unit} was at ${before} before it. ` +
+        (alone ? "If it is the merge's message, tell me the one to use, and I will merge with that and push again." : "Say when to push again."));
+    }
+    // A merge already on the branch here (theirs, or one made here whose push was refused) is pushed as it is.
+    lines.push(entry.step === "push" ? `Pushed ${unit} in ${name}, with ${into} merged into it.` : `Merged ${into} into ${unit} in ${name} and pushed ${unit}.`);
+  }
+  given?.spend();
+  console.log(JSON.stringify({ pushed: plan.some((entry) => entry.step !== "level"), unit, notice: joinSaid([...lines, whereNow().trim()]) }));
 }
 
 // The build's record finishes once its push reached home or the person put it

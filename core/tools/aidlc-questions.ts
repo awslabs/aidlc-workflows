@@ -57,7 +57,7 @@ export const ENGINE_ASK_TYPES: ReadonlySet<string> = new Set([
   "construction-staffing", "repo-scope", "units-repos", "unit-plan-change", "guard-recovery", "unit-claim",
   "legacy-plan-approval-recovery", "team-handover",
   "repos-manifest", "unit-take", "unit-push", "unit-amend", "unit-signoff",
-  "unit-turned-down", "unit-propose", "unit-move-onto", "unit-clone", "lead-plan-change",
+  "unit-turned-down", "unit-propose", "unit-move-onto", "unit-main-moved", "unit-clone", "lead-plan-change",
 ]);
 
 // The questions a stage asks of its own (logged by the agent); they stay listed

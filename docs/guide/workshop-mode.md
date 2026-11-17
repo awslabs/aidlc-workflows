@@ -806,7 +806,10 @@ offer names each. The line says where you are and the way back ("You're on
 refunds now in checkout-api and billing. Switch back to main any time."). What
 your host prints about your branch after the push, with a link in it, such as
 GitHub's link to create a pull request or GitLab's to create or view a merge
-request, comes with the line, as the host printed it. A
+request, comes with the line, as the host printed it. Where the branch started
+from where you are and main had changed one of the Unit's own files, the next
+step offers once to bring main in: a merge with your own git, then the push
+again (`unit push --merge-main`); a clash is left for you to resolve. A
 later push from the branch you went back to takes the Unit's files Code
 Generation changed there onto its branch as they are; when changes of your own
 are in the way, it stops with git's words, nothing moves, and the push is

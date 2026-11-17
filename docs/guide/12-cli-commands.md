@@ -49,7 +49,7 @@ diagnostic and lifecycle routes.
 | `/aidlc --release <unit>` | Release a live Unit claim from unscoped main by publishing a tombstone |
 | `/aidlc unit assign --here <unit>` | At the lead's project, build a Unit here: its claim is taken for the lead's project, like any take |
 | `/aidlc unit take <unit> --plan <work id> --from <address>` | Take a Unit of the lead's plan, shared in the code repository at that address, as your team's own piece of work, or carry its build on |
-| `/aidlc unit push [--later] [--remote <repo>=<name>] [--branch <name>] [--commit-message-file <file>] [--finish-merge]` | In a Unit's build, commit and push exactly its files on its branch in each repo, and send the result back to the lead's project |
+| `/aidlc unit push [--later] [--remote <repo>=<name>] [--branch <name>] [--commit-message-file <file>] [--finish-merge] [--merge-main] [--undo-merge]` | In a Unit's build, commit and push exactly its files on its branch in each repo, and send the result back to the lead's project |
 | `/aidlc unit send-back <unit>` | At the lead's project, send a team's Unit back from Build and Test in the failure's words |
 | `/aidlc unit propose --input <file>` | In a Unit's build, send the lead a change to an input the Unit was approved with |
 | `/aidlc unit rebase` | In a Unit's build started early, move it onto the branch the Unit it waited on merged into |
@@ -830,6 +830,8 @@ the build; you can also run it yourself, for example after a review fix:
 /aidlc unit push --branch feature/refunds
 /aidlc unit push --commit-message-file aidlc/.aidlc-engine/request-text/unit-push-message-<record>.txt
 /aidlc unit push --finish-merge
+/aidlc unit push --merge-main
+/aidlc unit push --undo-merge
 ```
 
 The commit message: with `--commit-message-file`, the Unit's commit takes the
@@ -877,6 +879,17 @@ merged the newer integration branch, say) is offered instead: **Finish the
 merge and push** runs `--finish-merge`, which concludes it with your own
 `git commit --no-edit` and then pushes.
 `--later` pushes nothing and only records that you said not now.
+
+When the push had to start the Unit's branch in a code repository from where
+you were, and main (the branch the Unit merges into, your team's Integration
+branch where one is set) changed one of the Unit's own files, the next step
+offers once to bring main in. On yes, `--merge-main` fetches main, merges it into
+the Unit's branch with your own git (your hooks, signing and identity; git's own
+merge message, or yours when you give one) and pushes the branch again; nothing
+is rewritten or forced. A clash is left for you to resolve, and `--merge-main`
+then finishes and pushes it; `--undo-merge` takes the waiting merge back out. A
+change of yours in a file main changes, or a file of yours where main adds one,
+stops it before anything is merged, with the way on.
 
 The branch is named after the Unit unless you name it: when your team's
 branches follow a rule of their own (a pre-push hook, or the host, wants

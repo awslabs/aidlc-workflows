@@ -878,6 +878,14 @@ export interface UnitMoveOntoAskDirective extends AskDirectiveBase {
   choices: AskChoice[];
 }
 
+// A pushed Unit whose main changed its own files: bring main in by a merge, or
+// not now.
+export interface UnitMainMovedAskDirective extends AskDirectiveBase {
+  ask_type: "unit-main-moved";
+  response_route: "command";
+  choices: AskChoice[];
+}
+
 // A Unit's likely repos not checked out here: clone them where repos.json puts
 // them, or not now.
 export interface UnitCloneAskDirective extends AskDirectiveBase {
@@ -1011,6 +1019,7 @@ export type AskDirective =
   | UnitTurnedDownAskDirective
   | UnitProposeAskDirective
   | UnitMoveOntoAskDirective
+  | UnitMainMovedAskDirective
   | UnitCloneAskDirective
   | UnitAmendAskDirective
   | UnitSignoffAskDirective
@@ -1862,7 +1871,7 @@ export function ceremonyNote(state: "on" | "off", questionsOnly = false): string
 // the numbers: a reply of "2" is read against this order, and the agent
 // renders nothing of its own. One builder, so every question has one shape.
 // Engine questions answered by running the picked choice's command.
-const COMMAND_CHOICE_ASKS = new Set(["construction-staffing", "repo-scope", "units-repos", "unit-plan-change", "repos-manifest", "unit-take", "unit-push", "unit-amend", "unit-signoff", "unit-turned-down", "unit-propose", "unit-move-onto", "unit-clone", "lead-plan-change"]);
+const COMMAND_CHOICE_ASKS = new Set(["construction-staffing", "repo-scope", "units-repos", "unit-plan-change", "repos-manifest", "unit-take", "unit-push", "unit-amend", "unit-signoff", "unit-turned-down", "unit-propose", "unit-move-onto", "unit-main-moved", "unit-clone", "lead-plan-change"]);
 
 export interface AskChoice {
   label: string;

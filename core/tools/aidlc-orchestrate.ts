@@ -718,6 +718,7 @@ import {
   takeDayOf,
   GitWriteRefused,
   earlyBaseMerged,
+  mainMovedRepos,
   teamMergeSeen,
   moveRefusedMark,
   shareBlocker,
@@ -839,6 +840,7 @@ import {
   type UnitBoardRow,
   UNIT_PUSH_FIELD,
   buildWaitsForPush,
+  takenFromPlan,
   unitBranchOf,
   unitBuildOf,
   unitBuildsHere,
@@ -2129,7 +2131,7 @@ function prepareEmission(directive: Directive): PreparedEmission {
     if (Buffer.byteLength(JSON.stringify(noted), "utf-8") <= directiveMaxBytes()) directive = noted;
   }
   const levelNote = engineProjectDir && directive.kind !== "load-steering" && directive.kind !== "error" && directive.kind !== "ask" &&
-    !isReadOnlyEngineProbe() ? levelOfferNote(engineProjectDir) : null;
+    !isReadOnlyEngineProbe() ? [levelOfferNote(engineProjectDir), mainMovedNote(engineProjectDir)].filter(Boolean).join(" ") || null : null;
   if (levelNote !== null) {
     const before = "board_note" in directive && typeof directive.board_note === "string" ? directive.board_note : "";
     const noted = { ...directive, board_note: [before, levelNote].filter(Boolean).join(" ") } as Directive;
@@ -10516,6 +10518,67 @@ function unitMoveOntoAsk(projectDir: string, stateContent: string): AskDirective
   return null;
 }
 
+// The offer's own mark, once for the push whose heads it names.
+const mainMovedAsked = (unit: string, moved: ReadonlyArray<{ head: string }>): string =>
+  `unit-main-moved-asked-${unit}-${moved.map((repo) => repo.head.slice(0, 12)).join("-")}`;
+
+// A Unit pushed from where the person was while the branch it merges into
+// changed its own files (the push kept mainMovedMark for that head): the offer
+// to bring that branch in, once for the push. Silent while a push is due, a
+// turn-down is open or the take is set aside, each of which says its own step.
+function unitMainMovedAsk(projectDir: string, stateContent: string): AskDirective | null {
+  const build = unitBuildOf(stateContent);
+  if (build === null || getField(stateContent, UNIT_PUSH_FIELD)?.trim() !== "pushed" || !takenFromPlan(projectDir, build)) return null;
+  if (unitPushToOffer(projectDir, stateContent) || turnedDownBuildWaits(projectDir, stateContent) !== null || takeAside(projectDir, stateContent)) return null;
+  const unit = build.unit;
+  const moved = mainMovedRepos(projectDir, unit, unitBranchOf(stateContent, unit));
+  if (moved.length === 0) return null;
+  if (engineAskMark(projectDir, mainMovedAsked(unit, moved)) !== null) return null;
+  noteEngineAskMark(projectDir, mainMovedAsked(unit, moved));
+  const due = moved.filter((repo) => repo.files.length > 0);
+  if (due.length === 0) return null;
+  const files = (names: string[]): string => (names.length <= 3 ? joinRepoNames(names) : `${names[0]}, ${names[1]} and ${names.length - 2} more files`);
+  const intos = [...new Set(due.map((repo) => repo.into))];
+  const one = due.length === 1 ? due[0] : null;
+  const many = one === null || one.files.length > 1;
+  const question = one !== null
+    ? `${one.into} in ${one.repo} has a change to ${files(one.files)} that ${unit}'s branch does not have, and ${unit} changes ` +
+      `${many ? "those files" : "that file"} too, so its pull request may show a clash. Do you want me to bring ${one.into} into ` +
+      `${unit} now? I'd merge it with your own git and push ${unit} again.`
+    : `${due.map((repo, at) => `${repo.into} in ${repo.repo} ${at === 0 ? "has a change to" : "one to"} ${files(repo.files)}`).join(", and ")}, ` +
+      `that ${unit}'s branches do not have, and ${unit} changes those files too, so its pull requests may show a clash. Do you want ` +
+      `me to bring them into ${unit} now? I'd merge each with your own git and push ${unit} again.`;
+  const named = intos.length === 1 ? intos[0] : "them";
+  return {
+    kind: "ask",
+    ask_type: "unit-main-moved",
+    response_route: "command",
+    question,
+    choices: [
+      {
+        label: `Bring ${named} in`,
+        detail: `Merges ${named} into ${unit} with your git and pushes it; nothing is rewritten or forced.`,
+        command: CHECKOUT_STEPS.merge.via(),
+      },
+      { label: "Not now", detail: `${unit} stays as it was pushed; say when you want ${named} brought in.` },
+    ],
+  };
+}
+
+// After that offer, while its push stands or a merge of that branch waits on
+// the Unit's branch: the commands for the agent when the person asks in words.
+function mainMovedNote(projectDir: string): string | null {
+  const state = loadStateFileIfPresent(projectDir);
+  const build = state === null ? null : unitBuildOf(state);
+  if (state === null || build === null) return null;
+  const moved = mainMovedRepos(projectDir, build.unit, unitBranchOf(state, build.unit));
+  const due = moved.filter((repo) => repo.files.length > 0);
+  if (due.length === 0 || engineAskMark(projectDir, mainMovedAsked(build.unit, moved)) === null) return null;
+  return `When the person asks to bring ${due[0].into} into ${build.unit}, or says a merge of it is resolved, run ` +
+    `\`${CHECKOUT_STEPS.merge.via()}\`; when they ask to undo a merge of it that waits, run \`${CHECKOUT_STEPS.merge.undoVia()}\`; ` +
+    "tell them in plain words what it reports.";
+}
+
 // The end of a Unit's build: the offer to push it home, until the person asked
 // for the push or said not now (then the end says it once). Null for other work.
 function unitPushAsk(projectDir: string, stateContent: string | null): AskDirective | PrintDirective | null {
@@ -14899,6 +14962,12 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   const moveOnto = stateContent !== null && !isReadOnlyEngineProbe() ? unitMoveOntoAsk(pd, stateContent) : null;
   if (moveOnto) {
     emit(moveOnto);
+    return;
+  }
+  // A Unit pushed while main changed its own files: bringing main in is offered once for that push.
+  const mainMoved = stateContent !== null && !isReadOnlyEngineProbe() ? unitMainMovedAsk(pd, stateContent) : null;
+  if (mainMoved) {
+    emit(mainMoved);
     return;
   }
   // The work's main left ahead and behind by a squash or rebase merge, all of its work there: offered once, at a bare look.
