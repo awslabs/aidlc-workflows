@@ -15,7 +15,7 @@ import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync
 import { dirname, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { gitTargetFor, planAtCopy, planFilesNow, planPlaceForShare, planUnitsKept, writePlan } from "../../dist/claude/.claude/tools/aidlc-unit.ts";
-import { checkInLine, copyOf, planJsonOf, repoCopyKey } from "../../dist/claude/.claude/tools/aidlc-unit-teams.ts";
+import { copyOf, planJsonOf, repoCopyKey } from "../../dist/claude/.claude/tools/aidlc-unit-teams.ts";
 import { seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
 import {
   cleanupTeamBuild,
@@ -31,6 +31,7 @@ import {
   makePlanHome,
   makePlanHomeWithRemote,
   next,
+  ORCH,
   type PlanHome,
   planRefOf,
   refundsTaken,
@@ -1567,7 +1568,10 @@ describe("what the lead reads", () => {
     const ask = next(home.dir);
     expect(String(ask.question)).toStartWith("Do you want me to share the plan with the teams?");
     share(home.dir);
-    expect(checkInLine(home.dir)).toBeNull();
+    const parked = run(ORCH, ["park"], home.dir);
+    expect(parked.status, parked.out).toBe(0);
+    expect(parked.out).not.toContain("aidlc/ is committed");
+    expect(parked.out).not.toContain("teammates see");
   });
 });
 

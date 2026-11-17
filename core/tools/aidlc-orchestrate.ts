@@ -809,11 +809,6 @@ import { noteReposManifestOffered, reposManifestListsOnlyAddedWorkspace, reposMa
 import {
   builtFromAnotherMachine,
   catchUpAsk,
-  checkInHandedOut,
-  checkInLine,
-  checkInNotice,
-  checkInState,
-  CHECKED_IN_LINE,
   levelDue,
   stagesCounted,
   lastCommittedByThisPerson,
@@ -2103,18 +2098,6 @@ function prepareEmission(directive: Directive): PreparedEmission {
   }
   const unread = engineProjectDir ? unreadDocumentsOnce(engineProjectDir) : null;
   if (unread !== null) directive = withChangeNotices(directive, [...(directive.change_notices ?? []), unread.line]);
-  // The chat that heard the check-in line hears once, at its next look after
-  // the person's own commit and push, where the record is (checkInNotice), so
-  // no old to-do stands: with the team, or pushed on a branch not in it yet.
-  if (engineProjectDir && engineSessionId && directive.kind !== "load-steering" && directive.kind !== "error" &&
-    !isReadOnlyEngineProbe() && checkInHandedOut(engineProjectDir, engineSessionId) &&
-    !personLineHeard(engineProjectDir, engineSessionId, CHECKED_IN_LINE)) {
-    const where = checkInNotice(checkInState(engineProjectDir));
-    if (where !== null && !personLineHeard(engineProjectDir, engineSessionId, where)) {
-      directive = withChangeNotices(directive, [...(directive.change_notices ?? []), where]);
-      markPersonLinesHeard(engineProjectDir, engineSessionId, [where]);
-    }
-  }
   if (restartUnmarkedNotice) {
     directive = withChangeNotices(directive, [RESTART_UNMARKED_LINE, ...(directive.change_notices ?? [])]);
     restartUnmarkedNotice = false;
@@ -7586,21 +7569,7 @@ function parkedAfterPark(pd: string, parkStdout: string, lead?: string): ParkedD
   }
   // The person's stop is said here, where it is made; a later look over the
   // parked work re-emits the park without it.
-  const parked = workflowParkedDirective(pd, stateContent, parkedAt, lead);
-  parked.narration = withCheckIn(pd, parked.narration ?? "", stateContent);
-  return parked;
-}
-
-// A stopping point's narration with the check-in line (checkInLine). Each
-// caller is an event that happens once (a park, an approval), never a step a
-// later look emits again.
-function withCheckIn(projectDir: string, narration: string, stateContent?: string): string {
-  const line = checkInLine(projectDir, stateContent);
-  if (line === null) return narration;
-  // An approval earlier in this turn kept it for the reply (keptForReply), so
-  // this step's change_notices already carry it.
-  if (engineSessionId !== undefined && pendingPersonLines(projectDir, engineSessionId, { replyOnly: true }).lines.includes(line)) return narration;
-  return narration ? `${narration} ${line}` : line;
+  return workflowParkedDirective(pd, stateContent, parkedAt, lead);
 }
 
 // "Approve, but let's stop there for today": the approval is recorded, then
@@ -19331,9 +19300,6 @@ function teamHomeClaims(
       ? `${merge.unit} is merged in ${joinRepoNames(merge.repos)}. Written on the plan.`
       : `${joinRepoNames(merge.repos)} merged ${merge.unit}. Written on the plan.`);
   }
-  // Taking a Unit in wrote its records here: one of the check-in line's stopping points.
-  const checkIn = tookIn.length > 0 ? checkInLine(projectDir) : null;
-  if (checkIn !== null) sayWithStepOnce(projectDir, checkIn);
   // In git's words when git refused it (a hook of theirs, the host), as the push and take lines are.
   if (unsent.length > 0) {
     sayWithStepOnce(projectDir, unsent[0].line);
@@ -26251,14 +26217,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   const approvedState = flags.result === "approved" ? loadStateFileIfPresent(pd) : null;
   const progress = approvedState === null ? null : approvalProgressLine(approvedState, slug, scope, { projectDir: pd });
   const approvedLines = [unbuilt, progress].filter(Boolean).join("\n");
-  // The lead's own Build and Test end on teams across repos is a stopping point.
-  // The next stage's steps go on from the approval, so in a chat the line is
-  // kept for the reply the turn ends on (said once); with none it rides here.
-  const checkIn = approvedState !== null && approvedTogether.includes("build-and-test") && unitBuildOf(approvedState) === null
-    ? checkInLine(pd, approvedState)
-    : null;
-  const unkept = checkIn === null ? [] : keptForReply(pd, [checkIn]);
-  const narration = [approvedLines, ...unkept].filter(Boolean).join(" ");
+  const narration = approvedLines;
   const continues = workflowContinues(pd);
   // The agent's own approval goes on to the next stage, so its lines wait for the reply.
   const approvalNotices = flags.result === "approved" && continues.workflow_continues === true &&

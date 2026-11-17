@@ -33,8 +33,6 @@ import {
   plannedStages,
   type StageEntry,
   unitMajorConstructionStageSlugs,
-  markPersonLinesHeard,
-  personLineHeard,
   loadScopeMapping,
   loadStageGraphAll,
   markdownBlocks,
@@ -831,10 +829,6 @@ export function unitBuildsHere(
   return found;
 }
 
-// A fact, not a task: the agent carried the earlier words (with their command
-// list) into every later look as a to-do.
-export const CHECK_IN_LINE = "Your teammates see where this work stands once aidlc/ is committed and pushed.";
-
 // The stages a record's counts name: every stage the plan runs after
 // Initialization, but at a lead's project that teams build for not the Units'
 // own stages, which run in each taker's build. Read by status's Completion
@@ -857,19 +851,7 @@ function unitStagesOfTeams(stateContent: string, scope: string): Set<string> | n
   return new Set(unitMajorConstructionStageSlugs(scope, stateContent, true));
 }
 
-// What the chat that heard CHECK_IN_LINE hears once at its first look after the
-// person's own commit and push, and status's line then (checkInState).
-export const CHECKED_IN_LINE = "aidlc/ is committed and pushed: your teammates see where this work stands.";
-
-// That chat's line for where the record is: with the team, or pushed on a
-// branch of its own (a pull request's) that is not in the integration branch
-// yet. Null when it is neither.
-export function checkInNotice(state: CheckIn): string | null {
-  if (typeof state === "string") return null;
-  return "pushedOn" in state ? `aidlc/ is pushed on ${state.pushedOn}; your teammates see it once it is in ${state.into}.` : CHECKED_IN_LINE;
-}
-
-// Status's Checked in field for the same, or null. The branch is named, so a
+// Status's Checked in field, where the record is, or null. The branch is named, so a
 // record merged by its pull request is not read as still on the branch pushed
 // for it; a checkout that merge left ahead and behind hears the command that
 // brings it level, losing nothing (levelByContent).
@@ -901,38 +883,6 @@ export function levelDue(projectDir: string, stateContent: string):
   if (typeof state !== "object" || !("split" in state) || state.split === null) return null;
   const head = run(["rev-parse", "HEAD"]).stdout.trim();
   return head === "" ? null : { head, remote: state.remote, branch: state.into, ...state.split };
-}
-
-// Teams across repos share AI-DLC's record by git, and the person checks it in.
-// The callers say this at the stopping points (a stop, the push or the
-// person's Not now to it, the lead's Build and Test approval), unless aidlc/ is
-// checked in or pushed on a branch of its own (checkInState). Null for other
-// work (main's team Units on the workspace's own repo commit the record for the
-// person) and where there is no remote to push.
-export function checkInLine(projectDir: string, stateContent?: string): string | null {
-  if (!checkInApplies(projectDir, stateContent)) return null;
-  // The lead's own work shares its plan by the plan's ref: the teams never
-  // read the lead's record, so its check-in is the lead's own business.
-  try {
-    const state = stateContent ?? readStateFile(projectDir);
-    if (unitBuildOf(state) === null) return null;
-  } catch {
-    return null;
-  }
-  const state = checkInState(projectDir, stateContent);
-  if (typeof state === "object") return null;
-  // The chat is noted as handed the line, whichever step carries it, so its
-  // first look after the check-in says it is done (checkInHandedOut).
-  const session = resolveWorkflowSelection(projectDir).sessionId;
-  if (session && !isReadOnlyEngineProbe()) markPersonLinesHeard(projectDir, session, [CHECK_IN_HANDED]);
-  return CHECK_IN_LINE;
-}
-
-// The person-lines record's note that this chat was handed CHECK_IN_LINE; never said.
-const CHECK_IN_HANDED = "(the check-in line was handed out)";
-
-export function checkInHandedOut(projectDir: string, sessionId: string): boolean {
-  return personLineHeard(projectDir, sessionId, CHECK_IN_HANDED);
 }
 
 export function checkInApplies(projectDir: string, stateContent?: string): boolean {

@@ -917,24 +917,16 @@ one, `aidlc.settings.json` at the workspace root. Tool folders (`.claude/`,
 `.codex/`, `.kiro/` and the other tools' folders) are not committed: each person
 runs `aidlc config` in their own clone for the tool they use.
 
-AI-DLC says so once at each stopping point of teams' work: when you stop for
-now, when your Unit is pushed, when you say **Not now** to its push, and at the
-lead's project when Build and Test is approved: "Your teammates see where this
-work stands once aidlc/ is committed and pushed." It is said at those events,
-never because git status shows aidlc/ changed, since a look's own audit rows
-always change it. Your local git is read only to hand over the positive fact:
-after your own commit and push, the next look in that chat says once "aidlc/ is
-committed and pushed: your teammates see where this work stands.", status shows
-`Checked in:     yes, aidlc/ is in main on origin`, and the reminder is left
-unsaid while it is checked in; the rows each look adds to this clone's own audit
-file are left out of that reading (a decision of yours there still counts), and
-a branch never pushed says nothing either way.
-That fact is the branch the work merges into, as this clone last fetched it: a
-record pushed on a branch of its own, for a pull request, says once "aidlc/ is
-pushed on <branch>; your teammates see it once it is in main." (the branch the
-work merges into, in place of main), and status shows `Checked in:     pushed on
-<branch>, not in main yet` until the merge reaches this clone by your own fetch
-or pull.
+When to commit it is your team's own way of sharing its workspace, so no step
+says it. Asked where things stand (`/aidlc --status`), a Unit's build says where
+its record is: after your own commit and push, `Checked in:     yes, aidlc/ is
+in main on origin`. That is read from your local git only: the rows each look
+adds to this clone's own audit file are left out of it (a decision of yours
+there still counts), and a branch never pushed, or an `aidlc/` git ignores here,
+says nothing. It is the branch the work merges into, as this clone last fetched
+it: a record pushed on a branch of its own, for a pull request, shows
+`Checked in:     pushed on <branch>, not in main yet` until the merge reaches
+this clone by your own fetch or pull.
 A push's own lines go with the
 step that follows it, so they are said before the next question. Asked where things stand (`/aidlc --status`), a clone also says what its
 last `git pull` that brought changes brought from other people, by who made each
@@ -1009,9 +1001,9 @@ origin's and keeps your own changes, or says git's reason and you stay where you
 A lead working on another branch is asked once whether to commit the plan
 there, so they can push it on a branch and get it merged their usual way;
 nothing is pushed. A share typed on the plan's own
-branch pushes that branch, so its pull request has the newer plan. A team's record pushed on a branch whose pull request is open reads
-"aidlc/ is pushed on <branch>; your teammates see it once it is in main.", and
-status shows `Checked in:     pushed on <branch>, not in main yet`.
+branch pushes that branch, so its pull request has the newer plan. For a team's
+record pushed on a branch whose pull request is open, status shows
+`Checked in:     pushed on <branch>, not in main yet`.
 Back on main before that pull request merges, or in a fresh clone on another
 computer, from the branch it fetched, the take question offers **Carry on
 <unit>** ("Your build of it, on branch <branch>; I switch you there."), and on

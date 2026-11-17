@@ -18,7 +18,7 @@ import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts
 import { hooksHealthReadDir, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { shellSingleQuote } from "../../dist/claude/.claude/tools/aidlc-runtime-paths.ts";
 import { pastUnitStages } from "../../dist/claude/.claude/tools/aidlc-unit.ts";
-import { CHECK_IN_LINE, pullRequestHeadRefs } from "../../dist/claude/.claude/tools/aidlc-unit-teams.ts";
+import { pullRequestHeadRefs } from "../../dist/claude/.claude/tools/aidlc-unit-teams.ts";
 import { AIDLC_SRC, fixtureIntentId8, seededStateFile } from "../harness/fixtures.ts";
 import {
   bashLine,
@@ -71,6 +71,8 @@ setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 type SentResult = { repos: Array<{ repo: string; base: string; heads: string[] }> };
 
 const JUMP = join(AIDLC_SRC, "tools", "aidlc-jump.ts");
+// AI-DLC never says what a teammate sees: a team's record in aidlc/ is the team's to share.
+const TEAMMATES_SEE = "teammates see where this work stands";
 
 afterEach(cleanupTeamBuild);
 
@@ -178,8 +180,7 @@ describe("the push", () => {
     expect(pushed.status, pushed.out).toBe(0);
     expect(pushed.json?.notice).toBe(
       "Pushed branch refunds in checkout-api and billing. Open a PR in each your usual way. You're on refunds now in " +
-        "checkout-api and billing; your other changes are still yours, uncommitted. Switch back to main any time. " +
-        "Your teammates see where this work stands once aidlc/ is committed and pushed.",
+        "checkout-api and billing; your other changes are still yours, uncommitted. Switch back to main any time.",
     );
     expect(git(hosts["checkout-api"], ["ls-tree", "-r", "--name-only", "refunds"]).split("\n")).toEqual(["README.md", "src/refunds.ts"]);
     // On the Unit's branch, as their own hands would put them; their note came along, uncommitted.
@@ -211,7 +212,7 @@ describe("the push", () => {
     const step = next(alice, chat);
     const said = ((step.change_notices ?? []) as string[]).join(" ");
     expect(said, JSON.stringify(step).slice(0, 800)).toContain("Pushed branch refunds in checkout-api and billing.");
-    expect(said).toContain(CHECK_IN_LINE);
+    expect(said).not.toContain(TEAMMATES_SEE);
     expect(JSON.stringify(next(alice, chat))).not.toContain("Pushed branch refunds");
   });
 
@@ -839,8 +840,7 @@ describe("the push", () => {
     const again = run(UNIT, ["push"], alice);
     expect(again.status, again.out).toBe(0);
     expect(String(again.json?.notice)).toBe(
-      "Pushed branch refunds in checkout-api and billing. Open a PR in each your usual way. " +
-        "Your teammates see where this work stands once aidlc/ is committed and pushed.",
+      "Pushed branch refunds in checkout-api and billing. Open a PR in each your usual way.",
     );
   });
 
@@ -868,7 +868,7 @@ describe("the push", () => {
     expect(pushed.status, pushed.out).toBe(0);
     expect(pushed.json?.notice).toBe(
       "Pushed branch refunds in checkout-api and billing. Open a PR in each your usual way. You're on refunds now in " +
-        "checkout-api and billing. Switch back to main any time. Your teammates see where this work stands once aidlc/ is committed and pushed.",
+        "checkout-api and billing. Switch back to main any time.",
     );
   });
 
@@ -887,7 +887,7 @@ describe("the push", () => {
     expect(again.status, again.out).toBe(0);
     expect(again.json?.notice).toBe(
       "Pushed branch refunds in checkout-api and billing. billing's host says: Create a pull request for 'refunds' on GitHub by " +
-        `visiting: https://github.com/owner/billing/pull/new/refunds\nOpen a PR in checkout-api your usual way. ${CHECK_IN_LINE}`,
+        `visiting: https://github.com/owner/billing/pull/new/refunds\nOpen a PR in checkout-api your usual way.`,
     );
   });
 
@@ -910,7 +910,7 @@ describe("the push", () => {
     expect(said).toBe(
       "Pushed branch feature/refunds in checkout-api. Its host says: To create a merge request for feature/refunds, visit: " +
         "https://gitlab.example.invalid/team/checkout-api/-/merge_requests/new?merge_request%5Bsource_branch%5D=feature%2Frefunds\n" +
-        `You're on feature/refunds now in checkout-api. Switch back to main any time. ${CHECK_IN_LINE}`,
+        `You're on feature/refunds now in checkout-api. Switch back to main any time.`,
     );
     expect(said).not.toMatch(/\bPR\b|pull request/i);
     // A review fix pushed again, with the merge request open: GitLab's link to it.
@@ -919,7 +919,7 @@ describe("the push", () => {
     expect(again.status, again.out).toBe(0);
     expect(again.json?.notice).toBe(
       "Pushed branch feature/refunds in checkout-api. Its host says: View merge request for feature/refunds: " +
-        `https://gitlab.example.invalid/team/checkout-api/-/merge_requests/12\n${CHECK_IN_LINE}`,
+        `https://gitlab.example.invalid/team/checkout-api/-/merge_requests/12`,
     );
   });
 
@@ -1110,8 +1110,7 @@ describe("the push", () => {
     const later = run(UNIT, ["push", "--later"], alice);
     expect(later.status, later.out).toBe(0);
     expect(later.json?.notice).toBe(
-      "Nothing is pushed. I'll push refunds when you want it to go to the lead. " +
-        "Your teammates see where this work stands once aidlc/ is committed and pushed.",
+      "Nothing is pushed. I'll push refunds when you want it to go to the lead.",
     );
     expect(tellsWhatToType(ask.question, ask.choices, later.json?.notice)).toBe(false);
     const end = next(alice);
@@ -1863,9 +1862,9 @@ describe("at the home", () => {
     const seen = next(home.dir);
     const notices = (seen.change_notices ?? []) as string[];
     expect(notices, JSON.stringify(seen)).toContain("refunds is merged in checkout-api and billing. Written on the plan.");
-    expect(notices.filter((line) => line === CHECK_IN_LINE), JSON.stringify(notices)).toHaveLength(0);
+    expect(notices.filter((line) => line.includes(TEAMMATES_SEE)), JSON.stringify(notices)).toHaveLength(0);
     const after = next(home.dir);
-    expect((after.change_notices ?? []) as string[]).not.toContain(CHECK_IN_LINE);
+    expect((after.change_notices ?? []) as string[]).not.toContain(TEAMMATES_SEE);
   });
 
   test("a team's result brings home what Build and Test reads of the Unit, so its coverage check passes for team-built Units", () => {
@@ -2305,7 +2304,7 @@ describe("at the home", () => {
     // The next step records nothing again and says nothing of it again.
     const after = next(home.dir);
     expect(merged()).toHaveLength(1);
-    expect(JSON.stringify(after.change_notices ?? [])).not.toContain(CHECK_IN_LINE);
+    expect(JSON.stringify(after.change_notices ?? [])).not.toContain(TEAMMATES_SEE);
     expect(JSON.stringify(after)).not.toContain("is recorded as merged here");
   });
 
@@ -3220,7 +3219,7 @@ describe("a Unit on the workspace's own repository", () => {
     // Nothing else of theirs is left out of git here, so the line that asks them to check in is not said, and nothing
     // is said to be still theirs: the record this push commits is AI-DLC's.
     expect(String(pushed.json?.notice)).toEndWith(recordWent("refunds"));
-    expect(String(pushed.json?.notice)).not.toContain(CHECK_IN_LINE);
+    expect(String(pushed.json?.notice)).not.toContain(TEAMMATES_SEE);
     expect(String(pushed.json?.notice)).not.toContain("your other changes are still yours");
     const sent = claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds") as {
       result: { repos: Array<{ repo: string; heads: string[]; paths: Record<string, string | null> }> };
@@ -3274,8 +3273,9 @@ describe("a Unit on the workspace's own repository", () => {
     expect(git(home.remote, ["log", "--format=%s", "main..refunds"])).toBe("PAY-7 refund handler for the checkout totals");
     expect(git(alice, ["rev-parse", "refunds"])).toBe(git(home.remote, ["rev-parse", "refunds"]));
     const said = String(pushed.json?.notice);
-    expect(said).toContain("AI-DLC's record of refunds did not go with it: commit-msg: subject is longer than 50 characters.");
-    expect(said).toEndWith(CHECK_IN_LINE);
+    // Said once, in this computer's words, and nothing after it about the record.
+    expect(said.split("AI-DLC's record of refunds did not go with it").length, said).toBe(2);
+    expect(said).toEndWith("AI-DLC's record of refunds did not go with it: commit-msg: subject is longer than 50 characters.");
   });
 
   // A host rule on the record's files, as a GitLab push rule on file names or a
@@ -3295,8 +3295,8 @@ describe("a Unit on the workspace's own repository", () => {
     expect(git(alice, ["rev-parse", "refunds"])).toBe(git(home.remote, ["rev-parse", "refunds"]));
     expect(git(alice, ["status", "--porcelain", "--", "aidlc/spaces/payments"])).toBe("?? aidlc/spaces/payments/");
     const said = String(pushed.json?.notice);
-    expect(said).toContain("AI-DLC's record of refunds did not go with it: GitLab: File name aidlc/ is prohibited (pre-receive hook declined).");
-    expect(said).toEndWith(CHECK_IN_LINE);
+    expect(said.split("AI-DLC's record of refunds did not go with it").length, said).toBe(2);
+    expect(said).toEndWith("AI-DLC's record of refunds did not go with it: GitLab: File name aidlc/ is prohibited (pre-receive hook declined).");
   });
   // Build and Test runs at the lead's project once every Unit is merged, and
   // on one repository the merges are on the remote's main, not in this checkout.

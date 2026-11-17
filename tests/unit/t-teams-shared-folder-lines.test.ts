@@ -1,4 +1,4 @@
-// covers: function:checkInLine, function:arrivedAtLastPull, function:mergedAtTeamLook, subcommand:aidlc-unit:take, subcommand:aidlc-unit:push
+// covers: function:checkInState, function:arrivedAtLastPull, function:mergedAtTeamLook, subcommand:aidlc-unit:take, subcommand:aidlc-unit:push
 //
 // The lines a person meets in a workspace teams share by git (#2410). Carry on
 // is offered only for the person's own take, by their git name, whatever space
@@ -16,7 +16,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
-import { arrivedAtLastPull, checkInLine, checkInState } from "../../dist/claude/.claude/tools/aidlc-unit-teams.ts";
+import { arrivedAtLastPull, checkInState } from "../../dist/claude/.claude/tools/aidlc-unit-teams.ts";
 import { mergedAtTeamLook, type UnitClaimPayload } from "../../dist/claude/.claude/tools/aidlc-unit.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { asLeadsOwnCheckout } from "../harness/team-unit-merge.ts";
@@ -31,7 +31,6 @@ import {
   finishBuild,
   git,
   HOME_RECORD,
-  homeState,
   inSpace,
   makeHome,
   makePlanHomeWithRemote,
@@ -54,7 +53,9 @@ import {
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 afterEach(cleanupTeamBuild);
 
-const LINE = "Your teammates see where this work stands once aidlc/ is committed and pushed.";
+// A team's record in aidlc/ is the team's to commit and share: no step says what a teammate sees of it, or where it
+// stands; status says that when asked.
+const CHECK_IN_SAID = /teammates see|aidlc\/ is committed and pushed|aidlc\/ is pushed on/;
 const INIT = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-init.ts");
 const CLAUDE_RELEASE = join(REPO_ROOT, "dist-release", "claude");
 type Choice = { label: string; detail?: string };
@@ -283,29 +284,31 @@ describe("Carry on in a shared workspace", () => {
   });
 });
 
-describe("the check-in line", () => {
-  test("said at the person's stop, once: a plain look over the parked work does not say it again", () => {
+describe("no line about the team's record at a stopping point", () => {
+  test("the person's stop, and a plain look over the parked work, say nothing of it", () => {
     const { alice } = refundsTakenInClone();
     next(alice);
     const parked = run(ORCH, ["park"], alice);
     expect(parked.status, parked.out).toBe(0);
-    expect(String(parked.json?.narration), parked.out).toEndWith(LINE);
+    expect(String(parked.json?.narration), parked.out).not.toMatch(CHECK_IN_SAID);
     const look = next(alice);
     expect(look.kind, JSON.stringify(look)).toBe("parked");
+    expect(JSON.stringify(look)).not.toMatch(CHECK_IN_SAID);
     expect(JSON.stringify(look)).not.toContain("git add aidlc");
   });
 
-  test("said at the push, last, and never the tool folder", () => {
+  test("the push says nothing of it, nor of the tool folder", () => {
     const { alice, record } = refundsTakenInClone();
     codeGenerated(alice, record);
     finishBuild(record);
     const pushed = run(UNIT, ["push"], alice);
     expect(pushed.status, pushed.out).toBe(0);
-    expect(String(pushed.json?.notice)).toEndWith(` ${LINE}`);
+    expect(String(pushed.json?.notice), pushed.out).toContain("Pushed branch refunds");
+    expect(String(pushed.json?.notice)).not.toMatch(CHECK_IN_SAID);
     expect(pushed.out).not.toContain("own folder");
   });
 
-  test("said when the push is put off, and not again by a later look at the finished build", () => {
+  test("the push put off says only that, and a later look at the finished build nothing more", () => {
     const { alice, record } = refundsTakenInClone();
     const step = next(alice);
     expect(JSON.stringify(step)).not.toContain("git add aidlc");
@@ -317,7 +320,7 @@ describe("the check-in line", () => {
     expect(next(alice).ask_type).toBe("unit-push");
     const later = run(UNIT, ["push", "--later"], alice);
     expect(later.status, later.out).toBe(0);
-    expect(later.json?.notice).toBe(`Nothing is pushed. I'll push refunds when you want it to go to the lead. ${LINE}`);
+    expect(later.json?.notice).toBe("Nothing is pushed. I'll push refunds when you want it to go to the lead.");
     // The end, and every look after it, carry nothing more.
     for (let look = 0; look < 2; look++) {
       const end = next(alice);
@@ -339,10 +342,10 @@ describe("the check-in line", () => {
     const chat: NodeJS.ProcessEnv = { ...ENV, CLAUDE_CODE_SESSION_ID: "7d8e2f3a-3b4c-4e5d-9a6b-2c3d4e5f6a70", CLAUDE_PID: String(process.pid) };
     const approved = run(ORCH, ["report", "--stage", "build-and-test", "--result", "approved", "--user-input", "Approve"], home.dir, chat);
     expect(approved.status, approved.out).toBe(0);
-    expect(approved.out).not.toContain(LINE);
+    expect(approved.out).not.toMatch(CHECK_IN_SAID);
     const parked = run(ORCH, ["park", "--person-asked"], home.dir, chat);
     expect(parked.status, parked.out).toBe(0);
-    expect(parked.out).not.toContain(LINE);
+    expect(parked.out).not.toMatch(CHECK_IN_SAID);
   });
 
   // A live run (Kiro CLI, the lead's Build and Test): the step said '15 of 23'
@@ -363,45 +366,26 @@ describe("the check-in line", () => {
     expect(status).not.toBeNull();
     expect([step![1], step![2]]).toEqual([status![1], status![2]]);
   });
-
-  test("only where teams take Units by pull request: work begun on main's flow on the workspace's own repo never hears it", () => {
-    const { alice } = refundsTakenInClone();
-    expect(checkInLine(alice)).toBe(LINE);
-    git(alice, ["remote", "remove", "origin"]);
-    expect(checkInLine(alice)).toBeNull();
-    const begun = makeHome({ repos: {}, state: homeState(["- **Unit Ownership**: team"]) });
-    expect(checkInLine(begun.dir)).toBeNull();
-  });
-
-  test("team work chosen on the workspace's own repo with a remote never hears it at the lead's own work, as teams across repos do not", () => {
-    const onRepo = makeHome({ repos: {} });
-    expect(run(STATE, ["set-unit-ownership", "team"], onRepo.dir).status).toBe(0);
-    expect(checkInLine(onRepo.dir)).toBeNull();
-  });
 });
 
-// Live runs (Claude Code on Windows Server, Codex, Kiro CLI): after the
-// person's own commit and push, the agent kept saying to commit and push
-// aidlc/; the next look now hands it the fact.
+// Where a team's record stands is status's to say, when the person asks: no
+// look says it, before or after their own commit and push.
 describe("the checked-in fact", () => {
-  const CHECKED_IN = "aidlc/ is committed and pushed: your teammates see where this work stands.";
   const STATUS_YES = "Checked in:     yes, aidlc/ is in main on origin\n";
   const chatOf = (session: string): NodeJS.ProcessEnv => ({ ...ENV, CLAUDE_CODE_SESSION_ID: session, CLAUDE_PID: String(process.pid) });
   const statusOf = (dir: string): string => run(UTILITY, ["status"], dir, ENV).out;
-  const notices = (step: Record<string, unknown>): string[] => (step.change_notices ?? []) as string[];
 
-  test("after the person's own commit and push, the chat that heard the line hears once that it is checked in, and status says yes", () => {
+  test("after the person's own commit and push, no look says anything of it, and status says yes", () => {
     const { alice } = refundsTakenInClone();
     const chat = chatOf("5b6c0d1e-1f2a-4c3b-8e4f-0a1b2c3d4e50");
     next(alice, chat);
     const parked = run(ORCH, ["park"], alice, chat);
-    expect(String(parked.json?.narration), parked.out).toEndWith(LINE);
+    expect(String(parked.json?.narration), parked.out).not.toMatch(CHECK_IN_SAID);
     expect(statusOf(alice)).not.toContain("Checked in:");
     checkIn(alice, "refunds parked");
     const look = next(alice, chat);
-    expect(notices(look), JSON.stringify(look)).toContain(CHECKED_IN);
-    expect(JSON.stringify(look)).not.toContain(LINE);
-    expect(notices(next(alice, chat))).not.toContain(CHECKED_IN);
+    expect(JSON.stringify(look)).not.toMatch(CHECK_IN_SAID);
+    expect(JSON.stringify(next(alice, chat))).not.toMatch(CHECK_IN_SAID);
     expect(statusOf(alice)).toContain(STATUS_YES);
   });
 
@@ -429,7 +413,7 @@ describe("the checked-in fact", () => {
     checkIn(alice, "refunds parked");
     // A change to the record the person has not checked in.
     writeFileSync(join(record, "notes.md"), "Not checked in yet.\n");
-    expect(notices(next(alice, chat))).not.toContain(CHECKED_IN);
+    expect(JSON.stringify(next(alice, chat))).not.toMatch(CHECK_IN_SAID);
     expect(statusOf(alice)).not.toContain("Checked in:");
     rmSync(join(record, "notes.md"));
     // A decision row of theirs, in this clone's own audit file only.
@@ -437,27 +421,22 @@ describe("the checked-in fact", () => {
     const shard = readdirSync(audit).find((name) => readFileSync(join(audit, name), "utf-8").includes("**Event**: UNIT_TAKEN_IN"))!;
     writeFileSync(join(audit, shard), `${readFileSync(join(audit, shard), "utf-8")}\n## Gate Approved\n**Timestamp**: 2026-11-10T12:00:00Z\n**Event**: GATE_APPROVED\n**Stage**: functional-design\n**Git Name**: alice\n\n---\n`);
     expect(statusOf(alice)).not.toContain("Checked in:");
-    expect(notices(next(alice, chat))).not.toContain(CHECKED_IN);
+    expect(JSON.stringify(next(alice, chat))).not.toMatch(CHECK_IN_SAID);
   });
 
   // A live run on GitHub: a record pushed with -u on a branch whose pull
   // request was open was said to be with the team while main had none of it.
-  test("a record pushed on a branch not merged yet is said pushed there, once, and checked in once main has it", () => {
+  test("a record pushed on a branch not merged yet is in status as pushed there, and checked in once main has it; no look says either", () => {
     const { home, alice } = refundsTakenInClone();
     const chat = chatOf("6c7d1e2f-2a3b-4d4c-9f5a-1b2c3d4e5f60");
-    const PUSHED = "aidlc/ is pushed on records/refunds; your teammates see it once it is in main.";
     next(alice, chat);
     const parked = run(ORCH, ["park"], alice, chat);
-    expect(String(parked.json?.narration), parked.out).toEndWith(LINE);
+    expect(String(parked.json?.narration), parked.out).not.toMatch(CHECK_IN_SAID);
     git(alice, ["checkout", "-q", "-b", "records/refunds"]);
     git(alice, ["add", "aidlc"]);
     git(alice, ["commit", "-q", "-m", "refunds parked"]);
     git(alice, ["push", "-q", "-u", "origin", "records/refunds"]);
-    const look = next(alice, chat);
-    expect(notices(look), JSON.stringify(look)).toContain(PUSHED);
-    expect(notices(look)).not.toContain(CHECKED_IN);
-    expect(notices(next(alice, chat))).not.toContain(PUSHED);
-    expect(checkInLine(alice)).toBeNull();
+    expect(JSON.stringify(next(alice, chat))).not.toMatch(CHECK_IN_SAID);
     expect(statusOf(alice)).toContain("Checked in:     pushed on records/refunds, not in main yet\n");
     // The pull request squash-merged on the host: main has the record as a commit of its own.
     const reviewer = cloneOf(home.remote, "reviewer");
@@ -466,7 +445,7 @@ describe("the checked-in fact", () => {
     git(reviewer, ["commit", "-q", "-m", "refunds record (#1)"]);
     git(reviewer, ["push", "-q", "origin", "main"]);
     git(alice, ["fetch", "-q", "origin"]);
-    expect(notices(next(alice, chat))).toContain(CHECKED_IN);
+    expect(JSON.stringify(next(alice, chat))).not.toMatch(CHECK_IN_SAID);
     expect(statusOf(alice)).toContain(STATUS_YES);
   });
 
@@ -506,13 +485,12 @@ describe("the checked-in fact", () => {
     expect(took.status, took.out).toBe(0);
     const chat = chatOf("7d8e2f3a-3b4c-4e5d-8a6b-2c3d4e5f6a70");
     next(alice, chat);
-    expect(String(run(ORCH, ["park"], alice, chat).json?.narration)).toEndWith(LINE);
+    expect(String(run(ORCH, ["park"], alice, chat).json?.narration)).not.toMatch(CHECK_IN_SAID);
     git(alice, ["checkout", "-q", "-b", "pr/refunds"]);
     git(alice, ["add", "aidlc"]);
     git(alice, ["commit", "-q", "-m", "refunds parked"]);
     git(alice, ["push", "-q", "-u", "origin", "pr/refunds"]);
-    const look = next(alice, chat);
-    expect(notices(look), JSON.stringify(look)).toContain("aidlc/ is pushed on pr/refunds; your teammates see it once it is in records.");
+    expect(JSON.stringify(next(alice, chat))).not.toMatch(CHECK_IN_SAID);
     expect(statusOf(alice)).toContain("Checked in:     pushed on pr/refunds, not in records yet\n");
     // Merged into records with a merge commit.
     const reviewer = cloneOf(home.remote, "reviewer");
@@ -521,20 +499,20 @@ describe("the checked-in fact", () => {
     git(reviewer, ["merge", "-q", "--no-ff", "--no-edit", "FETCH_HEAD"]);
     git(reviewer, ["push", "-q", "origin", "records"]);
     git(alice, ["fetch", "-q", "origin"]);
-    expect(notices(next(alice, chat))).toContain(CHECKED_IN);
+    expect(JSON.stringify(next(alice, chat))).not.toMatch(CHECK_IN_SAID);
     expect(statusOf(alice)).toContain("Checked in:     yes, aidlc/ is in records on origin\n");
   });
 
-  test("a branch never pushed cannot be told: no line at a look, none in status, and the stopping point says today's words", () => {
+  test("a branch never pushed cannot be told: no line at a look, at the stopping point or in status", () => {
     const { alice } = refundsTakenInClone();
     git(alice, ["checkout", "-q", "-b", "local-only"]);
     const chat = chatOf("3f4a8b9c-9d0e-4a1f-8c2d-8e9f0a1b2c30");
     next(alice, chat);
     const parked = run(ORCH, ["park"], alice, chat);
-    expect(String(parked.json?.narration), parked.out).toEndWith(LINE);
+    expect(String(parked.json?.narration), parked.out).not.toMatch(CHECK_IN_SAID);
     git(alice, ["add", "aidlc"]);
     git(alice, ["commit", "-q", "-m", "refunds parked"]);
-    expect(notices(next(alice, chat))).not.toContain(CHECKED_IN);
+    expect(JSON.stringify(next(alice, chat))).not.toMatch(CHECK_IN_SAID);
     expect(statusOf(alice)).not.toContain("Checked in:");
   });
 });

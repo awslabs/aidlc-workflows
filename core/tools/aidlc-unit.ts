@@ -231,7 +231,6 @@ import {
   unitsAskedHere,
   unitWriteTargets,
   outputForLead,
-  checkInLine,
   unitWordsArg,
   unitWordsFile,
   RECORD_COMMIT_MESSAGE,
@@ -11826,8 +11825,7 @@ function pushUnit(args: string[], projectDir?: string): void {
   if (bareFlags.has("later") || flags.later !== undefined) {
     withAuditLock(pd, () => writeStateFile(pd, setOrInsertField(readStateFile(pd), "## Runtime State", UNIT_PUSH_FIELD, "later")));
     finishBuildRecord(pd);
-    const later = [`Nothing is pushed. I'll push ${unit} when you want it to go to the lead.`, checkInLine(pd)].filter((line) => line !== null);
-    console.log(JSON.stringify({ pushed: false, notice: later.join(" ") }));
+    console.log(JSON.stringify({ pushed: false, notice: `Nothing is pushed. I'll push ${unit} when you want it to go to the lead.` }));
     return;
   }
   // The commit message the person gave, from the file the agent wrote it to:
@@ -12301,8 +12299,6 @@ function pushUnit(args: string[], projectDir?: string): void {
   const dot = planned.find((entry) => entry.repo === ".");
   const record = dot === undefined ? null : sendBuildRecord(pd, dot.remote, branch, unit, given?.text ?? null);
   if (record?.line) lines.push(record.line);
-  const checkIn = sentOn && !record?.went ? checkInLine(pd) : null;
-  if (checkIn !== null) lines.push(checkIn);
   // With the result on the Unit's record no line asks anything: the lines ride
   // the step that follows, as the take's carry-on line does, so a next run at
   // once says them with its question; with no chat known they are printed here.
@@ -14077,12 +14073,11 @@ function saidMerged(args: string[], projectDir?: string): void {
     verdicts: wordVerdicts(live, verdicts), ...(done ? { done: true as const } : {}),
   }));
   failUnlessWritten(pd, sent, `${unit}'s merge in ${flags.repo}`, lead.fields["Message Id"]);
-  const tookIn = done && recordUnitDone(pd, counted, verdicts);
+  if (done) recordUnitDone(pd, counted, verdicts);
   const said = `${flags.repo} counts as merged for ${unit}, in your words.`;
   const notMerged = verdicts.filter((verdict) => !verdict.merged).map((verdict) => verdict.repo);
-  const checkIn = tookIn ? checkInLine(pd) : null;
   const notice = done
-    ? [`${unit} is recorded as merged here.`, checkIn].filter((line) => line !== null).join(" ")
+    ? `${unit} is recorded as merged here.`
     : notMerged.length > 0
       ? `${said} ${joinNames(notMerged)} ${notMerged.length === 1 ? "has" : "have"} not merged it yet, so nothing is recorded here.`
       : said;
