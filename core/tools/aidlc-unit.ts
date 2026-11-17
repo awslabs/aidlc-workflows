@@ -13579,7 +13579,10 @@ function pushToFork(pd: string, args: string[], build: UnitBuild, branch: string
     const dir = repoDir(pd, repo);
     const others = address && isGitRepoDir(dir) ? remotesNotAt(dir, address) : null;
     const way = forkRemoteWay(pd, repo, `push --to-fork --remote ${repo}=<that name>`);
-    console.log(JSON.stringify({ pushed: false, unit, notice: others === null ? `${repo} is not cloned here, so nothing was pushed.`
+    console.log(JSON.stringify({ pushed: false, unit, notice: others === null
+      ? `${repo} is not cloned here, so nothing was pushed. Say if you want me to clone it, or tell me your fork's address and I'll clone ` +
+        `that into ${repoClonePath(pd, repo)}. On clone, run \`${aidlcToolInvocation("utility")} intent add-repo ${shellArg(repo)}\`; on an ` +
+        `address, clone it there with git on their word; then run \`${aidlcToolInvocation("unit")} push --to-fork\` again.`
       : others.length === 0
         ? `Your clone of ${repo} has no remote but the one at the plan's address, so nothing was pushed. Tell me your fork's address, ` +
           `and I'll push ${unit} there. ${way}`

@@ -215,6 +215,16 @@ describe("the push of a Unit's branch early to the person's fork", () => {
       "No push of refunds to a fork was offered or asked for, so nothing was pushed.");
   });
 
+  test("asked or offered with that repository not cloned here: said, with the way on", () => {
+    const { alice } = refundsTakenInClone((alice) => {
+      renameSync(join(alice, "checkout-api"), join(alice, "..", "checkout-api-elsewhere"));
+    });
+    offered(alice);
+    const said = String(run(UNIT, ["push", "--to-fork"], alice).json?.notice);
+    expect(said).toStartWith("checkout-api is not cloned here, so nothing was pushed. Say if you want me to clone it, or tell me your " +
+      "fork's address and I'll clone that into checkout-api.");
+  });
+
   test("asked or offered where no one fork can be told: what the clone has, the way on, and the remote the person names", () => {
     const { alice, hosts } = refundsTakenInClone();
     offered(alice);
@@ -357,7 +367,7 @@ describe("the push of a Unit's branch early to the person's fork", () => {
     chmodSync(hook, 0o755);
     const byRule = run(UNIT, ["push"], ruled.alice);
     expect(byRule.status).not.toBe(0);
-    expect(String(byRule.json?.error)).not.toContain("add your fork");
+    expect(String(byRule.json?.error)).not.toContain("takes no push from you");
   });
 
   test("no offer: a host rule on the record's refs, AI-DLC's own clone with no fork, an unattended run, or a fork added after the take", () => {
