@@ -162,11 +162,12 @@ describe("a team takes a Unit from the plan where it is shared", () => {
     expect(git(pay, ["rev-parse", copy])).toBe(home.plan!);
     expect((await tools()).homeCopyOf(copy)).toEqual({ id8: home.id8, key: repoCopyKey(plan), kind: "plan" });
     expect(git(pay, ["for-each-ref", "--format=%(refname)", `refs/aidlc/home/${home.id8}/integration`])).toBe("");
-    // One fetch of the plan, never ls-remote with a pattern, never the lead's branch.
+    // One fetch of the plan, never ls-remote with a pattern, never the lead's branch: the only branch a look
+    // reads is a record's own, where a repository holds it as a branch.
     const calls = readFileSync(trace, "utf-8").split(/\r?\n/).filter((line) => line.includes("trace: built-in: git ") || line.includes("trace: run_command: git"));
     expect(calls.filter((line) => / fetch .*refs\/aidlc\/plans\//.test(line))).toHaveLength(1);
     expect(calls.some((line) => / ls-remote .*refs\/aidlc\/\*/.test(line))).toBe(false);
-    expect(calls.some((line) => / fetch .*refs\/heads\//.test(line))).toBe(false);
+    expect(calls.some((line) => / fetch .*refs\/heads\/(?!aidlc\/claims\/)/.test(line))).toBe(false);
     // Nothing of AI-DLC's in the code clone, no remote here, no setting changed.
     expect(cloneState(join(pay, "billing"))).toBe(billingBefore);
     expect(git(join(pay, "billing"), ["for-each-ref", "--format=%(refname)", "refs/aidlc/"])).toBe("");

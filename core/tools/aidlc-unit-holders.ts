@@ -75,6 +75,10 @@ export function claimRecordRef(id8: string, unit: string): string {
   return `${CLAIM_RECORDS}${id8}/${unit}`;
 }
 
+// A Unit's record as a branch, where its repository takes no ref of AI-DLC's
+// but a branch: the same commits as the ref would hold.
+export const CLAIM_RECORD_BRANCHES = "refs/heads/aidlc/claims/";
+
 // The plan a lead shares with the teams, in one code repository.
 export function planRecordRef(id8: string): string {
   return `refs/aidlc/plans/${id8}`;
@@ -89,6 +93,19 @@ export function homeCopyName(id8: string, key: string, tail: string): string {
 }
 
 export type HomeCopy = { id8: string; key: string; kind: "plan" } | { id8: string; key: string; kind: "record"; unit: string };
+
+// The copy of what a look read from a branch, beside the one every reader
+// reads (homeCopyName), so the next look's prune of one form never takes the
+// other's and the look can tell which form the repository holds.
+export function homeCopyOnBranchName(id8: string, key: string, tail: string): string {
+  return `refs/aidlc/home/${id8}/${key}/on-branch/${tail}`;
+}
+
+// The one reading of an on-branch copy's name.
+export function homeCopyOnBranchOf(ref: string): HomeCopy | null {
+  const at = /^refs\/aidlc\/home\/([^/]+)\/([0-9a-f]{12})\/on-branch\/claims\/([^/]+)$/.exec(ref);
+  return at === null ? null : { id8: at[1], key: at[2], kind: "record", unit: at[3] };
+}
 
 // The one reading of a copy's name; the key is exactly twelve lower-case hex,
 // so no other ref under refs/aidlc/home/ reads as one.

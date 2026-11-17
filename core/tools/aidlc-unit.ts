@@ -303,12 +303,15 @@ import {
   claimHere,
   claimPlaces,
   claimPrefixOf,
+  CLAIM_RECORD_BRANCHES,
   claimRecordRef,
   claimsOnRemote,
   isClaimTreeFile,
   leadsPlanNotHere,
   PLAN_BRANCH,
   homeCopyOf,
+  homeCopyOnBranchName,
+  homeCopyOnBranchOf,
   planRecordRef,
   saidPlans,
   writeSaidPlans,
@@ -8914,7 +8917,10 @@ function cloneSpelling(projectDir: string, address: string, use: "fetch" | "push
 // at its own copy, never this one's; --prune, passed every time so the
 // person's fetch.prune never decides, takes away the copy of a ref the remote
 // no longer has, and a plan's copy it took is put back, so a build keeps the
-// rules and the commit it took from.
+// rules and the commit it took from. A look that does not finish puts back
+// every copy it took. A record is read in both forms, its ref and its branch
+// (where a repository takes only branches), each into a copy of its own; the
+// copy every reader reads holds the one that counts (recordFormsCounted).
 export type LookResult =
   | { ok: true; refs: Record<string, { now: string | null; was: string | null }> }
   // git's own words, sign-in masked, and its first line for a line that says
@@ -8923,23 +8929,53 @@ export type LookResult =
   // This repository's own .git could not be written (Codex's sandbox).
   | { ok: false; refused: string };
 
-function lookRefspec(address: string, ref: string): string {
+function lookRefspecs(address: string, ref: string): string[] {
   const key = repoCopyKey(address);
   const plan = /^refs\/aidlc\/plans\/([^/*]+)$/.exec(ref);
-  if (plan !== null) return `+${ref}*:refs/aidlc/home/${plan[1]}*/${key}/plan`;
-  if (/^refs\/aidlc\/plans\/$/.test(ref)) return `+refs/aidlc/plans/*:refs/aidlc/home/*/${key}/plan`;
-  return `+${ref}*:${copyOf(address, ref)}*`;
+  if (plan !== null) return [`+${ref}*:refs/aidlc/home/${plan[1]}*/${key}/plan`];
+  if (/^refs\/aidlc\/plans\/$/.test(ref)) return [`+refs/aidlc/plans/*:refs/aidlc/home/*/${key}/plan`];
+  const record = /^refs\/aidlc\/claims\/([^/]+)\/([^/]*)$/.exec(ref);
+  const onBranch = record === null ? [] :
+    [`+${CLAIM_RECORD_BRANCHES}${record[1]}/${record[2]}*:${homeCopyOnBranchName(record[1], key, `claims/${record[2]}`)}*`];
+  return [`+${ref}*:${copyOf(address, ref)}*`, ...onBranch];
 }
 
-// The copies this repository's look keeps, by name, with their commits.
-function copiesAt(pd: string, key: string): Map<string, string> {
+// The copies this repository's look keeps, by name, with their commits: those
+// every reader reads, or (`onBranch`) those of what it read from a branch.
+function copiesAt(pd: string, key: string, onBranch = false): Map<string, string> {
   const listed = localGit(pd, ["for-each-ref", "--format=%(objectname) %(refname)", "refs/aidlc/home/"]);
   const copies = new Map<string, string>();
+  const reads = onBranch ? homeCopyOnBranchOf : homeCopyOf;
   for (const line of listed.ok ? listed.stdout.split(/\r?\n/) : []) {
     const [oid, ref] = line.trim().split(" ");
-    if (oid && ref && homeCopyOf(ref)?.key === key) copies.set(ref, oid);
+    if (oid && ref && reads(ref)?.key === key) copies.set(ref, oid);
   }
   return copies;
+}
+
+// Each copy a look took away put back as it was.
+function copiesPutBack(pd: string, key: string, was: Map<string, string>, onBranch: boolean): void {
+  const now = copiesAt(pd, key, onBranch);
+  for (const [name, oid] of was) if (!now.has(name)) localGit(pd, ["update-ref", name, oid]);
+}
+
+// A record the repository holds as a branch counts where it has no ref, or
+// where the branch moved on from the ref's commit; otherwise the ref counts
+// (two writers at one moment). The look's own fetch just took away the copy of
+// a ref the repository does not have, so the copy every reader reads is the
+// ref's exactly when the repository has the ref.
+function recordFormsCounted(pd: string, address: string, key: string, refs: readonly string[]): void {
+  const looked = refs.filter((ref) => ref.startsWith("refs/aidlc/claims/"));
+  for (const [name, oid] of copiesAt(pd, key, true)) {
+    const copy = homeCopyOnBranchOf(name);
+    if (copy?.kind !== "record") continue;
+    const record = claimRecordRef(copy.id8, copy.unit);
+    if (!looked.some((ref) => record.startsWith(ref))) continue;
+    const reads = copyOf(address, record);
+    const ref = localGit(pd, ["rev-parse", "--verify", "--quiet", reads]).stdout.trim();
+    if (ref === oid) continue;
+    if (ref === "" || localGit(pd, ["merge-base", "--is-ancestor", ref, oid]).ok) localGit(pd, ["update-ref", reads, oid]);
+  }
 }
 
 // `refs`: the plan's ref, a record's ref, a work's records folder
@@ -8952,7 +8988,8 @@ export function lookAt(projectDir: string, address: string, refs: readonly strin
   const via = gitTargetFor(projectDir, address, "fetch");
   const key = repoCopyKey(address);
   const before = copiesAt(projectDir, key);
-  const args = ["fetch", "--no-tags", "--no-filter", "--no-write-fetch-head", "--prune", "-q", via.target, ...refs.map((ref) => lookRefspec(address, ref))];
+  const beforeOnBranch = copiesAt(projectDir, key, true);
+  const args = ["fetch", "--no-tags", "--no-filter", "--no-write-fetch-head", "--prune", "-q", via.target, ...refs.flatMap((ref) => lookRefspecs(address, ref))];
   const fetch = (): GitBytesResult => gitBytes(projectDir, args, { ...via.env, GIT_TERMINAL_PROMPT: "0" });
   const fetched = options.typed ? fetch() : quietly(() => {
     quietLimitMs = QUIET_LOOK_CEILING_MS;
@@ -8963,6 +9000,8 @@ export function lookAt(projectDir: string, address: string, refs: readonly strin
     }
   });
   if (!fetched.ok) {
+    copiesPutBack(projectDir, key, before, false);
+    copiesPutBack(projectDir, key, beforeOnBranch, true);
     const stderr = fetched.stderr;
     const refused = localGitWriteRefused(stderr);
     if (refused !== null) return { ok: false, refused };
@@ -8970,6 +9009,7 @@ export function lookAt(projectDir: string, address: string, refs: readonly strin
     const said = maskUserinfo(gitWords(stderr));
     return { ok: false, said, firstLine: maskUserinfo(stderr.trim().split(/\r?\n/)[0]?.trim() ?? "") || said };
   }
+  recordFormsCounted(projectDir, address, key, refs);
   const after = copiesAt(projectDir, key);
   const found: Record<string, { now: string | null; was: string | null }> = {};
   const copyName = (ref: string): string => (/^refs\/aidlc\/plans\/[^/]+$/.test(ref) || /^refs\/aidlc\/claims\/[^/]+\/[^/]+$/.test(ref) ? copyOf(address, ref) : "");
