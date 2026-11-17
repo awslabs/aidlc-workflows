@@ -7505,7 +7505,7 @@ function prepareRefreshSource(
     writeFileSync(process.env.AIDLC_STAGE_GRAPH, compiled.json);
     writeFileSync(stagedGrid, compiled.gridJson);
     resetProjectionCaches();
-    regenerateRunnersFor(root, stagedHarness);
+    regenerateRunnersFor(root, stagedHarness, pathPresent(join(projectDir, ".aidlc-version")));
     resetProjectionCaches();
 
     // The harness's skills folder: inside the harness dir, or one of the shared

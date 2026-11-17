@@ -18,9 +18,9 @@ function stampedRelease(stagedHarness: string): string | null {
   }
 }
 
-export function runnerGenerator(stagedHarness: string): { release: string; commands: string[][] } | null {
+export function runnerGenerator(stagedHarness: string, pinned: boolean): { release: string; commands: string[][] } | null {
   const release = stampedRelease(stagedHarness);
-  if (release === null || release === AIDLC_VERSION) return null;
+  if (!pinned || release === null || release === AIDLC_VERSION) return null;
 
   // native
   if (compiledExecutable() !== null) {
@@ -40,8 +40,8 @@ export function runnerGenerator(stagedHarness: string): { release: string; comma
   return { release, commands: [[process.execPath, tool, "write"], [process.execPath, tool, "scopes"]] };
 }
 
-export function regenerateRunnersFor(stagedRoot: string, stagedHarness: string): void {
-  const generator = runnerGenerator(stagedHarness);
+export function regenerateRunnersFor(stagedRoot: string, stagedHarness: string, pinned: boolean): void {
+  const generator = runnerGenerator(stagedHarness, pinned);
   if (generator === null) {
     regenerateRunnerSurfaces();
     return;
