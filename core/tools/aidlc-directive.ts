@@ -1375,7 +1375,8 @@ const STAGE_VALIDITY_FIELD = "stage_validity" as const;
 const CHANGE_NOTICES_FIELD = "change_notices" as const;
 const STAGE_VALIDITY_NOTE_FIELD = "stage_validity_note" as const;
 const CHANGE_NOTICES_NOTE_FIELD = "change_notices_note" as const;
-// At a team home, every step's commands for the lead's words about the teams' Units.
+// The commands for the person's words about the Units: at a team home, every
+// step's for the teams' Units; on an Inception step, who builds them.
 const BOARD_NOTE_FIELD = "board_note" as const;
 
 // Every kind's set gains `narration`, so the per-kind literals above stay the

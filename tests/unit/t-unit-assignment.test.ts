@@ -29,6 +29,7 @@ import {
   git,
   HOME_RECORD,
   homeState,
+  hook,
   makeHome,
   mergeOnHost,
   next,
@@ -157,6 +158,44 @@ describe("after choosing teams the plan goes to them the way main's share questi
     expect(ask.assign_command).toBeUndefined();
     expect(String(ask.question)).toStartWith("Do you want me to share the plan with the teams? I'd put it in app:");
     expect(JSON.stringify(ask)).not.toContain("Who builds which Unit");
+  });
+
+  // The person says who builds the Units in their own words while Delivery
+  // Planning runs, before the engine's question: the agent records it with
+  // the setter that step hands it, and the step after the approval is the
+  // share, as after the question's own pick.
+  test("teams said at Delivery Planning with the setter its step hands: the step after its approval is the share of the plan", () => {
+    const home = makeHome({
+      // Existing code, as the work's repositories hold it.
+      state: homeState()
+        .replace("- **Project Type**: Greenfield", "- **Project Type**: Brownfield")
+        .replace(/^- \[x\] delivery-planning /m, "- [-] delivery-planning ")
+        .replace(/^- \[-\] functional-design /m, "- [ ] functional-design ")
+        .replace("- **Lifecycle Phase**: CONSTRUCTION", "- **Lifecycle Phase**: INCEPTION")
+        .replace("- **Current Stage**: functional-design", "- **Current Stage**: delivery-planning"),
+    });
+    const step = next(home.dir);
+    expect(step.kind, JSON.stringify(step)).toBe("run-stage");
+    expect(step.stage).toBe("delivery-planning");
+    const setter = /`[^`]*aidlc-state\.ts (set-unit-ownership team --message) <id>`/.exec(String(step.board_note ?? ""));
+    expect(setter, JSON.stringify(step)).not.toBeNull();
+    const said = hook(home.dir, ENV, { hook_event_name: "UserPromptSubmit", session_id: "01995000-7a11-7000-8000-000000004021", prompt: "Several teams." });
+    const id = /on record as ([0-9a-f]+):/.exec(said.out)?.[1];
+    expect(id, said.out).toBeDefined();
+    const ran = run(STATE, [...setter![1].split(" "), String(id)], home.dir);
+    expect(ran.status, ran.out).toBe(0);
+    expect(field(stateOf(home.dir), "Home Location")).toBe(git(join(home.dir, "app"), ["remote", "get-url", "origin"]));
+    const dir = join(seededRecordDir(home.dir), "inception", "delivery-planning");
+    mkdirSync(dir, { recursive: true });
+    for (const name of ["bolt-plan.md", "team-allocation.md", "risk-and-sequencing-rationale.md", "external-dependency-map.md",
+      "delivery-planning-questions.md"]) writeFileSync(join(dir, name), `# ${name}\n\nPlanned.\n`);
+    expect(run(ORCH, ["report", "--stage", "delivery-planning", "--result", "awaiting-approval"], home.dir).status).toBe(0);
+    const approved = run(ORCH, ["report", "--stage", "delivery-planning", "--result", "approved", "--user-input", "Approve"], home.dir);
+    expect(approved.status, approved.out).toBe(0);
+    const ask = next(home.dir);
+    expect(isShare(ask), JSON.stringify(ask)).toBe(true);
+    expect(String(ask.question)).toStartWith(SHARE_ASKED);
+    expect(JSON.stringify(ask)).not.toContain("Who builds them");
   });
 
   test("asked once: Share the plan or Not now, and Not now is kept", () => {

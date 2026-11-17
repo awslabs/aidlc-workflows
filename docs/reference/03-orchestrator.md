@@ -698,8 +698,12 @@ a line waits past the step that settles the walking skeleton's stance, which
 the agent passes through without speaking. Showing the question notes an engine ask mark; once a
 human turn is on record after it with no answer recorded, the question is not
 put again and the first step carries one line that this session builds the
-Units and how to ask for teams. Work with recorded repos in a workspace that
-is not a git repository is never asked: the first step carries
+Units and how to ask for teams. Before the question, while no pick is recorded,
+an Inception `run-stage` of such a plan carries both setters in `board_note`
+(`whoBuildsNote`), so a person who says who builds the Units first has their
+answer recorded and is not asked it after. Work with
+recorded repos in a workspace that is not a git repository is never asked: the
+first step carries
 `teamsAcrossReposLine` instead, the line the setter's refusal also says. In a
 workspace in git, it is asked like any work, and choosing teams records the
 home.
