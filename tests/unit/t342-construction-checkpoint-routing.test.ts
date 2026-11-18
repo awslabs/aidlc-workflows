@@ -4133,6 +4133,109 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
       kind: "run-stage", stage: "code-generation", unit: "beta", plan_approval: { status: "revise" },
     });
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // beta paused at its Code Generation, before its review (two of its steps
+  // built) or after it (built, its review READY, only its completion left);
+  // `aside` pauses it set aside for alpha, which is done, so the walk's step is
+  // still beta's pause.
+  function betaPaused(reviewed: boolean, aside = false): string {
+    const p = reviewed ? betaCodeWrittenAndReviewed() : betaBuilding();
+    if (!reviewed) startedBuild(p);
+    const paused = tool(p, "state", [
+      "unit", "pause", "--stage", "code-generation", "--unit", "beta", "--reason", "waiting for an answer",
+      "--next-action", "Revise the plan.", ...(aside ? ["--set-aside-for", "alpha"] : []),
+    ]);
+    expect(paused.status, paused.out).toBe(0);
+    expect(next(p)).toMatchObject({ kind: "ask", ask_type: "unit-paused", unit: "beta" });
+    // The person answers the paused question with their change.
+    policyHuman(p, "Change beta's plan: cover the retry path.", "t342-plan");
+    return p;
+  }
+
+  // The person's change for beta, in the form the agent picked: the change
+  // form of `next --stage`, or their rejection of beta.
+  type ChangeStep = { kind: string; message?: string; stage?: string; unit?: string };
+  function changeFor(p: string, form: "change" | "rejection"): ChangeStep {
+    if (form === "change") return printedStep(p, ["--stage", "code-generation", "--unit", "beta", "--change"]) as ChangeStep;
+    return JSON.parse(tool(p, "orchestrate", [
+      "report", "--stage", "code-generation", "--result", "rejected", "--unit", "beta", "--user-input", "Request Changes",
+    ]).out.trim()) as ChangeStep;
+  }
+
+  // The printed command, as the agent runs it, passes both guards its tool call meets.
+  function guardsLetThrough(p: string, command: string) {
+    for (const hook of ["hooks/aidlc-plan-approval-guard.ts", "hooks/aidlc-state-transition-guard.ts"]) {
+      const out = hookCall(p, [join(AIDLC_SRC, hook)], {
+        hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command },
+      });
+      expect(out, `${hook}: ${out}`).not.toContain('"deny"');
+    }
+  }
+
+  const rejections = (p: string) => readAuditShardEvents(p).filter((row) => row.event === "GATE_REJECTED");
+
+  for (const form of ["change", "rejection"] as const) {
+    test(`${form}: the Unit paused after its review, only its completion left, is reopened for the change`, () => {
+      const p = betaPaused(true);
+      const step = changeFor(p, form);
+      expect(step.kind, JSON.stringify(step)).toBe("print");
+      const message = step.message ?? "";
+      expect(message).not.toContain("has not reached");
+      expect(message).toContain('"Making your change in Code Generation for unit beta. alpha keeps its finished work.');
+      const reopen = /aidlc-jump\.ts (reopen --target code-generation --stages code-generation --units beta --scope classic --via change)`/
+        .exec(message)?.[1];
+      expect(reopen, message).toBeDefined();
+      guardsLetThrough(p, `aidlc engine jump ${reopen}`);
+      runPrintedCommands(p, message);
+      expect(rejections(p)).toHaveLength(1);
+      expect(auditBlockField(rejections(p)[0].block, "Unit")).toBe("beta");
+      expect(auditBlockField(rejections(p)[0].block, "Reopen")).toBe("change");
+      expect(approved(p, "alpha")).toBe(true);
+      expect(next(p)).toMatchObject({
+        kind: "run-stage", stage: "code-generation", unit: "beta", plan_approval: { status: "revise" },
+      });
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    for (const aside of [false, true]) {
+      test(`${form}: the Unit paused before its review${aside ? ", set aside for a Unit now done," : ""} is picked up for the change, with no rejection recorded`, () => {
+        const p = betaPaused(false, aside);
+        const step = changeFor(p, form);
+        expect(step.kind, JSON.stringify(step)).toBe("print");
+        const message = step.message ?? "";
+        expect(message).not.toContain("has not reached");
+        expect(message).not.toContain("reopen");
+        expect(message).toContain('to pick unit "beta" up where it stopped, then tell the person in one line: ' +
+          '"Picked unit beta up at Code Generation."');
+        const resume = /`[^`]*aidlc-state\.ts (unit resume --stage code-generation --unit beta)`/.exec(message)?.[1];
+        expect(resume, message).toBeDefined();
+        guardsLetThrough(p, `aidlc engine state ${resume}`);
+        runPrintedCommands(p, message);
+        // Their change is the agent's to make on the step, as on the live
+        // path: the build comes back on its approved plan, which is rewritten
+        // because the person asked, and the plan question names the change.
+        const build = next(p) as ReturnType<typeof next> & { plan_note?: string };
+        expect(build).toMatchObject({ kind: "run-stage", stage: "code-generation", unit: "beta", plan_approval: { status: "approved" } });
+        expect(build.plan_note).toContain("never rewrite an approved plan unless the person asks");
+        const planFile = join(codeGenerationRecordDir(p, "beta"), "code-generation-plan.md");
+        writeFileSync(planFile, readFileSync(planFile, "utf-8").replace("## Steps\n\n", "## Steps\n\n- [ ] Step 0: cover the retry path in `src/retry.ts`\n"));
+        const asked = next(p) as ReturnType<typeof next> & { plan_approval?: { note?: string } };
+        expect(asked).toMatchObject({ kind: "ask", ask_type: "plan-approval", unit: "beta" });
+        expect(asked.plan_approval?.note).toContain("was added. I can also build the plan you approved instead.");
+        expect(rejections(p)).toEqual([]);
+      }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+    }
+  }
+
+  test("a change for the Unit live before its review, or not started, carries on as before; no change asked keeps the pause", () => {
+    const live = betaBuilding();
+    startedBuild(live);
+    expect(changeFor(live, "change")).toMatchObject({ kind: "run-stage", stage: "code-generation", unit: "beta" });
+    const fresh = betaBuilding();
+    expect(changeFor(fresh, "change")).toMatchObject({ kind: "run-stage", stage: "code-generation", unit: "beta" });
+    const paused = betaPaused(false);
+    expect(printedStep(paused, ["--stage", "code-generation", "--unit", "beta"]).kind).toBe("ask");
+    for (const p of [live, fresh, paused]) expect(rejections(p)).toEqual([]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 // The walking skeleton gates the per-unit stages. Once they are all done or

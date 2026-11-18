@@ -15411,6 +15411,9 @@ function unitReceiptOnlyStep(
   ledger: UnitLedger,
   stateContent: string | null,
   scope: string,
+  // The person's change for a Unit paused on the step asks whether only its
+  // completion is left, as if it carried on.
+  pausedCounts = false,
 ): UnitRecordStep | null {
   if (stateContent === null) return null;
   if (!ledger.inUse || ledger.receipts.has(unit) || ledger.skipped.has(unit)) return null;
@@ -15418,7 +15421,7 @@ function unitReceiptOnlyStep(
   const unitMajor = getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
   if (!unitMajor && waveEligible(node) && ledger.mode === "none" && ledger.checkpoint === null) return null;
   const own = ledger.open.find((entry) => entry.unit === unit);
-  if (own?.state === "paused") return null;
+  if (own?.state === "paused" && !pausedCounts) return null;
   if (ledger.checkpoint !== null && ledger.checkpoint.unit !== unit) return null;
   if (!unitCovered(projectDir, node, unit, recordPrefix, codekbCtx, unitKind)) return null;
   if (redoChosenForUnitStep(projectDir, node.slug, unit)) return null;
@@ -18303,13 +18306,19 @@ function unitStepOwedOnlyReceipt(
   unit: string,
 ): boolean {
   const step = walk.step;
-  if (step.kind !== "work" || step.stage.slug !== stageSlug || step.unit !== unit) return false;
+  const paused = unitPausedOnStep(step, stageSlug, unit);
+  if (!paused && (step.kind !== "work" || step.stage.slug !== stageSlug || step.unit !== unit)) return false;
   const target = walk.block.find((stage) => stage.slug === stageSlug);
   if (target === undefined) return false;
   return unitReceiptOnlyStep(
     projectDir, target, unit, walk.context.recordPrefix, walk.context.codekbCtx,
-    walk.context.kinds?.get(unit) ?? null, unitLedgerFor(projectDir, stageSlug), stateContent, scope,
+    walk.context.kinds?.get(unit) ?? null, unitLedgerFor(projectDir, stageSlug), stateContent, scope, paused,
   )?.receipt === true;
+}
+
+// The walk's step is that Unit's own pause on that stage.
+function unitPausedOnStep(step: UnitJumpStep, stageSlug: string, unit: string): boolean {
+  return step.kind === "paused" && step.stage === stageSlug && step.checkpoint.unit === unit;
 }
 
 function unitStepChangeReopen(
@@ -18322,7 +18331,10 @@ function unitStepChangeReopen(
   const stageSlug = flags.stage?.trim();
   if (!unit || !stageSlug || !validScopes().has(scope)) return null;
   const walk = unitJumpWalk(projectDir, scope, stateContent, true);
-  if (walk === null || !unitStepOwedOnlyReceipt(projectDir, scope, stateContent, walk, stageSlug, unit)) return null;
+  if (
+    walk === null ||
+    !(unitPausedOnStep(walk.step, stageSlug, unit) || unitStepOwedOnlyReceipt(projectDir, scope, stateContent, walk, stageSlug, unit))
+  ) return null;
   const reopen = unitMajorReopen(projectDir, scope, stateContent, stageSlug, {
     stage: stageSlug, jumpUnit: unit, everyUnit: false, change: true,
   });
@@ -18408,13 +18420,17 @@ function unitMajorReopen(
     }
     // The Unit in flight on the target itself: that is where the walk already is.
     // Asked for by name with no change, it carries on there; only the person's
-    // change reopens it, once nothing but its completion is left.
-    if (named === inFlight && liveStage === targetSlug &&
-      (!flags.change || !unitStepOwedOnlyReceipt(projectDir, scope, stateContent, walk, targetSlug, named))) return "route";
+    // change reopens it, once nothing but its completion is left. Paused there
+    // before that, their change picks it up, and is made on the step as live.
+    const onItsStep = named === inFlight && liveStage === targetSlug;
+    const reopens = onItsStep && flags.change === true &&
+      unitStepOwedOnlyReceipt(projectDir, scope, stateContent, walk, targetSlug, named);
+    const picksUp = onItsStep && flags.change === true && !reopens && unitPausedOnStep(step, targetSlug, named);
+    if (onItsStep && !reopens && !picksUp) return "route";
     // A Unit set aside on the target is picked up where it stopped.
     const parked = open.get(named);
-    if (named !== inFlight && parked?.stage === targetSlug && parked.checkpoint.setAsideFor !== null) {
-      const aside = inFlight === null ? null : setAside(inFlight, named, `the person went back to ${named}`);
+    if (picksUp || (named !== inFlight && parked?.stage === targetSlug && parked.checkpoint.setAsideFor !== null)) {
+      const aside = inFlight === null || inFlight === named ? null : setAside(inFlight, named, `the person went back to ${named}`);
       const resume = `${aidlcToolInvocation("state")} unit resume --stage ${targetSlug} --unit ${named}`;
       const line = aside && inFlight !== null
         ? `Paused unit ${inFlight} at ${nameOf(aside.stage)} and picked unit ${named} up at ${stageName}. ` +
